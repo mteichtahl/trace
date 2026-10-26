@@ -14,23 +14,39 @@ permissions:
 jobs:
   typescript:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      # KiCad, ngspice, Icarus, and the verification/FPGA programs, so those tests run instead of skipping.
+      APT_PACKAGES: kicad ngspice iverilog poppler-utils verilator yosys nextpnr-ice40 nextpnr-ecp5 nextpnr-gowin fpga-icestorm fpga-trellis z3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: "22", cache: npm }
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: { python-version: "3.12" }
-      - name: KiCad 10, ngspice, Icarus Verilog
+      # The runner's Ubuntu mirror can be slow (KiCad alone is several hundred MB): keep the downloaded packages.
+      - name: Package cache key
+        id: apt
+        run: echo "key=apt-${{ runner.os }}-$(echo "$APT_PACKAGES" | sha256sum | cut -c1-16)-$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/apt-cache
+          key: ${{ steps.apt.outputs.key }}
+          restore-keys: apt-${{ runner.os }}-
+      - name: KiCad 10, ngspice, Icarus Verilog, Verilator, Yosys, nextpnr
         run: |
+          mkdir -p ~/apt-cache/partial
           sudo add-apt-repository -y ppa:kicad/kicad-10.0-releases
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends kicad ngspice iverilog poppler-utils
+          sudo apt-get install -y -q --no-install-recommends -o Dir::Cache::Archives="$HOME/apt-cache" $APT_PACKAGES
+          sudo chown -R "$USER" ~/apt-cache && rm -f ~/apt-cache/lock
       - name: Python bridge
         run: |
           python -m venv .venv
-          .venv/bin/pip install -q -e 'python[dev]'
+          .venv/bin/pip install -q -e 'python[dev]' 'cocotb==2.1.0'
           echo "TRACE_PYTHON=$PWD/.venv/bin/python" >> "$GITHUB_ENV"
+          echo "TRACE_COCOTB_PYTHON=$PWD/.venv/bin/python" >> "$GITHUB_ENV"
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
