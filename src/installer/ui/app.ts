@@ -58,7 +58,7 @@ const s = {
    * installer raises it when a removed project is added again; never set here) */
   projects: new Map<string, { branch: string; onboard: boolean; applySettings: boolean; memoryDays: string; generation: number }>(),
   aws: { mode: 'profile' as 'profile' | 'keys', profile: 'default', region: 'us-east-1', keyId: '', secret: '', session: '', check: null as AwsCheck | null, confirmed: false, busy: false, error: '' },
-  /** where the GitHub Actions jobs run (AWS CodeBuild): connectionArn '' = find or create `<prefix>-github`; computeType
+  /** where the GitHub Actions jobs run (AWS CodeBuild): connectionArn '' = reuse an authorized connection, else the stack creates `<prefix>-github`; computeType
    * '' and privileged 'default' = the stack's defaults */
   runners: { connectionArn: '', computeType: '' as '' | (typeof RUNNER_COMPUTE_TYPES)[number], privileged: 'default' as 'default' | 'on' | 'off' },
   agents: { prefix: 'trace', model: '', maxLifetimeHours: 8, idleMinutes: 15, centralBucketName: '', retainData: true, escalateTo: '', gpuEnabled: true, gpuMaxVcpus: 16, gpuSpot: false,
@@ -295,9 +295,9 @@ function runners(): HTMLElement {
   const url = `https://${s.aws.region}.console.aws.amazon.com/codesuite/settings/connections?region=${s.aws.region}`
   return h('div', {},
     h('h3', {}, 'Where the workflows run'),
-    h('p', { class: 'lead' }, `Every GitHub Actions job of the repositories runs on AWS CodeBuild in this account, never on GitHub's own runners: each repository gets its own CodeBuild runner project. CodeBuild reaches GitHub through an AWS CodeConnections connection, so no GitHub token is stored for it. Leave the connection empty and the installer uses ${name}, creating it if it is not there.`),
-    note('warn', 'A new connection must be authorized once, by you, in the AWS console: the installer shows the link (', h('a', { href: url, target: '_blank', rel: 'noopener' }, 'Connections'), `), you choose ${r.connectionArn ? 'the connection' : name} and "Update pending connection", which installs the AWS Connector for GitHub app, and the installer carries on by itself. Give that app access to every repository chosen in step 1${s.projects.size ? ` (${[...s.projects.keys()].join(', ')})` : ''}: a repository it cannot reach gets no runner.`),
-    field('GitHub connection', input('text', r.connectionArn, (v) => { r.connectionArn = v.trim() }, { placeholder: `empty: use or create ${name}` }), 'an existing connection\'s ARN, if you have one'),
+    h('p', { class: 'lead' }, `Every GitHub Actions job of the repositories runs on AWS CodeBuild in this account, never on GitHub's own runners: each repository gets its own CodeBuild runner project. CodeBuild reaches GitHub through an AWS CodeConnections connection, so no GitHub token is stored for it. You need nothing here: the installer reuses a connection already authorized in this account and region (${name} first), and if there is none the stack creates ${name}.`),
+    note('warn', 'A new connection is authorized once per AWS account and region, by you, in the AWS console. After the first deploy the installer shows the link (', h('a', { href: url, target: '_blank', rel: 'noopener' }, 'Connections'), `) and waits: you choose ${r.connectionArn ? 'the connection' : name} and "Update pending connection", which installs the AWS Connector for GitHub app, and the installer adds the build runners by itself. Give that app access to every repository chosen in step 1${s.projects.size ? ` (${[...s.projects.keys()].join(', ')})` : ''}: a repository it cannot reach gets no runner.`),
+    field('Use an existing connection (optional)', input('text', r.connectionArn, (v) => { r.connectionArn = v.trim() }, { placeholder: `empty: reuse an authorized one, or create ${name}` }), 'an existing GitHub connection\'s ARN, only if you want that one'),
     h('div', { class: 'row' },
       field('Job size', select([{ value: '', label: 'Default (Large)' }, ...RUNNER_COMPUTE_TYPES.map((t) => ({ value: t, label: COMPUTE_LABEL[t] }))], r.computeType,
         (v) => { r.computeType = (RUNNER_COMPUTE_TYPES as readonly string[]).includes(v) ? v as (typeof RUNNER_COMPUTE_TYPES)[number] : '' }), 'a job can ask for another with an instance-size label'),

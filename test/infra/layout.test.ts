@@ -101,7 +101,12 @@ describe('the nested layout', () => {
     }
     // the knowledge bases add one resource to the parent (the vector bucket) and, from 24 projects, one more overflow
     // policies of the API role (it names every knowledge base for Retrieve): three at 24 projects, four at 60
-    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:87/19:0', '24:113/19:3', '60:150/19:4'])
+    // (the outputs include GithubConnectionArn and GithubConnectionCreated: src/infra/runner.ts GithubConnection)
+    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:87/21:0', '24:113/21:3', '60:150/21:4'])
+    // without a connection given, the stack creates one: one more resource of the parent's, and nothing more per project
+    const created = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: {} }), 'Count1Created')
+    expect(count(json(created.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0) + 1)
+    for (const t of created.nested.values()) expect(count(json(t).Resources)).toBe(26)
     // none of a project's outputs is the parent's: each is its nested stack's, with the repository it is the project of
     const s = synth(cfg(2), 'Count2Outputs')
     const parentOutputs = Object.keys(json(s.parent).Outputs ?? {})

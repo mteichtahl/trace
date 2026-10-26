@@ -26,9 +26,10 @@ and checks the following:
   token (see [Project isolation](#project-isolation)).
 - **AWS:** a profile (SSO works) or access keys, the region, and confirmation of the account. It checks that Bedrock
   AgentCore and an Anthropic model are available there.
-- **Builds:** the AWS CodeConnections connection to GitHub that the build runners use (see
-  [Where builds run](#where-builds-run)). It reuses one that is ready, or creates one and waits while you authorize it
-  once in the AWS console, showing when it will check again.
+- **Builds:** nothing, usually. The build runners reach GitHub through an AWS CodeConnections connection (see
+  [Where builds run](#where-builds-run)). The installer reuses one already authorized in the account and region. If
+  there is none, the stack creates one, and after the first deploy the installer shows you where to authorize it and
+  waits. You can also name an existing connection.
 - **Agents:** the model, session limits, and the central bucket.
 - **People:** the first administrator, and for everyone else their class (admin, user, guest) and the projects they
   are assigned to.
@@ -242,6 +243,20 @@ container runs the job and is discarded.
   `runs-on: [codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}, <job>]`.
 - **No GitHub token is stored for it.** CodeBuild reaches GitHub through an AWS CodeConnections connection (the AWS
   Connector for GitHub app). Grant that app access to every repository trace manages.
+- **One connection per account and region.** A person authorizes it once, in the AWS console. After that every
+  installation and `npm run deploy:ci` in the same account and region reuses it, and says which one it used. Nothing
+  needs it up front:
+  1. The installer looks for a connection that is already authorized. If it finds one, it deploys once, with the
+     runners.
+  2. If there is none, the stack creates `<prefix>-github` and the first deploy goes ahead without the runners.
+     CodeBuild can't attach a runner to a connection nobody has authorized yet.
+  3. The installer then shows the link to the AWS console, what to choose there ("Update pending connection", which
+     installs the AWS Connector for GitHub app), and the time of its next check. It checks every 15 seconds for up to
+     30 minutes. If it gives up, run it again and it carries on from there.
+  4. Once the connection is authorized, it deploys again. That only adds each repository's runner and its GitHub
+     webhook.
+
+  A connection the stack created is kept if the stack is deleted, because other installations may be using it.
 - **No AWS access comes with it.** The runner's own role may write its logs and use the connection, nothing else.
   Jobs reach AWS exactly as before, through their repository's GitHub OIDC role.
 - **No fallback.** If `TRACE_CODEBUILD_PROJECT` is missing or the runner project doesn't exist, jobs wait in the queue
@@ -253,8 +268,12 @@ trace's own repository builds the same way, on the runner project `trace-ci`. De
 its first pull request can be checked:
 
 ```sh
-TRACE_CONNECTION_ARN=arn:aws:codeconnections:<region>:<account>:connection/<id> npm run deploy:ci
+npm run deploy:ci
 ```
+
+It works the same way as the installer. It reuses an authorized connection (`trace-ci-github` first, then an
+installation's). If there is none, it creates `trace-ci-github`, shows you where to authorize it, waits, and then adds
+the runner. To use a particular connection, set `TRACE_CONNECTION_ARN`. Anything after `--` goes to `cdk deploy`.
 
 A guard test fails the build if any workflow here or in `templates/` names a runner other than a CodeBuild one.
 
