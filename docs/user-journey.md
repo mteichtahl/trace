@@ -21,7 +21,7 @@ Principles the journey follows:
 3. **People decide, agents prepare.** Agents propose and measure; a person approves requirements, architecture, the layout, the release and the order. Every task a person does runs through a guided skill that enforces a minimum quality bar, and every decision a person is asked to make comes with trace's recommendation and the reasons for it.
 4. **Every requirement is traceable.** From the line in the brief, through the part and the net, to the test that proved it on the bench.
 5. **Going back is normal.** A failure at any stage reopens the earliest stage it touches, and the record shows why.
-6. **The user is told only when it matters.** A gate is ready, an agent is stuck, or a decision is needed. Everything else is in the record.
+6. **The user is told only when it matters.** A gate is ready, an agent is stuck, or a decision is needed. Everything else is in the record. Whatever trace does say leads with a short summary in plain words, with the detail one tap away.
 
 ## The journey at a glance
 
@@ -223,6 +223,19 @@ In the example, the blue segments are the time to fix: Capture and Layout each w
 **Asking people.** Agents ask through the project's issues and the web app, never by stopping silently. A question names what it blocks, offers options where it can, and cites what it already read (knowledge base, datasheets). A gate never opens on a timeout.
 
 **Notifications.** The person hears about four things only: a gate is ready to review, an agent is stuck, a question blocks progress, and money is about to be spent.
+
+**Summary first, detail on request.** Every interaction leads with a summary a person can act on, and keeps the detail behind it, one tap away. This holds for messages, questions, notifications, findings, gate cards, reports and skill steps alike.
+
+- **The summary:** one or two sentences that say what happened or what is needed, and the recommendation when a decision is asked for.
+- **The detail:** the evidence, numbers, runs, sources and alternatives, opened by tapping the summary. Nothing a person needs to decide is only in the detail; nothing in the summary lacks detail behind it.
+- **Visuals follow the same rule:** a small picture in the summary, the full-size view with its data behind it.
+
+**Plain, contextual language.** trace writes the way a good colleague talks, fitted to the reader and the moment.
+
+- **Simple and clear:** short sentences, everyday words, one idea per sentence, the point first.
+- **No unexplained acronyms:** a term is spelled out in words, or explained the first time it appears in an interaction (for example "the parts list (BOM)"), and every technical term can be tapped for a one-line definition from the glossary at the end of this document.
+- **Contextual:** wording fits the stage and the person. A notification names the board, the stage and what is needed; a reviewer who has not seen the project gets the context a regular contributor does not need.
+- **Checked like everything else:** a writing check runs on what trace sends a person (summary present, acronyms explained, sentence length), and a message that fails it is rewritten before it is sent.
 
 **Visuals.** Wherever a picture can show what words describe, trace shows it, and a person can ask for one at any point ("show me the power sheet", "render the bottom side"). Skills open with the visual for their step, findings point at a place on a picture rather than a coordinate, and every image is stored with the run that made it, so it is evidence like any other. Slow images (photographic renders, turntables) are made when asked or at a gate, never on every push.
 
@@ -804,3 +817,35 @@ Decided with Marc on 27 October 2026; the stages and gaps above reflect them.
 | First fab and assembler | JLCPCB | Builds on the files `kicad.fab` already writes |
 | Does trace order? | Prepares only; a person submits and pays | No payment handling in trace |
 | Fixed or per-project journey? | Templates per project type | Board, FPGA, firmware and mixed |
+
+## Glossary
+
+The terms trace explains when a person taps them. Each definition is the one-line version shown in the app.
+
+| Term | In plain words |
+| --- | --- |
+| ADC | Analogue-to-digital converter: the part of a chip that turns a voltage into a number |
+| BOM | Bill of materials: the full parts list for a board, with quantities and part numbers |
+| CISPR 32 | The international standard for the radio interference electronic equipment may give off |
+| CPL | Component placement list: where each part sits on the board, for the assembly machine |
+| DFM | Design for manufacture: checking a board can be built reliably in volume |
+| DFT | Design for test: making sure each board can be tested in the factory |
+| DRC | Design rule check: KiCad's check that the board layout obeys its spacing and size rules |
+| EMC | Electromagnetic compatibility: not causing, and not suffering from, radio interference |
+| End of life | A part the maker has stopped making, or soon will |
+| ERC | Electrical rule check: KiCad's check that the schematic's connections make sense |
+| Gerbers | The files a board maker uses to make the bare board, one per layer |
+| HIL | Hardware in the loop: tests that run against the real board on the bench |
+| JLCPCB | The board maker and assembler trace prepares orders for first |
+| KiCad | The open-source electronics design program trace reads and writes |
+| LCSC | JLCPCB's parts supplier; its part codes tell JLCPCB which part to fit |
+| LDO | Low-dropout regulator: a simple part that lowers a supply voltage to a steady level |
+| MCU | Microcontroller: the small computer chip that runs the firmware |
+| Monte Carlo | Running a simulation many times with parts varied within their tolerances, to see the spread of results |
+| MPN | Manufacturer part number: the maker's own code for a part |
+| Pin plan | Which job each pin of the microcontroller does, agreed between schematic and firmware |
+| RF | Radio frequency: the radio side of a design, such as the antenna and its matching parts |
+| SPICE | The standard way to simulate an electronic circuit before building it |
+| STEP | A 3D file format used to share models of boards and enclosures |
+| SWD | Serial wire debug: the connection used to load and debug firmware on an Arm chip |
+| UART | A simple two-wire serial connection, often used for log messages |
