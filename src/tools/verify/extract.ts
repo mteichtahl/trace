@@ -53,11 +53,16 @@ const reNum = (s: string): number => Number(s.replace(',', '.'))
 export function limitsOf(text: string): Limit[] {
   const out: Limit[] = []
   const seen = new Set<string>()
-  const add = (l: Limit): void => {
+  const spans: [number, number][] = []
+  // a span of text already read as one limit is not read again by a later, looser pattern ("not exceed 5 mA" is <=,
+  // not also the >= of "exceed")
+  const add = (l: Limit, at = -1, len = 0): void => {
+    if (at >= 0 && spans.some(([a, b]) => at < b && at + len > a)) return
     const k = `${l.op}|${l.value ?? ''}|${l.low ?? ''}|${l.high ?? ''}|${l.unit}`
     if (!seen.has(k)) {
       seen.add(k)
       out.push(l)
+      if (at >= 0) spans.push([at, at + len])
     }
   }
   const t = text.replace(/−/g, '-')
@@ -65,11 +70,11 @@ export function limitsOf(text: string): Limit[] {
   for (const m of t.matchAll(new RegExp(String.raw`(?:between\s+)?(${NUM})\s*(${UNIT})?\s*(?:to|-|–|—|\.\.|and)\s*(${NUM})\s*(${UNIT})(?![\w/])`, 'g'))) {
     const u = (m[4] ?? m[2]) as string
     if (m[2] && m[4] && m[2] !== m[4]) continue
-    add({ op: 'range', low: reNum(m[1] as string), high: reNum(m[3] as string), unit: u, text: m[0].trim() })
+    add({ op: 'range', low: reNum(m[1] as string), high: reNum(m[3] as string), unit: u, text: m[0].trim() }, m.index, m[0].length)
   }
   // tolerances: ±2 %, +/- 50 ppm
   for (const m of t.matchAll(new RegExp(String.raw`(?:±|\+\/-|\+-)\s*(${NUM})\s*(${UNIT})(?![\w/])`, 'g'))) {
-    add({ op: 'tol', value: reNum(m[1] as string), unit: m[2] as string, text: m[0].trim() })
+    add({ op: 'tol', value: reNum(m[1] as string), unit: m[2] as string, text: m[0].trim() }, m.index, m[0].length)
   }
   // comparisons: ≤ 5 mA, less than 10 ns, at least 10 MHz, no more than 1 %, maximum of 3 W, exceeds 2 kV
   const cmp: [RegExp, Limit['op']][] = [
@@ -83,7 +88,7 @@ export function limitsOf(text: string): Limit[] {
     for (const m of t.matchAll(full)) {
       const v = reNum(m[1] as string)
       // "10 MHz or more" form is caught by the >= pattern only when the words come first; fine for a candidate list
-      add({ op, value: v, unit: m[2] as string, text: m[0].trim() })
+      add({ op, value: v, unit: m[2] as string, text: m[0].trim() }, m.index, m[0].length)
     }
   }
   // "of 100 mA" / "is 3.3 V" / "= 3.3 V" when nothing else was found

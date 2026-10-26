@@ -175,6 +175,9 @@ export interface FormalLog {
   steps: number | null
 }
 
+/** file.sv:25.51-26.45 (a source location) rather than a property's label. */
+const isLoc = (s: string): boolean => /:\d+(\.\d+)?(-\d+(\.\d+)?)?$/.test(s)
+
 /** yosys-smtbmc's output: "Status: PASSED|FAILED", "Assert failed in <mod>: <loc> (<name>)", "Reached cover statement
  * at <loc> (<name>) in step N.", "Unreached cover statement at …", "Writing trace to VCD file: <f>". */
 export function parseSmtbmc(log: string): FormalLog {
@@ -189,12 +192,16 @@ export function parseSmtbmc(log: string): FormalLog {
     if ((m = /^Status: (PASSED|FAILED|passed|failed)/.exec(line))) status = /pass/i.test(m[1] as string) ? 'PASS' : 'FAIL'
     else if (/^Temporal induction failed/.test(line)) induction = true
     else if ((m = /^Assert failed in (\S+?):\s*(\S+)(?:\s+\((.+)\))?\.?$/.exec(line))) {
-      findings.push({ kind: induction ? 'induction_failed' : 'assert_failed', name: m[3] ?? m[1] ?? null, location: m[2] ?? null, step: null })
+      // a labelled assertion prints its label where the location goes
+      const loc = m[2] as string
+      findings.push({ kind: induction ? 'induction_failed' : 'assert_failed', name: m[3] ?? (isLoc(loc) ? m[1] ?? null : loc), location: isLoc(loc) ? loc : null, step: null })
     } else if ((m = /^Assumptions are unsatisfiable!?/.exec(line))) findings.push({ kind: 'assume_failed', name: null, location: null, step: null })
-    else if ((m = /^Reached cover statement (?:in \S+ )?at (\S+)(?:\s+\((.+?)\))? in step (\d+)/.exec(line))) {
-      findings.push({ kind: 'cover_reached', name: m[2] ?? null, location: m[1] ?? null, step: Number(m[3]) })
-    } else if ((m = /^Unreached cover statement (?:in \S+ )?at (\S+)(?:\s+\((.+?)\))?/.exec(line))) {
-      findings.push({ kind: 'cover_unreached', name: m[2] ?? null, location: m[1] ?? null, step: null })
+    else if ((m = /^Reached cover statement (?:in \S+ )?at (\S+?)(?:\s+\((.+?)\))? in step (\d+)/.exec(line))) {
+      const loc = m[1] as string
+      findings.push({ kind: 'cover_reached', name: m[2] ?? (isLoc(loc) ? null : loc), location: isLoc(loc) ? loc : null, step: Number(m[3]) })
+    } else if ((m = /^Unreached cover statement (?:in \S+ )?at (\S+?)(?:\s+\((.+?)\))?\.?$/.exec(line))) {
+      const loc = m[1] as string
+      findings.push({ kind: 'cover_unreached', name: m[2] ?? (isLoc(loc) ? null : loc), location: isLoc(loc) ? loc : null, step: null })
     } else if ((m = /^Writing trace to (?:VCD|Yosys witness) file: (\S+)/.exec(line))) traces.push(m[1] as string)
     else if ((m = /^Checking (?:assertions|assumptions|cover reachability) in step (\d+)/.exec(line)) || (m = /^Trying induction in step (\d+)/.exec(line))) {
       steps = Math.max(steps ?? 0, Number(m[1]))

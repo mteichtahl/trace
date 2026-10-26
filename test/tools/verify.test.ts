@@ -347,8 +347,8 @@ describe.skipIf(!hasSmtbmc)('verify.formal with yosys-smtbmc (yosys + an SMT sol
       expect(r.status).toBe('FAIL')
       expect((r.findings as { kind: string; name: string }[])[0]).toMatchObject({ kind: 'assert_failed', name: 'never_above_half' })
       expect((r.traces as unknown[]).length).toBe(1)
-      const w = await call('sim.wave_read', { run_id: r.run_id, artifact: 'trace0.vcd', signals: ['avg'] }).catch(() => null)
-      expect(w).not.toBeNull()
+      const w = await call('sim.wave_read', { run_id: r.run_id, artifact: 'trace0.vcd' })
+      expect(JSON.stringify(w)).toMatch(/avg_valid/) // the counterexample is a readable VCD of the design's signals
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
