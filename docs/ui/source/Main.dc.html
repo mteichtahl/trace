@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>trace · Home</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2563eb;text-decoration:none}a:hover{color:#1d4ed8}
+</style>
+</helmet>
+<div style="font-family: Geist, system-ui, sans-serif; color: #0a0a0a; background: #ffffff; min-height: 1000px; display: flex; flex-wrap: wrap; font-size: 14px; line-height: 1.5">
+
+  <nav aria-label="Main" style="flex: 1 1 232px; max-width: 260px; background: #fafafa; border-right: 1px solid #e5e5e5; padding: 16px 12px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px">
+    <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px 18px">
+      <div style="width: 24px; height: 24px; border-radius: 6px; background: #0a0a0a; color: #fff; display: flex; align-items: center; justify-content: center; font-family: 'Geist Mono', monospace; font-size: 13px; font-weight: 600">t</div>
+      <span style="font-weight: 600; font-size: 15px">trace</span>
+    </div>
+    <a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; background: #f0f0f0; color: #0a0a0a; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/></svg>Home</a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Projects</a>
+    <a href="Knowledge.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h10a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z"/><path d="M4 16a4 4 0 0 1 4-4h10"/></svg>Knowledge</a>
+    <a href="Agents.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01"/></svg>Agents</a>
+    <a href="Operations.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Operations</a>
+    <a href="People.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>Admin</a>
+    <div style="margin: 20px 8px 6px; font-size: 12px; color: #737373; font-weight: 500">Pinned</div>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Soil sensor</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Motor driver</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Panel controller</span></a>
+    <div style="flex-grow: 1"></div>
+    <a href="Preferences.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040">
+      <span style="width: 28px; height: 28px; border-radius: 14px; background: #e5e5e5; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600">MT</span>
+      <span style="display: flex; flex-direction: column; line-height: 1.3"><span style="font-weight: 500; color: #0a0a0a">Marc Teichtahl</span><span style="font-size: 12px; color: #737373">Admin</span></span>
+    </a>
+  </nav>
+
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="height: 56px; border-bottom: 1px solid #e5e5e5; display: flex; align-items: center; gap: 12px; padding: 0 24px; box-sizing: border-box">
+      <span style="font-weight: 500">Home</span>
+      <div style="flex-grow: 1"></div>
+      <button type="button" style="display: flex; align-items: center; gap: 8px; height: 36px; width: 280px; max-width: 40%; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; color: #737373; font: inherit; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span style="flex-grow: 1; text-align: left">Search or run a command</span><kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; border: 1px solid #e5e5e5; border-radius: 4px; padding: 0 4px">⌘K</kbd></button>
+      <span title="Live: every screen updates as the record changes" style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #15803d"><span style="width: 8px; height: 8px; border-radius: 4px; background: #16a34a"></span>Live</span>
+      <button type="button" aria-label="Notifications, 2 new" style="position: relative; width: 36px; height: 36px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #0a0a0a"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><span style="position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 4px; background: #2563eb"></span></button>
+      <a href="Chat.dc.html" style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; color: #0a0a0a; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>Ask trace <kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373">⌘J</kbd></a>
+    </header>
+
+    <main style="width: 100%; max-width: 880px; margin: 0 auto; padding: 40px 24px 64px; box-sizing: border-box; display: flex; flex-direction: column; gap: 40px">
+      <div>
+        <h1 style="margin: 0; font-size: 30px; font-weight: 600; letter-spacing: -0.02em">Good morning, Marc.</h1>
+        <p style="margin: 6px 0 0; font-size: 16px; color: #525252">2 things need you. 3 are in progress.</p>
+      </div>
+
+      <section aria-labelledby="needs" style="display: flex; flex-direction: column; gap: 12px">
+        <h2 id="needs" style="margin: 0; font-size: 13px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 0.04em">Needs you</h2>
+
+        <article style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px 24px; display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap">
+          <span style="width: 8px; height: 8px; border-radius: 4px; background: #2563eb; margin-top: 7px; flex: 0 0 8px" aria-hidden="true"></span>
+          <div style="flex: 1 1 320px; min-width: 0">
+            <div style="font-size: 12px; color: #737373">Soil sensor · Rev A · Capture · Gate ready · waiting 3 hours</div>
+            <p style="margin: 4px 0 0; font-size: 15px">The schematic gate is ready. All 6 criteria are met and 1 waiver was taken. <strong style="font-weight: 600">trace recommends signing.</strong></p>
+          </div>
+          <a href="Gate.dc.html" style="flex: 0 0 auto; display: inline-flex; align-items: center; height: 36px; padding: 0 16px; border-radius: 8px; background: #2563eb; color: #fff; font-weight: 500">Review and sign</a>
+        </article>
+
+        <article style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px 24px; display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap">
+          <span style="width: 8px; height: 8px; border-radius: 4px; background: #2563eb; margin-top: 7px; flex: 0 0 8px" aria-hidden="true"></span>
+          <div style="flex: 1 1 320px; min-width: 0">
+            <div style="font-size: 12px; color: #737373">Motor driver · Rev A · Architect · Question · waiting 40 minutes</div>
+            <p style="margin: 4px 0 0; font-size: 15px">The Analog specialist needs the motor's stall current to size the current-sense resistor. <strong style="font-weight: 600">It recommends 4.2 A</strong>, from the motor datasheet, page 3.</p>
+            <div style="margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap">
+              <span style="font-size: 12px; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1px 8px; color: #404040">Motor datasheet p.3</span>
+              <span style="font-size: 12px; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1px 8px; color: #404040">Blocks: sense resistor sizing</span>
+            </div>
+          </div>
+          <div style="flex: 0 0 auto; display: flex; gap: 8px">
+            <button type="button" style="height: 36px; padding: 0 16px; border-radius: 8px; background: #2563eb; color: #fff; border: 0; font: inherit; font-weight: 500; cursor: pointer">Use 4.2 A</button>
+            <a href="PhoneAsk.dc.html" style="display: inline-flex; align-items: center; height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid #e5e5e5; color: #0a0a0a; font-weight: 500">Other answer</a>
+          </div>
+        </article>
+      </section>
+
+      <section aria-labelledby="projects" style="display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; align-items: baseline; justify-content: space-between">
+          <h2 id="projects" style="margin: 0; font-size: 13px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 0.04em">Your projects</h2>
+          <a href="Project.dc.html" style="font-size: 13px">See all</a>
+        </div>
+        <div style="border: 1px solid #e5e5e5; border-radius: 12px; overflow: hidden">
+          <sc-for list="{{projects}}" as="p" hint-placeholder-count="3">
+            <a href="Project.dc.html" style="display: flex; align-items: center; gap: 20px; padding: 16px 24px; border-top: {{p.divider}}; color: #0a0a0a; flex-wrap: wrap">
+              <div style="flex: 1 1 180px; min-width: 0">
+                <div style="font-weight: 600">{{p.name}}</div>
+                <div style="font-size: 12px; color: #737373">{{p.meta}}</div>
+              </div>
+              <div style="flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; align-items: flex-start">
+                <div style="display: flex; align-items: center; gap: 4px" role="img" aria-label="{{p.railLabel}}">
+                  <sc-for list="{{p.dots}}" as="d" hint-placeholder-count="9">
+                    <span style="{{d.style}}"></span>
+                  </sc-for>
+                </div>
+                <div style="font-size: 12px; color: #525252">{{p.stage}}</div>
+              </div>
+              <div style="flex: 1 1 240px; min-width: 0; font-size: 13px; color: {{p.nextColor}}; font-weight: {{p.nextWeight}}">{{p.next}}</div>
+            </a>
+          </sc-for>
+        </div>
+      </section>
+
+      <section aria-labelledby="running" style="display: flex; flex-direction: column; gap: 12px">
+        <h2 id="running" style="margin: 0; font-size: 13px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 0.04em">In progress</h2>
+        <div style="border: 1px solid #e5e5e5; border-radius: 12px; overflow: hidden">
+          <div style="display: flex; align-items: center; gap: 14px; padding: 14px 20px; flex-wrap: wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+            <div style="flex: 1 1 300px; min-width: 0">
+              <div><span style="font-weight: 500">Panel controller:</span> checking timing on the FPGA</div>
+              <div style="font-size: 12px; color: #737373">Step 2 of 4 · about 15 minutes left</div>
+              <div style="margin-top: 6px; height: 4px; border-radius: 2px; background: #f0f0f0; max-width: 360px"><div style="width: 45%; height: 4px; border-radius: 2px; background: #2563eb"></div></div>
+            </div>
+            <button type="button" aria-label="Run options" style="width: 32px; height: 32px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; color: #525252">•••</button>
+          </div>
+          <div style="display: flex; align-items: center; gap: 14px; padding: 14px 20px; border-top: 1px solid #f0f0f0; flex-wrap: wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+            <div style="flex: 1 1 300px; min-width: 0">
+              <div><span style="font-weight: 500">Soil sensor:</span> rendering the board for the gate</div>
+              <div style="font-size: 12px; color: #737373">On a graphics card · about 3 minutes left</div>
+            </div>
+            <button type="button" aria-label="Run options" style="width: 32px; height: 32px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; color: #525252">•••</button>
+          </div>
+          <div style="display: flex; align-items: center; gap: 14px; padding: 14px 20px; border-top: 1px solid #f0f0f0; flex-wrap: wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#737373" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            <div style="flex: 1 1 300px; min-width: 0">
+              <div><span style="font-weight: 500">Bench supply:</span> waiting for JLCPCB to ship the order</div>
+              <div style="font-size: 12px; color: #737373">Checked 2 hours ago · next check in 4 hours</div>
+            </div>
+            <button type="button" style="height: 32px; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 13px; cursor: pointer">Check now</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  rail(current, total) {
+    var dots = [];
+    for (var i = 0; i < total; i++) {
+      var base = 'display:inline-block;border-radius:6px;';
+      var s;
+      if (i < current) s = base + 'width:10px;height:10px;background:#0a0a0a;';
+      else if (i === current) s = base + 'width:12px;height:12px;background:#fff;border:3px solid #2563eb;box-sizing:border-box;';
+      else s = base + 'width:10px;height:10px;background:#fff;border:1.5px solid #d4d4d4;box-sizing:border-box;';
+      dots.push({ style: s });
+    }
+    return dots;
+  }
+  renderVals() {
+    return {
+      projects: [
+        { name: 'Soil sensor', meta: 'Rev A · Board', dots: this.rail(2, 9), stage: 'Capture · 6 of 6 criteria met', railLabel: 'Stage 3 of 9, Capture', next: 'Next: you sign the schematic gate', nextColor: '#2563eb', nextWeight: '600', divider: '0' },
+        { name: 'Motor driver', meta: 'Rev A · Board', dots: this.rail(1, 9), stage: 'Architect · 3 of 5 criteria met', railLabel: 'Stage 2 of 9, Architect', next: 'Next: you answer one question', nextColor: '#2563eb', nextWeight: '600', divider: '1px solid #f0f0f0' },
+        { name: 'Panel controller', meta: 'Rev B · FPGA', dots: this.rail(2, 6), stage: 'Prove · 4 of 7 criteria met', railLabel: 'Stage 3 of 6, Prove', next: 'Next: trace checks timing, about 15 minutes', nextColor: '#525252', nextWeight: '400', divider: '1px solid #f0f0f0' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

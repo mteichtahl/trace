@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>trace · Sign in</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2563eb;text-decoration:none}a:hover{color:#1d4ed8}
+</style>
+</helmet>
+<div style="font-family: Geist, system-ui, sans-serif; color: #0a0a0a; background: #fafafa; min-height: 900px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 48px; padding: 48px 16px; box-sizing: border-box; font-size: 14px; line-height: 1.5">
+
+  <section aria-labelledby="s1" style="flex: 0 1 400px; display: flex; flex-direction: column; gap: 12px">
+    <div style="font-size: 12px; color: #737373; text-align: center">Step 1: who you are</div>
+    <div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 14px; padding: 32px; display: flex; flex-direction: column; gap: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.04)">
+      <div style="display: flex; align-items: center; gap: 8px">
+        <div style="width: 28px; height: 28px; border-radius: 7px; background: #0a0a0a; color: #fff; display: flex; align-items: center; justify-content: center; font-family: 'Geist Mono', monospace; font-weight: 600">t</div>
+        <span style="font-weight: 600; font-size: 16px">trace</span>
+      </div>
+      <div>
+        <h1 id="s1" style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em">Sign in to trace</h1>
+        <p style="margin: 4px 0 0; color: #737373">Enter your work email to continue.</p>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <label for="email" style="font-weight: 500">Email</label>
+        <input id="email" type="email" value="marc@teichtahl.com" style="height: 40px; padding: 0 12px; border: 1px solid #d4d4d4; border-radius: 8px; font: inherit; outline: 2px solid #bfdbfe; outline-offset: 0">
+      </div>
+      <a href="SignIn.dc.html" style="display: flex; align-items: center; justify-content: center; height: 40px; border-radius: 8px; background: #2563eb; color: #fff; font-weight: 500">Continue</a>
+      <p style="margin: 0; font-size: 13px; color: #737373; text-align: center">trace is by invitation. Ask an admin on your team to invite you.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s2" style="flex: 0 1 400px; display: flex; flex-direction: column; gap: 12px">
+    <div style="font-size: 12px; color: #737373; text-align: center">Step 2: how you sign in (only what this person has set up)</div>
+    <div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 14px; padding: 32px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.04)">
+      <div>
+        <h2 id="s2" style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em">Welcome back</h2>
+        <p style="margin: 4px 0 0; color: #737373">marc@teichtahl.com · <a href="SignIn.dc.html">Not you?</a></p>
+      </div>
+      <a href="Main.dc.html" style="display: flex; align-items: center; gap: 12px; padding: 14px 16px; border: 2px solid #2563eb; border-radius: 10px; color: #0a0a0a; background: #eff4ff">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="4"/><path d="M3 21a6 6 0 0 1 12 0"/><path d="M19 10v8l2 2M17 12h4"/></svg>
+        <span style="flex-grow: 1; display: flex; flex-direction: column; line-height: 1.35"><span style="font-weight: 600">Use your passkey</span><span style="font-size: 12px; color: #525252">Recommended: nothing to type, cannot be phished</span></span>
+      </a>
+      <a href="SignIn.dc.html" style="display: flex; align-items: center; gap: 12px; padding: 14px 16px; border: 1px solid #e5e5e5; border-radius: 10px; color: #0a0a0a">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#525252" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+        <span style="flex-grow: 1; display: flex; flex-direction: column; line-height: 1.35"><span style="font-weight: 500">Email me a code</span><span style="font-size: 12px; color: #737373">A 6-digit code, valid for 3 minutes</span></span>
+      </a>
+      <a href="SignIn.dc.html" style="display: flex; align-items: center; gap: 12px; padding: 14px 16px; border: 1px solid #e5e5e5; border-radius: 10px; color: #0a0a0a">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#525252" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+        <span style="flex-grow: 1; display: flex; flex-direction: column; line-height: 1.35"><span style="font-weight: 500">Use my password</span><span style="font-size: 12px; color: #737373">Then a code from your authenticator app</span></span>
+      </a>
+    </div>
+  </section>
+
+  <section aria-labelledby="s3" style="flex: 0 1 400px; display: flex; flex-direction: column; gap: 12px">
+    <div style="font-size: 12px; color: #737373; text-align: center">Step 3, when a code is used</div>
+    <div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 14px; padding: 32px; display: flex; flex-direction: column; gap: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.04)">
+      <div>
+        <h2 id="s3" style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em">Enter the code</h2>
+        <p style="margin: 4px 0 0; color: #737373">We sent 6 digits to marc@teichtahl.com. You can paste it.</p>
+      </div>
+      <div style="display: flex; gap: 8px; justify-content: center" role="group" aria-label="6-digit code">
+        <input aria-label="Digit 1" value="4" style="width: 44px; height: 52px; text-align: center; font: inherit; font-size: 20px; border: 1px solid #d4d4d4; border-radius: 8px">
+        <input aria-label="Digit 2" value="1" style="width: 44px; height: 52px; text-align: center; font: inherit; font-size: 20px; border: 1px solid #d4d4d4; border-radius: 8px">
+        <input aria-label="Digit 3" value="9" style="width: 44px; height: 52px; text-align: center; font: inherit; font-size: 20px; border: 1px solid #d4d4d4; border-radius: 8px">
+        <input aria-label="Digit 4" value="" style="width: 44px; height: 52px; text-align: center; font: inherit; font-size: 20px; border: 2px solid #2563eb; border-radius: 8px">
+        <input aria-label="Digit 5" value="" style="width: 44px; height: 52px; text-align: center; font: inherit; font-size: 20px; border: 1px solid #d4d4d4; border-radius: 8px">
+        <input aria-label="Digit 6" value="" style="width: 44px; height: 52px; text-align: center; font: inherit; font-size: 20px; border: 1px solid #d4d4d4; border-radius: 8px">
+      </div>
+      <p style="margin: 0; text-align: center; color: #737373; font-size: 13px">Send a new code in 24 seconds</p>
+    </div>
+  </section>
+
+  <p style="flex: 1 1 100%; text-align: center; margin: 0; font-size: 12px; color: #737373">trace's own sign-in pages. They talk to the Cognito user pool through its API; Cognito's hosted pages are never shown.</p>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>trace · Preferences</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2563eb;text-decoration:none}a:hover{color:#1d4ed8}
+</style>
+</helmet>
+<div style="font-family: Geist, system-ui, sans-serif; color: #0a0a0a; background: #ffffff; min-height: 1000px; display: flex; flex-wrap: wrap; font-size: 14px; line-height: 1.5">
+
+  <nav aria-label="Main" style="flex: 1 1 232px; max-width: 260px; background: #fafafa; border-right: 1px solid #e5e5e5; padding: 16px 12px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px">
+    <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px 18px">
+      <div style="width: 24px; height: 24px; border-radius: 6px; background: #0a0a0a; color: #fff; display: flex; align-items: center; justify-content: center; font-family: 'Geist Mono', monospace; font-size: 13px; font-weight: 600">t</div>
+      <span style="font-weight: 600; font-size: 15px">trace</span>
+    </div>
+    <a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/></svg>Home</a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Projects</a>
+    <a href="Knowledge.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h10a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z"/><path d="M4 16a4 4 0 0 1 4-4h10"/></svg>Knowledge</a>
+    <a href="Agents.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01"/></svg>Agents</a>
+    <a href="Operations.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Operations</a>
+    <a href="People.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>Admin</a>
+    <div style="margin: 20px 8px 6px; font-size: 12px; color: #737373; font-weight: 500">Pinned</div>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Soil sensor</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Motor driver</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Panel controller</span></a>
+    <div style="flex-grow: 1"></div>
+    <a href="Preferences.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; background: #f0f0f0; color: #0a0a0a; font-weight: 500">
+      <span style="width: 28px; height: 28px; border-radius: 14px; background: #e5e5e5; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600">MT</span>
+      <span style="display: flex; flex-direction: column; line-height: 1.3"><span style="font-weight: 500; color: #0a0a0a">Marc Teichtahl</span><span style="font-size: 12px; color: #737373; font-weight: 400">Admin</span></span>
+    </a>
+  </nav>
+
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="height: 56px; border-bottom: 1px solid #e5e5e5; display: flex; align-items: center; gap: 12px; padding: 0 24px; box-sizing: border-box">
+      <span style="font-weight: 500">Preferences</span>
+      <div style="flex-grow: 1"></div>
+      <button type="button" style="display: flex; align-items: center; gap: 8px; height: 36px; width: 280px; max-width: 40%; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; color: #737373; font: inherit; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span style="flex-grow: 1; text-align: left">Search or run a command</span><kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; border: 1px solid #e5e5e5; border-radius: 4px; padding: 0 4px">⌘K</kbd></button>
+      <span title="Live: every screen updates as the record changes" style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #15803d"><span style="width: 8px; height: 8px; border-radius: 4px; background: #16a34a"></span>Live</span>
+      <button type="button" aria-label="Notifications, 2 new" style="position: relative; width: 36px; height: 36px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #0a0a0a"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><span style="position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 4px; background: #2563eb"></span></button>
+      <a href="Chat.dc.html" style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; color: #0a0a0a; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>Ask trace <kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373">⌘J</kbd></a>
+    </header>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 32px; padding: 32px 24px 64px; box-sizing: border-box; width: 100%; max-width: 1120px; margin: 0 auto">
+
+      <aside style="flex: 0 1 220px; min-width: 180px; display: flex; flex-direction: column; gap: 8px">
+        <h1 style="margin: 0 0 8px; font-size: 24px; font-weight: 600; letter-spacing: -0.01em">Preferences</h1>
+        <label for="find-setting" style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; color: #737373"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="find-setting" type="text" placeholder="Find a setting" style="border: 0; outline: none; font: inherit; min-width: 0; flex-grow: 1; background: transparent"></label>
+        <nav aria-label="Preference groups" style="display: flex; flex-direction: column; gap: 2px; margin-top: 4px">
+          <a href="#profile" style="padding: 7px 10px; border-radius: 8px; color: #404040">Profile</a>
+          <a href="#security" style="padding: 7px 10px; border-radius: 8px; color: #404040">Sign-in and security</a>
+          <a href="#notifications" style="padding: 7px 10px; border-radius: 8px; color: #404040">Notifications</a>
+          <a href="#voice" aria-current="true" style="padding: 7px 10px; border-radius: 8px; background: #f0f0f0; color: #0a0a0a; font-weight: 500">Voice</a>
+          <a href="#chat" style="padding: 7px 10px; border-radius: 8px; color: #404040">Chat</a>
+          <a href="#display" style="padding: 7px 10px; border-radius: 8px; color: #404040">Display</a>
+          <a href="#formats" style="padding: 7px 10px; border-radius: 8px; color: #404040">Formats</a>
+          <a href="#work" style="padding: 7px 10px; border-radius: 8px; color: #404040">Work</a>
+          <a href="#data" style="padding: 7px 10px; border-radius: 8px; color: #404040">Your data</a>
+        </nav>
+      </aside>
+
+      <main style="flex: 1 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 28px">
+
+        <div style="display: flex; gap: 16px; flex-wrap: wrap; align-items: stretch">
+          <section aria-labelledby="theme-h" style="flex: 1 1 400px; min-width: 0; border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px 24px; display: flex; flex-direction: column; gap: 12px">
+            <div>
+              <h2 id="theme-h" style="margin: 0; font-size: 15px; font-weight: 600">Theme</h2>
+              <p style="margin: 2px 0 0; font-size: 13px; color: #525252">System follows your device.</p>
+            </div>
+            <div role="radiogroup" aria-label="Theme" style="display: flex; gap: 10px; flex-wrap: wrap">
+              <label style="flex: 1 1 110px; display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 2px solid #2563eb; border-radius: 8px; cursor: pointer">
+                <span style="display: flex; height: 44px; border-radius: 6px; overflow: hidden; border: 1px solid #e5e5e5"><span style="flex: 1; background: #ffffff; padding: 6px"><span style="display: block; height: 6px; width: 70%; border-radius: 3px; background: #e5e5e5"></span></span><span style="flex: 1; background: #0a0a0a; padding: 6px"><span style="display: block; height: 6px; width: 70%; border-radius: 3px; background: #404040"></span></span></span>
+                <span style="display: flex; align-items: center; gap: 6px; font-weight: 500"><input type="radio" name="theme" value="system" checked style="margin: 0; accent-color: #2563eb">System</span>
+              </label>
+              <label style="flex: 1 1 110px; display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid #e5e5e5; border-radius: 8px; cursor: pointer">
+                <span style="display: block; height: 44px; border-radius: 6px; background: #ffffff; border: 1px solid #e5e5e5; padding: 6px; box-sizing: border-box"><span style="display: block; height: 6px; width: 50%; border-radius: 3px; background: #e5e5e5"></span><span style="display: block; margin-top: 6px; height: 6px; width: 30%; border-radius: 3px; background: #2563eb"></span></span>
+                <span style="display: flex; align-items: center; gap: 6px"><input type="radio" name="theme" value="light" style="margin: 0; accent-color: #2563eb">Light</span>
+              </label>
+              <label style="flex: 1 1 110px; display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid #e5e5e5; border-radius: 8px; cursor: pointer">
+                <span style="display: block; height: 44px; border-radius: 6px; background: #0a0a0a; border: 1px solid #262626; padding: 6px; box-sizing: border-box"><span style="display: block; height: 6px; width: 50%; border-radius: 3px; background: #404040"></span><span style="display: block; margin-top: 6px; height: 6px; width: 30%; border-radius: 3px; background: #3b82f6"></span></span>
+                <span style="display: flex; align-items: center; gap: 6px"><input type="radio" name="theme" value="dark" style="margin: 0; accent-color: #2563eb">Dark</span>
+              </label>
+            </div>
+          </section>
+
+          <a href="#security" style="flex: 0 1 240px; min-width: 200px; border: 1px solid #e5e5e5; border-radius: 12px; padding: 16px 18px; background: #fafafa; color: #0a0a0a; display: flex; flex-direction: column; gap: 6px; align-self: flex-start">
+            <span style="display: flex; align-items: center; gap: 8px; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Passkey required by your team</span>
+            <span style="font-size: 12px; color: #737373">Sign-in and security · set by an admin, so you can't turn it off here.</span>
+          </a>
+        </div>
+
+        <section id="voice" aria-labelledby="voice-h" style="display: flex; flex-direction: column">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid #e5e5e5">
+            <h2 id="voice-h" style="margin: 0; font-size: 13px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 0.04em">Voice</h2>
+            <button type="button" style="height: 32px; padding: 0 10px; border: 0; background: transparent; font: inherit; font-size: 13px; color: #525252; cursor: pointer">Reset to defaults</button>
+          </div>
+
+          <div style="display: flex; gap: 24px; padding: 18px 0; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap">
+            <div style="flex: 1 1 220px; min-width: 0">
+              <div id="voice-name" style="font-weight: 500">Voice</div>
+              <div style="font-size: 13px; color: #525252">Who reads trace's replies aloud.</div>
+            </div>
+            <div role="radiogroup" aria-labelledby="voice-name" style="flex: 1 1 340px; min-width: 0; border: 1px solid #e5e5e5; border-radius: 8px; overflow: hidden">
+              <div style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #eff4ff">
+                <input id="v-olivia" type="radio" name="voice" value="olivia" checked style="margin: 0; accent-color: #2563eb">
+                <label for="v-olivia" style="flex-grow: 1; cursor: pointer"><span style="font-weight: 500">Olivia</span> <span style="font-size: 12px; color: #525252">neural · Australian English</span></label>
+                <button type="button" aria-label="Preview Olivia" style="width: 30px; height: 30px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #0a0a0a"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg></button>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-top: 1px solid #f0f0f0">
+                <input id="v-matthew" type="radio" name="voice" value="matthew" style="margin: 0; accent-color: #2563eb">
+                <label for="v-matthew" style="flex-grow: 1; cursor: pointer"><span style="font-weight: 500">Matthew</span> <span style="font-size: 12px; color: #525252">neural · US English</span></label>
+                <button type="button" aria-label="Preview Matthew" style="width: 30px; height: 30px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #0a0a0a"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg></button>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-top: 1px solid #f0f0f0">
+                <input id="v-amy" type="radio" name="voice" value="amy" style="margin: 0; accent-color: #2563eb">
+                <label for="v-amy" style="flex-grow: 1; cursor: pointer"><span style="font-weight: 500">Amy</span> <span style="font-size: 12px; color: #525252">generative · British English</span></label>
+                <button type="button" aria-label="Preview Amy" style="width: 30px; height: 30px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #0a0a0a"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg></button>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-top: 1px solid #f0f0f0">
+                <input id="v-ruth" type="radio" name="voice" value="ruth" style="margin: 0; accent-color: #2563eb">
+                <label for="v-ruth" style="flex-grow: 1; cursor: pointer"><span style="font-weight: 500">Ruth</span> <span style="font-size: 12px; color: #525252">generative · US English</span></label>
+                <button type="button" aria-label="Preview Ruth" style="width: 30px; height: 30px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #0a0a0a"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg></button>
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 24px; padding: 18px 0; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap; align-items: center">
+            <div style="flex: 1 1 220px; min-width: 0">
+              <label for="speed" style="font-weight: 500">Speaking speed</label>
+              <div style="font-size: 13px; color: #525252">How fast replies are read.</div>
+            </div>
+            <div style="flex: 1 1 340px; min-width: 0; display: flex; align-items: center; gap: 10px">
+              <span style="font-size: 12px; color: #737373">0.75×</span>
+              <input id="speed" type="range" min="0.75" max="1.5" step="0.05" value="1" style="flex-grow: 1; accent-color: #2563eb">
+              <span style="font-size: 12px; color: #737373">1.5×</span>
+              <span style="font-family: 'Geist Mono', monospace; font-size: 13px; min-width: 36px; text-align: right">1×</span>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 24px; padding: 18px 0; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap; align-items: center">
+            <div style="flex: 1 1 220px; min-width: 0">
+              <div id="readaloud" style="font-weight: 500">Read replies aloud</div>
+              <div style="font-size: 13px; color: #525252">Speak trace's replies as they arrive.</div>
+            </div>
+            <div style="flex: 1 1 340px; min-width: 0">
+              <div role="radiogroup" aria-labelledby="readaloud" style="display: inline-flex; padding: 3px; background: #f5f5f5; border-radius: 8px; gap: 2px">
+                <button type="button" role="radio" aria-checked="false" style="height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; font: inherit; color: #525252; cursor: pointer">Off</button>
+                <button type="button" role="radio" aria-checked="true" style="height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.04); font: inherit; font-weight: 500; color: #0a0a0a; cursor: pointer">Summary only</button>
+                <button type="button" role="radio" aria-checked="false" style="height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; font: inherit; color: #525252; cursor: pointer">Whole reply</button>
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 24px; padding: 18px 0; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap; align-items: center">
+            <div style="flex: 1 1 220px; min-width: 0">
+              <label for="dictlang" style="font-weight: 500">Dictation language</label>
+              <div style="font-size: 13px; color: #525252">The language you speak when dictating.</div>
+            </div>
+            <div style="flex: 1 1 340px; min-width: 0">
+              <select id="dictlang" style="height: 36px; min-width: 220px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; color: #0a0a0a">
+                <option selected>English (Australia)</option>
+                <option>English (United States)</option>
+                <option>English (United Kingdom)</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 24px; padding: 18px 0; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap">
+            <div style="flex: 1 1 220px; min-width: 0">
+              <div id="mic" style="font-weight: 500">Microphone</div>
+              <div style="font-size: 13px; color: #525252">How dictation starts, and which microphone it uses.</div>
+            </div>
+            <div style="flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 10px">
+              <div role="radiogroup" aria-labelledby="mic" style="align-self: flex-start; display: inline-flex; padding: 3px; background: #f5f5f5; border-radius: 8px; gap: 2px">
+                <button type="button" role="radio" aria-checked="true" style="height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.04); font: inherit; font-weight: 500; color: #0a0a0a; cursor: pointer">Hold to talk</button>
+                <button type="button" role="radio" aria-checked="false" style="height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; font: inherit; color: #525252; cursor: pointer">Tap to start and stop</button>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+                <label for="micdev" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Microphone device</label>
+                <select id="micdev" style="height: 36px; min-width: 220px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; color: #0a0a0a">
+                  <option selected>MacBook Pro Microphone</option>
+                  <option>AirPods Pro</option>
+                </select>
+                <div role="img" aria-label="Input level, moderate" style="display: flex; align-items: flex-end; gap: 2px; height: 18px">
+                  <span style="width: 3px; height: 6px; background: #15803d; border-radius: 1px"></span>
+                  <span style="width: 3px; height: 10px; background: #15803d; border-radius: 1px"></span>
+                  <span style="width: 3px; height: 14px; background: #15803d; border-radius: 1px"></span>
+                  <span style="width: 3px; height: 11px; background: #15803d; border-radius: 1px"></span>
+                  <span style="width: 3px; height: 16px; background: #d4d4d4; border-radius: 1px"></span>
+                  <span style="width: 3px; height: 18px; background: #d4d4d4; border-radius: 1px"></span>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #737373"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>Kept on this device</div>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 24px; padding: 18px 0; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap; align-items: center">
+            <div style="flex: 1 1 220px; min-width: 0">
+              <label for="autosend" style="font-weight: 500">Send when I stop talking</label>
+              <div style="font-size: 13px; color: #525252">Send the message after a short pause instead of waiting for you to press send.</div>
+            </div>
+            <div style="flex: 1 1 340px; min-width: 0">
+              <input id="autosend" type="checkbox" role="switch" style="appearance: none; -webkit-appearance: none; width: 36px; height: 20px; border-radius: 10px; background: #e5e5e5; margin: 0; cursor: pointer; position: relative; box-shadow: inset 2px 0 0 0 #e5e5e5, inset 18px 0 0 0 #ffffff, inset 18px 0 0 2px #e5e5e5">
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 24px; padding: 18px 0; flex-wrap: wrap; align-items: center">
+            <div style="flex: 1 1 220px; min-width: 0">
+              <label for="spoken" style="font-weight: 500">Spoken commands (send, cancel, stop, read again)</label>
+              <div style="font-size: 13px; color: #525252">Say a command word at the end of dictation to act on it.</div>
+            </div>
+            <div style="flex: 1 1 340px; min-width: 0; display: flex; align-items: center; gap: 10px">
+              <input id="spoken" type="checkbox" role="switch" checked style="appearance: none; -webkit-appearance: none; width: 36px; height: 20px; border-radius: 10px; background: #2563eb; margin: 0; cursor: pointer; box-shadow: inset -2px 0 0 0 #2563eb, inset -18px 0 0 0 #ffffff, inset -18px 0 0 2px #2563eb">
+              <span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: #15803d"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Saved</span>
+            </div>
+          </div>
+        </section>
+
+        <section id="chat" aria-labelledby="chat-h" style="display: flex; flex-direction: column">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid #e5e5e5">
+            <h2 id="chat-h" style="margin: 0; font-size: 13px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 0.04em">Chat</h2>
+            <button type="button" style="height: 32px; padding: 0 10px; border: 0; background: transparent; font: inherit; font-size: 13px; color: #525252; cursor: pointer">Reset to defaults</button>
+          </div>
+
+          <div style="display: flex; gap: 24px; padding: 18px 0; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap">
+            <div style="flex: 1 1 220px; min-width: 0">
+              <div id="enterkey" style="font-weight: 500">Enter key</div>
+              <div style="font-size: 13px; color: #525252">What pressing Enter does in a message box.</div>
+            </div>
+            <div role="radiogroup" aria-labelledby="enterkey" style="flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 8px">
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer"><input type="radio" name="enter" value="send" checked style="margin: 0; accent-color: #2563eb">Enter sends, Shift+Enter adds a line</label>
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer"><input type="radio" name="enter" value="newline" style="margin: 0; accent-color: #2563eb">Enter adds a line, ⌘+Enter sends</label>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 24px; padding: 18px 0; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap; align-items: center">
+            <div style="flex: 1 1 220px; min-width: 0">
+              <label for="recall" style="font-weight: 500">Up and down recall sent messages</label>
+              <div style="font-size: 13px; color: #525252">In an empty box, the arrow keys bring back what you sent earlier.</div>
+            </div>
+            <div style="flex: 1 1 340px; min-width: 0">
+              <input id="recall" type="checkbox" role="switch" checked style="appearance: none; -webkit-appearance: none; width: 36px; height: 20px; border-radius: 10px; background: #2563eb; margin: 0; cursor: pointer; box-shadow: inset -2px 0 0 0 #2563eb, inset -18px 0 0 0 #ffffff, inset -18px 0 0 2px #2563eb">
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 24px; padding: 18px 0; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap; align-items: center">
+            <div style="flex: 1 1 220px; min-width: 0">
+              <label for="explain" style="font-weight: 500">Explain technical terms</label>
+              <div style="font-size: 13px; color: #525252">When trace adds a short plain-words explanation after a term.</div>
+            </div>
+            <div style="flex: 1 1 340px; min-width: 0">
+              <select id="explain" style="height: 36px; min-width: 260px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; color: #0a0a0a">
+                <option selected>First time in a conversation</option>
+                <option>Every time</option>
+                <option>Never, show tooltips only</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 24px; padding: 18px 0; flex-wrap: wrap; align-items: center">
+            <div style="flex: 1 1 220px; min-width: 0">
+              <div style="font-weight: 500">Tables</div>
+              <div style="font-size: 13px; color: #525252">Bring every table back to its default columns, sort and filters.</div>
+            </div>
+            <div style="flex: 1 1 340px; min-width: 0">
+              <button type="button" style="height: 36px; padding: 0 14px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-weight: 500; color: #0a0a0a; cursor: pointer">Reset all table views</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>
