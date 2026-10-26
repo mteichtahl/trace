@@ -1,6 +1,6 @@
 /**
  * The CodeBuild GitHub Actions runner projects (src/infra/runner.ts): one per project in both layouts, and trace's own
- * (src/infra/ci-app.ts). Every job runs on AWS, CodeBuild reaches GitHub through the CodeConnections connection, and
+ * (src/infra/ci-app.ts), once the GitHub connection (given, or created by the stack) is ready. Every job runs on AWS, CodeBuild reaches GitHub through the CodeConnections connection, and
  * the runner's role gives a job nothing in AWS beyond its logs and that connection.
  */
 import { App } from 'aws-cdk-lib'
@@ -8,9 +8,9 @@ import { Template } from 'aws-cdk-lib/assertions'
 import { describe, expect, it } from 'vitest'
 import { RUNNER_VARIABLE, SELF_CI_PROJECT, runnerProjectName } from '../../src/core/project.js'
 import { CI_STACK, TraceCiStack, ciSettings } from '../../src/infra/ci-app.js'
-import { InfraPropsSchema, projectHash, projectOutputs } from '../../src/infra/props.js'
+import { CONNECTION_CREATED_OUTPUT, CONNECTION_OUTPUT, InfraPropsSchema, projectHash, projectOutputs } from '../../src/infra/props.js'
 import { connectionArns } from '../../src/infra/runner.js'
-import { CONNECTION_ARN, RUNNERS, nestedOf, synth } from './templates.js'
+import { CONNECTION_ARN, RUNNERS, nestedOf, nestedResourceId, synth } from './templates.js'
 
 const A = 'mteichtahl/trace'
 const B = 'pokeys-toolkit/potroller'
@@ -36,11 +36,12 @@ function runnerOf(t: Template, name: string): { project: Res; role: Res; stateme
   return { project, role, statements: [...inline, ...attached] }
 }
 
-/** Every check a runner project must pass, whatever template it is in. */
-function expectRunner(t: Template, name: string, repository: string): void {
+/** Every check a runner project must pass, whatever template it is in. `connection`: the ARN as the template says it
+ * (the given one by default; a reference when the stack created the connection). */
+function expectRunner(t: Template, name: string, repository: string, connection: unknown = CONNECTION_ARN): void {
   const { project, role, statements } = runnerOf(t, name)
   const p = project.Properties
-  expect(p.Source).toMatchObject({ Type: 'GITHUB', Location: `https://github.com/${repository}`, Auth: { Type: 'CODECONNECTIONS', Resource: CONNECTION_ARN } })
+  expect(p.Source).toMatchObject({ Type: 'GITHUB', Location: `https://github.com/${repository}`, Auth: { Type: 'CODECONNECTIONS', Resource: connection } })
   expect(p.Triggers).toEqual({ Webhook: true, FilterGroups: [[{ Type: 'EVENT', Pattern: 'WORKFLOW_JOB_QUEUED' }]] })
   expect(p.Artifacts).toEqual({ Type: 'NO_ARTIFACTS' })
   expect(p.Environment).toMatchObject({ Type: 'LINUX_CONTAINER', ComputeType: 'BUILD_GENERAL1_LARGE', Image: 'aws/codebuild/standard:7.0', PrivilegedMode: false })
@@ -68,8 +69,15 @@ function expectRunner(t: Template, name: string, repository: string): void {
     'codestar-connections:GetConnection', 'codestar-connections:GetConnectionToken', 'codestar-connections:UseConnection',
     'logs:CreateLogStream', 'logs:PutLogEvents',
   ])
-  const connection = statements.find((s) => s.Sid === 'RunnerConnection')
-  expect(list(connection?.Resource).sort()).toEqual([CONNECTION_ARN, CODESTAR_ARN].sort())
+  const granted = list(statements.find((s) => s.Sid === 'RunnerConnection')?.Resource)
+  if (connection === CONNECTION_ARN) expect(granted.sort()).toEqual([CONNECTION_ARN, CODESTAR_ARN].sort())
+  else {
+    // the created connection's ARN, and the same connection under codestar-connections in this stack's own account
+    expect(granted).toHaveLength(2)
+    expect(granted[0]).toEqual(connection)
+    expect(JSON.stringify(granted[1])).toContain(':codestar-connections:')
+    expect(JSON.stringify(granted[1])).toContain(JSON.stringify(connection))
+  }
   const logs = statements.find((s) => s.Sid === 'RunnerLogs')
   for (const r of list(logs?.Resource)) {
     expect(r).not.toBe('*')
@@ -105,8 +113,9 @@ describe("each project's runner project", () => {
     const { project } = runnerOf(nestedOf(s, A), runnerProjectName('trace', A))
     expect(project.Properties.Environment).toMatchObject({ ComputeType: 'BUILD_GENERAL1_XLARGE', Image: 'aws/codebuild/standard:8.0', PrivilegedMode: true })
     expect(() => InfraPropsSchema.parse({ ...base, runners: { connectionArn: 'arn:aws:iam::123456789012:role/x' } })).toThrow(/CodeConnections connection ARN/)
+    // nothing is needed up front: no connection (the stack creates one), and ready by default
     const { runners: _, ...noRunners } = base
-    expect(() => InfraPropsSchema.parse(noRunners)).toThrow()
+    expect(InfraPropsSchema.parse(noRunners).runners).toEqual({ connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false })
     expect(RUNNER_VARIABLE).toBe('TRACE_CODEBUILD_PROJECT')
   }, 300_000)
 
@@ -116,25 +125,109 @@ describe("each project's runner project", () => {
   })
 })
 
+type Out = Record<string, { Value: unknown }>
+const outputsOf = (t: Template): Out => (t.toJSON() as { Outputs: Out }).Outputs
+
+describe("the installation's GitHub connection", () => {
+  it('uses a given connection without creating one, and outputs it', () => {
+    const s = synth(InfraPropsSchema.parse({ ...base, repositories: [A] }), 'ConnGiven')
+    s.all.resourceCountIs('AWS::CodeConnections::Connection', 0)
+    expect(outputsOf(s.parent)[CONNECTION_OUTPUT]?.Value).toBe(CONNECTION_ARN)
+    expect(outputsOf(s.parent)[CONNECTION_CREATED_OUTPUT]?.Value).toBe('false')
+  }, 300_000)
+
+  for (const layout of LAYOUTS) {
+    it(`creates <prefix>-github when given none, keeps it on delete, outputs it, and the runners use it (${layout})`, () => {
+      for (const retainData of [true, false]) {
+        const s = synth(InfraPropsSchema.parse({ ...base, layout, retainData, prefix: 'lab', runners: {} }), `ConnNew${layout}${retainData}`)
+        const conns = s.parent.findResources('AWS::CodeConnections::Connection') as Record<string, Res & { DeletionPolicy?: string }>
+        expect(Object.keys(conns)).toHaveLength(1)
+        s.all.resourceCountIs('AWS::CodeConnections::Connection', 1)
+        const [id, conn] = Object.entries(conns)[0] as [string, Res & { DeletionPolicy?: string }]
+        expect(conn.Properties).toEqual({ ConnectionName: 'lab-github', ProviderType: 'GitHub', Tags: [{ Key: 'trace:installation', Value: 'lab' }] })
+        // kept whatever retainData says: another stack may be reusing it
+        expect(conn.DeletionPolicy).toBe('Retain')
+        const ref = { 'Fn::GetAtt': [id, 'ConnectionArn'] }
+        expect(outputsOf(s.parent)[CONNECTION_OUTPUT]?.Value).toEqual(ref)
+        expect(outputsOf(s.parent)[CONNECTION_CREATED_OUTPUT]?.Value).toBe('true')
+        for (const repo of [A, B]) {
+          if (layout === 'flat') expectRunner(s.parent, runnerProjectName('lab', repo), repo, ref)
+          else {
+            // a parameter of its nested stack, which the parent sets to the connection's ARN
+            const t = nestedOf(s, repo)
+            const { project } = runnerOf(t, runnerProjectName('lab', repo))
+            const param = (project.Properties.Source as { Auth: { Resource: { Ref: string } } }).Auth.Resource.Ref
+            expect(Object.keys((t.toJSON() as { Parameters: object }).Parameters)).toContain(param)
+            expectRunner(t, runnerProjectName('lab', repo), repo, { Ref: param })
+            const passed = (s.parent.toJSON() as { Resources: Record<string, Res> }).Resources[nestedResourceId(s, projectHash(repo))]?.Properties.Parameters as Record<string, unknown>
+            expect(passed[param]).toEqual(ref)
+          }
+        }
+      }
+    }, 600_000)
+
+    it(`makes no runner project, role, log group or runner output until the connection is ready, but still the connection (${layout})`, () => {
+      const s = synth(InfraPropsSchema.parse({ ...base, layout, runners: { connectionReady: false } }), `ConnPending${layout}`)
+      // (the agent and GPU image builds are CodeBuild projects too: only the runners are counted)
+      const runners = (x: typeof s) => Object.values(x.all.findResources('AWS::CodeBuild::Project') as Record<string, Res>).map((r) => r.Properties.Name).filter((n) => /^trace-ci-[0-9a-f]{8}$/.test(String(n)))
+      expect(runners(s)).toEqual([])
+      s.parent.resourceCountIs('AWS::CodeConnections::Connection', 1)
+      const roles = Object.values(s.all.findResources('AWS::IAM::Role') as Record<string, Res>).map((r) => String(r.Properties.RoleName ?? ''))
+      for (const repo of [A, B]) {
+        expect(roles.some((n) => n.startsWith(runnerProjectName('trace', repo)))).toBe(false)
+        expect(Object.keys(outputsOf(s.all))).not.toContain(projectOutputs(repo).runnerProject)
+      }
+      const groups = Object.values(s.all.findResources('AWS::Logs::LogGroup') as Record<string, Res>).map((r) => String(r.Properties.LogGroupName ?? ''))
+      expect(groups.filter((g) => g.startsWith('/aws/codebuild/trace-ci-'))).toEqual([])
+      expect(outputsOf(s.parent)[CONNECTION_OUTPUT]).toBeDefined()
+      // and with it ready, the runners
+      const ready = synth(InfraPropsSchema.parse({ ...base, layout, runners: {} }), `ConnReady${layout}`)
+      expect(runners(ready).sort()).toEqual([A, B].map((r) => runnerProjectName('trace', r)).sort())
+    }, 600_000)
+  }
+})
+
 describe("trace's own CI stack", () => {
   const ctx = (o: Record<string, unknown>) => (k: string): unknown => o[k]
 
   it('is one runner project named trace-ci for mteichtahl/trace by default', () => {
     const s = ciSettings(ctx({ connectionArn: CONNECTION_ARN }), {})
-    expect(s).toEqual({ repository: 'mteichtahl/trace', connectionArn: CONNECTION_ARN, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false })
+    expect(s).toEqual({ repository: 'mteichtahl/trace', connectionArn: CONNECTION_ARN, connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false })
     const t = Template.fromStack(new TraceCiStack(new App(), CI_STACK, s, { account: '123456789012', region: 'us-east-1' }))
     t.resourceCountIs('AWS::CodeBuild::Project', 1)
     t.resourceCountIs('AWS::IAM::Policy', 0)
+    t.resourceCountIs('AWS::CodeConnections::Connection', 0)
+    expect(outputsOf(t)[CONNECTION_OUTPUT]?.Value).toBe(CONNECTION_ARN)
     expect(SELF_CI_PROJECT).toBe('trace-ci')
     expectRunner(t, SELF_CI_PROJECT, 'mteichtahl/trace')
   })
 
-  it('takes the connection and repository from the environment, and refuses to go without a connection', () => {
+  it('needs nothing up front: creates trace-ci-github and its runner, or only the connection while it is not ready', () => {
+    const s = ciSettings(ctx({}), {})
+    expect(s).toEqual({ repository: 'mteichtahl/trace', connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false })
+    const t = Template.fromStack(new TraceCiStack(new App(), CI_STACK, s, { account: '123456789012', region: 'us-east-1' }))
+    const conns = Object.entries(t.findResources('AWS::CodeConnections::Connection') as Record<string, Res & { DeletionPolicy?: string }>)
+    expect(conns).toHaveLength(1)
+    const [id, conn] = conns[0] as [string, Res & { DeletionPolicy?: string }]
+    expect(conn.Properties).toMatchObject({ ConnectionName: 'trace-ci-github', ProviderType: 'GitHub' })
+    expect(conn.DeletionPolicy).toBe('Retain')
+    expectRunner(t, SELF_CI_PROJECT, 'mteichtahl/trace', { 'Fn::GetAtt': [id, 'ConnectionArn'] })
+    expect(outputsOf(t)[CONNECTION_OUTPUT]?.Value).toEqual({ 'Fn::GetAtt': [id, 'ConnectionArn'] })
+    // connectionReady=false (context, or TRACE_CONNECTION_READY): the connection alone
+    for (const pending of [ciSettings(ctx({ connectionReady: 'false' }), {}), ciSettings(ctx({}), { TRACE_CONNECTION_READY: 'false' })]) {
+      expect(pending.connectionReady).toBe(false)
+      const p = Template.fromStack(new TraceCiStack(new App(), CI_STACK, pending, { account: '123456789012', region: 'us-east-1' }))
+      p.resourceCountIs('AWS::CodeConnections::Connection', 1)
+      for (const r of ['AWS::CodeBuild::Project', 'AWS::IAM::Role', 'AWS::Logs::LogGroup']) p.resourceCountIs(r, 0)
+    }
+    expect(() => ciSettings(ctx({ connectionReady: 'maybe' }), {})).toThrow(/connectionReady must be true or false/)
+  })
+
+  it('takes the connection and repository from the environment, and refuses a connection that is not one', () => {
     const s = ciSettings(ctx({}), { TRACE_CONNECTION_ARN: CONNECTION_ARN, TRACE_CI_REPOSITORY: 'Other/Repo', TRACE_CI_PRIVILEGED: 'true' })
     expect(s).toMatchObject({ repository: 'other/repo', connectionArn: CONNECTION_ARN, privileged: true })
     // context wins over the environment
     expect(ciSettings(ctx({ repository: 'a/b', connectionArn: CONNECTION_ARN }), { TRACE_CI_REPOSITORY: 'c/d' }).repository).toBe('a/b')
-    expect(() => ciSettings(ctx({}), {})).toThrow(/connectionArn.*TRACE_CONNECTION_ARN/)
     expect(() => ciSettings(ctx({ connectionArn: 'nope' }), {})).toThrow(/CodeConnections connection ARN/)
   })
 })

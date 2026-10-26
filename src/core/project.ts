@@ -79,6 +79,10 @@ export const runnerProjectName = (prefix: string, repository: string): string =>
 export const RUNNER_VARIABLE = 'TRACE_CODEBUILD_PROJECT'
 /** The CodeBuild runner project trace's own repository builds on (src/infra/ci-app.ts deploys it). */
 export const SELF_CI_PROJECT = 'trace-ci'
+/** The AWS CodeConnections connection to GitHub a stack creates when it is given none (src/infra/runner.ts
+ * GithubConnection): `<prefix>-github` for an installation, `trace-ci-github` for trace's own CI stack. At most 32
+ * characters (a prefix is at most 21). */
+export const connectionName = (prefix: string): string => `${prefix}-github`
 export const cpuJobDefinitionName = (prefix: string, repository: string): string => `${prefix}-cpu-${projectHash(repository)}`
 /** A project memory's log delivery source and destination name (`[\w-]{1,60}`, unique in the account and region). */
 export const memoryDeliveryName = (prefix: string, repository: string, kind: 'logs' | 'traces', generation = 0): string =>

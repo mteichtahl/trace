@@ -66,7 +66,9 @@ export const RUNNER_COMPUTE_TYPES = ['BUILD_GENERAL1_MEDIUM', 'BUILD_GENERAL1_LA
 /** Where every GitHub Actions job runs: AWS CodeBuild runners in the installation's account (props.ts runners), never
  * GitHub-hosted runners. CodeBuild reaches GitHub through an AWS CodeConnections connection. */
 export const RunnerAnswers = z.object({
-  /** An existing GitHub connection's ARN; empty: the installer reuses `<prefix>-github`, or creates it. */
+  /** An existing GitHub connection to use; empty: the installer reuses one already authorized in the account and region
+   * (`<prefix>-github` first), else the stack creates `<prefix>-github` and the installer waits after the deploy for a
+   * person to authorize it. */
   connectionArn: z.string().trim().regex(/^(arn:aws[a-z-]*:(codeconnections|codestar-connections):[a-z0-9-]+:\d{12}:connection\/[0-9a-f-]{36})?$/, 'an AWS CodeConnections connection ARN, or empty').default(''),
   /** A job's CodeBuild compute type; null: the stack's default (BUILD_GENERAL1_LARGE). */
   computeType: z.enum(RUNNER_COMPUTE_TYPES).nullable().default(null),

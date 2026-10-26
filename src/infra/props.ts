@@ -7,7 +7,7 @@ import { z } from 'zod'
 import { projectHash, projectSlug } from '../core/project.js'
 
 export {
-  cpuJobDefinitionName, gpuJobDefinitionName, githubSecretName, knowledgeBaseName, memoryDeliveryName, memoryName, projectDataPrefix, projectHash, projectJobsPrefix,
+  connectionName, cpuJobDefinitionName, gpuJobDefinitionName, githubSecretName, knowledgeBaseName, memoryDeliveryName, memoryName, projectDataPrefix, projectHash, projectJobsPrefix,
   projectKbPrefix, projectSlug, workerRuntimeName,
 } from '../core/project.js'
 
@@ -180,17 +180,23 @@ export const InfraPropsSchema = z.object({
   }).strict().prefault({}),
   /** Where every GitHub Actions job of every project runs: an AWS CodeBuild runner project per repository
    * (src/infra/runner.ts), never a GitHub-hosted runner. CodeBuild reaches GitHub through an AWS CodeConnections
-   * connection (the AWS Connector for GitHub app), so no GitHub token is stored for it; the installer finds or creates
-   * the connection and waits for it to be authorized before the deploy. */
+   * connection (the AWS Connector for GitHub app), so no GitHub token is stored for it. */
   runners: z.object({
-    connectionArn: z.string().regex(/^arn:aws[a-z-]*:(codeconnections|codestar-connections):[a-z0-9-]+:\d{12}:connection\/[0-9a-f-]{36}$/, 'an AWS CodeConnections connection ARN'),
+    /** An existing connection to reuse; unset: the stack creates `<prefix>-github` (connectionName) itself. Either
+     * way its ARN is the stack's CONNECTION_OUTPUT. */
+    connectionArn: z.string().regex(/^arn:aws[a-z-]*:(codeconnections|codestar-connections):[a-z0-9-]+:\d{12}:connection\/[0-9a-f-]{36}$/, 'an AWS CodeConnections connection ARN').optional(),
+    /** Whether the connection is authorized (AVAILABLE), so the runner projects can be made. A new connection is
+     * PENDING until a person authorizes it once in the AWS console, and CodeBuild cannot make a runner's webhook
+     * against a pending one, so the tools deploy with false first (the connection, no runners), wait for the person,
+     * and deploy again with true. True by default, so a plain `cdk deploy` never removes runners that exist. */
+    connectionReady: z.boolean().default(true),
     /** the CodeBuild compute type of a job (a job can ask for another with an `instance-size:` label) */
     computeType: z.enum(['BUILD_GENERAL1_MEDIUM', 'BUILD_GENERAL1_LARGE', 'BUILD_GENERAL1_XLARGE', 'BUILD_GENERAL1_2XLARGE']).default('BUILD_GENERAL1_LARGE'),
     /** the CodeBuild image jobs run on (Ubuntu, like the GitHub-hosted runners the workflows were written for) */
     image: z.string().min(3).default('aws/codebuild/standard:7.0'),
     /** Docker-in-Docker for jobs that build containers */
     privileged: z.boolean().default(false),
-  }).strict(),
+  }).strict().prefault({}),
   /** AgentCore observability: OpenTelemetry (ADOT) traces and metrics to CloudWatch (src/infra/observability.ts). */
   observability: z.object({
     enabled: z.boolean().default(true),
@@ -311,6 +317,13 @@ export const GPU_IMAGE_BUILD_OUTPUT = 'GpuImageBuild'
 /** The library gateway's outputs (gateway.enabled): its URL, and the distributor-keys secret the installer writes. */
 export const LIBRARY_GATEWAY_OUTPUT = 'LibraryGatewayUrl'
 export const LIBRARY_KEYS_OUTPUT = 'LibraryKeysSecretArn'
+
+/** The ARN of the GitHub connection the runners use (runners.connectionArn, or the one the stack created): the
+ * installer and `npm run deploy:ci` read it after the first deploy to show the person what to authorize. */
+export const CONNECTION_OUTPUT = 'GithubConnectionArn'
+/** 'true' when the stack created that connection itself (no runners.connectionArn): the tools then keep using it,
+ * without passing its ARN, so the stack keeps managing it. */
+export const CONNECTION_CREATED_OUTPUT = 'GithubConnectionCreated'
 
 /** The stack's layout ('flat' or 'nested'), an output so the installer can tell which an installation has. */
 export const LAYOUT_OUTPUT = 'Layout'

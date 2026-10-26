@@ -3,8 +3,9 @@
 #
 # Every job runs on AWS CodeBuild (a CodeBuild-hosted GitHub Actions runner in trace's AWS account), never on a
 # GitHub-hosted runner: the first runs-on label names the CodeBuild project trace-ci, the second keeps each job's
-# runner distinct within a run. It needs the TraceCi runner stack (`npm run deploy:ci`, src/infra/ci-app.ts); until
-# that project exists the jobs wait in the queue. The runner image is Ubuntu (aws/codebuild/standard), so the steps
+# runner distinct within a run. It needs the TraceCi runner stack (`npm run deploy:ci`, src/infra/ci-app.ts: it needs
+# nothing up front, and shows where to authorize the GitHub connection if one is new); until that project exists the
+# jobs wait in the queue. The runner image is Ubuntu (aws/codebuild/standard), so the steps
 # use sudo and never assume the job user's name or home directory.
 name: ci
 
