@@ -41,7 +41,7 @@ import type { SList } from './sexpr.js'
 export const C0 = 299_792_458
 export const ETA0 = 376.730313668
 const CACHE_NS = 'kicad.pcb'
-const CACHE_VERSION = 4
+const CACHE_VERSION = 5
 
 // ------------------------------------------------------------------ closed forms
 
@@ -251,6 +251,8 @@ export interface Pad {
   layers: string[]
   net: string
   kind: string
+  /** the hole (mm, x and y; equal for a round drill), for through-hole and NPTH pads */
+  drill?: [number, number]
 }
 
 export const padId = (p: Pad): string => `${p.ref}.${p.num}`
@@ -293,6 +295,8 @@ export interface Board {
   segments: Record<string, Segment[]>
   vias: Record<string, Via[]>
   pads: Record<string, Pad[]>
+  /** pads on no net (mounting holes, NPTH, unconnected pins), net '': copper and holes the routers must avoid */
+  unnetted?: Pad[]
   footprints: Footprint[]
   outline: Outline | null
   zones: Zone[]
@@ -467,6 +471,16 @@ function setupRules(tree: SList): Record<string, SetupValue> {
   return out
 }
 
+/** A pad's hole from `(drill D)` or `(drill oval X Y)` (an offset after it is ignored), [x, y] in mm. */
+export function padDrill(pd: SList): [number, number] | undefined {
+  const d = sx.find(pd, 'drill')
+  if (!d) return undefined
+  const nums = d.slice(1).filter((a) => typeof a === 'string' && a !== 'oval').map((a) => sx.num(a)).filter((n): n is number => n !== undefined && n > 0)
+  if (!nums.length) return undefined
+  const x = nums[0] as number
+  return [x, nums[1] ?? x]
+}
+
 function fpRefValue(fp: SList): { ref: string; value: string; props: Record<string, string> } {
   const props: Record<string, string> = {}
   for (const p of sx.findAll(fp, 'property')) {
@@ -566,6 +580,7 @@ export function parseBoard(path: string): Board {
   }
 
   const pads: Record<string, Pad[]> = {}
+  const unnetted: Pad[] = []
   const footprints: Footprint[] = []
   const edge: [number, number][] = []
   for (const fp of [...sx.findAll(tree, 'footprint'), ...sx.findAll(tree, 'module')]) {
@@ -596,7 +611,10 @@ export function parseBoard(path: string): Board {
       const cu = pkind === 'thru_hole' || pkind === 'np_thru_hole' || names.includes('*.Cu') ? cuNames : names.filter((n) => cuSet.has(n))
       const net = netOf(pd)
       fpPads.push({ num, net, x_mm: r4(x), y_mm: r4(y), type: pkind })
-      if (net) (pads[net] ??= []).push({ ref, num, x, y, w, h, layers: cu, net, kind: pkind })
+      const drill = padDrill(pd)
+      const pad: Pad = { ref, num, x, y, w, h, layers: cu, net: net ?? '', kind: pkind, ...(drill ? { drill } : {}) }
+      if (net) (pads[net] ??= []).push(pad)
+      else unnetted.push(pad)
     }
     for (const g of sx.children(fp)) {
       if ((sx.head(g) ?? '').startsWith('fp_') && layersOf(g).includes('Edge.Cuts')) {
@@ -637,7 +655,7 @@ export function parseBoard(path: string): Board {
     if (v) title[k] = v
   }
   return {
-    v: CACHE_VERSION, path: p, sha256, kicad: fileVersion(p), layers, layer_table: layerTable, segments, vias, pads, footprints,
+    v: CACHE_VERSION, path: p, sha256, kicad: fileVersion(p), layers, layer_table: layerTable, segments, vias, pads, unnetted, footprints,
     outline, zones, setup: setupRules(tree), thickness_mm: sx.numValue(sx.find(tree, 'general'), 'thickness') ?? null, title,
   }
 }

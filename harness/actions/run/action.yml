@@ -1,6 +1,6 @@
 name: trace
 description: >-
-  Runs one trace task (open-pr, automerge, update-queue, ci-doctor, worker-pick, worker-prompt, worker-dispatch, deploy-*) with the repository's .trace/config.yml.
+  Runs one trace task (open-pr, automerge, update-queue, ci-doctor, worker-pick, worker-prompt, worker-delegate, worker-report, worker-dispatch, deploy-*) with the repository's settings (.trace/project.db on the default branch).
 inputs:
   task:
     description: The task to run.
@@ -18,7 +18,35 @@ inputs:
     required: false
     default: ''
   agent:
-    description: worker-prompt/worker-dispatch only — the specialist (verify, impl, ams, emc, render) that takes the item; default the one worker-pick routed it to.
+    description: worker-prompt/worker-delegate/worker-report/worker-dispatch only — the specialist (verify, impl, ams, emc, render) that takes the item; default the one worker-pick routed it to.
+    required: false
+    default: ''
+  hardware:
+    description: worker-prompt/worker-delegate only — 'true' when this runner is wired to hardware (the specialist then gets its hardware tools).
+    required: false
+    default: 'false'
+  memory-id:
+    description: worker-* only — the project's AgentCore memory (vars.TRACE_MEMORY_ID); empty runs without memory. Needs the step's AWS credentials.
+    required: false
+    default: ''
+  specialist:
+    description: worker-delegate/worker-report only — the specialist step's structured_output (JSON).
+    required: false
+    default: ''
+  check:
+    description: worker-report only — the check step's structured_output (JSON).
+    required: false
+    default: ''
+  worker-conclusion:
+    description: worker-report only — the worker step's conclusion (success or failure).
+    required: false
+    default: ''
+  execution-file:
+    description: worker-delegate/worker-report only — the last Claude step's execution_file (its transcript; key tool outcomes are remembered).
+    required: false
+    default: ''
+  worker-execution-file:
+    description: worker-report only — a copy of the worker step's execution_file.
     required: false
     default: ''
   runtime-arn:
@@ -74,9 +102,17 @@ outputs:
   items: { description: worker-pick — the claimed items as a JSON list, value: '${{ steps.run.outputs.items }}' }
   runner: { description: worker-pick — where items run (worker.runner — agentcore or actions), value: '${{ steps.run.outputs.runner }}' }
   job: { description: worker-dispatch — the agent's job id, value: '${{ steps.run.outputs.job }}' }
-  prompt: { description: worker-prompt — the prompt, value: '${{ steps.run.outputs.prompt }}' }
+  trace: { description: worker-dispatch — the trace id the agent's work continues, value: '${{ steps.run.outputs.trace }}' }
+  prompt: { description: worker-prompt — the specialist's prompt; worker-delegate — the worker's, value: '${{ steps.run.outputs.prompt }}' }
   agent: { description: worker-prompt — the specialist the prompt is for, value: '${{ steps.run.outputs.agent }}' }
-  args: { description: worker-prompt — claude_args, value: '${{ steps.run.outputs.args }}' }
+  args: { description: worker-prompt — the specialist's claude_args (read only, structured output); worker-delegate — the worker's, value: '${{ steps.run.outputs.args }}' }
+  tools: { description: worker-prompt — the specialist's trace tools (TRACE_MCP_TOOLS for the install action), value: '${{ steps.run.outputs.tools }}' }
+  memory-actor: { description: worker-prompt — the specialist's memory actor, value: '${{ steps.run.outputs.memory-actor }}' }
+  worker-memory-actor: { description: worker-prompt — the worker's memory actor, value: '${{ steps.run.outputs.worker-memory-actor }}' }
+  memory-session: { description: worker-prompt — the memory session (pr-<n> or issue-<n>), value: '${{ steps.run.outputs.memory-session }}' }
+  delegate: { description: worker-delegate — 'true' when the specialist delegated to the worker, value: '${{ steps.run.outputs.delegate }}' }
+  check-prompt: { description: worker-delegate — the check's prompt (the specialist again), value: '${{ steps.run.outputs.check-prompt }}' }
+  check-args: { description: worker-delegate — the check's claude_args (read only), value: '${{ steps.run.outputs.check-args }}' }
   setup: { description: worker-prompt/deploy-commands — the setup command, value: '${{ steps.run.outputs.setup }}' }
   risk_check: { description: deploy-commands, value: '${{ steps.run.outputs.risk_check }}' }
   command: { description: deploy-commands, value: '${{ steps.run.outputs.command }}' }
@@ -95,6 +131,13 @@ runs:
         JOB_TOKEN: ${{ inputs.job-token }}
         ITEM: ${{ inputs.item }}
         AGENT: ${{ inputs.agent }}
+        HARDWARE: ${{ inputs.hardware }}
+        MEMORY_ID: ${{ inputs.memory-id }}
+        SPECIALIST: ${{ inputs.specialist }}
+        CHECK: ${{ inputs.check }}
+        WORKER_CONCLUSION: ${{ inputs.worker-conclusion }}
+        EXECUTION_FILE: ${{ inputs.execution-file }}
+        WORKER_EXECUTION_FILE: ${{ inputs.worker-execution-file }}
         TRACE_AGENT_RUNTIME_ARN: ${{ inputs.runtime-arn }}
         SHA: ${{ inputs.sha }}
         ISSUE: ${{ inputs.issue }}

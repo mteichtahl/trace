@@ -10,11 +10,10 @@
  *
  * Everything with side effects is injected (ToolDeps), so tests run it without git or a token.
  */
-import { Octokit } from '@octokit/rest'
 import { rmSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path'
 import type { Registry } from '../../core/registry.js'
-import { type Exec, cloneDefault, cloneDir, execReal, gitAuthEnv, redactor, secretsToken, workspaceDir } from './job.js'
+import type { Exec } from './job.js'
 import type { ToolJob } from './schemas.js'
 
 /** Tools scoped by a job's environment (its project, agent, session or delegation token): never through the API. */
@@ -94,6 +93,8 @@ export function toolRunner(d: ToolDeps): ToolRunner {
 /** The worker runtime's checkout for tool calls: its own slot, kept and fetched in a persistent workspace. */
 export function runtimeCheckout(o: { exec: Exec; getToken: () => Promise<string>; workspace: string; persistent: boolean; cli: string }): (repository: string) => Promise<ToolCheckout> {
   return async (repository) => {
+    // the job runner's git helpers and Octokit only here: the API imports this module for its policy alone
+    const [{ cloneDefault, cloneDir, gitAuthEnv, redactor }, { Octokit }] = await Promise.all([import('./job.js'), import('@octokit/rest')])
     const token = await o.getToken()
     const redact = redactor(token)
     const [owner = '', repo = ''] = repository.split('/')
@@ -110,7 +111,8 @@ export function runtimeCheckout(o: { exec: Exec; getToken: () => Promise<string>
 }
 
 /** The real runner: the registry of every tool, and the runtime's own clone (TRACE_GITHUB_SECRET_ARN). */
-export function realToolRunner(env: Record<string, string | undefined> = process.env): ToolRunner {
+export async function realToolRunner(env: Record<string, string | undefined> = process.env): Promise<ToolRunner> {
+  const { execReal, secretsToken, workspaceDir } = await import('./job.js')
   const ws = workspaceDir(env)
   return toolRunner({
     registry: async () => (await import('../../tools/index.js')).allTools(),

@@ -12,9 +12,13 @@
 #     repository variables TRACE_AWS_ROLE (this repository's own role, which GitHub OIDC can assume from __TR_BRANCH__
 #     only, allowed bedrock-agentcore:InvokeAgentRuntime on this project's runtime alone), TRACE_AWS_REGION and
 #     TRACE_AGENT_RUNTIME_ARN (this project's worker runtime). `trace install` sets both per repository.
-#   - actions: Claude Code runs here in GitHub Actions (claude-code-action). Model access, one of:
+#   - actions: Claude Code runs here in GitHub Actions (claude-code-action), in steps: the specialist (read only),
+#     then, when it delegates, the worker (write tools) with the specialist's brief and acceptance criteria, then the
+#     specialist again (read only) to check them; one report on the item. Model access, one of:
 #       - Amazon Bedrock: TRACE_AWS_ROLE (with Bedrock access) and TRACE_AWS_REGION;
 #       - the Anthropic API: secret ANTHROPIC_API_KEY.
+#     Memory (optional): TRACE_MEMORY_ID (the project's AgentCore memory) with TRACE_AWS_ROLE allowed to use it; the
+#     agents then recall and record as they do on AgentCore.
 #     Runner: variable TRACE_RUNNER as JSON ("ubuntu-24.04" or ["self-hosted","x64"]).
 # Also needs TRACE_TOKEN. An hourly schedule runs the pick as a backstop for events GitHub never sent.
 # Kill switch: variable TRACE_WORKER = 'false'.
@@ -120,22 +124,7 @@ jobs:
           token: ${{ secrets.TRACE_TOKEN }}
       - name: Fetch __TR_BRANCH__ too
         run: git fetch --depth=300 origin '+refs/heads/__TR_BRANCH__:refs/remotes/origin/__TR_BRANCH__'
-      - id: prompt
-        uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
-        with:
-          agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
-          task: worker-prompt
-          item: ${{ toJSON(matrix.item) }}
-          agent: ${{ matrix.item.route.kind }}
-      - id: tools
-        uses: __TR_SOURCE__/harness/actions/install@__TR_REF__
-        with:
-          hardware: ${{ vars.TRACE_HARDWARE == 'true' && 'true' || 'false' }}
-      - name: Project setup (worker.setup)
-        if: steps.prompt.outputs.setup != ''
-        env:
-          SETUP: ${{ steps.prompt.outputs.setup }}
-        run: bash -euo pipefail -c "$SETUP"
+      # First, so the specialist's memory is recalled with this role (and Bedrock, when used, is reachable).
       - if: vars.TRACE_AWS_ROLE != ''
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
@@ -143,11 +132,38 @@ jobs:
           role-session-name: trace-${{ github.run_id }}-${{ matrix.item.number }}
           role-duration-seconds: 7200
           aws-region: ${{ vars.TRACE_AWS_REGION || 'us-east-1' }}
+      - id: prompt
+        uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
+        with:
+          agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
+          task: worker-prompt
+          item: ${{ toJSON(matrix.item) }}
+          agent: ${{ matrix.item.route.kind }}
+          hardware: ${{ vars.TRACE_HARDWARE == 'true' && 'true' || 'false' }}
+          memory-id: ${{ vars.TRACE_MEMORY_ID }}
+      - id: tools
+        uses: __TR_SOURCE__/harness/actions/install@__TR_REF__
+        with:
+          hardware: ${{ vars.TRACE_HARDWARE == 'true' && 'true' || 'false' }}
+          tools: ${{ steps.prompt.outputs.tools }}
+          memory-id: ${{ vars.TRACE_MEMORY_ID }}
+          memory-actor: ${{ steps.prompt.outputs.memory-actor }}
+          worker-memory-actor: ${{ steps.prompt.outputs.worker-memory-actor }}
+          memory-session: ${{ steps.prompt.outputs.memory-session }}
+      - name: Project setup (worker.setup)
+        if: steps.prompt.outputs.setup != ''
+        env:
+          SETUP: ${{ steps.prompt.outputs.setup }}
+        run: bash -euo pipefail -c "$SETUP"
       - name: Git identity for commits
         run: |
           git config user.name "trace worker (Claude)"
           git config user.email "noreply@anthropic.com"
-      - name: Claude
+      # 1. The specialist: read only (no Bash, Write, Edit or Task; only its own trace tools). It ends with a
+      #    structured output: its report, and whether the worker should change the repository (brief, criteria).
+      - id: specialist
+        name: "Specialist: ${{ steps.prompt.outputs.agent }} (read only)"
+        continue-on-error: true
         env:
           TRACE_HOME: ${{ vars.TRACE_HOME }}
         uses: anthropics/claude-code-action@6fed3ca145920b639991cb756090506e1bcaf515 # v1.0.245
@@ -161,3 +177,69 @@ jobs:
             ${{ steps.prompt.outputs.args }}
             --mcp-config '${{ steps.tools.outputs.mcp-config }}'
           prompt: ${{ steps.prompt.outputs.prompt }}
+      - id: delegate
+        if: ${{ !cancelled() && steps.prompt.outcome == 'success' }}
+        uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
+        with:
+          agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
+          task: worker-delegate
+          item: ${{ toJSON(matrix.item) }}
+          agent: ${{ steps.prompt.outputs.agent }}
+          hardware: ${{ vars.TRACE_HARDWARE == 'true' && 'true' || 'false' }}
+          memory-id: ${{ vars.TRACE_MEMORY_ID }}
+          specialist: ${{ steps.specialist.outputs.structured_output }}
+          execution-file: ${{ steps.specialist.outputs.execution_file }}
+      # 2. The worker, only when the specialist delegated: the worker's tools (shell, edits, git), its own prompt with
+      #    the specialist's brief and acceptance criteria as its request.
+      - id: worker
+        name: Worker (delegated)
+        if: ${{ !cancelled() && steps.delegate.outputs.delegate == 'true' }}
+        continue-on-error: true
+        env:
+          TRACE_HOME: ${{ vars.TRACE_HOME }}
+        uses: anthropics/claude-code-action@6fed3ca145920b639991cb756090506e1bcaf515 # v1.0.245
+        with:
+          use_bedrock: ${{ vars.TRACE_AWS_ROLE != '' && 'true' || 'false' }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.TRACE_TOKEN }}
+          allowed_bots: "dependabot[bot],github-actions[bot]"
+          claude_args: |
+            ${{ steps.delegate.outputs.args }}
+            --mcp-config '${{ steps.tools.outputs.mcp-config-worker }}'
+          prompt: ${{ steps.delegate.outputs.prompt }}
+      - name: Keep the worker's transcript
+        if: ${{ !cancelled() && steps.worker.outputs.execution_file != '' }}
+        env:
+          FROM: ${{ steps.worker.outputs.execution_file }}
+        run: cp "$FROM" "$RUNNER_TEMP/trace-worker-execution.json"
+      # 3. The check: the specialist again, read only, checks each acceptance criterion with its own tools.
+      - id: check
+        name: "Check: ${{ steps.prompt.outputs.agent }} (read only)"
+        if: ${{ !cancelled() && steps.delegate.outputs.delegate == 'true' }}
+        continue-on-error: true
+        env:
+          TRACE_HOME: ${{ vars.TRACE_HOME }}
+        uses: anthropics/claude-code-action@6fed3ca145920b639991cb756090506e1bcaf515 # v1.0.245
+        with:
+          use_bedrock: ${{ vars.TRACE_AWS_ROLE != '' && 'true' || 'false' }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.TRACE_TOKEN }}
+          allowed_bots: "dependabot[bot],github-actions[bot]"
+          claude_args: |
+            ${{ steps.delegate.outputs.check-args }}
+            --mcp-config '${{ steps.tools.outputs.mcp-config }}'
+          prompt: ${{ steps.delegate.outputs.check-prompt }}
+      - id: report
+        if: ${{ !cancelled() && steps.prompt.outcome == 'success' }}
+        uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
+        with:
+          agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
+          task: worker-report
+          item: ${{ toJSON(matrix.item) }}
+          agent: ${{ steps.prompt.outputs.agent }}
+          memory-id: ${{ vars.TRACE_MEMORY_ID }}
+          specialist: ${{ steps.specialist.outputs.structured_output }}
+          check: ${{ steps.check.outputs.structured_output }}
+          worker-conclusion: ${{ steps.worker.outputs.conclusion }}
+          worker-execution-file: ${{ steps.worker.outputs.execution_file != '' && format('{0}/trace-worker-execution.json', runner.temp) || '' }}
+          execution-file: ${{ steps.check.outputs.execution_file }}

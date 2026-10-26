@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { InvokeAgentRuntimeCommand } from '@aws-sdk/client-bedrock-agentcore'
 import { afterEach, describe, expect, it } from 'vitest'
-import { dispatch, sessionId } from '../../src/agents/runtime/dispatch.js'
+import { dispatch, newTraceContext, sessionId, xrayTraceHeader } from '../../src/agents/runtime/dispatch.js'
+import { toolRunner } from '../../src/agents/runtime/tool.js'
+import { Registry, ToolError, defineTool } from '../../src/core/registry.js'
+import { z } from 'zod'
 import {
   type ClaudeOptions, DONE, type Exec, type RunnerDeps, TOOLS, authHeader, cloneDir, createRunner, parseSecret, redactor,
 } from '../../src/agents/runtime/job.js'
@@ -180,6 +183,28 @@ describe('dispatch', () => {
     expect(body).toEqual({ kind: 'work-item', repository: 'o/r', item: ITEM, runUrl: 'https://github.com/o/r/actions/runs/1' })
   })
 
+  it('carries a trace context in InvokeAgentRuntime\'s trace headers and in the payload', async () => {
+    const c = new FakeClient(JSON.stringify({ accepted: true, jobId: 'job-1' }))
+    const t = newTraceContext({}, () => Date.UTC(2026, 9, 26) )
+    expect(t.traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/)
+    // a new trace id starts with the time: it is a valid X-Ray trace id too
+    expect(t.traceparent.slice(3, 11)).toBe(Math.floor(Date.UTC(2026, 9, 26) / 1000).toString(16))
+    await dispatch(ITEM, 'o/r', { runtimeArn: 'arn:aws:bedrock-agentcore:us-west-2:1:runtime/x', client: c, trace: t })
+    const input = c.sent[0]!.input
+    expect(input.traceParent).toBe(t.traceparent)
+    const [, traceId = '', spanId = ''] = t.traceparent.split('-')
+    expect(input.traceId).toBe(`Root=1-${traceId.slice(0, 8)}-${traceId.slice(8)};Parent=${spanId};Sampled=1`)
+    expect(xrayTraceHeader(t)).toBe(input.traceId)
+    const body = JSON.parse(new TextDecoder().decode(input.payload as Uint8Array)) as Record<string, unknown>
+    expect(body.trace).toEqual({ traceparent: t.traceparent })
+    // a TRACEPARENT the workflow already had is continued: same trace, a new span
+    const parent = `00-${'ab'.repeat(16)}-${'cd'.repeat(8)}-01`
+    const child = newTraceContext({ TRACEPARENT: parent, TRACESTATE: 'k=v' })
+    expect(child.traceparent).toMatch(new RegExp(`^00-${'ab'.repeat(16)}-(?!${'cd'.repeat(8)})[0-9a-f]{16}-01$`))
+    expect(child.tracestate).toBe('k=v')
+    expect(newTraceContext({ TRACEPARENT: 'garbage' }).traceparent).not.toContain('garbage')
+  })
+
   it('fails clearly without an ARN, on an error status, or on a strange answer', async () => {
     const prev = process.env.TRACE_AGENT_RUNTIME_ARN
     delete process.env.TRACE_AGENT_RUNTIME_ARN
@@ -187,6 +212,65 @@ describe('dispatch', () => {
     if (prev !== undefined) process.env.TRACE_AGENT_RUNTIME_ARN = prev
     await expect(dispatch(ITEM, 'o/r', { runtimeArn: 'arn:x', client: new FakeClient('nope', 500) })).rejects.toThrow(/500/)
     await expect(dispatch(ITEM, 'o/r', { runtimeArn: 'arn:x', client: new FakeClient('[1]') })).rejects.toThrow(/unexpected/)
+  })
+})
+
+// ------------------------------------------------------------------ forwarded tool calls (invocation kind tool)
+
+describe('tool invocations', () => {
+  let close: (() => Promise<void>) | null = null
+  afterEach(async () => { await close?.(); close = null })
+  const ran: { name: string; cwd: string; db: string | undefined }[] = []
+  const registry = new Registry([
+    defineTool({ name: 'calc.echo', description: 'echo', input: z.object({ x: z.number(), path: z.string().optional() }), run: (a) => { ran.push({ name: 'calc.echo', cwd: process.cwd(), db: process.env.TRACE_PROJECT_DB }); return { x: a.x } } }),
+    defineTool({ name: 'calc.fail', description: 'fails', input: z.object({}), run: () => { throw new ToolError('bad input') } }),
+    defineTool({ name: 'hil.zap', description: 'hardware', hardware: true, input: z.object({}), run: () => { ran.push({ name: 'hil.zap', cwd: '', db: undefined }); return {} } }),
+    defineTool({ name: 'memory.recall', description: 'session scoped', input: z.object({}), run: () => { ran.push({ name: 'memory.recall', cwd: '', db: undefined }); return {} } }),
+  ])
+  const serve = async (o: { project?: string } = {}) => {
+    const clones: string[] = []
+    const jobs = createJobs(async () => 'never', { echo: () => undefined })
+    const tool = toolRunner({ registry: () => registry, checkout: async (repository) => { const dir = mkdtempSync(join(tmpdir(), 'trace-tool-')); clones.push(`${repository}:${dir}`); return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) } } })
+    const s = createAgentServer(jobs, { tool, log: () => undefined, ...o })
+    await new Promise<void>((r) => s.listen(0, '127.0.0.1', r))
+    close = () => new Promise((r) => s.close(() => r()))
+    const base = `http://127.0.0.1:${(s.address() as AddressInfo).port}`
+    const post = async (body: unknown) => { const r = await fetch(`${base}/invocations`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); return { status: r.status, json: (await r.json()) as Record<string, unknown> } }
+    return { post, jobs, clones }
+  }
+
+  it('runs the tool through the registry on the runtime\'s clone, with no model and no job', async () => {
+    ran.length = 0
+    const h = await serve()
+    const r = await h.post({ kind: 'tool', repository: 'o/r', name: 'calc.echo', args: { x: 3 } })
+    expect(r).toEqual({ status: 200, json: { ok: true, result: { x: 3 } } })
+    expect(h.clones).toHaveLength(1)
+    expect(h.clones[0]).toMatch(/^o\/r:/)
+    expect(ran[0]!.cwd).toContain('trace-tool-')
+    expect(ran[0]!.db).toMatch(/trace-tool-.*\/\.trace\/project\.db$/)
+    expect(process.cwd()).not.toContain('trace-tool-')
+    expect(h.jobs.jobStatus()).toEqual([])
+    // a ToolError is the tool's answer, not a failure of the runtime
+    expect((await h.post({ kind: 'tool', repository: 'o/r', name: 'calc.fail', args: {} })).json).toMatchObject({ ok: false, error: 'bad input' })
+  })
+
+  it('applies the same validation: no hardware, no session-scoped tools, paths inside the clone', async () => {
+    ran.length = 0
+    const h = await serve()
+    for (const name of ['hil.zap', 'memory.recall', 'calc.nothing']) {
+      expect((await h.post({ kind: 'tool', repository: 'o/r', name, args: {} })).json).toEqual({ ok: false, error: `no tool ${name}` })
+    }
+    expect((await h.post({ kind: 'tool', repository: 'o/r', name: 'calc.echo', args: { x: 1, path: '../../etc/passwd' } })).json).toEqual({ ok: false, error: 'path: must be a path inside the repository' })
+    expect((await h.post({ kind: 'tool', repository: 'o/r', name: 'calc.echo', args: { x: 1, library: '/x' } })).json).toMatchObject({ ok: false })
+    expect(ran).toEqual([])
+    expect(h.clones).toEqual([])
+    expect((await h.post({ kind: 'tool', repository: 'o/r', args: {} })).status).toBe(400)
+  })
+
+  it('in single-project mode, runs tools for its own project only', async () => {
+    const h = await serve({ project: 'o/r' })
+    expect((await h.post({ kind: 'tool', repository: 'x/y', name: 'calc.echo', args: { x: 1 } })).status).toBe(403)
+    expect(h.clones).toEqual([])
   })
 })
 
@@ -205,7 +289,9 @@ describe('worker-dispatch', () => {
     })
     expect(calls).toEqual([{ item: ITEM, repository: 'o/r', arn: 'arn:rt' }])
     const body = String(f.called('issues.createComment')[0]!.args.body)
-    expect(body).toMatch(/Dispatched to the trace agent on AgentCore \(job job-42\)/)
+    expect(body).toMatch(/Dispatched to the trace agent on AgentCore \(job job-42, trace `[0-9a-f]{32}`\)/)
+    expect(core.outputs.trace).toMatch(/^[0-9a-f]{32}$/)
+    expect(body).toContain(core.outputs.trace)
     expect(f.called('issues.createComment')[0]!.args.issue_number).toBe(5)
     expect(core.outputs.job).toBe('job-42')
   })

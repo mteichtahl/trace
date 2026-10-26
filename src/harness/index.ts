@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type TraceConfig, readSettings, resolve } from '../core/config.js'
+import { delegateStep, reportStep, specialistStep } from './actions.js'
 import * as ci from './ci-doctor.js'
 import * as deploy from './deploy.js'
 import { dispatchTask } from './dispatch.js'
@@ -22,7 +23,9 @@ export const TASKS: Record<string, (d: Deps) => Promise<void> | void> = {
   'update-queue': prs.updateQueue,
   'ci-doctor': ci.ciDoctor,
   'worker-pick': (d) => worker.pick(d),
-  'worker-prompt': worker.prompt,
+  'worker-prompt': (d) => specialistStep(d),
+  'worker-delegate': (d) => delegateStep(d),
+  'worker-report': (d) => reportStep(d),
   'worker-dispatch': (d) => dispatchTask(d),
   'deploy-request': deploy.request,
   'deploy-approve': deploy.approve,

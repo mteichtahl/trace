@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
-import { capacitanceUf, diffPairs, druRules } from '../../src/tools/layout/checks.js'
+import { capacitanceUf, diffPairs, druRules, type DruArea, type DruItem, type DruRule } from '../../src/tools/layout/checks.js'
 import { arcPoints, area, clip, hull, inside, loops, overlapArea, overlaps, rectPoly } from '../../src/tools/layout/geom.js'
 import { pointInPolygon, polygonOverlapArea, polygonsOverlap, segmentsCross, triangulate } from '../../src/tools/pcb/geometry.js'
 import { readLayout } from '../../src/tools/layout/board.js'
@@ -79,7 +79,7 @@ function fixture(): string {
   const pcb = join(dir, 'board.kicad_pcb')
   writeFileSync(pcb, boardText(fps, extra, nets))
   writeFileSync(join(dir, 'board.kicad_pro'), JSON.stringify({ meta: { filename: 'board.kicad_pro', version: 3 }, net_settings: { classes: [{ name: 'Default' }, { name: 'USB' }], netclass_patterns: [{ netclass: 'USB', pattern: 'USB_*' }] } }))
-  writeFileSync(join(dir, 'board.kicad_dru'), '(version 1)\n(rule "usb skew"\n  (constraint skew (max 0.2mm))\n  (condition "A.NetClass == \'USB\'"))\n(rule "odd" (constraint length (max 5mm)) (condition "A.Type == \'track\'"))\n')
+  writeFileSync(join(dir, 'board.kicad_dru'), '(version 1)\n(rule "usb skew"\n  (constraint skew (max 0.2mm))\n  (condition "A.NetClass == \'USB\'"))\n(rule "odd" (constraint length (max 5mm)) (condition "A.fromTo(\'U1-1\', \'J1-1\')"))\n(rule "tracks" (constraint length (max 50mm)) (condition "A.Type == \'Track\' && A.Layer == \'F.Cu\'"))\n')
   return pcb
 }
 
@@ -198,6 +198,76 @@ describe('courtyard polygons', () => {
   })
 })
 
+describe('.kicad_dru conditions', () => {
+  const item = (o: Partial<DruItem> = {}): DruItem => ({ type: 'track', net: '/USB_D+', netclass: 'USB', diffPair: true, layers: ['F.Cu'], points: [[1, 1], [3, 1]], ...o })
+  const rule = (cond: string, areas: DruArea[] = []): DruRule => {
+    const d = druRules(`(version 1)\n(rule "r" (constraint length (max 10mm)) (condition "${cond}"))`, areas)
+    expect(d.skipped).toEqual([])
+    return d.rules[0] as DruRule
+  }
+  const pad = item({ type: 'pad', padKind: 'thru_hole', reference: 'J1', layers: ['F.Cu', 'In1.Cu', 'B.Cu'], points: [[10, 10]] })
+  const via = item({ type: 'via', viaKind: 'blind', layers: ['F.Cu', 'In1.Cu'], points: [[5, 5]] })
+
+  it('evaluates A.Type, A.Layer and existsOnLayer, isPlated, Pad_Type, Via_Type and Reference', () => {
+    expect(rule("A.Type == 'track'").test(item())).toBe(true) // case-insensitive, as KiCad compares
+    expect(rule("A.Type == 'Via'").test(item())).toBe(false)
+    expect(rule("A.Type != 'Via'").test(item())).toBe(true)
+    expect(rule("A.Layer == 'F.Cu'").test(item())).toBe(true)
+    expect(rule("A.Layer == 'In*.Cu'").test(item())).toBe(false)
+    expect(rule("A.existsOnLayer('In1.Cu')").test(via)).toBe(true)
+    expect(rule("A.existsOnLayer('B.Cu')").test(via)).toBe(false)
+    expect(rule('A.isPlated()').test(pad)).toBe(true)
+    expect(rule('A.isPlated()').test({ ...pad, padKind: 'np_thru_hole' })).toBe(false)
+    expect(rule('A.isPlated()').test(via)).toBe(true)
+    expect(rule('!A.isPlated()').test(item())).toBe(true)
+    expect(rule("A.Pad_Type == 'Through-hole'").test(pad)).toBe(true)
+    expect(rule("A.Pad_Type == 'SMD'").test({ ...pad, padKind: 'smd' })).toBe(true)
+    expect(rule("A.Pad_Type == 'NPTH*'").test({ ...pad, padKind: 'np_thru_hole' })).toBe(true)
+    expect(rule("A.Via_Type == 'Blind/buried'").test(via)).toBe(true)
+    expect(rule("A.Reference == 'J*'").test(pad)).toBe(true)
+    expect(rule("A.Reference == 'U1'").test(item())).toBe(false) // a track has no footprint
+  })
+
+  it('combines with && || ! and parentheses, and evaluates B against the other item', () => {
+    const r = rule("(A.Type == 'Pad' || A.Type == 'Via') && !(A.NetClass == 'Power')")
+    expect(r.test(pad)).toBe(true)
+    expect(r.test(item())).toBe(false)
+    expect(r.test({ ...via, netclass: 'Power' })).toBe(false)
+    const ab = rule("A.inDiffPair('/USB*') && B.NetName == '/USB_D-'")
+    expect(ab.test(item(), item({ net: '/USB_D-' }))).toBe(true)
+    expect(ab.test(item(), item({ net: '/OTHER' }))).toBe(false)
+    expect(ab.test(item(), null)).toBe(false) // no B: B terms are false
+    // the net-level match the old callers use
+    expect(rule("A.NetClass == 'USB'").match('/USB_D+', 'USB', true)).toBe(true)
+  })
+
+  it('evaluates insideArea, intersectsArea and enclosedByArea on named rule areas', () => {
+    const areas: DruArea[] = [{ name: 'BGA_escape', layers: ['F.Cu'], polygon: rectPoly(0, 0, 2, 2) }, { name: 'inner', layers: ['In1.Cu'], polygon: rectPoly(0, 0, 100, 100) }]
+    expect(rule("A.insideArea('BGA_escape')", areas).test(item())).toBe(true) // the track starts inside
+    expect(rule("A.intersectsArea('BGA*')", areas).test(item({ points: [[-1, 1], [5, 1]] }))).toBe(true) // crosses it
+    expect(rule("A.enclosedByArea('BGA_escape')", areas).test(item())).toBe(false) // it leaves the area
+    expect(rule("A.enclosedByArea('BGA_escape')", areas).test(item({ points: [[0.5, 0.5], [1.5, 1.5]] }))).toBe(true)
+    expect(rule("A.insideArea('BGA_escape')", areas).test(item({ points: [[5, 5], [6, 6]] }))).toBe(false)
+    expect(rule("A.insideArea('inner')", areas).test(item())).toBe(false) // not on the area's layer
+    expect(rule("A.insideArea('nosuch')", areas).test(item())).toBe(false)
+  })
+
+  it('skips rules with conditions it does not evaluate, naming the term', () => {
+    const d = druRules(`(version 1)
+(rule "a" (constraint length (max 1mm)) (condition "A.fromTo('U1-1', 'J1-1')"))
+(rule "b" (constraint skew (max 1mm)) (condition "A.Width > 0.2mm"))
+(rule "c" (constraint length (max 1mm)) (condition "A.Type == 'Track' && A.memberOf('grp')"))
+(rule "d" (constraint length (max 1mm)) (condition "A.Type == 'Track'"))
+(rule "e" (constraint length (max 1mm)))`)
+    expect(d.rules.map((r) => r.name)).toEqual(['d', 'e'])
+    expect(d.skipped).toEqual([
+      expect.stringMatching(/^a: skipped: unsupported condition "A\.fromTo\(\)"/),
+      expect.stringMatching(/^b: skipped: unsupported condition "A\.Width >"/),
+      expect.stringMatching(/^c: skipped: unsupported condition "A\.memberOf\(\)"/),
+    ])
+  })
+})
+
 describe('pcb.placement_check', () => {
   it('finds every planted problem', async () => {
     const r = await call('pcb.placement_check', { project: fixture() })
@@ -235,7 +305,10 @@ describe('pcb.length_match', () => {
     // D+ 3 + 19 = 22; D- 4 + 2·0.3536 + 17.5 = 22.207
     expect(pairs[0]?.skew_mm).toBeCloseTo(0.207, 3)
     expect((r.groups as { status: string; spread_mm: number }[])[0]).toMatchObject({ status: 'pass' })
-    expect(r.dru_skipped).toEqual([expect.stringMatching(/odd/)])
+    expect(r.dru_skipped).toEqual([expect.stringMatching(/^odd: skipped: unsupported condition/)])
+    // the Type/Layer rule is evaluated: every USB track is on F.Cu, so it governs the group (50 mm: within it)
+    expect((r.groups as { rule?: string }[])[0]?.rule).toBe('tracks')
+    expect((r.dru_rules as { name: string }[]).map((x) => x.name)).toEqual(['usb skew', 'tracks'])
     const loose = await call('pcb.length_match', { project: join(dir, 'board.kicad_pcb'), max_skew_mm: 0.25 })
     expect((loose.pairs as { status: string }[])[0]?.status).toBe('pass')
   })

@@ -17,6 +17,7 @@ import * as sx from '../kicad/sexpr.js'
 import { Net, viaLength, type Board, type Pad } from '../kicad/pcb.js'
 import { onSide, type Layout, type PlacedFootprint } from './board.js'
 import { area, bbox, gapToSegments, inside, overlapArea, overlaps, rectPoly, type Poly, type Pt } from './geom.js'
+import type { DruItem, DruRule } from './dru.js'
 
 const r3 = (x: number): number => Math.round(x * 1000) / 1000
 
@@ -202,61 +203,30 @@ export function placementCheck(L: Layout, o: PlacementOptions): { findings: Find
 
 // ------------------------------------------------------------------ lengths
 
-export interface DruRule { name: string; skew_max_mm?: number; length?: { min?: number; opt?: number; max?: number }; match: (net: string, cls: string | null, pair: boolean) => boolean; condition: string }
+export { druRules, type DruArea, type DruItem, type DruRule } from './dru.js'
 
-const UNIT_MM: Record<string, number> = { mm: 1, um: 1e-3, mil: 0.0254, mils: 0.0254, in: 25.4, '': 1 }
-
-function mmOf(v: string | undefined): number | undefined {
-  if (v === undefined) return undefined
-  const m = /^(-?\d+(?:\.\d+)?)\s*(mm|um|mils?|in)?$/.exec(v.trim())
-  return m ? Number(m[1]) * (UNIT_MM[m[2] ?? ''] ?? 1) : undefined
+/** A net's items as .kicad_dru conditions see them: its tracks, vias and pads. (The board reader does not keep a
+ * via's micro flag: a via that is not through is Blind/buried here.) */
+export function netItems(b: Board, net: string, cls: string | null, pair: boolean): DruItem[] {
+  const order = b.layers.map((l) => l.name)
+  const out: DruItem[] = []
+  for (const [x1, y1, x2, y2, , ly] of b.segments[net] ?? []) out.push({ type: 'track', net, netclass: cls, diffPair: pair, layers: [ly], points: [[x1, y1], [x2, y2]] })
+  for (const [x, y, , , top, bot] of b.vias[net] ?? []) {
+    const through = top === order[0] && bot === order[order.length - 1]
+    const ia = order.indexOf(top)
+    const ib = order.indexOf(bot)
+    const span = ia >= 0 && ib >= 0 ? order.slice(Math.min(ia, ib), Math.max(ia, ib) + 1) : [top, bot]
+    out.push({ type: 'via', net, netclass: cls, diffPair: pair, layers: span, viaKind: through ? 'through' : 'blind', points: [[x, y]] })
+  }
+  for (const p of b.pads[net] ?? []) out.push({ type: 'pad', net, netclass: cls, diffPair: pair, layers: p.layers, padKind: p.kind, reference: p.ref, points: [[p.x, p.y]] })
+  return out
 }
 
-/** Skew and length constraints in a .kicad_dru whose condition is a NetClass / NetName / inDiffPair test (or &&
- * of them). Rules with other conditions are listed as skipped. */
-export function druRules(text: string): { rules: DruRule[]; skipped: string[] } {
-  let tree: sx.SList
-  try {
-    tree = sx.parse(`(dru ${text})`)
-  } catch {
-    return { rules: [], skipped: ['the .kicad_dru is not readable'] }
-  }
-  const rules: DruRule[] = []
-  const skipped: string[] = []
-  for (const r of sx.findAll(tree, 'rule')) {
-    const name = sx.atomAt(r, 1) ?? '?'
-    let skew: number | undefined
-    let length: DruRule['length']
-    for (const c of sx.findAll(r, 'constraint')) {
-      const kind = sx.atomAt(c, 1)
-      const get = (k: string): number | undefined => mmOf(sx.value(c, k))
-      if (kind === 'skew') skew = get('max')
-      if (kind === 'length') length = { ...(get('min') !== undefined ? { min: get('min') } : {}), ...(get('opt') !== undefined ? { opt: get('opt') } : {}), ...(get('max') !== undefined ? { max: get('max') } : {}) }
-    }
-    if (skew === undefined && !length) continue
-    const cond = sx.value(r, 'condition') ?? ''
-    const tests: ((n: string, c: string | null, p: boolean) => boolean)[] = []
-    let ok = true
-    for (const part of cond.split('&&').map((s) => s.trim()).filter(Boolean)) {
-      let m: RegExpExecArray | null
-      if ((m = /^A\.Net[Cc]lass\s*==\s*'([^']*)'$/.exec(part))) {
-        const re = glob(m[1] as string)
-        tests.push((_n, c) => c !== null && re.test(c))
-      } else if ((m = /^A\.NetName\s*==\s*'([^']*)'$/.exec(part))) {
-        const re = glob(m[1] as string)
-        tests.push((n) => re.test(n) || re.test(n.replace(/^\//, '')))
-      } else if ((m = /^A\.inDiffPair\(\s*'([^']*)'\s*\)$/.exec(part))) {
-        const re = glob(m[1] as string)
-        tests.push((n, _c, p) => p && (re.test(n) || re.test(n.replace(/^\//, ''))))
-      } else ok = false
-    }
-    if (!ok || !tests.length) {
-      skipped.push(`${name}: condition ${JSON.stringify(cond)} is not one this tool evaluates`)
-      continue
-    }
-    rules.push({ name, ...(skew !== undefined ? { skew_max_mm: skew } : {}), ...(length ? { length } : {}), condition: cond, match: (n, c, p) => tests.every((t) => t(n, c, p)) })
-  }
-  return { rules, skipped }
+/** Whether a rule governs a net: one of the net's items (or, with no items, the net itself) meets its condition,
+ * with the other net's items as B (a diff pair) when given. */
+export function ruleGoverns(rule: DruRule, items: readonly DruItem[], others: readonly DruItem[] = []): boolean {
+  if (!items.length) return false
+  return items.some((a) => (others.length ? others.some((b) => rule.test(a, b)) : rule.test(a, null)))
 }
 
 /** A net's class from the project file: netclass_assignments, then netclass_patterns (globs), else Default. */
@@ -330,7 +300,9 @@ export function lengthMatch(b: Board, nets: readonly string[], o: LengthOptions)
     const c = len(pr.n)
     const skew = r3(Math.abs(a.length_mm - c.length_mm))
     const cls = o.netClass(pr.p)
-    const rule = o.rules.find((r) => r.skew_max_mm !== undefined && r.match(pr.p, cls, true) && r.match(pr.n, o.netClass(pr.n), true))
+    const ip = netItems(b, pr.p, cls, true)
+    const iN = netItems(b, pr.n, o.netClass(pr.n), true)
+    const rule = o.rules.find((r) => r.skew_max_mm !== undefined && ruleGoverns(r, ip, iN) && ruleGoverns(r, iN, ip))
     const given = pr.max_skew_mm
     const tol: { v: number; from: string } | null = given !== undefined ? { v: given, from: 'given for the pair' }
       : o.max_skew_mm !== undefined ? { v: o.max_skew_mm, from: 'max_skew_mm' } : rule ? { v: rule.skew_max_mm as number, from: `rule ${rule.name}` } : null
@@ -351,7 +323,8 @@ export function lengthMatch(b: Board, nets: readonly string[], o: LengthOptions)
     const vals = rows.map((r) => r.length_mm)
     const longest = vals.length ? Math.max(...vals) : 0
     const ref = g.target_mm ?? longest
-    const rule = rows.length ? o.rules.find((r) => r.length?.max !== undefined && rows.every((x) => r.match(x.net, o.netClass(x.net), false))) : undefined
+    const pairNets = new Set(diffPairs(nets).flatMap((d) => [d.p, d.n]))
+    const rule = rows.length ? o.rules.find((r) => r.length?.max !== undefined && rows.every((x) => ruleGoverns(r, netItems(b, x.net, o.netClass(x.net), pairNets.has(x.net))))) : undefined
     const tol = g.tolerance_mm ?? null
     const bad = rows.filter((r) => (tol !== null && Math.abs(ref - r.length_mm) > tol + 1e-9) || (rule?.length?.max !== undefined && r.length_mm > rule.length.max) || (rule?.length?.min !== undefined && r.length_mm < rule.length.min))
     const unrouted = rows.filter((r) => !r.routed || r.unreached.length)

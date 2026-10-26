@@ -62,7 +62,6 @@ const deps: ActionDeps = {
   cognito: () => new FakeCognito(),
   jobs: async () => ({ repositoryOf: () => null, startJob: async () => ({ accepted: true, jobId: 'j' }), jobStatus: async () => [] }),
   tools: () => new Registry([]),
-  checkout: async () => { throw new Error('no clones here') },
   scratch: mkdtempSync(join(tmpdir(), 'trace-api-inactive-')),
   memory: () => memories,
 }

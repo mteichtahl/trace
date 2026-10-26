@@ -52,10 +52,12 @@ const s = {
   github: { token: '', adminToken: '', info: null as TokenInfo | null, filter: '', busy: false, error: '' },
   /** a project's own agent token (OWNER/REPO → token): memory only, like every other secret */
   projectTokens: new Map<string, string>(),
-  /** memoryDays: the field's text ('' = the installation's default) */
-  projects: new Map<string, { branch: string; onboard: boolean; applySettings: boolean; memoryDays: string }>(),
+  /** memoryDays: the field's text ('' = the installation's default); generation: kept from the saved answers (the
+   * installer raises it when a removed project is added again; never set here) */
+  projects: new Map<string, { branch: string; onboard: boolean; applySettings: boolean; memoryDays: string; generation: number }>(),
   aws: { mode: 'profile' as 'profile' | 'keys', profile: 'default', region: 'us-east-1', keyId: '', secret: '', session: '', check: null as AwsCheck | null, confirmed: false, busy: false, error: '' },
   agents: { prefix: 'trace', model: '', maxLifetimeHours: 8, idleMinutes: 15, centralBucketName: '', retainData: true, escalateTo: '', gpuEnabled: true, gpuMaxVcpus: 16, gpuSpot: false,
+    cpuEnabled: true, cpuMaxVcpus: 64, cpuSpot: false, cpuVcpus: 16, cpuMemoryMiB: 32_768,
     observability: true, transactionSearch: true, samplingPercent: '', dashboard: true, migrateLayout: false },
   adminEmail: '',
   people: [] as Person[],
@@ -113,6 +115,7 @@ function answers(): AnswersInput {
       prefix: s.agents.prefix, model: s.agents.model, maxLifetimeHours: s.agents.maxLifetimeHours, idleMinutes: s.agents.idleMinutes,
       createOidcProvider: !(s.aws.check?.oidcProvider ?? false), centralBucketName: s.agents.centralBucketName, retainData: s.agents.retainData,
       gpuEnabled: s.agents.gpuEnabled, gpuMaxVcpus: s.agents.gpuMaxVcpus, gpuSpot: s.agents.gpuSpot,
+      cpuEnabled: s.agents.cpuEnabled, cpuMaxVcpus: s.agents.cpuMaxVcpus, cpuSpot: s.agents.cpuSpot, cpuVcpus: s.agents.cpuVcpus, cpuMemoryMiB: s.agents.cpuMemoryMiB,
       observability: s.agents.observability, transactionSearch: s.agents.transactionSearch, dashboard: s.agents.dashboard,
       samplingPercent: s.agents.samplingPercent.trim() === '' ? null : Number(s.agents.samplingPercent),
       migrateLayout: s.agents.migrateLayout,
@@ -196,7 +199,7 @@ function github(): HTMLElement {
         const p = s.projects.get(r.fullName)
         return h('div', { class: 'item' },
           h('input', { type: 'checkbox', checked: Boolean(p), onchange: (e: Event) => {
-            if ((e.target as HTMLInputElement).checked) s.projects.set(r.fullName, { branch: r.defaultBranch, onboard: true, applySettings: r.admin, memoryDays: '' })
+            if ((e.target as HTMLInputElement).checked) s.projects.set(r.fullName, { branch: r.defaultBranch, onboard: true, applySettings: r.admin, memoryDays: '', generation: 0 })
             else s.projects.delete(r.fullName)
             void checkAccess(); render()
           } }),
@@ -311,6 +314,14 @@ function agents(): HTMLElement {
     h('div', { class: 'row' },
       field('Most vCPUs at once', input('number', String(g.gpuMaxVcpus), (v) => { g.gpuMaxVcpus = Number(v) }, { min: 4, max: 4096, step: 4 }), '4 per job: 16 runs four jobs side by side'),
       field('Instances', checkbox('Use Spot (cheaper; a job can be interrupted)', g.gpuSpot, (v) => { g.gpuSpot = v }))),
+    h('h3', {}, 'CPU jobs'),
+    h('p', { class: 'lead' }, 'CPU-heavy jobs sent off the runtime (openEMS field solves, Verilator, formal checks and nextpnr runs) go to a second AWS Batch queue of CPU instances (c7i, c6i or m7i), running the same image as the GPU jobs. It also scales to zero. It needs the GPU jobs turned on, and an installation with one nested stack per project.'),
+    checkbox('Run CPU-heavy jobs on AWS Batch', g.cpuEnabled, (v) => { g.cpuEnabled = v; render() }),
+    g.cpuEnabled && h('div', { class: 'row' },
+      field('Most vCPUs at once', input('number', String(g.cpuMaxVcpus), (v) => { g.cpuMaxVcpus = Number(v) }, { min: 1, max: 4096, step: 1 }), `${g.cpuVcpus} per job`),
+      field('vCPUs per job', input('number', String(g.cpuVcpus), (v) => { g.cpuVcpus = Number(v) }, { min: 1, max: 192, step: 1 })),
+      field('Memory per job (MiB)', input('number', String(g.cpuMemoryMiB), (v) => { g.cpuMemoryMiB = Number(v) }, { min: 1024, step: 1024 }), '32768 needs an 8xlarge on c7i/c6i; 30720 fits a 4xlarge'),
+      field('Instances', checkbox('Use Spot (cheaper; a job can be interrupted)', g.cpuSpot, (v) => { g.cpuSpot = v }))),
     h('h3', {}, 'Observability'),
     h('p', { class: 'lead' }, 'Both runtimes and the GPU jobs send OpenTelemetry traces and metrics to CloudWatch: each session, job, Claude turn and tool call appears in CloudWatch GenAI Observability. Only names, sizes, counts, tokens and outcomes are recorded, never prompts, tool arguments or file contents.'),
     checkbox('Send traces and metrics to CloudWatch (AgentCore observability)', g.observability, (v) => { g.observability = v; render() }),
@@ -424,6 +435,7 @@ async function boot(): Promise<void> {
         s.projects.set(p.repo, {
           branch: p.branch ?? 'main', onboard: p.onboard ?? true, applySettings: p.applySettings ?? true,
           memoryDays: p.memoryEventExpiryDays === null || p.memoryEventExpiryDays === undefined ? '' : String(p.memoryEventExpiryDays),
+          generation: p.generation ?? 0,
         })
       }
       s.adminEmail = saved.adminEmail

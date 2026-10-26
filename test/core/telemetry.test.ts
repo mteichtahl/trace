@@ -223,6 +223,36 @@ describe('invocations and jobs', () => {
     expect(await total('trace.jobs', { 'trace.job.kind': 'work-item', 'trace.agent': 'specialist', 'trace.outcome': 'ok' })).toBe(1)
   })
 
+  it('continues the dispatcher\'s trace from the payload when the request carries none of that trace (workflow → agent → tools)', async () => {
+    const jobs = createJobs(async () => { await span('inside', {}, async () => undefined); return 'ok' }, { echo: () => undefined })
+    const server = createAgentServer(jobs)
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+    const traceId = '6729a3b0c1d2e3f405162738495a6b7c'
+    const parentId = '1122334455667788'
+    const post = (headers: Record<string, string>) => fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/invocations`, {
+      method: 'POST', headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify({ kind: 'work-item', repository: 'o/r', item: { ...ITEM, number: 77 }, trace: { traceparent: `00-${traceId}-${parentId}-01` } }),
+    })
+    try {
+      // no trace headers at all (AgentCore did not forward them)
+      await post({})
+      await until(() => !jobs.busy() && named('trace.job work-item').length === 1)
+      // a traceparent of another trace (AgentCore's own): the payload's wins, and an X-Amzn-Trace-Id of it is dropped
+      await post({ traceparent: `00-${'9'.repeat(32)}-${'8'.repeat(16)}-01`, 'x-amzn-trace-id': `Root=1-${'9'.repeat(8)}-${'9'.repeat(24)};Parent=${'8'.repeat(16)};Sampled=1` })
+      await until(() => !jobs.busy() && named('trace.job work-item').length === 2)
+      // the same trace in the headers (a span of AgentCore's in between): the headers are used
+      await post({ traceparent: `00-${traceId}-${'a'.repeat(16)}-01` })
+      await until(() => !jobs.busy() && named('trace.job work-item').length === 3)
+    } finally {
+      await new Promise((r) => server.close(() => r(undefined)))
+    }
+    const invs = named('invoke_agent trace-worker')
+    expect(invs.map((i) => i.spanContext().traceId)).toEqual([traceId, traceId, traceId])
+    expect(invs.map((i) => i.parentSpanContext?.spanId)).toEqual([parentId, parentId, 'a'.repeat(16)])
+    for (const job of named('trace.job work-item')) expect(job.spanContext().traceId).toBe(traceId)
+    for (const s of named('inside')) expect(s.spanContext().traceId).toBe(traceId)
+  })
+
   it('records who asked as a hash, never their email, and marks a failed job', async () => {
     const jobs = createJobs(async () => { throw new Error('the push was rejected') }, { echo: () => undefined })
     const task: JobPayload = { kind: 'task', repository: 'o/r', request: 'please rewrite README', requestedBy: 'Marc@Example.com', agent: 'render' }

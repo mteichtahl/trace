@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-export interface PadSpec { num: string; x: number; y: number; w?: number; h?: number; net?: string; kind?: 'smd' | 'thru_hole'; layer?: string }
+export interface PadSpec { num: string; x: number; y: number; w?: number; h?: number; net?: string; kind?: 'smd' | 'thru_hole' | 'np_thru_hole'; layer?: string; drill?: number | [number, number] }
 export interface FpSpec { ref: string; x: number; y: number; rot?: number; pads: PadSpec[]; side?: 'F' | 'B' }
 export interface BoardSpec {
   copper: 2 | 4 | 6
@@ -37,8 +37,11 @@ export function boardText(s: BoardSpec): string {
     const side = f.side ?? 'F'
     const pads = f.pads.map((p) => {
       const kind = p.kind ?? 'smd'
-      const layers = kind === 'thru_hole' ? '"*.Cu" "*.Mask"' : `"${p.layer ?? `${side}.Cu`}" "${side}.Mask" "${side}.Paste"`
-      return `\t\t(pad "${p.num}" ${kind} rect (at ${p.x} ${p.y}${f.rot ? ` ${f.rot}` : ''}) (size ${p.w ?? 0.5} ${p.h ?? 0.5})${kind === 'thru_hole' ? ' (drill 0.6)' : ''} (layers ${layers})${netTok(p.net)} (uuid "${u()}"))`
+      const thru = kind === 'thru_hole' || kind === 'np_thru_hole'
+      const layers = thru ? '"*.Cu" "*.Mask"' : `"${p.layer ?? `${side}.Cu`}" "${side}.Mask" "${side}.Paste"`
+      const d = p.drill ?? 0.6
+      const drill = !thru ? '' : Array.isArray(d) ? ` (drill oval ${d[0]} ${d[1]})` : ` (drill ${d})`
+      return `\t\t(pad "${p.num}" ${kind} ${kind === 'np_thru_hole' ? 'circle' : 'rect'} (at ${p.x} ${p.y}${f.rot ? ` ${f.rot}` : ''}) (size ${p.w ?? 0.5} ${p.h ?? 0.5})${drill} (layers ${layers})${netTok(p.net)} (uuid "${u()}"))`
     }).join('\n')
     return `\t(footprint "test:${f.ref}" (layer "${side}.Cu") (uuid "${u()}") (at ${f.x} ${f.y}${f.rot ? ` ${f.rot}` : ''})\n`
       + `\t\t(property "Reference" "${f.ref}" (at 0 0) (layer "${side}.SilkS") (uuid "${u()}") (effects (font (size 1 1) (thickness 0.15))))\n`

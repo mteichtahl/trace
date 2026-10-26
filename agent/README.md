@@ -85,8 +85,8 @@ this machine has a GPU (or the job does not want one), and otherwise, when `TRAC
 pushed to the `<prefix>-gpu` ECR repository. It is based on `nvidia/cuda:12.9.2-runtime-ubuntu24.04` with
 `NVIDIA_DRIVER_CAPABILITIES=all` (OptiX needs the graphics libraries), and contains:
 
-- Node 22 and the trace dist; the job's command is `node /app/dist/gpu/runner.js`, which reads the spec from
-  `TRACE_GPU_JOB` (or `TRACE_GPU_JOB_URI`), downloads the inputs, runs the program, and uploads the outputs, both logs
+- Node 22 and the trace dist; the job's command is `node /app/dist/gpu/runner.js`, which reads the spec from the S3
+  object `TRACE_GPU_JOB_URI` names, downloads the inputs, runs the program, and uploads the outputs, both logs
   and the exit record. `TRACE_GPU=1` is set, so a job inside never ships itself again.
 - Blender 5.2.3, the official build from download.blender.org (sha256-checked): Cycles on CUDA/OptiX, OpenImageDenoise,
   and its bundled Python with numpy (glTF import).

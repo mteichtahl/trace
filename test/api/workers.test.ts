@@ -1,7 +1,7 @@
 import type { InvokeAgentRuntimeCommand } from '@aws-sdk/client-bedrock-agentcore'
 import { describe, expect, it } from 'vitest'
 import { projectHash } from '../../src/core/project.js'
-import { jobHandle, parseHandle, parseWorkerRuntimes, remoteJobs, taskSession } from '../../src/api/workers.js'
+import { jobHandle, parseHandle, parseWorkerRuntimes, remoteJobs, taskSession, toolSession } from '../../src/api/workers.js'
 
 /** A fake AgentCore data plane: one microVM (job list) per runtime and session. */
 function fakeAgentCore() {
@@ -16,7 +16,9 @@ function fakeAgentCore() {
       const vm = jobs.get(key) ?? []
       jobs.set(key, vm)
       let out: unknown
-      if (body.kind === 'task') {
+      if (body.kind === 'tool') {
+        out = body.name === 'calc.fail' ? { ok: false, error: 'bad input' } : { ok: true, result: { ran: body.name, args: body.args } }
+      } else if (body.kind === 'task') {
         const id = `job-${vm.length + 1}`
         vm.push({ id, kind: 'task', state: 'running', repository: String(body.repository) })
         out = { accepted: true, jobId: id }
@@ -64,5 +66,18 @@ describe('the API\'s remote jobs', () => {
     expect(await jobs.jobStatus(stranger)).toEqual([])
     expect(f.calls).toHaveLength(2)
     await expect(jobs.startJob({ kind: 'task', repository: 'other/repo', request: 'x', requestedBy: 'm' })).rejects.toThrow(/no worker runtime/)
+  })
+
+  it('forwards a tool call to its own project\'s worker, in one session per project, and returns the tool\'s answer', async () => {
+    const f = fakeAgentCore()
+    const jobs = remoteJobs({ runtimes: parseWorkerRuntimes(RUNTIMES), region: 'us-east-1', account: '123456789012', client: f.client })
+    expect(await jobs.runTool!({ kind: 'tool', repository: 'acme/board', name: 'kicad.drc', args: { project: 'hw/b.kicad_pro' } })).toEqual({ ran: 'kicad.drc', args: { project: 'hw/b.kicad_pro' } })
+    await jobs.runTool!({ kind: 'tool', repository: 'acme/board', name: 'calc.via', args: {} })
+    expect(f.calls[0]).toMatchObject({ arn: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/trace_w_aaaaaaaa-AbCdEf1234', session: toolSession('acme/board'), body: { kind: 'tool', repository: 'acme/board', name: 'kicad.drc' } })
+    expect(f.calls[1]!.session).toBe(f.calls[0]!.session)
+    expect(toolSession('acme/board')).toMatch(new RegExp(`^trace-api-${projectHash('acme/board')}-[0-9a-f]{24}$`))
+    expect(toolSession('acme/fw')).not.toBe(toolSession('acme/board'))
+    await expect(jobs.runTool!({ kind: 'tool', repository: 'acme/board', name: 'calc.fail', args: {} })).rejects.toThrow('bad input')
+    await expect(jobs.runTool!({ kind: 'tool', repository: 'other/repo', name: 'calc.via', args: {} })).rejects.toThrow(/no worker runtime/)
   })
 })

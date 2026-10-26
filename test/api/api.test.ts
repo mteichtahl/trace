@@ -1,8 +1,8 @@
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { type ActionDeps, perform, WRITE_TOOLS } from '../../src/api/actions.js'
@@ -11,6 +11,8 @@ import { listen } from '../../src/api/server.js'
 import { assign, assignments } from '../../src/core/access.js'
 import { readSettings } from '../../src/core/config.js'
 import { Registry, defineTool } from '../../src/core/registry.js'
+import { toolRunner } from '../../src/agents/runtime/tool.js'
+import type { ToolJob } from '../../src/agents/runtime/schemas.js'
 import { openProject } from '../../src/core/store.js'
 import { CLIENT_ID, FakeCognito, FakeGitHub, ISSUER, KID, accessToken, jwks, otherKeys, sign, verifier } from './fixtures.js'
 
@@ -80,11 +82,18 @@ const deps: ActionDeps = {
     repositoryOf: (id) => (id === 'job-1' || id === 'job-gone' ? 'acme/board' : id === 'job-secret' ? 'acme/secret' : null),
     startJob: async (p) => { started.push(p); return { accepted: true, jobId: 'job-1' } },
     jobStatus: async (id) => (statusCalls.push(id ?? ''), id === 'job-1' ? [{ id: 'job-1', kind: 'task', repository: 'acme/board', state: 'running' }] : []),
+    // the project's worker runtime: what it was asked (forwarded), and its tool runner on a clone of its own
+    runTool: async (p) => { forwarded.push(p); return worker(p as ToolJob) },
   }),
   tools: () => tools,
-  checkout: async () => { const dir = mkdtempSync(join(scratch, 'clone-')); return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) } },
   scratch,
 }
+const forwarded: unknown[] = []
+const clones: string[] = []
+const worker = toolRunner({
+  registry: () => tools,
+  checkout: async () => { const dir = mkdtempSync(join(scratch, 'clone-')); clones.push(dir); return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) } },
+})
 
 let server: Server
 let url = ''
@@ -109,7 +118,7 @@ beforeAll(async () => {
   await assign(ADMIN, { sub: 'user-1', email: 'user-1@example.com' }, 'acme/board')
 })
 afterAll(() => { server.close(); rmSync(scratch, { recursive: true, force: true }) })
-beforeEach(() => { toolCalls = []; github.calls = []; started.length = 0 })
+beforeEach(() => { toolCalls = []; github.calls = []; started.length = 0; forwarded.length = 0; clones.length = 0 })
 
 describe('the API server', () => {
   it('answers /ping', async () => {
@@ -156,7 +165,12 @@ describe('the API server', () => {
   it('a guest can run a read-only tool, but never a hardware one', async () => {
     const r = await call(guest, { action: 'tool', repo: 'acme/board', name: 'calc.echo', args: { x: 2 } })
     expect(r.body).toMatchObject({ ok: true, result: { x: 2 } })
+    // forwarded to the project's worker runtime, which ran it in its clone (never in the API's own process tree)
+    expect(forwarded).toEqual([{ kind: 'tool', repository: 'acme/board', name: 'calc.echo', args: { x: 2 } }])
+    expect((r.body.result as { cwd: string }).cwd).toBe(join(realpathSync(scratch), basename(clones[0]!)))
+    expect(process.cwd()).not.toBe(clones[0])
     expect((await call(guest, { action: 'tool', repo: 'acme/board', name: 'hil.zap', args: {} })).body).toMatchObject({ ok: false, error: 'no tool hil.zap' })
+    expect(forwarded).toHaveLength(1)
     const list = (await call(guest, { action: 'tools.list', repo: 'acme/board' })).body.result as { name: string; needs: string }[]
     expect(list.map((t) => t.name)).toEqual(['calc.echo', 'datasheets.add'])
     expect(list.find((t) => t.name === 'datasheets.add')?.needs).toBe('write')
@@ -168,6 +182,16 @@ describe('the API server', () => {
     expect(r.body).toMatchObject({ ok: false, error: 'path: must be a path inside the repository' })
     expect((await call(user, { action: 'tool', repo: 'acme/board', name: 'calc.echo', args: { x: 1, library: '/elsewhere' } })).body.ok).toBe(false)
     expect(toolCalls).toEqual([])
+    // refused before the worker is asked
+    expect(forwarded).toEqual([])
+  })
+
+  it('checks access before a tool call is forwarded, and needs write for a write tool', async () => {
+    expect((await call(guest, { action: 'tool', repo: 'acme/secret', name: 'calc.echo', args: { x: 1 } })).status).toBe(403)
+    expect((await call(guest, { action: 'tool', repo: 'acme/board', name: 'datasheets.add', args: { mpn: 'X' } })).status).toBe(403)
+    expect(forwarded).toEqual([])
+    expect((await call(user, { action: 'tool', repo: 'acme/board', name: 'datasheets.add', args: { mpn: 'X' } })).body.ok).toBe(true)
+    expect(forwarded).toHaveLength(1)
   })
 
   it('a user can write on an assigned project', async () => {

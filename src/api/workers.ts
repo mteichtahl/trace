@@ -1,6 +1,7 @@
 /**
- * How the API runtime starts and follows work: on the project's own worker runtime (InvokeAgentRuntime), never in
- * its own process. The API runs no model and gives nothing a shell; each worker's role reaches only its project.
+ * How the API runtime starts and follows work, and runs tools: on the project's own worker runtime (InvokeAgentRuntime),
+ * never in its own process. The API runs no model and no tool, and gives nothing a shell; each worker's role reaches
+ * only its project (and has its GPU and CPU queues).
  *
  *   TRACE_WORKER_RUNTIMES   `owner/repo=<runtime id> …` (space-separated), written by the stack
  *
@@ -40,6 +41,15 @@ export function taskSession(t: Pick<TaskJob, 'repository' | 'request' | 'agent' 
   return `trace-api-${projectHash(slug)}-${h}`
 }
 
+/**
+ * The AgentCore session the API's tool calls on one project run in: one per project, so they reuse a warm microVM and
+ * its clone. (A tool call is answered in the response: it has no job and no handle.)
+ */
+export function toolSession(repository: string): string {
+  const slug = projectSlug(repository)
+  return `trace-api-${projectHash(slug)}-${createHash('sha256').update(`${slug}\ntool`).digest('hex').slice(0, 24)}`
+}
+
 export const jobHandle = (session: string, jobId: string): string => `${session}.${jobId}`
 
 export function parseHandle(handle: string): { session: string; jobId: string; hash: string } | null {
@@ -49,6 +59,10 @@ export function parseHandle(handle: string): { session: string; jobId: string; h
 }
 
 const StatusOut = z.object({ jobs: z.array(z.object({ id: z.string(), kind: z.string(), state: z.string(), repository: z.string().optional() }).loose()) }).loose()
+const ToolOut = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), result: z.unknown() }).loose(),
+  z.object({ ok: z.literal(false), error: z.string() }).loose(),
+])
 
 export interface RemoteJobsOptions {
   /** slug → runtime id (parseWorkerRuntimes) */
@@ -78,6 +92,13 @@ export function remoteJobs(o: RemoteJobsOptions): JobsApi {
       const session = taskSession(payload)
       const r = AcceptedSchema.parse(await invoke(payload, session, opts(slug)))
       return { ...r, jobId: jobHandle(session, r.jobId) }
+    },
+    async runTool(payload) {
+      const slug = projectSlug(payload.repository)
+      const out = ToolOut.safeParse(await invoke({ ...payload }, toolSession(slug), opts(slug)))
+      if (!out.success) throw new ActionError(`${payload.name}: the project's worker answered something unexpected`)
+      if (!out.data.ok) throw new ActionError(out.data.error)
+      return out.data.result
     },
     async jobStatus(handle) {
       const h = handle ? parseHandle(handle) : null

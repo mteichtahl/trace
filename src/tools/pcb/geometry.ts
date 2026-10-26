@@ -93,6 +93,49 @@ export class ShapeIndex {
   }
 }
 
+/** A drilled hole: centre and diameter (mm). */
+export interface Hole { x: number; y: number; d: number; tag: string }
+
+/** Drilled holes indexed by a uniform grid, for hole-to-hole spacing (edge to edge, whatever the nets). */
+export class HoleIndex {
+  private readonly cells = new Map<string, Hole[]>()
+  constructor(private readonly cell = 2) {}
+
+  add(h: Hole): void {
+    const k = `${Math.floor(h.x / this.cell)},${Math.floor(h.y / this.cell)}`
+    ;(this.cells.get(k) ?? this.cells.set(k, []).get(k) as Hole[]).push(h)
+  }
+
+  /** The first hole whose edge is closer than `min` to `h`'s edge (holes at the same centre are the same hole), with
+   * that gap, or null. */
+  conflict(h: Omit<Hole, 'tag'>, min: number): { hole: Hole; gap: number } | null {
+    const reach = h.d / 2 + min + 5 // 5 mm: larger than any drill radius
+    const c = this.cell
+    for (let i = Math.floor((h.x - reach) / c); i <= Math.floor((h.x + reach) / c); i++) {
+      for (let j = Math.floor((h.y - reach) / c); j <= Math.floor((h.y + reach) / c); j++) {
+        for (const o of this.cells.get(`${i},${j}`) ?? []) {
+          const dc = Math.hypot(o.x - h.x, o.y - h.y)
+          if (dc < 1e-6) continue
+          const g = dc - o.d / 2 - h.d / 2
+          if (g < min - 1e-4) return { hole: o, gap: g }
+        }
+      }
+    }
+    return null
+  }
+}
+
+/** The board's drilled holes: vias with a drill, and every through-hole and NPTH pad (an oval hole as a circle of its
+ * larger side: conservative). */
+export function boardHoles(b: Board): Hole[] {
+  const out: Hole[] = []
+  for (const vs of Object.values(b.vias)) for (const [x, y, , drill] of vs) if (drill) out.push({ x, y, d: drill, tag: 'via' })
+  for (const p of [...Object.values(b.pads).flat(), ...(b.unnetted ?? [])]) {
+    if (p.drill && (p.kind === 'thru_hole' || p.kind === 'np_thru_hole')) out.push({ x: p.x, y: p.y, d: Math.max(p.drill[0], p.drill[1]), tag: `${p.kind === 'np_thru_hole' ? 'NPTH hole' : 'pad'} ${p.ref}.${p.num}` })
+  }
+  return out
+}
+
 /** The layers a via between `top` and `bottom` passes through, in stack order. */
 export function viaSpan(order: readonly string[], top: string, bottom: string): string[] {
   const a = order.indexOf(top)
@@ -101,12 +144,20 @@ export function viaSpan(order: readonly string[], top: string, bottom: string): 
   return order.slice(Math.min(a, b), Math.max(a, b) + 1)
 }
 
-/** The board's existing copper as shapes: pads, tracks (arcs as their chord: an approximation) and vias. */
+/** The board's existing copper as shapes: pads (with a net or without one: an unconnected pin, a mounting hole, an
+ * NPTH hole on every copper layer), tracks (arcs as their chord: an approximation) and vias. A net-less pad's net is
+ * '', which no routed net has, so every net keeps clear of it. */
 export function boardShapes(b: Board): Shape[] {
   const order = b.layers.map((l) => l.name)
   const out: Shape[] = []
   for (const [net, pads] of Object.entries(b.pads)) {
     for (const p of pads) out.push({ kind: 'rect', net, layers: p.layers, x0: p.x - p.w / 2, y0: p.y - p.h / 2, x1: p.x + p.w / 2, y1: p.y + p.h / 2, tag: `pad ${p.ref}.${p.num}` })
+  }
+  for (const p of b.unnetted ?? []) {
+    // an NPTH pad's copper is at most its hole; the hole is what must be kept clear of
+    const [w, h] = p.kind === 'np_thru_hole' && p.drill ? [Math.max(p.w, p.drill[0]), Math.max(p.h, p.drill[1])] : [p.w, p.h]
+    out.push({ kind: 'rect', net: '', layers: p.layers, x0: p.x - w / 2, y0: p.y - h / 2, x1: p.x + w / 2, y1: p.y + h / 2,
+      tag: p.kind === 'np_thru_hole' ? `NPTH hole ${p.ref}.${p.num || '(no number)'}` : `pad ${p.ref}.${p.num} (no net)` })
   }
   for (const [net, segs] of Object.entries(b.segments)) {
     for (const [x1, y1, x2, y2, w, ly] of segs) out.push({ kind: 'cap', net, layers: [ly], x1, y1, x2, y2, r: w / 2, tag: `track on ${ly}` })

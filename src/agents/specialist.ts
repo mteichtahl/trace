@@ -28,6 +28,12 @@ export const DELEGATE_TOOL = 'agent.delegate'
 /** Claude Code's own tools a specialist gets: reading only. No Bash, Write, Edit or Task. */
 export const SPECIALIST_BUILTINS = ['Read', 'Glob', 'Grep', 'TodoWrite'] as const
 
+/** Built-in tools a specialist never has, named as deny rules too where an allowlist alone may not hold (GitHub Actions). */
+export const SPECIALIST_DENIED = ['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Task', 'WebFetch', 'WebSearch'] as const
+
+/** The delegated worker's tools: everything, as before the specialists (it is never offered agent.delegate). */
+export const WORKER_TOOLS = ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Task', 'TodoWrite', 'mcp__trace'] as const
+
 /** core/mcp.ts's mcpName (`kicad.erc` → `kicad_erc`), here so the harness bundle does not pull in the MCP server. */
 export const mcpName = (name: string): string => name.replaceAll('.', '_')
 
@@ -94,9 +100,12 @@ export interface PromptContext {
   route?: Route | undefined
   /** Where it runs, for the first line. */
   where?: string
-  /** How repository changes are made: through agent.delegate (the runtime), or by the specialist itself following
-   * the worker's instructions (GitHub Actions, where there is no runtime to delegate to). */
-  delivery?: 'delegate' | { inline: string }
+  /**
+   * How repository changes are made: through agent.delegate (the runtime), or, in GitHub Actions (no runtime to
+   * delegate to), through the specialist's structured output: the workflow runs the worker in a later step with the
+   * brief and acceptance criteria, then runs the specialist again, read only, to check them ('actions').
+   */
+  delivery?: 'delegate' | 'actions'
   hardware?: boolean
 }
 
@@ -213,11 +222,22 @@ export function specialistPrompt(s: Specialist, c: PromptContext): string {
 }
 
 function deliveryLines(s: Specialist, delivery: PromptContext['delivery'], cfg: TraceConfig): string[] {
-  if (delivery && delivery !== 'delegate') {
+  if (delivery === 'actions') {
     return [
-      'DELIVERY: there is no runtime to delegate to here (GitHub Actions), so you make repository changes yourself, as',
-      'the worker would, following its instructions below; the workflow, done and escalation rules above still apply.',
-      ...fence('worker-instructions', delivery.inline, 30_000),
+      'DELIVERY (GitHub Actions): you have no shell and cannot edit files here either. Repository changes go to the trace',
+      'worker, which this workflow runs in its next step, in this same checkout, with a shell, git and the electronics',
+      'tools. Hand it the work in your final structured output:',
+      '  { delegate: true, brief, acceptance: [criteria], branch?, report }',
+      '- brief: what to change and why, with the evidence (run ids, files, lines, measured values). The worker follows',
+      '  the same rules and guardrails; it does not know what you found unless the brief says so.',
+      '- acceptance: each criterion one you can check afterwards with your own tools: the tool, its arguments and the',
+      '  expected outcome. The workflow runs you again after the worker, read only, to check each one.',
+      `- branch: leave it out to work on the branch checked out; give a new \`${cfg.worker.own_branch_prefix || 'claude/'}...\` branch for an issue.`,
+      '- report: what you found, with run ids (the harness posts it on the item if nothing is delegated).',
+      'When nothing needs changing, or you escalate: { delegate: false, report }. One delegation per run: when the',
+      'check finds a criterion unmet, the next run (a new push, or the next pick) tries again.',
+      '- Delegate only what needs the repository changed or long mechanical work. Investigation and measurement are yours.',
+      ...s.delegate.map((l) => `- ${l}`),
     ]
   }
   return [

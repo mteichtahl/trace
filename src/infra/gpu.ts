@@ -41,6 +41,7 @@ import type { Provider } from 'aws-cdk-lib/custom-resources'
 import { Construct } from 'constructs'
 import { cpuJobDefinitionName, gpuJobDefinitionName, PROJECT_TAG, projectHash, projectJobsPrefix, projectSlug } from '../core/project.js'
 import { grantPrefixes } from './project.js'
+import { GPU_JOB_VCPUS } from './props.js'
 
 export { JOBS_PREFIX } from '../core/project.js'
 
@@ -209,7 +210,7 @@ export class GpuCompute extends Construct {
       retryAttempts: 1,
       container: new batch.EcsEc2ContainerDefinition(scope, 'GpuContainer', {
         image: ecs.ContainerImage.fromEcrRepository(this.repository, p.source.assetHash),
-        cpu: 4,
+        cpu: GPU_JOB_VCPUS,
         memory: Size.gibibytes(14),
         gpu: 1,
         jobRole,

@@ -593,6 +593,8 @@ export interface JobMemory {
   observe(message: unknown): void
   /** Record the result (or the failure) and wait for every pending write. Never throws. */
   finish(ok: boolean, text: string): Promise<void>
+  /** Wait for every pending write without recording a result (a job in several steps: GitHub Actions). Never throws. */
+  flush?(): Promise<void>
 }
 
 export const MAX_TOOL_EVENTS = 12
@@ -670,6 +672,9 @@ export async function openJobMemory(mem: AgentMemory | null, plan: JobMemoryPlan
     },
     async finish(ok, text) {
       write(a, 'assistant', `${ok ? 'Result' : 'Failed'}: ${text.trim() || '(nothing)'}`)
+      await chain.catch(() => undefined)
+    },
+    async flush() {
       await chain.catch(() => undefined)
     },
   }

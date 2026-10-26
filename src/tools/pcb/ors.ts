@@ -9,17 +9,27 @@
  *   - the net's copper must keep the board's clearance to every other net's copper: the board's pads, tracks and vias,
  *     and the OrthoRoute copper already accepted (a through via made from a blind one is checked on every layer)
  *   - the net must be complete: every pad reached (tracks, vias and the net's existing copper; pours are not counted)
+ *   - every via's hole must keep the board's minimum hole-to-hole spacing (min_hole_to_hole) to every other hole:
+ *     the board's vias and through-hole and NPTH pads, the OrthoRoute vias already accepted and the net's own; a
+ *     through via made from a blind one is where this bites
  *
- * A net that fails either check is left out entirely and falls through to the next stage (Freerouting). What is
- * written is locked, so the next router treats it as fixed: `(locked yes)` in KiCad 8–10 boards (checked against
- * KiCad 10.0.7's own output), the bare `locked` flag in older ones.
+ * The board's pads with no net (unconnected pins, mounting holes, NPTH holes) are obstacles like any other copper.
+ *
+ * A net that fails a check is left out entirely and falls through to the next stage (Freerouting). What is
+ * written is locked, so the next router treats it as fixed: `(locked yes)` in boards of format 20231014 ("V8 file
+ * format normalization") and later, KiCad 8–10 (checked against KiCad 10.0.7's own output), and the bare `locked`
+ * flag after the item's head in KiCad 6 and 7 boards: `(segment locked (start …`, `(via blind locked (at …`. That is
+ * what KiCad 6.0 and 7.0 write (PCB_PLUGIN::format for PCB_TRACK in pcbnew/plugins/kicad/pcb_plugin.cpp prints
+ * "(segment%s" / "(arc%s" with " locked", and " locked" after the via type; format 20210424 is "Correct locked flag
+ * syntax (remove parens)"). dev-docs.kicad.org's s-expression page shows `[(locked)]`, the 5.99 development form,
+ * which those readers still accept but do not write.
  */
 import { gunzipSync } from 'node:zlib'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { ToolError } from '../../core/registry.js'
 import { Net, type Board, type Segment, type Via } from '../kicad/pcb.js'
-import { boardShapes, ShapeIndex, viaSpan, type Shape } from './geometry.js'
+import { boardHoles, boardShapes, HoleIndex, ShapeIndex, viaSpan, type Shape } from './geometry.js'
 
 const XY = z.object({ x: z.number(), y: z.number() })
 const Layer = z.union([z.string(), z.number().int()])
@@ -77,7 +87,12 @@ export interface ApplyOptions {
   blindBuried: boolean
   /** mm, the board's default clearance */
   clearance: number
+  /** mm, the minimum edge-to-edge spacing of drilled holes (the board's min_hole_to_hole; default 0.25, KiCad's) */
+  minHoleToHole?: number
 }
+
+/** KiCad's default min_hole_to_hole (mm). */
+export const DEFAULT_HOLE_TO_HOLE = 0.25
 
 export interface ApplyResult {
   /** the new board text, with the accepted copper appended and locked */
@@ -127,9 +142,12 @@ export function netRef(text: string): (net: string) => string {
 /** The board's file format version (YYYYMMDD). */
 export const formatVersion = (text: string): number => Number(/\(version\s+(\d+)\)/.exec(text.slice(0, 400))?.[1] ?? 0)
 
+/** The first board format that writes `(locked yes)` (KiCad 8's normalization); before it, the bare flag. */
+export const LOCKED_YES_SINCE = 20231014
+
 export function trackText(t: OrsTrack, net: string, ref: (n: string) => string, version: number): string {
-  const lock = version >= 20240000 ? '\t\t(locked yes)\n' : ''
-  return `\t(segment${version >= 20240000 ? '' : ' locked'}\n\t\t(start ${atom(t.x1)} ${atom(t.y1)})\n\t\t(end ${atom(t.x2)} ${atom(t.y2)})\n`
+  const lock = version >= LOCKED_YES_SINCE ? '\t\t(locked yes)\n' : ''
+  return `\t(segment${version >= LOCKED_YES_SINCE ? '' : ' locked'}\n\t\t(start ${atom(t.x1)} ${atom(t.y1)})\n\t\t(end ${atom(t.x2)} ${atom(t.y2)})\n`
     + `\t\t(width ${atom(t.width)})\n${lock}\t\t(layer ${q(t.layer)})\n\t\t${ref(net)}\n\t\t(uuid ${q(randomUUID())})\n\t)\n`
 }
 
@@ -137,8 +155,8 @@ export function viaText(v: OrsVia, net: string, ref: (n: string) => string, vers
   const [a, b] = [order.indexOf(v.from), order.indexOf(v.to)].sort((x, y) => x - y) as [number, number]
   const last = order.length - 1
   const kind = a === 0 && b === last ? '' : a === 0 || b === last ? ' blind' : version >= 20250000 ? ' buried' : ' blind'
-  const lock = version >= 20240000 ? '\t\t(locked yes)\n' : ''
-  return `\t(via${kind}${version >= 20240000 ? '' : ' locked'}\n\t\t(at ${atom(v.x)} ${atom(v.y)})\n\t\t(size ${atom(v.diameter)})\n`
+  const lock = version >= LOCKED_YES_SINCE ? '\t\t(locked yes)\n' : ''
+  return `\t(via${kind}${version >= LOCKED_YES_SINCE ? '' : ' locked'}\n\t\t(at ${atom(v.x)} ${atom(v.y)})\n\t\t(size ${atom(v.diameter)})\n`
     + `\t\t(drill ${atom(v.drill)})\n\t\t(layers ${q(order[a] as string)} ${q(order[b] as string)})\n${lock}\t\t${ref(net)}\n\t\t(uuid ${q(randomUUID())})\n\t)\n`
 }
 
@@ -148,6 +166,9 @@ export function applyOrs(text: string, board: Board, sol: OrsSolution, opts: App
   const blindOk = opts.blindBuried && order.length >= 4
   const index = new ShapeIndex()
   for (const s of boardShapes(board)) index.add(s)
+  const holes = new HoleIndex()
+  for (const h of boardHoles(board)) holes.add(h)
+  const minHole = opts.minHoleToHole ?? DEFAULT_HOLE_TO_HOLE
   const ref = netRef(text)
   const version = formatVersion(text)
   const routed: string[] = []
@@ -180,12 +201,25 @@ export function applyOrs(text: string, board: Board, sol: OrsSolution, opts: App
       failed.push({ net, reason: `too close to ${o.tag ?? 'copper'} of ${o.net} on ${s.layers.filter((l) => o.layers.includes(l)).join('/')}` })
       continue
     }
+    // hole to hole: against the board's holes, the vias accepted so far, and this net's own other vias
+    const mine = new HoleIndex()
+    let tooClose: string | null = null
+    for (const v of vs) {
+      const hit = holes.conflict({ x: v.x, y: v.y, d: v.drill }, minHole) ?? mine.conflict({ x: v.x, y: v.y, d: v.drill }, minHole)
+      if (hit) {
+        tooClose = `via at (${atom(v.x)}, ${atom(v.y)}): its hole is ${atom(Math.max(0, hit.gap))} mm from the hole of ${hit.hole.tag} (min_hole_to_hole ${minHole} mm)`
+        break
+      }
+      mine.add({ x: v.x, y: v.y, d: v.drill, tag: `this net's via at (${atom(v.x)}, ${atom(v.y)})` })
+    }
+    if (tooClose) { failed.push({ net, reason: tooClose }); continue }
     const segs: Segment[] = g.tracks.map((t) => [t.x1, t.y1, t.x2, t.y2, t.width, t.layer, Math.hypot(t.x2 - t.x1, t.y2 - t.y1)])
     const vrows: Via[] = vs.map((v) => [v.x, v.y, v.diameter, v.drill, v.from, v.to])
     const trial: Board = { ...board, segments: { ...board.segments, [net]: [...(board.segments[net] ?? []), ...segs] }, vias: { ...board.vias, [net]: [...(board.vias[net] ?? []), ...vrows] } }
     const missing = (board.pads[net]?.length ?? 0) >= 2 ? new Net(trial, net).unreached() : []
     if (missing.length) { failed.push({ net, reason: `incomplete: ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? ', …' : ''} not reached` }); continue }
     for (const s of shapes) index.add(s)
+    for (const v of vs) holes.add({ x: v.x, y: v.y, d: v.drill, tag: `the OrthoRoute via of ${net} at (${atom(v.x)}, ${atom(v.y)})` })
     for (const t of g.tracks) out += trackText(t, net, ref, version)
     for (const v of vs) out += viaText(v, net, ref, version, order)
     tracks += g.tracks.length

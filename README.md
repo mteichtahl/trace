@@ -34,13 +34,16 @@ It then shows the plan and runs it:
 
 - **AWS (CDK):** one stack. It contains the central bucket, the agent image (built by CodeBuild on arm64, so no
   local Docker is needed), and AgentCore runtimes from that image: one worker runtime per project, each with its own
-  execution role, GitHub OIDC role, GitHub token secret, memory and GPU job definition, and the API runtime. Each
+  execution role, GitHub OIDC role, GitHub token secret, memory and GPU and CPU job definitions, and the API runtime. Each
   project's resources are in a nested stack of their own (see [Stack layout](#stack-layout-and-limits)). A project's
   worker is invoked by that repository's workflows through IAM, and by the API. The API runtime is for people and is
   reached only with a Cognito sign-in. The stack also holds the Cognito user pool.
-- **GitHub:** each repository's Actions variables (`TRACE_AWS_ROLE` and `TRACE_AGENT_RUNTIME_ARN`, both its own
-  project's, `TRACE_AWS_REGION`, `TRACE_HOME`) and its `TRACE_TOKEN` secret (its project's agent token, encrypted
-  with the repository's key), plus the onboarding pull request.
+- **GitHub:** each repository's Actions variables (`TRACE_AWS_ROLE`, `TRACE_AGENT_RUNTIME_ARN` and `TRACE_MEMORY_ID`,
+  all its own project's, `TRACE_AWS_REGION`, `TRACE_HOME`) and its `TRACE_TOKEN` secret (its project's agent token,
+  encrypted with the repository's key), plus the onboarding pull request.
+- **The GPU image**, last: the deploy starts its build and does not wait for it (see [GPU jobs](#gpu-jobs-rendering-and-autorouting)),
+  so the installer waits for it once everything else is set up, and starts it again if an earlier one failed. A failed
+  GPU image leaves GPU and CPU jobs unavailable and everything else installed.
 - **People:** Cognito invitations into each person's class group, and project assignments recorded in the central
   database.
 
@@ -57,10 +60,10 @@ projects is therefore drawn in IAM, not only in code (`src/infra/project.ts`):
 | Isolated per project | How |
 | --- | --- |
 | **Worker runtime** | One AgentCore runtime per repository (`<prefix>_w_<hash>`, tagged `trace:project`), with its own execution role and `TRACE_PROJECT=owner/repo`. It refuses, with a 403 that is logged, any invocation or job for another repository. |
-| **Memory** | One AgentCore Memory per repository (`<prefix>_m_<hash>`, tagged `trace:project`), its own event expiry, and its own log group and log delivery. The worker is told only its own (`TRACE_MEMORY_ID`) and its role may use only that memory's ARN. On it, the role may still create and list events only for actors `<owner>/<repo>/*`, and recall and list records only under `/trace/<owner>/<repo>/*` (the condition keys `bedrock-agentcore:actorId` and `bedrock-agentcore:namespace`), as defence in depth. The actor comes from `TRACE_PROJECT`, never from the request. The GitHub OIDC role has no memory access. |
+| **Memory** | One AgentCore Memory per repository (`<prefix>_m_<hash>`, tagged `trace:project`), its own event expiry, and its own log group and log delivery. The worker is told only its own (`TRACE_MEMORY_ID`) and its role may use only that memory's ARN. On it, the role may still create and list events only for actors `<owner>/<repo>/*`, and recall and list records only under `/trace/<owner>/<repo>/*` (the condition keys `bedrock-agentcore:actorId` and `bedrock-agentcore:namespace`), as defence in depth. The actor comes from `TRACE_PROJECT`, never from the request. The GitHub OIDC role has the same grants on the same memory, for the `worker.runner = actions` fallback (the repository variable `TRACE_MEMORY_ID`). |
 | **S3** | Read and write `projects/<owner>/<repo>/*` and `jobs/<owner>/<repo>/*`, and list only those prefixes and `central/*`. Nothing under `access/*`, and nothing of another project. |
-| **GPU jobs** | One AWS Batch job definition per project, whose job role reads and writes only that project's `jobs/<owner>/<repo>/*`. A project's role may submit only with its own definition, only jobs tagged `trace:project=<owner>/<repo>`, and may stop only jobs carrying that tag. SubmitJob cannot override a definition's job role. |
-| **GitHub OIDC role** | One per repository, trusted only for `repo:OWNER/REPO:ref:refs/heads/BRANCH`. It may invoke only that project's runtime and read and write only that project's prefix (and the central database). |
+| **GPU and CPU jobs** | Two AWS Batch job definitions per project (`<prefix>-gpu-<hash>`, and `<prefix>-cpu-<hash>` with the CPU queue), with one job role that reads and writes only that project's `jobs/<owner>/<repo>/*`. A project's role may submit only with its own definitions, only jobs tagged `trace:project=<owner>/<repo>`, and may stop only jobs carrying that tag. SubmitJob cannot override a definition's job role. |
+| **GitHub OIDC role** | One per repository, trusted only for `repo:OWNER/REPO:ref:refs/heads/BRANCH`. It may invoke only that project's runtime, read and write only that project's prefix (and the central database), and use only that project's memory, as its worker does. |
 | **GitHub token** | Each project has its own secret, `<prefix>/github-token/<owner>/<repo>`, and its worker reads only that one. This isolates GitHub access only when you give the project its own fine-grained token limited to that repository. By default the shared token is copied into every project's secret, and the installer's summary says so. A project token is checked: it must see its repository, and the installer warns if it can also see another project's. |
 
 Shared on purpose:
@@ -68,12 +71,16 @@ Shared on purpose:
 - **The central database** (`central/`: datasheets and the parts database). Every project reads it. Every project
   may also write it, because adding a datasheet is a shared write, but only with a conditional put (`If-Match` or
   `If-None-Match`, which is how the central store always writes) and never a delete. The bucket is versioned.
-- **The GPU queue and compute environment**, and the GPU image.
+- **The GPU and CPU queues and compute environments**, and the GPU image (which both run).
 - **The agent image**: every runtime runs the same one.
 - **The API runtime.** It is the one component that spans projects. It holds the shared GitHub token, which admins
   need for `settings.get` and `settings.set` on any project. It reads (never writes) the records of every project's
   memory for `memory.list` and `memory.recall`, choosing the memory of the project asked for after the access check,
-  and it may invoke every project's worker. It does all of this only after its
+  and it may invoke every project's worker: each by its exact runtime ARN, and the runtime only when it carries this
+  installation's tag `trace:installation=<prefix>` (`aws:ResourceTag`, which the Service Authorization Reference
+  lists for both of InvokeAgentRuntime's resource types, runtime and runtime-endpoint; the endpoint statement names
+  the exact ARNs only, because the `DEFAULT` endpoint AgentCore makes is not tagged by the stack). No name pattern, so
+  another installation in the account is out of reach. It does all of this only after its
   Cognito access check. It runs no model and no agent, and nothing reaches a shell through it: a `task` is handed to
   the project's own worker runtime.
 
@@ -83,30 +90,36 @@ job on the queue, which includes its command and environment. Job ids, not data,
 ### Stack layout and limits
 
 An installation holds up to 60 projects. Each project's resources (its worker runtime and execution role, GitHub
-OIDC role, token secret, memory with its log group and log delivery, GPU job definition and job role: 17
+OIDC role, token secret, memory with its log group and log delivery, GPU and CPU job definitions and job role: 18
 CloudFormation resources with everything on) are a CloudFormation nested stack of their own, `Project<hash>Stack`
 (`src/infra/project.ts` `ProjectNestedStack`). The parent stack holds the shared parts and one
 `AWS::CloudFormation::Stack` per project. What a project uses of the parent (the bucket, the agent image and its
-repository, the OIDC provider, the GPU queue, image, execution role and log group) reaches its nested stack as
-parameters, and the parent waits for the GPU image and Transaction Search before it creates or updates a project.
+repository, the OIDC provider, the GPU and CPU queues, image repository, execution role and log group) reaches its
+nested stack as parameters, and the parent waits for Transaction Search before it creates or updates a project (not
+for the GPU image: see [GPU jobs](#gpu-jobs-rendering-and-autorouting)).
 Inside, the resources are the ones the single stack had, with the same names, IAM and removal policies (with
 `retainData`, a removed project's memory, log group and log delivery stay in the account, as before).
 
 | Projects | Parent stack: resources / outputs | Each project's nested stack: resources / outputs / parameters |
 | --- | --- | --- |
-| 1 | 83 / 20 | 17 / 12 / 10 |
-| 24 | 106 / 89 | 17 / 12 / 10 |
-| 60 | 143 / 197 | 17 / 12 / 10 |
+| 1 | 86 / 19 | 18 / 12 / 11 |
+| 24 | 111 / 19 | 18 / 12 / 11 |
+| 60 | 148 / 19 | 18 / 12 / 11 |
 
-(Everything on, including the legacy memory's one-deploy output. At 60 projects, CDK moves part of the API role's
-policy, which names every project's memory, into a managed policy of that role.)
+(Everything on, including the legacy memory's one-deploy output. From 24 projects, CDK moves part of the API role's
+policy, which names every project's memory and worker runtime, into managed policies of that role: three at 60, of
+the ten a role may have by default.)
 
 CloudFormation allows 500 resources, 200 outputs and 200 parameters per template, and the stack checks all three
-when it is built. Outputs are the tighter limit on the parent, so it carries three per project, the ones the
-installer reads: `Project<hash>RuntimeArn`, `Project<hash>ActionsRoleArn` and `Project<hash>MemoryId`. Each nested
-stack has those and the rest under the same names (`Project<hash>GithubSecretArn`, `Project<hash>GpuJobDefinition`,
-`Project<hash>LogGroup`, `Project<hash>MemoryLogGroup`); the installer writes a project's token by its secret's name,
-`<prefix>/github-token/<owner>/<repo>`. The other limit at 60 is the API's two `owner/repo=<id>` lists (see
+when it is built. The parent carries none of a project's outputs, so its output count does not grow with the
+projects. Each project's are its nested stack's, under the names they always had (`Project<hash>RuntimeArn`,
+`Project<hash>ActionsRoleArn`, `Project<hash>MemoryId`, `Project<hash>GithubSecretArn`,
+`Project<hash>GpuJobDefinition`, `Project<hash>LogGroup`, `Project<hash>MemoryLogGroup`), with `Repository`
+(`owner/repo`). The installer lists the parent's resources (`ListStackResources`: `DescribeStackResources` returns
+only the first 100), takes each `AWS::CloudFormation::Stack` whose logical id is `Project<hash>Stack…`, reads its
+outputs with `DescribeStacks` on its physical id, checks its `Repository` output against the hash, and takes only the
+outputs named for that hash (`src/installer/aws.ts` `stackOutputs`). The flat layout keeps its outputs in the one
+stack, as before. The other limit at 60 is the API's two `owner/repo=<id>` lists (see
 [Agent memory](#agent-memory)): very long repository names can reach their 5000 characters first, and the stack says
 so when it is built. The output `Layout` says which layout an installation has.
 
@@ -256,9 +269,43 @@ with that project's job definition), the job goes to an AWS Batch queue of GPU i
 idle. Inputs travel through the central bucket's `jobs/<owner>/<repo>/` prefix (`TRACE_PROJECT`; `jobs/_local/` outside
 a project), and outputs and logs come back the same way, so the tool answers the same wherever the job ran. The API
 runtime has no GPU queue: GPU work goes through a `task`.
+A job's spec (its argv, file names and program environment) is written to `jobs/<slug>/<id>/spec`, and the
+container gets only `TRACE_GPU_JOB_URI` and `TRACEPARENT` and runs the definition's generic
+`node /app/dist/gpu/runner.js`: AWS Batch's DescribeJobs has no resource-level permission, so anything in a job's
+command or environment would be readable by every project. Input names may be relative paths (`rtl/sub/x.vh`); the
+job sees them in that tree, locally and on the queue. A CPU job sent to the queue (`remote`, or
+`TRACE_GPU_REMOTE=always`) goes to `TRACE_CPU_QUEUE` with `TRACE_CPU_JOB_DEFINITION` when the stack sets them, else to
+the GPU queue. A job's `vcpus` hint becomes a VCPU override, capped at `TRACE_CPU_JOB_MAX_VCPUS` /
+`TRACE_GPU_JOB_MAX_VCPUS` (not applied when the cap is unset).
 `TRACE_GPU_REMOTE=always|never` overrides this choice. The installer's Agents step can turn the queue off and sets
 its vCPU limit and Spot use (`gpu.enabled`, `gpu.maxVcpus`, `gpu.spot` in the stack settings). The GPU image is
 described in `agent/README.md`.
+
+**CPU jobs.** CPU-heavy jobs sent remote (openEMS, and Verilator, formal and nextpnr runs with `remote`) go to a second
+Batch compute environment and queue, `<prefix>-cpu`, of x86 CPU instances (`c7i`, `c6i` and `m7i` families by default,
+on the plain ECS Amazon Linux 2023 AMI), also scaling from 0 vCPUs. They run the same image as the GPU jobs: its CUDA
+runtime base starts and runs CPU programs without a GPU, and only the programs that use CUDA load it. Each project has
+a CPU job definition, `<prefix>-cpu-<hash>` (16 vCPUs and 32 GiB by default; with 32 GiB a job needs at least a
+`c7i.8xlarge` or an `m7i.4xlarge`, so ask 30 GiB to fit a `c7i.4xlarge`), with the project's own job role, and each
+worker is told `TRACE_CPU_QUEUE` and `TRACE_CPU_JOB_DEFINITION` and may submit there only with its own definition and
+tag, as on the GPU queue. `src/gpu/batch.ts` sends a job that needs a GPU to the GPU queue and any other to the CPU
+queue. Settings: `cpu.enabled` (default true), `cpu.instanceTypes`, `cpu.maxVcpus` (default 64), `cpu.spot`,
+`cpu.vcpus` and `cpu.memoryMiB`, and the installer's CPU fields. The CPU queue shares the GPU side's image, network
+and execution role, so it needs `gpu.enabled`; and it exists only in the nested layout, because a flat stack of 24
+projects has no room for one more resource per project.
+
+**The GPU image does not hold up the deploy.** CloudFormation cannot isolate a failure inside one stack: a failed
+resource, a nested stack's included, rolls back the whole update, so putting the GPU side in a nested stack of its own,
+or ordering it with dependencies, would still roll back the core with a broken GPU image. So the deploy starts the
+GPU image's build (the same custom resource as before, with `Wait: 'false'`) and does not wait for it; no job
+definition or project depends on it, and the job definitions name the image tag, which Batch resolves only when a job
+starts. The installer then waits for that build as its last step (output `GpuImageBuild`, the build's id; CodeBuild
+`BatchGetBuilds`), with everything else already installed. If that build failed in an earlier run (an unchanged
+source starts no new build), the installer starts it again once (`StartBuild`, the same tag); if this run's build
+fails, it says so, GPU and CPU jobs fail to start until it is fixed, and the next installer run retries it. Building
+before the deploy instead was not chosen: the new source reaches S3 only when `cdk deploy` publishes it, so a build
+before it would check the old source. Deploying by hand with `cdk deploy`, nothing waits for the GPU image: check the
+`<prefix>-gpu-image` build in CodeBuild.
 
 `pcb.autoroute` routes a KiCad board with up to two routers in turn:
 
@@ -279,7 +326,10 @@ unrouted count and KiCad's DRC. The tool writes `<name>.routed.kicad_pcb` and ne
 
 The Verification agent keeps a project's requirements, test plan and evidence in the project database. The tables are
 `requirements`, `test_items`, `test_results`, `coverage_points` and `coverage_hits`, and `trace db merge` merges them
-like everything else. Requirements, tests and points keep the newer row; results and hits are unioned.
+like everything else. Requirements, tests and points keep the newer row; results and hits are unioned. New
+requirement ids are random (`REQ-<6 hex>`), so branches do not collide; older ids (`REQ-001`) are kept. When two
+branches still added different requirements under one id, the merge keeps both: theirs is renamed `<id>-<6 hex>`, its
+test items and coverage points follow, and the rename is listed as a merge note (`verify.requirements` list).
 
 | Tool | What it does |
 | --- | --- |
@@ -292,6 +342,10 @@ like everything else. Requirements, tests and points keep the newer row; results
 | `verify.cocotb` | cocotb tests on Icarus or Verilator. Per-test verdicts come from results.xml. |
 | `verify.formal` | A `.sby` file through SymbiYosys, or files + top in bmc, prove or cover mode. Without sby it runs yosys and yosys-smtbmc directly (the steps of sby's smtbmc engine). Counterexample traces come back as VCD artifacts. |
 
+HDL sources keep their folder layout in the job (named relative to the deepest folder holding all of them, include
+dirs walked into sub-folders, `` `include`` directives followed), and include dirs and source folders are passed as
+`-I`/`+incdir+`, so `` `include "sub/x.vh"`` resolves and two sources may share a basename.
+
 The Implementation agent's tools cover two areas:
 
 - **FPGA:** `fpga.synth` (yosys for ice40, ecp5, gowin and xilinx; cell counts by resource), `fpga.pnr` (nextpnr with
@@ -299,7 +353,8 @@ The Implementation agent's tools cover two areas:
   target per clock, slack, closure status, and critical paths split into logic and routing), `fpga.closure` (a fixed
   sweep of seeds, placers and options that keeps the best attempt) and `fpga.bitstream` (icepack, ecppack,
   gowin_pack).
-- **PCB:** `pcb.placement_check` (courtyard overlaps, parts outside or near the edge, keep-outs, decoupling distance,
+- **PCB:** `pcb.placement_check` (courtyard overlaps on the actual courtyard polygons, an L stays an L, with the
+  convex hull only when an outline does not close, said so in the finding; parts outside or near the edge, keep-outs, decoupling distance,
   connectors off the edge), `pcb.length_match` (diff pair skew and length groups against given or `.kicad_dru`
   tolerances) and `pcb.floorplan` (placement by sheet or block: boxes, density, overlaps, nets between blocks). The PCB
   tools read the board file and only report; they never move anything.
@@ -459,9 +514,9 @@ repository, named `<prefix>_m_<hash>` and created with the project's other resou
 
 - `memory.enabled` (default true).
 - `memory.eventExpiryDays`: how long short-term events are kept. The default is 30 and AgentCore allows 3 to 365.
-- `projectSettings`: settings for one project, keyed by `OWNER/REPO` (without `@BRANCH`). Today that is
-  `memoryEventExpiryDays`, which overrides `memory.eventExpiryDays` for that project. The installer sets it from the
-  "memory days" field beside each repository. An empty field means the default.
+- `projectSettings`: settings for one project, keyed by `OWNER/REPO` (without `@BRANCH`): `memoryEventExpiryDays`,
+  which overrides `memory.eventExpiryDays` for that project (the installer sets it from the "memory days" field
+  beside each repository; an empty field means the default), and `generation` (below).
 
 A project's memory lives and dies with the project. With `retainData` true (the default), each memory, its log group
 and its log delivery are marked Retain. When the repository is removed from the list, or the stack is deleted, they
@@ -469,6 +524,19 @@ stay in the account, outside the stack. With `retainData` false they are deleted
 memory id is the output `Project<hash>MemoryId`, and the installer records them on this machine. Moving an
 installation to nested stacks deletes every project's memory records (see
 [Stack layout and limits](#stack-layout-and-limits)).
+
+**Adding a removed project again.** A removed project can leave names behind in the account: its memory
+(`<prefix>_m_<hash>`, kept with `retainData`), its memory's delivery sources and destinations (`<prefix>-m-<hash>-logs`
+and `-traces`, kept with it), and its token secret (`<prefix>/github-token/<owner>/<repo>`, deleted, but holding its
+name through Secrets Manager's recovery window). Creating them again would fail on the first name in use. So each
+project has a `generation` (`projectSettings`, default 0), which goes into those names only when it is above 0
+(`<prefix>_m_<hash>_g1`, `<prefix>-m-<hash>-g1-logs`, `<prefix>/github-token/<owner>/<repo>@g1`), so existing names
+never change. Before deploying, the installer checks every project the stack does not have yet (from the stack's
+resources) against the account: `ListMemories` (a memory's id is `<name>-<suffix>`, in any status),
+`DescribeDeliverySources` and `DescribeDeliveryDestinations`, and `DescribeSecret` (which also finds a secret
+scheduled for deletion). If any of a generation's names is taken it tries the next, saves the one it settles on with
+the answers at once, and says so in the plan and the summary: the old memory is kept and orphaned, with its records,
+and the new one starts empty. A project the stack already has keeps its generation; a generation is never lowered.
 
 - **Short term:** events per actor and session. A job records what it was asked, its key trace-tool outcomes and its
   result. A job that continues a session (the same pull request or issue, or the same task branch) is given that
@@ -512,7 +580,9 @@ tokens and keys and is bounded in size (8000 characters per event, 12 tool outco
 - **In IAM:** each project's worker role may use only its own memory's ARN: `CreateEvent` and `ListEvents` for its
   project's actors (`<owner>/<repo>/*`), and `RetrieveMemoryRecords` and `ListMemoryRecords` under its namespaces
   (`/trace/<owner>/<repo>/*`). The API role may only recall, list and get records under `/trace/`, on each
-  project's memory (it gets one to check it before marking it inactive, see below). The GitHub OIDC roles have no memory access. The client draws the same lines as well (see
+  project's memory (it gets one to check it before marking it inactive, see below). Each project's GitHub OIDC role has
+  its worker's grants on its own memory, for the `worker.runner = actions` fallback, which is told the memory by the
+  repository variable `TRACE_MEMORY_ID` (set by the installer). The client draws the same lines as well (see
   [Project isolation](#project-isolation)).
 - **Limits:** the API's two lists (`TRACE_WORKER_RUNTIMES` and `TRACE_PROJECT_MEMORIES`) are each one environment
   value, at most 5000 characters, and a runtime may have at most 50 environment variables. The stack checks both

@@ -10,9 +10,10 @@
  */
 import { z } from 'zod'
 import type { TraceConfig } from '../core/config.js'
-import { SPECIALISTS, allowedToolsOf, specialistPrompt } from '../agents/index.js'
+import { SPECIALISTS } from '../agents/index.js'
 import { type Route, RouteSchema, SpecialistKindSchema } from '../agents/kinds.js'
 import { type CheckEvidence, type RouteInput, route } from '../agents/router.js'
+import { jobLogTail } from './ci-doctor.js'
 import { type CommentLike, comments, trustedAuthor } from './util.js'
 import { type Deps, type GitHub, labelNames, short } from './types.js'
 
@@ -28,7 +29,17 @@ export const WorkItemSchema = z.object({
 }).strict()
 export type WorkItem = z.infer<typeof WorkItemSchema>
 
-/** The evidence worker-pick gathers for routing: what the item's labels, failing checks, files and text say. */
+/** At most this many failing jobs' logs are read per claimed item, and this much of the end of each. */
+export const LOG_CHECKS = 5
+export const LOG_TAIL = 6000
+
+const isActionsJob = (r: { id?: number; app?: { slug?: string } | null; details_url?: string | null }): r is { id: number } =>
+  typeof r.id === 'number' && (r.app?.slug === 'github-actions' || /\/actions\/runs\/\d+\/job\//.test(r.details_url ?? ''))
+
+/**
+ * The evidence worker-pick gathers for routing: what the item's labels, failing checks (with their jobs' log tails),
+ * files and text say. Called for the items it claims only.
+ */
 export async function evidenceOf(github: GitHub, owner: string, repo: string, item: WorkItem, cfg: TraceConfig,
   known: { labels?: readonly string[]; body?: string | null | undefined } = {}): Promise<RouteInput> {
   const input: RouteInput = { labels: [...(known.labels ?? [])], text: `${item.title}\n\n${known.body ?? ''}`.trim() }
@@ -43,7 +54,14 @@ export async function evidenceOf(github: GitHub, owner: string, repo: string, it
       const failed = runs.filter((r) => r.conclusion === 'failure' || r.conclusion === 'timed_out')
       // the summary gate fails whenever another job did: its name says nothing about the cause
       const judged = failed.length > 1 ? failed.filter((r) => r.name !== cfg.build.required_check) : failed
-      input.checks = judged.map((r): CheckEvidence => ({ name: r.name, ...(r.output?.summary ? { log: String(r.output.summary).slice(-4000) } : {}) }))
+      // The failing jobs' own log tails, the way ci-doctor reads them (a GitHub Actions check run's id is its job's
+      // id); a check's output.summary is usually empty for Actions jobs. Bounded: LOG_CHECKS jobs, LOG_TAIL each.
+      const logs = await Promise.all(judged.map(async (r, i) =>
+        i < LOG_CHECKS && isActionsJob(r) ? jobLogTail(github, owner, repo, r.id, LOG_TAIL) : ''))
+      input.checks = judged.map((r, i): CheckEvidence => {
+        const log = [logs[i] ?? '', r.output?.summary ? String(r.output.summary) : ''].filter(Boolean).join('\n').slice(-LOG_TAIL)
+        return { name: r.name, ...(log ? { log } : {}) }
+      })
     } catch { /* routing works with less */ }
   }
   return input
@@ -134,8 +152,11 @@ export function routeLine(r: Route | undefined): string {
   return `It goes to the **${SPECIALISTS[r.kind].title}** specialist (\`${r.kind}\`): ${r.reason} (${r.source}, confidence ${r.confidence.toFixed(2)}).`
 }
 
-/** The prompt for one item. Pure, for tests. */
-export function promptFor(item: WorkItem, cfg: TraceConfig, repository: string): string {
+/**
+ * The worker's prompt for one item. Pure, for tests. `delegated`: a specialist's brief and acceptance criteria
+ * (GitHub Actions' worker step): they are its request, and the specialist, not the worker, reports on the item.
+ */
+export function promptFor(item: WorkItem, cfg: TraceConfig, repository: string, delegated?: string): string {
   const esc = cfg.worker.escalate_to
   const validate = cfg.worker.validate
     ? `Validate before every push by running: ${cfg.worker.validate}`
@@ -190,42 +211,19 @@ export function promptFor(item: WorkItem, cfg: TraceConfig, repository: string):
     '',
     'ESCALATE when you are blocked (a decision only a person can make, missing access, or a failure you cannot fix): one',
     `comment on #${item.number}${esc ? ` starting "${esc}"` : ''} with the exact question or diagnosis and what you tried.`,
-    `Finish with a comment on #${item.number} saying what you did (commits, PR links) or why not.`,
+    ...(delegated
+      ? [
+        '',
+        'THE SPECIALIST\'S REQUEST (data from the specialist that investigated this item; it is your request):',
+        ...delegated.split('\n').map((l) => `> ${l}`),
+        '',
+        `Do not post a report on #${item.number}: the specialist checks your work in the next step and reports. Push your`,
+        'commits, then end your session with one line per acceptance criterion saying how you met it, or why not.',
+      ]
+      : [`Finish with a comment on #${item.number} saying what you did (commits, PR links) or why not.`]),
   ]
   return lines.join('\n')
 }
-
-/**
- * worker-prompt (worker.runner = actions): the routed specialist's prompt for one item. There is no runtime to delegate
- * to in GitHub Actions, so the specialist makes repository changes itself following the worker's instructions
- * (promptFor, inline), with the worker's tools added to its own.
- */
-export async function prompt({ github, core, cfg, env, context }: Deps): Promise<void> {
-  const item = itemFromEnv(env)
-  const { owner, repo } = context.repo
-  const repository = `${owner}/${repo}`
-  const r = item.route ?? route({ text: item.title }, cfg)
-  const s = SPECIALISTS[r.kind]
-  const rules = await rulesOf(github, owner, repo, cfg.branch)
-  core.setOutput('prompt', specialistPrompt(s, {
-    cfg, repository, job: { kind: 'work-item', item }, rules, route: r, where: 'in GitHub Actions',
-    delivery: { inline: promptFor(item, cfg, repository) },
-  }))
-  const settings = cfg.agents[r.kind]
-  const model = settings.model || cfg.worker.model
-  const tools = [...new Set([...allowedToolsOf(s, { delegate: false, hardware: true }), ...ACTIONS_WORKER_TOOLS])]
-  const args = [
-    ...(model ? [`--model ${model}`] : []),
-    `--max-turns ${settings.max_turns}`,
-    `--allowedTools ${tools.join(',')}`,
-  ]
-  core.setOutput('args', args.join('\n'))
-  core.setOutput('setup', cfg.worker.setup)
-  core.setOutput('agent', r.kind)
-}
-
-/** What a specialist adds in GitHub Actions to act as its own worker: a shell, edits and subagents. */
-export const ACTIONS_WORKER_TOOLS = ['Bash', 'Write', 'Edit', 'Task'] as const
 
 /** .trace/rules.md on the default branch (null when there is none). */
 export async function rulesOf(github: GitHub, owner: string, repo: string, branch: string): Promise<string | null> {

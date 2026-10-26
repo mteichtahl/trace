@@ -10,7 +10,7 @@
  */
 import type { TraceConfig } from '../core/config.js'
 import { commentOnce, ensureLabel } from './util.js'
-import { type Deps, WorkflowRunPayload, errorStatus, payload, short } from './types.js'
+import { type Deps, type GitHub, WorkflowRunPayload, errorStatus, payload, short } from './types.js'
 
 export const FLAKY: readonly RegExp[] = [
   /ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|network timeout|TLS handshake timeout/i,
@@ -52,6 +52,19 @@ export function judge(job: JobLike, log: string, cfg: TraceConfig): Verdict {
   return { kind: 'real', detail: `step "${step?.name ?? '?'}"` }
 }
 
+/**
+ * The last `max` characters of one Actions job's log, or '' when it cannot be read (the job's log has expired, the
+ * token may not read it). Shared with worker-pick, which routes a claimed red PR on its failing jobs' log tails.
+ */
+export async function jobLogTail(github: GitHub, owner: string, repo: string, jobId: number, max = 60_000): Promise<string> {
+  try {
+    const r = await github.request('GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs', { owner, repo, job_id: jobId })
+    return String(r.data).slice(-max)
+  } catch {
+    return ''
+  }
+}
+
 export async function ciDoctor({ github, jobApi, context, core, cfg, env }: Deps): Promise<void> {
   const { owner, repo } = context.repo
   const run = payload(context, 'workflow_run', WorkflowRunPayload)
@@ -91,15 +104,7 @@ export async function ciDoctor({ github, jobApi, context, core, cfg, env }: Deps
   const judged = failed.filter((j) => j.name !== cfg.build.required_check || failed.length === 1)
   const why = new Map<string, Verdict>()
   for (const j of judged) {
-    let log = ''
-    if ((j.steps ?? []).length) {
-      try {
-        const r = await github.request('GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs', { owner, repo, job_id: j.id })
-        log = String(r.data).slice(-60_000)
-      } catch {
-        log = ''
-      }
-    }
+    const log = (j.steps ?? []).length ? await jobLogTail(github, owner, repo, j.id) : ''
     why.set(j.name, judge(j, log, cfg))
   }
   core.info(JSON.stringify(Object.fromEntries(why), null, 2))

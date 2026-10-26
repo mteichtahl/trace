@@ -16,6 +16,7 @@ import { createAgentServer } from '../../src/agents/runtime/server.js'
 import { resolve } from '../../src/core/config.js'
 import { allowlist, mcpName, offered } from '../../src/core/mcp.js'
 import { dispatchTask } from '../../src/harness/dispatch.js'
+import { specialistStep } from '../../src/harness/actions.js'
 import * as worker from '../../src/harness/worker.js'
 import { delegate, delegateEnv } from '../../src/tools/agent/tools.js'
 import { allTools } from '../../src/tools/index.js'
@@ -109,9 +110,10 @@ describe('specialist prompts', () => {
     expect(long).toMatch(/cut at 20000 characters/)
   })
 
-  it('inline the worker\'s instructions where there is no runtime to delegate to', () => {
-    const p = specialistPrompt(SPECIALISTS.ams, { cfg, repository: 'o/r', job, rules: '', delivery: { inline: 'WORKER TEXT' } })
-    expect(p).toContain('<worker-instructions>\nWORKER TEXT\n</worker-instructions>')
+  it('hand the work to a later worker step through the structured output where there is no runtime to delegate to', () => {
+    const p = specialistPrompt(SPECIALISTS.ams, { cfg, repository: 'o/r', job, rules: '', delivery: 'actions' })
+    expect(p).toMatch(/DELIVERY \(GitHub Actions\): you have no shell and cannot edit files here either/)
+    expect(p).toContain('{ delegate: true, brief, acceptance: [criteria], branch?, report }')
     expect(p).not.toContain('agent_delegate')
   })
 })
@@ -307,9 +309,10 @@ describe('delegation', () => {
       expect(r.status).toBe(400)
     })
 
-    it('gives up after the timeout, saying the worker still runs', async () => {
+    it('gives up after the timeout, stops the worker, and lets the specialist delegate again', async () => {
       const delegations = createDelegations()
-      const jobs = createJobs(() => new Promise(() => undefined), { echo: () => undefined })
+      // a worker that runs until it is aborted
+      const jobs = createJobs((_p, ctx) => new Promise((_r, rej) => { ctx.signal.addEventListener('abort', () => rej(ctx.signal.reason as Error)) }), { echo: () => undefined })
       const s = createAgentServer(jobs, { delegations })
       await new Promise<void>((r) => s.listen(0, '127.0.0.1', r))
       close = async () => { await jobs.shutdown(100); await new Promise((r) => s.close(() => r(undefined))) }
@@ -317,7 +320,96 @@ describe('delegation', () => {
       process.env.TRACE_DELEGATE_TOKEN = delegations.register(parent())
       process.env.TRACE_DELEGATE_POLL_MS = '10'
       process.env.TRACE_DELEGATE_TIMEOUT_S = '0.05'
-      expect(await delegate.run({ brief: 'x', acceptance: ['y'] }, { hardware: false, via: 'test' })).toMatchObject({ state: 'timeout' })
+      const first = await delegate.run({ brief: 'x', acceptance: ['y'] }, { hardware: false, via: 'test' }) as { state: string; delegation: string; job_id: string; error: string }
+      expect(first).toMatchObject({ state: 'timeout', delegation: 'cancelled' })
+      expect(first.error).toMatch(/the worker was stopped/)
+      // the worker job was aborted through its AbortController, not left running
+      expect(jobs.jobStatus(first.job_id)[0]).toMatchObject({ state: 'aborted', error: expect.stringMatching(/^cancelled: agent\.delegate waited/) as unknown })
+      expect(jobs.busy()).toBe(false)
+      // a cancelled delegation no longer blocks the next one
+      const second = await delegate.run({ brief: 'smaller', acceptance: ['y'] }, { hardware: false, via: 'test' }) as { state: string; job_id: string }
+      expect(second.state).toBe('timeout')
+      expect(second.job_id).not.toBe(first.job_id)
+    })
+
+    it('answers cancel for the token\'s own children only', async () => {
+      const delegations = createDelegations()
+      const jobs = createJobs((_p, ctx) => new Promise((_r, rej) => { ctx.signal.addEventListener('abort', () => rej(ctx.signal.reason as Error)) }), { echo: () => undefined })
+      const s = createAgentServer(jobs, { delegations })
+      await new Promise<void>((r) => s.listen(0, '127.0.0.1', r))
+      close = async () => { await jobs.shutdown(100); await new Promise((r) => s.close(() => r(undefined))) }
+      const url = `http://127.0.0.1:${(s.address() as AddressInfo).port}`
+      const a = delegations.register(parent())
+      const b = delegations.register(parent({ jobId: 'job-q' }))
+      const started = delegations.start({ token: a, brief: 'x', acceptance: ['y'] }, (p) => jobs.startJob(p))
+      const post = (body: unknown) => fetch(`${url}/delegate/cancel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+      expect((await post({ token: b, jobId: started.jobId })).status).toBe(404)
+      expect(jobs.jobStatus(started.jobId)[0]?.state).toBe('running')
+      const r = await post({ token: a, jobId: started.jobId, reason: 'test' })
+      expect(await r.json()).toEqual({ jobId: started.jobId, delegation: 'cancelled' })
+      expect(jobs.jobStatus(started.jobId)[0]?.state).toBe('aborted')
+    })
+  })
+
+  describe('stuck delegations', () => {
+    const waitForAbort: JobRunner = (p, ctx) => new Promise((res, rej) => {
+      if ('request' in p && p.request.includes('fail now')) { rej(new Error('the worker failed')); return }
+      ctx.signal.addEventListener('abort', () => rej(ctx.signal.reason as Error))
+      if ('request' in p && p.request.includes('finish soon')) setTimeout(() => res('done'), 20)
+    })
+    const specialistJob: JobPayload = { kind: 'task', repository: 'o/r', request: 'check timing', requestedBy: 'm@example.com', agent: 'impl' }
+    const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 30))
+
+    it('aborts the delegated worker when its specialist job is aborted, and marks the delegation cancelled', async () => {
+      const jobs = createJobs(waitForAbort, { echo: () => undefined })
+      const d = createDelegations()
+      const p = jobs.startJob(specialistJob)
+      const token = d.register(parent({ jobId: p.jobId }))
+      const w = d.start({ token, brief: 'Commit seed 7.', acceptance: ['fpga_timing: closed'] }, (x) => jobs.startJob(x), (id) => jobs.jobStatus(id))
+      expect(w.accepted).toBe(true)
+      expect(jobs.jobStatus(w.jobId)[0]).toMatchObject({ state: 'running', parentJobId: p.jobId })
+      expect(await jobs.abort(p.jobId, 'the runtime is stopping this job', 1000)).toBe(true)
+      await settle()
+      expect(jobs.jobStatus(p.jobId)[0]?.state).toBe('aborted')
+      expect(jobs.jobStatus(w.jobId)[0]).toMatchObject({ state: 'aborted', error: `cancelled: its specialist job ${p.jobId} was aborted` })
+      expect(d.status(token, w.jobId, (id) => jobs.jobStatus(id)).delegation).toBe('cancelled')
+      expect(jobs.busy()).toBe(false)
+      expect(await jobs.abort(p.jobId, 'again')).toBe(false)
+    })
+
+    it('a specialist that ends, however it ends, takes its worker with it', async () => {
+      const jobs = createJobs(waitForAbort, { echo: () => undefined })
+      const d = createDelegations()
+      const p = jobs.startJob({ ...specialistJob, request: 'finish soon' })
+      const token = d.register(parent({ jobId: p.jobId }))
+      const w = d.start({ token, brief: 'x', acceptance: ['y'] }, (x) => jobs.startJob(x))
+      await settle(); await settle()
+      expect(jobs.jobStatus(p.jobId)[0]?.state).toBe('succeeded')
+      expect(jobs.jobStatus(w.jobId)[0]).toMatchObject({ state: 'aborted', error: `cancelled: its specialist job ${p.jobId} ended (succeeded)` })
+    })
+
+    it('lets the specialist delegate again after a failed or cancelled delegation, still one at a time', async () => {
+      const jobs = createJobs(waitForAbort, { echo: () => undefined })
+      const d = createDelegations()
+      const p = jobs.startJob(specialistJob)
+      const token = d.register(parent({ jobId: p.jobId }))
+      const start = (brief: string) => d.start({ token, brief, acceptance: ['y'] }, (x) => jobs.startJob(x), (id) => jobs.jobStatus(id))
+      const failed = start('fail now')
+      await settle()
+      expect(jobs.jobStatus(failed.jobId)[0]?.state).toBe('failed')
+      // failed: the next one starts without anyone having asked for its status
+      const second = start('try again')
+      expect(second.accepted).toBe(true)
+      expect(() => start('a third at once')).toThrow(/still running/)
+      expect(await d.cancel(token, second.jobId, 'too slow', (id, why) => jobs.abort(id, why, 1000), (id) => jobs.jobStatus(id))).toBe('cancelled')
+      expect(jobs.jobStatus(second.jobId)[0]).toMatchObject({ state: 'aborted', error: 'cancelled: too slow' })
+      expect(d.status(token, second.jobId, (id) => jobs.jobStatus(id)).delegation).toBe('cancelled')
+      const third = start('smaller')
+      expect(third.accepted).toBe(true)
+      expect(d.status(token, failed.jobId, (id) => jobs.jobStatus(id)).delegation).toBe('failed')
+      // cancelling a finished one changes nothing
+      expect(await d.cancel(token, failed.jobId, 'late', async () => { throw new Error('not called') }, (id) => jobs.jobStatus(id))).toBe('failed')
+      await jobs.shutdown(500)
     })
   })
 
@@ -372,6 +464,10 @@ describe('delegation', () => {
       expect(env.TRACE_DELEGATE_URL).toBe('http://127.0.0.1:8080')
       expect(tokenSeen).toMatch(/^[0-9a-f]{64}$/)
       expect(Number(env.MCP_TOOL_TIMEOUT)).toBeGreaterThan(240 * 60 * 1000)
+      // Claude Code's own limits on that call: milliseconds, above the wait (the stdio idle limit is 30 min otherwise)
+      expect(options.env.MCP_TOOL_TIMEOUT).toBe(env.MCP_TOOL_TIMEOUT)
+      expect(options.env.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT).toBe(env.MCP_TOOL_TIMEOUT)
+      expect(options.env.CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS).toBe('0')
       // unregistered once the specialist ended: its token is dead
       expect(h.delegations.parent('job-s')).toBeNull()
     })
@@ -470,6 +566,30 @@ describe('harness: pick → kind', () => {
     expect(claims.some((b) => /It goes to the \*\*EMC & Simulation\*\* specialist \(`emc`\): label agent:emc/.test(b))).toBe(true)
   })
 
+  it('routes a claimed red PR on its failing jobs\' log tails (as ci-doctor reads them), bounded, for claimed items only', async () => {
+    const actions = (id: number, name: string) => ({ id, name, conclusion: 'failure', app: { slug: 'github-actions' }, output: { summary: null } })
+    const f = fakeGithub({
+      'pulls.list': [pr(1, { labels: [{ name: 'ci-red' }] }), pr(2, { labels: [{ name: 'ci-red' }] })],
+      'pulls.get': (a: Record<string, unknown>) => ({ number: a.pull_number, mergeable: true }),
+      'pulls.listFiles': [{ filename: 'README.md' }],
+      'checks.listForRef': { check_runs: [actions(11, 'build'), ...[12, 13, 14, 15, 16, 17].map((n) => actions(n, `job ${n}`)), { id: 99, name: 'external', conclusion: 'failure', app: { slug: 'some-ci' } }] },
+      'request GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs': (a: Record<string, unknown>) => (a.job_id === 11 ? `${'x'.repeat(50_000)}\nInfo: Max frequency for clock 'clk': 41.2 MHz (FAIL at 48 MHz)\nERROR: timing failed: negative slack -2.1 ns` : 'ok'),
+      'issues.listForRepo': [],
+      // #2 is claimed by another worker: no logs are read for it
+      'issues.listComments': (a: Record<string, unknown>) => (a.issue_number === 2 ? [{ body: `<!-- trace-claim: ${new Date().toISOString()} -->`, user: { login: 'github-actions[bot]' } }] : []),
+    })
+    const core = fakeCore()
+    await worker.pick(deps(f, core, cfg))
+    const items = worker.WorkItemSchema.array().parse(JSON.parse(core.outputs.items!))
+    expect(items.map((i) => i.number)).toEqual([1])
+    expect(items[0]?.route).toMatchObject({ kind: 'impl', source: 'evidence' })
+    expect(items[0]?.route?.reason).toMatch(/timing, routing or DRC failure in the log \("build"\)/)
+    const reads = f.called('request GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs')
+    // at most LOG_CHECKS jobs, GitHub Actions jobs only, once (for the claimed item)
+    expect(reads.map((c) => c.args.job_id)).toEqual([11, 12, 13, 14, 15].slice(0, worker.LOG_CHECKS))
+    expect(worker.LOG_TAIL).toBeLessThanOrEqual(8000)
+  })
+
   it('leaves an item with nothing to go on to the runtime, and the pick still works when the evidence calls fail', async () => {
     const f = fakeGithub({
       'pulls.list': [], 'issues.listComments': [],
@@ -489,21 +609,21 @@ describe('harness: pick → kind', () => {
     expect(JSON.parse(c2.outputs.items!)).toHaveLength(1)
   })
 
-  it('worker-prompt (actions) builds the routed specialist\'s prompt, its tools and the kind; AGENT overrides', async () => {
+  it('worker-prompt (actions) builds the routed specialist\'s read-only prompt, its tools and the kind; AGENT overrides', async () => {
     const item = { kind: 'ci-red', number: 5, sha: SHA('a'), ref: 'claude/x', own: true, title: 'x', route: { kind: 'impl', reason: 'label agent:impl', confidence: 1, source: 'label' } }
     const f = fakeGithub({ 'repos.getContent': { type: 'file', content: Buffer.from('No force pushes.').toString('base64') } })
     const core = fakeCore()
-    await worker.prompt(deps(f, core, cfg, context(), { ITEM: JSON.stringify(item) }))
+    await specialistStep(deps(f, core, cfg, context(), { ITEM: JSON.stringify(item) }))
     expect(core.outputs.agent).toBe('impl')
     expect(core.outputs.prompt).toMatch(/Implementation specialist/)
     expect(core.outputs.prompt).toContain('<rules>\nNo force pushes.\n</rules>')
-    expect(core.outputs.prompt).toContain('<worker-instructions>')
+    expect(core.outputs.prompt).toMatch(/DELIVERY \(GitHub Actions\)/)
     expect(core.outputs.args).toMatch(/--max-turns 120/)
     expect(core.outputs.args).toMatch(/mcp__trace__fpga_closure/)
     expect(core.outputs.args).not.toMatch(/mcp__trace__emc_run/)
-    expect(core.outputs.args).toMatch(/,Bash,/)
+    expect(core.outputs.tools!.split(',')).toEqual(toolsOf(SPECIALISTS.impl, { delegate: false }))
     const c2 = fakeCore()
-    await worker.prompt(deps(f, c2, cfg, context(), { ITEM: JSON.stringify(item), AGENT: 'emc' }))
+    await specialistStep(deps(f, c2, cfg, context(), { ITEM: JSON.stringify(item), AGENT: 'emc' }))
     expect(c2.outputs.agent).toBe('emc')
   })
 

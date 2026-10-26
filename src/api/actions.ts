@@ -12,7 +12,8 @@
  *   run           read                  one run: args, result, measurements, artifact list
  *   artifact      read                  one artifact's bytes (base64), at most 8 MB
  *   tools.list    read                  the tools (never the hardware ones), and which of them need write
- *   tool          read | write          run a tool on a fresh shallow clone; write for WRITE_TOOLS; hardware: never
+ *   tool          read | write          run a tool on the project's own worker runtime (src/agents/runtime/tool.ts), on
+ *                                       its clone of the default branch; write for WRITE_TOOLS; hardware: never
  *   settings.set  write                 change (or unset) one setting: a commit on trace/settings-<slug>, pushed (the
  *                                       harness opens the PR); never the default branch
  *   task          write                 start a free-form task job (Claude, on a claude/ branch), requestedBy you;
@@ -39,11 +40,9 @@
  *   unassign      admin                 remove them from it
  *   assignments   admin                 every assignment, optionally for one project
  */
-import { execFile } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path'
-import { promisify } from 'node:util'
+import { join } from 'node:path'
 import { z } from 'zod'
 import {
   AccessDenied, CLASSES, GROUPS, type PersonClass, type Principal, RepoSlug, type Role,
@@ -53,7 +52,8 @@ import { readSettings, resolve, setValue, unset } from '../core/config.js'
 import { type AnyTool, Registry, ToolError } from '../core/registry.js'
 import { type AgentMemory, AgentName, type MemoryRecord, type ProjectMemories, STRATEGIES, actorIn, personHash, projectPrefix, within } from '../agents/runtime/memory.js'
 import { type InactiveMark, ReasonSchema, RecordIdSchema, memoryState } from '../agents/runtime/memory-state.js'
-import { TASK_AGENTS } from '../agents/runtime/schemas.js'
+import { TASK_AGENTS, type ToolJob } from '../agents/runtime/schemas.js'
+import { API_HIDDEN_TOOLS, ToolRefused, apiTool, checkPaths } from '../agents/runtime/tool.js'
 import { Work } from '../core/store.js'
 import type { CognitoAdmin, CognitoUser } from './aws.js'
 import type { GitHubApi } from './github.js'
@@ -65,12 +65,9 @@ const MAX_ARTIFACT = 8 * 1024 * 1024
 export const WRITE_TOOLS: ReadonlySet<string> = new Set(['datasheets.add', 'datasheets.acknowledge', 'parts.fetch_datasheet'])
 
 /** Tools scoped by the session's environment (a job's project and agent), not by the request: never through the API.
- * The API reaches memory through memory.list and memory.recall, scoped to the project the access check passed. */
-export const API_HIDDEN_TOOLS: ReadonlySet<string> = new Set(['memory.recall', 'memory.remember'])
-
-/** Tool arguments that name files: they must stay inside the clone. `library` (another store) is refused outright. */
-const PATH_KEYS = new Set(['path', 'file', 'files', 'schematic', 'project', 'board', 'pcb', 'out_dir', 'models', 'include_dirs', 'dir', 'root'])
-const FORBIDDEN_KEYS = new Set(['library'])
+ * The API reaches memory through memory.list and memory.recall, scoped to the project the access check passed.
+ * The policy (these, hardware tools, paths inside the clone) is src/agents/runtime/tool.ts's, applied on both sides. */
+export { API_HIDDEN_TOOLS }
 
 export class ActionError extends Error {
   override name = 'ActionError'
@@ -84,19 +81,19 @@ export interface JobsApi {
   repositoryOf(jobId: string): string | null
   startJob(payload: { kind: 'task'; repository: string; request: string; requestedBy: string; agent?: (typeof TASK_AGENTS)[number] }): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined }>
   jobStatus(jobId?: string): Promise<readonly JobView[]>
+  /** One tool call on the project's own worker runtime (invocation kind `tool`): its result, or throws ActionError.
+   * Absent: this installation runs no tools for the API. */
+  runTool?(payload: Omit<ToolJob, 'trace'>): Promise<unknown>
 }
 
 export interface JobView { id: string; kind: string; repository?: string | undefined; state: string; [k: string]: unknown }
-
-export interface Checkout { dir: string; cleanup(): void }
 
 export interface ActionDeps {
   github: () => Promise<GitHubApi>
   cognito: () => CognitoAdmin
   jobs: () => Promise<JobsApi>
+  /** The tool registry: what tools.list shows and what `tool` may ask for (the call itself runs on the worker). */
   tools: () => Registry
-  /** A fresh shallow clone of the repository's default branch. */
-  checkout: (repo: string) => Promise<Checkout>
   /** Where temporary files go. */
   scratch: string
   /** Each project's memory (TRACE_PROJECT_MEMORIES); absent or null: memory.* answer that there is none. */
@@ -151,22 +148,6 @@ async function person(ctx: Context, who: string): Promise<CognitoUser> {
   const u = await ctx.deps.cognito().find(who)
   if (!u) throw new ActionError(`no such person: ${who}`)
   return u
-}
-
-function checkPaths(args: unknown, root: string, key = ''): void {
-  if (Array.isArray(args)) { for (const v of args) checkPaths(v, root, key); return }
-  if (args !== null && typeof args === 'object') {
-    for (const [k, v] of Object.entries(args)) {
-      if (FORBIDDEN_KEYS.has(k)) throw new ActionError(`${k}: not available through the API`)
-      checkPaths(v, root, PATH_KEYS.has(k) ? k : key)
-    }
-    return
-  }
-  if (key && typeof args === 'string') {
-    const full = resolvePath(root, args)
-    const rel = relative(root, full)
-    if (isAbsolute(args) || rel.startsWith('..') || isAbsolute(rel)) throw new ActionError(`${key}: must be a path inside the repository`)
-  }
 }
 
 /**
@@ -226,14 +207,6 @@ function projectMemory(ctx: Context, repo: string): AgentMemory | null {
 
 const toolNeed = (t: AnyTool): Role => (WRITE_TOOLS.has(t.name) ? 'write' : 'read')
 
-/** One tool call at a time per process: tools resolve the project from the working directory. */
-let toolQueue: Promise<unknown> = Promise.resolve()
-function serialised<T>(fn: () => Promise<T>): Promise<T> {
-  const next = toolQueue.then(fn, fn)
-  toolQueue = next.catch(() => undefined)
-  return next
-}
-
 // ------------------------------------------------------------------ the actions
 
 const ToolArgs = z.object({ repo: RepoSlug, name: z.string().regex(/^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/), args: z.record(z.string(), z.unknown()).default({}) })
@@ -291,28 +264,18 @@ export const ACTIONS = {
     name: t.name, description: t.description, needs: toolNeed(t), input: Registry.jsonSchema(t),
   }))),
 
+  // The access check (perform) came first. The call runs on the project's own worker runtime, never here: the API has
+  // no GPU or CPU queue and runs nothing heavy. The worker applies the same policy again on its clone.
   tool: def('tool', ToolArgs, async (a, ctx) => {
-    const t = ctx.deps.tools().get(a.name)
-    if (!t || t.hardware || API_HIDDEN_TOOLS.has(t.name)) throw new ActionError(`no tool ${a.name}`)
-    const co = await ctx.deps.checkout(a.repo)
+    if (!apiTool(ctx.deps.tools().get(a.name))) throw new ActionError(`no tool ${a.name}`)
     try {
-      checkPaths(a.args, co.dir)
-      return await serialised(async () => {
-        const cwd = process.cwd()
-        const env = process.env.TRACE_PROJECT_DB
-        process.chdir(co.dir)
-        process.env.TRACE_PROJECT_DB = join(co.dir, PROJECT_DB_PATH)
-        try {
-          return await ctx.deps.tools().call(a.name, a.args, { hardware: false, via: 'mcp' })
-        } finally {
-          process.chdir(cwd)
-          if (env === undefined) delete process.env.TRACE_PROJECT_DB
-          else process.env.TRACE_PROJECT_DB = env
-        }
-      })
-    } finally {
-      co.cleanup()
+      checkPaths(a.args, '/repository')
+    } catch (e) {
+      throw e instanceof ToolRefused ? new ActionError(e.message) : e
     }
+    const jobs = await ctx.deps.jobs()
+    if (!jobs.runTool) throw new ActionError('tools run on the project\'s worker runtime, and this installation has none for the API')
+    return jobs.runTool({ kind: 'tool', repository: a.repo, name: a.name, args: a.args })
   }),
 
   'settings.set': def('write', Repo.extend({ key: z.string().min(1).max(200), value: z.unknown().optional(), unset: z.boolean().default(false) }), async (a, ctx) => {
@@ -476,31 +439,5 @@ export async function perform(name: string, raw: Record<string, unknown>, ctx: C
 }
 
 export { ToolError }
-
-// ------------------------------------------------------------------ the real checkout
-
-const run = promisify(execFile)
-
-/** A shallow clone of `repo`'s default branch under `workspace`; the token reaches git only through the environment. */
-export function gitCheckout(token: () => Promise<string>, workspace: string): (repo: string) => Promise<Checkout> {
-  return async (repo) => {
-    const slug = RepoSlug.parse(repo)
-    mkdirSync(workspace, { recursive: true })
-    const dir = mkdtempSync(join(workspace, 'api-clone-'))
-    const cleanup = (): void => rmSync(dir, { recursive: true, force: true })
-    try {
-      const auth = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${await token()}`).toString('base64')}`
-      await run('git', ['clone', '--depth', '1', '--quiet', '--', `https://github.com/${slug}.git`, dir], {
-        env: { ...process.env, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader', GIT_CONFIG_VALUE_0: auth, GIT_TERMINAL_PROMPT: '0' },
-        timeout: 300_000, maxBuffer: 4 * 1024 * 1024,
-      })
-      return { dir, cleanup }
-    } catch (e) {
-      cleanup()
-      // git's message may name the URL; never the token, which is only in the environment.
-      throw new ActionError(`cannot clone ${slug}: ${e instanceof Error ? e.message.split('\n')[0] ?? 'git failed' : 'git failed'}`)
-    }
-  }
-}
 
 export const defaultScratch = (): string => process.env.TRACE_WORKSPACE ? join(process.env.TRACE_WORKSPACE, 'api') : join(tmpdir(), 'trace-api')

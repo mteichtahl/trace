@@ -43,6 +43,7 @@ import { claudeTelemetry } from './observe.js'
 import { type AgentMemory, type Actor, type JobMemory, NO_MEMORY, agentActor, memoryFromEnv, openJobMemory, personActor, sessionIdFor } from './memory.js'
 import { taskBranch, taskPrompt } from '../worker/prompt.js'
 import { SPECIALISTS, SPECIALIST_BUILTINS, type Specialist, allowedToolsOf, specialistPrompt, toolsOf } from '../index.js'
+import { WORKER_TOOLS } from '../specialist.js'
 import { type Route, WORKER } from '../kinds.js'
 import { type Classifier, type QueryFn, type RouteInput, routeJob, sdkClassifier } from '../router.js'
 import { readRules } from '../rules.js'
@@ -113,7 +114,7 @@ export interface RunnerDeps {
 }
 
 /** The delegated worker's tools: everything, as before the specialists (the MCP server offers no agent.delegate to it). */
-export const TOOLS = ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Task', 'TodoWrite', 'mcp__trace']
+export const TOOLS: string[] = [...WORKER_TOOLS]
 export const DONE = (jobId: string): string => `<!-- trace-agent-done: ${jobId} -->`
 const MAX_LIFETIME_S = 28_800
 

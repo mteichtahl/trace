@@ -12,10 +12,35 @@ inputs:
     description: Python bridge extras to install (pdf, visa, can, all, or none).
     required: false
     default: pdf
+  tools:
+    description: >-
+      The only trace tools (registry names, comma-separated) the mcp-config server offers (TRACE_MCP_TOOLS): a
+      specialist's allowlist (worker-prompt's `tools`). Empty offers every tool. mcp-config-worker is never limited.
+    required: false
+    default: ''
+  memory-id:
+    description: The project's AgentCore memory (vars.TRACE_MEMORY_ID) for the memory_recall/memory_remember tools; empty leaves them out.
+    required: false
+    default: ''
+  memory-actor:
+    description: The memory actor of mcp-config's session (worker-prompt's `memory-actor`, the specialist's).
+    required: false
+    default: ''
+  worker-memory-actor:
+    description: The memory actor of mcp-config-worker's session (worker-prompt's `worker-memory-actor`).
+    required: false
+    default: ''
+  memory-session:
+    description: The memory session both act in (worker-prompt's `memory-session`).
+    required: false
+    default: ''
 outputs:
   mcp-config:
-    description: The MCP config, as JSON text, for Claude Code's --mcp-config.
+    description: The MCP config, as JSON text, for Claude Code's --mcp-config (limited to `tools` when given).
     value: ${{ steps.install.outputs.mcp }}
+  mcp-config-worker:
+    description: The same server for the worker step, with every tool and the worker's memory actor.
+    value: ${{ steps.install.outputs.mcp-worker }}
 runs:
   using: composite
   steps:
@@ -29,6 +54,11 @@ runs:
         AP: ${{ github.action_path }}
         HARDWARE: ${{ inputs.hardware }}
         BRIDGE: ${{ inputs.bridge }}
+        TOOLS: ${{ inputs.tools }}
+        MEMORY_ID: ${{ inputs.memory-id }}
+        MEMORY_ACTOR: ${{ inputs.memory-actor }}
+        WORKER_MEMORY_ACTOR: ${{ inputs.worker-memory-actor }}
+        MEMORY_SESSION: ${{ inputs.memory-session }}
       run: |
         set -euo pipefail
         root="$(cd "$AP/../../.." && pwd)"
@@ -43,6 +73,21 @@ runs:
           echo "TRACE_PYTHON=$RUNNER_TEMP/trace-py/bin/python" >> "$GITHUB_ENV"
         fi
         git config --global merge.trace-db.driver "trace db merge %O %A %B"
-        hw=$([ "$HARDWARE" = "true" ] && echo '"1"' || echo '"0"')
-        echo "mcp={\"mcpServers\":{\"trace\":{\"command\":\"$RUNNER_TEMP/trace-bin/trace\",\"args\":[\"mcp\"],\"env\":{\"TRACE_HARDWARE\":$hw}}}}" >> "$GITHUB_OUTPUT"
+        # Built with node from the environment (no shell quoting of the values): TRACE_MCP_TOOLS limits the server to
+        # the specialist's tools; the memory tools act as the given actor and session only.
+        TRACE_BIN="$RUNNER_TEMP/trace-bin/trace" node -e '
+          const e = process.env
+          const config = (extra) => JSON.stringify({ mcpServers: { trace: { command: e.TRACE_BIN, args: ["mcp"], env: {
+            TRACE_HARDWARE: e.HARDWARE === "true" ? "1" : "0",
+            ...(e.MEMORY_ID ? { TRACE_MEMORY_ID: e.MEMORY_ID, ...(e.MEMORY_SESSION ? { TRACE_MEMORY_SESSION: e.MEMORY_SESSION } : {}) } : {}),
+            ...(e.AWS_REGION ? { AWS_REGION: e.AWS_REGION } : {}),
+            ...extra,
+          } } } })
+          const memory = (actor) => (e.MEMORY_ID && actor ? { TRACE_MEMORY_ACTOR: actor } : {})
+          const out = [
+            "mcp=" + config({ ...(e.TOOLS ? { TRACE_MCP_TOOLS: e.TOOLS } : {}), ...memory(e.MEMORY_ACTOR) }),
+            "mcp-worker=" + config(memory(e.WORKER_MEMORY_ACTOR)),
+          ]
+          require("fs").appendFileSync(e.GITHUB_OUTPUT, out.join("\n") + "\n")
+        '
         "$RUNNER_TEMP/trace-bin/trace" tools | tail -n 1

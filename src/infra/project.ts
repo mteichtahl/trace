@@ -53,7 +53,7 @@ import {
 } from '../core/project.js'
 import type { GpuCompute } from './gpu.js'
 import { EVENT_ACTIONS, RECORD_ACTIONS, TraceMemory } from './memory.js'
-import { type InfraProps, type ProjectRef, REPOSITORY_OUTPUT, projectOutputs, projectSettings } from './props.js'
+import { GPU_JOB_VCPUS, type InfraProps, type ProjectRef, REPOSITORY_OUTPUT, projectOutputs, projectSettings } from './props.js'
 
 /** The central bucket's prefixes: the shared database, and the access store beside it (src/core/access.ts). */
 export const CENTRAL_PREFIX = 'central'
@@ -230,7 +230,7 @@ export class ProjectStack extends Construct {
           sid: 'ProjectCpuSubmit', actions: ['batch:SubmitJob'], resources: [jobs, p.gpu.cpuQueue.jobQueueArn, cdef, `${cdef}:*`],
           conditions: { StringEquals: { [`aws:RequestTag/${PROJECT_TAG}`]: slug } },
         }))
-        Object.assign(gpuEnv, { TRACE_CPU_QUEUE: p.gpu.cpuQueue.jobQueueArn, TRACE_CPU_JOB_DEFINITION: job.cpu.jobDefinitionName })
+        Object.assign(gpuEnv, { TRACE_CPU_QUEUE: p.gpu.cpuQueue.jobQueueArn, TRACE_CPU_JOB_DEFINITION: job.cpu.jobDefinitionName, TRACE_CPU_JOB_MAX_VCPUS: String(cfg.cpu.vcpus) })
       }
       // SubmitJob authorizes the job, the queue and the definition; every one must carry this project's tag
       role.addToPolicy(new iam.PolicyStatement({
@@ -252,7 +252,8 @@ export class ProjectStack extends Construct {
       }))
       // DescribeJobs has no resource-level permissions
       role.addToPolicy(new iam.PolicyStatement({ sid: 'ProjectGpuDescribe', actions: ['batch:DescribeJobs'], resources: ['*'] }))
-      Object.assign(gpuEnv, { TRACE_GPU_QUEUE: p.gpu.queue.jobQueueArn, TRACE_GPU_JOB_DEFINITION: job.jobDefinitionName, TRACE_GPU_BUCKET: bucket.bucketName })
+      // the definitions' vCPUs: src/gpu/batch.ts caps a job's `vcpus` hint at them
+      Object.assign(gpuEnv, { TRACE_GPU_QUEUE: p.gpu.queue.jobQueueArn, TRACE_GPU_JOB_DEFINITION: job.jobDefinitionName, TRACE_GPU_BUCKET: bucket.bucketName, TRACE_GPU_JOB_MAX_VCPUS: String(GPU_JOB_VCPUS) })
     }
 
     // ------------------------------------------------------------------ the worker runtime

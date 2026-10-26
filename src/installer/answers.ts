@@ -33,6 +33,14 @@ export const AgentAnswers = z.object({
   gpuEnabled: z.boolean().default(true),
   gpuMaxVcpus: z.number().int().min(4).max(4096).default(16),
   gpuSpot: z.boolean().default(false),
+  /** CPU-heavy remote jobs (openEMS, Verilator, formal, nextpnr) on a second Batch queue of CPU instances; needs the GPU
+   * side (it shares its image) and the nested layout (props.ts cpu) */
+  cpuEnabled: z.boolean().default(true),
+  cpuMaxVcpus: z.number().int().min(1).max(4096).default(64),
+  cpuSpot: z.boolean().default(false),
+  /** what each CPU job asks for */
+  cpuVcpus: z.number().int().min(1).max(192).default(16),
+  cpuMemoryMiB: z.number().int().min(1024).max(1_572_864).default(32_768),
   /** AgentCore observability: OpenTelemetry traces and metrics to CloudWatch (GenAI Observability) */
   observability: z.boolean().default(true),
   /** turn on CloudWatch Transaction Search in the account and region (account-wide; never turned off) */
@@ -57,6 +65,9 @@ export const ProjectAnswer = z.object({
   applySettings: z.boolean().default(true),
   /** Days its agents' memory keeps short-term events (AgentCore allows 3–365); null: the installation's default (30). */
   memoryEventExpiryDays: z.number().int().min(3, 'at least 3 days').max(365, 'at most 365 days').nullable().default(null),
+  /** Its names' generation (props.ts projectSettings.generation): 0 normally. The installer raises it, and saves it
+   * here, when the project is added again while a removed copy's retained memory, delivery or secret holds its names. */
+  generation: z.number().int().min(0).max(99).default(0),
 }).strict()
 
 export const PersonAnswer = z.object({
@@ -83,6 +94,7 @@ export const AnswersSchema = z.object({
   const emails = a.people.map((p) => p.email.toLowerCase())
   if (new Set(emails).size !== emails.length) ctx.addIssue({ code: 'custom', path: ['people'], message: 'a person is listed twice' })
   if (emails.includes(a.adminEmail.toLowerCase())) ctx.addIssue({ code: 'custom', path: ['people'], message: 'the first administrator is already an admin: leave them out of the list' })
+  if (a.agents.cpuVcpus > a.agents.cpuMaxVcpus) ctx.addIssue({ code: 'custom', path: ['agents', 'cpuVcpus'], message: 'a CPU job cannot ask for more vCPUs than the CPU queue may run at once' })
 })
 export type Answers = z.output<typeof AnswersSchema>
 export type AnswersInput = z.input<typeof AnswersSchema>

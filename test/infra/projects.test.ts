@@ -111,6 +111,8 @@ describe('the CPU queue', () => {
       // the worker is told the queue and its definition, and may submit there only with its own, tagged with its project
       const env = resources(n, 'AWS::BedrockAgentCore::Runtime')[0]?.Properties.EnvironmentVariables as Record<string, unknown>
       expect(env.TRACE_CPU_JOB_DEFINITION).toBe(`trace-cpu-${h}`)
+      // the definitions' vCPUs, which src/gpu/batch.ts caps a job's vcpus hint at
+      expect([env.TRACE_GPU_JOB_MAX_VCPUS, env.TRACE_CPU_JOB_MAX_VCPUS]).toEqual(['4', '16'])
       expect(env.TRACE_CPU_QUEUE).toEqual(expect.objectContaining({ Ref: expect.any(String) }))
       const submit = statements(n, `Project${h}RuntimeRole`).find((x) => x.Sid === 'ProjectCpuSubmit')
       expect(JSON.stringify(submit?.Resource)).toContain(`job-definition/trace-cpu-${h}`)

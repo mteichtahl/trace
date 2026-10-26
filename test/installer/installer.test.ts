@@ -17,6 +17,9 @@ const calls = vi.hoisted(() => ({
   existing: null as null | { stack: string; status: string; outputs: Record<string, string> },
   /** secret names freeSecretNames was asked to free */
   freed: [] as string[],
+  /** the default names check (no hook): which projects the stack has, and the names taken in the account */
+  deployed: new Set<string>(),
+  taken: new Set<string>(),
 }))
 
 vi.mock('../../src/installer/aws.js', () => ({
@@ -26,6 +29,12 @@ vi.mock('../../src/installer/aws.js', () => ({
   stackOutputs: async () => ({}),
   freeSecretNames: async (_c: unknown, _r: string, names: readonly string[]) => { calls.freed.push(...names); return names.map((n) => `${n}: free`) },
   profiles: async () => ({ names: ['default'], regions: { default: 'us-east-1' } }),
+  cfnClient: () => ({}),
+  codebuildClient: () => ({}),
+  nameClients: () => ({}),
+  deployedProjects: async () => calls.deployed,
+  nameIndex: () => ({ taken: async (n: { memories: string[]; deliveries: string[]; secrets: string[] }) => [...n.memories, ...n.deliveries, ...n.secrets].filter((x) => calls.taken.has(x)) }),
+  ensureGpuImage: async () => ({ ok: true, detail: 'the GPU image is built' }),
 }))
 vi.mock('@aws-sdk/client-secrets-manager', () => ({
   SecretsManagerClient: class { async send(c: unknown) { calls.secrets.push(c) } },
@@ -78,7 +87,8 @@ const { InfraPropsSchema } = await import('../../src/infra/props.js')
 const { projectOutputs } = await import('../../src/infra/props.js')
 const { createInstaller } = await import('../../src/installer/server.js')
 const { seal, setVariable: realSetVariable, checkToken } = await vi.importActual<typeof import('../../src/installer/github.js')>('../../src/installer/github.js')
-const { installation } = await import('../../src/core/client.js')
+const { installation, answers: savedAnswers } = await import('../../src/core/client.js')
+const { projectHash } = await import('../../src/infra/props.js')
 const { assignments, require_, projectsFor } = await import('../../src/core/access.js')
 
 const ANSWERS = {
@@ -121,7 +131,7 @@ describe('answers', () => {
 
   it('plans every step, naming the account, region and repositories', () => {
     const steps = plan(AnswersSchema.parse(ANSWERS))
-    expect(steps.map((s) => s.id)).toEqual(['check', 'cdk', 'deploy', 'token', 'repos', 'onboard', 'people', 'local'])
+    expect(steps.map((s) => s.id)).toEqual(['check', 'cdk', 'deploy', 'token', 'repos', 'onboard', 'people', 'local', 'gpu'])
     expect(steps.find((s) => s.id === 'repos')?.detail).toContain('mteichtahl/fw')
     expect(steps.find((s) => s.id === 'deploy')?.detail).toMatch(/for each of the 2 repositories its own AgentCore worker runtime/)
   })
@@ -412,6 +422,106 @@ describe('the local server', () => {
     expect((await call('/api/plan', { method: 'POST', key, body: '{"answers":{}}' })).status).toBe(400)
     expect((await call('/api/plan', { method: 'POST', key, body: 'x', type: 'text/plain' })).status).toBe(415)
     const planned = await call('/api/plan', { method: 'POST', key, body: JSON.stringify({ answers: ANSWERS }) })
-    expect(JSON.parse(planned.body).steps).toHaveLength(8)
+    expect(JSON.parse(planned.body).steps).toHaveLength(9)
+  })
+})
+
+describe('adding a removed project again, its memory variable, the CPU queue and the GPU image', () => {
+  const run = async (a: unknown, hooks: Parameters<typeof apply>[3] = {}): Promise<{ ok: boolean; infra: Record<string, unknown>[]; events: { type: string; line?: string; summary?: string[]; step?: { id: string; status: string; detail: string } }[] }> => {
+    const infra: Record<string, unknown>[] = []
+    const events: { type: string; line?: string; summary?: string[]; step?: { id: string; status: string; detail: string } }[] = []
+    const ok = await apply(AnswersSchema.parse(a), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
+      cdk: async (args, env) => { if (args[0] === 'deploy') infra.push(JSON.parse(env.TRACE_INFRA ?? '{}')); return 0 }, outputs: async () => OUTPUTS, ...hooks,
+    })
+    return { ok, infra, events }
+  }
+  const board = projectHash('mteichtahl/board')
+
+  it("gives a project the stack does not have the next free generation, says the old memory is orphaned, and saves it", async () => {
+    const asked: string[][] = []
+    // board is new to the stack, and its generation-0 memory (retained) and secret (in its recovery window) are taken,
+    // and so is its generation-1 secret; fw is in the stack, so its names are its own whatever the account has
+    const taken = new Set([`trace_m_${board}`, 'trace/github-token/mteichtahl/board', 'trace/github-token/mteichtahl/board@g1', `trace_m_${projectHash('mteichtahl/fw')}`])
+    const r = await run(ANSWERS, {
+      names: {
+        deployed: async () => new Set([projectHash('mteichtahl/fw')]),
+        taken: async (n) => { asked.push([...n.memories, ...n.deliveries, ...n.secrets]); return [...n.memories, ...n.deliveries, ...n.secrets].filter((x) => taken.has(x)) },
+      },
+    })
+    expect(r.ok).toBe(true)
+    // generation 0, then 1, then 2 (free); fw never asked
+    expect(asked.map((x) => x.find((n) => n.startsWith('trace/github-token/')))).toEqual(['trace/github-token/mteichtahl/board', 'trace/github-token/mteichtahl/board@g1', 'trace/github-token/mteichtahl/board@g2'])
+    expect(asked[0]).toEqual([`trace_m_${board}`, `trace-m-${board}-logs`, `trace-m-${board}-traces`, 'trace/github-token/mteichtahl/board'])
+    expect(r.infra[0]?.projectSettings).toEqual({ 'mteichtahl/board': { generation: 2 } })
+    expect(InfraPropsSchema.parse(r.infra[0]).projectSettings['mteichtahl/board']?.generation).toBe(2)
+    // saved with the answers, so the next run starts there
+    const saved = AnswersSchema.parse(savedAnswers().answers)
+    expect(saved.projects.find((p) => p.repo === 'mteichtahl/board')?.generation).toBe(2)
+    expect(saved.projects.find((p) => p.repo === 'mteichtahl/fw')?.generation).toBe(0)
+    const summary = (r.events.at(-1)?.summary ?? []).join('\n')
+    expect(summary).toMatch(/mteichtahl\/board \(generation 2;.*taken\).*The old memory is kept and orphaned.*the new one starts empty/)
+    expect(r.events.find((e) => e.type === 'step' && e.step?.id === 'deploy' && e.step.status === 'pending' && /orphaned/.test(e.step.detail))).toBeDefined()
+    // its token is written to the new secret's name when the stack gives no ARN for it
+    calls.secrets.length = 0
+    const noArns = Object.fromEntries(Object.entries(OUTPUTS).filter(([k]) => !k.endsWith('GithubSecretArn') || k === 'GithubSecretArn'))
+    await run(saved, { outputs: async () => noArns, names: { deployed: async () => new Set([board, projectHash('mteichtahl/fw')]), taken: async () => ['anything'] } })
+    expect(secretWrites().map((w) => w.SecretId)).toContain('trace/github-token/mteichtahl/board@g2')
+  })
+
+  it('leaves every generation alone when the names are free, and uses the account check by default', async () => {
+    calls.deployed = new Set()
+    calls.taken = new Set()
+    const r = await run(ANSWERS)
+    expect(r.ok).toBe(true)
+    expect(r.infra[0]?.projectSettings).toBeUndefined()
+    expect((r.events.at(-1)?.summary ?? []).join('\n')).not.toMatch(/orphaned/)
+    // the default check: fw's generation-0 secret is taken in the account, and the stack has neither project
+    calls.taken = new Set(['trace/github-token/mteichtahl/fw'])
+    const r2 = await run(ANSWERS)
+    expect(r2.infra[0]?.projectSettings).toEqual({ 'mteichtahl/fw': { generation: 1 } })
+    calls.taken = new Set()
+  })
+
+  it('tells each repository its own memory (TRACE_MEMORY_ID) for the in-Actions fallback', async () => {
+    calls.values.clear()
+    await run(ANSWERS, { names: { deployed: async () => new Set(), taken: async () => [] } })
+    for (const repo of ['mteichtahl/board', 'mteichtahl/fw']) expect(calls.values.get(`${repo}:TRACE_MEMORY_ID`)).toBe(OUTPUTS[projectOutputs(repo).memoryId])
+    // memory off: no variable
+    calls.values.clear()
+    const off = { ...OUTPUTS }
+    for (const repo of ['mteichtahl/board', 'mteichtahl/fw']) delete off[projectOutputs(repo).memoryId]
+    await run(ANSWERS, { outputs: async () => off, names: { deployed: async () => new Set(), taken: async () => [] } })
+    expect([...calls.values.keys()].filter((k) => k.endsWith(':TRACE_MEMORY_ID'))).toEqual([])
+  })
+
+  it('passes the CPU queue settings to the stack, and says in the plan when the layout has no room for it', () => {
+    const a = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, cpuMaxVcpus: 128, cpuVcpus: 32, cpuMemoryMiB: 61_440, cpuSpot: true } })
+    expect(infraInput(a).cpu).toEqual({ enabled: true, maxVcpus: 128, spot: true, vcpus: 32, memoryMiB: 61_440 })
+    expect(InfraPropsSchema.parse(infraInput(a)).cpu).toMatchObject({ enabled: true, maxVcpus: 128, vcpus: 32, memoryMiB: 61_440, instanceTypes: ['c7i', 'c6i', 'm7i'] })
+    const detail = (x: typeof a, e: { outputs: Record<string, string> } | null = null): string => plan(x, e).find((st) => st.id === 'deploy')?.detail ?? ''
+    expect(detail(a)).toMatch(/a CPU queue for CPU-heavy remote jobs \(c7i\/c6i\/m7i, up to 128 vCPUs, Spot, 32 vCPUs and 60 GiB per job/)
+    expect(detail(a, { outputs: { TraceHome: 'x', Layout: 'flat' } })).toMatch(/no CPU queue \(it needs one nested stack per project/)
+    expect(detail(AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, cpuEnabled: false } }))).not.toMatch(/CPU queue/)
+    expect(AnswersSchema.safeParse({ ...ANSWERS, agents: { ...ANSWERS.agents, cpuVcpus: 96 } }).success).toBe(false)
+  })
+
+  it('waits for the GPU image last, and reports a failed build without undoing the rest', async () => {
+    const outputs = { ...OUTPUTS, GpuImageBuild: 'trace-gpu-image:1234', GpuImageUri: '123456789012.dkr.ecr.us-east-1.amazonaws.com/trace-gpu:abc123' }
+    const seen: { buildId: string; imageTag: string }[] = []
+    const order: string[] = []
+    const r = await run(ANSWERS, {
+      outputs: async () => outputs, names: { deployed: async () => new Set(), taken: async () => [] },
+      gpuImage: async (o) => { seen.push({ buildId: o.buildId, imageTag: o.imageTag }); return { ok: false, detail: 'the GPU image build trace-gpu-image:1234 failed in BUILD' } },
+    })
+    for (const e of r.events) if (e.type === 'step' && e.step?.status === 'done') order.push(e.step.id)
+    expect(seen).toEqual([{ buildId: 'trace-gpu-image:1234', imageTag: 'abc123' }])
+    expect(r.ok).toBe(true)
+    expect(order.at(-1)).toBe('local') // every other step is done before the GPU image is waited for
+    expect(r.events.find((e) => e.type === 'step' && e.step?.id === 'gpu' && e.step.status === 'failed')?.step?.detail).toMatch(/failed in BUILD/)
+    expect((r.events.at(-1)?.summary ?? []).join('\n')).toMatch(/GPU and CPU jobs cannot run until the GPU image is built.*run the installer again/)
+    // GPU off: nothing to wait for
+    const off = await run({ ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: false } }, { names: { deployed: async () => new Set(), taken: async () => [] }, gpuImage: async () => { throw new Error('not called') } })
+    expect(off.ok).toBe(true)
+    expect(off.events.find((e) => e.type === 'step' && e.step?.id === 'gpu' && e.step.status === 'skipped')).toBeDefined()
   })
 })

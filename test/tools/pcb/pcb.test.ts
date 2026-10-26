@@ -7,12 +7,23 @@ import { describe, expect, it } from 'vitest'
 import { Registry } from '../../../src/core/registry.js'
 import { Net, parseBoard } from '../../../src/tools/kicad/pcb.js'
 import { dsnWiring, lockedChanges, lockedItems } from '../../../src/tools/pcb/locked.js'
-import { applyOrs, mergeVias, netRef, readOrs, type OrsSolution } from '../../../src/tools/pcb/ors.js'
+import { applyOrs, LOCKED_YES_SINCE, mergeVias, netRef, readOrs, trackText, viaText, type OrsSolution } from '../../../src/tools/pcb/ors.js'
+import { boardHoles, boardShapes } from '../../../src/tools/pcb/geometry.js'
+import { holeToHole } from '../../../src/tools/pcb/autoroute.js'
 import { buildOrp, encodeOrp } from '../../../src/tools/pcb/orp.js'
 import { busStem, planRoute } from '../../../src/tools/pcb/plan.js'
 import { tools } from '../../../src/tools/pcb/tools.js'
 import { bga, bgaWithFanout, boardText, header, writeBoard, type BoardSpec } from './boards.js'
 
+const KICAD_PY = process.env.TRACE_KICAD_PYTHON ?? 'python3'
+const pcbnew = ((): boolean => {
+  try {
+    execFileSync(KICAD_PY, ['-c', 'import pcbnew'], { stdio: 'ignore', timeout: 60_000 })
+    return true
+  } catch {
+    return false
+  }
+})()
 const GPU = { available: true, how: 'test GPU' }
 const NO_GPU = { available: false, how: 'no GPU in the test' }
 const parse = (s: BoardSpec): ReturnType<typeof parseBoard> => parseBoard(writeBoard(s))
@@ -202,6 +213,51 @@ describe('ORS import', () => {
     expect(v.failed[0]?.reason).toMatch(/pad J5.1 of B on B.Cu/)
   })
 
+  it('keeps clear of pads with no net and of NPTH holes', () => {
+    // the straight A route passes 0.15 mm from a net-less pad (an unconnected pin): under the 0.2 mm clearance
+    const pin = { ...two(), footprints: [...two().footprints, { ref: 'U9', x: 13, y: 10.45, pads: [{ num: '7', x: 0, y: 0, w: 0.4, h: 0.4 }] }] }
+    const b = parse(pin)
+    expect(b.unnetted?.map((q) => `${q.ref}.${q.num}`)).toEqual(['U9.7'])
+    expect(boardShapes(b).find((x) => x.tag === 'pad U9.7 (no net)')).toMatchObject({ net: '', layers: ['F.Cu'] })
+    const straight = { A: { tracks: [{ layer: 'F.Cu', x1: 10, y1: 10, x2: 20, y2: 10, width: 0.2 }], vias: [] } }
+    const r = applyOrs(readFileSync(b.path, 'utf8'), b, solution(straight), opts)
+    expect(r.routed).toEqual([])
+    expect(r.failed[0]?.reason).toMatch(/too close to pad U9.7 \(no net\) of {2}on F.Cu/)
+    const hole = { ...two(), footprints: [...two().footprints, { ref: 'H1', x: 16, y: 10.75, pads: [{ num: '', x: 0, y: 0, w: 1, h: 1, kind: 'np_thru_hole' as const, drill: 1 }] }] }
+    const bh = parse(hole)
+    expect(bh.unnetted?.[0]).toMatchObject({ kind: 'np_thru_hole', drill: [1, 1], layers: L })
+    const viaRouteB = { A: { tracks: [{ layer: 'B.Cu', x1: 10, y1: 10, x2: 20, y2: 10, width: 0.2 }], vias: [] } }
+    expect(applyOrs(readFileSync(bh.path, 'utf8'), bh, solution(viaRouteB), opts).failed[0]?.reason).toMatch(/NPTH hole H1/) // every layer
+  })
+
+  it('reads through-hole drills from the pad for the .ORP', () => {
+    const b = parse({ ...two(), footprints: [
+      { ref: 'J1', x: 10, y: 10, pads: [{ num: '1', x: 0, y: 0, w: 1.7, h: 1.7, kind: 'thru_hole', net: 'A', drill: 1.02 }] },
+      { ref: 'J2', x: 20, y: 10, pads: [{ num: '1', x: 0, y: 0, w: 2, h: 3, kind: 'thru_hole', net: 'A', drill: [1.2, 2.2] }] },
+    ] })
+    expect(b.pads.A?.map((q) => q.drill)).toEqual([[1.02, 1.02], [1.2, 2.2]])
+    const orp = buildOrp(b, { nets: ['A'], rules: { track_width: 0.2, clearance: 0.2, via_diameter: 0.6, via_drill: 0.3 }, boardName: 'x' }) as { pads: { drill_size: number }[] }
+    expect(orp.pads.map((q) => q.drill_size)).toEqual([1.02, 1.2]) // not an estimate from the pad size
+  })
+
+  it('sends a net whose via would break hole-to-hole spacing on to Freerouting', () => {
+    // a through-hole pad of B 0.4 mm from the second via's centre: two 0.2 mm holes leave 0.2 mm, under 0.25
+    const near = { ...two(), footprints: [...two().footprints, { ref: 'J6', x: 20.4, y: 8, pads: [{ num: '1', x: 0, y: 0, w: 0.3, h: 0.3, kind: 'thru_hole' as const, net: 'B', drill: 0.2 }] }] }
+    const b = parse(near)
+    expect(boardHoles(b).map((h) => h.tag)).toEqual(['pad J6.1'])
+    const r = applyOrs(readFileSync(b.path, 'utf8'), b, solution(viaRoute()), { ...opts, clearance: 0.01 })
+    expect(r.routed).toEqual([])
+    expect(r.failed[0]?.reason).toMatch(/via at \(20, 8\): its hole is 0.2 mm from the hole of pad J6.1 \(min_hole_to_hole 0.25 mm\)/)
+    // the same board with a looser rule takes it
+    expect(applyOrs(readFileSync(b.path, 'utf8'), b, solution(viaRoute()), { ...opts, clearance: 0.01, minHoleToHole: 0.2 }).routed).toEqual(['A'])
+    // the net's own two vias, too close to each other once both are through vias
+    const twin = viaRoute()
+    ;(twin.A as { vias: unknown[] }).vias.push({ x: 10.3, y: 8, from: 'In1.Cu', to: 'In2.Cu', diameter: 0.45, drill: 0.2 })
+    const t = applyOrs(readFileSync(parse(two()).path, 'utf8'), parse(two()), solution(twin), opts)
+    expect(t.failed[0]?.reason).toMatch(/this net's via at \(10, 8\)/)
+    expect(holeToHole(parse(two()), null)).toEqual({ mm: 0.25, from: 'KiCad default' })
+  })
+
   it('names nets by number in KiCad 9 files and by name in KiCad 10 files', () => {
     expect(netRef(boardText(two()))('A')).toBe('(net 1)')
     expect(netRef(boardText(two(true)))('A')).toBe('(net "A")')
@@ -267,6 +323,39 @@ describe('locked copper', () => {
   )
 )
 `
+  it('reads the 5.99 `(locked)` form, and not `(locked no)`', () => {
+    const t = `${boardText(two()).trimEnd().slice(0, -1)}\t(segment (start 1 1) (end 2 1) (width 0.2) (layer "F.Cu") (locked) (net 1) (tstamp "a"))\n`
+      + '\t(segment (start 3 1) (end 4 1) (width 0.2) (layer "F.Cu") (locked no) (net 1) (uuid "b"))\n)\n'
+    expect(lockedItems(t).map((i) => i.key)).toEqual(['segment|A|F.Cu|1,1|2,1|w0.2'])
+  })
+
+  it('writes the lock as KiCad 6 and 7 do (bare flag) and as KiCad 8+ do ((locked yes))', () => {
+    const ref = netRef(boardText(two()))
+    const t = { layer: 'F.Cu', x1: 1, y1: 1, x2: 2, y2: 1, width: 0.2 }
+    const v = { x: 1, y: 1, from: 'F.Cu', to: 'In1.Cu', diameter: 0.6, drill: 0.3 }
+    expect(trackText(t, 'A', ref, 20221018)).toMatch(/^\t\(segment locked\n\t\t\(start 1 1\)/) // KiCad 7
+    expect(trackText(t, 'A', ref, 20211014)).toMatch(/^\t\(segment locked\n/) // KiCad 6
+    expect(viaText(v, 'A', ref, 20221018, L)).toMatch(/^\t\(via blind locked\n/) // type, then the flag
+    expect(trackText(t, 'A', ref, LOCKED_YES_SINCE)).toMatch(/^\t\(segment\n[\s\S]*\(locked yes\)/)
+  })
+
+  it.skipIf(!pcbnew)('KiCad\'s own reader takes the lock in KiCad 6, 7 and 8 format files (pcbnew installed)', () => {
+    const files = [20211014, 20221018, LOCKED_YES_SINCE, 20240108].map((v) => {
+      let t = boardText(two()).replace('(version 20241229)', `(version ${v})`).replace(/\t\(generator_version "[^"]*"\)\n/, '')
+      const ref = netRef(t)
+      const add = trackText({ layer: 'F.Cu', x1: 10, y1: 10, x2: 10, y2: 8, width: 0.2 }, 'A', ref, v)
+        + viaText({ x: 10, y: 8, from: 'F.Cu', to: 'B.Cu', diameter: 0.6, drill: 0.3 }, 'A', ref, v, L)
+        + viaText({ x: 12, y: 8, from: 'F.Cu', to: 'In1.Cu', diameter: 0.6, drill: 0.3 }, 'A', ref, v, L)
+      t = `${t.slice(0, t.lastIndexOf(')'))}${add})\n`
+      expect(lockedItems(t)).toHaveLength(3)
+      const p = writeBoard(two())
+      writeFileSync(p, t)
+      return p
+    })
+    const out = execFileSync(KICAD_PY, ['-c', 'import sys, pcbnew\nfor f in sys.argv[1:]: print(sum(1 for t in pcbnew.LoadBoard(f).GetTracks() if t.IsLocked()))', ...files], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    expect(out.trim().split('\n')).toEqual(['3', '3', '3', '3'])
+  }, 120_000)
+
   it('counts a DSN\'s wiring by type', () => {
     expect(dsnWiring(dsn)).toEqual({ wires: { route: 1, fix: 1 }, vias: { route: 1 } })
   })

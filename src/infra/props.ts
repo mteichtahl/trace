@@ -173,6 +173,10 @@ export function projectSettings(cfg: Pick<InfraProps, 'projectSettings' | 'memor
   return { memoryEventExpiryDays: own.memoryEventExpiryDays ?? cfg.memory.eventExpiryDays, generation: own.generation ?? 0 }
 }
 
+/** What each project's GPU job definition asks for (src/infra/gpu.ts). src/gpu/batch.ts caps a job's `vcpus` hint at
+ * it: the worker is told it as TRACE_GPU_JOB_MAX_VCPUS, and the CPU definition's (cpu.vcpus) as TRACE_CPU_JOB_MAX_VCPUS. */
+export const GPU_JOB_VCPUS = 4
+
 /** Whether the CPU queue exists: cpu.enabled, with the GPU side it shares, in the nested layout (see `cpu`). */
 export const cpuEnabled = (cfg: Pick<InfraProps, 'cpu' | 'gpu' | 'layout'>): boolean => cfg.cpu.enabled && cfg.gpu.enabled && cfg.layout === 'nested'
 

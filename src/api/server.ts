@@ -11,8 +11,8 @@
  * AgentCore has already validated the token (customJwtAuthorizer) and forwards the Authorization header; it is
  * verified again here (jwt.ts) before anything else. This is the one runtime that spans projects (the shared GitHub
  * token, every project's memory's records, InvokeAgentRuntime on every project's worker), and everything it does for
- * a project follows the access check. It runs no model and no agent: tasks go to the project's worker
- * (src/api/workers.ts). Every request is logged as one JSON line: who, action, repo,
+ * a project follows the access check. It runs no model, no agent and no tool: tasks and tool calls go to the
+ * project's worker (src/api/workers.ts). Every request is logged as one JSON line: who, action, repo,
  * outcome, duration. Tokens are never logged.
  */
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http'
@@ -23,7 +23,7 @@ import { ConfigError } from '../core/config.js'
 import { ToolError } from '../core/registry.js'
 import { ATTR, type Attrs, type Outcome, type Span, flush, personHash, setAttrs } from '../core/telemetry.js'
 import { observeInvocation } from '../agents/runtime/observe.js'
-import { ActionError, type ActionDeps, NO_ACCESS, defaultScratch, gitCheckout, perform } from './actions.js'
+import { ActionError, type ActionDeps, NO_ACCESS, defaultScratch, perform } from './actions.js'
 import { type CognitoAdmin, HttpCognito, githubToken } from './aws.js'
 import { HttpGitHub } from './github.js'
 import { AuthError, Verifier, bearer } from './jwt.js'
@@ -179,7 +179,6 @@ export async function start(): Promise<void> {
     jobs: async () => jobs,
     tools: () => allTools(),
     memory: () => projectMemoriesFromEnv(process.env),
-    checkout: gitCheckout(token, scratch),
     scratch,
   }
   const server = await listen({

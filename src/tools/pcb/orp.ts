@@ -27,7 +27,7 @@ export interface OrpOptions {
   gridPitch?: number
 }
 
-/** Through-hole drill when the board reader has none: a conservative fraction of the pad's smaller side. */
+/** Through-hole drill when the pad has no (drill …) the reader could read: a conservative fraction of its smaller side. */
 const drillFor = (w: number, h: number): number => Math.round(Math.min(w, h) * 0.6 * 1000) / 1000
 
 export function buildOrp(board: Board, opts: OrpOptions): Record<string, unknown> {
@@ -44,7 +44,8 @@ export function buildOrp(board: Board, opts: OrpOptions): Record<string, unknown
       pads.push({
         id: `${p.ref}@${p.num}`, component_id: p.ref, component_ref: p.ref, net_id: net, net_name: net,
         position: { x: p.x, y: p.y }, size: { width: p.w, height: p.h },
-        drill_size: thru ? drillFor(p.w, p.h) : null,
+        // the pad's own (drill …); an oval hole as its smaller side (what fits the slot)
+        drill_size: thru ? (p.drill ? Math.min(p.drill[0], p.drill[1]) : drillFor(p.w, p.h)) : null,
         layer: thru ? layers[0] : (p.layers[0] ?? layers[0]), shape: 'rect', angle: 0,
       })
     }

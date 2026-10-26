@@ -134,7 +134,7 @@ export function handler(jobs: Jobs, o: HandlerOptions = {}): (req: IncomingMessa
             // a forwarded tool call: no model, no job; the answer is the tool's (ok: false for a refusal or a ToolError)
             toolsRunning++
             try {
-              tool ??= (await import('./tool.js')).realToolRunner()
+              tool ??= await (await import('./tool.js')).realToolRunner()
               const result = await tool(p)
               outcome('ok')
               return send(res, 200, { ok: true, result })

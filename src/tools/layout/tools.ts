@@ -82,7 +82,7 @@ export const placementCheckTool = defineTool({
 
 export const lengthMatchTool = defineTool({
   name: 'pcb.length_match',
-  description: 'Length matching on a routed KiCad board: differential pair skew (pairs found as KiCad pairs them, names ending +/- or P/N, plus pairs given) and length groups (nets or globs, matched to the longest or a target), against tolerances given here or skew/length constraints in the .kicad_dru (conditions on A.NetClass, A.NetName, A.inDiffPair). Lengths are routed copper: pad-to-pad for two-pad nets (with delay when the stackup is known), total otherwise; via barrels included unless include_vias is false. Recorded; returns run_id.',
+  description: 'Length matching on a routed KiCad board: differential pair skew (pairs found as KiCad pairs them, names ending +/- or P/N, plus pairs given) and length groups (nets or globs, matched to the longest or a target), against tolerances given here or skew/length constraints in the .kicad_dru (conditions on A./B. NetClass, NetName, inDiffPair, Type, Layer, existsOnLayer, isPlated, Pad_Type, Via_Type, Reference, insideArea/intersectsArea/enclosedByArea on rule areas, with && || ! and parentheses; a rule with any other term is listed as skipped). A rule governs a net when one of its tracks, vias or pads meets the condition. Lengths are routed copper: pad-to-pad for two-pad nets (with delay when the stackup is known), total otherwise; via barrels included unless include_vias is false. Recorded; returns run_id.',
   input: z.object({
     project,
     pairs: z.array(z.object({ p: z.string(), n: z.string(), max_skew_mm: z.number().nonnegative().optional() }).strict()).optional(),
@@ -97,7 +97,8 @@ export const lengthMatchTool = defineTool({
     return recorded('pcb.length_match', subject(p), a, async (run) => {
       const L = readLayout(needPcb(p))
       const dru = p.pro ? p.pro.replace(/\.kicad_pro$/, '.kicad_dru') : null
-      const rules = dru && existsSync(dru) ? druRules(readFileSync(dru, 'utf8')) : { rules: [], skipped: [] }
+      const areas = L.keepouts.filter((k) => k.name).map((k) => ({ name: k.name as string, layers: k.layers, polygon: k.polygon }))
+      const rules = dru && existsSync(dru) ? druRules(readFileSync(dru, 'utf8'), areas) : { rules: [], skipped: [] }
       let r: ReturnType<typeof lengthMatch>
       try {
         r = lengthMatch(L.board, netNames(L.board), { pairs: a.pairs, auto_pairs: a.auto_pairs, max_skew_mm: a.max_skew_mm, groups: a.groups, include_vias: a.include_vias, rules: rules.rules, netClass: netClasses(p.pro) })

@@ -27,7 +27,7 @@ import { designRules, Net, parseBoard, type Board } from '../kicad/pcb.js'
 import { candidates, needPcb, relTo, resolveProject, type Project } from '../kicad/project.js'
 import { recorded, type RunHandle } from '../kicad/record.js'
 import { dsnWiring, lockedChanges, lockedItems } from './locked.js'
-import { applyOrs, readOrs } from './ors.js'
+import { applyOrs, DEFAULT_HOLE_TO_HOLE, readOrs } from './ors.js'
 import { buildOrp, encodeOrp, type OrpRules } from './orp.js'
 import { DEFAULT_AUTOROUTE, planRoute, type AutorouteSettings, type Engine, type RoutePlan } from './plan.js'
 
@@ -54,6 +54,16 @@ export function defaultRules(board: Board, pro: string | null): OrpRules {
   const d = dr.net_classes?.find((c) => c.name === 'Default') ?? dr.net_classes?.[0] ?? {}
   const n = (k: string, v: number): number => (typeof d[k] === 'number' && (d[k] as number) > 0 ? (d[k] as number) : v)
   return { track_width: n('track_width', 0.2), clearance: n('clearance', 0.2), via_diameter: n('via_diameter', 0.6), via_drill: n('via_drill', 0.3) }
+}
+
+/** The board's minimum hole-to-hole spacing (mm): the project's min_hole_to_hole (KiCad 6+), the board setup's
+ * hole_to_hole_min (older boards), else KiCad's default 0.25. */
+export function holeToHole(board: Board, pro: string | null): { mm: number; from: string } {
+  const r = designRules(board, pro).rules?.min_hole_to_hole
+  if (typeof r === 'number' && r >= 0) return { mm: r, from: 'min_hole_to_hole (.kicad_pro)' }
+  const s = board.setup.hole_to_hole_min
+  if (typeof s === 'number' && s >= 0) return { mm: s, from: 'hole_to_hole_min (board setup)' }
+  return { mm: DEFAULT_HOLE_TO_HOLE, from: 'KiCad default' }
 }
 
 /** Nets with pads that tracks and vias do not join (nets with a pour are skipped: the pour joins them). */
@@ -169,7 +179,8 @@ export const autoroute = defineTool({
           const ors = r.outputs['core.ORS']
           if (!ors) throw new ToolError('OrthoRoute reported success but wrote no solution')
           const sol = readOrs(readFileSync(ors), board.layers.map((l) => l.name))
-          const applied = applyOrs(text, board, sol, { nets, blindBuried: blind, clearance: rules.clearance })
+          const h2h = holeToHole(board, p.pro)
+          const applied = applyOrs(text, board, sol, { nets, blindBuried: blind, clearance: rules.clearance, minHoleToHole: h2h.mm })
           text = applied.text
           run.measure('orthoroute.routed', applied.routed.length)
           run.measure('orthoroute.failed', applied.failed.length)
@@ -177,7 +188,7 @@ export const autoroute = defineTool({
             stage: 'orthoroute', ...where(r), device: rep.gpu ?? 'cpu', cpu_only: rep.cpu_only === true,
             nets_attempted: nets.length, nets_routed: applied.routed.length, nets_failed: applied.failed.length,
             failed: applied.failed.slice(0, 50), tracks: applied.tracks, vias: applied.vias, through_vias_from_blind: applied.through_from_blind,
-            via_policy: blind ? 'blind/buried allowed' : 'through vias only', router_seconds: rep.seconds, iterations: sol.iterations,
+            via_policy: blind ? 'blind/buried allowed' : 'through vias only', min_hole_to_hole_mm: h2h.mm, min_hole_to_hole_from: h2h.from, router_seconds: rep.seconds, iterations: sol.iterations,
             converged: sol.metadata.converged ?? null,
           })
           cleanup(r)

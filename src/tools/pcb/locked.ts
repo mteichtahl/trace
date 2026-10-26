@@ -1,8 +1,8 @@
 /**
  * Locked copper in a board file, and the checks that keep it locked across a router's round trip.
  *
- *   lockedItems(text)        every locked track, arc and via (KiCad 8–10 `(locked yes)`, or KiCad 6–7's bare
- *                            `locked` flag), as comparable keys
+ *   lockedItems(text)        every locked track, arc and via (KiCad 8–10 `(locked yes)`, KiCad 6–7's bare `locked`
+ *                            flag, or the 5.99 development builds' `(locked)`), as comparable keys
  *   lockedChanges(a, b)      what of a's locked copper is missing or moved in b
  *   dsnWiring(dsn)           a Specctra DSN's wiring by type: KiCad writes locked copper as `(type fix)`, which is
  *                            what Freerouting must see so it routes around it instead of ripping it up
@@ -19,7 +19,11 @@ function netOf(node: sx.SList, codes: Map<string, string>): string {
   return sx.atomAt(n, 2) ?? codes.get(a) ?? a
 }
 
-const isLocked = (node: sx.SList): boolean => node.slice(1).includes('locked') || sx.value(node, 'locked') === 'yes'
+const isLocked = (node: sx.SList): boolean => {
+  if (node.slice(1).includes('locked')) return true
+  const l = sx.find(node, 'locked')
+  return l !== undefined && (l.length === 1 || sx.atomAt(l, 1) === 'yes')
+}
 
 /** Every locked track, arc and via in a .kicad_pcb's text. */
 export function lockedItems(text: string): LockedItem[] {

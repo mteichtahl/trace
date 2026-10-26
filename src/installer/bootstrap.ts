@@ -6,15 +6,21 @@
  *   2 cdk        bootstrap CDK in the account/region if it isn't
  *   3 deploy     `cdk deploy` the trace stack (the agent image builds in CodeBuild: the first deploy takes a while), in
  *                the layout the installation has (a new one: nested; an earlier one: flat), or, when asked to move a
- *                flat one to nested, three deploys in a row (release, drain, nested: see layoutDeploys)
+ *                flat one to nested, three deploys in a row (release, drain, nested: see layoutDeploys). Before it, a
+ *                project the stack does not have yet whose fixed names are taken in the account (a removed copy's
+ *                retained memory, delivery sources or destinations, or secret in its recovery window) gets the next
+ *                generation of names, saved with the answers (chooseGenerations)
  *   4 token      write the GitHub tokens into Secrets Manager: the shared one (the API's), and each project's own
  *                (its own token when one was given, else a copy of the shared one)
- *   5 repos      each repository's Actions variables (its own role and runtime, from its project's outputs; region,
- *                TRACE_HOME) and its TRACE_TOKEN secret (its project's token)
+ *   5 repos      each repository's Actions variables (its own role, runtime and memory, from its project's outputs,
+ *                which are its nested stack's in the nested layout; region, TRACE_HOME) and its TRACE_TOKEN secret
  *   6 onboard    the onboarding PR in each repository that asked for it, and its repository settings
  *   7 people     invite each person to Cognito, put them in their class's group (admin, user, guest), and record
  *                the projects they are assigned to
  *   8 local      save the installation on this machine so `trace login` and `trace remote …` work
+ *   9 gpu        wait for the GPU image build the deploy started (the stack does not wait for it, so a broken GPU
+ *                image never rolls back the core) and start it again if an earlier one failed; a failure here is
+ *                reported, and everything else stays installed
  *
  * Secrets never leave memory except to their destination (Secrets Manager, GitHub's sealed-box API).
  */
@@ -31,11 +37,15 @@ import { type Principal, GROUPS, assign, assignments, setClass, unassign } from 
 import { saveAnswers, saveInstallation } from '../core/client.js'
 import { onboard, register } from '../core/onboard.js'
 import {
-  type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, githubSecretName, projectOutputs, stackName,
+  GPU_IMAGE_BUILD_OUTPUT, type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, cpuEnabled, githubSecretName,
+  memoryDeliveryName, memoryName, projectHash, projectOutputs, stackName,
 } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import type { Answers, InstallEvent, Secrets, Step } from './answers.js'
-import { awsEnv, checkAws, credentials, freeSecretNames, stackOutputs } from './aws.js'
+import {
+  type ProjectNames, awsEnv, cfnClient, checkAws, codebuildClient, credentials, deployedProjects, ensureGpuImage, freeSecretNames, nameClients, nameIndex,
+  stackOutputs,
+} from './aws.js'
 import { type TokenInfo, checkToken, setSecret, setVariable } from './github.js'
 
 /** What the installer knows of the stack already in the account (checkAws), when there is one. */
@@ -98,7 +108,7 @@ export function layoutNote(a: Answers, existing?: Existing | null): string | nul
 
 /** The stack's settings from the answers (and, for the legacy memory's way out and the layout, what is deployed already). */
 export function infraInput(a: Answers, existing?: Existing | null, deploy?: LayoutDeploy): InfraInput {
-  const own = a.projects.filter((p) => p.memoryEventExpiryDays !== null)
+  const own = a.projects.filter((p) => p.memoryEventExpiryDays !== null || p.generation > 0)
   const d: LayoutDeploy = deploy ?? layoutDeploys(a, existing).at(-1) ?? { layout: 'nested', why: '' }
   return {
     prefix: a.agents.prefix,
@@ -114,12 +124,17 @@ export function infraInput(a: Answers, existing?: Existing | null, deploy?: Layo
     idleTimeoutSeconds: Math.round(a.agents.idleMinutes * 60),
     retainData: a.agents.retainData,
     gpu: { enabled: a.agents.gpuEnabled, maxVcpus: a.agents.gpuMaxVcpus, spot: a.agents.gpuSpot },
+    cpu: { enabled: a.agents.cpuEnabled, maxVcpus: a.agents.cpuMaxVcpus, spot: a.agents.cpuSpot, vcpus: a.agents.cpuVcpus, memoryMiB: a.agents.cpuMemoryMiB },
     observability: {
       enabled: a.agents.observability, transactionSearch: a.agents.transactionSearch, dashboard: a.agents.dashboard,
       ...(a.agents.samplingPercent !== null ? { samplingPercent: a.agents.samplingPercent } : {}),
     },
     ...(a.agents.retainData && sharedMemoryOf(existing) ? { memory: { legacySharedMemory: true } } : {}),
-    ...(own.length ? { projectSettings: Object.fromEntries(own.map((p) => [p.repo, { memoryEventExpiryDays: p.memoryEventExpiryDays ?? undefined }])) } : {}),
+    ...(own.length ? {
+      projectSettings: Object.fromEntries(own.map((p) => [p.repo, {
+        ...(p.memoryEventExpiryDays !== null ? { memoryEventExpiryDays: p.memoryEventExpiryDays } : {}), ...(p.generation > 0 ? { generation: p.generation } : {}),
+      }])),
+    } : {}),
     adminEmail: a.adminEmail,
   }
 }
@@ -131,6 +146,66 @@ export function sharedMemoryNote(a: Answers, existing?: Existing | null): string
   return a.agents.retainData
     ? `This installation has the installation-wide memory of an earlier version (${id}). Each project now gets its own, empty memory; the old one's records are not copied (AgentCore has no way to copy extracted records). With "keep data" on, this deploy keeps the old memory in the stack, unused and marked Retain, and the next installer run leaves it in the account as an orphan: delete it there when you no longer need it.`
     : `This installation has the installation-wide memory of an earlier version (${id}). Each project now gets its own, empty memory, and this deploy DELETES the old one with every record in it (AgentCore has no way to copy extracted records). Turn "keep data" on first to keep it.`
+}
+
+/** The names of one project, at one generation, that can outlive it in the account (and so block adding it again). */
+export function projectNames(props: Pick<InfraProps, 'prefix' | 'memory' | 'observability'>, repo: string, generation: number): ProjectNames {
+  return {
+    memories: props.memory.enabled ? [memoryName(props.prefix, repo, generation)] : [],
+    deliveries: props.memory.enabled && props.observability.enabled
+      ? (['logs', 'traces'] as const).map((k) => memoryDeliveryName(props.prefix, repo, k, generation)) : [],
+    secrets: [githubSecretName(props.prefix, repo, generation)],
+  }
+}
+
+/** A project whose generation the installer raised, and the names that were taken. */
+export interface GenerationChange { repo: string; from: number; to: number; taken: string[] }
+
+/**
+ * Before deploying: for each project the stack does not have yet (`deployed`: the hashes it has), find the first
+ * generation, from its saved one up, whose names are all free in the account (`taken`, src/installer/aws.ts nameIndex).
+ * A project the stack has keeps its generation whatever: its names are its own. Returns the answers with the new
+ * generations, and what changed.
+ */
+export async function chooseGenerations(a: Answers, props: Pick<InfraProps, 'prefix' | 'memory' | 'observability'>, deployed: ReadonlySet<string>, taken: (n: ProjectNames) => Promise<string[]>): Promise<{ answers: Answers; changed: GenerationChange[] }> {
+  const changed: GenerationChange[] = []
+  const projects: Answers['projects'] = []
+  for (const p of a.projects) {
+    if (deployed.has(projectHash(p.repo))) { projects.push(p); continue }
+    let generation = p.generation
+    const seen: string[] = []
+    for (;;) {
+      const t = await taken(projectNames(props, p.repo, generation))
+      if (!t.length) break
+      seen.push(...t)
+      if (generation >= 99) throw new Error(`${p.repo}: every generation of its names up to 99 is taken in the account (${t.join(', ')})`)
+      generation += 1
+    }
+    if (generation !== p.generation) changed.push({ repo: p.repo, from: p.generation, to: generation, taken: seen })
+    projects.push({ ...p, generation })
+  }
+  return { answers: { ...a, projects }, changed }
+}
+
+/** Said in the plan, the log and the summary when a project is added again under new names. */
+export function generationNote(changed: readonly GenerationChange[]): string | null {
+  if (!changed.length) return null
+  const what = changed.map((c) => `${c.repo} (generation ${c.to}; ${c.taken.join(', ')} ${c.taken.length === 1 ? 'is' : 'are'} taken)`).join(', ')
+  return `Added again after being removed: ${what}. Its earlier memory, log delivery or token secret still holds its names in the account, so it gets new ones. `
+    + 'The old memory is kept and orphaned, with its records (delete it in the AgentCore console when you no longer need it); the new one starts empty. A secret in its recovery window is deleted by Secrets Manager when the window ends.'
+}
+
+/** Said in the plan about the projects already at a generation above 0 (from an earlier run). */
+function generationsPlan(a: Answers): string {
+  const at = a.projects.filter((p) => p.generation > 0)
+  return at.length ? `; ${at.map((p) => `${p.repo} at generation ${p.generation} (its earlier memory stays in the account, orphaned)`).join(', ')}` : ''
+}
+
+/** The CPU queue part of the deploy step's description. */
+function cpuPlan(props: InfraProps): string {
+  if (!props.cpu.enabled || !props.gpu.enabled) return ''
+  if (!cpuEnabled(props)) return ', no CPU queue (it needs one nested stack per project: a flat stack has no room for its job definitions)'
+  return `, and a CPU queue for CPU-heavy remote jobs (${props.cpu.instanceTypes.join('/')}, up to ${props.cpu.maxVcpus} vCPUs${props.cpu.spot ? ', Spot' : ''}, ${props.cpu.vcpus} vCPUs and ${Math.round(props.cpu.memoryMiB / 1024)} GiB per job, the same image)`
 }
 
 /** The observability part of the deploy step's description. */
@@ -199,12 +274,15 @@ export function plan(a: Answers, existing?: Existing | null): Step[] {
   const steps: [string, string, string][] = [
     ['check', 'Check the AWS account', `${a.aws.account} in ${a.aws.region}`],
     ['cdk', 'Bootstrap CDK', `aws://${a.aws.account}/${a.aws.region} (only if it isn't already)`],
-    ['deploy', `Deploy ${stack}`, `central bucket, agent image (CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and GPU job definition' : ''}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64; one queue for every project)` : ''}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}${layoutPlan(a, existing)}`],
+    ['deploy', `Deploy ${stack}`, `central bucket, agent image (CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and job definitions' : ''}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64 without holding up the deploy; one queue for every project)${cpuPlan(props)}` : ''}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}${generationsPlan(a)}${layoutPlan(a, existing)}. A project added again after being removed gets new names if its old memory, log delivery or token secret still holds them: the old memory is kept and orphaned, and the new one starts empty`],
     ['token', 'Store the GitHub tokens', 'the shared token in the API\'s secret, and each project\'s agent token in its own secret'],
-    ['repos', 'Configure the repositories', `each repository's own TRACE_AWS_ROLE and TRACE_AGENT_RUNTIME_ARN, TRACE_AWS_REGION, TRACE_HOME and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}`],
+    ['repos', 'Configure the repositories', `each repository's own TRACE_AWS_ROLE, TRACE_AGENT_RUNTIME_ARN${props.memory.enabled ? ' and TRACE_MEMORY_ID' : ''}, TRACE_AWS_REGION, TRACE_HOME and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}`],
     ['onboard', 'Onboard the repositories', onboarding.length ? `open the onboarding PR in ${onboarding.join(', ')}` : 'none chosen'],
     ['people', 'Invite people and assign projects', `${a.adminEmail} (admin)${a.people.length ? `, ${a.people.map((p) => `${p.email} (${p.class})`).join(', ')}` : ''}`],
     ['local', 'Save this installation locally', '~/.trace/client.db, so `trace login` works here'],
+    ['gpu', 'Check the GPU image', props.gpu.enabled
+      ? 'wait for the GPU image build the deploy started (CodeBuild, amd64; the first takes 30–60 minutes) and start it again if an earlier one failed: GPU and CPU jobs need it, nothing else does'
+      : 'GPU jobs are off'],
   ]
   return steps.map(([id, title, detail]) => ({ id, title, detail, status: 'pending' as const }))
 }
@@ -243,9 +321,14 @@ export interface Hooks {
   cdk?: (args: string[], env: Record<string, string>, onLine: (l: string) => void) => Promise<number>
   outputs?: (creds: AwsCredentialIdentity, region: string, stack: string) => Promise<Record<string, string>>
   freeSecrets?: (creds: AwsCredentialIdentity, region: string, names: readonly string[]) => Promise<string[]>
+  /** which projects the stack has, and which names are taken in the account (chooseGenerations) */
+  names?: { deployed: () => Promise<Set<string>>; taken: (n: ProjectNames) => Promise<string[]> }
+  /** wait for the GPU image build (src/installer/aws.ts ensureGpuImage) */
+  gpuImage?: (o: { buildId: string; imageTag: string; startedAfter: Date; log: (l: string) => void }) => Promise<{ ok: boolean; detail: string }>
 }
 
 export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {}): Promise<boolean> {
+  const started = new Date()
   const steps = plan(a)
   const byId = new Map(steps.map((st) => [st.id, st]))
   const set = (id: string, status: Step['status'], detail?: string): void => {
@@ -274,6 +357,22 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
     // an installation of an earlier version: its installation-wide memory goes (kept, with retainData, for one deploy)
     const existing = check.existing ?? null
     props = InfraPropsSchema.parse(infraInput(a, existing))
+    // a project added again while a removed copy's names are still taken: the next generation, saved at once (a deploy
+    // that fails after creating a retained memory must not make the next run pick the same names)
+    const names = hooks.names ?? (() => {
+      const index = nameIndex(nameClients(creds, a.aws.region))
+      return { deployed: () => deployedProjects(cfnClient(creds, a.aws.region), stack), taken: index.taken }
+    })()
+    const gens = await chooseGenerations(a, props, await names.deployed(), names.taken)
+    if (gens.changed.length) {
+      a = gens.answers
+      saveAnswers({ answers: a })
+      props = InfraPropsSchema.parse(infraInput(a, existing))
+      const note = generationNote(gens.changed) ?? ''
+      log('check', note)
+      summary.push(note)
+      set('deploy', 'pending', `${byId.get('deploy')?.detail ?? ''} ${note}`)
+    }
     const legacy = sharedMemoryNote(a, existing)
     if (legacy) { log('check', legacy); summary.push(legacy) }
     const layout = layoutNote(a, existing)
@@ -301,7 +400,7 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
       if (deploys.length > 1) log('deploy', `deploy ${i + 1} of ${deploys.length}: ${d.why}`)
       // the drain deleted every project's secret; one still in its recovery window would block the nested stack's
       if (deploys.length > 1 && d.layout === 'nested') {
-        const lines = await (hooks.freeSecrets ?? freeSecretNames)(creds, a.aws.region, a.projects.map((p) => githubSecretName(props.prefix, p.repo)))
+        const lines = await (hooks.freeSecrets ?? freeSecretNames)(creds, a.aws.region, a.projects.map((p) => githubSecretName(props.prefix, p.repo, p.generation)))
         for (const l of lines) log('deploy', l)
       }
       const code = await cdk(['deploy', stack, '--app', `node ${join(REPO_ROOT, 'dist', 'infra', 'app.js')}`, '--require-approval', 'never', '--progress', 'events'], envFor(d), (l) => log('deploy', l))
@@ -329,8 +428,8 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
     await sm.send(new PutSecretValueCommand({ SecretId: need('GithubSecretArn'), SecretString: s.githubToken }))
     log('token', 'the API\'s (shared) token stored')
     for (const p of a.projects) {
-      // flat: its Project<hash>GithubSecretArn output; nested: that output is its nested stack's, so by name
-      const secretId = out[projectOutputs(p.repo).secretArn] || githubSecretName(props.prefix, p.repo)
+      // its Project<hash>GithubSecretArn output (the parent's when flat, its nested stack's when nested), else by name
+      const secretId = out[projectOutputs(p.repo).secretArn] || githubSecretName(props.prefix, p.repo, p.generation)
       await sm.send(new PutSecretValueCommand({ SecretId: secretId, SecretString: projectToken(s, p.repo) }))
       log('token', `${p.repo}: ${s.projectTokens[p.repo.toLowerCase()] ? 'its own token' : 'the shared token'} stored in its secret`)
     }
@@ -358,6 +457,8 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
         TRACE_AWS_ROLE: need(o.roleArn), TRACE_AWS_REGION: a.aws.region, TRACE_HOME: need('TraceHome'), TRACE_AGENT_RUNTIME_ARN: need(o.runtimeArn),
         // The worker trusts claim markers and refuses deploy approvals from this login (the agents' own account).
         TRACE_AGENT_LOGIN: login,
+        // its own memory, for the worker.runner = actions fallback (its OIDC role may use that memory only)
+        ...(memoryIds[p.repo.toLowerCase()] ? { TRACE_MEMORY_ID: memoryIds[p.repo.toLowerCase()] ?? '' } : {}),
       }
       for (const [k, v] of Object.entries(vars)) log('repos', `${p.repo}: ${k} ${await setVariable(adminToken, p.repo, k, v)}`)
       await setSecret(adminToken, p.repo, 'TRACE_TOKEN', projectToken(s, p.repo))
@@ -463,6 +564,21 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
     })
     saveAnswers({ answers: a })
     set('local', 'done')
+
+    // 9 — the GPU image: the deploy started its build and did not wait (src/infra/gpu.ts); wait now, with the rest up
+    current = 'gpu'
+    if (!props.gpu.enabled) set('gpu', 'skipped')
+    else {
+      set('gpu', 'running')
+      const imageTag = (out.GpuImageUri ?? '').split(':').at(-1) ?? ''
+      const wait = hooks.gpuImage ?? ((o) => ensureGpuImage(codebuildClient(creds, a.aws.region), o))
+      const r = await wait({ buildId: out[GPU_IMAGE_BUILD_OUTPUT] ?? '', imageTag, startedAfter: started, log: (l) => log('gpu', l) })
+      if (r.ok) set('gpu', 'done', r.detail)
+      else {
+        set('gpu', 'failed', r.detail)
+        summary.push(`GPU and CPU jobs cannot run until the GPU image is built: ${r.detail}. Everything else is installed; fix the cause and run the installer again to build it.`)
+      }
+    }
     summary.unshift(`trace is installed in ${a.aws.account} (${a.aws.region}) as ${stack}.`)
     summary.push('Write each project\'s rules in .trace/rules.md (they start empty).')
     emit({ type: 'done', ok: true, summary })
