@@ -17,6 +17,7 @@ export const impl: Specialist = {
     'pcb.autoroute', 'pcb.placement_check', 'pcb.length_match', 'pcb.floorplan',
     'kicad.drc', 'kicad.net_length',
     'render.board',
+    'protocol.compat', 'protocol.check', 'protocol.diagram',
   ],
   workflow: [
     'Recall earlier implementation sessions (memory_recall): seeds and placer settings that closed before, known'
@@ -36,6 +37,12 @@ export const impl: Specialist = {
     'Routing: pcb_autoroute (it plans OrthoRoute for the complex core and Freerouting for the rest, from the'
       + ' electronics.autoroute settings); then kicad_drc again, kicad_net_length for critical nets, and'
       + ' pcb_length_match for differential pairs and length groups against their constraints.',
+    'Interface timing budgets on the board: protocol_compat for each initiator-responder pair with stored specs, its'
+      + ' flight times from the routed nets (flight.<line>.net with from/to pads, or kicad_net_length lengths with'
+      + ' delay_per_m / impedance); read the slack per corner and the read-path fmax before relaxing or tightening a'
+      + ' length constraint. protocol_check on a simulated or captured bus confirms it; protocol_diagram with the check'
+      + ' run shows the worst edge for the report. A budget that only closes by lowering the clock is a requirement'
+      + ' change for a person.',
     'Visual review: render_board (top and bottom) of the result, at low size; look at it for parts off the outline,'
       + ' unrouted areas, silkscreen over pads. A render is a review aid, not evidence the board works.',
     'Changes to constraint files, RTL, placement or the routed board are delegated (DELIVERY) with the run ids and'

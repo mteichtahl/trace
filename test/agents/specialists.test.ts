@@ -54,16 +54,24 @@ describe('specialists', () => {
 
   it('keep to their area', () => {
     const area = (k: (typeof SPECIALIST_KINDS)[number]): string[] => SPECIALISTS[k].tools.map((t) => t.split('.')[0]!)
-    expect(new Set(area('verify'))).toEqual(new Set(['verify', 'sim', 'kicad']))
+    expect(new Set(area('verify'))).toEqual(new Set(['verify', 'sim', 'kicad', 'protocol']))
     expect(area('impl')).toEqual(expect.arrayContaining(['fpga', 'pcb', 'kicad', 'render']))
     expect(SPECIALISTS.impl.tools).not.toContain('verify.run')
-    expect(new Set(area('ams'))).toEqual(new Set(['ams', 'sim', 'calc', 'datasheets', 'parts']))
-    expect(new Set(area('emc'))).toEqual(new Set(['emc', 'calc', 'kicad']))
+    expect(new Set(area('ams'))).toEqual(new Set(['ams', 'sim', 'calc', 'datasheets', 'parts', 'protocol']))
+    expect(new Set(area('emc'))).toEqual(new Set(['emc', 'calc', 'kicad', 'protocol']))
     expect(new Set(area('render'))).toEqual(new Set(['render']))
     // hardware only when allowed, and only for verification
     expect(toolsOf(SPECIALISTS.verify)).not.toContain('hil.psu')
     expect(toolsOf(SPECIALISTS.verify, { hardware: true })).toContain('hil.psu')
     for (const k of ['impl', 'ams', 'emc', 'render'] as const) expect(toolsOf(SPECIALISTS[k], { hardware: true }).some((t) => t.startsWith('hil.'))).toBe(false)
+    // the protocol tools: verify has them all, the bus capture only with hardware; impl the timing ones; ams and emc the bus physics
+    const protocolTools = allTools().list().filter((t) => t.name.startsWith('protocol.') && t.name !== 'protocol.pullup').map((t) => t.name)
+    expect(protocolTools.length).toBe(9)
+    expect(toolsOf(SPECIALISTS.verify, { hardware: true })).toEqual(expect.arrayContaining(protocolTools))
+    expect(toolsOf(SPECIALISTS.verify)).not.toContain('protocol.capture')
+    expect(SPECIALISTS.impl.tools).toEqual(expect.arrayContaining(['protocol.compat', 'protocol.check', 'protocol.diagram']))
+    for (const k of ['ams', 'emc'] as const) expect(SPECIALISTS[k].tools).toEqual(expect.arrayContaining(['protocol.bus_analog', 'protocol.pullup']))
+    for (const k of ['impl', 'ams', 'emc', 'render', 'thermal'] as const) expect(toolsOf(SPECIALISTS[k], { hardware: true })).not.toContain('protocol.capture')
     // thermal: its area, the calculators and simulators it names, and the bench only when hardware is allowed
     expect(new Set(area('thermal'))).toEqual(new Set(['thermal', 'calc', 'sim', 'datasheets', 'parts', 'kicad']))
     const thermalTools = allTools().list().filter((t) => t.name.startsWith('thermal.')).map((t) => t.name)
