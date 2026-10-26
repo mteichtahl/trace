@@ -161,6 +161,20 @@ describe('the trace stack', () => {
       expect(submit?.Condition).toEqual({ StringEquals: { 'aws:RequestTag/trace:project': c.repo } })
       expect(s.find((x) => x.Sid === 'ProjectGpuTerminate')?.Condition).toEqual({ StringEquals: { 'aws:ResourceTag/trace:project': c.repo } })
       expect(s.find((x) => x.Sid === 'ProjectGpuTag')?.Condition?.StringEqualsIfExists).toEqual({ 'aws:ResourceTag/trace:project': c.repo })
+      // waiting on its jobs' events: its own wait queues by name, and the stack's topic, with those queues as the only endpoint
+      const waitQueues = { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, `:sqs:us-east-1:123456789012:trace-${c.h}-wait-*`]] }
+      const queues = s.find((x) => x.Sid === 'ProjectGpuWaitQueues')
+      expect(queues?.Action).toEqual(['sqs:CreateQueue', 'sqs:DeleteQueue', 'sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes', 'sqs:SetQueueAttributes', 'sqs:TagQueue'])
+      expect(queues?.Resource).toEqual(waitQueues)
+      expect(s.filter((x) => actionsOf(x).some((a) => a.startsWith('sqs:')))).toHaveLength(1)
+      const sub = s.find((x) => x.Sid === 'ProjectGpuWaitSubscribe')
+      expect(sub?.Action).toBe('sns:Subscribe')
+      expect(JSON.stringify(sub?.Resource)).toMatch(/GpuJobEvents/)
+      expect(sub?.Condition).toEqual({ StringEquals: { 'sns:Protocol': 'sqs' }, StringLike: { 'sns:Endpoint': waitQueues } })
+      const unsub = s.find((x) => x.Sid === 'ProjectGpuWaitUnsubscribe')
+      expect(unsub?.Action).toBe('sns:Unsubscribe')
+      expect(JSON.stringify(unsub?.Resource)).toMatch(/GpuJobEvents/)
+      expect(s.filter((x) => actionsOf(x).some((a) => a.startsWith('sns:')))).toHaveLength(2)
       // telemetry: its own runtime's log group
       expect(text).toContain(`/aws/bedrock-agentcore/runtimes/trace_w_${c.h}-*`)
       expect(text).not.toContain('/aws/bedrock-agentcore/runtimes/*')
@@ -303,6 +317,32 @@ describe('the trace stack', () => {
     t.resourceCountIs('AWS::CloudFormation::CustomResource', 2) // the agent image and the GPU image
   })
 
+  it('sends every job state change of its queues to one SNS topic, which only that rule may publish to', () => {
+    t.resourceCountIs('AWS::SNS::Topic', 1)
+    t.hasResourceProperties('AWS::SNS::Topic', { TopicName: 'trace-batch-events' })
+    const rules = t.findResources('AWS::Events::Rule')
+    expect(Object.keys(rules)).toHaveLength(1)
+    const [ruleId, rule] = Object.entries(rules)[0] as [string, { Properties: { EventPattern: Record<string, unknown>; Targets: { Arn: unknown }[] } }]
+    expect(rule.Properties.EventPattern).toMatchObject({ source: ['aws.batch'], 'detail-type': ['Batch Job State Change'] })
+    expect(Object.keys(rule.Properties.EventPattern).sort()).toEqual(['detail', 'detail-type', 'source'])
+    // exactly this stack's two queues
+    expect(rule.Properties.EventPattern.detail).toEqual({ jobQueue: [
+      { 'Fn::GetAtt': [expect.stringMatching(/^GpuQueue/), 'JobQueueArn'] }, { 'Fn::GetAtt': [expect.stringMatching(/^GpuCpuQueue/), 'JobQueueArn'] },
+    ] })
+    expect(rule.Properties.Targets).toEqual([expect.objectContaining({ Arn: { Ref: expect.stringMatching(/^GpuJobEvents/) } })])
+    const policies = Object.values(t.findResources('AWS::SNS::TopicPolicy')) as { Properties: { PolicyDocument: { Statement: Statement[] } } }[]
+    expect(policies).toHaveLength(1)
+    const publish = policies[0]?.Properties.PolicyDocument.Statement.filter((x) => x.Effect === 'Allow') ?? []
+    expect(publish).toEqual([expect.objectContaining({
+      Effect: 'Allow', Principal: { Service: 'events.amazonaws.com' },
+      Action: 'sns:Publish', Condition: { ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': [ruleId, 'Arn'] } } },
+    })])
+    // and every worker is told it
+    for (const h of [HA, HB]) {
+      t.hasResourceProperties('AWS::BedrockAgentCore::Runtime', { AgentRuntimeName: `trace_w_${h}`, EnvironmentVariables: Match.objectLike({ TRACE_BATCH_EVENTS_TOPIC: Match.anyValue() }) })
+    }
+  })
+
   it('tells each worker its queue, job definition and bucket', () => {
     for (const h of [HA, HB]) {
       t.hasResourceProperties('AWS::BedrockAgentCore::Runtime', {
@@ -315,10 +355,12 @@ describe('the trace stack', () => {
   it('creates none of the GPU side when gpu.enabled is false', () => {
     const off = InfraPropsSchema.parse({ ...props, gpu: { enabled: false } })
     const t2 = synth(off, 'NoGpu').all
-    for (const r of ['AWS::Batch::ComputeEnvironment', 'AWS::Batch::JobQueue', 'AWS::Batch::JobDefinition', 'AWS::EC2::VPC']) t2.resourceCountIs(r, 0)
+    for (const r of ['AWS::Batch::ComputeEnvironment', 'AWS::Batch::JobQueue', 'AWS::Batch::JobDefinition', 'AWS::EC2::VPC', 'AWS::SNS::Topic', 'AWS::Events::Rule']) t2.resourceCountIs(r, 0)
     t2.resourceCountIs('AWS::CloudFormation::CustomResource', 1)
     const json = JSON.stringify(t2.toJSON())
     expect(json).not.toContain('TRACE_GPU_QUEUE')
+    expect(json).not.toContain('TRACE_BATCH_EVENTS_TOPIC')
+    expect(json).not.toContain('sqs:')
     expect(json).not.toContain('batch:SubmitJob')
     const outputs = Object.keys(t2.toJSON().Outputs as Record<string, unknown>)
     expect(outputs).not.toContain('GpuJobQueue')

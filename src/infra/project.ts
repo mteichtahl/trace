@@ -17,7 +17,9 @@
  *   secret    <prefix>/github-token/<slug> only
  *   Batch     SubmitJob only with its own job definitions (GPU, and CPU when there is the CPU queue), on the shared
  *             queues, and only tagged trace:project=<slug>; TerminateJob only on jobs tagged with its slug;
- *             DescribeJobs (no resource-level permissions exist)
+ *             DescribeJobs (no resource-level permissions exist); to wait on its jobs' state-change events
+ *             (src/gpu/batch.ts), SQS on queues named <prefix>-<hash>-wait-* only, and Subscribe/Unsubscribe on the
+ *             stack's batch-events topic only, with its own wait queues as the only endpoint
  *   telemetry its own runtime's log group, X-Ray, PutMetricData in the bedrock-agentcore namespace
  *   model     Bedrock InvokeModel on Anthropic models and the account's inference profiles
  *   knowledge bedrock:Retrieve and Start/Get/ListIngestionJob on its own knowledge base only (nested layout,
@@ -295,6 +297,25 @@ export class ProjectStack extends Construct {
       }))
       // DescribeJobs has no resource-level permissions
       role.addToPolicy(new iam.PolicyStatement({ sid: 'ProjectGpuDescribe', actions: ['batch:DescribeJobs'], resources: ['*'] }))
+      // waiting on the job's state-change events (src/infra/gpu.ts, src/gpu/batch.ts): its own short-lived queues,
+      // by name prefix, subscribed to the stack's topic
+      const waitPrefix = `${cfg.prefix}-${hash}-wait-`
+      const waitQueues = `arn:${partition}:sqs:${region}:${account}:${waitPrefix}*`
+      role.addToPolicy(new iam.PolicyStatement({
+        sid: 'ProjectGpuWaitQueues',
+        actions: ['sqs:CreateQueue', 'sqs:DeleteQueue', 'sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes', 'sqs:SetQueueAttributes', 'sqs:TagQueue'],
+        resources: [waitQueues],
+      }))
+      role.addToPolicy(new iam.PolicyStatement({
+        sid: 'ProjectGpuWaitSubscribe', actions: ['sns:Subscribe'], resources: [p.gpu.jobEvents.topicArn],
+        conditions: { StringEquals: { 'sns:Protocol': 'sqs' }, StringLike: { 'sns:Endpoint': waitQueues } },
+      }))
+      // Unsubscribe names the subscription (<topic arn>:<id>); the topic is its resource type
+      role.addToPolicy(new iam.PolicyStatement({
+        sid: 'ProjectGpuWaitUnsubscribe', actions: ['sns:Unsubscribe'], resources: [p.gpu.jobEvents.topicArn, `${p.gpu.jobEvents.topicArn}:*`],
+      }))
+      // the queue names follow from it: the topic is <prefix>-batch-events (src/gpu/batch.ts waitQueueName)
+      gpuEnv.TRACE_BATCH_EVENTS_TOPIC = p.gpu.jobEvents.topicArn
       // the definitions' vCPUs: src/gpu/batch.ts caps a job's `vcpus` hint at them
       Object.assign(gpuEnv, { TRACE_GPU_QUEUE: p.gpu.queue.jobQueueArn, TRACE_GPU_JOB_DEFINITION: job.jobDefinitionName, TRACE_GPU_BUCKET: bucket.bucketName, TRACE_GPU_JOB_MAX_VCPUS: String(GPU_JOB_VCPUS) })
     }

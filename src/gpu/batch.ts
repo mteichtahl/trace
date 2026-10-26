@@ -13,20 +13,32 @@
  *      permission, so nothing that names a file goes into what Batch shows. A `vcpus` hint becomes a VCPU resource
  *      override, capped at TRACE_GPU_JOB_MAX_VCPUS / TRACE_CPU_JOB_MAX_VCPUS (the definition's limit, set by the
  *      stack); without that limit the hint is not applied.
- *   3. DescribeJobs, backing off from 5 s to 30 s, until SUCCEEDED or FAILED — or the deadline (the job's own time
- *      limit plus TRACE_GPU_QUEUE_WAIT_S, default 1800 s, for the queue to scale an instance up from zero and pull
- *      the image), when the job is terminated
+ *   3. wait for SUCCEEDED or FAILED — or the deadline (the job's own time limit plus TRACE_GPU_QUEUE_WAIT_S, default
+ *      1800 s, for the queue to scale an instance up from zero and pull the image), when the job is terminated:
+ *        on events   (TRACE_BATCH_EVENTS_TOPIC, set by the stack: src/infra/gpu.ts) Batch's "Batch Job State Change"
+ *                    events reach that SNS topic. A short-lived SQS queue of this job's own
+ *                    (<prefix>-<project hash>-wait-<Batch job id>, tagged trace:project) is subscribed to it with a
+ *                    filter on the job's id; then ONE DescribeJobs (an event from before the subscription would be
+ *                    missed: this closes that gap), then ReceiveMessage long polls, each returning the moment an event
+ *                    arrives. Event delivery is best effort, so one DescribeJobs every 5 minutes (said in the log when
+ *                    the wait starts) catches a lost one. The subscription and the queue are removed when the wait
+ *                    ends, however it ends
+ *        on a timer  where there is no subscription (an older stack without the topic, or setting it up failed: the
+ *                    log says why), DescribeJobs through waitWithTimer (src/core/wait.ts) from 5 s, backing off to 30 s
+ *                    while nothing changes and back to 5 s when it does; the log says when the next check is
  *   4. the outputs, stdout and stderr come back to a local scratch folder, and the runner's exit record gives the code
  *
- * The SDK clients are injected for tests; the real ones are loaded only when a job is shipped.
+ * The SDK clients are injected for tests; the real ones are loaded only when a job is shipped (SQS and SNS only when
+ * the job is waited on by events).
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { S3Backend, type S3Api } from '../core/central.js'
-import { PROJECT_TAG } from '../core/project.js'
+import { PROJECT_TAG, projectHash } from '../core/project.js'
 import { ToolError } from '../core/registry.js'
 import { ATTR, annotate, traceEnv } from '../core/telemetry.js'
+import { describeWait, trackEventWait, waitWithTimer } from '../core/wait.js'
 import { scratchDir } from '../core/store.js'
 import type { GpuJobSchema, JobResult } from './jobs.js'
 import type { z } from 'zod'
@@ -58,9 +70,25 @@ export interface BatchJobDetail {
   container?: { reason?: string | undefined; exitCode?: number | undefined; logStreamName?: string | undefined } | undefined
 }
 
+/** The SQS calls the event wait uses (the SDK's shapes, only the fields read here). */
+export interface SqsApi {
+  createQueue(i: { QueueName: string; Attributes?: Record<string, string>; tags?: Record<string, string> }): Promise<{ QueueUrl?: string | undefined }>
+  receiveMessage(i: { QueueUrl: string; WaitTimeSeconds: number; MaxNumberOfMessages: number }): Promise<{ Messages?: { Body?: string | undefined; ReceiptHandle?: string | undefined }[] | undefined }>
+  deleteMessage(i: { QueueUrl: string; ReceiptHandle: string }): Promise<unknown>
+  deleteQueue(i: { QueueUrl: string }): Promise<unknown>
+}
+
+/** The SNS calls the event wait uses. */
+export interface SnsApi {
+  subscribe(i: { TopicArn: string; Protocol: 'sqs'; Endpoint: string; Attributes: Record<string, string>; ReturnSubscriptionArn: boolean }): Promise<{ SubscriptionArn?: string | undefined }>
+  unsubscribe(i: { SubscriptionArn: string }): Promise<unknown>
+}
+
 export interface BatchDeps {
   batch?: BatchApi
   s3?: S3Api
+  sqs?: SqsApi
+  sns?: SnsApi
   sleep?: (ms: number) => Promise<void>
   now?: () => number
   env?: NodeJS.ProcessEnv
@@ -78,7 +106,34 @@ async function awsBatch(): Promise<BatchApi> {
   }
 }
 
-const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+async function awsSqs(): Promise<SqsApi> {
+  const q = await import('@aws-sdk/client-sqs')
+  const client = new q.SQSClient({})
+  return {
+    createQueue: (i) => client.send(new q.CreateQueueCommand(i)),
+    receiveMessage: (i) => client.send(new q.ReceiveMessageCommand(i)),
+    deleteMessage: (i) => client.send(new q.DeleteMessageCommand(i)),
+    deleteQueue: (i) => client.send(new q.DeleteQueueCommand(i)),
+  }
+}
+
+async function awsSns(): Promise<SnsApi> {
+  const n = await import('@aws-sdk/client-sns')
+  const client = new n.SNSClient({})
+  return {
+    subscribe: (i) => client.send(new n.SubscribeCommand(i)),
+    unsubscribe: (i) => client.send(new n.UnsubscribeCommand(i)),
+  }
+}
+
+/** While waiting on events: one DescribeJobs this often, in case an event was lost. */
+export const SAFETY_CHECK_MS = 5 * 60_000
+/** The timer used where there are no events (DescribeJobs): from 5 s, backing off to 30 s. */
+export const TIMER = { intervalMs: 5000, factor: 1.5, maxIntervalMs: 30_000 }
+const NO_EVENTS_WHY = 'no Batch event subscription on this stack'
+
+const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+const TERMINAL = new Set(['SUCCEEDED', 'FAILED'])
 
 /** A job id that sorts by time and is safe in S3 keys and Batch job names. */
 export function newJobId(kind: string, now = Date.now()): string {
@@ -125,7 +180,6 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
   const { bucket, prefix, project } = jobsLocation(env)
   const store = new S3Backend(bucket, prefix, deps.s3)
   const batch = deps.batch ?? (await awsBatch())
-  const sleep = deps.sleep ?? sleepMs
   const now = deps.now ?? Date.now
   const log = deps.log ?? (() => undefined)
   const t0 = now()
@@ -175,24 +229,22 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
 
   const queueWait = Number(env.TRACE_GPU_QUEUE_WAIT_S ?? 1800)
   const deadline = t0 + (job.timeoutSeconds + (Number.isFinite(queueWait) && queueWait >= 0 ? queueWait : 1800)) * 1000
-  let delay = 5000
-  let last = ''
-  let detail: BatchJobDetail | undefined
-  for (;;) {
-    detail = (await batch.describeJobs({ jobs: [jobId] })).jobs?.[0]
-    const status = detail?.status ?? 'UNKNOWN'
-    if (status !== last) {
-      log(`${jobId}: ${status}`)
-      last = status
-    }
-    if (status === 'SUCCEEDED' || status === 'FAILED') break
-    if (now() >= deadline) {
-      await batch.terminateJob({ jobId, reason: `trace: no result within ${Math.round((deadline - t0) / 1000)} s` }).catch(() => undefined)
-      throw new ToolError(`the GPU job ${id} (Batch ${jobId}) was still ${status} after ${Math.round((now() - t0) / 1000)} s and was terminated`
-        + (status === 'RUNNABLE' ? `: no ${place.pool.toUpperCase()} instance came up (check the compute environment's instance types, vCPU quota and Spot capacity)` : ''))
-    }
-    await sleep(delay)
-    delay = Math.min(30_000, Math.round(delay * 1.5))
+  const what = `the ${place.pool === 'gpu' ? 'graphics card' : 'remote CPU'} job ${id}`
+  const ctx: WaitCtx = { batch, jobId, deadline, now, log, what, sleep: deps.sleep }
+  let last: { status: string; detail: BatchJobDetail | undefined }
+  const topic = env.TRACE_BATCH_EVENTS_TOPIC
+  const queueName = topic ? waitQueueName(topic, project, jobId) : null
+  const onEvents = topic && queueName
+    ? await waitOnEvents(ctx, { topic, queueName, project, sqs: deps.sqs, sns: deps.sns })
+    : (log(`${jobId}: waiting on a timer: ${NO_EVENTS_WHY} (${topic ? 'TRACE_BATCH_EVENTS_TOPIC is not the stack\'s topic, or this is no project' : 'TRACE_BATCH_EVENTS_TOPIC is not set'})`), null)
+  if (onEvents && 'status' in onEvents) last = onEvents
+  else last = await waitOnTimer(ctx, onEvents?.why ?? NO_EVENTS_WHY, onEvents?.lastStatus ?? '')
+  const detail = last.detail
+  if (!TERMINAL.has(last.status)) {
+    const status = last.status
+    await batch.terminateJob({ jobId, reason: `trace: no result within ${Math.round((deadline - t0) / 1000)} s` }).catch(() => undefined)
+    throw new ToolError(`the GPU job ${id} (Batch ${jobId}) was still ${status} after ${Math.round((now() - t0) / 1000)} s and was terminated`
+      + (status === 'RUNNABLE' ? `: no ${place.pool.toUpperCase()} instance came up (check the compute environment's instance types, vCPU quota and Spot capacity)` : ''))
   }
 
   const exitBody = await store.get(keys.exit)
@@ -231,4 +283,194 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
     jobId,
     seconds: (now() - t0) / 1000,
   }
+}
+
+// ------------------------------------------------------------------ waiting for the job (step 3 of the header)
+
+interface WaitCtx {
+  batch: BatchApi
+  jobId: string
+  /** ms since the epoch */
+  deadline: number
+  now: () => number
+  log: (line: string) => void
+  /** what is awaited, in plain words */
+  what: string
+  sleep?: ((ms: number) => Promise<void>) | undefined
+}
+
+/** How the wait ended: the job's last status (terminal, or not when the deadline came) and its detail. */
+interface Seen { status: string; detail: BatchJobDetail | undefined }
+
+/**
+ * The job's own wait queue, `<prefix>-<project hash>-wait-<Batch job id>`: the only names the project's role may make
+ * (src/infra/project.ts). The prefix is the stack's, from its topic `<prefix>-batch-events`; null when the topic is
+ * not named so, or there is no project (a laptop), or the name would not be a valid queue name.
+ */
+export function waitQueueName(topicArn: string, project: string, jobId: string): string | null {
+  const prefix = /^arn:[\w-]+:sns:[\w-]+:\d{12}:([a-z][a-z0-9-]{1,20})-batch-events$/.exec(topicArn)?.[1]
+  if (!prefix) return null
+  let hash: string
+  try { hash = projectHash(project) } catch { return null }
+  const name = `${prefix}-${hash}-wait-${jobId}`
+  return /^[\w-]{1,80}$/.test(name) ? name : null
+}
+
+/** The job as DescribeJobs has it now. */
+async function describe(c: WaitCtx): Promise<Seen> {
+  const detail = (await c.batch.describeJobs({ jobs: [c.jobId] })).jobs?.[0]
+  return { status: detail?.status ?? 'UNKNOWN', detail }
+}
+
+/**
+ * The job's detail from one SQS message (an EventBridge event, delivered raw), or null when it is not this job's
+ * state change. The subscription filters on the job id; this checks again, since a filter can take a moment to apply.
+ */
+export function eventDetail(body: string | undefined, jobId: string): BatchJobDetail | null {
+  try {
+    const e = JSON.parse(body ?? '') as { 'detail-type'?: unknown; detail?: { jobId?: unknown; status?: unknown } }
+    if (e['detail-type'] !== 'Batch Job State Change' || !e.detail || e.detail.jobId !== jobId || typeof e.detail.status !== 'string') return null
+    return e.detail as BatchJobDetail
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Wait on the job's state-change events. Returns how the job ended (or stood at the deadline), or `why` events could
+ * not be used (setting up failed, or receiving did), with the last status seen, for the timer to carry on from.
+ */
+async function waitOnEvents(c: WaitCtx, o: { topic: string; queueName: string; project: string; sqs?: SqsApi | undefined; sns?: SnsApi | undefined }): Promise<Seen | { why: string; lastStatus: string }> {
+  const { jobId, log, now } = c
+  // the queue is in the topic's account and region (the stack's): its ARN follows from the topic's
+  const [arn, partition, , region, account] = o.topic.split(':')
+  const queueArn = `${arn}:${partition}:sqs:${region}:${account}:${o.queueName}`
+  let sqs: SqsApi | undefined
+  let sns: SnsApi | undefined
+  let queueUrl: string | undefined
+  let subscription: string | undefined
+  let wait: ReturnType<typeof trackEventWait> | undefined
+  let lastStatus = ''
+  const cleanup = async (): Promise<void> => {
+    wait?.end()
+    if (subscription && sns) await sns.unsubscribe({ SubscriptionArn: subscription }).catch((e: unknown) => log(`${jobId}: could not remove its event subscription (${errText(e)})`))
+    if (queueUrl && sqs) await sqs.deleteQueue({ QueueUrl: queueUrl }).catch((e: unknown) => log(`${jobId}: could not delete its event queue ${o.queueName} (${errText(e)})`))
+  }
+  try {
+    try {
+      sqs = o.sqs ?? (await awsSqs())
+      sns = o.sns ?? (await awsSns())
+      queueUrl = (await sqs.createQueue({
+        QueueName: o.queueName,
+        Attributes: {
+          MessageRetentionPeriod: '3600',
+          ReceiveMessageWaitTimeSeconds: '20',
+          // only the stack's topic may send to it
+          Policy: JSON.stringify({
+            Version: '2012-10-17',
+            Statement: [{ Sid: 'TraceBatchEvents', Effect: 'Allow', Principal: { Service: 'sns.amazonaws.com' }, Action: 'sqs:SendMessage', Resource: queueArn, Condition: { ArnEquals: { 'aws:SourceArn': o.topic } } }],
+          }),
+        },
+        tags: { [PROJECT_TAG]: o.project },
+      })).QueueUrl
+      if (!queueUrl) throw new Error('CreateQueue returned no queue URL')
+      subscription = (await sns.subscribe({
+        TopicArn: o.topic, Protocol: 'sqs', Endpoint: queueArn, ReturnSubscriptionArn: true,
+        Attributes: { RawMessageDelivery: 'true', FilterPolicyScope: 'MessageBody', FilterPolicy: JSON.stringify({ detail: { jobId: [jobId] } }) },
+      })).SubscriptionArn
+      if (!subscription) throw new Error('Subscribe returned no subscription ARN')
+    } catch (e) {
+      const why = `setting up its Batch event subscription failed (${errText(e)})`
+      log(`${jobId}: waiting on a timer: ${why}`)
+      return { why, lastStatus }
+    }
+    wait = trackEventWait({ what: c.what, now })
+    const seen = (s: Seen): void => {
+      if (s.status !== lastStatus) {
+        log(`${jobId}: ${s.status}`)
+        lastStatus = s.status
+        wait?.update(s.status)
+      }
+    }
+    // the one look that closes the gap before the subscription existed
+    let s = await describe(c)
+    seen(s)
+    if (TERMINAL.has(s.status)) return s
+    log(`${jobId}: waiting on its Batch events; a check every ${Math.round(SAFETY_CHECK_MS / 60_000)} minutes in case one is lost`)
+    let nextSafety = now() + SAFETY_CHECK_MS
+    for (;;) {
+      const t = now()
+      if (t >= c.deadline) {
+        // the job may have ended a moment ago: one last look before giving up on it
+        s = await describe(c)
+        seen(s)
+        return s
+      }
+      if (t >= nextSafety) {
+        s = await describe(c)
+        seen(s)
+        if (TERMINAL.has(s.status)) return s
+        nextSafety = now() + SAFETY_CHECK_MS
+        continue
+      }
+      const waitS = Math.max(1, Math.min(20, Math.ceil((Math.min(nextSafety, c.deadline) - t) / 1000)))
+      let messages: { Body?: string | undefined; ReceiptHandle?: string | undefined }[]
+      try {
+        messages = (await sqs.receiveMessage({ QueueUrl: queueUrl, WaitTimeSeconds: waitS, MaxNumberOfMessages: 10 })).Messages ?? []
+      } catch (e) {
+        const why = `receiving its Batch events failed (${errText(e)})`
+        log(`${jobId}: waiting on a timer from now: ${why}`)
+        return { why, lastStatus }
+      }
+      let terminal: Seen | null = null
+      for (const m of messages) {
+        if (m.ReceiptHandle) await sqs.deleteMessage({ QueueUrl: queueUrl, ReceiptHandle: m.ReceiptHandle }).catch(() => undefined)
+        const d = eventDetail(m.Body, jobId)
+        if (!d) continue
+        const ev = { status: d.status ?? 'UNKNOWN', detail: d }
+        // events may arrive out of order: an ending is final, whatever comes with it
+        if (TERMINAL.has(ev.status)) terminal ??= ev
+        else if (!terminal) seen(ev)
+      }
+      if (terminal) {
+        seen(terminal)
+        return terminal
+      }
+    }
+  } finally {
+    await cleanup()
+  }
+}
+
+/** Wait on a timer (no events): DescribeJobs through waitWithTimer, from where the event wait left off. */
+async function waitOnTimer(c: WaitCtx, why: string, lastStatus: string): Promise<Seen> {
+  const { jobId, log, now } = c
+  let last = lastStatus
+  let reported: string | null = null
+  let seenLast: Seen | undefined
+  const outcome = await waitWithTimer<Seen>({
+    what: c.what,
+    why,
+    ...TIMER,
+    deadlineAt: c.deadline,
+    now,
+    ...(c.sleep ? { sleep: (ms: number) => (c.sleep as (ms: number) => Promise<void>)(ms) } : {}),
+    check: async () => {
+      const s = await describe(c)
+      seenLast = s
+      if (s.status !== last) {
+        log(`${jobId}: ${s.status}`)
+        last = s.status
+      }
+      return TERMINAL.has(s.status) ? { done: true, value: s, state: s.status } : { done: false, state: s.status }
+    },
+    // a plain-language line when the state changes (not every check): what it is waiting for and when it looks next
+    report: (n) => {
+      if (!n.nextCheckAt || n.state === reported) return
+      reported = n.state
+      log(describeWait(n, now()))
+    },
+  })
+  if (outcome.done) return outcome.value
+  return seenLast ?? { status: outcome.state ?? 'UNKNOWN', detail: undefined }
 }

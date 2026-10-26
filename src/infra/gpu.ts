@@ -14,6 +14,12 @@
  *                    (<prefix>-cpu), for the CPU-heavy jobs sent remote (openEMS, Verilator, formal, nextpnr). It
  *                    runs the same image: a CUDA runtime base image starts and runs CPU programs without a GPU (the
  *                    CUDA libraries are only loaded by the programs that use them, which these jobs do not)
+ *   job events       one SNS topic (<prefix>-batch-events) and one EventBridge rule sending it every "Batch Job State
+ *                    Change" event of this stack's queues (the topic's policy lets EventBridge publish for that rule
+ *                    only). src/gpu/batch.ts waits on these instead of polling DescribeJobs: per job, a short-lived SQS
+ *                    queue (<prefix>-<hash>-wait-<Batch job id>) subscribed with a filter on the job's id, deleted when
+ *                    the job ends. One topic for the stack, like the queues: an event carries what DescribeJobs (open
+ *                    to every project, no resource-level permission) already shows, and nothing that names a file
  *   job definitions  per project (addProjectJob, called by src/infra/project.ts): a GPU one asking for 1 GPU, 4 vCPUs
  *                    and 14 GiB, and (CPU queue) a CPU one asking for cpu.vcpus and cpu.memoryMiB, both with the
  *                    project's one job role that may read and write only that project's jobs/<slug>/ prefix.
@@ -33,9 +39,11 @@ import * as codebuild from 'aws-cdk-lib/aws-codebuild'
 import * as ec2 from 'aws-cdk-lib/aws-ec2'
 import * as ecr from 'aws-cdk-lib/aws-ecr'
 import * as ecs from 'aws-cdk-lib/aws-ecs'
+import * as events from 'aws-cdk-lib/aws-events'
 import * as iam from 'aws-cdk-lib/aws-iam'
 import * as logs from 'aws-cdk-lib/aws-logs'
 import type * as s3 from 'aws-cdk-lib/aws-s3'
+import * as sns from 'aws-cdk-lib/aws-sns'
 import type { Asset } from 'aws-cdk-lib/aws-s3-assets'
 import type { Provider } from 'aws-cdk-lib/custom-resources'
 import { Construct } from 'constructs'
@@ -77,6 +85,9 @@ export class GpuCompute extends Construct {
   /** the GPU image build the deploy started (its CodeBuild build id) */
   readonly imageBuildId: string
   readonly logGroup: logs.LogGroup
+  /** the "Batch Job State Change" events of this stack's queues (TRACE_BATCH_EVENTS_TOPIC on the runtimes) */
+  readonly jobEvents: sns.Topic
+  readonly jobEventsRule: events.Rule
   /** every project's job role (observability lets them write spans) */
   readonly jobRoles: iam.Role[] = []
   private readonly image: CustomResource
@@ -174,6 +185,31 @@ export class GpuCompute extends Construct {
         priority: 1,
       })
     }
+
+    // ------------------------------------------------------------------ job state changes, as events (see the header)
+    this.jobEvents = new sns.Topic(this, 'JobEvents', {
+      topicName: `${p.prefix}-batch-events`,
+      displayName: 'trace: AWS Batch job state changes on the trace job queues',
+      enforceSSL: true,
+    })
+    this.jobEventsRule = new events.Rule(this, 'JobEventsRule', {
+      ruleName: `${p.prefix}-batch-job-events`,
+      description: 'trace: every job state change on the trace GPU and CPU queues, to the trace batch-events topic',
+      eventPattern: {
+        source: ['aws.batch'],
+        detailType: ['Batch Job State Change'],
+        detail: { jobQueue: [this.queue.jobQueueArn, ...(this.cpuQueue ? [this.cpuQueue.jobQueueArn] : [])] },
+      },
+    })
+    // the target without CDK's SnsTopic helper, whose publish grant has no condition: this one is for this rule only
+    this.jobEventsRule.addTarget({ bind: () => ({ arn: this.jobEvents.topicArn }) })
+    this.jobEvents.addToResourcePolicy(new iam.PolicyStatement({
+      sid: 'BatchJobEventsRule',
+      principals: [new iam.ServicePrincipal('events.amazonaws.com')],
+      actions: ['sns:Publish'],
+      resources: [this.jobEvents.topicArn],
+      conditions: { ArnEquals: { 'aws:SourceArn': this.jobEventsRule.ruleArn } },
+    }))
 
     this.logGroup = new logs.LogGroup(this, 'JobLogs', { logGroupName: `/trace/${p.prefix}/gpu-jobs`, retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY })
     // pulls the image and writes the job's logs, for every project's jobs; the job's own AWS access is its job role's
