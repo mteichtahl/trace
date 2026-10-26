@@ -28,13 +28,25 @@ import type { AwsCredentialIdentity } from '@smithy/types'
 import { type Principal, GROUPS, assign, assignments, setClass, unassign } from '../core/access.js'
 import { saveAnswers, saveInstallation } from '../core/client.js'
 import { onboard, register } from '../core/onboard.js'
-import { type InfraInput, type InfraProps, InfraPropsSchema, projectOutputs, stackName } from '../infra/props.js'
+import { type InfraInput, type InfraProps, InfraPropsSchema, LEGACY_MEMORY_OUTPUT, projectOutputs, stackName } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import type { Answers, InstallEvent, Secrets, Step } from './answers.js'
 import { awsEnv, checkAws, credentials, stackOutputs } from './aws.js'
 import { type TokenInfo, checkToken, setSecret, setVariable } from './github.js'
 
-export function infraInput(a: Answers): InfraInput {
+/** What the installer knows of the stack already in the account (checkAws), when there is one. */
+export interface Existing { outputs: Record<string, string> }
+
+/**
+ * An installation from before memory was per project: it has the installation-wide memory (its MemoryId output).
+ * The next deploy removes that memory; with retainData it is first kept, Retain, for one deploy (so the one after
+ * leaves it in the account), and without retainData it is deleted with its records.
+ */
+export const sharedMemoryOf = (existing: Existing | null | undefined): string | null => existing?.outputs[LEGACY_MEMORY_OUTPUT] || null
+
+/** The stack's settings from the answers (and, for the legacy memory's way out, what is deployed already). */
+export function infraInput(a: Answers, existing?: Existing | null): InfraInput {
+  const own = a.projects.filter((p) => p.memoryEventExpiryDays !== null)
   return {
     prefix: a.agents.prefix,
     account: a.aws.account,
@@ -51,8 +63,19 @@ export function infraInput(a: Answers): InfraInput {
       enabled: a.agents.observability, transactionSearch: a.agents.transactionSearch, dashboard: a.agents.dashboard,
       ...(a.agents.samplingPercent !== null ? { samplingPercent: a.agents.samplingPercent } : {}),
     },
+    ...(a.agents.retainData && sharedMemoryOf(existing) ? { memory: { legacySharedMemory: true } } : {}),
+    ...(own.length ? { projectSettings: Object.fromEntries(own.map((p) => [p.repo, { memoryEventExpiryDays: p.memoryEventExpiryDays ?? undefined }])) } : {}),
     adminEmail: a.adminEmail,
   }
+}
+
+/** Said in the plan, and the summary, when the installation-wide memory of an earlier version is about to go. */
+export function sharedMemoryNote(a: Answers, existing?: Existing | null): string | null {
+  const id = sharedMemoryOf(existing)
+  if (!id) return null
+  return a.agents.retainData
+    ? `This installation has the installation-wide memory of an earlier version (${id}). Each project now gets its own, empty memory; the old one's records are not copied (AgentCore has no way to copy extracted records). With "keep data" on, this deploy keeps the old memory in the stack, unused and marked Retain, and the next installer run leaves it in the account as an orphan: delete it there when you no longer need it.`
+    : `This installation has the installation-wide memory of an earlier version (${id}). Each project now gets its own, empty memory, and this deploy DELETES the old one with every record in it (AgentCore has no way to copy extracted records). Turn "keep data" on first to keep it.`
 }
 
 /** The observability part of the deploy step's description. */
@@ -96,15 +119,24 @@ export async function checkProjectTokens(a: Answers, s: Secrets, check: (token: 
   return { warnings, logins }
 }
 
-/** What will happen, before anything does. */
-export function plan(a: Answers): Step[] {
-  const props = InfraPropsSchema.parse(infraInput(a))
+/** The memory part of the deploy step's description. */
+function memoryPlan(a: Answers, props: InfraProps, existing?: Existing | null): string {
+  if (!props.memory.enabled) return ''
+  const own = a.projects.filter((p) => p.memoryEventExpiryDays !== null).map((p) => `${p.repo} ${p.memoryEventExpiryDays} days`)
+  const text = `; each project its own AgentCore memory (events kept ${props.memory.eventExpiryDays} days${own.length ? `; ${own.join(', ')}` : ''}${props.retainData ? ', kept if the project or the stack is removed' : ', deleted with the project'})`
+  const note = sharedMemoryNote(a, existing)
+  return note ? `${text}. ${note}` : text
+}
+
+/** What will happen, before anything does. `existing`: the stack already in the account, when the check found one. */
+export function plan(a: Answers, existing?: Existing | null): Step[] {
+  const props = InfraPropsSchema.parse(infraInput(a, existing))
   const stack = stackName(props.prefix)
   const onboarding = a.projects.filter((p) => p.onboard).map((p) => p.repo)
   const steps: [string, string, string][] = [
     ['check', 'Check the AWS account', `${a.aws.account} in ${a.aws.region}`],
     ['cdk', 'Bootstrap CDK', `aws://${a.aws.account}/${a.aws.region} (only if it isn't already)`],
-    ['deploy', `Deploy ${stack}`, `central bucket, agent image (CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and GPU job definition' : ''}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64; one queue for every project)` : ''}${observabilityPlan(props.observability, props.prefix)}`],
+    ['deploy', `Deploy ${stack}`, `central bucket, agent image (CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and GPU job definition' : ''}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64; one queue for every project)` : ''}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}`],
     ['token', 'Store the GitHub tokens', 'the shared token in the API\'s secret, and each project\'s agent token in its own secret'],
     ['repos', 'Configure the repositories', `each repository's own TRACE_AWS_ROLE and TRACE_AGENT_RUNTIME_ARN, TRACE_AWS_REGION, TRACE_HOME and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}`],
     ['onboard', 'Onboard the repositories', onboarding.length ? `open the onboarding PR in ${onboarding.join(', ')}` : 'none chosen'],
@@ -161,7 +193,7 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
   }
   const log = (id: string, line: string): void => emit({ type: 'log', step: id, line: redact(line, s) })
   for (const st of steps) emit({ type: 'step', step: { ...st } })
-  const props = InfraPropsSchema.parse(infraInput(a))
+  let props = InfraPropsSchema.parse(infraInput(a))
   const stack = stackName(props.prefix)
   const summary: string[] = []
   const cdk = hooks.cdk ?? ((args, env, onLine) => runStreaming(process.execPath, [cdkBin(), ...args], env, onLine))
@@ -175,7 +207,12 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
     const own = await checkProjectTokens(a, s)
     for (const w of own.warnings) { log('check', w); summary.push(w) }
     set('check', 'done', `${check.arn}`)
-    const env = { ...awsEnv(creds, a.aws.region), TRACE_INFRA: JSON.stringify(infraInput(a)), CDK_DISABLE_VERSION_CHECK: '1', CI: '1' }
+    // an installation of an earlier version: its installation-wide memory goes (kept, with retainData, for one deploy)
+    const existing = check.existing ?? null
+    props = InfraPropsSchema.parse(infraInput(a, existing))
+    const legacy = sharedMemoryNote(a, existing)
+    if (legacy) { log('check', legacy); summary.push(legacy) }
+    const env = { ...awsEnv(creds, a.aws.region), TRACE_INFRA: JSON.stringify(infraInput(a, existing)), CDK_DISABLE_VERSION_CHECK: '1', CI: '1' }
 
     // 2 — CDK bootstrap
     current = 'cdk'
@@ -198,6 +235,13 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
       if (!v) throw new Error(`the stack has no output ${k}`)
       return v
     }
+    // each project's own memory (none when memory is off)
+    const memoryIds = Object.fromEntries(a.projects.flatMap((p) => {
+      const id = out[projectOutputs(p.repo).memoryId]
+      return id ? [[p.repo.toLowerCase(), id] as const] : []
+    }))
+    for (const [repo, id] of Object.entries(memoryIds)) log('deploy', `${repo}: memory ${id}`)
+    if (props.memory.enabled && Object.keys(memoryIds).length !== a.projects.length) throw new Error('the stack has no memory output for every project')
     set('deploy', 'done', `${stack} is up`)
 
     // 4 — the token
@@ -335,7 +379,7 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
       userPoolId: need('UserPoolId'), clientId: need('UserPoolClientId'), cognitoDomain: need('CognitoDomain'),
       // each project has its own worker runtime and role (its repository's variables): none is the installation's
       apiRuntimeArn: need('ApiRuntimeArn'), workerRuntimeArn: '', actionsRoleArn: '',
-      githubSecretArn: need('GithubSecretArn'), callbackPorts: props.callbackPorts,
+      githubSecretArn: need('GithubSecretArn'), memoryIds, callbackPorts: props.callbackPorts,
     })
     saveAnswers({ answers: a })
     set('local', 'done')

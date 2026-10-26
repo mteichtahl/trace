@@ -27,6 +27,8 @@ export const InstallationSchema = z.object({
   workerRuntimeArn: z.string().default(''),
   actionsRoleArn: z.string().default(''),
   githubSecretArn: z.string().default(''),
+  /** Each project's AgentCore memory id (owner/repo → id, from its Project<hash>MemoryId output); empty without memory. */
+  memoryIds: z.record(z.string(), z.string()).default({}),
   callbackPorts: z.array(z.number().int()).default([47821, 47822]),
 }).strict()
 export type Installation = z.output<typeof InstallationSchema>

@@ -51,6 +51,8 @@ export const ProjectAnswer = z.object({
   onboard: z.boolean().default(true),
   /** Repository settings the loop needs: auto-merge, branch deletion, labels, the required-check ruleset. */
   applySettings: z.boolean().default(true),
+  /** Days its agents' memory keeps short-term events (AgentCore allows 3–365); null: the installation's default (30). */
+  memoryEventExpiryDays: z.number().int().min(3, 'at least 3 days').max(365, 'at most 365 days').nullable().default(null),
 }).strict()
 
 export const PersonAnswer = z.object({

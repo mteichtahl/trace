@@ -86,8 +86,9 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
       return checkAws(creds, b.aws.region, stackName(b.prefix))
     },
     'POST /api/plan': async (req) => {
-      const a = AnswersSchema.parse((await body(req) as { answers?: unknown }).answers)
-      return { steps: plan(a) }
+      const b = z.object({ answers: z.unknown(), existing: z.object({ outputs: z.record(z.string(), z.string()) }).loose().nullable().default(null) }).parse(await body(req))
+      const a = AnswersSchema.parse(b.answers)
+      return { steps: plan(a, b.existing) }
     },
     'POST /api/apply': async (req) => {
       if (run && !run.done) throw new HttpError(409, 'an installation is already running')
