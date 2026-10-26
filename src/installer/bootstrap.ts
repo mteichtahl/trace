@@ -32,7 +32,9 @@
  *  11 people     invite each person to Cognito, put them in their class's group (admin, user, guest), and record
  *                the projects they are assigned to
  *  12 local      save the installation on this machine so `trace login` and `trace remote …` work
- *  13 gpu        wait for the GPU image build the deploy started (the stack does not wait for it, so a broken GPU
+ *  13 release    (agents.publishImages) set this account up to publish trace's images (src/installer/release.ts);
+ *                a failure is reported, and everything else stays installed
+ *  14 gpu        wait for the GPU image build the deploy started (the stack does not wait for it, so a broken GPU
  *                image never rolls back the core) and start it again if an earlier one failed; a failure here is
  *                reported, and everything else stays installed
  *
@@ -50,8 +52,9 @@ import type { AwsCredentialIdentity } from '@smithy/types'
 import { type Principal, GROUPS, assign, assignments, setClass, unassign } from '../core/access.js'
 import { answers as savedAnswers, saveAnswers, saveInstallation } from '../core/client.js'
 import { INTEGRATIONS, INTEGRATION_NAMES, type IntegrationName, IntegrationStore, checkIntegration, secretsManagerApi } from '../core/integrations.js'
-import { register } from '../core/onboard.js'
-import { RUNNER_VARIABLE } from '../core/project.js'
+import { SOURCE, register } from '../core/onboard.js'
+import { RUNNER_VARIABLE, SELF_CI_PROJECT } from '../core/project.js'
+import { RELEASE_REGION, RELEASE_REPOSITORIES, RELEASE_STACK } from '../infra/release.js'
 import {
   CONNECTION_OUTPUT, GPU_IMAGE_BUILD_OUTPUT, type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, cpuEnabled, githubSecretName,
   kbOutputs, memoryDeliveryName, memoryName, projectHash, projectOutputs, stackName,
@@ -67,6 +70,7 @@ import { type Facts, resolveAnswers } from './derive.js'
 import { type TokenInfo, checkToken, createRepo, setSecret, setVariable } from './github.js'
 import { type ApiOnboardOptions, type ApiOnboardResult, onboardViaApi } from './onboard-api.js'
 import { CDK_BOOTSTRAP_MIN, mapLimit } from './preflight.js'
+import { type ReleaseResult, liveReleaseDeps, releaseSetup } from './release.js'
 
 /** What the installer knows of the stack already in the account (checkAws), when there is one. */
 export interface Existing { outputs: Record<string, string> }
@@ -154,7 +158,7 @@ export function infraInput(a: Answers, existing?: Existing | null, deploy?: Layo
     cpu: { enabled: a.agents.cpuEnabled ?? true, maxVcpus: a.agents.cpuMaxVcpus, spot: a.agents.cpuSpot, vcpus: a.agents.cpuVcpus, memoryMiB: a.agents.cpuMemoryMiB },
     knowledgeBase: { enabled: a.agents.knowledgeBase ?? true },
     gateway: { enabled: a.agents.libraryGateway },
-    images: { source: a.agents.imageSource },
+    images: { source: a.agents.imageSource, ...(a.agents.imageSource === 'prebuilt' && a.agents.imageRegistry ? { registry: a.agents.imageRegistry } : {}) },
     runners: {
       ...(runners
         ? (runners.auth === 'token' ? { auth: 'token' as const } : { ...(runners.connectionArn ? { connectionArn: runners.connectionArn } : {}), connectionReady: runners.connectionReady })
@@ -336,6 +340,9 @@ function githubPlan(a: Answers): string {
 /** The connection step's description. */
 function connectionPlan(a: Answers): string {
   const repos = a.projects.map((p) => p.repo).join(', ')
+  // the default path: a connection authorized already, else the token; nothing for a person to authorize
+  if (a.runners.auth === 'token') return 'nothing to authorize: the build runners reach GitHub with the token'
+  if (a.runners.auth === 'auto' && !a.runners.connectionArn) return 'nothing to authorize: the build runners use a GitHub connection only when one is authorized already, and the token otherwise'
   return `only if the build runners use a GitHub connection that is not authorized yet (a new one never is): it is authorized once per AWS account and region, by a person, in the AWS console (${connectionsConsoleUrl(a.aws.region)}, choose it, then "Update pending connection"), which installs the AWS Connector for GitHub app. After the deploy the installer shows the link and waits, checking every 15 seconds, for up to 30 minutes. Give that app access to ${repos || 'the repositories'}`
 }
 
@@ -397,6 +404,9 @@ export function plan(a: Answers, existing?: Existing | null, prev?: Answers | nu
     ['onboard', 'Onboard the repositories', [onboarding.length ? `open (or refresh) the onboarding PR in ${onboarding.join(', ')}` : '', creating.length ? `create ${creating.join(', ')}` : ''].filter(Boolean).join('; ') || 'none chosen'],
     ['people', 'Invite people and assign projects', `${a.adminEmail || 'the token\'s email'} (admin)${a.people.length ? `, ${a.people.map((p) => `${p.email} (${p.class})`).join(', ')}` : ''}`],
     ['local', 'Save this installation locally', '~/.trace/client.db, so `trace login` works here'],
+    ['release', 'Publish trace\'s images', a.agents.publishImages
+      ? `set this account up to publish trace's images (\`trace release setup\`): CDK in ${RELEASE_REGION} if needed, the ${RELEASE_STACK} stack there (ECR Public ${Object.values(RELEASE_REPOSITORIES).join(' and ')}, and a release role for ${SOURCE}'s main and v* tags), the registry's default alias read by API, ${SOURCE}'s TRACE_RELEASE_ROLE and TRACE_IMAGE_REGISTRY, and its privileged CodeBuild runner ${SELF_CI_PROJECT}`
+      : 'not chosen (Advanced → "Publish trace\'s images from this account", or `trace release setup` later)'],
     ['gpu', 'The GPU image', props.gpu.enabled
       ? 'after trace is ready: wait for the GPU image the deploy started (copied, or built on amd64: the first build takes 30–60 minutes) and start it again if an earlier one failed. GPU and CPU jobs need it, nothing else does: you can use trace meanwhile'
       : 'GPU jobs are off'],
@@ -455,6 +465,8 @@ export interface Hooks {
     resolve: (o: { prefix: string; given?: string; deployed: Record<string, string> | null }) => Promise<ConnectionChoice>
     wait: (conn: { arn: string; name: string; status: string }, o: ConnectionWait) => Promise<void>
   }
+  /** publishing trace's images (src/installer/release.ts releaseSetup), when agents.publishImages */
+  release?: (o: { creds: AwsCredentialIdentity; account: string; ciRegion: string; token: string; log: (l: string) => void }) => Promise<ReleaseResult>
   /** CodeBuild's GitHub source credential, for runners.auth token (src/installer/aws.ts ensureSourceCredential) */
   sourceCredential?: (token: string, ours: boolean) => Promise<SourceCredential>
   /** onboarding one repository (src/installer/onboard-api.ts onboardViaApi) */
@@ -869,12 +881,29 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     remember(a, true)
     saveAnswers({ traceVersion: (await import('./lifecycle.js')).traceVersion(), ...(runnerCredential ? { runnerCredential } : {}) })
     set('local', 'done')
+    // 13 — publishing trace's images from this account (only when asked); never fatal: trace is installed
+    current = 'release'
+    if (!a.agents.publishImages) set('release', 'skipped')
+    else {
+      set('release', 'running')
+      try {
+        const run = hooks.release ?? (async (o) => releaseSetup(await liveReleaseDeps(o.creds, o.ciRegion, o.token, { cdk: (args, env) => cdk(args, env, o.log), log: o.log }), { account: o.account, ciRegion: o.ciRegion, publish: true }))
+        const r = await run({ creds, account: a.aws.account, ciRegion: a.aws.region, token: adminToken, log: (l) => log('release', l) })
+        set('release', 'done', `${r.registry}: ${r.images.join(', ')}${r.dispatched ? '; the first release is running' : ''}`)
+        summary.push(`trace's images publish to ${r.registry} (${r.gallery.join(', ')}) from ${SOURCE}'s main and v* tags.`)
+      } catch (e) {
+        const m = redact(e instanceof Error ? e.message : String(e), s)
+        set('release', 'failed', m)
+        summary.push(`Publishing trace's images is not set up: ${m}. Everything else is installed; run \`trace release setup\` to finish it.`)
+      }
+    }
+
     summary.unshift(`trace is installed in ${a.aws.account} (${a.aws.region}) as ${stack}.`)
     if (!a.projects.length) summary.push('No repositories yet: run `trace install` again and pick some (or create one).')
     else summary.push('Write each project\'s rules in .trace/rules.md (they start empty).')
     if (!names_.length) summary.push('Optional: add a Nexar, Mouser or Digi-Key key for live stock and prices: `trace integrations set nexar` (see `trace integrations list`).')
 
-    // 13 — the GPU image: the deploy started its build and did not wait (src/infra/gpu.ts). trace is usable now; the
+    // 14 — the GPU image: the deploy started its build and did not wait (src/infra/gpu.ts). trace is usable now; the
     // page says so, and the wait goes on underneath
     current = 'gpu'
     if (!props.gpu.enabled) {

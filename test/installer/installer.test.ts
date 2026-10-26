@@ -153,7 +153,7 @@ describe('answers', () => {
 
   it('plans every step, naming the account, region and repositories', () => {
     const steps = plan(AnswersSchema.parse(ANSWERS))
-    expect(steps.map((s) => s.id)).toEqual(['check', 'cdk', 'github', 'deploy', 'connection', 'runners', 'token', 'integrations', 'repos', 'onboard', 'people', 'local', 'gpu'])
+    expect(steps.map((s) => s.id)).toEqual(['check', 'cdk', 'github', 'deploy', 'connection', 'runners', 'token', 'integrations', 'repos', 'onboard', 'people', 'local', 'release', 'gpu'])
     expect(steps.find((s) => s.id === 'repos')?.detail).toContain('mteichtahl/fw')
     expect(steps.find((s) => s.id === 'deploy')?.detail).toMatch(/for each of the 2 repositories its own AgentCore worker runtime/)
   })
@@ -444,7 +444,7 @@ describe('the local server', () => {
     expect((await call('/api/plan', { method: 'POST', key, body: '{"answers":{}}' })).status).toBe(400)
     expect((await call('/api/plan', { method: 'POST', key, body: 'x', type: 'text/plain' })).status).toBe(415)
     const planned = await call('/api/plan', { method: 'POST', key, body: JSON.stringify({ answers: ANSWERS }) })
-    expect(JSON.parse(planned.body).steps).toHaveLength(13)
+    expect(JSON.parse(planned.body).steps).toHaveLength(14)
     expect(JSON.parse(planned.body).timeline.join(' ')).toMatch(/about 15 minutes of CloudFormation/)
   })
 })
@@ -788,7 +788,8 @@ describe('the CodeBuild runners', () => {
     expect(ids.indexOf('deploy')).toBeLessThan(ids.indexOf('connection'))
     expect(ids.indexOf('connection')).toBeLessThan(ids.indexOf('runners'))
     expect(ids.indexOf('runners')).toBeLessThan(ids.indexOf('repos'))
-    const connection = steps.find((x) => x.id === 'connection')
+    const connection = plan(AnswersSchema.parse({ ...ANSWERS, runners: { auth: 'connection' } })).find((x) => x.id === 'connection')
+    expect(steps.find((x) => x.id === 'connection')?.detail).toMatch(/^nothing to authorize/)
     expect(connection?.title).toBe('Authorize the GitHub connection')
     expect(connection?.detail).toMatch(/only if the build runners use a GitHub connection that is not authorized yet.*once per AWS account and region.*https:\/\/us-east-1\.console\.aws\.amazon\.com\/codesuite\/settings\/connections\?region=us-east-1.*"Update pending connection".*AWS Connector for GitHub app.*mteichtahl\/board, mteichtahl\/fw/)
     expect(steps.find((x) => x.id === 'runners')?.title).toBe('Add the build runners')
@@ -904,5 +905,46 @@ describe('the CodeBuild runners', () => {
     expect(await apply(AnswersSchema.parse(ANSWERS), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), { ...quiet, cdk: async () => 0, outputs: async () => without })).toBe(false)
     // (the other repository, set up alongside, may still log after it)
     expect(events.find((e) => e.type === 'done')?.summary?.[0]).toBe(`Stopped at "Configure the repositories": the stack has no output ${projectOutputs('mteichtahl/fw').runnerProject}`)
+  })
+})
+
+describe('no console step on the default path', () => {
+  const CONSOLE = /console\.aws\.amazon\.com|AWS console|in the console/i
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+
+  it('plans nothing for a person to do in the AWS console, with or without publishing the images', () => {
+    for (const a of [ANSWERS, { ...ANSWERS, agents: { ...ANSWERS.agents, publishImages: true } }, { ...ANSWERS, runners: { auth: 'token' } }]) {
+      for (const st of plan(AnswersSchema.parse(a))) expect(`${st.title}: ${st.detail}`, st.id).not.toMatch(CONSOLE)
+    }
+    // only the connection path, chosen under Advanced, has one
+    expect(plan(AnswersSchema.parse({ ...ANSWERS, runners: { auth: 'connection' } })).find((x) => x.id === 'connection')?.detail).toMatch(CONSOLE)
+  })
+
+  it('installs, and sets publishing up, without any console link in the steps, the log or the summary', async () => {
+    const none = { resolve: async () => ({ name: 'trace-github', ready: false, message: 'No authorized GitHub connection in this account and region: …' }), wait: async () => { throw new Error('must not wait') } }
+    const lines: string[] = []
+    const released: string[] = []
+    const ok = await apply(AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, publishImages: true } }), SecretsSchema.parse({ githubToken: TOKEN }), (e) => {
+      const x = e as { type: string; line?: string; summary?: string[]; step?: { detail: string } }
+      lines.push(x.line ?? x.step?.detail ?? (x.summary ?? []).join('\n'))
+    }, {
+      ...quiet, connection: none, cdk: async () => 0, outputs: async () => OUTPUTS,
+      sourceCredential: async () => ({ state: 'imported', detail: 'the token imported as CodeBuild\'s GitHub source credential' }),
+      release: async (o) => { released.push(`${o.account} ${o.ciRegion}`); return { registry: 'public.ecr.aws/a1b2c3d4', roleArn: 'arn:role', images: ['public.ecr.aws/a1b2c3d4/trace-agent'], gallery: ['https://gallery.ecr.aws/a1b2c3d4/trace-agent'], credential: null, dispatched: true } },
+    })
+    expect(ok).toBe(true)
+    expect(released).toEqual(['123456789012 us-east-1'])
+    expect(lines.join('\n')).not.toMatch(CONSOLE)
+    expect(lines.join('\n')).toMatch(/trace's images publish to public\.ecr\.aws\/a1b2c3d4/)
+  })
+
+  it('reports a failed publishing setup without failing the install', async () => {
+    const events: { type: string; summary?: string[]; step?: { id: string; status: string } }[] = []
+    const ok = await apply(AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, publishImages: true } }), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
+      ...quiet, cdk: async () => 0, outputs: async () => OUTPUTS, release: async () => { throw new Error('cdk deploy TraceRelease exited 1') },
+    })
+    expect(ok).toBe(true)
+    expect(events.find((e) => e.step?.id === 'release' && e.step.status === 'failed')).toBeDefined()
+    expect(events.at(-1)?.summary?.join('\n')).toMatch(/Publishing trace's images is not set up: cdk deploy TraceRelease exited 1.*trace release setup/)
   })
 })

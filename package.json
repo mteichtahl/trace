@@ -27,6 +27,7 @@
     "test": "vitest run",
     "check": "npm run typecheck && npm test",
     "deploy:ci": "node scripts/deploy-ci.mjs",
+    "deploy:release": "node scripts/deploy-release.mjs",
     "prepare": "npm run build"
   },
   "dependencies": {

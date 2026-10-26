@@ -1,5 +1,5 @@
 /**
- * A SigV4-signed JSON call to an AWS API that has no SDK client in this package (Service Quotas, ECR, S3 Vectors),
+ * A SigV4-signed JSON call to an AWS API that has no SDK client in this package (Service Quotas, ECR, ECR Public, S3 Vectors),
  * so the installer checks them without adding dependencies. Two shapes:
  *
  *   json-1.1   POST / with `X-Amz-Target: <prefix>.<Operation>` (Service Quotas, ECR)
@@ -80,4 +80,9 @@ export const ecr = (region: string, operation: string, body: Record<string, unkn
 /** Amazon S3 Vectors (rest-json). */
 export const s3vectors = (region: string, operation: string, body: Record<string, unknown>): SignedCall => ({
   service: 's3vectors', host: `s3vectors.${region}.api.aws`, operation, body,
+})
+
+/** Amazon ECR Public (json-1.1; us-east-1 only): DescribeRegistries, PutRegistryCatalogData. */
+export const ecrPublic = (operation: string, body: Record<string, unknown>): SignedCall => ({
+  service: 'ecr-public', host: 'api.ecr-public.us-east-1.amazonaws.com', targetPrefix: 'SpencerFrontendService', operation, body,
 })

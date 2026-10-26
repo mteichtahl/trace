@@ -1,28 +1,32 @@
-# Publishes trace's two images for a release, so installations copy them instead of building them (src/infra/images.ts,
-# images.source 'prebuilt'): `<registry>-agent:<content tag>` (linux/arm64) and `<registry>-gpu:<content tag>`
-# (linux/amd64), the content tag being scripts/image-tag.mjs's (the same hash the stack computes).
+# Publishes trace's two images to Amazon ECR Public, so installations copy them instead of building them
+# (src/infra/images.ts, images.source 'prebuilt'): `<registry>/trace-agent` (linux/arm64, AgentCore) and
+# `<registry>/trace-gpu` (linux/amd64, AWS Batch), each tagged with the content tag of scripts/image-tag.mjs (the same
+# hash an installation computes), plus `latest` on main and `vX.Y.Z` on a release tag.
 #
-# Off until it is set up; it has not been run yet. It needs:
-#   - variable TRACE_PUBLIC_REGISTRY: the registry path, e.g. public.ecr.aws/<alias>/trace (the default the installer
-#     looks in is src/infra/images.ts PREBUILT_REGISTRY), with the public repositories <name>-agent and <name>-gpu made;
-#   - variable TRACE_RELEASE_ROLE: an IAM role this repository's tags may assume with GitHub OIDC, allowed
-#     ecr-public:GetAuthorizationToken, sts:GetServiceBearerToken and the ecr-public push actions on those two
-#     repositories (ECR Public lives in us-east-1);
-#   - Docker on the runner: like every job of this repository it runs on AWS CodeBuild, on trace's own runner project
-#     trace-ci (never a GitHub-hosted runner), which must then run privileged: deploy it with
-#     `TRACE_CI_PRIVILEGED=true npm run deploy:ci` (src/infra/ci-app.ts). QEMU builds the arm64 image on the x86 runner.
+# Set up once with `trace release setup` (README "Publishing images"): it deploys TraceRelease (src/infra/release.ts:
+# the two ECR Public repositories and the release role), reads the registry's default alias, and sets this
+# repository's variables TRACE_RELEASE_ROLE and TRACE_IMAGE_REGISTRY (public.ecr.aws/<alias>). Until both are set this
+# workflow does nothing.
+#
+# It runs, like every job here, on trace's own CodeBuild runner project trace-ci (never a GitHub-hosted runner), which
+# `trace release setup` makes privileged for Docker. BuildKit builds both images (QEMU for arm64 on the x86 runner),
+# caches in the registry itself (`:cache`, mode=max), attaches an OCI provenance attestation, and the job summary
+# records each pushed digest.
 name: release-images
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
 
 permissions: {}
 
+concurrency: { group: 'release-images-${{ github.ref }}', cancel-in-progress: false }
+
 jobs:
   publish:
-    if: vars.TRACE_PUBLIC_REGISTRY != '' && vars.TRACE_RELEASE_ROLE != ''
+    if: vars.TRACE_IMAGE_REGISTRY != '' && vars.TRACE_RELEASE_ROLE != ''
     runs-on:
       - codebuild-trace-ci-${{ github.run_id }}-${{ github.run_attempt }}
       - publish
@@ -45,12 +49,30 @@ jobs:
           aws-region: us-east-1
       - name: Build and push both images
         env:
-          REGISTRY: ${{ vars.TRACE_PUBLIC_REGISTRY }}
+          REGISTRY: ${{ vars.TRACE_IMAGE_REGISTRY }}
           TAG: ${{ steps.tag.outputs.tag }}
+          REF: ${{ github.ref }}
         run: |
+          set -euo pipefail
           aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
           docker run --privileged --rm tonistiigi/binfmt --install arm64
           docker buildx create --use --name trace-release
-          docker buildx build --platform linux/arm64 -f agent/Dockerfile -t "$REGISTRY-agent:$TAG" --push .
-          docker buildx build --platform linux/amd64 -f agent/Dockerfile.gpu -t "$REGISTRY-gpu:$TAG" --push .
-          echo "published $REGISTRY-agent:$TAG and $REGISTRY-gpu:$TAG"
+          extra=()
+          case "$REF" in
+            refs/heads/main) extra=(latest) ;;
+            refs/tags/v*) extra=("${REF#refs/tags/}") ;;
+          esac
+          echo "## Published images" >> "$GITHUB_STEP_SUMMARY"
+          for spec in "agent linux/arm64 agent/Dockerfile" "gpu linux/amd64 agent/Dockerfile.gpu"; do
+            set -- $spec
+            repo="$REGISTRY/trace-$1"
+            tags=(-t "$repo:$TAG")
+            for t in "${extra[@]}"; do tags+=(-t "$repo:$t"); done
+            docker buildx build --platform "$2" -f "$3" "${tags[@]}" \
+              --cache-from "type=registry,ref=$repo:cache" \
+              --cache-to "type=registry,ref=$repo:cache,mode=max,image-manifest=true,oci-mediatypes=true" \
+              --provenance=mode=max --metadata-file "meta-$1.json" --push .
+            digest=$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))["containerimage.digest"])' "meta-$1.json")
+            echo "- \`$repo:$TAG\` → \`$digest\` (also: ${extra[*]:-none})" >> "$GITHUB_STEP_SUMMARY"
+            echo "published $repo:$TAG @ $digest"
+          done

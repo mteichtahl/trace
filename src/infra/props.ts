@@ -5,7 +5,6 @@
  */
 import { z } from 'zod'
 import { projectHash, projectSlug } from '../core/project.js'
-import { PREBUILT_REGISTRY } from './images.js'
 
 export {
   connectionName, cpuJobDefinitionName, gpuJobDefinitionName, githubSecretName, knowledgeBaseName, memoryDeliveryName, memoryName, projectDataPrefix, projectHash, projectJobsPrefix,
@@ -77,6 +76,14 @@ export const ProjectSettingsSchema = z.object({
    * names; the old memory stays in the account, orphaned, and the new one starts empty. Never lower it. */
   generation: z.number().int().min(0).max(99).optional(),
 }).strict()
+
+/**
+ * Where trace's release workflow publishes its images (.github/workflows/release-images.yml, src/infra/release.ts):
+ * `public.ecr.aws/<alias>`, the alias being the default one ECR Public gave the publishing account's registry, which
+ * `trace release setup` prints. Set once at release time; empty until then, so every installation builds its images.
+ * An installation can look elsewhere with Advanced → "Published images registry" (answers agents.imageRegistry).
+ */
+export const PUBLISHED_REGISTRY = ''
 
 export const InfraPropsSchema = z.object({
   /** A short name prefixed to every resource: lets two installations share an account. */
@@ -183,8 +190,9 @@ export const InfraPropsSchema = z.object({
    * this exact source when they exist, and builds otherwise; 'build' always builds (with BuildKit's inline cache). */
   images: z.object({
     source: z.enum(['prebuilt', 'build']).default('prebuilt'),
-    /** the published images are `<registry>-agent:<tag>` and `<registry>-gpu:<tag>` */
-    registry: z.string().regex(/^[a-z0-9.-]+(:\d+)?(\/[a-z0-9._-]+)+$/, 'a registry path such as public.ecr.aws/alias/trace').default(PREBUILT_REGISTRY),
+    /** where the published images are: `<registry>/trace-agent:<tag>` and `<registry>/trace-gpu:<tag>`; empty: none
+     * published yet (always built). PUBLISHED_REGISTRY unless overridden (answers agents.imageRegistry) */
+    registry: z.string().regex(/^([a-z0-9.-]+(:\d+)?(\/[a-z0-9._-]+)*)?$/, 'a registry such as public.ecr.aws/<alias>, or empty').default(PUBLISHED_REGISTRY),
   }).strict().prefault({}),
   /** Where every GitHub Actions job of every project runs: an AWS CodeBuild runner project per repository
    * (src/infra/runner.ts), never a GitHub-hosted runner. CodeBuild reaches GitHub through an AWS CodeConnections

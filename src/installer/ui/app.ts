@@ -81,7 +81,7 @@ const s = {
     cpuEnabled: null as boolean | null, cpuMaxVcpus: 64, cpuSpot: false, cpuVcpus: 16, cpuMemoryMiB: 32_768,
     knowledgeBase: null as boolean | null, libraryGateway: false,
     observability: true, transactionSearch: true, samplingPercent: '', dashboard: true, migrateLayout: false,
-    imageSource: 'prebuilt' as 'prebuilt' | 'build',
+    imageSource: 'prebuilt' as 'prebuilt' | 'build', imageRegistry: '', publishImages: false,
   },
   /** how the build runners reach GitHub (answers runners): auth 'auto' = an authorized connection when there is one,
    * else the token; connectionArn '' = none named; computeType '' and privileged 'default' = the stack's defaults */
@@ -156,7 +156,7 @@ function answers(): AnswersInput {
       observability: g.observability, transactionSearch: g.transactionSearch, dashboard: g.dashboard,
       samplingPercent: g.samplingPercent.trim() === '' ? null : Number(g.samplingPercent),
       migrateLayout: g.migrateLayout,
-      imageSource: g.imageSource,
+      imageSource: g.imageSource, imageRegistry: g.imageRegistry, publishImages: g.publishImages,
     },
     runners: {
       auth: s.runners.auth, token: s.runners.token,
@@ -390,7 +390,9 @@ function advanced(): HTMLElement {
     checkbox('GPU: Spot instances (cheaper; a job can be interrupted)', g.gpuSpot, (v) => { g.gpuSpot = v }),
     checkbox('CPU: Spot instances', g.cpuSpot, (v) => { g.cpuSpot = v }),
     h('h3', {}, 'Images'),
-    field('Agent and GPU images', select([{ value: 'prebuilt', label: 'trace\'s published images for this version, else built here' }, { value: 'build', label: 'Always build them here (CodeBuild)' }], g.imageSource, (v) => { g.imageSource = v === 'build' ? 'build' : 'prebuilt' })),
+    field('Agent and GPU images', select([{ value: 'prebuilt', label: 'trace\'s published images for this version, else built here' }, { value: 'build', label: 'Always build them here (CodeBuild)' }], g.imageSource, (v) => { g.imageSource = v === 'build' ? 'build' : 'prebuilt'; render() })),
+    g.imageSource === 'prebuilt' ? field('Published images registry', input('text', g.imageRegistry, (v) => { g.imageRegistry = v.trim() }, { placeholder: 'empty: trace\'s own (public.ecr.aws/<alias>)' }), 'copied by digest into this account\'s private ECR; built when this version is not there') : null,
+    checkbox('Publish trace\'s images from this account (ECR Public in us-east-1, the release role, and the source repository\'s release variables: all by API)', g.publishImages, (v) => { g.publishImages = v }),
     ...buildRunners(),
     h('h3', {}, 'Knowledge bases, gateway, observability'),
     tri('Knowledge bases', g.knowledgeBase, f?.s3vectors === false ? 'off: no S3 Vectors here' : 'on where S3 Vectors is', (v) => { g.knowledgeBase = v }),
@@ -512,7 +514,8 @@ async function runFix(c: Check): Promise<void> {
     const p = c.action.params ?? {}
     const fixBody = c.action.id === 'quota-increase' ? { action: c.action.id, service: p.service, code: p.code, value: Number(p.value) }
       : c.action.id === 'bedrock-agreement' ? { action: c.action.id, model: p.model }
-      : c.action.id === 'delete-failed-stack' ? { action: c.action.id, stack: p.stack }
+      : c.action.id === 'delete-failed-stack' || c.action.id === 'continue-rollback' ? { action: c.action.id, stack: p.stack }
+      : c.action.id === 'delete-cognito-domain' ? { action: c.action.id, domain: p.domain, userPoolId: p.userPoolId }
       : c.action.id === 'clear-leftovers' ? { action: c.action.id, prefix: p.prefix }
       : { action: c.action.id }
     const r = await api<{ detail: string }>('POST', '/api/fix', { ...awsBody(), token: s.github.token, fix: fixBody })

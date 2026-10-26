@@ -18,7 +18,10 @@
  *   repository      / TRACE_CI_REPOSITORY     OWNER/REPO (default mteichtahl/trace)
  *   computeType     / TRACE_CI_COMPUTE_TYPE   (default BUILD_GENERAL1_LARGE)
  *   image           / TRACE_CI_IMAGE          (default aws/codebuild/standard:7.0)
- *   privileged      / TRACE_CI_PRIVILEGED     'true' for Docker-in-Docker (default false)
+ *   privileged      / TRACE_CI_PRIVILEGED     'true' for Docker-in-Docker (default false; `trace release setup` sets it,
+ *                                             as the release workflow builds images)
+ *   auth            / TRACE_CI_AUTH           'token': no connection; the runner uses the account's CodeBuild GitHub
+ *                                             source credential, imported beforehand (default 'connection')
  * The account and region are the deploying credentials' (CDK_DEFAULT_ACCOUNT, CDK_DEFAULT_REGION).
  */
 import { pathToFileURL } from 'node:url'
@@ -32,7 +35,7 @@ export const CI_REPOSITORY = 'mteichtahl/trace'
 /** The prefix of the connection TraceCi creates when it is given none: `trace-ci-github` (connectionName). */
 export const CI_PREFIX = SELF_CI_PROJECT
 
-export interface CiSettings { repository: string; connectionArn?: string | undefined; connectionReady: boolean; computeType: string; image: string; privileged: boolean }
+export interface CiSettings { repository: string; auth: 'connection' | 'token'; connectionArn?: string | undefined; connectionReady: boolean; computeType: string; image: string; privileged: boolean }
 
 /** The CI stack's settings from context and the environment, checked as `runners` is (src/infra/props.ts). */
 export function ciSettings(context: (key: string) => unknown, env: NodeJS.ProcessEnv = process.env): CiSettings {
@@ -44,30 +47,32 @@ export function ciSettings(context: (key: string) => unknown, env: NodeJS.Proces
   const ready = get('connectionReady', 'TRACE_CONNECTION_READY')
   if (ready !== undefined && ready !== 'true' && ready !== 'false') throw new Error(`connectionReady must be true or false, not ${ready}`)
   const repository = projectSlug(get('repository', 'TRACE_CI_REPOSITORY') ?? CI_REPOSITORY)
+  const auth = get('auth', 'TRACE_CI_AUTH')
   const runners = InfraPropsSchema.shape.runners.parse({
+    ...(auth !== undefined ? { auth } : {}),
     ...(connectionArn ? { connectionArn } : {}),
     ...(ready !== undefined ? { connectionReady: ready === 'true' } : {}),
     computeType: get('computeType', 'TRACE_CI_COMPUTE_TYPE'),
     image: get('image', 'TRACE_CI_IMAGE'),
     privileged: get('privileged', 'TRACE_CI_PRIVILEGED') === undefined ? undefined : get('privileged', 'TRACE_CI_PRIVILEGED') === 'true',
   })
-  // TraceCi always reaches GitHub through a connection (runners.auth is the installation's choice)
-  const { auth: _auth, ...rest } = runners
-  return { repository, ...rest }
+  if (runners.auth === 'token' && runners.connectionArn) throw new Error('connectionArn is for auth connection')
+  return { repository, ...runners }
 }
 
 /** The TraceCi stack: the GitHub connection (given, or trace-ci-github created here) and, once it is authorized,
  * trace's own runner project, named SELF_CI_PROJECT. */
 export class TraceCiStack extends Stack {
-  readonly connection: GithubConnection
+  /** null with auth 'token' */
+  readonly connection: GithubConnection | null
   readonly runner: RunnerProject | null
 
   constructor(scope: App, id: string, s: CiSettings, env?: { account?: string; region?: string }) {
     super(scope, id, { env, description: `trace's own CI: the CodeBuild GitHub Actions runner project of ${s.repository}` })
-    this.connection = new GithubConnection(this, 'GithubConnection', { prefix: CI_PREFIX, connectionArn: s.connectionArn, tags: { 'trace:ci': s.repository } })
-    this.runner = s.connectionReady
+    this.connection = s.auth === 'connection' ? new GithubConnection(this, 'GithubConnection', { prefix: CI_PREFIX, connectionArn: s.connectionArn, tags: { 'trace:ci': s.repository } }) : null
+    this.runner = !this.connection || s.connectionReady
       ? new RunnerProject(this, 'Runner', {
-          name: SELF_CI_PROJECT, repository: s.repository, connectionArn: this.connection.connectionArn,
+          name: SELF_CI_PROJECT, repository: s.repository, connectionArn: this.connection?.connectionArn ?? null,
           computeType: s.computeType, image: s.image, privileged: s.privileged, tags: { 'trace:ci': s.repository },
         })
       : null

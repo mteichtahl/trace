@@ -213,7 +213,17 @@ describe("trace's own CI stack", () => {
 
   it('is one runner project named trace-ci for mteichtahl/trace by default', () => {
     const s = ciSettings(ctx({ connectionArn: CONNECTION_ARN }), {})
-    expect(s).toEqual({ repository: 'mteichtahl/trace', connectionArn: CONNECTION_ARN, connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false })
+    expect(s).toEqual({ repository: 'mteichtahl/trace', auth: 'connection', connectionArn: CONNECTION_ARN, connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false })
+    // with the token (trace release setup, when no connection is authorized): no connection, a runner at once
+    const token = ciSettings(ctx({ auth: 'token', privileged: 'true' }), {})
+    expect(token).toMatchObject({ auth: 'token', privileged: true })
+    const tt = Template.fromStack(new TraceCiStack(new App(), 'TraceCiToken', token, { account: '123456789012', region: 'us-east-1' }))
+    expect(Object.keys(tt.findResources('AWS::CodeConnections::Connection'))).toEqual([])
+    const p = Object.values(tt.findResources('AWS::CodeBuild::Project') as Record<string, Res>)[0]
+    expect(p?.Properties.Name).toBe(SELF_CI_PROJECT)
+    expect(p?.Properties.Source).not.toHaveProperty('Auth')
+    expect(p?.Properties.Environment).toMatchObject({ PrivilegedMode: true })
+    expect(() => ciSettings(ctx({ auth: 'token', connectionArn: CONNECTION_ARN }), {})).toThrow(/auth/)
     const t = Template.fromStack(new TraceCiStack(new App(), CI_STACK, s, { account: '123456789012', region: 'us-east-1' }))
     t.resourceCountIs('AWS::CodeBuild::Project', 1)
     t.resourceCountIs('AWS::IAM::Policy', 0)
@@ -225,7 +235,7 @@ describe("trace's own CI stack", () => {
 
   it('needs nothing up front: creates trace-ci-github and its runner, or only the connection while it is not ready', () => {
     const s = ciSettings(ctx({}), {})
-    expect(s).toEqual({ repository: 'mteichtahl/trace', connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false })
+    expect(s).toEqual({ repository: 'mteichtahl/trace', auth: 'connection', connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false })
     const t = Template.fromStack(new TraceCiStack(new App(), CI_STACK, s, { account: '123456789012', region: 'us-east-1' }))
     const conns = Object.entries(t.findResources('AWS::CodeConnections::Connection') as Record<string, Res & { DeletionPolicy?: string }>)
     expect(conns).toHaveLength(1)

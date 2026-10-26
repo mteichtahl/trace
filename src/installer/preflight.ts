@@ -160,22 +160,21 @@ export async function preflight(input: PreflightInput, d: PreflightDeps): Promis
   else {
     if (input.model && !modelList.some((m) => m.id === input.model)) add({ id: 'bedrock.profile', status: 'warn', title: 'Bedrock model', detail: `${input.model} is not an active Anthropic inference profile in ${region} (${modelList.length} are).`, fix: 'Choose one of the listed models under Advanced, or leave it empty for the newest Sonnet.' })
     const access = await d.modelAccess(foundationModelOf(model)).catch((e: unknown): ModelAccess => ({ status: 'UNKNOWN', useCase: null, detail: msg(e) }))
-    const link = console_(region, `bedrock/home?region=${region}#/providers/anthropic`)
     if (access.status === 'AVAILABLE') add({ id: 'bedrock.model', status: 'ok', title: 'Bedrock model', detail: `${model}: the account has access` })
     else if (access.status === 'PENDING') add({ id: 'bedrock.model', status: 'warn', title: 'Bedrock model', detail: `${model}: access is being set up (Anthropic's agreement is pending; AWS emails when it is done).`, fix: 'Install now: the agents work once access is granted, usually within minutes.' })
     else if (access.useCase === false) {
       add({
         id: 'bedrock.model', status: 'warn', title: 'Bedrock model', detail: `${model}: Anthropic needs its one-time use-case form for this account (or its organisation's management account) before any Claude model can be used.`,
-        fix: 'Submit it here (the installer sends it with PutUseCaseForModelAccess) or in the Bedrock console. Installing does not wait for it; the agents work once access is granted.',
-        link, action: { id: 'bedrock-use-case', label: 'Fill in and submit the use-case form', params: { model: foundationModelOf(model) } },
+        fix: 'Submit it here: the installer sends it with PutUseCaseForModelAccess. Installing does not wait for it; the agents work once access is granted.',
+        action: { id: 'bedrock-use-case', label: 'Fill in and submit the use-case form', params: { model: foundationModelOf(model) } },
       })
     } else if (access.status === 'NOT_AVAILABLE' || access.status === 'ERROR') {
       add({
         id: 'bedrock.model', status: 'warn', title: 'Bedrock model', detail: `${model}: no access yet (${access.detail || access.status.toLowerCase()}).`,
-        fix: 'Accept the model\'s agreement (the installer can, with CreateFoundationModelAgreement; it needs aws-marketplace:Subscribe and a payment method on the account), or open the model in the Bedrock console playground once.',
-        link, action: { id: 'bedrock-agreement', label: 'Accept the model agreement', params: { model: foundationModelOf(model) } },
+        fix: 'Accept the model\'s agreement: the installer does it with CreateFoundationModelAgreement (it needs aws-marketplace:Subscribe and a payment method on the account). Installing does not wait for it.',
+        action: { id: 'bedrock-agreement', label: 'Accept the model agreement', params: { model: foundationModelOf(model) } },
       })
-    } else add({ id: 'bedrock.model', status: 'info', title: 'Bedrock model', detail: `${model}: access could not be checked (${access.detail}). Access to most models is enabled on first use; Anthropic's also needs the first-time-use form.`, link })
+    } else add({ id: 'bedrock.model', status: 'info', title: 'Bedrock model', detail: `${model}: access could not be checked (${access.detail}). Access to most models is enabled on first use; Anthropic's also needs the first-time-use form, which the installer sends when asked.` })
   }
 
   // knowledge bases' vectors
@@ -186,23 +185,22 @@ export async function preflight(input: PreflightInput, d: PreflightDeps): Promis
   // GPU and CPU compute
   facts.gpuQuota = gpuQuota.ok ? gpuQuota.v : null
   facts.cpuQuota = cpuQuota.ok ? cpuQuota.v : null
-  const quotaLink = (code: string): string => console_(region, `servicequotas/home/services/ec2/quotas/${code}`)
   const wantGpu = input.gpuEnabled !== false
   if (wantGpu && gpuQuota.ok && gpuQuota.v !== null && gpuQuota.v < 4) {
     add({
       id: 'gpu.quota', status: input.gpuEnabled === true ? 'warn' : 'info', title: 'GPU jobs',
       detail: `The account may run ${gpuQuota.v} ${input.gpuSpot ? 'Spot' : 'on-demand'} G and VT vCPUs in ${region}; one GPU job (a g6/g5/g4dn.xlarge) needs 4. ${input.gpuEnabled === true ? 'GPU jobs would wait for capacity that never comes.' : 'GPU and CPU jobs are left off (renders, autorouting, openEMS, CFD run locally or not at all); everything else installs.'}`,
       fix: 'Request 16 vCPUs (four jobs at once). Increases are usually granted within a day; then turn GPU jobs on under Advanced and run the installer again.',
-      link: quotaLink(gpuCode), action: { id: 'quota-increase', label: 'Request 16 G and VT vCPUs', params: { code: gpuCode, value: 16, service: 'ec2' } },
+      action: { id: 'quota-increase', label: 'Request 16 G and VT vCPUs', params: { code: gpuCode, value: 16, service: 'ec2' } },
     })
   } else if (wantGpu && gpuQuota.ok && gpuQuota.v !== null) add({ id: 'gpu.quota', status: 'ok', title: 'GPU jobs', detail: `${gpuQuota.v} G and VT vCPUs allowed (${Math.floor(gpuQuota.v / 4)} jobs at once)` })
-  else if (wantGpu && !gpuQuota.ok) add({ id: 'gpu.quota', status: 'info', title: 'GPU jobs', detail: `the G and VT quota could not be read (${msg(gpuQuota.e)}); GPU jobs stay on`, link: quotaLink(gpuCode) })
+  else if (wantGpu && !gpuQuota.ok) add({ id: 'gpu.quota', status: 'info', title: 'GPU jobs', detail: `the G and VT quota could not be read (${msg(gpuQuota.e)}); GPU jobs stay on` })
   if (wantGpu && cpuQuota.ok && cpuQuota.v !== null && cpuQuota.v < input.cpuVcpus) {
     add({
       id: 'cpu.quota', status: 'info', title: 'CPU jobs',
       detail: `The account may run ${cpuQuota.v} standard vCPUs in ${region}; a CPU job asks for ${input.cpuVcpus}. The CPU queue is left off.`,
       fix: `Request at least ${Math.max(64, input.cpuVcpus)} vCPUs, or lower "vCPUs per job" under Advanced.`,
-      link: quotaLink(cpuCode), action: { id: 'quota-increase', label: `Request ${Math.max(64, input.cpuVcpus)} standard vCPUs`, params: { code: cpuCode, value: Math.max(64, input.cpuVcpus), service: 'ec2' } },
+      action: { id: 'quota-increase', label: `Request ${Math.max(64, input.cpuVcpus)} standard vCPUs`, params: { code: cpuCode, value: Math.max(64, input.cpuVcpus), service: 'ec2' } },
     })
   }
   const stackNow = existing.ok ? existing.v : null
@@ -210,7 +208,7 @@ export async function preflight(input: PreflightInput, d: PreflightDeps): Promis
     add({
       id: 'vpc.quota', status: 'warn', title: 'GPU network',
       detail: `${region} already has ${vpcs.v.count} of the ${vpcs.v.quota} VPCs it allows, and GPU jobs need one more (public subnets, no NAT gateway).`,
-      fix: 'Request a higher VPC quota, delete an unused VPC, or turn GPU jobs off under Advanced.', link: console_(region, `servicequotas/home/services/vpc/quotas/${QUOTAS.vpcs}`),
+      fix: 'Request a higher VPC quota (the installer does, with RequestServiceQuotaIncrease), delete an unused VPC, or turn GPU jobs off under Advanced.',
       action: { id: 'quota-increase', label: `Request ${vpcs.v.quota + 5} VPCs`, params: { code: QUOTAS.vpcs, value: vpcs.v.quota + 5, service: 'vpc' } },
     })
   }
@@ -221,7 +219,7 @@ export async function preflight(input: PreflightInput, d: PreflightDeps): Promis
     facts.cdkBootstrapped = Boolean(c && !c.status.startsWith('DELETE') && !/FAILED|ROLLBACK_COMPLETE$/.test(c.status) && (c.version ?? 0) >= CDK_BOOTSTRAP_MIN)
     facts.cdkVersion = c?.version ?? null
     if (!c || c.status.startsWith('DELETE')) add({ id: 'cdk.bootstrap', status: 'info', title: 'CDK bootstrap', detail: `not bootstrapped in ${region}: the installer bootstraps it first (about 2 minutes)` })
-    else if (/FAILED|ROLLBACK_COMPLETE$/.test(c.status) && !/UPDATE_ROLLBACK_COMPLETE$/.test(c.status)) add({ id: 'cdk.bootstrap', status: 'fail', title: 'CDK bootstrap', detail: `the CDKToolkit stack is ${c.status}`, fix: 'Delete the CDKToolkit stack in the CloudFormation console (its bucket first, if it is not empty), then check again.', link: console_(region, 'cloudformation/home') })
+    else if (/FAILED|ROLLBACK_COMPLETE$/.test(c.status) && !/UPDATE_ROLLBACK_COMPLETE$/.test(c.status)) add({ id: 'cdk.bootstrap', status: 'fail', title: 'CDK bootstrap', detail: `the CDKToolkit stack is ${c.status}`, fix: `Empty and delete its staging bucket, then delete the stack (\`aws s3 rb s3://cdk-hnb659fds-assets-${facts.account ?? '<account>'}-${region} --force\`, then \`aws cloudformation delete-stack --stack-name CDKToolkit --region ${region}\`), and check again: the installer bootstraps it anew.` })
     else if ((c.version ?? 0) < CDK_BOOTSTRAP_MIN) add({ id: 'cdk.bootstrap', status: 'info', title: 'CDK bootstrap', detail: `bootstrap version ${c.version ?? 'unknown'}: the installer updates it to the current one first` })
     else add({ id: 'cdk.bootstrap', status: 'ok', title: 'CDK bootstrap', detail: `bootstrapped (version ${c.version})` })
   } else add({ id: 'cdk.bootstrap', status: 'info', title: 'CDK bootstrap', detail: `could not be read (${msg(cdk.e)}): the installer bootstraps if needed` })
@@ -230,10 +228,10 @@ export async function preflight(input: PreflightInput, d: PreflightDeps): Promis
   facts.existing = stackNow
   if (existing.ok && stackNow) {
     const st = stackNow.status
-    if (st.endsWith('_IN_PROGRESS')) add({ id: 'stack', status: 'fail', title: stack, detail: `${stack} is ${st}: a deploy or delete is running`, fix: 'Wait for it to finish, then check again.', link: console_(region, 'cloudformation/home') })
+    if (st.endsWith('_IN_PROGRESS')) add({ id: 'stack', status: 'fail', title: stack, detail: `${stack} is ${st}: a deploy or delete is running`, fix: 'Wait for it to finish, then check again.' })
     else if (st === 'ROLLBACK_COMPLETE' || st === 'ROLLBACK_FAILED') {
       add({ id: 'stack', status: 'fail', title: stack, detail: `${stack} is ${st}: its first deploy failed and CloudFormation cannot update it.`, fix: 'Delete it (nothing in it is in use) and install again.', action: { id: 'delete-failed-stack', label: `Delete ${stack}`, params: { stack } } })
-    } else if (st === 'UPDATE_ROLLBACK_FAILED') add({ id: 'stack', status: 'fail', title: stack, detail: `${stack} is UPDATE_ROLLBACK_FAILED`, fix: 'Continue the rollback in the CloudFormation console ("Stack actions → Continue update rollback"), then check again.', link: console_(region, 'cloudformation/home') })
+    } else if (st === 'UPDATE_ROLLBACK_FAILED') add({ id: 'stack', status: 'fail', title: stack, detail: `${stack} is UPDATE_ROLLBACK_FAILED`, fix: 'Continue the rollback (the installer does, with ContinueUpdateRollback), then check again.', action: { id: 'continue-rollback', label: `Continue ${stack}'s rollback`, params: { stack } } })
     else add({ id: 'stack', status: 'info', title: stack, detail: `trace is installed here (${st}): installing again updates it, and the plan shows only what changes` })
   } else if (existing.ok) add({ id: 'stack', status: 'info', title: stack, detail: 'a new installation' })
   if (leftovers.ok && leftovers.v.length && !stackNow) {
@@ -251,7 +249,7 @@ export async function preflight(input: PreflightInput, d: PreflightDeps): Promis
     const domain = `${prefix}-${facts.account}`
     const taken = await d.cognitoDomain(domain).catch(() => null)
     const ours = taken && stackNow?.outputs.UserPoolId === taken.userPoolId
-    if (taken && !ours) add({ id: 'cognito.domain', status: 'fail', title: 'Sign-in domain', detail: `the Cognito domain ${domain} belongs to user pool ${taken.userPoolId}, not this installation's${stackNow ? '' : ' (a removed installation kept its user pool)'}.`, fix: 'Delete that domain (Cognito console → the pool → App integration → Domain), or choose another prefix under Advanced.', link: console_(region, 'cognito/v2/idp/user-pools') })
+    if (taken && !ours) add({ id: 'cognito.domain', status: 'fail', title: 'Sign-in domain', detail: `the Cognito domain ${domain} belongs to user pool ${taken.userPoolId}, not this installation's${stackNow ? '' : ' (a removed installation kept its user pool)'}.`, fix: stackNow ? 'Choose another prefix under Advanced (that domain is another user pool\'s).' : 'Delete that domain (the installer does, with DeleteUserPoolDomain: the pool and its users stay), or choose another prefix under Advanced.', ...(stackNow ? {} : { action: { id: 'delete-cognito-domain' as FixAction, label: `Delete the domain ${domain}`, params: { domain, userPoolId: taken.userPoolId } } }) })
   }
 
   // how the CodeBuild runners will reach GitHub (every job runs on them: there is no GitHub-hosted fallback)

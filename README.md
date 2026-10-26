@@ -148,10 +148,20 @@ Variables or Administration, which the agents never need), give an admin token f
 while installing and never stored, unless you choose it as the token CodeBuild keeps (Advanced → Build runners). A project's own agent token
 (Advanced) isolates that project's agent on GitHub, as [Project isolation](#project-isolation) explains.
 
-**What stays manual, and why:** none of the above needs a console. Two things can: for an Anthropic model, AWS may
-hold the agreement as pending after the form is sent (AWS emails when it is done; nothing to do but wait); and a quota
-increase is decided by AWS (usually within a day). A private trace source repository whose admin you are not must be
-shared by its admin (Settings → Actions → General → Access).
+**Nothing on the default path needs the AWS console.** The preflight's fixes are API calls (the Anthropic use-case form,
+`PutUseCaseForModelAccess`; the model agreement, `CreateFoundationModelAgreement`; quota increases,
+`RequestServiceQuotaIncrease`; a failed first deploy, `DeleteStack`; a stuck rollback, `ContinueUpdateRollback`; a
+removed installation's sign-in domain, `DeleteUserPoolDomain`; its kept repositories and secret), the build runners
+use the token unless a connection is authorized already, and publishing images is set up by API too. What a person
+still decides, and why:
+
+| What | Why it can't be automated | When it comes up |
+| --- | --- | --- |
+| Authorizing a new AWS CodeConnections connection | AWS requires the GitHub app's installation to be approved in the console (the OAuth handshake with GitHub) | Only with Advanced → Build runners → "An AWS CodeConnections connection" and none authorized yet |
+| Waiting for AWS: a pending Anthropic agreement, a quota increase | AWS decides (it emails; usually minutes for the agreement, within a day for a quota) | Only when the preflight found them missing; installing never waits |
+| A payment method on the account | The model agreement is an AWS Marketplace subscription, which needs one (Billing) | Only on an account that has none |
+| A custom ECR Public alias | Requested in the console only | Never: trace uses the registry's default alias |
+| Sharing a private trace source repository's actions | GitHub requires that repository's admin | Only when you are not its admin |
 
 ### Optional integrations
 
@@ -189,14 +199,20 @@ reaches workers at their next session and the Lambda at its next cold start; not
 Both images (the agent's, arm64; the GPU and CPU jobs', amd64) are made by CodeBuild in your account
 (`src/infra/images.ts`):
 
-- **Prebuilt** (the default): CodeBuild pulls trace's published image for exactly this source,
-  `public.ecr.aws/mteichtahl/trace-agent:<content tag>` and `-gpu:`, and pushes it to the installation's repository.
-  The content tag is a hash of what goes into the image, computed the same way by the stack and by trace's release
-  workflow (`.github/workflows/release-images.yml`, `scripts/image-tag.mjs`), so a modified trace never takes an image
-  that is not its own (the workflow runs, like every job here, on trace's CodeBuild runner `trace-ci`, deployed
-privileged for it: see [Where builds run](#where-builds-run)). When there is none, it builds. **Nothing is published yet**: the release workflow is in place
-  but has not been run (it needs a public ECR repository and a role, listed in its header), so every pull misses
-  today and the images are built, as before.
+- **Prebuilt** (the default): CodeBuild copies trace's published image for exactly this source from Amazon ECR Public,
+  `<registry>/trace-agent:<content tag>` and `/trace-gpu:`, into the installation's own private repository. The
+  content tag is a hash of what goes into the image, computed the same way by the stack and by trace's release
+  workflow (`scripts/image-tag.mjs`), so a modified trace never takes an image that is not its own. The copy is pinned:
+  `scripts/resolve-image.mjs` reads the tag's digest from the registry and checks it against the manifest's own
+  bytes, the image is pulled by that digest, its digest is checked again after the pull, and only then is it re-tagged
+  and pushed. When the tag is not published (an unreleased commit, a fork), or no registry is set, it builds instead.
+  `<registry>` is `PUBLISHED_REGISTRY` in `src/infra/props.ts` (set once at release time; empty, so always built,
+  until then), or Advanced → "Published images registry".
+
+  AgentCore would also run an image straight from `public.ecr.aws` (its `containerUri` accepts it), and Batch could
+  pull one; trace copies it anyway, so the runtimes and jobs pull from the account's own registry in their region (no
+  public pull rate limits, no dependence on ECR Public at each cold start, the image stays if a release is withdrawn),
+  and the private repository keeps its lifecycle rule (the last 10 images).
 - **Build:** `docker build` with BuildKit's inline cache: the previous image (`:cache`) is the cache, so a rebuild
   after an upgrade redoes only the layers whose inputs changed, and CodeBuild's local Docker layer cache helps a build
   soon after another.
@@ -204,6 +220,40 @@ privileged for it: see [Where builds run](#where-builds-run)). When there is non
 An installed trace has no `package-lock.json` or `.npmrc` (npm never packs them), and both the images and the CDK's
 Lambda bundling need the lock file: `npm run build` copies both into `agent/`, which npm packs
 (`scripts/stage-image.mjs`, `src/infra/lockfile.ts`).
+
+### Publishing images
+
+trace's own images are published to Amazon ECR Public from one AWS account, the project owner's, so every
+installation can copy them. Setting that up needs no console:
+
+```sh
+trace release setup --publish       # or Advanced → "Publish trace's images from this account" in the installer
+```
+
+It (`src/installer/release.ts`):
+
+1. bootstraps CDK in us-east-1 (ECR Public's only region) when it isn't, and deploys **TraceRelease**
+   (`src/infra/release.ts`; `npm run deploy:release` deploys it alone): the public repositories `trace-agent`
+   (linux/arm64) and `trace-gpu` (linux/amd64) with their gallery catalog data, and the release role `trace-release`,
+   which GitHub OIDC lets only the source repository's `main` and `v*` tags assume, and which may only log in and push
+   to those two repositories (the account's GitHub OIDC provider is used when it has one);
+2. reads the registry's address, `public.ecr.aws/<alias>`, with `DescribeRegistries`. The alias is the registry's
+   default one, which ECR Public assigns by itself once the account's first public repository exists, so a new
+   registry gets it right after the deploy (setup waits a minute for it). A custom alias is the only kind that needs
+   the console, and trace does not use one. The gallery display name is set with `PutRegistryCatalogData`;
+3. sets the source repository's variables `TRACE_RELEASE_ROLE` and `TRACE_IMAGE_REGISTRY` with the GitHub token you
+   gave (REST);
+4. makes sure trace's CodeBuild runner `trace-ci` exists and is privileged (the workflow builds images): TraceCi,
+   through a GitHub connection when one is authorized already, else with the token as CodeBuild's GitHub source
+   credential;
+5. with `--publish`, starts the first release (`workflow_dispatch`) and prints where the images appear
+   (`public.ecr.aws/<alias>/trace-agent`, `https://gallery.ecr.aws/<alias>/trace-agent`, and the same for `trace-gpu`).
+
+From then on every merge to `main` and every `v*` tag publishes (`.github/workflows/release-images.yml`, which does
+nothing until both variables are set). It runs on `trace-ci`, builds both images with BuildKit, caches in the registry
+itself (`:cache`, mode=max), attaches an OCI provenance attestation, tags the content tag plus `latest` on main and
+`vX.Y.Z` on a tag, and records each pushed digest in the job summary. To make installations look there by default,
+set `PUBLISHED_REGISTRY` in `src/infra/props.ts` to the registry setup printed.
 
 ### Upgrading and uninstalling
 
@@ -471,8 +521,10 @@ npm run deploy:ci
 It works the same way as the installer. It reuses an authorized connection (`trace-ci-github` first, then an
 installation's). If there is none, it creates `trace-ci-github`, shows you where to authorize it, waits, and then adds
 the runner. To use a particular connection, set `TRACE_CONNECTION_ARN`. Anything after `--` goes to `cdk deploy`.
-The release workflow (`.github/workflows/release-images.yml`) builds images, so it needs Docker on that runner: deploy
-it with `TRACE_CI_PRIVILEGED=true npm run deploy:ci` before publishing a release.
+The release workflow (`.github/workflows/release-images.yml`) builds images, so it needs Docker on that runner:
+`trace release setup` makes `trace-ci` privileged (by hand: `TRACE_CI_PRIVILEGED=true npm run deploy:ci`), and can
+make it with the token instead of a connection (`TRACE_CI_AUTH=token`), so it never waits for a console step (see
+[Publishing images](#publishing-images)).
 
 A guard test fails the build if any workflow here or in `templates/` names a runner other than a CodeBuild one.
 

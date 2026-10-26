@@ -2,10 +2,18 @@
  * How the two images (the agent image, agent/Dockerfile, arm64; the GPU/CPU job image, agent/Dockerfile.gpu, amd64)
  * get into the account's ECR, fastest first:
  *
- *   prebuilt   images.source 'prebuilt' (the default): CodeBuild pulls trace's published image for exactly this
- *              source (`<images.registry>-agent:<content tag>`, `-gpu:`), re-tags it and pushes it to the
- *              installation's repository. Minutes instead of the build's 20–60. When there is no published image for
- *              this source (a local change, or nothing published yet), the pull fails and it builds instead.
+ *   prebuilt   images.source 'prebuilt' (the default): CodeBuild copies trace's published image for exactly this
+ *              source (`<images.registry>/trace-agent:<content tag>`, `/trace-gpu:`, on Amazon ECR Public) into the
+ *              installation's own private repository: scripts/resolve-image.mjs reads the tag's digest from the
+ *              registry and checks it against the manifest's bytes, the image is pulled by that digest (pinned: a tag
+ *              moved meanwhile can't change what is copied), its digest checked again after the pull, re-tagged and
+ *              pushed. Minutes instead of the build's 20–60. When the tag is not published (an unreleased commit, a
+ *              fork, or no registry set: props.ts PUBLISHED_REGISTRY empty) it builds instead.
+ *
+ *              Copied rather than run from ECR Public, although AgentCore's containerUri accepts public.ecr.aws: the
+ *              runtimes and the Batch jobs then pull from the account's own registry in their region (no public pull
+ *              rate limits, no dependence on the public registry at every cold start, and the image stays when a
+ *              release is withdrawn), and the repository keeps its lifecycle rule (the last 10 images).
  *   build      docker build, with BuildKit's inline cache: the previous image (`:cache`) is the cache, so a rebuild
  *              after an upgrade redoes only the layers whose inputs changed (the apt layers stay), and CodeBuild's
  *              local Docker layer cache helps a build soon after another on the same host.
@@ -18,11 +26,6 @@ import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import type * as codebuild from 'aws-cdk-lib/aws-codebuild'
-
-/** Where trace's release workflow publishes its images (.github/workflows/release-images.yml): `<registry>-agent`
- * and `<registry>-gpu`. Nothing is published there until that workflow has run with its role; until then every pull
- * misses and the images are built, as before. */
-export const PREBUILT_REGISTRY = 'public.ecr.aws/mteichtahl/trace'
 
 /** What the images are built from, relative to the repository root, in both a clone and an installed trace. */
 export const IMAGE_INPUTS = ['package.json', 'tsconfig.json', 'agent', 'src', 'python', 'scripts', 'harness', 'templates'] as const
@@ -55,8 +58,8 @@ export function imageContentTag(root: string): string {
 
 export type ImageKind = 'agent' | 'gpu'
 
-/** The published image for this content tag. */
-export const prebuiltImage = (registry: string, kind: ImageKind, tag: string): string => `${registry}-${kind}:${tag}`
+/** The published image for this content tag (the repositories of src/infra/release.ts). */
+export const prebuiltImage = (registry: string, kind: ImageKind, tag: string): string => `${registry}/trace-${kind}:${tag}`
 
 /**
  * The CodeBuild buildspec of one image: the published image when PREBUILT_IMAGE names one that exists, else a
@@ -65,11 +68,14 @@ export const prebuiltImage = (registry: string, kind: ImageKind, tag: string): s
 export function imageBuildSpec(o: { dockerfile: string; platform: 'linux/arm64' | 'linux/amd64' }): Record<string, unknown> {
   const build = [
     'export DOCKER_BUILDKIT=1',
-    'if [ -n "${PREBUILT_IMAGE:-}" ] && docker pull --platform ' + o.platform + ' "$PREBUILT_IMAGE"; then',
-    '  echo "trace: using the published image $PREBUILT_IMAGE (no build needed)"',
-    '  docker tag "$PREBUILT_IMAGE" "$REPOSITORY_URI:$IMAGE_TAG"',
+    // the tag's digest, checked against the published manifest (exit 3: not published, so build)
+    'PINNED=""',
+    '[ -n "${PREBUILT_IMAGE:-}" ] && PINNED="$(node scripts/resolve-image.mjs "$PREBUILT_IMAGE" || true)"',
+    'if [ -n "$PINNED" ] && docker pull --platform ' + o.platform + ' "$PINNED" && docker image inspect --format "{{json .RepoDigests}}" "$PINNED" | grep -qF "${PINNED##*@}"; then',
+    '  echo "trace: copying the published image $PREBUILT_IMAGE, pinned to $PINNED (no build needed)"',
+    '  docker tag "$PINNED" "$REPOSITORY_URI:$IMAGE_TAG"',
     'else',
-    '  [ -n "${PREBUILT_IMAGE:-}" ] && echo "trace: no published image $PREBUILT_IMAGE for this source: building it"',
+    '  [ -n "${PREBUILT_IMAGE:-}" ] && echo "trace: no published image $PREBUILT_IMAGE for this source (or its digest did not match): building it"',
     `  docker build --platform ${o.platform} --build-arg BUILDKIT_INLINE_CACHE=1 --cache-from "$REPOSITORY_URI:cache" -f ${o.dockerfile} -t "$REPOSITORY_URI:$IMAGE_TAG" -t "$REPOSITORY_URI:cache" .`,
     '  docker push "$REPOSITORY_URI:cache"',
     'fi',
@@ -86,5 +92,5 @@ export function imageBuildSpec(o: { dockerfile: string; platform: 'linux/arm64' 
 
 /** The project environment variables for an image's build: where to look for the published image (or none). */
 export function imageBuildEnv(images: { source: 'prebuilt' | 'build'; registry: string }, kind: ImageKind, tag: string): Record<string, codebuild.BuildEnvironmentVariable> {
-  return { PREBUILT_IMAGE: { value: images.source === 'prebuilt' ? prebuiltImage(images.registry, kind, tag) : '' } }
+  return { PREBUILT_IMAGE: { value: images.source === 'prebuilt' && images.registry ? prebuiltImage(images.registry, kind, tag) : '' } }
 }

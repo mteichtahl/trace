@@ -72,6 +72,12 @@ export const AgentAnswers = z.object({
   /** where the images come from (src/infra/images.ts): trace's published ones for this source when they exist, or a
    * build in this account */
   imageSource: z.enum(['prebuilt', 'build']).default('prebuilt'),
+  /** where to look for the published images instead of props.ts PUBLISHED_REGISTRY (`public.ecr.aws/<alias>`); empty:
+   * that constant */
+  imageRegistry: z.string().trim().regex(/^([a-z0-9.-]+(:\d+)?(\/[a-z0-9._-]+)*)?$/, 'a registry such as public.ecr.aws/<alias>, or empty').default(''),
+  /** also set this account up to publish trace's images (src/installer/release.ts, `trace release setup`): the
+   * TraceRelease stack in us-east-1, and the source repository's release variables */
+  publishImages: z.boolean().default(false),
 }).strict().prefault({})
 
 /** The CodeBuild compute types a runner job may have (props.ts runners.computeType; repeated here because this file is
@@ -211,7 +217,7 @@ export const EventSchema = z.discriminatedUnion('type', [
 export type InstallEvent = z.infer<typeof EventSchema>
 
 /** One preflight finding (src/installer/preflight.ts), as the page shows it. */
-export const FIX_ACTIONS = ['bedrock-use-case', 'bedrock-agreement', 'quota-increase', 'delete-failed-stack', 'share-source', 'clear-leftovers'] as const
+export const FIX_ACTIONS = ['bedrock-use-case', 'bedrock-agreement', 'quota-increase', 'delete-failed-stack', 'continue-rollback', 'delete-cognito-domain', 'share-source', 'clear-leftovers'] as const
 export type FixAction = (typeof FIX_ACTIONS)[number]
 export interface Check {
   id: string

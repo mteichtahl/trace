@@ -6,7 +6,7 @@
 import { Match, type Template } from 'aws-cdk-lib/assertions'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { LIBRARY_TOOLS, LOCAL_INPUTS } from '../../src/core/gateway.js'
-import { InfraPropsSchema, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, projectHash, stackName, workerRuntimeName } from '../../src/infra/props.js'
+import { InfraPropsSchema, PUBLISHED_REGISTRY, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, projectHash, stackName, workerRuntimeName } from '../../src/infra/props.js'
 import { gatewayName } from '../../src/infra/gateway.js'
 import { RUNNERS, type Synth, nestedOf, synth } from './templates.js'
 
@@ -150,8 +150,8 @@ describe('without the gateway', () => {
     const builds = Object.values(off.parent.findResources('AWS::CodeBuild::Project') as Record<string, { Properties: { Name: string; Environment: { EnvironmentVariables: { Name: string; Value: string }[] }; Cache?: { Type: string; Modes: string[] }; Source: { BuildSpec: string } } }>)
     expect(builds.map((b) => b.Properties.Name).sort()).toEqual(['trace-agent-image', 'trace-gpu-image'])
     for (const b of builds) {
-      const pre = b.Properties.Environment.EnvironmentVariables.find((v) => v.Name === 'PREBUILT_IMAGE')?.Value ?? ''
-      expect(pre).toMatch(new RegExp(`^public\\.ecr\\.aws/mteichtahl/trace-${b.Properties.Name.split('-')[1]}:v\\d+\\.\\d+\\.\\d+-[0-9a-f]{16}$`))
+      // PUBLISHED_REGISTRY: nothing published yet, so no image to copy (an installation can name a registry: images.test.ts)
+      expect(b.Properties.Environment.EnvironmentVariables.find((v) => v.Name === 'PREBUILT_IMAGE')?.Value).toBe(PUBLISHED_REGISTRY ? expect.stringContaining(PUBLISHED_REGISTRY) : '')
       expect(b.Properties.Cache).toEqual({ Type: 'LOCAL', Modes: ['LOCAL_DOCKER_LAYER_CACHE'] })
       expect(b.Properties.Source.BuildSpec).toContain('--cache-from')
     }

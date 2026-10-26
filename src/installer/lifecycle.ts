@@ -13,6 +13,13 @@
  *       --runner-auth switches how the CodeBuild runners reach GitHub (answers runners.auth, README "Where builds
  *         run"), saved for later runs: the runner projects are updated in place
  *
+ *   trace release setup [--repo OWNER/REPO] [--region R] [--profile P] [--publish]
+ *       sets this AWS account up to publish trace's images (src/installer/release.ts): TraceRelease in us-east-1,
+ *       the registry's default alias, the source repository's TRACE_RELEASE_ROLE and TRACE_IMAGE_REGISTRY, and its
+ *       privileged CodeBuild runner; --publish starts the first release. The AWS credentials are the installation's
+ *       (or --profile, or the environment's), the GitHub token TRACE_GITHUB_TOKEN / GITHUB_TOKEN or the
+ *       installation's own; no console step
+ *
  *   trace uninstall [--yes] [--delete-data]
  *       deletes the optional integrations' secrets, each repository's trace variables (TRACE_CODEBUILD_PROJECT among
  *       them) and TRACE_TOKEN secret, and the stack (with it the CodeBuild runner projects and their webhooks), then
@@ -228,6 +235,37 @@ export async function cmdUninstall(argv: string[]): Promise<number> {
     }
     forgetInstallation()
     out('Uninstalled. `trace install` installs again (the answers are kept on this machine).')
+    return 0
+  } catch (e) {
+    err(`trace: ${e instanceof Error ? e.message : String(e)}`)
+    return 1
+  }
+}
+
+export async function cmdRelease(argv: string[]): Promise<number> {
+  const [sub, ...rest] = argv
+  if (sub !== 'setup') { err('usage: trace release setup [--repo OWNER/REPO] [--region R] [--profile P] [--publish]'); return 2 }
+  const { values: o } = parseArgs({ args: rest, options: { repo: { type: 'string' }, region: { type: 'string' }, profile: { type: 'string' }, publish: { type: 'boolean' } } })
+  try {
+    const a = savedAnswers().answers ? saved() : null
+    const c = o.profile ? await credentials({ mode: 'profile', profile: o.profile }, { awsAccessKeyId: '', awsSecretAccessKey: '', awsSessionToken: '' })
+      : a ? await creds(a)
+        : await (await import('@aws-sdk/credential-providers')).fromNodeProviderChain()()
+    const ciRegion = o.region ?? a?.aws.region ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? 'us-east-1'
+    let token = process.env.TRACE_GITHUB_TOKEN || process.env.GITHUB_TOKEN || ''
+    if (!token && a) token = (await storedTokens(a, (await secretsManagerApi({ region: a.aws.region, credentials: c })).get)).githubToken
+    if (!token) throw new Error('no GitHub token: set TRACE_GITHUB_TOKEN (Variables: read and write on the source repository, and Actions to start the first release)')
+    const { STSClient, GetCallerIdentityCommand } = await import('@aws-sdk/client-sts')
+    const account = (await new STSClient({ region: ciRegion, credentials: c }).send(new GetCallerIdentityCommand({}))).Account ?? ''
+    const { liveReleaseDeps, releaseSetup } = await import('./release.js')
+    const { createRequire } = await import('node:module')
+    const cdkBin = createRequire(import.meta.url).resolve('aws-cdk/bin/cdk')
+    const cdk = (args: string[], env: Record<string, string>): Promise<number> => Promise.resolve(spawnSync(process.execPath, [cdkBin, ...args], { cwd: REPO_ROOT, stdio: 'inherit', env: { ...process.env, ...env } }).status ?? 1)
+    const r = await releaseSetup(await liveReleaseDeps(c, ciRegion, token, { cdk, log: out }), {
+      account, ciRegion, ...(o.repo ? { repository: o.repo } : {}), publish: Boolean(o.publish),
+      credentialOurs: savedAnswers().runnerCredential === 'imported',
+    })
+    out(`registry ${r.registry}; images ${r.images.join(', ')}`)
     return 0
   } catch (e) {
     err(`trace: ${e instanceof Error ? e.message : String(e)}`)

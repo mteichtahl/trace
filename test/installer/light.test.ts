@@ -125,7 +125,9 @@ describe('the preflight', () => {
     const c = form.checks.find((x) => x.id === 'bedrock.model')
     expect(c?.status).toBe('warn')
     expect(c?.action).toMatchObject({ id: 'bedrock-use-case', params: { model: 'anthropic.claude-sonnet-4-6' } })
-    expect(c?.link).toBe('https://us-east-1.console.aws.amazon.com/bedrock/home?region=us-east-1#/providers/anthropic')
+    // done by API, so no console link to send anyone to
+    expect(c?.link).toBeUndefined()
+    expect(c?.fix).not.toMatch(/console/)
     expect(form.ok).toBe(true)
     const agree = await preflight(IN, deps({ modelAccess: async () => ({ status: 'NOT_AVAILABLE', useCase: true, detail: 'NOT_AUTHORIZED' }) }))
     expect(agree.checks.find((x) => x.id === 'bedrock.model')?.action?.id).toBe('bedrock-agreement')
@@ -133,13 +135,13 @@ describe('the preflight', () => {
     expect(pending.checks.find((x) => x.id === 'bedrock.model')?.detail).toMatch(/pending/)
   })
 
-  it('turns GPU jobs off at a quota of 0 and offers the increase, with its console page', async () => {
+  it('turns GPU jobs off at a quota of 0 and offers the increase, by API', async () => {
     const r = await preflight(IN, deps({ quota: async (code) => (code === QUOTAS.gpuOnDemand ? 0 : 256) }))
     const g = r.checks.find((c) => c.id === 'gpu.quota')
     expect(g?.status).toBe('info')
     expect(g?.detail).toMatch(/may run 0 on-demand G and VT vCPUs.*left off/)
     expect(g?.action).toEqual({ id: 'quota-increase', label: 'Request 16 G and VT vCPUs', params: { code: QUOTAS.gpuOnDemand, value: 16, service: 'ec2' } })
-    expect(g?.link).toContain(`servicequotas/home/services/ec2/quotas/${QUOTAS.gpuOnDemand}`)
+    expect(g?.link).toBeUndefined()
     expect(r.facts.gpuQuota).toBe(0)
     expect(r.ok).toBe(true)
     // asked for on regardless: a warning, since jobs would wait forever
@@ -150,6 +152,18 @@ describe('the preflight', () => {
     expect(spot.calls).toContain(`quota ${QUOTAS.gpuSpot}`)
     // a full region's VPCs
     expect((await preflight(IN, deps({ vpcs: async () => ({ count: 5, quota: 5 }) }))).checks.find((c) => c.id === 'vpc.quota')?.action?.id).toBe('quota-increase')
+  })
+
+  it('has no console link on a ready account, and offers an API fix for a stuck rollback and a removed installation\'s sign-in domain', async () => {
+    const ready = await preflight(IN, deps())
+    expect(JSON.stringify(ready.checks)).not.toMatch(/console\.aws\.amazon\.com/)
+    const stuck = await preflight(IN, deps({ stack: async () => ({ status: 'UPDATE_ROLLBACK_FAILED', outputs: {} }) }))
+    expect(stuck.checks.find((c) => c.id === 'stack')).toMatchObject({ status: 'fail', action: { id: 'continue-rollback', params: { stack: 'TraceStack' } } })
+    const domain = await preflight(IN, deps({ cognitoDomain: async () => ({ userPoolId: 'us-east-1_OLD' }) }))
+    expect(domain.checks.find((c) => c.id === 'cognito.domain')).toMatchObject({ action: { id: 'delete-cognito-domain', params: { domain: 'trace-123456789012', userPoolId: 'us-east-1_OLD' } } })
+    // another live installation's pool is never offered for deletion
+    const live = await preflight(IN, deps({ cognitoDomain: async () => ({ userPoolId: 'us-east-1_OTHER' }), stack: async () => ({ status: 'UPDATE_COMPLETE', outputs: { UserPoolId: 'us-east-1_MINE' } }) }))
+    expect(live.checks.find((c) => c.id === 'cognito.domain')?.action).toBeUndefined()
   })
 
   it('stops on what would fail the deploy, saying what to do', async () => {
