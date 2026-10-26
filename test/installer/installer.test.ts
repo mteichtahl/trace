@@ -53,14 +53,18 @@ const { apply, plan, redact } = await import('../../src/installer/bootstrap.js')
 const { createInstaller } = await import('../../src/installer/server.js')
 const { seal, setVariable: realSetVariable, checkToken } = await vi.importActual<typeof import('../../src/installer/github.js')>('../../src/installer/github.js')
 const { installation } = await import('../../src/core/client.js')
-const { grants } = await import('../../src/core/access.js')
+const { assignments, require_, projectsFor } = await import('../../src/core/access.js')
 
 const ANSWERS = {
   aws: { mode: 'profile', profile: 'default', region: 'us-east-1', account: '123456789012' },
   agents: { model: 'us.anthropic.claude-sonnet-4-6' },
   projects: [{ repo: 'mteichtahl/board', onboard: true }, { repo: 'mteichtahl/fw', onboard: false }],
   adminEmail: 'marc@example.com',
-  people: [{ email: 'dev@example.com', grants: [{ repo: 'mteichtahl/board', role: 'write' }, { repo: 'mteichtahl/fw', role: 'read' }] }, { email: 'boss@example.com', admin: true }],
+  people: [
+    { email: 'dev@example.com', class: 'user', projects: ['mteichtahl/board'] },
+    { email: 'visitor@example.com', class: 'guest', projects: ['mteichtahl/fw'] },
+    { email: 'boss@example.com', class: 'admin' },
+  ],
 }
 // Built at runtime so no token-shaped literal sits in the source.
 const TOKEN = ['github', 'pat', '11FAKEFAKEFAKE0123456789'].join('_')
@@ -72,10 +76,11 @@ const OUTPUTS: Record<string, string> = {
 }
 
 describe('answers', () => {
-  it('requires grants to name a project being installed, and no repository twice', () => {
+  it('requires assignments to name a project being installed, and no repository or person twice', () => {
     expect(AnswersSchema.safeParse(ANSWERS).success).toBe(true)
-    const bad = AnswersSchema.safeParse({ ...ANSWERS, people: [{ email: 'x@example.com', grants: [{ repo: 'other/repo', role: 'read' }] }] })
-    expect(bad.success).toBe(false)
+    expect(AnswersSchema.safeParse({ ...ANSWERS, people: [{ email: 'x@example.com', projects: ['other/repo'] }] }).success).toBe(false)
+    expect(AnswersSchema.safeParse({ ...ANSWERS, people: [{ email: 'x@example.com' }, { email: 'X@example.com' }] }).success).toBe(false)
+    expect(AnswersSchema.safeParse({ ...ANSWERS, people: [{ email: 'x@example.com', class: 'owner' }] }).success).toBe(false)
     expect(AnswersSchema.safeParse({ ...ANSWERS, projects: [{ repo: 'a/b' }, { repo: 'a/b' }], people: [] }).success).toBe(false)
   })
 
@@ -136,9 +141,18 @@ describe('installing', () => {
     expect(calls.onboard).toEqual(['mteichtahl/board'])
     expect(installation()?.apiRuntimeArn).toBe(OUTPUTS.ApiRuntimeArn)
     process.env.TRACE_HOME = OUTPUTS.TraceHome
-    const all = await grants({ sub: 'x', email: null, groups: ['trace-admins'] })
-    expect(all.map((g) => `${g.email}:${g.repo}:${g.role}`).sort()).toEqual(['dev@example.com:mteichtahl/board:write', 'dev@example.com:mteichtahl/fw:read'])
-    expect(JSON.stringify(calls.cognito)).toContain('trace-admins')
+    const all = await assignments({ sub: 'x', email: null, groups: ['trace-admins'] })
+    expect(all.map((g) => `${g.email}:${g.class}:${g.repo}`).sort()).toEqual(['dev@example.com:user:mteichtahl/board', 'visitor@example.com:guest:mteichtahl/fw'])
+    const groups = JSON.stringify(calls.cognito)
+    for (const g of ['trace-admins', 'trace-users', 'trace-guests']) expect(groups).toContain(g)
+    // What those assignments mean once each person signs in with their group in the token:
+    const dev = { sub: 'sub-dev@example.com', email: 'dev@example.com', groups: ['trace-users'] }
+    const visitor = { sub: 'sub-visitor@example.com', email: 'visitor@example.com', groups: ['trace-guests'] }
+    expect(await require_(dev, 'mteichtahl/board', 'write')).toBe('write')
+    await expect(require_(dev, 'mteichtahl/fw', 'read')).rejects.toThrow(/no read access/)
+    expect(await require_(visitor, 'mteichtahl/fw', 'read')).toBe('read')
+    await expect(require_(visitor, 'mteichtahl/fw', 'write')).rejects.toThrow(/no write access/)
+    expect(await projectsFor(visitor)).toEqual([{ repo: 'mteichtahl/fw', role: 'read' }])
   })
 
   it('stops at the failing step and says how to continue', async () => {

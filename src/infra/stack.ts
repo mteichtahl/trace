@@ -8,9 +8,10 @@
  *                       ngspice, Icarus; session storage at /mnt/workspace
  *   actions role        assumed by the onboarded repositories' workflows through GitHub OIDC: invokes the worker
  *                       runtime and reads/writes the central bucket
- *   people              a Cognito user pool (no self sign-up; admins invite people) and the API runtime: the same
- *                       image in `api` mode, reachable only with a Cognito token, which checks each person's
- *                       read/write grant per project (src/core/access.ts) on every request
+ *   people              a Cognito user pool (no self sign-up; admins invite people) with three classes as groups —
+ *                       admin, user (read/write on assigned projects), guest (read on assigned projects) — and the
+ *                       API runtime: the same image in `api` mode, reachable only with a Cognito token, which checks
+ *                       the person's class and project assignments (src/core/access.ts) on every request
  *
  * Two runtimes, one image: the worker runtime accepts only IAM (the repositories' workflows), the API runtime only
  * Cognito tokens (people). A person's token can never reach the worker, and a workflow never acts as a person.
@@ -207,7 +208,10 @@ export class TraceStack extends Stack {
         logoutUrls: cfg.callbackPorts.map((p) => `http://localhost:${p}/signed-out`),
       },
     })
-    new cognito.CfnUserPoolGroup(this, 'Admins', { userPoolId: users.userPoolId, groupName: 'trace-admins', description: 'Hold write on every project; grant and revoke access' })
+    // The three classes of person (src/core/access.ts). A person's class is their group, carried in their token.
+    new cognito.CfnUserPoolGroup(this, 'AdminsGroup', { userPoolId: users.userPoolId, groupName: 'trace-admins', precedence: 0, description: 'admin: everything, on every project, including managing people' })
+    new cognito.CfnUserPoolGroup(this, 'UsersGroup', { userPoolId: users.userPoolId, groupName: 'trace-users', precedence: 1, description: 'user: read and write on the projects they are assigned to' })
+    new cognito.CfnUserPoolGroup(this, 'GuestsGroup', { userPoolId: users.userPoolId, groupName: 'trace-guests', precedence: 2, description: 'guest: read only, on the projects they are assigned to' })
     const admin = new cognito.CfnUserPoolUser(this, 'FirstAdmin', {
       userPoolId: users.userPoolId,
       username: cfg.adminEmail,
@@ -216,7 +220,7 @@ export class TraceStack extends Stack {
     })
     const adminInGroup = new cognito.CfnUserPoolUserToGroupAttachment(this, 'FirstAdminIsAdmin', { userPoolId: users.userPoolId, groupName: 'trace-admins', username: cfg.adminEmail })
     adminInGroup.addDependency(admin)
-    adminInGroup.node.addDependency(this.node.findChild('Admins'))
+    adminInGroup.node.addDependency(this.node.findChild('AdminsGroup'))
 
     const discoveryUrl = `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}/.well-known/openid-configuration`
     const api = new CfnRuntime(this, 'ApiRuntime', {

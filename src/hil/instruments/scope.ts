@@ -154,11 +154,15 @@ export function stats(w: Waveform): WaveStats {
     sq += x * x
   }
   const out: WaveStats = { points: n, vmin: lo, vmax: hi, vpp: hi - lo, vavg: sum / n, vrms: Math.sqrt(sq / n), freq_hz: null, period_s: null, rise_s: null, fall_s: null, duty_pct: null }
-  const swing = hi - lo
+  // edge timing uses the waveform's base and top (2nd and 98th percentiles), so a glitch does not move the levels
+  const sorted = Float64Array.from(v).sort()
+  const base = sorted[Math.floor((n - 1) * 0.02)]!
+  const top = sorted[Math.ceil((n - 1) * 0.98)]!
+  const swing = top - base
   if (!(swing > 0)) return out
-  const mid = lo + swing / 2, l10 = lo + swing * 0.1, l90 = lo + swing * 0.9
+  const mid = base + swing / 2, l10 = base + swing * 0.1, l90 = base + swing * 0.9
   // hysteresis around the midpoint, so noise does not count as edges
-  const hyst = swing * 0.05
+  const hyst = swing * 0.1
   const at = (i: number, level: number): number => {
     // linear interpolation of the crossing between samples i-1 and i
     const a = v[i - 1]!, b = v[i]!
@@ -171,22 +175,27 @@ export function stats(w: Waveform): WaveStats {
     if (state === 0 && x > mid + hyst) { state = 1; rising.push(i) }
     else if (state === 1 && x < mid - hyst) { state = 0; falling.push(i) }
   }
-  const crossTimes = (idx: number[], dir: 1 | -1): number[] => idx.map((i) => {
+  const crossTime = (i: number, dir: 1 | -1): number => {
     let j = i
     while (j > 1 && (dir === 1 ? v[j - 1]! > mid : v[j - 1]! < mid)) j--
     return at(j, mid)
-  })
-  const rt = crossTimes(rising, 1), ft = crossTimes(falling, -1)
-  if (rt.length >= 2) {
-    const period = (rt.at(-1)! - rt[0]!) / (rt.length - 1)
+  }
+  const rt = rising.map((i) => crossTime(i, 1)), ft = falling.map((i) => crossTime(i, -1))
+  const median = (xs: number[]): number | null => {
+    if (!xs.length) return null
+    const ys = [...xs].sort((p, q) => p - q)
+    const m = ys.length >> 1
+    return ys.length % 2 ? ys[m]! : (ys[m - 1]! + ys[m]!) / 2
+  }
+  const gaps = (ts: number[]): number[] => ts.slice(1).map((t, i) => t - ts[i]!)
+  // the median interval between like edges: a glitch adds two short intervals, which the median ignores
+  const period = median(gaps(rt).concat(gaps(ft)))
+  if (period !== null && period > 0) {
     out.period_s = period
     out.freq_hz = 1 / period
-    const firstFallAfter = ft.find((t) => t > rt[0]!)
-    if (firstFallAfter !== undefined) out.duty_pct = ((firstFallAfter - rt[0]!) / period) * 100
-  } else if (ft.length >= 2) {
-    const period = (ft.at(-1)! - ft[0]!) / (ft.length - 1)
-    out.period_s = period
-    out.freq_hz = 1 / period
+    const highs = rt.map((r) => { const f = ft.find((x) => x > r); return f === undefined ? null : f - r }).filter((x): x is number => x !== null && x <= period)
+    const hi = median(highs)
+    if (hi !== null) out.duty_pct = (hi / period) * 100
   }
   const edge = (i: number, dir: 1 | -1): number | null => {
     const from = dir === 1 ? l10 : l90, to = dir === 1 ? l90 : l10
@@ -196,10 +205,10 @@ export function stats(w: Waveform): WaveStats {
     if (a <= 1 || b >= n - 1) return null
     return at(b, to) - at(a, from)
   }
-  const r = rising.map((i) => edge(i, 1)).filter((x): x is number => x !== null)
-  const f = falling.map((i) => edge(i, -1)).filter((x): x is number => x !== null)
-  if (r.length) out.rise_s = r.reduce((a, b) => a + b, 0) / r.length
-  if (f.length) out.fall_s = f.reduce((a, b) => a + b, 0) / f.length
+  const r = median(rising.map((i) => edge(i, 1)).filter((x): x is number => x !== null))
+  const f = median(falling.map((i) => edge(i, -1)).filter((x): x is number => x !== null))
+  out.rise_s = r
+  out.fall_s = f
   return out
 }
 

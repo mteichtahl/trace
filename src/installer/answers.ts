@@ -10,7 +10,8 @@
 import { z } from 'zod'
 
 export const Repo = z.string().trim().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')
-export const Role = z.enum(['read', 'write'])
+/** admin: everything, everywhere; user: read/write on assigned projects; guest: read on assigned projects. */
+export const PersonClass = z.enum(['admin', 'user', 'guest'])
 
 export const AwsAnswers = z.object({
   mode: z.enum(['profile', 'keys']).default('profile'),
@@ -40,8 +41,9 @@ export const ProjectAnswer = z.object({
 
 export const PersonAnswer = z.object({
   email: z.string().trim().email(),
-  admin: z.boolean().default(false),
-  grants: z.array(z.object({ repo: Repo, role: Role }).strict()).default([]),
+  class: PersonClass.default('user'),
+  /** The projects they are assigned to (admins reach every project whatever is listed here). */
+  projects: z.array(Repo).default([]),
 }).strict()
 
 export const AnswersSchema = z.object({
@@ -55,9 +57,12 @@ export const AnswersSchema = z.object({
 }).strict().superRefine((a, ctx) => {
   const repos = new Set(a.projects.map((p) => p.repo.toLowerCase()))
   if (repos.size !== a.projects.length) ctx.addIssue({ code: 'custom', path: ['projects'], message: 'a repository is listed twice' })
-  a.people.forEach((p, i) => p.grants.forEach((g, j) => {
-    if (!repos.has(g.repo.toLowerCase())) ctx.addIssue({ code: 'custom', path: ['people', i, 'grants', j, 'repo'], message: `${g.repo} is not one of the projects being installed` })
+  a.people.forEach((p, i) => p.projects.forEach((r, j) => {
+    if (!repos.has(r.toLowerCase())) ctx.addIssue({ code: 'custom', path: ['people', i, 'projects', j], message: `${r} is not one of the projects being installed` })
   }))
+  const emails = a.people.map((p) => p.email.toLowerCase())
+  if (new Set(emails).size !== emails.length) ctx.addIssue({ code: 'custom', path: ['people'], message: 'a person is listed twice' })
+  if (emails.includes(a.adminEmail.toLowerCase())) ctx.addIssue({ code: 'custom', path: ['people'], message: 'the first administrator is already an admin: leave them out of the list' })
 })
 export type Answers = z.output<typeof AnswersSchema>
 export type AnswersInput = z.input<typeof AnswersSchema>

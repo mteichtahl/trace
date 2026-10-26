@@ -26,7 +26,8 @@ and checks the following:
 - **AWS:** a profile (SSO works) or access keys, the region, and confirmation of the account. It checks that Bedrock
   AgentCore and an Anthropic model are available there.
 - **Agents:** the model, session limits, and the central bucket.
-- **People:** the first administrator, everyone else, and each person's read or write access per project.
+- **People:** the first administrator, and for everyone else their class (admin, user, guest) and the projects they
+  are assigned to.
 
 It then shows the plan and runs it:
 
@@ -38,23 +39,44 @@ It then shows the plan and runs it:
 - **GitHub:** each repository's Actions variables (`TRACE_AWS_ROLE`, `TRACE_AWS_REGION`, `TRACE_HOME`,
   `TRACE_AGENT_RUNTIME_ARN`) and its `TRACE_TOKEN` secret (encrypted with the repository's key), plus the onboarding
   pull request.
-- **People:** Cognito invitations, and grants recorded in the central database.
+- **People:** Cognito invitations into each person's class group, and project assignments recorded in the central
+  database.
 
 Tokens and keys stay in the installer's memory. They are written only to Secrets Manager and GitHub. Every step can
 be run again safely, and running the installer again updates an existing installation.
 
 ## People and permissions
 
-Everyone signs in with Amazon Cognito (`trace login`). Each person holds **read** or **write** on each project:
+Everyone signs in with Amazon Cognito (`trace login`). Each person is in one of three classes:
 
-- **read**: see the project's status, settings, runs and artifacts, and use the read-only tools.
-- **write**: everything read allows, plus change settings, give the agents work (`trace remote task`), and use tools
-  that record runs.
+| Class | What they can do |
+| --- | --- |
+| **admin** | Everything, on every project. This includes inviting people, setting classes and assigning projects. |
+| **user** | Read and write, only on the projects they are assigned to. |
+| **guest** | Read only, only on the projects they are assigned to. |
 
-A person with no grant on a project cannot tell that it exists. Members of `trace-admins` hold write on every project
-and are the only ones who grant and revoke: `trace users invite|grant|revoke|grants`. Every request to the API runtime
-is checked against these grants. The repositories' own workflows reach only the worker runtime, through IAM, so a
-person's sign-in never acts as the loop, and the loop never acts as a person.
+- **Read** means seeing a project's status, settings, runs and artifacts, and using the read-only tools.
+- **Write** also allows changing settings, giving the agents work (`trace remote task`), and using the tools that
+  record runs.
+
+A person's class is their Cognito group (`trace-admins`, `trace-users`, `trace-guests`), so it travels inside their
+signed token. Someone in none of these groups can do nothing. Project assignments live in the central database.
+Someone not assigned to a project cannot tell that it exists.
+
+The API runtime checks every request against these rules. The repositories' own workflows reach only the worker
+runtime, through IAM, so a person's sign-in never acts as the loop, and the loop never acts as a person. Admins manage
+people with:
+
+```sh
+trace users invite EMAIL --class user|guest|admin
+trace users class EMAIL guest
+trace users assign EMAIL OWNER/REPO
+trace users unassign EMAIL OWNER/REPO
+trace users list
+trace users assignments
+```
+
+The installer sets up the first admin and anyone else you list, with their classes and projects.
 
 ## Putting another repository under trace
 

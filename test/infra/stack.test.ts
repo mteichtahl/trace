@@ -68,9 +68,9 @@ describe('the trace stack', () => {
     expect(invoke[0]).not.toContain('ApiRuntime')
   })
 
-  it('has a Cognito pool without self sign-up, an admins group, and the first admin', () => {
+  it('has a Cognito pool without self sign-up, the admin/user/guest groups, and the first admin', () => {
     t.hasResourceProperties('AWS::Cognito::UserPool', { AdminCreateUserConfig: Match.objectLike({ AllowAdminCreateUserOnly: true }) })
-    t.hasResourceProperties('AWS::Cognito::UserPoolGroup', { GroupName: 'trace-admins' })
+    for (const g of ['trace-admins', 'trace-users', 'trace-guests']) t.hasResourceProperties('AWS::Cognito::UserPoolGroup', { GroupName: g })
     t.hasResourceProperties('AWS::Cognito::UserPoolUser', { Username: 'marc@example.com' })
     t.hasResourceProperties('AWS::Cognito::UserPoolClient', { GenerateSecret: false, CallbackURLs: ['http://localhost:47821/callback', 'http://localhost:47822/callback'] })
   })

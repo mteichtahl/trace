@@ -23,10 +23,12 @@ export class FakeScpi {
   psu: PsuChannel[] = [1, 2, 3].map(() => ({ v: 0, i: 0.1, on: false, r: 100 }))
   selected = 1
   /** scope state */
-  scope = { running: true, triggerStatus: 'STOP', source: 1, points: 1200, vpp: 3.2, freq: 1000, xinc: 1e-6, chanScale: [1, 1, 1, 1] }
+  scope = { running: true, triggerStatus: 'STOP', source: 1, points: 1200, vpp: 3.2, freq: 1000, xinc: 5e-6, chanScale: [1, 1, 1, 1] }
   dmm = { func: 'VOLT:DC', reading: 3.3012 }
   /** do not answer this command (to test timeouts) */
   silent: RegExp | null = null
+  /** a scope whose trigger never comes */
+  neverTrigger = false
   private server: Server | null = null
   private readonly sockets = new Set<Socket>()
 
@@ -157,7 +159,7 @@ export class FakeScpi {
     const s = this.scope
     if (u === ':RUN') { s.running = true; s.triggerStatus = 'AUTO'; return true }
     if (u === ':STOP') { s.running = false; s.triggerStatus = 'STOP'; return true }
-    if (u === ':SING') { s.triggerStatus = 'WAIT'; setTimeout(() => { s.triggerStatus = 'STOP' }, 150); return true }
+    if (u === ':SING') { s.triggerStatus = 'WAIT'; if (!this.neverTrigger) setTimeout(() => { s.triggerStatus = 'STOP' }, 150); return true }
     if (u === ':TRIG:STAT?') { this.reply(sock, s.triggerStatus); return true }
     if ((m = /^:WAV:SOUR CHAN(\d)$/.exec(u))) { s.source = Number(m[1]); return true }
     if (/^:WAV:(MODE|FORM) /.test(u)) return true

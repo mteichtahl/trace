@@ -42,7 +42,8 @@ const TABS: { id: Tab; title: string }[] = [
   { id: 'people', title: '4 People' }, { id: 'review', title: '5 Review' }, { id: 'install', title: 'Install' },
 ]
 
-interface Person { email: string; admin: boolean; roles: Record<string, '' | 'read' | 'write'> }
+type PersonClass = 'admin' | 'user' | 'guest'
+interface Person { email: string; class: PersonClass; projects: Set<string> }
 
 const s = {
   tab: 'github' as Tab,
@@ -105,8 +106,8 @@ function answers(): AnswersInput {
     projects: [...s.projects].map(([repo, p]) => ({ repo, ...p })),
     adminEmail: s.adminEmail,
     people: s.people.filter((p) => p.email.trim()).map((p) => ({
-      email: p.email.trim(), admin: p.admin,
-      grants: Object.entries(p.roles).filter(([, r]) => r).map(([repo, role]) => ({ repo, role: role as 'read' | 'write' })),
+      email: p.email.trim(), class: p.class,
+      projects: p.class === 'admin' ? [] : [...p.projects].filter((r) => s.projects.has(r)),
     })),
     escalateTo: s.agents.escalateTo,
   }
@@ -283,22 +284,32 @@ function agents(): HTMLElement {
     next('agents', 'people'))
 }
 
+const CLASS_HELP: Record<PersonClass, string> = {
+  admin: 'everything, on every project, including managing people',
+  user: 'read and write on the projects ticked',
+  guest: 'read only, on the projects ticked',
+}
+
 function people(): HTMLElement {
   const repos = [...s.projects.keys()]
   return h('section', { class: 'card' },
     h('h2', {}, 'People'),
-    h('p', { class: 'lead' }, 'Everyone signs in with Amazon Cognito. Each person sees only the projects you give them: read lets them see a project\'s status, settings and runs; write also lets them change settings and give the agents work. Admins see every project and manage access. Cognito emails each person a temporary password.'),
+    h('p', { class: 'lead' }, 'Everyone signs in with Amazon Cognito, which emails each person a temporary password. There are three classes: admins can do everything on every project; users can read and change the projects they are assigned to; guests can only read the projects they are assigned to. Nobody can see a project they are not assigned to.'),
     field('First administrator', input('email', s.adminEmail, (v) => { s.adminEmail = v.trim() }, { placeholder: 'you@example.com' })),
     h('table', { class: 'grid' },
-      h('thead', {}, h('tr', {}, h('th', {}, 'Email'), h('th', {}, 'Admin'), ...repos.map((r) => h('th', {}, r)), h('th', {}, ''))),
+      h('thead', {}, h('tr', {}, h('th', {}, 'Email'), h('th', {}, 'Class'), ...repos.map((r) => h('th', {}, r)), h('th', {}, ''))),
       h('tbody', {}, ...s.people.map((p, i) => h('tr', {},
         h('td', {}, input('email', p.email, (v) => { p.email = v }, { placeholder: 'name@example.com' })),
-        h('td', {}, h('input', { type: 'checkbox', checked: p.admin, onchange: (e: Event) => { p.admin = (e.target as HTMLInputElement).checked; render() } })),
-        ...repos.map((r) => h('td', {}, p.admin ? h('span', { class: 'muted' }, 'write') : select(
-          [{ value: '', label: 'none' }, { value: 'read', label: 'read' }, { value: 'write', label: 'write' }],
-          p.roles[r] ?? '', (v) => { p.roles[r] = v === 'read' || v === 'write' ? v : '' }))),
+        h('td', { title: CLASS_HELP[p.class] }, select(
+          [{ value: 'user', label: 'user' }, { value: 'guest', label: 'guest' }, { value: 'admin', label: 'admin' }],
+          p.class, (v) => { p.class = v === 'admin' || v === 'guest' ? v : 'user'; render() })),
+        ...repos.map((r) => h('td', {}, p.class === 'admin'
+          ? h('span', { class: 'muted' }, 'all')
+          : h('input', { type: 'checkbox', checked: p.projects.has(r), title: `${p.class === 'guest' ? 'read' : 'read and write'} on ${r}`,
+            onchange: (e: Event) => { if ((e.target as HTMLInputElement).checked) p.projects.add(r); else p.projects.delete(r) } }))),
         h('td', {}, h('button', { class: 'secondary', onclick: () => { s.people.splice(i, 1); render() } }, 'Remove')))))),
-    h('div', { class: 'actions' }, h('button', { class: 'secondary', onclick: () => { s.people.push({ email: '', admin: false, roles: {} }); render() } }, 'Add a person')),
+    s.people.length ? h('p', { class: 'muted' }, s.people.map((p) => `${p.email || 'new person'}: ${CLASS_HELP[p.class]}`).join(' · ')) : null,
+    h('div', { class: 'actions' }, h('button', { class: 'secondary', onclick: () => { s.people.push({ email: '', class: 'user', projects: new Set() }); render() } }, 'Add a person')),
     next('people', 'review'))
 }
 
@@ -367,7 +378,7 @@ async function boot(): Promise<void> {
       Object.assign(s.agents, { ...saved.agents, escalateTo: saved.escalateTo ?? '' })
       for (const p of saved.projects) s.projects.set(p.repo, { onboard: p.onboard ?? true, applySettings: p.applySettings ?? true })
       s.adminEmail = saved.adminEmail
-      s.people = (saved.people ?? []).map((p) => ({ email: p.email, admin: p.admin ?? false, roles: Object.fromEntries((p.grants ?? []).map((g) => [g.repo, g.role])) }))
+      s.people = (saved.people ?? []).map((p) => ({ email: p.email, class: p.class ?? 'user', projects: new Set(p.projects ?? []) }))
     } else if (s.env.profiles.regions.default) {
       s.aws.region = s.env.profiles.regions.default
     }

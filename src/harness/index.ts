@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { type TraceConfig, readSettings, resolve } from '../core/config.js'
 import * as ci from './ci-doctor.js'
 import * as deploy from './deploy.js'
+import { dispatchTask } from './dispatch.js'
 import * as prs from './prs.js'
 import type { Context, Core, Deps, GitHub, TaskEnv } from './types.js'
 import * as worker from './worker.js'
@@ -22,6 +23,7 @@ export const TASKS: Record<string, (d: Deps) => Promise<void> | void> = {
   'ci-doctor': ci.ciDoctor,
   'worker-pick': (d) => worker.pick(d),
   'worker-prompt': worker.prompt,
+  'worker-dispatch': (d) => dispatchTask(d),
   'deploy-request': deploy.request,
   'deploy-approve': deploy.approve,
   'deploy-commands': deploy.commands,

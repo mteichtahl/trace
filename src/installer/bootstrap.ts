@@ -8,7 +8,8 @@
  *   4 token      write the GitHub token into the stack's Secrets Manager secret
  *   5 repos      each repository's Actions variables (role, region, TRACE_HOME, runtime) and its TRACE_TOKEN secret
  *   6 onboard    the onboarding PR in each repository that asked for it, and its repository settings
- *   7 people     invite each person to Cognito, admins into trace-admins, and record their per-project grants
+ *   7 people     invite each person to Cognito, put them in their class's group (admin, user, guest), and record
+ *                the projects they are assigned to
  *   8 local      save the installation on this machine so `trace login` and `trace remote …` work
  *
  * Secrets never leave memory except to their destination (Secrets Manager, GitHub's sealed-box API).
@@ -21,7 +22,7 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider'
 import { PutSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
 import type { AwsCredentialIdentity } from '@smithy/types'
-import { type Principal, ADMIN_GROUP, grant } from '../core/access.js'
+import { type Principal, GROUPS, assign, setClass } from '../core/access.js'
 import { saveAnswers, saveInstallation } from '../core/client.js'
 import { onboard, register } from '../core/onboard.js'
 import { type InfraInput, InfraPropsSchema, stackName } from '../infra/props.js'
@@ -58,7 +59,7 @@ export function plan(a: Answers): Step[] {
     ['token', 'Store the GitHub token', 'in the stack\'s Secrets Manager secret'],
     ['repos', 'Configure the repositories', `variables TRACE_AWS_ROLE, TRACE_AWS_REGION, TRACE_HOME, TRACE_AGENT_RUNTIME_ARN and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}`],
     ['onboard', 'Onboard the repositories', onboarding.length ? `open the onboarding PR in ${onboarding.join(', ')}` : 'none chosen'],
-    ['people', 'Invite people and grant access', `${a.adminEmail} (first admin)${a.people.length ? `, ${a.people.map((p) => p.email).join(', ')}` : ''}`],
+    ['people', 'Invite people and assign projects', `${a.adminEmail} (admin)${a.people.length ? `, ${a.people.map((p) => `${p.email} (${p.class})`).join(', ')}` : ''}`],
     ['local', 'Save this installation locally', '~/.trace/client.db, so `trace login` works here'],
   ]
   return steps.map(([id, title, detail]) => ({ id, title, detail, status: 'pending' as const }))
@@ -189,7 +190,7 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
       set('onboard', 'done')
     }
 
-    // 7 — people and grants (central database on S3: credentials in this process's environment for the duration)
+    // 7 — people and their projects (central database on S3: credentials in this process's environment for the duration)
     current = 'people'
     set('people', 'running')
     const saved = { ...process.env }
@@ -211,17 +212,16 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
           return c.User?.Attributes?.find((x) => x.Name === 'sub')?.Value ?? ''
         }
       }
-      const installer: Principal = { sub: `installer:${check.arn}`, email: a.adminEmail, groups: [ADMIN_GROUP] }
+      const installer: Principal = { sub: `installer:${check.arn}`, email: a.adminEmail, groups: [GROUPS.admin] }
       for (const p of a.people) {
         const sub = await subOf(p.email)
         if (!sub) throw new Error(`no Cognito id for ${p.email}`)
-        if (p.admin) {
-          await idp.send(new AdminAddUserToGroupCommand({ UserPoolId: pool, Username: p.email, GroupName: ADMIN_GROUP }))
-          log('people', `${p.email}: admin`)
-        }
-        for (const g of p.grants) {
-          await grant(installer, { sub, email: p.email }, g.repo, g.role)
-          log('people', `${p.email}: ${g.role} on ${g.repo}`)
+        await idp.send(new AdminAddUserToGroupCommand({ UserPoolId: pool, Username: p.email, GroupName: GROUPS[p.class] }))
+        await setClass(installer, { sub, email: p.email }, p.class)
+        log('people', `${p.email}: ${p.class}`)
+        for (const repo of p.projects) {
+          await assign(installer, { sub, email: p.email }, repo)
+          log('people', `${p.email}: assigned to ${repo} (${p.class === 'guest' ? 'read' : 'read and write'})`)
         }
       }
       for (const p of a.projects) await register(p.repo, null)
