@@ -28,12 +28,27 @@ def log(msg):
 
 
 def script_args():
-    """Everything after `--` on Blender's command line."""
-    return sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+    """Everything after `--` on Blender's command line: <job.json> <result.json> [more...]. The result is also written
+    to result.json (a copy of the TRACE_RESULT line), so a job always has one output file."""
+    global RESULT_FILE
+    a = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+    if len(a) >= 2:
+        RESULT_FILE = a[1]
+    return a
+
+
+RESULT_FILE = None
 
 
 def emit(obj):
-    print("TRACE_RESULT " + json.dumps(obj, separators=(",", ":")), flush=True)
+    line = json.dumps(obj, separators=(",", ":"))
+    if RESULT_FILE:
+        try:
+            with open(RESULT_FILE, "w", encoding="utf-8") as f:
+                f.write(line)
+        except OSError as e:
+            log(f"cannot write {RESULT_FILE}: {e}")
+    print("TRACE_RESULT " + line, flush=True)
 
 
 def run_main(fn):
@@ -558,11 +573,11 @@ def shoot(scene, job, subject, outs, sel, plan_views_ortho=True):
 
 def load_job():
     a = script_args()
-    if len(a) < 1:
-        raise JobError("usage: blender -b -P <script> -- <job.json> [model] [outputs...]")
+    if len(a) < 2:
+        raise JobError("usage: blender -b -P <script> -- <job.json> <result.json> [model] [outputs...]")
     with open(a[0], encoding="utf-8") as f:
         job = json.load(f)
-    return job, a[1:]
+    return job, a[2:]
 
 
 def device_for(job):

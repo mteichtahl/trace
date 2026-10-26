@@ -1,0 +1,23 @@
+Sensor-node analog front end: J1 -> R1/R2 divider -> R3/C1 anti-alias filter -> BAT54S clamp -> ADC_IN
+* Values are the schematic's (hardware/sensor-node.kicad_sch). Node names follow its nets.
+* The BAT54S model (Diodes Incorporated) is in models/BAT54S.lib.
+.include models/BAT54S.lib
+
+* J1: the sensor, 12 V full scale. DC vin_dc for .op (and the bias of the AC sweep); AC 1 V for the sweep;
+* a 0 -> 12 V step at 1 ms for .tran. Override vin_dc to look at another point of the range (params: {"vin_dc": 6}).
+.param vin_dc=12
+V1 vin 0 DC {vin_dc} AC 1 PULSE(0 12 1m 1u 1u 10m 20m)
+* J2 pin 1: the MCU's 3.3 V rail, which the clamp's upper diode returns to.
+V2 3v3 0 DC 3.3
+
+R1 vin div 39k
+R2 div 0 13k
+R3 div adc_in 6.2k
+C1 adc_in 0 10n
+* D1 BAT54S: pin 1 (A) to GND, pin 2 (K) to 3V3, pin 3 (COM) on ADC_IN
+XD1 0 3v3 adc_in BAT54S
+C2 3v3 0 100n
+
+.op
+.ac dec 50 1 1meg
+.tran 2u 5m

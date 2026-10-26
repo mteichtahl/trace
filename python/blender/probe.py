@@ -1,7 +1,7 @@
 """What this Blender can do, for render.status: version, engines, every Cycles compute device per backend, whether
 the glTF importer works (it needs numpy), denoisers, and whether EEVEE renders headless (a tiny test frame).
 
-    blender -b --factory-startup --python-exit-code 1 -P probe.py -- [eevee] [eevee.png]
+    blender -b --factory-startup --python-exit-code 1 -P probe.py -- <job.json> <result.json> [eevee <eevee.png>]
 """
 import os
 import sys
@@ -46,9 +46,13 @@ def denoisers():
 
 
 def main():
-    a = C.script_args()
+    a = C.script_args()[2:]
     types, devices = C.list_devices()
     ids = [e.identifier for e in bpy.types.RenderSettings.bl_rna.properties["engine"].enum_items]
+    for cls in bpy.types.RenderEngine.__subclasses__():        # add-on engines (Cycles is one)
+        idn = getattr(cls, "bl_idname", None)
+        if idn and idn not in ids:
+            ids.append(idn)
     res = {
         "blender": bpy.app.version_string,
         "engines": ids,

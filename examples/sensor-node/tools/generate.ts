@@ -71,6 +71,8 @@ interface Part {
   pcb: [number, number, number]
   /** pad number → net */
   pads: Record<string, string>
+  /** schematic: a side pin's power symbol reached by a wire [out, then down/up] (default 2.54, 2.54) */
+  powerRoute?: Record<string, [number, number]>
   description: string
 }
 
@@ -99,7 +101,7 @@ const PARTS: Part[] = [
     sch: [175.26, 101.6], pcb: [133, 105.92, 0], pads: { 1: '+3V3', 2: 'GND' }, description: '3V3 decoupling at the clamp' },
   { ref: 'J2', lib: 'Connector_Generic', sym: 'Conn_01x04', value: 'MCU', footprint: 'Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical',
     fields: { MPN: 'PZ254V-11-04P', Manufacturer: 'XFCN', LCSC: 'C2691448' }, sch: [220.98, 88.9], pcb: [137, 105.92, 0],
-    pads: { 1: '+3V3', 2: 'GND', 3: 'ADC_IN', 4: 'LED' }, description: 'To the MCU: 3V3, GND, ADC_IN, LED' },
+    pads: { 1: '+3V3', 2: 'GND', 3: 'ADC_IN', 4: 'LED' }, powerRoute: { 2: [12.7, 10.16] }, description: 'To the MCU: 3V3, GND, ADC_IN, LED' },
   { ref: 'R4', lib: 'Device', sym: 'R', value: '680', footprint: R0603, fields: uniroyal('0603WAF6800T5E', 'C23228'),
     sch: [190.5, 127], pcb: [131.5, 119, 0], pads: { 1: 'LED', 2: 'LED_A' }, description: 'LED series resistor, about 1.9 mA from a 3V3 GPIO' },
   { ref: 'D2', lib: 'Device', sym: 'LED', value: 'RED', footprint: 'LED_SMD:LED_0603_1608Metric',
@@ -107,14 +109,16 @@ const PARTS: Part[] = [
     sch: [175.26, 139.7], pcb: [136, 119, 180], pads: { 1: 'GND', 2: 'LED_A' }, description: 'Status LED' },
 ]
 
-/** Pin end points of each symbol (schematic coordinates, y down) relative to its position. */
-const PIN_OFFSETS: Record<string, Record<string, [number, number]>> = {
-  R: { 1: [0, -3.81], 2: [0, 3.81] },
-  C: { 1: [0, -3.81], 2: [0, 3.81] },
-  LED: { 1: [-3.81, 0], 2: [3.81, 0] },
-  BAT54S: { 1: [-7.62, 0], 2: [7.62, 0], 3: [0, 5.08] },
-  Conn_01x02: { 1: [-5.08, 0], 2: [-5.08, 2.54] },
-  Conn_01x04: { 1: [-5.08, -2.54], 2: [-5.08, 0], 3: [-5.08, 2.54], 4: [-5.08, 5.08] },
+/** Pin end points of each symbol (schematic coordinates, y down) relative to its position, and the way each pin
+ * points out of the symbol (labels and power symbols continue in that direction). */
+type Dir = 'up' | 'down' | 'left' | 'right'
+const PIN_OFFSETS: Record<string, Record<string, [number, number, Dir]>> = {
+  R: { 1: [0, -3.81, 'up'], 2: [0, 3.81, 'down'] },
+  C: { 1: [0, -3.81, 'up'], 2: [0, 3.81, 'down'] },
+  LED: { 1: [-3.81, 0, 'left'], 2: [3.81, 0, 'right'] },
+  BAT54S: { 1: [-7.62, 0, 'left'], 2: [7.62, 0, 'right'], 3: [0, 5.08, 'down'] },
+  Conn_01x02: { 1: [-5.08, 0, 'left'], 2: [-5.08, 2.54, 'left'] },
+  Conn_01x04: { 1: [-5.08, -2.54, 'left'], 2: [-5.08, 0, 'left'], 3: [-5.08, 2.54, 'left'], 4: [-5.08, 5.08, 'left'] },
 }
 
 // ------------------------------------------------------------------ the schematic
@@ -125,14 +129,14 @@ const hidden = (k: string, v: string, x: number, y: number): string =>
   `\t\t(property ${q(k)} ${q(v)} (at ${n(x)} ${n(y)} 0) (show_name no) (do_not_autoplace no) (hide yes) ${effects})`
 
 function symbolInstance(lib: string, sym: string, ref: string, value: string, footprint: string, x: number, y: number,
-  pins: string[], extra: Record<string, string>, datasheet = '~', description = ''): string {
+  pins: string[], extra: Record<string, string>, datasheet = '~', description = '', rot = 0): string {
   const id = uuid(`sym/${ref}`)
   return [
-    `\t(symbol (lib_id ${q(`${lib}:${sym}`)}) (at ${n(x)} ${n(y)} 0) (unit 1) (body_style 1)`,
+    `\t(symbol (lib_id ${q(`${lib}:${sym}`)}) (at ${n(x)} ${n(y)} ${rot}) (unit 1) (body_style 1)`,
     '\t\t(exclude_from_sim no) (in_bom yes) (on_board yes) (in_pos_files yes) (dnp no)',
     `\t\t(uuid ${q(id)})`,
-    libProperty(lib, sym, 'Reference', ref, x, y),
-    libProperty(lib, sym, 'Value', value, x, y),
+    libProperty(lib, sym, 'Reference', ref, x, y, rot),
+    libProperty(lib, sym, 'Value', value, x, y, rot),
     hidden('Footprint', footprint, x, y),
     hidden('Datasheet', datasheet, x, y),
     hidden('Description', description, x, y),
@@ -143,9 +147,9 @@ function symbolInstance(lib: string, sym: string, ref: string, value: string, fo
   ].join('\n')
 }
 
-/** A Reference or Value property placed where the library symbol puts it (library y is up, schematic y is down),
- * with the library's text effects (justification, hidden or not). */
-function libProperty(lib: string, sym: string, key: 'Reference' | 'Value', value: string, x: number, y: number): string {
+/** A Reference or Value property placed where the library symbol puts it (library y is up, schematic y is down; the
+ * offset turns with the symbol, counter-clockwise on screen), with the library's text effects. */
+function libProperty(lib: string, sym: string, key: 'Reference' | 'Value', value: string, x: number, y: number, rot = 0): string {
   const text = libSymbol(lib, sym)
   const at = text.indexOf(`(property ${q(key)} `)
   if (at < 0) throw new Error(`${lib}:${sym} has no ${key}`)
@@ -155,12 +159,19 @@ function libProperty(lib: string, sym: string, key: 'Reference' | 'Value', value
   if (!pos || eff < 0) throw new Error(`${lib}:${sym} ${key} has no position or effects`)
   const effectsText = balanced(prop, eff).replace(/\s+/g, ' ')
   const hide = /\(hide yes\)/.test(prop.slice(0, eff)) ? ' (hide yes)' : ''
-  return `\t\t(property ${q(key)} ${q(value)} (at ${n(x + Number(pos[1]))} ${n(y - Number(pos[2]))} ${pos[3]}) (show_name no) (do_not_autoplace no)${hide} ${effectsText})`
+  const [ox, oy] = turn(Number(pos[1]), -Number(pos[2]), rot)
+  return `\t\t(property ${q(key)} ${q(value)} (at ${n(x + ox)} ${n(y + oy)} ${(Number(pos[3]) + rot) % 180}) (show_name no) (do_not_autoplace no)${hide} ${effectsText})`
+}
+
+/** A screen offset (y down) turned counter-clockwise by a multiple of 90 degrees. */
+function turn(dx: number, dy: number, rot: number): [number, number] {
+  const r = ((rot % 360) + 360) % 360
+  return r === 90 ? [dy, -dx] : r === 180 ? [-dx, -dy] : r === 270 ? [-dy, dx] : [dx, dy]
 }
 
 /** A local label on a pin end, its text running away from the symbol: pins above go up, below go down, left go left. */
-function label(text: string, x: number, y: number, dx: number, dy: number): string {
-  const [angle, justify] = dy < 0 ? [90, 'left bottom'] : dy > 0 ? [270, 'right bottom'] : dx < 0 ? [180, 'right bottom'] : [0, 'left bottom']
+function label(text: string, x: number, y: number, dir: Dir): string {
+  const [angle, justify] = { up: [90, 'left bottom'], down: [270, 'right bottom'], left: [180, 'right bottom'], right: [0, 'left bottom'] }[dir]
   return `\t(label ${q(text)} (at ${n(x)} ${n(y)} ${angle}) (effects (font (size 1.27 1.27)) (justify ${justify})) (uuid ${q(uuid(`label/${text}/${x}/${y}`))}))`
 }
 
@@ -171,9 +182,17 @@ function wire(a: [number, number], b: [number, number]): string {
 function schematic(): string {
   const out: string[] = []
   let pwr = 0
-  const power = (sym: 'GND' | '+3V3', x: number, y: number): void => {
+  /** A power symbol on a pin end. On a side pin it sits upright at the end of an L of wire: out from the pin, then
+   * down to GND or up to +3V3. */
+  const power = (sym: 'GND' | '+3V3', x: number, y: number, dir: Dir, route: [number, number] = [2.54, 2.54]): void => {
     pwr++
-    out.push(symbolInstance('power', sym, `#PWR${String(pwr).padStart(2, '0')}`, sym, '', x, y, ['1'], {}, '',
+    let at: [number, number] = [x, y]
+    if (dir === 'left' || dir === 'right') {
+      const corner: [number, number] = [x + (dir === 'left' ? -route[0] : route[0]), y]
+      at = [corner[0], y + (sym === 'GND' ? route[1] : -route[1])]
+      out.push(wire([x, y], corner), wire(corner, at))
+    }
+    out.push(symbolInstance('power', sym, `#PWR${String(pwr).padStart(2, '0')}`, sym, '', at[0], at[1], ['1'], {}, '',
       sym === 'GND' ? 'Power symbol creates a global label with name "GND" , ground' : 'Power symbol creates a global label with name "+3V3"'))
   }
   for (const p of PARTS) {
@@ -181,13 +200,13 @@ function schematic(): string {
     if (!offs) throw new Error(`no pin map for ${p.sym}`)
     const ds = p.sym === 'BAT54S' ? 'https://www.diodes.com/assets/Datasheets/ds11005.pdf' : '~'
     out.push(symbolInstance(p.lib, p.sym, p.ref, p.value, p.footprint, p.sch[0], p.sch[1], Object.keys(offs), p.fields, ds, p.description))
-    for (const [pin, [dx, dy]] of Object.entries(offs)) {
+    for (const [pin, [dx, dy, dir]] of Object.entries(offs)) {
       const net = p.pads[pin]
       if (!net) throw new Error(`${p.ref}.${pin} has no net`)
       const x = p.sch[0] + dx
       const y = p.sch[1] + dy
-      if (net === 'GND' || net === '+3V3') power(net, x, y)
-      else out.push(label(net, x, y, dx, dy))
+      if (net === 'GND' || net === '+3V3') power(net, x, y, dir, p.powerRoute?.[pin])
+      else out.push(label(net, x, y, dir))
     }
   }
   // The supplies come in through J2 (and J1 for ground): PWR_FLAGs tell ERC they are driven from off the board.
@@ -197,7 +216,7 @@ function schematic(): string {
     out.push(symbolInstance('power', 'PWR_FLAG', `#FLG0${i + 1}`, 'PWR_FLAG', '', x, y, ['1'], {}, '~',
       'Special symbol for telling ERC where power comes from'))
     out.push(wire([x, y], [x + 7.62, y]))
-    power(net, x + 7.62, y)
+    power(net, x + 7.62, y, net === 'GND' ? 'down' : 'up')
   }
   const libs = [['Connector_Generic', 'Conn_01x02'], ['Connector_Generic', 'Conn_01x04'], ['Device', 'C'], ['Device', 'LED'], ['Device', 'R'],
     ['Diode', 'BAT54S'], ['power', '+3V3'], ['power', 'GND'], ['power', 'PWR_FLAG']] as const

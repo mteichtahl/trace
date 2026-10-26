@@ -1,0 +1,6 @@
+# KiCad's per-user view settings and backups, written beside the project when it is opened
+*.kicad_prl
+*-backups/
+fp-info-cache
+# firmware build output (make)
+firmware/build/

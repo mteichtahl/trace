@@ -1,6 +1,6 @@
 """Render a PCB exported by kicad-cli (GLB from `pcb export glb`, or VRML from `pcb export vrml --units m`).
 
-    blender -b --factory-startup --python-exit-code 1 -P render_board.py -- job.json board.glb top.png iso.png ...
+    blender -b --factory-startup --python-exit-code 1 -P render_board.py -- job.json result.json board.glb top.png iso.png ...
 
 The exporter's own colours say what each surface is (KiCad writes the board body, copper, mask and silkscreen as
 separate shapes with conventional colours); each is re-made as a clean physical surface: the solder mask in

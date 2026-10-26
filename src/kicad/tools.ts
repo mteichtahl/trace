@@ -11,7 +11,7 @@
  * (connectivity, ERC, DRC, plots, placement files) runs kicad-cli and fails with a clear ToolError without it.
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { z } from 'zod'
 import { defineTool, ToolError, type AnyTool } from '../core/registry.js'
 import { buildBom, bomCsv, jlcBomCsv, jlcCplCsv, placements } from './bom.js'
@@ -25,7 +25,12 @@ import { cap, recorded } from './record.js'
 const project = z.string().optional().describe('path to a .kicad_pro, .kicad_sch or .kicad_pcb (or a folder with one project); omit for the configured/only project')
 const limit = (d: number) => z.number().int().min(1).max(5000).default(d).describe(`maximum items listed (default ${d}); totals are always given`)
 
-const subject = (p: Project): string => p.pro ?? p.sch ?? p.pcb ?? p.name
+/** The run record's subject: the project file, relative to the working directory when it is inside it. */
+const subject = (p: Project): string => {
+  const f = p.pro ?? p.sch ?? p.pcb ?? p.name
+  const r = relative(process.cwd(), f)
+  return r && !r.startsWith('..') && !isAbsolute(r) ? r : f
+}
 const round = (x: number, d = 4): number => Math.round(x * 10 ** d) / 10 ** d
 const POUR_NOTE = 'connectivity follows tracks and vias; copper pours (zones) are not filled, so pads joined only by a pour show as unreached'
 

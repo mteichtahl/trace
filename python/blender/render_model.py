@@ -1,6 +1,6 @@
 """Render any model file (GLB/glTF, VRML/X3D, STL, OBJ, PLY, FBX): an enclosure, an assembly, a part.
 
-    blender -b --factory-startup --python-exit-code 1 -P render_model.py -- job.json model.stl front.png iso.png ...
+    blender -b --factory-startup --python-exit-code 1 -P render_model.py -- job.json result.json model.stl front.png iso.png ...
 
 materials: 'auto' keeps the model's own materials and gives a clay surface to anything without one; 'clay' puts one
 clay surface (clay_color) on everything; 'keep' changes nothing. STEP is not imported here (Blender has no STEP

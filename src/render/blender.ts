@@ -5,10 +5,11 @@
  * Every invocation goes through runJob() (src/gpu/jobs.ts), so the same call renders on this machine or, when there is
  * no local GPU and TRACE_GPU_QUEUE names a GPU queue (an AgentCore runtime), on that queue:
  *
- *   blender -b --factory-startup --python-exit-code 1 -P {in:script.py} -- {in:job.json} [{in:model}] {out:a.png} ...
+ *   blender -b --factory-startup --python-exit-code 1 -P {in:script.py} -- {in:job.json} {out:result.json} [{in:model}] {out:a.png} ...
  *
  * The job (a JSON file in a scratch directory, removed afterwards) carries the settings; the script prints exactly one
- * line `TRACE_RESULT {...}` last, which is parsed here with zod. A script failure prints `{"ok": false, "error"}`.
+ * line `TRACE_RESULT {...}` last (and writes the same JSON to result.json, so every job has an output to bring back),
+ * which is parsed here with zod. A script failure prints `{"ok": false, "error"}`.
  */
 import { existsSync, mkdirSync, readdirSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -159,12 +160,19 @@ export async function runBlender<T>(call: BlenderCall<T>): Promise<BlenderRun<T>
       kind: 'blender',
       gpu,
       timeoutSeconds,
-      argv: [bin, '-b', '--factory-startup', '--python-exit-code', '1', '-P', `{in:${call.script}}`, '--', '{in:job.json}', ...(call.args ?? [])],
+      argv: [bin, '-b', '--factory-startup', '--python-exit-code', '1', '-P', `{in:${call.script}}`, '--', '{in:job.json}', '{out:result.json}', ...(call.args ?? [])],
       inputs: { [call.script]: script, 'common.py': join(dir, 'common.py'), 'job.json': jobPath, ...(call.inputs ?? {}) },
-      outputs: call.outputs ?? [],
+      outputs: ['result.json', ...(call.outputs ?? [])],
+      env: { PYTHONDONTWRITEBYTECODE: '1' },
     })
-    const result = readResult(r, call.schema, timeoutSeconds)
     const outputs = r.outputs
+    let result: T
+    try {
+      result = readResult(r, call.schema, timeoutSeconds)
+    } catch (e) {
+      removeOutputs(outputs)
+      throw e
+    }
     return {
       result, outputs, where: r.where, seconds: r.seconds,
       ...(r.jobId ? { jobId: r.jobId } : {}),
@@ -184,7 +192,7 @@ export function removeOutputs(outputs: Record<string, string>): void {
     if (basename(out) === 'out') dirs.add(dirname(out))
   }
   for (const d of dirs) {
-    if (!resolve(d).startsWith(resolve(tmpdir())) || !/^blender-/.test(basename(d))) continue
+    if (!resolve(d).startsWith(resolve(tmpdir())) || !/^(trace-)?blender-/.test(basename(d))) continue
     rmSync(d, { recursive: true, force: true })
     const parent = dirname(d)
     try {

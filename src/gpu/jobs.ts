@@ -12,13 +12,13 @@
  * must be written to, {dir} by the job's working directory.
  */
 import { spawn } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { z } from 'zod'
 import { ToolError } from '../core/registry.js'
 import { scratchDir } from '../core/store.js'
 
-export const JobKind = z.enum(['blender', 'freerouting'])
+export const JobKind = z.enum(['blender', 'freerouting', 'orthoroute'])
 export type JobKind = z.output<typeof JobKind>
 
 export const GpuJobSchema = z.object({
@@ -75,8 +75,7 @@ export function substitute(argv: readonly string[], ins: Record<string, string>,
 
 export async function runLocal(spec: GpuJob): Promise<JobResult> {
   const job = GpuJobSchema.parse(spec)
-  mkdirSync(scratchDir(), { recursive: true })
-  const dir = mkdtempSync(join(scratchDir(), `${job.kind}-`))
+  const dir = scratchDir(`trace-${job.kind}-`) // one fresh directory per job; the caller removes it when done
   const ins: Record<string, string> = {}
   for (const [n, p] of Object.entries(job.inputs)) {
     if (!existsSync(p)) throw new ToolError(`input ${n}: ${p} does not exist`)
