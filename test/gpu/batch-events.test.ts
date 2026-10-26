@@ -9,7 +9,8 @@ import { projectHash } from '../../src/core/project.js'
 import { activeWaits, type WaitNotice } from '../../src/core/wait.js'
 import { FakeS3 } from '../core/fake-s3.js'
 
-const TOPIC = 'arn:aws:sns:us-east-1:123456789012:trace-batch-events'
+// the project's own topic: <prefix>-<project hash>-batch-events (src/infra/project.ts)
+const TOPIC = `arn:aws:sns:us-east-1:123456789012:trace-${projectHash('acme/board')}-batch-events`
 const env = { TRACE_GPU_QUEUE: 'q-arn', TRACE_GPU_JOB_DEFINITION: 'def-arn', TRACE_GPU_BUCKET: 'central-bucket', TRACE_GPU_QUEUE_WAIT_S: '600', TRACE_PROJECT: 'Acme/Board', TRACE_BATCH_EVENTS_TOPIC: TOPIC }
 const QUEUE = `trace-${projectHash('acme/board')}-wait-job-1`
 
@@ -270,7 +271,7 @@ describe('waiting on a timer where there are no events', () => {
     expect(r.sns.subscribed).toHaveLength(0)
     expect(r.sleeps).toEqual([5000, 5000, 7500, 5000])
     const text = r.logs.join('\n')
-    expect(text).toMatch(/waiting on a timer: AWS job events do not reach this run \(the installation predates them; running the installer again adds them\)/)
+    expect(text).toMatch(/waiting on a timer: AWS job events do not reach this run \(the installation does not send them: it predates them \(running the installer again adds them\), or its layout is flat\)/)
     // a plain-language line per change of state, not per check
     const lines = r.logs.filter((l) => l.startsWith('Waiting for the graphics card job'))
     expect(lines).toHaveLength(3)
@@ -302,10 +303,17 @@ describe('waiting on a timer where there are no events', () => {
   })
 
   it('names the wait queue from the stack\'s topic and the project, or not at all', () => {
-    expect(waitQueueName(TOPIC, 'acme/board', 'abc-123')).toBe(`trace-${projectHash('acme/board')}-wait-abc-123`)
-    expect(waitQueueName('arn:aws:sns:us-east-1:123456789012:my-lab-batch-events', 'acme/board', 'j')).toBe(`my-lab-${projectHash('acme/board')}-wait-j`)
+    const h = projectHash('acme/board')
+    expect(waitQueueName(TOPIC, 'acme/board', 'abc-123')).toBe(`trace-${h}-wait-abc-123`)
+    expect(waitQueueName(`arn:aws:sns:us-east-1:123456789012:my-lab-${h}-batch-events`, 'acme/board', 'j')).toBe(`my-lab-${h}-wait-j`)
+    // another project's topic, the old stack-wide one, or anything else: no queue (the timer)
+    expect(waitQueueName(`arn:aws:sns:us-east-1:123456789012:trace-${projectHash('other/project')}-batch-events`, 'acme/board', 'j')).toBeNull()
+    expect(waitQueueName('arn:aws:sns:us-east-1:123456789012:trace-batch-events', 'acme/board', 'j')).toBeNull()
     expect(waitQueueName('arn:aws:sns:us-east-1:123456789012:other-topic', 'acme/board', 'j')).toBeNull()
     expect(waitQueueName(TOPIC, '_local', 'j')).toBeNull()
+    // the longest: a 21-character prefix and a Batch job id (a UUID) fit SQS's 80
+    const longest = waitQueueName(`arn:aws:sns:us-east-1:123456789012:abcdefghij-klmnopqrst-${h}-batch-events`, 'acme/board', '4c7599ae-0a82-49aa-ba5a-4727fcce14a8')
+    expect(longest?.length).toBe(72)
   })
 })
 

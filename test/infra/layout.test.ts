@@ -76,12 +76,13 @@ describe('the nested layout', () => {
       expect(s.nested.size).toBe(n)
       for (const t of s.nested.values()) {
         const j = json(t)
-        // 17, its CPU job definition, and its knowledge base (index, service role and policy, knowledge base, data source)
-        expect(count(j.Resources)).toBe(23)
+        // 17, its CPU job definition, its knowledge base (index, service role and policy, knowledge base, data source),
+        // and its job events (topic, topic policy, EventBridge rule)
+        expect(count(j.Resources)).toBe(26)
         // its 12, its knowledge base's two (Project<hash>KnowledgeBaseId, …DataSourceId), and the id the parent reads
         expect(count(j.Outputs)).toBe(15)
-        // its 11, the vector bucket, and the batch-events topic (TRACE_BATCH_EVENTS_TOPIC)
-        expect(count(j.Parameters)).toBe(13)
+        // its 11, and the vector bucket (its job-events topic is its own; the queues' ARNs were parameters already)
+        expect(count(j.Parameters)).toBe(12)
       }
       // CDK moves what no longer fits the API role's inline policy (every memory's ARN) into a managed policy
       const overflow = Object.keys(s.parent.findResources('AWS::IAM::ManagedPolicy'))
@@ -99,8 +100,8 @@ describe('the nested layout', () => {
     }
     // the knowledge bases add one resource to the parent (the vector bucket) and, from 24 projects, one more overflow
     // policies of the API role (it names every knowledge base for Retrieve): three at 24 projects, four at 60
-    // (the Batch job-events topic, its policy and its EventBridge rule are three of the parent's, whatever the number of projects)
-    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:90/19:0', '24:116/19:3', '60:153/19:4'])
+    // (each project's job-events topic, policy and rule are in its nested stack: none in the parent)
+    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:87/19:0', '24:113/19:3', '60:150/19:4'])
     // none of a project's outputs is the parent's: each is its nested stack's, with the repository it is the project of
     const s = synth(cfg(2), 'Count2Outputs')
     const parentOutputs = Object.keys(json(s.parent).Outputs ?? {})
@@ -157,11 +158,26 @@ describe('the nested layout', () => {
       const flat = synth(InfraPropsSchema.parse({ ...base, retainData, layout: 'flat' }), `SameFlat${retainData}`)
       expect(flat.nested.size).toBe(0)
       const fp = json(flat.parent)
+      // a flat stack has no job events: its workers wait on the timer (src/gpu/batch.ts)
+      for (const kind of ['AWS::SNS::Topic', 'AWS::Events::Rule']) flat.parent.resourceCountIs(kind, 0)
+      expect(JSON.stringify(fp)).not.toContain('TRACE_BATCH_EVENTS_TOPIC')
       for (const [repo, h] of [[A, HA], [B, HB]] as const) {
         // flat: the project's construct, and its memory's delivery under Observability
         const flatOwn = Object.entries(fp.Resources).filter(([id]) => id.startsWith(`Project${h}`) || id.startsWith(`ObservabilityProject${h}`))
         const nt = json(nestedOf(nested, repo))
-        const nestedOwn = Object.entries(nt.Resources)
+        // the job events (topic, its policy, its rule) are the nested layout's only too (src/infra/project.ts)
+        const jobEvents = ['AWS::SNS::Topic', 'AWS::SNS::TopicPolicy', 'AWS::Events::Rule']
+        // and so are what the worker gets for them: TRACE_BATCH_EVENTS_TOPIC and the ProjectGpuWait* statements
+        const withoutJobEvents = (r: Res): Res => {
+          const c = JSON.parse(JSON.stringify(r)) as Res & { Properties: Record<string, any> }
+          if (c.Type === 'AWS::BedrockAgentCore::Runtime') delete c.Properties.EnvironmentVariables?.TRACE_BATCH_EVENTS_TOPIC
+          if (c.Type === 'AWS::IAM::Policy') c.Properties.PolicyDocument.Statement = c.Properties.PolicyDocument.Statement.filter((x: { Sid?: string }) => !String(x.Sid).startsWith('ProjectGpuWait'))
+          return c
+        }
+        const nestedOwn = Object.entries(nt.Resources).filter(([, r]) => !jobEvents.includes(r.Type)).map(([id, r]) => [id, withoutJobEvents(r)] as const)
+        expect(JSON.stringify(flatOwn)).not.toMatch(/ProjectGpuWait|TRACE_BATCH_EVENTS_TOPIC/)
+        expect(Object.values(nt.Resources).filter((r) => jobEvents.includes(r.Type))).toHaveLength(3)
+        expect(flatOwn.filter(([, r]) => jobEvents.includes(r.Type))).toHaveLength(0)
         const params = (json(nested.parent).Resources[nestedResourceId(nested, h)]?.Properties?.Parameters ?? {}) as Record<string, unknown>
         expect(nestedOwn.length).toBe(flatOwn.length)
         expect(nestedOwn.map(([, r]) => shape(r, nt, { tpl: json(nested.parent), params })).sort()).toEqual(flatOwn.map(([, r]) => shape(r, fp)).sort())

@@ -15,8 +15,10 @@
  *      stack); without that limit the hint is not applied.
  *   3. wait for SUCCEEDED or FAILED — or the deadline (the job's own time limit plus TRACE_GPU_QUEUE_WAIT_S, default
  *      1800 s, for the queue to scale an instance up from zero and pull the image), when the job is terminated:
- *        on events   (TRACE_BATCH_EVENTS_TOPIC, set by the stack: src/infra/gpu.ts) Batch's "Batch Job State Change"
- *                    events reach that SNS topic. A short-lived SQS queue of this job's own
+ *        on events   (TRACE_BATCH_EVENTS_TOPIC, set by the stack: src/infra/project.ts) the project's own SNS topic,
+ *                    <prefix>-<project hash>-batch-events, which an EventBridge rule sends the "Batch Job State Change"
+ *                    events of the project's own jobs (its own job definitions on the stack's queues). A short-lived
+ *                    SQS queue of this job's own
  *                    (<prefix>-<project hash>-wait-<Batch job id>, tagged trace:project) is subscribed to it with a
  *                    filter on the job's id; then ONE DescribeJobs (an event from before the subscription would be
  *                    missed: this closes that gap), then ReceiveMessage long polls, each returning the moment an event
@@ -267,7 +269,7 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
   const queueName = topic ? waitQueueName(topic, project, jobId) : null
   const onEvents = topic && queueName
     ? await waitOnEvents(ctx, { topic, queueName, project, sqs: deps.sqs, sns: deps.sns })
-    : (log(`${jobId}: waiting on a timer: ${NO_EVENTS_WHY} (${topic ? 'it runs outside a project, or its event settings do not match the installation' : 'the installation predates them; running the installer again adds them'})`), null)
+    : (log(`${jobId}: waiting on a timer: ${NO_EVENTS_WHY} (${topic ? 'it runs outside a project, or its event settings do not match the installation' : 'the installation does not send them: it predates them (running the installer again adds them), or its layout is flat'})`), null)
   if (onEvents && 'status' in onEvents) last = onEvents
   else last = await waitOnTimer(ctx, onEvents?.why ?? NO_EVENTS_WHY, onEvents?.lastStatus ?? '')
   const detail = last.detail
@@ -337,15 +339,18 @@ interface Seen { status: string; detail: BatchJobDetail | undefined }
 
 /**
  * The job's own wait queue, `<prefix>-<project hash>-wait-<Batch job id>`: the only names the project's role may make
- * (src/infra/project.ts). The prefix is the stack's, from its topic `<prefix>-batch-events`; null when the topic is
- * not named so, or there is no project (a laptop), or the name would not be a valid queue name.
+ * (src/infra/project.ts). Both come from the project's own topic, `<prefix>-<project hash>-batch-events`; null when
+ * the topic is not named so, or is another project's (its hash is not this project's), or there is no project (a
+ * laptop), or the name would not be a valid queue name (at most 80: a 21-character prefix and a Batch job id, a
+ * 36-character UUID, make 72).
  */
 export function waitQueueName(topicArn: string, project: string, jobId: string): string | null {
-  const prefix = /^arn:[\w-]+:sns:[\w-]+:\d{12}:([a-z][a-z0-9-]{1,20})-batch-events$/.exec(topicArn)?.[1]
-  if (!prefix) return null
+  const m = /^arn:[\w-]+:sns:[\w-]+:\d{12}:([a-z][a-z0-9-]{1,20})-([0-9a-f]{8})-batch-events$/.exec(topicArn)
+  if (!m) return null
   let hash: string
   try { hash = projectHash(project) } catch { return null }
-  const name = `${prefix}-${hash}-wait-${jobId}`
+  if (m[2] !== hash) return null
+  const name = `${m[1]}-${hash}-wait-${jobId}`
   return /^[\w-]{1,80}$/.test(name) ? name : null
 }
 
