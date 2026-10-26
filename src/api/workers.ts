@@ -95,12 +95,12 @@ export function remoteJobs(o: RemoteJobsOptions): JobsApi {
   }
   const opts = (slug: string) => ({ runtimeArn: arnOf(slug), region: o.region, ...(o.client ? { client: o.client } : {}) })
   /** The job's status on its worker (held there with afterVersion + waitS), its change counter and open waits. */
-  const watch = async (handle: string | undefined, w: { afterVersion?: number | undefined; waitS?: number | undefined }): Promise<{ jobs: JobView[]; version: number | null; waits: WaitView[] }> => {
+  const watch = async (handle: string | undefined, w: { afterVersion?: number | undefined; waitS?: number | undefined; signal?: AbortSignal | undefined }): Promise<{ jobs: JobView[]; version: number | null; waits: WaitView[] }> => {
     const h = handle ? parseHandle(handle) : null
     const slug = h ? byHash.get(h.hash) : undefined
     if (!h || !slug) return { jobs: [], version: null, waits: [] }
     const hold = w.afterVersion !== undefined && w.waitS ? { afterVersion: w.afterVersion, waitS: w.waitS } : {}
-    const out = StatusOut.parse(await invoke({ kind: 'status', jobId: h.jobId, ...hold }, h.session, opts(slug)))
+    const out = StatusOut.parse(await invoke({ kind: 'status', jobId: h.jobId, ...hold }, h.session, { ...opts(slug), signal: w.signal }))
     // a session of one project's runtime only ever has that project's jobs; checked all the same
     const jobs = out.jobs.filter((j) => j.id === h.jobId && (j.repository ?? slug).toLowerCase() === slug)
       .map((j): JobView => ({ ...j, id: handle ?? j.id, workerJobId: j.id }))
@@ -131,7 +131,7 @@ export function remoteJobs(o: RemoteJobsOptions): JobsApi {
     async watchTools(repository, w) {
       const slug = projectSlug(repository)
       const hold = w.afterVersion !== undefined && w.waitS ? { afterVersion: w.afterVersion, waitS: w.waitS } : {}
-      const out = StatusOut.parse(await invoke({ kind: 'status', ...hold }, toolSession(slug), opts(slug)))
+      const out = StatusOut.parse(await invoke({ kind: 'status', ...hold }, toolSession(slug), { ...opts(slug), signal: w.signal }))
       // the tool session's own waits: those open outside any job (a job's waits are on its own handle)
       return { version: out.version ?? null, waits: out.waits.filter((x) => x.jobId === null || x.jobId === undefined) }
     },

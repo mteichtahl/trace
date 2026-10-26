@@ -422,7 +422,11 @@ async function startInstall(): Promise<void> {
   const es = new EventSource(`/api/events?k=${encodeURIComponent(KEY)}`)
   es.onmessage = (m: MessageEvent<string>) => {
     const e = JSON.parse(m.data) as InstallEvent
-    if (e.type === 'step') s.steps = s.steps.map((st) => (st.id === e.step.id ? e.step : st))
+    if (e.type === 'step') {
+      s.steps = s.steps.map((st) => (st.id === e.step.id ? e.step : st))
+      // a step that is no longer running has no open wait, even if its last check failed before saying so
+      if (e.step.status !== 'running') s.waits.delete(e.step.id)
+    }
     else if (e.type === 'log') s.log = [...s.log.slice(-800), `[${e.step}] ${e.line}`]
     else if (e.type === 'wait') {
       // a check of a timer wait: keep the latest; a wait with no next check has ended

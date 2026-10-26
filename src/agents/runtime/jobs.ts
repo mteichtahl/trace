@@ -89,6 +89,8 @@ export interface Jobs {
   abort(jobId: string, reason: string, graceMs?: number): Promise<boolean>
   /** Abort every running job and wait (up to graceMs) for them to finish. */
   shutdown(graceMs?: number): Promise<void>
+  /** Stop listening to the process's wait changes (a registry that is thrown away, as in tests). */
+  dispose(): void
 }
 
 const KEEP_FINISHED = 200
@@ -146,7 +148,7 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
     events.emit({ ...e, version } as JobEvent)
   }
   // every change to the record of open waits is a change here too, so a held status answer wakes on it
-  waitChanges.on((change) => emit({ type: 'wait', jobId: change.notice.jobId ?? '', change }))
+  const unwatch = waitChanges.on((change) => emit({ type: 'wait', jobId: change.notice.jobId ?? '', change }))
   const scopeVersion = (jobId: string | undefined): number => (jobId ? versions.get(jobId) ?? 0 : version)
 
   const self: Jobs = {
@@ -258,6 +260,7 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
       await Promise.race([done, new Promise((res) => setTimeout(res, graceMs).unref())])
       return true
     },
+    dispose: () => { unwatch() },
     async shutdown(graceMs = 20_000) {
       const live = [...running.values()]
       for (const r of live) r.abort.abort(new Error('the runtime is shutting down'))

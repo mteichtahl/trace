@@ -161,7 +161,7 @@ export function staleAfterMs(env: NodeJS.ProcessEnv): number {
 }
 /** The timer used where there are no events (DescribeJobs): from 5 s, backing off to 30 s. */
 export const TIMER = { intervalMs: 5000, factor: 1.5, maxIntervalMs: 30_000 }
-const NO_EVENTS_WHY = 'no Batch event subscription on this stack'
+const NO_EVENTS_WHY = 'AWS job events do not reach this run'
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 const TERMINAL = new Set(['SUCCEEDED', 'FAILED'])
@@ -267,7 +267,7 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
   const queueName = topic ? waitQueueName(topic, project, jobId) : null
   const onEvents = topic && queueName
     ? await waitOnEvents(ctx, { topic, queueName, project, sqs: deps.sqs, sns: deps.sns })
-    : (log(`${jobId}: waiting on a timer: ${NO_EVENTS_WHY} (${topic ? 'TRACE_BATCH_EVENTS_TOPIC is not the stack\'s topic, or this is no project' : 'TRACE_BATCH_EVENTS_TOPIC is not set'})`), null)
+    : (log(`${jobId}: waiting on a timer: ${NO_EVENTS_WHY} (${topic ? 'it runs outside a project, or its event settings do not match the installation' : 'the installation predates them; running the installer again adds them'})`), null)
   if (onEvents && 'status' in onEvents) last = onEvents
   else last = await waitOnTimer(ctx, onEvents?.why ?? NO_EVENTS_WHY, onEvents?.lastStatus ?? '')
   const detail = last.detail
@@ -431,7 +431,7 @@ async function waitOnEvents(c: WaitCtx, o: { topic: string; queueName: string; p
     let s = await describe(c)
     seen(s)
     if (TERMINAL.has(s.status)) return s
-    log(`${jobId}: waiting on its Batch events. In case one is lost, trace also checks the job ${WARMUP_CHECKS_MS.map((ms) => `${ms / 1000} seconds`).join(' and ')} after subscribing (a new subscription can take about a minute to start delivering), then every ${Math.round(SAFETY_CHECK_MS / 60_000)} minutes`)
+    log(`${jobId}: waiting for AWS to say the job has changed. In case a message is lost, trace also checks the job ${WARMUP_CHECKS_MS.map((ms) => `${ms / 1000} seconds`).join(' and ')} after subscribing (a new subscription can take about a minute to start delivering), then every ${Math.round(SAFETY_CHECK_MS / 60_000)} minutes`)
     // the safety-net looks, from when the subscription was made: the warm-up ones, then every SAFETY_CHECK_MS
     const subscribedAt = now()
     const warmups = WARMUP_CHECKS_MS.map((ms) => subscribedAt + ms)
@@ -456,7 +456,7 @@ async function waitOnEvents(c: WaitCtx, o: { topic: string; queueName: string; p
       try {
         messages = (await sqs.receiveMessage({ QueueUrl: queueUrl, WaitTimeSeconds: waitS, MaxNumberOfMessages: 10 })).Messages ?? []
       } catch (e) {
-        const why = `receiving its Batch events failed (${errText(e)})`
+        const why = `receiving its AWS job events failed (${errText(e)})`
         log(`${jobId}: waiting on a timer from now: ${why}`)
         return { why, lastStatus }
       }

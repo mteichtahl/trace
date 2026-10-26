@@ -89,7 +89,11 @@ describe('waitWithTimer', () => {
     await new Promise((r) => setImmediate(r))
     const w = activeWaits().find((x) => x.what === 'the build')!
     expect(w).toBeDefined()
+    // a press within 2 s of the last check is not another check
     expect(checkNow(w.id)).toBe(true)
+    await new Promise((r) => setImmediate(r))
+    expect(checks).toBe(1)
+    expect(checkNow(w.id, Date.now() + 3_000)).toBe(true)
     await new Promise((r) => setImmediate(r))
     await new Promise((r) => setImmediate(r))
     expect(checks).toBe(2)
@@ -181,5 +185,13 @@ describe('waitChanges and withJob', () => {
     expect(seen[3]?.jobId).toBeNull()
     expect(seen[1]?.line).toBe('Waiting for the render (running). trace will know as soon as it changes.')
     expect(seen[4]?.line).toMatch(/^Waiting for the ingestion job \(in progress\)\. Checked just now; next check in a moment\.$/)
+  })
+})
+
+describe('describeWait and free-text states', () => {
+  it('reads a service state word as words, and leaves a log line as written', () => {
+    const base: WaitNotice = { id: 'w', what: 'the worker job job-1', source: 'event', startedAt: '2026-10-27T10:00:00Z', jobId: null, state: null, lastCheckedAt: null, nextCheckAt: null, intervalMs: null, checks: 0, why: null }
+    expect(describeWait({ ...base, state: 'RUNNABLE' })).toBe('Waiting for the worker job job-1 (runnable). trace will know as soon as it changes.')
+    expect(describeWait({ ...base, state: 'ran `npm test` in src/My_Board' })).toBe('Waiting for the worker job job-1 (ran `npm test` in src/My_Board). trace will know as soon as it changes.')
   })
 })

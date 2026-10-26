@@ -432,6 +432,7 @@ describe('the local server', () => {
     let id = ''
     const waiting = waitWithTimer<number>({
       what: 'a test build', why: 'a test', intervalMs: 3_600_000,
+      now: () => Date.now() - 10_000, // its last check is 10 s old: past check now's 2 s gap
       check: async () => (++checks >= 2 ? { done: true, value: checks } : { done: false, state: 'IN_PROGRESS' }),
       report: (n) => { id = n.id },
     })

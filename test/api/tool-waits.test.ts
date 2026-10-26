@@ -24,15 +24,17 @@ const JOBS = { id: 'wait-b', what: 'the graphics card job g-1', source: 'event',
 
 function fakeAgentCore() {
   const calls: { session: string; body: Record<string, unknown> }[] = []
+  const signals: (AbortSignal | undefined)[] = []
   const client = {
-    async send(cmd: InvokeAgentRuntimeCommand) {
+    async send(cmd: InvokeAgentRuntimeCommand, o?: { abortSignal?: AbortSignal }) {
       const body = JSON.parse(new TextDecoder().decode(cmd.input.payload as Uint8Array)) as Record<string, unknown>
       calls.push({ session: cmd.input.runtimeSessionId ?? '', body })
+      signals.push(o?.abortSignal)
       const out = body.kind === 'check-now' ? { ok: body.waitId === 'wait-a' } : { jobs: [], busy: false, version: 12, waits: [KB, JOBS] }
       return { statusCode: 200, response: { transformToString: async () => JSON.stringify(out) } }
     },
   }
-  return { client, calls }
+  return { client, calls, signals }
 }
 
 describe('tools.waits and tools.check_now', () => {
@@ -52,6 +54,13 @@ describe('tools.waits and tools.check_now', () => {
     expect(f.calls.map((c) => c.body)).toEqual([{ kind: 'status' }, { kind: 'status', afterVersion: 12, waitS: 60 }])
     expect(f.calls.every((c) => c.session === toolSession('acme/board'))).toBe(true)
     await expect(perform('tools.waits', { repo: 'acme/board', afterVersion: 1, waitS: 241 }, ctx(GUEST))).rejects.toThrow(/waitS/)
+  })
+
+  it('passes the caller\'s signal to the held worker call, so it stops holding when the caller goes away', async () => {
+    f.signals.length = 0
+    const gone = new AbortController()
+    await perform('tools.waits', { repo: 'acme/board', afterVersion: 12, waitS: 60 }, { ...ctx(GUEST), signal: gone.signal })
+    expect(f.signals[0]).toBe(gone.signal)
   })
 
   it('needs read on the project, checked before the worker is asked', async () => {

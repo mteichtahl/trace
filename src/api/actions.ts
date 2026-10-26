@@ -124,14 +124,14 @@ export interface JobsApi {
    * One job as jobStatus, with its worker's change counter and open waits; with afterVersion and waitS the worker
    * holds the answer until the job changes after that version (or waitS passes). Absent: `job` answers jobStatus only.
    */
-  watchJob?(jobId: string, o: { afterVersion?: number | undefined; waitS?: number | undefined }): Promise<{ jobs: readonly JobView[]; version: number | null; waits: readonly WaitView[] }>
+  watchJob?(jobId: string, o: { afterVersion?: number | undefined; waitS?: number | undefined; signal?: AbortSignal | undefined }): Promise<{ jobs: readonly JobView[]; version: number | null; waits: readonly WaitView[] }>
   /** Wake one timer wait on the job's worker (invocation kind `check-now`). Absent: there is nothing to wake. */
   checkNow?(jobId: string, waitId: string): Promise<boolean>
   /**
    * What the project's tool calls are waiting on (the waits open outside any job in its tool session), with that
    * worker's change counter; with afterVersion and waitS the worker holds the answer until one changes. Absent: none.
    */
-  watchTools?(repository: string, o: { afterVersion?: number | undefined; waitS?: number | undefined }): Promise<{ version: number | null; waits: readonly WaitView[] }>
+  watchTools?(repository: string, o: { afterVersion?: number | undefined; waitS?: number | undefined; signal?: AbortSignal | undefined }): Promise<{ version: number | null; waits: readonly WaitView[] }>
   /** Wake one of those timer waits (invocation kind `check-now` in the tool session). Absent: there is nothing to wake. */
   checkToolWait?(repository: string, waitId: string): Promise<boolean>
   /** One tool call on the project's own worker runtime (invocation kind `tool`): its result, or throws ActionError.
@@ -165,7 +165,12 @@ export interface ActionDeps {
 /** The installation's knowledge bases from the API runtime's environment (TRACE_PROJECT_KBS). */
 export const projectKbsFromEnv = (env: Record<string, string | undefined> = process.env): ReadonlyMap<string, string> => parseProjectKbs(env.TRACE_PROJECT_KBS)
 
-export interface Context { principal: Principal; deps: ActionDeps }
+export interface Context {
+  principal: Principal
+  deps: ActionDeps
+  /** Aborts when the caller goes away: a held call (job, tools.waits) stops holding the worker too. */
+  signal?: AbortSignal | undefined
+}
 
 type Need = 'signed-in' | 'read' | 'write' | 'admin' | 'tool' | 'job' | 'prompts'
 
@@ -554,7 +559,7 @@ export const ACTIONS = {
   job: def('job', JobId.extend({ afterVersion: z.number().int().min(0).optional(), waitS: z.number().min(0).max(240).optional() }), async (a, ctx) => {
     const jobs = await jobAccess(a.id, ctx)
     if (!jobs.watchJob) return ownJob((await jobs.jobStatus(a.id))[0], a.id, jobs)
-    const w = await jobs.watchJob(a.id, { afterVersion: a.afterVersion, waitS: a.waitS })
+    const w = await jobs.watchJob(a.id, { afterVersion: a.afterVersion, waitS: a.waitS, signal: ctx.signal })
     return { ...ownJob(w.jobs[0], a.id, jobs), version: w.version, waits: w.waits }
   }),
 
@@ -566,7 +571,7 @@ export const ACTIONS = {
   'tools.waits': def('read', Repo.extend({ afterVersion: z.number().int().min(0).optional(), waitS: z.number().min(0).max(240).optional() }), async (a, ctx) => {
     const jobs = await ctx.deps.jobs()
     if (!jobs.watchTools) return { repo: a.repo, version: null, waits: [] }
-    return { repo: a.repo, ...(await jobs.watchTools(a.repo, { afterVersion: a.afterVersion, waitS: a.waitS })) }
+    return { repo: a.repo, ...(await jobs.watchTools(a.repo, { afterVersion: a.afterVersion, waitS: a.waitS, signal: ctx.signal })) }
   }),
 
   'tools.check_now': def('read', Repo.extend({ waitId: z.string().min(1).max(64) }), async (a, ctx) => {

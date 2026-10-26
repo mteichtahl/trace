@@ -158,7 +158,7 @@ describe('waiting on Batch job events', () => {
     expect(r.sqs.acked).toEqual(['r1-0', 'r2-0', 'r2-1', 'r3-0'])
     // each status change logged once, as before
     expect(r.logs.filter((l) => /^job-1: [A-Z_]+$/.test(l))).toEqual(['job-1: SUBMITTED', 'job-1: RUNNABLE', 'job-1: STARTING', 'job-1: RUNNING', 'job-1: SUCCEEDED'])
-    expect(r.logs.join('\n')).toMatch(/waiting on its Batch events\. In case one is lost, trace also checks the job 30 seconds and 90 seconds after subscribing \(a new subscription can take about a minute to start delivering\), then every 5 minutes/)
+    expect(r.logs.join('\n')).toMatch(/waiting for AWS to say the job has changed\. In case a message is lost, trace also checks the job 30 seconds and 90 seconds after subscribing \(a new subscription can take about a minute to start delivering\), then every 5 minutes/)
     // on the record as an event wait while it lasted, with its state; off it after
     const mine = r.sqs.seenWaits.filter((w) => w.what.startsWith('the graphics card job blender-'))
     expect(mine.length).toBe(3)
@@ -243,7 +243,7 @@ describe('waiting on Batch job events', () => {
     r.sqs.failReceive = new Error('AccessDenied')
     r.sqs.onReceive = () => { r.batch.status = 'FAILED' }
     await expect(runBatch(job(), r.deps)).rejects.toThrow(/failed before its runner finished/)
-    expect(r.logs.join('\n')).toMatch(/waiting on a timer from now: receiving its Batch events failed \(AccessDenied\)/)
+    expect(r.logs.join('\n')).toMatch(/waiting on a timer from now: receiving its AWS job events failed \(AccessDenied\)/)
     expect(r.sns.unsubscribed).toHaveLength(1)
     expect(r.sqs.deleted).toHaveLength(1)
   })
@@ -270,7 +270,7 @@ describe('waiting on a timer where there are no events', () => {
     expect(r.sns.subscribed).toHaveLength(0)
     expect(r.sleeps).toEqual([5000, 5000, 7500, 5000])
     const text = r.logs.join('\n')
-    expect(text).toMatch(/waiting on a timer: no Batch event subscription on this stack \(TRACE_BATCH_EVENTS_TOPIC is not set\)/)
+    expect(text).toMatch(/waiting on a timer: AWS job events do not reach this run \(the installation predates them; running the installer again adds them\)/)
     // a plain-language line per change of state, not per check
     const lines = r.logs.filter((l) => l.startsWith('Waiting for the graphics card job'))
     expect(lines).toHaveLength(3)

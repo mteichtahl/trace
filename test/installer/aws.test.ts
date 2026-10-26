@@ -249,7 +249,7 @@ describe('the GPU image build', () => {
     const cb = fake((c) => (c instanceof BatchGetBuildsCommand ? build(n++ < 1 ? 'IN_PROGRESS' : 'SUCCEEDED', '2026-10-26T10:05:00Z') : null))
     const started = Date.now()
     const r = await ensureGpuImage(cb, {
-      buildId: 'trace-gpu-image:1', imageTag: 'abc', startedAfter: run, pollMs: 60_000,
+      buildId: 'trace-gpu-image:1', imageTag: 'abc', startedAfter: run, pollMs: 60_000, now: () => Date.now() - 10_000,
       report: (x) => { if (x.nextCheckAt) setTimeout(() => expect(checkNow(x.id)).toBe(true), 5) },
     })
     expect(r.ok).toBe(true)

@@ -82,10 +82,19 @@ export function activeWaits(): WaitNotice[] {
   return [...open.values()].map((o) => ({ ...o.notice })).reverse()
 }
 
-/** Wake one timer wait for an immediate check. False when no timer wait with that id is open. */
-export function checkNow(id: string): boolean {
+/** A check now within this long of the last check is not made again: the wait was just checked. */
+export const CHECK_NOW_MIN_GAP_MS = 2_000
+
+/**
+ * Wake one timer wait for an immediate check. False when no timer wait with that id is open. A wait checked less
+ * than CHECK_NOW_MIN_GAP_MS ago is not woken again (true: it was just checked), so repeated presses, or a caller
+ * asking in a loop, cannot turn into a stream of calls to the service being waited on.
+ */
+export function checkNow(id: string, now: number = Date.now()): boolean {
   const o = open.get(id)
   if (!o?.wake) return false
+  const last = o.notice.lastCheckedAt ? Date.parse(o.notice.lastCheckedAt) : null
+  if (last !== null && now - last < CHECK_NOW_MIN_GAP_MS) return true
   o.wake()
   return true
 }
@@ -110,7 +119,9 @@ const within = (ms: number): string => { const d = duration(ms); return d === 'j
 
 /** The line a person reads about one open wait. */
 export function describeWait(n: WaitNotice, now: number = Date.now()): string {
-  const head = `Waiting for ${n.what}${n.state ? ` (${n.state.toLowerCase().replace(/_/g, ' ')})` : ''}.`
+  // a service's own state word (IN_PROGRESS, RUNNABLE) reads as words; free text (a log line) is left as it is
+  const state = n.state && /^[A-Z][A-Z_]*$/.test(n.state) ? n.state.toLowerCase().replace(/_/g, ' ') : n.state
+  const head = `Waiting for ${n.what}${state ? ` (${state})` : ''}.`
   if (n.source === 'event') return `${head} trace will know as soon as it changes.`
   const last = n.lastCheckedAt ? `Checked ${ago(now - Date.parse(n.lastCheckedAt))}` : 'Not checked yet'
   const next = n.nextCheckAt ? `next check in ${within(Date.parse(n.nextCheckAt) - now)}` : 'no further check is planned'

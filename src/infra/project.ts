@@ -315,7 +315,11 @@ export class ProjectStack extends Construct {
         sid: 'ProjectGpuWaitSubscribe', actions: ['sns:Subscribe'], resources: [p.gpu.jobEvents.topicArn],
         conditions: { StringEquals: { 'sns:Protocol': 'sqs' }, StringLike: { 'sns:Endpoint': waitQueues } },
       }))
-      // Unsubscribe names the subscription (<topic arn>:<id>); the topic is its resource type
+      // Unsubscribe names the subscription (<topic arn>:<id>); the topic is its resource type. SNS has no condition key
+      // for a subscription's endpoint, so this cannot be narrowed to the project's own queues: a project could remove
+      // another's subscription on the shared topic. Accepted: that wait loses its events and finds the end through its
+      // safety checks (30 s, 90 s, then every 5 minutes), so it is slower, never stuck, and nothing is disclosed. The
+      // code only ever removes this project's own endpoints (src/gpu/batch.ts). A topic per project would close it.
       role.addToPolicy(new iam.PolicyStatement({
         sid: 'ProjectGpuWaitUnsubscribe', actions: ['sns:Unsubscribe'], resources: [p.gpu.jobEvents.topicArn, `${p.gpu.jobEvents.topicArn}:*`],
       }))

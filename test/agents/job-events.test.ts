@@ -215,12 +215,12 @@ describe('the runtime server, event-driven', () => {
     const base = await serve(jobs)
     let checks = 0
     const stop = new AbortController()
-    const timer = waitWithTimer({ what: 'the test thing', why: 'it sends no event', intervalMs: 60_000, signal: stop.signal, check: async () => { checks++; return { done: false, state: 'IDLE' } } })
+    const timer = waitWithTimer({ what: 'the test thing', why: 'it sends no event', intervalMs: 60_000, now: () => Date.now() - 10_000, signal: stop.signal, check: async () => { checks++; return { done: false, state: 'IDLE' } } })
     await vi.waitFor(() => expect(checks).toBe(1), { timeout: 2000, interval: 5 })
     const st = (await post(`${base}/invocations`, { kind: 'status' })).json as { waits: { id: string; what: string; source: string; text: string }[] }
     const w = st.waits.find((x) => x.what === 'the test thing')!
     expect(w).toMatchObject({ source: 'timer' })
-    expect(w.text).toMatch(/^Waiting for the test thing \(idle\)\. Checked just now; next check in 1 minute\.$/)
+    expect(w.text).toMatch(/^Waiting for the test thing \(idle\)\. Checked 1\d seconds ago; next check in [45]\d seconds\.$/)
     expect((await post(`${base}/invocations`, { kind: 'check-now', waitId: w.id })).json).toEqual({ ok: true })
     await vi.waitFor(() => expect(checks).toBe(2), { timeout: 2000, interval: 5 })
     expect((await post(`${base}/invocations`, { kind: 'check-now', waitId: 'wait-nope' })).json).toEqual({ ok: false })
