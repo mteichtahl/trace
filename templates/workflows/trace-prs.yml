@@ -9,9 +9,11 @@
 #
 # How work is found: events. A push to a branch opens its PR; a PR opened, reopened, made ready, retargeted or
 # (un)labelled gets auto-merge; a push to __TR_BRANCH__ (a merge, which leaves other PRs behind) moves the update
-# queue on. The schedule (minutes 17 and 47 of every hour, UTC) is only a safety net and runs update-queue alone: it
-# catches a queue left standing when GitHub failed to deliver the push, and a queue whose head PR's build failed (no
-# merge, so no push to __TR_BRANCH__: the next run skips the failed PR and brings the next one up to date).
+# queue on, and so does every finished __TR_BUILD_NAME__ run (a head PR whose build failed is not merged, so no push
+# follows: the finished build is the event that moves the queue past it). Runs of update-queue never overlap
+# (concurrency group trace-update-queue), and a finished build with nothing to do costs one short run. The schedule
+# (minutes 17 and 47 of every hour, UTC) is only a safety net and runs update-queue alone: it catches a queue left
+# standing when GitHub failed to deliver one of those events.
 name: trace-prs
 
 on:
@@ -20,6 +22,9 @@ on:
   pull_request:
     types: [opened, reopened, ready_for_review, edited, labeled, unlabeled]
     branches: [__TR_BRANCH__]
+  workflow_run:
+    workflows: ["__TR_BUILD_NAME__"]
+    types: [completed]           # a finished build moves the update queue on (see the header)
   schedule:
     - cron: '17,47 * * * *'    # safety net only: twice an hour, update-queue alone (see the header)
   workflow_dispatch:
@@ -58,7 +63,7 @@ jobs:
   update-queue:
     if: >-
       vars.TRACE_PRS != 'false' &&
-      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_run' ||
        (github.event_name == 'push' && github.ref == 'refs/heads/__TR_BRANCH__'))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
