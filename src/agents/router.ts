@@ -4,7 +4,7 @@
  *
  * Precedence:
  *   1. explicit   a kind the caller named (API task `agent`, `trace remote task --agent`, a pick that already routed)
- *   2. label      agent:verify / agent:impl / agent:ams / agent:emc / agent:render on the issue or PR (labels.agent_*)
+ *   2. label      agent:verify / agent:impl / agent:ams / agent:emc / agent:render / agent:thermal on the issue or PR (labels.agent_*)
  *   3. evidence   failing check or job names and their logs, and the changed files (EVIDENCE below)
  *   4. keyword    words in the issue, PR or task text (each specialist's `keywords`)
  *   5. model      one turn, no tools, schema-constrained output (Classifier), unless agents.route_with_model is off
@@ -55,6 +55,7 @@ const CHECK_NAME_RULES: readonly Rule[] = [
   { kind: 'ams', re: /\b(spice|ngspice|ams|analog|corners?|monte ?carlo|montecarlo|yield|noise)\b/i, weight: 3, what: 'SPICE, corners or yield check' },
   { kind: 'emc', re: /\b(emc|emi|si|openems|s ?param\w*|crosstalk|precheck|impedance)\b/i, weight: 3, what: 'EMC or signal-integrity check' },
   { kind: 'render', re: /\b(render\w*|turntable)\b/i, weight: 3, what: 'render job' },
+  { kind: 'thermal', re: /\b(thermal|temperature|tj|junction|derating|heat ?sink|overheat\w*)\b/i, weight: 3, what: 'thermal check' },
 ]
 
 /** What the failing logs say. */
@@ -63,6 +64,7 @@ const LOG_RULES: readonly Rule[] = [
   { kind: 'impl', re: /timing (fail\w*|violat\w*)|negative slack|max frequency .*FAIL|\bunrouted\b|unconnected (items|pads)|DRC (error|violation)s?|failed to route|nextpnr.*ERROR|setup violation/i, weight: 2, what: 'timing, routing or DRC failure in the log' },
   { kind: 'ams', re: /ams[._]spec|spec (miss|fail\w*)|out of spec|phase margin|ngspice.*(error|fail)|yield (below|under)|worst corner/i, weight: 2, what: 'analog spec miss in the log' },
   { kind: 'emc', re: /emc[._]precheck|return[- ]path|plane split|emission|crosstalk|insertion loss|openems/i, weight: 2, what: 'EMC precheck or SI finding in the log' },
+  { kind: 'thermal', re: /thermal[._](check|board|junction)|\bderated[_ ]margin|\btj\b.*(exceed|above|over)|junction temperature|over[- ]?temperature|thermal (shutdown|runaway)|\bat-risk\b/i, weight: 2, what: 'thermal check failure or over-temperature in the log' },
 ]
 
 /** Changed paths. Each rule counts once per job, however many files match it. */
@@ -80,6 +82,9 @@ const FILE_RULES: readonly Rule[] = [
   { kind: 'ams', re: /\.(lib|mod|subckt)$/i, weight: 2, what: 'SPICE models' },
   { kind: 'emc', re: /\.s\d+p$/i, weight: 3, what: 'S-parameter (Touchstone) files' },
   { kind: 'emc', re: /(^|\/)(emc|emi|openems|si)\//i, weight: 2, what: 'EMC or SI files' },
+  { kind: 'thermal', re: /\.thermal$|(^|\/)(thermal|temperature)[^/]*\.(csv|log|txt|dat)$|(^|\/)(temp|temps|temperature)[-_]?log[^/]*$/i, weight: 3, what: 'thermal files or temperature logs' },
+  { kind: 'thermal', re: /(^|\/)thermal\//i, weight: 2, what: 'thermal models or results' },
+  { kind: 'thermal', re: /(^|\/)[^/]*(ldo|regulator|buck|boost|mosfet|heatsink|power[-_]?stage)[^/]*\.(kicad_sch|kicad_pcb|kicad_sym|kicad_mod)$/i, weight: 2, what: 'power-stage parts' },
 ]
 
 // ------------------------------------------------------------------ route

@@ -483,6 +483,114 @@ Every radiated figure is labelled as a pre-compliance estimate. Locally, openEMS
 (`TRACE_OPENEMS_PYTHON`, or `openems-python` on PATH) and scikit-rf (`TRACE_PYTHON`). The GPU image builds openEMS
 v0.37.0 and installs scikit-rf 2.2.0.
 
+## Thermal specialist
+
+The Thermal specialist (`thermal`, label `agent:thermal`, memory actor `<owner>/<repo>/thermal`, settings
+`agents.thermal`) is responsible for the thermal properties of a design: its job is to keep the design inside its
+thermal envelope. Its workflow, in order (the catalog entry `specialist.thermal.workflow`, editable like the others):
+
+1. establish the envelope (`thermal.envelope`) and the parts' limits from the datasheet library, each cited;
+2. build the power budget (`thermal.budget`);
+3. compute junction and case temperatures per part at every ambient corner (`thermal.junction`);
+4. check them against the limits with the derating margin (`thermal.check`: one verdict, margins recorded per commit);
+5. run a board-level model for hot spots and copper/via needs (`thermal.board`), sizing fixes with `thermal.pcb`;
+6. when hardware is allowed, compare with measurements (`thermal.measure`);
+7. report the margins and the parts at risk;
+8. delegate design changes (pours, thermal vias, part swaps, heatsinks) to the worker, with acceptance criteria stated
+   as thermal margins (e.g. "`thermal.check`: U3 `derated_margin_c` >= 5 at every corner");
+9. escalate trade-offs (cost or size against margin) to a person.
+
+Which board solver when (the workflow says so too): **2.5D** for quick checks on every commit; **CalculiX** for 3D
+conduction (heatsinks, enclosure walls, component bodies, through-thickness paths); **CFD** for enclosures, ducted or
+fan-cooled designs, dense card cages and fin spacing, where the airflow decides the answer. A CFD run's effective h is
+stored as the envelope's correction and used by later 2.5D and CalculiX runs.
+
+### Tools
+
+| Tool | What it does |
+| --- | --- |
+| `thermal.envelope` | The envelope (table `thermal_envelopes`): ambient min/max (and a nominal corner), environment `natural`, `forced` (m/s), `sealed` (enclosure dimensions, wall) or `vacuum` (radiation only), orientation, altitude, emissivity (or a finish from the table), and the derating policy: `Tj <= Tj_max - offset` or `Tj <= fraction x Tj_max` (°C). Part limits (table `thermal_part_limits`): Tj max/min, θJA, θJC, θJB, ψJT, ψJB, each with a citation (`{mpn, sha256, page}`, or `{source}` for a manual figure; a figure without one is refused). `from_datasheet` proposes figures from `datasheets.params` rows, only where every matching row agrees. Also lists and clears the stored calibrations (`thermal_corrections`). |
+| `thermal.budget` | Power per part. Priority: explicit, a SPICE operating point (ngspice `.op`: `@r1[p]`, `@q1[p]`, `@m1[p]`, or V(a,k) x `@d1[id]` for a diode, since ngspice's `@d[p]` is not usable), regulator calculations (LDO `(Vin - Vout) Iout + Vin Iq`; buck/boost `Pout (1 - eta)/eta`, with eta from the datasheet curve, else 0.85 assumed and flagged), datasheet typical/max. A part given twice keeps the higher-priority figure and lists the other. Totals per rail and for the board; stored as a scenario (`thermal_budget`). |
+| `thermal.junction` | Tj per part at each corner: ψJT with a measured top, ψJB or θJB with the board model's temperature under the part, θJC plus interface plus heatsink, else θJA. It reports the margin to Tj max and to the derated limit, the status (pass / at-risk / fail / unknown), and which metric was used with its caveat (θJA is a JEDEC test-board figure, not this board). |
+| `thermal.pcb` | Calculators: spreading resistance (circular isoflux source on a cooled plate: the separation-of-variables series of Kennedy 1960 / Song, Lee & Au 1994), via arrays (barrels in parallel, optional fill, laminate in parallel), copper area for a target θ (an annular fin, Incropera table 3.5), and trace temperature rise (IPC-2221B, inverted from `calc.trace_width`; IPC-2152's charts have no closed form and are not implemented). |
+| `thermal.board` | The board model at one corner. `solver=2.5d` (default): a finite-volume grid, one node per copper layer; copper coverage rasterised from zone fills, tracks and pads; vias as vertical conductances; Jacobi-preconditioned CG. `solver=calculix`: 3D bricks (`DC3D8`) per copper layer and dielectric sublayer, with optional component bodies, run by `ccx` through `runJob` kind `calculix`. `solver=cfd`: OpenFOAM, below. Returns per-part board temperatures, the hot spot, the energy balance, grid size and solve time. Artifacts: temperature maps (PNG) and colour bar, CSV, VTU (ParaView), a temperature-textured GLB, the Markdown report, and the solver deck and logs. Large 2.5D grids (more than `TRACE_THERMAL_LOCAL_MAX_CELLS`, 400k) go to the CPU queue (`runJob` kind `thermal`, inputs and results in SQLite files). |
+| `thermal.check` | Budget, junction and (with a board) the board model at every corner of the envelope, as one verdict. Records `<ref>.tj_c`, `<ref>.margin_c`, `<ref>.derated_margin_c` (worst over the corners) and per-corner figures, with the commit, so `trace.runs kind=thermal.check` shows the trend. |
+| `thermal.validate` | Each solver against closed forms at two mesh sizes (numbers below); `solver=cfd` writes, and runs where OpenFOAM is available, the vertical-plate case against Churchill & Chu. |
+| `thermal.measure` | Hardware only. Bench temperatures at stated points: the DMM's temperature function (`CONF:TEMP TC,K`, RTD, FRTD, thermistor), a Pt RTD read as resistance (IEC 60751), any SCPI query, firmware serial telemetry (a regex), or a manual reading. Each point is compared with a model run (error = predicted - measured). A heater calibration (heater power, measured ambient, a 2.5D run) fits an h multiplier by re-running the model, and stores it with both run ids. |
+| `thermal.derating` | Derating curves (`thermal_derating`), from points or a datasheet table, cited; checks an operating point (outside the curve is out of range, never passed). |
+| `thermal.compare` | Two time series (runs' CSVs, or inline measurements) overlaid, as Antmicro's `tpost compare-csv` does: max, RMS and end difference, and the plot. |
+| `thermal.render` | A `thermal.board` run's temperature-coloured GLB through the Blender pipeline (`runJob` kind `blender`), as stills or a turntable, with the colour bar. |
+
+`trace db merge` merges the five thermal tables by key, keeping the newer row.
+
+### The models and their limits
+
+- **Convection** is a film coefficient from textbook correlations (Incropera 7th ed.). Natural convection uses
+  Churchill & Chu for a vertical plate, and hot-face-up and hot-face-down correlations for horizontal faces; forced
+  flow uses the laminar or mixed flat plate. The air properties come from table A.4 at the film temperature, and
+  altitude lowers the density. Like Antmicro's `find_coef.sh`, the coefficient is iterated until the surface
+  temperature it assumes matches the solved one, and the converged h per surface is in the result and the report.
+  `h_override` fixes h. A heater calibration or a CFD run stores a correction, which later runs apply and report.
+- **Radiation** exchanges with surroundings at the sink temperature, with a view factor of 1. The 2.5D model
+  linearises it per cell and iterates; CalculiX solves it exactly (`*RADIATE`). Emissivities (`materials.ts`) cover
+  solder mask, FR-4, anodised, black-anodised and bare aluminium, polished and oxidised copper, and black paint. Each
+  has a source and `verified: null`, because none was read from a document in the library.
+- **A sealed enclosure** is a lumped network: board to internal air, the wall, and the outside with radiation.
+  **Vacuum** is radiation only.
+- **2.5D and CalculiX do not compute airflow (no CFD).** In the 2.5D model, component bodies are not modelled: all of
+  a part's heat enters through its pads. Laminate figures are typical (`verified: null`) unless you give them.
+- **CFD** (`solver=cfd`) is OpenFOAM conjugate heat transfer, ESI-OpenCFD v2412: `chtMultiRegionSimpleFoam` for
+  steady runs, `chtMultiRegionFoam` for transient ones. The openfoam.org releases replaced these solvers with
+  `foamMultiRun` from v11. trace writes the whole case in TypeScript into the job's scratch space:
+  - meshing with blockMesh, snappyHexMesh (the board and each powered part as boxes, turned into cell zones) and
+    `splitMeshRegions -cellZones`;
+  - laminar flow for natural convection, k-omega SST for forced flow, and gravity with a perfect gas or Boussinesq;
+  - optional fvDOM or P1 radiation;
+  - for forced flow, a fixed flow or a fan curve (`fanPressure`);
+  - outputs: residuals, probes, the wall heat flux and the enthalpy flux through every open boundary (the energy
+    balance), per-region temperatures, and `foamToVTK`.
+
+  Limits: the board is one isotropic solid with its in-plane effective conductivity, so through-thickness
+  conduction is over-stated. Parts are boxes. Fan curves are idealised (uniform, no swirl). The mesh is only as good
+  as the geometry. Runs take minutes to hours, so they go to the CPU queue by default. **No CFD run was made where
+  this was written:** the sandbox could not install OpenFOAM. The dictionaries were checked against ESI's own v2412
+  `cpuCabinet` and `multiRegionHeaterRadiation` tutorials and are unit-tested. The real-run test
+  (`TRACE_THERMAL_CFD_TESTS=1` with OpenFOAM present) is skipped otherwise.
+
+### Validation
+
+The 2.5D grid and CalculiX solvers were checked against closed forms (`test/tools/thermal`, `thermal.validate`) at
+two mesh sizes each. Each cell gives the error against the closed form:
+
+| Case | Closed form | 2.5D coarse / fine | CalculiX coarse / fine |
+| --- | --- | --- | --- |
+| slab: 2-layer board, 1D through the thickness (2 / 1 mm cells) | q'' (t/k + 1/h) = 26.25 K | 0.0 % / 0.0 % | 0.0 % / 0.0 % |
+| fin: 100 mm strip heated at one end, adiabatic tip (2 / 1 mm) | Incropera table 3.4, 53.18 K | +0.002 % / +0.0005 % | -1.29 % / -0.64 % |
+| plate: 300 mm, 10 mm disc source (5 / 2.5 mm) | infinite-plate Bessel solution, 7.131 K | -1.74 % / -0.30 % | -0.67 % / +0.14 % |
+
+The tolerances asserted by the tests are 0.5 % for the slab and 3 % for the fin and the plate. The energy balance
+closes to about 1e-8 in the 2.5D model and to better than 0.1 % in CalculiX.
+
+The hot-board fixture is 1 W in a SOT-223 regulator on a 50 x 50 mm, 2-layer board, at 50 °C, with natural
+convection and radiation. Without copper the board under U1 reaches 164 °C (2.5D) or 156 °C (CalculiX), Tj is
+174 °C, and the check **fails**. With a pour on both layers and a 4 x 4 array of 0.3 mm vias the board reaches
+92.8 °C (2.5D) or 88.0 °C (CalculiX), Tj is 102.8 °C against a derated limit of 105 °C, and the check **passes**. The
+two solvers' rises above ambient differ by 7 % on the bare board (114.2 against 105.9 K) and 11 % on the poured one
+(42.8 against 38.0 K). The 2.5D model is the warmer, so it errs on the safe side. The difference comes from the model
+forms: sheets against bricks, linearised against exact radiation, and edge films. The `examples/sensor-node` envelope `bench` and budget
+`nominal` (`tools/setup-db.ts`) run on the real board. R1, R2 and R4 pass. D2 is **unknown**, because its datasheet
+gives no junction figures, and the check says so rather than guessing.
+
+### Credits
+
+The thermal workflow follows Antmicro's open-source thermal simulation work: geometry to CalculiX `ccx`, film
+coefficients solved for self-consistency (`find_coef.sh`), heater and thermocouple validation, a vacuum case, CSV,
+plots and run comparison (`tpost`), Markdown reports (`tpre report`), and ParaView, glTF and Blender visualisation.
+See [Open source thermal simulation, analysis and visualization](https://antmicro.com/blog/2025/03/open-source-thermal-simulation-analysis-and-visualization)
+and [antmicro/thermal-simulation-scripts](https://github.com/antmicro/thermal-simulation-scripts) (Apache-2.0).
+trace does not run their FreeCAD-based `tpre`/`tpost`. It builds its models from the KiCad board directly, and the
+optional `pipeline: 'antmicro'` mode is left as future work.
+
 ## Specialist agents
 
 Every job the loop starts (an `agent-fix` issue, a `ci-red` PR, a merge conflict, a sweep's items, a person's
@@ -497,6 +605,7 @@ delegates to it. The worker's prompt, guardrails and job runner are unchanged.
 | `ams` | Analog & Mixed-Signal | Keeps analog specs and judges circuits against them: corners, Monte Carlo yield, op-amp stability, noise and ADC/digital co-simulation. It also chooses parts from the datasheet library. | `ams.*`, `sim.spice`, `sim.sweep`, `sim.measure`, `sim.kicad_spice`, `calc.*`, `datasheets.*`, `parts.*` |
 | `emc` | EMC & Simulation | Runs EMI rule prechecks and emission estimates, sets up openEMS models (region, stackup, ports, boundary conditions, mesh) and runs them, and checks signal integrity from S-parameters. | `emc.*`, `calc.impedance`, `calc.trace_width`, `calc.via`, `kicad.board`, `kicad.net` |
 | `render` | Rendering | Renders boards and models, and makes turntables. This was the rendering agent; it is kept as a specialist of its own, not folded into `impl`, because people ask for renders directly. | `render.*` |
+| `thermal` | Thermal | Keeps the design inside its thermal envelope: the envelope and part limits, the power budget, Tj per part across ambient corners with a derating margin, board models (2.5D, CalculiX, OpenFOAM CFD) for hot spots and copper/via needs, derating curves, and bench measurements against the model. See [Thermal specialist](#thermal-specialist). | `thermal.*` (`thermal.measure` only with hardware), `calc.ldo_thermal`/`power`/`trace_width`/`via`/`buck`/`boost`, `sim.spice`, `sim.measure`, `datasheets.*`, `parts.*`; `hil.*` only when hardware is allowed |
 
 Every specialist also has the shared read tools: `kicad.board`/`components`/`net`,
 `datasheets.find`/`get`/`text`/`params`, `parts.lookup`, `trace.runs`/`run`/`artifact`, `memory.recall`/`remember`,
@@ -529,7 +638,7 @@ each part with its id, layer and version). Each specialist has its own memory ac
 
 1. **An explicit kind.** This is `trace remote task --agent <kind>`, the API's `task` with `agent`, or a route that
    worker-pick already made.
-2. **A label** on the issue or PR: `agent:verify`, `agent:impl`, `agent:ams`, `agent:emc` or `agent:render`. The names
+2. **A label** on the issue or PR: `agent:verify`, `agent:impl`, `agent:ams`, `agent:emc`, `agent:render` or `agent:thermal`. The names
    are the settings `labels.agent_<kind>`, and onboarding creates the labels.
 3. **The evidence.** The router reads the names and log tails of the failing checks. The summary gate
    `build.required_check` is ignored when other checks failed. It also reads the changed files:
@@ -537,7 +646,10 @@ each part with its id, layer and version). Each specialist has its own memory ac
    - `impl`: `.pcf`, `.lpf`, `.cst`, `.sdc`, `.xdc`, `.kicad_pcb`, autorouter files, and timing, routing or DRC
      failures;
    - `ams`: `.cir`, `.sp`, `.lib`, and an `ams.spec` miss;
-   - `emc`: Touchstone `.sNp`, and `emc.precheck` findings.
+   - `emc`: Touchstone `.sNp`, and `emc.precheck` findings;
+   - `thermal`: `.thermal` files, temperature logs (`temperature*.csv`, `temp-log*`), `thermal/` folders, power-stage
+     schematics and boards (`*ldo*`, `*regulator*`, `*buck*`, `*mosfet*`, `*heatsink*`), and thermal check failures
+     or over-temperature in the log (`thermal.check`, `derated_margin`, `junction temperature`, thermal shutdown).
 
    A rule counts once however many files match it. Keywords in the text break a tie.
 4. **Keywords** in the issue, PR or task text (each specialist's `keywords`).
@@ -619,7 +731,7 @@ memory under the AgentCore job's actors and session (`<owner>/<repo>/<kind>`, `<
 
 | Key | Default | What |
 | --- | --- | --- |
-| `agents.enabled` | all five | the specialists that may be routed to |
+| `agents.enabled` | all six | the specialists that may be routed to |
 | `agents.default` | `verify` | where a job goes when nothing decides |
 | `agents.route_with_model` | `true` | ask the model when labels, evidence and keywords do not decide |
 | `agents.router_model` | `''` | its model (else `worker.model`, then the runtime's) |

@@ -305,6 +305,25 @@ function modelPlan(a: { path: string; up_axis?: 'Y' | 'Z' | undefined; units?: '
   }
 }
 
+/**
+ * Render a model file that trace generated (outside the repository: a thermal map's GLB, say) through the same
+ * Blender pipeline as render.model / render.turntable, recorded as a run of `kind`. Used by thermal.render.
+ */
+export async function renderGeneratedModel(o: {
+  kind: string; path: string; args: unknown; views?: readonly string[]; frames?: number; seconds?: number; elevation?: number
+  width?: number | undefined; height?: number | undefined; samples?: number | undefined; device?: Want | undefined; timeout_s?: number; background?: string
+}): Promise<Record<string, unknown>> {
+  if (!existsSync(o.path)) throw new ToolError(`${o.path} does not exist`)
+  const frames = o.frames ?? 0
+  const job = { materials: 'keep', clay_color: '#c9ccd1', ...commonJob({ width: o.width, height: o.height, samples: o.samples, denoise: true, background: o.background ?? 'light' }), ...(frames ? { elevation: o.elevation ?? 35 } : {}) }
+  return renderRun({
+    kind: o.kind, subject: o.path, args: o.args, script: 'render_model.py', repoPath: process.cwd(),
+    prepare: (dir: string, f: BoardFormat) => prepareModel(o.path, dir, f), wantGltf: 'glb', job,
+    views: frames ? [] : (o.views ?? ['top', 'iso']), frames, fps: frames ? Math.max(1, Math.round((frames / (o.seconds ?? 4)) * 100) / 100) : 0,
+    keepFrames: false, device: o.device, engine: 'cycles', timeoutS: o.timeout_s ?? 1800, outDir: undefined,
+  })
+}
+
 // ------------------------------------------------------------------ tools
 
 const board = defineTool({

@@ -1,5 +1,5 @@
 /**
- * Heavy jobs (Blender renders, the PCB autorouter) run through here, so the same MCP tool works on a laptop and from
+ * Heavy jobs (Blender renders, the PCB autorouter, field and thermal solvers) run through here, so the same MCP tool works on a laptop and from
  * an AgentCore agent. AgentCore runtimes have no GPU, so when TRACE_GPU_QUEUE names an AWS Batch GPU job queue and
  * this machine has no usable GPU of its own, the job is shipped there: inputs go to S3, the job runs in the GPU image,
  * outputs come back. Otherwise the job runs here as a child process.
@@ -27,7 +27,10 @@ export const JobKind = z.enum(['blender', 'freerouting', 'orthoroute',
   // CPU jobs (gpu: false, so local unless TRACE_GPU_REMOTE=always): verification and FPGA implementation
   'verilator', 'cocotb', 'formal', 'yosys', 'nextpnr', 'fpga-pack',
   // the openEMS FDTD field solver (CPU, multithreaded): local, or the queue's many-core hosts when the caller asks (remote)
-  'openems'])
+  'openems',
+  // thermal (src/tools/thermal), all CPU: the 2.5D board solver for grids too big for the caller (thermal), CalculiX
+  // ccx for the 3D finite-element path (calculix), and OpenFOAM conjugate heat transfer for airflow (openfoam)
+  'thermal', 'calculix', 'openfoam'])
 export type JobKind = z.output<typeof JobKind>
 
 const SEGMENT = /^[\w.-]+$/

@@ -5,8 +5,12 @@
  *   electronics.projects  the KiCad project the kicad.* tools and `trace check` use
  *   electronics.models    SPICE models included in every simulation (the BAT54S clamp diode)
  *   firmware.targets      the C module, built and unit-tested on the host with make
+ *   thermal               the envelope "bench" (0 to 60 C, natural convection, horizontal), the parts' thermal
+ *                         limits with their sources, the power budget "nominal" and R4's power derating curve
+ *                         (src/tools/thermal/store.ts tables), so thermal.check has a real board to run on
  *
- * Run once from the repository root: `npx tsx examples/sensor-node/tools/setup-db.ts`. The database is rebuilt from
+ * Run once from the repository root: `npx tsx examples/sensor-node/tools/setup-db.ts` (or bundle it with esbuild and
+ * run the bundle with node). The database is rebuilt from
  * scratch, so it holds these settings and no run history. .trace/rules.md is the owner's to write and is left empty.
  */
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -14,6 +18,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { load, setValue } from '../../../src/core/config.js'
 import { open, PROJECT_SCHEMA } from '../../../src/core/store.js'
+import { putBudget, putCurve, putEnvelope, putPartLimit } from '../../../src/tools/thermal/store.js'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const DB = join(ROOT, '.trace', 'project.db')
@@ -37,8 +42,34 @@ setValue('firmware.targets', [{
   env: {},
 }], ROOT, BY)
 
+// ---- thermal: the envelope, the limits, the budget (every figure with its source)
+process.env.TRACE_PROJECT_DB = DB
+putEnvelope({
+  name: 'bench', ambient_min_c: 0, ambient_max_c: 60, environment: 'natural', orientation: 'horizontal', altitude_m: 0,
+  derating: { kind: 'offset', value_c: 20 }, source: 'examples/sensor-node: a bench instrument, 0 to 60 C ambient, still air',
+})
+// UNI-ROYAL 0603WAF thick-film chip resistors: rated 1/10 W at 70 C, derated linearly to 0 W at 155 C (the series
+// datasheet's power derating curve). The element limit is 155 C, and the curve implies (155 - 70) C / 0.1 W = 850 C/W
+// from element to ambient. The datasheet is not in the library here: recalled, verified: null.
+const uniroyal = 'UNI-ROYAL 0603WAF series datasheet, power derating curve (1/10 W at 70 C to 0 W at 155 C); recalled, verified: null (add the PDF with datasheets.add and cite its page)'
+for (const [ref, mpn] of [['R1', '0603WAF3902T5E'], ['R2', '0603WAF1302T5E'], ['R4', '0603WAF6800T5E']] as const) {
+  putPartLimit('bench', { ref, mpn, package: '0603', tj_max_c: 155, theta_ja: 850, citations: { tj_max_c: { source: uniroyal }, theta_ja: { source: `${uniroyal}; (155 - 70) / 0.1` } } })
+}
+// KT-0603R: its datasheet gives an operating ambient range and no junction figures, so D2 has no Tj_max here and the
+// check reports it as unknown rather than guessing one.
+putPartLimit('bench', { ref: 'D2', mpn: 'KT-0603R', package: '0603', notes: 'no junction temperature or thermal resistance in the datasheet: add them from a source before relying on a verdict' })
+putCurve({ ref: 'R4', curve: 'power_vs_ambient', x_unit: 'C', y_unit: 'W', points: [[-55, 0.1], [70, 0.1], [155, 0]], citation: { source: uniroyal } })
+// the operating point: 12 V across R1 + R2 (52 k: 231 uA, calc.divider), and the LED at (3.3 - 1.8) / 680 = 2.2 mA
+// (calc.led_resistor, Vf 1.8 V typical as README section 1 chose it)
+putBudget([
+  { ref: 'R1', rail: 'VIN', power_w: (12 / 52e3) ** 2 * 39e3, power_max_w: null, method: 'explicit', citation: { source: 'I^2 R with I = 12 V / 52 k (calc.divider, README section 1)' } },
+  { ref: 'R2', rail: 'VIN', power_w: (12 / 52e3) ** 2 * 13e3, power_max_w: null, method: 'explicit', citation: { source: 'I^2 R with I = 12 V / 52 k (calc.divider, README section 1)' } },
+  { ref: 'R4', rail: '3V3', power_w: (1.5 / 680) ** 2 * 680, power_max_w: null, method: 'explicit', citation: { source: 'I^2 R with I = (3.3 - 1.8) V / 680 (calc.led_resistor, README section 1)' } },
+  { ref: 'D2', rail: '3V3', power_w: 1.8 * (1.5 / 680), power_max_w: null, method: 'explicit', citation: { source: 'Vf x I = 1.8 V x 2.2 mA (calc.led_resistor, README section 1)' } },
+], 'nominal')
+
 const rules = join(ROOT, '.trace', 'rules.md')
 if (!existsSync(rules)) writeFileSync(rules, '')
 
 const cfg = load(ROOT)
-console.log(JSON.stringify({ root: cfg.root, electronics: cfg.electronics, firmware: cfg.firmware }, null, 1))
+console.log(JSON.stringify({ root: cfg.root, electronics: cfg.electronics, firmware: cfg.firmware, thermal: { envelope: 'bench', budget: 'nominal' } }, null, 1))

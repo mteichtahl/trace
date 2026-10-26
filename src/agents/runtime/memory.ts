@@ -77,7 +77,7 @@ export const NAMESPACE_TEMPLATES: Readonly<Record<Strategy, string>> = {
 }
 
 /** The agents that run jobs today (any name matching AgentName is accepted). */
-export const AGENTS = ['verify', 'impl', 'ams', 'emc', 'render', 'worker', 'local', 'ci-doctor', 'conflict'] as const
+export const AGENTS = ['verify', 'impl', 'ams', 'emc', 'render', 'thermal', 'worker', 'local', 'ci-doctor', 'conflict'] as const
 
 /**
  * The agents before the specialists: `ci-doctor` and `conflict` (named jobs of their own), and `worker` (every job
@@ -85,7 +85,7 @@ export const AGENTS = ['verify', 'impl', 'ams', 'emc', 'render', 'worker', 'loca
  * and a specialist's recall also searches them, read only, ranked after its own and tagged legacy in its prompt.
  */
 export const LEGACY_AGENTS = ['ci-doctor', 'conflict', 'worker'] as const
-const SPECIALIST_AGENTS: ReadonlySet<string> = new Set(['verify', 'impl', 'ams', 'emc', 'render'])
+const SPECIALIST_AGENTS: ReadonlySet<string> = new Set(['verify', 'impl', 'ams', 'emc', 'render', 'thermal'])
 
 /** The legacy actors a job's actor also recalls: the legacy agents of its project for a specialist, else none. */
 export function legacyActorsOf(a: Actor): Actor[] {

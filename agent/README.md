@@ -60,7 +60,7 @@ The workflows need these repository variables: `TRACE_AWS_ROLE` (allowed `bedroc
 
 `agent/Dockerfile`, built for linux/arm64 with the repository root as the context. AWS CodeBuild builds it from the
 CDK stack, so no local Docker is needed. It contains Ubuntu 24.04, Node 22 (NodeSource), git, the GitHub CLI,
-python3 with a venv holding the bridge (`/app/python[pdf]`), ngspice, iverilog, poppler-utils, ffmpeg, Blender (Ubuntu's package; Cycles renders on the CPU, and the bpy scripts are in `/app/python/blender`, copied in with the repository), and KiCad 10 from
+python3 with a venv holding the bridge (`/app/python[pdf]`), ngspice, iverilog, CalculiX ccx 2.21 (`calculix-ccx 2.21-1`, about 18 MB with its libraries, for `thermal.board solver=calculix`), poppler-utils, ffmpeg, Blender (Ubuntu's package; Cycles renders on the CPU, and the bpy scripts are in `/app/python/blender`, copied in with the repository), and KiCad 10 from
 `ppa:kicad/kicad-10.0-releases`. That PPA publishes arm64 builds for noble (10.0.7 as of 2026-10-26). If it can't be
 installed, the build falls back to Ubuntu's own `kicad`. The image runs as the non-root user `trace`, and its entry
 point is `node --require …/aws-distro-opentelemetry-node-autoinstrumentation/build/src/register.js /app/dist/agents/runtime/main.js`:
@@ -98,6 +98,13 @@ pushed to the `<prefix>-gpu` ECR repository. It is based on `nvidia/cuda:12.9.2-
 - OrthoRoute v1.0.0 (commit f2dd80c) at `/opt/orthoroute`, with a venv at `/opt/orthoroute/venv` holding numpy,
   scipy, psutil and `cupy-cuda12x`. OrthoRoute is the router that uses the GPU.
 - KiCad 10 from the PPA: `kicad-cli`, and the `pcbnew` Python module for the Specctra DSN export and SES import.
+- CalculiX ccx 2.21 (`calculix-ccx 2.21-1`) for the thermal FEM path (runJob kind `calculix`).
+- ESI-OpenCFD OpenFOAM v2412 (`openfoam2412 2412.260127-1` and `-common`, from dl.openfoam.com for noble/amd64,
+  with Open MPI) for the thermal CFD path (runJob kind `openfoam`: `chtMultiRegionSimpleFoam`/`chtMultiRegionFoam`,
+  snappyHexMesh, splitMeshRegions, foamToVTK). `OPENFOAM_BASHRC` points at its `etc/bashrc`. **Image size:** about
+  320 MB installed for OpenFOAM itself (the .deb is 65 MB), plus Open MPI and (PT-)Scotch, roughly 0.4 GB more image;
+  ParaView and the tutorials are not installed. CalculiX adds about 18 MB. The versions are pinned; the package's
+  sha256 is in the Dockerfile's comment.
 
 The compute environment uses the ECS Amazon Linux 2023 NVIDIA AMI on g6/g5/g4dn `.xlarge` instances, scales from
 0 vCPUs, and lives in a small VPC with public subnets only (no NAT gateway). Each job asks for 1 GPU, 4 vCPUs and

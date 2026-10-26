@@ -201,6 +201,7 @@ export const ConfigSchema = z.object({
     agent_ams: z.string().min(1).default('agent:ams'),
     agent_emc: z.string().min(1).default('agent:emc'),
     agent_render: z.string().min(1).default('agent:render'),
+    agent_thermal: z.string().min(1).default('agent:thermal'),
   }).strict().prefault({}),
   /** The specialist agents (src/agents): which run, how jobs are routed to them, and each one's model and limits. */
   agents: z.object({
@@ -218,6 +219,7 @@ export const ConfigSchema = z.object({
     ams: SpecialistSettingsSchema,
     emc: SpecialistSettingsSchema,
     render: SpecialistSettingsSchema,
+    thermal: SpecialistSettingsSchema,
   }).strict().prefault({}),
   electronics: z.object({
     /** KiCad project files (.kicad_pro), relative to the repository; empty = every one found */

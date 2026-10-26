@@ -118,7 +118,7 @@ export async function cmdWhoami(_argv: string[]): Promise<number> {
 
 // ------------------------------------------------------------------ remote
 
-const REMOTE_USAGE = 'usage: trace remote projects | status OWNER/REPO | settings OWNER/REPO [KEY [VALUE|--unset]] | runs OWNER/REPO [--kind K] [--limit N] | task OWNER/REPO [--agent verify|impl|ams|emc|render] "request" | job ID | memory list|deactivate|reactivate OWNER/REPO … | prompts list|get|set|reset|revert|history|diff|preview … | kb search|sync OWNER/REPO …'
+const REMOTE_USAGE = 'usage: trace remote projects | status OWNER/REPO | settings OWNER/REPO [KEY [VALUE|--unset]] | runs OWNER/REPO [--kind K] [--limit N] | task OWNER/REPO [--agent verify|impl|ams|emc|render|thermal] "request" | job ID | memory list|deactivate|reactivate OWNER/REPO … | prompts list|get|set|reset|revert|history|diff|preview … | kb search|sync OWNER/REPO …'
 
 export async function cmdRemote(argv: string[]): Promise<number> {
   return guarded(async () => {

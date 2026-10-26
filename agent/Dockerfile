@@ -52,6 +52,13 @@ RUN apt-get update \
  && verilator --version && yosys -V && nextpnr-ice40 --version
 # --- end verification and FPGA
 
+# --- Thermal (src/tools/thermal): CalculiX ccx 2.21 for thermal.board solver=calculix, from Ubuntu noble's universe
+# (calculix-ccx 2.21-1, published for arm64 and amd64; about 18 MB with SPOOLES, ARPACK, BLAS/LAPACK and gfortran).
+# OpenFOAM (solver=cfd) is in the CPU/GPU job image only (agent/Dockerfile.gpu): CFD runs go to the queue.
+RUN apt-get update && apt-get install -y --no-install-recommends calculix-ccx=2.21-1 && rm -rf /var/lib/apt/lists/* \
+ && command -v ccx
+# --- end thermal
+
 # A non-root user owns the app's runtime state; the workspace is /mnt/workspace (AgentCore session storage) when
 # mounted, else /tmp/trace-work.
 RUN useradd --create-home --uid 10001 --shell /bin/bash trace \
