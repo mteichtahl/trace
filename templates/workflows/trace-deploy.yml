@@ -12,6 +12,11 @@
 # The commands run with DEPLOY_SHA and DEPLOY_ENVIRONMENT set, and with the environment's and repository's secrets as
 # environment variables. Cloud credentials: variable TRACE_DEPLOY_AWS_ROLE (GitHub OIDC, environment
 # __TR_ENVIRONMENT__) and TRACE_DEPLOY_AWS_REGION, or your own secrets. Kill switch: TRACE_DEPLOY = 'false'.
+#
+# Runners: every job runs on AWS CodeBuild (a CodeBuild-hosted GitHub Actions runner in the installation's AWS account),
+# never on a GitHub-hosted runner. The first runs-on label names the project's CodeBuild runner project through the
+# repository variable TRACE_CODEBUILD_PROJECT, which `trace install` sets; the second keeps each job's runner distinct.
+# Without that variable the jobs wait in the queue: there is no GitHub-hosted fallback, by design.
 name: trace-deploy
 
 on:

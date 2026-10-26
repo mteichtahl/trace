@@ -6,6 +6,11 @@
 #
 # Behaviour is set in .trace/config.yml (read from __TR_BRANCH__, never from a PR). Kill switch: repository
 # variable TRACE_PRS = 'false'. Needs the TRACE_TOKEN secret for its actions to start builds.
+#
+# Runners: every job runs on AWS CodeBuild (a CodeBuild-hosted GitHub Actions runner in the installation's AWS account),
+# never on a GitHub-hosted runner. The first runs-on label names the project's CodeBuild runner project through the
+# repository variable TRACE_CODEBUILD_PROJECT, which `trace install` sets; the second keeps each job's runner distinct.
+# Without that variable the jobs wait in the queue: there is no GitHub-hosted fallback, by design.
 name: trace-prs
 
 on:
