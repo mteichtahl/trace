@@ -31,6 +31,9 @@ import { LIBRARY_TARGET, libraryToolDefinitions } from '../core/gateway.js'
 import { libraryRegistry } from '../library/lambda.js'
 import { CENTRAL_PREFIX, grantPrefixes } from './project.js'
 
+/** The Lambda's time limit: a BOM check of 2,000 lines asks the providers line by line. The gateway allows 15. */
+export const LAMBDA_TIMEOUT_MINUTES = 10
+
 /** What a project needs of the gateway: its ARN (for the worker role's grant) and its URL (TRACE_GATEWAY_URL). */
 export interface GatewayRef { arn: string; url: string }
 
@@ -119,7 +122,7 @@ export class LibraryGateway extends Construct {
       role,
       memorySize: 2048,
       ephemeralStorageSize: Size.mebibytes(4096),
-      timeout: Duration.minutes(5),
+      timeout: Duration.minutes(LAMBDA_TIMEOUT_MINUTES),
       logGroup,
       environment: {
         TRACE_HOME: p.traceHome,

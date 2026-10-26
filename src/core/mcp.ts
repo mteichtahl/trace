@@ -16,7 +16,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { load } from './config.js'
-import { type GatewayCaller, gatewayFromEnv, goesRemote, isLibraryTool, withProjectParts, writesLibrary } from './gateway.js'
+import { type GatewayCaller, type GatewayOutcome, gatewayFromEnv, goesRemote, isLibraryTool, withProjectParts, writesLibrary } from './gateway.js'
 import { type AnyTool, Registry, ToolError } from './registry.js'
 import { continueFromEnv, flush, observeTool } from './telemetry.js'
 
@@ -61,7 +61,19 @@ async function viaGateway(gateway: GatewayCaller, t: AnyTool, args: unknown): Pr
   if (!isLibraryTool(t.name)) return null
   const name = t.name
   const sent = withProjectParts(name, { ...(args as Record<string, unknown>) }, projectParts())
-  const out = await observeTool(name, sent, { via: 'gateway', hardware: false }, false, async () => gateway.call(name, sent))
+  // a call the gateway never took is recorded as an error on its span; the run here, if any, gets its own span
+  class Unreachable extends Error { override name = 'GatewayUnreachable' }
+  let out: GatewayOutcome
+  try {
+    out = await observeTool(name, sent, { via: 'gateway', hardware: false }, false, async () => {
+      const o = await gateway.call(name, sent)
+      if (o.kind === 'unreachable') throw new Unreachable(o.reason)
+      return o
+    })
+  } catch (e) {
+    if (!(e instanceof Unreachable)) throw e
+    out = { kind: 'unreachable', reason: e.message }
+  }
   if (out.kind === 'result') return out.result
   if (writesLibrary(name)) {
     return { content: [{ type: 'text', text: `${name} writes the shared library, which goes only through the library gateway, and the gateway can't be reached: ${out.reason}` }], isError: true }

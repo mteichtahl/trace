@@ -7,10 +7,11 @@ import { createServer, type Server as HttpServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError, type CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import {
-  type GatewayCaller, type GatewayOutcome, type SchemaDefinition, LIBRARY_TOOLS, LOCAL_INPUTS, gatewayClient, gatewayFromEnv, gatewayToolName, goesRemote,
+  type GatewayCaller, type GatewayOutcome, type SchemaDefinition, LIBRARY_TOOLS, LOCAL_INPUTS, classify, gatewayClient, gatewayFromEnv, gatewayToolName, goesRemote,
   libraryToolDefinitions, libraryToolOf, regionOf, resetGateway, signedFetch, toSchemaDefinition, unwrap, withProjectParts,
 } from '../../src/core/gateway.js'
 import { callTool } from '../../src/core/mcp.js'
@@ -170,6 +171,7 @@ describe('the client, against a streamable-HTTP MCP server', () => {
       mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [] }))
       mcp.setRequestHandler(CallToolRequestSchema, async (r) => {
         called.push({ name: r.params.name, args: r.params.arguments })
+        if (r.params.name === 'library___parts_bom_check') throw new McpError(ErrorCode.InternalError, 'Lambda timed out')
         if (r.params.name === 'library___datasheets_history') return { content: [{ type: 'text', text: JSON.stringify({ trace: 1, ok: false, error: 'TPX9: not in the library' }) }] }
         return { content: [{ type: 'text', text: JSON.stringify({ trace: 1, ok: true, result: { total: 3 } }) }] }
       })
@@ -209,9 +211,47 @@ describe('the client, against a streamable-HTTP MCP server', () => {
     expect(e).toEqual({ kind: 'result', result: { content: [{ type: 'text', text: 'TPX9: not in the library' }], isError: true } })
   })
 
+  it('answers a gateway error as an error, never as unreachable (the call may have run)', async () => {
+    const r = await gatewayClient(url, { region: 'us-west-2' }).call('parts.bom_check', { rows: [] })
+    expect(r.kind).toBe('result')
+    expect(r.kind === 'result' && r.result.isError).toBe(true)
+    expect(r.kind === 'result' ? text(r.result) : '').toMatch(/may have run there.*Lambda timed out/)
+  })
+
+  it('opens a new session when the old one has expired, and sends the call once more', async () => {
+    let refused = 0
+    const f = await signedFetch('us-west-2')
+    const expiring: typeof fetch = async (input, init) => {
+      if (refused === 0 && typeof init?.body === 'string' && init.body.includes('"tools/call"')) { refused++; return new Response('session not found', { status: 404 }) }
+      return f(input, init)
+    }
+    const r = await gatewayClient(url, { region: 'us-west-2', fetch: expiring }).call('datasheets.list', {})
+    expect(refused).toBe(1)
+    expect(r.kind).toBe('result')
+    expect(called).toEqual([{ name: 'library___datasheets_list', args: {} }])
+  })
+
   it('reports a gateway it can\'t reach as unreachable', async () => {
     const r = await gatewayClient('http://127.0.0.1:9/mcp', { region: 'us-west-2' }).call('datasheets.list', {})
     expect(r.kind).toBe('unreachable')
+  })
+})
+
+describe('what a failed call came to', () => {
+  it('is unreachable only when the call can\'t have run', () => {
+    expect(classify(new Error('boom'), false)).toEqual({ kind: 'unreachable', reason: 'boom' })
+    expect(classify(new TypeError('fetch failed'), true)).toEqual({ kind: 'unreachable', reason: 'fetch failed' })
+    for (const code of [401, 403, 429, 503]) expect(classify(new StreamableHTTPError(code, 'x'), true)).toMatchObject({ kind: 'unreachable' })
+    expect(classify(new StreamableHTTPError(404, 'Session not found'), true)).toBe('expired')
+    for (const e of [new StreamableHTTPError(500, 'x'), new StreamableHTTPError(504, 'x'), new McpError(ErrorCode.RequestTimeout, 'Request timed out'), new McpError(ErrorCode.InvalidParams, 'bad')]) {
+      expect(classify(e, true)).toMatchObject({ kind: 'result', result: { isError: true } })
+    }
+  })
+
+  it('signs only what it can sign faithfully', async () => {
+    const f = await signedFetch('us-east-1')
+    await expect(f(new Request('http://127.0.0.1:9/'))).rejects.toThrow(/not a Request/)
+    await expect(f('http://127.0.0.1:9/', { method: 'POST', body: new Uint8Array([1]) })).rejects.toThrow(/string bodies only/)
   })
 })
 

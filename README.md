@@ -300,11 +300,20 @@ Parts calls carry the project's `parts.providers` and `parts.currency`, since th
 (`src/library/lambda.ts`) answers in an envelope that `trace mcp` unwraps, so a forwarded call reads the same as one run
 in-process, and refuses any `file`, `path` or `library` whoever sends it.
 
-**When the gateway can't be reached.** A read runs in the worker instead, and `trace mcp` says so on stderr. A write
-(`datasheets.add`, `.acknowledge`, `parts.fetch_datasheet`) reports the error instead, so while the gateway is on,
-writes to the shared library go only through it. The worker role keeps its conditional write on `central/*`: the
-central database is one SQLite file that also holds the project registry (`src/core/onboard.ts`), so IAM can't let a
-worker write one table and not the library's.
+**When a call fails.** Only a failure that means the call never ran counts as unreachable: the session could not be
+opened, the connection was refused, or the gateway answered 401, 403, 429 or 503. A read then runs in the worker
+instead, and `trace mcp` says so on stderr; a write (`datasheets.add`, `.acknowledge`, `parts.fetch_datasheet`)
+reports the error. Anything else (an MCP error, the Lambda timing out, another HTTP status) may have run behind the
+gateway, so it is answered as an error and never run a second time here. An expired session (404) is opened again and
+the call sent once more. So while the gateway is on, library-tool writes without local inputs go only through it. A
+call with `file` or `library`, and the CLI, still write `central/` with the worker's role: the worker role keeps its
+conditional write there, because the central database is one SQLite file that also holds the project registry
+(`src/core/onboard.ts`), and IAM can't let a worker write one table and not the library's.
+
+**Downloads.** `datasheets.add` and `parts.fetch_datasheet` download from a URL, now from the shared Lambda. Every
+hop is checked against private, loopback, link-local and multicast addresses, including IPv4 written inside IPv6
+(`::ffff:7f00:1`, `64:ff9b::/96`), and the connection goes to the address that was checked, so a name that resolves
+differently the second time (DNS rebinding) can't reach the Lambda's runtime API or anything else inside AWS.
 
 **Distributor keys.** `MOUSER_API_KEY`, `DIGIKEY_CLIENT_ID`/`_SECRET` and `NEXAR_CLIENT_ID`/`_SECRET` go in one
 Secrets Manager secret, `<prefix>/library-keys` (output `LibraryKeysSecretArn`), as a JSON object. The installer writes
@@ -317,7 +326,7 @@ its role's credentials, can. Without the gateway, a worker has no distributor ke
 | --- | --- |
 | `<prefix>-library` gateway | `AWS_IAM` inbound auth, MCP. Its role (`<prefix>-gateway-<region>`) may only invoke the Lambda. |
 | `library` target | Lambda target, `GATEWAY_IAM_ROLE` credentials, its tool schema generated from the tools' zod inputs without their local inputs. Gateway's schema has no enums or bounds, so they are kept in each field's description; the Lambda validates with the full zod schema. |
-| `<prefix>-library` Lambda | Node 22 on arm64, 2 GB, 5 minutes. Role `<prefix>-library-<region>`: read `central/*`, write it only with a conditional put, read the keys secret. Nothing of `projects/`, `jobs/`, `access/` or `prompts/`. |
+| `<prefix>-library` Lambda | Node 22 on arm64, 2 GB, 10 minutes (a 2,000-line BOM check asks the providers line by line). Role `<prefix>-library-<region>`: read `central/*`, write it only with a conditional put, read the keys secret. Nothing of `projects/`, `jobs/`, `access/` or `prompts/`. |
 | `<prefix>/library-keys` secret | Written by the installer, never by CloudFormation. |
 
 **Cost.** Gateway calls are $0.005 per 1,000, and tool indexing $0.02 per 100 tools a month (11 tools), at

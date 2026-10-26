@@ -191,6 +191,8 @@ export const InfraPropsSchema = z.object({
   }).strict().prefault({}),
 }).strict().superRefine((p, ctx) => {
   if (p.layoutMigration && p.layout !== 'flat') ctx.addIssue({ code: 'custom', path: ['layoutMigration'], message: 'layoutMigration moves a flat installation: it needs layout flat' })
+  // the library gateway's name (`<prefix>-library`) must match AgentCore's ^([0-9a-zA-Z][-]?){1,48}$
+  if (p.gateway.enabled && !/^([0-9a-zA-Z][-]?){1,48}$/.test(`${p.prefix}-library`)) ctx.addIssue({ code: 'custom', path: ['prefix'], message: 'with the library gateway, the prefix can\'t end with a dash or have two in a row' })
   if (p.cpu.vcpus > p.cpu.maxVcpus) ctx.addIssue({ code: 'custom', path: ['cpu', 'vcpus'], message: `a CPU job asks for ${p.cpu.vcpus} vCPUs, more than cpu.maxVcpus (${p.cpu.maxVcpus})` })
   const listed = new Set(p.repositories.map((r) => (r.split('@')[0] ?? '').toLowerCase()))
   const seen = new Set<string>()

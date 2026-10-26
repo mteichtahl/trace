@@ -176,8 +176,9 @@ export function regionOf(url: string): string | null {
   }
 }
 
-/** How long one forwarded call may take: a BOM check of 2,000 lines asks the providers line by line. */
-export const CALL_TIMEOUT_MS = 6 * 60 * 1000
+/** How long one forwarded call may take: a BOM check of 2,000 lines asks the providers line by line. A little longer
+ * than the Lambda's own limit (src/infra/gateway.ts LAMBDA_TIMEOUT_MINUTES), so the Lambda's timeout is what answers. */
+export const CALL_TIMEOUT_MS = 11 * 60 * 1000
 
 /** A fetch that signs every request with SigV4 for `bedrock-agentcore`, with the default credential chain (the
  * AgentCore runtime's execution role in a worker). */
@@ -187,11 +188,14 @@ export async function signedFetch(region: string): Promise<typeof fetch> {
   ])
   const signer = new SignatureV4({ service: 'bedrock-agentcore', region, credentials: fromNodeProviderChain(), sha256: Sha256 })
   return async (input, init = {}) => {
-    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
+    // the MCP client passes a URL and a string body; anything else would be signed wrong, so it is refused
+    if (typeof input !== 'string' && !(input instanceof URL)) throw new Error('signedFetch takes a URL, not a Request')
+    if (init.body != null && typeof init.body !== 'string') throw new Error('signedFetch signs string bodies only')
+    const url = new URL(typeof input === 'string' ? input : input.href)
     const headers: Record<string, string> = {}
     new Headers(init.headers).forEach((v, k) => { headers[k] = v })
     headers.host = url.host
-    const body = typeof init.body === 'string' ? init.body : init.body == null ? undefined : String(init.body)
+    const body = typeof init.body === 'string' ? init.body : undefined
     const signed = await signer.sign(new HttpRequest({
       method: init.method ?? 'GET', protocol: url.protocol, hostname: url.hostname, ...(url.port ? { port: Number(url.port) } : {}),
       path: url.pathname, query: Object.fromEntries(url.searchParams), headers, ...(body !== undefined ? { body } : {}),
@@ -202,7 +206,28 @@ export async function signedFetch(region: string): Promise<typeof fetch> {
   }
 }
 
-/** The gateway at `url`, through one MCP session kept for the life of the process (opened on the first call). */
+/** HTTP answers that mean the gateway did not take the call: auth refused, throttled, unavailable. */
+const NOT_TAKEN = new Set([401, 403, 429, 503])
+
+/**
+ * What a failed call came to. Only a failure that means the call never ran is `unreachable` (the session could not be
+ * opened, the connection was refused, the gateway refused or shed the request), so a read can run here instead
+ * without running twice. Anything else (an MCP error, a timeout, another HTTP status) may have run behind the gateway:
+ * it is answered as an error and never run again here.
+ */
+export function classify(e: unknown, opened: boolean): GatewayOutcome | 'expired' {
+  const reason = e instanceof Error ? e.message : String(e)
+  const code = typeof (e as { code?: unknown } | null)?.code === 'number' ? (e as { code: number }).code : null
+  const http = (e as { name?: string } | null)?.name !== 'McpError' && /^Streamable HTTP error/.test(reason) ? code : null
+  if (!opened) return { kind: 'unreachable', reason }
+  if (http === 404) return 'expired' // the session ended (idle): the call was not taken
+  if (http !== null && NOT_TAKEN.has(http)) return { kind: 'unreachable', reason }
+  if (e instanceof TypeError) return { kind: 'unreachable', reason } // fetch failed: no connection
+  return { kind: 'result', result: { content: [{ type: 'text', text: `the library gateway answered with an error, and the call may have run there: ${reason}` }], isError: true } }
+}
+
+/** The gateway at `url`, through one MCP session kept for the life of the process (opened on the first call, and
+ * again when it has expired). */
 export function gatewayClient(url: string, o: { fetch?: typeof fetch; region?: string } = {}): GatewayCaller {
   type Client = import('@modelcontextprotocol/sdk/client/index.js').Client
   let session: Promise<Client> | null = null
@@ -216,17 +241,29 @@ export function gatewayClient(url: string, o: { fetch?: typeof fetch; region?: s
     await client.connect(new StreamableHTTPClientTransport(new URL(url), { fetch: o.fetch ?? (await signedFetch(region)) }))
     return client
   }
+  const once = async (name: LibraryTool, args: Record<string, unknown>): Promise<GatewayOutcome | 'expired'> => {
+    let client: Client
+    try {
+      session ??= open()
+      client = await session
+    } catch (e) {
+      session = null
+      return classify(e, false)
+    }
+    try {
+      const r = await client.callTool({ name: gatewayToolName(name), arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS })
+      return { kind: 'result', result: unwrap(r as CallToolResult) }
+    } catch (e) {
+      session = null // opened again on the next call
+      return classify(e, true)
+    }
+  }
   return {
     async call(name, args) {
-      try {
-        session ??= open()
-        const client = await session
-        const r = await client.callTool({ name: gatewayToolName(name), arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS })
-        return { kind: 'result', result: unwrap(r as CallToolResult) }
-      } catch (e) {
-        session = null // a broken session is opened again on the next call
-        return { kind: 'unreachable', reason: e instanceof Error ? e.message : String(e) }
-      }
+      const first = await once(name, args)
+      if (first !== 'expired') return first
+      const again = await once(name, args)
+      return again === 'expired' ? { kind: 'unreachable', reason: 'the gateway session expired twice in a row' } : again
     },
   }
 }

@@ -29,6 +29,13 @@ describe('the library gateway', () => {
     expect(InfraPropsSchema.parse(base).gateway).toEqual({ enabled: false })
   })
 
+  it('needs a prefix that makes a valid gateway name', () => {
+    expect(InfraPropsSchema.safeParse({ ...base, prefix: 'ab-', gateway: { enabled: true } }).success).toBe(false)
+    expect(InfraPropsSchema.safeParse({ ...base, prefix: 'a--b', gateway: { enabled: true } }).success).toBe(false)
+    expect(InfraPropsSchema.safeParse({ ...base, prefix: 'ab-', gateway: { enabled: false } }).success).toBe(true)
+    expect(InfraPropsSchema.safeParse({ ...base, prefix: 'my-lab', gateway: { enabled: true } }).success).toBe(true)
+  })
+
   it('is one gateway with IAM inbound auth over MCP, run by its own role', () => {
     on.parent.resourceCountIs('AWS::BedrockAgentCore::Gateway', 1)
     on.parent.hasResourceProperties('AWS::BedrockAgentCore::Gateway', {
@@ -73,7 +80,7 @@ describe('the library gateway', () => {
 
   it('runs the Lambda on Node 22 arm64 with TRACE_HOME and the keys secret, writing only under /tmp', () => {
     on.parent.hasResourceProperties('AWS::Lambda::Function', {
-      FunctionName: 'trace-library', Runtime: 'nodejs22.x', Architectures: ['arm64'], Handler: 'index.handler',
+      FunctionName: 'trace-library', Runtime: 'nodejs22.x', Architectures: ['arm64'], Handler: 'index.handler', Timeout: 600,
       Environment: { Variables: Match.objectLike({ TRACE_HOME: Match.anyValue(), TRACE_LIBRARY_KEYS_SECRET_ARN: Match.anyValue(), HOME: '/tmp', XDG_CACHE_HOME: '/tmp/cache' }) },
     })
     on.parent.hasResourceProperties('AWS::SecretsManager::Secret', { Name: 'trace/library-keys' })
