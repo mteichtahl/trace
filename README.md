@@ -22,7 +22,8 @@ trace install                                  # opens the installer in your bro
 The installer is a page served from your own machine (127.0.0.1, with a one-time key in its address). It asks for
 and checks the following:
 
-- **GitHub:** the token the agents use, and the repositories trace will run.
+- **GitHub:** the shared agent token, the repositories trace will run, and optionally each project's own agent
+  token (see [Project isolation](#project-isolation)).
 - **AWS:** a profile (SSO works) or access keys, the region, and confirmation of the account. It checks that Bedrock
   AgentCore and an Anthropic model are available there.
 - **Agents:** the model, session limits, and the central bucket.
@@ -31,19 +32,59 @@ and checks the following:
 
 It then shows the plan and runs it:
 
-- **AWS (CDK):** one stack. It contains the central bucket, the GitHub token's secret, the agent image (built by
-  CodeBuild on arm64, so no local Docker is needed), and two AgentCore runtimes from that image. The worker runtime
-  is invoked by the repositories' workflows through IAM. The API runtime is for people and is reached only with a
-  Cognito sign-in. The stack also holds the Cognito user pool and the GitHub OIDC role the repositories' workflows
-  assume.
-- **GitHub:** each repository's Actions variables (`TRACE_AWS_ROLE`, `TRACE_AWS_REGION`, `TRACE_HOME`,
-  `TRACE_AGENT_RUNTIME_ARN`) and its `TRACE_TOKEN` secret (encrypted with the repository's key), plus the onboarding
-  pull request.
+- **AWS (CDK):** one stack. It contains the central bucket, the agent image (built by CodeBuild on arm64, so no
+  local Docker is needed), and AgentCore runtimes from that image: one worker runtime per project, each with its own
+  execution role, GitHub OIDC role, GitHub token secret and GPU job definition, and the API runtime. A project's
+  worker is invoked by that repository's workflows through IAM, and by the API. The API runtime is for people and is
+  reached only with a Cognito sign-in. The stack also holds the Cognito user pool.
+- **GitHub:** each repository's Actions variables (`TRACE_AWS_ROLE` and `TRACE_AGENT_RUNTIME_ARN`, both its own
+  project's, `TRACE_AWS_REGION`, `TRACE_HOME`) and its `TRACE_TOKEN` secret (its project's agent token, encrypted
+  with the repository's key), plus the onboarding pull request.
 - **People:** Cognito invitations into each person's class group, and project assignments recorded in the central
   database.
 
 Tokens and keys stay in the installer's memory. They are written only to Secrets Manager and GitHub. Every step can
-be run again safely, and running the installer again updates an existing installation.
+be run again safely, and running the installer again updates an existing installation. Adding or removing a
+repository and running the installer again adds or removes that project's runtime, roles, secret and job
+definition.
+
+## Project isolation
+
+Each project's agent runs Claude with Bash, so it can use its runtime's AWS credentials directly. The line between
+projects is therefore drawn in IAM, not only in code (`src/infra/project.ts`):
+
+| Isolated per project | How |
+| --- | --- |
+| **Worker runtime** | One AgentCore runtime per repository (`<prefix>_w_<hash>`, tagged `trace:project`), with its own execution role and `TRACE_PROJECT=owner/repo`. It refuses, with a 403 that is logged, any invocation or job for another repository. |
+| **Memory** | Its role may create and list events only for actors `<owner>/<repo>/*`, and recall and list records only under `/trace/<owner>/<repo>/*` (the condition keys `bedrock-agentcore:actorId` and `bedrock-agentcore:namespace`). The actor comes from `TRACE_PROJECT`, never from the request. |
+| **S3** | Read and write `projects/<owner>/<repo>/*` and `jobs/<owner>/<repo>/*`, and list only those prefixes and `central/*`. Nothing under `access/*`, and nothing of another project. |
+| **GPU jobs** | One AWS Batch job definition per project, whose job role reads and writes only that project's `jobs/<owner>/<repo>/*`. A project's role may submit only with its own definition, only jobs tagged `trace:project=<owner>/<repo>`, and may stop only jobs carrying that tag. SubmitJob cannot override a definition's job role. |
+| **GitHub OIDC role** | One per repository, trusted only for `repo:OWNER/REPO:ref:refs/heads/BRANCH`. It may invoke only that project's runtime and read and write only that project's prefix (and the central database). |
+| **GitHub token** | Each project has its own secret, `<prefix>/github-token/<owner>/<repo>`, and its worker reads only that one. This isolates GitHub access only when you give the project its own fine-grained token limited to that repository. By default the shared token is copied into every project's secret, and the installer's summary says so. A project token is checked: it must see its repository, and the installer warns if it can also see another project's. |
+
+Shared on purpose:
+
+- **The central database** (`central/`: datasheets and the parts database). Every project reads it. Every project
+  may also write it, because adding a datasheet is a shared write, but only with a conditional put (`If-Match` or
+  `If-None-Match`, which is how the central store always writes) and never a delete. The bucket is versioned.
+- **The GPU queue and compute environment**, and the GPU image.
+- **The agent image**: every runtime runs the same one.
+- **The API runtime.** It is the one component that spans projects. It holds the shared GitHub token, which admins
+  need for `settings.get` and `settings.set` on any project. It reads (never writes) every project's memory records
+  for `memory.list` and `memory.recall`, and it may invoke every project's worker. It does all of this only after its
+  Cognito access check. It runs no model and no agent, and nothing reaches a shell through it: a `task` is handed to
+  the project's own worker runtime.
+- **AgentCore Memory**: one memory resource, divided by the conditions above.
+
+`DescribeJobs` in AWS Batch has no resource-level permissions, so any project's role can describe (not change) any
+job on the queue, which includes its command and environment. Job ids, not data, are what that reveals.
+
+**Upgrading an installation from before per-project roles.** The next installer run replaces the single worker
+runtime (`<prefix>_agent`), its role, the one GitHub OIDC role (`<prefix>-github-actions-<region>`) and the one GPU
+job definition with one of each per project, and rewrites every repository's `TRACE_AWS_ROLE` and
+`TRACE_AGENT_RUNTIME_ARN`. Workflows that run between the deploy and the variable update fail to assume the old
+role; re-run them. The shared `<prefix>/github-token` secret stays, as the API's. GPU job files written under the
+old `jobs/<id>/` layout expire with the bucket's one-week rule.
 
 ## People and permissions
 
@@ -63,8 +104,8 @@ A person's class is their Cognito group (`trace-admins`, `trace-users`, `trace-g
 signed token. Someone in none of these groups can do nothing. Project assignments live in the central database.
 Someone not assigned to a project cannot tell that it exists.
 
-The API runtime checks every request against these rules. The repositories' own workflows reach only the worker
-runtime, through IAM, so a person's sign-in never acts as the loop, and the loop never acts as a person. Admins manage
+The API runtime checks every request against these rules. Each repository's own workflows reach only that project's
+worker runtime, through IAM, so a person's sign-in never acts as the loop, and the loop never acts as a person. Admins manage
 people with:
 
 ```sh
@@ -133,9 +174,11 @@ Tools that drive real hardware (instruments, buses, flashing a target) are refus
 
 AgentCore runtimes have no GPU. Tools that need one, the Blender renders and the PCB autorouters, run their programs
 through `runJob` (`src/gpu/jobs.ts`). A job runs on the local machine when that machine has an NVIDIA GPU or the job
-does not need one. Otherwise, when `TRACE_GPU_QUEUE` is set (the stack sets it on both runtimes), the job goes to an
-AWS Batch queue of GPU instances that scales to zero when idle. Inputs travel through the central bucket's `jobs/`
-prefix, and outputs and logs come back the same way, so the tool answers the same wherever the job ran.
+does not need one. Otherwise, when `TRACE_GPU_QUEUE` is set (the stack sets it on each project's worker runtime,
+with that project's job definition), the job goes to an AWS Batch queue of GPU instances that scales to zero when
+idle. Inputs travel through the central bucket's `jobs/<owner>/<repo>/` prefix (`TRACE_PROJECT`; `jobs/_local/` outside
+a project), and outputs and logs come back the same way, so the tool answers the same wherever the job ran. The API
+runtime has no GPU queue: GPU work goes through a `task`.
 `TRACE_GPU_REMOTE=always|never` overrides this choice. The installer's Agents step can turn the queue off and sets
 its vCPU limit and Spot use (`gpu.enabled`, `gpu.maxVcpus`, `gpu.spot` in the stack settings). The GPU image is
 described in `agent/README.md`.
@@ -230,14 +273,14 @@ tokens and keys and is bounded in size (8000 characters per event, 12 tool outco
 - **Through the API:** anyone who can read a project can see its memory with the read-only actions `memory.list` and
   `memory.recall` (optionally for one `agent`). Person-scoped preferences are shown only to the person they belong
   to, and to admins.
-- **In IAM:** both runtime roles may call only `CreateEvent`, `ListEvents`, `RetrieveMemoryRecords` and
-  `ListMemoryRecords`, on this memory only. Events are limited to actor ids of the `<owner>/<repo>/<agent>` shape, and
-  records to namespaces under `/trace/`. One role serves every project, so the line between projects is drawn by the
-  client.
+- **In IAM:** each project's worker role may call only `CreateEvent` and `ListEvents` for its own project's actors
+  (`<owner>/<repo>/*`) and `RetrieveMemoryRecords` and `ListMemoryRecords` under its own namespaces
+  (`/trace/<owner>/<repo>/*`), on this memory only. The API role may only recall and list records under `/trace/`.
+  The client draws the same lines as well (see [Project isolation](#project-isolation)).
 
 ## Observability
 
-Both AgentCore runtimes start Node with the AWS Distro for OpenTelemetry (ADOT) auto-instrumentation
+Every AgentCore runtime starts Node with the AWS Distro for OpenTelemetry (ADOT) auto-instrumentation
 (`node --require …/aws-distro-opentelemetry-node-autoinstrumentation/…/register.js`, in `agent/Dockerfile`). AgentCore
 Runtime supplies its OpenTelemetry settings: the service name, the runtime's log group, and the headers that send
 metrics to the `bedrock-agentcore` namespace. Spans go to X-Ray, which stores them in CloudWatch Logs (Transaction
@@ -273,17 +316,17 @@ The stack (settings `observability.*`, chosen in the installer's Agents step) ad
 - X-Ray's OTLP endpoint in the GPU job definition.
 - The `<prefix>-agents` dashboard: invocations, latency, errors, jobs, tokens, cost, tool calls and GPU jobs.
 
-The stack outputs `DashboardUrl`, `GenAiObservabilityUrl`, `WorkerLogGroup`, `ApiLogGroup`, `SpansLogGroup` and
-`MemoryLogGroup`. When `observability.enabled` is false, the runtimes get `DISABLE_ADOT_OBSERVABILITY=true` and
+The stack outputs `DashboardUrl`, `GenAiObservabilityUrl`, `Project<hash>LogGroup` (one per project's worker),
+`ApiLogGroup`, `SpansLogGroup` and `MemoryLogGroup`. When `observability.enabled` is false, the runtimes get `DISABLE_ADOT_OBSERVABILITY=true` and
 `OTEL_SDK_DISABLED=true`, and nothing else is created.
 
-**In CloudWatch GenAI Observability** (CloudWatch → GenAI Observability → Bedrock AgentCore), the two runtimes appear
-as agents with their sessions, traces, latency, errors and token use. A session is one AgentCore runtime session. For
+**In CloudWatch GenAI Observability** (CloudWatch → GenAI Observability → Bedrock AgentCore), the runtimes (one per
+project, and the API) appear as agents with their sessions, traces, latency, errors and token use. A session is one AgentCore runtime session. For
 the worker, that is one work item at one head (`trace-<owner>-<repo>-<number>-<sha12>`, from `src/agent/dispatch.ts`).
 Its trace runs from the invocation through the job and Claude's turns down to each tool call, MCP tools included, and
 any GPU job.
 
-**To see one session's trace:** open the worker agent in GenAI Observability, choose **Sessions**, and pick the
+**To see one session's trace:** open the project's worker agent (`<prefix>_w_<hash>`) in GenAI Observability, choose **Sessions**, and pick the
 session id. Alternatively, in CloudWatch → Transaction Search, filter spans on `session.id` (or on `trace.job.id`, the
 job id the agent puts in its comment on the issue or PR), then open the trace.
 
@@ -306,7 +349,7 @@ outside AgentCore, either set `OTEL_SDK_DISABLED=true` or give it the variables 
 | Path | What |
 | --- | --- |
 | `src/core` | Settings, SQLite stores, the tool registry, the MCP server, onboarding, access control, the Python bridge client |
-| `src/infra` | The CDK stack (AgentCore runtimes, Cognito, the central bucket, the image builds, GitHub OIDC, the AWS Batch GPU queue in `gpu.ts`) |
+| `src/infra` | The CDK stack (Cognito, the central bucket, the image builds, the API runtime, the AWS Batch GPU queue in `gpu.ts`) and, per project, `project.ts` (its worker runtime, roles, token secret and GPU job definition) |
 | `src/installer` | `trace install`: the local web installer |
 | `src/agent`, `src/api`, `agent/Dockerfile` | The image AgentCore runs: the worker, and the people-facing API |
 | `src/login` | `trace login`, `trace remote …`, `trace users …` |

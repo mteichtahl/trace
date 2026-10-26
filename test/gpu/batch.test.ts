@@ -8,7 +8,7 @@ import { decodeSpec, encodeSpec, jobsLocation, type RemoteSpec } from '../../src
 import { main } from '../../src/gpu/runner.js'
 import { FakeS3 } from '../core/fake-s3.js'
 
-const env = { TRACE_GPU_QUEUE: 'q-arn', TRACE_GPU_JOB_DEFINITION: 'def-arn', TRACE_GPU_BUCKET: 'central-bucket', TRACE_GPU_QUEUE_WAIT_S: '60' }
+const env = { TRACE_GPU_QUEUE: 'q-arn', TRACE_GPU_JOB_DEFINITION: 'def-arn', TRACE_GPU_BUCKET: 'central-bucket', TRACE_GPU_QUEUE_WAIT_S: '60', TRACE_PROJECT: 'Acme/Board' }
 
 /** A Batch whose job "runs" by calling the real runner against the same fake S3 when it is first described. */
 class FakeBatch implements BatchApi {
@@ -47,10 +47,13 @@ const job = (over: Record<string, unknown> = {}) => {
 }
 
 describe('where GPU jobs are staged', () => {
-  it('uses TRACE_GPU_BUCKET, or TRACE_HOME\'s bucket under jobs/', () => {
-    expect(jobsLocation({ TRACE_GPU_BUCKET: 'b1' })).toEqual({ bucket: 'b1', prefix: 'jobs' })
-    expect(jobsLocation({ TRACE_GPU_BUCKET: 's3://b1/elsewhere/' })).toEqual({ bucket: 'b1', prefix: 'elsewhere' })
-    expect(jobsLocation({ TRACE_HOME: 's3://b2/central' })).toEqual({ bucket: 'b2', prefix: 'jobs' })
+  it('uses TRACE_GPU_BUCKET, or TRACE_HOME\'s bucket, under jobs/<project>/', () => {
+    expect(jobsLocation({ TRACE_GPU_BUCKET: 'b1', TRACE_PROJECT: 'Acme/Board' })).toEqual({ bucket: 'b1', prefix: 'jobs/acme/board', project: 'acme/board' })
+    expect(jobsLocation({ TRACE_GPU_BUCKET: 's3://b1/elsewhere/', TRACE_PROJECT: 'acme/board' })).toEqual({ bucket: 'b1', prefix: 'elsewhere/acme/board', project: 'acme/board' })
+    expect(jobsLocation({ TRACE_HOME: 's3://b2/central', TRACE_PROJECT: 'acme/board.fw' })).toEqual({ bucket: 'b2', prefix: 'jobs/acme/board.fw', project: 'acme/board.fw' })
+    // outside a project (a laptop): a prefix no project has
+    expect(jobsLocation({ TRACE_GPU_BUCKET: 'b1' })).toEqual({ bucket: 'b1', prefix: 'jobs/_local', project: '_local' })
+    expect(() => jobsLocation({ TRACE_GPU_BUCKET: 'b1', TRACE_PROJECT: '../other' })).toThrow(/TRACE_PROJECT/)
     expect(() => jobsLocation({ TRACE_HOME: '/home/me/.trace' })).toThrow(/TRACE_GPU_BUCKET/)
   })
 
@@ -74,11 +77,14 @@ describe('runBatch with the runner', () => {
     expect(r.stderr.trim()).toBe('warn')
     const sub = batch.submitted[0]
     expect(sub).toMatchObject({ jobQueue: 'q-arn', jobDefinition: 'def-arn', timeout: { attemptDurationSeconds: 660 } })
+    // the project's role may submit only jobs tagged with its project
+    expect(sub?.tags).toMatchObject({ 'trace:project': 'acme/board', 'trace:kind': 'blender' })
     expect(sub?.jobName).toMatch(/^trace-blender-\d{8}-\d{6}-[0-9a-f]{8}$/)
     const spec = decodeSpec(sub?.containerOverrides.environment.find((e) => e.name === 'TRACE_GPU_JOB')?.value as string)
-    expect(spec).toMatchObject({ bucket: 'central-bucket', prefix: 'jobs', kind: 'blender', inputs: ['a.txt'], outputs: ['b.txt', 'never.txt'] })
+    expect(spec).toMatchObject({ bucket: 'central-bucket', prefix: 'jobs/acme/board', kind: 'blender', inputs: ['a.txt'], outputs: ['b.txt', 'never.txt'] })
     const keys = [...s3.objects.keys()].map((k) => k.replace(spec.id, 'ID'))
-    expect(keys.sort()).toEqual(['central-bucket/jobs/ID/exit', 'central-bucket/jobs/ID/in/a.txt', 'central-bucket/jobs/ID/log/stderr.txt', 'central-bucket/jobs/ID/log/stdout.txt', 'central-bucket/jobs/ID/out/b.txt'])
+    const P = 'central-bucket/jobs/acme/board/ID'
+    expect(keys.sort()).toEqual([`${P}/exit`, `${P}/in/a.txt`, `${P}/log/stderr.txt`, `${P}/log/stdout.txt`, `${P}/out/b.txt`])
     expect(sleeps).toEqual([5000, 7500, 11250, 16875]) // backing off between the five looks
   })
 

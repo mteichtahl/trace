@@ -262,7 +262,7 @@ describe('job runner with memory', () => {
   const ws: string[] = []
   afterEach(() => { for (const w of ws.splice(0)) rmSync(w, { recursive: true, force: true }) })
 
-  function run(mem: AgentMemory | null, payload: JobPayload) {
+  function run(mem: AgentMemory | null, payload: JobPayload, project?: string) {
     const dir = mkdtempSync(join(tmpdir(), 'trace-mem-ws-')); ws.push(dir)
     const calls: { prompt: string; options: ClaudeOptions }[] = []
     const f = fakeGithub({ 'repos.get': { default_branch: 'main' }, 'issues.listComments': [] })
@@ -275,7 +275,7 @@ describe('job runner with memory', () => {
       exec: async () => ({ stdout: '', stderr: '' }), getToken: async () => 'ghs_TESTTOKEN1234567890abcdef', github: () => f.gh,
       claude: (a) => { calls.push(a); return (async function* () { for (const m of msgs) yield m })() },
       settingsOf: () => cfgOf(), remoteSettings: async () => cfgOf(), workspace: dir, persistent: false, cli: '/app/dist/cli.js', timeoutS: 60,
-      env: { PATH: '/usr/bin' }, now: Date.now, memory: mem,
+      env: { PATH: '/usr/bin' }, now: Date.now, memory: mem, ...(project ? { project } : {}),
     }
     const lines: string[] = []
     const ctx = { jobId: 'job-m', signal: new AbortController().signal, log: (l: string) => { lines.push(l) }, startJob: () => ({ accepted: true, jobId: 'c' }) }
@@ -306,6 +306,19 @@ describe('job runner with memory', () => {
       'Result: Pushed abc.',
     ])
     expect(h.lines.join('\n')).toMatch(/continuing session pr-5/)
+  })
+
+  it('in single-project mode, uses its own project\'s actors only, and touches no memory for another project', async () => {
+    const f = new FakeMemory()
+    const h = run(new AgentMemory(MEMORY_ID, f), { kind: 'task', repository: 'O/R', request: 'Add a test', requestedBy: 'marc@example.com' }, 'o/r')
+    await h.go()
+    const actors = new Set(f.of(CreateEventCommand).map((c) => c.input.actorId))
+    expect([...actors].every((a) => a?.startsWith('o/r/'))).toBe(true)
+    const other = new FakeMemory()
+    const x = run(new AgentMemory(MEMORY_ID, other), { kind: 'task', repository: 'x/y', request: 'Add a test', requestedBy: 'marc@example.com' }, 'o/r')
+    await expect(x.go()).rejects.toThrow(/serves o\/r only, not x\/y/)
+    expect(other.sent).toHaveLength(0)
+    expect(x.calls).toHaveLength(0)
   })
 
   it('runs a task as the worker, and a render task as the render agent, with the person who asked', async () => {

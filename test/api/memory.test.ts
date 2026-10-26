@@ -35,7 +35,7 @@ const client: SendClient = {
 const deps = (memory: AgentMemory | null): ActionDeps => ({
   github: async () => new FakeGitHub(['acme/board', 'acme/secret']),
   cognito: () => new FakeCognito(),
-  jobs: async () => ({ startJob: async () => ({ accepted: true, jobId: 'j' }), jobStatus: async () => [] }),
+  jobs: async () => ({ repositoryOf: () => null, startJob: async () => ({ accepted: true, jobId: 'j' }), jobStatus: async () => [] }),
   tools: () => new Registry(memoryTools),
   checkout: async () => { throw new Error('no clones here') },
   scratch: mkdtempSync(join(tmpdir(), 'trace-api-mem-')),

@@ -10,7 +10,7 @@ import {
 } from '../../src/agent/job.js'
 import { type JobRunner, type Jobs, createJobs } from '../../src/agent/jobs.js'
 import { taskBranch, taskPrompt, workItemPrompt } from '../../src/agent/prompt.js'
-import { InvocationSchema, type JobPayload, TaskPayload } from '../../src/agent/schemas.js'
+import { InvocationSchema, type JobPayload, TaskPayload, WrongProject, checkProject } from '../../src/agent/schemas.js'
 import { createAgentServer } from '../../src/agent/server.js'
 import { dispatchTask } from '../../src/harness/dispatch.js'
 import { TASKS } from '../../src/harness/index.js'
@@ -32,8 +32,8 @@ describe('agent server', () => {
   let close: (() => Promise<void>) | null = null
   afterEach(async () => { await close?.(); close = null })
 
-  const serve = async (jobs: Jobs): Promise<string> => {
-    const s = createAgentServer(jobs)
+  const serve = async (jobs: Jobs, o: { project?: string; log?: (l: string) => void } = {}): Promise<string> => {
+    const s = createAgentServer(jobs, o)
     await new Promise<void>((r) => s.listen(0, '127.0.0.1', r))
     close = () => new Promise((r) => s.close(() => r()))
     return `http://127.0.0.1:${(s.address() as AddressInfo).port}`
@@ -99,6 +99,37 @@ describe('agent server', () => {
     expect(jobs.jobStatus(f.jobId)[0]?.error).toBe('boom')
     await jobs.shutdown(1000)
     expect(jobs.jobStatus(w.jobId)[0]?.state).toBe('aborted')
+  })
+
+  it('in single-project mode, refuses (403, logged) anything for another repository', async () => {
+    const seen: JobPayload[] = []
+    const logged: string[] = []
+    const jobs = createJobs(async (p) => { seen.push(p); return 'ok' }, { echo: () => undefined, project: 'acme/board' })
+    const base = await serve(jobs, { project: 'acme/board', log: (l) => logged.push(l) })
+    const other = await post(base, { kind: 'work-item', repository: 'other/repo', item: ITEM })
+    expect(other.status).toBe(403)
+    expect(other.json.error).toMatch(/serves acme\/board only, not other\/repo/)
+    const task = await post(base, { kind: 'task', repository: 'acme/firmware', request: 'x', requestedBy: 'm' })
+    expect(task.status).toBe(403)
+    const sweep = await post(base, { kind: 'sweep', repositories: ['acme/board', 'other/repo'] })
+    expect(sweep.status).toBe(403)
+    expect(logged).toHaveLength(3)
+    expect(logged[0]).toMatch(/"refused":"work-item"/)
+    expect(seen).toHaveLength(0)
+    // its own project, in any case, is served; status needs no repository
+    expect((await post(base, { kind: 'work-item', repository: 'Acme/Board', item: ITEM })).json.accepted).toBe(true)
+    expect((await post(base, { kind: 'status' })).status).toBe(200)
+    await until(() => !jobs.busy())
+    expect(seen).toHaveLength(1)
+    // and the jobs and the runner refuse on their own, whoever calls them
+    expect(() => jobs.startJob({ kind: 'work-item', repository: 'other/repo', item: ITEM })).toThrow(WrongProject)
+    const h = harness({ project: 'acme/board' })
+    try {
+      await expect(createRunner(h.d)({ kind: 'work-item', repository: 'other/repo', item: ITEM }, h.ctx)).rejects.toThrow(WrongProject)
+      expect(h.cmds).toHaveLength(0)
+    } finally { h.cleanup() }
+    expect(() => checkProject({ kind: 'status' }, 'acme/board')).not.toThrow()
+    expect(() => checkProject({ kind: 'sweep', repositories: ['x/y'] }, undefined)).not.toThrow()
   })
 
   it('validates task payloads', () => {

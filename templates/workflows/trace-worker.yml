@@ -7,8 +7,9 @@
 #
 # Where each item runs is the setting worker.runner:
 #   - agentcore (default): the item is dispatched to the trace agent on Amazon Bedrock AgentCore Runtime. Needs the
-#     repository variables TRACE_AWS_ROLE (a role GitHub OIDC can assume, allowed bedrock-agentcore:InvokeAgentRuntime),
-#     TRACE_AWS_REGION and TRACE_AGENT_RUNTIME_ARN.
+#     repository variables TRACE_AWS_ROLE (this repository's own role, which GitHub OIDC can assume from __TR_BRANCH__
+#     only, allowed bedrock-agentcore:InvokeAgentRuntime on this project's runtime alone), TRACE_AWS_REGION and
+#     TRACE_AGENT_RUNTIME_ARN (this project's worker runtime). `trace install` sets both per repository.
 #   - actions: Claude Code runs here in GitHub Actions (claude-code-action). Model access, one of:
 #       - Amazon Bedrock: TRACE_AWS_ROLE (with Bedrock access) and TRACE_AWS_REGION;
 #       - the Anthropic API: secret ANTHROPIC_API_KEY.

@@ -6,7 +6,7 @@ import type { CloudFormationCustomResourceEvent } from 'aws-lambda'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { POLICY_NAME, type Clients, handle, policyDocument } from '../../src/infra/lambda/transaction-search.js'
 import { METRIC_NAMESPACE, RUNTIME_NAMESPACE, dashboardBody } from '../../src/infra/observability.js'
-import { InfraPropsSchema, stackName } from '../../src/infra/props.js'
+import { InfraPropsSchema, projectHash, stackName } from '../../src/infra/props.js'
 import { TraceStack } from '../../src/infra/stack.js'
 import { AnswersSchema } from '../../src/installer/answers.js'
 import { infraInput, plan } from '../../src/installer/bootstrap.js'
@@ -15,6 +15,9 @@ const base = {
   account: '123456789012', region: 'us-east-1', repositories: ['mteichtahl/trace'],
   model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com',
 }
+
+const H = projectHash('mteichtahl/trace')
+const WORKER = `trace_w_${H}`
 
 type Res = { Type: string; Properties?: Record<string, unknown>; DeletionPolicy?: string }
 
@@ -38,7 +41,7 @@ describe('observability in the stack', () => {
   })
 
   it('tells both runtimes to run ADOT for AgentCore, without message content, and leaves the rest to AgentCore', () => {
-    for (const name of ['trace_agent', 'trace_api']) {
+    for (const name of [WORKER, 'trace_api']) {
       const env = runtimeEnv(t, name)
       expect(env).toMatchObject({ AGENT_OBSERVABILITY_ENABLED: 'true', OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: 'false' })
       // AgentCore supplies these for hosted runtimes (they name the runtime's own log group)
@@ -47,17 +50,19 @@ describe('observability in the stack', () => {
   })
 
   it('gives each runtime role the execution-role telemetry statements, and PutResourcePolicy on its own log group only', () => {
-    for (const [who, name] of [['WorkerRuntimeRole', 'trace_agent'], ['ApiRuntimeRole', 'trace_api']] as const) {
+    for (const [who, name] of [[`Project${H}RuntimeRole`, WORKER], ['ApiRuntimeRole', 'trace_api']] as const) {
       const p = policiesOf(t, who)
       for (const a of ['xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets', 'logs:CreateLogStream', 'logs:PutLogEvents']) expect(p).toContain(a)
-      expect(p).toContain('/aws/bedrock-agentcore/runtimes/*')
+      // its own runtime's log group only
+      expect(p).not.toContain('/aws/bedrock-agentcore/runtimes/*')
       expect(p).toContain(`/aws/bedrock-agentcore/runtimes/${name}-*`)
       expect(p).toMatch(/"Action":"logs:PutResourcePolicy"/)
     }
     t.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({ Action: 'cloudwatch:PutMetricData', Resource: '*', Condition: { StringEquals: { 'cloudwatch:namespace': 'bedrock-agentcore' } } })]) },
     })
-    expect(policiesOf(t, 'WorkerRuntimeRole')).not.toContain('trace_api-*')
+    expect(policiesOf(t, `Project${H}RuntimeRole`)).not.toContain('trace_api-*')
+    expect(policiesOf(t, 'ApiRuntimeRole')).not.toContain(`${WORKER}-*`)
   })
 
   it('turns Transaction Search on with a custom resource that is kept on delete and leaves indexing alone by default', () => {
@@ -93,7 +98,7 @@ describe('observability in the stack', () => {
         ]),
       }),
     })
-    expect(policiesOf(t, 'GpuJobRole')).toContain('xray:PutTraceSegments')
+    expect(policiesOf(t, `Project${H}GpuJobRole`)).toContain('xray:PutTraceSegments')
   })
 
   it('has a dashboard of invocations, latency, errors, jobs, tokens, cost, tool calls and GPU jobs, and says where to look', () => {
@@ -105,14 +110,14 @@ describe('observability in the stack', () => {
       expect(body).toContain(m)
     }
     const outputs = Object.keys(t.toJSON().Outputs as Record<string, unknown>)
-    for (const o of ['DashboardUrl', 'WorkerLogGroup', 'ApiLogGroup', 'SpansLogGroup', 'MemoryLogGroup', 'GenAiObservabilityUrl']) expect(outputs).toContain(o)
+    for (const o of ['DashboardUrl', `Project${H}LogGroup`, 'ApiLogGroup', 'SpansLogGroup', 'MemoryLogGroup', 'GenAiObservabilityUrl']) expect(outputs).toContain(o)
     expect(JSON.stringify(t.toJSON().Outputs)).toContain('#dashboards/dashboard/trace-agents')
   })
 
   it('creates nothing when off, and tells the runtimes to stay quiet', () => {
     const off = Template.fromStack(new TraceStack(new App(), 'NoObs', InfraPropsSchema.parse({ ...base, observability: { enabled: false } })))
     for (const r of ['Custom::TransactionSearch', 'AWS::CloudWatch::Dashboard', 'AWS::Logs::DeliverySource', 'AWS::Logs::DeliveryDestination', 'AWS::Logs::Delivery']) off.resourceCountIs(r, 0)
-    for (const name of ['trace_agent', 'trace_api']) {
+    for (const name of [WORKER, 'trace_api']) {
       const env = runtimeEnv(off, name)
       expect(env).toMatchObject({ DISABLE_ADOT_OBSERVABILITY: 'true', OTEL_SDK_DISABLED: 'true' })
       expect(env.AGENT_OBSERVABILITY_ENABLED).toBeUndefined()
@@ -147,6 +152,9 @@ describe('the dashboard body', () => {
     for (const e of exprs) expect(e).toMatch(/^SEARCH\('Namespace="[^"]+" MetricName="[^"]+"[^']*', '(Sum|Average|p90)', 300\)$/)
     for (const w of b.widgets) expect((w.properties as { region?: string }).region ?? 'eu-west-1').toBe('eu-west-1')
     expect(JSON.stringify(dashboardBody({ region: 'eu-west-1', runtimes: [], gpu: true }))).toContain('trace.gpu.duration')
+    // many projects: the runtime filter would pass SEARCH's 1024-character limit, so every runtime is shown
+    const many = dashboardBody({ region: 'eu-west-1', runtimes: Array.from({ length: 60 }, (_, i) => `trace_w_${String(i).padStart(8, '0')}`), gpu: false })
+    for (const e of many.widgets.flatMap((w) => ((w.properties as { metrics?: { expression: string }[][] }).metrics ?? []).flat().map((m) => m.expression))) expect(e.length).toBeLessThanOrEqual(1024)
   })
 })
 

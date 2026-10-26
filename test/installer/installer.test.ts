@@ -8,7 +8,12 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 process.env.TRACE_CLIENT_DB = join(mkdtempSync(join(tmpdir(), 'trace-client-')), 'client.db')
 
-const calls = vi.hoisted(() => ({ secrets: [] as unknown[], cognito: [] as unknown[], variables: [] as string[], ghSecrets: [] as string[], onboard: [] as string[], users: new Map<string, Set<string>>() }))
+const calls = vi.hoisted(() => ({
+  secrets: [] as unknown[], cognito: [] as unknown[], variables: [] as string[], values: new Map<string, string>(), ghSecrets: [] as string[], ghSecretValues: new Map<string, string>(),
+  onboard: [] as string[], users: new Map<string, Set<string>>(),
+  /** what checkToken answers per token (default: the agents' account, seeing nothing) */
+  tokens: new Map<string, { login: string; repos: string[] }>(),
+}))
 
 vi.mock('../../src/installer/aws.js', () => ({
   credentials: async () => ({ accessKeyId: 'AKIAEXAMPLE', secretAccessKey: 'secret-key-value-1234' }),
@@ -50,9 +55,12 @@ vi.mock('@aws-sdk/client-cognito-identity-provider', () => {
 })
 vi.mock('../../src/installer/github.js', async (orig) => ({
   ...(await orig<typeof import('../../src/installer/github.js')>()),
-  setVariable: async (_t: string, repo: string, name: string) => { calls.variables.push(`${repo}:${name}`); return 'created' },
-  setSecret: async (_t: string, repo: string, name: string) => { calls.ghSecrets.push(`${repo}:${name}`) },
-  checkToken: async () => ({ login: 'trace-agent', name: null, kind: 'fine-grained', scopes: [], repos: [], warnings: [] }),
+  setVariable: async (_t: string, repo: string, name: string, value: string) => { calls.variables.push(`${repo}:${name}`); calls.values.set(`${repo}:${name}`, value); return 'created' },
+  setSecret: async (_t: string, repo: string, name: string, value: string) => { calls.ghSecrets.push(`${repo}:${name}`); calls.ghSecretValues.set(`${repo}:${name}`, value) },
+  checkToken: async (token: string) => {
+    const t = calls.tokens.get(token) ?? { login: 'trace-agent', repos: [] }
+    return { login: t.login, name: null, kind: 'fine-grained', scopes: [], repos: t.repos.map((fullName) => ({ fullName, private: true, admin: false, push: true, defaultBranch: 'main' })), warnings: [] }
+  },
 }))
 vi.mock('../../src/core/onboard.js', async (orig) => ({
   ...(await orig<typeof import('../../src/core/onboard.js')>()),
@@ -61,6 +69,7 @@ vi.mock('../../src/core/onboard.js', async (orig) => ({
 
 const { AnswersSchema, SecretsSchema } = await import('../../src/installer/answers.js')
 const { apply, plan, redact } = await import('../../src/installer/bootstrap.js')
+const { projectOutputs } = await import('../../src/infra/props.js')
 const { createInstaller } = await import('../../src/installer/server.js')
 const { seal, setVariable: realSetVariable, checkToken } = await vi.importActual<typeof import('../../src/installer/github.js')>('../../src/installer/github.js')
 const { installation } = await import('../../src/core/client.js')
@@ -81,10 +90,18 @@ const ANSWERS = {
 const TOKEN = ['github', 'pat', '11FAKEFAKEFAKE0123456789'].join('_')
 
 const OUTPUTS: Record<string, string> = {
-  TraceHome: '', GithubSecretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:trace/github-token', AgentRuntimeArn: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/trace_agent-abc',
-  ApiRuntimeArn: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/trace_api-abc', ActionsRoleArn: 'arn:aws:iam::123456789012:role/trace-github-actions-us-east-1',
+  TraceHome: '', GithubSecretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:trace/github-token',
+  ApiRuntimeArn: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/trace_api-abc',
   UserPoolId: 'us-east-1_abc', UserPoolClientId: 'client123', CognitoDomain: 'https://trace-123456789012.auth.us-east-1.amazoncognito.com',
 }
+// each project's own outputs, named by its hash
+for (const repo of ['mteichtahl/board', 'mteichtahl/fw']) {
+  const o = projectOutputs(repo)
+  OUTPUTS[o.runtimeArn] = `arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/trace_w_${repo.split('/')[1]}-abc`
+  OUTPUTS[o.roleArn] = `arn:aws:iam::123456789012:role/trace-gh-${repo.split('/')[1]}-us-east-1`
+  OUTPUTS[o.secretArn] = `arn:aws:secretsmanager:us-east-1:123456789012:secret:trace/github-token/${repo}`
+}
+const secretWrites = (): { SecretId: string; SecretString: string }[] => calls.secrets.map((c) => (c as { input: { SecretId: string; SecretString: string } }).input)
 
 describe('answers', () => {
   it('requires assignments to name a project being installed, and no repository or person twice', () => {
@@ -99,6 +116,7 @@ describe('answers', () => {
     const steps = plan(AnswersSchema.parse(ANSWERS))
     expect(steps.map((s) => s.id)).toEqual(['check', 'cdk', 'deploy', 'token', 'repos', 'onboard', 'people', 'local'])
     expect(steps.find((s) => s.id === 'repos')?.detail).toContain('mteichtahl/fw')
+    expect(steps.find((s) => s.id === 'deploy')?.detail).toMatch(/for each of the 2 repositories its own AgentCore worker runtime/)
   })
 
   it('redacts tokens and keys from log lines', () => {
@@ -165,6 +183,51 @@ describe('installing', () => {
     await expect(require_(visitor, 'mteichtahl/fw', 'write')).rejects.toThrow(/no write access/)
     expect(await projectsFor(visitor)).toEqual([{ repo: 'mteichtahl/fw', role: 'read' }])
     expect(calls.variables).toContain('mteichtahl/board:TRACE_AGENT_LOGIN')
+    // each repository gets its own project's role and runtime
+    for (const repo of ['mteichtahl/board', 'mteichtahl/fw']) {
+      expect(calls.values.get(`${repo}:TRACE_AWS_ROLE`)).toBe(OUTPUTS[projectOutputs(repo).roleArn])
+      expect(calls.values.get(`${repo}:TRACE_AGENT_RUNTIME_ARN`)).toBe(OUTPUTS[projectOutputs(repo).runtimeArn])
+    }
+    expect(calls.values.get('mteichtahl/board:TRACE_AWS_ROLE')).not.toBe(calls.values.get('mteichtahl/fw:TRACE_AWS_ROLE'))
+    // the shared token into the API's secret and, with no project token given, into each project's
+    expect(secretWrites().map((w) => w.SecretId).sort()).toEqual([OUTPUTS.GithubSecretArn, OUTPUTS[projectOutputs('mteichtahl/board').secretArn], OUTPUTS[projectOutputs('mteichtahl/fw').secretArn]].sort())
+    expect(secretWrites().every((w) => w.SecretString === TOKEN)).toBe(true)
+    // …and the summary says GitHub access is not isolated
+    const done = JSON.parse(events.at(-1) ?? '{}') as { summary: string[] }
+    expect(done.summary.join('\n')).toMatch(/GitHub access is not isolated between projects: mteichtahl\/board, mteichtahl\/fw use the shared agent token/)
+  })
+
+  it('stores each project\'s own token in its secret and TRACE_TOKEN, checks it, and warns when it reaches other projects', async () => {
+    calls.secrets.length = 0
+    calls.ghSecretValues.clear()
+    const BOARD = ['github', 'pat', '11BOARDBOARDBOARD0123456789'].join('_')
+    const FW = ['github', 'pat', '11FWFWFWFWFWFWFW0123456789'].join('_')
+    calls.tokens.set(BOARD, { login: 'board-bot', repos: ['mteichtahl/board'] })
+    calls.tokens.set(FW, { login: 'fw-bot', repos: ['mteichtahl/fw', 'mteichtahl/board'] })
+    const events: string[] = []
+    const ok = await apply(AnswersSchema.parse(ANSWERS), SecretsSchema.parse({ githubToken: TOKEN, projectTokens: { 'mteichtahl/board': BOARD, 'MTEICHTAHL/fw': FW } }), (e) => events.push(JSON.stringify(e)), { cdk: async () => 0, outputs: async () => OUTPUTS })
+    expect(ok).toBe(true)
+    const byId = new Map(secretWrites().map((w) => [w.SecretId, w.SecretString]))
+    expect(byId.get(OUTPUTS.GithubSecretArn)).toBe(TOKEN)
+    expect(byId.get(OUTPUTS[projectOutputs('mteichtahl/board').secretArn] ?? '')).toBe(BOARD)
+    expect(byId.get(OUTPUTS[projectOutputs('mteichtahl/fw').secretArn] ?? '')).toBe(FW)
+    expect(calls.ghSecretValues.get('mteichtahl/board:TRACE_TOKEN')).toBe(BOARD)
+    expect(calls.ghSecretValues.get('mteichtahl/fw:TRACE_TOKEN')).toBe(FW)
+    expect(calls.values.get('mteichtahl/board:TRACE_AGENT_LOGIN')).toBe('board-bot')
+    const text = events.join('\n')
+    for (const t of [BOARD, FW, TOKEN]) expect(text).not.toContain(t)
+    const summary = (JSON.parse(events.at(-1) ?? '{}') as { summary: string[] }).summary.join('\n')
+    expect(summary).toMatch(/mteichtahl\/fw's own token can also reach mteichtahl\/board/)
+    expect(summary).not.toMatch(/GitHub access is not isolated/)
+
+    // a project token that cannot see its own repository stops the installation before anything is deployed
+    const blind = ['github', 'pat', '11BLINDBLINDBLIND0123456789'].join('_')
+    calls.tokens.set(blind, { login: 'blind', repos: ['someone/else'] })
+    const cdk: string[][] = []
+    const failed: { type: string; summary?: string[] }[] = []
+    expect(await apply(AnswersSchema.parse(ANSWERS), SecretsSchema.parse({ githubToken: TOKEN, projectTokens: { 'mteichtahl/fw': blind } }), (e) => failed.push(e as never), { cdk: async (a) => { cdk.push(a); return 0 }, outputs: async () => OUTPUTS })).toBe(false)
+    expect(cdk).toEqual([])
+    expect(failed.at(-1)?.summary?.join(' ')).toMatch(/mteichtahl\/fw's own token \(blind\) cannot see mteichtahl\/fw/)
   })
 
   it('a second run takes away what the answers no longer list', async () => {

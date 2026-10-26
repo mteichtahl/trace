@@ -65,6 +65,7 @@ describe('access token verification', () => {
 const github = new FakeGitHub(['acme/board', 'acme/secret'])
 const cognito = new FakeCognito()
 const started: unknown[] = []
+const statusCalls: string[] = []
 const scratch = mkdtempSync(join(tmpdir(), 'trace-api-test-'))
 let toolCalls: string[] = []
 const tools = new Registry([
@@ -76,8 +77,9 @@ const deps: ActionDeps = {
   github: async () => github,
   cognito: () => cognito,
   jobs: async () => ({
+    repositoryOf: (id) => (id === 'job-1' || id === 'job-gone' ? 'acme/board' : id === 'job-secret' ? 'acme/secret' : null),
     startJob: async (p) => { started.push(p); return { accepted: true, jobId: 'job-1' } },
-    jobStatus: async (id) => (id === 'job-1' ? [{ id: 'job-1', kind: 'task', repository: 'acme/board', state: 'running' }] : []),
+    jobStatus: async (id) => (statusCalls.push(id ?? ''), id === 'job-1' ? [{ id: 'job-1', kind: 'task', repository: 'acme/board', state: 'running' }] : []),
   }),
   tools: () => tools,
   checkout: async () => { const dir = mkdtempSync(join(scratch, 'clone-')); return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) } },
@@ -185,7 +187,12 @@ describe('the API server', () => {
     expect(github.calls).toEqual([])
     // a job on someone else's project, and a job that does not exist, look the same too
     const outsider = accessToken('user-2', ['trace-users'])
+    statusCalls.length = 0
     expect(await call(outsider, { action: 'job', id: 'job-1' })).toEqual(await call(outsider, { action: 'job', id: 'job-nope' }))
+    expect(await call(user, { action: 'job', id: 'job-secret' })).toEqual(await call(user, { action: 'job', id: 'job-nope' }))
+    // the project is read from the id and checked before the worker is asked
+    expect(statusCalls).toEqual([])
+    expect(await call(user, { action: 'job', id: 'job-gone' })).toEqual(await call(user, { action: 'job', id: 'job-nope' }))
   })
 
   it('a person in no group can do nothing', async () => {
