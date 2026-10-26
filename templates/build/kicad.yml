@@ -13,7 +13,9 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-24.04
+    runs-on:
+      - codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - check
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -29,7 +31,9 @@ jobs:
     name: tests pass
     if: always()
     needs: [check]
-    runs-on: ubuntu-24.04
+    runs-on:
+      - codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - tests-pass
     steps:
       - name: Every job passed
         env:

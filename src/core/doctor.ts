@@ -5,6 +5,7 @@
  * cannot read is reported as such rather than guessed.
  */
 import { type Runner, runCommand } from './onboard.js'
+import { RUNNER_VARIABLE } from './project.js'
 
 export interface Finding { ok: boolean; what: string; fix: string }
 
@@ -50,6 +51,8 @@ export function doctor(slug: string, run: Runner = runCommand): Finding[] {
     add(s.has('TRACE_TOKEN'), 'secret TRACE_TOKEN', 'A fine-grained token for this repository (Contents, Pull requests, Issues, Workflows, Actions: read/write).')
     add(s.has('ANTHROPIC_API_KEY') || v.has('TRACE_AWS_ROLE'), 'model access for the worker', 'Variable TRACE_AWS_ROLE (Bedrock, via GitHub OIDC) or secret ANTHROPIC_API_KEY.')
     add(v.has('TRACE_HOME') || Boolean(orgHome?.value), 'TRACE_HOME (the central database)', 'Set TRACE_HOME = s3://<bucket>/<prefix> once for the organisation, or on this repository.')
+    // every job runs on the project's AWS CodeBuild runner; without the variable they wait in the queue (no GitHub-hosted fallback)
+    add(v.has(RUNNER_VARIABLE), `${RUNNER_VARIABLE} (the AWS CodeBuild runner its jobs run on)`, `Run \`trace install\` again with ${slug} among the repositories: it creates the runner and sets the variable. Until then its jobs wait in the queue.`)
   } else {
     add(false, 'secrets and variables readable', 'Run doctor as an admin of the repository.')
   }

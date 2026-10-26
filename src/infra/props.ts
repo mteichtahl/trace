@@ -178,6 +178,19 @@ export const InfraPropsSchema = z.object({
   gateway: z.object({
     enabled: z.boolean().default(false),
   }).strict().prefault({}),
+  /** Where every GitHub Actions job of every project runs: an AWS CodeBuild runner project per repository
+   * (src/infra/runner.ts), never a GitHub-hosted runner. CodeBuild reaches GitHub through an AWS CodeConnections
+   * connection (the AWS Connector for GitHub app), so no GitHub token is stored for it; the installer finds or creates
+   * the connection and waits for it to be authorized before the deploy. */
+  runners: z.object({
+    connectionArn: z.string().regex(/^arn:aws[a-z-]*:(codeconnections|codestar-connections):[a-z0-9-]+:\d{12}:connection\/[0-9a-f-]{36}$/, 'an AWS CodeConnections connection ARN'),
+    /** the CodeBuild compute type of a job (a job can ask for another with an `instance-size:` label) */
+    computeType: z.enum(['BUILD_GENERAL1_MEDIUM', 'BUILD_GENERAL1_LARGE', 'BUILD_GENERAL1_XLARGE', 'BUILD_GENERAL1_2XLARGE']).default('BUILD_GENERAL1_LARGE'),
+    /** the CodeBuild image jobs run on (Ubuntu, like the GitHub-hosted runners the workflows were written for) */
+    image: z.string().min(3).default('aws/codebuild/standard:7.0'),
+    /** Docker-in-Docker for jobs that build containers */
+    privileged: z.boolean().default(false),
+  }).strict(),
   /** AgentCore observability: OpenTelemetry (ADOT) traces and metrics to CloudWatch (src/infra/observability.ts). */
   observability: z.object({
     enabled: z.boolean().default(true),
@@ -272,11 +285,11 @@ export const cpuEnabled = (cfg: Pick<InfraProps, 'cpu' | 'gpu' | 'layout'>): boo
 /** The CloudFormation output names of one project (alphanumeric only, so the hash rather than the slug). In the nested
  * layout they are its nested stack's outputs only (the parent carries none of them): the installer reads them there
  * (src/installer/aws.ts stackOutputs). In the flat layout they are the stack's own, as they always were. */
-export const projectOutputs = (repository: string): { runtimeArn: string; roleArn: string; secretArn: string; jobDefinition: string; memoryId: string } => {
+export const projectOutputs = (repository: string): { runtimeArn: string; roleArn: string; secretArn: string; jobDefinition: string; memoryId: string; runnerProject: string } => {
   const h = projectHash(repository)
   return {
     runtimeArn: `Project${h}RuntimeArn`, roleArn: `Project${h}ActionsRoleArn`, secretArn: `Project${h}GithubSecretArn`, jobDefinition: `Project${h}GpuJobDefinition`,
-    memoryId: `Project${h}MemoryId`,
+    memoryId: `Project${h}MemoryId`, runnerProject: `Project${h}RunnerProject`,
   }
 }
 
