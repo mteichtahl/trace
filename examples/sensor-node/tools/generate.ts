@@ -80,31 +80,31 @@ const uniroyal = (mpn: string, lcsc: string): Record<string, string> => ({ MPN: 
 
 const PARTS: Part[] = [
   { ref: 'J1', lib: 'Connector_Generic', sym: 'Conn_01x02', value: 'SENSOR_IN', footprint: 'Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical',
-    fields: { MPN: 'PZ254V-11-02P', Manufacturer: 'XFCN', LCSC: 'C492401' }, sch: [38.1, 76.2], pcb: [103, 111, 0],
+    fields: { MPN: 'PZ254V-11-02P', Manufacturer: 'XFCN', LCSC: 'C492401' }, sch: [40.64, 88.9], pcb: [103, 111, 0],
     pads: { 1: 'VIN', 2: 'GND' }, description: 'Sensor input, 0-12 V' },
   { ref: 'R1', lib: 'Device', sym: 'R', value: '39k', footprint: R0603, fields: uniroyal('0603WAF3902T5E', 'C23153'),
-    sch: [63.5, 69.85], pcb: [108, 111, 0], pads: { 1: 'VIN', 2: 'DIV' }, description: 'Divider top, 1 %' },
+    sch: [63.5, 76.2], pcb: [108, 111, 0], pads: { 1: 'VIN', 2: 'DIV' }, description: 'Divider top, 1 %' },
   { ref: 'R2', lib: 'Device', sym: 'R', value: '13k', footprint: R0603, fields: uniroyal('0603WAF1302T5E', 'C22797'),
-    sch: [63.5, 85.09], pcb: [112, 115, 0], pads: { 1: 'DIV', 2: 'GND' }, description: 'Divider bottom, 1 %' },
+    sch: [63.5, 101.6], pcb: [112, 115, 0], pads: { 1: 'DIV', 2: 'GND' }, description: 'Divider bottom, 1 %' },
   { ref: 'R3', lib: 'Device', sym: 'R', value: '6k2', footprint: R0603, fields: uniroyal('0603WAF6201T5E', 'C4260'),
-    sch: [76.2, 69.85], pcb: [116, 111, 0], pads: { 1: 'DIV', 2: 'ADC_IN' }, description: 'Anti-alias filter R (with the divider\'s 9.75k source: 15.95k)' },
+    sch: [88.9, 76.2], pcb: [116, 111, 0], pads: { 1: 'DIV', 2: 'ADC_IN' }, description: 'Anti-alias filter R (with the divider\'s 9.75k source: 15.95k)' },
   { ref: 'C1', lib: 'Device', sym: 'C', value: '10n', footprint: C0603,
     fields: { MPN: 'CL10B103KB8NNNC', Manufacturer: 'Samsung Electro-Mechanics', LCSC: 'C1589' },
-    sch: [88.9, 85.09], pcb: [121, 114, 0], pads: { 1: 'ADC_IN', 2: 'GND' }, description: 'Anti-alias filter C, X7R 50 V' },
+    sch: [114.3, 101.6], pcb: [121, 114, 0], pads: { 1: 'ADC_IN', 2: 'GND' }, description: 'Anti-alias filter C, X7R 50 V' },
   { ref: 'D1', lib: 'Diode', sym: 'BAT54S', value: 'BAT54S', footprint: 'Package_TO_SOT_SMD:SOT-23',
     fields: { MPN: 'BAT54S-7-F', Manufacturer: 'Diodes Incorporated', LCSC: 'C83574' },
-    sch: [106.68, 76.2], pcb: [126, 114, 0], pads: { 1: 'GND', 2: '+3V3', 3: 'ADC_IN' }, description: 'ADC input clamp to GND and 3V3' },
+    sch: [149.86, 88.9], pcb: [126, 114, 0], pads: { 1: 'GND', 2: '+3V3', 3: 'ADC_IN' }, description: 'ADC input clamp to GND and 3V3' },
   { ref: 'C2', lib: 'Device', sym: 'C', value: '100n', footprint: C0603,
     fields: { MPN: 'CC0603KRX7R9BB104', Manufacturer: 'YAGEO', LCSC: 'C14663' },
-    sch: [127, 85.09], pcb: [133, 105.92, 0], pads: { 1: '+3V3', 2: 'GND' }, description: '3V3 decoupling at the clamp' },
+    sch: [175.26, 101.6], pcb: [133, 105.92, 0], pads: { 1: '+3V3', 2: 'GND' }, description: '3V3 decoupling at the clamp' },
   { ref: 'J2', lib: 'Connector_Generic', sym: 'Conn_01x04', value: 'MCU', footprint: 'Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical',
-    fields: { MPN: 'PZ254V-11-04P', Manufacturer: 'XFCN', LCSC: 'C2691448' }, sch: [152.4, 76.2], pcb: [137, 105.92, 0],
+    fields: { MPN: 'PZ254V-11-04P', Manufacturer: 'XFCN', LCSC: 'C2691448' }, sch: [220.98, 88.9], pcb: [137, 105.92, 0],
     pads: { 1: '+3V3', 2: 'GND', 3: 'ADC_IN', 4: 'LED' }, description: 'To the MCU: 3V3, GND, ADC_IN, LED' },
   { ref: 'R4', lib: 'Device', sym: 'R', value: '680', footprint: R0603, fields: uniroyal('0603WAF6800T5E', 'C23228'),
-    sch: [139.7, 101.6], pcb: [131.5, 119, 0], pads: { 1: 'LED', 2: 'LED_A' }, description: 'LED series resistor, about 1.9 mA from a 3V3 GPIO' },
+    sch: [190.5, 127], pcb: [131.5, 119, 0], pads: { 1: 'LED', 2: 'LED_A' }, description: 'LED series resistor, about 1.9 mA from a 3V3 GPIO' },
   { ref: 'D2', lib: 'Device', sym: 'LED', value: 'RED', footprint: 'LED_SMD:LED_0603_1608Metric',
     fields: { MPN: 'KT-0603R', Manufacturer: 'Hubei KENTO Elec', LCSC: 'C2286' },
-    sch: [135.89, 110.49], pcb: [136, 119, 180], pads: { 1: 'GND', 2: 'LED_A' }, description: 'Status LED' },
+    sch: [175.26, 139.7], pcb: [136, 119, 180], pads: { 1: 'GND', 2: 'LED_A' }, description: 'Status LED' },
 ]
 
 /** Pin end points of each symbol (schematic coordinates, y down) relative to its position. */
@@ -127,13 +127,12 @@ const hidden = (k: string, v: string, x: number, y: number): string =>
 function symbolInstance(lib: string, sym: string, ref: string, value: string, footprint: string, x: number, y: number,
   pins: string[], extra: Record<string, string>, datasheet = '~', description = ''): string {
   const id = uuid(`sym/${ref}`)
-  const vis = sym === 'GND' || sym === '+3V3' || sym === 'PWR_FLAG'
   return [
     `\t(symbol (lib_id ${q(`${lib}:${sym}`)}) (at ${n(x)} ${n(y)} 0) (unit 1) (body_style 1)`,
     '\t\t(exclude_from_sim no) (in_bom yes) (on_board yes) (in_pos_files yes) (dnp no)',
     `\t\t(uuid ${q(id)})`,
-    `\t\t(property "Reference" ${q(ref)} (at ${n(x + 2.54)} ${n(y - 1.27)} 0) (show_name no) (do_not_autoplace no)${vis ? ' (hide yes)' : ''} ${effects})`,
-    `\t\t(property "Value" ${q(value)} (at ${n(x + 2.54)} ${n(vis ? y + 3.81 : y + 1.27)} 0) (show_name no) (do_not_autoplace no) ${effects})`,
+    libProperty(lib, sym, 'Reference', ref, x, y),
+    libProperty(lib, sym, 'Value', value, x, y),
     hidden('Footprint', footprint, x, y),
     hidden('Datasheet', datasheet, x, y),
     hidden('Description', description, x, y),
@@ -144,8 +143,29 @@ function symbolInstance(lib: string, sym: string, ref: string, value: string, fo
   ].join('\n')
 }
 
-function label(text: string, x: number, y: number): string {
-  return `\t(label ${q(text)} (at ${n(x)} ${n(y)} 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid ${q(uuid(`label/${text}/${x}/${y}`))}))`
+/** A Reference or Value property placed where the library symbol puts it (library y is up, schematic y is down),
+ * with the library's text effects (justification, hidden or not). */
+function libProperty(lib: string, sym: string, key: 'Reference' | 'Value', value: string, x: number, y: number): string {
+  const text = libSymbol(lib, sym)
+  const at = text.indexOf(`(property ${q(key)} `)
+  if (at < 0) throw new Error(`${lib}:${sym} has no ${key}`)
+  const prop = balanced(text, at)
+  const pos = /\(at (-?[\d.]+) (-?[\d.]+) (-?[\d.]+)\)/.exec(prop)
+  const eff = prop.indexOf('(effects')
+  if (!pos || eff < 0) throw new Error(`${lib}:${sym} ${key} has no position or effects`)
+  const effectsText = balanced(prop, eff).replace(/\s+/g, ' ')
+  const hide = /\(hide yes\)/.test(prop.slice(0, eff)) ? ' (hide yes)' : ''
+  return `\t\t(property ${q(key)} ${q(value)} (at ${n(x + Number(pos[1]))} ${n(y - Number(pos[2]))} ${pos[3]}) (show_name no) (do_not_autoplace no)${hide} ${effectsText})`
+}
+
+/** A local label on a pin end, its text running away from the symbol: pins above go up, below go down, left go left. */
+function label(text: string, x: number, y: number, dx: number, dy: number): string {
+  const [angle, justify] = dy < 0 ? [90, 'left bottom'] : dy > 0 ? [270, 'right bottom'] : dx < 0 ? [180, 'right bottom'] : [0, 'left bottom']
+  return `\t(label ${q(text)} (at ${n(x)} ${n(y)} ${angle}) (effects (font (size 1.27 1.27)) (justify ${justify})) (uuid ${q(uuid(`label/${text}/${x}/${y}`))}))`
+}
+
+function wire(a: [number, number], b: [number, number]): string {
+  return `\t(wire (pts (xy ${n(a[0])} ${n(a[1])}) (xy ${n(b[0])} ${n(b[1])})) (stroke (width 0) (type default)) (uuid ${q(uuid(`wire/${a.join(',')}/${b.join(',')}`))}))`
 }
 
 function schematic(): string {
@@ -167,16 +187,17 @@ function schematic(): string {
       const x = p.sch[0] + dx
       const y = p.sch[1] + dy
       if (net === 'GND' || net === '+3V3') power(net, x, y)
-      else out.push(label(net, x, y))
+      else out.push(label(net, x, y, dx, dy))
     }
   }
   // The supplies come in through J2 (and J1 for ground): PWR_FLAGs tell ERC they are driven from off the board.
   for (const [i, net] of (['+3V3', 'GND'] as const).entries()) {
-    const x = 50.8 + i * 12.7
-    const y = 101.6
+    const x = 40.64 + i * 20.32
+    const y = 127
     out.push(symbolInstance('power', 'PWR_FLAG', `#FLG0${i + 1}`, 'PWR_FLAG', '', x, y, ['1'], {}, '~',
       'Special symbol for telling ERC where power comes from'))
-    power(net, x, y)
+    out.push(wire([x, y], [x + 7.62, y]))
+    power(net, x + 7.62, y)
   }
   const libs = [['Connector_Generic', 'Conn_01x02'], ['Connector_Generic', 'Conn_01x04'], ['Device', 'C'], ['Device', 'LED'], ['Device', 'R'],
     ['Diode', 'BAT54S'], ['power', '+3V3'], ['power', 'GND'], ['power', 'PWR_FLAG']] as const
