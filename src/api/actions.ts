@@ -37,7 +37,12 @@
  *                                       the project's own worker runtime (its role writes projects/<slug>/kb/ and starts
  *                                       the ingestion job; this runtime's cannot)
  *   job           read on its project   a job's state and log (the project is named by the job id, and checked
- *                                       before the worker is asked)
+ *                                       before the worker is asked), with `version` (its worker's change counter)
+ *                                       and `waits` (every wait open on its worker, each with `text`: "… next check
+ *                                       in 4 minutes"). afterVersion + waitS (≤ 240 s): the worker holds the answer
+ *                                       until the job changes after that version, or waitS passes: no polling
+ *   job.check_now read on its project   wake one timer wait on the job's worker (waitId from `waits`) for a check
+ *                                       now → { ok } (false: no such timer wait is open). It changes nothing
  *   users.list    admin                 every person: email, status, class, assigned projects
  *   users.invite  admin                 create the person in Cognito (email, class) → sub
  *   users.class   admin                 change a person's class (their Cognito group: exactly one of the three)
@@ -110,12 +115,22 @@ export interface JobsApi {
   repositoryOf(jobId: string): string | null
   startJob(payload: { kind: 'task'; repository: string; request: string; requestedBy: string; agent?: (typeof TASK_AGENTS)[number] }): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined }>
   jobStatus(jobId?: string): Promise<readonly JobView[]>
+  /**
+   * One job as jobStatus, with its worker's change counter and open waits; with afterVersion and waitS the worker
+   * holds the answer until the job changes after that version (or waitS passes). Absent: `job` answers jobStatus only.
+   */
+  watchJob?(jobId: string, o: { afterVersion?: number | undefined; waitS?: number | undefined }): Promise<{ jobs: readonly JobView[]; version: number | null; waits: readonly WaitView[] }>
+  /** Wake one timer wait on the job's worker (invocation kind `check-now`). Absent: there is nothing to wake. */
+  checkNow?(jobId: string, waitId: string): Promise<boolean>
   /** One tool call on the project's own worker runtime (invocation kind `tool`): its result, or throws ActionError.
    * Absent: this installation runs no tools for the API. */
   runTool?(payload: Omit<ToolJob, 'trace'>): Promise<unknown>
 }
 
 export interface JobView { id: string; kind: string; repository?: string | undefined; state: string; [k: string]: unknown }
+
+/** One wait open on a worker (src/core/wait.ts WaitNotice), with the line a person reads. */
+export interface WaitView { id: string; what: string; source: string; text: string; nextCheckAt?: string | null | undefined; [k: string]: unknown }
 
 export interface ActionDeps {
   github: () => Promise<GitHubApi>
@@ -158,6 +173,24 @@ const Who = z.string().min(1).max(320)
 const Cls = z.enum(CLASSES)
 
 // ------------------------------------------------------------------ helpers
+
+const JobId = z.object({ id: z.string().min(1).max(200) })
+
+/** need 'job': the project is read from the job id and checked (read) before its worker is asked anything. */
+async function jobAccess(id: string, ctx: Context): Promise<JobsApi> {
+  const jobs = await ctx.deps.jobs()
+  const repo = jobs.repositoryOf(id)
+  if (!repo) throw new AccessDenied(NO_ACCESS)
+  if (!isAdmin(ctx.principal)) await require_(ctx.principal, repo, 'read')
+  return jobs
+}
+
+/** The job, if it is the id's project's: otherwise the same "no access" as a stranger's. */
+function ownJob(j: JobView | undefined, id: string, jobs: JobsApi): JobView {
+  const repo = jobs.repositoryOf(id) ?? ''
+  if (!j || (j.repository !== undefined && j.repository.toLowerCase() !== repo.toLowerCase())) throw new AccessDenied(NO_ACCESS)
+  return j
+}
 
 function tempDb(scratch: string, bytes: Uint8Array | null): { root: string; db: string; cleanup(): void } {
   mkdirSync(scratch, { recursive: true })
@@ -506,15 +539,16 @@ export const ACTIONS = {
     return jobs.runTool({ kind: 'tool', repository: a.repo, name: 'kb.sync', args: { force: a.force, wait_minutes: a.wait_minutes } })
   }),
 
-  job: def('job', z.object({ id: z.string().min(1).max(200) }), async (a, ctx) => {
-    const jobs = await ctx.deps.jobs()
-    // the access check comes first: the project is read from the id, and only then is its worker asked
-    const repo = jobs.repositoryOf(a.id)
-    if (!repo) throw new AccessDenied(NO_ACCESS)
-    if (!isAdmin(ctx.principal)) await require_(ctx.principal, repo, 'read')
-    const j = (await jobs.jobStatus(a.id))[0]
-    if (!j || (j.repository !== undefined && j.repository.toLowerCase() !== repo.toLowerCase())) throw new AccessDenied(NO_ACCESS)
-    return j
+  job: def('job', JobId.extend({ afterVersion: z.number().int().min(0).optional(), waitS: z.number().min(0).max(240).optional() }), async (a, ctx) => {
+    const jobs = await jobAccess(a.id, ctx)
+    if (!jobs.watchJob) return ownJob((await jobs.jobStatus(a.id))[0], a.id, jobs)
+    const w = await jobs.watchJob(a.id, { afterVersion: a.afterVersion, waitS: a.waitS })
+    return { ...ownJob(w.jobs[0], a.id, jobs), version: w.version, waits: w.waits }
+  }),
+
+  'job.check_now': def('job', JobId.extend({ waitId: z.string().min(1).max(64) }), async (a, ctx) => {
+    const jobs = await jobAccess(a.id, ctx)
+    return { ok: jobs.checkNow ? await jobs.checkNow(a.id, a.waitId) : false }
   }),
 
   'users.list': def('admin', z.object({}), async (_a, ctx) => {

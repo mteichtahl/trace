@@ -308,7 +308,7 @@ describe('delegation', () => {
     const saved = { ...process.env }
     afterEach(async () => {
       await close?.(); close = null
-      for (const k of ['TRACE_DELEGATE_URL', 'TRACE_DELEGATE_TOKEN', 'TRACE_DELEGATE_POLL_MS', 'TRACE_DELEGATE_TIMEOUT_S']) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k] }
+      for (const k of ['TRACE_DELEGATE_URL', 'TRACE_DELEGATE_TOKEN', 'TRACE_DELEGATE_TIMEOUT_S']) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k] }
     })
 
     it('blocks until the worker ends and returns its summary; refuses without a token', async () => {
@@ -327,7 +327,6 @@ describe('delegation', () => {
 
       process.env.TRACE_DELEGATE_URL = url
       process.env.TRACE_DELEGATE_TOKEN = delegations.register(parent())
-      process.env.TRACE_DELEGATE_POLL_MS = '10'
       expect([...offered(allTools(), false).keys()]).toContain('agent_delegate')
       const call = allTools().call('agent.delegate', { brief: 'fix it', acceptance: ['kicad_drc: 0 errors'] }, { hardware: false, via: 'test' })
       // the tool's HTTP call reaches the runtime asynchronously: wait for the job rather than a fixed delay, which was
@@ -355,7 +354,6 @@ describe('delegation', () => {
       close = async () => { await jobs.shutdown(100); await new Promise((r) => s.close(() => r(undefined))) }
       process.env.TRACE_DELEGATE_URL = `http://127.0.0.1:${(s.address() as AddressInfo).port}`
       process.env.TRACE_DELEGATE_TOKEN = delegations.register(parent())
-      process.env.TRACE_DELEGATE_POLL_MS = '10'
       process.env.TRACE_DELEGATE_TIMEOUT_S = '0.05'
       const first = await delegate.run({ brief: 'x', acceptance: ['y'] }, { hardware: false, via: 'test' }) as { state: string; delegation: string; job_id: string; error: string }
       expect(first).toMatchObject({ state: 'timeout', delegation: 'cancelled' })
