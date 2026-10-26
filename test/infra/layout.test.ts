@@ -6,7 +6,7 @@ import { Template } from 'aws-cdk-lib/assertions'
 import { describe, expect, it } from 'vitest'
 import { InfraPropsSchema, REPOSITORY_OUTPUT, projectHash, projectOutputs } from '../../src/infra/props.js'
 import { TraceStack } from '../../src/infra/stack.js'
-import { nestedOf, nestedResourceId, synth } from './templates.js'
+import { RUNNERS, nestedOf, nestedResourceId, synth } from './templates.js'
 
 const A = 'mteichtahl/trace'
 const B = 'pokeys-toolkit/potroller'
@@ -15,7 +15,7 @@ const HB = projectHash(B)
 
 const base = {
   account: '123456789012', region: 'us-east-1', repositories: [A, `${B}@develop`],
-  model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com',
+  model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com', runners: RUNNERS,
 }
 const repos = (n: number): string[] => Array.from({ length: n }, (_, i) => `owner-${i}/repository-${i}`)
 
@@ -76,10 +76,12 @@ describe('the nested layout', () => {
       expect(s.nested.size).toBe(n)
       for (const t of s.nested.values()) {
         const j = json(t)
-        // 17, its CPU job definition, and its knowledge base (index, service role and policy, knowledge base, data source)
-        expect(count(j.Resources)).toBe(23)
-        // its 12, its knowledge base's two (Project<hash>KnowledgeBaseId, …DataSourceId), and the id the parent reads
-        expect(count(j.Outputs)).toBe(15)
+        // 17, its CPU job definition, its knowledge base (index, service role and policy, knowledge base, data source),
+        // and its CI runner (CodeBuild project, its role and its log group: src/infra/runner.ts)
+        expect(count(j.Resources)).toBe(26)
+        // its 13 (Project<hash>RunnerProject among them), its knowledge base's two (Project<hash>KnowledgeBaseId,
+        // …DataSourceId), and the id the parent reads
+        expect(count(j.Outputs)).toBe(16)
         // its 11, and the vector bucket
         expect(count(j.Parameters)).toBe(12)
       }
@@ -98,9 +100,19 @@ describe('the nested layout', () => {
       expect(z.outputs).toBeLessThanOrEqual(200)
     }
     // the knowledge bases add one resource to the parent (the vector bucket) and, from 24 projects, one more overflow
-    // policies of the API role (it names every knowledge base for Retrieve): three at 24 projects, four at 60. The CI
-    // runners' role (src/infra/runners.ts) adds two resources (the role and its policy) and one output (RunnerRoleArn)
-    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:89/20:0', '24:115/20:3', '60:152/20:4'])
+    // policies of the API role (it names every knowledge base for Retrieve): three at 24 projects, four at 60
+    // (the outputs include GithubConnectionArn and GithubConnectionCreated: src/infra/runner.ts GithubConnection)
+    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:87/21:0', '24:113/21:3', '60:150/21:4'])
+    // without a connection given, the stack creates one: one more resource of the parent's, and nothing more per project
+    const created = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: {} }), 'Count1Created')
+    expect(count(json(created.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0) + 1)
+    for (const t of created.nested.values()) expect(count(json(t).Resources)).toBe(26)
+    // with the token as CodeBuild's credential (runners.auth token): no connection and none of its outputs, the same
+    // runner in each project's stack
+    const token = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: { auth: 'token' } }), 'Count1Token')
+    expect(count(json(token.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0))
+    expect(count(json(token.parent).Outputs)).toBe((sizes[0]?.outputs ?? 0) - 2)
+    for (const t of token.nested.values()) expect(count(json(t).Resources)).toBe(26)
     // none of a project's outputs is the parent's: each is its nested stack's, with the repository it is the project of
     const s = synth(cfg(2), 'Count2Outputs')
     const parentOutputs = Object.keys(json(s.parent).Outputs ?? {})
@@ -116,8 +128,10 @@ describe('the nested layout', () => {
   }, 900_000)
 
   it('refuses at synth time a flat stack CloudFormation would refuse, and says why', () => {
-    expect(() => synth(InfraPropsSchema.parse({ ...base, layout: 'flat', repositories: repos(24) }), 'Flat24')).not.toThrow()
-    expect(() => synth(InfraPropsSchema.parse({ ...base, layout: 'flat', repositories: repos(60) }), 'Flat60')).toThrow(/would have \d+ resources \(CloudFormation allows 500 per template\): with layout 'flat' about 24 projects fit/)
+    // each flat project is 20 resources (its runner's three among them) and 8 outputs: 20 fit, 21 do not
+    expect(() => synth(InfraPropsSchema.parse({ ...base, layout: 'flat', repositories: repos(20) }), 'Flat20')).not.toThrow()
+    expect(() => synth(InfraPropsSchema.parse({ ...base, layout: 'flat', repositories: repos(21) }), 'Flat21')).toThrow(/would have \d+ resources \(CloudFormation allows 500 per template\): with layout 'flat' about 20 projects fit/)
+    expect(() => synth(InfraPropsSchema.parse({ ...base, layout: 'flat', repositories: repos(60) }), 'Flat60')).toThrow(/would have \d+ resources \(CloudFormation allows 500 per template\): with layout 'flat' about 20 projects fit/)
   }, 900_000)
 
   it("joins each nested stack to the parent by parameters, and a project's stack reaches only that project's resources", () => {
@@ -172,7 +186,11 @@ describe('the nested layout', () => {
       // the memories and their deliveries follow retainData inside the nested stacks
       for (const t of nested.nested.values()) {
         for (const kind of ['AWS::BedrockAgentCore::Memory', 'AWS::Logs::DeliverySource', 'AWS::Logs::DeliveryDestination', 'AWS::Logs::Delivery', 'AWS::Logs::LogGroup']) {
-          for (const r of Object.values(t.findResources(kind) as Record<string, Res>)) expect(r.DeletionPolicy, kind).toBe(retainData ? 'Retain' : 'Delete')
+          // (but the CI runner's build logs, which are not data: src/infra/runner.ts)
+          for (const r of Object.values(t.findResources(kind) as Record<string, Res>)) {
+            if (String(r.Properties?.LogGroupName).startsWith('/aws/codebuild/')) expect(r.DeletionPolicy).toBe('Delete')
+            else expect(r.DeletionPolicy, kind).toBe(retainData ? 'Retain' : 'Delete')
+          }
         }
         for (const r of Object.values(t.findResources('AWS::SecretsManager::Secret') as Record<string, Res>)) expect(r.DeletionPolicy).toBe('Delete')
       }

@@ -8,8 +8,9 @@
 #   - variable TRACE_RELEASE_ROLE: an IAM role this repository's tags may assume with GitHub OIDC, allowed
 #     ecr-public:GetAuthorizationToken, sts:GetServiceBearerToken and the ecr-public push actions on those two
 #     repositories (ECR Public lives in us-east-1);
-#   - a runner with Docker: TRACE_RELEASE_RUNNER (JSON label, e.g. a CodeBuild runner project in privileged mode), else
-#     the repository's CodeBuild runner or GitHub's ubuntu-24.04. QEMU builds the arm64 image on an x86 runner.
+#   - Docker on the runner: like every job of this repository it runs on AWS CodeBuild, on trace's own runner project
+#     trace-ci (never a GitHub-hosted runner), which must then run privileged: deploy it with
+#     `TRACE_CI_PRIVILEGED=true npm run deploy:ci` (src/infra/ci-app.ts). QEMU builds the arm64 image on the x86 runner.
 name: release-images
 
 on:
@@ -22,7 +23,9 @@ permissions: {}
 jobs:
   publish:
     if: vars.TRACE_PUBLIC_REGISTRY != '' && vars.TRACE_RELEASE_ROLE != ''
-    runs-on: ${{ vars.TRACE_RELEASE_RUNNER && fromJSON(vars.TRACE_RELEASE_RUNNER) || vars.TRACE_CODEBUILD_PROJECT && format('codebuild-{0}-{1}-{2}', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt) || 'ubuntu-24.04' }}
+    runs-on:
+      - codebuild-trace-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      - publish
     timeout-minutes: 180
     permissions:
       id-token: write

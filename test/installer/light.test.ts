@@ -19,7 +19,8 @@ describe('the answers', () => {
     expect(a.aws).toEqual({ mode: 'profile', profile: 'default', region: '', account: '' })
     expect(a.projects).toEqual([])
     expect(a.adminEmail).toBe('')
-    expect(a.agents).toMatchObject({ prefix: 'trace', model: '', gpuEnabled: null, cpuEnabled: null, knowledgeBase: null, runners: true, imageSource: 'prebuilt' })
+    expect(a.agents).toMatchObject({ prefix: 'trace', model: '', gpuEnabled: null, cpuEnabled: null, knowledgeBase: null, imageSource: 'prebuilt' })
+    expect(a.runners).toMatchObject({ auth: 'auto', token: 'agent', connectionArn: '' })
     expect(SecretsSchema.parse({ githubToken: TOKEN }).integrations).toEqual({})
     // keys instead of a profile
     expect(AnswersSchema.parse({ aws: { mode: 'keys' } }).aws.mode).toBe('keys')
@@ -98,6 +99,7 @@ function deps(over: Partial<PreflightDeps> = {}): PreflightDeps & { calls: strin
     cognitoDomain: async () => null,
     leftovers: t('leftovers', []),
     sourceCredential: t('sourceCredential', null),
+    connections: t('connections', []),
     token: t('token', info()),
     email: t('email', 'marc@example.com'),
     repo: async (r) => { calls.push(`repo ${r}`); return full(r) },
@@ -105,7 +107,7 @@ function deps(over: Partial<PreflightDeps> = {}): PreflightDeps & { calls: strin
     ...over,
   }
 }
-const IN: PreflightInput = { region: 'us-east-1', prefix: 'trace', model: '', gpuSpot: false, cpuSpot: false, cpuVcpus: 16, gpuEnabled: null, runners: true, repos: ['marc/board'], create: [], hasAdminToken: false }
+const IN: PreflightInput = { region: 'us-east-1', prefix: 'trace', model: '', gpuSpot: false, cpuSpot: false, cpuVcpus: 16, gpuEnabled: null, runnerAuth: 'auto', repos: ['marc/board'], create: [], hasAdminToken: false }
 
 describe('the preflight', () => {
   it('checks everything at once and passes a ready account', async () => {
@@ -171,9 +173,15 @@ describe('the preflight', () => {
   it('names the exact permission a repository is missing, and what that costs', async () => {
     const noHooks: RepoAccess = { repo: 'marc/fw', visible: true, configure: true, administer: false, webhooks: false, missing: ['Administration: read and write', 'Webhooks: read and write'] }
     const noSecrets: RepoAccess = { repo: 'marc/board', visible: true, configure: false, administer: true, webhooks: true, missing: ['Secrets: read and write'] }
-    expect(accessNote(noHooks)).toMatch(/lacks Administration: read and write, Webhooks: read and write: its settings and the "trace" ruleset are left alone, and its CI stays on GitHub's runners/)
+    expect(accessNote(noHooks)).toMatch(/lacks Administration: read and write, Webhooks: read and write: its settings and the "trace" ruleset are left alone; with the token as CodeBuild's GitHub credential its build runner can't be made .*so the deploy fails/)
     const r = await preflight({ ...IN, repos: ['marc/board', 'marc/fw'] }, deps({ repo: async (x) => (x === 'marc/fw' ? noHooks : noSecrets) }))
-    expect(r.checks.find((c) => c.id === 'github.repo:marc/fw')?.status).toBe('warn')
+    // the token would be CodeBuild's credential (no connection, none in the account): its runner's webhook can't be made
+    expect(r.checks.find((c) => c.id === 'github.repo:marc/fw')?.status).toBe('fail')
+    // with an authorized GitHub connection, or a credential the account had already, the token makes no webhook
+    const viaConnection = await preflight({ ...IN, repos: ['marc/fw'] }, deps({ repo: async () => noHooks, connections: async () => [{ name: 'trace-github', status: 'AVAILABLE' }] }))
+    expect(viaConnection.checks.find((c) => c.id === 'github.repo:marc/fw')?.status).toBe('warn')
+    expect(viaConnection.checks.find((c) => c.id === 'codebuild.github')?.detail).toMatch(/through the authorized GitHub connection trace-github: no token stored with CodeBuild, and no console step/)
+    expect(viaConnection.facts.runnerConnection).toBe('trace-github')
     expect(r.checks.find((c) => c.id === 'github.repo:marc/board')).toMatchObject({ status: 'fail', fix: expect.stringMatching(/Give the token Secrets: read and write on marc\/board \(or add an admin token under Advanced\)/) })
     // with an admin token the same gap only warns
     expect((await preflight({ ...IN, hasAdminToken: true }, deps({ repo: async () => noSecrets }))).checks.find((c) => c.id === 'github.repo:marc/board')?.status).toBe('warn')
@@ -226,7 +234,8 @@ describe('the plan', () => {
 
   it('names the runners, integrations and new repositories, and on a re-run only what changed', () => {
     const steps = plan({ ...a, projects: [...a.projects, { repo: 'marc/new-board', branch: 'main', onboard: true, applySettings: true, memoryEventExpiryDays: null, generation: 0, create: { template: 'kicad', private: true } }] })
-    expect(steps.find((s) => s.id === 'runners')?.detail).toMatch(/CodeBuild-hosted GitHub Actions runner \(aws\/codebuild\/standard:8\.0\).*marc\/board, marc\/new-board/)
+    expect(steps.find((s) => s.id === 'github')?.detail).toMatch(/import the agents' token as CodeBuild's GitHub source credential.*; create marc\/new-board first, as its runner needs the repository/)
+    expect(steps.find((s) => s.id === 'deploy')?.detail).toMatch(/its own AWS CodeBuild runner project that runs every one of its GitHub Actions jobs/)
     expect(steps.find((s) => s.id === 'onboard')?.detail).toMatch(/open \(or refresh\) the onboarding PR in marc\/board; create marc\/new-board \(kicad\)/)
     expect(steps.find((s) => s.id === 'deploy')?.detail).toMatch(/no GPU or CPU jobs/)
     expect(steps.find((s) => s.id === 'integrations')?.detail).toMatch(/trace integrations set <name>/)

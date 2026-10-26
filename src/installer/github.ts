@@ -183,8 +183,9 @@ export function accessNote(a: RepoAccess): string | null {
   const parts: string[] = []
   if (!a.visible) return `${a.repo}: the token cannot see it: ${a.missing.join('; ')}.`
   if (!a.configure) parts.push('its Actions variables and TRACE_TOKEN secret cannot be set (installing needs them: give the token Secrets and Variables, or an admin token)')
-  if (!a.administer) parts.push('its settings and the "trace" ruleset are left alone, and its CI stays on GitHub\'s runners')
-  else if (!a.webhooks) parts.push('its CI stays on GitHub\'s runners (CodeBuild\'s webhook needs Webhooks)')
+  if (!a.administer) parts.push('its settings and the "trace" ruleset are left alone')
+  // CodeBuild makes the runner's webhook with its GitHub credential: with the token as that credential it needs both
+  if (!a.administer || !a.webhooks) parts.push('with the token as CodeBuild\'s GitHub credential its build runner can\'t be made (CodeBuild needs Administration and Webhooks: read and write), so the deploy fails; a GitHub connection (Advanced) needs neither')
   return `${a.repo}: the token lacks ${a.missing.join(', ')}: ${parts.join('; ')}.`
 }
 

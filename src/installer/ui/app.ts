@@ -11,7 +11,7 @@
  * then the installation's progress, streamed. The answers are validated with the same zod schemas the server uses.
  */
 import { INTEGRATIONS, INTEGRATION_NAMES, type IntegrationName } from '../../core/integrations-catalog.js'
-import { type AnswersInput, AnswersSchema, type Check, type InstallEvent, type Step } from '../answers.js'
+import { type AnswersInput, AnswersSchema, type Check, type InstallEvent, RUNNER_AUTH, RUNNER_COMPUTE_TYPES, type Step } from '../answers.js'
 
 // ------------------------------------------------------------------ the server's answers (shapes the page relies on)
 
@@ -26,6 +26,7 @@ interface Preflight {
     account?: string; arn?: string; login?: string; email?: string | null; models?: { id: string; name: string }[]
     gpuQuota?: number | null; cpuQuota?: number | null; s3vectors?: boolean | null; oidcProvider?: boolean; cdkBootstrapped?: boolean
     existing?: { status: string; outputs: Record<string, string> } | null
+    runnerConnection?: string | null
   }
 }
 interface Env { profiles: { names: string[]; regions: Record<string, string> }; saved: AnswersInput | null; installed: { stack: string; region: string } | null; node: string; defaultRegion: string }
@@ -80,7 +81,13 @@ const s = {
     cpuEnabled: null as boolean | null, cpuMaxVcpus: 64, cpuSpot: false, cpuVcpus: 16, cpuMemoryMiB: 32_768,
     knowledgeBase: null as boolean | null, libraryGateway: false,
     observability: true, transactionSearch: true, samplingPercent: '', dashboard: true, migrateLayout: false,
-    runners: true, runnerToken: 'agent' as 'agent' | 'admin', runnerExtraRepos: '', imageSource: 'prebuilt' as 'prebuilt' | 'build',
+    imageSource: 'prebuilt' as 'prebuilt' | 'build',
+  },
+  /** how the build runners reach GitHub (answers runners): auth 'auto' = an authorized connection when there is one,
+   * else the token; connectionArn '' = none named; computeType '' and privileged 'default' = the stack's defaults */
+  runners: {
+    auth: 'auto' as (typeof RUNNER_AUTH)[number], token: 'agent' as 'agent' | 'admin', connectionArn: '',
+    computeType: '' as '' | (typeof RUNNER_COMPUTE_TYPES)[number], privileged: 'default' as 'default' | 'on' | 'off',
   },
   adminEmail: '',
   people: [] as Person[],
@@ -149,8 +156,12 @@ function answers(): AnswersInput {
       observability: g.observability, transactionSearch: g.transactionSearch, dashboard: g.dashboard,
       samplingPercent: g.samplingPercent.trim() === '' ? null : Number(g.samplingPercent),
       migrateLayout: g.migrateLayout,
-      runners: g.runners, runnerToken: g.runnerToken, imageSource: g.imageSource,
-      runnerExtraRepos: g.runnerExtraRepos.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean),
+      imageSource: g.imageSource,
+    },
+    runners: {
+      auth: s.runners.auth, token: s.runners.token,
+      connectionArn: s.runners.auth === 'token' ? '' : s.runners.connectionArn, computeType: s.runners.computeType || null,
+      privileged: s.runners.privileged === 'default' ? null : s.runners.privileged === 'on',
     },
     projects: [...s.projects].map(([repo, { memoryDays, ...p }]) => ({ repo, ...p, memoryEventExpiryDays: memoryDays.trim() === '' ? null : Number(memoryDays) })),
     adminEmail: s.adminEmail || s.pre?.facts.email || '',
@@ -190,6 +201,7 @@ function problems(tab: Tab): string[] {
   if (tab === 'review') {
     if (fails().length) out.push('A check failed: see Connect and Projects.')
     if (!s.adminEmail && !s.pre?.facts.email) out.push("Enter the first administrator's email under Advanced (the token cannot see its account's).")
+    if (s.runners.auth !== 'token' && s.runners.connectionArn && !CONNECTION_ARN.test(s.runners.connectionArn)) out.push('The GitHub connection under Advanced must be an AWS CodeConnections connection ARN, or empty.')
   }
   return out
 }
@@ -283,7 +295,7 @@ function projects(): HTMLElement {
   const owner = s.pre?.facts.login ?? ''
   return h('section', { class: 'card' },
     h('h2', {}, 'Projects'),
-    h('p', { class: 'lead' }, 'The repositories trace runs. Each gets its own agent, roles, memory and (when the token can administer it) a CodeBuild runner, and an onboarding pull request you merge. None is fine: install now and add them by running the installer again.'),
+    h('p', { class: 'lead' }, 'The repositories trace runs. Each gets its own agent, roles, memory and AWS CodeBuild runner (every one of its GitHub Actions jobs runs there), and an onboarding pull request you merge. None is fine: install now and add them by running the installer again.'),
     input('text', s.filter, (v) => { s.filter = v; render() }, { placeholder: `Filter the ${info?.repos.length ?? 0} repositories…` }),
     h('div', { class: 'repos' }, ...repos.slice(0, 300).map((r) => {
       const p = s.projects.get(r.fullName)
@@ -362,7 +374,7 @@ function advanced(): HTMLElement {
     field('Central bucket name', input('text', g.centralBucketName, (v) => { g.centralBucketName = v.trim() }, { placeholder: 'empty: named automatically' })),
     checkbox('Keep the data (central bucket, images, memories) if trace or a project is removed', g.retainData, (v) => { g.retainData = v }),
     ...(flatInstall() ? [
-      h('p', { class: 'muted' }, 'This installation keeps every project in one CloudFormation stack (about 24 fit). Moving to a nested stack per project (60 fit) takes three deploys and DELETES every project\'s memory records.'),
+      h('p', { class: 'muted' }, 'This installation keeps every project in one CloudFormation stack (about 20 fit). Moving to a nested stack per project (60 fit) takes three deploys and DELETES every project\'s memory records.'),
       checkbox('Move to one nested stack per project (deletes every project\'s memory records)', g.migrateLayout, (v) => { g.migrateLayout = v }),
     ] : []),
     h('h3', {}, 'GPU and CPU jobs'),
@@ -379,11 +391,7 @@ function advanced(): HTMLElement {
     checkbox('CPU: Spot instances', g.cpuSpot, (v) => { g.cpuSpot = v }),
     h('h3', {}, 'Images'),
     field('Agent and GPU images', select([{ value: 'prebuilt', label: 'trace\'s published images for this version, else built here' }, { value: 'build', label: 'Always build them here (CodeBuild)' }], g.imageSource, (v) => { g.imageSource = v === 'build' ? 'build' : 'prebuilt' })),
-    h('h3', {}, 'CI on AWS'),
-    checkbox('Run the repositories\' trace workflows on CodeBuild-hosted runners (not GitHub\'s)', g.runners, (v) => { g.runners = v }),
-    g.runners ? h('div', { class: 'row' },
-      field('CodeBuild\'s GitHub credential', select([{ value: 'agent', label: 'The token above' }, { value: 'admin', label: 'The admin token (stored by CodeBuild)' }], g.runnerToken, (v) => { g.runnerToken = v === 'admin' ? 'admin' : 'agent' }), 'needs Administration and Webhooks'),
-      field('More repositories with a runner', input('text', g.runnerExtraRepos, (v) => { g.runnerExtraRepos = v }, { placeholder: 'owner/repo, … (e.g. trace\'s own)' }))) : null,
+    ...buildRunners(),
     h('h3', {}, 'Knowledge bases, gateway, observability'),
     tri('Knowledge bases', g.knowledgeBase, f?.s3vectors === false ? 'off: no S3 Vectors here' : 'on where S3 Vectors is', (v) => { g.knowledgeBase = v }),
     checkbox('Serve the datasheets and parts tools through AgentCore Gateway (then only its Lambda can read the integration keys)', g.libraryGateway, (v) => { g.libraryGateway = v }),
@@ -444,6 +452,40 @@ function review(): HTMLElement {
       h('button', { class: 'primary', disabled: !s.plan || blockers.length > 0, onclick: () => void startInstall() }, `Install into ${f?.account ?? 'the account'} (${s.pre?.region ?? ''})`)))
 }
 
+const CONNECTION_ARN = /^arn:aws[a-z-]*:(codeconnections|codestar-connections):[a-z0-9-]+:\d{12}:connection\/[0-9a-f-]{36}$/
+const COMPUTE_LABEL: Record<(typeof RUNNER_COMPUTE_TYPES)[number], string> = {
+  BUILD_GENERAL1_MEDIUM: 'Medium (4 vCPUs, 7 GB)', BUILD_GENERAL1_LARGE: 'Large (8 vCPUs, 15 GB)',
+  BUILD_GENERAL1_XLARGE: 'X-large (36 vCPUs, 72 GB)', BUILD_GENERAL1_2XLARGE: '2X-large (72 vCPUs, 144 GB)',
+}
+
+/** Advanced: where the repositories' GitHub Actions jobs run (AWS CodeBuild, never GitHub's runners) and how
+ * CodeBuild reaches GitHub (README "Where builds run"). */
+function buildRunners(): (HTMLElement | null)[] {
+  const r = s.runners
+  const name = `${s.agents.prefix || 'trace'}-github`
+  const reg = region() || s.env?.defaultRegion || 'us-east-1'
+  const url = `https://${reg}.console.aws.amazon.com/codesuite/settings/connections?region=${reg}`
+  const found = s.pre?.facts.runnerConnection
+  return [
+    h('h3', {}, 'Build runners'),
+    h('p', { class: 'muted' }, 'Every GitHub Actions job of the repositories runs on AWS CodeBuild in this account, each repository on its own runner project; none runs on GitHub\'s runners.'),
+    field('How CodeBuild reaches GitHub', select([
+      { value: 'auto', label: `Automatic: an authorized GitHub connection when there is one${found ? ` (${found})` : ''}, else the GitHub token` },
+      { value: 'token', label: 'The GitHub token (no console step; the token is stored with CodeBuild)' },
+      { value: 'connection', label: 'An AWS CodeConnections connection instead of the token (no token stored; needs one console authorization)' },
+    ], r.auth, (v) => { r.auth = (RUNNER_AUTH as readonly string[]).includes(v) ? v as (typeof RUNNER_AUTH)[number] : 'auto'; s.pre = null; render() }), 'change it later with `trace upgrade --runner-auth auto|token|connection`'),
+    r.auth === 'connection' ? note('warn', 'A new connection is authorized once per AWS account and region, in the AWS console. After the first deploy the installer shows the link (', h('a', { href: url, target: '_blank', rel: 'noopener' }, 'Connections'), `) and waits: choose ${r.connectionArn ? 'the connection' : name} and "Update pending connection", which installs the AWS Connector for GitHub app, and give that app access to every chosen repository. The installer then adds the build runners by itself.`) : null,
+    r.auth !== 'token' ? field('Use this connection (optional)', input('text', r.connectionArn, (v) => { r.connectionArn = v.trim() }, { placeholder: `empty: reuse an authorized one${r.auth === 'connection' ? `, else create ${name}` : ''}` }), 'an existing GitHub connection\'s ARN') : null,
+    r.auth !== 'connection' ? field('The token CodeBuild keeps', select([{ value: 'agent', label: 'The GitHub token above' }, { value: 'admin', label: 'The admin token' }], r.token, (v) => { r.token = v === 'admin' ? 'admin' : 'agent' }),
+      'it needs Administration, Webhooks and Commit statuses (read and write) and Contents (read) on each repository; an account that has a GitHub credential already keeps it') : null,
+    h('div', { class: 'row' },
+      field('Job size', select([{ value: '', label: 'Default (Large)' }, ...RUNNER_COMPUTE_TYPES.map((t) => ({ value: t, label: COMPUTE_LABEL[t] }))], r.computeType,
+        (v) => { r.computeType = (RUNNER_COMPUTE_TYPES as readonly string[]).includes(v) ? v as (typeof RUNNER_COMPUTE_TYPES)[number] : '' }), 'a job can ask for another with an instance-size label'),
+      field('Docker in jobs', select([{ value: 'default', label: 'Default (off)' }, { value: 'on', label: 'On (privileged, for jobs that build containers)' }, { value: 'off', label: 'Off' }], r.privileged,
+        (v) => { r.privileged = v === 'on' || v === 'off' ? v : 'default' }))),
+  ]
+}
+
 async function runPreflight(): Promise<void> {
   if (s.github.token.length < 20) { s.preError = 'Paste a GitHub token first.'; render(); return }
   s.preBusy = true; s.preError = ''; render()
@@ -451,7 +493,7 @@ async function runPreflight(): Promise<void> {
     const g = s.agents
     s.pre = await api<Preflight>('POST', '/api/preflight', {
       ...awsBody(), token: s.github.token, adminToken: s.github.adminToken, prefix: g.prefix, model: g.model,
-      gpuEnabled: g.gpuEnabled, gpuSpot: g.gpuSpot, cpuSpot: g.cpuSpot, cpuVcpus: g.cpuVcpus, runners: g.runners,
+      gpuEnabled: g.gpuEnabled, gpuSpot: g.gpuSpot, cpuSpot: g.cpuSpot, cpuVcpus: g.cpuVcpus, runnerAuth: s.runners.auth,
       repos: [...s.projects].filter(([, p]) => !p.create).map(([r]) => r), create: [...s.projects].filter(([, p]) => p.create).map(([r]) => r),
     })
   } catch (e) {
@@ -554,8 +596,15 @@ async function boot(): Promise<void> {
         ...sa, escalateTo: saved.escalateTo ?? '',
         // the page keeps these as the fields' text
         samplingPercent: sa.samplingPercent === null || sa.samplingPercent === undefined ? '' : String(sa.samplingPercent),
-        runnerExtraRepos: (sa.runnerExtraRepos ?? []).join(', '),
       })
+      const sr = saved.runners
+      if (sr) {
+        s.runners.auth = sr.auth ?? 'auto'
+        s.runners.token = sr.token ?? 'agent'
+        s.runners.connectionArn = sr.connectionArn ?? ''
+        s.runners.computeType = sr.computeType ?? ''
+        s.runners.privileged = sr.privileged === true ? 'on' : sr.privileged === false ? 'off' : 'default'
+      }
       for (const p of saved.projects ?? []) {
         s.projects.set(p.repo, {
           branch: p.branch ?? 'main', onboard: p.onboard ?? true, applySettings: p.applySettings ?? true,

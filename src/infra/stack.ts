@@ -9,11 +9,19 @@
  *                       runtime runs it
  *   projects            one ProjectStack per repository (src/infra/project.ts): its worker runtime on Bedrock
  *                       AgentCore with its own execution role, its GitHub token secret, its GitHub OIDC role, its
- *                       AgentCore memory and its GPU job definition and job role. Each role reaches that project's
+ *                       AgentCore memory, its GPU job definition and job role, and its CodeBuild GitHub Actions
+ *                       runner project (src/infra/runner.ts: every CI job runs on AWS, never on a GitHub-hosted
+ *                       runner; its role gives a job no AWS access), once the GitHub connection is authorized
+ *                       (runners.connectionReady). Each role reaches that project's
  *                       resources only, so the line between projects holds in IAM even though the agent has Bash
  *                       and the role's credentials. Layout 'nested' (the default) puts each in its own nested stack,
  *                       so this stack holds one resource per project and 60 fit; 'flat' keeps them here, as earlier
- *                       installations have them (about 24 fit)
+ *                       installations have them (about 20 fit)
+ *   GitHub connection   runners.auth 'connection' only: the AWS CodeConnections connection the runners reach GitHub
+ *                       through: the one given (runners.connectionArn), or `<prefix>-github`, created here and kept
+ *                       (Retain) when the stack goes; its ARN is the GithubConnectionArn output (src/infra/runner.ts
+ *                       GithubConnection). With auth 'token' the runners use the account's CodeBuild GitHub source
+ *                       credential instead, and there is no connection
  *   agent memory        AgentCore Memory (src/infra/memory.ts): one per project, made by its ProjectStack, still
  *                       namespaced /trace/<owner>/<repo>/<agent>/; each worker may use only its own project's memory
  *   GPU                 one AWS Batch queue and compute environment shared by every project, and (cpu.enabled) a
@@ -60,11 +68,11 @@ import { JOBS_PREFIX, PROJECTS_PREFIX, memoryName } from '../core/project.js'
 import { LibraryGateway } from './gateway.js'
 import { imageBuildEnv, imageBuildSpec, imageContentTag } from './images.js'
 import { bundlingRoot } from './lockfile.js'
-import { RunnerSupport } from './runners.js'
 import { GpuCompute } from './gpu.js'
 import { KB_RETRIEVE_ACTIONS, VectorStore, knowledgeBaseArn } from './knowledge.js'
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
+import { GithubConnection } from './runner.js'
 import { ACCESS_PREFIX, CENTRAL_PREFIX, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
   GPU_IMAGE_BUILD_OUTPUT, type InfraProps, LAYOUT_OUTPUT, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled,
@@ -250,9 +258,15 @@ export class TraceStack extends Stack {
     const vectors = refs.some((r) => kbEnabled(cfg, r.repository)) ? new VectorStore(this, 'KnowledgeVectors', { prefix: cfg.prefix, removalPolicy: keep }) : null
     // the library gateway (gateway.enabled): the shared datasheets and parts tools behind AgentCore Gateway
     const library = cfg.gateway.enabled ? new LibraryGateway(this, 'Library', { prefix: cfg.prefix, bucket: central, traceHome, root: REPO_ROOT }) : null
+    // how the CodeBuild runners reach GitHub (src/infra/runner.ts). auth 'connection': the GitHub connection, given or
+    // created here, and the runner projects only once it is authorized (runners.connectionReady). auth 'token': the
+    // account's CodeBuild GitHub source credential (the installer imported it before the deploy), so no connection
+    const connection = cfg.runners.auth === 'connection' ? new GithubConnection(this, 'GithubConnection', { prefix: cfg.prefix, connectionArn: cfg.runners.connectionArn }) : null
+    const runnerSource = connection ? (cfg.runners.connectionReady ? { connectionArn: connection.connectionArn } : null) : { connectionArn: null }
     const projectProps = (ref: (typeof refs)[number]): ProjectProps => ({
       cfg, project: ref, bucket: central, images: repo, imageUri: image.getAttString('ImageUri'), oidcProviderArn: oidc.openIdConnectProviderArn,
       gpu, vectorBucketArn: vectors?.arn ?? null, gateway: library?.ref ?? null,
+      runnerSource,
       environment: {
         AWS_REGION: cfg.region, TRACE_HOME: traceHome, CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: cfg.model, TRACE_WORKSPACE: '/mnt/workspace',
       },
@@ -458,15 +472,12 @@ export class TraceStack extends Stack {
       ],
     })
 
-    // ------------------------------------------------------------------ CI on AWS (src/infra/runners.ts): the runners' role
-    if (cfg.runners.enabled) new RunnerSupport(this, 'Runners', { prefix: cfg.prefix })
-
     // ------------------------------------------------------------------ outputs
     new CfnOutput(this, LAYOUT_OUTPUT, { value: cfg.layout, description: 'Where each project\'s resources are: nested (a nested stack each) or flat (this stack)' })
     // Nested: the parent carries none of a project's outputs (Project<hash>RuntimeArn, ActionsRoleArn, MemoryId, …):
     // they are its nested stack's, and the installer reads them there (src/installer/aws.ts stackOutputs), so the
     // parent's outputs do not grow with the projects. Flat: the stack's own, as they always were (src/infra/project.ts).
-    const hint = nested ? '' : `: with layout 'flat' about 24 projects fit; see README "Project isolation" for the move to layout 'nested'`
+    const hint = nested ? '' : `: with layout 'flat' about 20 projects fit; see README "Project isolation" for the move to layout 'nested'`
     this.node.addValidation({ validate: () => stackQuotaErrors(this, hint) })
     for (const n of nestedStacks) n.node.addValidation({ validate: () => stackQuotaErrors(n, '') })
     new CfnOutput(this, 'TraceHome', { value: traceHome, description: 'TRACE_HOME: the central database location' })

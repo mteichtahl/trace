@@ -18,7 +18,8 @@
  *   github.token      the token: login, kind, scopes, and its email (the first administrator)
  *   github.source     trace's own repository: its actions are usable from the other repositories
  *   github.repo:<r>   per chosen repository: which permission is missing, and what that costs
- *   codebuild.github  CodeBuild's GitHub source credential (CI on AWS)
+ *   codebuild.github  how the CodeBuild runners will reach GitHub (README "Where builds run"): an authorized
+ *                     CodeConnections connection, else CodeBuild's GitHub source credential (the token, imported)
  */
 import type { AwsCredentialIdentity } from '@smithy/types'
 import { SOURCE } from '../core/onboard.js'
@@ -36,9 +37,10 @@ export interface PreflightInput {
   gpuSpot: boolean
   cpuSpot: boolean
   cpuVcpus: number
-  /** whether GPU jobs / runners are wanted (null: decide here) */
+  /** whether GPU jobs are wanted (null: decide here) */
   gpuEnabled: boolean | null
-  runners: boolean
+  /** how the CodeBuild runners reach GitHub (answers runners.auth) */
+  runnerAuth: 'auto' | 'token' | 'connection'
   repos: readonly string[]
   /** repositories to create (they must not exist yet) */
   create: readonly string[]
@@ -65,6 +67,8 @@ export interface PreflightDeps {
   /** names of an earlier installation that a new stack would collide with */
   leftovers(prefix: string): Promise<string[]>
   sourceCredential(): Promise<string | null>
+  /** the account and region's GitHub connections (CodeConnections) */
+  connections(): Promise<{ name: string; status: string }[]>
   token(): Promise<TokenInfo>
   email(): Promise<string | null>
   repo(repo: string, kind: TokenInfo['kind']): Promise<RepoAccess>
@@ -73,7 +77,7 @@ export interface PreflightDeps {
 
 export interface PreflightResult {
   checks: Check[]
-  facts: Facts & { arn?: string; oidcProvider?: boolean; cdkBootstrapped?: boolean; cdkVersion?: number | null; existing?: StackState | null; sourceCredential?: string | null }
+  facts: Facts & { arn?: string; oidcProvider?: boolean; cdkBootstrapped?: boolean; cdkVersion?: number | null; existing?: StackState | null; sourceCredential?: string | null; runnerConnection?: string | null }
   token: TokenInfo | null
   repos: RepoAccess[]
   /** installing is refused while any check fails */
@@ -120,10 +124,10 @@ export async function preflight(input: PreflightInput, d: PreflightDeps): Promis
   const gpuCode = input.gpuSpot ? QUOTAS.gpuSpot : QUOTAS.gpuOnDemand
   const cpuCode = input.cpuSpot ? QUOTAS.cpuSpot : QUOTAS.cpuOnDemand
   // everything that does not depend on another answer, at once
-  const [sts, agentCore, models, gpuQuota, cpuQuota, vpcs, s3v, cdk, existing, oidc, leftovers, credential, token, email, source] = await Promise.all([
+  const [sts, agentCore, models, gpuQuota, cpuQuota, vpcs, s3v, cdk, existing, oidc, leftovers, credential, conns, token, email, source] = await Promise.all([
     settle(d.sts()), settle(d.agentCore()), settle(d.models()), settle(d.quota(gpuCode)), settle(d.quota(cpuCode)), settle(d.vpcs()),
     settle(d.s3vectors()), settle(d.cdk()), settle(d.stack(stack)), settle(d.oidcProvider()), settle(d.leftovers(prefix)),
-    input.runners ? settle(d.sourceCredential()) : Promise.resolve({ ok: true as const, v: null }),
+    settle(d.sourceCredential()), input.runnerAuth === 'token' ? Promise.resolve({ ok: true as const, v: [] }) : settle(d.connections()),
     settle(d.token()), settle(d.email()), settle(d.source()),
   ])
   const checks: Check[] = []
@@ -250,11 +254,19 @@ export async function preflight(input: PreflightInput, d: PreflightDeps): Promis
     if (taken && !ours) add({ id: 'cognito.domain', status: 'fail', title: 'Sign-in domain', detail: `the Cognito domain ${domain} belongs to user pool ${taken.userPoolId}, not this installation's${stackNow ? '' : ' (a removed installation kept its user pool)'}.`, fix: 'Delete that domain (Cognito console → the pool → App integration → Domain), or choose another prefix under Advanced.', link: console_(region, 'cognito/v2/idp/user-pools') })
   }
 
-  // CodeBuild's GitHub credential
-  if (input.runners) {
-    facts.sourceCredential = credential.ok ? credential.v : null
-    if (credential.ok && credential.v) add({ id: 'codebuild.github', status: 'info', title: 'CI on AWS', detail: `CodeBuild already has a GitHub ${credential.v.toLowerCase().replace(/_/g, ' ')} credential in this account and region; trace's runners use it. If it cannot administer a repository, that repository's CI stays on GitHub's runners.` })
-    else if (credential.ok) add({ id: 'codebuild.github', status: 'info', title: 'CI on AWS', detail: 'the token becomes CodeBuild\'s GitHub source credential (no console step), so each repository\'s trace workflows run on CodeBuild-hosted runners' })
+  // how the CodeBuild runners will reach GitHub (every job runs on them: there is no GitHub-hosted fallback)
+  const available = conns.ok ? conns.v.filter((c) => c.status === 'AVAILABLE') : []
+  const reuse = available.find((c) => c.name === `${prefix}-github`) ?? available[0] ?? null
+  facts.sourceCredential = credential.ok ? credential.v : null
+  facts.runnerConnection = input.runnerAuth !== 'token' && reuse ? reuse.name : null
+  /** whether the deploy will make the runners' webhooks with this token (so it must be allowed to) */
+  let tokenMakesWebhooks = false
+  if (facts.runnerConnection) add({ id: 'codebuild.github', status: 'info', title: 'Build runners', detail: `CodeBuild reaches GitHub through the authorized GitHub connection ${facts.runnerConnection}: no token stored with CodeBuild, and no console step` })
+  else if (input.runnerAuth === 'connection') add({ id: 'codebuild.github', status: 'warn', title: 'Build runners', detail: `No authorized GitHub connection in this account and region: the stack creates ${prefix}-github, and after the first deploy you authorize it once in the AWS console (the installer shows the link and waits). Until then the repositories' jobs wait in the queue.`, fix: 'Or choose "the GitHub token" for the build runners under Advanced: no console step.', link: console_(region, 'codesuite/settings/connections') })
+  else if (credential.ok && credential.v) add({ id: 'codebuild.github', status: 'info', title: 'Build runners', detail: `CodeBuild already has a GitHub ${credential.v.toLowerCase().replace(/_/g, ' ')} credential in this account and region: the runners use it, and trace leaves it alone. It must be able to make each repository's webhook, or the deploy fails.` })
+  else if (credential.ok) {
+    tokenMakesWebhooks = true
+    add({ id: 'codebuild.github', status: 'info', title: 'Build runners', detail: 'the token becomes CodeBuild\'s GitHub source credential (no console step): each repository\'s jobs run on its own CodeBuild runner from the first deploy' })
   }
 
   // ------------------------------------------------------------------ GitHub
@@ -272,7 +284,9 @@ export async function preflight(input: PreflightInput, d: PreflightDeps): Promis
   for (const a of repos) {
     const note = accessNote(a)
     if (!note) { add({ id: `github.repo:${a.repo}`, status: 'ok', title: a.repo, detail: 'the token can configure it, apply its settings and give it a CodeBuild runner' }); continue }
-    const blocking = !a.visible || (!a.configure && !input.hasAdminToken)
+    // with the token as CodeBuild's credential, the deploy makes the runner's webhook with it: without Administration
+    // and Webhooks the deploy would fail
+    const blocking = !a.visible || (!a.configure && !input.hasAdminToken) || (tokenMakesWebhooks && (!a.webhooks || !a.administer))
     add({ id: `github.repo:${a.repo}`, status: blocking ? 'fail' : 'warn', title: a.repo, detail: note, fix: blocking ? `Give the token ${a.missing.join(', ')} on ${a.repo} (or add an admin token under Advanced), or leave the repository out.` : `Give the token ${a.missing.join(', ')} on ${a.repo} and run the installer again to complete it.` })
   }
   for (const r of input.create) {
@@ -366,6 +380,18 @@ export async function liveDeps(creds: AwsCredentialIdentity, region: string, tok
       return r.DomainDescription?.UserPoolId ? { userPoolId: r.DomainDescription.UserPoolId } : null
     },
     leftovers: async (prefix) => leftoverNames(prefix, { ecr: (o, b) => call(signed.ecr(region, o, b)), secrets: new sm.SecretsManagerClient(cfg) }),
+    connections: async () => {
+      const cc = await import('@aws-sdk/client-codeconnections')
+      const client = new cc.CodeConnectionsClient(cfg)
+      const out: { name: string; status: string }[] = []
+      let NextToken: string | undefined
+      do {
+        const r = await client.send(new cc.ListConnectionsCommand({ ProviderTypeFilter: 'GitHub', MaxResults: 100, ...(NextToken ? { NextToken } : {}) }))
+        for (const x of r.Connections ?? []) out.push({ name: x.ConnectionName ?? '', status: x.ConnectionStatus ?? '' })
+        NextToken = r.NextToken
+      } while (NextToken)
+      return out
+    },
     sourceCredential: async () => ((await new cb.CodeBuildClient(cfg).send(new cb.ListSourceCredentialsCommand({}))).sourceCredentialsInfos ?? []).find((c) => c.serverType === 'GITHUB')?.authType ?? null,
     token: () => (tokenInfo ??= gh.checkToken(token)),
     email: () => gh.tokenEmail(token),

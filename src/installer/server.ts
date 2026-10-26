@@ -49,7 +49,7 @@ const PreflightBody = z.object({
   gpuSpot: z.boolean().default(false),
   cpuSpot: z.boolean().default(false),
   cpuVcpus: z.number().int().min(1).max(192).default(16),
-  runners: z.boolean().default(true),
+  runnerAuth: z.enum(['auto', 'token', 'connection']).default('auto'),
   repos: z.array(z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')).max(60).default([]),
   create: z.array(z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')).max(20).default([]),
 }).strict()
@@ -129,7 +129,7 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
       const region = b.aws.region || prof || DEFAULT_REGION
       const r = await (opts.preflight ?? (async (i: PreflightInput, t: string) => preflight(i, await liveDeps(creds, region, t))))({
         region, prefix: b.prefix, model: b.model, gpuSpot: b.gpuSpot, cpuSpot: b.cpuSpot, cpuVcpus: b.cpuVcpus, gpuEnabled: b.gpuEnabled,
-        runners: b.runners, repos: b.repos, create: b.create, hasAdminToken: Boolean(b.adminToken),
+        runnerAuth: b.runnerAuth, repos: b.repos, create: b.create, hasAdminToken: Boolean(b.adminToken),
       }, b.token)
       return { ...r, region, profileRegion: prof }
     },

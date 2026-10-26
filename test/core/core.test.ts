@@ -224,6 +224,7 @@ describe('onboarding', () => {
     expect(f['secret TRACE_TOKEN']).toBe(true)
     expect(f['model access for the worker']).toBe(true)
     expect(f['TRACE_HOME (the central database)']).toBe(false)
+    expect(f['TRACE_CODEBUILD_PROJECT (the AWS CodeBuild runner its jobs run on)']).toBe(false)
   })
 })
 

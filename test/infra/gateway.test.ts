@@ -8,11 +8,11 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { LIBRARY_TOOLS, LOCAL_INPUTS } from '../../src/core/gateway.js'
 import { InfraPropsSchema, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, projectHash, stackName, workerRuntimeName } from '../../src/infra/props.js'
 import { gatewayName } from '../../src/infra/gateway.js'
-import { type Synth, nestedOf, synth } from './templates.js'
+import { RUNNERS, type Synth, nestedOf, synth } from './templates.js'
 
 const A = 'mteichtahl/trace'
 const B = 'pokeys-toolkit/potroller'
-const base = { account: '123456789012', region: 'us-east-1', repositories: [A, B], model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com' }
+const base = { account: '123456789012', region: 'us-east-1', repositories: [A, B], model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com', runners: RUNNERS }
 
 type Statement = { Sid?: string; Effect?: string; Action: string | string[]; Resource?: unknown; Condition?: unknown }
 const statements = (t: Template, prefix: string): Statement[] => Object.entries(t.findResources('AWS::IAM::Policy')).filter(([id]) => id.startsWith(prefix))
@@ -146,11 +146,7 @@ describe('without the gateway', () => {
     expect(actions(api[0] as Statement)).toEqual(expect.arrayContaining(['secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue', 'secretsmanager:DeleteSecret']))
   })
 
-  it('gives the CI runners a role with nothing but their own logs, and copies or caches the images', () => {
-    const st = statements(off.parent, 'RunnersRole')
-    expect(new Set(st.flatMap(actions))).toEqual(new Set(['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents']))
-    expect(JSON.stringify(st)).toContain('/aws/codebuild/trace-ci-*')
-    off.parent.hasOutput('RunnerRoleArn', {})
+  it('copies or caches the images (the parent holds only the image builds: each project\'s CI runner is in its nested stack)', () => {
     const builds = Object.values(off.parent.findResources('AWS::CodeBuild::Project') as Record<string, { Properties: { Name: string; Environment: { EnvironmentVariables: { Name: string; Value: string }[] }; Cache?: { Type: string; Modes: string[] }; Source: { BuildSpec: string } } }>)
     expect(builds.map((b) => b.Properties.Name).sort()).toEqual(['trace-agent-image', 'trace-gpu-image'])
     for (const b of builds) {

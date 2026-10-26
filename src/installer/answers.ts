@@ -69,18 +69,43 @@ export const AgentAnswers = z.object({
    * deploys in a row, and every project's memory records are deleted (README "Project isolation"). Ignored for a new
    * installation, which is nested already. */
   migrateLayout: z.boolean().default(false),
-  /** CI on AWS: each repository's trace workflows (and runnerExtraRepos') run on CodeBuild-hosted runners
-   * (src/installer/runners.ts) instead of GitHub's */
-  runners: z.boolean().default(true),
-  /** which token CodeBuild keeps as its GitHub source credential (it needs Administration and Webhooks on each
-   * repository): the agents' token, or the admin token (which is then stored by CodeBuild) */
-  runnerToken: z.enum(['agent', 'admin']).default('agent'),
-  /** repositories that get a CodeBuild runner without being projects (trace's own, for its ci.yml) */
-  runnerExtraRepos: z.array(z.string().trim().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')).max(20).default([]),
   /** where the images come from (src/infra/images.ts): trace's published ones for this source when they exist, or a
    * build in this account */
   imageSource: z.enum(['prebuilt', 'build']).default('prebuilt'),
 }).strict().prefault({})
+
+/** The CodeBuild compute types a runner job may have (props.ts runners.computeType; repeated here because this file is
+ * bundled into the page, which does not load the stack's settings). */
+export const RUNNER_COMPUTE_TYPES = ['BUILD_GENERAL1_MEDIUM', 'BUILD_GENERAL1_LARGE', 'BUILD_GENERAL1_XLARGE', 'BUILD_GENERAL1_2XLARGE'] as const
+
+/** How the CodeBuild runners reach GitHub (props.ts runners.auth; README "Where builds run"):
+ *   auto        an AWS CodeConnections connection already authorized in the account and region when there is one
+ *               (or the one this installation already uses), else the GitHub token, imported as CodeBuild's GitHub
+ *               source credential: the first deploy has the runners, with no console step
+ *   token       always the token (no connection, no console step; the token is stored with CodeBuild)
+ *   connection  always a connection (no token stored with CodeBuild; a new one needs one console authorization, and
+ *               the installer waits for it after the first deploy)
+ * Switch later with `trace upgrade --runner-auth <choice>` or by choosing again in `trace install`: the runner projects
+ * are updated in place. */
+export const RUNNER_AUTH = ['auto', 'token', 'connection'] as const
+
+/** Where every GitHub Actions job runs: AWS CodeBuild runners in the installation's account (props.ts runners), never
+ * GitHub-hosted runners. */
+export const RunnerAnswers = z.object({
+  auth: z.enum(RUNNER_AUTH).default('auto'),
+  /** auth token (or auto without a connection): which token CodeBuild keeps as its GitHub source credential (it needs
+   * Administration, Webhooks and Commit statuses read and write, and Contents read, on each repository): the agents'
+   * token, or the admin token */
+  token: z.enum(['agent', 'admin']).default('agent'),
+  /** An existing GitHub connection to use (auth auto or connection); empty: the installer reuses one already authorized
+   * in the account and region (`<prefix>-github` first); with auth connection and none, the stack creates
+   * `<prefix>-github` and the installer waits after the deploy for a person to authorize it. */
+  connectionArn: z.string().trim().regex(/^(arn:aws[a-z-]*:(codeconnections|codestar-connections):[a-z0-9-]+:\d{12}:connection\/[0-9a-f-]{36})?$/, 'an AWS CodeConnections connection ARN, or empty').default(''),
+  /** A job's CodeBuild compute type; null: the stack's default (BUILD_GENERAL1_LARGE). */
+  computeType: z.enum(RUNNER_COMPUTE_TYPES).nullable().default(null),
+  /** Docker-in-Docker for jobs that build containers; null: the stack's default (off). */
+  privileged: z.boolean().nullable().default(null),
+}).strict()
 
 export const ProjectAnswer = z.object({
   repo: Repo,
@@ -114,6 +139,7 @@ export const AnswersSchema = z.object({
   github: z.object({ login: z.string().default('') }).strict().default({ login: '' }),
   aws: AwsAnswers,
   agents: AgentAnswers,
+  runners: RunnerAnswers.prefault({}),
   /** none is fine: trace installs, and repositories are added by running the installer again */
   projects: z.array(ProjectAnswer).max(60).default([]),
   /** empty: the token's verified primary email (GitHub /user/emails) */
@@ -129,6 +155,7 @@ export const AnswersSchema = z.object({
   const emails = a.people.map((p) => p.email.toLowerCase())
   if (new Set(emails).size !== emails.length) ctx.addIssue({ code: 'custom', path: ['people'], message: 'a person is listed twice' })
   if (a.adminEmail && emails.includes(a.adminEmail.toLowerCase())) ctx.addIssue({ code: 'custom', path: ['people'], message: 'the first administrator is already an admin: leave them out of the list' })
+  if (a.runners.auth === 'token' && a.runners.connectionArn) ctx.addIssue({ code: 'custom', path: ['runners', 'connectionArn'], message: 'a GitHub connection is for "auto" or "connection": with "token" the runners use the GitHub token' })
   if (a.agents.cpuVcpus > a.agents.cpuMaxVcpus) ctx.addIssue({ code: 'custom', path: ['agents', 'cpuVcpus'], message: 'a CPU job cannot ask for more vCPUs than the CPU queue may run at once' })
 })
 export type Answers = z.output<typeof AnswersSchema>

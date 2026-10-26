@@ -31,17 +31,6 @@ export const TEMPLATES = join(dirname(fileURLToPath(import.meta.url)), '..', '..
 export const SOURCE = process.env.TRACE_SOURCE || 'mteichtahl/trace'
 export const REF = process.env.TRACE_REF || 'v1'
 export const ONBOARD_BRANCH = 'trace/onboard'
-
-/**
- * Where a trace workflow's job runs (`runs-on`). With the repository variable TRACE_CODEBUILD_PROJECT (set by
- * `trace install` when it made the repository's CodeBuild-hosted runner, src/installer/runners.ts), on AWS CodeBuild:
- * the label `codebuild-<project>-<run_id>-<run_attempt>` CodeBuild's runner documentation gives. Without it, GitHub's
- * ubuntu-24.04, as before. RUNS_ON_BENCH is for the jobs that may need a machine of your own (the worker's `work`
- * job, deploys): TRACE_RUNNER (JSON: "label" or ["self-hosted", …]) comes first there.
- */
-export const RUNS_ON = "${{ vars.TRACE_CODEBUILD_PROJECT && format('codebuild-{0}-{1}-{2}', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt) || 'ubuntu-24.04' }}"
-export const RUNS_ON_BENCH = "${{ vars.TRACE_RUNNER && fromJSON(vars.TRACE_RUNNER) || vars.TRACE_CODEBUILD_PROJECT && format('codebuild-{0}-{1}-{2}', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt) || 'ubuntu-24.04' }}"
-
 export const CLAUDE_MARKER = '<!-- trace -->'
 
 export class OnboardError extends Error {
@@ -201,7 +190,7 @@ export function writeFiles(repo: string, d: Detected, settings: Record<string, u
   mkdirSync(wf, { recursive: true })
   if (!d.build) {
     const starter = existsSync(join(TEMPLATES, 'build', `${d.language}.yml`)) ? `build/${d.language}.yml` : 'build/empty.yml'
-    writeFileSync(join(wf, 'trace-build.yml'), render(tpl(starter), { BRANCH: cfg.branch, SOURCE: source, REF: ref, RUNS_ON, RUNS_ON_BENCH }))
+    writeFileSync(join(wf, 'trace-build.yml'), render(tpl(starter), { BRANCH: cfg.branch, SOURCE: source, REF: ref }))
     written.push('.github/workflows/trace-build.yml')
     d.build = { file: 'trace-build.yml', name: 'build', jobs: ['tests pass'], triggers: ['push', 'pull_request'] }
     setValue('build.workflow', 'trace-build.yml', repo, 'trace onboard')
@@ -234,7 +223,6 @@ export function writeWorkflows(repo: string, cfg: ResolvedConfig, buildName: str
     SOURCE: source, REF: ref, BRANCH: cfg.branch, BUILD_NAME: buildName,
     HOLD: cfg.labels.hold, CI_RED: cfg.labels.ci_red, AGENT_FIX: cfg.labels.agent_fix,
     DEPLOY: cfg.labels.deploy, DEPLOY_HELD: cfg.labels.deploy_held, ENVIRONMENT: cfg.deploy.environment,
-    RUNS_ON, RUNS_ON_BENCH,
   }
   const wf = join(repo, '.github', 'workflows')
   mkdirSync(wf, { recursive: true })

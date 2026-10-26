@@ -2,6 +2,11 @@
 #
 # Every finished run of "__TR_BUILD_NAME__": flaky failures are re-run once; real ones label the PR __TR_CI_RED__
 # or open an __TR_AGENT_FIX__ issue for the worker; a pass clears both. Kill switch: variable TRACE_CI = 'false'.
+#
+# Runners: every job runs on AWS CodeBuild (a CodeBuild-hosted GitHub Actions runner in the installation's AWS account),
+# never on a GitHub-hosted runner. The first runs-on label names the project's CodeBuild runner project through the
+# repository variable TRACE_CODEBUILD_PROJECT, which `trace install` sets; the second keeps each job's runner distinct.
+# Without that variable the jobs wait in the queue: there is no GitHub-hosted fallback, by design.
 name: trace-ci
 
 on:
@@ -16,7 +21,9 @@ jobs:
     if: >-
       vars.TRACE_CI != 'false' &&
       (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'success')
-    runs-on: __TR_RUNS_ON__
+    runs-on:
+      - codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - ci-doctor
     timeout-minutes: 10
     concurrency: { group: 'trace-ci-${{ github.event.workflow_run.head_branch }}', cancel-in-progress: false }
     permissions:

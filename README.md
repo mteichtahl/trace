@@ -28,6 +28,11 @@ Contents, Pull requests, Issues, Workflows, Actions, Secrets, Variables, Adminis
 the account permission "Email addresses: read"; or a classic token with `repo`, `workflow` and `user:email`. What each
 permission is for, and what happens without it, is in [Tokens and permissions](#tokens-and-permissions).
 
+Builds need nothing more. Every GitHub Actions job runs on an AWS CodeBuild runner in your account, and CodeBuild
+reaches GitHub through an AWS CodeConnections connection already authorized in the account and region when there is
+one, else through that same token (see [Where builds run](#where-builds-run)), so the first deploy has the runners and
+no console step is needed.
+
 The installer is a page served from your own machine (127.0.0.1, with a one-time key in its address). It has four
 steps, and only the first asks for anything:
 
@@ -52,14 +57,16 @@ steps, and only the first asks for anything:
 | Model | The newest Claude Sonnet inference profile active in the region, the region's geography before `global.` |
 | GPU and CPU jobs | On when the account's quotas allow one job (G and VT instances for GPU, standard instances for CPU), else off |
 | Knowledge bases | On where the region has Amazon S3 Vectors |
-| Prefix, session limits, bucket, observability, runners, images | Their defaults (`trace`, 8 h, 15 min, a named bucket, on, on, prebuilt) |
+| Prefix, session limits, bucket, observability, images | Their defaults (`trace`, 8 h, 15 min, a named bucket, on, prebuilt) |
+| How the build runners reach GitHub | An authorized GitHub connection in the account and region, else the token ([Where builds run](#where-builds-run)) |
 
 **The preflight** checks, in parallel: the credentials; Bedrock AgentCore in the region; the model's inference
 profile and the account's access to it (`GetFoundationModelAvailability`; for Anthropic, whether the one-time use-case
 form was sent, `GetUseCaseForModelAccess`); Amazon S3 Vectors; the G and VT and standard-instance quotas (Service
 Quotas) and the region's VPC quota; the CDK bootstrap (present, healthy, version 6 or later); the trace stack (none,
 updatable, or stuck after a failed first deploy); names a removed installation kept (its image repositories and token
-secret) that a new stack would collide with; the Cognito domain `<prefix>-<account>`; CodeBuild's GitHub credential;
+secret) that a new stack would collide with; the Cognito domain `<prefix>-<account>`; how the build runners will reach GitHub (an authorized GitHub connection, or
+CodeBuild's GitHub credential, which with the token must be allowed to make each repository's webhook);
 the token, its email, and whether trace's own actions can be used from other repositories; and, per chosen
 repository, exactly which permission is missing and what that costs. What it offers to do:
 
@@ -79,17 +86,18 @@ It then runs the plan:
 
 - **AWS (CDK):** one stack (bootstrapped first if needed). It contains the central bucket, the agent image (arm64, see
   [Images](#images-copied-or-built)), and AgentCore runtimes from that image: one worker runtime per project, each with
-  its own execution role, GitHub OIDC role, GitHub token secret, memory, knowledge base and GPU and CPU job
-  definitions, and the API runtime. Each project's resources are in a nested stack of their own (see
-  [Stack layout](#stack-layout-and-limits)). A project's worker is invoked by that repository's workflows through IAM,
-  and by the API. The API runtime is for people and is reached only with a Cognito sign-in. The stack also holds the
-  Cognito user pool and the CI runners' role.
+  its own execution role, GitHub OIDC role, GitHub token secret, memory, knowledge base, GPU and CPU job definitions
+  and CodeBuild build runner (see [Where builds run](#where-builds-run)), and the API runtime. Each project's
+  resources are in a nested stack of their own (see [Stack layout](#stack-layout-and-limits)). A project's worker is
+  invoked by that repository's workflows through IAM, and by the API. The API runtime is for people and is reached
+  only with a Cognito sign-in. The stack also holds the Cognito user pool. Before the deploy, the token becomes
+  CodeBuild's GitHub source credential when the runners use it; after it, only when the runners wait for a GitHub
+  connection nobody has authorized yet, the installer waits for that and deploys again with them.
 - **Integrations:** any keys given, stored as `<prefix>/integrations/<name>`.
 - **GitHub, several repositories at once:** each repository's Actions variables (`TRACE_AWS_ROLE`,
-  `TRACE_AGENT_RUNTIME_ARN`, `TRACE_MEMORY_ID`, `TRACE_KB_ID` and `TRACE_KB_DATA_SOURCE_ID`, all its own project's,
-  `TRACE_AWS_REGION`, `TRACE_HOME`, `TRACE_AGENT_LOGIN`) and its `TRACE_TOKEN` secret (its project's agent token,
-  encrypted with the repository's key); its CodeBuild runner and `TRACE_CODEBUILD_PROJECT` (see
-  [CI on AWS](#ci-on-aws)); and its onboarding pull request, or, when it is onboarded already and the trace workflows
+  `TRACE_AGENT_RUNTIME_ARN`, `TRACE_MEMORY_ID`, `TRACE_KB_ID`, `TRACE_KB_DATA_SOURCE_ID` and `TRACE_CODEBUILD_PROJECT`,
+  all its own project's, `TRACE_AWS_REGION`, `TRACE_HOME`, `TRACE_AGENT_LOGIN`) and its `TRACE_TOKEN` secret (its
+  project's agent token, encrypted with the repository's key); and its onboarding pull request, or, when it is onboarded already and the trace workflows
   have changed, a held pull request refreshing them (`src/installer/onboard-api.ts`).
 - **People:** Cognito invitations into each person's class group, at once, and project assignments recorded in the
   central database, one after another (it is one file).
@@ -118,7 +126,7 @@ Every step is safe to repeat. Adding or removing a repository adds or removes th
 job definitions and runner.
 
 Tokens and keys stay in the installer's memory. They are written only to Secrets Manager, to GitHub (encrypted), and,
-for the CI runners, as CodeBuild's GitHub source credential (see [CI on AWS](#ci-on-aws)).
+when the build runners use the token, as CodeBuild's GitHub source credential (see [Where builds run](#where-builds-run)).
 
 ### Tokens and permissions
 
@@ -128,8 +136,8 @@ One token does everything. On each repository it needs:
 | --- | --- | --- |
 | Contents, Pull requests, Issues, Workflows, Actions: read and write | The agents' work, the onboarding PR | Onboarding fails for that repository |
 | Secrets, Variables: read and write | Its `TRACE_TOKEN` secret and variables | Refused for that repository, unless an admin token is given |
-| Administration: read and write | Its settings and the "trace" ruleset; CodeBuild registering each job's runner | Settings and ruleset left alone; its CI stays on GitHub's runners |
-| Webhooks: read and write | CodeBuild's workflow-job webhook | Its CI stays on GitHub's runners |
+| Administration: read and write | Its settings and the "trace" ruleset; with the token as CodeBuild's credential, CodeBuild registering each job's runner | Settings and ruleset left alone; with the token as CodeBuild's credential the preflight stops: its runner can't be made |
+| Webhooks, Commit statuses: read and write | With the token as CodeBuild's credential, its runner's workflow-job webhook | The same (a GitHub connection needs neither) |
 | Email addresses: read (account) | The first administrator's email | The email is asked for |
 
 A classic token needs `repo`, `workflow` and `user:email`, and its account must be an admin of each repository. The
@@ -137,7 +145,7 @@ preflight probes each permission without changing anything and names the missing
 
 **The optional second token** (Advanced → Admin token): when the agents' token is deliberately narrow (no Secrets,
 Variables or Administration, which the agents never need), give an admin token for the installation; it is used only
-while installing and never stored, unless you choose it as CodeBuild's credential. A project's own agent token
+while installing and never stored, unless you choose it as the token CodeBuild keeps (Advanced → Build runners). A project's own agent token
 (Advanced) isolates that project's agent on GitHub, as [Project isolation](#project-isolation) explains.
 
 **What stays manual, and why:** none of the above needs a console. Two things can: for an Anthropic model, AWS may
@@ -176,33 +184,6 @@ environment when it starts (so an agent, which has Bash and its role's credentia
 [library gateway](#library-gateway) on, only the gateway's Lambda may read them and no worker role can. A changed key
 reaches workers at their next session and the Lambda at its next cold start; nothing is redeployed.
 
-### CI on AWS
-
-The trace workflows (prs, ci, worker, deploy, kb-sync) and the starter build workflows run on AWS CodeBuild-hosted
-GitHub Actions runners, not GitHub's. For each repository, and each of Advanced → "More repositories with a runner"
-(trace's own, for its `ci.yml`), the installer (`src/installer/runners.ts`):
-
-1. makes CodeBuild's GitHub source credential from the token (`ImportSourceCredentials`, account and region), unless
-   the account has one already, which it uses and leaves alone (it may be another team's);
-2. makes a runner project `<prefix>-ci-<hash>`: source GitHub at the repository, image `aws/codebuild/standard:8.0`
-   (Ubuntu 24.04, as GitHub's `ubuntu-24.04`), the stack's runner role, and a `WORKFLOW_JOB_QUEUED` webhook;
-3. sets the repository variable `TRACE_CODEBUILD_PROJECT`, which every trace job's `runs-on` turns into CodeBuild's
-   label `codebuild-<project>-${{ github.run_id }}-${{ github.run_attempt }}` (`src/core/onboard.ts` `RUNS_ON`;
-   [AWS's runner tutorial](https://docs.aws.amazon.com/codebuild/latest/userguide/action-runner.html)).
-
-No console step is needed. A repository whose runner can't be made (the token lacks Administration or Webhooks there)
-keeps GitHub's runners: its variable is removed, so no job waits for a runner that never comes, and the summary says
-why. Turning runners off (Advanced) removes every runner and variable. Jobs that may need a machine of your own
-(the worker's `work`, deploys) still take `TRACE_RUNNER` first.
-
-The runner role reaches its own logs and nothing else, because every job a runner takes, a pull request's included,
-can use the container's credentials; workflows reach AWS through their repository's GitHub OIDC role, as on GitHub's
-runners. GitHub access is CodeBuild's source credential, which no job can read. The projects and webhooks are made by
-the installer, not CloudFormation, so a repository the token cannot administer fails on its own instead of rolling
-back the deploy. Repositories already onboarded get the new `runs-on` through the held "Refresh the trace workflows"
-pull request; until it is merged their jobs stay on GitHub's runners. In an organisation, self-hosted runners must be
-allowed for the repository (the organisation's Actions runner-group settings).
-
 ### Images: copied or built
 
 Both images (the agent's, arm64; the GPU and CPU jobs', amd64) are made by CodeBuild in your account
@@ -212,7 +193,8 @@ Both images (the agent's, arm64; the GPU and CPU jobs', amd64) are made by CodeB
   `public.ecr.aws/mteichtahl/trace-agent:<content tag>` and `-gpu:`, and pushes it to the installation's repository.
   The content tag is a hash of what goes into the image, computed the same way by the stack and by trace's release
   workflow (`.github/workflows/release-images.yml`, `scripts/image-tag.mjs`), so a modified trace never takes an image
-  that is not its own. When there is none, it builds. **Nothing is published yet**: the release workflow is in place
+  that is not its own (the workflow runs, like every job here, on trace's CodeBuild runner `trace-ci`, deployed
+privileged for it: see [Where builds run](#where-builds-run)). When there is none, it builds. **Nothing is published yet**: the release workflow is in place
   but has not been run (it needs a public ECR repository and a role, listed in its header), so every pull misses
   today and the images are built, as before.
 - **Build:** `docker build` with BuildKit's inline cache: the previous image (`:cache`) is the cache, so a rebuild
@@ -227,15 +209,17 @@ Lambda bundling need the lock file: `npm run build` copies both into `agent/`, w
 
 ```sh
 trace upgrade              # pull the newer trace (npm install -g github:mteichtahl/trace#v1), then redeploy with the
-                           # saved answers and refresh each repository's variables, runner and workflows
+                           # saved answers and refresh each repository's variables and workflows
 trace upgrade --check      # what it would change, without changing anything
+trace upgrade --runner-auth token|connection|auto   # switch how the build runners reach GitHub (Where builds run)
 trace uninstall            # remove it (asks you to type the stack's name; --yes to skip)
 ```
 
 Both use the answers saved on this machine and your AWS credentials; the GitHub token is read back from the
-installation's own secret, so neither asks for it. `trace uninstall` removes the CI runners and their variables,
-CodeBuild's GitHub credential when trace imported it, the integrations' secrets, each repository's trace variables and
-`TRACE_TOKEN`, and the stack, and then lists what stays: with keep data (`retainData`, the default) the central
+installation's own secret, so neither asks for it. `trace uninstall` removes the integrations' secrets, each
+repository's trace variables (`TRACE_CODEBUILD_PROJECT` among them) and `TRACE_TOKEN`, the stack (and with it the
+build runners and their webhooks), then CodeBuild's GitHub credential when trace imported it, and lists what stays (a
+GitHub connection the stack created among it): with keep data (`retainData`, the default) the central
 bucket, the image repositories, each project's memory, log groups and knowledge-base vectors; always the Cognito user
 pool, the API's token secret, the CDK bootstrap, Transaction Search and the files onboarding added to each repository.
 `--delete-data` also deletes what would block installing again with the same prefix (the image repositories, the token
@@ -326,8 +310,8 @@ so when it is built. The output `Layout` says which layout an installation has.
 uploads the agent source and the Lambda code, so the bootstrap the installer runs (version 6 or later) covers it.
 
 **Installations from before nested stacks keep `layout: 'flat'`.** There every project's resources are in the one
-stack, and it holds about 24 projects (`cdk synth` refuses more). A flat installation has no knowledge bases and no CPU
-queue: at about 490 of its 500 resources with 24 projects, it has no room for them. The installer picks the layout from the deployed
+stack, and it holds about 20 projects (`cdk synth` refuses more). A flat installation has no knowledge bases and no CPU
+queue: at about 480 of its 500 resources with 20 projects, it has no room for them. The installer picks the layout from the deployed
 stack: a stack with a `Layout` output keeps that layout, a stack without one is flat, and a new installation is
 nested. Deploying by hand, set `layout: 'flat'` in `TRACE_INFRA` for an older stack.
 
@@ -412,6 +396,86 @@ guests can list, read and preview them (see [Managing prompts](#managing-prompts
 Marking an agent memory inactive (`trace remote memory deactivate`) takes write access. A person's own preferences
 are the exception: they may mark those with read access alone (see [Inactive memories](#inactive-memories)).
 
+## Where builds run
+
+Every build, test and automation job runs on AWS, in the installation's own account. GitHub-hosted runners are
+never used, by trace's own repository or by any repository it manages.
+
+The workflows stay in GitHub Actions, so pull requests show their checks as usual, but each job runs on an
+[AWS CodeBuild-hosted runner](https://docs.aws.amazon.com/codebuild/latest/userguide/action-runner.html): GitHub
+queues the job, CodeBuild receives the queued event, starts a fresh build container in your account, and that
+container runs the job and is discarded.
+
+- **One runner project per repository**, `<prefix>-ci-<hash>`, made by the stack. Its workflows name it through the
+  repository variable `TRACE_CODEBUILD_PROJECT`, which the installer sets:
+  `runs-on: [codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}, <job>]`.
+- **How CodeBuild reaches GitHub** (to make each runner project's webhook, register each job's just-in-time runner
+  and fetch the source): one of two, chosen per installation (`runners.auth` in the answers; Advanced → Build
+  runners in the installer):
+
+  | | GitHub connection (CodeConnections) | The GitHub token (CodeBuild source credential) |
+  | --- | --- | --- |
+  | Stored with CodeBuild | No token: the AWS Connector for GitHub app's installation | The personal access token, imported with `ImportSourceCredentials` |
+  | Console step | One authorization per AWS account and region, the first time | None |
+  | First deploy | With the runners when a connection is authorized already; else without, then a second deploy once it is | With the runners |
+  | GitHub access | The app's: grant it every repository trace manages | The token's: Administration, Webhooks, Commit statuses (read and write) and Contents (read) on each repository |
+
+  **Automatic** (the default) uses a connection when one is authorized in the account and region already (the one
+  this installation used before, `<prefix>-github`, another installation's or trace's own CI's), and the token
+  otherwise, so a first install needs only the AWS credentials and the token. **The token** always uses the token.
+  **A connection** (Advanced: "use an AWS CodeConnections connection instead of the token; needs one console
+  authorization") always uses one, and creates `<prefix>-github` when there is none. Switch later with
+  `trace upgrade --runner-auth auto|token|connection` (or by choosing again in `trace install`): the runner projects
+  are updated in place.
+- **With the token**, the installer imports it before the deploy as CodeBuild's account-level GitHub source credential
+  (`ImportSourceCredentials`, server type `GITHUB`, auth type `PERSONAL_ACCESS_TOKEN`; Advanced chooses the agents'
+  token or the admin token). The runner projects then name no source credential of their own, so CodeBuild uses that
+  one for their webhooks, runner registration and checkouts
+  ([multiple access tokens](https://docs.aws.amazon.com/codebuild/latest/userguide/multiple-access-tokens.html):
+  account credentials "will be used on a project when no project or source level credentials are specified"). An
+  account that already has a GitHub source credential keeps it: it may be another team's, so trace uses it and leaves
+  it alone, and the preflight says so. One trace imported is refreshed on every run and removed by `trace uninstall`.
+  CodeBuild keeps the token itself: no job and no role can read it. The preflight stops when the token lacks
+  Administration or Webhooks on a chosen repository, because CodeBuild could not make that runner and the deploy would
+  fail.
+- **With a connection**, CodeBuild uses the AWS Connector for GitHub app and no GitHub token is stored for it. Grant
+  that app access to every repository trace manages. One connection serves the whole account and region: a person
+  authorizes it once, in the AWS console, and every installation and `npm run deploy:ci` there reuses it, and says
+  which one it used. Nothing needs it up front:
+  1. The installer looks for a connection that is already authorized. If it finds one, it deploys once, with the
+     runners.
+  2. If there is none, the stack creates `<prefix>-github` and the first deploy goes ahead without the runners.
+     CodeBuild can't attach a runner to a connection nobody has authorized yet.
+  3. The installer then shows the link to the AWS console, what to choose there ("Update pending connection", which
+     installs the AWS Connector for GitHub app), and the time of its next check. It checks every 15 seconds for up to
+     30 minutes. If it gives up, run it again and it carries on from there.
+  4. Once the connection is authorized, it deploys again. That only adds each repository's runner and its GitHub
+     webhook.
+
+  A connection the stack created is kept if the stack is deleted, because other installations may be using it.
+- **No AWS access comes with it.** The runner's own role may write its logs and (with a connection) use the
+  connection, nothing else.
+  Jobs reach AWS exactly as before, through their repository's GitHub OIDC role.
+- **No fallback.** If `TRACE_CODEBUILD_PROJECT` is missing or the runner project doesn't exist, jobs wait in the queue
+  rather than run on GitHub. `trace doctor owner/repo` reports it, and running the installer again fixes it.
+- **Bigger machines:** `runners.computeType` sets every job's default size (large unless changed); a job can ask for
+  another with an `instance-size:` label. `runners.privileged` turns on Docker for jobs that build containers.
+
+trace's own repository builds the same way, on the runner project `trace-ci`. Deploy it once per account, before
+its first pull request can be checked:
+
+```sh
+npm run deploy:ci
+```
+
+It works the same way as the installer. It reuses an authorized connection (`trace-ci-github` first, then an
+installation's). If there is none, it creates `trace-ci-github`, shows you where to authorize it, waits, and then adds
+the runner. To use a particular connection, set `TRACE_CONNECTION_ARN`. Anything after `--` goes to `cdk deploy`.
+The release workflow (`.github/workflows/release-images.yml`) builds images, so it needs Docker on that runner: deploy
+it with `TRACE_CI_PRIVILEGED=true npm run deploy:ci` before publishing a release.
+
+A guard test fails the build if any workflow here or in `templates/` names a runner other than a CodeBuild one.
+
 ## Putting another repository under trace
 
 ```sh
@@ -435,8 +499,8 @@ Onboarding adds the following:
 
 Settings are changed with `trace config set <key> <value>` (`trace config keys` lists them all). Each workflow has a
 kill switch, a repository variable set to `false`: `TRACE_PRS`, `TRACE_CI`, `TRACE_WORKER`, `TRACE_DEPLOY`. Work is
-done by a specialist agent (see [Specialist agents](#specialist-agents)) on AgentCore by default; `trace config set worker.runner actions` runs it inside GitHub Actions
-instead.
+done by a specialist agent (see [Specialist agents](#specialist-agents)) on AgentCore by default; `trace config set worker.runner actions` runs it as a GitHub Actions job instead, which
+still runs on the project's CodeBuild runner in AWS.
 
 ## Data
 
@@ -1083,7 +1147,7 @@ tokens and keys and is bounded in size (8000 characters per event, 12 tool outco
   value, at most 5000 characters, and a runtime may have at most 50 environment variables. The stack checks both
   when it is built and refuses an installation that would not fit. Each project is a nested stack of its own, so
   CloudFormation's 500 resources and 200 outputs per stack allow the full 60 projects; an installation still in the
-  flat layout holds about 24 (see [Stack layout and limits](#stack-layout-and-limits)).
+  flat layout holds about 20 (see [Stack layout and limits](#stack-layout-and-limits)).
 
 ### Inactive memories
 

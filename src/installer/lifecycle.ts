@@ -3,18 +3,21 @@
  * (~/.trace/client.db) and your AWS credentials. Neither asks for a GitHub token: the installation's own copy is read
  * back from Secrets Manager (`<prefix>/github-token`, and each project's), which those credentials may read.
  *
- *   trace upgrade [--ref REF] [--check] [--no-pull]
+ *   trace upgrade [--ref REF] [--check] [--no-pull] [--runner-auth auto|token|connection]
  *       1 pull: `npm install -g github:<source>#<ref>` (the ref the installation came from, v1 unless --ref), then
  *         run the new version's `trace upgrade --no-pull`
  *       2 the installer's steps with the saved answers (src/installer/bootstrap.ts apply): the stack is updated (the
  *         images are copied or rebuilt from their cache only when trace changed), each repository's variables, runner
  *         and trace workflows are refreshed (a held PR when the workflows changed), people stay as they are
  *       --check prints what would change and stops
+ *       --runner-auth switches how the CodeBuild runners reach GitHub (answers runners.auth, README "Where builds
+ *         run"), saved for later runs: the runner projects are updated in place
  *
  *   trace uninstall [--yes] [--delete-data]
- *       deletes the CodeBuild runners (projects and webhooks) and their repositories' TRACE_CODEBUILD_PROJECT, the
- *       optional integrations' secrets, CodeBuild's GitHub credential when trace imported it, each repository's
- *       trace variables and TRACE_TOKEN secret, and the stack; then lists what stays: with keep data (retainData) the
+ *       deletes the optional integrations' secrets, each repository's trace variables (TRACE_CODEBUILD_PROJECT among
+ *       them) and TRACE_TOKEN secret, and the stack (with it the CodeBuild runner projects and their webhooks), then
+ *       CodeBuild's GitHub credential when trace imported it; then lists what stays (a GitHub connection the stack
+ *       created among it): with keep data (retainData) the
  *       central bucket, the image repositories, each project's memory, log groups and knowledge base vectors; always
  *       the Cognito user pool, the API's token secret, the CDK bootstrap, Transaction Search, and the files onboarding
  *       added to each repository (its workflows stop: their variables are gone). --delete-data also deletes what
@@ -32,11 +35,11 @@ import { INTEGRATION_NAMES, IntegrationStore, secretsManagerApi } from '../core/
 import { REF, SOURCE } from '../core/onboard.js'
 import { githubSecretName, stackName } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
-import { type Answers, AnswersSchema, type InstallEvent, SecretsSchema } from './answers.js'
-import { RUNNER_VARIABLE, apply } from './bootstrap.js'
-import { credentials } from './aws.js'
+import { RUNNER_VARIABLE } from '../core/project.js'
+import { type Answers, AnswersSchema, type InstallEvent, RUNNER_AUTH, SecretsSchema } from './answers.js'
+import { apply } from './bootstrap.js'
+import { credentials, removeSourceCredential } from './aws.js'
 import { deleteVariable } from './github.js'
-import { removeRunner, runnerProjects } from './runners.js'
 
 /** This trace's version (package.json). */
 export function traceVersion(): string {
@@ -89,9 +92,14 @@ async function creds(a: Answers): Promise<AwsCredentialIdentity> {
 }
 
 export async function cmdUpgrade(argv: string[]): Promise<number> {
-  const { values: o } = parseArgs({ args: argv, options: { ref: { type: 'string' }, check: { type: 'boolean' }, 'no-pull': { type: 'boolean' } } })
+  const { values: o } = parseArgs({ args: argv, options: { ref: { type: 'string' }, check: { type: 'boolean' }, 'no-pull': { type: 'boolean' }, 'runner-auth': { type: 'string' } } })
   try {
-    const a = saved()
+    let a = saved()
+    const auth = o['runner-auth']
+    if (auth !== undefined) {
+      if (!(RUNNER_AUTH as readonly string[]).includes(auth)) throw new Error(`--runner-auth is one of ${RUNNER_AUTH.join(', ')}, not ${auth}`)
+      a = AnswersSchema.parse({ ...a, runners: { ...a.runners, auth, ...(auth === 'token' ? { connectionArn: '' } : {}) } })
+    }
     if (!o['no-pull'] && !o.check) {
       const ref = o.ref ?? REF
       out(`pulling trace from github:${SOURCE}#${ref} …`)
@@ -99,7 +107,7 @@ export async function cmdUpgrade(argv: string[]): Promise<number> {
       const r = spawnSync(npm, ['install', '-g', `github:${SOURCE}#${ref}`], { stdio: 'inherit' })
       if (r.status !== 0) { err(`trace: npm install exited ${r.status ?? 'abnormally'}`); return 1 }
       // the new version carries on (its stack, its workflows)
-      const next = spawnSync(process.platform === 'win32' ? 'trace.cmd' : 'trace', ['upgrade', '--no-pull'], { stdio: 'inherit' })
+      const next = spawnSync(process.platform === 'win32' ? 'trace.cmd' : 'trace', ['upgrade', '--no-pull', ...(auth !== undefined ? ['--runner-auth', auth] : [])], { stdio: 'inherit' })
       return next.status ?? 1
     }
     const c = await creds(a)
@@ -138,6 +146,7 @@ export function keptAfterUninstall(a: Answers, deleteData: boolean): string[] {
     kept.push(`the API's copy of the GitHub token, ${p}/github-token`)
   }
   kept.push('the CDK bootstrap (CDKToolkit) and CloudWatch Transaction Search (account-wide)')
+  kept.push(`a GitHub connection the stack created (${p}-github), which other installations in the account may reuse, and CodeBuild's GitHub credential unless trace imported it`)
   kept.push('the files onboarding added to each repository (.trace/, the trace workflows): their workflows stop, as their variables are gone; delete them, or set TRACE_PRS, TRACE_CI, TRACE_WORKER and TRACE_DEPLOY to false')
   return kept
 }
@@ -157,7 +166,7 @@ export async function cmdUninstall(argv: string[]): Promise<number> {
     const deleteData = Boolean(o['delete-data']) && !o['keep-data']
     const stack = stackName(a.agents.prefix)
     const region = a.aws.region
-    out(`This removes ${stack} from ${a.aws.account} (${region}), its CodeBuild runners and integrations, and each repository's trace variables.`)
+    out(`This removes ${stack} from ${a.aws.account} (${region}) with its CodeBuild runners, its integrations, and each repository's trace variables.`)
     out('It keeps:')
     for (const k of keptAfterUninstall(a, deleteData)) out(`  - ${k}`)
     if (!o.yes && !(await confirm(stack))) { err('not uninstalled'); return 1 }
@@ -165,20 +174,12 @@ export async function cmdUninstall(argv: string[]): Promise<number> {
     const cfg = { region, credentials: c }
     const sm = await secretsManagerApi(cfg)
     const token = await sm.get(`${a.agents.prefix}/github-token`).catch(() => null)
-    // the repositories: their runners and variables (the token first, before the stack takes its secret)
-    const cb = await import('@aws-sdk/client-codebuild')
-    const codebuild = new cb.CodeBuildClient(cfg)
-    for (const name of await runnerProjects(codebuild, a.agents.prefix).catch(() => [] as string[])) { await removeRunner(codebuild, name); out(`removed the runner ${name}`) }
-    if (savedAnswers().runnerCredential === 'imported') {
-      const list = (await codebuild.send(new cb.ListSourceCredentialsCommand({}))).sourceCredentialsInfos ?? []
-      const gh = list.find((x) => x.serverType === 'GITHUB')
-      if (gh?.arn) { await codebuild.send(new cb.DeleteSourceCredentialsCommand({ arn: gh.arn })); out('removed CodeBuild\'s GitHub credential (trace had imported it)') }
-    }
+    // the repositories' variables (the token first, before the stack takes its secret); the stack deletes the runners
     if (token) {
       const { z } = await import('zod')
       const { Github } = await import('./github.js')
       const gh = new Github(token)
-      for (const p of [...a.projects.map((x) => x.repo), ...a.agents.runnerExtraRepos]) {
+      for (const p of a.projects.map((x) => x.repo)) {
         for (const v of ['TRACE_AWS_ROLE', 'TRACE_AGENT_RUNTIME_ARN', 'TRACE_MEMORY_ID', 'TRACE_KB_ID', 'TRACE_KB_DATA_SOURCE_ID', 'TRACE_AWS_REGION', 'TRACE_HOME', 'TRACE_AGENT_LOGIN', RUNNER_VARIABLE]) {
           await deleteVariable(token, p, v).catch(() => false)
         }
@@ -201,6 +202,11 @@ export async function cmdUninstall(argv: string[]): Promise<number> {
       if (status === 'DELETE_FAILED') throw new Error(`${stack} is DELETE_FAILED: see its events in the CloudFormation console, fix the resource named there, and run \`trace uninstall\` again`)
     }
     out(`${stack} is deleted`)
+    // after the stack: deleting the runner projects removed their GitHub webhooks with this credential
+    if (savedAnswers().runnerCredential === 'imported') {
+      const { CodeBuildClient } = await import('@aws-sdk/client-codebuild')
+      if (await removeSourceCredential(new CodeBuildClient(cfg))) out('removed CodeBuild\'s GitHub credential (trace had imported it)')
+    }
     if (deleteData) {
       const [{ signedCaller, ecr }, cog] = await Promise.all([import('./signed.js'), import('@aws-sdk/client-cognito-identity-provider')])
       const call = signedCaller(c, region)

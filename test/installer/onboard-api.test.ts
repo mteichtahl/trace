@@ -62,7 +62,7 @@ describe.skipIf(!hasGit)('onboarding through the API and git', () => {
     expect(first).toMatchObject({ state: 'opened', pr: 'https://github.com/marc/board/pull/1' })
     expect(first.settings.join(' ')).toMatch(/ruleset/)
     expect(r.branches()).toEqual(['main', 'trace/onboard'])
-    expect(r.file('trace/onboard', '.github/workflows/trace-ci.yml')).toContain("format('codebuild-{0}-{1}-{2}'")
+    expect(r.file('trace/onboard', '.github/workflows/trace-ci.yml')).toContain('codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}')
     expect(gh.calls).toEqual(expect.arrayContaining(['POST /repos/marc/board/pulls', 'PATCH /repos/marc/board', 'POST /repos/marc/board/rulesets']))
     expect(gh.calls.some((c) => c.includes('/issues/1/labels'))).toBe(true)
 
@@ -76,7 +76,7 @@ describe.skipIf(!hasGit)('onboarding through the API and git', () => {
     expect(r.branches()).not.toContain(REFRESH_BRANCH)
 
     // an older trace's workflow on main → a refresh PR with only the workflows
-    writeFileSync(join(merge, '.github', 'workflows', 'trace-ci.yml'), readFileSync(join(merge, '.github', 'workflows', 'trace-ci.yml'), 'utf8').replace(/runs-on: .*/, 'runs-on: ubuntu-24.04'))
+    writeFileSync(join(merge, '.github', 'workflows', 'trace-ci.yml'), readFileSync(join(merge, '.github', 'workflows', 'trace-ci.yml'), 'utf8').replace(/runs-on:(\n\s+- .*)+/, 'runs-on: ubuntu-24.04'))
     r.git(['git', 'commit', '-q', '-am', 'an older workflow'], { cwd: merge })
     r.git(['git', 'push', '-q', 'origin', 'HEAD:refs/heads/main'], { cwd: merge })
     const refresh = await onboardViaApi('marc/board', { token: 't', login: 'marc', apply: false, git: r.git, fetchImpl: gh.fetch })
