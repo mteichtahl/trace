@@ -38,7 +38,7 @@ import { saveAnswers, saveInstallation } from '../core/client.js'
 import { onboard, register } from '../core/onboard.js'
 import {
   GPU_IMAGE_BUILD_OUTPUT, type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, cpuEnabled, githubSecretName,
-  memoryDeliveryName, memoryName, projectHash, projectOutputs, stackName,
+  kbOutputs, memoryDeliveryName, memoryName, projectHash, projectOutputs, stackName,
 } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import type { Answers, InstallEvent, Secrets, Step } from './answers.js'
@@ -125,6 +125,7 @@ export function infraInput(a: Answers, existing?: Existing | null, deploy?: Layo
     retainData: a.agents.retainData,
     gpu: { enabled: a.agents.gpuEnabled, maxVcpus: a.agents.gpuMaxVcpus, spot: a.agents.gpuSpot },
     cpu: { enabled: a.agents.cpuEnabled, maxVcpus: a.agents.cpuMaxVcpus, spot: a.agents.cpuSpot, vcpus: a.agents.cpuVcpus, memoryMiB: a.agents.cpuMemoryMiB },
+    knowledgeBase: { enabled: a.agents.knowledgeBase },
     observability: {
       enabled: a.agents.observability, transactionSearch: a.agents.transactionSearch, dashboard: a.agents.dashboard,
       ...(a.agents.samplingPercent !== null ? { samplingPercent: a.agents.samplingPercent } : {}),
@@ -208,6 +209,14 @@ function cpuPlan(props: InfraProps): string {
   return `, and a CPU queue for CPU-heavy remote jobs (${props.cpu.instanceTypes.join('/')}, up to ${props.cpu.maxVcpus} vCPUs${props.cpu.spot ? ', Spot' : ''}, ${props.cpu.vcpus} vCPUs and ${Math.round(props.cpu.memoryMiB / 1024)} GiB per job, the same image)`
 }
 
+/** The knowledge base part of the deploy step's description. */
+export function kbPlan(props: InfraProps): string {
+  if (!props.knowledgeBase.enabled) return ''
+  if (props.layout !== 'nested' || props.layoutMigration) return '; no knowledge bases (they need one nested stack per project: a flat stack has no room for theirs)'
+  const kb = props.knowledgeBase
+  return `; each project its own Bedrock knowledge base (${kb.embeddingModel}, ${kb.dimensions} dimensions, ${kb.chunking.strategy} chunks of ${kb.chunking.maxTokens} tokens; vectors in one S3 vector bucket, an index per project${props.retainData ? ', kept if the project or the stack is removed' : ''}), synced on every push to the default branch`
+}
+
 /** The observability part of the deploy step's description. */
 export function observabilityPlan(o: InfraProps['observability'], prefix: string): string {
   if (!o.enabled) return '; observability off'
@@ -274,9 +283,9 @@ export function plan(a: Answers, existing?: Existing | null): Step[] {
   const steps: [string, string, string][] = [
     ['check', 'Check the AWS account', `${a.aws.account} in ${a.aws.region}`],
     ['cdk', 'Bootstrap CDK', `aws://${a.aws.account}/${a.aws.region} (only if it isn't already)`],
-    ['deploy', `Deploy ${stack}`, `central bucket, agent image (CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and job definitions' : ''}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64 without holding up the deploy; one queue for every project)${cpuPlan(props)}` : ''}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}${generationsPlan(a)}${layoutPlan(a, existing)}. A project added again after being removed gets new names if its old memory, log delivery or token secret still holds them: the old memory is kept and orphaned, and the new one starts empty`],
+    ['deploy', `Deploy ${stack}`, `central bucket, agent image (CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and job definitions' : ''}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64 without holding up the deploy; one queue for every project)${cpuPlan(props)}` : ''}${kbPlan(props)}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}${generationsPlan(a)}${layoutPlan(a, existing)}. A project added again after being removed gets new names if its old memory, log delivery or token secret still holds them: the old memory is kept and orphaned, and the new one starts empty`],
     ['token', 'Store the GitHub tokens', 'the shared token in the API\'s secret, and each project\'s agent token in its own secret'],
-    ['repos', 'Configure the repositories', `each repository's own TRACE_AWS_ROLE, TRACE_AGENT_RUNTIME_ARN${props.memory.enabled ? ' and TRACE_MEMORY_ID' : ''}, TRACE_AWS_REGION, TRACE_HOME and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}`],
+    ['repos', 'Configure the repositories', `each repository's own TRACE_AWS_ROLE, TRACE_AGENT_RUNTIME_ARN${props.memory.enabled ? ', TRACE_MEMORY_ID' : ''}${props.knowledgeBase.enabled && props.layout === 'nested' ? ', TRACE_KB_ID and TRACE_KB_DATA_SOURCE_ID' : ''}, TRACE_AWS_REGION, TRACE_HOME and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}`],
     ['onboard', 'Onboard the repositories', onboarding.length ? `open the onboarding PR in ${onboarding.join(', ')}` : 'none chosen'],
     ['people', 'Invite people and assign projects', `${a.adminEmail} (admin)${a.people.length ? `, ${a.people.map((p) => `${p.email} (${p.class})`).join(', ')}` : ''}`],
     ['local', 'Save this installation locally', '~/.trace/client.db, so `trace login` works here'],
@@ -459,6 +468,8 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
         TRACE_AGENT_LOGIN: login,
         // its own memory, for the worker.runner = actions fallback (its OIDC role may use that memory only)
         ...(memoryIds[p.repo.toLowerCase()] ? { TRACE_MEMORY_ID: memoryIds[p.repo.toLowerCase()] ?? '' } : {}),
+        // its own knowledge base, for the kb-sync job on a push to the default branch and the actions fallback
+        ...(out[kbOutputs(p.repo).knowledgeBaseId] ? { TRACE_KB_ID: out[kbOutputs(p.repo).knowledgeBaseId] ?? '', TRACE_KB_DATA_SOURCE_ID: out[kbOutputs(p.repo).dataSourceId] ?? '' } : {}),
       }
       for (const [k, v] of Object.entries(vars)) log('repos', `${p.repo}: ${k} ${await setVariable(adminToken, p.repo, k, v)}`)
       await setSecret(adminToken, p.repo, 'TRACE_TOKEN', projectToken(s, p.repo))

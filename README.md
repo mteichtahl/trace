@@ -34,12 +34,12 @@ It then shows the plan and runs it:
 
 - **AWS (CDK):** one stack. It contains the central bucket, the agent image (built by CodeBuild on arm64, so no
   local Docker is needed), and AgentCore runtimes from that image: one worker runtime per project, each with its own
-  execution role, GitHub OIDC role, GitHub token secret, memory and GPU and CPU job definitions, and the API runtime. Each
+  execution role, GitHub OIDC role, GitHub token secret, memory, knowledge base and GPU and CPU job definitions, and the API runtime. Each
   project's resources are in a nested stack of their own (see [Stack layout](#stack-layout-and-limits)). A project's
   worker is invoked by that repository's workflows through IAM, and by the API. The API runtime is for people and is
   reached only with a Cognito sign-in. The stack also holds the Cognito user pool.
-- **GitHub:** each repository's Actions variables (`TRACE_AWS_ROLE`, `TRACE_AGENT_RUNTIME_ARN` and `TRACE_MEMORY_ID`,
-  all its own project's, `TRACE_AWS_REGION`, `TRACE_HOME`) and its `TRACE_TOKEN` secret (its project's agent token,
+- **GitHub:** each repository's Actions variables (`TRACE_AWS_ROLE`, `TRACE_AGENT_RUNTIME_ARN`, `TRACE_MEMORY_ID`,
+  `TRACE_KB_ID` and `TRACE_KB_DATA_SOURCE_ID`, all its own project's, `TRACE_AWS_REGION`, `TRACE_HOME`) and its `TRACE_TOKEN` secret (its project's agent token,
   encrypted with the repository's key), plus the onboarding pull request.
 - **The GPU image**, last: the deploy starts its build and does not wait for it (see [GPU jobs](#gpu-jobs-rendering-and-autorouting)),
   so the installer waits for it once everything else is set up, and starts it again if an earlier one failed. A failed
@@ -63,7 +63,8 @@ projects is therefore drawn in IAM, not only in code (`src/infra/project.ts`):
 | **Memory** | One AgentCore Memory per repository (`<prefix>_m_<hash>`, tagged `trace:project`), its own event expiry, and its own log group and log delivery. The worker is told only its own (`TRACE_MEMORY_ID`) and its role may use only that memory's ARN. On it, the role may still create and list events only for actors `<owner>/<repo>/*`, and recall and list records only under `/trace/<owner>/<repo>/*` (the condition keys `bedrock-agentcore:actorId` and `bedrock-agentcore:namespace`), as defence in depth. The actor comes from `TRACE_PROJECT`, never from the request. The GitHub OIDC role has the same grants on the same memory, for the `worker.runner = actions` fallback (the repository variable `TRACE_MEMORY_ID`). |
 | **S3** | Read and write `projects/<owner>/<repo>/*` and `jobs/<owner>/<repo>/*`, and list only those prefixes and `central/*`. Read, never write, `prompts/*` (the installation's prompt overrides, see [Managing prompts](#managing-prompts)). Nothing under `access/*`, and nothing of another project. |
 | **GPU and CPU jobs** | Two AWS Batch job definitions per project (`<prefix>-gpu-<hash>`, and `<prefix>-cpu-<hash>` with the CPU queue), with one job role that reads and writes only that project's `jobs/<owner>/<repo>/*`. A project's role may submit only with its own definitions, only jobs tagged `trace:project=<owner>/<repo>`, and may stop only jobs carrying that tag. SubmitJob cannot override a definition's job role. |
-| **GitHub OIDC role** | One per repository, trusted only for `repo:OWNER/REPO:ref:refs/heads/BRANCH`. It may invoke only that project's runtime, read and write only that project's prefix (and the central database), and use only that project's memory, as its worker does. |
+| **Knowledge base** | One Amazon Bedrock knowledge base per repository (`<prefix>-kb-<hash>`, nested layout only), with its own service role (`<prefix>-kb-<hash>-<region>`) that reads only `projects/<owner>/<repo>/kb/*` and its own S3 Vectors index, and invokes only the embedding model. The worker role and the OIDC role may `bedrock:Retrieve` and start, get and list ingestion jobs on that knowledge base's ARN only. See [Knowledge base](#knowledge-base). |
+| **GitHub OIDC role** | One per repository, trusted only for `repo:OWNER/REPO:ref:refs/heads/BRANCH`. It may invoke only that project's runtime, read and write only that project's prefix (and the central database), and use only that project's memory and knowledge base, as its worker does. |
 | **GitHub token** | Each project has its own secret, `<prefix>/github-token/<owner>/<repo>`, and its worker reads only that one. This isolates GitHub access only when you give the project its own fine-grained token limited to that repository. By default the shared token is copied into every project's secret, and the installer's summary says so. A project token is checked: it must see its repository, and the installer warns if it can also see another project's. |
 
 Shared on purpose:
@@ -72,10 +73,13 @@ Shared on purpose:
   may also write it, because adding a datasheet is a shared write, but only with a conditional put (`If-Match` or
   `If-None-Match`, which is how the central store always writes) and never a delete. The bucket is versioned.
 - **The GPU and CPU queues and compute environments**, and the GPU image (which both run).
+- **The S3 vector bucket** that holds every project's knowledge base index (one index per project; each service role
+  reaches only its own index's ARN).
 - **The agent image**: every runtime runs the same one.
 - **The API runtime.** It is the one component that spans projects. It holds the shared GitHub token, which admins
   need for `settings.get` and `settings.set` on any project. It reads (never writes) the records of every project's
   memory for `memory.list` and `memory.recall`, choosing the memory of the project asked for after the access check,
+  it may `bedrock:Retrieve` on every project's knowledge base for `kb.search`, again after the access check,
   and it may invoke every project's worker: each by its exact runtime ARN, and the runtime only when it carries this
   installation's tag `trace:installation=<prefix>` (`aws:ResourceTag`, which the Service Authorization Reference
   lists for both of InvokeAgentRuntime's resource types, runtime and runtime-endpoint; the endpoint statement names
@@ -90,25 +94,28 @@ job on the queue, which includes its command and environment. Job ids, not data,
 ### Stack layout and limits
 
 An installation holds up to 60 projects. Each project's resources (its worker runtime and execution role, GitHub
-OIDC role, token secret, memory with its log group and log delivery, GPU and CPU job definitions and job role: 18
-CloudFormation resources with everything on) are a CloudFormation nested stack of their own, `Project<hash>Stack`
+OIDC role, token secret, memory with its log group and log delivery, GPU and CPU job definitions and job role, and its
+knowledge base with its index, service role and data source: 23 CloudFormation resources with everything on) are a CloudFormation nested stack of their own, `Project<hash>Stack`
 (`src/infra/project.ts` `ProjectNestedStack`). The parent stack holds the shared parts and one
 `AWS::CloudFormation::Stack` per project. What a project uses of the parent (the bucket, the agent image and its
 repository, the OIDC provider, the GPU and CPU queues, image repository, execution role and log group) reaches its
-nested stack as parameters, and the parent waits for Transaction Search before it creates or updates a project (not
+nested stack as parameters (the S3 vector bucket too), and the parent waits for Transaction Search before it creates or updates a project (not
 for the GPU image: see [GPU jobs](#gpu-jobs-rendering-and-autorouting)).
 Inside, the resources are the ones the single stack had, with the same names, IAM and removal policies (with
 `retainData`, a removed project's memory, log group and log delivery stay in the account, as before).
 
 | Projects | Parent stack: resources / outputs | Each project's nested stack: resources / outputs / parameters |
 | --- | --- | --- |
-| 1 | 86 / 19 | 18 / 12 / 11 |
-| 24 | 111 / 19 | 18 / 12 / 11 |
-| 60 | 148 / 19 | 18 / 12 / 11 |
+| 1 | 87 / 19 | 23 / 15 / 12 |
+| 24 | 113 / 19 | 23 / 15 / 12 |
+| 60 | 150 / 19 | 23 / 15 / 12 |
 
-(Everything on, including the legacy memory's one-deploy output. From 24 projects, CDK moves part of the API role's
-policy, which names every project's memory and worker runtime, into managed policies of that role: three at 60, of
-the ten a role may have by default.)
+(Everything on, including the legacy memory's one-deploy output. The knowledge bases add the vector bucket to the
+parent, and to each nested stack five resources, its two outputs `Project<hash>KnowledgeBaseId` and
+`Project<hash>KnowledgeBaseDataSourceId`, the knowledge base id the parent reads for the API, and the vector bucket's
+parameter. From 24 projects, CDK moves part of the API role's policy, which names every project's memory, worker
+runtime and knowledge base, into managed policies of that role: three at 24 and four at 60, of the ten a role may have
+by default.)
 
 CloudFormation allows 500 resources, 200 outputs and 200 parameters per template, and the stack checks all three
 when it is built. The parent carries none of a project's outputs, so its output count does not grow with the
@@ -119,7 +126,7 @@ projects. Each project's are its nested stack's, under the names they always had
 only the first 100), takes each `AWS::CloudFormation::Stack` whose logical id is `Project<hash>Stack…`, reads its
 outputs with `DescribeStacks` on its physical id, checks its `Repository` output against the hash, and takes only the
 outputs named for that hash (`src/installer/aws.ts` `stackOutputs`). The flat layout keeps its outputs in the one
-stack, as before. The other limit at 60 is the API's two `owner/repo=<id>` lists (see
+stack, as before. The other limit at 60 is the API's three `owner/repo=<id>` lists (see
 [Agent memory](#agent-memory)): very long repository names can reach their 5000 characters first, and the stack says
 so when it is built. The output `Layout` says which layout an installation has.
 
@@ -127,7 +134,8 @@ so when it is built. The output `Layout` says which layout an installation has.
 uploads the agent source and the Lambda code, so the bootstrap the installer runs (version 6 or later) covers it.
 
 **Installations from before nested stacks keep `layout: 'flat'`.** There every project's resources are in the one
-stack, and it holds about 24 projects (`cdk synth` refuses more). The installer picks the layout from the deployed
+stack, and it holds about 24 projects (`cdk synth` refuses more). A flat installation has no knowledge bases and no CPU
+queue: at about 490 of its 500 resources with 24 projects, it has no room for them. The installer picks the layout from the deployed
 stack: a stack with a `Layout` output keeps that layout, a stack without one is flat, and a new installation is
 nested. Deploying by hand, set `layout: 'flat'` in `TRACE_INFRA` for an older stack.
 
@@ -419,7 +427,9 @@ delegates to it. The worker's prompt, guardrails and job runner are unchanged.
 | `render` | Rendering | Renders boards and models, and makes turntables. This was the rendering agent; it is kept as a specialist of its own, not folded into `impl`, because people ask for renders directly. | `render.*` |
 
 Every specialist also has the shared read tools: `kicad.board`/`components`/`net`,
-`datasheets.find`/`get`/`text`/`params`, `parts.lookup`, `trace.runs`/`run`/`artifact`, `memory.recall`/`remember`.
+`datasheets.find`/`get`/`text`/`params`, `parts.lookup`, `trace.runs`/`run`/`artifact`, `memory.recall`/`remember`,
+and `kb.search`/`kb.status` (offered only when the project has a [knowledge base](#knowledge-base)). Its prompt tells
+it to search the knowledge base before it asks a person, and to cite each passage by its path.
 It also has `agent.delegate`. Its Claude Code tools are read-only: Read, Glob, Grep and TodoWrite, with no Bash,
 Write, Edit or Task. The allowlist is enforced three ways. The Agent SDK's `tools` option sets the built-ins and
 `allowedTools` sets the rest. The job sets `TRACE_MCP_TOOLS`, so the MCP server lists only the specialist's tools.
@@ -624,7 +634,7 @@ tokens and keys and is bounded in size (8000 characters per event, 12 tool outco
   its worker's grants on its own memory, for the `worker.runner = actions` fallback, which is told the memory by the
   repository variable `TRACE_MEMORY_ID` (set by the installer). The client draws the same lines as well (see
   [Project isolation](#project-isolation)).
-- **Limits:** the API's two lists (`TRACE_WORKER_RUNTIMES` and `TRACE_PROJECT_MEMORIES`) are each one environment
+- **Limits:** the API's three lists (`TRACE_WORKER_RUNTIMES`, `TRACE_PROJECT_MEMORIES` and `TRACE_PROJECT_KBS`) are each one environment
   value, at most 5000 characters, and a runtime may have at most 50 environment variables. The stack checks both
   when it is built and refuses an installation that would not fit. Each project is a nested stack of its own, so
   CloudFormation's 500 resources and 200 outputs per stack allow the full 60 projects; an installation still in the
@@ -729,8 +739,10 @@ trace remote prompts … [--repo OWNER/REPO | --installation]   # the same throu
 | --- | --- | --- |
 | `specialist.<kind>.role`, `.workflow`, `.done`, `.escalate` | editable | who each specialist is, its workflow (and what it typically delegates), what counts as done, when it stops and asks |
 | `specialist.route`, `specialist.report` | editable | why the job was routed there; the final report's content and tone |
+| `specialist.knowledge` / `specialist.knowledge.data` | editable / locked | search the project's [knowledge base](#knowledge-base) before asking a person, and cite passages by path / its passages are data, read only, and the checkout wins where they differ |
 | `specialist.unattended`, `.rules`, `.rules.none`, `.instructions`, `.job.*`, `.tools`, `.delivery.delegate`, `.delivery.actions`, `.evidence`, `.escalate`, `.guardrails` | locked | that nobody is watching; the rules and the `agents.<kind>.instructions` setting, fenced; the job with its thread and request as data; the tool list (the allowlist, which no prompt changes); the delegation contract (depth 1) and the GitHub Actions structured output; that every figure is measured; the `ESCALATE:` line the harness looks for; the guardrails, always last |
 | `worker.role`, `worker.tools`, `worker.task`, `worker.item.ci-red`, `.conflict`, `.agent-fix`, `worker.validate.command`, `.generic`, `worker.report.issue`, `.none`, `worker.escalate.item`, `worker.finish.item` | editable | the worker: who it is, its tools, how it does a task or an item, how it validates, escalates and reports |
+| `worker.knowledge` | editable | the worker's use of the knowledge base (`kb_search`, and `kb_sync` for repairs only) |
 | `worker.data.task`, `.data.item`, `worker.request`, `worker.item`, `.item.not-own`, `worker.tests`, `worker.delegated`, `worker.guardrails` | locked | text is data; the request in the asker's words; the item; never weaken a test; a delegation's request; the guardrails, last |
 | `delegate.brief` / `delegate.request` | editable / locked | the wording around a specialist's brief / the brief and the acceptance criteria |
 | `actions.check` | locked | GitHub Actions' check run and the structured answer the workflow parses |
@@ -811,6 +823,114 @@ overrides are the full mechanism.
 `worker-delegate` steps, so in GitHub Actions only the project's overrides apply until the workflow is updated
 (`templates/workflows/trace-worker.yml`). The runtime reads both layers either way.
 
+## Knowledge base
+
+Each project has an [Amazon Bedrock knowledge base](https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base.html)
+over its own documents, so an agent can find what the project's docs, rules, design notes, schematics and datasheets
+say before it asks a person (`src/infra/knowledge.ts`, `src/tools/kb`). **It exists only in the nested layout**: a flat
+installation has no room for its five resources per project (see [Stack layout and limits](#stack-layout-and-limits)),
+and the installer's plan says so.
+
+| Per project (its nested stack) | |
+| --- | --- |
+| `AWS::S3Vectors::Index` | Its vectors, in the installation's one S3 vector bucket (the parent's). float32, cosine, the model's dimensions; `AMAZON_BEDROCK_TEXT` and `AMAZON_BEDROCK_METADATA` non-filterable, as S3 Vectors needs for Bedrock's chunk text. Named by CloudFormation, so a retained index never blocks a new one. |
+| `AWS::IAM::Role` and its policy | `<prefix>-kb-<hash>-<region>`, trusted by `bedrock.amazonaws.com` from this account's knowledge bases only. It lists and reads `projects/<owner>/<repo>/kb/*` of the central bucket, uses its own index (`PutVectors`, `GetVectors`, `DeleteVectors`, `QueryVectors`, `GetIndex`), and invokes the embedding model. Nothing else. |
+| `AWS::Bedrock::KnowledgeBase` | `<prefix>-kb-<hash>` (`-g<n>` at a [generation](#agent-memory) above 0), type `VECTOR`, storage `S3_VECTORS`. |
+| `AWS::Bedrock::DataSource` | `trace-repository`: S3, inclusion prefix `projects/<owner>/<repo>/kb/`, the project's chunking. |
+
+The worker runtime is told `TRACE_KB_ID` and `TRACE_KB_DATA_SOURCE_ID`, and the repository gets the same as Actions
+variables. Both are outputs of the project's nested stack only. With `retainData` (the default) the index, the knowledge
+base and the data source (whose own `DataDeletionPolicy` is then `RETAIN`) stay in the account when the project or the
+stack is removed, like its memory; the documents themselves are in the central bucket, which is kept too.
+
+Stack settings (`knowledgeBase` in `TRACE_INFRA`, and the installer's "Knowledge bases" checkbox):
+
+| Key | Default | |
+| --- | --- | --- |
+| `knowledgeBase.enabled` | `true` | every project's knowledge base |
+| `knowledgeBase.embeddingModel` | `amazon.titan-embed-text-v2:0` | any Bedrock embedding model id in the region |
+| `knowledgeBase.dimensions` | `1024` | Titan Text Embeddings V2 makes 256, 512 or 1,024; the stack refuses any other |
+| `knowledgeBase.chunking.strategy` | `fixed` | `fixed` (`maxTokens` 300, `overlapPercentage` 20), `semantic` (`maxTokens`, `bufferSize` 0, `breakpointPercentileThreshold` 95) or `hierarchical` (`parentMaxTokens` 1500 over `maxTokens`, `overlapTokens` 60) |
+| `projectSettings.<OWNER/REPO>.knowledgeBase` | | the same keys for one project, over the installation's (`{ "enabled": false }` turns one off) |
+
+Changing the model or the dimensions replaces the index and the knowledge base (a new id, which the next installer
+run writes into the repository's variables); changing the chunking replaces the data source. The next sync then
+ingests everything again. Hierarchical chunking keeps the parent chunk's text as S3 Vectors metadata, so parents of
+thousands of tokens can exceed its per-vector metadata limit; the AWS documentation does not recommend hierarchical
+chunking with S3 Vectors.
+
+**What is indexed** (`src/tools/kb/content.ts`, settings `knowledge.*` in the project database):
+
+| From | Into `projects/<owner>/<repo>/kb/` | `source`, `kind` |
+| --- | --- | --- |
+| Repository files matching `knowledge.include` and not `knowledge.exclude` (what `git ls-files` lists). By default: markdown, `.rst`, `.adoc`, `.txt`, HTML under `docs/`, `CLAUDE.md` and `.trace/rules.md`, without `node_modules`, build output, licences and changelogs. Firmware sources only when a glob names them (`trace config set knowledge.include '[…, "firmware/**/*.c"]'`). | `repo/<path>`, with `.txt` appended to anything that is not `.md`, `.txt`, `.html` or `.csv` (Bedrock reads those as text) | `repo`; `markdown`, `doc`, `rules`, `claude` or `source` |
+| Each KiCad project (`electronics.projects`, else every `.kicad_pro`): its title block, sheets, BOM (quantity, references, value, footprint, MPN, manufacturer, LCSC, description), parts left out, power nets, net labels and the board's nets, written by the KiCad readers trace already has. Raw KiCad files are never uploaded. `knowledge.kicad` | `summary/<path of the .kicad_pro>.md` | `summary`, `kicad` |
+| The current datasheet, in the shared library, of every MPN in those BOMs: one object per page of its text, at most `knowledge.max_datasheet_pages`. `knowledge.datasheets` | `datasheets/<part>/<first 16 of its sha256>/p<page>.txt` | `datasheet`, `datasheet` |
+
+Files larger than `knowledge.max_file_kb` (512), empty files, binaries, PDFs, images and the project database are
+left out, and the sync lists what it skipped. Every object has its `<key>.metadata.json` sidecar beside it, the form
+Bedrock requires for metadata (at most 10 KB): `source`, `kind`, `path`, `commit` (the commit its content was first
+synced from), `dir1`…`dir6` (the first 16 hex digits of the sha256 of each enclosing folder), and for a datasheet page
+`part`, `mpn`, `sha256` and `page`. `path` and `part` are embedded with each chunk; the rest is for filtering and
+citing.
+
+**How sync works** (`src/tools/kb/sync.ts`). `trace kb sync` collects the above from the checkout, then:
+
+1. lists the prefix (ListObjectsV2) and compares each object's content hash: a document's is the sha256 of its bytes,
+   kept in the object's metadata (`x-amz-meta-trace-sha256`); a sidecar's covers its document and attributes but not
+   the commit, so an unchanged document is not uploaded again on every push. The project database's `kb_objects`
+   table (`s3_key`, `path`, `hash`, `etag`, `uploaded_at`; `trace db merge` keeps the newer row per key) saves the
+   HeadObject calls when its row and the listed ETag agree; without rows (a fresh checkout) HeadObject decides;
+2. uploads what changed, deletes what is no longer wanted (DeleteObjects);
+3. starts an ingestion job (StartIngestionJob) when anything changed, when the data source has never been ingested,
+   when its last job failed or was stopped or began before the newest upload `kb_objects` records, or with `--force`. One job runs at a time per data source, so a running one is waited for first. It then polls
+   GetIngestionJob until the job is complete, failed or stopped, or `--wait` minutes (15) pass, and reports the job's
+   statistics (scanned, indexed, deleted, failed) and failure reasons. A job that outlives the wait carries on;
+   `trace kb status` shows it.
+
+The sync refuses a checkout that is not the default branch (`--allow-branch` overrides it): the knowledge base holds
+the default branch. It runs:
+
+- **on every push to the default branch**, as the `kb-sync` job of `trace-worker.yml`, with the repository's own GitHub
+  OIDC role (`TRACE_AWS_ROLE`, `TRACE_KB_ID`, `TRACE_KB_DATA_SOURCE_ID`, `TRACE_HOME`), whatever `worker.runner` says.
+  Repositories onboarded before this need `trace onboard --refresh` to get the job;
+- **by hand**: `trace kb sync [--force] [--dry-run] [--wait MINUTES]` in a clone, with your own credentials and those
+  variables, or `trace remote kb sync OWNER/REPO` (write access), which runs the `kb.sync` tool on the project's own
+  worker runtime, on its clone of the default branch;
+- **from the worker**: the `kb.sync` tool, for repairs. No specialist has it.
+
+**Using it.** The MCP tools are `kb.search { query, top_k, filter: { source?, kind?, path_prefix? } }` (Retrieve
+through `bedrock-agent-runtime`; each hit has its text, score, path, commit and a citation: `path@commit`, or the part,
+sha256 and page of a datasheet), `kb.status` (the newest ingestion job and how many documents are in S3) and `kb.sync`.
+They are offered only when `TRACE_KB_ID` is set. Every specialist has `kb.search` and `kb.status`, read only; nothing
+an agent is given can mark or change the knowledge base, apart from the worker's `kb.sync` of the default branch.
+S3 Vectors has no `startsWith` filter, so `path_prefix` is a folder in whole segments (`docs/power`) or one file's exact
+path: an equals on that folder's `dir<n>` hash, or on `path`; folders deeper than six levels are filtered on their
+first six and narrowed afterwards. From the command line: `trace kb search "query" [--source S] [--kind K] [--path P]`
+and `trace kb status` locally, `trace remote kb search OWNER/REPO "query"` through the API (read access). The API's
+`kb.search` runs Retrieve itself, on the knowledge base of the project asked for (from `TRACE_PROJECT_KBS`), after the
+access check; a project without a knowledge base in the installation gets the same 403 as one you are not assigned to.
+
+AgentCore Gateway can expose a knowledge base to agents as MCP tools, but its knowledge base connector supports only
+Bedrock's *managed* knowledge bases, not a vector knowledge base like these (one on S3 Vectors). trace's own MCP server
+offers the tools instead, and the agents already reach it.
+
+**Cost.** The vector store is S3 Vectors, which has no running cost when idle, where an OpenSearch Serverless
+collection per project would cost hundreds of dollars a month each. At the US East (N. Virginia) prices on the S3
+pricing page: storage $0.06 per GB-month (a 1,024-dimension float32 vector is 4 KB, plus its chunk text and metadata),
+PUT $0.20 per GB written, queries $2.50 per million plus $0.004 per TB processed for an index under 100,000 vectors.
+A project of 10,000 chunks is about 60 MB: under a cent a month to store, and about a cent to write in full. Each sync
+embeds only the documents that changed, with the embedding model's per-token price (Titan Text Embeddings V2 on
+the Bedrock pricing page; at about 300 tokens a chunk, a full re-embedding of 10,000 chunks is 3 million tokens), and
+each search embeds its query. The Bedrock pricing page lists per-call retrieval fees for its managed knowledge bases,
+not for a vector knowledge base you run yourself. The documents are ordinary S3 objects in the central bucket, whose
+old versions expire after 90 days.
+
+**Limits.** Bedrock reads at most 50 MB per file (trace stops at `knowledge.max_file_kb`); a metadata file is at most
+10 KB; S3 Vectors keeps at most 2 KB of filterable metadata, and Bedrock about 1 KB and 35 keys of custom metadata,
+per vector (trace writes at most 15 keys, each string cut at 300 characters); S3 Vectors does semantic search only,
+not hybrid; one ingestion job runs at a time per data source.
+
 ## Observability
 
 Every AgentCore runtime starts Node with the AWS Distro for OpenTelemetry (ADOT) auto-instrumentation
@@ -827,6 +947,7 @@ so with no SDK loaded (the CLI, local runs, tests) nothing is recorded and nothi
 | `claude.query` | each Agent SDK run | model, Claude's session id, turns, tokens (input, output, cache read and creation), the SDK's cost estimate |
 | `chat <model>` | each model response | model, response id, finish reason, the tools it asked for |
 | `execute_tool <name>` | each tool Claude used, and each call through the tool registry (the MCP server continues the job's trace) | tool name, where the call came from, the hardware flag, argument names and sizes, result size, duration, outcome |
+| `trace.kb.sync`, `trace.kb.search` | each knowledge base sync and search (src/tools/kb) | documents, objects, uploaded, unchanged, deleted, HeadObject calls, the ingestion job's status and its indexed and failed counts; the query's length, `top_k`, the filter's keys and the result count. Never paths, document text or the query |
 | `trace.gpu_job <kind>`, `trace.gpu.run <kind>` | each GPU job, and its runner inside AWS Batch (continued from `TRACEPARENT`) | kind, backend, job ids, seconds, exit code |
 
 **One trace from the workflow down.** The workflow's dispatch step (`worker-dispatch`, which has no OpenTelemetry SDK)
@@ -903,6 +1024,7 @@ outside AgentCore, either set `OTEL_SDK_DISABLED=true` or give it the variables 
 | `src/api`, `agent/Dockerfile` | The people-facing API, and the image AgentCore runs |
 | `src/login` | `trace login`, `trace remote …`, `trace users …` |
 | `src/harness` | The loop's logic, bundled into `harness/dist` for the GitHub actions in `harness/actions` |
+| `src/infra/knowledge.ts`, `src/tools/kb` | Each project's knowledge base: its CDK resources, and what goes in it, the sync, search and the kb tools |
 | `src/tools/calc`, `src/tools/kicad`, `src/tools/pcb`, `src/tools/sim`, `src/tools/datasheets`, `src/tools/parts`, `src/tools/hil`, `src/tools/firmware`, `src/tools/runs` | The tools |
 | `src/gpu`, `agent/Dockerfile.gpu` | GPU jobs: local or AWS Batch (`runJob`, `runBatch`), the in-container runner, and its image |
 | `python/kicad`, `python/orthoroute` | The scripts the autorouter jobs run: Freerouting through KiCad's pcbnew, and OrthoRoute's headless mode |

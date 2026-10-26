@@ -20,6 +20,8 @@
  *             DescribeJobs (no resource-level permissions exist)
  *   telemetry its own runtime's log group, X-Ray, PutMetricData in the bedrock-agentcore namespace
  *   model     Bedrock InvokeModel on Anthropic models and the account's inference profiles
+ *   knowledge bedrock:Retrieve and Start/Get/ListIngestionJob on its own knowledge base only (nested layout,
+ *             src/infra/knowledge.ts); its documents are S3 under projects/<slug>/kb/, inside its own prefix
  *
  * Its GitHub OIDC role (assumed by that repository's default-branch workflows only) may invoke only this runtime,
  * read the central store and write it the same conditional way (the worker.runner=actions fallback is the worker
@@ -53,8 +55,11 @@ import {
   PROJECT_TAG, githubSecretName, memoryName, projectDataPrefix, projectJobsPrefix, workerRuntimeName,
 } from '../core/project.js'
 import type { GpuCompute } from './gpu.js'
+import { ProjectKnowledgeBase } from './knowledge.js'
 import { EVENT_ACTIONS, RECORD_ACTIONS, TraceMemory } from './memory.js'
-import { GPU_JOB_VCPUS, type InfraProps, type ProjectRef, REPOSITORY_OUTPUT, projectOutputs, projectSettings } from './props.js'
+import {
+  GPU_JOB_VCPUS, type InfraProps, type ProjectRef, REPOSITORY_OUTPUT, kbEnabled, kbOutputs, knowledgeBaseOf, projectOutputs, projectSettings,
+} from './props.js'
 
 /** The central bucket's prefixes: the shared database, the access store beside it (src/core/access.ts), and the
  * installation's prompt overrides (src/prompts/store.ts). */
@@ -110,6 +115,8 @@ export interface ProjectProps {
   /** the GitHub OIDC provider's ARN */
   oidcProviderArn: string
   gpu: GpuCompute | null
+  /** the installation's S3 vector bucket (src/infra/knowledge.ts VectorStore): null without knowledge bases */
+  vectorBucketArn: string | null
   /** environment every worker gets (region, model, TRACE_HOME; its memory's and observability's are added here and later) */
   environment: Record<string, string>
 }
@@ -127,6 +134,8 @@ export class ProjectStack extends Construct {
   readonly generation: number
   /** its AgentCore memory (null when memory.enabled is false) */
   readonly memory: TraceMemory | null
+  /** its Bedrock knowledge base (null without one: knowledgeBase.enabled false for it, or the flat layout) */
+  readonly knowledgeBase: ProjectKnowledgeBase | null
 
   constructor(scope: Construct, id: string, p: ProjectProps) {
     super(scope, id)
@@ -215,6 +224,21 @@ export class ProjectStack extends Construct {
       memoryEnv.TRACE_MEMORY_ID = this.memory.memoryId
     }
 
+    // ------------------------------------------------------------------ its knowledge base (src/infra/knowledge.ts)
+    // nested layout only (props.ts kbEnabled); its documents are written under projects/<slug>/kb/, which this role
+    // (and the OIDC role below) already may write through projects/<slug>/*
+    this.knowledgeBase = p.vectorBucketArn && kbEnabled(cfg, repository)
+      ? new ProjectKnowledgeBase(this, 'Knowledge', {
+          prefix: cfg.prefix, repository, slug, hash, generation: settings.generation, settings: knowledgeBaseOf(cfg, repository),
+          bucket, vectorBucketArn: p.vectorBucketArn, removalPolicy: cfg.retainData ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
+        })
+      : null
+    const kbEnv: Record<string, string> = {}
+    if (this.knowledgeBase) {
+      for (const st of this.knowledgeBase.statements()) role.addToPolicy(st)
+      Object.assign(kbEnv, { TRACE_KB_ID: this.knowledgeBase.knowledgeBaseId, TRACE_KB_DATA_SOURCE_ID: this.knowledgeBase.dataSourceId })
+    }
+
     // ------------------------------------------------------------------ GPU jobs: its own definition and job role
     const gpuEnv: Record<string, string> = {}
     this.jobDefinitionName = null
@@ -278,6 +302,7 @@ export class ProjectStack extends Construct {
         TRACE_PROJECT_HOME: `s3://${bucket.bucketName}/${projectDataPrefix(repository)}`,
         TRACE_GITHUB_SECRET_ARN: this.secret.secretArn,
         ...memoryEnv,
+        ...kbEnv,
         ...gpuEnv,
       },
       tags: { [PROJECT_TAG]: slug, 'trace:installation': cfg.prefix },
@@ -307,6 +332,8 @@ export class ProjectStack extends Construct {
     this.actionsRole.addToPolicy(memoryState.copy())
     // the in-Actions fallback remembers as the worker does: its own memory, its own actors and namespaces
     if (this.memory) for (const st of memoryStatements(this.memory)) this.actionsRole.addToPolicy(st)
+    // and searches and syncs its own knowledge base (the kb-sync job on a push to the default branch, and the fallback)
+    if (this.knowledgeBase) for (const st of this.knowledgeBase.statements()) this.actionsRole.addToPolicy(st)
 
     for (const r of [role, this.actionsRole]) Tags.of(r).add(PROJECT_TAG, slug)
     Tags.of(this.secret).add(PROJECT_TAG, slug)
@@ -318,6 +345,12 @@ export class ProjectStack extends Construct {
     new CfnOutput(stack, outputs.secretArn, { value: this.secret.secretArn, description: `${slug}: its GitHub token secret` })
     if (this.jobDefinitionName) new CfnOutput(stack, outputs.jobDefinition, { value: this.jobDefinitionName, description: `${slug}: its GPU job definition` })
     if (this.memory) new CfnOutput(stack, outputs.memoryId, { value: this.memory.memoryId, description: `${slug}: its AgentCore memory (its worker's TRACE_MEMORY_ID)` })
+    // nested layout only, so these are always its nested stack's outputs, never the parent's
+    if (this.knowledgeBase) {
+      const kb = kbOutputs(repository)
+      new CfnOutput(stack, kb.knowledgeBaseId, { value: this.knowledgeBase.knowledgeBaseId, description: `${slug}: its knowledge base (TRACE_KB_ID)` })
+      new CfnOutput(stack, kb.dataSourceId, { value: this.knowledgeBase.dataSourceId, description: `${slug}: its knowledge base's data source (TRACE_KB_DATA_SOURCE_ID)` })
+    }
   }
 }
 
@@ -332,7 +365,7 @@ export class ProjectNestedStack extends NestedStack {
   readonly project: ProjectStack
 
   constructor(scope: Construct, id: string, p: ProjectProps) {
-    super(scope, id, { description: `trace: ${p.project.slug}'s worker runtime, roles, token secret, memory and job definitions`.slice(0, 1024) })
+    super(scope, id, { description: `trace: ${p.project.slug}'s worker runtime, roles, token secret, memory, knowledge base and job definitions`.slice(0, 1024) })
     this.project = new ProjectStack(this, `Project${p.project.hash}`, p)
     // whose nested stack this is: the installer reads each project's outputs here (the parent carries none of them)
     new CfnOutput(this, REPOSITORY_OUTPUT, { value: p.project.slug, description: 'The repository this nested stack is the project of' })

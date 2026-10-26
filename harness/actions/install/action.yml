@@ -22,6 +22,14 @@ inputs:
     description: The project's AgentCore memory (vars.TRACE_MEMORY_ID) for the memory_recall/memory_remember tools; empty leaves them out.
     required: false
     default: ''
+  kb-id:
+    description: The project's knowledge base (vars.TRACE_KB_ID) for kb_search and kb_status (and kb_sync in mcp-config-worker); empty leaves them out.
+    required: false
+    default: ''
+  kb-data-source-id:
+    description: Its data source (vars.TRACE_KB_DATA_SOURCE_ID), for kb_status and the worker's kb_sync.
+    required: false
+    default: ''
   memory-actor:
     description: The memory actor of mcp-config's session (worker-prompt's `memory-actor`, the specialist's).
     required: false
@@ -59,6 +67,8 @@ runs:
         MEMORY_ACTOR: ${{ inputs.memory-actor }}
         WORKER_MEMORY_ACTOR: ${{ inputs.worker-memory-actor }}
         MEMORY_SESSION: ${{ inputs.memory-session }}
+        KB_ID: ${{ inputs.kb-id }}
+        KB_DATA_SOURCE_ID: ${{ inputs.kb-data-source-id }}
       run: |
         set -euo pipefail
         root="$(cd "$AP/../../.." && pwd)"
@@ -81,6 +91,7 @@ runs:
             TRACE_HARDWARE: e.HARDWARE === "true" ? "1" : "0",
             ...(e.MEMORY_ID ? { TRACE_MEMORY_ID: e.MEMORY_ID, ...(e.MEMORY_SESSION ? { TRACE_MEMORY_SESSION: e.MEMORY_SESSION } : {}) } : {}),
             ...(e.AWS_REGION ? { AWS_REGION: e.AWS_REGION } : {}),
+            ...(e.KB_ID ? { TRACE_KB_ID: e.KB_ID, ...(e.KB_DATA_SOURCE_ID ? { TRACE_KB_DATA_SOURCE_ID: e.KB_DATA_SOURCE_ID } : {}) } : {}),
             ...extra,
           } } } })
           const memory = (actor) => (e.MEMORY_ID && actor ? { TRACE_MEMORY_ACTOR: actor } : {})

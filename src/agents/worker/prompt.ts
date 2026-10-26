@@ -35,7 +35,7 @@ export function composeTask(job: TaskLike, cfg: TraceConfig, branch: string, lay
   const from = JSON.stringify(job.requestedBy)
   p.add('worker.role', { repository: job.repository, where: WHERE }).add('worker.data.task')
   p.add('worker.request', { from, request: quoted(job.request) })
-  p.add('worker.tools')
+  p.add('worker.tools').add('worker.knowledge')
   p.add('worker.task', { branch, default_branch: cfg.branch, requested_by: job.requestedBy })
   addValidate(p, cfg)
   const esc = cfg.worker.escalate_to

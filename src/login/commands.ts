@@ -12,6 +12,8 @@
  *   trace remote memory list OWNER/REPO [--all] | deactivate OWNER/REPO RECORD_ID --reason "…" | reactivate OWNER/REPO RECORD_ID
  *                                                       (src/login/memory.ts)
  *   trace remote prompts list|get|set|reset|revert|history|diff|preview …  (src/login/prompts.ts)
+ *   trace remote kb search OWNER/REPO "query" [--top N] [--source S] [--kind K] [--path P] | sync OWNER/REPO [--force]
+ *                                                       (src/login/kb.ts)
  *   trace users list | invite EMAIL [--class user|guest|admin] | class EMAIL CLASS
  *              | assign EMAIL OWNER/REPO | unassign EMAIL OWNER/REPO | assignments [OWNER/REPO]
  *
@@ -24,6 +26,7 @@ import { CLASSES } from '../core/access.js'
 import { installation, saveInstallation, session } from '../core/client.js'
 import { parseCliValue } from '../core/config.js'
 import { ApiError, invokeApi } from './invoke.js'
+import { remoteKb } from './kb.js'
 import { remoteMemory } from './memory.js'
 import { remotePrompts } from './prompts.js'
 import { LoginError, NO_INSTALLATION, login, logout } from './oauth.js'
@@ -115,7 +118,7 @@ export async function cmdWhoami(_argv: string[]): Promise<number> {
 
 // ------------------------------------------------------------------ remote
 
-const REMOTE_USAGE = 'usage: trace remote projects | status OWNER/REPO | settings OWNER/REPO [KEY [VALUE|--unset]] | runs OWNER/REPO [--kind K] [--limit N] | task OWNER/REPO [--agent verify|impl|ams|emc|render] "request" | job ID | memory list|deactivate|reactivate OWNER/REPO … | prompts list|get|set|reset|revert|history|diff|preview …'
+const REMOTE_USAGE = 'usage: trace remote projects | status OWNER/REPO | settings OWNER/REPO [KEY [VALUE|--unset]] | runs OWNER/REPO [--kind K] [--limit N] | task OWNER/REPO [--agent verify|impl|ams|emc|render] "request" | job ID | memory list|deactivate|reactivate OWNER/REPO … | prompts list|get|set|reset|revert|history|diff|preview … | kb search|sync OWNER/REPO …'
 
 export async function cmdRemote(argv: string[]): Promise<number> {
   return guarded(async () => {
@@ -177,6 +180,7 @@ export async function cmdRemote(argv: string[]): Promise<number> {
       }
       case 'memory': return remoteMemory(rest)
       case 'prompts': return remotePrompts(rest)
+      case 'kb': return remoteKb(rest)
       case 'job': {
         if (!rest[0]) break
         show(await invokeApi('job', { id: rest[0] }))
