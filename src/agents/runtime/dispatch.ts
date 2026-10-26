@@ -29,7 +29,7 @@ export function sessionId(repository: string, item: Pick<WorkItem, 'number' | 's
 }
 
 export interface AgentCoreLike {
-  send(cmd: InvokeAgentRuntimeCommand): Promise<{ response?: { transformToString(): Promise<string> } | undefined; statusCode?: number | undefined }>
+  send(cmd: InvokeAgentRuntimeCommand, o?: { abortSignal?: AbortSignal }): Promise<{ response?: { transformToString(): Promise<string> } | undefined; statusCode?: number | undefined }>
 }
 
 export interface DispatchOptions {
@@ -42,6 +42,8 @@ export interface DispatchOptions {
   sessionId?: string
   /** The trace to continue (default: the active span's, when an OpenTelemetry SDK records one). */
   trace?: TraceContext
+  /** Stops the call when it aborts (a held status whose own caller went away). */
+  signal?: AbortSignal | undefined
 }
 
 // ------------------------------------------------------------------ trace context across the dispatch
@@ -100,7 +102,7 @@ export async function invoke(payload: Invocation, runtimeSessionId: string, opts
     payload: new TextEncoder().encode(JSON.stringify(body)),
     ...(t ? { traceParent: t.traceparent, ...(t.tracestate ? { traceState: t.tracestate } : {}), ...(t.baggage ? { baggage: t.baggage } : {}), ...(xray ? { traceId: xray } : {}) } : {}),
   }
-  const out = await client.send(new InvokeAgentRuntimeCommand(input))
+  const out = await client.send(new InvokeAgentRuntimeCommand(input), opts.signal ? { abortSignal: opts.signal } : undefined)
   const text = out.response ? await out.response.transformToString() : ''
   if (out.statusCode !== undefined && out.statusCode >= 300) throw new Error(`the agent runtime answered ${out.statusCode}: ${text.slice(0, 500)}`)
   try {

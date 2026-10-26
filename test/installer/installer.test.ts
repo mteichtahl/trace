@@ -100,6 +100,7 @@ const { apply, infraInput, layoutDeploys, layoutOf, mergeLibraryKeys, plan, reda
 const { InfraPropsSchema } = await import('../../src/infra/props.js')
 const { projectOutputs, projectHash } = await import('../../src/infra/props.js')
 const { createInstaller } = await import('../../src/installer/server.js')
+const { waitWithTimer } = await import('../../src/core/wait.js')
 const { seal, setVariable: realSetVariable, checkToken } = await vi.importActual<typeof import('../../src/installer/github.js')>('../../src/installer/github.js')
 const { installation, answers: savedAnswers } = await import('../../src/core/client.js')
 const { assignments, require_, projectsFor } = await import('../../src/core/access.js')
@@ -438,6 +439,32 @@ describe('the local server', () => {
     const planned = await call('/api/plan', { method: 'POST', key, body: JSON.stringify({ answers: ANSWERS }) })
     expect(JSON.parse(planned.body).steps).toHaveLength(11)
   })
+
+  it('checks a timer wait now on POST /api/check-now, with the key, JSON only and same-origin', async () => {
+    let checks = 0
+    let id = ''
+    const waiting = waitWithTimer<number>({
+      what: 'a test build', why: 'a test', intervalMs: 3_600_000,
+      now: () => Date.now() - 10_000, // its last check is 10 s old: past check now's 2 s gap
+      check: async () => (++checks >= 2 ? { done: true, value: checks } : { done: false, state: 'IN_PROGRESS' }),
+      report: (n) => { id = n.id },
+    })
+    await vi.waitFor(() => expect(id).not.toBe(''))
+    const body = JSON.stringify({ waitId: id })
+    expect((await call('/api/check-now', { method: 'POST', body })).status).toBe(401)
+    expect((await call('/api/check-now', { method: 'POST', key: 'wrong', body })).status).toBe(401)
+    expect((await call(`/api/check-now?k=${key}`, { method: 'POST', body })).status).toBe(401)
+    expect((await call('/api/check-now', { method: 'POST', key, body, type: 'text/plain' })).status).toBe(415)
+    expect((await call('/api/check-now', { method: 'POST', key, body, headers: { 'sec-fetch-site': 'cross-site' } })).status).toBe(403)
+    expect((await call('/api/check-now', { method: 'POST', key, body, headers: { origin: 'https://evil.example' } })).status).toBe(403)
+    expect((await call('/api/check-now', { method: 'POST', key, body: '{"waitId":"../x"}' })).status).toBe(400)
+    expect(checks).toBe(1)
+    const r = await call('/api/check-now', { method: 'POST', key, body })
+    expect(r).toEqual({ status: 200, body: '{"ok":true}' })
+    expect(await waiting).toMatchObject({ done: true, value: 2 })
+    // the wait has ended: nothing to wake
+    expect(JSON.parse((await call('/api/check-now', { method: 'POST', key, body })).body)).toEqual({ ok: false })
+  })
 })
 
 describe('adding a removed project again, its memory variable, the CPU queue and the GPU image', () => {
@@ -533,6 +560,19 @@ describe('adding a removed project again, its memory variable, the CPU queue and
     expect(order.at(-1)).toBe('local') // every other step is done before the GPU image is waited for
     expect(r.events.find((e) => e.type === 'step' && e.step?.id === 'gpu' && e.step.status === 'failed')?.step?.detail).toMatch(/failed in BUILD/)
     expect((r.events.at(-1)?.summary ?? []).join('\n')).toMatch(/GPU and CPU jobs cannot run until the GPU image is built.*run the installer again/)
+    // each check of the wait reaches the page as a `wait` event: the notice, and its line
+    const notice = { id: 'wait-abc123', what: 'the GPU image abc123 to build', source: 'timer' as const, startedAt: '2026-10-26T10:00:00.000Z', jobId: null, state: 'IN_PROGRESS',
+      lastCheckedAt: new Date().toISOString(), nextCheckAt: new Date(Date.now() + 30_000).toISOString(), intervalMs: 30_000, checks: 1, why: 'the installer runs on your computer' }
+    const w = await run(ANSWERS, {
+      outputs: async () => outputs, names: { deployed: async () => new Set(), taken: async () => [] },
+      gpuImage: async (o) => { o.report(notice); return { ok: true, detail: 'built' } },
+    })
+    const waitEvents = w.events.filter((e) => e.type === 'wait') as unknown as { step: string; wait: typeof notice; line: string }[]
+    expect(waitEvents).toHaveLength(1)
+    expect(waitEvents[0]).toMatchObject({ step: 'gpu', wait: notice })
+    expect(waitEvents[0]?.line).toMatch(/^Waiting for the GPU image abc123 to build \(in progress\)\. Checked just now; next check in (30|29) seconds\.$/)
+    const { EventSchema } = await import('../../src/installer/answers.js')
+    expect(EventSchema.safeParse(waitEvents[0]).success).toBe(true)
     // GPU off: nothing to wait for
     const off = await run({ ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: false } }, { names: { deployed: async () => new Set(), taken: async () => [] }, gpuImage: async () => { throw new Error('not called') } })
     expect(off.ok).toBe(true)

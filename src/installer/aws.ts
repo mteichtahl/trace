@@ -5,9 +5,10 @@
  * and whether trace is already installed (an update rather than a first install). And around the deploy: which
  * projects the stack has and which of a project's fixed names are already taken in the account (a removed project's
  * retained memory, its delivery sources and destinations, its secret in its recovery window), the stack's outputs
- * with each nested project stack's, the GPU image build the deploy started, and the AWS CodeConnections connection to
- * GitHub that the CodeBuild runners use (an authorized one reused, or the stack's own, waited on after the deploy
- * until a person authorizes it). `npm run deploy:ci` (src/infra/ci-deploy.ts) uses the same connection helpers.
+ * with each nested project stack's, the GPU image build the deploy started (a declared timer wait: AWS cannot send
+ * this computer CodeBuild's events), and the AWS CodeConnections connection to GitHub that the CodeBuild runners use
+ * (an authorized one reused, or the stack's own, waited on after the deploy until a person authorizes it).
+ * `npm run deploy:ci` (src/infra/ci-deploy.ts) uses the same connection helpers.
  *
  * The functions that call AWS around the deploy take their SDK clients as a parameter, so tests give them fakes.
  */
@@ -24,6 +25,7 @@ import { fromIni } from '@aws-sdk/credential-providers'
 import { loadSharedConfigFiles } from '@smithy/shared-ini-file-loader'
 import type { AwsCredentialIdentity } from '@smithy/types'
 import { CONNECTION_CREATED_OUTPUT, CONNECTION_OUTPUT, LAYOUT_OUTPUT, REPOSITORY_OUTPUT, connectionName, projectHash } from '../infra/props.js'
+import { type Check, type WaitNotice, waitWithTimer } from '../core/wait.js'
 import type { Answers, Secrets } from './answers.js'
 
 export async function profiles(): Promise<{ names: string[]; regions: Record<string, string> }> {
@@ -257,41 +259,71 @@ export function nameIndex(c: NameClients): { taken: (n: ProjectNames) => Promise
 
 const TERMINAL_FAILED = new Set(['FAILED', 'FAULT', 'STOPPED', 'TIMED_OUT'])
 
+/** Why the GPU image build is waited for on a timer. */
+export const GPU_WAIT_WHY = 'the installer runs on your computer, where AWS cannot send it the build\'s events'
+
+export interface GpuImageWait {
+  buildId: string
+  imageTag: string
+  startedAfter: Date
+  /** how often to check the build (default 30 s) */
+  pollMs?: number
+  /** how long to wait for it (default 3 hours) */
+  timeoutMs?: number
+  log?: (l: string) => void
+  /** after every check: the wait as it stands (what the installer page shows, with its countdown and Check now) */
+  report?: (n: WaitNotice) => void
+  signal?: AbortSignal
+  /** tests: the clock and the sleep between checks (waitWithTimer's) */
+  now?: () => number
+  sleep?: (ms: number, early: AbortSignal) => Promise<void>
+}
+
 /**
  * Wait for the GPU image build the deploy started (the stack does not wait for it: src/infra/gpu.ts), so the core is
  * up whatever happens to it. A build that failed before this run (an earlier deploy's: the same source does not
- * start another) is started again once, with the same image tag; a build this run's deploy started and that failed is
- * reported, not retried (the next installer run retries it). Returns whether the image is there, and what happened.
+ * start another) is started again once, with the same image tag, and checked straight away; a build this run's deploy
+ * started and that failed is reported, not retried (the next installer run retries it). Returns whether the image is
+ * there, and what happened.
+ *
+ * A timer, every pollMs (30 s) until timeoutMs (3 hours): the installer runs on the person's own computer, which AWS
+ * cannot send CodeBuild's events to. It is waitWithTimer's (core/wait.ts), so the wait is on the record with when it
+ * was last checked and when it is next, `report` hears every check, and checkNow(id) checks at once.
  */
-export async function ensureGpuImage(
-  codebuild: Pick<CodeBuildClient, 'send'>, o: { buildId: string; imageTag: string; startedAfter: Date; pollMs?: number; timeoutMs?: number; log?: (l: string) => void },
-): Promise<{ ok: boolean; detail: string }> {
+export async function ensureGpuImage(codebuild: Pick<CodeBuildClient, 'send'>, o: GpuImageWait): Promise<{ ok: boolean; detail: string }> {
   const project = o.buildId.split(':')[0] ?? ''
   if (!project || !o.imageTag) return { ok: false, detail: `no GPU image build to wait for (${o.buildId || 'none'})` }
-  const poll = o.pollMs ?? 30_000
-  const deadline = Date.now() + (o.timeoutMs ?? 3 * 3600_000)
+  const now = o.now ?? Date.now
   let id = o.buildId
   let retried = false
-  for (;;) {
-    const b = (await codebuild.send(new BatchGetBuildsCommand({ ids: [id] }))).builds?.[0]
-    const status = b?.buildStatus
-    if (status === 'SUCCEEDED') return { ok: true, detail: `the GPU image ${o.imageTag} is built (${id})` }
-    const before = !b?.startTime || b.startTime.getTime() < o.startedAfter.getTime()
-    if (!b || (status && TERMINAL_FAILED.has(status))) {
-      if (!retried && before) {
-        const r = await codebuild.send(new StartBuildCommand({ projectName: project, environmentVariablesOverride: [{ name: 'IMAGE_TAG', value: o.imageTag }] }))
-        if (!r.build?.id) throw new Error('CodeBuild started no build')
-        o.log?.(`the GPU image build ${id} ${b ? status?.toLowerCase() : 'is gone'}: started it again (${r.build.id})`)
-        id = r.build.id
-        retried = true
-        continue
+  const look = async (): Promise<Check<{ ok: boolean; detail: string }>> => {
+    for (;;) {
+      const b = (await codebuild.send(new BatchGetBuildsCommand({ ids: [id] }))).builds?.[0]
+      const status = b?.buildStatus
+      if (status === 'SUCCEEDED') return { done: true, value: { ok: true, detail: `the GPU image ${o.imageTag} is built (${id})` }, state: status }
+      const before = !b?.startTime || b.startTime.getTime() < o.startedAfter.getTime()
+      if (!b || (status && TERMINAL_FAILED.has(status))) {
+        if (!retried && before) {
+          const r = await codebuild.send(new StartBuildCommand({ projectName: project, environmentVariablesOverride: [{ name: 'IMAGE_TAG', value: o.imageTag }] }))
+          if (!r.build?.id) throw new Error('CodeBuild started no build')
+          o.log?.(`the GPU image build ${id} ${b ? status?.toLowerCase() : 'is gone'}: started it again (${r.build.id})`)
+          id = r.build.id
+          retried = true
+          continue
+        }
+        const phase = b?.phases?.find((ph) => ph.phaseStatus && ph.phaseStatus !== 'SUCCEEDED')
+        return { done: true, value: { ok: false, detail: `the GPU image build ${id} ${status?.toLowerCase() ?? 'failed'}${phase ? ` in ${phase.phaseType}` : ''} (logs: ${b?.logs?.deepLink ?? 'the CodeBuild console'})` }, state: status ?? 'FAILED' }
       }
-      const phase = b?.phases?.find((ph) => ph.phaseStatus && ph.phaseStatus !== 'SUCCEEDED')
-      return { ok: false, detail: `the GPU image build ${id} ${status?.toLowerCase() ?? 'failed'}${phase ? ` in ${phase.phaseType}` : ''} (logs: ${b?.logs?.deepLink ?? 'the CodeBuild console'})` }
+      return { done: false, state: status ?? 'UNKNOWN' }
     }
-    if (Date.now() > deadline) return { ok: false, detail: `the GPU image build ${id} is still running; run the installer again later to check it` }
-    await new Promise((r) => setTimeout(r, poll))
   }
+  const r = await waitWithTimer({
+    what: `the GPU image ${o.imageTag} to build`, why: GPU_WAIT_WHY, check: look,
+    intervalMs: Math.max(o.pollMs ?? 30_000, 1), deadlineAt: now() + (o.timeoutMs ?? 3 * 3600_000), now,
+    ...(o.report ? { report: o.report } : {}), ...(o.signal ? { signal: o.signal } : {}), ...(o.sleep ? { sleep: o.sleep } : {}),
+  })
+  if (r.done) return r.value
+  return { ok: false, detail: r.reason === 'aborted' ? `stopped waiting for the GPU image build ${id}; it carries on, and the next installer run checks it` : `the GPU image build ${id} is still running; run the installer again later to check it` }
 }
 
 /**
@@ -453,6 +485,8 @@ export interface ConnectionWait {
   repos: readonly string[]
   /** each line to show: the instructions once, then when the next check is */
   report: (line: string) => void
+  /** after every check: the wait as it stands (a page shows it with a countdown and Check now: core/wait.ts) */
+  onWait?: (n: WaitNotice) => void
   /** who is waiting, as the messages name it (default: the installer) */
   tool?: string
   pollMs?: number
@@ -478,26 +512,42 @@ export async function waitForConnection(c: Connections, conn: { arn: string; nam
   const poll = o.pollMs ?? CONNECTION_POLL_MS
   const timeout = o.timeoutMs ?? CONNECTION_TIMEOUT_MS
   const now = o.now ?? Date.now
-  const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   const tool = o.tool ?? 'the installer'
   const url = connectionsConsoleUrl(o.region)
   const deadline = now() + timeout
   const read = async (): Promise<string> => (await c.send(new GetConnectionCommand({ ConnectionArn: conn.arn }))).Connection?.ConnectionStatus ?? ''
-  let status = conn.status || await read()
+  let first = conn.status || ''
   let told = false
-  for (;;) {
-    if (status === 'AVAILABLE') return
-    if (status === 'ERROR') throw new Error(`the GitHub connection ${conn.name} is in status ERROR: delete it at ${url} and run ${tool} again, or give the ARN of another connection`)
-    if (!told) {
-      o.report(`The GitHub connection ${conn.name} is waiting for a person to authorize it (once for this AWS account and region). Open ${url}, choose ${conn.name}, then "Update pending connection": that installs or picks the AWS Connector for GitHub app. Give the app access to ${o.repos.join(', ')}. ${tool.replace(/^the /, 'The ')} carries on by itself once it is authorized.`)
-      told = true
-    }
-    if (now() + poll > deadline) {
-      const minutes = Math.round(timeout / 60_000)
-      throw new Error(`the GitHub connection ${conn.name} was still not authorized after ${minutes} minute${minutes === 1 ? '' : 's'}. Authorize it at ${url} ("Update pending connection"), then run ${tool} again: it resumes from here with the same connection`)
-    }
-    o.report(`Waiting for ${conn.name} to be authorized (status ${status || 'unknown'}): checking again at ${clockTime(new Date(now() + poll))}.`)
-    await sleep(poll)
-    status = await read()
-  }
+  // a timer: CodeConnections sends no event when a person authorizes a connection, and this runs on a computer AWS
+  // cannot reach anyway. Every check is on the record (Check now included: right after authorizing is when it counts)
+  const r = await waitWithTimer<boolean>({
+    what: `${conn.name} to be authorized`,
+    why: CONNECTION_WAIT_WHY,
+    intervalMs: poll,
+    now,
+    ...(o.sleep ? { sleep: (ms: number) => o.sleep!(ms) } : {}),
+    check: async () => {
+      const status = first || await read()
+      first = ''
+      if (status === 'AVAILABLE') return { done: true, value: true, state: status }
+      if (status === 'ERROR') throw new Error(`the GitHub connection ${conn.name} is in status ERROR: delete it at ${url} and run ${tool} again, or give the ARN of another connection`)
+      if (!told) {
+        o.report(`The GitHub connection ${conn.name} is waiting for a person to authorize it (once for this AWS account and region). Open ${url}, choose ${conn.name}, then "Update pending connection": that installs or picks the AWS Connector for GitHub app. Give the app access to ${o.repos.join(', ')}. ${tool.replace(/^the /, 'The ')} carries on by itself once it is authorized.`)
+        told = true
+      }
+      // no check would land before the deadline: stop here rather than look once more at it
+      if (now() + poll > deadline) return { done: true, value: false, state: status || 'unknown' }
+      return { done: false, state: status || 'unknown' }
+    },
+    report: (n) => {
+      o.onWait?.(n)
+      if (n.nextCheckAt) o.report(`Waiting for ${conn.name} to be authorized (status ${n.state ?? 'unknown'}): checking again at ${clockTime(new Date(n.nextCheckAt))}.`)
+    },
+  })
+  if (r.done && r.value) return
+  const minutes = Math.round(timeout / 60_000)
+  throw new Error(`the GitHub connection ${conn.name} was still not authorized after ${minutes} minute${minutes === 1 ? '' : 's'}. Authorize it at ${url} ("Update pending connection"), then run ${tool} again: it resumes from here with the same connection`)
 }
+
+/** Why the connection wait is a timer (shown with it). */
+export const CONNECTION_WAIT_WHY = 'AWS sends no event when a person authorizes a GitHub connection'

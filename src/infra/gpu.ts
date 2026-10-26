@@ -14,6 +14,8 @@
  *                    (<prefix>-cpu), for the CPU-heavy jobs sent remote (openEMS, Verilator, formal, nextpnr). It
  *                    runs the same image: a CUDA runtime base image starts and runs CPU programs without a GPU (the
  *                    CUDA libraries are only loaded by the programs that use them, which these jobs do not)
+ *   job events       none here: each project has its own SNS topic and EventBridge rule for its jobs' state changes
+ *                    (src/infra/project.ts), matching these queues (jobQueueArns) and that project's own definitions
  *   job definitions  per project (addProjectJob, called by src/infra/project.ts): a GPU one asking for 1 GPU, 4 vCPUs
  *                    and 14 GiB, and (CPU queue) a CPU one asking for cpu.vcpus and cpu.memoryMiB, both with the
  *                    project's one job role that may read and write only that project's jobs/<slug>/ prefix.
@@ -77,6 +79,10 @@ export class GpuCompute extends Construct {
   /** the GPU image build the deploy started (its CodeBuild build id) */
   readonly imageBuildId: string
   readonly logGroup: logs.LogGroup
+  /** the queues' ARNs: the GPU one, and the CPU one when there is one (each project's job-event rule matches them) */
+  get jobQueueArns(): string[] {
+    return [this.queue.jobQueueArn, ...(this.cpuQueue ? [this.cpuQueue.jobQueueArn] : [])]
+  }
   /** every project's job role (observability lets them write spans) */
   readonly jobRoles: iam.Role[] = []
   private readonly image: CustomResource

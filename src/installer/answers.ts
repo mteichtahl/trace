@@ -157,10 +157,28 @@ export const StepSchema = z.object({
 })
 export type Step = z.infer<typeof StepSchema>
 
-/** A line of progress streamed to the page. */
+/** A timer wait as the page shows it (core/wait.ts WaitNotice; times are ISO 8601). */
+export const WaitNoticeSchema = z.object({
+  id: z.string(),
+  what: z.string(),
+  source: z.enum(['event', 'timer']),
+  startedAt: z.string(),
+  jobId: z.string().nullable().default(null),
+  state: z.string().nullable(),
+  lastCheckedAt: z.string().nullable(),
+  nextCheckAt: z.string().nullable(),
+  intervalMs: z.number().nullable(),
+  checks: z.number(),
+  why: z.string().nullable(),
+})
+export type WaitNoticeView = z.infer<typeof WaitNoticeSchema>
+
+/** A line of progress streamed to the page. `wait`: after every check of a timer wait, the wait as it stands and
+ * its plain-language line (describeWait); the page counts down to nextCheckAt itself and offers Check now. */
 export const EventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('step'), step: StepSchema }),
   z.object({ type: z.literal('log'), step: z.string(), line: z.string() }),
+  z.object({ type: z.literal('wait'), step: z.string(), wait: WaitNoticeSchema, line: z.string() }),
   z.object({ type: z.literal('done'), ok: z.boolean(), summary: z.array(z.string()) }),
 ])
 export type InstallEvent = z.infer<typeof EventSchema>

@@ -233,10 +233,11 @@ In the example, the blue segments are the time to fix: Capture and Layout each w
 | What trace waits on | How trace hears about it | What the person sees |
 | --- | --- | --- |
 | Pushes, pull requests, reviews, test runs | GitHub sends an event | The change, at once |
-| Agent and worker jobs | The job reports each step as it happens | Live progress and the current step |
-| Graphics card jobs (renders, routing) | AWS sends a job-state event | Live state; today trace checks every 1.5 to 30 seconds |
-| Building the agents' container image | AWS sends a build-state event | Live state; today trace checks every 30 seconds |
-| Knowledge base updates | Checked every 10 seconds while one runs | Progress with the next check time |
+| Agent and worker jobs | The job reports each step as it happens; a specialist waiting on the worker hears the moment it ends | Live progress and the current step |
+| The pull-request update queue | GitHub sends an event on each merge and each finished build; a half-hourly run is a safety net | The queue moves at once |
+| Graphics card jobs (renders, routing) | AWS sends a job-state event to a queue made for that job; one check at 30 seconds, one at 90 seconds, then every 5 minutes in case an event is lost | Live state, the moment it changes |
+| Building the agents' container image (installer) | Checked every 30 seconds: the installer runs on your computer, where AWS cannot send it events | Last checked, a live countdown to the next check, Check now |
+| Knowledge base updates | Checked every 10 seconds while one runs (Bedrock sends no event when an ingestion job finishes) | Each check as it happens, with the next check time and Check now |
 | Part stock and prices at JLCPCB | Checked daily and at every gate (no event feed known) | Last checked, next check, Check now |
 | JLCPCB order status | Checked on a timer once an order is placed (no event feed known) | Last checked, next check, Check now |
 | Bench instruments (for example a scope capture) | Checked every tenth of a second; the instrument sends no event | A progress bar during the capture |
@@ -820,7 +821,7 @@ trace today is strongest in Prove, Layout and Sign-off; the journey's ends (Defi
 | No revisions | All | One design, versioned by git only | Revisions that carry requirements, waivers and results forward |
 | Nothing after acceptance | Certify to Sustain | Pre-compliance estimates only | A lab test pack, DFM and DFT review, a manufacturing test procedure, and a scheduled lifecycle watch |
 | No cost or schedule view | All | Run records hold no cost; nothing records stage times | A ledger of spent, committed and forecast cost (with AWS cost-allocation tags per project) and stage timing with waits |
-| Timers where events exist | All | Graphics card jobs check AWS every 1.5 to 30 s; image builds every 30 s; a handed-off worker job every 15 s; knowledge base updates every 10 s. The worker and the pull-request sweep run on hourly and half-hourly schedules | Subscriptions to AWS job and build events, a job-finished event from the agent runtime, work started by GitHub events, and one live connection to the web app. Any timer left declares its interval and shows the next check |
+| No screen follows the live updates yet | All | Job status and tools' waits can be held until something changes (the API's `job` and `tools.waits`), with each wait's line and Check now; nothing shows them yet | The web app follows them: each wait's line, a countdown to its next check, and a Check now button |
 
 ## Decisions
 

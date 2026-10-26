@@ -161,6 +161,30 @@ describe('the trace stack', () => {
       expect(submit?.Condition).toEqual({ StringEquals: { 'aws:RequestTag/trace:project': c.repo } })
       expect(s.find((x) => x.Sid === 'ProjectGpuTerminate')?.Condition).toEqual({ StringEquals: { 'aws:ResourceTag/trace:project': c.repo } })
       expect(s.find((x) => x.Sid === 'ProjectGpuTag')?.Condition?.StringEqualsIfExists).toEqual({ 'aws:ResourceTag/trace:project': c.repo })
+      // waiting on its jobs' events: its own wait queues by name, and its own topic, with those queues as the only endpoint
+      const ownTopic = new RegExp(`^\\{"Ref":"Project${c.h}JobEvents[0-9A-F]{8}"\\}$`)
+      const waitQueues = { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, `:sqs:us-east-1:123456789012:trace-${c.h}-wait-*`]] }
+      const queues = s.find((x) => x.Sid === 'ProjectGpuWaitQueues')
+      expect(queues?.Action).toEqual(['sqs:CreateQueue', 'sqs:DeleteQueue', 'sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes', 'sqs:SetQueueAttributes', 'sqs:TagQueue'])
+      expect(queues?.Resource).toEqual(waitQueues)
+      // ListQueues has no resource-level permission: a statement of its own, nothing else with it
+      expect(s.find((x) => x.Sid === 'ProjectGpuWaitListQueues')).toMatchObject({ Action: 'sqs:ListQueues', Resource: '*' })
+      expect(s.filter((x) => actionsOf(x).some((a) => a.startsWith('sqs:')))).toHaveLength(2)
+      const listSubs = s.find((x) => x.Sid === 'ProjectGpuWaitListSubscriptions')
+      expect(listSubs?.Action).toBe('sns:ListSubscriptionsByTopic')
+      expect(JSON.stringify(listSubs?.Resource)).toMatch(ownTopic)
+      const sub = s.find((x) => x.Sid === 'ProjectGpuWaitSubscribe')
+      expect(sub?.Action).toBe('sns:Subscribe')
+      expect(JSON.stringify(sub?.Resource)).toMatch(ownTopic)
+      expect(sub?.Condition).toEqual({ StringEquals: { 'sns:Protocol': 'sqs' }, StringLike: { 'sns:Endpoint': waitQueues } })
+      const unsub = s.find((x) => x.Sid === 'ProjectGpuWaitUnsubscribe')
+      expect(unsub?.Action).toBe('sns:Unsubscribe')
+      const topicRef = { Ref: expect.stringMatching(new RegExp(`^Project${c.h}JobEvents`)) }
+      expect(unsub?.Resource).toEqual([topicRef, { 'Fn::Join': ['', [topicRef, ':*']] }])
+      // no statement names any other project's topic
+      expect(text).not.toMatch(new RegExp(`Project${c.other.h}JobEvents`))
+      expect(text).not.toContain(`${c.other.h}-batch-events`)
+      expect(s.filter((x) => actionsOf(x).some((a) => a.startsWith('sns:')))).toHaveLength(3)
       // telemetry: its own runtime's log group
       expect(text).toContain(`/aws/bedrock-agentcore/runtimes/trace_w_${c.h}-*`)
       expect(text).not.toContain('/aws/bedrock-agentcore/runtimes/*')
@@ -303,6 +327,53 @@ describe('the trace stack', () => {
     t.resourceCountIs('AWS::CloudFormation::CustomResource', 2) // the agent image and the GPU image
   })
 
+  it("sends each project its own jobs' state changes, on its own topic that only its own rule may publish to", () => {
+    // none in the parent: each project's are in its nested stack
+    syn.parent.resourceCountIs('AWS::SNS::Topic', 0)
+    syn.parent.resourceCountIs('AWS::Events::Rule', 0)
+    t.resourceCountIs('AWS::SNS::Topic', 2)
+    t.resourceCountIs('AWS::Events::Rule', 2)
+    t.resourceCountIs('AWS::SNS::TopicPolicy', 2)
+    for (const [repo, h, oh] of [[A, HA, HB], [B, HB, HA]] as const) {
+      const n = nestedOf(syn, repo)
+      n.hasResourceProperties('AWS::SNS::Topic', { TopicName: `trace-${h}-batch-events`, Tags: [{ Key: 'trace:project', Value: repo }] })
+      const rules = Object.entries(n.findResources('AWS::Events::Rule')) as [string, { Properties: { Name: string; EventPattern: Record<string, unknown>; Targets: { Arn: unknown }[] } }][]
+      expect(rules).toHaveLength(1)
+      const [ruleId, rule] = rules[0] as (typeof rules)[number]
+      expect(rule.Properties.Name).toBe(`trace-${h}-batch-events`)
+      expect(rule.Properties.EventPattern).toMatchObject({ source: ['aws.batch'], 'detail-type': ['Batch Job State Change'] })
+      expect(Object.keys(rule.Properties.EventPattern).sort()).toEqual(['detail', 'detail-type', 'source'])
+      const detail = rule.Properties.EventPattern.detail as { jobQueue: unknown[]; jobDefinition: unknown[] }
+      expect(Object.keys(detail).sort()).toEqual(['jobDefinition', 'jobQueue'])
+      // the stack's two queues (the nested stack's parameters of them)
+      expect(detail.jobQueue).toHaveLength(2)
+      for (const q of detail.jobQueue) expect(q).toEqual({ Ref: expect.stringMatching(/Queue/) })
+      // only its own definitions, GPU and CPU, by ARN prefix without the revision
+      const defs = JSON.stringify(detail.jobDefinition)
+      expect(detail.jobDefinition).toHaveLength(2)
+      for (const d of [`trace-gpu-${h}:`, `trace-cpu-${h}:`]) expect(defs).toContain(`:job-definition/${d}`)
+      expect(defs).not.toContain(oh)
+      for (const d of detail.jobDefinition) expect(Object.keys(d as object)).toEqual(['prefix'])
+      expect(rule.Properties.Targets).toEqual([expect.objectContaining({ Arn: { Ref: expect.stringMatching(new RegExp(`^Project${h}JobEvents`)) } })])
+      // its topic: published to by EventBridge for its own rule only
+      const policies = Object.values(n.findResources('AWS::SNS::TopicPolicy')) as { Properties: { Topics: unknown[]; PolicyDocument: { Statement: Statement[] } } }[]
+      expect(policies).toHaveLength(1)
+      expect(policies[0]?.Properties.Topics).toEqual([{ Ref: expect.stringMatching(new RegExp(`^Project${h}JobEvents`)) }])
+      const allow = policies[0]?.Properties.PolicyDocument.Statement.filter((x) => x.Effect === 'Allow') ?? []
+      expect(allow).toEqual([expect.objectContaining({
+        Principal: { Service: 'events.amazonaws.com' }, Action: 'sns:Publish', Condition: { ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': [ruleId, 'Arn'] } } },
+      })])
+      expect(ruleId).toMatch(new RegExp(`^Project${h}JobEventsRule`))
+      // its worker is told its own topic
+      n.hasResourceProperties('AWS::BedrockAgentCore::Runtime', { EnvironmentVariables: Match.objectLike({ TRACE_BATCH_EVENTS_TOPIC: { Ref: Match.stringLikeRegexp(`^Project${h}JobEvents`) } }) })
+    }
+    // no role anywhere names a project's topic but that project's own worker role
+    for (const [id, p] of Object.entries(t.findResources('AWS::IAM::Policy'))) {
+      const body = JSON.stringify(p)
+      for (const h of [HA, HB]) if (body.includes(`Project${h}JobEvents`)) expect(id, `${id} names ${h}'s topic`).toMatch(new RegExp(`^Project${h}RuntimeRole`))
+    }
+  })
+
   it('tells each worker its queue, job definition and bucket', () => {
     for (const h of [HA, HB]) {
       t.hasResourceProperties('AWS::BedrockAgentCore::Runtime', {
@@ -315,10 +386,12 @@ describe('the trace stack', () => {
   it('creates none of the GPU side when gpu.enabled is false', () => {
     const off = InfraPropsSchema.parse({ ...props, gpu: { enabled: false } })
     const t2 = synth(off, 'NoGpu').all
-    for (const r of ['AWS::Batch::ComputeEnvironment', 'AWS::Batch::JobQueue', 'AWS::Batch::JobDefinition', 'AWS::EC2::VPC']) t2.resourceCountIs(r, 0)
+    for (const r of ['AWS::Batch::ComputeEnvironment', 'AWS::Batch::JobQueue', 'AWS::Batch::JobDefinition', 'AWS::EC2::VPC', 'AWS::SNS::Topic', 'AWS::Events::Rule']) t2.resourceCountIs(r, 0)
     t2.resourceCountIs('AWS::CloudFormation::CustomResource', 1)
     const json = JSON.stringify(t2.toJSON())
     expect(json).not.toContain('TRACE_GPU_QUEUE')
+    expect(json).not.toContain('TRACE_BATCH_EVENTS_TOPIC')
+    expect(json).not.toContain('sqs:')
     expect(json).not.toContain('batch:SubmitJob')
     const outputs = Object.keys(t2.toJSON().Outputs as Record<string, unknown>)
     expect(outputs).not.toContain('GpuJobQueue')

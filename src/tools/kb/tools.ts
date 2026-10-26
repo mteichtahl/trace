@@ -60,6 +60,8 @@ export interface SyncHereOptions {
   /** sync a tree that is not the default branch (it then becomes what the knowledge base holds) */
   allowBranch?: boolean
   env?: Record<string, string | undefined>
+  /** a plain line each time the ingestion wait's state changes (the CLI prints it to stderr) */
+  progress?: (line: string) => void
   /** for tests */
   clients?: { s3: KbS3; ingest: IngestClient }
   datasheets?: DatasheetSource | null
@@ -96,7 +98,7 @@ export async function syncHere(o: SyncHereOptions = {}): Promise<SyncHereResult>
     const r = await syncKb({ bucket: t.bucket, prefix: t.prefix, knowledgeBaseId: t.knowledgeBaseId, dataSourceId: t.dataSourceId }, content.docs,
       { s3: clients.s3, ingest: clients.ingest, db }, {
         commit, ...(o.force ? { force: true } : {}), ...(o.dryRun ? { dryRun: true } : {}),
-        waitMs: Math.round((o.waitMinutes ?? 15) * 60_000),
+        waitMs: Math.round((o.waitMinutes ?? 15) * 60_000), ...(o.progress ? { progress: o.progress } : {}),
       })
     return { ...r, repository: t.repository, commit, branch, skipped: content.skipped.slice(0, 200), datasheets: content.parts, kicad: content.kicad }
   } finally {
@@ -150,7 +152,16 @@ export const sync = defineTool({
     allow_branch: z.boolean().default(false).describe('sync even though this checkout is not the default branch'),
   }),
   available: configured,
-  run: async (a) => syncHere({ force: a.force, waitMinutes: a.wait_minutes, dryRun: a.dry_run, allowBranch: a.allow_branch }),
+  run: async (a) => {
+    // the wait lines, as they happened: in the answer for whoever asked (the API's kb.sync), and live meanwhile as
+    // changes to the wait's record (a held status answer on this runtime: the API's kb.waits)
+    const progress: { at: string; line: string }[] = []
+    const r = await syncHere({
+      force: a.force, waitMinutes: a.wait_minutes, dryRun: a.dry_run, allowBranch: a.allow_branch,
+      progress: (line) => { progress.push({ at: new Date().toISOString(), line }) },
+    })
+    return { ...r, progress }
+  },
 })
 
 export const tools = [search, status, sync]

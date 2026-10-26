@@ -8,8 +8,15 @@
  *                                                                           TRACE_HOME and the project (--repo, else
  *                                                                           TRACE_PROJECT, GITHUB_REPOSITORY or origin)
  *
+ *   `trace kb sync` waits for the ingestion job on a timer (Bedrock sends no event when one finishes) and says so on
+ *   stderr each time its state changes: what it is waiting for, when it last checked and when it checks next.
+ *
  *   trace remote kb search OWNER/REPO "query" [--top N] [--source S] [--kind K] [--path P]   through the API
  *   trace remote kb sync OWNER/REPO [--force] [--wait MINUTES]                                 (signed in)
+ *
+ *   `trace remote kb sync` prints the same lines on stderr while the worker waits: it follows the API's tools.waits,
+ *   a held call that answers the moment the wait is checked or changes (no asking on a timer), and stops when the
+ *   sync answers. Lines it could not follow live come from the answer's `progress` instead.
  */
 import { parseArgs } from 'node:util'
 import { z } from 'zod'
@@ -88,7 +95,7 @@ export async function cmdKb(argv: string[], env: Record<string, string | undefin
     if (sub === 'sync') {
       const wait = values.wait === undefined ? 15 : Number(values.wait)
       if (!Number.isFinite(wait) || wait < 0) { err('trace kb sync: --wait takes minutes'); return 2 }
-      const r = await syncHere({ env: e, force: values.force === true, dryRun: values['dry-run'] === true, allowBranch: values['allow-branch'] === true, waitMinutes: wait })
+      const r = await syncHere({ env: e, force: values.force === true, dryRun: values['dry-run'] === true, allowBranch: values['allow-branch'] === true, waitMinutes: wait, progress: err })
       if (values.json) out(JSON.stringify(r, null, 2))
       else printSync(r)
       return r.ingestion && ['FAILED', 'STOPPED'].includes(r.ingestion.status) ? 1 : 0
@@ -113,6 +120,33 @@ export async function cmdKb(argv: string[], env: Record<string, string | undefin
 
 const RemoteHit = z.object({ text: z.string(), score: z.number().nullable(), citation: z.string() }).loose()
 
+const SyncProgress = z.object({ progress: z.array(z.object({ line: z.string() }).loose()).default([]) }).loose()
+const ToolWaits = z.object({
+  version: z.number().nullable(),
+  waits: z.array(z.object({ id: z.string(), what: z.string(), text: z.string() }).loose()),
+}).loose()
+
+/**
+ * Print each wait line of the project's tool calls as it happens, until `signal`: tools.waits, held on the worker
+ * until a wait opens, is checked, changes or ends. A failed call ends the following quietly (the sync's own answer
+ * still carries its lines).
+ */
+export async function followToolWaits(repo: string, say: (line: string) => void, signal: AbortSignal, invoke: typeof invokeApi = invokeApi): Promise<void> {
+  let after: number | null = null
+  while (!signal.aborted) {
+    let r: z.infer<typeof ToolWaits>
+    try {
+      r = ToolWaits.parse(await invoke('tools.waits', { repo, ...(after !== null ? { afterVersion: after, waitS: 60 } : {}) }, { signal }))
+    } catch {
+      return
+    }
+    for (const w of r.waits) if (/knowledge base/i.test(w.what)) say(w.text)
+    // a worker without change counters cannot hold the answer: stop rather than ask again and again
+    if (r.version === null) return
+    after = r.version
+  }
+}
+
 /** `trace remote kb …` (the caller handles errors and prints usage on 2). */
 export async function remoteKb(argv: string[]): Promise<number> {
   const [sub, ...rest] = argv
@@ -133,7 +167,20 @@ export async function remoteKb(argv: string[]): Promise<number> {
     }
     case 'sync': {
       if (!repo) break
-      const r = await invokeApi('kb.sync', { repo: Repo.parse(repo), ...(values.force ? { force: true } : {}), ...(values.wait !== undefined ? { wait_minutes: Number(values.wait) } : {}) })
+      const slug = Repo.parse(repo)
+      const seen = new Set<string>()
+      const say = (line: string): void => { if (!seen.has(line)) { seen.add(line); err(line) } }
+      const stop = new AbortController()
+      const following = followToolWaits(slug, say, stop.signal)
+      let r: unknown
+      try {
+        r = await invokeApi('kb.sync', { repo: slug, ...(values.force ? { force: true } : {}), ...(values.wait !== undefined ? { wait_minutes: Number(values.wait) } : {}) })
+      } finally {
+        stop.abort()
+        await following
+      }
+      // what the live lines missed (an older worker, or a wait that began and ended between two answers)
+      for (const p of SyncProgress.safeParse(r).data?.progress ?? []) say(p.line)
       out(JSON.stringify(r, null, 2))
       return 0
     }

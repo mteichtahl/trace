@@ -42,9 +42,25 @@ export const SweepPayload = z.object({
   trace: TraceContextSchema.optional(),
 }).strict()
 
+/** The longest a status invocation is held (s), below undici's 300 s headers timeout. */
+export const MAX_STATUS_WAIT_S = 240
+
+/**
+ * `afterVersion` with `waitS`: hold the answer until a job in scope (jobId's, or any) changes after that version (the
+ * `version` an earlier answer gave), or waitS passes; then answer as usual. Without both, answered at once.
+ */
 export const StatusPayload = z.object({
   kind: z.literal('status'),
   jobId: z.string().max(64).optional(),
+  afterVersion: z.number().int().min(0).optional(),
+  waitS: z.number().min(0).max(MAX_STATUS_WAIT_S).optional(),
+  trace: TraceContextSchema.optional(),
+}).strict()
+
+/** Wake one timer wait of this process (src/core/wait.ts checkNow) for a check now: what a person's "check now" does. */
+export const CheckNowPayload = z.object({
+  kind: z.literal('check-now'),
+  waitId: z.string().min(1).max(64),
   trace: TraceContextSchema.optional(),
 }).strict()
 
@@ -102,13 +118,13 @@ export const ToolPayload = z.object({
 }).strict()
 export type ToolJob = z.infer<typeof ToolPayload>
 
-export const InvocationSchema = z.discriminatedUnion('kind', [WorkItemPayload, SweepPayload, StatusPayload, TaskPayload, ToolPayload])
+export const InvocationSchema = z.discriminatedUnion('kind', [WorkItemPayload, SweepPayload, StatusPayload, CheckNowPayload, TaskPayload, ToolPayload])
 export type Invocation = z.infer<typeof InvocationSchema>
 export type WorkItemJob = z.infer<typeof WorkItemPayload>
 export type SweepJob = z.infer<typeof SweepPayload>
 export type TaskJob = z.infer<typeof TaskPayload>
 export type DelegatedTaskJob = z.infer<typeof DelegatedTaskPayload>
-/** What can be started as a job (everything but status); a delegated task only from inside the runtime. */
+/** What can be started as a job (everything but status, check-now and tool); a delegated task only from inside the runtime. */
 export type JobPayload = WorkItemJob | SweepJob | TaskJob | DelegatedTaskJob
 
 export const AcceptedSchema = z.object({
@@ -153,12 +169,12 @@ export class WrongProject extends Error {
   readonly status = 403
 }
 
-/** The repositories an invocation is about (none for status). */
+/** The repositories an invocation is about (none for status and check-now). */
 export function repositoriesOf(p: Invocation | JobPayload): string[] {
   switch (p.kind) {
     case 'work-item': case 'task': case 'tool': return [p.repository]
     case 'sweep': return [...p.repositories]
-    case 'status': return []
+    case 'status': case 'check-now': return []
   }
 }
 

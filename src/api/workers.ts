@@ -10,12 +10,18 @@
  * `trace-api-<project hash>-<24 hex>`. The session is derived from the project, the agent and the request, so asking
  * twice for the same thing lands in the same session and is answered "already running" while it runs. The project
  * hash in the id lets the `job` action check access to that project before anything is invoked.
+ *
+ * Following a job is event-driven on the worker: `job` with afterVersion + waitS is forwarded as a held status
+ * invocation (the worker answers the moment the job changes), and `job.check_now` as a check-now invocation in the
+ * job's session (the microVM whose waits the status answer listed). Tool calls have no job: `tools.waits` holds a
+ * status invocation in the project's tool session (where kb.sync and the other tool calls run) and keeps the waits
+ * opened outside any job; `tools.check_now` wakes one of them there.
  */
 import { createHash } from 'node:crypto'
 import { type AgentCoreLike, invoke } from '../agents/runtime/dispatch.js'
 import { AcceptedSchema, type TaskJob } from '../agents/runtime/schemas.js'
 import { projectHash, projectSlug } from '../core/project.js'
-import { ActionError, type JobView, type JobsApi } from './actions.js'
+import { ActionError, type JobView, type JobsApi, type WaitView } from './actions.js'
 import { z } from 'zod'
 
 /** `owner/repo=<runtime id> …` → slug → runtime id. Malformed entries are refused (the stack writes this). */
@@ -58,7 +64,13 @@ export function parseHandle(handle: string): { session: string; jobId: string; h
   return m?.[1] && m[2] && s?.[1] ? { session: m[1], jobId: m[2], hash: s[1] } : null
 }
 
-const StatusOut = z.object({ jobs: z.array(z.object({ id: z.string(), kind: z.string(), state: z.string(), repository: z.string().optional() }).loose()) }).loose()
+const StatusOut = z.object({
+  jobs: z.array(z.object({ id: z.string(), kind: z.string(), state: z.string(), repository: z.string().optional() }).loose()),
+  // a worker from before held status answers has neither
+  version: z.number().optional(),
+  waits: z.array(z.object({ id: z.string(), what: z.string(), source: z.string(), text: z.string() }).loose()).default([]),
+}).loose()
+const CheckNowOut = z.object({ ok: z.boolean() }).loose()
 const ToolOut = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(true), result: z.unknown() }).loose(),
   z.object({ ok: z.literal(false), error: z.string() }).loose(),
@@ -82,6 +94,18 @@ export function remoteJobs(o: RemoteJobsOptions): JobsApi {
     return `arn:${o.partition ?? 'aws'}:bedrock-agentcore:${o.region}:${o.account}:runtime/${id}`
   }
   const opts = (slug: string) => ({ runtimeArn: arnOf(slug), region: o.region, ...(o.client ? { client: o.client } : {}) })
+  /** The job's status on its worker (held there with afterVersion + waitS), its change counter and open waits. */
+  const watch = async (handle: string | undefined, w: { afterVersion?: number | undefined; waitS?: number | undefined; signal?: AbortSignal | undefined }): Promise<{ jobs: JobView[]; version: number | null; waits: WaitView[] }> => {
+    const h = handle ? parseHandle(handle) : null
+    const slug = h ? byHash.get(h.hash) : undefined
+    if (!h || !slug) return { jobs: [], version: null, waits: [] }
+    const hold = w.afterVersion !== undefined && w.waitS ? { afterVersion: w.afterVersion, waitS: w.waitS } : {}
+    const out = StatusOut.parse(await invoke({ kind: 'status', jobId: h.jobId, ...hold }, h.session, { ...opts(slug), signal: w.signal }))
+    // a session of one project's runtime only ever has that project's jobs; checked all the same
+    const jobs = out.jobs.filter((j) => j.id === h.jobId && (j.repository ?? slug).toLowerCase() === slug)
+      .map((j): JobView => ({ ...j, id: handle ?? j.id, workerJobId: j.id }))
+    return { jobs, version: out.version ?? null, waits: out.waits }
+  }
   return {
     repositoryOf: (handle) => {
       const h = parseHandle(handle)
@@ -101,13 +125,25 @@ export function remoteJobs(o: RemoteJobsOptions): JobsApi {
       return out.data.result
     },
     async jobStatus(handle) {
-      const h = handle ? parseHandle(handle) : null
+      return (await watch(handle, {})).jobs
+    },
+    watchJob: (handle, w) => watch(handle, w),
+    async watchTools(repository, w) {
+      const slug = projectSlug(repository)
+      const hold = w.afterVersion !== undefined && w.waitS ? { afterVersion: w.afterVersion, waitS: w.waitS } : {}
+      const out = StatusOut.parse(await invoke({ kind: 'status', ...hold }, toolSession(slug), { ...opts(slug), signal: w.signal }))
+      // the tool session's own waits: those open outside any job (a job's waits are on its own handle)
+      return { version: out.version ?? null, waits: out.waits.filter((x) => x.jobId === null || x.jobId === undefined) }
+    },
+    async checkToolWait(repository, waitId) {
+      const slug = projectSlug(repository)
+      return CheckNowOut.parse(await invoke({ kind: 'check-now', waitId }, toolSession(slug), opts(slug))).ok
+    },
+    async checkNow(handle, waitId) {
+      const h = parseHandle(handle)
       const slug = h ? byHash.get(h.hash) : undefined
-      if (!h || !slug) return []
-      const out = StatusOut.parse(await invoke({ kind: 'status', jobId: h.jobId }, h.session, opts(slug)))
-      // a session of one project's runtime only ever has that project's jobs; checked all the same
-      return out.jobs.filter((j) => j.id === h.jobId && (j.repository ?? slug).toLowerCase() === slug)
-        .map((j): JobView => ({ ...j, id: handle ?? j.id, workerJobId: j.id }))
+      if (!h || !slug) return false
+      return CheckNowOut.parse(await invoke({ kind: 'check-now', waitId }, h.session, opts(slug))).ok
     },
   }
 }
