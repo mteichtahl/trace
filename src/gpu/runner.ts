@@ -1,6 +1,7 @@
 /**
  * The job runner inside the GPU image (agent/Dockerfile.gpu runs `node /app/dist/gpu/runner.js` as the Batch job's
- * command). It reads the spec that ./batch.ts put in TRACE_GPU_JOB (or TRACE_GPU_JOB_URI), downloads the inputs,
+ * command). It reads the spec that ./batch.ts put at TRACE_GPU_JOB_URI (the job's own `spec` object in S3; nothing
+ * else about the job is in its environment or command), downloads the inputs into their tree under in/,
  * substitutes the argv placeholders exactly as a local run does (`substitute` from ./jobs.ts), runs the program with
  * its output streamed both to the container log (CloudWatch) and to files, then uploads the outputs, the two logs
  * and, last, the exit record. It exits with the program's code, so a failed program also shows as FAILED in Batch.
@@ -8,7 +9,7 @@
 import { spawn } from 'node:child_process'
 import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { S3Backend, type S3Api } from '../core/central.js'
 import { ATTR, SpanKind, continueFromEnv, envContext, fail, flush, setAttrs, span, startSdkIfConfigured } from '../core/telemetry.js'
@@ -24,21 +25,24 @@ export interface RunnerDeps {
   echo?: boolean
 }
 
-async function readSpec(env: NodeJS.ProcessEnv, s3?: S3Api): Promise<RemoteSpec> {
-  if (env.TRACE_GPU_JOB) return decodeSpec(env.TRACE_GPU_JOB)
+/** The job's spec, from TRACE_GPU_JOB_URI. It must be the `spec` object of the job it describes. */
+export async function readSpec(env: NodeJS.ProcessEnv, s3?: S3Api): Promise<RemoteSpec> {
   const uri = env.TRACE_GPU_JOB_URI
-  if (!uri) throw new Error('neither TRACE_GPU_JOB nor TRACE_GPU_JOB_URI is set: this runs only as a trace GPU job')
+  if (!uri) throw new Error('TRACE_GPU_JOB_URI is not set: this runs only as a trace GPU job')
   const u = new URL(uri)
+  if (u.protocol !== 's3:') throw new Error(`TRACE_GPU_JOB_URI ${uri} is not an s3:// URL`)
   const path = decodeURIComponent(u.pathname).replace(/^\/+/, '')
   const r = await new S3Backend(u.hostname, '', s3).get(path)
   if (!r) throw new Error(`${uri} does not exist`)
-  return decodeSpec(new TextDecoder().decode(r.body))
+  const spec = decodeSpec(new TextDecoder().decode(r.body))
+  if (spec.bucket !== u.hostname || path !== `${spec.prefix}/${jobKeys(spec.id).spec}`) throw new Error(`${uri} holds the spec of another job (${spec.id})`)
+  return spec
 }
 
 /** Run one job. Returns the program's exit code (127 when it could not be started). */
-export async function main(deps: RunnerDeps = {}): Promise<number> {
+export async function main(deps: RunnerDeps = {}, given?: RemoteSpec): Promise<number> {
   const env = deps.env ?? process.env
-  const spec = await readSpec(env, deps.s3)
+  const spec = given ?? await readSpec(env, deps.s3)
   const store = new S3Backend(spec.bucket, spec.prefix, deps.s3)
   const keys = jobKeys(spec.id)
   const dir = mkdtempSync(join(deps.workRoot ?? tmpdir(), `${spec.kind}-`))
@@ -58,7 +62,8 @@ export async function main(deps: RunnerDeps = {}): Promise<number> {
   for (const n of spec.inputs) {
     const o = await store.get(keys.input(n))
     if (!o) return finish({ exitCode: 127, seconds: 0, error: `input ${n} is missing from ${store.url}/${keys.input(n)}`, outputs: [] })
-    ins[n] = join(dir, 'in', n)
+    ins[n] = join(dir, 'in', ...n.split('/')) // a relative path (checked by the spec's schema): the tree is kept
+    mkdirSync(dirname(ins[n]), { recursive: true })
     writeFileSync(ins[n], o.body)
   }
   const outs = Object.fromEntries(spec.outputs.map((n) => [n, join(dir, 'out', n)]))
@@ -105,9 +110,10 @@ export async function main(deps: RunnerDeps = {}): Promise<number> {
 export async function observedMain(deps: RunnerDeps = {}): Promise<number> {
   const env = deps.env ?? process.env
   const parent = envContext(env)
-  const kind = (() => { try { return env.TRACE_GPU_JOB ? decodeSpec(env.TRACE_GPU_JOB).kind : 'job' } catch { return 'job' } })()
+  const spec = await readSpec(env, deps.s3)
+  const kind = spec.kind
   return span(`trace.gpu.run ${kind}`, { [ATTR.gpuKind]: kind, [ATTR.gpuBackend]: 'batch' }, async (s) => {
-    const code = await main(deps)
+    const code = await main(deps, spec)
     setAttrs(s, { [ATTR.gpuExitCode]: code, [ATTR.outcome]: code === 0 ? 'ok' : 'error' })
     if (code !== 0) fail(s, new Error(`exit code ${code}`), 'exit_code')
     return code

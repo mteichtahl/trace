@@ -193,6 +193,9 @@ trace users assignments
 
 The installer sets up the first admin and anyone else you list, with their classes and projects.
 
+Marking an agent memory inactive (`trace remote memory deactivate`) takes write access. A person's own preferences
+are the exception: they may mark those with read access alone (see [Inactive memories](#inactive-memories)).
+
 ## Putting another repository under trace
 
 ```sh
@@ -508,14 +511,68 @@ tokens and keys and is bounded in size (8000 characters per event, 12 tool outco
   they belong to, and to admins.
 - **In IAM:** each project's worker role may use only its own memory's ARN: `CreateEvent` and `ListEvents` for its
   project's actors (`<owner>/<repo>/*`), and `RetrieveMemoryRecords` and `ListMemoryRecords` under its namespaces
-  (`/trace/<owner>/<repo>/*`). The API role may only recall and list records under `/trace/`, on each project's
-  memory. The GitHub OIDC roles have no memory access. The client draws the same lines as well (see
+  (`/trace/<owner>/<repo>/*`). The API role may only recall, list and get records under `/trace/`, on each
+  project's memory (it gets one to check it before marking it inactive, see below). The GitHub OIDC roles have no memory access. The client draws the same lines as well (see
   [Project isolation](#project-isolation)).
 - **Limits:** the API's two lists (`TRACE_WORKER_RUNTIMES` and `TRACE_PROJECT_MEMORIES`) are each one environment
   value, at most 5000 characters, and a runtime may have at most 50 environment variables. The stack checks both
   when it is built and refuses an installation that would not fit. Each project is a nested stack of its own, so
   CloudFormation's 500 resources and 200 outputs per stack allow the full 60 projects; an installation still in the
   flat layout holds about 24 (see [Stack layout and limits](#stack-layout-and-limits)).
+
+### Inactive memories
+
+A long-term record can be marked inactive: wrong, stale or no longer wanted. No agent considers it after that. It
+is not deleted, and reactivating it brings it back as it was.
+
+```sh
+trace remote memory list OWNER/REPO [--all]          # --all also lists inactive records, with why, who and when
+trace remote memory deactivate OWNER/REPO RECORD_ID --reason "the rail is 3V3, not 5V"
+trace remote memory reactivate OWNER/REPO RECORD_ID
+```
+
+These are the API actions `memory.deactivate { repo, recordId, reason }`, `memory.reactivate { repo, recordId }` and
+`memory.list { repo, includeInactive }`. Each record that `memory.list` returns has `active`, and an inactive one
+also has `inactive: { reason, by, by_you, at }`, where `by` is the person's hash, not their email. On a local
+installation that has no API, `trace memory list|deactivate|reactivate` does the same with your own AWS credentials
+(`TRACE_MEMORY_ID`, with the project taken from `--repo` or the clone's origin).
+
+- **What "not considered" covers:** the recall at the start of a job and the memory block in its prompt (the
+  person's own preferences too), the `memory_recall` tool, and the API's `memory.recall` and `memory.list`. Records
+  are filtered after they are retrieved. Recall asks AgentCore for as many extra records as there are inactive ones
+  under the namespace, up to the API's limit of 100, so the agent still gets its full `topK`. The prompt block drops
+  any record that carries a mark, as a second check. Each span records how many records were left out
+  (`trace.memory.inactive_filtered`), never which ones. If the marks cannot be read, nothing is handed out unchecked:
+  the read fails and a job runs without long-term memory.
+- **Who may mark:** anyone with write access on the project (users assigned to it, and admins). Guests cannot mark
+  the project's records. The one exception is a person's own records (their person actor
+  `<owner>/<repo>/person/<hash>`, in practice their preferences): they are shown only to that person, so that person
+  may turn them off or on with read access alone, guests included. Nobody but an admin can mark another person's
+  records, because nobody else can see them. Agents cannot mark anything. No tool offers it, and each project's
+  worker and GitHub OIDC role is denied writes under its `memory-state` prefix, although it can read it.
+- **Checks:** the project access check runs first, before any AWS call. Then the record is looked up in that
+  project's own memory, under `/trace/<owner>/<repo>/` (`GetMemoryRecord`, falling back to a listing of the
+  project's records). A record id from another project, or one the person cannot see, gets the same 403 "no access".
+- **Short-term events are not marked.** AgentCore has no way to update an event. Events are only ever given back
+  when a job continues the same session, and they expire after `eventExpiryDays`. Deactivate the long-term record
+  that was extracted from them instead. One limit follows from this: a later extraction or consolidation can write a
+  new record, with a new id, that says the same thing. That record is active until someone marks it too.
+- **Where the marks are:** a small SQLite database per project, beside its data:
+  `s3://<bucket>/projects/<owner>/<repo>/memory-state/central.db` (locally
+  `$TRACE_HOME/projects/<owner>/<repo>/memory-state`). It is written the same way as the central store, with
+  conditional puts that are retried on a conflict. Its tables are `inactive_records` (record id, namespace, reason,
+  the hash of who marked it, when) and the append-only audit log `memory_state_log`. The API role may read
+  `projects/*/memory-state/*` and write it only with conditional puts. It has nothing else under `projects/` and
+  cannot delete there.
+- **Why marks live beside the memory, not inside it:** AgentCore records can carry metadata, and
+  `RetrieveMemoryRecords` and `ListMemoryRecords` can filter on it. That would need several things this design
+  avoids. It needs an indexed key declared on every memory (at most 10 per memory, never removable, not backfilled).
+  It needs `BatchUpdateMemoryRecords`, which can also rewrite a record's content and namespaces, granted to the API,
+  where today nothing writes records except extraction. The docs leave open whether an update merges or replaces
+  metadata, and how a key is removed again, which reactivating would need. Filters have no not-equal, so records that
+  never had the key would need `NOT_EXISTS`. And the docs do not say whether batch-written metadata survives
+  consolidation. The overlay never changes a record, so reactivating restores it exactly, and it keeps who, why and
+  when in an audit log.
 
 **Upgrading from the installation-wide memory.** Earlier versions had one memory for every project
 (`<prefix>_memory`, output `MemoryId`). The next deploy removes it, and every project starts with its own, empty

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { App } from 'aws-cdk-lib'
 import { Template } from 'aws-cdk-lib/assertions'
 import { describe, expect, it } from 'vitest'
-import { InfraPropsSchema, PARENT_PROJECT_OUTPUTS, projectHash, projectOutputs } from '../../src/infra/props.js'
+import { InfraPropsSchema, REPOSITORY_OUTPUT, projectHash, projectOutputs } from '../../src/infra/props.js'
 import { TraceStack } from '../../src/infra/stack.js'
 import { nestedOf, nestedResourceId, synth } from './templates.js'
 
@@ -67,7 +67,7 @@ function shape(r: Res, tpl: Tpl, parent?: { tpl: Tpl; params: Record<string, unk
 }
 
 describe('the nested layout', () => {
-  it('keeps the parent to one resource and three outputs per project, so 60 fit, and each nested stack is small', () => {
+  it('keeps the parent to one resource and no output per project, so 60 fit, and each nested stack is small', () => {
     // every option that adds to the parent on: memory, GPU, observability, dashboard, and the legacy memory
     const cfg = (n: number) => InfraPropsSchema.parse({ ...base, repositories: repos(n), memory: { legacySharedMemory: true } })
     const sizes = [1, 24, 60].map((n) => {
@@ -76,7 +76,8 @@ describe('the nested layout', () => {
       expect(s.nested.size).toBe(n)
       for (const t of s.nested.values()) {
         const j = json(t)
-        expect(count(j.Resources)).toBe(17)
+        // 17, and its CPU job definition
+        expect(count(j.Resources)).toBe(18)
         expect(count(j.Outputs)).toBeLessThanOrEqual(200)
         expect(count(j.Parameters)).toBeLessThanOrEqual(200)
       }
@@ -88,14 +89,25 @@ describe('the nested layout', () => {
     const one = sizes[0]
     for (const z of sizes) {
       expect(z.stacks).toBe(z.n)
-      // one resource per project (its AWS::CloudFormation::Stack), three outputs per project
+      // one resource per project (its AWS::CloudFormation::Stack), and the same outputs whatever the number of projects
       expect(z.resources - z.n).toBe((one?.resources ?? 0) - 1)
-      expect(z.outputs - 3 * z.n).toBe((one?.outputs ?? 0) - 3)
+      expect(z.outputs).toBe(one?.outputs)
       expect(z.resources).toBeLessThan(500)
       expect(z.outputs).toBeLessThanOrEqual(200)
     }
-    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}`)).toEqual(['1:83/20', '24:106/89', '60:143/197'])
-    expect(PARENT_PROJECT_OUTPUTS).toHaveLength(3)
+    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}`)).toEqual(['1:86/19', '24:111/19', '60:148/19'])
+    // none of a project's outputs is the parent's: each is its nested stack's, with the repository it is the project of
+    const s = synth(cfg(2), 'Count2Outputs')
+    const parentOutputs = Object.keys(json(s.parent).Outputs ?? {})
+    for (const [i, t] of [...s.nested.values()].entries()) {
+      const repo = repos(2)[i] ?? ''
+      const own = json(t).Outputs as Record<string, { Value: unknown }>
+      expect(own[REPOSITORY_OUTPUT]?.Value).toBe(repo)
+      for (const o of [...Object.values(projectOutputs(repo)), REPOSITORY_OUTPUT]) {
+        expect(parentOutputs).not.toContain(o)
+        expect(Object.keys(own)).toContain(o)
+      }
+    }
   }, 900_000)
 
   it('refuses at synth time a flat stack CloudFormation would refuse, and says why', () => {
@@ -135,7 +147,8 @@ describe('the nested layout', () => {
 
   it('makes every project resource the same as the flat layout does: names, IAM, removal policies', () => {
     for (const retainData of [true, false]) {
-      const nested = synth(InfraPropsSchema.parse({ ...base, retainData }), `SameNested${retainData}`)
+      // the CPU queue is the nested layout's only (props.ts cpuEnabled): compared without it
+      const nested = synth(InfraPropsSchema.parse({ ...base, retainData, cpu: { enabled: false } }), `SameNested${retainData}`)
       const flat = synth(InfraPropsSchema.parse({ ...base, retainData, layout: 'flat' }), `SameFlat${retainData}`)
       expect(flat.nested.size).toBe(0)
       const fp = json(flat.parent)
@@ -182,6 +195,32 @@ describe('the nested layout', () => {
     const manifest = JSON.parse(readFileSync(join(out, 'manifest.json'), 'utf8')) as { artifacts: Record<string, { properties?: { requiresBootstrapStackVersion?: number } }> }
     expect(manifest.artifacts.TraceStack?.properties?.requiresBootstrapStackVersion).toBe(6)
   }, 300_000)
+})
+
+describe('inactive memories in both layouts', () => {
+  it("gives the API read and conditional writes on projects/*/memory-state, and each project's roles a deny on writing their own", () => {
+    for (const layout of ['nested', 'flat'] as const) {
+      const s = synth(InfraPropsSchema.parse({ ...base, layout }), `MemoryState${layout}`)
+      type St = { Sid?: string; Effect?: string; Resource?: unknown }
+      const statements = (tpl: Template, prefix: string): St[] => Object.entries(tpl.findResources('AWS::IAM::Policy')).filter(([id]) => id.startsWith(prefix))
+        .flatMap(([, r]) => (r as { Properties: { PolicyDocument: { Statement: St[] } } }).Properties.PolicyDocument.Statement)
+      const policies = (tpl: Template, prefix: string): string => JSON.stringify(statements(tpl, prefix))
+      // the API role is the parent's in both layouts
+      const api = policies(s.parent, 'ApiRuntimeRole')
+      expect(api).toContain('/projects/*/memory-state/*')
+      expect(api.replaceAll('projects/*/memory-state/*', '')).not.toContain('projects/')
+      for (const [repo, h] of [[A, HA], [B, HB]] as const) {
+        const tpl = layout === 'nested' ? nestedOf(s, repo) : s.parent
+        for (const role of ['RuntimeRole', 'ActionsRole']) {
+          const text = policies(tpl, `Project${h}${role}`)
+          const deny = statements(tpl, `Project${h}${role}`).filter((x) => x.Sid === 'MemoryStateReadOnly')
+          expect(deny.map((x) => x.Effect), `${layout} ${role}`).toEqual(['Deny'])
+          expect(JSON.stringify(deny[0]?.Resource)).toContain(`/projects/${repo}/memory-state/*`)
+          expect(text).not.toContain('/projects/*/memory-state')
+        }
+      }
+    }
+  }, 600_000)
 })
 
 describe('the flat layout and the move to nested stacks', () => {

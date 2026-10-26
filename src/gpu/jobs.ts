@@ -10,10 +10,14 @@
  *
  * argv placeholders: {in:NAME} is replaced by the input's path where the job runs, {out:NAME} by the path an output
  * must be written to, {dir} by the job's working directory.
+ *
+ * Input names may be relative paths (`rtl/core/alu.v`): the job sees them in that tree under `{dir}/in/`, so files
+ * that refer to each other by relative path (a Verilog `include "sub/x.vh"`) find each other wherever the job runs.
+ * Output names are plain file names.
  */
 import { spawn } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { z } from 'zod'
 import { ToolError } from '../core/registry.js'
 import { ATTR, type Outcome, fail, recordMetric, setAttrs, span } from '../core/telemetry.js'
@@ -26,20 +30,52 @@ export const JobKind = z.enum(['blender', 'freerouting', 'orthoroute',
   'openems'])
 export type JobKind = z.output<typeof JobKind>
 
+const SEGMENT = /^[\w.-]+$/
+
+/** Whether `s` is an input name: a relative path `a/b/c.v` of letters, digits, '.', '_' and '-' (no '.' or '..'
+ * segment, no leading '/', no backslash, no empty segment). */
+export function isInputName(s: string): boolean {
+  if (!s || s.length > 512 || s.includes('\\') || s.startsWith('/')) return false
+  return s.split('/').every((seg) => SEGMENT.test(seg) && seg !== '.' && seg !== '..')
+}
+
+export const InputName = z.string().refine(isInputName, {
+  message: "an input name is a relative path a/b/c of letters, digits, '.', '_' and '-' (no '..', no leading '/', no backslash)",
+})
+export const OutputName = z.string().regex(SEGMENT)
+
+/** Input names where one is a folder of another (`a` and `a/b`): they cannot both be staged. */
+export function nameClashes(names: readonly string[]): string[] {
+  const set = new Set(names)
+  const out: string[] = []
+  for (const n of names) {
+    const parts = n.split('/')
+    for (let i = 1; i < parts.length; i++) {
+      const dir = parts.slice(0, i).join('/')
+      if (set.has(dir)) out.push(`${dir} is both an input and the folder of ${n}`)
+    }
+  }
+  return out
+}
+
 export const GpuJobSchema = z.object({
   kind: JobKind,
   argv: z.array(z.string()).min(1),
-  /** name → local file to send with the job */
-  inputs: z.record(z.string().regex(/^[\w.-]+$/), z.string()).default({}),
+  /** name (a relative path) → local file to send with the job */
+  inputs: z.record(InputName, z.string()).default({}),
   /** names of files the job writes (via {out:NAME}) to bring back */
-  outputs: z.array(z.string().regex(/^[\w.-]+$/)).default([]),
+  outputs: z.array(OutputName).default([]),
   /** wants a GPU: picks the GPU queue; locally only a hint for the program */
   gpu: z.boolean().default(false),
   /** prefer the queue (when TRACE_GPU_QUEUE is set) even without needing a GPU: a CPU job too big for this machine */
   remote: z.boolean().default(false),
   timeoutSeconds: z.number().int().min(10).max(8 * 3600).default(3600),
   env: z.record(z.string(), z.string()).default({}),
-}).strict()
+  /** on the queue: the vCPUs to ask for (a resource override, capped at the job definition's limit); ignored locally */
+  vcpus: z.number().int().min(1).max(256).optional(),
+}).strict().superRefine((j, ctx) => {
+  for (const m of nameClashes(Object.keys(j.inputs))) ctx.addIssue({ code: 'custom', path: ['inputs'], message: m })
+})
 export type GpuJob = z.input<typeof GpuJobSchema>
 
 export interface JobResult {
@@ -72,7 +108,7 @@ export function localGpu(): boolean {
 }
 
 export function substitute(argv: readonly string[], ins: Record<string, string>, outs: Record<string, string>, dir: string): string[] {
-  return argv.map((a) => a.replace(/\{(in|out):([\w.-]+)\}|\{dir\}/g, (m, k: string | undefined, n: string | undefined) => {
+  return argv.map((a) => a.replace(/\{(in|out):([\w./-]+)\}|\{dir\}/g, (m, k: string | undefined, n: string | undefined) => {
     if (m === '{dir}') return dir
     const table = k === 'in' ? ins : outs
     const v = n === undefined ? undefined : table[n]
@@ -87,8 +123,8 @@ export async function runLocal(spec: GpuJob): Promise<JobResult> {
   const ins: Record<string, string> = {}
   for (const [n, p] of Object.entries(job.inputs)) {
     if (!existsSync(p)) throw new ToolError(`input ${n}: ${p} does not exist`)
-    ins[n] = join(dir, 'in', n)
-    mkdirSync(join(dir, 'in'), { recursive: true })
+    ins[n] = join(dir, 'in', ...n.split('/'))
+    mkdirSync(dirname(ins[n]), { recursive: true })
     copyFileSync(p, ins[n])
   }
   mkdirSync(join(dir, 'out'), { recursive: true })

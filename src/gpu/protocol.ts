@@ -3,25 +3,27 @@
  * where in S3 a job's files live. One job is one folder under its project's prefix, jobs/<slug>/ (slug: owner/repo,
  * lower case, src/core/project.ts), so each project's runtime and job role reach only their own project's jobs:
  *
- *   jobs/<slug>/<id>/in/<name>          inputs, uploaded before the job is submitted
+ *   jobs/<slug>/<id>/in/<name>          inputs, uploaded before the job is submitted (a name may be a relative path,
+ *                                       a/b/c.v: the keys mirror the tree the job sees)
  *   jobs/<slug>/<id>/out/<name>         outputs the program wrote ({out:NAME}), uploaded by the runner
  *   jobs/<slug>/<id>/log/stdout.txt     the program's output, uploaded by the runner
  *   jobs/<slug>/<id>/log/stderr.txt
  *   jobs/<slug>/<id>/exit               the exit record (ExitRecord), written last: its presence means the runner finished
- *   jobs/<slug>/<id>/spec               the spec, only when it is too large for the container's environment
+ *   jobs/<slug>/<id>/spec               the spec (RemoteSpec, JSON), written before the job is submitted
  *
  * The project is TRACE_PROJECT (set on each project's worker runtime). Without it (a laptop with admin credentials)
  * jobs go under jobs/_local/, which is never a project's.
  *
- * The spec reaches the container in TRACE_GPU_JOB (base64url JSON), or TRACE_GPU_JOB_URI (s3://… of `spec`) when it
- * is large. The objects are transient (the stack expires `jobs/` after a week); they are not data files.
+ * The container gets only TRACE_GPU_JOB_URI (s3://… of `spec`) and TRACEPARENT: AWS Batch's DescribeJobs has no
+ * resource-level permission, so whatever is in a job's command or environment can be read by any project's role. The
+ * spec (argv, file names, the program's env) therefore lives only in the project's own prefix, and the command is
+ * the job definition's generic `node /app/dist/gpu/runner.js`. The objects are transient (the stack expires `jobs/`
+ * after a week); they are not data files.
  */
 import { z } from 'zod'
 import { ToolError } from '../core/registry.js'
-import { JobKind } from './jobs.js'
+import { InputName, JobKind, OutputName, nameClashes } from './jobs.js'
 import { JOBS_PREFIX, LOCAL_JOBS, ProjectNameError, projectSlug } from '../core/project.js'
-
-const Name = z.string().regex(/^[\w.-]+$/)
 
 export const RemoteSpecSchema = z.object({
   v: z.literal(1),
@@ -30,12 +32,14 @@ export const RemoteSpecSchema = z.object({
   prefix: z.string(),
   kind: JobKind,
   argv: z.array(z.string()).min(1),
-  inputs: z.array(Name),
-  outputs: z.array(Name),
+  inputs: z.array(InputName),
+  outputs: z.array(OutputName),
   env: z.record(z.string(), z.string()),
   gpu: z.boolean(),
   timeoutSeconds: z.number().int().positive(),
-}).strict()
+}).strict().superRefine((s, ctx) => {
+  for (const m of nameClashes(s.inputs)) ctx.addIssue({ code: 'custom', path: ['inputs'], message: m })
+})
 export type RemoteSpec = z.output<typeof RemoteSpecSchema>
 
 export const ExitRecordSchema = z.object({
@@ -44,7 +48,7 @@ export const ExitRecordSchema = z.object({
   /** set when the program could not be run at all (not installed, an input missing) or was killed for time */
   error: z.string().optional(),
   /** outputs the program wrote and the runner uploaded */
-  outputs: z.array(Name).default([]),
+  outputs: z.array(OutputName).default([]),
 }).loose()
 export type ExitRecord = z.output<typeof ExitRecordSchema>
 
@@ -58,10 +62,11 @@ export const jobKeys = (id: string) => ({
   spec: `${id}/spec`,
 })
 
-/** Specs at most this long travel in the environment (Batch caps all container overrides together at 8 KiB). */
-export const INLINE_SPEC_LIMIT = 6000
+/** The spec as stored at `spec`. */
+export const encodeSpec = (s: RemoteSpec): string => JSON.stringify(s)
 
-export const encodeSpec = (s: RemoteSpec): string => Buffer.from(JSON.stringify(s), 'utf8').toString('base64url')
+/** The only environment variables a submitted job is given (see the header): nothing in them names a file. */
+export const JOB_ENV = ['TRACE_GPU_JOB_URI', 'TRACEPARENT'] as const
 
 export function decodeSpec(text: string): RemoteSpec {
   let raw: unknown

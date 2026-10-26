@@ -9,10 +9,11 @@
  *
  *   S3             projects/<slug>/…        the project's own data
  *                  jobs/<slug>/<id>/…       its GPU jobs' files (src/gpu/protocol.ts)
- *   Secrets        <prefix>/github-token/<slug>
+ *   Secrets        <prefix>/github-token/<slug>   (`@g<n>` appended at generation n > 0)
  *   AgentCore      <prefix>_w_<hash>        its worker runtime ([a-zA-Z][a-zA-Z0-9_]{0,47})
- *                  <prefix>_m_<hash>        its memory (the same pattern and length)
+ *                  <prefix>_m_<hash>        its memory (the same pattern and length; `_g<n>` appended at generation n > 0)
  *   Batch          <prefix>-gpu-<hash>      its GPU job definition
+ *                  <prefix>-cpu-<hash>      its CPU job definition
  *
  * A slug always contains exactly one `/`, so `projects/a/b/*` never matches `projects/a/bc/…` and nothing without a
  * slash (such as `jobs/_local/`) is ever a project's.
@@ -52,12 +53,26 @@ const under = (prefix: string): string => prefix.replace(/-/g, '_')
 
 /** The project's worker runtime (AgentCore names: a letter, then letters, digits and underscores, at most 48). */
 export const workerRuntimeName = (prefix: string, repository: string): string => `${under(prefix)}_w_${projectHash(repository)}`
-/** The project's AgentCore memory (CfnMemory Name: `^[a-zA-Z][a-zA-Z0-9_]{0,47}$`, at most 32 characters here). */
-export const memoryName = (prefix: string, repository: string): string => `${under(prefix)}_m_${projectHash(repository)}`
+/**
+ * A project's generation (projectSettings `generation`, 0 unless the installer bumped it): the names a removed
+ * project can leave behind in the account (its memory, kept with retainData; its memory's log delivery sources and
+ * destinations; its token secret, through its recovery window) carry it when it is above 0, so the project can be
+ * added again without colliding with them. Generation 0 is the names as they always were.
+ */
+const gen = (generation: number, sep: string): string => (generation > 0 ? `${sep}g${generation}` : '')
+
+/** The project's AgentCore memory (CfnMemory Name: `^[a-zA-Z][a-zA-Z0-9_]{0,47}$`, at most 36 characters here). */
+export const memoryName = (prefix: string, repository: string, generation = 0): string => `${under(prefix)}_m_${projectHash(repository)}${gen(generation, '_')}`
 /** The IAM pattern every project's worker runtime ARN of this installation matches (runtime ids are `<name>-<suffix>`). */
 export const workerRuntimeNamePattern = (prefix: string): string => `${under(prefix)}_w_*`
-export const githubSecretName = (prefix: string, repository: string): string => `${prefix}/github-token/${projectSlug(repository)}`
+/** `@` is in no repository name, so `owner/repo@g1` can never be another repository's generation 0. */
+export const githubSecretName = (prefix: string, repository: string, generation = 0): string => `${prefix}/github-token/${projectSlug(repository)}${gen(generation, '@')}`
 export const gpuJobDefinitionName = (prefix: string, repository: string): string => `${prefix}-gpu-${projectHash(repository)}`
+/** The project's CPU job definition (the CPU queue: openEMS, Verilator, formal, nextpnr sent remote). */
+export const cpuJobDefinitionName = (prefix: string, repository: string): string => `${prefix}-cpu-${projectHash(repository)}`
+/** A project memory's log delivery source and destination name (`[\w-]{1,60}`, unique in the account and region). */
+export const memoryDeliveryName = (prefix: string, repository: string, kind: 'logs' | 'traces', generation = 0): string =>
+  `${prefix}-m-${projectHash(repository)}${gen(generation, '-')}-${kind}`
 
 /** The tag every per-project resource and every Batch job carries: its slug. */
 export const PROJECT_TAG = 'trace:project'

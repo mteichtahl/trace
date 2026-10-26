@@ -29,6 +29,7 @@ import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs'
 import * as logs from 'aws-cdk-lib/aws-logs'
 import { Provider } from 'aws-cdk-lib/custom-resources'
 import { Construct } from 'constructs'
+import { memoryDeliveryName } from '../core/project.js'
 import type { InfraProps } from './props.js'
 
 /** Where ADOT's EMF metrics land (OTEL_EXPORTER_OTLP_LOGS_HEADERS x-aws-metric-namespace on AgentCore). */
@@ -73,8 +74,12 @@ export interface ObservedRuntime {
 export interface ObservedMemory {
   /** the project's construct id (Project<hash>): names its resources and its `<id>MemoryLogGroup` output */
   id: string
-  /** the project's hash: names its delivery sources and destinations */
+  /** the project's hash (the dashboard's search term) */
   hash: string
+  /** the project's repository and its names' generation: name its delivery sources and destinations
+   * (src/core/project.ts memoryDeliveryName) */
+  repository: string
+  generation?: number
   /** the memory's name (<prefix>_m_<hash>), for the dashboard */
   name: string
   arn: string
@@ -168,8 +173,9 @@ export class Observability extends Construct {
     const keep = p.retainData ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY
     const keepDelivery = p.releaseDeliveries ? RemovalPolicy.DESTROY : keep
     for (const m of p.memories ?? []) {
-      // delivery source and destination names: [\w-]{1,60}, unique in the account and region
-      const name = (kind: string): string => `${p.prefix}-m-${m.hash}-${kind}`
+      // delivery source and destination names: [\w-]{1,60}, unique in the account and region (and with retainData
+      // they outlive the project: its generation, when above 0, keeps a re-added project's apart)
+      const name = (kind: 'logs' | 'traces'): string => memoryDeliveryName(p.prefix, m.repository, kind, m.generation ?? 0)
       // flat: in this construct, ids prefixed with the project's (as ever); nested: in the project's own construct
       const at: Construct = m.scope ?? this
       const pre = m.scope ? '' : m.id

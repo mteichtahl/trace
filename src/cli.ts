@@ -28,6 +28,9 @@
  *     trace tools [--hardware]         every tool (the set the MCP server offers)
  *     trace tool NAME [key=value ...] [--args '{...}'] [--hardware]
  *     trace mcp                        the MCP server on stdio (claude mcp add trace -- trace mcp)
+ *
+ *   Agent memory (a local installation: your credentials, TRACE_MEMORY_ID; through the API: trace remote memory)
+ *     trace memory list [--repo OWNER/REPO] [--all] | deactivate RECORD_ID --reason "…" | reactivate RECORD_ID
  */
 import { readdirSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
@@ -43,6 +46,7 @@ import { flush } from './core/telemetry.js'
 import { Work, transaction } from './core/store.js'
 import { allTools } from './tools/index.js'
 import { cmdConnect, cmdLogin, cmdLogout, cmdRemote, cmdUsers, cmdWhoami } from './login/commands.js'
+import { cmdMemory } from './login/memory.js'
 
 // node:sqlite is stable in practice but still prints an experimental warning; keep the CLI's output clean.
 const emit = process.emitWarning.bind(process)
@@ -281,6 +285,7 @@ async function main(argv: string[]): Promise<number> {
       return cmdAgent(rest)
     }
     case 'users': return cmdUsers(rest)
+    case 'memory': return cmdMemory(rest)
     case 'worker-prompt':
       out(workerPrompt(rest.length ? rest : await projects()))
       return 0

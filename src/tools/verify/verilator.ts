@@ -21,7 +21,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ToolError } from '../../core/registry.js'
-import { coverLines, includeFiles, needProgram, shellJob, sq, stage } from './job.js'
+import { coverLines, hdlStage, includeArgs, needProgram, shellJob, sq, stage } from './job.js'
 import { parseCoverageDat, summarizeCoverage, verilatorMessages, type CovPoint, type VMessage } from './parse.js'
 
 export interface VerilatorOptions {
@@ -96,15 +96,13 @@ export async function runVerilator(o: VerilatorOptions): Promise<VerilatorRun> {
   needProgram('verilator', 'apt install verilator, or the OSS CAD Suite (github.com/YosysHQ/oss-cad-suite-build)')
   if (!/^[A-Za-z_][\w$]*$/.test(o.top)) throw new ToolError(`top ${JSON.stringify(o.top)} is not a module name`)
   if (!o.files.length) throw new ToolError('give files')
-  const st = stage(o.files)
-  const hdlNames = [...st.names]
-  stage(includeFiles(o.include_dirs ?? []), st)
-  const cppNames: string[] = []
+  // sources, include dirs and the C++ testbench keep their relative layout, so `include "sub/x.vh" resolves
+  const st = hdlStage({ files: o.files, include_dirs: o.include_dirs, extra: o.cpp })
+  const hdlNames = [...st.sources]
+  const cppNames: string[] = [...st.extra]
   let tmp: string | null = null
   if (o.cpp?.length) {
-    const before = st.names.length
-    stage(o.cpp, st)
-    cppNames.push(...st.names.slice(before))
+    // given: staged above
   } else if (o.mode === 'run') {
     tmp = mkdtempSync(join(tmpdir(), 'trace-vmain-'))
     writeFileSync(join(tmp, 'trace_main.cpp'), mainCpp(o.top))
@@ -112,8 +110,7 @@ export async function runVerilator(o: VerilatorOptions): Promise<VerilatorRun> {
     cppNames.push('trace_main.cpp')
   }
   const svTb = !o.cpp?.length
-  const inc = `-I{dir}/in`
-  const common = [inc, ...defineArgs(o.defines), ...paramArgs(o.parameters), '--top-module', o.top].map(sq).join(' ')
+  const common = [...includeArgs(st), ...defineArgs(o.defines), ...paramArgs(o.parameters), '--top-module', o.top].map(sq).join(' ')
   const hdl = hdlNames.map((n) => `{in:${n}}`).join(' ')
   const cov = o.coverage.length === 3 ? ['--coverage'] : o.coverage.map((c) => `--coverage-${c}`)
   const lines = [

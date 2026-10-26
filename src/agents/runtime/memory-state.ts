@@ -94,9 +94,10 @@ export class MemoryState implements InactiveSource {
   readonly store: Central
   private readonly now: () => number
 
-  constructor(repository: string, o: { home?: string; now?: () => number } = {}) {
+  /** `store`: a Central to use instead of the one at `home` (default memoryStateHome) — tests hand in one on a fake S3. */
+  constructor(repository: string, o: { home?: string; store?: Central; now?: () => number } = {}) {
     this.repository = projectSlug(repository)
-    this.store = central(o.home ?? memoryStateHome(repository))
+    this.store = o.store ?? central(o.home ?? memoryStateHome(repository))
     this.now = o.now ?? (() => Date.now() / 1000)
   }
 

@@ -409,9 +409,20 @@ export function specialistEnv(o: { tools: readonly string[]; delegateUrl?: strin
   return {
     TRACE_MCP_TOOLS: o.tools.join(','),
     ...(o.delegateUrl && o.token ? { TRACE_DELEGATE_URL: o.delegateUrl, TRACE_DELEGATE_TOKEN: o.token, TRACE_DELEGATE_TIMEOUT_S: String(timeoutS) } : {}),
-    // Claude Code's own limit on one MCP tool call must outlast the delegation's wait
-    MCP_TOOL_TIMEOUT: String((timeoutS + 600) * 1000),
+    ...mcpWaitEnv(timeoutS + 600),
   }
+}
+
+/**
+ * Claude Code's limits on one MCP tool call, raised above agent.delegate's wait (code.claude.com/docs/en/env-vars):
+ * MCP_TOOL_TIMEOUT is the wall-clock limit in milliseconds (default about 28 hours); CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT
+ * (milliseconds, capped at MCP_TOOL_TIMEOUT) cuts off a stdio server that sends no response or progress for 30 minutes
+ * by default, which a blocked agent.delegate would otherwise hit; CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS 0 keeps the call
+ * in the foreground (non-interactive runs do not background it today, this keeps it so).
+ */
+export function mcpWaitEnv(seconds: number): Record<string, string> {
+  const ms = String(Math.ceil(seconds) * 1000)
+  return { MCP_TOOL_TIMEOUT: ms, CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT: ms, CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: '0' }
 }
 
 /** A work item or a person's task: routed to a specialist, which runs with its own prompt, tools and memory. */

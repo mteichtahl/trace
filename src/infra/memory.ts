@@ -2,7 +2,8 @@
  * The agents' memory: one Amazon Bedrock AgentCore Memory per project (made by its ProjectStack, src/infra/project.ts),
  * each with the three built-in long-term strategies, and least-privilege access for the runtimes that use it.
  *
- *   name     <prefix>_m_<hash>  (src/core/project.ts memoryName; CfnMemory Name ^[a-zA-Z][a-zA-Z0-9_]{0,47}$)
+ *   name     <prefix>_m_<hash>  (src/core/project.ts memoryName; CfnMemory Name ^[a-zA-Z][a-zA-Z0-9_]{0,47}$), and
+ *            <prefix>_m_<hash>_g<n> for a project added again at generation n (its earlier memory stays, orphaned)
  *
  *   strategy          name                namespace template
  *   semantic          trace_facts         /trace/{actorId}/facts/
@@ -28,7 +29,8 @@
  *                          GetMemoryRecord to verify a record before memory.deactivate, after its access check), read
  *                          only, and no events (grantReadRecords). Inactive marks are not written to the memory: they
  *                          are an overlay in S3 (src/agents/runtime/memory-state.ts)
- *   the OIDC role          none
+ *   the OIDC role          the same as its project's worker, on its own project's memory only (the worker.runner =
+ *                          actions fallback is the worker in GitHub Actions): src/infra/project.ts
  */
 import { RemovalPolicy } from 'aws-cdk-lib'
 import * as iam from 'aws-cdk-lib/aws-iam'

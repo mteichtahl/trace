@@ -116,3 +116,194 @@ export function boardShapes(b: Board): Shape[] {
   }
   return out
 }
+
+// ------------------------------------------------------------------ polygons
+
+/**
+ * Simple polygons (a list of corners, closed implicitly), for courtyards and rule areas: proper segment crossing,
+ * point in polygon with the boundary told apart, whether two polygons overlap, and the exact area they share
+ * (both are ear-clipped into triangles and the triangles clipped pairwise, so concave outlines such as an L are
+ * exact). Lengths are mm.
+ */
+export type PPt = readonly [number, number]
+
+/** The two segments cross at a point inside both (touching, sharing an end, or running collinear is not crossing). */
+export function segmentsCross(a: PPt, b: PPt, c: PPt, d: PPt): boolean {
+  return segsCross(a[0], a[1], b[0], b[1], c[0], c[1], d[0], d[1])
+}
+
+/** Distance from a point to a polygon's outline. */
+export function pointOutlineDistance(p: PPt, poly: readonly PPt[]): number {
+  let m = Infinity
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i] as PPt
+    const b = poly[(i + 1) % poly.length] as PPt
+    m = Math.min(m, pointSeg(p[0], p[1], a[0], a[1], b[0], b[1]))
+  }
+  return m
+}
+
+/** 'in', 'out', or 'on' (within eps of the outline). Even–odd rule. */
+export function pointInPolygon(p: PPt, poly: readonly PPt[], eps = 1e-6): 'in' | 'out' | 'on' {
+  if (pointOutlineDistance(p, poly) <= eps) return 'on'
+  let r = false
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i] as PPt
+    const b = poly[j] as PPt
+    if ((a[1] > p[1]) !== (b[1] > p[1]) && p[0] < ((b[0] - a[0]) * (p[1] - a[1])) / (b[1] - a[1]) + a[0]) r = !r
+  }
+  return r ? 'in' : 'out'
+}
+
+/** Whether the insides of two polygons meet: an edge of one properly crosses an edge of the other, or a corner (or
+ * the edge midpoint, for outlines that only share corners) of one lies strictly inside the other. Outlines that only
+ * touch do not overlap. */
+export function polygonsOverlap(a: readonly PPt[], b: readonly PPt[], eps = 1e-6): boolean {
+  if (a.length < 3 || b.length < 3) return false
+  for (let i = 0; i < a.length; i++) {
+    const p = a[i] as PPt
+    const q = a[(i + 1) % a.length] as PPt
+    for (let j = 0; j < b.length; j++) if (segmentsCross(p, q, b[j] as PPt, b[(j + 1) % b.length] as PPt)) return true
+  }
+  const probe = (x: readonly PPt[], y: readonly PPt[]): boolean => x.some((p, i) => {
+    const q = x[(i + 1) % x.length] as PPt
+    return pointInPolygon(p, y, eps) === 'in' || pointInPolygon([(p[0] + q[0]) / 2, (p[1] + q[1]) / 2], y, eps) === 'in'
+  })
+  if (probe(a, b) || probe(b, a)) return true
+  // the same outline (or one whose every corner and midpoint is on the other's): compare an inner point
+  const inner = (x: readonly PPt[]): PPt | null => {
+    for (const t of triangulate(x)) {
+      const c: PPt = [(t[0][0] + t[1][0] + t[2][0]) / 3, (t[0][1] + t[1][1] + t[2][1]) / 3]
+      if (pointInPolygon(c, x, eps) === 'in') return c
+    }
+    return null
+  }
+  const ca = inner(a)
+  return ca !== null && pointInPolygon(ca, b, eps) === 'in'
+}
+
+export function signedArea(p: readonly PPt[]): number {
+  let s = 0
+  for (let i = 0; i < p.length; i++) {
+    const a = p[i] as PPt
+    const b = p[(i + 1) % p.length] as PPt
+    s += a[0] * b[1] - b[0] * a[1]
+  }
+  return s / 2
+}
+
+/** The intersection of a polygon with a convex polygon (Sutherland–Hodgman). */
+export function clip(subject: readonly PPt[], convex: readonly PPt[]): [number, number][] {
+  if (subject.length < 3 || convex.length < 3) return []
+  const c = signedArea(convex) < 0 ? [...convex].reverse() : [...convex]
+  let out: [number, number][] = subject.map((p) => [p[0], p[1]])
+  for (let i = 0; i < c.length && out.length; i++) {
+    const a = c[i] as PPt
+    const b = c[(i + 1) % c.length] as PPt
+    const inside = (p: PPt): boolean => (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]) >= -1e-12
+    const meet = (p: PPt, q: PPt): [number, number] => {
+      const a1 = b[1] - a[1]
+      const b1 = a[0] - b[0]
+      const c1 = a1 * a[0] + b1 * a[1]
+      const a2 = q[1] - p[1]
+      const b2 = p[0] - q[0]
+      const c2 = a2 * p[0] + b2 * p[1]
+      const d = a1 * b2 - a2 * b1
+      return Math.abs(d) < 1e-15 ? [p[0], p[1]] : [(b2 * c1 - b1 * c2) / d, (a1 * c2 - a2 * c1) / d]
+    }
+    const input = out
+    out = []
+    for (let k = 0; k < input.length; k++) {
+      const cur = input[k] as [number, number]
+      const prev = input[(k + input.length - 1) % input.length] as [number, number]
+      if (inside(cur)) {
+        if (!inside(prev)) out.push(meet(prev, cur))
+        out.push(cur)
+      } else if (inside(prev)) out.push(meet(prev, cur))
+    }
+  }
+  return out
+}
+
+/** Corners with repeats and collinear runs removed, counter-clockwise (y-up sense). */
+function cleaned(poly: readonly PPt[], eps = 1e-9): PPt[] {
+  let ps: PPt[] = []
+  for (const p of poly) {
+    const last = ps[ps.length - 1]
+    if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) > eps) ps.push(p)
+  }
+  while (ps.length > 1 && Math.hypot((ps[0] as PPt)[0] - (ps[ps.length - 1] as PPt)[0], (ps[0] as PPt)[1] - (ps[ps.length - 1] as PPt)[1]) <= eps) ps.pop()
+  let changed = true
+  while (changed && ps.length > 3) {
+    changed = false
+    for (let i = 0; i < ps.length; i++) {
+      const a = ps[(i + ps.length - 1) % ps.length] as PPt
+      const b = ps[i] as PPt
+      const c = ps[(i + 1) % ps.length] as PPt
+      if (Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) <= eps * Math.max(1, Math.hypot(c[0] - a[0], c[1] - a[1]))) {
+        ps = [...ps.slice(0, i), ...ps.slice(i + 1)]
+        changed = true
+        break
+      }
+    }
+  }
+  return signedArea(ps) < 0 ? ps.reverse() : ps
+}
+
+/** Ear-clipping triangulation of a simple polygon (any orientation). A polygon it cannot clip (self-intersecting)
+ * falls back to a fan from its first corner. */
+export function triangulate(poly: readonly PPt[]): [PPt, PPt, PPt][] {
+  const ps = cleaned(poly)
+  if (ps.length < 3) return []
+  const out: [PPt, PPt, PPt][] = []
+  const idx = ps.map((_, i) => i)
+  const cross = (o: PPt, a: PPt, b: PPt): number => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+  const inTri = (p: PPt, a: PPt, b: PPt, c: PPt): boolean => cross(a, b, p) >= -1e-12 && cross(b, c, p) >= -1e-12 && cross(c, a, p) >= -1e-12
+  let guard = 0
+  while (idx.length > 3 && guard++ < 10_000) {
+    let clipped = false
+    for (let k = 0; k < idx.length; k++) {
+      const ia = idx[(k + idx.length - 1) % idx.length] as number
+      const ib = idx[k] as number
+      const ic = idx[(k + 1) % idx.length] as number
+      const [a, b, c] = [ps[ia] as PPt, ps[ib] as PPt, ps[ic] as PPt]
+      if (cross(a, b, c) <= 1e-12) continue // reflex or flat
+      if (idx.some((j) => j !== ia && j !== ib && j !== ic && inTri(ps[j] as PPt, a, b, c))) continue
+      out.push([a, b, c])
+      idx.splice(k, 1)
+      clipped = true
+      break
+    }
+    if (!clipped) break
+  }
+  if (idx.length === 3) out.push([ps[idx[0] as number] as PPt, ps[idx[1] as number] as PPt, ps[idx[2] as number] as PPt])
+  else if (idx.length > 3) for (let k = 1; k + 1 < idx.length; k++) out.push([ps[idx[0] as number] as PPt, ps[idx[k] as number] as PPt, ps[idx[k + 1] as number] as PPt])
+  return out
+}
+
+const triArea = (t: readonly PPt[]): number => Math.abs(signedArea(t))
+
+const boxOf = (p: readonly PPt[]): [number, number, number, number] => {
+  let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity]
+  for (const [x, y] of p) {
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y)
+  }
+  return [x0, y0, x1, y1]
+}
+
+/** The area two simple polygons share (exact for concave ones: triangle by triangle). */
+export function polygonOverlapArea(a: readonly PPt[], b: readonly PPt[]): number {
+  const ta = triangulate(a)
+  const tb = triangulate(b)
+  let s = 0
+  const bb = tb.map(boxOf)
+  for (const t of ta) {
+    const [x0, y0, x1, y1] = boxOf(t)
+    tb.forEach((u, j) => {
+      const [u0, v0, u1, v1] = bb[j] as [number, number, number, number]
+      if (x1 <= u0 || u1 <= x0 || y1 <= v0 || v1 <= y0) return
+      s += triArea(clip(t, u))
+    })
+  }
+  return s
+}

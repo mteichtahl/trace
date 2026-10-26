@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { merge } from '../../src/core/dbmerge.js'
 import { VerifyDb } from '../../src/tools/verify/db.js'
 import { classify, extractCandidates, limitsOf, tableRow } from '../../src/tools/verify/extract.js'
-import { coverLines, sq, stage } from '../../src/tools/verify/job.js'
+import { commonRoot, coverLines, hdlStage, includeArgs, includesOf, sq, stage } from '../../src/tools/verify/job.js'
 import { backendFor } from '../../src/gpu/jobs.js'
 import { generatedSby, rewriteSbyFiles, sbyFiles } from '../../src/tools/verify/formal.js'
 import { mergeCoverage, parseCocotbResults, parseCoverageDat, parseSby, parseSmtbmc, summarizeCoverage, verilatorMessages } from '../../src/tools/verify/parse.js'
@@ -185,6 +185,34 @@ describe('parsers', () => {
     expect(generatedSby({ files: ['a.v'], top: 'a', mode: 'cover', depth: 9, solver: 'z3' })).toContain('[engines]\nsmtbmc z3\n')
   })
 
+  it('stages HDL sources as a tree: the layout, include dirs and followed includes kept', () => {
+    const d = mkdtempSync(join(tmpdir(), 'stage-tree-'))
+    try {
+      for (const sub of ['rtl/a', 'rtl/b', 'rtl/inc/deep', 'tb']) mkdirSync(join(d, sub), { recursive: true })
+      writeFileSync(join(d, 'rtl', 'a', 'util.v'), '`include "../inc/deep/w.vh"\nmodule ua; endmodule\n')
+      writeFileSync(join(d, 'rtl', 'b', 'util.v'), '// `include "nope.vh"\nmodule ub; endmodule\n')
+      writeFileSync(join(d, 'rtl', 'inc', 'deep', 'w.vh'), '`include "x.vh"\n')
+      writeFileSync(join(d, 'rtl', 'inc', 'deep', 'x.vh'), '')
+      writeFileSync(join(d, 'tb', 'tb.cpp'), '')
+      expect(includesOf('`include "a/b.vh"\n/* `include "c.vh" */ // `include "d.vh"\n  `include "e.vh"')).toEqual(['a/b.vh', 'e.vh'])
+      expect(commonRoot([join(d, 'rtl', 'a'), join(d, 'rtl', 'b')])).toBe(join(d, 'rtl'))
+      const h = hdlStage({ files: [join(d, 'rtl', 'a', 'util.v'), join(d, 'rtl', 'b', 'util.v')], extra: [join(d, 'tb', 'tb.cpp')] })
+      // the same basename twice is fine in a tree; the include chain (relative to each file) is followed
+      expect(h.sources).toEqual(['rtl/a/util.v', 'rtl/b/util.v'])
+      expect(h.followed).toEqual(['rtl/inc/deep/w.vh', 'rtl/inc/deep/x.vh'])
+      expect(h.extra).toEqual(['tb/tb.cpp'])
+      expect(h.inputs['rtl/inc/deep/x.vh']).toBe(join(d, 'rtl', 'inc', 'deep', 'x.vh'))
+      expect(includeArgs(h)).toEqual(['-I{dir}/in/rtl/a', '-I{dir}/in/rtl/b', '-I{dir}/in/rtl/inc/deep'])
+      const withInc = hdlStage({ files: [join(d, 'rtl', 'b', 'util.v')], include_dirs: [join(d, 'rtl', 'inc')] })
+      expect(withInc.incdirs).toEqual(['inc'])
+      expect(withInc.names).toEqual(['b/util.v', 'inc/deep/w.vh', 'inc/deep/x.vh']) // include dirs are walked into sub-folders
+      expect(includeArgs(withInc, '+incdir+')).toEqual(['+incdir+{dir}/in/inc', '+incdir+{dir}/in/b'])
+      expect(() => stage([join(d, 'tb', 'tb.cpp')], { inputs: {}, names: [] }, join(d, 'rtl'))).toThrow(/is not under/)
+    } finally {
+      rmSync(d, { recursive: true, force: true })
+    }
+  })
+
   it('keeps CPU jobs local unless TRACE_GPU_REMOTE=always, and stages inputs by unique file name', () => {
     const saved = { q: process.env.TRACE_GPU_QUEUE, m: process.env.TRACE_GPU_REMOTE }
     try {
@@ -226,21 +254,22 @@ describe('parsers', () => {
 describe('verification record', () => {
   it('keeps requirements, tests, results and coverage, and refuses dangling links', async () => {
     const add = await call('verify.requirements', { action: 'add', requirements: [{ text: 'avg is the mean of the last four samples', kind: 'functional' }, { id: 'REQ-T1', text: 'avg_valid one clock after valid', kind: 'timing', acceptance: 'formal bmc to depth 10' }] })
-    expect(add.added).toEqual(['REQ-001', 'REQ-T1'])
+    const [R1] = add.added as [string, string]
+    expect(add.added).toEqual([expect.stringMatching(/^REQ-[0-9a-f]{6}$/), 'REQ-T1'])
     await expect(call('verify.plan', { action: 'add', tests: [{ title: 'dangling', requirements: ['REQ-999'], method: 'inspection' }] })).rejects.toThrow(/no such requirement: REQ-999/)
-    await expect(call('verify.plan', { action: 'add', tests: [{ title: 'bad args', requirements: ['REQ-001'], method: 'sim', tool: 'sim.logic', args: { nonsense: 1 } }] })).rejects.toThrow(/args for sim.logic/)
-    await expect(call('verify.plan', { action: 'add', tests: [{ title: 'how?', requirements: ['REQ-001'], method: 'sim' }] })).rejects.toThrow(/needs a tool or a command/)
+    await expect(call('verify.plan', { action: 'add', tests: [{ title: 'bad args', requirements: [R1], method: 'sim', tool: 'sim.logic', args: { nonsense: 1 } }] })).rejects.toThrow(/args for sim.logic/)
+    await expect(call('verify.plan', { action: 'add', tests: [{ title: 'how?', requirements: [R1], method: 'sim' }] })).rejects.toThrow(/needs a tool or a command/)
     const plan = await call('verify.plan', { action: 'add', tests: [
-      { title: 'visual check', requirements: ['REQ-001'], method: 'inspection' },
+      { title: 'visual check', requirements: [R1], method: 'inspection' },
       { title: 'node runs', requirements: ['REQ-T1'], method: 'sim', command: [process.execPath, '-e', 'process.exit(0)'] },
     ] })
     expect(plan.added).toEqual(['TST-001', 'TST-002'])
     const run = await call('verify.run', { all: true, verdicts: { 'TST-001': { status: 'pass', note: 'read the RTL' } } })
     expect(run).toMatchObject({ ran: 2, pass: 2 })
-    const cov = await call('verify.coverage', { define: [{ requirements: ['REQ-001'], kind: 'functional', match: 'full_scale' }] })
+    const cov = await call('verify.coverage', { define: [{ requirements: [R1], kind: 'functional', match: 'full_scale' }] })
     const reqs = cov.requirements as { id: string; verdict: string }[]
     expect(reqs.find((r) => r.id === 'REQ-T1')?.verdict).toBe('verified')
-    expect(reqs.find((r) => r.id === 'REQ-001')?.verdict).toBe('coverage_gap') // the point has no hits
+    expect(reqs.find((r) => r.id === R1)?.verdict).toBe('coverage_gap') // the point has no hits
     const rep = await call('verify.report', { title: 'Test report' })
     expect(String(rep.markdown)).toMatch(/\| REQ-T1 \| timing \| verified \|/)
     // clean up for the tests below
@@ -287,6 +316,76 @@ describe('verification record', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  it('gives new requirements random ids, and keeps both of two different requirements that share an id', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'verify-collide-'))
+    const env = process.env.TRACE_PROJECT_DB
+    const withDb = <T>(p: string, fn: (v: VerifyDb) => T): T => {
+      process.env.TRACE_PROJECT_DB = p
+      const v = new VerifyDb()
+      try {
+        return fn(v)
+      } finally {
+        v.close()
+        process.env.TRACE_PROJECT_DB = env
+      }
+    }
+    try {
+      const base = join(dir, 'base.db')
+      const ours = join(dir, 'ours.db')
+      const theirs = join(dir, 'theirs.db')
+      // the shared history: a legacy sequential id, accepted as it is
+      withDb(base, (v) => {
+        v.addRequirement({ id: 'REQ-001', text: 'shared', kind: 'functional' })
+        v.db.prepare('UPDATE requirements SET created=1, updated=1').run()
+      })
+      copyFileSync(base, ours)
+      copyFileSync(base, theirs)
+      // each branch adds its own REQ-002 the old sequential way, with a test pointing at it, and a random-id one
+      const branch = (p: string, text: string, t: number): string => withDb(p, (v) => {
+        v.addRequirement({ id: 'REQ-002', text, kind: 'timing' })
+        v.db.prepare('UPDATE requirements SET created=?, updated=? WHERE id=?').run(t, t, 'REQ-002')
+        v.addTest({ id: `TST-${text}`, title: text, requirements: ['REQ-001', 'REQ-002'], method: 'inspection' })
+        v.definePoint({ id: `COV-${text}`, requirements: ['REQ-002'], kind: 'functional', match: text })
+        return v.addRequirement({ text: `${text} random`, kind: 'emc' }).id
+      })
+      const ro = branch(ours, 'ours', 10)
+      const rt = branch(theirs, 'theirs', 20)
+      expect(ro).toMatch(/^REQ-[0-9a-f]{6}$/)
+      expect(rt).toMatch(/^REQ-[0-9a-f]{6}$/)
+      expect(ro).not.toBe(rt)
+      expect(merge(base, ours, theirs)).toEqual([])
+      withDb(ours, (v) => {
+        const reqs = v.requirements()
+        const renamed = reqs.find((r) => r.text === 'theirs')
+        expect(reqs.find((r) => r.id === 'REQ-002')?.text).toBe('ours') // ours keeps the id, not overwritten as "newer"
+        expect(renamed?.id).toMatch(/^REQ-002-[0-9a-f]{6}$/)
+        expect(reqs.map((r) => r.id).sort()).toEqual(['REQ-001', 'REQ-002', renamed?.id, ro, rt].sort())
+        expect(v.test('TST-theirs')?.requirements).toEqual(['REQ-001', renamed?.id]) // theirs' links follow the rename
+        expect(v.test('TST-ours')?.requirements).toEqual(['REQ-001', 'REQ-002'])
+        expect(v.points().find((p) => p.id === 'COV-theirs')?.requirements).toEqual([renamed?.id])
+        const notes = v.mergeNotes()
+        expect(notes).toEqual([expect.objectContaining({ kind: 'requirement_renamed', old_id: 'REQ-002', new_id: renamed?.id })])
+        expect(notes[0]?.note).toMatch(/different requirement REQ-002/)
+      })
+      // the same requirement edited on both sides (same created time) is still one row, the newer text
+      const again = join(dir, 'again.db')
+      copyFileSync(base, again)
+      const edit = (p: string, text: string, t: number): void => { const db = new DatabaseSync(p); db.prepare('UPDATE requirements SET text=?, updated=? WHERE id=?').run(text, t, 'REQ-001'); db.close() }
+      const mine = join(dir, 'mine.db')
+      copyFileSync(base, mine)
+      edit(mine, 'mine', 5)
+      edit(again, 'again, newer', 6)
+      expect(merge(base, mine, again)).toEqual([])
+      withDb(mine, (v) => {
+        expect(v.requirements().map((r) => [r.id, r.text])).toEqual([['REQ-001', 'again, newer']])
+        expect(v.mergeNotes()).toEqual([])
+      })
+    } finally {
+      process.env.TRACE_PROJECT_DB = env
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 // ------------------------------------------------------------------ the programs, for real
@@ -322,6 +421,57 @@ describe.skipIf(!hasVerilator)('verify.verilator (Verilator installed)', () => {
       expect(String(r.reason)).toMatch(/deliberate|exited/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
+    }
+  }, 300_000)
+})
+
+/** A design whose include sits in a sub-folder, and two sources sharing a basename in different folders. */
+function nestedDesign(): string {
+  const d = mkdtempSync(join(tmpdir(), 'vnested-'))
+  for (const sub of ['rtl/sub', 'rtl/other', 'tb']) mkdirSync(join(d, sub), { recursive: true })
+  writeFileSync(join(d, 'rtl', 'sub', 'consts.vh'), '`define TRACE_MAGIC 8\'d42\n')
+  writeFileSync(join(d, 'rtl', 'top.v'), '`include "sub/consts.vh"\nmodule top(output [7:0] y, output [7:0] z); assign y = `TRACE_MAGIC; util u(.z(z)); endmodule\n')
+  writeFileSync(join(d, 'rtl', 'other', 'top.v'), 'module util(output [7:0] z); assign z = 8\'d7; endmodule\n')
+  writeFileSync(join(d, 'tb', 'tb.v'), 'module tb; wire [7:0] y, z; top dut(.y(y), .z(z)); initial begin #1; if (y == 42 && z == 7) $display("NESTED OK"); else $display("NESTED BAD %0d %0d", y, z); $finish; end endmodule\n')
+  writeFileSync(join(d, 'tb', 'test_nested.py'), 'import cocotb\nfrom cocotb.triggers import Timer\n\n@cocotb.test()\nasync def reads_the_include(dut):\n    await Timer(1, unit="ns")\n    assert int(dut.y.value) == 42 and int(dut.z.value) == 7\n')
+  return d
+}
+
+describe.skipIf(!hasVerilator)('include in a sub-folder, under Verilator', () => {
+  it('builds and runs with `include "sub/consts.vh" and two top.v files', async () => {
+    const d = nestedDesign()
+    try {
+      const r = await call('verify.verilator', { files: [join(d, 'rtl', 'top.v'), join(d, 'rtl', 'other', 'top.v'), join(d, 'tb', 'tb.v')], top: 'tb', coverage: [], pass: 'NESTED OK' })
+      expect(r.reason).toMatch(/pass pattern/)
+      expect(r.passed).toBe(true)
+    } finally {
+      rmSync(d, { recursive: true, force: true })
+    }
+  }, 300_000)
+})
+
+describe.skipIf(!hasCocotb)('include in a sub-folder, under cocotb + Icarus', () => {
+  it('runs a Python test against a design whose include is in a sub-folder', async () => {
+    const d = nestedDesign()
+    try {
+      const r = await call('verify.cocotb', { files: [join(d, 'rtl', 'top.v'), join(d, 'rtl', 'other', 'top.v')], top: 'top', modules: [join(d, 'tb', 'test_nested.py')], timescale: ['1ns', '1ps'] })
+      expect(r.reason).toMatch(/1 passed/)
+      expect(r.passed).toBe(true)
+    } finally {
+      rmSync(d, { recursive: true, force: true })
+    }
+  }, 300_000)
+})
+
+describe.skipIf(!hasSmtbmc)('include in a sub-folder, under yosys-smtbmc', () => {
+  it('proves a property over a design whose include is in a sub-folder', async () => {
+    const d = nestedDesign()
+    try {
+      writeFileSync(join(d, 'rtl', 'props.sv'), 'module props(input clk); wire [7:0] y, z; top dut(.y(y), .z(z)); always @(posedge clk) assert (y == 8\'d42 && z == 8\'d7); endmodule\n')
+      const r = await call('verify.formal', { engine: 'smtbmc', files: [join(d, 'rtl', 'top.v'), join(d, 'rtl', 'other', 'top.v'), join(d, 'rtl', 'props.sv')], top: 'props', mode: 'bmc', depth: 3 })
+      expect(r.status).toBe('PASS')
+    } finally {
+      rmSync(d, { recursive: true, force: true })
     }
   }, 300_000)
 })

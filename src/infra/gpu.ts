@@ -9,12 +9,23 @@
  *                    ECS Amazon Linux 2023 NVIDIA AMI, scaling from 0 vCPUs (no cost when idle) to maxVcpus;
  *                    on-demand, or Spot when asked
  *   queue            one job queue on that compute environment, shared by every project
- *   job definitions  one per project (addProjectJob, called by src/infra/project.ts), asking for 1 GPU, 4 vCPUs and
- *                    14 GiB, each with its own job role that may read and write only that project's jobs/<slug>/
- *                    prefix. SubmitJob cannot override a definition's job role, so a project's runtime, allowed to
- *                    submit only with its own definition, can never run a job as another project
+ *   CPU compute      (cpu.enabled) a second managed EC2 environment of x86 CPU instances (c7i/c6i/m7i families by
+ *                    default) on the plain ECS Amazon Linux 2023 AMI, 0 to cpu.maxVcpus, and its own queue
+ *                    (<prefix>-cpu), for the CPU-heavy jobs sent remote (openEMS, Verilator, formal, nextpnr). It
+ *                    runs the same image: a CUDA runtime base image starts and runs CPU programs without a GPU (the
+ *                    CUDA libraries are only loaded by the programs that use them, which these jobs do not)
+ *   job definitions  per project (addProjectJob, called by src/infra/project.ts): a GPU one asking for 1 GPU, 4 vCPUs
+ *                    and 14 GiB, and (CPU queue) a CPU one asking for cpu.vcpus and cpu.memoryMiB, both with the
+ *                    project's one job role that may read and write only that project's jobs/<slug>/ prefix.
+ *                    SubmitJob cannot override a definition's job role, so a project's runtime, allowed to submit
+ *                    only with its own definitions, can never run a job as another project
  *   image            ECR repository <prefix>-gpu, built from this repository by CodeBuild through the same
- *                    custom-resource provider as the agent image, tagged with the source hash
+ *                    custom-resource provider as the agent image, tagged with the source hash. The deploy starts the
+ *                    build and does not wait for it (Wait: 'false'): CloudFormation cannot isolate a failure inside one
+ *                    stack (a failed resource, nested stacks included, rolls back the whole update), so a broken GPU
+ *                    image must not be a resource the deploy waits on. The job definitions name the tag, which Batch
+ *                    resolves only when a job starts; the installer waits for the build after the deploy and starts
+ *                    it again if it failed (src/installer/aws.ts ensureGpuImage)
  */
 import { CustomResource, Duration, RemovalPolicy, Size, Stack, Tags } from 'aws-cdk-lib'
 import * as batch from 'aws-cdk-lib/aws-batch'
@@ -28,7 +39,7 @@ import type * as s3 from 'aws-cdk-lib/aws-s3'
 import type { Asset } from 'aws-cdk-lib/aws-s3-assets'
 import type { Provider } from 'aws-cdk-lib/custom-resources'
 import { Construct } from 'constructs'
-import { gpuJobDefinitionName, PROJECT_TAG, projectHash, projectJobsPrefix, projectSlug } from '../core/project.js'
+import { cpuJobDefinitionName, gpuJobDefinitionName, PROJECT_TAG, projectHash, projectJobsPrefix, projectSlug } from '../core/project.js'
 import { grantPrefixes } from './project.js'
 
 export { JOBS_PREFIX } from '../core/project.js'
@@ -49,6 +60,8 @@ export interface GpuComputeProps {
   retainData: boolean
   /** more environment for each job (the OpenTelemetry exporter's, src/infra/observability.ts) */
   environment?: Record<string, string>
+  /** the CPU compute environment and queue (null: none) */
+  cpu?: { instanceTypes: readonly string[]; maxVcpus: number; spot: boolean; vcpus: number; memoryMiB: number } | null
 }
 
 export class GpuCompute extends Construct {
@@ -57,6 +70,11 @@ export class GpuCompute extends Construct {
   readonly imageUri: string
   readonly computeEnvironment: batch.ManagedEc2EcsComputeEnvironment
   readonly queue: batch.JobQueue
+  /** the CPU compute environment and its queue (cpu.enabled), or null */
+  readonly cpuComputeEnvironment: batch.ManagedEc2EcsComputeEnvironment | null = null
+  readonly cpuQueue: batch.JobQueue | null = null
+  /** the GPU image build the deploy started (its CodeBuild build id) */
+  readonly imageBuildId: string
   readonly logGroup: logs.LogGroup
   /** every project's job role (observability lets them write spans) */
   readonly jobRoles: iam.Role[] = []
@@ -104,8 +122,9 @@ export class GpuCompute extends Construct {
     this.imageUri = `${this.repository.repositoryUri}:${p.source.assetHash}`
     this.image = new CustomResource(this, 'Image', {
       serviceToken: p.buildProvider.serviceToken,
-      properties: { ProjectName: build.projectName, ImageUri: this.imageUri, SourceHash: p.source.assetHash },
+      properties: { ProjectName: build.projectName, ImageUri: this.imageUri, SourceHash: p.source.assetHash, Wait: 'false' },
     })
+    this.imageBuildId = this.image.getAttString('BuildId')
 
     // ------------------------------------------------------------------ compute, queue, job definition
     this.computeEnvironment = new batch.ManagedEc2EcsComputeEnvironment(this, 'Compute', {
@@ -128,6 +147,32 @@ export class GpuCompute extends Construct {
       computeEnvironments: [{ computeEnvironment: this.computeEnvironment, order: 1 }],
       priority: 1,
     })
+    if (p.cpu) {
+      this.cpuComputeEnvironment = new batch.ManagedEc2EcsComputeEnvironment(this, 'CpuCompute', {
+        computeEnvironmentName: `${p.prefix}-cpu`,
+        vpc: this.vpc,
+        vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+        securityGroups: [sg],
+        // a family (c7i) is an instance class to Batch; a type (c7i.4xlarge) an instance type
+        instanceTypes: p.cpu.instanceTypes.filter((t) => t.includes('.')).map((t) => new ec2.InstanceType(t)),
+        instanceClasses: p.cpu.instanceTypes.filter((t) => !t.includes('.')).map((t) => t as ec2.InstanceClass),
+        useOptimalInstanceClasses: false,
+        images: [{ imageType: batch.EcsMachineImageType.ECS_AL2023 }],
+        // the GPU environment's instance role (ECS agent only): one role for both
+        ...(this.computeEnvironment.instanceRole ? { instanceRole: this.computeEnvironment.instanceRole } : {}),
+        minvCpus: 0,
+        maxvCpus: p.cpu.maxVcpus,
+        spot: p.cpu.spot,
+        allocationStrategy: p.cpu.spot ? batch.AllocationStrategy.SPOT_PRICE_CAPACITY_OPTIMIZED : batch.AllocationStrategy.BEST_FIT_PROGRESSIVE,
+        updateToLatestImageVersion: true,
+        replaceComputeEnvironment: false,
+      })
+      this.cpuQueue = new batch.JobQueue(this, 'CpuQueue', {
+        jobQueueName: `${p.prefix}-cpu`,
+        computeEnvironments: [{ computeEnvironment: this.cpuComputeEnvironment, order: 1 }],
+        priority: 1,
+      })
+    }
 
     this.logGroup = new logs.LogGroup(this, 'JobLogs', { logGroupName: `/trace/${p.prefix}/gpu-jobs`, retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY })
     // pulls the image and writes the job's logs, for every project's jobs; the job's own AWS access is its job role's
@@ -138,11 +183,14 @@ export class GpuCompute extends Construct {
   }
 
   /**
-   * One project's job definition and job role, in `scope` (the project's construct): the role may read and write
-   * only jobs/<slug>/ of the central bucket. Returns the definition's name (SubmitJob with it uses the latest
-   * active revision).
+   * One project's job definitions (GPU, and CPU when there is the CPU queue) and its job role, in `scope` (the
+   * project's construct): the role may read and write only jobs/<slug>/ of the central bucket. Returns the
+   * definitions' names (SubmitJob with one uses its latest active revision).
    */
-  addProjectJob(scope: Construct, repository: string): { jobDefinitionName: string; jobDefinition: batch.EcsJobDefinition; jobRole: iam.Role } {
+  addProjectJob(scope: Construct, repository: string): {
+    jobDefinitionName: string; jobDefinition: batch.EcsJobDefinition; jobRole: iam.Role
+    cpu: { jobDefinitionName: string; jobDefinition: batch.EcsJobDefinition } | null
+  } {
     const { region, account } = Stack.of(this)
     const p = this.p
     const hash = projectHash(repository)
@@ -172,7 +220,29 @@ export class GpuCompute extends Construct {
       }),
     })
     Tags.of(jobDefinition).add(PROJECT_TAG, slug)
-    jobDefinition.node.addDependency(this.image)
-    return { jobDefinitionName, jobDefinition, jobRole }
+    // no dependency on the image build: the deploy does not wait for it (see the header)
+    let cpu: { jobDefinitionName: string; jobDefinition: batch.EcsJobDefinition } | null = null
+    if (p.cpu && this.cpuQueue) {
+      const name = cpuJobDefinitionName(p.prefix, repository)
+      const def = new batch.EcsJobDefinition(scope, 'CpuJob', {
+        jobDefinitionName: name,
+        timeout: Duration.hours(8),
+        retryAttempts: 1,
+        container: new batch.EcsEc2ContainerDefinition(scope, 'CpuContainer', {
+          image: ecs.ContainerImage.fromEcrRepository(this.repository, p.source.assetHash),
+          cpu: p.cpu.vcpus,
+          memory: Size.mebibytes(p.cpu.memoryMiB),
+          jobRole,
+          executionRole: this.executionRole,
+          command: ['node', '/app/dist/gpu/runner.js'],
+          // TRACE_GPU=0: no GPU here (the image sets 1); no queue in a job's environment, so it never ships itself again
+          environment: { AWS_REGION: region, TRACE_GPU: '0', TRACE_PROJECT: slug, ...p.environment },
+          logging: ecs.LogDriver.awsLogs({ logGroup: this.logGroup, streamPrefix: `cpu-${hash}` }),
+        }),
+      })
+      Tags.of(def).add(PROJECT_TAG, slug)
+      cpu = { jobDefinitionName: name, jobDefinition: def }
+    }
+    return { jobDefinitionName, jobDefinition, jobRole, cpu }
   }
 }

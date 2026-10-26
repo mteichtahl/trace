@@ -22,7 +22,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { ToolError } from '../../core/registry.js'
-import { haveProgram, includeFiles, needProgram, shellJob, sq, stage } from './job.js'
+import { haveProgram, hdlStage, includeArgs, needProgram, shellJob, sq, stage } from './job.js'
 import { parseSby, parseSmtbmc, type FormalLog } from './parse.js'
 
 export interface FormalOptions {
@@ -91,7 +91,8 @@ export function rewriteSbyFiles(text: string, files: readonly { dest: string; na
     if (sec) {
       inFiles = sec[1]?.trim() === 'files'
       out.push(raw)
-      if (inFiles) for (const f of files) out.push(f.dest === f.name ? f.name : `${f.dest} ${f.name}`)
+      // a lone path is copied to its basename: a name with a folder is written as `dest name` to keep its place
+      if (inFiles) for (const f of files) out.push(f.dest === f.name && !f.name.includes('/') ? f.name : `${f.dest} ${f.name}`)
       continue
     }
     if (!inFiles) out.push(raw)
@@ -99,13 +100,18 @@ export function rewriteSbyFiles(text: string, files: readonly { dest: string; na
   return out.join('\n')
 }
 
-export function generatedSby(o: { files: string[]; top: string; mode: FormalOptions['mode']; depth: number; solver: string; defines?: FormalOptions['defines'] }): string {
-  const defs = Object.entries(o.defines ?? {}).filter(([, v]) => v !== false).map(([k, v]) => (v === true ? `-D${k}` : `-D${k}=${v}`)).join(' ')
+/** A .sby for files + top. `files` are read; `others` (include files) are copied beside them; `incdirs` become -I.
+ * Paths are relative to the .sby file and keep their folders in sby's src/. */
+export function generatedSby(o: { files: string[]; others?: string[]; incdirs?: string[]; top: string; mode: FormalOptions['mode']; depth: number; solver: string; defines?: FormalOptions['defines'] }): string {
+  const defs = Object.entries(o.defines ?? {}).filter(([, v]) => v !== false).map(([k, v]) => (v === true ? `-D${k}` : `-D${k}=${v}`))
+  const incs = [...new Set(o.incdirs ?? [])].map((d) => `-I${d}`)
+  const flags = [...defs, ...incs].join(' ')
+  const all = [...new Set([...o.files, ...(o.others ?? [])])]
   return [
     '[options]', `mode ${o.mode}`, `depth ${o.depth}`, '',
     '[engines]', `smtbmc ${o.solver}`, '',
-    '[script]', `read -formal ${defs ? `${defs} ` : ''}${o.files.join(' ')}`, `prep -top ${o.top}`, '',
-    '[files]', ...o.files, '',
+    '[script]', `read -formal ${flags ? `${flags} ` : ''}${o.files.join(' ')}`, `prep -top ${o.top}`, '',
+    '[files]', ...all.map((f) => (f.includes('/') ? `${f} ${f}` : f)), '',
   ].join('\n')
 }
 
@@ -119,22 +125,24 @@ export async function runFormal(o: FormalOptions): Promise<FormalRun> {
     if (engine === 'sby') {
       needProgram('sby', 'install SymbiYosys (the OSS CAD Suite has it), or use engine smtbmc with files and top')
       let sbyText: string
-      const st = { inputs: {} as Record<string, string>, names: [] as string[] }
+      let st: ReturnType<typeof hdlStage>
       let files: { dest: string; name: string }[]
       if (o.sby) {
         const p = resolve(o.sby)
         if (!existsSync(p)) throw new ToolError(`no file ${p}`)
         sbyText = readFileSync(p, 'utf8')
         const listed = sbyFiles(sbyText)
-        stage(listed.map((f) => resolve(dirname(p), f.src)), st)
-        files = listed.map((f) => ({ dest: f.dest, name: basename(f.src) }))
+        // the listed files keep their layout; [files] is rewritten to their staged names, dest names as given
+        st = hdlStage({ files: listed.map((f) => resolve(dirname(p), f.src)), include_dirs: o.include_dirs })
+        files = listed.map((f, i) => ({ dest: f.dest, name: st.sources[i] as string }))
       } else {
         if (!o.files?.length || !o.top) throw new ToolError('give a .sby file, or files and top')
-        stage(o.files, st)
-        files = st.names.map((n) => ({ dest: n, name: n }))
-        sbyText = generatedSby({ files: st.names, top: o.top, mode: o.mode, depth: o.depth, solver, defines: o.defines })
+        st = hdlStage({ files: o.files, include_dirs: o.include_dirs })
+        const others = st.names.filter((n) => !st.sources.includes(n))
+        const incdirs = includeArgs(st, '').map((a) => a.replace(/^\{dir\}\/in\/?/, '') || '.')
+        files = [...st.sources, ...others].map((n) => ({ dest: n, name: n }))
+        sbyText = generatedSby({ files: st.sources, others, incdirs, top: o.top, mode: o.mode, depth: o.depth, solver, defines: o.defines })
       }
-      stage(includeFiles(o.include_dirs ?? []), st)
       writeFileSync(join(tmp, 'trace_job.sby'), rewriteSbyFiles(sbyText, files))
       stage([join(tmp, 'trace_job.sby')], st)
       const script = [
@@ -159,11 +167,10 @@ export async function runFormal(o: FormalOptions): Promise<FormalRun> {
     needProgram('yosys-smtbmc', 'it comes with yosys (Debian/Ubuntu: the yosys package)')
     if (!o.files?.length || !o.top) throw new ToolError('engine smtbmc needs files and top')
     if (!/^[A-Za-z_][\w$]*$/.test(o.top)) throw new ToolError(`top ${JSON.stringify(o.top)} is not a module name`)
-    const st = stage(o.files)
-    const src = [...st.names]
-    stage(includeFiles(o.include_dirs ?? []), st)
+    const st = hdlStage({ files: o.files, include_dirs: o.include_dirs })
+    const src = [...st.sources]
     const defs = Object.entries(o.defines ?? {}).filter(([, v]) => v !== false).map(([k, v]) => (v === true ? `-D${k}` : `-D${k}=${v}`))
-    const ys = `read_verilog -formal -sv ${[...defs, '-I{dir}/in'].join(' ')} ${src.map((n) => `{in:${n}}`).join(' ')}; prep -top ${o.top}; async2sync; dffunmap; write_smt2 -wires {dir}/model.smt2`
+    const ys = `read_verilog -formal -sv ${[...defs, ...includeArgs(st)].join(' ')} ${src.map((n) => `{in:${n}}`).join(' ')}; prep -top ${o.top}; async2sync; dffunmap; write_smt2 -wires {dir}/model.smt2`
     const smt = (flags: string, vcd: string, log: string): string =>
       `yosys-smtbmc -s ${sq(solver)} --noprogress ${flags} -t ${o.depth} --dump-vcd {dir}/vcd/${vcd} {dir}/model.smt2 > {out:${log}} 2>&1; echo "${log}=$?" >> {out:status.txt}`
     const steps = o.mode === 'cover' ? [smt('-c', 'cover_%.vcd', 'cover.log')]

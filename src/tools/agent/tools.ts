@@ -6,7 +6,10 @@
  * tool is not offered, which is what limits delegation to depth 1; the runtime refuses any other token too.
  *
  * The call blocks: it polls the worker job's status every TRACE_DELEGATE_POLL_MS (default 15 s) until it ends or
- * TRACE_DELEGATE_TIMEOUT_S passes (agents.delegate_timeout_minutes).
+ * TRACE_DELEGATE_TIMEOUT_S passes (agents.delegate_timeout_minutes); then it cancels the worker (POST
+ * /delegate/cancel) and returns, and the specialist may delegate again. Claude Code waits for it: the job runner sets
+ * MCP_TOOL_TIMEOUT (ms, the wall-clock limit of one MCP call) and CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT (ms; a stdio
+ * server that answers nothing for 30 minutes is otherwise cut off) above the wait (src/agents/runtime/job.ts).
  */
 import { z } from 'zod'
 import { ToolError, defineTool } from '../../core/registry.js'
@@ -15,12 +18,15 @@ const BranchArg = z.string().min(1).max(200).regex(/^[A-Za-z0-9_][A-Za-z0-9._/-]
   .refine((s) => !s.includes('..') && !s.endsWith('/') && !s.endsWith('.lock') && !s.includes('//'), 'not a valid branch name')
 
 const Started = z.object({ accepted: z.boolean(), jobId: z.string(), reason: z.string().optional() }).loose()
+const DelegationStateSchema = z.enum(['running', 'succeeded', 'failed', 'cancelled'])
 const Status = z.object({
   job: z.object({
     id: z.string(), state: z.enum(['running', 'succeeded', 'failed', 'aborted']),
+    delegation: DelegationStateSchema.optional(),
     summary: z.string().optional(), error: z.string().optional(), endedAt: z.string().optional(), log: z.array(z.string()).default([]),
   }).loose(),
 }).loose()
+const Cancelled = z.object({ jobId: z.string(), delegation: DelegationStateSchema }).loose()
 const ErrorBody = z.object({ error: z.string() }).loose()
 
 export interface DelegateEnv {
@@ -70,18 +76,21 @@ export const delegate = defineTool({
     const end = Date.now() + e.timeoutS * 1000
     for (;;) {
       const s = Status.parse(await post(e, '/delegate/status', { token: e.token, jobId: started.jobId })).job
-      if (s.state !== 'running') {
+      const state = s.delegation ?? (s.state === 'aborted' ? 'cancelled' : s.state)
+      if (state !== 'running') {
         return {
-          job_id: s.id, state: s.state, summary: s.summary ?? null, error: s.error ?? null,
-          next: s.state === 'succeeded'
+          job_id: s.id, state, summary: s.summary ?? null, error: s.error ?? null,
+          next: state === 'succeeded'
             ? 'Check every acceptance criterion now with your own tools, in this checkout; report each with its run id.'
             : 'The worker did not finish: read the error, then delegate once more with what went wrong, or escalate.',
         }
       }
       if (Date.now() >= end) {
+        // a worker that outran the wait is stopped, so it cannot keep changing the checkout under the specialist
+        const c = Cancelled.parse(await post(e, '/delegate/cancel', { token: e.token, jobId: s.id, reason: `agent.delegate waited ${e.timeoutS} s` }))
         return {
-          job_id: s.id, state: 'timeout', summary: null, error: `still running after ${e.timeoutS} s`, log: s.log.slice(-10),
-          next: 'The worker is still running and no further delegation is possible while it does: escalate with this job id.',
+          job_id: s.id, state: 'timeout', delegation: c.delegation, summary: null, error: `still running after ${e.timeoutS} s: the worker was stopped`, log: s.log.slice(-10),
+          next: 'The worker ran out of time and was stopped. Look at what it committed (git log), then delegate again with a smaller brief, or escalate with this job id.',
         }
       }
       await sleep(e.pollMs)

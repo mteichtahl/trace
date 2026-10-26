@@ -15,7 +15,10 @@
  *                       installations have them (about 24 fit)
  *   agent memory        AgentCore Memory (src/infra/memory.ts): one per project, made by its ProjectStack, still
  *                       namespaced /trace/<owner>/<repo>/<agent>/; each worker may use only its own project's memory
- *   GPU                 one AWS Batch queue and compute environment shared by every project (src/infra/gpu.ts)
+ *   GPU                 one AWS Batch queue and compute environment shared by every project, and (cpu.enabled) a
+ *                       second queue and environment of CPU instances for CPU-heavy remote jobs (src/infra/gpu.ts).
+ *                       The deploy starts the GPU image's build without waiting for it, so a failed GPU image cannot
+ *                       roll back the core; the installer waits for it afterwards
  *   observability       OpenTelemetry (ADOT) from every runtime and the GPU jobs, CloudWatch Transaction Search,
  *                       each project memory's vended logs and traces, and a dashboard (src/infra/observability.ts)
  *   people              a Cognito user pool (no self sign-up; admins invite people) with three classes as groups —
@@ -32,7 +35,8 @@
  * A person's token can never reach a worker, and a workflow never acts as a person.
  *
  * Outputs carry everything the installer then writes into GitHub (each repository's variables, from that project's
- * outputs: src/infra/props.ts projectOutputs) and the local settings.
+ * outputs: src/infra/props.ts projectOutputs, the parent's own in the flat layout and each project's nested stack's in
+ * the nested one, which the installer reads there) and the local settings.
  */
 import { join } from 'node:path'
 import { CfnOutput, CfnParameter, CfnResource, CustomResource, Duration, Fn, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib'
@@ -50,14 +54,19 @@ import * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { Provider } from 'aws-cdk-lib/custom-resources'
 import type { Construct, IConstruct } from 'constructs'
 import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
-import { JOBS_PREFIX, PROJECTS_PREFIX, memoryName, workerRuntimeNamePattern } from '../core/project.js'
+import { JOBS_PREFIX, PROJECTS_PREFIX, memoryName } from '../core/project.js'
 import { GpuCompute } from './gpu.js'
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
 import { ACCESS_PREFIX, CENTRAL_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
-  type InfraProps, LAYOUT_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, projectOutputs, projectRefs,
+  GPU_IMAGE_BUILD_OUTPUT, type InfraProps, LAYOUT_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled,
+  projectRefs, projectSettings,
 } from './props.js'
+
+/** The tag every runtime (and memory) of an installation carries: its prefix. The API's grant on the workers is scoped
+ * by it as well as by their ARNs, so it can never reach another installation's runtime in the account. */
+export const INSTALLATION_TAG = 'trace:installation'
 
 /** The repository root, from dist/infra or src/infra. */
 export const REPO_ROOT = join(import.meta.dirname, '..', '..')
@@ -197,6 +206,7 @@ export class TraceStack extends Stack {
           bucket: central, source, buildProvider: provider, retainData: cfg.retainData,
           allowBuild: (arn) => { for (const f of [start, poll]) f.addToRolePolicy(new iam.PolicyStatement({ actions: ['codebuild:StartBuild', 'codebuild:BatchGetBuilds'], resources: [arn] })) },
           environment: gpuTelemetryEnv(cfg),
+          cpu: cpuEnabled(cfg) ? cfg.cpu : null,
         })
       : null
     // ------------------------------------------------------------------ the installation-wide memory of earlier versions
@@ -250,7 +260,7 @@ export class TraceStack extends Stack {
     const memoryEnv: Record<string, string> = {}
     if (memories.length) {
       memoryEnv.TRACE_PROJECT_MEMORIES = idList(projects.map((p) => p.memory?.memoryId ?? ''))
-      const memoryListLength = idListLength(refs.map((r) => ({ slug: r.slug, name: memoryName(cfg.prefix, r.repository) })))
+      const memoryListLength = idListLength(refs.map((r) => ({ slug: r.slug, name: memoryName(cfg.prefix, r.repository, projectSettings(cfg, r.repository).generation) })))
       if (memoryListLength > ENV_VALUE_MAX) throw new Error(`too many repositories for one installation: the API's list of project memories would be ${memoryListLength} characters (AgentCore allows ${ENV_VALUE_MAX})`)
     }
 
@@ -335,9 +345,20 @@ export class TraceStack extends Stack {
     // which memory records are inactive, per project (memory.deactivate / reactivate, src/agents/runtime/memory-state.ts):
     // read and conditional writes under projects/<slug>/memory-state/ only, nothing else of projects/
     grantPrefixes(apiRole, central, { conditional: [`${PROJECTS_PREFIX}/*/${MEMORY_STATE}`] })
-    // every project's worker runtime of this installation (by name; one statement however many projects there are)
-    const workers = `arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:runtime/${workerRuntimeNamePattern(cfg.prefix)}`
-    apiRole.addToPolicy(new iam.PolicyStatement({ sid: 'InvokeProjectWorkers', actions: ['bedrock-agentcore:InvokeAgentRuntime'], resources: [workers, `${workers}/runtime-endpoint/*`] }))
+    // every project's worker runtime of this installation: by its exact ARN (from its nested stack's output, or the
+    // runtime itself when flat), and on the runtime also by this installation's tag. InvokeAgentRuntime authorizes the
+    // runtime and the runtime endpoint (Service Authorization Reference: both resource types take aws:ResourceTag);
+    // the endpoint (DEFAULT, made by AgentCore) is not tagged by this stack, so its statement has the ARNs only
+    if (projects.length) {
+      const arns = projects.map((p) => p.runtime.attrAgentRuntimeArn)
+      apiRole.addToPolicy(new iam.PolicyStatement({
+        sid: 'InvokeProjectWorkers', actions: ['bedrock-agentcore:InvokeAgentRuntime'], resources: arns,
+        conditions: { StringEquals: { [`aws:ResourceTag/${INSTALLATION_TAG}`]: cfg.prefix } },
+      }))
+      apiRole.addToPolicy(new iam.PolicyStatement({
+        sid: 'InvokeProjectWorkerEndpoints', actions: ['bedrock-agentcore:InvokeAgentRuntime'], resources: arns.map((a) => `${a}/runtime-endpoint/*`),
+      }))
+    }
     grantReadRecords(apiRole, memories)
 
     const discoveryUrl = `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}/.well-known/openid-configuration`
@@ -365,6 +386,7 @@ export class TraceStack extends Stack {
         TRACE_WORKER_RUNTIMES: workerList,
         ...memoryEnv,
       },
+      tags: { [INSTALLATION_TAG]: cfg.prefix },
     })
     api.node.addDependency(apiRole)
     const observabilityEnv = Math.max(Object.keys(ENABLED_ENV).length, Object.keys(DISABLED_ENV).length)
@@ -383,7 +405,10 @@ export class TraceStack extends Stack {
       prefix: cfg.prefix, settings: cfg.observability, gpu: Boolean(gpu), gpuJobRoles: gpu?.jobRoles ?? [],
       retainData: cfg.retainData, releaseDeliveries: cfg.layoutMigration === 'release',
       memories: projects.flatMap((p, i) => (p.memory
-        ? [{ id: p.node.id, hash: refs[i]?.hash ?? '', name: memoryName(cfg.prefix, refs[i]?.repository ?? ''), arn: p.memory.memoryArn, memoryId: p.memory.memoryId, ...(nested ? { scope: p } : {}) }]
+        ? [{
+            id: p.node.id, hash: refs[i]?.hash ?? '', repository: refs[i]?.repository ?? '', generation: p.generation,
+            name: memoryName(cfg.prefix, refs[i]?.repository ?? '', p.generation), arn: p.memory.memoryArn, memoryId: p.memory.memoryId, ...(nested ? { scope: p } : {}),
+          }]
         : [])),
       runtimes: [
         ...projects.map((p) => ({ id: p.node.id, runtime: p.runtime, name: p.runtimeName, role: p.role })),
@@ -393,18 +418,9 @@ export class TraceStack extends Stack {
 
     // ------------------------------------------------------------------ outputs
     new CfnOutput(this, LAYOUT_OUTPUT, { value: cfg.layout, description: 'Where each project\'s resources are: nested (a nested stack each) or flat (this stack)' })
-    // Nested: what the installer reads of each project, under the names it always had (each project's nested stack
-    // has these and the rest: its secret, GPU job definition and log groups). Three per project, so 60 fit in 200.
-    if (nested) {
-      projects.forEach((p, i) => {
-        const ref = refs[i]
-        if (!ref) return
-        const o = projectOutputs(ref.repository)
-        new CfnOutput(this, o.runtimeArn, { value: p.runtime.attrAgentRuntimeArn, description: `${ref.slug}: its worker runtime (TRACE_AGENT_RUNTIME_ARN)` })
-        new CfnOutput(this, o.roleArn, { value: p.actionsRole.roleArn, description: `${ref.slug}: its GitHub OIDC role (TRACE_AWS_ROLE)` })
-        if (p.memory) new CfnOutput(this, o.memoryId, { value: p.memory.memoryId, description: `${ref.slug}: its AgentCore memory (its worker's TRACE_MEMORY_ID)` })
-      })
-    }
+    // Nested: the parent carries none of a project's outputs (Project<hash>RuntimeArn, ActionsRoleArn, MemoryId, …):
+    // they are its nested stack's, and the installer reads them there (src/installer/aws.ts stackOutputs), so the
+    // parent's outputs do not grow with the projects. Flat: the stack's own, as they always were (src/infra/project.ts).
     const hint = nested ? '' : `: with layout 'flat' about 24 projects fit; see README "Project isolation" for the move to layout 'nested'`
     this.node.addValidation({ validate: () => stackQuotaErrors(this, hint) })
     for (const n of nestedStacks) n.node.addValidation({ validate: () => stackQuotaErrors(n, '') })
@@ -422,6 +438,8 @@ export class TraceStack extends Stack {
     if (gpu) {
       new CfnOutput(this, 'GpuJobQueue', { value: gpu.queue.jobQueueArn })
       new CfnOutput(this, 'GpuImageUri', { value: gpu.imageUri })
+      new CfnOutput(this, GPU_IMAGE_BUILD_OUTPUT, { value: gpu.imageBuildId, description: 'The GPU image build this deploy started (the deploy does not wait for it; the installer does)' })
+      if (gpu.cpuQueue) new CfnOutput(this, 'CpuJobQueue', { value: gpu.cpuQueue.jobQueueArn })
     }
   }
 }

@@ -8,7 +8,9 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 import { capacitanceUf, diffPairs, druRules } from '../../src/tools/layout/checks.js'
-import { arcPoints, area, clip, hull, inside, loops, overlapArea, rectPoly } from '../../src/tools/layout/geom.js'
+import { arcPoints, area, clip, hull, inside, loops, overlapArea, overlaps, rectPoly } from '../../src/tools/layout/geom.js'
+import { pointInPolygon, polygonOverlapArea, polygonsOverlap, segmentsCross, triangulate } from '../../src/tools/pcb/geometry.js'
+import { readLayout } from '../../src/tools/layout/board.js'
 import { allTools } from '../../src/tools/index.js'
 
 type Dict = Record<string, unknown>
@@ -115,6 +117,84 @@ describe('geometry', () => {
     expect(d.rules[0]?.skew_max_mm).toBeCloseTo(0.127)
     expect(d.rules[0]?.match('/USB_D+', null, true)).toBe(true)
     expect(d.rules[0]?.match('/USB_D+', null, false)).toBe(false)
+  })
+})
+
+/** An L-shaped courtyard (6 fp_lines; 4×4 with the top-right 2×2 notch cut out), as KiCad draws one, around (0,0). */
+const L_LINES = [[-2, -2, 0, -2], [0, -2, 0, 0], [0, 0, 2, 0], [2, 0, 2, 2], [2, 2, -2, 2], [-2, 2, -2, -2]]
+  .map(([a, b, c, d]) => `\t\t(fp_line (start ${a} ${b}) (end ${c} ${d}) (stroke (width 0.05) (type solid)) (layer "F.CrtYd") (uuid "${uid()}"))`)
+
+function lBoard(name: string, lines: string[]): string {
+  const fp = (ref: string, x: number, y: number, body: string): string => `\t(footprint "test:${ref}" (layer "F.Cu") (uuid "${uid()}") (at ${x} ${y})
+\t\t(property "Reference" "${ref}" (at 0 0) (layer "F.SilkS") (uuid "${uid()}") (effects (font (size 1 1))))
+\t\t(property "Value" "x" (at 0 0) (layer "F.Fab") (uuid "${uid()}") (effects (font (size 1 1))))
+\t\t(attr smd)
+${body}
+\t\t(pad "1" smd rect (at 0 0) (size 0.5 0.5) (layers "F.Cu") (net 1 "N") (uuid "${uid()}"))
+\t)`
+  const rect = (x0: number, y0: number, x1: number, y1: number): string => `\t\t(fp_rect (start ${x0} ${y0}) (end ${x1} ${y1}) (stroke (width 0.05) (type solid)) (fill no) (layer "F.CrtYd") (uuid "${uid()}"))`
+  const text = `(kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0")
+\t(general (thickness 1.6))
+\t(layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user) (31 "F.CrtYd" user))
+\t(net 0 "")
+\t(net 1 "N")
+${fp('U1', 20, 20, lines.join('\n'))}
+${fp('C1', 21, 19, rect(-0.8, -0.8, 0.8, 0.8))}
+${fp('C2', 18.5, 21.5, rect(-0.75, -0.75, 0.75, 0.75))}
+\t(gr_rect (start 0 0) (end 50 40) (stroke (width 0.1) (type default)) (fill no) (layer "Edge.Cuts") (uuid "${uid()}"))
+)
+`
+  const f = join(dir, `${name}.kicad_pcb`)
+  writeFileSync(f, text)
+  return f
+}
+
+describe('courtyard polygons', () => {
+  it('overlaps concave polygons exactly, and tells touching from crossing', () => {
+    const L: [number, number][] = [[-2, -2], [0, -2], [0, 0], [2, 0], [2, 2], [-2, 2]]
+    expect(area(L)).toBe(12)
+    expect(triangulate(L).reduce((s, t) => s + area(t as never), 0)).toBeCloseTo(12, 9)
+    const notch = rectPoly(0.2, -1.8, 1.8, -0.2) // in the L's hull, outside the L
+    expect(overlapArea(L, notch)).toBeCloseTo(0, 9)
+    expect(overlaps(L, notch)).toBe(false)
+    expect(area(clip(notch, hull(L)))).toBeGreaterThan(1) // the hull would call it an overlap
+    expect(polygonOverlapArea(L, rectPoly(-1, -1, 1, 1))).toBeCloseTo(3, 9)
+    expect(polygonsOverlap(rectPoly(0, 0, 1, 1), rectPoly(1, 0, 2, 1))).toBe(false) // a shared edge only
+    expect(polygonsOverlap(rectPoly(0, 0, 4, 4), rectPoly(1, 1, 2, 2))).toBe(true) // containment, no crossing
+    expect(polygonsOverlap(rectPoly(0, 0, 1, 1), rectPoly(0, 0, 1, 1))).toBe(true) // the same outline
+    expect(segmentsCross([0, 0], [2, 2], [0, 2], [2, 0])).toBe(true)
+    expect(segmentsCross([0, 0], [1, 0], [1, 0], [2, 0])).toBe(false)
+    expect(pointInPolygon([0, 1], rectPoly(0, 0, 2, 2))).toBe('on')
+    expect(pointInPolygon([1, -1], L)).toBe('out')
+  })
+
+  it('reads an L-shaped courtyard as an L, and finds only the real overlap', async () => {
+    const pcb = lBoard('l-closed', L_LINES)
+    const lay = readLayout(pcb)
+    const u1 = lay.footprints.find((f) => f.ref === 'U1')
+    expect(u1?.courtyard_from).toBe('courtyard')
+    expect(u1?.courtyards).toHaveLength(1)
+    expect(area(u1?.courtyard ?? [])).toBeCloseTo(12, 6)
+    const r = await call('pcb.placement_check', { project: pcb, decap_max_mm: 100, connector_refs: '^$', edge_clearance_mm: 0 })
+    const ov = (r.findings as { check: string; refs: string[]; value_mm?: number; message: string }[]).filter((f) => f.check === 'courtyard_overlap')
+    // C1 sits in the notch (inside the hull, outside the L): no overlap. C2 overlaps the L's lower-left arm.
+    expect(ov.map((f) => f.refs)).toEqual([['C2', 'U1']])
+    // C2 spans 17.75..19.25 × 20.75..22.25 against the L's lower-left corner at 18, 22: 1.25 × 1.25
+    expect(ov[0]?.value_mm).toBeCloseTo(1.5625, 3)
+  })
+
+  it('falls back to the hull when the outline does not close, and says so', async () => {
+    const pcb = lBoard('l-open', L_LINES.slice(0, -1)) // the last edge missing
+    const lay = readLayout(pcb)
+    const u1 = lay.footprints.find((f) => f.ref === 'U1')
+    expect(u1?.courtyard_from).toBe('hull')
+    expect(u1?.courtyard_note).toMatch(/does not close/)
+    const r = await call('pcb.placement_check', { project: pcb, decap_max_mm: 100, connector_refs: '^$', edge_clearance_mm: 0 })
+    const f = r.findings as { check: string; refs: string[]; message: string }[]
+    const ov = f.filter((x) => x.check === 'courtyard_overlap')
+    expect(ov.map((x) => x.refs.join()).sort()).toEqual(['C1,U1', 'C2,U1'])
+    expect(ov.every((x) => /convex hull/.test(x.message))).toBe(true)
+    expect(f.find((x) => x.check === 'courtyard_open')?.refs).toEqual(['U1'])
   })
 })
 

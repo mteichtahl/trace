@@ -17,7 +17,7 @@ import { context, trace } from '@opentelemetry/api'
 import {
   ATTR, type Attrs, type Outcome, type Span, SpanKind, childNodeArgs, fail, fromHeaders, ok, parentContext, personHash, recordMetric, setAttrs, span, startSpan, traceEnv, withSession,
 } from '../../core/telemetry.js'
-import type { JobPayload } from './schemas.js'
+import type { JobPayload, TraceContext } from './schemas.js'
 
 /** Claude runs through Bedrock on AgentCore (CLAUDE_CODE_USE_BEDROCK=1); otherwise the Anthropic API. */
 export const genAiSystem = (env: NodeJS.ProcessEnv = process.env): string =>
@@ -37,6 +37,33 @@ export function telemetryNote(env: NodeJS.ProcessEnv = process.env): string {
 
 /** The header AgentCore Runtime sends each invocation's session id in (InvokeAgentRuntime's runtimeSessionId). */
 export const SESSION_HEADER = 'x-amzn-bedrock-agentcore-runtime-session-id'
+
+const w3cTraceId = (tp: string | undefined): string | undefined => (tp ? /^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$/.exec(tp.trim())?.[1] : undefined)
+/** An X-Amzn-Trace-Id's Root (1-<8 hex>-<24 hex>) as the W3C trace id it stands for. */
+const xrayTraceId = (h: string | undefined): string | undefined => {
+  const m = h ? /(?:^|;)\s*Root=1-([0-9a-f]{8})-([0-9a-f]{24})/i.exec(h) : null
+  return m ? `${m[1]}${m[2]}`.toLowerCase() : undefined
+}
+const first = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v)
+
+/**
+ * The headers an invocation continues its trace from. A caller (the GitHub workflow's dispatch, the API) sends its
+ * trace context both as InvokeAgentRuntime's traceparent/tracestate/baggage headers and in the payload (`trace`).
+ * When the request reaches here with a traceparent or X-Amzn-Trace-Id of that same trace (AgentCore's own span in
+ * between), the headers are used; otherwise the payload's context replaces them, so workflow → agent → tools → GPU
+ * jobs stay one trace whether or not AgentCore forwards the headers.
+ */
+export function invocationHeaders(headers: IncomingHttpHeaders, t?: TraceContext): IncomingHttpHeaders {
+  const want = t ? w3cTraceId(t.traceparent) : undefined
+  if (!t || !want) return headers
+  if (w3cTraceId(first(headers.traceparent)) === want || xrayTraceId(first(headers['x-amzn-trace-id'])) === want) return headers
+  const out: IncomingHttpHeaders = { ...headers, traceparent: t.traceparent }
+  delete out['x-amzn-trace-id']
+  delete out.tracestate
+  if (t.tracestate) out.tracestate = t.tracestate
+  if (t.baggage) out.baggage = t.baggage
+  return out
+}
 
 /** The runtime session id of a request, if AgentCore sent one. */
 export function sessionOf(headers: IncomingHttpHeaders): string | undefined {

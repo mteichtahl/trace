@@ -7,7 +7,8 @@ import { z } from 'zod'
 import { projectHash, projectSlug } from '../core/project.js'
 
 export {
-  gpuJobDefinitionName, githubSecretName, memoryName, projectDataPrefix, projectHash, projectJobsPrefix, projectSlug, workerRuntimeName,
+  cpuJobDefinitionName, gpuJobDefinitionName, githubSecretName, memoryDeliveryName, memoryName, projectDataPrefix, projectHash, projectJobsPrefix, projectSlug,
+  workerRuntimeName,
 } from '../core/project.js'
 
 /** OWNER/REPO, optionally @BRANCH (its default branch; main when omitted). */
@@ -20,6 +21,11 @@ const EventExpiryDays = z.number().int().min(3).max(365)
 export const ProjectSettingsSchema = z.object({
   /** days its memory keeps short-term events; unset: memory.eventExpiryDays */
   memoryEventExpiryDays: EventExpiryDays.optional(),
+  /** Its names' generation (src/core/project.ts): 0 (unset) keeps the names it always had; above 0, its memory,
+   * memory log delivery sources and destinations, and token secret carry `g<n>`. The installer raises it when a project
+   * is added again while a removed one's retained memory, delivery or secret (in its recovery window) still holds the
+   * names; the old memory stays in the account, orphaned, and the new one starts empty. Never lower it. */
+  generation: z.number().int().min(0).max(99).optional(),
 }).strict()
 
 export const InfraPropsSchema = z.object({
@@ -30,10 +36,10 @@ export const InfraPropsSchema = z.object({
   /** The onboarded repositories. Each is one project with its own worker runtime, roles, GitHub token secret, memory
    * and GPU job definition (src/infra/project.ts); only its default branch's workflows may assume its GitHub OIDC role
    * (subject `repo:OWNER/REPO:ref:refs/heads/BRANCH`). At most 60: the API runtime is told every worker runtime, and
-   * every project's memory, in one environment variable each (5000 characters; checked when the stack is built), and
-   * the parent stack carries three outputs per project (CloudFormation allows 200 per template). With layout 'nested'
-   * each project is its own nested stack, so 60 fit; with layout 'flat' CloudFormation's 500 resources and 200
-   * outputs per stack bind at about 24 projects (checked when the stack is built). */
+   * every project's memory, in one environment variable each (5000 characters; checked when the stack is built). With
+   * layout 'nested' each project is its own nested stack (one resource and no output of the parent's), so 60 fit; with
+   * layout 'flat' CloudFormation's 500 resources and 200 outputs per stack bind at about 24 projects (checked when the
+   * stack is built). */
   repositories: z.array(repoSlug).min(1).max(60).superRefine((rs, ctx) => {
     const seen = new Map<string, string>()
     for (const r of rs) {
@@ -72,6 +78,23 @@ export const InfraPropsSchema = z.object({
     /** use Spot instances (cheaper; a job may be interrupted) */
     spot: z.boolean().default(false),
   }).strict().prefault({}),
+  /** CPU-heavy jobs sent remote (openEMS, Verilator, formal, nextpnr): a second AWS Batch compute environment and queue
+   * of x86 CPU instances beside the GPU one, running the same image (src/infra/gpu.ts), with one CPU job definition
+   * per project and that project's job role. It shares the GPU side's image, network and execution role, so it exists
+   * only with gpu.enabled; and only in layout 'nested', because its job definition is one more resource per project
+   * and a flat stack of 24 projects has no room for it (cpuEnabled below). */
+  cpu: z.object({
+    enabled: z.boolean().default(true),
+    /** x86 instance families or types, tried in order of fit */
+    instanceTypes: z.array(z.string().regex(/^[a-z][a-z0-9-]*(\.[a-z0-9]+)?$/, 'an EC2 instance family or type such as c7i or c7i.4xlarge')).min(1).default(['c7i', 'c6i', 'm7i']),
+    /** the most vCPUs running at once; the queue scales to zero when idle */
+    maxVcpus: z.number().int().min(1).max(4096).default(64),
+    /** use Spot instances (cheaper; a job may be interrupted) */
+    spot: z.boolean().default(false),
+    /** what each job asks for: vCPUs and memory (MiB) */
+    vcpus: z.number().int().min(1).max(192).default(16),
+    memoryMiB: z.number().int().min(1024).max(1_572_864).default(32_768),
+  }).strict().prefault({}),
   /** The agents' memory: one AgentCore Memory per project (short-term events, long-term facts, session summaries,
    * preferences; src/infra/memory.ts). */
   memory: z.object({
@@ -109,6 +132,7 @@ export const InfraPropsSchema = z.object({
   }).strict().prefault({}),
 }).strict().superRefine((p, ctx) => {
   if (p.layoutMigration && p.layout !== 'flat') ctx.addIssue({ code: 'custom', path: ['layoutMigration'], message: 'layoutMigration moves a flat installation: it needs layout flat' })
+  if (p.cpu.vcpus > p.cpu.maxVcpus) ctx.addIssue({ code: 'custom', path: ['cpu', 'vcpus'], message: `a CPU job asks for ${p.cpu.vcpus} vCPUs, more than cpu.maxVcpus (${p.cpu.maxVcpus})` })
   const listed = new Set(p.repositories.map((r) => (r.split('@')[0] ?? '').toLowerCase()))
   const seen = new Set<string>()
   for (const k of Object.keys(p.projectSettings)) {
@@ -143,13 +167,18 @@ export function projectRefs(repositories: readonly string[]): ProjectRef[] {
 }
 
 /** One project's settings (projectSettings, keyed case-insensitively), with the installation's defaults filled in. */
-export function projectSettings(cfg: Pick<InfraProps, 'projectSettings' | 'memory'>, repository: string): { memoryEventExpiryDays: number } {
+export function projectSettings(cfg: Pick<InfraProps, 'projectSettings' | 'memory'>, repository: string): { memoryEventExpiryDays: number; generation: number } {
   const slug = projectSlug(repository)
   const own = Object.entries(cfg.projectSettings).find(([k]) => k.toLowerCase() === slug)?.[1] ?? {}
-  return { memoryEventExpiryDays: own.memoryEventExpiryDays ?? cfg.memory.eventExpiryDays }
+  return { memoryEventExpiryDays: own.memoryEventExpiryDays ?? cfg.memory.eventExpiryDays, generation: own.generation ?? 0 }
 }
 
-/** The CloudFormation output names of one project (alphanumeric only, so the hash rather than the slug). */
+/** Whether the CPU queue exists: cpu.enabled, with the GPU side it shares, in the nested layout (see `cpu`). */
+export const cpuEnabled = (cfg: Pick<InfraProps, 'cpu' | 'gpu' | 'layout'>): boolean => cfg.cpu.enabled && cfg.gpu.enabled && cfg.layout === 'nested'
+
+/** The CloudFormation output names of one project (alphanumeric only, so the hash rather than the slug). In the nested
+ * layout they are its nested stack's outputs only (the parent carries none of them): the installer reads them there
+ * (src/installer/aws.ts stackOutputs). In the flat layout they are the stack's own, as they always were. */
 export const projectOutputs = (repository: string): { runtimeArn: string; roleArn: string; secretArn: string; jobDefinition: string; memoryId: string } => {
   const h = projectHash(repository)
   return {
@@ -158,10 +187,13 @@ export const projectOutputs = (repository: string): { runtimeArn: string; roleAr
   }
 }
 
-/** The project outputs the parent stack carries in the nested layout (the installer reads these, and the secret by its
- * name): the others are the project's nested stack's own outputs, under the same names. CloudFormation allows 200
- * outputs per template, so three per project is what lets 60 projects fit. */
-export const PARENT_PROJECT_OUTPUTS = ['runtimeArn', 'roleArn', 'memoryId'] as const
+/** In the nested layout, the output of each project's nested stack that names its repository (owner/repo), so the
+ * installer can tell which nested stack is whose without relying on logical ids alone. */
+export const REPOSITORY_OUTPUT = 'Repository'
+
+/** The GPU image build the deploy started (it no longer waits for it: src/infra/gpu.ts): the installer waits for it
+ * after the core is up, and starts it again if it failed. Its value is the CodeBuild build id, `<project>:<uuid>`. */
+export const GPU_IMAGE_BUILD_OUTPUT = 'GpuImageBuild'
 
 /** The stack's layout ('flat' or 'nested'), an output so the installer can tell which an installation has. */
 export const LAYOUT_OUTPUT = 'Layout'

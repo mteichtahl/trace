@@ -15,21 +15,36 @@ export const RepositorySchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}
 export const BranchSchema = z.string().min(1).max(200).regex(/^[A-Za-z0-9_][A-Za-z0-9._/-]*$/, 'not a valid branch name')
   .refine((s) => !s.includes('..') && !s.endsWith('/') && !s.endsWith('.lock') && !s.includes('//'), 'not a valid branch name')
 
+/**
+ * The caller's trace context, in the payload as well as in InvokeAgentRuntime's traceparent/tracestate/baggage
+ * headers: AgentCore's documentation does not say those headers reach the container, so the runtime continues from
+ * the payload when the request carries no traceparent of the same trace (src/agents/runtime/observe.ts).
+ */
+export const TraceContextSchema = z.object({
+  traceparent: z.string().regex(/^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/, 'a W3C traceparent'),
+  tracestate: z.string().max(512).optional(),
+  baggage: z.string().max(8192).optional(),
+}).strict()
+export type TraceContext = z.infer<typeof TraceContextSchema>
+
 export const WorkItemPayload = z.object({
   kind: z.literal('work-item'),
   repository: RepositorySchema,
   item: WorkItemSchema,
   runUrl: z.string().url().optional(),
+  trace: TraceContextSchema.optional(),
 }).strict()
 
 export const SweepPayload = z.object({
   kind: z.literal('sweep'),
   repositories: z.array(RepositorySchema).min(1).max(200),
+  trace: TraceContextSchema.optional(),
 }).strict()
 
 export const StatusPayload = z.object({
   kind: z.literal('status'),
   jobId: z.string().max(64).optional(),
+  trace: TraceContextSchema.optional(),
 }).strict()
 
 /**
@@ -49,6 +64,7 @@ export const TaskPayload = z.object({
   issue: z.number().int().positive().optional(),
   /** Which specialist does it; routed when absent. */
   agent: SpecialistKindSchema.optional(),
+  trace: TraceContextSchema.optional(),
 }).strict()
 
 /** What a specialist's agent.delegate hands the worker, besides the brief (the task's request). */
@@ -71,7 +87,21 @@ export const DelegatedTaskPayload = TaskPayload.omit({ agent: true, issue: true 
   delegation: DelegationSchema,
 }).strict()
 
-export const InvocationSchema = z.discriminatedUnion('kind', [WorkItemPayload, SweepPayload, StatusPayload, TaskPayload])
+/**
+ * One tool call the API forwards to the project's worker runtime (src/agents/runtime/tool.ts): no model and no job,
+ * the tool's answer in the response. The worker clones the project's default branch, refuses hardware tools and
+ * paths outside the clone, and runs the tool through the registry. The API checked the person's access first.
+ */
+export const ToolPayload = z.object({
+  kind: z.literal('tool'),
+  repository: RepositorySchema,
+  name: z.string().regex(/^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/, 'a tool name (area.tool)'),
+  args: z.record(z.string(), z.unknown()).default({}),
+  trace: TraceContextSchema.optional(),
+}).strict()
+export type ToolJob = z.infer<typeof ToolPayload>
+
+export const InvocationSchema = z.discriminatedUnion('kind', [WorkItemPayload, SweepPayload, StatusPayload, TaskPayload, ToolPayload])
 export type Invocation = z.infer<typeof InvocationSchema>
 export type WorkItemJob = z.infer<typeof WorkItemPayload>
 export type SweepJob = z.infer<typeof SweepPayload>
@@ -123,7 +153,7 @@ export class WrongProject extends Error {
 /** The repositories an invocation is about (none for status). */
 export function repositoriesOf(p: Invocation | JobPayload): string[] {
   switch (p.kind) {
-    case 'work-item': case 'task': return [p.repository]
+    case 'work-item': case 'task': case 'tool': return [p.repository]
     case 'sweep': return [...p.repositories]
     case 'status': return []
   }

@@ -3,16 +3,18 @@
  * through runJob, so a tool answers the same whether the job runs here or on the AWS Batch queue. These are CPU jobs
  * (gpu: false): runJob keeps them on this machine unless TRACE_GPU_REMOTE=always sends every job to the queue.
  *
- * A job gets its inputs as flat files (`{dir}/in/<name>`), so sources are staged by basename: two sources with the
- * same basename are refused rather than silently shadowing each other, and `include files must be found through
- * `-I{dir}/in` (an include written with a sub-folder, `include "sub/x.vh"`, is not found). Each job is a short POSIX
- * shell script (`sh -c`), with every caller-supplied string single-quoted, that writes its logs and results to
+ * A job gets its inputs under `{dir}/in/`, by name. HDL sources keep their relative layout (`hdlStage`): every file is
+ * named by its path relative to the deepest folder holding all of them (the sources, the include folders, and the
+ * files the sources `include), so `include "sub/x.vh"` finds sub/x.vh wherever the job runs, and two sources that
+ * share a basename in different folders are both kept. Include folders become `-I{dir}/in/<their path>`. Files the
+ * tools write themselves (a generated main(), a driver script) are staged by basename at the top. Each job is a short
+ * POSIX shell script (`sh -c`), with every caller-supplied string single-quoted, that writes its logs and results to
  * `{out:NAME}` files; the tools parse those files.
  */
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { ToolError } from '../../core/registry.js'
-import { backendFor, runJob, type JobKind, type JobResult } from '../../gpu/jobs.js'
+import { backendFor, isInputName, runJob, type JobKind, type JobResult } from '../../gpu/jobs.js'
 import { which } from '../sim/proc.js'
 
 /** Single-quote for sh. */
@@ -23,41 +25,163 @@ export function sq(s: string): string {
 const NAME = /^[\w.-]+$/
 
 export interface Staged {
-  /** input name → local path, for runJob */
+  /** input name (a relative path) → local path, for runJob */
   inputs: Record<string, string>
   /** the staged names, in the order given */
   names: string[]
 }
 
-/** Stage files as job inputs by basename. Refuses a missing file and two files sharing a basename. */
-export function stage(paths: readonly string[], into: Staged = { inputs: {}, names: [] }): Staged {
+const posix = (p: string): string => p.split(sep).join('/')
+
+function addInput(into: Staged, name: string, p: string): string {
+  if (!isInputName(name)) throw new ToolError(`${p}: staged as ${JSON.stringify(name)}, but input names use letters, digits, '.', '_' and '-' in each folder and file name`)
+  const prev = into.inputs[name]
+  if (prev !== undefined) {
+    if (resolve(prev) === p) return name
+    throw new ToolError(`two inputs are both called ${name} (${prev} and ${p}); jobs see inputs by name`)
+  }
+  for (const other of into.names) {
+    if (other.startsWith(`${name}/`) || name.startsWith(`${other}/`)) throw new ToolError(`${name} and ${other} cannot both be staged (one is a folder of the other)`)
+  }
+  into.inputs[name] = p
+  into.names.push(name)
+  return name
+}
+
+function needFile(p0: string): string {
+  const p = resolve(p0)
+  if (!existsSync(p) || !statSync(p).isFile()) throw new ToolError(`no file ${p}`)
+  return p
+}
+
+/** Stage files as job inputs. By basename (flat); with `root`, by their path relative to it (a tree). Refuses a
+ * missing file, a file outside root, and two different files given the same name. */
+export function stage(paths: readonly string[], into: Staged = { inputs: {}, names: [] }, root?: string): Staged {
   for (const p0 of paths) {
-    const p = resolve(p0)
-    if (!existsSync(p) || !statSync(p).isFile()) throw new ToolError(`no file ${p}`)
-    const name = basename(p)
-    if (!NAME.test(name)) throw new ToolError(`${p}: file names may use letters, digits, '.', '_' and '-' only`)
-    const prev = into.inputs[name]
-    if (prev !== undefined) {
-      if (resolve(prev) === p) continue
-      throw new ToolError(`two inputs are both called ${name} (${prev} and ${p}); jobs see inputs by file name`)
+    const p = needFile(p0)
+    if (root === undefined) {
+      const name = basename(p)
+      if (!NAME.test(name)) throw new ToolError(`${p}: file names may use letters, digits, '.', '_' and '-' only`)
+      addInput(into, name, p)
+      continue
     }
-    into.inputs[name] = p
-    into.names.push(name)
+    const rel = relative(resolve(root), p)
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new ToolError(`${p} is not under ${root}`)
+    addInput(into, posix(rel), p)
   }
   return into
 }
 
-/** Every HDL include-type file in the given folders (not recursive), for -I. */
+const INCLUDE_EXT = /\.(vh|svh|v|sv|vinc|inc|h|hpp)$/i
+const MAX_INCLUDE_FILES = 2000
+const MAX_INCLUDE_DEPTH = 8
+
+/** Every HDL include-type file in the given folders and their sub-folders (to 8 levels, skipping hidden folders),
+ * for -I: an include can name a file in a sub-folder of an include dir. */
 export function includeFiles(dirs: readonly string[]): string[] {
   const out: string[] = []
+  const walk = (d: string, depth: number): void => {
+    for (const f of readdirSync(d).sort()) {
+      if (f.startsWith('.') || f === 'node_modules') continue
+      const p = join(d, f)
+      const st = statSync(p)
+      if (st.isDirectory()) {
+        if (depth < MAX_INCLUDE_DEPTH) walk(p, depth + 1)
+      } else if (INCLUDE_EXT.test(f) && st.isFile()) {
+        out.push(p)
+        if (out.length > MAX_INCLUDE_FILES) throw new ToolError(`include dirs ${dirs.join(', ')} hold more than ${MAX_INCLUDE_FILES} HDL files: give the folder the includes are in`)
+      }
+    }
+  }
   for (const d0 of dirs) {
     const d = resolve(d0)
     if (!existsSync(d) || !statSync(d).isDirectory()) throw new ToolError(`include dir ${d} is not a folder`)
-    for (const f of readdirSync(d).sort()) {
-      if (/\.(vh|svh|v|sv|vinc|inc|h|hpp)$/i.test(f) && statSync(join(d, f)).isFile()) out.push(join(d, f))
-    }
+    walk(d, 0)
   }
   return out
+}
+
+/** The deepest folder holding every path given (files' folders and folders themselves). */
+export function commonRoot(dirs: readonly string[]): string {
+  if (!dirs.length) return process.cwd()
+  let parts = resolve(dirs[0] as string).split(sep)
+  for (const d of dirs.slice(1)) {
+    const q = resolve(d).split(sep)
+    let i = 0
+    while (i < parts.length && i < q.length && parts[i] === q[i]) i++
+    parts = parts.slice(0, i)
+  }
+  return parts.join(sep) || sep
+}
+
+/** `include "file"` directives in Verilog/SystemVerilog text (comments removed first). */
+export function includesOf(text: string): string[] {
+  const code = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  return [...code.matchAll(/`include\s+"([^"\n]+)"/g)].map((m) => m[1] as string)
+}
+
+export interface HdlStage extends Staged {
+  /** the source names, in the order given */
+  sources: string[]
+  /** each include folder's name in the tree ('.' for the top), for -I / +incdir+ */
+  incdirs: string[]
+  /** the files found by following `include directives (not given, not in an include folder) */
+  followed: string[]
+  /** the names of the other files given (testbench C++, Python modules), in order */
+  extra: string[]
+  root: string
+}
+
+/**
+ * Stage HDL sources with their layout kept: the sources, every include-type file in the include folders, the files
+ * the sources (and those files) `include` relative to their own folder or an include folder, and `extra` files, all
+ * named relative to the deepest folder holding them.
+ */
+export function hdlStage(o: { files: readonly string[]; include_dirs?: readonly string[] | undefined; extra?: readonly string[] | undefined }): HdlStage {
+  const files = o.files.map(needFile)
+  const extra = (o.extra ?? []).map(needFile)
+  const dirs = (o.include_dirs ?? []).map((d) => resolve(d))
+  const incFiles = includeFiles(dirs)
+  // follow `include from the sources: a file next to the source (or under an include dir) is staged with it
+  const followed: string[] = []
+  const seen = new Set<string>([...files, ...incFiles])
+  const queue = [...files, ...incFiles]
+  while (queue.length) {
+    const f = queue.shift() as string
+    if (!/\.(v|sv|vh|svh|vinc|inc)$/i.test(f)) continue
+    let text: string
+    try {
+      text = readFileSync(f, 'utf8')
+    } catch {
+      continue
+    }
+    for (const inc of includesOf(text)) {
+      if (isAbsolute(inc)) continue
+      const hit = [dirname(f), ...dirs].map((d) => resolve(d, inc)).find((c) => existsSync(c) && statSync(c).isFile())
+      if (!hit || seen.has(hit)) continue
+      seen.add(hit)
+      followed.push(hit)
+      queue.push(hit)
+      if (seen.size > MAX_INCLUDE_FILES) throw new ToolError(`more than ${MAX_INCLUDE_FILES} included files`)
+    }
+  }
+  const root = commonRoot([...[...files, ...incFiles, ...followed, ...extra].map((f) => dirname(f)), ...dirs])
+  const st: Staged = { inputs: {}, names: [] }
+  stage(files, st, root)
+  const sources = files.map((f) => posix(relative(root, f)))
+  stage([...incFiles, ...followed], st, root)
+  stage(extra, st, root)
+  const incdirs = dirs.map((d) => posix(relative(root, d)) || '.')
+  return { ...st, sources, incdirs, followed: followed.map((f) => posix(relative(root, f))), extra: extra.map((f) => posix(relative(root, f))), root }
+}
+
+/** `-I{dir}/in/<incdir>` for each include folder, then for the folder of each source and each followed include (so
+ * an include written relative to the including file resolves under any tool, Icarus without -grelative-include
+ * included). */
+export function includeArgs(h: Pick<HdlStage, 'incdirs' | 'sources' | 'followed'>, flag = '-I'): string[] {
+  const dirOf = (s: string): string => (s.includes('/') ? s.slice(0, s.lastIndexOf('/')) : '.')
+  const dirs = [...h.incdirs, ...h.sources.map(dirOf), ...h.followed.map(dirOf)]
+  return [...new Set(dirs)].map((d) => `${flag}{dir}/in${d === '.' ? '' : `/${d}`}`)
 }
 
 /** A program is needed here only when the job runs here; on the queue the job image provides it. */

@@ -36,6 +36,11 @@ export interface Jobs {
   jobStatus(jobId?: string): JobInfo[]
   /** True while any job runs (GET /ping answers HealthyBusy). */
   busy(): boolean
+  /**
+   * Abort one running job (its AbortController: Claude is stopped, git commands are killed) and wait up to graceMs
+   * for it to end. False when no such job is running. A specialist's delegated worker is aborted with it.
+   */
+  abort(jobId: string, reason: string, graceMs?: number): Promise<boolean>
   /** Abort every running job and wait (up to graceMs) for them to finish. */
   shutdown(graceMs?: number): Promise<void>
 }
@@ -67,6 +72,18 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
   const now = opts.now ?? Date.now
   const jobs = new Map<string, JobInfo>()
   const running = new Map<string, { id: string; abort: AbortController; done: Promise<void> }>()
+  const runningById = (id: string): { id: string; abort: AbortController; done: Promise<void> } | undefined => {
+    for (const r of running.values()) if (r.id === id) return r
+    return undefined
+  }
+  /** A specialist job's delegated worker jobs, while they run: aborted when the specialist is aborted or ends. */
+  const children = new Map<string, Set<string>>()
+  const abortOne = (id: string, why: string): Promise<void> | null => {
+    const r = runningById(id)
+    if (!r) return null
+    if (!r.abort.signal.aborted) r.abort.abort(new Error(why))
+    return r.done
+  }
 
   const prune = (): void => {
     const finished = [...jobs.values()].filter((j) => j.state !== 'running')
@@ -89,6 +106,23 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
       }
       jobs.set(id, info)
       const abort = new AbortController()
+      // a delegated worker belongs to its specialist's job: it never outlives it (aborted, failed or finished)
+      const parentId = isDelegated(payload) ? payload.delegation.parentJobId : null
+      const parent = parentId ? runningById(parentId) : undefined
+      let unlink = (): void => undefined
+      if (parentId && parent) {
+        const kids = children.get(parentId) ?? new Set<string>()
+        kids.add(id)
+        children.set(parentId, kids)
+        const onParentAbort = (): void => { if (!abort.signal.aborted) abort.abort(new Error(`cancelled: its specialist job ${parentId} was aborted`)) }
+        if (parent.abort.signal.aborted) onParentAbort()
+        else parent.abort.signal.addEventListener('abort', onParentAbort, { once: true })
+        unlink = () => {
+          parent.abort.signal.removeEventListener('abort', onParentAbort)
+          children.get(parentId)?.delete(id)
+          if (children.get(parentId)?.size === 0) children.delete(parentId)
+        }
+      }
       const log = (line: string): void => {
         const l = `${new Date(now()).toISOString()} ${line}`
         info.log.push(l)
@@ -106,12 +140,17 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
         try {
           info.summary = await runner(payload, { jobId: id, signal: abort.signal, log, startJob: (p) => self.startJob(p), route })
           info.state = abort.signal.aborted ? 'aborted' : 'succeeded'
+          if (abort.signal.aborted) info.error = abort.signal.reason instanceof Error ? abort.signal.reason.message : String(abort.signal.reason)
         } catch (e) {
           info.state = abort.signal.aborted ? 'aborted' : 'failed'
           info.error = e instanceof Error ? e.message : String(e)
         } finally {
           info.endedAt = new Date(now()).toISOString()
           log(`${info.state}${info.error ? `: ${info.error}` : info.summary ? `: ${info.summary}` : ''}`)
+          unlink()
+          // a specialist that ended (however) takes any worker it delegated to with it
+          for (const kid of children.get(id) ?? []) void abortOne(kid, `cancelled: its specialist job ${id} ended (${info.state})`)
+          children.delete(id)
           running.delete(key)
           prune()
         }
@@ -124,6 +163,12 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
       return [...jobs.values()].reverse()
     },
     busy: () => running.size > 0,
+    async abort(jobId, reason, graceMs = 30_000) {
+      const done = abortOne(jobId, reason)
+      if (!done) return false
+      await Promise.race([done, new Promise((res) => setTimeout(res, graceMs).unref())])
+      return true
+    },
     async shutdown(graceMs = 20_000) {
       const live = [...running.values()]
       for (const r of live) r.abort.abort(new Error('the runtime is shutting down'))

@@ -1,6 +1,6 @@
 /** Plane geometry for placement checks: convex hulls, polygon area and intersection, point-in-polygon, distances.
- * All in mm, board coordinates (y down, as KiCad). */
-import { segSeg } from '../pcb/geometry.js'
+ * All in mm, board coordinates (y down, as KiCad). Polygon intersection itself is in src/tools/pcb/geometry.ts. */
+import { clip, polygonOverlapArea, polygonsOverlap, segSeg } from '../pcb/geometry.js'
 
 export type Pt = [number, number]
 export type Poly = Pt[]
@@ -33,50 +33,14 @@ export function area(p: readonly Pt[]): number {
   return Math.abs(s) / 2
 }
 
-const signedArea = (p: readonly Pt[]): number => {
-  let s = 0
-  for (let i = 0; i < p.length; i++) {
-    const a = p[i] as Pt
-    const b = p[(i + 1) % p.length] as Pt
-    s += a[0] * b[1] - b[0] * a[1]
-  }
-  return s / 2
-}
+/** The intersection of a polygon with a convex polygon (Sutherland–Hodgman); see src/tools/pcb/geometry.ts. */
+export { clip }
 
-/** The intersection of a polygon with a convex polygon (Sutherland–Hodgman). */
-export function clip(subject: readonly Pt[], convex: readonly Pt[]): Poly {
-  if (subject.length < 3 || convex.length < 3) return []
-  const c = signedArea(convex) < 0 ? [...convex].reverse() : [...convex]
-  let out: Pt[] = [...subject]
-  for (let i = 0; i < c.length && out.length; i++) {
-    const a = c[i] as Pt
-    const b = c[(i + 1) % c.length] as Pt
-    const inside = (p: Pt): boolean => (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]) >= -1e-12
-    const meet = (p: Pt, q: Pt): Pt => {
-      const a1 = b[1] - a[1]
-      const b1 = a[0] - b[0]
-      const c1 = a1 * a[0] + b1 * a[1]
-      const a2 = q[1] - p[1]
-      const b2 = p[0] - q[0]
-      const c2 = a2 * p[0] + b2 * p[1]
-      const d = a1 * b2 - a2 * b1
-      return Math.abs(d) < 1e-15 ? p : [(b2 * c1 - b1 * c2) / d, (a1 * c2 - a2 * c1) / d]
-    }
-    const input = out
-    out = []
-    for (let k = 0; k < input.length; k++) {
-      const cur = input[k] as Pt
-      const prev = input[(k + input.length - 1) % input.length] as Pt
-      if (inside(cur)) {
-        if (!inside(prev)) out.push(meet(prev, cur))
-        out.push(cur)
-      } else if (inside(prev)) out.push(meet(prev, cur))
-    }
-  }
-  return out
-}
+/** The area two polygons share: exact for concave ones (an L-shaped courtyard), see polygonOverlapArea. */
+export const overlapArea = (a: readonly Pt[], b: readonly Pt[]): number => polygonOverlapArea(a, b)
 
-export const overlapArea = (a: readonly Pt[], b: readonly Pt[]): number => area(clip(a, hull(b)))
+/** Whether the insides of two polygons meet (touching outlines do not). */
+export const overlaps = (a: readonly Pt[], b: readonly Pt[]): boolean => polygonsOverlap(a, b)
 
 /** Even–odd point in polygon. */
 export function inside(p: Pt, poly: readonly Pt[]): boolean {

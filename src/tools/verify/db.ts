@@ -17,22 +17,55 @@
  * merges those files, so the database committed with the repository does not grow by a row per toggled bit.
  *
  * `trace db merge` merges requirements, test_items and coverage_points by id, keeping the more recently updated row,
- * and takes the union of test_results and coverage_hits (keyed by run id).
+ * and takes the union of test_results and coverage_hits (keyed by run id). New requirement ids are random
+ * (REQ-<6 hex>), so two branches do not hand out the same one; ids written before that (REQ-001, a project's own
+ * numbering) are kept. Two different requirements that still share an id (different text and created time: each
+ * branch added its own) are both kept: theirs is renamed <id>-<6 hex>, their test items and coverage points are
+ * pointed at the new id, and the rename is recorded in verify_merge_notes.
  */
 import type { DatabaseSync } from 'node:sqlite'
+import { randomBytes } from 'node:crypto'
 import { userInfo } from 'node:os'
 import { z } from 'zod'
 import { ToolError } from '../../core/registry.js'
 import { dec, enc, ensureProjectSchema, openProject, transaction, type Json } from '../../core/store.js'
 
-const newerWins = (table: string, cols: readonly string[]): string =>
-  `INSERT INTO ${table} SELECT * FROM theirs.${table} WHERE true
-  ON CONFLICT(id) DO UPDATE SET ${cols.map((c) => `${c}=excluded.${c}`).join(', ')}
-  WHERE excluded.updated > ${table}.updated`
-
 const REQ_COLS = ['text', 'kind', 'acceptance', 'source', 'page', 'status', 'tags', 'created', 'updated', 'by'] as const
 const TEST_COLS = ['title', 'requirements', 'method', 'tool', 'args', 'command', 'expect', 'status', 'last_run', 'note', 'created', 'updated', 'by'] as const
 const POINT_COLS = ['requirements', 'kind', 'match', 'goal', 'description', 'created', 'updated', 'by'] as const
+
+/** The requirement renames of this merge (theirs' id → its new id), filled by the requirements merge below. */
+const RENAMES = `CREATE TEMP TABLE IF NOT EXISTS trace_req_renames (old TEXT PRIMARY KEY, new TEXT NOT NULL);`
+
+const upsert = (table: string, cols: readonly string[]): string =>
+  `ON CONFLICT(id) DO UPDATE SET ${cols.map((c) => `${c}=excluded.${c}`).join(', ')} WHERE excluded.updated > ${table}.updated`
+
+/** Requirements: newer row wins, except that a different requirement under the same id (text and created both
+ * differ) is renamed instead of overwriting ours. */
+const REQ_MERGE = `${RENAMES}
+DELETE FROM temp.trace_req_renames;
+INSERT INTO temp.trace_req_renames (old, new)
+  SELECT t.id, t.id || '-' || lower(hex(randomblob(3))) FROM theirs.requirements t JOIN main.requirements o ON o.id = t.id
+  WHERE t.created <> o.created AND t.text <> o.text;
+INSERT INTO requirements (id, ${REQ_COLS.join(', ')})
+  SELECT COALESCE(r.new, t.id), ${REQ_COLS.map((c) => `t.${c}`).join(', ')} FROM theirs.requirements t
+  LEFT JOIN temp.trace_req_renames r ON r.old = t.id WHERE true
+  ${upsert('requirements', REQ_COLS)};
+INSERT OR IGNORE INTO verify_merge_notes (id, at, kind, old_id, new_id, note)
+  SELECT 'rename:' || r.new, unixepoch('subsec'), 'requirement_renamed', r.old, r.new,
+    'both branches added a different requirement ' || r.old || ' (different text and created time): ours kept the id, theirs became ' || r.new
+  FROM temp.trace_req_renames r;`
+
+/** A JSON list of requirement ids with theirs' renamed ids replaced (unchanged when none is renamed). */
+const renamedRefs = (col: string): string => `CASE WHEN EXISTS (SELECT 1 FROM json_each(t.${col}) j JOIN temp.trace_req_renames r ON r.old = j.value)
+    THEN (SELECT json_group_array(COALESCE(r.new, j.value)) FROM json_each(t.${col}) j LEFT JOIN temp.trace_req_renames r ON r.old = j.value)
+    ELSE t.${col} END`
+
+/** Test items and coverage points: newer row wins; their requirement ids follow theirs' renames. */
+const refMerge = (table: string, cols: readonly string[]): string => `${RENAMES}
+INSERT INTO ${table} (id, ${cols.join(', ')})
+  SELECT t.id, ${cols.map((c) => (c === 'requirements' ? renamedRefs(c) : `t.${c}`)).join(', ')} FROM theirs.${table} t WHERE true
+  ${upsert(table, cols)};`
 
 ensureProjectSchema({
   table: 'requirements',
@@ -47,7 +80,19 @@ CREATE TABLE IF NOT EXISTS requirements (
   tags TEXT,                      -- JSON list
   created REAL NOT NULL, updated REAL NOT NULL, by TEXT
 );`,
-  merge: newerWins('requirements', REQ_COLS),
+  merge: REQ_MERGE,
+})
+
+ensureProjectSchema({
+  table: 'verify_merge_notes',
+  sql: `
+CREATE TABLE IF NOT EXISTS verify_merge_notes (
+  id TEXT PRIMARY KEY,            -- rename:<new id>
+  at REAL NOT NULL,
+  kind TEXT NOT NULL,             -- requirement_renamed
+  old_id TEXT, new_id TEXT,
+  note TEXT NOT NULL
+);`,
 })
 
 ensureProjectSchema({
@@ -67,7 +112,7 @@ CREATE TABLE IF NOT EXISTS test_items (
   note TEXT,
   created REAL NOT NULL, updated REAL NOT NULL, by TEXT
 );`,
-  merge: newerWins('test_items', TEST_COLS),
+  merge: refMerge('test_items', TEST_COLS),
 })
 
 ensureProjectSchema({
@@ -96,7 +141,7 @@ CREATE TABLE IF NOT EXISTS coverage_points (
   description TEXT,
   created REAL NOT NULL, updated REAL NOT NULL, by TEXT
 );`,
-  merge: newerWins('coverage_points', POINT_COLS),
+  merge: refMerge('coverage_points', POINT_COLS),
 })
 
 ensureProjectSchema({
@@ -216,7 +261,17 @@ function toPoint(r: Record<string, unknown>): CoveragePoint {
   }
 }
 
-/** The next free id with this prefix: REQ-001, REQ-002, … (gaps are not reused). */
+/** A new requirement id, REQ-<6 hex>: random, so ids added on two branches do not collide; checked against the
+ * table. */
+export function newRequirementId(db: DatabaseSync, random: () => string = () => randomBytes(3).toString('hex')): string {
+  for (let i = 0; i < 20; i++) {
+    const id = `REQ-${random()}`
+    if (!db.prepare('SELECT 1 FROM requirements WHERE id=?').get(id)) return id
+  }
+  throw new ToolError('could not find a free requirement id')
+}
+
+/** The next free id with this prefix: TST-001, TST-002, … (gaps are not reused). */
 function nextId(db: DatabaseSync, table: string, prefix: string): string {
   const rows = db.prepare(`SELECT id FROM ${table} WHERE id LIKE ?`).all(`${prefix}-%`)
   let n = 0
@@ -245,7 +300,7 @@ export class VerifyDb {
 
   addRequirement(r: { id?: string | undefined; text: string; kind: Requirement['kind']; acceptance?: string | undefined; source?: string | undefined; page?: number | undefined; status?: Requirement['status'] | undefined; tags?: string[] | undefined }): Requirement {
     return transaction(this.db, () => {
-      const id = r.id ?? nextId(this.db, 'requirements', 'REQ')
+      const id = r.id ?? newRequirementId(this.db)
       if (!ID.test(id)) throw new ToolError(`requirement id ${JSON.stringify(id)}: letters, digits, '.', '_' and '-', starting with a letter`)
       if (this.db.prepare('SELECT 1 FROM requirements WHERE id=?').get(id)) throw new ToolError(`requirement ${id} exists (use update)`)
       const t = now()
@@ -253,6 +308,12 @@ export class VerifyDb {
         .run(id, r.text, r.kind, r.acceptance ?? null, r.source ?? null, r.page ?? null, r.status ?? 'proposed', enc(r.tags ?? []), t, t, who())
       return this.requirement(id) as Requirement
     })
+  }
+
+  /** What merges recorded (requirements renamed because both branches added a different one under one id). */
+  mergeNotes(): { id: string; at: number; kind: string; old_id: string | null; new_id: string | null; note: string }[] {
+    return (this.db.prepare('SELECT * FROM verify_merge_notes ORDER BY at, id').all() as Record<string, unknown>[])
+      .map((r) => ({ id: String(r.id), at: Number(r.at), kind: String(r.kind), old_id: s(r.old_id), new_id: s(r.new_id), note: String(r.note) }))
   }
 
   requirement(id: string): Requirement | null {

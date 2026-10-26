@@ -16,7 +16,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import * as sx from '../kicad/sexpr.js'
 import { Net, viaLength, type Board, type Pad } from '../kicad/pcb.js'
 import { onSide, type Layout, type PlacedFootprint } from './board.js'
-import { area, bbox, gapToSegments, inside, overlapArea, rectPoly, type Pt } from './geom.js'
+import { area, bbox, gapToSegments, inside, overlapArea, overlaps, rectPoly, type Poly, type Pt } from './geom.js'
 
 const r3 = (x: number): number => Math.round(x * 1000) / 1000
 
@@ -48,7 +48,7 @@ export interface PlacementOptions {
 }
 
 export interface Finding {
-  check: 'courtyard_overlap' | 'outside_edge' | 'edge_clearance' | 'keepout' | 'decoupling_distance' | 'power_pin_without_decoupling' | 'connector_not_at_edge' | 'no_courtyard'
+  check: 'courtyard_overlap' | 'outside_edge' | 'edge_clearance' | 'keepout' | 'decoupling_distance' | 'power_pin_without_decoupling' | 'connector_not_at_edge' | 'no_courtyard' | 'courtyard_open'
   severity: 'error' | 'warning' | 'info'
   refs: string[]
   message: string
@@ -69,6 +69,16 @@ export function capacitanceUf(value: string): number | null {
 }
 
 const dist = (a: { x: number; y: number }, b: { x: number; y: number }): number => Math.hypot(a.x - b.x, a.y - b.y)
+
+/** The area two footprints' courtyards share (their actual polygons: an edge crossing or containment first, then the
+ * exact shared area), 0 when they only touch or are apart. */
+export function courtyardOverlap(a: { courtyards: Poly[] }, b: { courtyards: Poly[] }): number {
+  let s = 0
+  for (const p of a.courtyards) for (const q of b.courtyards) if (overlaps(p, q)) s += overlapArea(p, q)
+  return s
+}
+
+const hullNote = (f: PlacedFootprint): string => (f.courtyard_from === 'hull' ? `; ${f.ref}'s courtyard is its convex hull (the outline does not close), so this may overstate` : '')
 
 export function placementCheck(L: Layout, o: PlacementOptions): { findings: Finding[]; counts: Record<string, number>; decoupling: unknown[]; connectors: unknown[] } {
   const findings: Finding[] = []
@@ -100,9 +110,9 @@ export function placementCheck(L: Layout, o: PlacementOptions): { findings: Find
         const [ax0, ay0, ax1, ay1] = boxes[i] as number[] as [number, number, number, number]
         const [bx0, by0, bx1, by1] = boxes[j] as number[] as [number, number, number, number]
         if (ax1 <= bx0 || bx1 <= ax0 || ay1 <= by0 || by1 <= ay0) continue
-        const ov = overlapArea(fa.courtyard, fb.courtyard)
+        const ov = courtyardOverlap(fa, fb)
         if (ov > o.min_overlap_mm2) {
-          findings.push({ check: 'courtyard_overlap', severity: 'error', refs: [fa.ref, fb.ref].sort(), message: `${fa.ref} and ${fb.ref} courtyards overlap by ${r3(ov)} mm² (${fa.side})`, value_mm: r3(ov) })
+          findings.push({ check: 'courtyard_overlap', severity: 'error', refs: [fa.ref, fb.ref].sort(), message: `${fa.ref} and ${fb.ref} courtyards overlap by ${r3(ov)} mm² (${fa.side})${hullNote(fa)}${hullNote(fb)}`, value_mm: r3(ov) })
         }
       }
     }
@@ -127,8 +137,8 @@ export function placementCheck(L: Layout, o: PlacementOptions): { findings: Find
   for (const k of L.keepouts) {
     for (const f of fps) {
       if (!onSide(k.layers, f.side)) continue
-      if (k.not_allowed.includes('footprints') && overlapArea(f.courtyard, k.polygon) > 1e-6) {
-        findings.push({ check: 'keepout', severity: 'error', refs: [f.ref], message: `${f.ref} is inside keep-out ${k.name ?? '(unnamed)'}, which does not allow footprints` })
+      if (k.not_allowed.includes('footprints') && courtyardOverlap(f, { courtyards: [k.polygon] }) > 1e-6) {
+        findings.push({ check: 'keepout', severity: 'error', refs: [f.ref], message: `${f.ref} is inside keep-out ${k.name ?? '(unnamed)'}, which does not allow footprints${hullNote(f)}` })
       } else if (k.not_allowed.includes('pads')) {
         const inPads = f.pads.filter((p) => inside([p.x_mm, p.y_mm], k.polygon))
         if (inPads.length) findings.push({ check: 'keepout', severity: 'error', refs: [f.ref], message: `${f.ref} has ${inPads.length} pad(s) inside keep-out ${k.name ?? '(unnamed)'}, which does not allow pads` })
@@ -184,6 +194,7 @@ export function placementCheck(L: Layout, o: PlacementOptions): { findings: Find
   }
 
   for (const f of fps) if (f.courtyard_from === 'pads') findings.push({ check: 'no_courtyard', severity: 'info', refs: [f.ref], message: `${f.ref} (${f.footprint}) has no courtyard: its pads' box grown by a margin was used` })
+  for (const f of fps) if (f.courtyard_from === 'hull') findings.push({ check: 'courtyard_open', severity: 'info', refs: [f.ref], message: `${f.ref} (${f.footprint}): ${f.courtyard_note ?? 'the courtyard outline does not close: its convex hull was used'}` })
   const counts: Record<string, number> = {}
   for (const x of findings) counts[x.check] = (counts[x.check] ?? 0) + 1
   return { findings, counts, decoupling, connectors }

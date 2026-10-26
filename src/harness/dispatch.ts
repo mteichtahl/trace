@@ -3,7 +3,7 @@
  * configure-aws-credentials step provides the AWS credentials; TRACE_AGENT_RUNTIME_ARN names the runtime), then says
  * so on the item.
  */
-import { type DispatchOptions, dispatch } from '../agents/runtime/dispatch.js'
+import { type DispatchOptions, dispatch, newTraceContext } from '../agents/runtime/dispatch.js'
 import type { Accepted } from '../agents/runtime/schemas.js'
 import { type Deps, type TaskEnv, errorMessage } from './types.js'
 import { type WorkItem, itemFromEnv, routeLine } from './worker.js'
@@ -20,17 +20,22 @@ export async function dispatchTask({ github, context, core, env }: Deps, send: D
     core.setFailed('TRACE_AGENT_RUNTIME_ARN is not set (repository variable TRACE_AGENT_RUNTIME_ARN): set it, or set worker.runner to actions.')
     return
   }
+  // This step has no OpenTelemetry SDK: it makes the trace context itself (a child of any TRACEPARENT the workflow
+  // set), and the runtime continues it, so workflow → agent → tools → GPU jobs is one trace.
+  const trace = newTraceContext(process.env)
+  const traceId = trace.traceparent.split('-')[1] ?? ''
+  core.setOutput('trace', traceId)
   let r: Accepted
   try {
-    r = await send(item, repository, { runtimeArn, runUrl })
+    r = await send(item, repository, { runtimeArn, runUrl, trace })
   } catch (e) {
     core.setFailed(`Dispatching #${item.number} to the trace agent failed: ${errorMessage(e)}`)
     return
   }
   core.setOutput('job', r.jobId)
   const body = r.accepted
-    ? `Dispatched to the trace agent on AgentCore (job ${r.jobId}). ${routeLine(item.route)} [run](${runUrl})`
+    ? `Dispatched to the trace agent on AgentCore (job ${r.jobId}, trace \`${traceId}\`). ${routeLine(item.route)} [run](${runUrl})`
     : `Already being worked on by the trace agent on AgentCore (job ${r.jobId}).`
   await github.rest.issues.createComment({ owner, repo, issue_number: item.number, body })
-  core.info(`#${item.number}: ${r.accepted ? 'dispatched' : 'already running'} (job ${r.jobId}, specialist ${item.route?.kind ?? 'routed by the runtime'})`)
+  core.info(`#${item.number}: ${r.accepted ? 'dispatched' : 'already running'} (job ${r.jobId}, specialist ${item.route?.kind ?? 'routed by the runtime'}, trace ${traceId})`)
 }

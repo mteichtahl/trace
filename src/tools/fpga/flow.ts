@@ -22,7 +22,7 @@ import { extname, join } from 'node:path'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { z } from 'zod'
 import { ToolError } from '../../core/registry.js'
-import { haveProgram, includeFiles, needProgram, shellJob, sq, stage } from '../verify/job.js'
+import { haveProgram, hdlStage, includeArgs, needProgram, shellJob, sq, stage } from '../verify/job.js'
 
 export const FAMILIES = ['ice40', 'ecp5', 'gowin', 'xilinx'] as const
 export type Family = (typeof FAMILIES)[number]
@@ -97,9 +97,9 @@ export async function synthesize(o: SynthOptions): Promise<SynthRun> {
   needProgram('yosys', 'apt install yosys, or the OSS CAD Suite')
   if (!/^[A-Za-z_][\w$]*$/.test(o.top)) throw new ToolError(`top ${JSON.stringify(o.top)} is not a module name`)
   for (const f of o.files) if (/\.(vhd|vhdl)$/i.test(f)) throw new ToolError(`${f}: VHDL needs the ghdl-yosys plugin, which fpga.synth does not load; give Verilog/SystemVerilog`)
-  const st = stage(o.files)
-  const src = [...st.names]
-  stage(includeFiles(o.include_dirs ?? []), st)
+  // sources and include dirs keep their relative layout, so `include "sub/x.vh" resolves
+  const st = hdlStage({ files: o.files, include_dirs: o.include_dirs })
+  const src = [...st.sources]
   const defs = Object.entries(o.defines ?? {}).filter(([, v]) => v !== false).map(([k, v]) => (v === true ? `-D${k}` : `-D${k}=${v}`))
   const opt = (s: string): string => {
     if (!/^[-\w=.,:+/]+$/.test(s)) throw new ToolError(`synth option ${JSON.stringify(s)}: only flags and simple values`)
@@ -111,7 +111,7 @@ export async function synthesize(o: SynthOptions): Promise<SynthRun> {
   })
   const synth = [SYNTH[o.family], '-top', o.top, ...(o.family === 'xilinx' ? ['-family', opt(o.xilinx_family ?? 'xc7')] : []), ...o.options.map(opt)].join(' ')
   const ys = [
-    `read_verilog -sv ${[...defs, '-I{dir}/in'].join(' ')} ${src.map((n) => `{in:${n}}`).join(' ')}`,
+    `read_verilog -sv ${[...defs, ...includeArgs(st)].join(' ')} ${src.map((n) => `{in:${n}}`).join(' ')}`,
     `hierarchy -check -top ${o.top}`,
     ...params,
     synth,

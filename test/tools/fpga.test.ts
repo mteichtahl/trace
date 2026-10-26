@@ -4,7 +4,7 @@
  * floorplan regions, and a target the design cannot meet.
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -201,6 +201,25 @@ describe.skipIf(!hasYosys)('xilinx synthesis (yosys installed)', () => {
       expect(existsSync(join(dir, 'netlist.edif'))).toBe(true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
+    }
+  }, 300_000)
+})
+
+describe.skipIf(!hasYosys)('synthesis with an include in a sub-folder (yosys installed)', () => {
+  it('finds `include "sub/w.vh" and an include dir, and keeps two files of the same name', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'fpga-inc-'))
+    try {
+      for (const sub of ['rtl/sub', 'rtl/alt', 'inc']) mkdirSync(join(d, sub), { recursive: true })
+      writeFileSync(join(d, 'rtl', 'sub', 'w.vh'), '`define W 4\n')
+      writeFileSync(join(d, 'inc', 'reset.vh'), '`define RST_VAL 0\n')
+      writeFileSync(join(d, 'rtl', 'core.v'), '`include "sub/w.vh"\n`include "reset.vh"\nmodule core(input clk, output reg [`W-1:0] q); initial q = `RST_VAL; always @(posedge clk) q <= q + 1; endmodule\n')
+      writeFileSync(join(d, 'rtl', 'alt', 'core.v'), 'module top(input clk, output [3:0] q); core c(.clk(clk), .q(q)); endmodule\n')
+      const s = await call('fpga.synth', { family: 'ice40', files: [join(d, 'rtl', 'core.v'), join(d, 'rtl', 'alt', 'core.v')], include_dirs: [join(d, 'inc')], top: 'top' })
+      expect(s.reason).toMatch(/cells/)
+      expect(s.passed).toBe(true)
+      expect((s.utilisation as { resources: Record<string, number> }).resources.ff).toBe(4)
+    } finally {
+      rmSync(d, { recursive: true, force: true })
     }
   }, 300_000)
 })

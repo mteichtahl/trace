@@ -5,9 +5,12 @@
  * closed loops from Edge.Cuts (lines, rects, arcs, circles, polygons; footprint Edge.Cuts included), and the
  * keep-out rule areas with their polygons and what they forbid.
  *
- * Courtyards are the convex hull of the footprint's F.CrtYd/B.CrtYd graphics: exact for the rectangles and convex
- * outlines most footprints have, conservative (it can report an overlap that is not there) for an L-shaped one. A
- * footprint without a courtyard gets its pads' bounding box grown by `fallback_margin_mm`, and is marked so.
+ * Courtyards are the footprint's actual F.CrtYd/B.CrtYd outlines: fp_rect, fp_circle and fp_poly are closed shapes
+ * as they are, and fp_line/fp_arc segments are joined end to end into closed loops, so an L-shaped courtyard stays an
+ * L (a loop inside another of the same footprint is taken as filled). When the lines do not close, the convex hull of
+ * the courtyard graphics is used instead, marked `courtyard_from: 'hull'` with a note (it can report an overlap that
+ * is not there). A footprint without a courtyard gets its pads' bounding box grown by `fallback_margin_mm`, and is
+ * marked so.
  */
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
@@ -15,7 +18,7 @@ import { resolve } from 'node:path'
 import { ToolError } from '../../core/registry.js'
 import * as sx from '../kicad/sexpr.js'
 import { loadBoard, type Board } from '../kicad/pcb.js'
-import { arcPoints, area, bbox, circlePoints, hull, loops, rectPoly, type Poly, type Pt } from './geom.js'
+import { arcPoints, area, bbox, circlePoints, hull, inside, loops, rectPoly, type Poly, type Pt } from './geom.js'
 
 export interface PlacedFootprint {
   ref: string
@@ -25,9 +28,14 @@ export interface PlacedFootprint {
   x: number
   y: number
   rotation: number
-  /** courtyard (convex hull) in board coordinates */
+  /** the courtyard outline in board coordinates: the one closed outline, or the hull of several (edge and area
+   * checks) */
   courtyard: Poly
-  courtyard_from: 'courtyard' | 'pads'
+  /** the closed courtyard polygons, for overlaps (one, usually; the hull when the outline does not close) */
+  courtyards: Poly[]
+  courtyard_from: 'courtyard' | 'hull' | 'pads'
+  /** why the hull was used, when it was */
+  courtyard_note: string | null
   sheet: string
   sheetfile: string | null
   path: string | null
@@ -118,6 +126,17 @@ function shape(node: sx.SList): { points: Pt[]; segs: [Pt, Pt][] } {
   return { points: segs.flatMap(([a, b]) => [a, b]), segs }
 }
 
+/** Closed courtyard polygons from one footprint's courtyard graphics (board coordinates): closed shapes as they are,
+ * open segments joined into loops. `open` counts segments that close no loop. */
+export function courtyardPolygons(closed: readonly Poly[], segs: readonly [Pt, Pt][], tol = 1e-3): { polys: Poly[]; open: number } {
+  const ls = loops(segs, tol)
+  const used = ls.reduce((n, l) => n + l.length, 0)
+  const all = [...closed.filter((p) => p.length >= 3), ...ls].filter((p) => area(p) > 1e-9)
+  // a loop wholly inside another is not a hole a part may sit in: drop it (the outer one is taken as filled)
+  const polys = all.filter((p, i) => !all.some((q, j) => j !== i && area(q) > area(p) && p.every((pt) => inside(pt, q))))
+  return { polys, open: Math.max(0, segs.length - used) }
+}
+
 const memo = new Map<string, Layout>()
 
 export function readLayout(path: string, opts: { fallbackMarginMm?: number } = {}): Layout {
@@ -141,18 +160,35 @@ export function readLayout(path: string, opts: { fallbackMarginMm?: number } = {
     if (!meta) continue
     const [fx, fy, fr] = at
     const crt: Pt[] = []
+    const closed: Poly[] = []
+    const openSegs: [Pt, Pt][] = []
+    const toBoard = (p: Pt): Pt => rot(p[0], p[1], fx, fy, fr)
     for (const g of sx.children(fp)) {
       const h = sx.head(g) ?? ''
       if (!h.startsWith('fp_')) continue
       const ls = layersOf(g)
       const s = shape(g)
-      if (ls.some((l) => l.endsWith('.CrtYd'))) crt.push(...s.points.map(([x, y]) => rot(x, y, fx, fy, fr)))
-      if (ls.includes('Edge.Cuts')) for (const [a, b] of s.segs) edges.push([rot(a[0], a[1], fx, fy, fr), rot(b[0], b[1], fx, fy, fr)])
+      if (ls.some((l) => l.endsWith('.CrtYd'))) {
+        crt.push(...s.points.map(toBoard))
+        if (/_(rect|circle|poly)$/.test(h)) closed.push(s.segs.map(([a]) => toBoard(a)))
+        else for (const [a, b] of s.segs) openSegs.push([toBoard(a), toBoard(b)])
+      }
+      if (ls.includes('Edge.Cuts')) for (const [a, b] of s.segs) edges.push([toBoard(a), toBoard(b)])
     }
     let courtyard: Poly
+    let courtyards: Poly[]
+    let note: string | null = null
     let from: PlacedFootprint['courtyard_from'] = 'courtyard'
-    if (crt.length >= 3) courtyard = hull(crt)
-    else {
+    const cy = crt.length >= 3 ? courtyardPolygons(closed, openSegs) : { polys: [], open: 0 }
+    if (crt.length >= 3 && cy.polys.length && !cy.open) {
+      courtyards = cy.polys
+      courtyard = cy.polys.length === 1 ? cy.polys[0] as Poly : hull(cy.polys.flat())
+    } else if (crt.length >= 3) {
+      from = 'hull'
+      courtyard = hull(crt)
+      courtyards = [courtyard]
+      note = `the courtyard outline does not close (${cy.open || openSegs.length} of ${openSegs.length} line/arc segments join no loop): its convex hull was used, which can overstate overlaps`
+    } else {
       from = 'pads'
       const pads = board.pads
       const mine = Object.values(pads).flat().filter((q) => q.ref === meta.ref)
@@ -161,11 +197,12 @@ export function readLayout(path: string, opts: { fallbackMarginMm?: number } = {
       const all = ps.length ? ps : own.length ? own : [[fx, fy] as Pt]
       const [x0, y0, x1, y1] = bbox(all)
       courtyard = rectPoly(x0 - margin, y0 - margin, x1 + margin, y1 + margin)
+      courtyards = [courtyard]
     }
     const props = new Map(sx.findAll(fp, 'property').map((q) => [sx.atomAt(q, 1) ?? '', sx.atomAt(q, 2) ?? ''] as const))
     footprints.push({
       ref: meta.ref, value: meta.value, footprint: meta.footprint, side: meta.side, x: fx, y: fy, rotation: fr,
-      courtyard, courtyard_from: from,
+      courtyard, courtyards, courtyard_from: from, courtyard_note: note,
       sheet: sx.value(fp, 'sheetname') ?? props.get('Sheetname') ?? props.get('Sheet name') ?? '/',
       sheetfile: sx.value(fp, 'sheetfile') ?? props.get('Sheetfile') ?? null,
       path: sx.value(fp, 'path') ?? null, dnp: meta.dnp, pads: meta.pads,

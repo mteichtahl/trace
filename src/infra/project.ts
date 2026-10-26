@@ -14,15 +14,22 @@
  *   memory    its own memory only (<prefix>_m_<hash>), and on it still only events of actors `<owner>/<repo>/*` and
  *             records under `/trace/<owner>/<repo>/*` (the encodings of src/agents/runtime/memory.ts), as defence in depth
  *   secret    <prefix>/github-token/<slug> only
- *   Batch     SubmitJob only with its own job definition, on the shared queue, and only tagged trace:project=<slug>;
- *             TerminateJob only on jobs tagged with its slug; DescribeJobs (no resource-level permissions exist)
+ *   Batch     SubmitJob only with its own job definitions (GPU, and CPU when there is the CPU queue), on the shared
+ *             queues, and only tagged trace:project=<slug>; TerminateJob only on jobs tagged with its slug;
+ *             DescribeJobs (no resource-level permissions exist)
  *   telemetry its own runtime's log group, X-Ray, PutMetricData in the bedrock-agentcore namespace
  *   model     Bedrock InvokeModel on Anthropic models and the account's inference profiles
  *
  * Its GitHub OIDC role (assumed by that repository's default-branch workflows only) may invoke only this runtime,
  * read the central store and write it the same conditional way (the worker.runner=actions fallback is the worker
- * in GitHub Actions), and read/write projects/<slug>/*; it has no memory access. Its GPU job role may read/write
+ * in GitHub Actions), read/write projects/<slug>/*, and use its own project's memory exactly as the worker role may
+ * (the same actions, actor and namespace conditions: the fallback is the worker, and remembers as it does; the
+ * installer sets the repository variable TRACE_MEMORY_ID). Its job role (GPU and CPU jobs) may read/write
  * jobs/<slug>/* only.
+ *
+ * Its names that can outlive it in the account (its memory, kept with retainData; its memory's delivery sources and
+ * destinations; its secret, in its recovery window) carry its generation when that is above 0 (projectSettings,
+ * src/core/project.ts), so a removed project can be added again.
  *
  * Its memory follows retainData: Retain on stack deletion and on removal of the project, or Delete on both.
  *
@@ -46,7 +53,7 @@ import {
 } from '../core/project.js'
 import type { GpuCompute } from './gpu.js'
 import { EVENT_ACTIONS, RECORD_ACTIONS, TraceMemory } from './memory.js'
-import { type InfraProps, type ProjectRef, projectOutputs, projectSettings } from './props.js'
+import { type InfraProps, type ProjectRef, REPOSITORY_OUTPUT, projectOutputs, projectSettings } from './props.js'
 
 /** The central bucket's prefixes: the shared database, and the access store beside it (src/core/access.ts). */
 export const CENTRAL_PREFIX = 'central'
@@ -111,6 +118,10 @@ export class ProjectStack extends Construct {
   readonly actionsRole: iam.Role
   readonly secret: secrets.Secret
   readonly jobDefinitionName: string | null
+  /** its CPU job definition (null without the CPU queue) */
+  readonly cpuJobDefinitionName: string | null
+  /** its names' generation (projectSettings; 0 normally) */
+  readonly generation: number
   /** its AgentCore memory (null when memory.enabled is false) */
   readonly memory: TraceMemory | null
 
@@ -121,12 +132,14 @@ export class ProjectStack extends Construct {
     const { region, account, partition } = Stack.of(this)
     this.runtimeName = workerRuntimeName(cfg.prefix, repository)
     const outputs = projectOutputs(repository)
+    const settings = projectSettings(cfg, repository)
+    this.generation = settings.generation
 
     // ------------------------------------------------------------------ the project's GitHub token
     // Its value is written by the installer: the project's own fine-grained token, or a copy of the shared one. It is
     // a copy of a credential, not data, so it goes with the project (removalPolicy DESTROY whatever retainData says).
     this.secret = new secrets.Secret(this, 'GithubToken', {
-      secretName: githubSecretName(cfg.prefix, repository),
+      secretName: githubSecretName(cfg.prefix, repository, settings.generation),
       description: `The GitHub token ${slug}'s trace agent uses (written by \`trace install\`, never by CloudFormation).`,
       removalPolicy: RemovalPolicy.DESTROY,
     })
@@ -171,36 +184,54 @@ export class ProjectStack extends Construct {
     // ------------------------------------------------------------------ its memory (src/infra/memory.ts)
     this.memory = cfg.memory.enabled
       ? new TraceMemory(this, 'Memory', {
-          name: memoryName(cfg.prefix, repository),
+          name: memoryName(cfg.prefix, repository, settings.generation),
           description: `trace: ${slug}'s agents' memory (actors ${slug}/<agent>)`,
-          eventExpiryDays: projectSettings(cfg, repository).memoryEventExpiryDays,
+          eventExpiryDays: settings.memoryEventExpiryDays,
           // the 'release' step of the move to nested stacks marks it Delete, so the 'drain' deploy after it frees its name
           removalPolicy: cfg.retainData && cfg.layoutMigration !== 'release' ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
           tags: { [PROJECT_TAG]: slug, 'trace:installation': cfg.prefix },
         })
       : null
     const memoryEnv: Record<string, string> = {}
-    if (this.memory) {
-      // its own memory only; the actor and namespace conditions stay as defence in depth
-      role.addToPolicy(new iam.PolicyStatement({
-        sid: 'ProjectMemoryEvents', actions: [...EVENT_ACTIONS], resources: [this.memory.memoryArn],
+    // its own memory only; the actor and namespace conditions stay as defence in depth (the worker role here, and the
+    // OIDC role below for the worker.runner=actions fallback)
+    const memoryStatements = (memory: TraceMemory): iam.PolicyStatement[] => [
+      new iam.PolicyStatement({
+        sid: 'ProjectMemoryEvents', actions: [...EVENT_ACTIONS], resources: [memory.memoryArn],
         conditions: { StringLike: { 'bedrock-agentcore:actorId': `${projectId(repository)}/*` } },
-      }))
-      role.addToPolicy(new iam.PolicyStatement({
-        sid: 'ProjectMemoryRecords', actions: [...RECORD_ACTIONS], resources: [this.memory.memoryArn],
+      }),
+      new iam.PolicyStatement({
+        sid: 'ProjectMemoryRecords', actions: [...RECORD_ACTIONS], resources: [memory.memoryArn],
         conditions: { StringLike: { 'bedrock-agentcore:namespace': `${memoryProjectPrefix(repository)}*` } },
-      }))
+      }),
+    ]
+    if (this.memory) {
+      for (const st of memoryStatements(this.memory)) role.addToPolicy(st)
       memoryEnv.TRACE_MEMORY_ID = this.memory.memoryId
     }
 
     // ------------------------------------------------------------------ GPU jobs: its own definition and job role
     const gpuEnv: Record<string, string> = {}
     this.jobDefinitionName = null
+    this.cpuJobDefinitionName = null
     if (p.gpu) {
       const job = p.gpu.addProjectJob(this, repository)
       this.jobDefinitionName = job.jobDefinitionName
       const def = `arn:${partition}:batch:${region}:${account}:job-definition/${job.jobDefinitionName}`
       const jobs = `arn:${partition}:batch:${region}:${account}:job/*`
+      // the CPU queue (src/infra/gpu.ts): its own definition there, under the same tag conditions as the GPU one. IAM
+      // authorizes the queue and the definition of a SubmitJob separately, so this and ProjectGpuSubmit together also
+      // let a definition go to the other queue; that only ever runs this project's own job role, and a GPU definition
+      // on the CPU queue never finds an instance
+      if (job.cpu && p.gpu.cpuQueue) {
+        this.cpuJobDefinitionName = job.cpu.jobDefinitionName
+        const cdef = `arn:${partition}:batch:${region}:${account}:job-definition/${job.cpu.jobDefinitionName}`
+        role.addToPolicy(new iam.PolicyStatement({
+          sid: 'ProjectCpuSubmit', actions: ['batch:SubmitJob'], resources: [jobs, p.gpu.cpuQueue.jobQueueArn, cdef, `${cdef}:*`],
+          conditions: { StringEquals: { [`aws:RequestTag/${PROJECT_TAG}`]: slug } },
+        }))
+        Object.assign(gpuEnv, { TRACE_CPU_QUEUE: p.gpu.cpuQueue.jobQueueArn, TRACE_CPU_JOB_DEFINITION: job.cpu.jobDefinitionName })
+      }
       // SubmitJob authorizes the job, the queue and the definition; every one must carry this project's tag
       role.addToPolicy(new iam.PolicyStatement({
         sid: 'ProjectGpuSubmit', actions: ['batch:SubmitJob'], resources: [jobs, p.gpu.queue.jobQueueArn, def, `${def}:*`],
@@ -267,6 +298,8 @@ export class ProjectStack extends Construct {
     this.actionsRole.addToPolicy(modelAccess(account)) // the in-Actions fallback (worker.runner = actions)
     grantPrefixes(this.actionsRole, bucket, { conditional: [CENTRAL_PREFIX], readWrite: [projectDataPrefix(repository)] })
     this.actionsRole.addToPolicy(memoryState.copy())
+    // the in-Actions fallback remembers as the worker does: its own memory, its own actors and namespaces
+    if (this.memory) for (const st of memoryStatements(this.memory)) this.actionsRole.addToPolicy(st)
 
     for (const r of [role, this.actionsRole]) Tags.of(r).add(PROJECT_TAG, slug)
     Tags.of(this.secret).add(PROJECT_TAG, slug)
@@ -285,13 +318,16 @@ export class ProjectStack extends Construct {
  * One project in its own nested stack (layout 'nested'): the ProjectStack construct, under the same construct id as
  * in the flat layout (`Project<hash>`), so its logical ids and output names are the same inside the nested template.
  * CDK turns what it uses of the parent into the nested stack's parameters, and what the parent uses of it (the
- * runtime's id and ARN, the OIDC role's ARN, the memory's id and ARN) into its outputs.
+ * runtime's id and ARN, the memory's id and ARN) into its outputs. The parent re-exports none of the project's own
+ * outputs (Project<hash>RuntimeArn, …): the installer reads them from this nested stack (src/installer/aws.ts).
  */
 export class ProjectNestedStack extends NestedStack {
   readonly project: ProjectStack
 
   constructor(scope: Construct, id: string, p: ProjectProps) {
-    super(scope, id, { description: `trace: ${p.project.slug}'s worker runtime, roles, token secret, memory and GPU job definition`.slice(0, 1024) })
+    super(scope, id, { description: `trace: ${p.project.slug}'s worker runtime, roles, token secret, memory and job definitions`.slice(0, 1024) })
     this.project = new ProjectStack(this, `Project${p.project.hash}`, p)
+    // whose nested stack this is: the installer reads each project's outputs here (the parent carries none of them)
+    new CfnOutput(this, REPOSITORY_OUTPUT, { value: p.project.slug, description: 'The repository this nested stack is the project of' })
   }
 }

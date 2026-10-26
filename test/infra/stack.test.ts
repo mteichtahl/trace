@@ -15,14 +15,11 @@ const props = InfraPropsSchema.parse({
   model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com',
 })
 
-type Statement = { Sid?: string; Action: string | string[]; Resource?: unknown; Condition?: Record<string, Record<string, unknown>> }
+type Statement = { Sid?: string; Effect?: string; Action: string | string[]; Resource?: unknown; Condition?: Record<string, Record<string, unknown>> }
 const statementsOf = (t: Template, prefix: string): Statement[] => Object.entries(t.findResources('AWS::IAM::Policy')).filter(([id]) => id.startsWith(prefix))
   .flatMap(([, p]) => (p as { Properties: { PolicyDocument: { Statement: Statement[] } } }).Properties.PolicyDocument.Statement)
 const policyText = (t: Template, prefix: string): string => JSON.stringify(statementsOf(t, prefix))
 const actionsOf = (s: Statement): string[] => (Array.isArray(s.Action) ? s.Action : [s.Action])
-/** IAM StringLike/ARN wildcard matching. */
-const like = (pattern: string, v: string): boolean =>
-  new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`).test(v)
 
 let t: Template
 let syn: Synth
@@ -132,6 +129,12 @@ describe('the trace stack', () => {
       expect(s.filter((x) => actionsOf(x).includes('s3:DeleteObject')).map((x) => JSON.stringify(x.Resource)).join()).not.toContain('/central/')
       const list = s.find((x) => actionsOf(x).includes('s3:ListBucket'))
       expect([...(list?.Condition?.StringLike?.['s3:prefix'] as string[])].sort()).toEqual(['central/*', `jobs/${c.repo}/*`, `projects/${c.repo}/*`])
+      // which memory records are inactive (projects/<slug>/memory-state): read through projects/<slug>/*, never written
+      const deny = s.filter((x) => x.Sid === 'MemoryStateReadOnly')
+      expect(deny).toHaveLength(1)
+      expect(deny[0]).toMatchObject({ Effect: 'Deny', Action: ['s3:PutObject', 's3:DeleteObject', 's3:DeleteObjectVersion'] })
+      expect(JSON.stringify(deny[0]?.Resource)).toContain(`/projects/${c.repo}/memory-state/*`)
+      expect(s.filter((x) => x.Effect === 'Deny')).toHaveLength(1)
       // memory: its own memory only, and on it still only its own actors and namespaces
       const memoryArn = { 'Fn::GetAtt': [Match.stringLikeRegexp(`^Project${c.h}Memory`), 'MemoryArn'] }
       expect(s).toEqual(expect.arrayContaining([
@@ -160,7 +163,7 @@ describe('the trace stack', () => {
       expect(text).toContain('xray:PutTraceSegments')
       // never the other project's anything, nor people, nor the API's token
       for (const never of [c.other.repo, c.other.h, c.other.actor, 'cognito-idp', 'TraceMemoryRecordsRead']) expect(text).not.toContain(never)
-      for (const never of ['DeleteEvent', 'DeleteMemoryRecord', 'BatchCreateMemoryRecords', 'CreateMemory', 'bedrock-agentcore:*', 'InvokeAgentRuntime']) expect(text).not.toContain(never)
+      for (const never of ['DeleteEvent', 'DeleteMemoryRecord', 'BatchCreateMemoryRecords', 'BatchUpdateMemoryRecords', 'GetMemoryRecord', 'CreateMemory', 'bedrock-agentcore:*', 'InvokeAgentRuntime']) expect(text).not.toContain(never)
     }
   })
 
@@ -180,11 +183,22 @@ describe('the trace stack', () => {
       expect(text).not.toContain(h === HA ? HB : HA)
       expect(text).not.toContain(h === HA ? B : A)
       expect(text).toContain(`/projects/${repo}/*`)
+      // the workflows cannot change which memory records are inactive either
+      expect(s.find((x) => x.Sid === 'MemoryStateReadOnly')).toMatchObject({ Effect: 'Deny', Action: ['s3:PutObject', 's3:DeleteObject', 's3:DeleteObjectVersion'] })
+      expect(JSON.stringify(s.find((x) => x.Sid === 'MemoryStateReadOnly')?.Resource)).toContain(`/projects/${repo}/memory-state/*`)
       expect(text).not.toContain('/access/*')
       expect(text).not.toContain('/jobs/')
       expect(text).not.toContain('TraceMemory')
-      expect(text).not.toContain('MemoryArn')
-      expect(text).not.toContain('bedrock-agentcore:CreateEvent')
+      // memory: the worker's own grants, for the worker.runner = actions fallback: its own memory, actors, namespaces
+      const ns = `/trace/${repo}/*`
+      const mem = s.filter((x) => String(x.Sid).startsWith('ProjectMemory'))
+      expect(mem.map((x) => [x.Sid, x.Condition])).toEqual([
+        ['ProjectMemoryEvents', { StringLike: { 'bedrock-agentcore:actorId': `${repo}/*` } }],
+        ['ProjectMemoryRecords', { StringLike: { 'bedrock-agentcore:namespace': ns } }],
+      ])
+      for (const st of mem) expect(st.Resource).toEqual({ 'Fn::GetAtt': [memoryIdOf(h), 'MemoryArn'] })
+      expect(s.filter((x) => JSON.stringify(x).includes('MemoryArn'))).toHaveLength(2)
+      for (const never of ['DeleteEvent', 'DeleteMemoryRecord', 'BatchCreateMemoryRecords', 'GetMemoryRecord', 'CreateMemory', 'bedrock-agentcore:*']) expect(text).not.toContain(never)
     }
     // no installation-wide actions role any more
     expect(Object.keys(t.findResources('AWS::IAM::Role')).some((id) => id.startsWith('ActionsRole'))).toBe(false)
@@ -192,26 +206,40 @@ describe('the trace stack', () => {
 
   it('lets the API invoke every project worker, read every project\'s memory records, and reach people', () => {
     const s = statementsOf(t, 'ApiRuntimeRole')
+    // each worker by its exact ARN (no name pattern another installation's runtimes could match), and on the runtime
+    // also by this installation's tag; the endpoints (DEFAULT, untagged by the stack) by their runtime's exact ARN
     const invoke = s.find((x) => x.Sid === 'InvokeProjectWorkers')
-    expect(invoke?.Action).toBe('bedrock-agentcore:InvokeAgentRuntime')
-    const [runtimes = ''] = invoke?.Resource as string[]
-    expect(invoke?.Resource).toEqual(['arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/trace_w_*', 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/trace_w_*/runtime-endpoint/*'])
-    // the pattern covers both workers' runtime ids (`<name>-<suffix>`), and not the API itself
-    for (const h of [HA, HB]) expect(like(runtimes, `arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/trace_w_${h}-AbCdEf1234`)).toBe(true)
-    expect(like(runtimes, 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/trace_api-AbCdEf1234')).toBe(false)
+    const arns = [HA, HB].map((h) => parentRef(syn, h, `Project${h}Runtime`, 'AgentRuntimeArn'))
+    expect(invoke).toMatchObject({ Action: 'bedrock-agentcore:InvokeAgentRuntime', Resource: arns, Condition: { StringEquals: { 'aws:ResourceTag/trace:installation': 'trace' } } })
+    const endpoints = s.find((x) => x.Sid === 'InvokeProjectWorkerEndpoints')
+    expect(endpoints).toMatchObject({ Action: 'bedrock-agentcore:InvokeAgentRuntime', Resource: arns.map((a) => ({ 'Fn::Join': ['', [a, '/runtime-endpoint/*']] })) })
+    expect(endpoints?.Condition).toBeUndefined()
+    expect(JSON.stringify(s)).not.toContain('trace_w_*')
+    expect(s.filter((x) => actionsOf(x).includes('bedrock-agentcore:InvokeAgentRuntime'))).toHaveLength(2)
+    // and every runtime carries the tag (the API's own too)
+    for (const r of Object.values(t.findResources('AWS::BedrockAgentCore::Runtime') as Record<string, { Properties: { Tags?: Record<string, string> } }>)) expect(r.Properties.Tags?.['trace:installation']).toBe('trace')
     const text = JSON.stringify(s)
     expect(text).toContain('cognito-idp:AdminAddUserToGroup')
     expect(text).toContain('/access/*')
     expect(text).toContain('/central/*')
     expect(text).not.toMatch(/"Resource":"\*","Action":"cognito/)
-    // memory: records of every project's memory, read only; no events
+    // memory: records of every project's memory, read only (GetMemoryRecord to verify one before marking it inactive); no events, no record writes
     const read = s.find((x) => x.Sid === 'TraceMemoryRecordsRead')
-    expect(read).toMatchObject({ Action: ['bedrock-agentcore:RetrieveMemoryRecords', 'bedrock-agentcore:ListMemoryRecords'], Condition: { StringLike: { 'bedrock-agentcore:namespace': '/trace/*' } } })
+    expect(read).toMatchObject({ Action: ['bedrock-agentcore:RetrieveMemoryRecords', 'bedrock-agentcore:ListMemoryRecords', 'bedrock-agentcore:GetMemoryRecord'], Condition: { StringLike: { 'bedrock-agentcore:namespace': '/trace/*' } } })
+    for (const never of ['BatchUpdateMemoryRecords', 'BatchCreateMemoryRecords', 'DeleteMemoryRecord']) expect(text).not.toContain(never)
+    // which records are inactive: projects/*/memory-state/* only — read, and conditional puts; no deletes, nothing else of projects/
+    const MS = 'projects/*/memory-state/*'
+    const msPuts = s.filter((x) => actionsOf(x).includes('s3:PutObject') && JSON.stringify(x.Resource).includes(`/${MS}`))
+    expect(msPuts.map((x) => Object.keys(x.Condition?.Null ?? {})[0]).sort()).toEqual(['s3:if-match', 's3:if-none-match'])
+    expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes(`/${MS}`))).toBe(true)
+    expect(s.filter((x) => actionsOf(x).includes('s3:DeleteObject')).map((x) => JSON.stringify(x.Resource)).join()).not.toContain('memory-state')
+    expect(s.filter((x) => actionsOf(x).includes('s3:ListBucket')).flatMap((x) => x.Condition?.StringLike?.['s3:prefix'] as string[]).sort()).toEqual(['central/*', MS])
     expect(read?.Resource).toEqual(expect.arrayContaining([HA, HB].map((h) => parentRef(syn, h, memoryIdOf(h), 'MemoryArn'))))
     expect(read?.Resource).toHaveLength(2)
     expect(text).not.toContain('CreateEvent')
     // no GPU, no project data, no project tokens
-    for (const never of ['batch:', '/jobs/', '/projects/', `Project${HA}GithubToken`, `Project${HB}GithubToken`]) expect(text).not.toContain(never)
+    for (const never of ['batch:', '/jobs/', '/projects/', `Project${HA}GithubToken`, `Project${HB}GithubToken`]) expect(text.replaceAll(MS, '')).not.toContain(never)
+    expect(text.replaceAll(MS, '')).not.toContain('projects/')
   })
 
   it('has a Cognito pool without self sign-up, the admin/user/guest groups, and the first admin', () => {
@@ -238,9 +266,11 @@ describe('the trace stack', () => {
         Ec2Configuration: [{ ImageType: 'ECS_AL2023_NVIDIA' }],
       }),
     })
-    t.resourceCountIs('AWS::Batch::JobQueue', 1)
-    t.resourceCountIs('AWS::Batch::ComputeEnvironment', 1)
-    t.resourceCountIs('AWS::Batch::JobDefinition', 2)
+    // the GPU queue and environment, and the CPU ones beside them (test/infra/projects.test.ts)
+    t.resourceCountIs('AWS::Batch::JobQueue', 2)
+    t.resourceCountIs('AWS::Batch::ComputeEnvironment', 2)
+    t.resourceCountIs('AWS::Batch::JobDefinition', 4)
+    t.hasResourceProperties('AWS::Batch::JobQueue', { JobQueueName: 'trace-gpu' })
     for (const [repo, h] of [[A, HA], [B, HB]] as const) {
       t.hasResourceProperties('AWS::Batch::JobDefinition', {
         JobDefinitionName: `trace-gpu-${h}`,
@@ -289,27 +319,27 @@ describe('the trace stack', () => {
     const outputs = Object.keys(parentOutputs)
     for (const o of ['TraceHome', 'GithubSecretArn', 'ApiRuntimeArn', 'UserPoolId', 'UserPoolClientId', 'CognitoDomain', 'GpuJobQueue', 'Layout']) expect(outputs).toContain(o)
     expect(parentOutputs.Layout?.Value).toBe('nested')
-    // the parent re-exports what the installer reads of each project, under the names it always had; the project's
-    // nested stack has those and the rest (its secret, GPU job definition, log groups) under the same names
+    for (const o of ['CpuJobQueue', 'GpuImageBuild']) expect(outputs).toContain(o)
+    // the parent carries none of a project's outputs: the installer reads them from its nested stack, which has them
+    // all under the names they always had, and the repository it is the project of
     for (const [repo, h] of [[A, HA], [B, HB]] as const) {
       const o = projectOutputs(repo)
-      for (const k of [o.runtimeArn, o.roleArn, o.memoryId]) expect(outputs).toContain(k)
-      for (const k of [o.secretArn, o.jobDefinition]) expect(outputs).not.toContain(k)
-      const own = Object.keys(nestedOf(syn, repo).toJSON().Outputs as Record<string, unknown>)
-      for (const k of [...Object.values(o), `Project${h}LogGroup`, `Project${h}MemoryLogGroup`]) expect(own).toContain(k)
-      expect(parentOutputs[o.runtimeArn]?.Value).toEqual(parentRef(syn, h, `Project${h}Runtime`, 'AgentRuntimeArn'))
-      expect(parentOutputs[o.roleArn]?.Value).toEqual(parentRef(syn, h, `Project${h}ActionsRole`, 'Arn'))
+      for (const k of Object.values(o)) expect(outputs).not.toContain(k)
+      const own = nestedOf(syn, repo).toJSON().Outputs as Record<string, { Value: unknown }>
+      for (const k of [...Object.values(o), `Project${h}LogGroup`, `Project${h}MemoryLogGroup`, 'Repository']) expect(Object.keys(own)).toContain(k)
+      expect(own.Repository?.Value).toBe(repo)
+      expect(own[o.runtimeArn]?.Value).toEqual({ 'Fn::GetAtt': [Object.keys(nestedOf(syn, repo).findResources('AWS::BedrockAgentCore::Runtime'))[0], 'AgentRuntimeArn'] })
     }
+    expect(outputs.filter((k) => /^Project[0-9a-f]{8}/.test(k))).toEqual([])
     // the installation-wide memory is gone: each project has its own (Project<hash>MemoryId)
     for (const gone of ['AgentRuntimeArn', 'ActionsRoleArn', 'GpuJobDefinition', 'MemoryId', 'LegacyMemoryId']) expect(outputs).not.toContain(gone)
-    expect(parentOutputs[projectOutputs(A).memoryId]?.Value).toEqual(parentRef(syn, HA, memoryIdOf(HA), 'MemoryId'))
     expect((nestedOf(syn, A).toJSON().Outputs as Record<string, { Value: unknown }>)[projectOutputs(A).memoryId]?.Value).toEqual({ 'Fn::GetAtt': [memoryIdOf(HA), 'MemoryId'] })
   })
 
   it('adds and removes a project\'s resources with the repository list', () => {
     const one = synth(InfraPropsSchema.parse({ ...props, repositories: [A] }), 'One').all
     one.resourceCountIs('AWS::BedrockAgentCore::Runtime', 2)
-    one.resourceCountIs('AWS::Batch::JobDefinition', 1)
+    one.resourceCountIs('AWS::Batch::JobDefinition', 2) // its GPU and CPU ones
     expect(JSON.stringify(one.toJSON())).not.toContain(HB)
     // removing a project never takes data with it (retainData, the default): the bucket is not the project's, and its
     // memory is kept in the account (Retain applies on removal from the template as on stack deletion)

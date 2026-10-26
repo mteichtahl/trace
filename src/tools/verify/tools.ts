@@ -36,7 +36,7 @@ const Params = z.record(z.string(), z.union([z.string(), z.number()]))
 // ------------------------------------------------------------------ verify.requirements
 
 const ReqInput = z.object({
-  id: z.string().optional().describe('default: the next REQ-nnn'),
+  id: z.string().optional().describe('default: a new random REQ-xxxxxx (6 hex digits, so branches do not collide); existing ids such as REQ-001 are kept'),
   text: z.string().min(3),
   kind: z.enum(REQ_KINDS),
   acceptance: z.string().optional().describe('the acceptance criterion: what a test must show'),
@@ -97,7 +97,8 @@ export const requirementsTool = defineTool({
         return { requirement: v.updateRequirement(a.id, a.set) }
       }
       const list = v.requirements({ kind: a.kind, status: a.status })
-      return { total: list.length, requirements: list.slice(0, a.limit) }
+      const notes = v.mergeNotes()
+      return { total: list.length, requirements: list.slice(0, a.limit), ...(notes.length ? { merge_notes: notes } : {}) }
     })
   },
 })
