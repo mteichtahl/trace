@@ -224,6 +224,23 @@ In the example, the blue segments are the time to fix: Capture and Layout each w
 
 **Notifications.** The person hears about four things only: a gate is ready to review, an agent is stuck, a question blocks progress, and money is about to be spent.
 
+**Events, not polling.** trace acts when something happens, not by checking on a timer: a push, a finished run, a signed gate, a reply to a question, a review comment. The web app keeps one live connection open, so every screen changes the moment the record changes and nobody refreshes a page. trace checks on a timer only where the other side sends no event, and then it says so.
+
+**Fast, and the person in control.** Every click is answered at once, even when the work behind it takes hours: what started, what it is doing now, and how long it is likely to take. Long work can be paused, cancelled or moved up the queue at any time; a cancel stops within seconds and says what was kept. Nothing runs that a person, or a rule a person set, did not start, and trace never changes a design out of sight.
+
+**Saying when trace will look next.** Wherever trace has to check on a timer, the screen shows what it is waiting for, when it last looked, when it will look next, and a Check now button. For example: "Waiting for JLCPCB to confirm the order. Checked 2 minutes ago; next check in 13 minutes." When checks slow down because nothing is changing, the next-check time shows that too.
+
+| What trace waits on | How trace hears about it | What the person sees |
+| --- | --- | --- |
+| Pushes, pull requests, reviews, test runs | GitHub sends an event | The change, at once |
+| Agent and worker jobs | The job reports each step as it happens | Live progress and the current step |
+| Graphics card jobs (renders, routing) | AWS sends a job-state event | Live state; today trace checks every 1.5 to 30 seconds |
+| Building the agents' container image | AWS sends a build-state event | Live state; today trace checks every 30 seconds |
+| Knowledge base updates | Checked every 10 seconds while one runs | Progress with the next check time |
+| Part stock and prices at JLCPCB | Checked daily and at every gate (no event feed known) | Last checked, next check, Check now |
+| JLCPCB order status | Checked on a timer once an order is placed (no event feed known) | Last checked, next check, Check now |
+| Bench instruments (for example a scope capture) | Checked every tenth of a second; the instrument sends no event | A progress bar during the capture |
+
 **Summary first, detail on request.** Every interaction leads with a summary a person can act on, and keeps the detail behind it, one tap away. This holds for messages, questions, notifications, findings, gate cards, reports and skill steps alike.
 
 - **The summary:** one or two sentences that say what happened or what is needed, and the recommendation when a decision is asked for.
@@ -803,6 +820,7 @@ trace today is strongest in Prove, Layout and Sign-off; the journey's ends (Defi
 | No revisions | All | One design, versioned by git only | Revisions that carry requirements, waivers and results forward |
 | Nothing after acceptance | Certify to Sustain | Pre-compliance estimates only | A lab test pack, DFM and DFT review, a manufacturing test procedure, and a scheduled lifecycle watch |
 | No cost or schedule view | All | Run records hold no cost; nothing records stage times | A ledger of spent, committed and forecast cost (with AWS cost-allocation tags per project) and stage timing with waits |
+| Timers where events exist | All | Graphics card jobs check AWS every 1.5 to 30 s; image builds every 30 s; a handed-off worker job every 15 s; knowledge base updates every 10 s. The worker and the pull-request sweep run on hourly and half-hourly schedules | Subscriptions to AWS job and build events, a job-finished event from the agent runtime, work started by GitHub events, and one live connection to the web app. Any timer left declares its interval and shows the next check |
 
 ## Decisions
 
