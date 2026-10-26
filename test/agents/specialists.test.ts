@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   DELEGATE_TOOL, SHARED_TOOLS, SPECIALISTS, SPECIALIST_BUILTINS, SPECIALIST_KINDS, allowedToolsOf, mcpToolName, specialistPrompt, toolsOf,
 } from '../../src/agents/index.js'
@@ -294,9 +294,10 @@ describe('delegation', () => {
       process.env.TRACE_DELEGATE_POLL_MS = '10'
       expect([...offered(allTools(), false).keys()]).toContain('agent_delegate')
       const call = allTools().call('agent.delegate', { brief: 'fix it', acceptance: ['kicad_drc: 0 errors'] }, { hardware: false, via: 'test' })
-      await new Promise((r) => setTimeout(r, 50))
+      // the tool's HTTP call reaches the runtime asynchronously: wait for the job rather than a fixed delay, which was
+      // too short when the whole suite runs in parallel
+      await vi.waitFor(() => expect(jobs.jobStatus()).toHaveLength(1), { timeout: 5000, interval: 10 })
       const running = jobs.jobStatus()
-      expect(running).toHaveLength(1)
       expect(running[0]).toMatchObject({ kind: 'task', agent: 'worker', parentJobId: 'job-p', state: 'running' })
       release.forEach((r) => r())
       expect(await call).toMatchObject({ state: 'succeeded', summary: 'branch claude/x, done in 3 turns', job_id: running[0]!.id })
