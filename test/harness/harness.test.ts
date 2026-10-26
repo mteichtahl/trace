@@ -263,5 +263,5 @@ describe('deploy', () => {
 })
 
 it('exports every task', () => {
-  expect(Object.keys(TASKS)).toHaveLength(13)
+  expect(Object.keys(TASKS)).toHaveLength(14)
 })
