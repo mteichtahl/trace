@@ -265,8 +265,8 @@ function footprint(p: Part): string {
       return `(at ${ax} ${ay}${a ? ` ${a}` : ''})`
     })
   }
-  const props = [['Datasheet', p.sym === 'BAT54S' ? 'https://www.diodes.com/assets/Datasheets/ds11005.pdf' : '~'], ['Description', p.description],
-    ...Object.entries(p.fields)]
+  const props = ([['Datasheet', p.sym === 'BAT54S' ? 'https://www.diodes.com/assets/Datasheets/ds11005.pdf' : '~'], ['Description', p.description],
+    ...Object.entries(p.fields)] as [string, string][])
     .filter(([k]) => !new RegExp(`\\(property ${q(k).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} `).test(t))
     .map(([k, v]) => `\t(property ${q(k)} ${q(v)} (at 0 0 ${rot}) (layer "F.Fab") (hide yes) (uuid ${q(uuid(`fp/${p.ref}/${k}`))}) (effects (font (size 1 1) (thickness 0.15))))`)
   const link = [`\t(path ${q(`/${uuid(`sym/${p.ref}`)}`)})`, '\t(sheetname "/")', `\t(sheetfile ${q(`${NAME}.kicad_sch`)})`]
@@ -278,6 +278,22 @@ function footprint(p: Part): string {
     return `${block}\n\t\t(net ${q(boardNet(net))})`
   })
   for (const num of Object.keys(p.pads)) if (!t.includes(`(pad ${q(num)}`)) throw new Error(`${p.footprint} has no pad ${num}`)
+  // Library footprints carry no UUIDs on their texts, graphics and pads; KiCad would invent random ones on save.
+  // Give each a stable one so regenerating the board reproduces the same file.
+  // (KiCad wants the uuid after an item's other fields, so it goes in just before the item's closing parenthesis.)
+  let item = 0
+  const head = /\n\t\((property|fp_line|fp_rect|fp_circle|fp_arc|fp_poly|fp_curve|fp_text|fp_text_box|pad)\b/g
+  let outText = ''
+  let last = 0
+  for (let m = head.exec(t); m; m = head.exec(t)) {
+    const start = m.index + 2
+    const block = balanced(t, start)
+    if (block.includes('(uuid ')) continue
+    outText += t.slice(last, start) + block.slice(0, -1).trimEnd() + ` (uuid ${q(uuid(`fp/${p.ref}/item/${item++}`))}))`
+    last = start + block.length
+    head.lastIndex = last
+  }
+  t = outText + t.slice(last)
   return t.split('\n').map((l) => `\t${l}`).join('\n')
 }
 

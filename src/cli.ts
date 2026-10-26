@@ -164,7 +164,8 @@ async function cmdCheck(): Promise<number> {
       const r = (await reg.call('firmware.build', { target: t.name }, { hardware: false, via: 'cli' })) as Record<string, unknown>
       const ok = r.ok === true || ['pass', 'ok', 'success'].includes(String(r.status))
       failures += ok ? 0 : 1
-      out(`${ok ? 'ok  ' : 'FAIL'}   firmware.build ${t.name}: ${String(r.summary ?? '')}`)
+      const said = r.summary ?? (r.errors !== undefined ? `${String(r.errors)} errors, ${String(r.warnings ?? 0)} warnings${r.seconds !== undefined ? ` in ${String(r.seconds)} s` : ''}` : r.status ?? '')
+      out(`${ok ? 'ok  ' : 'FAIL'}   firmware.build ${t.name}: ${String(said)}`)
     } catch (x) {
       failures++
       out(`FAIL   firmware.build ${t.name}: ${x instanceof Error ? x.message : String(x)}`)

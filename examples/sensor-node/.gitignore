@@ -4,3 +4,5 @@
 fp-info-cache
 # firmware build output (make)
 firmware/build/
+# outputs written by kicad.fab / kicad.export when asked
+build/
