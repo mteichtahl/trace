@@ -31,6 +31,11 @@
  *                      person records   one you may see; any other id gets the same "no access". A guest may mark
  *                                       only records under their own person actor (their preferences)
  *   memory.reactivate  the same         remove the mark: the record is considered again (it was never deleted)
+ *   kb.search     read                  search the project's knowledge base (Retrieve, from this runtime, on that project's
+ *                                       knowledge base only: TRACE_PROJECT_KBS); a project without one here: "no access"
+ *   kb.sync       write                 sync the project's default branch into its knowledge base: the tool kb.sync on
+ *                                       the project's own worker runtime (its role writes projects/<slug>/kb/ and starts
+ *                                       the ingestion job; this runtime's cannot)
  *   job           read on its project   a job's state and log (the project is named by the job id, and checked
  *                                       before the worker is asked)
  *   users.list    admin                 every person: email, status, class, assigned projects
@@ -55,6 +60,8 @@ import { type InactiveMark, ReasonSchema, RecordIdSchema, memoryState } from '..
 import { TASK_AGENTS, type ToolJob } from '../agents/runtime/schemas.js'
 import { API_HIDDEN_TOOLS, ToolRefused, apiTool, checkPaths } from '../agents/runtime/tool.js'
 import { Work } from '../core/store.js'
+import { parseProjectKbs } from '../tools/kb/env.js'
+import { FilterSchema, type RetrieveClient, searchKb } from '../tools/kb/search.js'
 import type { CognitoAdmin, CognitoUser } from './aws.js'
 import type { GitHubApi } from './github.js'
 
@@ -62,7 +69,7 @@ export const PROJECT_DB_PATH = '.trace/project.db'
 const MAX_ARTIFACT = 8 * 1024 * 1024
 
 /** Tools that change state outside their scratch clone (the shared datasheet library and parts links): write. */
-export const WRITE_TOOLS: ReadonlySet<string> = new Set(['datasheets.add', 'datasheets.acknowledge', 'parts.fetch_datasheet'])
+export const WRITE_TOOLS: ReadonlySet<string> = new Set(['datasheets.add', 'datasheets.acknowledge', 'parts.fetch_datasheet', 'kb.sync'])
 
 /** Tools scoped by the session's environment (a job's project and agent), not by the request: never through the API.
  * The API reaches memory through memory.list and memory.recall, scoped to the project the access check passed.
@@ -98,7 +105,14 @@ export interface ActionDeps {
   scratch: string
   /** Each project's memory (TRACE_PROJECT_MEMORIES); absent or null: memory.* answer that there is none. */
   memory?: () => ProjectMemories | null
+  /** Each project's knowledge base (TRACE_PROJECT_KBS: slug → id), and the Retrieve client; absent or empty: kb.*
+   * answer that there is none. */
+  kbs?: () => ReadonlyMap<string, string>
+  retrieve?: () => Promise<RetrieveClient>
 }
+
+/** The installation's knowledge bases from the API runtime's environment (TRACE_PROJECT_KBS). */
+export const projectKbsFromEnv = (env: Record<string, string | undefined> = process.env): ReadonlyMap<string, string> => parseProjectKbs(env.TRACE_PROJECT_KBS)
 
 export interface Context { principal: Principal; deps: ActionDeps }
 
@@ -205,6 +219,19 @@ function projectMemory(ctx: Context, repo: string): AgentMemory | null {
   const mem = all.forProject(repo)
   if (!mem) throw new AccessDenied(NO_ACCESS)
   return mem
+}
+
+/**
+ * The project's knowledge base id, after the access check: null when the installation has none at all; a project with
+ * none here (not one of this installation's, or one with its knowledge base off) gets the same "no access" as one
+ * the person is not assigned to.
+ */
+function projectKb(ctx: Context, repo: string): string | null {
+  const all = ctx.deps.kbs?.() ?? new Map<string, string>()
+  if (!all.size) return null
+  const id = all.get(repo.toLowerCase())
+  if (!id) throw new AccessDenied(NO_ACCESS)
+  return id
 }
 
 const toolNeed = (t: AnyTool): Role => (WRITE_TOOLS.has(t.name) ? 'write' : 'read')
@@ -349,6 +376,26 @@ export const ACTIONS = {
     if (!mark) return { repo: a.repo, id: a.recordId, actor: actorIn(ns, a.repo), changed: false, active: true }
     const removed = await state.reactivate(a.recordId, byHash(ctx.principal))
     return { repo: a.repo, id: a.recordId, actor: actorIn(ns, a.repo), changed: removed !== null, active: true }
+  }),
+
+  'kb.search': def('read', Repo.extend({
+    query: z.string().min(1).max(1000), top_k: z.number().int().min(1).max(50).default(8), filter: FilterSchema.optional(),
+  }), async (a, ctx) => {
+    const id = projectKb(ctx, a.repo)
+    if (!id) return { repo: a.repo, enabled: false, results: [] }
+    if (!ctx.deps.retrieve) throw new ActionError('this installation does not search knowledge bases from the API')
+    const r = await searchKb(await ctx.deps.retrieve(), id, { query: a.query, top_k: a.top_k, ...(a.filter ? { filter: a.filter } : {}) })
+    return { repo: a.repo, enabled: true, ...r }
+  }),
+
+  // the project's own worker runtime does it, on its clone of the default branch, with its own role
+  // the wait is short: the API waits for the worker's answer in one InvokeAgentRuntime call, and the ingestion job
+  // carries on after it (its status is in the answer, and in kb.status)
+  'kb.sync': def('write', Repo.extend({ force: z.boolean().default(false), wait_minutes: z.number().min(0).max(10).default(5) }), async (a, ctx) => {
+    if (!projectKb(ctx, a.repo)) throw new ActionError('this installation has no knowledge bases')
+    const jobs = await ctx.deps.jobs()
+    if (!jobs.runTool) throw new ActionError('the knowledge base syncs on the project\'s worker runtime, and this installation has none for the API')
+    return jobs.runTool({ kind: 'tool', repository: a.repo, name: 'kb.sync', args: { force: a.force, wait_minutes: a.wait_minutes } })
   }),
 
   job: def('job', z.object({ id: z.string().min(1).max(200) }), async (a, ctx) => {

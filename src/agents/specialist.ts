@@ -20,6 +20,8 @@ export const SHARED_TOOLS = [
   'parts.lookup',
   'trace.runs', 'trace.run', 'trace.artifact',
   'memory.recall', 'memory.remember',
+  // the project's knowledge base, read only (src/tools/kb): hidden when the project has none. kb.sync is the worker's
+  'kb.search', 'kb.status',
 ] as const
 
 /** The delegation tool (src/agents/delegate.ts): offered to a specialist on the runtime, never to the worker. */
@@ -194,6 +196,12 @@ export function specialistPrompt(s: Specialist, c: PromptContext): string {
     'Every trace tool call is a recorded run with a run_id; trace_runs, trace_run and trace_artifact read earlier ones.',
     'The datasheet and parts databases are shared by every project: cite each figure you use with its part number,',
     'sha256 and page.',
+    `KNOWLEDGE BASE: before you ask a person anything, or decide what the project's docs, rules or design notes say,`,
+    `search the project's knowledge base with ${mcpName('kb.search')} (its docs, markdown, .trace/rules.md, CLAUDE.md, KiCad`,
+    'summaries and the datasheets of its BOM parts), and cite each passage you rely on by its path (path@commit, or part,',
+    `sha256 and page). It reflects the default branch at its last sync (${mcpName('kb.status')}): the files in your checkout win where`,
+    'they differ. You cannot change the knowledge base; when it is stale, say so in your report. If the tool is not offered,',
+    'the project has no knowledge base: read the files instead.',
     '',
     ...deliveryLines(s, delivery, cfg),
     '',

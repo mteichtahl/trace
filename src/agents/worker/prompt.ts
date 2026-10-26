@@ -71,6 +71,8 @@ export function taskPrompt(job: TaskLike, cfg: TraceConfig, branch: string): str
     'datasheet library, calculators, SPICE and Verilog simulation, firmware build; instruments and targets only on a',
     'runner wired to hardware). The datasheet and parts databases are shared by every project: add any datasheet you',
     'rely on to the library, and cite each figure you use with its part number, sha256 and page.',
+    'When the project has a knowledge base, kb_search finds its docs, rules, KiCad summaries and datasheets (cite the',
+    'path it gives). It follows the default branch by itself on every push there; kb_sync is for repairing it only.',
     '',
     `You are on the branch \`${branch}\` (from origin/${cfg.branch} unless it already existed). Implement the smallest`,
     'complete change with tests, validate, then have a fresh subagent (Task tool) that did not write it review',

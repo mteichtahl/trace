@@ -8,7 +8,9 @@
  *                  the runtime's name, the job definition's, the roles', CloudFormation ids and output names.
  *
  *   S3             projects/<slug>/…        the project's own data
+ *                  projects/<slug>/kb/…     its knowledge base's documents and their metadata sidecars (src/tools/kb)
  *                  jobs/<slug>/<id>/…       its GPU jobs' files (src/gpu/protocol.ts)
+ *   Bedrock        <prefix>-kb-<hash>       its knowledge base (`-g<n>` appended at generation n > 0)
  *   Secrets        <prefix>/github-token/<slug>   (`@g<n>` appended at generation n > 0)
  *   AgentCore      <prefix>_w_<hash>        its worker runtime ([a-zA-Z][a-zA-Z0-9_]{0,47})
  *                  <prefix>_m_<hash>        its memory (the same pattern and length; `_g<n>` appended at generation n > 0)
@@ -73,6 +75,15 @@ export const cpuJobDefinitionName = (prefix: string, repository: string): string
 /** A project memory's log delivery source and destination name (`[\w-]{1,60}`, unique in the account and region). */
 export const memoryDeliveryName = (prefix: string, repository: string, kind: 'logs' | 'traces', generation = 0): string =>
   `${prefix}-m-${projectHash(repository)}${gen(generation, '-')}-${kind}`
+
+/** The project's Bedrock knowledge base (`([0-9a-zA-Z][_-]?){1,100}`): `<prefix>-kb-<hash>`, `-g<n>` at generation n > 0. */
+export const knowledgeBaseName = (prefix: string, repository: string, generation = 0): string =>
+  `${prefix.replace(/-{2,}/g, '-').replace(/-$/, '')}-kb-${projectHash(repository)}${gen(generation, '-')}`
+/** Its S3 data source's name (`([0-9a-zA-Z][_-]?){1,100}`, unique within its knowledge base). */
+export const KB_DATA_SOURCE_NAME = 'trace-repository'
+/** Where its knowledge base's documents are (and the only prefix its data source and its service role read). */
+export const KB_FOLDER = 'kb'
+export const projectKbPrefix = (repository: string): string => `${projectDataPrefix(repository)}/${KB_FOLDER}`
 
 /** The tag every per-project resource and every Batch job carries: its slug. */
 export const PROJECT_TAG = 'trace:project'

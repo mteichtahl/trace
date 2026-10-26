@@ -56,12 +56,13 @@ import type { Construct, IConstruct } from 'constructs'
 import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
 import { JOBS_PREFIX, PROJECTS_PREFIX, memoryName } from '../core/project.js'
 import { GpuCompute } from './gpu.js'
+import { KB_RETRIEVE_ACTIONS, VectorStore, knowledgeBaseArn } from './knowledge.js'
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
 import { ACCESS_PREFIX, CENTRAL_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
   GPU_IMAGE_BUILD_OUTPUT, type InfraProps, LAYOUT_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled,
-  projectRefs, projectSettings,
+  kbEnabled, projectRefs, projectSettings,
 } from './props.js'
 
 /** The tag every runtime (and memory) of an installation carries: its prefix. The API's grant on the workers is scoped
@@ -87,6 +88,12 @@ const ID_SUFFIX = 11
  */
 export const idListLength = (entries: readonly { slug: string; name: string }[]): number =>
   entries.reduce((n, e, i) => n + (i ? 1 : 0) + e.slug.length + 1 + e.name.length + ID_SUFFIX, 0)
+
+/** A Bedrock knowledge base id: 10 letters and digits, whatever its name (TRACE_PROJECT_KBS's ids). */
+export const KB_ID_LENGTH = 10
+
+/** The length of TRACE_PROJECT_KBS (`owner/repo=<knowledge base id> …`) for these slugs. */
+export const kbListLength = (slugs: readonly string[]): number => slugs.reduce((n, s, i) => n + (i ? 1 : 0) + s.length + 1 + KB_ID_LENGTH, 0)
 
 /** Refuse, at synth time, a runtime environment AgentCore would refuse at deploy time. `extra`: entries the
  * observability construct adds later as property overrides. */
@@ -235,9 +242,11 @@ export class TraceStack extends Stack {
     // the 'drain' step of the move to nested stacks: every project out of the stack, so a nested deploy can make them again
     const refs = cfg.layoutMigration === 'drain' ? [] : projectRefs(cfg.repositories)
     const nested = cfg.layout === 'nested'
+    // the knowledge bases' vectors: one S3 vector bucket for the installation, an index per project in it (nested only)
+    const vectors = refs.some((r) => kbEnabled(cfg, r.repository)) ? new VectorStore(this, 'KnowledgeVectors', { prefix: cfg.prefix, removalPolicy: keep }) : null
     const projectProps = (ref: (typeof refs)[number]): ProjectProps => ({
       cfg, project: ref, bucket: central, images: repo, imageUri: image.getAttString('ImageUri'), oidcProviderArn: oidc.openIdConnectProviderArn,
-      gpu,
+      gpu, vectorBucketArn: vectors?.arn ?? null,
       environment: {
         AWS_REGION: cfg.region, TRACE_HOME: traceHome, CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: cfg.model, TRACE_WORKSPACE: '/mnt/workspace',
       },
@@ -262,6 +271,14 @@ export class TraceStack extends Stack {
       memoryEnv.TRACE_PROJECT_MEMORIES = idList(projects.map((p) => p.memory?.memoryId ?? ''))
       const memoryListLength = idListLength(refs.map((r) => ({ slug: r.slug, name: memoryName(cfg.prefix, r.repository, projectSettings(cfg, r.repository).generation) })))
       if (memoryListLength > ENV_VALUE_MAX) throw new Error(`too many repositories for one installation: the API's list of project memories would be ${memoryListLength} characters (AgentCore allows ${ENV_VALUE_MAX})`)
+    }
+    // every project's knowledge base, for the API's kb.search (src/tools/kb/env.ts parseProjectKbs): the same encoding,
+    // with only the projects that have one. Each id reaches the parent as an output of its project's nested stack.
+    const kbs = projects.flatMap((p, i) => (p.knowledgeBase ? [{ slug: refs[i]?.slug ?? '', kb: p.knowledgeBase }] : []))
+    if (kbs.length) {
+      memoryEnv.TRACE_PROJECT_KBS = Fn.join(' ', kbs.map((k) => Fn.join('=', [k.slug, k.kb.knowledgeBaseId])))
+      const kbLength = kbListLength(kbs.map((k) => k.slug))
+      if (kbLength > ENV_VALUE_MAX) throw new Error(`too many repositories for one installation: the API's list of knowledge bases would be ${kbLength} characters (AgentCore allows ${ENV_VALUE_MAX})`)
     }
 
     // ------------------------------------------------------------------ people: Cognito and the API runtime
@@ -360,6 +377,14 @@ export class TraceStack extends Stack {
       }))
     }
     grantReadRecords(apiRole, memories)
+    // kb.search on any project's knowledge base, after the access check (src/api/actions.ts); nothing else of them.
+    // The ARN is made from the id, so the parent takes one output per knowledge base from its nested stack, not two.
+    if (kbs.length) {
+      apiRole.addToPolicy(new iam.PolicyStatement({
+        sid: 'RetrieveProjectKnowledgeBases', actions: [...KB_RETRIEVE_ACTIONS],
+        resources: kbs.map((k) => knowledgeBaseArn(this.partition, cfg.region, cfg.account, k.kb.knowledgeBaseId)),
+      }))
+    }
 
     const discoveryUrl = `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}/.well-known/openid-configuration`
     const api = new CfnRuntime(this, 'ApiRuntime', {

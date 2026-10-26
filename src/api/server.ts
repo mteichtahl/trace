@@ -23,7 +23,7 @@ import { ConfigError } from '../core/config.js'
 import { ToolError } from '../core/registry.js'
 import { ATTR, type Attrs, type Outcome, type Span, flush, personHash, setAttrs } from '../core/telemetry.js'
 import { observeInvocation } from '../agents/runtime/observe.js'
-import { ActionError, type ActionDeps, NO_ACCESS, defaultScratch, perform } from './actions.js'
+import { ActionError, type ActionDeps, NO_ACCESS, defaultScratch, perform, projectKbsFromEnv } from './actions.js'
 import { type CognitoAdmin, HttpCognito, githubToken } from './aws.js'
 import { HttpGitHub } from './github.js'
 import { AuthError, Verifier, bearer } from './jwt.js'
@@ -179,6 +179,8 @@ export async function start(): Promise<void> {
     jobs: async () => jobs,
     tools: () => allTools(),
     memory: () => projectMemoriesFromEnv(process.env),
+    kbs: () => projectKbsFromEnv(process.env),
+    retrieve: async () => (await import('../tools/kb/search.js')).awsRetrieve(process.env.AWS_REGION),
     scratch,
   }
   const server = await listen({

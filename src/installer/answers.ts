@@ -41,6 +41,8 @@ export const AgentAnswers = z.object({
   /** what each CPU job asks for */
   cpuVcpus: z.number().int().min(1).max(192).default(16),
   cpuMemoryMiB: z.number().int().min(1024).max(1_572_864).default(32_768),
+  /** each project's Bedrock knowledge base (props.ts knowledgeBase); nested layout only */
+  knowledgeBase: z.boolean().default(true),
   /** AgentCore observability: OpenTelemetry traces and metrics to CloudWatch (GenAI Observability) */
   observability: z.boolean().default(true),
   /** turn on CloudWatch Transaction Search in the account and region (account-wide; never turned off) */

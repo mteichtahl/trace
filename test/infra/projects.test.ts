@@ -51,7 +51,10 @@ describe("a project's generation", () => {
       // the other project, and everything else of this one, keep their names
       expect(resources(a, 'AWS::BedrockAgentCore::Memory').map((r) => r.Properties.Name)).toContain(`trace_m_${HA}`)
       expect(resources(b, 'AWS::BedrockAgentCore::Runtime').map((r) => String(r.Properties.AgentRuntimeName)).filter((n) => n.includes(HB))).toEqual([`trace_w_${HB}`])
-      expect(resources(b, 'AWS::IAM::Role').map((r) => String(r.Properties.RoleName)).filter((n) => n.includes(HB)).sort()).toEqual([`trace-gh-${HB}-us-east-1`, `trace-gpu-${HB}-us-east-1`, `trace-w-${HB}-us-east-1`])
+      expect(resources(b, 'AWS::IAM::Role').map((r) => String(r.Properties.RoleName)).filter((n) => n.includes(HB)).sort()).toEqual([
+        `trace-gh-${HB}-us-east-1`, `trace-gpu-${HB}-us-east-1`, ...(layout === 'nested' ? [`trace-kb-${HB}-us-east-1`] : []), `trace-w-${HB}-us-east-1`])
+      // the knowledge base (nested only) carries the generation in its name; its role and index need none
+      if (layout === 'nested') expect(resources(b, 'AWS::Bedrock::KnowledgeBase').map((r) => r.Properties.Name)).toEqual([`trace-kb-${HB}-g2`])
     }, 300_000)
   }
 })
