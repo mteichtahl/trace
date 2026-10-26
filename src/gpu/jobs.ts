@@ -1,0 +1,116 @@
+/**
+ * Heavy jobs (Blender renders, the PCB autorouter) run through here, so the same MCP tool works on a laptop and from
+ * an AgentCore agent. AgentCore runtimes have no GPU, so when TRACE_GPU_QUEUE names an AWS Batch GPU job queue and
+ * this machine has no usable GPU of its own, the job is shipped there: inputs go to S3, the job runs in the GPU image,
+ * outputs come back. Otherwise the job runs here as a child process.
+ *
+ *   const r = await runJob({ kind: 'blender', argv: ['blender', '-b', '-P', '{in:scene.py}', '--', '{out:frame.png}'],
+ *     inputs: { 'scene.py': '/tmp/x/scene.py' }, outputs: ['frame.png'], gpu: true, timeoutSeconds: 1800 })
+ *   r.outputs['frame.png']   // a local path, wherever the job ran
+ *
+ * argv placeholders: {in:NAME} is replaced by the input's path where the job runs, {out:NAME} by the path an output
+ * must be written to, {dir} by the job's working directory.
+ */
+import { spawn } from 'node:child_process'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { basename, join } from 'node:path'
+import { z } from 'zod'
+import { ToolError } from '../core/registry.js'
+import { scratchDir } from '../core/store.js'
+
+export const JobKind = z.enum(['blender', 'freerouting'])
+export type JobKind = z.output<typeof JobKind>
+
+export const GpuJobSchema = z.object({
+  kind: JobKind,
+  argv: z.array(z.string()).min(1),
+  /** name → local file to send with the job */
+  inputs: z.record(z.string().regex(/^[\w.-]+$/), z.string()).default({}),
+  /** names of files the job writes (via {out:NAME}) to bring back */
+  outputs: z.array(z.string().regex(/^[\w.-]+$/)).default([]),
+  /** wants a GPU: picks the GPU queue; locally only a hint for the program */
+  gpu: z.boolean().default(false),
+  timeoutSeconds: z.number().int().min(10).max(8 * 3600).default(3600),
+  env: z.record(z.string(), z.string()).default({}),
+}).strict()
+export type GpuJob = z.input<typeof GpuJobSchema>
+
+export interface JobResult {
+  exitCode: number
+  stdout: string
+  stderr: string
+  /** output name → local path (missing when the job did not write it) */
+  outputs: Record<string, string>
+  where: 'local' | 'batch'
+  /** the Batch job id when it ran there */
+  jobId?: string
+  seconds: number
+}
+
+/** Where a job would run now. TRACE_GPU_REMOTE=always|never overrides the default (remote only without a local GPU). */
+export function backendFor(job: { gpu?: boolean | undefined }): 'local' | 'batch' {
+  const queue = process.env.TRACE_GPU_QUEUE
+  const mode = process.env.TRACE_GPU_REMOTE ?? 'auto'
+  if (!queue || mode === 'never') return 'local'
+  if (mode === 'always') return 'batch'
+  return job.gpu && !localGpu() ? 'batch' : 'local'
+}
+
+/** A GPU this process can use: an NVIDIA device node, or TRACE_GPU=1 set by the GPU image. */
+export function localGpu(): boolean {
+  if (['1', 'true', 'yes'].includes(process.env.TRACE_GPU ?? '')) return true
+  if (['0', 'false', 'no'].includes(process.env.TRACE_GPU ?? '')) return false
+  return existsSync('/dev/nvidia0') || existsSync('/proc/driver/nvidia/version')
+}
+
+export function substitute(argv: readonly string[], ins: Record<string, string>, outs: Record<string, string>, dir: string): string[] {
+  return argv.map((a) => a.replace(/\{(in|out):([\w.-]+)\}|\{dir\}/g, (m, k: string | undefined, n: string | undefined) => {
+    if (m === '{dir}') return dir
+    const table = k === 'in' ? ins : outs
+    const v = n === undefined ? undefined : table[n]
+    if (v === undefined) throw new ToolError(`${m} names no ${k === 'in' ? 'input' : 'output'} of the job`)
+    return v
+  }))
+}
+
+export async function runLocal(spec: GpuJob): Promise<JobResult> {
+  const job = GpuJobSchema.parse(spec)
+  mkdirSync(scratchDir(), { recursive: true })
+  const dir = mkdtempSync(join(scratchDir(), `${job.kind}-`))
+  const ins: Record<string, string> = {}
+  for (const [n, p] of Object.entries(job.inputs)) {
+    if (!existsSync(p)) throw new ToolError(`input ${n}: ${p} does not exist`)
+    ins[n] = join(dir, 'in', n)
+    mkdirSync(join(dir, 'in'), { recursive: true })
+    copyFileSync(p, ins[n])
+  }
+  mkdirSync(join(dir, 'out'), { recursive: true })
+  const outs = Object.fromEntries(job.outputs.map((n) => [n, join(dir, 'out', basename(n))]))
+  const argv = substitute(job.argv, ins, outs, dir)
+  const t0 = Date.now()
+  const [cmd, ...args] = argv as [string, ...string[]]
+  return new Promise((resolve, reject) => {
+    const p = spawn(cmd, args, { cwd: dir, env: { ...process.env, ...job.env }, stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    p.stdout.on('data', (d: Buffer) => { stdout = (stdout + d.toString()).slice(-200_000) })
+    p.stderr.on('data', (d: Buffer) => { stderr = (stderr + d.toString()).slice(-200_000) })
+    const timer = setTimeout(() => p.kill('SIGKILL'), job.timeoutSeconds * 1000)
+    p.on('error', (e: NodeJS.ErrnoException) => {
+      clearTimeout(timer)
+      reject(e.code === 'ENOENT' ? new ToolError(`${cmd} is not installed here${process.env.TRACE_GPU_QUEUE ? '' : ' (set TRACE_GPU_QUEUE to run it on the GPU queue)'}`) : e)
+    })
+    p.on('close', (code) => {
+      clearTimeout(timer)
+      const outputs = Object.fromEntries(Object.entries(outs).filter(([, f]) => existsSync(f)))
+      resolve({ exitCode: code ?? -1, stdout, stderr, outputs, where: 'local', seconds: (Date.now() - t0) / 1000 })
+    })
+  })
+}
+
+/** Run a job where it fits (see backendFor). The Batch backend lives in ./batch.ts and is loaded only when used. */
+export async function runJob(spec: GpuJob): Promise<JobResult> {
+  if (backendFor(spec) === 'local') return runLocal(spec)
+  const { runBatch } = await import('./batch.js')
+  return runBatch(GpuJobSchema.parse(spec))
+}

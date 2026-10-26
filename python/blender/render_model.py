@@ -13,6 +13,24 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as C  # noqa: E402
 
 
+# kicad-cli's VRML of a STEP placed on an empty board carries a small stand-in board in KiCad's default body and mask
+# colours (exactly these values); the STEP's own surfaces come from its file and do not match them.
+KICAD_BOARD_COLOURS = ((0.43, 0.45, 0.30), (0.078, 0.2, 0.141))
+
+
+def drop_kicad_board(objs):
+    keep = []
+    for o in objs:
+        cols = [C.base_color(s.material)[0] for s in o.material_slots]
+        if cols and all(c is not None and any(all(abs(c[i] - k[i]) < 0.006 for i in range(3)) for k in KICAD_BOARD_COLOURS) for c in cols):
+            C.bpy.data.objects.remove(o, do_unlink=True)
+        else:
+            keep.append(o)
+    if not keep:
+        raise C.JobError("the model has no geometry besides KiCad's stand-in board")
+    return keep
+
+
 def main():
     job, rest = C.load_job()
     if not rest:
@@ -23,6 +41,8 @@ def main():
     fmt = job.get("format") or os.path.splitext(model)[1].lstrip(".")
     C.log(f"import {os.path.basename(model)} ({fmt})")
     objs = C.import_model(model, fmt, job.get("up_axis"))
+    if job.get("drop_kicad_board"):
+        objs = drop_kicad_board(objs)
     C.normalise_units(objs, job.get("units"))
     mode = job.get("materials", "auto")
     clay = C.principled("Clay", C.hex_rgba(job.get("clay_color", "#c9ccd1")), rough=0.55)
