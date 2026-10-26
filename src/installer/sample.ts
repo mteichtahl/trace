@@ -45,7 +45,7 @@ export function withSample(a: Answers): Answers {
 // ------------------------------------------------------------------ the files
 
 /** Paths in templates/sample that are the installer's, not the sample repository's. */
-const INSTALLER_ONLY = new Set(['tour.json'])
+const INSTALLER_ONLY = new Set(['tour.json', 'settings.json'])
 
 function walk(dir: string, root = dir, out: string[] = []): string[] {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -72,7 +72,7 @@ export async function pushSample(token: string, repo: string, branch: string, di
 
 // ------------------------------------------------------------------ onboarding
 
-export interface SampleOnboard { url: string; commit: string | null; settings: string[] }
+export interface SampleOnboard { url: string; commit: string | null; settings: string[]; seeded?: string[] }
 
 /**
  * Put the sample under trace: the files `trace onboard` writes (core/onboard.ts writeFiles, on a scratch copy of the
@@ -92,11 +92,15 @@ export async function onboardSample(token: string, repo: string, branch: string,
       writeFileSync(join(work, f.path), f.content)
     }
     let commit: string | null = null
+    const lines: string[] = []
     const under = await hasFile(token, repo, branch, '.trace/project.db') && await hasFile(token, repo, branch, '.github/workflows/trace-worker.yml')
     if (!under) {
       const d = await detect(work, branch, () => '')
       const settings = { ...settingsFor(d, o.escalateTo), ...sampleSettings(dir) }
       const written = writeFiles(work, d, settings)
+      // the sample's requirements, test plan, specs and thermal data, in the same project database
+      const { seedSample } = await import('./sample-seed.js')
+      for (const l of seedSample(work)) lines.push(l)
       const files: RepoFile[] = [...new Set(written)].map((rel) => ({ path: rel, content: readFileSync(join(work, rel)) }))
       commit = await commitFiles(token, repo, branch, files, 'Put the sample project under trace\n\nThe project database with its settings, the trace workflows, the merge driver for the database and CLAUDE.md. Committed by the installer, which created this repository.')
     }
@@ -111,7 +115,7 @@ export async function onboardSample(token: string, repo: string, branch: string,
         else process.env.GH_TOKEN = prior
       }
     }
-    return { url, commit, settings }
+    return { url, commit, settings, seeded: lines }
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }

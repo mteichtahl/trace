@@ -667,6 +667,7 @@ export async function apply(answers: Answers, s: Secrets, emit: Emit, hooks: Hoo
         const sp = a.projects.find((p) => isSample(p.repo))
         const r = await sampleGit.onboard(adminToken, sample, sp?.branch ?? 'main', { escalateTo: a.escalateTo, applySettings: sp?.applySettings ?? true })
         log('onboard', `${sample}: ${r.commit ? `under trace (${r.commit.slice(0, 7)} on ${sp?.branch ?? 'main'})` : 'already under trace'}${r.settings.length ? ` (${r.settings.join('; ')})` : ''}`)
+        for (const l of r.seeded ?? []) log('onboard', `${sample}: ${l}`)
         summary.push(`The sample project is at ${r.url}.`)
       }
       const prior = process.env.GH_TOKEN

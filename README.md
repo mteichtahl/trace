@@ -22,7 +22,7 @@ trace install                                  # opens the installer in your bro
 The installer is a page served from your own machine (127.0.0.1, with a one-time key in its address). It asks for
 and checks the following:
 
-- **GitHub:** the shared agent token, the repositories trace will run, and optionally each project's own agent
+- **GitHub:** the shared agent token, the repositories trace will run (or just [the sample project](#the-sample-project)), and optionally each project's own agent
   token (see [Project isolation](#project-isolation)).
 - **AWS:** a profile (SSO works) or access keys, the region, and confirmation of the account. It checks that Bedrock
   AgentCore and an Anthropic model are available there.
@@ -51,6 +51,32 @@ It then shows the plan and runs it:
   GPU image leaves GPU and CPU jobs unavailable and everything else installed.
 - **People:** Cognito invitations into each person's class group, and project assignments recorded in the central
   database.
+
+### The sample project
+
+On the GitHub step you can also choose **Install the sample project**. It is a small sensor board, from intent to
+fabrication files, in a repository of its own (`<your login>/trace-sample` unless you name another). It is the quickest
+way to see the whole system work before you bring your own design, and it is the only repository you need to choose.
+
+- **Before the deploy,** the installer creates the repository if it does not exist and commits the sample's files
+  (`templates/sample`) onto its default branch. An existing repository is used as it is: files are added or updated,
+  nothing is deleted. Creating one needs a token that may create repositories (a fine-grained token with
+  Administration read and write on your account, or the admin token); otherwise create it yourself, empty, and run the
+  installer again.
+- **From then on it is a project like any other:** its own runtime, roles, memory, knowledge base and build runner,
+  and you can assign people to it. It is put under trace straight away, without the held onboarding pull request,
+  and its project database starts with the sample's requirements, test plan, specifications and thermal data.
+- **The tour,** last, opens one task per step of the journey (define, architect, capture, prove, layout, sign-off,
+  release, bring-up), each labelled for the agent that takes it. Together they run every agent and every tool, every
+  simulation included: circuit (ngspice), mixed-signal, logic, formal and coverage, FPGA synthesis and place and
+  route, protocols, thermal (2.5D, CalculiX and CFD), electromagnetic (openEMS), autorouting (Freerouting and
+  OrthoRoute), rendering (Blender), firmware, and hardware in the loop on an emulated bench
+  (`trace hil emulate`). Tasks that need GPU or CPU jobs are left out when GPU jobs are off. The tour runs on AWS
+  like any other work and costs what that work costs; untick **Start the tour** to install the sample without it.
+  Running the installer again opens only the tasks that are missing.
+
+`test/installer/sample-tour.test.ts` keeps the tour complete: a tool, agent or kind of remote job added without a
+tour task fails it.
 
 Tokens and keys stay in the installer's memory. They are written only to Secrets Manager and GitHub. Every step can
 be run again safely, and running the installer again updates an existing installation. Adding or removing a
