@@ -4,11 +4,13 @@
  *   TRACE_AGENT_MODE=api               the API runtime for people (Cognito JWT), src/api/server.ts
  */
 import { z } from 'zod'
+import { telemetryNote } from './observe.js'
 
 const Mode = z.enum(['worker', 'api']).default('worker')
 const ApiModule = z.object({ start: z.function() })
 
 async function main(): Promise<void> {
+  process.stdout.write(`${telemetryNote()}\n`)
   const mode = Mode.parse(process.env.TRACE_AGENT_MODE || undefined)
   if (mode === 'api') {
     // Built separately (src/api); resolved at run time so the worker image builds without it.

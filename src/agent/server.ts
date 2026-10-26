@@ -12,7 +12,9 @@
  * id. SIGTERM aborts the running jobs, waits briefly for them to report, and closes.
  */
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http'
+import { ATTR, flush } from '../core/telemetry.js'
 import { type Jobs, defaultJobs } from './jobs.js'
+import { observeInvocation } from './observe.js'
 import { InvocationSchema } from './schemas.js'
 
 const MAX_BODY = 1024 * 1024
@@ -55,8 +57,13 @@ export function handler(jobs: Jobs): (req: IncomingMessage, res: ServerResponse)
           return send(res, 400, { error: 'invalid invocation', issues: parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`) })
         }
         const p = parsed.data
-        if (p.kind === 'status') return send(res, 200, { jobs: jobs.jobStatus(p.jobId), busy: jobs.busy() })
-        return send(res, 200, jobs.startJob(p))
+        return observeInvocation('worker', req.headers, { [ATTR.invocationKind]: p.kind, ...('repository' in p ? { [ATTR.repository]: p.repository } : {}) }, (_s, outcome) => {
+          if (p.kind === 'status') { outcome('ok'); return send(res, 200, { jobs: jobs.jobStatus(p.jobId), busy: jobs.busy() }) }
+          // the job's span starts here, under this invocation (and its session)
+          const r = jobs.startJob(p)
+          outcome(r.accepted ? 'ok' : 'rejected', { [ATTR.jobId]: r.jobId })
+          return send(res, 200, r)
+        })
       })().catch((e: unknown) => { if (!res.headersSent) send(res, 500, { error: e instanceof Error ? e.message : String(e) }) })
       return
     }
@@ -80,7 +87,7 @@ export async function start(opts: { port?: number; host?: string; jobs?: Jobs } 
     stopping = true
     process.stdout.write(`${sig}: stopping the running jobs\n`)
     server.close()
-    void jobs.shutdown(20_000).finally(() => process.exit(0))
+    void jobs.shutdown(20_000).then(() => flush()).finally(() => process.exit(0))
   }
   process.once('SIGTERM', () => stop('SIGTERM'))
   process.once('SIGINT', () => stop('SIGINT'))

@@ -8,6 +8,8 @@
  *                       ngspice, Icarus; session storage at /mnt/workspace
  *   agent memory        AgentCore Memory (src/infra/memory.ts): events and the semantic, summary and preference
  *                       strategies, namespaced /trace/<owner>/<repo>/<agent>/; both runtimes may use it
+ *   observability       OpenTelemetry (ADOT) from both runtimes and the GPU jobs, CloudWatch Transaction Search,
+ *                       the memory's vended logs and traces, and a dashboard (src/infra/observability.ts)
  *   actions role        assumed by the onboarded repositories' workflows through GitHub OIDC: invokes the worker
  *                       runtime and reads/writes the central bucket
  *   people              a Cognito user pool (no self sign-up; admins invite people) with three classes as groups —
@@ -37,6 +39,7 @@ import { Provider } from 'aws-cdk-lib/custom-resources'
 import type { Construct } from 'constructs'
 import { GpuCompute, JOBS_PREFIX } from './gpu.js'
 import { TraceMemory } from './memory.js'
+import { Observability, gpuTelemetryEnv } from './observability.js'
 import { type InfraProps, runtimeName } from './props.js'
 
 /** The repository root, from dist/infra or src/infra. */
@@ -135,6 +138,7 @@ export class TraceStack extends Stack {
           prefix: cfg.prefix, instanceTypes: cfg.gpu.instanceTypes, maxVcpus: cfg.gpu.maxVcpus, spot: cfg.gpu.spot,
           bucket: central, source, buildProvider: provider, retainData: cfg.retainData,
           allowBuild: (arn) => { for (const f of [start, poll]) f.addToRolePolicy(new iam.PolicyStatement({ actions: ['codebuild:StartBuild', 'codebuild:BatchGetBuilds'], resources: [arn] })) },
+          environment: gpuTelemetryEnv(cfg),
         })
       : null
     const gpuEnv: Record<string, string> = gpu
@@ -295,6 +299,16 @@ export class TraceStack extends Stack {
 
     if (gpu) for (const role of [workerRole, apiRole]) gpu.grantSubmit(role, central)
     if (memory) for (const role of [workerRole, apiRole]) memory.grantUse(role)
+
+    // ------------------------------------------------------------------ observability (OpenTelemetry/ADOT, src/infra/observability.ts)
+    new Observability(this, 'Observability', {
+      prefix: cfg.prefix, settings: cfg.observability, gpu: Boolean(gpu), gpuJobRole: gpu?.jobRole ?? null,
+      memory: memory ? { arn: memory.memoryArn, id: memory.memoryId } : null,
+      runtimes: [
+        { id: 'Worker', runtime, name: runtimeName(cfg.prefix), role: workerRole },
+        { id: 'Api', runtime: api, name: api.agentRuntimeName, role: apiRole },
+      ],
+    })
 
     // ------------------------------------------------------------------ the onboarded repositories' role (GitHub OIDC)
     const issuer = 'token.actions.githubusercontent.com'

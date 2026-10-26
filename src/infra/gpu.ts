@@ -42,6 +42,8 @@ export interface GpuComputeProps {
   /** let the provider's functions start and poll this build project */
   allowBuild: (projectArn: string) => void
   retainData: boolean
+  /** more environment for each job (the OpenTelemetry exporter's, src/infra/observability.ts) */
+  environment?: Record<string, string>
 }
 
 export class GpuCompute extends Construct {
@@ -142,7 +144,7 @@ export class GpuCompute extends Construct {
         gpu: 1,
         jobRole: this.jobRole,
         command: ['node', '/app/dist/gpu/runner.js'],
-        environment: { AWS_REGION: region, TRACE_GPU: '1', NVIDIA_DRIVER_CAPABILITIES: 'all' },
+        environment: { AWS_REGION: region, TRACE_GPU: '1', NVIDIA_DRIVER_CAPABILITIES: 'all', ...p.environment },
         logging: ecs.LogDriver.awsLogs({ logGroup: this.logGroup, streamPrefix: 'job' }),
       }),
     })

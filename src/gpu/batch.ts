@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { S3Backend, type S3Api } from '../core/central.js'
 import { ToolError } from '../core/registry.js'
+import { ATTR, annotate, traceEnv } from '../core/telemetry.js'
 import { scratchDir } from '../core/store.js'
 import type { GpuJobSchema, JobResult } from './jobs.js'
 import type { z } from 'zod'
@@ -112,7 +113,8 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
     jobName: `trace-${id}`.slice(0, 128),
     jobQueue: queue,
     jobDefinition: definition,
-    containerOverrides: { environment },
+    // the trace context, so the runner's span continues this trace (src/core/telemetry.ts; nothing without a span)
+    containerOverrides: { environment: [...environment, ...Object.entries(traceEnv()).map(([name, value]) => ({ name, value }))] },
     // the runner enforces the job's own limit; Batch's is a backstop for a runner that hangs
     timeout: { attemptDurationSeconds: Math.max(60, job.timeoutSeconds + 600) },
     tags: { 'trace:job': id, 'trace:kind': job.kind },
@@ -120,6 +122,7 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
   const jobId = submitted.jobId
   if (!jobId) throw new ToolError('AWS Batch accepted the job but returned no job id')
   log(`submitted ${id} as Batch job ${jobId}`)
+  annotate({ [ATTR.gpuJobId]: id, [ATTR.gpuBatchJobId]: jobId })
 
   const queueWait = Number(env.TRACE_GPU_QUEUE_WAIT_S ?? 1800)
   const deadline = t0 + (job.timeoutSeconds + (Number.isFinite(queueWait) && queueWait >= 0 ? queueWait : 1800)) * 1000

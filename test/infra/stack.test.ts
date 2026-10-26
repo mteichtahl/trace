@@ -146,6 +146,52 @@ describe('the trace stack', () => {
 
   it('exports what the installer needs', () => {
     const outputs = Object.keys(t.toJSON().Outputs as Record<string, unknown>)
-    for (const o of ['TraceHome', 'GithubSecretArn', 'AgentRuntimeArn', 'ApiRuntimeArn', 'ActionsRoleArn', 'UserPoolId', 'UserPoolClientId', 'CognitoDomain', 'GpuJobQueue', 'GpuJobDefinition']) expect(outputs).toContain(o)
+    for (const o of ['TraceHome', 'GithubSecretArn', 'AgentRuntimeArn', 'ApiRuntimeArn', 'ActionsRoleArn', 'UserPoolId', 'UserPoolClientId', 'CognitoDomain', 'GpuJobQueue', 'GpuJobDefinition', 'MemoryId']) expect(outputs).toContain(o)
   })
+
+  it('has one AgentCore memory with the semantic, summary and preference strategies, namespaced by actor', () => {
+    t.resourceCountIs('AWS::BedrockAgentCore::Memory', 1)
+    t.hasResourceProperties('AWS::BedrockAgentCore::Memory', {
+      Name: 'trace_memory',
+      EventExpiryDuration: 30,
+      MemoryStrategies: [
+        { SemanticMemoryStrategy: Match.objectLike({ Name: 'trace_facts', NamespaceTemplates: ['/trace/{actorId}/facts/'] }) },
+        { SummaryMemoryStrategy: Match.objectLike({ Name: 'trace_sessions', NamespaceTemplates: ['/trace/{actorId}/sessions/{sessionId}/'] }) },
+        { UserPreferenceMemoryStrategy: Match.objectLike({ Name: 'trace_preferences', NamespaceTemplates: ['/trace/{actorId}/preferences/'] }) },
+      ],
+    })
+    for (const mode of ['worker', 'api']) {
+      t.hasResourceProperties('AWS::BedrockAgentCore::Runtime', { EnvironmentVariables: Match.objectLike({ TRACE_AGENT_MODE: mode, TRACE_MEMORY_ID: { 'Fn::GetAtt': [Match.stringLikeRegexp('^AgentMemory'), 'MemoryId'] } }) })
+    }
+    const custom = Template.fromStack(new TraceStack(new App(), 'MemoryDays', InfraPropsSchema.parse({ ...props, memory: { eventExpiryDays: 90 } })))
+    custom.hasResourceProperties('AWS::BedrockAgentCore::Memory', { EventExpiryDuration: 90 })
+    expect(() => InfraPropsSchema.parse({ ...props, memory: { eventExpiryDays: 2 } })).toThrow()
+  }, 300_000)
+
+  it('lets both runtimes use the memory: events by trace actor, records under /trace/, nothing else', () => {
+    const policies = Object.entries(t.findResources('AWS::IAM::Policy'))
+    const statements = (who: string): Record<string, unknown>[] => policies.filter(([id]) => id.startsWith(who))
+      .flatMap(([, p]) => (p as { Properties: { PolicyDocument: { Statement: Record<string, unknown>[] } } }).Properties.PolicyDocument.Statement)
+    const memoryArn = { 'Fn::GetAtt': [Match.stringLikeRegexp('^AgentMemory'), 'MemoryArn'] }
+    for (const who of ['WorkerRuntimeRole', 'ApiRuntimeRole']) {
+      const s = statements(who)
+      expect(s).toEqual(expect.arrayContaining([
+        expect.objectContaining({ Sid: 'TraceMemoryEvents', Action: ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents'], Condition: { StringLike: { 'bedrock-agentcore:actorId': ['?*/?*/?*'] } } }),
+        expect.objectContaining({ Sid: 'TraceMemoryRecords', Action: ['bedrock-agentcore:RetrieveMemoryRecords', 'bedrock-agentcore:ListMemoryRecords'], Condition: { StringLike: { 'bedrock-agentcore:namespace': '/trace/*' } } }),
+      ]))
+      for (const st of s.filter((x) => String(x.Sid).startsWith('TraceMemory'))) expect(Match.objectLike({ Resource: memoryArn }).test(st).isSuccess).toBe(true)
+      const all = JSON.stringify(s)
+      for (const never of ['DeleteEvent', 'DeleteMemoryRecord', 'BatchCreateMemoryRecords', 'CreateMemory', 'UpdateMemory', 'DeleteMemory', 'bedrock-agentcore:*']) expect(all).not.toContain(never)
+    }
+    expect(JSON.stringify(statements('ActionsRole'))).not.toContain('TraceMemory')
+  })
+
+  it('creates none of the memory when memory.enabled is false', () => {
+    const off = InfraPropsSchema.parse({ ...props, memory: { enabled: false } })
+    const t2 = Template.fromStack(new TraceStack(new App(), 'NoMemory', off))
+    t2.resourceCountIs('AWS::BedrockAgentCore::Memory', 0)
+    const json = JSON.stringify(t2.toJSON())
+    for (const s of ['TRACE_MEMORY_ID', 'TraceMemory', 'bedrock-agentcore:CreateEvent', 'RetrieveMemoryRecords']) expect(json).not.toContain(s)
+    expect(Object.keys(t2.toJSON().Outputs as Record<string, unknown>)).not.toContain('MemoryId')
+  }, 300_000)
 })

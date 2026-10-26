@@ -16,6 +16,7 @@ import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { z } from 'zod'
 import { ToolError } from '../core/registry.js'
+import { ATTR, type Outcome, fail, recordMetric, setAttrs, span } from '../core/telemetry.js'
 import { scratchDir } from '../core/store.js'
 
 export const JobKind = z.enum(['blender', 'freerouting', 'orthoroute'])
@@ -107,9 +108,35 @@ export async function runLocal(spec: GpuJob): Promise<JobResult> {
   })
 }
 
-/** Run a job where it fits (see backendFor). The Batch backend lives in ./batch.ts and is loaded only when used. */
+/**
+ * Run a job where it fits (see backendFor). The Batch backend lives in ./batch.ts and is loaded only when used.
+ * Each job is a span (`trace.gpu_job <kind>`: kind, backend, job ids, seconds, exit code) and counts trace.gpu.jobs and
+ * trace.gpu.duration; a Batch job gets the span's trace context (TRACEPARENT), so its runner's span joins the trace.
+ */
 export async function runJob(spec: GpuJob): Promise<JobResult> {
-  if (backendFor(spec) === 'local') return runLocal(spec)
-  const { runBatch } = await import('./batch.js')
-  return runBatch(GpuJobSchema.parse(spec))
+  const backend = backendFor(spec)
+  let outcome: Outcome = 'ok'
+  const t0 = performance.now()
+  try {
+    return await span(`trace.gpu_job ${spec.kind}`, {
+      [ATTR.gpuKind]: spec.kind, [ATTR.gpuBackend]: backend, [ATTR.gpuWanted]: spec.gpu ?? false,
+      [ATTR.gpuInputs]: Object.keys(spec.inputs ?? {}).length, [ATTR.gpuOutputs]: (spec.outputs ?? []).length,
+    }, async (s) => {
+      const r = backend === 'local' ? await runLocal(spec) : await (await import('./batch.js')).runBatch(GpuJobSchema.parse(spec))
+      outcome = r.exitCode === 0 ? 'ok' : 'error'
+      setAttrs(s, {
+        [ATTR.gpuExitCode]: r.exitCode, [ATTR.gpuSeconds]: r.seconds, [ATTR.outcome]: outcome,
+        ...(r.jobId ? { [ATTR.gpuBatchJobId]: r.jobId } : {}),
+      })
+      if (outcome !== 'ok') fail(s, new Error(`exit code ${r.exitCode}`), 'exit_code')
+      return r
+    })
+  } catch (e) {
+    outcome = 'error'
+    throw e
+  } finally {
+    const dims = { [ATTR.gpuKind]: spec.kind, [ATTR.gpuBackend]: backend, [ATTR.outcome]: outcome }
+    recordMetric('trace.gpu.jobs', 1, dims)
+    recordMetric('trace.gpu.duration', (performance.now() - t0) / 1000, dims)
+  }
 }

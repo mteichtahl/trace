@@ -30,6 +30,8 @@ import { loadConfig } from '../harness/index.js'
 import type { Context, Core, GitHub } from '../harness/types.js'
 import { type WorkItem, WorkItemSchema, pick } from '../harness/worker.js'
 import type { JobContext, JobRunner } from './jobs.js'
+import { addSecret } from '../core/telemetry.js'
+import { claudeTelemetry } from './observe.js'
 import { type AgentMemory, type Actor, type JobMemory, NO_MEMORY, agentActor, memoryFromEnv, openJobMemory, personActor, sessionIdFor } from './memory.js'
 import { renderTaskPrompt, taskBranch, taskPrompt, workItemPrompt } from './prompt.js'
 import { BranchSchema, type JobPayload, type SweepJob, type TaskJob, type WorkItemJob } from './schemas.js'
@@ -200,6 +202,8 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
   extraEnv?: Record<string, string>
   /** Sees every SDK message (memory records the key tool outcomes). */
   onMessage?: (m: unknown) => void
+  /** The agent doing it (worker, ci-doctor, render, …), for telemetry. */
+  agent?: string
 }): Promise<ClaudeOutcome> {
   const abort = new AbortController()
   const stop = (why: string): void => { if (!abort.signal.aborted) { o.log(why); abort.abort(new Error(why)) } }
@@ -208,6 +212,10 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
   const timer = setTimeout(() => stop(`stopping Claude: it ran longer than ${d.timeoutS} s`), d.timeoutS * 1000)
   timer.unref()
   const model = d.model || o.cfg.worker.model || undefined
+  // Spans for the query, each model response and each tool use (a no-op without an OpenTelemetry SDK); the MCP
+  // server gets the trace context so its tool spans join this trace.
+  const tel = await claudeTelemetry({ model, agent: o.agent })
+  const mcpEnv = { ...o.extraEnv, ...tel.env }
   const options: ClaudeOptions = {
     ...(model ? { model } : {}),
     cwd: o.cwd,
@@ -215,7 +223,7 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
     permissionMode: 'bypassPermissions',
     allowDangerouslySkipPermissions: true,
     allowedTools: [...TOOLS],
-    mcpServers: { trace: { type: 'stdio', command: 'node', args: [d.cli, 'mcp'], ...(o.extraEnv && Object.keys(o.extraEnv).length ? { env: o.extraEnv } : {}) } },
+    mcpServers: { trace: { type: 'stdio', command: 'node', args: [...tel.nodeArgs, d.cli, 'mcp'], ...(Object.keys(mcpEnv).length ? { env: mcpEnv } : {}) } },
     maxTurns: o.cfg.worker.max_turns,
     abortController: abort,
     env: { ...d.env, ...o.extraEnv, GH_TOKEN: o.token, GITHUB_TOKEN: o.token, ...gitAuthEnv(o.token), CLAUDE_AGENT_SDK_CLIENT_APP: 'trace-agent/1' },
@@ -227,18 +235,22 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
     stderr: (s) => { const l = s.trim(); if (l) o.log(`claude: ${o.redact(l).slice(0, 500)}`) },
   }
   let last: z.infer<typeof ResultMessage> | null = null
+  let thrown: unknown
   try {
     for await (const m of d.claude({ prompt: o.prompt, options })) {
       try { o.onMessage?.(m) } catch { /* an observer never stops the job */ }
+      tel.observe(m)
       const r = ResultMessage.safeParse(m)
       if (r.success) last = r.data
     }
   } catch (e) {
+    thrown = e
     if (abort.signal.aborted) return { ok: false, text: errText(abort.signal.reason), turns: last?.num_turns ?? 0 }
     throw e
   } finally {
     clearTimeout(timer)
     o.signal.removeEventListener('abort', onAbort)
+    tel.end({ aborted: abort.signal.aborted, ...(abort.signal.aborted ? { error: abort.signal.reason } : thrown !== undefined ? { error: thrown } : {}) })
   }
   if (abort.signal.aborted) return { ok: false, text: errText(abort.signal.reason), turns: last?.num_turns ?? 0 }
   if (!last) return { ok: false, text: 'Claude ended without a result', turns: 0 }
@@ -341,7 +353,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     mem = await jobMemory(d, p, prep, branch, log, redact)
     log(`running Claude on ${p.repository} ${branch} (max ${cfg.worker.max_turns} turns)`)
     const out = await runClaude(d, {
-      prompt: `${prep.prompt(cfg)}${mem.context}`, cwd: dir, cfg, token, signal: ctx.signal, log, redact, extraEnv: mem.env, onMessage: (m) => mem.observe(m),
+      prompt: `${prep.prompt(cfg)}${mem.context}`, cwd: dir, cfg, token, signal: ctx.signal, log, redact, extraEnv: mem.env, onMessage: (m) => mem.observe(m), agent: prep.agent,
     })
     const summary = redact(out.text)
     await mem.finish(out.ok, summary)
@@ -435,6 +447,7 @@ export function secretsToken(arn: string | undefined, region?: string): () => Pr
     const sm = new SecretsManagerClient(region ? { region } : {})
     const out = await sm.send(new GetSecretValueCommand({ SecretId: arn }))
     cached = { token: parseSecret(out.SecretString), at: Date.now() }
+    addSecret(cached.token) // never in a span, whatever goes wrong upstream
     return cached.token
   }
 }

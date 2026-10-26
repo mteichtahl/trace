@@ -67,4 +67,10 @@ ENV PATH=/opt/trace-venv/bin:$PATH \
 
 USER trace
 EXPOSE 8080
-CMD ["node", "/app/dist/agent/main.js"]
+# AgentCore observability: the ADOT auto-instrumentation (@aws/aws-distro-opentelemetry-node-autoinstrumentation, a
+# pinned dependency) registers the OpenTelemetry SDK before the agent starts. AgentCore Runtime supplies its OTEL_*
+# settings (AGENT_OBSERVABILITY_ENABLED, OTEL_RESOURCE_ATTRIBUTES, OTEL_EXPORTER_OTLP_LOGS_HEADERS, …): spans go to
+# X-Ray (CloudWatch Transaction Search), metrics to CloudWatch as EMF. To run the image anywhere else without
+# exporting, set OTEL_SDK_DISABLED=true. See the README's "Observability".
+RUN test -f /app/node_modules/@aws/aws-distro-opentelemetry-node-autoinstrumentation/build/src/register.js
+CMD ["node", "--require", "/app/node_modules/@aws/aws-distro-opentelemetry-node-autoinstrumentation/build/src/register.js", "/app/dist/agent/main.js"]

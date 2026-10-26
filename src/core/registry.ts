@@ -16,6 +16,7 @@
  * problem the caller should read (bad input, a missing program, a failed run); anything else is a bug.
  */
 import { z } from 'zod'
+import { observeTool } from './telemetry.js'
 
 export class ToolError extends Error {
   override name = 'ToolError'
@@ -77,6 +78,10 @@ export class Registry {
 
   /** Validate `args` against the tool's schema, then run it. */
   async call(name: string, args: unknown, ctx: ToolContext): Promise<unknown> {
+    return observeTool(name, args, ctx, this.tools.get(name)?.hardware ?? false, () => this.invoke(name, args, ctx))
+  }
+
+  private async invoke(name: string, args: unknown, ctx: ToolContext): Promise<unknown> {
     const t = this.tools.get(name)
     if (!t) throw new ToolError(`no tool ${JSON.stringify(name)}`)
     if (t.hardware && !ctx.hardware) {

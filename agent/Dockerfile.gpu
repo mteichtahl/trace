@@ -88,4 +88,7 @@ ENV TRACE_GPU=1 \
     NODE_ENV=production
 
 USER trace
+# The runner starts the ADOT SDK itself (src/core/telemetry.ts startSdkIfConfigured) only when the job definition
+# names an OTLP endpoint (OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, set by the stack with observability on); its span
+# continues the submitter's trace from TRACEPARENT. Otherwise nothing is exported.
 CMD ["node", "/app/dist/gpu/runner.js"]

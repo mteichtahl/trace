@@ -47,6 +47,17 @@ export const InfraPropsSchema = z.object({
     /** days short-term events are kept before they expire (AgentCore allows 3–365) */
     eventExpiryDays: z.number().int().min(3).max(365).default(30),
   }).strict().prefault({}),
+  /** AgentCore observability: OpenTelemetry (ADOT) traces and metrics to CloudWatch (src/infra/observability.ts). */
+  observability: z.object({
+    enabled: z.boolean().default(true),
+    /** turn on CloudWatch Transaction Search in the account and region if it is not (never turned off on delete) */
+    transactionSearch: z.boolean().default(true),
+    /** X-Ray's account-wide trace indexing percentage (UpdateIndexingRule "Default"); unset leaves the account's
+     * setting alone (1% unless someone changed it). Every span is stored in aws/spans whatever this says. */
+    samplingPercent: z.number().min(0).max(100).optional(),
+    /** a CloudWatch dashboard of invocations, latency, errors, tokens, tool calls and GPU jobs */
+    dashboard: z.boolean().default(true),
+  }).strict().prefault({}),
 }).strict()
 
 export type InfraProps = z.output<typeof InfraPropsSchema>

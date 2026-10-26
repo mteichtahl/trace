@@ -8,7 +8,8 @@
  * The runner that does the work is injected (createJobs), so tests drive the contract without git or a model.
  */
 import { randomBytes } from 'node:crypto'
-import { realRunner } from './job.js'
+import { ITEM_AGENT, realRunner } from './job.js'
+import { observeJob } from './observe.js'
 import type { Accepted, JobInfo, JobPayload } from './schemas.js'
 
 export { AcceptedSchema, InvocationSchema, SweepPayload, StatusPayload, TaskPayload, WorkItemPayload } from './schemas.js'
@@ -77,7 +78,7 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
         echo(`[${id}] ${line}`)
       }
       log(`started ${key}`)
-      const done = (async () => {
+      const done = observeJob(payload, id, payload.kind === 'work-item' ? ITEM_AGENT[payload.item.kind] : payload.kind === 'task' ? payload.agent ?? 'worker' : 'worker', () => info, async () => {
         try {
           info.summary = await runner(payload, { jobId: id, signal: abort.signal, log, startJob: (p) => self.startJob(p) })
           info.state = abort.signal.aborted ? 'aborted' : 'succeeded'
@@ -90,7 +91,7 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
           running.delete(key)
           prune()
         }
-      })()
+      })
       running.set(key, { id, abort, done })
       return { accepted: true, jobId: id }
     },

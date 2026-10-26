@@ -155,6 +155,52 @@ unrouted count and KiCad's DRC. The tool writes `<name>.routed.kicad_pcb` and ne
 `TRACE_JAVA`), `TRACE_KICAD_PYTHON` (a Python that can `import pcbnew`), and `TRACE_ORTHOROUTE` /
 `TRACE_ORTHOROUTE_PYTHON` (its source, and a Python with numpy, scipy, psutil and, for the GPU, cupy).
 
+## Agent memory
+
+Each agent has short-term and long-term memory in one Amazon Bedrock AgentCore Memory per installation
+(`src/infra/memory.ts`; the client is `src/agent/memory.ts`). Set `memory.enabled` and `memory.eventExpiryDays`
+(default 30, from 3 to 365) in the stack settings.
+
+- **Short term:** events per actor and session. A job records what it was asked, its key trace-tool outcomes and its
+  result. A job that continues a session (the same pull request or issue, or the same task branch) is given that
+  session's earlier turns.
+- **Long term:** three built-in strategies extract records from those events. The semantic strategy keeps facts
+  about the project, the summary strategy keeps one summary per session, and the user preference strategy keeps how
+  the project wants things done.
+
+The actors and namespaces keep projects and agents apart:
+
+| Actor | Who |
+| --- | --- |
+| `<owner>/<repo>/<agent>` | One agent on one project. The agents are `worker` (agent-fix issues, tasks), `ci-doctor` (a red check), `conflict` (a merge conflict), `render` (render tasks) and `local` (a person's own Claude Code). |
+| `<owner>/<repo>/person/<hash>` | The person who started a task through the API: their own preferences, inside the project. The hash is part of the sha256 of their email, so the email itself never appears. |
+
+| Strategy | Namespace |
+| --- | --- |
+| semantic (`trace_facts`) | `/trace/{actorId}/facts/` |
+| summary (`trace_sessions`) | `/trace/{actorId}/sessions/{sessionId}/` |
+| user preference (`trace_preferences`) | `/trace/{actorId}/preferences/` |
+
+Every namespace therefore starts with its project (`/trace/<owner>/<repo>/`) and then its agent. Names are lower-cased,
+and a repository's `_` and `.` are written `_u` and `_d`, because AgentCore allows neither in an id. The mapping is
+one-to-one, so no two repositories share a namespace. Sessions are `pr-<n>`, `issue-<n>` or the task's branch.
+
+At the start of a job, its memory is added to the end of the prompt in a fenced block that says it is data, not
+instructions. Each item is one line, cut to length, and cannot close the fence. Everything recorded is scrubbed of
+tokens and keys and is bounded in size (8000 characters per event, 12 tool outcomes per job). Without
+`TRACE_MEMORY_ID`, or when AgentCore fails, a job runs as before without memory.
+
+- **Inside a job:** Claude has the MCP tools `memory_recall` and `memory_remember`. They act only as the job's actor and
+  session (`TRACE_MEMORY_ACTOR` and `TRACE_MEMORY_SESSION`, or `TRACE_MEMORY_REPOSITORY` and `TRACE_MEMORY_AGENT`), and
+  they are offered only when `TRACE_MEMORY_ID` is set.
+- **Through the API:** anyone who can read a project can see its memory with the read-only actions `memory.list` and
+  `memory.recall` (optionally for one `agent`). Person-scoped preferences are shown only to the person they belong
+  to, and to admins.
+- **In IAM:** both runtime roles may call only `CreateEvent`, `ListEvents`, `RetrieveMemoryRecords` and
+  `ListMemoryRecords`, on this memory only. Events are limited to actor ids of the `<owner>/<repo>/<agent>` shape, and
+  records to namespaces under `/trace/`. One role serves every project, so the line between projects is drawn by the
+  client.
+
 ## Layout
 
 | Path | What |
