@@ -34,8 +34,23 @@ RUN install -d -m 0755 /etc/apt/keyrings \
  && rm -rf /var/lib/apt/lists/*
 
 # --- Blender (the rendering agent: src/render drives bpy scripts in /app/python/blender; Cycles on the CPU, no GPU).
-RUN apt-get update && apt-get install -y --no-install-recommends blender && blender --version && rm -rf /var/lib/apt/lists/*
+# python3-numpy: Ubuntu's Blender uses the system Python, and its glTF importer needs numpy.
+RUN apt-get update && apt-get install -y --no-install-recommends blender python3-numpy && blender --version && rm -rf /var/lib/apt/lists/*
 # --- end Blender
+
+# --- Verification and FPGA implementation (src/tools/verify, src/tools/fpga): Verilator, Yosys, nextpnr for ice40,
+# ECP5 and Gowin, IceStorm and Trellis packers, and z3 for formal (yosys-smtbmc). SymbiYosys is a Python front end,
+# installed from its repository at the tag matching Ubuntu's Yosys; if that tag is missing, verify.formal still runs
+# yosys + yosys-smtbmc directly.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends verilator yosys nextpnr-ice40 nextpnr-ecp5 nextpnr-gowin fpga-icestorm fpga-trellis z3 \
+ && rm -rf /var/lib/apt/lists/* \
+ && YV="$(yosys -V | sed -E 's/^Yosys ([0-9]+\.[0-9]+).*/\1/')" \
+ && (git clone --depth 1 --branch "v${YV}" https://github.com/YosysHQ/sby.git /tmp/sby && make -C /tmp/sby install PREFIX=/usr/local \
+     || echo "note: SymbiYosys v${YV} not installed; verify.formal uses yosys-smtbmc directly") \
+ && rm -rf /tmp/sby \
+ && verilator --version && yosys -V && nextpnr-ice40 --version
+# --- end verification and FPGA
 
 # A non-root user owns the app's runtime state; the workspace is /mnt/workspace (AgentCore session storage) when
 # mounted, else /tmp/trace-work.
@@ -53,7 +68,7 @@ RUN npm run build \
  && npm prune --omit=dev \
  && npm rebuild \
  && python3 -m venv /opt/trace-venv \
- && /opt/trace-venv/bin/pip install --no-cache-dir '/app/python[pdf]' \
+ && /opt/trace-venv/bin/pip install --no-cache-dir '/app/python[pdf]' 'cocotb==2.1.0' 'apycula==0.10.0' \
  && { test -d /app/python/blender || echo "note: /app/python/blender is not in the build context yet"; } \
  && ln -s /app/dist/cli.js /usr/local/bin/trace && chmod +x /app/dist/cli.js \
  && chown -R trace:trace /app

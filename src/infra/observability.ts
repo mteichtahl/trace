@@ -11,8 +11,11 @@
  *                      job role
  *   Transaction Search a custom resource (lambda/transaction-search.ts): on if it is not, idempotent, never turned off
  *   GPU jobs           the job definition names X-Ray's OTLP endpoint, so the runner exports its span (TRACEPARENT)
- *   memory             vended delivery of the memory's APPLICATION_LOGS to a log group and its TRACES to X-Ray
- *   dashboard          invocations, latency, errors, jobs, tokens, cost, tool calls and GPU jobs
+ *   memory             for each project's memory: vended delivery of its APPLICATION_LOGS to its own log group and
+ *                      of its TRACES to X-Ray. The log group, sources, destinations and deliveries follow retainData
+ *                      like the memory itself (Retain, or Delete, on stack deletion and on removal of the project)
+ *   dashboard          invocations, latency, errors, jobs, tokens, cost, tool calls, GPU jobs, and the memories'
+ *                      operations (one SEARCH across every project's memory)
  *
  * Disabled, nothing is created: only the two environment variables that keep the runtimes quiet.
  */
@@ -66,12 +69,26 @@ export interface ObservedRuntime {
   role: iam.IRole
 }
 
+/** One project's memory, for its log and trace delivery. */
+export interface ObservedMemory {
+  /** the project's construct id (Project<hash>): names its resources and its `<id>MemoryLogGroup` output */
+  id: string
+  /** the project's hash: names its delivery sources and destinations */
+  hash: string
+  /** the memory's name (<prefix>_m_<hash>), for the dashboard */
+  name: string
+  arn: string
+  memoryId: string
+}
+
 export interface ObservabilityProps {
   prefix: string
   settings: InfraProps['observability']
   runtimes: readonly ObservedRuntime[]
-  /** the agents' memory, when there is one: its logs and traces are delivered */
-  memory?: { arn: string; id: string } | null
+  /** every project's memory: their logs and traces are delivered */
+  memories?: readonly ObservedMemory[]
+  /** keep the memories' log groups and deliveries when the stack is deleted or a project removed (as the memories) */
+  retainData?: boolean
   /** the projects' GPU job roles, when there are GPU jobs: they may write spans */
   gpuJobRoles?: readonly iam.IRole[]
   /** whether the GPU side exists (its widgets) */
@@ -140,31 +157,35 @@ export class Observability extends Construct {
       })
     }
 
-    // ------------------------------------------------------------------ the memory's logs and traces (vended delivery)
-    if (p.memory) {
-      const group = new logs.LogGroup(this, 'MemoryLogs', {
-        logGroupName: `/aws/vendedlogs/bedrock-agentcore/memory/APPLICATION_LOGS/${p.memory.id}`,
+    // ------------------------------------------------------------------ each project memory's logs and traces (vended delivery)
+    const keep = p.retainData ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY
+    for (const m of p.memories ?? []) {
+      // delivery source and destination names: [\w-]{1,60}, unique in the account and region
+      const name = (kind: string): string => `${p.prefix}-m-${m.hash}-${kind}`
+      const group = new logs.LogGroup(this, `${m.id}MemoryLogs`, {
+        logGroupName: `/aws/vendedlogs/bedrock-agentcore/memory/APPLICATION_LOGS/${m.memoryId}`,
         retention: logs.RetentionDays.ONE_MONTH,
-        removalPolicy: RemovalPolicy.DESTROY,
+        removalPolicy: keep,
       })
-      const logsSource = new logs.CfnDeliverySource(this, 'MemoryLogsSource', { name: `${p.prefix}-memory-logs`, logType: 'APPLICATION_LOGS', resourceArn: p.memory.arn })
-      const tracesSource = new logs.CfnDeliverySource(this, 'MemoryTracesSource', { name: `${p.prefix}-memory-traces`, logType: 'TRACES', resourceArn: p.memory.arn })
-      const logsDest = new logs.CfnDeliveryDestination(this, 'MemoryLogsDestination', { name: `${p.prefix}-memory-logs`, destinationResourceArn: group.logGroupArn })
-      const tracesDest = new logs.CfnDeliveryDestination(this, 'MemoryTracesDestination', { name: `${p.prefix}-memory-traces`, deliveryDestinationType: 'XRAY' })
-      const logsDelivery = new logs.CfnDelivery(this, 'MemoryLogsDelivery', { deliverySourceName: logsSource.name, deliveryDestinationArn: logsDest.attrArn })
-      const tracesDelivery = new logs.CfnDelivery(this, 'MemoryTracesDelivery', { deliverySourceName: tracesSource.name, deliveryDestinationArn: tracesDest.attrArn })
+      const logsSource = new logs.CfnDeliverySource(this, `${m.id}MemoryLogsSource`, { name: name('logs'), logType: 'APPLICATION_LOGS', resourceArn: m.arn })
+      const tracesSource = new logs.CfnDeliverySource(this, `${m.id}MemoryTracesSource`, { name: name('traces'), logType: 'TRACES', resourceArn: m.arn })
+      const logsDest = new logs.CfnDeliveryDestination(this, `${m.id}MemoryLogsDestination`, { name: name('logs'), destinationResourceArn: group.logGroupArn })
+      const tracesDest = new logs.CfnDeliveryDestination(this, `${m.id}MemoryTracesDestination`, { name: name('traces'), deliveryDestinationType: 'XRAY' })
+      const logsDelivery = new logs.CfnDelivery(this, `${m.id}MemoryLogsDelivery`, { deliverySourceName: logsSource.name, deliveryDestinationArn: logsDest.attrArn })
+      const tracesDelivery = new logs.CfnDelivery(this, `${m.id}MemoryTracesDelivery`, { deliverySourceName: tracesSource.name, deliveryDestinationArn: tracesDest.attrArn })
+      for (const r of [logsSource, tracesSource, logsDest, tracesDest, logsDelivery, tracesDelivery]) r.applyRemovalPolicy(keep)
       logsDelivery.addDependency(logsSource)
       tracesDelivery.addDependency(tracesSource)
       // X-Ray as a destination needs Transaction Search
       if (this.transactionSearch) tracesDelivery.node.addDependency(this.transactionSearch)
-      new CfnOutput(stack, 'MemoryLogGroup', { value: group.logGroupName, description: 'The agents\' memory: its APPLICATION_LOGS' })
+      new CfnOutput(stack, `${m.id}MemoryLogGroup`, { value: group.logGroupName, description: `The project's memory (${m.name}): its APPLICATION_LOGS` })
     }
 
     // ------------------------------------------------------------------ the dashboard
     if (p.settings.dashboard) {
       this.dashboard = new cloudwatch.CfnDashboard(this, 'Dashboard', {
         dashboardName: this.dashboardName,
-        dashboardBody: JSON.stringify(dashboardBody({ region, runtimes: p.runtimes.map((r) => r.name), gpu: p.gpu })),
+        dashboardBody: JSON.stringify(dashboardBody({ region, runtimes: p.runtimes.map((r) => r.name), memories: (p.memories ?? []).map((m) => m.hash), gpu: p.gpu })),
       })
       new CfnOutput(stack, 'DashboardUrl', {
         value: `https://${region}.console.aws.amazon.com/cloudwatch/home?region=${region}#dashboards/dashboard/${this.dashboardName}`,
@@ -208,12 +229,18 @@ function graph(title: string, region: string, x: number, y: number, queries: Rec
   }
 }
 
-/** The dashboard: AgentCore's own runtime metrics, then trace's (namespace bedrock-agentcore, from ADOT's EMF). */
-export function dashboardBody(o: { region: string; runtimes: readonly string[]; gpu: boolean }): { widgets: Widget[] } {
+/**
+ * The dashboard: AgentCore's own runtime metrics, then trace's (namespace bedrock-agentcore, from ADOT's EMF), then
+ * the projects' memories. `memories` are the projects' hashes: each memory's name and id (<prefix>_m_<hash>-…) carry
+ * it, so one SEARCH term per project finds that memory's series whichever dimension AgentCore files them under.
+ */
+export function dashboardBody(o: { region: string; runtimes: readonly string[]; memories?: readonly string[]; gpu: boolean }): { widgets: Widget[] } {
   const { region } = o
   const rt = o.runtimes.map((n) => `"${n}"`).join(' OR ')
   // a SEARCH expression is at most 1024 characters: with many projects, every runtime in the namespace is shown
   const runtimeFilter = o.runtimes.length && rt.length <= 800 ? `(${rt})` : ''
+  const mt = (o.memories ?? []).join(' OR ')
+  const memoryFilter = mt.length <= 800 ? `(${mt})` : 'memory'
   // dimension names in the filter keep other agents' metrics in the shared namespace out
   const ours = '"trace.outcome"'
   const widgets: Widget[] = [
@@ -242,6 +269,15 @@ export function dashboardBody(o: { region: string; runtimes: readonly string[]; 
   if (o.gpu) {
     widgets.push(graph('GPU jobs by kind, backend and outcome', region, 16, 20, [search('gpu', METRIC_NAMESPACE, 'trace.gpu.jobs', 'Sum', ours)], { stacked: true }))
     widgets.push(graph('GPU job duration (p90, queue wait included)', region, 0, 26, [search('gdur', METRIC_NAMESPACE, 'trace.gpu.duration', 'p90', ours)], { w: 24, yLabel: 's' }))
+  }
+  if (o.memories?.length) {
+    const y = o.gpu ? 32 : 26
+    widgets.push(graph('Memory operations (every project\'s memory)', region, 0, y, [search('minv', RUNTIME_NAMESPACE, 'Invocations', 'Sum', memoryFilter)], { stacked: true }))
+    widgets.push(graph('Memory latency (avg)', region, 8, y, [search('mlat', RUNTIME_NAMESPACE, 'Latency', 'Average', memoryFilter)], { yLabel: 'ms' }))
+    widgets.push(graph('Memory errors and throttles', region, 16, y, [
+      search('merr', RUNTIME_NAMESPACE, 'Errors', 'Sum', memoryFilter),
+      search('mthr', RUNTIME_NAMESPACE, 'Throttles', 'Sum', memoryFilter),
+    ]))
   }
   return { widgets }
 }
