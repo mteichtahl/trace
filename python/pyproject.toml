@@ -15,7 +15,7 @@ dependencies = []
 [project.optional-dependencies]
 pdf = ["pdfplumber>=0.11", "pypdf>=6.21.2"]
 visa = ["pyvisa>=1.14", "pyvisa-py>=0.8.1", "pyserial>=3.5"]
-can = ["python-can>=4.3"]
+can = ["python-can>=4.6.1"]
 all = ["tracebridge[pdf,visa,can]"]
 dev = ["pytest>=8", "reportlab>=4", "tracebridge[all]"]
 
