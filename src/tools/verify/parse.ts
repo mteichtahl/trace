@@ -2,7 +2,7 @@
  * Readers for what the verification programs write: Verilator's messages and coverage.dat, cocotb's results.xml, and
  * the logs of yosys-smtbmc and SymbiYosys. Pure functions, so they are tested on captured output.
  */
-import { childrenNamed, descendants, parseXml, type XmlElement } from '../../kicad/xml.js'
+import { childrenNamed, descendants, parseXml, type XmlElement } from '../kicad/xml.js'
 
 // ------------------------------------------------------------------ verilator messages
 

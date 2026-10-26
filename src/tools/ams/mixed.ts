@@ -42,8 +42,8 @@ import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 
 import { Cache, scratchDir } from '../../core/store.js'
-import { run, which } from '../../sim/proc.js'
-import { SpiceError } from '../../sim/spice.js'
+import { run, which } from '../sim/proc.js'
+import { SpiceError } from '../sim/spice.js'
 
 export class CosimError extends Error {
   override name = 'CosimError'

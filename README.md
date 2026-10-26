@@ -435,7 +435,7 @@ outside AgentCore, either set `OTEL_SDK_DISABLED=true` or give it the variables 
 | `src/agent`, `src/api`, `agent/Dockerfile` | The image AgentCore runs: the worker, and the people-facing API |
 | `src/login` | `trace login`, `trace remote …`, `trace users …` |
 | `src/harness` | The loop's logic, bundled into `harness/dist` for the GitHub actions in `harness/actions` |
-| `src/calc`, `src/kicad`, `src/pcb`, `src/sim`, `src/datasheets`, `src/parts`, `src/hil`, `src/firmware`, `src/runs` | The tools |
+| `src/tools/calc`, `src/tools/kicad`, `src/tools/pcb`, `src/tools/sim`, `src/tools/datasheets`, `src/tools/parts`, `src/tools/hil`, `src/tools/firmware`, `src/tools/runs` | The tools |
 | `src/gpu`, `agent/Dockerfile.gpu` | GPU jobs: local or AWS Batch (`runJob`, `runBatch`), the in-container runner, and its image |
 | `python/kicad`, `python/orthoroute` | The scripts the autorouter jobs run: Freerouting through KiCad's pcbnew, and OrthoRoute's headless mode |
 | `python/tracebridge` | The only Python, used where Node has no maintained equivalent: PDF tables and figures (pdfplumber), VISA instruments (pyvisa), and CAN vendor interfaces (python-can) |

@@ -1,6 +1,6 @@
 """Tables and vector figures out of datasheet PDFs, with pdfplumber: the part Node has no maintained equivalent for.
 
-Methods (called from src/datasheets through src/core/bridge.ts):
+Methods (called from src/tools/datasheets through src/core/bridge.ts):
 
   pdf.tables   {path, page}                  every table pdfplumber finds on a page, as rows of cells
   pdf.params   {path, query, pages?}         electrical-characteristics rows whose parameter name or symbol matches

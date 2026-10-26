@@ -1,5 +1,5 @@
 /**
- * What the placement tools need from a .kicad_pcb beyond the board reader in src/kicad/pcb.ts (whose Board gives
+ * What the placement tools need from a .kicad_pcb beyond the board reader in src/tools/kicad/pcb.ts (whose Board gives
  * pads, nets, tracks, outline box and zones): each footprint's courtyard in board coordinates, its sheet (KiCad 7+
  * `sheetname`/`sheetfile`, older `Sheetname`/`Sheetfile` properties) and hierarchical path, the board outline as
  * closed loops from Edge.Cuts (lines, rects, arcs, circles, polygons; footprint Edge.Cuts included), and the
@@ -13,8 +13,8 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { ToolError } from '../../core/registry.js'
-import * as sx from '../../kicad/sexpr.js'
-import { loadBoard, type Board } from '../../kicad/pcb.js'
+import * as sx from '../kicad/sexpr.js'
+import { loadBoard, type Board } from '../kicad/pcb.js'
 import { arcPoints, area, bbox, circlePoints, hull, loops, rectPoly, type Poly, type Pt } from './geom.js'
 
 export interface PlacedFootprint {

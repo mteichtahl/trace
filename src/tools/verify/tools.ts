@@ -20,7 +20,7 @@ import { basename, dirname, extname, resolve } from 'node:path'
 import { z } from 'zod'
 import { defineTool, ToolError, type AnyTool } from '../../core/registry.js'
 import type { Json } from '../../core/store.js'
-import { Recorder } from '../../sim/record.js'
+import { Recorder } from '../sim/record.js'
 import { ExpectSchema, METHODS, POINT_KINDS, REQ_KINDS, REQ_STATUS, TEST_STATUS, withVerify, type TestItem } from './db.js'
 import { extractCandidates } from './extract.js'
 import { tail } from './job.js'
@@ -50,7 +50,7 @@ async function documentPages(path: string): Promise<string[]> {
   const p = resolve(path)
   if (!existsSync(p)) throw new ToolError(`no file ${p}`)
   if (extname(p).toLowerCase() === '.pdf') {
-    const { pdfText } = await import('../../datasheets/text.js')
+    const { pdfText } = await import('../datasheets/text.js')
     return (await pdfText(new Uint8Array(readFileSync(p)))).pages
   }
   // text: form feeds separate pages (pdftotext's output); otherwise one page

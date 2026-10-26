@@ -12,7 +12,7 @@ import {
   type SendClient, actorIn, actorPrefix, agentActor, memoryBlock, memoryFromEnv, namespaceOf, openJobMemory, parseActor, personActor,
   projectPrefix, scrub, sessionIdFor, within,
 } from '../../src/agent/memory.js'
-import { memoryScope, tools as memoryTools } from '../../src/agent/tools.js'
+import { memoryScope, tools as memoryTools } from '../../src/tools/memory/tools.js'
 import { offered } from '../../src/core/mcp.js'
 import { Registry } from '../../src/core/registry.js'
 import { cfgOf, fakeGithub } from '../harness/fake.js'

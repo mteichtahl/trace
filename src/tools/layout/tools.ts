@@ -1,7 +1,7 @@
 /**
  * PCB implementation checks for the Implementation agent, read from the board file (no kicad-cli needed): placement
  * rules, length matching, and a floorplan summary by functional block. They report; none of them moves anything.
- * Tool names are pcb.*; the area lives in src/tools/layout so it stays apart from the router area (src/pcb).
+ * Tool names are pcb.*; the area lives in src/tools/layout so it stays apart from the router area (src/tools/pcb).
  *
  *   pcb.placement_check  courtyard overlaps, parts outside / too near the edge, keep-out areas, decoupling distance,
  *                        connectors away from the edge
@@ -12,9 +12,9 @@
 import { relative } from 'node:path'
 import { z } from 'zod'
 import { defineTool, ToolError, type AnyTool } from '../../core/registry.js'
-import { netNames } from '../../kicad/pcb.js'
-import { needPcb, resolveProject, type Project } from '../../kicad/project.js'
-import { cap, recorded } from '../../kicad/record.js'
+import { netNames } from '../kicad/pcb.js'
+import { needPcb, resolveProject, type Project } from '../kicad/project.js'
+import { cap, recorded } from '../kicad/record.js'
 import { readLayout } from './board.js'
 import { druRules, floorplan, GROUND, lengthMatch, netClasses, placementCheck, POWER } from './checks.js'
 import { existsSync, readFileSync } from 'node:fs'

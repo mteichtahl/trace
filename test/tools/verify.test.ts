@@ -18,7 +18,7 @@ import { backendFor } from '../../src/gpu/jobs.js'
 import { generatedSby, rewriteSbyFiles, sbyFiles } from '../../src/tools/verify/formal.js'
 import { mergeCoverage, parseCocotbResults, parseCoverageDat, parseSby, parseSmtbmc, summarizeCoverage, verilatorMessages } from '../../src/tools/verify/parse.js'
 import { runIds } from '../../src/tools/verify/run.js'
-import { allTools } from '../../src/tools.js'
+import { allTools } from '../../src/tools/index.js'
 
 const LOGIC = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'examples', 'sensor-node', 'logic')
 const f = (n: string): string => join(LOGIC, n)

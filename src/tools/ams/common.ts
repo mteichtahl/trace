@@ -3,7 +3,7 @@
  * many ngspice jobs through the bounded queue, and small numeric helpers (interpolation on a log-frequency axis,
  * phase unwrapping, crossings) used by the op-amp and noise benches.
  *
- * Every simulation here is a plain ngspice batch run through src/sim/spice.ts (simulate), so the netlist wrapping,
+ * Every simulation here is a plain ngspice batch run through src/tools/sim/spice.ts (simulate), so the netlist wrapping,
  * model includes (config electronics.models), raw-file parsing and error reporting are the same as sim.spice's.
  */
 import { readFileSync } from 'node:fs'
@@ -11,9 +11,9 @@ import { dirname, resolve } from 'node:path'
 import { z } from 'zod'
 
 import { ToolError } from '../../core/registry.js'
-import { round } from '../../sim/measure.js'
-import type { Recorder } from '../../sim/record.js'
-import { SpiceError, type SimulateOptions, type SpiceRun } from '../../sim/spice.js'
+import { round } from '../sim/measure.js'
+import type { Recorder } from '../sim/record.js'
+import { SpiceError, type SimulateOptions, type SpiceRun } from '../sim/spice.js'
 
 export const ParamValue = z.union([z.number(), z.string()])
 

@@ -1,4 +1,4 @@
-"""Run OrthoRoute's headless router on a .ORP written by trace (src/pcb/orp.ts) and write the .ORS.
+"""Run OrthoRoute's headless router on a .ORP written by trace (src/tools/pcb/orp.ts) and write the .ORS.
 
 OrthoRoute's own `main.py headless` uses its built-in geometry defaults and lets every layer pair carry a via. This
 shim runs that same entry point, but first hands the router the board's rules from the .ORP (track width, clearance,
@@ -71,7 +71,7 @@ original = up.UnifiedPathFinder.initialize_graph
 def initialize_graph(self, board):
     # The lattice needs its layer-pair vias: restricted to whole-stack spans it routes nothing (tried with 1.0.0).
     # So the router keeps them, and trace turns them into through vias on the way back in unless blind/buried vias
-    # are allowed (src/pcb/ors.ts), vetting every converted via against the other nets' copper.
+    # are allowed (src/tools/pcb/ors.ts), vetting every converted via against the other nets' copper.
     board._design_rules = dict(design_rules)
     # 1.0.0's headless mode sets max_routing_iterations, which the router does not read; it reads max_iterations
     self.config.max_iterations = a.max_iterations

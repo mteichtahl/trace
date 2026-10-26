@@ -13,7 +13,7 @@
  * each frequency. Peak-to-peak figures use 6.6 x rms (Gaussian noise exceeds it 0.1 % of the time); that is a
  * convention, not a bound.
  */
-import { simulate, vectorOf, type Plot, type SimulateOptions, type SpiceRun } from '../../sim/spice.js'
+import { simulate, vectorOf, type Plot, type SimulateOptions, type SpiceRun } from '../sim/spice.js'
 
 /** Integral of a density squared (power spectral density) between fa and fb, power-law per segment. */
 export function integratePsd(f: readonly number[], psd: readonly number[], fa?: number, fb?: number): number {

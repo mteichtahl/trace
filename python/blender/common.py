@@ -1,7 +1,7 @@
 """Shared helpers for the bpy scripts trace runs inside Blender (render_board.py, render_model.py, probe.py).
 
 These run on Blender's own Python with nothing but bpy and the standard library: no numpy, no pip packages. They are
-driven from TypeScript (src/render/), which writes a JSON job, runs
+driven from TypeScript (src/tools/render/), which writes a JSON job, runs
 
     blender -b --factory-startup --python-exit-code 1 -P <script> -- <job.json> <model> <out1.png> <out2.png> ...
 
@@ -111,7 +111,7 @@ def list_devices():
 
 
 def select_device(want, devices):
-    """'auto' | 'gpu' | 'cpu' -> {type, names}. The same rule as src/render/device.ts selectDevice()."""
+    """'auto' | 'gpu' | 'cpu' -> {type, names}. The same rule as src/tools/render/device.ts selectDevice()."""
     if want not in ("auto", "gpu", "cpu"):
         raise JobError(f"device must be auto, gpu or cpu, not {want!r}")
     cpus = [d for d in devices if d["type"] == "CPU"]

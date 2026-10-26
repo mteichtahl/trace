@@ -182,7 +182,7 @@ export const ConfigSchema = z.object({
     projects: z.array(z.string()).default([]),
     /** SPICE model files or folders, relative to the repository, included in every simulation */
     models: z.array(z.string()).default([]),
-    /** pcb.autoroute: how the board's complex core is found (src/pcb/plan.ts) and how the two routers run */
+    /** pcb.autoroute: how the board's complex core is found (src/tools/pcb/plan.ts) and how the two routers run */
     autoroute: z.object({
       /** area arrays (BGAs): at most this pitch, at least this many pads, at least this fraction of the grid filled */
       bga_max_pitch_mm: z.number().positive().default(0.8),

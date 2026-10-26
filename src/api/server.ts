@@ -166,7 +166,7 @@ const Env = z.object({
 
 /** The API runtime's entry (src/agent/main.ts, TRACE_AGENT_MODE=api). */
 export async function start(): Promise<void> {
-  const { allTools } = await import('../tools.js')
+  const { allTools } = await import('../tools/index.js')
   const env = Env.parse(process.env)
   let cognito: CognitoAdmin | null = null
   const cog = (): CognitoAdmin => (cognito ??= new HttpCognito({ region: env.AWS_REGION, poolId: env.TRACE_COGNITO_POOL_ID }))

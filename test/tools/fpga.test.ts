@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { clockName, clockScript, regionScript, timingFromReport, utilisation, utilisationFromReport } from '../../src/tools/fpga/flow.js'
 import { attemptScore } from '../../src/tools/fpga/tools.js'
-import { which } from '../../src/sim/proc.js'
-import { allTools } from '../../src/tools.js'
+import { which } from '../../src/tools/sim/proc.js'
+import { allTools } from '../../src/tools/index.js'
 
 const EX = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'examples', 'fpga-blinky')
 const f = (n: string): string => join(EX, n)

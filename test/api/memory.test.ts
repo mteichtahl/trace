@@ -7,7 +7,7 @@ import { AgentMemory, type ProjectMemories, type SendClient, namespaceOf, parseP
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
 import { AccessDenied, assign } from '../../src/core/access.js'
 import { Registry } from '../../src/core/registry.js'
-import { tools as memoryTools } from '../../src/agent/tools.js'
+import { tools as memoryTools } from '../../src/tools/memory/tools.js'
 import { FakeCognito, FakeGitHub } from './fixtures.js'
 
 const ADMIN = { sub: 'admin-1', email: 'admin@example.com', groups: ['trace-admins'] }

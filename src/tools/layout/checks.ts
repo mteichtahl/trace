@@ -13,8 +13,8 @@
  *                   boxes overlap, and how many nets join each pair of blocks. A report: nothing is moved.
  */
 import { existsSync, readFileSync } from 'node:fs'
-import * as sx from '../../kicad/sexpr.js'
-import { Net, viaLength, type Board, type Pad } from '../../kicad/pcb.js'
+import * as sx from '../kicad/sexpr.js'
+import { Net, viaLength, type Board, type Pad } from '../kicad/pcb.js'
 import { onSide, type Layout, type PlacedFootprint } from './board.js'
 import { area, bbox, gapToSegments, inside, overlapArea, rectPoly, type Pt } from './geom.js'
 

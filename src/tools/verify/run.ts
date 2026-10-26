@@ -21,8 +21,8 @@
  */
 import { ToolError, type ToolContext } from '../../core/registry.js'
 import { findRoot, Work, type Json } from '../../core/store.js'
-import { run as runProc } from '../../sim/proc.js'
-import { Recorder } from '../../sim/record.js'
+import { run as runProc } from '../sim/proc.js'
+import { Recorder } from '../sim/record.js'
 import { type Expect, type TestItem, type TestResult, VerifyDb } from './db.js'
 import { coverLines, tail } from './job.js'
 
@@ -121,7 +121,7 @@ export async function runTest(t: TestItem, ctx: ToolContext, opts: { verdict?: {
   let checks: Verdict['checks']
   try {
     if (t.tool) {
-      const { allTools } = await import('../../tools.js')
+      const { allTools } = await import('../index.js')
       const reg = allTools()
       const tool = reg.get(t.tool)
       if (!tool) throw new ToolError(`no tool ${t.tool}`)
@@ -209,7 +209,7 @@ export async function runTest(t: TestItem, ctx: ToolContext, opts: { verdict?: {
 
 /** The stored args of a test item, validated against its tool's input schema (so a typo is caught when planned). */
 export async function validateToolArgs(tool: string, args: unknown): Promise<void> {
-  const { allTools } = await import('../../tools.js')
+  const { allTools } = await import('../index.js')
   const t = allTools().get(tool)
   if (!t) throw new ToolError(`no tool ${JSON.stringify(tool)} (trace tools lists them)`)
   const r = t.input.strict().safeParse(args ?? {})

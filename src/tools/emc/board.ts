@@ -1,5 +1,5 @@
 /**
- * What the EMC tools need from a board beyond src/kicad/pcb.ts's Board: the copper zones' filled polygons (the real
+ * What the EMC tools need from a board beyond src/tools/kicad/pcb.ts's Board: the copper zones' filled polygons (the real
  * plane shapes, with the voids KiCad left around other nets' copper), the Edge.Cuts outline as segments, each
  * dielectric's loss tangent, and planar geometry helpers (point in polygon, polygon area and clipping, convex hull).
  *
@@ -10,8 +10,8 @@
  */
 import { readFileSync } from 'node:fs'
 
-import { loadBoard, type Board } from '../../kicad/pcb.js'
-import * as sx from '../../kicad/sexpr.js'
+import { loadBoard, type Board } from '../kicad/pcb.js'
+import * as sx from '../kicad/sexpr.js'
 
 export type Pt = [number, number]
 export type Poly = Pt[]

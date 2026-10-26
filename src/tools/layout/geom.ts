@@ -1,6 +1,6 @@
 /** Plane geometry for placement checks: convex hulls, polygon area and intersection, point-in-polygon, distances.
  * All in mm, board coordinates (y down, as KiCad). */
-import { segSeg } from '../../pcb/geometry.js'
+import { segSeg } from '../pcb/geometry.js'
 
 export type Pt = [number, number]
 export type Poly = Pt[]

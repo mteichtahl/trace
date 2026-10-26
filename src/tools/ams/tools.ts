@@ -1,6 +1,6 @@
 /**
  * The analog and mixed-signal tools (ams.*), for the Analog/Mixed-Signal agent. All of them run ngspice (batch, the
- * version on PATH or $NGSPICE; built and tested against ngspice 42) through src/sim, so circuits, models and
+ * version on PATH or $NGSPICE; built and tested against ngspice 42) through src/tools/sim, so circuits, models and
  * measurements work exactly as in sim.spice, and every run is recorded in the project database with its netlists
  * and logs as artifacts and its results as measurements.
  */
@@ -9,10 +9,10 @@ import { resolve } from 'node:path'
 import { z } from 'zod'
 
 import { defineTool, ToolError, type AnyTool } from '../../core/registry.js'
-import { decimate, MeasureSpecSchema, round, type MeasureSpec } from '../../sim/measure.js'
-import { Recorder } from '../../sim/record.js'
-import { ngspice, simulate, SpiceError, splitNetlist, vectorOf, type SimulateOptions, type SpiceRun } from '../../sim/spice.js'
-import { measureRun, type MonteCarloResult } from '../../sim/sweep.js'
+import { decimate, MeasureSpecSchema, round, type MeasureSpec } from '../sim/measure.js'
+import { Recorder } from '../sim/record.js'
+import { ngspice, simulate, SpiceError, splitNetlist, vectorOf, type SimulateOptions, type SpiceRun } from '../sim/spice.js'
+import { measureRun, type MonteCarloResult } from '../sim/sweep.js'
 import { baseOptions, circuitInput, r, readCircuit, spiceFail } from './common.js'
 import { planCorners, runCorners, worstCorners, type CornerPoint } from './corners.js'
 import { buildCosim, clockSamples, CosimError, mixedNetlist, shimDir, verilator, type CosimLibrary, type Drive } from './mixed.js'

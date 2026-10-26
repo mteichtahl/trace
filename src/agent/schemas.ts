@@ -31,7 +31,7 @@ export const StatusPayload = z.object({
   jobId: z.string().max(64).optional(),
 }).strict()
 
-/** The agents a task can be given to: the worker (code changes), or the rendering agent (src/render/agent.ts). */
+/** The agents a task can be given to: the worker (code changes), or the rendering agent (src/tools/render/agent.ts). */
 export const TASK_AGENTS = ['worker', 'render'] as const
 
 /** A free-form request from an authorised person (the API runtime): done on a claude/task-<slug> branch, pushed, PR opened. */

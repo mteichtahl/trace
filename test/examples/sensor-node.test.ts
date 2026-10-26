@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { load } from '../../src/core/config.js'
 import { Work } from '../../src/core/store.js'
-import { allTools } from '../../src/tools.js'
+import { allTools } from '../../src/tools/index.js'
 
 const SAMPLE = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'examples', 'sensor-node')
 const has = (cmd: string): boolean => {

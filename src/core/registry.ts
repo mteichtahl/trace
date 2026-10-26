@@ -11,7 +11,7 @@
  *     run: async (args) => { ... },   // args is fully typed from `input`
  *   })
  *
- * and lists them in its `tools` export; src/tools.ts gathers every area. Inputs are validated by their zod schema
+ * and lists them in its `tools` export; src/tools/index.ts gathers every area. Inputs are validated by their zod schema
  * before `run` sees them, and the same schema is published to MCP as JSON Schema. A tool throws ToolError for a
  * problem the caller should read (bad input, a missing program, a failed run); anything else is a bug.
  */

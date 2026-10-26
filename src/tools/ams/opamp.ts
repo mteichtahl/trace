@@ -32,8 +32,8 @@
  * limits) will report the ideal value for it.
  */
 import { parseValue } from '../../core/units.js'
-import { defaultConcurrency, mapLimit } from '../../sim/proc.js'
-import { simulate, SpiceError, vectorOf, type Plot, type SimulateOptions, type SpiceRun } from '../../sim/spice.js'
+import { defaultConcurrency, mapLimit } from '../sim/proc.js'
+import { simulate, SpiceError, vectorOf, type Plot, type SimulateOptions, type SpiceRun } from '../sim/spice.js'
 import { atLogX, crossingLogX, cx, db, unwrapDeg, type Cx } from './common.js'
 
 export type OpampTest = 'loop' | 'aol' | 'cmrr' | 'psrr' | 'slew' | 'swing' | 'icmr'

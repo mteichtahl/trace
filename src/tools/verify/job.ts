@@ -13,7 +13,7 @@ import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs
 import { basename, dirname, join, resolve } from 'node:path'
 import { ToolError } from '../../core/registry.js'
 import { backendFor, runJob, type JobKind, type JobResult } from '../../gpu/jobs.js'
-import { which } from '../../sim/proc.js'
+import { which } from '../sim/proc.js'
 
 /** Single-quote for sh. */
 export function sq(s: string): string {

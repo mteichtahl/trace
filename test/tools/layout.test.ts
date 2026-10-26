@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 import { capacitanceUf, diffPairs, druRules } from '../../src/tools/layout/checks.js'
 import { arcPoints, area, clip, hull, inside, loops, overlapArea, rectPoly } from '../../src/tools/layout/geom.js'
-import { allTools } from '../../src/tools.js'
+import { allTools } from '../../src/tools/index.js'
 
 type Dict = Record<string, unknown>
 const reg = allTools()

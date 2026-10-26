@@ -1,5 +1,5 @@
 """Route a KiCad board with Freerouting: export Specctra DSN (pcbnew), route (java -jar freerouting.jar), import the SES
-and save. Run with KiCad's Python (it needs `import pcbnew`). Driven by trace's pcb.autoroute (src/pcb/autoroute.ts),
+and save. Run with KiCad's Python (it needs `import pcbnew`). Driven by trace's pcb.autoroute (src/tools/pcb/autoroute.ts),
 which runs it through runJob; a JSON report goes to --report.
 
 Locked tracks and vias (OrthoRoute's stage-1 copper, or anything a designer locked) must reach Freerouting as fixed

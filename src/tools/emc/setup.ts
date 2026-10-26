@@ -36,7 +36,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-import { stackupKnown, type Board } from '../../kicad/pcb.js'
+import { stackupKnown, type Board } from '../kicad/pcb.js'
 import { clipSegment, clipToBox, isGround, readGeometry, type BoardGeometry, type Poly, type Pt } from './board.js'
 import { C0, harmonics, type Trapezoid } from './spectrum.js'
 

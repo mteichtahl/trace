@@ -22,13 +22,13 @@
  *                    power net and the other on ground; none, or farther than decap_mm, is a finding.
  *   edge_spectrum    for each net given in `edges` (frequency, 10-90 % rise time, amplitude): the trapezoid
  *                    harmonic amplitudes (spectrum.ts), the current V_n / Z0 (Z0 of the net's main layer and width,
- *                    Hammerstad-Jensen / IPC-2141A from src/kicad/pcb.ts), the loop area (track length x height to
+ *                    Hammerstad-Jensen / IPC-2141A from src/tools/kicad/pcb.ts), the loop area (track length x height to
  *                    its plane), and the differential-mode field at distance_m (Ott, with ground reflection) against
  *                    CISPR 32 class A/B. A PRE-COMPLIANCE ESTIMATE: it ignores common-mode (cable) radiation, which
  *                    usually dominates real failures, and the matched-line current assumption can be off either way.
  */
-import { segSeg } from '../../pcb/geometry.js'
-import { z0 as layerZ0, type Board, type Layer } from '../../kicad/pcb.js'
+import { segSeg } from '../pcb/geometry.js'
+import { z0 as layerZ0, type Board, type Layer } from '../kicad/pcb.js'
 import { CLOCKISH, convexHull, isGround, isPower, polyArea, SWITCHING, type BoardGeometry, type Poly, type Pt, type ZoneFill } from './board.js'
 import { cisprLimit, CISPR_SOURCE, type CisprClass } from './limits.js'
 import { dBuV, dmField, harmonics, peakToRms } from './spectrum.js'

@@ -7,7 +7,7 @@
  *   TRACE_PYTHON           the interpreter for emc.si (scikit-rf, numpy); default python3
  */
 import { ToolError } from '../../core/registry.js'
-import { run, which } from '../../sim/proc.js'
+import { run, which } from '../sim/proc.js'
 
 export function openemsPython(): string {
   return process.env.TRACE_OPENEMS_PYTHON || which('openems-python') || 'python3'

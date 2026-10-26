@@ -35,7 +35,7 @@ import { OnboardError, SCAFFOLDS, type Scaffold, createNew, onboard, projects } 
 import { ToolError } from './core/registry.js'
 import { flush } from './core/telemetry.js'
 import { Work, transaction } from './core/store.js'
-import { allTools } from './tools.js'
+import { allTools } from './tools/index.js'
 import { cmdConnect, cmdLogin, cmdLogout, cmdRemote, cmdUsers, cmdWhoami } from './login/commands.js'
 
 // node:sqlite is stable in practice but still prints an experimental warning; keep the CLI's output clean.

@@ -1,8 +1,8 @@
 /**
  * The central store: what every project trace is onboarded to shares — one SQLite database and its documents.
  *
- *   <TRACE_HOME>/central.db           the datasheet library's catalog and page text (src/datasheets), the parts
- *                                      database (src/parts), the registry of projects
+ *   <TRACE_HOME>/central.db           the datasheet library's catalog and page text (src/tools/datasheets), the parts
+ *                                      database (src/tools/parts), the registry of projects
  *   <TRACE_HOME>/docs/<sha256>.pdf    datasheets, named by their content: one copy however many parts and projects
  *                                      cite it
  *

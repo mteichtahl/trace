@@ -1,5 +1,5 @@
 /**
- * Monte Carlo yield and sensitivity, on top of sim.montecarlo's engine (src/sim/sweep.ts: montecarlo).
+ * Monte Carlo yield and sensitivity, on top of sim.montecarlo's engine (src/tools/sim/sweep.ts: montecarlo).
  *
  *   yield         the fraction of runs meeting every spec, and each spec's own pass fraction. A run whose
  *                 simulation failed, or whose measurement is missing, counts as a failure. The confidence interval
@@ -17,10 +17,10 @@
  *                                per part); the swing (value at +tol minus value at -tol) and that swing as a share
  *                                of the spec window. Linear-response assumption; it does not see interactions.
  */
-import type { MeasureSpec } from '../../sim/measure.js'
-import { defaultConcurrency, mapLimit } from '../../sim/proc.js'
-import { simulate, SpiceError, type SimulateOptions } from '../../sim/spice.js'
-import { measureRun, montecarlo, paramValue, scaleComponent, type MonteCarloResult, type Tolerance } from '../../sim/sweep.js'
+import type { MeasureSpec } from '../sim/measure.js'
+import { defaultConcurrency, mapLimit } from '../sim/proc.js'
+import { simulate, SpiceError, type SimulateOptions } from '../sim/spice.js'
+import { measureRun, montecarlo, paramValue, scaleComponent, type MonteCarloResult, type Tolerance } from '../sim/sweep.js'
 import { parseValue } from '../../core/units.js'
 import { judge, type SpecLimit } from './spec.js'
 

@@ -33,7 +33,7 @@ RUN install -d -m 0755 /etc/apt/keyrings \
  && node --version && gh --version \
  && rm -rf /var/lib/apt/lists/*
 
-# --- Blender (the rendering agent: src/render drives bpy scripts in /app/python/blender; Cycles on the CPU, no GPU).
+# --- Blender (the rendering agent: src/tools/render drives bpy scripts in /app/python/blender; Cycles on the CPU, no GPU).
 # python3-numpy: Ubuntu's Blender uses the system Python, and its glTF importer needs numpy.
 RUN apt-get update && apt-get install -y --no-install-recommends blender python3-numpy && blender --version && rm -rf /var/lib/apt/lists/*
 # --- end Blender
