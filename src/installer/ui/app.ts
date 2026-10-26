@@ -50,6 +50,8 @@ const s = {
   done: new Set<Tab>(),
   env: null as Env | null,
   github: { token: '', adminToken: '', info: null as TokenInfo | null, filter: '', busy: false, error: '' },
+  /** a project's own agent token (OWNER/REPO → token): memory only, like every other secret */
+  projectTokens: new Map<string, string>(),
   projects: new Map<string, { branch: string; onboard: boolean; applySettings: boolean }>(),
   aws: { mode: 'profile' as 'profile' | 'keys', profile: 'default', region: 'us-east-1', keyId: '', secret: '', session: '', check: null as AwsCheck | null, confirmed: false, busy: false, error: '' },
   agents: { prefix: 'trace', model: '', maxLifetimeHours: 8, idleMinutes: 15, centralBucketName: '', retainData: true, escalateTo: '', gpuEnabled: true, gpuMaxVcpus: 16, gpuSpot: false,
@@ -117,8 +119,9 @@ function answers(): AnswersInput {
   }
 }
 
-const secrets = (): Record<string, string> => ({
+const secrets = (): Record<string, unknown> => ({
   githubToken: s.github.token, githubAdminToken: s.github.adminToken,
+  projectTokens: Object.fromEntries([...s.projectTokens].filter(([r, t]) => s.projects.has(r) && t.trim())),
   awsAccessKeyId: s.aws.mode === 'keys' ? s.aws.keyId : '', awsSecretAccessKey: s.aws.mode === 'keys' ? s.aws.secret : '',
   awsSessionToken: s.aws.mode === 'keys' ? s.aws.session : '',
 })
@@ -193,6 +196,9 @@ function github(): HTMLElement {
           p ? h('span', { class: 'opt' }, checkbox('onboarding PR', p.onboard, (v) => { p.onboard = v })) : h('span', {}),
           p ? h('span', { class: 'opt' }, checkbox('repo settings', p.applySettings, (v) => { p.applySettings = v })) : h('span', {}))
       }))) : null,
+    s.projects.size ? h('details', {}, h('summary', { class: 'muted' }, 'Each project\'s own agent token (optional)'),
+      h('p', { class: 'muted' }, 'Every project gets its own AWS resources and roles, so one project\'s agent cannot reach another\'s in AWS. On GitHub it can reach whatever its token can: give a project a fine-grained token limited to that repository alone to isolate it there too. Projects without one use the token above.'),
+      ...[...s.projects.keys()].map((r) => field(r, input('password', s.projectTokens.get(r) ?? '', (v) => { s.projectTokens.set(r, v.trim()) }, { placeholder: 'the token above' }), 'checked when installing: it must reach this repository, and should reach no other project'))) : null,
     next('github', 'aws'))
 }
 

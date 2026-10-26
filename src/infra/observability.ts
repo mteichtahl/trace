@@ -7,7 +7,8 @@
  *                      defaults unset) and OTEL_SDK_DISABLED=true (ADOT starts nothing).
  *   IAM                the execution role statements the AgentCore guide lists are in stack.ts (X-Ray, runtime log
  *                      groups, PutMetricData in the bedrock-agentcore namespace); this adds logs:PutResourcePolicy on
- *                      each runtime's own log group (spans delivered there), and X-Ray writes for the GPU job role
+ *                      each runtime's own log group (spans delivered there), and X-Ray writes for each project's GPU
+ *                      job role
  *   Transaction Search a custom resource (lambda/transaction-search.ts): on if it is not, idempotent, never turned off
  *   GPU jobs           the job definition names X-Ray's OTLP endpoint, so the runner exports its span (TRACEPARENT)
  *   memory             vended delivery of the memory's APPLICATION_LOGS to a log group and its TRACES to X-Ray
@@ -57,8 +58,8 @@ export function gpuTelemetryEnv(cfg: Pick<InfraProps, 'observability' | 'region'
 }
 
 export interface ObservedRuntime {
-  /** worker or api: names the outputs */
-  id: 'Worker' | 'Api'
+  /** Api, or a project's construct id (Project<hash>): names the `<id>LogGroup` output */
+  id: string
   runtime: CfnRuntime
   /** the runtime's name (agentRuntimeName), for its log group's ARN pattern */
   name: string
@@ -71,8 +72,8 @@ export interface ObservabilityProps {
   runtimes: readonly ObservedRuntime[]
   /** the agents' memory, when there is one: its logs and traces are delivered */
   memory?: { arn: string; id: string } | null
-  /** the GPU job role, when there are GPU jobs: it may write spans */
-  gpuJobRole?: iam.IRole | null
+  /** the projects' GPU job roles, when there are GPU jobs: they may write spans */
+  gpuJobRoles?: readonly iam.IRole[]
   /** whether the GPU side exists (its widgets) */
   gpu: boolean
 }
@@ -101,11 +102,13 @@ export class Observability extends Construct {
         resources: [`arn:${partition}:logs:${region}:${account}:log-group:/aws/bedrock-agentcore/runtimes/${r.name}-*`],
       }))
     }
-    p.gpuJobRole?.addToPrincipalPolicy(new iam.PolicyStatement({
-      sid: 'GpuJobSpans',
-      actions: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets'],
-      resources: ['*'],
-    }))
+    for (const role of p.gpuJobRoles ?? []) {
+      role.addToPrincipalPolicy(new iam.PolicyStatement({
+        sid: 'GpuJobSpans',
+        actions: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets'],
+        resources: ['*'],
+      }))
+    }
 
     // ------------------------------------------------------------------ Transaction Search (account-wide, once)
     if (p.settings.transactionSearch) {
@@ -173,7 +176,7 @@ export class Observability extends Construct {
     for (const r of p.runtimes) {
       new CfnOutput(stack, `${r.id}LogGroup`, {
         value: Fn.join('', ['/aws/bedrock-agentcore/runtimes/', r.runtime.attrAgentRuntimeId, '-DEFAULT']),
-        description: `The ${r.id.toLowerCase()} runtime's log group (its logs, and its spans on the unified destination)`,
+        description: `The ${r.name} runtime's log group (its logs, and its spans on the unified destination)`,
       })
     }
     new CfnOutput(stack, 'SpansLogGroup', { value: SPANS_LOG_GROUP, description: 'The shared span log group (CloudWatch Transaction Search)' })
@@ -209,7 +212,8 @@ function graph(title: string, region: string, x: number, y: number, queries: Rec
 export function dashboardBody(o: { region: string; runtimes: readonly string[]; gpu: boolean }): { widgets: Widget[] } {
   const { region } = o
   const rt = o.runtimes.map((n) => `"${n}"`).join(' OR ')
-  const runtimeFilter = o.runtimes.length ? `(${rt})` : ''
+  // a SEARCH expression is at most 1024 characters: with many projects, every runtime in the namespace is shown
+  const runtimeFilter = o.runtimes.length && rt.length <= 800 ? `(${rt})` : ''
   // dimension names in the filter keep other agents' metrics in the shared namespace out
   const ours = '"trace.outcome"'
   const widgets: Widget[] = [

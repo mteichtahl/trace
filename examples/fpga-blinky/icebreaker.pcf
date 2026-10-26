@@ -1,0 +1,6 @@
+# iCEBreaker (iCE40UP5K-SG48): 12 MHz oscillator, user button, the two board LEDs
+set_io clk 35
+set_io rst_n 10
+set_io led_r 11
+set_io led_g 37
+set_frequency clk 12

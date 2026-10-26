@@ -20,7 +20,7 @@ J2.4 LED ──R4 680── D2 red LED ── GND           J2: 1 3V3, 2 GND, 3 
 |---|---|
 | `hardware/` | The KiCad 10 project: schematic, 2-layer 40×25 mm board, and project library tables pointing at KiCad's standard libraries. |
 | `sim/` | `front-end.cir`, the analog path as an ngspice netlist with the schematic's values. `front-end-from-kicad.sh` simulates the schematic itself. `models/BAT54S.lib` is the vendor model for the clamp diode. |
-| `logic/` | A 4-sample moving average for the ADC samples, and its self-checking testbench. |
+| `logic/` | A 4-sample moving average for the ADC samples, and its self-checking testbench. The same checks are also written as cocotb tests (`test_moving_average.py`, run with `verify.cocotb`), and as formal properties (`moving_average_props.sv`, plus `moving_average.sby` for `verify.formal`). |
 | `firmware/` | `adc.c`, which converts ADC counts to input millivolts, plus a host unit test and a Makefile (`make`, `make test`). |
 | `tools/` | `generate.ts` writes the KiCad files. `setup-db.ts` writes `.trace/project.db`. |
 | `.trace/` | `project.db` holds the settings below and records every tool run. `rules.md` is left for the owner to write. |

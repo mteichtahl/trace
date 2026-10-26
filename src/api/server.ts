@@ -9,7 +9,10 @@
  *                         the action needs admin
  *
  * AgentCore has already validated the token (customJwtAuthorizer) and forwards the Authorization header; it is
- * verified again here (jwt.ts) before anything else. Every request is logged as one JSON line: who, action, repo,
+ * verified again here (jwt.ts) before anything else. This is the one runtime that spans projects (the shared GitHub
+ * token, every project's memory records, InvokeAgentRuntime on every project's worker), and everything it does for
+ * a project follows the access check. It runs no model and no agent: tasks go to the project's worker
+ * (src/api/workers.ts). Every request is logged as one JSON line: who, action, repo,
  * outcome, duration. Tokens are never logged.
  */
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http'
@@ -24,6 +27,7 @@ import { ActionError, type ActionDeps, NO_ACCESS, defaultScratch, gitCheckout, p
 import { type CognitoAdmin, HttpCognito, githubToken } from './aws.js'
 import { HttpGitHub } from './github.js'
 import { AuthError, Verifier, bearer } from './jwt.js'
+import { parseWorkerRuntimes, remoteJobs } from './workers.js'
 
 const MAX_BODY = 2 * 1024 * 1024
 
@@ -155,6 +159,8 @@ const Env = z.object({
   TRACE_COGNITO_CLIENT_ID: z.string().min(1),
   TRACE_COGNITO_ISSUER: z.string().url(),
   TRACE_GITHUB_SECRET_ARN: z.string().min(1),
+  TRACE_AWS_ACCOUNT: z.string().regex(/^\d{12}$/),
+  TRACE_WORKER_RUNTIMES: z.string().default(''),
   PORT: z.coerce.number().int().default(8080),
 })
 
@@ -166,16 +172,11 @@ export async function start(): Promise<void> {
   const cog = (): CognitoAdmin => (cognito ??= new HttpCognito({ region: env.AWS_REGION, poolId: env.TRACE_COGNITO_POOL_ID }))
   const scratch = defaultScratch()
   const token = (): Promise<string> => githubToken(env.TRACE_GITHUB_SECRET_ARN)
+  const jobs = remoteJobs({ runtimes: parseWorkerRuntimes(env.TRACE_WORKER_RUNTIMES), region: env.AWS_REGION, account: env.TRACE_AWS_ACCOUNT })
   const deps: ActionDeps = {
     github: async () => new HttpGitHub(await token()),
     cognito: cog,
-    jobs: async () => {
-      const j = await import('../agent/jobs.js')
-      return {
-        startJob: async (payload) => j.startJob(payload),
-        jobStatus: async (id) => (await j.jobStatus(id)).map((x) => ({ ...x })),
-      }
-    },
+    jobs: async () => jobs,
     tools: () => allTools(),
     memory: () => memoryFromEnv(process.env),
     checkout: gitCheckout(token, scratch),

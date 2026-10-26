@@ -25,9 +25,10 @@
  *
  * ISOLATION. Callers never pass a namespace: they pass an Actor (built and validated here) and the namespaces come
  * from it. Every record that comes back is checked to be under the namespace asked for, and dropped otherwise. In
- * AWS, the runtime roles may only use actors of this shape and namespaces under /trace/ (IAM condition keys
- * bedrock-agentcore:actorId and bedrock-agentcore:namespace); one role serves every project, so the per-project
- * line is drawn here.
+ * AWS the line is also drawn by IAM: each project's worker runtime has its own role, which may only use actors
+ * `<owner>/<repo>/*` (bedrock-agentcore:actorId) and namespaces `/trace/<owner>/<repo>/*` (bedrock-agentcore:namespace)
+ * of its own project (src/infra/project.ts builds those patterns from projectId and projectPrefix below). The API
+ * runtime, which serves every project after its access check, may only read records.
  *
  * Without TRACE_MEMORY_ID there is no memory, and everything that uses it quietly does without.
  */
@@ -91,7 +92,8 @@ function repoOf(repository: string): { slug: string; owner: string; repo: string
   return { slug, owner, repo }
 }
 
-const projectId = (repository: string): string => { const { owner, repo } = repoOf(repository); return `${owner}/${encodeRepo(repo)}` }
+/** The project part of every actor id of `repository`: `<owner>/<encoded repo>` (IAM: bedrock-agentcore:actorId). */
+export const projectId = (repository: string): string => { const { owner, repo } = repoOf(repository); return `${owner}/${encodeRepo(repo)}` }
 
 function actor(repository: string, kind: Actor['kind'], name: string, id: string): Actor {
   if (id.length > ACTOR_MAX) throw new MemoryScopeError(`actor id longer than ${ACTOR_MAX} characters: ${repository}`)

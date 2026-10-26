@@ -11,9 +11,13 @@
  * for the person who asked, so every namespace starts with its project: `/trace/<owner>/<repo>/`. The scheme, and the
  * escaping that keeps it one-to-one, is in src/agent/memory.ts. Short-term events expire after eventExpiryDays.
  *
- * Access (grantUse): only the data-plane calls the agents make, on this memory only, and only for actors of the
- * project shape (bedrock-agentcore:actorId) and namespaces under /trace/ (bedrock-agentcore:namespace). No control
- * plane, no deletes, no direct record writes: long-term records come only from the strategies' extraction.
+ * Access: only data-plane calls, on this memory only. No control plane, no deletes, no direct record writes: long-term
+ * records come only from the strategies' extraction.
+ *
+ *   each project's worker  events of its own actors (`<owner>/<repo>/*`, bedrock-agentcore:actorId) and records of
+ *                          its own namespaces (`/trace/<owner>/<repo>/*`, bedrock-agentcore:namespace): src/infra/project.ts
+ *   the API                records under /trace/ (every project: memory.list and memory.recall, after its access
+ *                          check), read only, and no events (grantReadRecords)
  */
 import * as iam from 'aws-cdk-lib/aws-iam'
 import { CfnMemory } from 'aws-cdk-lib/aws-bedrockagentcore'
@@ -29,8 +33,6 @@ export const STRATEGY_NAMES = { facts: `${ROOT}_facts`, sessions: `${ROOT}_sessi
 export const EVENT_ACTIONS = ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents'] as const
 export const RECORD_ACTIONS = ['bedrock-agentcore:RetrieveMemoryRecords', 'bedrock-agentcore:ListMemoryRecords'] as const
 
-/** IAM patterns for every trace actor: `<owner>/<repo>/<agent>` and `<owner>/<repo>/person/<hash>`. */
-export const ACTOR_PATTERNS = ['?*/?*/?*'] as const
 /** IAM pattern for every trace namespace (the normalised form: leading and trailing slash). */
 export const NAMESPACE_PATTERN = `/${ROOT}/*`
 
@@ -63,16 +65,10 @@ export class TraceMemory extends Construct {
   get memoryId(): string { return this.memory.attrMemoryId }
   get memoryArn(): string { return this.memory.attrMemoryArn }
 
-  /** Let `grantee` record and read events, and recall and list records, of trace actors and namespaces only. */
-  grantUse(grantee: iam.IGrantable): void {
+  /** Let `grantee` (the API) recall and list the records of every project, and nothing else of the memory. */
+  grantReadRecords(grantee: iam.IGrantable): void {
     grantee.grantPrincipal.addToPrincipalPolicy(new iam.PolicyStatement({
-      sid: 'TraceMemoryEvents',
-      actions: [...EVENT_ACTIONS],
-      resources: [this.memoryArn],
-      conditions: { StringLike: { 'bedrock-agentcore:actorId': [...ACTOR_PATTERNS] } },
-    }))
-    grantee.grantPrincipal.addToPrincipalPolicy(new iam.PolicyStatement({
-      sid: 'TraceMemoryRecords',
+      sid: 'TraceMemoryRecordsRead',
       actions: [...RECORD_ACTIONS],
       resources: [this.memoryArn],
       conditions: { StringLike: { 'bedrock-agentcore:namespace': NAMESPACE_PATTERN } },

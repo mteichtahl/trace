@@ -1,0 +1,246 @@
+/**
+ * One onboarded project (one entry of `repositories`): its own worker runtime, the roles around it, its GitHub token
+ * secret and its GPU job definition. The stack makes one per repository, so adding or removing a repository (running
+ * the installer again) adds or removes exactly these resources.
+ *
+ * The worker runtime runs Claude with Bash, so whatever its execution role allows, the agent can do directly with
+ * the role's credentials. That role is therefore the line between projects, and it allows only:
+ *
+ *   S3        read central/* (the datasheets and parts database every project shares, by design) and write it
+ *             only with a conditional put (If-Match / If-None-Match: the central store always writes that way, see
+ *             src/core/central.ts), never delete it; read/write projects/<slug>/* and jobs/<slug>/*; list only those
+ *             prefixes; nothing of access/*, nor of any other project
+ *   memory    events of actors `<owner>/<repo>/*` and records under `/trace/<owner>/<repo>/*` only (the encodings of
+ *             src/agent/memory.ts), on the installation's one memory
+ *   secret    <prefix>/github-token/<slug> only
+ *   Batch     SubmitJob only with its own job definition, on the shared queue, and only tagged trace:project=<slug>;
+ *             TerminateJob only on jobs tagged with its slug; DescribeJobs (no resource-level permissions exist)
+ *   telemetry its own runtime's log group, X-Ray, PutMetricData in the bedrock-agentcore namespace
+ *   model     Bedrock InvokeModel on Anthropic models and the account's inference profiles
+ *
+ * Its GitHub OIDC role (assumed by that repository's default-branch workflows only) may invoke only this runtime,
+ * read the central store and write it the same conditional way (the worker.runner=actions fallback is the worker
+ * in GitHub Actions), and read/write projects/<slug>/*. Its GPU job role may read/write jobs/<slug>/* only.
+ */
+import { CfnOutput, Duration, RemovalPolicy, Stack, Tags } from 'aws-cdk-lib'
+import { CfnRuntime } from 'aws-cdk-lib/aws-bedrockagentcore'
+import type * as ecr from 'aws-cdk-lib/aws-ecr'
+import * as iam from 'aws-cdk-lib/aws-iam'
+import type * as s3 from 'aws-cdk-lib/aws-s3'
+import * as secrets from 'aws-cdk-lib/aws-secretsmanager'
+import { Construct } from 'constructs'
+import { projectId, projectPrefix as memoryProjectPrefix } from '../agent/memory.js'
+import {
+  PROJECT_TAG, githubSecretName, projectDataPrefix, projectJobsPrefix, workerRuntimeName,
+} from '../core/project.js'
+import type { GpuCompute } from './gpu.js'
+import { EVENT_ACTIONS, RECORD_ACTIONS, type TraceMemory } from './memory.js'
+import { type InfraProps, type ProjectRef, projectOutputs } from './props.js'
+
+/** The central bucket's prefixes: the shared database, and the access store beside it (src/core/access.ts). */
+export const CENTRAL_PREFIX = 'central'
+export const ACCESS_PREFIX = 'access'
+
+const TELEMETRY_ACTIONS = ['xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets']
+
+/** The Bedrock model access the agents need (also the worker.runner=actions fallback). */
+export function modelAccess(account: string): iam.PolicyStatement {
+  return new iam.PolicyStatement({
+    actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:GetInferenceProfile'],
+    resources: ['arn:aws:bedrock:*::foundation-model/anthropic.*', `arn:aws:bedrock:*:${account}:inference-profile/*`],
+  })
+}
+
+/**
+ * S3 on the central bucket by prefix: `read` (Get), `readWrite` (Get, Put, Delete) and `conditional` (Get, and Put
+ * only with If-Match or If-None-Match). Listing is allowed only under the prefixes named.
+ */
+export function grantPrefixes(role: iam.IRole, bucket: s3.IBucket, o: { read?: string[]; readWrite?: string[]; conditional?: string[] }): void {
+  const obj = (p: string): string => bucket.arnForObjects(`${p}/*`)
+  const all = [...(o.read ?? []), ...(o.readWrite ?? []), ...(o.conditional ?? [])]
+  if (!all.length) return
+  role.addToPrincipalPolicy(new iam.PolicyStatement({
+    actions: ['s3:GetObject', 's3:GetObjectVersion', 's3:GetObjectAttributes'], resources: all.map(obj),
+  }))
+  role.addToPrincipalPolicy(new iam.PolicyStatement({
+    actions: ['s3:ListBucket'], resources: [bucket.bucketArn], conditions: { StringLike: { 's3:prefix': all.map((p) => `${p}/*`) } },
+  }))
+  if (o.readWrite?.length) {
+    role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['s3:PutObject', 's3:DeleteObject', 's3:AbortMultipartUpload'], resources: o.readWrite.map(obj),
+    }))
+  }
+  // S3 checks the conditional-write headers with the s3:if-match and s3:if-none-match condition keys
+  for (const key of ['s3:if-match', 's3:if-none-match']) {
+    if (!o.conditional?.length) break
+    role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['s3:PutObject'], resources: o.conditional.map(obj), conditions: { Null: { [key]: 'false' } },
+    }))
+  }
+}
+
+export interface ProjectProps {
+  cfg: InfraProps
+  project: ProjectRef
+  bucket: s3.IBucket
+  /** the agent image: repository (pull) and URI */
+  images: ecr.IRepository
+  imageUri: string
+  /** the GitHub OIDC provider's ARN */
+  oidcProviderArn: string
+  gpu: GpuCompute | null
+  memory: TraceMemory | null
+  /** environment every worker gets (region, model, TRACE_HOME, memory, observability's are added later) */
+  environment: Record<string, string>
+}
+
+export class ProjectStack extends Construct {
+  readonly runtime: CfnRuntime
+  readonly runtimeName: string
+  readonly role: iam.Role
+  readonly actionsRole: iam.Role
+  readonly secret: secrets.Secret
+  readonly jobDefinitionName: string | null
+
+  constructor(scope: Construct, id: string, p: ProjectProps) {
+    super(scope, id)
+    const { cfg, project, bucket } = p
+    const { slug, hash, repository } = project
+    const { region, account, partition } = Stack.of(this)
+    this.runtimeName = workerRuntimeName(cfg.prefix, repository)
+    const outputs = projectOutputs(repository)
+
+    // ------------------------------------------------------------------ the project's GitHub token
+    // Its value is written by the installer: the project's own fine-grained token, or a copy of the shared one. It is
+    // a copy of a credential, not data, so it goes with the project (removalPolicy DESTROY whatever retainData says).
+    this.secret = new secrets.Secret(this, 'GithubToken', {
+      secretName: githubSecretName(cfg.prefix, repository),
+      description: `The GitHub token ${slug}'s trace agent uses (written by \`trace install\`, never by CloudFormation).`,
+      removalPolicy: RemovalPolicy.DESTROY,
+    })
+
+    // ------------------------------------------------------------------ the worker's execution role
+    this.role = new iam.Role(this, 'RuntimeRole', {
+      roleName: `${cfg.prefix}-w-${hash}-${region}`,
+      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', {
+        conditions: {
+          StringEquals: { 'aws:SourceAccount': account },
+          ArnLike: { 'aws:SourceArn': `arn:${partition}:bedrock-agentcore:${region}:${account}:*` },
+        },
+      }),
+      description: `Run by ${slug}'s trace worker on Bedrock AgentCore: that project's resources only`,
+    })
+    const role = this.role
+    p.images.grantPull(role)
+    role.addToPolicy(new iam.PolicyStatement({ actions: ['ecr:GetAuthorizationToken'], resources: ['*'] }))
+    const logs = `arn:${partition}:logs:${region}:${account}:log-group:/aws/bedrock-agentcore/runtimes/${this.runtimeName}-*`
+    role.addToPolicy(new iam.PolicyStatement({
+      actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams'], resources: [logs, `${logs}:log-stream:*`],
+    }))
+    role.addToPolicy(new iam.PolicyStatement({ actions: ['logs:DescribeLogGroups'], resources: [`arn:${partition}:logs:${region}:${account}:log-group:*`] }))
+    role.addToPolicy(new iam.PolicyStatement({ actions: TELEMETRY_ACTIONS, resources: ['*'] }))
+    role.addToPolicy(new iam.PolicyStatement({ actions: ['cloudwatch:PutMetricData'], resources: ['*'], conditions: { StringEquals: { 'cloudwatch:namespace': 'bedrock-agentcore' } } }))
+    role.addToPolicy(new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:GetWorkloadAccessToken', 'bedrock-agentcore:GetWorkloadAccessTokenForJWT', 'bedrock-agentcore:GetWorkloadAccessTokenForUserId'],
+      resources: [`arn:${partition}:bedrock-agentcore:${region}:${account}:workload-identity-directory/default`,
+        `arn:${partition}:bedrock-agentcore:${region}:${account}:workload-identity-directory/default/workload-identity/*`],
+    }))
+    role.addToPolicy(modelAccess(account))
+    this.secret.grantRead(role)
+    grantPrefixes(role, bucket, { conditional: [CENTRAL_PREFIX], readWrite: [projectDataPrefix(repository), projectJobsPrefix(repository)] })
+
+    if (p.memory) {
+      role.addToPolicy(new iam.PolicyStatement({
+        sid: 'ProjectMemoryEvents', actions: [...EVENT_ACTIONS], resources: [p.memory.memoryArn],
+        conditions: { StringLike: { 'bedrock-agentcore:actorId': `${projectId(repository)}/*` } },
+      }))
+      role.addToPolicy(new iam.PolicyStatement({
+        sid: 'ProjectMemoryRecords', actions: [...RECORD_ACTIONS], resources: [p.memory.memoryArn],
+        conditions: { StringLike: { 'bedrock-agentcore:namespace': `${memoryProjectPrefix(repository)}*` } },
+      }))
+    }
+
+    // ------------------------------------------------------------------ GPU jobs: its own definition and job role
+    const gpuEnv: Record<string, string> = {}
+    this.jobDefinitionName = null
+    if (p.gpu) {
+      const job = p.gpu.addProjectJob(this, repository)
+      this.jobDefinitionName = job.jobDefinitionName
+      const def = `arn:${partition}:batch:${region}:${account}:job-definition/${job.jobDefinitionName}`
+      const jobs = `arn:${partition}:batch:${region}:${account}:job/*`
+      // SubmitJob authorizes the job, the queue and the definition; every one must carry this project's tag
+      role.addToPolicy(new iam.PolicyStatement({
+        sid: 'ProjectGpuSubmit', actions: ['batch:SubmitJob'], resources: [jobs, p.gpu.queue.jobQueueArn, def, `${def}:*`],
+        conditions: { StringEquals: { [`aws:RequestTag/${PROJECT_TAG}`]: slug } },
+      }))
+      // tagging on submit (SubmitJob's dependent action); never re-tags another project's job
+      role.addToPolicy(new iam.PolicyStatement({
+        sid: 'ProjectGpuTag', actions: ['batch:TagResource'], resources: [jobs],
+        conditions: {
+          StringEquals: { [`aws:RequestTag/${PROJECT_TAG}`]: slug },
+          StringEqualsIfExists: { [`aws:ResourceTag/${PROJECT_TAG}`]: slug },
+          'ForAllValues:StringEquals': { 'aws:TagKeys': [PROJECT_TAG, 'trace:job', 'trace:kind'] },
+        },
+      }))
+      role.addToPolicy(new iam.PolicyStatement({
+        sid: 'ProjectGpuTerminate', actions: ['batch:TerminateJob'], resources: [jobs],
+        conditions: { StringEquals: { [`aws:ResourceTag/${PROJECT_TAG}`]: slug } },
+      }))
+      // DescribeJobs has no resource-level permissions
+      role.addToPolicy(new iam.PolicyStatement({ sid: 'ProjectGpuDescribe', actions: ['batch:DescribeJobs'], resources: ['*'] }))
+      Object.assign(gpuEnv, { TRACE_GPU_QUEUE: p.gpu.queue.jobQueueArn, TRACE_GPU_JOB_DEFINITION: job.jobDefinitionName, TRACE_GPU_BUCKET: bucket.bucketName })
+    }
+
+    // ------------------------------------------------------------------ the worker runtime
+    this.runtime = new CfnRuntime(this, 'Runtime', {
+      agentRuntimeName: this.runtimeName,
+      description: `trace: Claude working on ${slug}`.slice(0, 200),
+      agentRuntimeArtifact: { containerConfiguration: { containerUri: p.imageUri } },
+      roleArn: role.roleArn,
+      networkConfiguration: { networkMode: 'PUBLIC' },
+      protocolConfiguration: 'HTTP',
+      lifecycleConfiguration: { idleRuntimeSessionTimeout: cfg.idleTimeoutSeconds, maxLifetime: cfg.maxLifetimeSeconds },
+      filesystemConfigurations: [{ sessionStorage: { mountPath: '/mnt/workspace' } }],
+      environmentVariables: {
+        ...p.environment,
+        TRACE_AGENT_MODE: 'worker',
+        TRACE_PROJECT: slug,
+        TRACE_PROJECT_HOME: `s3://${bucket.bucketName}/${projectDataPrefix(repository)}`,
+        TRACE_GITHUB_SECRET_ARN: this.secret.secretArn,
+        ...gpuEnv,
+      },
+      tags: { [PROJECT_TAG]: slug, 'trace:installation': cfg.prefix },
+    })
+    this.runtime.node.addDependency(role)
+
+    // ------------------------------------------------------------------ the repository's GitHub OIDC role
+    const issuer = 'token.actions.githubusercontent.com'
+    this.actionsRole = new iam.Role(this, 'ActionsRole', {
+      roleName: `${cfg.prefix}-gh-${hash}-${region}`,
+      maxSessionDuration: Duration.hours(2),
+      description: `Assumed by ${slug}'s trace workflows on its default branch (GitHub OIDC)`,
+      assumedBy: new iam.WebIdentityPrincipal(p.oidcProviderArn, {
+        StringEquals: { [`${issuer}:aud`]: 'sts.amazonaws.com' },
+        // Only runs on the repository's default branch: workflow_run, issues, schedule and pushes to it. A branch or a
+        // pull request can't assume this role, so it can't reach the agent or the central store with its own code.
+        StringLike: { [`${issuer}:sub`]: `repo:${repository}:ref:refs/heads/${project.branch}` },
+      }),
+    })
+    this.actionsRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:InvokeAgentRuntime'],
+      resources: [this.runtime.attrAgentRuntimeArn, `${this.runtime.attrAgentRuntimeArn}/*`],
+    }))
+    this.actionsRole.addToPolicy(modelAccess(account)) // the in-Actions fallback (worker.runner = actions)
+    grantPrefixes(this.actionsRole, bucket, { conditional: [CENTRAL_PREFIX], readWrite: [projectDataPrefix(repository)] })
+
+    for (const r of [role, this.actionsRole]) Tags.of(r).add(PROJECT_TAG, slug)
+    Tags.of(this.secret).add(PROJECT_TAG, slug)
+
+    // ------------------------------------------------------------------ outputs (alphanumeric names: the hash)
+    const stack = Stack.of(this)
+    new CfnOutput(stack, outputs.runtimeArn, { value: this.runtime.attrAgentRuntimeArn, description: `${slug}: its worker runtime (TRACE_AGENT_RUNTIME_ARN)` })
+    new CfnOutput(stack, outputs.roleArn, { value: this.actionsRole.roleArn, description: `${slug}: its GitHub OIDC role (TRACE_AWS_ROLE)` })
+    new CfnOutput(stack, outputs.secretArn, { value: this.secret.secretArn, description: `${slug}: its GitHub token secret` })
+    if (this.jobDefinitionName) new CfnOutput(stack, outputs.jobDefinition, { value: this.jobDefinitionName, description: `${slug}: its GPU job definition` })
+  }
+}

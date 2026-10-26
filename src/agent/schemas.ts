@@ -77,3 +77,32 @@ export interface JobInfo {
   error?: string
   log: string[]
 }
+
+// ------------------------------------------------------------------ single-project mode
+
+/** An invocation or job for another project than the one this runtime serves (TRACE_PROJECT): answered 403. */
+export class WrongProject extends Error {
+  override name = 'WrongProject'
+  readonly status = 403
+}
+
+/** The repositories an invocation is about (none for status). */
+export function repositoriesOf(p: Invocation): string[] {
+  switch (p.kind) {
+    case 'work-item': case 'task': return [p.repository]
+    case 'sweep': return [...p.repositories]
+    case 'status': return []
+  }
+}
+
+/**
+ * Refuse anything for another project. `project` is TRACE_PROJECT (owner/repo): each project's worker runtime has
+ * its own, and its role reaches only that project's resources, so this is the friendly answer to what IAM would
+ * refuse anyway. Without a project (a local run, tests) everything is allowed.
+ */
+export function checkProject(p: Invocation, project: string | undefined): void {
+  const mine = project?.trim().toLowerCase()
+  if (!mine) return
+  const other = repositoriesOf(p).filter((r) => r.toLowerCase() !== mine)
+  if (other.length) throw new WrongProject(`this runtime serves ${mine} only, not ${other.join(', ')}`)
+}

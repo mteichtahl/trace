@@ -10,12 +10,15 @@
  *
  * One job per item at a time: a second invocation for a running item answers accepted: false with the running job's
  * id. SIGTERM aborts the running jobs, waits briefly for them to report, and closes.
+ *
+ * Single-project mode (TRACE_PROJECT=owner/repo, set on each project's worker runtime): an invocation for any other
+ * repository answers 403 { error } and is logged. The runtime's role could not reach that project anyway.
  */
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http'
 import { ATTR, flush } from '../core/telemetry.js'
 import { type Jobs, defaultJobs } from './jobs.js'
 import { observeInvocation } from './observe.js'
-import { InvocationSchema } from './schemas.js'
+import { InvocationSchema, WrongProject, checkProject } from './schemas.js'
 
 const MAX_BODY = 1024 * 1024
 
@@ -37,7 +40,14 @@ async function readBody(req: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString('utf8')
 }
 
-export function handler(jobs: Jobs): (req: IncomingMessage, res: ServerResponse) => void {
+export interface HandlerOptions {
+  /** The one project this runtime serves (TRACE_PROJECT); unset: any. */
+  project?: string | undefined
+  log?: (line: string) => void
+}
+
+export function handler(jobs: Jobs, o: HandlerOptions = {}): (req: IncomingMessage, res: ServerResponse) => void {
+  const log = o.log ?? ((l: string) => { process.stdout.write(`${l}\n`) })
   return (req, res) => {
     const path = (req.url ?? '/').split('?')[0]
     if (req.method === 'GET' && path === '/ping') {
@@ -57,6 +67,13 @@ export function handler(jobs: Jobs): (req: IncomingMessage, res: ServerResponse)
           return send(res, 400, { error: 'invalid invocation', issues: parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`) })
         }
         const p = parsed.data
+        try {
+          checkProject(p, o.project)
+        } catch (e) {
+          if (!(e instanceof WrongProject)) throw e
+          log(JSON.stringify({ at: new Date().toISOString(), refused: p.kind, reason: e.message }))
+          return send(res, e.status, { error: e.message })
+        }
         return observeInvocation('worker', req.headers, { [ATTR.invocationKind]: p.kind, ...('repository' in p ? { [ATTR.repository]: p.repository } : {}) }, (_s, outcome) => {
           if (p.kind === 'status') { outcome('ok'); return send(res, 200, { jobs: jobs.jobStatus(p.jobId), busy: jobs.busy() }) }
           // the job's span starts here, under this invocation (and its session)
@@ -71,13 +88,15 @@ export function handler(jobs: Jobs): (req: IncomingMessage, res: ServerResponse)
   }
 }
 
-export function createAgentServer(jobs: Jobs): Server {
-  return createServer(handler(jobs))
+export function createAgentServer(jobs: Jobs, o: HandlerOptions = {}): Server {
+  return createServer(handler(jobs, o))
 }
 
-export async function start(opts: { port?: number; host?: string; jobs?: Jobs } = {}): Promise<Server> {
+export async function start(opts: { port?: number; host?: string; jobs?: Jobs; project?: string } = {}): Promise<Server> {
   const jobs = opts.jobs ?? defaultJobs()
-  const server = createAgentServer(jobs)
+  const project = opts.project ?? (process.env.TRACE_PROJECT || undefined)
+  const server = createAgentServer(jobs, { project })
+  if (project) process.stdout.write(`trace agent: serving ${project} only\n`)
   const port = opts.port ?? Number(process.env.PORT || 8080)
   await new Promise<void>((res) => server.listen(port, opts.host ?? '0.0.0.0', res))
   process.stdout.write(`trace agent listening on ${opts.host ?? '0.0.0.0'}:${port}\n`)

@@ -1,13 +1,17 @@
 /**
  * What passes between the submitting side (./batch.ts) and the job runner inside the GPU image (./runner.ts), and
- * where in S3 a job's files live. One job is one folder under the central bucket's `jobs/` prefix:
+ * where in S3 a job's files live. One job is one folder under its project's prefix, jobs/<slug>/ (slug: owner/repo,
+ * lower case, src/core/project.ts), so each project's runtime and job role reach only their own project's jobs:
  *
- *   jobs/<id>/in/<name>          inputs, uploaded before the job is submitted
- *   jobs/<id>/out/<name>         outputs the program wrote ({out:NAME}), uploaded by the runner
- *   jobs/<id>/log/stdout.txt     the program's output, uploaded by the runner
- *   jobs/<id>/log/stderr.txt
- *   jobs/<id>/exit               the exit record (ExitRecord), written last: its presence means the runner finished
- *   jobs/<id>/spec               the spec, only when it is too large for the container's environment
+ *   jobs/<slug>/<id>/in/<name>          inputs, uploaded before the job is submitted
+ *   jobs/<slug>/<id>/out/<name>         outputs the program wrote ({out:NAME}), uploaded by the runner
+ *   jobs/<slug>/<id>/log/stdout.txt     the program's output, uploaded by the runner
+ *   jobs/<slug>/<id>/log/stderr.txt
+ *   jobs/<slug>/<id>/exit               the exit record (ExitRecord), written last: its presence means the runner finished
+ *   jobs/<slug>/<id>/spec               the spec, only when it is too large for the container's environment
+ *
+ * The project is TRACE_PROJECT (set on each project's worker runtime). Without it (a laptop with admin credentials)
+ * jobs go under jobs/_local/, which is never a project's.
  *
  * The spec reaches the container in TRACE_GPU_JOB (base64url JSON), or TRACE_GPU_JOB_URI (s3://… of `spec`) when it
  * is large. The objects are transient (the stack expires `jobs/` after a week); they are not data files.
@@ -15,6 +19,7 @@
 import { z } from 'zod'
 import { ToolError } from '../core/registry.js'
 import { JobKind } from './jobs.js'
+import { JOBS_PREFIX, LOCAL_JOBS, ProjectNameError, projectSlug } from '../core/project.js'
 
 const Name = z.string().regex(/^[\w.-]+$/)
 
@@ -43,7 +48,7 @@ export const ExitRecordSchema = z.object({
 }).loose()
 export type ExitRecord = z.output<typeof ExitRecordSchema>
 
-/** Keys relative to the jobs prefix. */
+/** Keys relative to the job's prefix (jobs/<slug>). */
 export const jobKeys = (id: string) => ({
   input: (n: string) => `${id}/in/${n}`,
   output: (n: string) => `${id}/out/${n}`,
@@ -71,17 +76,33 @@ export function decodeSpec(text: string): RemoteSpec {
   return r.data
 }
 
-/** Where jobs are staged: TRACE_GPU_BUCKET (a bucket name, or s3://bucket/prefix), else TRACE_HOME's bucket under `jobs/`. */
-export function jobsLocation(env: NodeJS.ProcessEnv = process.env): { bucket: string; prefix: string } {
-  const fromUrl = (u: string, fallbackPrefix: string | null): { bucket: string; prefix: string } => {
+/** The project jobs are staged for (TRACE_PROJECT), or `_local`. */
+export function jobsProject(env: NodeJS.ProcessEnv = process.env): string {
+  const p = env.TRACE_PROJECT?.trim()
+  if (!p) return LOCAL_JOBS
+  try {
+    return projectSlug(p)
+  } catch (e) {
+    if (e instanceof ProjectNameError) throw new ToolError(`TRACE_PROJECT: ${e.message}`)
+    throw e
+  }
+}
+
+/**
+ * Where jobs are staged: TRACE_GPU_BUCKET (a bucket name, or s3://bucket/base), else TRACE_HOME's bucket; under
+ * `<base>/<slug>` (base: `jobs` unless the URL names another).
+ */
+export function jobsLocation(env: NodeJS.ProcessEnv = process.env): { bucket: string; prefix: string; project: string } {
+  const project = jobsProject(env)
+  const fromUrl = (u: string, base: string | null): { bucket: string; prefix: string; project: string } => {
     const url = new URL(u)
     if (!url.hostname) throw new ToolError(`${u}: no bucket`)
     const path = decodeURIComponent(url.pathname).replace(/^\/+|\/+$/g, '')
-    return { bucket: url.hostname, prefix: fallbackPrefix ?? (path || 'jobs') }
+    return { bucket: url.hostname, prefix: `${base ?? (path || JOBS_PREFIX)}/${project}`, project }
   }
   const b = env.TRACE_GPU_BUCKET?.trim()
-  if (b) return b.startsWith('s3://') ? fromUrl(b, null) : { bucket: b, prefix: 'jobs' }
+  if (b) return b.startsWith('s3://') ? fromUrl(b, null) : { bucket: b, prefix: `${JOBS_PREFIX}/${project}`, project }
   const home = env.TRACE_HOME?.trim()
-  if (home?.startsWith('s3://')) return fromUrl(home, 'jobs')
+  if (home?.startsWith('s3://')) return fromUrl(home, JOBS_PREFIX)
   throw new ToolError('nowhere to stage GPU jobs: set TRACE_GPU_BUCKET (or TRACE_HOME to s3://bucket/central)')
 }

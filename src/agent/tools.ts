@@ -22,6 +22,10 @@ export function memoryScope(env: Record<string, string | undefined> = process.en
       if (!repository) throw new ToolError('memory: no project in scope (TRACE_MEMORY_ACTOR or TRACE_MEMORY_REPOSITORY is not set)')
       actor = agentActor(repository, env.TRACE_MEMORY_AGENT || (env.GITHUB_ACTIONS === 'true' ? 'worker' : 'local'))
     }
+    // a project's worker runtime (TRACE_PROJECT) serves that project only; its role refuses any other actor too
+    if (env.TRACE_PROJECT && actor.repository !== env.TRACE_PROJECT.trim().toLowerCase()) {
+      throw new ToolError(`memory: this runtime serves ${env.TRACE_PROJECT.trim().toLowerCase()} only, not ${actor.repository}`)
+    }
     const session = env.TRACE_MEMORY_SESSION ? sessionIdFor(env.TRACE_MEMORY_SESSION) : `adhoc-${new Date(now()).toISOString().slice(0, 10).replaceAll('-', '')}`
     return { actor, session }
   } catch (e) {

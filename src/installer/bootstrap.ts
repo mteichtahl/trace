@@ -5,8 +5,10 @@
  *   1 check      the credentials still resolve to the confirmed account
  *   2 cdk        bootstrap CDK in the account/region if it isn't
  *   3 deploy     `cdk deploy` the trace stack (the agent image builds in CodeBuild: the first deploy takes a while)
- *   4 token      write the GitHub token into the stack's Secrets Manager secret
- *   5 repos      each repository's Actions variables (role, region, TRACE_HOME, runtime) and its TRACE_TOKEN secret
+ *   4 token      write the GitHub tokens into Secrets Manager: the shared one (the API's), and each project's own
+ *                (its own token when one was given, else a copy of the shared one)
+ *   5 repos      each repository's Actions variables (its own role and runtime, from its project's outputs; region,
+ *                TRACE_HOME) and its TRACE_TOKEN secret (its project's token)
  *   6 onboard    the onboarding PR in each repository that asked for it, and its repository settings
  *   7 people     invite each person to Cognito, put them in their class's group (admin, user, guest), and record
  *                the projects they are assigned to
@@ -26,11 +28,11 @@ import type { AwsCredentialIdentity } from '@smithy/types'
 import { type Principal, GROUPS, assign, assignments, setClass, unassign } from '../core/access.js'
 import { saveAnswers, saveInstallation } from '../core/client.js'
 import { onboard, register } from '../core/onboard.js'
-import { type InfraInput, type InfraProps, InfraPropsSchema, stackName } from '../infra/props.js'
+import { type InfraInput, type InfraProps, InfraPropsSchema, projectOutputs, stackName } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import type { Answers, InstallEvent, Secrets, Step } from './answers.js'
 import { awsEnv, checkAws, credentials, stackOutputs } from './aws.js'
-import { checkToken, setSecret, setVariable } from './github.js'
+import { type TokenInfo, checkToken, setSecret, setVariable } from './github.js'
 
 export function infraInput(a: Answers): InfraInput {
   return {
@@ -62,6 +64,38 @@ export function observabilityPlan(o: InfraProps['observability'], prefix: string
   return `, ${parts.join(', ')}`
 }
 
+/** The agent token a project's worker and workflows use: its own when one was given, else the shared one. */
+export const projectToken = (s: Secrets, repo: string): string => s.projectTokens[repo.toLowerCase()] ?? s.githubToken
+
+/** Said in the summary when any project shares the token: GitHub access is then not isolated between projects. */
+export function sharedTokenWarning(a: Answers, s: Secrets): string | null {
+  const shared = a.projects.filter((p) => !s.projectTokens[p.repo.toLowerCase()]).map((p) => p.repo)
+  if (!shared.length || a.projects.length < 2) return null
+  return `GitHub access is not isolated between projects: ${shared.join(', ')} use${shared.length === 1 ? 's' : ''} the shared agent token, so that project's agent can reach every repository the token can. `
+    + 'AWS resources are isolated per project either way; for GitHub, give each project its own fine-grained token limited to that repository and run the installer again.'
+}
+
+/**
+ * Check each project's own token: it must reach its repository, and should reach none of the other projects'
+ * (a warning, not a failure). Returns the warnings, and each token's login (its project's TRACE_AGENT_LOGIN).
+ */
+export async function checkProjectTokens(a: Answers, s: Secrets, check: (token: string) => Promise<TokenInfo> = checkToken): Promise<{ warnings: string[]; logins: Map<string, string> }> {
+  const warnings: string[] = []
+  const logins = new Map<string, string>()
+  const all = a.projects.map((p) => p.repo.toLowerCase())
+  for (const [repo, token] of Object.entries(s.projectTokens)) {
+    if (!all.includes(repo)) throw new Error(`a token was given for ${repo}, which is not one of the projects being installed`)
+    const info = await check(token)
+    const seen = new Set(info.repos.map((r) => r.fullName.toLowerCase()))
+    if (!seen.has(repo)) throw new Error(`${repo}'s own token (${info.login}) cannot see ${repo}`)
+    const others = all.filter((r) => r !== repo && seen.has(r))
+    if (others.length) warnings.push(`${repo}'s own token can also reach ${others.join(', ')}: limit it to ${repo} alone, or its agent is not isolated from ${others.length === 1 ? 'that project' : 'those projects'} on GitHub.`)
+    for (const w of info.warnings) warnings.push(`${repo}'s token: ${w}`)
+    logins.set(repo, info.login)
+  }
+  return { warnings, logins }
+}
+
 /** What will happen, before anything does. */
 export function plan(a: Answers): Step[] {
   const props = InfraPropsSchema.parse(infraInput(a))
@@ -70,9 +104,9 @@ export function plan(a: Answers): Step[] {
   const steps: [string, string, string][] = [
     ['check', 'Check the AWS account', `${a.aws.account} in ${a.aws.region}`],
     ['cdk', 'Bootstrap CDK', `aws://${a.aws.account}/${a.aws.region} (only if it isn't already)`],
-    ['deploy', `Deploy ${stack}`, `central bucket, GitHub secret, agent image (CodeBuild, arm64), two AgentCore runtimes (worker and API), Cognito, GitHub OIDC role for ${props.repositories.length} repositories${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64)` : ''}${observabilityPlan(props.observability, props.prefix)}`],
-    ['token', 'Store the GitHub token', 'in the stack\'s Secrets Manager secret'],
-    ['repos', 'Configure the repositories', `variables TRACE_AWS_ROLE, TRACE_AWS_REGION, TRACE_HOME, TRACE_AGENT_RUNTIME_ARN and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}`],
+    ['deploy', `Deploy ${stack}`, `central bucket, agent image (CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and GPU job definition' : ''}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64; one queue for every project)` : ''}${observabilityPlan(props.observability, props.prefix)}`],
+    ['token', 'Store the GitHub tokens', 'the shared token in the API\'s secret, and each project\'s agent token in its own secret'],
+    ['repos', 'Configure the repositories', `each repository's own TRACE_AWS_ROLE and TRACE_AGENT_RUNTIME_ARN, TRACE_AWS_REGION, TRACE_HOME and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}`],
     ['onboard', 'Onboard the repositories', onboarding.length ? `open the onboarding PR in ${onboarding.join(', ')}` : 'none chosen'],
     ['people', 'Invite people and assign projects', `${a.adminEmail} (admin)${a.people.length ? `, ${a.people.map((p) => `${p.email} (${p.class})`).join(', ')}` : ''}`],
     ['local', 'Save this installation locally', '~/.trace/client.db, so `trace login` works here'],
@@ -104,7 +138,7 @@ function runStreaming(cmd: string, args: string[], env: Record<string, string>, 
 /** Redact anything that looks like a credential before it reaches the page. */
 export function redact(line: string, secrets: Secrets): string {
   let out = line
-  for (const s of [secrets.githubToken, secrets.githubAdminToken, secrets.awsSecretAccessKey, secrets.awsSessionToken, secrets.awsAccessKeyId]) {
+  for (const s of [secrets.githubToken, secrets.githubAdminToken, secrets.awsSecretAccessKey, secrets.awsSessionToken, secrets.awsAccessKeyId, ...Object.values(secrets.projectTokens)]) {
     if (s && s.length >= 8) out = out.split(s).join('••••')
   }
   return out.replace(/(gh[pousr]_|github_pat_)[A-Za-z0-9_]{10,}/g, '$1••••')
@@ -138,6 +172,8 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
     const check = await checkAws(creds, a.aws.region, stack)
     if (check.account !== a.aws.account) throw new Error(`these credentials are for account ${check.account}, not the confirmed ${a.aws.account}`)
     if (!check.agentCore.ok) throw new Error(`Bedrock AgentCore is not available to these credentials in ${a.aws.region}: ${check.agentCore.reason}`)
+    const own = await checkProjectTokens(a, s)
+    for (const w of own.warnings) { log('check', w); summary.push(w) }
     set('check', 'done', `${check.arn}`)
     const env = { ...awsEnv(creds, a.aws.region), TRACE_INFRA: JSON.stringify(infraInput(a)), CDK_DISABLE_VERSION_CHECK: '1', CI: '1' }
 
@@ -167,7 +203,15 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
     // 4 — the token
     current = 'token'
     set('token', 'running')
-    await new SecretsManagerClient({ region: a.aws.region, credentials: creds }).send(new PutSecretValueCommand({ SecretId: need('GithubSecretArn'), SecretString: s.githubToken }))
+    const sm = new SecretsManagerClient({ region: a.aws.region, credentials: creds })
+    await sm.send(new PutSecretValueCommand({ SecretId: need('GithubSecretArn'), SecretString: s.githubToken }))
+    log('token', 'the API\'s (shared) token stored')
+    for (const p of a.projects) {
+      await sm.send(new PutSecretValueCommand({ SecretId: need(projectOutputs(p.repo).secretArn), SecretString: projectToken(s, p.repo) }))
+      log('token', `${p.repo}: ${s.projectTokens[p.repo.toLowerCase()] ? 'its own token' : 'the shared token'} stored in its secret`)
+    }
+    const sharing = sharedTokenWarning(a, s)
+    if (sharing) summary.push(sharing)
     set('token', 'done')
 
     // 5 — repositories
@@ -180,13 +224,19 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
       summary.push(`The agents' token belongs to ${agentLogin}, so /approve from ${agentLogin} is refused on deploys (an agent must never approve its own). Give the agents a machine account's token, or approve from another account.`)
     }
     for (const p of a.projects) {
+      const o = projectOutputs(p.repo)
+      const login = own.logins.get(p.repo.toLowerCase()) ?? agentLogin
+      if (login.toLowerCase() === adminLogin.toLowerCase() && login !== agentLogin) {
+        summary.push(`${p.repo}'s own token belongs to ${login}, so /approve from ${login} is refused on its deploys.`)
+      }
       const vars: Record<string, string> = {
-        TRACE_AWS_ROLE: need('ActionsRoleArn'), TRACE_AWS_REGION: a.aws.region, TRACE_HOME: need('TraceHome'), TRACE_AGENT_RUNTIME_ARN: need('AgentRuntimeArn'),
+        // this project's own role and runtime: neither reaches any other project
+        TRACE_AWS_ROLE: need(o.roleArn), TRACE_AWS_REGION: a.aws.region, TRACE_HOME: need('TraceHome'), TRACE_AGENT_RUNTIME_ARN: need(o.runtimeArn),
         // The worker trusts claim markers and refuses deploy approvals from this login (the agents' own account).
-        TRACE_AGENT_LOGIN: agentLogin,
+        TRACE_AGENT_LOGIN: login,
       }
       for (const [k, v] of Object.entries(vars)) log('repos', `${p.repo}: ${k} ${await setVariable(adminToken, p.repo, k, v)}`)
-      await setSecret(adminToken, p.repo, 'TRACE_TOKEN', s.githubToken)
+      await setSecret(adminToken, p.repo, 'TRACE_TOKEN', projectToken(s, p.repo))
       log('repos', `${p.repo}: TRACE_TOKEN set`)
     }
     set('repos', 'done')
@@ -283,7 +333,8 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
     saveInstallation({
       name: 'default', region: a.aws.region, account: a.aws.account, stack, traceHome: need('TraceHome'),
       userPoolId: need('UserPoolId'), clientId: need('UserPoolClientId'), cognitoDomain: need('CognitoDomain'),
-      apiRuntimeArn: need('ApiRuntimeArn'), workerRuntimeArn: need('AgentRuntimeArn'), actionsRoleArn: need('ActionsRoleArn'),
+      // each project has its own worker runtime and role (its repository's variables): none is the installation's
+      apiRuntimeArn: need('ApiRuntimeArn'), workerRuntimeArn: '', actionsRoleArn: '',
       githubSecretArn: need('GithubSecretArn'), callbackPorts: props.callbackPorts,
     })
     saveAnswers({ answers: a })

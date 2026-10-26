@@ -123,7 +123,8 @@ export async function runCocotb(o: CocotbOptions): Promise<CocotbRun> {
   const spec = {
     simulator: o.simulator, top: o.top, sources: hdl, modules: mods,
     defines: Object.fromEntries(Object.entries(o.defines ?? {}).filter(([, v]) => v !== false).map(([k, v]) => [k, v === true ? 1 : v])),
-    parameters: o.parameters ?? {}, build_args: o.build_args, plusargs: o.plusargs, env: o.env, testcase: o.testcase ?? [],
+    // Verilator warnings (width, unused) would stop the build: linting is verify.verilator's job, so they stay warnings
+    parameters: o.parameters ?? {}, build_args: o.simulator === 'verilator' && !o.build_args.some((x) => /^-W(no-)?fatal$/.test(x)) ? ['-Wno-fatal', ...o.build_args] : o.build_args, plusargs: o.plusargs, env: o.env, testcase: o.testcase ?? [],
     timescale: o.timescale ?? null, seed: o.seed ?? null, waves: o.waves,
   }
   let r
@@ -153,7 +154,10 @@ export async function runCocotb(o: CocotbOptions): Promise<CocotbRun> {
     const failed = cases.filter((c) => c.status === 'fail' || c.status === 'error')
     let passed = false
     if (reason) passed = false
-    else if (!xml.trim()) reason = `cocotb wrote no results (exit ${Number.isNaN(rc) ? r.job.exitCode : rc}): ${lastError(output)}`
+    else if (!xml.trim()) {
+      reason = `cocotb wrote no results (exit ${Number.isNaN(rc) ? r.job.exitCode : rc}): ${lastError(output)}`
+      if (o.simulator === 'verilator' && /verilator\.cpp:\d+:\d+: error: .*(VerilatedVpi|Verilated)/.test(output)) reason += ' (cocotb\'s Verilator support does not build against this Verilator: cocotb 2.x needs Verilator 5.036 or later)'
+    }
     else if (!cases.length) reason = 'no test cases ran (check modules and testcase)'
     else if (failed.length) reason = `${failed.length} of ${cases.length} failed: ${failed.slice(0, 3).map((c) => `${c.name}${c.message ? ` (${c.message.split('\n')[0]?.slice(0, 120)})` : ''}`).join('; ')}`
     else {
@@ -175,5 +179,6 @@ export async function runCocotb(o: CocotbOptions): Promise<CocotbRun> {
 
 function lastError(log: string): string {
   const lines = log.split('\n').map((l) => l.trim()).filter(Boolean)
-  return (lines.reverse().find((l) => /error|exception|not found|unsupported|requires/i.test(l)) ?? lines[0] ?? '(no output)').slice(0, 300)
+  const tool = lines.find((l) => /^%Error|^error:|^ERROR:|:\d+:\d+: error: |requires? (Verilator|Icarus|version)|unsupported/i.test(l))
+  return (tool ?? [...lines].reverse().find((l) => /error|exception|not found|unsupported|requires/i.test(l)) ?? lines[0] ?? '(no output)').slice(0, 300)
 }

@@ -1,29 +1,37 @@
 /**
  * The cloud side of trace, in one CDK stack:
  *
- *   central bucket      $TRACE_HOME: the central database (datasheets, parts) every project shares
- *   GitHub secret       the token the agents use to clone, push and comment (value written by the installer)
- *   agent image         built from this repository by AWS CodeBuild on arm64 (no local Docker), pushed to ECR
- *   agent runtime       Bedrock AgentCore Runtime running the image: Claude, the trace tools, git, gh, KiCad,
- *                       ngspice, Icarus; session storage at /mnt/workspace
- *   agent memory        AgentCore Memory (src/infra/memory.ts): events and the semantic, summary and preference
- *                       strategies, namespaced /trace/<owner>/<repo>/<agent>/; both runtimes may use it
- *   observability       OpenTelemetry (ADOT) from both runtimes and the GPU jobs, CloudWatch Transaction Search,
+ *   central bucket      $TRACE_HOME (central/): the central database (datasheets, parts) every project shares;
+ *                       projects/<slug>/ and jobs/<slug>/ for each project's own data and GPU job files; access/ for
+ *                       who may do what (the API's only)
+ *   agent image         built from this repository by AWS CodeBuild on arm64 (no local Docker), pushed to ECR; every
+ *                       runtime runs it
+ *   projects            one ProjectStack per repository (src/infra/project.ts): its worker runtime on Bedrock
+ *                       AgentCore with its own execution role, its GitHub token secret, its GitHub OIDC role and its
+ *                       GPU job definition and job role. Each role reaches that project's resources only, so the
+ *                       line between projects holds in IAM even though the agent has Bash and the role's credentials
+ *   agent memory        AgentCore Memory (src/infra/memory.ts): one for the installation, namespaced
+ *                       /trace/<owner>/<repo>/<agent>/; each worker may use only its project's actors and namespaces
+ *   GPU                 one AWS Batch queue and compute environment shared by every project (src/infra/gpu.ts)
+ *   observability       OpenTelemetry (ADOT) from every runtime and the GPU jobs, CloudWatch Transaction Search,
  *                       the memory's vended logs and traces, and a dashboard (src/infra/observability.ts)
- *   actions role        assumed by the onboarded repositories' workflows through GitHub OIDC: invokes the worker
- *                       runtime and reads/writes the central bucket
  *   people              a Cognito user pool (no self sign-up; admins invite people) with three classes as groups —
  *                       admin, user (read/write on assigned projects), guest (read on assigned projects) — and the
  *                       API runtime: the same image in `api` mode, reachable only with a Cognito token, which checks
  *                       the person's class and project assignments (src/core/access.ts) on every request
  *
- * Two runtimes, one image: the worker runtime accepts only IAM (the repositories' workflows), the API runtime only
- * Cognito tokens (people). A person's token can never reach the worker, and a workflow never acts as a person.
+ * The API runtime is the one component that spans projects: it reads every project's settings and status with the
+ * shared GitHub token, reads (never writes) every project's memory records, and hands tasks to each project's worker
+ * runtime (InvokeAgentRuntime), always after its access check. It runs no model and gives nothing a shell.
  *
- * Outputs carry everything the installer then writes into GitHub (repository variables) and the local settings.
+ * Workers accept only IAM (their repository's workflows, and the API); the API accepts only Cognito tokens (people).
+ * A person's token can never reach a worker, and a workflow never acts as a person.
+ *
+ * Outputs carry everything the installer then writes into GitHub (each repository's variables, from that project's
+ * outputs: src/infra/props.ts projectOutputs) and the local settings.
  */
 import { join } from 'node:path'
-import { CfnOutput, CustomResource, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib'
+import { CfnOutput, CustomResource, Duration, Fn, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib'
 import { CfnRuntime } from 'aws-cdk-lib/aws-bedrockagentcore'
 import * as codebuild from 'aws-cdk-lib/aws-codebuild'
 import * as cognito from 'aws-cdk-lib/aws-cognito'
@@ -37,19 +45,22 @@ import { Asset } from 'aws-cdk-lib/aws-s3-assets'
 import * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { Provider } from 'aws-cdk-lib/custom-resources'
 import type { Construct } from 'constructs'
-import { GpuCompute, JOBS_PREFIX } from './gpu.js'
+import { JOBS_PREFIX, workerRuntimeNamePattern } from '../core/project.js'
+import { GpuCompute } from './gpu.js'
 import { TraceMemory } from './memory.js'
 import { Observability, gpuTelemetryEnv } from './observability.js'
-import { type InfraProps, runtimeName } from './props.js'
+import { ACCESS_PREFIX, CENTRAL_PREFIX, ProjectStack, grantPrefixes } from './project.js'
+import { type InfraProps, apiRuntimeName, projectRefs } from './props.js'
 
 /** The repository root, from dist/infra or src/infra. */
 export const REPO_ROOT = join(import.meta.dirname, '..', '..')
 
-/** What the image build doesn't need (keeps the source asset small and its hash stable). */
-/** The central database's prefix in the bucket, and the access store's beside it (src/core/access.ts accessHome). */
-export const CENTRAL_PREFIX = 'central'
-export const ACCESS_PREFIX = 'access'
+export { ACCESS_PREFIX, CENTRAL_PREFIX } from './project.js'
 
+/** AgentCore's limit on one environment variable's value (CreateAgentRuntime environmentVariables). */
+export const ENV_VALUE_MAX = 5000
+
+/** What the image build doesn't need (keeps the source asset small and its hash stable). */
 export const SOURCE_EXCLUDE = [
   '.env', '.env.*', '**/.env', '**/.env.*', '*.pem', '**/*.pem', '*.key', '**/*.key', '.aws', '**/.aws', '.npmrc.local', '**/id_rsa*',
   '.git', 'node_modules', '**/node_modules', 'dist', 'cdk.out', '.venv', '**/__pycache__', '**/*.pyc', 'test', 'python/tests',
@@ -78,9 +89,11 @@ export class TraceStack extends Stack {
     })
     const traceHome = `s3://${central.bucketName}/${CENTRAL_PREFIX}`
 
+    // The API's token: it reads and writes every project's settings (after its access check). Each worker has its
+    // own project's secret instead (src/infra/project.ts).
     const githubToken = new secrets.Secret(this, 'GithubToken', {
       secretName: `${cfg.prefix}/github-token`,
-      description: 'The GitHub token the trace agents use (written by `trace install`, never by CloudFormation).',
+      description: 'The GitHub token the trace API uses across projects (written by `trace install`, never by CloudFormation).',
       removalPolicy: RemovalPolicy.RETAIN,
     })
 
@@ -141,9 +154,6 @@ export class TraceStack extends Stack {
           environment: gpuTelemetryEnv(cfg),
         })
       : null
-    const gpuEnv: Record<string, string> = gpu
-      ? { TRACE_GPU_QUEUE: gpu.queue.jobQueueArn, TRACE_GPU_JOB_DEFINITION: gpu.jobDefinitionName, TRACE_GPU_BUCKET: central.bucketName }
-      : {}
     // ------------------------------------------------------------------ the agents' memory (AgentCore Memory, src/infra/memory.ts)
     const memory = cfg.memory.enabled ? new TraceMemory(this, 'AgentMemory', { prefix: cfg.prefix, eventExpiryDays: cfg.memory.eventExpiryDays }) : null
     const memoryEnv: Record<string, string> = memory ? { TRACE_MEMORY_ID: memory.memoryId } : {}
@@ -152,68 +162,24 @@ export class TraceStack extends Stack {
       properties: { ProjectName: build.projectName, ImageUri: imageUri, SourceHash: source.assetHash },
     })
 
-    // ------------------------------------------------------------------ the runtimes' roles (one each)
-    // The worker handles untrusted text (issues, logs, code) from the repositories: it gets the central database and
-    // the model, nothing about people. The API serves signed-in people: it also gets the access store and Cognito.
-    const modelAccess = new iam.PolicyStatement({
-      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:GetInferenceProfile'],
-      resources: ['arn:aws:bedrock:*::foundation-model/anthropic.*', `arn:aws:bedrock:*:${cfg.account}:inference-profile/*`],
-    })
-    const runtimeRole = (id: string, name: string, description: string): iam.Role => {
-      const role = new iam.Role(this, id, {
-        roleName: `${cfg.prefix}-${name}-${cfg.region}`,
-        assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', {
-          conditions: {
-            StringEquals: { 'aws:SourceAccount': cfg.account },
-            ArnLike: { 'aws:SourceArn': `arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:*` },
-          },
-        }),
-        description,
-      })
-      repo.grantPull(role)
-      role.addToPolicy(new iam.PolicyStatement({ actions: ['ecr:GetAuthorizationToken'], resources: ['*'] }))
-      role.addToPolicy(new iam.PolicyStatement({
-        actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams'],
-        resources: [`arn:aws:logs:${cfg.region}:${cfg.account}:log-group:/aws/bedrock-agentcore/runtimes/*`, `arn:aws:logs:${cfg.region}:${cfg.account}:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*`],
-      }))
-      role.addToPolicy(new iam.PolicyStatement({ actions: ['logs:DescribeLogGroups'], resources: [`arn:aws:logs:${cfg.region}:${cfg.account}:log-group:*`] }))
-      role.addToPolicy(new iam.PolicyStatement({ actions: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets'], resources: ['*'] }))
-      role.addToPolicy(new iam.PolicyStatement({ actions: ['cloudwatch:PutMetricData'], resources: ['*'], conditions: { StringEquals: { 'cloudwatch:namespace': 'bedrock-agentcore' } } }))
-      role.addToPolicy(new iam.PolicyStatement({
-        actions: ['bedrock-agentcore:GetWorkloadAccessToken', 'bedrock-agentcore:GetWorkloadAccessTokenForJWT', 'bedrock-agentcore:GetWorkloadAccessTokenForUserId'],
-        resources: [`arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:workload-identity-directory/default`, `arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:workload-identity-directory/default/workload-identity/*`],
-      }))
-      role.addToPolicy(modelAccess)
-      githubToken.grantRead(role)
-      central.grantReadWrite(role, `${CENTRAL_PREFIX}/*`)
-      return role
-    }
-    const workerRole = runtimeRole('WorkerRuntimeRole', 'agent-worker', 'Run by the trace worker on Bedrock AgentCore (repositories\' work)')
-    const apiRole = runtimeRole('ApiRuntimeRole', 'agent-api', 'Run by the trace API on Bedrock AgentCore (signed-in people)')
-    central.grantReadWrite(apiRole, `${ACCESS_PREFIX}/*`)
-
-    const runtime = new CfnRuntime(this, 'AgentRuntime', {
-      agentRuntimeName: runtimeName(cfg.prefix),
-      description: 'trace: Claude working on the onboarded repositories',
-      agentRuntimeArtifact: { containerConfiguration: { containerUri: image.getAttString('ImageUri') } },
-      roleArn: workerRole.roleArn,
-      networkConfiguration: { networkMode: 'PUBLIC' },
-      protocolConfiguration: 'HTTP',
-      lifecycleConfiguration: { idleRuntimeSessionTimeout: cfg.idleTimeoutSeconds, maxLifetime: cfg.maxLifetimeSeconds },
-      filesystemConfigurations: [{ sessionStorage: { mountPath: '/mnt/workspace' } }],
-      environmentVariables: {
-        AWS_REGION: cfg.region,
-        TRACE_HOME: traceHome,
-        TRACE_GITHUB_SECRET_ARN: githubToken.secretArn,
-        CLAUDE_CODE_USE_BEDROCK: '1',
-        ANTHROPIC_MODEL: cfg.model,
-        TRACE_WORKSPACE: '/mnt/workspace',
-        TRACE_AGENT_MODE: 'worker',
-        ...gpuEnv,
-        ...memoryEnv,
+    // ------------------------------------------------------------------ the projects (one worker runtime and its roles each)
+    const issuer = 'token.actions.githubusercontent.com'
+    const oidc = cfg.createOidcProvider
+      ? new iam.OpenIdConnectProvider(this, 'GithubOidc', { url: `https://${issuer}`, clientIds: ['sts.amazonaws.com'] })
+      : iam.OpenIdConnectProvider.fromOpenIdConnectProviderArn(this, 'GithubOidc', `arn:aws:iam::${cfg.account}:oidc-provider/${issuer}`)
+    const refs = projectRefs(cfg.repositories)
+    const projects = refs.map((ref) => new ProjectStack(this, `Project${ref.hash}`, {
+      cfg, project: ref, bucket: central, images: repo, imageUri: image.getAttString('ImageUri'), oidcProviderArn: oidc.openIdConnectProviderArn,
+      gpu, memory,
+      environment: {
+        AWS_REGION: cfg.region, TRACE_HOME: traceHome, CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: cfg.model, TRACE_WORKSPACE: '/mnt/workspace', ...memoryEnv,
       },
-    })
-    runtime.node.addDependency(workerRole)
+    }))
+    // The API is told every worker runtime: `owner/repo=<runtime id>` separated by spaces (src/api/workers.ts).
+    const workerList = Fn.join(' ', projects.map((p, i) => Fn.join('=', [refs[i]?.slug ?? '', p.runtime.attrAgentRuntimeId])))
+    // runtime ids are `<name>-<10 characters>`
+    const workerListLength = refs.reduce((n, r, i) => n + r.slug.length + 1 + (projects[i]?.runtimeName.length ?? 0) + 11 + 1, 0)
+    if (workerListLength > ENV_VALUE_MAX) throw new Error(`too many repositories for one installation: the API's list of worker runtimes would be ${workerListLength} characters (AgentCore allows ${ENV_VALUE_MAX})`)
 
     // ------------------------------------------------------------------ people: Cognito and the API runtime
     const users = new cognito.UserPool(this, 'Users', {
@@ -263,9 +229,44 @@ export class TraceStack extends Stack {
     adminInGroup.addDependency(admin)
     adminInGroup.node.addDependency(this.node.findChild('AdminsGroup'))
 
+    // ------------------------------------------------------------------ the API's role
+    // People's requests, after the access check: the access store, Cognito, the shared GitHub token, every project's
+    // memory records (read only), the central database, and invoking the projects' workers. No model, no GPU.
+    const apiRole = new iam.Role(this, 'ApiRuntimeRole', {
+      roleName: `${cfg.prefix}-agent-api-${cfg.region}`,
+      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', {
+        conditions: {
+          StringEquals: { 'aws:SourceAccount': cfg.account },
+          ArnLike: { 'aws:SourceArn': `arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:*` },
+        },
+      }),
+      description: 'Run by the trace API on Bedrock AgentCore (signed-in people, every project after the access check)',
+    })
+    const apiName = apiRuntimeName(cfg.prefix)
+    repo.grantPull(apiRole)
+    apiRole.addToPolicy(new iam.PolicyStatement({ actions: ['ecr:GetAuthorizationToken'], resources: ['*'] }))
+    const apiLogs = `arn:aws:logs:${cfg.region}:${cfg.account}:log-group:/aws/bedrock-agentcore/runtimes/${apiName}-*`
+    apiRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams'], resources: [apiLogs, `${apiLogs}:log-stream:*`],
+    }))
+    apiRole.addToPolicy(new iam.PolicyStatement({ actions: ['logs:DescribeLogGroups'], resources: [`arn:aws:logs:${cfg.region}:${cfg.account}:log-group:*`] }))
+    apiRole.addToPolicy(new iam.PolicyStatement({ actions: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets'], resources: ['*'] }))
+    apiRole.addToPolicy(new iam.PolicyStatement({ actions: ['cloudwatch:PutMetricData'], resources: ['*'], conditions: { StringEquals: { 'cloudwatch:namespace': 'bedrock-agentcore' } } }))
+    apiRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:GetWorkloadAccessToken', 'bedrock-agentcore:GetWorkloadAccessTokenForJWT', 'bedrock-agentcore:GetWorkloadAccessTokenForUserId'],
+      resources: [`arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:workload-identity-directory/default`, `arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:workload-identity-directory/default/workload-identity/*`],
+    }))
+    githubToken.grantRead(apiRole)
+    grantPrefixes(apiRole, central, { conditional: [CENTRAL_PREFIX] })
+    central.grantReadWrite(apiRole, `${ACCESS_PREFIX}/*`)
+    // every project's worker runtime of this installation (by name; one statement however many projects there are)
+    const workers = `arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:runtime/${workerRuntimeNamePattern(cfg.prefix)}`
+    apiRole.addToPolicy(new iam.PolicyStatement({ sid: 'InvokeProjectWorkers', actions: ['bedrock-agentcore:InvokeAgentRuntime'], resources: [workers, `${workers}/runtime-endpoint/*`] }))
+    if (memory) memory.grantReadRecords(apiRole)
+
     const discoveryUrl = `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}/.well-known/openid-configuration`
     const api = new CfnRuntime(this, 'ApiRuntime', {
-      agentRuntimeName: `${runtimeName(cfg.prefix).replace(/_agent$/, '')}_api`.slice(0, 48),
+      agentRuntimeName: apiName,
       description: 'trace: what people do with their projects, behind Cognito and per-project grants',
       agentRuntimeArtifact: { containerConfiguration: { containerUri: image.getAttString('ImageUri') } },
       roleArn: apiRole.roleArn,
@@ -279,14 +280,13 @@ export class TraceStack extends Stack {
         AWS_REGION: cfg.region,
         TRACE_HOME: traceHome,
         TRACE_GITHUB_SECRET_ARN: githubToken.secretArn,
-        CLAUDE_CODE_USE_BEDROCK: '1',
-        ANTHROPIC_MODEL: cfg.model,
         TRACE_WORKSPACE: '/mnt/workspace',
         TRACE_AGENT_MODE: 'api',
         TRACE_COGNITO_POOL_ID: users.userPoolId,
         TRACE_COGNITO_CLIENT_ID: client.userPoolClientId,
         TRACE_COGNITO_ISSUER: `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}`,
-        ...gpuEnv,
+        TRACE_AWS_ACCOUNT: cfg.account,
+        TRACE_WORKER_RUNTIMES: workerList,
         ...memoryEnv,
       },
     })
@@ -297,49 +297,21 @@ export class TraceStack extends Stack {
       resources: [users.userPoolArn],
     }))
 
-    if (gpu) for (const role of [workerRole, apiRole]) gpu.grantSubmit(role, central)
-    if (memory) for (const role of [workerRole, apiRole]) memory.grantUse(role)
-
     // ------------------------------------------------------------------ observability (OpenTelemetry/ADOT, src/infra/observability.ts)
     new Observability(this, 'Observability', {
-      prefix: cfg.prefix, settings: cfg.observability, gpu: Boolean(gpu), gpuJobRole: gpu?.jobRole ?? null,
+      prefix: cfg.prefix, settings: cfg.observability, gpu: Boolean(gpu), gpuJobRoles: gpu?.jobRoles ?? [],
       memory: memory ? { arn: memory.memoryArn, id: memory.memoryId } : null,
       runtimes: [
-        { id: 'Worker', runtime, name: runtimeName(cfg.prefix), role: workerRole },
-        { id: 'Api', runtime: api, name: api.agentRuntimeName, role: apiRole },
+        ...projects.map((p) => ({ id: p.node.id, runtime: p.runtime, name: p.runtimeName, role: p.role })),
+        { id: 'Api', runtime: api, name: apiName, role: apiRole },
       ],
     })
-
-    // ------------------------------------------------------------------ the onboarded repositories' role (GitHub OIDC)
-    const issuer = 'token.actions.githubusercontent.com'
-    const oidc = cfg.createOidcProvider
-      ? new iam.OpenIdConnectProvider(this, 'GithubOidc', { url: `https://${issuer}`, clientIds: ['sts.amazonaws.com'] })
-      : iam.OpenIdConnectProvider.fromOpenIdConnectProviderArn(this, 'GithubOidc', `arn:aws:iam::${cfg.account}:oidc-provider/${issuer}`)
-    const actionsRole = new iam.Role(this, 'ActionsRole', {
-      roleName: `${cfg.prefix}-github-actions-${cfg.region}`,
-      maxSessionDuration: Duration.hours(2),
-      description: 'Assumed by the onboarded repositories\' trace workflows (GitHub OIDC)',
-      assumedBy: new iam.WebIdentityPrincipal(oidc.openIdConnectProviderArn, {
-        StringEquals: { [`${issuer}:aud`]: 'sts.amazonaws.com' },
-        // Only runs on each repository's default branch: workflow_run, issues, schedule and pushes to it. A branch or a
-        // pull request can't assume this role, so it can't reach the agents or the central store with its own code.
-        StringLike: { [`${issuer}:sub`]: cfg.repositories.map((r) => { const [slug, branch = 'main'] = r.split('@'); return `repo:${slug}:ref:refs/heads/${branch}` }) },
-      }),
-    })
-    actionsRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['bedrock-agentcore:InvokeAgentRuntime'],
-      resources: [runtime.attrAgentRuntimeArn, `${runtime.attrAgentRuntimeArn}/*`],
-    }))
-    actionsRole.addToPolicy(modelAccess) // the in-Actions fallback (worker.runner = actions)
-    central.grantReadWrite(actionsRole, `${CENTRAL_PREFIX}/*`)
 
     // ------------------------------------------------------------------ outputs
     new CfnOutput(this, 'TraceHome', { value: traceHome, description: 'TRACE_HOME: the central database location' })
     new CfnOutput(this, 'CentralBucket', { value: central.bucketName })
-    new CfnOutput(this, 'GithubSecretArn', { value: githubToken.secretArn })
-    new CfnOutput(this, 'AgentRuntimeArn', { value: runtime.attrAgentRuntimeArn })
+    new CfnOutput(this, 'GithubSecretArn', { value: githubToken.secretArn, description: 'The API\'s GitHub token (across projects); each project has its own (Project<hash>GithubSecretArn)' })
     new CfnOutput(this, 'AgentImageUri', { value: imageUri })
-    new CfnOutput(this, 'ActionsRoleArn', { value: actionsRole.roleArn })
     new CfnOutput(this, 'Region', { value: cfg.region })
     new CfnOutput(this, 'ApiRuntimeArn', { value: api.attrAgentRuntimeArn })
     new CfnOutput(this, 'UserPoolId', { value: users.userPoolId })
@@ -348,7 +320,6 @@ export class TraceStack extends Stack {
     if (memory) new CfnOutput(this, 'MemoryId', { value: memory.memoryId, description: 'TRACE_MEMORY_ID: the agents\' AgentCore Memory' })
     if (gpu) {
       new CfnOutput(this, 'GpuJobQueue', { value: gpu.queue.jobQueueArn })
-      new CfnOutput(this, 'GpuJobDefinition', { value: gpu.jobDefinitionName })
       new CfnOutput(this, 'GpuImageUri', { value: gpu.imageUri })
     }
   }

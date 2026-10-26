@@ -16,11 +16,13 @@
  *   settings.set  write                 change (or unset) one setting: a commit on trace/settings-<slug>, pushed (the
  *                                       harness opens the PR); never the default branch
  *   task          write                 start a free-form task job (Claude, on a claude/ branch), requestedBy you;
- *                                       agent: worker (default) or render
+ *                                       agent: worker (default) or render. It runs on the project's own worker
+ *                                       runtime (src/api/workers.ts), never in this process: the API runs no model
  *   memory.list   read                  the agents' long-term memory of the project (facts, preferences, session
  *                                       summaries), newest first; agent narrows it to one agent
  *   memory.recall read                  the records most relevant to a query, the same scope
- *   job           read on its project   a job's state and log
+ *   job           read on its project   a job's state and log (the project is named by the job id, and checked
+ *                                       before the worker is asked)
  *   users.list    admin                 every person: email, status, class, assigned projects
  *   users.invite  admin                 create the person in Cognito (email, class) → sub
  *   users.class   admin                 change a person's class (their Cognito group: exactly one of the three)
@@ -68,6 +70,8 @@ export class ActionError extends Error {
 export const NO_ACCESS = 'no access'
 
 export interface JobsApi {
+  /** The project a job id belongs to (read from the id itself), or null for an id that is not one of ours. */
+  repositoryOf(jobId: string): string | null
   startJob(payload: { kind: 'task'; repository: string; request: string; requestedBy: string; agent?: (typeof TASK_AGENTS)[number] }): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined }>
   jobStatus(jobId?: string): Promise<readonly JobView[]>
 }
@@ -306,13 +310,14 @@ export const ACTIONS = {
     return { repo: a.repo, enabled: true, records: records.map((r) => recordView(r, a.repo)) }
   }),
 
-  job: def('job', z.object({ id: z.string().min(1).max(64) }), async (a, ctx) => {
-    const j = (await (await ctx.deps.jobs()).jobStatus(a.id))[0]
-    if (!j) throw new AccessDenied(NO_ACCESS)
-    if (!isAdmin(ctx.principal)) {
-      if (!j.repository) throw new AccessDenied(NO_ACCESS)
-      await require_(ctx.principal, j.repository, 'read')
-    }
+  job: def('job', z.object({ id: z.string().min(1).max(200) }), async (a, ctx) => {
+    const jobs = await ctx.deps.jobs()
+    // the access check comes first: the project is read from the id, and only then is its worker asked
+    const repo = jobs.repositoryOf(a.id)
+    if (!repo) throw new AccessDenied(NO_ACCESS)
+    if (!isAdmin(ctx.principal)) await require_(ctx.principal, repo, 'read')
+    const j = (await jobs.jobStatus(a.id))[0]
+    if (!j || (j.repository !== undefined && j.repository.toLowerCase() !== repo.toLowerCase())) throw new AccessDenied(NO_ACCESS)
     return j
   }),
 

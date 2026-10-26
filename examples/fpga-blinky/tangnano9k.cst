@@ -1,0 +1,7 @@
+// Tang Nano 9K (GW1NR-LV9QN88PC6/I5): 27 MHz oscillator, button S1, LEDs 0 and 1. The clock target is given to
+// fpga.pnr as clocks={"clk": 27} (a CST holds no timing).
+IO_LOC "clk" 52;
+IO_PORT "clk" PULL_MODE=UP;
+IO_LOC "rst_n" 4;
+IO_LOC "led_r" 10;
+IO_LOC "led_g" 11;

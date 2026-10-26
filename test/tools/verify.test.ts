@@ -4,7 +4,7 @@
  * whole loop: requirements → plan → run → coverage → report.
  */
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,7 +13,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { merge } from '../../src/core/dbmerge.js'
 import { VerifyDb } from '../../src/tools/verify/db.js'
 import { classify, extractCandidates, limitsOf, tableRow } from '../../src/tools/verify/extract.js'
-import { coverLines, sq } from '../../src/tools/verify/job.js'
+import { coverLines, sq, stage } from '../../src/tools/verify/job.js'
+import { backendFor } from '../../src/gpu/jobs.js'
 import { generatedSby, rewriteSbyFiles, sbyFiles } from '../../src/tools/verify/formal.js'
 import { mergeCoverage, parseCocotbResults, parseCoverageDat, parseSby, parseSmtbmc, summarizeCoverage, verilatorMessages } from '../../src/tools/verify/parse.js'
 import { runIds } from '../../src/tools/verify/run.js'
@@ -182,6 +183,35 @@ describe('parsers', () => {
     expect(sbyFiles(text)).toEqual([{ dest: 'a.v', src: '../rtl/a.v' }, { dest: 'props.sv', src: '../formal/p.sv' }])
     expect(rewriteSbyFiles(text, [{ dest: 'a.v', name: 'a.v' }, { dest: 'props.sv', name: 'p.sv' }])).toBe('[options]\nmode bmc\n\n[files]\na.v\nprops.sv p.sv')
     expect(generatedSby({ files: ['a.v'], top: 'a', mode: 'cover', depth: 9, solver: 'z3' })).toContain('[engines]\nsmtbmc z3\n')
+  })
+
+  it('keeps CPU jobs local unless TRACE_GPU_REMOTE=always, and stages inputs by unique file name', () => {
+    const saved = { q: process.env.TRACE_GPU_QUEUE, m: process.env.TRACE_GPU_REMOTE }
+    try {
+      process.env.TRACE_GPU_QUEUE = 'trace-gpu'
+      delete process.env.TRACE_GPU_REMOTE
+      expect(backendFor({ gpu: false })).toBe('local')
+      process.env.TRACE_GPU_REMOTE = 'always'
+      expect(backendFor({ gpu: false })).toBe('batch')
+      process.env.TRACE_GPU_REMOTE = 'never'
+      expect(backendFor({ gpu: false })).toBe('local')
+    } finally {
+      if (saved.q === undefined) delete process.env.TRACE_GPU_QUEUE
+      else process.env.TRACE_GPU_QUEUE = saved.q
+      if (saved.m === undefined) delete process.env.TRACE_GPU_REMOTE
+      else process.env.TRACE_GPU_REMOTE = saved.m
+    }
+    const d = mkdtempSync(join(tmpdir(), 'stage-'))
+    try {
+      mkdirSync(join(d, 'a'))
+      mkdirSync(join(d, 'b'))
+      writeFileSync(join(d, 'a', 'x.v'), '')
+      writeFileSync(join(d, 'b', 'x.v'), '')
+      expect(stage([join(d, 'a', 'x.v'), join(d, 'a', 'x.v')]).names).toEqual(['x.v'])
+      expect(() => stage([join(d, 'a', 'x.v'), join(d, 'b', 'x.v')])).toThrow(/both called x.v/)
+    } finally {
+      rmSync(d, { recursive: true, force: true })
+    }
   })
 
   it('finds TRACE_COVER lines, run ids, and quotes for sh', () => {

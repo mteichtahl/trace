@@ -30,12 +30,13 @@ export interface PdfText {
 /** The text of every page (index 0 is page 1). */
 export async function pdfText(data: Uint8Array): Promise<PdfText> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
-  const doc = await pdfjs.getDocument({
+  const task = pdfjs.getDocument({
     data: new Uint8Array(data), // pdfjs takes ownership of the buffer it is given
     standardFontDataUrl: fontDir(),
     useSystemFonts: false,
     verbosity: 0,
-  }).promise
+  })
+  const doc = await task.promise
   try {
     const pages: string[] = []
     for (let i = 1; i <= doc.numPages; i++) {
@@ -46,7 +47,7 @@ export async function pdfText(data: Uint8Array): Promise<PdfText> {
     }
     return { pages }
   } finally {
-    await doc.destroy()
+    await task.destroy() // pdfjs 6 destroys through the loading task (the document proxy no longer has destroy)
   }
 }
 

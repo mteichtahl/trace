@@ -1,7 +1,7 @@
 /**
  * The job runner: does one job (a work item, a free-form task, or a sweep) inside the AgentCore container.
  *
- * For an item: the GitHub token from Secrets Manager (TRACE_GITHUB_SECRET_ARN; never logged, never in argv or a URL —
+ * For an item: the project's GitHub token from Secrets Manager (TRACE_GITHUB_SECRET_ARN, its own secret; never logged, never in argv or a URL —
  * git gets it as an http.extraHeader through GIT_CONFIG_* environment variables scoped to each command); a shallow
  * clone of the default branch (the settings are read from it, never from a PR's tree), then the item's branch; the
  * git identity and the trace-db merge driver; then Claude (Agent SDK) with the harness's own prompt, the trace MCP
@@ -34,7 +34,7 @@ import { addSecret } from '../core/telemetry.js'
 import { claudeTelemetry } from './observe.js'
 import { type AgentMemory, type Actor, type JobMemory, NO_MEMORY, agentActor, memoryFromEnv, openJobMemory, personActor, sessionIdFor } from './memory.js'
 import { renderTaskPrompt, taskBranch, taskPrompt, workItemPrompt } from './prompt.js'
-import { BranchSchema, type JobPayload, type SweepJob, type TaskJob, type WorkItemJob } from './schemas.js'
+import { BranchSchema, type JobPayload, type SweepJob, type TaskJob, type WorkItemJob, checkProject } from './schemas.js'
 
 // ------------------------------------------------------------------ injected pieces
 
@@ -83,6 +83,9 @@ export interface RunnerDeps {
   now: () => number
   /** The agents' memory (TRACE_MEMORY_ID); absent or null: jobs run without memory. */
   memory?: AgentMemory | null
+  /** The one project this runtime serves (TRACE_PROJECT): jobs for any other are refused, and the memory actor is
+   * this project's whatever the payload says. */
+  project?: string | undefined
 }
 
 export const TOOLS = ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Task', 'TodoWrite', 'mcp__trace']
@@ -319,9 +322,11 @@ function prepared(p: WorkItemJob | TaskJob): Prepared {
 async function jobMemory(d: RunnerDeps, p: WorkItemJob | TaskJob, prep: Prepared, branch: string, log: (l: string) => void, redact: (s: string) => string): Promise<JobMemory> {
   if (!d.memory) return NO_MEMORY
   try {
-    const person: Actor | undefined = p.kind === 'task' ? personActor(p.repository, p.requestedBy) : undefined
+    // the runtime's own project (TRACE_PROJECT), never the payload's: its role may use no other actor anyway
+    const project = d.project || p.repository
+    const person: Actor | undefined = p.kind === 'task' ? personActor(project, p.requestedBy) : undefined
     return await openJobMemory(d.memory, {
-      actor: agentActor(p.repository, prep.agent), person, session: prep.session(branch), query: prep.query, request: prep.request,
+      actor: agentActor(project, prep.agent), person, session: prep.session(branch), query: prep.query, request: prep.request,
     }, { log, redact })
   } catch (e) {
     log(`memory: not used for this job: ${redact(errText(e)).slice(0, 300)}`)
@@ -414,7 +419,10 @@ export async function runSweep(d: RunnerDeps, p: SweepJob, ctx: JobContext): Pro
 }
 
 export function createRunner(d: RunnerDeps): JobRunner {
-  return (p: JobPayload, ctx: JobContext) => (p.kind === 'sweep' ? runSweep(d, p, ctx) : runItem(d, p, ctx))
+  return async (p: JobPayload, ctx: JobContext) => {
+    checkProject(p, d.project)
+    return p.kind === 'sweep' ? runSweep(d, p, ctx) : runItem(d, p, ctx)
+  }
 }
 
 // ------------------------------------------------------------------ the real dependencies
@@ -471,5 +479,6 @@ export function realRunner(env: Record<string, string | undefined> = process.env
     env,
     now: Date.now,
     memory: memoryFromEnv(env),
+    project: env.TRACE_PROJECT || undefined,
   })
 }

@@ -155,6 +155,40 @@ unrouted count and KiCad's DRC. The tool writes `<name>.routed.kicad_pcb` and ne
 `TRACE_JAVA`), `TRACE_KICAD_PYTHON` (a Python that can `import pcbnew`), and `TRACE_ORTHOROUTE` /
 `TRACE_ORTHOROUTE_PYTHON` (its source, and a Python with numpy, scipy, psutil and, for the GPU, cupy).
 
+## Verification and FPGA implementation
+
+The Verification agent keeps a project's requirements, test plan and evidence in the project database. The tables are
+`requirements`, `test_items`, `test_results`, `coverage_points` and `coverage_hits`, and `trace db merge` merges them
+like everything else. Requirements, tests and points keep the newer row; results and hits are unioned.
+
+| Tool | What it does |
+| --- | --- |
+| `verify.requirements` | Adds, lists and updates requirements: id, text, kind (functional, electrical, timing, emc), acceptance criterion, source and page. `extract` returns candidate requirements from a spec's text, or from a PDF or text file. It works by rules (requirement verbs, spec-table rows, numeric limits) and never writes; the agent confirms each one with `add`. |
+| `verify.plan` | Test items. Each is linked to requirements, has a method (sim, formal, spice, hil, inspection, drc), and runs as a tool call (its args are checked against the tool's schema) or as a command. Items can also carry measurement limits (`expect`). |
+| `verify.run` | Runs items through their tools or commands and records pass, fail, error or blocked, with the evidence run ids. Hardware tools are blocked unless hardware is allowed. Inspection items take a given verdict. |
+| `verify.coverage` | The requirement coverage matrix (verified, coverage_gap, failing, partial, untested, no_test, waived). It merges functional coverage from the evidence runs (cover property points, formal covers, `TRACE_COVER <name>` lines in any simulator's output) against coverage points, plus line, toggle and branch coverage from Verilator's coverage.dat. |
+| `verify.report` | The status as Markdown, kept as an artifact and optionally written to a file. |
+| `verify.verilator` | Lint, plus build and run of a C++ or HDL testbench, with line, toggle and user coverage. |
+| `verify.cocotb` | cocotb tests on Icarus or Verilator. Per-test verdicts come from results.xml. |
+| `verify.formal` | A `.sby` file through SymbiYosys, or files + top in bmc, prove or cover mode. Without sby it runs yosys and yosys-smtbmc directly (the steps of sby's smtbmc engine). Counterexample traces come back as VCD artifacts. |
+
+The Implementation agent's tools cover two areas:
+
+- **FPGA:** `fpga.synth` (yosys for ice40, ecp5, gowin and xilinx; cell counts by resource), `fpga.pnr` (nextpnr with
+  PCF, LPF or CST constraints, seed, placer, per-clock targets and floorplan regions), `fpga.timing` (Fmax against
+  target per clock, slack, closure status, and critical paths split into logic and routing), `fpga.closure` (a fixed
+  sweep of seeds, placers and options that keeps the best attempt) and `fpga.bitstream` (icepack, ecppack,
+  gowin_pack).
+- **PCB:** `pcb.placement_check` (courtyard overlaps, parts outside or near the edge, keep-outs, decoupling distance,
+  connectors off the edge), `pcb.length_match` (diff pair skew and length groups against given or `.kicad_dru`
+  tolerances) and `pcb.floorplan` (placement by sheet or block: boxes, density, overlaps, nets between blocks). The PCB
+  tools read the board file and only report; they never move anything.
+
+The programs run through `runJob` as CPU jobs: locally, or on the queue only with `TRACE_GPU_REMOTE=always`. A missing
+program is reported as such. `examples/fpga-blinky` (iCEBreaker, ULX3S and Tang Nano 9K constraints) is the fixture
+that goes from synth to bitstream. `examples/sensor-node/logic` has a cocotb test (`test_moving_average.py`) and
+formal properties (`moving_average_props.sv`, `moving_average.sby`) for its filter.
+
 ## Agent memory
 
 Each agent has short-term and long-term memory in one Amazon Bedrock AgentCore Memory per installation

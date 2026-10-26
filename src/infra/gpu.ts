@@ -8,12 +8,15 @@
  *   compute          an AWS Batch managed EC2 environment of GPU instances (g6/g5/g4dn .xlarge by default) on the
  *                    ECS Amazon Linux 2023 NVIDIA AMI, scaling from 0 vCPUs (no cost when idle) to maxVcpus;
  *                    on-demand, or Spot when asked
- *   queue, job       one job queue, and a job definition asking for 1 GPU, 4 vCPUs and 14 GiB, whose role may read and
- *                    write only the central bucket's jobs/ prefix
+ *   queue            one job queue on that compute environment, shared by every project
+ *   job definitions  one per project (addProjectJob, called by src/infra/project.ts), asking for 1 GPU, 4 vCPUs and
+ *                    14 GiB, each with its own job role that may read and write only that project's jobs/<slug>/
+ *                    prefix. SubmitJob cannot override a definition's job role, so a project's runtime, allowed to
+ *                    submit only with its own definition, can never run a job as another project
  *   image            ECR repository <prefix>-gpu, built from this repository by CodeBuild through the same
  *                    custom-resource provider as the agent image, tagged with the source hash
  */
-import { CustomResource, Duration, RemovalPolicy, Size, Stack } from 'aws-cdk-lib'
+import { CustomResource, Duration, RemovalPolicy, Size, Stack, Tags } from 'aws-cdk-lib'
 import * as batch from 'aws-cdk-lib/aws-batch'
 import * as codebuild from 'aws-cdk-lib/aws-codebuild'
 import * as ec2 from 'aws-cdk-lib/aws-ec2'
@@ -25,15 +28,17 @@ import type * as s3 from 'aws-cdk-lib/aws-s3'
 import type { Asset } from 'aws-cdk-lib/aws-s3-assets'
 import type { Provider } from 'aws-cdk-lib/custom-resources'
 import { Construct } from 'constructs'
+import { gpuJobDefinitionName, PROJECT_TAG, projectHash, projectJobsPrefix, projectSlug } from '../core/project.js'
+import { grantPrefixes } from './project.js'
 
-export const JOBS_PREFIX = 'jobs'
+export { JOBS_PREFIX } from '../core/project.js'
 
 export interface GpuComputeProps {
   prefix: string
   instanceTypes: readonly string[]
   maxVcpus: number
   spot: boolean
-  /** the central bucket: jobs are staged under jobs/ */
+  /** the central bucket: each project's jobs are staged under jobs/<slug>/ */
   bucket: s3.IBucket
   /** the repository source the agent image is also built from */
   source: Asset
@@ -52,15 +57,15 @@ export class GpuCompute extends Construct {
   readonly imageUri: string
   readonly computeEnvironment: batch.ManagedEc2EcsComputeEnvironment
   readonly queue: batch.JobQueue
-  readonly jobDefinition: batch.EcsJobDefinition
-  /** the job definition's name: SubmitJob with it uses the latest active revision */
-  readonly jobDefinitionName: string
-  readonly jobRole: iam.Role
   readonly logGroup: logs.LogGroup
+  /** every project's job role (observability lets them write spans) */
+  readonly jobRoles: iam.Role[] = []
+  private readonly image: CustomResource
+  private readonly executionRole: iam.Role
 
-  constructor(scope: Construct, id: string, p: GpuComputeProps) {
+  constructor(scope: Construct, id: string, private readonly p: GpuComputeProps) {
     super(scope, id)
-    const { region, account } = Stack.of(this)
+    const { account } = Stack.of(this)
     const keep = p.retainData ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY
 
     this.vpc = new ec2.Vpc(this, 'Vpc', {
@@ -97,7 +102,7 @@ export class GpuCompute extends Construct {
     p.source.grantRead(build)
     p.allowBuild(build.projectArn)
     this.imageUri = `${this.repository.repositoryUri}:${p.source.assetHash}`
-    const image = new CustomResource(this, 'Image', {
+    this.image = new CustomResource(this, 'Image', {
       serviceToken: p.buildProvider.serviceToken,
       properties: { ProjectName: build.projectName, ImageUri: this.imageUri, SourceHash: p.source.assetHash },
     })
@@ -124,44 +129,50 @@ export class GpuCompute extends Construct {
       priority: 1,
     })
 
-    this.jobRole = new iam.Role(this, 'JobRole', {
-      roleName: `${p.prefix}-gpu-job-${region}`,
-      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com', { conditions: { StringEquals: { 'aws:SourceAccount': account } } }),
-      description: 'Run by trace GPU jobs on AWS Batch: reads inputs from and writes results to the central bucket\'s jobs/ prefix only',
-    })
-    p.bucket.grantReadWrite(this.jobRole, `${JOBS_PREFIX}/*`)
     this.logGroup = new logs.LogGroup(this, 'JobLogs', { logGroupName: `/trace/${p.prefix}/gpu-jobs`, retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY })
+    // pulls the image and writes the job's logs, for every project's jobs; the job's own AWS access is its job role's
+    this.executionRole = new iam.Role(this, 'ExecutionRole', {
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com', { conditions: { StringEquals: { 'aws:SourceAccount': account } } }),
+      description: 'Starts trace GPU job containers on AWS Batch: pulls the GPU image, writes the job logs',
+    })
+  }
 
-    this.jobDefinitionName = `${p.prefix}-gpu`
-    this.jobDefinition = new batch.EcsJobDefinition(this, 'Job', {
-      jobDefinitionName: this.jobDefinitionName,
+  /**
+   * One project's job definition and job role, in `scope` (the project's construct): the role may read and write
+   * only jobs/<slug>/ of the central bucket. Returns the definition's name (SubmitJob with it uses the latest
+   * active revision).
+   */
+  addProjectJob(scope: Construct, repository: string): { jobDefinitionName: string; jobDefinition: batch.EcsJobDefinition; jobRole: iam.Role } {
+    const { region, account } = Stack.of(this)
+    const p = this.p
+    const hash = projectHash(repository)
+    const slug = projectSlug(repository)
+    const jobRole = new iam.Role(scope, 'GpuJobRole', {
+      roleName: `${p.prefix}-gpu-${hash}-${region}`,
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com', { conditions: { StringEquals: { 'aws:SourceAccount': account } } }),
+      description: `Run by ${slug}'s GPU jobs on AWS Batch: reads inputs from and writes results to ${projectJobsPrefix(repository)}/ only`,
+    })
+    grantPrefixes(jobRole, p.bucket, { readWrite: [projectJobsPrefix(repository)] })
+    this.jobRoles.push(jobRole)
+    const jobDefinitionName = gpuJobDefinitionName(p.prefix, repository)
+    const jobDefinition = new batch.EcsJobDefinition(scope, 'GpuJob', {
+      jobDefinitionName,
       timeout: Duration.hours(8),
       retryAttempts: 1,
-      container: new batch.EcsEc2ContainerDefinition(this, 'Container', {
+      container: new batch.EcsEc2ContainerDefinition(scope, 'GpuContainer', {
         image: ecs.ContainerImage.fromEcrRepository(this.repository, p.source.assetHash),
         cpu: 4,
         memory: Size.gibibytes(14),
         gpu: 1,
-        jobRole: this.jobRole,
+        jobRole,
+        executionRole: this.executionRole,
         command: ['node', '/app/dist/gpu/runner.js'],
-        environment: { AWS_REGION: region, TRACE_GPU: '1', NVIDIA_DRIVER_CAPABILITIES: 'all', ...p.environment },
-        logging: ecs.LogDriver.awsLogs({ logGroup: this.logGroup, streamPrefix: 'job' }),
+        environment: { AWS_REGION: region, TRACE_GPU: '1', TRACE_PROJECT: slug, NVIDIA_DRIVER_CAPABILITIES: 'all', ...p.environment },
+        logging: ecs.LogDriver.awsLogs({ logGroup: this.logGroup, streamPrefix: `job-${hash}` }),
       }),
     })
-    this.jobDefinition.node.addDependency(image)
-  }
-
-  /** Let a role submit, watch and stop this queue's jobs, and stage their files under jobs/. */
-  grantSubmit(role: iam.IRole, bucket: s3.IBucket): void {
-    const { region, account } = Stack.of(this)
-    role.addToPrincipalPolicy(new iam.PolicyStatement({
-      actions: ['batch:SubmitJob'],
-      resources: [this.queue.jobQueueArn, `arn:aws:batch:${region}:${account}:job-definition/${this.jobDefinitionName}`,
-        `arn:aws:batch:${region}:${account}:job-definition/${this.jobDefinitionName}:*`],
-    }))
-    role.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['batch:TerminateJob', 'batch:TagResource'], resources: [`arn:aws:batch:${region}:${account}:job/*`] }))
-    // DescribeJobs has no resource-level permissions
-    role.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['batch:DescribeJobs'], resources: ['*'] }))
-    bucket.grantReadWrite(role, `${JOBS_PREFIX}/*`)
+    Tags.of(jobDefinition).add(PROJECT_TAG, slug)
+    jobDefinition.node.addDependency(this.image)
+    return { jobDefinitionName, jobDefinition, jobRole }
   }
 }

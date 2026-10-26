@@ -12,11 +12,14 @@ import { tools as render } from './render/tools.js'
 import { tools as runs } from './runs/tools.js'
 import { tools as sim } from './sim/tools.js'
 import { tools as ams } from './tools/ams/tools.js'
+import { tools as emc } from './tools/emc/tools.js'
 import { tools as verify } from './tools/verify/tools.js'
+import { tools as fpga } from './tools/fpga/tools.js'
+import { tools as layout } from './tools/layout/tools.js'
 
 let registry: Registry | null = null
 
 export function allTools(): Registry {
-  registry ??= new Registry([...calc, ...kicad, ...sim, ...datasheets, ...parts, ...hil, ...firmware, ...runs, ...render, ...pcb, ...memory, ...ams, ...verify])
+  registry ??= new Registry([...calc, ...kicad, ...sim, ...datasheets, ...parts, ...hil, ...firmware, ...runs, ...render, ...pcb, ...memory, ...ams, ...emc, ...verify, ...fpga, ...layout])
   return registry
 }

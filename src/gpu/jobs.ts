@@ -21,7 +21,9 @@ import { scratchDir } from '../core/store.js'
 
 export const JobKind = z.enum(['blender', 'freerouting', 'orthoroute',
   // CPU jobs (gpu: false, so local unless TRACE_GPU_REMOTE=always): verification and FPGA implementation
-  'verilator', 'cocotb', 'formal', 'yosys', 'nextpnr', 'fpga-pack'])
+  'verilator', 'cocotb', 'formal', 'yosys', 'nextpnr', 'fpga-pack',
+  // the openEMS FDTD field solver (CPU, multithreaded): local, or the queue's many-core hosts when the caller asks (remote)
+  'openems'])
 export type JobKind = z.output<typeof JobKind>
 
 export const GpuJobSchema = z.object({
@@ -33,6 +35,8 @@ export const GpuJobSchema = z.object({
   outputs: z.array(z.string().regex(/^[\w.-]+$/)).default([]),
   /** wants a GPU: picks the GPU queue; locally only a hint for the program */
   gpu: z.boolean().default(false),
+  /** prefer the queue (when TRACE_GPU_QUEUE is set) even without needing a GPU: a CPU job too big for this machine */
+  remote: z.boolean().default(false),
   timeoutSeconds: z.number().int().min(10).max(8 * 3600).default(3600),
   env: z.record(z.string(), z.string()).default({}),
 }).strict()
@@ -50,13 +54,14 @@ export interface JobResult {
   seconds: number
 }
 
-/** Where a job would run now. TRACE_GPU_REMOTE=always|never overrides the default (remote only without a local GPU). */
-export function backendFor(job: { gpu?: boolean | undefined }): 'local' | 'batch' {
+/** Where a job would run now. TRACE_GPU_REMOTE=always|never overrides the default (remote only without a local GPU,
+ * or when the job asks for the queue with `remote`). */
+export function backendFor(job: { gpu?: boolean | undefined; remote?: boolean | undefined }): 'local' | 'batch' {
   const queue = process.env.TRACE_GPU_QUEUE
   const mode = process.env.TRACE_GPU_REMOTE ?? 'auto'
   if (!queue || mode === 'never') return 'local'
   if (mode === 'always') return 'batch'
-  return job.gpu && !localGpu() ? 'batch' : 'local'
+  return (job.gpu && !localGpu()) || job.remote ? 'batch' : 'local'
 }
 
 /** A GPU this process can use: an NVIDIA device node, or TRACE_GPU=1 set by the GPU image. */

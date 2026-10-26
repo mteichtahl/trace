@@ -82,8 +82,14 @@ export type Answers = z.output<typeof AnswersSchema>
 export type AnswersInput = z.input<typeof AnswersSchema>
 
 export const SecretsSchema = z.object({
-  /** The token the agents and workflows use (stored in Secrets Manager and as each repository's TRACE_TOKEN). */
+  /** The shared token: the API's (it reads and writes every project's settings), and every project's agent token
+   * unless that project has its own below. Stored in Secrets Manager (and as each such repository's TRACE_TOKEN). */
   githubToken: z.string().min(20, 'a GitHub token'),
+  /** A project's own agent token (OWNER/REPO → token), optional: a fine-grained token limited to that repository is
+   * what keeps one project's agent out of the others' repositories. Stored in that project's secret and as its
+   * TRACE_TOKEN; never in the answers. */
+  projectTokens: z.record(Repo, z.string().trim().refine((v) => v === '' || v.length >= 20, 'a GitHub token')).default({}).transform((r) =>
+    Object.fromEntries(Object.entries(r).filter(([, v]) => v !== '').map(([k, v]) => [k.toLowerCase(), v]))),
   /** Used only during installation to change repository settings, if the agents' token can't (optional). */
   githubAdminToken: z.string().default(''),
   /** Only when aws.mode = keys. */

@@ -10,7 +10,7 @@
 import { randomBytes } from 'node:crypto'
 import { ITEM_AGENT, realRunner } from './job.js'
 import { observeJob } from './observe.js'
-import type { Accepted, JobInfo, JobPayload } from './schemas.js'
+import { type Accepted, type JobInfo, type JobPayload, checkProject } from './schemas.js'
 
 export { AcceptedSchema, InvocationSchema, SweepPayload, StatusPayload, TaskPayload, WorkItemPayload } from './schemas.js'
 export type { Accepted, Invocation, JobInfo, JobPayload, JobState, SweepJob, TaskJob, WorkItemJob } from './schemas.js'
@@ -47,7 +47,8 @@ export function jobKey(p: JobPayload): string {
   }
 }
 
-export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => void; now?: () => number } = {}): Jobs {
+/** `project`: the one project jobs may be for (TRACE_PROJECT); startJob throws WrongProject for any other. */
+export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => void; now?: () => number; project?: string | undefined } = {}): Jobs {
   const echo = opts.echo ?? ((l: string) => { process.stdout.write(`${l}\n`) })
   const now = opts.now ?? Date.now
   const jobs = new Map<string, JobInfo>()
@@ -60,6 +61,7 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
 
   const self: Jobs = {
     startJob(payload) {
+      checkProject(payload, opts.project)
       const key = jobKey(payload)
       const live = running.get(key)
       if (live) return { accepted: false, jobId: live.id, reason: `already running (${key})` }
@@ -115,7 +117,7 @@ let current: Jobs | null = null
 
 /** The jobs of this process, with the real runner (git, GitHub, Claude). Created on first use. */
 export function defaultJobs(): Jobs {
-  current ??= createJobs(realRunner())
+  current ??= createJobs(realRunner(), { project: process.env.TRACE_PROJECT || undefined })
   return current
 }
 

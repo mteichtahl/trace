@@ -2,8 +2,9 @@
  * The AWS Batch backend of runJob (./jobs.ts): a job that wants a GPU, asked for where there is none (an AgentCore
  * runtime, a laptop), runs on the stack's GPU job queue instead.
  *
- *   1. its inputs go to s3://<bucket>/jobs/<id>/in/ (./protocol.ts has the layout)
- *   2. SubmitJob to TRACE_GPU_QUEUE with TRACE_GPU_JOB_DEFINITION; the spec travels in the container's environment
+ *   1. its inputs go to s3://<bucket>/jobs/<slug>/<id>/in/ (./protocol.ts has the layout; slug: TRACE_PROJECT)
+ *   2. SubmitJob to TRACE_GPU_QUEUE with TRACE_GPU_JOB_DEFINITION (the project's own: its job role reaches only
+ *      jobs/<slug>/), tagged trace:project=<slug>; the spec travels in the container's environment
  *   3. DescribeJobs, backing off from 5 s to 30 s, until SUCCEEDED or FAILED — or the deadline (the job's own time
  *      limit plus TRACE_GPU_QUEUE_WAIT_S, default 1800 s, for the queue to scale a GPU instance up from zero and pull
  *      the image), when the job is terminated
@@ -15,6 +16,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { S3Backend, type S3Api } from '../core/central.js'
+import { PROJECT_TAG } from '../core/project.js'
 import { ToolError } from '../core/registry.js'
 import { ATTR, annotate, traceEnv } from '../core/telemetry.js'
 import { scratchDir } from '../core/store.js'
@@ -80,7 +82,7 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
   const queue = env.TRACE_GPU_QUEUE
   const definition = env.TRACE_GPU_JOB_DEFINITION
   if (!queue || !definition) throw new ToolError('the GPU queue needs TRACE_GPU_QUEUE and TRACE_GPU_JOB_DEFINITION (set by the stack on the runtimes)')
-  const { bucket, prefix } = jobsLocation(env)
+  const { bucket, prefix, project } = jobsLocation(env)
   const store = new S3Backend(bucket, prefix, deps.s3)
   const batch = deps.batch ?? (await awsBatch())
   const sleep = deps.sleep ?? sleepMs
@@ -117,7 +119,8 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
     containerOverrides: { environment: [...environment, ...Object.entries(traceEnv()).map(([name, value]) => ({ name, value }))] },
     // the runner enforces the job's own limit; Batch's is a backstop for a runner that hangs
     timeout: { attemptDurationSeconds: Math.max(60, job.timeoutSeconds + 600) },
-    tags: { 'trace:job': id, 'trace:kind': job.kind },
+    // the project's role may submit, tag and stop only jobs carrying its own trace:project tag
+    tags: { [PROJECT_TAG]: project, 'trace:job': id, 'trace:kind': job.kind },
   })
   const jobId = submitted.jobId
   if (!jobId) throw new ToolError('AWS Batch accepted the job but returned no job id')
