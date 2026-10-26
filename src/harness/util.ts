@@ -23,7 +23,14 @@ export async function ensureLabel(github: GitHub, owner: string, repo: string, c
   return name
 }
 
-export interface CommentLike { body?: string | null | undefined }
+export interface CommentLike { body?: string | null | undefined; user?: { login?: string | null | undefined } | null | undefined }
+
+/** The accounts whose hidden markers the harness trusts: the workflows' own (github-actions) and the agents'. Anyone
+ * else who can comment could otherwise post a claim marker and stall the worker. */
+export function trustedAuthor(c: CommentLike, agentLogin: string | undefined): boolean {
+  const login = (c.user?.login ?? '').toLowerCase()
+  return login === 'github-actions[bot]' || (Boolean(agentLogin) && login === agentLogin!.toLowerCase())
+}
 
 export async function comments(github: GitHub, owner: string, repo: string, issue_number: number): Promise<CommentLike[]> {
   return github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 })

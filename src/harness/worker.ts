@@ -10,7 +10,7 @@
  */
 import { z } from 'zod'
 import type { TraceConfig } from '../core/config.js'
-import { type CommentLike, comments } from './util.js'
+import { type CommentLike, comments, trustedAuthor } from './util.js'
 import { type Deps, labelNames, short } from './types.js'
 
 export const WorkItemSchema = z.object({
@@ -28,7 +28,7 @@ const claimedAt = (cs: CommentLike[]): number[] =>
   cs.map((c) => CLAIM.exec(c.body ?? '')?.[1]).filter((t): t is string => Boolean(t)).map(Date.parse).filter(Number.isFinite)
 const attempts = (cs: CommentLike[], sha: string): number => cs.filter((c) => (c.body ?? '').includes(`<!-- trace-attempt: ${sha} -->`)).length
 
-export async function pick({ github, context, core, cfg }: Deps, now: number = Date.now(), via?: string): Promise<void> {
+export async function pick({ github, context, core, cfg, env }: Deps, now: number = Date.now(), via?: string): Promise<void> {
   const { owner, repo } = context.repo
   core.setOutput('items', '[]')
   core.setOutput('runner', cfg.worker.runner)
@@ -37,7 +37,8 @@ export async function pick({ github, context, core, cfg }: Deps, now: number = D
   const blocked: { n: number; kind: WorkItem['kind']; sha: string; marker: string }[] = []
 
   const consider = async (item: WorkItem): Promise<void> => {
-    const cs = await comments(github, owner, repo, item.number)
+    // Only markers left by the workflows or the agents count: anyone who can comment could otherwise stall an item.
+    const cs = (await comments(github, owner, repo, item.number)).filter((c) => trustedAuthor(c, env.AGENT_LOGIN))
     if (claimedAt(cs).some((t) => now - t < cfg.worker.claim_hours * 3600e3)) return core.info(`#${item.number} (${item.kind}) is claimed: skipped`)
     if (attempts(cs, item.sha) >= cfg.worker.max_attempts) {
       const marker = `<!-- trace-escalated: ${item.sha} -->`

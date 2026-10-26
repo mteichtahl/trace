@@ -39,7 +39,12 @@ import { type InfraProps, runtimeName } from './props.js'
 export const REPO_ROOT = join(import.meta.dirname, '..', '..')
 
 /** What the image build doesn't need (keeps the source asset small and its hash stable). */
+/** The central database's prefix in the bucket, and the access store's beside it (src/core/access.ts accessHome). */
+export const CENTRAL_PREFIX = 'central'
+export const ACCESS_PREFIX = 'access'
+
 export const SOURCE_EXCLUDE = [
+  '.env', '.env.*', '**/.env', '**/.env.*', '*.pem', '**/*.pem', '*.key', '**/*.key', '.aws', '**/.aws', '.npmrc.local', '**/id_rsa*',
   '.git', 'node_modules', '**/node_modules', 'dist', 'cdk.out', '.venv', '**/__pycache__', '**/*.pyc', 'test', 'python/tests',
   '.trace', '*.db', '*.db-*', 'coverage',
 ]
@@ -60,7 +65,7 @@ export class TraceStack extends Stack {
       autoDeleteObjects: !cfg.retainData,
       lifecycleRules: [{ noncurrentVersionExpiration: Duration.days(90) }],
     })
-    const traceHome = `s3://${central.bucketName}/central`
+    const traceHome = `s3://${central.bucketName}/${CENTRAL_PREFIX}`
 
     const githubToken = new secrets.Secret(this, 'GithubToken', {
       secretName: `${cfg.prefix}/github-token`,
@@ -120,44 +125,51 @@ export class TraceStack extends Stack {
       properties: { ProjectName: build.projectName, ImageUri: imageUri, SourceHash: source.assetHash },
     })
 
-    // ------------------------------------------------------------------ the agent runtime
-    const runtimeRole = new iam.Role(this, 'AgentRuntimeRole', {
-      roleName: `${cfg.prefix}-agent-runtime-${cfg.region}`,
-      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', {
-        conditions: {
-          StringEquals: { 'aws:SourceAccount': cfg.account },
-          ArnLike: { 'aws:SourceArn': `arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:*` },
-        },
-      }),
-      description: 'Run by the trace agent on Bedrock AgentCore',
-    })
-    repo.grantPull(runtimeRole)
-    runtimeRole.addToPolicy(new iam.PolicyStatement({ actions: ['ecr:GetAuthorizationToken'], resources: ['*'] }))
-    runtimeRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams', 'logs:DescribeLogGroups'],
-      resources: [`arn:aws:logs:${cfg.region}:${cfg.account}:log-group:/aws/bedrock-agentcore/runtimes/*`, `arn:aws:logs:${cfg.region}:${cfg.account}:log-group:*`],
-    }))
-    runtimeRole.addToPolicy(new iam.PolicyStatement({ actions: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets'], resources: ['*'] }))
-    runtimeRole.addToPolicy(new iam.PolicyStatement({ actions: ['cloudwatch:PutMetricData'], resources: ['*'], conditions: { StringEquals: { 'cloudwatch:namespace': 'bedrock-agentcore' } } }))
-    runtimeRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['bedrock-agentcore:GetWorkloadAccessToken', 'bedrock-agentcore:GetWorkloadAccessTokenForJWT', 'bedrock-agentcore:GetWorkloadAccessTokenForUserId'],
-      resources: [`arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:workload-identity-directory/default`, `arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:workload-identity-directory/default/workload-identity/*`],
-    }))
+    // ------------------------------------------------------------------ the runtimes' roles (one each)
+    // The worker handles untrusted text (issues, logs, code) from the repositories: it gets the central database and
+    // the model, nothing about people. The API serves signed-in people: it also gets the access store and Cognito.
     const modelAccess = new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:GetInferenceProfile'],
       resources: ['arn:aws:bedrock:*::foundation-model/anthropic.*', `arn:aws:bedrock:*:${cfg.account}:inference-profile/*`],
     })
-    runtimeRole.addToPolicy(modelAccess)
-    githubToken.grantRead(runtimeRole)
-    central.grantReadWrite(runtimeRole)
-
-    runtimeRole.addToPolicy(new iam.PolicyStatement({ actions: ['cognito-idp:ListUsers', 'cognito-idp:AdminGetUser', 'cognito-idp:AdminListGroupsForUser'], resources: ['*'] }))
+    const runtimeRole = (id: string, name: string, description: string): iam.Role => {
+      const role = new iam.Role(this, id, {
+        roleName: `${cfg.prefix}-${name}-${cfg.region}`,
+        assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', {
+          conditions: {
+            StringEquals: { 'aws:SourceAccount': cfg.account },
+            ArnLike: { 'aws:SourceArn': `arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:*` },
+          },
+        }),
+        description,
+      })
+      repo.grantPull(role)
+      role.addToPolicy(new iam.PolicyStatement({ actions: ['ecr:GetAuthorizationToken'], resources: ['*'] }))
+      role.addToPolicy(new iam.PolicyStatement({
+        actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams'],
+        resources: [`arn:aws:logs:${cfg.region}:${cfg.account}:log-group:/aws/bedrock-agentcore/runtimes/*`, `arn:aws:logs:${cfg.region}:${cfg.account}:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*`],
+      }))
+      role.addToPolicy(new iam.PolicyStatement({ actions: ['logs:DescribeLogGroups'], resources: [`arn:aws:logs:${cfg.region}:${cfg.account}:log-group:*`] }))
+      role.addToPolicy(new iam.PolicyStatement({ actions: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets'], resources: ['*'] }))
+      role.addToPolicy(new iam.PolicyStatement({ actions: ['cloudwatch:PutMetricData'], resources: ['*'], conditions: { StringEquals: { 'cloudwatch:namespace': 'bedrock-agentcore' } } }))
+      role.addToPolicy(new iam.PolicyStatement({
+        actions: ['bedrock-agentcore:GetWorkloadAccessToken', 'bedrock-agentcore:GetWorkloadAccessTokenForJWT', 'bedrock-agentcore:GetWorkloadAccessTokenForUserId'],
+        resources: [`arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:workload-identity-directory/default`, `arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:workload-identity-directory/default/workload-identity/*`],
+      }))
+      role.addToPolicy(modelAccess)
+      githubToken.grantRead(role)
+      central.grantReadWrite(role, `${CENTRAL_PREFIX}/*`)
+      return role
+    }
+    const workerRole = runtimeRole('WorkerRuntimeRole', 'agent-worker', 'Run by the trace worker on Bedrock AgentCore (repositories\' work)')
+    const apiRole = runtimeRole('ApiRuntimeRole', 'agent-api', 'Run by the trace API on Bedrock AgentCore (signed-in people)')
+    central.grantReadWrite(apiRole, `${ACCESS_PREFIX}/*`)
 
     const runtime = new CfnRuntime(this, 'AgentRuntime', {
       agentRuntimeName: runtimeName(cfg.prefix),
       description: 'trace: Claude working on the onboarded repositories',
       agentRuntimeArtifact: { containerConfiguration: { containerUri: image.getAttString('ImageUri') } },
-      roleArn: runtimeRole.roleArn,
+      roleArn: workerRole.roleArn,
       networkConfiguration: { networkMode: 'PUBLIC' },
       protocolConfiguration: 'HTTP',
       lifecycleConfiguration: { idleRuntimeSessionTimeout: cfg.idleTimeoutSeconds, maxLifetime: cfg.maxLifetimeSeconds },
@@ -172,7 +184,7 @@ export class TraceStack extends Stack {
         TRACE_AGENT_MODE: 'worker',
       },
     })
-    runtime.node.addDependency(runtimeRole)
+    runtime.node.addDependency(workerRole)
 
     // ------------------------------------------------------------------ people: Cognito and the API runtime
     const users = new cognito.UserPool(this, 'Users', {
@@ -227,7 +239,7 @@ export class TraceStack extends Stack {
       agentRuntimeName: `${runtimeName(cfg.prefix).replace(/_agent$/, '')}_api`.slice(0, 48),
       description: 'trace: what people do with their projects, behind Cognito and per-project grants',
       agentRuntimeArtifact: { containerConfiguration: { containerUri: image.getAttString('ImageUri') } },
-      roleArn: runtimeRole.roleArn,
+      roleArn: apiRole.roleArn,
       networkConfiguration: { networkMode: 'PUBLIC' },
       protocolConfiguration: 'HTTP',
       authorizerConfiguration: { customJwtAuthorizer: { discoveryUrl, allowedClients: [client.userPoolClientId] } },
@@ -247,7 +259,12 @@ export class TraceStack extends Stack {
         TRACE_COGNITO_ISSUER: `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}`,
       },
     })
-    api.node.addDependency(runtimeRole)
+    api.node.addDependency(apiRole)
+    apiRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['cognito-idp:ListUsers', 'cognito-idp:AdminGetUser', 'cognito-idp:AdminListGroupsForUser', 'cognito-idp:AdminCreateUser',
+        'cognito-idp:AdminAddUserToGroup', 'cognito-idp:AdminRemoveUserFromGroup'],
+      resources: [users.userPoolArn],
+    }))
 
     // ------------------------------------------------------------------ the onboarded repositories' role (GitHub OIDC)
     const issuer = 'token.actions.githubusercontent.com'
@@ -260,7 +277,9 @@ export class TraceStack extends Stack {
       description: 'Assumed by the onboarded repositories\' trace workflows (GitHub OIDC)',
       assumedBy: new iam.WebIdentityPrincipal(oidc.openIdConnectProviderArn, {
         StringEquals: { [`${issuer}:aud`]: 'sts.amazonaws.com' },
-        StringLike: { [`${issuer}:sub`]: cfg.repositories.map((r) => `repo:${r}:*`) },
+        // Only runs on each repository's default branch: workflow_run, issues, schedule and pushes to it. A branch or a
+        // pull request can't assume this role, so it can't reach the agents or the central store with its own code.
+        StringLike: { [`${issuer}:sub`]: cfg.repositories.map((r) => { const [slug, branch = 'main'] = r.split('@'); return `repo:${slug}:ref:refs/heads/${branch}` }) },
       }),
     })
     actionsRole.addToPolicy(new iam.PolicyStatement({
@@ -268,7 +287,7 @@ export class TraceStack extends Stack {
       resources: [runtime.attrAgentRuntimeArn, `${runtime.attrAgentRuntimeArn}/*`],
     }))
     actionsRole.addToPolicy(modelAccess) // the in-Actions fallback (worker.runner = actions)
-    central.grantReadWrite(actionsRole)
+    central.grantReadWrite(actionsRole, `${CENTRAL_PREFIX}/*`)
 
     // ------------------------------------------------------------------ outputs
     new CfnOutput(this, 'TraceHome', { value: traceHome, description: 'TRACE_HOME: the central database location' })

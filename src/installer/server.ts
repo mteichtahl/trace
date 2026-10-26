@@ -57,8 +57,11 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
   const ui = opts.uiScript ?? readFileSync(join(REPO_ROOT, 'dist', 'installer', 'ui.js'), 'utf8')
   let run: RunState | null = null
 
+  // The key travels in the query only where a browser can't set a header (opening the page, EventSource); the API
+  // takes it as a header, so it never sits in a URL the page fetches.
   const authorised = (req: IncomingMessage, url: URL): boolean => {
-    const given = String(req.headers['x-trace-key'] ?? url.searchParams.get('k') ?? '')
+    const queryOk = req.method === 'GET' && (url.pathname === '/' || url.pathname === '/api/events')
+    const given = String(req.headers['x-trace-key'] ?? (queryOk ? url.searchParams.get('k') : '') ?? '')
     const a = Buffer.from(given)
     const b = Buffer.from(key)
     return a.length === b.length && timingSafeEqual(a, b)
@@ -72,7 +75,7 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
       node: process.version,
     }),
     'POST /api/github/check': async (req) => {
-      const { token, repos } = z.object({ token: z.string().min(20), repos: z.array(z.string()).default([]) }).parse(await body(req))
+      const { token, repos } = z.object({ token: z.string().min(20), repos: z.array(z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')).max(200).default([]) }).parse(await body(req))
       const info = await checkToken(token)
       const access = await Promise.all(repos.map(async (r) => ({ repo: r, ...(await canConfigure(token, r)) })))
       return { ...info, access }
@@ -108,6 +111,11 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
       const url = new URL(req.url ?? '/', 'http://localhost')
       const host = (req.headers.host ?? '').replace(/:\d+$/, '')
       if (!['localhost', '127.0.0.1', '[::1]'].includes(host)) return send(res, 421, { error: 'wrong host' })
+      // A browser marks a request another site started: refuse it whatever it carries (no cross-site driving).
+      const site = String(req.headers['sec-fetch-site'] ?? '')
+      if (site && !['same-origin', 'none'].includes(site)) return send(res, 403, { error: 'cross-site request' })
+      const origin = req.headers.origin
+      if (origin && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin)) return send(res, 403, { error: 'cross-site request' })
       res.setHeader('x-content-type-options', 'nosniff')
       res.setHeader('referrer-policy', 'no-referrer')
       if (req.method === 'GET' && url.pathname === '/') {

@@ -45,6 +45,7 @@ jobs:
       - id: ask
         uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
         with:
+          agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
           task: deploy-request
 
   approve:
@@ -69,6 +70,7 @@ jobs:
       - id: check
         uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
         with:
+          agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
           task: deploy-approve
           triggering-actor: ${{ github.triggering_actor }}
 
@@ -102,11 +104,13 @@ jobs:
       - id: cmd
         uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
         with:
+          agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
           task: deploy-commands
       # The job may start long after the approval (a busy runner): check again, now, before touching anything.
       - id: guard
         uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
         with:
+          agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
           task: deploy-guard
           sha: ${{ env.SHA }}
           issue: ${{ env.ISSUE }}
@@ -150,6 +154,7 @@ jobs:
         if: steps.gate.outputs.hold == 'true'
         uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
         with:
+          agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
           task: deploy-hold
           sha: ${{ env.SHA }}
           issue: ${{ env.ISSUE }}
@@ -175,6 +180,7 @@ jobs:
         if: always()
         uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
         with:
+          agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
           task: deploy-report
           sha: ${{ env.SHA }}
           issue: ${{ env.ISSUE }}
@@ -208,6 +214,7 @@ jobs:
       - id: cmd
         uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
         with:
+          agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
           task: deploy-commands
       - name: Secrets as environment variables for the commands
         env:
@@ -247,6 +254,7 @@ jobs:
         if: always()
         uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
         with:
+          agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
           task: rollback-report
           sha: ${{ env.SHA }}
           issue: ${{ env.ISSUE }}

@@ -53,6 +53,10 @@ inputs:
     description: deploy-* only — the risk check's reasons.
     required: false
     default: ''
+  agent-login:
+    description: The GitHub login the trace agents act as (vars.TRACE_AGENT_LOGIN) — never allowed to approve a deploy; the only author (besides github-actions) whose claim markers count.
+    required: false
+    default: ''
   triggering-actor:
     description: deploy-* only — github.triggering_actor.
     required: false
@@ -95,6 +99,7 @@ runs:
         ROLLBACK: ${{ inputs.rollback-to }}
         REASONS: ${{ inputs.reasons }}
         TRIGGERING_ACTOR: ${{ inputs.triggering-actor }}
+        AGENT_LOGIN: ${{ inputs.agent-login }}
       with:
         github-token: ${{ inputs.token || inputs.job-token }}
         script: |

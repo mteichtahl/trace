@@ -59,8 +59,10 @@ export const NO_ACCESS = 'no access'
 
 export interface JobsApi {
   startJob(payload: { kind: 'task'; repository: string; request: string; requestedBy: string }): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined }>
-  jobStatus(jobId?: string): Promise<readonly { id: string; kind: string; repository?: string | undefined; [k: string]: unknown }[]>
+  jobStatus(jobId?: string): Promise<readonly JobView[]>
 }
+
+export interface JobView { id: string; kind: string; repository?: string | undefined; state: string; [k: string]: unknown }
 
 export interface Checkout { dir: string; cleanup(): void }
 
@@ -97,6 +99,9 @@ function tempDb(scratch: string, bytes: Uint8Array | null): { root: string; db: 
   mkdirSync(scratch, { recursive: true })
   const root = mkdtempSync(join(scratch, 'trace-api-'))
   mkdirSync(join(root, '.trace'))
+  // A .git marker makes this folder the project root for config.setValue/unset (store.findRoot), even when the
+  // repository has no database yet — never a database somewhere above it.
+  mkdirSync(join(root, '.git'))
   const db = join(root, PROJECT_DB_PATH)
   if (bytes) writeFileSync(db, bytes)
   return { root, db, cleanup: () => rmSync(root, { recursive: true, force: true }) }

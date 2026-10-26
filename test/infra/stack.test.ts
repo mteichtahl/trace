@@ -5,7 +5,7 @@ import { InfraPropsSchema, runtimeName, stackName } from '../../src/infra/props.
 import { TraceStack } from '../../src/infra/stack.js'
 
 const props = InfraPropsSchema.parse({
-  account: '123456789012', region: 'us-east-1', repositories: ['mteichtahl/trace', 'pokeys-toolkit/potroller'],
+  account: '123456789012', region: 'us-east-1', repositories: ['mteichtahl/trace', 'pokeys-toolkit/potroller@develop'],
   model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com',
 })
 
@@ -51,13 +51,13 @@ describe('the trace stack', () => {
     })
   })
 
-  it('lets only the listed repositories assume the actions role, and only to invoke the worker', () => {
+  it("lets only the listed repositories' default branches assume the actions role, and only to invoke the worker", () => {
     t.hasResourceProperties('AWS::IAM::Role', {
       AssumeRolePolicyDocument: { Statement: [Match.objectLike({
         Action: 'sts:AssumeRoleWithWebIdentity',
         Condition: {
           StringEquals: { 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com' },
-          StringLike: { 'token.actions.githubusercontent.com:sub': ['repo:mteichtahl/trace:*', 'repo:pokeys-toolkit/potroller:*'] },
+          StringLike: { 'token.actions.githubusercontent.com:sub': ['repo:mteichtahl/trace:ref:refs/heads/main', 'repo:pokeys-toolkit/potroller:ref:refs/heads/develop'] },
         },
       })] },
     })
@@ -66,6 +66,21 @@ describe('the trace stack', () => {
     expect(invoke).toHaveLength(1)
     expect(invoke[0]).toContain('AgentRuntime')
     expect(invoke[0]).not.toContain('ApiRuntime')
+  })
+
+  it('gives each runtime its own role: only the API reaches people (Cognito, the access store)', () => {
+    const policies = Object.entries(t.findResources('AWS::IAM::Policy')).map(([id, p]) => [id, JSON.stringify(p)] as const)
+    const worker = policies.filter(([id]) => id.startsWith('WorkerRuntimeRole')).map(([, p]) => p).join()
+    const api = policies.filter(([id]) => id.startsWith('ApiRuntimeRole')).map(([, p]) => p).join()
+    const actions = policies.filter(([id]) => id.startsWith('ActionsRole')).map(([, p]) => p).join()
+    expect(worker).not.toContain('cognito-idp')
+    expect(api).toContain('cognito-idp:AdminAddUserToGroup')
+    expect(api).toContain('/access/*')
+    for (const p of [worker, actions]) {
+      expect(p).toContain('/central/*')
+      expect(p).not.toContain('/access/*')
+    }
+    expect(api).not.toMatch(/"Resource":"\*","Action":"cognito/)
   })
 
   it('has a Cognito pool without self sign-up, the admin/user/guest groups, and the first admin', () => {

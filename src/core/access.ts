@@ -12,15 +12,20 @@
  *   write   also change settings, start work (a task, a fix), and use the tools that record runs
  *
  * A person in none of the groups can do nothing. A person who isn't assigned to a project cannot tell it exists.
- * Assignments live in the central database (tables `users`, `assignments`, `assignment_log`), keyed by the person's
- * Cognito `sub` (the identity that never changes), with their email kept for display.
+ * Assignments live in the ACCESS store (tables `users`, `assignments`, `assignment_log`), keyed by the person's
+ * Cognito `sub` (the identity that never changes), with their email kept for display. The access store is its own
+ * SQLite database beside the central one ($TRACE_ACCESS_HOME, default: TRACE_HOME's sibling `access`), because the
+ * repositories' workflows and the worker agent may write the central database (datasheets, parts) but must never be
+ * able to write who has access: in AWS only the API runtime's role and the installing admin can write it.
  *
  * This module only decides. The user-facing API (src/api) enforces it on every request, and changes the Cognito
  * group membership when an admin changes someone's class.
  */
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
-import { ensureSchema, read, update } from './central.js'
+import { join } from 'node:path'
+import { central, ensureSchema, read as readCentral } from './central.js'
+import { traceHome } from './store.js'
 
 export const CLASSES = ['admin', 'user', 'guest'] as const
 export type PersonClass = (typeof CLASSES)[number]
@@ -73,6 +78,23 @@ CREATE TABLE IF NOT EXISTS assignment_log (
 `
 ensureSchema(SCHEMA)
 
+/** Where the access store is: $TRACE_ACCESS_HOME, else beside TRACE_HOME (s3://b/central → s3://b/access). */
+export function accessHome(): string {
+  if (process.env.TRACE_ACCESS_HOME) return process.env.TRACE_ACCESS_HOME
+  const home = traceHome()
+  const s3 = /^s3:\/\/([^/]+)(\/.*)?$/.exec(home)
+  if (s3) {
+    const parts = (s3[2] ?? '').split('/').filter(Boolean)
+    parts.pop()
+    return `s3://${s3[1]}/${[...parts, 'access'].join('/')}`
+  }
+  return join(home.replace(/^file:\/\//, ''), 'access')
+}
+
+const store = () => central(accessHome())
+const read = (): Promise<DatabaseSync> => store().read()
+const update = <T>(fn: (db: DatabaseSync) => T): Promise<T> => store().update(fn)
+
 export class AccessDenied extends Error {
   override name = 'AccessDenied'
 }
@@ -123,8 +145,15 @@ export async function projectsFor(p: Principal): Promise<{ repo: string; role: R
   const db = await read()
   try {
     if (cls === 'admin') {
-      const hasProjects = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='projects'").get()
-      const repos = hasProjects ? db.prepare('SELECT repo FROM projects').all().map((r) => String(r.repo).toLowerCase()) : []
+      // Every registered project (the registry is in the central database) and every assigned one.
+      const c = await readCentral()
+      let repos: string[] = []
+      try {
+        const hasProjects = c.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='projects'").get()
+        repos = hasProjects ? c.prepare('SELECT repo FROM projects').all().map((r) => String(r.repo).toLowerCase()) : []
+      } finally {
+        c.close()
+      }
       const assigned = db.prepare('SELECT DISTINCT repo FROM assignments').all().map((r) => String(r.repo))
       return [...new Set([...repos, ...assigned])].sort().map((repo) => ({ repo, role: 'write' as const }))
     }

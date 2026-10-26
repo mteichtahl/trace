@@ -1,3 +1,4 @@
+// @ts-expect-error the package's exports map hides its (correct) types from NodeNext resolution
 import { MockBinding, type MockPortBinding } from '@serialport/binding-mock'
 import type { BindingInterface } from '@serialport/bindings-cpp'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'

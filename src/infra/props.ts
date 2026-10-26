@@ -5,14 +5,16 @@
  */
 import { z } from 'zod'
 
-const repoSlug = z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')
+/** OWNER/REPO, optionally @BRANCH (its default branch; main when omitted). */
+const repoSlug = z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+(@[A-Za-z0-9._\/-]+)?$/, 'expected OWNER/REPO or OWNER/REPO@BRANCH')
 
 export const InfraPropsSchema = z.object({
   /** A short name prefixed to every resource: lets two installations share an account. */
   prefix: z.string().regex(/^[a-z][a-z0-9-]{1,20}$/, 'lower-case letters, digits and dashes, 2–21 characters').default('trace'),
   account: z.string().regex(/^\d{12}$/, 'a 12-digit AWS account id'),
   region: z.string().regex(/^[a-z]{2}(-[a-z]+)+-\d$/, 'an AWS region such as us-east-1'),
-  /** The repositories whose GitHub Actions may assume the actions role (OIDC subject `repo:OWNER/REPO:*`). */
+  /** The repositories whose default-branch workflows may assume the actions role (OIDC subject
+   * `repo:OWNER/REPO:ref:refs/heads/BRANCH`). */
   repositories: z.array(repoSlug).min(1),
   /** Create the account's GitHub OIDC provider (there can be only one per account), or use the existing one. */
   createOidcProvider: z.boolean().default(true),

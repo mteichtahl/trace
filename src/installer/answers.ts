@@ -33,6 +33,8 @@ export const AgentAnswers = z.object({
 
 export const ProjectAnswer = z.object({
   repo: Repo,
+  /** Its default branch: only workflows running there may assume the AWS role. */
+  branch: z.string().regex(/^[A-Za-z0-9._\/-]+$/).default('main'),
   /** Open the onboarding PR (workflows, empty rules, project database) in this repository. */
   onboard: z.boolean().default(true),
   /** Repository settings the loop needs: auto-merge, branch deletion, labels, the required-check ruleset. */

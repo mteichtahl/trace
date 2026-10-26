@@ -35,6 +35,7 @@ import { OnboardError, SCAFFOLDS, type Scaffold, createNew, onboard, projects } 
 import { ToolError } from './core/registry.js'
 import { Work, transaction } from './core/store.js'
 import { allTools } from './tools.js'
+import { cmdConnect, cmdLogin, cmdLogout, cmdRemote, cmdUsers, cmdWhoami } from './login/commands.js'
 
 // node:sqlite is stable in practice but still prints an experimental warning; keep the CLI's output clean.
 const emit = process.emitWarning.bind(process)
@@ -262,6 +263,12 @@ async function main(argv: string[]): Promise<number> {
       out(`The installer is at ${url}\n(keep this running until it says it is done; Ctrl-C to stop)`)
       return new Promise<number>(() => undefined)
     }
+    case 'connect': return cmdConnect(rest)
+    case 'login': return cmdLogin(rest)
+    case 'logout': return cmdLogout(rest)
+    case 'whoami': return cmdWhoami(rest)
+    case 'remote': return cmdRemote(rest)
+    case 'users': return cmdUsers(rest)
     case 'worker-prompt':
       out(workerPrompt(rest.length ? rest : await projects()))
       return 0

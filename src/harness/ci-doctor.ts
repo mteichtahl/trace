@@ -60,7 +60,10 @@ export async function ciDoctor({ github, jobApi, context, core, cfg, env }: Deps
   const branch = run.head_branch ?? ''
   const onMain = branch === cfg.branch && ['push', 'schedule', 'workflow_dispatch'].includes(run.event)
   const prs = run.pull_requests.filter((p) => p.base.repo.name === repo).map((p) => p.number)
-  if (!prs.length && !onMain && run.event === 'pull_request') {
+  // A fork's PR is never looked up by branch name: a same-named branch here would get the label instead.
+  const fromFork = (run as { head_repository?: { full_name?: string } }).head_repository?.full_name !== undefined &&
+    (run as { head_repository?: { full_name?: string } }).head_repository?.full_name !== `${owner}/${repo}`
+  if (!prs.length && !onMain && run.event === 'pull_request' && !fromFork) {
     // pull_requests is empty for a fork's PR or before GitHub links it: look it up.
     const open = (await github.rest.pulls.list({ owner, repo, state: 'open', head: `${owner}:${branch}`, per_page: 1 })).data
     if (open[0]) prs.push(open[0].number)

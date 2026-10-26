@@ -9,7 +9,7 @@
  * Actions that must start other workflows (opening a PR, merging, updating a branch) are taken with the repository's
  * TRACE_TOKEN: GitHub starts no workflow for an event made with GITHUB_TOKEN.
  */
-import { globMatch } from './util.js'
+import { commentOnce, globMatch } from './util.js'
 import { type Deps, type GitHub, PullRequestPayload, errorMessage, errorStatus, labelNames, payload, short } from './types.js'
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -78,6 +78,18 @@ export async function automerge({ github, jobApi, context, core, cfg, env }: Dep
       core.warning('No TRACE_TOKEN secret: the merge is made with GITHUB_TOKEN, which starts no build on the default branch.')
     }
     return fn(jobApi)
+  }
+
+  // A PR that changes what steers the harness (workflows, settings, rules, ownership) is held for a person.
+  const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number: pr.number, per_page: 100 })
+  const touched = files.flatMap((f) => [f.filename, ...(f.previous_filename ? [f.previous_filename] : [])])
+    .filter((f) => cfg.prs.protected_paths.some((g) => globMatch(g, f)))
+  if (touched.length) {
+    await attempt((gh) => gh.graphql(DISABLE, { id: pr.node_id })).catch(() => undefined)
+    await github.rest.issues.addLabels({ owner, repo, issue_number: pr.number, labels: [cfg.labels.hold] }).catch(() => undefined)
+    await commentOnce(github, owner, repo, pr.number, '<!-- trace: protected-paths -->',
+      `This PR changes files that steer trace itself (${touched.slice(0, 8).map((f) => `\`${f}\``).join(', ')}${touched.length > 8 ? ', …' : ''}), so it does not merge itself: a person reviews and merges it.`)
+    return say(`#${pr.number} touches protected paths: held for a person.`)
   }
 
   if (labelNames(pr.labels).includes(cfg.labels.hold)) {

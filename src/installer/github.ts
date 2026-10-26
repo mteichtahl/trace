@@ -39,14 +39,14 @@ export class Github {
 }
 
 const User = z.object({ login: z.string(), name: z.string().nullable().optional(), type: z.string() }).loose()
-const RepoItem = z.object({ full_name: z.string(), private: z.boolean(), archived: z.boolean().optional(), permissions: z.object({ admin: z.boolean().optional(), push: z.boolean().optional() }).loose().optional() }).loose()
+const RepoItem = z.object({ full_name: z.string(), private: z.boolean(), default_branch: z.string().default('main'), archived: z.boolean().optional(), permissions: z.object({ admin: z.boolean().optional(), push: z.boolean().optional() }).loose().optional() }).loose()
 
 export interface TokenInfo {
   login: string
   name: string | null
   kind: 'classic' | 'fine-grained' | 'app' | 'unknown'
   scopes: string[]
-  repos: { fullName: string; private: boolean; admin: boolean; push: boolean }[]
+  repos: { fullName: string; private: boolean; admin: boolean; push: boolean; defaultBranch: string }[]
   warnings: string[]
 }
 
@@ -58,7 +58,7 @@ export async function checkToken(token: string, fetchImpl?: Fetch): Promise<Toke
   const repos: TokenInfo['repos'] = []
   for (let page = 1; page <= 10; page++) {
     const { data } = await gh.request('GET', `/user/repos?per_page=100&page=${page}&sort=pushed&affiliation=owner,collaborator,organization_member`, z.array(RepoItem))
-    for (const r of data) if (!r.archived) repos.push({ fullName: r.full_name, private: r.private, admin: Boolean(r.permissions?.admin), push: Boolean(r.permissions?.push) })
+    for (const r of data) if (!r.archived) repos.push({ fullName: r.full_name, private: r.private, admin: Boolean(r.permissions?.admin), push: Boolean(r.permissions?.push), defaultBranch: r.default_branch })
     if (data.length < 100) break
   }
   const warnings: string[] = []

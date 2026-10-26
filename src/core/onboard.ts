@@ -212,6 +212,8 @@ export function writeFiles(repo: string, d: Detected, settings: Record<string, u
     writeFileSync(ga, `${existing}${existing && !existing.endsWith('\n') ? '\n' : ''}${line}\n`)
     written.push('.gitattributes')
   }
+  const owners = codeOwners(repo, cfg)
+  if (owners) written.push(owners)
   const cm = join(repo, 'CLAUDE.md')
   const text = existsSync(cm) ? readFileSync(cm, 'utf8') : ''
   if (!text.includes(CLAUDE_MARKER)) {
@@ -219,6 +221,37 @@ export function writeFiles(repo: string, d: Detected, settings: Record<string, u
     written.push('CLAUDE.md')
   }
   return written
+}
+
+const OWNERS_BEGIN = '# trace: files that steer trace need a person (worker.escalate_to) to approve'
+const OWNERS_END = '# end trace'
+
+/** prs.protected_paths glob → a CODEOWNERS pattern. */
+export function ownersPattern(glob: string): string {
+  const g = glob.replace(/\/\*\*$/, '/')
+  return g.startsWith('**/') ? g.slice(3) : `/${g}`
+}
+
+/** With worker.escalate_to set, give that person or team ownership of prs.protected_paths, so the ruleset's code
+ * owner review makes a PR that changes them wait for their approval (the agent's own token can't approve its PR).
+ * Uses the CODEOWNERS file GitHub would read; the trace section is rewritten in place. Returns the path written. */
+export function codeOwners(repo: string, cfg: ResolvedConfig): string | null {
+  const who = cfg.worker.escalate_to.trim()
+  if (!who) return null
+  const owner = who.startsWith('@') ? who : `@${who}`
+  const rel = ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'].find((f) => existsSync(join(repo, f))) ?? '.github/CODEOWNERS'
+  const path = join(repo, rel)
+  const before = existsSync(path) ? readFileSync(path, 'utf8') : ''
+  const section = [OWNERS_BEGIN, ...cfg.prs.protected_paths.map((g) => `${ownersPattern(g)} ${owner}`), OWNERS_END].join('\n')
+  const start = before.indexOf(OWNERS_BEGIN)
+  const end = before.indexOf(OWNERS_END)
+  // Last match wins in CODEOWNERS, so the trace section goes at the end where nothing later can override it.
+  const rest = start >= 0 && end > start ? before.slice(0, start) + before.slice(end + OWNERS_END.length).replace(/^\n/, '') : before
+  const next = `${rest}${rest && !rest.endsWith('\n') ? '\n' : ''}${section}\n`
+  if (next === before) return null
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, next)
+  return rel
 }
 
 // ------------------------------------------------------------------ GitHub
@@ -250,7 +283,7 @@ export function applySettings(slug: string, cfg: ResolvedConfig, ruleset = true,
         conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } },
         rules: [
           { type: 'deletion' }, { type: 'non_fast_forward' },
-          { type: 'pull_request', parameters: { required_approving_review_count: 0, dismiss_stale_reviews_on_push: false, require_code_owner_review: false, require_last_push_approval: false, required_review_thread_resolution: false } },
+          { type: 'pull_request', parameters: { required_approving_review_count: 0, dismiss_stale_reviews_on_push: false, require_code_owner_review: Boolean(cfg.worker.escalate_to.trim()), require_last_push_approval: false, required_review_thread_resolution: false } },
           { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: false, required_status_checks: [{ context: cfg.build.required_check }] } },
         ],
       }

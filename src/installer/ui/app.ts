@@ -9,7 +9,7 @@ import { type AnswersInput, AnswersSchema, type InstallEvent, type Step } from '
 
 interface TokenInfo {
   login: string; name: string | null; kind: string; scopes: string[]; warnings: string[]
-  repos: { fullName: string; private: boolean; admin: boolean; push: boolean }[]
+  repos: { fullName: string; private: boolean; admin: boolean; push: boolean; defaultBranch: string }[]
   access: { repo: string; ok: boolean; reason: string }[]
 }
 interface AwsCheck {
@@ -50,7 +50,7 @@ const s = {
   done: new Set<Tab>(),
   env: null as Env | null,
   github: { token: '', adminToken: '', info: null as TokenInfo | null, filter: '', busy: false, error: '' },
-  projects: new Map<string, { onboard: boolean; applySettings: boolean }>(),
+  projects: new Map<string, { branch: string; onboard: boolean; applySettings: boolean }>(),
   aws: { mode: 'profile' as 'profile' | 'keys', profile: 'default', region: 'us-east-1', keyId: '', secret: '', session: '', check: null as AwsCheck | null, confirmed: false, busy: false, error: '' },
   agents: { prefix: 'trace', model: '', maxLifetimeHours: 8, idleMinutes: 15, centralBucketName: '', retainData: true, escalateTo: '' },
   adminEmail: '',
@@ -165,7 +165,7 @@ function github(): HTMLElement {
   const repos = (info?.repos ?? []).filter((r) => !g.filter || r.fullName.toLowerCase().includes(g.filter.toLowerCase()))
   return h('section', { class: 'card' },
     h('h2', {}, 'GitHub'),
-    h('p', { class: 'lead' }, 'The token the agents and workflows use to clone, push, open PRs and comment. A fine-grained token limited to the repositories below, with Contents, Pull requests, Issues, Workflows, Actions, Secrets, Variables and Administration read/write, is the safest choice. It is stored in AWS Secrets Manager and as each repository\'s TRACE_TOKEN secret.'),
+    h('p', { class: 'lead' }, 'The token the agents and workflows use to clone, push, open PRs and comment. Use a fine-grained token limited to the repositories below, with only Contents, Pull requests, Issues, Workflows and Actions read/write: the agents never need Secrets, Variables or Administration. Make it on a separate machine account if you can, so the agents\' approvals are never yours. It is stored in AWS Secrets Manager and as each repository\'s TRACE_TOKEN secret. Setting up the repositories (variables, secrets, the ruleset) needs more: give a second, admin token below; it is used only during this installation and never stored.'),
     field('Token', input('password', g.token, (v) => { g.token = v.trim(); g.info = null }, { placeholder: 'github_pat_…' })),
     h('details', {}, h('summary', { class: 'muted' }, 'Installing with a different token'),
       field('Admin token', input('password', g.adminToken, (v) => { g.adminToken = v.trim() }), 'used only now, to set repository secrets, variables and settings; never stored')),
@@ -181,7 +181,7 @@ function github(): HTMLElement {
         const p = s.projects.get(r.fullName)
         return h('div', { class: 'item' },
           h('input', { type: 'checkbox', checked: Boolean(p), onchange: (e: Event) => {
-            if ((e.target as HTMLInputElement).checked) s.projects.set(r.fullName, { onboard: true, applySettings: r.admin })
+            if ((e.target as HTMLInputElement).checked) s.projects.set(r.fullName, { branch: r.defaultBranch, onboard: true, applySettings: r.admin })
             else s.projects.delete(r.fullName)
             void checkAccess(); render()
           } }),
@@ -376,7 +376,7 @@ async function boot(): Promise<void> {
       s.aws.profile = saved.aws.profile ?? 'default'
       s.aws.region = saved.aws.region
       Object.assign(s.agents, { ...saved.agents, escalateTo: saved.escalateTo ?? '' })
-      for (const p of saved.projects) s.projects.set(p.repo, { onboard: p.onboard ?? true, applySettings: p.applySettings ?? true })
+      for (const p of saved.projects) s.projects.set(p.repo, { branch: p.branch ?? 'main', onboard: p.onboard ?? true, applySettings: p.applySettings ?? true })
       s.adminEmail = saved.adminEmail
       s.people = (saved.people ?? []).map((p) => ({ email: p.email, class: p.class ?? 'user', projects: new Set(p.projects ?? []) }))
     } else if (s.env.profiles.regions.default) {

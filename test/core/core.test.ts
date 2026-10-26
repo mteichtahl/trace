@@ -152,6 +152,14 @@ describe('onboarding', () => {
     onboard.writeFiles(repo, await onboard.detect(repo, 'main'), {}, 'me/trace', 'v9')
     expect(readFileSync(join(repo, '.trace', 'rules.md'), 'utf8')).toMatch(/^Never touch/)
     expect(readFileSync(join(repo, 'CLAUDE.md'), 'utf8').split(onboard.CLAUDE_MARKER)).toHaveLength(2)
+    // The person escalated to owns what steers trace; rewriting keeps one trace section, after the repo's own lines.
+    const owners = readFileSync(join(repo, '.github', 'CODEOWNERS'), 'utf8')
+    expect(owners).toContain('/.github/ @marc')
+    expect(owners).toContain('/.trace/ @marc')
+    expect(owners).toMatch(/^CODEOWNERS @marc$/m)
+    writeFileSync(join(repo, '.github', 'CODEOWNERS'), `* @someone\n${owners}`)
+    expect(onboard.codeOwners(repo, load(repo))).toBeNull()
+    expect(readFileSync(join(repo, '.github', 'CODEOWNERS'), 'utf8').startsWith('* @someone\n# trace')).toBe(true)
   })
 
   it('gives a repository without a build the starter for its language', async () => {

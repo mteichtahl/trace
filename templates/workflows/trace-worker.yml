@@ -53,6 +53,7 @@ jobs:
       - id: pick
         uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
         with:
+          agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
           task: worker-pick
 
   dispatch:
@@ -81,6 +82,7 @@ jobs:
       - id: dispatch
         uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
         with:
+          agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
           task: worker-dispatch
           item: ${{ toJSON(matrix.item) }}
           runtime-arn: ${{ vars.TRACE_AGENT_RUNTIME_ARN }}
@@ -115,6 +117,7 @@ jobs:
       - id: prompt
         uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
         with:
+          agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
           task: worker-prompt
           item: ${{ toJSON(matrix.item) }}
       - id: tools

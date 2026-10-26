@@ -18,25 +18,26 @@ import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import {
-  AdminAddUserToGroupCommand, AdminCreateUserCommand, AdminGetUserCommand, CognitoIdentityProviderClient, UserNotFoundException,
+  AdminAddUserToGroupCommand, AdminCreateUserCommand, AdminGetUserCommand, AdminListGroupsForUserCommand, AdminRemoveUserFromGroupCommand,
+  CognitoIdentityProviderClient, UserNotFoundException,
 } from '@aws-sdk/client-cognito-identity-provider'
 import { PutSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
 import type { AwsCredentialIdentity } from '@smithy/types'
-import { type Principal, GROUPS, assign, setClass } from '../core/access.js'
+import { type Principal, GROUPS, assign, assignments, setClass, unassign } from '../core/access.js'
 import { saveAnswers, saveInstallation } from '../core/client.js'
 import { onboard, register } from '../core/onboard.js'
 import { type InfraInput, InfraPropsSchema, stackName } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import type { Answers, InstallEvent, Secrets, Step } from './answers.js'
 import { awsEnv, checkAws, credentials, stackOutputs } from './aws.js'
-import { setSecret, setVariable } from './github.js'
+import { checkToken, setSecret, setVariable } from './github.js'
 
 export function infraInput(a: Answers): InfraInput {
   return {
     prefix: a.agents.prefix,
     account: a.aws.account,
     region: a.aws.region,
-    repositories: a.projects.map((p) => p.repo),
+    repositories: a.projects.map((p) => `${p.repo}@${p.branch}`),
     createOidcProvider: a.agents.createOidcProvider,
     model: a.agents.model,
     ...(a.agents.centralBucketName ? { centralBucketName: a.agents.centralBucketName } : {}),
@@ -159,9 +160,16 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
     current = 'repos'
     set('repos', 'running')
     const adminToken = s.githubAdminToken || s.githubToken
+    const agentLogin = (await checkToken(s.githubToken)).login
+    const adminLogin = adminToken === s.githubToken ? agentLogin : (await checkToken(adminToken)).login
+    if (adminLogin.toLowerCase() === agentLogin.toLowerCase()) {
+      summary.push(`The agents' token belongs to ${agentLogin}, so /approve from ${agentLogin} is refused on deploys (an agent must never approve its own). Give the agents a machine account's token, or approve from another account.`)
+    }
     for (const p of a.projects) {
       const vars: Record<string, string> = {
         TRACE_AWS_ROLE: need('ActionsRoleArn'), TRACE_AWS_REGION: a.aws.region, TRACE_HOME: need('TraceHome'), TRACE_AGENT_RUNTIME_ARN: need('AgentRuntimeArn'),
+        // The worker trusts claim markers and refuses deploy approvals from this login (the agents' own account).
+        TRACE_AGENT_LOGIN: agentLogin,
       }
       for (const [k, v] of Object.entries(vars)) log('repos', `${p.repo}: ${k} ${await setVariable(adminToken, p.repo, k, v)}`)
       await setSecret(adminToken, p.repo, 'TRACE_TOKEN', s.githubToken)
@@ -217,12 +225,34 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
         const sub = await subOf(p.email)
         if (!sub) throw new Error(`no Cognito id for ${p.email}`)
         await idp.send(new AdminAddUserToGroupCommand({ UserPoolId: pool, Username: p.email, GroupName: GROUPS[p.class] }))
+        // Exactly one class: a person moved from admin to guest must lose the admin group, not keep both.
+        const groups = (await idp.send(new AdminListGroupsForUserCommand({ UserPoolId: pool, Username: p.email }))).Groups ?? []
+        for (const g of groups) {
+          const other = Object.values(GROUPS).includes(g.GroupName ?? '') && g.GroupName !== GROUPS[p.class]
+          if (!other) continue
+          await idp.send(new AdminRemoveUserFromGroupCommand({ UserPoolId: pool, Username: p.email, GroupName: g.GroupName }))
+          log('people', `${p.email}: removed from ${g.GroupName}`)
+        }
         await setClass(installer, { sub, email: p.email }, p.class)
         log('people', `${p.email}: ${p.class}`)
+        const want = new Set(p.projects.map((r) => r.toLowerCase()))
         for (const repo of p.projects) {
           await assign(installer, { sub, email: p.email }, repo)
           log('people', `${p.email}: assigned to ${repo} (${p.class === 'guest' ? 'read' : 'read and write'})`)
         }
+        // The answers are the whole truth for a listed person: projects no longer listed are taken away.
+        for (const g of await assignments(installer, { sub })) {
+          if (want.has(g.repo.toLowerCase())) continue
+          await unassign(installer, sub, g.repo)
+          log('people', `${p.email}: unassigned from ${g.repo}`)
+        }
+      }
+      // People granted access earlier but missing from these answers keep it until an admin removes them: say so.
+      const listed = new Set(a.people.map((p) => p.email.toLowerCase()))
+      const stale = [...new Set((await assignments(installer)).filter((g) => g.email && !listed.has(g.email.toLowerCase()) && g.email.toLowerCase() !== a.adminEmail.toLowerCase()).map((g) => g.email!))]
+      if (stale.length) {
+        log('people', `not in this installation's list but still assigned: ${stale.join(', ')}`)
+        summary.push(`Still have project access though not listed here: ${stale.join(', ')} (remove with \`trace users unassign\`)`)
       }
       for (const p of a.projects) await register(p.repo, null)
     } finally {

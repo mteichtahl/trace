@@ -1,11 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { AccessDenied, assign, assignments, classOf, projectsFor, require_, setClass, unassign, type Principal } from '../../src/core/access.js'
+import { AccessDenied, accessHome, assign, assignments, classOf, projectsFor, require_, setClass, unassign, type Principal } from '../../src/core/access.js'
 import { update } from '../../src/core/central.js'
 
 const admin: Principal = { sub: 'a', email: 'admin@example.com', groups: ['trace-admins'] }
 const user: Principal = { sub: 'u', email: 'user@example.com', groups: ['trace-users'] }
 const guest: Principal = { sub: 'g', email: 'guest@example.com', groups: ['trace-guests'] }
 const nobody: Principal = { sub: 'n', email: 'nobody@example.com', groups: [] }
+
+describe('the access store', () => {
+  it('sits beside the central database, not in it', () => {
+    const prior = process.env.TRACE_HOME
+    process.env.TRACE_HOME = 's3://bucket/central'
+    expect(accessHome()).toBe('s3://bucket/access')
+    process.env.TRACE_HOME = 's3://bucket/a/b/central'
+    expect(accessHome()).toBe('s3://bucket/a/b/access')
+    process.env.TRACE_HOME = prior
+  })
+})
 
 describe('the three classes', () => {
   it('come from the token groups, highest first', () => {

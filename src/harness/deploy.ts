@@ -43,7 +43,7 @@ export async function request({ github, context, core, cfg }: Deps): Promise<voi
     '',
     auto
       ? `**This deploys automatically.**${cfg.deploy.risk_check ? ' It is held for `/approve` only if the risk check says so;' : ''} \`/reject\` skips it. A newer commit that passes moves this request to itself.`
-      : '**Comment `/approve` to deploy it, or `/reject` to skip it.** A newer commit that passes moves this request to itself.',
+      : `**Comment \`/approve ${sha.slice(0, 12)}\` to deploy it, or \`/reject\` to skip it.** A newer commit that passes moves this request to itself.`,
     '',
     last ? `Since the last deploy (${last.slice(0, 7)}):` : 'No earlier deploy is recorded here.',
     ...commits,
@@ -81,7 +81,10 @@ export async function request({ github, context, core, cfg }: Deps): Promise<voi
 }
 
 /** Why `login` may not approve, or null when they may. */
-export async function refusal(github: GitHub, owner: string, repo: string, cfg: TraceConfig, login: string, type?: string): Promise<string | null> {
+export async function refusal(github: GitHub, owner: string, repo: string, cfg: TraceConfig, login: string, type?: string, agentLogin?: string): Promise<string | null> {
+  // The agents act through a person's token (TRACE_TOKEN), so GitHub reports them as that person. Their login is
+  // recorded at install (TRACE_AGENT_LOGIN) and can never approve: the agents that write the code don't ship it.
+  if (agentLogin && login.toLowerCase() === agentLogin.toLowerCase()) return `@${login} is the account the trace agents act as, and it can't approve a deploy`
   let t = type
   if (t === undefined) t = (await github.rest.users.getByUsername({ username: login }).catch(() => null))?.data.type
   if (t === 'Bot' || /\[bot\]$/i.test(login)) return `@${login} is a bot or app account, and only a person can approve a deploy`
@@ -114,13 +117,13 @@ export async function approve({ github, context, core, cfg, env }: Deps): Promis
     else core.info(body)
   }
   const senderType = ic ? ic.comment.user.type : payload(context, null, ActorPayload)?.sender?.type
-  const why = await refusal(github, owner, repo, cfg, who, senderType)
+  const why = await refusal(github, owner, repo, cfg, who, senderType, env.AGENT_LOGIN)
   if (why) return say(`${why}. Nothing was deployed.`)
   // A re-run keeps the first attempt's approver: whoever re-runs must be able to approve too, so a bot with Actions
   // access cannot replay a person's approval.
   const again = env.TRIGGERING_ACTOR
   if (again && again.toLowerCase() !== who.toLowerCase()) {
-    const whyAgain = await refusal(github, owner, repo, cfg, again)
+    const whyAgain = await refusal(github, owner, repo, cfg, again, undefined, env.AGENT_LOGIN)
     if (whyAgain) return say(`This is a re-run started by @${again}: ${whyAgain.replace(/^@\S+ /, '')}. Nothing was deployed.`)
   }
   if (ic && ic.comment.body.startsWith('/reject') && issue) {
@@ -131,6 +134,13 @@ export async function approve({ github, context, core, cfg, env }: Deps): Promis
   if (live && live.state !== 'open') return say('This request is closed. Nothing was deployed.')
   const sha = dispatch ? context.sha : DEPLOY_SHA.exec(live?.body ?? '')?.[1]
   if (!sha) return say('This request names no commit. Nothing was deployed.')
+  // An approval names the commit the person saw (`/approve <sha>`), so a request that moved to a newer commit after
+  // they read it — or a re-run after it moved — can't ship something they didn't approve.
+  if (ic) {
+    const named = /^\/approve\s+([0-9a-f]{7,40})\b/i.exec(ic.comment.body.trim())?.[1]?.toLowerCase()
+    if (!named) return say(`Approve with the commit you reviewed: \`/approve ${sha.slice(0, 12)}\`. Nothing was deployed.`)
+    if (!sha.startsWith(named)) return say(`You approved ${named}, but this request now asks for ${short(sha)}. Review it and \`/approve ${sha.slice(0, 12)}\`. Nothing was deployed.`)
+  }
   const onBranch = await github.rest.repos.compareCommits({ owner, repo, base: sha, head: cfg.branch })
     .then((c) => ['identical', 'ahead'].includes(c.data.status)).catch(() => false)
   if (!onBranch) return say(`${short(sha)} is not on ${cfg.branch}. Nothing was deployed.`)
@@ -149,13 +159,19 @@ export async function approve({ github, context, core, cfg, env }: Deps): Promis
 export async function guard({ github, context, core, cfg, env }: Deps): Promise<void> {
   const { owner, repo } = context.repo
   const sha = env.SHA ?? ''
+  // Deploy records are only trusted from requests the workflows opened (github-actions), and only for commits on the
+  // default branch: an edited issue body can't point the rollback at unreviewed code.
+  const fromWorkflow = (i: { user?: { login?: string | null } | null }): boolean => (i.user?.login ?? '') === 'github-actions[bot]'
   const closed = (await github.rest.issues.listForRepo({ owner, repo, labels: cfg.labels.deploy, state: 'closed', sort: 'updated', direction: 'desc', per_page: 30 })).data
-  const shas = closed.map((i) => DEPLOYED_SHA.exec(i.body ?? '')?.[1]).filter((s): s is string => Boolean(s))
+  const shas = closed.filter(fromWorkflow).map((i) => DEPLOYED_SHA.exec(i.body ?? '')?.[1]).filter((s): s is string => Boolean(s))
   const open = env.ISSUE ? (await github.rest.issues.get({ owner, repo, issue_number: Number(env.ISSUE) })).data : null
-  const fromOpen = DEPLOYED_SHA.exec(open?.body ?? '')?.[1]
+  const fromOpen = open && fromWorkflow(open) ? DEPLOYED_SHA.exec(open.body ?? '')?.[1] : undefined
   if (fromOpen) shas.unshift(fromOpen)
+  const onBranch = async (s: string): Promise<boolean> =>
+    github.rest.repos.compareCommits({ owner, repo, base: s, head: cfg.branch }).then((c) => ['identical', 'ahead'].includes(c.data.status)).catch(() => false)
   let deployed: string | null = null
   for (const s of shas) {
+    if (!(await onBranch(s))) { core.warning(`Ignoring a deploy record for ${short(s)}: it is not on ${cfg.branch}.`); continue }
     if (!deployed) { deployed = s; continue }
     const c = await github.rest.repos.compareCommits({ owner, repo, base: deployed, head: s }).catch(() => null)
     if (c?.data.status === 'ahead') deployed = s

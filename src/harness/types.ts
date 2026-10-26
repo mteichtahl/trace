@@ -41,6 +41,8 @@ export interface TaskEnv {
   ROLLBACK?: string
   REASONS?: string
   TRIGGERING_ACTOR?: string
+  /** The login the agents act as (TRACE_AGENT_LOGIN): never an approver; its markers are trusted. */
+  AGENT_LOGIN?: string
 }
 
 export interface Deps {

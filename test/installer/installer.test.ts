@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 process.env.TRACE_CLIENT_DB = join(mkdtempSync(join(tmpdir(), 'trace-client-')), 'client.db')
 
-const calls = vi.hoisted(() => ({ secrets: [] as unknown[], cognito: [] as unknown[], variables: [] as string[], ghSecrets: [] as string[], onboard: [] as string[] }))
+const calls = vi.hoisted(() => ({ secrets: [] as unknown[], cognito: [] as unknown[], variables: [] as string[], ghSecrets: [] as string[], onboard: [] as string[], users: new Map<string, Set<string>>() }))
 
 vi.mock('../../src/installer/aws.js', () => ({
   credentials: async () => ({ accessKeyId: 'AKIAEXAMPLE', secretAccessKey: 'secret-key-value-1234' }),
@@ -26,22 +26,33 @@ vi.mock('@aws-sdk/client-cognito-identity-provider', () => {
   return {
     UserNotFoundException,
     CognitoIdentityProviderClient: class {
-      async send(c: { kind: string; input: { Username?: string } }) {
+      async send(c: { kind: string; input: { Username?: string; GroupName?: string } }) {
         calls.cognito.push(c)
-        if (c.kind === 'get') throw new UserNotFoundException('no')
-        if (c.kind === 'create') return { User: { Attributes: [{ Name: 'sub', Value: `sub-${c.input.Username}` }] } }
+        const u = c.input.Username ?? ''
+        const groups = calls.users.get(u)
+        if (c.kind === 'get') {
+          if (!groups) throw new UserNotFoundException('no')
+          return { UserAttributes: [{ Name: 'sub', Value: `sub-${u}` }] }
+        }
+        if (c.kind === 'create') { calls.users.set(u, new Set()); return { User: { Attributes: [{ Name: 'sub', Value: `sub-${u}` }] } } }
+        if (c.kind === 'group') groups?.add(c.input.GroupName ?? '')
+        if (c.kind === 'ungroup') groups?.delete(c.input.GroupName ?? '')
+        if (c.kind === 'groups') return { Groups: [...(groups ?? [])].map((GroupName) => ({ GroupName })) }
         return {}
       }
     },
     AdminGetUserCommand: class { kind = 'get'; constructor(readonly input: unknown) {} },
     AdminCreateUserCommand: class { kind = 'create'; constructor(readonly input: unknown) {} },
     AdminAddUserToGroupCommand: class { kind = 'group'; constructor(readonly input: unknown) {} },
+    AdminRemoveUserFromGroupCommand: class { kind = 'ungroup'; constructor(readonly input: unknown) {} },
+    AdminListGroupsForUserCommand: class { kind = 'groups'; constructor(readonly input: unknown) {} },
   }
 })
 vi.mock('../../src/installer/github.js', async (orig) => ({
   ...(await orig<typeof import('../../src/installer/github.js')>()),
   setVariable: async (_t: string, repo: string, name: string) => { calls.variables.push(`${repo}:${name}`); return 'created' },
   setSecret: async (_t: string, repo: string, name: string) => { calls.ghSecrets.push(`${repo}:${name}`) },
+  checkToken: async () => ({ login: 'trace-agent', name: null, kind: 'fine-grained', scopes: [], repos: [], warnings: [] }),
 }))
 vi.mock('../../src/core/onboard.js', async (orig) => ({
   ...(await orig<typeof import('../../src/core/onboard.js')>()),
@@ -153,6 +164,19 @@ describe('installing', () => {
     expect(await require_(visitor, 'mteichtahl/fw', 'read')).toBe('read')
     await expect(require_(visitor, 'mteichtahl/fw', 'write')).rejects.toThrow(/no write access/)
     expect(await projectsFor(visitor)).toEqual([{ repo: 'mteichtahl/fw', role: 'read' }])
+    expect(calls.variables).toContain('mteichtahl/board:TRACE_AGENT_LOGIN')
+  })
+
+  it('a second run takes away what the answers no longer list', async () => {
+    // dev moves from user on board to guest on fw; visitor is dropped from the list entirely.
+    const again = { ...ANSWERS, people: [{ email: 'dev@example.com', class: 'guest', projects: ['mteichtahl/fw'] }, { email: 'boss@example.com', class: 'admin' }] }
+    const events: string[] = []
+    const ok = await apply(AnswersSchema.parse(again), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(JSON.stringify(e)), { cdk: async () => 0, outputs: async () => OUTPUTS })
+    expect(ok).toBe(true)
+    expect([...(calls.users.get('dev@example.com') ?? [])]).toEqual(['trace-guests'])
+    const all = await assignments({ sub: 'x', email: null, groups: ['trace-admins'] })
+    expect(all.map((g) => `${g.email}:${g.class}:${g.repo}`).sort()).toEqual(['dev@example.com:guest:mteichtahl/fw', 'visitor@example.com:guest:mteichtahl/fw'])
+    expect(events.join('\n')).toMatch(/still assigned: visitor@example.com/)
   })
 
   it('stops at the failing step and says how to continue', async () => {
@@ -177,11 +201,11 @@ describe('the local server', () => {
   })
   afterAll(() => close())
 
-  const call = (path: string, opts: { method?: string; key?: string; host?: string; body?: string; type?: string } = {}): Promise<{ status: number; body: string }> =>
+  const call = (path: string, opts: { method?: string; key?: string; host?: string; body?: string; type?: string; headers?: Record<string, string> } = {}): Promise<{ status: number; body: string }> =>
     new Promise((resolveP, reject) => {
       const u = new URL(base + path)
       const req = request({ host: u.hostname, port: u.port, path: u.pathname + u.search, method: opts.method ?? 'GET', headers: {
-        host: opts.host ?? `localhost:${u.port}`, ...(opts.key ? { 'x-trace-key': opts.key } : {}), ...(opts.body ? { 'content-type': opts.type ?? 'application/json' } : {}),
+        host: opts.host ?? `localhost:${u.port}`, ...(opts.key ? { 'x-trace-key': opts.key } : {}), ...(opts.body ? { 'content-type': opts.type ?? 'application/json' } : {}), ...opts.headers,
       } }, (res) => { let b = ''; res.on('data', (d: Buffer) => { b += d.toString() }); res.on('end', () => resolveP({ status: res.statusCode ?? 0, body: b })) })
       req.on('error', reject)
       if (opts.body) req.write(opts.body)
@@ -193,6 +217,13 @@ describe('the local server', () => {
     expect((await call('/api/env')).status).toBe(401)
     expect((await call('/')).status).toBe(401)
     expect((await call(`/?k=wrong`)).status).toBe(401)
+  })
+
+  it('takes the key in the URL only for the page and the event stream, and refuses cross-site requests', async () => {
+    expect((await call(`/api/env?k=${key}`)).status).toBe(401)
+    expect((await call('/api/env', { key, headers: { 'sec-fetch-site': 'cross-site' } })).status).toBe(403)
+    expect((await call('/api/env', { key, headers: { origin: 'https://evil.example' } })).status).toBe(403)
+    expect((await call('/api/github/check', { key, method: 'POST', body: JSON.stringify({ token: 'x'.repeat(30), repos: ['../../user'] }) })).status).toBe(400)
   })
 
   it('serves the page with a strict policy, and the API with the key', async () => {

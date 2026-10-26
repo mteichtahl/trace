@@ -114,7 +114,7 @@ export type FirmwareTarget = z.output<typeof FirmwareTargetSchema>
 
 export const DispatchOnSchema = z.object({ match: z.string(), workflow: z.string(), note: z.string().optional() }).strict()
 
-const regex = z.string().refine((s) => { try { new RegExp(s); return true } catch { return false } }, 'not a valid regular expression')
+const regex = z.string().max(200, 'at most 200 characters').refine((s) => { try { new RegExp(s); return true } catch { return false } }, 'not a valid regular expression')
 
 // ------------------------------------------------------------------ every setting
 
@@ -132,6 +132,9 @@ export const ConfigSchema = z.object({
     update_queue: z.boolean().default(true),
     skip_branches: z.array(z.string()).default(['dependabot/**', 'gh-readonly-queue/**']),
     wip_marker: z.string().default('wip'),
+    /** A PR touching any of these never merges itself: a person reviews and merges it. They are the files that steer
+     * the harness itself (its workflows, settings, rules and ownership), so an agent can't change them unreviewed. */
+    protected_paths: z.array(z.string()).default(['.github/**', '.trace/**', '.gitattributes', 'CODEOWNERS', '**/CODEOWNERS']),
   }).strict().prefault({}),
   ci_doctor: z.object({
     enabled: z.boolean().default(true),

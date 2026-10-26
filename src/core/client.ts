@@ -6,9 +6,9 @@
  *   session        the signed-in person's Cognito tokens, written by `trace login`. The file is created 0600 and
  *                  `trace logout` deletes the row. Access tokens last an hour; the refresh token renews them.
  */
-import { chmodSync, existsSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { open, transaction } from './store.js'
 
@@ -22,9 +22,10 @@ export const InstallationSchema = z.object({
   clientId: z.string(),
   cognitoDomain: z.string().url(),
   apiRuntimeArn: z.string(),
-  workerRuntimeArn: z.string(),
-  actionsRoleArn: z.string(),
-  githubSecretArn: z.string(),
+  /** '' when unknown (`trace connect`: people other than the installer don't need these). */
+  workerRuntimeArn: z.string().default(''),
+  actionsRoleArn: z.string().default(''),
+  githubSecretArn: z.string().default(''),
   callbackPorts: z.array(z.number().int()).default([47821, 47822]),
 }).strict()
 export type Installation = z.output<typeof InstallationSchema>
@@ -53,8 +54,14 @@ CREATE TABLE IF NOT EXISTS answers (key TEXT PRIMARY KEY, value TEXT NOT NULL, u
 
 function db(): import('node:sqlite').DatabaseSync {
   const path = clientPath()
+  // Sessions (refresh tokens) live here: the directory is private, and the rollback journal (not WAL) means no
+  // long-lived -wal/-shm side files that could be created with a looser mode.
+  const dir = dirname(path)
+  const own = !existsSync(dir) || dir === join(homedir(), '.trace') // never tighten a directory someone else chose (e.g. /tmp)
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  if (own) try { chmodSync(dir, 0o700) } catch { /* best effort on platforms without modes */ }
   const fresh = !existsSync(path)
-  const d = open(path)
+  const d = open(path, { wal: false })
   d.exec(SCHEMA)
   if (fresh) try { chmodSync(path, 0o600) } catch { /* best effort on platforms without modes */ }
   return d
@@ -81,7 +88,7 @@ function get(table: 'installations' | 'sessions', key: string): unknown {
   }
 }
 
-export function saveInstallation(i: Installation): void { put('installations', i.name, InstallationSchema.parse(i)) }
+export function saveInstallation(i: z.input<typeof InstallationSchema>): void { const v = InstallationSchema.parse(i); put('installations', v.name, v) }
 
 export function installation(name = process.env.TRACE_INSTALLATION || 'default'): Installation | null {
   const v = get('installations', name)

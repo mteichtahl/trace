@@ -139,6 +139,7 @@ const Env = z.object({
 
 /** The API runtime's entry (src/agent/main.ts, TRACE_AGENT_MODE=api). */
 export async function start(): Promise<void> {
+  const { allTools } = await import('../tools.js')
   const env = Env.parse(process.env)
   let cognito: CognitoAdmin | null = null
   const cog = (): CognitoAdmin => (cognito ??= new HttpCognito({ region: env.AWS_REGION, poolId: env.TRACE_COGNITO_POOL_ID }))
@@ -147,13 +148,17 @@ export async function start(): Promise<void> {
   const deps: ActionDeps = {
     github: async () => new HttpGitHub(await token()),
     cognito: cog,
-    jobs: async () => import('../agent/jobs.js'),
-    tools: () => toolsRegistry(),
+    jobs: async () => {
+      const j = await import('../agent/jobs.js')
+      return {
+        startJob: async (payload) => j.startJob(payload),
+        jobStatus: async (id) => (await j.jobStatus(id)).map((x) => ({ ...x })),
+      }
+    },
+    tools: () => allTools(),
     checkout: gitCheckout(token, scratch),
     scratch,
   }
-  const { allTools } = await import('../tools.js')
-  const toolsRegistry = allTools
   const server = await listen({
     verifier: new Verifier({ issuer: env.TRACE_COGNITO_ISSUER, clientId: env.TRACE_COGNITO_CLIENT_ID }),
     deps,

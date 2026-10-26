@@ -70,7 +70,7 @@ describe('CAN on the virtual bus', () => {
     try {
       const capturing = call('hil.can_capture', { bus: 'veh', seconds: 1, format: 'candump' })
       await new Promise((r) => setTimeout(r, 300))
-      await peer.send(Array.from({ length: 5 }, (_, i) => ({ id: 0x321, data: `0${i}` })).concat([{ id: 0x1abcdef, data: 'ff', extended: true }]))
+      await peer.send([...Array.from({ length: 5 }, (_, i) => ({ id: 0x321, data: `0${i}`, extended: false })), { id: 0x1abcdef, data: 'ff', extended: true }])
       const r = await capturing
       expect(r.frames).toBe(6)
       expect(r.ids).toEqual([{ id: '0x321', count: 5 }, { id: '0x01ABCDEF', count: 1 }])

@@ -86,6 +86,21 @@ describe('automerge', () => {
   })
 })
 
+describe('protected paths', () => {
+  it('holds a PR that changes the workflows or the settings, whoever opened it', async () => {
+    const f = fakeGithub({ 'pulls.listFiles': [{ filename: 'src/a.ts' }, { filename: '.trace/project.db' }], 'issues.listComments': [] })
+    const core = fakeCore()
+    await prs.automerge(deps(f, core, cfgOf(), context({ payload: { action: 'opened', pull_request: pr() } }), { OWN_TOKEN: 't' }))
+    expect(f.called('issues.addLabels')[0]!.args.labels).toEqual(['no-automerge'])
+    expect(String(f.called('graphql')[0]!.args.query)).toMatch(/disablePullRequestAutoMerge/)
+    expect(f.called('graphql').some((c) => /enablePullRequestAutoMerge/.test(String(c.args.query)))).toBe(false)
+    expect(core.text).toMatch(/held for a person/)
+    const ok = fakeGithub({ 'pulls.listFiles': [{ filename: 'src/a.ts' }] })
+    await prs.automerge(deps(ok, fakeCore(), cfgOf(), context({ payload: { action: 'opened', pull_request: pr() } }), { OWN_TOKEN: 't' }))
+    expect(String(ok.called('graphql')[0]!.args.query)).toMatch(/enablePullRequestAutoMerge/)
+  })
+})
+
 describe('update queue', () => {
   const list = [1, 2, 3].map((n) => ({ number: n, created_at: `2026-01-0${n}`, auto_merge: {}, draft: false, labels: [] }))
   it('updates the oldest behind PR and skips conflicts', async () => {
@@ -162,9 +177,9 @@ describe('worker', () => {
     const now = Date.parse('2026-10-26T06:00:00Z')
     const pull = (n: number, ref: string) => ({ number: n, draft: false, head: { ref, sha: SHA(String(n)), repo: { full_name: 'o/r' } }, labels: [{ name: 'ci-red' }], title: ref })
     const comments: Record<number, unknown[]> = {
-      1: [],
-      2: [{ body: `<!-- trace-claim: ${new Date(now - 3600e3).toISOString()} -->` }],
-      4: [1, 2, 3].map(() => ({ body: `<!-- trace-attempt: ${SHA('4')} -->` })),
+      1: [{ user: { login: 'mallory' }, body: `<!-- trace-claim: ${new Date(now).toISOString()} -->` }], // spoofed: ignored
+      2: [{ user: { login: 'github-actions[bot]' }, body: `<!-- trace-claim: ${new Date(now - 3600e3).toISOString()} -->` }],
+      4: [1, 2, 3].map(() => ({ user: { login: 'trace-agent' }, body: `<!-- trace-attempt: ${SHA('4')} -->` })),
       10: [],
     }
     const f = fakeGithub({
@@ -174,7 +189,7 @@ describe('worker', () => {
       'issues.listForRepo': [{ number: 10, title: 'Build failing' }],
     })
     const core = fakeCore()
-    await worker.pick(deps(f, core, cfgOf()), now)
+    await worker.pick(deps(f, core, cfgOf(), context(), { AGENT_LOGIN: 'trace-agent' }), now)
     expect((JSON.parse(core.outputs.items!) as { number: number }[]).map((i) => i.number)).toEqual([1, 10])
     const posted = f.called('issues.createComment').map((c) => String(c.args.body))
     expect(posted.filter((b) => b.includes('trace-escalated'))).toHaveLength(1)
@@ -197,7 +212,7 @@ describe('deploy', () => {
 
   it('refuses bots and non-maintainers, closes on /reject, deploys the newest passing commit for a maintainer', async () => {
     const issue = { number: 3, state: 'open', labels: [{ name: 'deploy' }], body: `<!-- trace-deploy-sha: ${SHA('a')} -->` }
-    const ctx = (login: string, body = '/approve', type = 'User') => context({ eventName: 'issue_comment', payload: { issue, comment: { body, user: { login, type } } } })
+    const ctx = (login: string, body = `/approve ${SHA('a').slice(0, 12)}`, type = 'User') => context({ eventName: 'issue_comment', payload: { issue, comment: { body, user: { login, type } } } })
     const handlers = {
       'repos.getCollaboratorPermissionLevel': ({ username }: Record<string, unknown>) => ({ role_name: username === 'marc' ? 'admin' : 'write' }),
       'issues.get': issue,
@@ -221,6 +236,19 @@ describe('deploy', () => {
     f = fakeGithub(handlers); core = fakeCore()
     await deploy.approve(deps(f, core, dcfg(), ctx('marc'), { TRIGGERING_ACTOR: 'helper[bot]' }))
     expect(core.outputs.go).toBe('false')
+    // The approval must name the commit the person reviewed.
+    f = fakeGithub(handlers); core = fakeCore()
+    await deploy.approve(deps(f, core, dcfg(), ctx('marc', '/approve')))
+    expect(core.outputs.go).toBe('false')
+    expect(String(f.called('issues.createComment')[0]!.args.body)).toMatch(/\/approve aaaaaaaaaaaa/)
+    f = fakeGithub(handlers); core = fakeCore()
+    await deploy.approve(deps(f, core, dcfg(), ctx('marc', `/approve ${SHA('b').slice(0, 7)}`)))
+    expect(core.outputs.go).toBe('false')
+    // The agents act through a person's token: that login can never approve, however privileged.
+    f = fakeGithub(handlers); core = fakeCore()
+    await deploy.approve(deps(f, core, dcfg(), ctx('marc'), { AGENT_LOGIN: 'Marc' }))
+    expect(core.outputs.go).toBe('false')
+    expect(String(f.called('issues.createComment')[0]!.args.body)).toMatch(/account the trace agents act as/)
   })
 
   it('deploys automatically only the newest passing commit; a manual request waits', async () => {
@@ -244,8 +272,13 @@ describe('deploy', () => {
 
   it('guard refuses when a newer commit is already deployed', async () => {
     const f = fakeGithub({
-      'issues.listForRepo': [{ body: `<!-- trace-deployed-sha: ${SHA('9')} -->` }],
-      'repos.compareCommits': ({ base, head }: Record<string, unknown>) => ({ status: base === SHA('8') && head === SHA('9') ? 'ahead' : 'behind' }),
+      'issues.listForRepo': [
+        { user: { login: 'github-actions[bot]' }, body: `<!-- trace-deployed-sha: ${SHA('9')} -->` },
+        { user: { login: 'mallory' }, body: `<!-- trace-deployed-sha: ${SHA('7')} -->` }, // edited by someone: ignored
+      ],
+      'repos.compareCommits': ({ base, head }: Record<string, unknown>) => ({
+        status: head === 'main' ? (base === SHA('7') ? 'diverged' : 'ahead') : base === SHA('8') && head === SHA('9') ? 'ahead' : 'behind',
+      }),
     })
     const core = fakeCore()
     await deploy.guard(deps(f, core, dcfg(), context(), { SHA: SHA('8') }))

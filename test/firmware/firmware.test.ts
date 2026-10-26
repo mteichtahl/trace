@@ -3,7 +3,7 @@
  * `make` project whose build prints gcc- and rustc-style diagnostics, canned `size` output, and the refusal paths of
  * flash and logs. Programs that are not installed (probe-rs, pio, west…) are exercised by their absence.
  */
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -185,7 +185,6 @@ describe('build, size, flash and logs on a fake make project', () => {
   beforeEach(() => {
     root = tree(sources)
     inRepo(root)
-    const { chmodSync } = require('node:fs') as typeof import('node:fs')
     chmodSync(join(root, 'bin/arm-none-eabi-size'), 0o755)
     process.env.PATH = `${join(root, 'bin')}:${process.env.PATH ?? ''}`
     setValue('firmware.targets', [
