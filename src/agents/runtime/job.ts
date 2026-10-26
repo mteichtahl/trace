@@ -46,7 +46,7 @@ import { SPECIALISTS, SPECIALIST_BUILTINS, type Specialist, allowedToolsOf, spec
 import { WORKER_TOOLS } from '../specialist.js'
 import { type Route, WORKER } from '../kinds.js'
 import { type Classifier, type QueryFn, type RouteInput, routeJob, sdkClassifier } from '../router.js'
-import { readRules } from '../rules.js'
+import { readProjectNotes, readRules } from '../rules.js'
 import type { SpecialistJob } from '../specialist.js'
 import { type Delegations, defaultDelegations } from './delegation.js'
 import { BranchSchema, type DelegatedTaskJob, type JobPayload, type SweepJob, type TaskJob, type WorkItemJob, checkProject, isDelegated } from './schemas.js'
@@ -71,7 +71,8 @@ export interface ClaudeOptions {
   maxTurns: number
   abortController: AbortController
   env: Record<string, string | undefined>
-  settingSources: ('project')[]
+  /** Always empty: project settings (.claude/settings.json hooks, MCP servers, permissions) are never loaded. */
+  settingSources: never[]
   systemPrompt: { type: 'preset'; preset: 'claude_code'; append: string }
   stderr: (data: string) => void
 }
@@ -227,6 +228,8 @@ export interface ClaudeOutcome { ok: boolean; text: string; turns: number }
 
 export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS' | 'model' | 'env'>, o: {
   prompt: string; cwd: string; cfg: TraceConfig; token: string; signal: AbortSignal; log: (l: string) => void; redact: (s: string) => string
+  /** The default branch's CLAUDE.md (readProjectNotes), appended to the system prompt as the project's notes. */
+  notes?: string | null
   /** Extra environment for Claude and the trace MCP server (the memory tools' scope). */
   extraEnv?: Record<string, string>
   /** Sees every SDK message (memory records the key tool outcomes). */
@@ -261,10 +264,11 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
     maxTurns: o.maxTurns ?? o.cfg.worker.max_turns,
     abortController: abort,
     env: { ...d.env, ...o.extraEnv, GH_TOKEN: o.token, GITHUB_TOKEN: o.token, ...gitAuthEnv(o.token), CLAUDE_AGENT_SDK_CLIENT_APP: 'trace-agent/1' },
-    settingSources: ['project'],
+    settingSources: [],
     systemPrompt: {
       type: 'preset', preset: 'claude_code',
-      append: 'You run unattended in a disposable container on Amazon Bedrock AgentCore Runtime. git and gh are authenticated through the environment; never print, echo or write the token anywhere.',
+      append: 'You run unattended in a disposable container on Amazon Bedrock AgentCore Runtime. git and gh are authenticated through the environment; never print, echo or write the token anywhere.' +
+        (o.notes?.trim() ? `\n\nThe project's notes (CLAUDE.md on the default branch; the task and .trace/rules.md take precedence over them):\n<project-notes>\n${o.notes.replaceAll('</project-notes>', '')}\n</project-notes>` : ''),
     },
     stderr: (s) => { const l = s.trim(); if (l) o.log(`claude: ${o.redact(l).slice(0, 500)}`) },
   }
@@ -448,6 +452,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     const base = await cloneDefault({ ...g, repository: p.repository, defaultBranch, cli: d.cli })
     const cfg = d.settingsOf(base.dir)
     const rules = readRules(base.dir)
+    const notes = readProjectNotes(base.dir)
     let branch = p.kind === 'task' ? taskBranch(p, cfg) : prep.branch
     if (prep.from !== 'none') branch = await checkoutBranch({ ...g, defaultBranch: base.defaultBranch, branch, from: prep.from })
     else branch = base.defaultBranch
@@ -469,13 +474,13 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     const delegate = Boolean(delegations && d.delegateUrl)
     const tools = toolsOf(s, { hardware, delegate })
     const dtoken = delegate && delegations
-      ? delegations.register({ jobId: ctx.jobId, kind: r.kind, repository: p.repository, dir, cfg, branch, defaultBranch: base.defaultBranch, session })
+      ? delegations.register({ jobId: ctx.jobId, kind: r.kind, repository: p.repository, dir, cfg, branch, defaultBranch: base.defaultBranch, session, notes })
       : undefined
     try {
       const prompt = specialistPrompt(s, { cfg, repository: p.repository, job: prep.job(branch, thread?.text), rules, route: r, hardware, delivery: 'delegate' })
       log(`running the ${r.kind} specialist on ${p.repository} ${branch} (max ${settings.max_turns} turns, ${tools.length} tools)`)
       const out = await runClaude(d, {
-        prompt: `${prompt}${mem.context}`, cwd: dir, cfg, token, signal: ctx.signal, log, redact,
+        prompt: `${prompt}${mem.context}`, cwd: dir, cfg, token, signal: ctx.signal, log, redact, notes,
         extraEnv: { ...mem.env, ...specialistEnv({ tools, delegateUrl: d.delegateUrl, token: dtoken, timeoutMinutes: cfg.agents.delegate_timeout_minutes }) },
         onMessage: (m) => mem.observe(m), agent: r.kind,
         model: settings.model || d.model || cfg.worker.model || undefined, maxTurns: settings.max_turns,
@@ -527,7 +532,7 @@ export async function runDelegated(d: RunnerDeps, p: DelegatedTaskJob, ctx: JobC
     mem = await jobMemory(d, { repository: p.repository, agent: WORKER, session: parent.session, query: p.request.slice(0, 2000), request: p.request }, log, redact)
     log(`running the worker for the ${parent.kind} specialist (job ${parent.jobId}) on ${branch} (max ${parent.cfg.worker.max_turns} turns)`)
     const out = await runClaude(d, {
-      prompt: `${taskPrompt(p, parent.cfg, branch)}${mem.context}`, cwd: parent.dir, cfg: parent.cfg, token, signal: ctx.signal, log, redact,
+      prompt: `${taskPrompt(p, parent.cfg, branch)}${mem.context}`, cwd: parent.dir, cfg: parent.cfg, token, signal: ctx.signal, log, redact, notes: parent.notes ?? null,
       extraEnv: mem.env, onMessage: (m) => mem.observe(m), agent: WORKER,
     })
     const summary = redact(out.text)

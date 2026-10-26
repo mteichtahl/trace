@@ -380,6 +380,8 @@ describe('job runner', () => {
       // the specialist's own turn limit (agents.verify.max_turns), not the worker's
       expect(options).toMatchObject({ cwd: dir, model: 'claude-test', maxTurns: 120, permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true })
       expect(options.tools).toEqual([...SPECIALIST_BUILTINS])
+      // the checkout's .claude/settings.json (hooks, MCP servers, permissions) is never loaded
+      expect(options.settingSources).toEqual([])
       expect(options.allowedTools).toEqual(allowedToolsOf(SPECIALISTS.verify, { delegate: false }))
       expect(options.allowedTools).not.toContain('Bash')
       expect(options.allowedTools).not.toEqual(TOOLS)

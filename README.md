@@ -519,10 +519,12 @@ pattern in steps (`src/harness/actions.ts`, `templates/workflows/trace-worker.ym
    not met or not checked.
 
 One delegation per run: an unmet criterion is retried on the next run. claude-code-action passes `claude_args` to the
-CLI as written, and adds GitHub MCP servers of its own only for tools named in `--allowedTools` (none here). One gap
-remains: the action loads the checked-out tree's `.claude/settings.json` (setting sources user, project and local),
-whose hooks run commands even in the read-only specialist's session, as `settingSources: ['project']` does on
-AgentCore. With `TRACE_MEMORY_ID` (and `TRACE_AWS_ROLE` allowed to use that memory) the steps recall and record
+CLI as written, and adds GitHub MCP servers of its own only for tools named in `--allowedTools` (none here). Every
+Claude step runs with `--setting-sources user`, and the AgentCore runtime with `settingSources: []`: a checkout's
+`.claude/settings.json` and `settings.local.json` are never loaded, because their hooks would run commands (even in
+the read-only specialist's session), add MCP servers or widen permissions, and a PR's author controls them. On
+AgentCore the default branch's `CLAUDE.md` is read by trace and given to Claude as the project's notes; in the Actions
+runner the CLI still reads the checked-out tree's `CLAUDE.md` (instructions only, no commands). With `TRACE_MEMORY_ID` (and `TRACE_AWS_ROLE` allowed to use that memory) the steps recall and record
 memory under the AgentCore job's actors and session (`<owner>/<repo>/<kind>`, `<owner>/<repo>/worker`, `pr-<n>` or
 `issue-<n>`).
 

@@ -43,6 +43,8 @@ export interface ParentJob {
   defaultBranch: string
   /** The memory session the worker continues. */
   session: string
+  /** The default branch's CLAUDE.md, for the worker's system prompt. */
+  notes?: string | null
 }
 
 export const DelegateRequest = z.object({

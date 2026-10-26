@@ -87,6 +87,13 @@ export const delegation = (o: SpecialistOutput | null): (SpecialistOutput & { br
 const q = (s: string): string => `'${s.replaceAll('\'', '\'\\\'\'')}'`
 
 /** The specialist's claude_args: read only, its own trace tools, the structured output. */
+/**
+ * Load only the runner's (empty) user settings: never the checkout's .claude/settings.json or settings.local.json,
+ * whose hooks would run commands (even in the read-only specialist's session), add MCP servers or widen permissions,
+ * and which a PR's author controls. The same rule as the AgentCore runtime (settingSources: []).
+ */
+export const NO_PROJECT_SETTINGS = '--setting-sources user'
+
 export function specialistArgs(cfg: TraceConfig, kind: Route['kind'], hardware: boolean): string[] {
   const s = SPECIALISTS[kind]
   const settings = cfg.agents[kind]
@@ -97,13 +104,14 @@ export function specialistArgs(cfg: TraceConfig, kind: Route['kind'], hardware: 
     `--tools ${SPECIALIST_BUILTINS.join(',')}`,
     `--allowedTools ${allowedToolsOf(s, { delegate: false, hardware }).join(',')}`,
     `--disallowedTools ${SPECIALIST_DENIED.join(',')}`,
+    NO_PROJECT_SETTINGS,
     `--json-schema ${q(JSON.stringify(OUTPUT_JSON_SCHEMA))}`,
   ]
 }
 
 /** The worker's claude_args: its tools, as on the runtime (trace's MCP server unrestricted, without agent.delegate). */
 export function workerArgs(cfg: TraceConfig): string[] {
-  return [...(cfg.worker.model ? [`--model ${cfg.worker.model}`] : []), `--max-turns ${cfg.worker.max_turns}`, `--allowedTools ${WORKER_TOOLS.join(',')}`]
+  return [...(cfg.worker.model ? [`--model ${cfg.worker.model}`] : []), `--max-turns ${cfg.worker.max_turns}`, `--allowedTools ${WORKER_TOOLS.join(',')}`, NO_PROJECT_SETTINGS]
 }
 
 // ------------------------------------------------------------------ memory
