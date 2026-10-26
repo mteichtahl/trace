@@ -44,6 +44,11 @@
  *   assign        admin                 assign a person (email or sub) to a project
  *   unassign      admin                 remove them from it
  *   assignments   admin                 every assignment, optionally for one project
+ *   integrations.list    admin          the optional integrations (Nexar, Mouser, Digi-Key): configured or not, when
+ *                                       changed, what each enables (never a value)
+ *   integrations.set     admin          store one integration's credentials (checked with the service first; a failed
+ *                                       check is reported, never blocks)
+ *   integrations.remove  admin          delete one integration's secret
  *
  *   prompts.list     read (repo), or any  the prompt catalog: each id, editable or locked, and the layer its text comes
  *                    class without repo   from (installation, and the project's default branch with repo), and every
@@ -70,6 +75,7 @@ import {
   assign, assignments, classOf, isAdmin, projectsFor, require_, setClass, unassign,
 } from '../core/access.js'
 import { readSettings, resolve, setValue, unset } from '../core/config.js'
+import { IntegrationNameSchema, type IntegrationStore, checkIntegration, valuesFor } from '../core/integrations.js'
 import { type AnyTool, Registry, ToolError } from '../core/registry.js'
 import { type AgentMemory, AgentName, type MemoryRecord, type ProjectMemories, STRATEGIES, actorIn, personHash, projectPrefix, within } from '../agents/runtime/memory.js'
 import { type InactiveMark, ReasonSchema, RecordIdSchema, memoryState } from '../agents/runtime/memory-state.js'
@@ -133,6 +139,15 @@ export interface ActionDeps {
    * answer that there is none. */
   kbs?: () => ReadonlyMap<string, string>
   retrieve?: () => Promise<RetrieveClient>
+  /** The installation's optional integrations (TRACE_INTEGRATIONS_PREFIX); absent: integrations.* answer that there are none. */
+  integrations?: () => Promise<IntegrationStore>
+  /** Checks a key with its service (tests replace it). */
+  checkIntegration?: typeof checkIntegration
+}
+
+async function integrationStore(ctx: Context): Promise<IntegrationStore> {
+  if (!ctx.deps.integrations) throw new ActionError('this installation does not manage integrations through the API (TRACE_INTEGRATIONS_PREFIX is not set)')
+  return ctx.deps.integrations()
 }
 
 /** The installation's knowledge bases from the API runtime's environment (TRACE_PROJECT_KBS). */
@@ -560,6 +575,17 @@ export const ACTIONS = {
   }),
 
   assignments: def('admin', z.object({ repo: RepoSlug.optional() }), async (a, ctx) => assignments(ctx.principal, a.repo ? { repo: a.repo } : {})),
+
+  // the installation's optional integrations (src/core/integrations.ts): admins set and remove them; their values are
+  // never read back through the API (this runtime's role may write them, not read them)
+  'integrations.list': def('admin', z.object({}), async (_a, ctx) => (await integrationStore(ctx)).list()),
+  'integrations.set': def('admin', z.object({ name: IntegrationNameSchema, values: z.record(z.string(), z.string().max(4096)) }), async (a, ctx) => {
+    const values = valuesFor(a.name, a.values)
+    const check = await (ctx.deps.checkIntegration ?? checkIntegration)(a.name, values)
+    const secret = await (await integrationStore(ctx)).set(a.name, values)
+    return { name: a.name, secret, check, note: 'Workers read it when they next start (a new session); the library gateway on its next cold start.' }
+  }),
+  'integrations.remove': def('admin', z.object({ name: IntegrationNameSchema }), async (a, ctx) => ({ name: a.name, removed: await (await integrationStore(ctx)).remove(a.name) })),
 
   'prompts.list': def('prompts', PromptRepo, async (a, ctx) => ({ ...(a.repo ? { repo: a.repo } : {}), ...listView(await promptLayers(ctx, a.repo)) }), mayReadPrompts),
 

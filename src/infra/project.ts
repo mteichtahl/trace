@@ -56,6 +56,7 @@ import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
 import {
   PROJECT_TAG, githubSecretName, memoryName, projectDataPrefix, projectJobsPrefix, workerRuntimeName,
 } from '../core/project.js'
+import { integrationsPrefix } from '../core/integrations.js'
 import type { GatewayRef } from './gateway.js'
 import type { GpuCompute } from './gpu.js'
 import { ProjectKnowledgeBase } from './knowledge.js'
@@ -71,6 +72,15 @@ export const ACCESS_PREFIX = 'access'
 export const PROMPTS_PREFIX = 'prompts'
 
 const TELEMETRY_ACTIONS = ['xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets']
+
+/** Reading the installation's optional integrations (`<prefix>/integrations/*`, src/core/integrations.ts): each
+ * worker's role when the library gateway is off, the gateway's Lambda when it is on, never both. */
+export function integrationsReadStatement(partition: string, region: string, account: string, prefix: string): iam.PolicyStatement {
+  return new iam.PolicyStatement({
+    sid: 'IntegrationsRead', actions: ['secretsmanager:GetSecretValue'],
+    resources: [`arn:${partition}:secretsmanager:${region}:${account}:secret:${integrationsPrefix(prefix)}*`],
+  })
+}
 
 /** The Bedrock model access the agents need (also the worker.runner=actions fallback). */
 export function modelAccess(account: string): iam.PolicyStatement {
@@ -251,6 +261,11 @@ export class ProjectStack extends Construct {
     if (p.gateway) {
       role.addToPolicy(new iam.PolicyStatement({ sid: 'LibraryGateway', actions: ['bedrock-agentcore:InvokeGateway'], resources: [p.gateway.arn] }))
       gatewayEnv.TRACE_GATEWAY_URL = p.gateway.url
+    } else {
+      // no gateway: the parts tools run here, so this worker reads the installation's optional integrations itself
+      // (the agent can then read them too; with the gateway on, only its Lambda can). README "Optional integrations"
+      role.addToPolicy(integrationsReadStatement(partition, region, account, cfg.prefix))
+      gatewayEnv.TRACE_INTEGRATIONS_PREFIX = integrationsPrefix(cfg.prefix)
     }
 
     // ------------------------------------------------------------------ GPU jobs: its own definition and job role

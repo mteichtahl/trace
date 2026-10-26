@@ -59,7 +59,12 @@ export interface AwsCheck {
   agentCore: { ok: boolean; reason: string }
   models: { id: string; name: string }[]
   oidcProvider: boolean
+  /** the provider is the trace stack's own resource (an earlier deploy made it): it must stay in the stack, or
+   * CloudFormation deletes it */
+  oidcInStack?: boolean
   cdkBootstrapped: boolean
+  /** the CDKToolkit stack's BootstrapVersion output (null when there is none) */
+  cdkVersion?: number | null
   existing: { stack: string; status: string; outputs: Record<string, string> } | null
   warnings: string[]
 }
@@ -105,9 +110,18 @@ export async function checkAws(creds: AwsCredentialIdentity, region: string, sta
   }
   const toolkit = await describe('CDKToolkit')
   const existing = await describe(stack)
+  let oidcInStack = false
+  if (existing) {
+    try {
+      oidcInStack = (await stackResources(cfn, stack)).some((r) => r.logicalId.startsWith('GithubOidc') && r.type !== 'AWS::CloudFormation::Stack')
+    } catch (e) {
+      warnings.push(`Could not list the stack's resources: ${msg(e)}`)
+    }
+  }
   return {
-    account: id.Account ?? '', arn: id.Arn ?? '', region, agentCore, models, oidcProvider,
+    account: id.Account ?? '', arn: id.Arn ?? '', region, agentCore, models, oidcProvider, oidcInStack,
     cdkBootstrapped: Boolean(toolkit && !toolkit.status.startsWith('DELETE')),
+    cdkVersion: toolkit?.outputs.BootstrapVersion ? Number(toolkit.outputs.BootstrapVersion) : null,
     existing: existing ? { stack, ...existing } : null, warnings,
   }
 }
@@ -313,4 +327,31 @@ export async function freeSecretNames(creds: AwsCredentialIdentity, region: stri
     }
   }
   return out
+}
+
+/**
+ * The facts derive.ts needs that the answers leave open, and only those (src/installer/derive.ts resolveAnswers):
+ * the account always (STS), the profile's region, the token's login and email, the region's models, the GPU and CPU
+ * quotas, and whether the region has S3 Vectors. A fact that cannot be read is left out (its default applies).
+ */
+export async function liveFacts(creds: AwsCredentialIdentity, a: Answers, token: string): Promise<import('./derive.js').Facts> {
+  const { liveDeps, QUOTAS } = await import('./preflight.js')
+  const profileRegion = a.aws.mode === 'profile' ? (await profiles()).regions[a.aws.profile] ?? '' : ''
+  const region = a.aws.region || profileRegion || 'us-east-1'
+  const d = await liveDeps(creds, region, token)
+  const quiet = <T>(p: Promise<T>): Promise<T | undefined> => p.catch(() => undefined)
+  const [sts, info, email, models, gpuQuota, cpuQuota, s3vectors] = await Promise.all([
+    d.sts(),
+    a.github.login ? Promise.resolve(undefined) : quiet(d.token()),
+    a.adminEmail ? Promise.resolve(undefined) : quiet(d.email()),
+    a.agents.model ? Promise.resolve(undefined) : quiet(d.models()),
+    a.agents.gpuEnabled === null ? quiet(d.quota(a.agents.gpuSpot ? QUOTAS.gpuSpot : QUOTAS.gpuOnDemand)) : Promise.resolve(undefined),
+    a.agents.cpuEnabled === null ? quiet(d.quota(a.agents.cpuSpot ? QUOTAS.cpuSpot : QUOTAS.cpuOnDemand)) : Promise.resolve(undefined),
+    a.agents.knowledgeBase === null ? quiet(d.s3vectors()) : Promise.resolve(undefined),
+  ])
+  return {
+    account: sts.account, ...(profileRegion ? { profileRegion } : {}),
+    ...(info ? { login: info.login } : {}), ...(email !== undefined ? { email } : {}), ...(models ? { models } : {}),
+    ...(gpuQuota !== undefined ? { gpuQuota } : {}), ...(cpuQuota !== undefined ? { cpuQuota } : {}), ...(s3vectors !== undefined ? { s3vectors } : {}),
+  }
 }

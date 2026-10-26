@@ -20,12 +20,16 @@ const calls = vi.hoisted(() => ({
   /** the default names check (no hook): which projects the stack has, and the names taken in the account */
   deployed: new Set<string>(),
   taken: new Set<string>(),
+  /** CodeBuild runners: what was made, removed and asked of the credential; repositories whose runner fails */
+  runners: [] as string[], removedRunners: [] as string[], credential: [] as string[], runnerFails: new Set<string>(), deletedVars: [] as string[],
+  /** GitHub's OIDC provider in the account, and whether it is the stack's own */
+  oidc: { provider: false, inStack: false },
 }))
 
 vi.mock('../../src/installer/aws.js', () => ({
   credentials: async () => ({ accessKeyId: 'AKIAEXAMPLE', secretAccessKey: 'secret-key-value-1234' }),
   awsEnv: (_c: unknown, region: string) => ({ AWS_REGION: region }),
-  checkAws: async () => ({ account: '123456789012', arn: 'arn:aws:iam::123456789012:user/marc', region: 'us-east-1', agentCore: { ok: true, reason: '' }, models: [], oidcProvider: false, cdkBootstrapped: false, existing: calls.existing, warnings: [] }),
+  checkAws: async () => ({ account: '123456789012', arn: 'arn:aws:iam::123456789012:user/marc', region: 'us-east-1', agentCore: { ok: true, reason: '' }, models: [], oidcProvider: calls.oidc.provider, oidcInStack: calls.oidc.inStack, cdkBootstrapped: false, existing: calls.existing, warnings: [] }),
   stackOutputs: async () => ({}),
   freeSecretNames: async (_c: unknown, _r: string, names: readonly string[]) => { calls.freed.push(...names); return names.map((n) => `${n}: free`) },
   profiles: async () => ({ names: ['default'], regions: { default: 'us-east-1' } }),
@@ -35,6 +39,21 @@ vi.mock('../../src/installer/aws.js', () => ({
   deployedProjects: async () => calls.deployed,
   nameIndex: () => ({ taken: async (n: { memories: string[]; deliveries: string[]; secrets: string[] }) => [...n.memories, ...n.deliveries, ...n.secrets].filter((x) => calls.taken.has(x)) }),
   ensureGpuImage: async () => ({ ok: true, detail: 'the GPU image is built' }),
+  liveFacts: async () => ({ account: '123456789012' }),
+}))
+vi.mock('../../src/installer/runners.js', async (orig) => ({
+  ...(await orig<typeof import('../../src/installer/runners.js')>()),
+  ensureSourceCredential: async (_cb: unknown, token: string, ours: boolean) => { calls.credential.push(`${token.slice(0, 6)}:${ours}`); return { state: 'imported', detail: 'imported' } },
+  ensureRunner: async (_cb: unknown, spec: { repo: string; prefix: string }) => {
+    if (calls.runnerFails.has(spec.repo)) throw new Error(`the webhook on ${spec.repo}: OAuthProviderException (the token needs Administration and Webhooks read and write on it)`)
+    calls.runners.push(spec.repo); return `${spec.prefix}-ci-x`
+  },
+  runnerProjects: async () => ['trace-ci-gone0000'],
+  removeRunner: async (_cb: unknown, name: string) => { calls.removedRunners.push(name) },
+}))
+vi.mock('../../src/installer/onboard-api.js', async (orig) => ({
+  ...(await orig<typeof import('../../src/installer/onboard-api.js')>()),
+  onboardViaApi: async (repo: string) => { calls.onboard.push(repo); return { repo, state: 'opened', pr: `https://github.com/${repo}/pull/1`, settings: [], notes: [] } },
 }))
 vi.mock('@aws-sdk/client-secrets-manager', () => ({
   SecretsManagerClient: class { async send(c: unknown) { calls.secrets.push(c) } },
@@ -72,14 +91,12 @@ vi.mock('../../src/installer/github.js', async (orig) => ({
   ...(await orig<typeof import('../../src/installer/github.js')>()),
   setVariable: async (_t: string, repo: string, name: string, value: string) => { calls.variables.push(`${repo}:${name}`); calls.values.set(`${repo}:${name}`, value); return 'created' },
   setSecret: async (_t: string, repo: string, name: string, value: string) => { calls.ghSecrets.push(`${repo}:${name}`); calls.ghSecretValues.set(`${repo}:${name}`, value) },
+  deleteVariable: async (_t: string, repo: string, name: string) => { calls.deletedVars.push(`${repo}:${name}`); return true },
+  createRepo: async (_t: string, slug: string) => ({ fullName: slug, defaultBranch: 'main', created: true }),
   checkToken: async (token: string) => {
     const t = calls.tokens.get(token) ?? { login: 'trace-agent', repos: [] }
     return { login: t.login, name: null, kind: 'fine-grained', scopes: [], repos: t.repos.map((fullName) => ({ fullName, private: true, admin: false, push: true, defaultBranch: 'main' })), warnings: [] }
   },
-}))
-vi.mock('../../src/core/onboard.js', async (orig) => ({
-  ...(await orig<typeof import('../../src/core/onboard.js')>()),
-  onboard: async (repo: string) => { calls.onboard.push(repo); return { pr: `https://github.com/${repo}/pull/1`, settings: [] } },
 }))
 
 const { AnswersSchema, SecretsSchema } = await import('../../src/installer/answers.js')
@@ -110,6 +127,7 @@ const OUTPUTS: Record<string, string> = {
   TraceHome: '', GithubSecretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:trace/github-token',
   ApiRuntimeArn: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/trace_api-abc',
   UserPoolId: 'us-east-1_abc', UserPoolClientId: 'client123', CognitoDomain: 'https://trace-123456789012.auth.us-east-1.amazoncognito.com',
+  RunnerRoleArn: 'arn:aws:iam::123456789012:role/trace-ci-runner-us-east-1',
 }
 // each project's own outputs, named by its hash
 for (const repo of ['mteichtahl/board', 'mteichtahl/fw']) {
@@ -132,7 +150,7 @@ describe('answers', () => {
 
   it('plans every step, naming the account, region and repositories', () => {
     const steps = plan(AnswersSchema.parse(ANSWERS))
-    expect(steps.map((s) => s.id)).toEqual(['check', 'cdk', 'deploy', 'token', 'repos', 'onboard', 'people', 'local', 'gpu'])
+    expect(steps.map((s) => s.id)).toEqual(['check', 'cdk', 'deploy', 'token', 'integrations', 'repos', 'runners', 'onboard', 'people', 'local', 'gpu'])
     expect(steps.find((s) => s.id === 'repos')?.detail).toContain('mteichtahl/fw')
     expect(steps.find((s) => s.id === 'deploy')?.detail).toMatch(/for each of the 2 repositories its own AgentCore worker runtime/)
   })
@@ -423,7 +441,8 @@ describe('the local server', () => {
     expect((await call('/api/plan', { method: 'POST', key, body: '{"answers":{}}' })).status).toBe(400)
     expect((await call('/api/plan', { method: 'POST', key, body: 'x', type: 'text/plain' })).status).toBe(415)
     const planned = await call('/api/plan', { method: 'POST', key, body: JSON.stringify({ answers: ANSWERS }) })
-    expect(JSON.parse(planned.body).steps).toHaveLength(9)
+    expect(JSON.parse(planned.body).steps).toHaveLength(11)
+    expect(JSON.parse(planned.body).timeline.join(' ')).toMatch(/about 15 minutes of CloudFormation/)
   })
 })
 
@@ -545,30 +564,159 @@ describe('the library gateway', () => {
     expect(SecretsSchema.safeParse({ githubToken: TOKEN, libraryKeys: { OTHER: 'x' } }).success).toBe(false)
   })
 
-  it('writes the keys given into the gateway\'s secret, merged, and never shows them', async () => {
+  it('stores the keys given as the installation\'s integration (<prefix>/integrations/<name>), checked, never shown', async () => {
     calls.secrets.length = 0
     OUTPUTS.TraceHome = join(mkdtempSync(join(tmpdir(), 'trace-central-')), 'home')
     const events: string[] = []
+    const stored: { name: string; values: Record<string, unknown> }[] = []
     const ok = await apply(AnswersSchema.parse(GW), SecretsSchema.parse({ githubToken: TOKEN, libraryKeys: { MOUSER_API_KEY: MOUSER } }), (e) => events.push(JSON.stringify(e)), {
       cdk: async (args, env) => { if (args[0] === 'deploy') expect(JSON.parse(env.TRACE_INFRA ?? '{}').gateway).toEqual({ enabled: true }); expect(env.TRACE_INFRA).not.toContain(MOUSER); return 0 },
       outputs: async () => ({ ...OUTPUTS, LibraryKeysSecretArn: KEYS_ARN }),
-      readSecret: async () => ({ unused: 'Ab12', NEXAR_CLIENT_ID: 'kept' }),
+      integrations: { set: async (name, values) => { stored.push({ name, values }); return `trace/integrations/${name}` } },
+      checkIntegration: async () => ({ ok: true, detail: 'Mouser accepted the key' }),
     })
     expect(ok).toBe(true)
-    const w = secretWrites().find((x) => x.SecretId === KEYS_ARN)
-    expect(JSON.parse(w?.SecretString ?? '{}')).toEqual({ NEXAR_CLIENT_ID: 'kept', MOUSER_API_KEY: MOUSER })
+    expect(stored).toEqual([{ name: 'mouser', values: { MOUSER_API_KEY: MOUSER } }])
+    expect(secretWrites().map((x) => x.SecretId)).not.toContain(KEYS_ARN)
     expect(events.join('\n')).not.toContain(MOUSER)
-    expect(events.join('\n')).toContain('distributor keys stored for the library gateway: MOUSER_API_KEY')
+    expect(events.join('\n')).toContain('mouser: stored in trace/integrations/mouser')
   })
 
-  it('leaves the secret alone when no key is given', async () => {
+  it('stores nothing, and says how to add one later, when no key is given', async () => {
     calls.secrets.length = 0
     OUTPUTS.TraceHome = join(mkdtempSync(join(tmpdir(), 'trace-central-')), 'home')
-    const ok = await apply(AnswersSchema.parse(GW), SecretsSchema.parse({ githubToken: TOKEN }), () => undefined, {
+    const events: { type: string; summary?: string[]; step?: { id: string; status: string; detail: string } }[] = []
+    const ok = await apply(AnswersSchema.parse(GW), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
       cdk: async () => 0, outputs: async () => ({ ...OUTPUTS, LibraryKeysSecretArn: KEYS_ARN }),
-      readSecret: async () => { throw new Error('must not be read') },
+      integrations: { set: async () => { throw new Error('must not be stored') } },
     })
     expect(ok).toBe(true)
     expect(secretWrites().map((x) => x.SecretId)).not.toContain(KEYS_ARN)
+    expect(events.find((e) => e.step?.id === 'integrations' && e.step.status === 'skipped')?.step?.detail).toMatch(/trace integrations set <name>/)
+    expect(events.at(-1)?.summary?.join(' ')).toMatch(/trace integrations set nexar/)
+  })
+})
+
+describe('the light install', () => {
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const run = async (a: unknown, s: Record<string, unknown> = {}, hooks: Parameters<typeof apply>[3] = {}): Promise<{ ok: boolean; events: { type: string; line?: string; summary?: string[]; step?: { id: string; status: string; detail: string } }[] }> => {
+    OUTPUTS.TraceHome = join(mkdtempSync(join(tmpdir(), 'trace-central-')), 'home')
+    const events: { type: string; line?: string; summary?: string[]; step?: { id: string; status: string; detail: string } }[] = []
+    const ok = await apply(AnswersSchema.parse(a), SecretsSchema.parse({ githubToken: TOKEN, ...s }), (e) => events.push(e as never), { cdk: async () => 0, outputs: async () => OUTPUTS, ...quiet, ...hooks })
+    return { ok, events }
+  }
+
+  it('installs from the credentials and a token alone: account, email and model derived, no repositories needed', async () => {
+    const infra: Record<string, unknown>[] = []
+    const r = await run({}, {}, {
+      facts: async () => ({ account: '123456789012', login: 'marc', email: 'marc@example.com', models: [{ id: 'us.anthropic.claude-sonnet-4-6', name: 'S' }], gpuQuota: 0 }),
+      cdk: async (args, env) => { if (args[0] === 'deploy') infra.push(JSON.parse(env.TRACE_INFRA ?? '{}')); return 0 },
+    })
+    expect(r.ok).toBe(true)
+    expect(infra[0]).toMatchObject({ account: '123456789012', region: 'us-east-1', adminEmail: 'marc@example.com', model: 'us.anthropic.claude-sonnet-4-6', repositories: [], gpu: { enabled: false } })
+    expect(r.events.filter((e) => e.type === 'log' && e.line?.startsWith('derived:')).map((e) => e.line)).toEqual(expect.arrayContaining(['derived: account 123456789012 (the credentials\')', 'derived: first administrator marc@example.com (the token\'s primary email)']))
+    expect(r.events.find((e) => e.step?.id === 'repos' && e.step.status === 'skipped')).toBeDefined()
+    expect(r.events.at(-1)?.summary?.join(' ')).toMatch(/No repositories yet: run `trace install` again/)
+    // the decision from the quota is not saved as an answer: the next run decides again
+    expect(AnswersSchema.parse(savedAnswers().answers).agents.gpuEnabled).toBeNull()
+    // and without an email visible to the token, it stops before anything is created and says what to give
+    const cdk: string[][] = []
+    const stopped = await run({}, {}, { facts: async () => ({ account: '123456789012', login: 'marc', email: null }), cdk: async (a) => { cdk.push(a); return 0 } })
+    expect(stopped.ok).toBe(false)
+    expect(cdk).toEqual([])
+    expect(stopped.events.at(-1)?.summary?.join(' ')).toMatch(/first administrator's email/)
+  })
+
+  it('runs each repository on its CodeBuild runner, and keeps one the token cannot administer on GitHub\'s', async () => {
+    calls.runners.length = 0
+    calls.deletedVars.length = 0
+    calls.removedRunners.length = 0
+    calls.values.clear()
+    calls.runnerFails = new Set(['mteichtahl/fw'])
+    try {
+      const r = await run({ ...ANSWERS, agents: { ...ANSWERS.agents, runnerExtraRepos: ['mteichtahl/trace'] } })
+      expect(r.ok).toBe(true)
+      expect(calls.runners.sort()).toEqual(['mteichtahl/board', 'mteichtahl/trace'])
+      expect(calls.values.get('mteichtahl/board:TRACE_CODEBUILD_PROJECT')).toBe('trace-ci-x')
+      // the failed one has no variable (its jobs would wait for a runner that never comes) and the summary says why
+      expect(calls.values.has('mteichtahl/fw:TRACE_CODEBUILD_PROJECT')).toBe(false)
+      expect(calls.deletedVars).toContain('mteichtahl/fw:TRACE_CODEBUILD_PROJECT')
+      expect(r.events.at(-1)?.summary?.join('\n')).toMatch(/mteichtahl\/fw's CI stays on GitHub's runners: .*Administration and Webhooks/)
+      expect(r.events.find((e) => e.step?.id === 'runners' && e.step.status === 'done')?.step?.detail).toMatch(/2 on CodeBuild, 1 kept on GitHub's runners \(mteichtahl\/fw\)/)
+      // a runner of a repository no longer here is removed
+      expect(calls.removedRunners).toEqual(['trace-ci-gone0000'])
+      // off: every runner and variable goes
+      calls.removedRunners.length = 0
+      const off = await run({ ...ANSWERS, agents: { ...ANSWERS.agents, runners: false } })
+      expect(off.ok).toBe(true)
+      expect(calls.removedRunners).toEqual(['trace-ci-gone0000'])
+      expect(off.events.filter((e) => e.step?.id === 'runners').at(-1)?.step?.status).toBe('skipped')
+    } finally {
+      calls.runnerFails = new Set()
+    }
+  })
+
+  it('creates a new project\'s repository before setting its variables, then scaffolds it', async () => {
+    calls.onboard.length = 0
+    const created: string[] = []
+    const o = projectOutputs('mteichtahl/new-board')
+    const r = await run({ ...ANSWERS, projects: [{ repo: 'mteichtahl/new-board', create: { template: 'kicad' } }], people: [] }, {}, {
+      outputs: async () => ({ ...OUTPUTS, [o.runtimeArn]: 'arn:rt/new', [o.roleArn]: 'arn:role/new', [o.secretArn]: 'arn:secret/new', [o.memoryId]: 'm-new' }),
+      createRepo: async (_t, slug) => { created.push(slug); return { fullName: slug, defaultBranch: 'main', created: true } },
+    })
+    expect(r.ok).toBe(true)
+    expect(created).toEqual(['mteichtahl/new-board'])
+    expect(calls.onboard).toEqual(['mteichtahl/new-board'])
+  })
+
+  it('says trace is ready before it waits for the GPU image, and reports incomplete integration keys', async () => {
+    const order: string[] = []
+    const r = await run({ ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: true } }, { integrations: { nexar: { NEXAR_CLIENT_ID: 'only-the-id' } } }, {
+      outputs: async () => ({ ...OUTPUTS, GpuImageBuild: 'trace-gpu-image:1', GpuImageUri: 'x/trace-gpu:abc' }),
+      gpuImage: async () => { order.push('gpu'); return { ok: true, detail: 'built' } },
+    })
+    expect(r.ok).toBe(true)
+    expect(order).toEqual(['gpu'])
+    expect(r.events.findIndex((e) => e.type === 'ready')).toBeLessThan(r.events.findIndex((e) => e.step?.id === 'gpu' && e.step.status === 'running'))
+    expect(r.events.at(-1)?.summary?.join('\n')).toMatch(/Nexar \(Octopart\): NEXAR_CLIENT_SECRET missing, so it was not stored/)
+  })
+
+  it('keeps GitHub\'s OIDC provider in the stack that made it, and uses one made elsewhere', async () => {
+    const want = async (oidc: { provider: boolean; inStack: boolean }): Promise<boolean> => {
+      calls.oidc = oidc
+      let made = false
+      await run(ANSWERS, {}, { cdk: async (args, env) => { if (args[0] === 'deploy') made = JSON.parse(env.TRACE_INFRA ?? '{}').createOidcProvider; return 0 } })
+      return made
+    }
+    try {
+      expect(await want({ provider: false, inStack: false })).toBe(true)
+      expect(await want({ provider: true, inStack: false })).toBe(false)
+      // the provider exists because the stack made it: dropping it from the stack would delete it
+      expect(await want({ provider: true, inStack: true })).toBe(true)
+    } finally {
+      calls.oidc = { provider: false, inStack: false }
+    }
+  })
+
+  it('sets several repositories up at once, a few at a time', async () => {
+    const repos = Array.from({ length: 10 }, (_, i) => `mteichtahl/r${i}`)
+    let open = 0
+    let most = 0
+    const outputs: Record<string, string> = { ...OUTPUTS }
+    for (const repo of repos) {
+      const o = projectOutputs(repo)
+      Object.assign(outputs, { [o.runtimeArn]: `arn:rt/${repo}`, [o.roleArn]: `arn:role/${repo}`, [o.secretArn]: `arn:secret/${repo}`, [o.memoryId]: `m-${repo}` })
+    }
+    const r = await run({ ...ANSWERS, projects: repos.map((repo) => ({ repo, onboard: false })), people: [] }, {}, {
+      outputs: async () => outputs,
+      runners: {
+        credential: async () => ({ state: 'existing', detail: 'existing' }),
+        ensure: async (spec) => { open++; most = Math.max(most, open); await new Promise((x) => setTimeout(x, 5)); open--; return `trace-ci-${spec.repo}` },
+        list: async () => [], remove: async () => undefined,
+      },
+    })
+    expect(r.ok).toBe(true)
+    expect(most).toBeGreaterThan(1)
+    expect(most).toBeLessThanOrEqual(4)
   })
 })

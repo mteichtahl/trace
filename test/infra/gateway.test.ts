@@ -101,6 +101,18 @@ describe('the library gateway', () => {
     }
   })
 
+  it('keeps the optional integrations\' keys from the agents: only the Lambda may read them', () => {
+    const lambda = statements(on.parent, 'LibraryFunctionRole').filter((x) => x.Sid === 'IntegrationsRead')
+    expect(lambda).toHaveLength(1)
+    expect(JSON.stringify(lambda[0]?.Resource)).toMatch(/:secret:trace\/integrations\/\*/)
+    on.parent.hasResourceProperties('AWS::Lambda::Function', { Environment: { Variables: Match.objectLike({ TRACE_INTEGRATIONS_PREFIX: 'trace/integrations/' }) } })
+    for (const r of [A, B]) {
+      const n = nestedOf(on, r)
+      expect(JSON.stringify(statements(n, `Project${projectHash(r)}RuntimeRole`))).not.toContain('integrations')
+      expect(JSON.stringify(n.toJSON())).not.toContain('TRACE_INTEGRATIONS_PREFIX')
+    }
+  })
+
   it('outputs the gateway URL and the keys secret', () => {
     on.parent.hasOutput(LIBRARY_GATEWAY_OUTPUT, {})
     on.parent.hasOutput(LIBRARY_KEYS_OUTPUT, {})
@@ -118,5 +130,34 @@ describe('without the gateway', () => {
     off.all.resourceCountIs('AWS::BedrockAgentCore::GatewayTarget', 0)
     expect(JSON.stringify(off.all.toJSON())).not.toContain('TRACE_GATEWAY_URL')
     expect(JSON.stringify(off.all.toJSON())).not.toContain('InvokeGateway')
+  })
+
+  it('lets each worker read the optional integrations itself, and is told where they are', () => {
+    const n = nestedOf(off, A)
+    const st = statements(n, `Project${projectHash(A)}RuntimeRole`).filter((x) => x.Sid === 'IntegrationsRead')
+    expect(st).toHaveLength(1)
+    expect(actions(st[0] as Statement)).toEqual(['secretsmanager:GetSecretValue'])
+    const runtime = Object.values(n.findResources('AWS::BedrockAgentCore::Runtime') as Record<string, { Properties: { EnvironmentVariables: Record<string, unknown> } }>)[0]
+    expect(runtime?.Properties.EnvironmentVariables.TRACE_INTEGRATIONS_PREFIX).toBe('trace/integrations/')
+    // the API may write them for admins, never read them
+    const api = statements(off.parent, 'ApiRuntimeRole').filter((x) => x.Sid === 'ManageIntegrations')
+    expect(api).toHaveLength(1)
+    expect(actions(api[0] as Statement)).not.toContain('secretsmanager:GetSecretValue')
+    expect(actions(api[0] as Statement)).toEqual(expect.arrayContaining(['secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue', 'secretsmanager:DeleteSecret']))
+  })
+
+  it('gives the CI runners a role with nothing but their own logs, and copies or caches the images', () => {
+    const st = statements(off.parent, 'RunnersRole')
+    expect(new Set(st.flatMap(actions))).toEqual(new Set(['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents']))
+    expect(JSON.stringify(st)).toContain('/aws/codebuild/trace-ci-*')
+    off.parent.hasOutput('RunnerRoleArn', {})
+    const builds = Object.values(off.parent.findResources('AWS::CodeBuild::Project') as Record<string, { Properties: { Name: string; Environment: { EnvironmentVariables: { Name: string; Value: string }[] }; Cache?: { Type: string; Modes: string[] }; Source: { BuildSpec: string } } }>)
+    expect(builds.map((b) => b.Properties.Name).sort()).toEqual(['trace-agent-image', 'trace-gpu-image'])
+    for (const b of builds) {
+      const pre = b.Properties.Environment.EnvironmentVariables.find((v) => v.Name === 'PREBUILT_IMAGE')?.Value ?? ''
+      expect(pre).toMatch(new RegExp(`^public\\.ecr\\.aws/mteichtahl/trace-${b.Properties.Name.split('-')[1]}:v\\d+\\.\\d+\\.\\d+-[0-9a-f]{16}$`))
+      expect(b.Properties.Cache).toEqual({ Type: 'LOCAL', Modes: ['LOCAL_DOCKER_LAYER_CACHE'] })
+      expect(b.Properties.Source.BuildSpec).toContain('--cache-from')
+    }
   })
 })

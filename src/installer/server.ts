@@ -17,13 +17,48 @@ import { z } from 'zod'
 import { answers as savedAnswers, installation } from '../core/client.js'
 import { stackName } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
-import { AnswersSchema, AwsAnswers, type InstallEvent, SecretsSchema } from './answers.js'
-import { apply, plan } from './bootstrap.js'
+import { IntegrationNameSchema, checkIntegration, valuesFor } from '../core/integrations.js'
+import { type Answers, AnswersSchema, AwsAnswers, type InstallEvent, SecretsSchema } from './answers.js'
+import { type Hooks, apply, changesSince, plan, timeline } from './bootstrap.js'
 import { checkAws, credentials, profiles } from './aws.js'
+import { DEFAULT_REGION } from './derive.js'
+import { FixRequest, fix } from './fix.js'
 import { canConfigure, checkToken } from './github.js'
 import { page } from './page.js'
+import { type PreflightInput, type PreflightResult, liveDeps, preflight } from './preflight.js'
 
-export interface InstallerOptions { port?: number; host?: string; uiScript?: string }
+export interface InstallerOptions {
+  port?: number
+  host?: string
+  uiScript?: string
+  /** tests: the preflight, the fixes, the integration checks and the install's hooks */
+  preflight?: (i: PreflightInput, token: string) => Promise<PreflightResult>
+  fix?: typeof fix
+  checkIntegration?: typeof checkIntegration
+  hooks?: Hooks
+}
+
+const PreflightBody = z.object({
+  aws: z.object({ mode: z.enum(['profile', 'keys']).default('profile'), profile: z.string().default('default'), region: z.string().regex(/^([a-z]{2}(-[a-z]+)+-\d)?$/).default('') }).strict(),
+  secrets: SecretsSchema.pick({ awsAccessKeyId: true, awsSecretAccessKey: true, awsSessionToken: true }).partial().default({}),
+  token: z.string().min(20, 'a GitHub token'),
+  adminToken: z.string().default(''),
+  prefix: z.string().regex(/^[a-z][a-z0-9-]{1,20}$/).default('trace'),
+  model: z.string().default(''),
+  gpuEnabled: z.boolean().nullable().default(null),
+  gpuSpot: z.boolean().default(false),
+  cpuSpot: z.boolean().default(false),
+  cpuVcpus: z.number().int().min(1).max(192).default(16),
+  runners: z.boolean().default(true),
+  repos: z.array(z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')).max(60).default([]),
+  create: z.array(z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')).max(20).default([]),
+}).strict()
+
+/** The answers of the last installation from this machine, when they still parse. */
+function previous(): Answers | null {
+  const r = AnswersSchema.safeParse(savedAnswers().answers)
+  return r.success ? r.data : null
+}
 
 interface RunState { events: InstallEvent[]; listeners: Set<ServerResponse>; done: boolean }
 
@@ -73,6 +108,7 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
       saved: (savedAnswers().answers ?? null) as unknown,
       installed: installation(),
       node: process.version,
+      defaultRegion: DEFAULT_REGION,
     }),
     'POST /api/github/check': async (req) => {
       const { token, repos } = z.object({ token: z.string().min(20), repos: z.array(z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')).max(200).default([]) }).parse(await body(req))
@@ -81,14 +117,39 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
       return { ...info, access }
     },
     'POST /api/aws/check': async (req) => {
-      const b = z.object({ aws: AwsAnswers.pick({ mode: true, profile: true, region: true }), secrets: SecretsSchema.pick({ awsAccessKeyId: true, awsSecretAccessKey: true, awsSessionToken: true }).partial(), prefix: z.string().default('trace') }).parse(await body(req))
+      const b = z.object({ aws: AwsAnswers.unwrap().pick({ mode: true, profile: true, region: true }), secrets: SecretsSchema.pick({ awsAccessKeyId: true, awsSecretAccessKey: true, awsSessionToken: true }).partial(), prefix: z.string().default('trace') }).parse(await body(req))
       const creds = await credentials(b.aws, { awsAccessKeyId: '', awsSecretAccessKey: '', awsSessionToken: '', ...b.secrets })
       return checkAws(creds, b.aws.region, stackName(b.prefix))
     },
+    // everything at once, before anything is created (src/installer/preflight.ts): what is derived, and each finding
+    'POST /api/preflight': async (req) => {
+      const b = PreflightBody.parse(await body(req))
+      const creds = await credentials(b.aws, { awsAccessKeyId: '', awsSecretAccessKey: '', awsSessionToken: '', ...b.secrets })
+      const prof = b.aws.mode === 'profile' ? (await profiles()).regions[b.aws.profile] ?? '' : ''
+      const region = b.aws.region || prof || DEFAULT_REGION
+      const r = await (opts.preflight ?? (async (i: PreflightInput, t: string) => preflight(i, await liveDeps(creds, region, t))))({
+        region, prefix: b.prefix, model: b.model, gpuSpot: b.gpuSpot, cpuSpot: b.cpuSpot, cpuVcpus: b.cpuVcpus, gpuEnabled: b.gpuEnabled,
+        runners: b.runners, repos: b.repos, create: b.create, hasAdminToken: Boolean(b.adminToken),
+      }, b.token)
+      return { ...r, region, profileRegion: prof }
+    },
+    // what the preflight offered to fix, when the person asks
+    'POST /api/fix': async (req) => {
+      const b = z.object({ aws: AwsAnswers.unwrap().pick({ mode: true, profile: true, region: true }), secrets: SecretsSchema.pick({ awsAccessKeyId: true, awsSecretAccessKey: true, awsSessionToken: true }).partial().default({}), token: z.string().default(''), fix: FixRequest }).parse(await body(req))
+      const creds = await credentials(b.aws, { awsAccessKeyId: '', awsSecretAccessKey: '', awsSessionToken: '', ...b.secrets })
+      const region = b.aws.region || (await profiles()).regions[b.aws.profile] || DEFAULT_REGION
+      return { detail: await (opts.fix ?? fix)(b.fix, { creds, region, token: b.token }) }
+    },
+    // an integration's keys, checked with its service (never stored here: that is the install's)
+    'POST /api/integrations/check': async (req) => {
+      const b = z.object({ name: IntegrationNameSchema, values: z.record(z.string(), z.string().max(4096)) }).parse(await body(req))
+      return (opts.checkIntegration ?? checkIntegration)(b.name, valuesFor(b.name, b.values))
+    },
     'POST /api/plan': async (req) => {
-      const b = z.object({ answers: z.unknown(), existing: z.object({ outputs: z.record(z.string(), z.string()) }).loose().nullable().default(null) }).parse(await body(req))
+      const b = z.object({ answers: z.unknown(), existing: z.object({ outputs: z.record(z.string(), z.string()) }).loose().nullable().default(null), cdkBootstrapped: z.boolean().default(false) }).parse(await body(req))
       const a = AnswersSchema.parse(b.answers)
-      return { steps: plan(a, b.existing) }
+      const prev = previous()
+      return { steps: plan(a, b.existing, prev), timeline: timeline(a, b.existing, { cdkBootstrapped: b.cdkBootstrapped }), changes: b.existing ? changesSince(prev, a) : [] }
     },
     'POST /api/apply': async (req) => {
       if (run && !run.done) throw new HttpError(409, 'an installation is already running')
@@ -101,8 +162,9 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
         state.events.push(e)
         for (const l of state.listeners) l.write(`data: ${JSON.stringify(e)}\n\n`)
         if (e.type === 'done') { state.done = true; for (const l of state.listeners) l.end() }
+        // 'ready' keeps the stream open: the GPU image's wait goes on after it
       }
-      void apply(a, s, emit)
+      void apply(a, s, emit, opts.hooks ?? {}, { prev: previous() })
       return { started: true }
     },
   }

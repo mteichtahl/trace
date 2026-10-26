@@ -55,8 +55,12 @@ import * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { Provider } from 'aws-cdk-lib/custom-resources'
 import type { Construct, IConstruct } from 'constructs'
 import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
+import { integrationsPrefix } from '../core/integrations.js'
 import { JOBS_PREFIX, PROJECTS_PREFIX, memoryName } from '../core/project.js'
 import { LibraryGateway } from './gateway.js'
+import { imageBuildEnv, imageBuildSpec, imageContentTag } from './images.js'
+import { bundlingRoot } from './lockfile.js'
+import { RunnerSupport } from './runners.js'
 import { GpuCompute } from './gpu.js'
 import { KB_RETRIEVE_ACTIONS, VectorStore, knowledgeBaseArn } from './knowledge.js'
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
@@ -169,6 +173,8 @@ export class TraceStack extends Stack {
       lifecycleRules: [{ maxImageCount: 10 }],
     })
     const source = new Asset(this, 'AgentSource', { path: REPO_ROOT, exclude: SOURCE_EXCLUDE })
+    // what the published images for this source are tagged (src/infra/images.ts; the release workflow tags them so)
+    const contentTag = imageContentTag(REPO_ROOT)
     const build = new codebuild.Project(this, 'AgentImageBuild', {
       projectName: `${cfg.prefix}-agent-image`,
       description: 'Builds the trace agent image (agent/Dockerfile) for AgentCore, on arm64',
@@ -178,23 +184,19 @@ export class TraceStack extends Stack {
         computeType: codebuild.ComputeType.LARGE,
         privileged: true,
       },
-      environmentVariables: { REPOSITORY_URI: { value: repo.repositoryUri }, IMAGE_TAG: { value: 'latest' } },
+      environmentVariables: { REPOSITORY_URI: { value: repo.repositoryUri }, IMAGE_TAG: { value: 'latest' }, ...imageBuildEnv(cfg.images, 'agent', contentTag) },
       timeout: Duration.minutes(90),
       logging: { cloudWatch: { logGroup: new logs.LogGroup(this, 'AgentImageBuildLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY }) } },
-      buildSpec: codebuild.BuildSpec.fromObject({
-        version: '0.2',
-        phases: {
-          pre_build: { commands: ['aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${REPOSITORY_URI%%/*}"'] },
-          build: { commands: ['docker build --platform linux/arm64 -f agent/Dockerfile -t "$REPOSITORY_URI:$IMAGE_TAG" .'] },
-          post_build: { commands: ['docker push "$REPOSITORY_URI:$IMAGE_TAG"'] },
-        },
-      }),
+      // the published image when there is one for this source, else a build cached on the previous image (images.ts)
+      buildSpec: codebuild.BuildSpec.fromObject(imageBuildSpec({ dockerfile: 'agent/Dockerfile', platform: 'linux/arm64' })),
+      cache: codebuild.Cache.local(codebuild.LocalCacheMode.DOCKER_LAYER),
     })
     repo.grantPullPush(build)
     source.grantRead(build)
 
     const builder = (name: string, handler: 'onEvent' | 'isComplete'): NodejsFunction => new NodejsFunction(this, name, {
       entry: join(REPO_ROOT, 'src', 'infra', 'lambda', 'image-build.ts'),
+      ...bundlingRoot(REPO_ROOT),
       handler,
       runtime: lambda.Runtime.NODEJS_22_X,
       architecture: lambda.Architecture.ARM_64,
@@ -212,7 +214,7 @@ export class TraceStack extends Stack {
     const gpu = cfg.gpu.enabled
       ? new GpuCompute(this, 'Gpu', {
           prefix: cfg.prefix, instanceTypes: cfg.gpu.instanceTypes, maxVcpus: cfg.gpu.maxVcpus, spot: cfg.gpu.spot,
-          bucket: central, source, buildProvider: provider, retainData: cfg.retainData,
+          bucket: central, source, buildProvider: provider, retainData: cfg.retainData, images: cfg.images, contentTag,
           allowBuild: (arn) => { for (const f of [start, poll]) f.addToRolePolicy(new iam.PolicyStatement({ actions: ['codebuild:StartBuild', 'codebuild:BatchGetBuilds'], resources: [arn] })) },
           environment: gpuTelemetryEnv(cfg),
           cpu: cpuEnabled(cfg) ? cfg.cpu : null,
@@ -416,6 +418,7 @@ export class TraceStack extends Stack {
         TRACE_COGNITO_ISSUER: `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}`,
         TRACE_AWS_ACCOUNT: cfg.account,
         TRACE_WORKER_RUNTIMES: workerList,
+        TRACE_INTEGRATIONS_PREFIX: integrationsPrefix(cfg.prefix),
         ...memoryEnv,
       },
       tags: { [INSTALLATION_TAG]: cfg.prefix },
@@ -426,6 +429,13 @@ export class TraceStack extends Stack {
       const env = r.environmentVariables
       if (env && typeof env === 'object' && !('resolve' in env)) checkRuntimeEnv(r.agentRuntimeName, env, observabilityEnv)
     }
+    // the installation's optional integrations (src/core/integrations.ts, integrations.* for admins): create, overwrite,
+    // describe and delete them, never read their values
+    apiRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'ManageIntegrations',
+      actions: ['secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue', 'secretsmanager:DescribeSecret', 'secretsmanager:DeleteSecret', 'secretsmanager:TagResource'],
+      resources: [`arn:${this.partition}:secretsmanager:${cfg.region}:${cfg.account}:secret:${integrationsPrefix(cfg.prefix)}*`],
+    }))
     apiRole.addToPolicy(new iam.PolicyStatement({
       actions: ['cognito-idp:ListUsers', 'cognito-idp:ListUsersInGroup', 'cognito-idp:AdminGetUser', 'cognito-idp:AdminListGroupsForUser', 'cognito-idp:AdminCreateUser',
         'cognito-idp:AdminAddUserToGroup', 'cognito-idp:AdminRemoveUserFromGroup'],
@@ -447,6 +457,9 @@ export class TraceStack extends Stack {
         { id: 'Api', runtime: api, name: apiName, role: apiRole },
       ],
     })
+
+    // ------------------------------------------------------------------ CI on AWS (src/infra/runners.ts): the runners' role
+    if (cfg.runners.enabled) new RunnerSupport(this, 'Runners', { prefix: cfg.prefix })
 
     // ------------------------------------------------------------------ outputs
     new CfnOutput(this, LAYOUT_OUTPUT, { value: cfg.layout, description: 'Where each project\'s resources are: nested (a nested stack each) or flat (this stack)' })

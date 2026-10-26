@@ -1,0 +1,53 @@
+# Publishes trace's two images for a release, so installations copy them instead of building them (src/infra/images.ts,
+# images.source 'prebuilt'): `<registry>-agent:<content tag>` (linux/arm64) and `<registry>-gpu:<content tag>`
+# (linux/amd64), the content tag being scripts/image-tag.mjs's (the same hash the stack computes).
+#
+# Off until it is set up; it has not been run yet. It needs:
+#   - variable TRACE_PUBLIC_REGISTRY: the registry path, e.g. public.ecr.aws/<alias>/trace (the default the installer
+#     looks in is src/infra/images.ts PREBUILT_REGISTRY), with the public repositories <name>-agent and <name>-gpu made;
+#   - variable TRACE_RELEASE_ROLE: an IAM role this repository's tags may assume with GitHub OIDC, allowed
+#     ecr-public:GetAuthorizationToken, sts:GetServiceBearerToken and the ecr-public push actions on those two
+#     repositories (ECR Public lives in us-east-1);
+#   - a runner with Docker: TRACE_RELEASE_RUNNER (JSON label, e.g. a CodeBuild runner project in privileged mode), else
+#     the repository's CodeBuild runner or GitHub's ubuntu-24.04. QEMU builds the arm64 image on an x86 runner.
+name: release-images
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  publish:
+    if: vars.TRACE_PUBLIC_REGISTRY != '' && vars.TRACE_RELEASE_ROLE != ''
+    runs-on: ${{ vars.TRACE_RELEASE_RUNNER && fromJSON(vars.TRACE_RELEASE_RUNNER) || vars.TRACE_CODEBUILD_PROJECT && format('codebuild-{0}-{1}-{2}', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt) || 'ubuntu-24.04' }}
+    timeout-minutes: 180
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "22", cache: npm }
+      # npm ci runs the build (prepare), which stages agent/package-lock.json and agent/npmrc as an install has them
+      - run: npm ci
+      - id: tag
+        run: echo "tag=$(node scripts/image-tag.mjs)" >> "$GITHUB_OUTPUT"
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.TRACE_RELEASE_ROLE }}
+          role-session-name: trace-release-${{ github.run_id }}
+          aws-region: us-east-1
+      - name: Build and push both images
+        env:
+          REGISTRY: ${{ vars.TRACE_PUBLIC_REGISTRY }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
+          docker run --privileged --rm tonistiigi/binfmt --install arm64
+          docker buildx create --use --name trace-release
+          docker buildx build --platform linux/arm64 -f agent/Dockerfile -t "$REGISTRY-agent:$TAG" --push .
+          docker buildx build --platform linux/amd64 -f agent/Dockerfile.gpu -t "$REGISTRY-gpu:$TAG" --push .
+          echo "published $REGISTRY-agent:$TAG and $REGISTRY-gpu:$TAG"

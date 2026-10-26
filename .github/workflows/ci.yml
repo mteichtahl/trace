@@ -1,5 +1,9 @@
 # trace's own build: typecheck, the TypeScript tests (with KiCad, ngspice and Icarus installed so their tests run),
 # the Python bridge's tests, and a check that the committed harness bundle matches its source.
+#
+# Runs on AWS: with the repository variable TRACE_CODEBUILD_PROJECT (set by `trace install` when this repository is a
+# project or in runners.extraRepos), every job runs on that CodeBuild-hosted runner (aws/codebuild/standard:8.0,
+# Ubuntu 24.04, as root); without it, on GitHub's ubuntu-24.04. The `runs-on` expression is src/core/onboard.ts RUNS_ON.
 name: ci
 
 on:
@@ -13,7 +17,7 @@ permissions:
 
 jobs:
   typescript:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && format('codebuild-{0}-{1}-{2}', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt) || 'ubuntu-24.04' }}
     timeout-minutes: 45
     env:
       # KiCad, ngspice, Icarus, and the verification/FPGA programs, so those tests run instead of skipping.
@@ -35,11 +39,14 @@ jobs:
           restore-keys: apt-${{ runner.os }}-
       - name: KiCad 10, ngspice, Icarus Verilog, Verilator, Yosys, nextpnr
         run: |
+          # GitHub's runner has sudo; a CodeBuild runner runs as root and may not
+          SUDO="$(command -v sudo || true)"
           mkdir -p ~/apt-cache/partial
-          sudo add-apt-repository -y ppa:kicad/kicad-10.0-releases
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends -o Dir::Cache::Archives="$HOME/apt-cache" $APT_PACKAGES
-          sudo chown -R "$USER" ~/apt-cache && rm -f ~/apt-cache/lock
+          command -v add-apt-repository >/dev/null || { $SUDO apt-get update -q && $SUDO apt-get install -y -q --no-install-recommends software-properties-common; }
+          $SUDO add-apt-repository -y ppa:kicad/kicad-10.0-releases
+          $SUDO apt-get update -q
+          $SUDO apt-get install -y -q --no-install-recommends -o Dir::Cache::Archives="$HOME/apt-cache" $APT_PACKAGES
+          $SUDO chown -R "$(id -un)" ~/apt-cache && rm -f ~/apt-cache/lock
       - name: Python bridge
         run: |
           python -m venv .venv
@@ -56,7 +63,7 @@ jobs:
           git diff --exit-code harness/dist || { echo "harness/dist is stale: run npm run build and commit it"; exit 1; }
 
   python-bridge:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && format('codebuild-{0}-{1}-{2}', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt) || 'ubuntu-24.04' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -69,7 +76,7 @@ jobs:
     name: tests pass
     if: always()
     needs: [typescript, python-bridge]
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && format('codebuild-{0}-{1}-{2}', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt) || 'ubuntu-24.04' }}
     steps:
       - env:
           RESULTS: ${{ join(needs.*.result, ' ') }}

@@ -5,6 +5,7 @@
  */
 import { z } from 'zod'
 import { projectHash, projectSlug } from '../core/project.js'
+import { PREBUILT_REGISTRY } from './images.js'
 
 export {
   cpuJobDefinitionName, gpuJobDefinitionName, githubSecretName, knowledgeBaseName, memoryDeliveryName, memoryName, projectDataPrefix, projectHash, projectJobsPrefix,
@@ -89,7 +90,7 @@ export const InfraPropsSchema = z.object({
    * layout 'nested' each project is its own nested stack (one resource and no output of the parent's), so 60 fit; with
    * layout 'flat' CloudFormation's 500 resources and 200 outputs per stack bind at about 24 projects (checked when the
    * stack is built). */
-  repositories: z.array(repoSlug).min(1).max(60).superRefine((rs, ctx) => {
+  repositories: z.array(repoSlug).max(60).superRefine((rs, ctx) => {
     const seen = new Map<string, string>()
     for (const r of rs) {
       const slug = projectSlug(r.split('@')[0] ?? '')
@@ -177,6 +178,24 @@ export const InfraPropsSchema = z.object({
    * default: with it off every tool runs in the worker, as before. */
   gateway: z.object({
     enabled: z.boolean().default(false),
+  }).strict().prefault({}),
+  /** Where the agent and GPU images come from (src/infra/images.ts): 'prebuilt' copies trace's published images for
+   * this exact source when they exist, and builds otherwise; 'build' always builds (with BuildKit's inline cache). */
+  images: z.object({
+    source: z.enum(['prebuilt', 'build']).default('prebuilt'),
+    /** the published images are `<registry>-agent:<tag>` and `<registry>-gpu:<tag>` */
+    registry: z.string().regex(/^[a-z0-9.-]+(:\d+)?(\/[a-z0-9._-]+)+$/, 'a registry path such as public.ecr.aws/alias/trace').default(PREBUILT_REGISTRY),
+  }).strict().prefault({}),
+  /** CI on AWS (src/infra/runners.ts): GitHub Actions jobs of the onboarded repositories run on AWS CodeBuild-hosted
+   * runners instead of GitHub's. The stack holds the runners' role and the source credential's secret; the installer
+   * makes one CodeBuild runner project and webhook per repository after the deploy (src/installer/runners.ts). The
+   * stack holds only their service role. */
+  runners: z.object({
+    enabled: z.boolean().default(true),
+    /** CodeBuild compute for each job (BUILD_GENERAL1_SMALL | MEDIUM | LARGE …) */
+    computeType: z.enum(['BUILD_GENERAL1_SMALL', 'BUILD_GENERAL1_MEDIUM', 'BUILD_GENERAL1_LARGE', 'BUILD_GENERAL1_XLARGE', 'BUILD_GENERAL1_2XLARGE']).default('BUILD_GENERAL1_MEDIUM'),
+    /** more repositories (OWNER/REPO) that get a runner but are not projects, such as trace's own */
+    extraRepos: z.array(z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')).max(20).default([]),
   }).strict().prefault({}),
   /** AgentCore observability: OpenTelemetry (ADOT) traces and metrics to CloudWatch (src/infra/observability.ts). */
   observability: z.object({
@@ -294,6 +313,9 @@ export const REPOSITORY_OUTPUT = 'Repository'
 /** The GPU image build the deploy started (it no longer waits for it: src/infra/gpu.ts): the installer waits for it
  * after the core is up, and starts it again if it failed. Its value is the CodeBuild build id, `<project>:<uuid>`. */
 export const GPU_IMAGE_BUILD_OUTPUT = 'GpuImageBuild'
+
+/** The CI runners' output (runners.enabled): their CodeBuild service role (src/infra/runners.ts). */
+export const RUNNER_ROLE_OUTPUT = 'RunnerRoleArn'
 
 /** The library gateway's outputs (gateway.enabled): its URL, and the distributor-keys secret the installer writes. */
 export const LIBRARY_GATEWAY_OUTPUT = 'LibraryGatewayUrl'

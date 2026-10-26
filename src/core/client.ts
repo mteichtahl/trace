@@ -114,6 +114,19 @@ export function clearSession(name = process.env.TRACE_INSTALLATION || 'default')
   }
 }
 
+/** Forget an installation on this machine (`trace uninstall`): its record and its session. */
+export function forgetInstallation(name = process.env.TRACE_INSTALLATION || 'default'): void {
+  const d = db()
+  try {
+    transaction(d, () => {
+      d.prepare('DELETE FROM installations WHERE name=?').run(name)
+      d.prepare('DELETE FROM sessions WHERE installation=?').run(name)
+    })
+  } finally {
+    d.close()
+  }
+}
+
 /** The installer's remembered, non-secret answers (so a second run starts where the first left off). */
 export function saveAnswers(answers: Record<string, unknown>): void {
   const d = db()

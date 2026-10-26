@@ -34,19 +34,25 @@ import {
 import { GetSecretValueCommand, PutSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
 import type { AwsCredentialIdentity } from '@smithy/types'
 import { type Principal, GROUPS, assign, assignments, setClass, unassign } from '../core/access.js'
-import { saveAnswers, saveInstallation } from '../core/client.js'
-import { onboard, register } from '../core/onboard.js'
+import { answers as savedAnswers, saveAnswers, saveInstallation } from '../core/client.js'
+import { INTEGRATIONS, INTEGRATION_NAMES, type IntegrationName, IntegrationStore, checkIntegration, secretsManagerApi } from '../core/integrations.js'
+import { register } from '../core/onboard.js'
+import { runnerProjectName } from '../infra/runners.js'
 import {
-  GPU_IMAGE_BUILD_OUTPUT, type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, LIBRARY_KEYS_OUTPUT, cpuEnabled, githubSecretName,
+  GPU_IMAGE_BUILD_OUTPUT, type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, RUNNER_ROLE_OUTPUT, cpuEnabled, githubSecretName,
   kbOutputs, memoryDeliveryName, memoryName, projectHash, projectOutputs, stackName,
 } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import type { Answers, InstallEvent, Secrets, Step } from './answers.js'
 import {
-  type ProjectNames, awsEnv, cfnClient, checkAws, codebuildClient, credentials, deployedProjects, ensureGpuImage, freeSecretNames, nameClients, nameIndex,
+  type ProjectNames, awsEnv, cfnClient, checkAws, codebuildClient, credentials, deployedProjects, ensureGpuImage, freeSecretNames, liveFacts, nameClients, nameIndex,
   stackOutputs,
 } from './aws.js'
-import { type TokenInfo, checkToken, setSecret, setVariable } from './github.js'
+import { type Facts, resolveAnswers } from './derive.js'
+import { type TokenInfo, checkToken, createRepo, deleteVariable, setSecret, setVariable } from './github.js'
+import { type ApiOnboardOptions, type ApiOnboardResult, onboardViaApi } from './onboard-api.js'
+import { CDK_BOOTSTRAP_MIN, mapLimit } from './preflight.js'
+import { type RunnerSpec, ensureRunner, ensureSourceCredential, removeRunner, runnerProjects, runnerRepos } from './runners.js'
 
 /** What the installer knows of the stack already in the account (checkAws), when there is one. */
 export interface Existing { outputs: Record<string, string> }
@@ -123,10 +129,13 @@ export function infraInput(a: Answers, existing?: Existing | null, deploy?: Layo
     maxLifetimeSeconds: Math.round(a.agents.maxLifetimeHours * 3600),
     idleTimeoutSeconds: Math.round(a.agents.idleMinutes * 60),
     retainData: a.agents.retainData,
-    gpu: { enabled: a.agents.gpuEnabled, maxVcpus: a.agents.gpuMaxVcpus, spot: a.agents.gpuSpot },
-    cpu: { enabled: a.agents.cpuEnabled, maxVcpus: a.agents.cpuMaxVcpus, spot: a.agents.cpuSpot, vcpus: a.agents.cpuVcpus, memoryMiB: a.agents.cpuMemoryMiB },
-    knowledgeBase: { enabled: a.agents.knowledgeBase },
+    // null (decide from the preflight) never reaches here after resolveAnswers; on its own it means on
+    gpu: { enabled: a.agents.gpuEnabled ?? true, maxVcpus: a.agents.gpuMaxVcpus, spot: a.agents.gpuSpot },
+    cpu: { enabled: a.agents.cpuEnabled ?? true, maxVcpus: a.agents.cpuMaxVcpus, spot: a.agents.cpuSpot, vcpus: a.agents.cpuVcpus, memoryMiB: a.agents.cpuMemoryMiB },
+    knowledgeBase: { enabled: a.agents.knowledgeBase ?? true },
     gateway: { enabled: a.agents.libraryGateway },
+    images: { source: a.agents.imageSource },
+    runners: { enabled: a.agents.runners, extraRepos: a.agents.runnerExtraRepos },
     observability: {
       enabled: a.agents.observability, transactionSearch: a.agents.transactionSearch, dashboard: a.agents.dashboard,
       ...(a.agents.samplingPercent !== null ? { samplingPercent: a.agents.samplingPercent } : {}),
@@ -276,22 +285,64 @@ function layoutPlan(a: Answers, existing?: Existing | null): string {
   return note ? `${what}. ${note}` : what
 }
 
-/** What will happen, before anything does. `existing`: the stack already in the account, when the check found one. */
-export function plan(a: Answers, existing?: Existing | null): Step[] {
+/** What changed since the answers of the last installation from this machine (null: none known), in words. */
+export function changesSince(prev: Answers | null, next: Answers): string[] {
+  if (!prev) return []
+  const out: string[] = []
+  const was = new Set(prev.projects.map((p) => p.repo.toLowerCase()))
+  const now = new Set(next.projects.map((p) => p.repo.toLowerCase()))
+  const added = next.projects.filter((p) => !was.has(p.repo.toLowerCase())).map((p) => p.repo)
+  const removed = prev.projects.filter((p) => !now.has(p.repo.toLowerCase())).map((p) => p.repo)
+  if (added.length) out.push(`adds ${added.join(', ')}`)
+  if (removed.length) out.push(`removes ${removed.join(', ')} (its runtime, roles, secret, job definitions and runner go; ${next.agents.retainData ? 'its memory and knowledge base stay' : 'its memory and knowledge base are deleted'})`)
+  const flat = (o: Record<string, unknown>, at = ''): Record<string, string> => Object.fromEntries(Object.entries(o).flatMap(([k, v]) => (
+    v && typeof v === 'object' && !Array.isArray(v) ? Object.entries(flat(v as Record<string, unknown>, `${at}${k}.`)) : [[`${at}${k}`, JSON.stringify(v)]])))
+  const a = flat({ ...prev.agents, adminEmail: prev.adminEmail, escalateTo: prev.escalateTo })
+  const b = flat({ ...next.agents, adminEmail: next.adminEmail, escalateTo: next.escalateTo })
+  const settings = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => a[k] !== b[k]).sort()
+  if (settings.length) out.push(`changes ${settings.map((k) => `${k} ${a[k] ?? 'unset'} → ${b[k] ?? 'unset'}`).join(', ')}`)
+  const people = (x: Answers): string => JSON.stringify([...x.people].sort((p, q) => p.email.localeCompare(q.email)))
+  if (people(prev) !== people(next)) out.push('changes the people or their projects')
+  return out
+}
+
+/** How long each part takes, roughly (estimates from the steps' own work, not measured on a real deploy). */
+export function timeline(a: Answers, existing?: Existing | null, o: { cdkBootstrapped?: boolean } = {}): string[] {
+  const fresh = !existing
+  const prebuilt = a.agents.imageSource === 'prebuilt'
+  const lines: string[] = []
+  if (fresh && !o.cdkBootstrapped) lines.push('CDK bootstrap: about 2 minutes')
+  lines.push(fresh
+    ? `the stack: about 15 minutes of CloudFormation (Cognito, roles, AgentCore runtimes and memories, ${a.projects.length} project stack${a.projects.length === 1 ? '' : 's'} in parallel), plus the agent image: ${prebuilt ? 'about 5 minutes to copy trace\'s published image when there is one for this version, else' : ''} 20–40 minutes to build it`
+    : 'the stack: a few minutes when only settings or projects change; when trace itself changed, the agent image is rebuilt from its cache (about 5–10 minutes, the system packages are not installed again) or copied')
+  lines.push(`the repositories, their runners, onboarding and people: about 1–2 minutes, ${a.projects.length > 1 ? 'in parallel' : 'together'}`)
+  if (a.agents.gpuEnabled !== false) lines.push(`then trace is ready to use; the GPU image ${prebuilt ? 'copies in about 10 minutes when published, else builds' : 'builds'} in the background (${fresh ? '30–60 minutes the first time' : 'faster from its cache'}): only GPU and CPU jobs wait for it`)
+  else lines.push('then trace is ready to use (GPU and CPU jobs are off, so there is no GPU image to wait for)')
+  return lines
+}
+
+/** What will happen, before anything does. `existing`: the stack already in the account, when the check found one;
+ * `prev`: the answers of the last installation from this machine, so a re-run says what changes. */
+export function plan(a: Answers, existing?: Existing | null, prev?: Answers | null): Step[] {
   const props = InfraPropsSchema.parse(infraInput(a, existing))
   const stack = stackName(props.prefix)
-  const onboarding = a.projects.filter((p) => p.onboard).map((p) => p.repo)
+  const onboarding = a.projects.filter((p) => p.onboard && !p.create).map((p) => p.repo)
+  const creating = a.projects.filter((p) => p.create).map((p) => `${p.repo} (${p.create?.template})`)
+  const changes = existing ? changesSince(prev ?? null, a) : []
+  const deployWhat = `central bucket, agent image (${props.images.source === 'prebuilt' ? 'trace\'s published image for this version when there is one, else built' : 'built'} by CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and job definitions' : ''}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image made without holding up the deploy; one queue for every project)${cpuPlan(props)}` : ', no GPU or CPU jobs'}${props.gateway.enabled ? ', the library gateway (AgentCore Gateway and a Lambda for the shared datasheets and parts tools)' : ''}${kbPlan(props)}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}${generationsPlan(a)}${layoutPlan(a, existing)}${props.runners.enabled ? ', and the CI runners\' CodeBuild role' : ''}. A project added again after being removed gets new names if its old memory, log delivery or token secret still holds them: the old memory is kept and orphaned, and the new one starts empty`
   const steps: [string, string, string][] = [
-    ['check', 'Check the AWS account', `${a.aws.account} in ${a.aws.region}`],
-    ['cdk', 'Bootstrap CDK', `aws://${a.aws.account}/${a.aws.region} (only if it isn't already)`],
-    ['deploy', `Deploy ${stack}`, `central bucket, agent image (CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and job definitions' : ''}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64 without holding up the deploy; one queue for every project)${cpuPlan(props)}` : ''}${props.gateway.enabled ? ', the library gateway (AgentCore Gateway and a Lambda for the shared datasheets and parts tools)' : ''}${kbPlan(props)}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}${generationsPlan(a)}${layoutPlan(a, existing)}. A project added again after being removed gets new names if its old memory, log delivery or token secret still holds them: the old memory is kept and orphaned, and the new one starts empty`],
+    ['check', 'Check the AWS account', `${a.aws.account || 'the credentials\' account'} in ${a.aws.region || 'the profile\'s region'}`],
+    ['cdk', 'Bootstrap CDK', `aws://${a.aws.account}/${a.aws.region} (only if it isn't already, or is older than version 6)`],
+    ['deploy', existing ? `Update ${stack}` : `Deploy ${stack}`, existing ? `${changes.length ? `This run ${changes.join('; ')}. ` : 'No answer changed since the last run from here: CloudFormation leaves unchanged resources alone. '}${deployWhat}` : deployWhat],
     ['token', 'Store the GitHub tokens', `the shared token in the API's secret, and each project's agent token in its own secret${props.gateway.enabled ? '; any distributor keys given in the library gateway\'s secret' : ''}`],
-    ['repos', 'Configure the repositories', `each repository's own TRACE_AWS_ROLE, TRACE_AGENT_RUNTIME_ARN${props.memory.enabled ? ', TRACE_MEMORY_ID' : ''}${props.knowledgeBase.enabled && props.layout === 'nested' ? ', TRACE_KB_ID and TRACE_KB_DATA_SOURCE_ID' : ''}, TRACE_AWS_REGION, TRACE_HOME and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}`],
-    ['onboard', 'Onboard the repositories', onboarding.length ? `open the onboarding PR in ${onboarding.join(', ')}` : 'none chosen'],
-    ['people', 'Invite people and assign projects', `${a.adminEmail} (admin)${a.people.length ? `, ${a.people.map((p) => `${p.email} (${p.class})`).join(', ')}` : ''}`],
+    ['integrations', 'Store the optional integrations', 'any integration keys given (Nexar, Mouser, Digi-Key), each checked with its service and stored as <prefix>/integrations/<name>; none is needed, and they can be added later with `trace integrations set <name>`'],
+    ['repos', 'Configure the repositories', a.projects.length ? `each repository's own TRACE_AWS_ROLE, TRACE_AGENT_RUNTIME_ARN${props.memory.enabled ? ', TRACE_MEMORY_ID' : ''}${props.knowledgeBase.enabled && props.layout === 'nested' ? ', TRACE_KB_ID and TRACE_KB_DATA_SOURCE_ID' : ''}, TRACE_AWS_REGION, TRACE_HOME, TRACE_AGENT_LOGIN and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}, several at once` : 'no repositories yet: run the installer again to add them'],
+    ['runners', 'Run CI on AWS', props.runners.enabled ? `a CodeBuild-hosted GitHub Actions runner (aws/codebuild/standard:8.0) and its webhook for each of ${[...a.projects.map((p) => p.repo), ...props.runners.extraRepos].join(', ') || 'no repository yet'}, and its TRACE_CODEBUILD_PROJECT variable, so their trace workflows run on AWS; the token becomes CodeBuild's GitHub source credential unless the account has one. A repository the token cannot administer keeps GitHub's runners` : 'off: the trace workflows run on GitHub\'s runners'],
+    ['onboard', 'Onboard the repositories', [onboarding.length ? `open (or refresh) the onboarding PR in ${onboarding.join(', ')}` : '', creating.length ? `create ${creating.join(', ')}` : ''].filter(Boolean).join('; ') || 'none chosen'],
+    ['people', 'Invite people and assign projects', `${a.adminEmail || 'the token\'s email'} (admin)${a.people.length ? `, ${a.people.map((p) => `${p.email} (${p.class})`).join(', ')}` : ''}`],
     ['local', 'Save this installation locally', '~/.trace/client.db, so `trace login` works here'],
-    ['gpu', 'Check the GPU image', props.gpu.enabled
-      ? 'wait for the GPU image build the deploy started (CodeBuild, amd64; the first takes 30–60 minutes) and start it again if an earlier one failed: GPU and CPU jobs need it, nothing else does'
+    ['gpu', 'The GPU image', props.gpu.enabled
+      ? 'after trace is ready: wait for the GPU image the deploy started (copied, or built on amd64: the first build takes 30–60 minutes) and start it again if an earlier one failed. GPU and CPU jobs need it, nothing else does: you can use trace meanwhile'
       : 'GPU jobs are off'],
   ]
   return steps.map(([id, title, detail]) => ({ id, title, detail, status: 'pending' as const }))
@@ -337,6 +388,22 @@ export interface Hooks {
   gpuImage?: (o: { buildId: string; imageTag: string; startedAfter: Date; log: (l: string) => void }) => Promise<{ ok: boolean; detail: string }>
   /** the library keys stored now (readSecretJson) */
   readSecret?: (sm: SecretsManagerClient, arn: string) => Promise<Record<string, string>>
+  /** what the answers leave to be derived (src/installer/aws.ts liveFacts) */
+  facts?: (creds: AwsCredentialIdentity, a: Answers) => Promise<Facts>
+  /** the optional integrations' store, and checking a key with its service */
+  integrations?: Pick<IntegrationStore, 'set'>
+  checkIntegration?: typeof checkIntegration
+  /** CodeBuild runners (src/installer/runners.ts) */
+  runners?: {
+    credential: (token: string, ours: boolean) => Promise<{ state: 'imported' | 'refreshed' | 'existing'; detail: string }>
+    ensure: (spec: RunnerSpec) => Promise<string>
+    list: (prefix: string) => Promise<string[]>
+    remove: (name: string) => Promise<void>
+  }
+  /** onboarding one repository (src/installer/onboard-api.ts onboardViaApi) */
+  onboard?: (repo: string, o: Omit<ApiOnboardOptions, 'token' | 'login'>) => Promise<ApiOnboardResult>
+  /** creating a new project's repository before its variables are set */
+  createRepo?: typeof createRepo
 }
 
 /** A secret's JSON object of strings ({} when it holds anything else). */
@@ -358,10 +425,33 @@ export function mergeLibraryKeys(stored: Record<string, string>, given: Record<s
   return { ...kept, ...given }
 }
 
-export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {}): Promise<boolean> {
+/** The integrations given with the secrets: each complete one (every key it takes), from `integrations` and the older
+ * `libraryKeys` fields. An incomplete one is reported, not stored. */
+export function givenIntegrations(s: Secrets): { complete: Partial<Record<IntegrationName, Record<string, string>>>; incomplete: string[] } {
+  const complete: Partial<Record<IntegrationName, Record<string, string>>> = {}
+  const incomplete: string[] = []
+  const legacy = Object.fromEntries(Object.entries(s.libraryKeys).filter(([, v]) => v))
+  for (const n of INTEGRATION_NAMES) {
+    const raw = { ...Object.fromEntries(INTEGRATIONS[n].keys.filter((k) => legacy[k]).map((k) => [k, legacy[k] ?? ''])), ...(s.integrations[n] ?? {}) }
+    const given = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v))
+    if (!Object.keys(given).length) continue
+    const missing = INTEGRATIONS[n].keys.filter((k) => !given[k])
+    if (missing.length) incomplete.push(`${INTEGRATIONS[n].title}: ${missing.join(', ')} missing, so it was not stored`)
+    else complete[n] = Object.fromEntries(INTEGRATIONS[n].keys.map((k) => [k, given[k] ?? '']))
+  }
+  return { complete, incomplete }
+}
+
+export interface ApplyOptions {
+  /** the answers of the last installation from this machine (the plan's changes) */
+  prev?: Answers | null
+}
+
+export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks = {}, opts: ApplyOptions = {}): Promise<boolean> {
   const started = new Date()
-  const steps = plan(a)
-  const byId = new Map(steps.map((st) => [st.id, st]))
+  let a = input
+  let steps: Step[] = [{ id: 'check', title: 'Check the AWS account', detail: 'credentials, account and region', status: 'pending' }]
+  let byId = new Map(steps.map((st) => [st.id, st]))
   const set = (id: string, status: Step['status'], detail?: string): void => {
     const st = byId.get(id)
     if (!st) return
@@ -370,24 +460,38 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
     emit({ type: 'step', step: { ...st } })
   }
   const log = (id: string, line: string): void => emit({ type: 'log', step: id, line: redact(line, s) })
-  for (const st of steps) emit({ type: 'step', step: { ...st } })
-  let props = InfraPropsSchema.parse(infraInput(a))
-  const stack = stackName(props.prefix)
   const summary: string[] = []
   const cdk = hooks.cdk ?? ((args, env, onLine) => runStreaming(process.execPath, [cdkBin(), ...args], env, onLine))
   let current = 'check'
+  let stack = stackName(a.agents.prefix)
   try {
-    // 1 — the account
+    // 1 — the account, and everything the answers leave to be worked out (derive.ts)
+    set('check', 'running')
     const creds = await credentials(a.aws, s)
+    const facts = await (hooks.facts ?? ((c, x) => liveFacts(c, x, s.githubToken)))(creds, a)
+    if (!a.github.login && !facts.login) facts.login = (await checkToken(s.githubToken)).login
+    const resolved = resolveAnswers(a, facts)
+    if (resolved.missing.length) throw new Error(resolved.missing.join('; '))
+    a = resolved.answers
+    for (const d of resolved.derived) log('check', `derived: ${d}`)
     const check = await checkAws(creds, a.aws.region, stack)
     if (check.account !== a.aws.account) throw new Error(`these credentials are for account ${check.account}, not the confirmed ${a.aws.account}`)
     if (!check.agentCore.ok) throw new Error(`Bedrock AgentCore is not available to these credentials in ${a.aws.region}: ${check.agentCore.reason}`)
+    // GitHub's OIDC provider (one per account): the stack makes it when the account has none, and keeps it when an
+    // earlier deploy made it (dropping it from the stack would delete it); one made elsewhere is used, not made
+    const makeOidc = Boolean(check.oidcInStack) || !check.oidcProvider
+    if (a.agents.createOidcProvider !== makeOidc) { log('check', makeOidc ? 'GitHub\'s OIDC provider: the stack makes (or keeps) it' : 'GitHub\'s OIDC provider exists in the account: the stack uses it'); a = { ...a, agents: { ...a.agents, createOidcProvider: makeOidc } } }
+    // the whole plan, now that every answer is known
+    const existing = check.existing ?? null
+    steps = plan(a, existing, opts.prev ?? null)
+    byId = new Map(steps.map((st) => [st.id, st]))
+    for (const st of steps) emit({ type: 'step', step: { ...st } })
+    set('check', 'running')
     const own = await checkProjectTokens(a, s)
     for (const w of own.warnings) { log('check', w); summary.push(w) }
     set('check', 'done', `${check.arn}`)
-    // an installation of an earlier version: its installation-wide memory goes (kept, with retainData, for one deploy)
-    const existing = check.existing ?? null
-    props = InfraPropsSchema.parse(infraInput(a, existing))
+    let props = InfraPropsSchema.parse(infraInput(a, existing))
+    stack = stackName(props.prefix)
     // a project added again while a removed copy's names are still taken: the next generation, saved at once (a deploy
     // that fails after creating a retained memory must not make the next run pick the same names)
     const names = hooks.names ?? (() => {
@@ -395,9 +499,15 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
       return { deployed: () => deployedProjects(cfnClient(creds, a.aws.region), stack), taken: index.taken }
     })()
     const gens = await chooseGenerations(a, props, await names.deployed(), names.taken)
+    // saved for the next run: what was decided from the preflight stays to be decided again (a quota raised since turns
+    // GPU jobs on), and once onboarding is done a created repository is an existing one
+    const remember = (x: Answers, onboarded = false): void => saveAnswers({ answers: {
+      ...x, agents: { ...x.agents, gpuEnabled: input.agents.gpuEnabled, cpuEnabled: input.agents.cpuEnabled, knowledgeBase: input.agents.knowledgeBase },
+      ...(onboarded ? { projects: x.projects.map((p) => ({ ...p, create: null })) } : {}),
+    } })
     if (gens.changed.length) {
       a = gens.answers
-      saveAnswers({ answers: a })
+      remember(a)
       props = InfraPropsSchema.parse(infraInput(a, existing))
       const note = generationNote(gens.changed) ?? ''
       log('check', note)
@@ -414,11 +524,13 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
     })
     const env = envFor(deploys.at(-1) ?? { layout: 'nested', why: '' })
 
-    // 2 — CDK bootstrap (nested stacks' templates are file assets in its bucket, like the agent source)
+    // 2 — CDK bootstrap (nested stacks' templates are file assets in its bucket, like the agent source); again when it
+    // is older than the deploy needs
     current = 'cdk'
-    if (check.cdkBootstrapped) set('cdk', 'skipped', 'already bootstrapped')
+    const bootstrapOk = check.cdkBootstrapped && (check.cdkVersion === undefined || check.cdkVersion === null || check.cdkVersion >= CDK_BOOTSTRAP_MIN)
+    if (bootstrapOk) set('cdk', 'skipped', 'already bootstrapped')
     else {
-      set('cdk', 'running')
+      set('cdk', 'running', check.cdkBootstrapped ? `updating the bootstrap from version ${check.cdkVersion}` : undefined)
       const code = await cdk(['bootstrap', `aws://${a.aws.account}/${a.aws.region}`, '--app', `node ${join(REPO_ROOT, 'dist', 'infra', 'app.js')}`], env, (l) => log('cdk', l))
       if (code !== 0) throw new Error(`cdk bootstrap exited ${code}`)
       set('cdk', 'done')
@@ -426,7 +538,7 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
 
     // 3 — deploy (one deploy, or the three of the move to nested stacks, in order)
     current = 'deploy'
-    set('deploy', 'running', 'the first deploy builds the agent image: expect 20–40 minutes')
+    set('deploy', 'running', existing ? 'updating the stack: only what changed' : `the first deploy ${props.images.source === 'prebuilt' ? 'copies the agent image (or builds it when this version has none published): 15–40 minutes' : 'builds the agent image: expect 20–40 minutes'}`)
     for (const [i, d] of deploys.entries()) {
       if (deploys.length > 1) log('deploy', `deploy ${i + 1} of ${deploys.length}: ${d.why}`)
       // the drain deleted every project's secret; one still in its recovery window would block the nested stack's
@@ -434,7 +546,7 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
         const lines = await (hooks.freeSecrets ?? freeSecretNames)(creds, a.aws.region, a.projects.map((p) => githubSecretName(props.prefix, p.repo, p.generation)))
         for (const l of lines) log('deploy', l)
       }
-      const code = await cdk(['deploy', stack, '--app', `node ${join(REPO_ROOT, 'dist', 'infra', 'app.js')}`, '--require-approval', 'never', '--progress', 'events'], envFor(d), (l) => log('deploy', l))
+      const code = await cdk(['deploy', stack, '--app', `node ${join(REPO_ROOT, 'dist', 'infra', 'app.js')}`, '--require-approval', 'never', '--progress', 'events', '--concurrency', '10'], envFor(d), (l) => log('deploy', l))
       if (code !== 0) throw new Error(`cdk deploy exited ${code}${deploys.length > 1 ? ` (deploy ${i + 1} of ${deploys.length}: ${d.why}; run the installer again to carry on)` : ''}`)
     }
     const out = await (hooks.outputs ?? stackOutputs)(creds, a.aws.region, stack)
@@ -452,88 +564,136 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
     if (props.memory.enabled && Object.keys(memoryIds).length !== a.projects.length) throw new Error('the stack has no memory output for every project')
     set('deploy', 'done', `${stack} is up`)
 
-    // 4 — the token
+    // 4 — the tokens
     current = 'token'
     set('token', 'running')
     const sm = new SecretsManagerClient({ region: a.aws.region, credentials: creds })
     await sm.send(new PutSecretValueCommand({ SecretId: need('GithubSecretArn'), SecretString: s.githubToken }))
     log('token', 'the API\'s (shared) token stored')
-    for (const p of a.projects) {
+    await mapLimit(a.projects, 6, async (p) => {
       // its Project<hash>GithubSecretArn output (the parent's when flat, its nested stack's when nested), else by name
       const secretId = out[projectOutputs(p.repo).secretArn] || githubSecretName(props.prefix, p.repo, p.generation)
       await sm.send(new PutSecretValueCommand({ SecretId: secretId, SecretString: projectToken(s, p.repo) }))
       log('token', `${p.repo}: ${s.projectTokens[p.repo.toLowerCase()] ? 'its own token' : 'the shared token'} stored in its secret`)
-    }
+    })
     const sharing = sharedTokenWarning(a, s)
     if (sharing) summary.push(sharing)
-    // the distributor keys, for the library gateway's Lambda (the only reader of that secret)
-    if (props.gateway.enabled) {
-      const keysArn = out[LIBRARY_KEYS_OUTPUT]
-      if (!keysArn) throw new Error(`the stack has no output ${LIBRARY_KEYS_OUTPUT}`)
-      const given = Object.fromEntries(Object.entries(s.libraryKeys).filter(([, v]) => v !== ''))
-      if (Object.keys(given).length) {
-        const stored = await (hooks.readSecret ?? readSecretJson)(sm, keysArn)
-        await sm.send(new PutSecretValueCommand({ SecretId: keysArn, SecretString: JSON.stringify(mergeLibraryKeys(stored, given)) }))
-        log('token', `distributor keys stored for the library gateway: ${Object.keys(given).join(', ')}`)
-      } else {
-        log('token', 'no distributor keys given: the library gateway keeps the ones it has (LCSC needs none)')
-      }
-    }
     set('token', 'done')
 
-    // 5 — repositories
+    // 5 — the optional integrations: each given one checked (never blocking) and stored as <prefix>/integrations/<name>
+    current = 'integrations'
+    const given = givenIntegrations(s)
+    for (const w of given.incomplete) { log('integrations', w); summary.push(w) }
+    const names_ = Object.keys(given.complete) as IntegrationName[]
+    if (!names_.length) set('integrations', 'skipped', 'none given: add one any time with `trace integrations set <name>`; the parts tools ask LCSC (no key) meanwhile')
+    else {
+      set('integrations', 'running')
+      const store = hooks.integrations ?? new IntegrationStore(props.prefix, await secretsManagerApi({ region: a.aws.region, credentials: creds }))
+      const checkKey = hooks.checkIntegration ?? checkIntegration
+      await Promise.all(names_.map(async (n) => {
+        const values = given.complete[n] ?? {}
+        const c = await checkKey(n, values)
+        log('integrations', `${INTEGRATIONS[n].title}: ${c.detail}`)
+        if (!c.ok) summary.push(`${INTEGRATIONS[n].title}: ${c.detail}. It is stored anyway; replace it with \`trace integrations set ${n}\`.`)
+        log('integrations', `${n}: stored in ${await store.set(n, values)}`)
+      }))
+      set('integrations', 'done', names_.map((n) => INTEGRATIONS[n].title).join(', '))
+    }
+
+    // 6 — repositories (several at once)
     current = 'repos'
-    set('repos', 'running')
     const adminToken = s.githubAdminToken || s.githubToken
     const agentLogin = (await checkToken(s.githubToken)).login
     const adminLogin = adminToken === s.githubToken ? agentLogin : (await checkToken(adminToken)).login
-    if (adminLogin.toLowerCase() === agentLogin.toLowerCase()) {
-      summary.push(`The agents' token belongs to ${agentLogin}, so /approve from ${agentLogin} is refused on deploys (an agent must never approve its own). Give the agents a machine account's token, or approve from another account.`)
-    }
-    for (const p of a.projects) {
-      const o = projectOutputs(p.repo)
-      const login = own.logins.get(p.repo.toLowerCase()) ?? agentLogin
-      if (login.toLowerCase() === adminLogin.toLowerCase() && login !== agentLogin) {
-        summary.push(`${p.repo}'s own token belongs to ${login}, so /approve from ${login} is refused on its deploys.`)
+    if (!a.projects.length) set('repos', 'skipped', 'no repositories yet')
+    else {
+      set('repos', 'running')
+      if (adminLogin.toLowerCase() === agentLogin.toLowerCase()) {
+        summary.push(`The agents' token belongs to ${agentLogin}, so /approve from ${agentLogin} is refused on deploys (an agent must never approve its own). Give the agents a machine account's token, or approve from another account.`)
       }
-      const vars: Record<string, string> = {
-        // this project's own role and runtime: neither reaches any other project
-        TRACE_AWS_ROLE: need(o.roleArn), TRACE_AWS_REGION: a.aws.region, TRACE_HOME: need('TraceHome'), TRACE_AGENT_RUNTIME_ARN: need(o.runtimeArn),
-        // The worker trusts claim markers and refuses deploy approvals from this login (the agents' own account).
-        TRACE_AGENT_LOGIN: login,
-        // its own memory, for the worker.runner = actions fallback (its OIDC role may use that memory only)
-        ...(memoryIds[p.repo.toLowerCase()] ? { TRACE_MEMORY_ID: memoryIds[p.repo.toLowerCase()] ?? '' } : {}),
-        // its own knowledge base, for the kb-sync job on a push to the default branch and the actions fallback
-        ...(out[kbOutputs(p.repo).knowledgeBaseId] ? { TRACE_KB_ID: out[kbOutputs(p.repo).knowledgeBaseId] ?? '', TRACE_KB_DATA_SOURCE_ID: out[kbOutputs(p.repo).dataSourceId] ?? '' } : {}),
-      }
-      for (const [k, v] of Object.entries(vars)) log('repos', `${p.repo}: ${k} ${await setVariable(adminToken, p.repo, k, v)}`)
-      await setSecret(adminToken, p.repo, 'TRACE_TOKEN', projectToken(s, p.repo))
-      log('repos', `${p.repo}: TRACE_TOKEN set`)
+      await mapLimit(a.projects, 4, async (p) => {
+        const o = projectOutputs(p.repo)
+        const login = own.logins.get(p.repo.toLowerCase()) ?? agentLogin
+        if (login.toLowerCase() === adminLogin.toLowerCase() && login !== agentLogin) {
+          summary.push(`${p.repo}'s own token belongs to ${login}, so /approve from ${login} is refused on its deploys.`)
+        }
+        if (p.create) await (hooks.createRepo ?? createRepo)(adminToken, p.repo, { private: p.create.private })
+        const vars: Record<string, string> = {
+          // this project's own role and runtime: neither reaches any other project
+          TRACE_AWS_ROLE: need(o.roleArn), TRACE_AWS_REGION: a.aws.region, TRACE_HOME: need('TraceHome'), TRACE_AGENT_RUNTIME_ARN: need(o.runtimeArn),
+          // The worker trusts claim markers and refuses deploy approvals from this login (the agents' own account).
+          TRACE_AGENT_LOGIN: login,
+          // its own memory, for the worker.runner = actions fallback (its OIDC role may use that memory only)
+          ...(memoryIds[p.repo.toLowerCase()] ? { TRACE_MEMORY_ID: memoryIds[p.repo.toLowerCase()] ?? '' } : {}),
+          // its own knowledge base, for the kb-sync job on a push to the default branch and the actions fallback
+          ...(out[kbOutputs(p.repo).knowledgeBaseId] ? { TRACE_KB_ID: out[kbOutputs(p.repo).knowledgeBaseId] ?? '', TRACE_KB_DATA_SOURCE_ID: out[kbOutputs(p.repo).dataSourceId] ?? '' } : {}),
+        }
+        for (const [k, v] of Object.entries(vars)) log('repos', `${p.repo}: ${k} ${await setVariable(adminToken, p.repo, k, v)}`)
+        await setSecret(adminToken, p.repo, 'TRACE_TOKEN', projectToken(s, p.repo))
+        log('repos', `${p.repo}: TRACE_TOKEN set`)
+      })
+      set('repos', 'done')
     }
-    set('repos', 'done')
 
-    // 6 — onboarding PRs (gh CLI, with the admin token in this process's environment only for the duration)
+    // 7 — CI on AWS: a CodeBuild-hosted runner per repository (src/installer/runners.ts). Never fatal: a repository
+    // whose runner can't be made keeps GitHub's runners (its TRACE_CODEBUILD_PROJECT is removed, so no job waits)
+    current = 'runners'
+    const runnerFor = runnerRepos(a.projects.map((p) => p.repo), props.runners.extraRepos)
+    const rh = hooks.runners ?? liveRunners(codebuildClient(creds, a.aws.region))
+    let runnerCredential: 'imported' | 'refreshed' | 'existing' | null = null
+    if (!props.runners.enabled) {
+      for (const name of await rh.list(props.prefix)) { await rh.remove(name); log('runners', `removed ${name}`) }
+      await mapLimit(runnerFor, 4, async (r) => { if (await deleteVariable(adminToken, r, RUNNER_VARIABLE).catch(() => false)) log('runners', `${r}: ${RUNNER_VARIABLE} removed`) })
+      set('runners', 'skipped', 'off: the trace workflows run on GitHub\'s runners')
+    } else if (!runnerFor.length) set('runners', 'skipped', 'no repositories yet')
+    else {
+      set('runners', 'running')
+      const roleArn = need(RUNNER_ROLE_OUTPUT)
+      const ours = (opts.prev as (Answers & { runnerCredential?: string }) | null | undefined)?.runnerCredential === 'imported' || savedRunnerCredential() === 'imported'
+      const cred = await rh.credential(a.agents.runnerToken === 'admin' ? adminToken : s.githubToken, ours)
+      runnerCredential = cred.state === 'existing' ? 'existing' : 'imported'
+      log('runners', cred.detail)
+      const made: string[] = []
+      const failed: string[] = []
+      await mapLimit(runnerFor, 4, async (r) => {
+        try {
+          const name = await rh.ensure({ prefix: props.prefix, repo: r, roleArn, computeType: props.runners.computeType })
+          await setVariable(adminToken, r, RUNNER_VARIABLE, name)
+          made.push(r)
+          log('runners', `${r}: jobs run on ${name} (runs-on codebuild-${name}-<run id>-<attempt>)`)
+        } catch (e) {
+          failed.push(r)
+          const why = redact(e instanceof Error ? e.message : String(e), s)
+          log('runners', `${r}: no runner: ${why}`)
+          summary.push(`${r}'s CI stays on GitHub's runners: ${why}`)
+          await deleteVariable(adminToken, r, RUNNER_VARIABLE).catch(() => false)
+        }
+      })
+      // runners of repositories no longer here
+      const want = new Set(runnerFor.map((r) => runnerProjectName(props.prefix, projectHash(r))))
+      for (const name of await rh.list(props.prefix)) if (!want.has(name)) { await rh.remove(name); log('runners', `removed ${name} (its repository is no longer here)`) }
+      set('runners', failed.length && !made.length ? 'failed' : 'done', `${made.length} on CodeBuild${failed.length ? `, ${failed.length} kept on GitHub's runners (${failed.join(', ')})` : ''}`)
+    }
+
+    // 8 — onboarding PRs and new repositories (REST and git with the admin token; several at once)
     current = 'onboard'
-    const toOnboard = a.projects.filter((p) => p.onboard)
+    const toOnboard = a.projects.filter((p) => p.onboard || p.create)
     if (!toOnboard.length) set('onboard', 'skipped')
     else {
       set('onboard', 'running')
-      const prior = process.env.GH_TOKEN
-      process.env.GH_TOKEN = adminToken
-      try {
-        for (const p of toOnboard) {
-          const r = await onboard(p.repo, { apply: p.applySettings, ...(a.escalateTo ? { escalateTo: a.escalateTo } : {}) })
-          log('onboard', `${p.repo}: ${r.pr ?? 'no PR'}${r.settings.length ? ` (${r.settings.join('; ')})` : ''}`)
-          if (r.pr) summary.push(`Merge the onboarding PR: ${r.pr}`)
-        }
-      } finally {
-        if (prior === undefined) delete process.env.GH_TOKEN
-        else process.env.GH_TOKEN = prior
-      }
+      const onboardOne = hooks.onboard ?? ((repo: string, o: Omit<ApiOnboardOptions, 'token' | 'login'>) => onboardViaApi(repo, { ...o, token: adminToken, login: adminLogin }))
+      await mapLimit(toOnboard, 3, async (p) => {
+        const r = await onboardOne(p.repo, { apply: p.applySettings, create: p.create, ...(a.escalateTo ? { escalateTo: a.escalateTo } : {}) })
+        log('onboard', `${p.repo}: ${r.state}${r.pr ? ` ${r.pr}` : ''}${r.settings.length ? ` (${r.settings.join('; ')})` : ''}`)
+        if (r.pr && r.state !== 'refreshed') summary.push(`Merge the onboarding PR: ${r.pr}`)
+        if (r.pr && r.state === 'refreshed') summary.push(`Merge the workflow refresh: ${r.pr}`)
+        if (r.state === 'created') summary.push(`Created ${p.repo} under trace.`)
+      })
       set('onboard', 'done')
     }
 
-    // 7 — people and their projects (central database on S3: credentials in this process's environment for the duration)
+    // 9 — people and their projects (central database on S3: credentials in this process's environment for the
+    // duration). Cognito for everyone at once; the access store, which is one file, one write after another.
     current = 'people'
     set('people', 'running')
     const saved = { ...process.env }
@@ -556,7 +716,7 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
         }
       }
       const installer: Principal = { sub: `installer:${check.arn}`, email: a.adminEmail, groups: [GROUPS.admin] }
-      for (const p of a.people) {
+      const subs = await mapLimit(a.people, 5, async (p) => {
         const sub = await subOf(p.email)
         if (!sub) throw new Error(`no Cognito id for ${p.email}`)
         await idp.send(new AdminAddUserToGroupCommand({ UserPoolId: pool, Username: p.email, GroupName: GROUPS[p.class] }))
@@ -568,6 +728,10 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
           await idp.send(new AdminRemoveUserFromGroupCommand({ UserPoolId: pool, Username: p.email, GroupName: g.GroupName }))
           log('people', `${p.email}: removed from ${g.GroupName}`)
         }
+        return sub
+      })
+      for (const [i, p] of a.people.entries()) {
+        const sub = subs[i] ?? ''
         await setClass(installer, { sub, email: p.email }, p.class)
         log('people', `${p.email}: ${p.class}`)
         const want = new Set(p.projects.map((r) => r.toLowerCase()))
@@ -596,10 +760,10 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
         else process.env[k] = saved[k]
       }
     }
-    summary.push(`${a.adminEmail} receives a temporary password from Cognito; sign in with \`trace login\`.`)
+    if (!existing) summary.push(`${a.adminEmail} receives a temporary password from Cognito; sign in with \`trace login\`.`)
     set('people', 'done')
 
-    // 8 — this machine
+    // 10 — this machine
     current = 'local'
     saveInstallation({
       name: 'default', region: a.aws.region, account: a.aws.account, stack, traceHome: need('TraceHome'),
@@ -608,31 +772,56 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
       apiRuntimeArn: need('ApiRuntimeArn'), workerRuntimeArn: '', actionsRoleArn: '',
       githubSecretArn: need('GithubSecretArn'), memoryIds, callbackPorts: props.callbackPorts,
     })
-    saveAnswers({ answers: a })
+    remember(a, true)
+    saveAnswers({ traceVersion: (await import('./lifecycle.js')).traceVersion(), ...(runnerCredential ? { runnerCredential } : {}) })
     set('local', 'done')
-
-    // 9 — the GPU image: the deploy started its build and did not wait (src/infra/gpu.ts); wait now, with the rest up
-    current = 'gpu'
-    if (!props.gpu.enabled) set('gpu', 'skipped')
-    else {
-      set('gpu', 'running')
-      const imageTag = (out.GpuImageUri ?? '').split(':').at(-1) ?? ''
-      const wait = hooks.gpuImage ?? ((o) => ensureGpuImage(codebuildClient(creds, a.aws.region), o))
-      const r = await wait({ buildId: out[GPU_IMAGE_BUILD_OUTPUT] ?? '', imageTag, startedAfter: started, log: (l) => log('gpu', l) })
-      if (r.ok) set('gpu', 'done', r.detail)
-      else {
-        set('gpu', 'failed', r.detail)
-        summary.push(`GPU and CPU jobs cannot run until the GPU image is built: ${r.detail}. Everything else is installed; fix the cause and run the installer again to build it.`)
-      }
-    }
     summary.unshift(`trace is installed in ${a.aws.account} (${a.aws.region}) as ${stack}.`)
-    summary.push('Write each project\'s rules in .trace/rules.md (they start empty).')
+    if (!a.projects.length) summary.push('No repositories yet: run `trace install` again and pick some (or create one).')
+    else summary.push('Write each project\'s rules in .trace/rules.md (they start empty).')
+    if (!names_.length) summary.push('Optional: add a Nexar, Mouser or Digi-Key key for live stock and prices: `trace integrations set nexar` (see `trace integrations list`).')
+
+    // 11 — the GPU image: the deploy started its build and did not wait (src/infra/gpu.ts). trace is usable now; the
+    // page says so, and the wait goes on underneath
+    current = 'gpu'
+    if (!props.gpu.enabled) {
+      set('gpu', 'skipped')
+      emit({ type: 'done', ok: true, summary })
+      return true
+    }
+    emit({ type: 'ready', summary: [...summary, 'The GPU image is still being made: GPU and CPU jobs wait for it, nothing else does.'] })
+    set('gpu', 'running')
+    const imageTag = (out.GpuImageUri ?? '').split(':').at(-1) ?? ''
+    const wait = hooks.gpuImage ?? ((o) => ensureGpuImage(codebuildClient(creds, a.aws.region), o))
+    const r = await wait({ buildId: out[GPU_IMAGE_BUILD_OUTPUT] ?? '', imageTag, startedAfter: started, log: (l) => log('gpu', l) })
+    if (r.ok) set('gpu', 'done', r.detail)
+    else {
+      set('gpu', 'failed', r.detail)
+      summary.push(`GPU and CPU jobs cannot run until the GPU image is built: ${r.detail}. Everything else is installed; fix the cause and run the installer again to build it.`)
+    }
     emit({ type: 'done', ok: true, summary })
     return true
   } catch (e) {
     const m = redact(e instanceof Error ? e.message : String(e), s)
     set(current, 'failed', m)
-    emit({ type: 'done', ok: false, summary: [`Stopped at "${byId.get(current)?.title}": ${m}`, 'Fix the cause and run the installer again: every step is safe to repeat.'] })
+    emit({ type: 'done', ok: false, summary: [`Stopped at "${byId.get(current)?.title ?? current}": ${m}`, 'Fix the cause and run the installer again: every step is safe to repeat.'] })
     return false
+  }
+}
+
+/** The repository variable naming a repository's CodeBuild runner project (src/core/onboard.ts RUNS_ON reads it). */
+export const RUNNER_VARIABLE = 'TRACE_CODEBUILD_PROJECT'
+
+/** Whether trace imported CodeBuild's GitHub credential on an earlier run (so it may refresh it). */
+function savedRunnerCredential(): string | null {
+  try { const v = savedAnswers().runnerCredential; return typeof v === 'string' ? v : null } catch { return null }
+}
+
+/** The runner calls, live. */
+export function liveRunners(cb: Parameters<typeof ensureRunner>[0]): NonNullable<Hooks['runners']> {
+  return {
+    credential: (token, ours) => ensureSourceCredential(cb, token, ours),
+    ensure: (spec) => ensureRunner(cb, spec),
+    list: (prefix) => runnerProjects(cb, prefix),
+    remove: (name) => removeRunner(cb, name),
   }
 }

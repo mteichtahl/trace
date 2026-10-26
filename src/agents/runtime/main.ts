@@ -20,6 +20,15 @@ async function main(): Promise<void> {
     await (mod.start as () => Promise<void>)()
     return
   }
+  // the installation's optional integrations (distributor keys), when this worker may read them
+  // (TRACE_INTEGRATIONS_PREFIX: set with the library gateway off; src/core/integrations.ts). Never fatal.
+  try {
+    const { loadIntegrationsFromEnv } = await import('../../core/integrations.js')
+    const r = await loadIntegrationsFromEnv()
+    if (r) process.stdout.write(`integrations: ${r.loaded.length ? r.loaded.join(', ') : 'none configured'}${r.skipped.length ? ` (skipped: ${r.skipped.join('; ')})` : ''}\n`)
+  } catch (e) {
+    process.stderr.write(`integrations not loaded: ${e instanceof Error ? e.message : String(e)}\n`)
+  }
   const { start } = await import('./server.js')
   await start()
 }

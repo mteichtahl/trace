@@ -98,8 +98,9 @@ describe('the nested layout', () => {
       expect(z.outputs).toBeLessThanOrEqual(200)
     }
     // the knowledge bases add one resource to the parent (the vector bucket) and, from 24 projects, one more overflow
-    // policies of the API role (it names every knowledge base for Retrieve): three at 24 projects, four at 60
-    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:87/19:0', '24:113/19:3', '60:150/19:4'])
+    // policies of the API role (it names every knowledge base for Retrieve): three at 24 projects, four at 60. The CI
+    // runners' role (src/infra/runners.ts) adds two resources (the role and its policy) and one output (RunnerRoleArn)
+    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:89/20:0', '24:115/20:3', '60:152/20:4'])
     // none of a project's outputs is the parent's: each is its nested stack's, with the repository it is the project of
     const s = synth(cfg(2), 'Count2Outputs')
     const parentOutputs = Object.keys(json(s.parent).Outputs ?? {})

@@ -23,7 +23,7 @@ permissions: {}
 jobs:
   open-pr:
     if: vars.TRACE_PRS != 'false' && github.event_name == 'push' && github.ref != 'refs/heads/__TR_BRANCH__'
-    runs-on: ubuntu-24.04
+    runs-on: __TR_RUNS_ON__
     timeout-minutes: 5
     concurrency: { group: 'trace-open-${{ github.ref }}', cancel-in-progress: false }
     permissions:
@@ -37,7 +37,7 @@ jobs:
 
   automerge:
     if: vars.TRACE_PRS != 'false' && github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
+    runs-on: __TR_RUNS_ON__
     timeout-minutes: 5
     concurrency: { group: 'trace-automerge-${{ github.event.pull_request.number }}', cancel-in-progress: true }
     permissions:
@@ -54,7 +54,7 @@ jobs:
       vars.TRACE_PRS != 'false' &&
       (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'push' && github.ref == 'refs/heads/__TR_BRANCH__'))
-    runs-on: ubuntu-24.04
+    runs-on: __TR_RUNS_ON__
     timeout-minutes: 10
     concurrency: { group: trace-update-queue, cancel-in-progress: false }
     permissions:

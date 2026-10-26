@@ -53,13 +53,14 @@ export async function runLibraryTool(registry: Registry, gatewayName: string, ar
 }
 
 /** Copy the distributor credentials from the secret's JSON into the environment (known names only, strings only). */
-export function applyKeys(secret: string, env: NodeJS.ProcessEnv = process.env): string[] {
+export function applyKeys(secret: string, env: NodeJS.ProcessEnv = process.env, o: { keep?: boolean } = {}): string[] {
   let obj: unknown
   try { obj = JSON.parse(secret) } catch { return [] }
   if (typeof obj !== 'object' || obj === null) return []
   const set: string[] = []
   for (const k of KEY_NAMES) {
     const v = (obj as Record<string, unknown>)[k]
+    if (o.keep && env[k]) continue
     if (typeof v === 'string' && v.trim()) { env[k] = v.trim(); set.push(k) }
   }
   return set
@@ -68,11 +69,16 @@ export function applyKeys(secret: string, env: NodeJS.ProcessEnv = process.env):
 let keys: Promise<void> | null = null
 
 async function loadKeys(): Promise<void> {
+  // the installation's integrations first (<prefix>/integrations/<name>, src/core/integrations.ts), then the older
+  // single secret for any key they leave unset
+  const { loadIntegrationsFromEnv } = await import('../core/integrations.js')
+  const r = await loadIntegrationsFromEnv()
+  if (r?.skipped.length) console.error(`integrations skipped: ${r.skipped.join('; ')}`)
   const arn = process.env.TRACE_LIBRARY_KEYS_SECRET_ARN
   if (!arn) return
   const { SecretsManagerClient, GetSecretValueCommand } = await import('@aws-sdk/client-secrets-manager')
-  const r = await new SecretsManagerClient({}).send(new GetSecretValueCommand({ SecretId: arn }))
-  if (r.SecretString) applyKeys(r.SecretString)
+  const s = await new SecretsManagerClient({}).send(new GetSecretValueCommand({ SecretId: arn }))
+  if (s.SecretString) applyKeys(s.SecretString, process.env, { keep: true })
 }
 
 let registry: Registry | null = null

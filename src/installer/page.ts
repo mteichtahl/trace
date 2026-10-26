@@ -64,6 +64,15 @@ table.grid td select { padding: 4px 6px; }
 .status-done .icon { color: var(--ok); } .status-failed .icon { color: var(--bad); } .status-running .icon { color: var(--accent); }
 pre.log { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: 320px; overflow: auto; font: 12px/1.45 var(--mono); white-space: pre-wrap; }
 .muted { color: var(--muted); }
+.small { font-size: 12px; }
+.actions.left { justify-content: flex-start; margin-top: 8px; }
+.sub { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 8px; }
+.sub h3, details.advanced h3 { font-size: 14px; margin: 14px 0 4px; }
+details.advanced { margin-top: 16px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+details.advanced > summary { cursor: pointer; font-weight: 600; }
+button.link { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0; font: inherit; text-decoration: underline; }
+textarea { min-height: 4em; }
+a { color: var(--accent); }
 code { font-family: var(--mono); font-size: 13px; }
 @media (max-width: 600px) { .repos .item { grid-template-columns: auto 1fr; } .repos .item .opt { grid-column: 2; } }
 </style>
@@ -71,7 +80,7 @@ code { font-family: var(--mono); font-size: 13px; }
 <body>
 <header>
   <h1>Install trace</h1>
-  <p>Sets up trace's agents on Amazon Bedrock AgentCore in your AWS account, and connects your GitHub repositories. Tokens and keys you enter stay on this machine until they are written to AWS Secrets Manager and GitHub.</p>
+  <p>Needs two things: AWS credentials and one GitHub token. Everything else is worked out or has a default. Tokens and keys you enter stay on this machine until they are written to AWS Secrets Manager and GitHub.</p>
 </header>
 <main id="app"><p class="muted">Loading…</p></main>
 <script src="/ui.js"></script>

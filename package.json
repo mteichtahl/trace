@@ -22,7 +22,7 @@
     "tsconfig.json"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/bundle-harness.mjs && node scripts/bundle-ui.mjs",
+    "build": "node scripts/stage-image.mjs && tsc -p tsconfig.json && node scripts/bundle-harness.mjs && node scripts/bundle-ui.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.ui.json && tsc -p tsconfig.test.json --noEmit",
     "test": "vitest run",
     "check": "npm run typecheck && npm test",
