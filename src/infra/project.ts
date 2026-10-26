@@ -9,7 +9,8 @@
  *   S3        read central/* (the datasheets and parts database every project shares, by design) and write it
  *             only with a conditional put (If-Match / If-None-Match: the central store always writes that way, see
  *             src/core/central.ts), never delete it; read/write projects/<slug>/* and jobs/<slug>/*; list only those
- *             prefixes; nothing of access/*, nor of any other project
+ *             prefixes; nothing of access/*, nor of any other project. projects/<slug>/memory-state/* (which memory
+ *             records people marked inactive) is read only: writes there are denied
  *   memory    its own memory only (<prefix>_m_<hash>), and on it still only events of actors `<owner>/<repo>/*` and
  *             records under `/trace/<owner>/<repo>/*` (the encodings of src/agents/runtime/memory.ts), as defence in depth
  *   secret    <prefix>/github-token/<slug> only
@@ -39,6 +40,7 @@ import type * as s3 from 'aws-cdk-lib/aws-s3'
 import * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { Construct } from 'constructs'
 import { projectId, projectPrefix as memoryProjectPrefix } from '../agents/runtime/memory.js'
+import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
 import {
   PROJECT_TAG, githubSecretName, memoryName, projectDataPrefix, projectJobsPrefix, workerRuntimeName,
 } from '../core/project.js'
@@ -158,6 +160,13 @@ export class ProjectStack extends Construct {
     role.addToPolicy(modelAccess(account))
     this.secret.grantRead(role)
     grantPrefixes(role, bucket, { conditional: [CENTRAL_PREFIX], readWrite: [projectDataPrefix(repository), projectJobsPrefix(repository)] })
+    // which memory records are inactive (projects/<slug>/memory-state, src/agents/runtime/memory-state.ts): read, never
+    // written, by the agent: it has Bash and these credentials, and must not bring back a record people turned off
+    const memoryState = new iam.PolicyStatement({
+      sid: 'MemoryStateReadOnly', effect: iam.Effect.DENY, actions: ['s3:PutObject', 's3:DeleteObject', 's3:DeleteObjectVersion'],
+      resources: [bucket.arnForObjects(`${projectDataPrefix(repository)}/${MEMORY_STATE}/*`)],
+    })
+    role.addToPolicy(memoryState)
 
     // ------------------------------------------------------------------ its memory (src/infra/memory.ts)
     this.memory = cfg.memory.enabled
@@ -257,6 +266,7 @@ export class ProjectStack extends Construct {
     }))
     this.actionsRole.addToPolicy(modelAccess(account)) // the in-Actions fallback (worker.runner = actions)
     grantPrefixes(this.actionsRole, bucket, { conditional: [CENTRAL_PREFIX], readWrite: [projectDataPrefix(repository)] })
+    this.actionsRole.addToPolicy(memoryState.copy())
 
     for (const r of [role, this.actionsRole]) Tags.of(r).add(PROJECT_TAG, slug)
     Tags.of(this.secret).add(PROJECT_TAG, slug)

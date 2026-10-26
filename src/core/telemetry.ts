@@ -95,6 +95,8 @@ export const ATTR = {
   gpuSeconds: 'trace.gpu.seconds',
   gpuInputs: 'trace.gpu.inputs',
   gpuOutputs: 'trace.gpu.outputs',
+  /** how many inactive memory records were left out of what an agent or a person was given (never their ids) */
+  memoryInactiveFiltered: 'trace.memory.inactive_filtered',
 } as const
 
 export type AttrKey = (typeof ATTR)[keyof typeof ATTR]

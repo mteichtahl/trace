@@ -24,7 +24,8 @@
  *                       the person's class and project assignments (src/core/access.ts) on every request
  *
  * The API runtime is the one component that spans projects: it reads every project's settings and status with the
- * shared GitHub token, reads (never writes) the records of every project's memory, and hands tasks to each project's worker
+ * shared GitHub token, reads (never writes) the records of every project's memory, keeps which of them people marked
+ * inactive (projects/<slug>/memory-state), and hands tasks to each project's worker
  * runtime (InvokeAgentRuntime), always after its access check. It runs no model and gives nothing a shell.
  *
  * Workers accept only IAM (their repository's workflows, and the API); the API accepts only Cognito tokens (people).
@@ -48,7 +49,8 @@ import { Asset } from 'aws-cdk-lib/aws-s3-assets'
 import * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { Provider } from 'aws-cdk-lib/custom-resources'
 import type { Construct, IConstruct } from 'constructs'
-import { JOBS_PREFIX, memoryName, workerRuntimeNamePattern } from '../core/project.js'
+import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
+import { JOBS_PREFIX, PROJECTS_PREFIX, memoryName, workerRuntimeNamePattern } from '../core/project.js'
 import { GpuCompute } from './gpu.js'
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
@@ -330,6 +332,9 @@ export class TraceStack extends Stack {
     githubToken.grantRead(apiRole)
     grantPrefixes(apiRole, central, { conditional: [CENTRAL_PREFIX] })
     central.grantReadWrite(apiRole, `${ACCESS_PREFIX}/*`)
+    // which memory records are inactive, per project (memory.deactivate / reactivate, src/agents/runtime/memory-state.ts):
+    // read and conditional writes under projects/<slug>/memory-state/ only, nothing else of projects/
+    grantPrefixes(apiRole, central, { conditional: [`${PROJECTS_PREFIX}/*/${MEMORY_STATE}`] })
     // every project's worker runtime of this installation (by name; one statement however many projects there are)
     const workers = `arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:runtime/${workerRuntimeNamePattern(cfg.prefix)}`
     apiRole.addToPolicy(new iam.PolicyStatement({ sid: 'InvokeProjectWorkers', actions: ['bedrock-agentcore:InvokeAgentRuntime'], resources: [workers, `${workers}/runtime-endpoint/*`] }))

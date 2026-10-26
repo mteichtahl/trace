@@ -208,12 +208,28 @@ export class S3Backend implements Backend {
     return null
   }
 
+  /**
+   * S3 answers 403, not 404, for a missing object unless the caller may list the bucket unconditionally; the roles
+   * may list only their own prefixes. So a 403 is taken for "missing" only when listing that very key (allowed under
+   * those prefixes) shows it is not there; when the listing is refused too, the 403 stands.
+   */
+  private async missing(e: unknown, key: string): Promise<boolean> {
+    if (isMissing(e)) return true
+    const { name, status } = awsError(e)
+    if (name !== 'AccessDenied' && status !== 403) return false
+    try {
+      return !(await this.list(key)).includes(key)
+    } catch {
+      return false
+    }
+  }
+
   async get(key: string): Promise<{ body: Uint8Array; etag: string } | null> {
     try {
       const r = await (await this.s3()).getObject({ Bucket: this.bucket, Key: this.key(key) })
       return { body: r.Body, etag: r.ETag ?? '' }
     } catch (e) {
-      if (isMissing(e)) return null
+      if (await this.missing(e, key)) return null
       throw e
     }
   }
@@ -222,7 +238,7 @@ export class S3Backend implements Backend {
     try {
       return (await (await this.s3()).headObject({ Bucket: this.bucket, Key: this.key(key) })).ETag ?? ''
     } catch (e) {
-      if (isMissing(e)) return null
+      if (await this.missing(e, key)) return null
       throw e
     }
   }

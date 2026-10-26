@@ -24,8 +24,10 @@
  *   the project's worker   events and records of its own memory; still only its own actors (`<owner>/<repo>/*`,
  *                          bedrock-agentcore:actorId) and namespaces (`/trace/<owner>/<repo>/*`,
  *                          bedrock-agentcore:namespace), as defence in depth: src/infra/project.ts
- *   the API                records under /trace/ of every project's memory (memory.list and memory.recall, after its
- *                          access check), read only, and no events (grantReadRecords)
+ *   the API                records under /trace/ of every project's memory (memory.list, memory.recall, and
+ *                          GetMemoryRecord to verify a record before memory.deactivate, after its access check), read
+ *                          only, and no events (grantReadRecords). Inactive marks are not written to the memory: they
+ *                          are an overlay in S3 (src/agents/runtime/memory-state.ts)
  *   the OIDC role          none
  */
 import { RemovalPolicy } from 'aws-cdk-lib'
@@ -89,12 +91,16 @@ export class TraceMemory extends Construct {
   get memoryArn(): string { return this.memory.attrMemoryArn }
 }
 
-/** Let `grantee` (the API) recall and list the records of every project's memory, and nothing else of them. */
+/** What the API may do with records: recall and list them, and get one (memory.deactivate verifies a record is the
+ * project's before marking it inactive; the marks are kept beside the memory, never written to it). */
+export const API_RECORD_ACTIONS = [...RECORD_ACTIONS, 'bedrock-agentcore:GetMemoryRecord'] as const
+
+/** Let `grantee` (the API) recall, list and get the records of every project's memory, and nothing else of them. */
 export function grantReadRecords(grantee: iam.IGrantable, memories: readonly TraceMemory[]): void {
   if (!memories.length) return
   grantee.grantPrincipal.addToPrincipalPolicy(new iam.PolicyStatement({
     sid: 'TraceMemoryRecordsRead',
-    actions: [...RECORD_ACTIONS],
+    actions: [...API_RECORD_ACTIONS],
     resources: memories.map((m) => m.memoryArn),
     conditions: { StringLike: { 'bedrock-agentcore:namespace': NAMESPACE_PATTERN } },
   }))

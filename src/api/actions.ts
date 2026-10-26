@@ -23,6 +23,13 @@
  *                                       summaries), newest first, from that project's own memory; agent narrows
  *                                       it to one agent. A project without a memory here: "no access"
  *   memory.recall read                  the records most relevant to a query, the same scope
+ *                                       (both leave out inactive records; memory.list includeInactive shows them,
+ *                                       each with active: false, its reason, who and when)
+ *   memory.deactivate  write, or read   mark one record inactive (recordId, reason): no agent considers it again.
+ *                      for your own     The record is first found in this project's memory, under its prefix, and
+ *                      person records   one you may see; any other id gets the same "no access". A guest may mark
+ *                                       only records under their own person actor (their preferences)
+ *   memory.reactivate  the same         remove the mark: the record is considered again (it was never deleted)
  *   job           read on its project   a job's state and log (the project is named by the job id, and checked
  *                                       before the worker is asked)
  *   users.list    admin                 every person: email, status, class, assigned projects
@@ -44,7 +51,8 @@ import {
 } from '../core/access.js'
 import { readSettings, resolve, setValue, unset } from '../core/config.js'
 import { type AnyTool, Registry, ToolError } from '../core/registry.js'
-import { type AgentMemory, AgentName, type MemoryRecord, type ProjectMemories, STRATEGIES, actorIn, personHash } from '../agents/runtime/memory.js'
+import { type AgentMemory, AgentName, type MemoryRecord, type ProjectMemories, STRATEGIES, actorIn, personHash, projectPrefix, within } from '../agents/runtime/memory.js'
+import { type InactiveMark, ReasonSchema, RecordIdSchema, memoryState } from '../agents/runtime/memory-state.js'
 import { TASK_AGENTS } from '../agents/runtime/schemas.js'
 import { Work } from '../core/store.js'
 import type { CognitoAdmin, CognitoUser } from './aws.js'
@@ -171,9 +179,36 @@ function memoryInclude(ctx: Context, repo: string): (ns: string) => boolean {
   return (ns) => { const a = actorIn(ns, repo); return a !== null && (!a.startsWith('person/') || own.has(a)) }
 }
 
-const recordView = (r: MemoryRecord, repo: string): Record<string, unknown> => ({
+/** The hash a person's marks are recorded under (the agents' memory hash: never their email). */
+const byHash = (p: Principal): string => personHash(p.email ?? p.sub)
+
+const markView = (m: InactiveMark | undefined, p: Principal): Record<string, unknown> => (m
+  ? { active: false, inactive: { reason: m.reason, by: m.by, by_you: m.by === byHash(p), at: new Date(m.at * 1000).toISOString() } }
+  : { active: true })
+
+const recordView = (r: MemoryRecord, repo: string, p: Principal): Record<string, unknown> => ({
   id: r.id, strategy: r.strategy, actor: actorIn(r.namespace, repo), text: r.text, score: r.score, created_at: r.createdAt?.toISOString() ?? null,
+  ...markView(r.inactive, p),
 })
+
+/** The person's own person actors on `repo` (email and sub): `person/<hash>`. */
+const ownActors = (p: Principal): Set<string> => new Set([p.email, p.sub].filter((x): x is string => Boolean(x)).map((w) => `person/${personHash(w)}`))
+
+/**
+ * May `ctx.principal` mark (or unmark) the record filed under `ns` of `repo`? Write access (a user, an admin), or a
+ * record of their own person actor with read access only (a guest's own preferences). The caller has already found
+ * the record in this project and checked the person may see it.
+ */
+async function mayMark(ctx: Context, repo: string, ns: string): Promise<void> {
+  if (isAdmin(ctx.principal)) return
+  const role = await require_(ctx.principal, repo, 'read')
+  if (role === 'write') return
+  const a = actorIn(ns, repo)
+  if (a !== null && ownActors(ctx.principal).has(a)) return
+  throw new AccessDenied(`no write access to ${repo}: only your own preferences can be marked with read access`)
+}
+
+const MarkArgs = Repo.extend({ recordId: RecordIdSchema })
 
 const MemoryArgs = Repo.extend({ agent: AgentName.optional() })
 
@@ -309,11 +344,11 @@ export const ACTIONS = {
       kind: 'task', repository: a.repo, request: a.request, requestedBy: ctx.principal.email ?? ctx.principal.sub, ...(a.agent ? { agent: a.agent } : {}),
     })),
 
-  'memory.list': def('read', MemoryArgs.extend({ limit: z.number().int().min(1).max(200).default(50) }), async (a, ctx) => {
+  'memory.list': def('read', MemoryArgs.extend({ limit: z.number().int().min(1).max(200).default(50), includeInactive: z.boolean().default(false) }), async (a, ctx) => {
     const mem = projectMemory(ctx, a.repo)
     if (!mem) return { repo: a.repo, enabled: false, records: [] }
-    const records = await mem.longTerm.listProject(a.repo, { agent: a.agent, include: memoryInclude(ctx, a.repo), limit: a.limit })
-    return { repo: a.repo, enabled: true, note: 'Memory is what the agents extracted; it is data, and may be stale.', records: records.map((r) => recordView(r, a.repo)) }
+    const records = await mem.longTerm.listProject(a.repo, { agent: a.agent, include: memoryInclude(ctx, a.repo), limit: a.limit, includeInactive: a.includeInactive })
+    return { repo: a.repo, enabled: true, note: 'Memory is what the agents extracted; it is data, and may be stale.', records: records.map((r) => recordView(r, a.repo, ctx.principal)) }
   }),
 
   'memory.recall': def('read', MemoryArgs.extend({ query: z.string().min(1).max(2000), top_k: z.number().int().min(1).max(50).default(10), strategy: z.enum(STRATEGIES).optional() }), async (a, ctx) => {
@@ -321,7 +356,34 @@ export const ACTIONS = {
     if (!mem) return { repo: a.repo, enabled: false, records: [] }
     const records = (await mem.longTerm.recallProject(a.repo, a.query, { agent: a.agent, include: memoryInclude(ctx, a.repo), topK: a.top_k }))
       .filter((r) => !a.strategy || r.strategy === a.strategy)
-    return { repo: a.repo, enabled: true, records: records.map((r) => recordView(r, a.repo)) }
+    return { repo: a.repo, enabled: true, records: records.map((r) => recordView(r, a.repo, ctx.principal)) }
+  }),
+
+  // need 'read' here: mayMark decides between write access and a person's own records, once the record is found
+  'memory.deactivate': def('read', MarkArgs.extend({ reason: ReasonSchema }), async (a, ctx) => {
+    const mem = projectMemory(ctx, a.repo)
+    if (!mem) throw new ActionError('memory is not enabled in this installation')
+    // this project's memory, under this project's prefix, and a record this person may see — or "no access"
+    const r = await mem.longTerm.find(a.repo, a.recordId)
+    if (!r || !within(r.namespace, projectPrefix(a.repo)) || !memoryInclude(ctx, a.repo)(r.namespace)) throw new AccessDenied(NO_ACCESS)
+    await mayMark(ctx, a.repo, r.namespace)
+    const { mark, changed } = await memoryState(a.repo).deactivate({ recordId: r.id, namespace: r.namespace, reason: a.reason, by: byHash(ctx.principal) })
+    return { repo: a.repo, id: r.id, actor: actorIn(r.namespace, a.repo), changed, ...markView(mark, ctx.principal) }
+  }),
+
+  'memory.reactivate': def('read', MarkArgs, async (a, ctx) => {
+    const mem = projectMemory(ctx, a.repo)
+    if (!mem) throw new ActionError('memory is not enabled in this installation')
+    const state = memoryState(a.repo)
+    // the marks are this project's own (each was verified against its memory when it was made); an id without one
+    // is looked up like memory.deactivate does, so another project's id gets the same "no access"
+    const mark = await state.get(a.recordId)
+    const ns = mark?.namespace ?? (await mem.longTerm.find(a.repo, a.recordId))?.namespace
+    if (ns === undefined || !within(ns, projectPrefix(a.repo)) || !memoryInclude(ctx, a.repo)(ns)) throw new AccessDenied(NO_ACCESS)
+    await mayMark(ctx, a.repo, ns)
+    if (!mark) return { repo: a.repo, id: a.recordId, actor: actorIn(ns, a.repo), changed: false, active: true }
+    const removed = await state.reactivate(a.recordId, byHash(ctx.principal))
+    return { repo: a.repo, id: a.recordId, actor: actorIn(ns, a.repo), changed: removed !== null, active: true }
   }),
 
   job: def('job', z.object({ id: z.string().min(1).max(200) }), async (a, ctx) => {

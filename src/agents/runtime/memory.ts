@@ -39,12 +39,22 @@
  *   TRACE_PROJECT_MEMORIES    the API's: `owner/repo=<memory id> …`, space-separated, written by the stack
  *
  * Without them there is no memory, and everything that uses it quietly does without.
+ *
+ * INACTIVE RECORDS. People may mark a long-term record inactive (the API's memory.deactivate; src/agents/runtime/
+ * memory-state.ts keeps the marks beside the memory). Every read here leaves inactive records out after retrieval,
+ * whoever reads: the job's recall and its prompt block, the memory_recall tool, and the API's memory.recall and
+ * memory.list. Recall asks for as many more as there are inactive records under the namespace, so the answer is
+ * not shorter for them. When the marks cannot be read, the read fails rather than hand out memory unchecked (a job
+ * then runs without long-term memory). Short-term events are not marked: see README "Inactive memories".
  */
 import { createHash } from 'node:crypto'
 import {
-  BedrockAgentCoreClient, CreateEventCommand, ListEventsCommand, ListMemoryRecordsCommand, RetrieveMemoryRecordsCommand,
+  BedrockAgentCoreClient, CreateEventCommand, GetMemoryRecordCommand, ListEventsCommand, ListMemoryRecordsCommand, RetrieveMemoryRecordsCommand,
 } from '@aws-sdk/client-bedrock-agentcore'
+import { type Span, trace } from '@opentelemetry/api'
 import { z } from 'zod'
+import { ATTR, setAttrs } from '../../core/telemetry.js'
+import { type InactiveMark, type InactiveSource, memoryState } from './memory-state.js'
 import { RepositorySchema } from './schemas.js'
 
 // ------------------------------------------------------------------ the scheme
@@ -204,7 +214,7 @@ const API_ROLE = { user: 'USER', assistant: 'ASSISTANT', tool: 'TOOL', other: 'O
 
 /** What the client needs of BedrockAgentCoreClient (tests pass a fake). */
 export interface SendClient {
-  send(command: CreateEventCommand | ListEventsCommand | RetrieveMemoryRecordsCommand | ListMemoryRecordsCommand): Promise<unknown>
+  send(command: CreateEventCommand | ListEventsCommand | RetrieveMemoryRecordsCommand | ListMemoryRecordsCommand | GetMemoryRecordCommand): Promise<unknown>
 }
 
 export const MemoryIdSchema = z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,99}-[a-zA-Z0-9]{10}$/, 'an AgentCore memory id')
@@ -235,9 +245,14 @@ const RecordSchema = z.object({
   score: z.number().optional(),
 }).loose()
 const RecordsOut = z.object({ memoryRecordSummaries: z.array(RecordSchema).default([]), nextToken: z.string().nullish() }).loose()
+const GetRecordOut = z.object({ memoryRecord: RecordSchema }).loose()
 
 export interface Turn { id: string; at: Date | null; role: Role; text: string }
-export interface MemoryRecord { id: string; strategy: Strategy | null; namespace: string; text: string; score: number | null; createdAt: Date | null }
+export interface MemoryRecord {
+  id: string; strategy: Strategy | null; namespace: string; text: string; score: number | null; createdAt: Date | null
+  /** set only when inactive records were asked for (listing with includeInactive); never given to an agent */
+  inactive?: InactiveMark | undefined
+}
 
 function turnOf(e: z.infer<typeof EventSchema>): Turn[] {
   return e.payload.flatMap((p) => {
@@ -271,6 +286,27 @@ function keep(rs: z.infer<typeof RecordSchema>[], prefix: string): MemoryRecord[
 export interface RecallOptions { strategies?: readonly Strategy[]; topK?: number }
 export interface ProjectScope { agent?: string | undefined; include?: ((ns: string) => boolean) | undefined }
 
+/** The most records one RetrieveMemoryRecords or ListMemoryRecords call returns (the API's maxResults). */
+const API_PAGE_MAX = 100
+
+/** How many inactive records were left out, added up on the active span (a count, never which ones). */
+const filteredOn = new WeakMap<Span, number>()
+function noteInactive(n: number): void {
+  if (n <= 0) return
+  const s = trace.getActiveSpan()
+  if (!s) return
+  const total = (filteredOn.get(s) ?? 0) + n
+  filteredOn.set(s, total)
+  setAttrs(s, { [ATTR.memoryInactiveFiltered]: total })
+}
+
+/** Inactive marks of records at or below `prefix`: how many results a query there may lose to them. */
+const inactiveUnder = (marks: ReadonlyMap<string, InactiveMark>, prefix: string): number => {
+  let n = 0
+  for (const m of marks.values()) if (within(m.namespace, prefix)) n++
+  return n
+}
+
 const scopePrefix = (repository: string, agent?: string): string => (agent ? actorPrefix(agentActor(repository, agent)) : projectPrefix(repository))
 
 /** Which actor of its project a namespace belongs to: `worker`, `person/<hash>`, … (null outside the project). */
@@ -282,8 +318,20 @@ export function actorIn(ns: string, repository: string): string | null {
 }
 
 export class AgentMemory {
-  constructor(readonly memoryId: string, private readonly client: SendClient, private readonly now: () => number = Date.now) {
+  /**
+   * `stateFor`: each project's inactive marks (src/agents/runtime/memory-state.ts). Every read of long-term memory
+   * leaves inactive records out, whoever reads it; only listing with includeInactive shows them, marked.
+   */
+  constructor(
+    readonly memoryId: string, private readonly client: SendClient, private readonly now: () => number = Date.now,
+    private readonly stateFor: (repository: string) => InactiveSource = memoryState,
+  ) {
     MemoryIdSchema.parse(memoryId)
+  }
+
+  /** The inactive marks of `repository`. A failure is thrown: memory is not given without knowing what is inactive. */
+  private marks(repository: string): Promise<ReadonlyMap<string, InactiveMark>> {
+    return this.stateFor(repository).inactive()
   }
 
   /** Short-term memory: the events of one actor's session. */
@@ -321,40 +369,74 @@ export class AgentMemory {
     /** The records most relevant to `query`, per strategy, from this actor's namespaces only. */
     recall: async (a: Actor, query: string, o: RecallOptions = {}): Promise<MemoryRecord[]> => {
       const strategies = o.strategies?.length ? o.strategies : STRATEGIES
-      const per = await Promise.all(strategies.map((s) => this.retrieve(namespaceOf(a, s), query, o.topK ?? 5)))
+      const marks = await this.marks(a.repository)
+      const per = await Promise.all(strategies.map((s) => this.retrieve(namespaceOf(a, s), query, o.topK ?? 5, marks)))
       return per.flat()
     },
     /** The records under this actor (or one strategy of it), newest first. */
     list: async (a: Actor, o: { strategy?: Strategy; limit?: number } = {}): Promise<MemoryRecord[]> =>
-      this.list(o.strategy ? namespaceOf(a, o.strategy) : actorPrefix(a), o.limit ?? 50),
+      this.list(o.strategy ? namespaceOf(a, o.strategy) : actorPrefix(a), o.limit ?? 50, await this.marks(a.repository), false),
     /** One project (the API): every actor of `repository`, or one agent of it, then filtered by `include`. */
     recallProject: async (repository: string, query: string, o: ProjectScope & { topK: number }): Promise<MemoryRecord[]> =>
-      (await this.retrieve(scopePrefix(repository, o.agent), query, o.topK)).filter((r) => (o.include ?? (() => true))(r.namespace)),
-    listProject: async (repository: string, o: ProjectScope & { limit: number }): Promise<MemoryRecord[]> =>
-      (await this.list(scopePrefix(repository, o.agent), o.limit)).filter((r) => (o.include ?? (() => true))(r.namespace)),
+      (await this.retrieve(scopePrefix(repository, o.agent), query, o.topK, await this.marks(repository), o.include)),
+    /** With includeInactive, inactive records are listed too, each with its mark (the API's memory.list --all). */
+    listProject: async (repository: string, o: ProjectScope & { limit: number; includeInactive?: boolean }): Promise<MemoryRecord[]> =>
+      (await this.list(scopePrefix(repository, o.agent), o.limit, await this.marks(repository), o.includeInactive === true, o.include)),
+    /**
+     * One record of `repository`, or null when this memory has no such record under the project's prefix. GetMemoryRecord
+     * first; when that is refused or finds nothing, the project's records are listed (at most 1000) and searched, so a
+     * record is never wrongly reported missing because of how GetMemoryRecord treats its namespace argument.
+     */
+    find: async (repository: string, recordId: string): Promise<MemoryRecord | null> => {
+      const prefix = projectPrefix(repository)
+      try {
+        const out = GetRecordOut.parse(await this.client.send(new GetMemoryRecordCommand({ memoryId: this.memoryId, memoryRecordId: recordId, namespace: prefix })))
+        const [r] = keep([out.memoryRecord], prefix)
+        if (r && r.id === recordId) return r
+      } catch {
+        // not found, or refused: the listing below decides
+      }
+      return (await this.list(prefix, 1000, new Map(), true, undefined, 1000)).find((r) => r.id === recordId) ?? null
+    },
   }
 
-  private async retrieve(prefix: string, query: string, topK: number): Promise<MemoryRecord[]> {
+  /**
+   * The most relevant records under `prefix`, inactive ones left out. Up to as many more are asked for as there are
+   * inactive records under the prefix (at most the API's 100), so that leaving them out does not shorten the answer.
+   */
+  private async retrieve(prefix: string, query: string, topK: number, marks: ReadonlyMap<string, InactiveMark>, include?: (ns: string) => boolean): Promise<MemoryRecord[]> {
     const q = bound(query.trim() || 'what to know about this project', 10_000)
+    const want = Math.max(1, Math.min(topK, API_PAGE_MAX))
+    const ask = Math.min(API_PAGE_MAX, want + inactiveUnder(marks, prefix))
     const out = RecordsOut.parse(await this.client.send(new RetrieveMemoryRecordsCommand({
-      memoryId: this.memoryId, namespace: prefix, searchCriteria: { searchQuery: q, topK: Math.max(1, Math.min(topK, 100)) },
-      maxResults: Math.max(1, Math.min(topK, 100)),
+      memoryId: this.memoryId, namespace: prefix, searchCriteria: { searchQuery: q, topK: ask }, maxResults: ask,
     })))
-    return keep(out.memoryRecordSummaries, prefix)
+    const found = keep(out.memoryRecordSummaries, prefix).filter((r) => (include ?? (() => true))(r.namespace))
+    const active = found.filter((r) => !marks.has(r.id))
+    noteInactive(found.length - active.length)
+    return active.slice(0, want)
   }
 
-  private async list(prefix: string, limit: number): Promise<MemoryRecord[]> {
+  /** The records under `prefix`, newest first: the active ones, or with `all` every one, inactive ones marked. */
+  private async list(prefix: string, limit: number, marks: ReadonlyMap<string, InactiveMark>, all: boolean, include?: (ns: string) => boolean, max = 500): Promise<MemoryRecord[]> {
     const rs: MemoryRecord[] = []
     let nextToken: string | undefined
-    const want = Math.max(1, Math.min(limit, 500))
+    let dropped = 0
+    const want = Math.max(1, Math.min(limit, max))
     for (let page = 0; page < 10 && rs.length < want; page++) {
       const out = RecordsOut.parse(await this.client.send(new ListMemoryRecordsCommand({
-        memoryId: this.memoryId, namespace: prefix, maxResults: Math.min(100, want), ...(nextToken ? { nextToken } : {}),
+        memoryId: this.memoryId, namespace: prefix, maxResults: Math.min(API_PAGE_MAX, want), ...(nextToken ? { nextToken } : {}),
       })))
-      rs.push(...keep(out.memoryRecordSummaries, prefix))
+      for (const r of keep(out.memoryRecordSummaries, prefix)) {
+        if (include && !include(r.namespace)) continue
+        const mark = marks.get(r.id)
+        if (mark && !all) { dropped++; continue }
+        rs.push(mark ? { ...r, inactive: mark } : r)
+      }
       nextToken = out.nextToken ?? undefined
       if (!nextToken) break
     }
+    noteInactive(dropped)
     return rs.sort((x, y) => (y.createdAt?.getTime() ?? 0) - (x.createdAt?.getTime() ?? 0)).slice(0, want)
   }
 }
@@ -425,8 +507,9 @@ export function memoryBlock(o: { records: readonly MemoryRecord[]; history?: rea
   const seen = new Set<string>()
   const add = (s: string): void => { if (!seen.has(s)) { seen.add(s); items.push(s) } }
   for (const t of o.history ?? []) add(`- [this session, ${t.role}] ${line(t.text)}`)
-  for (const r of o.person ?? []) add(`- [preference of the person who asked] ${line(r.text)}`)
-  for (const r of o.records) add(`- [${r.strategy ? LABEL[r.strategy] : 'memory'}] ${line(r.text)}`)
+  // inactive records never reach a prompt, even if a caller passes one (recall already leaves them out)
+  for (const r of o.person ?? []) if (!r.inactive) add(`- [preference of the person who asked] ${line(r.text)}`)
+  for (const r of o.records) if (!r.inactive) add(`- [${r.strategy ? LABEL[r.strategy] : 'memory'}] ${line(r.text)}`)
   if (!items.length) return ''
   const head = [
     '',
