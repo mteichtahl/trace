@@ -109,7 +109,7 @@ describe('describeWait', () => {
   it('says what, when it last looked and when it will look next', () => {
     const now = Date.parse('2026-10-27T10:15:00Z')
     const n: WaitNotice = {
-      id: 'w', what: 'JLCPCB to confirm the order', source: 'timer', startedAt: '2026-10-27T10:00:00Z', state: 'IN_REVIEW',
+      id: 'w', what: 'JLCPCB to confirm the order', source: 'timer', startedAt: '2026-10-27T10:00:00Z', jobId: null, state: 'IN_REVIEW',
       lastCheckedAt: '2026-10-27T10:13:00Z', nextCheckAt: '2026-10-27T10:28:00Z', intervalMs: 900_000, checks: 3, why: 'no event feed',
     }
     expect(describeWait(n, now)).toBe('Waiting for JLCPCB to confirm the order (in review). Checked 2 minutes ago; next check in 13 minutes.')
@@ -158,5 +158,28 @@ describe('trackEventWait', () => {
     expect(checkNow(w.id)).toBe(false)
     w.end()
     expect(activeWaits().some((x) => x.id === w.id)).toBe(false)
+  })
+})
+
+describe('waitChanges and withJob', () => {
+  it('emits opened, updated and ended with the line and a growing version, and attributes waits to their job', async () => {
+    const { waitChanges, waitsVersion, withJob } = await import('../../src/core/wait.js')
+    const seen: { type: string; version: number; jobId: string | null; line: string }[] = []
+    const stop = waitChanges.on((c) => seen.push({ type: c.type, version: c.version, jobId: c.notice.jobId, line: c.line }))
+    const v0 = waitsVersion()
+    const w = withJob('job-7', () => trackEventWait({ what: 'the render' }))
+    w.update('RUNNING')
+    w.update('RUNNING') // no change, no event
+    w.end()
+    w.end() // already ended, no event
+    let n = 0
+    await waitWithTimer({ what: 'the ingestion job', why: 'no event', intervalMs: 1, sleep: async () => undefined, check: async () => (++n < 2 ? { done: false, state: 'IN_PROGRESS' } : { done: true, value: 1, state: 'COMPLETE' }) })
+    stop()
+    expect(seen.map((s) => s.type)).toEqual(['opened', 'updated', 'ended', 'opened', 'updated', 'updated', 'ended'])
+    expect(seen.map((s) => s.version)).toEqual([1, 2, 3, 4, 5, 6, 7].map((i) => v0 + i))
+    expect(seen.slice(0, 3).every((s) => s.jobId === 'job-7')).toBe(true)
+    expect(seen[3]?.jobId).toBeNull()
+    expect(seen[1]?.line).toBe('Waiting for the render (running). trace will know as soon as it changes.')
+    expect(seen[4]?.line).toMatch(/^Waiting for the ingestion job \(in progress\)\. Checked just now; next check in a moment\.$/)
   })
 })

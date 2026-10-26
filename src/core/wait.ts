@@ -10,11 +10,16 @@
  *   checkNow(id)         wake one timer wait for an immediate check; false when no such timer wait is open
  *   describeWait(n)      the plain-language line a person reads: "Waiting for the order to be confirmed. Checked
  *                        2 minutes ago; next check in 13 minutes."
+ *   waitChanges          an EventBus of every change to the record (opened, updated after a check or a new state,
+ *                        ended), each with the notice, its line and waitsVersion(): how a screen follows waits as they
+ *                        happen, through a held status answer, rather than asking again and again
+ *   withJob(jobId, fn)   run fn so that every wait it opens is attributed to that job (notice.jobId)
  *
  * Timer intervals back off while nothing changes (factor, up to maxIntervalMs) and drop back to the base interval
  * the moment the awaited thing's state changes, so a wait that is moving is checked often and one that is idle is
  * not; the next-check time always says which.
  */
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomBytes } from 'node:crypto'
 
 // ------------------------------------------------------------------ the record of open waits
@@ -28,6 +33,8 @@ export interface WaitNotice {
   what: string
   source: WaitSource
   startedAt: string
+  /** the job the wait was opened in (withJob), or null for one opened outside any job (a tool call, the CLI) */
+  jobId: string | null
   /** the awaited thing's latest state, in its own words (RUNNING, IN_PROGRESS, …), or null before the first news */
   state: string | null
   /** timer waits: when trace last looked, when it will look next, and the interval it is on now */
@@ -41,6 +48,32 @@ export interface WaitNotice {
 
 interface Open { notice: WaitNotice; wake: (() => void) | null }
 const open = new Map<string, Open>()
+
+/** One change to the record of open waits. `version` is waitsVersion() after the change. */
+export interface WaitChange {
+  type: 'opened' | 'updated' | 'ended'
+  version: number
+  notice: WaitNotice
+  /** describeWait(notice) at the time of the change */
+  line: string
+}
+
+let version = 0
+
+/** A counter that only grows: one step per change to the record of open waits (per process, from 0). */
+export function waitsVersion(): number { return version }
+
+function changed(type: WaitChange['type'], notice: WaitNotice): void {
+  version++
+  waitChanges.emit({ type, version, notice: { ...notice }, line: describeWait(notice) })
+}
+
+const jobScope = new AsyncLocalStorage<string>()
+
+/** Run fn so that every wait it opens (however deep) is attributed to jobId. */
+export function withJob<T>(jobId: string, fn: () => T): T {
+  return jobScope.run(jobId, fn)
+}
 
 const newId = (): string => `wait-${randomBytes(5).toString('hex')}`
 
@@ -132,6 +165,9 @@ export class EventBus<E> {
   }
 }
 
+/** Every change to the record of open waits, as it happens. */
+export const waitChanges = new EventBus<WaitChange>()
+
 /** An event-driven wait, on the record while it lasts: no timer, only the latest state. */
 export interface EventWait {
   readonly id: string
@@ -143,14 +179,19 @@ export function trackEventWait(o: { what: string; state?: string | null; now?: (
   const now = o.now ?? Date.now
   const id = newId()
   const notice: WaitNotice = {
-    id, what: o.what, source: 'event', startedAt: new Date(now()).toISOString(), state: o.state ?? null,
-    lastCheckedAt: null, nextCheckAt: null, intervalMs: null, checks: 0, why: null,
+    id, what: o.what, source: 'event', startedAt: new Date(now()).toISOString(), jobId: jobScope.getStore() ?? null,
+    state: o.state ?? null, lastCheckedAt: null, nextCheckAt: null, intervalMs: null, checks: 0, why: null,
   }
   open.set(id, { notice, wake: null })
+  changed('opened', notice)
   return {
     id,
-    update(state) { notice.state = state },
-    end() { open.delete(id) },
+    update(state) {
+      if (!open.has(id) || state === notice.state) return
+      notice.state = state
+      changed('updated', notice)
+    },
+    end() { if (open.delete(id)) changed('ended', notice) },
   }
 }
 
@@ -204,12 +245,15 @@ export async function waitWithTimer<T>(o: TimerWaitOptions<T>): Promise<WaitOutc
   const max = Math.max(o.maxIntervalMs ?? o.intervalMs, o.intervalMs)
   const id = newId()
   const notice: WaitNotice = {
-    id, what: o.what, source: 'timer', startedAt: new Date(now()).toISOString(), state: null,
-    lastCheckedAt: null, nextCheckAt: null, intervalMs: o.intervalMs, checks: 0, why: o.why,
+    id, what: o.what, source: 'timer', startedAt: new Date(now()).toISOString(), jobId: jobScope.getStore() ?? null,
+    state: null, lastCheckedAt: null, nextCheckAt: null, intervalMs: o.intervalMs, checks: 0, why: o.why,
   }
   let early = new AbortController()
   const entry: Open = { notice, wake: () => early.abort() }
   open.set(id, entry)
+  changed('opened', notice)
+  /** after every check: the caller's report, and the record's change event */
+  const told = (): void => { o.report?.({ ...notice }); changed('updated', notice) }
   const onAbort = (): void => early.abort()
   o.signal?.addEventListener('abort', onAbort, { once: true })
   let interval = o.intervalMs
@@ -219,30 +263,30 @@ export async function waitWithTimer<T>(o: TimerWaitOptions<T>): Promise<WaitOutc
       const r = await o.check()
       notice.checks++
       notice.lastCheckedAt = new Date(now()).toISOString()
-      const changed = r.state !== undefined && r.state !== notice.state
+      const moved = r.state !== undefined && r.state !== notice.state
       if (r.state !== undefined) notice.state = r.state
       if (r.done) {
         notice.nextCheckAt = null
-        o.report?.({ ...notice })
+        told()
         return { done: true, value: r.value, checks: notice.checks, waitId: id }
       }
       // moving: check again soon; idle: back off
-      interval = changed ? o.intervalMs : notice.checks === 1 ? o.intervalMs : Math.min(max, Math.round(interval * factor))
+      interval = moved ? o.intervalMs : notice.checks === 1 ? o.intervalMs : Math.min(max, Math.round(interval * factor))
       const t = now()
       if (o.deadlineAt !== undefined && t >= o.deadlineAt) {
         notice.nextCheckAt = null
-        o.report?.({ ...notice })
+        told()
         return { done: false, reason: 'deadline', state: notice.state, checks: notice.checks, waitId: id }
       }
       const at = o.deadlineAt !== undefined ? Math.min(t + interval, o.deadlineAt) : t + interval
       notice.intervalMs = interval
       notice.nextCheckAt = new Date(at).toISOString()
-      o.report?.({ ...notice })
+      told()
       await sleep(at - t, early.signal)
       if (early.signal.aborted) early = new AbortController()
     }
   } finally {
     o.signal?.removeEventListener('abort', onAbort)
-    open.delete(id)
+    if (open.delete(id)) changed('ended', notice)
   }
 }

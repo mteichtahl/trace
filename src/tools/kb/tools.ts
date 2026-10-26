@@ -152,7 +152,16 @@ export const sync = defineTool({
     allow_branch: z.boolean().default(false).describe('sync even though this checkout is not the default branch'),
   }),
   available: configured,
-  run: async (a) => syncHere({ force: a.force, waitMinutes: a.wait_minutes, dryRun: a.dry_run, allowBranch: a.allow_branch }),
+  run: async (a) => {
+    // the wait lines, as they happened: in the answer for whoever asked (the API's kb.sync), and live meanwhile as
+    // changes to the wait's record (a held status answer on this runtime: the API's kb.waits)
+    const progress: { at: string; line: string }[] = []
+    const r = await syncHere({
+      force: a.force, waitMinutes: a.wait_minutes, dryRun: a.dry_run, allowBranch: a.allow_branch,
+      progress: (line) => { progress.push({ at: new Date().toISOString(), line }) },
+    })
+    return { ...r, progress }
+  },
 })
 
 export const tools = [search, status, sync]

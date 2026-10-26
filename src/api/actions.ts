@@ -43,6 +43,11 @@
  *                                       until the job changes after that version, or waitS passes: no polling
  *   job.check_now read on its project   wake one timer wait on the job's worker (waitId from `waits`) for a check
  *                                       now → { ok } (false: no such timer wait is open). It changes nothing
+ *   tools.waits   read                  what the project's tool calls are waiting on (kb.sync's ingestion job, a
+ *                                       graphics card job): { version, waits }, each wait with `text`. afterVersion +
+ *                                       waitS (≤ 240 s): held on the worker until a wait opens, is checked, changes
+ *                                       or ends: how a screen shows a tool call's lines while it runs
+ *   tools.check_now read                wake one of those timer waits for a check now (waitId) → { ok }
  *   users.list    admin                 every person: email, status, class, assigned projects
  *   users.invite  admin                 create the person in Cognito (email, class) → sub
  *   users.class   admin                 change a person's class (their Cognito group: exactly one of the three)
@@ -122,6 +127,13 @@ export interface JobsApi {
   watchJob?(jobId: string, o: { afterVersion?: number | undefined; waitS?: number | undefined }): Promise<{ jobs: readonly JobView[]; version: number | null; waits: readonly WaitView[] }>
   /** Wake one timer wait on the job's worker (invocation kind `check-now`). Absent: there is nothing to wake. */
   checkNow?(jobId: string, waitId: string): Promise<boolean>
+  /**
+   * What the project's tool calls are waiting on (the waits open outside any job in its tool session), with that
+   * worker's change counter; with afterVersion and waitS the worker holds the answer until one changes. Absent: none.
+   */
+  watchTools?(repository: string, o: { afterVersion?: number | undefined; waitS?: number | undefined }): Promise<{ version: number | null; waits: readonly WaitView[] }>
+  /** Wake one of those timer waits (invocation kind `check-now` in the tool session). Absent: there is nothing to wake. */
+  checkToolWait?(repository: string, waitId: string): Promise<boolean>
   /** One tool call on the project's own worker runtime (invocation kind `tool`): its result, or throws ActionError.
    * Absent: this installation runs no tools for the API. */
   runTool?(payload: Omit<ToolJob, 'trace'>): Promise<unknown>
@@ -549,6 +561,17 @@ export const ACTIONS = {
   'job.check_now': def('job', JobId.extend({ waitId: z.string().min(1).max(64) }), async (a, ctx) => {
     const jobs = await jobAccess(a.id, ctx)
     return { ok: jobs.checkNow ? await jobs.checkNow(a.id, a.waitId) : false }
+  }),
+
+  'tools.waits': def('read', Repo.extend({ afterVersion: z.number().int().min(0).optional(), waitS: z.number().min(0).max(240).optional() }), async (a, ctx) => {
+    const jobs = await ctx.deps.jobs()
+    if (!jobs.watchTools) return { repo: a.repo, version: null, waits: [] }
+    return { repo: a.repo, ...(await jobs.watchTools(a.repo, { afterVersion: a.afterVersion, waitS: a.waitS })) }
+  }),
+
+  'tools.check_now': def('read', Repo.extend({ waitId: z.string().min(1).max(64) }), async (a, ctx) => {
+    const jobs = await ctx.deps.jobs()
+    return { ok: jobs.checkToolWait ? await jobs.checkToolWait(a.repo, a.waitId) : false }
   }),
 
   'users.list': def('admin', z.object({}), async (_a, ctx) => {

@@ -547,7 +547,7 @@ describe('adding a removed project again, its memory variable, the CPU queue and
     expect(r.events.find((e) => e.type === 'step' && e.step?.id === 'gpu' && e.step.status === 'failed')?.step?.detail).toMatch(/failed in BUILD/)
     expect((r.events.at(-1)?.summary ?? []).join('\n')).toMatch(/GPU and CPU jobs cannot run until the GPU image is built.*run the installer again/)
     // each check of the wait reaches the page as a `wait` event: the notice, and its line
-    const notice = { id: 'wait-abc123', what: 'the GPU image abc123 to build', source: 'timer' as const, startedAt: '2026-10-26T10:00:00.000Z', state: 'IN_PROGRESS',
+    const notice = { id: 'wait-abc123', what: 'the GPU image abc123 to build', source: 'timer' as const, startedAt: '2026-10-26T10:00:00.000Z', jobId: null, state: 'IN_PROGRESS',
       lastCheckedAt: new Date().toISOString(), nextCheckAt: new Date(Date.now() + 30_000).toISOString(), intervalMs: 30_000, checks: 1, why: 'the installer runs on your computer' }
     const w = await run(ANSWERS, {
       outputs: async () => outputs, names: { deployed: async () => new Set(), taken: async () => [] },

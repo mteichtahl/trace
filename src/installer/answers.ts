@@ -145,6 +145,7 @@ export const WaitNoticeSchema = z.object({
   what: z.string(),
   source: z.enum(['event', 'timer']),
   startedAt: z.string(),
+  jobId: z.string().nullable().default(null),
   state: z.string().nullable(),
   lastCheckedAt: z.string().nullable(),
   nextCheckAt: z.string().nullable(),

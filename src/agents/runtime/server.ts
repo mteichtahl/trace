@@ -7,11 +7,12 @@
  *        { kind: "sweep", repositories }                    → { accepted, jobId }   (worker-pick per repository)
  *        { kind: "task", repository, request, requestedBy, branch?, issue? } → { accepted, jobId }
  *        { kind: "status", jobId?, afterVersion?, waitS? }  → { jobs: [...], busy, version, waits }
- *             `version` is the jobs' change counter (jobs.ts: every start, log line, route and end bumps it). With
- *             afterVersion and waitS (0–240 s) the answer is held until a job in scope (jobId's, or any) changes after
- *             that version, or waitS passes: ask again with the version you got, and the answer comes the moment
- *             something happens. `waits`: every wait this process has open (src/core/wait.ts), each with `text`, the
- *             line a person reads ("… next check in 4 minutes" for a timer, "… as soon as it changes" for an event)
+ *             `version` is the jobs' change counter (jobs.ts: every start, log line, route and end bumps it, and every
+ *             change to an open wait). With afterVersion and waitS (0–240 s) the answer is held until something in
+ *             scope (jobId's job and its waits, or anything) changes after that version, or waitS passes: ask again
+ *             with the version you got, and the answer comes the moment something happens. `waits`: the open waits
+ *             (src/core/wait.ts; jobId's own, or all of them, tool calls' included), each with `text`, the line a
+ *             person reads ("… next check in 4 minutes" for a timer, "… as soon as it changes" for an event)
  *        { kind: "check-now", waitId }                      → { ok }   (wake one timer wait for a check now; false when
  *                                                              no such timer wait is open)
  *        { kind: "tool", repository, name, args }           → { ok, result | error }  (a tool call the API forwarded:
@@ -79,10 +80,13 @@ function gone(res: ServerResponse): AbortController {
   return c
 }
 
-/** The status answer: the jobs, whether any runs, the change counter, and every open wait in plain words. */
+/**
+ * The status answer: the jobs, whether any runs, the change counter, and the open waits in plain words: that job's own
+ * with a jobId, else every wait in this process (those of jobs, and those of tool calls, which run outside any job).
+ */
 const statusBody = (jobs: Jobs, jobId: string | undefined): Record<string, unknown> => ({
   jobs: jobs.jobStatus(jobId), busy: jobs.busy(), version: jobs.version(),
-  waits: activeWaits().map((w) => ({ ...w, text: describeWait(w) })),
+  waits: activeWaits().filter((w) => !jobId || w.jobId === jobId).map((w) => ({ ...w, text: describeWait(w) })),
 })
 
 const jobBody = (j: ReturnType<Delegations['status']>): Record<string, unknown> =>

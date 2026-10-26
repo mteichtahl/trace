@@ -13,7 +13,9 @@
  *
  * Following a job is event-driven on the worker: `job` with afterVersion + waitS is forwarded as a held status
  * invocation (the worker answers the moment the job changes), and `job.check_now` as a check-now invocation in the
- * job's session (the microVM whose waits the status answer listed).
+ * job's session (the microVM whose waits the status answer listed). Tool calls have no job: `tools.waits` holds a
+ * status invocation in the project's tool session (where kb.sync and the other tool calls run) and keeps the waits
+ * opened outside any job; `tools.check_now` wakes one of them there.
  */
 import { createHash } from 'node:crypto'
 import { type AgentCoreLike, invoke } from '../agents/runtime/dispatch.js'
@@ -126,6 +128,17 @@ export function remoteJobs(o: RemoteJobsOptions): JobsApi {
       return (await watch(handle, {})).jobs
     },
     watchJob: (handle, w) => watch(handle, w),
+    async watchTools(repository, w) {
+      const slug = projectSlug(repository)
+      const hold = w.afterVersion !== undefined && w.waitS ? { afterVersion: w.afterVersion, waitS: w.waitS } : {}
+      const out = StatusOut.parse(await invoke({ kind: 'status', ...hold }, toolSession(slug), opts(slug)))
+      // the tool session's own waits: those open outside any job (a job's waits are on its own handle)
+      return { version: out.version ?? null, waits: out.waits.filter((x) => x.jobId === null || x.jobId === undefined) }
+    },
+    async checkToolWait(repository, waitId) {
+      const slug = projectSlug(repository)
+      return CheckNowOut.parse(await invoke({ kind: 'check-now', waitId }, toolSession(slug), opts(slug))).ok
+    },
     async checkNow(handle, waitId) {
       const h = parseHandle(handle)
       const slug = h ? byHash.get(h.hash) : undefined

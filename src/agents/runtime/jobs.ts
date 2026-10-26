@@ -9,6 +9,8 @@
  *
  *   started   a job was accepted (its JobInfo)          log      one line into a job's log (the line, timestamped)
  *   routed    a specialist job was routed (its Route)   ended    a job ended (its final JobInfo: state, summary, error)
+ *   wait      a wait opened, was checked or changed state, or ended (src/core/wait.ts): a job runs inside withJob, so
+ *             its waits carry its id and count as its changes; a wait outside any job (a tool call) has jobId ''
  *
  * Each event bumps `version()`, a counter that only grows (per process, from 0), and carries it; a job's own last
  * change is `versionOf(jobId)`. On top of the events:
@@ -22,7 +24,7 @@
  * The runner that does the work is injected (createJobs), so tests drive the contract without git or a model.
  */
 import { randomBytes } from 'node:crypto'
-import { EventBus } from '../../core/wait.js'
+import { EventBus, type WaitChange, waitChanges, withJob } from '../../core/wait.js'
 import { ATTR, annotate } from '../../core/telemetry.js'
 import type { Route } from '../kinds.js'
 import { type PromptRecord, promptAttrs } from '../../prompts/telemetry.js'
@@ -55,6 +57,8 @@ export type JobEvent =
   | { type: 'log'; jobId: string; version: number; line: string }
   | { type: 'routed'; jobId: string; version: number; route: Route }
   | { type: 'ended'; jobId: string; version: number; job: JobInfo }
+  /** a wait opened, checked or ended (src/core/wait.ts): in a job (its jobId), or outside any job (jobId '') */
+  | { type: 'wait'; jobId: string; version: number; change: WaitChange }
 
 export type JobEnded = Extract<JobEvent, { type: 'ended' }>
 
@@ -141,6 +145,8 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
     versions.set(e.jobId, version)
     events.emit({ ...e, version } as JobEvent)
   }
+  // every change to the record of open waits is a change here too, so a held status answer wakes on it
+  waitChanges.on((change) => emit({ type: 'wait', jobId: change.notice.jobId ?? '', change }))
   const scopeVersion = (jobId: string | undefined): number => (jobId ? versions.get(jobId) ?? 0 : version)
 
   const self: Jobs = {
@@ -198,7 +204,7 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
       }
       const done = observeJob(payload, id, info.agent ?? 'specialist', () => info, async () => {
         try {
-          info.summary = await runner(payload, { jobId: id, signal: abort.signal, log, startJob: (p) => self.startJob(p), route, prompts })
+          info.summary = await withJob(id, () => runner(payload, { jobId: id, signal: abort.signal, log, startJob: (p) => self.startJob(p), route, prompts }))
           info.state = abort.signal.aborted ? 'aborted' : 'succeeded'
           if (abort.signal.aborted) info.error = abort.signal.reason instanceof Error ? abort.signal.reason.message : String(abort.signal.reason)
         } catch (e) {
