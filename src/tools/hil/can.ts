@@ -91,7 +91,9 @@ export class CanSession {
 
   /**
    * Frames matching `filters` until `maxFrames`, `untilId` is seen, or `timeoutMs` passes. The bridge is asked in short
-   * slices, so other calls (a send on another session, say) are served in between.
+   * slices, so other calls (a send on another session, say) are served in between. Each slice is a held call that
+   * returns as soon as frames arrive (wait_ms is how long it may hold, not a sleep), so frames reach the caller as they
+   * come; the whole receive is bounded by `timeoutMs`.
    */
   async receive(timeoutMs: number, maxFrames: number, filters?: Filter[], untilId?: number): Promise<{ frames: FrameOut[]; timed_out: boolean }> {
     const frames: FrameOut[] = []
