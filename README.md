@@ -650,9 +650,9 @@ installation that has no API, `trace memory list|deactivate|reactivate` does the
   (`trace.memory.inactive_filtered`), never which ones. If the marks cannot be read, nothing is handed out unchecked:
   the read fails and a job runs without long-term memory.
 - **Who may mark:** anyone with write access on the project (users assigned to it, and admins). Guests cannot mark
-  the project's records. The one exception is a person's own records (their person actor
-  `<owner>/<repo>/person/<hash>`, in practice their preferences): they are shown only to that person, so that person
-  may turn them off or on with read access alone, guests included. Nobody but an admin can mark another person's
+  the project's records. The one exception is a person's own preferences (the preference records of their person
+  actor `<owner>/<repo>/person/<hash>`): they are shown only to that person, who may turn them off or on with read
+  access alone, guests included. Other records of their person actor (facts, session summaries) need write access. Nobody but an admin can mark another person's
   records, because nobody else can see them. Agents cannot mark anything. No tool offers it, and each project's
   worker and GitHub OIDC role is denied writes under its `memory-state` prefix, although it can read it.
 - **Checks:** the project access check runs first, before any AWS call. Then the record is looked up in that

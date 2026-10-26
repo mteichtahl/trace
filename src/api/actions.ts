@@ -184,8 +184,10 @@ async function mayMark(ctx: Context, repo: string, ns: string): Promise<void> {
   if (isAdmin(ctx.principal)) return
   const role = await require_(ctx.principal, repo, 'read')
   if (role === 'write') return
+  // Read access only (a guest): their own preferences and nothing else, not even other records of their own actor.
   const a = actorIn(ns, repo)
-  if (a !== null && ownActors(ctx.principal).has(a)) return
+  const preference = a !== null && ns.slice(ns.indexOf(`/${a}/`) + a.length + 2).startsWith('preferences/')
+  if (a !== null && ownActors(ctx.principal).has(a) && preference) return
   throw new AccessDenied(`no write access to ${repo}: only your own preferences can be marked with read access`)
 }
 

@@ -30,6 +30,7 @@ const BY_MEMORY: Record<string, Rec[]> = {
     { id: 'mem-fact', ns: namespaceOf(agentActor(BOARD, 'worker'), 'facts'), text: 'The board has a 3V3 LDO.' },
     { id: 'mem-render', ns: namespaceOf(agentActor(BOARD, 'render'), 'preferences'), text: 'Renders at 1920x1200.' },
     { id: 'mem-guest', ns: namespaceOf(guestPerson, 'preferences'), text: 'Guest likes terse PRs.' },
+    { id: 'mem-guest-fact', ns: namespaceOf(guestPerson, 'facts'), text: 'Guest asked about the LDO.' },
     { id: 'mem-other', ns: namespaceOf(otherPerson, 'preferences'), text: 'Someone else likes long PRs.' },
   ],
   'trace_m_0000bbbb-abcdefghij': [{ id: 'mem-secret', ns: '/trace/acme/secret/worker/facts/', text: 'Secret project.' }],
@@ -93,8 +94,9 @@ describe('who may mark a memory inactive', () => {
     expect((await deactivate(USER, 'mem-fact')).result).toMatchObject({ changed: false })
   })
 
-  it('a guest: only their own preferences (decided: their person actor, readable only by them, is theirs to turn off)', async () => {
+  it('a guest: only their own preferences (Marc, 2026-10-27), not other records of their own person actor', async () => {
     await expect(deactivate(GUEST, 'mem-fact')).rejects.toThrow(AccessDenied)
+    await expect(deactivate(GUEST, 'mem-guest-fact')).rejects.toThrow(/only your own preferences/)
     await expect(deactivate(GUEST, 'mem-render')).rejects.toThrow(/no write access/)
     expect((await deactivate(GUEST, 'mem-guest')).result).toMatchObject({ changed: true, actor: `person/${guestPerson.name}` })
     // and someone else's preferences are not even visible to them: "no access"
@@ -133,7 +135,7 @@ describe('who may mark a memory inactive', () => {
 describe('inactive records through the API', () => {
   it('are left out of memory.list and memory.recall, and shown marked with includeInactive', async () => {
     await deactivate(USER, 'mem-fact')
-    expect((await listed(GUEST)).map((r) => r.id).sort()).toEqual(['mem-guest', 'mem-render'])
+    expect((await listed(GUEST)).map((r) => r.id).sort()).toEqual(['mem-guest', 'mem-guest-fact', 'mem-render'])
     const all = await listed(GUEST, { includeInactive: true })
     expect(all.find((r) => r.id === 'mem-fact')).toMatchObject({ active: false, inactive: { reason: 'out of date', by: personHash(USER.email), by_you: false } })
     expect(all.find((r) => r.id === 'mem-render')).toMatchObject({ active: true })
