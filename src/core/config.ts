@@ -182,6 +182,28 @@ export const ConfigSchema = z.object({
     projects: z.array(z.string()).default([]),
     /** SPICE model files or folders, relative to the repository, included in every simulation */
     models: z.array(z.string()).default([]),
+    /** pcb.autoroute: how the board's complex core is found (src/pcb/plan.ts) and how the two routers run */
+    autoroute: z.object({
+      /** area arrays (BGAs): at most this pitch, at least this many pads, at least this fraction of the grid filled */
+      bga_max_pitch_mm: z.number().positive().default(0.8),
+      bga_min_pads: z.number().int().min(4).default(64),
+      bga_min_fill: z.number().min(0).max(1).default(0.35),
+      /** this many nets with one name stem between the same footprints are a bus */
+      bus_min_nets: z.number().int().min(2).default(8),
+      /** this many nets between two connectors are a backplane fan */
+      backplane_min_nets: z.number().int().min(2).default(32),
+      /** reference prefixes of connectors */
+      connector_prefixes: z.array(z.string().min(1)).default(['J', 'P', 'CN', 'X']),
+      /** nets always / never given to OrthoRoute, whatever the classifier says */
+      include_nets: z.array(z.string()).default([]),
+      exclude_nets: z.array(z.string()).default([]),
+      /** OrthoRoute is planned only on boards with at least this many copper layers */
+      orthoroute_min_layers: z.number().int().min(2).default(4),
+      /** let OrthoRoute keep blind/buried vias (needs 4+ copper layers); otherwise every via is a through via */
+      blind_buried_vias: z.boolean().default(false),
+      orthoroute_iterations: z.number().int().min(1).max(10_000).default(200),
+      freerouting_passes: z.number().int().min(1).max(10_000).default(100),
+    }).strict().prefault({}),
   }).strict().prefault({}),
   parts: z.object({
     providers: z.array(z.enum(['lcsc', 'mouser', 'digikey', 'nexar'])).default(['lcsc']),

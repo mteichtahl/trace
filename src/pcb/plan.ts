@@ -94,10 +94,12 @@ export function areaArray(fp: Footprint, s: AutorouteSettings): { pitch: number;
  * "TX0_P" → "TX_"), or null when it has no index. */
 export function busStem(name: string): string | null {
   const leaf = name.split('/').pop() ?? name
-  const noPair = leaf.replace(/(_?[PN]|[+-])$/, (m) => (/\d/.test(leaf.slice(0, -m.length).slice(-1)) ? '' : m))
-  const m = /^(.*?)(\d+)(\D*)$/.exec(noPair)
-  if (!m || !(m[1] ?? '') && !(m[3] ?? '')) return null
-  return `${m[1]}${m[3]}${noPair !== leaf ? '±' : ''}`
+  // a differential pair's suffix, when it follows an index: TX0_P, D3+, LANE2N
+  const pair = /^(.*\d)(_?[PN]|[+-])$/.exec(leaf)
+  const base = pair ? (pair[1] as string) : leaf
+  const m = /^(.*?)(\d+)(\D*)$/.exec(base)
+  if (!m || (!m[1] && !m[3])) return null
+  return `${m[1]}#${m[3]}${pair ? '±' : ''}`
 }
 
 export function planRoute(board: Board, opts: { engine?: Engine; gpu: { available: boolean; how: string }; settings?: Partial<AutorouteSettings> }): RoutePlan {
