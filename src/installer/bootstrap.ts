@@ -26,7 +26,7 @@ import type { AwsCredentialIdentity } from '@smithy/types'
 import { type Principal, GROUPS, assign, assignments, setClass, unassign } from '../core/access.js'
 import { saveAnswers, saveInstallation } from '../core/client.js'
 import { onboard, register } from '../core/onboard.js'
-import { type InfraInput, InfraPropsSchema, stackName } from '../infra/props.js'
+import { type InfraInput, type InfraProps, InfraPropsSchema, stackName } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import type { Answers, InstallEvent, Secrets, Step } from './answers.js'
 import { awsEnv, checkAws, credentials, stackOutputs } from './aws.js'
@@ -45,8 +45,21 @@ export function infraInput(a: Answers): InfraInput {
     idleTimeoutSeconds: Math.round(a.agents.idleMinutes * 60),
     retainData: a.agents.retainData,
     gpu: { enabled: a.agents.gpuEnabled, maxVcpus: a.agents.gpuMaxVcpus, spot: a.agents.gpuSpot },
+    observability: {
+      enabled: a.agents.observability, transactionSearch: a.agents.transactionSearch, dashboard: a.agents.dashboard,
+      ...(a.agents.samplingPercent !== null ? { samplingPercent: a.agents.samplingPercent } : {}),
+    },
     adminEmail: a.adminEmail,
   }
+}
+
+/** The observability part of the deploy step's description. */
+export function observabilityPlan(o: InfraProps['observability'], prefix: string): string {
+  if (!o.enabled) return '; observability off'
+  const parts = ['OpenTelemetry (ADOT) traces and metrics to CloudWatch GenAI Observability']
+  if (o.transactionSearch) parts.push(`CloudWatch Transaction Search turned on if it is off (account-wide, never turned off${o.samplingPercent !== undefined ? `; X-Ray indexing set to ${o.samplingPercent}%` : ''})`)
+  if (o.dashboard) parts.push(`the ${prefix}-agents dashboard`)
+  return `, ${parts.join(', ')}`
 }
 
 /** What will happen, before anything does. */
@@ -57,7 +70,7 @@ export function plan(a: Answers): Step[] {
   const steps: [string, string, string][] = [
     ['check', 'Check the AWS account', `${a.aws.account} in ${a.aws.region}`],
     ['cdk', 'Bootstrap CDK', `aws://${a.aws.account}/${a.aws.region} (only if it isn't already)`],
-    ['deploy', `Deploy ${stack}`, `central bucket, GitHub secret, agent image (CodeBuild, arm64), two AgentCore runtimes (worker and API), Cognito, GitHub OIDC role for ${props.repositories.length} repositories${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64)` : ''}`],
+    ['deploy', `Deploy ${stack}`, `central bucket, GitHub secret, agent image (CodeBuild, arm64), two AgentCore runtimes (worker and API), Cognito, GitHub OIDC role for ${props.repositories.length} repositories${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64)` : ''}${observabilityPlan(props.observability, props.prefix)}`],
     ['token', 'Store the GitHub token', 'in the stack\'s Secrets Manager secret'],
     ['repos', 'Configure the repositories', `variables TRACE_AWS_ROLE, TRACE_AWS_REGION, TRACE_HOME, TRACE_AGENT_RUNTIME_ARN and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}`],
     ['onboard', 'Onboard the repositories', onboarding.length ? `open the onboarding PR in ${onboarding.join(', ')}` : 'none chosen'],

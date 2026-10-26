@@ -33,6 +33,14 @@ export const AgentAnswers = z.object({
   gpuEnabled: z.boolean().default(true),
   gpuMaxVcpus: z.number().int().min(4).max(4096).default(16),
   gpuSpot: z.boolean().default(false),
+  /** AgentCore observability: OpenTelemetry traces and metrics to CloudWatch (GenAI Observability) */
+  observability: z.boolean().default(true),
+  /** turn on CloudWatch Transaction Search in the account and region (account-wide; never turned off) */
+  transactionSearch: z.boolean().default(true),
+  /** X-Ray's account-wide trace indexing percentage; null leaves the account's setting alone */
+  samplingPercent: z.number().min(0).max(100).nullable().default(null),
+  /** a CloudWatch dashboard for the agents */
+  dashboard: z.boolean().default(true),
 }).strict()
 
 export const ProjectAnswer = z.object({
