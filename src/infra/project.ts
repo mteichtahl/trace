@@ -11,7 +11,7 @@
  *             src/core/central.ts), never delete it; read/write projects/<slug>/* and jobs/<slug>/*; list only those
  *             prefixes; nothing of access/*, nor of any other project
  *   memory    its own memory only (<prefix>_m_<hash>), and on it still only events of actors `<owner>/<repo>/*` and
- *             records under `/trace/<owner>/<repo>/*` (the encodings of src/agent/memory.ts), as defence in depth
+ *             records under `/trace/<owner>/<repo>/*` (the encodings of src/agents/runtime/memory.ts), as defence in depth
  *   secret    <prefix>/github-token/<slug> only
  *   Batch     SubmitJob only with its own job definition, on the shared queue, and only tagged trace:project=<slug>;
  *             TerminateJob only on jobs tagged with its slug; DescribeJobs (no resource-level permissions exist)
@@ -32,7 +32,7 @@ import * as iam from 'aws-cdk-lib/aws-iam'
 import type * as s3 from 'aws-cdk-lib/aws-s3'
 import * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { Construct } from 'constructs'
-import { projectId, projectPrefix as memoryProjectPrefix } from '../agent/memory.js'
+import { projectId, projectPrefix as memoryProjectPrefix } from '../agents/runtime/memory.js'
 import {
   PROJECT_TAG, githubSecretName, memoryName, projectDataPrefix, projectJobsPrefix, workerRuntimeName,
 } from '../core/project.js'

@@ -11,8 +11,8 @@
  * hash in the id lets the `job` action check access to that project before anything is invoked.
  */
 import { createHash } from 'node:crypto'
-import { type AgentCoreLike, invoke } from '../agent/dispatch.js'
-import { AcceptedSchema, type TaskJob } from '../agent/schemas.js'
+import { type AgentCoreLike, invoke } from '../agents/runtime/dispatch.js'
+import { AcceptedSchema, type TaskJob } from '../agents/runtime/schemas.js'
 import { projectHash, projectSlug } from '../core/project.js'
 import { ActionError, type JobView, type JobsApi } from './actions.js'
 import { z } from 'zod'

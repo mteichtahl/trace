@@ -3,8 +3,8 @@
  * configure-aws-credentials step provides the AWS credentials; TRACE_AGENT_RUNTIME_ARN names the runtime), then says
  * so on the item.
  */
-import { type DispatchOptions, dispatch } from '../agent/dispatch.js'
-import type { Accepted } from '../agent/schemas.js'
+import { type DispatchOptions, dispatch } from '../agents/runtime/dispatch.js'
+import type { Accepted } from '../agents/runtime/schemas.js'
 import { type Deps, type TaskEnv, errorMessage } from './types.js'
 import { type WorkItem, WorkItemSchema } from './worker.js'
 

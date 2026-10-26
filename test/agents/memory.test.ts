@@ -5,13 +5,13 @@ import {
   CreateEventCommand, ListEventsCommand, ListMemoryRecordsCommand, RetrieveMemoryRecordsCommand,
 } from '@aws-sdk/client-bedrock-agentcore'
 import { afterEach, describe, expect, it } from 'vitest'
-import { type ClaudeOptions, type RunnerDeps, createRunner } from '../../src/agent/job.js'
-import type { JobPayload } from '../../src/agent/schemas.js'
+import { type ClaudeOptions, type RunnerDeps, createRunner } from '../../src/agents/runtime/job.js'
+import type { JobPayload } from '../../src/agents/runtime/schemas.js'
 import {
   AgentMemory, FENCE_CLOSE, FENCE_OPEN, MAX_BLOCK_CHARS, MAX_EVENT_CHARS, MAX_TOOL_EVENTS, MemoryScopeError, NAMESPACE_TEMPLATES, NO_MEMORY,
   type SendClient, actorIn, actorPrefix, agentActor, memoryBlock, memoryFromEnv, namespaceOf, openJobMemory, parseActor, personActor,
   projectPrefix, scrub, sessionIdFor, within,
-} from '../../src/agent/memory.js'
+} from '../../src/agents/runtime/memory.js'
 import { memoryScope, tools as memoryTools } from '../../src/tools/memory/tools.js'
 import { offered } from '../../src/core/mcp.js'
 import { Registry } from '../../src/core/registry.js'

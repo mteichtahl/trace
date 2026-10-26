@@ -5,7 +5,7 @@
  */
 import { createHash } from 'node:crypto'
 import { BedrockAgentCoreClient, InvokeAgentRuntimeCommand, type InvokeAgentRuntimeCommandInput } from '@aws-sdk/client-bedrock-agentcore'
-import type { WorkItem } from '../harness/worker.js'
+import type { WorkItem } from '../../harness/worker.js'
 import { type Accepted, AcceptedSchema, type Invocation, InvocationSchema } from './schemas.js'
 
 export const SESSION_MIN = 33

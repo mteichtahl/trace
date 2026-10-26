@@ -1,7 +1,7 @@
 /** Without an OpenTelemetry SDK (local runs, the CLI, every other test file) telemetry is a no-op and changes nothing. */
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { claudeTelemetry } from '../../src/agent/observe.js'
+import { claudeTelemetry } from '../../src/agents/runtime/observe.js'
 import { Registry, ToolError, defineTool } from '../../src/core/registry.js'
 import { childNodeArgs, enabled, flush, recordMetric, span, startSdkIfConfigured, traceEnv, withSession } from '../../src/core/telemetry.js'
 

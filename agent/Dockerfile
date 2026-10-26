@@ -88,4 +88,4 @@ EXPOSE 8080
 # X-Ray (CloudWatch Transaction Search), metrics to CloudWatch as EMF. To run the image anywhere else without
 # exporting, set OTEL_SDK_DISABLED=true. See the README's "Observability".
 RUN test -f /app/node_modules/@aws/aws-distro-opentelemetry-node-autoinstrumentation/build/src/register.js
-CMD ["node", "--require", "/app/node_modules/@aws/aws-distro-opentelemetry-node-autoinstrumentation/build/src/register.js", "/app/dist/agent/main.js"]
+CMD ["node", "--require", "/app/node_modules/@aws/aws-distro-opentelemetry-node-autoinstrumentation/build/src/register.js", "/app/dist/agents/runtime/main.js"]

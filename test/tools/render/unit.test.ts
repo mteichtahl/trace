@@ -26,7 +26,7 @@ const { parseResultLine, readResult, runBlender, pngSize } = await import('../..
 const { selectDevice, defaultDevice, probe, DEFAULTS } = await import('../../../src/tools/render/device.js')
 const { freeName, tools } = await import('../../../src/tools/render/tools.js')
 const { commitOf } = await import('../../../src/tools/render/model.js')
-const { renderingAgentPrompt } = await import('../../../src/tools/render/agent.js')
+const { renderingAgentPrompt } = await import('../../../src/agents/render/prompt.js')
 const { Cache } = await import('../../../src/core/store.js')
 
 const fakeBlender = join(mkdtempSync(join(tmpdir(), 'fake-blender-')), 'blender')

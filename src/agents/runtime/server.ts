@@ -15,7 +15,7 @@
  * repository answers 403 { error } and is logged. The runtime's role could not reach that project anyway.
  */
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http'
-import { ATTR, flush } from '../core/telemetry.js'
+import { ATTR, flush } from '../../core/telemetry.js'
 import { type Jobs, defaultJobs } from './jobs.js'
 import { observeInvocation } from './observe.js'
 import { InvocationSchema, WrongProject, checkProject } from './schemas.js'

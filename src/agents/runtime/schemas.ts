@@ -1,10 +1,10 @@
 /**
  * The contract of the trace agent on Bedrock AgentCore Runtime: what POST /invocations accepts and what it answers.
- * Shared by the runtime (src/agent/server.ts), the dispatcher (src/agent/dispatch.ts) and the API runtime (src/api),
+ * Shared by the runtime (src/agents/runtime/server.ts), the dispatcher (src/agents/runtime/dispatch.ts) and the API runtime (src/api),
  * which starts the same jobs in-process.
  */
 import { z } from 'zod'
-import { WorkItemSchema } from '../harness/worker.js'
+import { WorkItemSchema } from '../../harness/worker.js'
 
 /** owner/repo, GitHub's own character set (no "..", no leading dash or dot). */
 export const RepositorySchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/, 'expected owner/repo')
@@ -31,7 +31,7 @@ export const StatusPayload = z.object({
   jobId: z.string().max(64).optional(),
 }).strict()
 
-/** The agents a task can be given to: the worker (code changes), or the rendering agent (src/tools/render/agent.ts). */
+/** The agents a task can be given to: the worker (code changes), or the rendering agent (src/agents/render/prompt.ts). */
 export const TASK_AGENTS = ['worker', 'render'] as const
 
 /** A free-form request from an authorised person (the API runtime): done on a claude/task-<slug> branch, pushed, PR opened. */

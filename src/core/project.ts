@@ -1,5 +1,5 @@
 /**
- * One onboarded project's names in AWS, shared by the stack (src/infra), the worker (src/agent), the API (src/api)
+ * One onboarded project's names in AWS, shared by the stack (src/infra), the worker (src/agents), the API (src/api)
  * and the GPU jobs (src/gpu). Pure: no AWS calls, no settings.
  *
  *   slug           owner/repo, lower case (GitHub names are case-insensitive). Used where `/` is allowed and

@@ -16,7 +16,7 @@ import type { IncomingHttpHeaders } from 'node:http'
 import { context, trace } from '@opentelemetry/api'
 import {
   ATTR, type Attrs, type Outcome, type Span, SpanKind, childNodeArgs, fail, fromHeaders, ok, parentContext, personHash, recordMetric, setAttrs, span, startSpan, traceEnv, withSession,
-} from '../core/telemetry.js'
+} from '../../core/telemetry.js'
 import type { JobPayload } from './schemas.js'
 
 /** Claude runs through Bedrock on AgentCore (CLAUDE_CODE_USE_BEDROCK=1); otherwise the Anthropic API. */

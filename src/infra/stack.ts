@@ -209,7 +209,7 @@ export class TraceStack extends Stack {
       },
     }))
     // The API is told every worker runtime, and every project's memory, as `owner/repo=<id>` separated by spaces
-    // (src/api/workers.ts, src/agent/memory.ts parseProjectMemories). Each is one value of at most 5000 characters.
+    // (src/api/workers.ts, src/agents/runtime/memory.ts parseProjectMemories). Each is one value of at most 5000 characters.
     const idList = (ids: readonly string[]): string => Fn.join(' ', ids.map((id, i) => Fn.join('=', [refs[i]?.slug ?? '', id])))
     const workerList = idList(projects.map((p) => p.runtime.attrAgentRuntimeId))
     const workerListLength = idListLength(refs.map((r, i) => ({ slug: r.slug, name: projects[i]?.runtimeName ?? '' })))

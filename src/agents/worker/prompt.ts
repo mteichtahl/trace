@@ -3,10 +3,10 @@
  * and tools), re-worded for where it runs; a free-form task from a person gets the same rules around their request.
  */
 import { createHash } from 'node:crypto'
-import type { TraceConfig } from '../core/config.js'
-import { type WorkItem, promptFor } from '../harness/worker.js'
-import { renderingAgentPrompt } from '../tools/render/agent.js'
-import type { TaskJob } from './schemas.js'
+import type { TraceConfig } from '../../core/config.js'
+import { type WorkItem, promptFor } from '../../harness/worker.js'
+import { renderingAgentPrompt } from '../render/prompt.js'
+import type { TaskJob } from '../runtime/schemas.js'
 
 const WHERE = 'on Amazon Bedrock AgentCore Runtime'
 
@@ -41,7 +41,7 @@ function reportLines(job: TaskJob, esc: string | undefined): string[] {
       ]
 }
 
-/** A task for the rendering agent: its own instructions (src/tools/render/agent.ts) inside the same rules and guardrails. */
+/** A task for the rendering agent: its own instructions (src/agents/render/prompt.ts) inside the same rules and guardrails. */
 export function renderTaskPrompt(job: TaskJob, cfg: TraceConfig, branch: string): string {
   return [
     `You are trace's rendering agent for ${job.repository}, running unattended ${WHERE}. Nobody is watching: never ask`,

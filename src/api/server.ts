@@ -17,12 +17,12 @@
  */
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http'
 import { z } from 'zod'
-import { projectMemoriesFromEnv } from '../agent/memory.js'
+import { projectMemoriesFromEnv } from '../agents/runtime/memory.js'
 import { AccessDenied, type Principal, seen } from '../core/access.js'
 import { ConfigError } from '../core/config.js'
 import { ToolError } from '../core/registry.js'
 import { ATTR, type Attrs, type Outcome, type Span, flush, personHash, setAttrs } from '../core/telemetry.js'
-import { observeInvocation } from '../agent/observe.js'
+import { observeInvocation } from '../agents/runtime/observe.js'
 import { ActionError, type ActionDeps, NO_ACCESS, defaultScratch, gitCheckout, perform } from './actions.js'
 import { type CognitoAdmin, HttpCognito, githubToken } from './aws.js'
 import { HttpGitHub } from './github.js'
@@ -92,7 +92,7 @@ export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerRes
       })
       send(res, status, body)
     }
-    // One span per request, continuing the caller's trace with the AgentCore session in baggage (src/agent/observe.ts).
+    // One span per request, continuing the caller's trace with the AgentCore session in baggage (src/agents/runtime/observe.ts).
     void observeInvocation('api', req.headers, {}, async (span, outcome) => {
       obs = { span, outcome }
       let principal: Principal
@@ -164,7 +164,7 @@ const Env = z.object({
   PORT: z.coerce.number().int().default(8080),
 })
 
-/** The API runtime's entry (src/agent/main.ts, TRACE_AGENT_MODE=api). */
+/** The API runtime's entry (src/agents/runtime/main.ts, TRACE_AGENT_MODE=api). */
 export async function start(): Promise<void> {
   const { allTools } = await import('../tools/index.js')
   const env = Env.parse(process.env)

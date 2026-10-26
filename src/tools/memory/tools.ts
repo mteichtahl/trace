@@ -8,7 +8,7 @@ import { z } from 'zod'
 import { ToolError, defineTool } from '../../core/registry.js'
 import {
   type Actor, MemoryScopeError, STRATEGIES, agentActor, memoryFromEnv, parseActor, sessionIdFor,
-} from '../../agent/memory.js'
+} from '../../agents/runtime/memory.js'
 
 const configured = (): boolean => memoryFromEnv() !== null
 

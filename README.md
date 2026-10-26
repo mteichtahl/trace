@@ -274,7 +274,7 @@ v0.37.0 and installs scikit-rf 2.2.0.
 
 Each agent has short-term and long-term memory in its project's own Amazon Bedrock AgentCore Memory: one per
 repository, named `<prefix>_m_<hash>` and created with the project's other resources (`src/infra/project.ts` and
-`src/infra/memory.ts`; the client is `src/agent/memory.ts`). The stack settings are:
+`src/infra/memory.ts`; the client is `src/agents/runtime/memory.ts`). The stack settings are:
 
 - `memory.enabled` (default true).
 - `memory.eventExpiryDays`: how long short-term events are kept. The default is 30 and AgentCore allows 3 to 365.
@@ -403,7 +403,7 @@ The stack outputs `DashboardUrl`, `GenAiObservabilityUrl`, `Project<hash>LogGrou
 
 **In CloudWatch GenAI Observability** (CloudWatch → GenAI Observability → Bedrock AgentCore), the runtimes (one per
 project, and the API) appear as agents with their sessions, traces, latency, errors and token use. A session is one AgentCore runtime session. For
-the worker, that is one work item at one head (`trace-<owner>-<repo>-<number>-<sha12>`, from `src/agent/dispatch.ts`).
+the worker, that is one work item at one head (`trace-<owner>-<repo>-<number>-<sha12>`, from `src/agents/runtime/dispatch.ts`).
 Its trace runs from the invocation through the job and Claude's turns down to each tool call, MCP tools included, and
 any GPU job.
 
@@ -432,7 +432,7 @@ outside AgentCore, either set `OTEL_SDK_DISABLED=true` or give it the variables 
 | `src/core` | Settings, SQLite stores, the tool registry, the MCP server, onboarding, access control, the Python bridge client |
 | `src/infra` | The CDK stack (Cognito, the central bucket, the image builds, the API runtime, the AWS Batch GPU queue in `gpu.ts`) and, per project, `project.ts` (its worker runtime, roles, token secret and GPU job definition) |
 | `src/installer` | `trace install`: the local web installer |
-| `src/agent`, `src/api`, `agent/Dockerfile` | The image AgentCore runs: the worker, and the people-facing API |
+| `src/agents`, `src/api`, `agent/Dockerfile` | The image AgentCore runs: the worker, and the people-facing API |
 | `src/login` | `trace login`, `trace remote …`, `trace users …` |
 | `src/harness` | The loop's logic, bundled into `harness/dist` for the GitHub actions in `harness/actions` |
 | `src/tools/calc`, `src/tools/kicad`, `src/tools/pcb`, `src/tools/sim`, `src/tools/datasheets`, `src/tools/parts`, `src/tools/hil`, `src/tools/firmware`, `src/tools/runs` | The tools |

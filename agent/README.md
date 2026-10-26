@@ -7,14 +7,14 @@ before; its `dispatch` job (task `worker-dispatch`) sends each item here with In
 
 One image, two runtimes, selected by `TRACE_AGENT_MODE`:
 
-- `worker` (default): IAM-authenticated, invoked only by the workflows. `src/agent/server.ts`.
+- `worker` (default): IAM-authenticated, invoked only by the workflows. `src/agents/runtime/server.ts`.
 - `api`: Cognito-JWT-authenticated, for people. `src/api/server.ts` (`start()`), which reuses the job machinery
-  in-process (`startJob`, `jobStatus` and the payload schemas from `src/agent/jobs.ts`).
+  in-process (`startJob`, `jobStatus` and the payload schemas from `src/agents/runtime/jobs.ts`).
 
 ## Contract (worker mode, 0.0.0.0:8080)
 
 - `GET /ping` returns `{"status":"Healthy"}`, or `"HealthyBusy"` while any job runs, so the session is kept alive.
-- `POST /invocations` takes JSON (zod, `src/agent/schemas.ts`):
+- `POST /invocations` takes JSON (zod, `src/agents/runtime/schemas.ts`):
   - `{ "kind": "work-item", "repository": "owner/repo", "item": WorkItem, "runUrl"?: url }` (WorkItem is the
     harness's `{kind: ci-red|conflict|agent-fix, number, sha, ref, own, title}`)
   - `{ "kind": "sweep", "repositories": ["owner/repo", …] }`: the hourly backstop. Runs worker-pick for each
@@ -63,7 +63,7 @@ CDK stack, so no local Docker is needed. It contains Ubuntu 24.04, Node 22 (Node
 python3 with a venv holding the bridge (`/app/python[pdf]`), ngspice, iverilog, poppler-utils, ffmpeg, Blender (Ubuntu's package; Cycles renders on the CPU, and the bpy scripts are in `/app/python/blender`, copied in with the repository), and KiCad 10 from
 `ppa:kicad/kicad-10.0-releases`. That PPA publishes arm64 builds for noble (10.0.7 as of 2026-10-26). If it can't be
 installed, the build falls back to Ubuntu's own `kicad`. The image runs as the non-root user `trace`, and its entry
-point is `node --require …/aws-distro-opentelemetry-node-autoinstrumentation/build/src/register.js /app/dist/agent/main.js`:
+point is `node --require …/aws-distro-opentelemetry-node-autoinstrumentation/build/src/register.js /app/dist/agents/runtime/main.js`:
 ADOT registers the OpenTelemetry SDK first (README "Observability"). The job hands the trace MCP server its trace
 context (`TRACEPARENT`) and the same `--require`, so tool calls join the job's trace.
 

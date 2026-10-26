@@ -11,7 +11,7 @@
  *
  * actorId is still `<owner>/<repo>/<agent>` (worker, ci-doctor, conflict, render, …) or `<owner>/<repo>/person/<hash16>`
  * for the person who asked, so records stay self-describing and every namespace starts with its project:
- * `/trace/<owner>/<repo>/`. The scheme, and the escaping that keeps it one-to-one, is in src/agent/memory.ts.
+ * `/trace/<owner>/<repo>/`. The scheme, and the escaping that keeps it one-to-one, is in src/agents/runtime/memory.ts.
  * Short-term events expire after the project's eventExpiryDays (memory.eventExpiryDays unless projectSettings says).
  *
  * Its lifetime is the project's: removing the repository from `repositories` removes its memory, and deleting the
@@ -32,7 +32,7 @@ import { RemovalPolicy } from 'aws-cdk-lib'
 import * as iam from 'aws-cdk-lib/aws-iam'
 import { CfnMemory } from 'aws-cdk-lib/aws-bedrockagentcore'
 import { Construct } from 'constructs'
-import { NAMESPACE_TEMPLATES, ROOT } from '../agent/memory.js'
+import { NAMESPACE_TEMPLATES, ROOT } from '../agents/runtime/memory.js'
 
 /** The memory of installations before memory was per project (one for every project). Kept only so that it can be
  * retained on the way out (memory.legacySharedMemory): its name must not change, or CloudFormation replaces it. */
