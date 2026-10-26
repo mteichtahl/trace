@@ -54,7 +54,7 @@ Each stage lists what the person does, what trace does, what the person sees, an
 - **trace:** drafts the schematic from the approved architecture: one sheet per block, parts from the key-parts list with MPN and LCSC fields filled, and every other part chosen in stock first, in the same order as key parts: in stock at JLCPCB/LCSC for the build quantity, then in stock elsewhere, and only then out of stock, with the reason written on the part, support circuits sized with `calc.*`, and each sheet annotated with the requirements it serves.
 - **Person:** finishes and corrects the sheets in KiCad and pushes them. trace re-checks every push: ERC, each part's use against its datasheet limits (cited by page), missing fields, and BOM cost.
 - **Sees:** the drafted sheets, then a review list per sheet: what the person changed from the draft, ERC findings, datasheet conflicts, BOM gaps, and any part not in stock with an in-stock alternative (parts.alternatives).
-- **Gate, schematic review:** ERC clean or waived with a reason, no open datasheet conflicts, every part in stock for the build quantity (parts.bom\_check) or its exception signed.
+- **Gate, schematic review:** ERC clean or waived with a reason, no open datasheet conflicts, every part in stock for the build quantity (parts.bom\_check) or its exception signed, and the firmware pin plan matches the schematic.
 
 ### 4. Prove
 
@@ -68,7 +68,7 @@ Each stage lists what the person does, what trace does, what the person sees, an
 - **Person:** sets the outline, stackup and fixed parts (connectors, mounting holes, anything mechanical), then adjusts trace's placement.
 - **trace:** proposes a placement from the floorplan (blocks grouped, decoupling at its pins, connectors on the edge), re-checks the person's adjustments (`pcb.placement_check`), routes (`pcb.autoroute`: OrthoRoute for the dense core, then Freerouting), matches lengths, runs DRC with schematic parity, and renders the board.
 - **Sees:** the proposed placement as a render and an overlay, then the routing report, unrouted count, DRC and length-match findings.
-- **Gate, layout review:** zero unrouted, DRC clean or waived, length groups in tolerance, renders approved.
+- **Gate, layout review:** zero unrouted, DRC clean or waived, length groups in tolerance, mechanical fit passes or each clash is waived, renders approved.
 
 ### 6. Sign-off
 
@@ -89,7 +89,7 @@ Each stage lists what the person does, what trace does, what the person sees, an
 - **Person:** signs the order gate, then uploads the package and pays on JLCPCB's site, and records the order number in trace.
 - **trace:** prepares everything JLCPCB needs (Gerbers, BOM and CPL in its columns, board options), re-checks LCSC stock and price on the day, and tracks the order once its number is recorded.
 - **Sees:** an order sheet with the files, options, expected cost and any stock change since sign-off; then the order's status.
-- **Gate, order approval:** an admin signs before the files are handed over. trace never pays.
+- **Gate, order approval:** an admin signs before the files are handed over. trace never pays. The stage closes at a second gate, boards received and inspected with firmware and bench ready (see Using the fab wait).
 
 ### 9. Bring up
 
@@ -97,6 +97,108 @@ Each stage lists what the person does, what trace does, what the person sees, an
 - **trace:** steps through a bring-up checklist with current-limited supplies (`hil.psu`), builds and flashes firmware (`firmware.*`), runs the plan's hardware items (`hil.*`), and records results against requirements.
 - **Sees:** the same coverage matrix, now with bench evidence, and any failures turned into issues routed to a specialist.
 - **Gate, revision accepted:** every requirement verified on hardware or carried to the next revision as an issue.
+
+## Beyond the core journey
+
+The nine stages cover a new design up to its first accepted board. Seven additions close the gaps around them: a way in for existing designs, a firmware track, mechanical fit, deliberate change, work during the fab wait, the stages after acceptance, and a running view of cost and schedule. Hard gates still hold for every stage; the firmware track and the fab-wait work are the current stage's own work, not the next stage started early.
+
+### Starting from an existing design
+
+A project can start from an existing KiCad design instead of an intent. The Design import skill reads what exists, rebuilds the record the journey needs, and enters the journey at the earliest stage whose gate the design cannot yet pass.
+
+1. **Read:** trace reads the schematic, board, BOM and any docs, firmware or test results in the repository (`kicad.*`, the knowledge base).
+2. **Reverse-build:** it drafts the intent and requirements from what the design does (rails, interfaces, parts and their ratings), and the architecture from the sheet hierarchy.
+3. **Confirm:** the person corrects the drafted intent and requirements through Intent builder and Requirements review, marking each requirement as stated by a person or inferred from the design.
+4. **Assess:** trace runs every gate's checks against the design as it stands (ERC, DRC, the datasheet-limit check, stock, coverage) and shows which gates it would pass today.
+5. **Enter:** the project starts at the first gate that fails; earlier gates are signed on the import evidence.
+
+An imported board that is already built enters at Bring up as revision A, so its bench results become the first evidence.
+
+### The firmware track
+
+Firmware runs as a track beside the hardware stages, with its work tied to each stage's gate, so a board arrives with firmware ready to flash and tests ready to run. Its gate criteria are added to the hardware gates; it has no gates of its own.
+
+| Stage | Firmware work | Added to the gate |
+| --- | --- | --- |
+| Define | Firmware requirements: behaviours, timing, power states, update method | Firmware requirements accepted with the rest |
+| Architect | Toolchain, RTOS or bare metal, peripheral budget per block | Every interface has a peripheral; no peripheral claimed twice |
+| Capture | Pin plan agreed with the schematic: each MCU pin's function, alternate function and net | Pin plan matches the schematic; no conflicting alternate functions |
+| Prove | Drivers and logic built and unit-tested on the host; the MCU simulated where a model exists (Renode for STM32 is the natural first) | Firmware builds clean; unit tests pass; size fits flash and RAM (`firmware.size`) |
+| Layout | Nothing new; pin swaps made for routing are checked against the pin plan | Pin plan still matches after pin swaps |
+| Fabricate | Bring-up firmware and test scripts finished while boards are made | Release build tagged with the hardware revision |
+| Bring up | Flash, run, fix (`firmware.*`, `hil.*`) | Firmware requirements verified on hardware |
+
+The firmware-only template keeps this track and drops Capture, Layout and Fabricate. A firmware change after release is a change request against the firmware alone, without reopening the hardware.
+
+### Mechanical fit
+
+When the intent names an enclosure, the board is checked against it in 3D before the layout gate, so a connector that misses its cut-out is found on screen, not in the hand.
+
+- **Define:** the intent builder asks for the enclosure as a model (STEP or STL) or as limits (inside size, mounting points, cut-out positions, height above and below the board).
+- **Board setup:** the outline, mounting holes and fixed parts are taken from the enclosure model where one exists.
+- **Layout:** trace exports the board as STEP (`kicad.export`), places it in the enclosure, and checks clearances: parts against walls and lids, connectors against cut-outs, height against the limits. A new fit-check tool does the geometry; `render.model` renders the result.
+- **Gate:** the layout gate adds "mechanical fit passes, or each clash is waived", and the release stores the board-in-enclosure render.
+
+Without an enclosure, the intent's size and height limits are checked against the board alone.
+
+### Changing the design on purpose
+
+A deliberate change (a new or changed requirement, a part going end of life, a better idea) goes through a change request, so its effect on the work already done is known before anyone edits the design.
+
+1. **Raise:** anyone on the project raises a change request through the Change request skill, stating what changes and why.
+2. **Analyse:** trace follows the traceability chains from the change to every requirement, block, sheet, board area, test and piece of evidence it touches, and marks that evidence stale.
+3. **Show the impact:** the earliest stage that must reopen, the gates that will need signing again, the stale evidence to re-run, and the expected cost and time from the running view.
+4. **Decide:** an admin approves or rejects it, like a gate.
+5. **Apply:** the project returns to the earliest affected stage; only stale evidence is re-run, and everything else carries forward.
+
+A released revision is never edited. A change after release always opens the next revision, and a firmware-only change opens a firmware revision without reopening the hardware.
+
+### Using the fab wait
+
+The Fabricate stage now runs until the boards are on the bench, and its work fills the one to three weeks JLCPCB takes, so bring-up starts the day the boards arrive. This is Fabricate's own work, so hard gates still hold.
+
+- **Firmware:** the bring-up and release builds finished and tagged with the hardware revision.
+- **Bring-up plan:** the power-on sequence with expected readings and limits per step, built from the schematic and the test plan.
+- **Bench:** the bench wiring view drawn and the Bench setup skill run against a powered-off bench, so instruments, limits and wiring are ready.
+- **Test scripts:** every hil test item scripted and dry-run against recorded or simulated data.
+- **Incoming inspection:** when boards arrive, the Incoming inspection skill checks them against the release (count, visible assembly faults, parts JLCPCB did not place, photos against the render).
+
+The Fabricate gate becomes "boards received and inspected, firmware and bench ready", signed before Bring up starts.
+
+### After the first board
+
+An accepted revision can continue through three more stages, chosen per project. A one-off prototype stops at acceptance; a product carries on.
+
+| Stage | What happens | Gate |
+| --- | --- | --- |
+| 10 Certify | trace builds the lab test pack from the compliance requirements (standards, test setups, firmware test modes, the pre-compliance estimates); the person books an accredited lab; results come back as evidence against the requirements | Every compliance requirement passed at the lab, or a change request raised |
+| 11 Produce | Design-for-manufacture and design-for-test review; a manufacturing test and programming procedure (and fixture, if needed) from the test plan; a golden board; volume quotes at the production quantity | Production release signed: the files, the test procedure and the programming image for volume |
+| 12 Sustain | A scheduled task re-checks every part's stock and lifecycle weekly; a part going short or end of life raises a change request with in-stock alternatives; field issues are raised against requirements | No gate; it runs until the product is retired |
+
+Certify replaces pre-compliance estimates with real results, which is why it needs a person to book and attend the lab. Sustain is the only stage that runs on its own schedule rather than a person's request.
+
+### Cost and schedule
+
+The design record carries a running view of what the project has spent, what it has committed and what it is forecast to cost, beside where its time went and when the next gate is expected. A person sees the cost of a decision before making it, and the change request and gate skills show the same figures.
+
+**Cost**, by revision and stage:
+
+- **Spent:** orders paid (recorded by Order submit), lab fees (Certify), and cloud use: GPU and CPU jobs and agent model use, attributed to the project through its AWS cost-allocation tags.
+- **Committed:** signed orders not yet paid, booked lab time.
+- **Forecast:** the BOM at the build quantity from today's prices, the next order's quote, and the cloud use of the remaining stages at this project's own past rate.
+- **Budget:** an optional budget per revision; a gate whose next step would exceed it says so before it is signed.
+
+**Schedule**, by stage:
+
+- **Actual:** each stage's start and end, split into time the agents and people were working and time it waited on a person (a question or a gate).
+- **Forecast:** the next gate's expected date, from the remaining work, JLCPCB's quoted lead time, and how long this project's gates have taken to sign.
+- **Waiting:** what is waiting on whom right now, oldest first.
+
+![Cost and schedule: stage timeline example](ux/schedule-timeline.png)
+
+*stage timeline · soil sensor rev A, illustrative dates*
+
+In the example, the blue segments are the time to fix: Capture and Layout each waited days for a signature. The view makes that visible, and the notifications rule (a gate is ready to review) is what shortens it.
 
 ## Across every stage
 
@@ -225,18 +327,24 @@ Every task a person does is run by a skill that guides them through it and will 
 
 | Skill | Stage | Guides the person through | Will not submit until |
 | --- | --- | --- | --- |
+| Design import | Start | Bringing an existing design into trace | Every drafted requirement is confirmed or struck; the entry stage is shown with the failing gate checks that set it |
 | Intent builder | Define | Writing the product intent | Every item below is answered (spec follows the table) |
 | Requirements review | Define | Accepting, editing or striking each proposed requirement | Each accepted requirement has one testable criterion with number and unit, a kind and a source; no duplicates or conflicts left open |
 | Architecture choice | Architect | Comparing the proposed architectures and picking one | Each option was scored on the same criteria; the choice states why; every requirement maps to a block |
 | Schematic finish | Capture | Correcting and completing trace's drafted sheets | Every change from the draft has a reason; ERC run on the final push; no part without MPN and LCSC fields |
+| Pin plan review | Capture | Agreeing each MCU pin between schematic and firmware | Every used pin has a function and net; no alternate-function conflicts; schematic and firmware agree |
 | Waiver | Any | Waiving a requirement, finding or check | States the reason, the risk if wrong, and where it will be verified instead (a later stage or the bench) |
+| Change request | Any | Proposing a deliberate change to the design | What changes and why are stated; the impact (stages, gates, stale evidence, cost, time) has been reviewed |
 | Board setup | Layout | Outline, stackup, mounting and fixed parts | Outline closed; stackup has layer count, thickness and copper weights; each fixed part has a mechanical reason |
 | Placement adjust | Layout | Moving parts trace placed | Each move has a reason; placement check passes, or its findings are waived |
 | Gate signing | Every gate | Reviewing the evidence before signing | Every criterion shows its evidence run; every waiver taken at this stage has been opened and acknowledged |
 | Release review | Sign-off | Reading the release report | Coverage, EMC estimates, BOM cost and stock and open waivers each acknowledged |
 | Order submit | Fabricate | Placing the order on JLCPCB | The options entered match the order sheet; the order number and paid cost are recorded |
+| Incoming inspection | Fabricate | Checking delivered boards against the release | Count, assembly faults and unplaced parts recorded; each board has a serial; photos stored |
 | Bench setup | Bring up | Wiring instruments and buses | Each power supply has voltage and current limits; every instrument answers its identity query; wiring matches the plan |
 | Bring-up run | Bring up | Powering up and running the hardware tests | Each power-on step passed its limits before the next; every failure is recorded as an issue |
+| Certification run | Certify | Preparing for, attending and recording the lab test | The lab, standard and test setups are recorded; every compliance requirement has a lab result or a change request |
+| Production release | Produce | Handing the design to volume manufacture | DFM and DFT findings closed or waived; the test procedure ran on the golden board; the volume quote is recorded |
 | Question answer | Any | Answering a question an agent raised | The answer is specific enough to unblock the agent, and cites its source when it is a fact |
 
 ### Intent builder
@@ -250,7 +358,7 @@ Topics it covers, in order:
 3. **Power:** source, input voltage range, power budget, battery life if any, behaviour on brown-out.
 4. **Interfaces:** each one with type, connector, protocol, rate and direction.
 5. **Performance:** the numbers that define success (accuracy, latency, resolution, range, throughput).
-6. **Physical:** board size limits, mounting, height, connector positions.
+6. **Physical:** board size limits, mounting, height, connector positions, and the enclosure as a model or as limits.
 7. **Compliance:** target standards and class (for example CISPR 32 class B), safety, markings.
 8. **Build:** quantity per run, target unit cost, assembly preference.
 9. **Constraints:** parts or vendors that must be used or avoided, reuse of earlier designs.
@@ -529,6 +637,125 @@ Quality bar:
 
 Produces: the answer on the agent's job, and when it lasts, a rule or a requirement change.
 
+### Design import
+
+The skill brings an existing design into trace and decides where it enters the journey. It shows what trace inferred beside where it inferred it from, so the person corrects the record rather than writing it from nothing.
+
+Steps:
+
+1. **Point at the design:** the KiCad project, plus any firmware, docs and test results in the repository.
+2. **Review the inferred intent:** each statement shown with the sheet, part or document it came from; correct it, or mark it unknown.
+3. **Review the inferred requirements:** through Requirements review, each marked stated or inferred.
+4. **See the assessment:** every gate's checks run against the design as it stands, with pass or fail per criterion.
+5. **Confirm the entry stage:** the first failing gate, or Bring up for a board already built.
+
+Quality bar:
+
+- Every inferred requirement is confirmed, edited or struck; none stays merely inferred.
+- The entry stage matches the first failing gate, or the person states why it should be later.
+- Gates before the entry stage are signed on the import evidence through Gate signing.
+
+Produces: an intent, a requirements baseline, an architecture record and gate records for the earlier stages, with the project placed at its entry stage.
+
+### Pin plan review
+
+The skill sits between the schematic and the firmware, so a pin that works on the drawing but cannot carry its function in silicon is found before layout. It shows the MCU as a pin map coloured by function.
+
+Steps:
+
+1. **See the map:** every MCU pin with its net, the function the firmware expects, and the alternate functions the part allows.
+2. **Resolve conflicts:** two functions on one peripheral instance, a function on a pin that cannot carry it, a boot or debug pin used for something else.
+3. **Keep room:** spare pins brought to test points or a header where the person wants them.
+4. **Agree:** the schematic and the firmware pin configuration are generated from or checked against the same plan.
+
+Quality bar:
+
+- Every used pin has a net and a function the part supports on that pin.
+- No peripheral instance is claimed twice.
+- Boot, reset and debug pins keep their roles, or the change is waived.
+- The firmware pin configuration matches the schematic.
+
+Produces: the pin plan, checked again after any pin swap in Layout.
+
+### Change request
+
+The skill runs whenever someone wants to change the design on purpose. It shows the cost of the change before anyone commits to it.
+
+Steps:
+
+1. **State the change:** what changes (a requirement, a part, a block, the firmware) and why.
+2. **See the impact:** trace follows the traceability chains and shows the stages that reopen, the gates to re-sign, the evidence that goes stale, and the expected cost and time from the running view.
+3. **Choose the scope:** this revision (if not yet released) or the next one; hardware and firmware, or firmware only.
+4. **Submit for approval:** an admin approves or rejects it through Gate signing.
+
+Quality bar:
+
+- The reason is stated, and a changed requirement goes through Requirements review.
+- The impact was shown and acknowledged before submission.
+- A change to a released revision opens the next revision; it never edits the released one.
+
+Produces: an approved or rejected change request; on approval, the project returns to the earliest affected stage with stale evidence marked for re-run.
+
+### Incoming inspection
+
+The skill runs when boards arrive from JLCPCB, before any of them are powered. It compares what arrived with what was released.
+
+Steps:
+
+1. **Count:** boards received against boards ordered.
+2. **Look:** a photo of each side of each board, compared with the release render; the skill points at areas to check closely (fine-pitch parts, polarised parts, the parts JLCPCB did not place).
+3. **Record faults:** bridges, missing or rotated parts, damage, each against its board and reference.
+4. **Fit hand-placed parts:** the parts JLCPCB did not place, listed with their positions.
+5. **Label:** a serial for each board, so every later result belongs to one board.
+
+Quality bar:
+
+- The count is recorded, and every board has a serial and photos.
+- Every fault is recorded against a board and a reference.
+- Every part JLCPCB did not place is fitted or marked as not fitted.
+
+Produces: the inspection record per board, and the boards cleared for bring-up.
+
+### Certification run
+
+The skill guides the person through formal compliance testing at an accredited lab. trace prepares everything it can; the person books the lab and attends.
+
+Steps:
+
+1. **Read the test pack:** the standards and classes from the requirements, the test setups, the firmware test modes, and the pre-compliance estimates with their margins.
+2. **Book:** the lab, the dates and the test plan agreed with the lab, recorded in trace.
+3. **Prepare:** boards and firmware for the test modes, cables and support equipment as the setups list.
+4. **Record results:** each test's result against its requirement, with the lab's report attached.
+5. **Handle failures:** each failure raises a change request with the lab's data attached.
+
+Quality bar:
+
+- The lab, standard and test setups are recorded before testing.
+- Every compliance requirement has a lab result or a change request.
+- The lab's report is stored with the results.
+
+Produces: compliance evidence against the requirements, and the Certify gate's record.
+
+### Production release
+
+The skill hands a certified design to volume manufacture. It makes sure the factory can build and test the board without the people who designed it.
+
+Steps:
+
+1. **Review for manufacture:** DFM findings from trace (panelisation, fiducials, part orientation, spacing for volume assembly) fixed or waived.
+2. **Review for test:** every requirement that needs a production test has a test point and a test step; programming access is reachable.
+3. **Write the procedure:** the manufacturing test and programming procedure, built from the test plan, with pass limits.
+4. **Prove it on a golden board:** the procedure run end to end on a known-good board.
+5. **Quote:** the volume quote at the production quantity, recorded with its lead time.
+
+Quality bar:
+
+- DFM and DFT findings are closed or waived.
+- The test procedure ran on the golden board and every step passed.
+- The production files, procedure, programming image and quote are stored together as the production release.
+
+Produces: the production release, and the start of Sustain.
+
 trace has none of these skills today. The prompt catalog and Agent Skills are the natural home for the guidance, and each quality bar needs a checker tool that the gate and the skill both call.
 
 ## What trace is missing for this journey
@@ -538,16 +765,22 @@ trace today is strongest in Prove, Layout and Sign-off; the journey's ends (Defi
 | Gap | Stage | Today | Needed |
 | --- | --- | --- | --- |
 | No notion of stage or gate | All | Work is routed per issue or PR; nothing tracks where a project is | A project state machine with hard gates and gate records (signer, date, evidence, waivers) in the project database |
-| No project templates | All | One shape for every project | Board, FPGA, firmware and mixed templates, each with its own stages |
+| No project templates | All | One shape for every project | Board, FPGA, firmware and mixed templates, each with its own stages, and Certify, Produce and Sustain as options |
+| No import of existing designs | Start | Nothing infers intent or requirements from a design | Reverse-building intent, requirements and architecture from a KiCad project; gate assessment to pick the entry stage |
 | No intent intake | Define | `verify.requirements extract` works from a spec's text by rules | A guided intake that turns a plain-language brief into requirements and questions |
 | No architecture agent | Architect | Parts, datasheets and calculators exist; nothing proposes a block diagram or compares options | An architecture step, or a sixth specialist, that writes blocks and maps requirements to them |
 | No schematic drafting | Capture | KiCad tools only read and check | Writing KiCad schematic sheets from the architecture: symbols, MPN and LCSC fields, support circuits, net labels. The largest new build |
 | No datasheet-limit check | Capture | Datasheet params and part fields are readable | A check of each part's operating point against its datasheet limits, cited by page |
+| No firmware track before bring-up | Capture to Fabricate | `firmware.build`, `firmware.size`, `firmware.flash` exist | A pin plan checked against the schematic; host unit tests; MCU simulation (Renode is the natural first) |
 | No placement | Layout | `pcb.placement_check` and `pcb.floorplan` only report | A placer that writes footprint positions from the floorplan, respecting parts the person fixed |
+| No mechanical fit check | Layout | `kicad.export` writes STEP; `render.model` renders models | A fit-check tool for clearances between the board and the enclosure |
+| No change requests | All | Changes arrive as issues and PRs with no impact analysis | Change requests that walk the traceability chains and mark stale evidence |
 | No release object | Release | `kicad.fab` writes a package to a folder | A release record: revision, package, frozen BOM, approving report, git tag |
-| No order preparation | Fabricate | `kicad.fab` writes JLCPCB files | A JLCPCB order sheet (options, expected cost, stock re-check) and order tracking by order number |
+| No order preparation or inspection | Fabricate | `kicad.fab` writes JLCPCB files | A JLCPCB order sheet, order tracking by order number, and incoming inspection records per board serial |
 | No bring-up checklist | Bring up | `hil.*` and `firmware.*` exist; `verify.plan` supports hil items | A staged power-on sequence with limits and stop conditions, built from the plan |
 | No revisions | All | One design, versioned by git only | Revisions that carry requirements, waivers and results forward |
+| Nothing after acceptance | Certify to Sustain | Pre-compliance estimates only | A lab test pack, DFM and DFT review, a manufacturing test procedure, and a scheduled lifecycle watch |
+| No cost or schedule view | All | Run records hold no cost; nothing records stage times | A ledger of spent, committed and forecast cost (with AWS cost-allocation tags per project) and stage timing with waits |
 
 ## Decisions
 
