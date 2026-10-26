@@ -9,11 +9,13 @@
  *                       runtime runs it
  *   projects            one ProjectStack per repository (src/infra/project.ts): its worker runtime on Bedrock
  *                       AgentCore with its own execution role, its GitHub token secret, its GitHub OIDC role, its
- *                       AgentCore memory and its GPU job definition and job role. Each role reaches that project's
+ *                       AgentCore memory, its GPU job definition and job role, and its CodeBuild GitHub Actions
+ *                       runner project (src/infra/runner.ts: every CI job runs on AWS, never on a GitHub-hosted
+ *                       runner; its role gives a job no AWS access). Each role reaches that project's
  *                       resources only, so the line between projects holds in IAM even though the agent has Bash
  *                       and the role's credentials. Layout 'nested' (the default) puts each in its own nested stack,
  *                       so this stack holds one resource per project and 60 fit; 'flat' keeps them here, as earlier
- *                       installations have them (about 24 fit)
+ *                       installations have them (about 20 fit)
  *   agent memory        AgentCore Memory (src/infra/memory.ts): one per project, made by its ProjectStack, still
  *                       namespaced /trace/<owner>/<repo>/<agent>/; each worker may use only its own project's memory
  *   GPU                 one AWS Batch queue and compute environment shared by every project, and (cpu.enabled) a
@@ -453,7 +455,7 @@ export class TraceStack extends Stack {
     // Nested: the parent carries none of a project's outputs (Project<hash>RuntimeArn, ActionsRoleArn, MemoryId, …):
     // they are its nested stack's, and the installer reads them there (src/installer/aws.ts stackOutputs), so the
     // parent's outputs do not grow with the projects. Flat: the stack's own, as they always were (src/infra/project.ts).
-    const hint = nested ? '' : `: with layout 'flat' about 24 projects fit; see README "Project isolation" for the move to layout 'nested'`
+    const hint = nested ? '' : `: with layout 'flat' about 20 projects fit; see README "Project isolation" for the move to layout 'nested'`
     this.node.addValidation({ validate: () => stackQuotaErrors(this, hint) })
     for (const n of nestedStacks) n.node.addValidation({ validate: () => stackQuotaErrors(n, '') })
     new CfnOutput(this, 'TraceHome', { value: traceHome, description: 'TRACE_HOME: the central database location' })

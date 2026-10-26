@@ -1,5 +1,11 @@
 # trace's own build: typecheck, the TypeScript tests (with KiCad, ngspice and Icarus installed so their tests run),
 # the Python bridge's tests, and a check that the committed harness bundle matches its source.
+#
+# Every job runs on AWS CodeBuild (a CodeBuild-hosted GitHub Actions runner in trace's AWS account), never on a
+# GitHub-hosted runner: the first runs-on label names the CodeBuild project trace-ci, the second keeps each job's
+# runner distinct within a run. It needs the TraceCi runner stack (`npm run deploy:ci`, src/infra/ci-app.ts); until
+# that project exists the jobs wait in the queue. The runner image is Ubuntu (aws/codebuild/standard), so the steps
+# use sudo and never assume the job user's name or home directory.
 name: ci
 
 on:
@@ -13,7 +19,9 @@ permissions:
 
 jobs:
   typescript:
-    runs-on: ubuntu-24.04
+    runs-on:
+      - codebuild-trace-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      - typescript
     timeout-minutes: 45
     env:
       # KiCad, ngspice, Icarus, and the verification/FPGA programs, so those tests run instead of skipping.
@@ -25,21 +33,27 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with: { python-version: "3.12" }
       # The runner's Ubuntu mirror can be slow (KiCad alone is several hundred MB): keep the downloaded packages.
+      # Under the runner's temp directory, not ~: on CodeBuild the job user and its home need not be GitHub's.
       - name: Package cache key
         id: apt
-        run: echo "key=apt-${{ runner.os }}-$(echo "$APT_PACKAGES" | sha256sum | cut -c1-16)-$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "APT_CACHE=$RUNNER_TEMP/apt-cache" >> "$GITHUB_ENV"
+          echo "key=apt-${{ runner.os }}-$(echo "$APT_PACKAGES" | sha256sum | cut -c1-16)-$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/apt-cache
+          path: ${{ env.APT_CACHE }}
           key: ${{ steps.apt.outputs.key }}
           restore-keys: apt-${{ runner.os }}-
       - name: KiCad 10, ngspice, Icarus Verilog, Verilator, Yosys, nextpnr
         run: |
-          mkdir -p ~/apt-cache/partial
+          mkdir -p "$APT_CACHE/partial"
+          export DEBIAN_FRONTEND=noninteractive
+          command -v add-apt-repository >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends software-properties-common; }
           sudo add-apt-repository -y ppa:kicad/kicad-10.0-releases
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends -o Dir::Cache::Archives="$HOME/apt-cache" $APT_PACKAGES
-          sudo chown -R "$USER" ~/apt-cache && rm -f ~/apt-cache/lock
+          sudo -E apt-get install -y -q --no-install-recommends -o Dir::Cache::Archives="$APT_CACHE" $APT_PACKAGES
+          # apt leaves the archives root-owned: hand them back to whoever runs this job so actions/cache can save them.
+          sudo chown -R "$(id -u):$(id -g)" "$APT_CACHE" && sudo rm -f "$APT_CACHE/lock"
       - name: Python bridge
         run: |
           python -m venv .venv
@@ -56,7 +70,9 @@ jobs:
           git diff --exit-code harness/dist || { echo "harness/dist is stale: run npm run build and commit it"; exit 1; }
 
   python-bridge:
-    runs-on: ubuntu-24.04
+    runs-on:
+      - codebuild-trace-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      - python-bridge
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -69,7 +85,9 @@ jobs:
     name: tests pass
     if: always()
     needs: [typescript, python-bridge]
-    runs-on: ubuntu-24.04
+    runs-on:
+      - codebuild-trace-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      - tests-pass
     steps:
       - env:
           RESULTS: ${{ join(needs.*.result, ' ') }}

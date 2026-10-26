@@ -1,7 +1,7 @@
 /**
  * Each project's knowledge base: an Amazon Bedrock knowledge base over that project's documents in the central bucket,
  * with its vectors in an Amazon S3 Vectors index. Made by its ProjectStack (src/infra/project.ts), in the nested layout
- * only: a flat stack of about 24 projects has no room for five more resources per project.
+ * only: a flat stack of about 20 projects has no room for five more resources per project.
  *
  *   resource                         name / where
  *   AWS::S3Vectors::VectorBucket     one per installation, in the parent stack (VectorStore below); its name is

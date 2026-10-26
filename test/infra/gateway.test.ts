@@ -8,11 +8,11 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { LIBRARY_TOOLS, LOCAL_INPUTS } from '../../src/core/gateway.js'
 import { InfraPropsSchema, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, projectHash, stackName, workerRuntimeName } from '../../src/infra/props.js'
 import { gatewayName } from '../../src/infra/gateway.js'
-import { type Synth, nestedOf, synth } from './templates.js'
+import { RUNNERS, type Synth, nestedOf, synth } from './templates.js'
 
 const A = 'mteichtahl/trace'
 const B = 'pokeys-toolkit/potroller'
-const base = { account: '123456789012', region: 'us-east-1', repositories: [A, B], model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com' }
+const base = { account: '123456789012', region: 'us-east-1', repositories: [A, B], model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com', runners: RUNNERS }
 
 type Statement = { Sid?: string; Effect?: string; Action: string | string[]; Resource?: unknown; Condition?: unknown }
 const statements = (t: Template, prefix: string): Statement[] => Object.entries(t.findResources('AWS::IAM::Policy')).filter(([id]) => id.startsWith(prefix))

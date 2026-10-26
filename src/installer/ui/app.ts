@@ -3,7 +3,7 @@
  * people, review — each checked against the local installer server before moving on, then the installation's
  * progress streamed live. The answers are validated with the same zod schemas the server uses.
  */
-import { type AnswersInput, AnswersSchema, type InstallEvent, type Step } from '../answers.js'
+import { type AnswersInput, AnswersSchema, type InstallEvent, RUNNER_COMPUTE_TYPES, type Step } from '../answers.js'
 
 // ------------------------------------------------------------------ the server's answers (shapes the page relies on)
 
@@ -58,6 +58,9 @@ const s = {
    * installer raises it when a removed project is added again; never set here) */
   projects: new Map<string, { branch: string; onboard: boolean; applySettings: boolean; memoryDays: string; generation: number }>(),
   aws: { mode: 'profile' as 'profile' | 'keys', profile: 'default', region: 'us-east-1', keyId: '', secret: '', session: '', check: null as AwsCheck | null, confirmed: false, busy: false, error: '' },
+  /** where the GitHub Actions jobs run (AWS CodeBuild): connectionArn '' = find or create `<prefix>-github`; computeType
+   * '' and privileged 'default' = the stack's defaults */
+  runners: { connectionArn: '', computeType: '' as '' | (typeof RUNNER_COMPUTE_TYPES)[number], privileged: 'default' as 'default' | 'on' | 'off' },
   agents: { prefix: 'trace', model: '', maxLifetimeHours: 8, idleMinutes: 15, centralBucketName: '', retainData: true, escalateTo: '', gpuEnabled: true, gpuMaxVcpus: 16, gpuSpot: false,
     cpuEnabled: true, cpuMaxVcpus: 64, cpuSpot: false, cpuVcpus: 16, cpuMemoryMiB: 32_768, knowledgeBase: true, libraryGateway: false,
     observability: true, transactionSearch: true, samplingPercent: '', dashboard: true, migrateLayout: false },
@@ -123,6 +126,10 @@ function answers(): AnswersInput {
       samplingPercent: s.agents.samplingPercent.trim() === '' ? null : Number(s.agents.samplingPercent),
       migrateLayout: s.agents.migrateLayout,
     },
+    runners: {
+      connectionArn: s.runners.connectionArn, computeType: s.runners.computeType || null,
+      privileged: s.runners.privileged === 'default' ? null : s.runners.privileged === 'on',
+    },
     projects: [...s.projects].map(([repo, { memoryDays, ...p }]) => ({ repo, ...p, memoryEventExpiryDays: memoryDays.trim() === '' ? null : Number(memoryDays) })),
     adminEmail: s.adminEmail,
     people: s.people.filter((p) => p.email.trim()).map((p) => ({
@@ -154,6 +161,7 @@ function problems(tab: Tab): string[] {
       if (!s.aws.confirmed) out.push(`Confirm that ${s.aws.check.account} is the right account.`)
       if (!s.aws.check.agentCore.ok) out.push('Bedrock AgentCore is not available here.')
     }
+    if (s.runners.connectionArn && !CONNECTION_ARN.test(s.runners.connectionArn)) out.push('The GitHub connection must be an AWS CodeConnections connection ARN, or empty.')
   }
   if (tab === 'agents' && !s.agents.model) out.push('Choose the model the agents use.')
   if (tab === 'people' && !/^\S+@\S+\.\S+$/.test(s.adminEmail)) out.push("Enter the first administrator's email.")
@@ -270,7 +278,31 @@ function aws(): HTMLElement {
       note('ok', c.cdkBootstrapped ? 'CDK is already bootstrapped here.' : 'CDK will be bootstrapped here first.'),
       c.existing ? note('warn', `trace is already installed here (${c.existing.stack}, ${c.existing.status}): installing again updates it.`) : null,
       ...c.warnings.map((w) => note('warn', w))) : null,
+    runners(),
     next('aws', 'agents'))
+}
+
+const CONNECTION_ARN = /^arn:aws[a-z-]*:(codeconnections|codestar-connections):[a-z0-9-]+:\d{12}:connection\/[0-9a-f-]{36}$/
+const COMPUTE_LABEL: Record<(typeof RUNNER_COMPUTE_TYPES)[number], string> = {
+  BUILD_GENERAL1_MEDIUM: 'Medium (4 vCPUs, 7 GB)', BUILD_GENERAL1_LARGE: 'Large (8 vCPUs, 15 GB)',
+  BUILD_GENERAL1_XLARGE: 'X-large (36 vCPUs, 72 GB)', BUILD_GENERAL1_2XLARGE: '2X-large (72 vCPUs, 144 GB)',
+}
+
+/** Where the repositories' GitHub Actions jobs run: AWS CodeBuild, reached through a CodeConnections connection. */
+function runners(): HTMLElement {
+  const r = s.runners
+  const name = `${s.agents.prefix || 'trace'}-github`
+  const url = `https://${s.aws.region}.console.aws.amazon.com/codesuite/settings/connections?region=${s.aws.region}`
+  return h('div', {},
+    h('h3', {}, 'Where the workflows run'),
+    h('p', { class: 'lead' }, `Every GitHub Actions job of the repositories runs on AWS CodeBuild in this account, never on GitHub's own runners: each repository gets its own CodeBuild runner project. CodeBuild reaches GitHub through an AWS CodeConnections connection, so no GitHub token is stored for it. Leave the connection empty and the installer uses ${name}, creating it if it is not there.`),
+    note('warn', 'A new connection must be authorized once, by you, in the AWS console: the installer shows the link (', h('a', { href: url, target: '_blank', rel: 'noopener' }, 'Connections'), `), you choose ${r.connectionArn ? 'the connection' : name} and "Update pending connection", which installs the AWS Connector for GitHub app, and the installer carries on by itself. Give that app access to every repository chosen in step 1${s.projects.size ? ` (${[...s.projects.keys()].join(', ')})` : ''}: a repository it cannot reach gets no runner.`),
+    field('GitHub connection', input('text', r.connectionArn, (v) => { r.connectionArn = v.trim() }, { placeholder: `empty: use or create ${name}` }), 'an existing connection\'s ARN, if you have one'),
+    h('div', { class: 'row' },
+      field('Job size', select([{ value: '', label: 'Default (Large)' }, ...RUNNER_COMPUTE_TYPES.map((t) => ({ value: t, label: COMPUTE_LABEL[t] }))], r.computeType,
+        (v) => { r.computeType = (RUNNER_COMPUTE_TYPES as readonly string[]).includes(v) ? v as (typeof RUNNER_COMPUTE_TYPES)[number] : '' }), 'a job can ask for another with an instance-size label'),
+      field('Docker in jobs', select([{ value: 'default', label: 'Default (off)' }, { value: 'on', label: 'On (privileged, for jobs that build containers)' }, { value: 'off', label: 'Off' }], r.privileged,
+        (v) => { r.privileged = v === 'on' || v === 'off' ? v : 'default' }))))
 }
 
 async function checkAws(): Promise<void> {
@@ -309,7 +341,7 @@ function agents(): HTMLElement {
       field('Who the agents ask', input('text', g.escalateTo, (v) => { g.escalateTo = v.trim() }, { placeholder: '@your-login' }), 'mentioned when a project needs a person')),
     checkbox('Keep the central bucket and images if trace is uninstalled', g.retainData, (v) => { g.retainData = v }),
     ...(flatInstall() ? [
-      h('p', { class: 'lead' }, 'This installation keeps every project in one CloudFormation stack, which holds about 24 projects. New installations give each project its own nested stack, which holds 60. Moving takes three deploys and DELETES every project\'s memory records (AgentCore cannot copy them); the projects are offline while it runs.'),
+      h('p', { class: 'lead' }, 'This installation keeps every project in one CloudFormation stack, which holds about 20 projects. New installations give each project its own nested stack, which holds 60. Moving takes three deploys and DELETES every project\'s memory records (AgentCore cannot copy them); the projects are offline while it runs.'),
       checkbox('Move to one nested stack per project (deletes every project\'s memory records)', g.migrateLayout, (v) => { g.migrateLayout = v }),
     ] : []),
     h('h3', {}, 'GPU jobs'),
@@ -455,6 +487,11 @@ async function boot(): Promise<void> {
           memoryDays: p.memoryEventExpiryDays === null || p.memoryEventExpiryDays === undefined ? '' : String(p.memoryEventExpiryDays),
           generation: p.generation ?? 0,
         })
+      }
+      if (saved.runners) {
+        s.runners.connectionArn = saved.runners.connectionArn ?? ''
+        s.runners.computeType = saved.runners.computeType ?? ''
+        s.runners.privileged = saved.runners.privileged === true ? 'on' : saved.runners.privileged === false ? 'off' : 'default'
       }
       s.adminEmail = saved.adminEmail
       s.people = (saved.people ?? []).map((p) => ({ email: p.email, class: p.class ?? 'user', projects: new Set(p.projects ?? []) }))

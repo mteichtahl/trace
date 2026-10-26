@@ -26,6 +26,9 @@ and checks the following:
   token (see [Project isolation](#project-isolation)).
 - **AWS:** a profile (SSO works) or access keys, the region, and confirmation of the account. It checks that Bedrock
   AgentCore and an Anthropic model are available there.
+- **Builds:** the AWS CodeConnections connection to GitHub that the build runners use (see
+  [Where builds run](#where-builds-run)). It reuses one that is ready, or creates one and waits while you authorize it
+  once in the AWS console, showing when it will check again.
 - **Agents:** the model, session limits, and the central bucket.
 - **People:** the first administrator, and for everyone else their class (admin, user, guest) and the projects they
   are assigned to.
@@ -34,12 +37,13 @@ It then shows the plan and runs it:
 
 - **AWS (CDK):** one stack. It contains the central bucket, the agent image (built by CodeBuild on arm64, so no
   local Docker is needed), and AgentCore runtimes from that image: one worker runtime per project, each with its own
-  execution role, GitHub OIDC role, GitHub token secret, memory, knowledge base and GPU and CPU job definitions, and the API runtime. Each
+  execution role, GitHub OIDC role, GitHub token secret, memory, knowledge base, GPU and CPU job definitions and CodeBuild
+  build runner, and the API runtime. Each
   project's resources are in a nested stack of their own (see [Stack layout](#stack-layout-and-limits)). A project's
   worker is invoked by that repository's workflows through IAM, and by the API. The API runtime is for people and is
   reached only with a Cognito sign-in. The stack also holds the Cognito user pool.
 - **GitHub:** each repository's Actions variables (`TRACE_AWS_ROLE`, `TRACE_AGENT_RUNTIME_ARN`, `TRACE_MEMORY_ID`,
-  `TRACE_KB_ID` and `TRACE_KB_DATA_SOURCE_ID`, all its own project's, `TRACE_AWS_REGION`, `TRACE_HOME`) and its `TRACE_TOKEN` secret (its project's agent token,
+  `TRACE_KB_ID`, `TRACE_KB_DATA_SOURCE_ID` and `TRACE_CODEBUILD_PROJECT`, all its own project's, `TRACE_AWS_REGION`, `TRACE_HOME`) and its `TRACE_TOKEN` secret (its project's agent token,
   encrypted with the repository's key), plus the onboarding pull request.
 - **The GPU image**, last: the deploy starts its build and does not wait for it (see [GPU jobs](#gpu-jobs-rendering-and-autorouting)),
   so the installer waits for it once everything else is set up, and starts it again if an earlier one failed. A failed
@@ -137,8 +141,8 @@ so when it is built. The output `Layout` says which layout an installation has.
 uploads the agent source and the Lambda code, so the bootstrap the installer runs (version 6 or later) covers it.
 
 **Installations from before nested stacks keep `layout: 'flat'`.** There every project's resources are in the one
-stack, and it holds about 24 projects (`cdk synth` refuses more). A flat installation has no knowledge bases and no CPU
-queue: at about 490 of its 500 resources with 24 projects, it has no room for them. The installer picks the layout from the deployed
+stack, and it holds about 20 projects (`cdk synth` refuses more). A flat installation has no knowledge bases and no CPU
+queue: at about 480 of its 500 resources with 20 projects, it has no room for them. The installer picks the layout from the deployed
 stack: a stack with a `Layout` output keeps that layout, a stack without one is flat, and a new installation is
 nested. Deploying by hand, set `layout: 'flat'` in `TRACE_INFRA` for an older stack.
 
@@ -223,6 +227,37 @@ guests can list, read and preview them (see [Managing prompts](#managing-prompts
 Marking an agent memory inactive (`trace remote memory deactivate`) takes write access. A person's own preferences
 are the exception: they may mark those with read access alone (see [Inactive memories](#inactive-memories)).
 
+## Where builds run
+
+Every build, test and automation job runs on AWS, in the installation's own account. GitHub-hosted runners are
+never used, by trace's own repository or by any repository it manages.
+
+The workflows stay in GitHub Actions, so pull requests show their checks as usual, but each job runs on an
+[AWS CodeBuild-hosted runner](https://docs.aws.amazon.com/codebuild/latest/userguide/action-runner.html): GitHub
+queues the job, CodeBuild receives the queued event, starts a fresh build container in your account, and that
+container runs the job and is discarded.
+
+- **One runner project per repository**, `<prefix>-ci-<hash>`, made by the stack. Its workflows name it through the
+  repository variable `TRACE_CODEBUILD_PROJECT`, which the installer sets:
+  `runs-on: [codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}, <job>]`.
+- **No GitHub token is stored for it.** CodeBuild reaches GitHub through an AWS CodeConnections connection (the AWS
+  Connector for GitHub app). Grant that app access to every repository trace manages.
+- **No AWS access comes with it.** The runner's own role may write its logs and use the connection, nothing else.
+  Jobs reach AWS exactly as before, through their repository's GitHub OIDC role.
+- **No fallback.** If `TRACE_CODEBUILD_PROJECT` is missing or the runner project doesn't exist, jobs wait in the queue
+  rather than run on GitHub. `trace doctor owner/repo` reports it, and running the installer again fixes it.
+- **Bigger machines:** `runners.computeType` sets every job's default size (large unless changed); a job can ask for
+  another with an `instance-size:` label. `runners.privileged` turns on Docker for jobs that build containers.
+
+trace's own repository builds the same way, on the runner project `trace-ci`. Deploy it once per account, before
+its first pull request can be checked:
+
+```sh
+TRACE_CONNECTION_ARN=arn:aws:codeconnections:<region>:<account>:connection/<id> npm run deploy:ci
+```
+
+A guard test fails the build if any workflow here or in `templates/` names a runner other than a CodeBuild one.
+
 ## Putting another repository under trace
 
 ```sh
@@ -243,8 +278,8 @@ Onboarding adds the following:
 
 Settings are changed with `trace config set <key> <value>` (`trace config keys` lists them all). Each workflow has a
 kill switch, a repository variable set to `false`: `TRACE_PRS`, `TRACE_CI`, `TRACE_WORKER`, `TRACE_DEPLOY`. Work is
-done by a specialist agent (see [Specialist agents](#specialist-agents)) on AgentCore by default; `trace config set worker.runner actions` runs it inside GitHub Actions
-instead.
+done by a specialist agent (see [Specialist agents](#specialist-agents)) on AgentCore by default; `trace config set worker.runner actions` runs it as a GitHub Actions job instead, which
+still runs on the project's CodeBuild runner in AWS.
 
 ## Data
 
@@ -890,7 +925,7 @@ tokens and keys and is bounded in size (8000 characters per event, 12 tool outco
   value, at most 5000 characters, and a runtime may have at most 50 environment variables. The stack checks both
   when it is built and refuses an installation that would not fit. Each project is a nested stack of its own, so
   CloudFormation's 500 resources and 200 outputs per stack allow the full 60 projects; an installation still in the
-  flat layout holds about 24 (see [Stack layout and limits](#stack-layout-and-limits)).
+  flat layout holds about 20 (see [Stack layout and limits](#stack-layout-and-limits)).
 
 ### Inactive memories
 
