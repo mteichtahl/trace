@@ -31,6 +31,16 @@ export const InfraPropsSchema = z.object({
   callbackPorts: z.array(z.number().int().min(1024).max(65535)).min(1).default([47821, 47822]),
   /** Keep the central bucket and the image repository when the stack is deleted. */
   retainData: z.boolean().default(true),
+  /** GPU jobs (Blender renders, the PCB autorouters) on AWS Batch: AgentCore runtimes have no GPU (src/infra/gpu.ts). */
+  gpu: z.object({
+    enabled: z.boolean().default(true),
+    /** x86 NVIDIA instance types, tried in order of fit */
+    instanceTypes: z.array(z.string().regex(/^[a-z][a-z0-9-]*\.[a-z0-9]+$/, 'an EC2 instance type such as g6.xlarge')).min(1).default(['g6.xlarge', 'g5.xlarge', 'g4dn.xlarge']),
+    /** the most vCPUs running at once (4 per job on the default types); the queue scales to zero when idle */
+    maxVcpus: z.number().int().min(4).max(4096).default(16),
+    /** use Spot instances (cheaper; a job may be interrupted) */
+    spot: z.boolean().default(false),
+  }).strict().prefault({}),
 }).strict()
 
 export type InfraProps = z.output<typeof InfraPropsSchema>

@@ -129,17 +129,45 @@ Tools that drive real hardware (instruments, buses, flashing a target) are refus
 `TRACE_HARDWARE=1`. Run them only on a machine wired to the bench. Configure the bench with `trace config set` for
 `hil.instruments`, `hil.serial` and `hil.can`. Every power supply must have voltage and current limits.
 
+## GPU jobs: rendering and autorouting
+
+AgentCore runtimes have no GPU. Tools that need one, the Blender renders and the PCB autorouters, run their programs
+through `runJob` (`src/gpu/jobs.ts`). A job runs on the local machine when that machine has an NVIDIA GPU or the job
+does not need one. Otherwise, when `TRACE_GPU_QUEUE` is set (the stack sets it on both runtimes), the job goes to an
+AWS Batch queue of GPU instances that scales to zero when idle. Inputs travel through the central bucket's `jobs/`
+prefix, and outputs and logs come back the same way, so the tool answers the same wherever the job ran.
+`TRACE_GPU_REMOTE=always|never` overrides this choice. The installer's Agents step can turn the queue off and sets
+its vCPU limit and Spot use (`gpu.enabled`, `gpu.maxVcpus`, `gpu.spot` in the stack settings). The GPU image is
+described in `agent/README.md`.
+
+`pcb.autoroute` routes a KiCad board with up to two routers in turn:
+
+- **OrthoRoute** is a CUDA lattice router. It handles the board's complex core: BGA escapes, dense buses and
+  backplane connector fans. It is not a general-purpose router.
+- **Freerouting** is a CPU push-and-shove router. It routes everything else around what OrthoRoute laid down, which
+  is locked first.
+
+With `engine: auto`, the tool decides from the board. A board without a complex core, or with no GPU reachable, gets
+Freerouting only, and the answer gives the reason. The answer also includes the plan, a report for each stage, the
+unrouted count and KiCad's DRC. The tool writes `<name>.routed.kicad_pcb` and never overwrites the input unless
+`in_place` is set. `engine: orthoroute` or `engine: freerouting` re-runs one stage on its own. The thresholds are in
+`electronics.autoroute.*`. To run either router locally, set `TRACE_FREEROUTING_JAR` (Freerouting needs Java 25,
+`TRACE_JAVA`), `TRACE_KICAD_PYTHON` (a Python that can `import pcbnew`), and `TRACE_ORTHOROUTE` /
+`TRACE_ORTHOROUTE_PYTHON` (its source, and a Python with numpy, scipy, psutil and, for the GPU, cupy).
+
 ## Layout
 
 | Path | What |
 | --- | --- |
 | `src/core` | Settings, SQLite stores, the tool registry, the MCP server, onboarding, access control, the Python bridge client |
-| `src/infra` | The CDK stack (AgentCore runtimes, Cognito, the central bucket, the image build, GitHub OIDC) |
+| `src/infra` | The CDK stack (AgentCore runtimes, Cognito, the central bucket, the image builds, GitHub OIDC, the AWS Batch GPU queue in `gpu.ts`) |
 | `src/installer` | `trace install`: the local web installer |
 | `src/agent`, `src/api`, `agent/Dockerfile` | The image AgentCore runs: the worker, and the people-facing API |
 | `src/login` | `trace login`, `trace remote …`, `trace users …` |
 | `src/harness` | The loop's logic, bundled into `harness/dist` for the GitHub actions in `harness/actions` |
-| `src/calc`, `src/kicad`, `src/sim`, `src/datasheets`, `src/parts`, `src/hil`, `src/firmware`, `src/runs` | The tools |
+| `src/calc`, `src/kicad`, `src/pcb`, `src/sim`, `src/datasheets`, `src/parts`, `src/hil`, `src/firmware`, `src/runs` | The tools |
+| `src/gpu`, `agent/Dockerfile.gpu` | GPU jobs: local or AWS Batch (`runJob`, `runBatch`), the in-container runner, and its image |
+| `python/kicad`, `python/orthoroute` | The scripts the autorouter jobs run: Freerouting through KiCad's pcbnew, and OrthoRoute's headless mode |
 | `python/tracebridge` | The only Python, used where Node has no maintained equivalent: PDF tables and figures (pdfplumber), VISA instruments (pyvisa), and CAN vendor interfaces (python-can) |
 | `templates` | What onboarding writes: workflows, starter builds, scaffolds, the empty rules |
 

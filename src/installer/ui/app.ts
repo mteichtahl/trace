@@ -52,7 +52,7 @@ const s = {
   github: { token: '', adminToken: '', info: null as TokenInfo | null, filter: '', busy: false, error: '' },
   projects: new Map<string, { branch: string; onboard: boolean; applySettings: boolean }>(),
   aws: { mode: 'profile' as 'profile' | 'keys', profile: 'default', region: 'us-east-1', keyId: '', secret: '', session: '', check: null as AwsCheck | null, confirmed: false, busy: false, error: '' },
-  agents: { prefix: 'trace', model: '', maxLifetimeHours: 8, idleMinutes: 15, centralBucketName: '', retainData: true, escalateTo: '' },
+  agents: { prefix: 'trace', model: '', maxLifetimeHours: 8, idleMinutes: 15, centralBucketName: '', retainData: true, escalateTo: '', gpuEnabled: true, gpuMaxVcpus: 16, gpuSpot: false },
   adminEmail: '',
   people: [] as Person[],
   plan: null as Step[] | null,
@@ -102,6 +102,7 @@ function answers(): AnswersInput {
     agents: {
       prefix: s.agents.prefix, model: s.agents.model, maxLifetimeHours: s.agents.maxLifetimeHours, idleMinutes: s.agents.idleMinutes,
       createOidcProvider: !(s.aws.check?.oidcProvider ?? false), centralBucketName: s.agents.centralBucketName, retainData: s.agents.retainData,
+      gpuEnabled: s.agents.gpuEnabled, gpuMaxVcpus: s.agents.gpuMaxVcpus, gpuSpot: s.agents.gpuSpot,
     },
     projects: [...s.projects].map(([repo, p]) => ({ repo, ...p })),
     adminEmail: s.adminEmail,
@@ -281,6 +282,12 @@ function agents(): HTMLElement {
       field('Central bucket name', input('text', g.centralBucketName, (v) => { g.centralBucketName = v.trim() }, { placeholder: 'leave empty to name it automatically' }), 'datasheets and parts, shared by every project'),
       field('Who the agents ask', input('text', g.escalateTo, (v) => { g.escalateTo = v.trim() }, { placeholder: '@your-login' }), 'mentioned when a project needs a person')),
     checkbox('Keep the central bucket and images if trace is uninstalled', g.retainData, (v) => { g.retainData = v }),
+    h('h3', {}, 'GPU jobs'),
+    h('p', { class: 'lead' }, 'AgentCore has no GPU, so Blender renders and the PCB autorouters run as AWS Batch jobs on GPU instances (g6, g5 or g4dn). The queue scales to zero: nothing runs, and nothing is billed, while there is no job.'),
+    checkbox('Run GPU jobs on AWS Batch', g.gpuEnabled, (v) => { g.gpuEnabled = v }),
+    h('div', { class: 'row' },
+      field('Most vCPUs at once', input('number', String(g.gpuMaxVcpus), (v) => { g.gpuMaxVcpus = Number(v) }, { min: 4, max: 4096, step: 4 }), '4 per job: 16 runs four jobs side by side'),
+      field('Instances', checkbox('Use Spot (cheaper; a job can be interrupted)', g.gpuSpot, (v) => { g.gpuSpot = v }))),
     next('agents', 'people'))
 }
 

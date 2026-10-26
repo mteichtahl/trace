@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
+import { defaults } from '../../src/core/config.js'
 import type { GpuJob, JobResult } from '../../src/gpu/jobs.js'
 
 const calls: { spec: GpuJob; job: unknown }[] = []
@@ -212,7 +213,7 @@ describe('helpers', () => {
   })
 
   it('the rendering-agent prompt names the tools and the rules', () => {
-    const p = renderingAgentPrompt('Render the board for the README', { electronics: { projects: ['hw/main.kicad_pro'], models: [] } })
+    const p = renderingAgentPrompt('Render the board for the README', { electronics: { ...defaults().electronics, projects: ['hw/main.kicad_pro'] } })
     for (const s of ['render_status', 'render_board', 'render_model', 'render_turntable', 'device=auto', 'GPU', 'hw/main.kicad_pro', 'commit', 'Never overwrite', 'Look at every image']) {
       expect(p).toContain(s)
     }

@@ -32,7 +32,6 @@ describe('the trace stack', () => {
 
   it('builds the agent image on arm64 with CodeBuild and waits for it', () => {
     t.hasResourceProperties('AWS::CodeBuild::Project', { Environment: Match.objectLike({ Type: 'ARM_CONTAINER', PrivilegedMode: true }) })
-    t.resourceCountIs('AWS::CloudFormation::CustomResource', 1)
   })
 
   it('runs two AgentCore runtimes: the worker on IAM, the API behind Cognito', () => {
@@ -96,8 +95,57 @@ describe('the trace stack', () => {
     t.hasResourceProperties('AWS::SecretsManager::Secret', { Name: 'trace/github-token' })
   })
 
+  it('runs GPU jobs on a Batch queue of GPU instances that scales to zero', () => {
+    t.hasResourceProperties('AWS::Batch::ComputeEnvironment', {
+      Type: 'managed',
+      ComputeResources: Match.objectLike({
+        Type: 'EC2', MinvCpus: 0, MaxvCpus: 16, InstanceTypes: ['g6.xlarge', 'g5.xlarge', 'g4dn.xlarge'],
+        Ec2Configuration: [{ ImageType: 'ECS_AL2023_NVIDIA' }],
+      }),
+    })
+    t.hasResourceProperties('AWS::Batch::JobDefinition', {
+      JobDefinitionName: 'trace-gpu',
+      ContainerProperties: Match.objectLike({
+        Command: ['node', '/app/dist/gpu/runner.js'],
+        ResourceRequirements: Match.arrayWith([{ Type: 'GPU', Value: '1' }]),
+      }),
+    })
+    t.resourceCountIs('AWS::Batch::JobQueue', 1)
+    t.resourceCountIs('AWS::EC2::NatGateway', 0)
+    t.hasResourceProperties('AWS::CodeBuild::Project', { Environment: Match.objectLike({ Type: 'LINUX_CONTAINER', PrivilegedMode: true }) })
+    t.resourceCountIs('AWS::CloudFormation::CustomResource', 2) // the agent image and the GPU image
+  })
+
+  it('lets both runtimes submit GPU jobs and stage files under jobs/ only, and tells them where', () => {
+    const policies = Object.entries(t.findResources('AWS::IAM::Policy')).map(([id, p]) => [id, JSON.stringify(p)] as const)
+    for (const who of ['WorkerRuntimeRole', 'ApiRuntimeRole']) {
+      const p = policies.filter(([id]) => id.startsWith(who)).map(([, x]) => x).join()
+      for (const a of ['batch:SubmitJob', 'batch:DescribeJobs', 'batch:TerminateJob']) expect(p).toContain(a)
+      expect(p).toContain('/jobs/*')
+    }
+    const job = policies.filter(([id]) => id.startsWith('GpuJobRole')).map(([, x]) => x).join()
+    expect(job).toContain('/jobs/*')
+    expect(job).not.toContain('/central/*')
+    for (const mode of ['worker', 'api']) {
+      t.hasResourceProperties('AWS::BedrockAgentCore::Runtime', {
+        EnvironmentVariables: Match.objectLike({ TRACE_AGENT_MODE: mode, TRACE_GPU_QUEUE: Match.anyValue(), TRACE_GPU_JOB_DEFINITION: 'trace-gpu', TRACE_GPU_BUCKET: Match.anyValue() }),
+      })
+    }
+    const api = policies.filter(([id]) => id.startsWith('ApiRuntimeRole')).map(([, x]) => x).join()
+    expect(api).toContain('cognito-idp:ListUsersInGroup')
+  })
+
+  it('creates none of the GPU side when gpu.enabled is false', () => {
+    const off = InfraPropsSchema.parse({ ...props, gpu: { enabled: false } })
+    const t2 = Template.fromStack(new TraceStack(new App(), 'NoGpu', off))
+    for (const r of ['AWS::Batch::ComputeEnvironment', 'AWS::Batch::JobQueue', 'AWS::Batch::JobDefinition', 'AWS::EC2::VPC']) t2.resourceCountIs(r, 0)
+    t2.resourceCountIs('AWS::CloudFormation::CustomResource', 1)
+    expect(JSON.stringify(t2.toJSON())).not.toContain('TRACE_GPU_QUEUE')
+    expect(Object.keys(t2.toJSON().Outputs as Record<string, unknown>)).not.toContain('GpuJobQueue')
+  }, 300_000)
+
   it('exports what the installer needs', () => {
     const outputs = Object.keys(t.toJSON().Outputs as Record<string, unknown>)
-    for (const o of ['TraceHome', 'GithubSecretArn', 'AgentRuntimeArn', 'ApiRuntimeArn', 'ActionsRoleArn', 'UserPoolId', 'UserPoolClientId', 'CognitoDomain']) expect(outputs).toContain(o)
+    for (const o of ['TraceHome', 'GithubSecretArn', 'AgentRuntimeArn', 'ApiRuntimeArn', 'ActionsRoleArn', 'UserPoolId', 'UserPoolClientId', 'CognitoDomain', 'GpuJobQueue', 'GpuJobDefinition']) expect(outputs).toContain(o)
   })
 })

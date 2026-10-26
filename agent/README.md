@@ -61,3 +61,36 @@ python3 with a venv holding the bridge (`/app/python[pdf]`), ngspice, iverilog, 
 `ppa:kicad/kicad-10.0-releases`. That PPA publishes arm64 builds for noble (10.0.7 as of 2026-10-26). If it can't be
 installed, the build falls back to Ubuntu's own `kicad`. The image runs as the non-root user `trace`, and its entry
 point is `node /app/dist/agent/main.js`.
+
+## The GPU job image
+
+AgentCore runtimes have no GPU, so heavy jobs go to AWS Batch: `runJob` (`src/gpu/jobs.ts`) runs a job here when
+this machine has a GPU (or the job does not want one), and otherwise, when `TRACE_GPU_QUEUE` is set, ships it with
+`runBatch` (`src/gpu/batch.ts`). The stack sets these on both runtimes:
+
+| variable | |
+|---|---|
+| `TRACE_GPU_QUEUE` | the Batch job queue's ARN |
+| `TRACE_GPU_JOB_DEFINITION` | the job definition's name (its latest revision is used) |
+| `TRACE_GPU_BUCKET` | the central bucket; jobs are staged under `jobs/<id>/` (`in/`, `out/`, `log/`, `exit`), expired after 7 days |
+| `TRACE_GPU_REMOTE` | optional: `always` ships every job, `never` runs every job here |
+| `TRACE_GPU_QUEUE_WAIT_S` | optional: how long a job may wait for an instance before it is terminated (default 1800 s) |
+
+`agent/Dockerfile.gpu` is built for linux/amd64 by CodeBuild (the same custom resource as the agent image) and
+pushed to the `<prefix>-gpu` ECR repository. It is based on `nvidia/cuda:12.9.2-runtime-ubuntu24.04` with
+`NVIDIA_DRIVER_CAPABILITIES=all` (OptiX needs the graphics libraries), and contains:
+
+- Node 22 and the trace dist; the job's command is `node /app/dist/gpu/runner.js`, which reads the spec from
+  `TRACE_GPU_JOB` (or `TRACE_GPU_JOB_URI`), downloads the inputs, runs the program, and uploads the outputs, both logs
+  and the exit record. `TRACE_GPU=1` is set, so a job inside never ships itself again.
+- Blender 5.2.3, the official build from download.blender.org (sha256-checked): Cycles on CUDA/OptiX, OpenImageDenoise,
+  and its bundled Python with numpy (glTF import).
+- Java 25 (Ubuntu's `openjdk-25-jre-headless`) and Freerouting 2.5.0 at `/opt/freerouting/freerouting.jar`
+  (sha256-checked). Freerouting is CPU-only; on the GPU host it uses the instance's cores.
+- OrthoRoute v1.0.0 (commit f2dd80c) at `/opt/orthoroute`, with a venv at `/opt/orthoroute/venv` holding numpy,
+  scipy, psutil and `cupy-cuda12x`. OrthoRoute is the router that uses the GPU.
+- KiCad 10 from the PPA: `kicad-cli`, and the `pcbnew` Python module for the Specctra DSN export and SES import.
+
+The compute environment uses the ECS Amazon Linux 2023 NVIDIA AMI on g6/g5/g4dn `.xlarge` instances, scales from
+0 vCPUs, and lives in a small VPC with public subnets only (no NAT gateway). Each job asks for 1 GPU, 4 vCPUs and
+14 GiB. Its role can read and write only the bucket's `jobs/` prefix.

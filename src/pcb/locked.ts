@@ -38,7 +38,7 @@ export function lockedItems(text: string): LockedItem[] {
     if (kind === 'via') {
       const at = sx.find(node, 'at')
       const layers = sx.find(node, 'layers')
-      out.push({ kind, key: `via|${net}|${r4(sx.atomAt(at, 1))},${r4(sx.atomAt(at, 2))}|${layers ? sx.atoms(layers).slice(1).join('-') : ''}` })
+      out.push({ kind, key: `via|${net}|${r4(sx.atomAt(at, 1))},${r4(sx.atomAt(at, 2))}|${layers ? sx.atoms(layers).join('-') : ''}` })
     } else {
       const s = sx.find(node, 'start')
       const e = sx.find(node, 'end')

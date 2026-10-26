@@ -33,6 +33,7 @@ import { Asset } from 'aws-cdk-lib/aws-s3-assets'
 import * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { Provider } from 'aws-cdk-lib/custom-resources'
 import type { Construct } from 'constructs'
+import { GpuCompute, JOBS_PREFIX } from './gpu.js'
 import { type InfraProps, runtimeName } from './props.js'
 
 /** The repository root, from dist/infra or src/infra. */
@@ -63,7 +64,11 @@ export class TraceStack extends Stack {
       enforceSSL: true,
       removalPolicy: keep,
       autoDeleteObjects: !cfg.retainData,
-      lifecycleRules: [{ noncurrentVersionExpiration: Duration.days(90) }],
+      lifecycleRules: [
+        { noncurrentVersionExpiration: Duration.days(90) },
+        // GPU job staging (src/gpu/protocol.ts): transient, kept a week for debugging
+        { prefix: `${JOBS_PREFIX}/`, expiration: Duration.days(7), noncurrentVersionExpiration: Duration.days(1) },
+      ],
     })
     const traceHome = `s3://${central.bucketName}/${CENTRAL_PREFIX}`
 
@@ -120,6 +125,18 @@ export class TraceStack extends Stack {
     for (const f of [start, poll]) f.addToRolePolicy(new iam.PolicyStatement({ actions: ['codebuild:StartBuild', 'codebuild:BatchGetBuilds'], resources: [build.projectArn] }))
     const provider = new Provider(this, 'ImageBuildProvider', { onEventHandler: start, isCompleteHandler: poll, queryInterval: Duration.seconds(30), totalTimeout: Duration.minutes(100) })
     const imageUri = `${repo.repositoryUri}:${source.assetHash}`
+
+    // ------------------------------------------------------------------ GPU jobs (AWS Batch), built the same way on amd64
+    const gpu = cfg.gpu.enabled
+      ? new GpuCompute(this, 'Gpu', {
+          prefix: cfg.prefix, instanceTypes: cfg.gpu.instanceTypes, maxVcpus: cfg.gpu.maxVcpus, spot: cfg.gpu.spot,
+          bucket: central, source, buildProvider: provider, retainData: cfg.retainData,
+          allowBuild: (arn) => { for (const f of [start, poll]) f.addToRolePolicy(new iam.PolicyStatement({ actions: ['codebuild:StartBuild', 'codebuild:BatchGetBuilds'], resources: [arn] })) },
+        })
+      : null
+    const gpuEnv: Record<string, string> = gpu
+      ? { TRACE_GPU_QUEUE: gpu.queue.jobQueueArn, TRACE_GPU_JOB_DEFINITION: gpu.jobDefinitionName, TRACE_GPU_BUCKET: central.bucketName }
+      : {}
     const image = new CustomResource(this, 'AgentImage', {
       serviceToken: provider.serviceToken,
       properties: { ProjectName: build.projectName, ImageUri: imageUri, SourceHash: source.assetHash },
@@ -182,6 +199,7 @@ export class TraceStack extends Stack {
         ANTHROPIC_MODEL: cfg.model,
         TRACE_WORKSPACE: '/mnt/workspace',
         TRACE_AGENT_MODE: 'worker',
+        ...gpuEnv,
       },
     })
     runtime.node.addDependency(workerRole)
@@ -257,14 +275,17 @@ export class TraceStack extends Stack {
         TRACE_COGNITO_POOL_ID: users.userPoolId,
         TRACE_COGNITO_CLIENT_ID: client.userPoolClientId,
         TRACE_COGNITO_ISSUER: `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}`,
+        ...gpuEnv,
       },
     })
     api.node.addDependency(apiRole)
     apiRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['cognito-idp:ListUsers', 'cognito-idp:AdminGetUser', 'cognito-idp:AdminListGroupsForUser', 'cognito-idp:AdminCreateUser',
+      actions: ['cognito-idp:ListUsers', 'cognito-idp:ListUsersInGroup', 'cognito-idp:AdminGetUser', 'cognito-idp:AdminListGroupsForUser', 'cognito-idp:AdminCreateUser',
         'cognito-idp:AdminAddUserToGroup', 'cognito-idp:AdminRemoveUserFromGroup'],
       resources: [users.userPoolArn],
     }))
+
+    if (gpu) for (const role of [workerRole, apiRole]) gpu.grantSubmit(role, central)
 
     // ------------------------------------------------------------------ the onboarded repositories' role (GitHub OIDC)
     const issuer = 'token.actions.githubusercontent.com'
@@ -301,5 +322,10 @@ export class TraceStack extends Stack {
     new CfnOutput(this, 'UserPoolId', { value: users.userPoolId })
     new CfnOutput(this, 'UserPoolClientId', { value: client.userPoolClientId })
     new CfnOutput(this, 'CognitoDomain', { value: domain.baseUrl() })
+    if (gpu) {
+      new CfnOutput(this, 'GpuJobQueue', { value: gpu.queue.jobQueueArn })
+      new CfnOutput(this, 'GpuJobDefinition', { value: gpu.jobDefinitionName })
+      new CfnOutput(this, 'GpuImageUri', { value: gpu.imageUri })
+    }
   }
 }

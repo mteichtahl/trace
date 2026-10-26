@@ -1,0 +1,91 @@
+# The trace GPU job image for AWS Batch (linux/amd64: Batch's GPU instances are x86 g-family).
+# Built by AWS CodeBuild from the CDK stack (src/infra/gpu.ts), with the repository root as the context:
+#   docker buildx build --platform linux/amd64 -f agent/Dockerfile.gpu .
+# Each Batch job runs `node /app/dist/gpu/runner.js` (src/gpu/runner.ts), which reads its spec from the environment,
+# fetches its inputs from S3, runs one program and sends the results back. See agent/README.md.
+#
+# Contents: CUDA 12.9 runtime (Ubuntu 24.04), Node 22, the official Blender build (Cycles CUDA/OptiX, OpenImageDenoise,
+# its own Python with numpy, glTF import), Java 25 + Freerouting, OrthoRoute with CuPy, KiCad 10 (kicad-cli and the
+# pcbnew Python module for Specctra DSN/SES), and the trace dist.
+FROM --platform=linux/amd64 nvidia/cuda:12.9.2-runtime-ubuntu24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG BLENDER_VERSION=5.2.3
+ARG BLENDER_SHA256=78486c018b4443efe5e75ab54c290ed8c15abafd249b862c2c9ce2530a918eec
+ARG FREEROUTING_VERSION=2.5.0
+ARG FREEROUTING_SHA256=f6f51bb02245e8e717f9359bd260cc9c5c0b1bc0acc8b7cb2cd5b8ffeb5de3c7
+# OrthoRoute v1.0.0 (MIT): the tag's commit, so a moved tag cannot change the image
+ARG ORTHOROUTE_COMMIT=f2dd80cab476e51836b5c5d60d5bffd4f11a7cf3
+
+# `all` gives the container the graphics and compute driver libraries, which OptiX needs (the default, compute+utility,
+# has CUDA only). NVIDIA_DISABLE_REQUIRE: the AMI's driver may report an older CUDA than this image's 12.9; Blender and
+# CuPy need only the driver (CUDA minor-version compatibility), so the toolkit's version gate is not wanted here.
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=UTC \
+    NVIDIA_VISIBLE_DEVICES=all NVIDIA_DRIVER_CAPABILITIES=all NVIDIA_DISABLE_REQUIRE=1
+
+# Base tools, Java 25 (Freerouting 2.x needs it) and the libraries the official Blender build links against.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl gnupg git xz-utils python3 python3-venv \
+      openjdk-25-jre-headless \
+      libxi6 libxxf86vm1 libxfixes3 libxrender1 libxkbcommon0 libsm6 libice6 libgl1 libegl1 libglu1-mesa libx11-6 libxext6 \
+ && java -version \
+ && rm -rf /var/lib/apt/lists/*
+
+# Node 22 (NodeSource) and KiCad 10 (ppa:kicad/kicad-10.0-releases, amd64 for noble): kicad-cli for DRC, and the pcbnew
+# Python module (in the kicad package, for the system python3) for the Specctra DSN export and SES import.
+RUN install -d -m 0755 /etc/apt/keyrings \
+ && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+ && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+ && curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xFDA854F61C4D0D9572BB95E5245D5502FAD7A805" | gpg --dearmor -o /etc/apt/keyrings/kicad.gpg \
+ && echo "deb [signed-by=/etc/apt/keyrings/kicad.gpg] https://ppa.launchpadcontent.net/kicad/kicad-10.0-releases/ubuntu noble main" > /etc/apt/sources.list.d/kicad-10.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends nodejs kicad kicad-footprints \
+ && kicad-cli version && python3 -c 'import pcbnew; print("pcbnew", pcbnew.Version())' \
+ && node --version \
+ && rm -rf /var/lib/apt/lists/*
+
+# Blender: the official build (not Ubuntu's): CUDA and OptiX kernels, OpenImageDenoise, its own Python with numpy.
+RUN curl -fsSL -o /tmp/blender.tar.xz "https://download.blender.org/release/Blender${BLENDER_VERSION%.*}/blender-${BLENDER_VERSION}-linux-x64.tar.xz" \
+ && echo "${BLENDER_SHA256}  /tmp/blender.tar.xz" | sha256sum -c - \
+ && mkdir -p /opt/blender && tar -xJf /tmp/blender.tar.xz -C /opt/blender --strip-components=1 && rm /tmp/blender.tar.xz \
+ && ln -s /opt/blender/blender /usr/local/bin/blender \
+ && blender --version \
+ && blender -b --python-expr 'import bpy, numpy; print("blender ok", bpy.app.version_string, "numpy", numpy.__version__)'
+
+# Freerouting (headless: --gui.enabled=false), CPU only: it uses the job host's cores.
+RUN mkdir -p /opt/freerouting \
+ && curl -fsSL -o /opt/freerouting/freerouting.jar "https://github.com/freerouting/freerouting/releases/download/v${FREEROUTING_VERSION}/freerouting-${FREEROUTING_VERSION}.jar" \
+ && echo "${FREEROUTING_SHA256}  /opt/freerouting/freerouting.jar" | sha256sum -c -
+
+# OrthoRoute: the source at the pinned commit, and a venv with what its headless mode imports plus CuPy for CUDA 12.
+# (Its GUI and KiCad-IPC dependencies, PyQt6 and kicad-python, are not needed: trace writes the .ORP itself.)
+RUN git clone --filter=blob:none https://github.com/bbenchoff/OrthoRoute /opt/orthoroute \
+ && git -C /opt/orthoroute checkout --detach "${ORTHOROUTE_COMMIT}" \
+ && rm -rf /opt/orthoroute/.git \
+ && python3 -m venv /opt/orthoroute/venv \
+ && /opt/orthoroute/venv/bin/pip install --no-cache-dir numpy==2.5.4 scipy==1.18.1 psutil==7.2.2 cupy-cuda12x==14.2.0 \
+ && /opt/orthoroute/venv/bin/python -c 'import numpy, scipy, psutil, cupy; print("orthoroute deps ok, cupy", cupy.__version__)'
+
+RUN useradd --create-home --uid 10001 --shell /bin/bash trace
+WORKDIR /app
+
+COPY package.json package-lock.json .npmrc ./
+RUN npm ci --ignore-scripts
+COPY . .
+RUN npm run build \
+ && npm prune --omit=dev \
+ && npm rebuild \
+ && test -f /app/dist/gpu/runner.js \
+ && chown -R trace:trace /app
+
+ENV TRACE_GPU=1 \
+    TRACE_FREEROUTING_JAR=/opt/freerouting/freerouting.jar \
+    TRACE_JAVA=java \
+    TRACE_ORTHOROUTE=/opt/orthoroute \
+    TRACE_ORTHOROUTE_PYTHON=/opt/orthoroute/venv/bin/python \
+    TRACE_KICAD_PYTHON=python3 \
+    HOME=/home/trace \
+    NODE_ENV=production
+
+USER trace
+CMD ["node", "/app/dist/gpu/runner.js"]

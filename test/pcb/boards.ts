@@ -115,6 +115,12 @@ export function bga(ref: string, x: number, y: number, n: number, pitch: number,
   return { ref, x, y, pads }
 }
 
+/** An n×n area array with every ball also on a connector beside it, so each net has two pads to join. */
+export function bgaWithFanout(n: number, pitch: number, prefix = 'B'): FpSpec[] {
+  const u = bga('U1', 20, 20, n, pitch, prefix)
+  return [u, header('J1', 2, 2, u.pads.map((p) => p.net as string), Math.min(0.35, 36 / (n * n)), { w: 0.2 })]
+}
+
 /** A single-row connector with pins on `nets`, at `pitch`. */
 export function header(ref: string, x: number, y: number, nets: readonly string[], pitch = 1.27, opts: { w?: number; kind?: 'smd' | 'thru_hole' } = {}): FpSpec {
   return { ref, x, y, pads: nets.map((net, i) => ({ num: String(i + 1), x: 0, y: Math.round(i * pitch * 1e4) / 1e4, w: opts.w ?? 0.6, h: opts.w ?? 0.6, net, kind: opts.kind ?? 'smd' })) }

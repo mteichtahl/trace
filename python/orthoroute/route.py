@@ -2,7 +2,7 @@
 
 OrthoRoute's own `main.py headless` uses its built-in geometry defaults and lets every layer pair carry a via. This
 shim runs that same entry point, but first hands the router the board's rules from the .ORP (track width, clearance,
-via size and drill) and, unless blind/buried vias are allowed, restricts it to through vias. A JSON report goes to
+via size and drill). --blind-buried is recorded in the report only: the via policy is applied by trace on import. A JSON report goes to
 --report. Run it with the Python that has OrthoRoute's dependencies (numpy, scipy, psutil; cupy for the GPU).
 
   python route.py --orthoroute /opt/orthoroute --orp core.ORP --ors core.ORS --report report.json \
@@ -69,10 +69,12 @@ original = up.UnifiedPathFinder.initialize_graph
 
 
 def initialize_graph(self, board):
+    # The lattice needs its layer-pair vias: restricted to whole-stack spans it routes nothing (tried with 1.0.0).
+    # So the router keeps them, and trace turns them into through vias on the way back in unless blind/buried vias
+    # are allowed (src/pcb/ors.ts), vetting every converted via against the other nets' copper.
     board._design_rules = dict(design_rules)
-    if not a.blind_buried and layer_count >= 2:
-        # every via spans the whole stack
-        self.config.allowed_via_spans = {(0, layer_count - 1)}
+    # 1.0.0's headless mode sets max_routing_iterations, which the router does not read; it reads max_iterations
+    self.config.max_iterations = a.max_iterations
     return original(self, board)
 
 
@@ -80,7 +82,7 @@ up.UnifiedPathFinder.initialize_graph = initialize_graph
 
 import main as ormain  # noqa: E402  (OrthoRoute's main.py)
 
-report.update(stage='route', layer_count=layer_count, design_rules=design_rules, through_vias_only=not a.blind_buried,
+report.update(stage='route', layer_count=layer_count, design_rules=design_rules, blind_buried_allowed=a.blind_buried,
               gpu=gpu, cpu_only=a.cpu_only or gpu is None)
 write_report()
 t0 = time.time()

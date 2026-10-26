@@ -44,6 +44,7 @@ export function infraInput(a: Answers): InfraInput {
     maxLifetimeSeconds: Math.round(a.agents.maxLifetimeHours * 3600),
     idleTimeoutSeconds: Math.round(a.agents.idleMinutes * 60),
     retainData: a.agents.retainData,
+    gpu: { enabled: a.agents.gpuEnabled, maxVcpus: a.agents.gpuMaxVcpus, spot: a.agents.gpuSpot },
     adminEmail: a.adminEmail,
   }
 }
@@ -56,7 +57,7 @@ export function plan(a: Answers): Step[] {
   const steps: [string, string, string][] = [
     ['check', 'Check the AWS account', `${a.aws.account} in ${a.aws.region}`],
     ['cdk', 'Bootstrap CDK', `aws://${a.aws.account}/${a.aws.region} (only if it isn't already)`],
-    ['deploy', `Deploy ${stack}`, `central bucket, GitHub secret, agent image (CodeBuild, arm64), two AgentCore runtimes (worker and API), Cognito, GitHub OIDC role for ${props.repositories.length} repositories`],
+    ['deploy', `Deploy ${stack}`, `central bucket, GitHub secret, agent image (CodeBuild, arm64), two AgentCore runtimes (worker and API), Cognito, GitHub OIDC role for ${props.repositories.length} repositories${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64)` : ''}`],
     ['token', 'Store the GitHub token', 'in the stack\'s Secrets Manager secret'],
     ['repos', 'Configure the repositories', `variables TRACE_AWS_ROLE, TRACE_AWS_REGION, TRACE_HOME, TRACE_AGENT_RUNTIME_ARN and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}`],
     ['onboard', 'Onboard the repositories', onboarding.length ? `open the onboarding PR in ${onboarding.join(', ')}` : 'none chosen'],

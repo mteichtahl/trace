@@ -29,6 +29,10 @@ export const AgentAnswers = z.object({
   createOidcProvider: z.boolean().default(true),
   centralBucketName: z.string().regex(/^([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])?$/, 'a valid S3 bucket name, or empty').default(''),
   retainData: z.boolean().default(true),
+  /** GPU jobs on AWS Batch (Blender renders, the PCB autorouters): AgentCore has no GPU */
+  gpuEnabled: z.boolean().default(true),
+  gpuMaxVcpus: z.number().int().min(4).max(4096).default(16),
+  gpuSpot: z.boolean().default(false),
 }).strict()
 
 export const ProjectAnswer = z.object({
