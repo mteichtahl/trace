@@ -17,6 +17,7 @@ export const emc: Specialist = {
     'emc.precheck', 'emc.setup', 'emc.run', 'emc.si', 'emc.spectrum',
     'calc.impedance', 'calc.trace_width', 'calc.via',
     'kicad.board', 'kicad.net',
+    'protocol.bus_analog', 'protocol.pullup',
   ],
   workflow: [
     'Recall earlier EMC sessions (memory_recall): limits the project targets (class A or B), mesh settings that were'
@@ -32,6 +33,10 @@ export const emc: Specialist = {
       + ' the ends; PML boundaries at a margin of at least a few substrate heights (MUR only for a quick look);'
       + ' fstop above the highest frequency of interest; mesh fine enough for the narrowest feature. State each'
       + ' boundary-condition and mesh choice and why. Then emc_run (local or the batch queue, by cell count).',
+    'Edge rates for the emission estimates come from the bus as built, not a guess: protocol_bus_analog with the'
+      + ' driver, the trace (transmission line from calc_impedance and the net length) and the load gives rise/fall'
+      + ' time, overshoot and ringing; an I2C pull-up that is stiffer than needed (protocol_pullup) makes edges faster'
+      + ' and emissions higher.',
     'emc_si on the S-parameters (or a Touchstone file in the tree): TDR impedance against the target with the'
       + ' tolerance, insertion loss against the budget, NEXT/FEXT between the named nets.',
     'Layout changes (stitching vias, moving a trace off a split, a guard, decoupling placement) are delegated'

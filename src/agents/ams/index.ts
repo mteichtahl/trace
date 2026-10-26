@@ -21,6 +21,7 @@ export const ams: Specialist = {
     'datasheets.acknowledge', 'datasheets.add', 'datasheets.find', 'datasheets.get', 'datasheets.history', 'datasheets.list',
     'datasheets.page_image', 'datasheets.params', 'datasheets.tables', 'datasheets.text',
     'parts.alternatives', 'parts.bom_check', 'parts.fetch_datasheet', 'parts.lookup', 'parts.search',
+    'protocol.bus_analog', 'protocol.pullup',
   ],
   workflow: [
     'Recall earlier analog sessions (memory_recall): spec sets, models that misbehaved, decisions on parts. Read the'
@@ -37,6 +38,10 @@ export const ams: Specialist = {
       + ' real load). Noise budgets: ams_noise over the band, with the top contributors.',
     'Yield: ams_montecarlo_yield with the parts\' real tolerances (from the BOM or datasheets), and its sensitivity'
       + ' ranking; report yield with its confidence interval and the number of runs.',
+    'Bus electrical level: protocol_pullup for an I2C pull-up range from VDD, VOL/IOL and the bus capacitance'
+      + ' (UM10204 equations; simulate it), and protocol_bus_analog for the bus as built (open drain, push-pull with the'
+      + ' trace, RS-232 levels): rise/fall against the mode limit, levels against VIL/VIH, and the receiver delays a'
+      + ' digital check needs. Report its run id with the RC closed form it was compared with.',
     'Mixed-signal: ams_mixed for an ADC front end with its digital consumer; state the model\'s limits (ideal ADC,'
       + ' cycle-based Verilog) in the report.',
     'Part changes: parts_lookup / parts_alternatives / parts_bom_check for availability, and the new part\'s'

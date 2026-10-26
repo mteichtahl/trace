@@ -10,6 +10,7 @@ import { tools as kb } from './kb/tools.js'
 import { tools as kicad } from './kicad/tools.js'
 import { tools as parts } from './parts/tools.js'
 import { tools as pcb } from './pcb/tools.js'
+import { tools as protocol } from './protocol/tools.js'
 import { tools as render } from './render/tools.js'
 import { tools as runs } from './runs/tools.js'
 import { tools as sim } from './sim/tools.js'
@@ -23,6 +24,6 @@ import { tools as thermal } from './thermal/tools.js'
 let registry: Registry | null = null
 
 export function allTools(): Registry {
-  registry ??= new Registry([...calc, ...kicad, ...sim, ...datasheets, ...parts, ...hil, ...firmware, ...runs, ...render, ...pcb, ...memory, ...ams, ...emc, ...verify, ...fpga, ...layout, ...thermal, ...kb, ...agent])
+  registry ??= new Registry([...calc, ...kicad, ...sim, ...datasheets, ...parts, ...hil, ...firmware, ...runs, ...render, ...pcb, ...memory, ...protocol, ...ams, ...emc, ...verify, ...fpga, ...layout, ...thermal, ...kb, ...agent])
   return registry
 }

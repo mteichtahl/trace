@@ -19,8 +19,11 @@ export const verify: Specialist = {
     'sim.spice', 'sim.sweep', 'sim.measure', 'sim.montecarlo', 'sim.kicad_spice', 'sim.logic',
     'sim.wave_read', 'sim.wave_decode', 'sim.wave_timing',
     'kicad.erc', 'kicad.drc',
+    'protocol.model', 'protocol.spec', 'protocol.spec_extract', 'protocol.check', 'protocol.compat', 'protocol.diagram',
+    'protocol.testbench', 'protocol.bus_analog',
   ],
   hardwareTools: [
+    'protocol.capture',
     'hil.ports', 'hil.idn', 'hil.psu', 'hil.dmm', 'hil.scope_capture', 'hil.scope_measure', 'hil.scpi',
     'hil.serial_capture', 'hil.serial_expect', 'hil.can_capture', 'hil.can_send',
   ],
@@ -37,6 +40,17 @@ export const verify: Specialist = {
       + ' (action=add). Prefer formal (verify_formal) for control logic and protocol invariants, a testbench'
       + ' (verify_cocotb or verify_verilator mode=run) for datapaths and sequences, sim_spice / sim_kicad_spice for'
       + ' analog limits, kicad_erc / kicad_drc for rule items.',
+    'Digital interfaces (I2C, SPI, UART/RS-232, CAN, 1-Wire, I2S): the device timing comes from its datasheet, never'
+      + ' from memory. protocol_spec action=get; when it is missing, protocol_spec_extract on the datasheet in the library,'
+      + ' read each candidate against its cited page and store the ones it states (protocol_spec action=set, citation'
+      + ' with part, sha256 and page). Generate the traffic with protocol_model (or use the sim_logic VCD of the HDL),'
+      + ' judge it with protocol_check against the spec, or the bus standard when there is none, and plan that check'
+      + ' as a verify_plan item (tool protocol.check, expect on the parameter margins). protocol_compat is the'
+      + ' initiator-to-responder budget; protocol_bus_analog gives real edges whose delays protocol_check applies'
+      + ' (analog_runs); protocol_testbench turns the model into a self-checking Verilog testbench for an HDL'
+      + ' peripheral (run with sim_logic, coverage from its TRACE_COVER lines); protocol_diagram draws the worst case'
+      + ' with its arrows, and spec mode draws the datasheet timing to compare. A real bus: protocol_capture, only'
+      + ' when it is offered (hardware).',
     'Reproduce first: for a failing check, run the failing test item or tool exactly as the check does (verify_run'
       + ' on those items, or the tool directly) and confirm you see the same failure before deciding anything.'
       + ' Lint RTL with verify_verilator mode=lint when a build fails.',
@@ -73,6 +87,6 @@ export const verify: Specialist = {
   keywords: [
     /\bverif(y|ication)\b/i, /\btest ?bench\b/i, /\bcocotb\b/i, /\bverilator\b/i, /\bformal\b/i, /\bsymbiyosys\b|\bsby\b/i,
     /\bcoverage\b/i, /\bassert(ion)?s?\b/i, /\brequirements?\b/i, /\btest plan\b/i, /\bregression\b/i, /\berc\b/i,
-    /\bfailing tests?\b/i, /\bsimulation fail/i,
+    /\bfailing tests?\b/i, /\bsimulation fail/i, /\b(i2c|spi|uart|rs-?232|1-wire|i2s)\b/i, /\btiming diagram/i, /\bprotocol\b/i,
   ],
 }

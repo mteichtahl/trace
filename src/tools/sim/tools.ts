@@ -20,6 +20,7 @@ import { decimate, evaluate, MeasureSpecSchema, round, type MeasureResult } from
 import { artifactNames, defaultCapture, Recorder, readArtifact } from './record.js'
 import { opTable, parseRaw, simulate, SpiceError, type Plot, type SimulateOptions, type SpiceRun } from './spice.js'
 import { corners, measureRun, montecarlo, stats, sweep, type PointResult, type Stat } from './sweep.js'
+import { canDecode, i2sDecode, onewireDecode, spiDecodeLanes } from './decode.js'
 import * as wave from './wave.js'
 
 // ------------------------------------------------------------------------------------------- shared inputs
@@ -470,7 +471,8 @@ const source = {
   vih: z.number().optional(),
 }
 
-async function loadCapture(a: { file?: string | undefined; run_id?: string | undefined; artifact?: string | undefined }, keep?: ReadonlySet<string>): Promise<wave.Capture> {
+/** A capture from a file, or from an earlier run's artifact (default: its only .vcd/.csv). Shared with protocol.*. */
+export async function loadCapture(a: { file?: string | undefined; run_id?: string | undefined; artifact?: string | undefined }, keep?: ReadonlySet<string>): Promise<wave.Capture> {
   if ((a.file === undefined) === (a.run_id === undefined)) throw new ToolError('give file, or run_id (+ artifact)')
   try {
     if (a.file !== undefined) return await wave.read(resolve(a.file), a.file, keep)
@@ -515,21 +517,26 @@ const fmtByte = (v: number | null): string | null => (v === null ? null : `0x${v
 
 export const waveDecodeTool = defineTool({
   name: 'sim.wave_decode',
-  description: 'Decode a protocol from a capture (file or run artifact): SPI (modes 0-3, CS, MSB/LSB, word size), I2C (START/STOP, address, R/W, ACK, data, UM10204 timing checked against standard/fast/fast_plus), UART (baud, data bits, parity, stop bits, inverted). Signals are given by role.',
+  description: 'Decode a protocol from a capture (file or run artifact): SPI (modes 0-3, CS, MSB/LSB, word size; dual/quad lanes io0..io3), I2C (START/STOP, address, R/W, ACK, data, UM10204 timing checked against standard/fast/fast_plus), UART (baud, data bits, parity incl. mark/space, stop bits, inverted), CAN 2.0A/B (stuffing, CRC-15, ACK; bitrate and sample point), 1-Wire (reset/presence, slots, standard or overdrive), I2S (i2s or left-justified). Signals are given by role. A decoder reports what it sees; protocol.check judges timing against a spec.',
   input: z.object({
     ...source,
-    protocol: z.enum(['spi', 'i2c', 'uart']),
-    signals: z.record(z.string(), z.string()).describe('role → signal: spi {sck, mosi?, miso?, cs?}; i2c {scl, sda}; uart {rx} (or tx)'),
+    protocol: z.enum(['spi', 'i2c', 'uart', 'can', 'onewire', 'i2s']),
+    signals: z.record(z.string(), z.string()).describe('role → signal: spi {sck, mosi?, miso?, cs?} or {sck, io0, io1, io2?, io3?, cs?} for dual/quad; i2c {scl, sda}; uart {rx} (or tx); can {can} (or rx); onewire {dq}; i2s {sck, ws, sd}'),
     mode: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]).optional().describe('SPI mode'),
-    bits: z.number().int().min(1).max(32).optional().describe('SPI word size (default 8)'),
+    bits: z.number().int().min(1).max(32).optional().describe('SPI word size (default 8); I2S word bits (default 16)'),
     lsb_first: z.boolean().optional(),
     cs_active_high: z.boolean().optional(),
     speed: z.enum(['standard', 'fast', 'fast_plus']).optional().describe('I2C: check the timing against this mode'),
     baud: z.number().positive().optional(),
     data_bits: z.number().int().min(5).max(9).optional(),
-    parity: z.enum(['none', 'even', 'odd']).optional(),
+    parity: z.enum(['none', 'even', 'odd', 'mark', 'space']).optional(),
     stop_bits: z.union([z.literal(1), z.literal(1.5), z.literal(2)]).optional(),
     invert: z.boolean().optional(),
+    bitrate: z.number().positive().optional().describe('CAN bit rate'),
+    sample_point: z.number().gt(0).lt(1).optional().describe('CAN sample point (default 0.875)'),
+    sjw: z.number().int().min(1).max(16).optional().describe('CAN resynchronisation limit in 1/16 bit (default 1)'),
+    onewire_speed: z.enum(['standard', 'overdrive']).optional(),
+    format: z.enum(['i2s', 'left_justified']).optional().describe('I2S format'),
     from: z.number().optional().describe('start time (s)'),
     to: z.number().optional().describe('end time (s)'),
     limit: z.number().int().min(1).max(5000).optional().describe('items returned (default 100)'),
@@ -541,6 +548,47 @@ export const waveDecodeTool = defineTool({
     const inWin = (t: number): boolean => (a.from === undefined || t >= a.from) && (a.to === undefined || t <= a.to)
     return wrap(() => {
       const s = wave.remap(c, a.signals, lv)
+      if (a.protocol === 'spi' && s.io0) {
+        if (!s.sck || !s.io1) throw new ToolError('dual/quad spi needs signals.sck, io0 and io1 (and io2, io3 for quad)')
+        const io = [s.io0, s.io1, ...(s.io2 && s.io3 ? [s.io2, s.io3] : [])]
+        const tx = spiDecodeLanes({ sck: s.sck, io, cs: s.cs }, { mode: a.mode, bits: a.bits, lsbFirst: a.lsb_first, csActiveHigh: a.cs_active_high }).filter((t) => inWin(t.start))
+        return {
+          protocol: 'spi', lanes: io.length, mode: a.mode ?? 0, transfers: tx.length, words: tx.reduce((n, t) => n + t.words.length, 0),
+          items: tx.slice(0, limit).map((t) => ({ t: round(t.start), end: round(t.end), io: t.words.map(fmtByte), ...(t.leftover_bits ? { leftover_bits: t.leftover_bits } : {}) })),
+          ...(tx.length > limit ? { truncated: `${tx.length} transfers, ${limit} shown` } : {}),
+        }
+      }
+      if (a.protocol === 'can') {
+        const line = s.can ?? s.rx ?? s.tx
+        if (!line) throw new ToolError('can needs signals.can (or rx)')
+        if (a.bitrate === undefined) throw new ToolError('can needs bitrate')
+        const fr = canDecode(line, { bitrate: a.bitrate, samplePoint: a.sample_point, sjw: a.sjw }, c.end).filter((f) => inWin(f.t))
+        return {
+          protocol: 'can', bitrate: a.bitrate, frames: fr.length, errors: fr.filter((f) => f.errors.length).length,
+          items: fr.slice(0, limit).map((f) => ({ t: round(f.t), id: f.id === null ? null : `0x${f.id.toString(16)}`, extended: f.extended, rtr: f.rtr, dlc: f.dlc, data: f.data.map(fmtByte), crc: f.crc === null ? null : `0x${f.crc.toString(16)}`, crc_ok: f.crc_ok, ack: f.ack, stuff_bits: f.stuff_bits, ...(f.errors.length ? { errors: f.errors } : {}) })),
+          ...(fr.length > limit ? { truncated: `${fr.length} frames, ${limit} shown` } : {}),
+        }
+      }
+      if (a.protocol === 'onewire') {
+        const dq = s.dq ?? s.line
+        if (!dq) throw new ToolError('onewire needs signals.dq')
+        const d = onewireDecode(dq, { speed: a.onewire_speed })
+        const ev = d.events.filter((e) => inWin(e.t))
+        const timing: Record<string, number | null> = {}
+        for (const [k, v] of Object.entries(d.timing)) timing[k] = v ? round(v[0]) : null
+        return {
+          protocol: 'onewire', speed: a.onewire_speed ?? 'standard', resets: ev.filter((e) => e.kind === 'reset').length, bytes: ev.filter((e) => e.kind === 'byte').length,
+          items: ev.slice(0, limit).map((e) => ({ t: round(e.t), kind: e.kind, ...(e.kind === 'reset' ? { presence: e.presence } : { value: fmtByte(e.value ?? null), ...(e.bits ? { partial_bits: e.bits } : {}) }) })),
+          ...(ev.length > limit ? { truncated: `${ev.length} events, ${limit} shown` } : {}),
+          timing,
+        }
+      }
+      if (a.protocol === 'i2s') {
+        if (!s.sck || !s.ws || !s.sd) throw new ToolError('i2s needs signals.sck, ws and sd')
+        const d = i2sDecode({ sck: s.sck, ws: s.ws, sd: s.sd }, { wordBits: a.bits ?? 16, format: a.format })
+        const fr = d.frames.filter((f) => inWin(f.t))
+        return { protocol: 'i2s', format: a.format ?? 'i2s', word_bits: a.bits ?? 16, frames: fr.length, items: fr.slice(0, limit).map((f) => ({ t: round(f.t), left: f.left, right: f.right })), ...(fr.length > limit ? { truncated: `${fr.length} frames, ${limit} shown` } : {}) }
+      }
       if (a.protocol === 'spi') {
         if (!s.sck) throw new ToolError('spi needs signals.sck')
         const tx = wave.spiDecode({ sck: s.sck, mosi: s.mosi, miso: s.miso, cs: s.cs }, { mode: a.mode, bits: a.bits, lsbFirst: a.lsb_first, csActiveHigh: a.cs_active_high }, c.end).filter((t) => inWin(t.start))
