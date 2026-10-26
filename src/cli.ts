@@ -33,6 +33,7 @@ import { doctor } from './core/doctor.js'
 import { serve } from './core/mcp.js'
 import { OnboardError, SCAFFOLDS, type Scaffold, createNew, onboard, projects } from './core/onboard.js'
 import { ToolError } from './core/registry.js'
+import { flush } from './core/telemetry.js'
 import { Work, transaction } from './core/store.js'
 import { allTools } from './tools.js'
 import { cmdConnect, cmdLogin, cmdLogout, cmdRemote, cmdUsers, cmdWhoami } from './login/commands.js'
@@ -285,7 +286,9 @@ async function main(argv: string[]): Promise<number> {
   return 2
 }
 
-main(process.argv.slice(2)).then((code) => { process.exitCode = code }, (e: unknown) => {
+// flush(): spans buffered by an OpenTelemetry SDK, when one was loaded (README "Observability"); otherwise nothing
+main(process.argv.slice(2)).then(async (code) => { await flush(); process.exitCode = code }, async (e: unknown) => {
+  await flush()
   if (e instanceof ToolError || e instanceof ConfigError || e instanceof OnboardError) { err(`trace: ${e.message}`); process.exitCode = 1; return }
   throw e
 })

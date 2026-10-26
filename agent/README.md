@@ -49,6 +49,9 @@ under `/mnt/workspace`, where they are kept and fetched next time.
 | `TRACE_WORKSPACE` | optional; clones go here (default `/mnt/workspace/trace` when mounted, else `/tmp/trace-work`) |
 | `TRACE_AGENT_MODE` | `worker` (default) or `api` |
 | `TRACE_JOB_TIMEOUT_S` | optional; Claude's time limit per job (default 27000 s, capped at 28200 s) |
+| `AGENT_OBSERVABILITY_ENABLED` | `true` (set by the stack): ADOT exports for AgentCore observability. AgentCore Runtime itself supplies `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_EXPORTER_OTLP_LOGS_HEADERS` and the rest of ADOT's defaults; the agent logs one `telemetry:` line at start saying whether they are there |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `false` (set by the stack): no prompts or completions on spans |
+| `DISABLE_ADOT_OBSERVABILITY`, `OTEL_SDK_DISABLED` | `true` (set by the stack when `observability.enabled` is false): no telemetry |
 
 The workflows need these repository variables: `TRACE_AWS_ROLE` (allowed `bedrock-agentcore:InvokeAgentRuntime`),
 `TRACE_AWS_REGION` and `TRACE_AGENT_RUNTIME_ARN`.
@@ -60,7 +63,9 @@ CDK stack, so no local Docker is needed. It contains Ubuntu 24.04, Node 22 (Node
 python3 with a venv holding the bridge (`/app/python[pdf]`), ngspice, iverilog, poppler-utils, ffmpeg, Blender (Ubuntu's package; Cycles renders on the CPU, and the bpy scripts are in `/app/python/blender`, copied in with the repository), and KiCad 10 from
 `ppa:kicad/kicad-10.0-releases`. That PPA publishes arm64 builds for noble (10.0.7 as of 2026-10-26). If it can't be
 installed, the build falls back to Ubuntu's own `kicad`. The image runs as the non-root user `trace`, and its entry
-point is `node /app/dist/agent/main.js`.
+point is `node --require …/aws-distro-opentelemetry-node-autoinstrumentation/build/src/register.js /app/dist/agent/main.js`:
+ADOT registers the OpenTelemetry SDK first (README "Observability"). The job hands the trace MCP server its trace
+context (`TRACEPARENT`) and the same `--require`, so tool calls join the job's trace.
 
 ## The GPU job image
 

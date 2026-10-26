@@ -82,12 +82,20 @@ export async function start(opts: { port?: number; host?: string; jobs?: Jobs } 
   await new Promise<void>((res) => server.listen(port, opts.host ?? '0.0.0.0', res))
   process.stdout.write(`trace agent listening on ${opts.host ?? '0.0.0.0'}:${port}\n`)
   let stopping = false
+  // ADOT (loaded with --require) shuts the OpenTelemetry SDK down as soon as SIGTERM arrives, which would drop the
+  // spans of the jobs that end during the grace period. Its listener, and any other registered before this one, run
+  // after the jobs have reported and the telemetry has been flushed.
+  const earlier = process.listeners('SIGTERM')
+  for (const l of earlier) process.removeListener('SIGTERM', l)
   const stop = (sig: string): void => {
     if (stopping) return
     stopping = true
     process.stdout.write(`${sig}: stopping the running jobs\n`)
     server.close()
-    void jobs.shutdown(20_000).then(() => flush()).finally(() => process.exit(0))
+    void jobs.shutdown(20_000)
+      .then(() => flush())
+      .then(() => { for (const l of earlier) { try { l('SIGTERM') } catch { /* theirs */ } } })
+      .finally(() => process.exit(0))
   }
   process.once('SIGTERM', () => stop('SIGTERM'))
   process.once('SIGINT', () => stop('SIGINT'))

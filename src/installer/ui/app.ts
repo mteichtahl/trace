@@ -394,7 +394,11 @@ async function boot(): Promise<void> {
       s.aws.mode = saved.aws.mode ?? 'profile'
       s.aws.profile = saved.aws.profile ?? 'default'
       s.aws.region = saved.aws.region
-      Object.assign(s.agents, { ...saved.agents, escalateTo: saved.escalateTo ?? '' })
+      Object.assign(s.agents, {
+        ...saved.agents, escalateTo: saved.escalateTo ?? '',
+        // the page keeps the percentage as the field's text ('' = leave the account's setting)
+        samplingPercent: saved.agents.samplingPercent === null || saved.agents.samplingPercent === undefined ? '' : String(saved.agents.samplingPercent),
+      })
       for (const p of saved.projects) s.projects.set(p.repo, { branch: p.branch ?? 'main', onboard: p.onboard ?? true, applySettings: p.applySettings ?? true })
       s.adminEmail = saved.adminEmail
       s.people = (saved.people ?? []).map((p) => ({ email: p.email, class: p.class ?? 'user', projects: new Set(p.projects ?? []) }))

@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { S3Backend, type S3Api } from '../core/central.js'
-import { ATTR, SpanKind, fail, flush, setAttrs, span, startSdkIfConfigured } from '../core/telemetry.js'
+import { ATTR, SpanKind, continueFromEnv, envContext, fail, flush, setAttrs, span, startSdkIfConfigured } from '../core/telemetry.js'
 import { substitute } from './jobs.js'
 import { decodeSpec, jobKeys, type ExitRecord, type RemoteSpec } from './protocol.js'
 
@@ -104,17 +104,19 @@ export async function main(deps: RunnerDeps = {}): Promise<number> {
  */
 export async function observedMain(deps: RunnerDeps = {}): Promise<number> {
   const env = deps.env ?? process.env
+  const parent = envContext(env)
   const kind = (() => { try { return env.TRACE_GPU_JOB ? decodeSpec(env.TRACE_GPU_JOB).kind : 'job' } catch { return 'job' } })()
   return span(`trace.gpu.run ${kind}`, { [ATTR.gpuKind]: kind, [ATTR.gpuBackend]: 'batch' }, async (s) => {
     const code = await main(deps)
     setAttrs(s, { [ATTR.gpuExitCode]: code, [ATTR.outcome]: code === 0 ? 'ok' : 'error' })
     if (code !== 0) fail(s, new Error(`exit code ${code}`), 'exit_code')
     return code
-  }, { kind: SpanKind.CONSUMER })
+  }, { kind: SpanKind.CONSUMER, ...(parent ? { parent } : {}) })
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   // ADOT starts only when the job definition names an OTLP endpoint (the stack does, with observability on).
+  continueFromEnv()
   void startSdkIfConfigured()
     .then(() => observedMain())
     .then(async (code) => { await flush(); process.exit(code) }, async (e: unknown) => {

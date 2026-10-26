@@ -19,7 +19,9 @@ import { ToolError } from '../core/registry.js'
 import { ATTR, type Outcome, fail, recordMetric, setAttrs, span } from '../core/telemetry.js'
 import { scratchDir } from '../core/store.js'
 
-export const JobKind = z.enum(['blender', 'freerouting', 'orthoroute'])
+export const JobKind = z.enum(['blender', 'freerouting', 'orthoroute',
+  // CPU jobs (gpu: false, so local unless TRACE_GPU_REMOTE=always): verification and FPGA implementation
+  'verilator', 'cocotb', 'formal', 'yosys', 'nextpnr', 'fpga-pack'])
 export type JobKind = z.output<typeof JobKind>
 
 export const GpuJobSchema = z.object({

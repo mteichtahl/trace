@@ -11,6 +11,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { type AnyTool, Registry, ToolError } from './registry.js'
+import { continueFromEnv, flush } from './telemetry.js'
 
 export const VERSION = '0.1.0'
 export const mcpName = (name: string): string => name.replaceAll('.', '_')
@@ -63,5 +64,9 @@ export function server(registry: Registry): Server {
 }
 
 export async function serve(registry: Registry): Promise<void> {
+  // Under Claude on AgentCore the job passes its trace context (TRACEPARENT): the tool spans join the job's trace,
+  // and what is buffered is pushed when Claude closes the pipe (src/core/telemetry.ts; no-op without an SDK).
+  continueFromEnv()
+  process.stdin.once('end', () => { void flush() })
   await server(registry).connect(new StdioServerTransport())
 }

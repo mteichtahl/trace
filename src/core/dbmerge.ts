@@ -7,6 +7,7 @@
  * (the result is written back into it) and theirs.
  *
  *   runs, measurements, artifacts   union: their rows that ours lacks are added (keys are UUIDs, so nothing collides)
+ *   registered tables                each area's own merge SQL (store.ensureProjectSchema), else a union
  *   settings                         three-way per key: a key only they changed takes theirs; one only we changed keeps
  *                                    ours; one both changed to different values is a CONFLICT — ours is kept, the key
  *                                    is listed, and the driver exits 1 so git reports the conflict.
@@ -15,7 +16,7 @@
  */
 import { existsSync, statSync } from 'node:fs'
 import type { DatabaseSync } from 'node:sqlite'
-import { PROJECT_SCHEMA, open, transaction } from './store.js'
+import { PROJECT_SCHEMA, open, projectTables, transaction } from './store.js'
 
 interface Setting { value: string; updated: number; by: string | null }
 
@@ -27,6 +28,7 @@ function settings(db: DatabaseSync): Map<string, Setting> {
 function opened(path: string): DatabaseSync {
   const db = open(path, { wal: false })
   db.exec(PROJECT_SCHEMA)
+  for (const t of projectTables()) db.exec(t.sql)
   return db
 }
 
@@ -59,6 +61,8 @@ export function merge(base: string, ours: string, theirs: string): string[] {
       o.exec('INSERT OR IGNORE INTO runs SELECT * FROM theirs.runs')
       o.exec('INSERT OR IGNORE INTO measurements SELECT * FROM theirs.measurements')
       o.exec('INSERT OR IGNORE INTO artifacts SELECT * FROM theirs.artifacts')
+      // tables areas register (store.ensureProjectSchema): their own merge SQL, else a union
+      for (const tb of projectTables()) o.exec(tb.merge ?? `INSERT OR IGNORE INTO ${tb.table} SELECT * FROM theirs.${tb.table}`)
     })
     o.exec('DETACH DATABASE theirs')
     o.exec('VACUUM')

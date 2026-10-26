@@ -128,9 +128,33 @@ CREATE TABLE IF NOT EXISTS artifacts (
 );
 `
 
+/**
+ * Tables an area adds to the project database (CREATE … IF NOT EXISTS), applied after PROJECT_SCHEMA wherever the
+ * project database is opened. `merge` is the SQL `trace db merge` runs for the table, with their database attached
+ * as `theirs` (e.g. an upsert keeping the newer row); without it a registered table is merged as a union
+ * (INSERT OR IGNORE: on a key both sides have, ours is kept).
+ */
+export interface ProjectTable { readonly table: string; readonly sql: string; readonly merge?: string }
+
+const PROJECT_TABLES = new Map<string, ProjectTable>()
+
+export function ensureProjectSchema(t: ProjectTable): void {
+  PROJECT_TABLES.set(t.table, t)
+}
+
+/** The registered tables, in registration order. */
+export function projectTables(): ProjectTable[] {
+  return [...PROJECT_TABLES.values()]
+}
+
+function applyProjectSchema(db: DatabaseSync): void {
+  db.exec(PROJECT_SCHEMA)
+  for (const t of PROJECT_TABLES.values()) db.exec(t.sql)
+}
+
 export function openProject(root?: string): DatabaseSync {
   const db = open(projectPath(root), { wal: false })
-  db.exec(PROJECT_SCHEMA)
+  applyProjectSchema(db)
   return db
 }
 
@@ -176,7 +200,7 @@ export class Work {
 
   constructor(path?: string) {
     this.db = open(path ?? projectPath(), { wal: false })
-    this.db.exec(PROJECT_SCHEMA)
+    applyProjectSchema(this.db)
   }
 
   start(kind: string, opts: { subject?: string; args?: unknown; gitSha?: string } = {}): string {

@@ -207,6 +207,16 @@ export function traceEnv(ctx: Context = context.active()): Record<string, string
 }
 
 let envParent: { key: string; ctx: Context } | null = null
+let inheritEnv = false
+
+/**
+ * Let this process continue the trace its parent passed in TRACEPARENT/BAGGAGE when nothing is active: the trace
+ * MCP server under Claude, the GPU runner. Off by default, so a TRACEPARENT a process merely inherited (a CI runner,
+ * a developer's shell) never captures its spans.
+ */
+export function continueFromEnv(on = true): void {
+  inheritEnv = on
+}
 
 /** The parent this process was given in TRACEPARENT/BAGGAGE (the MCP server under Claude, a GPU job), if any. */
 export function envContext(env: NodeJS.ProcessEnv = process.env): Context | null {
@@ -221,11 +231,11 @@ export function envContext(env: NodeJS.ProcessEnv = process.env): Context | null
   return envParent.ctx
 }
 
-/** The active context, or the process's TRACEPARENT parent when nothing is active. */
+/** The active context, or (after continueFromEnv) the process's TRACEPARENT parent when nothing is active. */
 export function parentContext(): Context {
   const active = context.active()
   if (trace.getSpan(active)) return active
-  const fromEnv = envContext()
+  const fromEnv = inheritEnv ? envContext() : null
   if (!fromEnv) return active
   // keep any baggage set in-process on top of the inherited one
   const bag = propagation.getBaggage(active)

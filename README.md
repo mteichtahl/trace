@@ -201,6 +201,72 @@ tokens and keys and is bounded in size (8000 characters per event, 12 tool outco
   records to namespaces under `/trace/`. One role serves every project, so the line between projects is drawn by the
   client.
 
+## Observability
+
+Both AgentCore runtimes start Node with the AWS Distro for OpenTelemetry (ADOT) auto-instrumentation
+(`node --require …/aws-distro-opentelemetry-node-autoinstrumentation/…/register.js`, in `agent/Dockerfile`). AgentCore
+Runtime supplies its OpenTelemetry settings: the service name, the runtime's log group, and the headers that send
+metrics to the `bedrock-agentcore` namespace. Spans go to X-Ray, which stores them in CloudWatch Logs (Transaction
+Search). Metrics go to CloudWatch as EMF. The code records through the OpenTelemetry API only (`src/core/telemetry.ts`),
+so with no SDK loaded (the CLI, local runs, tests) nothing is recorded and nothing changes.
+
+| Span | Where | What it carries |
+| --- | --- | --- |
+| `invoke_agent trace-worker` / `trace-api` | each `POST /invocations` | the invocation kind or API action, the repository, the outcome; it continues the caller's trace (`traceparent`, `X-Amzn-Trace-Id`) and puts the AgentCore session id into baggage `session.id`, so every span below has it |
+| `trace.job <kind>` | each job | job id, kind, repository, agent (`worker`, `ci-doctor`, `conflict`, `render`), the item, who asked (a hash), the outcome |
+| `claude.query` | each Agent SDK run | model, Claude's session id, turns, tokens (input, output, cache read and creation), the SDK's cost estimate |
+| `chat <model>` | each model response | model, response id, finish reason, the tools it asked for |
+| `execute_tool <name>` | each tool Claude used, and each call through the tool registry (the MCP server continues the job's trace) | tool name, where the call came from, the hardware flag, argument names and sizes, result size, duration, outcome |
+| `trace.gpu_job <kind>`, `trace.gpu.run <kind>` | each GPU job, and its runner inside AWS Batch (continued from `TRACEPARENT`) | kind, backend, job ids, seconds, exit code |
+
+Metrics: `trace.invocations`, `trace.jobs` and `trace.job.duration`, `trace.tool.calls`, `trace.tool.errors` and
+`trace.tool.duration`, `gen_ai.client.token.usage` (by token type and model), `trace.claude.cost`, and
+`trace.gpu.jobs` and `trace.gpu.duration`. Their dimensions are kinds, agents, tool names and outcomes, never ids.
+
+What is never recorded: prompts, tool arguments and results, file contents, tokens or keys, and email addresses. A
+person is a 16-character sha256 of their email, the same hash the agents' memory uses. Every attribute also passes a
+guard that truncates it and replaces anything shaped like a credential.
+
+The stack (settings `observability.*`, chosen in the installer's Agents step) adds the following:
+
+- **CloudWatch Transaction Search**, turned on by a custom resource if it is off. It is account-wide. An account that
+  already has it is left alone, and deleting the stack never turns it off. `observability.samplingPercent` sets X-Ray's
+  trace-indexing rule. When it is unset, the account's own setting is kept (1% unless someone changed it). Every span
+  is stored either way.
+- The runtime roles' telemetry permissions, which match the AgentCore execution role. Each role can also put the
+  resource policy on its own log group.
+- The memory's `APPLICATION_LOGS`, delivered to a log group, and its `TRACES`, delivered to X-Ray.
+- X-Ray's OTLP endpoint in the GPU job definition.
+- The `<prefix>-agents` dashboard: invocations, latency, errors, jobs, tokens, cost, tool calls and GPU jobs.
+
+The stack outputs `DashboardUrl`, `GenAiObservabilityUrl`, `WorkerLogGroup`, `ApiLogGroup`, `SpansLogGroup` and
+`MemoryLogGroup`. When `observability.enabled` is false, the runtimes get `DISABLE_ADOT_OBSERVABILITY=true` and
+`OTEL_SDK_DISABLED=true`, and nothing else is created.
+
+**In CloudWatch GenAI Observability** (CloudWatch → GenAI Observability → Bedrock AgentCore), the two runtimes appear
+as agents with their sessions, traces, latency, errors and token use. A session is one AgentCore runtime session. For
+the worker, that is one work item at one head (`trace-<owner>-<repo>-<number>-<sha12>`, from `src/agent/dispatch.ts`).
+Its trace runs from the invocation through the job and Claude's turns down to each tool call, MCP tools included, and
+any GPU job.
+
+**To see one session's trace:** open the worker agent in GenAI Observability, choose **Sessions**, and pick the
+session id. Alternatively, in CloudWatch → Transaction Search, filter spans on `session.id` (or on `trace.job.id`, the
+job id the agent puts in its comment on the issue or PR), then open the trace.
+
+**Locally, or with another OTLP backend:** load the same register module and point the standard OTLP variables at any
+OTLP/HTTP collector on port 4318 (the OpenTelemetry Collector, Jaeger, Grafana Tempo):
+
+```sh
+OTEL_SERVICE_NAME=trace-local OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_NODE_RESOURCE_DETECTORS=env \
+  node --require @aws/aws-distro-opentelemetry-node-autoinstrumentation/register dist/cli.js tool calc.divider vin=12 vout=3.3
+```
+
+This sends the tool call's span and its metrics over OTLP. Keep `OTEL_NODE_RESOURCE_DETECTORS=env`: ADOT's default
+detectors would record the process's command line, arguments included, as a resource attribute. Leave
+`AGENT_OBSERVABILITY_ENABLED` unset there, because it switches ADOT to the AWS endpoints. To run the agent image
+outside AgentCore, either set `OTEL_SDK_DISABLED=true` or give it the variables above. Setting
+`DISABLE_ADOT_OBSERVABILITY=true` on a runtime turns off AgentCore's defaults, so you can send its telemetry elsewhere.
+
 ## Layout
 
 | Path | What |
