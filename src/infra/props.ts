@@ -7,7 +7,7 @@ import { z } from 'zod'
 import { projectHash, projectSlug } from '../core/project.js'
 
 export {
-  cpuJobDefinitionName, gpuJobDefinitionName, githubSecretName, knowledgeBaseName, memoryDeliveryName, memoryName, projectDataPrefix, projectHash, projectJobsPrefix,
+  connectionName, cpuJobDefinitionName, gpuJobDefinitionName, githubSecretName, knowledgeBaseName, memoryDeliveryName, memoryName, projectDataPrefix, projectHash, projectJobsPrefix,
   projectKbPrefix, projectSlug, workerRuntimeName,
 } from '../core/project.js'
 
@@ -87,7 +87,7 @@ export const InfraPropsSchema = z.object({
    * (subject `repo:OWNER/REPO:ref:refs/heads/BRANCH`). At most 60: the API runtime is told every worker runtime, and
    * every project's memory, in one environment variable each (5000 characters; checked when the stack is built). With
    * layout 'nested' each project is its own nested stack (one resource and no output of the parent's), so 60 fit; with
-   * layout 'flat' CloudFormation's 500 resources and 200 outputs per stack bind at about 24 projects (checked when the
+   * layout 'flat' CloudFormation's 500 resources and 200 outputs per stack bind at about 20 projects (checked when the
    * stack is built). */
   repositories: z.array(repoSlug).min(1).max(60).superRefine((rs, ctx) => {
     const seen = new Map<string, string>()
@@ -131,7 +131,7 @@ export const InfraPropsSchema = z.object({
    * of x86 CPU instances beside the GPU one, running the same image (src/infra/gpu.ts), with one CPU job definition
    * per project and that project's job role. It shares the GPU side's image, network and execution role, so it exists
    * only with gpu.enabled; and only in layout 'nested', because its job definition is one more resource per project
-   * and a flat stack of 24 projects has no room for it (cpuEnabled below). */
+   * and a flat stack of 20 projects has no room for it (cpuEnabled below). */
   cpu: z.object({
     enabled: z.boolean().default(true),
     /** x86 instance families or types, tried in order of fit */
@@ -158,7 +158,7 @@ export const InfraPropsSchema = z.object({
   }).strict().prefault({}),
   /** Each project's knowledge base (src/infra/knowledge.ts): a Bedrock knowledge base over projects/<slug>/kb/ in the
    * central bucket, its vectors in an S3 Vectors index of the installation's one vector bucket. Only in layout
-   * 'nested' (kbEnabled below): a flat stack of 24 projects has no room for five more resources per project. */
+   * 'nested' (kbEnabled below): a flat stack of 20 projects has no room for five more resources per project. */
   knowledgeBase: KnowledgeBaseSchema.prefault({}),
   /** Where each project's resources live (README "Project isolation"). 'nested': one CloudFormation nested stack per
    * project, so the parent carries one resource per project. 'flat': every project's resources in the one stack, as
@@ -177,6 +177,25 @@ export const InfraPropsSchema = z.object({
    * default: with it off every tool runs in the worker, as before. */
   gateway: z.object({
     enabled: z.boolean().default(false),
+  }).strict().prefault({}),
+  /** Where every GitHub Actions job of every project runs: an AWS CodeBuild runner project per repository
+   * (src/infra/runner.ts), never a GitHub-hosted runner. CodeBuild reaches GitHub through an AWS CodeConnections
+   * connection (the AWS Connector for GitHub app), so no GitHub token is stored for it. */
+  runners: z.object({
+    /** An existing connection to reuse; unset: the stack creates `<prefix>-github` (connectionName) itself. Either
+     * way its ARN is the stack's CONNECTION_OUTPUT. */
+    connectionArn: z.string().regex(/^arn:aws[a-z-]*:(codeconnections|codestar-connections):[a-z0-9-]+:\d{12}:connection\/[0-9a-f-]{36}$/, 'an AWS CodeConnections connection ARN').optional(),
+    /** Whether the connection is authorized (AVAILABLE), so the runner projects can be made. A new connection is
+     * PENDING until a person authorizes it once in the AWS console, and CodeBuild cannot make a runner's webhook
+     * against a pending one, so the tools deploy with false first (the connection, no runners), wait for the person,
+     * and deploy again with true. True by default, so a plain `cdk deploy` never removes runners that exist. */
+    connectionReady: z.boolean().default(true),
+    /** the CodeBuild compute type of a job (a job can ask for another with an `instance-size:` label) */
+    computeType: z.enum(['BUILD_GENERAL1_MEDIUM', 'BUILD_GENERAL1_LARGE', 'BUILD_GENERAL1_XLARGE', 'BUILD_GENERAL1_2XLARGE']).default('BUILD_GENERAL1_LARGE'),
+    /** the CodeBuild image jobs run on (Ubuntu, like the GitHub-hosted runners the workflows were written for) */
+    image: z.string().min(3).default('aws/codebuild/standard:7.0'),
+    /** Docker-in-Docker for jobs that build containers */
+    privileged: z.boolean().default(false),
   }).strict().prefault({}),
   /** AgentCore observability: OpenTelemetry (ADOT) traces and metrics to CloudWatch (src/infra/observability.ts). */
   observability: z.object({
@@ -272,11 +291,11 @@ export const cpuEnabled = (cfg: Pick<InfraProps, 'cpu' | 'gpu' | 'layout'>): boo
 /** The CloudFormation output names of one project (alphanumeric only, so the hash rather than the slug). In the nested
  * layout they are its nested stack's outputs only (the parent carries none of them): the installer reads them there
  * (src/installer/aws.ts stackOutputs). In the flat layout they are the stack's own, as they always were. */
-export const projectOutputs = (repository: string): { runtimeArn: string; roleArn: string; secretArn: string; jobDefinition: string; memoryId: string } => {
+export const projectOutputs = (repository: string): { runtimeArn: string; roleArn: string; secretArn: string; jobDefinition: string; memoryId: string; runnerProject: string } => {
   const h = projectHash(repository)
   return {
     runtimeArn: `Project${h}RuntimeArn`, roleArn: `Project${h}ActionsRoleArn`, secretArn: `Project${h}GithubSecretArn`, jobDefinition: `Project${h}GpuJobDefinition`,
-    memoryId: `Project${h}MemoryId`,
+    memoryId: `Project${h}MemoryId`, runnerProject: `Project${h}RunnerProject`,
   }
 }
 
@@ -298,6 +317,13 @@ export const GPU_IMAGE_BUILD_OUTPUT = 'GpuImageBuild'
 /** The library gateway's outputs (gateway.enabled): its URL, and the distributor-keys secret the installer writes. */
 export const LIBRARY_GATEWAY_OUTPUT = 'LibraryGatewayUrl'
 export const LIBRARY_KEYS_OUTPUT = 'LibraryKeysSecretArn'
+
+/** The ARN of the GitHub connection the runners use (runners.connectionArn, or the one the stack created): the
+ * installer and `npm run deploy:ci` read it after the first deploy to show the person what to authorize. */
+export const CONNECTION_OUTPUT = 'GithubConnectionArn'
+/** 'true' when the stack created that connection itself (no runners.connectionArn): the tools then keep using it,
+ * without passing its ARN, so the stack keeps managing it. */
+export const CONNECTION_CREATED_OUTPUT = 'GithubConnectionCreated'
 
 /** The stack's layout ('flat' or 'nested'), an output so the installer can tell which an installation has. */
 export const LAYOUT_OUTPUT = 'Layout'

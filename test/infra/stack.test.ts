@@ -3,7 +3,7 @@ import { Match, Template } from 'aws-cdk-lib/assertions'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { InfraPropsSchema, apiRuntimeName, memoryName, projectHash, projectOutputs, projectSettings, stackName, workerRuntimeName } from '../../src/infra/props.js'
 import { ENV_VALUE_MAX, TraceStack, checkRuntimeEnv, idListLength } from '../../src/infra/stack.js'
-import { type Synth, nestedOf, nestedResourceId, parentRef, synth } from './templates.js'
+import { RUNNERS, type Synth, nestedOf, nestedResourceId, parentRef, synth } from './templates.js'
 
 const A = 'mteichtahl/trace'
 const B = 'pokeys-toolkit/potroller'
@@ -12,7 +12,7 @@ const HB = projectHash(B)
 
 const props = InfraPropsSchema.parse({
   account: '123456789012', region: 'us-east-1', repositories: [A, `${B}@develop`],
-  model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com',
+  model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com', runners: RUNNERS,
 })
 
 type Statement = { Sid?: string; Effect?: string; Action: string | string[]; Resource?: unknown; Condition?: Record<string, Record<string, unknown>> }

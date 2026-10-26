@@ -7,13 +7,13 @@ import { describe, expect, it } from 'vitest'
 import { chunkingConfiguration } from '../../src/infra/knowledge.js'
 import { InfraPropsSchema, kbOutputs, knowledgeBaseOf, projectHash } from '../../src/infra/props.js'
 import { kbListLength } from '../../src/infra/stack.js'
-import { nestedOf, synth } from './templates.js'
+import { RUNNERS, nestedOf, synth } from './templates.js'
 
 const A = 'mteichtahl/trace'
 const B = 'pokeys-toolkit/potroller'
 const HA = projectHash(A)
 const HB = projectHash(B)
-const base = { account: '123456789012', region: 'us-east-1', repositories: [A, `${B}@develop`], model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com' }
+const base = { account: '123456789012', region: 'us-east-1', repositories: [A, `${B}@develop`], model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com', runners: RUNNERS }
 
 type Statement = { Sid?: string; Effect?: string; Action: string | string[]; Resource?: unknown; Condition?: Record<string, Record<string, unknown>> }
 type Res = { Type: string; Properties: Record<string, unknown>; DeletionPolicy?: string; UpdateReplacePolicy?: string }

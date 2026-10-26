@@ -8,13 +8,13 @@ import { POLICY_NAME, type Clients, handle, policyDocument } from '../../src/inf
 import { METRIC_NAMESPACE, RUNTIME_NAMESPACE, dashboardBody } from '../../src/infra/observability.js'
 import { InfraPropsSchema, projectHash, stackName } from '../../src/infra/props.js'
 import { TraceStack } from '../../src/infra/stack.js'
-import { type Synth, nestedResourceId, synth } from './templates.js'
+import { RUNNERS, type Synth, nestedResourceId, synth } from './templates.js'
 import { AnswersSchema } from '../../src/installer/answers.js'
 import { infraInput, plan } from '../../src/installer/bootstrap.js'
 
 const base = {
   account: '123456789012', region: 'us-east-1', repositories: ['mteichtahl/trace'],
-  model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com',
+  model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com', runners: RUNNERS,
 }
 
 const H = projectHash('mteichtahl/trace')

@@ -19,7 +19,6 @@
 #       - the Anthropic API: secret ANTHROPIC_API_KEY.
 #     Memory (optional): TRACE_MEMORY_ID (the project's AgentCore memory) with TRACE_AWS_ROLE allowed to use it; the
 #     agents then recall and record as they do on AgentCore.
-#     Runner: variable TRACE_RUNNER as JSON ("ubuntu-24.04" or ["self-hosted","x64"]).
 # Knowledge base (optional): with TRACE_KB_ID and TRACE_KB_DATA_SOURCE_ID (set by `trace install`), every push to
 # __TR_BRANCH__ syncs the project's knowledge base (job kb-sync: `trace kb sync` through TRACE_AWS_ROLE), whatever
 # worker.runner says; in the actions runner the agents also get kb_search and kb_status.
@@ -30,6 +29,11 @@
 # that hourly pick finds whatever such a lost event left waiting (a PR still labelled __TR_CI_RED__, a PR still in
 # conflict, an __TR_AGENT_FIX__ issue nobody claimed). On a scheduled run with nothing waiting, the pick finds nothing.
 # Kill switch: variable TRACE_WORKER = 'false'.
+#
+# Runners: every job runs on AWS CodeBuild (a CodeBuild-hosted GitHub Actions runner in the installation's AWS account),
+# never on a GitHub-hosted runner. The first runs-on label names the project's CodeBuild runner project through the
+# repository variable TRACE_CODEBUILD_PROJECT, which `trace install` sets; the second keeps each job's runner distinct.
+# Without that variable the jobs wait in the queue: there is no GitHub-hosted fallback, by design.
 name: trace-worker
 
 on:
@@ -55,7 +59,9 @@ jobs:
   kb-sync:
     if: >-
       vars.TRACE_WORKER != 'false' && github.event_name == 'push' && vars.TRACE_KB_ID != '' && vars.TRACE_AWS_ROLE != ''
-    runs-on: ubuntu-24.04
+    runs-on:
+      - codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - kb-sync
     timeout-minutes: 30
     concurrency: { group: trace-kb-sync, cancel-in-progress: false }
     permissions:
@@ -82,7 +88,9 @@ jobs:
     if: >-
       vars.TRACE_WORKER != 'false' &&
       (github.event_name != 'issues' || github.event.label.name == '__TR_AGENT_FIX__')
-    runs-on: ubuntu-24.04
+    runs-on:
+      - codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - pick
     timeout-minutes: 5
     permissions:
       issues: write
@@ -109,7 +117,9 @@ jobs:
       max-parallel: 20
       matrix:
         item: ${{ fromJSON(needs.pick.outputs.items) }}
-    runs-on: ubuntu-24.04
+    runs-on:
+      - codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - dispatch-${{ matrix.item.number }}
     timeout-minutes: 5
     permissions:
       id-token: write          # GitHub OIDC -> TRACE_AWS_ROLE (bedrock-agentcore:InvokeAgentRuntime)
@@ -143,7 +153,9 @@ jobs:
     concurrency:
       group: trace-work-${{ matrix.item.number }}
       cancel-in-progress: false
-    runs-on: ${{ vars.TRACE_RUNNER && fromJSON(vars.TRACE_RUNNER) || 'ubuntu-24.04' }}
+    runs-on:
+      - codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - work-${{ matrix.item.number }}
     timeout-minutes: 150
     permissions:
       id-token: write          # GitHub OIDC -> TRACE_AWS_ROLE (Bedrock), when set

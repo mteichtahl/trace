@@ -14,6 +14,11 @@
 # (concurrency group trace-update-queue), and a finished build with nothing to do costs one short run. The schedule
 # (minutes 17 and 47 of every hour, UTC) is only a safety net and runs update-queue alone: it catches a queue left
 # standing when GitHub failed to deliver one of those events.
+#
+# Runners: every job runs on AWS CodeBuild (a CodeBuild-hosted GitHub Actions runner in the installation's AWS account),
+# never on a GitHub-hosted runner. The first runs-on label names the project's CodeBuild runner project through the
+# repository variable TRACE_CODEBUILD_PROJECT, which `trace install` sets; the second keeps each job's runner distinct.
+# Without that variable the jobs wait in the queue: there is no GitHub-hosted fallback, by design.
 name: trace-prs
 
 on:
@@ -34,7 +39,9 @@ permissions: {}
 jobs:
   open-pr:
     if: vars.TRACE_PRS != 'false' && github.event_name == 'push' && github.ref != 'refs/heads/__TR_BRANCH__'
-    runs-on: ubuntu-24.04
+    runs-on:
+      - codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - open-pr
     timeout-minutes: 5
     concurrency: { group: 'trace-open-${{ github.ref }}', cancel-in-progress: false }
     permissions:
@@ -48,7 +55,9 @@ jobs:
 
   automerge:
     if: vars.TRACE_PRS != 'false' && github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
+    runs-on:
+      - codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - automerge
     timeout-minutes: 5
     concurrency: { group: 'trace-automerge-${{ github.event.pull_request.number }}', cancel-in-progress: true }
     permissions:
@@ -65,7 +74,9 @@ jobs:
       vars.TRACE_PRS != 'false' &&
       (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_run' ||
        (github.event_name == 'push' && github.ref == 'refs/heads/__TR_BRANCH__'))
-    runs-on: ubuntu-24.04
+    runs-on:
+      - codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - update-queue
     timeout-minutes: 10
     concurrency: { group: trace-update-queue, cancel-in-progress: false }
     permissions:

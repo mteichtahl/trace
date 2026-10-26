@@ -8,13 +8,13 @@ import { Match, type Template } from 'aws-cdk-lib/assertions'
 import { describe, expect, it } from 'vitest'
 import { isComplete } from '../../src/infra/lambda/image-build.js'
 import { InfraPropsSchema, githubSecretName, memoryDeliveryName, memoryName, projectHash } from '../../src/infra/props.js'
-import { nestedOf, synth } from './templates.js'
+import { RUNNERS, nestedOf, synth } from './templates.js'
 
 const A = 'mteichtahl/trace'
 const B = 'pokeys-toolkit/potroller'
 const HA = projectHash(A)
 const HB = projectHash(B)
-const base = { account: '123456789012', region: 'us-east-1', repositories: [A, `${B}@develop`], model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com' }
+const base = { account: '123456789012', region: 'us-east-1', repositories: [A, `${B}@develop`], model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com', runners: RUNNERS }
 const LAYOUTS = ['nested', 'flat'] as const
 
 type Statement = { Sid?: string; Action: string | string[]; Resource?: unknown; Condition?: Record<string, Record<string, unknown>> }
@@ -52,7 +52,7 @@ describe("a project's generation", () => {
       expect(resources(a, 'AWS::BedrockAgentCore::Memory').map((r) => r.Properties.Name)).toContain(`trace_m_${HA}`)
       expect(resources(b, 'AWS::BedrockAgentCore::Runtime').map((r) => String(r.Properties.AgentRuntimeName)).filter((n) => n.includes(HB))).toEqual([`trace_w_${HB}`])
       expect(resources(b, 'AWS::IAM::Role').map((r) => String(r.Properties.RoleName)).filter((n) => n.includes(HB)).sort()).toEqual([
-        `trace-gh-${HB}-us-east-1`, `trace-gpu-${HB}-us-east-1`, ...(layout === 'nested' ? [`trace-kb-${HB}-us-east-1`] : []), `trace-w-${HB}-us-east-1`])
+        `trace-ci-${HB}-us-east-1`, `trace-gh-${HB}-us-east-1`, `trace-gpu-${HB}-us-east-1`, ...(layout === 'nested' ? [`trace-kb-${HB}-us-east-1`] : []), `trace-w-${HB}-us-east-1`])
       // the knowledge base (nested only) carries the generation in its name; its role and index need none
       if (layout === 'nested') expect(resources(b, 'AWS::Bedrock::KnowledgeBase').map((r) => r.Properties.Name)).toEqual([`trace-kb-${HB}-g2`])
     }, 300_000)

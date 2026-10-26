@@ -6,11 +6,14 @@ import { ListMemoriesCommand } from '@aws-sdk/client-bedrock-agentcore-control'
 import { DescribeStacksCommand, ListStackResourcesCommand } from '@aws-sdk/client-cloudformation'
 import { DescribeDeliveryDestinationsCommand, DescribeDeliverySourcesCommand } from '@aws-sdk/client-cloudwatch-logs'
 import { BatchGetBuildsCommand, StartBuildCommand } from '@aws-sdk/client-codebuild'
+import { GetConnectionCommand, ListConnectionsCommand, ListTagsForResourceCommand } from '@aws-sdk/client-codeconnections'
 import { DescribeSecretCommand, ResourceNotFoundException } from '@aws-sdk/client-secrets-manager'
 import { describe, expect, it } from 'vitest'
 import { AnswersSchema } from '../../src/installer/answers.js'
 import { type WaitNotice, activeWaits, checkNow } from '../../src/core/wait.js'
-import { GPU_WAIT_WHY, type NameClients, deployedProjects, ensureGpuImage, nameIndex, stackOutputs } from '../../src/installer/aws.js'
+import {
+  CONNECTION_WAIT_WHY, GPU_WAIT_WHY, type NameClients, clockTime, deployedProjects, ensureGpuImage, nameIndex, resolveConnection, reusableConnection, stackOutputs, waitForConnection,
+} from '../../src/installer/aws.js'
 import { chooseGenerations, projectNames } from '../../src/installer/bootstrap.js'
 import { InfraPropsSchema, projectHash, projectOutputs } from '../../src/infra/props.js'
 
@@ -19,6 +22,7 @@ const B = 'mteichtahl/fw'
 const HA = projectHash(A)
 const HB = projectHash(B)
 const creds = { accessKeyId: 'AKIAEXAMPLE', secretAccessKey: 'secret' }
+const CONNECTION = 'arn:aws:codeconnections:us-east-1:123456789012:connection/11111111-2222-3333-4444-555555555555'
 
 /** A fake client: `answer` maps each command to its response (or throws), and every command is recorded. */
 function fake(answer: (c: { input: Record<string, unknown> }) => unknown): { send: (c: unknown) => Promise<never>; sent: { name: string; input: Record<string, unknown> }[] } {
@@ -254,5 +258,137 @@ describe('the GPU image build', () => {
     })
     expect(r.ok).toBe(true)
     expect(Date.now() - started).toBeLessThan(5_000)
+  })
+})
+
+describe('the GitHub connection the CodeBuild runners use', () => {
+  const OTHER = 'arn:aws:codeconnections:us-east-1:123456789012:connection/99999999-8888-7777-6666-555555555555'
+  const CI = 'arn:aws:codeconnections:us-east-1:123456789012:connection/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+  const TAGGED = 'arn:aws:codeconnections:us-east-1:123456789012:connection/bbbbbbbb-cccc-dddd-eeee-ffffffffffff'
+  const URL = 'https://us-east-1.console.aws.amazon.com/codesuite/settings/connections?region=us-east-1'
+  type Conn = { arn: string; name: string; status: string; tagged?: boolean }
+  /** a fake CodeConnections: these connections (two pages), and GetConnection answering `statuses` in turn */
+  const connections = (o: { list: Conn[]; statuses?: string[]; provider?: string }) => {
+    const statuses = [...(o.statuses ?? [])]
+    return fake((c) => {
+      if (c instanceof ListConnectionsCommand) {
+        const page = c.input.NextToken ? o.list.slice(1) : o.list.slice(0, 1)
+        return { Connections: page.map((x) => ({ ConnectionArn: x.arn, ConnectionName: x.name, ConnectionStatus: x.status, ProviderType: 'GitHub' })), ...(c.input.NextToken ? {} : { NextToken: 'p2' }) }
+      }
+      if (c instanceof ListTagsForResourceCommand) {
+        const known = o.list.find((x) => x.arn === c.input.ResourceArn)
+        return { Tags: known?.tagged ? [{ Key: 'trace:installation', Value: 'lab' }] : [] }
+      }
+      if (c instanceof GetConnectionCommand) {
+        const known = o.list.find((x) => x.arn === c.input.ConnectionArn)
+        if (!known) throw Object.assign(new Error('Connection not found'), { name: 'ResourceNotFoundException' })
+        return { Connection: { ConnectionArn: c.input.ConnectionArn, ConnectionName: known.name, ProviderType: o.provider ?? 'GitHub', ConnectionStatus: statuses.shift() ?? known.status } }
+      }
+      throw new Error(`unexpected ${JSON.stringify(c.input)}`)
+    })
+  }
+  /** a clock that only moves when the installer sleeps */
+  const clock = (start = new Date(2026, 9, 26, 10, 42, 0).getTime()) => {
+    let t = start
+    const slept: number[] = []
+    return { now: () => t, sleep: async (ms: number) => { slept.push(ms); t += ms }, slept }
+  }
+
+  it('reuses an authorized connection in order: <prefix>-github, trace-ci-github, one tagged trace:installation, any; never a pending one', async () => {
+    const mine = { arn: CONNECTION, name: 'trace-github', status: 'AVAILABLE' }
+    const ci = { arn: CI, name: 'trace-ci-github', status: 'AVAILABLE' }
+    const tagged = { arn: TAGGED, name: 'lab-github', status: 'AVAILABLE', tagged: true }
+    const any = { arn: OTHER, name: 'someone-else', status: 'AVAILABLE' }
+    const prefer = ['trace-github', 'trace-ci-github']
+    expect((await reusableConnection(connections({ list: [any, tagged, ci, mine] }), prefer))?.name).toBe('trace-github')
+    expect((await reusableConnection(connections({ list: [any, tagged, ci] }), prefer))?.name).toBe('trace-ci-github')
+    expect((await reusableConnection(connections({ list: [any, tagged] }), prefer))?.name).toBe('lab-github')
+    expect((await reusableConnection(connections({ list: [any] }), prefer))?.name).toBe('someone-else')
+    expect(await reusableConnection(connections({ list: [{ ...mine, status: 'PENDING' }, { ...ci, status: 'ERROR' }] }), prefer)).toBeNull()
+    // deploy:ci's order: its own first
+    expect((await reusableConnection(connections({ list: [mine, ci] }), ['trace-ci-github', 'trace-github']))?.name).toBe('trace-ci-github')
+  })
+
+  it('says plainly which authorized connection it reused, and passes it to the stack, which then creates none', async () => {
+    const c = connections({ list: [{ arn: OTHER, name: 'someone-else', status: 'PENDING' }, { arn: CI, name: 'trace-ci-github', status: 'AVAILABLE' }] })
+    const r = await resolveConnection(c, { prefix: 'trace', deployed: null })
+    expect(r).toEqual({ pass: CI, arn: CI, name: 'trace-ci-github', ready: true, message: `Using the GitHub connection trace-ci-github (${CI}), already authorized.` })
+    expect(c.sent.map((x) => x.name)).toEqual(['ListConnectionsCommand', 'ListConnectionsCommand'])
+    expect(c.sent[0]?.input).toMatchObject({ ProviderTypeFilter: 'GitHub' })
+    // never creates anything
+    expect(c.sent.map((x) => x.name).filter((n) => /Create/.test(n))).toEqual([])
+  })
+
+  it('lets the stack create <prefix>-github when no connection is authorized, and says the runners wait for it', async () => {
+    const r = await resolveConnection(connections({ list: [{ arn: OTHER, name: 'someone-else', status: 'PENDING' }] }), { prefix: 'lab', deployed: null })
+    expect(r).toEqual({ name: 'lab-github', ready: false, message: 'No authorized GitHub connection in this account and region: the deploy creates lab-github, without the build runners, and you authorize it once after the deploy.' })
+    // a pending <prefix>-github left in the account (a deleted stack kept it) is given to the stack, which cannot make another
+    const left = await resolveConnection(connections({ list: [{ arn: CONNECTION, name: 'trace-github', status: 'PENDING' }] }), { prefix: 'trace', deployed: null })
+    expect(left).toMatchObject({ pass: CONNECTION, arn: CONNECTION, ready: false })
+  })
+
+  it("keeps using the connection the stack created, authorized or not, without passing it (the stack keeps managing it)", async () => {
+    const deployed = { GithubConnectionArn: CONNECTION, GithubConnectionCreated: 'true' }
+    const pending = await resolveConnection(connections({ list: [{ arn: CONNECTION, name: 'trace-github', status: 'PENDING' }, { arn: OTHER, name: 'x', status: 'AVAILABLE' }] }), { prefix: 'trace', deployed })
+    expect(pending).toEqual({ arn: CONNECTION, name: 'trace-github', ready: false, message: `The GitHub connection this stack created, trace-github (${CONNECTION}) is not authorized yet (PENDING): the deploy goes ahead without the build runners, and you authorize it once after the deploy.` })
+    const ready = await resolveConnection(connections({ list: [{ arn: CONNECTION, name: 'trace-github', status: 'AVAILABLE' }] }), { prefix: 'trace', deployed })
+    expect(ready).toEqual({ arn: CONNECTION, name: 'trace-github', ready: true, message: `Using the GitHub connection trace-github (${CONNECTION}), which this stack created, already authorized.` })
+    // one it was given before (not its own) is passed again while it is authorized
+    const given = await resolveConnection(connections({ list: [{ arn: OTHER, name: 'x', status: 'AVAILABLE' }] }), { prefix: 'trace', deployed: { GithubConnectionArn: OTHER, GithubConnectionCreated: 'false' } })
+    expect(given).toMatchObject({ pass: OTHER, ready: true })
+  })
+
+  it('uses the connection the answers give, checks it is a GitHub one, and never lists', async () => {
+    const c = connections({ list: [{ arn: OTHER, name: 'mine', status: 'AVAILABLE' }] })
+    expect(await resolveConnection(c, { prefix: 'trace', given: OTHER })).toEqual({ pass: OTHER, arn: OTHER, name: 'mine', ready: true, message: `Using the GitHub connection mine (${OTHER}) you gave, already authorized.` })
+    expect(c.sent.map((x) => x.name)).toEqual(['GetConnectionCommand'])
+    expect(await resolveConnection(connections({ list: [{ arn: OTHER, name: 'mine', status: 'PENDING' }] }), { prefix: 'trace', given: OTHER })).toMatchObject({ pass: OTHER, ready: false })
+    await expect(resolveConnection(connections({ list: [{ arn: OTHER, name: 'bb', status: 'AVAILABLE' }], provider: 'Bitbucket' }), { prefix: 'trace', given: OTHER })).rejects.toThrow(/a Bitbucket connection, not a GitHub one/)
+    await expect(resolveConnection(connections({ list: [] }), { prefix: 'trace', given: CONNECTION })).rejects.toThrow(/does not exist in this account and region/)
+    await expect(resolveConnection(connections({ list: [{ arn: OTHER, name: 'e', status: 'ERROR' }] }), { prefix: 'trace', given: OTHER })).rejects.toThrow(/status ERROR/)
+  })
+
+  it('waits for a person to authorize it, saying what to do once and when it checks next', async () => {
+    const c = connections({ list: [{ arn: CONNECTION, name: 'lab-github', status: 'PENDING' }], statuses: ['PENDING', 'PENDING', 'AVAILABLE'] })
+    const lines: string[] = []
+    const k = clock()
+    await waitForConnection(c, { arn: CONNECTION, name: 'lab-github', status: '' }, { region: 'us-east-1', repos: [A, B], report: (l) => lines.push(l), pollMs: 15_000, ...k })
+    expect(k.slept).toEqual([15_000, 15_000])
+    expect(lines).toEqual([
+      `The GitHub connection lab-github is waiting for a person to authorize it (once for this AWS account and region). Open ${URL}, choose lab-github, then "Update pending connection": that installs or picks the AWS Connector for GitHub app. Give the app access to ${A}, ${B}. The installer carries on by itself once it is authorized.`,
+      'Waiting for lab-github to be authorized (status PENDING): checking again at 10:42:15.',
+      'Waiting for lab-github to be authorized (status PENDING): checking again at 10:42:30.',
+    ])
+  })
+
+  it('gives up at the timeout with the link, and says running the tool again resumes', async () => {
+    const c = connections({ list: [{ arn: CONNECTION, name: 'trace-github', status: 'PENDING' }] })
+    const lines: string[] = []
+    const k = clock()
+    await expect(waitForConnection(c, { arn: CONNECTION, name: 'trace-github', status: 'PENDING' }, { region: 'us-east-1', repos: [A], report: (l) => lines.push(l), pollMs: 60_000, timeoutMs: 5 * 60_000, ...k }))
+      .rejects.toThrow(`the GitHub connection trace-github was still not authorized after 5 minutes. Authorize it at ${URL} ("Update pending connection"), then run the installer again: it resumes from here with the same connection`)
+    // checks at +1..+5 minutes, then stops rather than sleep past the deadline
+    expect(k.slept).toEqual([60_000, 60_000, 60_000, 60_000, 60_000])
+    expect(lines.filter((l) => l.startsWith('Waiting for')).map((l) => /at (\S+)\.$/.exec(l)?.[1])).toEqual(['10:43:00', '10:44:00', '10:45:00', '10:46:00', '10:47:00'])
+    // the instructions are said once, not on every check
+    expect(lines.filter((l) => l.includes('Update pending connection'))).toHaveLength(1)
+  })
+
+  it('puts each check on the record for the page (countdown, Check now), with why it is a timer', async () => {
+    const c = connections({ list: [{ arn: CONNECTION, name: 'trace-github', status: 'PENDING' }], statuses: ['PENDING', 'AVAILABLE'] })
+    const seen: WaitNotice[] = []
+    await waitForConnection(c, { arn: CONNECTION, name: 'trace-github', status: 'PENDING' }, { region: 'us-east-1', repos: [A], report: () => undefined, onWait: (n) => seen.push(n), pollMs: 60_000, ...clock() })
+    expect(seen[0]).toMatchObject({ what: 'trace-github to be authorized', source: 'timer', why: CONNECTION_WAIT_WHY, state: 'PENDING', intervalMs: 60_000 })
+    expect(seen[0]?.nextCheckAt).not.toBeNull()
+    expect(seen.at(-1)).toMatchObject({ state: 'AVAILABLE', nextCheckAt: null })
+  })
+
+  it('stops on a connection in ERROR', async () => {
+    const c = connections({ list: [{ arn: CONNECTION, name: 'x', status: 'PENDING' }], statuses: ['ERROR'] })
+    await expect(waitForConnection(c, { arn: CONNECTION, name: 'x', status: 'PENDING' }, { region: 'us-east-1', repos: [A], report: () => undefined, pollMs: 1, ...clock() })).rejects.toThrow(/status ERROR/)
+  })
+
+  it('prints the time of day as HH:MM:SS', () => {
+    expect(clockTime(new Date(2026, 0, 2, 3, 4, 5))).toBe('03:04:05')
   })
 })

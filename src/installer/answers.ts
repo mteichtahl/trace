@@ -59,6 +59,23 @@ export const AgentAnswers = z.object({
   migrateLayout: z.boolean().default(false),
 }).strict()
 
+/** The CodeBuild compute types a runner job may have (props.ts runners.computeType; repeated here because this file is
+ * bundled into the page, which does not load the stack's settings). */
+export const RUNNER_COMPUTE_TYPES = ['BUILD_GENERAL1_MEDIUM', 'BUILD_GENERAL1_LARGE', 'BUILD_GENERAL1_XLARGE', 'BUILD_GENERAL1_2XLARGE'] as const
+
+/** Where every GitHub Actions job runs: AWS CodeBuild runners in the installation's account (props.ts runners), never
+ * GitHub-hosted runners. CodeBuild reaches GitHub through an AWS CodeConnections connection. */
+export const RunnerAnswers = z.object({
+  /** An existing GitHub connection to use; empty: the installer reuses one already authorized in the account and region
+   * (`<prefix>-github` first), else the stack creates `<prefix>-github` and the installer waits after the deploy for a
+   * person to authorize it. */
+  connectionArn: z.string().trim().regex(/^(arn:aws[a-z-]*:(codeconnections|codestar-connections):[a-z0-9-]+:\d{12}:connection\/[0-9a-f-]{36})?$/, 'an AWS CodeConnections connection ARN, or empty').default(''),
+  /** A job's CodeBuild compute type; null: the stack's default (BUILD_GENERAL1_LARGE). */
+  computeType: z.enum(RUNNER_COMPUTE_TYPES).nullable().default(null),
+  /** Docker-in-Docker for jobs that build containers; null: the stack's default (off). */
+  privileged: z.boolean().nullable().default(null),
+}).strict()
+
 export const ProjectAnswer = z.object({
   repo: Repo,
   /** Its default branch: only workflows running there may assume the AWS role. */
@@ -85,6 +102,7 @@ export const AnswersSchema = z.object({
   github: z.object({ login: z.string().default('') }).strict().default({ login: '' }),
   aws: AwsAnswers,
   agents: AgentAnswers,
+  runners: RunnerAnswers.prefault({}),
   projects: z.array(ProjectAnswer).min(1, 'choose at least one repository'),
   adminEmail: z.string().trim().email('the first administrator\'s email'),
   people: z.array(PersonAnswer).default([]),
