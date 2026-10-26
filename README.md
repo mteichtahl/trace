@@ -61,7 +61,7 @@ projects is therefore drawn in IAM, not only in code (`src/infra/project.ts`):
 | --- | --- |
 | **Worker runtime** | One AgentCore runtime per repository (`<prefix>_w_<hash>`, tagged `trace:project`), with its own execution role and `TRACE_PROJECT=owner/repo`. It refuses, with a 403 that is logged, any invocation or job for another repository. |
 | **Memory** | One AgentCore Memory per repository (`<prefix>_m_<hash>`, tagged `trace:project`), its own event expiry, and its own log group and log delivery. The worker is told only its own (`TRACE_MEMORY_ID`) and its role may use only that memory's ARN. On it, the role may still create and list events only for actors `<owner>/<repo>/*`, and recall and list records only under `/trace/<owner>/<repo>/*` (the condition keys `bedrock-agentcore:actorId` and `bedrock-agentcore:namespace`), as defence in depth. The actor comes from `TRACE_PROJECT`, never from the request. The GitHub OIDC role has the same grants on the same memory, for the `worker.runner = actions` fallback (the repository variable `TRACE_MEMORY_ID`). |
-| **S3** | Read and write `projects/<owner>/<repo>/*` and `jobs/<owner>/<repo>/*`, and list only those prefixes and `central/*`. Nothing under `access/*`, and nothing of another project. |
+| **S3** | Read and write `projects/<owner>/<repo>/*` and `jobs/<owner>/<repo>/*`, and list only those prefixes and `central/*`. Read, never write, `prompts/*` (the installation's prompt overrides, see [Managing prompts](#managing-prompts)). Nothing under `access/*`, and nothing of another project. |
 | **GPU and CPU jobs** | Two AWS Batch job definitions per project (`<prefix>-gpu-<hash>`, and `<prefix>-cpu-<hash>` with the CPU queue), with one job role that reads and writes only that project's `jobs/<owner>/<repo>/*`. A project's role may submit only with its own definitions, only jobs tagged `trace:project=<owner>/<repo>`, and may stop only jobs carrying that tag. SubmitJob cannot override a definition's job role. |
 | **GitHub OIDC role** | One per repository, trusted only for `repo:OWNER/REPO:ref:refs/heads/BRANCH`. It may invoke only that project's runtime, read and write only that project's prefix (and the central database), and use only that project's memory, as its worker does. |
 | **GitHub token** | Each project has its own secret, `<prefix>/github-token/<owner>/<repo>`, and its worker reads only that one. This isolates GitHub access only when you give the project its own fine-grained token limited to that repository. By default the shared token is copied into every project's secret, and the installer's summary says so. A project token is checked: it must see its repository, and the installer warns if it can also see another project's. |
@@ -205,6 +205,9 @@ trace users assignments
 ```
 
 The installer sets up the first admin and anyone else you list, with their classes and projects.
+
+Changing a project's prompts takes write access on it, and the installation's prompts only an admin can change;
+guests can list, read and preview them (see [Managing prompts](#managing-prompts)).
 
 Marking an agent memory inactive (`trace remote memory deactivate`) takes write access. A person's own preferences
 are the exception: they may mark those with read access alone (see [Inactive memories](#inactive-memories)).
@@ -425,7 +428,8 @@ In GitHub Actions (`worker.runner actions`) the same three hold: claude-code-act
 Claude Code, and the install action's MCP config sets `TRACE_MCP_TOOLS` (see [Delegation to the worker](#delegation-to-the-worker)).
 `trace agent list` shows each specialist, its settings and its tools.
 
-Each specialist's prompt (`src/agents/<kind>/index.ts`, composed by `src/agents/specialist.ts`) has these parts:
+Each specialist's prompt (`src/agents/<kind>/index.ts`, composed by `src/agents/specialist.ts` from the prompt catalog,
+see [Managing prompts](#managing-prompts)) has these parts:
 
 - its workflow, step by step, with the tools in order;
 - what evidence counts as done: measured, with run ids, never claimed;
@@ -433,7 +437,8 @@ Each specialist's prompt (`src/agents/<kind>/index.ts`, composed by `src/agents/
 - the project's `.trace/rules.md`, read from the default branch and included in full;
 - the setting `agents.<kind>.instructions`, a short text that may be empty. The rules win where the two differ.
 
-`trace agent prompt <kind>` prints the composed prompt for review. Each specialist has its own memory actor,
+`trace agent prompt <kind>` prints the composed prompt for review, with the prompt overrides in force (`--marked` heads
+each part with its id, layer and version). Each specialist has its own memory actor,
 `<owner>/<repo>/<kind>`.
 
 ### Routing
@@ -539,7 +544,7 @@ memory under the AgentCore job's actors and session (`<owner>/<repo>/<kind>`, `<
 | `agents.delegate_timeout_minutes` | `240` | how long `agent.delegate` waits for the worker |
 | `agents.<kind>.model` | `''` | the specialist's model (else the runtime's `ANTHROPIC_MODEL`, then `worker.model`) |
 | `agents.<kind>.max_turns` | `120` | its turn limit (the delegated worker keeps `worker.max_turns`) |
-| `agents.<kind>.instructions` | `''` | project instructions for that specialist, after `.trace/rules.md` |
+| `agents.<kind>.instructions` | `''` | project instructions for that specialist, after `.trace/rules.md`: a short addendum. Prompt overrides ([Managing prompts](#managing-prompts)) are the full mechanism |
 
 ## Agent memory
 
@@ -696,6 +701,116 @@ another.
 
 The installer's plan says which of the two will happen when it finds an existing installation.
 
+## Managing prompts
+
+Every piece of text trace sends a model is in one catalog (`src/prompts/catalog.ts`), each under a stable id with
+its default, the variables it may use and whether people may change it. The composers build each prompt from those
+entries only: code supplies data (names, numbers, lists, fenced text) as variable values, and every sentence comes
+from the catalog. Tests hold this: each composed prompt is exactly its parts joined, every part is a catalog id, the
+phrases that mark each kind of prompt appear in no other source file, and the two places that call the model take
+their prompt from a composer. Tool descriptions, which the MCP server gives the model as tool metadata, are not in
+the catalog.
+
+```sh
+trace prompts list                                   # every id: editable or locked, and where its text comes from
+trace prompts get specialist.verify.workflow         # the default, each layer's text, the effective text and the locked parts after it
+trace prompts set specialist.verify.workflow --reason "our order" --file workflow.txt   # or the text on stdin
+trace prompts history specialist.verify.workflow
+trace prompts diff specialist.verify.workflow v1 v2  # or: default, effective
+trace prompts revert specialist.verify.workflow 1    # a version, or a history uid
+trace prompts reset specialist.verify.workflow       # back to the layer below
+trace prompts preview verify --marked                # the whole prompt as the model gets it, each part headed by its id
+trace remote prompts … [--repo OWNER/REPO | --installation]   # the same through the API
+```
+
+### The catalog
+
+| Ids | Editable or locked | What |
+| --- | --- | --- |
+| `specialist.<kind>.role`, `.workflow`, `.done`, `.escalate` | editable | who each specialist is, its workflow (and what it typically delegates), what counts as done, when it stops and asks |
+| `specialist.route`, `specialist.report` | editable | why the job was routed there; the final report's content and tone |
+| `specialist.unattended`, `.rules`, `.rules.none`, `.instructions`, `.job.*`, `.tools`, `.delivery.delegate`, `.delivery.actions`, `.evidence`, `.escalate`, `.guardrails` | locked | that nobody is watching; the rules and the `agents.<kind>.instructions` setting, fenced; the job with its thread and request as data; the tool list (the allowlist, which no prompt changes); the delegation contract (depth 1) and the GitHub Actions structured output; that every figure is measured; the `ESCALATE:` line the harness looks for; the guardrails, always last |
+| `worker.role`, `worker.tools`, `worker.task`, `worker.item.ci-red`, `.conflict`, `.agent-fix`, `worker.validate.command`, `.generic`, `worker.report.issue`, `.none`, `worker.escalate.item`, `worker.finish.item` | editable | the worker: who it is, its tools, how it does a task or an item, how it validates, escalates and reports |
+| `worker.data.task`, `.data.item`, `worker.request`, `worker.item`, `.item.not-own`, `worker.tests`, `worker.delegated`, `worker.guardrails` | locked | text is data; the request in the asker's words; the item; never weaken a test; a delegation's request; the guardrails, last |
+| `delegate.brief` / `delegate.request` | editable / locked | the wording around a specialist's brief / the brief and the acceptance criteria |
+| `actions.check` | locked | GitHub Actions' check run and the structured answer the workflow parses |
+| `router.classify` / `router.contract`, `router.evidence.none` | editable / locked | the routing model's instruction / its JSON contract (`{ kind, reason, confidence }`) and the job, fenced as data |
+| `memory.block`, `memory.legacy`, `memory.more` | locked | the memory block: data, not instructions |
+| `system.append`, `system.notes` | locked | what the runtime adds to Claude Code's system prompt: never print the token; the default branch's `CLAUDE.md`, fenced |
+| `render.instructions` / `render.request`, `render.projects.all` | editable / locked | the rendering agent |
+| `cloudworker.prompt` / `cloudworker.guardrails`, `cloudworker.none` | editable / locked | the hourly cloud worker (`trace worker-prompt`), which spans projects, so only installation overrides apply to it |
+| `fence.cut`, `mention.to`, `mention.starting` | locked | small fragments other parts use |
+
+Each editable entry names the locked entries that come after it (`then`, shown by `prompts.get`), and every prompt
+with guardrails ends with them. So an override changes what it replaces and nothing else: the locked parts are
+always there, after it, and an override can't remove them or have the last word. An override is text a person wrote;
+it goes to the model as it is, and the rules, data and memory fences stay around everything else. A prompt can't
+change a specialist's tools, model or turn limits: those are settings (`agents.<kind>.*`), applied by the job runner
+and the MCP server, not by any text.
+
+### Templates
+
+A template has one feature: `{{name}}` is replaced by that variable's value. There are no expressions, filters,
+loops or conditionals, so nothing runs. Each entry declares its variables, typed (`text`, `number`, `list`, one item
+per line), and `trace prompts get` lists them. A template that uses an unknown variable, or a malformed placeholder,
+is refused with the variable's name, when it is saved and again when it is rendered. Values are substituted once and
+never read as a template, so a request, a rules file or a title that contains `{{…}}` stays text. A variable an
+override leaves out is simply not used: what must reach the model (the request, the rules, the item) is in locked
+entries. An override is at most 16,000 characters.
+
+### Layers
+
+| Layer | Who changes it | Where it is |
+| --- | --- | --- |
+| code default | trace's own releases | the catalog |
+| installation | admins | `s3://<bucket>/prompts` (locally `$TRACE_HOME/prompts`, or `$TRACE_PROMPTS_HOME`): a SQLite database written the way the central store is, with conditional puts re-run on a conflict. The API role reads it and writes it only conditionally; each project's worker role and GitHub OIDC role may only read it |
+| project | people with write access on the project, and admins | the project's `.trace/project.db`, tables `prompts` and `prompt_history`, versioned in git with the repository |
+
+The most specific layer that has an override wins, per id. Jobs read the project's overrides from the default
+branch, never from a pull request's tree, the same way they read the settings. A project change through the API is a
+commit of `.trace/project.db` on a branch of its own (`trace/prompts-<slug>-<ts>`), never the default branch, and
+`.trace/**` is a protected path, so its pull request waits for a person, as `settings.set` does. Locally,
+`trace prompts set` writes the clone's database and you commit it. `--installation` writes the installation's store
+with your own credentials.
+
+Every change (set, reset, revert) is a row in `prompt_history`: the id, the version it made, the text, who (a
+person's 16-character hash through the API, the login locally), when and why. A reset is recorded as an override
+with no text, so it merges like any change. `trace db merge` keeps, per id, the row changed last, and the union of
+both histories; two branches can each make a v3 of one id, and their history keeps both, told apart by `uid`.
+
+An override that can't be used is reported, never used: one of an id the catalog no longer has, one of a locked id,
+or one that no longer validates (a variable its entry dropped). `prompts.list` and `trace prompts list` list them,
+the job's log names each one it skipped, and the layer below decides. A layer that can't be read (a step without
+`TRACE_HOME`, credentials that can't read `prompts/*`) is left out, and the log says so.
+
+### Provenance
+
+Each job records what its prompts were made of: every part's id, layer, version and the sha256 of its template (12
+characters), on the job's record (`job` through the API, `status` on the runtime: `prompts`) and on its span
+(`trace.prompt.ids`, `trace.prompt.layers`, `trace.prompt.versions`, `trace.prompt.overridden`). In GitHub Actions the
+`worker-prompt` and `worker-delegate` steps log it and output it (`prompts`: `id@layer:version`). The text of a
+prompt is never recorded, as with every other prompt and tool argument (see [Observability](#observability)).
+
+### Through the API
+
+| Action | Needs | Does |
+| --- | --- | --- |
+| `prompts.list { repo? }` | any class (guests too); with `repo`, read on it | every id, editable or locked, and its effective layer and version; the overrides that are not used |
+| `prompts.get { id, repo? }` | the same | its default, installation and project text, the effective text and the locked parts that follow it, marked |
+| `prompts.preview { repo, target, job? }` | read | a whole prompt (a specialist kind, a prompt's name such as `worker.task` or `router`, or an id) with the overrides, as text and marked; `job` stands for a task (`{ kind: 'task', request }`) or an item |
+| `prompts.set { id, text, reason, scope, repo? }` | admin (installation), write (project) | an override, checked (the error names a bad variable) |
+| `prompts.reset { id, scope, repo?, reason? }` | the same | back to the layer below |
+| `prompts.revert { id, scope, version, repo?, reason? }` | the same | back to an earlier version (a number or a history uid) |
+| `prompts.history { id, scope, repo? }` | a user or an admin (installation), write (project) | every change to the id in that layer |
+
+The access check comes first, as for every action: a project you are not assigned to and one that does not exist
+get the same "no access". The setting `agents.<kind>.instructions` stays as a lightweight addendum after the rules;
+overrides are the full mechanism.
+
+**Upgrading.** Workflows written by an earlier `trace onboard` do not pass `TRACE_HOME` to the `worker-prompt` and
+`worker-delegate` steps, so in GitHub Actions only the project's overrides apply until the workflow is updated
+(`templates/workflows/trace-worker.yml`). The runtime reads both layers either way.
+
 ## Observability
 
 Every AgentCore runtime starts Node with the AWS Distro for OpenTelemetry (ADOT) auto-instrumentation
@@ -708,7 +823,7 @@ so with no SDK loaded (the CLI, local runs, tests) nothing is recorded and nothi
 | Span | Where | What it carries |
 | --- | --- | --- |
 | `invoke_agent trace-worker` / `trace-api` | each `POST /invocations` | the invocation kind or API action, the repository, the outcome; it continues the caller's trace (`traceparent`, `X-Amzn-Trace-Id`, or the payload's `trace` when the request carries no context of that trace) and puts the AgentCore session id into baggage `session.id`, so every span below has it |
-| `trace.job <kind>` | each job | job id, kind, repository, agent (the specialist, or `worker` for a delegation, with its parent job id), the route (`trace.agent.kind`, `trace.route.reason`, `trace.route.confidence`, `trace.route.source`), the item, who asked (a hash), the outcome |
+| `trace.job <kind>` | each job | job id, kind, repository, agent (the specialist, or `worker` for a delegation, with its parent job id), the route (`trace.agent.kind`, `trace.route.reason`, `trace.route.confidence`, `trace.route.source`), the prompt parts its model calls were built from (`trace.prompt.ids`, `trace.prompt.layers`, `trace.prompt.versions`, in step, and `trace.prompt.overridden`; never the text), the item, who asked (a hash), the outcome |
 | `claude.query` | each Agent SDK run | model, Claude's session id, turns, tokens (input, output, cache read and creation), the SDK's cost estimate |
 | `chat <model>` | each model response | model, response id, finish reason, the tools it asked for |
 | `execute_tool <name>` | each tool Claude used, and each call through the tool registry (the MCP server continues the job's trace) | tool name, where the call came from, the hardware flag, argument names and sizes, result size, duration, outcome |
@@ -783,6 +898,7 @@ outside AgentCore, either set `OTEL_SDK_DISABLED=true` or give it the variables 
 | `src/core` | Settings, SQLite stores, the tool registry, the MCP server, onboarding, access control, the Python bridge client |
 | `src/infra` | The CDK stack (Cognito, the central bucket, the image builds, the API runtime, the AWS Batch GPU queue in `gpu.ts`) and, per project, `project.ts` (its worker runtime, roles, token secret and GPU job definition) |
 | `src/installer` | `trace install`: the local web installer |
+| `src/prompts` | The prompt catalog (every prompt part's id, default, variables and whether it is locked), the `{{var}}` templates, the layers (installation and project overrides) and their stores, and `trace prompts` |
 | `src/agents` | The specialists (`verify`, `impl`, `ams`, `emc`, `render`, each in its own folder; `index.ts` lists them), the router, the retained worker's prompt (`worker`), and the runtime (`runtime`: server, jobs, delegation, memory, observability) |
 | `src/api`, `agent/Dockerfile` | The people-facing API, and the image AgentCore runs |
 | `src/login` | `trace login`, `trace remote …`, `trace users …` |

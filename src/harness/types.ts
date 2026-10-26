@@ -5,6 +5,7 @@
  */
 import type { Octokit } from '@octokit/rest'
 import { z } from 'zod'
+import type { Layers } from '../prompts/resolve.js'
 import type { TraceConfig } from '../core/config.js'
 
 export type GitHub = Octokit
@@ -55,6 +56,8 @@ export interface Deps {
   core: Core
   cfg: TraceConfig
   env: TaskEnv
+  /** The prompt overrides in force (src/prompts): the default branch's project overrides and the installation's. */
+  prompts?: Layers | undefined
 }
 
 // ------------------------------------------------------------------ the payload fields the harness reads

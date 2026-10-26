@@ -134,6 +134,8 @@ jobs:
           aws-region: ${{ vars.TRACE_AWS_REGION || 'us-east-1' }}
       - id: prompt
         uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
+        env:
+          TRACE_HOME: ${{ vars.TRACE_HOME }}       # the installation's prompt overrides are read beside it
         with:
           agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
           task: worker-prompt
@@ -180,6 +182,8 @@ jobs:
       - id: delegate
         if: ${{ !cancelled() && steps.prompt.outcome == 'success' }}
         uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
+        env:
+          TRACE_HOME: ${{ vars.TRACE_HOME }}
         with:
           agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
           task: worker-delegate

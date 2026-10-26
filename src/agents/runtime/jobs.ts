@@ -10,6 +10,7 @@
 import { randomBytes } from 'node:crypto'
 import { ATTR, annotate } from '../../core/telemetry.js'
 import type { Route } from '../kinds.js'
+import { type PromptRecord, promptAttrs } from '../../prompts/telemetry.js'
 import { realRunner } from './job.js'
 import { observeJob } from './observe.js'
 import { type Accepted, type JobInfo, type JobPayload, checkProject, isDelegated } from './schemas.js'
@@ -26,6 +27,8 @@ export interface JobContext {
   startJob(payload: JobPayload): Accepted
   /** Record how the job was routed: on the job (status) and on its span. */
   route?(r: Route): void
+  /** Record which prompt versions the job's model calls were built from: on the job (status) and on its span. */
+  prompts?(used: readonly PromptRecord[]): void
 }
 
 /** Does one job; resolves with a one-line summary, rejects with the reason it failed. */
@@ -136,9 +139,13 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
         log(`routed to ${r.kind} (${r.source}, confidence ${r.confidence.toFixed(2)}): ${r.reason}`)
         annotate({ [ATTR.agent]: r.kind, [ATTR.agentKind]: r.kind, [ATTR.routeReason]: r.reason, [ATTR.routeConfidence]: r.confidence, [ATTR.routeSource]: r.source })
       }
+      const prompts = (used: readonly PromptRecord[]): void => {
+        info.prompts = [...(info.prompts ?? []), ...used]
+        annotate(promptAttrs(info.prompts))
+      }
       const done = observeJob(payload, id, info.agent ?? 'specialist', () => info, async () => {
         try {
-          info.summary = await runner(payload, { jobId: id, signal: abort.signal, log, startJob: (p) => self.startJob(p), route })
+          info.summary = await runner(payload, { jobId: id, signal: abort.signal, log, startJob: (p) => self.startJob(p), route, prompts })
           info.state = abort.signal.aborted ? 'aborted' : 'succeeded'
           if (abort.signal.aborted) info.error = abort.signal.reason instanceof Error ? abort.signal.reason.message : String(abort.signal.reason)
         } catch (e) {

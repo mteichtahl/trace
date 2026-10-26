@@ -27,6 +27,7 @@ import { z } from 'zod'
 import type { TraceConfig } from '../../core/config.js'
 import { SPECIALISTS } from '../index.js'
 import { type SpecialistKind, WORKER } from '../kinds.js'
+import { type Composed, Composer, type Layers, NO_LAYERS } from '../../prompts/resolve.js'
 import { type Accepted, BranchSchema, type DelegatedTaskJob, type JobInfo, type JobPayload } from './schemas.js'
 
 /** What the worker inherits from the specialist job that delegates. */
@@ -45,6 +46,8 @@ export interface ParentJob {
   session: string
   /** The default branch's CLAUDE.md, for the worker's system prompt. */
   notes?: string | null
+  /** The prompt overrides the specialist runs with (the worker's prompt and the delegation's wording use them too). */
+  prompts?: Layers | undefined
 }
 
 export const DelegateRequest = z.object({
@@ -72,20 +75,16 @@ export class DelegationError extends Error {
   constructor(message: string, readonly status = 400) { super(message) }
 }
 
-/** The worker's request: the specialist's brief and acceptance criteria, as the task's request. */
-export function delegatedRequest(kind: SpecialistKind, parentJobId: string, brief: string, acceptance: readonly string[]): string {
-  return [
-    `The ${SPECIALISTS[kind].title} specialist (job ${parentJobId}) delegated this to you. Its brief:`,
-    '',
-    brief.trim(),
-    '',
-    'ACCEPTANCE CRITERIA. The specialist checks each one with its own tools after you finish, in this same checkout:',
-    ...acceptance.map((a, i) => `${i + 1}. ${a.trim()}`),
-    '',
-    'Meet every criterion. You work in the specialist\'s checkout: uncommitted files in it (such as .trace/project.db',
-    'with its runs) are part of the work; commit them when the brief says so, and never discard them. End your session',
-    'with one line per criterion saying how you met it, or why you could not.',
-  ].join('\n')
+/** The worker's request: the specialist's brief and acceptance criteria (delegate.brief, delegate.request in the prompt catalog). */
+export function composeDelegated(kind: SpecialistKind, parentJobId: string, brief: string, acceptance: readonly string[], layers: Layers = NO_LAYERS): Composed {
+  return new Composer(layers)
+    .add('delegate.brief', { specialist: SPECIALISTS[kind].title, parent_job: parentJobId })
+    .add('delegate.request', { brief: brief.trim(), acceptance: acceptance.map((a, i) => `${i + 1}. ${a.trim()}`) })
+    .done()
+}
+
+export function delegatedRequest(kind: SpecialistKind, parentJobId: string, brief: string, acceptance: readonly string[], layers: Layers = NO_LAYERS): string {
+  return composeDelegated(kind, parentJobId, brief, acceptance, layers).text
 }
 
 const same = (a: string, b: string): boolean => {
@@ -138,7 +137,7 @@ export function createDelegations(): Delegations {
       const p = e.parent
       const payload: DelegatedTaskJob = {
         kind: 'task', agent: WORKER, repository: p.repository,
-        request: delegatedRequest(p.kind, p.jobId, req.brief, req.acceptance),
+        request: delegatedRequest(p.kind, p.jobId, req.brief, req.acceptance, p.prompts),
         requestedBy: `the trace ${p.kind} specialist (job ${p.jobId})`,
         // never the default branch: a specialist on it (an issue) gets a branch of its own for the worker
         branch: req.branch ?? (p.branch === p.defaultBranch ? `${p.cfg.worker.own_branch_prefix || 'claude/'}${p.kind}-${p.jobId.replace(/^job-/, '')}` : p.branch),

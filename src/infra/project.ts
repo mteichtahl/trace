@@ -10,7 +10,8 @@
  *             only with a conditional put (If-Match / If-None-Match: the central store always writes that way, see
  *             src/core/central.ts), never delete it; read/write projects/<slug>/* and jobs/<slug>/*; list only those
  *             prefixes; nothing of access/*, nor of any other project. projects/<slug>/memory-state/* (which memory
- *             records people marked inactive) is read only: writes there are denied
+ *             records people marked inactive) is read only: writes there are denied. prompts/* (the installation's
+ *             prompt overrides) is read only too: nothing grants a write there
  *   memory    its own memory only (<prefix>_m_<hash>), and on it still only events of actors `<owner>/<repo>/*` and
  *             records under `/trace/<owner>/<repo>/*` (the encodings of src/agents/runtime/memory.ts), as defence in depth
  *   secret    <prefix>/github-token/<slug> only
@@ -55,9 +56,11 @@ import type { GpuCompute } from './gpu.js'
 import { EVENT_ACTIONS, RECORD_ACTIONS, TraceMemory } from './memory.js'
 import { GPU_JOB_VCPUS, type InfraProps, type ProjectRef, REPOSITORY_OUTPUT, projectOutputs, projectSettings } from './props.js'
 
-/** The central bucket's prefixes: the shared database, and the access store beside it (src/core/access.ts). */
+/** The central bucket's prefixes: the shared database, the access store beside it (src/core/access.ts), and the
+ * installation's prompt overrides (src/prompts/store.ts). */
 export const CENTRAL_PREFIX = 'central'
 export const ACCESS_PREFIX = 'access'
+export const PROMPTS_PREFIX = 'prompts'
 
 const TELEMETRY_ACTIONS = ['xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets']
 
@@ -173,6 +176,8 @@ export class ProjectStack extends Construct {
     role.addToPolicy(modelAccess(account))
     this.secret.grantRead(role)
     grantPrefixes(role, bucket, { conditional: [CENTRAL_PREFIX], readWrite: [projectDataPrefix(repository), projectJobsPrefix(repository)] })
+    // the installation's prompt overrides (src/prompts/store.ts): read only, so an agent can't change its own prompt
+    grantPrefixes(role, bucket, { read: [PROMPTS_PREFIX] })
     // which memory records are inactive (projects/<slug>/memory-state, src/agents/runtime/memory-state.ts): read, never
     // written, by the agent: it has Bash and these credentials, and must not bring back a record people turned off
     const memoryState = new iam.PolicyStatement({
@@ -298,6 +303,7 @@ export class ProjectStack extends Construct {
     }))
     this.actionsRole.addToPolicy(modelAccess(account)) // the in-Actions fallback (worker.runner = actions)
     grantPrefixes(this.actionsRole, bucket, { conditional: [CENTRAL_PREFIX], readWrite: [projectDataPrefix(repository)] })
+    grantPrefixes(this.actionsRole, bucket, { read: [PROMPTS_PREFIX] })
     this.actionsRole.addToPolicy(memoryState.copy())
     // the in-Actions fallback remembers as the worker does: its own memory, its own actors and namespaces
     if (this.memory) for (const st of memoryStatements(this.memory)) this.actionsRole.addToPolicy(st)

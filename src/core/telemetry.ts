@@ -95,6 +95,12 @@ export const ATTR = {
   gpuSeconds: 'trace.gpu.seconds',
   gpuInputs: 'trace.gpu.inputs',
   gpuOutputs: 'trace.gpu.outputs',
+  /** the prompt parts a job's model calls were built from (src/prompts): ids, layers and versions, in step; never the text */
+  promptIds: 'trace.prompt.ids',
+  promptLayers: 'trace.prompt.layers',
+  promptVersions: 'trace.prompt.versions',
+  /** how many of them came from an override (installation or project) */
+  promptOverridden: 'trace.prompt.overridden',
   /** how many inactive memory records were left out of what an agent or a person was given (never their ids) */
   memoryInactiveFiltered: 'trace.memory.inactive_filtered',
 } as const

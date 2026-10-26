@@ -135,6 +135,10 @@ describe('the trace stack', () => {
       expect(deny[0]).toMatchObject({ Effect: 'Deny', Action: ['s3:PutObject', 's3:DeleteObject', 's3:DeleteObjectVersion'] })
       expect(JSON.stringify(deny[0]?.Resource)).toContain(`/projects/${c.repo}/memory-state/*`)
       expect(s.filter((x) => x.Effect === 'Deny')).toHaveLength(1)
+      // the installation's prompt overrides (prompts/*): read and listed, never written
+      expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes('/prompts/*'))).toBe(true)
+      expect(s.filter((x) => actionsOf(x).includes('s3:ListBucket')).flatMap((x) => x.Condition?.StringLike?.['s3:prefix'] as string[])).toContain('prompts/*')
+      expect(s.filter((x) => actionsOf(x).some((a) => a === 's3:PutObject' || a === 's3:DeleteObject')).map((x) => JSON.stringify(x.Resource)).join()).not.toContain('/prompts/')
       // memory: its own memory only, and on it still only its own actors and namespaces
       const memoryArn = { 'Fn::GetAtt': [Match.stringLikeRegexp(`^Project${c.h}Memory`), 'MemoryArn'] }
       expect(s).toEqual(expect.arrayContaining([
@@ -187,6 +191,9 @@ describe('the trace stack', () => {
       expect(s.find((x) => x.Sid === 'MemoryStateReadOnly')).toMatchObject({ Effect: 'Deny', Action: ['s3:PutObject', 's3:DeleteObject', 's3:DeleteObjectVersion'] })
       expect(JSON.stringify(s.find((x) => x.Sid === 'MemoryStateReadOnly')?.Resource)).toContain(`/projects/${repo}/memory-state/*`)
       expect(text).not.toContain('/access/*')
+      // the workflows read the installation's prompt overrides, and cannot write them
+      expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes('/prompts/*'))).toBe(true)
+      expect(s.filter((x) => actionsOf(x).includes('s3:PutObject')).map((x) => JSON.stringify(x.Resource)).join()).not.toContain('/prompts/')
       expect(text).not.toContain('/jobs/')
       expect(text).not.toContain('TraceMemory')
       // memory: the worker's own grants, for the worker.runner = actions fallback: its own memory, actors, namespaces
@@ -233,7 +240,11 @@ describe('the trace stack', () => {
     expect(msPuts.map((x) => Object.keys(x.Condition?.Null ?? {})[0]).sort()).toEqual(['s3:if-match', 's3:if-none-match'])
     expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes(`/${MS}`))).toBe(true)
     expect(s.filter((x) => actionsOf(x).includes('s3:DeleteObject')).map((x) => JSON.stringify(x.Resource)).join()).not.toContain('memory-state')
-    expect(s.filter((x) => actionsOf(x).includes('s3:ListBucket')).flatMap((x) => x.Condition?.StringLike?.['s3:prefix'] as string[]).sort()).toEqual(['central/*', MS])
+    expect(s.filter((x) => actionsOf(x).includes('s3:ListBucket')).flatMap((x) => x.Condition?.StringLike?.['s3:prefix'] as string[]).sort()).toEqual(['central/*', MS, 'prompts/*'])
+    // the installation's prompt overrides (prompts.set, admins): read, and conditional puts only; no deletes
+    const promptPuts = s.filter((x) => actionsOf(x).includes('s3:PutObject') && JSON.stringify(x.Resource).includes('/prompts/*'))
+    expect(promptPuts.map((x) => Object.keys(x.Condition?.Null ?? {})[0]).sort()).toEqual(['s3:if-match', 's3:if-none-match'])
+    expect(s.filter((x) => actionsOf(x).includes('s3:DeleteObject')).map((x) => JSON.stringify(x.Resource)).join()).not.toContain('/prompts/')
     expect(read?.Resource).toEqual(expect.arrayContaining([HA, HB].map((h) => parentRef(syn, h, memoryIdOf(h), 'MemoryArn'))))
     expect(read?.Resource).toHaveLength(2)
     expect(text).not.toContain('CreateEvent')

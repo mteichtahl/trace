@@ -18,6 +18,11 @@
  *     trace runs [--kind K] [--limit N] | trace run ID | trace artifact ID NAME [--out PATH]
  *     trace db merge BASE OURS THEIRS | trace db prune [--keep N]
  *
+ *   Prompts (the catalog of every prompt the agents get, and its overrides: README "Managing prompts")
+ *     trace prompts list | get ID | set ID --reason "why" [--file F] | reset ID | revert ID VERSION | history ID
+ *                 | diff ID [FROM [TO]] | preview TARGET [--marked]      this clone's .trace/project.db, or with
+ *                                      --installation the installation's store (your own credentials)
+ *
  *   Specialist agents (verify, impl, ams, emc, render)
  *     trace agent list [--json]        each specialist, its settings and its tools
  *     trace agent route <issue|pr|text> [--repo OWNER/REPO] [--labels a,b] [--files f,g] [--checks c,d] [--model]
@@ -37,6 +42,8 @@ import { join, relative } from 'node:path'
 import { parseArgs } from 'node:util'
 import { ConfigError, changed, leaves, load, parseCliValue, resolve, setValue, unset } from './core/config.js'
 import { mergeMain } from './core/dbmerge.js'
+// registers the prompts tables of .trace/project.db, so `trace db merge` merges them by their rule
+import './prompts/store.js'
 import { workerPrompt } from './core/cloudworker.js'
 import { doctor } from './core/doctor.js'
 import { serve } from './core/mcp.js'
@@ -286,9 +293,18 @@ async function main(argv: string[]): Promise<number> {
     }
     case 'users': return cmdUsers(rest)
     case 'memory': return cmdMemory(rest)
-    case 'worker-prompt':
-      out(workerPrompt(rest.length ? rest : await projects()))
+    case 'worker-prompt': {
+      // it spans projects: only the installation's overrides apply (when this machine can read them)
+      const { InstallationPrompts, loadLayers } = await import('./prompts/store.js')
+      const layers = await loadLayers({ installation: new InstallationPrompts() })
+      for (const u of layers.unavailable ?? []) err(`(the installation's prompt overrides are not used: ${u.reason})`)
+      process.stdout.write(workerPrompt(rest.length ? rest : await projects(), layers))
       return 0
+    }
+    case 'prompts': {
+      const { cmdPrompts } = await import('./prompts/cli.js')
+      return cmdPrompts(rest)
+    }
     case undefined: case '-h': case '--help': case 'help': {
       const { readFileSync } = await import('node:fs')
       const { fileURLToPath } = await import('node:url')

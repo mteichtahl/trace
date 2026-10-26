@@ -39,6 +39,22 @@
  *   assign        admin                 assign a person (email or sub) to a project
  *   unassign      admin                 remove them from it
  *   assignments   admin                 every assignment, optionally for one project
+ *
+ *   prompts.list     read (repo), or any  the prompt catalog: each id, editable or locked, and the layer its text comes
+ *                    class without repo   from (installation, and the project's default branch with repo), and every
+ *                                         override that is not used (an unknown or locked id, a bad template)
+ *   prompts.get      the same             one id: its default, installation and project text, the effective text
+ *                                         and the locked parts that always follow it
+ *   prompts.preview  read                 a whole prompt (a specialist kind, a prompt's name, or an id) as the model
+ *                                         would get it with the overrides, its parts marked
+ *   prompts.set      admin (installation) override one editable id (text, reason). Installation: the prompts store;
+ *                    write (project)      project: a commit of .trace/project.db on trace/prompts-<slug>-<ts>, pushed
+ *                                         (the harness opens the PR, held for a person: .trace/** is protected)
+ *   prompts.reset    the same             back to the layer below (a recorded reset)
+ *   prompts.revert   the same             back to an earlier version (a number or a history uid)
+ *   prompts.history  admin or user        every change to one id in one layer (installation: a user or an admin;
+ *                    (installation),      project: write access). Guests can list, get and preview only
+ *                    write (project)
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -55,6 +71,12 @@ import { type InactiveMark, ReasonSchema, RecordIdSchema, memoryState } from '..
 import { TASK_AGENTS, type ToolJob } from '../agents/runtime/schemas.js'
 import { API_HIDDEN_TOOLS, ToolRefused, apiTool, checkPaths } from '../agents/runtime/tool.js'
 import { Work } from '../core/store.js'
+import { personHash as telemetryHash } from '../core/telemetry.js'
+import { PROMPT_ID, entry } from '../prompts/catalog.js'
+import type { Layers } from '../prompts/resolve.js'
+import { InstallationPrompts, PromptError, type PromptWrite, ReasonSchema as PromptReason, projectHistory, projectOverrides, writeProject } from '../prompts/store.js'
+import { MAX_PROMPT_CHARS, TemplateError } from '../prompts/template.js'
+import { PreviewJob, PreviewTarget, getView, listView, preview } from '../prompts/views.js'
 import type { CognitoAdmin, CognitoUser } from './aws.js'
 import type { GitHubApi } from './github.js'
 
@@ -98,19 +120,24 @@ export interface ActionDeps {
   scratch: string
   /** Each project's memory (TRACE_PROJECT_MEMORIES); absent or null: memory.* answer that there is none. */
   memory?: () => ProjectMemories | null
+  /** The installation's prompt overrides (src/prompts/store.ts); absent: the store at promptsHome(). */
+  prompts?: () => InstallationPrompts
 }
 
 export interface Context { principal: Principal; deps: ActionDeps }
 
-type Need = 'signed-in' | 'read' | 'write' | 'admin' | 'tool' | 'job'
+type Need = 'signed-in' | 'read' | 'write' | 'admin' | 'tool' | 'job' | 'prompts'
 
 interface Action<S extends z.ZodType> {
   need: Need
   args: S
   run: (a: z.output<S>, ctx: Context) => Promise<unknown>
+  /** need 'prompts': the check, which depends on the arguments (a scope, an optional repo). Runs before `run`. */
+  authorize?: (a: z.output<S>, p: Principal) => Promise<void>
 }
 
-const def = <S extends z.ZodType>(need: Need, args: S, run: (a: z.output<S>, ctx: Context) => Promise<unknown>): Action<S> => ({ need, args, run })
+const def = <S extends z.ZodType>(need: Need, args: S, run: (a: z.output<S>, ctx: Context) => Promise<unknown>, authorize?: (a: z.output<S>, p: Principal) => Promise<void>): Action<S> =>
+  ({ need, args, run, ...(authorize ? { authorize } : {}) })
 
 const Repo = z.object({ repo: RepoSlug })
 const Who = z.string().min(1).max(320)
@@ -208,6 +235,87 @@ function projectMemory(ctx: Context, repo: string): AgentMemory | null {
 }
 
 const toolNeed = (t: AnyTool): Role => (WRITE_TOOLS.has(t.name) ? 'write' : 'read')
+
+// ------------------------------------------------------------------ prompts
+
+const PromptId = z.string().regex(PROMPT_ID, 'a prompt id such as specialist.verify.workflow')
+const Scope = z.enum(['installation', 'project'])
+const PromptRepo = z.object({ repo: RepoSlug.optional() })
+const Scoped = z.object({ id: PromptId, scope: Scope, repo: RepoSlug.optional() })
+
+/** Anyone in a class (guests too) may read the catalog and the installation's overrides; a repo needs read on it. */
+async function mayReadPrompts(a: { repo?: string | undefined }, p: Principal): Promise<void> {
+  if (a.repo) { await require_(p, a.repo, 'read'); return }
+  if (classOf(p) === null) throw new AccessDenied(NO_ACCESS)
+}
+
+/** Installation scope: admins. Project scope: write on the repo (users assigned to it, and admins). */
+async function mayWritePrompts(a: { scope: 'installation' | 'project'; repo?: string | undefined }, p: Principal): Promise<void> {
+  if (a.scope === 'installation') { if (!isAdmin(p)) throw new AccessDenied('admins only: installation prompts'); return }
+  if (!a.repo) throw new ActionError('scope project needs repo')
+  await require_(p, a.repo, 'write')
+}
+
+/** History: no guests. Installation: a user or an admin; project: write on the repo. */
+async function mayReadHistory(a: { scope: 'installation' | 'project'; repo?: string | undefined }, p: Principal): Promise<void> {
+  if (a.scope === 'project') return mayWritePrompts(a, p)
+  const cls = classOf(p)
+  if (cls !== 'admin' && cls !== 'user') throw new AccessDenied(NO_ACCESS)
+}
+
+const installationPrompts = (ctx: Context): InstallationPrompts => ctx.deps.prompts?.() ?? new InstallationPrompts()
+
+/** The overrides in force: the installation's, and with a repo its default branch's project.db. */
+async function promptLayers(ctx: Context, repo: string | undefined): Promise<Layers> {
+  const unavailable: { layer: 'installation' | 'project'; reason: string }[] = []
+  const installation = await installationPrompts(ctx).overrides().catch((e: unknown) => { unavailable.push({ layer: 'installation', reason: errMsg(e) }); return undefined })
+  const project = repo ? await withProjectDb(ctx, repo, (db) => projectOverrides(db)) : undefined
+  return { ...(installation ? { installation } : {}), ...(project ? { project } : {}), ...(unavailable.length ? { unavailable } : {}) }
+}
+
+const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e)).slice(0, 300)
+
+/** The hash a person's prompt changes are recorded under (never their email). */
+const promptBy = (p: Principal): string => telemetryHash(p.email ?? p.sub)
+
+/** A checked write, as an ActionError when the text, the id or the reason is refused (it names the bad variable). */
+function checked<T>(fn: () => T): T {
+  try {
+    return fn()
+  } catch (e) {
+    if (e instanceof TemplateError || e instanceof PromptError) throw new ActionError(e.message)
+    if (e instanceof z.ZodError) throw new ActionError(e.issues.map((i) => i.message).join('; '))
+    throw e
+  }
+}
+
+/** One write to one layer: the installation's store, or a commit of the project's database on a branch of its own. */
+async function writePrompt(ctx: Context, scope: 'installation' | 'project', repo: string | undefined, w: PromptWrite) {
+  if (scope === 'installation') {
+    try {
+      const h = await installationPrompts(ctx).write(w)
+      return { scope, id: w.id, version: h.version, uid: h.uid, action: h.action }
+    } catch (e) {
+      return checked(() => { throw e })
+    }
+  }
+  const r = repo as string
+  const gh = await ctx.deps.github()
+  const { branch: base, sha } = await gh.defaultBranch(r)
+  const blob = await gh.fileSha(r, PROJECT_DB_PATH, base)
+  const t = tempDb(ctx.deps.scratch, await gh.rawFile(r, PROJECT_DB_PATH, base))
+  try {
+    const h = checked(() => writeProject(w, t.root))
+    const branch = `trace/prompts-${slugify(w.id)}-${Date.now().toString(36)}`
+    if (branch === base) throw new ActionError('refusing to write the default branch')
+    await gh.createBranch(r, branch, sha)
+    const message = `prompts: ${w.op} ${w.id} (v${h.version})\n\n${h.reason ?? ''}\n\nRequested by ${ctx.principal.email ?? ctx.principal.sub} through the trace API.`
+    const { commit } = await gh.putFile(r, { path: PROJECT_DB_PATH, branch, content: readFileSync(t.db), message, sha: blob })
+    return { scope, repo: r, id: w.id, version: h.version, uid: h.uid, action: h.action, branch, commit, note: '.trace/** is a protected path: the pull request waits for a person to merge it.' }
+  } finally {
+    t.cleanup()
+  }
+}
 
 // ------------------------------------------------------------------ the actions
 
@@ -405,6 +513,42 @@ export const ACTIONS = {
   }),
 
   assignments: def('admin', z.object({ repo: RepoSlug.optional() }), async (a, ctx) => assignments(ctx.principal, a.repo ? { repo: a.repo } : {})),
+
+  'prompts.list': def('prompts', PromptRepo, async (a, ctx) => ({ ...(a.repo ? { repo: a.repo } : {}), ...listView(await promptLayers(ctx, a.repo)) }), mayReadPrompts),
+
+  'prompts.get': def('prompts', PromptRepo.extend({ id: PromptId }), async (a, ctx) => {
+    checked(() => entry(a.id))
+    return { ...(a.repo ? { repo: a.repo } : {}), ...getView(a.id, await promptLayers(ctx, a.repo)) }
+  }, mayReadPrompts),
+
+  'prompts.preview': def('read', Repo.extend({ target: PreviewTarget, job: PreviewJob.optional() }), async (a, ctx) => {
+    const layers = await promptLayers(ctx, a.repo)
+    const gh = await ctx.deps.github()
+    const { branch } = await gh.defaultBranch(a.repo)
+    const rulesBytes = await gh.rawFile(a.repo, '.trace/rules.md', branch)
+    const cfg = await withProjectDb(ctx, a.repo, (db) => resolve(readSettings(db)).config)
+    const p = checked(() => preview({ target: a.target, cfg, repository: a.repo, rules: rulesBytes ? Buffer.from(rulesBytes).toString('utf8') : null, layers, job: a.job }))
+    return {
+      repo: a.repo, prompt: p.prompt, ...(p.kind ? { kind: p.kind } : {}), text: p.composed.text, marked: p.marked,
+      parts: p.composed.parts.map(({ text: _t, ...x }) => x), unavailable: layers.unavailable,
+    }
+  }),
+
+  'prompts.set': def('prompts', Scoped.extend({ text: z.string().min(1).max(MAX_PROMPT_CHARS), reason: PromptReason }), async (a, ctx) =>
+    writePrompt(ctx, a.scope, a.repo, { op: 'set', id: a.id, text: a.text, reason: a.reason, by: promptBy(ctx.principal) }), mayWritePrompts),
+
+  'prompts.reset': def('prompts', Scoped.extend({ reason: PromptReason.default('reset to the layer below') }), async (a, ctx) =>
+    writePrompt(ctx, a.scope, a.repo, { op: 'reset', id: a.id, reason: a.reason, by: promptBy(ctx.principal) }), mayWritePrompts),
+
+  'prompts.revert': def('prompts', Scoped.extend({ version: z.union([z.number().int().positive(), z.string().min(1).max(40)]), reason: PromptReason.optional() }), async (a, ctx) =>
+    writePrompt(ctx, a.scope, a.repo, { op: 'revert', id: a.id, to: a.version, reason: a.reason, by: promptBy(ctx.principal) }), mayWritePrompts),
+
+  'prompts.history': def('prompts', Scoped, async (a, ctx) => {
+    const history = a.scope === 'installation'
+      ? await installationPrompts(ctx).history(a.id)
+      : await withProjectDb(ctx, a.repo as string, (db) => projectHistory(db, a.id))
+    return { id: a.id, scope: a.scope, ...(a.repo && a.scope === 'project' ? { repo: a.repo } : {}), history: history.map((h) => ({ ...h, at: new Date(h.at * 1000).toISOString() })) }
+  }, mayReadHistory),
 } satisfies Record<string, Action<z.ZodType>>
 
 export type ActionName = keyof typeof ACTIONS
@@ -428,6 +572,7 @@ export async function perform(name: string, raw: Record<string, unknown>, ctx: C
   const p = ctx.principal
   switch (action.need) {
     case 'signed-in': case 'job': break
+    case 'prompts': if (!action.authorize) throw new AccessDenied(NO_ACCESS); await action.authorize(args, p); break
     case 'admin': if (!isAdmin(p)) throw new AccessDenied('admins only'); break
     case 'read': case 'write': await require_(p, repo ?? '', action.need); break
     case 'tool': {

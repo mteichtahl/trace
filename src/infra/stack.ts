@@ -3,7 +3,8 @@
  *
  *   central bucket      $TRACE_HOME (central/): the central database (datasheets, parts) every project shares;
  *                       projects/<slug>/ and jobs/<slug>/ for each project's own data and GPU job files; access/ for
- *                       who may do what (the API's only)
+ *                       who may do what (the API's only); prompts/ for the installation's prompt overrides (the API
+ *                       writes them, conditionally; workers and workflows read them)
  *   agent image         built from this repository by AWS CodeBuild on arm64 (no local Docker), pushed to ECR; every
  *                       runtime runs it
  *   projects            one ProjectStack per repository (src/infra/project.ts): its worker runtime on Bedrock
@@ -58,7 +59,7 @@ import { JOBS_PREFIX, PROJECTS_PREFIX, memoryName } from '../core/project.js'
 import { GpuCompute } from './gpu.js'
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
-import { ACCESS_PREFIX, CENTRAL_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
+import { ACCESS_PREFIX, CENTRAL_PREFIX, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
   GPU_IMAGE_BUILD_OUTPUT, type InfraProps, LAYOUT_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled,
   projectRefs, projectSettings,
@@ -71,7 +72,7 @@ export const INSTALLATION_TAG = 'trace:installation'
 /** The repository root, from dist/infra or src/infra. */
 export const REPO_ROOT = join(import.meta.dirname, '..', '..')
 
-export { ACCESS_PREFIX, CENTRAL_PREFIX } from './project.js'
+export { ACCESS_PREFIX, CENTRAL_PREFIX, PROMPTS_PREFIX } from './project.js'
 
 /** AgentCore's limits on a runtime's environment (CreateAgentRuntime environmentVariables: 0–50 entries, each
  * value 0–5000 characters). */
@@ -342,6 +343,9 @@ export class TraceStack extends Stack {
     githubToken.grantRead(apiRole)
     grantPrefixes(apiRole, central, { conditional: [CENTRAL_PREFIX] })
     central.grantReadWrite(apiRole, `${ACCESS_PREFIX}/*`)
+    // the installation's prompt overrides (prompts.set / reset / revert, admins only, src/prompts/store.ts): read, and
+    // write only with conditional puts (the central store's way); the workers and workflows only read them
+    grantPrefixes(apiRole, central, { conditional: [PROMPTS_PREFIX] })
     // which memory records are inactive, per project (memory.deactivate / reactivate, src/agents/runtime/memory-state.ts):
     // read and conditional writes under projects/<slug>/memory-state/ only, nothing else of projects/
     grantPrefixes(apiRole, central, { conditional: [`${PROJECTS_PREFIX}/*/${MEMORY_STATE}`] })
