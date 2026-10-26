@@ -11,11 +11,15 @@
  *                       AgentCore with its own execution role, its GitHub token secret, its GitHub OIDC role, its
  *                       AgentCore memory, its GPU job definition and job role, and its CodeBuild GitHub Actions
  *                       runner project (src/infra/runner.ts: every CI job runs on AWS, never on a GitHub-hosted
- *                       runner; its role gives a job no AWS access). Each role reaches that project's
+ *                       runner; its role gives a job no AWS access), once the GitHub connection is authorized
+ *                       (runners.connectionReady). Each role reaches that project's
  *                       resources only, so the line between projects holds in IAM even though the agent has Bash
  *                       and the role's credentials. Layout 'nested' (the default) puts each in its own nested stack,
  *                       so this stack holds one resource per project and 60 fit; 'flat' keeps them here, as earlier
  *                       installations have them (about 20 fit)
+ *   GitHub connection   the AWS CodeConnections connection the runners reach GitHub through: the one given
+ *                       (runners.connectionArn), or `<prefix>-github`, created here and kept (Retain) when the stack
+ *                       goes; its ARN is the GithubConnectionArn output (src/infra/runner.ts GithubConnection)
  *   agent memory        AgentCore Memory (src/infra/memory.ts): one per project, made by its ProjectStack, still
  *                       namespaced /trace/<owner>/<repo>/<agent>/; each worker may use only its own project's memory
  *   GPU                 one AWS Batch queue and compute environment shared by every project, and (cpu.enabled) a
@@ -63,6 +67,7 @@ import { GpuCompute } from './gpu.js'
 import { KB_RETRIEVE_ACTIONS, VectorStore, knowledgeBaseArn } from './knowledge.js'
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
+import { GithubConnection } from './runner.js'
 import { ACCESS_PREFIX, CENTRAL_PREFIX, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
   GPU_IMAGE_BUILD_OUTPUT, type InfraProps, LAYOUT_OUTPUT, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled,
@@ -250,9 +255,13 @@ export class TraceStack extends Stack {
     const vectors = refs.some((r) => kbEnabled(cfg, r.repository)) ? new VectorStore(this, 'KnowledgeVectors', { prefix: cfg.prefix, removalPolicy: keep }) : null
     // the library gateway (gateway.enabled): the shared datasheets and parts tools behind AgentCore Gateway
     const library = cfg.gateway.enabled ? new LibraryGateway(this, 'Library', { prefix: cfg.prefix, bucket: central, traceHome, root: REPO_ROOT }) : null
+    // the GitHub connection the CodeBuild runners use (src/infra/runner.ts): given, or created here; the runner
+    // projects only once it is authorized (runners.connectionReady)
+    const connection = new GithubConnection(this, 'GithubConnection', { prefix: cfg.prefix, connectionArn: cfg.runners.connectionArn })
     const projectProps = (ref: (typeof refs)[number]): ProjectProps => ({
       cfg, project: ref, bucket: central, images: repo, imageUri: image.getAttString('ImageUri'), oidcProviderArn: oidc.openIdConnectProviderArn,
       gpu, vectorBucketArn: vectors?.arn ?? null, gateway: library?.ref ?? null,
+      connectionArn: cfg.runners.connectionReady ? connection.connectionArn : null,
       environment: {
         AWS_REGION: cfg.region, TRACE_HOME: traceHome, CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: cfg.model, TRACE_WORKSPACE: '/mnt/workspace',
       },
