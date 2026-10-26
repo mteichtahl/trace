@@ -20,9 +20,11 @@
  *                    (<prefix>-<project hash>-wait-<Batch job id>, tagged trace:project) is subscribed to it with a
  *                    filter on the job's id; then ONE DescribeJobs (an event from before the subscription would be
  *                    missed: this closes that gap), then ReceiveMessage long polls, each returning the moment an event
- *                    arrives. Event delivery is best effort, so one DescribeJobs every 5 minutes (said in the log when
- *                    the wait starts) catches a lost one. The subscription and the queue are removed when the wait
- *                    ends, however it ends
+ *                    arrives. Event delivery is best effort, and a new subscription can take about a minute to start
+ *                    delivering, so DescribeJobs also looks 30 s and 90 s after subscribing, then every 5 minutes (said
+ *                    in the log when the wait starts). The subscription and the queue are removed when the wait ends,
+ *                    however it ends; one left by a process that was killed is swept by a later wait of the project
+ *                    (queues older than 24 h, and their subscriptions), alongside that wait and never in its way
  *        on a timer  where there is no subscription (an older stack without the topic, or setting it up failed: the
  *                    log says why), DescribeJobs through waitWithTimer (src/core/wait.ts) from 5 s, backing off to 30 s
  *                    while nothing changes and back to 5 s when it does; the log says when the next check is
@@ -76,12 +78,18 @@ export interface SqsApi {
   receiveMessage(i: { QueueUrl: string; WaitTimeSeconds: number; MaxNumberOfMessages: number }): Promise<{ Messages?: { Body?: string | undefined; ReceiptHandle?: string | undefined }[] | undefined }>
   deleteMessage(i: { QueueUrl: string; ReceiptHandle: string }): Promise<unknown>
   deleteQueue(i: { QueueUrl: string }): Promise<unknown>
+  listQueues(i: { QueueNamePrefix: string; MaxResults: number; NextToken?: string | undefined }): Promise<{ QueueUrls?: string[] | undefined; NextToken?: string | undefined }>
+  getQueueAttributes(i: { QueueUrl: string; AttributeNames: 'CreatedTimestamp'[] }): Promise<{ Attributes?: Record<string, string> | undefined }>
 }
 
 /** The SNS calls the event wait uses. */
 export interface SnsApi {
   subscribe(i: { TopicArn: string; Protocol: 'sqs'; Endpoint: string; Attributes: Record<string, string>; ReturnSubscriptionArn: boolean }): Promise<{ SubscriptionArn?: string | undefined }>
   unsubscribe(i: { SubscriptionArn: string }): Promise<unknown>
+  listSubscriptionsByTopic(i: { TopicArn: string; NextToken?: string | undefined }): Promise<{
+    Subscriptions?: { SubscriptionArn?: string | undefined; Endpoint?: string | undefined; Protocol?: string | undefined }[] | undefined
+    NextToken?: string | undefined
+  }>
 }
 
 export interface BatchDeps {
@@ -114,6 +122,8 @@ async function awsSqs(): Promise<SqsApi> {
     receiveMessage: (i) => client.send(new q.ReceiveMessageCommand(i)),
     deleteMessage: (i) => client.send(new q.DeleteMessageCommand(i)),
     deleteQueue: (i) => client.send(new q.DeleteQueueCommand(i)),
+    listQueues: (i) => client.send(new q.ListQueuesCommand(i)),
+    getQueueAttributes: (i) => client.send(new q.GetQueueAttributesCommand(i)),
   }
 }
 
@@ -123,11 +133,32 @@ async function awsSns(): Promise<SnsApi> {
   return {
     subscribe: (i) => client.send(new n.SubscribeCommand(i)),
     unsubscribe: (i) => client.send(new n.UnsubscribeCommand(i)),
+    listSubscriptionsByTopic: (i) => client.send(new n.ListSubscriptionsByTopicCommand(i)),
   }
 }
 
 /** While waiting on events: one DescribeJobs this often, in case an event was lost. */
 export const SAFETY_CHECK_MS = 5 * 60_000
+/**
+ * And, before that, these long after subscribing: a new SNS subscription can take up to about a minute before it
+ * delivers, so a job that ends in that window would otherwise be found only at the first 5-minute check.
+ */
+export const WARMUP_CHECKS_MS = [30_000, 90_000] as const
+/**
+ * A wait queue older than this is left over from a wait that never cleaned up (its process was killed) and is swept.
+ * The longest a wait can last is the job's time limit (at most 8 h: GpuJobSchema's timeoutSeconds) plus
+ * TRACE_GPU_QUEUE_WAIT_S (default 30 min), so 8.5 h by default: 24 h is far above it. A TRACE_GPU_QUEUE_WAIT_S set
+ * so high that a wait could outlast 24 h raises the bound to that wait plus an hour (staleAfterMs): every wait of a
+ * project runs in its runtime, with the same environment, so the bound this process works out holds for the others.
+ */
+export const STALE_WAIT_QUEUE_MS = 24 * 3600_000
+const MAX_JOB_SECONDS = 8 * 3600
+
+export function staleAfterMs(env: NodeJS.ProcessEnv): number {
+  const queueWait = Number(env.TRACE_GPU_QUEUE_WAIT_S ?? 1800)
+  const longest = (MAX_JOB_SECONDS + (Number.isFinite(queueWait) && queueWait >= 0 ? queueWait : 1800)) * 1000
+  return Math.max(STALE_WAIT_QUEUE_MS, longest + 3600_000)
+}
 /** The timer used where there are no events (DescribeJobs): from 5 s, backing off to 30 s. */
 export const TIMER = { intervalMs: 5000, factor: 1.5, maxIntervalMs: 30_000 }
 const NO_EVENTS_WHY = 'no Batch event subscription on this stack'
@@ -230,7 +261,7 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
   const queueWait = Number(env.TRACE_GPU_QUEUE_WAIT_S ?? 1800)
   const deadline = t0 + (job.timeoutSeconds + (Number.isFinite(queueWait) && queueWait >= 0 ? queueWait : 1800)) * 1000
   const what = `the ${place.pool === 'gpu' ? 'graphics card' : 'remote CPU'} job ${id}`
-  const ctx: WaitCtx = { batch, jobId, deadline, now, log, what, sleep: deps.sleep }
+  const ctx: WaitCtx = { batch, jobId, deadline, now, log, what, sleep: deps.sleep, staleMs: staleAfterMs(env) }
   let last: { status: string; detail: BatchJobDetail | undefined }
   const topic = env.TRACE_BATCH_EVENTS_TOPIC
   const queueName = topic ? waitQueueName(topic, project, jobId) : null
@@ -297,6 +328,8 @@ interface WaitCtx {
   /** what is awaited, in plain words */
   what: string
   sleep?: ((ms: number) => Promise<void>) | undefined
+  /** wait queues older than this are swept (staleAfterMs) */
+  staleMs: number
 }
 
 /** How the wait ended: the job's last status (terminal, or not when the deadline came) and its detail. */
@@ -360,6 +393,8 @@ async function waitOnEvents(c: WaitCtx, o: { topic: string; queueName: string; p
     try {
       sqs = o.sqs ?? (await awsSqs())
       sns = o.sns ?? (await awsSns())
+      // this project's wait queues left over by waits that never cleaned up: alongside, never in the way
+      startSweep({ sqs, sns, topic: o.topic, prefix: o.queueName.slice(0, o.queueName.length - jobId.length), own: o.queueName, now, staleMs: c.staleMs, log })
       queueUrl = (await sqs.createQueue({
         QueueName: o.queueName,
         Attributes: {
@@ -396,8 +431,11 @@ async function waitOnEvents(c: WaitCtx, o: { topic: string; queueName: string; p
     let s = await describe(c)
     seen(s)
     if (TERMINAL.has(s.status)) return s
-    log(`${jobId}: waiting on its Batch events; a check every ${Math.round(SAFETY_CHECK_MS / 60_000)} minutes in case one is lost`)
-    let nextSafety = now() + SAFETY_CHECK_MS
+    log(`${jobId}: waiting on its Batch events. In case one is lost, trace also checks the job ${WARMUP_CHECKS_MS.map((ms) => `${ms / 1000} seconds`).join(' and ')} after subscribing (a new subscription can take about a minute to start delivering), then every ${Math.round(SAFETY_CHECK_MS / 60_000)} minutes`)
+    // the safety-net looks, from when the subscription was made: the warm-up ones, then every SAFETY_CHECK_MS
+    const subscribedAt = now()
+    const warmups = WARMUP_CHECKS_MS.map((ms) => subscribedAt + ms)
+    let nextSafety = warmups.shift() ?? subscribedAt + SAFETY_CHECK_MS
     for (;;) {
       const t = now()
       if (t >= c.deadline) {
@@ -410,7 +448,7 @@ async function waitOnEvents(c: WaitCtx, o: { topic: string; queueName: string; p
         s = await describe(c)
         seen(s)
         if (TERMINAL.has(s.status)) return s
-        nextSafety = now() + SAFETY_CHECK_MS
+        nextSafety = warmups.shift() ?? now() + SAFETY_CHECK_MS
         continue
       }
       const waitS = Math.max(1, Math.min(20, Math.ceil((Math.min(nextSafety, c.deadline) - t) / 1000)))
@@ -473,4 +511,102 @@ async function waitOnTimer(c: WaitCtx, why: string, lastStatus: string): Promise
   })
   if (outcome.done) return outcome.value
   return seenLast ?? { status: outcome.state ?? 'UNKNOWN', detail: undefined }
+}
+
+// ------------------------------------------------------------------ leftover wait queues
+
+let sweeping: Promise<void> | null = null
+
+/** The sweep running now, if any (tests wait for it). */
+export function sweepInFlight(): Promise<void> | null { return sweeping }
+
+const missingQueue = (e: unknown): boolean => {
+  const n = (e as { name?: unknown; Code?: unknown })?.name ?? (e as { Code?: unknown })?.Code
+  return n === 'QueueDoesNotExist' || n === 'AWS.SimpleQueueService.NonExistentQueue'
+}
+
+/** Start sweeping this project's stale wait queues unless a sweep is already running in this process. Never throws. */
+function startSweep(o: SweepOptions): void {
+  if (sweeping) return
+  sweeping = sweepWaitQueues(o)
+    .catch((e: unknown) => o.log(`could not sweep left-over event queues (${errText(e)})`))
+    .finally(() => { sweeping = null })
+}
+
+interface SweepOptions {
+  sqs: SqsApi
+  sns: SnsApi
+  topic: string
+  /** this project's wait-queue name prefix, `<prefix>-<hash>-wait-` */
+  prefix: string
+  /** the queue this wait is about to make: never touched */
+  own: string
+  now: () => number
+  staleMs: number
+  log: (line: string) => void
+}
+
+/**
+ * Delete this project's wait queues older than staleMs, and remove the topic's subscriptions of this project's wait
+ * queues that are gone. Only names with this project's own prefix are ever touched; a subscription is removed only
+ * when its queue was deleted here or SQS says it does not exist (a queue another wait made a moment ago is left alone).
+ */
+export async function sweepWaitQueues(o: SweepOptions): Promise<void> {
+  const [arn, partition, , region, account] = o.topic.split(':')
+  const arnPrefix = `${arn}:${partition}:sqs:${region}:${account}:`
+  const nameOf = (url: string): string => url.slice(url.lastIndexOf('/') + 1)
+  const urls: string[] = []
+  let token: string | undefined
+  do {
+    const page = await o.sqs.listQueues({ QueueNamePrefix: o.prefix, MaxResults: 1000, ...(token ? { NextToken: token } : {}) })
+    urls.push(...(page.QueueUrls ?? []))
+    token = page.NextToken
+  } while (token)
+  const urlByName = new Map<string, string>()
+  const deleted = new Set<string>()
+  for (const url of urls) {
+    const name = nameOf(url)
+    if (!name.startsWith(o.prefix) || name === o.own) continue
+    urlByName.set(name, url)
+    try {
+      const created = Number((await o.sqs.getQueueAttributes({ QueueUrl: url, AttributeNames: ['CreatedTimestamp'] })).Attributes?.CreatedTimestamp) * 1000
+      if (!Number.isFinite(created) || o.now() - created < o.staleMs) continue
+      await o.sqs.deleteQueue({ QueueUrl: url })
+      deleted.add(name)
+      o.log(`deleted the left-over event queue ${name}`)
+    } catch (e) {
+      if (missingQueue(e)) deleted.add(name)
+      else o.log(`could not sweep the event queue ${name} (${errText(e)})`)
+    }
+  }
+  // the queue's URL when the listing did not have it (gone, or made since): SQS's own form for the region
+  const urlFor = (name: string): string => urlByName.get(name) ?? `https://sqs.${region}.amazonaws.com${partition === 'aws-cn' ? '.cn' : ''}/${account}/${name}`
+  token = undefined
+  do {
+    const page = await o.sns.listSubscriptionsByTopic({ TopicArn: o.topic, ...(token ? { NextToken: token } : {}) })
+    for (const sub of page.Subscriptions ?? []) {
+      const endpoint = sub.Endpoint ?? ''
+      if (sub.Protocol !== 'sqs' || !endpoint.startsWith(arnPrefix + o.prefix) || !sub.SubscriptionArn || sub.SubscriptionArn === 'PendingConfirmation') continue
+      const name = endpoint.slice(arnPrefix.length)
+      if (name === o.own) continue
+      let gone = deleted.has(name)
+      if (!gone) {
+        // not deleted here: removed only if SQS says the queue is not there
+        try {
+          await o.sqs.getQueueAttributes({ QueueUrl: urlFor(name), AttributeNames: ['CreatedTimestamp'] })
+        } catch (e) {
+          gone = missingQueue(e)
+          if (!gone) o.log(`could not check the event queue ${name} (${errText(e)})`)
+        }
+      }
+      if (!gone) continue
+      try {
+        await o.sns.unsubscribe({ SubscriptionArn: sub.SubscriptionArn })
+        o.log(`removed the left-over event subscription of ${name}`)
+      } catch (e) {
+        o.log(`could not remove the event subscription of ${name} (${errText(e)})`)
+      }
+    }
+    token = page.NextToken
+  } while (token)
 }

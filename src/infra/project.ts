@@ -19,7 +19,8 @@
  *             queues, and only tagged trace:project=<slug>; TerminateJob only on jobs tagged with its slug;
  *             DescribeJobs (no resource-level permissions exist); to wait on its jobs' state-change events
  *             (src/gpu/batch.ts), SQS on queues named <prefix>-<hash>-wait-* only, and Subscribe/Unsubscribe on the
- *             stack's batch-events topic only, with its own wait queues as the only endpoint
+ *             stack's batch-events topic only, with its own wait queues as the only endpoint; ListQueues (no
+ *             resource-level permission) and ListSubscriptionsByTopic on that topic, to sweep its left-over wait queues
  *   telemetry its own runtime's log group, X-Ray, PutMetricData in the bedrock-agentcore namespace
  *   model     Bedrock InvokeModel on Anthropic models and the account's inference profiles
  *   knowledge bedrock:Retrieve and Start/Get/ListIngestionJob on its own knowledge base only (nested layout,
@@ -306,6 +307,10 @@ export class ProjectStack extends Construct {
         actions: ['sqs:CreateQueue', 'sqs:DeleteQueue', 'sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes', 'sqs:SetQueueAttributes', 'sqs:TagQueue'],
         resources: [waitQueues],
       }))
+      // the sweep of its wait queues left over by a killed process (src/gpu/batch.ts sweepWaitQueues): ListQueues has
+      // no resource-level permission, so "*"; it lists names only, and the sweep asks with this project's prefix
+      role.addToPolicy(new iam.PolicyStatement({ sid: 'ProjectGpuWaitListQueues', actions: ['sqs:ListQueues'], resources: ['*'] }))
+      role.addToPolicy(new iam.PolicyStatement({ sid: 'ProjectGpuWaitListSubscriptions', actions: ['sns:ListSubscriptionsByTopic'], resources: [p.gpu.jobEvents.topicArn] }))
       role.addToPolicy(new iam.PolicyStatement({
         sid: 'ProjectGpuWaitSubscribe', actions: ['sns:Subscribe'], resources: [p.gpu.jobEvents.topicArn],
         conditions: { StringEquals: { 'sns:Protocol': 'sqs' }, StringLike: { 'sns:Endpoint': waitQueues } },

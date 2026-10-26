@@ -166,7 +166,13 @@ describe('the trace stack', () => {
       const queues = s.find((x) => x.Sid === 'ProjectGpuWaitQueues')
       expect(queues?.Action).toEqual(['sqs:CreateQueue', 'sqs:DeleteQueue', 'sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes', 'sqs:SetQueueAttributes', 'sqs:TagQueue'])
       expect(queues?.Resource).toEqual(waitQueues)
-      expect(s.filter((x) => actionsOf(x).some((a) => a.startsWith('sqs:')))).toHaveLength(1)
+      // ListQueues has no resource-level permission: a statement of its own, nothing else with it
+      expect(s.find((x) => x.Sid === 'ProjectGpuWaitListQueues')).toMatchObject({ Action: 'sqs:ListQueues', Resource: '*' })
+      expect(s.filter((x) => actionsOf(x).some((a) => a.startsWith('sqs:')))).toHaveLength(2)
+      const listSubs = s.find((x) => x.Sid === 'ProjectGpuWaitListSubscriptions')
+      expect(listSubs?.Action).toBe('sns:ListSubscriptionsByTopic')
+      expect(JSON.stringify(listSubs?.Resource)).toMatch(/GpuJobEvents/)
+      expect(JSON.stringify(listSubs?.Resource)).not.toContain('*')
       const sub = s.find((x) => x.Sid === 'ProjectGpuWaitSubscribe')
       expect(sub?.Action).toBe('sns:Subscribe')
       expect(JSON.stringify(sub?.Resource)).toMatch(/GpuJobEvents/)
@@ -174,7 +180,7 @@ describe('the trace stack', () => {
       const unsub = s.find((x) => x.Sid === 'ProjectGpuWaitUnsubscribe')
       expect(unsub?.Action).toBe('sns:Unsubscribe')
       expect(JSON.stringify(unsub?.Resource)).toMatch(/GpuJobEvents/)
-      expect(s.filter((x) => actionsOf(x).some((a) => a.startsWith('sns:')))).toHaveLength(2)
+      expect(s.filter((x) => actionsOf(x).some((a) => a.startsWith('sns:')))).toHaveLength(3)
       // telemetry: its own runtime's log group
       expect(text).toContain(`/aws/bedrock-agentcore/runtimes/trace_w_${c.h}-*`)
       expect(text).not.toContain('/aws/bedrock-agentcore/runtimes/*')

@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { SAFETY_CHECK_MS, eventDetail, runBatch, waitQueueName, type BatchApi, type BatchJobDetail, type SnsApi, type SqsApi } from '../../src/gpu/batch.js'
+import { SAFETY_CHECK_MS, STALE_WAIT_QUEUE_MS, eventDetail, runBatch, staleAfterMs, sweepInFlight, waitQueueName, type BatchApi, type BatchJobDetail, type SnsApi, type SqsApi } from '../../src/gpu/batch.js'
 import { GpuJobSchema } from '../../src/gpu/jobs.js'
 import { main } from '../../src/gpu/runner.js'
 import { projectHash } from '../../src/core/project.js'
@@ -50,10 +50,15 @@ class Sqs implements SqsApi {
   failCreate: Error | null = null
   failReceive: Error | null = null
   onReceive: ((n: number) => void) | null = null
+  /** the account's queues: name -> created (ms) */
+  queues = new Map<string, number>()
+  listed: string[] = []
+  failList: Error | null = null
   constructor(private readonly clock: Clock, public script: (string[] | null)[] = []) {}
   async createQueue(i: Parameters<SqsApi['createQueue']>[0]) {
     if (this.failCreate) throw this.failCreate
     this.created.push(i)
+    this.queues.set(i.QueueName, this.clock.t)
     return { QueueUrl: `https://sqs.us-east-1.amazonaws.com/123456789012/${i.QueueName}` }
   }
   async receiveMessage(i: { QueueUrl: string; WaitTimeSeconds: number }) {
@@ -67,19 +72,40 @@ class Sqs implements SqsApi {
     return { Messages: next.map((Body, k) => ({ Body, ReceiptHandle: `r${this.receives.length}-${k}` })) }
   }
   async deleteMessage(i: { ReceiptHandle: string }) { this.acked.push(i.ReceiptHandle); return {} }
-  async deleteQueue(i: { QueueUrl: string }) { this.deleted.push(i.QueueUrl); return {} }
+  async deleteQueue(i: { QueueUrl: string }) { this.deleted.push(i.QueueUrl); this.queues.delete(i.QueueUrl.slice(i.QueueUrl.lastIndexOf('/') + 1)); return {} }
+  async listQueues(i: { QueueNamePrefix: string; NextToken?: string | undefined }) {
+    if (this.failList) throw this.failList
+    this.listed.push(i.QueueNamePrefix)
+    // two pages, to follow NextToken
+    const all = [...this.queues.keys()].filter((n) => n.startsWith(i.QueueNamePrefix)).map((n) => `https://sqs.us-east-1.amazonaws.com/123456789012/${n}`)
+    return i.NextToken ? { QueueUrls: all.slice(1) } : { QueueUrls: all.slice(0, 1), ...(all.length > 1 ? { NextToken: 'p2' } : {}) }
+  }
+  async getQueueAttributes(i: { QueueUrl: string }) {
+    const created = this.queues.get(i.QueueUrl.slice(i.QueueUrl.lastIndexOf('/') + 1))
+    if (created === undefined) throw Object.assign(new Error('The specified queue does not exist.'), { name: 'QueueDoesNotExist' })
+    return { Attributes: { CreatedTimestamp: String(Math.floor(created / 1000)) } }
+  }
 }
 
 class Sns implements SnsApi {
   subscribed: Parameters<SnsApi['subscribe']>[0][] = []
   unsubscribed: string[] = []
   fail: Error | null = null
+  /** the topic's other subscriptions: arn -> endpoint */
+  subs = new Map<string, string>()
   async subscribe(i: Parameters<SnsApi['subscribe']>[0]) {
     if (this.fail) throw this.fail
     this.subscribed.push(i)
     return { SubscriptionArn: `${i.TopicArn}:sub-1` }
   }
-  async unsubscribe(i: { SubscriptionArn: string }) { this.unsubscribed.push(i.SubscriptionArn); return {} }
+  async unsubscribe(i: { SubscriptionArn: string }) { this.unsubscribed.push(i.SubscriptionArn); this.subs.delete(i.SubscriptionArn); return {} }
+  private pages: { SubscriptionArn: string; Endpoint: string; Protocol: string }[] = []
+  async listSubscriptionsByTopic(i: { NextToken?: string | undefined }) {
+    // two pages of the listing as it was at the first: removing one while paging does not shift the next page
+    if (!i.NextToken) this.pages = [...this.subs].map(([SubscriptionArn, Endpoint]) => ({ SubscriptionArn, Endpoint, Protocol: Endpoint.includes('@') ? 'email' : 'sqs' }))
+    const all = this.pages
+    return i.NextToken ? { Subscriptions: all.slice(1) } : { Subscriptions: all.slice(0, 1), ...(all.length > 1 ? { NextToken: 'p2' } : {}) }
+  }
 }
 
 const job = (over: Record<string, unknown> = {}) => {
@@ -132,7 +158,7 @@ describe('waiting on Batch job events', () => {
     expect(r.sqs.acked).toEqual(['r1-0', 'r2-0', 'r2-1', 'r3-0'])
     // each status change logged once, as before
     expect(r.logs.filter((l) => /^job-1: [A-Z_]+$/.test(l))).toEqual(['job-1: SUBMITTED', 'job-1: RUNNABLE', 'job-1: STARTING', 'job-1: RUNNING', 'job-1: SUCCEEDED'])
-    expect(r.logs.join('\n')).toMatch(/waiting on its Batch events; a check every 5 minutes/)
+    expect(r.logs.join('\n')).toMatch(/waiting on its Batch events\. In case one is lost, trace also checks the job 30 seconds and 90 seconds after subscribing \(a new subscription can take about a minute to start delivering\), then every 5 minutes/)
     // on the record as an event wait while it lasted, with its state; off it after
     const mine = r.sqs.seenWaits.filter((w) => w.what.startsWith('the graphics card job blender-'))
     expect(mine.length).toBe(3)
@@ -176,18 +202,28 @@ describe('waiting on Batch job events', () => {
     expect(r.logs.filter((l) => /^job-1: [A-Z]+$/.test(l)).at(-1)).toBe('job-1: SUCCEEDED')
   })
 
-  it('looks with DescribeJobs every 5 minutes when no event comes, and finds the job finished', async () => {
+  it('looks with DescribeJobs at 30 s and 90 s after subscribing, then every 5 minutes, when no event comes', async () => {
     const r = rig({ script: [] })
     // the job ends after 7 minutes, and its event is lost
     r.sqs.onReceive = () => { if (r.clock.t - 1_000_000 >= 7 * 60_000) r.batch.status = 'SUCCEEDED' }
     const t0 = r.clock.t
-    const res = await runBatch(job(), r.deps)
+    // a deadline well past the looks (the default here is 660 s)
+    const res = await runBatch(job(), { ...r.deps, env: { ...env, TRACE_GPU_QUEUE_WAIT_S: '3600' } })
     expect(res.exitCode).toBe(0)
-    // the look after subscribing, then at 5 and 10 minutes
-    expect(r.batch.described.map((t) => t - t0)).toEqual([0, SAFETY_CHECK_MS, 2 * SAFETY_CHECK_MS])
-    // the receives fill the time between, never past the next look
-    expect(r.sqs.receives.length).toBe(30)
+    // the look after subscribing; the warm-up looks at 30 s and 90 s; then 5 and 10 minutes after the last
+    expect(r.batch.described.map((t) => t - t0)).toEqual([0, 30_000, 90_000, 90_000 + SAFETY_CHECK_MS, 90_000 + 2 * SAFETY_CHECK_MS])
+    // the receives fill the time between, never past the next look: 0-30 s (20+10), 30-90 s (3x20), then 15 per 5 minutes
+    expect(r.sqs.receives.slice(0, 5).map((x) => x.waitS)).toEqual([20, 10, 20, 20, 20])
+    expect(r.sqs.receives.length).toBe(2 + 3 + 15 + 15)
     expect(r.sns.unsubscribed).toHaveLength(1)
+  })
+
+  it('finds a job that ended while the subscription was warming up at the 30 s look', async () => {
+    const r = rig({ script: [] })
+    r.sqs.onReceive = () => { if (r.clock.t - 1_000_000 >= 10_000) r.batch.status = 'SUCCEEDED' }
+    const t0 = r.clock.t
+    expect((await runBatch(job(), r.deps)).exitCode).toBe(0)
+    expect(r.batch.described.map((t) => t - t0)).toEqual([0, 30_000])
   })
 
   it('terminates a job stuck past its deadline, and cleans up', async () => {
@@ -195,9 +231,9 @@ describe('waiting on Batch job events', () => {
     await expect(runBatch(job(), { ...r.deps, env: { ...env, TRACE_GPU_QUEUE_WAIT_S: '60' } }))
       .rejects.toThrow(/still RUNNABLE after \d+ s and was terminated: no GPU instance came up/)
     expect(r.batch.terminated).toEqual(['job-1'])
-    // the deadline is 120 s: receives up to it, and one last look at it
+    // the deadline is 120 s: the looks at 0, 30 s and 90 s, receives up to it, and one last look at it
     expect(r.clock.t - 1_000_000).toBe(120_000)
-    expect(r.batch.described).toHaveLength(2)
+    expect(r.batch.described.map((t) => t - 1_000_000)).toEqual([0, 30_000, 90_000, 120_000])
     expect(r.sns.unsubscribed).toHaveLength(1)
     expect(r.sqs.deleted).toHaveLength(1)
   })
@@ -270,5 +306,67 @@ describe('waiting on a timer where there are no events', () => {
     expect(waitQueueName('arn:aws:sns:us-east-1:123456789012:my-lab-batch-events', 'acme/board', 'j')).toBe(`my-lab-${projectHash('acme/board')}-wait-j`)
     expect(waitQueueName('arn:aws:sns:us-east-1:123456789012:other-topic', 'acme/board', 'j')).toBeNull()
     expect(waitQueueName(TOPIC, '_local', 'j')).toBeNull()
+  })
+})
+
+describe('sweeping left-over wait queues', () => {
+  const H = projectHash('acme/board')
+  const OTHER = projectHash('other/project')
+  const arnOf = (name: string): string => `arn:aws:sqs:us-east-1:123456789012:${name}`
+
+  it('deletes this project\'s stale queues and their subscriptions, leaves fresh ones and other projects\' alone, alongside the wait', async () => {
+    const r = rig({ script: [[event('SUCCEEDED')]] })
+    const day = STALE_WAIT_QUEUE_MS
+    // this project's: two stale (one listed on the second page), one fresh, and a subscription whose queue is long gone
+    r.sqs.queues.set(`trace-${H}-wait-old-1`, r.clock.t - day - 60_000)
+    r.sqs.queues.set(`trace-${H}-wait-old-2`, r.clock.t - 2 * day)
+    r.sqs.queues.set(`trace-${H}-wait-fresh`, r.clock.t - 3600_000)
+    // another project's, and another installation's, both stale
+    r.sqs.queues.set(`trace-${OTHER}-wait-old`, r.clock.t - 2 * day)
+    r.sqs.queues.set(`lab-${H}-wait-old`, r.clock.t - 2 * day)
+    r.sns.subs.set(`${TOPIC}:s-old-1`, arnOf(`trace-${H}-wait-old-1`))
+    r.sns.subs.set(`${TOPIC}:s-old-2`, arnOf(`trace-${H}-wait-old-2`))
+    r.sns.subs.set(`${TOPIC}:s-fresh`, arnOf(`trace-${H}-wait-fresh`))
+    r.sns.subs.set(`${TOPIC}:s-gone`, arnOf(`trace-${H}-wait-gone`))
+    r.sns.subs.set(`${TOPIC}:s-other`, arnOf(`trace-${OTHER}-wait-old`))
+    r.sns.subs.set(`${TOPIC}:s-other-gone`, arnOf(`trace-${OTHER}-wait-gone`))
+    r.sns.subs.set(`${TOPIC}:s-email`, 'someone@example.com')
+    const res = await runBatch(job(), r.deps)
+    expect(res.exitCode).toBe(0)
+    await sweepInFlight()
+    expect(r.sqs.listed).toEqual([`trace-${H}-wait-`, `trace-${H}-wait-`])
+    expect([...r.sqs.queues.keys()].sort()).toEqual([`lab-${H}-wait-old`, `trace-${H}-wait-fresh`, `trace-${OTHER}-wait-old`].sort())
+    expect([...r.sns.subs.keys()].sort()).toEqual([`${TOPIC}:s-email`, `${TOPIC}:s-fresh`, `${TOPIC}:s-other`, `${TOPIC}:s-other-gone`].sort())
+    expect(r.logs.join('\n')).toMatch(/deleted the left-over event queue trace-[0-9a-f]{8}-wait-old-1/)
+    // and the wait's own queue and subscription were cleaned up as usual
+    expect(r.sns.unsubscribed).toContain(`${TOPIC}:sub-1`)
+    expect(r.sqs.deleted).toContain(`https://sqs.us-east-1.amazonaws.com/123456789012/${QUEUE}`)
+  })
+
+  it('does not hold the wait up, and a failing sweep changes nothing about it', async () => {
+    const r = rig({ script: [[event('SUCCEEDED')]] })
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((res) => { release = res })
+    // a sweep that hangs until released: the job still finishes
+    r.sqs.listQueues = async () => { await gate; throw new Error('AccessDenied: sqs:ListQueues') }
+    const res = await runBatch(job(), r.deps)
+    expect(res.exitCode).toBe(0)
+    expect(sweepInFlight()).not.toBeNull()
+    // only one sweep at a time in a process: a second job while it hangs starts none
+    const r2 = rig({ script: [[event('SUCCEEDED')]] })
+    let listed2 = 0
+    r2.sqs.listQueues = async () => { listed2++; return { QueueUrls: [] } }
+    expect((await runBatch(job(), r2.deps)).exitCode).toBe(0)
+    expect(listed2).toBe(0)
+    release()
+    await sweepInFlight()
+    expect(sweepInFlight()).toBeNull()
+    expect(r.logs.join('\n')).toMatch(/could not sweep left-over event queues \(AccessDenied: sqs:ListQueues\)/)
+  })
+
+  it('keeps queues for as long as the longest wait could last', () => {
+    expect(staleAfterMs({})).toBe(STALE_WAIT_QUEUE_MS)
+    // 8 h job + 20 h for the queue: 28 h, plus an hour
+    expect(staleAfterMs({ TRACE_GPU_QUEUE_WAIT_S: String(20 * 3600) })).toBe(29 * 3600_000)
   })
 })
