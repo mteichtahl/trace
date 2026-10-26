@@ -72,8 +72,11 @@ export function run(command: string, opts: RunOptions): Promise<RunResult> {
       const s = b.toString('utf8')
       opts.onData?.(s)
       size += b.length
-      if (head.length < max / 2) head += s
-      else {
+      if (head.length < max / 2) {
+        const room = max / 2 - head.length
+        head += s.slice(0, room)
+        if (s.length > room) { truncated = true; tailBuf = (tailBuf + s.slice(room)).slice(-max / 2) }
+      } else {
         truncated = true
         tailBuf = (tailBuf + s).slice(-max / 2)
       }
@@ -251,7 +254,7 @@ export function sizeTool(prefer?: string): string | null {
 /** Memory regions from a GNU ld map / memory.x: FLASH and RAM lengths, to report percentages. */
 export function memoryRegions(text: string): Record<string, number> {
   const out: Record<string, number> = {}
-  const re = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:\([^)]*\))?\s*:\s*ORIGIN\s*=\s*[^,]+,\s*LENGTH\s*=\s*([0-9xXa-fA-F]+)\s*([KkMm])?/gm
+  const re = /(?:^|[\s{])([A-Za-z_][A-Za-z0-9_]*)\s*(?:\([^)]*\))?\s*:\s*ORIGIN\s*=\s*[^,]+,\s*LENGTH\s*=\s*([0-9xXa-fA-F]+)\s*([KkMm])?/gm
   for (const m of text.matchAll(re)) {
     const n = m[2]!.startsWith('0x') || m[2]!.startsWith('0X') ? parseInt(m[2]!, 16) : Number(m[2])
     const mul = m[3] ? (m[3].toUpperCase() === 'K' ? 1024 : 1024 * 1024) : 1

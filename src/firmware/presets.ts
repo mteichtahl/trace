@@ -123,7 +123,8 @@ export { OPENOCD }
 export function fill(template: string, values: Record<string, string | undefined>, target: string): string {
   return template.replace(/\{([a-z_]+)\}/g, (_, k: string) => {
     const v = values[k]
-    if (v === undefined || v === '') {
+    // an empty string is a deliberate blank (an optional `--probe` argument); only a missing value is an error
+    if (v === undefined) {
       const hint: Record<string, string> = {
         chip: 'set chip (probe-rs chip like RP235x or STM32G071RBTx, a Zephyr board, an Arduino FQBN)',
         port: 'set serial (a hil.serial name) for the upload/monitor port',

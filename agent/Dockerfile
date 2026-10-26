@@ -10,7 +10,7 @@ ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=UTC
 # Base tools.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl gnupg git openssh-client jq unzip xz-utils \
-      build-essential python3 python3-venv python3-pip ngspice iverilog poppler-utils \
+      build-essential python3 python3-venv python3-pip ngspice iverilog poppler-utils ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
 # Node 22 (NodeSource), the GitHub CLI (its apt repository) and KiCad 10 (ppa:kicad/kicad-10.0-releases, which builds
@@ -33,6 +33,10 @@ RUN install -d -m 0755 /etc/apt/keyrings \
  && node --version && gh --version \
  && rm -rf /var/lib/apt/lists/*
 
+# --- Blender (the rendering agent: src/render drives bpy scripts in /app/python/blender; Cycles on the CPU, no GPU).
+RUN apt-get update && apt-get install -y --no-install-recommends blender && blender --version && rm -rf /var/lib/apt/lists/*
+# --- end Blender
+
 # A non-root user owns the app's runtime state; the workspace is /mnt/workspace (AgentCore session storage) when
 # mounted, else /tmp/trace-work.
 RUN useradd --create-home --uid 10001 --shell /bin/bash trace \
@@ -50,6 +54,7 @@ RUN npm run build \
  && npm rebuild \
  && python3 -m venv /opt/trace-venv \
  && /opt/trace-venv/bin/pip install --no-cache-dir '/app/python[pdf]' \
+ && { test -d /app/python/blender || echo "note: /app/python/blender is not in the build context yet"; } \
  && ln -s /app/dist/cli.js /usr/local/bin/trace && chmod +x /app/dist/cli.js \
  && chown -R trace:trace /app
 

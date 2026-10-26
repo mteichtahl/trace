@@ -44,6 +44,8 @@ export interface CognitoUser { sub: string; username: string; email: string | nu
 
 export interface CognitoAdmin {
   getUser(username: string): Promise<CognitoUser | null>
+  /** A person by email or sub (ListUsers with a filter), or null. */
+  find(who: string): Promise<CognitoUser | null>
   listUsers(): Promise<CognitoUser[]>
   usersInGroup(group: string): Promise<CognitoUser[]>
   createUser(email: string): Promise<CognitoUser>
@@ -116,6 +118,13 @@ export class HttpCognito implements CognitoAdmin {
   }
 
   listUsers(): Promise<CognitoUser[]> { return this.paged('ListUsers', {}, 'PaginationToken') }
+
+  async find(who: string): Promise<CognitoUser | null> {
+    const attr = who.includes('@') ? 'email' : 'sub'
+    if (!/^[^"\\\s]+$/.test(who)) return null
+    const found = await this.paged('ListUsers', { Filter: `${attr} = "${who}"` }, 'PaginationToken')
+    return found[0] ?? null
+  }
   usersInGroup(group: string): Promise<CognitoUser[]> { return this.paged('ListUsersInGroup', { GroupName: group }, 'NextToken') }
 
   async createUser(email: string): Promise<CognitoUser> {

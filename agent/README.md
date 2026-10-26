@@ -57,7 +57,7 @@ The workflows need these repository variables: `TRACE_AWS_ROLE` (allowed `bedroc
 
 `agent/Dockerfile`, built for linux/arm64 with the repository root as the context. AWS CodeBuild builds it from the
 CDK stack, so no local Docker is needed. It contains Ubuntu 24.04, Node 22 (NodeSource), git, the GitHub CLI,
-python3 with a venv holding the bridge (`/app/python[pdf]`), ngspice, iverilog, poppler-utils, and KiCad 10 from
+python3 with a venv holding the bridge (`/app/python[pdf]`), ngspice, iverilog, poppler-utils, ffmpeg, Blender (Ubuntu's package; Cycles renders on the CPU, and the bpy scripts are in `/app/python/blender`, copied in with the repository), and KiCad 10 from
 `ppa:kicad/kicad-10.0-releases`. That PPA publishes arm64 builds for noble (10.0.7 as of 2026-10-26). If it can't be
 installed, the build falls back to Ubuntu's own `kicad`. The image runs as the non-root user `trace`, and its entry
 point is `node /app/dist/agent/main.js`.
