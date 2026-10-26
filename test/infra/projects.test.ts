@@ -8,13 +8,13 @@ import { Match, type Template } from 'aws-cdk-lib/assertions'
 import { describe, expect, it } from 'vitest'
 import { isComplete } from '../../src/infra/lambda/image-build.js'
 import { InfraPropsSchema, githubSecretName, memoryDeliveryName, memoryName, projectHash } from '../../src/infra/props.js'
-import { nestedOf, synth } from './templates.js'
+import { RUNNERS, nestedOf, synth } from './templates.js'
 
 const A = 'mteichtahl/trace'
 const B = 'pokeys-toolkit/potroller'
 const HA = projectHash(A)
 const HB = projectHash(B)
-const base = { account: '123456789012', region: 'us-east-1', repositories: [A, `${B}@develop`], model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com' }
+const base = { account: '123456789012', region: 'us-east-1', repositories: [A, `${B}@develop`], model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com', runners: RUNNERS }
 const LAYOUTS = ['nested', 'flat'] as const
 
 type Statement = { Sid?: string; Action: string | string[]; Resource?: unknown; Condition?: Record<string, Record<string, unknown>> }

@@ -5,7 +5,8 @@
  * and whether trace is already installed (an update rather than a first install). And around the deploy: which
  * projects the stack has and which of a project's fixed names are already taken in the account (a removed project's
  * retained memory, its delivery sources and destinations, its secret in its recovery window), the stack's outputs
- * with each nested project stack's, and the GPU image build the deploy started.
+ * with each nested project stack's, the GPU image build the deploy started, and the AWS CodeConnections connection to
+ * GitHub that the CodeBuild runners use (found or created, then waited on until a person authorizes it).
  *
  * The functions that call AWS around the deploy take their SDK clients as a parameter, so tests give them fakes.
  */
@@ -14,6 +15,7 @@ import { BedrockAgentCoreControlClient, ListAgentRuntimesCommand, ListMemoriesCo
 import { CloudFormationClient, DescribeStacksCommand, ListStackResourcesCommand, type Stack } from '@aws-sdk/client-cloudformation'
 import { CloudWatchLogsClient, DescribeDeliveryDestinationsCommand, DescribeDeliverySourcesCommand } from '@aws-sdk/client-cloudwatch-logs'
 import { BatchGetBuildsCommand, CodeBuildClient, StartBuildCommand } from '@aws-sdk/client-codebuild'
+import { CodeConnectionsClient, CreateConnectionCommand, GetConnectionCommand, ListConnectionsCommand } from '@aws-sdk/client-codeconnections'
 import { IAMClient, ListOpenIDConnectProvidersCommand } from '@aws-sdk/client-iam'
 import { DeleteSecretCommand, DescribeSecretCommand, ResourceNotFoundException, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts'
@@ -313,4 +315,126 @@ export async function freeSecretNames(creds: AwsCredentialIdentity, region: stri
     }
   }
   return out
+}
+
+/** The AWS CodeConnections side: the connection to GitHub through which CodeBuild runs every GitHub Actions job of the
+ * onboarded repositories (src/infra/runner.ts). No GitHub token is stored for it: a person authorizes it once in the
+ * AWS console, which installs (or picks) the AWS Connector for GitHub app on their account or organization. */
+type Connections = Pick<CodeConnectionsClient, 'send'>
+
+export const connectionsClient = (creds: AwsCredentialIdentity, region: string): CodeConnectionsClient => new CodeConnectionsClient({ region, credentials: creds })
+
+/** The connection the installer creates, or reuses, when the answers name none (at most 32 characters: the prefix is 21). */
+export const connectionName = (prefix: string): string => `${prefix}-github`
+
+/** Where a person authorizes a pending connection. */
+export const connectionsConsoleUrl = (region: string): string => `https://${region}.console.aws.amazon.com/codesuite/settings/connections?region=${region}`
+
+export interface GithubConnection { arn: string; name: string; status: string }
+
+/** Every GitHub connection in the account and region (ListConnections, paged). */
+export async function githubConnections(c: Connections): Promise<GithubConnection[]> {
+  const out: GithubConnection[] = []
+  let NextToken: string | undefined
+  do {
+    const r = await c.send(new ListConnectionsCommand({ ProviderTypeFilter: 'GitHub', MaxResults: 100, ...(NextToken ? { NextToken } : {}) }))
+    for (const x of r.Connections ?? []) out.push({ arn: x.ConnectionArn ?? '', name: x.ConnectionName ?? '', status: x.ConnectionStatus ?? '' })
+    NextToken = r.NextToken
+  } while (NextToken)
+  return out
+}
+
+/**
+ * The connection to use: the one the answers give (it must be a GitHub connection), else `<prefix>-github` when it is
+ * there (AVAILABLE, or PENDING from an earlier run that was not authorized yet: connection names are unique in an
+ * account, so another cannot be made beside it), else a new one, tagged with the installation, which starts PENDING.
+ */
+export async function findOrCreateConnection(c: Connections, o: { prefix: string; given?: string }): Promise<GithubConnection & { created: boolean }> {
+  if (o.given) {
+    let x
+    try {
+      x = (await c.send(new GetConnectionCommand({ ConnectionArn: o.given }))).Connection
+    } catch (e) {
+      if ((e as { name?: string }).name === 'ResourceNotFoundException') throw new Error(`the GitHub connection ${o.given} given in the answers does not exist in this account and region`)
+      throw e
+    }
+    if (!x) throw new Error(`the GitHub connection ${o.given} given in the answers does not exist in this account and region`)
+    if (x.ProviderType && x.ProviderType !== 'GitHub') throw new Error(`the connection ${o.given} is a ${x.ProviderType} connection, not a GitHub one`)
+    return { arn: x.ConnectionArn ?? o.given, name: x.ConnectionName ?? '', status: x.ConnectionStatus ?? '', created: false }
+  }
+  const name = connectionName(o.prefix)
+  const mine = (await githubConnections(c)).find((x) => x.name === name)
+  if (mine) {
+    if (mine.status === 'ERROR') throw new Error(`the GitHub connection ${name} is in status ERROR: delete it in the AWS console (Developer Tools > Settings > Connections) and run the installer again to create a new one, or give the ARN of another connection`)
+    return { ...mine, created: false }
+  }
+  const r = await c.send(new CreateConnectionCommand({ ProviderType: 'GitHub', ConnectionName: name, Tags: [{ Key: 'trace:installation', Value: o.prefix }] }))
+  if (!r.ConnectionArn) throw new Error('AWS CodeConnections created no connection')
+  return { arn: r.ConnectionArn, name, status: 'PENDING', created: true }
+}
+
+/** HH:MM:SS on this machine's clock, as the person reads it. */
+export const clockTime = (d: Date): string => [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':')
+
+export interface ConnectionWait {
+  region: string
+  /** the onboarded repositories, which the AWS Connector for GitHub app must be allowed to reach */
+  repos: readonly string[]
+  /** each line to show: the instructions once, then when the next check is */
+  report: (line: string) => void
+  pollMs?: number
+  timeoutMs?: number
+  /** a clock and a sleep, so tests need not wait */
+  now?: () => number
+  sleep?: (ms: number) => Promise<void>
+}
+
+export const CONNECTION_POLL_MS = 15_000
+export const CONNECTION_TIMEOUT_MS = 30 * 60_000
+
+/** What to tell the person about the AWS Connector for GitHub app's repository access. */
+export const connectorAccessNote = (repos: readonly string[]): string =>
+  `The AWS Connector for GitHub app must be allowed to reach every onboarded repository (${repos.join(', ')}): a repository it cannot reach gets no runner, and its workflow jobs never start. Check it on GitHub under Settings > Applications > AWS Connector for GitHub > Configure (the organization's settings for an organization's repositories).`
+
+/**
+ * Wait until the connection is AVAILABLE: GetConnection every pollMs, telling the person what to do and when the next
+ * check is. Gives up at the timeout (or on ERROR) with what to do next; running the installer again resumes, with the
+ * same connection.
+ */
+export async function waitForConnection(c: Connections, conn: { arn: string; name: string; status: string }, o: ConnectionWait): Promise<void> {
+  const poll = o.pollMs ?? CONNECTION_POLL_MS
+  const timeout = o.timeoutMs ?? CONNECTION_TIMEOUT_MS
+  const now = o.now ?? Date.now
+  const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const url = connectionsConsoleUrl(o.region)
+  const deadline = now() + timeout
+  let status = conn.status
+  let told = false
+  for (;;) {
+    if (status === 'AVAILABLE') return
+    if (status === 'ERROR') throw new Error(`the GitHub connection ${conn.name} is in status ERROR: delete it at ${url} and run the installer again to create a new one, or give the ARN of another connection`)
+    if (!told) {
+      o.report(`The GitHub connection ${conn.name} is waiting for a person to authorize it (once). Open ${url}, choose ${conn.name}, then "Update pending connection": that installs or picks the AWS Connector for GitHub app. Give the app access to ${o.repos.join(', ')}. The installer carries on by itself once it is authorized.`)
+      told = true
+    }
+    if (now() + poll > deadline) {
+      const minutes = Math.round(timeout / 60_000)
+      throw new Error(`the GitHub connection ${conn.name} was still not authorized after ${minutes} minute${minutes === 1 ? '' : 's'}. Authorize it at ${url} ("Update pending connection"), then run the installer again: it resumes from here with the same connection`)
+    }
+    o.report(`Waiting for ${conn.name} to be authorized (status ${status || 'unknown'}): checking again at ${clockTime(new Date(now() + poll))}.`)
+    await sleep(poll)
+    const x = (await c.send(new GetConnectionCommand({ ConnectionArn: conn.arn }))).Connection
+    status = x?.ConnectionStatus ?? ''
+  }
+}
+
+/** The connection the runners use, authorized: found or created (findOrCreateConnection), then waited on. */
+export async function ensureConnection(c: Connections, o: ConnectionWait & { prefix: string; given?: string }): Promise<GithubConnection & { created: boolean }> {
+  const conn = await findOrCreateConnection(c, o)
+  o.report(conn.created
+    ? `Created the GitHub connection ${conn.name} (${conn.arn}).`
+    : `Using the GitHub connection ${conn.name || conn.arn} (${conn.arn}, ${conn.status || 'status unknown'}).`)
+  await waitForConnection(c, conn, o)
+  o.report(`The GitHub connection ${conn.name || conn.arn} is authorized (AVAILABLE).`)
+  return { ...conn, status: 'AVAILABLE' }
 }

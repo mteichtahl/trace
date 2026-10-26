@@ -1,7 +1,7 @@
 /**
  * One onboarded project (one entry of `repositories`): its own worker runtime, the roles around it, its GitHub token
- * secret, its AgentCore memory and its GPU job definition. The stack makes one per repository, so adding or removing a repository (running
- * the installer again) adds or removes exactly these resources.
+ * secret, its AgentCore memory, its GPU job definition and its CodeBuild runner project. The stack makes one per
+ * repository, so adding or removing a repository (running the installer again) adds or removes exactly these resources.
  *
  * The worker runtime runs Claude with Bash, so whatever its execution role allows, the agent can do directly with
  * the role's credentials. That role is therefore the line between projects, and it allows only:
@@ -32,6 +32,13 @@
  * installer sets the repository variable TRACE_MEMORY_ID). Its job role (GPU and CPU jobs) may read/write
  * jobs/<slug>/* only.
  *
+ * Its CodeBuild runner project (src/infra/runner.ts, named runnerProjectName: <prefix>-ci-<hash>) is where every
+ * GitHub Actions job of the repository runs: GitHub-hosted runners are never used. CodeBuild reaches GitHub through the
+ * installation's CodeConnections connection (`runners.connectionArn`); the runner's service role may write its own
+ * log group and use that connection, nothing else in AWS, so a job still reaches AWS only by assuming the OIDC role
+ * above, exactly as on a GitHub-hosted runner. The installer sets the repository variable TRACE_CODEBUILD_PROJECT
+ * from its Project<hash>RunnerProject output.
+ *
  * Its names that can outlive it in the account (its memory, kept with retainData; its memory's delivery sources and
  * destinations; its secret, in its recovery window) carry its generation when that is above 0 (projectSettings,
  * src/core/project.ts), so a removed project can be added again.
@@ -54,12 +61,13 @@ import { Construct } from 'constructs'
 import { projectId, projectPrefix as memoryProjectPrefix } from '../agents/runtime/memory.js'
 import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
 import {
-  PROJECT_TAG, githubSecretName, memoryName, projectDataPrefix, projectJobsPrefix, workerRuntimeName,
+  PROJECT_TAG, githubSecretName, memoryName, projectDataPrefix, projectJobsPrefix, runnerProjectName, workerRuntimeName,
 } from '../core/project.js'
 import type { GatewayRef } from './gateway.js'
 import type { GpuCompute } from './gpu.js'
 import { ProjectKnowledgeBase } from './knowledge.js'
 import { EVENT_ACTIONS, RECORD_ACTIONS, TraceMemory } from './memory.js'
+import { RunnerProject } from './runner.js'
 import {
   GPU_JOB_VCPUS, type InfraProps, type ProjectRef, REPOSITORY_OUTPUT, kbEnabled, kbOutputs, knowledgeBaseOf, projectOutputs, projectSettings,
 } from './props.js'
@@ -141,6 +149,8 @@ export class ProjectStack extends Construct {
   readonly memory: TraceMemory | null
   /** its Bedrock knowledge base (null without one: knowledgeBase.enabled false for it, or the flat layout) */
   readonly knowledgeBase: ProjectKnowledgeBase | null
+  /** where its repository's GitHub Actions jobs run (src/infra/runner.ts) */
+  readonly runner: RunnerProject
 
   constructor(scope: Construct, id: string, p: ProjectProps) {
     super(scope, id)
@@ -350,6 +360,14 @@ export class ProjectStack extends Construct {
     // and searches and syncs its own knowledge base (the kb-sync job on a push to the default branch, and the fallback)
     if (this.knowledgeBase) for (const st of this.knowledgeBase.statements()) this.actionsRole.addToPolicy(st)
 
+    // ------------------------------------------------------------------ its CI: the CodeBuild runner project (src/infra/runner.ts)
+    // every GitHub Actions job of the repository runs here, in this account; its role gives a job no AWS access (a job
+    // assumes the OIDC role above for that, as before)
+    this.runner = new RunnerProject(this, 'Runner', {
+      name: runnerProjectName(cfg.prefix, repository), repository, ...cfg.runners,
+      tags: { [PROJECT_TAG]: slug, 'trace:installation': cfg.prefix },
+    })
+
     for (const r of [role, this.actionsRole]) Tags.of(r).add(PROJECT_TAG, slug)
     Tags.of(this.secret).add(PROJECT_TAG, slug)
 
@@ -359,6 +377,7 @@ export class ProjectStack extends Construct {
     new CfnOutput(stack, outputs.roleArn, { value: this.actionsRole.roleArn, description: `${slug}: its GitHub OIDC role (TRACE_AWS_ROLE)` })
     new CfnOutput(stack, outputs.secretArn, { value: this.secret.secretArn, description: `${slug}: its GitHub token secret` })
     if (this.jobDefinitionName) new CfnOutput(stack, outputs.jobDefinition, { value: this.jobDefinitionName, description: `${slug}: its GPU job definition` })
+    new CfnOutput(stack, outputs.runnerProject, { value: this.runner.projectName, description: `${slug}: its CodeBuild runner project (TRACE_CODEBUILD_PROJECT)` })
     if (this.memory) new CfnOutput(stack, outputs.memoryId, { value: this.memory.memoryId, description: `${slug}: its AgentCore memory (its worker's TRACE_MEMORY_ID)` })
     // nested layout only, so these are always its nested stack's outputs, never the parent's
     if (this.knowledgeBase) {
@@ -380,7 +399,7 @@ export class ProjectNestedStack extends NestedStack {
   readonly project: ProjectStack
 
   constructor(scope: Construct, id: string, p: ProjectProps) {
-    super(scope, id, { description: `trace: ${p.project.slug}'s worker runtime, roles, token secret, memory, knowledge base and job definitions`.slice(0, 1024) })
+    super(scope, id, { description: `trace: ${p.project.slug}'s worker runtime, roles, token secret, memory, knowledge base, job definitions and CI runner`.slice(0, 1024) })
     this.project = new ProjectStack(this, `Project${p.project.hash}`, p)
     // whose nested stack this is: the installer reads each project's outputs here (the parent carries none of them)
     new CfnOutput(this, REPOSITORY_OUTPUT, { value: p.project.slug, description: 'The repository this nested stack is the project of' })

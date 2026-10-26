@@ -26,6 +26,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.ui.json && tsc -p tsconfig.test.json --noEmit",
     "test": "vitest run",
     "check": "npm run typecheck && npm test",
+    "deploy:ci": "tsc -p tsconfig.json && cdk deploy TraceCi --app \"node dist/infra/ci-app.js\"",
     "prepare": "npm run build"
   },
   "dependencies": {

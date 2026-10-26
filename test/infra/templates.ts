@@ -8,6 +8,10 @@ import { Template } from 'aws-cdk-lib/assertions'
 import { type InfraProps, projectHash } from '../../src/infra/props.js'
 import { TraceStack } from '../../src/infra/stack.js'
 
+/** The `runners` every test installation has: a CodeConnections connection in the test account. */
+export const CONNECTION_ARN = 'arn:aws:codeconnections:us-east-1:123456789012:connection/00000000-0000-0000-0000-000000000000'
+export const RUNNERS = { connectionArn: CONNECTION_ARN }
+
 export interface Synth {
   stack: TraceStack
   parent: Template

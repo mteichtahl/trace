@@ -20,6 +20,8 @@ const calls = vi.hoisted(() => ({
   /** the default names check (no hook): which projects the stack has, and the names taken in the account */
   deployed: new Set<string>(),
   taken: new Set<string>(),
+  /** what the default connection step (no hook) was asked */
+  connection: [] as { prefix: string; given?: string; repos: readonly string[] }[],
 }))
 
 vi.mock('../../src/installer/aws.js', () => ({
@@ -35,7 +37,16 @@ vi.mock('../../src/installer/aws.js', () => ({
   deployedProjects: async () => calls.deployed,
   nameIndex: () => ({ taken: async (n: { memories: string[]; deliveries: string[]; secrets: string[] }) => [...n.memories, ...n.deliveries, ...n.secrets].filter((x) => calls.taken.has(x)) }),
   ensureGpuImage: async () => ({ ok: true, detail: 'the GPU image is built' }),
+  connectionsClient: () => ({}),
+  connectionName: (prefix: string) => `${prefix}-github`,
+  connectionsConsoleUrl: (region: string) => `https://${region}.console.aws.amazon.com/codesuite/settings/connections?region=${region}`,
+  connectorAccessNote: (repos: readonly string[]) => `The AWS Connector for GitHub app must be allowed to reach every onboarded repository (${repos.join(', ')})`,
+  ensureConnection: async (_c: unknown, o: { prefix: string; given?: string; repos: readonly string[] }) => {
+    calls.connection.push({ prefix: o.prefix, ...(o.given ? { given: o.given } : {}), repos: o.repos })
+    return { arn: o.given ?? CONNECTION, name: `${o.prefix}-github`, status: 'AVAILABLE', created: false }
+  },
 }))
+const CONNECTION = vi.hoisted(() => 'arn:aws:codeconnections:us-east-1:123456789012:connection/11111111-2222-3333-4444-555555555555')
 vi.mock('@aws-sdk/client-secrets-manager', () => ({
   SecretsManagerClient: class { async send(c: unknown) { calls.secrets.push(c) } },
   PutSecretValueCommand: class { constructor(readonly input: unknown) {} },
@@ -85,11 +96,10 @@ vi.mock('../../src/core/onboard.js', async (orig) => ({
 const { AnswersSchema, SecretsSchema } = await import('../../src/installer/answers.js')
 const { apply, infraInput, layoutDeploys, layoutOf, mergeLibraryKeys, plan, redact } = await import('../../src/installer/bootstrap.js')
 const { InfraPropsSchema } = await import('../../src/infra/props.js')
-const { projectOutputs } = await import('../../src/infra/props.js')
+const { projectOutputs, projectHash } = await import('../../src/infra/props.js')
 const { createInstaller } = await import('../../src/installer/server.js')
 const { seal, setVariable: realSetVariable, checkToken } = await vi.importActual<typeof import('../../src/installer/github.js')>('../../src/installer/github.js')
 const { installation, answers: savedAnswers } = await import('../../src/core/client.js')
-const { projectHash } = await import('../../src/infra/props.js')
 const { assignments, require_, projectsFor } = await import('../../src/core/access.js')
 
 const ANSWERS = {
@@ -118,6 +128,7 @@ for (const repo of ['mteichtahl/board', 'mteichtahl/fw']) {
   OUTPUTS[o.roleArn] = `arn:aws:iam::123456789012:role/trace-gh-${repo.split('/')[1]}-us-east-1`
   OUTPUTS[o.secretArn] = `arn:aws:secretsmanager:us-east-1:123456789012:secret:trace/github-token/${repo}`
   OUTPUTS[o.memoryId] = `trace_m_${repo.split('/')[1]}-abcdefghij`
+  OUTPUTS[o.runnerProject] = `trace-ci-${projectHash(repo)}`
 }
 const secretWrites = (): { SecretId: string; SecretString: string }[] => calls.secrets.map((c) => (c as { input: { SecretId: string; SecretString: string } }).input)
 
@@ -132,7 +143,7 @@ describe('answers', () => {
 
   it('plans every step, naming the account, region and repositories', () => {
     const steps = plan(AnswersSchema.parse(ANSWERS))
-    expect(steps.map((s) => s.id)).toEqual(['check', 'cdk', 'deploy', 'token', 'repos', 'onboard', 'people', 'local', 'gpu'])
+    expect(steps.map((s) => s.id)).toEqual(['check', 'connection', 'cdk', 'deploy', 'token', 'repos', 'onboard', 'people', 'local', 'gpu'])
     expect(steps.find((s) => s.id === 'repos')?.detail).toContain('mteichtahl/fw')
     expect(steps.find((s) => s.id === 'deploy')?.detail).toMatch(/for each of the 2 repositories its own AgentCore worker runtime/)
   })
@@ -423,7 +434,7 @@ describe('the local server', () => {
     expect((await call('/api/plan', { method: 'POST', key, body: '{"answers":{}}' })).status).toBe(400)
     expect((await call('/api/plan', { method: 'POST', key, body: 'x', type: 'text/plain' })).status).toBe(415)
     const planned = await call('/api/plan', { method: 'POST', key, body: JSON.stringify({ answers: ANSWERS }) })
-    expect(JSON.parse(planned.body).steps).toHaveLength(9)
+    expect(JSON.parse(planned.body).steps).toHaveLength(10)
   })
 })
 
@@ -570,5 +581,99 @@ describe('the library gateway', () => {
     })
     expect(ok).toBe(true)
     expect(secretWrites().map((x) => x.SecretId)).not.toContain(KEYS_ARN)
+  })
+})
+
+describe('the CodeBuild runners', () => {
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+
+  it('takes the runner settings from the answers, and plans the connection before the deploy', () => {
+    const a = AnswersSchema.parse(ANSWERS)
+    expect(a.runners).toEqual({ connectionArn: '', computeType: null, privileged: null })
+    // planning: a stand-in ARN, so the plan parses before the connection is known; the stack's defaults otherwise
+    const props = InfraPropsSchema.parse(infraInput(a))
+    expect(props.runners).toEqual({ connectionArn: 'arn:aws:codeconnections:us-east-1:123456789012:connection/00000000-0000-0000-0000-000000000000', computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false })
+    // the connection apply found wins over the answers', which wins over the stand-in
+    const own = AnswersSchema.parse({ ...ANSWERS, runners: { connectionArn: CONNECTION, computeType: 'BUILD_GENERAL1_XLARGE', privileged: true } })
+    expect(infraInput(own).runners).toEqual({ connectionArn: CONNECTION, computeType: 'BUILD_GENERAL1_XLARGE', privileged: true })
+    expect(infraInput(own, null, undefined, 'arn:found').runners.connectionArn).toBe('arn:found')
+    expect(AnswersSchema.safeParse({ ...ANSWERS, runners: { connectionArn: 'not-an-arn' } }).success).toBe(false)
+    expect(AnswersSchema.safeParse({ ...ANSWERS, runners: { computeType: 'BUILD_GENERAL1_SMALL' } }).success).toBe(false)
+    const steps = plan(a)
+    const connection = steps.find((x) => x.id === 'connection')
+    expect(connection?.title).toBe('Connect AWS to GitHub')
+    expect(connection?.detail).toMatch(/use the GitHub connection trace-github in AWS CodeConnections, or create it.*https:\/\/us-east-1\.console\.aws\.amazon\.com\/codesuite\/settings\/connections\?region=us-east-1.*"Update pending connection".*AWS Connector for GitHub app.*mteichtahl\/board, mteichtahl\/fw/)
+    expect(plan(own).find((x) => x.id === 'connection')?.detail).toContain(`use the GitHub connection ${CONNECTION}`)
+    expect(steps.find((x) => x.id === 'deploy')?.detail).toMatch(/its own AWS CodeBuild runner project that runs every one of its GitHub Actions jobs \(BUILD_GENERAL1_LARGE; no job runs on GitHub's own runners\)/)
+    expect(plan(own).find((x) => x.id === 'deploy')?.detail).toMatch(/BUILD_GENERAL1_XLARGE, Docker-in-Docker/)
+    expect(steps.find((x) => x.id === 'repos')?.detail).toContain('TRACE_CODEBUILD_PROJECT (the CodeBuild runner project its workflows run on)')
+    expect(JSON.stringify(steps)).not.toContain('TRACE_RUNNER')
+  })
+
+  it('connects to GitHub before bootstrapping or deploying, and deploys with that connection', async () => {
+    const order: string[] = []
+    const infra: Record<string, unknown>[] = []
+    const events: { type: string; line?: string; summary?: string[]; step?: { id: string; status: string; detail: string } }[] = []
+    const ok = await apply(AnswersSchema.parse(ANSWERS), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
+      ...quiet,
+      connection: async (o) => {
+        order.push(`connection ${o.prefix} ${o.given ?? '-'} ${o.region} ${o.repos.join(',')}`)
+        o.report('The GitHub connection trace-github is waiting for a person to authorize it (once). Open https://x, …')
+        o.report('Waiting for trace-github to be authorized (status PENDING): checking again at 10:42:15.')
+        return { arn: CONNECTION, name: 'trace-github', status: 'AVAILABLE' }
+      },
+      cdk: async (args, env) => { order.push(args[0] ?? ''); if (args[0] === 'deploy') infra.push(JSON.parse(env.TRACE_INFRA ?? '{}')); return 0 },
+      outputs: async () => OUTPUTS,
+    })
+    expect(ok).toBe(true)
+    expect(order).toEqual(['connection trace - us-east-1 mteichtahl/board,mteichtahl/fw', 'bootstrap', 'deploy'])
+    expect(infra[0]?.runners).toEqual({ connectionArn: CONNECTION })
+    // while it waits, the step itself says what to do and when the next check is
+    const running = events.filter((e) => e.type === 'step' && e.step?.id === 'connection' && e.step.status === 'running').map((e) => e.step?.detail ?? '')
+    expect(running.at(-1)).toMatch(/waiting for a person to authorize it.*checking again at 10:42:15/)
+    expect(events.find((e) => e.type === 'step' && e.step?.id === 'connection' && e.step.status === 'done')?.step?.detail).toBe(`trace-github is authorized (${CONNECTION})`)
+    // and the summary reminds them the app must reach every repository
+    expect((events.at(-1)?.summary ?? []).join('\n')).toMatch(/AWS Connector for GitHub app must be allowed to reach every onboarded repository \(mteichtahl\/board, mteichtahl\/fw\)/)
+  })
+
+  it('stops before deploying when the connection is not authorized in time, and says re-running resumes', async () => {
+    const cdk: string[] = []
+    const events: { type: string; summary?: string[]; step?: { id: string; status: string; detail: string } }[] = []
+    const ok = await apply(AnswersSchema.parse(ANSWERS), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
+      ...quiet,
+      connection: async () => { throw new Error('the GitHub connection trace-github was still not authorized after 30 minutes. Authorize it at https://x ("Update pending connection"), then run the installer again: it resumes from here with the same connection') },
+      cdk: async (args) => { cdk.push(args[0] ?? ''); return 0 },
+      outputs: async () => OUTPUTS,
+    })
+    expect(ok).toBe(false)
+    expect(cdk).toEqual([])
+    expect(events.find((e) => e.type === 'step' && e.step?.id === 'connection' && e.step.status === 'failed')?.step?.detail).toMatch(/still not authorized after 30 minutes.*run the installer again: it resumes/)
+    expect(events.at(-1)?.summary?.[0]).toMatch(/^Stopped at "Connect AWS to GitHub"/)
+  })
+
+  it('uses the account check by default, with the connection the answers give', async () => {
+    calls.connection.length = 0
+    const given = 'arn:aws:codeconnections:us-east-1:123456789012:connection/99999999-8888-7777-6666-555555555555'
+    const infra: Record<string, unknown>[] = []
+    const ok = await apply(AnswersSchema.parse({ ...ANSWERS, runners: { connectionArn: given, privileged: true } }), SecretsSchema.parse({ githubToken: TOKEN }), () => undefined, {
+      ...quiet, cdk: async (args, env) => { if (args[0] === 'deploy') infra.push(JSON.parse(env.TRACE_INFRA ?? '{}')); return 0 }, outputs: async () => OUTPUTS,
+    })
+    expect(ok).toBe(true)
+    expect(calls.connection).toEqual([{ prefix: 'trace', given, repos: ['mteichtahl/board', 'mteichtahl/fw'] }])
+    expect(infra[0]?.runners).toEqual({ connectionArn: given, privileged: true })
+  })
+
+  it("sets each repository's TRACE_CODEBUILD_PROJECT to its own project's runner output, and no TRACE_RUNNER", async () => {
+    calls.values.clear()
+    expect(await apply(AnswersSchema.parse(ANSWERS), SecretsSchema.parse({ githubToken: TOKEN }), () => undefined, { ...quiet, cdk: async () => 0, outputs: async () => OUTPUTS })).toBe(true)
+    for (const repo of ['mteichtahl/board', 'mteichtahl/fw']) expect(calls.values.get(`${repo}:TRACE_CODEBUILD_PROJECT`)).toBe(`trace-ci-${projectHash(repo)}`)
+    expect(calls.values.get('mteichtahl/board:TRACE_CODEBUILD_PROJECT')).not.toBe(calls.values.get('mteichtahl/fw:TRACE_CODEBUILD_PROJECT'))
+    expect([...calls.values.keys()].filter((k) => k.endsWith(':TRACE_RUNNER'))).toEqual([])
+    // a stack without the output (a runner project missing) stops at the repositories, naming it
+    const without = { ...OUTPUTS }
+    delete without[projectOutputs('mteichtahl/fw').runnerProject]
+    const events: { type: string; summary?: string[] }[] = []
+    expect(await apply(AnswersSchema.parse(ANSWERS), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), { ...quiet, cdk: async () => 0, outputs: async () => without })).toBe(false)
+    expect(events.at(-1)?.summary?.[0]).toBe(`Stopped at "Configure the repositories": the stack has no output ${projectOutputs('mteichtahl/fw').runnerProject}`)
   })
 })

@@ -6,7 +6,7 @@ import { Template } from 'aws-cdk-lib/assertions'
 import { describe, expect, it } from 'vitest'
 import { InfraPropsSchema, REPOSITORY_OUTPUT, projectHash, projectOutputs } from '../../src/infra/props.js'
 import { TraceStack } from '../../src/infra/stack.js'
-import { nestedOf, nestedResourceId, synth } from './templates.js'
+import { RUNNERS, nestedOf, nestedResourceId, synth } from './templates.js'
 
 const A = 'mteichtahl/trace'
 const B = 'pokeys-toolkit/potroller'
@@ -15,7 +15,7 @@ const HB = projectHash(B)
 
 const base = {
   account: '123456789012', region: 'us-east-1', repositories: [A, `${B}@develop`],
-  model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com',
+  model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com', runners: RUNNERS,
 }
 const repos = (n: number): string[] => Array.from({ length: n }, (_, i) => `owner-${i}/repository-${i}`)
 
