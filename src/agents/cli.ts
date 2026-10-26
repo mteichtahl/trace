@@ -7,15 +7,18 @@
  *                                             a dry run of the router: a number reads that issue or PR from GitHub
  *                                             (gh: labels, text, changed files, failing checks); anything else is
  *                                             routed as text. --model asks the model when nothing else decides.
- *   trace agent prompt <kind>                 the composed system prompt, with this project's settings and
- *                                             .trace/rules.md, for review
+ *   trace agent prompt <kind> [--marked]      the composed prompt, with this project's settings, .trace/rules.md
+ *                                             and the prompt overrides in force (this clone's and the
+ *                                             installation's), for review; --marked heads each part with its id
  */
 import { spawnSync } from 'node:child_process'
 import { parseArgs } from 'node:util'
 import { z } from 'zod'
 import { type TraceConfig, load } from '../core/config.js'
 import { findRoot } from '../core/store.js'
-import { SPECIALISTS, specialistPrompt, toolsOf } from './index.js'
+import { SPECIALISTS, toolsOf } from './index.js'
+import { composeSpecialist } from './specialist.js'
+import { marked } from '../prompts/resolve.js'
 import { SPECIALIST_KINDS, SpecialistKindSchema } from './kinds.js'
 import { type QueryFn, type RouteInput, route, routeJob, sdkClassifier } from './router.js'
 import { readRules } from './rules.js'
@@ -24,7 +27,7 @@ import { mcpName } from './specialist.js'
 const out = (s: string): void => { process.stdout.write(`${s}\n`) }
 const err = (s: string): void => { process.stderr.write(`${s}\n`) }
 
-const USAGE = 'usage: trace agent list [--json] | route <issue|pr|text> [--repo OWNER/REPO] [--labels a,b] [--files f,g] [--checks c,d] [--model] | prompt <kind>'
+const USAGE = 'usage: trace agent list [--json] | route <issue|pr|text> [--repo OWNER/REPO] [--labels a,b] [--files f,g] [--checks c,d] [--model] | prompt <kind> [--marked]'
 
 const list = (v: string | undefined): string[] => (v ?? '').split(',').map((s) => s.trim()).filter(Boolean)
 
@@ -104,7 +107,8 @@ export async function cmdAgent(argv: string[]): Promise<number> {
       let r = route(input, cfg)
       if (values.model) {
         const { query } = await import('@anthropic-ai/claude-agent-sdk')
-        r = await routeJob(input, cfg, sdkClassifier(query as unknown as QueryFn, { model: cfg.agents.router_model || cfg.worker.model || undefined }))
+        const { localLayers } = await import('../prompts/cli.js')
+        r = await routeJob(input, cfg, sdkClassifier(query as unknown as QueryFn, { model: cfg.agents.router_model || cfg.worker.model || undefined }), await localLayers())
       } else if (r.source === 'default' && cfg.agents.route_with_model) {
         err('(nothing deterministic decided: on the runtime the model would be asked; --model asks it here)')
       }
@@ -114,11 +118,16 @@ export async function cmdAgent(argv: string[]): Promise<number> {
       return 0
     }
     case 'prompt': {
-      const k = SpecialistKindSchema.safeParse(rest[0])
+      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { marked: { type: 'boolean' } } })
+      const k = SpecialistKindSchema.safeParse(positionals[0])
       if (!k.success) { err(`trace agent prompt: one of ${SPECIALIST_KINDS.join(', ')}`); return 2 }
       const root = findRoot()
       const repository = (() => { try { return currentRepo() } catch { return 'OWNER/REPO' } })()
-      out(specialistPrompt(SPECIALISTS[k.data], { cfg, repository, job: { kind: 'preview' }, rules: root ? readRules(root) : null, hardware: false, delivery: 'delegate' }))
+      const { localLayers } = await import('../prompts/cli.js')
+      const prompts = await localLayers()
+      for (const u of prompts.unavailable ?? []) err(`(the ${u.layer} prompt overrides are not used: ${u.reason})`)
+      const c = composeSpecialist(SPECIALISTS[k.data], { cfg, repository, job: { kind: 'preview' }, rules: root ? readRules(root) : null, hardware: false, delivery: 'delegate', prompts })
+      out(values.marked ? marked(c) : c.text)
       return 0
     }
   }

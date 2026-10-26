@@ -20,6 +20,9 @@
 #     Memory (optional): TRACE_MEMORY_ID (the project's AgentCore memory) with TRACE_AWS_ROLE allowed to use it; the
 #     agents then recall and record as they do on AgentCore.
 #     Runner: variable TRACE_RUNNER as JSON ("ubuntu-24.04" or ["self-hosted","x64"]).
+# Knowledge base (optional): with TRACE_KB_ID and TRACE_KB_DATA_SOURCE_ID (set by `trace install`), every push to
+# __TR_BRANCH__ syncs the project's knowledge base (job kb-sync: `trace kb sync` through TRACE_AWS_ROLE), whatever
+# worker.runner says; in the actions runner the agents also get kb_search and kb_status.
 # Also needs TRACE_TOKEN. An hourly schedule runs the pick as a backstop for events GitHub never sent.
 # Kill switch: variable TRACE_WORKER = 'false'.
 name: trace-worker
@@ -43,6 +46,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # the project's knowledge base follows the default branch: changed documents only, then an ingestion job
+  kb-sync:
+    if: >-
+      vars.TRACE_WORKER != 'false' && github.event_name == 'push' && vars.TRACE_KB_ID != '' && vars.TRACE_AWS_ROLE != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency: { group: trace-kb-sync, cancel-in-progress: false }
+    permissions:
+      id-token: write          # GitHub OIDC -> TRACE_AWS_ROLE (projects/<slug>/kb/ in S3, its knowledge base's ingestion)
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.TRACE_AWS_ROLE }}
+          role-session-name: trace-kb-sync-${{ github.run_id }}
+          aws-region: ${{ vars.TRACE_AWS_REGION || 'us-east-1' }}
+      - uses: __TR_SOURCE__/harness/actions/install@__TR_REF__
+        with:
+          bridge: none
+      - name: Sync the knowledge base
+        env:
+          TRACE_HOME: ${{ vars.TRACE_HOME }}
+          TRACE_KB_ID: ${{ vars.TRACE_KB_ID }}
+          TRACE_KB_DATA_SOURCE_ID: ${{ vars.TRACE_KB_DATA_SOURCE_ID }}
+        run: trace kb sync --wait 20
+
   pick:
     if: >-
       vars.TRACE_WORKER != 'false' &&
@@ -134,6 +164,8 @@ jobs:
           aws-region: ${{ vars.TRACE_AWS_REGION || 'us-east-1' }}
       - id: prompt
         uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
+        env:
+          TRACE_HOME: ${{ vars.TRACE_HOME }}       # the installation's prompt overrides are read beside it
         with:
           agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
           task: worker-prompt
@@ -147,6 +179,8 @@ jobs:
           hardware: ${{ vars.TRACE_HARDWARE == 'true' && 'true' || 'false' }}
           tools: ${{ steps.prompt.outputs.tools }}
           memory-id: ${{ vars.TRACE_MEMORY_ID }}
+          kb-id: ${{ vars.TRACE_KB_ID }}
+          kb-data-source-id: ${{ vars.TRACE_KB_DATA_SOURCE_ID }}
           memory-actor: ${{ steps.prompt.outputs.memory-actor }}
           worker-memory-actor: ${{ steps.prompt.outputs.worker-memory-actor }}
           memory-session: ${{ steps.prompt.outputs.memory-session }}
@@ -180,6 +214,8 @@ jobs:
       - id: delegate
         if: ${{ !cancelled() && steps.prompt.outcome == 'success' }}
         uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
+        env:
+          TRACE_HOME: ${{ vars.TRACE_HOME }}
         with:
           agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
           task: worker-delegate

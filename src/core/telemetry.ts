@@ -95,8 +95,28 @@ export const ATTR = {
   gpuSeconds: 'trace.gpu.seconds',
   gpuInputs: 'trace.gpu.inputs',
   gpuOutputs: 'trace.gpu.outputs',
+  /** the prompt parts a job's model calls were built from (src/prompts): ids, layers and versions, in step; never the text */
+  promptIds: 'trace.prompt.ids',
+  promptLayers: 'trace.prompt.layers',
+  promptVersions: 'trace.prompt.versions',
+  /** how many of them came from an override (installation or project) */
+  promptOverridden: 'trace.prompt.overridden',
   /** how many inactive memory records were left out of what an agent or a person was given (never their ids) */
   memoryInactiveFiltered: 'trace.memory.inactive_filtered',
+  /** the knowledge base (src/tools/kb): counts, sizes and outcomes only, never paths, document text or query text */
+  kbDocuments: 'trace.kb.documents',
+  kbObjects: 'trace.kb.objects',
+  kbUploaded: 'trace.kb.uploaded',
+  kbUnchanged: 'trace.kb.unchanged',
+  kbDeleted: 'trace.kb.deleted',
+  kbHeaded: 'trace.kb.headed',
+  kbIngestion: 'trace.kb.ingestion_status',
+  kbIndexed: 'trace.kb.indexed',
+  kbFailed: 'trace.kb.failed',
+  kbQueryChars: 'trace.kb.query_chars',
+  kbTopK: 'trace.kb.top_k',
+  kbFilter: 'trace.kb.filter_keys',
+  kbResults: 'trace.kb.results',
 } as const
 
 export type AttrKey = (typeof ATTR)[keyof typeof ATTR]

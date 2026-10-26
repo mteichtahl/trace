@@ -76,10 +76,12 @@ describe('the nested layout', () => {
       expect(s.nested.size).toBe(n)
       for (const t of s.nested.values()) {
         const j = json(t)
-        // 17, and its CPU job definition
-        expect(count(j.Resources)).toBe(18)
-        expect(count(j.Outputs)).toBeLessThanOrEqual(200)
-        expect(count(j.Parameters)).toBeLessThanOrEqual(200)
+        // 17, its CPU job definition, and its knowledge base (index, service role and policy, knowledge base, data source)
+        expect(count(j.Resources)).toBe(23)
+        // its 12, its knowledge base's two (Project<hash>KnowledgeBaseId, …DataSourceId), and the id the parent reads
+        expect(count(j.Outputs)).toBe(15)
+        // its 11, and the vector bucket
+        expect(count(j.Parameters)).toBe(12)
       }
       // CDK moves what no longer fits the API role's inline policy (every memory's ARN) into a managed policy
       const overflow = Object.keys(s.parent.findResources('AWS::IAM::ManagedPolicy'))
@@ -95,7 +97,9 @@ describe('the nested layout', () => {
       expect(z.resources).toBeLessThan(500)
       expect(z.outputs).toBeLessThanOrEqual(200)
     }
-    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}`)).toEqual(['1:86/19', '24:111/19', '60:148/19'])
+    // the knowledge bases add one resource to the parent (the vector bucket) and, from 24 projects, one more overflow
+    // policies of the API role (it names every knowledge base for Retrieve): three at 24 projects, four at 60
+    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:87/19:0', '24:113/19:3', '60:150/19:4'])
     // none of a project's outputs is the parent's: each is its nested stack's, with the repository it is the project of
     const s = synth(cfg(2), 'Count2Outputs')
     const parentOutputs = Object.keys(json(s.parent).Outputs ?? {})
@@ -147,8 +151,8 @@ describe('the nested layout', () => {
 
   it('makes every project resource the same as the flat layout does: names, IAM, removal policies', () => {
     for (const retainData of [true, false]) {
-      // the CPU queue is the nested layout's only (props.ts cpuEnabled): compared without it
-      const nested = synth(InfraPropsSchema.parse({ ...base, retainData, cpu: { enabled: false } }), `SameNested${retainData}`)
+      // the CPU queue and the knowledge bases are the nested layout's only (props.ts cpuEnabled, kbEnabled): compared without them
+      const nested = synth(InfraPropsSchema.parse({ ...base, retainData, cpu: { enabled: false }, knowledgeBase: { enabled: false } }), `SameNested${retainData}`)
       const flat = synth(InfraPropsSchema.parse({ ...base, retainData, layout: 'flat' }), `SameFlat${retainData}`)
       expect(flat.nested.size).toBe(0)
       const fp = json(flat.parent)

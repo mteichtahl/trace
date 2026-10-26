@@ -25,14 +25,16 @@
 import { readFileSync } from 'node:fs'
 import { z } from 'zod'
 import type { TraceConfig } from '../core/config.js'
-import { SPECIALISTS, specialistPrompt, toolsOf, allowedToolsOf } from '../agents/index.js'
+import { SPECIALISTS, toolsOf, allowedToolsOf } from '../agents/index.js'
+import { composeSpecialist } from '../agents/specialist.js'
+import { type Composed, Composer, JOIN, type Layers, NO_LAYERS, label, provenanceOf } from '../prompts/resolve.js'
 import { type Route, WORKER } from '../agents/kinds.js'
 import { route } from '../agents/router.js'
 import { SPECIALIST_BUILTINS, SPECIALIST_DENIED, WORKER_TOOLS } from '../agents/specialist.js'
 import { delegatedRequest } from '../agents/runtime/delegation.js'
 import { type AgentMemory, type JobMemory, NO_MEMORY, agentActor, memoryFromEnv, openJobMemory } from '../agents/runtime/memory.js'
 import { type Deps, type TaskEnv, short } from './types.js'
-import { type WorkItem, itemFromEnv, promptFor, rulesOf } from './worker.js'
+import { type WorkItem, composeItem, itemFromEnv, rulesOf } from './worker.js'
 
 // ------------------------------------------------------------------ the structured output
 
@@ -176,7 +178,7 @@ function routed(env: ActionsEnv, cfg: TraceConfig): { item: WorkItem; r: Route }
 }
 
 /** worker-prompt: the specialist's step (read only). */
-export async function specialistStep({ github, core, cfg, env: e, context }: Deps, memory: AgentMemory | null = actionsMemory(e as ActionsEnv)): Promise<void> {
+export async function specialistStep({ github, core, cfg, env: e, context, prompts }: Deps, memory: AgentMemory | null = actionsMemory(e as ActionsEnv)): Promise<void> {
   const env = e as ActionsEnv
   const { owner, repo } = context.repo
   const repository = `${owner}/${repo}`
@@ -186,8 +188,9 @@ export async function specialistStep({ github, core, cfg, env: e, context }: Dep
   const rules = await rulesOf(github, owner, repo, cfg.branch)
   const mem = await stepMemory(memory, { repository, agent: s.memoryAgent, item, request: requestOf(item), recall: true }, (l) => core.info(l))
   await mem.flush?.()
-  const prompt = specialistPrompt(s, { cfg, repository, job: { kind: 'work-item', item }, rules, route: r, where: 'in GitHub Actions', delivery: 'actions', hardware })
-  core.setOutput('prompt', `${prompt}${mem.context}`)
+  const composed = composeSpecialist(s, { cfg, repository, job: { kind: 'work-item', item }, rules, route: r, where: 'in GitHub Actions', delivery: 'actions', hardware, prompts })
+  core.setOutput('prompt', `${composed.text}${mem.context}`)
+  core.setOutput('prompts', promptLog(composed, core))
   core.setOutput('args', specialistArgs(cfg, r.kind, hardware).join('\n'))
   core.setOutput('tools', toolsOf(s, { delegate: false, hardware }).join(','))
   core.setOutput('setup', cfg.worker.setup)
@@ -197,23 +200,30 @@ export async function specialistStep({ github, core, cfg, env: e, context }: Dep
   core.setOutput('worker-memory-actor', agentActor(repository, WORKER).id)
 }
 
-/** The check's prompt: the specialist again, read only, with its own brief and criteria and the worker's outcome. */
-export function checkPrompt(base: string, d: { brief: string; acceptance: readonly string[] }): string {
-  return [
-    base,
-    '',
-    'THIS RUN IS THE CHECK. The worker has run on the brief you gave it, in this checkout (git log shows its commits).',
-    'Do not delegate again: answer with delegate false. Check every acceptance criterion with your own tools, in this',
-    'checkout, and give each in `criteria` with met true or false and the run that shows it. Your report is posted on',
-    'the item. Your brief was (data):',
-    ...d.brief.trim().split('\n').map((l) => `> ${l}`),
-    'Its acceptance criteria:',
-    ...d.acceptance.map((a, i) => `${i + 1}. ${a.trim()}`),
-  ].join('\n')
+/** The check's prompt: the specialist again, read only, with its own brief and criteria (actions.check, locked). */
+export function composeCheck(base: Composed, d: { brief: string; acceptance: readonly string[] }, layers: Layers = NO_LAYERS): Composed {
+  const check = new Composer(layers).add('actions.check', {
+    brief: d.brief.trim().split('\n').map((l) => `> ${l}`).join('\n'),
+    acceptance: d.acceptance.map((a, i) => `${i + 1}. ${a.trim()}`),
+  }).done()
+  return { text: [base.text, check.text].join(JOIN), parts: [...base.parts, ...check.parts], provenance: [...base.provenance, ...check.provenance] }
+}
+
+export function checkPrompt(base: string, d: { brief: string; acceptance: readonly string[] }, layers: Layers = NO_LAYERS): string {
+  return composeCheck({ text: base, parts: [], provenance: [] }, d, layers).text
+}
+
+/** One line per prompt part for the step's log and its `prompts` output: id, layer and version, never the text. */
+export function promptLog(c: Composed, core: Deps['core']): string {
+  const line = c.provenance.map(label).join(' ')
+  const over = c.provenance.filter((p) => p.layer !== 'default')
+  core.info(`prompts: ${over.length ? `${over.length} overridden: ${over.map(label).join(', ')}` : 'all defaults'}`)
+  for (const p of c.provenance) for (const s of p.skipped ?? []) core.warning(`prompt ${p.id}: the ${s.layer} override v${s.version} is not used: ${s.reason}`)
+  return line
 }
 
 /** worker-delegate: after the specialist. Records its outcomes; when it delegated, the worker's and the check's prompts. */
-export async function delegateStep({ github, core, cfg, env: e, context }: Deps, memory: AgentMemory | null = actionsMemory(e as ActionsEnv)): Promise<void> {
+export async function delegateStep({ github, core, cfg, env: e, context, prompts }: Deps, memory: AgentMemory | null = actionsMemory(e as ActionsEnv)): Promise<void> {
   const env = e as ActionsEnv
   const { owner, repo } = context.repo
   const repository = `${owner}/${repo}`
@@ -237,15 +247,18 @@ export async function delegateStep({ github, core, cfg, env: e, context }: Deps,
     return
   }
   await sm.flush?.()
-  const request = `${delegatedRequest(r.kind, `run ${context.runId}`, d.brief, d.acceptance)}${d.branch ? `\n\nWork on the branch \`${d.branch}\` (create it from origin/${cfg.branch} if it does not exist).` : ''}`
+  const request = `${delegatedRequest(r.kind, `run ${context.runId}`, d.brief, d.acceptance, prompts)}${d.branch ? `\n\nWork on the branch \`${d.branch}\` (create it from origin/${cfg.branch} if it does not exist).` : ''}`
   // the worker continues the specialist's session as its own actor, as a delegation on the runtime does
   const wm = await stepMemory(mem, { repository, agent: WORKER, item, request, recall: false }, (l) => core.info(l))
   await wm.flush?.()
-  core.setOutput('prompt', promptFor(item, cfg, repository, request))
+  const worker = composeItem(item, cfg, repository, request, { prompts })
+  core.setOutput('prompt', worker.text)
   core.setOutput('args', workerArgs(cfg).join('\n'))
   const rules = await rulesOf(github, owner, repo, cfg.branch)
-  const base = specialistPrompt(s, { cfg, repository, job: { kind: 'work-item', item }, rules, route: r, where: 'in GitHub Actions', delivery: 'actions', hardware })
-  core.setOutput('check-prompt', checkPrompt(base, d))
+  const base = composeSpecialist(s, { cfg, repository, job: { kind: 'work-item', item }, rules, route: r, where: 'in GitHub Actions', delivery: 'actions', hardware, prompts })
+  const check = composeCheck(base, d, prompts)
+  core.setOutput('check-prompt', check.text)
+  core.setOutput('prompts', promptLog({ text: '', parts: [], provenance: [...provenanceOf(['delegate.brief', 'delegate.request'], prompts), ...worker.provenance, ...check.provenance] }, core))
   core.setOutput('check-args', specialistArgs(cfg, r.kind, hardware).join('\n'))
   core.info(`#${item.number}: the ${r.kind} specialist delegates ${d.acceptance.length} criteria to the worker`)
 }

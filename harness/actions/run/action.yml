@@ -112,6 +112,7 @@ outputs:
   memory-session: { description: worker-prompt — the memory session (pr-<n> or issue-<n>), value: '${{ steps.run.outputs.memory-session }}' }
   delegate: { description: worker-delegate — 'true' when the specialist delegated to the worker, value: '${{ steps.run.outputs.delegate }}' }
   check-prompt: { description: worker-delegate — the check's prompt (the specialist again), value: '${{ steps.run.outputs.check-prompt }}' }
+  prompts: { description: worker-prompt / worker-delegate — the prompt parts used (id@layer:version, never the text), value: '${{ steps.run.outputs.prompts }}' }
   check-args: { description: worker-delegate — the check's claude_args (read only), value: '${{ steps.run.outputs.check-args }}' }
   setup: { description: worker-prompt/deploy-commands — the setup command, value: '${{ steps.run.outputs.setup }}' }
   risk_check: { description: deploy-commands, value: '${{ steps.run.outputs.risk_check }}' }

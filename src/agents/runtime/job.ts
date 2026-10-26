@@ -41,8 +41,13 @@ import type { JobContext, JobRunner } from './jobs.js'
 import { addSecret } from '../../core/telemetry.js'
 import { claudeTelemetry } from './observe.js'
 import { type AgentMemory, type Actor, type JobMemory, NO_MEMORY, agentActor, memoryFromEnv, openJobMemory, personActor, sessionIdFor } from './memory.js'
-import { taskBranch, taskPrompt } from '../worker/prompt.js'
-import { SPECIALISTS, SPECIALIST_BUILTINS, type Specialist, allowedToolsOf, specialistPrompt, toolsOf } from '../index.js'
+import { composeTask, taskBranch } from '../worker/prompt.js'
+import { SPECIALISTS, SPECIALIST_BUILTINS, type Specialist, allowedToolsOf, toolsOf } from '../index.js'
+import { composeSpecialist } from '../specialist.js'
+import { type Composed, type Layers, NO_LAYERS, type Provenance, provenanceOf, record } from '../../prompts/resolve.js'
+import { InstallationPrompts, loadLayers } from '../../prompts/store.js'
+import { systemAppend } from '../../prompts/system.js'
+import { projectPath } from '../../core/store.js'
 import { WORKER_TOOLS } from '../specialist.js'
 import { type Route, WORKER } from '../kinds.js'
 import { type Classifier, type QueryFn, type RouteInput, routeJob, sdkClassifier } from '../router.js'
@@ -112,6 +117,11 @@ export interface RunnerDeps {
   delegateUrl?: string | undefined
   /** Hardware is allowed in this runtime (TRACE_HARDWARE): the specialists' hardware tools are offered. */
   hardware?: boolean | undefined
+  /**
+   * The prompt overrides for a checkout of the default branch (its .trace/project.db) and the installation's
+   * (src/prompts/store.ts); absent: the catalog's defaults only.
+   */
+  prompts?: ((dir: string) => Promise<Layers>) | undefined
 }
 
 /** The delegated worker's tools: everything, as before the specialists (the MCP server offers no agent.delegate to it). */
@@ -238,6 +248,8 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
   agent?: string
   /** Overrides: the model, the turn limit (else worker.max_turns), and the tools (a specialist's; else TOOLS). */
   model?: string | undefined
+  /** The system prompt's addition (systemAppend); absent: the catalog's defaults with these notes. */
+  system?: Composed
   maxTurns?: number
   tools?: { builtins: string[]; allowed: string[] }
 }): Promise<ClaudeOutcome> {
@@ -265,11 +277,7 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
     abortController: abort,
     env: { ...d.env, ...o.extraEnv, GH_TOKEN: o.token, GITHUB_TOKEN: o.token, ...gitAuthEnv(o.token), CLAUDE_AGENT_SDK_CLIENT_APP: 'trace-agent/1' },
     settingSources: [],
-    systemPrompt: {
-      type: 'preset', preset: 'claude_code',
-      append: 'You run unattended in a disposable container on Amazon Bedrock AgentCore Runtime. git and gh are authenticated through the environment; never print, echo or write the token anywhere.' +
-        (o.notes?.trim() ? `\n\nThe project's notes (CLAUDE.md on the default branch; the task and .trace/rules.md take precedence over them):\n<project-notes>\n${o.notes.replaceAll('</project-notes>', '')}\n</project-notes>` : ''),
-    },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: (o.system ?? systemAppend(o.notes)).text },
     stderr: (s) => { const l = s.trim(); if (l) o.log(`claude: ${o.redact(l).slice(0, 500)}`) },
   }
   let last: z.infer<typeof ResultMessage> | null = null
@@ -298,6 +306,26 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
 }
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+
+/** A job's prompt overrides: never fails the job (a layer that cannot be read is left out and logged). */
+async function jobLayers(d: RunnerDeps, dir: string, log: (l: string) => void): Promise<Layers> {
+  if (!d.prompts) return NO_LAYERS
+  try {
+    const l = await d.prompts(dir)
+    for (const u of l.unavailable ?? []) log(`prompts: the ${u.layer} overrides could not be read, so they are not used: ${u.reason}`)
+    return l
+  } catch (e) {
+    log(`prompts: overrides not used: ${errText(e).slice(0, 300)}`)
+    return NO_LAYERS
+  }
+}
+
+/** Log what the prompt was made of (ids, layers, versions; never the text), and every override that was skipped. */
+function logPrompts(ps: readonly Provenance[], log: (l: string) => void): void {
+  const over = ps.filter((p) => p.layer !== 'default')
+  log(`prompts: ${over.length ? `${over.length} overridden (${over.map((p) => `${p.id}@${p.layer} v${p.version ?? 0}`).join(', ')})` : 'all catalog defaults'}`)
+  for (const p of ps) for (const sk of p.skipped ?? []) log(`prompts: the ${sk.layer} override v${sk.version} of ${p.id} is not used: ${sk.reason}`)
+}
 
 // ------------------------------------------------------------------ the jobs
 
@@ -453,6 +481,8 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     const cfg = d.settingsOf(base.dir)
     const rules = readRules(base.dir)
     const notes = readProjectNotes(base.dir)
+    // the prompt overrides: the default branch's (read before the item's branch is checked out) and the installation's
+    const layers = await jobLayers(d, base.dir, log)
     let branch = p.kind === 'task' ? taskBranch(p, cfg) : prep.branch
     if (prep.from !== 'none') branch = await checkoutBranch({ ...g, defaultBranch: base.defaultBranch, branch, from: prep.from })
     else branch = base.defaultBranch
@@ -460,7 +490,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     // the item's labels, body and latest comments: for the router (when the pick did not route it) and the prompt
     const thread = p.kind === 'work-item' ? await threadOf(gh, p.repository, p.item.number, log) : null
     const input: RouteInput = thread ? { ...prep.routeInput, labels: thread.labels, text: `${p.kind === 'work-item' ? p.item.title : ''}\n\n${thread.body}`.trim() } : prep.routeInput
-    const r = prep.route ?? await routeJob(input, cfg, d.classifier?.(cfg) ?? null)
+    const r = prep.route ?? await routeJob(input, cfg, d.classifier?.(cfg) ?? null, layers)
     ctx.route?.(r)
     const s = SPECIALISTS[r.kind]
     const settings = cfg.agents[r.kind]
@@ -474,13 +504,19 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     const delegate = Boolean(delegations && d.delegateUrl)
     const tools = toolsOf(s, { hardware, delegate })
     const dtoken = delegate && delegations
-      ? delegations.register({ jobId: ctx.jobId, kind: r.kind, repository: p.repository, dir, cfg, branch, defaultBranch: base.defaultBranch, session, notes })
+      ? delegations.register({ jobId: ctx.jobId, kind: r.kind, repository: p.repository, dir, cfg, branch, defaultBranch: base.defaultBranch, session, notes, prompts: layers })
       : undefined
     try {
-      const prompt = specialistPrompt(s, { cfg, repository: p.repository, job: prep.job(branch, thread?.text), rules, route: r, hardware, delivery: 'delegate' })
+      const prompt = composeSpecialist(s, { cfg, repository: p.repository, job: prep.job(branch, thread?.text), rules, route: r, hardware, delivery: 'delegate', prompts: layers })
+      const system = systemAppend(notes, layers)
+      const asked = prep.route === null && r.source === 'model'
+      const used = [...(asked ? provenanceOf(['router.classify', 'router.contract'], layers) : []), ...prompt.provenance, ...system.provenance,
+        ...(mem.context ? provenanceOf(['memory.block']) : [])]
+      logPrompts(used, log)
+      ctx.prompts?.(record(used))
       log(`running the ${r.kind} specialist on ${p.repository} ${branch} (max ${settings.max_turns} turns, ${tools.length} tools)`)
       const out = await runClaude(d, {
-        prompt: `${prompt}${mem.context}`, cwd: dir, cfg, token, signal: ctx.signal, log, redact, notes,
+        prompt: `${prompt.text}${mem.context}`, cwd: dir, cfg, token, signal: ctx.signal, log, redact, notes, system,
         extraEnv: { ...mem.env, ...specialistEnv({ tools, delegateUrl: d.delegateUrl, token: dtoken, timeoutMinutes: cfg.agents.delegate_timeout_minutes }) },
         onMessage: (m) => mem.observe(m), agent: r.kind,
         model: settings.model || d.model || cfg.worker.model || undefined, maxTurns: settings.max_turns,
@@ -530,9 +566,16 @@ export async function runDelegated(d: RunnerDeps, p: DelegatedTaskJob, ctx: JobC
       ? await checkoutBranch({ ...g, defaultBranch: parent.defaultBranch, branch: p.branch, from: 'maybe' })
       : parent.branch
     mem = await jobMemory(d, { repository: p.repository, agent: WORKER, session: parent.session, query: p.request.slice(0, 2000), request: p.request }, log, redact)
+    const layers = parent.prompts ?? NO_LAYERS
+    const prompt = composeTask(p, parent.cfg, branch, layers)
+    const system = systemAppend(parent.notes, layers)
+    // the brief's wording (delegate.*) was composed when the specialist delegated, with the same layers
+    const used = [...provenanceOf(['delegate.brief', 'delegate.request'], layers), ...prompt.provenance, ...system.provenance, ...(mem.context ? provenanceOf(['memory.block']) : [])]
+    logPrompts(used, log)
+    ctx.prompts?.(record(used))
     log(`running the worker for the ${parent.kind} specialist (job ${parent.jobId}) on ${branch} (max ${parent.cfg.worker.max_turns} turns)`)
     const out = await runClaude(d, {
-      prompt: `${taskPrompt(p, parent.cfg, branch)}${mem.context}`, cwd: parent.dir, cfg: parent.cfg, token, signal: ctx.signal, log, redact, notes: parent.notes ?? null,
+      prompt: `${prompt.text}${mem.context}`, cwd: parent.dir, cfg: parent.cfg, token, signal: ctx.signal, log, redact, notes: parent.notes ?? null, system,
       extraEnv: mem.env, onMessage: (m) => mem.observe(m), agent: WORKER,
     })
     const summary = redact(out.text)
@@ -659,5 +702,13 @@ export function realRunner(env: Record<string, string | undefined> = process.env
     delegations: defaultDelegations(),
     delegateUrl: `http://127.0.0.1:${Number(env.PORT || 8080)}`,
     hardware: ['1', 'true', 'yes'].includes(env.TRACE_HARDWARE ?? ''),
+    prompts: realPromptLayers(),
   })
 }
+
+/** The real prompt layers: the checkout's .trace/project.db (the default branch) and the installation's store (read only here). */
+export function realPromptLayers(installation: InstallationPrompts = new InstallationPrompts()): (dir: string) => Promise<Layers> {
+  return (dir) => loadLayers({ projectDb: projectPath(dir), installation })
+}
+
+export { systemAppend }

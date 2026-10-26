@@ -125,6 +125,16 @@ const SpecialistSettingsSchema = z.object({
 
 const regex = z.string().max(200, 'at most 200 characters').refine((s) => { try { new RegExp(s); return true } catch { return false } }, 'not a valid regular expression')
 
+/** The knowledge base's default repository globs: documentation and markdown, the rules and Claude's notes. */
+export const KNOWLEDGE_INCLUDE = [
+  '**/*.md', '**/*.markdown', '**/*.mdx', '**/*.rst', '**/*.adoc', '**/*.txt', 'docs/**/*.html', 'doc/**/*.html',
+  'CLAUDE.md', '.trace/rules.md',
+] as const
+export const KNOWLEDGE_EXCLUDE = [
+  '**/node_modules/**', '**/.venv/**', '**/venv/**', '**/dist/**', '**/build/**', '**/*-backups/**', '**/LICENSE*', '**/CHANGELOG*',
+  '**/requirements*.txt', '**/CMakeLists.txt',
+] as const
+
 // ------------------------------------------------------------------ every setting
 
 export const ConfigSchema = z.object({
@@ -236,6 +246,21 @@ export const ConfigSchema = z.object({
       orthoroute_iterations: z.number().int().min(1).max(10_000).default(200),
       freerouting_passes: z.number().int().min(1).max(10_000).default(100),
     }).strict().prefault({}),
+  }).strict().prefault({}),
+  /** What goes into the project's knowledge base (src/tools/kb): repository files by glob (paths relative to the
+   * repository, `**` across folders), KiCad summaries, and the datasheets of the parts in the BOM. Firmware and other
+   * sources go in only when a glob here names them (e.g. "firmware/**\/*.rs"). */
+  knowledge: z.object({
+    include: z.array(z.string().min(1).max(300)).max(200).default([...KNOWLEDGE_INCLUDE]),
+    exclude: z.array(z.string().min(1).max(300)).max(200).default([...KNOWLEDGE_EXCLUDE]),
+    /** a text summary of each KiCad project (components, BOM, nets), never the raw KiCad files */
+    kicad: z.boolean().default(true),
+    /** the text of the shared library's datasheets for the MPNs in the project's BOMs */
+    datasheets: z.boolean().default(true),
+    /** files larger than this are left out (and listed as skipped) */
+    max_file_kb: z.number().int().min(1).max(10_240).default(512),
+    /** at most this many pages of one datasheet */
+    max_datasheet_pages: z.number().int().min(1).max(2000).default(400),
   }).strict().prefault({}),
   parts: z.object({
     providers: z.array(z.enum(['lcsc', 'mouser', 'digikey', 'nexar'])).default(['lcsc']),

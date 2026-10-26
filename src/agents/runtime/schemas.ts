@@ -4,6 +4,7 @@
  * which starts the same jobs in-process.
  */
 import { z } from 'zod'
+import type { PromptRecord } from '../../prompts/resolve.js'
 import { WorkItemSchema } from '../../harness/worker.js'
 import { type Route, SPECIALIST_KINDS, SpecialistKindSchema, WORKER } from '../kinds.js'
 
@@ -136,6 +137,8 @@ export interface JobInfo {
   route?: Route
   /** A delegated job: the specialist job that started it. */
   parentJobId?: string
+  /** Which prompt versions its model calls were built from: id, layer, version and the template's sha (never the text). */
+  prompts?: PromptRecord[]
   log: string[]
 }
 

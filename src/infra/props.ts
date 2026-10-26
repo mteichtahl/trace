@@ -7,8 +7,8 @@ import { z } from 'zod'
 import { projectHash, projectSlug } from '../core/project.js'
 
 export {
-  cpuJobDefinitionName, gpuJobDefinitionName, githubSecretName, memoryDeliveryName, memoryName, projectDataPrefix, projectHash, projectJobsPrefix, projectSlug,
-  workerRuntimeName,
+  cpuJobDefinitionName, gpuJobDefinitionName, githubSecretName, knowledgeBaseName, memoryDeliveryName, memoryName, projectDataPrefix, projectHash, projectJobsPrefix,
+  projectKbPrefix, projectSlug, workerRuntimeName,
 } from '../core/project.js'
 
 /** OWNER/REPO, optionally @BRANCH (its default branch; main when omitted). */
@@ -17,8 +17,57 @@ const repoSlug = z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+(@[A-Za-z0-9._
 /** AgentCore Memory's EventExpiryDuration bounds (days). */
 const EventExpiryDays = z.number().int().min(3).max(365)
 
+/** Amazon Titan Text Embeddings V2: its model id, and the output sizes it supports (1,024 is its default). */
+export const TITAN_V2 = 'amazon.titan-embed-text-v2:0'
+export const TITAN_V2_DIMENSIONS = [256, 512, 1024] as const
+
+/** How the data source splits documents into chunks before they are embedded (CfnDataSource ChunkingConfiguration).
+ * fixed: maxTokens with overlapPercentage; semantic: maxTokens, bufferSize, breakpointPercentileThreshold;
+ * hierarchical: parentMaxTokens over maxTokens (the child), overlapTokens. S3 Vectors keeps the parent text as
+ * non-filterable metadata, so very large parents (thousands of tokens) can exceed its per-vector metadata limit. */
+const CHUNKING = {
+  strategy: z.enum(['fixed', 'semantic', 'hierarchical']),
+  maxTokens: z.number().int().min(20).max(8192),
+  overlapPercentage: z.number().int().min(1).max(99),
+  parentMaxTokens: z.number().int().min(20).max(8192),
+  overlapTokens: z.number().int().min(1).max(1000),
+  bufferSize: z.number().int().min(0).max(1),
+  breakpointPercentileThreshold: z.number().int().min(50).max(99),
+}
+export const ChunkingSchema = z.object({
+  strategy: CHUNKING.strategy.default('fixed'),
+  maxTokens: CHUNKING.maxTokens.default(300),
+  overlapPercentage: CHUNKING.overlapPercentage.default(20),
+  parentMaxTokens: CHUNKING.parentMaxTokens.default(1500),
+  overlapTokens: CHUNKING.overlapTokens.default(60),
+  bufferSize: CHUNKING.bufferSize.default(0),
+  breakpointPercentileThreshold: CHUNKING.breakpointPercentileThreshold.default(95),
+}).strict()
+
+/** A project's knowledge base: an Amazon Bedrock knowledge base over its documents in S3, with an S3 Vectors index
+ * (src/infra/knowledge.ts). Nested layout only. */
+export const KnowledgeBaseSchema = z.object({
+  enabled: z.boolean().default(true),
+  /** a Bedrock embedding model id (Titan Text Embeddings V2 by default) */
+  embeddingModel: z.string().regex(/^[a-z0-9-]+\.[a-z0-9.:-]+$/, 'a Bedrock foundation model id such as amazon.titan-embed-text-v2:0').default(TITAN_V2),
+  /** the vectors' dimensions: the index is made with it and the model asked for it */
+  dimensions: z.number().int().min(1).max(4096).default(1024),
+  chunking: ChunkingSchema.prefault({}),
+}).strict()
+
+/** The parts of KnowledgeBaseSchema one project may set for itself (projectSettings), over the installation's. */
+const KnowledgeBaseOverride = z.object({
+  enabled: z.boolean().optional(),
+  embeddingModel: KnowledgeBaseSchema.shape.embeddingModel.unwrap().optional(),
+  dimensions: KnowledgeBaseSchema.shape.dimensions.unwrap().optional(),
+  /** only what it changes: everything else is the installation's */
+  chunking: z.object(Object.fromEntries(Object.entries(CHUNKING).map(([k, v]) => [k, v.optional()])) as { [K in keyof typeof CHUNKING]: z.ZodOptional<(typeof CHUNKING)[K]> }).strict().optional(),
+}).strict()
+
 /** One project's own settings, beside its entry in `repositories` (which stays a plain OWNER/REPO[@BRANCH] list). */
 export const ProjectSettingsSchema = z.object({
+  /** its knowledge base, over `knowledgeBase` (e.g. { enabled: false }, or another chunking strategy) */
+  knowledgeBase: KnowledgeBaseOverride.optional(),
   /** days its memory keeps short-term events; unset: memory.eventExpiryDays */
   memoryEventExpiryDays: EventExpiryDays.optional(),
   /** Its names' generation (src/core/project.ts): 0 (unset) keeps the names it always had; above 0, its memory,
@@ -107,6 +156,10 @@ export const InfraPropsSchema = z.object({
      * when it finds that memory (the old `MemoryId` output) and retainData is true; see README "Agent memory". */
     legacySharedMemory: z.boolean().default(false),
   }).strict().prefault({}),
+  /** Each project's knowledge base (src/infra/knowledge.ts): a Bedrock knowledge base over projects/<slug>/kb/ in the
+   * central bucket, its vectors in an S3 Vectors index of the installation's one vector bucket. Only in layout
+   * 'nested' (kbEnabled below): a flat stack of 24 projects has no room for five more resources per project. */
+  knowledgeBase: KnowledgeBaseSchema.prefault({}),
   /** Where each project's resources live (README "Project isolation"). 'nested': one CloudFormation nested stack per
    * project, so the parent carries one resource per project. 'flat': every project's resources in the one stack, as
    * installations before nested stacks were made; kept for them because moving a resource with a fixed name into a
@@ -141,7 +194,35 @@ export const InfraPropsSchema = z.object({
     else if (seen.has(slug)) ctx.addIssue({ code: 'custom', path: ['projectSettings', k], message: `${k} is listed twice` })
     seen.add(slug)
   }
+  // Titan Text Embeddings V2 makes 256, 512 or 1,024 dimensions only; the index must be made with the same number
+  const titan = (kb: KnowledgeBaseSettings, path: (string | number)[]): void => {
+    if (kb.embeddingModel === TITAN_V2 && !(TITAN_V2_DIMENSIONS as readonly number[]).includes(kb.dimensions)) {
+      ctx.addIssue({ code: 'custom', path, message: `${TITAN_V2} makes ${TITAN_V2_DIMENSIONS.join(', ')} dimensions, not ${kb.dimensions}` })
+    }
+  }
+  titan(p.knowledgeBase, ['knowledgeBase', 'dimensions'])
+  for (const k of Object.keys(p.projectSettings)) titan(knowledgeBaseOf(p, k), ['projectSettings', k, 'knowledgeBase', 'dimensions'])
 })
+
+export type KnowledgeBaseSettings = z.output<typeof KnowledgeBaseSchema>
+
+/** One project's knowledge base settings: its projectSettings override over the installation's `knowledgeBase`. */
+export function knowledgeBaseOf(cfg: { projectSettings: Record<string, z.output<typeof ProjectSettingsSchema>>; knowledgeBase: KnowledgeBaseSettings }, repository: string): KnowledgeBaseSettings {
+  const slug = repository.trim().toLowerCase()
+  const own = Object.entries(cfg.projectSettings).find(([k]) => k.toLowerCase() === slug)?.[1]?.knowledgeBase ?? {}
+  const base = cfg.knowledgeBase
+  return {
+    enabled: own.enabled ?? base.enabled,
+    embeddingModel: own.embeddingModel ?? base.embeddingModel,
+    dimensions: own.dimensions ?? base.dimensions,
+    chunking: { ...base.chunking, ...Object.fromEntries(Object.entries(own.chunking ?? {}).filter(([, v]) => v !== undefined)) },
+  }
+}
+
+/** Whether this project has a knowledge base: its setting, in the nested layout only (a flat stack has no room), and
+ * not while the move to nested stacks is under way. */
+export const kbEnabled = (cfg: Parameters<typeof knowledgeBaseOf>[0] & { layout: 'flat' | 'nested'; layoutMigration?: 'release' | 'drain' | undefined }, repository: string): boolean =>
+  cfg.layout === 'nested' && cfg.layoutMigration === undefined && knowledgeBaseOf(cfg, repository).enabled
 
 export type InfraProps = z.output<typeof InfraPropsSchema>
 export type InfraInput = z.input<typeof InfraPropsSchema>
@@ -189,6 +270,13 @@ export const projectOutputs = (repository: string): { runtimeArn: string; roleAr
     runtimeArn: `Project${h}RuntimeArn`, roleArn: `Project${h}ActionsRoleArn`, secretArn: `Project${h}GithubSecretArn`, jobDefinition: `Project${h}GpuJobDefinition`,
     memoryId: `Project${h}MemoryId`,
   }
+}
+
+/** A project's knowledge base outputs: its nested stack's only (knowledge bases exist only in the nested layout), never
+ * the parent's. The installer sets them as the repository variables TRACE_KB_ID and TRACE_KB_DATA_SOURCE_ID. */
+export const kbOutputs = (repository: string): { knowledgeBaseId: string; dataSourceId: string } => {
+  const h = projectHash(repository)
+  return { knowledgeBaseId: `Project${h}KnowledgeBaseId`, dataSourceId: `Project${h}KnowledgeBaseDataSourceId` }
 }
 
 /** In the nested layout, the output of each project's nested stack that names its repository (owner/repo), so the
