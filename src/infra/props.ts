@@ -87,7 +87,7 @@ export const InfraPropsSchema = z.object({
    * (subject `repo:OWNER/REPO:ref:refs/heads/BRANCH`). At most 60: the API runtime is told every worker runtime, and
    * every project's memory, in one environment variable each (5000 characters; checked when the stack is built). With
    * layout 'nested' each project is its own nested stack (one resource and no output of the parent's), so 60 fit; with
-   * layout 'flat' CloudFormation's 500 resources and 200 outputs per stack bind at about 24 projects (checked when the
+   * layout 'flat' CloudFormation's 500 resources and 200 outputs per stack bind at about 20 projects (checked when the
    * stack is built). */
   repositories: z.array(repoSlug).min(1).max(60).superRefine((rs, ctx) => {
     const seen = new Map<string, string>()
@@ -131,7 +131,7 @@ export const InfraPropsSchema = z.object({
    * of x86 CPU instances beside the GPU one, running the same image (src/infra/gpu.ts), with one CPU job definition
    * per project and that project's job role. It shares the GPU side's image, network and execution role, so it exists
    * only with gpu.enabled; and only in layout 'nested', because its job definition is one more resource per project
-   * and a flat stack of 24 projects has no room for it (cpuEnabled below). */
+   * and a flat stack of 20 projects has no room for it (cpuEnabled below). */
   cpu: z.object({
     enabled: z.boolean().default(true),
     /** x86 instance families or types, tried in order of fit */
@@ -158,7 +158,7 @@ export const InfraPropsSchema = z.object({
   }).strict().prefault({}),
   /** Each project's knowledge base (src/infra/knowledge.ts): a Bedrock knowledge base over projects/<slug>/kb/ in the
    * central bucket, its vectors in an S3 Vectors index of the installation's one vector bucket. Only in layout
-   * 'nested' (kbEnabled below): a flat stack of 24 projects has no room for five more resources per project. */
+   * 'nested' (kbEnabled below): a flat stack of 20 projects has no room for five more resources per project. */
   knowledgeBase: KnowledgeBaseSchema.prefault({}),
   /** Where each project's resources live (README "Project isolation"). 'nested': one CloudFormation nested stack per
    * project, so the parent carries one resource per project. 'flat': every project's resources in the one stack, as

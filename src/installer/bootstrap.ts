@@ -104,7 +104,7 @@ export function layoutDeploys(a: Answers, existing?: Existing | null): LayoutDep
 export function layoutNote(a: Answers, existing?: Existing | null): string | null {
   if (layoutOf(existing) !== 'flat') return null
   if (!a.agents.migrateLayout) {
-    return 'This installation keeps every project in the one stack (layout flat), which holds about 24 projects. New installations put each project in its own nested stack, which holds 60; '
+    return 'This installation keeps every project in the one stack (layout flat), which holds about 20 projects. New installations put each project in its own nested stack, which holds 60; '
       + 'moving this one is a choice ("move to nested stacks") because it deletes every project\'s memory records.'
   }
   return 'Moving to one nested stack per project, in three deploys: '

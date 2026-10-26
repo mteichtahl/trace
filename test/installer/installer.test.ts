@@ -342,7 +342,7 @@ describe('installing', () => {
     // the plan says which, and what the move costs
     const detail = (a: typeof keep, e: typeof flatStack | null): string => plan(a, e).find((x) => x.id === 'deploy')?.detail ?? ''
     expect(detail(keep, null)).toMatch(/one nested stack per project \(a new installation\)/)
-    expect(detail(keep, flatStack)).toMatch(/layout flat.*about 24 projects.*"move to nested stacks"/)
+    expect(detail(keep, flatStack)).toMatch(/layout flat.*about 20 projects.*"move to nested stacks"/)
     expect(detail(move, flatStack)).toMatch(/3 deploys.*DELETING each project's memory and every record in it.*offline/)
 
     // the move: release, drain, then nested, with the drained secrets' names freed just before the nested deploy

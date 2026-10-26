@@ -341,7 +341,7 @@ function agents(): HTMLElement {
       field('Who the agents ask', input('text', g.escalateTo, (v) => { g.escalateTo = v.trim() }, { placeholder: '@your-login' }), 'mentioned when a project needs a person')),
     checkbox('Keep the central bucket and images if trace is uninstalled', g.retainData, (v) => { g.retainData = v }),
     ...(flatInstall() ? [
-      h('p', { class: 'lead' }, 'This installation keeps every project in one CloudFormation stack, which holds about 24 projects. New installations give each project its own nested stack, which holds 60. Moving takes three deploys and DELETES every project\'s memory records (AgentCore cannot copy them); the projects are offline while it runs.'),
+      h('p', { class: 'lead' }, 'This installation keeps every project in one CloudFormation stack, which holds about 20 projects. New installations give each project its own nested stack, which holds 60. Moving takes three deploys and DELETES every project\'s memory records (AgentCore cannot copy them); the projects are offline while it runs.'),
       checkbox('Move to one nested stack per project (deletes every project\'s memory records)', g.migrateLayout, (v) => { g.migrateLayout = v }),
     ] : []),
     h('h3', {}, 'GPU jobs'),

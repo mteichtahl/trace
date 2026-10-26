@@ -141,8 +141,8 @@ so when it is built. The output `Layout` says which layout an installation has.
 uploads the agent source and the Lambda code, so the bootstrap the installer runs (version 6 or later) covers it.
 
 **Installations from before nested stacks keep `layout: 'flat'`.** There every project's resources are in the one
-stack, and it holds about 24 projects (`cdk synth` refuses more). A flat installation has no knowledge bases and no CPU
-queue: at about 490 of its 500 resources with 24 projects, it has no room for them. The installer picks the layout from the deployed
+stack, and it holds about 20 projects (`cdk synth` refuses more). A flat installation has no knowledge bases and no CPU
+queue: at about 480 of its 500 resources with 20 projects, it has no room for them. The installer picks the layout from the deployed
 stack: a stack with a `Layout` output keeps that layout, a stack without one is flat, and a new installation is
 nested. Deploying by hand, set `layout: 'flat'` in `TRACE_INFRA` for an older stack.
 
@@ -857,7 +857,7 @@ tokens and keys and is bounded in size (8000 characters per event, 12 tool outco
   value, at most 5000 characters, and a runtime may have at most 50 environment variables. The stack checks both
   when it is built and refuses an installation that would not fit. Each project is a nested stack of its own, so
   CloudFormation's 500 resources and 200 outputs per stack allow the full 60 projects; an installation still in the
-  flat layout holds about 24 (see [Stack layout and limits](#stack-layout-and-limits)).
+  flat layout holds about 20 (see [Stack layout and limits](#stack-layout-and-limits)).
 
 ### Inactive memories
 
