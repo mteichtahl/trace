@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { bridge } from '../../../src/core/bridge.js'
 import { Central } from '../../../src/core/central.js'
 import { ToolError, Registry } from '../../../src/core/registry.js'
-import { downloadPdf, isPrivateAddress } from '../../../src/tools/datasheets/download.js'
+import { DownloadError, downloadPdf, guardedFetch, isPrivateAddress } from '../../../src/tools/datasheets/download.js'
 import { DatasheetLibrary } from '../../../src/tools/datasheets/library.js'
 import { mpnKey, mpnLoose, packagingBase } from '../../../src/tools/datasheets/mpn.js'
 import { tools } from '../../../src/tools/datasheets/tools.js'
@@ -136,6 +136,30 @@ describe('downloads', () => {
     await expect(downloadPdf('http://169.254.169.254/latest', { fetch: html })).rejects.toThrow(/not a public address/)
     expect(isPrivateAddress('10.1.2.3')).toBe(true)
     expect(isPrivateAddress('8.8.8.8')).toBe(false)
+  })
+
+  it('reads IPv4 written inside IPv6, however it is spelled', async () => {
+    for (const ip of ['::ffff:127.0.0.1', '::ffff:7f00:1', '0:0:0:0:0:ffff:7f00:0001', '::ffff:a9fe:a9fe', '::127.0.0.1', '::a00:1', '64:ff9b::a9fe:a9fe',
+      '::', '::1', 'fd00::1', 'fe80::1', 'ff02::1', 'not-an-address', '1::2::3']) expect(isPrivateAddress(ip), ip).toBe(true)
+    for (const ip of ['::ffff:8.8.8.8', '::ffff:808:808', '2606:4700:4700::1111', '64:ff9b::808:808']) expect(isPrivateAddress(ip), ip).toBe(false)
+    // what new URL() makes of a bracketed mapped address is the hex form
+    const html = async () => new Response('<html>')
+    expect(new URL('http://[::ffff:127.0.0.1]:9001/').hostname).toBe('[::ffff:7f00:1]')
+    await expect(downloadPdf('http://[::ffff:127.0.0.1]:9001/2018-06-01/runtime/invocation/next', { fetch: html })).rejects.toThrow(/not a public address/)
+  })
+
+  it('connects only to the address it checked (a name that turns private between checks is refused)', async () => {
+    const { createServer } = await import('node:http')
+    const server = createServer((_q, r) => { r.end('%PDF-1.4 secret') })
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+    const port = (server.address() as { port: number }).port
+    try {
+      // the name check passed (a public address), but the connection resolves localhost: refused at connect time
+      await expect(guardedFetch(`http://localhost:${port}/`, { headers: {} })).rejects.toBeInstanceOf(DownloadError)
+      await expect(downloadPdf(`http://localhost:${port}/`, { resolveHost: async () => ['93.184.216.34'] })).rejects.toThrow(/not a public address/)
+    } finally {
+      server.close()
+    }
   })
 
   it('records a URL source in the library', async () => {

@@ -172,6 +172,12 @@ export const InfraPropsSchema = z.object({
   layoutMigration: z.enum(['release', 'drain']).optional(),
   /** Per-project settings, by OWNER/REPO (no @BRANCH; case-insensitive): every key must be in `repositories`. */
   projectSettings: z.record(z.string(), ProjectSettingsSchema).default({}),
+  /** The library gateway (src/infra/gateway.ts, README "Library gateway"): AgentCore Gateway in front of the shared
+   * datasheets and parts tools, which every project's worker then calls instead of running them itself. Off by
+   * default: with it off every tool runs in the worker, as before. */
+  gateway: z.object({
+    enabled: z.boolean().default(false),
+  }).strict().prefault({}),
   /** AgentCore observability: OpenTelemetry (ADOT) traces and metrics to CloudWatch (src/infra/observability.ts). */
   observability: z.object({
     enabled: z.boolean().default(true),
@@ -185,6 +191,8 @@ export const InfraPropsSchema = z.object({
   }).strict().prefault({}),
 }).strict().superRefine((p, ctx) => {
   if (p.layoutMigration && p.layout !== 'flat') ctx.addIssue({ code: 'custom', path: ['layoutMigration'], message: 'layoutMigration moves a flat installation: it needs layout flat' })
+  // the library gateway's name (`<prefix>-library`) must match AgentCore's ^([0-9a-zA-Z][-]?){1,48}$
+  if (p.gateway.enabled && !/^([0-9a-zA-Z][-]?){1,48}$/.test(`${p.prefix}-library`)) ctx.addIssue({ code: 'custom', path: ['prefix'], message: 'with the library gateway, the prefix can\'t end with a dash or have two in a row' })
   if (p.cpu.vcpus > p.cpu.maxVcpus) ctx.addIssue({ code: 'custom', path: ['cpu', 'vcpus'], message: `a CPU job asks for ${p.cpu.vcpus} vCPUs, more than cpu.maxVcpus (${p.cpu.maxVcpus})` })
   const listed = new Set(p.repositories.map((r) => (r.split('@')[0] ?? '').toLowerCase()))
   const seen = new Set<string>()
@@ -286,6 +294,10 @@ export const REPOSITORY_OUTPUT = 'Repository'
 /** The GPU image build the deploy started (it no longer waits for it: src/infra/gpu.ts): the installer waits for it
  * after the core is up, and starts it again if it failed. Its value is the CodeBuild build id, `<project>:<uuid>`. */
 export const GPU_IMAGE_BUILD_OUTPUT = 'GpuImageBuild'
+
+/** The library gateway's outputs (gateway.enabled): its URL, and the distributor-keys secret the installer writes. */
+export const LIBRARY_GATEWAY_OUTPUT = 'LibraryGatewayUrl'
+export const LIBRARY_KEYS_OUTPUT = 'LibraryKeysSecretArn'
 
 /** The stack's layout ('flat' or 'nested'), an output so the installer can tell which an installation has. */
 export const LAYOUT_OUTPUT = 'Layout'

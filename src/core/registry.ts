@@ -25,8 +25,8 @@ export class ToolError extends Error {
 export interface ToolContext {
   /** Hardware (instruments, buses, targets) may be driven in this call. */
   readonly hardware: boolean
-  /** Where the call came from, for the run record. */
-  readonly via: 'cli' | 'mcp' | 'test'
+  /** Where the call came from, for the run record ('gateway': the library gateway's Lambda, src/library/lambda.ts). */
+  readonly via: 'cli' | 'mcp' | 'gateway' | 'test'
 }
 
 export interface Tool<I extends z.ZodObject = z.ZodObject, O = unknown> {

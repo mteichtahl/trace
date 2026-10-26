@@ -56,13 +56,14 @@ import { Provider } from 'aws-cdk-lib/custom-resources'
 import type { Construct, IConstruct } from 'constructs'
 import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
 import { JOBS_PREFIX, PROJECTS_PREFIX, memoryName } from '../core/project.js'
+import { LibraryGateway } from './gateway.js'
 import { GpuCompute } from './gpu.js'
 import { KB_RETRIEVE_ACTIONS, VectorStore, knowledgeBaseArn } from './knowledge.js'
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
 import { ACCESS_PREFIX, CENTRAL_PREFIX, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
-  GPU_IMAGE_BUILD_OUTPUT, type InfraProps, LAYOUT_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled,
+  GPU_IMAGE_BUILD_OUTPUT, type InfraProps, LAYOUT_OUTPUT, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled,
   kbEnabled, projectRefs, projectSettings,
 } from './props.js'
 
@@ -245,9 +246,11 @@ export class TraceStack extends Stack {
     const nested = cfg.layout === 'nested'
     // the knowledge bases' vectors: one S3 vector bucket for the installation, an index per project in it (nested only)
     const vectors = refs.some((r) => kbEnabled(cfg, r.repository)) ? new VectorStore(this, 'KnowledgeVectors', { prefix: cfg.prefix, removalPolicy: keep }) : null
+    // the library gateway (gateway.enabled): the shared datasheets and parts tools behind AgentCore Gateway
+    const library = cfg.gateway.enabled ? new LibraryGateway(this, 'Library', { prefix: cfg.prefix, bucket: central, traceHome, root: REPO_ROOT }) : null
     const projectProps = (ref: (typeof refs)[number]): ProjectProps => ({
       cfg, project: ref, bucket: central, images: repo, imageUri: image.getAttString('ImageUri'), oidcProviderArn: oidc.openIdConnectProviderArn,
-      gpu, vectorBucketArn: vectors?.arn ?? null,
+      gpu, vectorBucketArn: vectors?.arn ?? null, gateway: library?.ref ?? null,
       environment: {
         AWS_REGION: cfg.region, TRACE_HOME: traceHome, CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: cfg.model, TRACE_WORKSPACE: '/mnt/workspace',
       },
@@ -454,6 +457,10 @@ export class TraceStack extends Stack {
     this.node.addValidation({ validate: () => stackQuotaErrors(this, hint) })
     for (const n of nestedStacks) n.node.addValidation({ validate: () => stackQuotaErrors(n, '') })
     new CfnOutput(this, 'TraceHome', { value: traceHome, description: 'TRACE_HOME: the central database location' })
+    if (library) {
+      new CfnOutput(this, LIBRARY_GATEWAY_OUTPUT, { value: library.ref.url, description: 'The library gateway (the workers\' TRACE_GATEWAY_URL)' })
+      new CfnOutput(this, LIBRARY_KEYS_OUTPUT, { value: library.keys.secretArn, description: 'The distributor keys the library gateway\'s Lambda reads (written by `trace install`)' })
+    }
     new CfnOutput(this, 'CentralBucket', { value: central.bucketName })
     new CfnOutput(this, 'GithubSecretArn', { value: githubToken.secretArn, description: 'The API\'s GitHub token (across projects); each project has its own (Project<hash>GithubSecretArn)' })
     new CfnOutput(this, 'AgentImageUri', { value: imageUri })

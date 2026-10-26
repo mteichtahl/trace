@@ -31,13 +31,13 @@ import {
   AdminAddUserToGroupCommand, AdminCreateUserCommand, AdminGetUserCommand, AdminListGroupsForUserCommand, AdminRemoveUserFromGroupCommand,
   CognitoIdentityProviderClient, UserNotFoundException,
 } from '@aws-sdk/client-cognito-identity-provider'
-import { PutSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
+import { GetSecretValueCommand, PutSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
 import type { AwsCredentialIdentity } from '@smithy/types'
 import { type Principal, GROUPS, assign, assignments, setClass, unassign } from '../core/access.js'
 import { saveAnswers, saveInstallation } from '../core/client.js'
 import { onboard, register } from '../core/onboard.js'
 import {
-  GPU_IMAGE_BUILD_OUTPUT, type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, cpuEnabled, githubSecretName,
+  GPU_IMAGE_BUILD_OUTPUT, type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, LIBRARY_KEYS_OUTPUT, cpuEnabled, githubSecretName,
   kbOutputs, memoryDeliveryName, memoryName, projectHash, projectOutputs, stackName,
 } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
@@ -126,6 +126,7 @@ export function infraInput(a: Answers, existing?: Existing | null, deploy?: Layo
     gpu: { enabled: a.agents.gpuEnabled, maxVcpus: a.agents.gpuMaxVcpus, spot: a.agents.gpuSpot },
     cpu: { enabled: a.agents.cpuEnabled, maxVcpus: a.agents.cpuMaxVcpus, spot: a.agents.cpuSpot, vcpus: a.agents.cpuVcpus, memoryMiB: a.agents.cpuMemoryMiB },
     knowledgeBase: { enabled: a.agents.knowledgeBase },
+    gateway: { enabled: a.agents.libraryGateway },
     observability: {
       enabled: a.agents.observability, transactionSearch: a.agents.transactionSearch, dashboard: a.agents.dashboard,
       ...(a.agents.samplingPercent !== null ? { samplingPercent: a.agents.samplingPercent } : {}),
@@ -283,8 +284,8 @@ export function plan(a: Answers, existing?: Existing | null): Step[] {
   const steps: [string, string, string][] = [
     ['check', 'Check the AWS account', `${a.aws.account} in ${a.aws.region}`],
     ['cdk', 'Bootstrap CDK', `aws://${a.aws.account}/${a.aws.region} (only if it isn't already)`],
-    ['deploy', `Deploy ${stack}`, `central bucket, agent image (CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and job definitions' : ''}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64 without holding up the deploy; one queue for every project)${cpuPlan(props)}` : ''}${kbPlan(props)}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}${generationsPlan(a)}${layoutPlan(a, existing)}. A project added again after being removed gets new names if its old memory, log delivery or token secret still holds them: the old memory is kept and orphaned, and the new one starts empty`],
-    ['token', 'Store the GitHub tokens', 'the shared token in the API\'s secret, and each project\'s agent token in its own secret'],
+    ['deploy', `Deploy ${stack}`, `central bucket, agent image (CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and job definitions' : ''}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64 without holding up the deploy; one queue for every project)${cpuPlan(props)}` : ''}${props.gateway.enabled ? ', the library gateway (AgentCore Gateway and a Lambda for the shared datasheets and parts tools)' : ''}${kbPlan(props)}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}${generationsPlan(a)}${layoutPlan(a, existing)}. A project added again after being removed gets new names if its old memory, log delivery or token secret still holds them: the old memory is kept and orphaned, and the new one starts empty`],
+    ['token', 'Store the GitHub tokens', `the shared token in the API's secret, and each project's agent token in its own secret${props.gateway.enabled ? '; any distributor keys given in the library gateway\'s secret' : ''}`],
     ['repos', 'Configure the repositories', `each repository's own TRACE_AWS_ROLE, TRACE_AGENT_RUNTIME_ARN${props.memory.enabled ? ', TRACE_MEMORY_ID' : ''}${props.knowledgeBase.enabled && props.layout === 'nested' ? ', TRACE_KB_ID and TRACE_KB_DATA_SOURCE_ID' : ''}, TRACE_AWS_REGION, TRACE_HOME and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}`],
     ['onboard', 'Onboard the repositories', onboarding.length ? `open the onboarding PR in ${onboarding.join(', ')}` : 'none chosen'],
     ['people', 'Invite people and assign projects', `${a.adminEmail} (admin)${a.people.length ? `, ${a.people.map((p) => `${p.email} (${p.class})`).join(', ')}` : ''}`],
@@ -334,6 +335,27 @@ export interface Hooks {
   names?: { deployed: () => Promise<Set<string>>; taken: (n: ProjectNames) => Promise<string[]> }
   /** wait for the GPU image build (src/installer/aws.ts ensureGpuImage) */
   gpuImage?: (o: { buildId: string; imageTag: string; startedAfter: Date; log: (l: string) => void }) => Promise<{ ok: boolean; detail: string }>
+  /** the library keys stored now (readSecretJson) */
+  readSecret?: (sm: SecretsManagerClient, arn: string) => Promise<Record<string, string>>
+}
+
+/** A secret's JSON object of strings ({} when it holds anything else). */
+export async function readSecretJson(sm: SecretsManagerClient, arn: string): Promise<Record<string, string>> {
+  const r = await sm.send(new GetSecretValueCommand({ SecretId: arn }))
+  try {
+    const v = JSON.parse(r.SecretString ?? '{}') as unknown
+    if (typeof v !== 'object' || v === null || Array.isArray(v)) return {}
+    return Object.fromEntries(Object.entries(v).filter((e): e is [string, string] => typeof e[1] === 'string'))
+  } catch {
+    return {}
+  }
+}
+
+/** The library keys to store: the ones given over the ones stored (an empty field keeps a stored key), without the
+ * placeholder CloudFormation generated. */
+export function mergeLibraryKeys(stored: Record<string, string>, given: Record<string, string>): Record<string, string> {
+  const { unused: _placeholder, ...kept } = stored
+  return { ...kept, ...given }
 }
 
 export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {}): Promise<boolean> {
@@ -444,6 +466,19 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
     }
     const sharing = sharedTokenWarning(a, s)
     if (sharing) summary.push(sharing)
+    // the distributor keys, for the library gateway's Lambda (the only reader of that secret)
+    if (props.gateway.enabled) {
+      const keysArn = out[LIBRARY_KEYS_OUTPUT]
+      if (!keysArn) throw new Error(`the stack has no output ${LIBRARY_KEYS_OUTPUT}`)
+      const given = Object.fromEntries(Object.entries(s.libraryKeys).filter(([, v]) => v !== ''))
+      if (Object.keys(given).length) {
+        const stored = await (hooks.readSecret ?? readSecretJson)(sm, keysArn)
+        await sm.send(new PutSecretValueCommand({ SecretId: keysArn, SecretString: JSON.stringify(mergeLibraryKeys(stored, given)) }))
+        log('token', `distributor keys stored for the library gateway: ${Object.keys(given).join(', ')}`)
+      } else {
+        log('token', 'no distributor keys given: the library gateway keeps the ones it has (LCSC needs none)')
+      }
+    }
     set('token', 'done')
 
     // 5 — repositories

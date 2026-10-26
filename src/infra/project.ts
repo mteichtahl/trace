@@ -22,6 +22,8 @@
  *   model     Bedrock InvokeModel on Anthropic models and the account's inference profiles
  *   knowledge bedrock:Retrieve and Start/Get/ListIngestionJob on its own knowledge base only (nested layout,
  *             src/infra/knowledge.ts); its documents are S3 under projects/<slug>/kb/, inside its own prefix
+ *   gateway   bedrock-agentcore:InvokeGateway on the installation's library gateway only (gateway.enabled,
+ *             src/infra/gateway.ts), which serves the shared datasheets and parts tools
  *
  * Its GitHub OIDC role (assumed by that repository's default-branch workflows only) may invoke only this runtime,
  * read the central store and write it the same conditional way (the worker.runner=actions fallback is the worker
@@ -54,6 +56,7 @@ import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
 import {
   PROJECT_TAG, githubSecretName, memoryName, projectDataPrefix, projectJobsPrefix, workerRuntimeName,
 } from '../core/project.js'
+import type { GatewayRef } from './gateway.js'
 import type { GpuCompute } from './gpu.js'
 import { ProjectKnowledgeBase } from './knowledge.js'
 import { EVENT_ACTIONS, RECORD_ACTIONS, TraceMemory } from './memory.js'
@@ -119,6 +122,8 @@ export interface ProjectProps {
   vectorBucketArn: string | null
   /** environment every worker gets (region, model, TRACE_HOME; its memory's and observability's are added here and later) */
   environment: Record<string, string>
+  /** the installation's library gateway (src/infra/gateway.ts): null without one */
+  gateway?: GatewayRef | null
 }
 
 export class ProjectStack extends Construct {
@@ -239,6 +244,15 @@ export class ProjectStack extends Construct {
       Object.assign(kbEnv, { TRACE_KB_ID: this.knowledgeBase.knowledgeBaseId, TRACE_KB_DATA_SOURCE_ID: this.knowledgeBase.dataSourceId })
     }
 
+    // ------------------------------------------------------------------ the library gateway (src/infra/gateway.ts)
+    // the shared datasheets and parts tools: this role may call the installation's one gateway, nothing more; what the
+    // gateway's Lambda reaches is the central store, which this role reaches already
+    const gatewayEnv: Record<string, string> = {}
+    if (p.gateway) {
+      role.addToPolicy(new iam.PolicyStatement({ sid: 'LibraryGateway', actions: ['bedrock-agentcore:InvokeGateway'], resources: [p.gateway.arn] }))
+      gatewayEnv.TRACE_GATEWAY_URL = p.gateway.url
+    }
+
     // ------------------------------------------------------------------ GPU jobs: its own definition and job role
     const gpuEnv: Record<string, string> = {}
     this.jobDefinitionName = null
@@ -304,6 +318,7 @@ export class ProjectStack extends Construct {
         ...memoryEnv,
         ...kbEnv,
         ...gpuEnv,
+        ...gatewayEnv,
       },
       tags: { [PROJECT_TAG]: slug, 'trace:installation': cfg.prefix },
     })
