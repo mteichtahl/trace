@@ -28,11 +28,15 @@ beforeEach(() => {
   process.chdir(root)
   // the test setup points TRACE_PROJECT_DB at a scratch database; here the clone's own is used
   delete process.env.TRACE_PROJECT_DB
+  // GitHub Actions sets GITHUB_REPOSITORY: without a repository the preview uses the OWNER/REPO placeholder
+  vi.stubEnv('GITHUB_REPOSITORY', '')
+  vi.stubEnv('TRACE_MEMORY_REPOSITORY', '')
   installation = new InstallationPrompts({ home: mkdtempSync(join(tmpdir(), 'trace-prompts-cli-home-')) })
 })
 afterEach(() => {
   process.chdir(cwd)
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
 })
 
 const run = (argv: string[]): Promise<number> => runPrompts(argv, localBackend(installation))
