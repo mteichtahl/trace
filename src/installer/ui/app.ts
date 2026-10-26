@@ -56,7 +56,7 @@ const s = {
   projects: new Map<string, { branch: string; onboard: boolean; applySettings: boolean; memoryDays: string }>(),
   aws: { mode: 'profile' as 'profile' | 'keys', profile: 'default', region: 'us-east-1', keyId: '', secret: '', session: '', check: null as AwsCheck | null, confirmed: false, busy: false, error: '' },
   agents: { prefix: 'trace', model: '', maxLifetimeHours: 8, idleMinutes: 15, centralBucketName: '', retainData: true, escalateTo: '', gpuEnabled: true, gpuMaxVcpus: 16, gpuSpot: false,
-    observability: true, transactionSearch: true, samplingPercent: '', dashboard: true },
+    observability: true, transactionSearch: true, samplingPercent: '', dashboard: true, migrateLayout: false },
   adminEmail: '',
   people: [] as Person[],
   plan: null as Step[] | null,
@@ -99,6 +99,12 @@ function select(options: { value: string; label: string }[], value: string, on: 
 
 // ------------------------------------------------------------------ the answers
 
+/** The stack already here keeps every project in itself (layout flat: no Layout output, or Layout=flat): bootstrap.ts layoutOf. */
+function flatInstall(): boolean {
+  const o = s.aws.check?.existing?.outputs ?? {}
+  return o.Layout ? o.Layout === 'flat' : Object.keys(o).length > 0
+}
+
 function answers(): AnswersInput {
   return {
     github: { login: s.github.info?.login ?? '' },
@@ -109,6 +115,7 @@ function answers(): AnswersInput {
       gpuEnabled: s.agents.gpuEnabled, gpuMaxVcpus: s.agents.gpuMaxVcpus, gpuSpot: s.agents.gpuSpot,
       observability: s.agents.observability, transactionSearch: s.agents.transactionSearch, dashboard: s.agents.dashboard,
       samplingPercent: s.agents.samplingPercent.trim() === '' ? null : Number(s.agents.samplingPercent),
+      migrateLayout: s.agents.migrateLayout,
     },
     projects: [...s.projects].map(([repo, { memoryDays, ...p }]) => ({ repo, ...p, memoryEventExpiryDays: memoryDays.trim() === '' ? null : Number(memoryDays) })),
     adminEmail: s.adminEmail,
@@ -294,6 +301,10 @@ function agents(): HTMLElement {
       field('Central bucket name', input('text', g.centralBucketName, (v) => { g.centralBucketName = v.trim() }, { placeholder: 'leave empty to name it automatically' }), 'datasheets and parts, shared by every project'),
       field('Who the agents ask', input('text', g.escalateTo, (v) => { g.escalateTo = v.trim() }, { placeholder: '@your-login' }), 'mentioned when a project needs a person')),
     checkbox('Keep the central bucket and images if trace is uninstalled', g.retainData, (v) => { g.retainData = v }),
+    ...(flatInstall() ? [
+      h('p', { class: 'lead' }, 'This installation keeps every project in one CloudFormation stack, which holds about 24 projects. New installations give each project its own nested stack, which holds 60. Moving takes three deploys and DELETES every project\'s memory records (AgentCore cannot copy them); the projects are offline while it runs.'),
+      checkbox('Move to one nested stack per project (deletes every project\'s memory records)', g.migrateLayout, (v) => { g.migrateLayout = v }),
+    ] : []),
     h('h3', {}, 'GPU jobs'),
     h('p', { class: 'lead' }, 'AgentCore has no GPU, so Blender renders and the PCB autorouters run as AWS Batch jobs on GPU instances (g6, g5 or g4dn). The queue scales to zero: nothing runs, and nothing is billed, while there is no job.'),
     checkbox('Run GPU jobs on AWS Batch', g.gpuEnabled, (v) => { g.gpuEnabled = v }),

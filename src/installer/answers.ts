@@ -41,6 +41,10 @@ export const AgentAnswers = z.object({
   samplingPercent: z.number().min(0).max(100).nullable().default(null),
   /** a CloudWatch dashboard for the agents */
   dashboard: z.boolean().default(true),
+  /** move an installation whose projects are all in one stack (layout flat) to one nested stack per project: three
+   * deploys in a row, and every project's memory records are deleted (README "Project isolation"). Ignored for a new
+   * installation, which is nested already. */
+  migrateLayout: z.boolean().default(false),
 }).strict()
 
 export const ProjectAnswer = z.object({

@@ -10,7 +10,9 @@
  *                       AgentCore with its own execution role, its GitHub token secret, its GitHub OIDC role, its
  *                       AgentCore memory and its GPU job definition and job role. Each role reaches that project's
  *                       resources only, so the line between projects holds in IAM even though the agent has Bash
- *                       and the role's credentials
+ *                       and the role's credentials. Layout 'nested' (the default) puts each in its own nested stack,
+ *                       so this stack holds one resource per project and 60 fit; 'flat' keeps them here, as earlier
+ *                       installations have them (about 24 fit)
  *   agent memory        AgentCore Memory (src/infra/memory.ts): one per project, made by its ProjectStack, still
  *                       namespaced /trace/<owner>/<repo>/<agent>/; each worker may use only its own project's memory
  *   GPU                 one AWS Batch queue and compute environment shared by every project (src/infra/gpu.ts)
@@ -32,7 +34,7 @@
  * outputs: src/infra/props.ts projectOutputs) and the local settings.
  */
 import { join } from 'node:path'
-import { CfnOutput, CustomResource, Duration, Fn, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib'
+import { CfnOutput, CfnParameter, CfnResource, CustomResource, Duration, Fn, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib'
 import { CfnRuntime } from 'aws-cdk-lib/aws-bedrockagentcore'
 import * as codebuild from 'aws-cdk-lib/aws-codebuild'
 import * as cognito from 'aws-cdk-lib/aws-cognito'
@@ -45,13 +47,15 @@ import * as s3 from 'aws-cdk-lib/aws-s3'
 import { Asset } from 'aws-cdk-lib/aws-s3-assets'
 import * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { Provider } from 'aws-cdk-lib/custom-resources'
-import type { Construct } from 'constructs'
+import type { Construct, IConstruct } from 'constructs'
 import { JOBS_PREFIX, memoryName, workerRuntimeNamePattern } from '../core/project.js'
 import { GpuCompute } from './gpu.js'
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
-import { ACCESS_PREFIX, CENTRAL_PREFIX, ProjectStack, grantPrefixes } from './project.js'
-import { type InfraProps, apiRuntimeName, projectRefs } from './props.js'
+import { ACCESS_PREFIX, CENTRAL_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
+import {
+  type InfraProps, LAYOUT_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, projectOutputs, projectRefs,
+} from './props.js'
 
 /** The repository root, from dist/infra or src/infra. */
 export const REPO_ROOT = join(import.meta.dirname, '..', '..')
@@ -81,6 +85,22 @@ export function checkRuntimeEnv(runtime: string, env: Record<string, unknown>, e
   for (const [k, v] of Object.entries(env)) {
     if (typeof v === 'string' && !v.includes('${Token[') && v.length > ENV_VALUE_MAX) throw new Error(`the ${runtime} runtime's ${k} would be ${v.length} characters (AgentCore allows ${ENV_VALUE_MAX})`)
   }
+}
+
+/**
+ * Refuse, at synth time, a template CloudFormation would refuse at deploy time: more than 500 resources, 200 outputs
+ * or 200 parameters. Counted after CDK has added the parameters and outputs that join nested stacks to the parent.
+ */
+export function stackQuotaErrors(stack: Stack, hint: string): string[] {
+  const own = stack.node.findAll().filter((c: IConstruct) => Stack.of(c) === stack)
+  const errors: string[] = []
+  const check = (what: string, n: number, max: number): void => {
+    if (n > max) errors.push(`${stack.node.path} would have ${n} ${what} (CloudFormation allows ${max} per template)${hint}`)
+  }
+  check('resources', own.filter((c) => c instanceof CfnResource).length, STACK_RESOURCES_MAX)
+  check('outputs', own.filter((c) => c instanceof CfnOutput).length, STACK_OUTPUTS_MAX)
+  check('parameters', own.filter((c) => c instanceof CfnParameter).length, STACK_PARAMETERS_MAX)
+  return errors
 }
 
 /** What the image build doesn't need (keeps the source asset small and its hash stable). */
@@ -200,17 +220,27 @@ export class TraceStack extends Stack {
     const oidc = cfg.createOidcProvider
       ? new iam.OpenIdConnectProvider(this, 'GithubOidc', { url: `https://${issuer}`, clientIds: ['sts.amazonaws.com'] })
       : iam.OpenIdConnectProvider.fromOpenIdConnectProviderArn(this, 'GithubOidc', `arn:aws:iam::${cfg.account}:oidc-provider/${issuer}`)
-    const refs = projectRefs(cfg.repositories)
-    const projects = refs.map((ref) => new ProjectStack(this, `Project${ref.hash}`, {
+    // the 'drain' step of the move to nested stacks: every project out of the stack, so a nested deploy can make them again
+    const refs = cfg.layoutMigration === 'drain' ? [] : projectRefs(cfg.repositories)
+    const nested = cfg.layout === 'nested'
+    const projectProps = (ref: (typeof refs)[number]): ProjectProps => ({
       cfg, project: ref, bucket: central, images: repo, imageUri: image.getAttString('ImageUri'), oidcProviderArn: oidc.openIdConnectProviderArn,
       gpu,
       environment: {
         AWS_REGION: cfg.region, TRACE_HOME: traceHome, CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: cfg.model, TRACE_WORKSPACE: '/mnt/workspace',
       },
-    }))
+    })
+    const nestedStacks: ProjectNestedStack[] = []
+    const projects = refs.map((ref) => {
+      if (!nested) return new ProjectStack(this, `Project${ref.hash}`, projectProps(ref))
+      const n = new ProjectNestedStack(this, `Project${ref.hash}Stack`, projectProps(ref))
+      nestedStacks.push(n)
+      return n.project
+    })
     // The API is told every worker runtime, and every project's memory, as `owner/repo=<id>` separated by spaces
     // (src/api/workers.ts, src/agents/runtime/memory.ts parseProjectMemories). Each is one value of at most 5000 characters.
-    const idList = (ids: readonly string[]): string => Fn.join(' ', ids.map((id, i) => Fn.join('=', [refs[i]?.slug ?? '', id])))
+    // (empty while the move to nested stacks drains the projects: Fn.join refuses an empty list)
+    const idList = (ids: readonly string[]): string => (!ids.length ? '' : Fn.join(' ', ids.map((id, i) => Fn.join('=', [refs[i]?.slug ?? '', id]))))
     const workerList = idList(projects.map((p) => p.runtime.attrAgentRuntimeId))
     const workerListLength = idListLength(refs.map((r, i) => ({ slug: r.slug, name: projects[i]?.runtimeName ?? '' })))
     if (workerListLength > ENV_VALUE_MAX) throw new Error(`too many repositories for one installation: the API's list of worker runtimes would be ${workerListLength} characters (AgentCore allows ${ENV_VALUE_MAX})`)
@@ -346,8 +376,10 @@ export class TraceStack extends Stack {
     // ------------------------------------------------------------------ observability (OpenTelemetry/ADOT, src/infra/observability.ts)
     new Observability(this, 'Observability', {
       prefix: cfg.prefix, settings: cfg.observability, gpu: Boolean(gpu), gpuJobRoles: gpu?.jobRoles ?? [],
-      retainData: cfg.retainData,
-      memories: projects.flatMap((p, i) => (p.memory ? [{ id: p.node.id, hash: refs[i]?.hash ?? '', name: memoryName(cfg.prefix, refs[i]?.repository ?? ''), arn: p.memory.memoryArn, memoryId: p.memory.memoryId }] : [])),
+      retainData: cfg.retainData, releaseDeliveries: cfg.layoutMigration === 'release',
+      memories: projects.flatMap((p, i) => (p.memory
+        ? [{ id: p.node.id, hash: refs[i]?.hash ?? '', name: memoryName(cfg.prefix, refs[i]?.repository ?? ''), arn: p.memory.memoryArn, memoryId: p.memory.memoryId, ...(nested ? { scope: p } : {}) }]
+        : [])),
       runtimes: [
         ...projects.map((p) => ({ id: p.node.id, runtime: p.runtime, name: p.runtimeName, role: p.role })),
         { id: 'Api', runtime: api, name: apiName, role: apiRole },
@@ -355,6 +387,22 @@ export class TraceStack extends Stack {
     })
 
     // ------------------------------------------------------------------ outputs
+    new CfnOutput(this, LAYOUT_OUTPUT, { value: cfg.layout, description: 'Where each project\'s resources are: nested (a nested stack each) or flat (this stack)' })
+    // Nested: what the installer reads of each project, under the names it always had (each project's nested stack
+    // has these and the rest: its secret, GPU job definition and log groups). Three per project, so 60 fit in 200.
+    if (nested) {
+      projects.forEach((p, i) => {
+        const ref = refs[i]
+        if (!ref) return
+        const o = projectOutputs(ref.repository)
+        new CfnOutput(this, o.runtimeArn, { value: p.runtime.attrAgentRuntimeArn, description: `${ref.slug}: its worker runtime (TRACE_AGENT_RUNTIME_ARN)` })
+        new CfnOutput(this, o.roleArn, { value: p.actionsRole.roleArn, description: `${ref.slug}: its GitHub OIDC role (TRACE_AWS_ROLE)` })
+        if (p.memory) new CfnOutput(this, o.memoryId, { value: p.memory.memoryId, description: `${ref.slug}: its AgentCore memory (its worker's TRACE_MEMORY_ID)` })
+      })
+    }
+    const hint = nested ? '' : `: with layout 'flat' about 24 projects fit; see README "Project isolation" for the move to layout 'nested'`
+    this.node.addValidation({ validate: () => stackQuotaErrors(this, hint) })
+    for (const n of nestedStacks) n.node.addValidation({ validate: () => stackQuotaErrors(n, '') })
     new CfnOutput(this, 'TraceHome', { value: traceHome, description: 'TRACE_HOME: the central database location' })
     new CfnOutput(this, 'CentralBucket', { value: central.bucketName })
     new CfnOutput(this, 'GithubSecretArn', { value: githubToken.secretArn, description: 'The API\'s GitHub token (across projects); each project has its own (Project<hash>GithubSecretArn)' })

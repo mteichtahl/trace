@@ -10,8 +10,11 @@
  */
 import { z } from 'zod'
 import type { TraceConfig } from '../core/config.js'
+import { SPECIALISTS, allowedToolsOf, specialistPrompt } from '../agents/index.js'
+import { type Route, RouteSchema, SpecialistKindSchema } from '../agents/kinds.js'
+import { type CheckEvidence, type RouteInput, route } from '../agents/router.js'
 import { type CommentLike, comments, trustedAuthor } from './util.js'
-import { type Deps, labelNames, short } from './types.js'
+import { type Deps, type GitHub, labelNames, short } from './types.js'
 
 export const WorkItemSchema = z.object({
   kind: z.enum(['ci-red', 'conflict', 'agent-fix']),
@@ -20,8 +23,31 @@ export const WorkItemSchema = z.object({
   ref: z.string(),
   own: z.boolean(),
   title: z.string(),
+  /** The specialist it goes to and why (worker-pick routes it; the runtime routes an item without one). */
+  route: RouteSchema.optional(),
 }).strict()
 export type WorkItem = z.infer<typeof WorkItemSchema>
+
+/** The evidence worker-pick gathers for routing: what the item's labels, failing checks, files and text say. */
+export async function evidenceOf(github: GitHub, owner: string, repo: string, item: WorkItem, cfg: TraceConfig,
+  known: { labels?: readonly string[]; body?: string | null | undefined } = {}): Promise<RouteInput> {
+  const input: RouteInput = { labels: [...(known.labels ?? [])], text: `${item.title}\n\n${known.body ?? ''}`.trim() }
+  if (item.kind === 'agent-fix') return input
+  try {
+    const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number: item.number, per_page: 100 })
+    input.files = files.map((f) => f.filename).filter((f): f is string => typeof f === 'string')
+  } catch { /* routing works with less */ }
+  if (item.kind === 'ci-red') {
+    try {
+      const runs = (await github.rest.checks.listForRef({ owner, repo, ref: item.sha, per_page: 100 })).data.check_runs ?? []
+      const failed = runs.filter((r) => r.conclusion === 'failure' || r.conclusion === 'timed_out')
+      // the summary gate fails whenever another job did: its name says nothing about the cause
+      const judged = failed.length > 1 ? failed.filter((r) => r.name !== cfg.build.required_check) : failed
+      input.checks = judged.map((r): CheckEvidence => ({ name: r.name, ...(r.output?.summary ? { log: String(r.output.summary).slice(-4000) } : {}) }))
+    } catch { /* routing works with less */ }
+  }
+  return input
+}
 
 const CLAIM = /<!-- trace-claim: (\S+) -->/
 const claimedAt = (cs: CommentLike[]): number[] =>
@@ -34,6 +60,7 @@ export async function pick({ github, context, core, cfg, env }: Deps, now: numbe
   core.setOutput('runner', cfg.worker.runner)
   if (!cfg.worker.enabled) return core.info('worker.enabled is off.')
   const items: WorkItem[] = []
+  const known = new Map<number, { labels: string[]; body: string | null | undefined }>()
   const blocked: { n: number; kind: WorkItem['kind']; sha: string; marker: string }[] = []
 
   const consider = async (item: WorkItem): Promise<void> => {
@@ -64,10 +91,12 @@ export async function pick({ github, context, core, cfg, env }: Deps, now: numbe
       const idle = (now - at) / 60e3
       if (idle < cfg.worker.others_branches_after_minutes) { core.info(`#${p.number} is someone's branch, pushed ${Math.round(idle)} min ago: waiting`); continue }
     }
+    known.set(p.number, { labels: labelNames(p.labels), body: p.body })
     await consider({ kind, number: p.number, sha: p.head.sha, ref: p.head.ref, own, title: p.title.slice(0, 200) })
   }
   const issues = (await github.paginate(github.rest.issues.listForRepo, { owner, repo, state: 'open', labels: cfg.labels.agent_fix, per_page: 100 }))
     .filter((i) => !i.pull_request)
+  for (const i of issues) known.set(i.number, { labels: labelNames(i.labels), body: i.body })
   for (const i of issues) await consider({ kind: 'agent-fix', number: i.number, sha: 'issue', ref: '', own: true, title: i.title.slice(0, 200) })
 
   for (const b of blocked) {
@@ -76,14 +105,33 @@ export async function pick({ github, context, core, cfg, env }: Deps, now: numbe
       body: `${who}the worker has tried this ${cfg.worker.max_attempts} times (${b.kind}${b.sha === 'issue' ? '' : ` on ${short(b.sha)}`}) without resolving it, so it is left for a person. The attempts' comments above say what was tried. A new push, or deleting the attempt comments, puts it back in the queue.\n${b.marker}` })
   }
 
-  const picked = items.slice(0, cfg.worker.max_parallel)
+  const picked: WorkItem[] = []
+  for (const it of items.slice(0, cfg.worker.max_parallel)) {
+    // the deterministic route only: no model here; the runtime asks the model when this fell to the default
+    const r = route(await evidenceOf(github, owner, repo, it, cfg, known.get(it.number)), cfg)
+    picked.push(r.source === 'default' ? it : { ...it, route: r })
+  }
   const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`
   for (const it of picked) {
     await github.rest.issues.createComment({ owner, repo, issue_number: it.number,
-      body: `Picked up by the trace worker (${it.kind}): ${via ?? `[run](${runUrl})`}.\n<!-- trace-claim: ${new Date(now).toISOString()} -->\n<!-- trace-attempt: ${it.sha} -->` })
+      body: `Picked up by trace (${it.kind}): ${via ?? `[run](${runUrl})`}. ${routeLine(it.route)}\n<!-- trace-claim: ${new Date(now).toISOString()} -->\n<!-- trace-attempt: ${it.sha} -->` })
   }
-  core.info(picked.length ? `Work: ${picked.map((i) => `#${i.number} ${i.kind}`).join(', ')}` : 'Nothing to do.')
+  core.info(picked.length ? `Work: ${picked.map((i) => `#${i.number} ${i.kind} → ${i.route?.kind ?? '(routed by the runtime)'}`).join(', ')}` : 'Nothing to do.')
   core.setOutput('items', JSON.stringify(picked))
+}
+
+/** The item a workflow step passes (ITEM), with the specialist the step names (AGENT, when one) as its route. */
+export function itemFromEnv(env: { ITEM?: string | undefined; AGENT?: string | undefined }): WorkItem {
+  const item = WorkItemSchema.parse(JSON.parse(env.ITEM || '{}'))
+  const kind = SpecialistKindSchema.safeParse(env.AGENT?.trim())
+  if (!kind.success || item.route?.kind === kind.data) return item
+  return { ...item, route: { kind: kind.data, reason: `the workflow asked for the ${kind.data} specialist`, confidence: 1, source: 'explicit' } }
+}
+
+/** One line for a comment: which specialist takes the item, and why. */
+export function routeLine(r: Route | undefined): string {
+  if (!r) return 'Nothing here decides the specialist: the runtime routes it (the model, else agents.default).'
+  return `It goes to the **${SPECIALISTS[r.kind].title}** specialist (\`${r.kind}\`): ${r.reason} (${r.source}, confidence ${r.confidence.toFixed(2)}).`
 }
 
 /** The prompt for one item. Pure, for tests. */
@@ -147,14 +195,45 @@ export function promptFor(item: WorkItem, cfg: TraceConfig, repository: string):
   return lines.join('\n')
 }
 
-export function prompt({ core, cfg, env, context }: Deps): void {
-  const item = WorkItemSchema.parse(JSON.parse(env.ITEM ?? '{}'))
-  core.setOutput('prompt', promptFor(item, cfg, `${context.repo.owner}/${context.repo.repo}`))
+/**
+ * worker-prompt (worker.runner = actions): the routed specialist's prompt for one item. There is no runtime to delegate
+ * to in GitHub Actions, so the specialist makes repository changes itself following the worker's instructions
+ * (promptFor, inline), with the worker's tools added to its own.
+ */
+export async function prompt({ github, core, cfg, env, context }: Deps): Promise<void> {
+  const item = itemFromEnv(env)
+  const { owner, repo } = context.repo
+  const repository = `${owner}/${repo}`
+  const r = item.route ?? route({ text: item.title }, cfg)
+  const s = SPECIALISTS[r.kind]
+  const rules = await rulesOf(github, owner, repo, cfg.branch)
+  core.setOutput('prompt', specialistPrompt(s, {
+    cfg, repository, job: { kind: 'work-item', item }, rules, route: r, where: 'in GitHub Actions',
+    delivery: { inline: promptFor(item, cfg, repository) },
+  }))
+  const settings = cfg.agents[r.kind]
+  const model = settings.model || cfg.worker.model
+  const tools = [...new Set([...allowedToolsOf(s, { delegate: false, hardware: true }), ...ACTIONS_WORKER_TOOLS])]
   const args = [
-    ...(cfg.worker.model ? [`--model ${cfg.worker.model}`] : []),
-    `--max-turns ${cfg.worker.max_turns}`,
-    '--allowedTools Bash,Read,Write,Edit,Glob,Grep,Task,TodoWrite,mcp__trace',
+    ...(model ? [`--model ${model}`] : []),
+    `--max-turns ${settings.max_turns}`,
+    `--allowedTools ${tools.join(',')}`,
   ]
   core.setOutput('args', args.join('\n'))
   core.setOutput('setup', cfg.worker.setup)
+  core.setOutput('agent', r.kind)
+}
+
+/** What a specialist adds in GitHub Actions to act as its own worker: a shell, edits and subagents. */
+export const ACTIONS_WORKER_TOOLS = ['Bash', 'Write', 'Edit', 'Task'] as const
+
+/** .trace/rules.md on the default branch (null when there is none). */
+export async function rulesOf(github: GitHub, owner: string, repo: string, branch: string): Promise<string | null> {
+  try {
+    const meta = (await github.rest.repos.getContent({ owner, repo, path: '.trace/rules.md', ref: branch })).data
+    if (Array.isArray(meta) || meta.type !== 'file' || !meta.content) return null
+    return Buffer.from(meta.content, 'base64').toString('utf8')
+  } catch {
+    return null
+  }
 }

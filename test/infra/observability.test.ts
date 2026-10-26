@@ -8,6 +8,7 @@ import { POLICY_NAME, type Clients, handle, policyDocument } from '../../src/inf
 import { METRIC_NAMESPACE, RUNTIME_NAMESPACE, dashboardBody } from '../../src/infra/observability.js'
 import { InfraPropsSchema, projectHash, stackName } from '../../src/infra/props.js'
 import { TraceStack } from '../../src/infra/stack.js'
+import { type Synth, nestedResourceId, synth } from './templates.js'
 import { AnswersSchema } from '../../src/installer/answers.js'
 import { infraInput, plan } from '../../src/installer/bootstrap.js'
 
@@ -31,8 +32,10 @@ const runtimeEnv = (t: Template, name: string): Record<string, unknown> => {
 
 describe('observability in the stack', () => {
   let t: Template
+  let s: Synth
   beforeAll(() => {
-    t = Template.fromStack(new TraceStack(new App(), stackName('trace'), InfraPropsSchema.parse(base)))
+    s = synth(InfraPropsSchema.parse(base), stackName('trace'))
+    t = s.all
   }, 300_000)
 
   it('is on by default', () => {
@@ -87,7 +90,7 @@ describe('observability in the stack', () => {
     t.hasResourceProperties('AWS::Logs::LogGroup', { LogGroupName: { 'Fn::Join': ['', ['/aws/vendedlogs/bedrock-agentcore/memory/APPLICATION_LOGS/', { 'Fn::GetAtt': [Match.stringLikeRegexp(`^Project${H}Memory`), 'MemoryId'] }]] } })
     t.resourceCountIs('AWS::Logs::Delivery', 2)
     // two projects: two of each, one per memory, never the installation-wide one
-    const two = Template.fromStack(new TraceStack(new App(), 'TwoMemories', InfraPropsSchema.parse({ ...base, repositories: ['mteichtahl/trace', 'pokeys-toolkit/potroller'] })))
+    const two = synth(InfraPropsSchema.parse({ ...base, repositories: ['mteichtahl/trace', 'pokeys-toolkit/potroller'] }), 'TwoMemories').all
     two.resourceCountIs('AWS::Logs::Delivery', 4)
     two.resourceCountIs('AWS::Logs::DeliverySource', 4)
     const names = Object.values(two.findResources('AWS::Logs::DeliverySource') as Record<string, Res>).map((r) => r.Properties?.Name).sort()
@@ -99,8 +102,12 @@ describe('observability in the stack', () => {
     // the dashboard SEARCHes across both memories
     const body = JSON.stringify(Object.values(two.findResources('AWS::CloudWatch::Dashboard') as Record<string, Res>)[0]?.Properties?.DashboardBody)
     expect(body).toContain(`(${H} OR ${H2})`)
-    const delivery = Object.values(t.findResources('AWS::Logs::Delivery') as Record<string, Res & { DependsOn?: string[] }>)
-    expect(delivery.some((d) => (d.DependsOn ?? []).some((x) => x.startsWith('ObservabilityTransactionSearch')))).toBe(true)
+    // X-Ray as a destination needs Transaction Search: the project's nested stack (which holds the delivery) waits for it
+    const stackRes = s.parent.toJSON().Resources[nestedResourceId(s, H)] as { DependsOn?: string[] }
+    expect((stackRes.DependsOn ?? []).some((x) => x.startsWith('ObservabilityTransactionSearch'))).toBe(true)
+    // and the delivery lives in the nested stack, beside its memory
+    expect(Object.keys(s.nested.get(H)?.findResources('AWS::Logs::Delivery') ?? {})).toHaveLength(2)
+    expect(Object.keys(s.parent.findResources('AWS::Logs::Delivery'))).toHaveLength(0)
   })
 
   it('has the GPU jobs export their span to X-Ray\'s OTLP endpoint, as the job role', () => {
@@ -132,7 +139,7 @@ describe('observability in the stack', () => {
   })
 
   it('creates nothing when off, and tells the runtimes to stay quiet', () => {
-    const off = Template.fromStack(new TraceStack(new App(), 'NoObs', InfraPropsSchema.parse({ ...base, observability: { enabled: false } })))
+    const off = synth(InfraPropsSchema.parse({ ...base, observability: { enabled: false } }), 'NoObs').all
     for (const r of ['Custom::TransactionSearch', 'AWS::CloudWatch::Dashboard', 'AWS::Logs::DeliverySource', 'AWS::Logs::DeliveryDestination', 'AWS::Logs::Delivery']) off.resourceCountIs(r, 0)
     for (const name of [WORKER, 'trace_api']) {
       const env = runtimeEnv(off, name)
@@ -147,11 +154,11 @@ describe('observability in the stack', () => {
   }, 300_000)
 
   it('can skip Transaction Search and the dashboard, and set the indexing percentage', () => {
-    const t2 = Template.fromStack(new TraceStack(new App(), 'Partial', InfraPropsSchema.parse({ ...base, observability: { transactionSearch: false, dashboard: false } })))
+    const t2 = synth(InfraPropsSchema.parse({ ...base, observability: { transactionSearch: false, dashboard: false } }), 'Partial').all
     t2.resourceCountIs('Custom::TransactionSearch', 0)
     t2.resourceCountIs('AWS::CloudWatch::Dashboard', 0)
     t2.hasResourceProperties('AWS::Logs::DeliverySource', { LogType: 'TRACES' })
-    const t3 = Template.fromStack(new TraceStack(new App(), 'Sampled', InfraPropsSchema.parse({ ...base, observability: { samplingPercent: 25 } })))
+    const t3 = synth(InfraPropsSchema.parse({ ...base, observability: { samplingPercent: 25 } }), 'Sampled').all
     t3.hasResourceProperties('Custom::TransactionSearch', { SamplingPercent: '25' })
     expect(() => InfraPropsSchema.parse({ ...base, observability: { samplingPercent: 101 } })).toThrow()
   }, 300_000)

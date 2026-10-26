@@ -34,7 +34,8 @@ It then shows the plan and runs it:
 
 - **AWS (CDK):** one stack. It contains the central bucket, the agent image (built by CodeBuild on arm64, so no
   local Docker is needed), and AgentCore runtimes from that image: one worker runtime per project, each with its own
-  execution role, GitHub OIDC role, GitHub token secret and GPU job definition, and the API runtime. A project's
+  execution role, GitHub OIDC role, GitHub token secret, memory and GPU job definition, and the API runtime. Each
+  project's resources are in a nested stack of their own (see [Stack layout](#stack-layout-and-limits)). A project's
   worker is invoked by that repository's workflows through IAM, and by the API. The API runtime is for people and is
   reached only with a Cognito sign-in. The stack also holds the Cognito user pool.
 - **GitHub:** each repository's Actions variables (`TRACE_AWS_ROLE` and `TRACE_AGENT_RUNTIME_ARN`, both its own
@@ -78,6 +79,75 @@ Shared on purpose:
 
 `DescribeJobs` in AWS Batch has no resource-level permissions, so any project's role can describe (not change) any
 job on the queue, which includes its command and environment. Job ids, not data, are what that reveals.
+
+### Stack layout and limits
+
+An installation holds up to 60 projects. Each project's resources (its worker runtime and execution role, GitHub
+OIDC role, token secret, memory with its log group and log delivery, GPU job definition and job role: 17
+CloudFormation resources with everything on) are a CloudFormation nested stack of their own, `Project<hash>Stack`
+(`src/infra/project.ts` `ProjectNestedStack`). The parent stack holds the shared parts and one
+`AWS::CloudFormation::Stack` per project. What a project uses of the parent (the bucket, the agent image and its
+repository, the OIDC provider, the GPU queue, image, execution role and log group) reaches its nested stack as
+parameters, and the parent waits for the GPU image and Transaction Search before it creates or updates a project.
+Inside, the resources are the ones the single stack had, with the same names, IAM and removal policies (with
+`retainData`, a removed project's memory, log group and log delivery stay in the account, as before).
+
+| Projects | Parent stack: resources / outputs | Each project's nested stack: resources / outputs / parameters |
+| --- | --- | --- |
+| 1 | 83 / 20 | 17 / 12 / 10 |
+| 24 | 106 / 89 | 17 / 12 / 10 |
+| 60 | 143 / 197 | 17 / 12 / 10 |
+
+(Everything on, including the legacy memory's one-deploy output. At 60 projects, CDK moves part of the API role's
+policy, which names every project's memory, into a managed policy of that role.)
+
+CloudFormation allows 500 resources, 200 outputs and 200 parameters per template, and the stack checks all three
+when it is built. Outputs are the tighter limit on the parent, so it carries three per project, the ones the
+installer reads: `Project<hash>RuntimeArn`, `Project<hash>ActionsRoleArn` and `Project<hash>MemoryId`. Each nested
+stack has those and the rest under the same names (`Project<hash>GithubSecretArn`, `Project<hash>GpuJobDefinition`,
+`Project<hash>LogGroup`, `Project<hash>MemoryLogGroup`); the installer writes a project's token by its secret's name,
+`<prefix>/github-token/<owner>/<repo>`. The other limit at 60 is the API's two `owner/repo=<id>` lists (see
+[Agent memory](#agent-memory)): very long repository names can reach their 5000 characters first, and the stack says
+so when it is built. The output `Layout` says which layout an installation has.
+
+`cdk deploy` uploads each nested template to the CDK bootstrap bucket as a file asset, the same way it already
+uploads the agent source and the Lambda code, so the bootstrap the installer runs (version 6 or later) covers it.
+
+**Installations from before nested stacks keep `layout: 'flat'`.** There every project's resources are in the one
+stack, and it holds about 24 projects (`cdk synth` refuses more). The installer picks the layout from the deployed
+stack: a stack with a `Layout` output keeps that layout, a stack without one is flat, and a new installation is
+nested. Deploying by hand, set `layout: 'flat'` in `TRACE_INFRA` for an older stack.
+
+Moving a flat installation to nested stacks is a choice in the installer ("Move to one nested stack per project"),
+because it deletes every project's memory records. CloudFormation cannot move these resources in place:
+
+| Resource | What a plain switch to nested would do |
+| --- | --- |
+| AgentCore runtime (`<prefix>_w_<hash>`), memory (`<prefix>_m_<hash>`), IAM roles (`<prefix>-w-`, `-gh-`, `-gpu-<hash>-<region>`), secret (`<prefix>/github-token/<owner>/<repo>`), delivery sources and destinations (`<prefix>-m-<hash>-…`) | CloudFormation creates a moved resource before it deletes the old one, and these names are fixed, so the nested stack's create fails on the first name already in use and the update rolls back. Nothing is lost, and nothing moves. A memory with `retainData` is also Retain, so even after its old copy is removed its name stays taken. A deleted secret can keep its name through its recovery window. |
+| Batch job definition (`<prefix>-gpu-<hash>`) | Would work: registering an existing name adds a revision, and deleting the old resource deregisters only its own revision. |
+| A memory's log group (`/aws/vendedlogs/…/<memory id>`) | Named after the memory's id, so a new memory gets a new log group. The old one stays with `retainData`. |
+
+CloudFormation stack refactoring (2025, and `cdk refactor`) moves resources between stacks, nested ones included,
+but only as an operation that creates, deletes and modifies nothing. This move has to create the nested stack
+resources and their parameters, and to change the API runtime's environment, the API role's policy and the outputs
+to read from the nested stacks. That would take a separate deploy for each of those changes around a refactor, and
+refactoring also requires every moved resource type to be fully mutable, which has not been confirmed for the AgentCore
+resource types. It was not chosen. Renaming everything once (a version suffix) would keep the records but change every
+name for good, and the names are how projects are told apart in IAM.
+
+The move is therefore three deploys in a row, run by the installer:
+
+1. **release** (only with `retainData`; `layoutMigration: 'release'`): the same stack, with each project's memory and
+   its log delivery marked Delete. Nothing else changes.
+2. **drain** (`layoutMigration: 'drain'`): every project out of the stack. CloudFormation deletes each project's
+   runtime, roles, secret, job definition, memory with every record in it, and log delivery. With `retainData`, each
+   memory's log group stays in the account. The API is told no workers, so the projects are offline from here.
+3. **nested** (`layout: 'nested'`): every project again, each in its own nested stack, with an empty memory. Just
+   before it the installer force-deletes any project secret still in its recovery window (they are copies of tokens,
+   and it writes them again straight after). Then it rewrites every repository's variables as usual.
+
+Workflows that run between the second deploy and the variable update fail; re-run them. If a deploy fails, run the
+installer again: it carries on from the layout the stack is then in.
 
 **Upgrading an installation from before per-project roles.** The next installer run replaces the single worker
 runtime (`<prefix>_agent`), its role, the one GitHub OIDC role (`<prefix>-github-actions-<region>`) and the one GPU
@@ -285,7 +355,9 @@ repository, named `<prefix>_m_<hash>` and created with the project's other resou
 A project's memory lives and dies with the project. With `retainData` true (the default), each memory, its log group
 and its log delivery are marked Retain. When the repository is removed from the list, or the stack is deleted, they
 stay in the account, outside the stack. With `retainData` false they are deleted, records and all. Each project's
-memory id is the output `Project<hash>MemoryId`, and the installer records them on this machine.
+memory id is the output `Project<hash>MemoryId`, and the installer records them on this machine. Moving an
+installation to nested stacks deletes every project's memory records (see
+[Stack layout and limits](#stack-layout-and-limits)).
 
 - **Short term:** events per actor and session. A job records what it was asked, its key trace-tool outcomes and its
   result. A job that continues a session (the same pull request or issue, or the same task branch) is given that
@@ -333,9 +405,9 @@ tokens and keys and is bounded in size (8000 characters per event, 12 tool outco
   [Project isolation](#project-isolation)).
 - **Limits:** the API's two lists (`TRACE_WORKER_RUNTIMES` and `TRACE_PROJECT_MEMORIES`) are each one environment
   value, at most 5000 characters, and a runtime may have at most 50 environment variables. The stack checks both
-  when it is built and refuses an installation that would not fit. CloudFormation's 500 resources per stack is the
-  tighter limit in practice: each project adds about 17 resources with memory and observability on (9 without memory),
-  so with the defaults one stack holds about 24 projects. `cdk synth` fails with `TooManyResourcesInStack` beyond that.
+  when it is built and refuses an installation that would not fit. Each project is a nested stack of its own, so
+  CloudFormation's 500 resources and 200 outputs per stack allow the full 60 projects; an installation still in the
+  flat layout holds about 24 (see [Stack layout and limits](#stack-layout-and-limits)).
 
 **Upgrading from the installation-wide memory.** Earlier versions had one memory for every project
 (`<prefix>_memory`, output `MemoryId`). The next deploy removes it, and every project starts with its own, empty

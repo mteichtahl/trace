@@ -284,22 +284,24 @@ describe('job runner with memory', () => {
 
   const ITEM = { kind: 'ci-red' as const, number: 5, sha: 'a'.repeat(40), ref: 'claude/x', own: true, title: 'DRC fails on the 3V3 rail' }
 
-  it('gives a red check to the ci-doctor: recalls its memory, continues its session, records the outcome', async () => {
+  it('gives a red check to its routed specialist: recalls its memory, continues its session, records the outcome', async () => {
     const f = new FakeMemory()
-    f.records = [rec('1', '/trace/o/r/ci-doctor/facts/', 'The DRC uses the JLC rules.'), rec('2', '/trace/o/r/worker/facts/', 'Not for the ci-doctor.')]
-    f.events = [{ eventId: 'old', actorId: 'o/r/ci-doctor', sessionId: 'pr-5', eventTimestamp: new Date(1), payload: [{ conversational: { role: 'ASSISTANT', content: { text: 'Tried widening the trace.' } } }] }]
+    // "DRC fails …": the keyword drc routes it to the Implementation specialist, whose memory actor is o/r/impl
+    f.records = [rec('1', '/trace/o/r/impl/facts/', 'The DRC uses the JLC rules.'), rec('2', '/trace/o/r/worker/facts/', 'Not for the impl specialist.')]
+    f.events = [{ eventId: 'old', actorId: 'o/r/impl', sessionId: 'pr-5', eventTimestamp: new Date(1), payload: [{ conversational: { role: 'ASSISTANT', content: { text: 'Tried widening the trace.' } } }] }]
     const h = run(new AgentMemory(MEMORY_ID, f), { kind: 'work-item', repository: 'o/r', item: ITEM })
     await h.go()
     const { prompt, options } = h.calls[0]!
     expect(prompt).toContain(FENCE_OPEN)
     expect(prompt).toContain('[fact] The DRC uses the JLC rules.')
     expect(prompt).toContain('[this session, assistant] Tried widening the trace.')
-    expect(prompt).not.toContain('Not for the ci-doctor.')
-    expect(options.env.TRACE_MEMORY_ACTOR).toBe('o/r/ci-doctor')
+    expect(prompt).toMatch(/Implementation specialist/)
+    expect(prompt).not.toContain('Not for the impl specialist.')
+    expect(options.env.TRACE_MEMORY_ACTOR).toBe('o/r/impl')
     expect(options.env.TRACE_MEMORY_SESSION).toBe('pr-5')
-    expect(options.mcpServers.trace!.env).toEqual({ TRACE_MEMORY_ACTOR: 'o/r/ci-doctor', TRACE_MEMORY_SESSION: 'pr-5' })
+    expect(options.mcpServers.trace!.env).toMatchObject({ TRACE_MEMORY_ACTOR: 'o/r/impl', TRACE_MEMORY_SESSION: 'pr-5' })
     const events = f.of(CreateEventCommand)
-    expect(events.every((c) => c.input.actorId === 'o/r/ci-doctor' && c.input.sessionId === 'pr-5')).toBe(true)
+    expect(events.every((c) => c.input.actorId === 'o/r/impl' && c.input.sessionId === 'pr-5')).toBe(true)
     expect(events.map(textOf)).toEqual([
       'The required check failed on pull request #5: DRC fails on the 3V3 rail (branch claude/x)',
       'trace kicad_erc: ok: ERC clean',
@@ -321,13 +323,13 @@ describe('job runner with memory', () => {
     expect(x.calls).toHaveLength(0)
   })
 
-  it('runs a task as the worker, and a render task as the render agent, with the person who asked', async () => {
+  it('runs a render task as the rendering specialist, and an unrouted task as the default specialist, with the person who asked', async () => {
     const f = new FakeMemory()
     const person = personActor('o/r', 'marc@example.com')
     f.records = [rec('p', namespaceOf(person, 'preferences'), 'Marc wants renders at 1920x1200.')]
     const h = run(new AgentMemory(MEMORY_ID, f), { kind: 'task', repository: 'o/r', request: 'Render the board', requestedBy: 'marc@example.com', agent: 'render' })
     await h.go()
-    expect(h.calls[0]!.prompt).toMatch(/trace's rendering agent/)
+    expect(h.calls[0]!.prompt).toMatch(/trace's Rendering specialist/)
     expect(h.calls[0]!.prompt).toContain('[preference of the person who asked] Marc wants renders at 1920x1200.')
     expect(h.calls[0]!.options.env.TRACE_MEMORY_ACTOR).toBe('o/r/render')
     const actors = f.of(CreateEventCommand).map((c) => c.input.actorId)
@@ -339,7 +341,8 @@ describe('job runner with memory', () => {
 
     const w = run(new AgentMemory(MEMORY_ID, new FakeMemory()), { kind: 'task', repository: 'o/r', request: 'Add a test', requestedBy: 'marc@example.com', issue: 7 })
     await w.go()
-    expect(w.calls[0]!.options.env).toMatchObject({ TRACE_MEMORY_ACTOR: 'o/r/worker', TRACE_MEMORY_SESSION: 'issue-7' })
+    // nothing in "Add a test" points anywhere and no model is configured here: agents.default (verify)
+    expect(w.calls[0]!.options.env).toMatchObject({ TRACE_MEMORY_ACTOR: 'o/r/verify', TRACE_MEMORY_SESSION: 'issue-7' })
   })
 
   it('runs exactly as before without memory, and despite a failing memory', async () => {
@@ -347,7 +350,8 @@ describe('job runner with memory', () => {
     await h.go()
     expect(h.calls[0]!.prompt).not.toContain(FENCE_OPEN)
     expect(h.calls[0]!.options.env.TRACE_MEMORY_ACTOR).toBeUndefined()
-    expect(h.calls[0]!.options.mcpServers.trace).toEqual({ type: 'stdio', command: 'node', args: ['/app/dist/cli.js', 'mcp'] })
+    expect(h.calls[0]!.options.mcpServers.trace).toMatchObject({ type: 'stdio', command: 'node', args: ['/app/dist/cli.js', 'mcp'] })
+    expect(h.calls[0]!.options.mcpServers.trace!.env?.TRACE_MEMORY_ACTOR).toBeUndefined()
     const f = new FakeMemory()
     f.fail = new Error('ThrottledException')
     const g = run(new AgentMemory(MEMORY_ID, f), { kind: 'work-item', repository: 'o/r', item: ITEM })

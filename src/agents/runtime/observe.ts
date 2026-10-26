@@ -83,9 +83,13 @@ export function jobAttrs(p: JobPayload, jobId: string, agent: string): Attrs {
   const base: Attrs = { [ATTR.jobId]: jobId, [ATTR.jobKind]: p.kind, [ATTR.agent]: agent }
   switch (p.kind) {
     case 'work-item':
-      return { ...base, [ATTR.repository]: p.repository, [ATTR.workItemKind]: p.item.kind, [ATTR.workItemNumber]: p.item.number }
+      return {
+        ...base, [ATTR.repository]: p.repository, [ATTR.workItemKind]: p.item.kind, [ATTR.workItemNumber]: p.item.number,
+        ...(p.item.route ? { [ATTR.agentKind]: p.item.route.kind, [ATTR.routeSource]: p.item.route.source, [ATTR.routeConfidence]: p.item.route.confidence, [ATTR.routeReason]: p.item.route.reason } : {}),
+      }
     case 'task':
-      return { ...base, [ATTR.repository]: p.repository, [ATTR.requestedBy]: personHash(p.requestedBy), ...(p.issue ? { [ATTR.workItemNumber]: p.issue } : {}) }
+      if ('delegation' in p) return { ...base, [ATTR.repository]: p.repository, [ATTR.parentJobId]: p.delegation.parentJobId, [ATTR.agentKind]: 'worker' }
+      return { ...base, [ATTR.repository]: p.repository, [ATTR.requestedBy]: personHash(p.requestedBy), ...(p.issue ? { [ATTR.workItemNumber]: p.issue } : {}), ...(p.agent ? { [ATTR.agentKind]: p.agent } : {}) }
     case 'sweep':
       return base
   }
@@ -96,7 +100,7 @@ export function jobAttrs(p: JobPayload, jobId: string, agent: string): Attrs {
  * count and duration metrics. `run` never throws (jobs.ts records the failure on the job); the outcome is read from
  * the job's state once it has run.
  */
-export async function observeJob(p: JobPayload, jobId: string, agent: string, state: () => { state: string; error?: string | undefined }, run: () => Promise<void>): Promise<void> {
+export async function observeJob(p: JobPayload, jobId: string, agent: string, state: () => { state: string; error?: string | undefined; agent?: string | undefined }, run: () => Promise<void>): Promise<void> {
   const t0 = performance.now()
   let outcome: Outcome = 'ok'
   try {
@@ -111,7 +115,8 @@ export async function observeJob(p: JobPayload, jobId: string, agent: string, st
   } catch {
     // telemetry never stops a job; run() itself does not throw
   } finally {
-    const dims = { [ATTR.jobKind]: p.kind, [ATTR.agent]: agent, [ATTR.outcome]: outcome }
+    // the agent once routed (the specialist), else the one it started as
+    const dims = { [ATTR.jobKind]: p.kind, [ATTR.agent]: state().agent ?? agent, [ATTR.outcome]: outcome }
     recordMetric('trace.jobs', 1, dims)
     recordMetric('trace.job.duration', (performance.now() - t0) / 1000, dims)
   }

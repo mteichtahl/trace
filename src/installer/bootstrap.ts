@@ -4,7 +4,9 @@
  *
  *   1 check      the credentials still resolve to the confirmed account
  *   2 cdk        bootstrap CDK in the account/region if it isn't
- *   3 deploy     `cdk deploy` the trace stack (the agent image builds in CodeBuild: the first deploy takes a while)
+ *   3 deploy     `cdk deploy` the trace stack (the agent image builds in CodeBuild: the first deploy takes a while), in
+ *                the layout the installation has (a new one: nested; an earlier one: flat), or, when asked to move a
+ *                flat one to nested, three deploys in a row (release, drain, nested: see layoutDeploys)
  *   4 token      write the GitHub tokens into Secrets Manager: the shared one (the API's), and each project's own
  *                (its own token when one was given, else a copy of the shared one)
  *   5 repos      each repository's Actions variables (its own role and runtime, from its project's outputs; region,
@@ -28,10 +30,12 @@ import type { AwsCredentialIdentity } from '@smithy/types'
 import { type Principal, GROUPS, assign, assignments, setClass, unassign } from '../core/access.js'
 import { saveAnswers, saveInstallation } from '../core/client.js'
 import { onboard, register } from '../core/onboard.js'
-import { type InfraInput, type InfraProps, InfraPropsSchema, LEGACY_MEMORY_OUTPUT, projectOutputs, stackName } from '../infra/props.js'
+import {
+  type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, githubSecretName, projectOutputs, stackName,
+} from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import type { Answers, InstallEvent, Secrets, Step } from './answers.js'
-import { awsEnv, checkAws, credentials, stackOutputs } from './aws.js'
+import { awsEnv, checkAws, credentials, freeSecretNames, stackOutputs } from './aws.js'
 import { type TokenInfo, checkToken, setSecret, setVariable } from './github.js'
 
 /** What the installer knows of the stack already in the account (checkAws), when there is one. */
@@ -44,11 +48,62 @@ export interface Existing { outputs: Record<string, string> }
  */
 export const sharedMemoryOf = (existing: Existing | null | undefined): string | null => existing?.outputs[LEGACY_MEMORY_OUTPUT] || null
 
-/** The stack's settings from the answers (and, for the legacy memory's way out, what is deployed already). */
-export function infraInput(a: Answers, existing?: Existing | null): InfraInput {
+/**
+ * The layout of the stack already in the account: its Layout output, or flat for a stack from before there was one
+ * (every installation then had its projects in the one stack). No stack, or one without outputs (a first deploy that
+ * rolled back): nested.
+ */
+export function layoutOf(existing: Existing | null | undefined): 'flat' | 'nested' {
+  const o = existing?.outputs ?? {}
+  if (o[LAYOUT_OUTPUT] === 'flat' || o[LAYOUT_OUTPUT] === 'nested') return o[LAYOUT_OUTPUT]
+  return Object.keys(o).length ? 'flat' : 'nested'
+}
+
+/** One deploy of the install: its stack settings' layout part, and what it is for. */
+export interface LayoutDeploy { layout: 'flat' | 'nested'; layoutMigration?: 'release' | 'drain'; why: string }
+
+/**
+ * The deploys this install makes. Normally one, in the installation's own layout. Moving a flat installation to
+ * nested (agents.migrateLayout) takes three, because CloudFormation creates a moved resource before it deletes the
+ * old one and every project resource has a fixed name (runtime, roles, secret, memory, delivery sources):
+ *
+ *   release  (only with retainData) the same stack, each project's memory and log delivery now marked Delete
+ *   drain    every project out of the stack: CloudFormation deletes them, the memories and their records with them
+ *            (each memory's log group stays, with retainData), and the projects are offline until the next deploy
+ *   nested   every project again, each in its own nested stack, empty memory; then the repositories' variables
+ */
+export function layoutDeploys(a: Answers, existing?: Existing | null): LayoutDeploy[] {
+  const now = layoutOf(existing)
+  if (now === 'nested') return [{ layout: 'nested', why: existing ? 'one nested stack per project' : 'one nested stack per project (a new installation)' }]
+  if (!a.agents.migrateLayout) return [{ layout: 'flat', why: 'every project in the one stack, as this installation has them' }]
+  return [
+    ...(a.agents.retainData ? [{ layout: 'flat' as const, layoutMigration: 'release' as const, why: 'mark each project\'s memory and log delivery Delete' }] : []),
+    { layout: 'flat', layoutMigration: 'drain', why: 'remove every project from the stack (their memories and records are deleted)' },
+    { layout: 'nested', why: 'every project again, each in its own nested stack' },
+  ]
+}
+
+/** Said in the plan, and the summary, about the layout. */
+export function layoutNote(a: Answers, existing?: Existing | null): string | null {
+  if (layoutOf(existing) !== 'flat') return null
+  if (!a.agents.migrateLayout) {
+    return 'This installation keeps every project in the one stack (layout flat), which holds about 24 projects. New installations put each project in its own nested stack, which holds 60; '
+      + 'moving this one is a choice ("move to nested stacks") because it deletes every project\'s memory records.'
+  }
+  return 'Moving to one nested stack per project, in three deploys: '
+    + `${a.agents.retainData ? 'the first marks each project\'s memory and log delivery Delete, ' : ''}the next removes every project from the stack, DELETING each project's memory and every record in it (each memory's log group ${a.agents.retainData ? 'stays in the account' : 'goes too'}), and the last creates every project again in its own nested stack, with an empty memory. `
+    + 'AgentCore cannot copy memory records, and CloudFormation cannot move these resources (they have fixed names) into a nested stack in place. '
+    + 'The projects are offline from the second deploy until the repositories\' variables are rewritten; workflows that run in between fail: re-run them.'
+}
+
+/** The stack's settings from the answers (and, for the legacy memory's way out and the layout, what is deployed already). */
+export function infraInput(a: Answers, existing?: Existing | null, deploy?: LayoutDeploy): InfraInput {
   const own = a.projects.filter((p) => p.memoryEventExpiryDays !== null)
+  const d: LayoutDeploy = deploy ?? layoutDeploys(a, existing).at(-1) ?? { layout: 'nested', why: '' }
   return {
     prefix: a.agents.prefix,
+    layout: d.layout,
+    ...(d.layoutMigration ? { layoutMigration: d.layoutMigration } : {}),
     account: a.aws.account,
     region: a.aws.region,
     repositories: a.projects.map((p) => `${p.repo}@${p.branch}`),
@@ -128,6 +183,14 @@ function memoryPlan(a: Answers, props: InfraProps, existing?: Existing | null): 
   return note ? `${text}. ${note}` : text
 }
 
+/** The layout part of the deploy step's description. */
+function layoutPlan(a: Answers, existing?: Existing | null): string {
+  const deploys = layoutDeploys(a, existing)
+  const what = deploys.length === 1 ? `; ${deploys[0]?.why}` : `; ${deploys.length} deploys: ${deploys.map((d, i) => `${i + 1}) ${d.why}`).join(', ')}`
+  const note = layoutNote(a, existing)
+  return note ? `${what}. ${note}` : what
+}
+
 /** What will happen, before anything does. `existing`: the stack already in the account, when the check found one. */
 export function plan(a: Answers, existing?: Existing | null): Step[] {
   const props = InfraPropsSchema.parse(infraInput(a, existing))
@@ -136,7 +199,7 @@ export function plan(a: Answers, existing?: Existing | null): Step[] {
   const steps: [string, string, string][] = [
     ['check', 'Check the AWS account', `${a.aws.account} in ${a.aws.region}`],
     ['cdk', 'Bootstrap CDK', `aws://${a.aws.account}/${a.aws.region} (only if it isn't already)`],
-    ['deploy', `Deploy ${stack}`, `central bucket, agent image (CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and GPU job definition' : ''}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64; one queue for every project)` : ''}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}`],
+    ['deploy', `Deploy ${stack}`, `central bucket, agent image (CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and GPU job definition' : ''}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64; one queue for every project)` : ''}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}${layoutPlan(a, existing)}`],
     ['token', 'Store the GitHub tokens', 'the shared token in the API\'s secret, and each project\'s agent token in its own secret'],
     ['repos', 'Configure the repositories', `each repository's own TRACE_AWS_ROLE and TRACE_AGENT_RUNTIME_ARN, TRACE_AWS_REGION, TRACE_HOME and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}`],
     ['onboard', 'Onboard the repositories', onboarding.length ? `open the onboarding PR in ${onboarding.join(', ')}` : 'none chosen'],
@@ -179,6 +242,7 @@ export function redact(line: string, secrets: Secrets): string {
 export interface Hooks {
   cdk?: (args: string[], env: Record<string, string>, onLine: (l: string) => void) => Promise<number>
   outputs?: (creds: AwsCredentialIdentity, region: string, stack: string) => Promise<Record<string, string>>
+  freeSecrets?: (creds: AwsCredentialIdentity, region: string, names: readonly string[]) => Promise<string[]>
 }
 
 export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {}): Promise<boolean> {
@@ -212,9 +276,15 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
     props = InfraPropsSchema.parse(infraInput(a, existing))
     const legacy = sharedMemoryNote(a, existing)
     if (legacy) { log('check', legacy); summary.push(legacy) }
-    const env = { ...awsEnv(creds, a.aws.region), TRACE_INFRA: JSON.stringify(infraInput(a, existing)), CDK_DISABLE_VERSION_CHECK: '1', CI: '1' }
+    const layout = layoutNote(a, existing)
+    if (layout) { log('check', layout); summary.push(layout) }
+    const deploys = layoutDeploys(a, existing)
+    const envFor = (d: LayoutDeploy): Record<string, string> => ({
+      ...awsEnv(creds, a.aws.region), TRACE_INFRA: JSON.stringify(infraInput(a, existing, d)), CDK_DISABLE_VERSION_CHECK: '1', CI: '1',
+    })
+    const env = envFor(deploys.at(-1) ?? { layout: 'nested', why: '' })
 
-    // 2 — CDK bootstrap
+    // 2 — CDK bootstrap (nested stacks' templates are file assets in its bucket, like the agent source)
     current = 'cdk'
     if (check.cdkBootstrapped) set('cdk', 'skipped', 'already bootstrapped')
     else {
@@ -224,11 +294,19 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
       set('cdk', 'done')
     }
 
-    // 3 — deploy
+    // 3 — deploy (one deploy, or the three of the move to nested stacks, in order)
     current = 'deploy'
     set('deploy', 'running', 'the first deploy builds the agent image: expect 20–40 minutes')
-    const code = await cdk(['deploy', stack, '--app', `node ${join(REPO_ROOT, 'dist', 'infra', 'app.js')}`, '--require-approval', 'never', '--progress', 'events'], env, (l) => log('deploy', l))
-    if (code !== 0) throw new Error(`cdk deploy exited ${code}`)
+    for (const [i, d] of deploys.entries()) {
+      if (deploys.length > 1) log('deploy', `deploy ${i + 1} of ${deploys.length}: ${d.why}`)
+      // the drain deleted every project's secret; one still in its recovery window would block the nested stack's
+      if (deploys.length > 1 && d.layout === 'nested') {
+        const lines = await (hooks.freeSecrets ?? freeSecretNames)(creds, a.aws.region, a.projects.map((p) => githubSecretName(props.prefix, p.repo)))
+        for (const l of lines) log('deploy', l)
+      }
+      const code = await cdk(['deploy', stack, '--app', `node ${join(REPO_ROOT, 'dist', 'infra', 'app.js')}`, '--require-approval', 'never', '--progress', 'events'], envFor(d), (l) => log('deploy', l))
+      if (code !== 0) throw new Error(`cdk deploy exited ${code}${deploys.length > 1 ? ` (deploy ${i + 1} of ${deploys.length}: ${d.why}; run the installer again to carry on)` : ''}`)
+    }
     const out = await (hooks.outputs ?? stackOutputs)(creds, a.aws.region, stack)
     const need = (k: string): string => {
       const v = out[k]
@@ -251,7 +329,9 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
     await sm.send(new PutSecretValueCommand({ SecretId: need('GithubSecretArn'), SecretString: s.githubToken }))
     log('token', 'the API\'s (shared) token stored')
     for (const p of a.projects) {
-      await sm.send(new PutSecretValueCommand({ SecretId: need(projectOutputs(p.repo).secretArn), SecretString: projectToken(s, p.repo) }))
+      // flat: its Project<hash>GithubSecretArn output; nested: that output is its nested stack's, so by name
+      const secretId = out[projectOutputs(p.repo).secretArn] || githubSecretName(props.prefix, p.repo)
+      await sm.send(new PutSecretValueCommand({ SecretId: secretId, SecretString: projectToken(s, p.repo) }))
       log('token', `${p.repo}: ${s.projectTokens[p.repo.toLowerCase()] ? 'its own token' : 'the shared token'} stored in its secret`)
     }
     const sharing = sharedTokenWarning(a, s)

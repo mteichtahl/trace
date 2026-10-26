@@ -18,6 +18,12 @@
  *     trace runs [--kind K] [--limit N] | trace run ID | trace artifact ID NAME [--out PATH]
  *     trace db merge BASE OURS THEIRS | trace db prune [--keep N]
  *
+ *   Specialist agents (verify, impl, ams, emc, render)
+ *     trace agent list [--json]        each specialist, its settings and its tools
+ *     trace agent route <issue|pr|text> [--repo OWNER/REPO] [--labels a,b] [--files f,g] [--checks c,d] [--model]
+ *                                      a dry run of the router
+ *     trace agent prompt <kind>        the composed system prompt, for review
+ *
  *   Tools
  *     trace tools [--hardware]         every tool (the set the MCP server offers)
  *     trace tool NAME [key=value ...] [--args '{...}'] [--hardware]
@@ -270,6 +276,10 @@ async function main(argv: string[]): Promise<number> {
     case 'logout': return cmdLogout(rest)
     case 'whoami': return cmdWhoami(rest)
     case 'remote': return cmdRemote(rest)
+    case 'agent': {
+      const { cmdAgent } = await import('./agents/cli.js')
+      return cmdAgent(rest)
+    }
     case 'users': return cmdUsers(rest)
     case 'worker-prompt':
       out(workerPrompt(rest.length ? rest : await projects()))

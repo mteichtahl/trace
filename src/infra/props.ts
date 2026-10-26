@@ -30,8 +30,10 @@ export const InfraPropsSchema = z.object({
   /** The onboarded repositories. Each is one project with its own worker runtime, roles, GitHub token secret, memory
    * and GPU job definition (src/infra/project.ts); only its default branch's workflows may assume its GitHub OIDC role
    * (subject `repo:OWNER/REPO:ref:refs/heads/BRANCH`). At most 60: the API runtime is told every worker runtime, and
-   * every project's memory, in one environment variable each (5000 characters; checked when the stack is built). In
-   * practice CloudFormation's 500 resources per stack binds first: about 24 projects with memory and observability on. */
+   * every project's memory, in one environment variable each (5000 characters; checked when the stack is built), and
+   * the parent stack carries three outputs per project (CloudFormation allows 200 per template). With layout 'nested'
+   * each project is its own nested stack, so 60 fit; with layout 'flat' CloudFormation's 500 resources and 200
+   * outputs per stack bind at about 24 projects (checked when the stack is built). */
   repositories: z.array(repoSlug).min(1).max(60).superRefine((rs, ctx) => {
     const seen = new Map<string, string>()
     for (const r of rs) {
@@ -82,6 +84,16 @@ export const InfraPropsSchema = z.object({
      * when it finds that memory (the old `MemoryId` output) and retainData is true; see README "Agent memory". */
     legacySharedMemory: z.boolean().default(false),
   }).strict().prefault({}),
+  /** Where each project's resources live (README "Project isolation"). 'nested': one CloudFormation nested stack per
+   * project, so the parent carries one resource per project. 'flat': every project's resources in the one stack, as
+   * installations before nested stacks were made; kept for them because moving a resource with a fixed name into a
+   * nested stack cannot be done in place (the installer picks the layout from the deployed stack's outputs). */
+  layout: z.enum(['flat', 'nested']).default('nested'),
+  /** The opt-in move of a 'flat' installation to 'nested', one deploy at a time (the installer runs them in order):
+   * 'release' marks each project's memory and its log delivery Delete (nothing else changes), 'drain' then removes
+   * every project from the stack (its memory and records are deleted), and a 'nested' deploy creates them again.
+   * Only with layout 'flat'. */
+  layoutMigration: z.enum(['release', 'drain']).optional(),
   /** Per-project settings, by OWNER/REPO (no @BRANCH; case-insensitive): every key must be in `repositories`. */
   projectSettings: z.record(z.string(), ProjectSettingsSchema).default({}),
   /** AgentCore observability: OpenTelemetry (ADOT) traces and metrics to CloudWatch (src/infra/observability.ts). */
@@ -96,6 +108,7 @@ export const InfraPropsSchema = z.object({
     dashboard: z.boolean().default(true),
   }).strict().prefault({}),
 }).strict().superRefine((p, ctx) => {
+  if (p.layoutMigration && p.layout !== 'flat') ctx.addIssue({ code: 'custom', path: ['layoutMigration'], message: 'layoutMigration moves a flat installation: it needs layout flat' })
   const listed = new Set(p.repositories.map((r) => (r.split('@')[0] ?? '').toLowerCase()))
   const seen = new Set<string>()
   for (const k of Object.keys(p.projectSettings)) {
@@ -144,6 +157,19 @@ export const projectOutputs = (repository: string): { runtimeArn: string; roleAr
     memoryId: `Project${h}MemoryId`,
   }
 }
+
+/** The project outputs the parent stack carries in the nested layout (the installer reads these, and the secret by its
+ * name): the others are the project's nested stack's own outputs, under the same names. CloudFormation allows 200
+ * outputs per template, so three per project is what lets 60 projects fit. */
+export const PARENT_PROJECT_OUTPUTS = ['runtimeArn', 'roleArn', 'memoryId'] as const
+
+/** The stack's layout ('flat' or 'nested'), an output so the installer can tell which an installation has. */
+export const LAYOUT_OUTPUT = 'Layout'
+
+/** CloudFormation's per-template quotas the stack checks when it is built. */
+export const STACK_RESOURCES_MAX = 500
+export const STACK_OUTPUTS_MAX = 200
+export const STACK_PARAMETERS_MAX = 200
 
 /** The installation-wide memory's output before memory was per project: an install that has it is an older one. */
 export const LEGACY_MEMORY_OUTPUT = 'MemoryId'

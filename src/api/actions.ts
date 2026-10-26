@@ -16,7 +16,8 @@
  *   settings.set  write                 change (or unset) one setting: a commit on trace/settings-<slug>, pushed (the
  *                                       harness opens the PR); never the default branch
  *   task          write                 start a free-form task job (Claude, on a claude/ branch), requestedBy you;
- *                                       agent: worker (default) or render. It runs on the project's own worker
+ *                                       agent: verify, impl, ams, emc or render (a specialist), or left out to be
+ *                                       routed (src/agents/router.ts). It runs on the project's own worker
  *                                       runtime (src/api/workers.ts), never in this process: the API runs no model
  *   memory.list   read                  the agents' long-term memory of the project (facts, preferences, session
  *                                       summaries), newest first, from that project's own memory; agent narrows

@@ -36,7 +36,7 @@ const HANDLE = /^(trace-api-[0-9a-f]{8}-[0-9a-f]{24})\.([A-Za-z0-9_-]{1,64})$/
 /** The AgentCore session a task runs in: one per project, agent and request. */
 export function taskSession(t: Pick<TaskJob, 'repository' | 'request' | 'agent' | 'branch'>): string {
   const slug = projectSlug(t.repository)
-  const h = createHash('sha256').update(`${slug}\n${t.agent ?? 'worker'}\n${t.branch ?? ''}\n${t.request}`).digest('hex').slice(0, 24)
+  const h = createHash('sha256').update(`${slug}\n${t.agent ?? 'auto'}\n${t.branch ?? ''}\n${t.request}`).digest('hex').slice(0, 24)
   return `trace-api-${projectHash(slug)}-${h}`
 }
 

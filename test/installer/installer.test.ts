@@ -15,6 +15,8 @@ const calls = vi.hoisted(() => ({
   tokens: new Map<string, { login: string; repos: string[] }>(),
   /** the stack checkAws finds already deployed (default: none) */
   existing: null as null | { stack: string; status: string; outputs: Record<string, string> },
+  /** secret names freeSecretNames was asked to free */
+  freed: [] as string[],
 }))
 
 vi.mock('../../src/installer/aws.js', () => ({
@@ -22,6 +24,7 @@ vi.mock('../../src/installer/aws.js', () => ({
   awsEnv: (_c: unknown, region: string) => ({ AWS_REGION: region }),
   checkAws: async () => ({ account: '123456789012', arn: 'arn:aws:iam::123456789012:user/marc', region: 'us-east-1', agentCore: { ok: true, reason: '' }, models: [], oidcProvider: false, cdkBootstrapped: false, existing: calls.existing, warnings: [] }),
   stackOutputs: async () => ({}),
+  freeSecretNames: async (_c: unknown, _r: string, names: readonly string[]) => { calls.freed.push(...names); return names.map((n) => `${n}: free`) },
   profiles: async () => ({ names: ['default'], regions: { default: 'us-east-1' } }),
 }))
 vi.mock('@aws-sdk/client-secrets-manager', () => ({
@@ -70,7 +73,7 @@ vi.mock('../../src/core/onboard.js', async (orig) => ({
 }))
 
 const { AnswersSchema, SecretsSchema } = await import('../../src/installer/answers.js')
-const { apply, infraInput, plan, redact } = await import('../../src/installer/bootstrap.js')
+const { apply, infraInput, layoutDeploys, layoutOf, plan, redact } = await import('../../src/installer/bootstrap.js')
 const { InfraPropsSchema } = await import('../../src/infra/props.js')
 const { projectOutputs } = await import('../../src/infra/props.js')
 const { createInstaller } = await import('../../src/installer/server.js')
@@ -291,6 +294,65 @@ describe('installing', () => {
     } finally {
       calls.existing = null
     }
+  })
+
+  it('puts a new installation in nested stacks, keeps an earlier one flat, and moves it only when asked, in three deploys', async () => {
+    const flatStack = { stack: 'TraceStack', status: 'UPDATE_COMPLETE', outputs: { TraceHome: 's3://b/central' } }
+    expect(layoutOf(null)).toBe('nested')
+    expect(layoutOf({ outputs: {} })).toBe('nested') // a first deploy that rolled back
+    expect(layoutOf(flatStack)).toBe('flat')
+    expect(layoutOf({ outputs: { TraceHome: 'x', Layout: 'nested' } })).toBe('nested')
+    expect(layoutOf({ outputs: { TraceHome: 'x', Layout: 'flat' } })).toBe('flat')
+    const keep = AnswersSchema.parse(ANSWERS)
+    const move = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, migrateLayout: true } })
+    expect(infraInput(keep).layout).toBe('nested')
+    expect(infraInput(keep, flatStack).layout).toBe('flat')
+    expect(infraInput(move, null).layout).toBe('nested')
+    expect(layoutDeploys(move, null)).toHaveLength(1)
+    expect(layoutDeploys(move, { outputs: { TraceHome: 'x', Layout: 'nested' } })).toHaveLength(1)
+    expect(layoutDeploys(keep, flatStack).map((d) => d.layout)).toEqual(['flat'])
+    expect(layoutDeploys(move, flatStack).map((d) => `${d.layout}:${d.layoutMigration ?? ''}`)).toEqual(['flat:release', 'flat:drain', 'nested:'])
+    // without retainData the memories are Delete already: no release step
+    const moveNoKeep = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, migrateLayout: true, retainData: false } })
+    expect(layoutDeploys(moveNoKeep, flatStack).map((d) => `${d.layout}:${d.layoutMigration ?? ''}`)).toEqual(['flat:drain', 'nested:'])
+    // every stage is a valid stack setting
+    for (const d of layoutDeploys(move, flatStack)) expect(InfraPropsSchema.safeParse(infraInput(move, flatStack, d)).success).toBe(true)
+    // the plan says which, and what the move costs
+    const detail = (a: typeof keep, e: typeof flatStack | null): string => plan(a, e).find((x) => x.id === 'deploy')?.detail ?? ''
+    expect(detail(keep, null)).toMatch(/one nested stack per project \(a new installation\)/)
+    expect(detail(keep, flatStack)).toMatch(/layout flat.*about 24 projects.*"move to nested stacks"/)
+    expect(detail(move, flatStack)).toMatch(/3 deploys.*DELETING each project's memory and every record in it.*offline/)
+
+    // the move: release, drain, then nested, with the drained secrets' names freed just before the nested deploy
+    calls.existing = flatStack
+    calls.freed.length = 0
+    try {
+      const order: string[] = []
+      const ok = await apply(move, SecretsSchema.parse({ githubToken: TOKEN }), () => undefined, {
+        cdk: async (args, env) => { if (args[0] === 'deploy') { const i = JSON.parse(env.TRACE_INFRA ?? '{}'); order.push(`deploy ${i.layout}:${i.layoutMigration ?? ''}`) } return 0 },
+        outputs: async () => OUTPUTS,
+        freeSecrets: async (_c, _r, names) => { order.push(`free ${names.join(',')}`); return [] },
+      })
+      expect(ok).toBe(true)
+      expect(order).toEqual(['deploy flat:release', 'deploy flat:drain', 'free trace/github-token/mteichtahl/board,trace/github-token/mteichtahl/fw', 'deploy nested:'])
+      // no move asked: one flat deploy, nothing freed
+      order.length = 0
+      expect(await apply(keep, SecretsSchema.parse({ githubToken: TOKEN }), () => undefined, {
+        cdk: async (args, env) => { if (args[0] === 'deploy') order.push(`deploy ${JSON.parse(env.TRACE_INFRA ?? '{}').layout}`); return 0 }, outputs: async () => OUTPUTS,
+      })).toBe(true)
+      expect(order).toEqual(['deploy flat'])
+      expect(calls.freed).toEqual([])
+    } finally {
+      calls.existing = null
+    }
+  })
+
+  it('writes each project\'s token into its secret by name when the parent does not carry its ARN (the nested layout)', async () => {
+    calls.secrets.length = 0
+    const nestedOutputs = Object.fromEntries(Object.entries(OUTPUTS).filter(([k]) => !k.endsWith('GithubSecretArn') || k === 'GithubSecretArn'))
+    const ok = await apply(AnswersSchema.parse(ANSWERS), SecretsSchema.parse({ githubToken: TOKEN }), () => undefined, { cdk: async () => 0, outputs: async () => nestedOutputs })
+    expect(ok).toBe(true)
+    expect(secretWrites().map((w) => w.SecretId).sort()).toEqual([OUTPUTS.GithubSecretArn, 'trace/github-token/mteichtahl/board', 'trace/github-token/mteichtahl/fw'].sort())
   })
 
   it('stops at the failing step and says how to continue', async () => {

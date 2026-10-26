@@ -22,6 +22,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { LABEL_STYLE } from '../harness/util.js'
 import { ensureSchema, read, update } from './central.js'
 import { type FirmwareTargetSchema, type ResolvedConfig, load, setValue } from './config.js'
 import type { z } from 'zod'
@@ -256,13 +257,8 @@ export function codeOwners(repo: string, cfg: ResolvedConfig): string | null {
 
 // ------------------------------------------------------------------ GitHub
 
-const LABELS: Record<keyof ResolvedConfig['labels'], readonly [string, string]> = {
-  hold: ['fbca04', 'trace: do not merge this PR automatically'],
-  ci_red: ['b60205', 'trace: the build failed for real; the worker fixes it'],
-  agent_fix: ['5319e7', 'trace: work for the worker (fix and push)'],
-  deploy: ['0e8a16', 'trace: a deploy request'],
-  deploy_held: ['d93f0b', 'trace: a deploy held for a person'],
-}
+/** Every label the harness uses, the specialists' routing labels (agent:verify, …) included. */
+const LABELS = LABEL_STYLE
 
 /** Repository settings the loop needs. Returns what was done. */
 export function applySettings(slug: string, cfg: ResolvedConfig, ruleset = true, run: Runner = runCommand): string[] {

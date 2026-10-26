@@ -1,5 +1,6 @@
 /** Every area's tools, gathered into the one registry the CLI and the MCP server share. */
 import { Registry } from '../core/registry.js'
+import { tools as agent } from './agent/tools.js'
 import { tools as memory } from './memory/tools.js'
 import { tools as calc } from './calc/tools.js'
 import { tools as datasheets } from './datasheets/tools.js'
@@ -20,6 +21,6 @@ import { tools as layout } from './layout/tools.js'
 let registry: Registry | null = null
 
 export function allTools(): Registry {
-  registry ??= new Registry([...calc, ...kicad, ...sim, ...datasheets, ...parts, ...hil, ...firmware, ...runs, ...render, ...pcb, ...memory, ...ams, ...emc, ...verify, ...fpga, ...layout])
+  registry ??= new Registry([...calc, ...kicad, ...sim, ...datasheets, ...parts, ...hil, ...firmware, ...runs, ...render, ...pcb, ...memory, ...ams, ...emc, ...verify, ...fpga, ...layout, ...agent])
   return registry
 }

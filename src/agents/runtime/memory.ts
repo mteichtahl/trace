@@ -11,7 +11,8 @@
  *
  * THE SCHEME. Every actor id starts with the project, so every namespace does too:
  *
- *   agent actor    <owner>/<repo>/<agent>              agent: worker | ci-doctor | conflict | render | local | …
+ *   agent actor    <owner>/<repo>/<agent>              agent: verify | impl | ams | emc | render (the specialists),
+ *                                                      worker (delegated), local; ci-doctor and conflict (before the specialists)
  *   person actor   <owner>/<repo>/person/<hash16>      the person who asked (sha256 of their email): their own
  *                                                      preferences, inside the project, never across projects
  *
@@ -62,7 +63,7 @@ export const NAMESPACE_TEMPLATES: Readonly<Record<Strategy, string>> = {
 }
 
 /** The agents that run jobs today (any name matching AgentName is accepted). */
-export const AGENTS = ['worker', 'ci-doctor', 'conflict', 'render', 'local'] as const
+export const AGENTS = ['verify', 'impl', 'ams', 'emc', 'render', 'worker', 'local', 'ci-doctor', 'conflict'] as const
 
 export const AgentName = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/, 'an agent name: lower-case letters, digits and dashes')
   .refine((a) => a !== 'person', '"person" is reserved for person actors')

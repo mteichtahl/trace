@@ -63,6 +63,11 @@ export const ATTR = {
   workItemNumber: 'trace.work_item.number',
   repository: 'trace.repository',
   agent: 'trace.agent',
+  agentKind: 'trace.agent.kind',
+  routeReason: 'trace.route.reason',
+  routeConfidence: 'trace.route.confidence',
+  routeSource: 'trace.route.source',
+  parentJobId: 'trace.job.parent_id',
   /** sha256 of the lower-cased email, 16 hex characters (the same hash the agents' memory uses) */
   requestedBy: 'trace.requested_by.hash',
   principal: 'trace.principal.hash',

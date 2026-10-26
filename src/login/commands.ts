@@ -16,6 +16,7 @@
  */
 import { parseArgs } from 'node:util'
 import { z } from 'zod'
+import { SpecialistKindSchema } from '../agents/kinds.js'
 import { CLASSES } from '../core/access.js'
 import { installation, saveInstallation, session } from '../core/client.js'
 import { parseCliValue } from '../core/config.js'
@@ -109,7 +110,7 @@ export async function cmdWhoami(_argv: string[]): Promise<number> {
 
 // ------------------------------------------------------------------ remote
 
-const REMOTE_USAGE = 'usage: trace remote projects | status OWNER/REPO | settings OWNER/REPO [KEY [VALUE|--unset]] | runs OWNER/REPO [--kind K] [--limit N] | task OWNER/REPO "request" | job ID'
+const REMOTE_USAGE = 'usage: trace remote projects | status OWNER/REPO | settings OWNER/REPO [KEY [VALUE|--unset]] | runs OWNER/REPO [--kind K] [--limit N] | task OWNER/REPO [--agent verify|impl|ams|emc|render] "request" | job ID'
 
 export async function cmdRemote(argv: string[]): Promise<number> {
   return guarded(async () => {
@@ -159,10 +160,13 @@ export async function cmdRemote(argv: string[]): Promise<number> {
         return 0
       }
       case 'task': {
-        const [repo, ...words] = rest
+        const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { agent: { type: 'string' } } })
+        const [repo, ...words] = positionals
         if (!repo || !words.length) break
+        // without --agent the runtime routes it to a specialist (trace agent route "<request>" shows where)
+        const agent = values.agent === undefined ? undefined : SpecialistKindSchema.parse(values.agent)
         const r = z.object({ accepted: z.boolean(), jobId: z.string(), reason: z.string().optional() }).loose()
-          .parse(await invokeApi('task', { repo: Repo.parse(repo), request: words.join(' ') }))
+          .parse(await invokeApi('task', { repo: Repo.parse(repo), request: words.join(' '), ...(agent ? { agent } : {}) }))
         out(r.accepted ? `Started ${r.jobId}. Follow it with: trace remote job ${r.jobId}` : `Not started (${r.reason ?? 'refused'}); the running job is ${r.jobId}.`)
         return 0
       }

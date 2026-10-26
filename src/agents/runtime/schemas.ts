@@ -5,6 +5,7 @@
  */
 import { z } from 'zod'
 import { WorkItemSchema } from '../../harness/worker.js'
+import { type Route, SPECIALIST_KINDS, SpecialistKindSchema, WORKER } from '../kinds.js'
 
 /** owner/repo, GitHub's own character set (no "..", no leading dash or dot). */
 export const RepositorySchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/, 'expected owner/repo')
@@ -31,8 +32,11 @@ export const StatusPayload = z.object({
   jobId: z.string().max(64).optional(),
 }).strict()
 
-/** The agents a task can be given to: the worker (code changes), or the rendering agent (src/agents/render/prompt.ts). */
-export const TASK_AGENTS = ['worker', 'render'] as const
+/**
+ * The agents a person's task can be given to: the specialists (src/agents). Leave `agent` out and the job is routed
+ * (src/agents/router.ts). The generic worker is not among them: only a specialist starts it (agent.delegate).
+ */
+export const TASK_AGENTS = SPECIALIST_KINDS
 
 /** A free-form request from an authorised person (the API runtime): done on a claude/task-<slug> branch, pushed, PR opened. */
 export const TaskPayload = z.object({
@@ -43,8 +47,28 @@ export const TaskPayload = z.object({
   branch: BranchSchema.optional(),
   /** An issue or PR to report back on, when the request came from one. */
   issue: z.number().int().positive().optional(),
-  /** Which agent does it (default worker). */
-  agent: z.enum(TASK_AGENTS).optional(),
+  /** Which specialist does it; routed when absent. */
+  agent: SpecialistKindSchema.optional(),
+}).strict()
+
+/** What a specialist's agent.delegate hands the worker, besides the brief (the task's request). */
+export const DelegationSchema = z.object({
+  /** The specialist's job: its checkout, settings and branch are the worker's (src/agents/runtime/delegation.ts). */
+  parentJobId: z.string().min(1).max(64),
+  specialist: SpecialistKindSchema,
+  acceptance: z.array(z.string().min(1).max(1000)).min(1).max(20),
+  /** Always 1: a delegated worker cannot delegate. */
+  depth: z.literal(1),
+}).strict()
+export type Delegation = z.infer<typeof DelegationSchema>
+
+/**
+ * A worker job a specialist started (internal only: never accepted on /invocations or through the API). The request
+ * is the specialist's brief with its acceptance criteria; it runs in the specialist's checkout.
+ */
+export const DelegatedTaskPayload = TaskPayload.omit({ agent: true, issue: true }).extend({
+  agent: z.literal(WORKER),
+  delegation: DelegationSchema,
 }).strict()
 
 export const InvocationSchema = z.discriminatedUnion('kind', [WorkItemPayload, SweepPayload, StatusPayload, TaskPayload])
@@ -52,8 +76,9 @@ export type Invocation = z.infer<typeof InvocationSchema>
 export type WorkItemJob = z.infer<typeof WorkItemPayload>
 export type SweepJob = z.infer<typeof SweepPayload>
 export type TaskJob = z.infer<typeof TaskPayload>
-/** What can be started as a job (everything but status). */
-export type JobPayload = WorkItemJob | SweepJob | TaskJob
+export type DelegatedTaskJob = z.infer<typeof DelegatedTaskPayload>
+/** What can be started as a job (everything but status); a delegated task only from inside the runtime. */
+export type JobPayload = WorkItemJob | SweepJob | TaskJob | DelegatedTaskJob
 
 export const AcceptedSchema = z.object({
   accepted: z.boolean(),
@@ -75,8 +100,17 @@ export interface JobInfo {
   endedAt?: string
   summary?: string
   error?: string
+  /** The agent that does it: a specialist kind, or worker for a delegated job. */
+  agent?: string
+  /** How a specialist job was routed (set once the runner has routed it). */
+  route?: Route
+  /** A delegated job: the specialist job that started it. */
+  parentJobId?: string
   log: string[]
 }
+
+/** A delegated worker job (from agent.delegate). */
+export const isDelegated = (p: JobPayload): p is DelegatedTaskJob => p.kind === 'task' && 'delegation' in p
 
 // ------------------------------------------------------------------ single-project mode
 
@@ -87,7 +121,7 @@ export class WrongProject extends Error {
 }
 
 /** The repositories an invocation is about (none for status). */
-export function repositoriesOf(p: Invocation): string[] {
+export function repositoriesOf(p: Invocation | JobPayload): string[] {
   switch (p.kind) {
     case 'work-item': case 'task': return [p.repository]
     case 'sweep': return [...p.repositories]
@@ -100,7 +134,7 @@ export function repositoriesOf(p: Invocation): string[] {
  * its own, and its role reaches only that project's resources, so this is the friendly answer to what IAM would
  * refuse anyway. Without a project (a local run, tests) everything is allowed.
  */
-export function checkProject(p: Invocation, project: string | undefined): void {
+export function checkProject(p: Invocation | JobPayload, project: string | undefined): void {
   const mine = project?.trim().toLowerCase()
   if (!mine) return
   const other = repositoriesOf(p).filter((r) => r.toLowerCase() !== mine)

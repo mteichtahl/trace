@@ -32,6 +32,8 @@ export interface Context {
 export interface TaskEnv {
   OWN_TOKEN?: string
   ITEM?: string
+  /** worker-prompt/worker-dispatch: the specialist to use instead of the item's route. */
+  AGENT?: string
   SHA?: string
   ISSUE?: string
   BY?: string

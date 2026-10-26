@@ -26,9 +26,16 @@ function text(obj: unknown): string {
   return typeof obj === 'string' ? obj : JSON.stringify(obj, (_k, v: unknown) => (typeof v === 'bigint' ? Number(v) : v), 1)
 }
 
+/** TRACE_MCP_TOOLS: the only tools (registry names, comma-separated) this server offers, when set. A specialist's
+ * job sets it to the specialist's allowlist, so its session is never offered another area's tools. */
+export function allowlist(env: NodeJS.ProcessEnv = process.env): Set<string> | null {
+  const v = env.TRACE_MCP_TOOLS?.trim()
+  return v ? new Set(v.split(',').map((s) => s.trim()).filter(Boolean)) : null
+}
+
 /** The tools this session offers, by MCP name. */
-export function offered(registry: Registry, hardware = hardwareAllowed()): Map<string, AnyTool> {
-  return new Map(registry.list().filter((t) => (hardware || !t.hardware) && Registry.available(t)).map((t) => [mcpName(t.name), t]))
+export function offered(registry: Registry, hardware = hardwareAllowed(), only: Set<string> | null = allowlist()): Map<string, AnyTool> {
+  return new Map(registry.list().filter((t) => (hardware || !t.hardware) && Registry.available(t) && (!only || only.has(t.name))).map((t) => [mcpName(t.name), t]))
 }
 
 /** One tools/call, as the server answers it (exported for tests). */

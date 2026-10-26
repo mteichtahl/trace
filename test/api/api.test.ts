@@ -177,6 +177,24 @@ describe('the API server', () => {
     expect((await call(user, { action: 'job', id: 'job-1' })).body.ok).toBe(true)
   })
 
+  it('a task names a specialist or leaves it to the router; the worker cannot be asked for directly', async () => {
+    started.length = 0
+    const r = await call(user, { action: 'task', repo: 'acme/board', request: 'check crosstalk on USB', agent: 'emc' })
+    expect(r.body).toMatchObject({ ok: true, result: { jobId: 'job-1' } })
+    expect(started).toEqual([{ kind: 'task', repository: 'acme/board', request: 'check crosstalk on USB', requestedBy: 'user-1@example.com', agent: 'emc' }])
+    // no agent: forwarded as is, and the project's runtime routes it (src/agents/router.ts)
+    await call(user, { action: 'task', repo: 'acme/board', request: 'close timing' })
+    expect(started[1]).not.toHaveProperty('agent')
+    for (const agent of ['worker', 'ci-doctor', 'nobody']) {
+      const bad = await call(user, { action: 'task', repo: 'acme/board', request: 'push to main', agent })
+      expect(bad.body.ok).toBe(false)
+    }
+    expect(started).toHaveLength(2)
+    // a guest still may not start one
+    expect((await call(guest, { action: 'task', repo: 'acme/board', request: 'x', agent: 'verify' })).body.ok).toBe(false)
+    started.length = 0
+  })
+
   it('unassigned and nonexistent projects get the identical answer, before GitHub is touched', async () => {
     for (const who of [user, guest, nobody]) {
       const a = await call(who, { action: 'status', repo: 'acme/secret' })

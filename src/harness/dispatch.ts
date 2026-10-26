@@ -6,12 +6,12 @@
 import { type DispatchOptions, dispatch } from '../agents/runtime/dispatch.js'
 import type { Accepted } from '../agents/runtime/schemas.js'
 import { type Deps, type TaskEnv, errorMessage } from './types.js'
-import { type WorkItem, WorkItemSchema } from './worker.js'
+import { type WorkItem, itemFromEnv, routeLine } from './worker.js'
 
 export type DispatchFn = (item: WorkItem, repository: string, opts: DispatchOptions) => Promise<Accepted>
 
 export async function dispatchTask({ github, context, core, env }: Deps, send: DispatchFn = dispatch): Promise<void> {
-  const item = WorkItemSchema.parse(JSON.parse(env.ITEM || '{}'))
+  const item = itemFromEnv(env)
   const { owner, repo } = context.repo
   const repository = `${owner}/${repo}`
   const runtimeArn = (env as TaskEnv & { TRACE_AGENT_RUNTIME_ARN?: string }).TRACE_AGENT_RUNTIME_ARN || process.env.TRACE_AGENT_RUNTIME_ARN
@@ -29,8 +29,8 @@ export async function dispatchTask({ github, context, core, env }: Deps, send: D
   }
   core.setOutput('job', r.jobId)
   const body = r.accepted
-    ? `Dispatched to the trace agent on AgentCore (job ${r.jobId}). [run](${runUrl})`
+    ? `Dispatched to the trace agent on AgentCore (job ${r.jobId}). ${routeLine(item.route)} [run](${runUrl})`
     : `Already being worked on by the trace agent on AgentCore (job ${r.jobId}).`
   await github.rest.issues.createComment({ owner, repo, issue_number: item.number, body })
-  core.info(`#${item.number}: ${r.accepted ? 'dispatched' : 'already running'} (job ${r.jobId})`)
+  core.info(`#${item.number}: ${r.accepted ? 'dispatched' : 'already running'} (job ${r.jobId}, specialist ${item.route?.kind ?? 'routed by the runtime'})`)
 }

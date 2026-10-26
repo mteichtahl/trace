@@ -213,13 +213,14 @@ describe('invocations and jobs', () => {
     const job = one('trace.job work-item')
     expect(job.parentSpanContext?.spanId).toBe(inv.spanContext().spanId)
     expect(job.attributes).toMatchObject({
-      'session.id': 'trace-o-r-5-aaaaaaaaaaaa', 'trace.job.kind': 'work-item', 'trace.repository': 'o/r', 'trace.agent': 'ci-doctor',
+      'session.id': 'trace-o-r-5-aaaaaaaaaaaa', 'trace.job.kind': 'work-item', 'trace.repository': 'o/r', 'trace.agent': 'specialist',
       'trace.work_item.kind': 'ci-red', 'trace.work_item.number': 5, 'trace.outcome': 'ok',
     })
     expect(String(job.attributes['trace.job.id'])).toMatch(/^job-/)
     expect(one('inside').parentSpanContext?.spanId).toBe(job.spanContext().spanId)
     expect(await total('trace.invocations', { 'trace.agent': 'worker', 'trace.invocation.kind': 'work-item', 'trace.outcome': 'ok' })).toBe(1)
-    expect(await total('trace.jobs', { 'trace.job.kind': 'work-item', 'trace.agent': 'ci-doctor', 'trace.outcome': 'ok' })).toBe(1)
+    // the item carried no route and this runner routes nothing: the job is counted as the generic "specialist"
+    expect(await total('trace.jobs', { 'trace.job.kind': 'work-item', 'trace.agent': 'specialist', 'trace.outcome': 'ok' })).toBe(1)
   })
 
   it('records who asked as a hash, never their email, and marks a failed job', async () => {
@@ -328,7 +329,10 @@ describe('Claude', () => {
     const q = one('claude.query')
     expect(mcp?.env?.TRACEPARENT).toBe(`00-${q.spanContext().traceId}-${q.spanContext().spanId}-01`)
     expect(q.parentSpanContext?.spanId).toBe(one('trace.job work-item').spanContext().spanId)
-    expect(q.attributes['trace.agent']).toBe('ci-doctor')
+    // routed by the runner (no route on the item, nothing in its text, no model): agents.default
+    expect(q.attributes['trace.agent']).toBe('verify')
+    const job = one('trace.job work-item')
+    expect(job.attributes).toMatchObject({ 'trace.agent': 'verify', 'trace.agent.kind': 'verify', 'trace.route.source': 'default', 'trace.route.confidence': 0.2 })
   })
 })
 

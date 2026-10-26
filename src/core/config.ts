@@ -15,6 +15,7 @@
 import { existsSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import { z } from 'zod'
+import { SPECIALIST_KINDS, SpecialistKindSchema } from '../agents/kinds.js'
 import { dec, enc, findRoot, open, openProject, projectPath, transaction } from './store.js'
 
 // ------------------------------------------------------------------ the electronics sections' items
@@ -114,6 +115,14 @@ export type FirmwareTarget = z.output<typeof FirmwareTargetSchema>
 
 export const DispatchOnSchema = z.object({ match: z.string(), workflow: z.string(), note: z.string().optional() }).strict()
 
+/** One specialist's settings (agents.<kind>.*): its model ('' = worker.model), turn limit and extra instructions. */
+const SpecialistSettingsSchema = z.object({
+  model: z.string().default(''),
+  max_turns: z.number().int().min(1).max(2000).default(120),
+  /** Appended to the specialist's prompt after .trace/rules.md (which wins where they differ). May be empty. */
+  instructions: z.string().max(4000).default(''),
+}).strict().prefault({})
+
 const regex = z.string().max(200, 'at most 200 characters').refine((s) => { try { new RegExp(s); return true } catch { return false } }, 'not a valid regular expression')
 
 // ------------------------------------------------------------------ every setting
@@ -176,6 +185,29 @@ export const ConfigSchema = z.object({
     agent_fix: z.string().min(1).default('agent-fix'),
     deploy: z.string().min(1).default('deploy'),
     deploy_held: z.string().min(1).default('deploy-held'),
+    /** Route an issue or PR to one specialist (src/agents/router.ts): a label beats every other rule. */
+    agent_verify: z.string().min(1).default('agent:verify'),
+    agent_impl: z.string().min(1).default('agent:impl'),
+    agent_ams: z.string().min(1).default('agent:ams'),
+    agent_emc: z.string().min(1).default('agent:emc'),
+    agent_render: z.string().min(1).default('agent:render'),
+  }).strict().prefault({}),
+  /** The specialist agents (src/agents): which run, how jobs are routed to them, and each one's model and limits. */
+  agents: z.object({
+    enabled: z.array(SpecialistKindSchema).min(1).default([...SPECIALIST_KINDS]),
+    /** The specialist when nothing points anywhere (and the model is not asked or cannot decide). */
+    default: SpecialistKindSchema.default('verify'),
+    /** Ask the model (one turn, no tools) when labels, evidence and keywords do not decide. */
+    route_with_model: z.boolean().default(true),
+    /** The model for that classification ('' = worker.model, then the runtime's default). */
+    router_model: z.string().default(''),
+    /** How long agent.delegate waits for the worker before it gives up on it. */
+    delegate_timeout_minutes: z.number().int().min(5).max(420).default(240),
+    verify: SpecialistSettingsSchema,
+    impl: SpecialistSettingsSchema,
+    ams: SpecialistSettingsSchema,
+    emc: SpecialistSettingsSchema,
+    render: SpecialistSettingsSchema,
   }).strict().prefault({}),
   electronics: z.object({
     /** KiCad project files (.kicad_pro), relative to the repository; empty = every one found */
@@ -218,6 +250,8 @@ export const ConfigSchema = z.object({
     instruments: z.array(InstrumentSchema).default([]),
   }).strict().prefault({}),
 }).strict().superRefine((c, ctx) => {
+  if (!c.agents.enabled.includes(c.agents.default)) ctx.addIssue({ code: 'custom', path: ['agents', 'default'], message: `${c.agents.default} is not in agents.enabled` })
+  if (new Set(c.agents.enabled).size !== c.agents.enabled.length) ctx.addIssue({ code: 'custom', path: ['agents', 'enabled'], message: 'a specialist is listed twice' })
   if (c.deploy.enabled && !c.deploy.command) ctx.addIssue({ code: 'custom', path: ['deploy', 'command'], message: 'required when deploy.enabled is true' })
   for (const [i, p] of c.hil.instruments.entries()) {
     if (p.kind === 'psu' && (p.limits.max_voltage_v === undefined || p.limits.max_current_a === undefined)) {

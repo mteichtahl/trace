@@ -3,12 +3,17 @@ import type { GitHub } from './types.js'
 
 type LabelKey = keyof TraceConfig['labels']
 
-const LABEL_STYLE: Record<LabelKey, readonly [string, string]> = {
+export const LABEL_STYLE: Record<LabelKey, readonly [string, string]> = {
   hold: ['fbca04', 'trace: do not merge this PR automatically'],
-  ci_red: ['b60205', 'trace: the build failed for real; the worker fixes it'],
-  agent_fix: ['5319e7', 'trace: work for the worker (fix and push)'],
+  ci_red: ['b60205', 'trace: the build failed for real; a specialist agent fixes it'],
+  agent_fix: ['5319e7', 'trace: work for the agents (routed to a specialist)'],
   deploy: ['0e8a16', 'trace: a deploy request'],
   deploy_held: ['d93f0b', 'trace: a deploy held for a person'],
+  agent_verify: ['1d76db', 'trace: route to the Verification specialist'],
+  agent_impl: ['0052cc', 'trace: route to the Implementation specialist'],
+  agent_ams: ['5319e7', 'trace: route to the Analog & Mixed-Signal specialist'],
+  agent_emc: ['c2e0c6', 'trace: route to the EMC & Simulation specialist'],
+  agent_render: ['bfdadc', 'trace: route to the Rendering specialist'],
 }
 
 /** Create the label cfg.labels[key] if the repository lacks it. Returns its name. */

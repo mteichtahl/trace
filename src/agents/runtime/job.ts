@@ -4,12 +4,20 @@
  * For an item: the project's GitHub token from Secrets Manager (TRACE_GITHUB_SECRET_ARN, its own secret; never logged, never in argv or a URL —
  * git gets it as an http.extraHeader through GIT_CONFIG_* environment variables scoped to each command); a shallow
  * clone of the default branch (the settings are read from it, never from a PR's tree), then the item's branch; the
- * git identity and the trace-db merge driver; then Claude (Agent SDK) with the harness's own prompt, the trace MCP
+ * git identity and the trace-db merge driver; then Claude (Agent SDK) as the routed specialist (below), the trace MCP
  * server, unattended permissions (the container is the sandbox) and a timeout below the session's maxLifetime. If
  * Claude left no comment on the item, or the job failed, a final comment says so (marker trace-agent-done).
  *
- * Memory (memory.ts, when TRACE_MEMORY_ID is set): each job is one agent (ci-doctor for a red check, conflict for a
- * merge conflict, worker for an agent-fix issue or a task, render for a render task) on one project, in one session
+ * SPECIALISTS. A work item or a person's task is routed (src/agents/router.ts; a pick may have routed it already) to
+ * one specialist (src/agents/<kind>), which runs with its own prompt (the default branch's .trace/rules.md and its
+ * agents.<kind>.instructions included), its own tool allowlist (built-ins: reading only; trace tools: its area's,
+ * enforced by the SDK's tools/allowedTools and by the MCP server's TRACE_MCP_TOOLS) and its own memory actor
+ * (<owner>/<repo>/<kind>). It delegates repository changes to the retained worker through agent.delegate
+ * (delegation.ts): a delegated task runs the worker's own prompt in the specialist's checkout (runDelegated). The
+ * specialist's report is posted on the item with which specialist acted and why it was routed there.
+ *
+ * Memory (memory.ts, when TRACE_MEMORY_ID is set): each job is one agent (the specialist, or the worker for a
+ * delegation, which continues its specialist's session) on one project, in one session
  * (pr-<n>, issue-<n>, or the task's branch). At the start its long-term memory, and the session's earlier turns when
  * it continues one, are appended to the prompt as a fenced data block; the request, key tool outcomes and the result
  * are recorded as events, scrubbed and bounded. A memory failure is logged once and never fails the job.
@@ -33,8 +41,14 @@ import type { JobContext, JobRunner } from './jobs.js'
 import { addSecret } from '../../core/telemetry.js'
 import { claudeTelemetry } from './observe.js'
 import { type AgentMemory, type Actor, type JobMemory, NO_MEMORY, agentActor, memoryFromEnv, openJobMemory, personActor, sessionIdFor } from './memory.js'
-import { renderTaskPrompt, taskBranch, taskPrompt, workItemPrompt } from '../worker/prompt.js'
-import { BranchSchema, type JobPayload, type SweepJob, type TaskJob, type WorkItemJob, checkProject } from './schemas.js'
+import { taskBranch, taskPrompt } from '../worker/prompt.js'
+import { SPECIALISTS, SPECIALIST_BUILTINS, type Specialist, allowedToolsOf, specialistPrompt, toolsOf } from '../index.js'
+import { type Route, WORKER } from '../kinds.js'
+import { type Classifier, type QueryFn, type RouteInput, routeJob, sdkClassifier } from '../router.js'
+import { readRules } from '../rules.js'
+import type { SpecialistJob } from '../specialist.js'
+import { type Delegations, defaultDelegations } from './delegation.js'
+import { BranchSchema, type DelegatedTaskJob, type JobPayload, type SweepJob, type TaskJob, type WorkItemJob, checkProject, isDelegated } from './schemas.js'
 
 // ------------------------------------------------------------------ injected pieces
 
@@ -50,6 +64,8 @@ export interface ClaudeOptions {
   permissionMode: 'bypassPermissions'
   allowDangerouslySkipPermissions: true
   allowedTools: string[]
+  /** The built-in tools available at all (a specialist: reading only); absent = Claude Code's default set. */
+  tools?: string[]
   mcpServers: Record<string, { type: 'stdio'; command: string; args: string[]; env?: Record<string, string> }>
   maxTurns: number
   abortController: AbortController
@@ -86,8 +102,17 @@ export interface RunnerDeps {
   /** The one project this runtime serves (TRACE_PROJECT): jobs for any other are refused, and the memory actor is
    * this project's whatever the payload says. */
   project?: string | undefined
+  /** The model classifier for routing, given the job's settings (null or absent: no model, the default decides). */
+  classifier?: ((cfg: TraceConfig) => Classifier | null) | undefined
+  /** This process's delegations (src/agents/runtime/delegation.ts); absent: specialists cannot delegate. */
+  delegations?: Delegations | undefined
+  /** Where agent.delegate reaches this runtime (http://127.0.0.1:<port>); absent: no delegation. */
+  delegateUrl?: string | undefined
+  /** Hardware is allowed in this runtime (TRACE_HARDWARE): the specialists' hardware tools are offered. */
+  hardware?: boolean | undefined
 }
 
+/** The delegated worker's tools: everything, as before the specialists (the MCP server offers no agent.delegate to it). */
 export const TOOLS = ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Task', 'TodoWrite', 'mcp__trace']
 export const DONE = (jobId: string): string => `<!-- trace-agent-done: ${jobId} -->`
 const MAX_LIFETIME_S = 28_800
@@ -205,8 +230,12 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
   extraEnv?: Record<string, string>
   /** Sees every SDK message (memory records the key tool outcomes). */
   onMessage?: (m: unknown) => void
-  /** The agent doing it (worker, ci-doctor, render, …), for telemetry. */
+  /** The agent doing it (a specialist kind, or worker), for telemetry. */
   agent?: string
+  /** Overrides: the model, the turn limit (else worker.max_turns), and the tools (a specialist's; else TOOLS). */
+  model?: string | undefined
+  maxTurns?: number
+  tools?: { builtins: string[]; allowed: string[] }
 }): Promise<ClaudeOutcome> {
   const abort = new AbortController()
   const stop = (why: string): void => { if (!abort.signal.aborted) { o.log(why); abort.abort(new Error(why)) } }
@@ -214,7 +243,7 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
   o.signal.addEventListener('abort', onAbort, { once: true })
   const timer = setTimeout(() => stop(`stopping Claude: it ran longer than ${d.timeoutS} s`), d.timeoutS * 1000)
   timer.unref()
-  const model = d.model || o.cfg.worker.model || undefined
+  const model = o.model || d.model || o.cfg.worker.model || undefined
   // Spans for the query, each model response and each tool use (a no-op without an OpenTelemetry SDK); the MCP
   // server gets the trace context so its tool spans join this trace.
   const tel = await claudeTelemetry({ model, agent: o.agent })
@@ -225,9 +254,10 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
     // The container is the sandbox: nobody is there to answer a permission prompt.
     permissionMode: 'bypassPermissions',
     allowDangerouslySkipPermissions: true,
-    allowedTools: [...TOOLS],
+    allowedTools: o.tools ? [...o.tools.allowed] : [...TOOLS],
+    ...(o.tools ? { tools: [...o.tools.builtins] } : {}),
     mcpServers: { trace: { type: 'stdio', command: 'node', args: [...tel.nodeArgs, d.cli, 'mcp'], ...(Object.keys(mcpEnv).length ? { env: mcpEnv } : {}) } },
-    maxTurns: o.cfg.worker.max_turns,
+    maxTurns: o.maxTurns ?? o.cfg.worker.max_turns,
     abortController: abort,
     env: { ...d.env, ...o.extraEnv, GH_TOKEN: o.token, GITHUB_TOKEN: o.token, ...gitAuthEnv(o.token), CLAUDE_AGENT_SDK_CLIENT_APP: 'trace-agent/1' },
     settingSources: ['project'],
@@ -271,6 +301,8 @@ function split(repository: string): { owner: string; repo: string } {
   return { owner, repo }
 }
 
+const quote = (text: string): string => (text.trim() || '(nothing)').slice(0, 3000).split('\n').map((l) => `> ${l}`).join('\n')
+
 /** Post the final comment unless Claude commented since the job started (a failure is always reported). */
 async function finalComment(gh: GitHub, repository: string, n: number, jobId: string, startedAt: number, ok: boolean, text: string, link?: string): Promise<void> {
   const { owner, repo } = split(repository)
@@ -280,18 +312,38 @@ async function finalComment(gh: GitHub, repository: string, n: number, jobId: st
   const head = ok
     ? `The trace agent finished (job \`${jobId}\`) without leaving a summary here. Its last words:`
     : `The trace agent could not finish this (job \`${jobId}\`):`
-  const quoted = (text.trim() || '(nothing)').slice(0, 3000).split('\n').map((l) => `> ${l}`).join('\n')
-  await gh.rest.issues.createComment({ owner, repo, issue_number: n, body: `${head}\n\n${quoted}${link ? `\n\n[dispatching run](${link})` : ''}\n${DONE(jobId)}` })
+  await gh.rest.issues.createComment({ owner, repo, issue_number: n, body: `${head}\n\n${quote(text)}${link ? `\n\n[dispatching run](${link})` : ''}\n${DONE(jobId)}` })
+}
+
+/** Which specialist acted and why it was routed there: the first line of everything a specialist posts. */
+export function specialistHeader(s: Specialist, r: Route, jobId: string): string {
+  return `**trace ${s.title} specialist** (\`${s.kind}\`, job \`${jobId}\`). Routed here: ${r.reason} (${r.source}, confidence ${r.confidence.toFixed(2)}).`
+}
+
+/** A report that starts "ESCALATE:" asks for a person. */
+export const escalation = (text: string): boolean => /^\s*ESCALATE:/i.test(text)
+
+/** The specialist's report on the item: always posted (once per job), since a delegated worker may have commented too. */
+async function specialistComment(gh: GitHub, repository: string, n: number, jobId: string, s: Specialist, r: Route, ok: boolean, text: string,
+  escalateTo: string, link?: string): Promise<void> {
+  const { owner, repo } = split(repository)
+  const cs = await gh.paginate(gh.rest.issues.listComments, { owner, repo, issue_number: n, per_page: 100 })
+  if (cs.some((c) => (c.body ?? '').includes(DONE(jobId)))) return
+  const lead = !ok ? 'It could not finish:' : escalation(text) ? `${escalateTo ? `${escalateTo} ` : ''}it needs a person:` : 'Its report:'
+  const body = `${specialistHeader(s, r, jobId)}\n\n${lead}\n\n${quote(text)}${link ? `\n\n[dispatching run](${link})` : ''}\n${DONE(jobId)}`
+  await gh.rest.issues.createComment({ owner, repo, issue_number: n, body })
 }
 
 interface Prepared {
-  slot: string; branch: string; from: 'remote' | 'maybe' | 'none'; prompt: (cfg: TraceConfig) => string; issue?: number; runUrl?: string
-  /** Memory: the agent doing it, the session (given the branch it runs on), what it is about, and what was asked. */
-  agent: string; session: (branch: string) => string; query: string; request: string
+  slot: string; branch: string; from: 'remote' | 'maybe' | 'none'; issue?: number; runUrl?: string
+  /** The route a pick already made, or what to route on. */
+  route: Route | null; routeInput: RouteInput
+  /** The job as the specialist's prompt describes it, given the branch it runs on. */
+  job: (branch: string) => SpecialistJob
+  /** Memory: the session (given the branch it runs on), what it is about, and what was asked. */
+  session: (branch: string) => string; query: string; request: string
 }
 
-/** The agent that does each kind of work item (its memory is its own). */
-export const ITEM_AGENT: Readonly<Record<WorkItem['kind'], string>> = { 'ci-red': 'ci-doctor', conflict: 'conflict', 'agent-fix': 'worker' }
 const ITEM_WHAT: Readonly<Record<WorkItem['kind'], string>> = {
   'ci-red': 'The required check failed on pull request', conflict: 'Merge conflict on pull request', 'agent-fix': 'Issue for the agent',
 }
@@ -301,39 +353,52 @@ function prepared(p: WorkItemJob | TaskJob): Prepared {
     const it: WorkItem = p.item
     const pr = it.kind !== 'agent-fix'
     if (pr && !BranchSchema.safeParse(it.ref).success) throw new Error(`#${it.number} has no usable head ref (${JSON.stringify(it.ref)})`)
+    const { route: r, ...item } = it
     return {
-      slot: String(it.number), branch: it.ref, from: pr ? 'remote' : 'none', issue: it.number,
-      prompt: (cfg) => workItemPrompt(it, cfg, p.repository), ...(p.runUrl ? { runUrl: p.runUrl } : {}),
-      agent: ITEM_AGENT[it.kind], session: () => `${pr ? 'pr' : 'issue'}-${it.number}`, query: it.title,
+      slot: String(it.number), branch: it.ref, from: pr ? 'remote' : 'none', issue: it.number, ...(p.runUrl ? { runUrl: p.runUrl } : {}),
+      route: r ?? null, routeInput: { text: it.title },
+      job: () => ({ kind: 'work-item', item }),
+      session: () => `${pr ? 'pr' : 'issue'}-${it.number}`, query: it.title,
       request: `${ITEM_WHAT[it.kind]} #${it.number}: ${it.title}${pr ? ` (branch ${it.ref})` : ''}`,
     }
   }
-  const render = p.agent === 'render'
   return {
-    slot: `${render ? 'render' : 'task'}-${(p.branch ?? p.request).replace(/[^A-Za-z0-9]+/g, '-').slice(0, 30)}`,
+    slot: `task-${(p.branch ?? p.request).replace(/[^A-Za-z0-9]+/g, '-').slice(0, 30)}`,
     branch: '', from: 'maybe', ...(p.issue ? { issue: p.issue } : {}),
-    prompt: (cfg) => (render ? renderTaskPrompt : taskPrompt)(p, cfg, taskBranch(p, cfg)),
-    agent: p.agent ?? 'worker', session: (branch) => (p.issue ? `issue-${p.issue}` : sessionIdFor(branch)), query: p.request,
+    route: null, routeInput: { kind: p.agent, text: p.request },
+    job: (branch) => ({ kind: 'task', request: p.request, requestedBy: p.requestedBy, issue: p.issue, branch }),
+    session: (branch) => (p.issue ? `issue-${p.issue}` : sessionIdFor(branch)), query: p.request,
     request: `A person asked: ${p.request}`,
   }
 }
 
 /** The job's memory, or none: memory never stops a job. */
-async function jobMemory(d: RunnerDeps, p: WorkItemJob | TaskJob, prep: Prepared, branch: string, log: (l: string) => void, redact: (s: string) => string): Promise<JobMemory> {
+async function jobMemory(d: RunnerDeps, o: { repository: string; agent: string; person?: string | undefined; session: string; query: string; request: string },
+  log: (l: string) => void, redact: (s: string) => string): Promise<JobMemory> {
   if (!d.memory) return NO_MEMORY
   try {
     // the runtime's own project (TRACE_PROJECT), never the payload's: its role may use no other actor anyway
-    const project = d.project || p.repository
-    const person: Actor | undefined = p.kind === 'task' ? personActor(project, p.requestedBy) : undefined
-    return await openJobMemory(d.memory, {
-      actor: agentActor(project, prep.agent), person, session: prep.session(branch), query: prep.query, request: prep.request,
-    }, { log, redact })
+    const project = d.project || o.repository
+    const person: Actor | undefined = o.person ? personActor(project, o.person) : undefined
+    return await openJobMemory(d.memory, { actor: agentActor(project, o.agent), person, session: o.session, query: o.query, request: o.request }, { log, redact })
   } catch (e) {
     log(`memory: not used for this job: ${redact(errText(e)).slice(0, 300)}`)
     return NO_MEMORY
   }
 }
 
+/** The environment that lets a specialist's MCP server delegate (agent.delegate) and limits it to its own tools. */
+export function specialistEnv(o: { tools: readonly string[]; delegateUrl?: string | undefined; token?: string | undefined; timeoutMinutes: number }): Record<string, string> {
+  const timeoutS = o.timeoutMinutes * 60
+  return {
+    TRACE_MCP_TOOLS: o.tools.join(','),
+    ...(o.delegateUrl && o.token ? { TRACE_DELEGATE_URL: o.delegateUrl, TRACE_DELEGATE_TOKEN: o.token, TRACE_DELEGATE_TIMEOUT_S: String(timeoutS) } : {}),
+    // Claude Code's own limit on one MCP tool call must outlast the delegation's wait
+    MCP_TOOL_TIMEOUT: String((timeoutS + 600) * 1000),
+  }
+}
+
+/** A work item or a person's task: routed to a specialist, which runs with its own prompt, tools and memory. */
 export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobContext): Promise<string> {
   const startedAt = d.now()
   const token = await d.getToken()
@@ -341,41 +406,110 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
   const log = (l: string): void => ctx.log(redact(l))
   const gh = d.github(token)
   const { owner, repo } = split(p.repository)
+  const delegations = d.delegations ?? null
   let prep: Prepared | null = null
   let dir: string | null = null
   let mem: JobMemory = NO_MEMORY
+  let acting: { s: Specialist; r: Route; escalateTo: string } | null = null
   try {
     prep = prepared(p)
     const defaultBranch = (await gh.rest.repos.get({ owner, repo })).data.default_branch
     dir = cloneDir(d.workspace, p.repository, prep.slot)
-    // The default branch first: the settings come from it, never from a PR's tree.
+    // The default branch first: the settings and the rules come from it, never from a PR's tree.
     const g: GitOpts = { exec: d.exec, dir, auth: gitAuthEnv(token), signal: ctx.signal, log }
     const base = await cloneDefault({ ...g, repository: p.repository, defaultBranch, cli: d.cli })
     const cfg = d.settingsOf(base.dir)
+    const rules = readRules(base.dir)
     let branch = p.kind === 'task' ? taskBranch(p, cfg) : prep.branch
     if (prep.from !== 'none') branch = await checkoutBranch({ ...g, defaultBranch: base.defaultBranch, branch, from: prep.from })
     else branch = base.defaultBranch
-    mem = await jobMemory(d, p, prep, branch, log, redact)
-    log(`running Claude on ${p.repository} ${branch} (max ${cfg.worker.max_turns} turns)`)
-    const out = await runClaude(d, {
-      prompt: `${prep.prompt(cfg)}${mem.context}`, cwd: dir, cfg, token, signal: ctx.signal, log, redact, extraEnv: mem.env, onMessage: (m) => mem.observe(m), agent: prep.agent,
-    })
-    const summary = redact(out.text)
-    await mem.finish(out.ok, summary)
-    mem = NO_MEMORY
-    if (prep.issue) await finalComment(gh, p.repository, prep.issue, ctx.jobId, startedAt, out.ok, summary, prep.runUrl)
-    if (!out.ok) throw new Error(summary)
-    return `done in ${out.turns} turns`
+
+    const r = prep.route ?? await routeJob(prep.routeInput, cfg, d.classifier?.(cfg) ?? null)
+    ctx.route?.(r)
+    const s = SPECIALISTS[r.kind]
+    const settings = cfg.agents[r.kind]
+    acting = { s, r, escalateTo: cfg.worker.escalate_to }
+    const session = prep.session(branch)
+    mem = await jobMemory(d, {
+      repository: p.repository, agent: s.memoryAgent, person: p.kind === 'task' ? p.requestedBy : undefined, session, query: prep.query, request: prep.request,
+    }, log, redact)
+
+    const hardware = Boolean(d.hardware)
+    const delegate = Boolean(delegations && d.delegateUrl)
+    const tools = toolsOf(s, { hardware, delegate })
+    const dtoken = delegate && delegations
+      ? delegations.register({ jobId: ctx.jobId, kind: r.kind, repository: p.repository, dir, cfg, branch, defaultBranch: base.defaultBranch, session })
+      : undefined
+    try {
+      const prompt = specialistPrompt(s, { cfg, repository: p.repository, job: prep.job(branch), rules, route: r, hardware, delivery: 'delegate' })
+      log(`running the ${r.kind} specialist on ${p.repository} ${branch} (max ${settings.max_turns} turns, ${tools.length} tools)`)
+      const out = await runClaude(d, {
+        prompt: `${prompt}${mem.context}`, cwd: dir, cfg, token, signal: ctx.signal, log, redact,
+        extraEnv: { ...mem.env, ...specialistEnv({ tools, delegateUrl: d.delegateUrl, token: dtoken, timeoutMinutes: cfg.agents.delegate_timeout_minutes }) },
+        onMessage: (m) => mem.observe(m), agent: r.kind,
+        model: settings.model || d.model || cfg.worker.model || undefined, maxTurns: settings.max_turns,
+        tools: { builtins: [...SPECIALIST_BUILTINS], allowed: allowedToolsOf(s, { hardware, delegate }) },
+      })
+      const summary = redact(out.text)
+      await mem.finish(out.ok, summary)
+      mem = NO_MEMORY
+      if (prep.issue) await specialistComment(gh, p.repository, prep.issue, ctx.jobId, s, r, out.ok, summary, cfg.worker.escalate_to, prep.runUrl)
+      if (!out.ok) throw new Error(summary)
+      return `${r.kind}: done in ${out.turns} turns${escalation(summary) ? ' (escalated)' : ''}${prep.issue ? '' : `: ${summary.slice(0, 2000)}`}`
+    } finally {
+      if (dtoken) delegations?.unregister(ctx.jobId)
+    }
   } catch (e) {
     const msg = redact(errText(e))
     await mem.finish(false, msg)
     if (prep?.issue) {
-      await finalComment(gh, p.repository, prep.issue, ctx.jobId, startedAt, false, msg, prep.runUrl)
-        .catch((ce: unknown) => log(`could not post the final comment: ${redact(errText(ce))}`))
+      const n = prep.issue
+      const post = acting
+        ? specialistComment(gh, p.repository, n, ctx.jobId, acting.s, acting.r, false, msg, acting.escalateTo, prep.runUrl)
+        : finalComment(gh, p.repository, n, ctx.jobId, startedAt, false, msg, prep.runUrl)
+      await post.catch((ce: unknown) => log(`could not post the final comment: ${redact(errText(ce))}`))
     }
     throw new Error(msg)
   } finally {
     if (dir && !d.persistent) rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+/**
+ * A worker job a specialist delegated (agent.delegate): the retained worker's own prompt (taskPrompt) with the
+ * specialist's brief and acceptance criteria as its request, in the specialist's checkout, with the specialist's
+ * settings. No route, no final comment (the specialist reports), no agent.delegate (depth 1).
+ */
+export async function runDelegated(d: RunnerDeps, p: DelegatedTaskJob, ctx: JobContext): Promise<string> {
+  const parent = d.delegations?.parent(p.delegation.parentJobId)
+  if (!parent) throw new Error(`the specialist job ${p.delegation.parentJobId} is not running: nothing to delegate for`)
+  if (parent.repository.toLowerCase() !== p.repository.toLowerCase()) throw new Error('a delegation is for its specialist\'s repository only')
+  const token = await d.getToken()
+  const redact = redactor(token)
+  const log = (l: string): void => ctx.log(redact(l))
+  let mem: JobMemory = NO_MEMORY
+  try {
+    const g: GitOpts = { exec: d.exec, dir: parent.dir, auth: gitAuthEnv(token), signal: ctx.signal, log }
+    const branch = p.branch && p.branch !== parent.branch
+      ? await checkoutBranch({ ...g, defaultBranch: parent.defaultBranch, branch: p.branch, from: 'maybe' })
+      : parent.branch
+    mem = await jobMemory(d, { repository: p.repository, agent: WORKER, session: parent.session, query: p.request.slice(0, 2000), request: p.request }, log, redact)
+    log(`running the worker for the ${parent.kind} specialist (job ${parent.jobId}) on ${branch} (max ${parent.cfg.worker.max_turns} turns)`)
+    const out = await runClaude(d, {
+      prompt: `${taskPrompt(p, parent.cfg, branch)}${mem.context}`, cwd: parent.dir, cfg: parent.cfg, token, signal: ctx.signal, log, redact,
+      extraEnv: mem.env, onMessage: (m) => mem.observe(m), agent: WORKER,
+    })
+    const summary = redact(out.text)
+    await mem.finish(out.ok, summary)
+    mem = NO_MEMORY
+    const commits = await d.exec('git', ['log', '--format=%h %s', '-n', '20', `origin/${parent.defaultBranch}..HEAD`], { cwd: parent.dir })
+      .then((r) => r.stdout.trim()).catch(() => '')
+    if (!out.ok) throw new Error(summary)
+    return [`branch ${branch}, done in ${out.turns} turns`, ...(commits ? [`commits:\n${commits}`] : []), summary.slice(0, 6000)].join('\n')
+  } catch (e) {
+    const msg = redact(errText(e))
+    await mem.finish(false, msg)
+    throw new Error(msg)
   }
 }
 
@@ -421,7 +555,9 @@ export async function runSweep(d: RunnerDeps, p: SweepJob, ctx: JobContext): Pro
 export function createRunner(d: RunnerDeps): JobRunner {
   return async (p: JobPayload, ctx: JobContext) => {
     checkProject(p, d.project)
-    return p.kind === 'sweep' ? runSweep(d, p, ctx) : runItem(d, p, ctx)
+    if (p.kind === 'sweep') return runSweep(d, p, ctx)
+    if (isDelegated(p)) return runDelegated(d, p, ctx)
+    return runItem(d, p, ctx)
   }
 }
 
@@ -480,5 +616,12 @@ export function realRunner(env: Record<string, string | undefined> = process.env
     now: Date.now,
     memory: memoryFromEnv(env),
     project: env.TRACE_PROJECT || undefined,
+    classifier: (cfg) => sdkClassifier(query as unknown as QueryFn, {
+      model: cfg.agents.router_model || env.ANTHROPIC_MODEL || cfg.worker.model || undefined,
+      env: { ...env, CLAUDE_AGENT_SDK_CLIENT_APP: 'trace-agent/1' },
+    }),
+    delegations: defaultDelegations(),
+    delegateUrl: `http://127.0.0.1:${Number(env.PORT || 8080)}`,
+    hardware: ['1', 'true', 'yes'].includes(env.TRACE_HARDWARE ?? ''),
   })
 }

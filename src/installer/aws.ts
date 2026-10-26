@@ -8,6 +8,7 @@ import { BedrockClient, ListInferenceProfilesCommand } from '@aws-sdk/client-bed
 import { BedrockAgentCoreControlClient, ListAgentRuntimesCommand } from '@aws-sdk/client-bedrock-agentcore-control'
 import { CloudFormationClient, DescribeStacksCommand } from '@aws-sdk/client-cloudformation'
 import { IAMClient, ListOpenIDConnectProvidersCommand } from '@aws-sdk/client-iam'
+import { DeleteSecretCommand, DescribeSecretCommand, ResourceNotFoundException, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts'
 import { fromIni } from '@aws-sdk/credential-providers'
 import { loadSharedConfigFiles } from '@smithy/shared-ini-file-loader'
@@ -107,4 +108,28 @@ export async function stackOutputs(creds: AwsCredentialIdentity, region: string,
   const s = (await new CloudFormationClient({ region, credentials: creds }).send(new DescribeStacksCommand({ StackName: stack }))).Stacks?.[0]
   if (!s) throw new Error(`stack ${stack} not found`)
   return Object.fromEntries((s.Outputs ?? []).map((o) => [o.OutputKey ?? '', o.OutputValue ?? '']))
+}
+
+/**
+ * Free these secret names for the nested deploy of the move to nested stacks: a secret the 'drain' deploy deleted may
+ * still hold its name for its recovery window, and the nested stack creates one of the same name. Each is a copy of
+ * a GitHub token that the installer writes again right after, so a secret scheduled for deletion is deleted now,
+ * without recovery. A secret that is not scheduled for deletion is left alone and reported (the deploy would fail on
+ * it). Returns what was done, one line per name.
+ */
+export async function freeSecretNames(creds: AwsCredentialIdentity, region: string, names: readonly string[]): Promise<string[]> {
+  const sm = new SecretsManagerClient({ region, credentials: creds })
+  const out: string[] = []
+  for (const name of names) {
+    try {
+      const d = await sm.send(new DescribeSecretCommand({ SecretId: name }))
+      if (!d.DeletedDate) throw new Error(`the secret ${name} still exists outside its scheduled deletion: the nested stack cannot create it (delete it, or keep layout flat)`)
+      await sm.send(new DeleteSecretCommand({ SecretId: name, ForceDeleteWithoutRecovery: true }))
+      out.push(`${name}: was scheduled for deletion; deleted now so the nested stack can create it`)
+    } catch (e) {
+      if (e instanceof ResourceNotFoundException) { out.push(`${name}: free`); continue }
+      throw e
+    }
+  }
+  return out
 }

@@ -11,11 +11,16 @@
  * One job per item at a time: a second invocation for a running item answers accepted: false with the running job's
  * id. SIGTERM aborts the running jobs, waits briefly for them to report, and closes.
  *
+ * Delegation (delegation.ts), loopback callers only (a specialist's own MCP server, in this container):
+ *   POST /delegate          { token, brief, acceptance, branch? }  → { accepted, jobId }  (a worker job)
+ *   POST /delegate/status   { token, jobId }                       → { job }               (that specialist's own child)
+ *
  * Single-project mode (TRACE_PROJECT=owner/repo, set on each project's worker runtime): an invocation for any other
  * repository answers 403 { error } and is logged. The runtime's role could not reach that project anyway.
  */
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http'
 import { ATTR, flush } from '../../core/telemetry.js'
+import { DelegateRequest, DelegateStatusRequest, DelegationError, type Delegations, defaultDelegations } from './delegation.js'
 import { type Jobs, defaultJobs } from './jobs.js'
 import { observeInvocation } from './observe.js'
 import { InvocationSchema, WrongProject, checkProject } from './schemas.js'
@@ -44,6 +49,34 @@ export interface HandlerOptions {
   /** The one project this runtime serves (TRACE_PROJECT); unset: any. */
   project?: string | undefined
   log?: (line: string) => void
+  /** The delegations of this process (default: the process's own). */
+  delegations?: Delegations
+}
+
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
+
+async function delegate(req: IncomingMessage, res: ServerResponse, path: string, jobs: Jobs, delegations: Delegations): Promise<void> {
+  if (!LOOPBACK.has(req.socket.remoteAddress ?? '')) return send(res, 403, { error: 'delegation is for this runtime\'s own specialists' })
+  let raw: unknown
+  try {
+    raw = JSON.parse(await readBody(req))
+  } catch {
+    return send(res, 400, { error: 'the body is not JSON' })
+  }
+  try {
+    if (path === '/delegate') {
+      const r = DelegateRequest.safeParse(raw)
+      if (!r.success) return send(res, 400, { error: 'invalid delegation', issues: r.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`) })
+      return send(res, 200, delegations.start(r.data, (p) => jobs.startJob(p)))
+    }
+    const r = DelegateStatusRequest.safeParse(raw)
+    if (!r.success) return send(res, 400, { error: 'invalid status request' })
+    const j = delegations.status(r.data.token, r.data.jobId, (id) => jobs.jobStatus(id))
+    return send(res, 200, { job: { id: j.id, state: j.state, startedAt: j.startedAt, endedAt: j.endedAt, summary: j.summary, error: j.error, log: j.log.slice(-20) } })
+  } catch (e) {
+    if (e instanceof DelegationError) return send(res, e.status, { error: e.message })
+    throw e
+  }
 }
 
 export function handler(jobs: Jobs, o: HandlerOptions = {}): (req: IncomingMessage, res: ServerResponse) => void {
@@ -52,6 +85,11 @@ export function handler(jobs: Jobs, o: HandlerOptions = {}): (req: IncomingMessa
     const path = (req.url ?? '/').split('?')[0]
     if (req.method === 'GET' && path === '/ping') {
       return send(res, 200, { status: jobs.busy() ? 'HealthyBusy' : 'Healthy', time_of_last_update: Math.floor(Date.now() / 1000) })
+    }
+    if (req.method === 'POST' && (path === '/delegate' || path === '/delegate/status')) {
+      void delegate(req, res, path, jobs, o.delegations ?? defaultDelegations())
+        .catch((e: unknown) => { if (!res.headersSent) send(res, 500, { error: e instanceof Error ? e.message : String(e) }) })
+      return
     }
     if (req.method === 'POST' && path === '/invocations') {
       void (async () => {

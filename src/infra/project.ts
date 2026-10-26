@@ -24,8 +24,14 @@
  * jobs/<slug>/* only.
  *
  * Its memory follows retainData: Retain on stack deletion and on removal of the project, or Delete on both.
+ *
+ * Where it lives is the stack's layout (props.ts `layout`): 'nested' puts each project in its own CloudFormation
+ * nested stack (ProjectNestedStack below), whose parameters are what it uses of the parent (the bucket, the agent
+ * image and its repository, the OIDC provider, the GPU queue, image, execution role and log group); 'flat' puts it
+ * straight in the parent, as installations before nested stacks were made. The construct and its resources are the
+ * same either way, with the same names, IAM and removal policies.
  */
-import { CfnOutput, Duration, RemovalPolicy, Stack, Tags } from 'aws-cdk-lib'
+import { CfnOutput, Duration, NestedStack, RemovalPolicy, Stack, Tags } from 'aws-cdk-lib'
 import { CfnRuntime } from 'aws-cdk-lib/aws-bedrockagentcore'
 import type * as ecr from 'aws-cdk-lib/aws-ecr'
 import * as iam from 'aws-cdk-lib/aws-iam'
@@ -159,7 +165,8 @@ export class ProjectStack extends Construct {
           name: memoryName(cfg.prefix, repository),
           description: `trace: ${slug}'s agents' memory (actors ${slug}/<agent>)`,
           eventExpiryDays: projectSettings(cfg, repository).memoryEventExpiryDays,
-          removalPolicy: cfg.retainData ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
+          // the 'release' step of the move to nested stacks marks it Delete, so the 'drain' deploy after it frees its name
+          removalPolicy: cfg.retainData && cfg.layoutMigration !== 'release' ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
           tags: { [PROJECT_TAG]: slug, 'trace:installation': cfg.prefix },
         })
       : null
@@ -261,5 +268,20 @@ export class ProjectStack extends Construct {
     new CfnOutput(stack, outputs.secretArn, { value: this.secret.secretArn, description: `${slug}: its GitHub token secret` })
     if (this.jobDefinitionName) new CfnOutput(stack, outputs.jobDefinition, { value: this.jobDefinitionName, description: `${slug}: its GPU job definition` })
     if (this.memory) new CfnOutput(stack, outputs.memoryId, { value: this.memory.memoryId, description: `${slug}: its AgentCore memory (its worker's TRACE_MEMORY_ID)` })
+  }
+}
+
+/**
+ * One project in its own nested stack (layout 'nested'): the ProjectStack construct, under the same construct id as
+ * in the flat layout (`Project<hash>`), so its logical ids and output names are the same inside the nested template.
+ * CDK turns what it uses of the parent into the nested stack's parameters, and what the parent uses of it (the
+ * runtime's id and ARN, the OIDC role's ARN, the memory's id and ARN) into its outputs.
+ */
+export class ProjectNestedStack extends NestedStack {
+  readonly project: ProjectStack
+
+  constructor(scope: Construct, id: string, p: ProjectProps) {
+    super(scope, id, { description: `trace: ${p.project.slug}'s worker runtime, roles, token secret, memory and GPU job definition`.slice(0, 1024) })
+    this.project = new ProjectStack(this, `Project${p.project.hash}`, p)
   }
 }

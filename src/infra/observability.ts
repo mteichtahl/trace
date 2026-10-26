@@ -79,6 +79,9 @@ export interface ObservedMemory {
   name: string
   arn: string
   memoryId: string
+  /** where its log group and delivery go: the project's own construct in the nested layout (its nested stack), or
+   * this construct (the flat layout, unchanged) when unset */
+  scope?: Construct
 }
 
 export interface ObservabilityProps {
@@ -89,6 +92,10 @@ export interface ObservabilityProps {
   memories?: readonly ObservedMemory[]
   /** keep the memories' log groups and deliveries when the stack is deleted or a project removed (as the memories) */
   retainData?: boolean
+  /** mark the deliveries (sources, destinations, deliveries) Delete whatever retainData says: the 'release' step of
+   * the move to nested stacks, so that the next deploy frees their names. The log groups keep retainData's policy:
+   * their names carry the memory id, which the new memory does not share. */
+  releaseDeliveries?: boolean
   /** the projects' GPU job roles, when there are GPU jobs: they may write spans */
   gpuJobRoles?: readonly iam.IRole[]
   /** whether the GPU side exists (its widgets) */
@@ -159,26 +166,30 @@ export class Observability extends Construct {
 
     // ------------------------------------------------------------------ each project memory's logs and traces (vended delivery)
     const keep = p.retainData ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY
+    const keepDelivery = p.releaseDeliveries ? RemovalPolicy.DESTROY : keep
     for (const m of p.memories ?? []) {
       // delivery source and destination names: [\w-]{1,60}, unique in the account and region
       const name = (kind: string): string => `${p.prefix}-m-${m.hash}-${kind}`
-      const group = new logs.LogGroup(this, `${m.id}MemoryLogs`, {
+      // flat: in this construct, ids prefixed with the project's (as ever); nested: in the project's own construct
+      const at: Construct = m.scope ?? this
+      const pre = m.scope ? '' : m.id
+      const group = new logs.LogGroup(at, `${pre}MemoryLogs`, {
         logGroupName: `/aws/vendedlogs/bedrock-agentcore/memory/APPLICATION_LOGS/${m.memoryId}`,
         retention: logs.RetentionDays.ONE_MONTH,
         removalPolicy: keep,
       })
-      const logsSource = new logs.CfnDeliverySource(this, `${m.id}MemoryLogsSource`, { name: name('logs'), logType: 'APPLICATION_LOGS', resourceArn: m.arn })
-      const tracesSource = new logs.CfnDeliverySource(this, `${m.id}MemoryTracesSource`, { name: name('traces'), logType: 'TRACES', resourceArn: m.arn })
-      const logsDest = new logs.CfnDeliveryDestination(this, `${m.id}MemoryLogsDestination`, { name: name('logs'), destinationResourceArn: group.logGroupArn })
-      const tracesDest = new logs.CfnDeliveryDestination(this, `${m.id}MemoryTracesDestination`, { name: name('traces'), deliveryDestinationType: 'XRAY' })
-      const logsDelivery = new logs.CfnDelivery(this, `${m.id}MemoryLogsDelivery`, { deliverySourceName: logsSource.name, deliveryDestinationArn: logsDest.attrArn })
-      const tracesDelivery = new logs.CfnDelivery(this, `${m.id}MemoryTracesDelivery`, { deliverySourceName: tracesSource.name, deliveryDestinationArn: tracesDest.attrArn })
-      for (const r of [logsSource, tracesSource, logsDest, tracesDest, logsDelivery, tracesDelivery]) r.applyRemovalPolicy(keep)
+      const logsSource = new logs.CfnDeliverySource(at, `${pre}MemoryLogsSource`, { name: name('logs'), logType: 'APPLICATION_LOGS', resourceArn: m.arn })
+      const tracesSource = new logs.CfnDeliverySource(at, `${pre}MemoryTracesSource`, { name: name('traces'), logType: 'TRACES', resourceArn: m.arn })
+      const logsDest = new logs.CfnDeliveryDestination(at, `${pre}MemoryLogsDestination`, { name: name('logs'), destinationResourceArn: group.logGroupArn })
+      const tracesDest = new logs.CfnDeliveryDestination(at, `${pre}MemoryTracesDestination`, { name: name('traces'), deliveryDestinationType: 'XRAY' })
+      const logsDelivery = new logs.CfnDelivery(at, `${pre}MemoryLogsDelivery`, { deliverySourceName: logsSource.name, deliveryDestinationArn: logsDest.attrArn })
+      const tracesDelivery = new logs.CfnDelivery(at, `${pre}MemoryTracesDelivery`, { deliverySourceName: tracesSource.name, deliveryDestinationArn: tracesDest.attrArn })
+      for (const r of [logsSource, tracesSource, logsDest, tracesDest, logsDelivery, tracesDelivery]) r.applyRemovalPolicy(keepDelivery)
       logsDelivery.addDependency(logsSource)
       tracesDelivery.addDependency(tracesSource)
-      // X-Ray as a destination needs Transaction Search
+      // X-Ray as a destination needs Transaction Search (nested: CDK makes the project's nested stack wait for it)
       if (this.transactionSearch) tracesDelivery.node.addDependency(this.transactionSearch)
-      new CfnOutput(stack, `${m.id}MemoryLogGroup`, { value: group.logGroupName, description: `The project's memory (${m.name}): its APPLICATION_LOGS` })
+      new CfnOutput(Stack.of(at), `${m.id}MemoryLogGroup`, { value: group.logGroupName, description: `The project's memory (${m.name}): its APPLICATION_LOGS` })
     }
 
     // ------------------------------------------------------------------ the dashboard
@@ -195,7 +206,8 @@ export class Observability extends Construct {
 
     // ------------------------------------------------------------------ where to look
     for (const r of p.runtimes) {
-      new CfnOutput(stack, `${r.id}LogGroup`, {
+      // in the runtime's own stack: a project's nested stack in the nested layout
+      new CfnOutput(Stack.of(r.runtime), `${r.id}LogGroup`, {
         value: Fn.join('', ['/aws/bedrock-agentcore/runtimes/', r.runtime.attrAgentRuntimeId, '-DEFAULT']),
         description: `The ${r.name} runtime's log group (its logs, and its spans on the unified destination)`,
       })

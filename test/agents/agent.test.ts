@@ -9,7 +9,8 @@ import {
   type ClaudeOptions, DONE, type Exec, type RunnerDeps, TOOLS, authHeader, cloneDir, createRunner, parseSecret, redactor,
 } from '../../src/agents/runtime/job.js'
 import { type JobRunner, type Jobs, createJobs } from '../../src/agents/runtime/jobs.js'
-import { taskBranch, taskPrompt, workItemPrompt } from '../../src/agents/worker/prompt.js'
+import { taskBranch, taskPrompt } from '../../src/agents/worker/prompt.js'
+import { SPECIALISTS, SPECIALIST_BUILTINS, allowedToolsOf, specialistPrompt, toolsOf } from '../../src/agents/index.js'
 import { InvocationSchema, type JobPayload, TaskPayload, WrongProject, checkProject } from '../../src/agents/runtime/schemas.js'
 import { createAgentServer } from '../../src/agents/runtime/server.js'
 import { dispatchTask } from '../../src/harness/dispatch.js'
@@ -283,26 +284,52 @@ describe('job runner', () => {
       expect(flat.at(-1)).toBe('checkout -B claude/x --track origin/claude/x')
 
       const { prompt, options } = h.claudeCalls[0]!
-      expect(prompt).toBe(workItemPrompt(ITEM, cfgOf({ worker: { max_turns: 42 } }), 'o/r'))
+      // "Fix it" says nothing and no model is configured: the default specialist (verify), with its own prompt
+      const cfg = cfgOf({ worker: { max_turns: 42 } })
+      const route = { kind: 'verify' as const, reason: 'nothing points to a specialist: the default (agents.default)', confidence: 0.2, source: 'default' as const }
+      const { route: _none, ...item } = ITEM
+      expect(prompt).toBe(specialistPrompt(SPECIALISTS.verify, { cfg, repository: 'o/r', job: { kind: 'work-item', item }, rules: null, route, hardware: false, delivery: 'delegate' }))
+      expect(prompt).toMatch(/Verification specialist/)
       expect(prompt).toMatch(/Bedrock AgentCore Runtime/)
-      expect(options).toMatchObject({ cwd: dir, model: 'claude-test', maxTurns: 42, permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true })
-      expect(options.allowedTools).toEqual(TOOLS)
-      expect(options.mcpServers.trace).toEqual({ type: 'stdio', command: 'node', args: ['/app/dist/cli.js', 'mcp'] })
+      // the specialist's own turn limit (agents.verify.max_turns), not the worker's
+      expect(options).toMatchObject({ cwd: dir, model: 'claude-test', maxTurns: 120, permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true })
+      expect(options.tools).toEqual([...SPECIALIST_BUILTINS])
+      expect(options.allowedTools).toEqual(allowedToolsOf(SPECIALISTS.verify, { delegate: false }))
+      expect(options.allowedTools).not.toContain('Bash')
+      expect(options.allowedTools).not.toEqual(TOOLS)
+      expect(options.mcpServers.trace).toMatchObject({ type: 'stdio', command: 'node', args: ['/app/dist/cli.js', 'mcp'] })
+      expect(options.mcpServers.trace!.env?.TRACE_MCP_TOOLS).toBe(toolsOf(SPECIALISTS.verify, { delegate: false }).join(','))
       expect(options.env.GH_TOKEN).toBe(TOKEN)
       // Claude commented? The fake has no comments since start, so the runner posts its summary once.
       const posted = h.f.called('issues.createComment')
       expect(posted).toHaveLength(1)
-      expect(String(posted[0]!.args.body)).toContain(DONE('job-t'))
+      const body = String(posted[0]!.args.body)
+      expect(body).toContain(DONE('job-t'))
+      // which specialist acted, and why it was routed there
+      expect(body).toMatch(/\*\*trace Verification specialist\*\* \(`verify`, job `job-t`\)\. Routed here: nothing points to a specialist/)
+      expect(body).toContain('> Pushed abc.')
       expect(h.lines.join('\n')).not.toContain(TOKEN)
     } finally { h.cleanup() }
   })
 
-  it('does not comment when Claude already did', async () => {
+  it('posts the specialist\'s report once per job, even when a worker commented meanwhile', async () => {
     const h = harness()
     try {
       const f = fakeGithub({ 'repos.get': { default_branch: 'main' }, 'issues.listComments': [{ body: 'Fixed in abc', created_at: new Date(Date.now() + 1000).toISOString() }] })
       await createRunner({ ...h.d, github: () => f.gh })({ kind: 'work-item', repository: 'o/r', item: ITEM }, h.ctx)
-      expect(f.called('issues.createComment')).toHaveLength(0)
+      expect(f.called('issues.createComment')).toHaveLength(1)
+      const g = fakeGithub({ 'repos.get': { default_branch: 'main' }, 'issues.listComments': [{ body: `done ${DONE('job-t')}`, created_at: new Date().toISOString() }] })
+      await createRunner({ ...h.d, github: () => g.gh })({ kind: 'work-item', repository: 'o/r', item: ITEM }, h.ctx)
+      expect(g.called('issues.createComment')).toHaveLength(0)
+    } finally { h.cleanup() }
+  })
+
+  it('mentions escalate_to when the specialist escalates', async () => {
+    const h = harness({ settingsOf: () => cfgOf({ worker: { escalate_to: 'marc' } }) }, [{ type: 'result', subtype: 'success', is_error: false, result: 'ESCALATE: the spec gives no limit for VOUT ripple', num_turns: 3 }])
+    try {
+      const s = await createRunner(h.d)({ kind: 'work-item', repository: 'o/r', item: ITEM }, h.ctx)
+      expect(s).toMatch(/escalated/)
+      expect(String(h.f.called('issues.createComment')[0]!.args.body)).toMatch(/@marc it needs a person/)
     } finally { h.cleanup() }
   })
 
@@ -344,7 +371,9 @@ describe('job runner', () => {
       expect(p).toMatch(/"marc@example.com"/)
       expect(p).toMatch(/\.trace\/rules\.md/)
       expect(p).toMatch(/never push to the default branch/)
-      expect(p).toMatch(/There is no issue to comment on/)
+      expect(p).toContain(`Your working directory is the branch \`${branch}\``)
+      // the retained worker's prompt, unchanged, for what a specialist delegates
+      expect(taskPrompt(task, cfgOf(), branch)).toMatch(/There is no issue to comment on/)
       expect(taskPrompt({ ...task, issue: 12 }, cfgOf(), branch)).toMatch(/Finish with a comment on #12/)
     } finally { h.cleanup() }
   })

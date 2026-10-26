@@ -8,9 +8,11 @@
  * The runner that does the work is injected (createJobs), so tests drive the contract without git or a model.
  */
 import { randomBytes } from 'node:crypto'
-import { ITEM_AGENT, realRunner } from './job.js'
+import { ATTR, annotate } from '../../core/telemetry.js'
+import type { Route } from '../kinds.js'
+import { realRunner } from './job.js'
 import { observeJob } from './observe.js'
-import { type Accepted, type JobInfo, type JobPayload, checkProject } from './schemas.js'
+import { type Accepted, type JobInfo, type JobPayload, checkProject, isDelegated } from './schemas.js'
 
 export { AcceptedSchema, InvocationSchema, SweepPayload, StatusPayload, TaskPayload, WorkItemPayload } from './schemas.js'
 export type { Accepted, Invocation, JobInfo, JobPayload, JobState, SweepJob, TaskJob, WorkItemJob } from './schemas.js'
@@ -20,8 +22,10 @@ export interface JobContext {
   signal: AbortSignal
   /** One line into the job's log (kept in memory, also written to stdout). Never pass secrets. */
   log(line: string): void
-  /** Start another job (a sweep starts one per item it claims). */
+  /** Start another job (a sweep starts one per item it claims; a specialist's delegation starts a worker job). */
   startJob(payload: JobPayload): Accepted
+  /** Record how the job was routed: on the job (status) and on its span. */
+  route?(r: Route): void
 }
 
 /** Does one job; resolves with a one-line summary, rejects with the reason it failed. */
@@ -39,10 +43,20 @@ export interface Jobs {
 const KEEP_FINISHED = 200
 const LOG_LINES = 200
 
+/** The agent a job starts as: the worker for a delegation, else the specialist named or routed so far. */
+export function jobAgent(p: JobPayload): string {
+  if (isDelegated(p)) return 'worker'
+  if (p.kind === 'work-item') return p.item.route?.kind ?? 'specialist'
+  if (p.kind === 'task') return p.agent ?? 'specialist'
+  return 'sweep'
+}
+
 export function jobKey(p: JobPayload): string {
   switch (p.kind) {
     case 'work-item': return `${p.repository.toLowerCase()}#${p.item.number}`
-    case 'task': return `${p.repository.toLowerCase()}:${p.agent === 'render' ? 'render' : 'task'}:${p.branch ?? p.request}`
+    case 'task': return isDelegated(p)
+      ? `${p.repository.toLowerCase()}:delegate:${p.delegation.parentJobId}`
+      : `${p.repository.toLowerCase()}:task:${p.agent ?? 'auto'}:${p.branch ?? p.request}`
     case 'sweep': return `sweep:${[...p.repositories].map((r) => r.toLowerCase()).sort().join(',')}`
   }
 }
@@ -69,7 +83,9 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
       const info: JobInfo = {
         id, kind: payload.kind, key, state: 'running', startedAt: new Date(now()).toISOString(), log: [],
         ...('repository' in payload ? { repository: payload.repository } : {}),
-        ...(payload.kind === 'work-item' ? { number: payload.item.number } : payload.kind === 'task' && payload.issue ? { number: payload.issue } : {}),
+        ...(payload.kind === 'work-item' ? { number: payload.item.number } : payload.kind === 'task' && !isDelegated(payload) && payload.issue ? { number: payload.issue } : {}),
+        agent: jobAgent(payload),
+        ...(isDelegated(payload) ? { parentJobId: payload.delegation.parentJobId } : {}),
       }
       jobs.set(id, info)
       const abort = new AbortController()
@@ -80,9 +96,15 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
         echo(`[${id}] ${line}`)
       }
       log(`started ${key}`)
-      const done = observeJob(payload, id, payload.kind === 'work-item' ? ITEM_AGENT[payload.item.kind] : payload.kind === 'task' ? payload.agent ?? 'worker' : 'worker', () => info, async () => {
+      const route = (r: Route): void => {
+        info.route = r
+        info.agent = r.kind
+        log(`routed to ${r.kind} (${r.source}, confidence ${r.confidence.toFixed(2)}): ${r.reason}`)
+        annotate({ [ATTR.agent]: r.kind, [ATTR.agentKind]: r.kind, [ATTR.routeReason]: r.reason, [ATTR.routeConfidence]: r.confidence, [ATTR.routeSource]: r.source })
+      }
+      const done = observeJob(payload, id, info.agent ?? 'specialist', () => info, async () => {
         try {
-          info.summary = await runner(payload, { jobId: id, signal: abort.signal, log, startJob: (p) => self.startJob(p) })
+          info.summary = await runner(payload, { jobId: id, signal: abort.signal, log, startJob: (p) => self.startJob(p), route })
           info.state = abort.signal.aborted ? 'aborted' : 'succeeded'
         } catch (e) {
           info.state = abort.signal.aborted ? 'aborted' : 'failed'
