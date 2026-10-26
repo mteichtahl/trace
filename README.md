@@ -483,6 +483,74 @@ Every radiated figure is labelled as a pre-compliance estimate. Locally, openEMS
 (`TRACE_OPENEMS_PYTHON`, or `openems-python` on PATH) and scikit-rf (`TRACE_PYTHON`). The GPU image builds openEMS
 v0.37.0 and installs scikit-rf 2.2.0.
 
+## Digital protocols and timing
+
+`src/tools/protocol` simulates digital buses, checks them against datasheets and the bus standards, and draws their
+timing. It builds on what is there: the models write VCDs that `sim.wave_read`, `sim.wave_decode`, `sim.wave_timing`
+and `verify.*` read; the analog layer runs through `sim.spice`; datasheet figures come from the shared library through
+`datasheets.params`; captures come through `hil.scope_capture` and `hil.scpi`; testbenches run in `sim.logic`.
+
+| Tool | What it does |
+| --- | --- |
+| `protocol.model` | Bus-functional models: transactions in, edges out (`model.vcd`, `model.csv`; RS-232 line voltages as `line.csv`), every time configurable. **I2C** standard, fast, fast-plus and high-speed (master code at Fast-mode timing, then Hs), 7- and 10-bit addresses, read, write, combined (repeated START), ACK/NACK, clock stretching, two-master arbitration (wired-AND, the loser releases SDA), general call. **SPI** modes 0-3, MSB/LSB first, 1-32-bit words, several selects, daisy chains (each device's output shown), dual and quad lanes, tCSS / tCSH / tCSD, inter-word gaps, the responder's tV and tHO (MISO `x` between them). **UART/RS-232** baud, 5-9 data bits, parity (even, odd, mark, space), 1/1.5/2 stop bits, break, inverted logic, a transmitter clock error, and the RS-232 driver voltage (mark negative). **CAN 2.0A/B** with stuffing, CRC-15, the ACK slot and bit timing from the clock, sample point and SJW. **1-Wire** reset/presence and slots at standard and overdrive speed. **I2S** in I2S and left-justified formats. Each run decodes its own waveform and reports whether it gets the transactions back. |
+| `protocol.bus_analog` | The physical bus as a SPICE netlist, run with `sim.spice`: open drain (Rp, Cb, Ron = VOL/IOL), push-pull (driver resistance and edge, the trace as RC or a transmission line, ideal or lossy LTRA, from `calc.impedance` and `kicad.net_length` when a board net is given, receiver capacitance), RS-232 (levels, slew, cable, 3-7 kΩ load). It measures, per edge at the receiver, rise and fall time (30-70 % for I2C as UM10204 defines them, 10-90 % otherwise), overshoot, undershoot, settling, levels, and the delay to VIH / VIL. Those delays are the effective timing `protocol.check` applies to a digital capture (`analog_runs`). |
+| `protocol.pullup` | The I2C pull-up range from UM10204 section 7.1: Rp(min) = (VDD - VOL) / IOL, Rp(max) = tr / (0.8473 Cb). `calc.i2c_pullup` does the arithmetic. With `simulate`, it runs the pick through `protocol.bus_analog`. |
+| `protocol.spec` | Device interface timing in the project database. For I2C: fSCL, tHD;STA, tLOW, tHIGH, tSU;STA, tHD;DAT, tSU;DAT, tVD;DAT, tSU;STO, tBUF, tr, tf, Cb, tSP and levels. For SPI: fSCK, SCK high/low, tCSS, tCSH, tCSD, tSU, tH, tV, tHO, tDIS, the modes and word sizes. For UART: baud and tolerance. Each parameter has min/typ/max in the unit given (stored as SI), conditions, and a citation. A citation is `verified: true` only when it has the part, sha256 and page. |
+| `protocol.spec_extract` | Proposes specs from a datasheet in the shared library, by rules, with no model inside. Each characteristics-table row is matched on its normalised symbol (`tSU;DAT`, `t SU:STA` and `tSU(DAT)` are one symbol), then on its parameter name. A symbol that belongs to another protocol is skipped. Numbers are converted to SI, and each candidate carries its page citation. Rows whose cells are not plain numbers come back raw. It never writes: the agent confirms each row with `protocol.spec`. |
+| `protocol.check` | Judges a capture against a device spec, the standard (UM10204 speed modes; 1-Wire standard or overdrive; the derived mid-bit tolerance for UART), or inline limits. For each parameter it reports the measured worst case, the limit, the margin, pass/fail, the two edges and the transaction where the worst case happened, and SPI mode compatibility. It is recorded as a `protocol.check` run with a measurement per parameter and margin, so trends show over commits, and `verify.run` can take it as a test item. |
+| `protocol.compat` | The initiator-to-responder budget from two specs, at corners (slow, fast, and the worst mix). SPI covers write and read setup/hold, the read-path fmax, fSCK, SCK high/low, tCSS/tCSH/tCSD and shared modes. I2C covers each generated time against the responder's minimum, fSCL, and tLOW - tr - tVD;DAT - tSU;DAT. Flight time comes from the delays you give, or from lengths or board nets. A missing figure is listed, and its check is skipped. |
+| `protocol.diagram` | Timing diagrams of a capture or a spec, or both stacked. They show signal lanes, bus lanes with values, decoded rows (START, ADDR 0x50 W, ACK, DATA, ...), measurement arrows from a check (green pass, red fail), cursors, and zoom to a window or a transaction. The SVG is written in TypeScript. A PNG is made when resvg, rsvg-convert or sharp is installed; otherwise it is skipped and the result says so. WaveDrom JSON comes back as text, sampled on a tick. Spec mode draws the datasheet timing at the spec's limits. |
+| `protocol.capture` | A real bus to VCD: sigrok-cli with a logic analyser (fx2lafw by default; not installed by trace), `hil.scope_capture` channels digitised at a threshold, or an oscilloscope's digital channels over `hil.scpi` (Rigol MSO5000-style commands by default). With `protocol`, it then checks the capture like `protocol.check`. Hardware only. |
+| `protocol.testbench` | A self-checking Verilog testbench from a model: the initiator's signals are replayed into the DUT edge for edge, and each bit the DUT drives is checked where the initiator samples it. Supported DUTs: SPI slave, I2C target (wired-AND SDA), UART receiver (with a clock). It prints `MISMATCH` and ends with `$fatal`, or prints `ALL TESTS PASSED`. `TRACE_COVER` lines go out per clean transaction and per response value. With `run`, it goes through `sim.logic`. |
+
+`sim.wave_decode` gained the CAN, 1-Wire, I2S and dual/quad SPI decoders (`src/tools/sim/decode.ts`) and mark/space
+parity. `sim/wave.ts` `i2cDecode` now also says where each worst UM10204 value was seen.
+
+The table is `protocol_specs` (key: device, protocol, parameter), registered with `ensureProjectSchema`. `trace db
+merge` keeps the newer row.
+
+**Verification numbers** (`test/tools/protocol`, `test/examples/sensor-node-protocol.test.ts`):
+
+- **Round trips.** Every protocol model's output decoded by the `sim.wave_decode` decoders gives back the transactions, field for field:
+  - I2C: write, read, combined with repeated START, NACK on the address and on data, 10-bit write and read, general call, a chain of repeated STARTs, stretching, arbitration, Hs-mode;
+  - SPI: 4 modes × MSB/LSB × 8/12/16 bits with two selects, a three-device daisy chain, dual, quad, and a single-lane command before a quad transfer;
+  - UART: 5/7/8/9 bits × 5 parities × 3 stop-bit settings, inverted, a 2 % clock error, a break;
+  - CAN: standard, extended, RTR, empty, no ACK;
+  - 1-Wire: standard and overdrive, with reset, presence, write, read and no presence;
+  - I2S: both formats, and 24-bit samples in 32-bit slots.
+- **UM10204 pull-ups** (equations 1 and 2):
+  - Standard-mode, 5 V, 400 pF: Rp(min) 1533 Ω, Rp(max) 2951 Ω.
+  - Fast-mode, 3.3 V, 400 pF: Rp(min) 967 Ω is above Rp(max) 885 Ω, so no resistor works.
+  - Fast-mode Plus, 3.3 V, 550 pF, 20 mA: 145 Ω to 258 Ω.
+  - These match the curves of UM10204 Figures 42 and 43 as recalled; they were not read from the PDF.
+- **SPICE against the RC closed forms:**
+  - Open drain, 2.2 kΩ and 200 pF: 30-70 % rise time 372.81 ns, where 0.8473 RC = 372.81 ns (-0.00003 %). The delay to VIH is 503.8 ns. Starting from the bus low level VOL = 0.19 V (Ron 133 Ω), RC ln((VDD - VOL) / (0.3 VDD)) = 503.9 ns.
+  - Open drain at 10-90 %, 4.7 kΩ and 100 pF: 1.0327 µs, where 2.197 RC = 1.0327 µs.
+  - Push-pull, 1 kΩ into 100 pF: 219.72 ns, where 2.197 RC = 219.72 ns (+0.00008 %).
+  - Transmission line, 0.2 m of 55.1 Ω microstrip from `calc.impedance`: flight 1.168 ns, and the far end crosses VIH at 1.30 ns.
+- **SPI timing budget at 10 MHz:**
+  - Inputs: initiator tV 5 ns, tHO 1 ns, MISO set-up 10 ns, hold 0; responder tSU 5 ns, tH 5 ns, tV 20 ns, tHO 2 ns; 1 ns flight on each line.
+  - Write: set-up slack 40 ns, hold slack 46 ns. Read: set-up slack 18 ns, hold slack 54 ns.
+  - Read-path fmax: 15.625 MHz.
+  - These are the hand-calculated values exactly. At 20 MHz the read set-up fails.
+
+**What is verified and what is assumed.**
+
+- The bus standards' figures in `src/tools/protocol/standards.ts` carry `verified: null`. No standard document is in the shared library, so they are cited from memory, not from a PDF:
+  - UM10204 rev. 7 Tables 9, 10 and 12 and section 7.1;
+  - AN126 and 1-Wire device AC characteristics;
+  - TIA-232-F;
+  - ISO 11898-1.
+- The Table 10 figures are the same as the existing `I2C_LIMITS`, and a test keeps them equal. Add the PDFs with `datasheets.add` to confirm them.
+- Model edges are ideal until `protocol.bus_analog` runs, and checks measure at the capture's pins.
+- The I2C arbitration model shares one SCL between the two masters; clock synchronisation between different SCLs is not modelled.
+- The CAN decoder resynchronises by at most SJW/16 of a bit.
+- The UART tolerance is derived (±0.5 bit over the frame, split between the two ends) and labelled that way.
+- Specific to `protocol.capture`:
+  - The mso path has not been run against an instrument.
+  - sigrok-cli is not installed here, so only its missing-program path is tested.
+  - The scope path is tested against the fake SCPI scope.
+
 ## Thermal specialist
 
 The Thermal specialist (`thermal`, label `agent:thermal`, memory actor `<owner>/<repo>/thermal`, settings
@@ -600,10 +668,10 @@ delegates to it. The worker's prompt, guardrails and job runner are unchanged.
 
 | Kind | Specialist | What it does | Its trace tools (besides the shared ones) |
 | --- | --- | --- | --- |
-| `verify` | Verification | Turns specifications into requirements and a test plan, runs simulation, formal and rule checks against the plan, and closes functional and code coverage. It owns failing tests, testbenches, formal properties, coverage gaps and ERC. | `verify.*` (requirements, plan, run, coverage, report, verilator, cocotb, formal), `sim.*`, `kicad.erc`, `kicad.drc`; `hil.*` only when hardware is allowed |
-| `impl` | Implementation | Runs FPGA synthesis, place and route, timing closure and bitstreams, and PCB placement, floor planning, routing and length matching. It owns timing failures, constraint files, unrouted nets and DRC. It renders the result for visual review. | `fpga.*`, `pcb.autoroute`, `pcb.placement_check`, `pcb.length_match`, `pcb.floorplan`, `kicad.drc`, `kicad.net_length`, `render.board` |
-| `ams` | Analog & Mixed-Signal | Keeps analog specs and judges circuits against them: corners, Monte Carlo yield, op-amp stability, noise and ADC/digital co-simulation. It also chooses parts from the datasheet library. | `ams.*`, `sim.spice`, `sim.sweep`, `sim.measure`, `sim.kicad_spice`, `calc.*`, `datasheets.*`, `parts.*` |
-| `emc` | EMC & Simulation | Runs EMI rule prechecks and emission estimates, sets up openEMS models (region, stackup, ports, boundary conditions, mesh) and runs them, and checks signal integrity from S-parameters. | `emc.*`, `calc.impedance`, `calc.trace_width`, `calc.via`, `kicad.board`, `kicad.net` |
+| `verify` | Verification | Turns specifications into requirements and a test plan, runs simulation, formal and rule checks against the plan, and closes functional and code coverage. It owns failing tests, testbenches, formal properties, coverage gaps and ERC. | `verify.*` (requirements, plan, run, coverage, report, verilator, cocotb, formal), `sim.*`, `kicad.erc`, `kicad.drc`, `protocol.*` but `pullup` (model, spec, spec_extract, check, compat, diagram, testbench, bus_analog); `hil.*` and `protocol.capture` only when hardware is allowed |
+| `impl` | Implementation | Runs FPGA synthesis, place and route, timing closure and bitstreams, and PCB placement, floor planning, routing and length matching. It owns timing failures, constraint files, unrouted nets and DRC. It renders the result for visual review. | `fpga.*`, `pcb.autoroute`, `pcb.placement_check`, `pcb.length_match`, `pcb.floorplan`, `kicad.drc`, `kicad.net_length`, `render.board`, `protocol.compat`, `protocol.check`, `protocol.diagram` (interface timing budgets) |
+| `ams` | Analog & Mixed-Signal | Keeps analog specs and judges circuits against them: corners, Monte Carlo yield, op-amp stability, noise and ADC/digital co-simulation. It also chooses parts from the datasheet library. | `ams.*`, `sim.spice`, `sim.sweep`, `sim.measure`, `sim.kicad_spice`, `calc.*`, `datasheets.*`, `parts.*`, `protocol.bus_analog`, `protocol.pullup` |
+| `emc` | EMC & Simulation | Runs EMI rule prechecks and emission estimates, sets up openEMS models (region, stackup, ports, boundary conditions, mesh) and runs them, and checks signal integrity from S-parameters. | `emc.*`, `calc.impedance`, `calc.trace_width`, `calc.via`, `kicad.board`, `kicad.net`, `protocol.bus_analog`, `protocol.pullup` (edge rates of the bus as built) |
 | `render` | Rendering | Renders boards and models, and makes turntables. This was the rendering agent; it is kept as a specialist of its own, not folded into `impl`, because people ask for renders directly. | `render.*` |
 | `thermal` | Thermal | Keeps the design inside its thermal envelope: the envelope and part limits, the power budget, Tj per part across ambient corners with a derating margin, board models (2.5D, CalculiX, OpenFOAM CFD) for hot spots and copper/via needs, derating curves, and bench measurements against the model. See [Thermal specialist](#thermal-specialist). | `thermal.*` (`thermal.measure` only with hardware), `calc.ldo_thermal`/`power`/`trace_width`/`via`/`buck`/`boost`, `sim.spice`, `sim.measure`, `datasheets.*`, `parts.*`; `hil.*` only when hardware is allowed |
 
@@ -1210,7 +1278,7 @@ outside AgentCore, either set `OTEL_SDK_DISABLED=true` or give it the variables 
 | `src/harness` | The loop's logic, bundled into `harness/dist` for the GitHub actions in `harness/actions` |
 | `src/infra/gateway.ts`, `src/core/gateway.ts`, `src/library` | The library gateway: its CDK resources, which calls `trace mcp` forwards and how (SigV4, fallback), and the Lambda behind it |
 | `src/infra/knowledge.ts`, `src/tools/kb` | Each project's knowledge base: its CDK resources, and what goes in it, the sync, search and the kb tools |
-| `src/tools/calc`, `src/tools/kicad`, `src/tools/pcb`, `src/tools/sim`, `src/tools/datasheets`, `src/tools/parts`, `src/tools/hil`, `src/tools/firmware`, `src/tools/runs` | The tools |
+| `src/tools/calc`, `src/tools/kicad`, `src/tools/pcb`, `src/tools/sim`, `src/tools/protocol`, `src/tools/datasheets`, `src/tools/parts`, `src/tools/hil`, `src/tools/firmware`, `src/tools/runs` | The tools |
 | `src/gpu`, `agent/Dockerfile.gpu` | GPU jobs: local or AWS Batch (`runJob`, `runBatch`), the in-container runner, and its image |
 | `python/kicad`, `python/orthoroute` | The scripts the autorouter jobs run: Freerouting through KiCad's pcbnew, and OrthoRoute's headless mode |
 | `python/tracebridge` | The only Python, used where Node has no maintained equivalent: PDF tables and figures (pdfplumber), VISA instruments (pyvisa), and CAN vendor interfaces (python-can) |

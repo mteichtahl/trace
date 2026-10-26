@@ -8,6 +8,10 @@
  *   thermal               the envelope "bench" (0 to 60 C, natural convection, horizontal), the parts' thermal
  *                         limits with their sources, the power budget "nominal" and R4's power derating curve
  *                         (src/tools/thermal/store.ts tables), so thermal.check has a real board to run on
+ *   protocol_specs        the SPI interface of an ADC reading ADC_IN, "SPI-ADC-12 (fixture)", and the MCU's SPI
+ *                         master, "sensor-mcu (fixture)": no real datasheet is in the shared library, so both are
+ *                         marked fixtures with illustrative figures (verified: null), for protocol.check,
+ *                         protocol.compat and protocol.diagram (README section 7)
  *
  * Run once from the repository root: `npx tsx examples/sensor-node/tools/setup-db.ts` (or bundle it with esbuild and
  * run the bundle with node). The database is rebuilt from
@@ -18,6 +22,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { load, setValue } from '../../../src/core/config.js'
 import { open, PROJECT_SCHEMA } from '../../../src/core/store.js'
+import { putSpecRows } from '../../../src/tools/protocol/spec.js'
 import { putBudget, putCurve, putEnvelope, putPartLimit } from '../../../src/tools/thermal/store.js'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -68,8 +73,39 @@ putBudget([
   { ref: 'D2', rail: '3V3', power_w: 1.8 * (1.5 / 680), power_max_w: null, method: 'explicit', citation: { source: 'Vf x I = 1.8 V x 2.2 mA (calc.led_resistor, README section 1)' } },
 ], 'nominal')
 
+// ---- protocol: the SPI ADC on ADC_IN and the MCU that reads it. No SPI ADC datasheet is in the shared library, so
+// these are fixtures: illustrative figures of the size such parts have, not any real part's, and every row says so.
+const fixture = (what: string): { source: string } => ({ source: `fixture: ${what}; illustrative, not a real part's datasheet (verified: null)` })
+const adc = fixture('SPI-ADC-12, a generic 12-bit SPI ADC for examples/sensor-node')
+putSpecRows('SPI-ADC-12 (fixture)', 'spi', 'responder', [
+  { parameter: 'f_sck', max: 2, unit: 'MHz', citation: adc },
+  { parameter: 't_sck_high', min: 200, unit: 'ns', citation: adc },
+  { parameter: 't_sck_low', min: 200, unit: 'ns', citation: adc },
+  { parameter: 'tcss', min: 100, unit: 'ns', citation: adc },
+  { parameter: 'tcsh', min: 50, unit: 'ns', citation: adc },
+  { parameter: 'tcsd', min: 500, unit: 'ns', citation: adc },
+  { parameter: 'tsu', min: 50, unit: 'ns', citation: adc },
+  { parameter: 'th', min: 50, unit: 'ns', citation: adc },
+  { parameter: 'tv', max: 125, unit: 'ns', citation: adc },
+  { parameter: 'tho', min: 10, unit: 'ns', citation: adc },
+  { parameter: 'modes', value: [0, 3], citation: adc },
+  { parameter: 'word_bits', value: [16], citation: adc },
+], BY)
+const mcu = fixture('sensor-mcu, the SPI master of a small MCU for examples/sensor-node')
+putSpecRows('sensor-mcu (fixture)', 'spi', 'initiator', [
+  { parameter: 'f_sck', max: 8, unit: 'MHz', citation: mcu },
+  { parameter: 'tv', max: 15, unit: 'ns', citation: mcu },
+  { parameter: 'tho', min: 0, unit: 'ns', citation: mcu },
+  { parameter: 'tsu_mi', min: 20, unit: 'ns', citation: mcu },
+  { parameter: 'th_mi', min: 5, unit: 'ns', citation: mcu },
+  { parameter: 'tcss', min: 500, unit: 'ns', citation: mcu },
+  { parameter: 'tcsh', min: 500, unit: 'ns', citation: mcu },
+  { parameter: 'tcsd', min: 1000, unit: 'ns', citation: mcu },
+  { parameter: 'modes', value: [0, 1, 2, 3], citation: mcu },
+], BY)
+
 const rules = join(ROOT, '.trace', 'rules.md')
 if (!existsSync(rules)) writeFileSync(rules, '')
 
 const cfg = load(ROOT)
-console.log(JSON.stringify({ root: cfg.root, electronics: cfg.electronics, firmware: cfg.firmware, thermal: { envelope: 'bench', budget: 'nominal' } }, null, 1))
+console.log(JSON.stringify({ root: cfg.root, electronics: cfg.electronics, firmware: cfg.firmware, thermal: { envelope: 'bench', budget: 'nominal' }, protocol: ['SPI-ADC-12 (fixture)', 'sensor-mcu (fixture)'] }, null, 1))
