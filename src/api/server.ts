@@ -10,14 +10,14 @@
  *
  * AgentCore has already validated the token (customJwtAuthorizer) and forwards the Authorization header; it is
  * verified again here (jwt.ts) before anything else. This is the one runtime that spans projects (the shared GitHub
- * token, every project's memory records, InvokeAgentRuntime on every project's worker), and everything it does for
+ * token, every project's memory's records, InvokeAgentRuntime on every project's worker), and everything it does for
  * a project follows the access check. It runs no model and no agent: tasks go to the project's worker
  * (src/api/workers.ts). Every request is logged as one JSON line: who, action, repo,
  * outcome, duration. Tokens are never logged.
  */
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http'
 import { z } from 'zod'
-import { memoryFromEnv } from '../agent/memory.js'
+import { projectMemoriesFromEnv } from '../agent/memory.js'
 import { AccessDenied, type Principal, seen } from '../core/access.js'
 import { ConfigError } from '../core/config.js'
 import { ToolError } from '../core/registry.js'
@@ -178,7 +178,7 @@ export async function start(): Promise<void> {
     cognito: cog,
     jobs: async () => jobs,
     tools: () => allTools(),
-    memory: () => memoryFromEnv(process.env),
+    memory: () => projectMemoriesFromEnv(process.env),
     checkout: gitCheckout(token, scratch),
     scratch,
   }

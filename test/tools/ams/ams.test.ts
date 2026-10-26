@@ -9,6 +9,8 @@ import { applyLibCorner, libSections, supplyValues } from '../../../src/tools/am
 import { contiguousRange, loopMetrics, slewRate } from '../../../src/tools/ams/opamp.js'
 import { integratePsd, noiseDevices } from '../../../src/tools/ams/noise.js'
 import { judge } from '../../../src/tools/ams/spec.js'
+import { merge } from '../../../src/core/dbmerge.js'
+import { openProject } from '../../../src/core/store.js'
 import { normalQuantile, pearson, wilson } from '../../../src/tools/ams/yield.js'
 import { parseModelHeader, planInputs, shimDir, verilator, vlData, wrapper } from '../../../src/tools/ams/mixed.js'
 import { crossingLogX, unwrapDeg } from '../../../src/tools/ams/common.js'
@@ -29,6 +31,31 @@ describe('ams pure helpers', () => {
     const z = wilson(0, 20)
     expect(z.lo).toBe(0)
     expect(z.hi).toBeCloseTo(0.1611, 3)
+  })
+
+  it('trace db merge keeps the newer ams_specs row', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'trace-ams-merge-'))
+    const mk = (name: string, rows: [string, string, number, number][]): string => {
+      const p = join(dir, name, '.trace', 'project.db')
+      const prev = process.env.TRACE_PROJECT_DB
+      process.env.TRACE_PROJECT_DB = p
+      const db = openProject()
+      for (const [set, m, max, t] of rows) db.prepare('INSERT INTO ams_specs (spec_set, measure, max, updated) VALUES (?,?,?,?)').run(set, m, max, t)
+      db.close()
+      process.env.TRACE_PROJECT_DB = prev
+      return p
+    }
+    const base = mk('base', [['s', 'a', 1, 1]])
+    const ours = mk('ours', [['s', 'a', 2, 2], ['s', 'b', 5, 2]])
+    const theirs = mk('theirs', [['s', 'a', 3, 3], ['s', 'c', 7, 3]])
+    expect(merge(base, ours, theirs)).toEqual([])
+    const prev = process.env.TRACE_PROJECT_DB
+    process.env.TRACE_PROJECT_DB = ours
+    const db = openProject()
+    const rows = db.prepare('SELECT measure, max FROM ams_specs ORDER BY measure').all()
+    db.close()
+    process.env.TRACE_PROJECT_DB = prev
+    expect(rows.map((x) => [x.measure, x.max])).toEqual([['a', 3], ['b', 5], ['c', 7]])
   })
 
   it('pearson r', () => {

@@ -7,21 +7,22 @@
  *   agent image         built from this repository by AWS CodeBuild on arm64 (no local Docker), pushed to ECR; every
  *                       runtime runs it
  *   projects            one ProjectStack per repository (src/infra/project.ts): its worker runtime on Bedrock
- *                       AgentCore with its own execution role, its GitHub token secret, its GitHub OIDC role and its
- *                       GPU job definition and job role. Each role reaches that project's resources only, so the
- *                       line between projects holds in IAM even though the agent has Bash and the role's credentials
- *   agent memory        AgentCore Memory (src/infra/memory.ts): one for the installation, namespaced
- *                       /trace/<owner>/<repo>/<agent>/; each worker may use only its project's actors and namespaces
+ *                       AgentCore with its own execution role, its GitHub token secret, its GitHub OIDC role, its
+ *                       AgentCore memory and its GPU job definition and job role. Each role reaches that project's
+ *                       resources only, so the line between projects holds in IAM even though the agent has Bash
+ *                       and the role's credentials
+ *   agent memory        AgentCore Memory (src/infra/memory.ts): one per project, made by its ProjectStack, still
+ *                       namespaced /trace/<owner>/<repo>/<agent>/; each worker may use only its own project's memory
  *   GPU                 one AWS Batch queue and compute environment shared by every project (src/infra/gpu.ts)
  *   observability       OpenTelemetry (ADOT) from every runtime and the GPU jobs, CloudWatch Transaction Search,
- *                       the memory's vended logs and traces, and a dashboard (src/infra/observability.ts)
+ *                       each project memory's vended logs and traces, and a dashboard (src/infra/observability.ts)
  *   people              a Cognito user pool (no self sign-up; admins invite people) with three classes as groups —
  *                       admin, user (read/write on assigned projects), guest (read on assigned projects) — and the
  *                       API runtime: the same image in `api` mode, reachable only with a Cognito token, which checks
  *                       the person's class and project assignments (src/core/access.ts) on every request
  *
  * The API runtime is the one component that spans projects: it reads every project's settings and status with the
- * shared GitHub token, reads (never writes) every project's memory records, and hands tasks to each project's worker
+ * shared GitHub token, reads (never writes) the records of every project's memory, and hands tasks to each project's worker
  * runtime (InvokeAgentRuntime), always after its access check. It runs no model and gives nothing a shell.
  *
  * Workers accept only IAM (their repository's workflows, and the API); the API accepts only Cognito tokens (people).
@@ -45,10 +46,10 @@ import { Asset } from 'aws-cdk-lib/aws-s3-assets'
 import * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { Provider } from 'aws-cdk-lib/custom-resources'
 import type { Construct } from 'constructs'
-import { JOBS_PREFIX, workerRuntimeNamePattern } from '../core/project.js'
+import { JOBS_PREFIX, memoryName, workerRuntimeNamePattern } from '../core/project.js'
 import { GpuCompute } from './gpu.js'
-import { TraceMemory } from './memory.js'
-import { Observability, gpuTelemetryEnv } from './observability.js'
+import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
+import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
 import { ACCESS_PREFIX, CENTRAL_PREFIX, ProjectStack, grantPrefixes } from './project.js'
 import { type InfraProps, apiRuntimeName, projectRefs } from './props.js'
 
@@ -57,8 +58,30 @@ export const REPO_ROOT = join(import.meta.dirname, '..', '..')
 
 export { ACCESS_PREFIX, CENTRAL_PREFIX } from './project.js'
 
-/** AgentCore's limit on one environment variable's value (CreateAgentRuntime environmentVariables). */
+/** AgentCore's limits on a runtime's environment (CreateAgentRuntime environmentVariables: 0–50 entries, each
+ * value 0–5000 characters). */
 export const ENV_VALUE_MAX = 5000
+export const ENV_ENTRIES_MAX = 50
+
+/** AgentCore runtime and memory ids: `<name>-<10 characters>`. */
+const ID_SUFFIX = 11
+
+/**
+ * The longest `owner/repo=<id> …` list (the encoding of TRACE_WORKER_RUNTIMES and TRACE_PROJECT_MEMORIES) with these
+ * slugs and resource names: what the value will be once CloudFormation has filled in the ids.
+ */
+export const idListLength = (entries: readonly { slug: string; name: string }[]): number =>
+  entries.reduce((n, e, i) => n + (i ? 1 : 0) + e.slug.length + 1 + e.name.length + ID_SUFFIX, 0)
+
+/** Refuse, at synth time, a runtime environment AgentCore would refuse at deploy time. `extra`: entries the
+ * observability construct adds later as property overrides. */
+export function checkRuntimeEnv(runtime: string, env: Record<string, unknown>, extra: number): void {
+  const n = Object.keys(env).length + extra
+  if (n > ENV_ENTRIES_MAX) throw new Error(`the ${runtime} runtime would have ${n} environment variables (AgentCore allows ${ENV_ENTRIES_MAX})`)
+  for (const [k, v] of Object.entries(env)) {
+    if (typeof v === 'string' && !v.includes('${Token[') && v.length > ENV_VALUE_MAX) throw new Error(`the ${runtime} runtime's ${k} would be ${v.length} characters (AgentCore allows ${ENV_VALUE_MAX})`)
+  }
+}
 
 /** What the image build doesn't need (keeps the source asset small and its hash stable). */
 export const SOURCE_EXCLUDE = [
@@ -154,9 +177,19 @@ export class TraceStack extends Stack {
           environment: gpuTelemetryEnv(cfg),
         })
       : null
-    // ------------------------------------------------------------------ the agents' memory (AgentCore Memory, src/infra/memory.ts)
-    const memory = cfg.memory.enabled ? new TraceMemory(this, 'AgentMemory', { prefix: cfg.prefix, eventExpiryDays: cfg.memory.eventExpiryDays }) : null
-    const memoryEnv: Record<string, string> = memory ? { TRACE_MEMORY_ID: memory.memoryId } : {}
+    // ------------------------------------------------------------------ the installation-wide memory of earlier versions
+    // Each project has its own memory now (src/infra/project.ts). The old one had no DeletionPolicy, so removing it
+    // from the template would delete it whatever retainData says: memory.legacySharedMemory keeps it here for one
+    // deploy, unchanged (its name must not change: that replaces it), unused and now Retain, so the next deploy
+    // without it leaves it in the account. Nothing is granted on it and no runtime is told it.
+    const legacy = cfg.memory.legacySharedMemory
+      ? new TraceMemory(this, 'AgentMemory', {
+          name: sharedMemoryName(cfg.prefix),
+          description: 'trace: the agents\' memory, by project and agent (actor <owner>/<repo>/<agent>)',
+          eventExpiryDays: cfg.memory.eventExpiryDays,
+          removalPolicy: RemovalPolicy.RETAIN,
+        })
+      : null
     const image = new CustomResource(this, 'AgentImage', {
       serviceToken: provider.serviceToken,
       properties: { ProjectName: build.projectName, ImageUri: imageUri, SourceHash: source.assetHash },
@@ -170,16 +203,24 @@ export class TraceStack extends Stack {
     const refs = projectRefs(cfg.repositories)
     const projects = refs.map((ref) => new ProjectStack(this, `Project${ref.hash}`, {
       cfg, project: ref, bucket: central, images: repo, imageUri: image.getAttString('ImageUri'), oidcProviderArn: oidc.openIdConnectProviderArn,
-      gpu, memory,
+      gpu,
       environment: {
-        AWS_REGION: cfg.region, TRACE_HOME: traceHome, CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: cfg.model, TRACE_WORKSPACE: '/mnt/workspace', ...memoryEnv,
+        AWS_REGION: cfg.region, TRACE_HOME: traceHome, CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: cfg.model, TRACE_WORKSPACE: '/mnt/workspace',
       },
     }))
-    // The API is told every worker runtime: `owner/repo=<runtime id>` separated by spaces (src/api/workers.ts).
-    const workerList = Fn.join(' ', projects.map((p, i) => Fn.join('=', [refs[i]?.slug ?? '', p.runtime.attrAgentRuntimeId])))
-    // runtime ids are `<name>-<10 characters>`
-    const workerListLength = refs.reduce((n, r, i) => n + r.slug.length + 1 + (projects[i]?.runtimeName.length ?? 0) + 11 + 1, 0)
+    // The API is told every worker runtime, and every project's memory, as `owner/repo=<id>` separated by spaces
+    // (src/api/workers.ts, src/agent/memory.ts parseProjectMemories). Each is one value of at most 5000 characters.
+    const idList = (ids: readonly string[]): string => Fn.join(' ', ids.map((id, i) => Fn.join('=', [refs[i]?.slug ?? '', id])))
+    const workerList = idList(projects.map((p) => p.runtime.attrAgentRuntimeId))
+    const workerListLength = idListLength(refs.map((r, i) => ({ slug: r.slug, name: projects[i]?.runtimeName ?? '' })))
     if (workerListLength > ENV_VALUE_MAX) throw new Error(`too many repositories for one installation: the API's list of worker runtimes would be ${workerListLength} characters (AgentCore allows ${ENV_VALUE_MAX})`)
+    const memories = projects.flatMap((p) => (p.memory ? [p.memory] : []))
+    const memoryEnv: Record<string, string> = {}
+    if (memories.length) {
+      memoryEnv.TRACE_PROJECT_MEMORIES = idList(projects.map((p) => p.memory?.memoryId ?? ''))
+      const memoryListLength = idListLength(refs.map((r) => ({ slug: r.slug, name: memoryName(cfg.prefix, r.repository) })))
+      if (memoryListLength > ENV_VALUE_MAX) throw new Error(`too many repositories for one installation: the API's list of project memories would be ${memoryListLength} characters (AgentCore allows ${ENV_VALUE_MAX})`)
+    }
 
     // ------------------------------------------------------------------ people: Cognito and the API runtime
     const users = new cognito.UserPool(this, 'Users', {
@@ -262,7 +303,7 @@ export class TraceStack extends Stack {
     // every project's worker runtime of this installation (by name; one statement however many projects there are)
     const workers = `arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:runtime/${workerRuntimeNamePattern(cfg.prefix)}`
     apiRole.addToPolicy(new iam.PolicyStatement({ sid: 'InvokeProjectWorkers', actions: ['bedrock-agentcore:InvokeAgentRuntime'], resources: [workers, `${workers}/runtime-endpoint/*`] }))
-    if (memory) memory.grantReadRecords(apiRole)
+    grantReadRecords(apiRole, memories)
 
     const discoveryUrl = `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}/.well-known/openid-configuration`
     const api = new CfnRuntime(this, 'ApiRuntime', {
@@ -291,6 +332,11 @@ export class TraceStack extends Stack {
       },
     })
     api.node.addDependency(apiRole)
+    const observabilityEnv = Math.max(Object.keys(ENABLED_ENV).length, Object.keys(DISABLED_ENV).length)
+    for (const r of [api, ...projects.map((p) => p.runtime)]) {
+      const env = r.environmentVariables
+      if (env && typeof env === 'object' && !('resolve' in env)) checkRuntimeEnv(r.agentRuntimeName, env, observabilityEnv)
+    }
     apiRole.addToPolicy(new iam.PolicyStatement({
       actions: ['cognito-idp:ListUsers', 'cognito-idp:ListUsersInGroup', 'cognito-idp:AdminGetUser', 'cognito-idp:AdminListGroupsForUser', 'cognito-idp:AdminCreateUser',
         'cognito-idp:AdminAddUserToGroup', 'cognito-idp:AdminRemoveUserFromGroup'],
@@ -300,7 +346,8 @@ export class TraceStack extends Stack {
     // ------------------------------------------------------------------ observability (OpenTelemetry/ADOT, src/infra/observability.ts)
     new Observability(this, 'Observability', {
       prefix: cfg.prefix, settings: cfg.observability, gpu: Boolean(gpu), gpuJobRoles: gpu?.jobRoles ?? [],
-      memory: memory ? { arn: memory.memoryArn, id: memory.memoryId } : null,
+      retainData: cfg.retainData,
+      memories: projects.flatMap((p, i) => (p.memory ? [{ id: p.node.id, hash: refs[i]?.hash ?? '', name: memoryName(cfg.prefix, refs[i]?.repository ?? ''), arn: p.memory.memoryArn, memoryId: p.memory.memoryId }] : [])),
       runtimes: [
         ...projects.map((p) => ({ id: p.node.id, runtime: p.runtime, name: p.runtimeName, role: p.role })),
         { id: 'Api', runtime: api, name: apiName, role: apiRole },
@@ -317,7 +364,8 @@ export class TraceStack extends Stack {
     new CfnOutput(this, 'UserPoolId', { value: users.userPoolId })
     new CfnOutput(this, 'UserPoolClientId', { value: client.userPoolClientId })
     new CfnOutput(this, 'CognitoDomain', { value: domain.baseUrl() })
-    if (memory) new CfnOutput(this, 'MemoryId', { value: memory.memoryId, description: 'TRACE_MEMORY_ID: the agents\' AgentCore Memory' })
+    // each project's own memory is its Project<hash>MemoryId output (src/infra/project.ts)
+    if (legacy) new CfnOutput(this, 'LegacyMemoryId', { value: legacy.memoryId, description: 'The installation-wide memory of earlier versions: retained, unused; left in the account by the next deploy' })
     if (gpu) {
       new CfnOutput(this, 'GpuJobQueue', { value: gpu.queue.jobQueueArn })
       new CfnOutput(this, 'GpuImageUri', { value: gpu.imageUri })

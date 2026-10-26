@@ -1,6 +1,6 @@
 /**
  * One onboarded project (one entry of `repositories`): its own worker runtime, the roles around it, its GitHub token
- * secret and its GPU job definition. The stack makes one per repository, so adding or removing a repository (running
+ * secret, its AgentCore memory and its GPU job definition. The stack makes one per repository, so adding or removing a repository (running
  * the installer again) adds or removes exactly these resources.
  *
  * The worker runtime runs Claude with Bash, so whatever its execution role allows, the agent can do directly with
@@ -10,8 +10,8 @@
  *             only with a conditional put (If-Match / If-None-Match: the central store always writes that way, see
  *             src/core/central.ts), never delete it; read/write projects/<slug>/* and jobs/<slug>/*; list only those
  *             prefixes; nothing of access/*, nor of any other project
- *   memory    events of actors `<owner>/<repo>/*` and records under `/trace/<owner>/<repo>/*` only (the encodings of
- *             src/agent/memory.ts), on the installation's one memory
+ *   memory    its own memory only (<prefix>_m_<hash>), and on it still only events of actors `<owner>/<repo>/*` and
+ *             records under `/trace/<owner>/<repo>/*` (the encodings of src/agent/memory.ts), as defence in depth
  *   secret    <prefix>/github-token/<slug> only
  *   Batch     SubmitJob only with its own job definition, on the shared queue, and only tagged trace:project=<slug>;
  *             TerminateJob only on jobs tagged with its slug; DescribeJobs (no resource-level permissions exist)
@@ -20,7 +20,10 @@
  *
  * Its GitHub OIDC role (assumed by that repository's default-branch workflows only) may invoke only this runtime,
  * read the central store and write it the same conditional way (the worker.runner=actions fallback is the worker
- * in GitHub Actions), and read/write projects/<slug>/*. Its GPU job role may read/write jobs/<slug>/* only.
+ * in GitHub Actions), and read/write projects/<slug>/*; it has no memory access. Its GPU job role may read/write
+ * jobs/<slug>/* only.
+ *
+ * Its memory follows retainData: Retain on stack deletion and on removal of the project, or Delete on both.
  */
 import { CfnOutput, Duration, RemovalPolicy, Stack, Tags } from 'aws-cdk-lib'
 import { CfnRuntime } from 'aws-cdk-lib/aws-bedrockagentcore'
@@ -31,11 +34,11 @@ import * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { Construct } from 'constructs'
 import { projectId, projectPrefix as memoryProjectPrefix } from '../agent/memory.js'
 import {
-  PROJECT_TAG, githubSecretName, projectDataPrefix, projectJobsPrefix, workerRuntimeName,
+  PROJECT_TAG, githubSecretName, memoryName, projectDataPrefix, projectJobsPrefix, workerRuntimeName,
 } from '../core/project.js'
 import type { GpuCompute } from './gpu.js'
-import { EVENT_ACTIONS, RECORD_ACTIONS, type TraceMemory } from './memory.js'
-import { type InfraProps, type ProjectRef, projectOutputs } from './props.js'
+import { EVENT_ACTIONS, RECORD_ACTIONS, TraceMemory } from './memory.js'
+import { type InfraProps, type ProjectRef, projectOutputs, projectSettings } from './props.js'
 
 /** The central bucket's prefixes: the shared database, and the access store beside it (src/core/access.ts). */
 export const CENTRAL_PREFIX = 'central'
@@ -89,8 +92,7 @@ export interface ProjectProps {
   /** the GitHub OIDC provider's ARN */
   oidcProviderArn: string
   gpu: GpuCompute | null
-  memory: TraceMemory | null
-  /** environment every worker gets (region, model, TRACE_HOME, memory, observability's are added later) */
+  /** environment every worker gets (region, model, TRACE_HOME; its memory's and observability's are added here and later) */
   environment: Record<string, string>
 }
 
@@ -101,6 +103,8 @@ export class ProjectStack extends Construct {
   readonly actionsRole: iam.Role
   readonly secret: secrets.Secret
   readonly jobDefinitionName: string | null
+  /** its AgentCore memory (null when memory.enabled is false) */
+  readonly memory: TraceMemory | null
 
   constructor(scope: Construct, id: string, p: ProjectProps) {
     super(scope, id)
@@ -149,15 +153,28 @@ export class ProjectStack extends Construct {
     this.secret.grantRead(role)
     grantPrefixes(role, bucket, { conditional: [CENTRAL_PREFIX], readWrite: [projectDataPrefix(repository), projectJobsPrefix(repository)] })
 
-    if (p.memory) {
+    // ------------------------------------------------------------------ its memory (src/infra/memory.ts)
+    this.memory = cfg.memory.enabled
+      ? new TraceMemory(this, 'Memory', {
+          name: memoryName(cfg.prefix, repository),
+          description: `trace: ${slug}'s agents' memory (actors ${slug}/<agent>)`,
+          eventExpiryDays: projectSettings(cfg, repository).memoryEventExpiryDays,
+          removalPolicy: cfg.retainData ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
+          tags: { [PROJECT_TAG]: slug, 'trace:installation': cfg.prefix },
+        })
+      : null
+    const memoryEnv: Record<string, string> = {}
+    if (this.memory) {
+      // its own memory only; the actor and namespace conditions stay as defence in depth
       role.addToPolicy(new iam.PolicyStatement({
-        sid: 'ProjectMemoryEvents', actions: [...EVENT_ACTIONS], resources: [p.memory.memoryArn],
+        sid: 'ProjectMemoryEvents', actions: [...EVENT_ACTIONS], resources: [this.memory.memoryArn],
         conditions: { StringLike: { 'bedrock-agentcore:actorId': `${projectId(repository)}/*` } },
       }))
       role.addToPolicy(new iam.PolicyStatement({
-        sid: 'ProjectMemoryRecords', actions: [...RECORD_ACTIONS], resources: [p.memory.memoryArn],
+        sid: 'ProjectMemoryRecords', actions: [...RECORD_ACTIONS], resources: [this.memory.memoryArn],
         conditions: { StringLike: { 'bedrock-agentcore:namespace': `${memoryProjectPrefix(repository)}*` } },
       }))
+      memoryEnv.TRACE_MEMORY_ID = this.memory.memoryId
     }
 
     // ------------------------------------------------------------------ GPU jobs: its own definition and job role
@@ -207,6 +224,7 @@ export class ProjectStack extends Construct {
         TRACE_PROJECT: slug,
         TRACE_PROJECT_HOME: `s3://${bucket.bucketName}/${projectDataPrefix(repository)}`,
         TRACE_GITHUB_SECRET_ARN: this.secret.secretArn,
+        ...memoryEnv,
         ...gpuEnv,
       },
       tags: { [PROJECT_TAG]: slug, 'trace:installation': cfg.prefix },
@@ -242,5 +260,6 @@ export class ProjectStack extends Construct {
     new CfnOutput(stack, outputs.roleArn, { value: this.actionsRole.roleArn, description: `${slug}: its GitHub OIDC role (TRACE_AWS_ROLE)` })
     new CfnOutput(stack, outputs.secretArn, { value: this.secret.secretArn, description: `${slug}: its GitHub token secret` })
     if (this.jobDefinitionName) new CfnOutput(stack, outputs.jobDefinition, { value: this.jobDefinitionName, description: `${slug}: its GPU job definition` })
+    if (this.memory) new CfnOutput(stack, outputs.memoryId, { value: this.memory.memoryId, description: `${slug}: its AgentCore memory (its worker's TRACE_MEMORY_ID)` })
   }
 }

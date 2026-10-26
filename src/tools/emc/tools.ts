@@ -326,7 +326,7 @@ const RunResult = z.object({
 
 export const runTool = defineTool({
   name: 'emc.run',
-  description: 'Run an emc.setup model with openEMS through runJob (kind openems; CPU, multithreaded): locally, or on the AWS Batch queue when TRACE_GPU_QUEUE is set and the model has more cells than TRACE_OPENEMS_LOCAL_MAX_CELLS (default 2e6). Returns S-parameters (Touchstone artifact when every port was excited), insertion and return loss at the given frequencies, the TDR impedance profile per port (frequency-domain step response, resolution ~1/fstop), and for a radiated setup the far field from NF2FF scaled to the drive\'s harmonics from a matched 50-ohm source, as a dBuV/m PRE-COMPLIANCE ESTIMATE at the setup\'s distance (free space, and +6 dB for ground reflection) against CISPR 32 class A/B. FDTD accuracy is set by the mesh; see the setup summary. Recorded; returns run_id.',
+  description: 'Run an emc.setup model with openEMS through runJob (kind openems; CPU, multithreaded): locally, or on the AWS Batch queue when TRACE_GPU_QUEUE is set and the model has more cells than TRACE_OPENEMS_LOCAL_MAX_CELLS (default 2e6) or openEMS is not installed here. Returns S-parameters (Touchstone artifact when every port was excited), insertion and return loss at the given frequencies, the TDR impedance profile per port (frequency-domain step response, resolution ~1/fstop), and for a radiated setup the far field from NF2FF scaled to the drive\'s harmonics from a matched 50-ohm source, as a dBuV/m PRE-COMPLIANCE ESTIMATE at the setup\'s distance (free space, and +6 dB for ground reflection) against CISPR 32 class A/B. FDTD accuracy is set by the mesh; see the setup summary. Recorded; returns run_id.',
   input: z.object({
     setup_run_id: z.string().describe('an emc.setup run'),
     frequencies: z.array(z.number().positive()).optional().describe('report IL/RL here (default 5 points over the band)'),
@@ -345,7 +345,9 @@ export const runTool = defineTool({
       writeFileSync(join(dir, 'model.py'), st.script)
       const threshold = Number(process.env.TRACE_OPENEMS_LOCAL_MAX_CELLS ?? 2e6)
       const mode = a.remote ?? 'auto'
-      const wantRemote = mode === 'always' || (mode === 'auto' && s.mesh.cells > threshold)
+      let wantRemote = mode === 'always' || (mode === 'auto' && s.mesh.cells > threshold)
+      // a small model on a machine without openEMS (an AgentCore runtime) still goes to the queue when there is one
+      if (!wantRemote && mode === 'auto' && process.env.TRACE_GPU_QUEUE && !(await canImport(openemsPython(), ['CSXCAD', 'openEMS']))) wantRemote = true
       const where = backendFor({ gpu: false, remote: wantRemote })
       const py = where === 'local' ? openemsPython() : 'openems-python'
       if (where === 'local' && !(await canImport(py, ['CSXCAD', 'openEMS']))) {

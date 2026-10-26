@@ -1,9 +1,9 @@
 /**
- * The agents' memory: Amazon Bedrock AgentCore Memory, one memory per installation (src/infra/memory.ts), shared by
- * every project and every agent and kept apart by actor and namespace.
+ * The agents' memory: Amazon Bedrock AgentCore Memory, one memory per project (src/infra/memory.ts), shared by that
+ * project's agents and kept apart by actor and namespace.
  *
  *   short term   events (CreateEvent / ListEvents) per actor and session: what was asked, what came of it, key tool
- *                outcomes. Kept eventExpiryDays (default 30).
+ *                outcomes. Kept the project's eventExpiryDays (default 30).
  *   long term    records the memory's three built-in strategies extract from those events, asynchronously:
  *                  semantic         facts about the project            /trace/{actorId}/facts/
  *                  summary          one summary per session            /trace/{actorId}/sessions/{sessionId}/
@@ -23,14 +23,21 @@
  * so `a/b.c` and `a/b_c` can never share a namespace. `person` is not a valid agent name. Namespaces end in a slash,
  * so `/trace/o/r/` is never a prefix of `/trace/o/r2/`.
  *
- * ISOLATION. Callers never pass a namespace: they pass an Actor (built and validated here) and the namespaces come
- * from it. Every record that comes back is checked to be under the namespace asked for, and dropped otherwise. In
- * AWS the line is also drawn by IAM: each project's worker runtime has its own role, which may only use actors
- * `<owner>/<repo>/*` (bedrock-agentcore:actorId) and namespaces `/trace/<owner>/<repo>/*` (bedrock-agentcore:namespace)
- * of its own project (src/infra/project.ts builds those patterns from projectId and projectPrefix below). The API
- * runtime, which serves every project after its access check, may only read records.
+ * The actor scheme predates per-project memories and is kept: records stay self-describing (a record says whose it
+ * is wherever it is read), and the isolation below still holds inside one memory.
  *
- * Without TRACE_MEMORY_ID there is no memory, and everything that uses it quietly does without.
+ * ISOLATION. Each project has its own memory, and its worker's role may use only that one (src/infra/project.ts).
+ * Inside it, callers never pass a namespace: they pass an Actor (built and validated here) and the namespaces come
+ * from it. Every record that comes back is checked to be under the namespace asked for, and dropped otherwise. IAM
+ * also still allows only actors `<owner>/<repo>/*` (bedrock-agentcore:actorId) and namespaces `/trace/<owner>/<repo>/*`
+ * (bedrock-agentcore:namespace) of its own project (src/infra/project.ts builds those patterns from projectId and
+ * projectPrefix below). The API runtime, which serves every project after its access check, may only read records,
+ * and picks the memory of the project asked for (projectMemoriesFromEnv).
+ *
+ *   TRACE_MEMORY_ID           a worker's memory: its project's (memoryFromEnv)
+ *   TRACE_PROJECT_MEMORIES    the API's: `owner/repo=<memory id> …`, space-separated, written by the stack
+ *
+ * Without them there is no memory, and everything that uses it quietly does without.
  */
 import { createHash } from 'node:crypto'
 import {
@@ -364,6 +371,38 @@ export function memoryFromEnv(env: Record<string, string | undefined> = process.
     clients.set(id, m)
   }
   return m
+}
+
+/** `owner/repo=<memory id> …` → slug → memory id. Malformed entries are refused (the stack writes this). */
+export function parseProjectMemories(text: string | undefined): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const entry of (text ?? '').split(/\s+/).filter(Boolean)) {
+    const at = entry.lastIndexOf('=')
+    const id = entry.slice(at + 1)
+    const repo = RepositorySchema.safeParse(entry.slice(0, at))
+    if (at <= 0 || !repo.success || !MemoryIdSchema.safeParse(id).success) throw new Error(`TRACE_PROJECT_MEMORIES: not owner/repo=<memory id>: ${JSON.stringify(entry)}`)
+    out.set(repo.data.toLowerCase(), id)
+  }
+  return out
+}
+
+/** The API's view: each project's own memory. */
+export interface ProjectMemories {
+  /** The memory of `repository`, or null when it has none in this installation. */
+  forProject(repository: string): AgentMemory | null
+}
+
+/** Every project's memory (TRACE_PROJECT_MEMORIES), or null when the installation has none. */
+export function projectMemoriesFromEnv(env: Record<string, string | undefined> = process.env): ProjectMemories | null {
+  const ids = parseProjectMemories(env.TRACE_PROJECT_MEMORIES)
+  if (!ids.size) return null
+  const region = env.AWS_REGION || env.AWS_DEFAULT_REGION
+  return {
+    forProject: (repository) => {
+      const id = ids.get(repository.trim().toLowerCase())
+      return id ? memoryFromEnv({ TRACE_MEMORY_ID: id, ...(region ? { AWS_REGION: region } : {}) }) : null
+    },
+  }
 }
 
 // ------------------------------------------------------------------ into a prompt

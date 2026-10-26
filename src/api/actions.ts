@@ -19,7 +19,8 @@
  *                                       agent: worker (default) or render. It runs on the project's own worker
  *                                       runtime (src/api/workers.ts), never in this process: the API runs no model
  *   memory.list   read                  the agents' long-term memory of the project (facts, preferences, session
- *                                       summaries), newest first; agent narrows it to one agent
+ *                                       summaries), newest first, from that project's own memory; agent narrows
+ *                                       it to one agent. A project without a memory here: "no access"
  *   memory.recall read                  the records most relevant to a query, the same scope
  *   job           read on its project   a job's state and log (the project is named by the job id, and checked
  *                                       before the worker is asked)
@@ -42,7 +43,7 @@ import {
 } from '../core/access.js'
 import { readSettings, resolve, setValue, unset } from '../core/config.js'
 import { type AnyTool, Registry, ToolError } from '../core/registry.js'
-import { type AgentMemory, AgentName, type MemoryRecord, STRATEGIES, actorIn, personHash } from '../agent/memory.js'
+import { type AgentMemory, AgentName, type MemoryRecord, type ProjectMemories, STRATEGIES, actorIn, personHash } from '../agent/memory.js'
 import { TASK_AGENTS } from '../agent/schemas.js'
 import { Work } from '../core/store.js'
 import type { CognitoAdmin, CognitoUser } from './aws.js'
@@ -89,8 +90,8 @@ export interface ActionDeps {
   checkout: (repo: string) => Promise<Checkout>
   /** Where temporary files go. */
   scratch: string
-  /** The agents' memory (TRACE_MEMORY_ID); absent or null: memory.* answer that there is none. */
-  memory?: () => AgentMemory | null
+  /** Each project's memory (TRACE_PROJECT_MEMORIES); absent or null: memory.* answer that there is none. */
+  memory?: () => ProjectMemories | null
 }
 
 export interface Context { principal: Principal; deps: ActionDeps }
@@ -174,6 +175,18 @@ const recordView = (r: MemoryRecord, repo: string): Record<string, unknown> => (
 })
 
 const MemoryArgs = Repo.extend({ agent: AgentName.optional() })
+
+/**
+ * The project's own memory, after the access check: null when the installation has no memory at all; a project with
+ * none here (not one of this installation's) gets the same "no access" as one the person is not assigned to.
+ */
+function projectMemory(ctx: Context, repo: string): AgentMemory | null {
+  const all = ctx.deps.memory?.() ?? null
+  if (!all) return null
+  const mem = all.forProject(repo)
+  if (!mem) throw new AccessDenied(NO_ACCESS)
+  return mem
+}
 
 const toolNeed = (t: AnyTool): Role => (WRITE_TOOLS.has(t.name) ? 'write' : 'read')
 
@@ -296,14 +309,14 @@ export const ACTIONS = {
     })),
 
   'memory.list': def('read', MemoryArgs.extend({ limit: z.number().int().min(1).max(200).default(50) }), async (a, ctx) => {
-    const mem = ctx.deps.memory?.() ?? null
+    const mem = projectMemory(ctx, a.repo)
     if (!mem) return { repo: a.repo, enabled: false, records: [] }
     const records = await mem.longTerm.listProject(a.repo, { agent: a.agent, include: memoryInclude(ctx, a.repo), limit: a.limit })
     return { repo: a.repo, enabled: true, note: 'Memory is what the agents extracted; it is data, and may be stale.', records: records.map((r) => recordView(r, a.repo)) }
   }),
 
   'memory.recall': def('read', MemoryArgs.extend({ query: z.string().min(1).max(2000), top_k: z.number().int().min(1).max(50).default(10), strategy: z.enum(STRATEGIES).optional() }), async (a, ctx) => {
-    const mem = ctx.deps.memory?.() ?? null
+    const mem = projectMemory(ctx, a.repo)
     if (!mem) return { repo: a.repo, enabled: false, records: [] }
     const records = (await mem.longTerm.recallProject(a.repo, a.query, { agent: a.agent, include: memoryInclude(ctx, a.repo), topK: a.top_k }))
       .filter((r) => !a.strategy || r.strategy === a.strategy)

@@ -11,6 +11,7 @@
  *                  jobs/<slug>/<id>/…       its GPU jobs' files (src/gpu/protocol.ts)
  *   Secrets        <prefix>/github-token/<slug>
  *   AgentCore      <prefix>_w_<hash>        its worker runtime ([a-zA-Z][a-zA-Z0-9_]{0,47})
+ *                  <prefix>_m_<hash>        its memory (the same pattern and length)
  *   Batch          <prefix>-gpu-<hash>      its GPU job definition
  *
  * A slug always contains exactly one `/`, so `projects/a/b/*` never matches `projects/a/bc/…` and nothing without a
@@ -51,6 +52,8 @@ const under = (prefix: string): string => prefix.replace(/-/g, '_')
 
 /** The project's worker runtime (AgentCore names: a letter, then letters, digits and underscores, at most 48). */
 export const workerRuntimeName = (prefix: string, repository: string): string => `${under(prefix)}_w_${projectHash(repository)}`
+/** The project's AgentCore memory (CfnMemory Name: `^[a-zA-Z][a-zA-Z0-9_]{0,47}$`, at most 32 characters here). */
+export const memoryName = (prefix: string, repository: string): string => `${under(prefix)}_m_${projectHash(repository)}`
 /** The IAM pattern every project's worker runtime ARN of this installation matches (runtime ids are `<name>-<suffix>`). */
 export const workerRuntimeNamePattern = (prefix: string): string => `${under(prefix)}_w_*`
 export const githubSecretName = (prefix: string, repository: string): string => `${prefix}/github-token/${projectSlug(repository)}`
