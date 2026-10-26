@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 
 import { allTools } from '../../../src/tools/index.js'
 import { iverilog, parseMessages, rootModules, vvp } from '../../../src/tools/sim/logic.js'
@@ -147,7 +147,8 @@ try {
 describe.skipIf(!HAS_KICAD || !kicadLib || !ngspice())('kicad-cli', () => {
   const dir = mkdtempSync(join(tmpdir(), 'trace-kicad-'))
   const sch = join(dir, 'divider.kicad_sch')
-  writeFileSync(sch, schematic())
+  // in beforeAll: a skipped describe still runs its body while collecting
+  beforeAll(() => writeFileSync(sch, schematic()))
 
   it('exports a schematic to SPICE', async () => {
     const e = await exportSpice({ schematic: sch })

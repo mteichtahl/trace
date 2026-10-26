@@ -1,9 +1,9 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import {
-  arcLength, clearMemo, describeLayer, designRules, layerOf, loadBoard, microstrip, Net, netNames, parseBoard, stackupKnown,
+  type Board, arcLength, clearMemo, describeLayer, designRules, layerOf, loadBoard, microstrip, Net, netNames, parseBoard, stackupKnown,
   stripline, striplineSymmetric, viaLength, z0,
 } from '../../../src/tools/kicad/pcb.js'
 import { DEMO_PCB, DEMO_PRO, hasReal, REAL } from './helpers.js'
@@ -175,7 +175,9 @@ describe('KiCad 6–9 numbered nets and a missing stackup', () => {
 })
 
 describe.skipIf(!hasReal)('a real KiCad 10 board', () => {
-  const b = loadBoard(`${REAL}.kicad_pcb`)
+  // loaded in beforeAll: a skipped describe still runs its body while collecting
+  let b: Board
+  beforeAll(() => { b = loadBoard(`${REAL}.kicad_pcb`) })
 
   it('reads the board', () => {
     expect(b.footprints.length).toBe(816)

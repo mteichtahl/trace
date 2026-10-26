@@ -17,7 +17,7 @@ pdf = ["pdfplumber>=0.11", "pypdf>=4"]
 visa = ["pyvisa>=1.14", "pyvisa-py>=0.7", "pyserial>=3.5"]
 can = ["python-can>=4.3"]
 all = ["tracebridge[pdf,visa,can]"]
-dev = ["pytest>=8", "tracebridge[all]"]
+dev = ["pytest>=8", "reportlab>=4", "tracebridge[all]"]
 
 [tool.setuptools.packages.find]
 where = ["."]
