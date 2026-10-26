@@ -14,6 +14,8 @@
  *                        ended), each with the notice, its line and waitsVersion(): how a screen follows waits as they
  *                        happen, through a held status answer, rather than asking again and again
  *   withJob(jobId, fn)   run fn so that every wait it opens is attributed to that job (notice.jobId)
+ *   mirrorWait(n, o)     put another process's wait on this record (a job's MCP server's, relayed to the runtime:
+ *                        src/agents/runtime/wait-relay.ts); checkNow on a mirrored timer wait calls its onWake
  *
  * Timer intervals back off while nothing changes (factor, up to maxIntervalMs) and drop back to the base interval
  * the moment the awaited thing's state changes, so a wait that is moving is checked often and one that is idle is
@@ -301,3 +303,52 @@ export async function waitWithTimer<T>(o: TimerWaitOptions<T>): Promise<WaitOutc
     if (open.delete(id)) changed('ended', notice)
   }
 }
+
+// ------------------------------------------------------------------ mirrored waits (another process's, relayed here)
+
+/** A wait another process has open, mirrored on this record (src/agents/runtime/wait-relay.ts). */
+export interface MirroredWait {
+  readonly id: string
+  /** Its latest notice from the other process: everything but the id and the jobId (this record's) is taken. */
+  update(notice: WaitNotice): void
+  end(): void
+}
+
+const mirrored = new Set<string>()
+
+/**
+ * Put a wait another process has open on this record, as that process reports it: it appears in activeWaits() and
+ * every change emits waitChanges, like a wait of this process. `notice.id` and `notice.jobId` are this record's (the
+ * caller picks them; an id already open throws). A timer wait can be woken with checkNow(id): onWake is called, and
+ * passes the wake on to the process that runs the timer. An event wait cannot be woken.
+ */
+export function mirrorWait(notice: WaitNotice, o: { onWake?: () => void } = {}): MirroredWait {
+  const n: WaitNotice = { ...notice }
+  const { id, jobId } = n
+  if (open.has(id)) throw new Error(`mirrorWait: a wait ${id} is already open`)
+  const wake = o.onWake
+  open.set(id, { notice: n, wake: n.source === 'timer' && wake ? () => wake() : null })
+  mirrored.add(id)
+  changed('opened', n)
+  return {
+    id,
+    update(next) {
+      const e = open.get(id)
+      if (!e || e.notice !== n) return
+      Object.assign(n, next, { id, jobId })
+      e.wake = n.source === 'timer' && wake ? () => wake() : null
+      changed('updated', n)
+    },
+    end() {
+      const e = open.get(id)
+      if (!e || e.notice !== n) return
+      open.delete(id)
+      changed('ended', n)
+      mirrored.delete(id)
+    },
+  }
+}
+
+/** True for a wait mirrored from another process (mirrorWait), also while its ended change is emitted: a relay never
+ * reports those back. */
+export function isMirrored(id: string): boolean { return mirrored.has(id) }

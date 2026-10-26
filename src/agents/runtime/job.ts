@@ -22,6 +22,13 @@
  * it continues one, are appended to the prompt as a fenced data block; the request, key tool outcomes and the result
  * are recorded as events, scrubbed and bounded. A memory failure is logged once and never fails the job.
  *
+ * WAITS. Every job's tools run in the MCP server its Claude session starts (`trace mcp`), so the waits they open
+ * (gpu.*, kb.sync, …) are on that child's record. While a specialist or worker job runs it is registered on the wait
+ * relay (wait-relay.ts; openWaitRelay), and its MCP server gets TRACE_WAITS_URL (this runtime, loopback: the same base
+ * as TRACE_DELEGATE_URL) and TRACE_WAITS_TOKEN (that job's, in the MCP server's environment only): the child reports
+ * its waits (src/core/wait-report.ts), the runtime mirrors them as that job's, and a check now reaches them. The
+ * token dies, and the mirrors end, when the job ends.
+ *
  * A sweep runs the worker-pick scan for each repository (same claims and attempt markers as the workflows) and starts
  * one work-item job per claimed item.
  *
@@ -54,6 +61,7 @@ import { type Classifier, type QueryFn, type RouteInput, routeJob, sdkClassifier
 import { readProjectNotes, readRules } from '../rules.js'
 import type { SpecialistJob } from '../specialist.js'
 import { type Delegations, defaultDelegations } from './delegation.js'
+import { type WaitRelay, defaultWaitRelay } from './wait-relay.js'
 import { BranchSchema, type DelegatedTaskJob, type JobPayload, type SweepJob, type TaskJob, type WorkItemJob, checkProject, isDelegated } from './schemas.js'
 
 // ------------------------------------------------------------------ injected pieces
@@ -115,6 +123,10 @@ export interface RunnerDeps {
   delegations?: Delegations | undefined
   /** Where agent.delegate reaches this runtime (http://127.0.0.1:<port>); absent: no delegation. */
   delegateUrl?: string | undefined
+  /** This process's wait relay (wait-relay.ts); absent: a job's tool waits stay in its MCP server process. */
+  waitRelay?: WaitRelay | undefined
+  /** Where a job's MCP server reports its waits (http://127.0.0.1:<port>; default delegateUrl); absent: no relay. */
+  waitsUrl?: string | undefined
   /** Hardware is allowed in this runtime (TRACE_HARDWARE): the specialists' hardware tools are offered. */
   hardware?: boolean | undefined
   /**
@@ -242,6 +254,8 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
   notes?: string | null
   /** Extra environment for Claude and the trace MCP server (the memory tools' scope). */
   extraEnv?: Record<string, string>
+  /** Extra environment for the trace MCP server only (the wait relay's token: openWaitRelay). */
+  mcpEnv?: Record<string, string>
   /** Sees every SDK message (memory records the key tool outcomes). */
   onMessage?: (m: unknown) => void
   /** The agent doing it (a specialist kind, or worker), for telemetry. */
@@ -263,7 +277,7 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
   // Spans for the query, each model response and each tool use (a no-op without an OpenTelemetry SDK); the MCP
   // server gets the trace context so its tool spans join this trace.
   const tel = await claudeTelemetry({ model, agent: o.agent })
-  const mcpEnv = { ...o.extraEnv, ...tel.env }
+  const mcpEnv = { ...o.extraEnv, ...o.mcpEnv, ...tel.env }
   const options: ClaudeOptions = {
     ...(model ? { model } : {}),
     cwd: o.cwd,
@@ -458,6 +472,19 @@ export function mcpWaitEnv(seconds: number): Record<string, string> {
   return { MCP_TOOL_TIMEOUT: ms, CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT: ms, CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: '0' }
 }
 
+/**
+ * Register the job on the wait relay: `env` is what its MCP server needs to report its waits (TRACE_WAITS_URL,
+ * TRACE_WAITS_TOKEN), empty without a relay. close() (when the job's Claude session is over) kills the token and ends
+ * the job's mirrored waits.
+ */
+export function openWaitRelay(d: Pick<RunnerDeps, 'waitRelay' | 'waitsUrl' | 'delegateUrl'>, jobId: string): { env: Record<string, string>; close(): void } {
+  const url = d.waitsUrl ?? d.delegateUrl
+  const relay = d.waitRelay
+  if (!relay || !url) return { env: {}, close: () => undefined }
+  const token = relay.register(jobId)
+  return { env: { TRACE_WAITS_URL: url, TRACE_WAITS_TOKEN: token }, close: () => relay.unregister(jobId) }
+}
+
 /** A work item or a person's task: routed to a specialist, which runs with its own prompt, tools and memory. */
 export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobContext): Promise<string> {
   const startedAt = d.now()
@@ -506,6 +533,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     const dtoken = delegate && delegations
       ? delegations.register({ jobId: ctx.jobId, kind: r.kind, repository: p.repository, dir, cfg, branch, defaultBranch: base.defaultBranch, session, notes, prompts: layers })
       : undefined
+    const waits = openWaitRelay(d, ctx.jobId)
     try {
       const prompt = composeSpecialist(s, { cfg, repository: p.repository, job: prep.job(branch, thread?.text), rules, route: r, hardware, delivery: 'delegate', prompts: layers })
       const system = systemAppend(notes, layers)
@@ -518,6 +546,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
       const out = await runClaude(d, {
         prompt: `${prompt.text}${mem.context}`, cwd: dir, cfg, token, signal: ctx.signal, log, redact, notes, system,
         extraEnv: { ...mem.env, ...specialistEnv({ tools, delegateUrl: d.delegateUrl, token: dtoken, timeoutMinutes: cfg.agents.delegate_timeout_minutes }) },
+        mcpEnv: waits.env,
         onMessage: (m) => mem.observe(m), agent: r.kind,
         model: settings.model || d.model || cfg.worker.model || undefined, maxTurns: settings.max_turns,
         tools: { builtins: [...SPECIALIST_BUILTINS], allowed: allowedToolsOf(s, { hardware, delegate }) },
@@ -529,6 +558,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
       if (!out.ok) throw new Error(summary)
       return `${r.kind}: done in ${out.turns} turns${escalation(summary) ? ' (escalated)' : ''}${prep.issue ? '' : `: ${summary.slice(0, 2000)}`}`
     } finally {
+      waits.close()
       if (dtoken) delegations?.unregister(ctx.jobId)
     }
   } catch (e) {
@@ -574,10 +604,11 @@ export async function runDelegated(d: RunnerDeps, p: DelegatedTaskJob, ctx: JobC
     logPrompts(used, log)
     ctx.prompts?.(record(used))
     log(`running the worker for the ${parent.kind} specialist (job ${parent.jobId}) on ${branch} (max ${parent.cfg.worker.max_turns} turns)`)
+    const waits = openWaitRelay(d, ctx.jobId)
     const out = await runClaude(d, {
       prompt: `${prompt.text}${mem.context}`, cwd: parent.dir, cfg: parent.cfg, token, signal: ctx.signal, log, redact, notes: parent.notes ?? null, system,
-      extraEnv: mem.env, onMessage: (m) => mem.observe(m), agent: WORKER,
-    })
+      extraEnv: mem.env, mcpEnv: waits.env, onMessage: (m) => mem.observe(m), agent: WORKER,
+    }).finally(() => waits.close())
     const summary = redact(out.text)
     await mem.finish(out.ok, summary)
     mem = NO_MEMORY
@@ -701,6 +732,8 @@ export function realRunner(env: Record<string, string | undefined> = process.env
     }),
     delegations: defaultDelegations(),
     delegateUrl: `http://127.0.0.1:${Number(env.PORT || 8080)}`,
+    waitRelay: defaultWaitRelay(),
+    waitsUrl: `http://127.0.0.1:${Number(env.PORT || 8080)}`,
     hardware: ['1', 'true', 'yes'].includes(env.TRACE_HARDWARE ?? ''),
     prompts: realPromptLayers(),
   })

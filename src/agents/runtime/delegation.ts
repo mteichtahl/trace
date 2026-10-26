@@ -110,6 +110,8 @@ export interface Delegations {
   unregister(jobId: string): void
   /** The specialist job a delegated task belongs to (for the runner), or null once it ended. */
   parent(jobId: string): ParentJob | null
+  /** The specialist job holding this token (server.ts attributes a /delegate/wait's wait to it), or throws (403). */
+  parentOfToken(token: string): ParentJob
   /**
    * Start a worker job for the token's specialist: one at a time. With `jobStatus`, the active one is looked up first,
    * so a delegation that failed or was cancelled no longer blocks the next.
@@ -141,6 +143,7 @@ export function createDelegations(): Delegations {
     },
     unregister(jobId) { byJob.delete(jobId) },
     parent(jobId) { return byJob.get(jobId)?.parent ?? null },
+    parentOfToken(token) { return byToken(token).parent },
     start(req, startJob, jobStatus) {
       const e = byToken(req.token)
       if (e.active && jobStatus) {

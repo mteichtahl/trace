@@ -28,18 +28,29 @@
  *                                                                    or timeoutS passes, at most 240 s; then as it stands)
  *   POST /delegate/status   { token, jobId }                       → { job }               (that specialist's own child)
  *   POST /delegate/cancel   { token, jobId, reason? }              → { jobId, delegation } (abort it: a timed-out wait)
+ * While /delegate/wait holds, the wait for the worker is on this process's record (status `waits`), attributed to the
+ * specialist's job (the token's), its state the worker's latest log line.
+ *
+ * The wait relay (wait-relay.ts), loopback callers only (any job's own MCP server, src/core/wait-report.ts): the waits
+ * a job's tools open in that child process are mirrored here, attributed to the job, so `status` lists them and
+ * `check-now` wakes them.
+ *   POST /waits/report      { token, change: { type, notice } }    → { ok }        (one change to one of its waits)
+ *   POST /waits/wakes       { token, timeoutS }                    → { waitIds }   (held until check-now is asked for
+ *                                                                    on one of its timer waits, or timeoutS passes, at
+ *                                                                    most 240 s; [] then)
  *
  * Single-project mode (TRACE_PROJECT=owner/repo, set on each project's worker runtime): an invocation for any other
  * repository answers 403 { error } and is logged. The runtime's role could not reach that project anyway.
  */
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http'
 import { ATTR, flush } from '../../core/telemetry.js'
-import { type EventWait, activeWaits, checkNow, describeWait, trackEventWait } from '../../core/wait.js'
+import { type EventWait, activeWaits, checkNow, describeWait, trackEventWait, withJob } from '../../core/wait.js'
 import { DelegateCancelRequest, DelegateRequest, DelegateStatusRequest, DelegateWaitRequest, DelegationError, type Delegations, MAX_WAIT_S, defaultDelegations } from './delegation.js'
 import { type Jobs, defaultJobs } from './jobs.js'
 import { invocationHeaders, observeInvocation } from './observe.js'
 import { InvocationSchema, WrongProject, checkProject } from './schemas.js'
 import { ToolRefused, type ToolRunner } from './tool.js'
+import { MAX_WAKES_S, RelayError, type WaitRelay, WaitReportRequest, WaitWakesRequest, defaultWaitRelay } from './wait-relay.js'
 
 const MAX_BODY = 1024 * 1024
 
@@ -69,6 +80,8 @@ export interface HandlerOptions {
   delegations?: Delegations
   /** Runs a forwarded tool call (invocation kind `tool`; default: the registry on this runtime's clone, tool.ts). */
   tool?: ToolRunner
+  /** The wait relay of this process (default: the process's own, wait-relay.ts). */
+  waitRelay?: WaitRelay
 }
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
@@ -117,13 +130,15 @@ async function delegate(req: IncomingMessage, res: ServerResponse, path: string,
       const r = DelegateWaitRequest.safeParse(raw)
       if (!r.success) return send(res, 400, { error: 'invalid wait request' })
       const client = gone(res)
-      // on this process's record too (status `waits`), its state the worker's latest log line, while the call holds
+      // on this process's record too (status `waits`), attributed to the specialist's job (the token's), its state the
+      // worker's latest log line, while the call holds
+      const parentJobId = delegations.parentOfToken(r.data.token).jobId
       let tracked: EventWait | null = null
       let stop = (): void => undefined
       const j = await delegations.wait(r.data.token, r.data.jobId, { timeoutMs: Math.min(r.data.timeoutS, MAX_WAIT_S) * 1000, signal: client.signal }, {
         jobStatus: status,
         waitForEnd: (id, w) => {
-          const w0 = trackEventWait({ what: `the worker job ${id}`, state: jobs.jobStatus(id)[0]?.log.at(-1)?.replace(/^\S+Z /, '').slice(0, 200) ?? null })
+          const w0 = withJob(parentJobId, () => trackEventWait({ what: `the worker job ${id}`, state: jobs.jobStatus(id)[0]?.log.at(-1)?.replace(/^\S+Z /, '').slice(0, 200) ?? null }))
           tracked = w0
           stop = jobs.events.on((ev) => { if (ev.type === 'log' && ev.jobId === id) w0.update(ev.line.replace(/^\S+Z /, '').slice(0, 200)) })
           return jobs.waitForEnd(id, w)
@@ -141,6 +156,33 @@ async function delegate(req: IncomingMessage, res: ServerResponse, path: string,
   }
 }
 
+async function relay(req: IncomingMessage, res: ServerResponse, path: string, waits: WaitRelay): Promise<void> {
+  if (!LOOPBACK.has(req.socket.remoteAddress ?? '')) return send(res, 403, { error: 'the wait relay is for this runtime\'s own jobs' })
+  let raw: unknown
+  try {
+    raw = JSON.parse(await readBody(req))
+  } catch {
+    return send(res, 400, { error: 'the body is not JSON' })
+  }
+  try {
+    if (path === '/waits/report') {
+      const r = WaitReportRequest.safeParse(raw)
+      if (!r.success) return send(res, 400, { error: 'invalid wait report', issues: r.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`) })
+      waits.report(r.data.token, r.data.change)
+      return send(res, 200, { ok: true })
+    }
+    const r = WaitWakesRequest.safeParse(raw)
+    if (!r.success) return send(res, 400, { error: 'invalid wakes request' })
+    const client = gone(res)
+    const waitIds = await waits.wakes(r.data.token, { timeoutMs: Math.min(r.data.timeoutS, MAX_WAKES_S) * 1000, signal: client.signal })
+    if (client.signal.aborted) return
+    return send(res, 200, { waitIds })
+  } catch (e) {
+    if (e instanceof RelayError) return send(res, e.status, { error: e.message })
+    throw e
+  }
+}
+
 export function handler(jobs: Jobs, o: HandlerOptions = {}): (req: IncomingMessage, res: ServerResponse) => void {
   const log = o.log ?? ((l: string) => { process.stdout.write(`${l}\n`) })
   let tool: ToolRunner | null = o.tool ?? null
@@ -152,6 +194,11 @@ export function handler(jobs: Jobs, o: HandlerOptions = {}): (req: IncomingMessa
     }
     if (req.method === 'POST' && (path === '/delegate' || path === '/delegate/status' || path === '/delegate/wait' || path === '/delegate/cancel')) {
       void delegate(req, res, path, jobs, o.delegations ?? defaultDelegations())
+        .catch((e: unknown) => { if (!res.headersSent) send(res, 500, { error: e instanceof Error ? e.message : String(e) }) })
+      return
+    }
+    if (req.method === 'POST' && (path === '/waits/report' || path === '/waits/wakes')) {
+      void relay(req, res, path, o.waitRelay ?? defaultWaitRelay())
         .catch((e: unknown) => { if (!res.headersSent) send(res, 500, { error: e instanceof Error ? e.message : String(e) }) })
       return
     }

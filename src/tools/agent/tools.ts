@@ -9,14 +9,15 @@
  * holds until the worker job ends (jobs.ts waitForEnd) and answers that instant, or answers "still running" after
  * timeoutS (at most 240 s a call, below undici's 300 s headers timeout); then it asks again with the time left. When
  * TRACE_DELEGATE_TIMEOUT_S (agents.delegate_timeout_minutes) has passed it cancels the worker (POST /delegate/cancel)
- * and returns, and the specialist may delegate again. While it waits, the wait is on the process's record
- * (src/core/wait.ts trackEventWait: "the worker job <id>", its latest log line as the state). Claude Code waits for it: the job runner sets
+ * and returns, and the specialist may delegate again. While it waits, the wait is on the runtime's record, not this
+ * process's: the runtime's /delegate/wait handler opens it ("the worker job <id>", its latest log line as the state),
+ * attributed to the specialist's job, so it is listed once (this process's other waits reach the runtime through the
+ * wait relay, src/core/wait-report.ts). Claude Code waits for it: the job runner sets
  * MCP_TOOL_TIMEOUT (ms, the wall-clock limit of one MCP call) and CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT (ms; a stdio
  * server that answers nothing for 30 minutes is otherwise cut off) above the wait (src/agents/runtime/job.ts).
  */
 import { z } from 'zod'
 import { ToolError, defineTool } from '../../core/registry.js'
-import { trackEventWait } from '../../core/wait.js'
 
 const BranchArg = z.string().min(1).max(200).regex(/^[A-Za-z0-9_][A-Za-z0-9._/-]*$/, 'not a valid branch name')
   .refine((s) => !s.includes('..') && !s.endsWith('/') && !s.endsWith('.lock') && !s.includes('//'), 'not a valid branch name')
@@ -62,12 +63,6 @@ async function post(e: DelegateEnv, path: string, body: unknown): Promise<unknow
   return json
 }
 
-/** A log line without its timestamp, as the wait's state. */
-const lastLine = (log: readonly string[]): string | null => {
-  const l = log.at(-1)
-  return l ? l.replace(/^\S+Z /, '').slice(0, 200) : null
-}
-
 export const delegate = defineTool({
   name: 'agent.delegate',
   description: 'Hand repository changes or long mechanical work to the trace worker (shell, git, the electronics tools; the same rules and guardrails), and wait for it. The worker works in your checkout on the branch you are on (or the one given), commits and pushes. Returns its state, its summary and commits. Then check every acceptance criterion yourself with your own tools before you report. Specialists only; one delegation at a time.',
@@ -83,34 +78,27 @@ export const delegate = defineTool({
     const started = Started.parse(await post(e, '/delegate', { token: e.token, brief: a.brief, acceptance: a.acceptance, ...(a.branch ? { branch: a.branch } : {}) }))
     if (!started.accepted) throw new ToolError(`agent.delegate: not started (${started.reason ?? 'refused'}); the running job is ${started.jobId}`)
     const end = Date.now() + e.timeoutS * 1000
-    const wait = trackEventWait({ what: `the worker job ${started.jobId}`, state: 'running' })
-    try {
-      for (;;) {
-        const left = Math.max(0, (end - Date.now()) / 1000)
-        // held by the runtime until the worker ends (answered that instant) or `left` passes: no timer here
-        const s = Status.parse(await post(e, '/delegate/wait', { token: e.token, jobId: started.jobId, timeoutS: Math.min(WAIT_S, left) })).job
-        const state = s.delegation ?? (s.state === 'aborted' ? 'cancelled' : s.state)
-        if (state !== 'running') {
-          return {
-            job_id: s.id, state, summary: s.summary ?? null, error: s.error ?? null,
-            next: state === 'succeeded'
-              ? 'Check every acceptance criterion now with your own tools, in this checkout; report each with its run id.'
-              : 'The worker did not finish: read the error, then delegate once more with what went wrong, or escalate.',
-          }
-        }
-        const line = lastLine(s.log)
-        if (line) wait.update(line)
-        if (Date.now() >= end) {
-          // a worker that outran the wait is stopped, so it cannot keep changing the checkout under the specialist
-          const c = Cancelled.parse(await post(e, '/delegate/cancel', { token: e.token, jobId: s.id, reason: `agent.delegate waited ${e.timeoutS} s` }))
-          return {
-            job_id: s.id, state: 'timeout', delegation: c.delegation, summary: null, error: `still running after ${e.timeoutS} s: the worker was stopped`, log: s.log.slice(-10),
-            next: 'The worker ran out of time and was stopped. Look at what it committed (git log), then delegate again with a smaller brief, or escalate with this job id.',
-          }
+    for (;;) {
+      const left = Math.max(0, (end - Date.now()) / 1000)
+      // held by the runtime until the worker ends (answered that instant) or `left` passes: no timer here
+      const s = Status.parse(await post(e, '/delegate/wait', { token: e.token, jobId: started.jobId, timeoutS: Math.min(WAIT_S, left) })).job
+      const state = s.delegation ?? (s.state === 'aborted' ? 'cancelled' : s.state)
+      if (state !== 'running') {
+        return {
+          job_id: s.id, state, summary: s.summary ?? null, error: s.error ?? null,
+          next: state === 'succeeded'
+            ? 'Check every acceptance criterion now with your own tools, in this checkout; report each with its run id.'
+            : 'The worker did not finish: read the error, then delegate once more with what went wrong, or escalate.',
         }
       }
-    } finally {
-      wait.end()
+      if (Date.now() >= end) {
+        // a worker that outran the wait is stopped, so it cannot keep changing the checkout under the specialist
+        const c = Cancelled.parse(await post(e, '/delegate/cancel', { token: e.token, jobId: s.id, reason: `agent.delegate waited ${e.timeoutS} s` }))
+        return {
+          job_id: s.id, state: 'timeout', delegation: c.delegation, summary: null, error: `still running after ${e.timeoutS} s: the worker was stopped`, log: s.log.slice(-10),
+          next: 'The worker ran out of time and was stopped. Look at what it committed (git log), then delegate again with a smaller brief, or escalate with this job id.',
+        }
+      }
     }
   },
 })

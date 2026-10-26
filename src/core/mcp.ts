@@ -11,6 +11,10 @@
  * need nothing on this machine are forwarded to AgentCore Gateway, signed with this runtime's credentials
  * (src/core/gateway.ts). A read the gateway can't take runs here instead; a write reports the error, so every write
  * to the shared library goes through the gateway while it is on.
+ *
+ * Under a job on the trace runtime (TRACE_WAITS_URL and TRACE_WAITS_TOKEN set, src/agents/runtime/job.ts), the waits
+ * this process's tools open (gpu.*, kb.sync, …) are relayed to the runtime as they change, attributed to that job, and
+ * a check now asked for there wakes the timer here (src/core/wait-report.ts). The relay stops when stdin ends.
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
@@ -19,6 +23,7 @@ import { load } from './config.js'
 import { type GatewayCaller, type GatewayOutcome, gatewayFromEnv, goesRemote, isLibraryTool, withProjectParts, writesLibrary } from './gateway.js'
 import { type AnyTool, Registry, ToolError } from './registry.js'
 import { continueFromEnv, flush, observeTool } from './telemetry.js'
+import { startWaitReporter } from './wait-report.js'
 
 export const VERSION = '0.1.0'
 export const mcpName = (name: string): string => name.replaceAll('.', '_')
@@ -122,6 +127,8 @@ export async function serve(registry: Registry): Promise<void> {
   // Under Claude on AgentCore the job passes its trace context (TRACEPARENT): the tool spans join the job's trace,
   // and what is buffered is pushed when Claude closes the pipe (src/core/telemetry.ts; no-op without an SDK).
   continueFromEnv()
-  process.stdin.once('end', () => { void flush() })
+  // this job's waits, relayed to the runtime that runs it (nothing without TRACE_WAITS_URL / TRACE_WAITS_TOKEN)
+  const relay = startWaitReporter()
+  process.stdin.once('end', () => { relay?.stop(); void flush() })
   await server(registry).connect(new StdioServerTransport())
 }

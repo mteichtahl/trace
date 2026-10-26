@@ -9,6 +9,7 @@ import {
 import { mcpName as specialistMcpName } from '../../src/agents/specialist.js'
 import { type RouteInput, classificationPrompt, labelKind, route, routeJob, sdkClassifier } from '../../src/agents/router.js'
 import { createDelegations, delegatedRequest } from '../../src/agents/runtime/delegation.js'
+import { createWaitRelay } from '../../src/agents/runtime/wait-relay.js'
 import { type ClaudeOptions, type RunnerDeps, TOOLS, createRunner } from '../../src/agents/runtime/job.js'
 import { type JobRunner, createJobs } from '../../src/agents/runtime/jobs.js'
 import { DelegatedTaskPayload, InvocationSchema, type JobPayload, TaskPayload } from '../../src/agents/runtime/schemas.js'
@@ -472,7 +473,7 @@ describe('delegation', () => {
         claude: (a) => { calls.push(a); return (async function* () { for (const m of messages) yield m })() },
         settingsOf: (dir) => { writeRules(dir); return cfgOf({ agents: { emc: { instructions: 'Target class B.', max_turns: 33, model: 'claude-emc' } } }) },
         remoteSettings: async () => cfgOf(), workspace: ws, persistent: false, cli: '/app/dist/cli.js', timeoutS: 60, env: { PATH: '/usr/bin' }, now: Date.now,
-        delegations, delegateUrl: 'http://127.0.0.1:8080',
+        delegations, delegateUrl: 'http://127.0.0.1:8080', waitRelay: createWaitRelay(),
       }
       return { d, calls, cmds, f, delegations, ws }
     }
@@ -485,9 +486,13 @@ describe('delegation', () => {
     it('runs the routed specialist with its prompt, rules, instructions, tools, model, memory actor and a delegation token', async () => {
       const h = setup()
       let tokenSeen: string | undefined
+      let waitsTokenSeen: string | undefined
       h.d.claude = (a) => {
         h.calls.push(a)
         tokenSeen = a.options.mcpServers.trace!.env?.TRACE_DELEGATE_TOKEN
+        waitsTokenSeen = a.options.mcpServers.trace!.env?.TRACE_WAITS_TOKEN
+        // while it runs, its wait relay token is live
+        expect(() => h.d.waitRelay!.report(waitsTokenSeen!, { type: 'ended', notice: { id: 'wait-x', what: 'x', source: 'event', startedAt: '', state: null, lastCheckedAt: null, nextCheckAt: null, intervalMs: null, checks: 0, why: null } })).not.toThrow()
         // while the specialist runs, its job is registered as a parent
         expect(h.delegations.parent('job-s')).toMatchObject({ kind: 'emc', branch: expect.stringMatching(/^claude\/task-/) as unknown, dir: expect.stringContaining(join(h.ws, 'o__r')) as unknown })
         return (async function* () { yield { type: 'result', subtype: 'success', is_error: false, result: 'Precheck clean.', num_turns: 4 } })()
@@ -506,6 +511,13 @@ describe('delegation', () => {
       expect(env.TRACE_MCP_TOOLS!.split(',')).toEqual(toolsOf(SPECIALISTS.emc))
       expect(env.TRACE_DELEGATE_URL).toBe('http://127.0.0.1:8080')
       expect(tokenSeen).toMatch(/^[0-9a-f]{64}$/)
+      // its MCP server reports its waits to this runtime, with a token of its own (the MCP server's env only)
+      expect(env.TRACE_WAITS_URL).toBe('http://127.0.0.1:8080')
+      expect(waitsTokenSeen).toMatch(/^[0-9a-f]{64}$/)
+      expect(waitsTokenSeen).not.toBe(tokenSeen)
+      expect(options.env.TRACE_WAITS_TOKEN).toBeUndefined()
+      // dead once the job ended
+      expect(() => h.d.waitRelay!.report(waitsTokenSeen!, { type: 'ended', notice: { id: 'wait-x', what: 'x', source: 'event', startedAt: '', state: null, lastCheckedAt: null, nextCheckAt: null, intervalMs: null, checks: 0, why: null } })).toThrow(/not a running job/)
       expect(Number(env.MCP_TOOL_TIMEOUT)).toBeGreaterThan(240 * 60 * 1000)
       // Claude Code's own limits on that call: milliseconds, above the wait (the stdio idle limit is 30 min otherwise)
       expect(options.env.MCP_TOOL_TIMEOUT).toBe(env.MCP_TOOL_TIMEOUT)
@@ -558,6 +570,9 @@ describe('delegation', () => {
       expect(options.env.TRACE_DELEGATE_TOKEN).toBeUndefined()
       expect(options.mcpServers.trace!.env?.TRACE_DELEGATE_TOKEN).toBeUndefined()
       expect(options.mcpServers.trace!.env?.TRACE_DELEGATE_URL).toBeUndefined()
+      // but its tools' waits are relayed like any job's
+      expect(options.mcpServers.trace!.env?.TRACE_WAITS_URL).toBe('http://127.0.0.1:8080')
+      expect(options.mcpServers.trace!.env?.TRACE_WAITS_TOKEN).toMatch(/^[0-9a-f]{64}$/)
       // the specialist's checkout: no clone, and nothing removed
       expect(h.cmds.some((c) => c.startsWith('clone'))).toBe(false)
       expect(h.f.called('issues.createComment')).toHaveLength(0)

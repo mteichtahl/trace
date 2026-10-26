@@ -1,6 +1,7 @@
 /**
  * agent.delegate against a fake runtime: it waits on /delegate/wait (held until the worker ends), never on a timer,
- * asks for at most 240 s a call, keeps its overall timeout and cancel, and puts its wait on the record meanwhile.
+ * asks for at most 240 s a call, and keeps its overall timeout and cancel. It opens no wait of its own: the runtime's
+ * /delegate/wait handler does (attributed to the specialist's job), so the wait is listed once.
  */
 import { type IncomingMessage, type Server, createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -73,8 +74,8 @@ describe('agent.delegate', () => {
     expect(r).toMatchObject({ job_id: 'job-w', state: 'succeeded', summary: 'done' })
     expect(f.calls.map((c) => c.path)).toEqual(['/delegate', '/delegate/wait'])
     expect(f.calls[1]!.body).toEqual({ token: 't'.repeat(64), jobId: 'job-w', timeoutS: 240 })
-    // the wait was on the record while it lasted (event-driven), and is gone now
-    expect(f.seenWaits).toContain('event:the worker job job-w')
+    // no wait of its own in this process (the runtime's handler holds it): it would be listed twice through the relay
+    expect(f.seenWaits).not.toContain('event:the worker job job-w')
     expect(activeWaits().some((w) => w.what === 'the worker job job-w')).toBe(false)
   })
 
