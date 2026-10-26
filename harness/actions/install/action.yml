@@ -1,0 +1,48 @@
+name: trace install
+description: >-
+  Installs the trace toolkit (the `trace` CLI, its MCP server and the Python bridge) from this action's own copy of the
+  repository, so a workflow in another repository gets it without a token for the trace repository, and returns an MCP
+  config that gives Claude Code the electronics tools.
+inputs:
+  hardware:
+    description: "'true' lets the tools drive instruments, buses and targets (only on a runner wired to hardware)."
+    required: false
+    default: 'false'
+  bridge:
+    description: Python bridge extras to install (pdf, visa, can, all, or none).
+    required: false
+    default: pdf
+outputs:
+  mcp-config:
+    description: The MCP config, as JSON text, for Claude Code's --mcp-config.
+    value: ${{ steps.install.outputs.mcp }}
+runs:
+  using: composite
+  steps:
+    # node:sqlite needs Node 22.13 or later; the runner's default Node is older.
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: "22"
+    - id: install
+      shell: bash
+      env:
+        AP: ${{ github.action_path }}
+        HARDWARE: ${{ inputs.hardware }}
+        BRIDGE: ${{ inputs.bridge }}
+      run: |
+        set -euo pipefail
+        root="$(cd "$AP/../../.." && pwd)"
+        (cd "$root" && npm ci --no-audit --no-fund --loglevel=error && npm run build --silent)
+        mkdir -p "$RUNNER_TEMP/trace-bin"
+        printf '#!/usr/bin/env bash\nexec node "%s/dist/bin.js" "$@"\n' "$root" > "$RUNNER_TEMP/trace-bin/trace"
+        chmod +x "$RUNNER_TEMP/trace-bin/trace"
+        echo "$RUNNER_TEMP/trace-bin" >> "$GITHUB_PATH"
+        if [ "$BRIDGE" != "none" ]; then
+          python3 -m venv "$RUNNER_TEMP/trace-py"
+          "$RUNNER_TEMP/trace-py/bin/pip" install -q "$root/python[$BRIDGE]"
+          echo "TRACE_PYTHON=$RUNNER_TEMP/trace-py/bin/python" >> "$GITHUB_ENV"
+        fi
+        git config --global merge.trace-db.driver "trace db merge %O %A %B"
+        hw=$([ "$HARDWARE" = "true" ] && echo '"1"' || echo '"0"')
+        echo "mcp={\"mcpServers\":{\"trace\":{\"command\":\"$RUNNER_TEMP/trace-bin/trace\",\"args\":[\"mcp\"],\"env\":{\"TRACE_HARDWARE\":$hw}}}}" >> "$GITHUB_OUTPUT"
+        "$RUNNER_TEMP/trace-bin/trace" tools | tail -n 1

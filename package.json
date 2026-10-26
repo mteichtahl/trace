@@ -1,0 +1,70 @@
+{
+  "name": "@mteichtahl/trace",
+  "version": "0.1.0",
+  "description": "trace: an autonomous repository harness and an electronics toolkit (KiCad, simulation, datasheets, parts, hardware-in-the-loop, firmware) for Claude Code",
+  "type": "module",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "trace": "dist/bin.js"
+  },
+  "files": [
+    "dist",
+    "src",
+    "harness",
+    "templates",
+    "python",
+    "scripts",
+    "agent",
+    "tsconfig.json"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/bundle-harness.mjs && node scripts/bundle-ui.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.ui.json && tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.310",
+    "@aws-sdk/client-bedrock": "^3.1156.0",
+    "@aws-sdk/client-bedrock-agentcore": "^3.1156.0",
+    "@aws-sdk/client-bedrock-agentcore-control": "^3.1156.0",
+    "@aws-sdk/client-cloudformation": "^3.1156.0",
+    "@aws-sdk/client-codebuild": "^3.1156.0",
+    "@aws-sdk/client-cognito-identity-provider": "^3.1156.0",
+    "@aws-sdk/client-iam": "^3.1156.0",
+    "@aws-sdk/client-s3": "^3.1156.0",
+    "@aws-sdk/client-secrets-manager": "^3.1156.0",
+    "@aws-sdk/client-sts": "^3.1156.0",
+    "@aws-sdk/credential-providers": "^3.1156.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@octokit/rest": "^22.0.1",
+    "@serialport/bindings-cpp": "^13.0.0",
+    "@serialport/bindings-interface": "^1.2.2",
+    "@serialport/stream": "^13.0.0",
+    "@smithy/shared-ini-file-loader": "^4.7.2",
+    "@smithy/types": "^4.19.0",
+    "aws-cdk": "^2.1146.1",
+    "aws-cdk-lib": "^2.274.0",
+    "constructs": "^10.8.1",
+    "esbuild": "^0.28.2",
+    "libsodium-wrappers": "^0.8.4",
+    "pdfjs-dist": "^5.7.284",
+    "serialport": "^13.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.1",
+    "@serialport/binding-mock": "^10.2.2",
+    "@types/aws-lambda": "^8.10.164",
+    "@types/libsodium-wrappers": "^0.8.2",
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
+  }
+}

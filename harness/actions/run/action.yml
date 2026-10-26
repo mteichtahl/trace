@@ -1,0 +1,95 @@
+name: trace
+description: >-
+  Runs one trace task (open-pr, automerge, update-queue, ci-doctor, worker-pick, worker-prompt, deploy-*) with the repository's .trace/config.yml.
+inputs:
+  task:
+    description: The task to run.
+    required: true
+  token:
+    description: TRACE_TOKEN, a fine-grained token whose pushes, merges and PRs start workflows. May be empty (the task then degrades and says so).
+    required: false
+    default: ''
+  job-token:
+    description: The job's GITHUB_TOKEN (used to read the settings, the Checks API, and as the fallback).
+    required: false
+    default: ${{ github.token }}
+  item:
+    description: worker-prompt only — one item from worker-pick, as JSON.
+    required: false
+    default: ''
+  sha:
+    description: deploy-* only — the commit being deployed.
+    required: false
+    default: ''
+  issue:
+    description: deploy-* only — the deploy request issue number.
+    required: false
+    default: ''
+  by:
+    description: deploy-* only — who approved.
+    required: false
+    default: ''
+  status:
+    description: deploy-* only — the deploy job status.
+    required: false
+    default: ''
+  guard:
+    description: deploy-* only — the guard step's outcome.
+    required: false
+    default: ''
+  held:
+    description: deploy-* only — 'true' when the risk check held the deploy.
+    required: false
+    default: ''
+  rollback-to:
+    description: deploy-* only — the commit being rolled back to.
+    required: false
+    default: ''
+  reasons:
+    description: deploy-* only — the risk check's reasons.
+    required: false
+    default: ''
+  triggering-actor:
+    description: deploy-* only — github.triggering_actor.
+    required: false
+    default: ''
+outputs:
+  go: { description: deploy-request/approve — 'true' to deploy, value: '${{ steps.run.outputs.go }}' }
+  sha: { description: deploy-request/approve — the commit to deploy, value: '${{ steps.run.outputs.sha }}' }
+  issue: { description: deploy-request/approve — the request issue, value: '${{ steps.run.outputs.issue }}' }
+  by: { description: deploy-approve — who approved, value: '${{ steps.run.outputs.by }}' }
+  before: { description: deploy-guard — what was deployed before (the rollback target), value: '${{ steps.run.outputs.before }}' }
+  items: { description: worker-pick — the claimed items as a JSON list, value: '${{ steps.run.outputs.items }}' }
+  prompt: { description: worker-prompt — the prompt, value: '${{ steps.run.outputs.prompt }}' }
+  args: { description: worker-prompt — claude_args, value: '${{ steps.run.outputs.args }}' }
+  setup: { description: worker-prompt/deploy-commands — the setup command, value: '${{ steps.run.outputs.setup }}' }
+  risk_check: { description: deploy-commands, value: '${{ steps.run.outputs.risk_check }}' }
+  command: { description: deploy-commands, value: '${{ steps.run.outputs.command }}' }
+  smoke: { description: deploy-commands, value: '${{ steps.run.outputs.smoke }}' }
+  rollback: { description: deploy-commands, value: '${{ steps.run.outputs.rollback }}' }
+  enabled: { description: deploy-commands, value: '${{ steps.run.outputs.enabled }}' }
+runs:
+  using: composite
+  steps:
+    - id: run
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        AP: ${{ github.action_path }}
+        TRACE_TASK: ${{ inputs.task }}
+        OWN_TOKEN: ${{ inputs.token }}
+        JOB_TOKEN: ${{ inputs.job-token }}
+        ITEM: ${{ inputs.item }}
+        SHA: ${{ inputs.sha }}
+        ISSUE: ${{ inputs.issue }}
+        BY: ${{ inputs.by }}
+        STATUS: ${{ inputs.status }}
+        GUARD: ${{ inputs.guard }}
+        HELD: ${{ inputs.held }}
+        ROLLBACK: ${{ inputs.rollback-to }}
+        REASONS: ${{ inputs.reasons }}
+        TRIGGERING_ACTOR: ${{ inputs.triggering-actor }}
+      with:
+        github-token: ${{ inputs.token || inputs.job-token }}
+        script: |
+          const { run } = require(`${process.env.AP}/../../dist/index.cjs`)
+          await run({ github, context, core, getOctokit })
