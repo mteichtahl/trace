@@ -8,6 +8,9 @@
  *                                                                           TRACE_HOME and the project (--repo, else
  *                                                                           TRACE_PROJECT, GITHUB_REPOSITORY or origin)
  *
+ *   `trace kb sync` waits for the ingestion job on a timer (Bedrock sends no event when one finishes) and says so on
+ *   stderr each time its state changes: what it is waiting for, when it last checked and when it checks next.
+ *
  *   trace remote kb search OWNER/REPO "query" [--top N] [--source S] [--kind K] [--path P]   through the API
  *   trace remote kb sync OWNER/REPO [--force] [--wait MINUTES]                                 (signed in)
  */
@@ -88,7 +91,7 @@ export async function cmdKb(argv: string[], env: Record<string, string | undefin
     if (sub === 'sync') {
       const wait = values.wait === undefined ? 15 : Number(values.wait)
       if (!Number.isFinite(wait) || wait < 0) { err('trace kb sync: --wait takes minutes'); return 2 }
-      const r = await syncHere({ env: e, force: values.force === true, dryRun: values['dry-run'] === true, allowBranch: values['allow-branch'] === true, waitMinutes: wait })
+      const r = await syncHere({ env: e, force: values.force === true, dryRun: values['dry-run'] === true, allowBranch: values['allow-branch'] === true, waitMinutes: wait, progress: err })
       if (values.json) out(JSON.stringify(r, null, 2))
       else printSync(r)
       return r.ingestion && ['FAILED', 'STOPPED'].includes(r.ingestion.status) ? 1 : 0

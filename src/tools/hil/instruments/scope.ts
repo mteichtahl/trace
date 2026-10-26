@@ -421,7 +421,12 @@ export const SCOPE_DIALECTS: readonly ScopeDialect[] = [
   { id: 'generic', idn: /$^/, ...keysightBase },
 ]
 
-/** Arm a single acquisition and wait (polling) until it completes or `timeoutMs` passes. */
+/**
+ * Arm a single acquisition and wait until it completes or `timeoutMs` passes. A timer, on purpose: an oscilloscope
+ * answers SCPI queries and does not tell anyone when an acquisition ends, so the only way to know is to ask it (the
+ * dialect's `done`), every 100 ms over the local connection, after a first 50 ms. The wait is short and local, so it
+ * is not put on the record (core/wait.ts waitWithTimer); it never outlasts `timeoutMs`, and false says it ran out.
+ */
 export async function single(t: Transport, d: ScopeDialect, timeoutMs: number): Promise<boolean> {
   for (const c of d.single()) await t.write(c)
   const end = Date.now() + timeoutMs

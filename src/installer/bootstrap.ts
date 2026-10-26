@@ -20,7 +20,9 @@
  *   8 local      save the installation on this machine so `trace login` and `trace remote …` work
  *   9 gpu        wait for the GPU image build the deploy started (the stack does not wait for it, so a broken GPU
  *                image never rolls back the core) and start it again if an earlier one failed; a failure here is
- *                reported, and everything else stays installed
+ *                reported, and everything else stays installed. The wait is a timer (every 30 s: AWS cannot send
+ *                this computer the build's events), and each check is streamed to the page as a `wait` event: what
+ *                is awaited, when it was checked, when it is next, and the id the page's Check now button sends
  *
  * Secrets never leave memory except to their destination (Secrets Manager, GitHub's sealed-box API).
  */
@@ -35,6 +37,7 @@ import { GetSecretValueCommand, PutSecretValueCommand, SecretsManagerClient } fr
 import type { AwsCredentialIdentity } from '@smithy/types'
 import { type Principal, GROUPS, assign, assignments, setClass, unassign } from '../core/access.js'
 import { saveAnswers, saveInstallation } from '../core/client.js'
+import { type WaitNotice, describeWait } from '../core/wait.js'
 import { onboard, register } from '../core/onboard.js'
 import {
   GPU_IMAGE_BUILD_OUTPUT, type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, LIBRARY_KEYS_OUTPUT, cpuEnabled, githubSecretName,
@@ -334,7 +337,7 @@ export interface Hooks {
   /** which projects the stack has, and which names are taken in the account (chooseGenerations) */
   names?: { deployed: () => Promise<Set<string>>; taken: (n: ProjectNames) => Promise<string[]> }
   /** wait for the GPU image build (src/installer/aws.ts ensureGpuImage) */
-  gpuImage?: (o: { buildId: string; imageTag: string; startedAfter: Date; log: (l: string) => void }) => Promise<{ ok: boolean; detail: string }>
+  gpuImage?: (o: { buildId: string; imageTag: string; startedAfter: Date; log: (l: string) => void; report: (n: WaitNotice) => void }) => Promise<{ ok: boolean; detail: string }>
   /** the library keys stored now (readSecretJson) */
   readSecret?: (sm: SecretsManagerClient, arn: string) => Promise<Record<string, string>>
 }
@@ -618,7 +621,10 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
       set('gpu', 'running')
       const imageTag = (out.GpuImageUri ?? '').split(':').at(-1) ?? ''
       const wait = hooks.gpuImage ?? ((o) => ensureGpuImage(codebuildClient(creds, a.aws.region), o))
-      const r = await wait({ buildId: out[GPU_IMAGE_BUILD_OUTPUT] ?? '', imageTag, startedAfter: started, log: (l) => log('gpu', l) })
+      // a timer (AWS cannot send this computer the build's events): after every check the page gets the wait, with
+      // when it checks next and its id for Check now (POST /api/check-now)
+      const report = (n: WaitNotice): void => emit({ type: 'wait', step: 'gpu', wait: n, line: redact(describeWait(n), s) })
+      const r = await wait({ buildId: out[GPU_IMAGE_BUILD_OUTPUT] ?? '', imageTag, startedAfter: started, log: (l) => log('gpu', l), report })
       if (r.ok) set('gpu', 'done', r.detail)
       else {
         set('gpu', 'failed', r.detail)

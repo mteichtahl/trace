@@ -6,6 +6,12 @@
 #
 # Behaviour is set in .trace/config.yml (read from __TR_BRANCH__, never from a PR). Kill switch: repository
 # variable TRACE_PRS = 'false'. Needs the TRACE_TOKEN secret for its actions to start builds.
+#
+# How work is found: events. A push to a branch opens its PR; a PR opened, reopened, made ready, retargeted or
+# (un)labelled gets auto-merge; a push to __TR_BRANCH__ (a merge, which leaves other PRs behind) moves the update
+# queue on. The schedule (minutes 17 and 47 of every hour, UTC) is only a safety net and runs update-queue alone: it
+# catches a queue left standing when GitHub failed to deliver the push, and a queue whose head PR's build failed (no
+# merge, so no push to __TR_BRANCH__: the next run skips the failed PR and brings the next one up to date).
 name: trace-prs
 
 on:
@@ -15,7 +21,7 @@ on:
     types: [opened, reopened, ready_for_review, edited, labeled, unlabeled]
     branches: [__TR_BRANCH__]
   schedule:
-    - cron: '17,47 * * * *'
+    - cron: '17,47 * * * *'    # safety net only: twice an hour, update-queue alone (see the header)
   workflow_dispatch:
 
 permissions: {}
