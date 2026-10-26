@@ -3,6 +3,9 @@
  * updates what the first made.
  *
  *   1 check      the credentials still resolve to the confirmed account
+ *     sample     (only when asked) the sample project's repository: created if it does not exist, and its design files
+ *                committed onto its default branch (src/installer/sample.ts). It is then a project like any other:
+ *                deployed, configured, onboarded and given people below
  *   2 cdk        bootstrap CDK in the account/region if it isn't
  *   3 deploy     `cdk deploy` the trace stack (the agent image builds in CodeBuild: the first deploy takes a while), in
  *                the layout the installation has (a new one: nested; an earlier one: flat), or, when asked to move a
@@ -24,7 +27,9 @@
  *   7 repos      each repository's Actions variables (its own role, runtime, memory and CodeBuild runner project, from
  *                its project's outputs, which are its nested stack's in the nested layout; region, TRACE_HOME) and its
  *                TRACE_TOKEN secret
- *   8 onboard    the onboarding PR in each repository that asked for it, and its repository settings
+ *   8 onboard    the onboarding PR in each repository that asked for it, and its repository settings; the sample
+ *                instead gets the trace files committed straight onto its default branch (the installer made it, and
+ *                its tour must run without anyone merging first)
  *   9 people     invite each person to Cognito, put them in their class's group (admin, user, guest), and record
  *                the projects they are assigned to
  *  10 local      save the installation on this machine so `trace login` and `trace remote …` work
@@ -33,6 +38,8 @@
  *                reported, and everything else stays installed. The wait is a timer (every 30 s: AWS cannot send
  *                this computer the build's events), and each check is streamed to the page as a `wait` event: what
  *                is awaited, when it was checked, when it is next, and the id the page's Check now button sends
+ *  12 tour       (only with the sample and its tour) open the sample's tour: one issue per agent and per simulation,
+ *                each labelled for the agent that takes it, so every agent and every simulation runs once
  *
  * Secrets never leave memory except to their destination (Secrets Manager, GitHub's sealed-box API).
  */
@@ -61,7 +68,8 @@ import {
   connectionsConsoleUrl, connectorAccessNote, credentials, deployedProjects, ensureGpuImage, freeSecretNames, nameClients, nameIndex, resolveConnection,
   stackOutputs, waitForConnection,
 } from './aws.js'
-import { type TokenInfo, checkToken, setSecret, setVariable } from './github.js'
+import { type TokenInfo, checkToken, ensureRepo, setSecret, setVariable } from './github.js'
+import { type SampleOnboard, type TourResult, SAMPLE_DESCRIPTION, pushSample, onboardSample, sampleRepo, startTour, tourPlan, withSample } from './sample.js'
 
 /** What the installer knows of the stack already in the account (checkAws), when there is one. */
 export interface Existing { outputs: Record<string, string> }
@@ -313,24 +321,31 @@ function connectionUse(a: Answers): string {
 }
 
 /** What will happen, before anything does. `existing`: the stack already in the account, when the check found one. */
-export function plan(a: Answers, existing?: Existing | null): Step[] {
+export function plan(answers: Answers, existing?: Existing | null): Step[] {
+  const a = withSample(answers)
+  const sample = answers.sample.enabled ? sampleRepo(answers) : null
   const props = InfraPropsSchema.parse(infraInput(a, existing))
   const stack = stackName(props.prefix)
-  const onboarding = a.projects.filter((p) => p.onboard).map((p) => p.repo)
+  const onboarding = a.projects.filter((p) => p.onboard && p.repo.toLowerCase() !== sample?.toLowerCase()).map((p) => p.repo)
   const steps: [string, string, string][] = [
     ['check', 'Check the AWS account', `${a.aws.account} in ${a.aws.region}`],
+    ...(sample ? [['sample', 'Create the sample project', `${sample} (${answers.sample.private ? 'private' : 'public'}; created if it does not exist, an existing one is used as it is): ${SAMPLE_DESCRIPTION} Its files are committed onto its default branch; nothing in it is deleted`] as [string, string, string]] : []),
     ['cdk', 'Bootstrap CDK', `aws://${a.aws.account}/${a.aws.region} (only if it isn't already)`],
     ['deploy', `Deploy ${stack}`, `central bucket, agent image (CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and job definitions' : ''}, and its own AWS CodeBuild runner project that runs every one of its GitHub Actions jobs (${props.runners.computeType}${props.runners.privileged ? ', Docker-in-Docker' : ''}; no job runs on GitHub's own runners) once the GitHub connection is authorized, ${connectionUse(a)}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64 without holding up the deploy; one queue for every project)${cpuPlan(props)}` : ''}${props.gateway.enabled ? ', the library gateway (AgentCore Gateway and a Lambda for the shared datasheets and parts tools)' : ''}${kbPlan(props)}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}${generationsPlan(a)}${layoutPlan(a, existing)}. A project added again after being removed gets new names if its old memory, log delivery or token secret still holds them: the old memory is kept and orphaned, and the new one starts empty`],
     ['connection', 'Authorize the GitHub connection', connectionPlan(a)],
     ['runners', 'Add the build runners', `only if the connection was not authorized before the deploy: deploy ${stack} again once it is. That only adds each repository's CodeBuild runner project and its GitHub webhook; nothing else changes`],
     ['token', 'Store the GitHub tokens', `the shared token in the API's secret, and each project's agent token in its own secret${props.gateway.enabled ? '; any distributor keys given in the library gateway\'s secret' : ''}`],
     ['repos', 'Configure the repositories', `each repository's own TRACE_AWS_ROLE, TRACE_AGENT_RUNTIME_ARN, ${RUNNER_VARIABLE} (the CodeBuild runner project its workflows run on)${props.memory.enabled ? ', TRACE_MEMORY_ID' : ''}${props.knowledgeBase.enabled && props.layout === 'nested' ? ', TRACE_KB_ID and TRACE_KB_DATA_SOURCE_ID' : ''}, TRACE_AWS_REGION, TRACE_HOME and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}`],
-    ['onboard', 'Onboard the repositories', onboarding.length ? `open the onboarding PR in ${onboarding.join(', ')}` : 'none chosen'],
+    ['onboard', 'Onboard the repositories', [
+      ...(onboarding.length ? [`open the onboarding PR in ${onboarding.join(', ')}`] : []),
+      ...(sample ? [`put ${sample} under trace straight away (the trace files committed onto its default branch, and its repository settings)`] : []),
+    ].join('; ') || 'none chosen'],
     ['people', 'Invite people and assign projects', `${a.adminEmail} (admin)${a.people.length ? `, ${a.people.map((p) => `${p.email} (${p.class})`).join(', ')}` : ''}`],
     ['local', 'Save this installation locally', '~/.trace/client.db, so `trace login` works here'],
     ['gpu', 'Check the GPU image', props.gpu.enabled
       ? 'wait for the GPU image build the deploy started (CodeBuild, amd64; the first takes 30–60 minutes) and start it again if an earlier one failed: GPU and CPU jobs need it, nothing else does'
       : 'GPU jobs are off'],
+    ...(sample && answers.sample.tour ? [['tour', 'Start the sample\'s tour', tourPlan(sample, props.gpu.enabled)] as [string, string, string]] : []),
   ]
   return steps.map(([id, title, detail]) => ({ id, title, detail, status: 'pending' as const }))
 }
@@ -379,6 +394,13 @@ export interface Hooks {
     resolve: (o: { prefix: string; given?: string; deployed: Record<string, string> | null }) => Promise<ConnectionChoice>
     wait: (conn: { arn: string; name: string; status: string }, o: ConnectionWait) => Promise<void>
   }
+  /** the sample project's GitHub side (src/installer/sample.ts) */
+  sample?: {
+    ensure: (token: string, repo: string, o: { private: boolean; description: string }) => Promise<{ created: boolean; defaultBranch: string; url: string }>
+    push: (token: string, repo: string, branch: string) => Promise<string | null>
+    onboard: (token: string, repo: string, branch: string, o: { escalateTo: string; applySettings: boolean }) => Promise<SampleOnboard>
+    tour: (token: string, repo: string, o: { gpu: boolean }) => Promise<TourResult>
+  }
   /** the library keys stored now (readSecretJson) */
   readSecret?: (sm: SecretsManagerClient, arn: string) => Promise<Record<string, string>>
 }
@@ -402,9 +424,18 @@ export function mergeLibraryKeys(stored: Record<string, string>, given: Record<s
   return { ...kept, ...given }
 }
 
-export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {}): Promise<boolean> {
+export async function apply(answers: Answers, s: Secrets, emit: Emit, hooks: Hooks = {}): Promise<boolean> {
   const started = new Date()
-  const steps = plan(a)
+  const steps = plan(answers)
+  // the sample, when asked for, is one more project from here on (its branch is set once its repository is seen)
+  let a = withSample(answers)
+  const sample = answers.sample.enabled ? sampleRepo(answers) : null
+  const sampleGit = hooks.sample ?? {
+    ensure: (token, repo, o) => ensureRepo(token, repo, o),
+    push: (token, repo, branch) => pushSample(token, repo, branch),
+    onboard: (token, repo, branch, o) => onboardSample(token, repo, branch, o),
+    tour: (token, repo, o) => startTour(token, repo, o),
+  }
   const byId = new Map(steps.map((st) => [st.id, st]))
   const set = (id: string, status: Step['status'], detail?: string): void => {
     const st = byId.get(id)
@@ -429,6 +460,19 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
     const own = await checkProjectTokens(a, s)
     for (const w of own.warnings) { log('check', w); summary.push(w) }
     set('check', 'done', `${check.arn}`)
+
+    // the sample's repository and its design files, before the deploy: the stack makes its runtime and roles for it
+    if (sample) {
+      current = 'sample'
+      set('sample', 'running')
+      const token = s.githubAdminToken || s.githubToken
+      const r = await sampleGit.ensure(token, sample, { private: answers.sample.private, description: 'trace\'s sample project: one small board design that exercises every agent and every simulation' })
+      log('sample', `${sample}: ${r.created ? 'created' : 'exists already: used as it is'} (${r.url}), default branch ${r.defaultBranch}`)
+      a = { ...a, projects: a.projects.map((p) => p.repo.toLowerCase() === sample.toLowerCase() ? { ...p, branch: r.defaultBranch } : p) }
+      const sha = await sampleGit.push(token, sample, r.defaultBranch)
+      log('sample', sha ? `the sample's files committed onto ${r.defaultBranch} (${sha.slice(0, 7)})` : `the sample's files are there already: nothing to commit`)
+      set('sample', 'done', `${r.url}`)
+    }
     // an installation of an earlier version: its installation-wide memory goes (kept, with retainData, for one deploy)
     const existing = check.existing ?? null
     props = InfraPropsSchema.parse(infraInput(a, existing))
@@ -614,10 +658,17 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
 
     // 8 — onboarding PRs (gh CLI, with the admin token in this process's environment only for the duration)
     current = 'onboard'
-    const toOnboard = a.projects.filter((p) => p.onboard)
-    if (!toOnboard.length) set('onboard', 'skipped')
+    const isSample = (repo: string): boolean => repo.toLowerCase() === sample?.toLowerCase()
+    const toOnboard = a.projects.filter((p) => p.onboard && !isSample(p.repo))
+    if (!toOnboard.length && !sample) set('onboard', 'skipped')
     else {
       set('onboard', 'running')
+      if (sample) {
+        const sp = a.projects.find((p) => isSample(p.repo))
+        const r = await sampleGit.onboard(adminToken, sample, sp?.branch ?? 'main', { escalateTo: a.escalateTo, applySettings: sp?.applySettings ?? true })
+        log('onboard', `${sample}: ${r.commit ? `under trace (${r.commit.slice(0, 7)} on ${sp?.branch ?? 'main'})` : 'already under trace'}${r.settings.length ? ` (${r.settings.join('; ')})` : ''}`)
+        summary.push(`The sample project is at ${r.url}.`)
+      }
       const prior = process.env.GH_TOKEN
       process.env.GH_TOKEN = adminToken
       try {
@@ -727,6 +778,17 @@ export async function apply(a: Answers, s: Secrets, emit: Emit, hooks: Hooks = {
         set('gpu', 'failed', r.detail)
         summary.push(`GPU and CPU jobs cannot run until the GPU image is built: ${r.detail}. Everything else is installed; fix the cause and run the installer again to build it.`)
       }
+    }
+
+    // 12 — the sample's tour, last: every agent and every simulation gets its task (the GPU and CPU ones need the image)
+    if (sample && answers.sample.tour) {
+      current = 'tour'
+      set('tour', 'running')
+      const t = await sampleGit.tour(adminToken, sample, { gpu: props.gpu.enabled })
+      for (const l of t.lines) log('tour', l)
+      set('tour', 'done', `${t.opened} task${t.opened === 1 ? '' : 's'} opened${t.existing ? `, ${t.existing} already there` : ''}: ${t.url}`)
+      summary.push(`The sample's tour has started: every agent and every simulation has a task in ${t.url}. Follow it on the main screen; the tasks close as the agents finish them.`)
+      if (t.skipped.length) summary.push(`Not in this tour (${t.skipped.join('; ')}).`)
     }
     summary.unshift(`trace is installed in ${a.aws.account} (${a.aws.region}) as ${stack}.`)
     summary.push('Write each project\'s rules in .trace/rules.md (they start empty).')

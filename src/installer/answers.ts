@@ -98,18 +98,37 @@ export const PersonAnswer = z.object({
   projects: z.array(Repo).default([]),
 }).strict()
 
+/** The sample project (src/installer/sample.ts): a repository the installer creates and fills with a small board design
+ * that exercises every agent and every tool, every simulation included, then onboards like any other project. */
+export const SampleAnswers = z.object({
+  enabled: z.boolean().default(false),
+  /** OWNER/NAME of the sample's repository; empty: the GitHub token's own account, `<login>/trace-sample`. An existing
+   * repository is used as it is (its files are added or updated, nothing is deleted). */
+  repo: z.union([Repo, z.literal('')]).default(''),
+  /** private (the default) or public, when the installer creates it */
+  private: z.boolean().default(true),
+  /** once installed, start the sample's tour: one task per agent and per simulation, so every one of them runs */
+  tour: z.boolean().default(true),
+}).strict()
+
 export const AnswersSchema = z.object({
   github: z.object({ login: z.string().default('') }).strict().default({ login: '' }),
   aws: AwsAnswers,
   agents: AgentAnswers,
   runners: RunnerAnswers.prefault({}),
-  projects: z.array(ProjectAnswer).min(1, 'choose at least one repository'),
+  projects: z.array(ProjectAnswer).default([]),
+  sample: SampleAnswers.prefault({}),
   adminEmail: z.string().trim().email('the first administrator\'s email'),
   people: z.array(PersonAnswer).default([]),
   escalateTo: z.string().regex(/^(@?[A-Za-z0-9-]+(\/[A-Za-z0-9._-]+)?)?$/, 'a GitHub login or @org/team').default(''),
 }).strict().superRefine((a, ctx) => {
-  const repos = new Set(a.projects.map((p) => p.repo.toLowerCase()))
-  if (repos.size !== a.projects.length) ctx.addIssue({ code: 'custom', path: ['projects'], message: 'a repository is listed twice' })
+  if (!a.projects.length && !a.sample.enabled) ctx.addIssue({ code: 'custom', path: ['projects'], message: 'choose at least one repository, or install the sample project' })
+  if (a.sample.enabled && !a.sample.repo && !a.github.login) ctx.addIssue({ code: 'custom', path: ['sample', 'repo'], message: 'name the sample\'s repository (OWNER/NAME): the GitHub token has not been checked, so its account is not known' })
+  // the sample is a project too (it may already be listed, from an earlier run): people may be assigned to it
+  const sample = a.sample.enabled ? (a.sample.repo || `${a.github.login}/trace-sample`).toLowerCase() : ''
+  const listed = new Set(a.projects.map((p) => p.repo.toLowerCase()))
+  if (listed.size !== a.projects.length) ctx.addIssue({ code: 'custom', path: ['projects'], message: 'a repository is listed twice' })
+  const repos = new Set([...listed, ...(sample ? [sample] : [])])
   a.people.forEach((p, i) => p.projects.forEach((r, j) => {
     if (!repos.has(r.toLowerCase())) ctx.addIssue({ code: 'custom', path: ['people', i, 'projects', j], message: `${r} is not one of the projects being installed` })
   }))

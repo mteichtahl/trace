@@ -783,3 +783,140 @@ describe('the CodeBuild runners', () => {
     expect(events.at(-1)?.summary?.[0]).toBe(`Stopped at "Configure the repositories": the stack has no output ${projectOutputs('mteichtahl/fw').runnerProject}`)
   })
 })
+
+describe('the sample project', () => {
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const SAMPLE = 'trace-agent/trace-sample'
+  type Ev = { type: string; line?: string; summary?: string[]; step?: { id: string; status: string; detail: string } }
+  const withSampleOutputs = (): Record<string, string> => {
+    const o = { ...OUTPUTS }
+    const p = projectOutputs(SAMPLE)
+    o[p.runtimeArn] = 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/trace_w_sample-abc'
+    o[p.roleArn] = 'arn:aws:iam::123456789012:role/trace-gh-sample-us-east-1'
+    o[p.secretArn] = `arn:aws:secretsmanager:us-east-1:123456789012:secret:trace/github-token/${SAMPLE}`
+    o[p.memoryId] = 'trace_m_sample-abcdefghij'
+    o[p.runnerProject] = `trace-ci-${projectHash(SAMPLE)}`
+    return o
+  }
+
+  it('is off by default, needs no other repository when on, and is named after the token\'s account', async () => {
+    const { sampleRepo, withSample } = await import('../../src/installer/sample.js')
+    expect(AnswersSchema.parse(ANSWERS).sample).toEqual({ enabled: false, repo: '', private: true, tour: true })
+    const none = { ...ANSWERS, projects: [], people: [] }
+    expect(AnswersSchema.safeParse(none).success).toBe(false)
+    const only = AnswersSchema.parse({ ...none, github: { login: 'trace-agent' }, sample: { enabled: true } })
+    expect(sampleRepo(only)).toBe(SAMPLE)
+    expect(withSample(only).projects).toEqual([{ repo: SAMPLE, branch: 'main', onboard: true, applySettings: true, memoryEventExpiryDays: null, generation: 0 }])
+    // without the token's account and with no name it cannot be placed
+    expect(AnswersSchema.safeParse({ ...none, sample: { enabled: true } }).success).toBe(false)
+    expect(sampleRepo(AnswersSchema.parse({ ...none, sample: { enabled: true, repo: 'acme/demo' } }))).toBe('acme/demo')
+    // people may be assigned to it; listed again from an earlier run it is not doubled
+    expect(AnswersSchema.safeParse({ ...only, people: [{ email: 'dev@example.com', projects: [SAMPLE] }] }).success).toBe(true)
+    const again = AnswersSchema.parse({ ...only, projects: [{ repo: SAMPLE, branch: 'trunk' }] })
+    expect(withSample(again).projects.map((p) => `${p.repo}@${p.branch}`)).toEqual([`${SAMPLE}@trunk`])
+    expect(AnswersSchema.safeParse({ ...ANSWERS, sample: { enabled: true, repo: 'not a repo' } }).success).toBe(false)
+  })
+
+  it('plans the sample before the deploy and its tour last, and deploys it as a project', () => {
+    const a = AnswersSchema.parse({ ...ANSWERS, github: { login: 'trace-agent' }, sample: { enabled: true } })
+    const steps = plan(a)
+    const ids = steps.map((x) => x.id)
+    expect(ids[1]).toBe('sample')
+    expect(ids.at(-1)).toBe('tour')
+    expect(steps.find((x) => x.id === 'sample')?.detail).toMatch(/trace-agent\/trace-sample \(private; created if it does not exist.*every agent and every simulation/)
+    expect(steps.find((x) => x.id === 'onboard')?.detail).toMatch(/open the onboarding PR in mteichtahl\/board; put trace-agent\/trace-sample under trace straight away/)
+    expect(steps.find((x) => x.id === 'tour')?.detail).toMatch(/open \d+ tasks in trace-agent\/trace-sample, each labelled for the agent that takes it/)
+    expect(InfraPropsSchema.parse(infraInput(a)).repositories).not.toContain(`${SAMPLE}@main`)
+    expect(plan(AnswersSchema.parse({ ...ANSWERS, github: { login: 'x' }, sample: { enabled: true, tour: false } })).map((x) => x.id)).not.toContain('tour')
+    expect(plan(AnswersSchema.parse(ANSWERS)).map((x) => x.id)).not.toContain('sample')
+  })
+
+  it('creates and fills the repository before the deploy, onboards it straight onto its branch, and starts the tour last', async () => {
+    calls.onboard.length = 0
+    calls.variables.length = 0
+    const order: string[] = []
+    const infra: Record<string, unknown>[] = []
+    const events: Ev[] = []
+    const a = AnswersSchema.parse({ ...ANSWERS, github: { login: 'trace-agent' }, sample: { enabled: true }, people: [{ email: 'dev@example.com', projects: [SAMPLE] }] })
+    const ok = await apply(a, SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
+      ...quiet,
+      cdk: async (args, env) => { order.push(args[0] ?? ''); if (args[0] === 'deploy') infra.push(JSON.parse(env.TRACE_INFRA ?? '{}')); return 0 },
+      outputs: async () => withSampleOutputs(),
+      sample: {
+        ensure: async (token, repo, o) => { order.push(`ensure ${repo} ${o.private ? 'private' : 'public'}`); expect(token).toBe(TOKEN); return { created: true, defaultBranch: 'trunk', url: `https://github.com/${repo}` } },
+        push: async (_t, repo, branch) => { order.push(`push ${repo}@${branch}`); return 'abcdef1234' },
+        onboard: async (_t, repo, branch) => { order.push(`onboard ${repo}@${branch}`); return { url: `https://github.com/${repo}`, commit: '1234567abc', settings: ['created the labels'] } },
+        tour: async (_t, repo, o) => { order.push(`tour ${repo} gpu=${o.gpu}`); return { url: `https://github.com/${repo}/issues`, opened: 12, existing: 0, skipped: [], lines: [] } },
+      },
+    })
+    expect(ok).toBe(true)
+    expect(order).toEqual(['ensure trace-agent/trace-sample private', 'push trace-agent/trace-sample@trunk', 'bootstrap', 'deploy', 'onboard trace-agent/trace-sample@trunk', 'tour trace-agent/trace-sample gpu=true'])
+    // deployed with its actual default branch, configured like any project, and not given the held onboarding PR
+    expect(infra[0]?.repositories).toContain(`${SAMPLE}@trunk`)
+    expect(calls.variables).toContain(`${SAMPLE}:TRACE_AGENT_RUNTIME_ARN`)
+    expect(calls.variables).toContain(`${SAMPLE}:TRACE_CODEBUILD_PROJECT`)
+    expect(calls.onboard).toEqual(['mteichtahl/board'])
+    const done = events.at(-1)
+    expect(done?.summary?.join('\n')).toMatch(/sample's tour has started: every agent and every simulation has a task in https:\/\/github.com\/trace-agent\/trace-sample\/issues/)
+    expect(events.find((e) => e.type === 'step' && e.step?.id === 'tour' && e.step.status === 'done')?.step?.detail).toMatch(/^12 tasks opened/)
+  })
+
+  it('leaves GPU and CPU tasks out of the tour when GPU jobs are off, and stops before the deploy when the repository cannot be made', async () => {
+    const order: string[] = []
+    const events: Ev[] = []
+    const a = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: false }, github: { login: 'trace-agent' }, sample: { enabled: true } })
+    const fake = {
+      ensure: async () => { throw new Error('could not create trace-agent/trace-sample: the token cannot create repositories in its account') },
+      push: async () => null, onboard: async () => ({ url: '', commit: null, settings: [] }), tour: async () => ({ url: '', opened: 0, existing: 0, skipped: [], lines: [] }),
+    }
+    const ok = await apply(a, SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), { ...quiet, sample: fake, cdk: async (args) => { order.push(args[0] ?? ''); return 0 }, outputs: async () => withSampleOutputs() })
+    expect(ok).toBe(false)
+    expect(order).toEqual([])
+    expect(events.at(-1)?.summary?.[0]).toMatch(/Stopped at "Create the sample project": could not create/)
+    expect(plan(a).find((x) => x.id === 'tour')?.detail).toMatch(/left out because GPU jobs are off/)
+  })
+})
+
+describe('the sample\'s GitHub calls', () => {
+  it('creates the repository in the token\'s account when it does not exist, and commits files in one commit', async () => {
+    const { ensureRepo, commitFiles } = await vi.importActual<typeof import('../../src/installer/github.js')>('../../src/installer/github.js')
+    const seen: string[] = []
+    const bodies: unknown[] = []
+    const fake = (async (url: string, init?: RequestInit) => {
+      const m = init?.method ?? 'GET'
+      seen.push(`${m} ${url.replace('https://api.github.com', '')}`)
+      if (init?.body) bodies.push(JSON.parse(String(init.body)))
+      const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status })
+      if (m === 'GET' && url.endsWith('/repos/marc/trace-sample')) return json({ message: 'Not Found' }, 404)
+      if (url.endsWith('/user')) return json({ login: 'marc', type: 'User' })
+      if (m === 'POST' && url.endsWith('/user/repos')) return json({ full_name: 'marc/trace-sample', private: true, default_branch: 'main', html_url: 'https://github.com/marc/trace-sample' }, 201)
+      if (url.includes('/git/ref/heads/main')) return json({ object: { sha: 'p1' } })
+      if (url.includes('/git/commits/p1')) return json({ sha: 'p1', tree: { sha: 't0' } })
+      if (url.endsWith('/git/blobs')) return json({ sha: `b${bodies.length}` }, 201)
+      if (url.endsWith('/git/trees')) return json({ sha: 't1' }, 201)
+      if (url.endsWith('/git/commits')) return json({ sha: 'c1' }, 201)
+      if (m === 'PATCH') return json({ object: { sha: 'c1' } })
+      return json({ message: 'unexpected' }, 500)
+    }) as typeof fetch
+    expect(await ensureRepo('t', 'marc/trace-sample', { private: true }, fake)).toEqual({ created: true, defaultBranch: 'main', url: 'https://github.com/marc/trace-sample', private: true })
+    expect(bodies[0]).toEqual({ name: 'trace-sample', private: true, auto_init: true })
+    expect(await commitFiles('t', 'marc/trace-sample', 'main', [{ path: 'a.txt', content: 'hi' }, { path: 'run.sh', content: 'x', executable: true }], 'msg', fake)).toBe('c1')
+    expect(seen.filter((x) => x.includes('/git/'))).toEqual([
+      'GET /repos/marc/trace-sample/git/ref/heads/main', 'GET /repos/marc/trace-sample/git/commits/p1',
+      'POST /repos/marc/trace-sample/git/blobs', 'POST /repos/marc/trace-sample/git/blobs', 'POST /repos/marc/trace-sample/git/trees',
+      'POST /repos/marc/trace-sample/git/commits', 'PATCH /repos/marc/trace-sample/git/refs/heads/main',
+    ])
+    const tree = bodies.find((b) => (b as { base_tree?: string }).base_tree) as { tree: { path: string; mode: string }[] }
+    expect(tree.tree.map((e) => `${e.path} ${e.mode}`)).toEqual(['a.txt 100644', 'run.sh 100755'])
+  })
+
+  it('says how to fix a token that may not create repositories', async () => {
+    const { ensureRepo } = await vi.importActual<typeof import('../../src/installer/github.js')>('../../src/installer/github.js')
+    const fake = (async (url: string, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') === 'GET' && url.includes('/repos/')) return new Response('{"message":"Not Found"}', { status: 404 })
+      if (url.endsWith('/user')) return new Response('{"login":"marc","type":"User"}', { status: 200 })
+      return new Response('{"message":"Resource not accessible by personal access token"}', { status: 403 })
+    }) as typeof fetch
+    await expect(ensureRepo('t', 'acme/trace-sample', {}, fake)).rejects.toThrow(/cannot create repositories in acme.*Administration: read and write.*Create acme\/trace-sample yourself/)
+  })
+})

@@ -93,6 +93,108 @@ export async function setSecret(token: string, repo: string, name: string, value
   await gh.request('PUT', `/repos/${repo}/actions/secrets/${name}`, z.unknown(), { encrypted_value: await seal(key.key, value), key_id: key.key_id })
 }
 
+const RepoInfo = z.object({ full_name: z.string(), default_branch: z.string().default('main'), private: z.boolean(), size: z.number().default(0), html_url: z.string().default('') }).loose()
+
+/** A repository that exists now: whether this call created it, its default branch and its address. */
+export interface EnsuredRepo { created: boolean; defaultBranch: string; url: string; private: boolean }
+
+/**
+ * Make sure OWNER/NAME exists: leave one that does alone; else create it, in the token's own account when OWNER is its
+ * login, else in the organization OWNER, with a first commit (auto_init) so files can be committed onto its default
+ * branch. Creating needs the token's Administration write permission (a fine-grained token) or the `repo` scope.
+ */
+export async function ensureRepo(token: string, slug: string, o: { private?: boolean; description?: string } = {}, fetchImpl?: Fetch): Promise<EnsuredRepo> {
+  const gh = new Github(token, fetchImpl)
+  try {
+    const { data } = await gh.request('GET', `/repos/${slug}`, RepoInfo)
+    return { created: false, defaultBranch: data.default_branch, url: data.html_url || `https://github.com/${slug}`, private: data.private }
+  } catch (e) {
+    if (!(e instanceof GithubError) || e.status !== 404) throw e
+  }
+  const [owner = '', name = ''] = slug.split('/')
+  const { data: me } = await gh.request('GET', '/user', User)
+  const body = { name, private: o.private ?? true, auto_init: true, ...(o.description ? { description: o.description } : {}) }
+  const path = me.login.toLowerCase() === owner.toLowerCase() ? '/user/repos' : `/orgs/${owner}/repos`
+  try {
+    const { data } = await gh.request('POST', path, RepoInfo, body)
+    return { created: true, defaultBranch: data.default_branch, url: data.html_url || `https://github.com/${slug}`, private: data.private }
+  } catch (e) {
+    if (e instanceof GithubError && (e.status === 403 || e.status === 404)) {
+      throw new GithubError(`could not create ${slug}: the token cannot create repositories ${path === '/user/repos' ? 'in its account' : `in ${owner}`} (a fine-grained token needs Administration: read and write; a classic one the repo scope). Create ${slug} yourself, empty, and run the installer again, or give an admin token. (${e.message})`, e.status)
+    }
+    throw e
+  }
+}
+
+/** A file to commit: its path in the repository and its bytes. */
+export interface RepoFile { path: string; content: Buffer | string; executable?: boolean }
+
+const Ref = z.object({ object: z.object({ sha: z.string() }).loose() }).loose()
+const CommitInfo = z.object({ sha: z.string(), tree: z.object({ sha: z.string() }).loose() }).loose()
+const Sha = z.object({ sha: z.string() }).loose()
+
+/**
+ * Commit `files` onto `branch` in one commit, through the Git data API (no clone, no gh CLI): every file is added or
+ * replaced, nothing else is touched. A commit that would change nothing is not made. Returns the new commit's sha, or
+ * null when nothing changed.
+ */
+export async function commitFiles(token: string, slug: string, branch: string, files: readonly RepoFile[], message: string, fetchImpl?: Fetch): Promise<string | null> {
+  const gh = new Github(token, fetchImpl)
+  const { data: ref } = await gh.request('GET', `/repos/${slug}/git/ref/heads/${encodeURIComponent(branch)}`, Ref)
+  const parent = ref.object.sha
+  const { data: head } = await gh.request('GET', `/repos/${slug}/git/commits/${parent}`, CommitInfo)
+  const entries: { path: string; mode: string; type: 'blob'; sha: string }[] = []
+  for (const f of files) {
+    const bytes = typeof f.content === 'string' ? Buffer.from(f.content, 'utf8') : f.content
+    const { data: blob } = await gh.request('POST', `/repos/${slug}/git/blobs`, Sha, { content: bytes.toString('base64'), encoding: 'base64' })
+    entries.push({ path: f.path, mode: f.executable ? '100755' : '100644', type: 'blob', sha: blob.sha })
+  }
+  const { data: tree } = await gh.request('POST', `/repos/${slug}/git/trees`, Sha, { base_tree: head.tree.sha, tree: entries })
+  if (tree.sha === head.tree.sha) return null
+  const { data: commit } = await gh.request('POST', `/repos/${slug}/git/commits`, Sha, { message, tree: tree.sha, parents: [parent] })
+  await gh.request('PATCH', `/repos/${slug}/git/refs/heads/${encodeURIComponent(branch)}`, z.unknown(), { sha: commit.sha, force: false })
+  return commit.sha
+}
+
+/** Does `path` exist on `branch`? */
+export async function hasFile(token: string, slug: string, branch: string, path: string, fetchImpl?: Fetch): Promise<boolean> {
+  const gh = new Github(token, fetchImpl)
+  try {
+    await gh.request('GET', `/repos/${slug}/contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(branch)}`, z.unknown())
+    return true
+  } catch (e) {
+    if (e instanceof GithubError && e.status === 404) return false
+    throw e
+  }
+}
+
+const Issue = z.object({ number: z.number(), html_url: z.string(), title: z.string(), labels: z.array(z.union([z.string(), z.object({ name: z.string() }).loose()])).default([]) }).loose()
+
+/** Open issues in a repository (pull requests left out), up to 300. */
+export async function listIssues(token: string, slug: string, fetchImpl?: Fetch): Promise<{ number: number; url: string; title: string; labels: string[] }[]> {
+  const gh = new Github(token, fetchImpl)
+  const out: { number: number; url: string; title: string; labels: string[] }[] = []
+  for (let page = 1; page <= 3; page++) {
+    const { data } = await gh.request('GET', `/repos/${slug}/issues?state=all&per_page=100&page=${page}`, z.array(Issue.extend({ pull_request: z.unknown().optional() }).loose()))
+    for (const i of data) if (!i.pull_request) out.push({ number: i.number, url: i.html_url, title: i.title, labels: i.labels.map((l) => typeof l === 'string' ? l : l.name) })
+    if (data.length < 100) break
+  }
+  return out
+}
+
+/** Open an issue, with labels (GitHub creates a label that does not exist yet). */
+export async function openIssue(token: string, slug: string, issue: { title: string; body: string; labels: readonly string[] }, fetchImpl?: Fetch): Promise<{ number: number; url: string }> {
+  const gh = new Github(token, fetchImpl)
+  const { data } = await gh.request('POST', `/repos/${slug}/issues`, Issue, { title: issue.title, body: issue.body, labels: [...issue.labels] })
+  return { number: data.number, url: data.html_url }
+}
+
+/** Start a workflow_dispatch workflow on `ref`. */
+export async function dispatchWorkflow(token: string, slug: string, workflow: string, ref: string, inputs: Record<string, string> = {}, fetchImpl?: Fetch): Promise<void> {
+  const gh = new Github(token, fetchImpl)
+  await gh.request('POST', `/repos/${slug}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, z.unknown(), { ref, inputs })
+}
+
 export async function setVariable(token: string, repo: string, name: string, value: string, fetchImpl?: Fetch): Promise<'created' | 'updated'> {
   const gh = new Github(token, fetchImpl)
   try {

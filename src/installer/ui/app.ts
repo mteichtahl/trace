@@ -70,6 +70,8 @@ const s = {
   agents: { prefix: 'trace', model: '', maxLifetimeHours: 8, idleMinutes: 15, centralBucketName: '', retainData: true, escalateTo: '', gpuEnabled: true, gpuMaxVcpus: 16, gpuSpot: false,
     cpuEnabled: true, cpuMaxVcpus: 64, cpuSpot: false, cpuVcpus: 16, cpuMemoryMiB: 32_768, knowledgeBase: true, libraryGateway: false,
     observability: true, transactionSearch: true, samplingPercent: '', dashboard: true, migrateLayout: false },
+  /** the sample project (installer/sample.ts): repo '' = <login>/trace-sample */
+  sample: { enabled: false, repo: '', private: true, tour: true },
   adminEmail: '',
   people: [] as Person[],
   plan: null as Step[] | null,
@@ -139,10 +141,11 @@ function answers(): AnswersInput {
       privileged: s.runners.privileged === 'default' ? null : s.runners.privileged === 'on',
     },
     projects: [...s.projects].map(([repo, { memoryDays, ...p }]) => ({ repo, ...p, memoryEventExpiryDays: memoryDays.trim() === '' ? null : Number(memoryDays) })),
+    sample: { enabled: s.sample.enabled, repo: s.sample.repo, private: s.sample.private, tour: s.sample.tour },
     adminEmail: s.adminEmail,
     people: s.people.filter((p) => p.email.trim()).map((p) => ({
       email: p.email.trim(), class: p.class,
-      projects: p.class === 'admin' ? [] : [...p.projects].filter((r) => s.projects.has(r)),
+      projects: p.class === 'admin' ? [] : [...p.projects].filter((r) => projectRepos().includes(r)),
     })),
     escalateTo: s.agents.escalateTo,
   }
@@ -156,11 +159,24 @@ const secrets = (): Record<string, unknown> => ({
   libraryKeys: s.agents.libraryGateway ? { ...s.libraryKeys } : {},
 })
 
+/** The sample's repository as it will be: the one named, else the token's account's trace-sample. */
+function sampleName(): string {
+  return s.sample.repo.trim() || (s.github.info ? `${s.github.info.login}/trace-sample` : '')
+}
+
+/** Every repository being installed: the ones chosen, and the sample's when it is asked for. */
+function projectRepos(): string[] {
+  const repos = [...s.projects.keys()]
+  const sample = s.sample.enabled ? sampleName() : ''
+  return sample && !repos.some((r) => r.toLowerCase() === sample.toLowerCase()) ? [...repos, sample] : repos
+}
+
 function problems(tab: Tab): string[] {
   const out: string[] = []
   if (tab === 'github') {
     if (!s.github.info) out.push('Check the GitHub token.')
-    if (!s.projects.size) out.push('Choose at least one repository.')
+    if (!s.projects.size && !s.sample.enabled) out.push('Choose at least one repository, or install the sample project.')
+    if (s.sample.enabled && s.sample.repo.trim() && !/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(s.sample.repo.trim())) out.push('Name the sample\'s repository as OWNER/NAME, or leave it empty.')
     for (const a of s.github.info?.access ?? []) if (!a.ok && s.projects.has(a.repo) && !s.github.adminToken) out.push(`The token can't manage ${a.repo}'s Actions secrets: add an admin token under "Installing with a different token".`)
   }
   if (tab === 'aws') {
@@ -229,10 +245,26 @@ function github(): HTMLElement {
           p ? h('span', { class: 'opt', title: 'Days this project\'s agent memory keeps short-term events (3–365). Empty: 30.' },
             h('label', { class: 'check' }, 'memory days ', input('number', p.memoryDays, (v) => { p.memoryDays = v.trim() }, { min: 3, max: 365, step: 1, placeholder: '30', style: 'width:5em' }))) : h('span', {}))
       }))) : null,
+    info ? sampleCard() : null,
     s.projects.size ? h('details', {}, h('summary', { class: 'muted' }, 'Each project\'s own agent token (optional)'),
       h('p', { class: 'muted' }, 'Every project gets its own AWS resources and roles, so one project\'s agent cannot reach another\'s in AWS. On GitHub it can reach whatever its token can: give a project a fine-grained token limited to that repository alone to isolate it there too. Projects without one use the token above.'),
       ...[...s.projects.keys()].map((r) => field(r, input('password', s.projectTokens.get(r) ?? '', (v) => { s.projectTokens.set(r, v.trim()) }, { placeholder: 'the token above' }), 'checked when installing: it must reach this repository, and should reach no other project'))) : null,
     next('github', 'aws'))
+}
+
+/** The sample project: one small board that exercises every agent and every simulation, in a repository of its own. */
+function sampleCard(): HTMLElement {
+  const x = s.sample
+  const name = sampleName()
+  return h('div', {},
+    h('h3', {}, 'Sample project'),
+    h('p', { class: 'lead' }, 'A small sensor board, from intent to fabrication files, in a repository of its own. Once trace is installed it starts a tour: one task for every agent and every simulation (circuit, mixed-signal, logic and formal, thermal, electromagnetic, protocol, firmware and the hardware-in-the-loop bench on emulated instruments), so you see the whole system work before you bring your own design. Recommended for a first installation.'),
+    checkbox('Install the sample project', x.enabled, (v) => { x.enabled = v; render() }),
+    x.enabled ? h('div', {},
+      field('Repository', input('text', x.repo, (v) => { x.repo = v.trim() }, { placeholder: name || 'OWNER/trace-sample' }), `empty: ${name || 'your account\'s trace-sample'}. Created if it does not exist; an existing one is used as it is, and nothing in it is deleted`),
+      checkbox('Private repository', x.private, (v) => { x.private = v }),
+      checkbox('Start the tour once installed', x.tour, (v) => { x.tour = v }),
+      note('warn', 'The tour runs every agent and every simulation once, on AWS like any other work, so it costs what that work costs (the GPU and CPU jobs most of all). Creating the repository needs a token that may create repositories: a fine-grained token with Administration read and write on your account, or the admin token below.')) : null)
 }
 
 async function checkGithub(): Promise<void> {
@@ -399,7 +431,7 @@ const CLASS_HELP: Record<PersonClass, string> = {
 }
 
 function people(): HTMLElement {
-  const repos = [...s.projects.keys()]
+  const repos = projectRepos()
   return h('section', { class: 'card' },
     h('h2', {}, 'People'),
     h('p', { class: 'lead' }, 'Everyone signs in with Amazon Cognito, which emails each person a temporary password. There are three classes: admins can do everything on every project; users can read and change the projects they are assigned to; guests can only read the projects they are assigned to. Nobody can see a project they are not assigned to.'),
@@ -567,7 +599,7 @@ async function boot(): Promise<void> {
         // the page keeps the percentage as the field's text ('' = leave the account's setting)
         samplingPercent: saved.agents.samplingPercent === null || saved.agents.samplingPercent === undefined ? '' : String(saved.agents.samplingPercent),
       })
-      for (const p of saved.projects) {
+      for (const p of saved.projects ?? []) {
         s.projects.set(p.repo, {
           branch: p.branch ?? 'main', onboard: p.onboard ?? true, applySettings: p.applySettings ?? true,
           memoryDays: p.memoryEventExpiryDays === null || p.memoryEventExpiryDays === undefined ? '' : String(p.memoryEventExpiryDays),
@@ -578,6 +610,12 @@ async function boot(): Promise<void> {
         s.runners.connectionArn = saved.runners.connectionArn ?? ''
         s.runners.computeType = saved.runners.computeType ?? ''
         s.runners.privileged = saved.runners.privileged === true ? 'on' : saved.runners.privileged === false ? 'off' : 'default'
+      }
+      if (saved.sample) {
+        Object.assign(s.sample, { enabled: saved.sample.enabled ?? false, repo: saved.sample.repo ?? '', private: saved.sample.private ?? true, tour: saved.sample.tour ?? true })
+        // the installer saves the sample among the projects too: show it once, as the sample
+        const was = (s.sample.repo || (saved.github?.login ? `${saved.github.login}/trace-sample` : '')).toLowerCase()
+        if (s.sample.enabled && was) for (const r of [...s.projects.keys()]) if (r.toLowerCase() === was) s.projects.delete(r)
       }
       s.adminEmail = saved.adminEmail
       s.people = (saved.people ?? []).map((p) => ({ email: p.email, class: p.class ?? 'user', projects: new Set(p.projects ?? []) }))
