@@ -34,8 +34,28 @@ export interface OpenOptions {
 export function open(path: string, opts: OpenOptions = {}): DatabaseSync {
   if (!opts.readonly) mkdirSync(dirname(path), { recursive: true })
   const db = new DatabaseSync(path, { readOnly: opts.readonly ?? false, timeout: BUSY_MS, enableForeignKeyConstraints: true })
-  if (!opts.readonly) db.exec(`PRAGMA journal_mode=${opts.wal === false ? 'DELETE' : 'WAL'}`)
+  if (!opts.readonly) setJournalMode(db, opts.wal === false ? 'delete' : 'wal')
   return db
+}
+
+/**
+ * Switch the journal mode, waiting out other connections. Changing the mode needs an exclusive lock, and SQLite
+ * answers "database is locked" at once instead of calling the busy handler, so several processes opening the same
+ * new database could fail here. The mode is persistent: when it is already set, nothing is locked at all.
+ */
+export function setJournalMode(db: Pick<DatabaseSync, 'prepare' | 'exec'>, mode: 'wal' | 'delete'): void {
+  const current = (): string => String((db.prepare('PRAGMA journal_mode').get() as { journal_mode?: unknown } | undefined)?.journal_mode ?? '').toLowerCase()
+  const deadline = Date.now() + BUSY_MS
+  for (let wait = 5; ; wait = Math.min(wait * 2, 200)) {
+    try {
+      if (current() === mode) return
+      db.exec(`PRAGMA journal_mode=${mode.toUpperCase()}`)
+      return
+    } catch (e) {
+      if (!/database is locked|SQLITE_BUSY/i.test(String((e as Error).message)) || Date.now() > deadline) throw e
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait)
+    }
+  }
 }
 
 /** BEGIN IMMEDIATE … COMMIT: writers queue rather than fail half way. */
