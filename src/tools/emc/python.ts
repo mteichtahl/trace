@@ -65,3 +65,10 @@ export function openemsSpeed(log: string): number | null {
   const all = [...log.matchAll(/Speed:\s*([\d.]+)\s*MC(?:ells)?\/s/gi)].map((m) => Number(m[1]))
   return all.length ? (all[all.length - 1] as number) : null
 }
+
+/** What openEMS's log says about each run: timesteps, and whether the energy end criterion was met. */
+export function openemsRuns(log: string): { timesteps: number[]; endCriterionMet: boolean[] } {
+  const timesteps = [...log.matchAll(/Time for (\d+) iterations/g)].map((m) => Number(m[1]))
+  const runs = log.split(/Create FDTD operator/).slice(1)
+  return { timesteps, endCriterionMet: runs.map((r) => /end-criteria of [-\d.]+dB reached/.test(r)) }
+}

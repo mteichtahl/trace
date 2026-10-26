@@ -26,8 +26,9 @@
  *              uniform grid df, 2df, ... fstop (df = fstop / points), which TDR needs.
  *
  * Estimates (reported, not promised): cells = Nx Ny Nz; the time step from the Courant limit of the smallest cells;
- * timesteps for the pulse (openEMS's Gaussian lasts 2 x 9 / (2 pi fc)) plus 20 transits of the domain's diagonal at
- * the slowest wave speed, capped at nr_ts; memory at 72 bytes per cell for the fields and update coefficients
+ * timesteps for the pulse (openEMS's Gaussian lasts 2 x 9 / (2 pi fc)) plus 5 transits of the domain's diagonal at
+ * the slowest wave speed, capped at nr_ts (a resonant structure rings much longer; openEMS stops at the energy end
+ * criterion, and emc.run reports the real count); memory at 72 bytes per cell for the fields and update coefficients
  * (6 field and 12 coefficient float32 values) times 1.5 for set-up overhead; run time at an assumed throughput
  * (TRACE_OPENEMS_MCPS, default 50 million cell-updates per second; openEMS prints the real figure, which emc.run
  * reports).
@@ -480,7 +481,7 @@ export function buildModel(input: SetupInput, geometry?: BoardGeometry): { model
   const pulse = (2 * 9) / (2 * Math.PI * fc)
   const diag = Math.hypot((xs[xs.length - 1] as number) - (xs[0] as number), (ys[ys.length - 1] as number) - (ys[0] as number), (zs[zs.length - 1] as number) - (zs[0] as number)) * 1e-3
   const nrTs = input.nr_ts ?? 1_000_000
-  const tsEst = Math.min(nrTs, Math.ceil((pulse + (20 * diag * Math.sqrt(erMax)) / C0) / dt))
+  const tsEst = Math.min(nrTs, Math.ceil((pulse + (5 * diag * Math.sqrt(erMax)) / C0) / dt))
   const excite = input.excite ?? 'all'
   const excitations = excite === 'all' ? ports.length : 1
   const mcps = Number(process.env.TRACE_OPENEMS_MCPS ?? 50)
@@ -523,7 +524,7 @@ export function buildModel(input: SetupInput, geometry?: BoardGeometry): { model
     timestep_s: Number(dt.toPrecision(4)), timesteps_est: tsEst,
     memory_mb_est: Math.round((cells * 72 * 1.5) / 1e6),
     time_s_est: Math.round(timeEst),
-    time_assumption: `${mcps} million cell-updates per second (TRACE_OPENEMS_MCPS), ${excitations} excitation(s); pulse + 20 domain transits`,
+    time_assumption: `${mcps} million cell-updates per second (TRACE_OPENEMS_MCPS), ${excitations} excitation(s); pulse + 5 domain transits (a resonant structure rings far longer)`,
     excitations,
     ports: pSummary,
     stackup: b.layers.map((l, k) => ({ layer: l.name, z_mm: r4(zOf[k] as number) })),

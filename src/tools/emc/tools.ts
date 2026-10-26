@@ -21,7 +21,7 @@ import { run as runProc } from '../../sim/proc.js'
 import { readArtifact, Recorder } from '../../sim/record.js'
 import { readGeometry } from './board.js'
 import { cisprLimit, CISPR_SOURCE, type CisprClass } from './limits.js'
-import { canImport, expectResult, openemsPython, openemsSpeed, siPython } from './python.js'
+import { canImport, expectResult, openemsPython, openemsRuns, openemsSpeed, siPython } from './python.js'
 import { CLOCKISH, SWITCHING } from './board.js'
 import { DEFAULTS, precheck, RULES, type PrecheckOptions, type Rule } from './precheck.js'
 import { buildModel, modelScript, pythonDir, SetupError, type SetupInput, type Summary } from './setup.js'
@@ -434,9 +434,13 @@ export const runTool = defineTool({
         }
       }
       const speed = openemsSpeed(log)
+      const runsInfo = openemsRuns(log)
+      const unmet = runsInfo.endCriterionMet.filter((x) => !x).length
       const result = {
         run_id: rec.id, setup_run_id: a.setup_run_id, where: job.where, ...(job.jobId ? { batch_job: job.jobId } : {}),
         seconds: r(res.seconds, 4), ...(speed !== null ? { openems_speed_mcells_per_s: speed } : {}), estimated_seconds: s.time_s_est,
+        timesteps: runsInfo.timesteps, estimated_timesteps: s.timesteps_est,
+        ...(unmet ? { warning: `${unmet} run(s) stopped at nr_ts before the energy end criterion: the pulse had not died away, so S-parameters are truncated (raise nr_ts)` } : {}),
         excited_ports: res.excited, touchstone: res.touchstone ?? null,
         losses, tdr, ...(radiated ? { radiated } : {}),
         ...(res.touchstone ? {} : { note: 'only port 1 was excited (setup excite=first): no full S-matrix, no Touchstone file' }),
