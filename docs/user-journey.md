@@ -18,7 +18,7 @@ Principles the journey follows:
 
 1. **One record.** Requirements, decisions, runs and evidence live in the project database. Every screen is a view of it; nothing lives only in a chat.
 2. **Evidence, not claims.** A stage is done when its gate criteria are measured, each linked to a run id. An agent's opinion never passes a gate.
-3. **People decide, agents prepare.** Agents propose and measure; a person approves requirements, architecture, the layout, the release and the order. Every task a person does runs through a guided skill that enforces a minimum quality bar.
+3. **People decide, agents prepare.** Agents propose and measure; a person approves requirements, architecture, the layout, the release and the order. Every task a person does runs through a guided skill that enforces a minimum quality bar, and every decision a person is asked to make comes with trace's recommendation and the reasons for it.
 4. **Every requirement is traceable.** From the line in the brief, through the part and the net, to the test that proved it on the bench.
 5. **Going back is normal.** A failure at any stage reopens the earliest stage it touches, and the record shows why.
 6. **The user is told only when it matters.** A gate is ready, an agent is stuck, or a decision is needed. Everything else is in the record.
@@ -147,7 +147,7 @@ A deliberate change (a new or changed requirement, a part going end of life, a b
 
 1. **Raise:** anyone on the project raises a change request through the Change request skill, stating what changes and why.
 2. **Analyse:** trace follows the traceability chains from the change to every requirement, block, sheet, board area, test and piece of evidence it touches, and marks that evidence stale.
-3. **Show the impact:** the earliest stage that must reopen, the gates that will need signing again, the stale evidence to re-run, and the expected cost and time from the running view.
+3. **Show the impact:** the earliest stage that must reopen, the gates that will need signing again, the stale evidence to re-run, and the expected cost and time from the running view, with trace's recommendation (approve, reject, or defer to the next revision) and its reasons.
 4. **Decide:** an admin approves or rejects it, like a gate.
 5. **Apply:** the project returns to the earliest affected stage; only stale evidence is re-run, and everything else carries forward.
 
@@ -325,6 +325,15 @@ The view is stored with each bring-up run, so a later reader knows exactly how t
 
 Every task a person does is run by a skill that guides them through it and will not accept the result until it meets a minimum quality bar. The bar is checked by a tool that returns pass or fail with the reasons, never by the model's opinion; what passes is written to the project database, and what fails says exactly what is missing.
 
+**Every decision comes with a recommendation.** Whenever trace asks a person to decide, in a skill, a question, a gate or a notification, it states which option it recommends and why. A recommendation has four parts:
+
+- **The option:** one clear choice, never "it depends".
+- **Why:** the evidence behind it, cited (the requirement, the run, the datasheet page, the stock or price, the cost and time from the running view).
+- **What it gives up:** the trade-off the person accepts by taking it.
+- **The alternatives:** each other option with the reason it was not recommended.
+
+The person is always free to choose otherwise. When they do, the skill asks for their reason in a line and records it beside the recommendation, so a later reader sees both. Where a choice is purely the person's preference (a colour, a name), trace says so instead of inventing a recommendation. Every skill's quality bar includes: a decision that differs from the recommendation has a recorded reason.
+
 | Skill | Stage | Guides the person through | Will not submit until |
 | --- | --- | --- | --- |
 | Design import | Start | Bringing an existing design into trace | Every drafted requirement is confirmed or struck; the entry stage is shown with the failing gate checks that set it |
@@ -408,7 +417,7 @@ Steps:
 1. **Agree the criteria:** start from cost, risk, part availability, power, size and schedule; the person adds, removes or weights them before seeing any scores.
 2. **Read each option:** block diagram, key parts with stock and price, how each requirement is met, and the risks trace sees.
 3. **Score:** each option on each criterion, with a one-line reason per score.
-4. **Choose and state why:** the choice and the deciding criteria, in the person's words.
+4. **Choose and state why:** trace recommends one option, with the scores and evidence behind it and what it gives up; the person takes it or picks another, and states the deciding criteria in their own words.
 5. **Map:** confirm every requirement maps to a block in the chosen option; unmapped ones go back to Requirements review or get a block.
 6. **Accept the key parts:** each key part follows the in-stock order, or its exception is written.
 
@@ -452,7 +461,7 @@ The skill runs whenever a person wants to set aside a requirement, a check findi
 
 Steps:
 
-1. **Name what is waived:** the requirement, finding or test item, shown with its evidence.
+1. **Name what is waived:** the requirement, finding or test item, shown with its evidence and trace's recommendation (waive, or fix now) with its reasons.
 2. **Give the reason:** why it cannot or need not be met or checked now.
 3. **State the risk:** what goes wrong if the reason is mistaken, and how bad that would be (cosmetic, degraded, failure, safety).
 4. **Say where it is caught instead:** a later stage, a bench test, or nowhere (accepted for good).
@@ -515,7 +524,7 @@ The skill runs at every gate. Because gates are hard and need only one admin's s
 
 Steps:
 
-1. **See the criteria:** the gate's criteria, each marked met, not met or waived by the checker tool.
+1. **See the criteria:** the gate's criteria, each marked met, not met or waived by the checker tool, and trace's recommendation to sign or return, with its reasons.
 2. **Open the evidence:** for each criterion, the run or record behind it (a coverage row, a DRC report, a BOM check); the skill records that each was opened.
 3. **Acknowledge the waivers:** every waiver taken in this stage, with its reason, risk and where it will be caught.
 4. **Note concerns:** anything the signer is uneasy about but will not block on, recorded as a note or an issue.
@@ -541,7 +550,7 @@ Steps:
 3. **BOM:** cost per board and for the build quantity, stock today, lifecycle, and parts with a single source.
 4. **Fabrication:** board options, DRC against JLCPCB's capability, assembly coverage (parts JLCPCB can place, parts placed by hand).
 5. **Changes since the last revision:** what changed and why, for a revision after the first.
-6. **Decide:** release, or return to the stage the concern belongs to.
+6. **Decide:** release, or return to the stage the concern belongs to; trace recommends one, with its reasons.
 
 Quality bar:
 
@@ -624,7 +633,7 @@ The skill runs when an agent raises a question it cannot answer from the record,
 Steps:
 
 1. **See the context:** what the agent is doing, what the question blocks, and the sources it already searched.
-2. **Pick or write:** choose one of the agent's options, or write an answer.
+2. **Pick or write:** the agent offers its options with the one it recommends and why; choose one, or write an answer.
 3. **Make it specific:** a quantity gets a number and unit; a choice names the option; a fact names its source.
 4. **Say whether it lasts:** a one-off answer, or a rule for the project (added to `.trace/rules.md` or the requirements).
 
@@ -647,7 +656,7 @@ Steps:
 2. **Review the inferred intent:** each statement shown with the sheet, part or document it came from; correct it, or mark it unknown.
 3. **Review the inferred requirements:** through Requirements review, each marked stated or inferred.
 4. **See the assessment:** every gate's checks run against the design as it stands, with pass or fail per criterion.
-5. **Confirm the entry stage:** the first failing gate, or Bring up for a board already built.
+5. **Confirm the entry stage:** the first failing gate, or Bring up for a board already built; trace recommends the entry stage and says why.
 
 Quality bar:
 
@@ -664,7 +673,7 @@ The skill sits between the schematic and the firmware, so a pin that works on th
 Steps:
 
 1. **See the map:** every MCU pin with its net, the function the firmware expects, and the alternate functions the part allows.
-2. **Resolve conflicts:** two functions on one peripheral instance, a function on a pin that cannot carry it, a boot or debug pin used for something else.
+2. **Resolve conflicts:** two functions on one peripheral instance, a function on a pin that cannot carry it, a boot or debug pin used for something else; trace proposes a fix for each and says why.
 3. **Keep room:** spare pins brought to test points or a header where the person wants them.
 4. **Agree:** the schematic and the firmware pin configuration are generated from or checked against the same plan.
 
@@ -684,7 +693,7 @@ The skill runs whenever someone wants to change the design on purpose. It shows 
 Steps:
 
 1. **State the change:** what changes (a requirement, a part, a block, the firmware) and why.
-2. **See the impact:** trace follows the traceability chains and shows the stages that reopen, the gates to re-sign, the evidence that goes stale, and the expected cost and time from the running view.
+2. **See the impact:** trace follows the traceability chains and shows the stages that reopen, the gates to re-sign, the evidence that goes stale, and the expected cost and time from the running view, with trace's recommendation (approve, reject, or defer to the next revision) and its reasons.
 3. **Choose the scope:** this revision (if not yet released) or the next one; hardware and firmware, or firmware only.
 4. **Submit for approval:** an admin approves or rejects it through Gate signing.
 
