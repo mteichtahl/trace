@@ -184,6 +184,7 @@ export const canSend = defineTool({
     }
     if (!frames.length) throw new ToolError('give frames, or a DBC message with signals')
     return record('hil.can_send', { subject: bus.name, args: a }, async (rec) => withBus(bus, async (s: CanSession) => {
+      if (a.reply_timeout_ms) await s.flush()
       const sent = await s.send(frames, a.interval_ms)
       let replies: Awaited<ReturnType<CanSession['receive']>> | undefined
       if (a.reply_timeout_ms) replies = await s.receive(a.reply_timeout_ms, a.reply_max, toFilters(a.reply_filters))

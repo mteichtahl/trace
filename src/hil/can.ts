@@ -35,13 +35,14 @@ export type FrameOut = z.output<typeof FrameOut>
 
 const Opened = z.object({ session: z.string() })
 const Sent = z.object({ sent: z.number() })
-const Received = z.object({ frames: z.array(FrameOut), timed_out: z.boolean() })
+const Received = z.object({ frames: z.array(FrameOut) })
 const Decoded = z.object({ id: z.number(), message: z.string(), signals: z.record(z.string(), z.union([z.number(), z.string()])).optional(), error: z.string().optional() })
 const Captured = z.object({
   frames: z.number(), errors: z.number(), seconds: z.number(), rate_fps: z.number(),
   ids: z.array(z.object({ id: z.number(), count: z.number() })), first: z.array(FrameOut), decoded: z.array(Decoded),
   log_base64: z.string(), log_name: z.string(),
 })
+const Ok = z.object({ ok: z.literal(true) })
 const Stats = z.object({ interface: z.string(), channel: z.string(), tx: z.number(), rx: z.number(), error_frames: z.number(), open_s: z.number(), state: z.string().optional() })
 const Encoded = z.object({ id: z.number(), extended: z.boolean(), data: z.string(), fd: z.boolean() })
 const Available = z.object({ available: z.boolean() })
@@ -83,12 +84,38 @@ export class CanSession {
     return (await bridge().call('can.send', { session: this.session, frames, interval_ms: intervalMs }, Sent, timeout)).sent
   }
 
-  async receive(timeoutMs: number, maxFrames: number, filters?: Filter[], untilId?: number): Promise<z.output<typeof Received>> {
-    return bridge().call('can.receive', { session: this.session, timeout_ms: timeoutMs, max_frames: maxFrames, filters: filters ?? null, until_id: untilId ?? null }, Received, timeoutMs + 10_000)
+  /** Forget frames buffered so far (before a request whose replies are wanted). */
+  async flush(): Promise<void> {
+    await bridge().call('can.flush', { session: this.session }, z.object({ dropped: z.number() }), 10_000)
   }
 
+  /**
+   * Frames matching `filters` until `maxFrames`, `untilId` is seen, or `timeoutMs` passes. The bridge is asked in short
+   * slices, so other calls (a send on another session, say) are served in between.
+   */
+  async receive(timeoutMs: number, maxFrames: number, filters?: Filter[], untilId?: number): Promise<{ frames: FrameOut[]; timed_out: boolean }> {
+    const frames: FrameOut[] = []
+    const end = Date.now() + timeoutMs
+    let t0: number | null = null
+    for (;;) {
+      const left = end - Date.now()
+      if (left <= 0) break
+      const r = await bridge().call('can.receive', { session: this.session, wait_ms: Math.min(left, 200), max_frames: maxFrames - frames.length, filters: filters ?? null }, Received, 15_000)
+      for (const f of r.frames) {
+        t0 ??= f.t
+        frames.push({ ...f, t: Number((f.t - t0).toFixed(6)) })
+        if (untilId !== undefined && f.id === untilId) return { frames, timed_out: false }
+      }
+      if (frames.length >= maxFrames) return { frames, timed_out: false }
+    }
+    return { frames, timed_out: true }
+  }
+
+  /** Record the bus for `seconds` into a log; frames are written by the bridge's reader as they arrive. */
   async capture(seconds: number, fmt: string, filters?: Filter[], dbc?: string): Promise<z.output<typeof Captured>> {
-    return bridge().call('can.capture', { session: this.session, seconds, fmt, filters: filters ?? null, dbc: dbc ?? null }, Captured, seconds * 1000 + 30_000)
+    await bridge().call('can.capture_start', { session: this.session, fmt, filters: filters ?? null, dbc: dbc ?? null }, Ok, 30_000)
+    await new Promise((r) => setTimeout(r, seconds * 1000))
+    return bridge().call('can.capture_stop', { session: this.session }, Captured, 60_000)
   }
 
   async stats(): Promise<z.output<typeof Stats>> {
@@ -97,7 +124,7 @@ export class CanSession {
 
   async close(): Promise<void> {
     try {
-      await bridge().call('can.close', { session: this.session }, z.object({ ok: z.literal(true) }), 10_000)
+      await bridge().call('can.close', { session: this.session }, Ok, 10_000)
     } catch { /* the bridge closes every bus when it exits */ }
   }
 }

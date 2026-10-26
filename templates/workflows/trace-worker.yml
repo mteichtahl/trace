@@ -5,11 +5,15 @@
 # starts the build). The repository's .trace/rules.md is the authority on what to do and when to ask a person;
 # the guardrails in the prompt (no pushes to __TR_BRANCH__, no merges, no deploys, no settings) are built in.
 #
-# Model access, one of:
-#   - Amazon Bedrock: repository variable TRACE_AWS_ROLE (a role GitHub OIDC can assume, with Bedrock access)
-#     and TRACE_AWS_REGION;
-#   - the Anthropic API: secret ANTHROPIC_API_KEY.
-# Also needs TRACE_TOKEN. Runner: variable TRACE_RUNNER as JSON ("ubuntu-24.04" or ["self-hosted","x64"]).
+# Where each item runs is the setting worker.runner:
+#   - agentcore (default): the item is dispatched to the trace agent on Amazon Bedrock AgentCore Runtime. Needs the
+#     repository variables TRACE_AWS_ROLE (a role GitHub OIDC can assume, allowed bedrock-agentcore:InvokeAgentRuntime),
+#     TRACE_AWS_REGION and TRACE_AGENT_RUNTIME_ARN.
+#   - actions: Claude Code runs here in GitHub Actions (claude-code-action). Model access, one of:
+#       - Amazon Bedrock: TRACE_AWS_ROLE (with Bedrock access) and TRACE_AWS_REGION;
+#       - the Anthropic API: secret ANTHROPIC_API_KEY.
+#     Runner: variable TRACE_RUNNER as JSON ("ubuntu-24.04" or ["self-hosted","x64"]).
+# Also needs TRACE_TOKEN. An hourly schedule runs the pick as a backstop for events GitHub never sent.
 # Kill switch: variable TRACE_WORKER = 'false'.
 name: trace-worker
 
@@ -21,6 +25,8 @@ on:
     types: [labeled]
   push:
     branches: [__TR_BRANCH__]
+  schedule:
+    - cron: '23 * * * *'
   workflow_dispatch:
 
 permissions: {}
@@ -42,15 +48,46 @@ jobs:
       contents: read
     outputs:
       items: ${{ steps.pick.outputs.items }}
+      runner: ${{ steps.pick.outputs.runner }}
     steps:
       - id: pick
         uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
         with:
           task: worker-pick
 
+  dispatch:
+    needs: pick
+    if: >-
+      needs.pick.outputs.items != '' && needs.pick.outputs.items != '[]' &&
+      (needs.pick.outputs.runner == 'agentcore' || needs.pick.outputs.runner == '')
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        item: ${{ fromJSON(needs.pick.outputs.items) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      id-token: write          # GitHub OIDC -> TRACE_AWS_ROLE (bedrock-agentcore:InvokeAgentRuntime)
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.TRACE_AWS_ROLE }}
+          role-session-name: trace-dispatch-${{ github.run_id }}-${{ matrix.item.number }}
+          aws-region: ${{ vars.TRACE_AWS_REGION || 'us-east-1' }}
+      - id: dispatch
+        uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
+        with:
+          task: worker-dispatch
+          item: ${{ toJSON(matrix.item) }}
+          runtime-arn: ${{ vars.TRACE_AGENT_RUNTIME_ARN }}
+
   work:
     needs: pick
-    if: needs.pick.outputs.items != '' && needs.pick.outputs.items != '[]'
+    if: needs.pick.outputs.items != '' && needs.pick.outputs.items != '[]' && needs.pick.outputs.runner == 'actions'
     strategy:
       fail-fast: false
       max-parallel: 20

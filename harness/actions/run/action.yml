@@ -1,6 +1,6 @@
 name: trace
 description: >-
-  Runs one trace task (open-pr, automerge, update-queue, ci-doctor, worker-pick, worker-prompt, deploy-*) with the repository's .trace/config.yml.
+  Runs one trace task (open-pr, automerge, update-queue, ci-doctor, worker-pick, worker-prompt, worker-dispatch, deploy-*) with the repository's .trace/config.yml.
 inputs:
   task:
     description: The task to run.
@@ -14,7 +14,11 @@ inputs:
     required: false
     default: ${{ github.token }}
   item:
-    description: worker-prompt only — one item from worker-pick, as JSON.
+    description: worker-prompt/worker-dispatch only — one item from worker-pick, as JSON.
+    required: false
+    default: ''
+  runtime-arn:
+    description: worker-dispatch only — the trace agent's AgentCore runtime ARN (TRACE_AGENT_RUNTIME_ARN).
     required: false
     default: ''
   sha:
@@ -60,6 +64,8 @@ outputs:
   by: { description: deploy-approve — who approved, value: '${{ steps.run.outputs.by }}' }
   before: { description: deploy-guard — what was deployed before (the rollback target), value: '${{ steps.run.outputs.before }}' }
   items: { description: worker-pick — the claimed items as a JSON list, value: '${{ steps.run.outputs.items }}' }
+  runner: { description: worker-pick — where items run (worker.runner — agentcore or actions), value: '${{ steps.run.outputs.runner }}' }
+  job: { description: worker-dispatch — the agent's job id, value: '${{ steps.run.outputs.job }}' }
   prompt: { description: worker-prompt — the prompt, value: '${{ steps.run.outputs.prompt }}' }
   args: { description: worker-prompt — claude_args, value: '${{ steps.run.outputs.args }}' }
   setup: { description: worker-prompt/deploy-commands — the setup command, value: '${{ steps.run.outputs.setup }}' }
@@ -79,6 +85,7 @@ runs:
         OWN_TOKEN: ${{ inputs.token }}
         JOB_TOKEN: ${{ inputs.job-token }}
         ITEM: ${{ inputs.item }}
+        TRACE_AGENT_RUNTIME_ARN: ${{ inputs.runtime-arn }}
         SHA: ${{ inputs.sha }}
         ISSUE: ${{ inputs.issue }}
         BY: ${{ inputs.by }}

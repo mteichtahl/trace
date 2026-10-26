@@ -39,7 +39,8 @@ export async function record<R extends object>(
     const rec: Rec = {
       id,
       measure: (name, value, unit = '', detail) => work.measure(id, name, value !== null && Number.isFinite(value) ? value : null, unit, detail),
-      artifact: (name, data, mime) => work.artifact(id, name, data, mime),
+      // SQLite binds an empty blob as NULL, and an empty artifact says nothing: leave it out
+      artifact: (name, data, mime) => { if (data.length) work.artifact(id, name, data, mime) },
     }
     let out: Outcome<R>
     try {

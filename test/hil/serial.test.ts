@@ -132,17 +132,24 @@ describe('hil settings validation', () => {
       'hil.can': [{ name: 'c', interface: 'nope', channel: 'can0' }],
       'hil.instruments': [
         { name: 's', kind: 'scope', address: '10.0.0.1' },
-        { name: 'p', kind: 'psu', address: 'TCPIP::h::5025::SOCKET', limits: { max_voltage_v: 5 } },
-        { name: 'c', kind: 'dmm', address: 'tcp://h:5025', color: 'red' },
+        { name: 'd', kind: 'dmm', address: 'tcp://h:5025', color: 'red' },
       ],
     }).errors.join('\n')
     expect(e).toMatch(/hil.serial.0.name: letters, digits/)
     expect(e).toMatch(/hil.serial.0.baud/)
     expect(e).toMatch(/hil.can.0.interface/)
     expect(e).toMatch(/hil.instruments.0.address: expected TCPIP::host::port::SOCKET/)
-    expect(e).toMatch(/hil.instruments.1.limits: a PSU needs max_voltage_v and max_current_a/)
-    expect(e).toMatch(/hil.instruments.2.*color/)
-    expect(e).toMatch(/c is also hil.can\[0\]/)
+    expect(e).toMatch(/hil.instruments.1.*color/)
+    // checks across items run once every item is well formed
+    const x = resolve({
+      'hil.can': [{ name: 'c', interface: 'virtual', channel: 'x' }],
+      'hil.instruments': [
+        { name: 'p', kind: 'psu', address: 'TCPIP::h::5025::SOCKET', limits: { max_voltage_v: 5 } },
+        { name: 'c', kind: 'dmm', address: 'tcp://h:5025' },
+      ],
+    }).errors.join('\n')
+    expect(x).toMatch(/hil.instruments.0.limits: a PSU needs max_voltage_v and max_current_a/)
+    expect(x).toMatch(/hil.instruments.1.name: c is also hil.can\[0\]/)
     const ok = resolve({ 'hil.instruments': [{ name: 'p', kind: 'psu', address: 'TCPIP::h::5025::SOCKET', limits: { max_voltage_v: 5, max_current_a: 1, per_channel: { '2': { max_voltage_v: 3.3 } } } }] })
     expect(ok.errors).toEqual([])
     expect(ok.config.hil.instruments[0]?.timeout_s).toBe(5)
