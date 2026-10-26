@@ -56,7 +56,7 @@ projects is therefore drawn in IAM, not only in code (`src/infra/project.ts`):
 | Isolated per project | How |
 | --- | --- |
 | **Worker runtime** | One AgentCore runtime per repository (`<prefix>_w_<hash>`, tagged `trace:project`), with its own execution role and `TRACE_PROJECT=owner/repo`. It refuses, with a 403 that is logged, any invocation or job for another repository. |
-| **Memory** | Its role may create and list events only for actors `<owner>/<repo>/*`, and recall and list records only under `/trace/<owner>/<repo>/*` (the condition keys `bedrock-agentcore:actorId` and `bedrock-agentcore:namespace`). The actor comes from `TRACE_PROJECT`, never from the request. |
+| **Memory** | One AgentCore Memory per repository (`<prefix>_m_<hash>`, tagged `trace:project`), its own event expiry, and its own log group and log delivery. The worker is told only its own (`TRACE_MEMORY_ID`) and its role may use only that memory's ARN. On it, the role may still create and list events only for actors `<owner>/<repo>/*`, and recall and list records only under `/trace/<owner>/<repo>/*` (the condition keys `bedrock-agentcore:actorId` and `bedrock-agentcore:namespace`), as defence in depth. The actor comes from `TRACE_PROJECT`, never from the request. The GitHub OIDC role has no memory access. |
 | **S3** | Read and write `projects/<owner>/<repo>/*` and `jobs/<owner>/<repo>/*`, and list only those prefixes and `central/*`. Nothing under `access/*`, and nothing of another project. |
 | **GPU jobs** | One AWS Batch job definition per project, whose job role reads and writes only that project's `jobs/<owner>/<repo>/*`. A project's role may submit only with its own definition, only jobs tagged `trace:project=<owner>/<repo>`, and may stop only jobs carrying that tag. SubmitJob cannot override a definition's job role. |
 | **GitHub OIDC role** | One per repository, trusted only for `repo:OWNER/REPO:ref:refs/heads/BRANCH`. It may invoke only that project's runtime and read and write only that project's prefix (and the central database). |
@@ -70,11 +70,11 @@ Shared on purpose:
 - **The GPU queue and compute environment**, and the GPU image.
 - **The agent image**: every runtime runs the same one.
 - **The API runtime.** It is the one component that spans projects. It holds the shared GitHub token, which admins
-  need for `settings.get` and `settings.set` on any project. It reads (never writes) every project's memory records
-  for `memory.list` and `memory.recall`, and it may invoke every project's worker. It does all of this only after its
+  need for `settings.get` and `settings.set` on any project. It reads (never writes) the records of every project's
+  memory for `memory.list` and `memory.recall`, choosing the memory of the project asked for after the access check,
+  and it may invoke every project's worker. It does all of this only after its
   Cognito access check. It runs no model and no agent, and nothing reaches a shell through it: a `task` is handed to
   the project's own worker runtime.
-- **AgentCore Memory**: one memory resource, divided by the conditions above.
 
 `DescribeJobs` in AWS Batch has no resource-level permissions, so any project's role can describe (not change) any
 job on the queue, which includes its command and environment. Job ids, not data, are what that reveals.
@@ -85,6 +85,10 @@ job definition with one of each per project, and rewrites every repository's `TR
 `TRACE_AGENT_RUNTIME_ARN`. Workflows that run between the deploy and the variable update fail to assume the old
 role; re-run them. The shared `<prefix>/github-token` secret stays, as the API's. GPU job files written under the
 old `jobs/<id>/` layout expire with the bucket's one-week rule.
+
+**Upgrading an installation from before per-project memory.** The installation-wide memory (`<prefix>_memory`) is
+removed and every project starts with its own, empty memory. See [Agent memory](#agent-memory) for what happens to
+the old one's records.
 
 ## People and permissions
 
@@ -268,9 +272,20 @@ v0.37.0 and installs scikit-rf 2.2.0.
 
 ## Agent memory
 
-Each agent has short-term and long-term memory in one Amazon Bedrock AgentCore Memory per installation
-(`src/infra/memory.ts`; the client is `src/agent/memory.ts`). Set `memory.enabled` and `memory.eventExpiryDays`
-(default 30, from 3 to 365) in the stack settings.
+Each agent has short-term and long-term memory in its project's own Amazon Bedrock AgentCore Memory: one per
+repository, named `<prefix>_m_<hash>` and created with the project's other resources (`src/infra/project.ts` and
+`src/infra/memory.ts`; the client is `src/agent/memory.ts`). The stack settings are:
+
+- `memory.enabled` (default true).
+- `memory.eventExpiryDays`: how long short-term events are kept. The default is 30 and AgentCore allows 3 to 365.
+- `projectSettings`: settings for one project, keyed by `OWNER/REPO` (without `@BRANCH`). Today that is
+  `memoryEventExpiryDays`, which overrides `memory.eventExpiryDays` for that project. The installer sets it from the
+  "memory days" field beside each repository. An empty field means the default.
+
+A project's memory lives and dies with the project. With `retainData` true (the default), each memory, its log group
+and its log delivery are marked Retain. When the repository is removed from the list, or the stack is deleted, they
+stay in the account, outside the stack. With `retainData` false they are deleted, records and all. Each project's
+memory id is the output `Project<hash>MemoryId`, and the installer records them on this machine.
 
 - **Short term:** events per actor and session. A job records what it was asked, its key trace-tool outcomes and its
   result. A job that continues a session (the same pull request or issue, or the same task branch) is given that
@@ -279,7 +294,8 @@ Each agent has short-term and long-term memory in one Amazon Bedrock AgentCore M
   about the project, the summary strategy keeps one summary per session, and the user preference strategy keeps how
   the project wants things done.
 
-The actors and namespaces keep projects and agents apart:
+Each memory serves one project. The actor and namespace scheme from the time when one memory served every project
+is kept, so every record still says whose it is, and the existing checks still hold inside each memory:
 
 | Actor | Who |
 | --- | --- |
@@ -299,18 +315,44 @@ one-to-one, so no two repositories share a namespace. Sessions are `pr-<n>`, `is
 At the start of a job, its memory is added to the end of the prompt in a fenced block that says it is data, not
 instructions. Each item is one line, cut to length, and cannot close the fence. Everything recorded is scrubbed of
 tokens and keys and is bounded in size (8000 characters per event, 12 tool outcomes per job). Without
-`TRACE_MEMORY_ID`, or when AgentCore fails, a job runs as before without memory.
+`TRACE_MEMORY_ID` (its project's memory), or when AgentCore fails, a job runs as before without memory.
 
 - **Inside a job:** Claude has the MCP tools `memory_recall` and `memory_remember`. They act only as the job's actor and
   session (`TRACE_MEMORY_ACTOR` and `TRACE_MEMORY_SESSION`, or `TRACE_MEMORY_REPOSITORY` and `TRACE_MEMORY_AGENT`), and
   they are offered only when `TRACE_MEMORY_ID` is set.
 - **Through the API:** anyone who can read a project can see its memory with the read-only actions `memory.list` and
-  `memory.recall` (optionally for one `agent`). Person-scoped preferences are shown only to the person they belong
-  to, and to admins.
-- **In IAM:** each project's worker role may call only `CreateEvent` and `ListEvents` for its own project's actors
-  (`<owner>/<repo>/*`) and `RetrieveMemoryRecords` and `ListMemoryRecords` under its own namespaces
-  (`/trace/<owner>/<repo>/*`), on this memory only. The API role may only recall and list records under `/trace/`.
-  The client draws the same lines as well (see [Project isolation](#project-isolation)).
+  `memory.recall` (optionally for one `agent`). The API learns every project's memory from `TRACE_PROJECT_MEMORIES`
+  (`owner/repo=<memory id>`, separated by spaces, the same encoding as `TRACE_WORKER_RUNTIMES`). After the access
+  check it reads only the memory of the project asked for. A project with no memory in the installation gets the
+  same 403 "no access" as a project you are not assigned to. Person-scoped preferences are shown only to the person
+  they belong to, and to admins.
+- **In IAM:** each project's worker role may use only its own memory's ARN: `CreateEvent` and `ListEvents` for its
+  project's actors (`<owner>/<repo>/*`), and `RetrieveMemoryRecords` and `ListMemoryRecords` under its namespaces
+  (`/trace/<owner>/<repo>/*`). The API role may only recall and list records under `/trace/`, on each project's
+  memory. The GitHub OIDC roles have no memory access. The client draws the same lines as well (see
+  [Project isolation](#project-isolation)).
+- **Limits:** the API's two lists (`TRACE_WORKER_RUNTIMES` and `TRACE_PROJECT_MEMORIES`) are each one environment
+  value, at most 5000 characters, and a runtime may have at most 50 environment variables. The stack checks both
+  when it is built and refuses an installation that would not fit. CloudFormation's 500 resources per stack is the
+  tighter limit in practice: each project adds about 17 resources with memory and observability on (9 without memory),
+  so with the defaults one stack holds about 24 projects. `cdk synth` fails with `TooManyResourcesInStack` beyond that.
+
+**Upgrading from the installation-wide memory.** Earlier versions had one memory for every project
+(`<prefix>_memory`, output `MemoryId`). The next deploy removes it, and every project starts with its own, empty
+memory. Records are not migrated: AgentCore has no API that copies extracted long-term records from one memory to
+another.
+
+- With `retainData` true, the old memory is kept as an orphan with its records. The old template gave it no
+  DeletionPolicy, so taking it out in one step would delete it. The installer therefore keeps it in the stack for one
+  more deploy: it sees the old `MemoryId` output and sets `memory.legacySharedMemory`. On that deploy the memory is
+  unused, no role can reach it, and it is marked Retain (output `LegacyMemoryId`). The installer run after that
+  leaves it out, and CloudFormation leaves it in the account. Read it with your own credentials, and delete it with
+  the AgentCore console or `aws bedrock-agentcore-control delete-memory` when you no longer need it. If you deploy by
+  hand, set `memory.legacySharedMemory: true` for the first deploy. The old memory's log group and log delivery are
+  deleted on the first deploy either way, because the old template marked them Delete.
+- With `retainData` false, the old memory and its records are deleted on the next deploy.
+
+The installer's plan says which of the two will happen when it finds an existing installation.
 
 ## Observability
 
@@ -346,12 +388,17 @@ The stack (settings `observability.*`, chosen in the installer's Agents step) ad
   is stored either way.
 - The runtime roles' telemetry permissions, which match the AgentCore execution role. Each role can also put the
   resource policy on its own log group.
-- The memory's `APPLICATION_LOGS`, delivered to a log group, and its `TRACES`, delivered to X-Ray.
+- Each project memory's `APPLICATION_LOGS`, delivered to its own log group
+  (`/aws/vendedlogs/bedrock-agentcore/memory/APPLICATION_LOGS/<memory id>`), and its `TRACES`, delivered to X-Ray.
+  The delivery sources and destinations are `<prefix>-m-<hash>-logs` and `<prefix>-m-<hash>-traces`. They follow
+  `retainData` like the memory does.
 - X-Ray's OTLP endpoint in the GPU job definition.
-- The `<prefix>-agents` dashboard: invocations, latency, errors, jobs, tokens, cost, tool calls and GPU jobs.
+- The `<prefix>-agents` dashboard: invocations, latency, errors, jobs, tokens, cost, tool calls and GPU jobs. A last row
+  shows memory operations, latency and errors across every project's memory with one SEARCH, which matches each
+  memory by the project hash in its name.
 
 The stack outputs `DashboardUrl`, `GenAiObservabilityUrl`, `Project<hash>LogGroup` (one per project's worker),
-`ApiLogGroup`, `SpansLogGroup` and `MemoryLogGroup`. When `observability.enabled` is false, the runtimes get `DISABLE_ADOT_OBSERVABILITY=true` and
+`ApiLogGroup`, `SpansLogGroup` and `Project<hash>MemoryLogGroup` (one per project's memory). When `observability.enabled` is false, the runtimes get `DISABLE_ADOT_OBSERVABILITY=true` and
 `OTEL_SDK_DISABLED=true`, and nothing else is created.
 
 **In CloudWatch GenAI Observability** (CloudWatch → GenAI Observability → Bedrock AgentCore), the runtimes (one per

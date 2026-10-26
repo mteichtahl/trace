@@ -2,7 +2,7 @@
  * The memory tools (MCP: memory_recall, memory_remember). They reach one actor's memory only: the job's project and
  * agent, from the environment the job runner gives Claude (TRACE_MEMORY_ACTOR, TRACE_MEMORY_SESSION), or derived
  * from TRACE_MEMORY_REPOSITORY (or GITHUB_REPOSITORY) and TRACE_MEMORY_AGENT. There is no argument that names a
- * project, an actor or a namespace. They are offered only when TRACE_MEMORY_ID is set.
+ * project, an actor or a namespace. They are offered only when TRACE_MEMORY_ID (the project's own memory) is set.
  */
 import { z } from 'zod'
 import { ToolError, defineTool } from '../core/registry.js'

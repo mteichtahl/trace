@@ -52,7 +52,8 @@ const s = {
   github: { token: '', adminToken: '', info: null as TokenInfo | null, filter: '', busy: false, error: '' },
   /** a project's own agent token (OWNER/REPO → token): memory only, like every other secret */
   projectTokens: new Map<string, string>(),
-  projects: new Map<string, { branch: string; onboard: boolean; applySettings: boolean }>(),
+  /** memoryDays: the field's text ('' = the installation's default) */
+  projects: new Map<string, { branch: string; onboard: boolean; applySettings: boolean; memoryDays: string }>(),
   aws: { mode: 'profile' as 'profile' | 'keys', profile: 'default', region: 'us-east-1', keyId: '', secret: '', session: '', check: null as AwsCheck | null, confirmed: false, busy: false, error: '' },
   agents: { prefix: 'trace', model: '', maxLifetimeHours: 8, idleMinutes: 15, centralBucketName: '', retainData: true, escalateTo: '', gpuEnabled: true, gpuMaxVcpus: 16, gpuSpot: false,
     observability: true, transactionSearch: true, samplingPercent: '', dashboard: true },
@@ -109,7 +110,7 @@ function answers(): AnswersInput {
       observability: s.agents.observability, transactionSearch: s.agents.transactionSearch, dashboard: s.agents.dashboard,
       samplingPercent: s.agents.samplingPercent.trim() === '' ? null : Number(s.agents.samplingPercent),
     },
-    projects: [...s.projects].map(([repo, p]) => ({ repo, ...p })),
+    projects: [...s.projects].map(([repo, { memoryDays, ...p }]) => ({ repo, ...p, memoryEventExpiryDays: memoryDays.trim() === '' ? null : Number(memoryDays) })),
     adminEmail: s.adminEmail,
     people: s.people.filter((p) => p.email.trim()).map((p) => ({
       email: p.email.trim(), class: p.class,
@@ -188,13 +189,15 @@ function github(): HTMLElement {
         const p = s.projects.get(r.fullName)
         return h('div', { class: 'item' },
           h('input', { type: 'checkbox', checked: Boolean(p), onchange: (e: Event) => {
-            if ((e.target as HTMLInputElement).checked) s.projects.set(r.fullName, { branch: r.defaultBranch, onboard: true, applySettings: r.admin })
+            if ((e.target as HTMLInputElement).checked) s.projects.set(r.fullName, { branch: r.defaultBranch, onboard: true, applySettings: r.admin, memoryDays: '' })
             else s.projects.delete(r.fullName)
             void checkAccess(); render()
           } }),
           h('span', {}, r.fullName, ' ', r.private ? h('span', { class: 'tag' }, 'private') : null, r.admin ? null : h('span', { class: 'tag' }, 'not admin')),
           p ? h('span', { class: 'opt' }, checkbox('onboarding PR', p.onboard, (v) => { p.onboard = v })) : h('span', {}),
-          p ? h('span', { class: 'opt' }, checkbox('repo settings', p.applySettings, (v) => { p.applySettings = v })) : h('span', {}))
+          p ? h('span', { class: 'opt' }, checkbox('repo settings', p.applySettings, (v) => { p.applySettings = v })) : h('span', {}),
+          p ? h('span', { class: 'opt', title: 'Days this project\'s agent memory keeps short-term events (3–365). Empty: 30.' },
+            h('label', { class: 'check' }, 'memory days ', input('number', p.memoryDays, (v) => { p.memoryDays = v.trim() }, { min: 3, max: 365, step: 1, placeholder: '30', style: 'width:5em' }))) : h('span', {}))
       }))) : null,
     s.projects.size ? h('details', {}, h('summary', { class: 'muted' }, 'Each project\'s own agent token (optional)'),
       h('p', { class: 'muted' }, 'Every project gets its own AWS resources and roles, so one project\'s agent cannot reach another\'s in AWS. On GitHub it can reach whatever its token can: give a project a fine-grained token limited to that repository alone to isolate it there too. Projects without one use the token above.'),
@@ -343,7 +346,8 @@ async function loadPlan(): Promise<void> {
   const parsed = AnswersSchema.safeParse(answers())
   if (!parsed.success) { s.planError = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '); render(); return }
   try {
-    s.plan = (await api<{ steps: Step[] }>('POST', '/api/plan', { answers: answers() })).steps
+    // the stack already there, if the AWS check found one: the plan says what happens to its old memory
+    s.plan = (await api<{ steps: Step[] }>('POST', '/api/plan', { answers: answers(), existing: s.aws.check?.existing ?? null })).steps
   } catch (e) {
     s.planError = e instanceof Error ? e.message : String(e)
   }
@@ -405,7 +409,12 @@ async function boot(): Promise<void> {
         // the page keeps the percentage as the field's text ('' = leave the account's setting)
         samplingPercent: saved.agents.samplingPercent === null || saved.agents.samplingPercent === undefined ? '' : String(saved.agents.samplingPercent),
       })
-      for (const p of saved.projects) s.projects.set(p.repo, { branch: p.branch ?? 'main', onboard: p.onboard ?? true, applySettings: p.applySettings ?? true })
+      for (const p of saved.projects) {
+        s.projects.set(p.repo, {
+          branch: p.branch ?? 'main', onboard: p.onboard ?? true, applySettings: p.applySettings ?? true,
+          memoryDays: p.memoryEventExpiryDays === null || p.memoryEventExpiryDays === undefined ? '' : String(p.memoryEventExpiryDays),
+        })
+      }
       s.adminEmail = saved.adminEmail
       s.people = (saved.people ?? []).map((p) => ({ email: p.email, class: p.class ?? 'user', projects: new Set(p.projects ?? []) }))
     } else if (s.env.profiles.regions.default) {

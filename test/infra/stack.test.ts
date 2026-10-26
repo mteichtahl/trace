@@ -1,8 +1,8 @@
 import { App } from 'aws-cdk-lib'
 import { Match, Template } from 'aws-cdk-lib/assertions'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { InfraPropsSchema, apiRuntimeName, projectHash, projectOutputs, stackName, workerRuntimeName } from '../../src/infra/props.js'
-import { TraceStack } from '../../src/infra/stack.js'
+import { InfraPropsSchema, apiRuntimeName, memoryName, projectHash, projectOutputs, projectSettings, stackName, workerRuntimeName } from '../../src/infra/props.js'
+import { ENV_VALUE_MAX, TraceStack, checkRuntimeEnv, idListLength } from '../../src/infra/stack.js'
 
 const A = 'mteichtahl/trace'
 const B = 'pokeys-toolkit/potroller'
@@ -28,6 +28,17 @@ beforeAll(() => {
   const app = new App()
   t = Template.fromStack(new TraceStack(app, stackName(props.prefix), props))
 }, 300_000)
+
+/** The logical id of a project's memory in `t`. */
+const memoryIdOf = (h: string): string => {
+  const ids = Object.keys(t.findResources('AWS::BedrockAgentCore::Memory')).filter((id) => id.startsWith(`Project${h}Memory`))
+  expect(ids).toHaveLength(1)
+  return ids[0] ?? ''
+}
+const runtimeEnv = (tpl: Template, name: string): Record<string, unknown> => {
+  const r = Object.values(tpl.findResources('AWS::BedrockAgentCore::Runtime') as Record<string, { Properties: Record<string, unknown> }>).find((x) => x.Properties.AgentRuntimeName === name)
+  return (r?.Properties.EnvironmentVariables ?? {}) as Record<string, unknown>
+}
 
 describe('the trace stack', () => {
   it('names things from the prefix and the project', () => {
@@ -93,7 +104,6 @@ describe('the trace stack', () => {
   })
 
   it("gives each project's worker role that project's prefixes, actors, namespaces, secret and job definition only", () => {
-    const memoryArn = { 'Fn::GetAtt': [Match.stringLikeRegexp('^AgentMemory'), 'MemoryArn'] }
     const cases = [
       { repo: A, h: HA, actor: 'mteichtahl/trace/*', ns: '/trace/mteichtahl/trace/*', other: { repo: B, h: HB, actor: 'pokeys-toolkit/potroller' } },
       { repo: B, h: HB, actor: 'pokeys-toolkit/potroller/*', ns: '/trace/pokeys-toolkit/potroller/*', other: { repo: A, h: HA, actor: 'mteichtahl/trace' } },
@@ -111,12 +121,17 @@ describe('the trace stack', () => {
       expect(s.filter((x) => actionsOf(x).includes('s3:DeleteObject')).map((x) => JSON.stringify(x.Resource)).join()).not.toContain('/central/')
       const list = s.find((x) => actionsOf(x).includes('s3:ListBucket'))
       expect([...(list?.Condition?.StringLike?.['s3:prefix'] as string[])].sort()).toEqual(['central/*', `jobs/${c.repo}/*`, `projects/${c.repo}/*`])
-      // memory: its own actors and namespaces, on the one memory
+      // memory: its own memory only, and on it still only its own actors and namespaces
+      const memoryArn = { 'Fn::GetAtt': [Match.stringLikeRegexp(`^Project${c.h}Memory`), 'MemoryArn'] }
       expect(s).toEqual(expect.arrayContaining([
         expect.objectContaining({ Sid: 'ProjectMemoryEvents', Action: ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents'], Condition: { StringLike: { 'bedrock-agentcore:actorId': c.actor } } }),
         expect.objectContaining({ Sid: 'ProjectMemoryRecords', Action: ['bedrock-agentcore:RetrieveMemoryRecords', 'bedrock-agentcore:ListMemoryRecords'], Condition: { StringLike: { 'bedrock-agentcore:namespace': c.ns } } }),
       ]))
-      for (const st of s.filter((x) => String(x.Sid).startsWith('ProjectMemory'))) expect(Match.objectLike({ Resource: memoryArn }).test(st).isSuccess).toBe(true)
+      const memoryStatements = s.filter((x) => String(x.Sid).startsWith('ProjectMemory'))
+      expect(memoryStatements).toHaveLength(2)
+      for (const st of memoryStatements) expect(Match.objectLike({ Resource: memoryArn }).test(st).isSuccess).toBe(true)
+      // and no other statement names any memory
+      expect(s.filter((x) => JSON.stringify(x).includes('MemoryArn'))).toHaveLength(2)
       // its own secret only
       const secretReads = s.filter((x) => actionsOf(x).includes('secretsmanager:GetSecretValue'))
       expect(secretReads).toHaveLength(1)
@@ -157,6 +172,8 @@ describe('the trace stack', () => {
       expect(text).not.toContain('/access/*')
       expect(text).not.toContain('/jobs/')
       expect(text).not.toContain('TraceMemory')
+      expect(text).not.toContain('MemoryArn')
+      expect(text).not.toContain('bedrock-agentcore:CreateEvent')
     }
     // no installation-wide actions role any more
     expect(Object.keys(t.findResources('AWS::IAM::Role')).some((id) => id.startsWith('ActionsRole'))).toBe(false)
@@ -176,10 +193,11 @@ describe('the trace stack', () => {
     expect(text).toContain('/access/*')
     expect(text).toContain('/central/*')
     expect(text).not.toMatch(/"Resource":"\*","Action":"cognito/)
-    // memory: records of every project, read only; no events
-    expect(s).toEqual(expect.arrayContaining([expect.objectContaining({
-      Sid: 'TraceMemoryRecordsRead', Action: ['bedrock-agentcore:RetrieveMemoryRecords', 'bedrock-agentcore:ListMemoryRecords'], Condition: { StringLike: { 'bedrock-agentcore:namespace': '/trace/*' } },
-    })]))
+    // memory: records of every project's memory, read only; no events
+    const read = s.find((x) => x.Sid === 'TraceMemoryRecordsRead')
+    expect(read).toMatchObject({ Action: ['bedrock-agentcore:RetrieveMemoryRecords', 'bedrock-agentcore:ListMemoryRecords'], Condition: { StringLike: { 'bedrock-agentcore:namespace': '/trace/*' } } })
+    expect(read?.Resource).toEqual(expect.arrayContaining([HA, HB].map((h) => ({ 'Fn::GetAtt': [memoryIdOf(h), 'MemoryArn'] }))))
+    expect(read?.Resource).toHaveLength(2)
     expect(text).not.toContain('CreateEvent')
     // no GPU, no project data, no project tokens
     for (const never of ['batch:', '/jobs/', '/projects/', `Project${HA}GithubToken`, `Project${HB}GithubToken`]) expect(text).not.toContain(never)
@@ -257,9 +275,11 @@ describe('the trace stack', () => {
 
   it('exports what the installer needs, per project by hash', () => {
     const outputs = Object.keys(t.toJSON().Outputs as Record<string, unknown>)
-    for (const o of ['TraceHome', 'GithubSecretArn', 'ApiRuntimeArn', 'UserPoolId', 'UserPoolClientId', 'CognitoDomain', 'GpuJobQueue', 'MemoryId']) expect(outputs).toContain(o)
+    for (const o of ['TraceHome', 'GithubSecretArn', 'ApiRuntimeArn', 'UserPoolId', 'UserPoolClientId', 'CognitoDomain', 'GpuJobQueue']) expect(outputs).toContain(o)
     for (const repo of [A, B]) for (const o of Object.values(projectOutputs(repo))) expect(outputs).toContain(o)
-    for (const gone of ['AgentRuntimeArn', 'ActionsRoleArn', 'GpuJobDefinition']) expect(outputs).not.toContain(gone)
+    // the installation-wide memory is gone: each project has its own (Project<hash>MemoryId)
+    for (const gone of ['AgentRuntimeArn', 'ActionsRoleArn', 'GpuJobDefinition', 'MemoryId', 'LegacyMemoryId']) expect(outputs).not.toContain(gone)
+    expect((t.toJSON().Outputs as Record<string, { Value: unknown }>)[projectOutputs(A).memoryId]?.Value).toEqual({ 'Fn::GetAtt': [memoryIdOf(HA), 'MemoryId'] })
   })
 
   it('adds and removes a project\'s resources with the repository list', () => {
@@ -267,32 +287,102 @@ describe('the trace stack', () => {
     one.resourceCountIs('AWS::BedrockAgentCore::Runtime', 2)
     one.resourceCountIs('AWS::Batch::JobDefinition', 1)
     expect(JSON.stringify(one.toJSON())).not.toContain(HB)
-    // removing a project never takes data with it: the bucket and the memory are not the project's
+    // removing a project never takes data with it (retainData, the default): the bucket is not the project's, and its
+    // memory is kept in the account (Retain applies on removal from the template as on stack deletion)
     const bucket = Object.values(one.findResources('AWS::S3::Bucket') as Record<string, { DeletionPolicy?: string }>)[0]
     expect(bucket?.DeletionPolicy).toBe('Retain')
+    one.resourceCountIs('AWS::BedrockAgentCore::Memory', 1)
+    for (const m of Object.values(t.findResources('AWS::BedrockAgentCore::Memory') as Record<string, { DeletionPolicy?: string; UpdateReplacePolicy?: string }>)) {
+      expect(m).toMatchObject({ DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' })
+    }
     // its token copy goes with it
     const secrets = Object.entries(one.findResources('AWS::SecretsManager::Secret') as Record<string, { DeletionPolicy?: string }>)
     expect(secrets.find(([id]) => id.startsWith(`Project${HA}`))?.[1].DeletionPolicy).toBe('Delete')
     expect(() => new TraceStack(new App(), 'Many', InfraPropsSchema.parse({ ...props, repositories: Array.from({ length: 61 }, (_, i) => `o/r${i}`) }))).toThrow()
   }, 300_000)
 
-  it('has one AgentCore memory with the semantic, summary and preference strategies, namespaced by actor', () => {
-    t.resourceCountIs('AWS::BedrockAgentCore::Memory', 1)
-    t.hasResourceProperties('AWS::BedrockAgentCore::Memory', {
-      Name: 'trace_memory',
-      EventExpiryDuration: 30,
-      MemoryStrategies: [
-        { SemanticMemoryStrategy: Match.objectLike({ Name: 'trace_facts', NamespaceTemplates: ['/trace/{actorId}/facts/'] }) },
-        { SummaryMemoryStrategy: Match.objectLike({ Name: 'trace_sessions', NamespaceTemplates: ['/trace/{actorId}/sessions/{sessionId}/'] }) },
-        { UserPreferenceMemoryStrategy: Match.objectLike({ Name: 'trace_preferences', NamespaceTemplates: ['/trace/{actorId}/preferences/'] }) },
-      ],
-    })
-    for (const name of [`trace_w_${HA}`, `trace_w_${HB}`, 'trace_api']) {
-      t.hasResourceProperties('AWS::BedrockAgentCore::Runtime', { AgentRuntimeName: name, EnvironmentVariables: Match.objectLike({ TRACE_MEMORY_ID: { 'Fn::GetAtt': [Match.stringLikeRegexp('^AgentMemory'), 'MemoryId'] } }) })
+  it('has one AgentCore memory per project, each with the semantic, summary and preference strategies, namespaced by actor', () => {
+    t.resourceCountIs('AWS::BedrockAgentCore::Memory', 2)
+    for (const [repo, h] of [[A, HA], [B, HB]] as const) {
+      expect(memoryName('trace', repo)).toBe(`trace_m_${h}`)
+      t.hasResourceProperties('AWS::BedrockAgentCore::Memory', {
+        Name: `trace_m_${h}`,
+        EventExpiryDuration: 30,
+        MemoryStrategies: [
+          { SemanticMemoryStrategy: Match.objectLike({ Name: 'trace_facts', NamespaceTemplates: ['/trace/{actorId}/facts/'] }) },
+          { SummaryMemoryStrategy: Match.objectLike({ Name: 'trace_sessions', NamespaceTemplates: ['/trace/{actorId}/sessions/{sessionId}/'] }) },
+          { UserPreferenceMemoryStrategy: Match.objectLike({ Name: 'trace_preferences', NamespaceTemplates: ['/trace/{actorId}/preferences/'] }) },
+        ],
+        Tags: { 'trace:project': repo, 'trace:installation': 'trace' },
+      })
+      // each worker is told its own memory
+      t.hasResourceProperties('AWS::BedrockAgentCore::Runtime', { AgentRuntimeName: `trace_w_${h}`, EnvironmentVariables: Match.objectLike({ TRACE_MEMORY_ID: { 'Fn::GetAtt': [memoryIdOf(h), 'MemoryId'] } }) })
     }
-    const custom = Template.fromStack(new TraceStack(new App(), 'MemoryDays', InfraPropsSchema.parse({ ...props, memory: { eventExpiryDays: 90 } })))
-    custom.hasResourceProperties('AWS::BedrockAgentCore::Memory', { EventExpiryDuration: 90 })
+    // CfnMemory's Name pattern, at the longest prefix
+    expect(memoryName('a'.repeat(21), A)).toMatch(/^[a-zA-Z][a-zA-Z0-9_]{0,47}$/)
+    // the API is told every project's memory as owner/repo=<memory id>, and none as its own
+    const api = JSON.stringify(runtimeEnv(t, 'trace_api'))
+    expect(api).not.toContain('"TRACE_MEMORY_ID"')
+    for (const [repo, h] of [[A, HA], [B, HB]] as const) expect(api).toContain(`"${repo}",{"Fn::GetAtt":["${memoryIdOf(h)}","MemoryId"]}`)
+    expect(api).toContain('TRACE_PROJECT_MEMORIES')
+    // the installation-wide memory is gone
+    expect(Object.keys(t.findResources('AWS::BedrockAgentCore::Memory')).some((id) => id.startsWith('AgentMemory'))).toBe(false)
+    expect(JSON.stringify(t.toJSON())).not.toContain('trace_memory')
+  })
+
+  it('lets one project keep its memory events longer, defaulting from memory.eventExpiryDays', () => {
+    const cfg = InfraPropsSchema.parse({ ...props, memory: { eventExpiryDays: 90 }, projectSettings: { [B.toUpperCase()]: { memoryEventExpiryDays: 7 } } })
+    expect(projectSettings(cfg, A).memoryEventExpiryDays).toBe(90)
+    expect(projectSettings(cfg, B).memoryEventExpiryDays).toBe(7)
+    const custom = Template.fromStack(new TraceStack(new App(), 'MemoryDays', cfg))
+    custom.hasResourceProperties('AWS::BedrockAgentCore::Memory', { Name: `trace_m_${HA}`, EventExpiryDuration: 90 })
+    custom.hasResourceProperties('AWS::BedrockAgentCore::Memory', { Name: `trace_m_${HB}`, EventExpiryDuration: 7 })
     expect(() => InfraPropsSchema.parse({ ...props, memory: { eventExpiryDays: 2 } })).toThrow()
+    expect(() => InfraPropsSchema.parse({ ...props, projectSettings: { [A]: { memoryEventExpiryDays: 366 } } })).toThrow()
+    expect(() => InfraPropsSchema.parse({ ...props, projectSettings: { 'other/repo': { memoryEventExpiryDays: 10 } } })).toThrow(/not one of the repositories/)
+    expect(() => InfraPropsSchema.parse({ ...props, projectSettings: { [A]: {}, [A.toUpperCase()]: {} } })).toThrow(/twice/)
+  }, 300_000)
+
+  it('deletes each project\'s memory, its log group and its log delivery with the stack or the project when retainData is false', () => {
+    const t2 = Template.fromStack(new TraceStack(new App(), 'NoRetain', InfraPropsSchema.parse({ ...props, retainData: false })))
+    const kinds = ['AWS::BedrockAgentCore::Memory', 'AWS::Logs::DeliverySource', 'AWS::Logs::DeliveryDestination', 'AWS::Logs::Delivery']
+    for (const [tpl, policy] of [[t, 'Retain'], [t2, 'Delete']] as const) {
+      for (const kind of kinds) {
+        const rs = Object.values(tpl.findResources(kind) as Record<string, { DeletionPolicy?: string }>)
+        expect(rs.length, kind).toBe(kind === 'AWS::BedrockAgentCore::Memory' ? 2 : 4)
+        for (const r of rs) expect(r.DeletionPolicy ?? 'Delete', kind).toBe(policy)
+      }
+      const groups = Object.entries(tpl.findResources('AWS::Logs::LogGroup') as Record<string, { DeletionPolicy?: string }>).filter(([id]) => /MemoryLogs/.test(id))
+      expect(groups).toHaveLength(2)
+      for (const [, g] of groups) expect(g.DeletionPolicy).toBe(policy)
+    }
+  }, 300_000)
+
+  it('keeps the installation-wide memory of earlier versions, unused and Retain, when asked to on the way out', () => {
+    const t2 = Template.fromStack(new TraceStack(new App(), 'Legacy', InfraPropsSchema.parse({ ...props, memory: { legacySharedMemory: true } })))
+    const legacy = Object.entries(t2.findResources('AWS::BedrockAgentCore::Memory') as Record<string, { DeletionPolicy?: string; Properties: { Name: string } }>).filter(([id]) => id.startsWith('AgentMemory'))
+    expect(legacy).toHaveLength(1)
+    // the same construct path (AgentMemory/Memory, so the same logical id) and name as before: CloudFormation updates
+    // it in place rather than replacing it
+    expect(legacy[0]?.[0]).toBe('AgentMemoryF0943253')
+    expect(legacy[0]?.[1]).toMatchObject({ DeletionPolicy: 'Retain', Properties: { Name: 'trace_memory' } })
+    const id = legacy[0]?.[0] ?? ''
+    // nothing uses it: no runtime is told it and no role may reach it
+    const json = JSON.stringify({ ...t2.toJSON(), Outputs: {} })
+    expect(json).not.toContain(`{"Fn::GetAtt":["${id}"`)
+    expect(json).not.toContain(`{"Ref":"${id}"}`)
+    expect(Object.keys(t2.toJSON().Outputs as Record<string, unknown>)).toContain('LegacyMemoryId')
+  }, 300_000)
+
+  it('refuses a runtime environment AgentCore would refuse: more than 50 entries, or a value over 5000 characters', () => {
+    expect(() => checkRuntimeEnv('x', Object.fromEntries(Array.from({ length: 49 }, (_, i) => [`K${i}`, 'v'])), 1)).not.toThrow()
+    expect(() => checkRuntimeEnv('x', Object.fromEntries(Array.from({ length: 49 }, (_, i) => [`K${i}`, 'v'])), 2)).toThrow(/51 environment variables/)
+    expect(() => checkRuntimeEnv('x', { K: 'v'.repeat(ENV_VALUE_MAX + 1) }, 0)).toThrow(/5001 characters/)
+    // `owner/repo=<name>-<10>` separated by spaces
+    expect(idListLength([{ slug: 'a/b', name: 'trace_m_12345678' }, { slug: 'c/d', name: 'trace_m_abcdef12' }])).toBe('a/b=trace_m_12345678-0123456789 c/d=trace_m_abcdef12-0123456789'.length)
+    // 60 long repository names would overflow the lists: refused when the stack is built
+    const long = Array.from({ length: 60 }, (_, i) => `${'o'.repeat(39)}/${'r'.repeat(50)}${i}`)
+    expect(() => new TraceStack(new App(), 'Long', InfraPropsSchema.parse({ ...props, repositories: long }))).toThrow(/characters \(AgentCore allows 5000\)/)
   }, 300_000)
 
   it('creates none of the memory when memory.enabled is false', () => {
@@ -300,7 +390,8 @@ describe('the trace stack', () => {
     const t2 = Template.fromStack(new TraceStack(new App(), 'NoMemory', off))
     t2.resourceCountIs('AWS::BedrockAgentCore::Memory', 0)
     const json = JSON.stringify(t2.toJSON())
-    for (const s of ['TRACE_MEMORY_ID', 'TraceMemory', 'ProjectMemory', 'bedrock-agentcore:CreateEvent', 'RetrieveMemoryRecords']) expect(json).not.toContain(s)
-    expect(Object.keys(t2.toJSON().Outputs as Record<string, unknown>)).not.toContain('MemoryId')
+    for (const s of ['TRACE_MEMORY_ID', 'TRACE_PROJECT_MEMORIES', 'TraceMemory', 'ProjectMemory', 'bedrock-agentcore:CreateEvent', 'RetrieveMemoryRecords']) expect(json).not.toContain(s)
+    const outputs = Object.keys(t2.toJSON().Outputs as Record<string, unknown>)
+    for (const o of ['MemoryId', projectOutputs(A).memoryId, projectOutputs(B).memoryId]) expect(outputs).not.toContain(o)
   }, 300_000)
 })

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ListMemoryRecordsCommand, RetrieveMemoryRecordsCommand } from '@aws-sdk/client-bedrock-agentcore'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { AgentMemory, type SendClient, namespaceOf, personActor } from '../../src/agent/memory.js'
+import { AgentMemory, type ProjectMemories, type SendClient, namespaceOf, parseProjectMemories, personActor, projectMemoriesFromEnv } from '../../src/agent/memory.js'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
 import { AccessDenied, assign } from '../../src/core/access.js'
 import { Registry } from '../../src/core/registry.js'
@@ -32,7 +32,14 @@ const client: SendClient = {
   },
 }
 
-const deps = (memory: AgentMemory | null): ActionDeps => ({
+const BOARD_MEMORY = 'trace_m_0000aaaa-abcdefghij'
+const SECRET_MEMORY = 'trace_m_0000bbbb-abcdefghij'
+/** Each project's own memory, as the API sees them (TRACE_PROJECT_MEMORIES). */
+const memories = (byRepo: Record<string, string> = { 'acme/board': BOARD_MEMORY, 'acme/secret': SECRET_MEMORY }): ProjectMemories => ({
+  forProject: (repo) => { const id = byRepo[repo.toLowerCase()]; return id ? new AgentMemory(id, client) : null },
+})
+
+const deps = (memory: ProjectMemories | null): ActionDeps => ({
   github: async () => new FakeGitHub(['acme/board', 'acme/secret']),
   cognito: () => new FakeCognito(),
   jobs: async () => ({ repositoryOf: () => null, startJob: async () => ({ accepted: true, jobId: 'j' }), jobStatus: async () => [] }),
@@ -41,7 +48,8 @@ const deps = (memory: AgentMemory | null): ActionDeps => ({
   scratch: mkdtempSync(join(tmpdir(), 'trace-api-mem-')),
   memory: () => memory,
 })
-const ctx = (principal: Context['principal'], memory: AgentMemory | null = new AgentMemory('trace_memory-abcdefghij', client)): Context => ({ principal, deps: deps(memory) })
+const ctx = (principal: Context['principal'], memory: ProjectMemories | null = memories()): Context => ({ principal, deps: deps(memory) })
+const memoryIdsSent = (): string[] => sent.map((c) => (c as { input: { memoryId: string } }).input.memoryId)
 const texts = (r: unknown): string[] => (r as { records: { text: string }[] }).records.map((x) => x.text).sort()
 
 beforeAll(async () => {
@@ -76,6 +84,38 @@ describe('memory through the API', () => {
     await expect(perform('memory.recall', { repo: 'acme/secret', query: 'x' }, ctx(GUEST))).rejects.toThrow(AccessDenied)
     expect(sent).toHaveLength(0)
     await expect(perform('memory.list', { repo: 'acme/board', agent: 'person' }, ctx(GUEST))).rejects.toThrow(/agent/)
+  })
+
+  it('reads the requested project\'s own memory, and no other', async () => {
+    sent.length = 0
+    await perform('memory.list', { repo: 'acme/board' }, ctx(GUEST))
+    await perform('memory.recall', { repo: 'ACME/Board', query: 'ldo' }, ctx(GUEST))
+    expect(new Set(memoryIdsSent())).toEqual(new Set([BOARD_MEMORY]))
+    sent.length = 0
+    await perform('memory.list', { repo: 'acme/secret' }, ctx(ADMIN))
+    expect(new Set(memoryIdsSent())).toEqual(new Set([SECRET_MEMORY]))
+  })
+
+  it('answers "no access" for a project with no memory in this installation, even to an admin, before memory is touched', async () => {
+    sent.length = 0
+    const only = memories({ 'acme/board': BOARD_MEMORY })
+    for (const action of ['memory.list', 'memory.recall'] as const) {
+      await expect(perform(action, { repo: 'acme/secret', query: 'x' }, ctx(ADMIN, only))).rejects.toThrow(AccessDenied)
+      await expect(perform(action, { repo: 'other/repo', query: 'x' }, ctx(ADMIN, only))).rejects.toThrow(/no access/)
+    }
+    expect(sent).toHaveLength(0)
+  })
+
+  it('learns each project\'s memory from TRACE_PROJECT_MEMORIES', () => {
+    const env = { AWS_REGION: 'us-east-1', TRACE_PROJECT_MEMORIES: `acme/board=${BOARD_MEMORY} Acme/Secret=${SECRET_MEMORY}` }
+    expect(parseProjectMemories(env.TRACE_PROJECT_MEMORIES)).toEqual(new Map([['acme/board', BOARD_MEMORY], ['acme/secret', SECRET_MEMORY]]))
+    const m = projectMemoriesFromEnv(env)
+    expect(m?.forProject('ACME/board')?.memoryId).toBe(BOARD_MEMORY)
+    expect(m?.forProject('acme/secret')?.memoryId).toBe(SECRET_MEMORY)
+    expect(m?.forProject('acme/other')).toBeNull()
+    expect(projectMemoriesFromEnv({})).toBeNull()
+    expect(projectMemoriesFromEnv({ TRACE_PROJECT_MEMORIES: '' })).toBeNull()
+    for (const bad of ['acme/board', `=${BOARD_MEMORY}`, 'acme/board=not-an-id', `../x=${BOARD_MEMORY}`]) expect(() => parseProjectMemories(bad)).toThrow(/TRACE_PROJECT_MEMORIES/)
   })
 
   it('answers enabled: false without memory', async () => {

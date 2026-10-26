@@ -27,10 +27,11 @@ export const InfraPropsSchema = z.object({
   prefix: z.string().regex(/^[a-z][a-z0-9-]{1,20}$/, 'lower-case letters, digits and dashes, 2–21 characters').default('trace'),
   account: z.string().regex(/^\d{12}$/, 'a 12-digit AWS account id'),
   region: z.string().regex(/^[a-z]{2}(-[a-z]+)+-\d$/, 'an AWS region such as us-east-1'),
-  /** The onboarded repositories. Each is one project with its own worker runtime, roles, GitHub token secret and GPU
-   * job definition (src/infra/project.ts); only its default branch's workflows may assume its GitHub OIDC role
-   * (subject `repo:OWNER/REPO:ref:refs/heads/BRANCH`). At most 60: the API runtime is told every worker runtime in one
-   * environment variable (5000 characters). */
+  /** The onboarded repositories. Each is one project with its own worker runtime, roles, GitHub token secret, memory
+   * and GPU job definition (src/infra/project.ts); only its default branch's workflows may assume its GitHub OIDC role
+   * (subject `repo:OWNER/REPO:ref:refs/heads/BRANCH`). At most 60: the API runtime is told every worker runtime, and
+   * every project's memory, in one environment variable each (5000 characters; checked when the stack is built). In
+   * practice CloudFormation's 500 resources per stack binds first: about 24 projects with memory and observability on. */
   repositories: z.array(repoSlug).min(1).max(60).superRefine((rs, ctx) => {
     const seen = new Map<string, string>()
     for (const r of rs) {

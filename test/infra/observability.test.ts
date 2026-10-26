@@ -78,12 +78,27 @@ describe('observability in the stack', () => {
     t.resourceCountIs('AWS::CloudFormation::CustomResource', 2)
   })
 
-  it('delivers the memory\'s application logs to a log group and its traces to X-Ray', () => {
-    t.hasResourceProperties('AWS::Logs::DeliverySource', { LogType: 'APPLICATION_LOGS', Name: 'trace-memory-logs', ResourceArn: Match.anyValue() })
-    t.hasResourceProperties('AWS::Logs::DeliverySource', { LogType: 'TRACES', Name: 'trace-memory-traces' })
-    t.hasResourceProperties('AWS::Logs::DeliveryDestination', { DeliveryDestinationType: 'XRAY' })
-    t.hasResourceProperties('AWS::Logs::DeliveryDestination', { DestinationResourceArn: Match.anyValue() })
+  it('delivers each project memory\'s application logs to its own log group and its traces to X-Ray', () => {
+    const memory = { 'Fn::GetAtt': [Match.stringLikeRegexp(`^Project${H}Memory`), 'MemoryArn'] }
+    t.hasResourceProperties('AWS::Logs::DeliverySource', { LogType: 'APPLICATION_LOGS', Name: `trace-m-${H}-logs`, ResourceArn: memory })
+    t.hasResourceProperties('AWS::Logs::DeliverySource', { LogType: 'TRACES', Name: `trace-m-${H}-traces`, ResourceArn: memory })
+    t.hasResourceProperties('AWS::Logs::DeliveryDestination', { Name: `trace-m-${H}-traces`, DeliveryDestinationType: 'XRAY' })
+    t.hasResourceProperties('AWS::Logs::DeliveryDestination', { Name: `trace-m-${H}-logs`, DestinationResourceArn: Match.anyValue() })
+    t.hasResourceProperties('AWS::Logs::LogGroup', { LogGroupName: { 'Fn::Join': ['', ['/aws/vendedlogs/bedrock-agentcore/memory/APPLICATION_LOGS/', { 'Fn::GetAtt': [Match.stringLikeRegexp(`^Project${H}Memory`), 'MemoryId'] }]] } })
     t.resourceCountIs('AWS::Logs::Delivery', 2)
+    // two projects: two of each, one per memory, never the installation-wide one
+    const two = Template.fromStack(new TraceStack(new App(), 'TwoMemories', InfraPropsSchema.parse({ ...base, repositories: ['mteichtahl/trace', 'pokeys-toolkit/potroller'] })))
+    two.resourceCountIs('AWS::Logs::Delivery', 4)
+    two.resourceCountIs('AWS::Logs::DeliverySource', 4)
+    const names = Object.values(two.findResources('AWS::Logs::DeliverySource') as Record<string, Res>).map((r) => r.Properties?.Name).sort()
+    const H2 = projectHash('pokeys-toolkit/potroller')
+    expect(names).toEqual([`trace-m-${H}-logs`, `trace-m-${H}-traces`, `trace-m-${H2}-logs`, `trace-m-${H2}-traces`].sort())
+    for (const n of names) expect(String(n)).toMatch(/^[\w-]{1,60}$/)
+    const outputs = Object.keys(two.toJSON().Outputs as Record<string, unknown>)
+    expect(outputs).toEqual(expect.arrayContaining([`Project${H}MemoryLogGroup`, `Project${H2}MemoryLogGroup`]))
+    // the dashboard SEARCHes across both memories
+    const body = JSON.stringify(Object.values(two.findResources('AWS::CloudWatch::Dashboard') as Record<string, Res>)[0]?.Properties?.DashboardBody)
+    expect(body).toContain(`(${H} OR ${H2})`)
     const delivery = Object.values(t.findResources('AWS::Logs::Delivery') as Record<string, Res & { DependsOn?: string[] }>)
     expect(delivery.some((d) => (d.DependsOn ?? []).some((x) => x.startsWith('ObservabilityTransactionSearch')))).toBe(true)
   })
@@ -110,7 +125,9 @@ describe('observability in the stack', () => {
       expect(body).toContain(m)
     }
     const outputs = Object.keys(t.toJSON().Outputs as Record<string, unknown>)
-    for (const o of ['DashboardUrl', `Project${H}LogGroup`, 'ApiLogGroup', 'SpansLogGroup', 'MemoryLogGroup', 'GenAiObservabilityUrl']) expect(outputs).toContain(o)
+    for (const o of ['DashboardUrl', `Project${H}LogGroup`, 'ApiLogGroup', 'SpansLogGroup', `Project${H}MemoryLogGroup`, 'GenAiObservabilityUrl']) expect(outputs).toContain(o)
+    expect(outputs).not.toContain('MemoryLogGroup')
+    expect(body).toContain('Memory operations')
     expect(JSON.stringify(t.toJSON().Outputs)).toContain('#dashboards/dashboard/trace-agents')
   })
 
@@ -126,7 +143,7 @@ describe('observability in the stack', () => {
     expect(json).not.toContain('OTEL_EXPORTER_OTLP_TRACES_ENDPOINT')
     expect(json).not.toContain('logs:PutResourcePolicy')
     const outputs = Object.keys(off.toJSON().Outputs as Record<string, unknown>)
-    for (const o of ['DashboardUrl', 'SpansLogGroup', 'MemoryLogGroup']) expect(outputs).not.toContain(o)
+    for (const o of ['DashboardUrl', 'SpansLogGroup', `Project${H}MemoryLogGroup`]) expect(outputs).not.toContain(o)
   }, 300_000)
 
   it('can skip Transaction Search and the dashboard, and set the indexing percentage', () => {
@@ -153,7 +170,11 @@ describe('the dashboard body', () => {
     for (const w of b.widgets) expect((w.properties as { region?: string }).region ?? 'eu-west-1').toBe('eu-west-1')
     expect(JSON.stringify(dashboardBody({ region: 'eu-west-1', runtimes: [], gpu: true }))).toContain('trace.gpu.duration')
     // many projects: the runtime filter would pass SEARCH's 1024-character limit, so every runtime is shown
-    const many = dashboardBody({ region: 'eu-west-1', runtimes: Array.from({ length: 60 }, (_, i) => `trace_w_${String(i).padStart(8, '0')}`), gpu: false })
+    expect(text).not.toContain('Memory operations')
+    // the memories: one SEARCH across them all, by the hash each memory's name and id carry
+    const mem = JSON.stringify(dashboardBody({ region: 'eu-west-1', runtimes: [], memories: ['0123abcd', 'deadbeef'], gpu: false }))
+    expect(mem).toContain(`Namespace=\\"${RUNTIME_NAMESPACE}\\" MetricName=\\"Invocations\\" (0123abcd OR deadbeef)`)
+    const many = dashboardBody({ region: 'eu-west-1', runtimes: Array.from({ length: 60 }, (_, i) => `trace_w_${String(i).padStart(8, '0')}`), memories: Array.from({ length: 60 }, (_, i) => String(i).padStart(8, '0')), gpu: false })
     for (const e of many.widgets.flatMap((w) => ((w.properties as { metrics?: { expression: string }[][] }).metrics ?? []).flat().map((m) => m.expression))) expect(e.length).toBeLessThanOrEqual(1024)
   })
 })

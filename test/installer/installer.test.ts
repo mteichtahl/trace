@@ -13,12 +13,14 @@ const calls = vi.hoisted(() => ({
   onboard: [] as string[], users: new Map<string, Set<string>>(),
   /** what checkToken answers per token (default: the agents' account, seeing nothing) */
   tokens: new Map<string, { login: string; repos: string[] }>(),
+  /** the stack checkAws finds already deployed (default: none) */
+  existing: null as null | { stack: string; status: string; outputs: Record<string, string> },
 }))
 
 vi.mock('../../src/installer/aws.js', () => ({
   credentials: async () => ({ accessKeyId: 'AKIAEXAMPLE', secretAccessKey: 'secret-key-value-1234' }),
   awsEnv: (_c: unknown, region: string) => ({ AWS_REGION: region }),
-  checkAws: async () => ({ account: '123456789012', arn: 'arn:aws:iam::123456789012:user/marc', region: 'us-east-1', agentCore: { ok: true, reason: '' }, models: [], oidcProvider: false, cdkBootstrapped: false, existing: null, warnings: [] }),
+  checkAws: async () => ({ account: '123456789012', arn: 'arn:aws:iam::123456789012:user/marc', region: 'us-east-1', agentCore: { ok: true, reason: '' }, models: [], oidcProvider: false, cdkBootstrapped: false, existing: calls.existing, warnings: [] }),
   stackOutputs: async () => ({}),
   profiles: async () => ({ names: ['default'], regions: { default: 'us-east-1' } }),
 }))
@@ -68,7 +70,8 @@ vi.mock('../../src/core/onboard.js', async (orig) => ({
 }))
 
 const { AnswersSchema, SecretsSchema } = await import('../../src/installer/answers.js')
-const { apply, plan, redact } = await import('../../src/installer/bootstrap.js')
+const { apply, infraInput, plan, redact } = await import('../../src/installer/bootstrap.js')
+const { InfraPropsSchema } = await import('../../src/infra/props.js')
 const { projectOutputs } = await import('../../src/infra/props.js')
 const { createInstaller } = await import('../../src/installer/server.js')
 const { seal, setVariable: realSetVariable, checkToken } = await vi.importActual<typeof import('../../src/installer/github.js')>('../../src/installer/github.js')
@@ -100,6 +103,7 @@ for (const repo of ['mteichtahl/board', 'mteichtahl/fw']) {
   OUTPUTS[o.runtimeArn] = `arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/trace_w_${repo.split('/')[1]}-abc`
   OUTPUTS[o.roleArn] = `arn:aws:iam::123456789012:role/trace-gh-${repo.split('/')[1]}-us-east-1`
   OUTPUTS[o.secretArn] = `arn:aws:secretsmanager:us-east-1:123456789012:secret:trace/github-token/${repo}`
+  OUTPUTS[o.memoryId] = `trace_m_${repo.split('/')[1]}-abcdefghij`
 }
 const secretWrites = (): { SecretId: string; SecretString: string }[] => calls.secrets.map((c) => (c as { input: { SecretId: string; SecretString: string } }).input)
 
@@ -117,6 +121,34 @@ describe('answers', () => {
     expect(steps.map((s) => s.id)).toEqual(['check', 'cdk', 'deploy', 'token', 'repos', 'onboard', 'people', 'local'])
     expect(steps.find((s) => s.id === 'repos')?.detail).toContain('mteichtahl/fw')
     expect(steps.find((s) => s.id === 'deploy')?.detail).toMatch(/for each of the 2 repositories its own AgentCore worker runtime/)
+  })
+
+  it('passes each project\'s memory event expiry to the stack, and leaves the rest to the default', () => {
+    const a = AnswersSchema.parse({ ...ANSWERS, projects: [{ repo: 'mteichtahl/board', memoryEventExpiryDays: 90 }, { repo: 'mteichtahl/fw' }] })
+    const input = infraInput(a)
+    expect(input.projectSettings).toEqual({ 'mteichtahl/board': { memoryEventExpiryDays: 90 } })
+    expect(input.memory).toBeUndefined()
+    const props = InfraPropsSchema.parse(input)
+    expect(props.memory.eventExpiryDays).toBe(30)
+    expect(infraInput(AnswersSchema.parse(ANSWERS)).projectSettings).toBeUndefined()
+    expect(plan(a).find((s) => s.id === 'deploy')?.detail).toMatch(/each project its own AgentCore memory \(events kept 30 days; mteichtahl\/board 90 days, kept if the project or the stack is removed\)/)
+    expect(AnswersSchema.safeParse({ ...ANSWERS, projects: [{ repo: 'mteichtahl/board', memoryEventExpiryDays: 2 }] }).success).toBe(false)
+  })
+
+  it('says what happens to an earlier version\'s installation-wide memory, and keeps it on the way out with retainData', () => {
+    const existing = { outputs: { MemoryId: 'trace_memory-abcdefghij' } }
+    const keep = AnswersSchema.parse(ANSWERS)
+    expect(infraInput(keep, existing).memory).toEqual({ legacySharedMemory: true })
+    expect(plan(keep, existing).find((s) => s.id === 'deploy')?.detail).toMatch(/trace_memory-abcdefghij.*not copied.*marked Retain.*orphan/)
+    const drop = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, retainData: false } })
+    expect(infraInput(drop, existing).memory).toBeUndefined()
+    expect(plan(drop, existing).find((s) => s.id === 'deploy')?.detail).toMatch(/DELETES the old one/)
+    // a fresh install, or one already past the change, says nothing of it
+    const none: (null | { outputs: Record<string, string> })[] = [null, { outputs: {} }, { outputs: { LegacyMemoryId: 'trace_memory-abcdefghij' } }]
+    for (const e of none) {
+      expect(infraInput(keep, e).memory).toBeUndefined()
+      expect(plan(keep, e).find((s) => s.id === 'deploy')?.detail).not.toMatch(/earlier version/)
+    }
   })
 
   it('redacts tokens and keys from log lines', () => {
@@ -169,6 +201,8 @@ describe('installing', () => {
     expect(calls.ghSecrets).toEqual(['mteichtahl/board:TRACE_TOKEN', 'mteichtahl/fw:TRACE_TOKEN'])
     expect(calls.onboard).toEqual(['mteichtahl/board'])
     expect(installation()?.apiRuntimeArn).toBe(OUTPUTS.ApiRuntimeArn)
+    // each project's own memory, from its Project<hash>MemoryId output
+    expect(installation()?.memoryIds).toEqual({ 'mteichtahl/board': 'trace_m_board-abcdefghij', 'mteichtahl/fw': 'trace_m_fw-abcdefghij' })
     process.env.TRACE_HOME = OUTPUTS.TraceHome
     const all = await assignments({ sub: 'x', email: null, groups: ['trace-admins'] })
     expect(all.map((g) => `${g.email}:${g.class}:${g.repo}`).sort()).toEqual(['dev@example.com:user:mteichtahl/board', 'visitor@example.com:guest:mteichtahl/fw'])
@@ -240,6 +274,23 @@ describe('installing', () => {
     const all = await assignments({ sub: 'x', email: null, groups: ['trace-admins'] })
     expect(all.map((g) => `${g.email}:${g.class}:${g.repo}`).sort()).toEqual(['dev@example.com:guest:mteichtahl/fw', 'visitor@example.com:guest:mteichtahl/fw'])
     expect(events.join('\n')).toMatch(/still assigned: visitor@example.com/)
+  })
+
+  it('keeps an earlier version\'s installation-wide memory for one deploy, and says so', async () => {
+    calls.existing = { stack: 'TraceStack', status: 'UPDATE_COMPLETE', outputs: { MemoryId: 'trace_memory-abcdefghij' } }
+    try {
+      const events: string[] = []
+      const infra: string[] = []
+      const ok = await apply(AnswersSchema.parse(ANSWERS), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(JSON.stringify(e)), {
+        cdk: async (args, env) => { if (args[0] === 'deploy') infra.push(env.TRACE_INFRA ?? ''); return 0 }, outputs: async () => OUTPUTS,
+      })
+      expect(ok).toBe(true)
+      expect(JSON.parse(infra[0] ?? '{}').memory).toEqual({ legacySharedMemory: true })
+      const done = JSON.parse(events.at(-1) ?? '{}') as { summary: string[] }
+      expect(done.summary.join('\n')).toMatch(/installation-wide memory of an earlier version \(trace_memory-abcdefghij\)/)
+    } finally {
+      calls.existing = null
+    }
   })
 
   it('stops at the failing step and says how to continue', async () => {
