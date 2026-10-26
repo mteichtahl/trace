@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=84.2.1"]
 build-backend = "setuptools.build_meta"
 
 # The Python bridge: only what Node has no maintained equivalent for, called from TypeScript (src/core/bridge.ts).
