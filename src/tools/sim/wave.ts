@@ -15,7 +15,7 @@
  *
  * Decoders: SPI (modes 0-3, optional chip select, MSB or LSB first, any word size), I2C (START, repeated START, STOP,
  * address, R/W, ACK/NACK, data, and the bus timing of UM10204 Table 10, checked against a speed mode when one is given),
- * UART (baud, data bits, parity, stop bits, idle level). Timing checks: setup and hold of data around a clock edge,
+ * UART (baud, data bits, parity, stop bits, idle level); CAN, 1-Wire, I2S and dual/quad SPI are in decode.ts. Timing checks: setup and hold of data around a clock edge,
  * chip select to clock, select spacing, more than one select or driver active at once, pulse widths and period.
  * Results are compact: long lists are capped and always come with their full counts.
  */
@@ -659,7 +659,7 @@ export const I2C_LIMITS: Readonly<Record<'standard' | 'fast' | 'fast_plus', Read
  * tvd_dat_max (SCL fall to SDA's next change), thd_sta, tsu_sta (repeated START), tsu_sto and t_buf (STOP to START);
  * `framing` counts STARTs and STOPs not on a byte boundary, `unknown` the bits sampled as x or z.
  */
-export function i2cDecode(scl: Signal, sda: Signal, t0 = -Infinity, t1 = Infinity): { frames: I2cFrame[]; timing: I2cTiming } {
+export function i2cDecode(scl: Signal, sda: Signal, t0 = -Infinity, t1 = Infinity): { frames: I2cFrame[]; timing: I2cTiming; worst_at: Partial<Record<keyof I2cTiming | 'period', [number, number]>>; period_min: number } {
   const times = [...new Set([...scl.t, ...sda.t])].filter((t) => t >= t0 && t <= t1).sort((a, b) => a - b)
   const r: I2cTiming = { t_low: Infinity, t_high: Infinity, tsu_dat: Infinity, thd_dat: Infinity, tvd_dat_max: 0, thd_sta: Infinity, tsu_sta: Infinity, tsu_sto: Infinity, t_buf: Infinity, framing: 0, unknown: 0 }
   const frames: I2cFrame[] = []
@@ -677,6 +677,12 @@ export function i2cDecode(scl: Signal, sda: Signal, t0 = -Infinity, t1 = Infinit
   let cur = 0
   let bad = 0
   let sampled = 'x'
+  // where each worst value was seen: [from, to] (the two events the time is measured between)
+  const at: Partial<Record<keyof I2cTiming | 'period', [number, number]>> = {}
+  let periodMin = Infinity
+  const low = (k: Exclude<keyof I2cTiming, 'framing' | 'unknown' | 'tvd_dat_max'>, a: number, b: number): void => {
+    if (b - a < r[k]) { r[k] = b - a; at[k] = [a, b] }
+  }
   for (const t of times) {
     const nc = scl.at(t)
     const nd = sda.at(t)
@@ -684,8 +690,8 @@ export function i2cDecode(scl: Signal, sda: Signal, t0 = -Infinity, t1 = Infinit
       if (sclV === '1' && nc === '1') {
         if (nd === '0' && sdaV === '1') {
           if (inTx && bits % 9 !== 0) r.framing++
-          if (inTx && lastRise !== null) r.tsu_sta = Math.min(r.tsu_sta, t - lastRise)
-          if (!inTx && lastStop !== null) r.t_buf = Math.min(r.t_buf, t - lastStop)
+          if (inTx && lastRise !== null) low('tsu_sta', lastRise, t)
+          if (!inTx && lastStop !== null) low('t_buf', lastStop, t)
           if (frame) frame.end = t
           frame = { t, repeated: inTx, bytes: [], end: Infinity, stopped: false }
           frames.push(frame)
@@ -697,7 +703,7 @@ export function i2cDecode(scl: Signal, sda: Signal, t0 = -Infinity, t1 = Infinit
           highHasCondition = true
         } else if (nd === '1' && sdaV === '0' && inTx) {
           if (bits % 9 !== 0) r.framing++
-          if (lastRise !== null) r.tsu_sto = Math.min(r.tsu_sto, t - lastRise)
+          if (lastRise !== null) low('tsu_sto', lastRise, t)
           if (frame) {
             frame.end = t
             frame.stopped = true
@@ -708,25 +714,26 @@ export function i2cDecode(scl: Signal, sda: Signal, t0 = -Infinity, t1 = Infinit
           highHasCondition = true
         }
       } else if (inTx && sclV === '0' && lastFall !== null) {
-        r.thd_dat = Math.min(r.thd_dat, t - lastFall)
-        r.tvd_dat_max = Math.max(r.tvd_dat_max, t - lastFall)
+        low('thd_dat', lastFall, t)
+        if (t - lastFall > r.tvd_dat_max) { r.tvd_dat_max = t - lastFall; at.tvd_dat_max = [lastFall, t] }
       }
       lastSdaChange = t
       sdaV = nd
     }
     if (nc !== sclV) {
       if (nc === '1' && sclV === '0') {
-        if (inTx && lastFall !== null) r.t_low = Math.min(r.t_low, t - lastFall)
-        if (inTx && lastSdaChange !== null) r.tsu_dat = Math.min(r.tsu_dat, t - lastSdaChange)
+        if (inTx && lastFall !== null) low('t_low', lastFall, t)
+        if (inTx && lastSdaChange !== null) low('tsu_dat', lastSdaChange, t)
+        if (inTx && lastRise !== null && t - lastRise < periodMin) { periodMin = t - lastRise; at.period = [lastRise, t] }
         sampled = sda.at(t)
         lastRise = t
         highHasCondition = false
       } else if (nc === '0' && sclV === '1') {
         if (pendingStart !== null) {
-          r.thd_sta = Math.min(r.thd_sta, t - pendingStart)
+          low('thd_sta', pendingStart, t)
           pendingStart = null
         } else if (inTx && lastRise !== null && !highHasCondition) {
-          r.t_high = Math.min(r.t_high, t - lastRise)
+          low('t_high', lastRise, t)
           if (sampled !== '0' && sampled !== '1') r.unknown++
           bits++
           const k = (bits - 1) % 9
@@ -744,7 +751,7 @@ export function i2cDecode(scl: Signal, sda: Signal, t0 = -Infinity, t1 = Infinit
       sclV = nc
     }
   }
-  return { frames, timing: r }
+  return { frames, timing: r, worst_at: at, period_min: periodMin }
 }
 
 export function i2cCheck(t: I2cTiming, mode: keyof typeof I2C_LIMITS): { parameter: string; measured: number | null; limit: number; ok: boolean }[] {
@@ -764,7 +771,7 @@ export function i2cCheck(t: I2cTiming, mode: keyof typeof I2C_LIMITS): { paramet
 export interface UartOptions {
   baud: number
   dataBits?: number
-  parity?: 'none' | 'even' | 'odd'
+  parity?: 'none' | 'even' | 'odd' | 'mark' | 'space'
   stopBits?: 1 | 1.5 | 2
   /** Idle low (an inverted line, as after some level shifters). */
   invert?: boolean
@@ -816,7 +823,7 @@ export function uartDecode(line: Signal, o: UartOptions, end = Infinity): UartFr
     if (parity !== 'none') {
       const p = lvl(t + bit * (pos + 0.5))
       const total = ones + (p === '1' ? 1 : 0)
-      if ((parity === 'even' && total % 2 !== 0) || (parity === 'odd' && total % 2 !== 1)) f.parity_error = true
+      if ((parity === 'even' && total % 2 !== 0) || (parity === 'odd' && total % 2 !== 1) || (parity === 'mark' && p !== '1') || (parity === 'space' && p !== '0')) f.parity_error = true
       pos++
     }
     if (lvl(t + bit * (pos + 0.5)) !== '1') f.framing_error = true
