@@ -10,6 +10,8 @@ import { DEFAULTS, precheck } from '../../../src/tools/emc/precheck.js'
 import { canImport, openemsPython, siPython } from '../../../src/tools/emc/python.js'
 import { axisLines, buildModel, modelScript } from '../../../src/tools/emc/setup.js'
 import { cmCurrentFor, cmField, dBuV, dmField, envelope, envelopeCorners, harmonic, K_CM, K_DM } from '../../../src/tools/emc/spectrum.js'
+import { backendFor } from '../../../src/gpu/jobs.js'
+import { openemsRuns, openemsSpeed } from '../../../src/tools/emc/python.js'
 import { writeEmcBoard } from './boards.js'
 
 const ctx = { hardware: false, via: 'test' } as const
@@ -65,6 +67,33 @@ describe('emc spectrum closed forms (hand-computed)', () => {
     const i1 = harmonic({ amplitude: 3.3, freq: 50e6, rise: 1e-9 }, 1) / 50
     expect(h1.dm_dbuv_m).toBeCloseTo(dBuV(dmField(50e6, 100e-6, i1, 3, true) / Math.SQRT2), 2)
     expect(typeof r.pass).toBe('boolean')
+  })
+})
+
+describe('emc.run routing and log reading', () => {
+  it('sends a big CPU job to the queue only when asked and a queue exists', () => {
+    const saved = { q: process.env.TRACE_GPU_QUEUE, m: process.env.TRACE_GPU_REMOTE }
+    try {
+      delete process.env.TRACE_GPU_REMOTE
+      delete process.env.TRACE_GPU_QUEUE
+      expect(backendFor({ gpu: false, remote: true })).toBe('local')
+      process.env.TRACE_GPU_QUEUE = 'q'
+      expect(backendFor({ gpu: false, remote: true })).toBe('batch')
+      expect(backendFor({ gpu: false, remote: false })).toBe('local')
+      process.env.TRACE_GPU_REMOTE = 'never'
+      expect(backendFor({ gpu: false, remote: true })).toBe('local')
+    } finally {
+      if (saved.q === undefined) delete process.env.TRACE_GPU_QUEUE
+      else process.env.TRACE_GPU_QUEUE = saved.q
+      if (saved.m === undefined) delete process.env.TRACE_GPU_REMOTE
+      else process.env.TRACE_GPU_REMOTE = saved.m
+    }
+  })
+
+  it('reads openEMS\'s log', () => {
+    const log = 'Create FDTD operator (compressed SSE + multi-threading)\nRunFDTD: end-criteria of -30.00dB reached after 2665 timesteps (-35.49dB)\nTime for 2665 iterations with 372060.00 cells : 26.79 sec\nSpeed: 37.01 MCells/s\nCreate FDTD operator\nTime for 1000 iterations with 5 cells : 1 sec\n'
+    expect(openemsSpeed(log)).toBe(37.01)
+    expect(openemsRuns(log)).toEqual({ timesteps: [2665, 1000], endCriterionMet: [true, false] })
   })
 })
 
@@ -195,6 +224,17 @@ describe('emc.setup (model generation)', () => {
     expect(m1.model.ports[0]?.stop[2]).toBe(1)
     expect(() => buildModel({ ...input, nets: ['/NOPE'] })).toThrow(/no net/)
   })
+
+  it('models the sensor-node ADC_IN net between its SMD pads, and refuses a lumped port on a through-hole pad', () => {
+    const board = resolve('examples/sensor-node/hardware/sensor-node.kicad_pcb')
+    expect(() => buildModel({ board, nets: ['/ADC_IN'], ports: [{ at: 'R3.2' }, { at: 'J2.3' }], fstop: 3e9 })).toThrow(/through-hole/)
+    const m = buildModel({ board, nets: ['/ADC_IN'], ports: [{ at: 'R3.2' }, { at: 'C1.1' }], fstop: 3e9 })
+    expect(m.summary.reference_nets).toEqual(['GND'])
+    expect(m.summary.dielectrics[0]?.er).toBe(4.5)
+    expect(m.summary.boundary.margin_mm).toBeCloseTo(8 * 1.51, 3)
+    expect(m.summary.mesh.fine_cell_mm).toBe(0.125) // half the 0.25 mm track
+    expect(m.model.layers.find((l) => l.name === 'B.Cu')?.polygons.length).toBeGreaterThan(0) // the clipped GND pour
+  })
 })
 
 const haveOpenems = await canImport(openemsPython(), ['CSXCAD', 'openEMS', 'numpy'])
@@ -203,9 +243,10 @@ const haveSkrf = await canImport(siPython(), ['skrf', 'numpy'])
 describe.skipIf(!haveOpenems)('emc.setup + emc.run with openEMS', () => {
   it('simulates a 50 ohm microstrip: S-parameters, Touchstone, TDR', async () => {
     const zA = microstrip(1.9, 1.0, 0.035, 4.4)[0]
-    const s = await call('emc.setup', { board: lineBoard(), nets: ['/RF'], ports: [{ at: 'J1.1' }, { at: 'J2.1' }], fstop: 3e9, points: 300, fine_cell_mm: 0.475, cells_per_dielectric: 4, end_criteria_db: -30 })
+    const s = await call('emc.setup', { board: lineBoard(), nets: ['/RF'], ports: [{ at: 'J1.1' }, { at: 'J2.1' }], fstop: 3e9, points: 300, fine_cell_mm: 0.475, cells_per_dielectric: 4, end_criteria_db: -30, radiated: { frequencies: [2.5e9] } })
     expect(s.build).toMatch(/built/)
-    const r = await call('emc.run', { setup_run_id: s.run_id, frequencies: [0.5e9, 1e9] })
+    expect(s.summary.boundary.margin_reason).toMatch(/lambda\/4 at 2500 MHz/)
+    const r = await call('emc.run', { setup_run_id: s.run_id, frequencies: [0.5e9, 1e9], drive: { amplitude_v: 3.3, freq_hz: 100e6, rise_s: 1e-9 } })
     expect(r.where).toBe('local')
     expect(r.touchstone).toBe('sparams.s2p')
     const at1 = r.losses.find((l: { f_hz: number }) => l.f_hz === 1e9)
@@ -216,6 +257,16 @@ describe.skipIf(!haveOpenems)('emc.setup + emc.run with openEMS', () => {
     const t = r.tdr[0]
     expect(t.z_min_ohm).toBeLessThan(zA * 1.3)
     expect(t.z_max_ohm).toBeGreaterThan(zA * 0.7)
+    expect(r.timesteps.length).toBe(2)
+    expect(r.warning).toBeUndefined()
+    // the far field: a pre-compliance estimate, with ground reflection 6.02 dB above free space
+    expect(r.radiated.label).toMatch(/PRE-COMPLIANCE/)
+    const ff = r.radiated.rows[0]
+    expect(ff.f_hz).toBe(2.5e9)
+    expect(ff.e_with_ground_dbuv_m - ff.e_free_space_dbuv_m).toBeCloseTo(6.02, 2)
+    expect(ff.limit_dbuv_m).toBe(50)
+    expect(ff.radiated_fraction_of_incident).toBeGreaterThan(0)
+    expect(ff.radiated_fraction_of_incident).toBeLessThan(0.1)
     if (haveSkrf) {
       const si = await call('emc.si', { run_id: r.run_id, z_target: 50, tol: 0.3, insertion_loss: [{ from: 1, to: 2, budget_db: 3, f_max: 2e9 }] })
       expect(si.insertion_loss[0].pass).toBe(true)

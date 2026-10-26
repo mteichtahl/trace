@@ -1,6 +1,7 @@
 /**
- * The container's single entry (node /app/dist/agent/main.js). One image, two AgentCore runtimes:
- *   TRACE_AGENT_MODE=worker (default)  the worker runtime (IAM-authenticated; the repositories' workflows invoke it)
+ * The container's single entry (node /app/dist/agent/main.js). One image, every AgentCore runtime:
+ *   TRACE_AGENT_MODE=worker (default)  a project's worker runtime (IAM-authenticated; that repository's workflows and
+ *                                      the API invoke it; TRACE_PROJECT names the one project it serves)
  *   TRACE_AGENT_MODE=api               the API runtime for people (Cognito JWT), src/api/server.ts
  */
 import { z } from 'zod'

@@ -22,7 +22,8 @@ export const InstallationSchema = z.object({
   clientId: z.string(),
   cognitoDomain: z.string().url(),
   apiRuntimeArn: z.string(),
-  /** '' when unknown (`trace connect`: people other than the installer don't need these). */
+  /** '' when unknown (`trace connect`: people other than the installer don't need these). Each project now has its
+   * own worker runtime and GitHub OIDC role (its repository's variables), so the installer leaves the first two ''. */
   workerRuntimeArn: z.string().default(''),
   actionsRoleArn: z.string().default(''),
   githubSecretArn: z.string().default(''),

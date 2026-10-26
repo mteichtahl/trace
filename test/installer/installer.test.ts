@@ -208,7 +208,7 @@ describe('installing', () => {
     const ok = await apply(AnswersSchema.parse(ANSWERS), SecretsSchema.parse({ githubToken: TOKEN, projectTokens: { 'mteichtahl/board': BOARD, 'MTEICHTAHL/fw': FW } }), (e) => events.push(JSON.stringify(e)), { cdk: async () => 0, outputs: async () => OUTPUTS })
     expect(ok).toBe(true)
     const byId = new Map(secretWrites().map((w) => [w.SecretId, w.SecretString]))
-    expect(byId.get(OUTPUTS.GithubSecretArn ?? "")).toBe(TOKEN)
+    expect(byId.get(OUTPUTS.GithubSecretArn ?? '')).toBe(TOKEN)
     expect(byId.get(OUTPUTS[projectOutputs('mteichtahl/board').secretArn] ?? '')).toBe(BOARD)
     expect(byId.get(OUTPUTS[projectOutputs('mteichtahl/fw').secretArn] ?? '')).toBe(FW)
     expect(calls.ghSecretValues.get('mteichtahl/board:TRACE_TOKEN')).toBe(BOARD)

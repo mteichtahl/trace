@@ -405,6 +405,9 @@ export function buildModel(input: SetupInput, geometry?: BoardGeometry): { model
       if (!refLayer) throw new SetupError(`port ${k + 1}: no reference plane found (give ref_layer)`)
       choices.push(`port ${k + 1}: reference layer ${refLayer} (nearest layer with a reference zone)`)
     }
+    if (typeof p.at === 'string' && padAt(b, p.at).layers.includes(refLayer)) {
+      throw new SetupError(`port ${k + 1} at ${p.at}: a through-hole pad has its own copper on ${refLayer}, which would short a lumped port to itself; give a point on the track beside the pad ("at": [x, y]) or an MSL port`)
+    }
     const zs = layerZ(layer)
     const zr = layerZ(refLayer)
     const name = p.name ?? (typeof p.at === 'string' ? p.at : `P${k + 1}`)

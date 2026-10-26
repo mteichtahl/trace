@@ -6,7 +6,7 @@
 #
 # Contents: CUDA 12.9 runtime (Ubuntu 24.04), Node 22, the official Blender build (Cycles CUDA/OptiX, OpenImageDenoise,
 # its own Python with numpy, glTF import), Java 25 + Freerouting, OrthoRoute with CuPy, KiCad 10 (kicad-cli and the
-# pcbnew Python module for Specctra DSN/SES), and the trace dist.
+# pcbnew Python module for Specctra DSN/SES), openEMS v0.37.0 with its Python modules and scikit-rf, and the trace dist.
 FROM --platform=linux/amd64 nvidia/cuda:12.9.2-runtime-ubuntu24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -66,6 +66,43 @@ RUN git clone --filter=blob:none https://github.com/bbenchoff/OrthoRoute /opt/or
  && /opt/orthoroute/venv/bin/pip install --no-cache-dir numpy==2.5.4 scipy==1.18.1 psutil==7.2.2 cupy-cuda12x==14.2.0 \
  && /opt/orthoroute/venv/bin/python -c 'import numpy, scipy, psutil, cupy; print("orthoroute deps ok, cupy", cupy.__version__)'
 
+# openEMS (FDTD field solver, CPU multithreaded) for emc.run: openEMS-Project v0.37.0 (CSXCAD 0.7.0) built from the
+# tag's commit without the Qt viewer, its Python modules in a venv with h5py and scikit-rf (also emc.si). The -dev
+# packages stay installed: they carry the runtime libraries (HDF5, VTK, Boost, CGAL headers, TinyXML) openEMS links.
+# `openems-python` on PATH is the interpreter src/tools/emc/python.ts looks for.
+ARG OPENEMS_COMMIT=974294ba7d812ef5a46a4760593057aee7ce6866
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential cmake libhdf5-dev libvtk9-dev libcgal-dev libtinyxml-dev \
+      libboost-thread-dev libboost-system-dev libboost-date-time-dev libboost-serialization-dev libboost-chrono-dev \
+      libboost-program-options-dev libexpat1-dev libgmp-dev libmpfr-dev python3-dev \
+ && rm -rf /var/lib/apt/lists/* \
+ && git clone --recursive https://github.com/thliebig/openEMS-Project /tmp/openems \
+ && git -C /tmp/openems checkout --detach "${OPENEMS_COMMIT}" && git -C /tmp/openems submodule update --init --recursive \
+ && cmake -S /tmp/openems -B /tmp/openems/build -DCMAKE_INSTALL_PREFIX=/opt/openEMS -DBUILD_APPCSXCAD=NO \
+ && cmake --build /tmp/openems/build -j"$(nproc)" \
+ && python3 -m venv /opt/openEMS/venv \
+ && /opt/openEMS/venv/bin/pip install --no-cache-dir numpy==2.3.4 cython==3.1.6 setuptools==80.9.0 setuptools_scm==9.2.2 h5py==3.15.1 scikit-rf==2.2.0 \
+ && cd /tmp/openems/CSXCAD/python && CSXCAD_INSTALL_PATH=/opt/openEMS CSXCAD_NOSCM=1 VIRTUAL_ENV=/opt/openEMS/venv /opt/openEMS/venv/bin/pip install --no-cache-dir --no-build-isolation . \
+ && cd /tmp/openems/openEMS/python && OPENEMS_INSTALL_PATH=/opt/openEMS CSXCAD_INSTALL_PATH=/opt/openEMS OPENEMS_NOSCM=1 VIRTUAL_ENV=/opt/openEMS/venv /opt/openEMS/venv/bin/pip install --no-cache-dir --no-build-isolation . \
+ && cd / && rm -rf /tmp/openems \
+ && ln -s /opt/openEMS/venv/bin/python /usr/local/bin/openems-python \
+ && openems-python -c 'import CSXCAD, skrf; from openEMS import openEMS; print("openEMS ok, scikit-rf", skrf.__version__)'
+
+# Optional (docker build --build-arg WITH_GERBER2EMS=1): Antmicro's gerber2ems at a pinned commit, in its own venv
+# (it pins scikit-rf 2.1.0, VTK 9.7 and others), with gerbv. trace's tools do not call it: emc.setup builds the model
+# from the KiCad board directly. It is here for people who want its gerber-based flow on the same machine.
+ARG WITH_GERBER2EMS=0
+ARG GERBER2EMS_COMMIT=39d13fc60a6940214a47ffbcf2e164f2c6533b61
+RUN if [ "${WITH_GERBER2EMS}" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends gerbv && rm -rf /var/lib/apt/lists/* \
+      && git clone https://github.com/antmicro/gerber2ems /opt/gerber2ems/src \
+      && git -C /opt/gerber2ems/src checkout --detach "${GERBER2EMS_COMMIT}" \
+      && python3 -m venv --system-site-packages /opt/gerber2ems/venv \
+      && /opt/gerber2ems/venv/bin/pip install --no-cache-dir /opt/gerber2ems/src \
+      && ln -s /opt/openEMS/venv/lib/python3*/site-packages/CSXCAD /opt/openEMS/venv/lib/python3*/site-packages/openEMS /opt/gerber2ems/venv/lib/python3*/site-packages/ \
+      && /opt/gerber2ems/venv/bin/gerber2ems --help > /dev/null; \
+    fi
+
 RUN useradd --create-home --uid 10001 --shell /bin/bash trace
 WORKDIR /app
 
@@ -84,6 +121,7 @@ ENV TRACE_GPU=1 \
     TRACE_ORTHOROUTE=/opt/orthoroute \
     TRACE_ORTHOROUTE_PYTHON=/opt/orthoroute/venv/bin/python \
     TRACE_KICAD_PYTHON=python3 \
+    TRACE_OPENEMS_PYTHON=/opt/openEMS/venv/bin/python \
     HOME=/home/trace \
     NODE_ENV=production
 

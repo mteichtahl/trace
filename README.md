@@ -232,6 +232,40 @@ program is reported as such. `examples/fpga-blinky` (iCEBreaker, ULX3S and Tang 
 that goes from synth to bitstream. `examples/sensor-node/logic` has a cocotb test (`test_moving_average.py`) and
 formal properties (`moving_average_props.sv`, `moving_average.sby`) for its filter.
 
+## Analog, mixed-signal and EMC
+
+The Analog/Mixed-Signal agent's tools run ngspice (built and tested against ngspice 42) through the same code as
+`sim.spice`, and record every run:
+
+| Tool | What it does |
+| --- | --- |
+| `ams.spec` | Analog specs in the project database (table `ams_specs`): min/typ/max, unit, conditions and source per spec set and measure. `trace db merge` keeps the newer row. |
+| `ams.corners` | PVT corners: `.lib` sections (tt/ff/ss from the netlist's or `electronics.models` libraries) or `.param` sets, × supply values, × temperatures. Returns a table, and per spec the worst corner (least margin). |
+| `ams.montecarlo_yield` | Monte Carlo yield against specs, with a Wilson confidence interval, and per measure a sensitivity ranking (correlation over the runs, and/or one-at-a-time ±tol runs). |
+| `ams.opamp_check` | Generated benches around a subcircuit: loop gain by Middlebrook double injection (crossover, phase and gain margin), Aol/GBW, CMRR, PSRR±, slew, output swing, input common-mode range. |
+| `ams.noise` | `.noise` integrated over a band, output and input-referred, spot densities, and the top contributing devices. |
+| `ams.mixed` | One ngspice transient with the analog netlist, an ideal behavioural ADC and a Verilog design compiled by Verilator into a `d_cosim` library. Without Verilator it runs the analog part only and says so. |
+
+`ams.mixed` reproduces ngspice's `vlnggen` steps itself, with ngspice's own shim sources. It gives every input bit
+its own port, because ngspice 42's shim mis-clears bits of multi-bit inputs. It also keeps the library path lower
+case, because ngspice lower-cases the netlist. The co-simulation is two-state and cycle-based: Verilog `#` delays
+are not simulated. For the sensor-node front end driving `moving_average.v`, the averages match the latched ADC codes
+sample for sample (`test/tools/ams`).
+
+The EMC/Simulation agent's tools:
+
+| Tool | What it does |
+| --- | --- |
+| `emc.spectrum` | Closed forms: trapezoid harmonics and envelope (Paul), differential-mode loop and common-mode cable radiation (Ott), and the cable current that meets a limit, against CISPR 32 class A/B. |
+| `emc.precheck` | Rules on the board's geometry with no solver. It checks return-path gaps and plane-split crossings, switching-node area, fast nets near the edge, missing stitching vias, decoupling distance, and an edge-rate emission estimate. Each finding has a location and its evidence. |
+| `emc.setup` | An openEMS FDTD model of a board region: copper, stackup, lumped/MSL ports, PML or MUR at a reported margin, graded mesh, optional NF2FF. It is written as one deterministic Python script, with cell count, memory and time estimates. |
+| `emc.run` | Runs the model through `runJob` (kind `openems`). It goes to the Batch queue when `TRACE_GPU_QUEUE` is set and the model has more cells than `TRACE_OPENEMS_LOCAL_MAX_CELLS` (2e6). Returns a Touchstone file, IL/RL, a TDR impedance profile, and a far-field dBuV/m pre-compliance estimate against CISPR 32. |
+| `emc.si` | scikit-rf checks on S-parameters: TDR discontinuities, insertion loss against a budget, and NEXT/FEXT between nets. |
+
+Every radiated figure is labelled as a pre-compliance estimate. Locally, openEMS needs its Python modules
+(`TRACE_OPENEMS_PYTHON`, or `openems-python` on PATH) and scikit-rf (`TRACE_PYTHON`). The GPU image builds openEMS
+v0.37.0 and installs scikit-rf 2.2.0.
+
 ## Agent memory
 
 Each agent has short-term and long-term memory in one Amazon Bedrock AgentCore Memory per installation
