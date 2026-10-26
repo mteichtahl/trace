@@ -268,7 +268,8 @@ does not need one. Otherwise, when `TRACE_GPU_QUEUE` is set (the stack sets it o
 with that project's job definition), the job goes to an AWS Batch queue of GPU instances that scales to zero when
 idle. Inputs travel through the central bucket's `jobs/<owner>/<repo>/` prefix (`TRACE_PROJECT`; `jobs/_local/` outside
 a project), and outputs and logs come back the same way, so the tool answers the same wherever the job ran. The API
-runtime has no GPU queue: GPU work goes through a `task`.
+runtime has no GPU or CPU queue and runs no tool itself: its `tool` action is forwarded to the project's worker
+runtime (invocation kind `tool`, `src/agents/runtime/tool.ts`), which runs it on its clone of the default branch.
 A job's spec (its argv, file names and program environment) is written to `jobs/<slug>/<id>/spec`, and the
 container gets only `TRACE_GPU_JOB_URI` and `TRACEPARENT` and runs the definition's generic
 `node /app/dist/gpu/runner.js`: AWS Batch's DescribeJobs has no resource-level permission, so anything in a job's
@@ -419,6 +420,9 @@ Every specialist also has the shared read tools: `kicad.board`/`components`/`net
 It also has `agent.delegate`. Its Claude Code tools are read-only: Read, Glob, Grep and TodoWrite, with no Bash,
 Write, Edit or Task. The allowlist is enforced three ways. The Agent SDK's `tools` option sets the built-ins and
 `allowedTools` sets the rest. The job sets `TRACE_MCP_TOOLS`, so the MCP server lists only the specialist's tools.
+In GitHub Actions (`worker.runner actions`) the same three hold: claude-code-action passes `--tools`,
+`--allowedTools` and `--disallowedTools` (Bash, Write, Edit, MultiEdit, NotebookEdit, Task, WebFetch, WebSearch) to
+Claude Code, and the install action's MCP config sets `TRACE_MCP_TOOLS` (see [Delegation to the worker](#delegation-to-the-worker)).
 `trace agent list` shows each specialist, its settings and its tools.
 
 Each specialist's prompt (`src/agents/<kind>/index.ts`, composed by `src/agents/specialist.ts`) has these parts:
@@ -461,6 +465,8 @@ the default.
 
 worker-pick (in GitHub Actions) routes each item it claims without the model. It writes the route into the item
 (`route: { kind, reason, confidence, source }`), and the claim comment names the specialist and why it was chosen.
+For a red PR it claims, it reads the failing GitHub Actions jobs' log tails the way ci-doctor does (at most 5 jobs,
+the last 6000 characters of each; a check's `output.summary` is usually empty), and only for the items it claims.
 An item that nothing decides goes to the runtime without a route, and the runtime asks the model. The workflow
 passes the kind to dispatch (`agent:`), and each matrix job is named after it. The kind, reason, confidence and
 source are recorded on the job (`status`) and as span attributes (`trace.agent.kind`, `trace.route.*`). Every
@@ -484,15 +490,41 @@ When a job needs the repository changed, or long mechanical work, the specialist
   on the specialist's branch, or gets `claude/<kind>-<job>` if that is the default branch.
 - **The wait.** The call blocks: the MCP tool polls the runtime over loopback until the worker ends or
   `agents.delegate_timeout_minutes` (240) passes. It returns the worker's state, its summary and its commits.
+  Claude Code waits that long for it: the job sets `MCP_TOOL_TIMEOUT` (milliseconds, the wall-clock limit of one MCP
+  call, default about 28 hours) and `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` (milliseconds; without it a stdio server
+  that sends nothing for 30 minutes is cut off) to the wait plus 10 minutes, and `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS`
+  to 0 (code.claude.com/docs/en/env-vars).
+- **Stuck delegations.** A worker never outlives its specialist. When the specialist job is aborted, or ends while
+  its worker still runs, the runtime aborts the worker job (its AbortController, through `jobs.ts`). When the wait
+  times out, `agent.delegate` cancels the worker (`POST /delegate/cancel`) and returns `state: timeout`. Either way
+  the delegation is `cancelled`. After a cancelled or failed delegation the specialist may delegate again, still one
+  at a time.
 - **After it returns.** The specialist checks every acceptance criterion with its own tools before it reports. A
   criterion that fails twice is escalated.
 - **Depth 1.** A specialist job holds a per-job token. A delegated worker gets no token, so it is never offered
   `agent.delegate`, and the runtime refuses any token it did not issue. A specialist runs one delegation at a time.
 - **Internal only.** `/invocations` and the API never accept a worker task (`agent: 'worker'`).
 
-**Under `worker.runner actions`** there is no runtime to delegate to. The specialist runs in GitHub Actions with its
-own prompt plus the worker's instructions inline, and with Bash, Write, Edit and Task added, so it makes the change
-itself.
+**Under `worker.runner actions`** there is no runtime to delegate to, so the workflow's `work` job runs the same
+pattern in steps (`src/harness/actions.ts`, `templates/workflows/trace-worker.yml`):
+
+1. `worker-prompt`, then **the specialist**, read only: `--tools Read,Glob,Grep,TodoWrite`, its trace tools in
+   `--allowedTools`, the write tools in `--disallowedTools`, and an MCP config limited to its tools
+   (`TRACE_MCP_TOOLS`, from the install action's `tools` input). It ends with a structured output (`--json-schema`):
+   `{ report, delegate, brief?, acceptance?, branch? }`.
+2. `worker-delegate` reads it. When the specialist delegated, **the worker** runs next with the worker's tools (Bash,
+   Write, Edit, Task, every trace tool), with the brief and the numbered criteria as its request.
+3. **The check**: the specialist again, read only, checks each criterion with its own tools.
+4. `worker-report` posts one report on the item, headed with which specialist acted and why, with each criterion met,
+   not met or not checked.
+
+One delegation per run: an unmet criterion is retried on the next run. claude-code-action passes `claude_args` to the
+CLI as written, and adds GitHub MCP servers of its own only for tools named in `--allowedTools` (none here). One gap
+remains: the action loads the checked-out tree's `.claude/settings.json` (setting sources user, project and local),
+whose hooks run commands even in the read-only specialist's session, as `settingSources: ['project']` does on
+AgentCore. With `TRACE_MEMORY_ID` (and `TRACE_AWS_ROLE` allowed to use that memory) the steps recall and record
+memory under the AgentCore job's actors and session (`<owner>/<repo>/<kind>`, `<owner>/<repo>/worker`, `pr-<n>` or
+`issue-<n>`).
 
 ### Settings
 
@@ -551,7 +583,7 @@ is kept, so every record still says whose it is, and the existing checks still h
 
 | Actor | Who |
 | --- | --- |
-| `<owner>/<repo>/<agent>` | One agent on one project. The agents are the specialists `verify`, `impl`, `ams`, `emc` and `render` (every job), `worker` (a specialist's delegation, continuing its session) and `local` (a person's own Claude Code). `ci-doctor` and `conflict` hold what was remembered before the specialists. |
+| `<owner>/<repo>/<agent>` | One agent on one project. The agents are the specialists `verify`, `impl`, `ams`, `emc` and `render` (every job), `worker` (a specialist's delegation, continuing its session) and `local` (a person's own Claude Code). `ci-doctor` and `conflict` hold what was remembered before the specialists. A specialist's recall (at the start of a job, and `memory_recall`) also searches `ci-doctor`, `conflict` and `worker`, read only, ranked after its own records and tagged `legacy` in the prompt block; nothing is migrated (AgentCore cannot copy records). |
 | `<owner>/<repo>/person/<hash>` | The person who started a task through the API: their own preferences, inside the project. The hash is part of the sha256 of their email, so the email itself never appears. |
 
 | Strategy | Namespace |
@@ -673,12 +705,21 @@ so with no SDK loaded (the CLI, local runs, tests) nothing is recorded and nothi
 
 | Span | Where | What it carries |
 | --- | --- | --- |
-| `invoke_agent trace-worker` / `trace-api` | each `POST /invocations` | the invocation kind or API action, the repository, the outcome; it continues the caller's trace (`traceparent`, `X-Amzn-Trace-Id`) and puts the AgentCore session id into baggage `session.id`, so every span below has it |
+| `invoke_agent trace-worker` / `trace-api` | each `POST /invocations` | the invocation kind or API action, the repository, the outcome; it continues the caller's trace (`traceparent`, `X-Amzn-Trace-Id`, or the payload's `trace` when the request carries no context of that trace) and puts the AgentCore session id into baggage `session.id`, so every span below has it |
 | `trace.job <kind>` | each job | job id, kind, repository, agent (the specialist, or `worker` for a delegation, with its parent job id), the route (`trace.agent.kind`, `trace.route.reason`, `trace.route.confidence`, `trace.route.source`), the item, who asked (a hash), the outcome |
 | `claude.query` | each Agent SDK run | model, Claude's session id, turns, tokens (input, output, cache read and creation), the SDK's cost estimate |
 | `chat <model>` | each model response | model, response id, finish reason, the tools it asked for |
 | `execute_tool <name>` | each tool Claude used, and each call through the tool registry (the MCP server continues the job's trace) | tool name, where the call came from, the hardware flag, argument names and sizes, result size, duration, outcome |
 | `trace.gpu_job <kind>`, `trace.gpu.run <kind>` | each GPU job, and its runner inside AWS Batch (continued from `TRACEPARENT`) | kind, backend, job ids, seconds, exit code |
+
+**One trace from the workflow down.** The workflow's dispatch step (`worker-dispatch`, which has no OpenTelemetry SDK)
+makes a W3C trace context itself: a child of any `TRACEPARENT` the workflow set, else a new trace whose id starts with
+the time, so it is a valid X-Ray id too. `invoke` (`src/agents/runtime/dispatch.ts`; the API's calls to the workers
+too, from their active span) sends it as InvokeAgentRuntime's `traceParent`, `traceState`, `baggage` and `traceId`
+(`X-Amzn-Trace-Id`) parameters, and in the payload (`trace`). AgentCore's documentation lists those headers but
+does not say they reach the container, so the runtime continues from the payload unless the request already carries
+that same trace (`invocationHeaders` in `src/agents/runtime/observe.ts`). The dispatch comment on the item names the
+trace id, so workflow → agent → tools → GPU jobs is one trace to search for.
 
 Metrics: `trace.invocations`, `trace.jobs` and `trace.job.duration`, `trace.tool.calls`, `trace.tool.errors` and
 `trace.tool.duration`, `gen_ai.client.token.usage` (by token type and model), `trace.claude.cost`, and

@@ -296,5 +296,7 @@ describe('deploy', () => {
 })
 
 it('exports every task', () => {
-  expect(Object.keys(TASKS)).toHaveLength(14)
+  expect(Object.keys(TASKS)).toHaveLength(16)
+  // worker.runner actions runs in steps: the specialist, the delegated worker, the report
+  for (const t of ['worker-prompt', 'worker-delegate', 'worker-report']) expect(TASKS[t]).toBeTypeOf('function')
 })
