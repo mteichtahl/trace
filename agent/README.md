@@ -77,9 +77,12 @@ this machine has a GPU (or the job does not want one), and otherwise, when `TRAC
 |---|---|
 | `TRACE_GPU_QUEUE` | the Batch job queue's ARN |
 | `TRACE_GPU_JOB_DEFINITION` | the job definition's name (its latest revision is used) |
-| `TRACE_GPU_BUCKET` | the central bucket; jobs are staged under `jobs/<id>/` (`in/`, `out/`, `log/`, `exit`), expired after 7 days |
+| `TRACE_GPU_BUCKET` | the central bucket; jobs are staged under `jobs/<project>/<id>/` (`in/`, `out/`, `log/`, `exit`), expired after 7 days |
 | `TRACE_GPU_REMOTE` | optional: `always` ships every job, `never` runs every job here |
 | `TRACE_GPU_QUEUE_WAIT_S` | optional: how long a job may wait for an instance before it is terminated (default 1800 s) |
+| `TRACE_CPU_QUEUE` | the CPU job queue's ARN: jobs that don't want a GPU go here (else to the GPU queue) |
+| `TRACE_CPU_JOB_DEFINITION` | the project's CPU job definition |
+| `TRACE_GPU_JOB_MAX_VCPUS` / `TRACE_CPU_JOB_MAX_VCPUS` | the cap for a job's `vcpus` hint on each queue; without it the hint is ignored |
 
 `agent/Dockerfile.gpu` is built for linux/amd64 by CodeBuild (the same custom resource as the agent image) and
 pushed to the `<prefix>-gpu` ECR repository. It is based on `nvidia/cuda:12.9.2-runtime-ubuntu24.04` with

@@ -287,7 +287,8 @@ on the plain ECS Amazon Linux 2023 AMI), also scaling from 0 vCPUs. They run the
 runtime base starts and runs CPU programs without a GPU, and only the programs that use CUDA load it. Each project has
 a CPU job definition, `<prefix>-cpu-<hash>` (16 vCPUs and 32 GiB by default; with 32 GiB a job needs at least a
 `c7i.8xlarge` or an `m7i.4xlarge`, so ask 30 GiB to fit a `c7i.4xlarge`), with the project's own job role, and each
-worker is told `TRACE_CPU_QUEUE` and `TRACE_CPU_JOB_DEFINITION` and may submit there only with its own definition and
+worker is told `TRACE_CPU_QUEUE` and `TRACE_CPU_JOB_DEFINITION` (and `TRACE_GPU_JOB_MAX_VCPUS` and
+`TRACE_CPU_JOB_MAX_VCPUS`, the two definitions' vCPUs, at which a job's `vcpus` hint is capped) and may submit there only with its own definition and
 tag, as on the GPU queue. `src/gpu/batch.ts` sends a job that needs a GPU to the GPU queue and any other to the CPU
 queue. Settings: `cpu.enabled` (default true), `cpu.instanceTypes`, `cpu.maxVcpus` (default 64), `cpu.spot`,
 `cpu.vcpus` and `cpu.memoryMiB`, and the installer's CPU fields. The CPU queue shares the GPU side's image, network

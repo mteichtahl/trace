@@ -63,8 +63,6 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@actions/core": "^1.11.1",
-    "@actions/github": "^6.0.1",
     "@opentelemetry/context-async-hooks": "2.8.0",
     "@opentelemetry/core": "2.8.0",
     "@opentelemetry/sdk-metrics": "2.8.0",

@@ -31,6 +31,20 @@ RUN apt-get update \
  && java -version \
  && rm -rf /var/lib/apt/lists/*
 
+# Verification and FPGA programs for remote CPU jobs (verilator, cocotb, formal, yosys, nextpnr, fpga-pack kinds):
+# the same set as agent/Dockerfile, so a job runs the same way locally, on the CPU queue or here. cocotb goes into the
+# system Python because remote job scripts call plain `python3` (which must also keep KiCad's pcbnew for the router).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential make iverilog verilator yosys nextpnr-ice40 nextpnr-ecp5 nextpnr-gowin \
+      fpga-icestorm fpga-trellis z3 python3-pip \
+ && rm -rf /var/lib/apt/lists/* \
+ && YV="$(yosys -V | sed -E 's/^Yosys ([0-9]+\.[0-9]+).*/\1/')" \
+ && (git clone --depth 1 --branch "v${YV}" https://github.com/YosysHQ/sby.git /tmp/sby && make -C /tmp/sby install PREFIX=/usr/local \
+     || echo "note: SymbiYosys v${YV} not installed; verify.formal uses yosys-smtbmc directly") \
+ && rm -rf /tmp/sby \
+ && pip3 install --no-cache-dir --break-system-packages 'cocotb==2.1.0' 'apycula==0.10.0' \
+ && verilator --version && yosys -V && nextpnr-ice40 --version
+
 # Node 22 (NodeSource) and KiCad 10 (ppa:kicad/kicad-10.0-releases, amd64 for noble): kicad-cli for DRC, and the pcbnew
 # Python module (in the kicad package, for the system python3) for the Specctra DSN export and SES import.
 RUN install -d -m 0755 /etc/apt/keyrings \
