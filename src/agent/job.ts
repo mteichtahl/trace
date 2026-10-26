@@ -8,6 +8,12 @@
  * server, unattended permissions (the container is the sandbox) and a timeout below the session's maxLifetime. If
  * Claude left no comment on the item, or the job failed, a final comment says so (marker trace-agent-done).
  *
+ * Memory (memory.ts, when TRACE_MEMORY_ID is set): each job is one agent (ci-doctor for a red check, conflict for a
+ * merge conflict, worker for an agent-fix issue or a task, render for a render task) on one project, in one session
+ * (pr-<n>, issue-<n>, or the task's branch). At the start its long-term memory, and the session's earlier turns when
+ * it continues one, are appended to the prompt as a fenced data block; the request, key tool outcomes and the result
+ * are recorded as events, scrubbed and bounded. A memory failure is logged once and never fails the job.
+ *
  * A sweep runs the worker-pick scan for each repository (same claims and attempt markers as the workflows) and starts
  * one work-item job per claimed item.
  *
@@ -24,7 +30,8 @@ import { loadConfig } from '../harness/index.js'
 import type { Context, Core, GitHub } from '../harness/types.js'
 import { type WorkItem, WorkItemSchema, pick } from '../harness/worker.js'
 import type { JobContext, JobRunner } from './jobs.js'
-import { taskBranch, taskPrompt, workItemPrompt } from './prompt.js'
+import { type AgentMemory, type Actor, type JobMemory, NO_MEMORY, agentActor, memoryFromEnv, openJobMemory, personActor, sessionIdFor } from './memory.js'
+import { renderTaskPrompt, taskBranch, taskPrompt, workItemPrompt } from './prompt.js'
 import { BranchSchema, type JobPayload, type SweepJob, type TaskJob, type WorkItemJob } from './schemas.js'
 
 // ------------------------------------------------------------------ injected pieces
@@ -41,7 +48,7 @@ export interface ClaudeOptions {
   permissionMode: 'bypassPermissions'
   allowDangerouslySkipPermissions: true
   allowedTools: string[]
-  mcpServers: Record<string, { type: 'stdio'; command: string; args: string[] }>
+  mcpServers: Record<string, { type: 'stdio'; command: string; args: string[]; env?: Record<string, string> }>
   maxTurns: number
   abortController: AbortController
   env: Record<string, string | undefined>
@@ -72,6 +79,8 @@ export interface RunnerDeps {
   model?: string
   env: Record<string, string | undefined>
   now: () => number
+  /** The agents' memory (TRACE_MEMORY_ID); absent or null: jobs run without memory. */
+  memory?: AgentMemory | null
 }
 
 export const TOOLS = ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Task', 'TodoWrite', 'mcp__trace']
@@ -187,6 +196,10 @@ export interface ClaudeOutcome { ok: boolean; text: string; turns: number }
 
 export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS' | 'model' | 'env'>, o: {
   prompt: string; cwd: string; cfg: TraceConfig; token: string; signal: AbortSignal; log: (l: string) => void; redact: (s: string) => string
+  /** Extra environment for Claude and the trace MCP server (the memory tools' scope). */
+  extraEnv?: Record<string, string>
+  /** Sees every SDK message (memory records the key tool outcomes). */
+  onMessage?: (m: unknown) => void
 }): Promise<ClaudeOutcome> {
   const abort = new AbortController()
   const stop = (why: string): void => { if (!abort.signal.aborted) { o.log(why); abort.abort(new Error(why)) } }
@@ -202,10 +215,10 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
     permissionMode: 'bypassPermissions',
     allowDangerouslySkipPermissions: true,
     allowedTools: [...TOOLS],
-    mcpServers: { trace: { type: 'stdio', command: 'node', args: [d.cli, 'mcp'] } },
+    mcpServers: { trace: { type: 'stdio', command: 'node', args: [d.cli, 'mcp'], ...(o.extraEnv && Object.keys(o.extraEnv).length ? { env: o.extraEnv } : {}) } },
     maxTurns: o.cfg.worker.max_turns,
     abortController: abort,
-    env: { ...d.env, GH_TOKEN: o.token, GITHUB_TOKEN: o.token, ...gitAuthEnv(o.token), CLAUDE_AGENT_SDK_CLIENT_APP: 'trace-agent/1' },
+    env: { ...d.env, ...o.extraEnv, GH_TOKEN: o.token, GITHUB_TOKEN: o.token, ...gitAuthEnv(o.token), CLAUDE_AGENT_SDK_CLIENT_APP: 'trace-agent/1' },
     settingSources: ['project'],
     systemPrompt: {
       type: 'preset', preset: 'claude_code',
@@ -216,6 +229,7 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
   let last: z.infer<typeof ResultMessage> | null = null
   try {
     for await (const m of d.claude({ prompt: o.prompt, options })) {
+      try { o.onMessage?.(m) } catch { /* an observer never stops the job */ }
       const r = ResultMessage.safeParse(m)
       if (r.success) last = r.data
     }
@@ -255,7 +269,17 @@ async function finalComment(gh: GitHub, repository: string, n: number, jobId: st
   await gh.rest.issues.createComment({ owner, repo, issue_number: n, body: `${head}\n\n${quoted}${link ? `\n\n[dispatching run](${link})` : ''}\n${DONE(jobId)}` })
 }
 
-interface Prepared { slot: string; branch: string; from: 'remote' | 'maybe' | 'none'; prompt: (cfg: TraceConfig) => string; issue?: number; runUrl?: string }
+interface Prepared {
+  slot: string; branch: string; from: 'remote' | 'maybe' | 'none'; prompt: (cfg: TraceConfig) => string; issue?: number; runUrl?: string
+  /** Memory: the agent doing it, the session (given the branch it runs on), what it is about, and what was asked. */
+  agent: string; session: (branch: string) => string; query: string; request: string
+}
+
+/** The agent that does each kind of work item (its memory is its own). */
+export const ITEM_AGENT: Readonly<Record<WorkItem['kind'], string>> = { 'ci-red': 'ci-doctor', conflict: 'conflict', 'agent-fix': 'worker' }
+const ITEM_WHAT: Readonly<Record<WorkItem['kind'], string>> = {
+  'ci-red': 'The required check failed on pull request', conflict: 'Merge conflict on pull request', 'agent-fix': 'Issue for the agent',
+}
 
 function prepared(p: WorkItemJob | TaskJob): Prepared {
   if (p.kind === 'work-item') {
@@ -265,12 +289,31 @@ function prepared(p: WorkItemJob | TaskJob): Prepared {
     return {
       slot: String(it.number), branch: it.ref, from: pr ? 'remote' : 'none', issue: it.number,
       prompt: (cfg) => workItemPrompt(it, cfg, p.repository), ...(p.runUrl ? { runUrl: p.runUrl } : {}),
+      agent: ITEM_AGENT[it.kind], session: () => `${pr ? 'pr' : 'issue'}-${it.number}`, query: it.title,
+      request: `${ITEM_WHAT[it.kind]} #${it.number}: ${it.title}${pr ? ` (branch ${it.ref})` : ''}`,
     }
   }
+  const render = p.agent === 'render'
   return {
-    slot: `task-${(p.branch ?? p.request).replace(/[^A-Za-z0-9]+/g, '-').slice(0, 30)}`,
+    slot: `${render ? 'render' : 'task'}-${(p.branch ?? p.request).replace(/[^A-Za-z0-9]+/g, '-').slice(0, 30)}`,
     branch: '', from: 'maybe', ...(p.issue ? { issue: p.issue } : {}),
-    prompt: (cfg) => taskPrompt(p, cfg, taskBranch(p, cfg)),
+    prompt: (cfg) => (render ? renderTaskPrompt : taskPrompt)(p, cfg, taskBranch(p, cfg)),
+    agent: p.agent ?? 'worker', session: (branch) => (p.issue ? `issue-${p.issue}` : sessionIdFor(branch)), query: p.request,
+    request: `A person asked: ${p.request}`,
+  }
+}
+
+/** The job's memory, or none: memory never stops a job. */
+async function jobMemory(d: RunnerDeps, p: WorkItemJob | TaskJob, prep: Prepared, branch: string, log: (l: string) => void, redact: (s: string) => string): Promise<JobMemory> {
+  if (!d.memory) return NO_MEMORY
+  try {
+    const person: Actor | undefined = p.kind === 'task' ? personActor(p.repository, p.requestedBy) : undefined
+    return await openJobMemory(d.memory, {
+      actor: agentActor(p.repository, prep.agent), person, session: prep.session(branch), query: prep.query, request: prep.request,
+    }, { log, redact })
+  } catch (e) {
+    log(`memory: not used for this job: ${redact(errText(e)).slice(0, 300)}`)
+    return NO_MEMORY
   }
 }
 
@@ -283,6 +326,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
   const { owner, repo } = split(p.repository)
   let prep: Prepared | null = null
   let dir: string | null = null
+  let mem: JobMemory = NO_MEMORY
   try {
     prep = prepared(p)
     const defaultBranch = (await gh.rest.repos.get({ owner, repo })).data.default_branch
@@ -294,14 +338,20 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     let branch = p.kind === 'task' ? taskBranch(p, cfg) : prep.branch
     if (prep.from !== 'none') branch = await checkoutBranch({ ...g, defaultBranch: base.defaultBranch, branch, from: prep.from })
     else branch = base.defaultBranch
+    mem = await jobMemory(d, p, prep, branch, log, redact)
     log(`running Claude on ${p.repository} ${branch} (max ${cfg.worker.max_turns} turns)`)
-    const out = await runClaude(d, { prompt: prep.prompt(cfg), cwd: dir, cfg, token, signal: ctx.signal, log, redact })
+    const out = await runClaude(d, {
+      prompt: `${prep.prompt(cfg)}${mem.context}`, cwd: dir, cfg, token, signal: ctx.signal, log, redact, extraEnv: mem.env, onMessage: (m) => mem.observe(m),
+    })
     const summary = redact(out.text)
+    await mem.finish(out.ok, summary)
+    mem = NO_MEMORY
     if (prep.issue) await finalComment(gh, p.repository, prep.issue, ctx.jobId, startedAt, out.ok, summary, prep.runUrl)
     if (!out.ok) throw new Error(summary)
     return `done in ${out.turns} turns`
   } catch (e) {
     const msg = redact(errText(e))
+    await mem.finish(false, msg)
     if (prep?.issue) {
       await finalComment(gh, p.repository, prep.issue, ctx.jobId, startedAt, false, msg, prep.runUrl)
         .catch((ce: unknown) => log(`could not post the final comment: ${redact(errText(ce))}`))
@@ -407,5 +457,6 @@ export function realRunner(env: Record<string, string | undefined> = process.env
     ...(env.ANTHROPIC_MODEL ? { model: env.ANTHROPIC_MODEL } : {}),
     env,
     now: Date.now,
+    memory: memoryFromEnv(env),
   })
 }

@@ -41,7 +41,7 @@ const LOG_LINES = 200
 export function jobKey(p: JobPayload): string {
   switch (p.kind) {
     case 'work-item': return `${p.repository.toLowerCase()}#${p.item.number}`
-    case 'task': return `${p.repository.toLowerCase()}:task:${p.branch ?? p.request}`
+    case 'task': return `${p.repository.toLowerCase()}:${p.agent === 'render' ? 'render' : 'task'}:${p.branch ?? p.request}`
     case 'sweep': return `sweep:${[...p.repositories].map((r) => r.toLowerCase()).sort().join(',')}`
   }
 }

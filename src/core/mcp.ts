@@ -18,7 +18,8 @@ export const hardwareAllowed = (): boolean => ['1', 'true', 'yes'].includes(proc
 
 const INSTRUCTIONS = 'Electronics tools: KiCad reading and ERC/DRC, BOM and parts, a datasheet library and parts database ' +
   'shared by every project, calculators, SPICE and Verilog simulation, the firmware loop and hardware-in-the-loop. ' +
-  'Every run is recorded in the project database (trace_runs, trace_run). Cite datasheet figures with part number, sha256 and page.'
+  'Every run is recorded in the project database (trace_runs, trace_run). Cite datasheet figures with part number, sha256 and page. ' +
+  'When the agents\' memory is configured, memory_recall and memory_remember reach this project\'s and agent\'s memory only.'
 
 function text(obj: unknown): string {
   return typeof obj === 'string' ? obj : JSON.stringify(obj, (_k, v: unknown) => (typeof v === 'bigint' ? Number(v) : v), 1)
@@ -26,7 +27,7 @@ function text(obj: unknown): string {
 
 /** The tools this session offers, by MCP name. */
 export function offered(registry: Registry, hardware = hardwareAllowed()): Map<string, AnyTool> {
-  return new Map(registry.list().filter((t) => hardware || !t.hardware).map((t) => [mcpName(t.name), t]))
+  return new Map(registry.list().filter((t) => (hardware || !t.hardware) && Registry.available(t)).map((t) => [mcpName(t.name), t]))
 }
 
 /** One tools/call, as the server answers it (exported for tests). */

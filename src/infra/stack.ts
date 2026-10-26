@@ -6,6 +6,8 @@
  *   agent image         built from this repository by AWS CodeBuild on arm64 (no local Docker), pushed to ECR
  *   agent runtime       Bedrock AgentCore Runtime running the image: Claude, the trace tools, git, gh, KiCad,
  *                       ngspice, Icarus; session storage at /mnt/workspace
+ *   agent memory        AgentCore Memory (src/infra/memory.ts): events and the semantic, summary and preference
+ *                       strategies, namespaced /trace/<owner>/<repo>/<agent>/; both runtimes may use it
  *   actions role        assumed by the onboarded repositories' workflows through GitHub OIDC: invokes the worker
  *                       runtime and reads/writes the central bucket
  *   people              a Cognito user pool (no self sign-up; admins invite people) with three classes as groups —
@@ -34,6 +36,7 @@ import * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { Provider } from 'aws-cdk-lib/custom-resources'
 import type { Construct } from 'constructs'
 import { GpuCompute, JOBS_PREFIX } from './gpu.js'
+import { TraceMemory } from './memory.js'
 import { type InfraProps, runtimeName } from './props.js'
 
 /** The repository root, from dist/infra or src/infra. */
@@ -137,6 +140,9 @@ export class TraceStack extends Stack {
     const gpuEnv: Record<string, string> = gpu
       ? { TRACE_GPU_QUEUE: gpu.queue.jobQueueArn, TRACE_GPU_JOB_DEFINITION: gpu.jobDefinitionName, TRACE_GPU_BUCKET: central.bucketName }
       : {}
+    // ------------------------------------------------------------------ the agents' memory (AgentCore Memory, src/infra/memory.ts)
+    const memory = cfg.memory.enabled ? new TraceMemory(this, 'AgentMemory', { prefix: cfg.prefix, eventExpiryDays: cfg.memory.eventExpiryDays }) : null
+    const memoryEnv: Record<string, string> = memory ? { TRACE_MEMORY_ID: memory.memoryId } : {}
     const image = new CustomResource(this, 'AgentImage', {
       serviceToken: provider.serviceToken,
       properties: { ProjectName: build.projectName, ImageUri: imageUri, SourceHash: source.assetHash },
@@ -200,6 +206,7 @@ export class TraceStack extends Stack {
         TRACE_WORKSPACE: '/mnt/workspace',
         TRACE_AGENT_MODE: 'worker',
         ...gpuEnv,
+        ...memoryEnv,
       },
     })
     runtime.node.addDependency(workerRole)
@@ -276,6 +283,7 @@ export class TraceStack extends Stack {
         TRACE_COGNITO_CLIENT_ID: client.userPoolClientId,
         TRACE_COGNITO_ISSUER: `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}`,
         ...gpuEnv,
+        ...memoryEnv,
       },
     })
     api.node.addDependency(apiRole)
@@ -286,6 +294,7 @@ export class TraceStack extends Stack {
     }))
 
     if (gpu) for (const role of [workerRole, apiRole]) gpu.grantSubmit(role, central)
+    if (memory) for (const role of [workerRole, apiRole]) memory.grantUse(role)
 
     // ------------------------------------------------------------------ the onboarded repositories' role (GitHub OIDC)
     const issuer = 'token.actions.githubusercontent.com'
@@ -322,6 +331,7 @@ export class TraceStack extends Stack {
     new CfnOutput(this, 'UserPoolId', { value: users.userPoolId })
     new CfnOutput(this, 'UserPoolClientId', { value: client.userPoolClientId })
     new CfnOutput(this, 'CognitoDomain', { value: domain.baseUrl() })
+    if (memory) new CfnOutput(this, 'MemoryId', { value: memory.memoryId, description: 'TRACE_MEMORY_ID: the agents\' AgentCore Memory' })
     if (gpu) {
       new CfnOutput(this, 'GpuJobQueue', { value: gpu.queue.jobQueueArn })
       new CfnOutput(this, 'GpuJobDefinition', { value: gpu.jobDefinitionName })

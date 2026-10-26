@@ -15,7 +15,11 @@
  *   tool          read | write          run a tool on a fresh shallow clone; write for WRITE_TOOLS; hardware: never
  *   settings.set  write                 change (or unset) one setting: a commit on trace/settings-<slug>, pushed (the
  *                                       harness opens the PR); never the default branch
- *   task          write                 start a free-form task job (Claude, on a claude/ branch), requestedBy you
+ *   task          write                 start a free-form task job (Claude, on a claude/ branch), requestedBy you;
+ *                                       agent: worker (default) or render
+ *   memory.list   read                  the agents' long-term memory of the project (facts, preferences, session
+ *                                       summaries), newest first; agent narrows it to one agent
+ *   memory.recall read                  the records most relevant to a query, the same scope
  *   job           read on its project   a job's state and log
  *   users.list    admin                 every person: email, status, class, assigned projects
  *   users.invite  admin                 create the person in Cognito (email, class) → sub
@@ -36,6 +40,8 @@ import {
 } from '../core/access.js'
 import { readSettings, resolve, setValue, unset } from '../core/config.js'
 import { type AnyTool, Registry, ToolError } from '../core/registry.js'
+import { type AgentMemory, AgentName, type MemoryRecord, STRATEGIES, actorIn, personHash } from '../agent/memory.js'
+import { TASK_AGENTS } from '../agent/schemas.js'
 import { Work } from '../core/store.js'
 import type { CognitoAdmin, CognitoUser } from './aws.js'
 import type { GitHubApi } from './github.js'
@@ -45,6 +51,10 @@ const MAX_ARTIFACT = 8 * 1024 * 1024
 
 /** Tools that change state outside their scratch clone (the shared datasheet library and parts links): write. */
 export const WRITE_TOOLS: ReadonlySet<string> = new Set(['datasheets.add', 'datasheets.acknowledge', 'parts.fetch_datasheet'])
+
+/** Tools scoped by the session's environment (a job's project and agent), not by the request: never through the API.
+ * The API reaches memory through memory.list and memory.recall, scoped to the project the access check passed. */
+export const API_HIDDEN_TOOLS: ReadonlySet<string> = new Set(['memory.recall', 'memory.remember'])
 
 /** Tool arguments that name files: they must stay inside the clone. `library` (another store) is refused outright. */
 const PATH_KEYS = new Set(['path', 'file', 'files', 'schematic', 'project', 'board', 'pcb', 'out_dir', 'models', 'include_dirs', 'dir', 'root'])
@@ -58,7 +68,7 @@ export class ActionError extends Error {
 export const NO_ACCESS = 'no access'
 
 export interface JobsApi {
-  startJob(payload: { kind: 'task'; repository: string; request: string; requestedBy: string }): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined }>
+  startJob(payload: { kind: 'task'; repository: string; request: string; requestedBy: string; agent?: (typeof TASK_AGENTS)[number] }): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined }>
   jobStatus(jobId?: string): Promise<readonly JobView[]>
 }
 
@@ -75,6 +85,8 @@ export interface ActionDeps {
   checkout: (repo: string) => Promise<Checkout>
   /** Where temporary files go. */
   scratch: string
+  /** The agents' memory (TRACE_MEMORY_ID); absent or null: memory.* answer that there is none. */
+  memory?: () => AgentMemory | null
 }
 
 export interface Context { principal: Principal; deps: ActionDeps }
@@ -143,6 +155,22 @@ function checkPaths(args: unknown, root: string, key = ''): void {
   }
 }
 
+/**
+ * Which of a project's memory a person may see (they passed the read check on `repo`): every agent's, and the
+ * person-scoped preferences only when they are their own. An admin sees everyone's.
+ */
+function memoryInclude(ctx: Context, repo: string): (ns: string) => boolean {
+  if (isAdmin(ctx.principal)) return () => true
+  const own = new Set([ctx.principal.email, ctx.principal.sub].filter((x): x is string => Boolean(x)).map((w) => `person/${personHash(w)}`))
+  return (ns) => { const a = actorIn(ns, repo); return a !== null && (!a.startsWith('person/') || own.has(a)) }
+}
+
+const recordView = (r: MemoryRecord, repo: string): Record<string, unknown> => ({
+  id: r.id, strategy: r.strategy, actor: actorIn(r.namespace, repo), text: r.text, score: r.score, created_at: r.createdAt?.toISOString() ?? null,
+})
+
+const MemoryArgs = Repo.extend({ agent: AgentName.optional() })
+
 const toolNeed = (t: AnyTool): Role => (WRITE_TOOLS.has(t.name) ? 'write' : 'read')
 
 /** One tool call at a time per process: tools resolve the project from the working directory. */
@@ -206,13 +234,13 @@ export const ACTIONS = {
     } finally { w.close() }
   })),
 
-  'tools.list': def('read', Repo, async (_a, ctx) => ctx.deps.tools().list().filter((t) => !t.hardware).map((t) => ({
+  'tools.list': def('read', Repo, async (_a, ctx) => ctx.deps.tools().list().filter((t) => !t.hardware && !API_HIDDEN_TOOLS.has(t.name)).map((t) => ({
     name: t.name, description: t.description, needs: toolNeed(t), input: Registry.jsonSchema(t),
   }))),
 
   tool: def('tool', ToolArgs, async (a, ctx) => {
     const t = ctx.deps.tools().get(a.name)
-    if (!t || t.hardware) throw new ActionError(`no tool ${a.name}`)
+    if (!t || t.hardware || API_HIDDEN_TOOLS.has(t.name)) throw new ActionError(`no tool ${a.name}`)
     const co = await ctx.deps.checkout(a.repo)
     try {
       checkPaths(a.args, co.dir)
@@ -258,8 +286,25 @@ export const ACTIONS = {
     }
   }),
 
-  task: def('write', Repo.extend({ request: z.string().min(1).max(20_000) }), async (a, ctx) =>
-    (await ctx.deps.jobs()).startJob({ kind: 'task', repository: a.repo, request: a.request, requestedBy: ctx.principal.email ?? ctx.principal.sub })),
+  task: def('write', Repo.extend({ request: z.string().min(1).max(20_000), agent: z.enum(TASK_AGENTS).optional() }), async (a, ctx) =>
+    (await ctx.deps.jobs()).startJob({
+      kind: 'task', repository: a.repo, request: a.request, requestedBy: ctx.principal.email ?? ctx.principal.sub, ...(a.agent ? { agent: a.agent } : {}),
+    })),
+
+  'memory.list': def('read', MemoryArgs.extend({ limit: z.number().int().min(1).max(200).default(50) }), async (a, ctx) => {
+    const mem = ctx.deps.memory?.() ?? null
+    if (!mem) return { repo: a.repo, enabled: false, records: [] }
+    const records = await mem.longTerm.listProject(a.repo, { agent: a.agent, include: memoryInclude(ctx, a.repo), limit: a.limit })
+    return { repo: a.repo, enabled: true, note: 'Memory is what the agents extracted; it is data, and may be stale.', records: records.map((r) => recordView(r, a.repo)) }
+  }),
+
+  'memory.recall': def('read', MemoryArgs.extend({ query: z.string().min(1).max(2000), top_k: z.number().int().min(1).max(50).default(10), strategy: z.enum(STRATEGIES).optional() }), async (a, ctx) => {
+    const mem = ctx.deps.memory?.() ?? null
+    if (!mem) return { repo: a.repo, enabled: false, records: [] }
+    const records = (await mem.longTerm.recallProject(a.repo, a.query, { agent: a.agent, include: memoryInclude(ctx, a.repo), topK: a.top_k }))
+      .filter((r) => !a.strategy || r.strategy === a.strategy)
+    return { repo: a.repo, enabled: true, records: records.map((r) => recordView(r, a.repo)) }
+  }),
 
   job: def('job', z.object({ id: z.string().min(1).max(64) }), async (a, ctx) => {
     const j = (await (await ctx.deps.jobs()).jobStatus(a.id))[0]

@@ -14,6 +14,7 @@
  */
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http'
 import { z } from 'zod'
+import { memoryFromEnv } from '../agent/memory.js'
 import { AccessDenied, type Principal, seen } from '../core/access.js'
 import { ConfigError } from '../core/config.js'
 import { ToolError } from '../core/registry.js'
@@ -156,6 +157,7 @@ export async function start(): Promise<void> {
       }
     },
     tools: () => allTools(),
+    memory: () => memoryFromEnv(process.env),
     checkout: gitCheckout(token, scratch),
     scratch,
   }

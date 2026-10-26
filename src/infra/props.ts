@@ -41,6 +41,12 @@ export const InfraPropsSchema = z.object({
     /** use Spot instances (cheaper; a job may be interrupted) */
     spot: z.boolean().default(false),
   }).strict().prefault({}),
+  /** The agents' memory (AgentCore Memory: short-term events, long-term facts, session summaries, preferences; src/infra/memory.ts). */
+  memory: z.object({
+    enabled: z.boolean().default(true),
+    /** days short-term events are kept before they expire (AgentCore allows 3–365) */
+    eventExpiryDays: z.number().int().min(3).max(365).default(30),
+  }).strict().prefault({}),
 }).strict()
 
 export type InfraProps = z.output<typeof InfraPropsSchema>

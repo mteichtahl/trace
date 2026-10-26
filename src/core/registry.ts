@@ -34,6 +34,8 @@ export interface Tool<I extends z.ZodObject = z.ZodObject, O = unknown> {
   readonly input: I
   /** Drives real hardware: refused unless the session allows it (TRACE_HARDWARE=1 or --hardware). */
   readonly hardware: boolean
+  /** Offered only when this says so (e.g. memory.* only with TRACE_MEMORY_ID set); always, when absent. */
+  readonly available?: () => boolean
   readonly run: (args: z.output<I>, ctx: ToolContext) => Promise<O> | O
 }
 
@@ -42,6 +44,7 @@ export function defineTool<I extends z.ZodObject, O>(def: {
   description: string
   input: I
   hardware?: boolean
+  available?: () => boolean
   run: (args: z.output<I>, ctx: ToolContext) => Promise<O> | O
 }): Tool<I, O> {
   if (!/^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/.test(def.name)) throw new Error(`tool name ${def.name} must be area.name`)
@@ -79,11 +82,17 @@ export class Registry {
     if (t.hardware && !ctx.hardware) {
       throw new ToolError(`${name} drives real hardware; it runs only with hardware allowed (TRACE_HARDWARE=1 or --hardware)`)
     }
+    if (!Registry.available(t)) throw new ToolError(`${name} is not available in this session`)
     const parsed = t.input.strict().safeParse(args ?? {})
     if (!parsed.success) {
       throw new ToolError(`${name}: ${parsed.error.issues.map((i) => `${i.path.join('.') || 'input'}: ${i.message}`).join('; ')}`)
     }
     return t.run(parsed.data, ctx)
+  }
+
+  /** Whether the tool may be offered and run now. */
+  static available(t: AnyTool): boolean {
+    return t.available ? t.available() : true
   }
 
   /** The tool's input as JSON Schema (for MCP and `trace tools --schema`). */

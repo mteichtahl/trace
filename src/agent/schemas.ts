@@ -31,6 +31,9 @@ export const StatusPayload = z.object({
   jobId: z.string().max(64).optional(),
 }).strict()
 
+/** The agents a task can be given to: the worker (code changes), or the rendering agent (src/render/agent.ts). */
+export const TASK_AGENTS = ['worker', 'render'] as const
+
 /** A free-form request from an authorised person (the API runtime): done on a claude/task-<slug> branch, pushed, PR opened. */
 export const TaskPayload = z.object({
   kind: z.literal('task'),
@@ -40,6 +43,8 @@ export const TaskPayload = z.object({
   branch: BranchSchema.optional(),
   /** An issue or PR to report back on, when the request came from one. */
   issue: z.number().int().positive().optional(),
+  /** Which agent does it (default worker). */
+  agent: z.enum(TASK_AGENTS).optional(),
 }).strict()
 
 export const InvocationSchema = z.discriminatedUnion('kind', [WorkItemPayload, SweepPayload, StatusPayload, TaskPayload])
