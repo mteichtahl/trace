@@ -57,7 +57,7 @@ export const delegate = defineTool({
   name: 'agent.delegate',
   description: 'Hand repository changes or long mechanical work to the trace worker (shell, git, the electronics tools; the same rules and guardrails), and wait for it. The worker works in your checkout on the branch you are on (or the one given), commits and pushes. Returns its state, its summary and commits. Then check every acceptance criterion yourself with your own tools before you report. Specialists only; one delegation at a time.',
   input: z.object({
-    brief: z.string().min(1).max(20_000).describe('what to change and why, with the evidence: run ids, files, lines, measured values'),
+    brief: z.string().min(1).max(15_000).describe('what to change and why, with the evidence: run ids, files, lines, measured values'),
     acceptance: z.array(z.string().min(1).max(1000)).min(1).max(20).describe('criteria you will check afterwards with your own tools: the tool, its arguments, the expected outcome'),
     branch: BranchArg.optional().describe('a branch for the work (default: the branch you are on; a new claude/ branch when that is the default branch)'),
   }),

@@ -338,8 +338,8 @@ interface Prepared {
   slot: string; branch: string; from: 'remote' | 'maybe' | 'none'; issue?: number; runUrl?: string
   /** The route a pick already made, or what to route on. */
   route: Route | null; routeInput: RouteInput
-  /** The job as the specialist's prompt describes it, given the branch it runs on. */
-  job: (branch: string) => SpecialistJob
+  /** The job as the specialist's prompt describes it, given the branch it runs on and the item's thread. */
+  job: (branch: string, thread?: string) => SpecialistJob
   /** Memory: the session (given the branch it runs on), what it is about, and what was asked. */
   session: (branch: string) => string; query: string; request: string
 }
@@ -357,7 +357,7 @@ function prepared(p: WorkItemJob | TaskJob): Prepared {
     return {
       slot: String(it.number), branch: it.ref, from: pr ? 'remote' : 'none', issue: it.number, ...(p.runUrl ? { runUrl: p.runUrl } : {}),
       route: r ?? null, routeInput: { text: it.title },
-      job: () => ({ kind: 'work-item', item }),
+      job: (_b, thread) => ({ kind: 'work-item', item, thread }),
       session: () => `${pr ? 'pr' : 'issue'}-${it.number}`, query: it.title,
       request: `${ITEM_WHAT[it.kind]} #${it.number}: ${it.title}${pr ? ` (branch ${it.ref})` : ''}`,
     }
@@ -384,6 +384,22 @@ async function jobMemory(d: RunnerDeps, o: { repository: string; agent: string; 
   } catch (e) {
     log(`memory: not used for this job: ${redact(errText(e)).slice(0, 300)}`)
     return NO_MEMORY
+  }
+}
+
+/** An issue's or PR's labels, body and latest comments (the runner reads them; a specialist has no shell). Never fails the job. */
+async function threadOf(gh: GitHub, repository: string, n: number, log: (l: string) => void): Promise<{ labels: string[]; body: string; text: string } | null> {
+  const { owner, repo } = split(repository)
+  try {
+    const issue = (await gh.rest.issues.get({ owner, repo, issue_number: n })).data
+    const labels = (issue.labels ?? []).map((l) => (typeof l === 'string' ? l : l.name ?? '')).filter(Boolean)
+    const body = (issue.body ?? '').slice(0, 8000)
+    const cs = await gh.paginate(gh.rest.issues.listComments, { owner, repo, issue_number: n, per_page: 100 })
+    const recent = cs.slice(-8).map((c) => `--- ${c.user?.login ?? 'someone'} at ${c.created_at}:\n${(c.body ?? '').replace(/<!--[\s\S]*?-->/g, '').trim().slice(0, 1500)}`)
+    return { labels, body, text: [body || '(no body)', ...recent].join('\n\n') }
+  } catch (e) {
+    log(`could not read #${n}'s thread: ${errText(e).slice(0, 200)}`)
+    return null
   }
 }
 
@@ -424,7 +440,10 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     if (prep.from !== 'none') branch = await checkoutBranch({ ...g, defaultBranch: base.defaultBranch, branch, from: prep.from })
     else branch = base.defaultBranch
 
-    const r = prep.route ?? await routeJob(prep.routeInput, cfg, d.classifier?.(cfg) ?? null)
+    // the item's labels, body and latest comments: for the router (when the pick did not route it) and the prompt
+    const thread = p.kind === 'work-item' ? await threadOf(gh, p.repository, p.item.number, log) : null
+    const input: RouteInput = thread ? { ...prep.routeInput, labels: thread.labels, text: `${p.kind === 'work-item' ? p.item.title : ''}\n\n${thread.body}`.trim() } : prep.routeInput
+    const r = prep.route ?? await routeJob(input, cfg, d.classifier?.(cfg) ?? null)
     ctx.route?.(r)
     const s = SPECIALISTS[r.kind]
     const settings = cfg.agents[r.kind]
@@ -441,7 +460,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
       ? delegations.register({ jobId: ctx.jobId, kind: r.kind, repository: p.repository, dir, cfg, branch, defaultBranch: base.defaultBranch, session })
       : undefined
     try {
-      const prompt = specialistPrompt(s, { cfg, repository: p.repository, job: prep.job(branch), rules, route: r, hardware, delivery: 'delegate' })
+      const prompt = specialistPrompt(s, { cfg, repository: p.repository, job: prep.job(branch, thread?.text), rules, route: r, hardware, delivery: 'delegate' })
       log(`running the ${r.kind} specialist on ${p.repository} ${branch} (max ${settings.max_turns} turns, ${tools.length} tools)`)
       const out = await runClaude(d, {
         prompt: `${prompt}${mem.context}`, cwd: dir, cfg, token, signal: ctx.signal, log, redact,

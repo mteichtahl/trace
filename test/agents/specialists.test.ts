@@ -376,6 +376,27 @@ describe('delegation', () => {
       expect(h.delegations.parent('job-s')).toBeNull()
     })
 
+    it('routes an unrouted item on its thread (labels, body) and gives the specialist the thread as data', async () => {
+      const h = setup()
+      const f = fakeGithub({
+        'repos.get': { default_branch: 'main' },
+        'issues.get': { labels: [{ name: 'agent-fix' }], body: 'The LDO output rings: phase margin looks low.' },
+        'issues.listComments': [{ body: 'Seen on rev B too <!-- trace-claim: x -->', user: { login: 'marc' }, created_at: '2026-10-26T00:00:00Z' }],
+      })
+      h.d.github = () => f.gh
+      const { ctx, routes } = ctxOf('job-t')
+      await createRunner(h.d)({ kind: 'work-item', repository: 'o/r', item: { kind: 'agent-fix', number: 12, sha: 'issue', ref: '', own: true, title: 'Rail is noisy' } }, ctx)
+      expect(routes).toEqual([expect.objectContaining({ kind: 'ams', source: 'keyword' })])
+      const p = h.calls[0]!.prompt
+      expect(p).toContain('<thread>\nThe LDO output rings: phase margin looks low.')
+      expect(p).toContain('--- marc at 2026-10-26T00:00:00Z:\nSeen on rev B too')
+      expect(p).not.toContain('trace-claim')
+      // a pick's route is kept as it is
+      const r2 = ctxOf('job-u')
+      await createRunner(h.d)({ kind: 'work-item', repository: 'o/r', item: { kind: 'agent-fix', number: 12, sha: 'issue', ref: '', own: true, title: 'Rail is noisy', route: { kind: 'emc', reason: 'label agent:emc', confidence: 1, source: 'label' } } }, r2.ctx)
+      expect(r2.routes).toEqual([{ kind: 'emc', reason: 'label agent:emc', confidence: 1, source: 'label' }])
+    })
+
     it('runs a delegated worker in the specialist\'s checkout with the worker\'s own prompt and tools, and no way to delegate again', async () => {
       const h = setup([{ type: 'result', subtype: 'success', is_error: false, result: '1. met: fpga_timing closed', num_turns: 9 }])
       const dir = join(h.ws, 'o__r', '5')

@@ -42,7 +42,7 @@ export interface ParentJob {
 
 export const DelegateRequest = z.object({
   token: z.string().min(16).max(200),
-  brief: z.string().min(1).max(20_000),
+  brief: z.string().min(1).max(15_000),
   acceptance: z.array(z.string().min(1).max(1000)).min(1).max(20),
   branch: BranchSchema.optional(),
 }).strict()

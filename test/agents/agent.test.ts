@@ -288,7 +288,7 @@ describe('job runner', () => {
       const cfg = cfgOf({ worker: { max_turns: 42 } })
       const route = { kind: 'verify' as const, reason: 'nothing points to a specialist: the default (agents.default)', confidence: 0.2, source: 'default' as const }
       const { route: _none, ...item } = ITEM
-      expect(prompt).toBe(specialistPrompt(SPECIALISTS.verify, { cfg, repository: 'o/r', job: { kind: 'work-item', item }, rules: null, route, hardware: false, delivery: 'delegate' }))
+      expect(prompt).toBe(specialistPrompt(SPECIALISTS.verify, { cfg, repository: 'o/r', job: { kind: 'work-item', item, thread: '(no body)' }, rules: null, route, hardware: false, delivery: 'delegate' }))
       expect(prompt).toMatch(/Verification specialist/)
       expect(prompt).toMatch(/Bedrock AgentCore Runtime/)
       // the specialist's own turn limit (agents.verify.max_turns), not the worker's

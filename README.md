@@ -213,7 +213,7 @@ Onboarding adds the following:
 
 Settings are changed with `trace config set <key> <value>` (`trace config keys` lists them all). Each workflow has a
 kill switch, a repository variable set to `false`: `TRACE_PRS`, `TRACE_CI`, `TRACE_WORKER`, `TRACE_DEPLOY`. Work is
-done by the agent on AgentCore by default; `trace config set worker.runner actions` runs it inside GitHub Actions
+done by a specialist agent (see [Specialist agents](#specialist-agents)) on AgentCore by default; `trace config set worker.runner actions` runs it inside GitHub Actions
 instead.
 
 ## Data
@@ -340,6 +340,114 @@ Every radiated figure is labelled as a pre-compliance estimate. Locally, openEMS
 (`TRACE_OPENEMS_PYTHON`, or `openems-python` on PATH) and scikit-rf (`TRACE_PYTHON`). The GPU image builds openEMS
 v0.37.0 and installs scikit-rf 2.2.0.
 
+## Specialist agents
+
+Every job the loop starts (an `agent-fix` issue, a `ci-red` PR, a merge conflict, a sweep's items, a person's
+`task`) goes to one **specialist**. The specialist investigates and measures with its own tools, and hands
+repository changes to the **worker**, the generic agent with a shell and git, which runs only when a specialist
+delegates to it. The worker's prompt, guardrails and job runner are unchanged.
+
+| Kind | Specialist | What it does | Its trace tools (besides the shared ones) |
+| --- | --- | --- | --- |
+| `verify` | Verification | Turns specifications into requirements and a test plan, runs simulation, formal and rule checks against the plan, and closes functional and code coverage. It owns failing tests, testbenches, formal properties, coverage gaps and ERC. | `verify.*` (requirements, plan, run, coverage, report, verilator, cocotb, formal), `sim.*`, `kicad.erc`, `kicad.drc`; `hil.*` only when hardware is allowed |
+| `impl` | Implementation | Runs FPGA synthesis, place and route, timing closure and bitstreams, and PCB placement, floor planning, routing and length matching. It owns timing failures, constraint files, unrouted nets and DRC. It renders the result for visual review. | `fpga.*`, `pcb.autoroute`, `pcb.placement_check`, `pcb.length_match`, `pcb.floorplan`, `kicad.drc`, `kicad.net_length`, `render.board` |
+| `ams` | Analog & Mixed-Signal | Keeps analog specs and judges circuits against them: corners, Monte Carlo yield, op-amp stability, noise and ADC/digital co-simulation. It also chooses parts from the datasheet library. | `ams.*`, `sim.spice`, `sim.sweep`, `sim.measure`, `sim.kicad_spice`, `calc.*`, `datasheets.*`, `parts.*` |
+| `emc` | EMC & Simulation | Runs EMI rule prechecks and emission estimates, sets up openEMS models (region, stackup, ports, boundary conditions, mesh) and runs them, and checks signal integrity from S-parameters. | `emc.*`, `calc.impedance`, `calc.trace_width`, `calc.via`, `kicad.board`, `kicad.net` |
+| `render` | Rendering | Renders boards and models, and makes turntables. This was the rendering agent; it is kept as a specialist of its own, not folded into `impl`, because people ask for renders directly. | `render.*` |
+
+Every specialist also has the shared read tools: `kicad.board`/`components`/`net`,
+`datasheets.find`/`get`/`text`/`params`, `parts.lookup`, `trace.runs`/`run`/`artifact`, `memory.recall`/`remember`.
+It also has `agent.delegate`. Its Claude Code tools are read-only: Read, Glob, Grep and TodoWrite, with no Bash,
+Write, Edit or Task. The allowlist is enforced three ways. The Agent SDK's `tools` option sets the built-ins and
+`allowedTools` sets the rest. The job sets `TRACE_MCP_TOOLS`, so the MCP server lists only the specialist's tools.
+`trace agent list` shows each specialist, its settings and its tools.
+
+Each specialist's prompt (`src/agents/<kind>/index.ts`, composed by `src/agents/specialist.ts`) has these parts:
+
+- its workflow, step by step, with the tools in order;
+- what evidence counts as done: measured, with run ids, never claimed;
+- when to stop and ask a person;
+- the project's `.trace/rules.md`, read from the default branch and included in full;
+- the setting `agents.<kind>.instructions`, a short text that may be empty. The rules win where the two differ.
+
+`trace agent prompt <kind>` prints the composed prompt for review. Each specialist has its own memory actor,
+`<owner>/<repo>/<kind>`.
+
+### Routing
+
+`src/agents/router.ts` picks the specialist. It tries these in order, and the first that decides wins:
+
+1. **An explicit kind.** This is `trace remote task --agent <kind>`, the API's `task` with `agent`, or a route that
+   worker-pick already made.
+2. **A label** on the issue or PR: `agent:verify`, `agent:impl`, `agent:ams`, `agent:emc` or `agent:render`. The names
+   are the settings `labels.agent_<kind>`, and onboarding creates the labels.
+3. **The evidence.** The router reads the names and log tails of the failing checks. The summary gate
+   `build.required_check` is ignored when other checks failed. It also reads the changed files:
+   - `verify`: `.sby`, testbenches and `tests/`, coverage data, HDL;
+   - `impl`: `.pcf`, `.lpf`, `.cst`, `.sdc`, `.xdc`, `.kicad_pcb`, autorouter files, and timing, routing or DRC
+     failures;
+   - `ams`: `.cir`, `.sp`, `.lib`, and an `ams.spec` miss;
+   - `emc`: Touchstone `.sNp`, and `emc.precheck` findings.
+
+   A rule counts once however many files match it. Keywords in the text break a tie.
+4. **Keywords** in the issue, PR or task text (each specialist's `keywords`).
+5. **The model**, as a last resort. This is one Agent SDK call with no tools and output constrained to
+   `{ kind, reason, confidence }`. It is skipped when an explicit kind is given, and it is off with
+   `agents.route_with_model false`. `agents.router_model` picks the model.
+6. **The default**, `agents.default` (`verify`).
+
+Only specialists in `agents.enabled` are candidates. Confidence is 1 for an explicit kind or a label, 0.5 to 0.95
+for evidence (by its margin over the runner-up), 0.35 to 0.75 for keywords, at most 0.8 from the model, and 0.2 for
+the default.
+
+worker-pick (in GitHub Actions) routes each item it claims without the model. It writes the route into the item
+(`route: { kind, reason, confidence, source }`), and the claim comment names the specialist and why it was chosen.
+An item that nothing decides goes to the runtime without a route, and the runtime asks the model. The workflow
+passes the kind to dispatch (`agent:`), and each matrix job is named after it. The kind, reason, confidence and
+source are recorded on the job (`status`) and as span attributes (`trace.agent.kind`, `trace.route.*`). Every
+report a specialist posts starts with which specialist acted and why it was routed there.
+
+To force a specialist, do one of these:
+
+- label the issue or PR `agent:<kind>`;
+- start the task with `trace remote task OWNER/REPO --agent <kind> "…"` (or `agent` in the API's `task`);
+- for a dry run, use `trace agent route <issue|pr number|"text"> [--labels …] [--files …] [--checks …] [--model]`.
+
+### Delegation to the worker
+
+When a job needs the repository changed, or long mechanical work, the specialist calls
+`agent.delegate { brief, acceptance: [criteria], branch? }`.
+
+- **What runs.** The runtime starts a worker job: the existing job runner and the worker's task prompt
+  (`src/agents/worker/prompt.ts`). The brief and the numbered acceptance criteria are its request.
+- **Where it runs.** The worker runs in the specialist's own checkout, with the specialist's settings from the
+  default branch. The runs the specialist recorded are already in that tree. With no branch given, the worker stays
+  on the specialist's branch, or gets `claude/<kind>-<job>` if that is the default branch.
+- **The wait.** The call blocks: the MCP tool polls the runtime over loopback until the worker ends or
+  `agents.delegate_timeout_minutes` (240) passes. It returns the worker's state, its summary and its commits.
+- **After it returns.** The specialist checks every acceptance criterion with its own tools before it reports. A
+  criterion that fails twice is escalated.
+- **Depth 1.** A specialist job holds a per-job token. A delegated worker gets no token, so it is never offered
+  `agent.delegate`, and the runtime refuses any token it did not issue. A specialist runs one delegation at a time.
+- **Internal only.** `/invocations` and the API never accept a worker task (`agent: 'worker'`).
+
+**Under `worker.runner actions`** there is no runtime to delegate to. The specialist runs in GitHub Actions with its
+own prompt plus the worker's instructions inline, and with Bash, Write, Edit and Task added, so it makes the change
+itself.
+
+### Settings
+
+| Key | Default | What |
+| --- | --- | --- |
+| `agents.enabled` | all five | the specialists that may be routed to |
+| `agents.default` | `verify` | where a job goes when nothing decides |
+| `agents.route_with_model` | `true` | ask the model when labels, evidence and keywords do not decide |
+| `agents.router_model` | `''` | its model (else `worker.model`, then the runtime's) |
+| `agents.delegate_timeout_minutes` | `240` | how long `agent.delegate` waits for the worker |
+| `agents.<kind>.model` | `''` | the specialist's model (else the runtime's `ANTHROPIC_MODEL`, then `worker.model`) |
+| `agents.<kind>.max_turns` | `120` | its turn limit (the delegated worker keeps `worker.max_turns`) |
+| `agents.<kind>.instructions` | `''` | project instructions for that specialist, after `.trace/rules.md` |
+
 ## Agent memory
 
 Each agent has short-term and long-term memory in its project's own Amazon Bedrock AgentCore Memory: one per
@@ -371,7 +479,7 @@ is kept, so every record still says whose it is, and the existing checks still h
 
 | Actor | Who |
 | --- | --- |
-| `<owner>/<repo>/<agent>` | One agent on one project. The agents are `worker` (agent-fix issues, tasks), `ci-doctor` (a red check), `conflict` (a merge conflict), `render` (render tasks) and `local` (a person's own Claude Code). |
+| `<owner>/<repo>/<agent>` | One agent on one project. The agents are the specialists `verify`, `impl`, `ams`, `emc` and `render` (every job), `worker` (a specialist's delegation, continuing its session) and `local` (a person's own Claude Code). `ci-doctor` and `conflict` hold what was remembered before the specialists. |
 | `<owner>/<repo>/person/<hash>` | The person who started a task through the API: their own preferences, inside the project. The hash is part of the sha256 of their email, so the email itself never appears. |
 
 | Strategy | Namespace |
@@ -438,7 +546,7 @@ so with no SDK loaded (the CLI, local runs, tests) nothing is recorded and nothi
 | Span | Where | What it carries |
 | --- | --- | --- |
 | `invoke_agent trace-worker` / `trace-api` | each `POST /invocations` | the invocation kind or API action, the repository, the outcome; it continues the caller's trace (`traceparent`, `X-Amzn-Trace-Id`) and puts the AgentCore session id into baggage `session.id`, so every span below has it |
-| `trace.job <kind>` | each job | job id, kind, repository, agent (`worker`, `ci-doctor`, `conflict`, `render`), the item, who asked (a hash), the outcome |
+| `trace.job <kind>` | each job | job id, kind, repository, agent (the specialist, or `worker` for a delegation, with its parent job id), the route (`trace.agent.kind`, `trace.route.reason`, `trace.route.confidence`, `trace.route.source`), the item, who asked (a hash), the outcome |
 | `claude.query` | each Agent SDK run | model, Claude's session id, turns, tokens (input, output, cache read and creation), the SDK's cost estimate |
 | `chat <model>` | each model response | model, response id, finish reason, the tools it asked for |
 | `execute_tool <name>` | each tool Claude used, and each call through the tool registry (the MCP server continues the job's trace) | tool name, where the call came from, the hardware flag, argument names and sizes, result size, duration, outcome |
@@ -504,7 +612,8 @@ outside AgentCore, either set `OTEL_SDK_DISABLED=true` or give it the variables 
 | `src/core` | Settings, SQLite stores, the tool registry, the MCP server, onboarding, access control, the Python bridge client |
 | `src/infra` | The CDK stack (Cognito, the central bucket, the image builds, the API runtime, the AWS Batch GPU queue in `gpu.ts`) and, per project, `project.ts` (its worker runtime, roles, token secret and GPU job definition) |
 | `src/installer` | `trace install`: the local web installer |
-| `src/agents`, `src/api`, `agent/Dockerfile` | The image AgentCore runs: the worker, and the people-facing API |
+| `src/agents` | The specialists (`verify`, `impl`, `ams`, `emc`, `render`, each in its own folder; `index.ts` lists them), the router, the retained worker's prompt (`worker`), and the runtime (`runtime`: server, jobs, delegation, memory, observability) |
+| `src/api`, `agent/Dockerfile` | The people-facing API, and the image AgentCore runs |
 | `src/login` | `trace login`, `trace remote …`, `trace users …` |
 | `src/harness` | The loop's logic, bundled into `harness/dist` for the GitHub actions in `harness/actions` |
 | `src/tools/calc`, `src/tools/kicad`, `src/tools/pcb`, `src/tools/sim`, `src/tools/datasheets`, `src/tools/parts`, `src/tools/hil`, `src/tools/firmware`, `src/tools/runs` | The tools |
