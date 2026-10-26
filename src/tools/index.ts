@@ -18,10 +18,11 @@ import { tools as emc } from './emc/tools.js'
 import { tools as verify } from './verify/tools.js'
 import { tools as fpga } from './fpga/tools.js'
 import { tools as layout } from './layout/tools.js'
+import { tools as thermal } from './thermal/tools.js'
 
 let registry: Registry | null = null
 
 export function allTools(): Registry {
-  registry ??= new Registry([...calc, ...kicad, ...sim, ...datasheets, ...parts, ...hil, ...firmware, ...runs, ...render, ...pcb, ...memory, ...ams, ...emc, ...verify, ...fpga, ...layout, ...kb, ...agent])
+  registry ??= new Registry([...calc, ...kicad, ...sim, ...datasheets, ...parts, ...hil, ...firmware, ...runs, ...render, ...pcb, ...memory, ...ams, ...emc, ...verify, ...fpga, ...layout, ...thermal, ...kb, ...agent])
   return registry
 }

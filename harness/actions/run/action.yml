@@ -18,7 +18,7 @@ inputs:
     required: false
     default: ''
   agent:
-    description: worker-prompt/worker-delegate/worker-report/worker-dispatch only — the specialist (verify, impl, ams, emc, render) that takes the item; default the one worker-pick routed it to.
+    description: worker-prompt/worker-delegate/worker-report/worker-dispatch only — the specialist (verify, impl, ams, emc, render, thermal) that takes the item; default the one worker-pick routed it to.
     required: false
     default: ''
   hardware:

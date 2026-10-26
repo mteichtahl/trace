@@ -23,6 +23,7 @@ import { impl } from '../agents/impl/index.js'
 import { SPECIALIST_KINDS, type SpecialistKind } from '../agents/kinds.js'
 import { render } from '../agents/render/index.js'
 import type { Specialist } from '../agents/specialist.js'
+import { thermal } from '../agents/thermal/index.js'
 import { verify } from '../agents/verify/index.js'
 import { TemplateError, type VarSpec, type VarSpecs, validateTemplate } from './template.js'
 
@@ -52,7 +53,7 @@ const V = {
   repository: text('the project, OWNER/REPO'),
   where: text('where it runs: "on Amazon Bedrock AgentCore Runtime" or "in GitHub Actions"'),
   title: text("the specialist's title (Verification, Implementation, …)"),
-  kind: text('the specialist kind (verify, impl, ams, emc, render)'),
+  kind: text('the specialist kind (verify, impl, ams, emc, render, thermal)'),
   default_branch: text("the project's default branch"),
   branch: text('the branch the job works on'),
   branch_prefix: text("the agents' own branch prefix (worker.own_branch_prefix, claude/ by default)"),
@@ -74,7 +75,7 @@ add({ id: 'mention.starting', mode: 'locked', prompt: 'worker.task', description
 
 // ------------------------------------------------------------------ the specialists
 
-const DEFS: Readonly<Record<SpecialistKind, Specialist>> = { verify, impl, ams, emc, render }
+const DEFS: Readonly<Record<SpecialistKind, Specialist>> = { verify, impl, ams, emc, render, thermal }
 const ROLE_VARS: VarSpecs = { repository: V.repository, where: V.where, title: V.title, kind: V.kind }
 
 for (const k of SPECIALIST_KINDS) {
@@ -115,7 +116,7 @@ add({ id: 'specialist.route', mode: 'editable', prompt: 'specialist', then: ['sp
   default: [
     'You were given this job because: {{reason}} (routing: {{source}}, confidence {{confidence}}).',
     'If, once you have looked, the job is plainly outside your area, do not do another specialist\'s work: report which',
-    'specialist fits (verify, impl, ams, emc or render) and why, and stop. A person can relabel it agent:<kind>.',
+    'specialist fits (verify, impl, ams, emc, render or thermal) and why, and stop. A person can relabel it agent:<kind>.',
   ].join('\n') })
 
 const RULES_HEAD = [

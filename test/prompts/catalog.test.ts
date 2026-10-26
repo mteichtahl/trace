@@ -144,7 +144,7 @@ describe('completeness: every prompt is the catalog\'s parts and nothing else', 
     for (const f of files) {
       const rel = relative(root, f)
       // the catalog, and the specialists' definitions it builds their entries from
-      if (rel === join('prompts', 'catalog.ts') || /^agents[/\\](verify|impl|ams|emc|render)[/\\]index\.ts$/.test(rel)) continue
+      if (rel === join('prompts', 'catalog.ts') || /^agents[/\\](verify|impl|ams|emc|render|thermal)[/\\]index\.ts$/.test(rel)) continue
       // tool descriptions (the MCP tools' metadata) are not prompts: README "Managing prompts" says so
       if (rel.startsWith(`tools${sep}`)) continue
       const src = strip(readFileSync(f, 'utf8'))

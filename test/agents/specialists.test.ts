@@ -28,7 +28,7 @@ const TOKEN = 'ghs_TESTTOKEN1234567890abcdef'
 // ------------------------------------------------------------------ the definitions
 
 describe('specialists', () => {
-  it('cover verify, impl, ams, emc and render, each with a substantive definition', () => {
+  it('cover verify, impl, ams, emc, render and thermal, each with a substantive definition', () => {
     expect(Object.keys(SPECIALISTS).sort()).toEqual([...SPECIALIST_KINDS].sort())
     for (const k of SPECIALIST_KINDS) {
       const s = SPECIALISTS[k]
@@ -64,6 +64,18 @@ describe('specialists', () => {
     expect(toolsOf(SPECIALISTS.verify)).not.toContain('hil.psu')
     expect(toolsOf(SPECIALISTS.verify, { hardware: true })).toContain('hil.psu')
     for (const k of ['impl', 'ams', 'emc', 'render'] as const) expect(toolsOf(SPECIALISTS[k], { hardware: true }).some((t) => t.startsWith('hil.'))).toBe(false)
+    // thermal: its area, the calculators and simulators it names, and the bench only when hardware is allowed
+    expect(new Set(area('thermal'))).toEqual(new Set(['thermal', 'calc', 'sim', 'datasheets', 'parts', 'kicad']))
+    const thermalTools = allTools().list().filter((t) => t.name.startsWith('thermal.')).map((t) => t.name)
+    expect(thermalTools.length).toBeGreaterThanOrEqual(10)
+    expect(toolsOf(SPECIALISTS.thermal, { hardware: true })).toEqual(expect.arrayContaining(thermalTools))
+    expect(SPECIALISTS.thermal.tools).toEqual(expect.arrayContaining(['calc.ldo_thermal', 'calc.power', 'calc.trace_width', 'calc.via', 'calc.buck', 'calc.boost', 'sim.spice', 'sim.measure', 'kicad.board', 'kicad.components', 'kicad.net']))
+    expect(toolsOf(SPECIALISTS.thermal)).not.toContain('thermal.measure')
+    expect(toolsOf(SPECIALISTS.thermal).some((t) => t.startsWith('hil.'))).toBe(false)
+    expect(toolsOf(SPECIALISTS.thermal, { hardware: true })).toEqual(expect.arrayContaining(['thermal.measure', 'hil.dmm', 'hil.scpi', 'hil.serial_capture']))
+    // thermal.measure drives hardware, so it is offered only with hardware
+    expect(allTools().get('thermal.measure')?.hardware).toBe(true)
+    for (const t of SPECIALISTS.thermal.tools) expect(allTools().get(t)?.hardware, t).toBe(false)
   })
 
   it('have read-only built-ins and MCP names as the SDK spells them', () => {
@@ -121,6 +133,30 @@ describe('specialist prompts', () => {
 // ------------------------------------------------------------------ the router
 
 describe('router', () => {
+  it('routes thermal work by label, evidence and keywords', () => {
+    expect(labelKind('agent:thermal', cfg)).toBe('thermal')
+    expect(route({ labels: ['agent:thermal'] }, cfg)).toMatchObject({ kind: 'thermal', source: 'label', confidence: 1 })
+    expect(route({ checks: [{ name: 'thermal-check' }] }, cfg)).toMatchObject({ kind: 'thermal', source: 'evidence' })
+    expect(route({ checks: [{ name: 'build', log: 'thermal.check: U3 derated_margin_c -4.2 (at-risk)' }] }, cfg).kind).toBe('thermal')
+    expect(route({ checks: [{ name: 'hil', log: 'U5 over-temperature: thermal shutdown at 85 C ambient' }] }, cfg).kind).toBe('thermal')
+    expect(route({ files: ['bench/temperature-log.csv'] }, cfg)).toMatchObject({ kind: 'thermal', source: 'evidence' })
+    expect(route({ files: ['hw/board.thermal'] }, cfg).kind).toBe('thermal')
+    expect(route({ files: ['hw/ldo-stage.kicad_sch'] }, cfg).kind).toBe('thermal')
+    expect(route({ text: 'U3 is overheating: what is its junction temperature (Tj) and θJA, and does it need a heatsink?' }, cfg)).toMatchObject({ kind: 'thermal', source: 'keyword' })
+    expect(route({ text: 'find the hot spot and check the derating' }, cfg).kind).toBe('thermal')
+    const p = specialistPrompt(SPECIALISTS.thermal, { cfg, repository: 'o/r', job: { kind: 'preview' }, rules: null })
+    expect(p).toMatch(/You are trace's Thermal specialist for o\/r/)
+    expect(p).toMatch(/2\.5d for quick per-commit checks; calculix for 3D conduction/)
+    expect(p).toMatch(/cfd for enclosures, ducted or fan-cooled designs, dense card cages and fin spacing/)
+    expect(p).toContain('thermal_check')
+    const toolsLine = (text: string): string => /these trace tools[^\n]*\n\s+([^\n]+)/.exec(text)?.[1] ?? ''
+    expect(toolsLine(p)).toContain('thermal_check')
+    expect(toolsLine(p)).not.toContain('thermal_measure')
+    expect(toolsLine(specialistPrompt(SPECIALISTS.thermal, { cfg, repository: 'o/r', job: { kind: 'preview' }, rules: null, hardware: true }))).toContain('thermal_measure')
+    expect(cfg.agents.thermal.max_turns).toBeGreaterThan(0)
+    expect(cfg.labels.agent_thermal).toBe('agent:thermal')
+  })
+
   it('maps the agent:<kind> labels from the settings', () => {
     expect(labelKind('agent:verify', cfg)).toBe('verify')
     expect(labelKind('AGENT:EMC', cfg)).toBe('emc')

@@ -186,6 +186,24 @@ b27486a2e6804359  2026-10-26 07:39  pass    sim.kicad_spice   hardware/sensor-no
 Each run keeps its full outputs in `.trace/project.db`: the ERC/DRC JSON reports, the BOM CSV, the netlists, the
 ngspice logs and raw data, the VCD, and the build log. Look at one with `trace run ID` or `trace artifact ID NAME`.
 
+## 6. Thermal
+
+`.trace/project.db` holds a thermal envelope `bench` (0 to 60 °C, still air, horizontal, Tj <= Tj_max - 20 °C), the
+parts' limits with their sources, the budget `nominal` and R4's power derating curve (`tools/setup-db.ts` writes
+them; README "Thermal specialist" in the repository root explains the tools):
+
+```
+$ trace tool thermal.check envelope=bench scenario=nominal board=hardware/sensor-node.kicad_pcb cell_mm=0.5
+verdict: unknown    R1, R2, R4 pass (milliwatts: a fraction of a degree)    D2 unknown
+$ trace tool thermal.derating action=check ref=R4 curve=power_vs_ambient x=60 y=0.0033
+status: pass        allowed 0.1 W at 60 °C
+```
+
+The resistors' limits come from the UNI-ROYAL 0603WAF derating curve (1/10 W at 70 °C to 0 at 155 °C, so 850 °C/W
+from element to ambient), recalled rather than read from a PDF in the library (`verified: null`). D2's datasheet
+gives no junction figures, so the check reports it as unknown instead of guessing. Add the datasheets with
+`datasheets.add` and cite their pages to firm these up.
+
 ## Regenerating
 
 The KiCad files are generated, then finished by KiCad itself: `kicad-cli pcb drc --refill-zones --save-board` fills

@@ -6,7 +6,8 @@
 #
 # Contents: CUDA 12.9 runtime (Ubuntu 24.04), Node 22, the official Blender build (Cycles CUDA/OptiX, OpenImageDenoise,
 # its own Python with numpy, glTF import), Java 25 + Freerouting, OrthoRoute with CuPy, KiCad 10 (kicad-cli and the
-# pcbnew Python module for Specctra DSN/SES), openEMS v0.37.0 with its Python modules and scikit-rf, and the trace dist.
+# pcbnew Python module for Specctra DSN/SES), openEMS v0.37.0 with its Python modules and scikit-rf, CalculiX ccx 2.21 and
+# ESI OpenFOAM v2412 (thermal), and the trace dist.
 FROM --platform=linux/amd64 nvidia/cuda:12.9.2-runtime-ubuntu24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -116,6 +117,27 @@ RUN if [ "${WITH_GERBER2EMS}" = "1" ]; then \
       && ln -s /opt/openEMS/venv/lib/python3*/site-packages/CSXCAD /opt/openEMS/venv/lib/python3*/site-packages/openEMS /opt/gerber2ems/venv/lib/python3*/site-packages/ \
       && /opt/gerber2ems/venv/bin/gerber2ems --help > /dev/null; \
     fi
+
+# Thermal solvers (src/tools/thermal), CPU jobs:
+#   calculix  CalculiX ccx 2.21 (Ubuntu noble universe, calculix-ccx 2.21-1, about 18 MB with its libraries)
+#   openfoam  ESI-OpenCFD OpenFOAM v2412 from its apt repository for noble/amd64 (dl.openfoam.com), pinned to
+#             openfoam2412 2412.260127-1 (package sha256 7022b3d4…c80c; its -common 8d734715…0310): solver binaries
+#             in /usr/lib/openfoam/openfoam2412/platforms/linux64GccDPInt32Opt/bin (chtMultiRegionSimpleFoam,
+#             chtMultiRegionFoam, blockMesh, snappyHexMesh, splitMeshRegions, foamToVTK, decomposePar, reconstructPar),
+#             sourced from /usr/lib/openfoam/openfoam2412/etc/bashrc. About 320 MB installed plus Open MPI and
+#             (PT-)Scotch; no ParaView, no tutorials. ESI's line, not openfoam.org's: from v11 openfoam.org replaced the
+#             chtMultiRegion*Foam solvers with foamMultiRun.
+ARG OPENFOAM_VERSION=2412.260127-1
+RUN apt-get update && apt-get install -y --no-install-recommends calculix-ccx=2.21-1 \
+ && install -d -m 0755 /etc/apt/keyrings \
+ && curl -fsSL https://dl.openfoam.com/pubkey.gpg | gpg --dearmor -o /etc/apt/keyrings/openfoam.gpg \
+ && echo "deb [signed-by=/etc/apt/keyrings/openfoam.gpg] https://dl.openfoam.com/repos/deb noble main" > /etc/apt/sources.list.d/openfoam.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends "openfoam2412=${OPENFOAM_VERSION}" "openfoam2412-common=${OPENFOAM_VERSION}" openmpi-bin \
+ && rm -rf /var/lib/apt/lists/* \
+ && command -v ccx \
+ && bash -c '. /usr/lib/openfoam/openfoam2412/etc/bashrc && command -v chtMultiRegionSimpleFoam snappyHexMesh splitMeshRegions foamToVTK'
+ENV OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2412/etc/bashrc
 
 RUN useradd --create-home --uid 10001 --shell /bin/bash trace
 WORKDIR /app

@@ -7,13 +7,14 @@
  *   ams      Analog & Mixed-Signal: specs, corners, Monte Carlo yield, stability, noise, mixed-signal co-simulation
  *   emc      EMC & Simulation: rule prechecks, field-solver setup (boundaries, ports, mesh), runs, SI, spectra
  *   render   Renders of boards and models (the rendering agent, kept as a specialist of its own)
+ *   thermal  Thermal: envelope, power budget, junction temperatures across corners, board models, measurements
  *
  * The generic worker (code changes, pushes, pull requests) is not in this list: it is started only by a specialist
  * through agent.delegate (src/agents/delegate.ts).
  */
 import { z } from 'zod'
 
-export const SPECIALIST_KINDS = ['verify', 'impl', 'ams', 'emc', 'render'] as const
+export const SPECIALIST_KINDS = ['verify', 'impl', 'ams', 'emc', 'render', 'thermal'] as const
 export type SpecialistKind = (typeof SPECIALIST_KINDS)[number]
 export const SpecialistKindSchema = z.enum(SPECIALIST_KINDS)
 
