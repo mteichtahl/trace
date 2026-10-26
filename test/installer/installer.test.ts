@@ -39,6 +39,7 @@ vi.mock('../../src/installer/aws.js', () => ({
 vi.mock('@aws-sdk/client-secrets-manager', () => ({
   SecretsManagerClient: class { async send(c: unknown) { calls.secrets.push(c) } },
   PutSecretValueCommand: class { constructor(readonly input: unknown) {} },
+  GetSecretValueCommand: class { constructor(readonly input: unknown) {} },
 }))
 vi.mock('@aws-sdk/client-cognito-identity-provider', () => {
   class UserNotFoundException extends Error {}
@@ -82,7 +83,7 @@ vi.mock('../../src/core/onboard.js', async (orig) => ({
 }))
 
 const { AnswersSchema, SecretsSchema } = await import('../../src/installer/answers.js')
-const { apply, infraInput, layoutDeploys, layoutOf, plan, redact } = await import('../../src/installer/bootstrap.js')
+const { apply, infraInput, layoutDeploys, layoutOf, mergeLibraryKeys, plan, redact } = await import('../../src/installer/bootstrap.js')
 const { InfraPropsSchema } = await import('../../src/infra/props.js')
 const { projectOutputs } = await import('../../src/infra/props.js')
 const { createInstaller } = await import('../../src/installer/server.js')
@@ -523,5 +524,51 @@ describe('adding a removed project again, its memory variable, the CPU queue and
     const off = await run({ ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: false } }, { names: { deployed: async () => new Set(), taken: async () => [] }, gpuImage: async () => { throw new Error('not called') } })
     expect(off.ok).toBe(true)
     expect(off.events.find((e) => e.type === 'step' && e.step?.id === 'gpu' && e.step.status === 'skipped')).toBeDefined()
+  })
+})
+
+describe('the library gateway', () => {
+  const GW = { ...ANSWERS, agents: { ...ANSWERS.agents, libraryGateway: true } }
+  const KEYS_ARN = 'arn:aws:secretsmanager:us-east-1:123456789012:secret:trace/library-keys-AbCdEf'
+  const MOUSER = ['mouser', 'key', '0123456789abcdef'].join('-')
+
+  it('is off unless chosen, and asked of the stack when it is', () => {
+    expect(infraInput(AnswersSchema.parse(ANSWERS)).gateway).toEqual({ enabled: false })
+    expect(infraInput(AnswersSchema.parse(GW)).gateway).toEqual({ enabled: true })
+    expect(plan(AnswersSchema.parse(GW)).find((x) => x.id === 'deploy')?.detail).toContain('the library gateway')
+    expect(plan(AnswersSchema.parse(ANSWERS)).find((x) => x.id === 'deploy')?.detail).not.toContain('library gateway')
+  })
+
+  it('keeps stored keys a run leaves empty, and drops the placeholder CloudFormation made', () => {
+    expect(mergeLibraryKeys({ unused: 'x1y2', MOUSER_API_KEY: 'old', NEXAR_CLIENT_ID: 'n' }, { MOUSER_API_KEY: 'new' })).toEqual({ MOUSER_API_KEY: 'new', NEXAR_CLIENT_ID: 'n' })
+    expect(SecretsSchema.parse({ githubToken: TOKEN }).libraryKeys).toEqual({ MOUSER_API_KEY: '', DIGIKEY_CLIENT_ID: '', DIGIKEY_CLIENT_SECRET: '', NEXAR_CLIENT_ID: '', NEXAR_CLIENT_SECRET: '' })
+    expect(SecretsSchema.safeParse({ githubToken: TOKEN, libraryKeys: { OTHER: 'x' } }).success).toBe(false)
+  })
+
+  it('writes the keys given into the gateway\'s secret, merged, and never shows them', async () => {
+    calls.secrets.length = 0
+    OUTPUTS.TraceHome = join(mkdtempSync(join(tmpdir(), 'trace-central-')), 'home')
+    const events: string[] = []
+    const ok = await apply(AnswersSchema.parse(GW), SecretsSchema.parse({ githubToken: TOKEN, libraryKeys: { MOUSER_API_KEY: MOUSER } }), (e) => events.push(JSON.stringify(e)), {
+      cdk: async (args, env) => { if (args[0] === 'deploy') expect(JSON.parse(env.TRACE_INFRA ?? '{}').gateway).toEqual({ enabled: true }); expect(env.TRACE_INFRA).not.toContain(MOUSER); return 0 },
+      outputs: async () => ({ ...OUTPUTS, LibraryKeysSecretArn: KEYS_ARN }),
+      readSecret: async () => ({ unused: 'Ab12', NEXAR_CLIENT_ID: 'kept' }),
+    })
+    expect(ok).toBe(true)
+    const w = secretWrites().find((x) => x.SecretId === KEYS_ARN)
+    expect(JSON.parse(w?.SecretString ?? '{}')).toEqual({ NEXAR_CLIENT_ID: 'kept', MOUSER_API_KEY: MOUSER })
+    expect(events.join('\n')).not.toContain(MOUSER)
+    expect(events.join('\n')).toContain('distributor keys stored for the library gateway: MOUSER_API_KEY')
+  })
+
+  it('leaves the secret alone when no key is given', async () => {
+    calls.secrets.length = 0
+    OUTPUTS.TraceHome = join(mkdtempSync(join(tmpdir(), 'trace-central-')), 'home')
+    const ok = await apply(AnswersSchema.parse(GW), SecretsSchema.parse({ githubToken: TOKEN }), () => undefined, {
+      cdk: async () => 0, outputs: async () => ({ ...OUTPUTS, LibraryKeysSecretArn: KEYS_ARN }),
+      readSecret: async () => { throw new Error('must not be read') },
+    })
+    expect(ok).toBe(true)
+    expect(secretWrites().map((x) => x.SecretId)).not.toContain(KEYS_ARN)
   })
 })

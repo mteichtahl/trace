@@ -172,6 +172,12 @@ export const InfraPropsSchema = z.object({
   layoutMigration: z.enum(['release', 'drain']).optional(),
   /** Per-project settings, by OWNER/REPO (no @BRANCH; case-insensitive): every key must be in `repositories`. */
   projectSettings: z.record(z.string(), ProjectSettingsSchema).default({}),
+  /** The library gateway (src/infra/gateway.ts, README "Library gateway"): AgentCore Gateway in front of the shared
+   * datasheets and parts tools, which every project's worker then calls instead of running them itself. Off by
+   * default: with it off every tool runs in the worker, as before. */
+  gateway: z.object({
+    enabled: z.boolean().default(false),
+  }).strict().prefault({}),
   /** AgentCore observability: OpenTelemetry (ADOT) traces and metrics to CloudWatch (src/infra/observability.ts). */
   observability: z.object({
     enabled: z.boolean().default(true),
@@ -286,6 +292,10 @@ export const REPOSITORY_OUTPUT = 'Repository'
 /** The GPU image build the deploy started (it no longer waits for it: src/infra/gpu.ts): the installer waits for it
  * after the core is up, and starts it again if it failed. Its value is the CodeBuild build id, `<project>:<uuid>`. */
 export const GPU_IMAGE_BUILD_OUTPUT = 'GpuImageBuild'
+
+/** The library gateway's outputs (gateway.enabled): its URL, and the distributor-keys secret the installer writes. */
+export const LIBRARY_GATEWAY_OUTPUT = 'LibraryGatewayUrl'
+export const LIBRARY_KEYS_OUTPUT = 'LibraryKeysSecretArn'
 
 /** The stack's layout ('flat' or 'nested'), an output so the installer can tell which an installation has. */
 export const LAYOUT_OUTPUT = 'Layout'

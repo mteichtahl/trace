@@ -1,0 +1,19 @@
+Metadata-Version: 2.4
+Name: tracebridge
+Version: 0.1.0
+Requires-Python: >=3.10
+Provides-Extra: pdf
+Requires-Dist: pdfplumber>=0.11.10; extra == "pdf"
+Requires-Dist: pypdf>=6.21.2; extra == "pdf"
+Provides-Extra: visa
+Requires-Dist: pyvisa>=1.14; extra == "visa"
+Requires-Dist: pyvisa-py>=0.8.1; extra == "visa"
+Requires-Dist: pyserial>=3.5; extra == "visa"
+Provides-Extra: can
+Requires-Dist: python-can>=4.6.1; extra == "can"
+Provides-Extra: all
+Requires-Dist: tracebridge[can,pdf,visa]; extra == "all"
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Requires-Dist: reportlab>=5.1.0; extra == "dev"
+Requires-Dist: tracebridge[all]; extra == "dev"

@@ -52,12 +52,14 @@ const s = {
   github: { token: '', adminToken: '', info: null as TokenInfo | null, filter: '', busy: false, error: '' },
   /** a project's own agent token (OWNER/REPO → token): memory only, like every other secret */
   projectTokens: new Map<string, string>(),
+  /** distributor keys for the library gateway (memory only, like every other secret; empty keeps the stored one) */
+  libraryKeys: { MOUSER_API_KEY: '', DIGIKEY_CLIENT_ID: '', DIGIKEY_CLIENT_SECRET: '', NEXAR_CLIENT_ID: '', NEXAR_CLIENT_SECRET: '' },
   /** memoryDays: the field's text ('' = the installation's default); generation: kept from the saved answers (the
    * installer raises it when a removed project is added again; never set here) */
   projects: new Map<string, { branch: string; onboard: boolean; applySettings: boolean; memoryDays: string; generation: number }>(),
   aws: { mode: 'profile' as 'profile' | 'keys', profile: 'default', region: 'us-east-1', keyId: '', secret: '', session: '', check: null as AwsCheck | null, confirmed: false, busy: false, error: '' },
   agents: { prefix: 'trace', model: '', maxLifetimeHours: 8, idleMinutes: 15, centralBucketName: '', retainData: true, escalateTo: '', gpuEnabled: true, gpuMaxVcpus: 16, gpuSpot: false,
-    cpuEnabled: true, cpuMaxVcpus: 64, cpuSpot: false, cpuVcpus: 16, cpuMemoryMiB: 32_768, knowledgeBase: true,
+    cpuEnabled: true, cpuMaxVcpus: 64, cpuSpot: false, cpuVcpus: 16, cpuMemoryMiB: 32_768, knowledgeBase: true, libraryGateway: false,
     observability: true, transactionSearch: true, samplingPercent: '', dashboard: true, migrateLayout: false },
   adminEmail: '',
   people: [] as Person[],
@@ -116,7 +118,7 @@ function answers(): AnswersInput {
       createOidcProvider: !(s.aws.check?.oidcProvider ?? false), centralBucketName: s.agents.centralBucketName, retainData: s.agents.retainData,
       gpuEnabled: s.agents.gpuEnabled, gpuMaxVcpus: s.agents.gpuMaxVcpus, gpuSpot: s.agents.gpuSpot,
       cpuEnabled: s.agents.cpuEnabled, cpuMaxVcpus: s.agents.cpuMaxVcpus, cpuSpot: s.agents.cpuSpot, cpuVcpus: s.agents.cpuVcpus, cpuMemoryMiB: s.agents.cpuMemoryMiB,
-      knowledgeBase: s.agents.knowledgeBase,
+      knowledgeBase: s.agents.knowledgeBase, libraryGateway: s.agents.libraryGateway,
       observability: s.agents.observability, transactionSearch: s.agents.transactionSearch, dashboard: s.agents.dashboard,
       samplingPercent: s.agents.samplingPercent.trim() === '' ? null : Number(s.agents.samplingPercent),
       migrateLayout: s.agents.migrateLayout,
@@ -136,6 +138,7 @@ const secrets = (): Record<string, unknown> => ({
   projectTokens: Object.fromEntries([...s.projectTokens].filter(([r, t]) => s.projects.has(r) && t.trim())),
   awsAccessKeyId: s.aws.mode === 'keys' ? s.aws.keyId : '', awsSecretAccessKey: s.aws.mode === 'keys' ? s.aws.secret : '',
   awsSessionToken: s.aws.mode === 'keys' ? s.aws.session : '',
+  libraryKeys: s.agents.libraryGateway ? { ...s.libraryKeys } : {},
 })
 
 function problems(tab: Tab): string[] {
@@ -326,6 +329,17 @@ function agents(): HTMLElement {
     h('h3', {}, 'Knowledge bases'),
     h('p', { class: 'lead' }, 'Each project gets an Amazon Bedrock knowledge base over its docs, markdown, rules, KiCad summaries and the datasheets of its BOM parts, with its vectors in Amazon S3 Vectors. Every push to the default branch syncs it. The agents search it before asking. It needs an installation with one nested stack per project.'),
     checkbox('Give each project a knowledge base', g.knowledgeBase, (v) => { g.knowledgeBase = v }),
+    h('h3', {}, 'Library gateway'),
+    h('p', { class: 'lead' }, 'The shared datasheets and parts tools can run behind one Amazon Bedrock AgentCore Gateway instead of inside every worker. Only those tools move: everything that works on a project stays in its own worker, under its own role. The distributor keys below are then held by the gateway alone, so no agent can read them.'),
+    checkbox('Serve the datasheets and parts tools through AgentCore Gateway', g.libraryGateway, (v) => { g.libraryGateway = v; render() }),
+    g.libraryGateway && h('div', {},
+      h('div', { class: 'row' },
+        field('Mouser API key', input('password', s.libraryKeys.MOUSER_API_KEY, (v) => { s.libraryKeys.MOUSER_API_KEY = v.trim() }, { placeholder: 'leave empty to keep the stored one' })),
+        field('DigiKey client id', input('password', s.libraryKeys.DIGIKEY_CLIENT_ID, (v) => { s.libraryKeys.DIGIKEY_CLIENT_ID = v.trim() })),
+        field('DigiKey client secret', input('password', s.libraryKeys.DIGIKEY_CLIENT_SECRET, (v) => { s.libraryKeys.DIGIKEY_CLIENT_SECRET = v.trim() }))),
+      h('div', { class: 'row' },
+        field('Nexar client id', input('password', s.libraryKeys.NEXAR_CLIENT_ID, (v) => { s.libraryKeys.NEXAR_CLIENT_ID = v.trim() })),
+        field('Nexar client secret', input('password', s.libraryKeys.NEXAR_CLIENT_SECRET, (v) => { s.libraryKeys.NEXAR_CLIENT_SECRET = v.trim() }), 'optional, all of them: LCSC needs no key'))),
     h('h3', {}, 'Observability'),
     h('p', { class: 'lead' }, 'Both runtimes and the GPU jobs send OpenTelemetry traces and metrics to CloudWatch: each session, job, Claude turn and tool call appears in CloudWatch GenAI Observability. Only names, sizes, counts, tokens and outcomes are recorded, never prompts, tool arguments or file contents.'),
     checkbox('Send traces and metrics to CloudWatch (AgentCore observability)', g.observability, (v) => { g.observability = v; render() }),

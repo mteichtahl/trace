@@ -64,6 +64,7 @@ projects is therefore drawn in IAM, not only in code (`src/infra/project.ts`):
 | **S3** | Read and write `projects/<owner>/<repo>/*` and `jobs/<owner>/<repo>/*`, and list only those prefixes and `central/*`. Read, never write, `prompts/*` (the installation's prompt overrides, see [Managing prompts](#managing-prompts)). Nothing under `access/*`, and nothing of another project. |
 | **GPU and CPU jobs** | Two AWS Batch job definitions per project (`<prefix>-gpu-<hash>`, and `<prefix>-cpu-<hash>` with the CPU queue), with one job role that reads and writes only that project's `jobs/<owner>/<repo>/*`. A project's role may submit only with its own definitions, only jobs tagged `trace:project=<owner>/<repo>`, and may stop only jobs carrying that tag. SubmitJob cannot override a definition's job role. |
 | **Knowledge base** | One Amazon Bedrock knowledge base per repository (`<prefix>-kb-<hash>`, nested layout only), with its own service role (`<prefix>-kb-<hash>-<region>`) that reads only `projects/<owner>/<repo>/kb/*` and its own S3 Vectors index, and invokes only the embedding model. The worker role and the OIDC role may `bedrock:Retrieve` and start, get and list ingestion jobs on that knowledge base's ARN only. See [Knowledge base](#knowledge-base). |
+| **Library gateway** | Off by default (`gateway.enabled`). When on, each worker role may `bedrock-agentcore:InvokeGateway` on the installation's one library gateway and nothing else of it; the gateway serves only the shared datasheets and parts tools. See [Library gateway](#library-gateway). |
 | **GitHub OIDC role** | One per repository, trusted only for `repo:OWNER/REPO:ref:refs/heads/BRANCH`. It may invoke only that project's runtime, read and write only that project's prefix (and the central database), and use only that project's memory and knowledge base, as its worker does. |
 | **GitHub token** | Each project has its own secret, `<prefix>/github-token/<owner>/<repo>`, and its worker reads only that one. This isolates GitHub access only when you give the project its own fine-grained token limited to that repository. By default the shared token is copied into every project's secret, and the installer's summary says so. A project token is checked: it must see its repository, and the installer warns if it can also see another project's. |
 
@@ -72,6 +73,8 @@ Shared on purpose:
 - **The central database** (`central/`: datasheets and the parts database). Every project reads it. Every project
   may also write it, because adding a datasheet is a shared write, but only with a conditional put (`If-Match` or
   `If-None-Match`, which is how the central store always writes) and never a delete. The bucket is versioned.
+- **The library gateway** (when `gateway.enabled`): one AgentCore Gateway and its Lambda, which reach the central
+  store and the distributor keys only. See [Library gateway](#library-gateway).
 - **The GPU and CPU queues and compute environments**, and the GPU image (which both run).
 - **The S3 vector bucket** that holds every project's knowledge base index (one index per project; each service role
   reaches only its own index's ARN).
@@ -270,6 +273,66 @@ claude mcp add trace -- trace mcp             # give Claude Code all of them
 Tools that drive real hardware (instruments, buses, flashing a target) are refused, and hidden from MCP, unless
 `TRACE_HARDWARE=1`. Run them only on a machine wired to the bench. Configure the bench with `trace config set` for
 `hil.instruments`, `hil.serial` and `hil.can`. Every power supply must have voltage and current limits.
+
+## Library gateway
+
+The shared library's tools (datasheets and parts) can run behind one Amazon Bedrock AgentCore Gateway instead of in
+every worker. Turn it on with `gateway.enabled` in the stack settings, or **Library gateway** in the installer's Agents
+step. It is off by default, and with it off every tool runs in the worker, as before.
+
+**What moves.** Only calls that need nothing on the worker's disk: `datasheets.list`, `.find`, `.text`, `.history`,
+`.add` (from a URL), `.acknowledge`, and `parts.lookup`, `.search`, `.alternatives`, `.bom_check` (with `rows`),
+`.fetch_datasheet` (`src/core/gateway.ts` `LIBRARY_TOOLS`). A call that names a local file or another store (`file`,
+`path`, `library`) runs where it was made, and so do `datasheets.get`, `.tables`, `.params` and `.page_image`, which
+hand back a local path or need Python or poppler. Everything that works on a project (KiCad, simulation, PCB,
+firmware, hardware, memory, the knowledge base, GPU jobs) stays in the project's own worker, under its own role.
+
+**Why only the library.** A Lambda target runs with the gateway's role, never the caller's, and is not told who
+called. A per-project tool behind a shared gateway would need a role that reaches every project, which is the line
+[Project isolation](#project-isolation) draws in IAM. The central database is shared by every project already, so the
+gateway's Lambda reaches nothing a worker can't.
+
+**How a call gets there.** The agent's MCP configuration does not change: `trace mcp` stays its one server. With
+`TRACE_GATEWAY_URL` set (the stack sets it on every worker), `trace mcp` forwards these calls to the gateway as MCP
+`tools/call` on `library___<tool>`, signed with SigV4 by the runtime's own credentials (the gateway's inbound auth is
+`AWS_IAM`; an MCP client's remote configuration takes static headers only, so the signing has to be done here).
+Parts calls carry the project's `parts.providers` and `parts.currency`, since the Lambda has no project. The Lambda
+(`src/library/lambda.ts`) answers in an envelope that `trace mcp` unwraps, so a forwarded call reads the same as one run
+in-process, and refuses any `file`, `path` or `library` whoever sends it.
+
+**When the gateway can't be reached.** A read runs in the worker instead, and `trace mcp` says so on stderr. A write
+(`datasheets.add`, `.acknowledge`, `parts.fetch_datasheet`) reports the error instead, so while the gateway is on,
+writes to the shared library go only through it. The worker role keeps its conditional write on `central/*`: the
+central database is one SQLite file that also holds the project registry (`src/core/onboard.ts`), so IAM can't let a
+worker write one table and not the library's.
+
+**Distributor keys.** `MOUSER_API_KEY`, `DIGIKEY_CLIENT_ID`/`_SECRET` and `NEXAR_CLIENT_ID`/`_SECRET` go in one
+Secrets Manager secret, `<prefix>/library-keys` (output `LibraryKeysSecretArn`), as a JSON object. The installer writes
+the ones you give and keeps the ones you leave empty. Only the Lambda's role reads it, so no agent, which has Bash and
+its role's credentials, can. Without the gateway, a worker has no distributor keys and `parts.lookup` asks LCSC only.
+
+**Resources** (`src/infra/gateway.ts`, in the parent stack):
+
+| Resource | What it may do |
+| --- | --- |
+| `<prefix>-library` gateway | `AWS_IAM` inbound auth, MCP. Its role (`<prefix>-gateway-<region>`) may only invoke the Lambda. |
+| `library` target | Lambda target, `GATEWAY_IAM_ROLE` credentials, its tool schema generated from the tools' zod inputs without their local inputs. Gateway's schema has no enums or bounds, so they are kept in each field's description; the Lambda validates with the full zod schema. |
+| `<prefix>-library` Lambda | Node 22 on arm64, 2 GB, 5 minutes. Role `<prefix>-library-<region>`: read `central/*`, write it only with a conditional put, read the keys secret. Nothing of `projects/`, `jobs/`, `access/` or `prompts/`. |
+| `<prefix>/library-keys` secret | Written by the installer, never by CloudFormation. |
+
+**Cost.** Gateway calls are $0.005 per 1,000, and tool indexing $0.02 per 100 tools a month (11 tools), at
+[AgentCore pricing](https://aws.amazon.com/bedrock/agentcore/pricing/); the Lambda is billed per call. Nothing runs
+while idle.
+
+**Not yet tried on a real deploy.** Everything above is tested offline: the bundle CloudFormation ships is built and
+run against a local store, and the client is run against a local MCP server that checks every request's SigV4
+signature. Still to confirm on AWS:
+
+- that the gateway accepts the generated tool schema and lists `library___<tool>` as expected;
+- that `bedrock-agentcore:InvokeGateway` on the gateway ARN is all a worker role needs to call it with SigV4;
+- that the `nodejs22.x` Lambda runtime has `node:sqlite` without a flag (Node 22.13 and later);
+- how the gateway wraps the Lambda's answer (`trace mcp` unwraps the envelope only when it finds it, and passes
+  anything else through unchanged).
 
 ## GPU jobs: rendering and autorouting
 
@@ -1024,6 +1087,7 @@ outside AgentCore, either set `OTEL_SDK_DISABLED=true` or give it the variables 
 | `src/api`, `agent/Dockerfile` | The people-facing API, and the image AgentCore runs |
 | `src/login` | `trace login`, `trace remote …`, `trace users …` |
 | `src/harness` | The loop's logic, bundled into `harness/dist` for the GitHub actions in `harness/actions` |
+| `src/infra/gateway.ts`, `src/core/gateway.ts`, `src/library` | The library gateway: its CDK resources, which calls `trace mcp` forwards and how (SigV4, fallback), and the Lambda behind it |
 | `src/infra/knowledge.ts`, `src/tools/kb` | Each project's knowledge base: its CDK resources, and what goes in it, the sync, search and the kb tools |
 | `src/tools/calc`, `src/tools/kicad`, `src/tools/pcb`, `src/tools/sim`, `src/tools/datasheets`, `src/tools/parts`, `src/tools/hil`, `src/tools/firmware`, `src/tools/runs` | The tools |
 | `src/gpu`, `agent/Dockerfile.gpu` | GPU jobs: local or AWS Batch (`runJob`, `runBatch`), the in-container runner, and its image |

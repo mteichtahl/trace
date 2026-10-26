@@ -43,6 +43,8 @@ export const AgentAnswers = z.object({
   cpuMemoryMiB: z.number().int().min(1024).max(1_572_864).default(32_768),
   /** each project's Bedrock knowledge base (props.ts knowledgeBase); nested layout only */
   knowledgeBase: z.boolean().default(true),
+  /** The library gateway (props.ts gateway): the shared datasheets and parts tools behind AgentCore Gateway */
+  libraryGateway: z.boolean().default(false),
   /** AgentCore observability: OpenTelemetry traces and metrics to CloudWatch (GenAI Observability) */
   observability: z.boolean().default(true),
   /** turn on CloudWatch Transaction Search in the account and region (account-wide; never turned off) */
@@ -110,6 +112,15 @@ export const SecretsSchema = z.object({
    * TRACE_TOKEN; never in the answers. */
   projectTokens: z.record(Repo, z.string().trim().refine((v) => v === '' || v.length >= 20, 'a GitHub token')).default({}).transform((r) =>
     Object.fromEntries(Object.entries(r).filter(([, v]) => v !== '').map(([k, v]) => [k.toLowerCase(), v]))),
+  /** Distributor API keys for the parts tools (optional), by the names the providers read. Written to the library
+   * gateway's secret when the gateway is on; a key left empty keeps the one stored, so a second run needs none. */
+  libraryKeys: z.object({
+    MOUSER_API_KEY: z.string().trim().default(''),
+    DIGIKEY_CLIENT_ID: z.string().trim().default(''),
+    DIGIKEY_CLIENT_SECRET: z.string().trim().default(''),
+    NEXAR_CLIENT_ID: z.string().trim().default(''),
+    NEXAR_CLIENT_SECRET: z.string().trim().default(''),
+  }).strict().prefault({}),
   /** Used only during installation to change repository settings, if the agents' token can't (optional). */
   githubAdminToken: z.string().default(''),
   /** Only when aws.mode = keys. */

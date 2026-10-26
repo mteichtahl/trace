@@ -18,15 +18,19 @@ const providersArg = z.array(ProviderEnum).min(1).optional().describe('providers
 /** Test seam: canned HTTP for the providers and the datasheet download (and its host check). */
 export const http: { fetch: LookupOptions['fetch']; resolveHost: ResolveHost | undefined } = { fetch: undefined, resolveHost: undefined }
 
-function options(providers: ProviderName[] | undefined, fresh = false): LookupOptions {
+function options(providers: ProviderName[] | undefined, fresh = false, currency?: string): LookupOptions {
   let cfg: { providers: ProviderName[]; currency: string }
   try {
     cfg = load(undefined, { strict: false }).parts
   } catch {
     cfg = { providers: ['lcsc'], currency: 'USD' }
   }
-  return { providers: providers ?? cfg.providers, currency: cfg.currency, fresh, ...(http.fetch ? { fetch: http.fetch } : {}) }
+  return { providers: providers ?? cfg.providers, currency: currency ?? cfg.currency, fresh, ...(http.fetch ? { fetch: http.fetch } : {}) }
 }
+
+/** The currency prices are asked in. A call through the library gateway (src/core/gateway.ts) carries the project's,
+ * since the gateway's Lambda has no project config. */
+const currencyArg = z.string().regex(/^[A-Z]{3}$/, 'an ISO 4217 code such as USD').optional().describe('currency for prices; default config parts.currency')
 
 const compact = (o: PartOffer) => ({
   mpn: o.mpn, manufacturer: o.manufacturer, provider: o.provider, seller: o.seller, provider_part: o.provider_part, stock: o.stock, moq: o.moq,
@@ -39,9 +43,10 @@ export const partsLookup = defineTool({
   input: z.object({
     mpn: z.string().min(1), providers: providersArg, fresh: z.boolean().default(false),
     limit: z.number().int().min(1).max(100).default(20), attributes: z.boolean().default(false).describe('include each offer\'s attributes'),
+    currency: currencyArg,
   }),
   run: async (a) => {
-    const r = await lookup(a.mpn, options(a.providers, a.fresh))
+    const r = await lookup(a.mpn, options(a.providers, a.fresh, a.currency))
     return {
       mpn: r.mpn, part: r.part, providers: r.providers, total: r.offers.length,
       offers: r.offers.slice(0, a.limit).map((o) => (a.attributes ? { ...compact(o), description: o.description, attributes: o.attributes } : compact(o))),
@@ -54,12 +59,12 @@ export const partsSearch = defineTool({
   description: 'Keyword search across the configured providers (e.g. "100nF 0402 X7R 16V"), filtered by package, manufacturer or in stock.',
   input: z.object({
     query: z.string().min(2), package: z.string().optional(), manufacturer: z.string().optional(), in_stock: z.boolean().default(false),
-    providers: providersArg, limit: z.number().int().min(1).max(50).default(20),
+    providers: providersArg, limit: z.number().int().min(1).max(50).default(20), currency: currencyArg,
   }),
   run: async (a) => {
     const r = await providerSearch(a.query, {
       ...(a.package ? { package: a.package } : {}), ...(a.manufacturer ? { manufacturer: a.manufacturer } : {}), in_stock: a.in_stock,
-    }, a.limit, options(a.providers))
+    }, a.limit, options(a.providers, false, a.currency))
     return { total: r.total, providers: r.providers, offers: r.offers.map((o) => ({ ...compact(o), description: o.description })) }
   },
 })
@@ -73,11 +78,12 @@ export const partsBomCheck = defineTool({
     path: z.string().optional(), rows: z.array(BomRowArg).max(2000).optional(), boards: z.number().int().min(1).default(1),
     providers: providersArg, fresh: z.boolean().default(false), limit: z.number().int().min(1).max(2000).default(200),
     only_problems: z.boolean().default(false).describe('list only lines that are not ok'),
+    currency: currencyArg,
   }),
   run: async (a) => {
     if ((a.path === undefined) === (a.rows === undefined)) throw new ToolError('give a BOM path or rows (one of them)')
     const rows = a.path !== undefined ? readBom(a.path) : (a.rows ?? []).map((r) => ({ ...r, ...(r.lcsc ? { lcsc: r.lcsc.toUpperCase() } : {}) }))
-    const r = await bomCheck(rows, a.boards, options(a.providers, a.fresh))
+    const r = await bomCheck(rows, a.boards, options(a.providers, a.fresh, a.currency))
     const shown = (a.only_problems ? r.lines.filter((l) => l.status !== 'ok' || l.flags.includes('end-of-life')) : r.lines).slice(0, a.limit)
     return { ...r, lines: shown, line_count: r.lines.length }
   },
@@ -86,8 +92,8 @@ export const partsBomCheck = defineTool({
 export const partsAlternatives = defineTool({
   name: 'parts.alternatives',
   description: 'Candidate alternatives for a part: same package and the same key attributes the providers print (value, rating, tolerance …). Candidates only — an engineer must compare datasheets before any replaces the original; none is a drop-in.',
-  input: z.object({ mpn: z.string().min(1), providers: providersArg, in_stock: z.boolean().default(true), limit: z.number().int().min(1).max(30).default(10) }),
-  run: async (a) => findAlternatives(a.mpn, { ...options(a.providers), in_stock: a.in_stock, limit: a.limit }),
+  input: z.object({ mpn: z.string().min(1), providers: providersArg, in_stock: z.boolean().default(true), limit: z.number().int().min(1).max(30).default(10), currency: currencyArg }),
+  run: async (a) => findAlternatives(a.mpn, { ...options(a.providers, false, a.currency), in_stock: a.in_stock, limit: a.limit }),
 })
 
 export const partsFetchDatasheet = defineTool({
