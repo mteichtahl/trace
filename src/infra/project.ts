@@ -13,8 +13,9 @@
  *             records people marked inactive) is read only: writes there are denied. prompts/* (the installation's
  *             prompt overrides) is read only too: nothing grants a write there. projects/<slug>/journey and /chats
  *             (what people decided and said) are read only as well. projects/<slug>/journey-agent (the agents' own
- *             facts about the journey: questions, criterion checks, stuck notes) is written, but only with a
- *             conditional put and never deleted (AgentFactsConditional), the way its store writes
+ *             facts about the journey: questions, criterion checks, stuck notes; and its job index, jobs.db) is
+ *             written, but only with a conditional put and never deleted (AgentFactsConditional), the way its stores
+ *             write; a paused job's transcript (projects/<slug>/job-sessions) is read and written as the rest of it
  *   memory    its own memory only (<prefix>_m_<hash>), and on it still only events of actors `<owner>/<repo>/*` and
  *             records under `/trace/<owner>/<repo>/*` (the encodings of src/agents/runtime/memory.ts), as defence in depth
  *   secret    <prefix>/github-token/<slug> only
@@ -26,8 +27,9 @@
  *             ListQueues (no resource-level permission), to sweep its left-over wait queues
  *   events    (nested layout only) its own SNS topic <prefix>-<hash>-batch-events (made with or without GPU jobs), an
  *             EventBridge rule <prefix>-<hash>-journey-events sending it the central bucket's "Object Created" events of
- *             its journey record (projects/<slug>/journey/journey.db, which only the API writes), so a worker waiting in
- *             journey.ask is told when a person answers; and, with GPU jobs, an EventBridge rule (default bus) sending it the
+ *             its journey record (projects/<slug>/journey/journey.db, which only the API writes) and of its job index
+ *             (journey-agent/jobs.db), so a worker waiting in journey.ask is told when a person answers, and a queued job
+ *             when its turn may have come; and, with GPU jobs, an EventBridge rule (default bus) sending it the
  *             "Batch Job State Change" events of the stack's queues whose job definition is one of its own (prefix
  *             match on the definition's ARN without the revision): it submits only with those (ProjectGpuSubmit, and
  *             src/gpu/batch.ts placement uses only TRACE_GPU_JOB_DEFINITION / TRACE_CPU_JOB_DEFINITION, which are
@@ -93,6 +95,7 @@ import type { GpuCompute } from './gpu.js'
 import { ProjectKnowledgeBase } from './knowledge.js'
 import { EVENT_ACTIONS, RECORD_ACTIONS, TraceMemory } from './memory.js'
 import { RunnerProject } from './runner.js'
+import { jobIndexKey } from '../core/job-index.js'
 import {
   GPU_JOB_VCPUS, type InfraProps, type ProjectRef, REPOSITORY_OUTPUT, kbEnabled, kbOutputs, knowledgeBaseOf, projectOutputs, projectSettings,
 } from './props.js'
@@ -428,16 +431,18 @@ export class ProjectStack extends Construct {
         })
         sendTo(rule, 'BatchJobEventsRule')
       }
-      // a person's act on the journey record (an answer, above all): the central bucket's own "Object Created" event
-      // for this project's journey.db (the bucket sends its events to EventBridge: src/infra/stack.ts), so a worker
-      // waiting in journey.ask is told at once. Only the API writes that object (PeopleRecordsReadOnly)
+      // a person's act on the journey record (an answer, a job held or moved up): the central bucket's own "Object
+      // Created" event for this project's journey.db (the bucket sends its events to EventBridge: src/infra/stack.ts),
+      // so a worker waiting in journey.ask, or a queued job, is told at once. Only the API writes that object
+      // (PeopleRecordsReadOnly). And its job index (journey-agent/jobs.db, its worker's), so a queued job is told when
+      // another ends: the same rule, two exact keys, no rule more per project
       const journeyRule = new events.Rule(this, 'JourneyEventsRule', {
         ruleName: journeyEventsRuleName(cfg.prefix, hash),
-        description: `trace: ${slug}'s journey record written (a person answered, signed, waived), to its events topic`.slice(0, 512),
+        description: `trace: ${slug}'s journey record or job index written (a person answered, a job changed), to its events topic`.slice(0, 512),
         eventPattern: {
           source: ['aws.s3'],
           detailType: ['Object Created'],
-          detail: { bucket: { name: [bucket.bucketName] }, object: { key: [journeyRecordKey(repository)] } },
+          detail: { bucket: { name: [bucket.bucketName] }, object: { key: [journeyRecordKey(repository), jobIndexKey(repository)] } },
         },
       })
       sendTo(journeyRule, 'JourneyEventsRule')

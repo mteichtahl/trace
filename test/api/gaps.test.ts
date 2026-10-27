@@ -166,11 +166,12 @@ describe('access to the new actions', () => {
 })
 
 describe('job.control', () => {
-  it('cancels a running job (the job view says it can), and says plainly why pause and move up cannot be done', async () => {
+  it('cancels a running job the index does not list (the job view says it can), and says plainly what it cannot do', async () => {
+    // this installation's API cannot pause (no pause in its jobs), and the job is not in the project's index
     expect(await run(USER, 'job', { id: JOB })).toMatchObject({ id: JOB, state: 'running', controls: ['cancel'] })
-    expect(await run(USER, 'job.control', { id: JOB, op: 'pause' })).toEqual({ ok: false, op: 'pause', reason: expect.stringMatching(/cannot be paused/) })
-    expect(await run(USER, 'job.control', { id: JOB, op: 'move_up' })).toEqual({ ok: false, op: 'move_up', reason: expect.stringMatching(/not queued/) })
-    expect(await run(USER, 'job.control', { id: JOB, op: 'cancel' })).toEqual({ ok: true, op: 'cancel', state: 'aborted', kept: expect.stringMatching(/already pushed/) })
+    expect(await run(USER, 'job.control', { id: JOB, op: 'pause' })).toEqual({ ok: false, op: 'pause', repo: REPO, reason: expect.stringMatching(/can only be cancelled/) })
+    expect(await run(USER, 'job.control', { id: JOB, op: 'move_up' })).toEqual({ ok: false, op: 'move_up', repo: REPO, reason: expect.stringMatching(/can only be cancelled/) })
+    expect(await run(USER, 'job.control', { id: JOB, op: 'cancel' })).toEqual({ ok: true, op: 'cancel', repo: REPO, state: 'aborted', kept: expect.stringMatching(/already pushed/) })
     expect(cancels).toEqual([`cancelled by ${USER.email}`])
     expect(await run(USER, 'job', { id: JOB })).toMatchObject({ state: 'aborted', controls: [] })
     expect(await run(ADMIN, 'job.control', { id: JOB, op: 'cancel' })).toMatchObject({ ok: false, reason: 'The job has already aborted.' })

@@ -9,7 +9,8 @@
  *                                       on each: write needs the contributor part (admins are contributors everywhere)
  *   status        read                  open PRs, open agent-fix issues, recent trace workflow runs, the last deploy
  *   settings.get  read                  the project's settings (.trace/project.db on the default branch), resolved
- *   runs          read                  the project's run record (newest first; kind, limit)
+ *   runs          read                  the project's run record (newest first; kind, limit, agent: one agent's runs;
+ *                                       each run names the agent whose session made it, null for a person's own)
  *   run           read                  one run: args, result, measurements, artifact list
  *   artifact      read                  one artifact's bytes (base64), at most 8 MB
  *   tools.list    read                  the tools (never the hardware ones), and which of them need write
@@ -89,7 +90,7 @@
  *   actions-me.ts        me.get, me.set
  *   actions-graph.ts     graph.neighbourhood
  *   actions-files.ts     files.list, files.url
- *   actions-jobs.ts      job.control
+ *   actions-jobs.ts      jobs.list, job.control
  *   actions-people.ts    users.history
  *   actions-record.ts    requirements.trace, design.get, build.get, order.record, cost.get
  *   actions-skills.ts    skill.get, skill.draft, skill.drafts, skill.submit
@@ -362,8 +363,8 @@ export const ACTIONS = {
     return { repo, set: own, config, errors }
   })),
 
-  runs: def('read', Repo.extend({ kind: z.string().max(100).optional(), limit: z.number().int().min(1).max(500).default(20) }), async (a, ctx) =>
-    withProjectDb(ctx, a.repo, (db) => { const w = new Work(db); try { return w.runs(a.kind, a.limit) } finally { w.close() } })),
+  runs: def('read', Repo.extend({ kind: z.string().max(100).optional(), limit: z.number().int().min(1).max(500).default(20), agent: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/).optional() }), async (a, ctx) =>
+    withProjectDb(ctx, a.repo, (db) => { const w = new Work(db); try { return w.runs(a.kind, a.limit, a.agent) } finally { w.close() } })),
 
   run: def('read', Repo.extend({ id: z.string().min(1).max(64) }), async (a, ctx) => withProjectDb(ctx, a.repo, (db) => {
     const w = new Work(db)

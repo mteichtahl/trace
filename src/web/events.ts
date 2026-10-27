@@ -60,6 +60,7 @@ export function changeOf(action: string): What | null {
 
 export const userChannel = (sub: string): string => `/trace/users/${sub}`
 
+/** `job.updated`: { repo, jobId, state } (jobId and state null: several of the project's jobs changed at once). */
 export interface LiveEvent { type: 'record.changed' | 'job.updated' | 'notification'; repo?: string; at: string; [k: string]: unknown }
 
 export interface Publisher {
