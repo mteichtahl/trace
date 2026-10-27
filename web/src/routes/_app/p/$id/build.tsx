@@ -132,6 +132,9 @@ function Build() {
 
 // ------------------------------------------------------------------ the JLCPCB order sheet
 
+/** unit prices below a cent keep their digits (US$0.002, not US$0.00) */
+const price = (n: number, c: string) => (n > 0 && n < 0.01 ? `${money(0, c).replace(/0$/, '')}${n.toFixed(3).slice(1)}`.replace('$.', '$0.') : money(n, c))
+
 type Option = OrderView['options'][number]
 type PartLine = OrderView['parts'][number]
 
@@ -162,8 +165,8 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
     { accessorKey: 'ref', header: 'Ref', size: 160, meta: { label: 'Ref', kind: 'text' }, cell: ({ row }) => <span><span className="font-mono">{row.original.ref}</span><span className="block text-xs text-muted-foreground">{row.original.name}</span></span> },
     { accessorKey: 'lcsc', header: 'LCSC', size: 110, meta: { label: 'LCSC', kind: 'text', mono: true } },
     { accessorKey: 'stock', header: 'Stock', size: 100, meta: { label: 'Stock', kind: 'number', align: 'right' }, cell: ({ row }) => row.original.stock.toLocaleString('en-US') },
-    { accessorKey: 'then', header: 'Price then', size: 100, meta: { label: 'Price then', kind: 'number', align: 'right' }, cell: ({ row }) => money(row.original.then, o.currency) },
-    { accessorKey: 'now', header: 'Price now', size: 100, meta: { label: 'Price now', kind: 'number', align: 'right' }, cell: ({ row }) => money(row.original.now, o.currency) },
+    { accessorKey: 'then', header: 'Price then', size: 100, meta: { label: 'Price then', kind: 'number', align: 'right' }, cell: ({ row }) => price(row.original.then, o.currency) },
+    { accessorKey: 'now', header: 'Price now', size: 100, meta: { label: 'Price now', kind: 'number', align: 'right' }, cell: ({ row }) => price(row.original.now, o.currency) },
     {
       id: 'status', accessorFn: (p) => (p.stock < o.boards ? 'Short' : p.now > p.then ? 'Price up' : 'In stock'), header: 'Status', size: 170, meta: { label: 'Status', kind: 'enum' },
       cell: ({ row }) => {

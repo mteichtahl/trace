@@ -117,7 +117,7 @@ export function FocusLayout({
   const right = variant === 'conversational' ? aside : trace
   const draft = draftSavedAt ? (
     <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" aria-live="polite">
-      <Check className="size-3.5" aria-hidden /> Draft saved {ago(draftSavedAt, now)}
+      <Check className="size-3.5" aria-hidden /> Draft saved {ago(Math.min(draftSavedAt, now), now)}
     </span>
   ) : null
 

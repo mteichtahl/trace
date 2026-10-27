@@ -69,7 +69,7 @@ function Settings() {
       {!admin && <p className="mt-6 flex items-center gap-2 text-sm text-muted-foreground"><Lock className="size-4" aria-hidden /> Only admins change a project's settings. You can read them here.</p>}
       {s.data.errors.length > 0 && <p className="mt-6 text-sm text-destructive">Some stored settings could not be read: {s.data.errors.join('; ')}</p>}
 
-      <Section label="About" className="mt-8">
+      <div className="h-8" aria-hidden /><Section label="About">
         <div className="space-y-5 rounded-xl border p-5">
           <TextSetting label="Name" value={str('project.name', j.data.name)} disabled={!admin} saving={pending === 'project.name'} saved={saved === 'project.name'} onSave={(x) => save('project.name', x)} check={(x) => x.trim().length >= 2} />
           <TextSetting multiline label="Short description" hint="One or two sentences: shown on Home and in notifications." value={str('project.description', j.data.description ?? '')} disabled={!admin} saving={pending === 'project.description'} saved={saved === 'project.description'} onSave={(x) => save('project.description', x)} check={(x) => /[.!?]$/.test(x.trim()) && x.trim().length <= 280} />

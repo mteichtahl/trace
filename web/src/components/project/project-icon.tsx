@@ -35,7 +35,13 @@ export const COLOURS: Record<IconColour, { label: string; bg: string; fg: string
 
 /** The glyph trace recommends for a name and description (Sensor for "soil moisture sensor"). */
 export function recommendGlyph(text: string): IconGlyph {
-  return GLYPHS.find((g) => g.words.test(text))?.id ?? 'board'
+  // the word that comes first wins: "soil moisture sensor … over LoRa" is a sensor
+  let best: { id: IconGlyph; at: number } | null = null
+  for (const g of GLYPHS) {
+    const m = g.words.exec(text)
+    if (m && (!best || m.index < best.at)) best = { id: g.id, at: m.index }
+  }
+  return best?.id ?? 'board'
 }
 
 /** A colour the person's other projects do not use yet. */

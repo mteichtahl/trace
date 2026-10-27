@@ -25,7 +25,7 @@ import { Route as AppKnowledgeIndexRouteImport } from './routes/_app/knowledge/i
 import { Route as AppOpsIndexRouteImport } from './routes/_app/ops/index'
 import { Route as AppPIdRouteImport } from './routes/_app/p/$id'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects/index'
-import { Route as AppProjectsNewRouteImport } from './routes/_app/projects/new'
+import { Route as FocusProjectsNewRouteImport } from './routes/_focus/projects/new'
 import { Route as AppPIdIndexRouteImport } from './routes/_app/p/$id/index'
 import { Route as AppPIdSplatRouteImport } from './routes/_app/p/$id/$'
 import { Route as AppPIdBuildRouteImport } from './routes/_app/p/$id/build'
@@ -118,10 +118,10 @@ const AppProjectsIndexRoute = AppProjectsIndexRouteImport.update({
   path: '/projects/',
   getParentRoute: () => AppRoute,
 } as any)
-const AppProjectsNewRoute = AppProjectsNewRouteImport.update({
+const FocusProjectsNewRoute = FocusProjectsNewRouteImport.update({
   id: '/projects/new',
   path: '/projects/new',
-  getParentRoute: () => AppRoute,
+  getParentRoute: () => FocusRoute,
 } as any)
 const AppPIdIndexRoute = AppPIdIndexRouteImport.update({
   id: '/',
@@ -200,7 +200,7 @@ export interface FileRoutesByFullPath {
   '/sign-in/': typeof SignInIndexRoute
   '/admin/people': typeof AppAdminPeopleRoute
   '/p/$id': typeof AppPIdRouteWithChildren
-  '/projects/new': typeof AppProjectsNewRoute
+  '/projects/new': typeof FocusProjectsNewRoute
   '/agents/': typeof AppAgentsIndexRoute
   '/knowledge/': typeof AppKnowledgeIndexRoute
   '/ops/': typeof AppOpsIndexRoute
@@ -229,7 +229,7 @@ export interface FileRoutesByTo {
   '/sign-in/reset': typeof SignInResetRoute
   '/sign-in': typeof SignInIndexRoute
   '/admin/people': typeof AppAdminPeopleRoute
-  '/projects/new': typeof AppProjectsNewRoute
+  '/projects/new': typeof FocusProjectsNewRoute
   '/agents': typeof AppAgentsIndexRoute
   '/knowledge': typeof AppKnowledgeIndexRoute
   '/ops': typeof AppOpsIndexRoute
@@ -262,7 +262,7 @@ export interface FileRoutesById {
   '/sign-in/': typeof SignInIndexRoute
   '/_app/admin/people': typeof AppAdminPeopleRoute
   '/_app/p/$id': typeof AppPIdRouteWithChildren
-  '/_app/projects/new': typeof AppProjectsNewRoute
+  '/_focus/projects/new': typeof FocusProjectsNewRoute
   '/_app/agents/': typeof AppAgentsIndexRoute
   '/_app/knowledge/': typeof AppKnowledgeIndexRoute
   '/_app/ops/': typeof AppOpsIndexRoute
@@ -355,7 +355,7 @@ export interface FileRouteTypes {
     | '/sign-in/'
     | '/_app/admin/people'
     | '/_app/p/$id'
-    | '/_app/projects/new'
+    | '/_focus/projects/new'
     | '/_app/agents/'
     | '/_app/knowledge/'
     | '/_app/ops/'
@@ -499,12 +499,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProjectsIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/projects/new': {
-      id: '/_app/projects/new'
+    '/_focus/projects/new': {
+      id: '/_focus/projects/new'
       path: '/projects/new'
       fullPath: '/projects/new'
-      preLoaderRoute: typeof AppProjectsNewRouteImport
-      parentRoute: typeof AppRoute
+      preLoaderRoute: typeof FocusProjectsNewRouteImport
+      parentRoute: typeof FocusRoute
     }
     '/_app/p/$id/': {
       id: '/_app/p/$id/'
@@ -646,7 +646,6 @@ interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
   AppAdminPeopleRoute: typeof AppAdminPeopleRoute
   AppPIdRoute: typeof AppPIdRouteWithChildren
-  AppProjectsNewRoute: typeof AppProjectsNewRoute
   AppAgentsIndexRoute: typeof AppAgentsIndexRoute
   AppKnowledgeIndexRoute: typeof AppKnowledgeIndexRoute
   AppOpsIndexRoute: typeof AppOpsIndexRoute
@@ -659,7 +658,6 @@ const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
   AppAdminPeopleRoute: AppAdminPeopleRoute,
   AppPIdRoute: AppPIdRouteWithChildren,
-  AppProjectsNewRoute: AppProjectsNewRoute,
   AppAgentsIndexRoute: AppAgentsIndexRoute,
   AppKnowledgeIndexRoute: AppKnowledgeIndexRoute,
   AppOpsIndexRoute: AppOpsIndexRoute,
@@ -669,11 +667,13 @@ const AppRouteChildren: AppRouteChildren = {
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
 interface FocusRouteChildren {
+  FocusProjectsNewRoute: typeof FocusProjectsNewRoute
   FocusPIdDoSkillRoute: typeof FocusPIdDoSkillRoute
   FocusPIdGatesGateRoute: typeof FocusPIdGatesGateRoute
 }
 
 const FocusRouteChildren: FocusRouteChildren = {
+  FocusProjectsNewRoute: FocusProjectsNewRoute,
   FocusPIdDoSkillRoute: FocusPIdDoSkillRoute,
   FocusPIdGatesGateRoute: FocusPIdGatesGateRoute,
 }

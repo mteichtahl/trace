@@ -174,7 +174,7 @@ function RunPage() {
                       {time(m.at)} · trace · {m.who}
                     </p>
                     <Markdown text={m.text} />
-                    {m.tools?.map((t) => <ToolRow key={t} name={t} args={{}} status="complete" summary={t} />)}
+                    {m.tools?.map((t) => <ToolRow key={t} name="" args={{ step: t }} status="complete" summary={t} />)}
                   </li>
                 ))}
                 {running && current && <li className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" aria-hidden /> {current.detail ?? current.title}…</li>}
