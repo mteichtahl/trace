@@ -31,9 +31,22 @@ export interface SignedIn {
   config: WebConfig
 }
 
+/**
+ * Where the person's bearer token arrives. CloudFront's origin access control signs every request to the function URL
+ * and puts its own signature in Authorization, so the /api/* viewer-request function (src/infra/web.ts) moves the
+ * viewer's Authorization here first, dropping any value a viewer sent in this header. Must match FORWARDED_AUTH_HEADER.
+ */
+export const FORWARDED_AUTH_HEADER = 'x-trace-authorization'
+
+/** The person's token: the forwarded header behind CloudFront; Authorization only when it carries a bearer token
+ * (local runs without CloudFront, and tests). */
+export function personToken(headers: WebRequest['headers']): string | null {
+  return bearer(headers[FORWARDED_AUTH_HEADER]) ?? bearer(headers.authorization)
+}
+
 /** The verified bearer token of the request, or 401. Sets the log's `who`. */
 export async function signedIn(req: WebRequest, ctx: Ctx, deps: WebDeps): Promise<SignedIn> {
-  const token = bearer(req.headers.authorization)
+  const token = personToken(req.headers)
   if (!token) throw new WebError(401, 'not signed in', 'unauthenticated')
   const config = await deps.config()
   try {

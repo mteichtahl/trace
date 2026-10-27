@@ -3,7 +3,7 @@
  *
  *   signature   RS256, against the user pool's JWKS (${issuer}/.well-known/jwks.json), cached; an unknown `kid`
  *               refetches the set at most once a minute (key rotation)
- *   claims      iss = the pool, token_use = 'access', client_id = the CLI app client, exp/nbf with 60 s leeway
+ *   claims      iss = the pool, token_use = 'access', client_id = the CLI app client or the web app's, exp/nbf with 60 s leeway
  *               (verifyId: an id token, token_use = 'id' and aud = the app client; the web backend reads who signed in
  *               from it)
  *
@@ -55,7 +55,8 @@ export type JwksFetcher = (url: string) => Promise<unknown>
 
 export interface VerifierOptions {
   issuer: string
-  clientId: string
+  /** The app client (or clients) whose tokens are accepted: the CLI's, and the web app's when it exists. */
+  clientId: string | readonly string[]
   fetchJwks?: JwksFetcher
   now?: () => number
 }
@@ -78,7 +79,7 @@ const defaultFetch: JwksFetcher = async (url) => {
 
 export class Verifier {
   private readonly issuer: string
-  private readonly clientId: string
+  private readonly clientIds: ReadonlySet<string>
   private readonly fetchJwks: JwksFetcher
   private readonly now: () => number
   private keys = new Map<string, KeyObject>()
@@ -86,9 +87,10 @@ export class Verifier {
   private loading: Promise<void> | null = null
 
   constructor(o: VerifierOptions) {
-    if (!o.issuer || !o.clientId) throw new Error('the verifier needs the Cognito issuer and client id')
+    const ids = (typeof o.clientId === 'string' ? [o.clientId] : [...o.clientId]).filter(Boolean)
+    if (!o.issuer || !ids.length) throw new Error('the verifier needs the Cognito issuer and client id')
     this.issuer = o.issuer.replace(/\/+$/, '')
-    this.clientId = o.clientId
+    this.clientIds = new Set(ids)
     this.fetchJwks = o.fetchJwks ?? defaultFetch
     this.now = o.now ?? Date.now
   }
@@ -130,7 +132,7 @@ export class Verifier {
   async verify(token: string): Promise<AccessClaims> {
     const c = await this.checked(token, AccessClaims)
     if (c.token_use !== 'access') throw new AuthError('not an access token')
-    if (c.client_id !== this.clientId) throw new AuthError('wrong client')
+    if (c.client_id === undefined || !this.clientIds.has(c.client_id)) throw new AuthError('wrong client')
     return c
   }
 
@@ -138,7 +140,7 @@ export class Verifier {
   async verifyId(token: string): Promise<IdClaims> {
     const c = await this.checked(token, IdClaims)
     if (c.token_use !== 'id') throw new AuthError('not an id token')
-    if (c.aud !== this.clientId) throw new AuthError('wrong client')
+    if (typeof c.aud !== 'string' || !this.clientIds.has(c.aud)) throw new AuthError('wrong client')
     return c
   }
 

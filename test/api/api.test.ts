@@ -36,6 +36,12 @@ describe('access token verification', () => {
   it('rejects the wrong client', async () => {
     await expect(v.verify(sign({ ...base, client_id: 'someone-else' }))).rejects.toThrow(/wrong client/)
   })
+  it('accepts the CLI\'s and the web app\'s clients when given both, and no other', async () => {
+    const both = new Verifier({ issuer: ISSUER, clientId: [CLIENT_ID, 'web-client'], fetchJwks: async () => jwks() })
+    expect((await both.verify(sign({ ...base, client_id: 'web-client' }))).sub).toBe('u1')
+    expect((await both.verify(sign(base))).sub).toBe('u1')
+    await expect(both.verify(sign({ ...base, client_id: 'someone-else' }))).rejects.toThrow(/wrong client/)
+  })
   it('rejects an id token used as an access token', async () => {
     const { client_id: _c, ...rest } = base
     await expect(v.verify(sign({ ...rest, token_use: 'id', aud: CLIENT_ID }))).rejects.toThrow(/not an access token/)

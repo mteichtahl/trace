@@ -160,6 +160,8 @@ const Env = z.object({
   AWS_REGION: z.string().min(1),
   TRACE_COGNITO_POOL_ID: z.string().min(1),
   TRACE_COGNITO_CLIENT_ID: z.string().min(1),
+  /** The web app's client (src/infra/web.ts): its people's tokens are accepted too. */
+  TRACE_COGNITO_WEB_CLIENT_ID: z.string().optional(),
   TRACE_COGNITO_ISSUER: z.string().url(),
   TRACE_GITHUB_SECRET_ARN: z.string().min(1),
   TRACE_AWS_ACCOUNT: z.string().regex(/^\d{12}$/),
@@ -202,7 +204,7 @@ export async function start(): Promise<void> {
     },
   }
   const server = await listen({
-    verifier: new Verifier({ issuer: env.TRACE_COGNITO_ISSUER, clientId: env.TRACE_COGNITO_CLIENT_ID }),
+    verifier: new Verifier({ issuer: env.TRACE_COGNITO_ISSUER, clientId: [env.TRACE_COGNITO_CLIENT_ID, ...(env.TRACE_COGNITO_WEB_CLIENT_ID ? [env.TRACE_COGNITO_WEB_CLIENT_ID] : [])] }),
     deps,
     emailOf: async (sub, username) => (await cog().getUser(username ?? sub))?.email ?? null,
   }, env.PORT)
