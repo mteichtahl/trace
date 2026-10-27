@@ -13,7 +13,7 @@ import { doctor } from '../../src/core/doctor.js'
 import { callTool, offered } from '../../src/core/mcp.js'
 import * as onboard from '../../src/core/onboard.js'
 import { Registry, ToolError, defineTool } from '../../src/core/registry.js'
-import { Cache, Work } from '../../src/core/store.js'
+import { Cache, Work, runAgent } from '../../src/core/store.js'
 
 const tmp = (): string => mkdtempSync(join(tmpdir(), 'trace-core-'))
 function gitRepo(dir = join(tmp(), 'r')): string {
@@ -63,6 +63,30 @@ describe('run record and cache', () => {
     expect(r?.measurements[0]?.value).toBe(159.2)
     expect(new TextDecoder().decode(w.getArtifact(id, 'netlist.cir')!)).toBe('R1 1 2 1k')
     expect(w.runs('sim')).toHaveLength(1)
+  })
+  it('records which agent made each run (TRACE_AGENT, the job\'s MCP server), and lists one agent\'s runs; an older database gains the column', () => {
+    const path = join(tmp(), 'agents.db')
+    // a database from before runs.agent: its runs table without the column, and one run
+    const old = new DatabaseSync(path)
+    old.exec("CREATE TABLE runs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, subject TEXT, started REAL NOT NULL, finished REAL, status TEXT NOT NULL DEFAULT 'running', summary TEXT, args TEXT, result TEXT, git_sha TEXT)")
+    old.exec("INSERT INTO runs (id, kind, started) VALUES ('old-run', 'kicad.erc', 1)")
+    old.close()
+    const was = process.env.TRACE_AGENT
+    try {
+      const w = new Work(path)
+      process.env.TRACE_AGENT = 'verify'
+      const v = w.start('kicad.erc')
+      delete process.env.TRACE_AGENT
+      const own = w.start('kicad.drc')
+      const named = w.start('sim.spice', { agent: 'ams' })
+      expect(w.runs('kicad', 10, 'verify').map((r) => r.id)).toEqual([v])
+      expect(Object.fromEntries(w.runs(undefined, 10).map((r) => [r.id, r.agent]))).toEqual({ 'old-run': null, [v]: 'verify', [own]: null, [named]: 'ams' })
+      expect(runAgent({ TRACE_AGENT: 'Not An Agent!' })).toBeNull()
+      w.close()
+    } finally {
+      if (was === undefined) delete process.env.TRACE_AGENT
+      else process.env.TRACE_AGENT = was
+    }
   })
   it('caches with expiry', () => {
     const c = new Cache(join(tmp(), 'c.db'))
