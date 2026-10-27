@@ -10,8 +10,8 @@
  *                                  onboarding pull request (or its workflows refreshed when it is onboarded already)
  *                               2. register it in the central registry of projects
  *                               3. assign people with their parts, inviting new emails (a guest only as a reviewer)
- *                               4. write the journey's first state from the chosen template (on the onboarding branch
- *                                  until that is merged, else on trace/journey: never the default branch)
+ *                               4. write the journey's first state from the chosen template, in the journey store
+ *                                  (the central bucket: src/core/journey-store.ts)
  *                               5. record the request under installation/pending-projects/ for the next update of the
  *                                  installation, which adds the project's own agent, memory, knowledge base and build
  *                                  runner (per-project cloud resources need the stack deployed again)
@@ -27,6 +27,7 @@ import { z } from 'zod'
 import { GROUPS, PARTS, type Part, PartRefused, type PersonClass, RepoSlug, assign, classOf, membersOf, setClass } from '../core/access.js'
 import { Conflict } from '../core/central.js'
 import { BuildSchema, LATER_STAGES, TEMPLATES, type Template, TEMPLATE_NAMES, journeyView, startJourney } from '../core/journey.js'
+import { forgetNoJourney } from '../core/journey-store.js'
 import { register } from '../core/onboard.js'
 import { projectSlug } from '../core/project.js'
 import { ActionError, type Context, Repo, def, hashOf, label, storeAt, writeJourney } from './action-kit.js'
@@ -173,7 +174,8 @@ export const PROJECT_ACTIONS = {
     // 4. the journey
     let journey: unknown = null
     try {
-      const r = await writeJourney(ctx, repo, `journey: start from the ${TEMPLATE_NAMES[a.template]} template`, (db) => {
+      forgetNoJourney(repo)
+      const r = await writeJourney(ctx, repo, (db) => {
         const rec = startJourney(db, {
           template: a.template, later: a.later, start: a.start, name: a.name, description: a.description ?? null, icon: a.icon ?? null,
           build: a.build ?? {}, by: label(ctx.principal),
@@ -181,9 +183,9 @@ export const PROJECT_ACTIONS = {
         return { result: { view: journeyView(rec, { hash: hashOf(ctx.principal), label: label(ctx.principal), admin: true, part: 'contributor' }) } }
       })
       journey = r.view
-      step('journey', 'Start the journey', 'done', `Started from the ${TEMPLATE_NAMES[a.template]} template at ${r.view.stages[0]?.name ?? 'the first stage'}, on the branch ${r.branch}.`)
+      step('journey', 'Start the journey', 'done', `Started from the ${TEMPLATE_NAMES[a.template]} template at ${r.view.stages[0]?.name ?? 'the first stage'}.`)
     } catch (e) {
-      const already = e instanceof Error && e.name === 'JourneyError'
+      const already = e instanceof Error && /already has a journey/.test(e.message)
       step('journey', 'Start the journey', already ? 'skipped' : 'failed', message(e))
     }
 

@@ -8,7 +8,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { AgentMemory, type ProjectMemories, type SendClient } from '../../src/agents/runtime/memory.js'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
-import { JOURNEY_BRANCH, bucketStore } from '../../src/api/action-kit.js'
+import { bucketStore, journeyStore } from '../../src/api/action-kit.js'
 import { kindOf } from '../../src/api/actions-files.js'
 import { neighbourhood, type GraphNode } from '../../src/api/actions-graph.js'
 import { listen } from '../../src/api/server.js'
@@ -181,23 +181,27 @@ describe('the journey through the API', () => {
     expect(rev.questions[0]?.for_you).toBe(false)
   })
 
-  it('opening evidence, answering, signing: each a commit on trace/journey naming the person, never the default branch', async () => {
-    const before = github.calls.length
-    const opened = await run(ADMIN, 'journey.criterion.open', { repo: 'acme/web', criterion: 'define.accepted' }) as { commit: string; branch: string }
-    expect(opened).toMatchObject({ opened: 'define.accepted', branch: JOURNEY_BRANCH, commit: expect.any(String) })
-    expect(github.calls.slice(before)).toContain(`createBranch acme/web ${JOURNEY_BRANCH} sha-main`)
-    // opening it again changes nothing
-    expect(await run(ADMIN, 'journey.criterion.open', { repo: 'acme/web', criterion: 'define.accepted' })).toMatchObject({ commit: null })
+  it('imported the journey an older install kept in the repository, once, into the central bucket', () => {
+    expect(readFileSync(join(bucket, 'projects', 'acme', 'web', 'journey', 'journey.db')).length).toBeGreaterThan(0)
+  })
+
+  it('opening evidence, answering, signing: each a new version in the bucket, nothing written to GitHub', async () => {
+    github.calls = []
+    const opened = await run(ADMIN, 'journey.criterion.open', { repo: 'acme/web', criterion: 'define.accepted' }) as { version: number }
+    expect(opened).toMatchObject({ opened: 'define.accepted', version: expect.any(Number) })
+    expect(opened).not.toHaveProperty('commit')
+    // opening it again changes nothing: the same version
+    expect(await run(ADMIN, 'journey.criterion.open', { repo: 'acme/web', criterion: 'define.accepted' })).toMatchObject({ version: opened.version })
     // a reviewer may open evidence too
-    expect(await run(REVIEWER, 'journey.criterion.open', { repo: 'acme/web', criterion: 'define.accepted' })).toMatchObject({ branch: JOURNEY_BRANCH })
+    expect(await run(REVIEWER, 'journey.criterion.open', { repo: 'acme/web', criterion: 'define.accepted' })).toMatchObject({ version: opened.version + 1 })
     await expect(run(ADMIN, 'gate.sign', { repo: 'acme/web', gate: 'define' })).rejects.toThrow(/Open the evidence for 1 more criterion/)
     await run(ADMIN, 'journey.criterion.open', { repo: 'acme/web', criterion: 'define.measurable' })
     const q = (await run(USER, 'journey.get', { repo: 'acme/web' }) as { questions: { id: string }[] }).questions[0]?.id
     await expect(run(USER, 'question.answer', { repo: 'acme/web', question: q, option: 'b' })).rejects.toThrow(/why you chose otherwise/)
     expect(await run(USER, 'question.answer', { repo: 'acme/web', question: q, option: 'a' })).toMatchObject({ question: { answered: { answer: '2.7 to 3.6 V', by: USER.email } } })
     const signed = await run(ADMIN, 'gate.sign', { repo: 'acme/web', gate: 'define', notes: 'Looks right.' }) as { advanced_to: string; summary: string }
-    expect(signed).toMatchObject({ advanced_to: 'architect', summary: 'Gate signed. Architect started.' })
-    expect(github.calls.filter((c) => c.startsWith('putFile acme/web main'))).toEqual([])
+    expect(signed).toMatchObject({ advanced_to: 'architect', summary: 'Gate signed. Architect started.', released: false, snapshot: null })
+    expect(github.calls.filter((c) => c.startsWith('putFile') || c.startsWith('createBranch'))).toEqual([])
     const r = await run(GUEST, 'journey.get', { repo: 'acme/web' }) as { current_stage: string; decisions: { kind: string; by: string }[] }
     expect(r.current_stage).toBe('architect')
     expect(r.decisions.slice(0, 2).map((d) => [d.kind, d.by])).toEqual([['gate.signed', ADMIN.email], ['question.answered', USER.email]])
@@ -212,16 +216,17 @@ describe('the journey through the API', () => {
 })
 
 describe('inbox', () => {
-  it('aggregates the person\'s projects, reading each project once', async () => {
-    seedProject('acme/other', (db) => {
+  it('aggregates the person\'s projects from the bucket, without asking GitHub', async () => {
+    await journeyStore({ principal: ADMIN, deps }, 'acme/other').update((db) => {
       startJourney(db, { template: 'firmware', by: 'seed', name: 'Motor driver' })
       askQuestion(db, { askedBy: 'the Firmware specialist', kind: 'stuck', text: 'The build needs a linker script.' })
+      return { result: null }
     })
     github.calls = []
     const r = await run(USER, 'inbox') as { summary: string; items: { kind: string; repo: string }[]; unavailable: unknown[] }
     expect(r.items).toEqual([expect.objectContaining({ kind: 'stuck', repo: 'acme/other' })])
     expect(r.summary).toBe('1 thing needs you.')
-    expect(github.calls.filter((c) => c.startsWith('rawFile')).length).toBe(2)
+    expect(github.calls).toEqual([])
     expect(await run(GUEST, 'inbox')).toMatchObject({ items: [], summary: 'Nothing needs you. trace will tell you when something does.' })
     await expect(run({ sub: 'x', email: null, groups: [] }, 'inbox')).rejects.toThrow(AccessDenied)
   })
@@ -308,7 +313,7 @@ describe('files', () => {
 })
 
 describe('projects.create', () => {
-  it('onboards, registers, assigns with parts, starts the journey on the onboarding branch, and waits for the installation', async () => {
+  it('onboards, registers, assigns with parts, starts the journey in the bucket, and waits for the installation', async () => {
     const r = await run(ADMIN, 'projects.create', {
       repo: 'Acme/Fresh', name: 'Fresh board', template: 'mixed', later: ['certify'],
       people: [{ who: USER.email, part: 'reviewer' }, { who: GUEST.email, part: 'contributor' }, { who: 'new-person@example.com' }, { who: ADMIN.email }],
@@ -324,8 +329,9 @@ describe('projects.create', () => {
     ])
     expect(r.waits[0]?.text).toBe('The project\'s agent and knowledge base are added at the next update of the installation.')
     expect(r.journey).toMatchObject({ template: 'mixed', build: { quantity: 25 } })
-    expect(r.steps.find((s) => s.id === 'journey')?.detail).toMatch(/on the branch trace\/onboard/)
-    expect(github.files.has('acme/fresh:trace/onboard:.trace/project.db')).toBe(true)
+    expect(r.steps.find((s) => s.id === 'journey')?.detail).toBe('Started from the Mixed template at Define.')
+    expect(github.files.has('acme/fresh:trace/onboard:.trace/project.db')).toBe(false)
+    expect(readFileSync(join(bucket, 'projects', 'acme', 'fresh', 'journey', 'journey.db')).length).toBeGreaterThan(0)
     expect(await standing(USER, 'acme/fresh')).toEqual({ role: 'read', part: 'reviewer' })
     const pending = JSON.parse(readFileSync(join(bucket, 'installation', 'pending-projects', 'acme', 'fresh.json'), 'utf8')) as { repo: string; requested_by: string }
     expect(pending).toMatchObject({ repo: 'acme/fresh', requested_by: ADMIN.email })
@@ -349,5 +355,44 @@ describe('the central bucket beside TRACE_HOME', () => {
     const d = mkdtempSync(join(tmpdir(), 'trace-bs-'))
     writeFileSync(join(d, 'x'), '')
     expect(bucketStore('projects', d).url).toBe(join(d, 'projects'))
+  })
+})
+
+describe('the release copy', () => {
+  it('signing the gate that cuts a release copies the record into the repository and logs the commit', async () => {
+    const c = { principal: ADMIN, deps }
+    await journeyStore(c, 'acme/secret').update((db) => {
+      startJourney(db, { template: 'firmware', by: 'seed', name: 'Firmware only' })
+      for (const g of ['define', 'architect', 'prove']) for (const row of db.prepare('SELECT id FROM gate_criteria WHERE gate=?').all(g)) setCriterion(db, String(row.id), 'met', [], 'trace')
+      return { result: null }
+    })
+    seedProject('acme/secret')
+    const open = async (gate: string): Promise<void> => {
+      const v = await run(ADMIN, 'journey.get', { repo: 'acme/secret' }) as { gates: { id: string; criteria: { id: string }[] }[] }
+      for (const k of v.gates.find((g) => g.id === gate)?.criteria ?? []) await run(ADMIN, 'journey.criterion.open', { repo: 'acme/secret', criterion: k.id })
+    }
+    for (const g of ['define', 'architect']) { await open(g); expect(await run(ADMIN, 'gate.sign', { repo: 'acme/secret', gate: g })).toMatchObject({ snapshot: null }) }
+    await open('prove')
+    github.calls = []
+    const signed = await run(ADMIN, 'gate.sign', { repo: 'acme/secret', gate: 'prove' }) as { released: boolean; advanced_to: string; snapshot: { branch: string; commit: string }; summary: string }
+    expect(signed).toMatchObject({ released: true, advanced_to: 'bringup', snapshot: { branch: expect.stringMatching(/^trace\/release-a-/), commit: 'c0ffee0000000000' } })
+    expect(signed.summary).toMatch(/copied into the repository/)
+    expect(github.calls.some((x) => x.startsWith('putFile acme/secret main'))).toBe(false)
+    // the copy: the repository's own tables kept, the journey's replaced by the live record
+    const bytes = github.files.get(`acme/secret:${signed.snapshot.branch}:.trace/project.db`)
+    const dir = mkdtempSync(join(scratch, 'snap-'))
+    writeFileSync(join(dir, 'p.db'), bytes ?? new Uint8Array())
+    const db = new DatabaseSync(join(dir, 'p.db'))
+    expect(db.prepare("SELECT current_stage FROM journey WHERE id='current'").get()?.current_stage).toBe('bringup')
+    expect(db.prepare('SELECT count(*) AS n FROM gate_signatures').get()?.n).toBe(3)
+    db.close()
+    const log = await run(ADMIN, 'journey.get', { repo: 'acme/secret' }) as { decisions: { kind: string; ref: string }[] }
+    expect(log.decisions[0]).toMatchObject({ kind: 'journey.snapshot', ref: 'c0ffee0000000000' })
+  })
+
+  it('journey.snapshot is for admins, and needs a journey', async () => {
+    expect((await call(accessToken('w-user', ['trace-users']), { action: 'journey.snapshot', repo: 'acme/web' })).status).toBe(403)
+    expect(await run(ADMIN, 'journey.snapshot', { repo: 'acme/web', reason: 'a check' })).toMatchObject({ branch: expect.stringMatching(/^trace\/release-/), revision: 'A', version: expect.any(Number) })
+    await expect(run(ADMIN, 'journey.snapshot', { repo: 'acme/fresh2' })).rejects.toThrow()
   })
 })

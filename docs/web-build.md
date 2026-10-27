@@ -89,7 +89,8 @@ reviewer. `require_(p, repo, 'write')` needs the contributor part (or admin). `p
 | `projects.create` | admin | onboard a repository (new or existing; reuses `src/installer/onboard-api.ts`), register it, assign people with parts, write the journey record's first state from the template; returns what was done and what waits (the project's own cloud resources come with the next stack update, shown as a wait) |
 | `journey.get` | read | the project's journey: template, revision, stages (state, criteria met/total, reopened), gates (state, criteria, evidence, waivers, signature), next step, questions, waivers, decisions log |
 | `journey.criterion.open` | read | records that this person opened a criterion's evidence (the Sign button needs it) |
-| `gate.sign` / `gate.return` | admin / write | sign (every criterion met or waived, evidence opened, waivers acknowledged) or return with a reason |
+| `gate.sign` / `gate.return` | admin / write | sign (every criterion met or waived, evidence opened, waivers acknowledged) or return with a reason; a signature that cuts a release also copies the record into the repository |
+| `journey.snapshot` | admin | copy the journey record into the repository's `.trace/project.db` on a `trace/release-…` branch and log the commit |
 | `question.answer` | write | answer an agent's question (the recommended option or another with a reason) |
 | `waiver.add` | write | a waiver with reason, risk, severity, where it is caught instead |
 | `inbox` | signed-in | the four kinds that earn a notification across the person's projects, oldest and most blocking first |
@@ -98,11 +99,17 @@ reviewer. `require_(p, repo, 'write')` needs the contributor part (or admin). `p
 | `graph.neighbourhood` | read | `{ nodes, links }` around a focus item, depth 1–3, from the project record, memory and the knowledge base |
 | `files.list` / `files.url` | read | the project's files by kind, and a short-lived signed URL (or bytes) for one |
 
-The journey record is new tables in the project database (`src/core/journey.ts`): `journey` (template, revision,
-current stage), `stages`, `gates`, `gate_criteria`, `criterion_opens`, `gate_signatures`, `questions`, `waivers`,
-`decisions`. Templates (Board, FPGA, Firmware, Mixed) define stages and gate criteria as in
-[user-journey.md](user-journey.md). Writes go through GitHub as `settings.set` does today. Chats and preferences are
-not in the repository: chats in the central bucket under `projects/<slug>/chats/`, preferences in the access store.
+The journey record is new tables (`src/core/journey.ts`): `journey` (template, revision, current stage), `stages`,
+`gates`, `gate_criteria`, `criterion_opens`, `gate_signatures`, `questions`, `waivers`, `decisions`. Templates (Board,
+FPGA, Firmware, Mixed) define stages and gate criteria as in [user-journey.md](user-journey.md). The live record is not
+in the repository: it is one SQLite database per project in the central bucket, `projects/<slug>/journey/journey.db`
+(`src/core/journey-store.ts`), read and written with conditional puts like the central store and chats (a lost race
+is re-run on a fresh copy); every write answers the record's `version`. When a release is cut (signing the gate the
+Release stage follows) the record is copied into the repository: the default branch's `.trace/project.db` with its
+journey tables replaced, committed on `trace/release-<revision>-<time>` the way `settings.set` writes, and the commit
+logged in the decisions; `journey.snapshot` (admin) makes the same copy on demand. A project whose journey an older
+install kept in `.trace/project.db` has it imported into the bucket on first read. Chats and preferences are not in
+the repository either: chats in the central bucket under `projects/<slug>/chats/`, preferences in the access store.
 
 ## The app (`web/`)
 
