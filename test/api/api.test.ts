@@ -203,7 +203,7 @@ describe('the API server', () => {
   it('a user can write on an assigned project', async () => {
     const r = await call(user, { action: 'task', repo: 'acme/board', request: 'add a test point' })
     expect(r.body).toMatchObject({ ok: true, result: { jobId: 'job-1' } })
-    expect(started).toEqual([{ kind: 'task', repository: 'acme/board', request: 'add a test point', requestedBy: 'user-1@example.com' }])
+    expect(started).toEqual([{ kind: 'task', repository: 'acme/board', request: 'add a test point', requestedBy: 'user-1@example.com', requestedBySub: 'user-1' }])
     expect((await call(user, { action: 'job', id: 'job-1' })).body.ok).toBe(true)
   })
 
@@ -211,7 +211,7 @@ describe('the API server', () => {
     started.length = 0
     const r = await call(user, { action: 'task', repo: 'acme/board', request: 'check crosstalk on USB', agent: 'emc' })
     expect(r.body).toMatchObject({ ok: true, result: { jobId: 'job-1' } })
-    expect(started).toEqual([{ kind: 'task', repository: 'acme/board', request: 'check crosstalk on USB', requestedBy: 'user-1@example.com', agent: 'emc' }])
+    expect(started).toEqual([{ kind: 'task', repository: 'acme/board', request: 'check crosstalk on USB', requestedBy: 'user-1@example.com', requestedBySub: 'user-1', agent: 'emc' }])
     // no agent: forwarded as is, and the project's runtime routes it (src/agents/router.ts)
     await call(user, { action: 'task', repo: 'acme/board', request: 'close timing' })
     expect(started[1]).not.toHaveProperty('agent')

@@ -85,7 +85,7 @@
  *
  *   actions-projects.ts  project.members, projects.create
  *   actions-journey.ts   journey.get, journey.criterion.open, gate.sign, gate.return, question.answer, waiver.add, inbox
- *   actions-chats.ts     chats.list, chats.get, chats.append, chats.rename, chats.recall
+ *   actions-chats.ts     chats.list, chats.get, chats.append, chats.reply, chats.rename, chats.recall
  *   actions-me.ts        me.get, me.set
  *   actions-graph.ts     graph.neighbourhood
  *   actions-files.ts     files.list, files.url
@@ -106,7 +106,7 @@ import {
 import { readSettings, resolve, setValue, unset } from '../core/config.js'
 import { IntegrationNameSchema, type IntegrationStore, checkIntegration, valuesFor } from '../core/integrations.js'
 import { type AnyTool, Registry, ToolError } from '../core/registry.js'
-import { AgentName, type MemoryRecord, STRATEGIES, actorIn, personHash, projectPrefix, within } from '../agents/runtime/memory.js'
+import { AgentName, type MemoryRecord, STRATEGIES, actorIn, projectPrefix, within } from '../agents/runtime/memory.js'
 import { type InactiveMark, ReasonSchema, RecordIdSchema, memoryState } from '../agents/runtime/memory-state.js'
 import { TASK_AGENTS } from '../agents/runtime/schemas.js'
 import { API_HIDDEN_TOOLS, ToolRefused, apiTool, checkPaths } from '../agents/runtime/tool.js'
@@ -120,7 +120,7 @@ import { PreviewJob, PreviewTarget, getView, listView, preview } from '../prompt
 import { parseProjectKbs } from '../tools/kb/env.js'
 import { FilterSchema, searchKb } from '../tools/kb/search.js'
 import {
-  type Action, ActionError, type Context, type JobView, type JobsApi, MAX_ARTIFACT, type Need, NO_ACCESS, PROJECT_DB_PATH, Repo, def, memoryInclude, projectMemory, slugify, tempDb, withProjectDb,
+  type Action, ActionError, type Context, type JobView, type JobsApi, MAX_ARTIFACT, type Need, NO_ACCESS, PROJECT_DB_PATH, Repo, def, hashOf, hashesOf, memoryInclude, projectMemory, slugify, tempDb, withProjectDb,
 } from './action-kit.js'
 import { CHAT_ACTIONS } from './actions-chats.js'
 import { FILE_ACTIONS } from './actions-files.js'
@@ -184,11 +184,11 @@ async function person(ctx: Context, who: string): Promise<CognitoUser> {
   return u
 }
 
-/** The hash a person's marks are recorded under (the agents' memory hash: never their email). */
-const byHash = (p: Principal): string => personHash(p.email ?? p.sub)
+/** The hash a person's marks are recorded under (the agents' memory hash of their sub: never their email). */
+const byHash = (p: Principal): string => hashOf(p)
 
 const markView = (m: InactiveMark | undefined, p: Principal): Record<string, unknown> => (m
-  ? { active: false, inactive: { reason: m.reason, by: m.by, by_you: m.by === byHash(p), at: new Date(m.at * 1000).toISOString() } }
+  ? { active: false, inactive: { reason: m.reason, by: m.by, by_you: hashesOf(p).includes(m.by), at: new Date(m.at * 1000).toISOString() } }
   : { active: true })
 
 const recordView = (r: MemoryRecord, repo: string, p: Principal): Record<string, unknown> => ({
@@ -196,8 +196,8 @@ const recordView = (r: MemoryRecord, repo: string, p: Principal): Record<string,
   ...markView(r.inactive, p),
 })
 
-/** The person's own person actors on `repo` (email and sub): `person/<hash>`. */
-const ownActors = (p: Principal): Set<string> => new Set([p.email, p.sub].filter((x): x is string => Boolean(x)).map((w) => `person/${personHash(w)}`))
+/** The person's own person actors on `repo` (the sub's hash, and the email's for records made before): `person/<hash>`. */
+const ownActors = (p: Principal): Set<string> => new Set(hashesOf(p).map((h) => `person/${h}`))
 
 /**
  * May `ctx.principal` mark (or unmark) the record filed under `ns` of `repo`? Write access (a user, an admin), or a
@@ -280,7 +280,7 @@ async function promptLayers(ctx: Context, repo: string | undefined): Promise<Lay
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e)).slice(0, 300)
 
 /** The hash a person's prompt changes are recorded under (never their email). */
-const promptBy = (p: Principal): string => telemetryHash(p.email ?? p.sub)
+const promptBy = (p: Principal): string => telemetryHash(p.sub)
 
 /** A checked write, as an ActionError when the text, the id or the reason is refused (it names the bad variable). */
 function checked<T>(fn: () => T): T {
@@ -418,7 +418,7 @@ export const ACTIONS = {
 
   task: def('write', Repo.extend({ request: z.string().min(1).max(20_000), agent: z.enum(TASK_AGENTS).optional() }), async (a, ctx) =>
     (await ctx.deps.jobs()).startJob({
-      kind: 'task', repository: a.repo, request: a.request, requestedBy: ctx.principal.email ?? ctx.principal.sub, ...(a.agent ? { agent: a.agent } : {}),
+      kind: 'task', repository: a.repo, request: a.request, requestedBy: ctx.principal.email ?? ctx.principal.sub, requestedBySub: ctx.principal.sub, ...(a.agent ? { agent: a.agent } : {}),
     })),
 
   'memory.list': def('read', MemoryArgs.extend({ limit: z.number().int().min(1).max(200).default(50), includeInactive: z.boolean().default(false) }), async (a, ctx) => {

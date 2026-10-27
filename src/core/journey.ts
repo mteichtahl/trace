@@ -474,7 +474,16 @@ export function loadJourney(db: DatabaseSync): JourneyRecord | null {
 // ------------------------------------------------------------------ the computed view (pure)
 
 /** Who is looking: what the next step and the inbox are worked out for. */
-export interface Viewer { hash: string; label: string; admin: boolean; part: 'contributor' | 'reviewer' | null }
+export interface Viewer {
+  /** the person's 16-character hash (of their Cognito sub): what new marks are written under */
+  hash: string
+  label: string; admin: boolean; part: 'contributor' | 'reviewer' | null
+  /** other hashes the person's earlier marks may carry (the email's, from before identity was keyed on the sub) */
+  also?: readonly string[] | undefined
+}
+
+/** Is `who` (a recorded hash) this viewer? */
+export const isViewer = (v: Pick<Viewer, 'hash' | 'also'>, who: string | null): boolean => who !== null && (who === v.hash || (v.also?.includes(who) ?? false))
 
 export type StageState = 'done' | 'current' | 'queued' | 'reopened'
 export type CriterionState = 'met' | 'not_met' | 'waived'
@@ -569,7 +578,7 @@ export function signBlockers(r: JourneyRecord, id: string, viewer: Viewer, ackno
   const earlier = r.gates.filter((g) => g.stage === gate.stage && g.ord < gate.ord && !liveSignature(r, g.id))
   for (const g of earlier) out.push(`Sign ${gateTitle(g)} first.`)
   const waived = waiverFor(r)
-  const opened = new Set(r.opens.filter((o) => o.who === viewer.hash).map((o) => o.item))
+  const opened = new Set(r.opens.filter((o) => isViewer(viewer, o.who)).map((o) => o.item))
   const criteria = r.criteria.filter((c) => c.gate === id)
   const notMet = criteria.filter((c) => c.status !== 'met' && !waived.has(c.id))
   if (notMet.length) out.push(`${plural(notMet.length, 'criterion is', 'criteria are')} not met or waived: ${notMet.map((c) => c.text.replace(/\.$/, '').toLowerCase()).join('; ')}.`)
@@ -585,7 +594,7 @@ export function signBlockers(r: JourneyRecord, id: string, viewer: Viewer, ackno
 
 function criterionViews(r: JourneyRecord, gate: string, viewer: Viewer): CriterionView[] {
   const waived = waiverFor(r)
-  const opened = new Set(r.opens.filter((o) => o.who === viewer.hash).map((o) => o.item))
+  const opened = new Set(r.opens.filter((o) => isViewer(viewer, o.who)).map((o) => o.item))
   return r.criteria.filter((c) => c.gate === gate).map((c) => {
     const w = waived.get(c.id)
     return {
@@ -618,11 +627,11 @@ export function gateView(r: JourneyRecord, id: string, viewer: Viewer): GateView
 }
 
 /** Whether a question is for this viewer: asked of them, or of no one and they are a contributor (or an admin). */
-const questionFor = (q: QuestionRow, v: Viewer): boolean => (q.askedOf ? q.askedOf === v.hash : v.admin || v.part === 'contributor')
+const questionFor = (q: QuestionRow, v: Viewer): boolean => (q.askedOf ? isViewer(v, q.askedOf) : v.admin || v.part === 'contributor')
 
 function questionView(q: QuestionRow, v: Viewer): QuestionView {
   return {
-    id: q.id, kind: q.kind, asked_by: q.askedBy, for_you: questionFor(q, v), for: q.askedOf ? (q.askedOf === v.hash ? 'you' : 'person') : 'contributors',
+    id: q.id, kind: q.kind, asked_by: q.askedBy, for_you: questionFor(q, v), for: q.askedOf ? (isViewer(v, q.askedOf) ? 'you' : 'person') : 'contributors',
     stage: q.stage, text: q.text, blocks: q.blocks, options: q.options, recommended: q.options.find((o) => o.recommended) ?? null,
     sources: q.sources, job_id: q.jobId, asked_at: isoN(q.askedAt),
     answered: q.answeredAt !== null ? { answer: q.answer ?? '', option_id: q.optionId, reason: q.answerReason, by: q.answeredBy, at: isoN(q.answeredAt) } : null,
@@ -736,7 +745,7 @@ export function journeyView(r: JourneyRecord, viewer: Viewer, at: number = now()
       gates: own.map((g) => g.id),
     }
   })
-  const opened = new Set(r.opens.filter((o) => o.who === viewer.hash).map((o) => o.item))
+  const opened = new Set(r.opens.filter((o) => isViewer(viewer, o.who)).map((o) => o.item))
   return {
     template: r.journey.template, template_name: TEMPLATE_NAMES[r.journey.template], revision: r.journey.revision, current_stage: r.journey.currentStage,
     later: r.journey.later, start: r.journey.start, name: r.journey.name, description: r.journey.description, icon: r.journey.icon, build: r.journey.build,
@@ -831,12 +840,12 @@ export function setCriterion(db: DatabaseSync, id: string, status: 'met' | 'not_
   if (!Number(n)) throw new JourneyError(`There is no criterion called ${id} in this project.`)
 }
 
-export interface Signer { hash: string; label: string }
+export interface Signer { hash: string; label: string; also?: readonly string[] | undefined }
 
 /** Sign a gate (the caller has checked the signer is an admin). Moves the project on when it closes the stage. */
 export function signGate(db: DatabaseSync, id: string, signer: Signer, o: { acknowledged?: readonly string[] | undefined; notes?: string | null | undefined } = {}): { gate: GateView; advanced_to: StageId | null; released: boolean; summary: string } {
   const r = need(db)
-  const viewer: Viewer = { hash: signer.hash, label: signer.label, admin: true, part: 'contributor' }
+  const viewer: Viewer = { hash: signer.hash, label: signer.label, also: signer.also, admin: true, part: 'contributor' }
   const blockers = signBlockers(r, id, viewer, o.acknowledged ?? [])
   if (blockers.length) throw new JourneyError(`The gate cannot be signed yet. ${blockers.join(' ')}`)
   const gate = r.gates.find((g) => g.id === id) as GateRow
@@ -909,7 +918,7 @@ export function returnGate(db: DatabaseSync, id: string, by: Signer, o: { reason
       db.prepare('UPDATE stages SET reopened_at=?, reopened_reason=?, reopened_by=?, updated=? WHERE id=?').run(t, reason, by.label, t, gate.stage)
     }
   })
-  return { gate: gateView(need(db), id, { hash: by.hash, label: by.label, admin: false, part: 'contributor' }), reopened }
+  return { gate: gateView(need(db), id, { hash: by.hash, label: by.label, also: by.also, admin: false, part: 'contributor' }), reopened }
 }
 
 function reopenStage(db: DatabaseSync, r: JourneyRecord, stage: StageId, reason: string, by: string, t: number): void {
@@ -950,7 +959,7 @@ export function answerQuestion(db: DatabaseSync, id: string, by: Signer, a: { op
     })
   })
   const after = need(db).questions.find((x) => x.id === id) as QuestionRow
-  return questionView(after, { hash: by.hash, label: by.label, admin: false, part: 'contributor' })
+  return questionView(after, { hash: by.hash, label: by.label, also: by.also, admin: false, part: 'contributor' })
 }
 
 export interface WaiverInput {
@@ -988,7 +997,7 @@ export function addWaiver(db: DatabaseSync, w: WaiverInput, by: Signer): WaiverV
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, stage, gate, w.target.kind, w.target.id, reason, w.risk.trim(), w.severity, w.caught_where?.trim() || null, w.scope.trim(), by.label, t, t)
     decide(db, { kind: 'waiver.added', stage, ref: id, by: by.label, summary: `A waiver was taken on ${w.target.kind} ${w.target.id} (rated ${w.severity}): ${reason}` })
   })
-  const v = journeyView(need(db), { hash: by.hash, label: by.label, admin: false, part: 'contributor' })
+  const v = journeyView(need(db), { hash: by.hash, label: by.label, also: by.also, admin: false, part: 'contributor' })
   return v.waivers.find((x) => x.id === id) as WaiverView
 }
 

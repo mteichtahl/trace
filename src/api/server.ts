@@ -105,7 +105,7 @@ export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerRes
       }
       entry.who = principal.email ?? principal.sub
       // who, as a hash (never the email), and their class
-      if (obs) setAttrs(obs.span, { [ATTR.principal]: personHash(principal.email ?? principal.sub), [ATTR.principalClass]: principal.groups.join(',') })
+      if (obs) setAttrs(obs.span, { [ATTR.principal]: personHash(principal.sub), [ATTR.principalClass]: principal.groups.join(',') })
       if (!seenOnce.has(principal.sub)) {
         seenOnce.add(principal.sub)
         seen(principal).catch((e: unknown) => { log({ ...entry, warning: `seen: ${message(e)}` }) })

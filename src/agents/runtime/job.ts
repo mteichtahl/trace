@@ -524,7 +524,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     acting = { s, r, escalateTo: cfg.worker.escalate_to }
     const session = prep.session(branch)
     mem = await jobMemory(d, {
-      repository: p.repository, agent: s.memoryAgent, person: p.kind === 'task' ? p.requestedBy : undefined, session, query: prep.query, request: prep.request,
+      repository: p.repository, agent: s.memoryAgent, person: p.kind === 'task' ? p.requestedBySub ?? p.requestedBy : undefined, session, query: prep.query, request: prep.request,
     }, log, redact)
 
     const hardware = Boolean(d.hardware)

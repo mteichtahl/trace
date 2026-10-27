@@ -89,6 +89,8 @@ export const TaskPayload = z.object({
   repository: RepositorySchema,
   request: z.string().min(1).max(20_000),
   requestedBy: z.string().min(1).max(200),
+  /** The person's Cognito sub (immutable): their person memory is keyed on it; requestedBy (an email) is for reading. */
+  requestedBySub: z.string().min(1).max(200).optional(),
   branch: BranchSchema.optional(),
   /** An issue or PR to report back on, when the request came from one. */
   issue: z.number().int().positive().optional(),

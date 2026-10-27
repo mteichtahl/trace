@@ -31,8 +31,9 @@
  *
  * The record lives in the central bucket (src/core/journey-store.ts): every write is a conditional put of the
  * project's journey database, re-run on a lost race, and answers the record's `version`.
- * Who did it is recorded as their email for the record people read, and as their 16-character hash where the record
- * only matches them (opened evidence), never as anything else.
+ * Who did it is recorded as their email for the record people read, and as the 16-character hash of their Cognito sub
+ * where the record only matches them (opened evidence, questions asked of them), never as anything else. Records made
+ * before identity was keyed on the sub carry the email's hash: both are accepted when reading (hashesOf).
  */
 import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
@@ -40,14 +41,14 @@ import {
   INBOX_KINDS, type InboxItem, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
   journeyView, loadJourney, recordOpen, returnGate, signGate, sortInbox,
 } from '../core/journey.js'
-import { type Context, NO_ACCESS, Repo, def, hashOf, label, plainly, snapshotJourney, withJourneyDb, writeJourney } from './action-kit.js'
+import { type Context, NO_ACCESS, Repo, def, hashOf, hashesOf, label, plainly, snapshotJourney, withJourneyDb, writeJourney } from './action-kit.js'
 
 const Id = z.string().min(1).max(80)
 
 /** Who is looking, for the journey's computations. */
 export async function viewerOf(p: Principal, repo: string): Promise<Viewer> {
   const s = await standing(p, repo)
-  return { hash: hashOf(p), label: label(p), admin: isAdmin(p), part: s?.part ?? null }
+  return { hash: hashOf(p), also: hashesOf(p), label: label(p), admin: isAdmin(p), part: s?.part ?? null }
 }
 
 const NOT_STARTED = {
@@ -56,7 +57,7 @@ const NOT_STARTED = {
   next: 'An admin starts it by choosing a template: Board, FPGA, Firmware or Mixed.',
 }
 
-const signer = (ctx: Context): { hash: string; label: string } => ({ hash: hashOf(ctx.principal), label: label(ctx.principal) })
+const signer = (ctx: Context): { hash: string; label: string; also: string[] } => ({ hash: hashOf(ctx.principal), also: hashesOf(ctx.principal), label: label(ctx.principal) })
 
 /** Run a journey write, turning a refusal of the record's own into the person's error. */
 const journeyWrite = <T>(ctx: Context, repo: string, fn: Parameters<typeof writeJourney<T>>[2]) => plainly(() => writeJourney<T>(ctx, repo, fn))
@@ -166,7 +167,7 @@ export const JOURNEY_ACTIONS = {
       try {
         const r: JourneyRecord | null = await withJourneyDb(ctx, p.repo, (db) => loadJourney(db))
         if (!r) return []
-        return inboxItems(p.repo, r, { hash: hashOf(ctx.principal), label: label(ctx.principal), admin: isAdmin(ctx.principal), part: p.part })
+        return inboxItems(p.repo, r, { hash: hashOf(ctx.principal), also: hashesOf(ctx.principal), label: label(ctx.principal), admin: isAdmin(ctx.principal), part: p.part })
       } catch (e) {
         unavailable.push({ repo: p.repo, reason: (e instanceof Error ? e.message : String(e)).slice(0, 200) })
         return []

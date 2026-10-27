@@ -27,10 +27,10 @@
 import { z } from 'zod'
 import { isAdmin } from '../core/access.js'
 import { type JourneyRecord, STAGE_NAMES, type StageId, type Signer, loadJourney, loadOrders, recordOrder } from '../core/journey.js'
-import { type Context, Repo, def, hashOf, label, plainly, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
+import { type Context, Repo, def, hashOf, hashesOf, label, plainly, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { type Finding, checkFindings, latestRun, requirementEvidence, runImages, runResult, sheetFileOf } from './record-read.js'
 
-const signer = (ctx: Context): Signer => ({ hash: hashOf(ctx.principal), label: label(ctx.principal) })
+const signer = (ctx: Context): Signer => ({ hash: hashOf(ctx.principal), also: hashesOf(ctx.principal), label: label(ctx.principal) })
 const iso = (t: number | null): string | null => (t === null ? null : new Date(t * 1000).toISOString())
 const DAY = 86400
 

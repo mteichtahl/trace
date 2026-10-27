@@ -12,9 +12,19 @@
  *   projects/<slug>/chats/recall/<hash>.json    one person's own sent messages on this project, newest first, at
  *                                                most 200, without repeats in a row: what Up and Down recall
  *
- * A message is { id, role (user | assistant | tool), text (markdown), by and by_hash for a person's, at, parts? }.
- * `parts` carries a renderer's data (a decision card, a run card) as JSON, bounded like the text. People are named by
- * their email for others on the project to read, and matched by their 16-character hash.
+ * A message is { id, role (user | assistant | tool), text (markdown), by and by_hash, at, for_hash?, parts? }.
+ * `parts` carries a renderer's data (a decision card, a run card, the tool calls of a reply) as JSON, bounded like the
+ * text. Who wrote what is never taken from the caller's word:
+ *
+ *   append   the person's own turns only: role user, `by` their email (display only) and `by_hash` the hash of their
+ *            Cognito sub (what every match uses; records made before carry their email's hash, `also`)
+ *   reply    trace's replies and tool rows (role assistant | tool), `by` "trace", `by_hash` null, and `for_hash` the
+ *            person whose turn they answer. Accepted only while the thread's last person turn is the caller's own (the
+ *            id it answers is named), so nobody can write trace's words under someone else's question. The web
+ *            backend (src/web/agui.ts) records each run's output this way, with the person's token
+ *
+ * Limits: a person starts at most MAX_THREADS_PER_PERSON threads on a project; a person's message is at most
+ * MAX_USER_CHARS characters, a reply's at most MAX_MESSAGE_CHARS.
  */
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
@@ -22,6 +32,9 @@ import { type Backend, Conflict } from './central.js'
 import { projectSlug } from './project.js'
 
 export const MAX_MESSAGE_CHARS = 100_000
+export const MAX_USER_CHARS = 20_000
+export const MAX_THREADS_PER_PERSON = 500
+export const TRACE_AUTHOR = 'trace'
 export const MAX_PARTS_BYTES = 200_000
 export const MAX_THREAD_BYTES = 4 * 1024 * 1024
 export const MAX_RECALL = 200
@@ -35,20 +48,31 @@ export const ThreadId = z.string().regex(/^[a-z0-9]{8,40}$/, 'a thread id')
 
 const Message = z.object({
   id: z.string(), role: z.enum(ROLES), text: z.string(), by: z.string().nullable(), by_hash: z.string().nullable(), at: z.string(),
+  /** a reply's: the person whose turn it answers */
+  for_hash: z.string().nullable().optional(),
   parts: z.unknown().optional(),
 })
 export type ChatMessage = z.output<typeof Message>
-const Thread = z.object({ id: z.string(), title: z.string(), created: z.string(), updated: z.string(), by: z.string().nullable(), messages: z.array(Message) })
+const Thread = z.object({ id: z.string(), title: z.string(), created: z.string(), updated: z.string(), by: z.string().nullable(), by_hash: z.string().nullable().optional(), messages: z.array(Message) })
 export type ChatThread = z.output<typeof Thread>
-const Summary = z.object({ id: z.string(), title: z.string(), created: z.string(), updated: z.string(), by: z.string().nullable(), count: z.number(), last: z.string() })
+const Summary = z.object({ id: z.string(), title: z.string(), created: z.string(), updated: z.string(), by: z.string().nullable(), by_hash: z.string().nullable().optional(), count: z.number(), last: z.string() })
 export type ThreadSummary = z.output<typeof Summary>
 const Index = z.object({ threads: z.array(Summary) })
 const Recall = z.object({ messages: z.array(z.object({ text: z.string(), thread: z.string(), at: z.string() })) })
 export type RecallEntry = z.output<typeof Recall>['messages'][number]
 
-export interface Author { label: string; hash: string }
-export interface NewMessage { role: (typeof ROLES)[number]; text: string; parts?: unknown }
+/** A person: `label` to read (their email), `hash` to match (their sub's), `also` the hashes earlier records may carry. */
+export interface Author { label: string; hash: string; also?: readonly string[] | undefined }
+export interface NewMessage { text: string; parts?: unknown }
+export interface ReplyMessage { role: 'assistant' | 'tool'; text: string; parts?: unknown }
 
+/** Is the recorded hash this person? */
+export const isAuthor = (who: Author, hash: string | null | undefined): boolean => !!hash && (hash === who.hash || (who.also?.includes(hash) ?? false))
+
+/** The last person turn of a thread, or null. */
+export const lastTurn = (messages: readonly ChatMessage[]): ChatMessage | null => [...messages].reverse().find((m) => m.role === 'user') ?? null
+
+const newMessageId = (): string => randomUUID().replaceAll('-', '').slice(0, 16)
 const enc = (v: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(v))
 const dec = (b: Uint8Array): unknown => JSON.parse(new TextDecoder().decode(b))
 const firstLine = (t: string): string => (t.split('\n').find((l) => l.trim()) ?? '').trim().slice(0, 160)
@@ -111,42 +135,74 @@ export class ChatStore {
     return { thread, messages: messages.slice(start, stop), more: start > 0 }
   }
 
-  /** Add messages to a thread (a new one when `thread` is absent): returns the thread's summary and the new ids. */
-  async append(who: Author, o: { thread?: string | undefined; title?: string | undefined; messages: readonly NewMessage[] }): Promise<{ thread: ThreadSummary; ids: string[]; created: boolean }> {
-    if (!o.messages.length) throw new ChatError('Nothing to add.')
-    for (const m of o.messages) {
-      if (m.text.length > MAX_MESSAGE_CHARS) throw new ChatError(`A message can be at most ${MAX_MESSAGE_CHARS.toLocaleString('en')} characters.`)
+  private checkSizes(ms: readonly { text: string; parts?: unknown }[], max: number): void {
+    if (!ms.length) throw new ChatError('Nothing to add.')
+    for (const m of ms) {
+      if (m.text.length > max) throw new ChatError(`A message can be at most ${max.toLocaleString('en')} characters.`)
       if (m.parts !== undefined && enc(m.parts).length > MAX_PARTS_BYTES) throw new ChatError('A message\'s cards are too large to keep.')
     }
+  }
+
+  private summaryOf(t: ChatThread): ThreadSummary {
+    return { id: t.id, title: t.title, created: t.created, updated: t.updated, by: t.by, by_hash: t.by_hash ?? null, count: t.messages.length, last: firstLine(t.messages.at(-1)?.text ?? '') }
+  }
+
+  private async index(summary: ThreadSummary): Promise<void> {
+    await this.change(this.key('index.json'), Index, { threads: [] }, (ix) => ({ value: { threads: [summary, ...ix.threads.filter((x) => x.id !== summary.id)] }, result: null }))
+  }
+
+  /** The person's own turns, in a thread (a new one when `thread` is absent): the thread's summary and the new ids. */
+  async append(who: Author, o: { thread?: string | undefined; title?: string | undefined; messages: readonly NewMessage[] }): Promise<{ thread: ThreadSummary; ids: string[]; created: boolean }> {
+    this.checkSizes(o.messages, MAX_USER_CHARS)
     const created = !o.thread
+    if (created) {
+      const { value } = await this.read(this.key('index.json'), Index, { threads: [] })
+      const mine = value.threads.filter((t) => isAuthor(who, t.by_hash) || (!t.by_hash && t.by === who.label)).length
+      if (mine >= MAX_THREADS_PER_PERSON) throw new ChatError(`You have ${MAX_THREADS_PER_PERSON} conversations on this project, the most one person can start. Carry on in one of them.`)
+    }
     const id = o.thread ? ThreadId.parse(o.thread) : randomUUID().replaceAll('-', '').slice(0, 20)
     const at = this.now().toISOString()
     const added: ChatMessage[] = o.messages.map((m) => ({
-      id: randomUUID().replaceAll('-', '').slice(0, 16), role: m.role, text: m.text, at,
-      by: m.role === 'user' ? who.label : null, by_hash: m.role === 'user' ? who.hash : null, ...(m.parts !== undefined ? { parts: m.parts } : {}),
+      id: newMessageId(), role: 'user', text: m.text, at, by: who.label, by_hash: who.hash, ...(m.parts !== undefined ? { parts: m.parts } : {}),
     }))
     const thread = await this.change(this.key('threads', `${id}.json`), Thread.nullable(), null, (t) => {
       if (!t && !created) throw new ChatError(`There is no conversation ${id} on this project.`)
-      const firstUser = o.messages.find((m) => m.role === 'user')?.text ?? o.messages[0]?.text ?? ''
       const next: ChatThread = t
         ? { ...t, updated: at, messages: [...t.messages, ...added] }
-        : { id, title: o.title?.trim() || titleFrom(firstUser), created: at, updated: at, by: who.label, messages: added }
+        : { id, title: o.title?.trim() || titleFrom(o.messages[0]?.text ?? ''), created: at, updated: at, by: who.label, by_hash: who.hash, messages: added }
       return { value: next, result: next }
     })
-    const summary: ThreadSummary = {
-      id, title: thread.title, created: thread.created, updated: thread.updated, by: thread.by, count: thread.messages.length,
-      last: firstLine(thread.messages.at(-1)?.text ?? ''),
-    }
-    await this.change(this.key('index.json'), Index, { threads: [] }, (ix) => ({ value: { threads: [summary, ...ix.threads.filter((x) => x.id !== id)] }, result: null }))
-    const sent = added.filter((m) => m.role === 'user')
-    if (sent.length) {
-      await this.change(this.key('recall', `${who.hash}.json`), Recall, { messages: [] }, (r) => {
-        let list = r.messages
-        for (const m of sent) if (list[0]?.text !== m.text) list = [{ text: m.text, thread: id, at: m.at }, ...list]
-        return { value: { messages: list.slice(0, MAX_RECALL) }, result: null }
-      })
-    }
+    const summary = this.summaryOf(thread)
+    await this.index(summary)
+    await this.change(this.key('recall', `${who.hash}.json`), Recall, { messages: [] }, (r) => {
+      let list = r.messages
+      for (const m of added) if (list[0]?.text !== m.text) list = [{ text: m.text, thread: id, at: m.at }, ...list]
+      return { value: { messages: list.slice(0, MAX_RECALL) }, result: null }
+    })
     return { thread: summary, ids: added.map((m) => m.id), created }
+  }
+
+  /**
+   * trace's reply to the caller's turn `after` (and the tool rows of it): refused unless `after` is the thread's last
+   * person turn and it is the caller's own.
+   */
+  async reply(who: Author, o: { thread: string; after: string; messages: readonly ReplyMessage[] }): Promise<{ thread: ThreadSummary; ids: string[] }> {
+    this.checkSizes(o.messages, MAX_MESSAGE_CHARS)
+    const id = ThreadId.parse(o.thread)
+    const at = this.now().toISOString()
+    const added: ChatMessage[] = o.messages.map((m) => ({
+      id: newMessageId(), role: m.role, text: m.text, at, by: TRACE_AUTHOR, by_hash: null, for_hash: who.hash, ...(m.parts !== undefined ? { parts: m.parts } : {}),
+    }))
+    const thread = await this.change(this.key('threads', `${id}.json`), Thread.nullable(), null, (t) => {
+      if (!t) throw new ChatError(`There is no conversation ${id} on this project.`)
+      const turn = lastTurn(t.messages)
+      if (!turn || turn.id !== o.after || !isAuthor(who, turn.by_hash)) throw new ChatError('Only a reply to your own latest message in this conversation can be kept.')
+      const next: ChatThread = { ...t, updated: at, messages: [...t.messages, ...added] }
+      return { value: next, result: next }
+    })
+    const summary = this.summaryOf(thread)
+    await this.index(summary)
+    return { thread: summary, ids: added.map((m) => m.id) }
   }
 
   async rename(id: string, title: string): Promise<ThreadSummary> {
@@ -157,14 +213,15 @@ export class ChatStore {
       const next = { ...cur, title: name.slice(0, 120) }
       return { value: next, result: next }
     })
-    const summary: ThreadSummary = { id, title: t.title, created: t.created, updated: t.updated, by: t.by, count: t.messages.length, last: firstLine(t.messages.at(-1)?.text ?? '') }
+    const summary = this.summaryOf(t)
     await this.change(this.key('index.json'), Index, { threads: [] }, (ix) => ({ value: { threads: ix.threads.map((x) => (x.id === id ? summary : x)) }, result: null }))
     return summary
   }
 
   /** The person's own sent messages on this project, newest first. */
   async recall(who: Author, limit = 50): Promise<RecallEntry[]> {
-    const { value } = await this.read(this.key('recall', `${who.hash}.json`), Recall, { messages: [] })
-    return value.messages.slice(0, limit)
+    const hashes = [...new Set([who.hash, ...(who.also ?? [])])]
+    const lists = await Promise.all(hashes.map(async (h) => (await this.read(this.key('recall', `${h}.json`), Recall, { messages: [] })).value.messages))
+    return lists.flat().sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit)
   }
 }

@@ -46,7 +46,7 @@ export const NO_ACCESS = 'no access'
 export interface JobsApi {
   /** The project a job id belongs to (read from the id itself), or null for an id that is not one of ours. */
   repositoryOf(jobId: string): string | null
-  startJob(payload: { kind: 'task'; repository: string; request: string; requestedBy: string; agent?: (typeof TASK_AGENTS)[number] }): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined }>
+  startJob(payload: { kind: 'task'; repository: string; request: string; requestedBy: string; requestedBySub?: string; agent?: (typeof TASK_AGENTS)[number] }): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined }>
   jobStatus(jobId?: string): Promise<readonly JobView[]>
   /**
    * One job as jobStatus, with its worker's change counter and open waits; with afterVersion and waitS the worker
@@ -128,10 +128,18 @@ export const def = <S extends z.ZodType>(need: Need, args: S, run: (a: z.output<
 
 export const Repo = z.object({ repo: RepoSlug })
 
-/** Who did it, for people to read in a commit or a record: the email (else the sub). */
+/** Who did it, for people to read in a commit or a record: the email (else the sub). Display only: never matched on,
+ * because a person's email can change and the sub cannot. */
 export const label = (p: Principal): string => p.email ?? p.sub
-/** Who did it, where only a match is needed: the agents' memory hash of the email (else the sub). Never the email. */
-export const hashOf = (p: Principal): string => personHash(p.email ?? p.sub)
+/** Who did it, where only a match is needed: the agents' memory hash of the person's sub (Cognito's immutable id).
+ * Never the email. */
+export const hashOf = (p: Principal): string => personHash(p.sub)
+/**
+ * Every hash a person's own marks may be recorded under: the sub's (now), and the email's, which records written
+ * before identity was keyed on the sub carry (journey opens, questions asked of them, chat authorship, memory marks
+ * and person memory). Read-side only: nothing new is written under the email's hash.
+ */
+export const hashesOf = (p: Principal): string[] => [...new Set([personHash(p.sub), ...(p.email ? [personHash(p.email)] : [])])]
 
 // ------------------------------------------------------------------ the project database through GitHub
 
@@ -290,7 +298,7 @@ export const storeAt = (ctx: Context, prefix: string): Backend => (ctx.deps.stor
  */
 export function memoryInclude(ctx: Context, repo: string): (ns: string) => boolean {
   if (isAdmin(ctx.principal)) return () => true
-  const own = new Set([ctx.principal.email, ctx.principal.sub].filter((x): x is string => Boolean(x)).map((w) => `person/${personHash(w)}`))
+  const own = new Set(hashesOf(ctx.principal).map((h) => `person/${h}`))
   return (ns) => { const a = actorIn(ns, repo); return a !== null && (!a.startsWith('person/') || own.has(a)) }
 }
 
