@@ -184,6 +184,17 @@ async function person(ctx: Context, who: string): Promise<CognitoUser> {
   return u
 }
 
+/** End every session of a person (AdminUserGlobalSignOut). A failure is reported in the answer, never thrown: the
+ * change itself has been made. */
+async function signOutQuietly(ctx: Context, u: CognitoUser): Promise<boolean> {
+  try {
+    await ctx.deps.cognito().signOut(u.username)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** The hash a person's marks are recorded under (the agents' memory hash of their sub: never their email). */
 const byHash = (p: Principal): string => hashOf(p)
 
@@ -543,7 +554,10 @@ export const ACTIONS = {
     if (!now.includes(want)) await cog.addToGroup(u.username, want)
     for (const c of CLASSES) if (GROUPS[c] !== want && now.includes(GROUPS[c])) await cog.removeFromGroup(u.username, GROUPS[c])
     await setClass(ctx.principal, { sub: u.sub, email: u.email }, a.class)
-    return { sub: u.sub, email: u.email, class: a.class, note: 'Takes effect when their access token next refreshes (within an hour).' }
+    // a changed class must not ride on a session that carries the old one: their refresh tokens go
+    const changed = !(now.length === 1 && now[0] === want)
+    const signedOut = changed ? await signOutQuietly(ctx, u) : false
+    return { sub: u.sub, email: u.email, class: a.class, signed_out: signedOut, note: signedOut ? 'They were signed out everywhere; the new class applies when they sign in again (an access token already issued lasts at most an hour).' : 'Takes effect when their access token next refreshes (within an hour).' }
   }),
 
   assign: def('admin', z.object({ who: Who, repo: RepoSlug, part: z.enum(PARTS).optional() }), async (a, ctx) => {
@@ -558,7 +572,11 @@ export const ACTIONS = {
 
   unassign: def('admin', z.object({ who: Who, repo: RepoSlug }), async (a, ctx) => {
     const u = await person(ctx, a.who)
-    return { sub: u.sub, email: u.email, repo: a.repo, removed: await unassign(ctx.principal, u.sub, a.repo) }
+    const removed = await unassign(ctx.principal, u.sub, a.repo)
+    // removed from their last project (and not an admin): nothing is left to sign in for, so their sessions end
+    const left = removed ? (await assignments(ctx.principal, { sub: u.sub })).length : 1
+    const signedOut = removed && left === 0 && (await classNow(ctx, u)) !== 'admin' ? await signOutQuietly(ctx, u) : false
+    return { sub: u.sub, email: u.email, repo: a.repo, removed, signed_out: signedOut }
   }),
 
   assignments: def('admin', z.object({ repo: RepoSlug.optional() }), async (a, ctx) => assignments(ctx.principal, a.repo ? { repo: a.repo } : {})),

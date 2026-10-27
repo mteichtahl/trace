@@ -81,7 +81,7 @@ import { KB_RETRIEVE_ACTIONS, VectorStore, knowledgeBaseArn } from './knowledge.
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
 import { GithubConnection, RunnerProject } from './runner.js'
-import { TraceWeb, addWebClient, traceWebProps } from './web.js'
+import { SELF_WRITABLE, TraceWeb, addWebClient, traceWebProps } from './web.js'
 import { ACCESS_PREFIX, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
   GPU_IMAGE_BUILD_OUTPUT, type InfraProps, ciRunnerOutput, LAYOUT_OUTPUT, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled,
@@ -336,7 +336,7 @@ export class TraceStack extends Stack {
 
     // ------------------------------------------------------------------ people: Cognito and the API runtime
     const signIn = web
-      ? 'Sign in at ' + web.url + '/invite, or with `trace login`.'
+      ? 'To accept, open ' + web.url + '/invite and enter this email address and the temporary password; you then choose your own sign-in (a passkey, or a password with an authenticator app). You can also sign in with `trace login`.'
       : 'Sign in with `trace login`.'
     const users = new cognito.UserPool(this, 'Users', {
       userPoolName: `${cfg.prefix}-users`,
@@ -351,8 +351,12 @@ export class TraceStack extends Stack {
       featurePlan: cognito.FeaturePlan.ESSENTIALS,
       userInvitation: {
         emailSubject: 'You have been invited to trace',
-        emailBody: `Your trace user name is {username} and your temporary password is {####}. ${signIn}`,
+        emailBody: `You have been invited to trace. Your user name is {username} and your temporary password is {####} (it works once, for 7 days). ${signIn}`,
       },
+      // a person's email is display only (identity is the sub), and a change to it takes effect only once the new
+      // address is verified: until then the original stays, so nobody can take an address that is not theirs.
+      // UserAttributeUpdateSettings is updatable in place on an existing pool (no replacement)
+      keepOriginal: { email: true },
       // the web app's choice-based sign-in (USER_AUTH): passkeys bound to its address, passwords, and email codes when
       // the pool sends through SES. The CLI's client keeps SRP and the hosted domain
       ...(web ? {
@@ -367,6 +371,9 @@ export class TraceStack extends Stack {
     const client = users.addClient('Cli', {
       userPoolClientName: `${cfg.prefix}-cli`,
       generateSecret: false,
+      // a person may change nothing of their own profile but their email (Cognito requires a required attribute to be
+      // writable), and that only through verification (keepOriginal above)
+      writeAttributes: SELF_WRITABLE,
       authFlows: { userSrp: true },
       preventUserExistenceErrors: true,
       accessTokenValidity: Duration.hours(1),
@@ -504,7 +511,9 @@ export class TraceStack extends Stack {
     }))
     apiRole.addToPolicy(new iam.PolicyStatement({
       actions: ['cognito-idp:ListUsers', 'cognito-idp:ListUsersInGroup', 'cognito-idp:AdminGetUser', 'cognito-idp:AdminListGroupsForUser', 'cognito-idp:AdminCreateUser',
-        'cognito-idp:AdminAddUserToGroup', 'cognito-idp:AdminRemoveUserFromGroup'],
+        'cognito-idp:AdminAddUserToGroup', 'cognito-idp:AdminRemoveUserFromGroup',
+        // users.class and the removal from a person's last project end their sessions
+        'cognito-idp:AdminUserGlobalSignOut'],
       resources: [users.userPoolArn],
     }))
 

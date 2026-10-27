@@ -40,7 +40,7 @@ import * as appsync from 'aws-cdk-lib/aws-appsync'
 import * as acm from 'aws-cdk-lib/aws-certificatemanager'
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront'
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins'
-import type * as cognito from 'aws-cdk-lib/aws-cognito'
+import * as cognito from 'aws-cdk-lib/aws-cognito'
 import * as iam from 'aws-cdk-lib/aws-iam'
 import * as lambda from 'aws-cdk-lib/aws-lambda'
 import * as logs from 'aws-cdk-lib/aws-logs'
@@ -387,6 +387,10 @@ export interface WebConfig {
   features: { passkeys: boolean; email: boolean; voice: boolean; ops: boolean }
 }
 
+/** What a person may write of their own Cognito profile through an app client: their email alone (a required
+ * attribute must be writable), and a change to it waits for verification (the pool's keepOriginal). */
+export const SELF_WRITABLE = new cognito.ClientAttributes().withStandardAttributes({ email: true })
+
 /** The web app's app client of the pool: our own sign-in pages (USER_AUTH: passkeys, email codes, passwords) and
  * refresh, no secret; tokens as the CLI's. Refresh-token rotation stays off (sign-out revokes). */
 export function addWebClient(pool: cognito.UserPool, prefix: string): cognito.UserPoolClient {
@@ -394,6 +398,7 @@ export function addWebClient(pool: cognito.UserPool, prefix: string): cognito.Us
     userPoolClientName: `${prefix}-web`,
     generateSecret: false,
     authFlows: { user: true },
+    writeAttributes: SELF_WRITABLE,
     // no hosted pages, no redirects: the app's own pages only
     disableOAuth: true,
     preventUserExistenceErrors: true,

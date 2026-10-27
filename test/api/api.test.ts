@@ -264,8 +264,14 @@ describe('the API server', () => {
     expect(cognito.calls).toEqual(['create new@example.com', 'add new@example.com trace-guests'])
 
     const cls = await call(admin, { action: 'users.class', who: 'new@example.com', class: 'user' })
-    expect(cls.body.ok).toBe(true)
+    expect(cls.body).toMatchObject({ ok: true, result: { signed_out: true } })
     expect([...(cognito.groups.get('new@example.com') ?? [])]).toEqual(['trace-users'])
+    // a class change ends the person's sessions, so the old class cannot ride on a refresh token
+    expect(cognito.calls.at(-1)).toBe('signout new@example.com')
+    // the same class again changes nothing and signs no one out
+    cognito.calls = []
+    expect((await call(admin, { action: 'users.class', who: 'new@example.com', class: 'user' })).body).toMatchObject({ result: { signed_out: false } })
+    expect(cognito.calls.filter((c) => c.startsWith('signout'))).toEqual([])
 
     expect((await call(admin, { action: 'assign', who: 'new@example.com', repo: 'Acme/Secret' })).body.ok).toBe(true)
     expect((await assignments(ADMIN, { repo: 'acme/secret' })).map((a) => a.sub)).toEqual(['sub-new@example.com'])
@@ -273,7 +279,9 @@ describe('the API server', () => {
     expect(list.find((u) => u.email === 'new@example.com')).toMatchObject({ class: 'user', projects: ['acme/secret'] })
 
     const un = await call(admin, { action: 'unassign', who: 'sub-new@example.com', repo: 'acme/secret' })
-    expect(un.body).toMatchObject({ ok: true, result: { removed: true } })
+    // removed from their last project: signed out everywhere
+    expect(un.body).toMatchObject({ ok: true, result: { removed: true, signed_out: true } })
+    expect(cognito.calls.at(-1)).toBe('signout new@example.com')
     expect(await assignments(ADMIN, { repo: 'acme/secret' })).toEqual([])
     expect((await call(admin, { action: 'assign', who: 'ghost@example.com', repo: 'acme/secret' })).body).toMatchObject({ ok: false, error: 'no such person: ghost@example.com' })
   })

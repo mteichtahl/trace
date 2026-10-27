@@ -264,6 +264,8 @@ describe('the trace stack', () => {
     for (const r of Object.values(t.findResources('AWS::BedrockAgentCore::Runtime') as Record<string, { Properties: { Tags?: Record<string, string> } }>)) expect(r.Properties.Tags?.['trace:installation']).toBe('trace')
     const text = JSON.stringify(s)
     expect(text).toContain('cognito-idp:AdminAddUserToGroup')
+    // users.class and removal from a person's last project end their sessions
+    expect(text).toContain('cognito-idp:AdminUserGlobalSignOut')
     expect(text).toContain('/access/*')
     expect(text).toContain('/central/*')
     expect(text).not.toMatch(/"Resource":"\*","Action":"cognito/)
@@ -297,6 +299,14 @@ describe('the trace stack', () => {
     for (const g of ['trace-admins', 'trace-users', 'trace-guests']) t.hasResourceProperties('AWS::Cognito::UserPoolGroup', { GroupName: g })
     t.hasResourceProperties('AWS::Cognito::UserPoolUser', { Username: 'marc@example.com' })
     t.hasResourceProperties('AWS::Cognito::UserPoolClient', { GenerateSecret: false, CallbackURLs: ['http://localhost:47821/callback', 'http://localhost:47822/callback'] })
+    // identity is the sub; an email change waits for verification, and the clients may write nothing else
+    t.hasResourceProperties('AWS::Cognito::UserPool', { UserAttributeUpdateSettings: { AttributesRequireVerificationBeforeUpdate: ['email'] } })
+    for (const c of Object.values(t.findResources('AWS::Cognito::UserPoolClient') as Record<string, { Properties: { WriteAttributes?: string[] } }>)) expect(c.Properties.WriteAttributes).toEqual(['email'])
+    // the invitation points at the app's /invite page, where the temporary password is entered (no secret in a link)
+    const pool = Object.values(t.findResources('AWS::Cognito::UserPool') as Record<string, { Properties: { AdminCreateUserConfig: { InviteMessageTemplate: { EmailMessage: unknown } } } }>)[0]!
+    const body = JSON.stringify(pool.Properties.AdminCreateUserConfig.InviteMessageTemplate.EmailMessage)
+    expect(body).toContain('/invite and enter this email address and the temporary password')
+    expect(body).toContain('{####}')
   })
 
   it('keeps the GitHub tokens out of the template: the API\'s shared secret, and one per project', () => {

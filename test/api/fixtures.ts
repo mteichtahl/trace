@@ -50,6 +50,7 @@ export class FakeCognito implements CognitoAdmin {
     const s = this.groups.get(username) ?? new Set<string>(); s.add(group); this.groups.set(username, s)
   }
   async removeFromGroup(username: string, group: string): Promise<void> { this.calls.push(`remove ${username} ${group}`); this.groups.get(username)?.delete(group) }
+  async signOut(username: string): Promise<void> { this.calls.push(`signout ${username}`) }
 }
 
 export class FakeGitHub implements GitHubApi {

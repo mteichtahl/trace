@@ -52,6 +52,8 @@ export interface CognitoAdmin {
   groupsFor(username: string): Promise<string[]>
   addToGroup(username: string, group: string): Promise<void>
   removeFromGroup(username: string, group: string): Promise<void>
+  /** AdminUserGlobalSignOut: every refresh token of the person is revoked (their access tokens run out within the hour). */
+  signOut(username: string): Promise<void>
 }
 
 const Attr = z.object({ Name: z.string(), Value: z.string().optional() }).loose()
@@ -150,6 +152,7 @@ export class HttpCognito implements CognitoAdmin {
 
   async addToGroup(username: string, group: string): Promise<void> { await this.call('AdminAddUserToGroup', { Username: username, GroupName: group }) }
   async removeFromGroup(username: string, group: string): Promise<void> { await this.call('AdminRemoveUserFromGroup', { Username: username, GroupName: group }) }
+  async signOut(username: string): Promise<void> { await this.call('AdminUserGlobalSignOut', { Username: username }) }
 }
 
 // ------------------------------------------------------------------ the GitHub token
