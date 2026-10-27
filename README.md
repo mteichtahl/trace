@@ -354,6 +354,34 @@ Tools that drive real hardware (instruments, buses, flashing a target) are refus
 `TRACE_HARDWARE=1`. Run them only on a machine wired to the bench. Configure the bench with `trace config set` for
 `hil.instruments`, `hil.serial` and `hil.can`. Every power supply must have voltage and current limits.
 
+### Hardware in the loop without hardware
+
+`trace hil emulate` starts a pretend bench on your own machine, so the hardware tools can run with no instruments.
+That is how the sample project tests its board. Run it inside the project's clone:
+
+```sh
+trace hil emulate --write-settings --serial      # keep it running; Ctrl-C stops it
+TRACE_HARDWARE=1 trace tool hil.psu instrument=bench-psu voltage=12 current=0.05 output=on
+TRACE_HARDWARE=1 trace tool hil.dmm instrument=bench-dmm          # about 3.0 V
+```
+
+The bench copies the sample board's input stage. A 39k/13k divider and an RC filter bring the 0-12 V input down to
+the microcontroller's ADC pin, and a diode clamps that pin at 3.3 V.
+
+| Name | Pretends to be | What it shows |
+|---|---|---|
+| `bench-psu` | Rigol DP832 power supply, port 5555 | Channel 1 powers the board. Limits are 13 V and 0.1 A. |
+| `bench-dmm` | Keysight 34465A multimeter, port 5557 | The ADC pin: a quarter of the input with the supply on, 0 V with it off. It also reads the board current, and a temperature of 25 °C. |
+| `bench-scope` | Rigol DS1104Z oscilloscope, port 5556 | Channel 1 is the ADC pin, showing the last input change as it passes the filter (rise time about 0.35 ms). Channel 2 is a 1 kHz, 3.2 V test square wave. |
+| `bench-uart` (with `--serial`) | The board's firmware console | Once the input is at 4 V or more, it prints `adc raw=3722 mv=11998` every second and a temperature every 5 seconds. It answers `READ`, `ID` and `HELP`. |
+| `bench-can` | A CAN bus | python-can's `virtual` bus. It carries frames only between the CAN tools of a single trace process, and nothing on the bench answers. |
+
+The command prints the settings these names need. `--write-settings` saves them into `.trace/project.db` and keeps
+your other instruments. To use other ports, pass `--psu-port`, `--scope-port` and `--dmm-port`; 0 picks any free
+port. `--host` sets the address the instruments listen on. The serial console needs Linux or macOS and `python3`
+(standard library only). It is a pseudo-terminal, reached through a fixed link at `/tmp/trace-bench-uart-<psu port>`.
+Tests start the same bench with `startBench()` from `src/tools/hil/emulator/bench.ts`.
+
 ## Library gateway
 
 The shared library's tools (datasheets and parts) can run behind one Amazon Bedrock AgentCore Gateway instead of in

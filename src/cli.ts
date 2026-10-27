@@ -29,6 +29,13 @@
  *                                      a dry run of the router
  *     trace agent prompt <kind>        the composed system prompt, for review
  *
+ *   Hardware in the loop
+ *     trace hil emulate [--write-settings] [--host H] [--psu-port N] [--scope-port N] [--dmm-port N] [--serial]
+ *                                      a bench without instruments: a PSU, scope and DMM on local ports (5555-5557)
+ *                                      wired to the sample board, and with --serial its firmware console on a pty;
+ *                                      prints the hil settings (--write-settings puts them in .trace/project.db);
+ *                                      runs until Ctrl-C. The hil tools use it with TRACE_HARDWARE=1
+ *
  *   Tools
  *     trace tools [--hardware]         every tool (the set the MCP server offers)
  *     trace tool NAME [key=value ...] [--args '{...}'] [--hardware]
@@ -224,6 +231,55 @@ function cmdDb(argv: string[]): number {
   return 2
 }
 
+/** `trace hil emulate`: the bench emulator (src/tools/hil/emulator/bench.ts) until SIGINT/SIGTERM. */
+async function cmdHil(argv: string[]): Promise<number> {
+  const [action, ...rest] = argv
+  const usage = 'usage: trace hil emulate [--write-settings] [--host H] [--psu-port N] [--scope-port N] [--dmm-port N] [--serial]'
+  if (action !== 'emulate') { err(usage); return 2 }
+  const { values } = parseArgs({ args: rest, options: {
+    'write-settings': { type: 'boolean' }, host: { type: 'string' }, 'psu-port': { type: 'string' }, 'scope-port': { type: 'string' },
+    'dmm-port': { type: 'string' }, serial: { type: 'boolean' } } })
+  const port = (flag: 'psu-port' | 'scope-port' | 'dmm-port'): number | undefined => {
+    const v = values[flag]
+    if (v === undefined) return undefined
+    const n = Number(v)
+    if (!Number.isInteger(n) || n < 0 || n > 65535) throw new ToolError(`--${flag} ${v}: expected a TCP port (0-65535, 0 = any free port)`)
+    return n
+  }
+  const { startBench, writeBenchSettings } = await import('./tools/hil/emulator/bench.js')
+  const ports = { psu: port('psu-port'), scope: port('scope-port'), dmm: port('dmm-port') }
+  let bench
+  try {
+    bench = await startBench({
+      ...(values.host ? { host: values.host } : {}),
+      ports: Object.fromEntries(Object.entries(ports).filter(([, v]) => v !== undefined)),
+      serial: Boolean(values.serial),
+    })
+  } catch (e) {
+    throw new ToolError(`the bench could not start: ${e instanceof Error ? e.message : String(e)}`)
+  }
+  out(JSON.stringify(bench.settings, null, 2))
+  if (values['write-settings']) {
+    try {
+      const keys = writeBenchSettings(bench.settings)
+      out(`Wrote ${keys.join(', ')} to this project's settings (.trace/project.db).`)
+    } catch (e) {
+      await bench.stop()
+      throw e
+    }
+  }
+  const names = bench.settings['hil.instruments'].map((i) => i.name)
+  if (bench.settings['hil.serial']) names.push(...bench.settings['hil.serial'].map((s) => s.name))
+  const next = values['write-settings'] ? 'Set TRACE_HARDWARE=1 to use it.'
+    : 'Put the settings above in the project (or run again with --write-settings), then set TRACE_HARDWARE=1 to use it.'
+  out(`The bench is running: ${names.join(', ')} (and the virtual CAN bus bench-can) model the sample board, with the PSU's channel 1 as its input. ${next} Ctrl-C stops it.`)
+  return new Promise<number>((resolve) => {
+    const stop = (): void => { void bench.stop().then(() => { out('The bench has stopped.'); resolve(0) }) }
+    process.once('SIGINT', stop)
+    process.once('SIGTERM', stop)
+  })
+}
+
 async function main(argv: string[]): Promise<number> {
   const [cmd, ...rest] = argv
   switch (cmd) {
@@ -248,6 +304,7 @@ async function main(argv: string[]): Promise<number> {
       return 0
     }
     case 'db': return cmdDb(rest)
+    case 'hil': return cmdHil(rest)
     case 'onboard': {
       const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: {
         path: { type: 'string' }, 'no-push': { type: 'boolean' }, 'apply-settings': { type: 'boolean' }, 'no-ruleset': { type: 'boolean' },
