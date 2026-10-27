@@ -503,6 +503,14 @@ only), the chat model, and publishing live events. It cannot reach the access st
 admin API. Anything about a project goes through the API runtime, with the person's own token, so the access checks
 stay in one place.
 
+**Ask trace's instructions.** An admin's change to `chat.role` at installation scope (Admin › Prompts, or
+`prompts.set`) reaches the chat agent within a minute. The backend cannot read the prompts store, and is not given
+read access to it: the store is one database holding every prompt's override and its history, and S3 cannot grant
+part of one object. Instead it asks the API for `prompts.chat`, which answers only the editable chat entries, and
+keeps the answer for 60 seconds per Lambda container. A change made through the app clears that container's copy at
+once; other containers pick it up within the 60 seconds (the live `record.changed` event reaches browsers, not the
+Lambda). The locked chat entries (the data fences) always come from the code.
+
 Every response carries strict security headers: HSTS, `nosniff`, `X-Frame-Options: DENY`, and
 `strict-origin-when-cross-origin`. The content security policy allows only these:
 
@@ -1537,6 +1545,7 @@ prompt is never recorded, as with every other prompt and tool argument (see [Obs
 | `prompts.reset { id, scope, repo?, reason? }` | the same | back to the layer below |
 | `prompts.revert { id, scope, version, repo?, reason? }` | the same | back to an earlier version (a number or a history uid) |
 | `prompts.history { id, scope, repo? }` | a user or an admin (installation), write (project) | every change to the id in that layer |
+| `prompts.chat {}` | any class | the installation's text of the chat agent's editable entries (`chat.role`), or null for the default: what the web app's backend applies to Ask trace |
 
 The access check comes first, as for every action: a project you are not assigned to and one that does not exist
 get the same "no access". The setting `agents.<kind>.instructions` stays as a lightweight addendum after the rules;

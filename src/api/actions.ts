@@ -94,6 +94,7 @@
  *   actions-record.ts    requirements.trace, design.get, build.get, order.record, cost.get
  *   actions-skills.ts    skill.get, skill.draft, skill.drafts, skill.submit
  *   actions-me.ts        also policy.get, policy.set
+ *   actions-prompts.ts   prompts.chat (the chat agent's editable instructions as the installation has them)
  */
 import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -132,6 +133,7 @@ import { PEOPLE_ACTIONS } from './actions-people.js'
 import { RECORD_ACTIONS } from './actions-record.js'
 import { SKILL_ACTIONS } from './actions-skills.js'
 import { PROJECT_ACTIONS } from './actions-projects.js'
+import { PROMPT_ACTIONS } from './actions-prompts.js'
 import type { CognitoUser } from './aws.js'
 
 export {
@@ -638,6 +640,7 @@ export const ACTIONS = {
   ...PEOPLE_ACTIONS,
   ...RECORD_ACTIONS,
   ...SKILL_ACTIONS,
+  ...PROMPT_ACTIONS,
 } satisfies Record<string, Action<z.ZodType>>
 
 export type ActionName = keyof typeof ACTIONS

@@ -133,6 +133,7 @@ reviewer. `require_(p, repo, 'write')` needs the contributor part (or admin). `p
 | `skill.get` / `skill.draft` / `skill.drafts` / `skill.submit` | read / read / read / write | a guided skill's bar computed from the record (`unavailable` where it cannot be yet), the person's draft in the journey store, and submit (refused unless every check is met or waived; Waiver and Question answer go through `waiver.add` and `question.answer`) |
 | `policy.get` / `policy.set` | signed-in / admin | the installation's locked settings (`me.get` answers them as `locks`; `me.set` refuses a locked key) |
 | `users.history` | admin | a person's assignment log in words |
+| `prompts.chat` | signed-in (a class) | the installation's text of each editable `chat.*` entry (null: the default), never a locked one; the chat agent asks for it as the person and keeps it 60 s per container (`src/web/chat-prompts.ts`), cleared by a prompts write through that container |
 
 The app reads the answers whose shape differs from its screens' through `web/src/lib/readers.ts` (journey.get, inbox,
 me.get, project.members, users.list, files.list, files.url, gate.sign, projects.create), tested against real answers
