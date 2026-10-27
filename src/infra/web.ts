@@ -61,6 +61,7 @@ import * as events from 'aws-cdk-lib/aws-events'
 import * as targets from 'aws-cdk-lib/aws-events-targets'
 import * as ssm from 'aws-cdk-lib/aws-ssm'
 import { Construct } from 'constructs'
+import { BENCH_DB } from '../core/bench.js'
 import { AGENT_FACTS_DB, AGENT_FACTS_FOLDER } from '../core/agent-facts.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { ACCESS_PREFIX } from './project.js'
@@ -486,7 +487,7 @@ export class WebStack extends NestedStack {
       eventPattern: {
         source: ['aws.s3'],
         detailType: ['Object Created'],
-        detail: { bucket: { name: [central.bucketName] }, object: { key: events.Match.wildcard(AGENT_FACTS_KEYS) } },
+        detail: { bucket: { name: [central.bucketName] }, object: { key: events.Match.anyOf(events.Match.wildcard(AGENT_FACTS_KEYS), events.Match.wildcard(BENCH_KEYS)) } },
       },
     })
     rule.addTarget(new targets.LambdaFunction(fn, { retryAttempts: 2, maxEventAge: Duration.hours(1) }))
@@ -498,6 +499,8 @@ export interface TraceWebProps extends WebStackProps {}
 
 /** The agents' facts objects, as the JourneyEvents rule matches them (EventBridge wildcard). */
 export const AGENT_FACTS_KEYS = `${PROJECTS_PREFIX}/*/${AGENT_FACTS_FOLDER}/${AGENT_FACTS_DB}`
+/** The bench's live copies (src/core/bench.ts): a reading taken refreshes the Bring-up run screen; never read. */
+export const BENCH_KEYS = `${PROJECTS_PREFIX}/*/${AGENT_FACTS_FOLDER}/${BENCH_DB}`
 
 /** What attach needs of the parent: the pool and the web client, the API runtime, and the parent's outputs' stack. */
 export interface WebAttachProps {
