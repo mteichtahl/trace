@@ -12,26 +12,21 @@
  *                 brand new. Its gallery display name is set by API (PutRegistryCatalogData)
  *   4 variables   TRACE_RELEASE_ROLE and TRACE_IMAGE_REGISTRY (`public.ecr.aws/<alias>`) on the source repository,
  *                 with the GitHub token already given (REST)
- *   5 runner      trace's own CodeBuild runner project, trace-ci, which the release workflow runs on, made (or made
- *                 privileged, for Docker) when it is not: TraceCi (src/infra/ci-app.ts) through an authorized GitHub
- *                 connection when there is one, else with the token as CodeBuild's GitHub source credential, so no
- *                 console step either way
- *   6 record      the registry recorded where every installation finds it: the source repository's release
+ *   5 record      the registry recorded where every installation finds it: the source repository's release
  *                 `trace-images` (a pre-release, never "latest"), whose body names it in a marker line. Installers read
  *                 it (publishedRegistry) when nothing else says where the images are, so nobody edits or commits a
  *                 registry anywhere
- *   7 publish     optionally, the first release run (workflow_dispatch), and where the images will appear
+ *   6 publish     optionally, the first release run (workflow_dispatch), and where the images will appear
+ *
+ * The release workflow runs where every trace workflow does: the source repository's own AWS CodeBuild runner, which the
+ * installation makes (props.ts ciRepositories; Docker-in-Docker with runners.ciPrivileged when it publishes), and
+ * GitHub's ubuntu-24.04 runner until that exists.
  *
  * Every step is safe to run again. Every AWS and GitHub call is a dependency, so the tests give fakes.
  */
-import { CI_PREFIX, CI_STACK } from '../infra/ci-app.js'
-import { RELEASE_REGION, RELEASE_REPOSITORIES, RELEASE_REPOSITORY, RELEASE_ROLE_OUTPUT, RELEASE_STACK } from '../infra/release.js'
-import { SELF_CI_PROJECT, connectionName } from '../core/project.js'
-
-/** The connections TraceCi reuses first, as `npm run deploy:ci` does (src/infra/ci-deploy.ts CI_PREFER). */
-const CI_PREFER = [connectionName(CI_PREFIX), connectionName('trace')] as const
 import type { AwsCredentialIdentity } from '@smithy/types'
-import { type ConnectionChoice, type SourceCredential, awsEnv, chooseRunnerAuth } from './aws.js'
+import { RELEASE_REGION, RELEASE_REPOSITORIES, RELEASE_REPOSITORY, RELEASE_ROLE_OUTPUT, RELEASE_STACK } from '../infra/release.js'
+import { awsEnv } from './aws.js'
 
 /** The registry's aliases as DescribeRegistries gives them. */
 export interface RegistryInfo { registryId: string; aliases: { name: string; status: string; defaultRegistryAlias: boolean; primaryRegistryAlias: boolean }[] }
@@ -54,12 +49,6 @@ export interface ReleaseDeps {
   dispatch(repo: string, workflow: string, ref: string): Promise<void>
   /** the release REGISTRY_TAG on the repository, its body this text (made, or its body updated): 'created' | 'updated' */
   recordRegistry(repo: string, body: string): Promise<'created' | 'updated'>
-  /** the runner project trace-ci in the CI region: null when there is none */
-  runnerProject(): Promise<{ privileged: boolean } | null>
-  /** the GitHub connection for TraceCi (src/installer/aws.ts resolveConnection with deploy:ci's preferences) */
-  resolveConnection(o: { prefix: string; deployed: Record<string, string> | null; prefer: readonly string[] }): Promise<ConnectionChoice>
-  /** CodeBuild's GitHub source credential in the CI region (src/installer/aws.ts ensureSourceCredential) */
-  sourceCredential(ours: boolean): Promise<SourceCredential>
   log(line: string): void
   sleep(ms: number): Promise<void>
 }
@@ -69,15 +58,11 @@ export interface ReleaseOptions {
   account: string
   /** OWNER/REPO whose release workflow publishes (default trace's own) */
   repository?: string
-  /** the region trace-ci runs in (the installation's) */
-  ciRegion: string
   /** start the first release run */
   publish?: boolean
-  /** trace imported CodeBuild's GitHub credential in the CI region before (it may refresh it) */
-  credentialOurs?: boolean
 }
 
-export interface ReleaseResult { registry: string; roleArn: string; images: string[]; gallery: string[]; credential: SourceCredential['state'] | null; dispatched: boolean }
+export interface ReleaseResult { registry: string; roleArn: string; images: string[]; gallery: string[]; dispatched: boolean }
 
 /** The source repository's release that records where its images are published. */
 export const REGISTRY_TAG = 'trace-images'
@@ -128,31 +113,6 @@ export async function defaultAlias(d: Pick<ReleaseDeps, 'registries' | 'sleep' |
   }
 }
 
-/** trace-ci, privileged (the release workflow builds images), when it is not: through a connection authorized
- * already, else with the token as CodeBuild's GitHub source credential. */
-export async function ensureCiRunner(d: ReleaseDeps, o: { repository: string; ciRegion: string; credentialOurs?: boolean }): Promise<SourceCredential['state'] | null> {
-  const now = await d.runnerProject()
-  if (now?.privileged) { d.log(`${SELF_CI_PROJECT}: exists, privileged`); return null }
-  const deployed = await d.outputs(CI_STACK, o.ciRegion)
-  const auth = await chooseRunnerAuth('auto', { prefix: CI_PREFIX, deployed }, (x) => d.resolveConnection({ ...x, prefer: CI_PREFER }))
-  let credential: SourceCredential['state'] | null = null
-  const args = ['deploy', CI_STACK, '--app', 'node dist/infra/ci-app.js', '--require-approval', 'never', '-c', 'privileged=true', '-c', `repository=${o.repository}`]
-  if (auth.auth === 'connection') {
-    d.log(auth.connection.message)
-    args.push('-c', 'connectionReady=true', ...(auth.connection.pass ? ['-c', `connectionArn=${auth.connection.pass}`] : []))
-  } else {
-    d.log(auth.message)
-    const c = await d.sourceCredential(Boolean(o.credentialOurs))
-    d.log(c.detail)
-    credential = c.state
-    args.push('-c', 'auth=token')
-  }
-  d.log(`${SELF_CI_PROJECT}: ${now ? 'making it privileged (the release workflow builds images)' : 'creating it'} in ${o.ciRegion}`)
-  const code = await d.cdk(args, { AWS_REGION: o.ciRegion, CDK_DEFAULT_REGION: o.ciRegion })
-  if (code !== 0) throw new Error(`cdk deploy ${CI_STACK} exited ${code}`)
-  return credential
-}
-
 export async function releaseSetup(d: ReleaseDeps, o: ReleaseOptions): Promise<ReleaseResult> {
   const repository = o.repository ?? RELEASE_REPOSITORY
   const region = { AWS_REGION: RELEASE_REGION, CDK_DEFAULT_REGION: RELEASE_REGION }
@@ -176,11 +136,9 @@ export async function releaseSetup(d: ReleaseDeps, o: ReleaseOptions): Promise<R
   await d.catalog('trace').then(() => d.log('the registry\'s gallery display name: trace'), (e: unknown) => d.log(`the registry's display name was not set (${e instanceof Error ? e.message : String(e)}); nothing depends on it`))
   // 4 — the source repository's variables
   for (const [k, v] of [['TRACE_RELEASE_ROLE', roleArn], ['TRACE_IMAGE_REGISTRY', registry]] as const) d.log(`${repository}: ${k} ${await d.setVariable(repository, k, v)} (${v})`)
-  // 5 — the runner it publishes on
-  const credential = await ensureCiRunner(d, { repository, ciRegion: o.ciRegion, ...(o.credentialOurs !== undefined ? { credentialOurs: o.credentialOurs } : {}) })
-  // 6 — where installations find the registry
+  // 5 — where installations find the registry
   d.log(`${repository}: release ${REGISTRY_TAG} ${await d.recordRegistry(repository, registryRecord(registry, repository))}: installations find the images there`)
-  // 7 — the first release
+  // 6 — the first release
   const images = Object.values(RELEASE_REPOSITORIES).map((r) => `${registry}/${r}`)
   const gallery = Object.values(RELEASE_REPOSITORIES).map((r) => `https://gallery.ecr.aws/${alias}/${r}`)
   let dispatched = false
@@ -190,14 +148,13 @@ export async function releaseSetup(d: ReleaseDeps, o: ReleaseOptions): Promise<R
     d.log(`started the release workflow on ${repository} (main): https://github.com/${repository}/actions/workflows/release-images.yml`)
   }
   d.log(`the images will appear at ${images.join(' and ')} (${gallery.join(', ')}), tagged with the content tag, latest and each vX.Y.Z`)
-  return { registry, roleArn, images, gallery, credential, dispatched }
+  return { registry, roleArn, images, gallery, dispatched }
 }
 
 /** The real calls: these credentials, the CDK CLI of this trace, and the GitHub token. */
-export async function liveReleaseDeps(creds: AwsCredentialIdentity, ciRegion: string, token: string, o: { cdk: (args: string[], env: Record<string, string>) => Promise<number>; log: (l: string) => void }): Promise<ReleaseDeps> {
-  const [cfn, iam, signed, cb, cc, aws, gh, { z }] = await Promise.all([
-    import('@aws-sdk/client-cloudformation'), import('@aws-sdk/client-iam'), import('./signed.js'), import('@aws-sdk/client-codebuild'),
-    import('@aws-sdk/client-codeconnections'), import('./aws.js'), import('./github.js'), import('zod'),
+export async function liveReleaseDeps(creds: AwsCredentialIdentity, token: string, o: { cdk: (args: string[], env: Record<string, string>) => Promise<number>; log: (l: string) => void }): Promise<ReleaseDeps> {
+  const [cfn, iam, signed, gh, { z }] = await Promise.all([
+    import('@aws-sdk/client-cloudformation'), import('@aws-sdk/client-iam'), import('./signed.js'), import('./github.js'), import('zod'),
   ])
   const outputs = async (stack: string, region: string): Promise<Record<string, string> | null> => {
     try {
@@ -210,9 +167,7 @@ export async function liveReleaseDeps(creds: AwsCredentialIdentity, ciRegion: st
     }
   }
   const ecr = signed.signedCaller(creds, RELEASE_REGION)
-  const codebuild = new cb.CodeBuildClient({ region: ciRegion, credentials: creds })
-  const connections = new cc.CodeConnectionsClient({ region: ciRegion, credentials: creds })
-  const env = (extra: Record<string, string>): Record<string, string> => ({ ...awsEnv(creds, extra.AWS_REGION ?? ciRegion), ...extra, CDK_DISABLE_VERSION_CHECK: '1', CI: '1' })
+  const env = (extra: Record<string, string>): Record<string, string> => ({ ...awsEnv(creds, extra.AWS_REGION ?? RELEASE_REGION), ...extra, CDK_DISABLE_VERSION_CHECK: '1', CI: '1' })
   return {
     bootstrapped: async () => {
       const b = await outputs('CDKToolkit', RELEASE_REGION)
@@ -244,12 +199,6 @@ export async function liveReleaseDeps(creds: AwsCredentialIdentity, ciRegion: st
       })
       return 'created'
     },
-    runnerProject: async () => {
-      const p = (await codebuild.send(new cb.BatchGetProjectsCommand({ names: [SELF_CI_PROJECT] }))).projects?.[0]
-      return p ? { privileged: Boolean(p.environment?.privilegedMode) } : null
-    },
-    resolveConnection: (x) => aws.resolveConnection(connections, x),
-    sourceCredential: (ours) => aws.ensureSourceCredential(codebuild, token, ours),
     log: o.log,
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   }

@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>trace · Agents and tools</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2563eb;text-decoration:none}a:hover{color:#1d4ed8}
+</style>
+</helmet>
+<div style="font-family: Geist, system-ui, sans-serif; color: #0a0a0a; background: #ffffff; min-height: 1000px; display: flex; flex-wrap: wrap; font-size: 14px; line-height: 1.5">
+
+  <nav aria-label="Main" style="flex: 1 1 232px; max-width: 260px; background: #fafafa; border-right: 1px solid #e5e5e5; padding: 16px 12px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px">
+    <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px 18px">
+      <div style="width: 24px; height: 24px; border-radius: 6px; background: #0a0a0a; color: #fff; display: flex; align-items: center; justify-content: center; font-family: 'Geist Mono', monospace; font-size: 13px; font-weight: 600">t</div>
+      <span style="font-weight: 600; font-size: 15px">trace</span>
+    </div>
+    <a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/></svg>Home</a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Projects</a>
+    <a href="Knowledge.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h10a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z"/><path d="M4 16a4 4 0 0 1 4-4h10"/></svg>Knowledge</a>
+    <a href="Agents.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; background: #f0f0f0; color: #0a0a0a; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01"/></svg>Agents</a>
+    <a href="Operations.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Operations</a>
+    <a href="People.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>Admin</a>
+    <div style="margin: 20px 8px 6px; font-size: 12px; color: #737373; font-weight: 500">Pinned</div>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Soil sensor</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Motor driver</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Panel controller</span></a>
+    <div style="flex-grow: 1"></div>
+    <a href="Preferences.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040">
+      <span style="width: 28px; height: 28px; border-radius: 14px; background: #e5e5e5; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600">MT</span>
+      <span style="display: flex; flex-direction: column; line-height: 1.3"><span style="font-weight: 500; color: #0a0a0a">Marc Teichtahl</span><span style="font-size: 12px; color: #737373">Admin</span></span>
+    </a>
+  </nav>
+
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="height: 56px; border-bottom: 1px solid #e5e5e5; display: flex; align-items: center; gap: 12px; padding: 0 24px; box-sizing: border-box">
+      <span style="font-weight: 500">Agents and tools</span>
+      <div style="flex-grow: 1"></div>
+      <button type="button" style="display: flex; align-items: center; gap: 8px; height: 36px; width: 280px; max-width: 40%; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; color: #737373; font: inherit; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span style="flex-grow: 1; text-align: left">Search or run a command</span><kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; border: 1px solid #e5e5e5; border-radius: 4px; padding: 0 4px">⌘K</kbd></button>
+      <span title="Live: every screen updates as the record changes" style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #15803d"><span style="width: 8px; height: 8px; border-radius: 4px; background: #16a34a"></span>Live</span>
+      <button type="button" aria-label="Notifications, 2 new" style="position: relative; width: 36px; height: 36px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #0a0a0a"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><span style="position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 4px; background: #2563eb"></span></button>
+      <a href="Chat.dc.html" style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; color: #0a0a0a; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>Ask trace <kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373">⌘J</kbd></a>
+    </header>
+
+    <div style="display: flex; flex-wrap: wrap; flex-grow: 1; min-width: 0">
+
+    <main style="flex: 999 1 560px; min-width: 0; padding: 32px 24px 48px; box-sizing: border-box; display: flex; flex-direction: column; gap: 32px">
+      <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap">
+        <div>
+          <h1 style="margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.01em">Agents and tools</h1>
+          <p style="margin: 4px 0 0; color: #525252">3 agents are working and 1 is stuck. One question is waiting on a person.</p>
+        </div>
+        <div role="tablist" aria-label="View" style="display: inline-flex; padding: 3px; background: #f5f5f5; border-radius: 8px; gap: 2px">
+          <button type="button" role="tab" aria-selected="true" style="height: 30px; padding: 0 14px; border: 0; border-radius: 6px; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.04); font: inherit; font-weight: 500; color: #0a0a0a; cursor: pointer">Agents (7)</button>
+          <button type="button" role="tab" aria-selected="false" style="height: 30px; padding: 0 14px; border: 0; border-radius: 6px; background: transparent; font: inherit; color: #525252; cursor: pointer">Tools</button>
+        </div>
+      </div>
+
+      <section aria-labelledby="agents-h" style="display: flex; flex-direction: column; gap: 12px">
+        <h2 id="agents-h" style="margin: 0; font-size: 13px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 0.04em">Agents</h2>
+
+        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+          <label for="agent-search" style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; flex: 0 1 240px; color: #737373"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="agent-search" type="text" placeholder="Search…" style="border: 0; outline: none; font: inherit; min-width: 0; flex-grow: 1; background: transparent"></label>
+          <button type="button" style="display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-weight: 500; cursor: pointer; color: #0a0a0a"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>Filter</button>
+          <div role="group" aria-label="Status" style="display: flex; gap: 6px; flex-wrap: wrap">
+            <button type="button" aria-pressed="true" style="height: 28px; padding: 0 10px; border-radius: 6px; border: 1px solid #0a0a0a; background: #0a0a0a; color: #fff; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer">All</button>
+            <button type="button" aria-pressed="false" style="height: 28px; padding: 0 10px; border-radius: 6px; border: 1px solid #e5e5e5; background: #fff; color: #404040; font: inherit; font-size: 12px; cursor: pointer">Working 3</button>
+            <button type="button" aria-pressed="false" style="height: 28px; padding: 0 10px; border-radius: 6px; border: 1px solid #e5e5e5; background: #fff; color: #404040; font: inherit; font-size: 12px; cursor: pointer">Queued 2</button>
+            <button type="button" aria-pressed="false" style="height: 28px; padding: 0 10px; border-radius: 6px; border: 1px solid #e5e5e5; background: #fff; color: #404040; font: inherit; font-size: 12px; cursor: pointer">Waiting on a person 1</button>
+            <button type="button" aria-pressed="false" style="height: 28px; padding: 0 10px; border-radius: 6px; border: 1px solid #e5e5e5; background: #fff; color: #404040; font: inherit; font-size: 12px; cursor: pointer">Stuck 1</button>
+          </div>
+          <div style="flex-grow: 1"></div>
+          <button type="button" style="display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-weight: 500; cursor: pointer; color: #0a0a0a"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/></svg>Columns</button>
+          <button type="button" style="height: 36px; padding: 0 10px; border: 0; background: transparent; font: inherit; color: #525252; cursor: pointer">Reset view</button>
+        </div>
+
+        <div style="border: 1px solid #e5e5e5; border-radius: 12px; overflow-x: auto">
+          <table style="width: 100%; min-width: 860px; border-collapse: collapse; font-size: 14px">
+            <thead>
+              <tr style="background: #fafafa">
+                <th scope="col" aria-sort="ascending" style="position: relative; text-align: left; padding: 10px 14px; font-size: 12px; font-weight: 500; color: #0a0a0a; border-bottom: 1px solid #e5e5e5; width: 190px">Agent <span aria-hidden="true" style="color: #525252">↑</span><span aria-hidden="true" style="position: absolute; right: 0; top: 8px; bottom: 8px; width: 2px; background: #e5e5e5"></span></th>
+                <th scope="col" style="position: relative; text-align: left; padding: 10px 14px; font-size: 12px; font-weight: 500; color: #737373; border-bottom: 1px solid #e5e5e5; width: 170px">Status<span aria-hidden="true" style="position: absolute; right: 0; top: 8px; bottom: 8px; width: 2px; background: #e5e5e5"></span></th>
+                <th scope="col" style="position: relative; text-align: left; padding: 10px 14px; font-size: 12px; font-weight: 500; color: #737373; border-bottom: 1px solid #e5e5e5">Now<span aria-hidden="true" style="position: absolute; right: 0; top: 8px; bottom: 8px; width: 2px; background: #e5e5e5"></span></th>
+                <th scope="col" style="position: relative; text-align: left; padding: 10px 14px; font-size: 12px; font-weight: 500; color: #737373; border-bottom: 1px solid #e5e5e5; width: 120px">Queue<span aria-hidden="true" style="position: absolute; right: 0; top: 8px; bottom: 8px; width: 2px; background: #e5e5e5"></span></th>
+                <th scope="col" style="position: relative; text-align: left; padding: 10px 14px; font-size: 12px; font-weight: 500; color: #737373; border-bottom: 1px solid #e5e5e5; width: 160px">Today<span aria-hidden="true" style="position: absolute; right: 0; top: 8px; bottom: 8px; width: 2px; background: #e5e5e5"></span></th>
+                <th scope="col" style="position: relative; text-align: left; padding: 10px 14px; font-size: 12px; font-weight: 500; color: #737373; border-bottom: 1px solid #e5e5e5; width: 120px">Instructions<span aria-hidden="true" style="position: absolute; right: 0; top: 8px; bottom: 8px; width: 2px; background: #e5e5e5"></span></th>
+                <th scope="col" style="padding: 10px 8px; border-bottom: 1px solid #e5e5e5; width: 40px"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="padding: 12px 14px; font-weight: 500">Verification</td>
+                <td style="padding: 12px 14px"><span style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; color: #2563eb; background: #eff4ff; border-radius: 6px; padding: 2px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>Working</span></td>
+                <td style="padding: 12px 14px">Writing the test plan for Panel controller<div style="margin-top: 6px; height: 4px; border-radius: 2px; background: #f0f0f0; max-width: 220px"><div style="width: 30%; height: 4px; border-radius: 2px; background: #2563eb"></div></div></td>
+                <td style="padding: 12px 14px">1</td>
+                <td style="padding: 12px 14px; font-size: 13px; color: #525252">31 runs · 97% · 4.1 min</td>
+                <td style="padding: 12px 14px; font-size: 13px; color: #525252">Installation's</td>
+                <td style="padding: 12px 8px"><button type="button" aria-label="Verification options: Pause, Cancel, Move up" style="width: 32px; height: 32px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; color: #525252">•••</button></td>
+              </tr>
+              <tr style="border-top: 1px solid #f0f0f0">
+                <td style="padding: 12px 14px; font-weight: 500">Implementation</td>
+                <td style="padding: 12px 14px"><span style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; color: #2563eb; background: #eff4ff; border-radius: 6px; padding: 2px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>Working</span></td>
+                <td style="padding: 12px 14px">Routing the Soil sensor board, stage 1 of 2<div style="display: flex; align-items: center; gap: 8px; margin-top: 6px"><div style="height: 4px; border-radius: 2px; background: #f0f0f0; flex: 0 1 220px"><div style="width: 55%; height: 4px; border-radius: 2px; background: #2563eb"></div></div><span style="font-size: 12px; color: #737373">55%</span></div></td>
+                <td style="padding: 12px 14px">2 <span style="font-size: 12px; color: #737373">(oldest 4 min)</span><div><button type="button" style="margin-top: 2px; padding: 0; border: 0; background: transparent; font: inherit; font-size: 12px; color: #2563eb; cursor: pointer">Move up</button></div></td>
+                <td style="padding: 12px 14px; font-size: 13px; color: #525252">12 runs · 92% · 18 min</td>
+                <td style="padding: 12px 14px; font-size: 13px; color: #525252">Project's</td>
+                <td style="padding: 12px 8px"><button type="button" aria-label="Implementation options: Pause, Cancel, Move up" style="width: 32px; height: 32px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; color: #525252">•••</button></td>
+              </tr>
+              <tr style="border-top: 1px solid #f0f0f0">
+                <td style="padding: 12px 14px; font-weight: 500">Analog and mixed-signal</td>
+                <td style="padding: 12px 14px"><span style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; color: #2563eb; background: #fff; border: 1px solid #2563eb; border-radius: 6px; padding: 1px 8px; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Waiting on a person</span></td>
+                <td style="padding: 12px 14px">Needs the stall current from Marc (Motor driver) <a href="PhoneAsk.dc.html" style="font-weight: 500">Answer</a></td>
+                <td style="padding: 12px 14px">0</td>
+                <td style="padding: 12px 14px; font-size: 13px; color: #525252">6 runs · 100% · 2.3 min</td>
+                <td style="padding: 12px 14px; font-size: 13px; color: #525252">Installation's</td>
+                <td style="padding: 12px 8px"><button type="button" aria-label="Analog and mixed-signal options: Pause, Cancel, Move up" style="width: 32px; height: 32px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; color: #525252">•••</button></td>
+              </tr>
+              <tr style="border-top: 1px solid #f0f0f0">
+                <td style="padding: 12px 14px; font-weight: 500">EMC</td>
+                <td style="padding: 12px 14px"><span style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; color: #737373; background: #f5f5f5; border-radius: 6px; padding: 2px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/></svg>Idle</span></td>
+                <td style="padding: 12px 14px; color: #737373">Last run 2 hours ago</td>
+                <td style="padding: 12px 14px">0</td>
+                <td style="padding: 12px 14px; font-size: 13px; color: #525252">3 runs · 100% · 6.0 min</td>
+                <td style="padding: 12px 14px; font-size: 13px; color: #525252">Installation's</td>
+                <td style="padding: 12px 8px"><button type="button" aria-label="EMC options: Pause, Cancel, Move up" style="width: 32px; height: 32px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; color: #525252">•••</button></td>
+              </tr>
+              <tr style="border-top: 1px solid #f0f0f0">
+                <td style="padding: 12px 14px; font-weight: 500">Rendering</td>
+                <td style="padding: 12px 14px"><span style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; color: #2563eb; background: #eff4ff; border-radius: 6px; padding: 2px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>Working</span></td>
+                <td style="padding: 12px 14px">Rendering the Soil sensor board for the gate, about 3 min<div style="margin-top: 6px; height: 4px; border-radius: 2px; background: #f0f0f0; max-width: 220px"><div style="width: 70%; height: 4px; border-radius: 2px; background: #2563eb"></div></div></td>
+                <td style="padding: 12px 14px">0</td>
+                <td style="padding: 12px 14px; font-size: 13px; color: #525252">9 runs · 100% · 3.4 min</td>
+                <td style="padding: 12px 14px; font-size: 13px; color: #525252">Installation's</td>
+                <td style="padding: 12px 8px"><button type="button" aria-label="Rendering options: Pause, Cancel, Move up" style="width: 32px; height: 32px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; color: #525252">•••</button></td>
+              </tr>
+              <tr style="border-top: 1px solid #f0f0f0; background: #eff4ff">
+                <td style="padding: 12px 14px; font-weight: 500">Thermal</td>
+                <td style="padding: 12px 14px"><span style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; color: #b91c1c; background: #fef2f2; border-radius: 6px; padding: 2px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m15 9-6 6M9 9l6 6"/></svg>Stuck</span></td>
+                <td style="padding: 12px 14px">Board model failed to mesh near U4 <button type="button" aria-expanded="true" style="padding: 0; border: 0; background: transparent; font: inherit; font-weight: 500; color: #2563eb; cursor: pointer">See options</button></td>
+                <td style="padding: 12px 14px">1</td>
+                <td style="padding: 12px 14px; font-size: 13px; color: #525252">4 runs · 75% · 9.2 min</td>
+                <td style="padding: 12px 14px; font-size: 13px; color: #525252">Installation's</td>
+                <td style="padding: 12px 8px"><button type="button" aria-label="Thermal options: Pause, Cancel, Move up" style="width: 32px; height: 32px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; color: #525252">•••</button></td>
+              </tr>
+              <tr style="border-top: 1px solid #f0f0f0">
+                <td style="padding: 12px 14px; font-weight: 500">Worker</td>
+                <td style="padding: 12px 14px"><span style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; color: #737373; background: #f5f5f5; border-radius: 6px; padding: 2px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/></svg>Idle</span></td>
+                <td style="padding: 12px 14px; color: #737373">Makes code changes when a specialist asks</td>
+                <td style="padding: 12px 14px">0</td>
+                <td style="padding: 12px 14px; font-size: 13px; color: #525252">5 runs · 100% · 1.8 min</td>
+                <td style="padding: 12px 14px; font-size: 13px; color: #525252">Installation's</td>
+                <td style="padding: 12px 8px"><button type="button" aria-label="Worker options: Pause, Cancel, Move up" style="width: 32px; height: 32px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; color: #525252">•••</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="font-size: 12px; color: #737373">7 of 7 rows · sorted by Agent</div>
+      </section>
+
+      <section aria-labelledby="tools-h" style="display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap">
+          <h2 id="tools-h" style="margin: 0; font-size: 13px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 0.04em">Tools · grouped by family</h2>
+          <label for="tool-search" style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; flex: 0 1 260px; color: #737373"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="tool-search" type="text" placeholder="Search tools…" style="border: 0; outline: none; font: inherit; min-width: 0; flex-grow: 1; background: transparent"></label>
+        </div>
+
+        <div style="border: 1px solid #e5e5e5; border-radius: 12px; overflow: hidden">
+          <button type="button" aria-expanded="true" style="width: 100%; display: flex; align-items: center; gap: 8px; padding: 12px 18px; border: 0; background: #fafafa; font: inherit; font-weight: 600; text-align: left; cursor: pointer; color: #0a0a0a"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>Layout and routing<span style="font-weight: 400; font-size: 12px; color: #737373">3 tools</span></button>
+          <div style="display: flex; align-items: center; gap: 16px; padding: 12px 18px 12px 42px; border-top: 1px solid #f0f0f0; flex-wrap: wrap">
+            <div style="flex: 1 1 240px; min-width: 0"><div style="font-weight: 500">Route the board</div><div style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373">pcb.autoroute</div></div>
+            <div style="flex: 0 0 150px; font-size: 13px; color: #525252">Runs on: graphics card</div>
+            <div style="flex: 0 0 210px"><span style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; color: #737373; background: #f5f5f5; border-radius: 6px; padding: 2px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Busy, queue wait 4 min</span></div>
+            <div style="flex: 0 0 200px; font-size: 12px; color: #737373">Last used 12 min ago · errors 2%</div>
+            <div style="flex: 0 0 72px"></div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 16px; padding: 12px 18px 12px 42px; border-top: 1px solid #f0f0f0; flex-wrap: wrap">
+            <div style="flex: 1 1 240px; min-width: 0"><div style="font-weight: 500">Check placement</div><div style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373">pcb.placement_check</div></div>
+            <div style="flex: 0 0 150px; font-size: 13px; color: #525252">Runs on: project's agent</div>
+            <div style="flex: 0 0 210px"><span style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 2px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Ready</span></div>
+            <div style="flex: 0 0 200px; font-size: 12px; color: #737373">Last used 1 hour ago · errors 0%</div>
+            <button type="button" style="flex: 0 0 72px; height: 32px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; color: #0a0a0a">Try it</button>
+          </div>
+          <div style="display: flex; align-items: center; gap: 16px; padding: 12px 18px 12px 42px; border-top: 1px solid #f0f0f0; flex-wrap: wrap">
+            <div style="flex: 1 1 240px; min-width: 0"><div style="font-weight: 500">Plan the floor</div><div style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373">pcb.floorplan</div></div>
+            <div style="flex: 0 0 150px; font-size: 13px; color: #525252">Runs on: project's agent</div>
+            <div style="flex: 0 0 210px"><span style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 2px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Ready</span></div>
+            <div style="flex: 0 0 200px; font-size: 12px; color: #737373">Last used yesterday · errors 0%</div>
+            <button type="button" style="flex: 0 0 72px; height: 32px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; color: #0a0a0a">Try it</button>
+          </div>
+
+          <button type="button" aria-expanded="true" style="width: 100%; display: flex; align-items: center; gap: 8px; padding: 12px 18px; border: 0; border-top: 1px solid #e5e5e5; background: #fafafa; font: inherit; font-weight: 600; text-align: left; cursor: pointer; color: #0a0a0a"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>Datasheets and parts<span style="font-weight: 400; font-size: 12px; color: #737373">2 tools</span></button>
+          <div style="display: flex; align-items: center; gap: 16px; padding: 12px 18px 12px 42px; border-top: 1px solid #f0f0f0; flex-wrap: wrap">
+            <div style="flex: 1 1 240px; min-width: 0"><div style="font-weight: 500">Search parts</div><div style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373">parts.search</div></div>
+            <div style="flex: 1 1 380px; min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap"><span style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; color: #a16207; background: #fefce8; border-radius: 6px; padding: 2px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/></svg>Needs setup</span><span style="font-size: 13px; color: #525252">Add a Nexar key for live stock and prices (optional)</span></div>
+            <button type="button" style="flex: 0 0 auto; height: 32px; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; color: #0a0a0a">Add key</button>
+          </div>
+          <div style="display: flex; align-items: center; gap: 16px; padding: 12px 18px 12px 42px; border-top: 1px solid #f0f0f0; flex-wrap: wrap">
+            <div style="flex: 1 1 240px; min-width: 0"><div style="font-weight: 500">Check parts against the build quantity</div><div style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373">parts.bom_check</div></div>
+            <div style="flex: 0 0 150px; font-size: 13px; color: #525252">Runs on: project's agent</div>
+            <div style="flex: 0 0 210px"><span style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 2px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Ready</span></div>
+            <div style="flex: 0 0 200px; font-size: 12px; color: #737373">Last used 3 hours ago · errors 0%</div>
+            <button type="button" style="flex: 0 0 72px; height: 32px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; color: #0a0a0a">Try it</button>
+          </div>
+
+          <button type="button" aria-expanded="false" style="width: 100%; display: flex; align-items: center; gap: 8px; padding: 12px 18px; border: 0; border-top: 1px solid #e5e5e5; background: #fff; font: inherit; text-align: left; cursor: pointer; color: #0a0a0a; flex-wrap: wrap"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><span style="font-weight: 600">Bench instruments (hardware in the loop)</span><span style="font-size: 12px; color: #737373">11 tools</span><span style="font-size: 13px; color: #525252">· Bench only: run on a machine with hardware allowed, not from the web</span></button>
+          <div style="border-top: 1px solid #e5e5e5; display: flex; align-items: center; gap: 8px; padding: 12px 18px; flex-wrap: wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            <span style="font-weight: 600">Rendering</span><span style="font-size: 12px; color: #737373">4 tools</span>
+            <span style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #525252; flex: 1 1 300px; min-width: 0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#737373" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Needs setup: graphics card image still building, about 25 minutes. Checked 2 minutes ago; next check in 13 minutes.</span>
+            <button type="button" style="height: 32px; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 13px; cursor: pointer; color: #0a0a0a">Check now</button>
+          </div>
+          <button type="button" aria-expanded="false" style="width: 100%; display: flex; align-items: center; gap: 8px; padding: 12px 18px; border: 0; border-top: 1px solid #e5e5e5; background: #fff; font: inherit; text-align: left; cursor: pointer; color: #0a0a0a"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><span style="font-weight: 600">Simulation</span><span style="font-size: 12px; color: #737373">9 tools</span><span style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 2px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Ready</span></button>
+        </div>
+      </section>
+
+      <p style="margin: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; color: #737373"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>You see every project's agents because you are an admin. Others see their projects' work, and other projects' work only as 'Busy'.</p>
+    </main>
+
+    <aside aria-labelledby="sheet-h" style="flex: 1 1 360px; max-width: 420px; border-left: 1px solid #e5e5e5; background: #fff; padding: 20px 24px 32px; box-sizing: border-box; display: flex; flex-direction: column; gap: 20px">
+      <div style="display: flex; align-items: center; gap: 10px">
+        <h2 id="sheet-h" style="margin: 0; font-size: 18px; font-weight: 600; flex-grow: 1">Thermal · Stuck</h2>
+        <span style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; color: #b91c1c; background: #fef2f2; border-radius: 6px; padding: 2px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m15 9-6 6M9 9l6 6"/></svg>Stuck</span>
+        <button type="button" aria-label="Close" style="width: 32px; height: 32px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; color: #525252; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>
+
+      <div>
+        <div style="font-size: 12px; color: #737373; font-weight: 500">What it was doing</div>
+        <p style="margin: 4px 0 0">Building a heat model of the Soil sensor board to check how hot the regulator and radio get during a transmit burst. Stopped 18 minutes ago.</p>
+      </div>
+      <div>
+        <div style="font-size: 12px; color: #737373; font-weight: 500">What went wrong</div>
+        <p style="margin: 4px 0 0">The copper pour on layer 2 has a zero-width sliver near U4, so the board model can't be meshed.</p>
+        <div style="margin-top: 6px; font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373">run_9a31 · thermal.mesh · exit 3</div>
+      </div>
+
+      <div style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 14px">
+        <span style="align-self: flex-start; font-size: 12px; font-weight: 600; color: #2563eb; background: #eff4ff; border-radius: 6px; padding: 2px 8px">trace recommends</span>
+        <p style="margin: 0; font-weight: 600">Re-pour with a 0.2 mm minimum width and retry.</p>
+        <svg width="100%" viewBox="0 0 320 150" role="img" aria-label="Board area around U4 on layer 2, with the zero-width copper sliver highlighted between the pour and the U4 pads" style="display: block; border: 1px solid #f0f0f0; border-radius: 8px; background: #fafafa">
+          <rect x="10" y="10" width="300" height="130" rx="4" fill="#f5f5f5" stroke="#d4d4d4"/>
+          <path d="M20 20h120v40l-30 0v70H20z" fill="#e5e5e5" stroke="#a3a3a3"/>
+          <path d="M200 20h100v110H180V80h20z" fill="#e5e5e5" stroke="#a3a3a3"/>
+          <rect x="128" y="62" width="44" height="44" rx="3" fill="#fff" stroke="#525252"/>
+          <text x="150" y="88" text-anchor="middle" font-family="Geist Mono, monospace" font-size="11" fill="#525252">U4</text>
+          <rect x="120" y="68" width="6" height="5" fill="#a3a3a3"/><rect x="120" y="80" width="6" height="5" fill="#a3a3a3"/><rect x="120" y="92" width="6" height="5" fill="#a3a3a3"/>
+          <rect x="174" y="68" width="6" height="5" fill="#a3a3a3"/><rect x="174" y="80" width="6" height="5" fill="#a3a3a3"/><rect x="174" y="92" width="6" height="5" fill="#a3a3a3"/>
+          <path d="M140 58 L178 58 L182 76" fill="none" stroke="#b91c1c" stroke-width="1.5"/>
+          <circle cx="160" cy="58" r="14" fill="none" stroke="#b91c1c" stroke-width="1.5" stroke-dasharray="3 3"/>
+          <text x="196" y="52" font-family="Geist, sans-serif" font-size="11" fill="#b91c1c">sliver, 0 mm</text>
+          <text x="24" y="132" font-family="Geist, sans-serif" font-size="10" fill="#737373">Layer 2 · ground pour</text>
+        </svg>
+        <div>
+          <div style="font-size: 12px; color: #737373; font-weight: 500">Why</div>
+          <p style="margin: 2px 0 0; font-size: 13px; color: #404040">A 0.2 mm minimum removes the sliver without changing any net or clearance. The fab's minimum is 0.127 mm, so it stays well within limits.</p>
+          <div style="margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap">
+            <span style="font-size: 12px; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1px 8px; color: #404040; font-family: 'Geist Mono', monospace">Run run_9a31</span>
+            <span style="font-size: 12px; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1px 8px; color: #404040">Fab rules p.4</span>
+          </div>
+        </div>
+        <div>
+          <div style="font-size: 12px; color: #737373; font-weight: 500">What it gives up</div>
+          <p style="margin: 2px 0 0; font-size: 13px; color: #404040">Nothing measurable.</p>
+        </div>
+        <button type="button" aria-expanded="false" style="align-self: flex-start; padding: 0; border: 0; background: transparent; font: inherit; font-size: 13px; color: #525252; cursor: pointer">2 alternatives ▸</button>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap">
+          <button type="button" style="height: 36px; padding: 0 16px; border-radius: 8px; background: #2563eb; color: #fff; border: 0; font: inherit; font-weight: 500; cursor: pointer">Re-pour and retry</button>
+          <button type="button" style="height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid #e5e5e5; background: #fff; color: #0a0a0a; font: inherit; font-weight: 500; cursor: pointer">Waive the thermal model</button>
+          <button type="button" style="height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid #e5e5e5; background: #fff; color: #0a0a0a; font: inherit; font-weight: 500; cursor: pointer">Other</button>
+        </div>
+        <p style="margin: 0; font-size: 12px; color: #737373">Waiving or choosing another answer asks for your reason.</p>
+      </div>
+
+      <div style="font-size: 13px; color: #525252; display: flex; flex-direction: column; gap: 4px">
+        <div><span style="color: #737373">Project</span> · Soil sensor · Rev A · Layout</div>
+        <div><span style="color: #737373">Queue</span> · 1 waiting: thermal check for Motor driver</div>
+        <a href="Run.dc.html" style="font-weight: 500">Open the full run</a>
+      </div>
+    </aside>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

@@ -9,8 +9,9 @@
 # and records the registry in the trace-images release, where installations find it. Until both variables are set
 # this workflow does nothing.
 #
-# It runs, like every job here, on trace's own CodeBuild runner project trace-ci (never a GitHub-hosted runner), which
-# `trace release setup` makes privileged for Docker. BuildKit builds both images (QEMU for arm64 on the x86 runner),
+# It runs, like every job here, on this repository's AWS CodeBuild runner once the installation has made it (the
+# repository variable TRACE_CODEBUILD_PROJECT; Docker-in-Docker when that installation publishes: props.ts
+# runners.ciPrivileged), and on GitHub's ubuntu-24.04 runner until then. BuildKit builds both images (QEMU for arm64 on the x86 runner),
 # caches in the registry itself (`:cache`, mode=max), attaches an OCI provenance attestation, and the job summary
 # records each pushed digest.
 name: release-images
@@ -28,9 +29,7 @@ concurrency: { group: 'release-images-${{ github.ref }}', cancel-in-progress: fa
 jobs:
   publish:
     if: vars.TRACE_IMAGE_REGISTRY != '' && vars.TRACE_RELEASE_ROLE != ''
-    runs-on:
-      - codebuild-trace-ci-${{ github.run_id }}-${{ github.run_attempt }}
-      - publish
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","publish"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     timeout-minutes: 180
     permissions:
       id-token: write

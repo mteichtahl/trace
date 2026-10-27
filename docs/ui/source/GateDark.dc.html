@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>trace · Schematic gate (dark)</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0a0a0a}
+a{color:#3b82f6;text-decoration:none}a:hover{color:#60a5fa}
+</style>
+</helmet>
+<div style="font-family: Geist, system-ui, sans-serif; color: {{k.text}}; background: {{k.page}}; min-height: 1100px; display: flex; flex-wrap: wrap; align-content: flex-start; font-size: 14px; line-height: 1.5; color-scheme: dark">
+
+  <header style="flex: 1 1 100%; height: 52px; border-bottom: 1px solid {{k.border}}; background: {{k.page}}; display: flex; align-items: center; gap: 12px; padding: 0 16px; box-sizing: border-box">
+    <a href="Project.dc.html" aria-label="Close and return" style="width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: {{k.text2}}; border: 1px solid {{k.border}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></a>
+    <span style="font-weight: 600">Schematic gate</span>
+    <span style="font-size: 13px; color: {{k.muted}}">Soil sensor · Rev A · Capture → Layout</span>
+    <div style="flex-grow: 1"></div>
+    <span style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: {{k.okFg}}"><span style="width: 8px; height: 8px; border-radius: 4px; background: {{k.okFg}}"></span>Live</span>
+  </header>
+
+  <main style="flex: 999 1 560px; min-width: 0; padding: 32px 24px 48px; box-sizing: border-box">
+    <div style="width: 100%; max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px">
+
+      <div>
+        <h1 style="margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.01em">Sign the schematic gate</h1>
+        <p style="margin: 4px 0 0; color: {{k.text2}}">Signing moves Soil sensor Rev A from Capture to Layout. Open the evidence for each criterion before you sign.</p>
+      </div>
+
+      <section aria-label="Recommendation" style="background: {{k.surface}}; border: 1px solid {{k.border}}; border-radius: 12px; padding: 20px 24px; display: flex; flex-direction: column; gap: 12px">
+        <span style="align-self: flex-start; font-size: 12px; font-weight: 500; color: {{k.accentText}}; background: {{k.accentTint}}; border: 1px solid {{k.accentBorder}}; border-radius: 6px; padding: 0 8px">trace recommends</span>
+        <p style="margin: 0; font-size: 16px"><strong style="font-weight: 600">trace recommends signing.</strong> All 6 criteria are met. One waiver was taken, rated degraded, and is caught on the bench.</p>
+        <div style="font-size: 13px"><span style="color: {{k.muted}}">What it gives up:</span> the waived finding on <span style="font-family: 'Geist Mono', monospace">U2</span>'s <span style="font-family: 'Geist Mono', monospace">VBAT</span> pin is only checked at bring-up.</div>
+        <button type="button" aria-expanded="false" style="align-self: flex-start; border: 0; background: transparent; padding: 0; font: inherit; font-size: 13px; color: {{k.text2}}; cursor: pointer">1 alternative ▸ <span style="color: {{k.muted}}">Return to Capture</span></button>
+      </section>
+
+      <section aria-labelledby="crit-h" style="display: flex; flex-direction: column; gap: 10px">
+        <div style="display: flex; align-items: baseline; gap: 8px">
+          <h2 id="crit-h" style="margin: 0; font-size: 18px; font-weight: 600">Criteria</h2>
+          <span style="font-size: 13px; color: {{k.muted}}">6 met · evidence opened for 4 of 6</span>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
+          <label style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: 1px solid {{k.border}}; border-radius: 8px; background: {{k.surface}}; color: {{k.muted}}; flex: 1 1 200px; max-width: 260px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span style="position: absolute; left: -9999px">Search criteria</span><input type="text" placeholder="Search…" style="border: 0; outline: none; font: inherit; background: transparent; color: {{k.text}}; min-width: 0; flex: 1 1 auto"></label>
+          <button type="button" style="display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border: 1px solid {{k.border}}; border-radius: 8px; background: {{k.surface}}; color: {{k.text}}; font: inherit; font-size: 13px; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>Filter</button>
+          <button type="button" style="display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border: 1px solid {{k.border}}; border-radius: 8px; background: {{k.surface}}; color: {{k.text}}; font: inherit; font-size: 13px; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/></svg>Columns</button>
+          <button type="button" style="height: 34px; padding: 0 10px; border: 0; background: transparent; color: {{k.muted}}; font: inherit; font-size: 13px; cursor: pointer">Reset view</button>
+          <div style="flex-grow: 1"></div>
+          <span style="font-size: 12px; color: {{k.muted}}">6 of 6 rows</span>
+        </div>
+        <div style="overflow-x: auto; background: {{k.surface}}; border: 1px solid {{k.border}}; border-radius: 12px">
+          <table style="width: 100%; min-width: 640px; border-collapse: collapse; font-size: 13px">
+            <thead>
+              <tr style="background: {{k.sidebar}}; text-align: left">
+                <th scope="col" aria-sort="ascending" style="position: relative; padding: 10px 14px; font-weight: 500; color: {{k.text}}; border-bottom: 1px solid {{k.border}}"><button type="button" style="border: 0; background: transparent; padding: 0; font: inherit; color: inherit; cursor: pointer">Criterion ↑</button><span aria-hidden="true" style="position: absolute; right: 0; top: 8px; bottom: 8px; width: 2px; background: {{k.border}}"></span></th>
+                <th scope="col" style="position: relative; padding: 10px 14px; font-weight: 500; color: {{k.text2}}; border-bottom: 1px solid {{k.border}}"><button type="button" style="border: 0; background: transparent; padding: 0; font: inherit; color: inherit; cursor: pointer">Status</button><span aria-hidden="true" style="position: absolute; right: 0; top: 8px; bottom: 8px; width: 2px; background: {{k.border}}"></span></th>
+                <th scope="col" style="position: relative; padding: 10px 14px; font-weight: 500; color: {{k.text2}}; border-bottom: 1px solid {{k.border}}"><button type="button" style="border: 0; background: transparent; padding: 0; font: inherit; color: inherit; cursor: pointer">Evidence</button><span aria-hidden="true" style="position: absolute; right: 0; top: 8px; bottom: 8px; width: 2px; background: {{k.border}}"></span></th>
+                <th scope="col" style="position: relative; padding: 10px 14px; font-weight: 500; color: {{k.text2}}; border-bottom: 1px solid {{k.border}}"><button type="button" style="border: 0; background: transparent; padding: 0; font: inherit; color: inherit; cursor: pointer">Opened</button><span aria-hidden="true" style="position: absolute; right: 0; top: 8px; bottom: 8px; width: 2px; background: {{k.border}}"></span></th>
+                <th scope="col" style="padding: 10px 14px; border-bottom: 1px solid {{k.border}}"><span style="position: absolute; left: -9999px">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-for list="{{criteria}}" as="r" hint-placeholder-count="6">
+                <tr style="{{r.rowStyle}}">
+                  <td style="padding: 12px 14px">{{r.name}}</td>
+                  <td style="padding: 12px 14px; white-space: nowrap"><span style="{{r.statusStyle}}">✓ {{r.status}}</span></td>
+                  <td style="padding: 12px 14px; font-family: 'Geist Mono', monospace; color: {{k.text2}}">{{r.evidence}}<span style="font-family: Geist, sans-serif; color: {{k.muted}}">{{r.evidenceNote}}</span></td>
+                  <td style="padding: 12px 14px; white-space: nowrap"><span style="{{r.openedStyle}}">{{r.opened}}</span></td>
+                  <td style="padding: 12px 14px; text-align: right"><button type="button" style="{{r.btnStyle}}">Open evidence</button></td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section aria-labelledby="waive-h" style="background: {{k.surface}}; border: 1px solid {{k.border}}; border-radius: 12px; padding: 20px 24px; display: flex; flex-direction: column; gap: 12px">
+        <h2 id="waive-h" style="margin: 0; font-size: 18px; font-weight: 600">Waivers taken in Capture (1)</h2>
+        <div style="display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap">
+          <span style="font-family: 'Geist Mono', monospace; font-size: 12px; background: {{k.wvBg}}; color: {{k.wvFg}}; border-radius: 6px; padding: 1px 8px; flex: 0 0 auto">W-3</span>
+          <div style="flex: 1 1 400px; min-width: 0; display: flex; flex-direction: column; gap: 4px">
+            <div style="font-weight: 500">Electrical rule check: <span style="font-family: 'Geist Mono', monospace">VBAT</span> pin not driven on <span style="font-family: 'Geist Mono', monospace">U2</span>.</div>
+            <div style="font-size: 13px"><span style="color: {{k.muted}}">Reason:</span> driven by the battery through <span style="font-family: 'Geist Mono', monospace">J1</span>, which the check can't see.</div>
+            <div style="font-size: 13px"><span style="color: {{k.muted}}">Risk:</span> <span style="font-size: 12px; font-weight: 500; background: {{k.warnBg}}; color: {{k.warnFg}}; border-radius: 6px; padding: 0 8px">! Degraded</span></div>
+            <div style="font-size: 13px"><span style="color: {{k.muted}}">Caught:</span> bring-up step 3 (unpowered rail check).</div>
+          </div>
+        </div>
+        <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; padding-top: 10px; border-top: 1px solid {{k.divider}}"><input type="checkbox" checked="checked" style="width: 16px; height: 16px; accent-color: {{k.accent}}; margin: 0">Acknowledge: I've read this waiver and where it is caught.</label>
+      </section>
+
+      <section aria-label="Cost and time" style="display: flex; align-items: center; gap: 10px; font-size: 13px; color: {{k.text2}}; flex-wrap: wrap">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        <span><strong style="font-weight: 500; color: {{k.text}}">Next: Layout.</strong> Forecast 2 days of agent time, about US$11 of cloud use.</span>
+      </section>
+
+      <section style="display: flex; flex-direction: column; gap: 6px">
+        <label for="gate-notes" style="font-size: 13px; font-weight: 500">Notes <span style="font-weight: 400; color: {{k.muted}}">(optional)</span></label>
+        <textarea id="gate-notes" rows="3" placeholder="Anything you're uneasy about but won't block on. Saved with the gate record." style="font: inherit; font-size: 14px; color: {{k.text}}; background: {{k.surface}}; border: 1px solid {{k.border}}; border-radius: 8px; padding: 10px 12px; resize: vertical; box-sizing: border-box; width: 100%"></textarea>
+      </section>
+
+      <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-top: 16px; border-top: 1px solid {{k.border}}">
+        <button type="button" style="height: 36px; padding: 0 16px; border-radius: 8px; background: {{k.surface}}; border: 1px solid {{k.border}}; color: {{k.text}}; font: inherit; font-weight: 500; cursor: pointer">Return</button>
+        <div style="flex-grow: 1"></div>
+        <span style="font-size: 13px; color: {{k.muted}}">Open the evidence for 2 more criteria to sign</span>
+        <button type="button" aria-disabled="true" title="Open the evidence for 2 more criteria to sign" style="height: 36px; padding: 0 16px; border-radius: 8px; background: {{k.disabledBg}}; color: {{k.disabledFg}}; border: 0; font: inherit; font-weight: 500; cursor: not-allowed">Sign the schematic gate</button>
+      </div>
+
+      <section aria-label="Confirmation after pressing Sign" style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px">
+        <div style="font-size: 12px; color: {{k.muted}}; font-weight: 500">After pressing Sign:</div>
+        <div style="border: 1px dashed {{k.border}}; border-radius: 12px; padding: 24px; background: {{k.sidebar}}; display: flex; justify-content: center">
+          <div role="dialog" aria-modal="true" aria-labelledby="dlg-h" style="width: 100%; max-width: 440px; background: {{k.surface}}; border: 1px solid {{k.border}}; border-radius: 12px; padding: 20px 24px; display: flex; flex-direction: column; gap: 12px">
+            <h3 id="dlg-h" style="margin: 0; font-size: 16px; font-weight: 600">Sign the schematic gate?</h3>
+            <p style="margin: 0; color: {{k.text2}}">You are signing the schematic gate for Soil sensor Rev A. Layout work starts as soon as you sign.</p>
+            <div style="display: flex; gap: 8px; justify-content: flex-end">
+              <button type="button" style="height: 36px; padding: 0 16px; border-radius: 8px; background: {{k.surface}}; border: 1px solid {{k.border}}; color: {{k.text}}; font: inherit; font-weight: 500; cursor: pointer">Cancel</button>
+              <a href="Project.dc.html" style="display: inline-flex; align-items: center; height: 36px; padding: 0 16px; border-radius: 8px; background: {{k.accent}}; color: {{k.onAccent}}; font-weight: 500">Sign</a>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <aside aria-label="Evidence: Parts list check" style="flex: 1 1 360px; max-width: 420px; background: {{k.sheet}}; border-left: 1px solid {{k.border}}; box-shadow: 0 1px 2px rgba(0,0,0,0.04); box-sizing: border-box; display: flex; flex-direction: column">
+    <div style="padding: 16px 20px; border-bottom: 1px solid {{k.divider}}; display: flex; align-items: flex-start; gap: 12px">
+      <div style="flex: 1 1 auto; min-width: 0">
+        <div style="font-weight: 600">Parts list check · <span style="font-family: 'Geist Mono', monospace; font-weight: 500">run_77b0</span></div>
+        <div style="font-size: 12px; color: {{k.muted}}">Criterion: Every part in stock for 10 boards · checked 09:12 today</div>
+      </div>
+      <button type="button" aria-label="Close evidence" style="width: 32px; height: 32px; border: 0; border-radius: 8px; background: transparent; color: {{k.text2}}; cursor: pointer; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    </div>
+    <div style="padding: 16px 20px; display: flex; flex-direction: column; gap: 14px">
+      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
+        <span style="font-size: 12px; font-weight: 500; background: {{k.okBg}}; color: {{k.okFg}}; border-radius: 6px; padding: 1px 8px">Opened ✓</span>
+        <span style="font-size: 12px; font-weight: 500; background: {{k.okBg}}; color: {{k.okFg}}; border-radius: 6px; padding: 1px 8px">✓ Met</span>
+      </div>
+      <p style="margin: 0; font-size: 13px; color: {{k.text2}}">All 5 key parts are in stock at LCSC for a run of 10 boards. Stock was checked against the parts list (BOM) at push <span style="font-family: 'Geist Mono', monospace">7f3e21</span>.</p>
+      <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap">
+        <label style="display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px; border: 1px solid {{k.border}}; border-radius: 8px; color: {{k.muted}}; flex: 1 1 120px; max-width: 170px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span style="position: absolute; left: -9999px">Search parts</span><input type="text" placeholder="Search…" style="border: 0; outline: none; font: inherit; font-size: 12px; background: transparent; color: {{k.text}}; min-width: 0; flex: 1 1 auto"></label>
+        <button type="button" style="height: 30px; padding: 0 10px; border: 1px solid {{k.border}}; border-radius: 8px; background: transparent; color: {{k.text}}; font: inherit; font-size: 12px; cursor: pointer">Filter</button>
+        <button type="button" style="height: 30px; padding: 0 10px; border: 1px solid {{k.border}}; border-radius: 8px; background: transparent; color: {{k.text}}; font: inherit; font-size: 12px; cursor: pointer">Columns</button>
+        <button type="button" style="height: 30px; padding: 0 6px; border: 0; background: transparent; color: {{k.muted}}; font: inherit; font-size: 12px; cursor: pointer">Reset view</button>
+        <span style="font-size: 12px; color: {{k.muted}}; margin-left: auto">5 of 5 rows</span>
+      </div>
+      <div style="overflow-x: auto; border: 1px solid {{k.border}}; border-radius: 8px">
+        <table style="width: 100%; border-collapse: collapse; font-size: 12px">
+          <thead>
+            <tr style="background: {{k.sidebar}}; text-align: left">
+              <th scope="col" aria-sort="ascending" style="position: relative; padding: 8px 10px; font-weight: 500; color: {{k.text}}; border-bottom: 1px solid {{k.border}}">Ref ↑<span aria-hidden="true" style="position: absolute; right: 0; top: 6px; bottom: 6px; width: 2px; background: {{k.border}}"></span></th>
+              <th scope="col" style="position: relative; padding: 8px 10px; font-weight: 500; color: {{k.text2}}; border-bottom: 1px solid {{k.border}}">MPN<span aria-hidden="true" style="position: absolute; right: 0; top: 6px; bottom: 6px; width: 2px; background: {{k.border}}"></span></th>
+              <th scope="col" style="position: relative; padding: 8px 10px; font-weight: 500; color: {{k.text2}}; border-bottom: 1px solid {{k.border}}">LCSC<span aria-hidden="true" style="position: absolute; right: 0; top: 6px; bottom: 6px; width: 2px; background: {{k.border}}"></span></th>
+              <th scope="col" style="position: relative; padding: 8px 10px; font-weight: 500; color: {{k.text2}}; border-bottom: 1px solid {{k.border}}; text-align: right">In stock<span aria-hidden="true" style="position: absolute; right: 0; top: 6px; bottom: 6px; width: 2px; background: {{k.border}}"></span></th>
+              <th scope="col" style="padding: 8px 10px; font-weight: 500; color: {{k.text2}}; border-bottom: 1px solid {{k.border}}; text-align: right">Needed</th>
+            </tr>
+          </thead>
+          <tbody>
+            <sc-for list="{{parts}}" as="p" hint-placeholder-count="5">
+              <tr style="{{p.rowStyle}}">
+                <td style="padding: 8px 10px; font-family: 'Geist Mono', monospace">{{p.ref}}</td>
+                <td style="padding: 8px 10px; font-family: 'Geist Mono', monospace">{{p.mpn}}</td>
+                <td style="padding: 8px 10px; font-family: 'Geist Mono', monospace; color: {{k.text2}}">{{p.lcsc}}</td>
+                <td style="padding: 8px 10px; text-align: right; color: {{k.okFg}}; white-space: nowrap">✓ {{p.stock}}</td>
+                <td style="padding: 8px 10px; text-align: right">10</td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+      <div style="font-size: 12px; color: {{k.muted}}">Prices and stock from LCSC at 09:12 today. Stock can change before the order; trace re-checks at Release.</div>
+    </div>
+  </aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1100}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var k = {
+      page: '#0a0a0a', surface: '#171717', sheet: '#171717', sidebar: '#111111',
+      border: '#262626', divider: '#1f1f1f',
+      text: '#fafafa', text2: '#a3a3a3', muted: '#a3a3a3', mutedFill: '#262626',
+      accent: '#3b82f6', onAccent: '#ffffff', accentText: '#93c5fd', accentTint: '#172554', accentBorder: '#1e3a8a',
+      okFg: '#4ade80', okBg: '#052e16', warnFg: '#facc15', warnBg: '#422006',
+      badFg: '#f87171', badBg: '#450a0a', wvFg: '#a3a3a3', wvBg: '#262626',
+      disabledBg: '#1e3a8a', disabledFg: '#a3a3a3'
+    };
+    var badge = 'font-size:12px;font-weight:500;border-radius:6px;padding:1px 8px;';
+    var btn = 'height:30px;padding:0 12px;border-radius:8px;font:inherit;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;';
+    var rows = [
+      ['Electrical rule check clean or waived', 'Met (1 waived)', 'run_51c0', '', true],
+      ['No open datasheet conflicts', 'Met', 'run_4a11', '', true],
+      ['Every part in stock for 10 boards', 'Met', 'run_77b0', ' (checked 09:12 today)', true],
+      ['Firmware pin plan matches the schematic', 'Met', 'run_62de', '', false],
+      ['Every sheet names its requirements', 'Met', 'record', '', true],
+      ['Every change from the draft has a reason', 'Met', 'record', '', false]
+    ];
+    var criteria = rows.map(function (r, i) {
+      var sel = r[2] === 'run_77b0';
+      return {
+        name: r[0], status: r[1], evidence: r[2], evidenceNote: r[3],
+        rowStyle: (i ? 'border-top:1px solid ' + k.divider + ';' : '') + (sel ? 'background:' + k.mutedFill + ';' : ''),
+        statusStyle: badge + 'background:' + k.okBg + ';color:' + k.okFg + ';',
+        opened: r[4] ? 'Opened ✓' : 'Not yet',
+        openedStyle: r[4] ? badge + 'background:' + k.okBg + ';color:' + k.okFg + ';' : 'font-size:12px;color:' + k.muted + ';',
+        btnStyle: r[4]
+          ? btn + 'background:transparent;border:1px solid ' + k.border + ';color:' + k.text + ';'
+          : btn + 'background:' + k.accentTint + ';border:1px solid ' + k.accentBorder + ';color:' + k.accentText + ';'
+      };
+    });
+    var partRows = [
+      ['C2', 'CL10A225KP8NNNC', 'C23630', '1.2M'],
+      ['D1', 'SMAJ5.0A', 'C113950', '48k'],
+      ['J1', 'S2B-PH-K-S', 'C173752', '21k'],
+      ['U1', 'STM32WLE5JCI6', 'C2846493', '1,140'],
+      ['U2', 'TLV75533PDBVR', 'C2861882', '9,870']
+    ];
+    var parts = partRows.map(function (p, i) {
+      return { ref: p[0], mpn: p[1], lcsc: p[2], stock: p[3], rowStyle: i ? 'border-top:1px solid ' + k.divider + ';' : '' };
+    });
+    return { k: k, criteria: criteria, parts: parts };
+  }
+}
+</script>
+</body>
+</html>

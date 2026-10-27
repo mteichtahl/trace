@@ -255,7 +255,7 @@ export async function preflight(input: PreflightInput, d: PreflightDeps): Promis
     if (taken && !ours) add({ id: 'cognito.domain', status: 'fail', title: 'Sign-in domain', detail: `the Cognito domain ${domain} belongs to user pool ${taken.userPoolId}, not this installation's${stackNow ? '' : ' (a removed installation kept its user pool)'}.`, fix: stackNow ? 'Choose another prefix under Advanced (that domain is another user pool\'s).' : 'Delete that domain (the installer does, with DeleteUserPoolDomain: the pool and its users stay), or choose another prefix under Advanced.', ...(stackNow ? {} : { action: { id: 'delete-cognito-domain' as FixAction, label: `Delete the domain ${domain}`, params: { domain, userPoolId: taken.userPoolId } } }) })
   }
 
-  // how the CodeBuild runners will reach GitHub (every job runs on them: there is no GitHub-hosted fallback)
+  // how the CodeBuild runners will reach GitHub (every job runs on them once they exist; on GitHub's runners until then)
   const available = conns.ok ? conns.v.filter((c) => c.status === 'AVAILABLE') : []
   const reuse = available.find((c) => c.name === `${prefix}-github`) ?? available[0] ?? null
   facts.sourceCredential = credential.ok ? credential.v : null

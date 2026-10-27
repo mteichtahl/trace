@@ -24,9 +24,6 @@ function deps(over: Partial<ReleaseDeps> & { registriesSeq?: RegistryInfo[][] } 
     setVariable: async (repo, name, value) => { vars.set(`${repo}:${name}`, value); return 'created' },
     dispatch: async (repo, wf, ref) => { calls.push(`dispatch ${repo} ${wf} ${ref}`) },
     recordRegistry: async (repo, body) => { calls.push(`record ${repo} ${parseRegistry(body)}`); return 'created' },
-    runnerProject: async () => ({ privileged: true }),
-    resolveConnection: async () => ({ name: 'trace-ci-github', ready: false, message: 'none authorized' }),
-    sourceCredential: async (ours) => { calls.push(`credential ${ours}`); return { state: 'imported', detail: 'imported' } },
     log: () => undefined,
     sleep: async (ms) => { calls.push(`sleep ${ms}`) },
     ...over,
@@ -52,50 +49,38 @@ describe('the registry alias', () => {
 })
 
 describe('trace release setup', () => {
-  it('deploys TraceRelease in us-east-1, sets both variables, keeps a privileged runner, and starts the first release', async () => {
+  it('deploys TraceRelease in us-east-1, sets both variables, records the registry, and starts the first release', async () => {
     const d = deps({ bootstrapped: async () => false })
-    const r = await releaseSetup(d, { account: '123456789012', ciRegion: 'ap-southeast-2', publish: true })
+    const r = await releaseSetup(d, { account: '123456789012', publish: true })
     expect(d.calls[0]).toBe('cdk bootstrap aws://123456789012/us-east-1 --app node dist/infra/release.js @us-east-1')
     expect(d.calls[1]).toBe('cdk deploy TraceRelease --app node dist/infra/release.js --require-approval never -c repository=mteichtahl/trace -c createOidcProvider=false @us-east-1')
     expect(d.calls).toContain('catalog trace')
     expect(Object.fromEntries(d.vars)).toEqual({ 'mteichtahl/trace:TRACE_RELEASE_ROLE': ROLE, 'mteichtahl/trace:TRACE_IMAGE_REGISTRY': 'public.ecr.aws/a1b2c3d4' })
-    // trace-ci exists and is privileged: nothing deployed for it
-    expect(d.calls.filter((c) => c.includes('TraceCi'))).toEqual([])
+    // the release workflow's runner is the installation's (props.ts ciRepositories): nothing deployed for it here
+    expect(d.calls.filter((c) => c.startsWith('cdk') && !c.includes('TraceRelease') && !c.startsWith('cdk bootstrap'))).toEqual([])
     // the registry recorded where installations find it, before the first release starts
     expect(d.calls.slice(-2)).toEqual(['record mteichtahl/trace public.ecr.aws/a1b2c3d4', 'dispatch mteichtahl/trace release-images.yml main'])
     expect(r).toMatchObject({
-      registry: 'public.ecr.aws/a1b2c3d4', roleArn: ROLE, dispatched: true, credential: null,
+      registry: 'public.ecr.aws/a1b2c3d4', roleArn: ROLE, dispatched: true,
       images: ['public.ecr.aws/a1b2c3d4/trace-agent', 'public.ecr.aws/a1b2c3d4/trace-gpu'],
       gallery: ['https://gallery.ecr.aws/a1b2c3d4/trace-agent', 'https://gallery.ecr.aws/a1b2c3d4/trace-gpu'],
     })
   })
 
-  it('makes the OIDC provider when the account has none, and the runner, with the token when no connection is authorized', async () => {
-    const d = deps({ oidcProvider: async () => false, runnerProject: async () => null })
-    const r = await releaseSetup(d, { account: '123456789012', ciRegion: 'eu-west-1' })
-    expect(d.calls.find((c) => c.startsWith('cdk deploy TraceRelease'))).toContain('createOidcProvider=true')
-    expect(d.calls).toContain('credential false')
-    expect(d.calls.find((c) => c.startsWith('cdk deploy TraceCi'))).toBe('cdk deploy TraceCi --app node dist/infra/ci-app.js --require-approval never -c privileged=true -c repository=mteichtahl/trace -c auth=token @eu-west-1')
-    expect(r).toMatchObject({ credential: 'imported', dispatched: false })
+  it('makes the OIDC provider when the account has none, publishes for the repository given, and starts nothing unasked', async () => {
+    const d = deps({ oidcProvider: async () => false })
+    const r = await releaseSetup(d, { account: '123456789012', repository: 'me/fork' })
+    expect(d.calls.find((c) => c.startsWith('cdk deploy TraceRelease'))).toBe('cdk deploy TraceRelease --app node dist/infra/release.js --require-approval never -c repository=me/fork -c createOidcProvider=true @us-east-1')
+    expect(d.vars.get('me/fork:TRACE_IMAGE_REGISTRY')).toBe('public.ecr.aws/a1b2c3d4')
+    expect(d.calls).toContain('record me/fork public.ecr.aws/a1b2c3d4')
+    expect(r).toMatchObject({ dispatched: false })
     expect(d.calls.filter((c) => c.startsWith('dispatch'))).toEqual([])
   })
 
-  it('uses an authorized connection for the runner when there is one, and makes an unprivileged one privileged', async () => {
-    const CONN = 'arn:aws:codeconnections:eu-west-1:123456789012:connection/11111111-2222-3333-4444-555555555555'
-    const d = deps({
-      runnerProject: async () => ({ privileged: false }),
-      resolveConnection: async () => ({ pass: CONN, arn: CONN, name: 'trace-ci-github', ready: true, message: 'authorized' }),
-    })
-    await releaseSetup(d, { account: '123456789012', ciRegion: 'eu-west-1', repository: 'me/fork' })
-    expect(d.calls.find((c) => c.startsWith('cdk deploy TraceCi'))).toBe(`cdk deploy TraceCi --app node dist/infra/ci-app.js --require-approval never -c privileged=true -c repository=me/fork -c connectionReady=true -c connectionArn=${CONN} @eu-west-1`)
-    expect(d.calls.filter((c) => c.startsWith('credential'))).toEqual([])
-    expect(d.vars.get('me/fork:TRACE_IMAGE_REGISTRY')).toBe('public.ecr.aws/a1b2c3d4')
-  })
-
   it('stops, saying which step, when a deploy fails, and carries on when only the display name could not be set', async () => {
-    await expect(releaseSetup(deps({ cdk: async (a) => (a.includes('TraceRelease') ? 1 : 0) }), { account: '1', ciRegion: 'us-east-1' })).rejects.toThrow(/cdk deploy TraceRelease exited 1/)
-    await expect(releaseSetup(deps({ outputs: async () => null }), { account: '1', ciRegion: 'us-east-1' })).rejects.toThrow(/no output ReleaseRoleArn/)
-    const r = await releaseSetup(deps({ catalog: async () => { throw new Error('denied') } }), { account: '1', ciRegion: 'us-east-1' })
+    await expect(releaseSetup(deps({ cdk: async (a) => (a.includes('TraceRelease') ? 1 : 0) }), { account: '1' })).rejects.toThrow(/cdk deploy TraceRelease exited 1/)
+    await expect(releaseSetup(deps({ outputs: async () => null }), { account: '1' })).rejects.toThrow(/no output ReleaseRoleArn/)
+    const r = await releaseSetup(deps({ catalog: async () => { throw new Error('denied') } }), { account: '1' })
     expect(r.registry).toBe('public.ecr.aws/a1b2c3d4')
   })
 })

@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>trace · Phone Ask</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2563eb;text-decoration:none}a:hover{color:#1d4ed8}
+</style>
+</helmet>
+<div style="font-family: Geist, system-ui, sans-serif; color: #0a0a0a; background: #ffffff; width: 390px; height: 844px; overflow: hidden; display: flex; flex-direction: column; font-size: 14px; line-height: 1.5; box-sizing: border-box">
+
+  <header style="height: 56px; flex: 0 0 56px; border-bottom: 1px solid #e5e5e5; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 8px; box-sizing: border-box">
+    <a href="PhoneHome.dc.html" aria-label="Back" style="width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #0a0a0a"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></a>
+    <span style="flex: 1 1 auto; min-width: 0; font-weight: 600; font-size: 15px">Ask trace</span>
+    <span style="display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 6px; font-size: 12px; color: #404040">Olivia · 1×</span>
+    <button type="button" aria-label="Read replies aloud" aria-pressed="true" style="width: 36px; height: 36px; border: 1px solid #2563eb; border-radius: 8px; background: #eff4ff; color: #2563eb; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg></button>
+  </header>
+
+  <div style="flex: 0 0 auto; display: flex; gap: 6px; padding: 10px 16px; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap">
+    <span style="display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 4px 0 10px; border-radius: 6px; background: #f5f5f5; font-size: 12px; color: #404040">Motor driver<button type="button" aria-label="Remove Motor driver from context" style="width: 20px; height: 20px; border: 0; background: transparent; cursor: pointer; color: #737373; font: inherit; padding: 0">×</button></span>
+    <span style="display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 4px 0 10px; border-radius: 6px; background: #f5f5f5; font-size: 12px; color: #404040">Architect<button type="button" aria-label="Remove Architect from context" style="width: 20px; height: 20px; border: 0; background: transparent; cursor: pointer; color: #737373; font: inherit; padding: 0">×</button></span>
+  </div>
+
+  <main style="flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px">
+
+    <section aria-label="Question from the Analog specialist" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #737373">
+        <span style="width: 8px; height: 8px; border-radius: 4px; background: #2563eb" aria-hidden="true"></span>Analog specialist · asks you · 40 min ago
+      </div>
+      <p style="margin: 0; font-size: 15px; font-weight: 500">To size the current-sense resistor I need the motor's stall current.</p>
+
+      <div style="border: 1px solid #2563eb; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; background: #fff">
+        <span style="align-self: flex-start; font-size: 12px; font-weight: 600; color: #2563eb; background: #eff4ff; border-radius: 6px; padding: 1px 8px">trace recommends</span>
+        <div style="font-weight: 500">4.2 A — from the motor datasheet, page 3 (stall current at 12 V)</div>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap">
+          <span style="font-size: 12px; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1px 8px; color: #404040">Motor datasheet p.3</span>
+        </div>
+        <div style="font-size: 13px; color: #525252"><span style="color: #737373; font-weight: 500">What it gives up:</span> above 12 V the stall current rises and the resistor would need resizing.</div>
+      </div>
+      <div style="border: 1px solid #e5e5e5; border-radius: 8px; padding: 10px 12px; font-size: 13px; color: #525252">Option 2 · Enter another value</div>
+
+      <div style="display: flex; gap: 8px">
+        <button type="button" style="flex: 1 1 auto; height: 40px; padding: 0 16px; border-radius: 8px; background: #2563eb; color: #fff; border: 0; font: inherit; font-weight: 500; cursor: pointer">Use 4.2 A</button>
+        <button type="button" style="flex: 1 1 auto; height: 40px; padding: 0 14px; border-radius: 8px; border: 1px solid #e5e5e5; background: #fff; color: #0a0a0a; font: inherit; font-weight: 500; cursor: pointer">Other answer</button>
+      </div>
+    </section>
+
+    <div style="align-self: flex-end; max-width: 80%; background: #f5f5f5; border-radius: 12px; padding: 8px 12px">What resistor does that give?</div>
+
+    <article aria-label="trace reply" style="display: flex; gap: 10px; align-items: flex-start">
+      <div style="flex: 0 0 24px; width: 24px; height: 24px; border-radius: 6px; background: #0a0a0a; color: #fff; display: flex; align-items: center; justify-content: center; font-family: 'Geist Mono', monospace; font-size: 12px; font-weight: 600">t</div>
+      <div style="flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px">
+        <p style="margin: 0"><strong style="font-weight: 600">A 10 mΩ sense resistor keeps the signal inside the amplifier's range at 4.2 A.</strong> It drops 42 mV at stall and burns about 0.18 W.</p>
+        <table style="border-collapse: collapse; font-size: 13px; border: 1px solid #e5e5e5; border-radius: 8px">
+          <thead><tr style="background: #fafafa"><th scope="col" style="text-align: left; padding: 6px 10px; font-weight: 500; color: #525252; border-bottom: 1px solid #e5e5e5">Current</th><th scope="col" style="text-align: left; padding: 6px 10px; font-weight: 500; color: #525252; border-bottom: 1px solid #e5e5e5">Voltage</th><th scope="col" style="text-align: left; padding: 6px 10px; font-weight: 500; color: #525252; border-bottom: 1px solid #e5e5e5">Power</th></tr></thead>
+          <tbody>
+            <tr><td style="padding: 6px 10px">Running, 1.1 A</td><td style="padding: 6px 10px">11 mV</td><td style="padding: 6px 10px">0.01 W</td></tr>
+            <tr style="border-top: 1px solid #f0f0f0"><td style="padding: 6px 10px">Stall, 4.2 A</td><td style="padding: 6px 10px">42 mV</td><td style="padding: 6px 10px">0.18 W</td></tr>
+          </tbody>
+        </table>
+        <p style="margin: 0; font-size: 13px; color: #404040">I'd place it as <code style="font-family: 'Geist Mono', monospace; font-size: 12px; background: #f5f5f5; border-radius: 4px; padding: 1px 4px">R_SENSE = 0.010 Ω, 1 W, 1%</code> in a 2512 package.</p>
+        <button type="button" aria-label="Play this reply" style="align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid #e5e5e5; border-radius: 6px; background: #fff; font: inherit; font-size: 12px; color: #525252; cursor: pointer"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg>Play</button>
+      </div>
+    </article>
+  </main>
+
+  <div style="flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-top: 1px solid #e5e5e5; background: #fafafa">
+    <div role="img" aria-label="Speaking" style="display: flex; align-items: flex-end; gap: 2px; height: 14px">
+      <span style="width: 3px; height: 6px; background: #2563eb; border-radius: 1px"></span>
+      <span style="width: 3px; height: 12px; background: #2563eb; border-radius: 1px"></span>
+      <span style="width: 3px; height: 9px; background: #2563eb; border-radius: 1px"></span>
+      <span style="width: 3px; height: 14px; background: #2563eb; border-radius: 1px"></span>
+    </div>
+    <span style="flex: 1 1 auto; font-size: 13px; font-weight: 500">Speaking · Olivia</span>
+    <button type="button" style="height: 30px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 13px; cursor: pointer; color: #0a0a0a">Pause</button>
+    <button type="button" style="height: 30px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 13px; cursor: pointer; color: #0a0a0a">Stop</button>
+  </div>
+
+  <sc-if value="{{historyOpen}}" hint-placeholder-val="{{ false }}">
+    <div role="listbox" aria-label="Earlier messages" style="flex: 0 0 auto; border-top: 1px solid #e5e5e5; background: #fff; padding: 8px; display: flex; flex-direction: column; gap: 2px">
+      <div style="font-size: 12px; color: #737373; font-weight: 500; padding: 4px 8px">Earlier messages</div>
+      <sc-for list="{{history}}" as="h" hint-placeholder-count="3">
+        <button type="button" role="option" onClick="{{h.pick}}" style="text-align: left; padding: 8px; border: 0; border-radius: 8px; background: transparent; font: inherit; color: #0a0a0a; cursor: pointer">{{h.text}}</button>
+      </sc-for>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{listening}}" hint-placeholder-val="{{ false }}">
+    <div style="flex: 0 0 auto; padding: 8px 16px 0; display: flex; justify-content: center">
+      <span role="status" style="display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px; border-radius: 15px; background: #eff4ff; color: #2563eb; font-size: 13px; font-weight: 500">
+        <span aria-hidden="true" style="display: flex; align-items: flex-end; gap: 2px; height: 14px"><span style="width: 3px; height: 5px; background: #2563eb; border-radius: 1px"></span><span style="width: 3px; height: 11px; background: #2563eb; border-radius: 1px"></span><span style="width: 3px; height: 14px; background: #2563eb; border-radius: 1px"></span><span style="width: 3px; height: 8px; background: #2563eb; border-radius: 1px"></span><span style="width: 3px; height: 4px; background: #93b4f5; border-radius: 1px"></span></span>
+        Listening… 'use four point two'
+      </span>
+    </div>
+  </sc-if>
+
+  <div style="flex: 0 0 auto; padding: 10px 12px 12px; display: flex; align-items: flex-end; gap: 6px; background: #fff">
+    <button type="button" aria-label="Earlier messages" aria-expanded="{{historyOpen}}" onClick="{{toggleHistory}}" style="{{historyStyle}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></button>
+    <label for="ask-input" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message trace</label>
+    <textarea id="ask-input" rows="1" placeholder="Ask or answer…" value="{{draft}}" onChange="{{onInput}}" style="flex: 1 1 auto; min-width: 0; min-height: 40px; max-height: 96px; padding: 9px 12px; border: 1px solid #e5e5e5; border-radius: 8px; font: inherit; resize: none; box-sizing: border-box; color: #0a0a0a"></textarea>
+    <button type="button" aria-label="Dictate" aria-pressed="{{listening}}" onClick="{{toggleMic}}" style="{{micStyle}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+    <button type="button" aria-label="Send" style="flex: 0 0 40px; width: 40px; height: 40px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+  </div>
+
+  <nav aria-label="Main" style="height: 64px; flex: 0 0 64px; border-top: 1px solid #e5e5e5; background: #ffffff; display: flex; box-sizing: border-box">
+    <a href="PhoneHome.dc.html" style="flex: 1 1 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 12px; color: #525252"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/></svg>Home</a>
+    <a href="Project.dc.html" style="flex: 1 1 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 12px; color: #525252"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Projects</a>
+    <a href="PhoneAsk.dc.html" aria-current="page" style="flex: 1 1 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 12px; color: #2563eb; font-weight: 500"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>Ask</a>
+    <a href="PhoneHome.dc.html" aria-label="Inbox, 2 new" style="flex: 1 1 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 12px; color: #525252; position: relative"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 13h5l2 3h4l2-3h5"/><path d="M5 5h14l2 8v6H3v-6z"/></svg><span style="position: absolute; top: 9px; left: 54%; min-width: 16px; height: 16px; border-radius: 8px; background: #2563eb; color: #fff; font-size: 10px; font-weight: 600; display: flex; align-items: center; justify-content: center">2</span>Inbox</a>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { historyOpen: false, listening: false, draft: '' };
+  }
+  renderVals() {
+    var self = this;
+    var sent = ['Why 4.2 A and not 3.8 A?', 'Show me the sense resistor sizing', 'What does the Thermal specialist think?'];
+    var btn = 'flex:0 0 40px;width:40px;height:40px;border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;';
+    var off = btn + 'border:1px solid #e5e5e5;background:#fff;color:#525252;';
+    var on = btn + 'border:1px solid #2563eb;background:#eff4ff;color:#2563eb;';
+    return {
+      historyOpen: this.state.historyOpen,
+      listening: this.state.listening,
+      draft: this.state.draft,
+      historyStyle: this.state.historyOpen ? on : off,
+      micStyle: this.state.listening ? on : off,
+      toggleHistory: function () { self.setState({ historyOpen: !self.state.historyOpen }); },
+      toggleMic: function () { self.setState({ listening: !self.state.listening }); },
+      onInput: function (e) { self.setState({ draft: e.target.value }); },
+      history: sent.map(function (t) {
+        return { text: t, pick: function () { self.setState({ draft: t, historyOpen: false }); } };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>

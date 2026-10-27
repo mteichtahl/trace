@@ -28,6 +28,8 @@ interface TokenInfo {
 }
 interface Preflight {
   checks: Check[]; ok: boolean; token: TokenInfo | null; repos: RepoAccess[]; region: string; profileRegion: string
+  /** trace's own repository, and whether the token can set its variables (null: the installer could not tell which) */
+  self: { repo: string; ok: boolean; reason: string } | null
   facts: {
     account?: string; arn?: string; login?: string; email?: string | null; models?: { id: string; name: string }[]
     gpuQuota?: number | null; cpuQuota?: number | null; s3vectors?: boolean | null; sourceAdmin?: boolean | null; publishedRegistry?: string | null; oidcProvider?: boolean; cdkBootstrapped?: boolean
@@ -94,6 +96,8 @@ const s = {
   runners: {
     auth: 'auto' as (typeof RUNNER_AUTH)[number], token: 'agent' as 'agent' | 'admin', connectionArn: '',
     computeType: '' as '' | (typeof RUNNER_COMPUTE_TYPES)[number], privileged: 'default' as 'default' | 'on' | 'off',
+    /** build trace's own repository on AWS too; null: not chosen (on when the token can configure it) */
+    buildTrace: null as boolean | null,
   },
   adminEmail: '',
   people: [] as Person[],
@@ -170,6 +174,7 @@ function answers(): AnswersInput {
       auth: s.runners.auth, token: s.runners.token,
       connectionArn: s.runners.auth === 'token' ? '' : s.runners.connectionArn, computeType: s.runners.computeType || null,
       privileged: s.runners.privileged === 'default' ? null : s.runners.privileged === 'on',
+      buildTrace: buildTrace(), traceRepository: buildTrace() ? selfRepo()?.repo ?? '' : '',
     },
     projects: [...s.projects].map(([repo, { memoryDays, ...p }]) => ({ repo, ...p, memoryEventExpiryDays: memoryDays.trim() === '' ? null : Number(memoryDays) })),
     adminEmail: s.adminEmail || s.pre?.facts.email || '',
@@ -180,6 +185,15 @@ function answers(): AnswersInput {
     escalateTo: g.escalateTo,
   }
 }
+
+/** trace's own repository as the GitHub check found it, when the token can configure it and it is not a project. */
+function selfRepo(): { repo: string; ok: boolean; reason: string } | null {
+  const own = s.pre?.self ?? null
+  if (!own || !own.ok || s.projects.has(own.repo)) return null
+  return own
+}
+/** Whether trace's own repository is built on AWS too: the person's choice, else on when it can be. */
+const buildTrace = (): boolean => (selfRepo() ? s.runners.buildTrace ?? true : false)
 
 const secrets = (): Record<string, unknown> => ({
   githubToken: s.github.token, githubAdminToken: s.github.adminToken,
@@ -479,7 +493,8 @@ function buildRunners(): (HTMLElement | null)[] {
   const found = s.pre?.facts.runnerConnection
   return [
     h('h3', {}, 'Build runners'),
-    h('p', { class: 'muted' }, 'Every GitHub Actions job of the repositories runs on AWS CodeBuild in this account, each repository on its own runner project; none runs on GitHub\'s runners.'),
+    h('p', { class: 'muted' }, 'Every GitHub Actions job of the repositories runs on AWS CodeBuild in this account, each repository on its own runner project, once that exists; until then its jobs run on GitHub\'s runners, and move to AWS by themselves.'),
+    ownRepository(),
     field('How CodeBuild reaches GitHub', select([
       { value: 'auto', label: `Automatic: an authorized GitHub connection when there is one${found ? ` (${found})` : ''}, else the GitHub token` },
       { value: 'token', label: 'The GitHub token (no console step; the token is stored with CodeBuild)' },
@@ -495,6 +510,15 @@ function buildRunners(): (HTMLElement | null)[] {
       field('Docker in jobs', select([{ value: 'default', label: 'Default (off)' }, { value: 'on', label: 'On (privileged, for jobs that build containers)' }, { value: 'off', label: 'Off' }], r.privileged,
         (v) => { r.privileged = v === 'on' || v === 'off' ? v : 'default' }))),
   ]
+}
+
+/** The "build trace's own repository on AWS too" checkbox, or why there is none. */
+function ownRepository(): HTMLElement | null {
+  const own = s.pre?.self ?? null
+  if (!own) return null
+  if (s.projects.has(own.repo)) return h('p', { class: 'muted' }, `trace's own repository (${own.repo}) is one of the projects, so it gets its build runner with them.`)
+  if (!own.ok) return h('p', { class: 'muted' }, `trace's own repository (${own.repo}) stays on GitHub's runners: the token can't set its variables.`)
+  return checkbox(`Build trace's own repository on AWS too (${own.repo}): a build runner for it alone, no agents`, buildTrace(), (v) => { s.runners.buildTrace = v; render() })
 }
 
 async function runPreflight(): Promise<void> {
@@ -694,6 +718,7 @@ async function boot(): Promise<void> {
         s.runners.connectionArn = sr.connectionArn ?? ''
         s.runners.computeType = sr.computeType ?? ''
         s.runners.privileged = sr.privileged === true ? 'on' : sr.privileged === false ? 'off' : 'default'
+        s.runners.buildTrace = sr.buildTrace ?? null
       }
       for (const p of saved.projects ?? []) {
         s.projects.set(p.repo, {

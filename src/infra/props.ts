@@ -14,6 +14,10 @@ export {
 /** OWNER/REPO, optionally @BRANCH (its default branch; main when omitted). */
 const repoSlug = z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+(@[A-Za-z0-9._\/-]+)?$/, 'expected OWNER/REPO or OWNER/REPO@BRANCH')
 
+/** The most build-only repositories (`ciRepositories`) one installation takes: each is three resources and one output
+ * of the parent stack. */
+export const CI_REPOSITORIES_MAX = 10
+
 /** AgentCore Memory's EventExpiryDuration bounds (days). */
 const EventExpiryDays = z.number().int().min(3).max(365)
 
@@ -108,6 +112,23 @@ export const InfraPropsSchema = z.object({
       seen.set(h, slug)
     }
   }),
+  /** Build-only repositories (OWNER/REPO, such as trace's own): each gets a CodeBuild runner project and nothing else (no
+   * worker, roles, secret, memory or job definitions), so its GitHub Actions jobs run on AWS like the projects'. In the
+   * parent stack (three resources and one output each, ciRunnerOutput), made with the same GitHub connection and only
+   * once it is authorized (runners.connectionReady). None may also be in `repositories` (a project has its runner
+   * already); at most CI_REPOSITORIES_MAX. */
+  ciRepositories: z.array(z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')).max(CI_REPOSITORIES_MAX).default([]).superRefine((rs, ctx) => {
+    const seen = new Map<string, string>()
+    for (const r of rs) {
+      let slug: string
+      try { slug = projectSlug(r) } catch (e) { ctx.addIssue({ code: 'custom', message: e instanceof Error ? e.message : String(e) }); continue }
+      const h = projectHash(slug)
+      const other = seen.get(h)
+      if (other === slug) ctx.addIssue({ code: 'custom', message: `${slug} is listed twice` })
+      else if (other) ctx.addIssue({ code: 'custom', message: `${slug} and ${other} have the same short hash ${h}: rename one` })
+      seen.set(h, slug)
+    }
+  }),
   /** Create the account's GitHub OIDC provider (there can be only one per account), or use the existing one. */
   createOidcProvider: z.boolean().default(true),
   /** The Bedrock model or inference profile the agents use, e.g. us.anthropic.claude-sonnet-4-6. */
@@ -195,10 +216,11 @@ export const InfraPropsSchema = z.object({
      * PUBLISHED_REGISTRY */
     registry: z.string().regex(/^([a-z0-9.-]+(:\d+)?(\/[a-z0-9._-]+)*)?$/, 'a registry such as public.ecr.aws/<alias>, or empty').default(PUBLISHED_REGISTRY),
   }).strict().prefault({}),
-  /** Where every GitHub Actions job of every project runs: an AWS CodeBuild runner project per repository
-   * (src/infra/runner.ts), never a GitHub-hosted runner. CodeBuild reaches GitHub through an AWS CodeConnections
-   * connection (the AWS Connector for GitHub app), or through the GitHub token the installer imported as CodeBuild's
-   * GitHub source credential (auth 'token'; README "Where builds run"). */
+  /** Where every GitHub Actions job of every project (and of each `ciRepositories` entry) runs: an AWS CodeBuild runner
+   * project per repository (src/infra/runner.ts); until it exists, the workflows fall back to GitHub's ubuntu-24.04
+   * runner. CodeBuild reaches GitHub through an AWS CodeConnections connection (the AWS Connector for GitHub app), or
+   * through the GitHub token the installer imported as CodeBuild's GitHub source credential (auth 'token'; README
+   * "Where builds run"). */
   runners: z.object({
     /** How CodeBuild reaches GitHub for the runners' webhooks, runner registration and source:
      *   'connection'  an AWS CodeConnections connection (connectionArn, or `<prefix>-github` the stack creates): no token
@@ -222,6 +244,9 @@ export const InfraPropsSchema = z.object({
     image: z.string().min(3).default('aws/codebuild/standard:7.0'),
     /** Docker-in-Docker for jobs that build containers */
     privileged: z.boolean().default(false),
+    /** Docker-in-Docker for the build-only repositories' runners (`ciRepositories`) alone: trace's own builds its images
+     * there when this installation publishes them (src/installer/release.ts) */
+    ciPrivileged: z.boolean().default(false),
   }).strict().prefault({}),
   /** AgentCore observability: OpenTelemetry (ADOT) traces and metrics to CloudWatch (src/infra/observability.ts). */
   observability: z.object({
@@ -241,6 +266,15 @@ export const InfraPropsSchema = z.object({
   if (p.gateway.enabled && !/^([0-9a-zA-Z][-]?){1,48}$/.test(`${p.prefix}-library`)) ctx.addIssue({ code: 'custom', path: ['prefix'], message: 'with the library gateway, the prefix can\'t end with a dash or have two in a row' })
   if (p.cpu.vcpus > p.cpu.maxVcpus) ctx.addIssue({ code: 'custom', path: ['cpu', 'vcpus'], message: `a CPU job asks for ${p.cpu.vcpus} vCPUs, more than cpu.maxVcpus (${p.cpu.maxVcpus})` })
   const listed = new Set(p.repositories.map((r) => (r.split('@')[0] ?? '').toLowerCase()))
+  // a build-only repository is never a project too (a project has its own runner), nor shares a project's hash (the
+  // runner project's name is `<prefix>-ci-<hash>`)
+  const hashes = new Map(p.repositories.map((r) => { const slug = (r.split('@')[0] ?? '').toLowerCase(); return [projectHash(slug), slug] as const }))
+  p.ciRepositories.forEach((r, i) => {
+    const slug = r.toLowerCase()
+    if (!/^[a-z0-9][a-z0-9-]{0,38}\/[a-z0-9_.][a-z0-9._-]{0,99}$/.test(slug) || slug.includes('..')) return // refused above
+    if (listed.has(slug)) ctx.addIssue({ code: 'custom', path: ['ciRepositories', i], message: `${r} is one of the repositories already (a project has its own build runner): list it once` })
+    else if (hashes.has(projectHash(slug))) ctx.addIssue({ code: 'custom', path: ['ciRepositories', i], message: `${r} and ${hashes.get(projectHash(slug))} have the same short hash ${projectHash(slug)}: rename one` })
+  })
   const seen = new Set<string>()
   for (const k of Object.keys(p.projectSettings)) {
     const slug = k.toLowerCase()
@@ -326,6 +360,10 @@ export const projectOutputs = (repository: string): { runtimeArn: string; roleAr
   }
 }
 
+/** A build-only repository's output (the parent's, in either layout): its CodeBuild runner project's name, which the
+ * installer sets as that repository's TRACE_CODEBUILD_PROJECT. Absent while the runners wait for the connection. */
+export const ciRunnerOutput = (repository: string): string => `CiRunner${projectHash(repository)}Project`
+
 /** A project's knowledge base outputs: its nested stack's only (knowledge bases exist only in the nested layout), never
  * the parent's. The installer sets them as the repository variables TRACE_KB_ID and TRACE_KB_DATA_SOURCE_ID. */
 export const kbOutputs = (repository: string): { knowledgeBaseId: string; dataSourceId: string } => {
@@ -346,7 +384,7 @@ export const LIBRARY_GATEWAY_OUTPUT = 'LibraryGatewayUrl'
 export const LIBRARY_KEYS_OUTPUT = 'LibraryKeysSecretArn'
 
 /** The ARN of the GitHub connection the runners use (runners.connectionArn, or the one the stack created): the
- * installer and `npm run deploy:ci` read it after the first deploy to show the person what to authorize. */
+ * installer reads it after the first deploy to show the person what to authorize. */
 export const CONNECTION_OUTPUT = 'GithubConnectionArn'
 /** 'true' when the stack created that connection itself (no runners.connectionArn): the tools then keep using it,
  * without passing its ARN, so the stack keeps managing it. */

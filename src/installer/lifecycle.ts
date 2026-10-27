@@ -251,19 +251,20 @@ export async function cmdRelease(argv: string[]): Promise<number> {
     const c = o.profile ? await credentials({ mode: 'profile', profile: o.profile }, { awsAccessKeyId: '', awsSecretAccessKey: '', awsSessionToken: '' })
       : a ? await creds(a)
         : await (await import('@aws-sdk/credential-providers')).fromNodeProviderChain()()
-    const ciRegion = o.region ?? a?.aws.region ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? 'us-east-1'
+    const region = o.region ?? a?.aws.region ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? 'us-east-1'
     let token = process.env.TRACE_GITHUB_TOKEN || process.env.GITHUB_TOKEN || ''
     if (!token && a) token = (await storedTokens(a, (await secretsManagerApi({ region: a.aws.region, credentials: c })).get)).githubToken
     if (!token) throw new Error('no GitHub token: set TRACE_GITHUB_TOKEN (Variables: read and write on the source repository, and Actions to start the first release)')
     const { STSClient, GetCallerIdentityCommand } = await import('@aws-sdk/client-sts')
-    const account = (await new STSClient({ region: ciRegion, credentials: c }).send(new GetCallerIdentityCommand({}))).Account ?? ''
+    const account = (await new STSClient({ region, credentials: c }).send(new GetCallerIdentityCommand({}))).Account ?? ''
     const { liveReleaseDeps, releaseSetup } = await import('./release.js')
     const { createRequire } = await import('node:module')
     const cdkBin = createRequire(import.meta.url).resolve('aws-cdk/bin/cdk')
     const cdk = (args: string[], env: Record<string, string>): Promise<number> => Promise.resolve(spawnSync(process.execPath, [cdkBin, ...args], { cwd: REPO_ROOT, stdio: 'inherit', env: { ...process.env, ...env } }).status ?? 1)
-    const r = await releaseSetup(await liveReleaseDeps(c, ciRegion, token, { cdk, log: out }), {
-      account, ciRegion, ...(o.repo ? { repository: o.repo } : {}), publish: Boolean(o.publish),
-      credentialOurs: savedAnswers().runnerCredential === 'imported',
+    // the release workflow runs on the repository's own AWS runner when the installation made it (`trace install`, with
+    // publishing on, makes it Docker-capable), else on GitHub's runners
+    const r = await releaseSetup(await liveReleaseDeps(c, token, { cdk, log: out }), {
+      account, ...((o.repo || a?.runners.traceRepository) ? { repository: o.repo || a?.runners.traceRepository || "" } : {}), publish: Boolean(o.publish),
     })
     out(`registry ${r.registry}; images ${r.images.join(', ')}`)
     return 0

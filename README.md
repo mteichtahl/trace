@@ -28,10 +28,10 @@ Contents, Pull requests, Issues, Workflows, Actions, Secrets, Variables, Adminis
 the account permission "Email addresses: read"; or a classic token with `repo`, `workflow` and `user:email`. What each
 permission is for, and what happens without it, is in [Tokens and permissions](#tokens-and-permissions).
 
-Builds need nothing more. Every GitHub Actions job runs on an AWS CodeBuild runner in your account, and CodeBuild
-reaches GitHub through an AWS CodeConnections connection already authorized in the account and region when there is
-one, else through that same token (see [Where builds run](#where-builds-run)), so the first deploy has the runners and
-no console step is needed.
+Builds need nothing more. Every GitHub Actions job runs on an AWS CodeBuild runner in your account, trace's own
+repository's included, and on GitHub's runners only until that runner exists. CodeBuild reaches GitHub through an AWS
+CodeConnections connection already authorized in the account and region when there is one, else through that same
+token (see [Where builds run](#where-builds-run)), so the first deploy has the runners and no console step is needed.
 
 The installer is a page served from your own machine (127.0.0.1, with a one-time key in its address). It has four
 steps, and only the first asks for anything:
@@ -243,16 +243,15 @@ It (`src/installer/release.ts`):
    the console, and trace does not use one. The gallery display name is set with `PutRegistryCatalogData`;
 3. sets the source repository's variables `TRACE_RELEASE_ROLE` and `TRACE_IMAGE_REGISTRY` with the GitHub token you
    gave (REST);
-4. makes sure trace's CodeBuild runner `trace-ci` exists and is privileged (the workflow builds images): TraceCi,
-   through a GitHub connection when one is authorized already, else with the token as CodeBuild's GitHub source
-   credential;
-5. records the registry in the source repository's `trace-images` release (a pre-release, never "latest"), where every
+4. records the registry in the source repository's `trace-images` release (a pre-release, never "latest"), where every
    installer finds it;
-6. starts the first release (`workflow_dispatch`; the CLI with `--publish`) and prints where the images appear
+5. starts the first release (`workflow_dispatch`; the CLI with `--publish`) and prints where the images appear
    (`public.ecr.aws/<alias>/trace-agent`, `https://gallery.ecr.aws/<alias>/trace-agent`, and the same for `trace-gpu`).
 
 From then on every merge to `main` and every `v*` tag publishes (`.github/workflows/release-images.yml`, which does
-nothing until both variables are set). It runs on `trace-ci`, builds both images with BuildKit, caches in the registry
+nothing until both variables are set). It runs on the source repository's own AWS build runner, which the
+installation makes (with Docker, when it publishes; see [Where builds run](#where-builds-run)), and on GitHub's
+`ubuntu-24.04` runner until that exists. It builds both images with BuildKit, caches in the registry
 itself (`:cache`, mode=max), attaches an OCI provenance attestation, tags the content tag plus `latest` on main and
 `vX.Y.Z` on a tag, and records each pushed digest in the job summary. Installations look there from then on by
 themselves: each install reads the `trace-images` release, and copies its version's images when they are published.
@@ -450,17 +449,27 @@ are the exception: they may mark those with read access alone (see [Inactive mem
 
 ## Where builds run
 
-Every build, test and automation job runs on AWS, in the installation's own account. GitHub-hosted runners are
-never used, by trace's own repository or by any repository it manages.
+Every build, test and automation job runs on AWS, in the installation's own account, once the installer has set it
+up. Until then the same jobs run on GitHub's own runners (`ubuntu-24.04`), so nothing waits. The installer handles
+all of it, including trace's own repository; there is nothing to deploy by hand.
 
-The workflows stay in GitHub Actions, so pull requests show their checks as usual, but each job runs on an
+The workflows stay in GitHub Actions, so pull requests show their checks as usual. On AWS, each job runs on an
 [AWS CodeBuild-hosted runner](https://docs.aws.amazon.com/codebuild/latest/userguide/action-runner.html): GitHub
 queues the job, CodeBuild receives the queued event, starts a fresh build container in your account, and that
 container runs the job and is discarded.
 
-- **One runner project per repository**, `<prefix>-ci-<hash>`, made by the stack. Its workflows name it through the
-  repository variable `TRACE_CODEBUILD_PROJECT`, which the installer sets:
-  `runs-on: [codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}, <job>]`.
+- **One runner per repository**, `<prefix>-ci-<hash>`, made by the stack: one for each project, and one for trace's
+  own repository.
+- **The switch is one repository variable.** Every job's `runs-on` reads `TRACE_CODEBUILD_PROJECT`: when it is set,
+  the job runs on that CodeBuild runner; when it is not, on `ubuntu-24.04`. The installer sets it only once the
+  repository's runner exists, and removes it where the runner does not exist, so a job never waits for a runner that
+  isn't there. When the runner arrives, the jobs move to AWS by themselves; no workflow changes.
+- **trace's own repository too.** The installer works out which GitHub repository your trace was installed from (the
+  `repository` field of its `package.json`, `github:mteichtahl/trace`; a git checkout's own remote, or
+  `TRACE_SOURCE`, comes first). If your token can manage that repository's variables, it gets a runner of its own
+  (a runner only: no agents, roles or memory) and its `TRACE_CODEBUILD_PROJECT`. This is on by default; turn off
+  "Build trace's own repository on AWS too" under Advanced → Build runners to leave it on GitHub's runners. When the
+  installation publishes trace's images, that runner has Docker (`runners.ciPrivileged`) for the release workflow.
 - **How CodeBuild reaches GitHub** (to make each runner project's webhook, register each job's just-in-time runner
   and fetch the source): one of two, chosen per installation (`runners.auth` in the answers; Advanced → Build
   runners in the installer):
@@ -469,14 +478,14 @@ container runs the job and is discarded.
   | --- | --- | --- |
   | Stored with CodeBuild | No token: the AWS Connector for GitHub app's installation | The personal access token, imported with `ImportSourceCredentials` |
   | Console step | One authorization per AWS account and region, the first time | None |
-  | First deploy | With the runners when a connection is authorized already; else without, then a second deploy once it is | With the runners |
-  | GitHub access | The app's: grant it every repository trace manages | The token's: Administration, Webhooks, Commit statuses (read and write) and Contents (read) on each repository |
+  | First deploy | With the runners when a connection is authorized already; else without (GitHub's runners meanwhile), then a second deploy once it is | With the runners |
+  | GitHub access | The app's: grant it every repository trace builds | The token's: Administration, Webhooks, Commit statuses (read and write) and Contents (read) on each repository |
 
   **Automatic** (the default) uses a connection when one is authorized in the account and region already (the one
-  this installation used before, `<prefix>-github`, another installation's or trace's own CI's), and the token
-  otherwise, so a first install needs only the AWS credentials and the token. **The token** always uses the token.
-  **A connection** (Advanced: "use an AWS CodeConnections connection instead of the token; needs one console
-  authorization") always uses one, and creates `<prefix>-github` when there is none. Switch later with
+  this installation used before, `<prefix>-github`, or another installation's), and the token otherwise, so a first
+  install needs only the AWS credentials and the token. **The token** always uses the token. **A connection**
+  (Advanced: "use an AWS CodeConnections connection instead of the token; needs one console authorization") always
+  uses one, and creates `<prefix>-github` when there is none. Switch later with
   `trace upgrade --runner-auth auto|token|connection` (or by choosing again in `trace install`): the runner projects
   are updated in place.
 - **With the token**, the installer imports it before the deploy as CodeBuild's account-level GitHub source credential
@@ -491,44 +500,30 @@ container runs the job and is discarded.
   Administration or Webhooks on a chosen repository, because CodeBuild could not make that runner and the deploy would
   fail.
 - **With a connection**, CodeBuild uses the AWS Connector for GitHub app and no GitHub token is stored for it. Grant
-  that app access to every repository trace manages. One connection serves the whole account and region: a person
-  authorizes it once, in the AWS console, and every installation and `npm run deploy:ci` there reuses it, and says
-  which one it used. Nothing needs it up front:
+  that app access to every repository trace builds. One connection serves the whole account and region: a person
+  authorizes it once, in the AWS console, and every installation there reuses it, and says which one it used. Nothing
+  needs it up front:
   1. The installer looks for a connection that is already authorized. If it finds one, it deploys once, with the
-     runners.
-  2. If there is none, the stack creates `<prefix>-github` and the first deploy goes ahead without the runners.
-     CodeBuild can't attach a runner to a connection nobody has authorized yet.
-  3. The installer then shows the link to the AWS console, what to choose there ("Update pending connection", which
+     runners, and sets each repository's variable.
+  2. If there is none, the stack creates `<prefix>-github` and the first deploy goes ahead without the runners
+     (CodeBuild can't attach a runner to a connection nobody has authorized yet). Until the build runners are added,
+     workflows run on GitHub's runners.
+  3. The installer shows the link to the AWS console, what to choose there ("Update pending connection", which
      installs the AWS Connector for GitHub app), and the time of its next check. It checks every 15 seconds for up to
-     30 minutes. If it gives up, run it again and it carries on from there.
-  4. Once the connection is authorized, it deploys again. That only adds each repository's runner and its GitHub
-     webhook.
+     30 minutes.
+  4. Once the connection is authorized, it deploys again. That only adds the runners and their GitHub webhooks, and
+     then it sets the variables. If nobody authorizes it in time, the rest of the installation is finished anyway
+     and the workflows keep running on GitHub's runners; authorize it and run the installer again to move them.
 
   A connection the stack created is kept if the stack is deleted, because other installations may be using it.
 - **No AWS access comes with it.** The runner's own role may write its logs and (with a connection) use the
-  connection, nothing else.
-  Jobs reach AWS exactly as before, through their repository's GitHub OIDC role.
-- **No fallback.** If `TRACE_CODEBUILD_PROJECT` is missing or the runner project doesn't exist, jobs wait in the queue
-  rather than run on GitHub. `trace doctor owner/repo` reports it, and running the installer again fixes it.
+  connection, nothing else. Jobs reach AWS exactly as they do on GitHub's runners, through their repository's GitHub
+  OIDC role.
 - **Bigger machines:** `runners.computeType` sets every job's default size (large unless changed); a job can ask for
   another with an `instance-size:` label. `runners.privileged` turns on Docker for jobs that build containers.
 
-trace's own repository builds the same way, on the runner project `trace-ci`. Deploy it once per account, before
-its first pull request can be checked:
-
-```sh
-npm run deploy:ci
-```
-
-It works the same way as the installer. It reuses an authorized connection (`trace-ci-github` first, then an
-installation's). If there is none, it creates `trace-ci-github`, shows you where to authorize it, waits, and then adds
-the runner. To use a particular connection, set `TRACE_CONNECTION_ARN`. Anything after `--` goes to `cdk deploy`.
-The release workflow (`.github/workflows/release-images.yml`) builds images, so it needs Docker on that runner:
-`trace release setup` makes `trace-ci` privileged (by hand: `TRACE_CI_PRIVILEGED=true npm run deploy:ci`), and can
-make it with the token instead of a connection (`TRACE_CI_AUTH=token`), so it never waits for a console step (see
-[Publishing images](#publishing-images)).
-
-A guard test fails the build if any workflow here or in `templates/` names a runner other than a CodeBuild one.
+`trace doctor owner/repo` notes when a repository has no AWS runner yet. A guard test fails the build if any workflow
+here or in `templates/` names a runner other than its CodeBuild runner or the `ubuntu-24.04` fallback.
 
 ## Putting another repository under trace
 
@@ -554,7 +549,7 @@ Onboarding adds the following:
 Settings are changed with `trace config set <key> <value>` (`trace config keys` lists them all). Each workflow has a
 kill switch, a repository variable set to `false`: `TRACE_PRS`, `TRACE_CI`, `TRACE_WORKER`, `TRACE_DEPLOY`. Work is
 done by a specialist agent (see [Specialist agents](#specialist-agents)) on AgentCore by default; `trace config set worker.runner actions` runs it as a GitHub Actions job instead, which
-still runs on the project's CodeBuild runner in AWS.
+runs on the project's CodeBuild runner in AWS like every other job (or on GitHub's runners until that exists).
 
 ## Data
 

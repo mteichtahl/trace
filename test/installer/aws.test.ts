@@ -306,8 +306,6 @@ describe('the GitHub connection the CodeBuild runners use', () => {
     expect((await reusableConnection(connections({ list: [any, tagged] }), prefer))?.name).toBe('lab-github')
     expect((await reusableConnection(connections({ list: [any] }), prefer))?.name).toBe('someone-else')
     expect(await reusableConnection(connections({ list: [{ ...mine, status: 'PENDING' }, { ...ci, status: 'ERROR' }] }), prefer)).toBeNull()
-    // deploy:ci's order: its own first
-    expect((await reusableConnection(connections({ list: [mine, ci] }), ['trace-ci-github', 'trace-github']))?.name).toBe('trace-ci-github')
   })
 
   it('says plainly which authorized connection it reused, and passes it to the stack, which then creates none', async () => {

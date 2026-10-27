@@ -71,17 +71,17 @@ export const workerRuntimeNamePattern = (prefix: string): string => `${under(pre
 export const githubSecretName = (prefix: string, repository: string, generation = 0): string => `${prefix}/github-token/${projectSlug(repository)}${gen(generation, '@')}`
 export const gpuJobDefinitionName = (prefix: string, repository: string): string => `${prefix}-gpu-${projectHash(repository)}`
 /** The project's CPU job definition (the CPU queue: openEMS, Verilator, formal, nextpnr sent remote). */
-/** A project's AWS CodeBuild runner project: every GitHub Actions job of its repository runs there, in the installation's
- * AWS account (GitHub-hosted runners are never used). Workflows name it through the repository variable
- * TRACE_CODEBUILD_PROJECT in `runs-on: codebuild-<name>-<run id>-<attempt>` (src/infra/runner.ts). */
+/** A repository's AWS CodeBuild runner project (an onboarded project's, or a build-only repository's such as trace's
+ * own): every GitHub Actions job of the repository runs there, in the installation's AWS account, once it exists.
+ * Workflows name it through the repository variable TRACE_CODEBUILD_PROJECT (src/infra/runner.ts). */
 export const runnerProjectName = (prefix: string, repository: string): string => `${prefix}-ci-${projectHash(repository)}`
-/** The repository variable naming that runner project, which the installer sets in each repository. */
+/** The repository variable naming that runner project. The installer sets it only once the runner project exists, so
+ * it is the workflows' "the AWS runner is there" signal: set, every job runs on it; unset, on GITHUB_HOSTED_FALLBACK. */
 export const RUNNER_VARIABLE = 'TRACE_CODEBUILD_PROJECT'
-/** The CodeBuild runner project trace's own repository builds on (src/infra/ci-app.ts deploys it). */
-export const SELF_CI_PROJECT = 'trace-ci'
+/** The GitHub-hosted runner every workflow job uses while its repository has no AWS CodeBuild runner yet. */
+export const GITHUB_HOSTED_FALLBACK = 'ubuntu-24.04'
 /** The AWS CodeConnections connection to GitHub a stack creates when it is given none (src/infra/runner.ts
- * GithubConnection): `<prefix>-github` for an installation, `trace-ci-github` for trace's own CI stack. At most 32
- * characters (a prefix is at most 21). */
+ * GithubConnection): `<prefix>-github`. At most 32 characters (a prefix is at most 21). */
 export const connectionName = (prefix: string): string => `${prefix}-github`
 export const cpuJobDefinitionName = (prefix: string, repository: string): string => `${prefix}-cpu-${projectHash(repository)}`
 /** A project memory's log delivery source and destination name (`[\w-]{1,60}`, unique in the account and region). */

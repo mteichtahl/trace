@@ -96,14 +96,25 @@ export const RUNNER_COMPUTE_TYPES = ['BUILD_GENERAL1_MEDIUM', 'BUILD_GENERAL1_LA
  * are updated in place. */
 export const RUNNER_AUTH = ['auto', 'token', 'connection'] as const
 
-/** Where every GitHub Actions job runs: AWS CodeBuild runners in the installation's account (props.ts runners), never
- * GitHub-hosted runners. */
+/** The most build-only repositories the answers may add besides trace's own (props.ts ciRepositories takes 10). */
+export const EXTRA_BUILD_REPOSITORIES_MAX = 9
+
+/** Where every GitHub Actions job runs: AWS CodeBuild runners in the installation's account (props.ts runners), once
+ * they exist; GitHub's own runners until then. */
 export const RunnerAnswers = z.object({
   auth: z.enum(RUNNER_AUTH).default('auto'),
   /** auth token (or auto without a connection): which token CodeBuild keeps as its GitHub source credential (it needs
    * Administration, Webhooks and Commit statuses read and write, and Contents read, on each repository): the agents'
    * token, or the admin token */
   token: z.enum(['agent', 'admin']).default('agent'),
+  /** Build trace's own repository on AWS too (a build runner for it alone: props.ts ciRepositories), when the tokens can
+   * configure it. On by default. */
+  buildTrace: z.boolean().default(true),
+  /** trace's own repository as the installer found it (src/installer/source.ts traceRepository) and the token can
+   * configure; '' when it found none it can. The installer checks it again before using it. */
+  traceRepository: z.union([Repo, z.literal('')]).default(''),
+  /** Other repositories to build on AWS without making them projects: each gets a build runner and nothing else. */
+  ciRepositories: z.array(Repo).max(EXTRA_BUILD_REPOSITORIES_MAX).default([]),
   /** An existing GitHub connection to use (auth auto or connection); empty: the installer reuses one already authorized
    * in the account and region (`<prefix>-github` first); with auth connection and none, the stack creates
    * `<prefix>-github` and the installer waits after the deploy for a person to authorize it. */
@@ -163,6 +174,11 @@ export const AnswersSchema = z.object({
   if (new Set(emails).size !== emails.length) ctx.addIssue({ code: 'custom', path: ['people'], message: 'a person is listed twice' })
   if (a.adminEmail && emails.includes(a.adminEmail.toLowerCase())) ctx.addIssue({ code: 'custom', path: ['people'], message: 'the first administrator is already an admin: leave them out of the list' })
   if (a.runners.auth === 'token' && a.runners.connectionArn) ctx.addIssue({ code: 'custom', path: ['runners', 'connectionArn'], message: 'a GitHub connection is for "auto" or "connection": with "token" the runners use the GitHub token' })
+  const extra = a.runners.ciRepositories.map((r) => r.toLowerCase())
+  extra.forEach((r, i) => {
+    if (repos.has(r)) ctx.addIssue({ code: 'custom', path: ['runners', 'ciRepositories', i], message: `${a.runners.ciRepositories[i]} is one of the projects already: it has its own build runner` })
+    else if (extra.indexOf(r) !== i) ctx.addIssue({ code: 'custom', path: ['runners', 'ciRepositories', i], message: `${a.runners.ciRepositories[i]} is listed twice` })
+  })
   if (a.agents.cpuVcpus > a.agents.cpuMaxVcpus) ctx.addIssue({ code: 'custom', path: ['agents', 'cpuVcpus'], message: 'a CPU job cannot ask for more vCPUs than the CPU queue may run at once' })
 })
 export type Answers = z.output<typeof AnswersSchema>

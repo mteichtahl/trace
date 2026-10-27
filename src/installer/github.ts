@@ -245,7 +245,7 @@ export async function createRepo(token: string, slug: string, o: { private: bool
   return { fullName: data.full_name, defaultBranch: 'main', created: true }
 }
 
-/** Remove a repository variable (no error when it is not there). */
+/** Remove a repository's Actions variable. Returns whether there was one. */
 export async function deleteVariable(token: string, repo: string, name: string, fetchImpl?: Fetch): Promise<boolean> {
   const gh = new Github(token, fetchImpl)
   try {

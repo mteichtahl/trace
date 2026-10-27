@@ -27,6 +27,7 @@ import { checkAws, credentials, profiles } from './aws.js'
 import { DEFAULT_REGION } from './derive.js'
 import { FixRequest, fix } from './fix.js'
 import { canConfigure, checkToken } from './github.js'
+import { traceRepository } from './source.js'
 import { page } from './page.js'
 import { type PreflightInput, type PreflightResult, liveDeps, preflight } from './preflight.js'
 
@@ -39,6 +40,8 @@ export interface InstallerOptions {
   fix?: typeof fix
   checkIntegration?: typeof checkIntegration
   hooks?: Hooks
+  /** trace's own GitHub repository (default: src/installer/source.ts traceRepository) */
+  traceRepository?: () => string | null
 }
 
 const PreflightBody = z.object({
@@ -117,7 +120,11 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
       const { token, repos } = z.object({ token: z.string().min(20), repos: z.array(z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')).max(200).default([]) }).parse(await body(req))
       const info = await checkToken(token)
       const access = await Promise.all(repos.map(async (r) => ({ repo: r, ...(await canConfigure(token, r)) })))
-      return { ...info, access }
+      // trace's own repository, and whether this token can set its variables (the page's "build trace's own repository
+      // on AWS too", on by default when it can)
+      const own = (opts.traceRepository ?? (() => traceRepository({ root: REPO_ROOT })))()
+      const self = own ? { repo: own, ...(await canConfigure(token, own)) } : null
+      return { ...info, access, self }
     },
     'POST /api/aws/check': async (req) => {
       const b = z.object({ aws: AwsAnswers.unwrap().pick({ mode: true, profile: true, region: true }), secrets: SecretsSchema.pick({ awsAccessKeyId: true, awsSecretAccessKey: true, awsSessionToken: true }).partial(), prefix: z.string().default('trace') }).parse(await body(req))
@@ -134,7 +141,11 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
         region, prefix: b.prefix, model: b.model, gpuSpot: b.gpuSpot, cpuSpot: b.cpuSpot, cpuVcpus: b.cpuVcpus, gpuEnabled: b.gpuEnabled,
         runnerAuth: b.runnerAuth, repos: b.repos, create: b.create, hasAdminToken: Boolean(b.adminToken),
       }, b.token)
-      return { ...r, region, profileRegion: prof }
+      // trace's own repository, and whether the token that configures repositories can set its variables (the page's
+      // "build trace's own repository on AWS too", on by default when it can)
+      const own = (opts.traceRepository ?? (() => traceRepository({ root: REPO_ROOT })))()
+      const self = own ? { repo: own, ...(await canConfigure(b.adminToken || b.token, own).catch((e: unknown) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }))) } : null
+      return { ...r, region, profileRegion: prof, self }
     },
     // what the preflight offered to fix, when the person asks
     'POST /api/fix': async (req) => {
