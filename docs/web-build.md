@@ -84,7 +84,7 @@ All bodies are JSON unless noted. Errors: `{ ok: false, error, code? }` with a f
   (`{ id, kind, repo, summary }`). The app treats each as "invalidate these queries" and refetches; payloads never
   carry project content.
 - Who publishes: the web backend, after an ok answer to a mutating `/api/call` (`src/web/events.ts` lists them, with
-  `stuck.dismiss` among the journey's), to the project's members and the caller; and `<prefix>-journey-events`
+  `stuck.dismiss`, `order.update`, `board.record` and `board.check` among the journey's), to the project's members and the caller; and `<prefix>-journey-events`
   (`src/web/journey-events.ts`, in the web stack beside the events API) for what agents write. Agents write their facts
   (`projects/<slug>/journey-agent/facts.db`) straight to the central bucket, which no backend sees. The bucket sends
   its object events to EventBridge (its own `NotificationConfiguration`, no custom resource), and a rule on "Object
@@ -92,7 +92,9 @@ All bodies are JSON unless noted. Errors: `{ ok: false, error, code? }` with a f
   key, the people on it from the access store (admins, and the people assigned, by part), and publishes
   `record.changed { repo, what: 'journey' }` to each, plus `notification { id, kind: 'question'|'stuck', repo,
   summary }` (a fixed line, no project content) for a question or stuck report written in that change, to the people
-  it is for. It reads the facts file that changed only to tell a new question from a check. The journey record
+  it is for. It reads the facts file that changed only to tell a new question from a check. The same rule matches the bench's live
+  copy, `projects/*/journey-agent/bench.db` (a bring-up reading was taken, `src/core/bench.ts`): that publishes
+  `record.changed { what: 'journey' }` only, notifies no one and is never read. The journey record
   (`projects/<slug>/journey/journey.db`) is not matched: only the API writes it, and the backend publishes those
   writes already, so matching it would send every event twice. One publish per S3 event, unbatched: an agent writes
   its facts a few times a job. Its role: `s3:GetObject` on `access/*` (and `s3:ListBucket` under it) and on
@@ -128,8 +130,11 @@ reviewer. `require_(p, repo, 'write')` needs the contributor part (or admin). `p
 | `job.control` | write on the job's project | `{ id, op }`: cancel aborts the job on its worker and terminates the Batch jobs its tools left running; pause, resume and move_up answer `{ ok: false, reason }` (a job cannot be held, and nothing is queued). Every job view carries `controls` |
 | `requirements.trace` | read | each requirement with its evidence status (verified, failing, untested, waived); `intent: []` and `intent_note` until the record keeps intent statements |
 | `design.get` | read | the KiCad files with the latest ERC and DRC findings, pictures runs stored, and `notes` for what is not recorded (block diagram, pin plan) |
-| `build.get` / `order.record` | read / write | releases (snapshots), orders (journey table `orders`), the order ready to place; recording an order answers a ship wait that nothing checks yet |
-| `cost.get` | read (money: admins) | the stage timeline for everyone; orders paid, committed and the build forecast (quantity x unit cost) for admins; cloud use is null (not recorded per project) |
+| `build.get` / `order.record` | read / write | releases (snapshots), orders (journey table `orders`) with their shipping and Wait line, the order ready to place, boards by serial with their inspection, the bench (each instrument's identity, the bring-up readings against their limits); `src/api/actions-build.ts` |
+| `order.update` / `order.check_now` | write / read | the shipping notice (carrier, tracking number), delivered, cancelled, a corrected ship date: people record them, trace never does; a DHL number is followed by the order watch on a backed-off timer (README "Cost and orders"); check now asks it once |
+| `board.record` / `board.check` | write | a board received by serial (order, photos, status); one incoming inspection check of one board (journey tables `boards`, `board_checks`) |
+| `cost.get` | read (money: admins) | the stage timeline for everyone; for admins: cloud use from the cost ledger (estimates by kind, priced from the dated price table; actuals from Cost Explorer a day behind, and when it reads next), orders paid, committed, the build forecast; `src/api/actions-cost.ts` |
+| `usage.month` | admin | every project's month: estimated and actual cloud spend, orders paid, budget; the installation's untagged spend |
 | `skill.get` / `skill.draft` / `skill.drafts` / `skill.submit` | read / read / read / write | a guided skill's bar computed from the record (`unavailable` where it cannot be yet), the person's draft in the journey store, and submit (refused unless every check is met or waived; Waiver and Question answer go through `waiver.add` and `question.answer`) |
 | `policy.get` / `policy.set` | signed-in / admin | the installation's locked settings (`me.get` answers them as `locks`; `me.set` refuses a locked key) |
 | `users.history` | admin | a person's assignment log in words |
