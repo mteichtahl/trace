@@ -73,7 +73,7 @@ export class JourneyStore {
 
   private static openAt(path: string): DatabaseSync {
     const db = open(path, { wal: false })
-    applyJourneySchema(db)
+    applyJourneySchema(db, { store: true })
     return db
   }
 

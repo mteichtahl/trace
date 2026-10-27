@@ -5,7 +5,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   type JourneyRecord, type Viewer, addWaiver, answerQuestion, askQuestion, gateView, inboxItems, journeyView, loadJourney, nextStep, recordOpen,
-  returnGate, setCriterion, signBlockers, signGate, sortInbox, startJourney, templateStages,
+  returnGate, setCriterion, signBlockers, signGate, sortInbox, startJourney, templateStages, applyJourneySchema, copyJourneyTables, getDraft, loadOrders, putDraft,
+  recordOrder,
 } from '../../src/core/journey.js'
 import { openProject } from '../../src/core/store.js'
 import { merge } from '../../src/core/dbmerge.js'
@@ -246,5 +247,39 @@ describe('merging the journey across branches', () => {
     expect(o.prepare("SELECT status FROM gate_criteria WHERE id='define.accepted'").get()?.status).toBe('met')
     expect(o.prepare("SELECT 1 AS x FROM decisions WHERE id='d-theirs'").get()?.x).toBe(1)
     o.close()
+  })
+})
+
+describe('orders and drafts', () => {
+  it('records an order once per fab number (a second time corrects it), logged in words', () => {
+    db = fresh()
+    startJourney(db, { template: 'board', by: 'x', build: { quantity: 5, currency: 'EUR', fab: 'JLCPCB' } })
+    expect(recordOrder(db, { number: 'Y1-0001', paid: 80, ship_date: '2026-11-04' }, signer)).toMatchObject({ created: true, order: { boards: 5, currency: 'EUR', state: 'placed', revision: 'A' } })
+    expect(recordOrder(db, { number: 'Y1-0001', paid: 82.5, ship_date: null }, signer)).toMatchObject({ created: false, order: { paid: 82.5, shipDate: null } })
+    expect(loadOrders(db)).toHaveLength(1)
+    expect(rec().decisions[0]?.summary).toBe('Order updated with JLCPCB: number Y1-0001, 5 boards, EUR 82.50 paid.')
+    expect(() => recordOrder(db, { number: 'Y2', paid: -1, ship_date: null }, signer)).toThrow(/negative/)
+    expect(() => recordOrder(db, { number: 'Y2', paid: 1, ship_date: 'Friday' }, signer)).toThrow(/as a date/)
+  })
+
+  it('keeps drafts in the store only: a release copy carries the orders and never the drafts', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'trace-drafts-'))
+    const store = new DatabaseSync(join(dir, 'journey.db'))
+    applyJourneySchema(store, { store: true })
+    startJourney(store, { template: 'board', by: 'x' })
+    recordOrder(store, { number: 'Y9', paid: null, ship_date: null }, signer)
+    expect(putDraft(store, 'h'.repeat(16), 'waiver', { step: 2, data: { reason: 'r' } })).toBe(true)
+    expect(getDraft(store, 'h'.repeat(16), 'waiver')).toMatchObject({ step: 2, data: { reason: 'r' } })
+    expect(getDraft(store, 'o'.repeat(16), 'waiver')).toBeNull()
+    expect(() => putDraft(store, 'h'.repeat(16), 'big', { step: 0, data: 'x'.repeat(300_000) })).toThrow(/256 KB/)
+    store.close()
+    const repo = fresh()
+    copyJourneyTables(repo, join(dir, 'journey.db'))
+    expect(loadOrders(repo).map((o) => o.number)).toEqual(['Y9'])
+    expect(repo.prepare("SELECT 1 AS x FROM sqlite_master WHERE name='skill_drafts'").get()).toBeUndefined()
+    const again = new DatabaseSync(join(dir, 'journey.db'))
+    expect(putDraft(again, 'h'.repeat(16), 'waiver', null)).toBe(true)
+    expect(getDraft(again, 'h'.repeat(16), 'waiver')).toBeNull()
+    again.close()
   })
 })

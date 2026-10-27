@@ -1,7 +1,7 @@
 /** Shared test fixtures: an RSA key, a fake JWKS, Cognito-shaped tokens, and fake GitHub/Cognito/jobs clients. */
-import { createSign, generateKeyPairSync, type KeyObject } from 'node:crypto'
+import { createHash, createSign, generateKeyPairSync, type KeyObject } from 'node:crypto'
 import type { CognitoAdmin, CognitoUser } from '../../src/api/aws.js'
-import type { GitHubApi, TreeEntry } from '../../src/api/github.js'
+import type { CommitSummary, GitHubApi, TreeEntry } from '../../src/api/github.js'
 import { Verifier } from '../../src/api/jwt.js'
 
 export const ISSUER = 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_TEST'
@@ -33,8 +33,8 @@ export class FakeCognito implements CognitoAdmin {
   users: CognitoUser[] = []
   groups = new Map<string, Set<string>>()
   calls: string[] = []
-  add(email: string, sub: string, group?: string): CognitoUser {
-    const u = { sub, username: email, email, status: 'CONFIRMED', enabled: true }
+  add(email: string, sub: string, group?: string, name?: string): CognitoUser {
+    const u = { sub, username: email, email, status: 'CONFIRMED', enabled: true, ...(name ? { name } : {}) }
     this.users.push(u)
     if (group) this.groups.set(email, new Set([group]))
     return u
@@ -66,7 +66,7 @@ export class FakeGitHub implements GitHubApi {
   async tree(repo: string, ref: string): Promise<{ files: TreeEntry[]; truncated: boolean }> {
     this.calls.push(`tree ${repo} ${ref}`)
     const pre = `${repo}:${ref}:`
-    return { truncated: false, files: [...this.files.entries()].filter(([k]) => k.startsWith(pre)).map(([k, v]) => ({ path: k.slice(pre.length), size: v.length, sha: `blob-${k.length}` })) }
+    return { truncated: false, files: [...this.files.entries()].filter(([k]) => k.startsWith(pre)).map(([k, v]) => ({ path: k.slice(pre.length), size: v.length, sha: `blob-${createHash('sha1').update(v).digest('hex').slice(0, 12)}` })) }
   }
   async fileInfo(repo: string, path: string, ref: string): Promise<{ size: number; sha: string; downloadUrl: string | null } | null> {
     const f = this.files.get(`${repo}:${ref}:${path}`)
@@ -80,6 +80,9 @@ export class FakeGitHub implements GitHubApi {
     this.files.set(`${repo}:${o.branch}:${o.path}`, o.content)
     return { commit: 'c0ffee0000000000' }
   }
+  /** "repo:path" → the commits that changed it, newest first */
+  history = new Map<string, CommitSummary[]>()
+  async commits(repo: string, path: string, _ref: string, limit: number): Promise<CommitSummary[]> { return (this.history.get(`${repo}:${path}`) ?? []).slice(0, limit) }
   async openPulls(): Promise<never[]> { return [] }
   async openIssues(): Promise<never[]> { return [] }
   async workflowRuns(): Promise<never[]> { return [] }

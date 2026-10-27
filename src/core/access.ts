@@ -315,6 +315,47 @@ export async function assignments(admin: Principal, filter: { repo?: string; sub
   }
 }
 
+/** When each person last used the API (their sub → ISO time), from the access store's users (admins only). Never seen: absent. */
+export async function lastSeen(admin: Principal): Promise<Map<string, string>> {
+  requireAdmin(admin, 'list people')
+  const db = await read()
+  try {
+    return new Map((db.prepare('SELECT sub, last_seen FROM users WHERE last_seen > 0').all() as Record<string, unknown>[])
+      .map((r) => [String(r.sub), new Date(Number(r.last_seen) * 1000).toISOString()]))
+  } finally {
+    db.close()
+  }
+}
+
+export interface LogEntry { at: string; by: string; repo: string | null; action: 'assign' | 'unassign' | 'class'; detail: string | null; text: string }
+
+/** One line of the assignment log, in words. */
+export function logWords(e: Omit<LogEntry, 'text'>): string {
+  switch (e.action) {
+    case 'class': return `${e.by} made them ${e.detail === 'admin' ? 'an admin' : `a ${e.detail ?? 'person without a class'}`}.`
+    case 'unassign': return `${e.by} removed them from ${e.repo}.`
+    case 'assign': {
+      const m = /^part: (?:(contributor|reviewer) → )?(contributor|reviewer)$/.exec(e.detail ?? '')
+      if (!m) return `${e.by} assigned them to ${e.repo} again.`
+      return m[1] ? `${e.by} changed their part on ${e.repo} from ${m[1]} to ${m[2]}.` : `${e.by} added them to ${e.repo} as a ${m[2]}.`
+    }
+  }
+}
+
+/** A person's history from the assignment log, newest first, each line in words (admins only). */
+export async function assignmentLog(admin: Principal, sub: string, limit = 200): Promise<LogEntry[]> {
+  requireAdmin(admin, 'read the assignment log')
+  const db = await read()
+  try {
+    return (db.prepare('SELECT at, by, repo, action, detail FROM assignment_log WHERE sub=? ORDER BY at DESC LIMIT ?').all(sub, limit) as Record<string, unknown>[]).map((r) => {
+      const e = { at: new Date(Number(r.at) * 1000).toISOString(), by: String(r.by), repo: r.repo === null ? null : String(r.repo), action: r.action as LogEntry['action'], detail: r.detail === null ? null : String(r.detail) }
+      return { ...e, text: logWords(e) }
+    })
+  } finally {
+    db.close()
+  }
+}
+
 export interface Member { sub: string; email: string | null; class: PersonClass | null; part: Part }
 
 /**

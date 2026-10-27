@@ -40,7 +40,7 @@ async function defaultCredentials(): Promise<Credentials> {
 
 // ------------------------------------------------------------------ Cognito
 
-export interface CognitoUser { sub: string; username: string; email: string | null; status: string | null; enabled: boolean }
+export interface CognitoUser { sub: string; username: string; email: string | null; status: string | null; enabled: boolean; name?: string | null | undefined }
 
 export interface CognitoAdmin {
   getUser(username: string): Promise<CognitoUser | null>
@@ -66,7 +66,7 @@ const UserShape = z.object({
 function toUser(u: z.output<typeof UserShape>): CognitoUser {
   const attrs = u.Attributes ?? u.UserAttributes ?? []
   const at = (n: string): string | null => attrs.find((a) => a.Name === n)?.Value ?? null
-  return { sub: at('sub') ?? u.Username, username: u.Username, email: at('email'), status: u.UserStatus ?? null, enabled: u.Enabled ?? true }
+  return { sub: at('sub') ?? u.Username, username: u.Username, email: at('email'), status: u.UserStatus ?? null, enabled: u.Enabled ?? true, name: at('name') }
 }
 
 export class CognitoError extends Error {

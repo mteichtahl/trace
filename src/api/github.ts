@@ -16,6 +16,7 @@ export interface DeploySummary { id: number; environment: string; ref: string; s
 
 /** One file in a repository's tree. */
 export interface TreeEntry { path: string; size: number; sha: string }
+export interface CommitSummary { sha: string; at: string | null; by: string | null; message: string }
 
 export interface GitHubApi {
   defaultBranch(repo: string): Promise<{ branch: string; sha: string }>
@@ -32,6 +33,8 @@ export interface GitHubApi {
   fileSha(repo: string, path: string, ref: string): Promise<string | null>
   createBranch(repo: string, branch: string, sha: string): Promise<void>
   putFile(repo: string, o: { path: string; branch: string; content: Uint8Array; message: string; sha: string | null }): Promise<{ commit: string }>
+  /** The commits that changed `path` on `ref`, newest first (at most `limit`). Optional: absent, no history is shown. */
+  commits?(repo: string, path: string, ref: string, limit: number): Promise<CommitSummary[]>
   openPulls(repo: string): Promise<PullSummary[]>
   openIssues(repo: string, label: string): Promise<IssueSummary[]>
   workflowRuns(repo: string, limit: number): Promise<RunSummary[]>
@@ -149,6 +152,14 @@ export class HttpGitHub implements GitHubApi {
       message: o.message, branch: o.branch, content: Buffer.from(o.content).toString('base64'), ...(o.sha ? { sha: o.sha } : {}),
     }))
     return { commit: r.commit.sha }
+  }
+
+  async commits(repo: string, path: string, ref: string, limit: number): Promise<CommitSummary[]> {
+    const C = z.object({ sha: z.string(), commit: z.object({ message: z.string().default(''), author: z.object({ name: z.string().optional(), date: z.string().optional() }).loose().nullable().optional() }).loose() }).loose()
+    const q = `path=${encodeURIComponent(path)}&sha=${encodeURIComponent(ref)}&per_page=${Math.min(100, Math.max(1, limit))}`
+    return z.array(C).parse(await this.json('GET', `${this.p(repo)}/commits?${q}`)).map((c) => ({
+      sha: c.sha, at: c.commit.author?.date ?? null, by: c.commit.author?.name ?? null, message: c.commit.message.split('\n')[0] ?? '',
+    }))
   }
 
   async openPulls(repo: string): Promise<PullSummary[]> {

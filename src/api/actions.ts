@@ -37,7 +37,8 @@
  *   kb.sync       write                 sync the project's default branch into its knowledge base: the tool kb.sync on
  *                                       the project's own worker runtime (its role writes projects/<slug>/kb/ and starts
  *                                       the ingestion job; this runtime's cannot)
- *   job           read on its project   a job's state and log (the project is named by the job id, and checked
+ *   job           read on its project   a job's state and log, its `controls` (actions-jobs.ts: the ops job.control can do
+ *                                       for it now) (the project is named by the job id, and checked
  *                                       before the worker is asked), with `version` (its worker's change counter)
  *                                       and `waits` (every wait open on its worker, each with `text`: "… next check
  *                                       in 4 minutes"). afterVersion + waitS (≤ 240 s): the worker holds the answer
@@ -49,7 +50,8 @@
  *                                       waitS (≤ 240 s): held on the worker until a wait opens, is checked, changes
  *                                       or ends: how a screen shows a tool call's lines while it runs
  *   tools.check_now read                wake one of those timer waits for a check now (waitId) → { ok }
- *   users.list    admin                 every person: email, status, class, assigned projects and their part on each
+ *   users.list    admin                 every person: email, name (Cognito's), status, class, last seen, assigned projects
+ *                                       and their part on each
  *   users.invite  admin                 create the person in Cognito (email, class) → sub
  *   users.class   admin                 change a person's class (their Cognito group: exactly one of the three)
  *   assign        admin                 assign a person (email or sub) to a project, with their part: contributor or
@@ -87,6 +89,11 @@
  *   actions-me.ts        me.get, me.set
  *   actions-graph.ts     graph.neighbourhood
  *   actions-files.ts     files.list, files.url
+ *   actions-jobs.ts      job.control
+ *   actions-people.ts    users.history
+ *   actions-record.ts    requirements.trace, design.get, build.get, order.record, cost.get
+ *   actions-skills.ts    skill.get, skill.draft, skill.drafts, skill.submit
+ *   actions-me.ts        also policy.get, policy.set
  */
 import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -94,7 +101,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import {
   AccessDenied, CLASSES, GROUPS, PARTS, PartRefused, type PersonClass, type Principal, RepoSlug, type Role,
-  assign, assignments, classOf, isAdmin, projectsFor, require_, setClass, unassign,
+  assign, assignments, classOf, isAdmin, lastSeen, projectsFor, require_, setClass, unassign,
 } from '../core/access.js'
 import { readSettings, resolve, setValue, unset } from '../core/config.js'
 import { IntegrationNameSchema, type IntegrationStore, checkIntegration, valuesFor } from '../core/integrations.js'
@@ -119,7 +126,11 @@ import { CHAT_ACTIONS } from './actions-chats.js'
 import { FILE_ACTIONS } from './actions-files.js'
 import { GRAPH_ACTIONS } from './actions-graph.js'
 import { JOURNEY_ACTIONS } from './actions-journey.js'
+import { JOB_ACTIONS, withControls } from './actions-jobs.js'
 import { ME_ACTIONS } from './actions-me.js'
+import { PEOPLE_ACTIONS } from './actions-people.js'
+import { RECORD_ACTIONS } from './actions-record.js'
+import { SKILL_ACTIONS } from './actions-skills.js'
 import { PROJECT_ACTIONS } from './actions-projects.js'
 import type { CognitoUser } from './aws.js'
 
@@ -474,9 +485,9 @@ export const ACTIONS = {
 
   job: def('job', JobId.extend({ afterVersion: z.number().int().min(0).optional(), waitS: z.number().min(0).max(240).optional() }), async (a, ctx) => {
     const jobs = await jobAccess(a.id, ctx)
-    if (!jobs.watchJob) return ownJob((await jobs.jobStatus(a.id))[0], a.id, jobs)
+    if (!jobs.watchJob) return withControls(ownJob((await jobs.jobStatus(a.id))[0], a.id, jobs), jobs)
     const w = await jobs.watchJob(a.id, { afterVersion: a.afterVersion, waitS: a.waitS, signal: ctx.signal })
-    return { ...ownJob(w.jobs[0], a.id, jobs), version: w.version, waits: w.waits }
+    return { ...withControls(ownJob(w.jobs[0], a.id, jobs), jobs), version: w.version, waits: w.waits }
   }),
 
   'job.check_now': def('job', JobId.extend({ waitId: z.string().min(1).max(64) }), async (a, ctx) => {
@@ -500,12 +511,14 @@ export const ACTIONS = {
     const [users, ...members] = await Promise.all([cog.listUsers(), ...CLASSES.map((c) => cog.usersInGroup(GROUPS[c]))])
     const classes = new Map<string, PersonClass>()
     CLASSES.forEach((c, i) => { for (const u of members[i] ?? []) if (!classes.has(u.sub)) classes.set(u.sub, c) })
-    const all = await assignments(ctx.principal)
+    const [all, seen] = await Promise.all([assignments(ctx.principal), lastSeen(ctx.principal)])
     return users.map((u) => {
       const cls = classes.get(u.sub) ?? null
       const mine = all.filter((x) => x.sub === u.sub)
       return {
         email: u.email, sub: u.sub, status: u.status, enabled: u.enabled, class: cls,
+        // when they last used trace (the access store), and their name when Cognito has one
+        last_seen: seen.get(u.sub) ?? null, ...(u.name ? { name: u.name } : {}),
         projects: mine.map((x) => x.repo),
         // each project with the person's part there; a guest is a reviewer whatever was stored (their class caps it)
         parts: mine.map((x) => ({ repo: x.repo, part: cls === 'guest' ? 'reviewer' as const : x.part })),
@@ -603,6 +616,10 @@ export const ACTIONS = {
   ...ME_ACTIONS,
   ...GRAPH_ACTIONS,
   ...FILE_ACTIONS,
+  ...JOB_ACTIONS,
+  ...PEOPLE_ACTIONS,
+  ...RECORD_ACTIONS,
+  ...SKILL_ACTIONS,
 } satisfies Record<string, Action<z.ZodType>>
 
 export type ActionName = keyof typeof ACTIONS

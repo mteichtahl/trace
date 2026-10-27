@@ -67,7 +67,7 @@ async function snapshot(ctx: Context, repo: string, why: string): Promise<{ bran
   const logged = await writeJourney(ctx, repo, (db) => {
     decide(db, {
       kind: 'journey.snapshot', stage: null, ref: s.commit, by: label(ctx.principal),
-      summary: `The record of revision ${s.revision} was copied into the repository (commit ${s.commit.slice(0, 7)} on ${s.branch}).`, detail: { branch: s.branch, commit: s.commit, why },
+      summary: `The record of revision ${s.revision} was copied into the repository (commit ${s.commit.slice(0, 7)} on ${s.branch}).`, detail: { branch: s.branch, commit: s.commit, revision: s.revision, why },
     })
     return { result: {} }
   })

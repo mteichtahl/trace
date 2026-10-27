@@ -30,6 +30,8 @@
  *                    one first and why, the sources it read, and the answer with who gave it and when
  *   waivers          reason, risk, severity, where it is caught instead, scope; who acknowledged it at the gate
  *   decisions        the log: every start, signature, return, answer and waiver, in plain words
+ *   orders           each order placed with the fab: its number, boards, what was paid, the ship date, its state
+ *   skill_drafts     (the store only, never copied into the repository) each person's unsubmitted guided-skill draft
  *
  * People are named by the memory hash of their email (or sub) where the record only needs to match them (opens,
  * who a question is for); where a person reads who did something (a signature, an answer) the record also keeps the
@@ -291,12 +293,47 @@ CREATE TABLE IF NOT EXISTS decisions (
 );
 CREATE INDEX IF NOT EXISTS decisions_at ON decisions(at);` })
 
-/** The journey's tables, in the order they are created and copied. */
-export const JOURNEY_TABLES = ['journey', 'stages', 'gates', 'gate_criteria', 'criterion_opens', 'gate_signatures', 'questions', 'waivers', 'decisions'] as const
+const ORDER_COLS = ['revision', 'fab', 'number', 'boards', 'paid', 'currency', 'ship_date', 'state', 'placed_by', 'placed_at', 'shipped_at', 'delivered_at', 'note', 'updated'] as const
 
-/** Create the journey's tables (and only those) in `db`: the journey store's own database. */
-export function applyJourneySchema(db: DatabaseSync): void {
+ensureProjectSchema({ table: 'orders', sql: `
+CREATE TABLE IF NOT EXISTS orders (
+  id TEXT PRIMARY KEY,
+  revision TEXT NOT NULL,         -- the revision the boards are of
+  fab TEXT NOT NULL,              -- JLCPCB, …
+  number TEXT NOT NULL,           -- the fab's own order number
+  boards INTEGER NOT NULL,
+  paid REAL,                      -- what was paid, in currency
+  currency TEXT NOT NULL,
+  ship_date TEXT,                 -- the date the fab expects to ship (YYYY-MM-DD)
+  state TEXT NOT NULL CHECK (state IN ('placed', 'shipped', 'delivered', 'cancelled')),
+  placed_by TEXT NOT NULL, placed_at REAL NOT NULL,
+  shipped_at REAL, delivered_at REAL,
+  note TEXT,
+  updated REAL NOT NULL
+);`, merge: newer('orders', 'id', ORDER_COLS) })
+
+/** The journey's tables, in the order they are created and copied. */
+export const JOURNEY_TABLES = ['journey', 'stages', 'gates', 'gate_criteria', 'criterion_opens', 'gate_signatures', 'questions', 'waivers', 'decisions', 'orders'] as const
+
+/**
+ * Tables only the journey store keeps: each person's unsubmitted guided-skill drafts. They are never copied into the
+ * repository with a release (copyJourneyTables copies JOURNEY_TABLES only), because a draft is one person's work in
+ * progress, not part of the record that approved a revision.
+ */
+const STORE_ONLY_SQL = `
+CREATE TABLE IF NOT EXISTS skill_drafts (
+  who TEXT NOT NULL,              -- the person's 16-character hash
+  skill TEXT NOT NULL,            -- the guided skill's id (schematic-finish, waiver, …)
+  step INTEGER NOT NULL DEFAULT 0,
+  data TEXT NOT NULL,             -- JSON: the skill's own draft
+  saved REAL NOT NULL,
+  PRIMARY KEY (who, skill)
+);`
+
+/** Create the journey's tables (and only those) in `db`; `store`: also the store-only ones (the journey store's own). */
+export function applyJourneySchema(db: DatabaseSync, o: { store?: boolean } = {}): void {
   for (const t of projectTables()) if ((JOURNEY_TABLES as readonly string[]).includes(t.table)) db.exec(t.sql)
+  if (o.store) db.exec(STORE_ONLY_SQL)
 }
 
 const tableIn = (db: DatabaseSync, schema: string, t: string): boolean =>
@@ -969,6 +1006,79 @@ export function askQuestion(db: DatabaseSync, q: {
   db.prepare(`INSERT INTO questions (id, kind, asked_by, asked_of, stage, text, blocks, options, sources, job_id, asked_at, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(id, q.kind ?? 'question', q.askedBy, q.askedOf ?? null, q.stage ?? r.journey.currentStage, q.text, q.blocks ?? null, JSON.stringify(options), JSON.stringify(q.sources ?? []), q.jobId ?? null, t, t)
   return id
+}
+
+
+// ------------------------------------------------------------------ orders
+
+export const ORDER_STATES = ['placed', 'shipped', 'delivered', 'cancelled'] as const
+export interface OrderRow {
+  id: string; revision: string; fab: string; number: string; boards: number; paid: number | null; currency: string; shipDate: string | null
+  state: (typeof ORDER_STATES)[number]; placedBy: string; placedAt: number; shippedAt: number | null; deliveredAt: number | null; note: string | null
+}
+
+/** Every order recorded, newest first (none for a project whose record predates orders). */
+export function loadOrders(db: DatabaseSync): OrderRow[] {
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='orders'").get()) return []
+  return (db.prepare('SELECT * FROM orders ORDER BY placed_at DESC').all() as Record<string, unknown>[]).map((r) => ({
+    id: String(r.id), revision: String(r.revision), fab: String(r.fab), number: String(r.number), boards: Number(r.boards), paid: num(r.paid),
+    currency: String(r.currency), shipDate: str(r.ship_date), state: r.state as OrderRow['state'], placedBy: String(r.placed_by), placedAt: Number(r.placed_at),
+    shippedAt: num(r.shipped_at), deliveredAt: num(r.delivered_at), note: str(r.note),
+  }))
+}
+
+export interface OrderInput { number: string; paid: number | null; ship_date: string | null; boards?: number | undefined; note?: string | null | undefined }
+
+/**
+ * Record an order placed with the fab (Order submit's last step). The same fab order number again updates that order
+ * (a corrected cost or ship date) rather than adding a second one. Logged in the decisions.
+ */
+export function recordOrder(db: DatabaseSync, o: OrderInput, by: Signer): { order: OrderRow; created: boolean } {
+  const r = need(db)
+  const number = o.number.trim()
+  if (!number) throw new JourneyError('Give the order number the fab gave you.')
+  if (o.paid !== null && !(o.paid >= 0)) throw new JourneyError('The amount paid cannot be negative.')
+  if (o.ship_date !== null && !/^\d{4}-\d{2}-\d{2}$/.test(o.ship_date)) throw new JourneyError('Give the ship date as a date (2026-11-04).')
+  const b = r.journey.build
+  const t = now()
+  const existing = loadOrders(db).find((x) => x.number === number && x.fab === b.fab)
+  const id = existing?.id ?? newId()
+  transaction(db, () => {
+    if (existing) {
+      db.prepare('UPDATE orders SET paid=?, ship_date=?, boards=?, note=COALESCE(?, note), updated=? WHERE id=?')
+        .run(o.paid, o.ship_date, o.boards ?? existing.boards, o.note ?? null, t, id)
+    } else {
+      db.prepare(`INSERT INTO orders (id, revision, fab, number, boards, paid, currency, ship_date, state, placed_by, placed_at, note, updated)
+        VALUES (?,?,?,?,?,?,?,?,'placed',?,?,?,?)`).run(id, r.journey.revision, b.fab, number, o.boards ?? b.quantity, o.paid, b.currency, o.ship_date, by.label, t, o.note ?? null, t)
+    }
+    const paid = o.paid === null ? 'cost not given' : `${b.currency} ${o.paid.toFixed(2)} paid`
+    decide(db, {
+      kind: existing ? 'order.updated' : 'order.placed', stage: 'fabricate', ref: id, by: by.label,
+      summary: `${existing ? 'Order updated' : 'Order placed'} with ${b.fab}: number ${number}, ${plural(o.boards ?? existing?.boards ?? b.quantity, 'board')}, ${paid}${o.ship_date ? `, shipping ${o.ship_date}` : ''}.`,
+      detail: { number, paid: o.paid, ship_date: o.ship_date },
+    })
+  })
+  return { order: loadOrders(db).find((x) => x.id === id) as OrderRow, created: !existing }
+}
+
+// ------------------------------------------------------------------ guided-skill drafts (the store only)
+
+export interface SkillDraft { skill: string; step: number; data: unknown; saved: string }
+
+/** This person's draft of one skill, or null. */
+export function getDraft(db: DatabaseSync, who: string, skill: string): SkillDraft | null {
+  const r = db.prepare('SELECT step, data, saved FROM skill_drafts WHERE who=? AND skill=?').get(who, skill) as Record<string, unknown> | undefined
+  return r ? { skill, step: Number(r.step), data: json<unknown>(r.data, null), saved: isoN(Number(r.saved)) } : null
+}
+
+/** Keep (or with data null, discard) this person's draft of one skill. At most 256 KB. */
+export function putDraft(db: DatabaseSync, who: string, skill: string, d: { step: number; data: unknown } | null): boolean {
+  if (d === null) return Number(db.prepare('DELETE FROM skill_drafts WHERE who=? AND skill=?').run(who, skill).changes) > 0
+  const text = JSON.stringify(d.data ?? null)
+  if (text.length > 256 * 1024) throw new JourneyError('The draft is larger than 256 KB; it was not saved.')
+  db.prepare('INSERT INTO skill_drafts (who, skill, step, data, saved) VALUES (?,?,?,?,?) ON CONFLICT(who, skill) DO UPDATE SET step=excluded.step, data=excluded.data, saved=excluded.saved')
+    .run(who, skill, d.step, text, now())
+  return true
 }
 
 // ------------------------------------------------------------------ the inbox
