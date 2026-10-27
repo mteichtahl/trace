@@ -161,12 +161,12 @@ describe('signing a gate', () => {
   it('passes Release with Sign-off, signs Fabricate\'s two gates in order, and finishes at Bring up', () => {
     for (const g of ['define', 'architect', 'capture', 'prove', 'layout']) { meetAll(g); openAll(g); signGate(db, g, signer) }
     meetAll('signoff'); openAll('signoff')
-    expect(signGate(db, 'signoff', signer).advanced_to).toBe('fabricate')
+    expect(signGate(db, 'signoff', signer)).toMatchObject({ advanced_to: 'fabricate', released: true })
     expect(journeyView(rec(), ADMIN).stages.find((s) => s.id === 'release')?.state).toBe('done')
     meetAll('fabricate.received'); openAll('fabricate.received')
     expect(signBlockers(rec(), 'fabricate.received', ADMIN)).toContain('Sign the order approval gate first.')
     meetAll('fabricate.order'); openAll('fabricate.order')
-    expect(signGate(db, 'fabricate.order', signer).advanced_to).toBeNull()
+    expect(signGate(db, 'fabricate.order', signer)).toMatchObject({ advanced_to: null, released: false })
     expect(signGate(db, 'fabricate.received', signer).advanced_to).toBe('bringup')
     meetAll('bringup'); openAll('bringup'); signGate(db, 'bringup', signer)
     expect(nextStep(rec(), USER)).toMatchObject({ kind: 'done', summary: 'Revision A is accepted.' })

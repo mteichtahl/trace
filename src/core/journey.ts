@@ -1,6 +1,9 @@
 /**
- * The journey record: where a project is between its written intent and an accepted board, kept in the project's own
- * database (.trace/project.db) beside its settings and runs, so it is versioned and merged with the repository.
+ * The journey record: where a project is between its written intent and an accepted board. It lives in the central
+ * bucket beside the project's chats (src/core/journey-store.ts: projects/<slug>/journey/journey.db, written with
+ * conditional puts), because it changes with every click (evidence opened, a question answered) and must be live for
+ * everyone at once. When a release is cut, the record is copied into the repository's .trace/project.db, whose journey
+ * tables are registered here with their merge rules, so the released revision carries the record that approved it.
  *
  * A project starts from a TEMPLATE (docs/user-journey.md "Templates") that keeps only the stages it needs:
  *
@@ -38,7 +41,7 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
-import { ensureProjectSchema, transaction } from './store.js'
+import { ensureProjectSchema, projectTables, transaction } from './store.js'
 
 // ------------------------------------------------------------------ templates
 
@@ -287,6 +290,44 @@ CREATE TABLE IF NOT EXISTS decisions (
   detail TEXT                     -- JSON
 );
 CREATE INDEX IF NOT EXISTS decisions_at ON decisions(at);` })
+
+/** The journey's tables, in the order they are created and copied. */
+export const JOURNEY_TABLES = ['journey', 'stages', 'gates', 'gate_criteria', 'criterion_opens', 'gate_signatures', 'questions', 'waivers', 'decisions'] as const
+
+/** Create the journey's tables (and only those) in `db`: the journey store's own database. */
+export function applyJourneySchema(db: DatabaseSync): void {
+  for (const t of projectTables()) if ((JOURNEY_TABLES as readonly string[]).includes(t.table)) db.exec(t.sql)
+}
+
+const tableIn = (db: DatabaseSync, schema: string, t: string): boolean =>
+  Boolean(db.prepare(`SELECT 1 FROM ${schema}.sqlite_master WHERE type='table' AND name=?`).get(t))
+
+/**
+ * Replace the journey tables of `target` with those of the database at `sourcePath` (a release snapshot into the
+ * project database, or an older repository's record into the store). Tables the source lacks are emptied. Returns
+ * whether the source had a journey at all.
+ */
+export function copyJourneyTables(target: DatabaseSync, sourcePath: string): boolean {
+  applyJourneySchema(target)
+  target.prepare('ATTACH DATABASE ? AS src').run(sourcePath)
+  try {
+    const had = tableIn(target, 'src', 'journey') && Boolean(target.prepare("SELECT 1 FROM src.journey WHERE id='current'").get())
+    transaction(target, () => {
+      for (const t of JOURNEY_TABLES) {
+        target.exec(`DELETE FROM main.${t}`)
+        if (tableIn(target, 'src', t)) {
+          const cols = (target.prepare(`SELECT name FROM pragma_table_info('${t}')`).all() as { name: string }[]).map((c) => c.name)
+          const theirs = new Set((target.prepare(`SELECT name FROM src.pragma_table_info('${t}')`).all() as { name: string }[]).map((c) => c.name))
+          const both = cols.filter((c) => theirs.has(c)).join(', ')
+          target.exec(`INSERT INTO main.${t} (${both}) SELECT ${both} FROM src.${t}`)
+        }
+      }
+    })
+    return had
+  } finally {
+    target.exec('DETACH DATABASE src')
+  }
+}
 
 // ------------------------------------------------------------------ rows
 
@@ -676,7 +717,8 @@ export function journeyView(r: JourneyRecord, viewer: Viewer, at: number = now()
 
 // ------------------------------------------------------------------ writes
 
-function decide(db: DatabaseSync, d: { kind: string; stage: string | null; ref: string | null; summary: string; by: string | null; detail?: unknown }): string {
+/** Add one entry to the decisions log (plain words); returns its id. */
+export function decide(db: DatabaseSync, d: { kind: string; stage: string | null; ref: string | null; summary: string; by: string | null; detail?: unknown }): string {
   const id = newId()
   db.prepare('INSERT INTO decisions (id, at, kind, stage, ref, summary, by, detail) VALUES (?,?,?,?,?,?,?,?)')
     .run(id, now(), d.kind, d.stage, d.ref, d.summary, d.by, d.detail === undefined ? null : JSON.stringify(d.detail))
@@ -755,7 +797,7 @@ export function setCriterion(db: DatabaseSync, id: string, status: 'met' | 'not_
 export interface Signer { hash: string; label: string }
 
 /** Sign a gate (the caller has checked the signer is an admin). Moves the project on when it closes the stage. */
-export function signGate(db: DatabaseSync, id: string, signer: Signer, o: { acknowledged?: readonly string[] | undefined; notes?: string | null | undefined } = {}): { gate: GateView; advanced_to: StageId | null; summary: string } {
+export function signGate(db: DatabaseSync, id: string, signer: Signer, o: { acknowledged?: readonly string[] | undefined; notes?: string | null | undefined } = {}): { gate: GateView; advanced_to: StageId | null; released: boolean; summary: string } {
   const r = need(db)
   const viewer: Viewer = { hash: signer.hash, label: signer.label, admin: true, part: 'contributor' }
   const blockers = signBlockers(r, id, viewer, o.acknowledged ?? [])
@@ -779,7 +821,10 @@ export function signGate(db: DatabaseSync, id: string, signer: Signer, o: { ackn
     })
   })
   const after = need(db)
-  return { gate: gateView(after, id, viewer), advanced_to: advanced, summary: `Gate signed.${advanced ? ` ${STAGE_NAMES[advanced]} started.` : ''}` }
+  // the Release stage has no gate of its own: it is passed by the signature before it, and that is when a release is cut
+  const ord = (st: StageId | null): number => r.stages.find((x) => x.id === st)?.ord ?? -1
+  const released = advanced !== null && r.stages.some((x) => x.id === 'release') && ord(gate.stage) < ord('release') && ord('release') < ord(advanced)
+  return { gate: gateView(after, id, viewer), advanced_to: advanced, released, summary: `Gate signed.${advanced ? ` ${STAGE_NAMES[advanced]} started.` : ''}` }
 }
 
 /** Close `from` and open the next stage; a stage with no gate (Release) is passed with it. Returns the new stage. */

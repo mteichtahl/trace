@@ -2,8 +2,8 @@
  * graph.neighbourhood: what trace knows around one item, as nodes and links (docs/ui-design.md "Graph view").
  *
  * Built from ONE project's record after the read check, so it is filtered by access by construction: nothing of
- * another project is read, drawn, grouped or counted. From the project's database (the journey branch while it exists,
- * like journey.get):
+ * another project is read, drawn, grouped or counted. From the project's database (default branch) and its journey record
+ * (the journey store), like journey.get:
  *
  *   requirement   requirements                     test     test_items          run       runs (and test_results)
  *   gate          gates with their criteria        waiver   waivers             decision  decisions, answered questions
@@ -22,7 +22,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
-import { ActionError, type Context, Repo, def, memoryInclude, projectMemory, withJourneyDb } from './action-kit.js'
+import { ActionError, type Context, Repo, def, memoryInclude, projectMemory, withRecordDb } from './action-kit.js'
 
 export const NODE_KINDS = ['requirement', 'test', 'run', 'gate', 'waiver', 'decision', 'person', 'memory', 'group'] as const
 export type NodeKind = (typeof NODE_KINDS)[number]
@@ -189,7 +189,7 @@ export const GRAPH_ACTIONS = {
     memory: z.boolean().default(false),
     memory_top_k: z.number().int().min(1).max(20).default(6),
   }), async (a, ctx: Context) => {
-    const g = await withJourneyDb(ctx, a.repo, (db) => projectGraph(db))
+    const g = await withRecordDb(ctx, a.repo, (db) => projectGraph(db))
     if (!g.nodes.has(a.focus)) throw new ActionError(`Nothing called ${a.focus} is in this project's record.`)
     if (a.memory && (!a.kinds || a.kinds.includes('memory'))) {
       const mem = projectMemory(ctx, a.repo)

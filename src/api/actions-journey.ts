@@ -23,17 +23,24 @@
  *                                    parallel with a small limit; a project whose record cannot be read is listed
  *                                    under `unavailable` rather than failing the whole inbox
  *
- * Every write is a commit on the project's journey branch naming the person (src/api/action-kit.ts writeJourney).
+ *   journey.snapshot        admin    copy the record into the repository's .trace/project.db (its journey tables) on a
+ *                                    new branch trace/release-<revision>-<time>, held for a person like every change
+ *                                    to .trace/**, and log the commit in the decisions. Signing the gate that cuts a
+ *                                    release (the release approval gate; Prove's in the Firmware template) takes it
+ *                                    on its own: a failed copy is reported with the signature and never undoes it
+ *
+ * The record lives in the central bucket (src/core/journey-store.ts): every write is a conditional put of the
+ * project's journey database, re-run on a lost race, and answers the record's `version`.
  * Who did it is recorded as their email for the record people read, and as their 16-character hash where the record
  * only matches them (opened evidence), never as anything else.
  */
 import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
-  INBOX_KINDS, type InboxItem, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
+  INBOX_KINDS, type InboxItem, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
   journeyView, loadJourney, recordOpen, returnGate, signGate, sortInbox,
 } from '../core/journey.js'
-import { type Context, NO_ACCESS, Repo, def, hashOf, label, plainly, withJourneyDb, writeJourney } from './action-kit.js'
+import { type Context, NO_ACCESS, Repo, def, hashOf, label, plainly, snapshotJourney, withJourneyDb, writeJourney } from './action-kit.js'
 
 const Id = z.string().min(1).max(80)
 
@@ -52,7 +59,20 @@ const NOT_STARTED = {
 const signer = (ctx: Context): { hash: string; label: string } => ({ hash: hashOf(ctx.principal), label: label(ctx.principal) })
 
 /** Run a journey write, turning a refusal of the record's own into the person's error. */
-const journeyWrite = <T>(ctx: Context, repo: string, message: string, fn: Parameters<typeof writeJourney<T>>[3]) => plainly(() => writeJourney<T>(ctx, repo, message, fn))
+const journeyWrite = <T>(ctx: Context, repo: string, fn: Parameters<typeof writeJourney<T>>[2]) => plainly(() => writeJourney<T>(ctx, repo, fn))
+
+/** Copy the record into the repository and log the commit in the decisions. */
+async function snapshot(ctx: Context, repo: string, why: string): Promise<{ branch: string; commit: string; revision: string; version: number }> {
+  const s = await plainly(() => snapshotJourney(ctx, repo, why))
+  const logged = await writeJourney(ctx, repo, (db) => {
+    decide(db, {
+      kind: 'journey.snapshot', stage: null, ref: s.commit, by: label(ctx.principal),
+      summary: `The record of revision ${s.revision} was copied into the repository (commit ${s.commit.slice(0, 7)} on ${s.branch}).`, detail: { branch: s.branch, commit: s.commit, why },
+    })
+    return { result: {} }
+  })
+  return { ...s, version: logged.version }
+}
 
 /** At most this many projects' databases are read at once for the inbox. */
 const INBOX_PARALLEL = 4
@@ -81,7 +101,7 @@ export const JOURNEY_ACTIONS = {
   'journey.criterion.open': def('read', Repo.extend({ criterion: Id.optional(), waiver: Id.optional() }).refine((a) => Boolean(a.criterion) !== Boolean(a.waiver), 'name a criterion or a waiver'), async (a, ctx) => {
     const who = hashOf(ctx.principal)
     const item = a.criterion ? { criterion: a.criterion } : { waiver: a.waiver as string }
-    return journeyWrite(ctx, a.repo, `journey: evidence opened (${a.criterion ?? `waiver ${a.waiver}`})`, (db) => {
+    return journeyWrite(ctx, a.repo, (db) => {
       const before = loadJourney(db)
       const key = a.criterion ?? `waiver:${a.waiver}`
       const seen = before?.opens.some((o) => o.item === key && o.who === who) ?? false
@@ -91,14 +111,26 @@ export const JOURNEY_ACTIONS = {
     })
   }),
 
-  'gate.sign': def('admin', Repo.extend({ gate: Id, acknowledge: z.array(Id).max(100).default([]), notes: z.string().trim().max(4000).optional() }), async (a, ctx) =>
-    journeyWrite(ctx, a.repo, `journey: gate ${a.gate} signed`, (db) => {
+  'gate.sign': def('admin', Repo.extend({ gate: Id, acknowledge: z.array(Id).max(100).default([]), notes: z.string().trim().max(4000).optional() }), async (a, ctx) => {
+    const signed = await journeyWrite(ctx, a.repo, (db) => {
       const r = signGate(db, a.gate, signer(ctx), { acknowledged: a.acknowledge, notes: a.notes ?? null })
       return { result: { repo: a.repo, ...r } }
-    })),
+    })
+    if (!signed.released) return { ...signed, snapshot: null }
+    // the signature cut a release: the record goes into the repository with it
+    try {
+      const s = await snapshot(ctx, a.repo, `${a.gate} signed`)
+      return { ...signed, version: s.version, snapshot: { branch: s.branch, commit: s.commit }, summary: `${signed.summary} The record was copied into the repository.` }
+    } catch (e) {
+      return { ...signed, snapshot: { error: `The gate is signed, but the record could not be copied into the repository: ${e instanceof Error ? e.message : String(e)}. An admin can copy it with journey.snapshot.` } }
+    }
+  }),
+
+  'journey.snapshot': def('admin', Repo.extend({ reason: z.string().trim().max(300).default('copied by an admin') }), async (a, ctx) =>
+    ({ repo: a.repo, ...(await snapshot(ctx, a.repo, a.reason)) })),
 
   'gate.return': def('write', Repo.extend({ gate: Id, reason: z.string().trim().min(1).max(4000), reopen: z.enum(STAGE_IDS).optional() }), async (a, ctx) =>
-    journeyWrite(ctx, a.repo, `journey: gate ${a.gate} returned`, (db) => {
+    journeyWrite(ctx, a.repo, (db) => {
       const r = returnGate(db, a.gate, signer(ctx), { reason: a.reason, reopen: a.reopen })
       return { result: { repo: a.repo, ...r, summary: r.reopened ? `Returned. ${r.reopened} is reopened.` : 'Returned with what has to change.' } }
     })),
@@ -106,7 +138,7 @@ export const JOURNEY_ACTIONS = {
   'question.answer': def('write', Repo.extend({
     question: Id, option: Id.optional(), answer: z.string().trim().max(4000).optional(), reason: z.string().trim().max(2000).optional(),
   }), async (a, ctx) =>
-    journeyWrite(ctx, a.repo, `journey: question ${a.question} answered`, (db) => {
+    journeyWrite(ctx, a.repo, (db) => {
       const q = answerQuestion(db, a.question, signer(ctx), { option: a.option, answer: a.answer, reason: a.reason })
       return { result: { repo: a.repo, question: q, summary: 'Answered. The agent carries on.' } }
     })),
@@ -119,7 +151,7 @@ export const JOURNEY_ACTIONS = {
     caught_where: z.string().trim().max(300).nullable(),
     scope: z.string().trim().min(1).max(300).default('this revision only'),
   }), async (a, ctx) =>
-    journeyWrite(ctx, a.repo, `journey: waiver on ${a.target.kind} ${a.target.id}`, (db) => {
+    journeyWrite(ctx, a.repo, (db) => {
       const w = addWaiver(db, { target: a.target, reason: a.reason, risk: a.risk, severity: a.severity, caught_where: a.caught_where, scope: a.scope }, signer(ctx))
       return { result: { repo: a.repo, waiver: w } }
     })),

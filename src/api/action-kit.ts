@@ -5,19 +5,13 @@
  * project's database through GitHub.
  *
  * A project's database is read from GitHub, never from a clone: the default branch's .trace/project.db is fetched
- * into a temporary folder, read, and removed. Writes are commits made with GitHub's contents API (a temporary copy
- * changed, then PUT with the blob sha it was read at, so a write that raced another is refused and re-run):
+ * into a temporary folder, read, and removed. Its writes (settings, prompts, a release's copy of the journey) are
+ * commits on a new branch per change (trace/settings-…, trace/prompts-…, trace/release-…), made with GitHub's
+ * contents API with the blob sha it was read at; their pull requests wait for a person, because .trace/** is a
+ * protected path.
  *
- *   settings, prompts   a new branch per change (trace/settings-…, trace/prompts-…): its pull request waits for a
- *                       person, because .trace/** is a protected path
- *   the journey record  one standing branch, trace/journey (JOURNEY_BRANCH): every signature, answer, waiver and
- *                       opened evidence is a commit on it, naming the person, and the journey is READ from it while it
- *                       exists. Its pull request is held for a person like the others; once merged (and the branch
- *                       deleted) the next write starts it again from the default branch. This keeps the record live
- *                       between a person's steps (open the evidence, then sign) without ever writing the default
- *                       branch. Before a project's onboarding pull request is merged (trace/onboard still open, and
- *                       no trace/journey), the journey is read from and written to trace/onboard itself, so the
- *                       first journey state travels with the onboarding and the two never both add the database.
+ * The journey record is not in the repository while it is live: it is in the central bucket (src/core/journey-store.ts,
+ * projects/<slug>/journey/journey.db, conditional puts), and copied into .trace/project.db when a release is cut.
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -29,18 +23,18 @@ import { AccessDenied, type Principal, RepoSlug, isAdmin } from '../core/access.
 import { type Backend, backendFor } from '../core/central.js'
 import type { IntegrationStore, checkIntegration } from '../core/integrations.js'
 import type { Registry } from '../core/registry.js'
-import '../core/journey.js'
+import { copyJourneyTables } from '../core/journey.js'
+import { JourneyStore } from '../core/journey-store.js'
+import { PROJECTS_PREFIX } from '../core/project.js'
 import { PROJECT_SCHEMA, open, projectTables, traceHome } from '../core/store.js'
 import type { InstallationPrompts } from '../prompts/store.js'
 import type { RetrieveClient } from '../tools/kb/search.js'
 import type { ApiOnboardResult } from '../installer/onboard-api.js'
 import type { CognitoAdmin } from './aws.js'
-import { GitHubError, type GitHubApi } from './github.js'
+import type { GitHubApi } from './github.js'
 
 export const PROJECT_DB_PATH = '.trace/project.db'
 export const MAX_ARTIFACT = 8 * 1024 * 1024
-/** The standing branch the journey record is written on (see the module comment). */
-export const JOURNEY_BRANCH = 'trace/journey'
 
 export class ActionError extends Error {
   override name = 'ActionError'
@@ -161,34 +155,87 @@ export async function withProjectDb<T>(ctx: Context, repo: string, fn: (db: stri
 
 export const slugify = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'change'
 
-/** The onboarding pull request's branch (src/core/onboard.ts ONBOARD_BRANCH). */
-export const ONBOARDING_BRANCH = 'trace/onboard'
-
 /**
- * Where the journey record is read and written: trace/journey while it exists; else trace/onboard while the
- * onboarding is not merged; else read from the default branch and written to a new trace/journey.
+ * One project's journey store (src/core/journey-store.ts) in the central bucket, importing an older repository's
+ * record (its .trace/project.db on the default branch) the first time it is read.
  */
-export async function journeyRef(gh: GitHubApi, repo: string): Promise<{ ref: string; write: string; create: boolean; base: string; baseSha: string }> {
-  const [{ branch: base, sha: baseSha }, journey, onboarding] = await Promise.all([
-    gh.defaultBranch(repo), gh.branchSha(repo, JOURNEY_BRANCH), gh.branchSha(repo, ONBOARDING_BRANCH),
-  ])
-  if (journey) return { ref: JOURNEY_BRANCH, write: JOURNEY_BRANCH, create: false, base, baseSha }
-  if (onboarding && base !== ONBOARDING_BRANCH) return { ref: ONBOARDING_BRANCH, write: ONBOARDING_BRANCH, create: false, base, baseSha }
-  return { ref: base, write: JOURNEY_BRANCH, create: true, base, baseSha }
+export function journeyStore(ctx: Context, repo: string): JourneyStore {
+  return new JourneyStore(storeAt(ctx, PROJECTS_PREFIX), repo, {
+    scratch: ctx.deps.scratch,
+    legacy: async () => {
+      const gh = await ctx.deps.github()
+      const { branch } = await gh.defaultBranch(repo)
+      return gh.rawFile(repo, PROJECT_DB_PATH, branch)
+    },
+  })
 }
 
-/** Run fn on the project's database as the journey sees it (read only: nothing is written back). */
+/** Run fn on the journey as it is now (read only), with the record's version. */
 export async function withJourneyDb<T>(ctx: Context, repo: string, fn: (db: DatabaseSync) => T): Promise<T> {
-  const gh = await ctx.deps.github()
-  const { ref } = await journeyRef(gh, repo)
-  const t = tempDb(ctx.deps.scratch, await gh.rawFile(repo, PROJECT_DB_PATH, ref))
-  try {
-    const db = openProjectDb(t.db)
+  return (await journeyStore(ctx, repo).read(fn)).result
+}
+
+/**
+ * Change the journey record in its store: fn runs on a fresh copy and must be replayable (a lost race runs it again on
+ * a fresh copy). `changed: false` (nothing to do): nothing is written. Answers fn's result with the record's version.
+ */
+export async function writeJourney<T>(ctx: Context, repo: string, fn: (db: DatabaseSync) => { result: T; changed?: boolean }): Promise<T & { version: number }> {
+  const r = await plainly(() => journeyStore(ctx, repo).update(fn))
+  return { ...r.result, version: r.version }
+}
+
+/**
+ * The project's database from the default branch with its journey tables replaced by the live record (read only):
+ * what the graph draws from, the requirements and runs of the repository beside the journey of the store.
+ */
+export async function withRecordDb<T>(ctx: Context, repo: string, fn: (db: DatabaseSync) => T): Promise<T> {
+  const live = await journeyStore(ctx, repo).bytes()
+  return withProjectDb(ctx, repo, (path, root) => {
+    const db = openProjectDb(path)
     try {
+      if (live) {
+        const src = join(root, 'journey.db')
+        writeFileSync(src, live)
+        copyJourneyTables(db, src)
+      }
       return fn(db)
     } finally {
       db.close()
     }
+  })
+}
+
+/**
+ * Copy the journey record into the repository: the default branch's .trace/project.db with its journey tables
+ * replaced by the store's, committed on a new branch trace/release-<revision>-<time> (held for a person like every
+ * change to .trace/**), the way settings.set writes. Returns the branch and commit.
+ */
+export async function snapshotJourney(ctx: Context, repo: string, why: string): Promise<{ branch: string; commit: string; revision: string }> {
+  const bytes = await journeyStore(ctx, repo).bytes()
+  if (!bytes) throw new ActionError('This project has no journey to copy yet.')
+  const gh = await ctx.deps.github()
+  const { branch: base, sha } = await gh.defaultBranch(repo)
+  const blob = await gh.fileSha(repo, PROJECT_DB_PATH, base)
+  const t = tempDb(ctx.deps.scratch, await gh.rawFile(repo, PROJECT_DB_PATH, base))
+  const src = join(t.root, 'journey.db')
+  writeFileSync(src, bytes)
+  try {
+    const db = openProjectDb(t.db)
+    let revision = 'A'
+    try {
+      copyJourneyTables(db, src)
+      revision = String((db.prepare("SELECT revision FROM journey WHERE id='current'").get() as { revision?: unknown } | undefined)?.revision ?? 'A')
+    } finally {
+      db.close()
+    }
+    const branch = `trace/release-${slugify(revision)}-${Date.now().toString(36)}`
+    if (branch === base) throw new ActionError('refusing to write the default branch')
+    await gh.createBranch(repo, branch, sha)
+    const { commit } = await gh.putFile(repo, {
+      path: PROJECT_DB_PATH, branch, content: readFileSync(t.db), sha: blob,
+      message: `journey: the record of revision ${revision} (${why})\n\nRequested by ${label(ctx.principal)} through the trace API.`,
+    })
+    return { branch, commit, revision }
   } finally {
     t.cleanup()
   }
@@ -207,54 +254,9 @@ export async function plainly<T>(fn: () => T | Promise<T>): Promise<T> {
   try {
     return await fn()
   } catch (e) {
-    if (e instanceof Error && ['JourneyError', 'PreferenceError', 'PartRefused', 'ChatError'].includes(e.name)) throw new ActionError(e.message)
+    if (e instanceof Error && ['JourneyError', 'JourneyStoreError', 'PreferenceError', 'PartRefused', 'ChatError'].includes(e.name)) throw new ActionError(e.message)
     throw e
   }
-}
-
-const conflict = (e: unknown): boolean => e instanceof GitHubError && (e.status === 409 || e.status === 422)
-
-/**
- * Change the journey record: fn runs on a fresh copy of the database (from trace/journey, or the default branch when
- * there is none yet), and the result is committed on trace/journey with a message naming the person. fn must be
- * replayable: when another write got in first, GitHub refuses the stale sha and the whole change runs again.
- * `changed` false (fn decided there was nothing to do): no commit.
- */
-export async function writeJourney<T>(ctx: Context, repo: string, message: string, fn: (db: DatabaseSync) => { result: T; changed?: boolean }): Promise<T & { commit: string | null; branch: string }> {
-  const gh = await ctx.deps.github()
-  let last: unknown = null
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const at = await journeyRef(gh, repo)
-    if (at.write === at.base) throw new ActionError('refusing to write the default branch')
-    // the blob sha the change starts from: GitHub refuses the write when the file moved on since (a new trace/journey
-    // starts at the default branch's commit, so its file is the one read here)
-    const blob = await gh.fileSha(repo, PROJECT_DB_PATH, at.ref)
-    const t = tempDb(ctx.deps.scratch, await gh.rawFile(repo, PROJECT_DB_PATH, at.ref))
-    try {
-      const db = openProjectDb(t.db)
-      let out: { result: T; changed?: boolean }
-      try {
-        out = fn(db)
-      } finally {
-        db.close()
-      }
-      if (out.changed === false) return { ...out.result, commit: null, branch: at.ref }
-      try {
-        if (at.create) await gh.createBranch(repo, at.write, at.baseSha)
-        const { commit } = await gh.putFile(repo, {
-          path: PROJECT_DB_PATH, branch: at.write, content: readFileSync(t.db), sha: blob,
-          message: `${message.slice(0, 200)}\n\nRequested by ${label(ctx.principal)} through the trace API.`,
-        })
-        return { ...out.result, commit, branch: at.write }
-      } catch (e) {
-        if (!conflict(e)) throw e
-        last = e
-      }
-    } finally {
-      t.cleanup()
-    }
-  }
-  throw new ActionError(`The journey record kept changing while this was being saved; try again. (${last instanceof Error ? last.message : String(last)})`)
 }
 
 // ------------------------------------------------------------------ the central bucket

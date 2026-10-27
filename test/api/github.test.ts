@@ -18,9 +18,9 @@ function fakeFetch(routes: Record<string, [number, unknown]>): { fetch: typeof f
 
 describe('HttpGitHub: what the web app\'s actions add', () => {
   it('branchSha: the branch\'s commit, or null when there is none', async () => {
-    const { fetch } = fakeFetch({ 'GET /repos/acme/board/git/ref/heads/trace/journey': [200, { object: { sha: 'abc' } }] })
+    const { fetch } = fakeFetch({ 'GET /repos/acme/board/git/ref/heads/trace/onboard': [200, { object: { sha: 'abc' } }] })
     const gh = new HttpGitHub('t', { fetch })
-    expect(await gh.branchSha('acme/board', 'trace/journey')).toBe('abc')
+    expect(await gh.branchSha('acme/board', 'trace/onboard')).toBe('abc')
     expect(await gh.branchSha('acme/board', 'trace/none')).toBeNull()
   })
 
