@@ -202,7 +202,7 @@ export class ProjectStack extends Construct {
     // a copy of a credential, not data, so it goes with the project (removalPolicy DESTROY whatever retainData says).
     this.secret = new secrets.Secret(this, 'GithubToken', {
       secretName: githubSecretName(cfg.prefix, repository, settings.generation),
-      description: `The GitHub token ${slug}'s trace agent uses (written by \`trace install\`, never by CloudFormation).`,
+      description: `The GitHub token ${slug}'s trace agent uses (written by \`tracectl install\`, never by CloudFormation).`,
       removalPolicy: RemovalPolicy.DESTROY,
     })
 

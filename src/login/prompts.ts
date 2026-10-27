@@ -1,11 +1,11 @@
 /**
- * `trace remote prompts …`: the prompt commands (src/prompts/cli.ts) through the API's prompts.* actions, signed in.
+ * `tracectl remote prompts …`: the prompt commands (src/prompts/cli.ts) through the API's prompts.* actions, signed in.
  *
- *   trace remote prompts list [--repo OWNER/REPO]                       with --repo: that project's overrides too
- *   trace remote prompts get ID [--repo OWNER/REPO]
- *   trace remote prompts set ID --reason "why" [--file F] (--repo OWNER/REPO | --installation)
- *   trace remote prompts reset|revert|history|diff ID … (--repo OWNER/REPO | --installation)
- *   trace remote prompts preview TARGET --repo OWNER/REPO [--marked] [--request "…"]
+ *   tracectl remote prompts list [--repo OWNER/REPO]                       with --repo: that project's overrides too
+ *   tracectl remote prompts get ID [--repo OWNER/REPO]
+ *   tracectl remote prompts set ID --reason "why" [--file F] (--repo OWNER/REPO | --installation)
+ *   tracectl remote prompts reset|revert|history|diff ID … (--repo OWNER/REPO | --installation)
+ *   tracectl remote prompts preview TARGET --repo OWNER/REPO [--marked] [--request "…"]
  *
  * A project change is a commit on a trace/prompts-<slug>-<ts> branch whose pull request waits for a person; an
  * installation change (admins) applies to jobs that start from then on.
@@ -17,7 +17,7 @@ import { invokeApi } from './invoke.js'
 
 const Repo = z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')
 
-export const REMOTE_PROMPTS_USAGE = 'usage: trace remote prompts list | get ID | set ID --reason "why" [--file F] | reset ID | revert ID VERSION | history ID | diff ID [FROM [TO]] | preview TARGET [--marked]  (--repo OWNER/REPO for a project, --installation for the installation\'s overrides)'
+export const REMOTE_PROMPTS_USAGE = 'usage: tracectl remote prompts list | get ID | set ID --reason "why" [--file F] | reset ID | revert ID VERSION | history ID | diff ID [FROM [TO]] | preview TARGET [--marked]  (--repo OWNER/REPO for a project, --installation for the installation\'s overrides)'
 
 /** `invoke`: the API call (invokeApi; a stand-in in tests). */
 export function remoteBackend(repo: string | undefined, invoke: (action: string, args: Record<string, unknown>) => Promise<unknown> = invokeApi): PromptBackend {

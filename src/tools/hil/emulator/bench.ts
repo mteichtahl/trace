@@ -165,7 +165,7 @@ export async function startBench(o: BenchOptions = {}): Promise<Bench> {
   const settings: BenchSettings = {
     'hil.instruments': [
       { name: 'bench-psu', kind: 'psu', model: 'rigol-dp800', address: at(psu), channels: [1], limits: { ...BENCH_LIMITS },
-        note: "bench emulator (trace hil emulate): Rigol DP832; CH1 is the sample board's VIN" },
+        note: "bench emulator (tracectl hil emulate): Rigol DP832; CH1 is the sample board's VIN" },
       { name: 'bench-scope', kind: 'scope', model: 'rigol-ds1000z', address: at(scope), channels: [1, 2, 3, 4],
         note: 'bench emulator: Rigol DS1104Z; CH1 is ADC_IN (the last VIN step through the RC filter), CH2 a 1 kHz 3.2 Vpp square' },
       { name: 'bench-dmm', kind: 'dmm', model: 'keysight-344xx', address: at(dmm), channels: [1],

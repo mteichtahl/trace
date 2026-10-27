@@ -1,5 +1,5 @@
 /**
- * `trace update-installation` (src/installer/update.ts): the self-update job of trace's own ci workflow, with fakes for
+ * `tracectl update-installation` (src/installer/update.ts): the self-update job of trace's own ci workflow, with fakes for
  * AWS, CDK and GitHub. It deploys with the saved settings and the runners' way to GitHub decided now (runners.auth, as
  * the installer decides it), sets the runners' variables when it can and writes them to the step summary when it
  * cannot, and fails only when the deploy does (or would deploy runners with a credential CodeBuild does not have).
@@ -65,7 +65,7 @@ function world(o: { choice?: ConnectionChoice; cdk?: number; githubFails?: boole
   return w
 }
 
-describe('trace update-installation', () => {
+describe('tracectl update-installation', () => {
   it('deploys the saved settings with the connection decided now, and sets each runner\'s variable that is missing or different', async () => {
     const w = world({ vars: { [`${TRACE}:TRACE_CODEBUILD_PROJECT`]: 'old-name' } })
     expect(await updateInstallation(w.deps)).toBe(0)

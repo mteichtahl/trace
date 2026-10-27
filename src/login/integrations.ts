@@ -1,14 +1,14 @@
 /**
- * `trace integrations`: the installation's optional integrations (src/core/integrations.ts), after installing.
+ * `tracectl integrations`: the installation's optional integrations (src/core/integrations.ts), after installing.
  *
- *   trace integrations list                          which are configured, what each enables, where to get a key
- *   trace integrations set NAME [KEY=VALUE ...]      store one (keys not given are read from the environment, then
+ *   tracectl integrations list                          which are configured, what each enables, where to get a key
+ *   tracectl integrations set NAME [KEY=VALUE ...]      store one (keys not given are read from the environment, then
  *                                                    asked for); checked with the service first, never refused for it
- *   trace integrations check NAME                    check the stored credentials with the service
- *   trace integrations remove NAME                   delete its secret
+ *   tracectl integrations check NAME                    check the stored credentials with the service
+ *   tracectl integrations remove NAME                   delete its secret
  *
  * With your own AWS credentials (the default: the installation's region, the prefix from the installer's answers or
- * --prefix), or with --remote through the API as a signed-in admin (`trace login`).
+ * --prefix), or with --remote through the API as a signed-in admin (`tracectl login`).
  */
 import { createInterface } from 'node:readline'
 import { parseArgs } from 'node:util'
@@ -21,7 +21,7 @@ import { ApiError, invokeApi } from './invoke.js'
 const out = (s: string): void => { process.stdout.write(`${s}\n`) }
 const err = (s: string): void => { process.stderr.write(`${s}\n`) }
 
-const USAGE = 'usage: trace integrations list | set NAME [KEY=VALUE ...] | check NAME | remove NAME   [--remote] [--prefix P] [--region R]'
+const USAGE = 'usage: tracectl integrations list | set NAME [KEY=VALUE ...] | check NAME | remove NAME   [--remote] [--prefix P] [--region R]'
 
 /** The installation's prefix on this machine: --prefix, else the installer's saved answers, else trace. */
 export function localPrefix(given?: string): string {
@@ -61,7 +61,7 @@ function show(list: readonly IntegrationStatus[]): void {
   for (const i of list) {
     out(`${i.configured ? 'set ' : '--  '} ${i.name.padEnd(8)} ${i.title}${i.changed ? ` (changed ${i.changed.slice(0, 10)})` : ''}`)
     out(`      ${i.enables}`)
-    if (!i.configured) out(`      get one at ${i.url}, then: trace integrations set ${i.name}`)
+    if (!i.configured) out(`      get one at ${i.url}, then: tracectl integrations set ${i.name}`)
   }
 }
 
@@ -105,7 +105,7 @@ export async function cmdIntegrations(argv: string[]): Promise<number> {
     // check: the stored credentials (local only: the API never reads them back)
     if (o.remote) { err('trace: `check` reads the stored credentials, which the API never returns: run it without --remote, with your AWS credentials'); return 2 }
     const stored = await (await localStore(o)).get(name)
-    if (!stored) { out(`${name} is not set: trace integrations set ${name}`); return 1 }
+    if (!stored) { out(`${name} is not set: tracectl integrations set ${name}`); return 1 }
     const c = await checkIntegration(name, stored)
     out(`${c.ok ? 'ok: ' : 'failed: '}${c.detail}`)
     return c.ok ? 0 : 1
@@ -117,6 +117,6 @@ export async function cmdIntegrations(argv: string[]): Promise<number> {
 
 async function localStore(o: { prefix?: string | undefined; region?: string | undefined }): Promise<IntegrationStore> {
   const region = o.region ?? installation()?.region ?? process.env.AWS_REGION
-  if (!region) throw new Error('no region: run `trace install` first, or pass --region')
+  if (!region) throw new Error('no region: run `tracectl install` first, or pass --region')
   return new IntegrationStore(localPrefix(o.prefix), await secretsManagerApi({ region }))
 }

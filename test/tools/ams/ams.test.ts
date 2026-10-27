@@ -33,7 +33,7 @@ describe('ams pure helpers', () => {
     expect(z.hi).toBeCloseTo(0.1611, 3)
   })
 
-  it('trace db merge keeps the newer ams_specs row', () => {
+  it('tracectl db merge keeps the newer ams_specs row', () => {
     const dir = mkdtempSync(join(tmpdir(), 'trace-ams-merge-'))
     const mk = (name: string, rows: [string, string, number, number][]): string => {
       const p = join(dir, name, '.trace', 'project.db')

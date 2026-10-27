@@ -211,7 +211,7 @@ export async function runTest(t: TestItem, ctx: ToolContext, opts: { verdict?: {
 export async function validateToolArgs(tool: string, args: unknown): Promise<void> {
   const { allTools } = await import('../index.js')
   const t = allTools().get(tool)
-  if (!t) throw new ToolError(`no tool ${JSON.stringify(tool)} (trace tools lists them)`)
+  if (!t) throw new ToolError(`no tool ${JSON.stringify(tool)} (tracectl tools lists them)`)
   const r = t.input.strict().safeParse(args ?? {})
   if (!r.success) throw new ToolError(`args for ${tool}: ${r.error.issues.map((i) => `${i.path.join('.') || 'input'}: ${i.message}`).join('; ')}`)
 }

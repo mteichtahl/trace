@@ -327,7 +327,7 @@ export type InfraInput = z.input<typeof InfraPropsSchema>
 
 export function infraPropsFromEnv(env: NodeJS.ProcessEnv = process.env): InfraProps {
   const raw = env.TRACE_INFRA
-  if (!raw) throw new Error('TRACE_INFRA is not set: run `trace install`, or set it to the stack settings as JSON')
+  if (!raw) throw new Error('TRACE_INFRA is not set: run `tracectl install`, or set it to the stack settings as JSON')
   return InfraPropsSchema.parse(JSON.parse(raw))
 }
 

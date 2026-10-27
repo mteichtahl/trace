@@ -125,7 +125,7 @@ export const SAMPLE_TESTS: readonly Plan[] = [
     note: 'run kicad.bom jlc=true and parts.bom_check boards=10; a person confirms and gives the verdict to verify.run' },
   { id: 'TST-THM-002', title: 'U1 tab temperature on the bench matches the model (thermal/u1-bench-log.csv)', requirements: ['REQ-THM-001'], method: 'inspection',
     note: 'thermal.compare of the 2.5d transient against the log; within 5 C at steady state passes' },
-  // hil: needs TRACE_HARDWARE=1 and the bench emulator (trace hil emulate --write-settings --serial)
+  // hil: needs TRACE_HARDWARE=1 and the bench emulator (tracectl hil emulate --write-settings --serial)
   { id: 'TST-HIL-001', title: 'ADC_IN on the DMM at 12 V (hil.dmm on bench-dmm)', requirements: ['REQ-HIL-001', 'REQ-PWR-001'], method: 'hil', tool: 'hil.dmm',
     args: { instrument: 'bench-dmm', function: 'vdc' }, note: 'set bench-psu to 12 V, 0.1 A, output on first (hil.psu)' },
   { id: 'TST-HIL-002', title: 'Console reports the rail (hil.serial_expect on bench-uart)', requirements: ['REQ-HIL-001', 'REQ-FW-001'], method: 'hil', tool: 'hil.serial_expect',

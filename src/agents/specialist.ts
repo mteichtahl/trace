@@ -92,7 +92,7 @@ export type SpecialistJob =
       /** The issue or PR body and its latest comments, read by the runner (the specialist has no shell). Data. */
       thread?: string | undefined }
   | { kind: 'task'; request: string; requestedBy: string; issue?: number | undefined; branch: string }
-  /** `trace agent prompt`: no job, for review. */
+  /** `tracectl agent prompt`: no job, for review. */
   | { kind: 'preview' }
 
 export interface PromptContext {

@@ -284,7 +284,7 @@ describe('the plan', () => {
     expect(steps.find((s) => s.id === 'deploy')?.detail).toMatch(/its own AWS CodeBuild runner project that runs every one of its GitHub Actions jobs/)
     expect(steps.find((s) => s.id === 'onboard')?.detail).toMatch(/open \(or refresh\) the onboarding PR in marc\/board; create marc\/new-board \(kicad\)/)
     expect(steps.find((s) => s.id === 'deploy')?.detail).toMatch(/no GPU or CPU jobs/)
-    expect(steps.find((s) => s.id === 'integrations')?.detail).toMatch(/trace integrations set <name>/)
+    expect(steps.find((s) => s.id === 'integrations')?.detail).toMatch(/tracectl integrations set <name>/)
     // nothing to set up for a repository-less install
     const none = plan({ ...a, projects: [] })
     expect(none.find((s) => s.id === 'repos')?.detail).toMatch(/no repositories yet/)

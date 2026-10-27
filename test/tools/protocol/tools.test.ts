@@ -62,7 +62,7 @@ describe('protocol.spec', () => {
     expect(projectTables().some((x) => x.table === 'protocol_specs')).toBe(true)
   })
 
-  it('trace db merge keeps the newer protocol_specs row and the union of the rest', () => {
+  it('tracectl db merge keeps the newer protocol_specs row and the union of the rest', () => {
     const dir = mkdtempSync(join(tmpdir(), 'trace-proto-merge-'))
     const mk = (name: string, rows: [string, number, number][]): string => {
       const p = join(dir, name, '.trace', 'project.db')

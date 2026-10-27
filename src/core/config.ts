@@ -377,7 +377,7 @@ export function changed(root?: string): Record<string, unknown> {
   return readSettings(projectPath(root))
 }
 
-/** `trace config set` values: JSON literals (true, 3, ["a"], {"k": 1}) or else a plain string. */
+/** `tracectl config set` values: JSON literals (true, 3, ["a"], {"k": 1}) or else a plain string. */
 export function parseCliValue(text: string): unknown {
   try {
     return JSON.parse(text)

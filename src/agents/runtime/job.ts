@@ -22,7 +22,7 @@
  * it continues one, are appended to the prompt as a fenced data block; the request, key tool outcomes and the result
  * are recorded as events, scrubbed and bounded. A memory failure is logged once and never fails the job.
  *
- * WAITS. Every job's tools run in the MCP server its Claude session starts (`trace mcp`), so the waits they open
+ * WAITS. Every job's tools run in the MCP server its Claude session starts (`tracectl mcp`), so the waits they open
  * (gpu.*, kb.sync, …) are on that child's record. While a specialist or worker job runs it is registered on the wait
  * relay (wait-relay.ts; openWaitRelay), and its MCP server gets TRACE_WAITS_URL (this runtime, loopback: the same base
  * as TRACE_DELEGATE_URL) and TRACE_WAITS_TOKEN (that job's, in the MCP server's environment only): the child reports

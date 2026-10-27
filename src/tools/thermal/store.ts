@@ -1,6 +1,6 @@
 /**
  * The thermal tools' tables in the project database (src/core/store.ts ensureProjectSchema), each merged by
- * `trace db merge` by key, keeping the more recently updated row:
+ * `tracectl db merge` by key, keeping the more recently updated row:
  *
  *   thermal_envelopes    name → the operating envelope: ambient min/max, environment (natural, forced, sealed,
  *                        vacuum), airflow, enclosure, orientation, altitude, the derating policy, notes, source

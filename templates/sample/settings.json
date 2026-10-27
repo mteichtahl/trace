@@ -28,7 +28,7 @@
   "hil.instruments": [
     { "name": "bench-psu", "kind": "psu", "model": "rigol-dp800", "address": "TCPIP::127.0.0.1::5555::SOCKET", "channels": [1],
       "limits": { "max_voltage_v": 13, "max_current_a": 0.1 },
-      "note": "bench emulator (trace hil emulate): Rigol DP832; CH1 is the sample board's VIN" },
+      "note": "bench emulator (tracectl hil emulate): Rigol DP832; CH1 is the sample board's VIN" },
     { "name": "bench-scope", "kind": "scope", "model": "rigol-ds1000z", "address": "TCPIP::127.0.0.1::5556::SOCKET", "channels": [1, 2, 3, 4],
       "note": "bench emulator: Rigol DS1104Z; CH1 is ADC_IN (the last VIN step through the RC filter), CH2 a 1 kHz 3.2 Vpp square" },
     { "name": "bench-dmm", "kind": "dmm", "model": "keysight-344xx", "address": "TCPIP::127.0.0.1::5557::SOCKET", "channels": [1],
@@ -36,5 +36,5 @@
   ],
   "hil.can": [{ "name": "bench-can", "interface": "virtual", "channel": "bench" }],
   "hil.serial": [{ "name": "bench-uart", "port": "/tmp/trace-bench-uart-5555", "baud": 115200,
-    "note": "bench emulator: the sample firmware's console (trace hil emulate --serial); adc raw=… mv=… each second, answers READ" }]
+    "note": "bench emulator: the sample firmware's console (tracectl hil emulate --serial); adc raw=… mv=… each second, answers READ" }]
 }

@@ -2,9 +2,9 @@
  * This machine's connection to a trace installation, in ~/.trace/client.db (SQLite):
  *
  *   installation   region, Cognito pool/client/domain, the API runtime's ARN, TRACE_HOME — written by
- *                  `trace install`, or by `trace connect` from values an admin shares. Nothing secret.
- *   session        the signed-in person's Cognito tokens, written by `trace login`. The file is created 0600 and
- *                  `trace logout` deletes the row. Access tokens last an hour; the refresh token renews them.
+ *                  `tracectl install`, or by `tracectl connect` from values an admin shares. Nothing secret.
+ *   session        the signed-in person's Cognito tokens, written by `tracectl login`. The file is created 0600 and
+ *                  `tracectl logout` deletes the row. Access tokens last an hour; the refresh token renews them.
  */
 import { chmodSync, existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -22,7 +22,7 @@ export const InstallationSchema = z.object({
   clientId: z.string(),
   cognitoDomain: z.string().url(),
   apiRuntimeArn: z.string(),
-  /** '' when unknown (`trace connect`: people other than the installer don't need these). Each project now has its
+  /** '' when unknown (`tracectl connect`: people other than the installer don't need these). Each project now has its
    * own worker runtime and GitHub OIDC role (its repository's variables), so the installer leaves the first two ''. */
   workerRuntimeArn: z.string().default(''),
   actionsRoleArn: z.string().default(''),
@@ -114,7 +114,7 @@ export function clearSession(name = process.env.TRACE_INSTALLATION || 'default')
   }
 }
 
-/** Forget an installation on this machine (`trace uninstall`): its record and its session. */
+/** Forget an installation on this machine (`tracectl uninstall`): its record and its session. */
 export function forgetInstallation(name = process.env.TRACE_INSTALLATION || 'default'): void {
   const d = db()
   try {

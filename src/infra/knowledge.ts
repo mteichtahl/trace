@@ -166,7 +166,7 @@ export class ProjectKnowledgeBase extends Construct {
     this.dataSource = new CfnDataSource(this, 'DataSource', {
       knowledgeBaseId: this.knowledgeBase.attrKnowledgeBaseId,
       name: KB_DATA_SOURCE_NAME,
-      description: `${p.slug}'s repository documents, KiCad summaries and datasheets, written by \`trace kb sync\``.slice(0, 200),
+      description: `${p.slug}'s repository documents, KiCad summaries and datasheets, written by \`tracectl kb sync\``.slice(0, 200),
       // what happens to the vectors when the data source is deleted
       dataDeletionPolicy: retain ? 'RETAIN' : 'DELETE',
       dataSourceConfiguration: {

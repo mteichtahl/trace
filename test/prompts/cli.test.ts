@@ -1,6 +1,6 @@
 /**
- * `trace prompts …` locally (this clone's .trace/project.db, and --installation on the installation's store) and
- * `trace remote prompts …` (the same commands as API calls).
+ * `tracectl prompts …` locally (this clone's .trace/project.db, and --installation on the installation's store) and
+ * `tracectl remote prompts …` (the same commands as API calls).
  */
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -42,7 +42,7 @@ afterEach(() => {
 const run = (argv: string[]): Promise<number> => runPrompts(argv, localBackend(installation))
 const text = (): string => stdout.join('')
 
-describe('trace prompts (local)', () => {
+describe('tracectl prompts (local)', () => {
   it('sets from a file, shows where each text comes from, keeps the history, diffs and reverts', async () => {
     const f = join(root, 'workflow.txt')
     writeFileSync(f, 'WORKFLOW:\n1. Check {{repository}} first.')
@@ -107,7 +107,7 @@ describe('trace prompts (local)', () => {
   })
 })
 
-describe('trace remote prompts', () => {
+describe('tracectl remote prompts', () => {
   it('sends the same commands as prompts.* API calls, with --repo for a project and --installation for the installation', async () => {
     const calls: [string, Record<string, unknown>][] = []
     const invoke = async (action: string, args: Record<string, unknown>): Promise<unknown> => {

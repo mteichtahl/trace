@@ -1,6 +1,6 @@
 name: trace install
 description: >-
-  Installs the trace toolkit (the `trace` CLI, its MCP server and the Python bridge) from this action's own copy of the
+  Installs the trace toolkit (the `tracectl` CLI, its MCP server and the Python bridge) from this action's own copy of the
   repository, so a workflow in another repository gets it without a token for the trace repository, and returns an MCP
   config that gives Claude Code the electronics tools.
 inputs:
@@ -74,18 +74,20 @@ runs:
         root="$(cd "$AP/../../.." && pwd)"
         (cd "$root" && npm ci --no-audit --no-fund --loglevel=error && npm run build --silent)
         mkdir -p "$RUNNER_TEMP/trace-bin"
-        printf '#!/usr/bin/env bash\nexec node "%s/dist/bin.js" "$@"\n' "$root" > "$RUNNER_TEMP/trace-bin/trace"
-        chmod +x "$RUNNER_TEMP/trace-bin/trace"
+        printf '#!/usr/bin/env bash\nexec node "%s/dist/bin.js" "$@"\n' "$root" > "$RUNNER_TEMP/trace-bin/tracectl"
+        chmod +x "$RUNNER_TEMP/trace-bin/tracectl"
+        # `trace` too, for workflows rendered before the command was renamed (they call `trace kb sync`, `trace check`)
+        ln -sf tracectl "$RUNNER_TEMP/trace-bin/trace"
         echo "$RUNNER_TEMP/trace-bin" >> "$GITHUB_PATH"
         if [ "$BRIDGE" != "none" ]; then
           python3 -m venv "$RUNNER_TEMP/trace-py"
           "$RUNNER_TEMP/trace-py/bin/pip" install -q "$root/python[$BRIDGE]"
           echo "TRACE_PYTHON=$RUNNER_TEMP/trace-py/bin/python" >> "$GITHUB_ENV"
         fi
-        git config --global merge.trace-db.driver "trace db merge %O %A %B"
+        git config --global merge.trace-db.driver "tracectl db merge %O %A %B"
         # Built with node from the environment (no shell quoting of the values): TRACE_MCP_TOOLS limits the server to
         # the specialist's tools; the memory tools act as the given actor and session only.
-        TRACE_BIN="$RUNNER_TEMP/trace-bin/trace" node -e '
+        TRACE_BIN="$RUNNER_TEMP/trace-bin/tracectl" node -e '
           const e = process.env
           const config = (extra) => JSON.stringify({ mcpServers: { trace: { command: e.TRACE_BIN, args: ["mcp"], env: {
             TRACE_HARDWARE: e.HARDWARE === "true" ? "1" : "0",
@@ -101,4 +103,4 @@ runs:
           ]
           require("fs").appendFileSync(e.GITHUB_OUTPUT, out.join("\n") + "\n")
         '
-        "$RUNNER_TEMP/trace-bin/trace" tools | tail -n 1
+        "$RUNNER_TEMP/trace-bin/tracectl" tools | tail -n 1

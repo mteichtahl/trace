@@ -10,7 +10,7 @@
     "node": ">=22.13"
   },
   "bin": {
-    "trace": "dist/bin.js"
+    "tracectl": "dist/bin.js"
   },
   "files": [
     "dist",

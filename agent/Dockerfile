@@ -80,7 +80,7 @@ RUN npm run build \
  && python3 -m venv /opt/trace-venv \
  && /opt/trace-venv/bin/pip install --no-cache-dir '/app/python[pdf]' 'cocotb==2.1.0' 'apycula==0.10.0' \
  && { test -d /app/python/blender || echo "note: /app/python/blender is not in the build context yet"; } \
- && ln -s /app/dist/cli.js /usr/local/bin/trace && chmod +x /app/dist/cli.js \
+ && ln -s /app/dist/cli.js /usr/local/bin/tracectl && ln -s tracectl /usr/local/bin/trace && chmod +x /app/dist/cli.js \
  && chown -R trace:trace /app
 
 ENV PATH=/opt/trace-venv/bin:$PATH \
