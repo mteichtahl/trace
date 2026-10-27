@@ -47,6 +47,8 @@ import { scratchDir } from '../core/store.js'
 import type { GpuJobSchema, JobResult } from './jobs.js'
 import type { z } from 'zod'
 import { trackInFlight } from './inflight.js'
+import { type UsageRow, jobRow, ledgerFromEnv, recordUsage } from '../core/cost.js'
+import { pricesFromEnv } from '../core/prices.js'
 import { encodeSpec, ExitRecordSchema, jobKeys, jobsLocation, type ExitRecord, type RemoteSpec } from './protocol.js'
 
 export type ParsedJob = z.output<typeof GpuJobSchema>
@@ -73,6 +75,9 @@ export interface BatchJobDetail {
   status?: string | undefined
   statusReason?: string | undefined
   container?: { reason?: string | undefined; exitCode?: number | undefined; logStreamName?: string | undefined } | undefined
+  /** ms since the epoch: when the container started and stopped (DescribeJobs and the state-change event carry them) */
+  startedAt?: number | undefined
+  stoppedAt?: number | undefined
 }
 
 /** The SQS calls the event wait uses (the SDK's shapes, only the fields read here). */
@@ -105,6 +110,21 @@ export interface BatchDeps {
   env?: NodeJS.ProcessEnv
   /** progress lines (status changes), e.g. for a CLI */
   log?: (line: string) => void
+  /** record what the job cost in the project's ledger (src/core/cost.ts); default: recordUsage into the session's ledger */
+  recordCost?: (row: UsageRow) => Promise<unknown>
+}
+
+/**
+ * What a finished job cost, for the ledger: its running time (Batch's startedAt to stoppedAt; a job that never
+ * started ran on no instance and costs nothing) x its pool's price (src/core/prices.ts). An estimate: the instance
+ * may have been up longer (scaling down is not counted), and a Spot price is lower.
+ */
+export function batchCostRow(o: { pool: 'gpu' | 'cpu'; detail: BatchJobDetail | undefined; vcpus: number | null; id: string; kind: string; env: NodeJS.ProcessEnv }): UsageRow | null {
+  const d = o.detail
+  if (!d?.startedAt) return null
+  const seconds = Math.max(0, ((d.stoppedAt ?? d.startedAt) - d.startedAt) / 1000)
+  const vcpus = o.vcpus ?? (Number(o.env[o.pool === 'cpu' ? 'TRACE_CPU_JOB_MAX_VCPUS' : 'TRACE_GPU_JOB_MAX_VCPUS']) || 1)
+  return jobRow(pricesFromEnv(o.env), { pool: o.pool, seconds, vcpus, at: (d.stoppedAt ?? d.startedAt) / 1000, jobId: o.id, kind: o.kind, region: o.env.AWS_REGION ?? null })
 }
 
 async function awsBatch(): Promise<BatchApi> {
@@ -280,6 +300,11 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
     forget()
   }
   const detail = last.detail
+  // its cost, as it ended (best effort: recording never fails the job)
+  if (TERMINAL.has(last.status)) {
+    const row = batchCostRow({ pool: place.pool, detail, vcpus: place.vcpus, id, kind: job.kind, env })
+    if (row) await (deps.recordCost ?? ((r: UsageRow) => recordUsage([r], { ledger: ledgerFromEnv(env), log })))(row).catch(() => undefined)
+  }
   if (!TERMINAL.has(last.status)) {
     const status = last.status
     await batch.terminateJob({ jobId, reason: `trace: no result within ${Math.round((deadline - t0) / 1000)} s` }).catch(() => undefined)

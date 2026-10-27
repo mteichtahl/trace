@@ -441,6 +441,20 @@ describe('job runner', () => {
     } finally { h.cleanup() }
   })
 
+  it('records what each Claude run cost, per model, with its job and agent (the cost ledger)', async () => {
+    const recorded: { uses: unknown; o: { jobId: string | null; agent: string | null } }[] = []
+    const h = harness({ recordCost: async (uses, o) => { recorded.push({ uses, o }) } }, [{
+      type: 'result', subtype: 'success', is_error: false, result: 'Done.', num_turns: 2, total_cost_usd: 0.2,
+      modelUsage: { 'us.anthropic.claude-sonnet-4-5': { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 50, cacheCreationInputTokens: 10, costUSD: 0.2 } },
+    }])
+    try {
+      await createRunner(h.d)({ kind: 'work-item', repository: 'o/r', item: ITEM }, h.ctx)
+      expect(recorded).toHaveLength(1)
+      expect(recorded[0]?.o).toMatchObject({ jobId: 'job-t', agent: expect.any(String) })
+      expect(recorded[0]?.uses).toEqual([{ model: 'us.anthropic.claude-sonnet-4-5', tokens: { input: 1000, output: 200, cacheRead: 50, cacheWrite: 10 }, sdkCost: 0.2 }])
+    } finally { h.cleanup() }
+  })
+
   it('stays on the default branch for an agent-fix issue and runs a task on a claude/task branch', async () => {
     const h = harness()
     try {

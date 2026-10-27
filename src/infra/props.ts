@@ -4,6 +4,7 @@
  * into Secrets Manager and GitHub after the deploy.
  */
 import { z } from 'zod'
+import { PriceOverridesSchema } from '../core/prices.js'
 import { projectHash, projectSlug } from '../core/project.js'
 
 export {
@@ -295,6 +296,20 @@ export const InfraPropsSchema = z.object({
     samplingPercent: z.number().min(0).max(100).optional(),
     /** a CloudWatch dashboard of invocations, latency, errors, tokens, tool calls and GPU jobs */
     dashboard: z.boolean().default(true),
+  }).strict().prefault({}),
+  /** Cloud cost per project (src/core/cost.ts, src/infra/cost.ts). */
+  cost: z.object({
+    /** overrides of the price table the estimates use (src/core/prices.ts DEFAULT_PRICES), with their date */
+    prices: PriceOverridesSchema.optional(),
+    /** a daily read of what AWS billed each project, from Cost Explorer by the trace:project cost allocation tag */
+    explorer: z.object({
+      enabled: z.boolean().default(true),
+      /** activate trace:project and trace:installation as cost allocation tags when they are not (needs the account
+       * to be allowed to: in an organization, only its management account is) */
+      activateTags: z.boolean().default(true),
+      /** when it reads, UTC, HH:MM */
+      at: z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/).default('06:17'),
+    }).strict().prefault({}),
   }).strict().prefault({}),
 }).strict().superRefine((p, ctx) => {
   if (p.runners.auth === 'token' && p.runners.connectionArn) ctx.addIssue({ code: 'custom', path: ['runners', 'connectionArn'], message: "runners.connectionArn is for auth 'connection': with auth 'token' the runners use CodeBuild's GitHub source credential" })

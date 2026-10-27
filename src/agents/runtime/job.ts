@@ -47,6 +47,7 @@ import { type WorkItem, WorkItemSchema, pick } from '../../harness/worker.js'
 import type { JobContext, JobRunner } from './jobs.js'
 import { addSecret } from '../../core/telemetry.js'
 import { claudeTelemetry } from './observe.js'
+import { type ModelUse, recordModelUse } from '../../core/cost.js'
 import { type AgentMemory, type Actor, type JobMemory, NO_MEMORY, agentActor, memoryFromEnv, openJobMemory, personActor, sessionIdFor } from './memory.js'
 import { composeTask, taskBranch } from '../worker/prompt.js'
 import { SPECIALISTS, SPECIALIST_BUILTINS, type Specialist, allowedToolsOf, toolsOf } from '../index.js'
@@ -134,6 +135,11 @@ export interface RunnerDeps {
    * (src/prompts/store.ts); absent: the catalog's defaults only.
    */
   prompts?: ((dir: string) => Promise<Layers>) | undefined
+  /**
+   * Record one Claude run's model use in the project's cost ledger (src/core/cost.ts recordModelUse); absent: not
+   * recorded (tests, and a session with no project in scope).
+   */
+  recordCost?: ((uses: readonly ModelUse[], o: { jobId: string | null; agent: string | null; log: (l: string) => void }) => Promise<unknown>) | undefined
 }
 
 /** The delegated worker's tools: everything, as before the specialists (the MCP server offers no agent.delegate to it). */
@@ -244,11 +250,26 @@ const ResultMessage = z.object({
   result: z.string().optional(),
   num_turns: z.number().optional(),
   errors: z.array(z.string()).optional(),
+  total_cost_usd: z.number().optional(),
+  modelUsage: z.record(z.string(), z.object({
+    inputTokens: z.number().default(0), outputTokens: z.number().default(0), cacheReadInputTokens: z.number().default(0),
+    cacheCreationInputTokens: z.number().default(0), costUSD: z.number().optional(),
+  }).loose()).optional(),
 }).loose()
+
+/** Each model's tokens from the SDK's result message, for the cost ledger (src/core/cost.ts). */
+export function modelUsesOf(r: z.infer<typeof ResultMessage>): ModelUse[] {
+  return Object.entries(r.modelUsage ?? {}).map(([model, u]) => ({
+    model, tokens: { input: u.inputTokens, output: u.outputTokens, cacheRead: u.cacheReadInputTokens, cacheWrite: u.cacheCreationInputTokens },
+    sdkCost: u.costUSD ?? null,
+  }))
+}
 
 export interface ClaudeOutcome { ok: boolean; text: string; turns: number }
 
-export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS' | 'model' | 'env'>, o: {
+export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS' | 'model' | 'env' | 'recordCost'>, o: {
+  /** The job, for the cost ledger's row (absent: the run is recorded without one). */
+  jobId?: string
   prompt: string; cwd: string; cfg: TraceConfig; token: string; signal: AbortSignal; log: (l: string) => void; redact: (s: string) => string
   /** The default branch's CLAUDE.md (readProjectNotes), appended to the system prompt as the project's notes. */
   notes?: string | null
@@ -311,6 +332,8 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
     clearTimeout(timer)
     o.signal.removeEventListener('abort', onAbort)
     tel.end({ aborted: abort.signal.aborted, ...(abort.signal.aborted ? { error: abort.signal.reason } : thrown !== undefined ? { error: thrown } : {}) })
+    // what the run cost, per model, into the project's ledger (best effort: never fails the run)
+    if (last && d.recordCost) await d.recordCost(modelUsesOf(last), { jobId: o.jobId ?? null, agent: o.agent ?? null, log: o.log }).catch(() => undefined)
   }
   if (abort.signal.aborted) return { ok: false, text: errText(abort.signal.reason), turns: last?.num_turns ?? 0 }
   if (!last) return { ok: false, text: 'Claude ended without a result', turns: 0 }
@@ -549,7 +572,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
       ctx.prompts?.(record(used))
       log(`running the ${r.kind} specialist on ${p.repository} ${branch} (max ${settings.max_turns} turns, ${tools.length} tools)`)
       const out = await runClaude(d, {
-        prompt: `${prompt.text}${mem.context}`, cwd: dir, cfg, token, signal: ctx.signal, log, redact, notes, system,
+        prompt: `${prompt.text}${mem.context}`, cwd: dir, cfg, token, signal: ctx.signal, log, redact, notes, system, jobId: ctx.jobId,
         extraEnv: {
           ...mem.env, ...journeyAgentEnv(r.kind, `the ${s.title} specialist`, ctx.jobId),
           ...specialistEnv({ tools, delegateUrl: d.delegateUrl, token: dtoken, timeoutMinutes: cfg.agents.delegate_timeout_minutes }),
@@ -614,7 +637,7 @@ export async function runDelegated(d: RunnerDeps, p: DelegatedTaskJob, ctx: JobC
     log(`running the worker for the ${parent.kind} specialist (job ${parent.jobId}) on ${branch} (max ${parent.cfg.worker.max_turns} turns)`)
     const waits = openWaitRelay(d, ctx.jobId)
     const out = await runClaude(d, {
-      prompt: `${prompt.text}${mem.context}`, cwd: parent.dir, cfg: parent.cfg, token, signal: ctx.signal, log, redact, notes: parent.notes ?? null, system,
+      prompt: `${prompt.text}${mem.context}`, cwd: parent.dir, cfg: parent.cfg, token, signal: ctx.signal, log, redact, notes: parent.notes ?? null, system, jobId: ctx.jobId,
       extraEnv: { ...mem.env, ...journeyAgentEnv(WORKER, 'the trace worker', ctx.jobId) }, mcpEnv: waits.env, onMessage: (m) => mem.observe(m), agent: WORKER,
     }).finally(() => waits.close())
     const summary = redact(out.text)
@@ -744,6 +767,7 @@ export function realRunner(env: Record<string, string | undefined> = process.env
     waitsUrl: `http://127.0.0.1:${Number(env.PORT || 8080)}`,
     hardware: ['1', 'true', 'yes'].includes(env.TRACE_HARDWARE ?? ''),
     prompts: realPromptLayers(),
+    recordCost: (uses, o) => recordModelUse(uses, { ...o, env }),
   })
 }
 

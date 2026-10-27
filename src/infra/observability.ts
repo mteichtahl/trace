@@ -20,7 +20,8 @@
  * Disabled, nothing is created: only the two environment variables that keep the runtimes quiet.
  */
 import { join } from 'node:path'
-import { CfnOutput, CustomResource, Duration, Fn, RemovalPolicy, Stack } from 'aws-cdk-lib'
+import { CfnOutput, CustomResource, Duration, Fn, RemovalPolicy, Stack, Tags } from 'aws-cdk-lib'
+import { PROJECT_TAG } from '../core/project.js'
 import type { CfnRuntime } from 'aws-cdk-lib/aws-bedrockagentcore'
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch'
 import * as iam from 'aws-cdk-lib/aws-iam'
@@ -196,6 +197,8 @@ export class Observability extends Construct {
       const logsDelivery = new logs.CfnDelivery(at, `${pre}MemoryLogsDelivery`, { deliverySourceName: logsSource.name, deliveryDestinationArn: logsDest.attrArn })
       const tracesDelivery = new logs.CfnDelivery(at, `${pre}MemoryTracesDelivery`, { deliverySourceName: tracesSource.name, deliveryDestinationArn: tracesDest.attrArn })
       for (const r of [logsSource, tracesSource, logsDest, tracesDest, logsDelivery, tracesDelivery]) r.applyRemovalPolicy(keepDelivery)
+      // the project's cost allocation tags, in either layout (nested: its construct tags them already, src/infra/project.ts)
+      if (!m.scope) for (const r of [group, logsSource, tracesSource, logsDest, tracesDest, logsDelivery, tracesDelivery]) { Tags.of(r).add(PROJECT_TAG, m.repository.toLowerCase()); Tags.of(r).add('trace:installation', p.prefix) }
       logsDelivery.addDependency(logsSource)
       tracesDelivery.addDependency(tracesSource)
       // X-Ray as a destination needs Transaction Search (nested: CDK makes the project's nested stack wait for it)
