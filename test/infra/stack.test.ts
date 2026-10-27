@@ -452,11 +452,11 @@ describe('the trace stack', () => {
         expect.objectContaining({ Principal: { Service: 'events.amazonaws.com' }, Action: 'sns:Publish', Condition: { ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': [ruleId, 'Arn'] } } } }),
         expect.objectContaining({ Principal: { Service: 'events.amazonaws.com' }, Action: 'sns:Publish', Condition: { ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': [journeyId, 'Arn'] } } } }),
       ])
-      // its journey record's writes: the bucket's Object Created events of that one key, to its own topic
+      // its journey record's and its job index's writes: the bucket's Object Created events of those two keys, to its own topic
       expect(journeyRule?.Properties.Name).toBe(`trace-${h}-journey-events`)
       expect(journeyRule?.Properties.EventPattern).toEqual({
         source: ['aws.s3'], 'detail-type': ['Object Created'],
-        detail: { bucket: { name: [expect.anything()] }, object: { key: [`projects/${repo}/journey/journey.db`] } },
+        detail: { bucket: { name: [expect.anything()] }, object: { key: [`projects/${repo}/journey/journey.db`, `projects/${repo}/journey-agent/jobs.db`] } },
       })
       expect(journeyRule?.Properties.Targets).toEqual([expect.objectContaining({ Arn: { Ref: expect.stringMatching(new RegExp(`^Project${h}JobEvents`)) } })])
       expect(ruleId).toMatch(new RegExp(`^Project${h}JobEventsRule`))

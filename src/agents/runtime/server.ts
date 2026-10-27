@@ -17,6 +17,9 @@
  *                                                              no such timer wait is open)
  *        { kind: "cancel", jobId, reason? }                 → { ok, state, kept } (abort one running job, wait up to 20 s
  *                                                              for it to end; ok false when no such job is running)
+ *        { kind: "pause", jobId, by }                      → { ok, state, pausing, kept } (a running task stops at its next
+ *                                                              safe point and keeps its work; answered at once: the
+ *                                                              job's state turns paused when it has stopped)
  *        { kind: "tool", repository, name, args }           → { ok, result | error }  (a tool call the API forwarded:
  *                                                              run here, on this runtime's clone, no model; tool.ts)
  *   Every invocation may carry `trace` (the caller's traceparent, tracestate, baggage): see observe.ts invocationHeaders.
@@ -49,7 +52,7 @@ import { ATTR, flush } from '../../core/telemetry.js'
 import { type EventWait, activeWaits, checkNow, describeWait, trackEventWait, withJob } from '../../core/wait.js'
 import { DelegateCancelRequest, DelegateRequest, DelegateStatusRequest, DelegateWaitRequest, DelegationError, type Delegations, MAX_WAIT_S, defaultDelegations } from './delegation.js'
 import { type Jobs, defaultJobs } from './jobs.js'
-import { invocationHeaders, observeInvocation } from './observe.js'
+import { invocationHeaders, observeInvocation, sessionOf } from './observe.js'
 import { InvocationSchema, WrongProject, checkProject } from './schemas.js'
 import { ToolRefused, type ToolRunner } from './tool.js'
 import { MAX_WAKES_S, RelayError, type WaitRelay, WaitReportRequest, WaitWakesRequest, defaultWaitRelay } from './wait-relay.js'
@@ -59,6 +62,8 @@ const MAX_BODY = 1024 * 1024
 const CANCEL_GRACE_MS = 20_000
 /** What a cancelled job keeps, in plain words: a job's changes reach GitHub only by its own pushes. */
 export const KEPT = 'Commits the agent had already pushed stay on their branch; its unpushed work and any graphics card or CPU job it started are stopped.'
+/** What a paused job keeps, in plain words (src/agents/runtime/job.ts: the work is committed and pushed at the stop). */
+export const PAUSE_KEPT = 'It stops before its next step: the step in progress finishes, its work so far is committed and pushed on its branch, and Resume carries on from there with what it has done.'
 
 function send(res: ServerResponse, status: number, body: unknown): void {
   const text = JSON.stringify(body)
@@ -247,6 +252,15 @@ export function handler(jobs: Jobs, o: HandlerOptions = {}): (req: IncomingMessa
             outcome(ok ? 'ok' : 'rejected')
             return send(res, 200, { ok, state: j?.state ?? null, ...(ok ? { kept: KEPT } : { reason: j ? `The job has already ${j.state === 'running' ? 'been asked to stop' : j.state}.` : 'There is no such job on this worker.' }) })
           }
+          if (p.kind === 'pause') {
+            // answered at once: the job stops at its next safe point, and its own state says when it has paused
+            const ok = jobs.pause(p.jobId, p.by)
+            const j = jobs.jobStatus(p.jobId)[0]
+            outcome(ok ? 'ok' : 'rejected')
+            return send(res, 200, ok
+              ? { ok, state: j?.state ?? null, pausing: true, kept: PAUSE_KEPT }
+              : { ok, state: j?.state ?? null, reason: !j ? 'There is no such job on this worker.' : j.state !== 'running' ? `The job has already ${j.state === 'queued' ? 'not started' : j.state}.` : 'Only a person\'s task can be paused; this job can only be cancelled.' })
+          }
           if (p.kind === 'tool') {
             // a forwarded tool call: no model, no job; the answer is the tool's (ok: false for a refusal or a ToolError)
             toolsRunning++
@@ -264,7 +278,7 @@ export function handler(jobs: Jobs, o: HandlerOptions = {}): (req: IncomingMessa
             }
           }
           // the job's span starts here, under this invocation (and its session)
-          const r = jobs.startJob(p)
+          const r = jobs.startJob(p, sessionOf(req.headers))
           outcome(r.accepted ? 'ok' : 'rejected', { [ATTR.jobId]: r.jobId })
           return send(res, 200, r)
         })

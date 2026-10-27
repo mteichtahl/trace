@@ -259,7 +259,7 @@ describe('the web app', () => {
     expect(JSON.stringify(by('PublishLiveEvents')?.Resource)).toMatch(/Events\w+","ApiArn"\]\},"\/channelNamespace\/trace"/)
   })
 
-  it('turns the agents\' facts writes into live events: the bucket\'s events, one rule, a Lambda that reads only who is on the project and that object', () => {
+  it('turns the agents\' facts and job index writes into live events: the bucket\'s events, one rule, a Lambda that reads only who is on the project and that object', () => {
     // the central bucket sends its object events to EventBridge (the bucket's own property: no custom resource)
     const central = Object.entries(on.parent.findResources('AWS::S3::Bucket')).find(([id]) => id.startsWith('Central'))?.[1] as Res
     expect(central.Properties.NotificationConfiguration).toEqual({ EventBridgeConfiguration: { EventBridgeEnabled: true } })
@@ -270,7 +270,7 @@ describe('the web app', () => {
     expect(rule.Name).toBe('trace-journey-events')
     expect(rule.EventPattern).toEqual({
       source: ['aws.s3'], 'detail-type': ['Object Created'],
-      detail: { bucket: { name: [{ Ref: expect.stringMatching(/Central/) }] }, object: { key: [{ wildcard: 'projects/*/journey-agent/facts.db' }, { wildcard: 'projects/*/journey-agent/bench.db' }] } },
+      detail: { bucket: { name: [{ Ref: expect.stringMatching(/Central/) }] }, object: { key: [{ wildcard: 'projects/*/journey-agent/facts.db' }, { wildcard: 'projects/*/journey-agent/bench.db' }, { wildcard: 'projects/*/journey-agent/jobs.db' }] } },
     })
     expect(rule.Targets).toEqual([expect.objectContaining({ Arn: { 'Fn::GetAtt': [expect.stringMatching(/^JourneyEvents[0-9A-F]{8}$/), 'Arn'] }, RetryPolicy: { MaximumEventAgeInSeconds: 3600, MaximumRetryAttempts: 2 } })])
     web.hasResourceProperties('AWS::Lambda::Function', {
@@ -279,11 +279,13 @@ describe('the web app', () => {
     })
     // its role: read access/* and the agents' facts objects, publish to the namespace, its log group. Nothing else
     const all = statements(web, 'JourneyEventsRole')
-    expect(all.flatMap(actions).sort()).toEqual(['appsync:EventPublish', 'logs:CreateLogStream', 'logs:PutLogEvents', 's3:GetObject', 's3:GetObject', 's3:ListBucket'])
+    expect(all.flatMap(actions).sort()).toEqual(['appsync:EventPublish', 'logs:CreateLogStream', 'logs:PutLogEvents', 's3:GetObject', 's3:GetObject', 's3:GetObject', 's3:ListBucket'])
     const by = (sid: string): Statement | undefined => all.find((x) => x.Sid === sid)
     expect(JSON.stringify(by('AccessStoreRead')?.Resource)).toMatch(/"\/access\/\*"/)
     expect(by('AccessStoreList')?.Condition).toEqual({ StringLike: { 's3:prefix': ['access/*'] } })
     expect(JSON.stringify(by('AgentFactsRead')?.Resource)).toMatch(/"\/projects\/\*\/journey-agent\/facts\.db"/)
+    // and the job index that changed (job.updated): that one object of each project
+    expect(JSON.stringify(by('JobIndexRead')?.Resource)).toMatch(/"\/projects\/\*\/journey-agent\/jobs\.db"/)
     expect(JSON.stringify(by('PublishLiveEvents')?.Resource)).toMatch(/Events\w+","ApiArn"\]\},"\/channelNamespace\/trace"/)
     const text = JSON.stringify(all)
     for (const never of ['s3:PutObject', 's3:DeleteObject', '/central/', '/journey/', '/chats/', 'cognito', 'bedrock', 'ssm:']) expect(text).not.toContain(never)

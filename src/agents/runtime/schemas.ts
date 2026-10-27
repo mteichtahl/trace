@@ -78,6 +78,19 @@ export const CancelPayload = z.object({
 }).strict()
 
 /**
+ * Pause one running task of this process (a person's Pause, through the API's job.control): it stops at the next
+ * safe point (before Claude's next tool call: the step in progress finishes), its work is committed and pushed on
+ * its branch, and its transcript is kept so Resume continues the same conversation. Answers at once ("pausing");
+ * the job's own state says when it has paused.
+ */
+export const PausePayload = z.object({
+  kind: z.literal('pause'),
+  jobId: z.string().min(1).max(64),
+  by: z.string().min(1).max(200),
+  trace: TraceContextSchema.optional(),
+}).strict()
+
+/**
  * The agents a person's task can be given to: the specialists (src/agents). Leave `agent` out and the job is routed
  * (src/agents/router.ts). The generic worker is not among them: only a specialist starts it (agent.delegate).
  */
@@ -96,6 +109,11 @@ export const TaskPayload = z.object({
   issue: z.number().int().positive().optional(),
   /** Which specialist does it; routed when absent. */
   agent: SpecialistKindSchema.optional(),
+  /**
+   * This task carries on a paused one (job.control resume): the paused job's id on this project's worker and who
+   * resumed it. Its work is on its branch; its transcript, when kept, is resumed (src/agents/runtime/job.ts).
+   */
+  resume: z.object({ job: z.string().min(1).max(64), by: z.string().min(1).max(200) }).strict().optional(),
   trace: TraceContextSchema.optional(),
 }).strict()
 
@@ -114,7 +132,7 @@ export type Delegation = z.infer<typeof DelegationSchema>
  * A worker job a specialist started (internal only: never accepted on /invocations or through the API). The request
  * is the specialist's brief with its acceptance criteria; it runs in the specialist's checkout.
  */
-export const DelegatedTaskPayload = TaskPayload.omit({ agent: true, issue: true }).extend({
+export const DelegatedTaskPayload = TaskPayload.omit({ agent: true, issue: true, resume: true }).extend({
   agent: z.literal(WORKER),
   delegation: DelegationSchema,
 }).strict()
@@ -133,13 +151,13 @@ export const ToolPayload = z.object({
 }).strict()
 export type ToolJob = z.infer<typeof ToolPayload>
 
-export const InvocationSchema = z.discriminatedUnion('kind', [WorkItemPayload, SweepPayload, StatusPayload, CheckNowPayload, CancelPayload, TaskPayload, ToolPayload])
+export const InvocationSchema = z.discriminatedUnion('kind', [WorkItemPayload, SweepPayload, StatusPayload, CheckNowPayload, CancelPayload, PausePayload, TaskPayload, ToolPayload])
 export type Invocation = z.infer<typeof InvocationSchema>
 export type WorkItemJob = z.infer<typeof WorkItemPayload>
 export type SweepJob = z.infer<typeof SweepPayload>
 export type TaskJob = z.infer<typeof TaskPayload>
 export type DelegatedTaskJob = z.infer<typeof DelegatedTaskPayload>
-/** What can be started as a job (everything but status, check-now, cancel and tool); a delegated task only from inside the runtime. */
+/** What can be started as a job (everything but status, check-now, cancel, pause and tool); a delegated task only from inside the runtime. */
 export type JobPayload = WorkItemJob | SweepJob | TaskJob | DelegatedTaskJob
 
 export const AcceptedSchema = z.object({
@@ -149,7 +167,11 @@ export const AcceptedSchema = z.object({
 }).loose()
 export type Accepted = z.infer<typeof AcceptedSchema>
 
-export type JobState = 'running' | 'succeeded' | 'failed' | 'aborted'
+/**
+ * queued: accepted, waiting for its turn in the project's queue (src/core/job-index.ts QUEUE RULE). paused: stopped
+ * at a safe point by a person, its work kept on its branch; Resume starts a task that carries it on.
+ */
+export type JobState = 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'aborted'
 
 export interface JobInfo {
   id: string
@@ -159,7 +181,17 @@ export interface JobInfo {
   number?: number
   state: JobState
   startedAt: string
+  /** when it began its work, after any wait in the queue */
+  runningAt?: string
   endedAt?: string
+  /** the latest line of its log (its current step) */
+  step?: string
+  /** the branch it works on, once known */
+  branch?: string
+  /** the AgentCore session it runs in (the invocation's), when there is one */
+  session?: string
+  /** a person asked it to pause: who and when (it pauses at the next safe point) */
+  pause?: { by: string; at: string }
   summary?: string
   error?: string
   /** The agent that does it: a specialist kind, or worker for a delegated job. */
@@ -184,12 +216,12 @@ export class WrongProject extends Error {
   readonly status = 403
 }
 
-/** The repositories an invocation is about (none for status, check-now and cancel). */
+/** The repositories an invocation is about (none for status, check-now, cancel and pause). */
 export function repositoriesOf(p: Invocation | JobPayload): string[] {
   switch (p.kind) {
     case 'work-item': case 'task': case 'tool': return [p.repository]
     case 'sweep': return [...p.repositories]
-    case 'status': case 'check-now': case 'cancel': return []
+    case 'status': case 'check-now': case 'cancel': case 'pause': return []
   }
 }
 

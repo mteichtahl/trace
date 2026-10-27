@@ -13,7 +13,9 @@ import { Central, S3Backend } from '../../src/core/central.js'
 import { loadJourney, startJourney } from '../../src/core/journey.js'
 import { JourneyStore, forgetNoJourney } from '../../src/core/journey-store.js'
 import type { LiveEvent, Publisher } from '../../src/web/events.js'
-import { NEW_WITHIN_S, onObjectCreated, projectOfKey } from '../../src/web/journey-events.js'
+import { MAX_JOB_EVENTS, NEW_WITHIN_S, onObjectCreated, projectOfIndexKey, projectOfKey } from '../../src/web/journey-events.js'
+import { JobIndexStore, putJob } from '../../src/core/job-index.js'
+import { projectHash } from '../../src/core/project.js'
 import { FakeS3 } from '../core/fake-s3.js'
 
 const BUCKET = 'central-bucket'
@@ -64,7 +66,7 @@ async function rig() {
   let t = Date.now()
   const event = (key = KEY, bucket = BUCKET) => ({ 'detail-type': 'Object Created', time: new Date(t).toISOString(), detail: { bucket: { name: bucket }, object: { key } } })
   const run = (e = event()) => onObjectCreated(e, { bucket: BUCKET, s3, publisher: pub, now: () => t, log: (x) => logs.push(x), scratch })
-  return { s3, facts, record, pub, logs, event, run, later: (s: number) => { t += s * 1000 } }
+  return { s3, facts, record, pub, logs, event, run, later: (s: number) => { t += s * 1000 }, index: new JobIndexStore(projects, 'acme/board'), now: () => t }
 }
 
 describe('live updates when an agent records a fact', () => {
@@ -141,5 +143,39 @@ describe('live updates when an agent records a fact', () => {
     await r.run()
     expect(r.pub.sent.map((x) => x.channel).sort()).toEqual(['/trace/users/admin-1', '/trace/users/guest-1', '/trace/users/user-2'])
     expect(r.logs).toContainEqual(expect.objectContaining({ warning: expect.stringMatching(/not delivered/), failed: 1, of: 4 }))
+  })
+})
+
+describe('live updates when a job changes', () => {
+  const INDEX = 'projects/acme/board/journey-agent/jobs.db'
+  const S = `trace-api-${projectHash('acme/board')}-${'a'.repeat(24)}`
+
+  it('takes the project from the job index\'s key only', () => {
+    expect(projectOfIndexKey(INDEX)).toBe('acme/board')
+    expect(projectOfIndexKey(KEY)).toBeNull()
+    expect(projectOfKey(INDEX)).toBeNull()
+  })
+
+  it('sends job.updated with the API\'s job id and its state to everyone on the project, and nothing of the job\'s content', async () => {
+    const r = await rig()
+    await r.index.update((db) => {
+      putJob(db, 'job-1', { kind: 'task', title: 'Route the secret board', state: 'running', session: S, step: 'routing the secret net' }, r.now() / 1000)
+      putJob(db, 'job-old', { kind: 'task', title: 'old', state: 'succeeded' }, r.now() / 1000 - NEW_WITHIN_S - 600)
+      return { result: null }
+    })
+    expect(await r.run(r.event(INDEX))).toEqual({ repo: 'acme/board', changed: 4, notified: 0, jobs: 1 })
+    expect(r.pub.sent.map((x) => x.channel).sort()).toEqual(['/trace/users/admin-1', '/trace/users/guest-1', '/trace/users/user-1', '/trace/users/user-2'])
+    for (const x of r.pub.sent) expect(x.events).toEqual([{ type: 'job.updated', repo: 'acme/board', jobId: `${S}.job-1`, state: 'running', at: expect.any(String) }])
+    expect(JSON.stringify(r.pub.sent)).not.toMatch(/secret/)
+  })
+
+  it('sends one event for the project when many jobs changed at once', async () => {
+    const r = await rig()
+    await r.index.update((db) => {
+      for (let i = 0; i <= MAX_JOB_EVENTS; i++) putJob(db, `job-${i}`, { kind: 'task', title: 't', state: 'queued' }, r.now() / 1000)
+      return { result: null }
+    })
+    await r.run(r.event(INDEX))
+    expect(r.pub.to('user-1')).toEqual([{ type: 'job.updated', repo: 'acme/board', jobId: null, state: null, at: expect.any(String) }])
   })
 })

@@ -9,7 +9,8 @@
  * the job id the API hands out names both: `<session>.<job id>`, where the session is
  * `trace-api-<project hash>-<24 hex>`. The session is derived from the project, the agent and the request, so asking
  * twice for the same thing lands in the same session and is answered "already running" while it runs. The project
- * hash in the id lets the `job` action check access to that project before anything is invoked.
+ * hash in the id lets the `job` action check access to that project before anything is invoked. A job the API did
+ * not start (a workflow's) is named by the job index as `p<project hash>.<session>.<job id>` (indexedHandle).
  *
  * Following a job is event-driven on the worker: `job` with afterVersion + waitS is forwarded as a held status
  * invocation (the worker answers the moment the job changes), and `job.check_now` as a check-now invocation in the
@@ -20,8 +21,9 @@
 import { createHash } from 'node:crypto'
 import { type AgentCoreLike, invoke } from '../agents/runtime/dispatch.js'
 import { AcceptedSchema, type TaskJob } from '../agents/runtime/schemas.js'
+import { indexedHandle } from '../core/job-index.js'
 import { projectHash, projectSlug } from '../core/project.js'
-import { ActionError, type JobView, type JobsApi, type WaitView } from './actions.js'
+import { ActionError, type JobView, type JobsApi, type WaitView } from './action-kit.js'
 import { z } from 'zod'
 
 /** `owner/repo=<runtime id> …` → slug → runtime id. Malformed entries are refused (the stack writes this). */
@@ -39,6 +41,12 @@ export function parseWorkerRuntimes(text: string | undefined): Map<string, strin
 
 const SESSION = /^trace-api-([0-9a-f]{8})-[0-9a-f]{24}$/
 const HANDLE = /^(trace-api-[0-9a-f]{8}-[0-9a-f]{24})\.([A-Za-z0-9_-]{1,64})$/
+/**
+ * A job the API did not start (a workflow's work item, a sweep's, or one whose session is not known) as the job index
+ * lists it: `p<project hash>.<session>.<job id>`, or `p<project hash>..<job id>` without a session. The hash names the
+ * project (access is checked on it); the session, when there is one, is where its worker is asked.
+ */
+const INDEXED = /^p([0-9a-f]{8})\.([A-Za-z0-9_-]{33,256})?\.([A-Za-z0-9_-]{1,64})$/
 
 /** The AgentCore session a task runs in: one per project, agent and request. */
 export function taskSession(t: Pick<TaskJob, 'repository' | 'request' | 'agent' | 'branch'>): string {
@@ -61,8 +69,12 @@ export const jobHandle = (session: string, jobId: string): string => `${session}
 export function parseHandle(handle: string): { session: string; jobId: string; hash: string } | null {
   const m = HANDLE.exec(handle)
   const s = m?.[1] ? SESSION.exec(m[1]) : null
-  return m?.[1] && m[2] && s?.[1] ? { session: m[1], jobId: m[2], hash: s[1] } : null
+  if (m?.[1] && m[2] && s?.[1]) return { session: m[1], jobId: m[2], hash: s[1] }
+  const i = INDEXED.exec(handle)
+  return i?.[1] && i[3] ? { session: i[2] ?? '', jobId: i[3], hash: i[1] } : null
 }
+
+export { indexedHandle }
 
 const StatusOut = z.object({
   jobs: z.array(z.object({ id: z.string(), kind: z.string(), state: z.string(), repository: z.string().optional() }).loose()),
@@ -72,6 +84,7 @@ const StatusOut = z.object({
 }).loose()
 const CheckNowOut = z.object({ ok: z.boolean() }).loose()
 const CancelOut = z.object({ ok: z.boolean(), state: z.string().nullable().default(null), kept: z.string().optional(), reason: z.string().optional() }).loose()
+const PauseOut = CancelOut
 const ToolOut = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(true), result: z.unknown() }).loose(),
   z.object({ ok: z.literal(false), error: z.string() }).loose(),
@@ -99,7 +112,7 @@ export function remoteJobs(o: RemoteJobsOptions): JobsApi {
   const watch = async (handle: string | undefined, w: { afterVersion?: number | undefined; waitS?: number | undefined; signal?: AbortSignal | undefined }): Promise<{ jobs: JobView[]; version: number | null; waits: WaitView[] }> => {
     const h = handle ? parseHandle(handle) : null
     const slug = h ? byHash.get(h.hash) : undefined
-    if (!h || !slug) return { jobs: [], version: null, waits: [] }
+    if (!h || !slug || !h.session) return { jobs: [], version: null, waits: [] }
     const hold = w.afterVersion !== undefined && w.waitS ? { afterVersion: w.afterVersion, waitS: w.waitS } : {}
     const out = StatusOut.parse(await invoke({ kind: 'status', jobId: h.jobId, ...hold }, h.session, { ...opts(slug), signal: w.signal }))
     // a session of one project's runtime only ever has that project's jobs; checked all the same
@@ -114,6 +127,7 @@ export function remoteJobs(o: RemoteJobsOptions): JobsApi {
     },
     async startJob(payload) {
       const slug = projectSlug(payload.repository)
+      // a resumed task runs on the paused one's branch: a session of its own (branch is part of the session's hash)
       const session = taskSession(payload)
       const r = AcceptedSchema.parse(await invoke(payload, session, opts(slug)))
       return { ...r, jobId: jobHandle(session, r.jobId) }
@@ -140,17 +154,26 @@ export function remoteJobs(o: RemoteJobsOptions): JobsApi {
       const slug = projectSlug(repository)
       return CheckNowOut.parse(await invoke({ kind: 'check-now', waitId }, toolSession(slug), opts(slug))).ok
     },
+    async pause(handle, by) {
+      const h = parseHandle(handle)
+      const slug = h ? byHash.get(h.hash) : undefined
+      if (!h || !slug) return { ok: false, state: null, reason: 'There is no such job.' }
+      if (!h.session) return { ok: false, state: null, reason: 'trace does not know where this job runs, so it cannot reach it.' }
+      const out = PauseOut.parse(await invoke({ kind: 'pause', jobId: h.jobId, by }, h.session, opts(slug)))
+      return { ok: out.ok, state: out.state, ...(out.kept ? { kept: out.kept } : {}), ...(out.reason ? { reason: out.reason } : {}) }
+    },
     async cancel(handle, reason) {
       const h = parseHandle(handle)
       const slug = h ? byHash.get(h.hash) : undefined
       if (!h || !slug) return { ok: false, state: null, reason: 'There is no such job.' }
+      if (!h.session) return { ok: false, state: null, reason: 'trace does not know where this job runs, so it cannot reach it.' }
       const out = CancelOut.parse(await invoke({ kind: 'cancel', jobId: h.jobId, reason }, h.session, opts(slug)))
       return { ok: out.ok, state: out.state, ...(out.kept ? { kept: out.kept } : {}), ...(out.reason ? { reason: out.reason } : {}) }
     },
     async checkNow(handle, waitId) {
       const h = parseHandle(handle)
       const slug = h ? byHash.get(h.hash) : undefined
-      if (!h || !slug) return false
+      if (!h || !slug || !h.session) return false
       return CheckNowOut.parse(await invoke({ kind: 'check-now', waitId }, h.session, opts(slug))).ok
     },
   }

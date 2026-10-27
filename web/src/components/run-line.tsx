@@ -1,10 +1,12 @@
 /**
  * Long work, in one line: a spinner, the run's name in plain words, the current step, then a thin progress bar when
  * the size is known, otherwise elapsed and typical time ("12 min so far, usually 20"); where it runs, quietly. A menu
- * holds Pause, Cancel and Move up, each only when the job's view says job.control can do it (`run.controls`); Cancel
- * asks once, then says what was kept.
+ * holds Pause, Resume, Move up and Cancel, each only when the job's view says job.control can do it (`run.controls`):
+ * Pause stops a running job at its next safe point and keeps its work (a queued one is held); Resume carries a paused
+ * job on from its branch (a held one is released); Move up takes it one place up its queue. Cancel asks once, then
+ * says what was kept. Every control says what happened in a toast; what changes next arrives as a live event.
  */
-import { Circle, Loader2, MoreHorizontal, PauseCircle, CircleX, CircleCheck } from 'lucide-react'
+import { Circle, CircleAlert, Loader2, MoreHorizontal, PauseCircle, CircleX, CircleCheck } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -21,16 +23,23 @@ export interface RunLineProps {
   run: RunSummary
   /** bold prefix ("Panel controller:") on Home, where runs from several projects mix */
   project?: string
-  onPause?: (run: RunSummary) => Promise<void> | void
+  /** resolves to what happens next ("It stops before its next step…"), for the toast */
+  onPause?: (run: RunSummary) => Promise<string | void> | string | void
+  onResume?: (run: RunSummary) => Promise<string | void> | string | void
   /** resolves to what was kept ("Stage 1 kept: 48 nets routed and locked") */
   onCancel?: (run: RunSummary) => Promise<string | void> | string | void
-  onMoveUp?: (run: RunSummary) => Promise<void> | void
+  onMoveUp?: (run: RunSummary) => Promise<string | void> | string | void
   onOpen?: (run: RunSummary) => void
   className?: string
 }
 
 export function runDetail(run: RunSummary, now: number): string {
-  if (run.state === 'queued') return run.startsWhen ? `Queued: ${run.startsWhen}` : 'Queued'
+  if (run.state === 'queued') {
+    const where = run.position ? `${run.position === 1 ? 'Next' : `Number ${run.position}`} in the queue` : 'Queued'
+    return run.startsWhen ? `${where}: ${run.startsWhen}` : where
+  }
+  if (run.state === 'paused') return `Paused${run.pausedBy ? ` by ${run.pausedBy}` : ''}: its work so far is kept${run.branch ? ` on ${run.branch}` : ''}. Resume carries on from there.`
+  if (run.state === 'lost') return run.step ?? 'trace lost contact with it.'
   const parts: string[] = []
   if (run.where) parts.push(run.where)
   if (run.stepIndex && run.stepCount) parts.push(`Step ${run.stepIndex} of ${run.stepCount}${run.step ? `: ${run.step}` : ''}`)
@@ -43,22 +52,36 @@ export function runDetail(run: RunSummary, now: number): string {
   return parts.join(' · ')
 }
 
-export function RunLine({ run, project, onPause, onCancel, onMoveUp, onOpen, className }: RunLineProps) {
+export function RunLine({ run, project, onPause, onResume, onCancel, onMoveUp, onOpen, className }: RunLineProps) {
   const now = useNow(run.etaS === undefined && run.startedAt ? 1000 : 60_000)
   const [confirm, setConfirm] = useState(false)
   const active = run.state === 'running'
-  const Icon = run.state === 'running' ? Loader2 : run.state === 'paused' ? PauseCircle : run.state === 'failed' || run.state === 'cancelled' ? CircleX : run.state === 'done' ? CircleCheck : Circle
+  const Icon = run.state === 'running' ? Loader2 : run.state === 'paused' || run.held ? PauseCircle : run.state === 'failed' || run.state === 'cancelled' ? CircleX : run.state === 'lost' ? CircleAlert : run.state === 'done' ? CircleCheck : Circle
   // only what the job system can do for this job, when its view says (job.control answers ok: false for the rest)
-  const can = (op: 'pause' | 'cancel' | 'move_up') => !run.controls || run.controls.includes(op)
+  const can = (op: 'pause' | 'resume' | 'cancel' | 'move_up') => !run.controls || run.controls.includes(op)
   const pause = can('pause') ? onPause : undefined
+  const resume = can('resume') ? onResume : undefined
   const cancelIt = can('cancel') ? onCancel : undefined
   const moveUp = can('move_up') ? onMoveUp : undefined
-  const controls = (pause || cancelIt || moveUp) && (run.state === 'running' || run.state === 'queued' || run.state === 'paused')
+  const controls = (pause || resume || cancelIt || moveUp) && (run.state === 'running' || run.state === 'queued' || run.state === 'paused')
 
+  /** run one control and say what happened (or why not) */
+  const act = async (what: string, fn: ((r: RunSummary) => Promise<string | void> | string | void) | undefined) => {
+    try {
+      const said = await fn?.(run)
+      toast(`${what}: ${run.title}`, said ? { description: said } : undefined)
+    } catch (e) {
+      toast.error(`Could not ${what.toLowerCase()} ${run.title.toLowerCase()}`, { description: e instanceof Error ? e.message : String(e) })
+    }
+  }
   const cancel = async () => {
     setConfirm(false)
-    const kept = await cancelIt?.(run)
-    toast(`Cancelled: ${run.title}`, { description: kept || 'Nothing was kept.' })
+    try {
+      const kept = await cancelIt?.(run)
+      toast(`Cancelled: ${run.title}`, { description: kept || 'Nothing was kept.' })
+    } catch (e) {
+      toast.error(`Could not cancel ${run.title.toLowerCase()}`, { description: e instanceof Error ? e.message : String(e) })
+    }
   }
 
   return (
@@ -93,8 +116,11 @@ export function RunLine({ run, project, onPause, onCancel, onMoveUp, onOpen, cla
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {pause && run.state === 'running' && <DropdownMenuItem onSelect={() => void pause(run)}>Pause</DropdownMenuItem>}
-            {moveUp && run.state === 'queued' && <DropdownMenuItem onSelect={() => void moveUp(run)}>Move up the queue</DropdownMenuItem>}
+            {pause && (run.state === 'running' || (run.state === 'queued' && !run.held)) && (
+              <DropdownMenuItem onSelect={() => void act(run.state === 'queued' ? 'Held' : 'Pausing', pause)}>{run.state === 'queued' ? 'Hold in the queue' : 'Pause'}</DropdownMenuItem>
+            )}
+            {resume && (run.state === 'paused' || run.held) && <DropdownMenuItem onSelect={() => void act('Resumed', resume)}>Resume</DropdownMenuItem>}
+            {moveUp && run.state === 'queued' && <DropdownMenuItem onSelect={() => void act('Moved up', moveUp)}>Move up the queue</DropdownMenuItem>}
             {cancelIt && (
               <DropdownMenuItem variant="destructive" onSelect={() => setConfirm(true)}>
                 Cancel…
@@ -107,7 +133,11 @@ export function RunLine({ run, project, onPause, onCancel, onMoveUp, onOpen, cla
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Cancel {run.title.toLowerCase()}?</AlertDialogTitle>
-            <AlertDialogDescription>It stops within seconds. Anything already finished is kept, and you will see what.</AlertDialogDescription>
+            <AlertDialogDescription>
+              {run.state === 'paused'
+                ? 'It will not be resumed. Its work so far stays on its branch.'
+                : run.state === 'queued' ? 'It leaves the queue and never starts.' : 'It stops within seconds. Anything already finished is kept, and you will see what.'}
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Keep running</AlertDialogCancel>
@@ -121,10 +151,25 @@ export function RunLine({ run, project, onPause, onCancel, onMoveUp, onOpen, cla
   )
 }
 
-/** Cancel a run's job through job.control: what was kept, or why it could not be cancelled (thrown, for the toast). */
-export async function cancelRun(jobId: string): Promise<string> {
+/** One control of a run's job through job.control: what happens next, or why it could not be done (thrown, for the toast). */
+export async function controlRun(jobId: string, op: 'pause' | 'resume' | 'cancel' | 'move_up'): Promise<string> {
   const { call } = await import('@/lib/api')
-  const r = await call('job.control', { id: jobId, op: 'cancel' })
-  if (!r.ok) throw new Error(r.reason ?? 'The run could not be cancelled.')
-  return r.kept ?? 'Nothing was kept.'
+  const r = await call('job.control', { id: jobId, op })
+  if (!r.ok) throw new Error(r.reason ?? 'It could not be done.')
+  if (op === 'move_up') return r.position === 1 ? 'It is next.' : `It is number ${r.position ?? '?'} in the queue now.`
+  return r.kept ?? (op === 'cancel' ? 'Nothing was kept.' : '')
+}
+
+/** Cancel a run's job through job.control: what was kept, or why it could not be cancelled (thrown, for the toast). */
+export const cancelRun = (jobId: string): Promise<string> => controlRun(jobId, 'cancel')
+
+/** The four controls of a run line, for people who may change the project (none for a reviewer). */
+export function runControls(write: boolean): Pick<RunLineProps, 'onPause' | 'onResume' | 'onCancel' | 'onMoveUp'> {
+  if (!write) return {}
+  return {
+    onPause: (r) => controlRun(r.id, 'pause'),
+    onResume: (r) => controlRun(r.id, 'resume'),
+    onCancel: (r) => controlRun(r.id, 'cancel'),
+    onMoveUp: (r) => controlRun(r.id, 'move_up'),
+  }
 }

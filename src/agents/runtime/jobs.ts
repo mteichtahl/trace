@@ -9,6 +9,7 @@
  *
  *   started   a job was accepted (its JobInfo)          log      one line into a job's log (the line, timestamped)
  *   routed    a specialist job was routed (its Route)   ended    a job ended (its final JobInfo: state, summary, error)
+ *   state     it was queued, admitted (running), or a person asked it to pause (its JobInfo)
  *   wait      a wait opened, was checked or changed state, or ended (src/core/wait.ts): a job runs inside withJob, so
  *             its waits carry its id and count as its changes; a wait outside any job (a tool call) has jobId ''
  *
@@ -21,6 +22,12 @@
  *                                                     any); at once when it already has; the version as it stands on
  *                                                     timeout or abort (a status answer that can hold: server.ts)
  *
+ * QUEUE AND PAUSE. A runner may ask to be admitted (ctx.admit, once it knows its agent): the job is `queued` until the
+ * `admit` option (src/agents/runtime/job-index.ts: the project's queue, src/core/job-index.ts) lets it start, then
+ * `running` again. pause(jobId) asks a running task to stop at its next safe point (ctx.pauseSignal: the runner
+ * stops Claude before its next tool call and keeps the work on its branch); a runner that stopped for it rejects with
+ * JobPaused and the job ends `paused`. Its delegated worker is asked to pause with it. Without `admit` nothing queues.
+ *
  * The runner that does the work is injected (createJobs), so tests drive the contract without git or a model.
  */
 import { randomBytes } from 'node:crypto'
@@ -29,6 +36,7 @@ import { ATTR, annotate } from '../../core/telemetry.js'
 import type { Route } from '../kinds.js'
 import { type PromptRecord, promptAttrs } from '../../prompts/telemetry.js'
 import { realRunner } from './job.js'
+import { workerIndex } from './job-index.js'
 import { observeJob } from './observe.js'
 import { type Accepted, type JobInfo, type JobPayload, checkProject, isDelegated } from './schemas.js'
 
@@ -38,6 +46,15 @@ export type { Accepted, Invocation, JobInfo, JobPayload, JobState, SweepJob, Tas
 export interface JobContext {
   jobId: string
   signal: AbortSignal
+  /** Aborted when a person asks this job to pause: stop at the next safe point, keep the work, reject with JobPaused. */
+  pauseSignal?: AbortSignal
+  /**
+   * Wait for this job's turn in its project's queue (the `admit` option of createJobs), as `agent`: the job is queued
+   * meanwhile. At once without a queue. Rejects when the job is aborted while it waits.
+   */
+  admit?(agent: string, o: { maxParallel: number }): Promise<void>
+  /** Record the branch the job works on (status, the job index). */
+  branch?(name: string): void
   /** One line into the job's log (kept in memory, also written to stdout). Never pass secrets. */
   log(line: string): void
   /** Start another job (a sweep starts one per item it claims; a specialist's delegation starts a worker job). */
@@ -51,12 +68,22 @@ export interface JobContext {
 /** Does one job; resolves with a one-line summary, rejects with the reason it failed. */
 export type JobRunner = (payload: JobPayload, ctx: JobContext) => Promise<string>
 
+/** A runner that stopped at a safe point because a person paused it: the job ends `paused`, with this as its summary. */
+export class JobPaused extends Error {
+  override name = 'JobPaused'
+}
+
+/** The queue a job waits in (createJobs `admit`): resolves when it may start; `queued(why)` says why it waits. */
+export type Admit = (job: JobInfo, o: { agent: string; maxParallel: number; signal: AbortSignal; queued: (why: string) => void }) => Promise<void>
+
 /** One change to one job. `version` is the jobs' change counter after it (Jobs.version). */
 export type JobEvent =
   | { type: 'started'; jobId: string; version: number; job: JobInfo }
   | { type: 'log'; jobId: string; version: number; line: string }
   | { type: 'routed'; jobId: string; version: number; route: Route }
   | { type: 'ended'; jobId: string; version: number; job: JobInfo }
+  /** queued, admitted, or asked to pause */
+  | { type: 'state'; jobId: string; version: number; job: JobInfo }
   /** a wait opened, checked or ended (src/core/wait.ts): in a job (its jobId), or outside any job (jobId '') */
   | { type: 'wait'; jobId: string; version: number; change: WaitChange }
 
@@ -65,7 +92,8 @@ export type JobEnded = Extract<JobEvent, { type: 'ended' }>
 export interface WaitOptions { timeoutMs?: number; signal?: AbortSignal | undefined }
 
 export interface Jobs {
-  startJob(payload: JobPayload): Accepted
+  /** `session`: the AgentCore session it was invoked in (recorded on the job: the API's handle names it). */
+  startJob(payload: JobPayload, session?: string): Accepted
   jobStatus(jobId?: string): JobInfo[]
   /** Every change to every job, as it happens. Listeners must not throw (a throw is swallowed) and must not block. */
   readonly events: EventBus<JobEvent>
@@ -87,8 +115,15 @@ export interface Jobs {
    * for it to end. False when no such job is running. A specialist's delegated worker is aborted with it.
    */
   abort(jobId: string, reason: string, graceMs?: number): Promise<boolean>
+  /**
+   * Ask one running task to pause at its next safe point (and its delegated worker with it). False when no such job
+   * is running, or it is not a person's task (a work item or a sweep cannot be paused: only cancelled).
+   */
+  pause(jobId: string, by: string): boolean
   /** Abort every running job and wait (up to graceMs) for them to finish. */
   shutdown(graceMs?: number): Promise<void>
+  /** The payload a job was started with (while the job is known), for the job index's title and Resume. */
+  payloadOf(jobId: string): JobPayload | undefined
   /** Stop listening to the process's wait changes (a registry that is thrown away, as in tests). */
   dispose(): void
 }
@@ -114,13 +149,21 @@ export function jobKey(p: JobPayload): string {
   }
 }
 
-/** `project`: the one project jobs may be for (TRACE_PROJECT); startJob throws WrongProject for any other. */
-export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => void; now?: () => number; project?: string | undefined } = {}): Jobs {
+/** Whether a job can be paused: a person's own task (not a delegated worker, not a work item or a sweep). */
+export const pausable = (p: JobPayload): boolean => p.kind === 'task' && !isDelegated(p)
+
+/**
+ * `project`: the one project jobs may be for (TRACE_PROJECT); startJob throws WrongProject for any other. `admit`:
+ * the project's queue (absent: nothing queues). `session`: the AgentCore session a payload was invoked in.
+ */
+export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => void; now?: () => number; project?: string | undefined; admit?: Admit } = {}): Jobs {
   const echo = opts.echo ?? ((l: string) => { process.stdout.write(`${l}\n`) })
   const now = opts.now ?? Date.now
   const jobs = new Map<string, JobInfo>()
-  const running = new Map<string, { id: string; abort: AbortController; done: Promise<void> }>()
-  const runningById = (id: string): { id: string; abort: AbortController; done: Promise<void> } | undefined => {
+  const payloads = new Map<string, JobPayload>()
+  type Live = { id: string; abort: AbortController; pause: AbortController; payload: JobPayload; done: Promise<void> }
+  const running = new Map<string, Live>()
+  const runningById = (id: string): Live | undefined => {
     for (const r of running.values()) if (r.id === id) return r
     return undefined
   }
@@ -134,8 +177,8 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
   }
 
   const prune = (): void => {
-    const finished = [...jobs.values()].filter((j) => j.state !== 'running')
-    for (const j of finished.slice(0, Math.max(0, finished.length - KEEP_FINISHED))) { jobs.delete(j.id); versions.delete(j.id) }
+    const finished = [...jobs.values()].filter((j) => j.state !== 'running' && j.state !== 'queued')
+    for (const j of finished.slice(0, Math.max(0, finished.length - KEEP_FINISHED))) { jobs.delete(j.id); versions.delete(j.id); payloads.delete(j.id) }
   }
 
   const events = new EventBus<JobEvent>()
@@ -152,7 +195,7 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
   const scopeVersion = (jobId: string | undefined): number => (jobId ? versions.get(jobId) ?? 0 : version)
 
   const self: Jobs = {
-    startJob(payload) {
+    startJob(payload, session?: string) {
       checkProject(payload, opts.project)
       const key = jobKey(payload)
       const live = running.get(key)
@@ -164,9 +207,13 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
         ...(payload.kind === 'work-item' ? { number: payload.item.number } : payload.kind === 'task' && !isDelegated(payload) && payload.issue ? { number: payload.issue } : {}),
         agent: jobAgent(payload),
         ...(isDelegated(payload) ? { parentJobId: payload.delegation.parentJobId } : {}),
+        ...(session ? { session } : {}),
+        ...(payload.kind === 'task' && payload.branch ? { branch: payload.branch } : {}),
       }
       jobs.set(id, info)
+      payloads.set(id, payload)
       const abort = new AbortController()
+      const pauseCtl = new AbortController()
       // a delegated worker belongs to its specialist's job: it never outlives it (aborted, failed or finished)
       const parentId = isDelegated(payload) ? payload.delegation.parentJobId : null
       const parent = parentId ? runningById(parentId) : undefined
@@ -187,6 +234,7 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
       const log = (line: string): void => {
         const l = `${new Date(now()).toISOString()} ${line}`
         info.log.push(l)
+        info.step = line.slice(0, 300)
         if (info.log.length > LOG_LINES) info.log.splice(0, info.log.length - LOG_LINES)
         echo(`[${id}] ${line}`)
         emit({ type: 'log', jobId: id, line: l })
@@ -204,14 +252,43 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
         info.prompts = [...(info.prompts ?? []), ...used]
         annotate(promptAttrs(info.prompts))
       }
+      const branch = (b: string): void => { info.branch = b }
+      const admit = async (agent: string, o: { maxParallel: number }): Promise<void> => {
+        if (!opts.admit) return
+        let waited = false
+        await opts.admit(info, {
+          agent, maxParallel: o.maxParallel, signal: abort.signal,
+          queued: (why) => {
+            if (info.state === 'queued' && info.step === why) return
+            waited = true
+            info.state = 'queued'
+            log(`queued: ${why}`)
+            emit({ type: 'state', jobId: id, job: info })
+          },
+        })
+        if (abort.signal.aborted) throw abort.signal.reason instanceof Error ? abort.signal.reason : new Error(String(abort.signal.reason))
+        if (waited) {
+          info.state = 'running'
+          info.runningAt = new Date(now()).toISOString()
+          log('its turn in the queue: starting')
+          emit({ type: 'state', jobId: id, job: info })
+        }
+      }
       const done = observeJob(payload, id, info.agent ?? 'specialist', () => info, async () => {
         try {
-          info.summary = await withJob(id, () => runner(payload, { jobId: id, signal: abort.signal, log, startJob: (p) => self.startJob(p), route, prompts }))
+          info.summary = await withJob(id, () => runner(payload, {
+            jobId: id, signal: abort.signal, pauseSignal: pauseCtl.signal, log, startJob: (p) => self.startJob(p, session), route, prompts, admit, branch,
+          }))
           info.state = abort.signal.aborted ? 'aborted' : 'succeeded'
           if (abort.signal.aborted) info.error = abort.signal.reason instanceof Error ? abort.signal.reason.message : String(abort.signal.reason)
         } catch (e) {
-          info.state = abort.signal.aborted ? 'aborted' : 'failed'
-          info.error = e instanceof Error ? e.message : String(e)
+          if (e instanceof JobPaused && !abort.signal.aborted) {
+            info.state = 'paused'
+            info.summary = e.message
+          } else {
+            info.state = abort.signal.aborted ? 'aborted' : 'failed'
+            info.error = e instanceof Error ? e.message : String(e)
+          }
         } finally {
           info.endedAt = new Date(now()).toISOString()
           log(`${info.state}${info.error ? `: ${info.error}` : info.summary ? `: ${info.summary}` : ''}`)
@@ -225,7 +302,7 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
           emit({ type: 'ended', jobId: id, job: info })
         }
       })
-      running.set(key, { id, abort, done })
+      running.set(key, { id, abort, pause: pauseCtl, payload, done })
       return { accepted: true, jobId: id }
     },
     jobStatus(jobId) {
@@ -254,12 +331,27 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
       })
       return e?.version ?? scopeVersion(jobId)
     },
+    pause(jobId, by) {
+      const r = runningById(jobId)
+      const info = jobs.get(jobId)
+      if (!r || !info || info.state !== 'running' || !pausable(r.payload) || r.abort.signal.aborted) return false
+      if (!r.pause.signal.aborted) {
+        info.pause = { by, at: new Date(now()).toISOString() }
+        r.pause.abort(new Error(`paused by ${by}`))
+        info.log.push(`${new Date(now()).toISOString()} pausing at the next safe point (asked by ${by})`)
+        emit({ type: 'state', jobId, job: info })
+        // its delegated worker stops at its own next safe point, so the specialist's call returns and it can stop too
+        for (const kid of children.get(jobId) ?? []) runningById(kid)?.pause.abort(new Error(`its specialist job ${jobId} is pausing`))
+      }
+      return true
+    },
     async abort(jobId, reason, graceMs = 30_000) {
       const done = abortOne(jobId, reason)
       if (!done) return false
       await Promise.race([done, new Promise((res) => setTimeout(res, graceMs).unref())])
       return true
     },
+    payloadOf: (jobId) => payloads.get(jobId),
     dispose: () => { unwatch() },
     async shutdown(graceMs = 20_000) {
       const live = [...running.values()]
@@ -274,9 +366,16 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
 
 let current: Jobs | null = null
 
-/** The jobs of this process, with the real runner (git, GitHub, Claude). Created on first use. */
+/**
+ * The jobs of this process, with the real runner (git, GitHub, Claude). Created on first use. On a project's worker
+ * runtime (TRACE_PROJECT_HOME) its jobs are written into the project's job index, a person's task waits its turn in
+ * the project's queue, and a paused job's transcript is kept (src/agents/runtime/job-index.ts).
+ */
 export function defaultJobs(): Jobs {
-  current ??= createJobs(realRunner(), { project: process.env.TRACE_PROJECT || undefined })
+  if (current) return current
+  const index = workerIndex()
+  current = createJobs(realRunner(process.env, index?.paused), { project: process.env.TRACE_PROJECT || undefined, ...(index ? { admit: index.admit } : {}) })
+  index?.watch(current)
   return current
 }
 

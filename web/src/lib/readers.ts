@@ -6,7 +6,7 @@
  * Each reader accepts an answer already in the app's shape and returns it unchanged, so mock mode (src/mock, which
  * answers in the app's shapes) and the tests keep working.
  */
-import type { ChatMessage, ChatThread, EvidenceRef, Gate, InboxItem, Journey, Member, MeDoc, NextStep, Question, Stage, Waiver } from './types'
+import type { AgentState, ChatMessage, ChatThread, EvidenceRef, Gate, InboxItem, Journey, Member, MeDoc, NextStep, ProjectJobs, Question, RunSummary, Stage, Waiver } from './types'
 import type { DecisionEntry, JourneyMore } from './types-s1'
 
 type Obj = Record<string, unknown>
@@ -130,8 +130,8 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
     template: String(raw.template) as Journey['template'],
     revision: /^rev/i.test(String(raw.revision)) ? String(raw.revision) : `Rev ${String(raw.revision)}`,
     stages, gates, current: String(raw.current_stage), next, questions, waivers,
-    // jobs are not part of the journey record: the API does not list a project's running jobs yet
-    jobs: [],
+    // the project's jobs (jobs.list's, from its job index)
+    jobs: arr(raw.jobs).map(readJob),
     recent: decisions.slice(0, 5).map((d) => ({ id: String(d.id), who: str(d.by) ?? 'trace', text: String(d.summary), at: String(d.at) })),
     hasMemory: Boolean(raw.has_memory),
     decisions: decisions.map((d) => ({
@@ -141,6 +141,41 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
     })),
   }
   return out
+}
+
+// ------------------------------------------------------------------ jobs (jobs.list, journey.get's jobs)
+
+const RUN_STATE: Record<string, RunSummary['state']> = { running: 'running', queued: 'queued', paused: 'paused', succeeded: 'done', failed: 'failed', aborted: 'cancelled', lost: 'lost' }
+const OPS = new Set(['pause', 'resume', 'cancel', 'move_up'])
+
+/** One job view of the API (src/api/actions-jobs.ts IndexedJob) as a run line's summary. */
+export function readJob(j: Obj): RunSummary {
+  if ('title' in j && !('workerJobId' in j)) return j as unknown as RunSummary
+  const q = isObj(j.queue) ? j.queue : null
+  const state = RUN_STATE[String(j.state)] ?? 'running'
+  const step = str(j.step)
+  return {
+    id: String(j.id), title: String(j.title), state, repo: str(j.repository),
+    ...(step && state !== 'queued' ? { step } : {}),
+    ...(str(j.startedAt) ? { startedAt: String(j.startedAt) } : {}),
+    ...(typeof j.typicalS === 'number' ? { typicalS: j.typicalS } : {}),
+    ...(str(j.where) ? { where: String(j.where) } : {}),
+    ...(q ? { startsWhen: String(q.startsWhen), position: Number(q.position) } : {}),
+    controls: (Array.isArray(j.controls) ? j.controls : []).filter((c): c is 'pause' | 'resume' | 'cancel' | 'move_up' => OPS.has(String(c))),
+    ...(str(j.agent) ? { agent: String(j.agent) } : {}), ...(str(j.agentName) ? { agentName: String(j.agentName) } : {}),
+    ...(str(j.startedBy) ? { startedBy: String(j.startedBy) } : {}), yours: Boolean(j.yours), held: Boolean(j.held),
+    ...(str(j.pausedBy) ? { pausedBy: String(j.pausedBy) } : {}), ...(str(j.branch) ? { branch: String(j.branch) } : {}),
+    ...(str(j.summary) ? { summary: String(j.summary) } : {}), ...(str(j.endedAt) ? { endedAt: String(j.endedAt) } : {}),
+  }
+}
+
+/** jobs.list: the jobs as run lines, the agents and the remote jobs as they are. */
+export function readJobs(raw: unknown, args?: { repo?: string }): ProjectJobs {
+  if (!isObj(raw)) return { repo: args?.repo ?? '', jobs: [], agents: [], batch: [], updatedAt: '' }
+  return {
+    repo: str(raw.repo) ?? args?.repo ?? '', jobs: arr(raw.jobs).map(readJob), agents: arr(raw.agents) as unknown as AgentState[],
+    batch: arr(raw.batch) as unknown as ProjectJobs['batch'], updatedAt: str(raw.updatedAt) ?? '',
+  }
 }
 
 // ------------------------------------------------------------------ inbox
@@ -279,6 +314,7 @@ export function readRecall(raw: unknown): string[] {
 /** The readers, by action. */
 export const READERS: Partial<Record<string, (raw: unknown, args: Record<string, unknown>) => unknown>> = {
   'journey.get': (r, a) => readJourney(r, a as { repo?: string }),
+  'jobs.list': (r, a) => readJobs(r, a as { repo?: string }),
   inbox: readInbox,
   'me.get': readMe,
   'project.members': readMembers,

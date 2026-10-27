@@ -26,9 +26,10 @@
  *                      namespace `trace`, whose onSubscribe handler allows /trace/users/<sub> to that <sub> alone
  *     journey events   `<prefix>-journey-events` (src/web/journey-events.ts) and its EventBridge rule: the central
  *                      bucket's "Object Created" events of each project's journey-agent/facts.db (an agent recorded a fact)
- *                      become `record.changed` (and `notification` for a new question or stuck report) on the channels
- *                      of the people on that project. Its role reads access/* and the agents' facts objects (S3 Get
- *                      only), and publishes to the namespace; nothing else
+ *                      become `record.changed` (and `notification` for a new question or stuck report), and of its
+ *                      job-index/jobs.db (a job changed) `job.updated`, on the channels of the people on that project.
+ *                      Its role reads access/*, the agents' facts objects and the job indexes (S3 Get only), and
+ *                      publishes to the namespace; nothing else
  *     content policy   names the events API's own two hosts, Transcribe streaming and the voice bucket; scripts only
  *                      from the app (the theme script is web/public/theme.js, not inline)
  *     WAF              web.waf (src/infra/edge.ts, on by default): made here in us-east-1, else the `<prefix>-edge`
@@ -65,6 +66,7 @@ import { Construct } from 'constructs'
 import { BENCH_DB } from '../core/bench.js'
 import { AGENT_FACTS_DB, AGENT_FACTS_FOLDER } from '../core/agent-facts.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
+import { JOB_INDEX_DB, JOB_INDEX_FOLDER } from '../core/job-index.js'
 import { ACCESS_PREFIX } from './project.js'
 import { EDGE_REGION, TraceWebAcl, edgeStackName } from './edge.js'
 import { agentsDashboardName } from './observability.js'
@@ -466,6 +468,8 @@ export class WebStack extends NestedStack {
     }))
     // the facts object that changed (a new question or stuck report is told apart from a check), nothing else of a project
     fnRole.addToPolicy(new iam.PolicyStatement({ sid: 'AgentFactsRead', actions: ['s3:GetObject'], resources: [central.arnForObjects(AGENT_FACTS_KEYS)] }))
+    // the job index that changed (which jobs, and their state: job.updated), nothing else of a project
+    fnRole.addToPolicy(new iam.PolicyStatement({ sid: 'JobIndexRead', actions: ['s3:GetObject'], resources: [central.arnForObjects(JOB_INDEX_KEYS)] }))
     fnRole.addToPolicy(new iam.PolicyStatement({
       sid: 'PublishLiveEvents', actions: ['appsync:EventPublish'], resources: [`${this.events.apiArn}/channelNamespace/${EVENTS_NAMESPACE}`],
     }))
@@ -496,7 +500,7 @@ export class WebStack extends NestedStack {
       eventPattern: {
         source: ['aws.s3'],
         detailType: ['Object Created'],
-        detail: { bucket: { name: [central.bucketName] }, object: { key: events.Match.anyOf(events.Match.wildcard(AGENT_FACTS_KEYS), events.Match.wildcard(BENCH_KEYS)) } },
+        detail: { bucket: { name: [central.bucketName] }, object: { key: events.Match.anyOf(events.Match.wildcard(AGENT_FACTS_KEYS), events.Match.wildcard(BENCH_KEYS), events.Match.wildcard(JOB_INDEX_KEYS)) } },
       },
     })
     rule.addTarget(new targets.LambdaFunction(fn, { retryAttempts: 2, maxEventAge: Duration.hours(1) }))
@@ -510,6 +514,8 @@ export interface TraceWebProps extends WebStackProps {}
 export const AGENT_FACTS_KEYS = `${PROJECTS_PREFIX}/*/${AGENT_FACTS_FOLDER}/${AGENT_FACTS_DB}`
 /** The bench's live copies (src/core/bench.ts): a reading taken refreshes the Bring-up run screen; never read. */
 export const BENCH_KEYS = `${PROJECTS_PREFIX}/*/${AGENT_FACTS_FOLDER}/${BENCH_DB}`
+/** The projects' job indexes (src/core/job-index.ts), the same way: job.updated events. */
+export const JOB_INDEX_KEYS = `${PROJECTS_PREFIX}/*/${JOB_INDEX_FOLDER}/${JOB_INDEX_DB}`
 
 /** What attach needs of the parent: the pool and the web client, the API runtime, and the parent's outputs' stack. */
 export interface WebAttachProps {

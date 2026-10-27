@@ -461,8 +461,8 @@ export class TraceStack extends Stack {
     // waiting for the next stack update (projects.create): read, and write only with conditional puts
     // and each project's journey record (journey.*, docs/web-build.md), under projects/<slug>/journey/
     grantPrefixes(apiRole, central, { conditional: [`${PROJECTS_PREFIX}/*/${CHATS_PREFIX}`, `${PROJECTS_PREFIX}/*/${JOURNEY_PREFIX}`, PENDING_PROJECTS] })
-    // what each project's agents contribute to its journey (projects/<slug>/journey-agent, src/core/agent-facts.ts):
-    // read and merged into the journey's views, never written by the API
+    // what each project's agents contribute to its journey (projects/<slug>/journey-agent, src/core/agent-facts.ts),
+    // and its job index there (jobs.db, src/core/job-index.ts: jobs.list): read, never written by the API
     // (and what the bench measured, live: projects/<slug>/journey-agent/bench.db, src/core/bench.ts)
     grantPrefixes(apiRole, central, { read: [`${PROJECTS_PREFIX}/*/${AGENT_FACTS}`] })
     // cost and the build's shipping, in a policy of their own (the role's inline policy has a size limit, which CDK

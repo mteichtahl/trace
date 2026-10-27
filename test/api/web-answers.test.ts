@@ -13,6 +13,8 @@ import { assign, seen } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
 import { askQuestion, setCriterion, startJourney } from '../../src/core/journey.js'
 import { Registry } from '../../src/core/registry.js'
+import { JobIndexStore, putJob } from '../../src/core/job-index.js'
+import { projectHash } from '../../src/core/project.js'
 import { openProject } from '../../src/core/store.js'
 import { DesignDb } from '../../src/tools/design/db.js'
 import '../../src/tools/verify/db.js'
@@ -25,7 +27,7 @@ const github = new FakeGitHub([REPO])
 const cognito = new FakeCognito()
 const scratch = mkdtempSync(join(tmpdir(), 'trace-answers-'))
 const bucket = mkdtempSync(join(tmpdir(), 'trace-answers-bucket-'))
-const deps: ActionDeps = { github: async () => github, cognito: () => cognito, jobs: async () => ({ repositoryOf: () => null, startJob: async () => ({ accepted: true, jobId: 'j' }), jobStatus: async () => [] }), tools: () => new Registry([]), scratch, store: (p) => backendFor(join(bucket, p)) }
+const deps: ActionDeps = { github: async () => github, cognito: () => cognito, jobs: async () => ({ repositoryOf: () => null, startJob: async () => ({ accepted: true, jobId: 'j' }), jobStatus: async () => [], cancel: async () => ({ ok: true, state: 'aborted' }), pause: async () => ({ ok: true, state: 'running' }) }), tools: () => new Registry([]), scratch, store: (p) => backendFor(join(bucket, p)) }
 const run = async (who: Context['principal'], action: string, args: Record<string, unknown> = {}): Promise<unknown> => (await perform(action, args, { principal: who, deps })).result
 const OUT = join(import.meta.dirname, '../../web/src/lib/api-answers.json')
 
@@ -66,6 +68,15 @@ beforeAll(async () => {
   github.files.set(`${REPO}:main:README.md`, new TextEncoder().encode('# Answers'))
   github.files.set(`${REPO}:main:hw/answers.kicad_sch`, new TextEncoder().encode('(kicad_sch)'))
   rmSync(dir, { recursive: true, force: true })
+  // the project's job index (src/core/job-index.ts): one running task of the person's, one queued behind it, one done
+  const S = (c: string): string => `trace-api-${projectHash(REPO)}-${c.repeat(24)}`
+  const now = Date.now() / 1000
+  await new JobIndexStore(backendFor(join(bucket, 'projects')), REPO).update((db) => {
+    putJob(db, 'job-run', { kind: 'task', agent: 'verify', title: 'Check the ERC', state: 'running', session: S('a'), requestedBySub: USER.sub, requestedBy: USER.email, step: 'running ERC on the main sheet', queuedAt: now - 300, startedAt: now - 300, beatAt: now, branch: 'claude/task-erc' }, now)
+    putJob(db, 'job-q', { kind: 'task', agent: 'verify', title: 'Check the DRC', state: 'queued', session: S('b'), requestedBySub: USER.sub, requestedBy: USER.email, step: 'queued: the verify agent is already working on this project ("Check the ERC")', queuedAt: now - 60 }, now)
+    putJob(db, 'job-done', { kind: 'task', agent: 'verify', title: 'Check the BOM', state: 'succeeded', session: S('c'), queuedAt: now - 3000, startedAt: now - 3000, endedAt: now - 2400, summary: 'verify: done in 9 turns' }, now)
+    return { result: null }
+  })
 })
 afterAll(() => { rmSync(scratch, { recursive: true, force: true }); rmSync(bucket, { recursive: true, force: true }) })
 
@@ -81,6 +92,7 @@ describe('the answers the web app reads', () => {
     await run(ADMIN, 'chats.append', { repo: REPO, thread: t.thread.id, messages: [{ text: 'And the heat?' }] })
     const answers = stable({
       'journey.get': { args: { repo: REPO }, result: await run(USER, 'journey.get', { repo: REPO }) },
+      'jobs.list': { args: { repo: REPO }, result: await run(USER, 'jobs.list', { repo: REPO }) },
       inbox: { args: {}, result: await run(USER, 'inbox') },
       'me.get': { args: {}, result: await run(USER, 'me.get') },
       'project.members': { args: { repo: REPO }, result: await run(USER, 'project.members', { repo: REPO }) },

@@ -10,6 +10,7 @@
  *   withSession(id, fn)            run fn with OTel baggage session.id (AgentCore groups a session's traces by it)
  *   traceEnv()                     TRACEPARENT/TRACESTATE/BAGGAGE for a child process or a Batch job
  *   flush()                        push what is buffered (before process.exit)
+ *   recordProjectMetric(name, v, a) the per-project series of a job, tool, cost or GPU metric (PROJECT METRICS below)
  *
  * What may be recorded: names, kinds, ids, counts, sizes, durations and outcomes. Never argument values, file
  * contents, prompts, tokens or email addresses. Every attribute goes through `redact`, which truncates strings and
@@ -62,6 +63,8 @@ export const ATTR = {
   workItemKind: 'trace.work_item.kind',
   workItemNumber: 'trace.work_item.number',
   repository: 'trace.repository',
+  /** `project-<8 hex>`: the project's hash (src/core/project.ts projectHash), the only per-project metric dimension */
+  project: 'trace.project',
   agent: 'trace.agent',
   agentKind: 'trace.agent.kind',
   routeReason: 'trace.route.reason',
@@ -373,8 +376,8 @@ export async function observeTool<T>(name: string, args: unknown, ctx: { via: st
   } finally {
     const ms = performance.now() - t0
     const dims: MetricAttrs = { [ATTR.toolName]: name, [ATTR.outcome]: outcome }
-    recordMetric('trace.tool.calls', 1, dims)
-    recordMetric('trace.tool.duration', ms, dims)
+    recordProjectMetric('trace.tool.calls', 1, dims)
+    recordProjectMetric('trace.tool.duration', ms, dims)
     if (outcome !== 'ok') recordMetric('trace.tool.errors', 1, { [ATTR.toolName]: name, [ATTR.errorType]: errorType })
   }
 }
@@ -393,11 +396,20 @@ export const METRICS = {
   'trace.claude.cost': { kind: 'counter', unit: 'USD', description: 'Estimated cost of Claude per job (the Agent SDK\'s estimate)' },
   'trace.gpu.jobs': { kind: 'counter', unit: '{job}', description: 'GPU jobs (renders, autorouters), by kind, backend and outcome' },
   'trace.gpu.duration': { kind: 'histogram', unit: 's', description: 'How long a GPU job took, queue wait included' },
+  // the per-project series (recordProjectMetric): the project's hash and the outcome only
+  'trace.project.jobs': { kind: 'counter', unit: '{job}', description: 'Jobs finished on one project, by outcome' },
+  'trace.project.job.duration': { kind: 'histogram', unit: 's', description: 'How long a job ran on one project' },
+  'trace.project.tool.calls': { kind: 'counter', unit: '{call}', description: 'Tool calls on one project, by outcome' },
+  'trace.project.tool.duration': { kind: 'histogram', unit: 'ms', description: 'How long a tool call took on one project' },
+  'trace.project.claude.cost': { kind: 'counter', unit: 'USD', description: 'Estimated cost of Claude on one project (the Agent SDK\'s estimate)' },
+  'trace.project.gpu.jobs': { kind: 'counter', unit: '{job}', description: 'GPU and CPU remote jobs on one project, by outcome' },
+  'trace.project.gpu.duration': { kind: 'histogram', unit: 's', description: 'How long a remote job took on one project, queue wait included' },
 } as const satisfies Record<string, { kind: 'counter' | 'histogram'; unit: string; description: string }>
 
 export type MetricName = keyof typeof METRICS
 
-/** Metric dimensions must stay few and low-cardinality (each combination is a CloudWatch metric): no ids, no repositories. */
+/** Metric dimensions must stay few and low-cardinality (each combination is a CloudWatch metric): no ids, no repositories
+ * (the per-project series carry a bounded project hash instead: PROJECT METRICS). */
 export type MetricAttrs = Partial<Record<AttrKey, string | number | boolean | undefined>>
 
 interface Instruments { add: (v: number, a: Attributes) => void }
@@ -434,6 +446,47 @@ export function recordMetric(name: MetricName, value: number, attrs: MetricAttrs
 /** For tests: forget the instruments made for earlier meter providers. */
 export function resetMetricsCache(): void {
   cache = new WeakMap()
+  projectDim = undefined
+}
+
+// ------------------------------------------------------------------ PROJECT METRICS
+
+/**
+ * Per-project series, for Operations' per-project numbers. A dimension on a metric is a CloudWatch metric per value,
+ * so the rule above (no repositories) stands for every other metric. These are the exception, because the value is
+ * bounded: a project's hash, one per project of the installation (`repositories` is at most 60, props.ts), and only
+ * the process's own project (TRACE_PROJECT, set on each project's worker runtime), never one from a request. Each
+ * carries the project and the outcome only (no tool name, kind or agent), so a project adds at most a few series per
+ * metric. They are separate metric names (trace.project.*), so the aggregate series stay exactly as they were and a
+ * sum across a metric never counts a call twice. The value is `project-<hash>` (not the repository's name: names are
+ * not for metrics), which Operations (src/web/ops.ts attribute) maps back to the person's projects.
+ */
+export const PROJECT_METRICS = {
+  'trace.jobs': 'trace.project.jobs', 'trace.job.duration': 'trace.project.job.duration',
+  'trace.tool.calls': 'trace.project.tool.calls', 'trace.tool.duration': 'trace.project.tool.duration',
+  'trace.claude.cost': 'trace.project.claude.cost', 'trace.gpu.jobs': 'trace.project.gpu.jobs', 'trace.gpu.duration': 'trace.project.gpu.duration',
+} as const satisfies Partial<Record<MetricName, MetricName>>
+
+let projectDim: string | null | undefined
+
+/** This process's project as a metric dimension value (`project-<hash>`), or null when it serves no one project. */
+export function projectDimension(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (env === process.env && projectDim !== undefined) return projectDim
+  const repo = env.TRACE_PROJECT?.trim().toLowerCase()
+  const v = repo && /^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/.test(repo) ? `project-${createHash('sha256').update(repo).digest('hex').slice(0, 8)}` : null
+  if (env === process.env) projectDim = v
+  return v
+}
+
+/**
+ * Record the aggregate metric as recordMetric does, and, on a project's own runtime, its per-project series
+ * (PROJECT_METRICS) with the project and the outcome only.
+ */
+export function recordProjectMetric(name: keyof typeof PROJECT_METRICS, value: number, attrs: MetricAttrs = {}): void {
+  recordMetric(name, value, attrs)
+  const project = projectDimension()
+  if (!project) return
+  recordMetric(PROJECT_METRICS[name], value, { [ATTR.project]: project, ...(attrs[ATTR.outcome] !== undefined ? { [ATTR.outcome]: attrs[ATTR.outcome] } : {}) })
 }
 
 // ------------------------------------------------------------------ the SDK

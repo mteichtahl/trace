@@ -13,7 +13,7 @@ import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from 
 import { Skeleton } from '@/components/ui/skeleton'
 import { NeedsYouCard } from '@/components/needs-you-card'
 import { useDismissStuck } from '@/components/dismiss-stuck'
-import { RunLine, cancelRun } from '@/components/run-line'
+import { RunLine, runControls } from '@/components/run-line'
 import { Column, Section } from '@/components/shell/app-shell'
 import { StageRail } from '@/components/stage-rail'
 import { EmptyState, Loading, QueryError, SkeletonRows } from '@/components/states'
@@ -53,7 +53,10 @@ function Home() {
 
   useTraceContext({ label: 'Home', description: 'The screen the person is on', value: 'Home: what needs them across their projects' }, 'screen')
 
-  const running: { run: RunSummary; project: string }[] = journeys.flatMap((j) => (j.data?.jobs ?? []).filter((r) => r.state === 'running').map((run) => ({ run, project: j.data!.name })))
+  // running and paused work, each with the controls the person has on its project (a reviewer: none)
+  const writeOn = new Set((projects.data ?? []).filter((p) => (p.part ?? 'contributor') !== 'reviewer').map((p) => p.repo))
+  const running: { run: RunSummary; project: string; write: boolean }[] = journeys.flatMap((j, i) => (j.data?.jobs ?? []).filter((r) => r.state === 'running' || r.state === 'paused')
+    .map((run) => ({ run, project: j.data!.name, write: writeOn.has(repos[i] ?? '') })))
   const waiting: (Wait & { project: string })[] = waits.flatMap((w, i) => (w.data?.waits ?? []).map((x) => ({ ...x, project: projectName(repos[i] ?? '') })))
   const inProgress = running.length + waiting.length
   const items = inbox.data ?? []
@@ -141,11 +144,11 @@ function Home() {
   )
 }
 
-function InProgress({ running, waiting }: { running: { run: RunSummary; project: string }[]; waiting: (Wait & { project: string })[] }) {
+function InProgress({ running, waiting }: { running: { run: RunSummary; project: string; write: boolean }[]; waiting: (Wait & { project: string })[] }) {
   return (
     <div className="divide-y overflow-hidden rounded-xl border">
-      {running.map(({ run, project }) => (
-        <RunLine key={run.id} run={run} project={project} onCancel={(x) => cancelRun(x.id)} />
+      {running.map(({ run, project, write }) => (
+        <RunLine key={run.id} run={run} project={project} {...runControls(write)} />
       ))}
       {waiting.map((w) => (
         <WaitLine

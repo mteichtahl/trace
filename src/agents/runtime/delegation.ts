@@ -77,7 +77,9 @@ export const DelegateCancelRequest = DelegateStatusRequest.extend({ reason: z.st
  */
 export type DelegationState = 'running' | 'succeeded' | 'failed' | 'cancelled'
 export const delegationStateOf = (j: Pick<JobInfo, 'state'>): DelegationState =>
-  (j.state === 'aborted' ? 'cancelled' : j.state)
+  // a delegated worker never queues (it is part of its specialist's job); one paused with its specialist stopped
+  // early, which is a cancelled delegation to the specialist (its work stays in the checkout, on the branch)
+  (j.state === 'aborted' || j.state === 'paused' ? 'cancelled' : j.state === 'queued' ? 'running' : j.state)
 
 export class DelegationError extends Error {
   override name = 'DelegationError'

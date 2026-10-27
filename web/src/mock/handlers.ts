@@ -13,6 +13,7 @@ import { designAction } from './design'
 import { smallAction } from './small'
 import { filesAction, withFileThread } from './files'
 import { buildCostAction } from './build-cost'
+import { jobsAction, jobsOf } from './jobs'
 
 let signedIn = typeof sessionStorage !== 'undefined' && sessionStorage.getItem('trace.mock.signedOut') !== '1'
 let inbox: InboxItem[] = [...INBOX]
@@ -30,13 +31,14 @@ function action(name: string, a: Record<string, unknown>): Response {
   const k = knowledgeAction(name, a); if (k !== undefined) return k && typeof k === 'object' && '__error' in k ? json({ ok: false, error: (k as { __error: string }).__error }, 403) : ok(k)
   const des = designAction(name, a); if (des) return des
   const bc = buildCostAction(name, a); if (bc) return bc
+  const jobs = jobsAction(name, a); if (jobs) return jobs.ok ? ok(jobs.result) : json({ ok: false, error: jobs.error })
   const s1 = s1Action(name, a); if (s1) return s1
   const small = smallAction(name, a); if (small) return small
   switch (name) {
     case 'whoami': return ok({ sub: ME.sub, email: ME.email, groups: ['trace-admins'], class: ME.class })
     case 'projects': return ok(PROJECTS)
     case 'inbox': return ok(inbox)
-    case 'journey.get': return JOURNEYS[repo] ? ok(JOURNEYS[repo]) : json({ ok: false, error: 'no access' }, 403)
+    case 'journey.get': return JOURNEYS[repo] ? ok({ ...JOURNEYS[repo], jobs: jobsOf(repo) }) : json({ ok: false, error: 'no access' }, 403)
     case 'project.members': return ok(MEMBERS[repo] ?? MEMBERS['acme/soil-sensor'])
     case 'tools.waits': return ok({ repo, version: 1, waits: WAITS[repo] ?? [] })
     case 'tools.check_now': case 'job.check_now': return new Promise<Response>((r) => setTimeout(() => r(ok({ ok: true })), 900)) as unknown as Response
