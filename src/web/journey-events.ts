@@ -29,6 +29,7 @@ import { fromNodeProviderChain } from '@aws-sdk/credential-providers'
 import { Central, S3Backend, type S3Api } from '../core/central.js'
 import { AGENT_FACTS_DB, AGENT_FACTS_FOLDER, applyAgentFactsSchema } from '../core/agent-facts.js'
 import { BucketDb } from '../core/journey-store.js'
+import { BENCH_DB } from '../core/bench.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { type LiveEvent, type Publisher, appsyncPublisher, userChannel } from './events.js'
 
@@ -38,7 +39,7 @@ export const NEW_WITHIN_S = 120
 /** The EventBridge event of an S3 object created (only the fields read here). */
 export interface S3ObjectEvent { 'detail-type'?: string; time?: string; detail?: { bucket?: { name?: string }; object?: { key?: string } } }
 
-const FACTS_KEY = new RegExp(`^${PROJECTS_PREFIX}/([A-Za-z0-9-]+/[A-Za-z0-9._-]+)/${AGENT_FACTS_FOLDER}/${AGENT_FACTS_DB.replace('.', '\\.')}$`)
+const FACTS_KEY = new RegExp(`^${PROJECTS_PREFIX}/([A-Za-z0-9-]+/[A-Za-z0-9._-]+)/${AGENT_FACTS_FOLDER}/(${AGENT_FACTS_DB.replace('.', '\\.')}|${BENCH_DB.replace('.', '\\.')})$`)
 
 /** The project (owner/repo, lower case) whose facts the key is, or null for any other key. */
 export function projectOfKey(key: string): string | null {
@@ -46,6 +47,9 @@ export function projectOfKey(key: string): string | null {
   if (!m?.[1] || m[1].includes('..')) return null
   return m[1].toLowerCase()
 }
+
+/** Whether the key is the bench's live copy (src/core/bench.ts): a reading was taken. Never read here. */
+export const isBenchKey = (key: string): boolean => key.endsWith(`/${AGENT_FACTS_FOLDER}/${BENCH_DB}`)
 
 export interface Audience { admins: string[]; contributors: string[]; reviewers: string[] }
 
@@ -114,7 +118,8 @@ export async function onObjectCreated(e: S3ObjectEvent, d: JourneyEventsDeps): P
   const access = new Central({ home: `s3://${d.bucket}/access`, ...(d.s3 ? { s3: d.s3 } : {}) })
   const facts = new BucketDb(projects, repo, { folder: AGENT_FACTS_FOLDER, file: AGENT_FACTS_DB, schema: applyAgentFactsSchema }, d.scratch ? { scratch: d.scratch } : {})
   const at = e.time ? Date.parse(e.time) / 1000 : d.now() / 1000
-  const [audience, fresh] = await Promise.all([access.query((db) => audienceOf(db, repo)), facts.read((db) => newFacts(db, at)).then((r) => r.result)])
+  // a bench reading tells the screens to refetch, and notifies no one: nothing in it is read here
+  const [audience, fresh] = await Promise.all([access.query((db) => audienceOf(db, repo)), isBenchKey(key) ? Promise.resolve([] as NewFact[]) : facts.read((db) => newFacts(db, at)).then((r) => r.result)])
   const everyone = [...new Set([...audience.admins, ...audience.contributors, ...audience.reviewers])]
   const stamp = new Date(d.now()).toISOString()
   const per = new Map<string, LiveEvent[]>()

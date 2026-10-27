@@ -14,12 +14,23 @@
  *
  * A throw inside the body finishes the run as `error` (with the message as its summary) and is re-thrown.
  */
+import { type BringupStep, type InstrumentId, type Reading, insertIds, insertReadings, mirrorBench, newReading } from '../../core/bench.js'
 import { Work, type RunStatus } from '../../core/store.js'
+
+/** A measurement taken for a bring-up step (the tools' `bringup` argument): which board, which step, its limits. */
+export interface BringupTag { board: string; step: BringupStep; quantity?: string | undefined; min?: number | undefined; max?: number | undefined; by?: string | undefined }
 
 export interface Rec {
   readonly id: string
   measure(name: string, value: number | null, unit?: string, detail?: unknown): void
   artifact(name: string, data: string | Uint8Array, mime?: string): void
+  /**
+   * Store a reading against a board and bring-up step (src/core/bench.ts), in the run record beside this run, and
+   * after the run in the project's live copy when the session reaches it. Returns it, with pass or fail.
+   */
+  reading(tag: BringupTag, r: { instrument: string | null; quantity: string; value: number | null; unit: string | null }): Reading
+  /** Store an instrument's identity (hil.idn), the same way. */
+  identity(id: Omit<InstrumentId, 'at' | 'runId'>): void
 }
 
 export interface Outcome<R> {
@@ -34,6 +45,8 @@ export async function record<R extends object>(
   body: (rec: Rec) => Promise<Outcome<R>>,
 ): Promise<R & { run_id: string }> {
   const work = new Work()
+  const readings: Reading[] = []
+  const ids: InstrumentId[] = []
   try {
     const id = work.start(kind, { subject: opts.subject, args: opts.args })
     const rec: Rec = {
@@ -41,6 +54,20 @@ export async function record<R extends object>(
       measure: (name, value, unit = '', detail) => work.measure(id, name, value !== null && Number.isFinite(value) ? value : null, unit, detail),
       // SQLite binds an empty blob as NULL, and an empty artifact says nothing: leave it out
       artifact: (name, data, mime) => { if (data.length) work.artifact(id, name, data, mime) },
+      reading: (tag, r) => {
+        const row = newReading({
+          board: tag.board, step: tag.step, instrument: r.instrument, quantity: tag.quantity ?? r.quantity, value: r.value !== null && Number.isFinite(r.value) ? r.value : null,
+          unit: r.unit, min: tag.min ?? null, max: tag.max ?? null, by: tag.by ?? (process.env.TRACE_AGENT_LABEL || process.env.TRACE_AGENT || 'a person at the bench'), runId: id,
+        })
+        insertReadings(work.db, [row])
+        readings.push(row)
+        return row
+      },
+      identity: (x) => {
+        const row = { ...x, at: Date.now() / 1000, runId: id }
+        insertIds(work.db, [row])
+        ids.push(row)
+      },
     }
     let out: Outcome<R>
     try {
@@ -52,6 +79,7 @@ export async function record<R extends object>(
     }
     const result = { ...out.result, run_id: id }
     work.finish(id, out.status, out.summary, result)
+    if (readings.length || ids.length) await mirrorBench({ readings, ids })
     return result
   } finally {
     work.close()

@@ -62,10 +62,11 @@ export class BucketDb {
   readonly key: string
   protected readonly retries: number
 
-  constructor(protected readonly store: Backend, repo: string, protected readonly where: { folder: string; file: string; schema: (db: DatabaseSync) => void },
+  constructor(protected readonly store: Backend, repo: string, protected readonly where: { folder: string; file: string; schema: (db: DatabaseSync) => void; key?: string },
     protected readonly o: Omit<JourneyStoreOptions, 'legacy'> = {}) {
-    this.slug = projectSlug(repo)
-    this.key = `${this.slug}/${where.folder}/${where.file}`
+    this.slug = where.key ? '' : projectSlug(repo)
+    // `key`: one database of the installation's (not a project's) at a fixed key of `store` (src/core/cost.ts)
+    this.key = where.key ?? `${this.slug}/${where.folder}/${where.file}`
     this.retries = o.retries ?? 5
   }
 

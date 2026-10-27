@@ -36,7 +36,7 @@ import { ApiError, api, projectName } from '@/lib/api'
 import type { OpsAlarm, OpsAnswer, OpsWidget } from '@/lib/admin-types'
 import { useAuth } from '@/lib/auth'
 import { ago, time } from '@/lib/format'
-import { q, useProjects } from '@/lib/queries'
+import { q, useAction, useProjects } from '@/lib/queries'
 import { cn } from '@/lib/utils'
 import { LEVEL, RANGES, type Range, momentLabel, momentSummary, opsUrl, refreshIn, sectionTitle, stepOf, tileViews, type TileView } from './ops-model'
 
@@ -82,7 +82,10 @@ export function Operations({ section }: { section?: string }) {
   const data = ops.data
   const sections = data?.sections ?? []
   const current = sections.find((s) => s.id === section) ?? sections[0]
-  const tiles = useMemo(() => tileViews(data?.tiles ?? [], admin), [data?.tiles, admin])
+  // the month's cloud spend from the cost ledger (admins only: usage.month refuses anyone else)
+  const month = useAction('usage.month', {}, { enabled: admin })
+  const monthCost = month.data ? { estimated: month.data.totals.estimated, actual: month.data.totals.actual, currency: month.data.currency, projects: month.data.projects.length } : null
+  const tiles = useMemo(() => tileViews(data?.tiles ?? [], admin, monthCost), [data?.tiles, admin, monthCost?.estimated, monthCost?.actual])
 
   useTraceContext(
     {

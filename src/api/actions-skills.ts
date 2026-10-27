@@ -32,7 +32,7 @@ import {
   questionIsFor,
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
-import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
+import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, storeAt, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { viewerOf } from './actions-journey.js'
 import { loadDesignDecisions, recordDesignDecision } from '../tools/design/decisions.js'
 import type { DesignRows } from '../tools/design/db.js'
@@ -40,6 +40,44 @@ import { architectureView, intentDraft, intentView, linksView, pinCheck } from '
 import { type DecisionInput, Decision, prepare } from './actions-design.js'
 import { kicadFiles } from './actions-record.js'
 import { checkFindings, designOf, hasTable, latestNetlist, latestRun, requirementEvidence, runResult, struckRequirements } from './record-read.js'
+import { BenchStore, type InstrumentId, type Reading, idsFromRuns, latestByQuantity, loadIds, loadReadings, unionIds, unionReadings } from '../core/bench.js'
+import { loadBoards } from '../core/boards.js'
+import { PROJECTS_PREFIX } from '../core/project.js'
+import { boardView, readingView } from './actions-build.js'
+
+/** The skills that read the bench. */
+const HARDWARE_SKILLS = new Set(['bench-setup', 'bring-up-run', 'incoming-inspection'])
+
+async function liveBenchOf(ctx: Context, repo: string): Promise<{ readings: Reading[]; ids: InstrumentId[] }> {
+  try {
+    return (await new BenchStore(storeAt(ctx, PROJECTS_PREFIX), repo, { scratch: ctx.deps.scratch }).read((db) => ({ readings: loadReadings(db), ids: loadIds(db) }))).result
+  } catch { return { readings: [], ids: [] } }
+}
+
+/**
+ * The bench as the checklist skills draw it (BenchReadout, docs/ui-design.md "Checklist on a picture"): for Bring-up
+ * run, the board on the bench now (the one with the newest reading), each of its newest readings against its limits,
+ * and the checklist ticked by trace from those readings; for Bench setup, each instrument ticked when it answered its
+ * identity query. Readings arrive as the bench takes them (the live copy's writes are live events).
+ */
+function skillBench(skill: string, i: CheckInput) {
+  const rs = i.readings ?? []
+  if (skill === 'bench-setup') {
+    const ids = new Map((i.ids ?? []).map((x) => [x.instrument, x]))
+    return {
+      powered: false, readouts: [],
+      checklist: i.instruments.map((x) => ({ id: `idn-${x.name}`, text: `${x.name} answers its identity query${ids.get(x.name)?.model ? ` (${[ids.get(x.name)?.manufacturer, ids.get(x.name)?.model].filter(Boolean).join(' ')})` : ''}`, by: 'trace' as const, done: Boolean(ids.get(x.name)?.ok) })),
+    }
+  }
+  const board = rs.length ? (rs[rs.length - 1] as Reading).board : null
+  const mine = board ? latestByQuantity(rs.filter((r) => r.board === board)) : []
+  return {
+    board, powered: mine.some((r) => r.step !== 'inspect' && r.step !== 'unpowered'),
+    readouts: mine.map((r) => ({ id: r.id, label: `${r.quantity}${r.instrument ? ` (${r.instrument})` : ''}`, value: r.value, unit: r.unit ?? '', ...(r.min !== null ? { min: r.min } : {}), ...(r.max !== null ? { max: r.max } : {}), step: r.step, at: new Date(r.at * 1000).toISOString() })),
+    checklist: mine.map((r) => ({ id: `r-${r.id}`, text: `${r.quantity}${r.min !== null || r.max !== null ? ` within ${r.min ?? '…'} to ${r.max ?? '…'} ${r.unit ?? ''}`.trimEnd() : ''}`, by: 'trace' as const, done: r.pass, powered: r.step !== 'inspect' && r.step !== 'unpowered' })),
+    readings: rs.filter((r) => r.board === board).map(readingView),
+  }
+}
 import { type CheckInput, type CheckResult, checkSkill } from './skill-checks.js'
 
 /** The skills whose Submit records design decisions. */
@@ -63,6 +101,8 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
   const facts = await agentFacts(ctx, repo)
   // Schematic finish names every sheet's requirements: the schematic files of the default branch
   const sheetFiles = skill === 'schematic-finish' ? await kicadFiles(ctx, repo).then((f) => f.sch, () => null) : null
+  // what the bench measured and who answered, as taken (the bench's live copy beside the facts: src/core/bench.ts)
+  const bench = HARDWARE_SKILLS.has(skill) ? await liveBenchOf(ctx, repo) : { readings: [], ids: [] }
   return withRecordDb(ctx, repo, (db) => {
     const own = loadJourney(db)
     const r = own ? mergeAgentFacts(own, facts) : null
@@ -92,7 +132,11 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
     } catch { /* unreadable settings: no instruments */ }
     const tests = hasTable(db, 'test_items') ? (db.prepare('SELECT id, method, status FROM test_items').all() as Record<string, unknown>[]).map((t) => ({ id: String(t.id), method: String(t.method), status: String(t.status) })) : []
     const question = r?.questions.find((q) => q.answeredAt === null && questionIsFor(q, viewer)) ?? null
+    const fab = latestRun(db, 'kicad.fab')
+    const fabResult = fab ? runResult(db, fab.id) : null
+    const handPlaced = Array.isArray(fabResult?.hand_placed) ? (fabResult.hand_placed as unknown[]).filter((x): x is string => typeof x === 'string') : null
     return {
+      boards: loadBoards(db), handPlaced, ids: unionIds(idsFromRuns(db), bench.ids), readings: unionReadings(loadReadings(db), bench.readings),
       r, viewer, requirements: live, struck,
       erc: erc.findings ? { findings: erc.findings, errors: erc.report.errors } : null,
       drc: drc.findings ? { findings: drc.findings, errors: drc.report.errors } : null,
@@ -211,6 +255,8 @@ function extras(skill: string, i: CheckInput): Record<string, unknown> {
     case 'schematic-finish': return { findings: (i.erc?.findings ?? []).map(finding) }
     case 'board-setup': case 'placement-adjust': return { findings: (i.drc?.findings ?? []).map(finding) }
     case 'gate-signing': return i.gate ? { gate: i.gate } : {}
+    case 'incoming-inspection': return { boards: (i.boards ?? []).map((b) => boardView(b, i.orders, i.readings ?? [])), ...(i.handPlaced ? { handPlaced: i.handPlaced } : {}) }
+    case 'bench-setup': case 'bring-up-run': return { bench: skillBench(skill, i) }
     default: return {}
   }
 }

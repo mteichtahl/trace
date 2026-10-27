@@ -207,6 +207,7 @@ carry on with what they have and say which key would add more ("no Nexar (Octopa
 | `nexar` | `NEXAR_CLIENT_ID`, `NEXAR_CLIENT_SECRET` | Stock, prices and lifecycle from every distributor Octopart lists (parts lookup, search, alternatives, BOM checks) | [portal.nexar.com](https://portal.nexar.com/) |
 | `mouser` | `MOUSER_API_KEY` | Mouser stock, prices, lifecycle, datasheet links | [mouser.com/api-hub](https://www.mouser.com/api-hub/) |
 | `digikey` | `DIGIKEY_CLIENT_ID`, `DIGIKEY_CLIENT_SECRET` | Digi-Key stock, prices, lifecycle, datasheet links | [developer.digikey.com](https://developer.digikey.com/) |
+| `dhl` | `DHL_API_KEY` | Following a shipped order's DHL parcel ([Cost and orders](#cost-and-orders)); read by the order watch only, kept as `<prefix>/order-watch/dhl`, never by a worker | [developer.dhl.com](https://developer.dhl.com/api-reference/shipment-tracking) |
 
 LCSC needs no key, and the datasheet tools fetch public URLs; those are every credential the tools read
 (`src/core/integrations-catalog.ts`, checked by `test/core/integrations.test.ts`).
@@ -530,6 +531,55 @@ The invitation email points at `https://<address>/invite` as well as `tracectl l
 Open trace button. Turn the app off with Advanced → Web app (`web.enabled: false`). Other stack settings:
 `web.model` (the chat model, which defaults to `model`) and `web.dashboards` (extra CloudWatch dashboards for the
 Operations page, beside `<prefix>-agents`).
+
+## Cost and orders
+
+**Cloud cost per project.** Each project's spend is kept in a cost ledger in the central bucket, beside its agents'
+facts (`projects/<slug>/journey-agent/cost.db`, `src/core/cost.ts`), not in the repository: money is for admins only.
+
+- **Agents.** Every Claude run records each model's tokens (the Agent SDK's result) with its job and agent, priced from
+  the price table.
+- **Graphics card and CPU jobs.** Every finished AWS Batch job records its running time (Batch's start and stop
+  times) times its pool's price: a graphics card job holds its instance, a CPU job pays for the vCPUs it asked for.
+- **The price table** (`src/core/prices.ts`) is one dated table: Bedrock prices per million tokens per model (with the
+  premium Bedrock charges for regional endpoints of the newer models) and the two pools' prices per hour. Its
+  defaults carry the date they were taken from the price pages. Override any part with the stack setting
+  `cost.prices` (a model entry, a region-only entry, a pool, and a new `asOf`), then run the installer: the workers get
+  it as `TRACE_PRICES`, and each row records the table date it was priced with. The screens say when the table is
+  more than six months old. Every figure from it is shown as an estimate.
+- **What AWS billed.** Every project resource carries the `trace:project` and `trace:installation` tags. A Lambda,
+  `<prefix>-cost-explorer`, reads Cost Explorer once a day (`cost.explorer.at`, default 06:17 UTC), grouped by
+  `trace:project` and service, and writes per-project actuals into `installation/cost/actuals.db`. Cost Explorer can
+  group by a tag only once it is **activated as a cost allocation tag**, a billing setting made once per account. With
+  `cost.explorer.activateTags` (default on) the Lambda activates it (`UpdateCostAllocationTagsStatus`); in a member
+  account of an AWS Organization only the management account may, so activate `trace:project` (and
+  `trace:installation`) once in the Billing and Cost Management console, under Cost allocation tags. Billing lists a
+  new tag up to a day after the first tagged resource exists, activation counts cost from then on only, and a day's
+  figures settle about 24 hours later. The screens say all of this, and when the next read is. Model use and the
+  shared job machines are not tagged per project, so for those the estimate is the per-project figure. Each run makes
+  two to four Cost Explorer requests (US$0.01 each).
+
+`cost.get` (Cost and time, and the gate's cost line) and `usage.month` (Admin › Usage and cost, and Operations' cost
+tile) answer from the ledger, for admins only.
+
+**Order status.** JLCPCB offers order status only through its Ordering API, for partner companies it approves on
+their order history and volume, so trace does not read JLCPCB. The person records the order after paying, then the
+carrier and tracking number from JLCPCB's shipping notice (Build tab, `order.update`), and marks it delivered. With
+the `dhl` integration set, an hourly Lambda, `<prefix>-order-watch`, follows each DHL parcel: its first check an hour
+after the number is recorded, then less often while nothing changes (up to every 12 hours), back to hourly when the
+status moves; a person can check now. The Wait line says when the next check is. It never changes an order: when DHL
+says delivered, the Build tab says so and the person records it. FedEx and UPS have tracking APIs that need an OAuth
+app with a shipping account; they are not built, and their parcels are not checked. Reading JLCPCB's notification
+emails would need inbound email (SES receiving and a domain's MX record), which an installation does not have, so it
+is not built either.
+
+**Boards and bring-up readings.** Boards are recorded by serial when they arrive (Incoming inspection: `board.record`,
+`board.check`), each check against a board: counted, labelled, a fault at its reference, each hand-placed part fitted
+or marked as left off. They are journey tables, people's entries. A hil tool given `bringup={board, step, min, max}`
+stores its reading against that board and bring-up step, with pass or fail, in the run record (`bringup_readings`, a
+measurement like any other), and copies it live beside the agents' facts so the Bring-up run screen shows it as it
+is taken; `hil.idn` stores each instrument's identity the same way. The Incoming inspection, Bench setup and
+Bring-up run checks are computed from these.
 
 ## Where builds run
 

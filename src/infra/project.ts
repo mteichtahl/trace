@@ -14,7 +14,8 @@
  *             prompt overrides) is read only too: nothing grants a write there. projects/<slug>/journey and /chats
  *             (what people decided and said) are read only as well. projects/<slug>/journey-agent (the agents' own
  *             facts about the journey: questions, criterion checks, stuck notes) is written, but only with a
- *             conditional put and never deleted (AgentFactsConditional), the way its store writes
+ *             conditional put and never deleted (AgentFactsConditional), the way its store writes; its cost ledger
+ *             (journey-agent/cost.db, src/core/cost.ts: what each run and job cost) is there, under the same rules
  *   memory    its own memory only (<prefix>_m_<hash>), and on it still only events of actors `<owner>/<repo>/*` and
  *             records under `/trace/<owner>/<repo>/*` (the encodings of src/agents/runtime/memory.ts), as defence in depth
  *   secret    <prefix>/github-token/<slug> only
@@ -120,8 +121,10 @@ export const PROMPTS_PREFIX = 'prompts'
 
 const TELEMETRY_ACTIONS = ['xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets']
 
-/** Reading the installation's optional integrations (`<prefix>/integrations/*`, src/core/integrations.ts): each
- * worker's role when the library gateway is off, the gateway's Lambda when it is on, never both. */
+/** Reading the installation's optional integrations the tools use (`<prefix>/integrations/*`, src/core/integrations.ts):
+ * each worker's role when the library gateway is off, the gateway's Lambda when it is on, never both. The order watch's
+ * carrier key is kept under `<prefix>/order-watch/` instead, which this does not cover: only its own Lambda reads it
+ * (src/infra/order-watch.ts). */
 export function integrationsReadStatement(partition: string, region: string, account: string, prefix: string): iam.PolicyStatement {
   return new iam.PolicyStatement({
     sid: 'IntegrationsRead', actions: ['secretsmanager:GetSecretValue'],
@@ -141,7 +144,7 @@ export function modelAccess(account: string): iam.PolicyStatement {
  * S3 on the central bucket by prefix: `read` (Get), `readWrite` (Get, Put, Delete) and `conditional` (Get, and Put
  * only with If-Match or If-None-Match). Listing is allowed only under the prefixes named.
  */
-export function grantPrefixes(role: iam.IRole, bucket: s3.IBucket, o: { read?: string[]; readWrite?: string[]; conditional?: string[] }): void {
+export function grantPrefixes(role: { addToPrincipalPolicy(s: iam.PolicyStatement): unknown }, bucket: s3.IBucket, o: { read?: string[]; readWrite?: string[]; conditional?: string[] }): void {
   const obj = (p: string): string => bucket.arnForObjects(`${p}/*`)
   const all = [...(o.read ?? []), ...(o.readWrite ?? []), ...(o.conditional ?? [])]
   if (!all.length) return
@@ -274,14 +277,16 @@ export class ProjectStack extends Construct {
     // what the agents contribute to the journey (projects/<slug>/journey-agent, src/core/agent-facts.ts): written through
     // projects/<slug>/*, but only as its store writes, with a conditional put (If-Match / If-None-Match), and never
     // deleted, so a stray unconditional write from Bash cannot clobber another job's facts
+    // (its cost ledger is there too: projects/<slug>/journey-agent/cost.db, src/core/cost.ts, what each run and job cost)
+    const agentWritten = [bucket.arnForObjects(`${projectDataPrefix(repository)}/${AGENT_FACTS}/*`)]
     const agentFacts = new iam.PolicyStatement({
       sid: 'AgentFactsConditional', effect: iam.Effect.DENY, actions: ['s3:PutObject'],
-      resources: [bucket.arnForObjects(`${projectDataPrefix(repository)}/${AGENT_FACTS}/*`)],
+      resources: agentWritten,
       conditions: { Null: { 's3:if-match': 'true', 's3:if-none-match': 'true' } },
     })
     const agentFactsKept = new iam.PolicyStatement({
       sid: 'AgentFactsNoDelete', effect: iam.Effect.DENY, actions: ['s3:DeleteObject', 's3:DeleteObjectVersion'],
-      resources: [bucket.arnForObjects(`${projectDataPrefix(repository)}/${AGENT_FACTS}/*`)],
+      resources: agentWritten,
     })
     role.addToPolicy(agentFacts)
     role.addToPolicy(agentFactsKept)
@@ -533,8 +538,10 @@ export class ProjectStack extends Construct {
         })
       : null
 
-    for (const r of [role, this.actionsRole]) Tags.of(r).add(PROJECT_TAG, slug)
-    Tags.of(this.secret).add(PROJECT_TAG, slug)
+    // every taggable resource of the project carries its project tag (and the installation's), so Cost Explorer can
+    // group what AWS bills by project once trace:project is a cost allocation tag (src/infra/cost.ts)
+    Tags.of(this).add(PROJECT_TAG, slug)
+    Tags.of(this).add('trace:installation', cfg.prefix)
 
     // ------------------------------------------------------------------ outputs (alphanumeric names: the hash)
     const stack = Stack.of(this)

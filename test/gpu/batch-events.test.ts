@@ -127,6 +127,15 @@ function rig(o: { status?: string; script?: (string[] | null)[]; run?: boolean }
   return { clock, s3, batch, sqs, sns, logs, sleeps, deps }
 }
 
+describe('what a finished job cost', () => {
+  it('records its running time x the pool\'s price in the cost ledger when it ends, from the state-change event\'s times', async () => {
+    const r = rig({ script: [[event('RUNNING')], [event('SUCCEEDED', 'job-1', { startedAt: 1_000_000, stoppedAt: 1_000_000 + 600_000 })]] })
+    const rows: unknown[] = []
+    await runBatch(job(), { ...r.deps, recordCost: async (row) => { rows.push(row) } })
+    expect(rows).toEqual([expect.objectContaining({ kind: 'gpu', agent: 'blender', seconds: 600, basis: 'table', jobId: expect.stringMatching(/^blender-/) })])
+  })
+})
+
 describe('waiting on Batch job events', () => {
   it('subscribes its own queue with a filter on the job id, looks once, then returns the moment SUCCEEDED arrives', async () => {
     const r = rig({ script: [[event('RUNNABLE')], [event('STARTING'), event('RUNNING')], [event('SUCCEEDED')]] })

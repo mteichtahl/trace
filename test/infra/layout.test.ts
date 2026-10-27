@@ -115,8 +115,11 @@ describe('the nested layout', () => {
     // (each project's job-events topic, policy and rule are in its nested stack: none in the parent; the outputs
     // include GithubConnectionArn and GithubConnectionCreated: src/infra/runner.ts GithubConnection). The web app adds
     // three resources (its nested stack, which holds the live events API too, the settings parameter and the web
-    // client) and four outputs (WebUrl, WebDistributionId, EventsApiEndpoint, WebClientId)
-    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:90/25:0', '24:117/25:4', '60:153/25:4'])
+    // client) and four outputs (WebUrl, WebDistributionId, EventsApiEndpoint, WebClientId). Cost and shipping add
+    // thirteen, whatever the number of projects: the daily cost read and the hourly order watch (each its function,
+    // role, policy, log group, schedule and invoke permission: src/infra/cost.ts, src/infra/order-watch.ts) and the
+    // API role's cost policy
+    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:103/25:0', '24:130/25:4', '60:166/25:4'])
     // without a connection given, the stack creates one: one more resource of the parent's, and nothing more per project
     const created = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: {} }), 'Count1Created')
     expect(count(json(created.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0) + 1)
@@ -186,7 +189,9 @@ describe('the nested layout', () => {
       expect(flat.nested.size).toBe(0)
       const fp = json(flat.parent)
       // a flat stack has no job events: its workers wait on the timer (src/gpu/batch.ts)
-      for (const kind of ['AWS::SNS::Topic', 'AWS::Events::Rule']) flat.parent.resourceCountIs(kind, 0)
+      flat.parent.resourceCountIs('AWS::SNS::Topic', 0)
+      // only the installation's two schedules (the daily cost read, the hourly order watch): no event rules
+      expect((Object.values(flat.parent.findResources('AWS::Events::Rule')) as { Properties: { EventPattern?: unknown; ScheduleExpression?: string } }[]).map((r) => Boolean(r.Properties.ScheduleExpression && !r.Properties.EventPattern))).toEqual([true, true])
       expect(JSON.stringify(fp)).not.toContain('TRACE_BATCH_EVENTS_TOPIC')
       for (const [repo, h] of [[A, HA], [B, HB]] as const) {
         // flat: the project's construct, and its memory's delivery under Observability

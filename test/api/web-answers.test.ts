@@ -95,6 +95,18 @@ describe('the answers the web app reads', () => {
       'requirements.trace': { args: { repo: REPO }, result: await run(USER, 'requirements.trace', { repo: REPO }) },
       'design.decide': { args: { repo: REPO, decision: { kind: 'intent', statement: 'INT-range', choice: 'accept' } }, result: await run(USER, 'design.decide', { repo: REPO, decision: { kind: 'intent', statement: 'INT-range', choice: 'accept' } }) },
       'design.get': { args: { repo: REPO }, result: await run(USER, 'design.get', { repo: REPO }) },
+      // the build and cost record (src/api/actions-build.ts, actions-cost.ts): an order shipped, a board inspected
+      ...(await (async () => {
+        await run(USER, 'order.record', { repo: REPO, number: 'Y12-0001', paid: 40, ship: '2026-11-04' })
+        await run(USER, 'order.update', { repo: REPO, order: 'Y12-0001', state: 'shipped', carrier: 'dhl', tracking: '1234567890' })
+        await run(USER, 'board.record', { repo: REPO, serial: 'SN-001', photos: ['runs/abc/top.jpg'] })
+        await run(USER, 'board.check', { repo: REPO, serial: 'SN-001', check: 'count', kind: 'count', result: 'pass' })
+        return {
+          'build.get': { args: { repo: REPO }, result: await run(USER, 'build.get', { repo: REPO }) },
+          'cost.get': { args: { repo: REPO }, result: await run(ADMIN, 'cost.get', { repo: REPO }) },
+          'usage.month': { args: { month: '2026-10' }, result: await run(ADMIN, 'usage.month', { month: '2026-10' }) },
+        }
+      })()),
     }) as Record<string, unknown>
     if (process.env.TRACE_WRITE_ANSWERS) writeFileSync(OUT, `${JSON.stringify(answers, null, 2)}\n`)
     const kept = JSON.parse(readFileSync(OUT, 'utf8')) as Record<string, unknown>

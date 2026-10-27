@@ -110,12 +110,25 @@ function valueOf(t: OpsTile): { value: string; unit?: string; sub?: string } {
   return { value: t.value.toLocaleString(), ...(rate ? { sub: rate } : {}) }
 }
 
+/** This month's cloud spend from the cost ledger (usage.month, admins), which the cost tile shows when it has it. */
+export interface MonthCost { estimated: number; actual: number | null; currency: string; projects: number }
+
+/** The cost tile from the ledger: the month's estimate across projects, with what AWS billed beside it. Pure. */
+export function costTile(c: MonthCost): TileView {
+  return {
+    id: 'cost', label: 'Cloud spend this month', value: money(c.estimated, c.currency), spark: [], status: 'ok',
+    sub: `Estimate across ${c.projects} project${c.projects === 1 ? '' : 's'}${c.actual !== null ? ` · ${money(c.actual, c.currency)} billed by AWS, a day behind` : ' · not billed by AWS yet'}`,
+  }
+}
+
 /** The design's tiles in its order (cost for admins only), each from the API's tile when there is one. */
-export function tileViews(tiles: OpsTile[], admin: boolean): TileView[] {
+export function tileViews(tiles: OpsTile[], admin: boolean, month?: MonthCost | null): TileView[] {
   const used = new Set<string>()
   const out: TileView[] = []
   for (const d of DESIGN) {
     if (d.admin && !admin) continue
+    // the cost tile from the cost ledger when an admin has it (CloudWatch's metric is Claude's estimate only)
+    if (d.id === 'cost' && month) { out.push(costTile(month)); for (const t of tiles) if (t.id === d.id || d.aka?.includes(t.id)) used.add(t.id); continue }
     const t = tiles.find((x) => x.id === d.id || d.aka?.includes(x.id))
     if (!t) {
       out.push({ id: d.id, label: d.label, value: '–', spark: [], status: 'ok', missing: `Not reported yet: needs ${d.needs}.` })

@@ -124,8 +124,14 @@ export interface Actions {
   'build.get': { args: Repo; result: import('./types-s1').BuildView }
   /** record a placed order (number, paid cost, ship date) */
   'order.record': { args: Repo & { order?: string; number: string; paid: number | null; ship: string | null }; result: { ok: true; wait?: Wait } }
-  /** the stage timeline; money for admins; what is not recorded is null, with notes */
+  /** the stage timeline; money for admins (cloud estimates and actuals from the cost ledger, orders); notes */
   'cost.get': { args: Repo; result: import('./types-s1').CostView }
+  // the build after payment and cloud cost (src/api/actions-build.ts, actions-cost.ts)
+  'order.update': { args: Repo & { order: string; state?: 'shipped' | 'delivered' | 'cancelled'; carrier?: import('./types-s1').Carrier; tracking?: string; ship?: string | null; note?: string }; result: { ok: true; wait: Wait | null; note?: string } }
+  'order.check_now': { args: Repo & { order: string }; result: { ok: boolean; reason?: string } }
+  'board.record': { args: Repo & { serial: string; order?: string; status?: string; notes?: string; photos?: string[] }; result: { ok: true; created: boolean } }
+  'board.check': { args: Repo & { serial: string; check: string; kind: 'count' | 'visual' | 'fault' | 'hand' | 'label'; result: 'pass' | 'fail' | 'marked'; ref?: string; note?: string; photo?: string }; result: { ok: true } }
+  'usage.month': { args: { month?: string }; result: import('./types-s1').UsageMonth }
   /** cancel a running job; pause, resume and move up answer ok: false with the reason */
   'job.control': { args: { id: string; op: JobOp; reason?: string }; result: { ok: boolean; kept?: string; reason?: string; state?: string | null } }
   // installation policy and people (src/api/actions-me.ts, actions-people.ts)

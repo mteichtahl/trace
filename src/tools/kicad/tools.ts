@@ -314,12 +314,15 @@ const fab = defineTool({
       if (a.zip) zipDir(join(dir, 'gerbers'), join(dir, `${p.name}-gerbers.zip`))
       const warnings: string[] = []
       const pl = await placements(pcb)
+      // the parts the fab will not place: fitted by hand at Incoming inspection (src/core/boards.ts inspectionProblems)
+      let handPlaced: string[] = []
       if (p.sch) {
         const b = buildBom(readSchematic(p.sch, p.name))
         writeFileSync(join(dir, `${p.name}-bom.csv`), bomCsv(b))
         run.artifact('bom.csv', bomCsv(b), 'text/csv')
         const placed = new Set(pl.map((x) => x.ref))
         const unplaced = b.lines.flatMap((l) => l.refs).filter((r) => !placed.has(r))
+        handPlaced = unplaced
         if (unplaced.length) warnings.push(`${unplaced.length} BOM parts have no placement (not on the board, or through-hole excluded): ${unplaced.slice(0, 20).join(', ')}`)
         if (a.house === 'jlcpcb') {
           writeFileSync(join(dir, `${p.name}-jlc-bom.csv`), jlcBomCsv(b))
@@ -337,7 +340,7 @@ const fab = defineTool({
       run.measure('files', out.length)
       run.measure('placements', pl.length)
       return { status: 'pass' as const, summary: `${out.length} fab files in ${dir}`,
-        result: { project: p.name, out_dir: dir, house: a.house, placements: pl.length, warnings, files_total: out.length, files: out.slice(0, 80) } }
+        result: { project: p.name, out_dir: dir, house: a.house, placements: pl.length, hand_placed: handPlaced, warnings, files_total: out.length, files: out.slice(0, 80) } }
     })
   },
 })

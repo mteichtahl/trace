@@ -104,7 +104,9 @@ describe('the library gateway', () => {
   it('keeps the optional integrations\' keys from the agents: only the Lambda may read them', () => {
     const lambda = statements(on.parent, 'LibraryFunctionRole').filter((x) => x.Sid === 'IntegrationsRead')
     expect(lambda).toHaveLength(1)
+    // the tools' integrations by name; never the order watch's carrier key (src/infra/order-watch.ts reads that alone)
     expect(JSON.stringify(lambda[0]?.Resource)).toMatch(/:secret:trace\/integrations\/\*/)
+    expect(JSON.stringify(lambda[0]?.Resource)).not.toContain('order-watch')
     on.parent.hasResourceProperties('AWS::Lambda::Function', { Environment: { Variables: Match.objectLike({ TRACE_INTEGRATIONS_PREFIX: 'trace/integrations/' }) } })
     for (const r of [A, B]) {
       const n = nestedOf(on, r)
@@ -137,6 +139,7 @@ describe('without the gateway', () => {
     const st = statements(n, `Project${projectHash(A)}RuntimeRole`).filter((x) => x.Sid === 'IntegrationsRead')
     expect(st).toHaveLength(1)
     expect(actions(st[0] as Statement)).toEqual(['secretsmanager:GetSecretValue'])
+    expect(JSON.stringify(st[0]?.Resource)).not.toContain('order-watch')
     const runtime = Object.values(n.findResources('AWS::BedrockAgentCore::Runtime') as Record<string, { Properties: { EnvironmentVariables: Record<string, unknown> } }>)[0]
     expect(runtime?.Properties.EnvironmentVariables.TRACE_INTEGRATIONS_PREFIX).toBe('trace/integrations/')
     // the API may write them for admins, never read them

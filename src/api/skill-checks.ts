@@ -16,6 +16,9 @@
  * draft, the statements Submit accepts) is laid over the record first (`pending`), so the bar shows what Submit would
  * record.
  */
+import type { InstrumentId, Reading } from '../core/bench.js'
+import { stepOrderProblems } from '../core/bench.js'
+import { type BoardRow, inspectionProblems } from '../core/boards.js'
 import type { JourneyRecord, OrderRow, QuestionRow, Viewer } from '../core/journey.js'
 import { signBlockers } from '../core/journey.js'
 import { type SkillCheckDef, skillDef } from '../core/skills.js'
@@ -54,6 +57,14 @@ export interface CheckInput {
   orders: OrderRow[]
   /** a test item's method and status, for the hardware checks */
   tests: { id: string; method: string; status: string }[]
+  /** the boards by serial with their inspection checks (journey: boards, board_checks) */
+  boards?: BoardRow[]
+  /** the parts the fab does not place (the latest kicad.fab run's hand_placed), null when no run says */
+  handPlaced?: string[] | null
+  /** each instrument's newest identity answer (hil.idn), from the run record and the bench's live copy */
+  ids?: InstrumentId[]
+  /** the bring-up readings (bringup_readings), from the run record and the bench's live copy */
+  readings?: Reading[]
   /** the person's draft of this skill (its own shape per skill), or null */
   draft: Record<string, unknown> | null
   /** the gate Gate signing is about; the question Question answer is about */
@@ -137,7 +148,6 @@ function pinBar(i: CheckInput, id: string, kinds: readonly PinFinding['kind'][])
   if (open.length) return notMet(id, `${open.slice(0, 3).map((f) => f.text).join(' ')}${open.length > 3 ? ` And ${open.length - 3} more.` : ''}`)
   return mine.length ? { id, status: 'waived', detail: `${plural(mine.length, 'finding')} waived.` } : met(id)
 }
-const NO_BOARDS = 'the boards received (each with its serial, photos and faults); Incoming inspection does not store them yet'
 
 /** Every check of every skill, by `<skill>/<check>`; the shared `reasons` check is the same for all. */
 export const CHECKS: Readonly<Record<string, Checker>> = {
@@ -364,10 +374,15 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     return missing.length ? notMet('recorded', `Order ${o.number} has no ${missing.join(' or ')}.`) : met('recorded', `Order ${o.number}.`)
   },
 
-  // ---- Incoming inspection
-  'incoming-inspection/count': () => unavailable('count', NO_BOARDS),
-  'incoming-inspection/faults': () => unavailable('faults', NO_BOARDS),
-  'incoming-inspection/hand': () => unavailable('hand', NO_BOARDS),
+  // ---- Incoming inspection: the boards recorded (board.record, board.check)
+  'incoming-inspection/count': (i) => { const p = inspection(i).count; return p ? notMet('count', p) : met('count', `${plural(boardsOf(i).length, 'board')} recorded, each with a serial and a photo.`) },
+  'incoming-inspection/faults': (i) => { const p = inspection(i).faults; return p ? notMet('faults', p) : met('faults') },
+  'incoming-inspection/hand': (i) => {
+    if (i.handPlaced === null || i.handPlaced === undefined) return unavailable('hand', 'the parts the fab does not place: run kicad.fab so its result lists them')
+    if (!i.handPlaced.length) return boardsOf(i).length ? met('hand', 'The fab places every part.') : notMet('hand', 'No boards are recorded yet.')
+    const p = inspection(i).hand
+    return p ? notMet('hand', p) : met('hand')
+  },
 
   // ---- Bench setup
   'bench-setup/limits': (i) => {
@@ -376,13 +391,40 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     const open = psus.filter((p) => !(p.limits?.max_voltage_v && p.limits?.max_current_a))
     return open.length ? notMet('limits', `${open.map((p) => p.name).join(', ')} without both a voltage and a current limit.`) : met('limits')
   },
-  'bench-setup/idn': () => unavailable('idn', 'each instrument\'s answer to its identity query, recorded on this bench (hil runs do not store it yet)'),
+  'bench-setup/idn': (i) => {
+    if (!i.instruments.length) return notMet('idn', 'No instruments are set up in hil.instruments.')
+    const ids = new Map((i.ids ?? []).map((x) => [x.instrument, x]))
+    const silent = i.instruments.filter((x) => !ids.get(x.name)?.ok)
+    return silent.length ? notMet('idn', `${silent.map((x) => x.name).join(', ')} ${silent.length === 1 ? 'has' : 'have'} not answered its identity query: run hil.idn on the bench.`) : met('idn', i.instruments.map((x) => `${x.name}: ${[ids.get(x.name)?.manufacturer, ids.get(x.name)?.model].filter(Boolean).join(' ')}`).join('; '))
+  },
   'bench-setup/wired': () => unavailable('wired', 'the bench wiring (each connection with its net), in the record'),
   'bench-setup/hardware': () => unavailable('hardware', 'which machine the bench tools run on; the API cannot see the bench machine'),
 
   // ---- Bring-up run
-  'bring-up-run/limits': () => unavailable('limits', 'each bring-up step\'s readings against its limits, in the record'),
-  'bring-up-run/shorts': () => unavailable('shorts', 'the unpowered checks (resistance to ground per rail), in the record'),
+  'bring-up-run/limits': (i) => {
+    const rs = i.readings ?? []
+    if (!rs.length) return notMet('limits', 'No bring-up readings are recorded yet: the bring-up run takes them with the hil tools against each step\'s limits.')
+    const problems = [...new Set(rs.map((r) => r.board))].flatMap((b) => (stepOrderProblems(rs.filter((r) => r.board === b)) ?? []).map((p) => `${b} ${p}`))
+    return problems.length ? notMet('limits', `${problems.slice(0, 4).join('; ')}.`) : met('limits')
+  },
+  'bring-up-run/shorts': (i) => {
+    const rs = i.readings ?? []
+    const boards = [...new Set(rs.map((r) => r.board))]
+    if (!boards.length) return notMet('shorts', 'No bring-up readings are recorded yet.')
+    const bad: string[] = []
+    for (const b of boards) {
+      const mine = rs.filter((r) => r.board === b)
+      const powered = mine.filter((r) => r.step !== 'inspect' && r.step !== 'unpowered')
+      if (!powered.length) continue
+      const firstPowered = Math.min(...powered.map((r) => r.at))
+      const unpowered = mine.filter((r) => r.step === 'unpowered' && r.at < firstPowered)
+      if (!unpowered.length) bad.push(`${b} was powered with no unpowered check before it`)
+      else if (unpowered.some((r) => !r.pass && !unpowered.some((x) => x.quantity === r.quantity && x.at > r.at && x.pass))) bad.push(`${b} was powered with an unpowered check out of limits`)
+      if (powered.some((r) => r.step === 'rails' && r.unit === 'A' && r.max === null)) bad.push(`${b} had a rail's current read without a limit`)
+    }
+    if (!boards.some((b) => rs.some((r) => r.board === b && r.step !== 'inspect' && r.step !== 'unpowered'))) return rs.some((r) => r.step === 'unpowered') ? met('shorts', 'Unpowered checks recorded; nothing powered yet.') : notMet('shorts', 'No unpowered check is recorded yet.')
+    return bad.length ? notMet('shorts', `${bad.join('; ')}.`) : met('shorts')
+  },
   'bring-up-run/results': (i) => {
     const hw = i.tests.filter((t) => t.method === 'hil')
     if (!hw.length) return notMet('results', 'No hardware test is planned.')
@@ -421,6 +463,9 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
   },
   'question-answer/requirement': (i) => (str(i.draft?.lasts) ? met('requirement') : notMet('requirement', 'Say whether the answer is a one-off, a rule, or a requirement change.')),
 }
+
+const boardsOf = (i: CheckInput): BoardRow[] => (i.boards ?? []).filter((b) => !i.r || b.revision === i.r.journey.revision)
+const inspection = (i: CheckInput) => inspectionProblems(i.boards ?? [], i.orders, i.r?.journey.revision ?? 'A', i.handPlaced ?? [])
 
 function gateCheck(i: CheckInput, id: string, about: RegExp): CheckResult {
   if (!i.r) return notMet(id, 'The project has no journey yet.')

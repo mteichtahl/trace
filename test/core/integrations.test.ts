@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ActionError, perform } from '../../src/api/actions.js'
 import {
-  INTEGRATIONS, INTEGRATION_KEYS, INTEGRATION_NAMES, IntegrationStore, type SecretsApi, addKeyHint, checkIntegration, integrationOf, integrationSecretName, loadIntegrations, valuesFor,
+  INTEGRATIONS, INTEGRATION_KEYS, INTEGRATION_NAMES, TOOL_INTEGRATION_KEYS, IntegrationStore, type SecretsApi, addKeyHint, checkIntegration, integrationOf, integrationSecretName, loadIntegrations, valuesFor,
 } from '../../src/core/integrations.js'
 import { Central } from '../../src/core/central.js'
 import { PartsDb } from '../../src/tools/parts/db.js'
@@ -38,7 +38,7 @@ describe('the catalog', () => {
       }
     }
     walk(join(import.meta.dirname, '..', '..', 'src', 'tools'))
-    expect([...found].sort()).toEqual([...INTEGRATION_KEYS].sort())
+    expect([...found].sort()).toEqual([...TOOL_INTEGRATION_KEYS].sort())
     expect(integrationOf('NEXAR_CLIENT_SECRET')).toBe('nexar')
     for (const n of INTEGRATION_NAMES) expect(INTEGRATIONS[n].url).toMatch(/^https:\/\//)
   })
@@ -58,7 +58,7 @@ describe('the store and loading at run time', () => {
     expect(await store.set('mouser', { MOUSER_API_KEY: 'm-key' })).toBe('trace/integrations/mouser')
     expect(sm.data.get('trace/integrations/mouser')).toEqual({ value: '{"MOUSER_API_KEY":"m-key"}', tags: { 'trace:installation': 'trace', 'trace:integration': 'mouser' } })
     const list = await store.list()
-    expect(list.map((i) => `${i.name}:${i.configured}`)).toEqual(['nexar:false', 'mouser:true', 'digikey:false'])
+    expect(list.map((i) => `${i.name}:${i.configured}`)).toEqual(['nexar:false', 'mouser:true', 'digikey:false', 'dhl:false'])
     expect(JSON.stringify(list)).not.toContain('m-key')
     expect(await store.get('mouser')).toEqual({ MOUSER_API_KEY: 'm-key' })
     expect(await store.remove('mouser')).toBe(true)
