@@ -105,7 +105,7 @@ export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerRes
       }
       entry.who = principal.email ?? principal.sub
       // who, as a hash (never the email), and their class
-      if (obs) setAttrs(obs.span, { [ATTR.principal]: personHash(principal.email ?? principal.sub), [ATTR.principalClass]: principal.groups.join(',') })
+      if (obs) setAttrs(obs.span, { [ATTR.principal]: personHash(principal.sub), [ATTR.principalClass]: principal.groups.join(',') })
       if (!seenOnce.has(principal.sub)) {
         seenOnce.add(principal.sub)
         seen(principal).catch((e: unknown) => { log({ ...entry, warning: `seen: ${message(e)}` }) })
@@ -160,6 +160,8 @@ const Env = z.object({
   AWS_REGION: z.string().min(1),
   TRACE_COGNITO_POOL_ID: z.string().min(1),
   TRACE_COGNITO_CLIENT_ID: z.string().min(1),
+  /** The web app's client (src/infra/web.ts): its people's tokens are accepted too. */
+  TRACE_COGNITO_WEB_CLIENT_ID: z.string().optional(),
   TRACE_COGNITO_ISSUER: z.string().url(),
   TRACE_GITHUB_SECRET_ARN: z.string().min(1),
   TRACE_AWS_ACCOUNT: z.string().regex(/^\d{12}$/),
@@ -192,9 +194,17 @@ export async function start(): Promise<void> {
       },
     } : {}),
     scratch,
+    // projects.create: the installer's onboarding (src/installer/onboard-api.ts) with this runtime's GitHub token; git
+    // is in the image (the agents' image), and the token reaches it only through git's environment
+    onboard: async (repo, o) => {
+      const [{ onboardViaApi }, { Github }] = await Promise.all([import('../installer/onboard-api.js'), import('../installer/github.js')])
+      const t = await token()
+      const { data } = await new Github(t).request('GET', '/user', z.object({ login: z.string() }).loose())
+      return onboardViaApi(repo, { token: t, login: data.login, apply: o.apply, create: o.create })
+    },
   }
   const server = await listen({
-    verifier: new Verifier({ issuer: env.TRACE_COGNITO_ISSUER, clientId: env.TRACE_COGNITO_CLIENT_ID }),
+    verifier: new Verifier({ issuer: env.TRACE_COGNITO_ISSUER, clientId: [env.TRACE_COGNITO_CLIENT_ID, ...(env.TRACE_COGNITO_WEB_CLIENT_ID ? [env.TRACE_COGNITO_WEB_CLIENT_ID] : [])] }),
     deps,
     emailOf: async (sub, username) => (await cog().getUser(username ?? sub))?.email ?? null,
   }, env.PORT)

@@ -95,7 +95,9 @@ jobs:
 
   update-installation:
     needs: tests-pass
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.TRACE_UPDATE_ROLE != ''
+    # a push to main, or the workflow run by hand on main (Actions → ci → Run workflow: e.g. to add a project created in
+    # the web app now rather than at the next merge). Either way only on main, which is all the role trusts
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && vars.TRACE_UPDATE_ROLE != ''
     runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","update-installation"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     timeout-minutes: 60
     # one update at a time, in order: a newer merge waits for the one deploying now instead of cancelling it

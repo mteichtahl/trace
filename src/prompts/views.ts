@@ -16,6 +16,7 @@ import { composeCheck } from '../harness/actions.js'
 import { WorkItemSchema, composeItem } from '../harness/worker.js'
 import { CATALOG, COMPOSED, type ComposedName, entry } from './catalog.js'
 import { type Composed, Composer, type Layers, type Override, type OverrideLayer, effective, marked, problems } from './resolve.js'
+import { composeChat } from './chat.js'
 import { systemAppend } from './system.js'
 
 export interface ListRow {
@@ -123,6 +124,7 @@ export function preview(i: PreviewInput): { prompt: ComposedName; kind?: Special
     case 'system': composed = systemAppend(i.notes ?? '(the default branch\'s CLAUDE.md)', layers); break
     case 'render': composed = composeRendering(task.request, cfg, layers); break
     case 'cloudworker': composed = composeCloudWorker([repository], layers); break
+    case 'chat': composed = composeChat([{ description: 'Project', value: repository }], { draft: '(shared state)' }, layers); break
   }
   return { prompt: name, ...(kind ? { kind } : {}), composed, marked: marked(composed) }
 }

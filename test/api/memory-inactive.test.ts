@@ -90,7 +90,7 @@ describe('who may mark a memory inactive', () => {
 
   it('a user with write access: any agent record of the project', async () => {
     const r = (await deactivate(USER, 'mem-fact')).result
-    expect(r).toMatchObject({ id: 'mem-fact', actor: 'worker', changed: true, active: false, inactive: { reason: 'out of date', by: personHash(USER.email), by_you: true } })
+    expect(r).toMatchObject({ id: 'mem-fact', actor: 'worker', changed: true, active: false, inactive: { reason: 'out of date', by: personHash(USER.sub), by_you: true } })
     expect((await deactivate(USER, 'mem-fact')).result).toMatchObject({ changed: false })
   })
 
@@ -101,7 +101,7 @@ describe('who may mark a memory inactive', () => {
     expect((await deactivate(GUEST, 'mem-guest')).result).toMatchObject({ changed: true, actor: `person/${guestPerson.name}` })
     // and someone else's preferences are not even visible to them: "no access"
     await expect(deactivate(GUEST, 'mem-other')).rejects.toThrow(/^no access$/)
-    expect(await new MemoryState(BOARD).inactive()).toEqual(new Map([['mem-guest', expect.objectContaining({ by: personHash(GUEST.email) })]]))
+    expect(await new MemoryState(BOARD).inactive()).toEqual(new Map([['mem-guest', expect.objectContaining({ by: personHash(GUEST.sub) })]]))
   })
 
   it('a user may not mark another person\'s preferences (they cannot see them); an admin may mark anything', async () => {
@@ -137,7 +137,7 @@ describe('inactive records through the API', () => {
     await deactivate(USER, 'mem-fact')
     expect((await listed(GUEST)).map((r) => r.id).sort()).toEqual(['mem-guest', 'mem-guest-fact', 'mem-render'])
     const all = await listed(GUEST, { includeInactive: true })
-    expect(all.find((r) => r.id === 'mem-fact')).toMatchObject({ active: false, inactive: { reason: 'out of date', by: personHash(USER.email), by_you: false } })
+    expect(all.find((r) => r.id === 'mem-fact')).toMatchObject({ active: false, inactive: { reason: 'out of date', by: personHash(USER.sub), by_you: false } })
     expect(all.find((r) => r.id === 'mem-render')).toMatchObject({ active: true })
     const recalled = (await perform('memory.recall', { repo: BOARD, query: 'ldo', top_k: 2 }, ctx(ADMIN))).result as { records: { id: string }[] }
     // refilled: two asked, two given, the inactive one not among them

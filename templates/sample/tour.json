@@ -14,10 +14,12 @@
       "kb.search",
       "memory.recall",
       "memory.remember",
-      "trace.runs"
+      "trace.runs",
+      "journey.status",
+      "journey.ask"
     ],
     "remote": null,
-    "body": "Define stage. The installer stored 19 requirements and a 27-item test plan. Check them against the documents.\n\n- Run verify.requirements action=extract on `docs/spec.md` and compare the candidates with verify.requirements action=list. Every REQ-* in the file should be in the database with the same acceptance criterion.\n- Run verify.plan action=list. Confirm every method (sim, formal, spice, hil, inspection, drc) has at least one item and every requirement has a test.\n- Use kb.status and kb.search (\"input voltage range\") to find where `docs/intent.md` states each number, and memory.remember one fact about the board.\n\nDone when: no requirement is missing or different, and you list any gap you found. Comment the numbers with their run ids on this issue, then close it."
+    "body": "Define stage. The installer stored 19 requirements and a 27-item test plan. Check them against the documents.\n\n- Run verify.requirements action=extract on `docs/spec.md` and compare the candidates with verify.requirements action=list. Every REQ-* in the file should be in the database with the same acceptance criterion.\n- Run verify.plan action=list. Confirm every method (sim, formal, spice, hil, inspection, drc) has at least one item and every requirement has a test.\n- Use kb.status and kb.search (\"input voltage range\") to find where `docs/intent.md` states each number, and memory.remember one fact about the board.\n- Read journey.status (the project's stage and its gates). If you find a gap, journey.ask the contributors which document is right, with options and one recommended, without wait_minutes.\n\nDone when: no requirement is missing or different, and you list any gap you found. Comment the numbers with their run ids on this issue, then close it."
   },
   {
     "id": "define-datasheets",
@@ -350,10 +352,12 @@
       "kicad.erc",
       "kicad.drc",
       "trace.run",
-      "trace.artifact"
+      "trace.artifact",
+      "journey.check",
+      "journey.stuck"
     ],
     "remote": null,
-    "body": "Sign-off stage. Run everything that can run without a bench or a person.\n\n- kicad.erc and kicad.drc (0 errors).\n- verify.run all=true. The hil items stay blocked without TRACE_HARDWARE=1 (Tour 20 runs them) and the inspection items need a verdict: give TST-LAY-004 one from Tour 3's parts.bom_check, and TST-THM-002 one from Tour 14's thermal.compare.\n- verify.coverage, then verify.report with path docs/verification.md (ask the worker to commit it).\n- Use trace.run and trace.artifact to quote the evidence for any failure.\n\nDone when: every requirement is verified except REQ-HIL-001, or you list what blocks it. Comment the numbers with their run ids on this issue, then close it."
+    "body": "Sign-off stage. Run everything that can run without a bench or a person.\n\n- kicad.erc and kicad.drc (0 errors).\n- verify.run all=true. The hil items stay blocked without TRACE_HARDWARE=1 (Tour 20 runs them) and the inspection items need a verdict: give TST-LAY-004 one from Tour 3's parts.bom_check, and TST-THM-002 one from Tour 14's thermal.compare.\n- verify.coverage, then verify.report with path docs/verification.md (ask the worker to commit it).\n- Use trace.run and trace.artifact to quote the evidence for any failure.\n- journey.check capture.erc met or not_met with the kicad.erc run as evidence. If something blocks the report, journey.stuck with why and a recommendation; journey.stuck resolved=true once you move on.\n\nDone when: every requirement is verified except REQ-HIL-001, or you list what blocks it. Comment the numbers with their run ids on this issue, then close it."
   },
   {
     "id": "release-fab",

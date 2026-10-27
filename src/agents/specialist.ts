@@ -24,6 +24,8 @@ export const SHARED_TOOLS = [
   'memory.recall', 'memory.remember',
   // the project's knowledge base, read only (src/tools/kb): hidden when the project has none. kb.sync is the worker's
   'kb.search', 'kb.status',
+  // the project's journey: read it, ask people, check the criteria trace owns, say when stuck (src/tools/journey)
+  'journey.status', 'journey.ask', 'journey.check', 'journey.stuck',
 ] as const
 
 /** The delegation tool (src/agents/delegate.ts): offered to a specialist on the runtime, never to the worker. */
@@ -171,6 +173,8 @@ export function composeSpecialist(s: Specialist, c: PromptContext): Composed {
   addJob(p, c.job, cfg, repository)
   p.add(`specialist.${s.kind}.workflow`, role).add('specialist.tools', { tools: tools.map(mcpName).join(', '), mcp_server: MCP_SERVER })
   p.add('specialist.knowledge', { search_tool: mcpName('kb.search'), status_tool: mcpName('kb.status') }).add('specialist.knowledge.data')
+  p.add('specialist.journey', { status_tool: mcpName('journey.status'), ask_tool: mcpName('journey.ask'), check_tool: mcpName('journey.check'), stuck_tool: mcpName('journey.stuck') })
+    .add('specialist.journey.people')
   const branchPrefix = cfg.worker.own_branch_prefix || 'claude/'
   if (delivery === 'actions') p.add('specialist.delivery.actions', { branch_prefix: branchPrefix })
   else p.add('specialist.delivery.delegate', { tool: mcpName(DELEGATE_TOOL), branch_prefix: branchPrefix, timeout: cfg.agents.delegate_timeout_minutes })

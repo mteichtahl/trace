@@ -41,8 +41,8 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1p
 .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 14px; }
 .check { display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 8px 0; }
 .check input { width: auto; }
-button.primary, button.secondary { font: inherit; border-radius: 8px; padding: 8px 16px; cursor: pointer; border: 1px solid var(--accent); }
-button.primary { background: var(--accent); color: var(--accent-ink); }
+button.primary, button.secondary, a.button { font: inherit; text-decoration: none; display: inline-block; border-radius: 8px; padding: 8px 16px; cursor: pointer; border: 1px solid var(--accent); }
+button.primary, a.button.primary { background: var(--accent); color: var(--accent-ink); }
 button.secondary { background: transparent; color: var(--accent); }
 button:disabled { opacity: .5; cursor: default; }
 .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }

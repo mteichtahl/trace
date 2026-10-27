@@ -15,6 +15,8 @@
  *             person reads ("… next check in 4 minutes" for a timer, "… as soon as it changes" for an event)
  *        { kind: "check-now", waitId }                      → { ok }   (wake one timer wait for a check now; false when
  *                                                              no such timer wait is open)
+ *        { kind: "cancel", jobId, reason? }                 → { ok, state, kept } (abort one running job, wait up to 20 s
+ *                                                              for it to end; ok false when no such job is running)
  *        { kind: "tool", repository, name, args }           → { ok, result | error }  (a tool call the API forwarded:
  *                                                              run here, on this runtime's clone, no model; tool.ts)
  *   Every invocation may carry `trace` (the caller's traceparent, tracestate, baggage): see observe.ts invocationHeaders.
@@ -53,6 +55,10 @@ import { ToolRefused, type ToolRunner } from './tool.js'
 import { MAX_WAKES_S, RelayError, type WaitRelay, WaitReportRequest, WaitWakesRequest, defaultWaitRelay } from './wait-relay.js'
 
 const MAX_BODY = 1024 * 1024
+/** How long a cancel waits for the job to end before it answers. */
+const CANCEL_GRACE_MS = 20_000
+/** What a cancelled job keeps, in plain words: a job's changes reach GitHub only by its own pushes. */
+export const KEPT = 'Commits the agent had already pushed stay on their branch; its unpushed work and any graphics card or CPU job it started are stopped.'
 
 function send(res: ServerResponse, status: number, body: unknown): void {
   const text = JSON.stringify(body)
@@ -235,6 +241,12 @@ export function handler(jobs: Jobs, o: HandlerOptions = {}): (req: IncomingMessa
             return send(res, 200, statusBody(jobs, p.jobId))
           }
           if (p.kind === 'check-now') { outcome('ok'); return send(res, 200, { ok: checkNow(p.waitId) }) }
+          if (p.kind === 'cancel') {
+            const ok = await jobs.abort(p.jobId, p.reason, CANCEL_GRACE_MS)
+            const j = jobs.jobStatus(p.jobId)[0]
+            outcome(ok ? 'ok' : 'rejected')
+            return send(res, 200, { ok, state: j?.state ?? null, ...(ok ? { kept: KEPT } : { reason: j ? `The job has already ${j.state === 'running' ? 'been asked to stop' : j.state}.` : 'There is no such job on this worker.' }) })
+          }
           if (p.kind === 'tool') {
             // a forwarded tool call: no model, no job; the answer is the tool's (ok: false for a refusal or a ToolError)
             toolsRunning++

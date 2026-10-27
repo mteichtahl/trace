@@ -1,7 +1,7 @@
 /** Shared test fixtures: an RSA key, a fake JWKS, Cognito-shaped tokens, and fake GitHub/Cognito/jobs clients. */
-import { createSign, generateKeyPairSync, type KeyObject } from 'node:crypto'
+import { createHash, createSign, generateKeyPairSync, type KeyObject } from 'node:crypto'
 import type { CognitoAdmin, CognitoUser } from '../../src/api/aws.js'
-import type { GitHubApi } from '../../src/api/github.js'
+import type { CommitSummary, GitHubApi, TreeEntry } from '../../src/api/github.js'
 import { Verifier } from '../../src/api/jwt.js'
 
 export const ISSUER = 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_TEST'
@@ -33,8 +33,8 @@ export class FakeCognito implements CognitoAdmin {
   users: CognitoUser[] = []
   groups = new Map<string, Set<string>>()
   calls: string[] = []
-  add(email: string, sub: string, group?: string): CognitoUser {
-    const u = { sub, username: email, email, status: 'CONFIRMED', enabled: true }
+  add(email: string, sub: string, group?: string, name?: string): CognitoUser {
+    const u = { sub, username: email, email, status: 'CONFIRMED', enabled: true, ...(name ? { name } : {}) }
     this.users.push(u)
     if (group) this.groups.set(email, new Set([group]))
     return u
@@ -50,10 +50,12 @@ export class FakeCognito implements CognitoAdmin {
     const s = this.groups.get(username) ?? new Set<string>(); s.add(group); this.groups.set(username, s)
   }
   async removeFromGroup(username: string, group: string): Promise<void> { this.calls.push(`remove ${username} ${group}`); this.groups.get(username)?.delete(group) }
+  async signOut(username: string): Promise<void> { this.calls.push(`signout ${username}`) }
 }
 
 export class FakeGitHub implements GitHubApi {
   files = new Map<string, Uint8Array>()   // "repo:branch:path"
+  sizes = new Map<string, number>()       // a size to report instead of the bytes' (large files)
   branches = new Map<string, string>()    // "repo:branch" → sha
   calls: string[] = []
   constructor(readonly repos: string[] = ['acme/board']) {
@@ -61,6 +63,16 @@ export class FakeGitHub implements GitHubApi {
   }
   private has(repo: string): void { if (!this.repos.includes(repo)) throw new Error(`404 ${repo}`) }
   async defaultBranch(repo: string): Promise<{ branch: string; sha: string }> { this.calls.push(`defaultBranch ${repo}`); this.has(repo); return { branch: 'main', sha: 'sha-main' } }
+  async branchSha(repo: string, branch: string): Promise<string | null> { return this.branches.get(`${repo}:${branch}`) ?? null }
+  async tree(repo: string, ref: string): Promise<{ files: TreeEntry[]; truncated: boolean }> {
+    this.calls.push(`tree ${repo} ${ref}`)
+    const pre = `${repo}:${ref}:`
+    return { truncated: false, files: [...this.files.entries()].filter(([k]) => k.startsWith(pre)).map(([k, v]) => ({ path: k.slice(pre.length), size: v.length, sha: `blob-${createHash('sha1').update(v).digest('hex').slice(0, 12)}` })) }
+  }
+  async fileInfo(repo: string, path: string, ref: string): Promise<{ size: number; sha: string; downloadUrl: string | null } | null> {
+    const f = this.files.get(`${repo}:${ref}:${path}`)
+    return f ? { size: this.sizes.get(`${repo}:${ref}:${path}`) ?? f.length, sha: 'blob-sha', downloadUrl: `https://raw.githubusercontent.com/${repo}/${ref}/${path}?token=short` } : null
+  }
   async rawFile(repo: string, path: string, ref: string): Promise<Uint8Array | null> { this.calls.push(`rawFile ${repo} ${ref} ${path}`); return this.files.get(`${repo}:${ref}:${path}`) ?? null }
   async fileSha(repo: string, path: string, ref: string): Promise<string | null> { return this.files.has(`${repo}:${ref}:${path}`) ? 'blob-sha' : null }
   async createBranch(repo: string, branch: string, sha: string): Promise<void> { this.calls.push(`createBranch ${repo} ${branch} ${sha}`); this.branches.set(`${repo}:${branch}`, sha) }
@@ -69,6 +81,9 @@ export class FakeGitHub implements GitHubApi {
     this.files.set(`${repo}:${o.branch}:${o.path}`, o.content)
     return { commit: 'c0ffee0000000000' }
   }
+  /** "repo:path" → the commits that changed it, newest first */
+  history = new Map<string, CommitSummary[]>()
+  async commits(repo: string, path: string, _ref: string, limit: number): Promise<CommitSummary[]> { return (this.history.get(`${repo}:${path}`) ?? []).slice(0, limit) }
   async openPulls(): Promise<never[]> { return [] }
   async openIssues(): Promise<never[]> { return [] }
   async workflowRuns(): Promise<never[]> { return [] }

@@ -46,6 +46,7 @@ import { describeWait, trackEventWait, waitWithTimer } from '../core/wait.js'
 import { scratchDir } from '../core/store.js'
 import type { GpuJobSchema, JobResult } from './jobs.js'
 import type { z } from 'zod'
+import { trackInFlight } from './inflight.js'
 import { encodeSpec, ExitRecordSchema, jobKeys, jobsLocation, type ExitRecord, type RemoteSpec } from './protocol.js'
 
 export type ParsedJob = z.output<typeof GpuJobSchema>
@@ -265,6 +266,9 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
   const what = `the ${place.pool === 'gpu' ? 'graphics card' : 'remote CPU'} job ${id}`
   const ctx: WaitCtx = { batch, jobId, deadline, now, log, what, sleep: deps.sleep, staleMs: staleAfterMs(env) }
   let last: { status: string; detail: BatchJobDetail | undefined }
+  // while it is waited on, a cancelled job (its tool server closing) terminates it: src/gpu/inflight.ts
+  const forget = trackInFlight({ jobId, terminate: (reason) => batch.terminateJob({ jobId, reason: `trace: ${reason}` }) })
+  try {
   const topic = env.TRACE_BATCH_EVENTS_TOPIC
   const queueName = topic ? waitQueueName(topic, project, jobId) : null
   const onEvents = topic && queueName
@@ -272,6 +276,9 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
     : (log(`${jobId}: waiting on a timer: ${NO_EVENTS_WHY} (${topic ? 'it runs outside a project, or its event settings do not match the installation' : 'the installation does not send them: it predates them (running the installer again adds them), or its layout is flat'})`), null)
   if (onEvents && 'status' in onEvents) last = onEvents
   else last = await waitOnTimer(ctx, onEvents?.why ?? NO_EVENTS_WHY, onEvents?.lastStatus ?? '')
+  } finally {
+    forget()
+  }
   const detail = last.detail
   if (!TERMINAL.has(last.status)) {
     const status = last.status
@@ -374,12 +381,42 @@ export function eventDetail(body: string | undefined, jobId: string): BatchJobDe
   }
 }
 
+// ------------------------------------------------------------------ a wait queue on a project's topic
+
+/** A wait queue subscribed to a project's topic: what it receives, and its removal. */
+export interface WaitQueue {
+  /** Long-poll up to waitS seconds; the bodies received (each deleted from the queue). Throws when receiving fails. */
+  receive(waitS: number): Promise<string[]>
+  /** Remove the subscription and the queue (never throws: what could not be removed is logged, and swept later). */
+  close(): Promise<void>
+}
+
+export interface WaitQueueOptions {
+  /** the project's topic, <prefix>-<hash>-batch-events */
+  topic: string
+  /** <prefix>-<hash>-wait-<what>: the only names the project's role may make (waitQueueName) */
+  queueName: string
+  /** <prefix>-<hash>-wait-: this project's wait queues, swept when left over */
+  sweepPrefix: string
+  /** the project (its tag) */
+  project: string
+  /** the subscription's filter on the message body: only what this wait is for reaches its queue */
+  filterPolicy: Record<string, unknown>
+  sqs?: SqsApi | undefined
+  sns?: SnsApi | undefined
+  now: () => number
+  /** wait queues older than this are swept (staleAfterMs) */
+  staleMs: number
+  log: (line: string) => void
+}
+
 /**
- * Wait on the job's state-change events. Returns how the job ended (or stood at the deadline), or `why` events could
- * not be used (setting up failed, or receiving did), with the last status seen, for the timer to carry on from.
+ * Make a short-lived SQS queue of this wait's own, that only the project's topic may send to, and subscribe it to the
+ * topic with a filter (raw delivery, so a body is the event as published); sweep the project's left-over wait queues
+ * alongside. Used by a Batch job's wait (below) and by an agent waiting for a person's answer (src/tools/journey).
+ * Throws when it cannot be set up, having removed what it made.
  */
-async function waitOnEvents(c: WaitCtx, o: { topic: string; queueName: string; project: string; sqs?: SqsApi | undefined; sns?: SnsApi | undefined }): Promise<Seen | { why: string; lastStatus: string }> {
-  const { jobId, log, now } = c
+export async function openWaitQueue(o: WaitQueueOptions): Promise<WaitQueue> {
   // the queue is in the topic's account and region (the stack's): its ARN follows from the topic's
   const [arn, partition, , region, account] = o.topic.split(':')
   const queueArn = `${arn}:${partition}:sqs:${region}:${account}:${o.queueName}`
@@ -387,38 +424,68 @@ async function waitOnEvents(c: WaitCtx, o: { topic: string; queueName: string; p
   let sns: SnsApi | undefined
   let queueUrl: string | undefined
   let subscription: string | undefined
-  let wait: ReturnType<typeof trackEventWait> | undefined
-  let lastStatus = ''
-  const cleanup = async (): Promise<void> => {
-    wait?.end()
-    if (subscription && sns) await sns.unsubscribe({ SubscriptionArn: subscription }).catch((e: unknown) => log(`${jobId}: could not remove its event subscription (${errText(e)})`))
-    if (queueUrl && sqs) await sqs.deleteQueue({ QueueUrl: queueUrl }).catch((e: unknown) => log(`${jobId}: could not delete its event queue ${o.queueName} (${errText(e)})`))
+  const close = async (): Promise<void> => {
+    if (subscription && sns) await sns.unsubscribe({ SubscriptionArn: subscription }).catch((e: unknown) => o.log(`could not remove its event subscription (${errText(e)})`))
+    if (queueUrl && sqs) await sqs.deleteQueue({ QueueUrl: queueUrl }).catch((e: unknown) => o.log(`could not delete its event queue ${o.queueName} (${errText(e)})`))
+    subscription = undefined
+    queueUrl = undefined
   }
   try {
+    sqs = o.sqs ?? (await awsSqs())
+    sns = o.sns ?? (await awsSns())
+    // this project's wait queues left over by waits that never cleaned up: alongside, never in the way
+    startSweep({ sqs, sns, topic: o.topic, prefix: o.sweepPrefix, own: o.queueName, now: o.now, staleMs: o.staleMs, log: o.log })
+    queueUrl = (await sqs.createQueue({
+      QueueName: o.queueName,
+      Attributes: {
+        MessageRetentionPeriod: '3600',
+        ReceiveMessageWaitTimeSeconds: '20',
+        // only the stack's topic may send to it
+        Policy: JSON.stringify({
+          Version: '2012-10-17',
+          Statement: [{ Sid: 'TraceBatchEvents', Effect: 'Allow', Principal: { Service: 'sns.amazonaws.com' }, Action: 'sqs:SendMessage', Resource: queueArn, Condition: { ArnEquals: { 'aws:SourceArn': o.topic } } }],
+        }),
+      },
+      tags: { [PROJECT_TAG]: o.project },
+    })).QueueUrl
+    if (!queueUrl) throw new Error('CreateQueue returned no queue URL')
+    subscription = (await sns.subscribe({
+      TopicArn: o.topic, Protocol: 'sqs', Endpoint: queueArn, ReturnSubscriptionArn: true,
+      Attributes: { RawMessageDelivery: 'true', FilterPolicyScope: 'MessageBody', FilterPolicy: JSON.stringify(o.filterPolicy) },
+    })).SubscriptionArn
+    if (!subscription) throw new Error('Subscribe returned no subscription ARN')
+  } catch (e) {
+    await close()
+    throw e
+  }
+  const q = sqs
+  return {
+    async receive(waitS) {
+      if (!queueUrl) return []
+      const url = queueUrl
+      const messages = (await q.receiveMessage({ QueueUrl: url, WaitTimeSeconds: waitS, MaxNumberOfMessages: 10 })).Messages ?? []
+      for (const m of messages) if (m.ReceiptHandle) await q.deleteMessage({ QueueUrl: url, ReceiptHandle: m.ReceiptHandle }).catch(() => undefined)
+      return messages.map((m) => m.Body ?? '')
+    },
+    close,
+  }
+}
+
+/**
+ * Wait on the job's state-change events. Returns how the job ended (or stood at the deadline), or `why` events could
+ * not be used (setting up failed, or receiving did), with the last status seen, for the timer to carry on from.
+ */
+async function waitOnEvents(c: WaitCtx, o: { topic: string; queueName: string; project: string; sqs?: SqsApi | undefined; sns?: SnsApi | undefined }): Promise<Seen | { why: string; lastStatus: string }> {
+  const { jobId, log, now } = c
+  let queue: WaitQueue | undefined
+  let wait: ReturnType<typeof trackEventWait> | undefined
+  let lastStatus = ''
+  try {
     try {
-      sqs = o.sqs ?? (await awsSqs())
-      sns = o.sns ?? (await awsSns())
-      // this project's wait queues left over by waits that never cleaned up: alongside, never in the way
-      startSweep({ sqs, sns, topic: o.topic, prefix: o.queueName.slice(0, o.queueName.length - jobId.length), own: o.queueName, now, staleMs: c.staleMs, log })
-      queueUrl = (await sqs.createQueue({
-        QueueName: o.queueName,
-        Attributes: {
-          MessageRetentionPeriod: '3600',
-          ReceiveMessageWaitTimeSeconds: '20',
-          // only the stack's topic may send to it
-          Policy: JSON.stringify({
-            Version: '2012-10-17',
-            Statement: [{ Sid: 'TraceBatchEvents', Effect: 'Allow', Principal: { Service: 'sns.amazonaws.com' }, Action: 'sqs:SendMessage', Resource: queueArn, Condition: { ArnEquals: { 'aws:SourceArn': o.topic } } }],
-          }),
-        },
-        tags: { [PROJECT_TAG]: o.project },
-      })).QueueUrl
-      if (!queueUrl) throw new Error('CreateQueue returned no queue URL')
-      subscription = (await sns.subscribe({
-        TopicArn: o.topic, Protocol: 'sqs', Endpoint: queueArn, ReturnSubscriptionArn: true,
-        Attributes: { RawMessageDelivery: 'true', FilterPolicyScope: 'MessageBody', FilterPolicy: JSON.stringify({ detail: { jobId: [jobId] } }) },
-      })).SubscriptionArn
-      if (!subscription) throw new Error('Subscribe returned no subscription ARN')
+      queue = await openWaitQueue({
+        topic: o.topic, queueName: o.queueName, sweepPrefix: o.queueName.slice(0, o.queueName.length - jobId.length), project: o.project, filterPolicy: { detail: { jobId: [jobId] } },
+        sqs: o.sqs, sns: o.sns, now, staleMs: c.staleMs, log: (line) => log(`${jobId}: ${line}`),
+      })
     } catch (e) {
       const why = `setting up its Batch event subscription failed (${errText(e)})`
       log(`${jobId}: waiting on a timer: ${why}`)
@@ -457,18 +524,17 @@ async function waitOnEvents(c: WaitCtx, o: { topic: string; queueName: string; p
         continue
       }
       const waitS = Math.max(1, Math.min(20, Math.ceil((Math.min(nextSafety, c.deadline) - t) / 1000)))
-      let messages: { Body?: string | undefined; ReceiptHandle?: string | undefined }[]
+      let bodies: string[]
       try {
-        messages = (await sqs.receiveMessage({ QueueUrl: queueUrl, WaitTimeSeconds: waitS, MaxNumberOfMessages: 10 })).Messages ?? []
+        bodies = await queue.receive(waitS)
       } catch (e) {
         const why = `receiving its AWS job events failed (${errText(e)})`
         log(`${jobId}: waiting on a timer from now: ${why}`)
         return { why, lastStatus }
       }
       let terminal: Seen | null = null
-      for (const m of messages) {
-        if (m.ReceiptHandle) await sqs.deleteMessage({ QueueUrl: queueUrl, ReceiptHandle: m.ReceiptHandle }).catch(() => undefined)
-        const d = eventDetail(m.Body, jobId)
+      for (const b of bodies) {
+        const d = eventDetail(b, jobId)
         if (!d) continue
         const ev = { status: d.status ?? 'UNKNOWN', detail: d }
         // events may arrive out of order: an ending is final, whatever comes with it
@@ -481,7 +547,8 @@ async function waitOnEvents(c: WaitCtx, o: { topic: string; queueName: string; p
       }
     }
   } finally {
-    await cleanup()
+    wait?.end()
+    await queue?.close()
   }
 }
 

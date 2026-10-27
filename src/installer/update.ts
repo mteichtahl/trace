@@ -19,9 +19,18 @@
  *                 variables, the job does not fail: the step summary says which variable to set to what, by hand
  *   5 gpu         the deploy starts the GPU image's build when its source changed; it is reported, not waited for
  *
- * What it never does: the installer's GitHub admin steps (secrets, rulesets, onboarding, people, this machine's
- * settings), and anything the self-update role cannot (it reads installation/* only, and deploys only through CDK's
- * bootstrap roles). Adding repositories or people still takes the installer.
+ * Projects created from the web app (projects.create) wait for their own cloud resources under
+ * installation/pending-projects/ (src/installer/pending.ts). Before step 3 the job adds every one recorded there, pending
+ * or added by an earlier update, to the saved settings' repositories (the installer's saved settings are never
+ * rewritten here: the records carry them until the installer runs again and takes them in). After a deploy that
+ * succeeded each pending record is marked added; after one that failed it counts an attempt. A newly added project then
+ * gets what the installer would give it: its token secret (a copy of the shared token) and its repository's variables and
+ * TRACE_TOKEN, best effort, with the step summary saying what is left to do by hand.
+ *
+ * What it never does: the installer's GitHub admin steps (rulesets, onboarding, people, this machine's settings), and
+ * anything the self-update role cannot (it reads installation/*, lists and marks installation/pending-projects/*, writes
+ * only projects' token secrets, and deploys only through CDK's bootstrap roles). Adding a repository from the installer,
+ * or people, still takes the installer.
  *
  * It exits non-zero only when the installation could not be deployed; everything after the deploy is reported.
  */
@@ -31,9 +40,10 @@ import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers'
 import type { AwsCredentialIdentity } from '@smithy/types'
+import { PutSecretValueCommand } from '@aws-sdk/client-secrets-manager'
 import { RUNNER_VARIABLE } from '../core/project.js'
 import {
-  CENTRAL_BUCKET_OUTPUT, GPU_IMAGE_BUILD_OUTPUT, INSTALLATION_RECORD_KEY, type InfraInput, InfraPropsSchema, ciRunnerOutput, projectOutputs, projectRefs,
+  CENTRAL_BUCKET_OUTPUT, GPU_IMAGE_BUILD_OUTPUT, INSTALLATION_RECORD_KEY, type InfraInput, InfraPropsSchema, ciRunnerOutput, kbOutputs, projectOutputs, projectRefs,
 } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import { ListSourceCredentialsCommand } from '@aws-sdk/client-codebuild'
@@ -42,7 +52,8 @@ import {
   type ConnectionChoice, type RunnerAuthChoice, awsEnv, chooseRunnerAuth, codebuildClient, connectionsClient, connectionsConsoleUrl, resolveConnection, stackOutputs,
 } from './aws.js'
 import { cdkBin, cdkDeployArgs, runStreaming } from './bootstrap.js'
-import { deleteVariable, getVariable, setVariable } from './github.js'
+import { checkToken, deleteVariable, getVariable, repositoryDefaultBranch, setSecret, setVariable } from './github.js'
+import { type PendingEntry, type PendingIo, type PendingRecord, addPending, markAdded, markAttempt, parsePending, s3PendingIo } from './pending.js'
 import { InstallationRecordSchema } from './record.js'
 
 /** What the update talks to (tests replace every one). */
@@ -62,7 +73,17 @@ export interface UpdateDeps {
     get: (token: string, repo: string, name: string) => Promise<string | null>
     set: (token: string, repo: string, name: string, value: string) => Promise<unknown>
     delete: (token: string, repo: string, name: string) => Promise<unknown>
+    /** an Actions secret (TRACE_TOKEN of a project added from the web app) */
+    setSecret?: (token: string, repo: string, name: string, value: string) => Promise<unknown>
+    /** the token's own login (TRACE_AGENT_LOGIN) and a repository's default branch */
+    login?: (token: string) => Promise<string>
+    branch?: (token: string, repo: string) => Promise<string>
   }
+  /** the projects created from the web app that wait for an update (installation/pending-projects/*): list, and write
+   * one back (marked); absent, none */
+  pending?: Pick<PendingIo, 'list' | 'put'>
+  /** write a project's token secret (its value: a copy of the shared token, as the installer writes it) */
+  putSecret?: (creds: AwsCredentialIdentity, region: string, secretArn: string, value: string) => Promise<void>
   log: (line: string) => void
   /** a line of the job's step summary ($GITHUB_STEP_SUMMARY) */
   summary: (line: string) => void
@@ -80,7 +101,14 @@ export const defaultUpdateDeps = (env: NodeJS.ProcessEnv = process.env): UpdateD
   hasSourceCredential: async (creds, region) => ((await codebuildClient(creds, region).send(new ListSourceCredentialsCommand({}))).sourceCredentialsInfos ?? []).some((c) => c.serverType === 'GITHUB'),
   cdk: (args, e, onLine) => runStreaming(process.execPath, [cdkBin(), ...args], e, onLine),
   sharedToken: async (creds, region, secretArn) => (await new SecretsManagerClient({ region, credentials: creds }).send(new GetSecretValueCommand({ SecretId: secretArn }))).SecretString ?? '',
-  github: { get: (t, r, n) => getVariable(t, r, n), set: (t, r, n, v) => setVariable(t, r, n, v), delete: (t, r, n) => deleteVariable(t, r, n) },
+  github: {
+    get: (t, r, n) => getVariable(t, r, n), set: (t, r, n, v) => setVariable(t, r, n, v), delete: (t, r, n) => deleteVariable(t, r, n),
+    setSecret: (t, r, n, v) => setSecret(t, r, n, v), login: async (t) => (await checkToken(t)).login, branch: (t, r) => repositoryDefaultBranch(t, r),
+  },
+  pending: s3PendingIo,
+  putSecret: async (creds, region, secretArn, value) => {
+    await new SecretsManagerClient({ region, credentials: creds }).send(new PutSecretValueCommand({ SecretId: secretArn, SecretString: value }))
+  },
   log: (l) => process.stdout.write(`${l}\n`),
   summary: (l) => {
     const file = env.GITHUB_STEP_SUMMARY
@@ -129,11 +157,13 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
   let given = ''
   let mode: (typeof RUNNER_AUTH)[number] = 'connection'
   let before: Record<string, string>
+  let bucket = ''
+  let pending: PendingEntry[] = []
   try {
     creds = await d.credentials()
     log(`Updating ${stack} in ${region}.`)
     before = await d.outputs(creds, region, stack)
-    const bucket = before[CENTRAL_BUCKET_OUTPUT]
+    bucket = before[CENTRAL_BUCKET_OUTPUT] ?? ''
     if (!bucket) throw new Error(`the stack has no ${CENTRAL_BUCKET_OUTPUT} output`)
     const record = InstallationRecordSchema.parse(JSON.parse(await d.readRecord(creds, region, bucket, INSTALLATION_RECORD_KEY)) as unknown)
     if (record.stack !== stack) throw new Error(`the saved settings are for ${record.stack}, not ${stack}`)
@@ -144,6 +174,39 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
   } catch (e) {
     say(`Could not update the installation: its saved settings could not be read (${redact(message(e))}). Run the installer again: it saves them.`)
     return 1
+  }
+
+  // 1b — projects created from the web app since: added to the repositories for this deploy (src/installer/pending.ts)
+  if (d.pending) {
+    try { pending = parsePending(await d.pending.list(creds, region, bucket), log) } catch (e) { say(`The projects waiting for this update could not be read (${redact(message(e))}); updating without them.`) }
+  }
+  let sharedToken = ''
+  const readShared = async (arn: string): Promise<string> => {
+    if (sharedToken || !arn) return sharedToken
+    try {
+      sharedToken = await d.sharedToken(creds, region, arn)
+      if (sharedToken) { secrets = [sharedToken]; if (env.GITHUB_ACTIONS === 'true') log(`::add-mask::${sharedToken}`) }
+    } catch (e) { log(`Could not read the shared agent token (${redact(message(e))}).`) }
+    return sharedToken
+  }
+  const branches = new Map<string, string>()
+  const fresh = pending.filter((p) => p.record.status === 'pending')
+  if (fresh.length && d.github.branch) {
+    const t = await readShared(before.GithubSecretArn ?? '')
+    for (const p of fresh) {
+      try { if (t) branches.set(p.record.repo.toLowerCase(), await d.github.branch(t, p.record.repo)) } catch (e) { log(`${p.record.repo}: its default branch could not be read (${redact(message(e))}); main is assumed`) }
+    }
+  }
+  // the ones an earlier update added first (they are projects of the stack now), then the new ones
+  const carried = pending.filter((p) => p.record.status === 'added').map((p) => ({ ...p, record: { ...p.record, status: 'pending' as const, attempts: 0 } }))
+  const kept = addPending(props as InfraInput, carried, (r) => pending.find((p) => p.record.repo.toLowerCase() === r)?.record.branch ?? 'main')
+  const grown = addPending(kept.props, fresh, (r) => branches.get(r) ?? 'main')
+  props = grown.props as Record<string, unknown>
+  for (const k of kept.skipped) say(`${k.repo}, added by an earlier update, is no longer deployed by it: ${k.why}.`)
+  for (const k of grown.skipped) say(`${k.repo} (created in the web app) is not added by this update: ${k.why}.`)
+  if (grown.added.length) say(`Adding ${grown.added.map((x) => x.repo).join(', ')} (created in the web app): ${grown.added.length === 1 ? 'its' : 'their'} agent, memory, knowledge base and build runner.`)
+  const mark = async (key: string, rec: PendingRecord): Promise<void> => {
+    try { await d.pending?.put(creds, region, bucket, key, JSON.stringify(rec, null, 2)) } catch (e) { log(`Could not update ${key} (${redact(message(e))}).`) }
   }
 
   // 2 — how the runners reach GitHub, decided as the installer decides it
@@ -178,10 +241,23 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
     ...awsEnv(creds, region), TRACE_INFRA: JSON.stringify(input), CDK_DISABLE_VERSION_CHECK: '1', CI: '1',
   }, (l) => log(redact(l)))
   if (code !== 0) {
+    for (const x of grown.added) {
+      const e = pending.find((p) => p.key === x.key)
+      if (e) await mark(x.key, markAttempt(e.record, `cdk deploy exited ${code}`))
+    }
     say(`The installation was not updated: cdk deploy exited ${code}. CloudFormation rolls a failed update back, so the installation is as it was. The log above says why; fix it and merge again, or re-run this job.`)
     return 1
   }
   say(`${stack} is up to date with this commit.`)
+  for (const x of grown.added) {
+    const e = pending.find((p) => p.key === x.key)
+    if (e) await mark(x.key, markAdded(e.record, { branch: x.branch }))
+  }
+  // already a project (the installer took it in): nothing was deployed for it, but it waits no longer
+  for (const x of grown.already) {
+    const e = pending.find((p) => p.key === x.key)
+    if (e) await mark(x.key, markAdded(e.record, { branch: typeof e.record.branch === 'string' ? e.record.branch : 'main' }))
+  }
 
   // 4 — the runners' variables (best effort from here on: the deploy is done)
   let after: Record<string, string> = {}
@@ -191,17 +267,42 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
   }
   if (Object.keys(after).length) {
     const want = runnerOutputs(input).map((r) => ({ repo: r.repo, value: ready ? after[r.output] ?? '' : '' }))
-    let token = ''
     const secretArn = after.GithubSecretArn ?? before.GithubSecretArn ?? ''
-    try {
-      token = await d.sharedToken(creds, region, secretArn)
-      if (!token) throw new Error('the secret is empty')
-      secrets = [token]
-      if (env.GITHUB_ACTIONS === 'true') log(`::add-mask::${token}`)
-    } catch (e) {
-      log(`Could not read the shared agent token (${redact(message(e))}).`)
-    }
+    const token = await readShared(secretArn)
+    if (!token) log('The shared agent token is empty or could not be read.')
     const byHand: string[] = []
+    // projects added now: their token secret and their repository's variables, as the installer sets them
+    for (const x of grown.added) {
+      const o = projectOutputs(x.repo)
+      const kb = kbOutputs(x.repo)
+      try {
+        if (!token) throw new Error('no shared token')
+        if (!after[o.secretArn]) throw new Error(`the stack has no output ${o.secretArn}`)
+        await d.putSecret?.(creds, region, after[o.secretArn] ?? '', token)
+        log(`${x.repo}: the shared token stored in its secret`)
+      } catch (e) {
+        log(`${x.repo}: its token secret could not be written (${redact(message(e))})`)
+        byHand.push(`- ${x.repo}: its agent has no GitHub token yet: run the installer again (it writes the project's token secret)`)
+      }
+      const vars: Record<string, string> = {
+        TRACE_AWS_ROLE: after[o.roleArn] ?? '', TRACE_AWS_REGION: region, TRACE_HOME: after.TraceHome ?? '', TRACE_AGENT_RUNTIME_ARN: after[o.runtimeArn] ?? '',
+        ...(after[o.memoryId] ? { TRACE_MEMORY_ID: after[o.memoryId] ?? '' } : {}),
+        ...(after[kb.knowledgeBaseId] ? { TRACE_KB_ID: after[kb.knowledgeBaseId] ?? '', TRACE_KB_DATA_SOURCE_ID: after[kb.dataSourceId] ?? '' } : {}),
+      }
+      try {
+        if (!token) throw new Error('no shared token')
+        if (d.github.login) vars.TRACE_AGENT_LOGIN = await d.github.login(token)
+        for (const [k, v] of Object.entries(vars)) {
+          if (!v) throw new Error(`the stack has no value for ${k}`)
+          await d.github.set(token, x.repo, k, v)
+        }
+        if (d.github.setSecret) await d.github.setSecret(token, x.repo, 'TRACE_TOKEN', token)
+        log(`${x.repo}: ${Object.keys(vars).join(', ')} and TRACE_TOKEN set`)
+      } catch (e) {
+        log(`${x.repo}: its variables could not be set (${redact(message(e))})`)
+        byHand.push(`- ${x.repo}: run the installer again to set its repository variables (${Object.keys(vars).join(', ')}) and TRACE_TOKEN`)
+      }
+    }
     for (const w of want) {
       try {
         if (!token) throw new Error('no token')

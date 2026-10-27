@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync } from 'node:fs'
 import { request } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -140,11 +140,13 @@ const ANSWERS = {
 }
 // Built at runtime so no token-shaped literal sits in the source.
 const TOKEN = ['github', 'pat', '11FAKEFAKEFAKE0123456789'].join('_')
+const CERT = 'arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000'
 
 const OUTPUTS: Record<string, string> = {
   TraceHome: '', GithubSecretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:trace/github-token',
   ApiRuntimeArn: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/trace_api-abc',
   UserPoolId: 'us-east-1_abc', UserPoolClientId: 'client123', CognitoDomain: 'https://trace-123456789012.auth.us-east-1.amazoncognito.com',
+  WebUrl: 'https://d111111abcdef8.cloudfront.net', WebDistributionId: 'E1ABCDEF', WebClientId: 'web123',
   CentralBucket: 'trace-central-bucket', SelfUpdateRoleArn: 'arn:aws:iam::123456789012:role/trace-self-update',
 }
 // each project's own outputs, named by its hash
@@ -171,9 +173,24 @@ describe('answers', () => {
 
   it('plans every step, naming the account, region and repositories', () => {
     const steps = plan(AnswersSchema.parse(ANSWERS))
-    expect(steps.map((s) => s.id)).toEqual(['check', 'cdk', 'github', 'deploy', 'connection', 'runners', 'token', 'integrations', 'repos', 'onboard', 'people', 'local', 'release', 'gpu'])
+    expect(steps.map((s) => s.id)).toEqual(['check', 'cdk', 'github', 'deploy', 'connection', 'runners', 'token', 'integrations', 'repos', 'onboard', 'people', 'web', 'local', 'release', 'gpu'])
     expect(steps.find((s) => s.id === 'repos')?.detail).toContain('mteichtahl/fw')
     expect(steps.find((s) => s.id === 'deploy')?.detail).toMatch(/for each of the 2 repositories its own AgentCore worker runtime/)
+  })
+
+  it('installs the web app by default, keeping the install at two inputs, with an optional custom domain and email codes', () => {
+    const a = AnswersSchema.parse(ANSWERS)
+    expect(infraInput(a).web).toEqual({ enabled: true })
+    expect(plan(a).find((s) => s.id === 'web')).toMatchObject({ title: 'Web app: the address people sign in at' })
+    expect(plan(a).find((s) => s.id === 'deploy')?.detail).toMatch(/the web app at CloudFront's own address/)
+    const custom = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, webDomain: 'trace.example.com', webCertificateArn: CERT, webEmailFrom: 'trace@example.com' } })
+    expect(infraInput(custom).web).toEqual({ enabled: true, domainName: 'trace.example.com', certificateArn: CERT, sesFrom: 'trace@example.com' })
+    expect(plan(custom).find((s) => s.id === 'web')?.detail).toContain('https://trace.example.com')
+    expect(plan(custom).find((s) => s.id === 'deploy')?.detail).toMatch(/a code by email \(from trace@example.com, through SES\)/)
+    expect(AnswersSchema.safeParse({ ...ANSWERS, agents: { ...ANSWERS.agents, webDomain: 'trace.example.com' } }).success).toBe(false)
+    const off = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, webEnabled: false } })
+    expect(infraInput(off).web).toEqual({ enabled: false })
+    expect(plan(off).map((s) => s.id)).not.toContain('web')
   })
 
   it('passes each project\'s memory event expiry to the stack, and leaves the rest to the default', () => {
@@ -277,7 +294,7 @@ describe('installing', () => {
     await expect(require_(dev, 'mteichtahl/fw', 'read')).rejects.toThrow(/no read access/)
     expect(await require_(visitor, 'mteichtahl/fw', 'read')).toBe('read')
     await expect(require_(visitor, 'mteichtahl/fw', 'write')).rejects.toThrow(/no write access/)
-    expect(await projectsFor(visitor)).toEqual([{ repo: 'mteichtahl/fw', role: 'read' }])
+    expect(await projectsFor(visitor)).toEqual([{ repo: 'mteichtahl/fw', role: 'read', part: 'reviewer' }])
     expect(calls.variables).toContain('mteichtahl/board:TRACE_AGENT_LOGIN')
     // each repository gets its own project's role and runtime
     for (const repo of ['mteichtahl/board', 'mteichtahl/fw']) {
@@ -475,7 +492,7 @@ describe('the local server', () => {
     expect((await call('/api/plan', { method: 'POST', key, body: '{"answers":[]}' })).status).toBe(400)
     expect((await call('/api/plan', { method: 'POST', key, body: 'x', type: 'text/plain' })).status).toBe(415)
     const planned = await call('/api/plan', { method: 'POST', key, body: JSON.stringify({ answers: ANSWERS }) })
-    expect(JSON.parse(planned.body).steps).toHaveLength(14)
+    expect(JSON.parse(planned.body).steps).toHaveLength(15)
     expect(JSON.parse(planned.body).timeline.join(' ')).toMatch(/about 15 minutes of CloudFormation/)
   })
 
@@ -634,6 +651,10 @@ describe('adding a removed project again, its memory variable, the CPU queue and
     expect(seen).toEqual([{ buildId: 'trace-gpu-image:1234', imageTag: 'abc123' }])
     expect(r.ok).toBe(true)
     expect(order.at(-1)).toBe('local') // every other step is done before the GPU image is waited for
+    // the web app's address: its step, the page's Open trace (ready and done), and the summary
+    expect(r.events.find((e) => e.type === 'step' && e.step?.id === 'web' && e.step.status === 'done')?.step?.detail).toBe('https://d111111abcdef8.cloudfront.net')
+    for (const kind of ['ready', 'done']) expect((r.events.find((e) => e.type === kind) as { url?: string } | undefined)?.url).toBe('https://d111111abcdef8.cloudfront.net')
+    expect(r.events.at(-1)?.summary?.[0]).toMatch(/Open trace: https:\/\/d111111abcdef8\.cloudfront\.net$/)
     expect(r.events.find((e) => e.type === 'step' && e.step?.id === 'gpu' && e.step.status === 'failed')?.step?.detail).toMatch(/failed in BUILD/)
     expect((r.events.at(-1)?.summary ?? []).join('\n')).toMatch(/GPU and CPU jobs cannot run until the GPU image is built.*run the installer again/)
     // each check of the wait reaches the page as a `wait` event: the notice, and its line
@@ -1174,6 +1195,25 @@ describe('the sample project', () => {
     const saved = AnswersSchema.parse(savedAnswers().answers)
     expect(saved.projects.find((p) => p.repo === SAMPLE)?.create).toBeNull()
     expect(saved.sample).toMatchObject({ enabled: true, tour: true })
+    // its journey's first state, as projects.create writes one, where the API reads it (projects/<slug>/journey/: in S3
+    // beside central/, locally inside TRACE_HOME, as bucketStore puts it)
+    expect(existsSync(join(OUTPUTS.TraceHome ?? '', 'projects', 'trace-agent', 'trace-sample', 'journey', 'journey.db'))).toBe(true)
+    expect(r.events.some((e) => e.type === 'log' && e.line === `${SAMPLE}: its journey started (Mixed template, at Define)`)).toBe(true)
+  })
+
+  it('starts the sample\'s journey once, and reports one that could not start without failing the install', async () => {
+    const asked: string[] = []
+    const ok = await run({ ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: false }, github: { login: 'trace-agent' }, sample: { enabled: true, tour: false } }, {
+      sampleJourney: async (_home, repo, by) => { asked.push(`${repo} by ${by}`); return 'exists' },
+    })
+    expect(ok.ok).toBe(true)
+    expect(asked).toEqual([`${SAMPLE} by marc@example.com`])
+    expect(ok.events.some((e) => e.type === 'log' && e.line === `${SAMPLE}: its journey is there already`)).toBe(true)
+    const failed = await run({ ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: false }, github: { login: 'trace-agent' }, sample: { enabled: true, tour: false } }, {
+      sampleJourney: async () => { throw new Error('PutObject: AccessDenied') },
+    })
+    expect(failed.ok).toBe(true)
+    expect(failed.events.at(-1)?.summary?.join('\n')).toMatch(/The sample's journey could not be started \(PutObject: AccessDenied\)/)
   })
 
   it('names the sample after the login derived at install, and reports a tour that could not start without failing the install', async () => {
@@ -1363,3 +1403,40 @@ describe('keeping the installation up to date', () => {
   })
 })
 
+describe('projects created in the web app', () => {
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const NEW = 'acme/fresh'
+
+  it('takes them in as existing, onboarded projects, deploys them, and removes their records once the run is done', async () => {
+    const records = new Map([[`installation/pending-projects/${NEW}.json`, JSON.stringify({ repo: NEW, name: 'Fresh', status: 'added', branch: 'trunk' })], ['installation/pending-projects/x.json', '{']])
+    const removed: string[] = []
+    const infra: Record<string, unknown>[] = []
+    const onboarded: string[] = []
+    calls.existing = { stack: 'TraceStack', status: 'UPDATE_COMPLETE', outputs: { ...OUTPUTS, Layout: 'nested' } }
+    OUTPUTS.TraceHome = join(mkdtempSync(join(tmpdir(), 'trace-central-')), 'home')
+    try {
+      const events: { type: string; line?: string; summary?: string[] }[] = []
+      const ok = await apply(AnswersSchema.parse(ANSWERS), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
+        ...quiet, cdk: async (args, env) => { if (args[0] === 'deploy') infra.push(JSON.parse(env.TRACE_INFRA ?? '{}')); return 0 },
+        outputs: async () => { const o = { ...OUTPUTS }; for (const r of ['mteichtahl/board', 'mteichtahl/fw', NEW]) { const p = projectOutputs(r); Object.assign(o, { [p.runtimeArn]: 'arn:rt', [p.roleArn]: 'arn:role', [p.secretArn]: 'arn:secret', [p.memoryId]: 'm', [p.runnerProject]: 'ci' }) } return o },
+        onboard: async (repo) => { onboarded.push(repo); return { repo, state: 'opened', pr: null, settings: [], notes: [] } },
+        pending: {
+          list: async (_c, _r, bucket) => { expect(bucket).toBe('trace-central-bucket'); return [...records].map(([key, text]) => ({ key, text })) },
+          put: async () => undefined,
+          remove: async (_c, _r, _b, key) => { removed.push(key); records.delete(key) },
+        },
+      })
+      expect(ok).toBe(true)
+      expect(infra.at(-1)?.repositories).toEqual(['mteichtahl/board@main', 'mteichtahl/fw@main', `${NEW}@trunk`])
+      // the API onboarded it already: no pull request from here
+      expect(onboarded).not.toContain(NEW)
+      expect(calls.variables).toContain(`${NEW}:TRACE_AGENT_RUNTIME_ARN`)
+      expect(events.at(-1)?.summary?.join('\n')).toMatch(/Adding the project created in the web app: acme\/fresh\./)
+      // the saved answers list it, so the next run keeps it, and its record is done (the unreadable one is kept)
+      expect(AnswersSchema.parse(savedAnswers().answers).projects.find((p) => p.repo === NEW)).toMatchObject({ branch: 'trunk', onboard: false, create: null })
+      expect(removed).toEqual([`installation/pending-projects/${NEW}.json`])
+    } finally {
+      calls.existing = null
+    }
+  })
+})

@@ -64,6 +64,7 @@ steps, and only the first asks for anything:
 | Knowledge bases | On where the region has Amazon S3 Vectors |
 | Prefix, session limits, bucket, observability, images | Their defaults (`trace`, 8 h, 15 min, a named bucket, on, prebuilt) |
 | How the build runners reach GitHub | An authorized GitHub connection in the account and region, else the token ([Where builds run](#where-builds-run)) |
+| Web app | On, at CloudFront's own address; a custom domain and email sign-in codes are optional ([Web app](#web-app)) |
 
 **The preflight** checks, in parallel: the credentials; Bedrock AgentCore in the region; the model's inference
 profile and the account's access to it (`GetFoundationModelAvailability`; for Anthropic, whether the one-time use-case
@@ -146,6 +147,8 @@ quickest way to see the whole system work before you bring your own design, and 
   its own runtime, roles, memory, knowledge base and build runner; you can assign people to it. Onboarding fills it
   with the sample's files and settings, seeds its project database (requirements, a test plan using every method,
   analog and protocol specifications, thermal data) and pushes it all to `main`, with no pull request to merge.
+  Its journey starts too, as a project made in the web app does: the Mixed template, at Define, so the web app shows
+  its stages and gates from the start.
 - **The tour,** last, opens one task per step of the journey (define, architect, capture, prove, layout, sign-off,
   release, bring-up), each labelled for the agent that takes it. Together they run every agent and every tool,
   every simulation included: circuit (ngspice), mixed-signal, logic, formal and coverage, FPGA synthesis and place
@@ -318,6 +321,7 @@ projects is therefore drawn in IAM, not only in code (`src/infra/project.ts`):
 | **Memory** | One AgentCore Memory per repository (`<prefix>_m_<hash>`, tagged `trace:project`), its own event expiry, and its own log group and log delivery. The worker is told only its own (`TRACE_MEMORY_ID`) and its role may use only that memory's ARN. On it, the role may still create and list events only for actors `<owner>/<repo>/*`, and recall and list records only under `/trace/<owner>/<repo>/*` (the condition keys `bedrock-agentcore:actorId` and `bedrock-agentcore:namespace`), as defence in depth. The actor comes from `TRACE_PROJECT`, never from the request. The GitHub OIDC role has the same grants on the same memory, for the `worker.runner = actions` fallback (the repository variable `TRACE_MEMORY_ID`). |
 | **S3** | Read and write `projects/<owner>/<repo>/*` and `jobs/<owner>/<repo>/*`, and list only those prefixes and `central/*`. Read, never write, `prompts/*` (the installation's prompt overrides, see [Managing prompts](#managing-prompts)). Nothing under `access/*`, and nothing of another project. |
 | **GPU and CPU jobs** | Two AWS Batch job definitions per project (`<prefix>-gpu-<hash>`, and `<prefix>-cpu-<hash>` with the CPU queue), with one job role that reads and writes only that project's `jobs/<owner>/<repo>/*`. A project's role may submit only with its own definitions, only jobs tagged `trace:project=<owner>/<repo>`, and may stop only jobs carrying that tag. SubmitJob cannot override a definition's job role. |
+| **Events** | Nested layout only. One SNS topic per project, `<prefix>-<hash>-batch-events`, and up to two EventBridge rules sending it events: its own Batch jobs' state changes (with GPU jobs), and `<prefix>-<hash>-journey-events`, the central bucket's "Object Created" event for its journey record (`projects/<owner>/<repo>/journey/journey.db`, which only the API writes). Only those rules may publish to it. A worker waiting on a job, or on a person's answer in `journey.ask`, subscribes a short-lived queue of its own (`<prefix>-<hash>-wait-*`) and is told at once. It still checks on a slow timer (30 seconds and 90 seconds after subscribing, then every 5 minutes) in case a message is lost. Without the topic (flat layout, or an older stack) it checks on a timer and says when it will look next. |
 | **Knowledge base** | One Amazon Bedrock knowledge base per repository (`<prefix>-kb-<hash>`, nested layout only), with its own service role (`<prefix>-kb-<hash>-<region>`) that reads only `projects/<owner>/<repo>/kb/*` and its own S3 Vectors index, and invokes only the embedding model. The worker role and the OIDC role may `bedrock:Retrieve` and start, get and list ingestion jobs on that knowledge base's ARN only. See [Knowledge base](#knowledge-base). |
 | **Library gateway** | Off by default (`gateway.enabled`). When on, each worker role may `bedrock-agentcore:InvokeGateway` on the installation's one library gateway and nothing else of it; the gateway serves only the shared datasheets and parts tools. See [Library gateway](#library-gateway). |
 | **GitHub OIDC role** | One per repository, trusted only for `repo:OWNER/REPO:ref:refs/heads/BRANCH`. It may invoke only that project's runtime, read and write only that project's prefix (and the central database), and use only that project's memory and knowledge base, as its worker does. |
@@ -478,6 +482,55 @@ guests can list, read and preview them (see [Managing prompts](#managing-prompts
 Marking an agent memory inactive (`tracectl remote memory deactivate`) takes write access. A person's own preferences
 are the exception: they may mark those with read access alone (see [Inactive memories](#inactive-memories)).
 
+## Web app
+
+The installer sets up a web app beside `tracectl login`: one address where people sign in and work with their projects.
+It is on by default and needs nothing more at install time. It is built from `web/` (the app) and `src/web/` (its
+backend) when the stack is deployed, and lives in its own nested stack (`src/infra/web.ts`).
+
+| Part | What it is |
+| --- | --- |
+| Address | A CloudFront distribution: CloudFront's own address (`https://<id>.cloudfront.net`, the `WebUrl` output) unless a custom domain is set. HTTP/2 and HTTP/3, price class 100 |
+| The app | A private S3 bucket that only this distribution can read (origin access control). `index.html` is never cached; Vite's hashed files under `assets/` are cached for a year. Any path without a dot loads the app |
+| Backend | A Lambda function (Node.js 22, arm64, response streaming) behind `/api/*` on the same address. Only CloudFront can call its function URL (IAM auth, origin access control). It reads its settings from one SSM parameter, `/<prefix>/web/config` |
+| Live updates | AppSync Events, `<prefix>-events`. People subscribe with their sign-in, each to `/trace/users/<their id>` only. Only the backend, and the agents' facts function below, can publish |
+| Agents' facts | When an agent records a journey fact (a question, a check, a stuck report), the central bucket's event reaches a small function, `<prefix>-journey-events`, through an EventBridge rule. It tells everyone on that project to refresh, and notifies the people a new question or stuck report is for. Its role may read the access store and the agents' facts files, and publish live events. Nothing else |
+| Sign-in | A Cognito app client of its own, `<prefix>-web`, using choice-based sign-in. People sign in with a passkey or a password, plus an email code when SES is set (see below). The CLI keeps its own client |
+| Voice | Polly speech kept 30 days in a small bucket of its own. The browser gets signed URLs for it and for Transcribe streaming |
+
+The backend's role can read its settings and use Polly, Transcribe streaming, its voice cache, CloudWatch (read
+only), the chat model, and publishing live events. It cannot reach the access store, any project's data or Cognito's
+admin API. Anything about a project goes through the API runtime, with the person's own token, so the access checks
+stay in one place.
+
+Every response carries strict security headers: HSTS, `nosniff`, `X-Frame-Options: DENY`, and
+`strict-origin-when-cross-origin`. The content security policy allows only these:
+
+- the app itself
+- AppSync in the stack's region
+- Transcribe streaming
+- the voice bucket
+- `data:` and `blob:` URLs
+- WebAssembly (PDF.js and Shiki)
+- inline styles
+
+**Custom domain.** Under Advanced → Web app, give a domain and its ACM certificate (it must be in us-east-1). After the
+deploy, point the domain's DNS at the distribution with a CNAME or alias (`WebDistributionId`). The props for this are
+`web.domainName` and `web.certificateArn`.
+
+**Passkeys.** Each passkey belongs to the app's address, which is the user pool's relying party. If you move from
+CloudFront's address to a custom domain later, people have to register their passkeys again. Their passwords still
+work.
+
+**Email codes.** Cognito sends sign-in codes by email only through Amazon SES. Without SES (the default), people sign
+in with a passkey or a password, and Cognito's own sender still sends the invitations. To add codes by email, give a
+verified SES sender under Advanced (`web.sesFrom`). The pool then sends all its email through SES.
+
+The invitation email points at `https://<address>/invite` as well as `tracectl login`. The installer's last card has an
+Open trace button. Turn the app off with Advanced → Web app (`web.enabled: false`). Other stack settings:
+`web.model` (the chat model, which defaults to `model`) and `web.dashboards` (extra CloudWatch dashboards for the
+Operations page, beside `<prefix>-agents`).
+
 ## Where builds run
 
 Every build, test and automation job runs on AWS, in the installation's own account, once the installer has set it
@@ -583,16 +636,26 @@ repositories, people and integrations or changes a setting.
   removed where its runner is gone) with the shared agent token. If the token may not change a repository's variables,
   the job still succeeds, and its summary lists which variable to set to what. It starts the GPU image build when that
   image changed, and does not wait for it.
-- **What it can't do.** It cannot add repositories or people, change secrets, integrations, rulesets or onboarding pull
-  requests, import CodeBuild's GitHub credential, or change any setting. Run the installer for those, and it saves the
+- **Projects created in the web app.** A project made there (Projects → New) is onboarded at once, but its own agent,
+  memory, knowledge base and build runner need the stack deployed again. Its request waits in the central bucket
+  (`installation/pending-projects/`), and the next update adds it: the job deploys with the saved settings plus every
+  such project (nested layout only, at most 60 projects), marks each request added, writes the project's token secret
+  (a copy of the shared token) and sets its repository's variables and `TRACE_TOKEN`; what it cannot set, the step
+  summary lists. A deploy that fails counts against the request; after two, the job leaves it to the installer. To add
+  a project now rather than at the next merge, run the `ci` workflow on main by hand (Actions → ci → Run workflow). The
+  next run of the installer takes every such project into its own answers and clears the requests.
+- **What it can't do.** It cannot add repositories (other than those created in the web app) or people, change
+  integrations, rulesets or onboarding pull requests, import CodeBuild's GitHub credential, or change any setting. Run the installer for those, and it saves the
   new settings for the next update. The job fails only when the deploy fails (CloudFormation then rolls the stack back
   to how it was), or when it cannot deploy faithfully (no saved settings, or the token's credential is missing).
 - **Security.** The job signs in to AWS as `<prefix>-self-update`. That role can be used only by the `ci` workflow
   of trace's own repository running on its default branch: its trust policy checks the repository, the branch and
   the workflow file. It may use CDK's deployment roles in this account and region, read `installation/*`, read the
   stack's outputs, check the GitHub connection, see whether CodeBuild has a GitHub source credential (never its token)
-  and read the shared agent token. Nothing else in the account trusts it, and no project's role can read or write
-  `installation/*`. Deploying through CDK's roles can change anything the stack holds, so **whoever can merge to
+  and read the shared agent token. For projects created in the web app it may also list and rewrite the requests under
+  `installation/pending-projects/` and write (never read) the projects' token secrets (`<prefix>/github-token/*`).
+  Nothing else in the account trusts it, and no project's role can read or write `installation/*` (the API may only
+  write requests under `installation/pending-projects/`, with conditional writes). Deploying through CDK's roles can change anything the stack holds, so **whoever can merge to
   trace's default branch can change this AWS installation.** Protect that branch as you would the AWS account.
 - **Turning it off.** Untick "Keep this installation up to date when trace's main branch changes" (Advanced → Build
   runners, under "Build trace's own repository on AWS too") and run the installer again. The role goes with that

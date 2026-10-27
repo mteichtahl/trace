@@ -16,10 +16,42 @@ const props = InfraPropsSchema.parse({
 })
 
 type Statement = { Sid?: string; Effect?: string; Action: string | string[]; Resource?: unknown; Condition?: Record<string, Record<string, unknown>> }
-const statementsOf = (t: Template, prefix: string): Statement[] => Object.entries(t.findResources('AWS::IAM::Policy')).filter(([id]) => id.startsWith(prefix))
+// a role's inline policy and, once CDK splits a long one, its overflow managed policies (RoleOverflowPolicy<n>)
+const statementsOf = (t: Template, prefix: string): Statement[] => Object.entries({ ...t.findResources('AWS::IAM::Policy'), ...t.findResources('AWS::IAM::ManagedPolicy') }).filter(([id]) => id.startsWith(prefix))
   .flatMap(([, p]) => (p as { Properties: { PolicyDocument: { Statement: Statement[] } } }).Properties.PolicyDocument.Statement)
 const policyText = (t: Template, prefix: string): string => JSON.stringify(statementsOf(t, prefix))
 const actionsOf = (s: Statement): string[] => (Array.isArray(s.Action) ? s.Action : [s.Action])
+
+/** The object paths a statement's resources name in the central bucket ("/projects/x/y/*"), from their Fn::Join tails. */
+const objectPaths = (st: Statement): string[] => {
+  const out: string[] = []
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) { v.forEach(walk); return }
+    if (v && typeof v === 'object') {
+      const j = (v as Record<string, unknown>)['Fn::Join'] as [string, unknown[]] | undefined
+      if (j) { const tail = j[1].at(-1); if (typeof tail === 'string' && tail.startsWith('/')) out.push(tail); return }
+      Object.values(v).forEach(walk)
+    }
+  }
+  walk(st.Resource)
+  return out
+}
+const glob = (pattern: string, path: string): boolean => new RegExp(`^${pattern.split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`).test(path)
+/**
+ * IAM, for one conditional put of the agents' facts (projects/<repo>/journey-agent/facts.db, with If-Match): some
+ * statement allows s3:PutObject on it, and no Deny applies to it (a Deny whose condition needs both conditional headers
+ * absent does not apply to a conditional put).
+ */
+function agentFactsWritable(s: Statement[], repo: string): boolean {
+  const key = `/projects/${repo}/journey-agent/facts.db`
+  const covers = (st: Statement): boolean => actionsOf(st).some((a) => a === 's3:PutObject' || a === 's3:*') && objectPaths(st).some((p) => glob(p, key))
+  const conditionalOnly = (st: Statement): boolean => JSON.stringify(st.Condition?.Null) === JSON.stringify({ 's3:if-match': 'true', 's3:if-none-match': 'true' })
+  const allowed = s.some((st) => st.Effect !== 'Deny' && covers(st))
+  const denied = s.some((st) => st.Effect === 'Deny' && covers(st) && !conditionalOnly(st))
+  // the same put without the headers is denied
+  const unconditionalDenied = s.some((st) => st.Effect === 'Deny' && covers(st))
+  return allowed && !denied && unconditionalDenied
+}
 
 let t: Template
 let syn: Synth
@@ -134,7 +166,24 @@ describe('the trace stack', () => {
       expect(deny).toHaveLength(1)
       expect(deny[0]).toMatchObject({ Effect: 'Deny', Action: ['s3:PutObject', 's3:DeleteObject', 's3:DeleteObjectVersion'] })
       expect(JSON.stringify(deny[0]?.Resource)).toContain(`/projects/${c.repo}/memory-state/*`)
-      expect(s.filter((x) => x.Effect === 'Deny')).toHaveLength(1)
+      // what people decided and said (projects/<slug>/journey, /chats): read through projects/<slug>/*, never written
+      const people = s.find((x) => x.Sid === 'PeopleRecordsReadOnly')
+      expect(people).toMatchObject({ Effect: 'Deny', Action: ['s3:PutObject', 's3:DeleteObject', 's3:DeleteObjectVersion'] })
+      expect(JSON.stringify(people?.Resource)).toContain(`/projects/${c.repo}/journey/*`)
+      expect(JSON.stringify(people?.Resource)).toContain(`/projects/${c.repo}/chats/*`)
+      // what the agents contribute to the journey (projects/<slug>/journey-agent): written through projects/<slug>/*,
+      // which the people-records deny does not cover (journey/* is not journey-agent/*), but only with a conditional
+      // put, and never deleted
+      expect(JSON.stringify(people?.Resource)).not.toContain('journey-agent')
+      expect(agentFactsWritable(s, c.repo)).toBe(true)
+      // (the check sees a deny that would cover it: a people-records deny on journey* instead of journey/*)
+      expect(agentFactsWritable([...s, { Effect: 'Deny', Action: ['s3:PutObject'], Resource: { 'Fn::Join': ['', ['arn', `/projects/${c.repo}/journey*`]] } }], c.repo)).toBe(false)
+      expect(s.find((x) => x.Sid === 'AgentFactsConditional')).toMatchObject({
+        Effect: 'Deny', Action: 's3:PutObject', Condition: { Null: { 's3:if-match': 'true', 's3:if-none-match': 'true' } },
+      })
+      expect(JSON.stringify(s.find((x) => x.Sid === 'AgentFactsConditional')?.Resource)).toContain(`/projects/${c.repo}/journey-agent/*`)
+      expect(s.find((x) => x.Sid === 'AgentFactsNoDelete')).toMatchObject({ Effect: 'Deny', Action: ['s3:DeleteObject', 's3:DeleteObjectVersion'] })
+      expect(s.filter((x) => x.Effect === 'Deny')).toHaveLength(4)
       // the installation's prompt overrides (prompts/*): read and listed, never written
       expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes('/prompts/*'))).toBe(true)
       expect(s.filter((x) => actionsOf(x).includes('s3:ListBucket')).flatMap((x) => x.Condition?.StringLike?.['s3:prefix'] as string[])).toContain('prompts/*')
@@ -218,6 +267,12 @@ describe('the trace stack', () => {
       // the workflows cannot change which memory records are inactive either
       expect(s.find((x) => x.Sid === 'MemoryStateReadOnly')).toMatchObject({ Effect: 'Deny', Action: ['s3:PutObject', 's3:DeleteObject', 's3:DeleteObjectVersion'] })
       expect(JSON.stringify(s.find((x) => x.Sid === 'MemoryStateReadOnly')?.Resource)).toContain(`/projects/${repo}/memory-state/*`)
+      // nor the journey record or the chats
+      expect(s.find((x) => x.Sid === 'PeopleRecordsReadOnly')).toMatchObject({ Effect: 'Deny' })
+      expect(JSON.stringify(s.find((x) => x.Sid === 'PeopleRecordsReadOnly')?.Resource)).toContain(`/projects/${repo}/journey/*`)
+      // but they write the agents' facts (the worker.runner = actions fallback), conditionally, as the worker does
+      expect(agentFactsWritable(s, repo)).toBe(true)
+      expect(s.find((x) => x.Sid === 'AgentFactsConditional')).toMatchObject({ Effect: 'Deny', Condition: { Null: { 's3:if-match': 'true', 's3:if-none-match': 'true' } } })
       expect(text).not.toContain('/access/*')
       // the workflows read the installation's prompt overrides, and cannot write them
       expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes('/prompts/*'))).toBe(true)
@@ -255,6 +310,8 @@ describe('the trace stack', () => {
     for (const r of Object.values(t.findResources('AWS::BedrockAgentCore::Runtime') as Record<string, { Properties: { Tags?: Record<string, string> } }>)) expect(r.Properties.Tags?.['trace:installation']).toBe('trace')
     const text = JSON.stringify(s)
     expect(text).toContain('cognito-idp:AdminAddUserToGroup')
+    // users.class and removal from a person's last project end their sessions
+    expect(text).toContain('cognito-idp:AdminUserGlobalSignOut')
     expect(text).toContain('/access/*')
     expect(text).toContain('/central/*')
     expect(text).not.toMatch(/"Resource":"\*","Action":"cognito/)
@@ -268,7 +325,11 @@ describe('the trace stack', () => {
     expect(msPuts.map((x) => Object.keys(x.Condition?.Null ?? {})[0]).sort()).toEqual(['s3:if-match', 's3:if-none-match'])
     expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes(`/${MS}`))).toBe(true)
     expect(s.filter((x) => actionsOf(x).includes('s3:DeleteObject')).map((x) => JSON.stringify(x.Resource)).join()).not.toContain('memory-state')
-    expect(s.filter((x) => actionsOf(x).includes('s3:ListBucket')).flatMap((x) => x.Condition?.StringLike?.['s3:prefix'] as string[]).sort()).toEqual(['central/*', MS, 'prompts/*'])
+    expect(s.filter((x) => actionsOf(x).includes('s3:ListBucket')).flatMap((x) => x.Condition?.StringLike?.['s3:prefix'] as string[]).sort()).toEqual(['central/*', 'installation/pending-projects/*', 'projects/*/chats/*', 'projects/*/journey-agent/*', 'projects/*/journey/*', MS, 'prompts/*'])
+    // the agents' facts (projects/*/journey-agent/*): read, never written or deleted by the API
+    const AF = 'projects/*/journey-agent/*'
+    expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes(`/${AF}`))).toBe(true)
+    expect(s.filter((x) => actionsOf(x).some((a) => a === 's3:PutObject' || a === 's3:DeleteObject')).map((x) => JSON.stringify(x.Resource)).join()).not.toContain('journey-agent')
     // the installation's prompt overrides (prompts.set, admins): read, and conditional puts only; no deletes
     const promptPuts = s.filter((x) => actionsOf(x).includes('s3:PutObject') && JSON.stringify(x.Resource).includes('/prompts/*'))
     expect(promptPuts.map((x) => Object.keys(x.Condition?.Null ?? {})[0]).sort()).toEqual(['s3:if-match', 's3:if-none-match'])
@@ -276,9 +337,12 @@ describe('the trace stack', () => {
     expect(read?.Resource).toEqual(expect.arrayContaining([HA, HB].map((h) => parentRef(syn, h, memoryIdOf(h), 'MemoryArn'))))
     expect(read?.Resource).toHaveLength(2)
     expect(text).not.toContain('CreateEvent')
-    // no GPU, no project data, no project tokens
-    for (const never of ['batch:', '/jobs/', '/projects/', `Project${HA}GithubToken`, `Project${HB}GithubToken`]) expect(text.replaceAll(MS, '')).not.toContain(never)
-    expect(text.replaceAll(MS, '')).not.toContain('projects/')
+    // no GPU, no project data, no project tokens (but each project's chats, kept outside its repository, and the projects
+    // waiting to be created: conditional writes, as above)
+    const rest = text.replaceAll('/projects/*/chats/*', '').replaceAll('projects/*/chats/*', '').replaceAll('/projects/*/journey/*', '').replaceAll('projects/*/journey/*', '')
+      .replaceAll('/projects/*/journey-agent/*', '').replaceAll('projects/*/journey-agent/*', '').replaceAll('pending-projects/*', '')
+    for (const never of ['batch:', '/jobs/', '/projects/', `Project${HA}GithubToken`, `Project${HB}GithubToken`]) expect(rest.replaceAll(MS, '')).not.toContain(never)
+    expect(rest.replaceAll(MS, '')).not.toContain('projects/')
   })
 
   it('has a Cognito pool without self sign-up, the admin/user/guest groups, and the first admin', () => {
@@ -286,6 +350,14 @@ describe('the trace stack', () => {
     for (const g of ['trace-admins', 'trace-users', 'trace-guests']) t.hasResourceProperties('AWS::Cognito::UserPoolGroup', { GroupName: g })
     t.hasResourceProperties('AWS::Cognito::UserPoolUser', { Username: 'marc@example.com' })
     t.hasResourceProperties('AWS::Cognito::UserPoolClient', { GenerateSecret: false, CallbackURLs: ['http://localhost:47821/callback', 'http://localhost:47822/callback'] })
+    // identity is the sub; an email change waits for verification, and the clients may write nothing else
+    t.hasResourceProperties('AWS::Cognito::UserPool', { UserAttributeUpdateSettings: { AttributesRequireVerificationBeforeUpdate: ['email'] } })
+    for (const c of Object.values(t.findResources('AWS::Cognito::UserPoolClient') as Record<string, { Properties: { WriteAttributes?: string[] } }>)) expect(c.Properties.WriteAttributes).toEqual(['email'])
+    // the invitation points at the app's /invite page, where the temporary password is entered (no secret in a link)
+    const pool = Object.values(t.findResources('AWS::Cognito::UserPool') as Record<string, { Properties: { AdminCreateUserConfig: { InviteMessageTemplate: { EmailMessage: unknown } } } }>)[0]!
+    const body = JSON.stringify(pool.Properties.AdminCreateUserConfig.InviteMessageTemplate.EmailMessage)
+    expect(body).toContain('/invite and enter this email address and the temporary password')
+    expect(body).toContain('{####}')
   })
 
   it('keeps the GitHub tokens out of the template: the API\'s shared secret, and one per project', () => {
@@ -336,12 +408,15 @@ describe('the trace stack', () => {
     syn.parent.resourceCountIs('AWS::SNS::Topic', 0)
     syn.parent.resourceCountIs('AWS::Events::Rule', 0)
     t.resourceCountIs('AWS::SNS::Topic', 2)
-    t.resourceCountIs('AWS::Events::Rule', 2)
+    // each project's two rules: its Batch jobs' state changes and its journey record's writes (journey.ask's wait)
+    t.resourceCountIs('AWS::Events::Rule', 4)
     t.resourceCountIs('AWS::SNS::TopicPolicy', 2)
     for (const [repo, h, oh] of [[A, HA, HB], [B, HB, HA]] as const) {
       const n = nestedOf(syn, repo)
       n.hasResourceProperties('AWS::SNS::Topic', { TopicName: `trace-${h}-batch-events`, Tags: [{ Key: 'trace:project', Value: repo }] })
-      const rules = Object.entries(n.findResources('AWS::Events::Rule')) as [string, { Properties: { Name: string; EventPattern: Record<string, unknown>; Targets: { Arn: unknown }[] } }][]
+      const all = Object.entries(n.findResources('AWS::Events::Rule')) as [string, { Properties: { Name: string; EventPattern: Record<string, unknown>; Targets: { Arn: unknown }[] } }][]
+      expect(all).toHaveLength(2)
+      const rules = all.filter(([id]) => id.startsWith(`Project${h}JobEventsRule`))
       expect(rules).toHaveLength(1)
       const [ruleId, rule] = rules[0] as (typeof rules)[number]
       expect(rule.Properties.Name).toBe(`trace-${h}-batch-events`)
@@ -364,9 +439,18 @@ describe('the trace stack', () => {
       expect(policies).toHaveLength(1)
       expect(policies[0]?.Properties.Topics).toEqual([{ Ref: expect.stringMatching(new RegExp(`^Project${h}JobEvents`)) }])
       const allow = policies[0]?.Properties.PolicyDocument.Statement.filter((x) => x.Effect === 'Allow') ?? []
-      expect(allow).toEqual([expect.objectContaining({
-        Principal: { Service: 'events.amazonaws.com' }, Action: 'sns:Publish', Condition: { ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': [ruleId, 'Arn'] } } },
-      })])
+      const [journeyId, journeyRule] = all.find(([id]) => id.startsWith(`Project${h}JourneyEventsRule`)) ?? []
+      expect(allow).toEqual([
+        expect.objectContaining({ Principal: { Service: 'events.amazonaws.com' }, Action: 'sns:Publish', Condition: { ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': [ruleId, 'Arn'] } } } }),
+        expect.objectContaining({ Principal: { Service: 'events.amazonaws.com' }, Action: 'sns:Publish', Condition: { ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': [journeyId, 'Arn'] } } } }),
+      ])
+      // its journey record's writes: the bucket's Object Created events of that one key, to its own topic
+      expect(journeyRule?.Properties.Name).toBe(`trace-${h}-journey-events`)
+      expect(journeyRule?.Properties.EventPattern).toEqual({
+        source: ['aws.s3'], 'detail-type': ['Object Created'],
+        detail: { bucket: { name: [expect.anything()] }, object: { key: [`projects/${repo}/journey/journey.db`] } },
+      })
+      expect(journeyRule?.Properties.Targets).toEqual([expect.objectContaining({ Arn: { Ref: expect.stringMatching(new RegExp(`^Project${h}JobEvents`)) } })])
       expect(ruleId).toMatch(new RegExp(`^Project${h}JobEventsRule`))
       // its worker is told its own topic
       n.hasResourceProperties('AWS::BedrockAgentCore::Runtime', { EnvironmentVariables: Match.objectLike({ TRACE_BATCH_EVENTS_TOPIC: { Ref: Match.stringLikeRegexp(`^Project${h}JobEvents`) } }) })
@@ -390,13 +474,16 @@ describe('the trace stack', () => {
   it('creates none of the GPU side when gpu.enabled is false', () => {
     const off = InfraPropsSchema.parse({ ...props, gpu: { enabled: false } })
     const t2 = synth(off, 'NoGpu').all
-    for (const r of ['AWS::Batch::ComputeEnvironment', 'AWS::Batch::JobQueue', 'AWS::Batch::JobDefinition', 'AWS::EC2::VPC', 'AWS::SNS::Topic', 'AWS::Events::Rule']) t2.resourceCountIs(r, 0)
+    for (const r of ['AWS::Batch::ComputeEnvironment', 'AWS::Batch::JobQueue', 'AWS::Batch::JobDefinition', 'AWS::EC2::VPC']) t2.resourceCountIs(r, 0)
     t2.resourceCountIs('AWS::CloudFormation::CustomResource', 1)
+    // each project keeps its events topic for its journey record's writes (journey.ask's wait), with no Batch rule
+    t2.resourceCountIs('AWS::SNS::Topic', 2)
+    const rules = Object.values(t2.findResources('AWS::Events::Rule')) as { Properties: { EventPattern: { source: string[] } } }[]
+    expect(rules.map((r) => r.Properties.EventPattern.source)).toEqual([['aws.s3'], ['aws.s3']])
     const json = JSON.stringify(t2.toJSON())
     expect(json).not.toContain('TRACE_GPU_QUEUE')
-    expect(json).not.toContain('TRACE_BATCH_EVENTS_TOPIC')
-    expect(json).not.toContain('sqs:')
     expect(json).not.toContain('batch:SubmitJob')
+    expect(json).not.toContain('aws.batch')
     const outputs = Object.keys(t2.toJSON().Outputs as Record<string, unknown>)
     expect(outputs).not.toContain('GpuJobQueue')
     expect(outputs).not.toContain(projectOutputs(A).jobDefinition)

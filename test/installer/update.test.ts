@@ -9,6 +9,7 @@ import type { ConnectionChoice } from '../../src/installer/aws.js'
 import { type InfraInput, InfraPropsSchema, ciRunnerOutput, projectHash, projectOutputs } from '../../src/infra/props.js'
 import { installationRecord } from '../../src/installer/record.js'
 import { type UpdateDeps, updateInstallation, updateProps } from '../../src/installer/update.js'
+import { MAX_ATTEMPTS, absorb, addPending, parsePending } from '../../src/installer/pending.js'
 
 const BOARD = 'mteichtahl/board'
 const TRACE = 'mteichtahl/trace'
@@ -34,15 +35,25 @@ interface World {
   log: string[]
   summary: string[]
   asked: { prefix: string; given?: string; deployed: Record<string, string> | null }[]
+  /** installation/pending-projects/* (key → text), and the project secrets written */
+  records: Map<string, string>
+  secrets: Map<string, string>
 }
 
-function world(o: { choice?: ConnectionChoice; cdk?: number; githubFails?: boolean; record?: string; env?: Record<string, string>; vars?: Record<string, string>; sourceCredential?: boolean } = {}): World {
-  const w: World = { deps: undefined as unknown as UpdateDeps, infra: [], cdkArgs: [], vars: new Map(Object.entries(o.vars ?? {})), log: [], summary: [], asked: [] }
+function world(o: { choice?: ConnectionChoice; cdk?: number; githubFails?: boolean; record?: string; env?: Record<string, string>; vars?: Record<string, string>; sourceCredential?: boolean; pending?: Record<string, unknown>[] } = {}): World {
+  const w: World = { deps: undefined as unknown as UpdateDeps, infra: [], cdkArgs: [], vars: new Map(Object.entries(o.vars ?? {})), log: [], summary: [], asked: [], records: new Map(), secrets: new Map() }
+  for (const r of o.pending ?? []) w.records.set(`installation/pending-projects/${String(r.repo).toLowerCase()}.json`, JSON.stringify(r))
   let deployed = false
   w.deps = {
     env: { TRACE_STACK: 'TraceStack', TRACE_AWS_REGION: 'us-east-1', ...(o.env ?? {}) },
     credentials: async () => ({ accessKeyId: 'ASIAEXAMPLE', secretAccessKey: 'secret-from-oidc-0123', sessionToken: 'session' }),
-    outputs: async () => (deployed && ((o.choice ?? ready).ready || w.infra.some((i) => (i.runners as Record<string, unknown>).auth === 'token')) ? WITH_RUNNERS : BASE_OUTPUTS),
+    outputs: async () => {
+      const base = deployed && ((o.choice ?? ready).ready || w.infra.some((i) => (i.runners as Record<string, unknown>).auth === 'token')) ? WITH_RUNNERS : BASE_OUTPUTS
+      const withNew = deployed && w.infra.some((i) => (i.repositories as string[]).some((r) => r.startsWith(`${NEW}@`)))
+      if (!withNew) return base
+      const p = projectOutputs(NEW)
+      return { ...base, TraceHome: 's3://trace-central/central', [p.roleArn]: 'arn:aws:iam::123456789012:role/fresh', [p.runtimeArn]: 'arn:runtime/fresh', [p.secretArn]: 'arn:secret/fresh', [p.memoryId]: 'mem-fresh', [p.runnerProject]: `trace-ci-${projectHash(NEW)}` }
+    },
     readRecord: async (_c, _r, bucket, key) => { expect([bucket, key]).toEqual(['trace-central', 'installation/props.json']); return o.record ?? RECORD },
     resolveConnection: async (_c, _r, q) => { w.asked.push(q); return o.choice ?? ready },
     hasSourceCredential: async () => o.sourceCredential ?? true,
@@ -59,11 +70,21 @@ function world(o: { choice?: ConnectionChoice; cdk?: number; githubFails?: boole
       set: async (_t, repo, name, value) => { if (o.githubFails) throw new Error('PATCH: 403 Resource not accessible by personal access token'); w.vars.set(`${repo}:${name}`, value) },
       delete: async (_t, repo, name) => { if (o.githubFails) throw new Error('DELETE: 403'); w.vars.delete(`${repo}:${name}`) },
     },
+    pending: {
+      list: async (_c, _r, bucket) => { expect(bucket).toBe('trace-central'); return [...w.records].map(([key, text]) => ({ key, text })) },
+      put: async (_c, _r, _b, key, text) => { w.records.set(key, text) },
+    },
+    putSecret: async (_c, _r, arn, value) => { w.secrets.set(arn, value) },
     log: (l) => w.log.push(l),
     summary: (l) => w.summary.push(l),
   }
+  w.deps.github.setSecret = async (_t, repo, name, value) => { w.vars.set(`${repo}:secret:${name}`, value) }
+  w.deps.github.login = async () => 'trace-bot'
+  w.deps.github.branch = async (_t, repo) => (repo === NEW ? 'trunk' : 'main')
   return w
 }
+
+const NEW = 'acme/fresh'
 
 describe('tracectl update-installation', () => {
   it('deploys the saved settings with the connection decided now, and sets each runner\'s variable that is missing or different', async () => {
@@ -176,5 +197,55 @@ describe('tracectl update-installation', () => {
     expect(await updateInstallation(w.deps)).toBe(0)
     expect(w.asked).toHaveLength(1)
     expect((w.infra[0]?.runners as Record<string, unknown>).connectionReady).toBe(false)
+  })
+
+  it('adds the projects created in the web app, gives each its secret and variables, and marks the records added', async () => {
+    const w = world({ pending: [{ repo: NEW, name: 'Fresh', requested_by: 'marc@example.com', requested_at: '2026-10-20T00:00:00Z' }] })
+    expect(await updateInstallation(w.deps)).toBe(0)
+    expect(w.infra[0]?.repositories).toEqual([`${BOARD}@main`, `${NEW}@trunk`])
+    const rec = JSON.parse(w.records.get(`installation/pending-projects/${NEW}.json`) ?? '{}') as Record<string, unknown>
+    expect(rec).toMatchObject({ repo: NEW, status: 'added', branch: 'trunk', requested_by: 'marc@example.com' })
+    expect(w.secrets.get('arn:secret/fresh')).toBe(TOKEN)
+    expect(w.vars.get(`${NEW}:TRACE_AWS_ROLE`)).toBe('arn:aws:iam::123456789012:role/fresh')
+    expect(w.vars.get(`${NEW}:TRACE_AGENT_RUNTIME_ARN`)).toBe('arn:runtime/fresh')
+    expect(w.vars.get(`${NEW}:TRACE_MEMORY_ID`)).toBe('mem-fresh')
+    expect(w.vars.get(`${NEW}:TRACE_AGENT_LOGIN`)).toBe('trace-bot')
+    expect(w.vars.get(`${NEW}:secret:TRACE_TOKEN`)).toBe(TOKEN)
+    expect(w.vars.get(`${NEW}:TRACE_CODEBUILD_PROJECT`)).toBe(`trace-ci-${projectHash(NEW)}`)
+    expect(w.summary.join('\n')).toMatch(/Adding acme\/fresh \(created in the web app\)/)
+    expect(w.log.join('\n')).not.toContain(TOKEN)
+
+    // the next update keeps it (the installer's saved settings do not have it yet), and does not set it up again
+    const next = world({ pending: [JSON.parse(w.records.get(`installation/pending-projects/${NEW}.json`) ?? '{}') as Record<string, unknown>] })
+    expect(await updateInstallation(next.deps)).toBe(0)
+    expect(next.infra[0]?.repositories).toEqual([`${BOARD}@main`, `${NEW}@trunk`])
+    expect(next.secrets.size).toBe(0)
+  })
+
+  it('a failed deploy counts an attempt; after the last one the update stops adding it, and says to run the installer', async () => {
+    const w = world({ cdk: 1, pending: [{ repo: NEW }] })
+    expect(await updateInstallation(w.deps)).toBe(1)
+    const once = JSON.parse(w.records.get(`installation/pending-projects/${NEW}.json`) ?? '{}') as { status: string; attempts: number }
+    expect(once).toMatchObject({ status: 'pending', attempts: 1 })
+    const again = world({ cdk: 1, pending: [once as unknown as Record<string, unknown>] })
+    await updateInstallation(again.deps)
+    expect(JSON.parse(again.records.get(`installation/pending-projects/${NEW}.json`) ?? '{}')).toMatchObject({ status: 'failed', attempts: MAX_ATTEMPTS })
+    const stop = world({ pending: [{ repo: NEW, attempts: MAX_ATTEMPTS }] })
+    expect(await updateInstallation(stop.deps)).toBe(0)
+    expect(stop.infra[0]?.repositories).toEqual([`${BOARD}@main`])
+    expect(stop.summary.join('\n')).toMatch(/acme\/fresh \(created in the web app\) is not added by this update: 2 updates with it failed; run the installer/)
+  })
+
+  it('pending projects: an existing project is only marked; a build-only repository, the flat layout, or too many are refused', () => {
+    const entry = (repo: string, extra: Record<string, unknown> = {}) => parsePending([{ key: `k/${repo}`, text: JSON.stringify({ repo, ...extra }) }])
+    expect(addPending(PROPS, entry(BOARD.toUpperCase()))).toMatchObject({ added: [], already: [{ repo: BOARD }] })
+    expect(addPending(PROPS, entry(TRACE)).skipped[0]?.why).toMatch(/build-only/)
+    expect(addPending({ ...PROPS, layout: 'flat' }, entry(NEW)).skipped[0]?.why).toMatch(/flat layout/)
+    const full = { ...PROPS, repositories: Array.from({ length: 60 }, (_, i) => `acme/p${i}@main`) }
+    expect(addPending(full, entry(NEW)).skipped[0]?.why).toMatch(/60/)
+    expect(parsePending([{ key: 'bad', text: '{' }])).toEqual([])
+    // the installer takes every record in as an existing, onboarded repository
+    const taken = absorb([{ repo: BOARD }], [...entry(NEW, { status: 'added', branch: 'trunk' }), ...entry(BOARD)], (repo, branch) => ({ repo: `${repo}@${branch}` }))
+    expect(taken).toEqual({ projects: [{ repo: BOARD }, { repo: `${NEW}@trunk` }], absorbed: [NEW] })
   })
 })

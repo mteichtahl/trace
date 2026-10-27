@@ -88,7 +88,7 @@ describe('the nested layout', () => {
         // 17, its CPU job definition, its knowledge base (index, service role and policy, knowledge base, data source),
         // its job events (topic, topic policy, EventBridge rule) and its CI runner (CodeBuild project, its role and its
         // log group: src/infra/runner.ts)
-        expect(nestedResources(j.Resources).own).toBe(29)
+        expect(nestedResources(j.Resources).own).toBe(30)
         // its 13 (Project<hash>RunnerProject among them), its knowledge base's two (Project<hash>KnowledgeBaseId,
         // …DataSourceId), and the id the parent reads
         expect(count(j.Outputs)).toBe(16)
@@ -98,10 +98,11 @@ describe('the nested layout', () => {
       // CDK moves what no longer fits the API role's inline policy (every memory's ARN) into a managed policy
       const overflow = Object.keys(s.parent.findResources('AWS::IAM::ManagedPolicy'))
       for (const id of overflow) expect(id).toMatch(/^ApiRuntimeRoleOverflowPolicy/)
-      return { n, resources: count(p.Resources) - overflow.length, outputs: count(p.Outputs), stacks: count(s.parent.findResources('AWS::CloudFormation::Stack')), overflow: overflow.length }
+      return { n, resources: count(p.Resources) - overflow.length, outputs: count(p.Outputs), stacks: count(s.parent.findResources('AWS::CloudFormation::Stack')) - 1, overflow: overflow.length }
     })
     const one = sizes[0]
     for (const z of sizes) {
+      // the projects', and the web app's (src/infra/web.ts WebStack) besides
       expect(z.stacks).toBe(z.n)
       // one resource per project (its AWS::CloudFormation::Stack), and the same outputs whatever the number of projects
       expect(z.resources - z.n).toBe((one?.resources ?? 0) - 1)
@@ -112,18 +113,20 @@ describe('the nested layout', () => {
     // the knowledge bases add one resource to the parent (the vector bucket) and, from 24 projects, one more overflow
     // policies of the API role (it names every knowledge base for Retrieve): three at 24 projects, four at 60
     // (each project's job-events topic, policy and rule are in its nested stack: none in the parent; the outputs
-    // include GithubConnectionArn and GithubConnectionCreated: src/infra/runner.ts GithubConnection)
-    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:87/21:0', '24:113/21:3', '60:150/21:4'])
+    // include GithubConnectionArn and GithubConnectionCreated: src/infra/runner.ts GithubConnection). The web app adds
+    // three resources (its nested stack, which holds the live events API too, the settings parameter and the web
+    // client) and four outputs (WebUrl, WebDistributionId, EventsApiEndpoint, WebClientId)
+    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:90/25:0', '24:117/25:4', '60:153/25:4'])
     // without a connection given, the stack creates one: one more resource of the parent's, and nothing more per project
     const created = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: {} }), 'Count1Created')
     expect(count(json(created.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0) + 1)
-    for (const t of created.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(29)
+    for (const t of created.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(30)
     // with the token as CodeBuild's credential (runners.auth token): no connection and none of its outputs, the same
     // runner in each project's stack
     const token = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: { auth: 'token' } }), 'Count1Token')
     expect(count(json(token.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0))
     expect(count(json(token.parent).Outputs)).toBe((sizes[0]?.outputs ?? 0) - 2)
-    for (const t of token.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(29)
+    for (const t of token.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(30)
     // none of a project's outputs is the parent's: each is its nested stack's, with the repository it is the project of
     const s = synth(cfg(2), 'Count2Outputs')
     const parentOutputs = Object.keys(json(s.parent).Outputs ?? {})
@@ -189,7 +192,7 @@ describe('the nested layout', () => {
         // flat: the project's construct, and its memory's delivery under Observability
         const flatOwn = Object.entries(fp.Resources).filter(([id]) => id.startsWith(`Project${h}`) || id.startsWith(`ObservabilityProject${h}`))
         const nt = json(nestedOf(nested, repo))
-        // the job events (topic, its policy, its rule) are the nested layout's only too (src/infra/project.ts)
+        // the job events (topic, its policy, its two rules) are the nested layout's only too (src/infra/project.ts)
         const jobEvents = ['AWS::SNS::Topic', 'AWS::SNS::TopicPolicy', 'AWS::Events::Rule']
         // and so are what the worker gets for them: TRACE_BATCH_EVENTS_TOPIC and the ProjectGpuWait* statements
         const withoutJobEvents = (r: Res): Res => {
@@ -200,7 +203,7 @@ describe('the nested layout', () => {
         }
         const nestedOwn = Object.entries(nt.Resources).filter(([, r]) => !jobEvents.includes(r.Type)).map(([id, r]) => [id, withoutJobEvents(r)] as const)
         expect(JSON.stringify(flatOwn)).not.toMatch(/ProjectGpuWait|TRACE_BATCH_EVENTS_TOPIC/)
-        expect(Object.values(nt.Resources).filter((r) => jobEvents.includes(r.Type))).toHaveLength(3)
+        expect(Object.values(nt.Resources).filter((r) => jobEvents.includes(r.Type))).toHaveLength(4)
         expect(flatOwn.filter(([, r]) => jobEvents.includes(r.Type))).toHaveLength(0)
         const params = (json(nested.parent).Resources[nestedResourceId(nested, h)]?.Properties?.Parameters ?? {}) as Record<string, unknown>
         expect(nestedOwn.length).toBe(flatOwn.length)
@@ -232,7 +235,8 @@ describe('the nested layout', () => {
     app.synth()
     const assets = JSON.parse(readFileSync(join(out, 'TraceStack.assets.json'), 'utf8')) as { files: Record<string, { source: { path: string; packaging: string }; destinations: Record<string, { bucketName: string; assumeRoleArn: string }> }> }
     const nested = Object.values(assets.files).filter((f) => f.source.path.endsWith('.nested.template.json'))
-    expect(nested).toHaveLength(2)
+    // the two projects' and the web app's (src/infra/web.ts WebStack)
+    expect(nested).toHaveLength(3)
     const source = Object.values(assets.files).find((f) => f.source.packaging === 'zip' || !f.source.path.endsWith('.json'))
     for (const f of nested) {
       const d = Object.values(f.destinations)[0]
@@ -257,7 +261,9 @@ describe('inactive memories in both layouts', () => {
       // the API role is the parent's in both layouts
       const api = policies(s.parent, 'ApiRuntimeRole')
       expect(api).toContain('/projects/*/memory-state/*')
-      expect(api.replaceAll('projects/*/memory-state/*', '')).not.toContain('projects/')
+      // and projects/*/chats/* (the web app's chats, conditional writes too; installation/pending-projects is not a
+      // project's): nothing else of projects/
+      expect(api.replaceAll('projects/*/memory-state/*', '').replaceAll('projects/*/chats/*', '').replaceAll('projects/*/journey/*', '').replaceAll('projects/*/journey-agent/*', '').replaceAll('installation/pending-projects/*', '')).not.toContain('projects/')
       for (const [repo, h] of [[A, HA], [B, HB]] as const) {
         const tpl = layout === 'nested' ? nestedOf(s, repo) : s.parent
         for (const role of ['RuntimeRole', 'ActionsRole']) {

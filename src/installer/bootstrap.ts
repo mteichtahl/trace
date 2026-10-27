@@ -79,7 +79,7 @@ import { type WaitNotice, describeWait } from '../core/wait.js'
 import { RELEASE_REGION, RELEASE_REPOSITORIES, RELEASE_STACK } from '../infra/release.js'
 import {
   CENTRAL_BUCKET_OUTPUT, CONNECTION_OUTPUT, GPU_IMAGE_BUILD_OUTPUT, INSTALLATION_RECORD_KEY, SELF_UPDATE_OUTPUT, ciRunnerOutput, type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, cpuEnabled, githubSecretName,
-  kbOutputs, memoryDeliveryName, memoryName, projectHash, projectOutputs, selfUpdateRoleName, stackName,
+  kbOutputs, memoryDeliveryName, memoryName, projectHash, projectOutputs, selfUpdateRoleName, stackName, WEB_OUTPUTS,
 } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import { type Answers, AnswersSchema, type InstallEvent, type Secrets, type Step } from './answers.js'
@@ -90,7 +90,8 @@ import {
 } from './aws.js'
 import { type Facts, resolveAnswers } from './derive.js'
 import { type TokenInfo, canConfigure, checkToken, createRepo, deleteVariable, repositoryDefaultBranch, setSecret, setVariable } from './github.js'
-import { type TourResult, startTour, tourPlan, withSample } from './sample.js'
+import { type TourResult, startSampleJourney, startTour, tourPlan, withSample } from './sample.js'
+import { type PendingEntry, type PendingIo, absorb, parsePending, s3PendingIo } from './pending.js'
 import { type ApiOnboardOptions, type ApiOnboardResult, onboardViaApi } from './onboard-api.js'
 import { CDK_BOOTSTRAP_MIN, mapLimit } from './preflight.js'
 import { checkNoSecrets, installationRecord } from './record.js'
@@ -261,6 +262,11 @@ export function infraInput(a: Answers, existing?: Existing | null, deploy?: Layo
       // trace's own repository builds its images on its runner when this installation publishes them
       ...(a.agents.publishImages ? { ciPrivileged: true } : {}),
     },
+    web: {
+      enabled: a.agents.webEnabled,
+      ...(a.agents.webDomain && a.agents.webCertificateArn ? { domainName: a.agents.webDomain, certificateArn: a.agents.webCertificateArn } : {}),
+      ...(a.agents.webEmailFrom ? { sesFrom: a.agents.webEmailFrom } : {}),
+    },
     observability: {
       enabled: a.agents.observability, transactionSearch: a.agents.transactionSearch, dashboard: a.agents.dashboard,
       ...(a.agents.samplingPercent !== null ? { samplingPercent: a.agents.samplingPercent } : {}),
@@ -359,6 +365,13 @@ export function observabilityPlan(o: InfraProps['observability'], prefix: string
   if (o.transactionSearch) parts.push(`CloudWatch Transaction Search turned on if it is off (account-wide, never turned off${o.samplingPercent !== undefined ? `; X-Ray indexing set to ${o.samplingPercent}%` : ''})`)
   if (o.dashboard) parts.push(`the ${prefix}-agents dashboard`)
   return `, ${parts.join(', ')}`
+}
+
+/** The web app part of the deploy step's description. */
+export function webPlan(props: InfraProps): string {
+  if (!props.web.enabled) return '; no web app (sign in with `tracectl login` only)'
+  const where = props.web.domainName ? `https://${props.web.domainName} (point its DNS at the distribution after the deploy)` : 'CloudFront\'s own address'
+  return `; the web app at ${where}: the static app on S3 behind CloudFront, its backend Lambda, live updates (AppSync Events), and sign-in with passkeys and passwords${props.web.sesFrom ? ` or a code by email (from ${props.web.sesFrom}, through SES)` : ''}`
 }
 
 /** The agent token a project's worker and workflows use: its own when one was given, else the shared one. */
@@ -507,7 +520,7 @@ export function plan(input: Answers, existing?: Existing | null, prev?: Answers 
   const onboarding = a.projects.filter((p) => p.onboard && !p.create).map((p) => p.repo)
   const creating = a.projects.filter((p) => p.create).map((p) => `${p.repo} (${p.create?.template})`)
   const changes = existing ? changesSince(prev ?? null, a) : []
-  const deployWhat = `central bucket, agent image (${props.images.source === 'prebuilt' ? 'trace\'s published image for this version when there is one, else built' : 'built'} by CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and job definitions' : ''}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image made without holding up the deploy; one queue for every project)${cpuPlan(props)}` : ', no GPU or CPU jobs'}${props.gateway.enabled ? ', the library gateway (AgentCore Gateway and a Lambda for the shared datasheets and parts tools)' : ''}${kbPlan(props)}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}${runnersPlan(a, props)}${generationsPlan(a)}${layoutPlan(a, existing)}. A project added again after being removed gets new names if its old memory, log delivery or token secret still holds them: the old memory is kept and orphaned, and the new one starts empty`
+  const deployWhat = `central bucket, agent image (${props.images.source === 'prebuilt' ? 'trace\'s published image for this version when there is one, else built' : 'built'} by CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and job definitions' : ''}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image made without holding up the deploy; one queue for every project)${cpuPlan(props)}` : ', no GPU or CPU jobs'}${props.gateway.enabled ? ', the library gateway (AgentCore Gateway and a Lambda for the shared datasheets and parts tools)' : ''}${kbPlan(props)}${webPlan(props)}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}${runnersPlan(a, props)}${generationsPlan(a)}${layoutPlan(a, existing)}. A project added again after being removed gets new names if its old memory, log delivery or token secret still holds them: the old memory is kept and orphaned, and the new one starts empty`
   const steps: [string, string, string][] = [
     ['check', 'Check the AWS account', `${a.aws.account || 'the credentials\' account'} in ${a.aws.region || 'the profile\'s region'}`],
     ['cdk', 'Bootstrap CDK', `aws://${a.aws.account}/${a.aws.region} (only if it isn't already, or is older than version 6)`],
@@ -522,6 +535,9 @@ export function plan(input: Answers, existing?: Existing | null, prev?: Answers 
       : 'no repositories yet: run the installer again to add them'],
     ['onboard', 'Onboard the repositories', [onboarding.length ? `open (or refresh) the onboarding PR in ${onboarding.join(', ')}` : '', creating.length ? `create ${creating.join(', ')}` : ''].filter(Boolean).join('; ') || 'none chosen'],
     ['people', 'Invite people and assign projects', `${a.adminEmail || 'the token\'s email'} (admin)${a.people.length ? `, ${a.people.map((p) => `${p.email} (${p.class})`).join(', ')}` : ''}`],
+    ...(props.web.enabled ? [['web', 'Web app: the address people sign in at', props.web.domainName
+      ? `https://${props.web.domainName}, served by CloudFront once its DNS points there; passkeys belong to this address`
+      : 'CloudFront\'s own address (https://<id>.cloudfront.net), shown when the deploy is done; passkeys belong to this address'] as [string, string, string]] : []),
     ['local', 'Save this installation locally', '~/.trace/client.db, so `tracectl login` works here'],
     ['release', 'Publish trace\'s images', a.agents.publishImages
       ? `set this account up to publish trace's images, all by API: CDK in ${RELEASE_REGION} if needed, the ${RELEASE_STACK} stack there (ECR Public ${Object.values(RELEASE_REPOSITORIES).join(' and ')}, and a release role for ${releaseRepository(a)}'s main and v* tags), the registry's default alias, ${releaseRepository(a)}'s TRACE_RELEASE_ROLE and TRACE_IMAGE_REGISTRY and its trace-images release (where every installation finds the images), then the first release run, on ${selfBuild(a) ? 'its own AWS build runner (Docker-in-Docker)' : 'GitHub\'s runners until it has an AWS one'}`
@@ -602,6 +618,10 @@ export interface Hooks {
   self?: SelfRepositoryDeps
   /** save the installation record (src/installer/record.ts) in the central bucket (default: S3 PutObject) */
   saveRecord?: (creds: AwsCredentialIdentity, region: string, bucket: string, key: string, text: string) => Promise<void>
+  /** the projects created in the web app that wait for a deploy (src/installer/pending.ts; default: S3) */
+  pending?: PendingIo
+  /** the sample's first journey state (src/installer/sample.ts startSampleJourney) */
+  sampleJourney?: (home: string, repo: string, by: string) => Promise<'started' | 'exists'>
 }
 
 /** Write the installation record to the central bucket. */
@@ -710,6 +730,23 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     if (self.note) log('check', self.note)
     // the whole plan, now that every answer is known
     const existing = check.existing ?? null
+    // projects created in the web app since the last deploy (src/installer/pending.ts): taken in as existing, already
+    // onboarded repositories, so this deploy keeps or adds them and the saved answers list them from now on
+    const pendingIo = hooks.pending ?? s3PendingIo
+    const pendingBucket = existing?.outputs[CENTRAL_BUCKET_OUTPUT] ?? ''
+    let pending: PendingEntry[] = []
+    if (pendingBucket) {
+      try { pending = parsePending(await pendingIo.list(creds, a.aws.region, pendingBucket), (l) => log('check', l)) } catch (e) { log('check', `the projects created in the web app could not be read (${redact(e instanceof Error ? e.message : String(e), s)}); run the installer again to add them`) }
+    }
+    if (pending.length) {
+      const taken = absorb(a.projects, pending, (repo, branch) => ({ repo, branch, onboard: false, applySettings: false, memoryEventExpiryDays: null, generation: 0, create: null }))
+      a = { ...a, projects: taken.projects }
+      if (taken.absorbed.length) {
+        const line = `Adding the project${taken.absorbed.length === 1 ? '' : 's'} created in the web app: ${taken.absorbed.join(', ')}.`
+        log('check', line)
+        summary.push(line)
+      }
+    }
     steps = plan(a, existing, opts.prev ?? null)
     byId = new Map(steps.map((st) => [st.id, st]))
     for (const st of steps) emit({ type: 'step', step: { ...st } })
@@ -1070,8 +1107,8 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
         log('people', `${p.email}: ${p.class}`)
         const want = new Set(p.projects.map((r) => r.toLowerCase()))
         for (const repo of p.projects) {
-          await assign(installer, { sub, email: p.email }, repo)
-          log('people', `${p.email}: assigned to ${repo} (${p.class === 'guest' ? 'read' : 'read and write'})`)
+          const a = await assign(installer, { sub, email: p.email }, repo, { class: p.class })
+          log('people', `${p.email}: assigned to ${repo} as a ${a.part} (${a.part === 'reviewer' ? 'read' : 'read and write'})`)
         }
         // The answers are the whole truth for a listed person: projects no longer listed are taken away.
         for (const g of await assignments(installer, { sub })) {
@@ -1088,14 +1125,30 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
         summary.push(`Still have project access though not listed here: ${stale.join(', ')} (remove with \`tracectl users unassign\`)`)
       }
       for (const p of a.projects) await register(p.repo, null)
+      // the sample's first journey state, as projects.create starts one, so the web app shows its stages and gates
+      const sample = sampleRepoOf(a)
+      if (sample) {
+        try {
+          const j = await (hooks.sampleJourney ?? startSampleJourney)(need('TraceHome'), sample, a.adminEmail || 'the installer')
+          log('people', `${sample}: ${j === 'started' ? 'its journey started (Mixed template, at Define)' : 'its journey is there already'}`)
+        } catch (e) {
+          const m = redact(e instanceof Error ? e.message : String(e), s)
+          log('people', `${sample}: its journey could not be started (${m})`)
+          summary.push(`The sample's journey could not be started (${m}): run the installer again, or start it from the web app.`)
+        }
+      }
     } finally {
       for (const k of ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION', 'AWS_DEFAULT_REGION', 'TRACE_HOME']) {
         if (saved[k] === undefined) delete process.env[k]
         else process.env[k] = saved[k]
       }
     }
-    if (!existing) summary.push(`${a.adminEmail} receives a temporary password from Cognito; sign in with \`tracectl login\`.`)
+    const webUrl = out[WEB_OUTPUTS.url] ?? ''
+    if (!existing) summary.push(`${a.adminEmail} receives a temporary password from Cognito; sign in ${webUrl ? `at ${webUrl} or ` : ''}with \`tracectl login\`.`)
     set('people', 'done')
+
+    // the web app's address (its outputs; nothing to do but show it)
+    if (byId.has('web')) set('web', webUrl ? 'done' : 'skipped', webUrl || `the stack has no output ${WEB_OUTPUTS.url} yet: run the installer again once the deploy has it`)
 
     // 12 — this machine
     current = 'local'
@@ -1107,6 +1160,10 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       githubSecretArn: need('GithubSecretArn'), memoryIds, callbackPorts: props.callbackPorts,
     })
     remember(a, true)
+    // the web app's projects are the installer's own now (in the saved answers and the record): their requests are done
+    for (const p of pending) {
+      try { await pendingIo.remove(creds, a.aws.region, pendingBucket, p.key) } catch (e) { log('local', `${p.key} could not be removed (${redact(e instanceof Error ? e.message : String(e), s)}); the next update marks it added`) }
+    }
     saveAnswers({ traceVersion: (await import('./lifecycle.js')).traceVersion(), ...(runnerCredential ? { runnerCredential } : {}) })
     set('local', 'done')
     // 13 — publishing trace's images from this account (its owner's install, or when asked); never fatal: trace is installed
@@ -1126,7 +1183,8 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       }
     }
 
-    summary.unshift(`trace is installed in ${a.aws.account} (${a.aws.region}) as ${stack}.`)
+    summary.unshift(`trace is installed in ${a.aws.account} (${a.aws.region}) as ${stack}.${webUrl ? ` Open trace: ${webUrl}` : ''}`)
+    if (webUrl && props.web.domainName) summary.push(`Point ${props.web.domainName}'s DNS (a CNAME or alias) at the CloudFront distribution ${out[WEB_OUTPUTS.distributionId] ?? ''}.`)
     if (!a.projects.length) summary.push('No repositories yet: run `tracectl install` again and pick some (or create one).')
     else summary.push('Write each project\'s rules in .trace/rules.md (they start empty).')
     if (!names_.length) summary.push('Optional: add a Nexar, Mouser or Digi-Key key for live stock and prices: `tracectl integrations set nexar` (see `tracectl integrations list`).')
@@ -1158,11 +1216,11 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     current = 'gpu'
     if (!props.gpu.enabled) {
       set('gpu', 'skipped')
-      await tour(false)
-      emit({ type: 'done', ok: true, summary })
+    await tour(false)
+      emit({ type: 'done', ok: true, ...(webUrl ? { url: webUrl } : {}), summary })
       return true
     }
-    emit({ type: 'ready', summary: [...summary, 'The GPU image is still being made: GPU and CPU jobs wait for it, nothing else does.'] })
+    emit({ type: 'ready', ...(webUrl ? { url: webUrl } : {}), summary: [...summary, 'The GPU image is still being made: GPU and CPU jobs wait for it, nothing else does.'] })
     set('gpu', 'running')
     const imageTag = (out.GpuImageUri ?? '').split(':').at(-1) ?? ''
     const wait = hooks.gpuImage ?? ((o) => ensureGpuImage(codebuildClient(creds, a.aws.region), o))
@@ -1176,7 +1234,7 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       summary.push(`GPU and CPU jobs cannot run until the GPU image is built: ${r.detail}. Everything else is installed; fix the cause and run the installer again to build it.`)
     }
     await tour(r.ok)
-    emit({ type: 'done', ok: true, summary })
+    emit({ type: 'done', ok: true, ...(webUrl ? { url: webUrl } : {}), summary })
     return true
   } catch (e) {
     const m = redact(e instanceof Error ? e.message : String(e), s)

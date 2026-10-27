@@ -5,7 +5,8 @@
  *
  *   action        needs                 does
  *   whoami        signed in             who you are: sub, email, groups, class
- *   projects      signed in             your projects and your role on each
+ *   projects      signed in             your projects, with your role (read, write) and part (contributor, reviewer)
+ *                                       on each: write needs the contributor part (admins are contributors everywhere)
  *   status        read                  open PRs, open agent-fix issues, recent trace workflow runs, the last deploy
  *   settings.get  read                  the project's settings (.trace/project.db on the default branch), resolved
  *   runs          read                  the project's run record (newest first; kind, limit)
@@ -36,7 +37,8 @@
  *   kb.sync       write                 sync the project's default branch into its knowledge base: the tool kb.sync on
  *                                       the project's own worker runtime (its role writes projects/<slug>/kb/ and starts
  *                                       the ingestion job; this runtime's cannot)
- *   job           read on its project   a job's state and log (the project is named by the job id, and checked
+ *   job           read on its project   a job's state and log, its `controls` (actions-jobs.ts: the ops job.control can do
+ *                                       for it now) (the project is named by the job id, and checked
  *                                       before the worker is asked), with `version` (its worker's change counter)
  *                                       and `waits` (every wait open on its worker, each with `text`: "… next check
  *                                       in 4 minutes"). afterVersion + waitS (≤ 240 s): the worker holds the answer
@@ -48,10 +50,13 @@
  *                                       waitS (≤ 240 s): held on the worker until a wait opens, is checked, changes
  *                                       or ends: how a screen shows a tool call's lines while it runs
  *   tools.check_now read                wake one of those timer waits for a check now (waitId) → { ok }
- *   users.list    admin                 every person: email, status, class, assigned projects
+ *   users.list    admin                 every person: email, name (Cognito's), status, class, last seen, assigned projects
+ *                                       and their part on each
  *   users.invite  admin                 create the person in Cognito (email, class) → sub
  *   users.class   admin                 change a person's class (their Cognito group: exactly one of the three)
- *   assign        admin                 assign a person (email or sub) to a project
+ *   assign        admin                 assign a person (email or sub) to a project, with their part: contributor or
+ *                                       reviewer (default: the part they have there, else their class's; a guest can
+ *                                       only be a reviewer)
  *   unassign      admin                 remove them from it
  *   assignments   admin                 every assignment, optionally for one project
  *   integrations.list    admin          the optional integrations (Nexar, Mouser, Digi-Key): configured or not, when
@@ -75,21 +80,35 @@
  *   prompts.history  admin or user        every change to one id in one layer (installation: a user or an admin;
  *                    (installation),      project: write access). Guests can list, get and preview only
  *                    write (project)
+ *
+ * The web app's actions are in their own files, each spread into ACTIONS (src/api/action-kit.ts holds what they share):
+ *
+ *   actions-projects.ts  project.members, projects.create
+ *   actions-journey.ts   journey.get, journey.criterion.open, gate.sign, gate.return, question.answer, stuck.dismiss, waiver.add, inbox
+ *   actions-chats.ts     chats.list, chats.get, chats.append, chats.reply, chats.rename, chats.recall
+ *   actions-me.ts        me.get, me.set
+ *   actions-graph.ts     graph.neighbourhood
+ *   actions-files.ts     files.list, files.url
+ *   actions-jobs.ts      job.control
+ *   actions-people.ts    users.history
+ *   actions-record.ts    requirements.trace, design.get, build.get, order.record, cost.get
+ *   actions-skills.ts    skill.get, skill.draft, skill.drafts, skill.submit
+ *   actions-me.ts        also policy.get, policy.set
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import {
-  AccessDenied, CLASSES, GROUPS, type PersonClass, type Principal, RepoSlug, type Role,
-  assign, assignments, classOf, isAdmin, projectsFor, require_, setClass, unassign,
+  AccessDenied, CLASSES, GROUPS, PARTS, PartRefused, type PersonClass, type Principal, RepoSlug, type Role,
+  assign, assignments, classOf, isAdmin, lastSeen, projectsFor, require_, setClass, unassign,
 } from '../core/access.js'
 import { readSettings, resolve, setValue, unset } from '../core/config.js'
 import { IntegrationNameSchema, type IntegrationStore, checkIntegration, valuesFor } from '../core/integrations.js'
 import { type AnyTool, Registry, ToolError } from '../core/registry.js'
-import { type AgentMemory, AgentName, type MemoryRecord, type ProjectMemories, STRATEGIES, actorIn, personHash, projectPrefix, within } from '../agents/runtime/memory.js'
+import { AgentName, type MemoryRecord, STRATEGIES, actorIn, projectPrefix, within } from '../agents/runtime/memory.js'
 import { type InactiveMark, ReasonSchema, RecordIdSchema, memoryState } from '../agents/runtime/memory-state.js'
-import { TASK_AGENTS, type ToolJob } from '../agents/runtime/schemas.js'
+import { TASK_AGENTS } from '../agents/runtime/schemas.js'
 import { API_HIDDEN_TOOLS, ToolRefused, apiTool, checkPaths } from '../agents/runtime/tool.js'
 import { Work } from '../core/store.js'
 import { personHash as telemetryHash } from '../core/telemetry.js'
@@ -99,12 +118,25 @@ import { InstallationPrompts, PromptError, type PromptWrite, ReasonSchema as Pro
 import { MAX_PROMPT_CHARS, TemplateError } from '../prompts/template.js'
 import { PreviewJob, PreviewTarget, getView, listView, preview } from '../prompts/views.js'
 import { parseProjectKbs } from '../tools/kb/env.js'
-import { FilterSchema, type RetrieveClient, searchKb } from '../tools/kb/search.js'
-import type { CognitoAdmin, CognitoUser } from './aws.js'
-import type { GitHubApi } from './github.js'
+import { FilterSchema, searchKb } from '../tools/kb/search.js'
+import {
+  type Action, ActionError, type Context, type JobView, type JobsApi, MAX_ARTIFACT, type Need, NO_ACCESS, PROJECT_DB_PATH, Repo, def, hashOf, hashesOf, memoryInclude, projectMemory, slugify, tempDb, withProjectDb,
+} from './action-kit.js'
+import { CHAT_ACTIONS } from './actions-chats.js'
+import { FILE_ACTIONS } from './actions-files.js'
+import { GRAPH_ACTIONS } from './actions-graph.js'
+import { JOURNEY_ACTIONS } from './actions-journey.js'
+import { JOB_ACTIONS, withControls } from './actions-jobs.js'
+import { ME_ACTIONS } from './actions-me.js'
+import { PEOPLE_ACTIONS } from './actions-people.js'
+import { RECORD_ACTIONS } from './actions-record.js'
+import { SKILL_ACTIONS } from './actions-skills.js'
+import { PROJECT_ACTIONS } from './actions-projects.js'
+import type { CognitoUser } from './aws.js'
 
-export const PROJECT_DB_PATH = '.trace/project.db'
-const MAX_ARTIFACT = 8 * 1024 * 1024
+export {
+  ActionError, NO_ACCESS, PROJECT_DB_PATH, type ActionDeps, type Context, type JobView, type JobsApi, type OnboardRequest, type WaitView,
+} from './action-kit.js'
 
 /** Tools that change state outside their scratch clone (the shared datasheet library and parts links): write. */
 export const WRITE_TOOLS: ReadonlySet<string> = new Set(['datasheets.add', 'datasheets.acknowledge', 'parts.fetch_datasheet', 'kb.sync'])
@@ -114,64 +146,6 @@ export const WRITE_TOOLS: ReadonlySet<string> = new Set(['datasheets.add', 'data
  * The policy (these, hardware tools, paths inside the clone) is src/agents/runtime/tool.ts's, applied on both sides. */
 export { API_HIDDEN_TOOLS }
 
-export class ActionError extends Error {
-  override name = 'ActionError'
-}
-
-/** "no access": the one answer for a project that is not yours, whether or not it exists. */
-export const NO_ACCESS = 'no access'
-
-export interface JobsApi {
-  /** The project a job id belongs to (read from the id itself), or null for an id that is not one of ours. */
-  repositoryOf(jobId: string): string | null
-  startJob(payload: { kind: 'task'; repository: string; request: string; requestedBy: string; agent?: (typeof TASK_AGENTS)[number] }): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined }>
-  jobStatus(jobId?: string): Promise<readonly JobView[]>
-  /**
-   * One job as jobStatus, with its worker's change counter and open waits; with afterVersion and waitS the worker
-   * holds the answer until the job changes after that version (or waitS passes). Absent: `job` answers jobStatus only.
-   */
-  watchJob?(jobId: string, o: { afterVersion?: number | undefined; waitS?: number | undefined; signal?: AbortSignal | undefined }): Promise<{ jobs: readonly JobView[]; version: number | null; waits: readonly WaitView[] }>
-  /** Wake one timer wait on the job's worker (invocation kind `check-now`). Absent: there is nothing to wake. */
-  checkNow?(jobId: string, waitId: string): Promise<boolean>
-  /**
-   * What the project's tool calls are waiting on (the waits open outside any job in its tool session), with that
-   * worker's change counter; with afterVersion and waitS the worker holds the answer until one changes. Absent: none.
-   */
-  watchTools?(repository: string, o: { afterVersion?: number | undefined; waitS?: number | undefined; signal?: AbortSignal | undefined }): Promise<{ version: number | null; waits: readonly WaitView[] }>
-  /** Wake one of those timer waits (invocation kind `check-now` in the tool session). Absent: there is nothing to wake. */
-  checkToolWait?(repository: string, waitId: string): Promise<boolean>
-  /** One tool call on the project's own worker runtime (invocation kind `tool`): its result, or throws ActionError.
-   * Absent: this installation runs no tools for the API. */
-  runTool?(payload: Omit<ToolJob, 'trace'>): Promise<unknown>
-}
-
-export interface JobView { id: string; kind: string; repository?: string | undefined; state: string; [k: string]: unknown }
-
-/** One wait open on a worker (src/core/wait.ts WaitNotice), with the line a person reads. */
-export interface WaitView { id: string; what: string; source: string; text: string; nextCheckAt?: string | null | undefined; [k: string]: unknown }
-
-export interface ActionDeps {
-  github: () => Promise<GitHubApi>
-  cognito: () => CognitoAdmin
-  jobs: () => Promise<JobsApi>
-  /** The tool registry: what tools.list shows and what `tool` may ask for (the call itself runs on the worker). */
-  tools: () => Registry
-  /** Where temporary files go. */
-  scratch: string
-  /** Each project's memory (TRACE_PROJECT_MEMORIES); absent or null: memory.* answer that there is none. */
-  memory?: () => ProjectMemories | null
-  /** The installation's prompt overrides (src/prompts/store.ts); absent: the store at promptsHome(). */
-  prompts?: () => InstallationPrompts
-  /** Each project's knowledge base (TRACE_PROJECT_KBS: slug → id), and the Retrieve client; absent or empty: kb.*
-   * answer that there is none. */
-  kbs?: () => ReadonlyMap<string, string>
-  retrieve?: () => Promise<RetrieveClient>
-  /** The installation's optional integrations (TRACE_INTEGRATIONS_PREFIX); absent: integrations.* answer that there are none. */
-  integrations?: () => Promise<IntegrationStore>
-  /** Checks a key with its service (tests replace it). */
-  checkIntegration?: typeof checkIntegration
-}
-
 async function integrationStore(ctx: Context): Promise<IntegrationStore> {
   if (!ctx.deps.integrations) throw new ActionError('this installation does not manage integrations through the API (TRACE_INTEGRATIONS_PREFIX is not set)')
   return ctx.deps.integrations()
@@ -180,27 +154,6 @@ async function integrationStore(ctx: Context): Promise<IntegrationStore> {
 /** The installation's knowledge bases from the API runtime's environment (TRACE_PROJECT_KBS). */
 export const projectKbsFromEnv = (env: Record<string, string | undefined> = process.env): ReadonlyMap<string, string> => parseProjectKbs(env.TRACE_PROJECT_KBS)
 
-export interface Context {
-  principal: Principal
-  deps: ActionDeps
-  /** Aborts when the caller goes away: a held call (job, tools.waits) stops holding the worker too. */
-  signal?: AbortSignal | undefined
-}
-
-type Need = 'signed-in' | 'read' | 'write' | 'admin' | 'tool' | 'job' | 'prompts'
-
-interface Action<S extends z.ZodType> {
-  need: Need
-  args: S
-  run: (a: z.output<S>, ctx: Context) => Promise<unknown>
-  /** need 'prompts': the check, which depends on the arguments (a scope, an optional repo). Runs before `run`. */
-  authorize?: (a: z.output<S>, p: Principal) => Promise<void>
-}
-
-const def = <S extends z.ZodType>(need: Need, args: S, run: (a: z.output<S>, ctx: Context) => Promise<unknown>, authorize?: (a: z.output<S>, p: Principal) => Promise<void>): Action<S> =>
-  ({ need, args, run, ...(authorize ? { authorize } : {}) })
-
-const Repo = z.object({ repo: RepoSlug })
 const Who = z.string().min(1).max(320)
 const Cls = z.enum(CLASSES)
 
@@ -224,31 +177,6 @@ function ownJob(j: JobView | undefined, id: string, jobs: JobsApi): JobView {
   return j
 }
 
-function tempDb(scratch: string, bytes: Uint8Array | null): { root: string; db: string; cleanup(): void } {
-  mkdirSync(scratch, { recursive: true })
-  const root = mkdtempSync(join(scratch, 'trace-api-'))
-  mkdirSync(join(root, '.trace'))
-  // A .git marker makes this folder the project root for config.setValue/unset (store.findRoot), even when the
-  // repository has no database yet — never a database somewhere above it.
-  mkdirSync(join(root, '.git'))
-  const db = join(root, PROJECT_DB_PATH)
-  if (bytes) writeFileSync(db, bytes)
-  return { root, db, cleanup: () => rmSync(root, { recursive: true, force: true }) }
-}
-
-async function withProjectDb<T>(ctx: Context, repo: string, fn: (db: string, root: string) => T | Promise<T>): Promise<T> {
-  const gh = await ctx.deps.github()
-  const { branch } = await gh.defaultBranch(repo)
-  const t = tempDb(ctx.deps.scratch, await gh.rawFile(repo, PROJECT_DB_PATH, branch))
-  try {
-    return await fn(t.db, t.root)
-  } finally {
-    t.cleanup()
-  }
-}
-
-const slugify = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'change'
-
 /** Resolve a person (email or sub) in Cognito; an unknown one is reported as such (admins only reach this). */
 async function person(ctx: Context, who: string): Promise<CognitoUser> {
   const u = await ctx.deps.cognito().find(who)
@@ -256,21 +184,22 @@ async function person(ctx: Context, who: string): Promise<CognitoUser> {
   return u
 }
 
-/**
- * Which of a project's memory a person may see (they passed the read check on `repo`): every agent's, and the
- * person-scoped preferences only when they are their own. An admin sees everyone's.
- */
-function memoryInclude(ctx: Context, repo: string): (ns: string) => boolean {
-  if (isAdmin(ctx.principal)) return () => true
-  const own = new Set([ctx.principal.email, ctx.principal.sub].filter((x): x is string => Boolean(x)).map((w) => `person/${personHash(w)}`))
-  return (ns) => { const a = actorIn(ns, repo); return a !== null && (!a.startsWith('person/') || own.has(a)) }
+/** End every session of a person (AdminUserGlobalSignOut). A failure is reported in the answer, never thrown: the
+ * change itself has been made. */
+async function signOutQuietly(ctx: Context, u: CognitoUser): Promise<boolean> {
+  try {
+    await ctx.deps.cognito().signOut(u.username)
+    return true
+  } catch {
+    return false
+  }
 }
 
-/** The hash a person's marks are recorded under (the agents' memory hash: never their email). */
-const byHash = (p: Principal): string => personHash(p.email ?? p.sub)
+/** The hash a person's marks are recorded under (the agents' memory hash of their sub: never their email). */
+const byHash = (p: Principal): string => hashOf(p)
 
 const markView = (m: InactiveMark | undefined, p: Principal): Record<string, unknown> => (m
-  ? { active: false, inactive: { reason: m.reason, by: m.by, by_you: m.by === byHash(p), at: new Date(m.at * 1000).toISOString() } }
+  ? { active: false, inactive: { reason: m.reason, by: m.by, by_you: hashesOf(p).includes(m.by), at: new Date(m.at * 1000).toISOString() } }
   : { active: true })
 
 const recordView = (r: MemoryRecord, repo: string, p: Principal): Record<string, unknown> => ({
@@ -278,8 +207,8 @@ const recordView = (r: MemoryRecord, repo: string, p: Principal): Record<string,
   ...markView(r.inactive, p),
 })
 
-/** The person's own person actors on `repo` (email and sub): `person/<hash>`. */
-const ownActors = (p: Principal): Set<string> => new Set([p.email, p.sub].filter((x): x is string => Boolean(x)).map((w) => `person/${personHash(w)}`))
+/** The person's own person actors on `repo` (the sub's hash, and the email's for records made before): `person/<hash>`. */
+const ownActors = (p: Principal): Set<string> => new Set(hashesOf(p).map((h) => `person/${h}`))
 
 /**
  * May `ctx.principal` mark (or unmark) the record filed under `ns` of `repo`? Write access (a user, an admin), or a
@@ -302,18 +231,6 @@ const MarkArgs = Repo.extend({ recordId: RecordIdSchema })
 const MemoryArgs = Repo.extend({ agent: AgentName.optional() })
 
 /**
- * The project's own memory, after the access check: null when the installation has no memory at all; a project with
- * none here (not one of this installation's) gets the same "no access" as one the person is not assigned to.
- */
-function projectMemory(ctx: Context, repo: string): AgentMemory | null {
-  const all = ctx.deps.memory?.() ?? null
-  if (!all) return null
-  const mem = all.forProject(repo)
-  if (!mem) throw new AccessDenied(NO_ACCESS)
-  return mem
-}
-
-/**
  * The project's knowledge base id, after the access check: null when the installation has none at all; a project with
  * none here (not one of this installation's, or one with its knowledge base off) gets the same "no access" as one
  * the person is not assigned to.
@@ -324,6 +241,12 @@ function projectKb(ctx: Context, repo: string): string | null {
   const id = all.get(repo.toLowerCase())
   if (!id) throw new AccessDenied(NO_ACCESS)
   return id
+}
+
+/** A person's class as Cognito has it now (their groups decide, not what was last recorded). */
+export async function classNow(ctx: Context, u: CognitoUser): Promise<PersonClass | null> {
+  const groups = await ctx.deps.cognito().groupsFor(u.username)
+  return CLASSES.find((c) => groups.includes(GROUPS[c])) ?? null
 }
 
 const toolNeed = (t: AnyTool): Role => (WRITE_TOOLS.has(t.name) ? 'write' : 'read')
@@ -368,7 +291,7 @@ async function promptLayers(ctx: Context, repo: string | undefined): Promise<Lay
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e)).slice(0, 300)
 
 /** The hash a person's prompt changes are recorded under (never their email). */
-const promptBy = (p: Principal): string => telemetryHash(p.email ?? p.sub)
+const promptBy = (p: Principal): string => telemetryHash(p.sub)
 
 /** A checked write, as an ActionError when the text, the id or the reason is refused (it names the bad variable). */
 function checked<T>(fn: () => T): T {
@@ -506,7 +429,7 @@ export const ACTIONS = {
 
   task: def('write', Repo.extend({ request: z.string().min(1).max(20_000), agent: z.enum(TASK_AGENTS).optional() }), async (a, ctx) =>
     (await ctx.deps.jobs()).startJob({
-      kind: 'task', repository: a.repo, request: a.request, requestedBy: ctx.principal.email ?? ctx.principal.sub, ...(a.agent ? { agent: a.agent } : {}),
+      kind: 'task', repository: a.repo, request: a.request, requestedBy: ctx.principal.email ?? ctx.principal.sub, requestedBySub: ctx.principal.sub, ...(a.agent ? { agent: a.agent } : {}),
     })),
 
   'memory.list': def('read', MemoryArgs.extend({ limit: z.number().int().min(1).max(200).default(50), includeInactive: z.boolean().default(false) }), async (a, ctx) => {
@@ -573,9 +496,9 @@ export const ACTIONS = {
 
   job: def('job', JobId.extend({ afterVersion: z.number().int().min(0).optional(), waitS: z.number().min(0).max(240).optional() }), async (a, ctx) => {
     const jobs = await jobAccess(a.id, ctx)
-    if (!jobs.watchJob) return ownJob((await jobs.jobStatus(a.id))[0], a.id, jobs)
+    if (!jobs.watchJob) return withControls(ownJob((await jobs.jobStatus(a.id))[0], a.id, jobs), jobs)
     const w = await jobs.watchJob(a.id, { afterVersion: a.afterVersion, waitS: a.waitS, signal: ctx.signal })
-    return { ...ownJob(w.jobs[0], a.id, jobs), version: w.version, waits: w.waits }
+    return { ...withControls(ownJob(w.jobs[0], a.id, jobs), jobs), version: w.version, waits: w.waits }
   }),
 
   'job.check_now': def('job', JobId.extend({ waitId: z.string().min(1).max(64) }), async (a, ctx) => {
@@ -599,11 +522,19 @@ export const ACTIONS = {
     const [users, ...members] = await Promise.all([cog.listUsers(), ...CLASSES.map((c) => cog.usersInGroup(GROUPS[c]))])
     const classes = new Map<string, PersonClass>()
     CLASSES.forEach((c, i) => { for (const u of members[i] ?? []) if (!classes.has(u.sub)) classes.set(u.sub, c) })
-    const all = await assignments(ctx.principal)
-    return users.map((u) => ({
-      email: u.email, sub: u.sub, status: u.status, enabled: u.enabled, class: classes.get(u.sub) ?? null,
-      projects: all.filter((x) => x.sub === u.sub).map((x) => x.repo),
-    })).sort((x, y) => (x.email ?? x.sub).localeCompare(y.email ?? y.sub))
+    const [all, seen] = await Promise.all([assignments(ctx.principal), lastSeen(ctx.principal)])
+    return users.map((u) => {
+      const cls = classes.get(u.sub) ?? null
+      const mine = all.filter((x) => x.sub === u.sub)
+      return {
+        email: u.email, sub: u.sub, status: u.status, enabled: u.enabled, class: cls,
+        // when they last used trace (the access store), and their name when Cognito has one
+        last_seen: seen.get(u.sub) ?? null, ...(u.name ? { name: u.name } : {}),
+        projects: mine.map((x) => x.repo),
+        // each project with the person's part there; a guest is a reviewer whatever was stored (their class caps it)
+        parts: mine.map((x) => ({ repo: x.repo, part: cls === 'guest' ? 'reviewer' as const : x.part })),
+      }
+    }).sort((x, y) => (x.email ?? x.sub).localeCompare(y.email ?? y.sub))
   }),
 
   'users.invite': def('admin', z.object({ email: z.string().email(), class: Cls.default('user') }), async (a, ctx) => {
@@ -612,7 +543,7 @@ export const ACTIONS = {
     const u = await cog.createUser(a.email)
     await cog.addToGroup(u.username, GROUPS[a.class])
     await setClass(ctx.principal, { sub: u.sub, email: a.email }, a.class)
-    return { sub: u.sub, email: a.email, class: a.class, note: 'Cognito has emailed them a temporary password; they sign in with `tracectl login`.' }
+    return { sub: u.sub, email: a.email, class: a.class, note: 'Cognito has emailed them a temporary password (valid 7 days); they accept at the web app\'s /invite page, or with `tracectl login`.' }
   }),
 
   'users.class': def('admin', z.object({ who: Who, class: Cls }), async (a, ctx) => {
@@ -623,17 +554,29 @@ export const ACTIONS = {
     if (!now.includes(want)) await cog.addToGroup(u.username, want)
     for (const c of CLASSES) if (GROUPS[c] !== want && now.includes(GROUPS[c])) await cog.removeFromGroup(u.username, GROUPS[c])
     await setClass(ctx.principal, { sub: u.sub, email: u.email }, a.class)
-    return { sub: u.sub, email: u.email, class: a.class, note: 'Takes effect when their access token next refreshes (within an hour).' }
+    // a changed class must not ride on a session that carries the old one: their refresh tokens go
+    const changed = !(now.length === 1 && now[0] === want)
+    const signedOut = changed ? await signOutQuietly(ctx, u) : false
+    return { sub: u.sub, email: u.email, class: a.class, signed_out: signedOut, note: signedOut ? 'They were signed out everywhere; the new class applies when they sign in again (an access token already issued lasts at most an hour).' : 'Takes effect when their access token next refreshes (within an hour).' }
   }),
 
-  assign: def('admin', z.object({ who: Who, repo: RepoSlug }), async (a, ctx) => {
+  assign: def('admin', z.object({ who: Who, repo: RepoSlug, part: z.enum(PARTS).optional() }), async (a, ctx) => {
     const u = await person(ctx, a.who)
-    return assign(ctx.principal, { sub: u.sub, email: u.email }, a.repo)
+    const cls = await classNow(ctx, u)
+    try {
+      return await assign(ctx.principal, { sub: u.sub, email: u.email }, a.repo, { part: a.part, class: cls })
+    } catch (e) {
+      throw e instanceof PartRefused ? new ActionError(e.message) : e
+    }
   }),
 
   unassign: def('admin', z.object({ who: Who, repo: RepoSlug }), async (a, ctx) => {
     const u = await person(ctx, a.who)
-    return { sub: u.sub, email: u.email, repo: a.repo, removed: await unassign(ctx.principal, u.sub, a.repo) }
+    const removed = await unassign(ctx.principal, u.sub, a.repo)
+    // removed from their last project (and not an admin): nothing is left to sign in for, so their sessions end
+    const left = removed ? (await assignments(ctx.principal, { sub: u.sub })).length : 1
+    const signedOut = removed && left === 0 && (await classNow(ctx, u)) !== 'admin' ? await signOutQuietly(ctx, u) : false
+    return { sub: u.sub, email: u.email, repo: a.repo, removed, signed_out: signedOut }
   }),
 
   assignments: def('admin', z.object({ repo: RepoSlug.optional() }), async (a, ctx) => assignments(ctx.principal, a.repo ? { repo: a.repo } : {})),
@@ -684,6 +627,17 @@ export const ACTIONS = {
       : await withProjectDb(ctx, a.repo as string, (db) => projectHistory(db, a.id))
     return { id: a.id, scope: a.scope, ...(a.repo && a.scope === 'project' ? { repo: a.repo } : {}), history: history.map((h) => ({ ...h, at: new Date(h.at * 1000).toISOString() })) }
   }, mayReadHistory),
+
+  ...PROJECT_ACTIONS,
+  ...JOURNEY_ACTIONS,
+  ...CHAT_ACTIONS,
+  ...ME_ACTIONS,
+  ...GRAPH_ACTIONS,
+  ...FILE_ACTIONS,
+  ...JOB_ACTIONS,
+  ...PEOPLE_ACTIONS,
+  ...RECORD_ACTIONS,
+  ...SKILL_ACTIONS,
 } satisfies Record<string, Action<z.ZodType>>
 
 export type ActionName = keyof typeof ACTIONS

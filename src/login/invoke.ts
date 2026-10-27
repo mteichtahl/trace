@@ -12,6 +12,7 @@
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { installation } from '../core/client.js'
+import { invocationUrl } from '../api/runtime-url.js'
 import { LoginError, NO_INSTALLATION, accessToken } from './oauth.js'
 
 export class ApiError extends Error {
@@ -28,10 +29,7 @@ const Answer = z.union([
 const SESSION_ID = `trace-cli-${randomUUID()}`
 export const sessionId = (): string => SESSION_ID
 
-export function invocationUrl(region: string, arn: string, endpoint?: string): string {
-  const host = (endpoint ?? `https://bedrock-agentcore.${region}.amazonaws.com`).replace(/\/+$/, '')
-  return `${host}/runtimes/${encodeURIComponent(arn)}/invocations?qualifier=DEFAULT`
-}
+export { invocationUrl }
 
 export interface InvokeOptions {
   fetch?: typeof fetch

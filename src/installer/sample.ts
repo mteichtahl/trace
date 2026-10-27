@@ -8,6 +8,8 @@
  *                installer-only files left out), puts it under trace with the sample's own settings (sampleSettings),
  *                seeds its project database (sample-seed.ts seedSample: requirements, test plan, specs, thermal data)
  *                and pushes it all to main in one commit
+ *   journey      its first journey state in the journey store (startSampleJourney: the Mixed template, at Define), as
+ *                projects.create writes one, so the web app shows it like a project made there
  *   tour         last, one issue per task in templates/sample/tour.json, each labelled for the agent that takes it.
  *                Together they run every agent and every simulation once. An issue already there with the same title
  *                is left alone, so a second run opens only what is missing
@@ -17,6 +19,10 @@ import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import type { Answers } from './answers.js'
+import { backendFor } from '../core/central.js'
+import { JourneyError, startJourney } from '../core/journey.js'
+import { JourneyStore } from '../core/journey-store.js'
+import { PROJECTS_PREFIX } from '../core/project.js'
 import { listIssues, openIssue } from './github.js'
 
 export const SAMPLE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'templates', 'sample')
@@ -137,4 +143,36 @@ export async function startTour(token: string, repo: string, o: { gpu: boolean }
     lines.push(`${t.title}: ${r.url}`)
   }
   return { url: `https://github.com/${repo}/issues`, opened, existing, skipped, lines }
+}
+
+/** The sample's journey (src/core/journey.ts), as projects.create starts one: the Mixed template (a board with logic
+ * and firmware), started from an existing design, at Define. */
+export const SAMPLE_JOURNEY = { template: 'mixed', start: 'import', name: 'trace-sample: a 12 V rail monitor', description: 'A small sensor board from intent to fabrication files, installed with trace to show every agent and simulation at work.' } as const
+
+/** Where the projects' records are, from TRACE_HOME (the central store, `s3://bucket/central` or a directory): its
+ * sibling `projects` (as the API's bucketStore and the agents' projectsFromEnv find it). */
+export function projectsLocation(home: string): string {
+  const s3 = /^s3:\/\/([^/]+)(\/.*)?$/.exec(home)
+  if (s3) {
+    const parts = (s3[2] ?? '').split('/').filter(Boolean)
+    parts.pop()
+    return `s3://${s3[1]}/${[...parts, PROJECTS_PREFIX].join('/')}`
+  }
+  return join(home.replace(/^file:\/\//, ''), PROJECTS_PREFIX)
+}
+
+/**
+ * Write the sample's first journey state in the journey store (projects/<slug>/journey/journey.db), as projects.create
+ * does for a project made in the web app, so the app shows it with its stages and gates. Nothing when it has one
+ * already (a second install). AWS credentials come from the environment (the installer's people step sets them).
+ */
+export async function startSampleJourney(home: string, repo: string, by: string): Promise<'started' | 'exists'> {
+  const store = new JourneyStore(backendFor(projectsLocation(home)), repo)
+  try {
+    await store.update((db) => ({ result: startJourney(db, { ...SAMPLE_JOURNEY, by }) }))
+    return 'started'
+  } catch (e) {
+    if (e instanceof JourneyError && /already has a journey/.test(e.message)) return 'exists'
+    throw e
+  }
 }

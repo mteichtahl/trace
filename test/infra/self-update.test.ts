@@ -79,15 +79,23 @@ describe('the self-update role', () => {
     expect(c).not.toContain('*')
   })
 
-  it('may only assume the CDK bootstrap roles, read installation/*, read the stack, check the connection and CodeBuild\'s credential, and read the shared token', () => {
+  it('may only assume the CDK bootstrap roles, read installation/*, read the stack, check the connection and CodeBuild\'s credential, read the shared token, mark pending projects and write projects\' token secrets', () => {
     const { statements } = roleOf(on.parent, 'trace-self-update')
     const bySid = Object.fromEntries(statements.map((s) => [s.Sid ?? '', s]))
-    expect(Object.keys(bySid).sort()).toEqual(['CdkBootstrapRoles', 'CodeBuildSourceCredential', 'GithubConnection', 'GithubConnections', 'InstallationSettings', 'SharedAgentToken', 'StackOutputs'])
+    expect(Object.keys(bySid).sort()).toEqual(['CdkBootstrapRoles', 'CodeBuildSourceCredential', 'GithubConnection', 'GithubConnections', 'InstallationSettings', 'PendingProjectsList', 'PendingProjectsMark', 'ProjectTokenSecrets', 'SharedAgentToken', 'StackOutputs'])
     for (const s of statements) {
       expect(s.Effect).toBe('Allow')
       for (const a of list(s.Action)) expect(a, `${s.Sid}`).not.toContain('*')
-      expect(s.Condition).toBeUndefined()
+      if (s.Sid !== 'PendingProjectsList') expect(s.Condition).toBeUndefined()
     }
+    // the projects created in the web app: listed and marked under installation/pending-projects/ only
+    expect(bySid.PendingProjectsList?.Action).toBe('s3:ListBucket')
+    expect(bySid.PendingProjectsList?.Condition).toEqual({ StringLike: { 's3:prefix': ['installation/pending-projects/*'] } })
+    expect(bySid.PendingProjectsMark?.Action).toBe('s3:PutObject')
+    expect(JSON.stringify(bySid.PendingProjectsMark?.Resource)).toMatch(/"\/installation\/pending-projects\/\*"\]\]\}$/)
+    // a project it adds gets a copy of the shared token in its own secret; never a value read but the shared one
+    expect(bySid.ProjectTokenSecrets?.Action).toBe('secretsmanager:PutSecretValue')
+    expect(JSON.stringify(bySid.ProjectTokenSecrets?.Resource)).toContain(':secretsmanager:us-east-1:123456789012:secret:trace/github-token/*')
     const text = (v: unknown): string => JSON.stringify(v)
     expect(bySid.CdkBootstrapRoles?.Action).toBe('sts:AssumeRole')
     expect(text(bySid.CdkBootstrapRoles?.Resource)).toBe(text({ 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':iam::123456789012:role/cdk-hnb659fds-*-123456789012-us-east-1']] }))
@@ -106,11 +114,16 @@ describe('the self-update role', () => {
     expect(text(bySid.SharedAgentToken?.Resource)).toMatch(/^\{"Ref":"GithubToken[0-9A-F]+"\}$/)
   })
 
-  it('leaves installation/* to it alone: no other role may read, write or list it', () => {
+  it('leaves installation/* to it alone: no other role may read, write or list it (but the API, pending-projects/ only)', () => {
     const { id } = roleOf(on.parent, 'trace-self-update')
+    const api = Object.entries(on.parent.findResources('AWS::IAM::Role') as Record<string, Res>).find(([k]) => k.startsWith('ApiRuntimeRole'))?.[0] ?? ''
+    expect(api).not.toBe('')
     for (const { roles, s } of allStatements(on.all)) {
       if (roles.includes(`"${id}"`) || roles === id) continue
-      const r = JSON.stringify(s.Resource ?? '') + JSON.stringify(s.Condition ?? '')
+      let r = JSON.stringify(s.Resource ?? '') + JSON.stringify(s.Condition ?? '')
+      // projects.create (src/api/actions-projects.ts) records requests under installation/pending-projects/, with
+      // conditional writes, for the update to pick up; the settings (installation/props.json) stay the update's alone
+      if (roles.includes(`"${api}"`)) r = r.replaceAll('installation/pending-projects/*', '')
       expect(r, `${roles} ${s.Sid ?? ''}`).not.toMatch(/installation\//)
       // a grant on the whole central bucket would reach it too
       const actions = list(s.Action).filter((a) => a.startsWith('s3:') && !['s3:ListBucket'].includes(a))

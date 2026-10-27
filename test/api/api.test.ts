@@ -36,6 +36,12 @@ describe('access token verification', () => {
   it('rejects the wrong client', async () => {
     await expect(v.verify(sign({ ...base, client_id: 'someone-else' }))).rejects.toThrow(/wrong client/)
   })
+  it('accepts the CLI\'s and the web app\'s clients when given both, and no other', async () => {
+    const both = new Verifier({ issuer: ISSUER, clientId: [CLIENT_ID, 'web-client'], fetchJwks: async () => jwks() })
+    expect((await both.verify(sign({ ...base, client_id: 'web-client' }))).sub).toBe('u1')
+    expect((await both.verify(sign(base))).sub).toBe('u1')
+    await expect(both.verify(sign({ ...base, client_id: 'someone-else' }))).rejects.toThrow(/wrong client/)
+  })
   it('rejects an id token used as an access token', async () => {
     const { client_id: _c, ...rest } = base
     await expect(v.verify(sign({ ...rest, token_use: 'id', aud: CLIENT_ID }))).rejects.toThrow(/not an access token/)
@@ -138,8 +144,8 @@ describe('the API server', () => {
   it('whoami and projects', async () => {
     const r = await call(user, { action: 'whoami' })
     expect(r).toMatchObject({ status: 200, body: { ok: true, result: { sub: 'user-1', email: 'user-1@example.com', class: 'user' } } })
-    expect((await call(guest, { action: 'projects' })).body.result).toEqual([{ repo: 'acme/board', role: 'read' }])
-    expect((await call(user, { action: 'projects' })).body.result).toEqual([{ repo: 'acme/board', role: 'write' }])
+    expect((await call(guest, { action: 'projects' })).body.result).toEqual([{ repo: 'acme/board', role: 'read', part: 'reviewer' }])
+    expect((await call(user, { action: 'projects' })).body.result).toEqual([{ repo: 'acme/board', role: 'write', part: 'contributor' }])
     expect((await call(nobody, { action: 'projects' })).body.result).toEqual([])
   })
 
@@ -197,7 +203,7 @@ describe('the API server', () => {
   it('a user can write on an assigned project', async () => {
     const r = await call(user, { action: 'task', repo: 'acme/board', request: 'add a test point' })
     expect(r.body).toMatchObject({ ok: true, result: { jobId: 'job-1' } })
-    expect(started).toEqual([{ kind: 'task', repository: 'acme/board', request: 'add a test point', requestedBy: 'user-1@example.com' }])
+    expect(started).toEqual([{ kind: 'task', repository: 'acme/board', request: 'add a test point', requestedBy: 'user-1@example.com', requestedBySub: 'user-1' }])
     expect((await call(user, { action: 'job', id: 'job-1' })).body.ok).toBe(true)
   })
 
@@ -205,7 +211,7 @@ describe('the API server', () => {
     started.length = 0
     const r = await call(user, { action: 'task', repo: 'acme/board', request: 'check crosstalk on USB', agent: 'emc' })
     expect(r.body).toMatchObject({ ok: true, result: { jobId: 'job-1' } })
-    expect(started).toEqual([{ kind: 'task', repository: 'acme/board', request: 'check crosstalk on USB', requestedBy: 'user-1@example.com', agent: 'emc' }])
+    expect(started).toEqual([{ kind: 'task', repository: 'acme/board', request: 'check crosstalk on USB', requestedBy: 'user-1@example.com', requestedBySub: 'user-1', agent: 'emc' }])
     // no agent: forwarded as is, and the project's runtime routes it (src/agents/router.ts)
     await call(user, { action: 'task', repo: 'acme/board', request: 'close timing' })
     expect(started[1]).not.toHaveProperty('agent')
@@ -258,8 +264,14 @@ describe('the API server', () => {
     expect(cognito.calls).toEqual(['create new@example.com', 'add new@example.com trace-guests'])
 
     const cls = await call(admin, { action: 'users.class', who: 'new@example.com', class: 'user' })
-    expect(cls.body.ok).toBe(true)
+    expect(cls.body).toMatchObject({ ok: true, result: { signed_out: true } })
     expect([...(cognito.groups.get('new@example.com') ?? [])]).toEqual(['trace-users'])
+    // a class change ends the person's sessions, so the old class cannot ride on a refresh token
+    expect(cognito.calls.at(-1)).toBe('signout new@example.com')
+    // the same class again changes nothing and signs no one out
+    cognito.calls = []
+    expect((await call(admin, { action: 'users.class', who: 'new@example.com', class: 'user' })).body).toMatchObject({ result: { signed_out: false } })
+    expect(cognito.calls.filter((c) => c.startsWith('signout'))).toEqual([])
 
     expect((await call(admin, { action: 'assign', who: 'new@example.com', repo: 'Acme/Secret' })).body.ok).toBe(true)
     expect((await assignments(ADMIN, { repo: 'acme/secret' })).map((a) => a.sub)).toEqual(['sub-new@example.com'])
@@ -267,7 +279,9 @@ describe('the API server', () => {
     expect(list.find((u) => u.email === 'new@example.com')).toMatchObject({ class: 'user', projects: ['acme/secret'] })
 
     const un = await call(admin, { action: 'unassign', who: 'sub-new@example.com', repo: 'acme/secret' })
-    expect(un.body).toMatchObject({ ok: true, result: { removed: true } })
+    // removed from their last project: signed out everywhere
+    expect(un.body).toMatchObject({ ok: true, result: { removed: true, signed_out: true } })
+    expect(cognito.calls.at(-1)).toBe('signout new@example.com')
     expect(await assignments(ADMIN, { repo: 'acme/secret' })).toEqual([])
     expect((await call(admin, { action: 'assign', who: 'ghost@example.com', repo: 'acme/secret' })).body).toMatchObject({ ok: false, error: 'no such person: ghost@example.com' })
   })
