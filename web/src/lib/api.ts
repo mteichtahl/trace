@@ -76,6 +76,17 @@ export interface Actions {
   'graph.neighbourhood': { args: Repo & { focus: string; depth?: 1 | 2 | 3 }; result: { nodes: unknown[]; links: unknown[] } }
   'files.list': { args: Repo; result: { path: string; kind: string; size: number; release?: string }[] }
   'files.url': { args: Repo & { path: string }; result: { url: string } }
+  // Operations, Admin and Preferences (src/api/actions.ts: integrations.*, prompts.*; shapes in lib/admin-types.ts)
+  'integrations.list': { args: Record<string, never>; result: import('./admin-types').IntegrationStatus[] }
+  'integrations.set': { args: { name: import('./admin-types').IntegrationName; values: Record<string, string> }; result: { name: string; secret: string; check: { ok: boolean; detail: string }; note?: string } }
+  'integrations.remove': { args: { name: import('./admin-types').IntegrationName }; result: { name: string; removed: boolean } }
+  'prompts.list': { args: { repo?: string }; result: import('./admin-types').PromptList }
+  'prompts.get': { args: { repo?: string; id: string }; result: import('./admin-types').PromptView }
+  'prompts.preview': { args: Repo & { target: string; job?: import('./admin-types').PreviewJob }; result: import('./admin-types').PromptPreview }
+  'prompts.set': { args: { id: string; scope: 'installation' | 'project'; repo?: string; text: string; reason: string }; result: import('./admin-types').PromptWriteResult }
+  'prompts.reset': { args: { id: string; scope: 'installation' | 'project'; repo?: string; reason: string }; result: import('./admin-types').PromptWriteResult }
+  'prompts.revert': { args: { id: string; scope: 'installation' | 'project'; repo?: string; version: number | string; reason?: string }; result: import('./admin-types').PromptWriteResult }
+  'prompts.history': { args: { id: string; scope: 'installation' | 'project'; repo?: string }; result: { id: string; scope: string; repo?: string; history: import('./admin-types').PromptHistoryEntry[] } }
 }
 
 export type ActionName = keyof Actions

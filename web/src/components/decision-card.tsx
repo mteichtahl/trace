@@ -24,6 +24,8 @@ export interface DecisionOption {
   label: string
   /** one line on what it means */
   detail?: string
+  /** an answer in the person's own words: choosing it asks for "Your answer" as well as "Your reason" */
+  free?: boolean
 }
 
 export interface Decision {
@@ -46,6 +48,8 @@ export interface DecisionChoice {
   recommended: boolean
   /** required when not the recommendation */
   reason?: string
+  /** the person's own answer, for a `free` option */
+  answer?: string
 }
 
 export interface DecisionCardProps {
@@ -63,9 +67,10 @@ export interface DecisionCardProps {
 }
 
 /** May this choice be sent? A reason is required when it is not the recommendation. */
-export function canSubmit(decision: Decision, option: string | null, reason: string): boolean {
+export function canSubmit(decision: Decision, option: string | null, reason: string, answer = ''): boolean {
   if (!option) return false
   if (option === decision.recommended) return true
+  if (decision.options.find((o) => o.id === option)?.free && !answer.trim()) return false
   return reason.trim().length >= 3
 }
 
@@ -74,7 +79,9 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
   const alternatives = decision.options.filter((o) => o.id !== rec.id)
   const [other, setOther] = useState<string | null>(null)
   const [reason, setReason] = useState('')
+  const [answer, setAnswer] = useState('')
   const [busy, setBusy] = useState(false)
+  const free = !!decision.options.find((o) => o.id === other)?.free
   const [open, setOpen] = useState(detail === 'full')
   const reasonId = useId()
 
@@ -94,7 +101,7 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
         {decision.question && <p className="text-muted-foreground">{decision.question}</p>}
         <p className="mt-1">
           <span className="font-medium">Chosen: </span>
-          {opt?.label ?? chosen.option}
+          {chosen.answer ?? opt?.label ?? chosen.option}
           {chosen.recommended ? <Badge variant="secondary" className="ml-2">Recommended</Badge> : null}
         </p>
         {chosen.reason && <p className="mt-1 text-muted-foreground">Reason: {chosen.reason}</p>}
@@ -157,6 +164,12 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
         </Collapsible>
       )}
 
+      {other && free && (
+        <div className="mt-3 space-y-1.5">
+          <Label htmlFor={`${reasonId}-answer`}>Your answer</Label>
+          <Textarea id={`${reasonId}-answer`} value={answer} onChange={(e) => setAnswer(e.target.value)} placeholder="What the agent should do, with a number and unit for a quantity" rows={2} aria-required />
+        </div>
+      )}
       {other && (
         <div className="mt-3 space-y-1.5">
           <Label htmlFor={reasonId}>Your reason</Label>
@@ -175,11 +188,11 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
       <div className="mt-4 flex flex-wrap gap-2">
         {other ? (
           <>
-            <Button disabled={!canSubmit(decision, other, reason) || busy} onClick={() => void send({ option: other, recommended: false, reason: reason.trim() })}>
+            <Button disabled={!canSubmit(decision, other, reason, answer) || busy} onClick={() => void send({ option: other, recommended: false, reason: reason.trim(), ...(free ? { answer: answer.trim() } : {}) })}>
               {busy && <Loader2 className="animate-spin" />}
-              Choose {decision.options.find((o) => o.id === other)?.label}
+              {free ? 'Send this answer' : `Choose ${decision.options.find((o) => o.id === other)?.label}`}
             </Button>
-            <Button variant="ghost" onClick={() => { setOther(null); setReason('') }}>
+            <Button variant="ghost" onClick={() => { setOther(null); setReason(''); setAnswer('') }}>
               Back to the recommendation
             </Button>
           </>

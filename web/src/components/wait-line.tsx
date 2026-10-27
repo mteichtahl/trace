@@ -17,31 +17,54 @@ export interface WaitLineProps {
   project?: string
   /** runs the check (job.check_now / tools.check_now); the spinner shows until it resolves */
   onCheckNow?: (wait: Wait) => Promise<unknown>
+  /** the line's words, where checking is not the verb (Operations: "Updated …; next update …", "Refresh now") */
+  words?: WaitWords
+  /** one line, no padding: the detail as the sentence (Operations' refresh line) */
+  compact?: boolean
   className?: string
 }
 
-export function waitDetail(w: Wait, now: number): string {
-  const parts: string[] = []
-  if (w.lastCheckedAt) parts.push(`Checked ${ago(w.lastCheckedAt, now)}`)
-  if (w.nextCheckAt) parts.push(w.slowed ? `checking less often while nothing changes: next ${until(w.nextCheckAt, now)}` : `next check ${until(w.nextCheckAt, now)}`)
-  return parts.join(' · ')
+export interface WaitWords {
+  /** "Checked" */
+  last?: string
+  /** "next check" */
+  next?: string
+  /** "Check now" */
+  now?: string
+  /** "Checking" */
+  busy?: string
 }
 
-export function WaitLine({ wait, project, onCheckNow, className }: WaitLineProps) {
+export function waitDetail(w: Wait, now: number, words: WaitWords = {}): string {
+  const parts: string[] = []
+  const next = words.next ?? 'next check'
+  if (w.lastCheckedAt) parts.push(`${words.last ?? 'Checked'} ${ago(w.lastCheckedAt, now)}`)
+  if (w.nextCheckAt) parts.push(w.slowed ? `${words.next ? `${next} less often while nothing changes` : 'checking less often while nothing changes'}: next ${until(w.nextCheckAt, now)}` : `${next} ${until(w.nextCheckAt, now)}`)
+  return parts.join(words.next ? '; ' : ' · ')
+}
+
+export function WaitLine({ wait, project, onCheckNow, words, compact, className }: WaitLineProps) {
   const now = useNow(1000)
   const [checking, setChecking] = useState(false)
-  const detail = waitDetail(wait, now)
+  const detail = waitDetail(wait, now, words)
   const what = wait.what || wait.text
   return (
-    <div className={cn('flex items-center gap-4 px-5 py-4', className)} data-density-item>
+    <div className={cn('flex items-center', compact ? 'flex-wrap gap-x-3 gap-y-1' : 'gap-4 px-5 py-4', className)} data-density-item>
       <Clock className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-      <div className="min-w-0 flex-1">
-        <p className="text-sm">
-          {project && <span className="font-semibold">{project}: </span>}
-          {what}
+      {compact ? (
+        <p className="text-sm text-muted-foreground" aria-live="off">
+          {what && <span className="text-foreground">{what} </span>}
+          {detail ? `${detail}.` : wait.text}
         </p>
-        {detail ? <p className="mt-0.5 text-xs text-muted-foreground" aria-live="off">{detail}</p> : wait.text !== what && <p className="mt-0.5 text-xs text-muted-foreground">{wait.text}</p>}
-      </div>
+      ) : (
+        <div className="min-w-0 flex-1">
+          <p className="text-sm">
+            {project && <span className="font-semibold">{project}: </span>}
+            {what}
+          </p>
+          {detail ? <p className="mt-0.5 text-xs text-muted-foreground" aria-live="off">{detail}</p> : wait.text !== what && <p className="mt-0.5 text-xs text-muted-foreground">{wait.text}</p>}
+        </div>
+      )}
       {onCheckNow && (
         <Button
           variant="outline"
@@ -57,7 +80,7 @@ export function WaitLine({ wait, project, onCheckNow, className }: WaitLineProps
           }}
         >
           {checking && <Loader2 className="animate-spin" />}
-          {checking ? 'Checking' : 'Check now'}
+          {checking ? (words?.busy ?? 'Checking') : (words?.now ?? 'Check now')}
         </Button>
       )}
     </div>
