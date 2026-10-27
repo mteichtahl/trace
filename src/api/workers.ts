@@ -13,7 +13,7 @@
  *
  * Following a job is event-driven on the worker: `job` with afterVersion + waitS is forwarded as a held status
  * invocation (the worker answers the moment the job changes), and `job.check_now` as a check-now invocation in the
- * job's session (the microVM whose waits the status answer listed). Tool calls have no job: `tools.waits` holds a
+ * job's session (the microVM whose waits the status answer listed); `job.control` cancel as a cancel invocation there. Tool calls have no job: `tools.waits` holds a
  * status invocation in the project's tool session (where kb.sync and the other tool calls run) and keeps the waits
  * opened outside any job; `tools.check_now` wakes one of them there.
  */
@@ -71,6 +71,7 @@ const StatusOut = z.object({
   waits: z.array(z.object({ id: z.string(), what: z.string(), source: z.string(), text: z.string() }).loose()).default([]),
 }).loose()
 const CheckNowOut = z.object({ ok: z.boolean() }).loose()
+const CancelOut = z.object({ ok: z.boolean(), state: z.string().nullable().default(null), kept: z.string().optional(), reason: z.string().optional() }).loose()
 const ToolOut = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(true), result: z.unknown() }).loose(),
   z.object({ ok: z.literal(false), error: z.string() }).loose(),
@@ -138,6 +139,13 @@ export function remoteJobs(o: RemoteJobsOptions): JobsApi {
     async checkToolWait(repository, waitId) {
       const slug = projectSlug(repository)
       return CheckNowOut.parse(await invoke({ kind: 'check-now', waitId }, toolSession(slug), opts(slug))).ok
+    },
+    async cancel(handle, reason) {
+      const h = parseHandle(handle)
+      const slug = h ? byHash.get(h.hash) : undefined
+      if (!h || !slug) return { ok: false, state: null, reason: 'There is no such job.' }
+      const out = CancelOut.parse(await invoke({ kind: 'cancel', jobId: h.jobId, reason }, h.session, opts(slug)))
+      return { ok: out.ok, state: out.state, ...(out.kept ? { kept: out.kept } : {}), ...(out.reason ? { reason: out.reason } : {}) }
     },
     async checkNow(handle, waitId) {
       const h = parseHandle(handle)

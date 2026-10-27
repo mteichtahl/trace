@@ -62,6 +62,11 @@ export interface JobsApi {
   watchTools?(repository: string, o: { afterVersion?: number | undefined; waitS?: number | undefined; signal?: AbortSignal | undefined }): Promise<{ version: number | null; waits: readonly WaitView[] }>
   /** Wake one of those timer waits (invocation kind `check-now` in the tool session). Absent: there is nothing to wake. */
   checkToolWait?(repository: string, waitId: string): Promise<boolean>
+  /**
+   * Cancel one running job on its worker (invocation kind `cancel`): its answer once the job has stopped (or a short
+   * grace passed). Absent: this installation cannot cancel from the API.
+   */
+  cancel?(jobId: string, reason: string): Promise<{ ok: boolean; state: string | null; kept?: string | undefined; reason?: string | undefined }>
   /** One tool call on the project's own worker runtime (invocation kind `tool`): its result, or throws ActionError.
    * Absent: this installation runs no tools for the API. */
   runTool?(payload: Omit<ToolJob, 'trace'>): Promise<unknown>

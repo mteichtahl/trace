@@ -22,6 +22,10 @@ function fakeAgentCore() {
         const id = `job-${vm.length + 1}`
         vm.push({ id, kind: 'task', state: 'running', repository: String(body.repository) })
         out = { accepted: true, jobId: id }
+      } else if (body.kind === 'cancel') {
+        const j = vm.find((x) => x.id === body.jobId && x.state === 'running')
+        if (j) j.state = 'aborted'
+        out = j ? { ok: true, state: 'aborted', kept: 'Commits the agent had already pushed stay on their branch.' } : { ok: false, state: null, reason: 'There is no such job on this worker.' }
       } else out = { jobs: vm.filter((j) => j.id === body.jobId), busy: true }
       return { statusCode: 200, response: { transformToString: async () => JSON.stringify(out) } }
     },
@@ -79,5 +83,15 @@ describe('the API\'s remote jobs', () => {
     expect(toolSession('acme/fw')).not.toBe(toolSession('acme/board'))
     await expect(jobs.runTool!({ kind: 'tool', repository: 'acme/board', name: 'calc.fail', args: {} })).rejects.toThrow('bad input')
     await expect(jobs.runTool!({ kind: 'tool', repository: 'other/repo', name: 'calc.via', args: {} })).rejects.toThrow(/no worker runtime/)
+  })
+
+  it('cancels a job on its own worker, in its own session, and says what was kept', async () => {
+    const f = fakeAgentCore()
+    const jobs = remoteJobs({ runtimes: parseWorkerRuntimes(RUNTIMES), region: 'us-east-1', account: '123456789012', client: f.client })
+    const r = await jobs.startJob({ kind: 'task', repository: 'acme/board', request: 'route it', requestedBy: 'dev@example.com' })
+    expect(await jobs.cancel!(r.jobId, 'cancelled by dev')).toEqual({ ok: true, state: 'aborted', kept: 'Commits the agent had already pushed stay on their branch.' })
+    expect(f.calls[1]).toMatchObject({ session: f.calls[0]?.session, body: { kind: 'cancel', jobId: 'job-1', reason: 'cancelled by dev' } })
+    expect(await jobs.cancel!(r.jobId, 'again')).toMatchObject({ ok: false, reason: 'There is no such job on this worker.' })
+    expect(await jobs.cancel!('nonsense', 'x')).toMatchObject({ ok: false })
   })
 })

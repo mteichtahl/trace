@@ -46,6 +46,7 @@ import { describeWait, trackEventWait, waitWithTimer } from '../core/wait.js'
 import { scratchDir } from '../core/store.js'
 import type { GpuJobSchema, JobResult } from './jobs.js'
 import type { z } from 'zod'
+import { trackInFlight } from './inflight.js'
 import { encodeSpec, ExitRecordSchema, jobKeys, jobsLocation, type ExitRecord, type RemoteSpec } from './protocol.js'
 
 export type ParsedJob = z.output<typeof GpuJobSchema>
@@ -265,6 +266,9 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
   const what = `the ${place.pool === 'gpu' ? 'graphics card' : 'remote CPU'} job ${id}`
   const ctx: WaitCtx = { batch, jobId, deadline, now, log, what, sleep: deps.sleep, staleMs: staleAfterMs(env) }
   let last: { status: string; detail: BatchJobDetail | undefined }
+  // while it is waited on, a cancelled job (its tool server closing) terminates it: src/gpu/inflight.ts
+  const forget = trackInFlight({ jobId, terminate: (reason) => batch.terminateJob({ jobId, reason: `trace: ${reason}` }) })
+  try {
   const topic = env.TRACE_BATCH_EVENTS_TOPIC
   const queueName = topic ? waitQueueName(topic, project, jobId) : null
   const onEvents = topic && queueName
@@ -272,6 +276,9 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
     : (log(`${jobId}: waiting on a timer: ${NO_EVENTS_WHY} (${topic ? 'it runs outside a project, or its event settings do not match the installation' : 'the installation does not send them: it predates them (running the installer again adds them), or its layout is flat'})`), null)
   if (onEvents && 'status' in onEvents) last = onEvents
   else last = await waitOnTimer(ctx, onEvents?.why ?? NO_EVENTS_WHY, onEvents?.lastStatus ?? '')
+  } finally {
+    forget()
+  }
   const detail = last.detail
   if (!TERMINAL.has(last.status)) {
     const status = last.status

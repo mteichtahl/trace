@@ -65,6 +65,19 @@ export const CheckNowPayload = z.object({
 }).strict()
 
 /**
+ * Cancel one running job of this process (a person's Cancel, through the API's job.control): its AbortController stops
+ * Claude and its git commands, its delegated worker goes with it, and the graphics card or CPU jobs its tools started
+ * on AWS Batch are terminated when its tool server closes (src/gpu/inflight.ts). Answers once the job has ended, or
+ * after a short grace.
+ */
+export const CancelPayload = z.object({
+  kind: z.literal('cancel'),
+  jobId: z.string().min(1).max(64),
+  reason: z.string().min(1).max(300).default('cancelled by a person'),
+  trace: TraceContextSchema.optional(),
+}).strict()
+
+/**
  * The agents a person's task can be given to: the specialists (src/agents). Leave `agent` out and the job is routed
  * (src/agents/router.ts). The generic worker is not among them: only a specialist starts it (agent.delegate).
  */
@@ -118,13 +131,13 @@ export const ToolPayload = z.object({
 }).strict()
 export type ToolJob = z.infer<typeof ToolPayload>
 
-export const InvocationSchema = z.discriminatedUnion('kind', [WorkItemPayload, SweepPayload, StatusPayload, CheckNowPayload, TaskPayload, ToolPayload])
+export const InvocationSchema = z.discriminatedUnion('kind', [WorkItemPayload, SweepPayload, StatusPayload, CheckNowPayload, CancelPayload, TaskPayload, ToolPayload])
 export type Invocation = z.infer<typeof InvocationSchema>
 export type WorkItemJob = z.infer<typeof WorkItemPayload>
 export type SweepJob = z.infer<typeof SweepPayload>
 export type TaskJob = z.infer<typeof TaskPayload>
 export type DelegatedTaskJob = z.infer<typeof DelegatedTaskPayload>
-/** What can be started as a job (everything but status, check-now and tool); a delegated task only from inside the runtime. */
+/** What can be started as a job (everything but status, check-now, cancel and tool); a delegated task only from inside the runtime. */
 export type JobPayload = WorkItemJob | SweepJob | TaskJob | DelegatedTaskJob
 
 export const AcceptedSchema = z.object({
@@ -169,12 +182,12 @@ export class WrongProject extends Error {
   readonly status = 403
 }
 
-/** The repositories an invocation is about (none for status and check-now). */
+/** The repositories an invocation is about (none for status, check-now and cancel). */
 export function repositoriesOf(p: Invocation | JobPayload): string[] {
   switch (p.kind) {
     case 'work-item': case 'task': case 'tool': return [p.repository]
     case 'sweep': return [...p.repositories]
-    case 'status': case 'check-now': return []
+    case 'status': case 'check-now': case 'cancel': return []
   }
 }
 

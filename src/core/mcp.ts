@@ -129,6 +129,10 @@ export async function serve(registry: Registry): Promise<void> {
   continueFromEnv()
   // this job's waits, relayed to the runtime that runs it (nothing without TRACE_WAITS_URL / TRACE_WAITS_TOKEN)
   const relay = startWaitReporter()
-  process.stdin.once('end', () => { relay?.stop(); void flush() })
+  // the job is over (or cancelled): stop what its tools left running on AWS Batch, then push the telemetry
+  process.stdin.once('end', () => {
+    relay?.stop()
+    void import('../gpu/inflight.js').then((m) => m.terminateInFlight('the job that started it ended', (l) => process.stderr.write(`${l}\n`))).finally(() => { void flush() })
+  })
   await server(registry).connect(new StdioServerTransport())
 }

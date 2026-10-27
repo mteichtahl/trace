@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { placement, runBatch, type BatchApi, type BatchJobDetail } from '../../src/gpu/batch.js'
+import { inFlight, terminateInFlight } from '../../src/gpu/inflight.js'
 import { GpuJobSchema, isInputName, runLocal } from '../../src/gpu/jobs.js'
 import { decodeSpec, encodeSpec, jobsLocation, type RemoteSpec } from '../../src/gpu/protocol.js'
 import { main, readSpec } from '../../src/gpu/runner.js'
@@ -82,6 +83,21 @@ describe('where GPU jobs are staged', () => {
 })
 
 describe('runBatch with the runner', () => {
+  it('is in flight while it is waited on, so a cancelled job terminates it; forgotten once the wait ends', async () => {
+    const s3 = new FakeS3()
+    const batch = new FakeBatch(s3, false)
+    batch.statuses = ['RUNNING']
+    let seen: string[] = []
+    let terminated: string[] = []
+    // the job's tool server closes while the wait is under way: what a cancel does
+    const r = runBatch(job(), { s3, batch, env, sleep: async () => { if (!seen.length) { seen = inFlight(); terminated = await terminateInFlight('the job that started it ended'); batch.statuses = ['FAILED'] } } })
+    await expect(r).rejects.toThrow(/failed before its runner finished/)
+    expect(seen).toEqual(['job-1'])
+    expect(terminated).toEqual(['job-1'])
+    expect(batch.terminated).toEqual(['job-1'])
+    expect(inFlight()).toEqual([])
+  })
+
   it('uploads inputs, submits, polls with backoff, runs, and brings back outputs and logs', async () => {
     const s3 = new FakeS3()
     const batch = new FakeBatch(s3)
