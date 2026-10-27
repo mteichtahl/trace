@@ -83,6 +83,20 @@ All bodies are JSON unless noted. Errors: `{ ok: false, error, code? }` with a f
   'memory'|'chats'|'people'|'prompts'|'kb' }`), `job.updated` (`{ repo, jobId, state }`), `notification`
   (`{ id, kind, repo, summary }`). The app treats each as "invalidate these queries" and refetches; payloads never
   carry project content.
+- Who publishes: the web backend, after an ok answer to a mutating `/api/call` (`src/web/events.ts` lists them, with
+  `stuck.dismiss` among the journey's), to the project's members and the caller; and `<prefix>-journey-events`
+  (`src/web/journey-events.ts`, in the web stack beside the events API) for what agents write. Agents write their facts
+  (`projects/<slug>/journey-agent/facts.db`) straight to the central bucket, which no backend sees. The bucket sends
+  its object events to EventBridge (its own `NotificationConfiguration`, no custom resource), and a rule on "Object
+  Created" of `projects/*/journey-agent/facts.db` in that bucket invokes the function. It takes the project from the
+  key, the people on it from the access store (admins, and the people assigned, by part), and publishes
+  `record.changed { repo, what: 'journey' }` to each, plus `notification { id, kind: 'question'|'stuck', repo,
+  summary }` (a fixed line, no project content) for a question or stuck report written in that change, to the people
+  it is for. It reads the facts file that changed only to tell a new question from a check. The journey record
+  (`projects/<slug>/journey/journey.db`) is not matched: only the API writes it, and the backend publishes those
+  writes already, so matching it would send every event twice. One publish per S3 event, unbatched: an agent writes
+  its facts a few times a job. Its role: `s3:GetObject` on `access/*` (and `s3:ListBucket` under it) and on
+  `projects/*/journey-agent/facts.db`, `appsync:EventPublish` on the namespace, its log group.
 
 ## New and changed API runtime actions (`src/api/`)
 
@@ -104,6 +118,7 @@ reviewer. `require_(p, repo, 'write')` needs the contributor part (or admin). `p
 | `journey.snapshot` | admin | copy the journey record into the repository's `.trace/project.db` on a `trace/release-…` branch and log the commit |
 | `question.answer` | write | answer an agent's question (the recommended option or another with a reason) |
 | `waiver.add` | write | a waiver with reason, risk, severity, where it is caught instead |
+| `stuck.dismiss` | write | `{ job, reason }`: dismiss a stuck agent's report (`job`: the agent's job id, or the stuck item's own id) with a reason in one line; it leaves the views and the inbox, the decisions log keeps it, and the agent reads it in `journey.status` |
 | `inbox` | signed-in | the four kinds that earn a notification across the person's projects, oldest and most blocking first |
 | `chats.list` / `chats.get` / `chats.append` / `chats.rename` / `chats.recall` | read | threads per project (visible to everyone on it), messages (each marked `yours`), the person's own sent messages newest first. `chats.append` keeps the caller's own words only (role user, by them); at most 500 threads per person per project |
 | `chats.reply` | read | trace's reply and tool rows after the caller's own latest turn, by "trace": called by the chat agent only (`/api/call` refuses it) |
@@ -140,8 +155,17 @@ the same conditional-write store), with `agent_questions` (options with exactly 
 sources, what it blocks, asked of a person by Cognito sub or of the contributors or admins), `criterion_checks` (a
 criterion trace owns met or not met, with evidence, the agent and its job; the newest check of a criterion stands) and
 `stuck` (why, the recommendation, options). Agents write it through the worker tools `journey.status`, `journey.ask`
-(optionally waiting for the answer on a declared timer), `journey.check` and `journey.stuck`, which the API's `tool`
-action never runs. The worker and workflow roles may write it only with conditional puts and never delete it; the API
+(optionally waiting for the answer), `journey.check` and `journey.stuck`, which the API's `tool` action never runs.
+`journey.ask`'s wait is told when the answer may have come: each project's events topic
+(`<prefix>-<hash>-batch-events`, nested layout) gets the bucket's "Object Created" event of its own `journey.db` from a
+rule of its own (`<prefix>-<hash>-journey-events`), and the waiting worker subscribes a short-lived queue to it (the
+same way it waits on its Batch jobs, `src/gpu/batch.ts openWaitQueue`), filtered to those events, and reads the record
+once per write. It also reads it 30 s and 90 s after subscribing and then every 5 minutes in case a message is lost.
+Without the topic, or when subscribing or receiving fails, it reads the record on a timer (30 s doubling to 5
+minutes) and says when it looks next. The S3 event was chosen over publishing from the API: it needs no new
+permission in the API's role, and it covers every write of the record (an answer through a guided skill too).
+A person may dismiss a stuck report (`stuck.dismiss`): the dismissal is a row of the record's `stuck_dismissals`, the
+item leaves every view, and `journey.status` shows the agent the dismissal with its reason. The worker and workflow roles may write it only with conditional puts and never delete it; the API
 role reads it. Every journey view (`journey.get`, the inbox, `gate.sign`, `waiver.add`, the guided skills) merges the
 facts in: an agent's question is a question, a check sets a trace-owned criterion's status (on its revision, not from
 before its stage was reopened, not over a newer row of the record), a stuck agent is a `stuck` item. `question.answer`

@@ -31,8 +31,11 @@
  *             "Batch Job State Change" events of the stack's queues whose job definition is one of its own (prefix
  *             match on the definition's ARN without the revision): it submits only with those (ProjectGpuSubmit, and
  *             src/gpu/batch.ts placement uses only TRACE_GPU_JOB_DEFINITION / TRACE_CPU_JOB_DEFINITION, which are
- *             them), so its topic carries its own jobs' events and no other project's. One rule per project: the
- *             default bus allows 300 rules per region by default, and `repositories` is at most 60 (props.ts)
+ *             them), so its topic carries its own jobs' events and no other project's. Two rules per project (and the
+ *             web app's one, src/infra/web.ts): the default bus allows 300 rules per region by default, and
+ *             `repositories` is at most 60 (props.ts). Waiting on the topic needs SQS on queues named
+ *             <prefix>-<hash>-wait-* only, Subscribe (its own wait queues as the only endpoint), Unsubscribe and
+ *             ListSubscriptionsByTopic on its own topic only, and ListQueues (the Batch line above)
  *   telemetry its own runtime's log group, X-Ray, PutMetricData in the bedrock-agentcore namespace
  *   model     Bedrock InvokeModel on Anthropic models and the account's inference profiles
  *   knowledge bedrock:Retrieve and Start/Get/ListIngestionJob on its own knowledge base only (nested layout,
@@ -409,8 +412,7 @@ export class ProjectStack extends Construct {
         }))
       }
       if (p.gpu && jobDefinitions.length) {
-        // EventBridge: one rule per project on the default bus (300 per region by default; at most 60 projects, two
-        // rules each). It matches its definitions by ARN prefix, revision left out (`<arn>:`): a job submitted by name
+        // EventBridge, on the default bus (300 rules per region by default; at most 60 projects, two rules each). It matches its definitions by ARN prefix, revision left out (`<arn>:`): a job submitted by name
         // runs the latest revision, and its event names the revision's ARN
         const rule = new events.Rule(this, 'JobEventsRule', {
           ruleName: batchEventsTopicName(cfg.prefix, hash),
