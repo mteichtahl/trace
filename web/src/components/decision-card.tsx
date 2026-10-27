@@ -59,6 +59,8 @@ export interface DecisionCardProps {
   label?: string
   /** primary button words for the recommendation (defaults to the option's label) */
   acceptLabel?: string
+  /** false: no buttons or choosing here (a gate, where Sign and Return sit below); alternatives list as text */
+  actions?: boolean
   className?: string
 }
 
@@ -69,7 +71,7 @@ export function canSubmit(decision: Decision, option: string | null, reason: str
   return reason.trim().length >= 3
 }
 
-export function DecisionCard({ decision, onChoose, chosen, detail = 'short', label = 'trace recommends', acceptLabel, className }: DecisionCardProps) {
+export function DecisionCard({ decision, onChoose, chosen, detail = 'short', label = 'trace recommends', acceptLabel, actions = true, className }: DecisionCardProps) {
   const rec = decision.options.find((o) => o.id === decision.recommended) ?? decision.options[0]!
   const alternatives = decision.options.filter((o) => o.id !== rec.id)
   const [other, setOther] = useState<string | null>(null)
@@ -142,6 +144,16 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
             {!open && <span className="truncate">: {alternatives.map((a) => a.label).join(', ')}</span>}
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-2">
+            {!actions ? (
+              <ul className="space-y-1.5 text-sm">
+                {alternatives.map((a) => (
+                  <li key={a.id} className="rounded-md border p-2.5">
+                    <span className="font-medium">{a.label}</span>
+                    {a.detail && <span className="block text-xs text-muted-foreground">{a.detail}</span>}
+                  </li>
+                ))}
+              </ul>
+            ) : (
             <RadioGroup value={other ?? ''} onValueChange={(v) => setOther(v)} aria-label="Alternatives">
               {alternatives.map((a) => (
                 <Label key={a.id} htmlFor={`${reasonId}-${a.id}`} className="flex cursor-pointer items-start gap-2 rounded-md border p-2.5 font-normal has-[[data-state=checked]]:border-primary">
@@ -153,6 +165,7 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
                 </Label>
               ))}
             </RadioGroup>
+            )}
           </CollapsibleContent>
         </Collapsible>
       )}
@@ -172,7 +185,7 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
         </div>
       )}
 
-      <div className="mt-4 flex flex-wrap gap-2">
+      {actions && <div className="mt-4 flex flex-wrap gap-2">
         {other ? (
           <>
             <Button disabled={!canSubmit(decision, other, reason) || busy} onClick={() => void send({ option: other, recommended: false, reason: reason.trim() })}>
@@ -196,7 +209,7 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
             )}
           </>
         )}
-      </div>
+      </div>}
     </div>
   )
 }

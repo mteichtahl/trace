@@ -76,6 +76,24 @@ export interface Actions {
   'graph.neighbourhood': { args: Repo & { focus: string; depth?: 1 | 2 | 3 }; result: { nodes: unknown[]; links: unknown[] } }
   'files.list': { args: Repo; result: { path: string; kind: string; size: number; release?: string }[] }
   'files.url': { args: Repo & { path: string }; result: { url: string } }
+  // gates, guided skills, new project and project tabs (web s1). Marked "needs building" where no backend action
+  // exists yet; the screens say so where they show that data.
+  /** needs building: a skill's state for this person (checks from its checker tool, items, picture, findings) */
+  'skill.get': { args: Repo & { skill: string }; result: import('./types-s1').SkillView }
+  /** needs building: submit a skill's result once its checker passes */
+  'skill.submit': { args: Repo & { skill: string; draft: unknown }; result: { ok: true; id?: string; started?: string[] } }
+  /** needs building: the intent lines and each requirement's link to one */
+  'requirements.trace': { args: Repo; result: import('./types-s1').TraceView }
+  /** needs building: architecture record, sheets, pin plan and board with findings */
+  'design.get': { args: Repo; result: import('./types-s1').DesignView }
+  /** needs building: releases, orders, boards by serial, the bench */
+  'build.get': { args: Repo; result: import('./types-s1').BuildView }
+  /** needs building: record a placed order (number, paid cost, ship date) */
+  'order.record': { args: Repo & { order: string; number: string; paid: number; ship: string }; result: { ok: true; wait?: Wait } }
+  /** needs building: spent, committed and forecast cost and the stage timeline */
+  'cost.get': { args: Repo; result: import('./types-s1').CostView }
+  /** needs building: Pause, Cancel and Move up for a job */
+  'job.control': { args: { id: string; op: 'pause' | 'resume' | 'cancel' | 'move_up' }; result: { ok: true; kept?: string } }
 }
 
 export type ActionName = keyof Actions
