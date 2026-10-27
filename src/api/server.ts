@@ -186,6 +186,8 @@ export async function start(): Promise<void> {
     memory: () => projectMemoriesFromEnv(process.env),
     kbs: () => projectKbsFromEnv(process.env),
     retrieve: async () => (await import('../tools/kb/search.js')).awsRetrieve(process.env.AWS_REGION),
+    ...(process.env.TRACE_PREFIX ? { installationPrefix: process.env.TRACE_PREFIX } : {}),
+    vocabularies: async () => (await import('./actions-voice.js')).awsVocabularies(process.env.AWS_REGION),
     ...(process.env.TRACE_INTEGRATIONS_PREFIX ? {
       integrations: async () => {
         const { IntegrationStore, secretsManagerApi } = await import('../core/integrations.js')

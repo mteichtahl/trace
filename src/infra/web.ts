@@ -255,7 +255,8 @@ export class WebStack extends NestedStack {
       resources: [`arn:${partition}:ssm:${region}:${account}:parameter${webConfigParameter(p.prefix)}`],
     }))
     role.addToPolicy(new iam.PolicyStatement({ sid: 'Speech', actions: ['polly:DescribeVoices', 'polly:SynthesizeSpeech'], resources: ['*'] }))
-    // the browser streams to the signed URL the backend hands it: signed for this action
+    // the browser streams to the signed URL the backend hands it: signed for this action (no resource type, so "*"); it
+    // may name a project's custom vocabulary, which needs nothing more of this role (src/infra/voice.ts)
     role.addToPolicy(new iam.PolicyStatement({ sid: 'Transcription', actions: ['transcribe:StartStreamTranscriptionWebSocket'], resources: ['*'] }))
     role.addToPolicy(new iam.PolicyStatement({ sid: 'VoiceCache', actions: ['s3:GetObject', 's3:PutObject'], resources: [this.voiceBucket.arnForObjects(`${VOICE_PREFIX}/*`)] }))
     // a cache miss is a 404, not a 403, only with ListBucket

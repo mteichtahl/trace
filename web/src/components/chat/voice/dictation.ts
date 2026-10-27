@@ -43,12 +43,17 @@ export interface DictationHandlers {
   onEnd?: () => void
 }
 
+/** Whether the project's own words (its Transcribe custom vocabulary) are in use, as /api/voice/listen says. */
+export interface DictationWords { state: 'READY' | 'PENDING' | 'FAILED' | 'NONE'; used: boolean; note: string }
+
 export interface Dictation {
   stop: () => void
+  /** the project's words, when a project was named */
+  words: DictationWords | null
 }
 
 export async function startDictation(o: { language: string; repo?: string } & DictationHandlers): Promise<Dictation> {
-  const { url } = await api<{ url: string }>('/api/voice/listen', { method: 'POST', body: { language: o.language, ...(o.repo ? { repo: o.repo } : {}) } })
+  const { url, vocabulary } = await api<{ url: string; vocabulary?: DictationWords }>('/api/voice/listen', { method: 'POST', body: { language: o.language, ...(o.repo ? { repo: o.repo } : {}) } })
   const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } })
   const ctx = new AudioContext()
   const blob = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }))
@@ -100,6 +105,7 @@ export async function startDictation(o: { language: string; repo?: string } & Di
   }
 
   return {
+    words: vocabulary ?? null,
     stop() {
       // an empty AudioEvent tells Transcribe the audio has ended; it then sends its last results and closes
       if (ws.readyState === WebSocket.OPEN) ws.send(audioEvent(new Uint8Array(0)))

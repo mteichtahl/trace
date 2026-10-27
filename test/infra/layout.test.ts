@@ -116,7 +116,8 @@ describe('the nested layout', () => {
     // include GithubConnectionArn and GithubConnectionCreated: src/infra/runner.ts GithubConnection). The web app adds
     // three resources (its nested stack, which holds the live events API too, the settings parameter and the web
     // client) and four outputs (WebUrl, WebDistributionId, EventsApiEndpoint, WebClientId)
-    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:90/25:0', '24:117/25:4', '60:153/25:4'])
+    // (the dictation vocabularies' read, src/infra/voice.ts, tips the API role's inline policy over at one project too)
+    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:91/25:1', '24:117/25:4', '60:153/25:4'])
     // without a connection given, the stack creates one: one more resource of the parent's, and nothing more per project
     const created = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: {} }), 'Count1Created')
     expect(count(json(created.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0) + 1)
@@ -201,7 +202,15 @@ describe('the nested layout', () => {
           if (c.Type === 'AWS::IAM::Policy') c.Properties.PolicyDocument.Statement = c.Properties.PolicyDocument.Statement.filter((x: { Sid?: string }) => !String(x.Sid).startsWith('ProjectGpuWait'))
           return c
         }
-        const nestedOwn = Object.entries(nt.Resources).filter(([, r]) => !jobEvents.includes(r.Type)).map(([id, r]) => [id, withoutJobEvents(r)] as const)
+        // the nested worker role's policy also has the job events' statements, so CDK moves what no longer fits its
+        // inline policy into a managed policy (…RuntimeRoleOverflowPolicy): folded back in to compare with flat's one
+        const folded = Object.fromEntries(Object.entries(nt.Resources).filter(([id]) => !/RuntimeRoleOverflowPolicy/.test(id)).map(([id, r]) => [id, JSON.parse(JSON.stringify(r)) as Res]))
+        for (const [id, r] of Object.entries(nt.Resources).filter(([oid]) => /RuntimeRoleOverflowPolicy/.test(oid))) {
+          const into = Object.entries(folded).find(([fid]) => /RuntimeRoleDefaultPolicy/.test(fid))?.[1] as (Res & { Properties: Record<string, any> }) | undefined
+          expect(into, id).toBeDefined()
+          into?.Properties.PolicyDocument.Statement.push(...(r as Res & { Properties: Record<string, any> }).Properties.PolicyDocument.Statement)
+        }
+        const nestedOwn = Object.entries(folded).filter(([, r]) => !jobEvents.includes(r.Type)).map(([id, r]) => [id, withoutJobEvents(r)] as const)
         expect(JSON.stringify(flatOwn)).not.toMatch(/ProjectGpuWait|TRACE_BATCH_EVENTS_TOPIC/)
         expect(Object.values(nt.Resources).filter((r) => jobEvents.includes(r.Type))).toHaveLength(4)
         expect(flatOwn.filter(([, r]) => jobEvents.includes(r.Type))).toHaveLength(0)

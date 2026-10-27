@@ -92,6 +92,7 @@ import type { GatewayRef } from './gateway.js'
 import type { GpuCompute } from './gpu.js'
 import { ProjectKnowledgeBase } from './knowledge.js'
 import { EVENT_ACTIONS, RECORD_ACTIONS, TraceMemory } from './memory.js'
+import { projectVocabularyStatements, vocabularyBase } from './voice.js'
 import { RunnerProject } from './runner.js'
 import {
   GPU_JOB_VCPUS, type InfraProps, type ProjectRef, REPOSITORY_OUTPUT, kbEnabled, kbOutputs, knowledgeBaseOf, projectOutputs, projectSettings,
@@ -257,6 +258,9 @@ export class ProjectStack extends Construct {
     grantPrefixes(role, bucket, { conditional: [CENTRAL_PREFIX], readWrite: [projectDataPrefix(repository), projectJobsPrefix(repository)] })
     // the installation's prompt overrides (src/prompts/store.ts): read only, so an agent can't change its own prompt
     grantPrefixes(role, bucket, { read: [PROMPTS_PREFIX] })
+    // dictation's project vocabularies (src/infra/voice.ts): create its own (tagged), update and read only its own names
+    const vocabulary = projectVocabularyStatements({ partition, region, account, prefix: cfg.prefix, hash, slug })
+    for (const st of vocabulary) role.addToPolicy(st)
     // which memory records are inactive (projects/<slug>/memory-state, src/agents/runtime/memory-state.ts): read, never
     // written, by the agent: it has Bash and these credentials, and must not bring back a record people turned off
     const memoryState = new iam.PolicyStatement({
@@ -483,6 +487,7 @@ export class ProjectStack extends Construct {
         TRACE_PROJECT: slug,
         TRACE_PROJECT_HOME: `s3://${bucket.bucketName}/${projectDataPrefix(repository)}`,
         TRACE_GITHUB_SECRET_ARN: this.secret.secretArn,
+        TRACE_VOCABULARY_BASE: vocabularyBase(cfg.prefix, hash),
         ...memoryEnv,
         ...kbEnv,
         ...gpuEnv,
@@ -521,6 +526,8 @@ export class ProjectStack extends Construct {
     if (this.memory) for (const st of memoryStatements(this.memory)) this.actionsRole.addToPolicy(st)
     // and searches and syncs its own knowledge base (the kb-sync job on a push to the default branch, and the fallback)
     if (this.knowledgeBase) for (const st of this.knowledgeBase.statements()) this.actionsRole.addToPolicy(st)
+    // and makes its dictation vocabulary on that push too (the kb-sync job's voice.vocabulary step)
+    for (const st of vocabulary) this.actionsRole.addToPolicy(st.copy())
 
     // ------------------------------------------------------------------ its CI: the CodeBuild runner project (src/infra/runner.ts)
     // every GitHub Actions job of the repository runs here, in this account; its role gives a job no AWS access (a job

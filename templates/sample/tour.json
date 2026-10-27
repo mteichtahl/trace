@@ -108,6 +108,7 @@
     "exercises": [
       "agent.delegate",
       "kb.sync",
+      "voice.vocabulary",
       "kicad.projects",
       "kicad.netlist",
       "kicad.components",
@@ -117,7 +118,7 @@
       "firmware.targets"
     ],
     "remote": null,
-    "body": "Capture stage. The verification specialist cannot sync the knowledge base or list projects: it delegates this to the worker with agent.delegate.\n\n- Worker: kb.sync (wait for the ingestion), kicad.projects, kicad.netlist on `hardware/trace-sample.kicad_pro` (12 nets, 17 parts), firmware.detect path=firmware and firmware.targets.\n- Specialist, afterwards: kicad.components, kicad.board and kicad.net /ADC_IN to check what the worker reported.\n\nDone when: the knowledge base has the docs and the KiCad summary, firmware.detect finds the make target, and the netlist matches the schematic. Comment the numbers with their run ids on this issue, then close it."
+    "body": "Capture stage. The verification specialist cannot sync the knowledge base or list projects: it delegates this to the worker with agent.delegate.\n\n- Worker: kb.sync (wait for the ingestion), voice.vocabulary (the dictation words: say how many rows and its state), kicad.projects, kicad.netlist on `hardware/trace-sample.kicad_pro` (12 nets, 17 parts), firmware.detect path=firmware and firmware.targets.\n- Specialist, afterwards: kicad.components, kicad.board and kicad.net /ADC_IN to check what the worker reported.\n\nDone when: the knowledge base has the docs and the KiCad summary, firmware.detect finds the make target, and the netlist matches the schematic. Comment the numbers with their run ids on this issue, then close it."
   },
   {
     "id": "prove-front-end",

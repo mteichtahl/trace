@@ -22,6 +22,10 @@
 # Knowledge base (optional): with TRACE_KB_ID and TRACE_KB_DATA_SOURCE_ID (set by `tracectl install`), every push to
 # __TR_BRANCH__ syncs the project's knowledge base (job kb-sync: `tracectl kb sync` through TRACE_AWS_ROLE), whatever
 # worker.runner says; in the actions runner the agents also get kb_search and kb_status.
+# Dictation words: every push to __TR_BRANCH__ also makes or updates the project's Amazon Transcribe custom vocabulary
+# from its design (job voice-vocabulary: `tracectl tool voice.vocabulary` through TRACE_AWS_ROLE, which may change only
+# this project's vocabularies), so dictation in the web app writes its reference designators, part numbers, net names
+# and requirement ids as the design spells them. Off with the setting voice.vocabulary = false.
 # Also needs TRACE_TOKEN.
 # How work is found: events. A finished trace-ci run (it labels a red PR or opens an issue), an issue labelled
 # __TR_AGENT_FIX__, and a push to __TR_BRANCH__ (which can put open PRs in conflict) each start the pick at once.
@@ -82,6 +86,33 @@ jobs:
           TRACE_KB_ID: ${{ vars.TRACE_KB_ID }}
           TRACE_KB_DATA_SOURCE_ID: ${{ vars.TRACE_KB_DATA_SOURCE_ID }}
         run: tracectl kb sync --wait 20
+
+  # the project's dictation vocabulary follows the default branch's design (src/tools/voice): it does not wait for
+  # Transcribe to finish (the web app checks the state when the microphone opens)
+  voice-vocabulary:
+    if: >-
+      vars.TRACE_WORKER != 'false' && github.event_name == 'push' && vars.TRACE_AWS_ROLE != '' && vars.TRACE_AGENT_RUNTIME_ARN != ''
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","voice-vocabulary"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    concurrency: { group: trace-voice-vocabulary, cancel-in-progress: false }
+    permissions:
+      id-token: write          # GitHub OIDC -> TRACE_AWS_ROLE (projects/<slug>/voice/ in S3, this project's vocabularies)
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.TRACE_AWS_ROLE }}
+          role-session-name: trace-voice-${{ github.run_id }}
+          aws-region: ${{ vars.TRACE_AWS_REGION || 'us-east-1' }}
+      - uses: __TR_SOURCE__/harness/actions/install@__TR_REF__
+        with:
+          bridge: none
+      - name: Make the dictation vocabulary
+        env:
+          TRACE_HOME: ${{ vars.TRACE_HOME }}
+          TRACE_AGENT_RUNTIME_ARN: ${{ vars.TRACE_AGENT_RUNTIME_ARN }}
+        run: tracectl tool voice.vocabulary wait_minutes=0
 
   pick:
     if: >-

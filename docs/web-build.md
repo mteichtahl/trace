@@ -69,7 +69,7 @@ All bodies are JSON unless noted. Errors: `{ ok: false, error, code? }` with a f
 | `POST /api/agui` | bearer, AG-UI `RunAgentInput` | `text/event-stream` of AG-UI events |
 | `GET /api/voice/voices?language=en-AU` | bearer | `{ voices: [{ id, name, gender, engines }] }` |
 | `POST /api/voice/speak` | bearer, `{ text, voice, engine?, rate? }` | `{ url, marks }` (signed S3 URL of the MP3, and word speech marks) |
-| `POST /api/voice/listen` | bearer, `{ language, repo? }` | `{ url }`: signed Transcribe streaming WebSocket URL, 5 minutes; vocabulary phrases from the project when `repo` |
+| `POST /api/voice/listen` | bearer, `{ language, repo? }` | `{ url, vocabulary? }`: signed Transcribe streaming WebSocket URL, 5 minutes; with `repo`, the project's custom vocabulary (`voice.vocabulary`, asked as the person) is named in it when READY, and `vocabulary: { state, used, note }` says whether |
 | `GET /api/ops?range=24h&repo=` | bearer | `{ status, tiles, alarms, sections: [{ id, title, widgets: [{ id, title, kind, unit, series: [{ label, repo?, points: [[t, v]] }] }] }], updatedAt, nextAt }` filtered by access |
 
 ## Live events (AppSync Events)
@@ -133,6 +133,7 @@ reviewer. `require_(p, repo, 'write')` needs the contributor part (or admin). `p
 | `skill.get` / `skill.draft` / `skill.drafts` / `skill.submit` | read / read / read / write | a guided skill's bar computed from the record (`unavailable` where it cannot be yet), the person's draft in the journey store, and submit (refused unless every check is met or waived; Waiver and Question answer go through `waiver.add` and `question.answer`) |
 | `policy.get` / `policy.set` | signed-in / admin | the installation's locked settings (`me.get` answers them as `locks`; `me.set` refuses a locked key) |
 | `users.history` | admin | a person's assignment log in words |
+| `voice.vocabulary` / `voice.vocabulary.sync` | read / write | the state of the project's dictation vocabulary for a language (`READY`, `PENDING`, `FAILED`, `NONE`, `usable`), and remaking it on the project's worker (`src/api/actions-voice.ts`, `src/tools/voice`) |
 | `prompts.chat` | signed-in (a class) | the installation's text of each editable `chat.*` entry (null: the default), never a locked one; the chat agent asks for it as the person and keeps it 60 s per container (`src/web/chat-prompts.ts`), cleared by a prompts write through that container |
 
 The app reads the answers whose shape differs from its screens' through `web/src/lib/readers.ts` (journey.get, inbox,

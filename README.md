@@ -496,12 +496,30 @@ backend) when the stack is deployed, and lives in its own nested stack (`src/inf
 | Live updates | AppSync Events, `<prefix>-events`. People subscribe with their sign-in, each to `/trace/users/<their id>` only. Only the backend, and the agents' facts function below, can publish |
 | Agents' facts | When an agent records a journey fact (a question, a check, a stuck report), the central bucket's event reaches a small function, `<prefix>-journey-events`, through an EventBridge rule. It tells everyone on that project to refresh, and notifies the people a new question or stuck report is for. Its role may read the access store and the agents' facts files, and publish live events. Nothing else |
 | Sign-in | A Cognito app client of its own, `<prefix>-web`, using choice-based sign-in. People sign in with a passkey or a password, plus an email code when SES is set (see below). The CLI keeps its own client |
-| Voice | Polly speech kept 30 days in a small bucket of its own. The browser gets signed URLs for it and for Transcribe streaming |
+| Voice | Polly speech kept 30 days in a small bucket of its own. The browser gets signed URLs for it and for Transcribe streaming. Dictation in a project uses that project's own words (below) |
 
 The backend's role can read its settings and use Polly, Transcribe streaming, its voice cache, CloudWatch (read
 only), the chat model, and publishing live events. It cannot reach the access store, any project's data or Cognito's
 admin API. Anything about a project goes through the API runtime, with the person's own token, so the access checks
 stay in one place.
+
+**Dictation with the project's words.** Each project gets an Amazon Transcribe custom vocabulary made from its design,
+so dictation writes `U4`, `R14`, `STM32F405RGT6`, `VCC_3V3` or `REQ-LAY-001` as the design spells them. Every push to
+the default branch remakes it (the `voice-vocabulary` job of `trace-worker.yml`, `tracectl tool voice.vocabulary`, with
+the project's own role); `voice.vocabulary.sync` does it on demand through the API. The table
+(`projects/<owner>/<repo>/voice/<language>.txt`) has one row per way of saying a name: a reference designator's
+letters spelled and its number said digit by digit or as a number ("R one four", "R fourteen" → R14), a part number or
+net spelled with its words kept ("Buck E N" → Buck_EN), with Transcribe's rules for a phrase (letters and hyphens, single
+letters with periods, no digits, at most 256 characters, at most 50 KB in all; `SoundsLike` and `IPA` are left empty,
+since Transcribe no longer uses them). It is named `<prefix>-<project hash>-<language>`, for the languages in the
+project setting `voice.languages` (default `en-AU`; English only, as the spoken numbers are English; Transcribe allows
+100 vocabularies per account by default). When the microphone opens, the backend asks the API (`voice.vocabulary`, as
+the person) and names the vocabulary in the signed streaming URL only when it is ready; the app says whether the
+project's words are in use. Waiting for a vocabulary to be ready is a timer (every 10 seconds, growing to a minute),
+declared: Transcribe's "Vocabulary State Change" event is sent only when a vocabulary is first made, not when it is
+updated. IAM: each project's worker and OIDC roles may create vocabularies only tagged with their own project and
+update and read only their own names; the API role may only read their state; the backend role gets nothing new. Turn
+it off per project with `voice.vocabulary = false`.
 
 **Ask trace's instructions.** An admin's change to `chat.role` at installation scope (Admin › Prompts, or
 `prompts.set`) reaches the chat agent within a minute. The backend cannot read the prompts store, and is not given

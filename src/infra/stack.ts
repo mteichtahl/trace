@@ -81,6 +81,7 @@ import { KB_RETRIEVE_ACTIONS, VectorStore, knowledgeBaseArn } from './knowledge.
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
 import { GithubConnection, RunnerProject } from './runner.js'
+import { apiVocabularyStatement } from './voice.js'
 import { SELF_WRITABLE, TraceWeb, addWebClient, traceWebProps } from './web.js'
 import { ACCESS_PREFIX, AGENT_FACTS, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
@@ -468,6 +469,8 @@ export class TraceStack extends Stack {
       }))
     }
     grantReadRecords(apiRole, memories)
+    // dictation: the state of each project's vocabulary for voice.vocabulary (after its access check), nothing more
+    apiRole.addToPolicy(apiVocabularyStatement({ partition: this.partition, region: cfg.region, account: cfg.account, prefix: cfg.prefix }))
     // kb.search on any project's knowledge base, after the access check (src/api/actions.ts); nothing else of them.
     // The ARN is made from the id, so the parent takes one output per knowledge base from its nested stack, not two.
     if (kbs.length) {
@@ -503,6 +506,8 @@ export class TraceStack extends Stack {
         TRACE_AWS_ACCOUNT: cfg.account,
         TRACE_WORKER_RUNTIMES: workerList,
         TRACE_INTEGRATIONS_PREFIX: integrationsPrefix(cfg.prefix),
+        // names the projects' dictation vocabularies (<prefix>-<hash>-<language>: src/api/actions-voice.ts)
+        TRACE_PREFIX: cfg.prefix,
         // where this installation's self-update runs (projects.create says when a new project's agent arrives)
         ...(cfg.selfUpdate ? { TRACE_SELF_UPDATE: `${cfg.selfUpdate.repository}@${cfg.selfUpdate.branch}` } : {}),
         ...memoryEnv,
