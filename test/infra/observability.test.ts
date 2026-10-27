@@ -23,7 +23,8 @@ const WORKER = `trace_w_${H}`
 type Res = { Type: string; Properties?: Record<string, unknown>; DeletionPolicy?: string }
 
 const policiesOf = (t: Template, prefix: string): string =>
-  Object.entries(t.findResources('AWS::IAM::Policy')).filter(([id]) => id.startsWith(prefix)).map(([, p]) => JSON.stringify(p)).join()
+  // the role's inline policy and, once its statements outgrow 10 KB, the managed overflow policy CDK splits them into
+  Object.entries({ ...t.findResources('AWS::IAM::Policy'), ...t.findResources('AWS::IAM::ManagedPolicy') }).filter(([id]) => id.startsWith(prefix)).map(([, p]) => JSON.stringify(p)).join()
 
 const runtimeEnv = (t: Template, name: string): Record<string, unknown> => {
   const r = Object.values(t.findResources('AWS::BedrockAgentCore::Runtime') as Record<string, Res>).find((x) => x.Properties?.AgentRuntimeName === name)

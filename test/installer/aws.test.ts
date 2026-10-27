@@ -5,14 +5,15 @@
 import { ListMemoriesCommand } from '@aws-sdk/client-bedrock-agentcore-control'
 import { DescribeStacksCommand, ListStackResourcesCommand } from '@aws-sdk/client-cloudformation'
 import { DescribeDeliveryDestinationsCommand, DescribeDeliverySourcesCommand } from '@aws-sdk/client-cloudwatch-logs'
-import { BatchGetBuildsCommand, StartBuildCommand } from '@aws-sdk/client-codebuild'
+import { BatchGetBuildsCommand, DeleteSourceCredentialsCommand, ImportSourceCredentialsCommand, ListSourceCredentialsCommand, StartBuildCommand } from '@aws-sdk/client-codebuild'
 import { GetConnectionCommand, ListConnectionsCommand, ListTagsForResourceCommand } from '@aws-sdk/client-codeconnections'
 import { DescribeSecretCommand, ResourceNotFoundException } from '@aws-sdk/client-secrets-manager'
 import { describe, expect, it } from 'vitest'
 import { AnswersSchema } from '../../src/installer/answers.js'
 import { type WaitNotice, activeWaits, checkNow } from '../../src/core/wait.js'
 import {
-  CONNECTION_WAIT_WHY, GPU_WAIT_WHY, type NameClients, clockTime, deployedProjects, ensureGpuImage, nameIndex, resolveConnection, reusableConnection, stackOutputs, waitForConnection,
+  CONNECTION_WAIT_WHY, GPU_WAIT_WHY, type ConnectionChoice, type NameClients, chooseRunnerAuth, clockTime, deployedProjects, ensureGpuImage, ensureSourceCredential, nameIndex,
+  removeSourceCredential, resolveConnection, reusableConnection, stackOutputs, waitForConnection,
 } from '../../src/installer/aws.js'
 import { chooseGenerations, projectNames } from '../../src/installer/bootstrap.js'
 import { InfraPropsSchema, projectHash, projectOutputs } from '../../src/infra/props.js'
@@ -388,5 +389,60 @@ describe('the GitHub connection the CodeBuild runners use', () => {
 
   it('prints the time of day as HH:MM:SS', () => {
     expect(clockTime(new Date(2026, 0, 2, 3, 4, 5))).toBe('03:04:05')
+  })
+})
+
+describe("the GitHub token as CodeBuild's source credential", () => {
+  const codebuild = (credentials: { serverType: string; authType: string; arn?: string }[]) => fake((c) => {
+    if (c instanceof ListSourceCredentialsCommand) return { sourceCredentialsInfos: credentials }
+    return {}
+  })
+
+  it('imports the token (GITHUB, PERSONAL_ACCESS_TOKEN) when the account has none, and never overwrites someone else\'s', async () => {
+    const fresh = codebuild([])
+    expect(await ensureSourceCredential(fresh, 'tok', false)).toMatchObject({ state: 'imported', detail: expect.stringMatching(/no console step/) })
+    expect(fresh.sent.find((x) => x.name === ImportSourceCredentialsCommand.name)?.input).toEqual({ serverType: 'GITHUB', authType: 'PERSONAL_ACCESS_TOKEN', token: 'tok', shouldOverwrite: true })
+    const theirs = codebuild([{ serverType: 'GITHUB', authType: 'CODECONNECTIONS' }])
+    expect(await ensureSourceCredential(theirs, 'tok', false)).toMatchObject({ state: 'existing', detail: expect.stringMatching(/codeconnections.*leaves it alone/) })
+    expect(theirs.sent.map((x) => x.name)).not.toContain(ImportSourceCredentialsCommand.name)
+    // one trace imported is refreshed
+    const ours = codebuild([{ serverType: 'GITHUB', authType: 'PERSONAL_ACCESS_TOKEN' }])
+    expect((await ensureSourceCredential(ours, 'tok', true)).state).toBe('refreshed')
+    expect(ours.sent.map((x) => x.name)).toContain(ImportSourceCredentialsCommand.name)
+  })
+
+  it('removes the GitHub one on uninstall, and says when there was none', async () => {
+    const c = codebuild([{ serverType: 'BITBUCKET', authType: 'BASIC_AUTH', arn: 'arn:bb' }, { serverType: 'GITHUB', authType: 'PERSONAL_ACCESS_TOKEN', arn: 'arn:gh' }])
+    expect(await removeSourceCredential(c)).toBe(true)
+    expect(c.sent.find((x) => x.name === DeleteSourceCredentialsCommand.name)?.input).toEqual({ arn: 'arn:gh' })
+    expect(await removeSourceCredential(codebuild([]))).toBe(false)
+  })
+})
+
+describe('how the build runners reach GitHub (runners.auth)', () => {
+  const ready: ConnectionChoice = { pass: CONNECTION, arn: CONNECTION, name: 'trace-github', ready: true, message: 'Using trace-github, already authorized.' }
+  const pending: ConnectionChoice = { name: 'trace-github', ready: false, message: 'No authorized GitHub connection …' }
+  const resolver = (c: ConnectionChoice | Error) => {
+    const asked: unknown[] = []
+    return { asked, resolve: async (o: unknown) => { asked.push(o); if (c instanceof Error) throw c; return c } }
+  }
+
+  it('automatic: an authorized connection, else the token; never waits for a person', async () => {
+    const r = resolver(ready)
+    expect(await chooseRunnerAuth('auto', { prefix: 'trace', deployed: null }, r.resolve)).toEqual({ auth: 'connection', connection: ready })
+    expect(await chooseRunnerAuth('auto', { prefix: 'trace', deployed: null }, resolver(pending).resolve)).toMatchObject({ auth: 'token', message: expect.stringMatching(/^No authorized GitHub connection in this account and region\. CodeBuild reaches GitHub with the GitHub token/) })
+    // a connection that can't be used (ERROR) is no reason to stop: the token
+    expect(await chooseRunnerAuth('auto', { prefix: 'trace', deployed: null }, resolver(new Error('status ERROR')).resolve)).toMatchObject({ auth: 'token', message: expect.stringMatching(/can't be used \(status ERROR\)/) })
+  })
+
+  it('a connection when asked for one, or named, authorized or not; the token when asked, without looking', async () => {
+    expect(await chooseRunnerAuth('connection', { prefix: 'trace', deployed: null }, resolver(pending).resolve)).toEqual({ auth: 'connection', connection: pending })
+    const named = resolver(pending)
+    expect(await chooseRunnerAuth('auto', { prefix: 'trace', given: CONNECTION, deployed: null }, named.resolve)).toEqual({ auth: 'connection', connection: pending })
+    expect(named.asked).toEqual([{ prefix: 'trace', given: CONNECTION, deployed: null }])
+    const none = resolver(ready)
+    expect((await chooseRunnerAuth('token', { prefix: 'trace', deployed: null }, none.resolve)).auth).toBe('token')
+    expect(none.asked).toEqual([])
+    await expect(chooseRunnerAuth('connection', { prefix: 'trace', deployed: null }, resolver(new Error('status ERROR')).resolve)).rejects.toThrow(/ERROR/)
   })
 })

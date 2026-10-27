@@ -184,6 +184,13 @@ export async function start(): Promise<void> {
     memory: () => projectMemoriesFromEnv(process.env),
     kbs: () => projectKbsFromEnv(process.env),
     retrieve: async () => (await import('../tools/kb/search.js')).awsRetrieve(process.env.AWS_REGION),
+    ...(process.env.TRACE_INTEGRATIONS_PREFIX ? {
+      integrations: async () => {
+        const { IntegrationStore, secretsManagerApi } = await import('../core/integrations.js')
+        const prefix = (process.env.TRACE_INTEGRATIONS_PREFIX ?? '').replace(/\/integrations\/$/, '')
+        return new IntegrationStore(prefix, await secretsManagerApi({ region: env.AWS_REGION }))
+      },
+    } : {}),
     scratch,
   }
   const server = await listen({

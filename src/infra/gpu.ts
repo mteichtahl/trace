@@ -43,6 +43,7 @@ import type { Provider } from 'aws-cdk-lib/custom-resources'
 import { Construct } from 'constructs'
 import { cpuJobDefinitionName, gpuJobDefinitionName, PROJECT_TAG, projectHash, projectJobsPrefix, projectSlug } from '../core/project.js'
 import { grantPrefixes } from './project.js'
+import { imageBuildEnv, imageBuildSpec } from './images.js'
 import { GPU_JOB_VCPUS } from './props.js'
 
 export { JOBS_PREFIX } from '../core/project.js'
@@ -61,6 +62,9 @@ export interface GpuComputeProps {
   /** let the provider's functions start and poll this build project */
   allowBuild: (projectArn: string) => void
   retainData: boolean
+  /** where the image comes from (props.ts images) and the content tag its published copy carries (images.ts) */
+  images: { source: 'prebuilt' | 'build'; registry: string }
+  contentTag: string
   /** more environment for each job (the OpenTelemetry exporter's, src/infra/observability.ts) */
   environment?: Record<string, string>
   /** the CPU compute environment and queue (null: none) */
@@ -111,17 +115,12 @@ export class GpuCompute extends Construct {
       description: 'Builds the trace GPU job image (agent/Dockerfile.gpu: CUDA, Blender, Freerouting, OrthoRoute, KiCad) for AWS Batch, on amd64',
       source: codebuild.Source.s3({ bucket: p.source.bucket, path: p.source.s3ObjectKey }),
       environment: { buildImage: codebuild.LinuxBuildImage.STANDARD_7_0, computeType: codebuild.ComputeType.LARGE, privileged: true },
-      environmentVariables: { REPOSITORY_URI: { value: this.repository.repositoryUri }, IMAGE_TAG: { value: 'latest' } },
+      environmentVariables: { REPOSITORY_URI: { value: this.repository.repositoryUri }, IMAGE_TAG: { value: 'latest' }, ...imageBuildEnv(p.images, 'gpu', p.contentTag) },
       timeout: Duration.minutes(120),
       logging: { cloudWatch: { logGroup: new logs.LogGroup(this, 'ImageBuildLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY }) } },
-      buildSpec: codebuild.BuildSpec.fromObject({
-        version: '0.2',
-        phases: {
-          pre_build: { commands: ['aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${REPOSITORY_URI%%/*}"'] },
-          build: { commands: ['docker build --platform linux/amd64 -f agent/Dockerfile.gpu -t "$REPOSITORY_URI:$IMAGE_TAG" .'] },
-          post_build: { commands: ['docker push "$REPOSITORY_URI:$IMAGE_TAG"'] },
-        },
-      }),
+      // the published image when there is one for this source, else a build cached on the previous image (images.ts)
+      buildSpec: codebuild.BuildSpec.fromObject(imageBuildSpec({ dockerfile: 'agent/Dockerfile.gpu', platform: 'linux/amd64' })),
+      cache: codebuild.Cache.local(codebuild.LocalCacheMode.DOCKER_LAYER),
     })
     this.repository.grantPullPush(build)
     p.source.grantRead(build)

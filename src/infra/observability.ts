@@ -31,6 +31,7 @@ import { Provider } from 'aws-cdk-lib/custom-resources'
 import { Construct } from 'constructs'
 import { memoryDeliveryName } from '../core/project.js'
 import type { InfraProps } from './props.js'
+import { bundlingRoot } from './lockfile.js'
 
 /** Where ADOT's EMF metrics land (OTEL_EXPORTER_OTLP_LOGS_HEADERS x-aws-metric-namespace on AgentCore). */
 export const METRIC_NAMESPACE = 'bedrock-agentcore'
@@ -143,6 +144,7 @@ export class Observability extends Construct {
     if (p.settings.transactionSearch) {
       const fn = new NodejsFunction(this, 'TransactionSearchFn', {
         entry: join(import.meta.dirname, '..', '..', 'src', 'infra', 'lambda', 'transaction-search.ts'),
+        ...bundlingRoot(join(import.meta.dirname, '..', '..')),
         handler: 'onEvent',
         runtime: lambda.Runtime.NODEJS_22_X,
         architecture: lambda.Architecture.ARM_64,

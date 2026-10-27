@@ -1,31 +1,43 @@
 /**
- * The installer page's behaviour (bundled to /ui.js by scripts/bundle-ui.mjs). Five steps — GitHub, AWS, agents,
- * people, review — each checked against the local installer server before moving on, then the installation's
- * progress streamed live. The answers are validated with the same zod schemas the server uses.
+ * The installer page's behaviour (bundled to /ui.js by scripts/bundle-ui.mjs). Four steps, and only the first asks
+ * for anything:
+ *
+ *   1 Connect        AWS credentials (a profile, or keys) and one GitHub token; "Check" runs the preflight
+ *                    (src/installer/preflight.ts) and shows what was derived and every finding, with its fix
+ *   2 Projects       the repositories the token sees (or a new one to create); none is fine
+ *   3 Integrations   optional service keys (Nexar, Mouser, Digi-Key); skippable, and `trace integrations set` later
+ *   4 Review         the plan, how long it takes, and an "Advanced" disclosure with every other setting
+ *
+ * then the installation's progress, streamed. The answers are validated with the same zod schemas the server uses.
  *
  * Nothing here polls: the page asks the server only when the person acts, and hears the installation over one event
- * stream (/api/events). The one wait the installer itself does on a timer (the GPU image build: AWS cannot send this
- * computer its events) arrives as a `wait` event after every check; the page shows it with a countdown to the next
- * check, worked out here from nextCheckAt and redrawn each second (a display tick: it asks the server nothing), and a
- * Check now button (POST /api/check-now).
+ * stream (/api/events). The waits the installer itself does on a timer (the GPU image build, a GitHub connection
+ * being authorized: AWS cannot send this computer their events) arrive as `wait` events after every check; the page
+ * shows each with a countdown to the next check, worked out here from nextCheckAt and redrawn each second (a display
+ * tick: it asks the server nothing), and a Check now button (POST /api/check-now).
  */
-import { type AnswersInput, AnswersSchema, type InstallEvent, RUNNER_COMPUTE_TYPES, type Step, type WaitNoticeView } from '../answers.js'
+import { INTEGRATIONS, INTEGRATION_NAMES, type IntegrationName } from '../../core/integrations-catalog.js'
+import { type AnswersInput, AnswersSchema, type Check, type InstallEvent, RUNNER_AUTH, RUNNER_COMPUTE_TYPES, type Step, type WaitNoticeView } from '../answers.js'
 
 // ------------------------------------------------------------------ the server's answers (shapes the page relies on)
 
+interface RepoAccess { repo: string; visible: boolean; configure: boolean; administer: boolean; webhooks: boolean; missing: string[] }
 interface TokenInfo {
   login: string; name: string | null; kind: string; scopes: string[]; warnings: string[]
   repos: { fullName: string; private: boolean; admin: boolean; push: boolean; defaultBranch: string }[]
-  access: { repo: string; ok: boolean; reason: string }[]
+}
+interface Preflight {
+  checks: Check[]; ok: boolean; token: TokenInfo | null; repos: RepoAccess[]; region: string; profileRegion: string
   /** trace's own repository, and whether the token can set its variables (null: the installer could not tell which) */
   self: { repo: string; ok: boolean; reason: string } | null
+  facts: {
+    account?: string; arn?: string; login?: string; email?: string | null; models?: { id: string; name: string }[]
+    gpuQuota?: number | null; cpuQuota?: number | null; s3vectors?: boolean | null; sourceAdmin?: boolean | null; publishedRegistry?: string | null; oidcProvider?: boolean; cdkBootstrapped?: boolean
+    existing?: { status: string; outputs: Record<string, string> } | null
+    runnerConnection?: string | null
+  }
 }
-interface AwsCheck {
-  account: string; arn: string; region: string; agentCore: { ok: boolean; reason: string }
-  models: { id: string; name: string }[]; oidcProvider: boolean; cdkBootstrapped: boolean
-  existing: { stack: string; status: string; outputs: Record<string, string> } | null; warnings: string[]
-}
-interface Env { profiles: { names: string[]; regions: Record<string, string> }; saved: AnswersInput | null; installed: { stack: string; region: string } | null; node: string }
+interface Env { profiles: { names: string[]; regions: Record<string, string> }; saved: AnswersInput | null; installed: { stack: string; region: string } | null; node: string; defaultRegion: string }
 
 const KEY = document.querySelector<HTMLMetaElement>('meta[name="trace-key"]')?.content ?? ''
 
@@ -44,44 +56,57 @@ async function api<T>(method: 'GET' | 'POST', path: string, body?: unknown): Pro
 
 const REGIONS = ['us-east-1', 'us-east-2', 'us-west-2', 'eu-central-1', 'eu-west-1', 'eu-west-2', 'ap-southeast-2', 'ap-southeast-1', 'ap-northeast-1', 'ap-south-1', 'ca-central-1', 'sa-east-1']
 
-type Tab = 'github' | 'aws' | 'agents' | 'people' | 'review' | 'install'
+type Tab = 'connect' | 'projects' | 'integrations' | 'review' | 'install'
 const TABS: { id: Tab; title: string }[] = [
-  { id: 'github', title: '1 GitHub' }, { id: 'aws', title: '2 AWS' }, { id: 'agents', title: '3 Agents' },
-  { id: 'people', title: '4 People' }, { id: 'review', title: '5 Review' }, { id: 'install', title: 'Install' },
+  { id: 'connect', title: '1 Connect' }, { id: 'projects', title: '2 Projects' }, { id: 'integrations', title: '3 Integrations (optional)' },
+  { id: 'review', title: '4 Review' }, { id: 'install', title: 'Install' },
 ]
 
 type PersonClass = 'admin' | 'user' | 'guest'
 interface Person { email: string; class: PersonClass; projects: Set<string> }
+type Template = 'empty' | 'python' | 'kicad' | 'rust' | 'sample'
+interface Project { branch: string; onboard: boolean; applySettings: boolean; memoryDays: string; generation: number; create: { template: Template; private: boolean } | null }
 
 const s = {
-  tab: 'github' as Tab,
+  tab: 'connect' as Tab,
   done: new Set<Tab>(),
   env: null as Env | null,
-  github: { token: '', adminToken: '', info: null as TokenInfo | null, filter: '', busy: false, error: '' },
-  /** a project's own agent token (OWNER/REPO → token): memory only, like every other secret */
+  aws: { mode: 'profile' as 'profile' | 'keys', profile: 'default', region: '', keyId: '', secret: '', session: '' },
+  github: { token: '', adminToken: '' },
+  pre: null as Preflight | null, preBusy: false, preError: '',
+  fixBusy: '', fixNote: new Map<string, string>(),
+  useCase: { open: false, companyName: '', companyWebsite: '', intendedUsers: '0' as '0' | '1' | '2', industryOption: 'Technology', otherIndustryOption: '', useCases: 'Autonomous coding agents that maintain our own electronics and firmware repositories (fixing CI failures, reviewing designs) on Amazon Bedrock AgentCore.' },
+  /** memoryDays: the field's text ('' = the installation's default); generation: kept from the saved answers */
+  projects: new Map<string, Project>(),
+  filter: '',
+  newRepo: { name: '', template: 'kicad' as Exclude<Template, 'sample'>, private: true },
+  /** the sample project (installer/sample.ts): a new repository among s.projects (template 'sample'), and its tour */
+  sample: { name: '', private: true, tour: true, repo: '' },
   projectTokens: new Map<string, string>(),
-  /** distributor keys for the library gateway (memory only, like every other secret; empty keeps the stored one) */
-  libraryKeys: { MOUSER_API_KEY: '', DIGIKEY_CLIENT_ID: '', DIGIKEY_CLIENT_SECRET: '', NEXAR_CLIENT_ID: '', NEXAR_CLIENT_SECRET: '' },
-  /** memoryDays: the field's text ('' = the installation's default); generation: kept from the saved answers (the
-   * installer raises it when a removed project is added again; never set here) */
-  projects: new Map<string, { branch: string; onboard: boolean; applySettings: boolean; memoryDays: string; generation: number }>(),
-  aws: { mode: 'profile' as 'profile' | 'keys', profile: 'default', region: 'us-east-1', keyId: '', secret: '', session: '', check: null as AwsCheck | null, confirmed: false, busy: false, error: '' },
-  /** where the GitHub Actions jobs run (AWS CodeBuild): connectionArn '' = reuse an authorized connection, else the stack creates `<prefix>-github`; computeType
-   * '' and privileged 'default' = the stack's defaults */
-  runners: { connectionArn: '', computeType: '' as '' | (typeof RUNNER_COMPUTE_TYPES)[number], privileged: 'default' as 'default' | 'on' | 'off',
-    /** build trace's own repository on AWS too; null: not chosen yet (on when the token can configure it) */
-    buildTrace: null as boolean | null },
-  agents: { prefix: 'trace', model: '', maxLifetimeHours: 8, idleMinutes: 15, centralBucketName: '', retainData: true, escalateTo: '', gpuEnabled: true, gpuMaxVcpus: 16, gpuSpot: false,
-    cpuEnabled: true, cpuMaxVcpus: 64, cpuSpot: false, cpuVcpus: 16, cpuMemoryMiB: 32_768, knowledgeBase: true, libraryGateway: false,
-    observability: true, transactionSearch: true, samplingPercent: '', dashboard: true, migrateLayout: false },
-  /** the sample project (installer/sample.ts): repo '' = <login>/trace-sample */
-  sample: { enabled: false, repo: '', private: true, tour: true },
+  integrations: Object.fromEntries(INTEGRATION_NAMES.map((n) => [n, Object.fromEntries(INTEGRATIONS[n].keys.map((k) => [k, '']))])) as Record<IntegrationName, Record<string, string>>,
+  integrationCheck: new Map<IntegrationName, { ok: boolean; detail: string } | 'busy'>(),
+  agents: {
+    prefix: 'trace', model: '', maxLifetimeHours: 8, idleMinutes: 15, centralBucketName: '', retainData: true, escalateTo: '',
+    gpuEnabled: null as boolean | null, gpuMaxVcpus: 16, gpuSpot: false,
+    cpuEnabled: null as boolean | null, cpuMaxVcpus: 64, cpuSpot: false, cpuVcpus: 16, cpuMemoryMiB: 32_768,
+    knowledgeBase: null as boolean | null, libraryGateway: false,
+    observability: true, transactionSearch: true, samplingPercent: '', dashboard: true, migrateLayout: false,
+    imageSource: 'prebuilt' as 'prebuilt' | 'build', imageRegistry: '', publishImages: null as boolean | null,
+  },
+  /** how the build runners reach GitHub (answers runners): auth 'auto' = an authorized connection when there is one,
+   * else the token; connectionArn '' = none named; computeType '' and privileged 'default' = the stack's defaults */
+  runners: {
+    auth: 'auto' as (typeof RUNNER_AUTH)[number], token: 'agent' as 'agent' | 'admin', connectionArn: '',
+    computeType: '' as '' | (typeof RUNNER_COMPUTE_TYPES)[number], privileged: 'default' as 'default' | 'on' | 'off',
+    /** build trace's own repository on AWS too; null: not chosen (on when the token can configure it) */
+    buildTrace: null as boolean | null,
+  },
   adminEmail: '',
   people: [] as Person[],
-  plan: null as Step[] | null,
-  planError: '',
+  plan: null as Step[] | null, timeline: [] as string[], changes: [] as string[], planError: '',
   steps: [] as Step[],
   log: [] as string[],
+  ready: null as string[] | null,
   result: null as { ok: boolean; summary: string[] } | null,
   /** the timer waits open now, by step: the latest notice, and whether a Check now is on its way */
   waits: new Map<string, { wait: WaitNoticeView; asked: boolean; error: string }>(),
@@ -96,7 +121,7 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<Record<
     if (v === undefined || v === null || v === false) continue
     if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v as EventListener)
     else if (k === 'class') el.className = String(v)
-    else if (k === 'value' && (el instanceof HTMLInputElement || el instanceof HTMLSelectElement)) el.value = String(v)
+    else if (k === 'value' && (el instanceof HTMLInputElement || el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement)) el.value = String(v)
     else if (k === 'checked' && el instanceof HTMLInputElement) el.checked = Boolean(v)
     else el.setAttribute(k, v === true ? '' : String(v))
   }
@@ -110,7 +135,10 @@ const input = (type: string, value: string, on: (v: string) => void, extra: Reco
   // without stealing focus mid-word.
   h('input', { type, value, autocomplete: 'off', spellcheck: 'false', oninput: (e: Event) => on((e.target as HTMLInputElement).value), onchange: () => render(), ...extra })
 const checkbox = (label: string, checked: boolean, on: (v: boolean) => void): HTMLElement =>
-  h('label', { class: 'check' }, h('input', { type: 'checkbox', checked, onchange: (e: Event) => on((e.target as HTMLInputElement).checked) }), label)
+  h('label', { class: 'check' }, h('input', { type: 'checkbox', checked, onchange: (e: Event) => { on((e.target as HTMLInputElement).checked); render() } }), label)
+/** on / off / decided by the preflight (null) */
+const tri = (label: string, value: boolean | null, auto: string, on: (v: boolean | null) => void): HTMLElement =>
+  field(label, select([{ value: 'auto', label: `Decide for me (${auto})` }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }], value === null ? 'auto' : value ? 'on' : 'off', (v) => { on(v === 'auto' ? null : v === 'on'); render() }))
 
 function select(options: { value: string; label: string }[], value: string, on: (v: string) => void): HTMLSelectElement {
   const el = h('select', { onchange: (e: Event) => on((e.target as HTMLSelectElement).value) }, ...options.map((o) => h('option', { value: o.value }, o.label)))
@@ -122,43 +150,54 @@ function select(options: { value: string; label: string }[], value: string, on: 
 
 /** The stack already here keeps every project in itself (layout flat: no Layout output, or Layout=flat): bootstrap.ts layoutOf. */
 function flatInstall(): boolean {
-  const o = s.aws.check?.existing?.outputs ?? {}
+  const o = s.pre?.facts.existing?.outputs ?? {}
   return o.Layout ? o.Layout === 'flat' : Object.keys(o).length > 0
 }
 
+const region = (): string => s.aws.region || s.pre?.region || ''
+
 function answers(): AnswersInput {
+  const g = s.agents
   return {
-    github: { login: s.github.info?.login ?? '' },
-    aws: { mode: s.aws.mode, profile: s.aws.profile, region: s.aws.region, account: s.aws.check?.account ?? '' },
+    github: { login: s.pre?.facts.login ?? '' },
+    aws: { mode: s.aws.mode, profile: s.aws.profile, region: region(), account: s.pre?.facts.account ?? '' },
     agents: {
-      prefix: s.agents.prefix, model: s.agents.model, maxLifetimeHours: s.agents.maxLifetimeHours, idleMinutes: s.agents.idleMinutes,
-      createOidcProvider: !(s.aws.check?.oidcProvider ?? false), centralBucketName: s.agents.centralBucketName, retainData: s.agents.retainData,
-      gpuEnabled: s.agents.gpuEnabled, gpuMaxVcpus: s.agents.gpuMaxVcpus, gpuSpot: s.agents.gpuSpot,
-      cpuEnabled: s.agents.cpuEnabled, cpuMaxVcpus: s.agents.cpuMaxVcpus, cpuSpot: s.agents.cpuSpot, cpuVcpus: s.agents.cpuVcpus, cpuMemoryMiB: s.agents.cpuMemoryMiB,
-      knowledgeBase: s.agents.knowledgeBase, libraryGateway: s.agents.libraryGateway,
-      observability: s.agents.observability, transactionSearch: s.agents.transactionSearch, dashboard: s.agents.dashboard,
-      samplingPercent: s.agents.samplingPercent.trim() === '' ? null : Number(s.agents.samplingPercent),
-      migrateLayout: s.agents.migrateLayout,
+      prefix: g.prefix, model: g.model, maxLifetimeHours: g.maxLifetimeHours, idleMinutes: g.idleMinutes,
+      createOidcProvider: !(s.pre?.facts.oidcProvider ?? false), centralBucketName: g.centralBucketName, retainData: g.retainData,
+      gpuEnabled: g.gpuEnabled, gpuMaxVcpus: g.gpuMaxVcpus, gpuSpot: g.gpuSpot,
+      cpuEnabled: g.cpuEnabled, cpuMaxVcpus: g.cpuMaxVcpus, cpuSpot: g.cpuSpot, cpuVcpus: g.cpuVcpus, cpuMemoryMiB: g.cpuMemoryMiB,
+      knowledgeBase: g.knowledgeBase, libraryGateway: g.libraryGateway,
+      observability: g.observability, transactionSearch: g.transactionSearch, dashboard: g.dashboard,
+      samplingPercent: g.samplingPercent.trim() === '' ? null : Number(g.samplingPercent),
+      migrateLayout: g.migrateLayout,
+      imageSource: g.imageSource, imageRegistry: g.imageRegistry, publishImages: g.publishImages,
     },
     runners: {
-      connectionArn: s.runners.connectionArn, computeType: s.runners.computeType || null,
+      auth: s.runners.auth, token: s.runners.token,
+      connectionArn: s.runners.auth === 'token' ? '' : s.runners.connectionArn, computeType: s.runners.computeType || null,
       privileged: s.runners.privileged === 'default' ? null : s.runners.privileged === 'on',
       buildTrace: buildTrace(), traceRepository: buildTrace() ? selfRepo()?.repo ?? '' : '',
     },
     projects: [...s.projects].map(([repo, { memoryDays, ...p }]) => ({ repo, ...p, memoryEventExpiryDays: memoryDays.trim() === '' ? null : Number(memoryDays) })),
-    sample: { enabled: s.sample.enabled, repo: s.sample.repo, private: s.sample.private, tour: s.sample.tour },
-    adminEmail: s.adminEmail,
+    sample: { enabled: Boolean(sampleRepo()), repo: sampleRepo() ?? '', private: s.sample.private, tour: s.sample.tour },
+    adminEmail: s.adminEmail || s.pre?.facts.email || '',
     people: s.people.filter((p) => p.email.trim()).map((p) => ({
       email: p.email.trim(), class: p.class,
-      projects: p.class === 'admin' ? [] : [...p.projects].filter((r) => projectRepos().includes(r)),
+      projects: p.class === 'admin' ? [] : [...p.projects].filter((r) => s.projects.has(r)),
     })),
-    escalateTo: s.agents.escalateTo,
+    escalateTo: g.escalateTo,
   }
+}
+
+/** The sample project's repository: the one being created, else the one an earlier run created. */
+function sampleRepo(): string | null {
+  const creating = [...s.projects].find(([, p]) => p.create?.template === 'sample')?.[0]
+  return creating ?? (s.sample.repo && s.projects.has(s.sample.repo) ? s.sample.repo : null)
 }
 
 /** trace's own repository as the GitHub check found it, when the token can configure it and it is not a project. */
 function selfRepo(): { repo: string; ok: boolean; reason: string } | null {
-  const own = s.github.info?.self ?? null
+  const own = s.pre?.self ?? null
   if (!own || !own.ok || s.projects.has(own.repo)) return null
   return own
 }
@@ -170,39 +209,31 @@ const secrets = (): Record<string, unknown> => ({
   projectTokens: Object.fromEntries([...s.projectTokens].filter(([r, t]) => s.projects.has(r) && t.trim())),
   awsAccessKeyId: s.aws.mode === 'keys' ? s.aws.keyId : '', awsSecretAccessKey: s.aws.mode === 'keys' ? s.aws.secret : '',
   awsSessionToken: s.aws.mode === 'keys' ? s.aws.session : '',
-  libraryKeys: s.agents.libraryGateway ? { ...s.libraryKeys } : {},
+  integrations: Object.fromEntries(INTEGRATION_NAMES.flatMap((n) => {
+    const v = Object.fromEntries(Object.entries(s.integrations[n]).filter(([, x]) => x.trim()))
+    return Object.keys(v).length ? [[n, v]] : []
+  })),
 })
 
-/** The sample's repository as it will be: the one named, else the token's account's trace-sample. */
-function sampleName(): string {
-  return s.sample.repo.trim() || (s.github.info ? `${s.github.info.login}/trace-sample` : '')
-}
+const awsBody = (): Record<string, unknown> => ({
+  aws: { mode: s.aws.mode, profile: s.aws.profile, region: s.aws.region },
+  secrets: s.aws.mode === 'keys' ? { awsAccessKeyId: s.aws.keyId, awsSecretAccessKey: s.aws.secret, awsSessionToken: s.aws.session } : {},
+})
 
-/** Every repository being installed: the ones chosen, and the sample's when it is asked for. */
-function projectRepos(): string[] {
-  const repos = [...s.projects.keys()]
-  const sample = s.sample.enabled ? sampleName() : ''
-  return sample && !repos.some((r) => r.toLowerCase() === sample.toLowerCase()) ? [...repos, sample] : repos
-}
+const fails = (pred: (c: Check) => boolean = () => true): Check[] => (s.pre?.checks ?? []).filter((c) => c.status === 'fail' && pred(c))
 
 function problems(tab: Tab): string[] {
   const out: string[] = []
-  if (tab === 'github') {
-    if (!s.github.info) out.push('Check the GitHub token.')
-    if (!s.projects.size && !s.sample.enabled) out.push('Choose at least one repository, or install the sample project.')
-    if (s.sample.enabled && s.sample.repo.trim() && !/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(s.sample.repo.trim())) out.push('Name the sample\'s repository as OWNER/NAME, or leave it empty.')
-    for (const a of s.github.info?.access ?? []) if (!a.ok && s.projects.has(a.repo) && !s.github.adminToken) out.push(`The token can't manage ${a.repo}'s Actions secrets: add an admin token under "Installing with a different token".`)
+  if (tab === 'connect') {
+    if (!s.pre) out.push('Check the AWS credentials and the GitHub token.')
+    else for (const c of fails((x) => !x.id.startsWith('github.repo:') && !x.id.startsWith('github.create:'))) out.push(`${c.title}: ${c.fix ?? c.detail}`)
   }
-  if (tab === 'aws') {
-    if (!s.aws.check) out.push('Check the AWS credentials.')
-    else {
-      if (!s.aws.confirmed) out.push(`Confirm that ${s.aws.check.account} is the right account.`)
-      if (!s.aws.check.agentCore.ok) out.push('Bedrock AgentCore is not available here.')
-    }
-    if (s.runners.connectionArn && !CONNECTION_ARN.test(s.runners.connectionArn)) out.push('The GitHub connection must be an AWS CodeConnections connection ARN, or empty.')
+  if (tab === 'projects') for (const c of fails((x) => x.id.startsWith('github.repo:') || x.id.startsWith('github.create:'))) out.push(`${c.title}: ${c.fix ?? c.detail}`)
+  if (tab === 'review') {
+    if (fails().length) out.push('A check failed: see Connect and Projects.')
+    if (!s.adminEmail && !s.pre?.facts.email) out.push("Enter the first administrator's email under Advanced (the token cannot see its account's).")
+    if (s.runners.auth !== 'token' && s.runners.connectionArn && !CONNECTION_ARN.test(s.runners.connectionArn)) out.push('The GitHub connection under Advanced must be an AWS CodeConnections connection ARN, or empty.')
   }
-  if (tab === 'agents' && !s.agents.model) out.push('Choose the model the agents use.')
-  if (tab === 'people' && !/^\S+@\S+\.\S+$/.test(s.adminEmail)) out.push("Enter the first administrator's email.")
   return out
 }
 
@@ -213,243 +244,165 @@ function render(): void {
   if (!root) return
   const nav = h('nav', { class: 'steps' }, ...TABS.map((t) => h('button', {
     class: `${s.tab === t.id ? 'on' : ''} ${s.done.has(t.id) ? 'ok' : ''}`,
-    disabled: t.id === 'install' && !s.steps.length,
-    onclick: () => { s.tab = t.id; render() },
+    disabled: (t.id === 'install' && !s.steps.length) || (t.id !== 'connect' && t.id !== 'install' && !s.pre),
+    onclick: () => { s.tab = t.id; if (t.id === 'review') void loadPlan(); render() },
   }, t.title)))
-  const body = { github: github, aws: aws, agents: agents, people: people, review: review, install: install }[s.tab]()
+  const body = { connect, projects, integrations, review, install }[s.tab]()
   root.replaceChildren(nav, body)
 }
 
-function next(from: Tab, to: Tab): HTMLElement {
+function next(from: Tab, to: Tab, label = 'Continue'): HTMLElement {
   const blockers = problems(from)
   return h('div', { class: 'actions' },
     blockers.length ? h('span', { class: 'muted' }, blockers[0] ?? '') : null,
-    h('button', { class: 'primary', disabled: blockers.length > 0, onclick: () => { s.done.add(from); s.tab = to; if (to === 'review') void loadPlan(); render() } }, 'Continue'))
+    h('button', { class: 'primary', disabled: blockers.length > 0, onclick: () => { s.done.add(from); s.tab = to; if (to === 'review') void loadPlan(); render() } }, label))
 }
 
-function github(): HTMLElement {
-  const g = s.github
-  const info = g.info
-  const repos = (info?.repos ?? []).filter((r) => !g.filter || r.fullName.toLowerCase().includes(g.filter.toLowerCase()))
-  return h('section', { class: 'card' },
-    h('h2', {}, 'GitHub'),
-    h('p', { class: 'lead' }, 'The token the agents and workflows use to clone, push, open PRs and comment. Use a fine-grained token limited to the repositories below, with only Contents, Pull requests, Issues, Workflows and Actions read/write: the agents never need Secrets, Variables or Administration. Make it on a separate machine account if you can, so the agents\' approvals are never yours. It is stored in AWS Secrets Manager and as each repository\'s TRACE_TOKEN secret. Setting up the repositories (variables, secrets, the ruleset) needs more: give a second, admin token below; it is used only during this installation and never stored.'),
-    field('Token', input('password', g.token, (v) => { g.token = v.trim(); g.info = null }, { placeholder: 'github_pat_…' })),
-    h('details', {}, h('summary', { class: 'muted' }, 'Installing with a different token'),
-      field('Admin token', input('password', g.adminToken, (v) => { g.adminToken = v.trim() }), 'used only now, to set repository secrets, variables and settings; never stored')),
-    h('div', { class: 'actions' }, h('button', { class: 'secondary', disabled: g.busy, onclick: () => void checkGithub() }, g.busy ? 'Checking…' : 'Check token')),
-    g.error ? note('bad', g.error) : null,
-    info ? note('ok', `Signed in as ${info.login}${info.name ? ` (${info.name})` : ''}: a ${info.kind} token with access to ${info.repos.length} repositories.`) : null,
-    ...(info?.warnings ?? []).map((w) => note('warn', w)),
-    ...(info?.access ?? []).filter((a) => !a.ok).map((a) => note('warn', `${a.repo}: ${a.reason}`)),
-    info ? h('div', {},
-      h('label', {}, 'Projects ', h('small', {}, '— the repositories trace runs')),
-      input('text', g.filter, (v) => { g.filter = v; render() }, { placeholder: 'Filter…' }),
-      h('div', { class: 'repos' }, ...repos.slice(0, 300).map((r) => {
-        const p = s.projects.get(r.fullName)
-        return h('div', { class: 'item' },
-          h('input', { type: 'checkbox', checked: Boolean(p), onchange: (e: Event) => {
-            if ((e.target as HTMLInputElement).checked) s.projects.set(r.fullName, { branch: r.defaultBranch, onboard: true, applySettings: r.admin, memoryDays: '', generation: 0 })
-            else s.projects.delete(r.fullName)
-            void checkAccess(); render()
-          } }),
-          h('span', {}, r.fullName, ' ', r.private ? h('span', { class: 'tag' }, 'private') : null, r.admin ? null : h('span', { class: 'tag' }, 'not admin')),
-          p ? h('span', { class: 'opt' }, checkbox('onboarding PR', p.onboard, (v) => { p.onboard = v })) : h('span', {}),
-          p ? h('span', { class: 'opt' }, checkbox('repo settings', p.applySettings, (v) => { p.applySettings = v })) : h('span', {}),
-          p ? h('span', { class: 'opt', title: 'Days this project\'s agent memory keeps short-term events (3–365). Empty: 30.' },
-            h('label', { class: 'check' }, 'memory days ', input('number', p.memoryDays, (v) => { p.memoryDays = v.trim() }, { min: 3, max: 365, step: 1, placeholder: '30', style: 'width:5em' }))) : h('span', {}))
-      }))) : null,
-    info ? sampleCard() : null,
-    s.projects.size ? h('details', {}, h('summary', { class: 'muted' }, 'Each project\'s own agent token (optional)'),
-      h('p', { class: 'muted' }, 'Every project gets its own AWS resources and roles, so one project\'s agent cannot reach another\'s in AWS. On GitHub it can reach whatever its token can: give a project a fine-grained token limited to that repository alone to isolate it there too. Projects without one use the token above.'),
-      ...[...s.projects.keys()].map((r) => field(r, input('password', s.projectTokens.get(r) ?? '', (v) => { s.projectTokens.set(r, v.trim()) }, { placeholder: 'the token above' }), 'checked when installing: it must reach this repository, and should reach no other project'))) : null,
-    next('github', 'aws'))
+const ICON: Record<Check['status'], string> = { ok: '✓', info: 'i', warn: '!', fail: '✕' }
+const KIND: Record<Check['status'], 'ok' | 'warn' | 'bad'> = { ok: 'ok', info: 'ok', warn: 'warn', fail: 'bad' }
+
+function checkView(c: Check): HTMLElement {
+  const busy = s.fixBusy === `${c.id}:${c.action?.id ?? ''}`
+  const done = s.fixNote.get(c.id)
+  return note(KIND[c.status],
+    h('strong', {}, `${ICON[c.status]} ${c.title}: `), c.detail,
+    c.fix ? h('div', { class: 'muted' }, c.fix) : null,
+    c.link ? h('div', {}, h('a', { href: c.link, target: '_blank', rel: 'noreferrer' }, 'Open in the console')) : null,
+    c.action ? h('div', { class: 'actions left' }, h('button', { class: 'secondary', disabled: busy, onclick: () => void runFix(c) }, busy ? 'Working…' : c.action.label)) : null,
+    c.action?.id === 'bedrock-use-case' && s.useCase.open ? useCaseForm(c) : null,
+    done ? h('div', { class: 'muted' }, done) : null)
 }
 
-/** The sample project: one small board that exercises every agent and every simulation, in a repository of its own. */
-function sampleCard(): HTMLElement {
-  const x = s.sample
-  const name = sampleName()
-  return h('div', {},
-    h('h3', {}, 'Sample project'),
-    h('p', { class: 'lead' }, 'A small sensor board, from intent to fabrication files, in a repository of its own. Once trace is installed it starts a tour: one task for every agent and every simulation (circuit, mixed-signal, logic and formal, thermal, electromagnetic, protocol, firmware and the hardware-in-the-loop bench on emulated instruments), so you see the whole system work before you bring your own design. Recommended for a first installation.'),
-    checkbox('Install the sample project', x.enabled, (v) => { x.enabled = v; render() }),
-    x.enabled ? h('div', {},
-      field('Repository', input('text', x.repo, (v) => { x.repo = v.trim() }, { placeholder: name || 'OWNER/trace-sample' }), `empty: ${name || 'your account\'s trace-sample'}. Created if it does not exist; an existing one is used as it is, and nothing in it is deleted`),
-      checkbox('Private repository', x.private, (v) => { x.private = v }),
-      checkbox('Start the tour once installed', x.tour, (v) => { x.tour = v }),
-      note('warn', 'The tour runs every agent and every simulation once, on AWS like any other work, so it costs what that work costs (the GPU and CPU jobs most of all). Creating the repository needs a token that may create repositories: a fine-grained token with Administration read and write on your account, or the admin token below.')) : null)
+function useCaseForm(c: Check): HTMLElement {
+  const u = s.useCase
+  return h('div', { class: 'sub' },
+    h('p', { class: 'muted' }, 'Anthropic\'s first-time-use form, sent from here with PutUseCaseForModelAccess. Once per account (or for the whole organisation from its management account).'),
+    h('div', { class: 'row' },
+      field('Company or your name', input('text', u.companyName, (v) => { u.companyName = v })),
+      field('Website', input('text', u.companyWebsite, (v) => { u.companyWebsite = v }, { placeholder: 'a GitHub profile or project page is fine' }))),
+    h('div', { class: 'row' },
+      field('Who uses it', select([{ value: '0', label: 'Internal users' }, { value: '1', label: 'External users' }, { value: '2', label: 'Both' }], u.intendedUsers, (v) => { u.intendedUsers = v === '1' || v === '2' ? v : '0' })),
+      field('Industry', input('text', u.industryOption, (v) => { u.industryOption = v }))),
+    field('Use case', h('textarea', { rows: 3, oninput: (e: Event) => { u.useCases = (e.target as HTMLTextAreaElement).value }, value: u.useCases })),
+    h('div', { class: 'actions left' }, h('button', { class: 'primary', disabled: s.fixBusy !== '', onclick: () => void submitUseCase(c) }, 'Submit the form')))
 }
 
-async function checkGithub(): Promise<void> {
-  if (s.github.token.length < 20) { s.github.error = 'Paste a GitHub token first.'; render(); return }
-  s.github.busy = true; s.github.error = ''; render()
-  try {
-    s.github.info = await api<TokenInfo>('POST', '/api/github/check', { token: s.github.token, repos: [...s.projects.keys()] })
-    // what the installer will configure with: the admin token, when one is given
-    if (s.github.adminToken) void checkAccess()
-  } catch (e) {
-    s.github.error = e instanceof Error ? e.message : String(e)
-  } finally {
-    s.github.busy = false; render()
-  }
-}
-
-async function checkAccess(): Promise<void> {
-  if (!s.github.info) return
-  try {
-    const r = await api<TokenInfo>('POST', '/api/github/check', { token: s.github.adminToken || s.github.token, repos: [...s.projects.keys()] })
-    s.github.info = { ...s.github.info, access: r.access, self: r.self }
-    render()
-  } catch { /* shown on the next check */ }
-}
-
-function aws(): HTMLElement {
+function connect(): HTMLElement {
   const a = s.aws
   const profiles = s.env?.profiles.names ?? []
-  const c = a.check
+  const profRegion = a.mode === 'profile' ? s.env?.profiles.regions[a.profile] ?? '' : ''
+  const f = s.pre?.facts
   return h('section', { class: 'card' },
-    h('h2', {}, 'AWS'),
-    h('p', { class: 'lead' }, 'The account and region trace is installed into. The credentials need to create IAM roles, S3, ECR, CodeBuild, Cognito, Secrets Manager and Bedrock AgentCore resources (an administrator profile is simplest). They are used only by this installer and by the CDK deploy it runs.'),
+    h('h2', {}, 'Connect'),
+    h('p', { class: 'lead' }, 'Two things: AWS credentials that may create IAM roles and the rest (an administrator profile is simplest; they are used only by this installer and its CDK deploy), and one GitHub token. Everything else is worked out from them.'),
     h('div', { class: 'row' },
-      field('Credentials', select([{ value: 'profile', label: 'A profile on this machine' }, { value: 'keys', label: 'Access keys' }], a.mode, (v) => { a.mode = v === 'keys' ? 'keys' : 'profile'; a.check = null; render() })),
-      field('Region', select(REGIONS.map((r) => ({ value: r, label: r })), a.region, (v) => { a.region = v; a.check = null; render() }))),
-    a.mode === 'profile'
-      ? field('Profile', profiles.length
-        ? select(profiles.map((p) => ({ value: p, label: p })), a.profile, (v) => { a.profile = v; const r = s.env?.profiles.regions[v]; if (r) a.region = r; a.check = null; render() })
-        : input('text', a.profile, (v) => { a.profile = v; a.check = null }), 'SSO profiles work: run `aws sso login` first')
+      field('AWS credentials', select([{ value: 'profile', label: 'A profile on this machine' }, { value: 'keys', label: 'Access keys' }], a.mode, (v) => { a.mode = v === 'keys' ? 'keys' : 'profile'; s.pre = null; render() })),
+      a.mode === 'profile'
+        ? field('Profile', profiles.length
+          ? select(profiles.map((p) => ({ value: p, label: p })), a.profile, (v) => { a.profile = v; s.pre = null; render() })
+          : input('text', a.profile, (v) => { a.profile = v; s.pre = null }), 'SSO profiles work: run `aws sso login` first')
+        : h('span', {})),
+    a.mode === 'keys' ? h('div', {},
+      h('div', { class: 'row' },
+        field('Access key id', input('text', a.keyId, (v) => { a.keyId = v.trim(); s.pre = null })),
+        field('Secret access key', input('password', a.secret, (v) => { a.secret = v.trim(); s.pre = null }))),
+      field('Session token', input('password', a.session, (v) => { a.session = v.trim(); s.pre = null }), 'only for temporary credentials')) : null,
+    field('GitHub token', input('password', s.github.token, (v) => { s.github.token = v.trim(); s.pre = null }, { placeholder: 'github_pat_… or ghp_…' }),
+      'fine-grained: Contents, Pull requests, Issues, Workflows, Actions, Secrets, Variables, Administration and Webhooks read and write on the repositories, and "Email addresses: read"; classic: repo, workflow, user:email'),
+    h('details', {}, h('summary', { class: 'muted' }, `Region: ${a.region || profRegion || s.env?.defaultRegion || 'us-east-1'}${a.region ? '' : profRegion ? ' (the profile\'s)' : ' (the default)'}`),
+      field('Region', select([{ value: '', label: `The profile's, else ${s.env?.defaultRegion ?? 'us-east-1'}` }, ...REGIONS.map((r) => ({ value: r, label: r }))], a.region, (v) => { a.region = v; s.pre = null; render() }), 'trace needs Bedrock AgentCore there')),
+    h('div', { class: 'actions' }, h('button', { class: 'secondary', disabled: s.preBusy, onclick: () => void runPreflight() }, s.preBusy ? 'Checking everything…' : s.pre ? 'Check again' : 'Check')),
+    s.preError ? note('bad', s.preError) : null,
+    f?.account ? note('ok', h('strong', {}, `Installing into ${f.account} in ${s.pre?.region}`), ` as ${f.arn ?? ''}${f.login ? `; GitHub: ${f.login}` : ''}${f.email ? `; first administrator: ${f.email}` : ''}.`) : null,
+    ...(s.pre?.checks ?? []).filter((c) => !c.id.startsWith('github.repo:') && !c.id.startsWith('github.create:')).map(checkView),
+    next('connect', 'projects'))
+}
+
+function projects(): HTMLElement {
+  const info = s.pre?.token
+  const repos = (info?.repos ?? []).filter((r) => !s.filter || r.fullName.toLowerCase().includes(s.filter.toLowerCase()))
+  const access = new Map((s.pre?.repos ?? []).map((r) => [r.repo.toLowerCase(), r]))
+  const n = s.newRepo
+  const owner = s.pre?.facts.login ?? ''
+  return h('section', { class: 'card' },
+    h('h2', {}, 'Projects'),
+    h('p', { class: 'lead' }, 'The repositories trace runs. Each gets its own agent, roles, memory and AWS CodeBuild runner (every one of its GitHub Actions jobs runs there), and an onboarding pull request you merge. None is fine: install now and add them by running the installer again.'),
+    input('text', s.filter, (v) => { s.filter = v; render() }, { placeholder: `Filter the ${info?.repos.length ?? 0} repositories…` }),
+    h('div', { class: 'repos' }, ...repos.slice(0, 300).map((r) => {
+      const p = s.projects.get(r.fullName)
+      const acc = access.get(r.fullName.toLowerCase())
+      return h('div', { class: 'item' },
+        h('input', { type: 'checkbox', checked: Boolean(p), onchange: (e: Event) => {
+          if ((e.target as HTMLInputElement).checked) s.projects.set(r.fullName, { branch: r.defaultBranch, onboard: true, applySettings: r.admin, memoryDays: '', generation: 0, create: null })
+          else s.projects.delete(r.fullName)
+          render()
+        } }),
+        h('span', {}, r.fullName, ' ', r.private ? h('span', { class: 'tag' }, 'private') : null, r.admin ? null : h('span', { class: 'tag' }, 'not admin'),
+          acc && acc.missing.length ? h('div', { class: 'muted small' }, `missing: ${acc.missing.join(', ')}`) : null),
+        p ? h('span', { class: 'opt' }, checkbox('onboarding PR', p.onboard, (v) => { p.onboard = v })) : h('span', {}),
+        p ? h('span', { class: 'opt' }, checkbox('repo settings', p.applySettings, (v) => { p.applySettings = v })) : h('span', {}))
+    })),
+    sampleCard(owner),
+    h('details', {}, h('summary', {}, 'Create a new project'),
+      h('div', { class: 'row' },
+        field('Repository', input('text', n.name, (v) => { n.name = v.trim() }, { placeholder: `${owner || 'owner'}/new-board` })),
+        field('Starts from', select([{ value: 'kicad', label: 'KiCad board' }, { value: 'rust', label: 'Rust firmware' }, { value: 'python', label: 'Python' }, { value: 'empty', label: 'Empty' }], n.template, (v) => { n.template = (['kicad', 'rust', 'python', 'empty'] as const).find((t) => t === v) ?? 'empty' })),
+        field('Visibility', checkbox('Private', n.private, (v) => { n.private = v }))),
+      h('div', { class: 'actions left' }, h('button', { class: 'secondary', disabled: !/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(n.name.includes('/') ? n.name : `${owner}/${n.name}`), onclick: () => {
+        const slug = n.name.includes('/') ? n.name : `${owner}/${n.name}`
+        s.projects.set(slug, { branch: 'main', onboard: true, applySettings: true, memoryDays: '', generation: 0, create: { template: n.template, private: n.private } })
+        n.name = ''
+        void runPreflight()
+      } }, 'Add it'))),
+    ...[...s.projects].filter(([, p]) => p.create && p.create.template !== 'sample').map(([r, p]) => note('ok', `${r}: created from the ${p.create?.template} template when installing.`, ' ', h('button', { class: 'link', onclick: () => { s.projects.delete(r); render() } }, 'remove'))),
+    h('div', { class: 'actions' }, h('button', { class: 'secondary', disabled: s.preBusy || !s.projects.size, onclick: () => void runPreflight() }, s.preBusy ? 'Checking…' : 'Check access to these')),
+    ...(s.pre?.checks ?? []).filter((c) => (c.id.startsWith('github.repo:') || c.id.startsWith('github.create:')) && s.projects.has(c.title)).map(checkView),
+    next('projects', 'integrations'))
+}
+
+/** The sample project: one small board that exercises every agent and every simulation, in a new repository. */
+function sampleCard(owner: string): HTMLElement {
+  const x = s.sample
+  const repo = sampleRepo()
+  const name = x.name.includes('/') ? x.name : `${owner || 'owner'}/${x.name || 'trace-sample'}`
+  const add = (): void => {
+    for (const [r, p] of s.projects) if (p.create?.template === 'sample') s.projects.delete(r)
+    s.projects.set(name, { branch: 'main', onboard: true, applySettings: true, memoryDays: '', generation: 0, create: { template: 'sample', private: x.private } })
+    x.repo = name
+    void runPreflight()
+  }
+  return h('div', { class: 'sub' },
+    h('h3', {}, 'Sample project (recommended for a first installation)'),
+    h('p', { class: 'muted' }, 'A small, finished sensor board in a new repository, from intent to fabrication files. Once trace is installed it starts a tour: one task for every agent and every simulation (circuit, mixed-signal, logic and formal, FPGA, protocols, thermal, electromagnetic, autorouting, rendering, firmware, and hardware in the loop on an emulated bench), so you see the whole system work before you bring your own design.'),
+    repo
+      ? h('div', {},
+        note('ok', `${repo}: ${s.projects.get(repo)?.create ? 'created and filled with the sample when installing' : 'installed by an earlier run'}.`, ' ',
+          s.projects.get(repo)?.create ? h('button', { class: 'link', onclick: () => { s.projects.delete(repo); x.repo = ''; render() } }, 'remove') : null),
+        checkbox('Start the tour once installed', x.tour, (v) => { x.tour = v }),
+        x.tour ? h('p', { class: 'muted small' }, 'The tour runs every agent and every simulation once, on AWS like any other work, so it costs what that work costs (the GPU and CPU jobs most of all). Running the installer again opens only the tasks that are missing.') : null)
       : h('div', {},
         h('div', { class: 'row' },
-          field('Access key id', input('text', a.keyId, (v) => { a.keyId = v.trim(); a.check = null })),
-          field('Secret access key', input('password', a.secret, (v) => { a.secret = v.trim(); a.check = null }))),
-        field('Session token', input('password', a.session, (v) => { a.session = v.trim(); a.check = null }), 'only for temporary credentials')),
-    h('div', { class: 'actions' }, h('button', { class: 'secondary', disabled: a.busy, onclick: () => void checkAws() }, a.busy ? 'Checking…' : 'Check credentials')),
-    a.error ? note('bad', a.error) : null,
-    c ? h('div', {},
-      note('ok', `${c.arn}`),
-      checkbox(`Install into account ${c.account} in ${c.region}`, a.confirmed, (v) => { a.confirmed = v; render() }),
-      c.agentCore.ok ? note('ok', 'Bedrock AgentCore is available.') : note('bad', `Bedrock AgentCore is not available: ${c.agentCore.reason}`),
-      note(c.models.length ? 'ok' : 'warn', c.models.length ? `${c.models.length} Anthropic models are available.` : 'No Anthropic model is enabled in this region yet.'),
-      note('ok', c.oidcProvider ? "GitHub's OIDC provider already exists in this account: trace will use it." : "GitHub's OIDC provider will be created."),
-      note('ok', c.cdkBootstrapped ? 'CDK is already bootstrapped here.' : 'CDK will be bootstrapped here first.'),
-      c.existing ? note('warn', `trace is already installed here (${c.existing.stack}, ${c.existing.status}): installing again updates it.`) : null,
-      ...c.warnings.map((w) => note('warn', w))) : null,
-    runners(),
-    next('aws', 'agents'))
+          field('Repository', input('text', x.name, (v) => { x.name = v.trim() }, { placeholder: `${owner || 'owner'}/trace-sample` }), 'a new repository: the installer creates it'),
+          field('Visibility', checkbox('Private', x.private, (v) => { x.private = v }))),
+        h('div', { class: 'actions left' }, h('button', { class: 'secondary', disabled: !/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(name) || !owner && !x.name.includes('/'), onclick: add }, 'Install the sample project'))))
 }
 
-const CONNECTION_ARN = /^arn:aws[a-z-]*:(codeconnections|codestar-connections):[a-z0-9-]+:\d{12}:connection\/[0-9a-f-]{36}$/
-const COMPUTE_LABEL: Record<(typeof RUNNER_COMPUTE_TYPES)[number], string> = {
-  BUILD_GENERAL1_MEDIUM: 'Medium (4 vCPUs, 7 GB)', BUILD_GENERAL1_LARGE: 'Large (8 vCPUs, 15 GB)',
-  BUILD_GENERAL1_XLARGE: 'X-large (36 vCPUs, 72 GB)', BUILD_GENERAL1_2XLARGE: '2X-large (72 vCPUs, 144 GB)',
-}
-
-/** Where the repositories' GitHub Actions jobs run: AWS CodeBuild, reached through a CodeConnections connection. */
-function runners(): HTMLElement {
-  const r = s.runners
-  const name = `${s.agents.prefix || 'trace'}-github`
-  const url = `https://${s.aws.region}.console.aws.amazon.com/codesuite/settings/connections?region=${s.aws.region}`
-  return h('div', {},
-    h('h3', {}, 'Where the workflows run'),
-    h('p', { class: 'lead' }, `Every GitHub Actions job of the repositories runs on AWS CodeBuild in this account: each repository gets its own CodeBuild runner project. Until its runner exists, its jobs run on GitHub's own runners, and they move to AWS by themselves once it does. CodeBuild reaches GitHub through an AWS CodeConnections connection, so no GitHub token is stored for it. You need nothing here: the installer reuses a connection already authorized in this account and region (${name} first), and if there is none the stack creates ${name}.`),
-    note('warn', 'A new connection is authorized once per AWS account and region, by you, in the AWS console. After the first deploy the installer shows the link (', h('a', { href: url, target: '_blank', rel: 'noopener' }, 'Connections'), `) and waits: you choose ${r.connectionArn ? 'the connection' : name} and "Update pending connection", which installs the AWS Connector for GitHub app, and the installer adds the build runners by itself. Give that app access to every repository chosen in step 1${s.projects.size ? ` (${[...s.projects.keys()].join(', ')})` : ''}${buildTrace() ? ` and to ${selfRepo()?.repo ?? ''}` : ''}: a repository it cannot reach gets no runner.`),
-    selfBuild(),
-    field('Use an existing connection (optional)', input('text', r.connectionArn, (v) => { r.connectionArn = v.trim() }, { placeholder: `empty: reuse an authorized one, or create ${name}` }), 'an existing GitHub connection\'s ARN, only if you want that one'),
-    h('div', { class: 'row' },
-      field('Job size', select([{ value: '', label: 'Default (Large)' }, ...RUNNER_COMPUTE_TYPES.map((t) => ({ value: t, label: COMPUTE_LABEL[t] }))], r.computeType,
-        (v) => { r.computeType = (RUNNER_COMPUTE_TYPES as readonly string[]).includes(v) ? v as (typeof RUNNER_COMPUTE_TYPES)[number] : '' }), 'a job can ask for another with an instance-size label'),
-      field('Docker in jobs', select([{ value: 'default', label: 'Default (off)' }, { value: 'on', label: 'On (privileged, for jobs that build containers)' }, { value: 'off', label: 'Off' }], r.privileged,
-        (v) => { r.privileged = v === 'on' || v === 'off' ? v : 'default' }))))
-}
-
-/** The "build trace's own repository on AWS too" checkbox, or why there is none. */
-function selfBuild(): HTMLElement | null {
-  const own = s.github.info?.self ?? null
-  if (!own) return null
-  if (s.projects.has(own.repo)) return h('p', { class: 'muted' }, `trace's own repository (${own.repo}) is one of the projects, so it gets its build runner with them.`)
-  if (!own.ok) return h('p', { class: 'muted' }, `trace's own repository (${own.repo}) stays on GitHub's runners: the token can't set its variables.`)
-  return h('div', {},
-    checkbox(`Build trace's own repository on AWS too (${own.repo})`, buildTrace(), (v) => { s.runners.buildTrace = v; render() }),
-    h('p', { class: 'muted' }, 'Its workflows then run on a build runner in this account as well (a runner only: no agents); until that runner exists they run on GitHub\'s runners.'))
-}
-
-async function checkAws(): Promise<void> {
-  const a = s.aws
-  a.busy = true; a.error = ''; render()
-  try {
-    a.check = await api<AwsCheck>('POST', '/api/aws/check', {
-      aws: { mode: a.mode, profile: a.profile, region: a.region }, prefix: s.agents.prefix,
-      secrets: a.mode === 'keys' ? { awsAccessKeyId: a.keyId, awsSecretAccessKey: a.secret, awsSessionToken: a.session } : {},
-    })
-    a.confirmed = false
-    if (!s.agents.model && a.check.models[0]) s.agents.model = a.check.models[0].id
-  } catch (e) {
-    a.error = e instanceof Error ? e.message : String(e)
-  } finally {
-    a.busy = false; render()
-  }
-}
-
-function agents(): HTMLElement {
-  const g = s.agents
-  const models = s.aws.check?.models ?? []
+function integrations(): HTMLElement {
   return h('section', { class: 'card' },
-    h('h2', {}, 'Agents'),
-    h('p', { class: 'lead' }, 'How the agents run on AgentCore. Two runtimes are created from one image: the worker, which the repositories\' workflows call to fix and build; and the API, which people reach after signing in.'),
-    h('div', { class: 'row' },
-      field('Name', input('text', g.prefix, (v) => { g.prefix = v.trim() }), 'prefixed to every resource'),
-      field('Model', models.length
-        ? select(models.map((m) => ({ value: m.id, label: m.name })), g.model, (v) => { g.model = v })
-        : input('text', g.model, (v) => { g.model = v.trim() }, { placeholder: 'us.anthropic.claude-sonnet-4-6' }))),
-    h('div', { class: 'row' },
-      field('Longest task (hours)', input('number', String(g.maxLifetimeHours), (v) => { g.maxLifetimeHours = Number(v) }, { min: 0.25, max: 8, step: 0.25 }), 'AgentCore allows up to 8'),
-      field('Idle session ends after (minutes)', input('number', String(g.idleMinutes), (v) => { g.idleMinutes = Number(v) }, { min: 1, max: 480 }))),
-    h('div', { class: 'row' },
-      field('Central bucket name', input('text', g.centralBucketName, (v) => { g.centralBucketName = v.trim() }, { placeholder: 'leave empty to name it automatically' }), 'datasheets and parts, shared by every project'),
-      field('Who the agents ask', input('text', g.escalateTo, (v) => { g.escalateTo = v.trim() }, { placeholder: '@your-login' }), 'mentioned when a project needs a person')),
-    checkbox('Keep the central bucket and images if trace is uninstalled', g.retainData, (v) => { g.retainData = v }),
-    ...(flatInstall() ? [
-      h('p', { class: 'lead' }, 'This installation keeps every project in one CloudFormation stack, which holds about 20 projects. New installations give each project its own nested stack, which holds 60. Moving takes three deploys and DELETES every project\'s memory records (AgentCore cannot copy them); the projects are offline while it runs.'),
-      checkbox('Move to one nested stack per project (deletes every project\'s memory records)', g.migrateLayout, (v) => { g.migrateLayout = v }),
-    ] : []),
-    h('h3', {}, 'GPU jobs'),
-    h('p', { class: 'lead' }, 'AgentCore has no GPU, so Blender renders and the PCB autorouters run as AWS Batch jobs on GPU instances (g6, g5 or g4dn). The queue scales to zero: nothing runs, and nothing is billed, while there is no job.'),
-    checkbox('Run GPU jobs on AWS Batch', g.gpuEnabled, (v) => { g.gpuEnabled = v }),
-    h('div', { class: 'row' },
-      field('Most vCPUs at once', input('number', String(g.gpuMaxVcpus), (v) => { g.gpuMaxVcpus = Number(v) }, { min: 4, max: 4096, step: 4 }), '4 per job: 16 runs four jobs side by side'),
-      field('Instances', checkbox('Use Spot (cheaper; a job can be interrupted)', g.gpuSpot, (v) => { g.gpuSpot = v }))),
-    h('h3', {}, 'CPU jobs'),
-    h('p', { class: 'lead' }, 'CPU-heavy jobs sent off the runtime (openEMS field solves, Verilator, formal checks and nextpnr runs) go to a second AWS Batch queue of CPU instances (c7i, c6i or m7i), running the same image as the GPU jobs. It also scales to zero. It needs the GPU jobs turned on, and an installation with one nested stack per project.'),
-    checkbox('Run CPU-heavy jobs on AWS Batch', g.cpuEnabled, (v) => { g.cpuEnabled = v; render() }),
-    g.cpuEnabled && h('div', { class: 'row' },
-      field('Most vCPUs at once', input('number', String(g.cpuMaxVcpus), (v) => { g.cpuMaxVcpus = Number(v) }, { min: 1, max: 4096, step: 1 }), `${g.cpuVcpus} per job`),
-      field('vCPUs per job', input('number', String(g.cpuVcpus), (v) => { g.cpuVcpus = Number(v) }, { min: 1, max: 192, step: 1 })),
-      field('Memory per job (MiB)', input('number', String(g.cpuMemoryMiB), (v) => { g.cpuMemoryMiB = Number(v) }, { min: 1024, step: 1024 }), '32768 needs an 8xlarge on c7i/c6i; 30720 fits a 4xlarge'),
-      field('Instances', checkbox('Use Spot (cheaper; a job can be interrupted)', g.cpuSpot, (v) => { g.cpuSpot = v }))),
-    h('h3', {}, 'Knowledge bases'),
-    h('p', { class: 'lead' }, 'Each project gets an Amazon Bedrock knowledge base over its docs, markdown, rules, KiCad summaries and the datasheets of its BOM parts, with its vectors in Amazon S3 Vectors. Every push to the default branch syncs it. The agents search it before asking. It needs an installation with one nested stack per project.'),
-    checkbox('Give each project a knowledge base', g.knowledgeBase, (v) => { g.knowledgeBase = v }),
-    h('h3', {}, 'Library gateway'),
-    h('p', { class: 'lead' }, 'The shared datasheets and parts tools can run behind one Amazon Bedrock AgentCore Gateway instead of inside every worker. Only those tools move: everything that works on a project stays in its own worker, under its own role. The distributor keys below are then held by the gateway alone, so no agent can read them.'),
-    checkbox('Serve the datasheets and parts tools through AgentCore Gateway', g.libraryGateway, (v) => { g.libraryGateway = v; render() }),
-    g.libraryGateway && h('div', {},
-      h('div', { class: 'row' },
-        field('Mouser API key', input('password', s.libraryKeys.MOUSER_API_KEY, (v) => { s.libraryKeys.MOUSER_API_KEY = v.trim() }, { placeholder: 'leave empty to keep the stored one' })),
-        field('DigiKey client id', input('password', s.libraryKeys.DIGIKEY_CLIENT_ID, (v) => { s.libraryKeys.DIGIKEY_CLIENT_ID = v.trim() })),
-        field('DigiKey client secret', input('password', s.libraryKeys.DIGIKEY_CLIENT_SECRET, (v) => { s.libraryKeys.DIGIKEY_CLIENT_SECRET = v.trim() }))),
-      h('div', { class: 'row' },
-        field('Nexar client id', input('password', s.libraryKeys.NEXAR_CLIENT_ID, (v) => { s.libraryKeys.NEXAR_CLIENT_ID = v.trim() })),
-        field('Nexar client secret', input('password', s.libraryKeys.NEXAR_CLIENT_SECRET, (v) => { s.libraryKeys.NEXAR_CLIENT_SECRET = v.trim() }), 'optional, all of them: LCSC needs no key'))),
-    h('h3', {}, 'Observability'),
-    h('p', { class: 'lead' }, 'Both runtimes and the GPU jobs send OpenTelemetry traces and metrics to CloudWatch: each session, job, Claude turn and tool call appears in CloudWatch GenAI Observability. Only names, sizes, counts, tokens and outcomes are recorded, never prompts, tool arguments or file contents.'),
-    checkbox('Send traces and metrics to CloudWatch (AgentCore observability)', g.observability, (v) => { g.observability = v; render() }),
-    g.observability && h('div', {},
-      checkbox('Turn on CloudWatch Transaction Search if it is off (once per account and region; uninstalling leaves it on)', g.transactionSearch, (v) => { g.transactionSearch = v }),
-      checkbox('Create a CloudWatch dashboard for the agents', g.dashboard, (v) => { g.dashboard = v }),
-      h('div', { class: 'row' },
-        field('X-Ray trace indexing (%)', input('number', g.samplingPercent, (v) => { g.samplingPercent = v }, { min: 0, max: 100, step: 1, placeholder: 'leave as it is' }),
-          'account-wide; empty keeps the account\'s setting (1% by default). Every span is kept in aws/spans whatever this says'))),
-    next('agents', 'people'))
+    h('h2', {}, 'Integrations (optional)'),
+    h('p', { class: 'lead' }, 'Keys for services some tools use. None is needed to install or deploy: without them the parts tools ask LCSC (no key) and say which key would add more. Add or change one any time with `trace integrations set <name>`. Each key is checked with its service and stored in AWS Secrets Manager (<prefix>/integrations/<name>).'),
+    ...INTEGRATION_NAMES.map((n) => {
+      const i = INTEGRATIONS[n]
+      const c = s.integrationCheck.get(n)
+      const values = s.integrations[n]
+      const complete = i.keys.every((k) => (values[k] ?? '').trim())
+      return h('div', { class: 'sub' },
+        h('h3', {}, i.title), h('p', { class: 'muted' }, i.enables, ' ', h('a', { href: i.url, target: '_blank', rel: 'noreferrer' }, 'Get a key')),
+        h('div', { class: 'row' }, ...i.keys.map((k) => field(k, input('password', values[k] ?? '', (v) => { values[k] = v.trim(); s.integrationCheck.delete(n) })))),
+        h('div', { class: 'actions left' }, h('button', { class: 'secondary', disabled: !complete || c === 'busy', onclick: () => void checkKey(n) }, c === 'busy' ? 'Checking…' : 'Check')),
+        c && c !== 'busy' ? note(c.ok ? 'ok' : 'warn', c.detail, c.ok ? '' : ' (it is stored anyway; installing never waits on it)') : null)
+    }),
+    next('integrations', 'review', Object.values(s.integrations).some((v) => Object.values(v).some(Boolean)) ? 'Continue' : 'Skip'))
 }
 
 const CLASS_HELP: Record<PersonClass, string> = {
@@ -458,27 +411,78 @@ const CLASS_HELP: Record<PersonClass, string> = {
   guest: 'read only, on the projects ticked',
 }
 
-function people(): HTMLElement {
-  const repos = projectRepos()
-  return h('section', { class: 'card' },
-    h('h2', {}, 'People'),
-    h('p', { class: 'lead' }, 'Everyone signs in with Amazon Cognito, which emails each person a temporary password. There are three classes: admins can do everything on every project; users can read and change the projects they are assigned to; guests can only read the projects they are assigned to. Nobody can see a project they are not assigned to.'),
-    field('First administrator', input('email', s.adminEmail, (v) => { s.adminEmail = v.trim() }, { placeholder: 'you@example.com' })),
+function advanced(): HTMLElement {
+  const g = s.agents
+  const f = s.pre?.facts
+  const models = f?.models ?? []
+  const repos = [...s.projects.keys()]
+  const gpuAuto = f?.gpuQuota === undefined || f?.gpuQuota === null ? 'on' : f.gpuQuota >= 4 ? `on: ${f.gpuQuota} vCPUs allowed` : `off: the quota is ${f.gpuQuota}`
+  return h('details', { class: 'advanced' }, h('summary', {}, 'Advanced (every setting has a default)'),
+    h('h3', {}, 'Agents'),
+    h('div', { class: 'row' },
+      field('Prefix', input('text', g.prefix, (v) => { g.prefix = v.trim() }), 'on every resource; two installations in one account need two'),
+      field('Model', models.length
+        ? select([{ value: '', label: 'The newest Claude Sonnet here' }, ...models.map((m) => ({ value: m.id, label: m.name }))], g.model, (v) => { g.model = v })
+        : input('text', g.model, (v) => { g.model = v.trim() }, { placeholder: 'the newest Claude Sonnet here' }))),
+    h('div', { class: 'row' },
+      field('Longest task (hours)', input('number', String(g.maxLifetimeHours), (v) => { g.maxLifetimeHours = Number(v) }, { min: 0.25, max: 8, step: 0.25 }), 'AgentCore allows up to 8'),
+      field('Idle session ends after (minutes)', input('number', String(g.idleMinutes), (v) => { g.idleMinutes = Number(v) }, { min: 1, max: 480 }))),
+    h('div', { class: 'row' },
+      field('First administrator', input('email', s.adminEmail, (v) => { s.adminEmail = v.trim() }, { placeholder: f?.email ?? 'you@example.com' }), f?.email ? 'empty: the token\'s email' : 'required: the token cannot see its email'),
+      field('Who the agents ask', input('text', g.escalateTo, (v) => { g.escalateTo = v.trim() }, { placeholder: '@your-login' }), 'mentioned when a project needs a person')),
+    field('Central bucket name', input('text', g.centralBucketName, (v) => { g.centralBucketName = v.trim() }, { placeholder: 'empty: named automatically' })),
+    checkbox('Keep the data (central bucket, images, memories) if trace or a project is removed', g.retainData, (v) => { g.retainData = v }),
+    ...(flatInstall() ? [
+      h('p', { class: 'muted' }, 'This installation keeps every project in one CloudFormation stack (about 20 fit). Moving to a nested stack per project (60 fit) takes three deploys and DELETES every project\'s memory records.'),
+      checkbox('Move to one nested stack per project (deletes every project\'s memory records)', g.migrateLayout, (v) => { g.migrateLayout = v }),
+    ] : []),
+    h('h3', {}, 'GPU and CPU jobs'),
+    h('p', { class: 'muted' }, 'Blender renders and PCB autorouting on GPU instances, and CPU-heavy jobs (openEMS, Verilator, formal, CFD) on a CPU queue, both AWS Batch scaling to zero. They share one large image (CUDA, Blender, KiCad, OpenFOAM) that is made after trace is ready.'),
+    h('div', { class: 'row' },
+      tri('GPU jobs', g.gpuEnabled, gpuAuto, (v) => { g.gpuEnabled = v }),
+      tri('CPU jobs', g.cpuEnabled, 'on with GPU jobs when the quota allows', (v) => { g.cpuEnabled = v })),
+    h('div', { class: 'row' },
+      field('GPU vCPUs at once', input('number', String(g.gpuMaxVcpus), (v) => { g.gpuMaxVcpus = Number(v) }, { min: 4, max: 4096, step: 4 }), '4 per job'),
+      field('CPU vCPUs at once', input('number', String(g.cpuMaxVcpus), (v) => { g.cpuMaxVcpus = Number(v) }, { min: 1, max: 4096 })),
+      field('vCPUs per CPU job', input('number', String(g.cpuVcpus), (v) => { g.cpuVcpus = Number(v) }, { min: 1, max: 192 })),
+      field('Memory per CPU job (MiB)', input('number', String(g.cpuMemoryMiB), (v) => { g.cpuMemoryMiB = Number(v) }, { min: 1024, step: 1024 }))),
+    checkbox('GPU: Spot instances (cheaper; a job can be interrupted)', g.gpuSpot, (v) => { g.gpuSpot = v }),
+    checkbox('CPU: Spot instances', g.cpuSpot, (v) => { g.cpuSpot = v }),
+    h('h3', {}, 'Images'),
+    field('Agent and GPU images', select([{ value: 'prebuilt', label: 'trace\'s published images for this version, else built here' }, { value: 'build', label: 'Always build them here (CodeBuild)' }], g.imageSource, (v) => { g.imageSource = v === 'build' ? 'build' : 'prebuilt'; render() })),
+    g.imageSource === 'prebuilt' ? field('Published images registry', input('text', g.imageRegistry, (v) => { g.imageRegistry = v.trim() }, { placeholder: f?.publishedRegistry ? `empty: ${f.publishedRegistry} (trace's)` : 'empty: wherever trace publishes them (none yet: built here)' }), 'copied by digest into this account\'s private ECR; built when this version is not there') : null,
+    tri('Publish trace\'s images from this account', g.publishImages, f?.sourceAdmin ? 'on: your token administers trace\'s repository' : 'off: only trace\'s owner publishes', (v) => { g.publishImages = v }),
+    g.publishImages === false ? null : h('p', { class: 'muted' }, 'Publishing is part of the install, all by API: ECR Public repositories in us-east-1, a release role for trace\'s main branch and v* tags, the repository variables and release that tell every installation where the images are, and the first release run.'),
+    ...buildRunners(),
+    h('h3', {}, 'Knowledge bases, gateway, observability'),
+    tri('Knowledge bases', g.knowledgeBase, f?.s3vectors === false ? 'off: no S3 Vectors here' : 'on where S3 Vectors is', (v) => { g.knowledgeBase = v }),
+    checkbox('Serve the datasheets and parts tools through AgentCore Gateway (then only its Lambda can read the integration keys)', g.libraryGateway, (v) => { g.libraryGateway = v }),
+    checkbox('Traces and metrics to CloudWatch (AgentCore observability)', g.observability, (v) => { g.observability = v }),
+    g.observability ? h('div', {},
+      checkbox('Turn on CloudWatch Transaction Search if it is off (account-wide; uninstalling leaves it on)', g.transactionSearch, (v) => { g.transactionSearch = v }),
+      checkbox('A CloudWatch dashboard for the agents', g.dashboard, (v) => { g.dashboard = v }),
+      field('X-Ray trace indexing (%)', input('number', g.samplingPercent, (v) => { g.samplingPercent = v }, { min: 0, max: 100, placeholder: 'leave as it is' }))) : null,
+    h('h3', {}, 'Tokens'),
+    field('Admin token', input('password', s.github.adminToken, (v) => { s.github.adminToken = v.trim() }), 'only when the token above cannot set a repository\'s secrets, variables or settings: used during this installation, never stored (unless chosen as CodeBuild\'s credential)'),
+    ...(repos.length ? [h('p', { class: 'muted' }, 'Each project gets its own AWS resources and roles. On GitHub its agent reaches whatever its token can: a fine-grained token limited to that repository isolates it there too.'),
+      ...repos.map((r) => field(`${r}'s own agent token`, input('password', s.projectTokens.get(r) ?? '', (v) => { s.projectTokens.set(r, v.trim()) }, { placeholder: 'the token above' })))] : []),
+    ...repos.map((r) => {
+      const p = s.projects.get(r)
+      return p ? field(`${r}: memory days`, input('number', p.memoryDays, (v) => { p.memoryDays = v.trim() }, { min: 3, max: 365, placeholder: '30' })) : null
+    }),
+    h('h3', {}, 'People'),
+    h('p', { class: 'muted' }, 'Everyone signs in with Amazon Cognito, which emails a temporary password. Admins can do everything; users read and change their projects; guests only read theirs. Admins can invite more later with `trace users invite`.'),
     h('table', { class: 'grid' },
       h('thead', {}, h('tr', {}, h('th', {}, 'Email'), h('th', {}, 'Class'), ...repos.map((r) => h('th', {}, r)), h('th', {}, ''))),
       h('tbody', {}, ...s.people.map((p, i) => h('tr', {},
         h('td', {}, input('email', p.email, (v) => { p.email = v }, { placeholder: 'name@example.com' })),
-        h('td', { title: CLASS_HELP[p.class] }, select(
-          [{ value: 'user', label: 'user' }, { value: 'guest', label: 'guest' }, { value: 'admin', label: 'admin' }],
-          p.class, (v) => { p.class = v === 'admin' || v === 'guest' ? v : 'user'; render() })),
-        ...repos.map((r) => h('td', {}, p.class === 'admin'
-          ? h('span', { class: 'muted' }, 'all')
-          : h('input', { type: 'checkbox', checked: p.projects.has(r), title: `${p.class === 'guest' ? 'read' : 'read and write'} on ${r}`,
-            onchange: (e: Event) => { if ((e.target as HTMLInputElement).checked) p.projects.add(r); else p.projects.delete(r) } }))),
+        h('td', { title: CLASS_HELP[p.class] }, select([{ value: 'user', label: 'user' }, { value: 'guest', label: 'guest' }, { value: 'admin', label: 'admin' }], p.class, (v) => { p.class = v === 'admin' || v === 'guest' ? v : 'user'; render() })),
+        ...repos.map((r) => h('td', {}, p.class === 'admin' ? h('span', { class: 'muted' }, 'all')
+          : h('input', { type: 'checkbox', checked: p.projects.has(r), onchange: (e: Event) => { if ((e.target as HTMLInputElement).checked) p.projects.add(r); else p.projects.delete(r) } }))),
         h('td', {}, h('button', { class: 'secondary', onclick: () => { s.people.splice(i, 1); render() } }, 'Remove')))))),
-    s.people.length ? h('p', { class: 'muted' }, s.people.map((p) => `${p.email || 'new person'}: ${CLASS_HELP[p.class]}`).join(' · ')) : null,
-    h('div', { class: 'actions' }, h('button', { class: 'secondary', onclick: () => { s.people.push({ email: '', class: 'user', projects: new Set() }); render() } }, 'Add a person')),
-    next('people', 'review'))
+    h('div', { class: 'actions left' },
+      h('button', { class: 'secondary', onclick: () => { s.people.push({ email: '', class: 'user', projects: new Set() }); render() } }, 'Add a person'),
+      h('button', { class: 'secondary', onclick: () => void loadPlan() }, 'Update the plan')))
 }
 
 async function loadPlan(): Promise<void> {
@@ -486,8 +490,8 @@ async function loadPlan(): Promise<void> {
   const parsed = AnswersSchema.safeParse(answers())
   if (!parsed.success) { s.planError = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '); render(); return }
   try {
-    // the stack already there, if the AWS check found one: the plan says what happens to its old memory
-    s.plan = (await api<{ steps: Step[] }>('POST', '/api/plan', { answers: answers(), existing: s.aws.check?.existing ?? null })).steps
+    const r = await api<{ steps: Step[]; timeline: string[]; changes: string[] }>('POST', '/api/plan', { answers: answers(), existing: s.pre?.facts.existing ?? null, cdkBootstrapped: s.pre?.facts.cdkBootstrapped ?? false })
+    s.plan = r.steps; s.timeline = r.timeline; s.changes = r.changes
   } catch (e) {
     s.planError = e instanceof Error ? e.message : String(e)
   }
@@ -495,17 +499,130 @@ async function loadPlan(): Promise<void> {
 }
 
 function review(): HTMLElement {
+  const f = s.pre?.facts
+  const blockers = problems('review')
   return h('section', { class: 'card' },
     h('h2', {}, 'Review'),
-    h('p', { class: 'lead' }, 'What installing will do. Every step can be run again safely: if one fails, fix the cause and install again.'),
+    h('p', { class: 'lead' }, f?.existing ? 'trace is installed here: this updates it, and changes only what the plan says. Every step can be run again safely.' : 'What installing will do. Every step can be run again safely: if one fails, fix the cause and install again.'),
+    s.changes.length ? note('ok', h('strong', {}, 'Changes since the last run: '), s.changes.join('; ')) : null,
+    s.timeline.length ? note('ok', h('strong', {}, 'How long: '), h('ul', {}, ...s.timeline.map((l) => h('li', {}, l)))) : null,
     s.planError ? note('bad', s.planError) : null,
     s.plan ? h('ol', { class: 'plan' }, ...s.plan.map((st) => h('li', {}, h('strong', {}, st.title), h('div', { class: 'muted' }, st.detail)))) : h('p', { class: 'muted' }, 'Working out the plan…'),
-    h('div', { class: 'actions' }, h('button', { class: 'primary', disabled: !s.plan, onclick: () => void startInstall() }, 'Install')))
+    advanced(),
+    h('div', { class: 'actions' },
+      blockers.length ? h('span', { class: 'muted' }, blockers[0] ?? '') : null,
+      h('button', { class: 'primary', disabled: !s.plan || blockers.length > 0, onclick: () => void startInstall() }, `Install into ${f?.account ?? 'the account'} (${s.pre?.region ?? ''})`)))
+}
+
+const CONNECTION_ARN = /^arn:aws[a-z-]*:(codeconnections|codestar-connections):[a-z0-9-]+:\d{12}:connection\/[0-9a-f-]{36}$/
+const COMPUTE_LABEL: Record<(typeof RUNNER_COMPUTE_TYPES)[number], string> = {
+  BUILD_GENERAL1_MEDIUM: 'Medium (4 vCPUs, 7 GB)', BUILD_GENERAL1_LARGE: 'Large (8 vCPUs, 15 GB)',
+  BUILD_GENERAL1_XLARGE: 'X-large (36 vCPUs, 72 GB)', BUILD_GENERAL1_2XLARGE: '2X-large (72 vCPUs, 144 GB)',
+}
+
+/** Advanced: where the repositories' GitHub Actions jobs run (AWS CodeBuild, never GitHub's runners) and how
+ * CodeBuild reaches GitHub (README "Where builds run"). */
+function buildRunners(): (HTMLElement | null)[] {
+  const r = s.runners
+  const name = `${s.agents.prefix || 'trace'}-github`
+  const reg = region() || s.env?.defaultRegion || 'us-east-1'
+  const url = `https://${reg}.console.aws.amazon.com/codesuite/settings/connections?region=${reg}`
+  const found = s.pre?.facts.runnerConnection
+  return [
+    h('h3', {}, 'Build runners'),
+    h('p', { class: 'muted' }, 'Every GitHub Actions job of the repositories runs on AWS CodeBuild in this account, each repository on its own runner project, once that exists; until then its jobs run on GitHub\'s runners, and move to AWS by themselves.'),
+    ownRepository(),
+    field('How CodeBuild reaches GitHub', select([
+      { value: 'auto', label: `Automatic: an authorized GitHub connection when there is one${found ? ` (${found})` : ''}, else the GitHub token` },
+      { value: 'token', label: 'The GitHub token (no console step; the token is stored with CodeBuild)' },
+      { value: 'connection', label: 'An AWS CodeConnections connection instead of the token (no token stored; needs one console authorization)' },
+    ], r.auth, (v) => { r.auth = (RUNNER_AUTH as readonly string[]).includes(v) ? v as (typeof RUNNER_AUTH)[number] : 'auto'; s.pre = null; render() }), 'change it later with `trace upgrade --runner-auth auto|token|connection`'),
+    r.auth === 'connection' ? note('warn', 'A new connection is authorized once per AWS account and region, in the AWS console. After the first deploy the installer shows the link (', h('a', { href: url, target: '_blank', rel: 'noopener' }, 'Connections'), `) and waits: choose ${r.connectionArn ? 'the connection' : name} and "Update pending connection", which installs the AWS Connector for GitHub app, and give that app access to every chosen repository. The installer then adds the build runners by itself.`) : null,
+    r.auth !== 'token' ? field('Use this connection (optional)', input('text', r.connectionArn, (v) => { r.connectionArn = v.trim() }, { placeholder: `empty: reuse an authorized one${r.auth === 'connection' ? `, else create ${name}` : ''}` }), 'an existing GitHub connection\'s ARN') : null,
+    r.auth !== 'connection' ? field('The token CodeBuild keeps', select([{ value: 'agent', label: 'The GitHub token above' }, { value: 'admin', label: 'The admin token' }], r.token, (v) => { r.token = v === 'admin' ? 'admin' : 'agent' }),
+      'it needs Administration, Webhooks and Commit statuses (read and write) and Contents (read) on each repository; an account that has a GitHub credential already keeps it') : null,
+    h('div', { class: 'row' },
+      field('Job size', select([{ value: '', label: 'Default (Large)' }, ...RUNNER_COMPUTE_TYPES.map((t) => ({ value: t, label: COMPUTE_LABEL[t] }))], r.computeType,
+        (v) => { r.computeType = (RUNNER_COMPUTE_TYPES as readonly string[]).includes(v) ? v as (typeof RUNNER_COMPUTE_TYPES)[number] : '' }), 'a job can ask for another with an instance-size label'),
+      field('Docker in jobs', select([{ value: 'default', label: 'Default (off)' }, { value: 'on', label: 'On (privileged, for jobs that build containers)' }, { value: 'off', label: 'Off' }], r.privileged,
+        (v) => { r.privileged = v === 'on' || v === 'off' ? v : 'default' }))),
+  ]
+}
+
+/** The "build trace's own repository on AWS too" checkbox, or why there is none. */
+function ownRepository(): HTMLElement | null {
+  const own = s.pre?.self ?? null
+  if (!own) return null
+  if (s.projects.has(own.repo)) return h('p', { class: 'muted' }, `trace's own repository (${own.repo}) is one of the projects, so it gets its build runner with them.`)
+  if (!own.ok) return h('p', { class: 'muted' }, `trace's own repository (${own.repo}) stays on GitHub's runners: the token can't set its variables.`)
+  return checkbox(`Build trace's own repository on AWS too (${own.repo}): a build runner for it alone, no agents`, buildTrace(), (v) => { s.runners.buildTrace = v; render() })
+}
+
+async function runPreflight(): Promise<void> {
+  if (s.github.token.length < 20) { s.preError = 'Paste a GitHub token first.'; render(); return }
+  s.preBusy = true; s.preError = ''; render()
+  try {
+    const g = s.agents
+    s.pre = await api<Preflight>('POST', '/api/preflight', {
+      ...awsBody(), token: s.github.token, adminToken: s.github.adminToken, prefix: g.prefix, model: g.model,
+      gpuEnabled: g.gpuEnabled, gpuSpot: g.gpuSpot, cpuSpot: g.cpuSpot, cpuVcpus: g.cpuVcpus, runnerAuth: s.runners.auth,
+      repos: [...s.projects].filter(([, p]) => !p.create).map(([r]) => r), create: [...s.projects].filter(([, p]) => p.create).map(([r]) => r),
+    })
+  } catch (e) {
+    s.preError = e instanceof Error ? e.message : String(e)
+  } finally {
+    s.preBusy = false; render()
+  }
+}
+
+async function runFix(c: Check): Promise<void> {
+  if (!c.action) return
+  if (c.action.id === 'bedrock-use-case') { s.useCase.open = !s.useCase.open; render(); return }
+  if (['delete-failed-stack', 'clear-leftovers'].includes(c.action.id) && !window.confirm(`${c.action.label}? This deletes it from the account.`)) return
+  s.fixBusy = `${c.id}:${c.action.id}`; render()
+  try {
+    const p = c.action.params ?? {}
+    const fixBody = c.action.id === 'quota-increase' ? { action: c.action.id, service: p.service, code: p.code, value: Number(p.value) }
+      : c.action.id === 'bedrock-agreement' ? { action: c.action.id, model: p.model }
+      : c.action.id === 'delete-failed-stack' || c.action.id === 'continue-rollback' ? { action: c.action.id, stack: p.stack }
+      : c.action.id === 'delete-cognito-domain' ? { action: c.action.id, domain: p.domain, userPoolId: p.userPoolId }
+      : c.action.id === 'clear-leftovers' ? { action: c.action.id, prefix: p.prefix }
+      : { action: c.action.id }
+    const r = await api<{ detail: string }>('POST', '/api/fix', { ...awsBody(), token: s.github.token, fix: fixBody })
+    s.fixNote.set(c.id, r.detail)
+  } catch (e) {
+    s.fixNote.set(c.id, `Could not: ${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    s.fixBusy = ''; render()
+  }
+}
+
+async function submitUseCase(c: Check): Promise<void> {
+  const { open: _o, ...form } = s.useCase
+  s.fixBusy = `${c.id}:bedrock-use-case`; render()
+  try {
+    const r = await api<{ detail: string }>('POST', '/api/fix', { ...awsBody(), token: s.github.token, fix: { action: 'bedrock-use-case', form } })
+    s.fixNote.set(c.id, r.detail); s.useCase.open = false
+  } catch (e) {
+    s.fixNote.set(c.id, `Could not submit it: ${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    s.fixBusy = ''; render()
+  }
+}
+
+async function checkKey(n: IntegrationName): Promise<void> {
+  s.integrationCheck.set(n, 'busy'); render()
+  try {
+    s.integrationCheck.set(n, await api<{ ok: boolean; detail: string }>('POST', '/api/integrations/check', { name: n, values: s.integrations[n] }))
+  } catch (e) {
+    s.integrationCheck.set(n, { ok: false, detail: e instanceof Error ? e.message : String(e) })
+  }
+  render()
 }
 
 async function startInstall(): Promise<void> {
   s.steps = s.plan ? s.plan.map((st) => ({ ...st })) : []
-  s.log = []; s.result = null; s.waits.clear(); s.tab = 'install'; render()
+  s.log = []; s.result = null; s.ready = null; s.waits.clear(); s.tab = 'install'; render()
   try {
     await api('POST', '/api/apply', { answers: answers(), secrets: secrets() })
   } catch (e) {
@@ -515,11 +632,12 @@ async function startInstall(): Promise<void> {
   es.onmessage = (m: MessageEvent<string>) => {
     const e = JSON.parse(m.data) as InstallEvent
     if (e.type === 'step') {
-      s.steps = s.steps.map((st) => (st.id === e.step.id ? e.step : st))
+      s.steps = s.steps.some((st) => st.id === e.step.id) ? s.steps.map((st) => (st.id === e.step.id ? e.step : st)) : [...s.steps, e.step]
       // a step that is no longer running has no open wait, even if its last check failed before saying so
       if (e.step.status !== 'running') s.waits.delete(e.step.id)
     }
     else if (e.type === 'log') s.log = [...s.log.slice(-800), `[${e.step}] ${e.line}`]
+    else if (e.type === 'ready') s.ready = e.summary
     else if (e.type === 'wait') {
       // a check of a timer wait: keep the latest; a wait with no next check has ended
       if (e.wait.nextCheckAt) s.waits.set(e.step, { wait: e.wait, asked: false, error: '' })
@@ -600,16 +718,18 @@ function waits(): HTMLElement | null {
     h('div', { class: 'actions' }, h('button', { class: 'secondary', disabled: o.asked, onclick: () => void checkWaitNow(step) }, o.asked ? 'Checking…' : 'Check now')))))
 }
 
-const ICON: Record<Step['status'], string> = { pending: '·', running: '…', done: '✓', skipped: '–', failed: '✕' }
+const STEP_ICON: Record<Step['status'], string> = { pending: '·', running: '…', done: '✓', skipped: '–', failed: '✕' }
 
 function install(): HTMLElement {
   return h('section', { class: 'card' },
-    h('h2', {}, s.result ? (s.result.ok ? 'Installed' : 'Stopped') : 'Installing'),
-    s.result ? note(s.result.ok ? 'ok' : 'bad', h('ul', {}, ...s.result.summary.map((l) => h('li', {}, l)))) : h('p', { class: 'lead' }, 'Keep this page open. The first deploy builds the agent image and takes a while.'),
+    h('h2', {}, s.result ? (s.result.ok ? 'Installed' : 'Stopped') : s.ready ? 'Ready to use' : 'Installing'),
+    s.result ? note(s.result.ok ? 'ok' : 'bad', h('ul', {}, ...s.result.summary.map((l) => h('li', {}, l))))
+      : s.ready ? note('ok', h('strong', {}, 'trace is ready: sign in with `trace login`. '), 'Only the GPU image is still being made.', h('ul', {}, ...s.ready.map((l) => h('li', {}, l))))
+      : h('p', { class: 'lead' }, 'Keep this page open until it says trace is ready.'),
     h('ul', { class: 'progress' }, ...s.steps.map((st) => h('li', { class: `status-${st.status}` },
-      h('span', { class: 'icon' }, ICON[st.status]), h('div', {}, h('strong', {}, st.title), h('div', { class: 'detail' }, st.detail))))),
+      h('span', { class: 'icon' }, STEP_ICON[st.status]), h('div', {}, h('strong', {}, st.title), h('div', { class: 'detail' }, st.detail))))),
     waits(),
-    s.log.length ? h('details', { open: !s.result?.ok }, h('summary', { class: 'muted' }, 'Log'), h('pre', { class: 'log' }, s.log.join('\n'))) : null)
+    s.log.length ? h('details', { open: s.result ? !s.result.ok : false }, h('summary', { class: 'muted' }, 'Log'), h('pre', { class: 'log' }, s.log.join('\n'))) : null)
 }
 
 // ------------------------------------------------------------------ start
@@ -619,37 +739,34 @@ async function boot(): Promise<void> {
     s.env = await api<Env>('GET', '/api/env')
     const saved = s.env.saved
     if (saved) {
-      s.aws.mode = saved.aws.mode ?? 'profile'
-      s.aws.profile = saved.aws.profile ?? 'default'
-      s.aws.region = saved.aws.region
+      s.aws.mode = saved.aws?.mode ?? 'profile'
+      s.aws.profile = saved.aws?.profile ?? 'default'
+      s.aws.region = saved.aws?.region ?? ''
+      const sa = saved.agents ?? {}
       Object.assign(s.agents, {
-        ...saved.agents, escalateTo: saved.escalateTo ?? '',
-        // the page keeps the percentage as the field's text ('' = leave the account's setting)
-        samplingPercent: saved.agents.samplingPercent === null || saved.agents.samplingPercent === undefined ? '' : String(saved.agents.samplingPercent),
+        ...sa, escalateTo: saved.escalateTo ?? '',
+        // the page keeps these as the fields' text
+        samplingPercent: sa.samplingPercent === null || sa.samplingPercent === undefined ? '' : String(sa.samplingPercent),
       })
+      const sr = saved.runners
+      if (sr) {
+        s.runners.auth = sr.auth ?? 'auto'
+        s.runners.token = sr.token ?? 'agent'
+        s.runners.connectionArn = sr.connectionArn ?? ''
+        s.runners.computeType = sr.computeType ?? ''
+        s.runners.privileged = sr.privileged === true ? 'on' : sr.privileged === false ? 'off' : 'default'
+        s.runners.buildTrace = sr.buildTrace ?? null
+      }
       for (const p of saved.projects ?? []) {
         s.projects.set(p.repo, {
           branch: p.branch ?? 'main', onboard: p.onboard ?? true, applySettings: p.applySettings ?? true,
           memoryDays: p.memoryEventExpiryDays === null || p.memoryEventExpiryDays === undefined ? '' : String(p.memoryEventExpiryDays),
-          generation: p.generation ?? 0,
+          generation: p.generation ?? 0, create: null,
         })
       }
-      if (saved.runners) {
-        s.runners.connectionArn = saved.runners.connectionArn ?? ''
-        s.runners.computeType = saved.runners.computeType ?? ''
-        s.runners.privileged = saved.runners.privileged === true ? 'on' : saved.runners.privileged === false ? 'off' : 'default'
-        s.runners.buildTrace = saved.runners.buildTrace ?? null
-      }
-      if (saved.sample) {
-        Object.assign(s.sample, { enabled: saved.sample.enabled ?? false, repo: saved.sample.repo ?? '', private: saved.sample.private ?? true, tour: saved.sample.tour ?? true })
-        // the installer saves the sample among the projects too: show it once, as the sample
-        const was = (s.sample.repo || (saved.github?.login ? `${saved.github.login}/trace-sample` : '')).toLowerCase()
-        if (s.sample.enabled && was) for (const r of [...s.projects.keys()]) if (r.toLowerCase() === was) s.projects.delete(r)
-      }
-      s.adminEmail = saved.adminEmail
+      if (saved.sample?.enabled && saved.sample.repo) Object.assign(s.sample, { repo: saved.sample.repo, private: saved.sample.private ?? true, tour: saved.sample.tour ?? true })
+      s.adminEmail = saved.adminEmail ?? ''
       s.people = (saved.people ?? []).map((p) => ({ email: p.email, class: p.class ?? 'user', projects: new Set(p.projects ?? []) }))
-    } else if (s.env.profiles.regions.default) {
-      s.aws.region = s.env.profiles.regions.default
     }
   } catch (e) {
     document.getElementById('app')?.replaceChildren(note('bad', `The installer can't be reached: ${e instanceof Error ? e.message : String(e)}`))

@@ -1,101 +1,76 @@
 /**
- * The installer's sample, end to end against a fake GitHub (an in-memory repository behind the REST and Git data
- * APIs): its files are pushed, it is put under trace with its seeded project database, and its tour is opened, each
- * step once however often the installer runs.
+ * The installer's sample, end to end: onboard-api.ts creates it from the 'sample' template with real git (the push
+ * goes to a local bare repository instead of GitHub), and its tour is opened against a fake GitHub issues API, once
+ * however often the installer runs.
  */
+import { spawnSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { DatabaseSync } from 'node:sqlite'
+import { describe, expect, it } from 'vitest'
+import type { Runner } from '../../src/core/onboard.js'
+import { onboardViaApi } from '../../src/installer/onboard-api.js'
+import { sampleFiles, startTour, tour } from '../../src/installer/sample.js'
 
-/** One repository: files on its default branch, commits made, issues opened. */
-class FakeGithub {
-  files = new Map<string, Buffer>([['README.md', Buffer.from('# created by GitHub\n')]])
-  commits = 0
-  blobs = new Map<string, Buffer>()
-  trees = new Map<string, Map<string, Buffer>>()
-  head = 'c0'
-  issues: { number: number; title: string; labels: string[]; body: string }[] = []
-  readonly fetch = (async (url: string, init?: RequestInit) => {
-    const method = init?.method ?? 'GET'
-    const path = url.replace('https://api.github.com', '').split('?')[0] ?? ''
-    const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {}
-    const json = (v: unknown, status = 200): Response => new Response(JSON.stringify(v), { status })
-    const base = '/repos/marc/trace-sample'
-    if (path === `${base}/git/ref/heads/main`) return json({ object: { sha: this.head } })
-    if (path === `${base}/git/commits/${this.head}`) return json({ sha: this.head, tree: { sha: this.treeSha(this.files) } })
-    if (path === `${base}/git/blobs`) {
-      const sha = `b${this.blobs.size}`
-      this.blobs.set(sha, Buffer.from(String(body.content), 'base64'))
-      return json({ sha }, 201)
-    }
-    if (path === `${base}/git/trees`) {
-      const next = new Map(this.files)
-      for (const e of body.tree as { path: string; sha: string }[]) next.set(e.path, this.blobs.get(e.sha) ?? Buffer.alloc(0))
-      const sha = this.treeSha(next)
-      this.trees.set(sha, next)
-      return json({ sha }, 201)
-    }
-    if (path === `${base}/git/commits` && method === 'POST') {
-      this.commits++
-      const sha = `c${this.commits}`
-      this.files = this.trees.get(String(body.tree)) ?? this.files
-      return json({ sha }, 201)
-    }
-    if (path === `${base}/git/refs/heads/main` && method === 'PATCH') { this.head = String(body.sha); return json({}) }
-    if (path.startsWith(`${base}/contents/`)) {
-      const f = decodeURIComponent(path.slice(`${base}/contents/`.length))
-      return this.files.has(f) ? json({ path: f }) : json({ message: 'Not Found' }, 404)
-    }
-    if (path === `${base}/issues` && method === 'GET') return json(this.issues.map((i) => ({ number: i.number, html_url: `https://github.com/marc/trace-sample/issues/${i.number}`, title: i.title, labels: i.labels.map((name) => ({ name })) })))
-    if (path === `${base}/issues` && method === 'POST') {
-      const i = { number: this.issues.length + 1, title: String(body.title), labels: body.labels as string[], body: String(body.body) }
-      this.issues.push(i)
-      return json({ number: i.number, html_url: `https://github.com/marc/trace-sample/issues/${i.number}`, title: i.title, labels: [] }, 201)
-    }
-    return json({ message: `unexpected ${method} ${path}` }, 500)
-  }) as typeof fetch
-
-  /** a content hash of a tree, so an unchanged tree keeps its sha (the API's behaviour) */
-  private treeSha(files: Map<string, Buffer>): string {
-    let h = 0
-    for (const [k, v] of [...files].sort(([a], [b]) => a.localeCompare(b))) for (const c of `${k}:${v.toString('base64')};`) h = (h * 31 + c.charCodeAt(0)) | 0
-    return `t${h >>> 0}`
-  }
+const git = (args: string[], cwd?: string): string => {
+  const p = spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' } })
+  if (p.status !== 0) throw new Error(`git ${args.join(' ')}: ${p.stderr}`)
+  return p.stdout
 }
 
-let gh: FakeGithub
-const realFetch = globalThis.fetch
+/** git as the installer runs it, with every push to github.com sent to `bare` instead. */
+const localGit = (bare: string): Runner => (cmd, opts = {}) => {
+  const args = cmd.slice(1).map((a) => (a.startsWith('https://github.com/') ? bare : a))
+  const p = spawnSync('git', args, { cwd: opts.cwd, input: opts.input, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' } })
+  if ((opts.check ?? true) && p.status !== 0) throw new Error(`git ${args.join(' ')}: ${p.stderr}`)
+  return p.stdout
+}
 
-beforeAll(() => {
-  gh = new FakeGithub()
-  globalThis.fetch = gh.fetch
-})
-afterAll(() => { globalThis.fetch = realFetch })
+/** GitHub as createRepo sees it: the repository does not exist, then it is created. */
+const fakeCreate = (async (url: string, init?: RequestInit) => {
+  const json = (v: unknown, status = 200): Response => new Response(JSON.stringify(v), { status })
+  if ((init?.method ?? 'GET') === 'GET' && url.endsWith('/repos/marc/trace-sample')) return json({ message: 'Not Found' }, 404)
+  if (url.endsWith('/user')) return json({ login: 'marc', type: 'User' })
+  if (url.endsWith('/user/repos')) return json({ full_name: 'marc/trace-sample', default_branch: 'main' }, 201)
+  return json({ message: `unexpected ${init?.method} ${url}` }, 500)
+}) as typeof fetch
 
-describe('the sample, against a fake GitHub', () => {
-  it('pushes the design, puts it under trace with its seeded database, and opens the tour once', async () => {
-    const { pushSample, onboardSample, startTour, sampleFiles, tour } = await import('../../src/installer/sample.js')
-    const { DatabaseSync } = await import('node:sqlite')
+/** The issues API of one repository. */
+function fakeIssues(): { fetch: typeof fetch; issues: { title: string; labels: string[]; body: string }[] } {
+  const issues: { title: string; labels: string[]; body: string }[] = []
+  const f = (async (url: string, init?: RequestInit) => {
+    const json = (v: unknown, status = 200): Response => new Response(JSON.stringify(v), { status })
+    if (!url.includes('/repos/marc/trace-sample/issues')) return json({ message: 'unexpected' }, 500)
+    if ((init?.method ?? 'GET') === 'GET') return json(issues.map((x, i) => ({ number: i + 1, html_url: `https://github.com/marc/trace-sample/issues/${i + 1}`, title: x.title, labels: x.labels.map((name) => ({ name })) })))
+    const b = JSON.parse(String(init?.body)) as { title: string; labels: string[]; body: string }
+    issues.push(b)
+    return json({ number: issues.length, html_url: `https://github.com/marc/trace-sample/issues/${issues.length}`, title: b.title, labels: [] }, 201)
+  }) as typeof fetch
+  return { fetch: f, issues }
+}
 
-    expect(await pushSample('t', 'marc/trace-sample', 'main')).toBe('c1')
-    for (const f of sampleFiles()) expect(gh.files.has(f.path), f.path).toBe(true)
-    expect(gh.files.has('tour.json')).toBe(false)
-    expect(gh.files.has('settings.json')).toBe(false)
-    expect(gh.files.has('.gitignore')).toBe(true)
-    expect(gh.files.get('README.md')?.toString()).not.toContain('created by GitHub')
-    // a second push changes nothing
-    expect(await pushSample('t', 'marc/trace-sample', 'main')).toBeNull()
-
-    const r = await onboardSample('t', 'marc/trace-sample', 'main', { escalateTo: '', applySettings: false })
-    expect(r.commit).toBe('c2')
-    expect(r.seeded?.length).toBeGreaterThan(0)
-    for (const f of ['.trace/project.db', '.github/workflows/trace-worker.yml', '.github/workflows/trace-build.yml', '.gitattributes', 'CLAUDE.md']) expect(gh.files.has(f), f).toBe(true)
-    // its own rules, not onboarding's empty ones
-    expect(gh.files.get('.trace/rules.md')?.toString().trim().length).toBeGreaterThan(0)
+describe('the sample, created by the installer', () => {
+  it('is created from the sample template: its files, the trace files and its seeded database, in one push to main', async () => {
+    const bare = join(mkdtempSync(join(tmpdir(), 'trace-sample-remote-')), 'repo.git')
+    git(['init', '-q', '--bare', '-b', 'main', bare])
+    const r = await onboardViaApi('marc/trace-sample', { token: 't', login: 'marc', apply: false, create: { template: 'sample', private: true }, git: localGit(bare), fetchImpl: fakeCreate })
+    expect(r.state).toBe('created')
+    expect(r.notes.length).toBeGreaterThan(0)
+    const files = new Set(git(['ls-tree', '-r', '--name-only', 'main'], bare).trim().split('\n'))
+    for (const f of sampleFiles()) expect(files, f.path).toContain(f.path)
+    for (const f of ['.trace/project.db', '.trace/rules.md', '.github/workflows/trace-worker.yml', '.github/workflows/trace-build.yml', '.gitattributes', 'CLAUDE.md', '.gitignore']) expect(files, f).toContain(f)
+    for (const f of ['tour.json', 'settings.json']) expect(files, f).not.toContain(f)
+    expect(git(['rev-list', '--count', 'main'], bare).trim()).toBe('1')
+    // binary files survive byte for byte
+    const pdf = sampleFiles().find((f) => f.path.endsWith('.pdf'))
+    if (pdf) expect(spawnSync('git', ['show', `main:${pdf.path}`], { cwd: bare }).stdout.equals(pdf.content)).toBe(true)
+    // its own rules, not onboarding's empty ones; its build is the KiCad one
+    expect(git(['show', 'main:.trace/rules.md'], bare).trim().length).toBeGreaterThan(0)
+    expect(git(['show', 'main:.github/workflows/trace-build.yml'], bare)).toMatch(/kicad/i)
     // the database carries the sample's settings and seeded tables
     const dbFile = join(mkdtempSync(join(tmpdir(), 'trace-sample-db-')), 'project.db')
-    writeFileSync(dbFile, gh.files.get('.trace/project.db') ?? Buffer.alloc(0))
+    writeFileSync(dbFile, spawnSync('git', ['show', 'main:.trace/project.db'], { cwd: bare }).stdout)
     const db = new DatabaseSync(dbFile, { readOnly: true })
     try {
       const keys = (db.prepare('SELECT key FROM settings').all() as { key: string }[]).map((x) => x.key)
@@ -106,29 +81,27 @@ describe('the sample, against a fake GitHub', () => {
     } finally {
       db.close()
     }
-    // a second run sees it is under trace already and commits nothing
-    expect((await onboardSample('t', 'marc/trace-sample', 'main', { escalateTo: '', applySettings: false })).commit).toBeNull()
+  }, 120_000)
 
-    const t = await startTour('t', 'marc/trace-sample', { gpu: true })
-    expect(t.opened).toBe(tour().length)
-    expect(gh.issues.every((i) => i.labels.includes('agent-fix') && i.labels.some((l) => l.startsWith('agent:')))).toBe(true)
-    expect(gh.issues[0]?.body).toMatch(/<!-- trace-sample-tour:[a-z0-9-]+ -->/)
-    const again = await startTour('t', 'marc/trace-sample', { gpu: true })
-    expect(again).toMatchObject({ opened: 0, existing: tour().length })
-  }, 60_000)
-
-  it('leaves the GPU and CPU tasks out when GPU jobs are off', async () => {
-    const { startTour, tour } = await import('../../src/installer/sample.js')
-    const fresh = new FakeGithub()
-    globalThis.fetch = fresh.fetch
+  it('opens the tour once, routed to each task\'s agent, and leaves out the remote tasks when GPU jobs are off', async () => {
+    const real = globalThis.fetch
+    const gh = fakeIssues()
+    globalThis.fetch = gh.fetch
     try {
-      const t = await startTour('t', 'marc/trace-sample', { gpu: false })
+      const t = await startTour('t', 'marc/trace-sample', { gpu: true })
+      expect(t.opened).toBe(tour().length)
+      expect(gh.issues.every((i) => i.labels.includes('agent-fix') && i.labels.some((l) => l.startsWith('agent:')))).toBe(true)
+      expect(gh.issues[0]?.body).toMatch(/<!-- trace-sample-tour:[a-z0-9-]+ -->/)
+      expect(await startTour('t', 'marc/trace-sample', { gpu: true })).toMatchObject({ opened: 0, existing: tour().length })
+      const off = fakeIssues()
+      globalThis.fetch = off.fetch
       const remote = tour().filter((x) => x.remote).length
       expect(remote).toBeGreaterThan(0)
-      expect(t.opened).toBe(tour().length - remote)
-      expect(t.skipped).toHaveLength(remote)
+      const t2 = await startTour('t', 'marc/trace-sample', { gpu: false })
+      expect(t2.opened).toBe(tour().length - remote)
+      expect(t2.skipped).toHaveLength(remote)
     } finally {
-      globalThis.fetch = gh.fetch
+      globalThis.fetch = real
     }
   })
 })

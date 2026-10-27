@@ -1,45 +1,44 @@
 /**
- * The sample project the installer can add: a repository holding one small, finished board design (templates/sample)
- * that exercises the whole of trace. Installing it:
+ * The sample project the installer can add: a new repository holding one small, finished board design
+ * (templates/sample) that exercises the whole of trace. It is a project like any other, created by the installer
+ * (ProjectAnswer.create, template 'sample'):
  *
- *   1 before the deploy  the repository is created if it does not exist (pushSample's caller: github.ts ensureRepo) and
- *                        the design's files are committed onto its default branch through the Git data API (no clone,
- *                        no gh CLI). Nothing in an existing repository is deleted; files are added or updated
- *   2 the deploy and the repositories' variables treat it as one more project (withSample)
- *   3 onboarding         the trace files (project database with its settings, rules, workflows, CLAUDE.md, and the
- *                        sample's own rules) are written by the same code `trace onboard` uses, then committed straight
- *                        onto the default branch: the installer made this repository, and its tour must start without
- *                        anyone merging a PR first. Then its repository settings, like any onboarded repository's
- *   4 the tour           one issue per task in TOUR (templates/sample/tour.json), each labelled for the agent that takes
- *                        it. Together they run every agent and every simulation once. An issue already open with the
- *                        same title is left alone, so a second run opens only what is missing
+ *   github step  the repository is created (github.ts createRepo), empty
+ *   onboard      onboard-api.ts writes the sample's files (scaffoldSample: binary-safe, `dot-x` → `.x`, the
+ *                installer-only files left out), puts it under trace with the sample's own settings (sampleSettings),
+ *                seeds its project database (sample-seed.ts seedSample: requirements, test plan, specs, thermal data)
+ *                and pushes it all to main in one commit
+ *   tour         last, one issue per task in templates/sample/tour.json, each labelled for the agent that takes it.
+ *                Together they run every agent and every simulation once. An issue already there with the same title
+ *                is left alone, so a second run opens only what is missing
  */
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import type { Answers } from './answers.js'
-import { type RepoFile, commitFiles, hasFile, listIssues, openIssue } from './github.js'
+import { listIssues, openIssue } from './github.js'
 
 export const SAMPLE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'templates', 'sample')
 
 /** Said in the plan about what the sample is. */
 export const SAMPLE_DESCRIPTION = 'a small sensor board (an intent, a KiCad schematic and board, analog, mixed-signal, logic, thermal, EMC and protocol models, firmware and a hardware-in-the-loop bench that runs on emulated instruments) that exercises every agent and every simulation.'
 
-/** The sample's repository: the one named, else `<login>/trace-sample`. */
+/** The sample's repository: the one named, else `<login>/trace-sample` (the login is derived, when not given, before
+ * the installer needs this). */
 export function sampleRepo(a: Pick<Answers, 'sample' | 'github'>): string {
   if (a.sample.repo) return a.sample.repo
   if (!a.github.login) throw new Error('the sample\'s repository has no owner: check the GitHub token, or name the repository')
   return `${a.github.login}/trace-sample`
 }
 
-/** The answers with the sample as one more project (when asked for, and not listed already). */
+/** The answers with the sample as one more project, a new repository to create (when asked for, and not listed
+ * already: once created, the saved answers list it as an existing repository). */
 export function withSample(a: Answers): Answers {
   if (!a.sample.enabled) return a
   const repo = sampleRepo(a)
   if (a.projects.some((p) => p.repo.toLowerCase() === repo.toLowerCase())) return a
-  return { ...a, projects: [...a.projects, { repo, branch: 'main', onboard: true, applySettings: true, memoryEventExpiryDays: null, generation: 0 }] }
+  return { ...a, projects: [...a.projects, { repo, branch: 'main', onboard: true, applySettings: true, memoryEventExpiryDays: null, generation: 0, create: { template: 'sample', private: a.sample.private } }] }
 }
 
 // ------------------------------------------------------------------ the files
@@ -57,7 +56,10 @@ function walk(dir: string, root = dir, out: string[] = []): string[] {
 }
 
 /** templates/sample's files as the repository holds them: `dot-x` becomes `.x` (npm drops dot-files from packages). */
-export function sampleFiles(dir = SAMPLE_DIR): RepoFile[] {
+/** A file of the sample: its path in the repository and its bytes. */
+export interface SampleFile { path: string; content: Buffer; executable: boolean }
+
+export function sampleFiles(dir = SAMPLE_DIR): SampleFile[] {
   return walk(dir).filter((rel) => !INSTALLER_ONLY.has(rel)).map((rel) => ({
     path: rel.replace(/(^|\/)dot-/g, '$1.'),
     content: readFileSync(join(dir, rel)),
@@ -65,66 +67,16 @@ export function sampleFiles(dir = SAMPLE_DIR): RepoFile[] {
   }))
 }
 
-/** Commit the sample's design files onto `branch` (null: they are there already). */
-export async function pushSample(token: string, repo: string, branch: string, dir = SAMPLE_DIR): Promise<string | null> {
-  return commitFiles(token, repo, branch, sampleFiles(dir), 'The trace sample project\n\nOne small sensor board, from intent to fabrication files, that exercises every trace agent and every simulation.')
-}
-
-// ------------------------------------------------------------------ onboarding
-
-export interface SampleOnboard { url: string; commit: string | null; settings: string[]; seeded?: string[] }
-
-/**
- * Put the sample under trace: the files `trace onboard` writes (core/onboard.ts writeFiles, on a scratch copy of the
- * sample with its settings), committed onto the default branch, then the repository settings (labels, auto-merge, the
- * ruleset) when asked. A repository already under trace (it has .trace/project.db and the workflows) is left as it is.
- */
-export async function onboardSample(token: string, repo: string, branch: string, o: { escalateTo: string; applySettings: boolean }, dir = SAMPLE_DIR): Promise<SampleOnboard> {
-  const url = `https://github.com/${repo}`
-  const { applySettings, detect, settingsFor, writeFiles } = await import('../core/onboard.js')
-  const { load } = await import('../core/config.js')
-  const tmp = mkdtempSync(join(tmpdir(), 'trace-sample-'))
-  try {
-    // a scratch copy of the repository as pushSample left it
-    const work = join(tmp, 'repo')
-    for (const f of sampleFiles(dir)) {
-      mkdirSync(dirname(join(work, f.path)), { recursive: true })
-      writeFileSync(join(work, f.path), f.content)
-    }
-    // its project database, so the settings land in it (a scratch copy has no .git for the store to find the root by)
-    const { PROJECT_SCHEMA, open } = await import('../core/store.js')
-    mkdirSync(join(work, '.trace'), { recursive: true })
-    const db = open(join(work, '.trace', 'project.db'), { wal: false })
-    db.exec(PROJECT_SCHEMA)
-    db.close()
-    let commit: string | null = null
-    const lines: string[] = []
-    const under = await hasFile(token, repo, branch, '.trace/project.db') && await hasFile(token, repo, branch, '.github/workflows/trace-worker.yml')
-    if (!under) {
-      const d = await detect(work, branch, () => '')
-      const settings = { ...settingsFor(d, o.escalateTo), ...sampleSettings(dir) }
-      const written = writeFiles(work, d, settings)
-      // the sample's requirements, test plan, specs and thermal data, in the same project database
-      const { seedSample } = await import('./sample-seed.js')
-      for (const l of seedSample(work)) lines.push(l)
-      const files: RepoFile[] = [...new Set(written)].map((rel) => ({ path: rel, content: readFileSync(join(work, rel)) }))
-      commit = await commitFiles(token, repo, branch, files, 'Put the sample project under trace\n\nThe project database with its settings, the trace workflows, the merge driver for the database and CLAUDE.md. Committed by the installer, which created this repository.')
-    }
-    let settings: string[] = []
-    if (o.applySettings) {
-      const prior = process.env.GH_TOKEN
-      process.env.GH_TOKEN = token
-      try {
-        settings = applySettings(repo, load(work))
-      } finally {
-        if (prior === undefined) delete process.env.GH_TOKEN
-        else process.env.GH_TOKEN = prior
-      }
-    }
-    return { url, commit, settings, seeded: lines }
-  } finally {
-    rmSync(tmp, { recursive: true, force: true })
+/** Write the sample's files into `repo` (a new repository's working tree). */
+export function scaffoldSample(repo: string, dir = SAMPLE_DIR): string[] {
+  const files = sampleFiles(dir)
+  for (const f of files) {
+    const out = join(repo, f.path)
+    mkdirSync(dirname(out), { recursive: true })
+    writeFileSync(out, f.content)
+    if (f.executable) chmodSync(out, 0o755)
   }
+  return files.map((f) => f.path)
 }
 
 /** The sample's own settings, beyond what onboarding detects (templates/sample/settings.json). */

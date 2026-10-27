@@ -15,75 +15,289 @@ the loop that runs Potroller.
 ## Installing
 
 ```sh
-npm install -g github:mteichtahl/trace#v1      # the `trace` CLI (Node 22.13+)
+npm install -g github:mteichtahl/trace#v1      # the `trace` CLI (Node 22.13+; git, which this needs anyway)
 trace install                                  # opens the installer in your browser
 ```
 
-The installer is a page served from your own machine (127.0.0.1, with a one-time key in its address). It asks for
-and checks the following:
+**What you need:** AWS credentials (a profile, SSO included, or access keys; an administrator is simplest) and one
+GitHub token. Nothing else: no Docker, no `gh` CLI, no KiCad or Python on this machine (the images build in
+CodeBuild, and onboarding talks to GitHub's API and `git`).
 
-- **GitHub:** the shared agent token, the repositories trace will run (or just [the sample project](#the-sample-project)), and optionally each project's own agent
-  token (see [Project isolation](#project-isolation)).
-- **AWS:** a profile (SSO works) or access keys, the region, and confirmation of the account. It checks that Bedrock
-  AgentCore and an Anthropic model are available there.
-- **Builds:** nothing, usually. Each repository gets a build runner on AWS, trace's own included (see
-  [Where builds run](#where-builds-run)); until it exists, its workflows run on GitHub's runners. The runners reach
-  GitHub through an AWS CodeConnections connection: the installer reuses one already authorized in the account and
-  region. If there is none, the stack creates one, and after the first deploy the installer shows you where to
-  authorize it and waits. You can also name an existing connection.
-- **Agents:** the model, session limits, and the central bucket.
-- **People:** the first administrator, and for everyone else their class (admin, user, guest) and the projects they
-  are assigned to.
+The token: a fine-grained token (github.com/settings/personal-access-tokens) on the repositories trace will run, with
+Contents, Pull requests, Issues, Workflows, Actions, Secrets, Variables, Administration and Webhooks read and write, and
+the account permission "Email addresses: read"; or a classic token with `repo`, `workflow` and `user:email`. What each
+permission is for, and what happens without it, is in [Tokens and permissions](#tokens-and-permissions).
 
-It then shows the plan and runs it:
+Builds need nothing more. Every GitHub Actions job runs on an AWS CodeBuild runner in your account, trace's own
+repository's included, and on GitHub's runners only until that runner exists. CodeBuild reaches GitHub through an AWS
+CodeConnections connection already authorized in the account and region when there is one, else through that same
+token (see [Where builds run](#where-builds-run)), so the first deploy has the runners and no console step is needed.
 
-- **AWS (CDK):** one stack. It contains the central bucket, the agent image (built by CodeBuild on arm64, so no
-  local Docker is needed), and AgentCore runtimes from that image: one worker runtime per project, each with its own
-  execution role, GitHub OIDC role, GitHub token secret, memory, knowledge base, GPU and CPU job definitions and CodeBuild
-  build runner, and the API runtime. Each
-  project's resources are in a nested stack of their own (see [Stack layout](#stack-layout-and-limits)). A project's
-  worker is invoked by that repository's workflows through IAM, and by the API. The API runtime is for people and is
-  reached only with a Cognito sign-in. The stack also holds the Cognito user pool.
-- **GitHub:** each repository's Actions variables (`TRACE_AWS_ROLE`, `TRACE_AGENT_RUNTIME_ARN`, `TRACE_MEMORY_ID`,
-  `TRACE_KB_ID`, `TRACE_KB_DATA_SOURCE_ID` and `TRACE_CODEBUILD_PROJECT`, all its own project's, `TRACE_AWS_REGION`, `TRACE_HOME`) and its `TRACE_TOKEN` secret (its project's agent token,
-  encrypted with the repository's key), plus the onboarding pull request. trace's own repository gets
-  `TRACE_CODEBUILD_PROJECT` alone. That variable is set only once the repository's build runner exists.
-- **The GPU image**, last: the deploy starts its build and does not wait for it (see [GPU jobs](#gpu-jobs-rendering-and-autorouting)),
-  so the installer waits for it once everything else is set up, and starts it again if an earlier one failed. A failed
-  GPU image leaves GPU and CPU jobs unavailable and everything else installed.
-- **People:** Cognito invitations into each person's class group, and project assignments recorded in the central
-  database.
+The installer is a page served from your own machine (127.0.0.1, with a one-time key in its address). It has four
+steps, and only the first asks for anything:
+
+1. **Connect.** The credentials and the token, then **Check**. Everything below is checked at once, before anything
+   is created, and each finding says what to do (`src/installer/preflight.ts`); where the installer can fix it itself
+   it offers a button, and does nothing until you press it.
+2. **Projects.** The repositories the token sees, to tick, or **Create a new project** (a repository made and
+   scaffolded from a KiCad, Rust, Python or empty template), or **Install the sample project** (see
+   [The sample project](#the-sample-project)). None is fine: install now, add repositories by running the installer
+   again.
+3. **Integrations (optional).** Keys for Nexar, Mouser or Digi-Key, each checked with its service. Skippable; see
+   [Optional integrations](#optional-integrations).
+4. **Review.** The plan, how long it takes, and **Advanced**, which holds every other setting with its default.
+
+**Worked out, not asked** (`src/installer/derive.ts`):
+
+| Setting | From |
+| --- | --- |
+| Account | STS `GetCallerIdentity` (a second run stops if the credentials now resolve to another account) |
+| Region | The profile's region, else `us-east-1` (Advanced to change) |
+| GitHub login | The token (`GET /user`) |
+| First administrator | The token's verified primary email (`GET /user/emails`); asked for under Advanced only when the token cannot see it |
+| Model | The newest Claude Sonnet inference profile active in the region, the region's geography before `global.` |
+| GPU and CPU jobs | On when the account's quotas allow one job (G and VT instances for GPU, standard instances for CPU), else off |
+| Knowledge bases | On where the region has Amazon S3 Vectors |
+| Prefix, session limits, bucket, observability, images | Their defaults (`trace`, 8 h, 15 min, a named bucket, on, prebuilt) |
+| How the build runners reach GitHub | An authorized GitHub connection in the account and region, else the token ([Where builds run](#where-builds-run)) |
+
+**The preflight** checks, in parallel: the credentials; Bedrock AgentCore in the region; the model's inference
+profile and the account's access to it (`GetFoundationModelAvailability`; for Anthropic, whether the one-time use-case
+form was sent, `GetUseCaseForModelAccess`); Amazon S3 Vectors; the G and VT and standard-instance quotas (Service
+Quotas) and the region's VPC quota; the CDK bootstrap (present, healthy, version 6 or later); the trace stack (none,
+updatable, or stuck after a failed first deploy); names a removed installation kept (its image repositories and token
+secret) that a new stack would collide with; the Cognito domain `<prefix>-<account>`; how the build runners will reach GitHub (an authorized GitHub connection, or
+CodeBuild's GitHub credential, which with the token must be allowed to make each repository's webhook);
+the token, its email, and whether trace's own actions can be used from other repositories; and, per chosen
+repository, exactly which permission is missing and what that costs. What it offers to do:
+
+| Finding | What the installer can do (on request) |
+| --- | --- |
+| Anthropic's first-time-use form not sent | Send it (`PutUseCaseForModelAccess`) with your answers; once per account or organisation |
+| No access to the model yet | Accept its agreement (`ListFoundationModelAgreementOffers`, `CreateFoundationModelAgreement`; needs `aws-marketplace:Subscribe` and a payment method) |
+| G and VT quota below one job (4 vCPUs) | Leave GPU and CPU jobs off and request 16 vCPUs (`RequestServiceQuotaIncrease`); turn them on and run again once granted |
+| Standard-instance quota below one CPU job, or the region's VPCs full | Request an increase |
+| The stack is `ROLLBACK_COMPLETE` (a failed first deploy) | Delete it, so the next install can create it |
+| A removed installation's image repositories and token secret | Delete them |
+| trace's actions not shared (a private source repository) | Share them with repositories of the same owner, when the token is its admin |
+
+Model access never blocks installing: the stack deploys without it, and the agents work once it is granted.
+
+It then runs the plan:
+
+- **AWS (CDK):** one stack (bootstrapped first if needed). It contains the central bucket, the agent image (arm64, see
+  [Images](#images-copied-or-built)), and AgentCore runtimes from that image: one worker runtime per project, each with
+  its own execution role, GitHub OIDC role, GitHub token secret, memory, knowledge base, GPU and CPU job definitions
+  and CodeBuild build runner (see [Where builds run](#where-builds-run)), and the API runtime. Each project's
+  resources are in a nested stack of their own (see [Stack layout](#stack-layout-and-limits)). A project's worker is
+  invoked by that repository's workflows through IAM, and by the API. The API runtime is for people and is reached
+  only with a Cognito sign-in. The stack also holds the Cognito user pool. Before the deploy, the token becomes
+  CodeBuild's GitHub source credential when the runners use it; after it, only when the runners wait for a GitHub
+  connection nobody has authorized yet, the installer waits for that and deploys again with them.
+- **Integrations:** any keys given, stored as `<prefix>/integrations/<name>`.
+- **GitHub, several repositories at once:** each repository's Actions variables (`TRACE_AWS_ROLE`,
+  `TRACE_AGENT_RUNTIME_ARN`, `TRACE_MEMORY_ID`, `TRACE_KB_ID`, `TRACE_KB_DATA_SOURCE_ID` and `TRACE_CODEBUILD_PROJECT`,
+  all its own project's, `TRACE_AWS_REGION`, `TRACE_HOME`, `TRACE_AGENT_LOGIN`) and its `TRACE_TOKEN` secret (its
+  project's agent token, encrypted with the repository's key); and its onboarding pull request, or, when it is onboarded already and the trace workflows
+  have changed, a held pull request refreshing them (`src/installer/onboard-api.ts`).
+- **People:** Cognito invitations into each person's class group, at once, and project assignments recorded in the
+  central database, one after another (it is one file).
+- **Ready.** The page says trace is ready to use (`trace login`). Only then does it wait for **the GPU image**: the
+  deploy starts it and does not wait for it (see [GPU jobs](#gpu-jobs-rendering-and-autorouting)), and it starts it
+  again if an earlier one failed. A failed GPU image leaves GPU and CPU jobs unavailable and everything else
+  installed.
+
+**How long** (estimates from what each step does; not yet measured on a real account):
+
+| | First install | Re-run or upgrade |
+| --- | --- | --- |
+| CDK bootstrap | about 2 minutes, when the region has none | none |
+| The stack | about 15 minutes of CloudFormation, plus the agent image: about 5 minutes to copy a published one, 20–40 to build it | a few minutes for settings or projects; 5–10 when trace changed (the image rebuilds from its cache, or is copied) |
+| Repositories, runners, onboarding, people | 1–2 minutes, in parallel | the same |
+| GPU image (after trace is ready) | about 10 minutes to copy, 30–60 to build | from its cache |
+
+Before this change the first install was the bootstrap, then 20–40 minutes for the agent image inside the deploy, then
+each repository and person one after another, and only then the 30–60 minute GPU image before the page said anything
+was done: about 60–110 minutes to a usable trace on a GPU-enabled account. Now it is about 20–25 minutes with a
+published image (35–60 when it builds), and the GPU image no longer stands in the way.
+
+**Running it again** updates the installation: the preflight says so, the plan lists what changes since the last run
+from this machine (projects added or removed, settings changed, people), and CloudFormation leaves the rest alone.
+Every step is safe to repeat. Adding or removing a repository adds or removes that project's runtime, roles, secret,
+job definitions and runner.
+
+Tokens and keys stay in the installer's memory. They are written only to Secrets Manager, to GitHub (encrypted), and,
+when the build runners use the token, as CodeBuild's GitHub source credential (see [Where builds run](#where-builds-run)).
 
 ### The sample project
 
-On the GitHub step you can also choose **Install the sample project**. It is a small sensor board, from intent to
-fabrication files, in a repository of its own (`<your login>/trace-sample` unless you name another). It is the quickest
-way to see the whole system work before you bring your own design, and it is the only repository you need to choose.
+**Install the sample project**, on the Projects step, adds a new repository (`<your login>/trace-sample` unless you
+name another): a small, finished sensor board from intent to fabrication files (`templates/sample`). It is the
+quickest way to see the whole system work before you bring your own design, and it can be the only project.
 
-- **Before the deploy,** the installer creates the repository if it does not exist and commits the sample's files
-  (`templates/sample`) onto its default branch. An existing repository is used as it is: files are added or updated,
-  nothing is deleted. Creating one needs a token that may create repositories (a fine-grained token with
-  Administration read and write on your account, or the admin token); otherwise create it yourself, empty, and run the
-  installer again.
-- **From then on it is a project like any other:** its own runtime, roles, memory, knowledge base and build runner,
-  and you can assign people to it. It is put under trace straight away, without the held onboarding pull request,
-  and its project database starts with the sample's requirements, test plan, specifications and thermal data.
+- **It is a new project like any other:** the installer creates the repository with the other new ones, and it gets
+  its own runtime, roles, memory, knowledge base and build runner; you can assign people to it. Onboarding fills it
+  with the sample's files and settings, seeds its project database (requirements, a test plan using every method,
+  analog and protocol specifications, thermal data) and pushes it all to `main`, with no pull request to merge.
 - **The tour,** last, opens one task per step of the journey (define, architect, capture, prove, layout, sign-off,
-  release, bring-up), each labelled for the agent that takes it. Together they run every agent and every tool, every
-  simulation included: circuit (ngspice), mixed-signal, logic, formal and coverage, FPGA synthesis and place and
-  route, protocols, thermal (2.5D, CalculiX and CFD), electromagnetic (openEMS), autorouting (Freerouting and
-  OrthoRoute), rendering (Blender), firmware, and hardware in the loop on an emulated bench
-  (`trace hil emulate`). Tasks that need GPU or CPU jobs are left out when GPU jobs are off. The tour runs on AWS
-  like any other work and costs what that work costs; untick **Start the tour** to install the sample without it.
-  Running the installer again opens only the tasks that are missing.
+  release, bring-up), each labelled for the agent that takes it. Together they run every agent and every tool,
+  every simulation included: circuit (ngspice), mixed-signal, logic, formal and coverage, FPGA synthesis and place
+  and route, protocols, thermal (2.5D, CalculiX and CFD), electromagnetic (openEMS), autorouting (Freerouting and
+  OrthoRoute), rendering (Blender), firmware, and hardware in the loop on an emulated bench (`trace hil emulate`).
+  The tasks that need GPU or CPU jobs wait for the GPU image (and are left out when GPU jobs are off). The tour runs
+  on AWS like any other work and costs what that work costs; untick **Start the tour** to install the sample without
+  it. Running the installer again opens only the tasks that are missing.
 
 `test/installer/sample-tour.test.ts` keeps the tour complete: a tool, agent or kind of remote job added without a
 tour task fails it.
 
-Tokens and keys stay in the installer's memory. They are written only to Secrets Manager and GitHub. Every step can
-be run again safely, and running the installer again updates an existing installation. Adding or removing a
-repository and running the installer again adds or removes that project's runtime, roles, secret and job
-definition.
+### Tokens and permissions
+
+One token does everything. On each repository it needs:
+
+| Permission (fine-grained) | For | Without it |
+| --- | --- | --- |
+| Contents, Pull requests, Issues, Workflows, Actions: read and write | The agents' work, the onboarding PR | Onboarding fails for that repository |
+| Secrets, Variables: read and write | Its `TRACE_TOKEN` secret and variables | Refused for that repository, unless an admin token is given |
+| Administration: read and write | Its settings and the "trace" ruleset; with the token as CodeBuild's credential, CodeBuild registering each job's runner | Settings and ruleset left alone; with the token as CodeBuild's credential the preflight stops: its runner can't be made |
+| Webhooks, Commit statuses: read and write | With the token as CodeBuild's credential, its runner's workflow-job webhook | The same (a GitHub connection needs neither) |
+| Email addresses: read (account) | The first administrator's email | The email is asked for |
+
+A classic token needs `repo`, `workflow` and `user:email`, and its account must be an admin of each repository. The
+preflight probes each permission without changing anything and names the missing ones per repository.
+
+**The optional second token** (Advanced → Admin token): when the agents' token is deliberately narrow (no Secrets,
+Variables or Administration, which the agents never need), give an admin token for the installation; it is used only
+while installing and never stored, unless you choose it as the token CodeBuild keeps (Advanced → Build runners). A project's own agent token
+(Advanced) isolates that project's agent on GitHub, as [Project isolation](#project-isolation) explains.
+
+**Nothing on the default path needs the AWS console.** The preflight's fixes are API calls (the Anthropic use-case form,
+`PutUseCaseForModelAccess`; the model agreement, `CreateFoundationModelAgreement`; quota increases,
+`RequestServiceQuotaIncrease`; a failed first deploy, `DeleteStack`; a stuck rollback, `ContinueUpdateRollback`; a
+removed installation's sign-in domain, `DeleteUserPoolDomain`; its kept repositories and secret), the build runners
+use the token unless a connection is authorized already, and publishing images is set up by API too. What a person
+still decides, and why:
+
+| What | Why it can't be automated | When it comes up |
+| --- | --- | --- |
+| Authorizing a new AWS CodeConnections connection | AWS requires the GitHub app's installation to be approved in the console (the OAuth handshake with GitHub) | Only with Advanced → Build runners → "An AWS CodeConnections connection" and none authorized yet |
+| Waiting for AWS: a pending Anthropic agreement, a quota increase | AWS decides (it emails; usually minutes for the agreement, within a day for a quota) | Only when the preflight found them missing; installing never waits |
+| A payment method on the account | The model agreement is an AWS Marketplace subscription, which needs one (Billing) | Only on an account that has none |
+| A custom ECR Public alias | Requested in the console only | Never: trace uses the registry's default alias |
+| Sharing a private trace source repository's actions | GitHub requires that repository's admin | Only when you are not its admin |
+
+### Optional integrations
+
+Keys for external services some tools use. None is needed to install or deploy; without one, the tools that use it
+carry on with what they have and say which key would add more ("no Nexar (Octopart) credentials …: add them with
+`trace integrations set nexar`").
+
+| Integration | Keys | Enables | Get one |
+| --- | --- | --- | --- |
+| `nexar` | `NEXAR_CLIENT_ID`, `NEXAR_CLIENT_SECRET` | Stock, prices and lifecycle from every distributor Octopart lists (parts lookup, search, alternatives, BOM checks) | [portal.nexar.com](https://portal.nexar.com/) |
+| `mouser` | `MOUSER_API_KEY` | Mouser stock, prices, lifecycle, datasheet links | [mouser.com/api-hub](https://www.mouser.com/api-hub/) |
+| `digikey` | `DIGIKEY_CLIENT_ID`, `DIGIKEY_CLIENT_SECRET` | Digi-Key stock, prices, lifecycle, datasheet links | [developer.digikey.com](https://developer.digikey.com/) |
+
+LCSC needs no key, and the datasheet tools fetch public URLs; those are every credential the tools read
+(`src/core/integrations-catalog.ts`, checked by `test/core/integrations.test.ts`).
+
+```sh
+trace integrations list                      # which are set, what each enables
+trace integrations set nexar                 # asks for the keys (or NEXAR_CLIENT_ID=… NEXAR_CLIENT_SECRET=…)
+trace integrations check nexar               # the stored keys, checked with Nexar
+trace integrations remove nexar
+trace integrations set mouser --remote       # through the API, as a signed-in admin
+```
+
+Each is one Secrets Manager secret, `<prefix>/integrations/<name>`, written by the installer, the CLI (your AWS
+credentials) or an admin through the API (`integrations.set`, `.list`, `.remove`; the API may write them and never
+reads them back). A key is checked with its service when given; a failed check is reported and the key stored anyway.
+With the library gateway off, each worker role may read `<prefix>/integrations/*`, and the worker loads them into its
+environment when it starts (so an agent, which has Bash and its role's credentials, can read them too). With the
+[library gateway](#library-gateway) on, only the gateway's Lambda may read them and no worker role can. A changed key
+reaches workers at their next session and the Lambda at its next cold start; nothing is redeployed.
+
+### Images: copied or built
+
+Both images (the agent's, arm64; the GPU and CPU jobs', amd64) are made by CodeBuild in your account
+(`src/infra/images.ts`):
+
+- **Prebuilt** (the default): CodeBuild copies trace's published image for exactly this source from Amazon ECR Public,
+  `<registry>/trace-agent:<content tag>` and `/trace-gpu:`, into the installation's own private repository. The
+  content tag is a hash of what goes into the image, computed the same way by the stack and by trace's release
+  workflow (`scripts/image-tag.mjs`), so a modified trace never takes an image that is not its own. The copy is pinned:
+  `scripts/resolve-image.mjs` reads the tag's digest from the registry and checks it against the manifest's own
+  bytes, the image is pulled by that digest, its digest is checked again after the pull, and only then is it re-tagged
+  and pushed. When the tag is not published (an unreleased commit, a fork), or no registry is set, it builds instead.
+  `<registry>` is found at install time: the source repository's `trace-images` release, which publishing writes
+  (below), names it. Nothing published yet, so always built until then. Advanced → "Published images registry"
+  overrides it, and `PUBLISHED_REGISTRY` in `src/infra/props.ts` can pin one for a fork; neither is needed.
+
+  AgentCore would also run an image straight from `public.ecr.aws` (its `containerUri` accepts it), and Batch could
+  pull one; trace copies it anyway, so the runtimes and jobs pull from the account's own registry in their region (no
+  public pull rate limits, no dependence on ECR Public at each cold start, the image stays if a release is withdrawn),
+  and the private repository keeps its lifecycle rule (the last 10 images).
+- **Build:** `docker build` with BuildKit's inline cache: the previous image (`:cache`) is the cache, so a rebuild
+  after an upgrade redoes only the layers whose inputs changed, and CodeBuild's local Docker layer cache helps a build
+  soon after another.
+
+An installed trace has no `package-lock.json` or `.npmrc` (npm never packs them), and both the images and the CDK's
+Lambda bundling need the lock file: `npm run build` copies both into `agent/`, which npm packs
+(`scripts/stage-image.mjs`, `src/infra/lockfile.ts`).
+
+### Publishing images
+
+trace's own images are published to Amazon ECR Public from one AWS account, the project owner's, so every
+installation can copy them. Publishing is a step of the install itself, with no prework: when the GitHub token you
+install with administers trace's source repository, the installer sets publishing up from that account and starts
+the first release (the preflight says so, and Advanced → "Publish trace's images" turns it on or off). Nothing is
+done in the console, and nothing is edited or committed. `trace release setup --publish` does the same on its own.
+
+It (`src/installer/release.ts`):
+
+1. bootstraps CDK in us-east-1 (ECR Public's only region) when it isn't, and deploys **TraceRelease**
+   (`src/infra/release.ts`; `npm run deploy:release` deploys it alone): the public repositories `trace-agent`
+   (linux/arm64) and `trace-gpu` (linux/amd64) with their gallery catalog data, and the release role `trace-release`,
+   which GitHub OIDC lets only the source repository's `main` and `v*` tags assume, and which may only log in and push
+   to those two repositories (the account's GitHub OIDC provider is used when it has one);
+2. reads the registry's address, `public.ecr.aws/<alias>`, with `DescribeRegistries`. The alias is the registry's
+   default one, which ECR Public assigns by itself once the account's first public repository exists, so a new
+   registry gets it right after the deploy (setup waits a minute for it). A custom alias is the only kind that needs
+   the console, and trace does not use one. The gallery display name is set with `PutRegistryCatalogData`;
+3. sets the source repository's variables `TRACE_RELEASE_ROLE` and `TRACE_IMAGE_REGISTRY` with the GitHub token you
+   gave (REST);
+4. records the registry in the source repository's `trace-images` release (a pre-release, never "latest"), where every
+   installer finds it;
+5. starts the first release (`workflow_dispatch`; the CLI with `--publish`) and prints where the images appear
+   (`public.ecr.aws/<alias>/trace-agent`, `https://gallery.ecr.aws/<alias>/trace-agent`, and the same for `trace-gpu`).
+
+From then on every merge to `main` and every `v*` tag publishes (`.github/workflows/release-images.yml`, which does
+nothing until both variables are set). It runs on the source repository's own AWS build runner, which the
+installation makes (with Docker, when it publishes; see [Where builds run](#where-builds-run)), and on GitHub's
+`ubuntu-24.04` runner until that exists. It builds both images with BuildKit, caches in the registry
+itself (`:cache`, mode=max), attaches an OCI provenance attestation, tags the content tag plus `latest` on main and
+`vX.Y.Z` on a tag, and records each pushed digest in the job summary. Installations look there from then on by
+themselves: each install reads the `trace-images` release, and copies its version's images when they are published.
+
+### Upgrading and uninstalling
+
+```sh
+trace upgrade              # pull the newer trace (npm install -g github:mteichtahl/trace#v1), then redeploy with the
+                           # saved answers and refresh each repository's variables and workflows
+trace upgrade --check      # what it would change, without changing anything
+trace upgrade --runner-auth token|connection|auto   # switch how the build runners reach GitHub (Where builds run)
+trace uninstall            # remove it (asks you to type the stack's name; --yes to skip)
+```
+
+Both use the answers saved on this machine and your AWS credentials; the GitHub token is read back from the
+installation's own secret, so neither asks for it. `trace uninstall` removes the integrations' secrets, each
+repository's trace variables (`TRACE_CODEBUILD_PROJECT` among them) and `TRACE_TOKEN`, the stack (and with it the
+build runners and their webhooks), then CodeBuild's GitHub credential when trace imported it, and lists what stays (a
+GitHub connection the stack created among it): with keep data (`retainData`, the default) the central
+bucket, the image repositories, each project's memory, log groups and knowledge-base vectors; always the Cognito user
+pool, the API's token secret, the CDK bootstrap, Transaction Search and the files onboarding added to each repository.
+`--delete-data` also deletes what would block installing again with the same prefix (the image repositories, the token
+secret, the user pool) and prints the commands for the bucket and the memories.
 
 ## Project isolation
 
@@ -142,11 +356,11 @@ Inside, the resources are the ones the single stack had, with the same names, IA
 
 | Projects | Parent stack: resources / outputs | Each project's nested stack: resources / outputs / parameters |
 | --- | --- | --- |
-| 1 | 87 / 19 | 23 / 15 / 12 |
-| 24 | 113 / 19 | 23 / 15 / 12 |
-| 60 | 150 / 19 | 23 / 15 / 12 |
+| 1 | 89 / 20 | 23 / 15 / 12 |
+| 24 | 115 / 20 | 23 / 15 / 12 |
+| 60 | 152 / 20 | 23 / 15 / 12 |
 
-(Everything on, including the legacy memory's one-deploy output. The knowledge bases add the vector bucket to the
+(Everything on, including the legacy memory's one-deploy output and the CI runners' role. The knowledge bases add the vector bucket to the
 parent, and to each nested stack five resources, its two outputs `Project<hash>KnowledgeBaseId` and
 `Project<hash>KnowledgeBaseDataSourceId`, the knowledge base id the parent reads for the API, and the vector bucket's
 parameter. From 24 projects, CDK moves part of the API role's policy, which names every project's memory, worker
@@ -277,11 +491,41 @@ container runs the job and is discarded.
   `repository` field of its `package.json`, `github:mteichtahl/trace`; a git checkout's own remote, or
   `TRACE_SOURCE`, comes first). If your token can manage that repository's variables, it gets a runner of its own
   (a runner only: no agents, roles or memory) and its `TRACE_CODEBUILD_PROJECT`. This is on by default; turn off
-  "Build trace's own repository on AWS too" under "Where the workflows run" to leave it on GitHub's runners.
-- **No GitHub token is stored for it.** CodeBuild reaches GitHub through an AWS CodeConnections connection (the AWS
-  Connector for GitHub app). Grant that app access to every repository trace builds.
-- **One connection per account and region.** A person authorizes it once, in the AWS console, and every
-  installation in that account and region reuses it. Nothing is needed up front:
+  "Build trace's own repository on AWS too" under Advanced → Build runners to leave it on GitHub's runners. When the
+  installation publishes trace's images, that runner has Docker (`runners.ciPrivileged`) for the release workflow.
+- **How CodeBuild reaches GitHub** (to make each runner project's webhook, register each job's just-in-time runner
+  and fetch the source): one of two, chosen per installation (`runners.auth` in the answers; Advanced → Build
+  runners in the installer):
+
+  | | GitHub connection (CodeConnections) | The GitHub token (CodeBuild source credential) |
+  | --- | --- | --- |
+  | Stored with CodeBuild | No token: the AWS Connector for GitHub app's installation | The personal access token, imported with `ImportSourceCredentials` |
+  | Console step | One authorization per AWS account and region, the first time | None |
+  | First deploy | With the runners when a connection is authorized already; else without (GitHub's runners meanwhile), then a second deploy once it is | With the runners |
+  | GitHub access | The app's: grant it every repository trace builds | The token's: Administration, Webhooks, Commit statuses (read and write) and Contents (read) on each repository |
+
+  **Automatic** (the default) uses a connection when one is authorized in the account and region already (the one
+  this installation used before, `<prefix>-github`, or another installation's), and the token otherwise, so a first
+  install needs only the AWS credentials and the token. **The token** always uses the token. **A connection**
+  (Advanced: "use an AWS CodeConnections connection instead of the token; needs one console authorization") always
+  uses one, and creates `<prefix>-github` when there is none. Switch later with
+  `trace upgrade --runner-auth auto|token|connection` (or by choosing again in `trace install`): the runner projects
+  are updated in place.
+- **With the token**, the installer imports it before the deploy as CodeBuild's account-level GitHub source credential
+  (`ImportSourceCredentials`, server type `GITHUB`, auth type `PERSONAL_ACCESS_TOKEN`; Advanced chooses the agents'
+  token or the admin token). The runner projects then name no source credential of their own, so CodeBuild uses that
+  one for their webhooks, runner registration and checkouts
+  ([multiple access tokens](https://docs.aws.amazon.com/codebuild/latest/userguide/multiple-access-tokens.html):
+  account credentials "will be used on a project when no project or source level credentials are specified"). An
+  account that already has a GitHub source credential keeps it: it may be another team's, so trace uses it and leaves
+  it alone, and the preflight says so. One trace imported is refreshed on every run and removed by `trace uninstall`.
+  CodeBuild keeps the token itself: no job and no role can read it. The preflight stops when the token lacks
+  Administration or Webhooks on a chosen repository, because CodeBuild could not make that runner and the deploy would
+  fail.
+- **With a connection**, CodeBuild uses the AWS Connector for GitHub app and no GitHub token is stored for it. Grant
+  that app access to every repository trace builds. One connection serves the whole account and region: a person
+  authorizes it once, in the AWS console, and every installation there reuses it, and says which one it used. Nothing
+  needs it up front:
   1. The installer looks for a connection that is already authorized. If it finds one, it deploys once, with the
      runners, and sets each repository's variable.
   2. If there is none, the stack creates `<prefix>-github` and the first deploy goes ahead without the runners
@@ -295,8 +539,9 @@ container runs the job and is discarded.
      and the workflows keep running on GitHub's runners; authorize it and run the installer again to move them.
 
   A connection the stack created is kept if the stack is deleted, because other installations may be using it.
-- **No AWS access comes with it.** The runner's own role may write its logs and use the connection, nothing else.
-  Jobs reach AWS exactly as they do on GitHub's runners, through their repository's GitHub OIDC role.
+- **No AWS access comes with it.** The runner's own role may write its logs and (with a connection) use the
+  connection, nothing else. Jobs reach AWS exactly as they do on GitHub's runners, through their repository's GitHub
+  OIDC role.
 - **Bigger machines:** `runners.computeType` sets every job's default size (large unless changed); a job can ask for
   another with an `instance-size:` label. `runners.privileged` turns on Docker for jobs that build containers.
 
@@ -310,6 +555,9 @@ trace onboard owner/repo --apply-settings      # an existing repository: opens a
 trace new owner/board --template kicad         # a new one: created, scaffolded and pushed
 trace doctor owner/repo                        # what is still missing, and how to fix each item
 ```
+
+`trace onboard` and `trace new` reach GitHub with the `gh` CLI, signed in as you. `trace install` does the same
+onboarding through GitHub's API and `git` with the installer's token, so it needs no `gh`.
 
 Onboarding adds the following:
 
@@ -423,10 +671,11 @@ hop is checked against private, loopback, link-local and multicast addresses, in
 (`::ffff:7f00:1`, `64:ff9b::/96`), and the connection goes to the address that was checked, so a name that resolves
 differently the second time (DNS rebinding) can't reach the Lambda's runtime API or anything else inside AWS.
 
-**Distributor keys.** `MOUSER_API_KEY`, `DIGIKEY_CLIENT_ID`/`_SECRET` and `NEXAR_CLIENT_ID`/`_SECRET` go in one
-Secrets Manager secret, `<prefix>/library-keys` (output `LibraryKeysSecretArn`), as a JSON object. The installer writes
-the ones you give and keeps the ones you leave empty. Only the Lambda's role reads it, so no agent, which has Bash and
-its role's credentials, can. Without the gateway, a worker has no distributor keys and `parts.lookup` asks LCSC only.
+**Distributor keys.** The installation's [optional integrations](#optional-integrations) (`<prefix>/integrations/<name>`):
+with the gateway on, only the Lambda's role may read them, so no agent, which has Bash and its role's credentials,
+can. The Lambda also still reads the older single secret, `<prefix>/library-keys` (output `LibraryKeysSecretArn`), for
+any key the integrations leave unset; the installer no longer writes it. Without the gateway, each worker reads the
+integrations itself (and its agent can read them).
 
 **Resources** (`src/infra/gateway.ts`, in the parent stack):
 
@@ -434,8 +683,8 @@ its role's credentials, can. Without the gateway, a worker has no distributor ke
 | --- | --- |
 | `<prefix>-library` gateway | `AWS_IAM` inbound auth, MCP. Its role (`<prefix>-gateway-<region>`) may only invoke the Lambda. |
 | `library` target | Lambda target, `GATEWAY_IAM_ROLE` credentials, its tool schema generated from the tools' zod inputs without their local inputs. Gateway's schema has no enums or bounds, so they are kept in each field's description; the Lambda validates with the full zod schema. |
-| `<prefix>-library` Lambda | Node 22 on arm64, 2 GB, 10 minutes (a 2,000-line BOM check asks the providers line by line). Role `<prefix>-library-<region>`: read `central/*`, write it only with a conditional put, read the keys secret. Nothing of `projects/`, `jobs/`, `access/` or `prompts/`. |
-| `<prefix>/library-keys` secret | Written by the installer, never by CloudFormation. |
+| `<prefix>-library` Lambda | Node 22 on arm64, 2 GB, 10 minutes (a 2,000-line BOM check asks the providers line by line). Role `<prefix>-library-<region>`: read `central/*`, write it only with a conditional put, read the keys secret and `<prefix>/integrations/*`. Nothing of `projects/`, `jobs/`, `access/` or `prompts/`. |
+| `<prefix>/library-keys` secret | The older home of the distributor keys, read for any key the integrations leave unset; never written by CloudFormation. |
 
 **Cost.** Gateway calls are $0.005 per 1,000, and tool indexing $0.02 per 100 tools a month (11 tools), at
 [AgentCore pricing](https://aws.amazon.com/bedrock/agentcore/pricing/); the Lambda is billed per call. Nothing runs

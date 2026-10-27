@@ -29,7 +29,8 @@ import * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { Construct } from 'constructs'
 import { LIBRARY_TARGET, libraryToolDefinitions } from '../core/gateway.js'
 import { libraryRegistry } from '../library/lambda.js'
-import { CENTRAL_PREFIX, grantPrefixes } from './project.js'
+import { integrationsPrefix } from '../core/integrations.js'
+import { CENTRAL_PREFIX, grantPrefixes, integrationsReadStatement } from './project.js'
 
 /** The Lambda's time limit: a BOM check of 2,000 lines asks the providers line by line. The gateway allows 15. */
 export const LAMBDA_TIMEOUT_MINUTES = 10
@@ -103,6 +104,8 @@ export class LibraryGateway extends Construct {
     })
     grantPrefixes(role, p.bucket, { conditional: [CENTRAL_PREFIX] })
     this.keys.grantRead(role)
+    // the installation's optional integrations (src/core/integrations.ts): with the gateway on, only this role reads them
+    role.addToPolicy(integrationsReadStatement(partition, region, account, p.prefix))
     const logGroup = new logs.LogGroup(this, 'FunctionLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY })
     logGroup.grantWrite(role)
 
@@ -127,6 +130,7 @@ export class LibraryGateway extends Construct {
       environment: {
         TRACE_HOME: p.traceHome,
         TRACE_LIBRARY_KEYS_SECRET_ARN: this.keys.secretArn,
+        TRACE_INTEGRATIONS_PREFIX: integrationsPrefix(p.prefix),
         // the function's file system is read-only but /tmp: the central database's copy and the documents go there
         HOME: '/tmp',
         XDG_CACHE_HOME: '/tmp/cache',

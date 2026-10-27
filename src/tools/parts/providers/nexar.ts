@@ -5,6 +5,7 @@
  * skipped. One offer per seller listing; the seller is named.
  */
 import { z } from 'zod'
+import { addKeyHint } from '../../../core/integrations.js'
 import { mpnLoose } from '../../datasheets/mpn.js'
 import { jsonOf, ProviderError, type PartOffer, type Provider, type ProviderContext } from '../types.js'
 
@@ -135,7 +136,7 @@ async function gql(query: string, variables: Record<string, string | number>, ct
 
 export const nexar: Provider = {
   name: 'nexar',
-  unavailable: (env) => (env.NEXAR_CLIENT_ID && env.NEXAR_CLIENT_SECRET ? null : 'no NEXAR_CLIENT_ID / NEXAR_CLIENT_SECRET set'),
+  unavailable: (env) => (env.NEXAR_CLIENT_ID && env.NEXAR_CLIENT_SECRET ? null : addKeyHint('nexar')),
   async lookup(mpn, ctx) {
     const want = mpnLoose(mpn)
     return (await gql(NEXAR_MPN_QUERY, { q: mpn, currency: ctx.currency }, ctx)).filter((o) => mpnLoose(o.mpn).startsWith(want))

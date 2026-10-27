@@ -14,16 +14,20 @@
  *                is a placeholder. Linux container, the image and compute type of `runners` (a job may ask for another
  *                with the `image:` and `instance-size:` labels), privileged only when asked (Docker-in-Docker); no
  *                artifacts, no cache, no VPC
- *   source auth  the installation's AWS CodeConnections connection (the AWS Connector for GitHub app), as the source's
- *                own credential (Source.Auth type CODECONNECTIONS): no GitHub token is stored for it, and the
- *                account's default CodeBuild source credential, whatever it is, is not used
+ *   source auth  runners.auth 'connection': the installation's AWS CodeConnections connection (the AWS Connector for
+ *                GitHub app), as the source's own credential (Source.Auth type CODECONNECTIONS): no GitHub token is
+ *                stored for it, and the account's default CodeBuild source credential, whatever it is, is not used.
+ *                runners.auth 'token': no Source.Auth, so CodeBuild uses the account's GitHub source credential (the
+ *                personal access token the installer imported with ImportSourceCredentials, or one the account had
+ *                already), which CodeBuild keeps itself: no job can read it, and the role below gets no connection
+ *                statement
  *   logs         its own log group, /aws/codebuild/<name>, kept a month, deleted with the project
  *   role         its service role, assumed by CodeBuild only for this project (aws:SourceAccount, aws:SourceArn), and
  *                allowed only:
  *                  logs        CreateLogStream and PutLogEvents on its own log group
  *                  connection  codeconnections:UseConnection, GetConnectionToken and GetConnection (and the same
  *                              codestar-connections actions, the service's former name, whose ARNs are the same
- *                              connection's) on that one connection ARN
+ *                              connection's) on that one connection ARN (auth 'connection' only)
  *
  * The security line: a CodeBuild build's container gets its service role's credentials, so whatever this role allows
  * every job of the repository can do with them. That is why it allows nothing in AWS beyond its logs and the
@@ -75,8 +79,9 @@ export interface RunnerProjectProps {
   name: string
   /** OWNER/REPO */
   repository: string
-  /** the AWS CodeConnections connection CodeBuild reaches GitHub through */
-  connectionArn: string
+  /** the AWS CodeConnections connection CodeBuild reaches GitHub through; null: the account's CodeBuild GitHub source
+   * credential (runners.auth 'token') */
+  connectionArn: string | null
   computeType: string
   image: string
   privileged: boolean
@@ -152,7 +157,7 @@ export class RunnerProject extends Construct {
     // VPC and log grants of its own to the role, and every one of those is a permission every job would have.
     this.role = new iam.Role(this, 'Role', {
       roleName: `${p.name}-${region}`,
-      description: `CodeBuild GitHub Actions runner for ${p.repository}: its logs and the GitHub connection only`.slice(0, 1000),
+      description: `CodeBuild GitHub Actions runner for ${p.repository}: its logs${p.connectionArn ? ' and the GitHub connection' : ''} only`.slice(0, 1000),
       assumedBy: new iam.ServicePrincipal('codebuild.amazonaws.com', {
         conditions: { StringEquals: { 'aws:SourceAccount': account }, ArnLike: { 'aws:SourceArn': projectArn } },
       }),
@@ -163,14 +168,14 @@ export class RunnerProject extends Construct {
               sid: 'RunnerLogs', actions: ['logs:CreateLogStream', 'logs:PutLogEvents'],
               resources: [this.logGroup.logGroupArn, `arn:${partition}:logs:${region}:${account}:log-group:${this.logGroup.logGroupName}:log-stream:*`],
             }),
-            new iam.PolicyStatement({
+            ...(p.connectionArn ? [new iam.PolicyStatement({
               sid: 'RunnerConnection',
               actions: [
                 'codeconnections:UseConnection', 'codeconnections:GetConnectionToken', 'codeconnections:GetConnection',
                 'codestar-connections:UseConnection', 'codestar-connections:GetConnectionToken', 'codestar-connections:GetConnection',
               ],
               resources: connectionArns(p.connectionArn, Stack.of(this)),
-            }),
+            })] : []),
           ],
         }),
       },
@@ -183,7 +188,8 @@ export class RunnerProject extends Construct {
       source: {
         type: 'GITHUB',
         location: `https://github.com/${p.repository}`,
-        auth: { type: 'CODECONNECTIONS', resource: p.connectionArn },
+        // no auth: the account's CodeBuild GitHub source credential (runners.auth 'token')
+        ...(p.connectionArn ? { auth: { type: 'CODECONNECTIONS', resource: p.connectionArn } } : {}),
         buildSpec: PLACEHOLDER_BUILDSPEC,
       },
       triggers: {

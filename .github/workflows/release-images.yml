@@ -1,0 +1,78 @@
+# Publishes trace's two images to Amazon ECR Public, so installations copy them instead of building them
+# (src/infra/images.ts, images.source 'prebuilt'): `<registry>/trace-agent` (linux/arm64, AgentCore) and
+# `<registry>/trace-gpu` (linux/amd64, AWS Batch), each tagged with the content tag of scripts/image-tag.mjs (the same
+# hash an installation computes), plus `latest` on main and `vX.Y.Z` on a release tag.
+#
+# Set up by the owner's install itself, or `trace release setup` (README "Publishing images"): it deploys
+# TraceRelease (src/infra/release.ts: the two ECR Public repositories and the release role), reads the registry's
+# default alias, sets this repository's variables TRACE_RELEASE_ROLE and TRACE_IMAGE_REGISTRY (public.ecr.aws/<alias>),
+# and records the registry in the trace-images release, where installations find it. Until both variables are set
+# this workflow does nothing.
+#
+# It runs, like every job here, on this repository's AWS CodeBuild runner once the installation has made it (the
+# repository variable TRACE_CODEBUILD_PROJECT; Docker-in-Docker when that installation publishes: props.ts
+# runners.ciPrivileged), and on GitHub's ubuntu-24.04 runner until then. BuildKit builds both images (QEMU for arm64 on the x86 runner),
+# caches in the registry itself (`:cache`, mode=max), attaches an OCI provenance attestation, and the job summary
+# records each pushed digest.
+name: release-images
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency: { group: 'release-images-${{ github.ref }}', cancel-in-progress: false }
+
+jobs:
+  publish:
+    if: vars.TRACE_IMAGE_REGISTRY != '' && vars.TRACE_RELEASE_ROLE != ''
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","publish"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
+    timeout-minutes: 180
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "22", cache: npm }
+      # npm ci runs the build (prepare), which stages agent/package-lock.json and agent/npmrc as an install has them
+      - run: npm ci
+      - id: tag
+        run: echo "tag=$(node scripts/image-tag.mjs)" >> "$GITHUB_OUTPUT"
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.TRACE_RELEASE_ROLE }}
+          role-session-name: trace-release-${{ github.run_id }}
+          aws-region: us-east-1
+      - name: Build and push both images
+        env:
+          REGISTRY: ${{ vars.TRACE_IMAGE_REGISTRY }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
+          docker run --privileged --rm tonistiigi/binfmt --install arm64
+          docker buildx create --use --name trace-release
+          extra=()
+          case "$REF" in
+            refs/heads/main) extra=(latest) ;;
+            refs/tags/v*) extra=("${REF#refs/tags/}") ;;
+          esac
+          echo "## Published images" >> "$GITHUB_STEP_SUMMARY"
+          for spec in "agent linux/arm64 agent/Dockerfile" "gpu linux/amd64 agent/Dockerfile.gpu"; do
+            set -- $spec
+            repo="$REGISTRY/trace-$1"
+            tags=(-t "$repo:$TAG")
+            for t in "${extra[@]}"; do tags+=(-t "$repo:$t"); done
+            docker buildx build --platform "$2" -f "$3" "${tags[@]}" \
+              --cache-from "type=registry,ref=$repo:cache" \
+              --cache-to "type=registry,ref=$repo:cache,mode=max,image-manifest=true,oci-mediatypes=true" \
+              --provenance=mode=max --metadata-file "meta-$1.json" --push .
+            digest=$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))["containerimage.digest"])' "meta-$1.json")
+            echo "- \`$repo:$TAG\` → \`$digest\` (also: ${extra[*]:-none})" >> "$GITHUB_STEP_SUMMARY"
+            echo "published $repo:$TAG @ $digest"
+          done

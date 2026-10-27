@@ -4,6 +4,7 @@
  * without one the provider is skipped. Tokens are kept until a minute before they expire.
  */
 import { z } from 'zod'
+import { addKeyHint } from '../../../core/integrations.js'
 import { mpnLoose } from '../../datasheets/mpn.js'
 import { jsonOf, ProviderError, type PartOffer, type Provider, type ProviderContext } from '../types.js'
 
@@ -110,7 +111,7 @@ async function keyword(q: string, ctx: ProviderContext, limit: number): Promise<
 
 export const digikey: Provider = {
   name: 'digikey',
-  unavailable: (env) => (env.DIGIKEY_CLIENT_ID && env.DIGIKEY_CLIENT_SECRET ? null : 'no DIGIKEY_CLIENT_ID / DIGIKEY_CLIENT_SECRET set'),
+  unavailable: (env) => (env.DIGIKEY_CLIENT_ID && env.DIGIKEY_CLIENT_SECRET ? null : addKeyHint('digikey')),
   async lookup(mpn, ctx) {
     const want = mpnLoose(mpn)
     return (await keyword(mpn, ctx, 10)).filter((o) => mpnLoose(o.mpn).startsWith(want))

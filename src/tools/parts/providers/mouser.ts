@@ -3,6 +3,7 @@
  * API key ($MOUSER_API_KEY, from mouser.com → My Account → APIs); without one the provider is skipped.
  */
 import { z } from 'zod'
+import { addKeyHint } from '../../../core/integrations.js'
 import { mpnLoose } from '../../datasheets/mpn.js'
 import { intOrNull, jsonOf, priceOrNull, ProviderError, type PartOffer, type Provider, type ProviderContext } from '../types.js'
 
@@ -73,7 +74,7 @@ async function post(path: string, body: unknown, ctx: ProviderContext): Promise<
 
 export const mouser: Provider = {
   name: 'mouser',
-  unavailable: (env) => (env.MOUSER_API_KEY ? null : 'no MOUSER_API_KEY set'),
+  unavailable: (env) => (env.MOUSER_API_KEY ? null : addKeyHint('mouser')),
   async lookup(mpn, ctx) {
     const offers = await post('partnumber', { SearchByPartRequest: { mouserPartNumber: mpn, partSearchOptions: 'None' } }, ctx)
     const want = mpnLoose(mpn)

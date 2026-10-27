@@ -22,16 +22,20 @@ const calls = vi.hoisted(() => ({
   /** the default names check (no hook): which projects the stack has, and the names taken in the account */
   deployed: new Set<string>(),
   taken: new Set<string>(),
+  /** CodeBuild's GitHub source credential: what it was asked (token prefix:ours) */
+  credential: [] as string[],
+  /** GitHub's OIDC provider in the account, and whether it is the stack's own */
+  oidc: { provider: false, inStack: false },
   /** what the default connection resolver (no hook) was asked */
   connection: [] as { prefix: string; given?: string; deployed: Record<string, string> | null }[],
   /** repository variables the installer removed (repo:NAME), and which ones existed to remove */
   deleted: [] as string[], existingVars: new Set<string>(),
 }))
 
-vi.mock('../../src/installer/aws.js', () => ({
+vi.mock('../../src/installer/aws.js', async (orig) => { const real = await orig<typeof import('../../src/installer/aws.js')>(); return {
   credentials: async () => ({ accessKeyId: 'AKIAEXAMPLE', secretAccessKey: 'secret-key-value-1234' }),
   awsEnv: (_c: unknown, region: string) => ({ AWS_REGION: region }),
-  checkAws: async () => ({ account: '123456789012', arn: 'arn:aws:iam::123456789012:user/marc', region: 'us-east-1', agentCore: { ok: true, reason: '' }, models: [], oidcProvider: false, cdkBootstrapped: false, existing: calls.existing, warnings: [] }),
+  checkAws: async () => ({ account: '123456789012', arn: 'arn:aws:iam::123456789012:user/marc', region: 'us-east-1', agentCore: { ok: true, reason: '' }, models: [], oidcProvider: calls.oidc.provider, oidcInStack: calls.oidc.inStack, cdkBootstrapped: false, existing: calls.existing, warnings: [] }),
   stackOutputs: async () => ({}),
   freeSecretNames: async (_c: unknown, _r: string, names: readonly string[]) => { calls.freed.push(...names); return names.map((n) => `${n}: free`) },
   profiles: async () => ({ names: ['default'], regions: { default: 'us-east-1' } }),
@@ -41,6 +45,7 @@ vi.mock('../../src/installer/aws.js', () => ({
   deployedProjects: async () => calls.deployed,
   nameIndex: () => ({ taken: async (n: { memories: string[]; deliveries: string[]; secrets: string[] }) => [...n.memories, ...n.deliveries, ...n.secrets].filter((x) => calls.taken.has(x)) }),
   ensureGpuImage: async () => ({ ok: true, detail: 'the GPU image is built' }),
+  liveFacts: async () => ({ account: '123456789012' }),
   connectionsClient: () => ({}),
   connectionName: (prefix: string) => `${prefix}-github`,
   connectionsConsoleUrl: (region: string) => `https://${region}.console.aws.amazon.com/codesuite/settings/connections?region=${region}`,
@@ -51,6 +56,12 @@ vi.mock('../../src/installer/aws.js', () => ({
     return { pass: arn, arn, name: `${o.prefix}-github`, ready: true, message: `Using the GitHub connection ${o.prefix}-github (${arn}), already authorized.` }
   },
   waitForConnection: async () => { throw new Error('must not wait') },
+  chooseRunnerAuth: real.chooseRunnerAuth,
+  ensureSourceCredential: async (_cb: unknown, token: string, ours: boolean) => { calls.credential.push(`${token.slice(0, 6)}:${ours}`); return { state: 'imported', detail: 'the token imported as CodeBuild\'s GitHub source credential' } },
+} })
+vi.mock('../../src/installer/onboard-api.js', async (orig) => ({
+  ...(await orig<typeof import('../../src/installer/onboard-api.js')>()),
+  onboardViaApi: async (repo: string) => { calls.onboard.push(repo); return { repo, state: 'opened', pr: `https://github.com/${repo}/pull/1`, settings: [], notes: [] } },
 }))
 const CONNECTION = vi.hoisted(() => 'arn:aws:codeconnections:us-east-1:123456789012:connection/11111111-2222-3333-4444-555555555555')
 vi.mock('@aws-sdk/client-secrets-manager', () => ({
@@ -89,6 +100,7 @@ vi.mock('../../src/installer/github.js', async (orig) => ({
   ...(await orig<typeof import('../../src/installer/github.js')>()),
   setVariable: async (_t: string, repo: string, name: string, value: string) => { calls.variables.push(`${repo}:${name}`); calls.values.set(`${repo}:${name}`, value); return 'created' },
   setSecret: async (_t: string, repo: string, name: string, value: string) => { calls.ghSecrets.push(`${repo}:${name}`); calls.ghSecretValues.set(`${repo}:${name}`, value) },
+  createRepo: async (_t: string, slug: string) => ({ fullName: slug, defaultBranch: 'main', created: true }),
   deleteVariable: async (_t: string, repo: string, name: string) => { calls.deleted.push(`${repo}:${name}`); return calls.existingVars.has(`${repo}:${name}`) },
   // the token can configure every repository unless a test says otherwise (only reached without a `self` hook)
   canConfigure: async () => ({ ok: true, reason: '' }),
@@ -96,10 +108,6 @@ vi.mock('../../src/installer/github.js', async (orig) => ({
     const t = calls.tokens.get(token) ?? { login: 'trace-agent', repos: [] }
     return { login: t.login, name: null, kind: 'fine-grained', scopes: [], repos: t.repos.map((fullName) => ({ fullName, private: true, admin: false, push: true, defaultBranch: 'main' })), warnings: [] }
   },
-}))
-vi.mock('../../src/core/onboard.js', async (orig) => ({
-  ...(await orig<typeof import('../../src/core/onboard.js')>()),
-  onboard: async (repo: string) => { calls.onboard.push(repo); return { pr: `https://github.com/${repo}/pull/1`, settings: [] } },
 }))
 
 const { AnswersSchema, SecretsSchema } = await import('../../src/installer/answers.js')
@@ -155,7 +163,7 @@ describe('answers', () => {
 
   it('plans every step, naming the account, region and repositories', () => {
     const steps = plan(AnswersSchema.parse(ANSWERS))
-    expect(steps.map((s) => s.id)).toEqual(['check', 'cdk', 'deploy', 'connection', 'runners', 'token', 'repos', 'onboard', 'people', 'local', 'gpu'])
+    expect(steps.map((s) => s.id)).toEqual(['check', 'cdk', 'github', 'deploy', 'connection', 'runners', 'token', 'integrations', 'repos', 'onboard', 'people', 'local', 'release', 'gpu'])
     expect(steps.find((s) => s.id === 'repos')?.detail).toContain('mteichtahl/fw')
     expect(steps.find((s) => s.id === 'deploy')?.detail).toMatch(/for each of the 2 repositories its own AgentCore worker runtime/)
   })
@@ -455,7 +463,8 @@ describe('the local server', () => {
     expect((await call('/api/plan', { method: 'POST', key, body: '{"answers":{}}' })).status).toBe(400)
     expect((await call('/api/plan', { method: 'POST', key, body: 'x', type: 'text/plain' })).status).toBe(415)
     const planned = await call('/api/plan', { method: 'POST', key, body: JSON.stringify({ answers: ANSWERS }) })
-    expect(JSON.parse(planned.body).steps).toHaveLength(11)
+    expect(JSON.parse(planned.body).steps).toHaveLength(14)
+    expect(JSON.parse(planned.body).timeline.join(' ')).toMatch(/about 15 minutes of CloudFormation/)
   })
 
   it("says on the GitHub check which repository trace came from and whether the token can configure it", async () => {
@@ -622,31 +631,178 @@ describe('the library gateway', () => {
     expect(SecretsSchema.safeParse({ githubToken: TOKEN, libraryKeys: { OTHER: 'x' } }).success).toBe(false)
   })
 
-  it('writes the keys given into the gateway\'s secret, merged, and never shows them', async () => {
+  it('stores the keys given as the installation\'s integration (<prefix>/integrations/<name>), checked, never shown', async () => {
     calls.secrets.length = 0
     OUTPUTS.TraceHome = join(mkdtempSync(join(tmpdir(), 'trace-central-')), 'home')
     const events: string[] = []
+    const stored: { name: string; values: Record<string, unknown> }[] = []
     const ok = await apply(AnswersSchema.parse(GW), SecretsSchema.parse({ githubToken: TOKEN, libraryKeys: { MOUSER_API_KEY: MOUSER } }), (e) => events.push(JSON.stringify(e)), {
       cdk: async (args, env) => { if (args[0] === 'deploy') expect(JSON.parse(env.TRACE_INFRA ?? '{}').gateway).toEqual({ enabled: true }); expect(env.TRACE_INFRA).not.toContain(MOUSER); return 0 },
       outputs: async () => ({ ...OUTPUTS, LibraryKeysSecretArn: KEYS_ARN }),
-      readSecret: async () => ({ unused: 'Ab12', NEXAR_CLIENT_ID: 'kept' }),
+      integrations: { set: async (name, values) => { stored.push({ name, values }); return `trace/integrations/${name}` } },
+      checkIntegration: async () => ({ ok: true, detail: 'Mouser accepted the key' }),
     })
     expect(ok).toBe(true)
-    const w = secretWrites().find((x) => x.SecretId === KEYS_ARN)
-    expect(JSON.parse(w?.SecretString ?? '{}')).toEqual({ NEXAR_CLIENT_ID: 'kept', MOUSER_API_KEY: MOUSER })
+    expect(stored).toEqual([{ name: 'mouser', values: { MOUSER_API_KEY: MOUSER } }])
+    expect(secretWrites().map((x) => x.SecretId)).not.toContain(KEYS_ARN)
     expect(events.join('\n')).not.toContain(MOUSER)
-    expect(events.join('\n')).toContain('distributor keys stored for the library gateway: MOUSER_API_KEY')
+    expect(events.join('\n')).toContain('mouser: stored in trace/integrations/mouser')
   })
 
-  it('leaves the secret alone when no key is given', async () => {
+  it('stores nothing, and says how to add one later, when no key is given', async () => {
     calls.secrets.length = 0
     OUTPUTS.TraceHome = join(mkdtempSync(join(tmpdir(), 'trace-central-')), 'home')
-    const ok = await apply(AnswersSchema.parse(GW), SecretsSchema.parse({ githubToken: TOKEN }), () => undefined, {
+    const events: { type: string; summary?: string[]; step?: { id: string; status: string; detail: string } }[] = []
+    const ok = await apply(AnswersSchema.parse(GW), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
       cdk: async () => 0, outputs: async () => ({ ...OUTPUTS, LibraryKeysSecretArn: KEYS_ARN }),
-      readSecret: async () => { throw new Error('must not be read') },
+      integrations: { set: async () => { throw new Error('must not be stored') } },
     })
     expect(ok).toBe(true)
     expect(secretWrites().map((x) => x.SecretId)).not.toContain(KEYS_ARN)
+    expect(events.find((e) => e.step?.id === 'integrations' && e.step.status === 'skipped')?.step?.detail).toMatch(/trace integrations set <name>/)
+    expect(events.at(-1)?.summary?.join(' ')).toMatch(/trace integrations set nexar/)
+  })
+})
+
+describe('the light install', () => {
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const run = async (a: unknown, s: Record<string, unknown> = {}, hooks: Parameters<typeof apply>[3] = {}): Promise<{ ok: boolean; events: { type: string; line?: string; summary?: string[]; step?: { id: string; status: string; detail: string } }[] }> => {
+    OUTPUTS.TraceHome = join(mkdtempSync(join(tmpdir(), 'trace-central-')), 'home')
+    const events: { type: string; line?: string; summary?: string[]; step?: { id: string; status: string; detail: string } }[] = []
+    const ok = await apply(AnswersSchema.parse(a), SecretsSchema.parse({ githubToken: TOKEN, ...s }), (e) => events.push(e as never), { cdk: async () => 0, outputs: async () => OUTPUTS, ...quiet, ...hooks })
+    return { ok, events }
+  }
+
+  it('installs from the credentials and a token alone: account, email and model derived, no repositories needed', async () => {
+    const infra: Record<string, unknown>[] = []
+    const r = await run({}, {}, {
+      facts: async () => ({ account: '123456789012', login: 'marc', email: 'marc@example.com', models: [{ id: 'us.anthropic.claude-sonnet-4-6', name: 'S' }], gpuQuota: 0 }),
+      cdk: async (args, env) => { if (args[0] === 'deploy') infra.push(JSON.parse(env.TRACE_INFRA ?? '{}')); return 0 },
+      // no trace repository found either: nothing at all to build
+      self: { source: () => null, canConfigure: async () => ({ ok: true, reason: '' }) },
+    })
+    expect(r.ok).toBe(true)
+    expect(infra[0]).toMatchObject({ account: '123456789012', region: 'us-east-1', adminEmail: 'marc@example.com', model: 'us.anthropic.claude-sonnet-4-6', repositories: [], gpu: { enabled: false } })
+    expect(r.events.filter((e) => e.type === 'log' && e.line?.startsWith('derived:')).map((e) => e.line)).toEqual(expect.arrayContaining(['derived: account 123456789012 (the credentials\')', 'derived: first administrator marc@example.com (the token\'s primary email)']))
+    expect(r.events.find((e) => e.step?.id === 'repos' && e.step.status === 'skipped')).toBeDefined()
+    expect(r.events.at(-1)?.summary?.join(' ')).toMatch(/No repositories yet: run `trace install` again/)
+    // the decision from the quota is not saved as an answer: the next run decides again
+    expect(AnswersSchema.parse(savedAnswers().answers).agents.gpuEnabled).toBeNull()
+    // and without an email visible to the token, it stops before anything is created and says what to give
+    const cdk: string[][] = []
+    const stopped = await run({}, {}, { facts: async () => ({ account: '123456789012', login: 'marc', email: null }), cdk: async (a) => { cdk.push(a); return 0 } })
+    expect(stopped.ok).toBe(false)
+    expect(cdk).toEqual([])
+    expect(stopped.events.at(-1)?.summary?.join(' ')).toMatch(/first administrator's email/)
+  })
+
+  it('with no authorized GitHub connection, imports the token as CodeBuild\'s source credential first and deploys once, with the runners', async () => {
+    calls.values.clear()
+    calls.credential.length = 0
+    const order: string[] = []
+    const infra: Record<string, unknown>[] = []
+    const none = {
+      resolve: async () => { order.push('resolve'); return { name: 'trace-github', ready: false, message: 'No authorized GitHub connection in this account and region: …' } },
+      wait: async () => { throw new Error('must not wait') },
+    }
+    const r = await run(ANSWERS, {}, {
+      connection: none,
+      sourceCredential: async (token, ours) => { order.push(`credential ${token.slice(0, 6)} ${ours}`); return { state: 'imported', detail: 'the token imported as CodeBuild\'s GitHub source credential' } },
+      cdk: async (args, env) => { order.push(args[0] ?? ''); if (args[0] === 'deploy') infra.push(JSON.parse(env.TRACE_INFRA ?? '{}')); return 0 },
+    })
+    expect(r.ok).toBe(true)
+    // the credential before the deploy that makes the runners' webhooks with it, and one deploy
+    expect(order).toEqual(['resolve', 'bootstrap', `credential ${TOKEN.slice(0, 6)} false`, 'deploy'])
+    expect(infra.map((x) => x.runners)).toEqual([{ auth: 'token' }])
+    expect(InfraPropsSchema.parse(infra[0]).runners).toMatchObject({ auth: 'token', connectionReady: true })
+    expect(calls.values.get('mteichtahl/board:TRACE_CODEBUILD_PROJECT')).toBe(`trace-ci-${projectHash('mteichtahl/board')}`)
+    const step = (id: string, status: string) => r.events.find((e) => e.step?.id === id && e.step.status === status)?.step?.detail
+    expect(step('github', 'done')).toMatch(/GitHub token, as its GitHub source credential: the runners come with the first deploy, with no console step/)
+    expect(step('connection', 'skipped')).toMatch(/with the token: no connection to authorize/)
+    expect(step('runners', 'skipped')).toBe('added with the deploy')
+    // no connection, so no word about the connector app
+    expect(r.events.at(-1)?.summary?.join('\n')).not.toMatch(/AWS Connector for GitHub/)
+  })
+
+  it('uses the token whatever connection there is when told to, refreshes a credential trace imported, and leaves another alone', async () => {
+    calls.credential.length = 0
+    calls.connection.length = 0
+    const infra: Record<string, unknown>[] = []
+    const cdk = async (args: string[], env: Record<string, string>): Promise<number> => { if (args[0] === 'deploy') infra.push(JSON.parse(env.TRACE_INFRA ?? '{}')); return 0 }
+    const r = await run({ ...ANSWERS, runners: { auth: 'token', token: 'admin' } }, { githubAdminToken: 'ghp_admin_token_value_123456' }, { cdk })
+    expect(r.ok).toBe(true)
+    expect(calls.connection).toEqual([])
+    // the admin token, as Advanced chose
+    expect(calls.credential).toEqual([expect.stringMatching(/^ghp_ad:/)])
+    expect(infra.at(-1)?.runners).toEqual({ auth: 'token' })
+    expect(savedAnswers().runnerCredential).toBe('imported')
+    // the next run refreshes the one it imported
+    await run({ ...ANSWERS, runners: { auth: 'token' } }, {}, { cdk })
+    expect(calls.credential.at(-1)).toBe(`${TOKEN.slice(0, 6)}:true`)
+    // a connection named in the answers is refused with the token
+    expect(AnswersSchema.safeParse({ ...ANSWERS, runners: { auth: 'token', connectionArn: CONNECTION } }).success).toBe(false)
+    expect(() => InfraPropsSchema.parse({ ...InfraPropsSchema.parse(infraInput(AnswersSchema.parse(ANSWERS))), runners: { auth: 'token', connectionArn: CONNECTION } })).toThrow(/auth 'connection'/)
+  })
+
+  it('creates a new project\'s repository before the deploy (its runner\'s webhook needs it), then scaffolds it', async () => {
+    calls.onboard.length = 0
+    const created: string[] = []
+    const o = projectOutputs('mteichtahl/new-board')
+    const r = await run({ ...ANSWERS, projects: [{ repo: 'mteichtahl/new-board', create: { template: 'kicad' } }], people: [] }, {}, {
+      outputs: async () => ({ ...OUTPUTS, [o.runtimeArn]: 'arn:rt/new', [o.roleArn]: 'arn:role/new', [o.secretArn]: 'arn:secret/new', [o.memoryId]: 'm-new', [o.runnerProject]: 'trace-ci-new' }),
+      createRepo: async (_t, slug) => { created.push(slug); return { fullName: slug, defaultBranch: 'main', created: true } },
+      cdk: async (args) => { if (args[0] === 'deploy') created.push('deploy'); return 0 },
+    })
+    expect(r.ok).toBe(true)
+    expect(created).toEqual(['mteichtahl/new-board', 'deploy'])
+    expect(calls.onboard).toEqual(['mteichtahl/new-board'])
+  })
+
+  it('says trace is ready before it waits for the GPU image, and reports incomplete integration keys', async () => {
+    const order: string[] = []
+    const r = await run({ ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: true } }, { integrations: { nexar: { NEXAR_CLIENT_ID: 'only-the-id' } } }, {
+      outputs: async () => ({ ...OUTPUTS, GpuImageBuild: 'trace-gpu-image:1', GpuImageUri: 'x/trace-gpu:abc' }),
+      gpuImage: async () => { order.push('gpu'); return { ok: true, detail: 'built' } },
+    })
+    expect(r.ok).toBe(true)
+    expect(order).toEqual(['gpu'])
+    expect(r.events.findIndex((e) => e.type === 'ready')).toBeLessThan(r.events.findIndex((e) => e.step?.id === 'gpu' && e.step.status === 'running'))
+    expect(r.events.at(-1)?.summary?.join('\n')).toMatch(/Nexar \(Octopart\): NEXAR_CLIENT_SECRET missing, so it was not stored/)
+  })
+
+  it('keeps GitHub\'s OIDC provider in the stack that made it, and uses one made elsewhere', async () => {
+    const want = async (oidc: { provider: boolean; inStack: boolean }): Promise<boolean> => {
+      calls.oidc = oidc
+      let made = false
+      await run(ANSWERS, {}, { cdk: async (args, env) => { if (args[0] === 'deploy') made = JSON.parse(env.TRACE_INFRA ?? '{}').createOidcProvider; return 0 } })
+      return made
+    }
+    try {
+      expect(await want({ provider: false, inStack: false })).toBe(true)
+      expect(await want({ provider: true, inStack: false })).toBe(false)
+      // the provider exists because the stack made it: dropping it from the stack would delete it
+      expect(await want({ provider: true, inStack: true })).toBe(true)
+    } finally {
+      calls.oidc = { provider: false, inStack: false }
+    }
+  })
+
+  it('sets several repositories up at once, a few at a time', async () => {
+    const repos = Array.from({ length: 10 }, (_, i) => `mteichtahl/r${i}`)
+    let open = 0
+    let most = 0
+    const outputs: Record<string, string> = { ...OUTPUTS }
+    for (const repo of repos) {
+      const o = projectOutputs(repo)
+      Object.assign(outputs, { [o.runtimeArn]: `arn:rt/${repo}`, [o.roleArn]: `arn:role/${repo}`, [o.secretArn]: `arn:secret/${repo}`, [o.memoryId]: `m-${repo}`, [o.runnerProject]: `trace-ci-${projectHash(repo)}` })
+    }
+    const r = await run({ ...ANSWERS, projects: repos.map((repo) => ({ repo, onboard: true })), people: [] }, {}, {
+      outputs: async () => outputs,
+      onboard: async (repo) => { open++; most = Math.max(most, open); await new Promise((x) => setTimeout(x, 5)); open--; return { repo, state: 'opened', pr: null, settings: [], notes: [] } },
+    })
+    expect(r.ok).toBe(true)
+    expect(most).toBeGreaterThan(1)
+    expect(most).toBeLessThanOrEqual(3)
   })
 })
 
@@ -679,10 +835,13 @@ describe('the CodeBuild runners', () => {
 
   it('takes the runner settings from the answers, and plans the connection after the deploy, then the runners', () => {
     const a = AnswersSchema.parse(ANSWERS)
-    expect(a.runners).toEqual({ buildTrace: true, traceRepository: '', ciRepositories: [], connectionArn: '', computeType: null, privileged: null })
+    expect(a.runners).toEqual({ auth: 'auto', token: 'agent', buildTrace: true, traceRepository: '', ciRepositories: [], connectionArn: '', computeType: null, privileged: null })
     // nothing is needed up front: no connection ARN (the stack creates one), ready by default
     const props = InfraPropsSchema.parse(infraInput(a))
-    expect(props.runners).toEqual({ connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false })
+    expect(props.runners).toEqual({ auth: 'connection', connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false, ciPrivileged: false })
+    // the token: no connection, whatever apply would otherwise pass
+    expect(infraInput(a, null, undefined, { auth: 'token' }).runners).toEqual({ auth: 'token' })
+    expect(infraInput(AnswersSchema.parse({ ...ANSWERS, runners: { auth: 'token' } })).runners).toEqual({ auth: 'token' })
     const own = AnswersSchema.parse({ ...ANSWERS, runners: { connectionArn: CONNECTION, computeType: 'BUILD_GENERAL1_XLARGE', privileged: true } })
     expect(infraInput(own).runners).toEqual({ connectionArn: CONNECTION, computeType: 'BUILD_GENERAL1_XLARGE', privileged: true })
     // what apply chose wins: the connection to pass (none: the stack's own), and whether it is ready
@@ -692,15 +851,21 @@ describe('the CodeBuild runners', () => {
     expect(AnswersSchema.safeParse({ ...ANSWERS, runners: { computeType: 'BUILD_GENERAL1_SMALL' } }).success).toBe(false)
     const steps = plan(a)
     const ids = steps.map((x) => x.id)
+    expect(ids.indexOf('github')).toBeLessThan(ids.indexOf('deploy'))
     expect(ids.indexOf('deploy')).toBeLessThan(ids.indexOf('connection'))
     expect(ids.indexOf('connection')).toBeLessThan(ids.indexOf('runners'))
     expect(ids.indexOf('runners')).toBeLessThan(ids.indexOf('repos'))
-    const connection = steps.find((x) => x.id === 'connection')
+    const connection = plan(AnswersSchema.parse({ ...ANSWERS, runners: { auth: 'connection' } })).find((x) => x.id === 'connection')
+    expect(steps.find((x) => x.id === 'connection')?.detail).toMatch(/^nothing to authorize/)
     expect(connection?.title).toBe('Authorize the GitHub connection')
-    expect(connection?.detail).toMatch(/only if the GitHub connection is not authorized yet.*once per AWS account and region.*https:\/\/us-east-1\.console\.aws\.amazon\.com\/codesuite\/settings\/connections\?region=us-east-1.*"Update pending connection".*AWS Connector for GitHub app.*mteichtahl\/board, mteichtahl\/fw/)
+    expect(connection?.detail).toMatch(/only if the build runners use a GitHub connection that is not authorized yet.*once per AWS account and region.*https:\/\/us-east-1\.console\.aws\.amazon\.com\/codesuite\/settings\/connections\?region=us-east-1.*"Update pending connection".*AWS Connector for GitHub app.*mteichtahl\/board, mteichtahl\/fw/)
     expect(steps.find((x) => x.id === 'runners')?.title).toBe('Add the build runners')
     expect(steps.find((x) => x.id === 'runners')?.detail).toMatch(/only adds each repository's CodeBuild runner project and its GitHub webhook/)
-    expect(steps.find((x) => x.id === 'deploy')?.detail).toMatch(/a GitHub connection already authorized in the account and region \(trace-github first\), else a new trace-github it creates/)
+    // automatic: an authorized connection, else the token; a connection by choice: else a new trace-github
+    expect(steps.find((x) => x.id === 'deploy')?.detail).toMatch(/a GitHub connection already authorized in the account and region \(trace-github first\), else with the GitHub token, imported as CodeBuild's GitHub source credential \(no console step\)/)
+    expect(steps.find((x) => x.id === 'github')?.detail).toMatch(/use a GitHub connection already authorized .* else import the agents' token as CodeBuild's GitHub source credential/)
+    expect(plan(AnswersSchema.parse({ ...ANSWERS, runners: { auth: 'connection' } })).find((x) => x.id === 'deploy')?.detail).toMatch(/\(trace-github first\), else a new trace-github it creates, authorized once in the console/)
+    expect(plan(AnswersSchema.parse({ ...ANSWERS, runners: { auth: 'token' } })).find((x) => x.id === 'deploy')?.detail).toMatch(/reaching GitHub with the GitHub token/)
     expect(plan(own).find((x) => x.id === 'deploy')?.detail).toContain(`the GitHub connection ${CONNECTION}`)
     expect(steps.find((x) => x.id === 'deploy')?.detail).toMatch(/its own AWS CodeBuild runner project that runs every one of its GitHub Actions jobs \(BUILD_GENERAL1_LARGE; its jobs run on GitHub's own runners until it exists\)/)
     expect(steps.find((x) => x.id === 'runners')?.detail).toMatch(/Until the build runners are added, workflows run on GitHub's runners\.$/)
@@ -716,7 +881,7 @@ describe('the CodeBuild runners', () => {
     const infra: Record<string, unknown>[] = []
     const events: Ev[] = []
     let deployed = 0
-    const ok = await apply(AnswersSchema.parse(ANSWERS), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
+    const ok = await apply(AnswersSchema.parse({ ...ANSWERS, runners: { auth: 'connection' } }), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
       ...quiet,
       connection: pending(order, async () => { order.push('authorized') }),
       cdk: async (args, env) => {
@@ -772,7 +937,7 @@ describe('the CodeBuild runners', () => {
     // an earlier run had set it in board (a runner since deleted, say): it must go, or board's jobs would wait
     calls.existingVars = new Set(['mteichtahl/board:TRACE_CODEBUILD_PROJECT'])
     try {
-      const ok = await apply(AnswersSchema.parse(ANSWERS), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
+      const ok = await apply(AnswersSchema.parse({ ...ANSWERS, runners: { auth: 'connection' } }), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
         ...quiet,
         connection: pending(order, async () => { throw new Error(`the GitHub connection trace-github was still not authorized after 30 minutes. Authorize it at ${URL} ("Update pending connection"), then run the installer again: it resumes from here with the same connection`) }),
         cdk: async (args) => { order.push(args[0] ?? ''); return 0 },
@@ -828,7 +993,71 @@ describe('the CodeBuild runners', () => {
     delete without[projectOutputs('mteichtahl/fw').runnerProject]
     const events: { type: string; summary?: string[] }[] = []
     expect(await apply(AnswersSchema.parse(ANSWERS), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), { ...quiet, cdk: async () => 0, outputs: async () => without })).toBe(false)
-    expect(events.at(-1)?.summary?.[0]).toBe(`Stopped at "Configure the repositories": the stack has no output ${projectOutputs('mteichtahl/fw').runnerProject}`)
+    // (the other repository, set up alongside, may still log after it)
+    expect(events.find((e) => e.type === 'done')?.summary?.[0]).toBe(`Stopped at "Configure the repositories": the stack has no output ${projectOutputs('mteichtahl/fw').runnerProject}`)
+  })
+})
+
+describe('no console step on the default path', () => {
+  const CONSOLE = /console\.aws\.amazon\.com|AWS console|in the console/i
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+
+  it('plans nothing for a person to do in the AWS console, with or without publishing the images', () => {
+    for (const a of [ANSWERS, { ...ANSWERS, agents: { ...ANSWERS.agents, publishImages: true } }, { ...ANSWERS, runners: { auth: 'token' } }]) {
+      for (const st of plan(AnswersSchema.parse(a))) expect(`${st.title}: ${st.detail}`, st.id).not.toMatch(CONSOLE)
+    }
+    // only the connection path, chosen under Advanced, has one
+    expect(plan(AnswersSchema.parse({ ...ANSWERS, runners: { auth: 'connection' } })).find((x) => x.id === 'connection')?.detail).toMatch(CONSOLE)
+  })
+
+  it('installs, and sets publishing up, without any console link in the steps, the log or the summary', async () => {
+    const none = { resolve: async () => ({ name: 'trace-github', ready: false, message: 'No authorized GitHub connection in this account and region: …' }), wait: async () => { throw new Error('must not wait') } }
+    const lines: string[] = []
+    const released: string[] = []
+    const ok = await apply(AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, publishImages: true } }), SecretsSchema.parse({ githubToken: TOKEN }), (e) => {
+      const x = e as { type: string; line?: string; summary?: string[]; step?: { detail: string } }
+      lines.push(x.line ?? x.step?.detail ?? (x.summary ?? []).join('\n'))
+    }, {
+      ...quiet, connection: none, cdk: async () => 0, outputs: async () => OUTPUTS,
+      sourceCredential: async () => ({ state: 'imported', detail: 'the token imported as CodeBuild\'s GitHub source credential' }),
+      release: async (o) => { released.push(`${o.account} ${o.repository}`); return { registry: 'public.ecr.aws/a1b2c3d4', roleArn: 'arn:role', images: ['public.ecr.aws/a1b2c3d4/trace-agent'], gallery: ['https://gallery.ecr.aws/a1b2c3d4/trace-agent'], dispatched: true } },
+    })
+    expect(ok).toBe(true)
+    expect(released).toEqual(['123456789012 mteichtahl/trace'])
+    expect(lines.join('\n')).not.toMatch(CONSOLE)
+    expect(lines.join('\n')).toMatch(/trace's images publish to public\.ecr\.aws\/a1b2c3d4/)
+  })
+
+  it('gives trace\'s own build runner Docker only when this installation publishes', () => {
+    const on = InfraPropsSchema.parse(infraInput(AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, publishImages: true } })))
+    expect(on.runners).toMatchObject({ ciPrivileged: true, privileged: false })
+    expect(InfraPropsSchema.parse(infraInput(AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, publishImages: false } }))).runners.ciPrivileged).toBe(false)
+  })
+
+  it('publishes from the owner\'s install with nothing asked or set beforehand, and from no one else\'s', async () => {
+    for (const sourceAdmin of [true, false]) {
+      const events: { type: string; summary?: string[]; step?: { id: string; status: string } }[] = []
+      const released: string[] = []
+      const a = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, publishImages: null } })
+      const ok = await apply(a, SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
+        ...quiet, cdk: async () => 0, outputs: async () => OUTPUTS,
+        facts: async () => ({ account: '123456789012', login: 'marc', email: 'marc@example.com', sourceAdmin, publishedRegistry: null }),
+        release: async (o) => { released.push(o.account); return { registry: 'public.ecr.aws/a1b2c3d4', roleArn: 'arn:role', images: [], gallery: [], dispatched: true } },
+      })
+      expect(ok).toBe(true)
+      expect(released).toEqual(sourceAdmin ? ['123456789012'] : [])
+      expect(events.filter((e) => e.step?.id === 'release').at(-1)?.step?.status).toBe(sourceAdmin ? 'done' : 'skipped')
+    }
+  })
+
+  it('reports a failed publishing setup without failing the install', async () => {
+    const events: { type: string; summary?: string[]; step?: { id: string; status: string } }[] = []
+    const ok = await apply(AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, publishImages: true } }), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
+      ...quiet, cdk: async () => 0, outputs: async () => OUTPUTS, release: async () => { throw new Error('cdk deploy TraceRelease exited 1') },
+    })
+    expect(ok).toBe(true)
+    expect(events.find((e) => e.step?.id === 'release' && e.step.status === 'failed')).toBeDefined()
+    expect(events.at(-1)?.summary?.join('\n')).toMatch(/Publishing trace's images is not set up: cdk deploy TraceRelease exited 1.*trace release setup/)
   })
 })
 
@@ -836,136 +1065,85 @@ describe('the sample project', () => {
   const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
   const SAMPLE = 'trace-agent/trace-sample'
   type Ev = { type: string; line?: string; summary?: string[]; step?: { id: string; status: string; detail: string } }
-  const withSampleOutputs = (): Record<string, string> => {
-    const o = { ...OUTPUTS }
-    const p = projectOutputs(SAMPLE)
-    o[p.runtimeArn] = 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/trace_w_sample-abc'
-    o[p.roleArn] = 'arn:aws:iam::123456789012:role/trace-gh-sample-us-east-1'
-    o[p.secretArn] = `arn:aws:secretsmanager:us-east-1:123456789012:secret:trace/github-token/${SAMPLE}`
-    o[p.memoryId] = 'trace_m_sample-abcdefghij'
-    o[p.runnerProject] = `trace-ci-${projectHash(SAMPLE)}`
-    return o
+  const outputsFor = (repos: string[]): Record<string, string> => {
+    const out = { ...OUTPUTS }
+    for (const repo of repos) {
+      const o = projectOutputs(repo)
+      Object.assign(out, { [o.runtimeArn]: `arn:rt/${repo}`, [o.roleArn]: `arn:role/${repo}`, [o.secretArn]: `arn:secret/${repo}`, [o.memoryId]: `m-${projectHash(repo)}`, [o.runnerProject]: `trace-ci-${projectHash(repo)}` })
+    }
+    return out
+  }
+  const run = async (a: unknown, hooks: Parameters<typeof apply>[3] = {}): Promise<{ ok: boolean; events: Ev[] }> => {
+    OUTPUTS.TraceHome = join(mkdtempSync(join(tmpdir(), 'trace-central-')), 'home')
+    const events: Ev[] = []
+    const ok = await apply(AnswersSchema.parse(a), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), { cdk: async () => 0, outputs: async () => outputsFor(['mteichtahl/board', 'mteichtahl/fw', SAMPLE]), ...quiet, ...hooks })
+    return { ok, events }
   }
 
-  it('is off by default, needs no other repository when on, and is named after the token\'s account', async () => {
+  it('is off by default, and when on is one more new repository, named after the token\'s account', async () => {
     const { sampleRepo, withSample } = await import('../../src/installer/sample.js')
     expect(AnswersSchema.parse(ANSWERS).sample).toEqual({ enabled: false, repo: '', private: true, tour: true })
-    const none = { ...ANSWERS, projects: [], people: [] }
-    expect(AnswersSchema.safeParse(none).success).toBe(false)
-    const only = AnswersSchema.parse({ ...none, github: { login: 'trace-agent' }, sample: { enabled: true } })
+    const only = AnswersSchema.parse({ ...ANSWERS, projects: [], people: [], github: { login: 'trace-agent' }, sample: { enabled: true, private: false } })
     expect(sampleRepo(only)).toBe(SAMPLE)
-    expect(withSample(only).projects).toEqual([{ repo: SAMPLE, branch: 'main', onboard: true, applySettings: true, memoryEventExpiryDays: null, generation: 0 }])
-    // without the token's account and with no name it cannot be placed
-    expect(AnswersSchema.safeParse({ ...none, sample: { enabled: true } }).success).toBe(false)
-    expect(sampleRepo(AnswersSchema.parse({ ...none, sample: { enabled: true, repo: 'acme/demo' } }))).toBe('acme/demo')
-    // people may be assigned to it; listed again from an earlier run it is not doubled
+    expect(withSample(only).projects).toEqual([{ repo: SAMPLE, branch: 'main', onboard: true, applySettings: true, memoryEventExpiryDays: null, generation: 0, create: { template: 'sample', private: false } }])
+    expect(sampleRepo(AnswersSchema.parse({ ...ANSWERS, sample: { enabled: true, repo: 'acme/demo' } }))).toBe('acme/demo')
+    // the login may still be to derive: the answers are valid, and the name waits for it
+    expect(AnswersSchema.safeParse({ ...ANSWERS, sample: { enabled: true } }).success).toBe(true)
+    // people may be assigned to it; listed already (an earlier run created it) it is not doubled
     expect(AnswersSchema.safeParse({ ...only, people: [{ email: 'dev@example.com', projects: [SAMPLE] }] }).success).toBe(true)
     const again = AnswersSchema.parse({ ...only, projects: [{ repo: SAMPLE, branch: 'trunk' }] })
-    expect(withSample(again).projects.map((p) => `${p.repo}@${p.branch}`)).toEqual([`${SAMPLE}@trunk`])
+    expect(withSample(again).projects.map((p) => `${p.repo}@${p.branch}:${p.create ? 'new' : 'existing'}`)).toEqual([`${SAMPLE}@trunk:existing`])
     expect(AnswersSchema.safeParse({ ...ANSWERS, sample: { enabled: true, repo: 'not a repo' } }).success).toBe(false)
   })
 
-  it('plans the sample before the deploy and its tour last, and deploys it as a project', () => {
+  it('plans it with the new repositories, and its tour last', () => {
     const a = AnswersSchema.parse({ ...ANSWERS, github: { login: 'trace-agent' }, sample: { enabled: true } })
     const steps = plan(a)
-    const ids = steps.map((x) => x.id)
-    expect(ids[1]).toBe('sample')
-    expect(ids.at(-1)).toBe('tour')
-    expect(steps.find((x) => x.id === 'sample')?.detail).toMatch(/trace-agent\/trace-sample \(private; created if it does not exist.*every agent and every simulation/)
-    expect(steps.find((x) => x.id === 'onboard')?.detail).toMatch(/open the onboarding PR in mteichtahl\/board; put trace-agent\/trace-sample under trace straight away/)
+    expect(steps.at(-1)?.id).toBe('tour')
+    expect(steps.find((x) => x.id === 'github')?.detail).toContain(`create ${SAMPLE} first`)
+    expect(steps.find((x) => x.id === 'onboard')?.detail).toContain(`create ${SAMPLE} (sample)`)
     expect(steps.find((x) => x.id === 'tour')?.detail).toMatch(/open \d+ tasks in trace-agent\/trace-sample, each labelled for the agent that takes it/)
-    expect(InfraPropsSchema.parse(infraInput(a)).repositories).not.toContain(`${SAMPLE}@main`)
     expect(plan(AnswersSchema.parse({ ...ANSWERS, github: { login: 'x' }, sample: { enabled: true, tour: false } })).map((x) => x.id)).not.toContain('tour')
-    expect(plan(AnswersSchema.parse(ANSWERS)).map((x) => x.id)).not.toContain('sample')
+    expect(plan(AnswersSchema.parse(ANSWERS)).map((x) => x.id)).not.toContain('tour')
+    expect(plan(AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: false }, github: { login: 'x' }, sample: { enabled: true } })).find((x) => x.id === 'tour')?.detail).toMatch(/left out because GPU jobs are off/)
   })
 
-  it('creates and fills the repository before the deploy, onboards it straight onto its branch, and starts the tour last', async () => {
-    calls.onboard.length = 0
-    calls.variables.length = 0
+  it('creates it before the deploy, onboards it from the sample template, and opens the tour after the GPU image', async () => {
     const order: string[] = []
-    const infra: Record<string, unknown>[] = []
-    const events: Ev[] = []
-    const a = AnswersSchema.parse({ ...ANSWERS, github: { login: 'trace-agent' }, sample: { enabled: true }, people: [{ email: 'dev@example.com', projects: [SAMPLE] }] })
-    const ok = await apply(a, SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
-      ...quiet,
-      cdk: async (args, env) => { order.push(args[0] ?? ''); if (args[0] === 'deploy') infra.push(JSON.parse(env.TRACE_INFRA ?? '{}')); return 0 },
-      outputs: async () => withSampleOutputs(),
-      sample: {
-        ensure: async (token, repo, o) => { order.push(`ensure ${repo} ${o.private ? 'private' : 'public'}`); expect(token).toBe(TOKEN); return { created: true, defaultBranch: 'trunk', url: `https://github.com/${repo}` } },
-        push: async (_t, repo, branch) => { order.push(`push ${repo}@${branch}`); return 'abcdef1234' },
-        onboard: async (_t, repo, branch) => { order.push(`onboard ${repo}@${branch}`); return { url: `https://github.com/${repo}`, commit: '1234567abc', settings: ['created the labels'] } },
-        tour: async (_t, repo, o) => { order.push(`tour ${repo} gpu=${o.gpu}`); return { url: `https://github.com/${repo}/issues`, opened: 12, existing: 0, skipped: [], lines: [] } },
-      },
+    const onboarded: { repo: string; create: unknown }[] = []
+    const r = await run({ ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: true }, github: { login: 'trace-agent' }, sample: { enabled: true }, people: [{ email: 'dev@example.com', projects: [SAMPLE] }] }, {
+      createRepo: async (_t, slug, o) => { order.push(`create ${slug} ${o.private ? 'private' : 'public'}`); return { fullName: slug, defaultBranch: 'main', created: true } },
+      cdk: async (args) => { if (args[0] === 'deploy') order.push('deploy'); return 0 },
+      outputs: async () => ({ ...outputsFor(['mteichtahl/board', 'mteichtahl/fw', SAMPLE]), GpuImageBuild: 'trace-gpu-image:1', GpuImageUri: 'x/trace-gpu:abc' }),
+      onboard: async (repo, o) => { onboarded.push({ repo, create: o.create ?? null }); return { repo, state: o.create ? 'created' : 'opened', pr: o.create ? null : `https://github.com/${repo}/pull/1`, settings: [], notes: o.create ? ['19 requirements'] : [] } },
+      gpuImage: async () => { order.push('gpu'); return { ok: true, detail: 'built' } },
+      tour: async (_t, repo, o) => { order.push(`tour ${repo} gpu=${o.gpu}`); return { url: `https://github.com/${repo}/issues`, opened: 20, existing: 0, skipped: [], lines: [] } },
     })
-    expect(ok).toBe(true)
-    expect(order).toEqual(['ensure trace-agent/trace-sample private', 'push trace-agent/trace-sample@trunk', 'bootstrap', 'deploy', 'onboard trace-agent/trace-sample@trunk', 'tour trace-agent/trace-sample gpu=true'])
-    // deployed with its actual default branch, configured like any project, and not given the held onboarding PR
-    expect(infra[0]?.repositories).toContain(`${SAMPLE}@trunk`)
+    expect(r.ok).toBe(true)
+    expect(order).toEqual([`create ${SAMPLE} private`, 'deploy', 'gpu', `tour ${SAMPLE} gpu=true`])
+    expect(onboarded.find((x) => x.repo === SAMPLE)?.create).toEqual({ template: 'sample', private: true })
     expect(calls.variables).toContain(`${SAMPLE}:TRACE_AGENT_RUNTIME_ARN`)
-    expect(calls.variables).toContain(`${SAMPLE}:TRACE_CODEBUILD_PROJECT`)
-    expect(calls.onboard).toEqual(['mteichtahl/board'])
-    const done = events.at(-1)
-    expect(done?.summary?.join('\n')).toMatch(/sample's tour has started: every agent and every simulation has a task in https:\/\/github.com\/trace-agent\/trace-sample\/issues/)
-    expect(events.find((e) => e.type === 'step' && e.step?.id === 'tour' && e.step.status === 'done')?.step?.detail).toMatch(/^12 tasks opened/)
+    expect(r.events.some((e) => e.type === 'log' && e.line === `${SAMPLE}: 19 requirements`)).toBe(true)
+    const summary = r.events.at(-1)?.summary?.join('\n') ?? ''
+    expect(summary).toMatch(/Created the sample project, trace-agent\/trace-sample, under trace/)
+    expect(summary).toMatch(/sample's tour has started: every agent and every simulation has a task in https:\/\/github.com\/trace-agent\/trace-sample\/issues/)
+    // once onboarded it is saved as an existing repository, so the next run does not create it again
+    const saved = AnswersSchema.parse(savedAnswers().answers)
+    expect(saved.projects.find((p) => p.repo === SAMPLE)?.create).toBeNull()
+    expect(saved.sample).toMatchObject({ enabled: true, tour: true })
   })
 
-  it('leaves GPU and CPU tasks out of the tour when GPU jobs are off, and stops before the deploy when the repository cannot be made', async () => {
-    const order: string[] = []
-    const events: Ev[] = []
-    const a = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: false }, github: { login: 'trace-agent' }, sample: { enabled: true } })
-    const fake = {
-      ensure: async () => { throw new Error('could not create trace-agent/trace-sample: the token cannot create repositories in its account') },
-      push: async () => null, onboard: async () => ({ url: '', commit: null, settings: [] }), tour: async () => ({ url: '', opened: 0, existing: 0, skipped: [], lines: [] }),
-    }
-    const ok = await apply(a, SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), { ...quiet, sample: fake, cdk: async (args) => { order.push(args[0] ?? ''); return 0 }, outputs: async () => withSampleOutputs() })
-    expect(ok).toBe(false)
-    expect(order).toEqual([])
-    expect(events.at(-1)?.summary?.[0]).toMatch(/Stopped at "Create the sample project": could not create/)
-    expect(plan(a).find((x) => x.id === 'tour')?.detail).toMatch(/left out because GPU jobs are off/)
-  })
-})
-
-describe('the sample\'s GitHub calls', () => {
-  it('creates the repository in the token\'s account when it does not exist, and commits files in one commit', async () => {
-    const { ensureRepo, commitFiles } = await vi.importActual<typeof import('../../src/installer/github.js')>('../../src/installer/github.js')
-    const seen: string[] = []
-    const bodies: unknown[] = []
-    const fake = (async (url: string, init?: RequestInit) => {
-      const m = init?.method ?? 'GET'
-      seen.push(`${m} ${url.replace('https://api.github.com', '')}`)
-      if (init?.body) bodies.push(JSON.parse(String(init.body)))
-      const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status })
-      if (m === 'GET' && url.endsWith('/repos/marc/trace-sample')) return json({ message: 'Not Found' }, 404)
-      if (url.endsWith('/user')) return json({ login: 'marc', type: 'User' })
-      if (m === 'POST' && url.endsWith('/user/repos')) return json({ full_name: 'marc/trace-sample', private: true, default_branch: 'main', html_url: 'https://github.com/marc/trace-sample' }, 201)
-      if (url.includes('/git/ref/heads/main')) return json({ object: { sha: 'p1' } })
-      if (url.includes('/git/commits/p1')) return json({ sha: 'p1', tree: { sha: 't0' } })
-      if (url.endsWith('/git/blobs')) return json({ sha: `b${bodies.length}` }, 201)
-      if (url.endsWith('/git/trees')) return json({ sha: 't1' }, 201)
-      if (url.endsWith('/git/commits')) return json({ sha: 'c1' }, 201)
-      if (m === 'PATCH') return json({ object: { sha: 'c1' } })
-      return json({ message: 'unexpected' }, 500)
-    }) as typeof fetch
-    expect(await ensureRepo('t', 'marc/trace-sample', { private: true }, fake)).toEqual({ created: true, defaultBranch: 'main', url: 'https://github.com/marc/trace-sample', private: true })
-    expect(bodies[0]).toEqual({ name: 'trace-sample', private: true, auto_init: true })
-    expect(await commitFiles('t', 'marc/trace-sample', 'main', [{ path: 'a.txt', content: 'hi' }, { path: 'run.sh', content: 'x', executable: true }], 'msg', fake)).toBe('c1')
-    expect(seen.filter((x) => x.includes('/git/'))).toEqual([
-      'GET /repos/marc/trace-sample/git/ref/heads/main', 'GET /repos/marc/trace-sample/git/commits/p1',
-      'POST /repos/marc/trace-sample/git/blobs', 'POST /repos/marc/trace-sample/git/blobs', 'POST /repos/marc/trace-sample/git/trees',
-      'POST /repos/marc/trace-sample/git/commits', 'PATCH /repos/marc/trace-sample/git/refs/heads/main',
-    ])
-    const tree = bodies.find((b) => (b as { base_tree?: string }).base_tree) as { tree: { path: string; mode: string }[] }
-    expect(tree.tree.map((e) => `${e.path} ${e.mode}`)).toEqual(['a.txt 100644', 'run.sh 100755'])
-  })
-
-  it('says how to fix a token that may not create repositories', async () => {
-    const { ensureRepo } = await vi.importActual<typeof import('../../src/installer/github.js')>('../../src/installer/github.js')
-    const fake = (async (url: string, init?: RequestInit) => {
-      if ((init?.method ?? 'GET') === 'GET' && url.includes('/repos/')) return new Response('{"message":"Not Found"}', { status: 404 })
-      if (url.endsWith('/user')) return new Response('{"login":"marc","type":"User"}', { status: 200 })
-      return new Response('{"message":"Resource not accessible by personal access token"}', { status: 403 })
-    }) as typeof fetch
-    await expect(ensureRepo('t', 'acme/trace-sample', {}, fake)).rejects.toThrow(/cannot create repositories in acme.*Administration: read and write.*Create acme\/trace-sample yourself/)
+  it('names the sample after the login derived at install, and reports a tour that could not start without failing the install', async () => {
+    const created: string[] = []
+    const r = await run({ ...ANSWERS, projects: [], people: [], agents: { ...ANSWERS.agents, gpuEnabled: false }, sample: { enabled: true } }, {
+      facts: async () => ({ account: '123456789012', login: 'trace-agent', email: 'marc@example.com', models: [{ id: 'us.anthropic.claude-sonnet-4-6', name: 'S' }], gpuQuota: 0 }),
+      createRepo: async (_t, slug) => { created.push(slug); return { fullName: slug, defaultBranch: 'main', created: true } },
+      tour: async () => { throw new Error('POST /repos/trace-agent/trace-sample/issues: 403 Resource not accessible') },
+    })
+    expect(r.ok).toBe(true)
+    expect(created).toEqual([SAMPLE])
+    expect(r.events.find((e) => e.step?.id === 'tour' && e.step.status === 'failed')?.step?.detail).toMatch(/403/)
+    expect(r.events.at(-1)?.summary?.join('\n')).toMatch(/The sample's tour did not start: .*run the installer again to open its tasks/)
   })
 })
 
@@ -1006,7 +1184,7 @@ describe("trace's own repository", () => {
   })
 
   it('says so in the plan, in plain words; adds other build-only repositories; refuses a project or a repeat among them', () => {
-    const a = AnswersSchema.parse({ ...ANSWERS, runners: { traceRepository: TRACE } })
+    const a = AnswersSchema.parse({ ...ANSWERS, runners: { auth: 'connection', traceRepository: TRACE } })
     const deploy = plan(a).find((x) => x.id === 'deploy')?.detail ?? ''
     expect(deploy).toMatch(/ Build trace's own repository on AWS too \(mteichtahl\/trace\): a build runner for it alone, nothing else\.$/)
     expect(plan(a).find((x) => x.id === 'repos')?.detail).toMatch(/; TRACE_CODEBUILD_PROJECT alone in mteichtahl\/trace\./)
