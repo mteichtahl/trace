@@ -248,6 +248,26 @@ export const InfraPropsSchema = z.object({
      * there when this installation publishes them (src/installer/release.ts) */
     ciPrivileged: z.boolean().default(false),
   }).strict().prefault({}),
+  /** The web app (src/infra/web.ts, README "Web app", docs/web-build.md): the static app on S3 behind CloudFront, its
+   * backend Lambda behind the same address (/api/*), AppSync Events for live updates, a Cognito app client of its own,
+   * and the pool's choice-based sign-in (passkeys with the app's address as relying party). In its own nested stack in
+   * either layout. */
+  web: z.object({
+    enabled: z.boolean().default(true),
+    /** a custom domain for the app (e.g. trace.example.com), with certificateArn; unset: CloudFront's own address. The
+     * DNS record (a CNAME or alias to the distribution) is the person's to make */
+    domainName: z.string().regex(/^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/, 'a domain name such as trace.example.com').optional(),
+    /** the ACM certificate for domainName, in us-east-1 (CloudFront's) */
+    certificateArn: z.string().regex(/^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[0-9a-f-]{36}$/, 'an ACM certificate ARN in us-east-1').optional(),
+    /** the Bedrock model or inference profile the app's chat agent uses; unset: `model`, the agents' (webModel) */
+    model: z.string().min(3).optional(),
+    /** CloudWatch dashboards the Operations page may read, besides the agents' own (`<prefix>-agents`) */
+    dashboards: z.array(z.string().regex(/^[A-Za-z0-9_-]{1,255}$/, 'a CloudWatch dashboard name')).max(20).default([]),
+    /** A verified Amazon SES identity (an address, or one at a verified domain) the user pool sends email from. Email
+     * one-time codes as a first sign-in factor need it (Cognito sends them only through SES): unset, sign-in offers
+     * passkeys and passwords, and Cognito's own sender keeps sending the invitations. */
+    sesFrom: z.string().email().optional(),
+  }).strict().prefault({}),
   /** AgentCore observability: OpenTelemetry (ADOT) traces and metrics to CloudWatch (src/infra/observability.ts). */
   observability: z.object({
     enabled: z.boolean().default(true),
@@ -264,7 +284,9 @@ export const InfraPropsSchema = z.object({
   if (p.layoutMigration && p.layout !== 'flat') ctx.addIssue({ code: 'custom', path: ['layoutMigration'], message: 'layoutMigration moves a flat installation: it needs layout flat' })
   // the library gateway's name (`<prefix>-library`) must match AgentCore's ^([0-9a-zA-Z][-]?){1,48}$
   if (p.gateway.enabled && !/^([0-9a-zA-Z][-]?){1,48}$/.test(`${p.prefix}-library`)) ctx.addIssue({ code: 'custom', path: ['prefix'], message: 'with the library gateway, the prefix can\'t end with a dash or have two in a row' })
-  if (p.cpu.vcpus > p.cpu.maxVcpus) ctx.addIssue({ code: 'custom', path: ['cpu', 'vcpus'], message: `a CPU job asks for ${p.cpu.vcpus} vCPUs, more than cpu.maxVcpus (${p.cpu.maxVcpus})` })
+  // a custom domain is served with its certificate: one without the other is a mistake
+  if (Boolean(p.web.domainName) !== Boolean(p.web.certificateArn)) ctx.addIssue({ code: 'custom', path: ['web', p.web.domainName ? 'certificateArn' : 'domainName'], message: 'web.domainName and web.certificateArn go together: the custom domain needs its us-east-1 certificate' })
+  if (p.cpu.vcpus > p.cpu.maxVcpus)ctx.addIssue({ code: 'custom', path: ['cpu', 'vcpus'], message: `a CPU job asks for ${p.cpu.vcpus} vCPUs, more than cpu.maxVcpus (${p.cpu.maxVcpus})` })
   const listed = new Set(p.repositories.map((r) => (r.split('@')[0] ?? '').toLowerCase()))
   // a build-only repository is never a project too (a project has its own runner), nor shares a project's hash (the
   // runner project's name is `<prefix>-ci-<hash>`)
@@ -324,6 +346,17 @@ export function infraPropsFromEnv(env: NodeJS.ProcessEnv = process.env): InfraPr
 /** AgentCore runtime names: a letter, then letters, digits and underscores, at most 48 characters. The API runtime's;
  * the workers' are workerRuntimeName (one per project). */
 export const apiRuntimeName = (prefix: string): string => `${prefix.replace(/-/g, '_')}_api`.slice(0, 48)
+
+/** The model the web app's chat agent uses: web.model, else the agents'. */
+export const webModel = (cfg: Pick<InfraProps, 'model' | 'web'>): string => cfg.web.model ?? cfg.model
+
+/** The web app's settings parameter (SSM, String): a fixed name, so the backend finds it without a reference that
+ * would make a cycle (docs/web-build.md). */
+export const webConfigParameter = (prefix: string): string => `/${prefix}/web/config`
+
+/** The web app's outputs (the parent's): its address, its distribution, the live events' HTTP endpoint, and its
+ * Cognito app client. */
+export const WEB_OUTPUTS = { url: 'WebUrl', distributionId: 'WebDistributionId', eventsEndpoint: 'EventsApiEndpoint', clientId: 'WebClientId' } as const
 
 /** One entry of `repositories`: OWNER/REPO and its default branch (main when omitted). */
 export interface ProjectRef { repository: string; slug: string; hash: string; branch: string }

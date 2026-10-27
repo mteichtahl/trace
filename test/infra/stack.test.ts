@@ -268,7 +268,7 @@ describe('the trace stack', () => {
     expect(msPuts.map((x) => Object.keys(x.Condition?.Null ?? {})[0]).sort()).toEqual(['s3:if-match', 's3:if-none-match'])
     expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes(`/${MS}`))).toBe(true)
     expect(s.filter((x) => actionsOf(x).includes('s3:DeleteObject')).map((x) => JSON.stringify(x.Resource)).join()).not.toContain('memory-state')
-    expect(s.filter((x) => actionsOf(x).includes('s3:ListBucket')).flatMap((x) => x.Condition?.StringLike?.['s3:prefix'] as string[]).sort()).toEqual(['central/*', MS, 'prompts/*'])
+    expect(s.filter((x) => actionsOf(x).includes('s3:ListBucket')).flatMap((x) => x.Condition?.StringLike?.['s3:prefix'] as string[]).sort()).toEqual(['central/*', 'installation/pending-projects/*', 'projects/*/chats/*', 'projects/*/journey/*', MS, 'prompts/*'])
     // the installation's prompt overrides (prompts.set, admins): read, and conditional puts only; no deletes
     const promptPuts = s.filter((x) => actionsOf(x).includes('s3:PutObject') && JSON.stringify(x.Resource).includes('/prompts/*'))
     expect(promptPuts.map((x) => Object.keys(x.Condition?.Null ?? {})[0]).sort()).toEqual(['s3:if-match', 's3:if-none-match'])
@@ -276,9 +276,11 @@ describe('the trace stack', () => {
     expect(read?.Resource).toEqual(expect.arrayContaining([HA, HB].map((h) => parentRef(syn, h, memoryIdOf(h), 'MemoryArn'))))
     expect(read?.Resource).toHaveLength(2)
     expect(text).not.toContain('CreateEvent')
-    // no GPU, no project data, no project tokens
-    for (const never of ['batch:', '/jobs/', '/projects/', `Project${HA}GithubToken`, `Project${HB}GithubToken`]) expect(text.replaceAll(MS, '')).not.toContain(never)
-    expect(text.replaceAll(MS, '')).not.toContain('projects/')
+    // no GPU, no project data, no project tokens (but each project's chats, kept outside its repository, and the projects
+    // waiting to be created: conditional writes, as above)
+    const rest = text.replaceAll('/projects/*/chats/*', '').replaceAll('projects/*/chats/*', '').replaceAll('/projects/*/journey/*', '').replaceAll('projects/*/journey/*', '').replaceAll('pending-projects/*', '')
+    for (const never of ['batch:', '/jobs/', '/projects/', `Project${HA}GithubToken`, `Project${HB}GithubToken`]) expect(rest.replaceAll(MS, '')).not.toContain(never)
+    expect(rest.replaceAll(MS, '')).not.toContain('projects/')
   })
 
   it('has a Cognito pool without self sign-up, the admin/user/guest groups, and the first admin', () => {

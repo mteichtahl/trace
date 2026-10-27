@@ -98,10 +98,11 @@ describe('the nested layout', () => {
       // CDK moves what no longer fits the API role's inline policy (every memory's ARN) into a managed policy
       const overflow = Object.keys(s.parent.findResources('AWS::IAM::ManagedPolicy'))
       for (const id of overflow) expect(id).toMatch(/^ApiRuntimeRoleOverflowPolicy/)
-      return { n, resources: count(p.Resources) - overflow.length, outputs: count(p.Outputs), stacks: count(s.parent.findResources('AWS::CloudFormation::Stack')), overflow: overflow.length }
+      return { n, resources: count(p.Resources) - overflow.length, outputs: count(p.Outputs), stacks: count(s.parent.findResources('AWS::CloudFormation::Stack')) - 1, overflow: overflow.length }
     })
     const one = sizes[0]
     for (const z of sizes) {
+      // the projects', and the web app's (src/infra/web.ts WebStack) besides
       expect(z.stacks).toBe(z.n)
       // one resource per project (its AWS::CloudFormation::Stack), and the same outputs whatever the number of projects
       expect(z.resources - z.n).toBe((one?.resources ?? 0) - 1)
@@ -112,8 +113,10 @@ describe('the nested layout', () => {
     // the knowledge bases add one resource to the parent (the vector bucket) and, from 24 projects, one more overflow
     // policies of the API role (it names every knowledge base for Retrieve): three at 24 projects, four at 60
     // (each project's job-events topic, policy and rule are in its nested stack: none in the parent; the outputs
-    // include GithubConnectionArn and GithubConnectionCreated: src/infra/runner.ts GithubConnection)
-    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:87/21:0', '24:113/21:3', '60:150/21:4'])
+    // include GithubConnectionArn and GithubConnectionCreated: src/infra/runner.ts GithubConnection). The web app adds
+    // six resources (its nested stack, the events API and namespace, the publish policy, the settings parameter and the
+    // web client) and four outputs (WebUrl, WebDistributionId, EventsApiEndpoint, WebClientId)
+    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:93/25:0', '24:120/25:4', '60:156/25:4'])
     // without a connection given, the stack creates one: one more resource of the parent's, and nothing more per project
     const created = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: {} }), 'Count1Created')
     expect(count(json(created.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0) + 1)
@@ -232,7 +235,8 @@ describe('the nested layout', () => {
     app.synth()
     const assets = JSON.parse(readFileSync(join(out, 'TraceStack.assets.json'), 'utf8')) as { files: Record<string, { source: { path: string; packaging: string }; destinations: Record<string, { bucketName: string; assumeRoleArn: string }> }> }
     const nested = Object.values(assets.files).filter((f) => f.source.path.endsWith('.nested.template.json'))
-    expect(nested).toHaveLength(2)
+    // the two projects' and the web app's (src/infra/web.ts WebStack)
+    expect(nested).toHaveLength(3)
     const source = Object.values(assets.files).find((f) => f.source.packaging === 'zip' || !f.source.path.endsWith('.json'))
     for (const f of nested) {
       const d = Object.values(f.destinations)[0]
@@ -257,7 +261,9 @@ describe('inactive memories in both layouts', () => {
       // the API role is the parent's in both layouts
       const api = policies(s.parent, 'ApiRuntimeRole')
       expect(api).toContain('/projects/*/memory-state/*')
-      expect(api.replaceAll('projects/*/memory-state/*', '')).not.toContain('projects/')
+      // and projects/*/chats/* (the web app's chats, conditional writes too; installation/pending-projects is not a
+      // project's): nothing else of projects/
+      expect(api.replaceAll('projects/*/memory-state/*', '').replaceAll('projects/*/chats/*', '').replaceAll('projects/*/journey/*', '').replaceAll('installation/pending-projects/*', '')).not.toContain('projects/')
       for (const [repo, h] of [[A, HA], [B, HB]] as const) {
         const tpl = layout === 'nested' ? nestedOf(s, repo) : s.parent
         for (const role of ['RuntimeRole', 'ActionsRole']) {

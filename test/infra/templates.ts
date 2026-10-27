@@ -7,6 +7,7 @@ import { App, NestedStack } from 'aws-cdk-lib'
 import { Template } from 'aws-cdk-lib/assertions'
 import { type InfraProps, projectHash } from '../../src/infra/props.js'
 import { TraceStack } from '../../src/infra/stack.js'
+import { WebStack } from '../../src/infra/web.js'
 
 /** The `runners` every test installation has: a CodeConnections connection in the test account. */
 export const CONNECTION_ARN = 'arn:aws:codeconnections:us-east-1:123456789012:connection/00000000-0000-0000-0000-000000000000'
@@ -18,15 +19,22 @@ export interface Synth {
   /** by project hash */
   nested: Map<string, Template>
   nestedStacks: Map<string, NestedStack>
+  /** the web app's nested stack (src/infra/web.ts WebStack), apart from the projects' and not in `all` */
+  web: Template | null
   all: Template
 }
+
+// the app and the backend are other parts' to build: a placeholder of each here
+process.env.TRACE_WEB_SKIP_BUNDLE = '1'
 
 export function synth(cfg: InfraProps, id = 'TraceStack'): Synth {
   const stack = new TraceStack(new App(), id, cfg)
   const parent = Template.fromStack(stack)
   const nested = new Map<string, Template>()
   const nestedStacks = new Map<string, NestedStack>()
+  let web: Template | null = null
   for (const n of stack.node.findAll().filter((c): c is NestedStack => c instanceof NestedStack)) {
+    if (n instanceof WebStack) { web = Template.fromStack(n); continue }
     const h = /^Project([0-9a-f]{8})Stack$/.exec(n.node.id)?.[1] ?? n.node.id
     nested.set(h, Template.fromStack(n))
     nestedStacks.set(h, n)
@@ -44,7 +52,7 @@ export function synth(cfg: InfraProps, id = 'TraceStack'): Synth {
   }
   Object.assign(outputs, p.Outputs ?? {})
   const all = Template.fromJSON({ ...p, Resources: resources, Outputs: outputs }, { skipCyclicalDependenciesCheck: true })
-  return { stack, parent, nested, nestedStacks, all }
+  return { stack, parent, nested, nestedStacks, web, all }
 }
 
 /** A project's nested template (throws if it has none). */
