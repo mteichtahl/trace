@@ -138,10 +138,10 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
 
       {alternatives.length > 0 && (
         <Collapsible open={open} onOpenChange={setOpen} className="mt-3">
-          <CollapsibleTrigger className="group flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+          <CollapsibleTrigger className="group flex w-full min-w-0 items-center gap-1 text-left text-sm text-muted-foreground hover:text-foreground">
             <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" aria-hidden />
-            {alternatives.length} alternative{alternatives.length > 1 ? 's' : ''}
-            {!open && <span className="truncate">: {alternatives.map((a) => a.label).join(', ')}</span>}
+            <span className="shrink-0 whitespace-nowrap">{alternatives.length} alternative{alternatives.length > 1 ? 's' : ''}</span>
+            {!open && <span className="min-w-0 truncate">: {alternatives.map((a) => a.label).join(', ')}</span>}
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-2">
             {!actions ? (

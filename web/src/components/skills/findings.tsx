@@ -70,7 +70,7 @@ export function FindingsPicture({ repo, title, subtitle, path, url, findings, se
     <CanvasFrame title={title} subtitle={subtitle} height={height} layers={layers} onLayer={onLayer} onAsk={onAsk} className={className}>
       {src ? (
         <div className="relative inline-block max-h-full max-w-full" onClick={() => onSelect?.(null)}>
-          <img src={src} alt={typeof title === 'string' ? `${title}, with ${placed.length} finding markers` : 'Drawing with finding markers'} className="block max-h-[calc(100%-8px)] max-w-full select-none" draggable={false} style={{ maxHeight: typeof height === 'number' ? height - 16 : undefined }} />
+          <img src={src} alt={typeof title === 'string' ? `${title}, with ${placed.length} finding markers` : 'Drawing with finding markers'} className="block w-auto max-w-none select-none" draggable={false} style={{ height: typeof height === 'number' ? height - 24 : 360 }} />
           {placed.map((f) => {
             const n = findings.indexOf(f) + 1
             return (
