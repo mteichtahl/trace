@@ -596,12 +596,32 @@ facts (`projects/<slug>/journey-agent/cost.db`, `src/core/cost.ts`), not in the 
   the price table.
 - **Graphics card and CPU jobs.** Every finished AWS Batch job records its running time (Batch's start and stop
   times) times its pool's price: a graphics card job holds its instance, a CPU job pays for the vCPUs it asked for.
-- **The price table** (`src/core/prices.ts`) is one dated table: Bedrock prices per million tokens per model (with the
-  premium Bedrock charges for regional endpoints of the newer models) and the two pools' prices per hour. Its
-  defaults carry the date they were taken from the price pages. Override any part with the stack setting
-  `cost.prices` (a model entry, a region-only entry, a pool, and a new `asOf`), then run the installer: the workers get
-  it as `TRACE_PRICES`, and each row records the table date it was priced with. The screens say when the table is
-  more than six months old. Every figure from it is shown as an estimate.
+- **The price table** (`src/core/prices.ts`) is one dated table: Claude on Bedrock per million tokens per model
+  (input, output, cache write, cache read; a global inference profile's price and the higher in-region one) and the
+  two pools' prices per hour. Its prices come from three places, highest first:
+  1. **An admin's prices**, the stack setting `cost.prices` (a model entry, a region-only entry, a pool, and an
+     `asOf`; run the installer to apply): the workers and the API get them as `TRACE_PRICES`.
+  2. **The AWS price list.** Once a day, the same Lambda that reads Cost Explorer (below, at `cost.explorer.at`) asks
+     the AWS Price List Query API (`pricing:GetProducts`, free) for Claude on Bedrock in the installation's region
+     (service code `AmazonBedrockFoundationModels`, on-demand, Anthropic) and for the pools' instances on demand
+     (`AmazonEC2`: the GPU pool's first instance type per hour, the CPU pool's first family's xlarge per vCPU), and
+     writes the table to `installation/cost/prices.json`, dated the day it fetched (`src/core/price-list.ts`,
+     `src/core/prices-store.ts`). Its endpoint is the nearest of the three the API has (us-east-1, eu-central-1,
+     ap-south-1; `cost.priceList.endpoint` picks one). It takes the configured models (`model`, `web.model`) and the
+     current Claude family (version 4 on). The price list names models by display name ("Claude Sonnet 4.6"), not by
+     id, so each becomes a match key (`claude-sonnet-4-6`); it gives no Spot prices, and for some models no cache
+     prices. A field it lacks is taken from the built-in entry of the same model, and a model it lacks (a newly
+     released one) is priced by the built-in table; the notes on Cost and time say which. No price is made up. A
+     failed fetch keeps the last table fetched and says why and when it tries next. `cost.priceList.enabled: false`
+     turns it off.
+  3. **The built-in table**, dated when it was taken from the public price pages: the last resort.
+
+  Workers read `prices.json` at most once an hour (their role may read that one key of `installation/` and nothing
+  else of it). Every row of the ledger records the date and the source (`override`, `fetched`, `built-in`) of the
+  price that priced it. Cost and time and Admin › Usage and cost say where the prices come from ("prices from the AWS
+  price list, fetched …"), warn when the fetch failed and the last or built-in prices are in use (with why and the next
+  try), say when the built-in table is more than six months old, and how many rows each source priced. Every figure
+  from the table is shown as an estimate.
 - **What AWS billed.** Every project resource carries the `trace:project` and `trace:installation` tags. A Lambda,
   `<prefix>-cost-explorer`, reads Cost Explorer once a day (`cost.explorer.at`, default 06:17 UTC), grouped by
   `trace:project` and service, and writes per-project actuals into `installation/cost/actuals.db`. Cost Explorer can
@@ -612,7 +632,10 @@ facts (`projects/<slug>/journey-agent/cost.db`, `src/core/cost.ts`), not in the 
   new tag up to a day after the first tagged resource exists, activation counts cost from then on only, and a day's
   figures settle about 24 hours later. The screens say all of this, and when the next read is. Model use and the
   shared job machines are not tagged per project, so for those the estimate is the per-project figure. Each run makes
-  two to four Cost Explorer requests (US$0.01 each).
+  two to four Cost Explorer requests (US$0.01 each). The Lambda's role may call `ce:GetCostAndUsage`,
+  `ce:ListCostAllocationTags`, `ce:UpdateCostAllocationTagsStatus` (with `activateTags`) and `pricing:GetProducts`
+  (none of these take a resource, so `*`), and read and conditionally write `installation/cost/*` only. With
+  `cost.explorer.enabled: false` and the price list on, it only fetches prices.
 
 `cost.get` (Cost and time, and the gate's cost line) and `usage.month` (Admin › Usage and cost, and Operations' cost
 tile) answer from the ledger, for admins only.
