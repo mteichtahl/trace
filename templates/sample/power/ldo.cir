@@ -1,0 +1,26 @@
+trace-sample power stage: J1 12 V -> U1 AMS1117-3.3 (SOT-223) -> 3V3, for thermal.budget (an operating point)
+* U1 is modelled by what sets its dissipation: a 3.3 V output (an ideal source, the LDO's regulation) and its
+* ground-pin current (5 mA typical at 12 V: the LCSC listing's "5mA" quiescent figure). Its dissipation is the
+* vector v(p_u1) = (VIN - 3V3) x I(out) + VIN x Iq, the formula calc.ldo_thermal uses.
+* The loads on 3V3 (docs/spec.md REQ-PWR-002): the MCU board through J2 (40 mA budgeted), the buffer U2 (0.1 mA),
+* the pull-ups when I2C is low (2 x 0.7 mA, counted in full), the LED (1.9 mA, from the MCU's GPIO).
+.param vin=12 i_mcu=40m i_iq=5m
+V1 vin 0 DC {vin}
+* U1: the pass element from VIN to 3V3, then its ground current
+Vreg 3v3 0 DC 3.3
+Vsense vin u1in DC 0
+Bpass u1in 0 I = i(Vload)
+Iq vin 0 DC {i_iq}
+* what U1 dissipates, as a node voltage (1 V = 1 W)
+Bp p_u1 0 V = (v(vin) - v(3v3)) * i(Vload) + v(vin) * {i_iq}
+Rp p_u1 0 1meg
+* the 3V3 loads, drawn through a 0 V sense source so their sum is i(Vload)
+Vload 3v3 l3 DC 0
+Rmcu l3 0 {3.3/i_mcu}
+Ropamp l3 0 33k
+Rpu l3 0 {3.3/1.4m}
+Rled l3 0 {3.3/1.9m}
+* the divider R1 + R2 across VIN, which also dissipates (R1 39k, R2 13k)
+R1 vin div 39k
+R2 div 0 13k
+.op

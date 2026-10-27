@@ -1,0 +1,23 @@
+# SymbiYosys job for moving_average_props.sv: `sby -f moving_average.sby bmc` (or cover), or through trace:
+#   trace tool verify.formal sby=moving_average.sby task=bmc
+# Without sby, verify.formal runs the same check with yosys-smtbmc directly:
+#   trace tool verify.formal files='["moving_average.v","moving_average_props.sv"]' top=moving_average_props mode=bmc depth=10
+[tasks]
+bmc
+cover
+
+[options]
+bmc: mode bmc
+cover: mode cover
+depth 10
+
+[engines]
+smtbmc
+
+[script]
+read -formal moving_average.v moving_average_props.sv
+prep -top moving_average_props
+
+[files]
+moving_average.v
+moving_average_props.sv

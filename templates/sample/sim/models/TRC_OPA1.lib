@@ -1,0 +1,25 @@
+* TRC_OPA1: a behavioural single-supply CMOS op-amp macromodel, written for the trace sample (not a vendor model).
+* It is sized to the headline figures of the buffer U2 (MCP6001T-I/OT, LCSC C116490: 1 MHz GBW, rail-to-rail input and
+* output, about 100 uA supply current, 28 nV/rtHz at 1 kHz) and to the fictional TRC-OPA1 datasheet in
+* docs/datasheets/TRC-OPA1.pdf, whose figures are this model's by construction:
+*   open-loop gain 100 dB (gm 1 mS into 100 Mohm), dominant pole 10 Hz, GBW 1.0 MHz (gm / 2 pi 159.15 pF)
+*   second pole 4 MHz (1 kohm, 39.8 pF), so a follower has about 76 degrees of phase margin
+*   slew rate 0.6 V/us (95 uA tail current into 159.15 pF), symmetric
+*   CMRR 70 dB and PSRR 70 dB (the 3162 terms), input common mode rail to rail
+*   output swing to 25 mV from either rail, 50 ohm open-loop output resistance
+*   input voltage noise 28 nV/rtHz white (a 47 kohm resistor in series with the + input carries no DC current)
+*   supply current 100 uA (a current source between the rails)
+* Pins: non-inverting input, inverting input, positive supply, negative supply, output.
+.subckt TRC_OPA1 inp inn vcc vee out
+Rn inp inpi 47k
+Iq vcc vee DC 100u
+Bmid mid 0 V = (v(vcc) + v(vee)) / 2
+Bgm mid n1 I = 95u * tanh(1m * (v(inpi) - v(inn) + (v(vcc) - v(vee) - 3.3) / 3162 + ((v(inpi) + v(inn)) / 2 - v(mid)) / 3162) / 95u)
+R1 n1 mid 100meg
+C1 n1 mid 159.15p
+E2 n2 mid n1 mid 1
+R2 n2 n3 1k
+C2 n3 mid 39.8p
+Bo oi 0 V = max(min(v(n3), v(vcc) - 0.025), v(vee) + 0.025)
+Ro oi out 50
+.ends TRC_OPA1

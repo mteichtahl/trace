@@ -1,0 +1,15 @@
+* Component corners for the trace-sample front end, as .lib sections (ams.corners model_corners, lib.section).
+* Each scales the parts that set the gain and the filter by their tolerance (R 1 %, C1 X7R 10 %):
+*   tt  nominal
+*   ff  fast corner: the filter's corner frequency highest (R3 and C1 low) and the divider's gain highest
+*       (R1 low, R2 high)
+*   ss  slow corner: the filter slowest and the gain lowest
+.lib tt
+.param k_r1=1 k_r2=1 k_r3=1 k_c1=1
+.endl tt
+.lib ff
+.param k_r1=0.99 k_r2=1.01 k_r3=0.99 k_c1=0.9
+.endl ff
+.lib ss
+.param k_r1=1.01 k_r2=0.99 k_r3=1.01 k_c1=1.1
+.endl ss

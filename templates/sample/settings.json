@@ -1,0 +1,40 @@
+{
+  "electronics.projects": ["hardware/trace-sample.kicad_pro"],
+  "electronics.models": ["sim/models"],
+  "electronics.autoroute.orthoroute_min_layers": 2,
+  "electronics.autoroute.orthoroute_iterations": 100,
+  "electronics.autoroute.freerouting_passes": 50,
+  "electronics.autoroute.connector_prefixes": ["J"],
+  "electronics.autoroute.exclude_nets": ["GND"],
+  "firmware.targets": [
+    {
+      "name": "trace-sample-fw",
+      "path": "firmware",
+      "preset": "make",
+      "build": "make all test",
+      "flash": "make flash",
+      "artifact": "build/trace-sample-fw.elf",
+      "serial": "bench-uart",
+      "env": {}
+    }
+  ],
+  "parts.providers": ["lcsc"],
+  "parts.currency": "USD",
+  "knowledge.include": [
+    "**/*.md", "CLAUDE.md", ".trace/rules.md",
+    "sim/**/*.cir", "sim/**/*.lib", "power/**/*.cir", "logic/**/*.v", "logic/**/*.sv", "logic/**/*.py",
+    "fpga/**/*.pcf", "firmware/**/*.c", "firmware/**/*.h", "firmware/Makefile", "emc/**/*.py", "thermal/**/*.csv"
+  ],
+  "hil.instruments": [
+    { "name": "bench-psu", "kind": "psu", "model": "rigol-dp800", "address": "TCPIP::127.0.0.1::5555::SOCKET", "channels": [1],
+      "limits": { "max_voltage_v": 13, "max_current_a": 0.1 },
+      "note": "bench emulator (trace hil emulate): Rigol DP832; CH1 is the sample board's VIN" },
+    { "name": "bench-scope", "kind": "scope", "model": "rigol-ds1000z", "address": "TCPIP::127.0.0.1::5556::SOCKET", "channels": [1, 2, 3, 4],
+      "note": "bench emulator: Rigol DS1104Z; CH1 is ADC_IN (the last VIN step through the RC filter), CH2 a 1 kHz 3.2 Vpp square" },
+    { "name": "bench-dmm", "kind": "dmm", "model": "keysight-344xx", "address": "TCPIP::127.0.0.1::5557::SOCKET", "channels": [1],
+      "note": "bench emulator: Keysight 34465A on ADC_IN (VIN x 13/52 with the PSU output on)" }
+  ],
+  "hil.can": [{ "name": "bench-can", "interface": "virtual", "channel": "bench" }],
+  "hil.serial": [{ "name": "bench-uart", "port": "/tmp/trace-bench-uart-5555", "baud": 115200,
+    "note": "bench emulator: the sample firmware's console (trace hil emulate --serial); adc raw=… mv=… each second, answers READ" }]
+}
