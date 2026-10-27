@@ -38,6 +38,10 @@
  *                       admin, user (read/write on assigned projects), guest (read on assigned projects) — and the
  *                       API runtime: the same image in `api` mode, reachable only with a Cognito token, which checks
  *                       the person's class and project assignments (src/core/access.ts) on every request
+ *   web app             (web.enabled) the static app on S3 behind CloudFront, its backend Lambda on /api/*, AppSync
+ *                       Events, its own Cognito app client and the pool's choice-based sign-in, with the app's address
+ *                       as the passkey relying party (src/infra/web.ts: the address in its own nested stack, made
+ *                       before the pool; what names the pool in this one, after it)
  *
  * The API runtime is the one component that spans projects: it reads every project's settings and status with the
  * shared GitHub token, reads (never writes) the records of every project's memory, keeps which of them people marked
@@ -77,6 +81,7 @@ import { KB_RETRIEVE_ACTIONS, VectorStore, knowledgeBaseArn } from './knowledge.
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
 import { GithubConnection, RunnerProject } from './runner.js'
+import { TraceWeb, addWebClient, traceWebProps } from './web.js'
 import { ACCESS_PREFIX, CENTRAL_PREFIX, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
   GPU_IMAGE_BUILD_OUTPUT, type InfraProps, ciRunnerOutput, LAYOUT_OUTPUT, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled,
@@ -145,6 +150,12 @@ export const SOURCE_EXCLUDE = [
   '.git', 'node_modules', '**/node_modules', 'dist', 'cdk.out', '.venv', '**/__pycache__', '**/*.pyc', 'test', 'python/tests',
   '.trace', '*.db', '*.db-*', 'coverage', 'web/**',
 ]
+
+/** Where the API keeps each project's chats (projects/<slug>/chats/) and the projects created from the app that wait for
+ * the next stack update (installation/pending-projects/): docs/web-build.md. */
+export const CHATS_PREFIX = 'chats'
+export const JOURNEY_PREFIX = 'journey'
+export const PENDING_PROJECTS = 'installation/pending-projects'
 
 export class TraceStack extends Stack {
   constructor(scope: Construct, id: string, cfg: InfraProps, props: StackProps = {}) {
@@ -317,7 +328,16 @@ export class TraceStack extends Stack {
       if (kbLength > ENV_VALUE_MAX) throw new Error(`too many repositories for one installation: the API's list of knowledge bases would be ${kbLength} characters (AgentCore allows ${ENV_VALUE_MAX})`)
     }
 
+    // ------------------------------------------------------------------ the web app's address (src/infra/web.ts)
+    // Its nested stack first: the pool takes its address as the passkey relying party, and nothing in it names the pool
+    const web = cfg.web.enabled ? new TraceWeb(this, 'Web', traceWebProps(cfg, REPO_ROOT)) : null
+    // email one-time codes need the pool to send through SES (Cognito's own sender cannot send them)
+    const emailCodes = Boolean(web && cfg.web.sesFrom)
+
     // ------------------------------------------------------------------ people: Cognito and the API runtime
+    const signIn = web
+      ? 'Sign in at ' + web.url + '/invite, or with `trace login`.'
+      : 'Sign in with `trace login`.'
     const users = new cognito.UserPool(this, 'Users', {
       userPoolName: `${cfg.prefix}-users`,
       selfSignUpEnabled: false,
@@ -331,8 +351,16 @@ export class TraceStack extends Stack {
       featurePlan: cognito.FeaturePlan.ESSENTIALS,
       userInvitation: {
         emailSubject: 'You have been invited to trace',
-        emailBody: 'Your trace user name is {username} and your temporary password is {####}. Sign in with `trace login`.',
+        emailBody: `Your trace user name is {username} and your temporary password is {####}. ${signIn}`,
       },
+      // the web app's choice-based sign-in (USER_AUTH): passkeys bound to its address, passwords, and email codes when
+      // the pool sends through SES. The CLI's client keeps SRP and the hosted domain
+      ...(web ? {
+        signInPolicy: { allowedFirstAuthFactors: { password: true, passkey: true, emailOtp: emailCodes } },
+        passkeyRelyingPartyId: web.domain,
+        passkeyUserVerification: cognito.PasskeyUserVerification.PREFERRED,
+      } : {}),
+      ...(emailCodes && cfg.web.sesFrom ? { email: cognito.UserPoolEmail.withSES({ fromEmail: cfg.web.sesFrom, fromName: 'trace', sesRegion: cfg.region }) } : {}),
       removalPolicy: RemovalPolicy.RETAIN,
     })
     const domain = users.addDomain('Domain', { cognitoDomain: { domainPrefix: `${cfg.prefix}-${cfg.account}` } })
@@ -351,6 +379,8 @@ export class TraceStack extends Stack {
         logoutUrls: cfg.callbackPorts.map((p) => `http://localhost:${p}/signed-out`),
       },
     })
+    // the web app's own client: its sign-in pages call the pool's API (USER_AUTH, refresh), never the hosted domain
+    const webClient = web ? addWebClient(users, cfg.prefix) : null
     // The three classes of person (src/core/access.ts). A person's class is their group, carried in their token.
     new cognito.CfnUserPoolGroup(this, 'AdminsGroup', { userPoolId: users.userPoolId, groupName: 'trace-admins', precedence: 0, description: 'admin: everything, on every project, including managing people' })
     new cognito.CfnUserPoolGroup(this, 'UsersGroup', { userPoolId: users.userPoolId, groupName: 'trace-users', precedence: 1, description: 'user: read and write on the projects they are assigned to' })
@@ -401,6 +431,10 @@ export class TraceStack extends Stack {
     // which memory records are inactive, per project (memory.deactivate / reactivate, src/agents/runtime/memory-state.ts):
     // read and conditional writes under projects/<slug>/memory-state/ only, nothing else of projects/
     grantPrefixes(apiRole, central, { conditional: [`${PROJECTS_PREFIX}/*/${MEMORY_STATE}`] })
+    // each project's chats (chats.*, docs/web-build.md: not in the repository) and the projects created from the app
+    // waiting for the next stack update (projects.create): read, and write only with conditional puts
+    // and each project's journey record (journey.*, docs/web-build.md), under projects/<slug>/journey/
+    grantPrefixes(apiRole, central, { conditional: [`${PROJECTS_PREFIX}/*/${CHATS_PREFIX}`, `${PROJECTS_PREFIX}/*/${JOURNEY_PREFIX}`, PENDING_PROJECTS] })
     // every project's worker runtime of this installation: by its exact ARN (from its nested stack's output, or the
     // runtime itself when flat), and on the runtime also by this installation's tag. InvokeAgentRuntime authorizes the
     // runtime and the runtime endpoint (Service Authorization Reference: both resource types take aws:ResourceTag);
@@ -433,7 +467,8 @@ export class TraceStack extends Stack {
       roleArn: apiRole.roleArn,
       networkConfiguration: { networkMode: 'PUBLIC' },
       protocolConfiguration: 'HTTP',
-      authorizerConfiguration: { customJwtAuthorizer: { discoveryUrl, allowedClients: [client.userPoolClientId] } },
+      // the CLI's client, and the web app's (its backend calls the API with the person's token)
+      authorizerConfiguration: { customJwtAuthorizer: { discoveryUrl, allowedClients: [client.userPoolClientId, ...(webClient ? [webClient.userPoolClientId] : [])] } },
       requestHeaderConfiguration: { requestHeaderAllowlist: ['Authorization'] },
       lifecycleConfiguration: { idleRuntimeSessionTimeout: cfg.idleTimeoutSeconds, maxLifetime: cfg.maxLifetimeSeconds },
       filesystemConfigurations: [{ sessionStorage: { mountPath: '/mnt/workspace' } }],
@@ -445,6 +480,7 @@ export class TraceStack extends Stack {
         TRACE_AGENT_MODE: 'api',
         TRACE_COGNITO_POOL_ID: users.userPoolId,
         TRACE_COGNITO_CLIENT_ID: client.userPoolClientId,
+        ...(webClient ? { TRACE_COGNITO_WEB_CLIENT_ID: webClient.userPoolClientId } : {}),
         TRACE_COGNITO_ISSUER: `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}`,
         TRACE_AWS_ACCOUNT: cfg.account,
         TRACE_WORKER_RUNTIMES: workerList,
@@ -488,6 +524,9 @@ export class TraceStack extends Stack {
       ],
     })
 
+    // ------------------------------------------------------------------ the web app's parts that name the pool
+    if (web && webClient) web.attach({ pool: users, client: webClient, apiRuntimeArn: api.attrAgentRuntimeArn, email: emailCodes })
+
     // ------------------------------------------------------------------ outputs
     new CfnOutput(this, LAYOUT_OUTPUT, { value: cfg.layout, description: 'Where each project\'s resources are: nested (a nested stack each) or flat (this stack)' })
     // Nested: the parent carries none of a project's outputs (Project<hash>RuntimeArn, ActionsRoleArn, MemoryId, …):
@@ -496,6 +535,7 @@ export class TraceStack extends Stack {
     const hint = nested ? '' : `: with layout 'flat' about 20 projects fit; see README "Project isolation" for the move to layout 'nested'`
     this.node.addValidation({ validate: () => stackQuotaErrors(this, hint) })
     for (const n of nestedStacks) n.node.addValidation({ validate: () => stackQuotaErrors(n, '') })
+    if (web) web.stack.node.addValidation({ validate: () => stackQuotaErrors(web.stack, '') })
     new CfnOutput(this, 'TraceHome', { value: traceHome, description: 'TRACE_HOME: the central database location' })
     if (library) {
       new CfnOutput(this, LIBRARY_GATEWAY_OUTPUT, { value: library.ref.url, description: 'The library gateway (the workers\' TRACE_GATEWAY_URL)' })

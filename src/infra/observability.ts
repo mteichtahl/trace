@@ -40,6 +40,9 @@ export const RUNTIME_NAMESPACE = 'AWS/Bedrock-AgentCore'
 /** The shared span log group Transaction Search writes to (agents on the unified destination use their own group). */
 export const SPANS_LOG_GROUP = 'aws/spans'
 
+/** The agents' CloudWatch dashboard (observability.dashboard): the web app's Operations page reads it too. */
+export const agentsDashboardName = (prefix: string): string => `${prefix}-agents`
+
 /** Runtime environment when observability is on. AgentCore sets the rest (OTEL_RESOURCE_ATTRIBUTES, the OTLP headers). */
 export const ENABLED_ENV: Readonly<Record<string, string>> = {
   AGENT_OBSERVABILITY_ENABLED: 'true',
@@ -117,7 +120,7 @@ export class Observability extends Construct {
     super(scope, id)
     const stack = Stack.of(this)
     const { region, account, partition } = stack
-    this.dashboardName = `${p.prefix}-agents`
+    this.dashboardName = agentsDashboardName(p.prefix)
 
     if (!p.settings.enabled) {
       for (const r of p.runtimes) for (const [k, v] of Object.entries(DISABLED_ENV)) r.runtime.addPropertyOverride(`EnvironmentVariables.${k}`, v)

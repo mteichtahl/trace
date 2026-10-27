@@ -133,11 +133,13 @@ const ANSWERS = {
 }
 // Built at runtime so no token-shaped literal sits in the source.
 const TOKEN = ['github', 'pat', '11FAKEFAKEFAKE0123456789'].join('_')
+const CERT = 'arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000'
 
 const OUTPUTS: Record<string, string> = {
   TraceHome: '', GithubSecretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:trace/github-token',
   ApiRuntimeArn: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/trace_api-abc',
   UserPoolId: 'us-east-1_abc', UserPoolClientId: 'client123', CognitoDomain: 'https://trace-123456789012.auth.us-east-1.amazoncognito.com',
+  WebUrl: 'https://d111111abcdef8.cloudfront.net', WebDistributionId: 'E1ABCDEF', WebClientId: 'web123',
 }
 // each project's own outputs, named by its hash
 for (const repo of ['mteichtahl/board', 'mteichtahl/fw']) {
@@ -163,9 +165,24 @@ describe('answers', () => {
 
   it('plans every step, naming the account, region and repositories', () => {
     const steps = plan(AnswersSchema.parse(ANSWERS))
-    expect(steps.map((s) => s.id)).toEqual(['check', 'cdk', 'github', 'deploy', 'connection', 'runners', 'token', 'integrations', 'repos', 'onboard', 'people', 'local', 'release', 'gpu'])
+    expect(steps.map((s) => s.id)).toEqual(['check', 'cdk', 'github', 'deploy', 'connection', 'runners', 'token', 'integrations', 'repos', 'onboard', 'people', 'web', 'local', 'release', 'gpu'])
     expect(steps.find((s) => s.id === 'repos')?.detail).toContain('mteichtahl/fw')
     expect(steps.find((s) => s.id === 'deploy')?.detail).toMatch(/for each of the 2 repositories its own AgentCore worker runtime/)
+  })
+
+  it('installs the web app by default, keeping the install at two inputs, with an optional custom domain and email codes', () => {
+    const a = AnswersSchema.parse(ANSWERS)
+    expect(infraInput(a).web).toEqual({ enabled: true })
+    expect(plan(a).find((s) => s.id === 'web')).toMatchObject({ title: 'Web app: the address people sign in at' })
+    expect(plan(a).find((s) => s.id === 'deploy')?.detail).toMatch(/the web app at CloudFront's own address/)
+    const custom = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, webDomain: 'trace.example.com', webCertificateArn: CERT, webEmailFrom: 'trace@example.com' } })
+    expect(infraInput(custom).web).toEqual({ enabled: true, domainName: 'trace.example.com', certificateArn: CERT, sesFrom: 'trace@example.com' })
+    expect(plan(custom).find((s) => s.id === 'web')?.detail).toContain('https://trace.example.com')
+    expect(plan(custom).find((s) => s.id === 'deploy')?.detail).toMatch(/a code by email \(from trace@example.com, through SES\)/)
+    expect(AnswersSchema.safeParse({ ...ANSWERS, agents: { ...ANSWERS.agents, webDomain: 'trace.example.com' } }).success).toBe(false)
+    const off = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, webEnabled: false } })
+    expect(infraInput(off).web).toEqual({ enabled: false })
+    expect(plan(off).map((s) => s.id)).not.toContain('web')
   })
 
   it('passes each project\'s memory event expiry to the stack, and leaves the rest to the default', () => {
@@ -463,7 +480,7 @@ describe('the local server', () => {
     expect((await call('/api/plan', { method: 'POST', key, body: '{"answers":{}}' })).status).toBe(400)
     expect((await call('/api/plan', { method: 'POST', key, body: 'x', type: 'text/plain' })).status).toBe(415)
     const planned = await call('/api/plan', { method: 'POST', key, body: JSON.stringify({ answers: ANSWERS }) })
-    expect(JSON.parse(planned.body).steps).toHaveLength(14)
+    expect(JSON.parse(planned.body).steps).toHaveLength(15)
     expect(JSON.parse(planned.body).timeline.join(' ')).toMatch(/about 15 minutes of CloudFormation/)
   })
 
@@ -591,6 +608,10 @@ describe('adding a removed project again, its memory variable, the CPU queue and
     expect(seen).toEqual([{ buildId: 'trace-gpu-image:1234', imageTag: 'abc123' }])
     expect(r.ok).toBe(true)
     expect(order.at(-1)).toBe('local') // every other step is done before the GPU image is waited for
+    // the web app's address: its step, the page's Open trace (ready and done), and the summary
+    expect(r.events.find((e) => e.type === 'step' && e.step?.id === 'web' && e.step.status === 'done')?.step?.detail).toBe('https://d111111abcdef8.cloudfront.net')
+    for (const kind of ['ready', 'done']) expect((r.events.find((e) => e.type === kind) as { url?: string } | undefined)?.url).toBe('https://d111111abcdef8.cloudfront.net')
+    expect(r.events.at(-1)?.summary?.[0]).toMatch(/Open trace: https:\/\/d111111abcdef8\.cloudfront\.net$/)
     expect(r.events.find((e) => e.type === 'step' && e.step?.id === 'gpu' && e.step.status === 'failed')?.step?.detail).toMatch(/failed in BUILD/)
     expect((r.events.at(-1)?.summary ?? []).join('\n')).toMatch(/GPU and CPU jobs cannot run until the GPU image is built.*run the installer again/)
     // each check of the wait reaches the page as a `wait` event: the notice, and its line

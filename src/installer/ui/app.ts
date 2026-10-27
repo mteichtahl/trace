@@ -88,6 +88,7 @@ const s = {
     gpuEnabled: null as boolean | null, gpuMaxVcpus: 16, gpuSpot: false,
     cpuEnabled: null as boolean | null, cpuMaxVcpus: 64, cpuSpot: false, cpuVcpus: 16, cpuMemoryMiB: 32_768,
     knowledgeBase: null as boolean | null, libraryGateway: false,
+    webEnabled: true, webDomain: '', webCertificateArn: '', webEmailFrom: '',
     observability: true, transactionSearch: true, samplingPercent: '', dashboard: true, migrateLayout: false,
     imageSource: 'prebuilt' as 'prebuilt' | 'build', imageRegistry: '', publishImages: null as boolean | null,
   },
@@ -106,6 +107,8 @@ const s = {
   log: [] as string[],
   ready: null as string[] | null,
   result: null as { ok: boolean; summary: string[] } | null,
+  /** the web app's address, once the installer knows it (Open trace) */
+  appUrl: '',
   /** the timer waits open now, by step: the latest notice, and whether a Check now is on its way */
   waits: new Map<string, { wait: WaitNoticeView; asked: boolean; error: string }>(),
 }
@@ -165,6 +168,7 @@ function answers(): AnswersInput {
       gpuEnabled: g.gpuEnabled, gpuMaxVcpus: g.gpuMaxVcpus, gpuSpot: g.gpuSpot,
       cpuEnabled: g.cpuEnabled, cpuMaxVcpus: g.cpuMaxVcpus, cpuSpot: g.cpuSpot, cpuVcpus: g.cpuVcpus, cpuMemoryMiB: g.cpuMemoryMiB,
       knowledgeBase: g.knowledgeBase, libraryGateway: g.libraryGateway,
+      webEnabled: g.webEnabled, webDomain: g.webEnabled ? g.webDomain : '', webCertificateArn: g.webEnabled ? g.webCertificateArn : '', webEmailFrom: g.webEnabled ? g.webEmailFrom : '',
       observability: g.observability, transactionSearch: g.transactionSearch, dashboard: g.dashboard,
       samplingPercent: g.samplingPercent.trim() === '' ? null : Number(g.samplingPercent),
       migrateLayout: g.migrateLayout,
@@ -223,6 +227,7 @@ function problems(tab: Tab): string[] {
   if (tab === 'review') {
     if (fails().length) out.push('A check failed: see Connect and Projects.')
     if (!s.adminEmail && !s.pre?.facts.email) out.push("Enter the first administrator's email under Advanced (the token cannot see its account's).")
+    if (s.agents.webEnabled && Boolean(s.agents.webDomain) !== Boolean(s.agents.webCertificateArn)) out.push('The web app\'s custom domain under Advanced needs its certificate (ACM, us-east-1), and the certificate its domain.')
     if (s.runners.auth !== 'token' && s.runners.connectionArn && !CONNECTION_ARN.test(s.runners.connectionArn)) out.push('The GitHub connection under Advanced must be an AWS CodeConnections connection ARN, or empty.')
   }
   return out
@@ -417,6 +422,15 @@ function advanced(): HTMLElement {
     tri('Publish trace\'s images from this account', g.publishImages, f?.sourceAdmin ? 'on: your token administers trace\'s repository' : 'off: only trace\'s owner publishes', (v) => { g.publishImages = v }),
     g.publishImages === false ? null : h('p', { class: 'muted' }, 'Publishing is part of the install, all by API: ECR Public repositories in us-east-1, a release role for trace\'s main branch and v* tags, the repository variables and release that tell every installation where the images are, and the first release run.'),
     ...buildRunners(),
+    h('h3', {}, 'Web app'),
+    h('p', { class: 'muted' }, 'The address people sign in at, with passkeys or a password: CloudFront\'s own address unless you give a domain. `trace login` works either way.'),
+    checkbox('The web app (S3 and CloudFront, a small Lambda, live updates)', g.webEnabled, (v) => { g.webEnabled = v }),
+    g.webEnabled ? h('div', {},
+      h('div', { class: 'row' },
+        field('Custom domain', input('text', g.webDomain, (v) => { g.webDomain = v.trim().toLowerCase() }, { placeholder: 'empty: CloudFront\'s address' }), 'you point its DNS at the distribution afterwards'),
+        field('Its certificate (ACM, us-east-1)', input('text', g.webCertificateArn, (v) => { g.webCertificateArn = v.trim() }, { placeholder: 'arn:aws:acm:us-east-1:…' }))),
+      field('Email sign-in codes from', input('email', g.webEmailFrom, (v) => { g.webEmailFrom = v.trim() }, { placeholder: 'empty: passkeys and passwords only' }), 'a verified Amazon SES sender: Cognito sends codes only through SES'),
+      h('p', { class: 'muted' }, 'Passkeys belong to the app\'s address: moving to a custom domain later means people add their passkeys again.')) : null,
     h('h3', {}, 'Knowledge bases, gateway, observability'),
     tri('Knowledge bases', g.knowledgeBase, f?.s3vectors === false ? 'off: no S3 Vectors here' : 'on where S3 Vectors is', (v) => { g.knowledgeBase = v }),
     checkbox('Serve the datasheets and parts tools through AgentCore Gateway (then only its Lambda can read the integration keys)', g.libraryGateway, (v) => { g.libraryGateway = v }),
@@ -585,7 +599,7 @@ async function checkKey(n: IntegrationName): Promise<void> {
 
 async function startInstall(): Promise<void> {
   s.steps = s.plan ? s.plan.map((st) => ({ ...st })) : []
-  s.log = []; s.result = null; s.ready = null; s.waits.clear(); s.tab = 'install'; render()
+  s.log = []; s.result = null; s.ready = null; s.appUrl = ''; s.waits.clear(); s.tab = 'install'; render()
   try {
     await api('POST', '/api/apply', { answers: answers(), secrets: secrets() })
   } catch (e) {
@@ -600,13 +614,13 @@ async function startInstall(): Promise<void> {
       if (e.step.status !== 'running') s.waits.delete(e.step.id)
     }
     else if (e.type === 'log') s.log = [...s.log.slice(-800), `[${e.step}] ${e.line}`]
-    else if (e.type === 'ready') s.ready = e.summary
+    else if (e.type === 'ready') { s.ready = e.summary; s.appUrl = e.url ?? s.appUrl }
     else if (e.type === 'wait') {
       // a check of a timer wait: keep the latest; a wait with no next check has ended
       if (e.wait.nextCheckAt) s.waits.set(e.step, { wait: e.wait, asked: false, error: '' })
       else s.waits.delete(e.step)
       s.log = [...s.log.slice(-800), `[${e.step}] ${e.line}`]
-    } else { s.result = { ok: e.ok, summary: e.summary }; s.waits.clear(); es.close() }
+    } else { s.result = { ok: e.ok, summary: e.summary }; s.appUrl = e.url ?? s.appUrl; s.waits.clear(); es.close() }
     render()
     const pre = document.querySelector('pre.log')
     if (pre) pre.scrollTop = pre.scrollHeight
@@ -686,8 +700,9 @@ const STEP_ICON: Record<Step['status'], string> = { pending: '·', running: '…
 function install(): HTMLElement {
   return h('section', { class: 'card' },
     h('h2', {}, s.result ? (s.result.ok ? 'Installed' : 'Stopped') : s.ready ? 'Ready to use' : 'Installing'),
+    s.appUrl && (s.ready || s.result?.ok) ? h('div', { class: 'actions' }, h('a', { class: 'button primary', href: s.appUrl, target: '_blank', rel: 'noopener' }, 'Open trace'), h('span', { class: 'muted' }, ` ${s.appUrl}`)) : null,
     s.result ? note(s.result.ok ? 'ok' : 'bad', h('ul', {}, ...s.result.summary.map((l) => h('li', {}, l))))
-      : s.ready ? note('ok', h('strong', {}, 'trace is ready: sign in with `trace login`. '), 'Only the GPU image is still being made.', h('ul', {}, ...s.ready.map((l) => h('li', {}, l))))
+      : s.ready ? note('ok', h('strong', {}, s.appUrl ? `trace is ready: sign in at ${s.appUrl} or with \`trace login\`. ` : 'trace is ready: sign in with `trace login`. '), 'Only the GPU image is still being made.', h('ul', {}, ...s.ready.map((l) => h('li', {}, l))))
       : h('p', { class: 'lead' }, 'Keep this page open until it says trace is ready.'),
     h('ul', { class: 'progress' }, ...s.steps.map((st) => h('li', { class: `status-${st.status}` },
       h('span', { class: 'icon' }, STEP_ICON[st.status]), h('div', {}, h('strong', {}, st.title), h('div', { class: 'detail' }, st.detail))))),

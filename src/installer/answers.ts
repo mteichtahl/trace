@@ -57,6 +57,14 @@ export const AgentAnswers = z.object({
   knowledgeBase: z.boolean().nullable().default(null),
   /** The library gateway (props.ts gateway): the shared datasheets and parts tools behind AgentCore Gateway */
   libraryGateway: z.boolean().default(false),
+  /** The web app (props.ts web): the address people sign in at, CloudFront's own unless webDomain is set */
+  webEnabled: z.boolean().default(true),
+  /** a custom domain for the web app (e.g. trace.example.com), with webCertificateArn; empty: CloudFront's address */
+  webDomain: z.string().trim().regex(/^(([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})?$/, 'a domain name such as trace.example.com, or empty').default(''),
+  /** the ACM certificate for webDomain, in us-east-1 (CloudFront's) */
+  webCertificateArn: z.string().trim().regex(/^(arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[0-9a-f-]{36})?$/, 'an ACM certificate ARN in us-east-1, or empty').default(''),
+  /** a verified Amazon SES sender for the user pool: then sign-in also offers a code by email; empty: passkeys and passwords */
+  webEmailFrom: z.string().trim().refine((v) => v === '' || z.string().email().safeParse(v).success, 'a verified SES sender address, or empty').default(''),
   /** AgentCore observability: OpenTelemetry traces and metrics to CloudWatch (GenAI Observability) */
   observability: z.boolean().default(true),
   /** turn on CloudWatch Transaction Search in the account and region (account-wide; never turned off) */
@@ -179,6 +187,7 @@ export const AnswersSchema = z.object({
     if (repos.has(r)) ctx.addIssue({ code: 'custom', path: ['runners', 'ciRepositories', i], message: `${a.runners.ciRepositories[i]} is one of the projects already: it has its own build runner` })
     else if (extra.indexOf(r) !== i) ctx.addIssue({ code: 'custom', path: ['runners', 'ciRepositories', i], message: `${a.runners.ciRepositories[i]} is listed twice` })
   })
+  if (Boolean(a.agents.webDomain) !== Boolean(a.agents.webCertificateArn)) ctx.addIssue({ code: 'custom', path: ['agents', a.agents.webDomain ? 'webCertificateArn' : 'webDomain'], message: 'the web app\'s custom domain needs its certificate (ACM, us-east-1), and the certificate its domain' })
   if (a.agents.cpuVcpus > a.agents.cpuMaxVcpus) ctx.addIssue({ code: 'custom', path: ['agents', 'cpuVcpus'], message: 'a CPU job cannot ask for more vCPUs than the CPU queue may run at once' })
 })
 export type Answers = z.output<typeof AnswersSchema>
@@ -245,9 +254,10 @@ export const EventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('step'), step: StepSchema }),
   z.object({ type: z.literal('log'), step: z.string(), line: z.string() }),
   /** trace is usable: everything but the GPU image is installed (its build may still be running) */
-  z.object({ type: z.literal('ready'), summary: z.array(z.string()) }),
+  /** url: the web app's address, when it has one (the page's Open trace) */
+  z.object({ type: z.literal('ready'), summary: z.array(z.string()), url: z.string().optional() }),
   z.object({ type: z.literal('wait'), step: z.string(), wait: WaitNoticeSchema, line: z.string() }),
-  z.object({ type: z.literal('done'), ok: z.boolean(), summary: z.array(z.string()) }),
+  z.object({ type: z.literal('done'), ok: z.boolean(), summary: z.array(z.string()), url: z.string().optional() }),
 ])
 export type InstallEvent = z.infer<typeof EventSchema>
 
