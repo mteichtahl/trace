@@ -6,6 +6,7 @@
 import type { ChatMessage, InboxItem } from '@/lib/types'
 import { INBOX, JOURNEYS, ME, ME_DOC, MEMBERS, PROJECTS, RECALL, THREADS, THREAD_MESSAGES, WAITS } from './fixtures'
 import { setPath } from '@/lib/prefs'
+import { adminHandle } from './admin'
 
 let signedIn = typeof sessionStorage !== 'undefined' && sessionStorage.getItem('trace.mock.signedOut') !== '1'
 let inbox: InboxItem[] = [...INBOX]
@@ -82,6 +83,7 @@ function agui(body: { threadId: string; runId: string; messages: { role: string;
 export async function handle(path: string, init: RequestInit = {}): Promise<Response> {
   const body = init.body ? JSON.parse(String(init.body)) : {}
   const url = new URL(path, 'http://mock')
+  const mine = await adminHandle(url.pathname + url.search, body, init, me); if (mine) return mine
   switch (url.pathname) {
     case '/api/config':
       return json({ region: 'ap-southeast-2', prefix: 'trace', userPoolId: 'mock', clientId: 'mock', events: { http: '', realtime: '' }, features: { passkeys: true, email: true, voice: true, ops: true } })
