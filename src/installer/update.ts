@@ -55,7 +55,7 @@ import {
 import { cdkBin, cdkDeployArgs, runStreaming } from './bootstrap.js'
 import { checkToken, deleteVariable, getVariable, repositoryDefaultBranch, setSecret, setVariable } from './github.js'
 import { deployEdge, withAcl } from './edge.js'
-import { type PendingEntry, type PendingIo, type PendingRecord, addPending, markAdded, markAttempt, parsePending, s3PendingIo } from './pending.js'
+import { FLAT_NOTE, type PendingEntry, type PendingIo, type PendingRecord, addPending, markAdded, markAttempt, parsePending, s3PendingIo } from './pending.js'
 import { InstallationRecordSchema } from './record.js'
 
 /** What the update talks to (tests replace every one). */
@@ -201,12 +201,14 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
   }
   // the ones an earlier update added first (they are projects of the stack now), then the new ones
   const carried = pending.filter((p) => p.record.status === 'added').map((p) => ({ ...p, record: { ...p.record, status: 'pending' as const, attempts: 0 } }))
-  const kept = addPending(props as InfraInput, carried, (r) => pending.find((p) => p.record.repo.toLowerCase() === r)?.record.branch ?? 'main')
+  const kept = addPending(props as InfraInput, carried, (r) => pending.find((p) => p.record.repo.toLowerCase() === r)?.record.branch ?? 'main', { deployed: true })
   const grown = addPending(kept.props, fresh, (r) => branches.get(r) ?? 'main')
   props = grown.props as Record<string, unknown>
   for (const k of kept.skipped) say(`${k.repo}, added by an earlier update, is no longer deployed by it: ${k.why}.`)
   for (const k of grown.skipped) say(`${k.repo} (created in the web app) is not added by this update: ${k.why}.`)
-  if (grown.added.length) say(`Adding ${grown.added.map((x) => x.repo).join(', ')} (created in the web app): ${grown.added.length === 1 ? 'its' : 'their'} agent, memory, knowledge base and build runner.`)
+  const flat = InfraPropsSchema.parse(props).layout === 'flat'
+  if (grown.added.length) say(`Adding ${grown.added.map((x) => x.repo).join(', ')} (created in the web app): ${grown.added.length === 1 ? 'its' : 'their'} agent, memory${flat ? '' : ', knowledge base'} and build runner${flat ? ' (this installation keeps every project in one stack, the flat layout: no knowledge base)' : ''}.`)
+  if (flat) d.summary(FLAT_NOTE)
   const mark = async (key: string, rec: PendingRecord): Promise<void> => {
     try { await d.pending?.put(creds, region, bucket, key, JSON.stringify(rec, null, 2)) } catch (e) { log(`Could not update ${key} (${redact(message(e))}).`) }
   }

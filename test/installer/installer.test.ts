@@ -1457,7 +1457,7 @@ describe('the web app\'s WAF outside us-east-1', () => {
       outputs: async () => OUTPUTS,
       saveRecord: async (_c, _r, _b, _k, text) => { saved.push(text) },
       edge: {
-        outputs: async (stack) => (stack === 'CDKToolkit' ? (edge.toolkit ? { BootstrapVersion: '27' } : null) : (edge.exists ?? true) ? { WebAclArn: ACL } : null),
+        outputs: async (stack) => (stack === 'CDKToolkit' ? (edge.toolkit ? ({ BootstrapVersion: '27' } as Record<string, string>) : null) : (edge.exists ?? true) ? ({ WebAclArn: ACL } as Record<string, string>) : null),
         remove: async (stack) => { removed.push(stack) },
       },
     })

@@ -20,6 +20,7 @@ import { Loading, QueryError, SkeletonRows } from '@/components/states'
 import { type Status, StatusBadge } from '@/components/status-badge'
 import { WaitLine } from '@/components/wait-line'
 import { useTraceContext } from '@/components/chat/context'
+import { LayoutSection } from '@/components/installation/layout'
 import { call, projectName } from '@/lib/api'
 import type { IntegrationName, IntegrationStatus } from '@/lib/admin-types'
 import { loadConfig } from '@/lib/config'
@@ -144,6 +145,10 @@ function Installation() {
         <p className="mt-2 text-xs text-muted-foreground">
           Not shown yet, because the API has no read for them: the graphics card image build, each project's knowledge base sync state and its build runner's own health. They will appear here as Wait lines when the API reports them.
         </p>
+      </Section>
+
+      <Section label="Projects">
+        <LayoutSection />
       </Section>
 
       <Section label="Optional keys">

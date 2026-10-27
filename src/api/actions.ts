@@ -96,6 +96,7 @@
  *   actions-me.ts        also policy.get, policy.set
  *   actions-prompts.ts   prompts.chat (the chat agent's editable instructions as the installation has them)
  *   actions-voice.ts     voice.vocabulary, voice.vocabulary.sync (dictation's project words)
+ *   actions-layout.ts    installation.layout (flat or nested, what that means, and how to move)
  */
 import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -136,6 +137,7 @@ import { SKILL_ACTIONS } from './actions-skills.js'
 import { PROJECT_ACTIONS } from './actions-projects.js'
 import { PROMPT_ACTIONS } from './actions-prompts.js'
 import { VOICE_ACTIONS } from './actions-voice.js'
+import { LAYOUT_ACTIONS } from './actions-layout.js'
 import type { CognitoUser } from './aws.js'
 
 export {
@@ -644,6 +646,7 @@ export const ACTIONS = {
   ...SKILL_ACTIONS,
   ...PROMPT_ACTIONS,
   ...VOICE_ACTIONS,
+  ...LAYOUT_ACTIONS,
 } satisfies Record<string, Action<z.ZodType>>
 
 export type ActionName = keyof typeof ACTIONS

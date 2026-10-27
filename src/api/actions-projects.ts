@@ -31,6 +31,7 @@ import { BuildSchema, LATER_STAGES, TEMPLATES, type Template, TEMPLATE_NAMES, jo
 import { forgetNoJourney } from '../core/journey-store.js'
 import { register } from '../core/onboard.js'
 import { projectSlug } from '../core/project.js'
+import { FLAT_UPDATE_MAX } from '../installer/pending.js'
 import { ActionError, type Context, Repo, def, hashOf, label, storeAt, writeJourney } from './action-kit.js'
 
 export interface Member { sub: string; email: string | null; class: PersonClass | null; part: Part; admin: boolean; can_sign: boolean }
@@ -90,8 +91,14 @@ async function recordPending(ctx: Context, repo: string, body: Record<string, un
  * `owner/repo@branch` of trace's own repository), the next run of its update-installation job, which a change to that
  * branch starts (or an admin, running its ci workflow on that branch by hand); without it, the next run of the installer.
  */
-export function cloudWait(selfUpdate: string | undefined = process.env.TRACE_SELF_UPDATE): string {
+export function cloudWait(selfUpdate: string | undefined = process.env.TRACE_SELF_UPDATE, layout: string | undefined = process.env.TRACE_LAYOUT): string {
   const m = /^([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)@(.+)$/.exec(selfUpdate?.trim() ?? '')
+  // a flat installation (every project in one stack): no knowledge base, and the update adds projects only up to a point
+  const flat = layout === 'flat'
+    ? ` This installation keeps every project in one stack (the flat layout): the project gets no knowledge base, and ${m ? `the update adds it only while there are fewer than ${FLAT_UPDATE_MAX} projects, else the next installer run does` : 'about 20 projects fit'}. Admin › Installation says how to move to one nested stack per project.`
+    : ''
+  if (m && flat) return `The project's agent is added at the next update of the installation: when ${m[1]}'s ${m[2]} branch next changes, its ci workflow deploys the installation with this project (usually within an hour of the merge).${flat}`
+  if (!m && flat) return `The project's agent is added the next time an admin runs the installer (\`tracectl install\`), which takes in every project created here.${flat}`
   if (!m) return 'The project\'s agent and knowledge base are added the next time an admin runs the installer (`tracectl install`), which takes in every project created here.'
   return `The project's agent and knowledge base are added at the next update of the installation: when ${m[1]}'s ${m[2]} branch next changes, its ci workflow deploys the installation with this project (usually within an hour of the merge). An admin can start it now by running that workflow on ${m[2]} by hand (Actions → ci → Run workflow), or by running the installer.`
 }

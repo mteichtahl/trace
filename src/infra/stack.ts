@@ -509,6 +509,8 @@ export class TraceStack extends Stack {
         TRACE_INTEGRATIONS_PREFIX: integrationsPrefix(cfg.prefix),
         // names the projects' dictation vocabularies (<prefix>-<hash>-<language>: src/api/actions-voice.ts)
         TRACE_PREFIX: cfg.prefix,
+        // what a project created in the web app gets, and how this installation can move (src/api/actions-layout.ts)
+        TRACE_LAYOUT: cfg.layout,
         // where this installation's self-update runs (projects.create says when a new project's agent arrives)
         ...(cfg.selfUpdate ? { TRACE_SELF_UPDATE: `${cfg.selfUpdate.repository}@${cfg.selfUpdate.branch}` } : {}),
         ...memoryEnv,

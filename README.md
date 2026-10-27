@@ -432,6 +432,17 @@ The move is therefore three deploys in a row, run by the installer:
 Workflows that run between the second deploy and the variable update fail; re-run them. If a deploy fails, run the
 installer again: it carries on from the layout the stack is then in.
 
+**What a flat installation gets, and why the move is the way on.** Projects created in the web app are added to a flat
+installation by the self-update too, while it holds fewer than 15 projects (`FLAT_UPDATE_MAX`, src/installer/pending.ts;
+each project is about 21 of the stack's 500 resources, and an unattended deploy keeps room for trace's own changes);
+past that, by the next installer run. They get their agent, memory and build runner, but no knowledge base, CPU queue or
+per-project events topic, so an agent waiting in `journey.ask` checks the record on its timer. Giving the flat layout
+those was rejected: the knowledge base (5 resources), the CPU job definition (1) and the events topic with its policy
+and rule (3) would take 20 projects past 500 resources, so the flat cap would drop to about 15 for every existing
+installation. The self-update never moves the layout, because the move deletes every project's memory records, which
+is a person's call; the installer offers it ("Move to one nested stack per project"), and the app says all of this on
+New project and Admin › Installation (`installation.layout`), with the move's steps and what it costs.
+
 **Upgrading an installation from before per-project roles.** The next installer run replaces the single worker
 runtime (`<prefix>_agent`), its role, the one GitHub OIDC role (`<prefix>-github-actions-<region>`) and the one GPU
 job definition with one of each per project, and rewrites every repository's `TRACE_AWS_ROLE` and

@@ -290,6 +290,9 @@ describe('inactive memories in both layouts', () => {
 describe('the flat layout and the move to nested stacks', () => {
   it('keeps every project in the parent, with every output, for installations made before nested stacks', () => {
     const s = synth(InfraPropsSchema.parse({ ...base, layout: 'flat' }), 'Flat')
+    // the API is told the layout, so the app can say what a flat installation gives a project (installation.layout)
+    const apiEnv = (Object.values(s.parent.findResources('AWS::BedrockAgentCore::Runtime')) as { Properties: { AgentRuntimeName: string; EnvironmentVariables: Record<string, unknown> } }[]).find((r) => r.Properties.EnvironmentVariables.TRACE_AGENT_MODE === 'api')
+    expect(apiEnv?.Properties.EnvironmentVariables.TRACE_LAYOUT).toBe('flat')
     expect(s.nested.size).toBe(0)
     const outputs = json(s.parent).Outputs ?? {}
     expect((outputs as Record<string, { Value: unknown }>).Layout?.Value).toBe('flat')

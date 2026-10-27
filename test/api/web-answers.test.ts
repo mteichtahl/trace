@@ -79,6 +79,10 @@ describe('the answers the web app reads', () => {
       'chats.append': { args: { repo: REPO, messages: [{ text: 'A new question' }] }, result: await run(USER, 'chats.append', { repo: REPO, messages: [{ text: 'A new question' }] }) },
       'chats.rename': { args: { repo: REPO, thread: t.thread.id, title: 'Regulator' }, result: await run(USER, 'chats.rename', { repo: REPO, thread: t.thread.id, title: 'Regulator' }) },
       'chats.recall': { args: { repo: REPO }, result: await run(USER, 'chats.recall', { repo: REPO }) },
+      // the small gaps: what Admin › Installation and New project read, and what the backend reads for voice and chat
+      'installation.layout': { args: {}, result: (await perform('installation.layout', {}, { principal: USER, deps: { ...deps, layout: 'flat' } })).result },
+      'prompts.chat': { args: {}, result: await run(USER, 'prompts.chat') },
+      'voice.vocabulary': { args: { repo: REPO, language: 'en-AU' }, result: (await perform('voice.vocabulary', { repo: REPO, language: 'en-AU' }, { principal: USER, deps: { ...deps, installationPrefix: 'trace', vocabularies: async () => ({ get: async () => ({ state: 'READY' as const }) }) } })).result },
     }) as Record<string, unknown>
     if (process.env.TRACE_WRITE_ANSWERS) writeFileSync(OUT, `${JSON.stringify(answers, null, 2)}\n`)
     const kept = JSON.parse(readFileSync(OUT, 'utf8')) as Record<string, unknown>

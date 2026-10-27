@@ -94,7 +94,7 @@ describe('deploying it (the installer and the self-update)', () => {
       calls,
       deps: {
         cdk: async (args: string[], env: Record<string, string>) => { calls.push({ args, env }); return args[0] === 'deploy' ? (o.code ?? 0) : 0 },
-        outputs: async (stack: string) => (stack === 'CDKToolkit' ? (o.toolkit === false ? null : { BootstrapVersion: '27' }) : o.acl === null ? null : { [EDGE_ACL_OUTPUT]: o.acl ?? ACL }),
+        outputs: async (stack: string) => (stack === 'CDKToolkit' ? (o.toolkit === false ? null : ({ BootstrapVersion: '27' } as Record<string, string>)) : o.acl === null ? null : ({ [EDGE_ACL_OUTPUT]: o.acl ?? ACL } as Record<string, string>)),
         log: () => undefined,
       },
     }
