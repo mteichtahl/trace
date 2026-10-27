@@ -91,6 +91,12 @@ export async function onboardSample(token: string, repo: string, branch: string,
       mkdirSync(dirname(join(work, f.path)), { recursive: true })
       writeFileSync(join(work, f.path), f.content)
     }
+    // its project database, so the settings land in it (a scratch copy has no .git for the store to find the root by)
+    const { PROJECT_SCHEMA, open } = await import('../core/store.js')
+    mkdirSync(join(work, '.trace'), { recursive: true })
+    const db = open(join(work, '.trace', 'project.db'), { wal: false })
+    db.exec(PROJECT_SCHEMA)
+    db.close()
     let commit: string | null = null
     const lines: string[] = []
     const under = await hasFile(token, repo, branch, '.trace/project.db') && await hasFile(token, repo, branch, '.github/workflows/trace-worker.yml')
