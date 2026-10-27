@@ -32,8 +32,9 @@
  *  11 people     invite each person to Cognito, put them in their class's group (admin, user, guest), and record
  *                the projects they are assigned to
  *  12 local      save the installation on this machine so `trace login` and `trace remote …` work
- *  13 release    (agents.publishImages) set this account up to publish trace's images (src/installer/release.ts);
- *                a failure is reported, and everything else stays installed
+ *  13 release    (agents.publishImages: by default, when the token administers trace's source repository) set this
+ *                account up to publish trace's images and start the first release (src/installer/release.ts); a
+ *                failure is reported, and everything else stays installed
  *  14 gpu        wait for the GPU image build the deploy started (the stack does not wait for it, so a broken GPU
  *                image never rolls back the core) and start it again if an earlier one failed; a failure here is
  *                reported, and everything else stays installed. The wait is a timer (every 30 s: AWS cannot send
@@ -409,7 +410,7 @@ export function plan(a: Answers, existing?: Existing | null, prev?: Answers | nu
     ['local', 'Save this installation locally', '~/.trace/client.db, so `trace login` works here'],
     ['release', 'Publish trace\'s images', a.agents.publishImages
       ? `set this account up to publish trace's images (\`trace release setup\`): CDK in ${RELEASE_REGION} if needed, the ${RELEASE_STACK} stack there (ECR Public ${Object.values(RELEASE_REPOSITORIES).join(' and ')}, and a release role for ${SOURCE}'s main and v* tags), the registry's default alias read by API, ${SOURCE}'s TRACE_RELEASE_ROLE and TRACE_IMAGE_REGISTRY, and its privileged CodeBuild runner ${SELF_CI_PROJECT}`
-      : 'not chosen (Advanced → "Publish trace\'s images from this account", or `trace release setup` later)'],
+      : `off: by default only the installation whose token administers ${SOURCE} publishes (Advanced → "Publish trace's images")`],
     ['gpu', 'The GPU image', props.gpu.enabled
       ? 'after trace is ready: wait for the GPU image the deploy started (copied, or built on amd64: the first build takes 30–60 minutes) and start it again if an earlier one failed. GPU and CPU jobs need it, nothing else does: you can use trace meanwhile'
       : 'GPU jobs are off'],
@@ -574,7 +575,8 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     // saved for the next run: what was decided from the preflight stays to be decided again (a quota raised since turns
     // GPU jobs on), and once onboarding is done a created repository is an existing one
     const remember = (x: Answers, onboarded = false): void => saveAnswers({ answers: {
-      ...x, agents: { ...x.agents, gpuEnabled: input.agents.gpuEnabled, cpuEnabled: input.agents.cpuEnabled, knowledgeBase: input.agents.knowledgeBase },
+      // what was derived stays derived: worked out again next time (a registry published since, a token that changed)
+      ...x, agents: { ...x.agents, gpuEnabled: input.agents.gpuEnabled, cpuEnabled: input.agents.cpuEnabled, knowledgeBase: input.agents.knowledgeBase, publishImages: input.agents.publishImages, imageRegistry: input.agents.imageRegistry },
       ...(onboarded ? { projects: x.projects.map((p) => ({ ...p, create: null })) } : {}),
     } })
     if (gens.changed.length) {
@@ -886,7 +888,7 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     remember(a, true)
     saveAnswers({ traceVersion: (await import('./lifecycle.js')).traceVersion(), ...(runnerCredential ? { runnerCredential } : {}) })
     set('local', 'done')
-    // 13 — publishing trace's images from this account (only when asked); never fatal: trace is installed
+    // 13 — publishing trace's images from this account (its owner's install, or when asked); never fatal: trace is installed
     current = 'release'
     if (!a.agents.publishImages) set('release', 'skipped')
     else {

@@ -206,8 +206,9 @@ Both images (the agent's, arm64; the GPU and CPU jobs', amd64) are made by CodeB
   `scripts/resolve-image.mjs` reads the tag's digest from the registry and checks it against the manifest's own
   bytes, the image is pulled by that digest, its digest is checked again after the pull, and only then is it re-tagged
   and pushed. When the tag is not published (an unreleased commit, a fork), or no registry is set, it builds instead.
-  `<registry>` is `PUBLISHED_REGISTRY` in `src/infra/props.ts` (set once at release time; empty, so always built,
-  until then), or Advanced → "Published images registry".
+  `<registry>` is found at install time: the source repository's `trace-images` release, which publishing writes
+  (below), names it. Nothing published yet, so always built until then. Advanced → "Published images registry"
+  overrides it, and `PUBLISHED_REGISTRY` in `src/infra/props.ts` can pin one for a fork; neither is needed.
 
   AgentCore would also run an image straight from `public.ecr.aws` (its `containerUri` accepts it), and Batch could
   pull one; trace copies it anyway, so the runtimes and jobs pull from the account's own registry in their region (no
@@ -224,11 +225,10 @@ Lambda bundling need the lock file: `npm run build` copies both into `agent/`, w
 ### Publishing images
 
 trace's own images are published to Amazon ECR Public from one AWS account, the project owner's, so every
-installation can copy them. Setting that up needs no console:
-
-```sh
-trace release setup --publish       # or Advanced → "Publish trace's images from this account" in the installer
-```
+installation can copy them. Publishing is a step of the install itself, with no prework: when the GitHub token you
+install with administers trace's source repository, the installer sets publishing up from that account and starts
+the first release (the preflight says so, and Advanced → "Publish trace's images" turns it on or off). Nothing is
+done in the console, and nothing is edited or committed. `trace release setup --publish` does the same on its own.
 
 It (`src/installer/release.ts`):
 
@@ -246,14 +246,16 @@ It (`src/installer/release.ts`):
 4. makes sure trace's CodeBuild runner `trace-ci` exists and is privileged (the workflow builds images): TraceCi,
    through a GitHub connection when one is authorized already, else with the token as CodeBuild's GitHub source
    credential;
-5. with `--publish`, starts the first release (`workflow_dispatch`) and prints where the images appear
+5. records the registry in the source repository's `trace-images` release (a pre-release, never "latest"), where every
+   installer finds it;
+6. starts the first release (`workflow_dispatch`; the CLI with `--publish`) and prints where the images appear
    (`public.ecr.aws/<alias>/trace-agent`, `https://gallery.ecr.aws/<alias>/trace-agent`, and the same for `trace-gpu`).
 
 From then on every merge to `main` and every `v*` tag publishes (`.github/workflows/release-images.yml`, which does
 nothing until both variables are set). It runs on `trace-ci`, builds both images with BuildKit, caches in the registry
 itself (`:cache`, mode=max), attaches an OCI provenance attestation, tags the content tag plus `latest` on main and
-`vX.Y.Z` on a tag, and records each pushed digest in the job summary. To make installations look there by default,
-set `PUBLISHED_REGISTRY` in `src/infra/props.ts` to the registry setup printed.
+`vX.Y.Z` on a tag, and records each pushed digest in the job summary. Installations look there from then on by
+themselves: each install reads the `trace-images` release, and copies its version's images when they are published.
 
 ### Upgrading and uninstalling
 

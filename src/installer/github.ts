@@ -189,24 +189,32 @@ export function accessNote(a: RepoAccess): string | null {
   return `${a.repo}: the token lacks ${a.missing.join(', ')}: ${parts.join('; ')}.`
 }
 
+/** GET a path, its JSON, or null on 404 (or 403: a token that cannot see it). */
+export async function getOrNull(token: string, path: string, fetchImpl?: Fetch): Promise<Record<string, unknown> | null> {
+  try { return (await new Github(token, fetchImpl).request('GET', path, z.record(z.string(), z.unknown()))).data } catch (e) {
+    if (e instanceof GithubError && [403, 404].includes(e.status)) return null
+    throw e
+  }
+}
+
 /** Can repositories outside trace's own use its actions (`uses: <source>/harness/actions/...`)? A public source:
  * always. A private one: only with its Actions access level `user` or `organization`, which its admin may set. */
-export async function sourceAccess(token: string, source: string, fetchImpl?: Fetch): Promise<{ ok: boolean; private: boolean; level: string | null; canFix: boolean; detail: string }> {
+export async function sourceAccess(token: string, source: string, fetchImpl?: Fetch): Promise<{ ok: boolean; private: boolean; level: string | null; canFix: boolean; admin: boolean; detail: string }> {
   const gh = new Github(token, fetchImpl)
   let repo: { private: boolean; permissions?: { admin?: boolean | undefined } | undefined; owner: { type: string } }
   try {
     repo = (await gh.request('GET', `/repos/${source}`, z.object({ private: z.boolean(), permissions: z.object({ admin: z.boolean().optional() }).loose().optional(), owner: z.object({ type: z.string() }).loose() }).loose())).data
   } catch (e) {
-    if (e instanceof GithubError && [403, 404].includes(e.status)) return { ok: false, private: true, level: null, canFix: false, detail: `the token cannot see ${source}, whose actions every trace workflow uses: ask its owner for access` }
+    if (e instanceof GithubError && [403, 404].includes(e.status)) return { ok: false, private: true, level: null, canFix: false, admin: false, detail: `the token cannot see ${source}, whose actions every trace workflow uses: ask its owner for access` }
     throw e
   }
-  if (!repo.private) return { ok: true, private: false, level: null, canFix: false, detail: `${source} is public: every repository can use its actions` }
+  if (!repo.private) return { ok: true, private: false, level: null, canFix: false, admin: Boolean(repo.permissions?.admin), detail: `${source} is public: every repository can use its actions` }
   let level: string | null = null
   try { level = (await gh.request('GET', `/repos/${source}/actions/permissions/access`, z.object({ access_level: z.string() }).loose())).data.access_level } catch { level = null }
   const ok = level === 'user' || level === 'organization' || level === 'enterprise'
   const admin = Boolean(repo.permissions?.admin)
   return {
-    ok, private: true, level, canFix: !ok && admin,
+    ok, private: true, level, canFix: !ok && admin, admin,
     detail: ok ? `${source} is private and lets repositories of the same ${level === 'user' ? 'account' : level} use its actions`
       : `${source} is private and its actions are not shared (access level ${level ?? 'unknown'}): workflows in other repositories cannot use them. ${admin ? 'trace can set its Actions access to "accessible from repositories owned by the same ' + (repo.owner.type === 'Organization' ? 'organization' : 'user') + '".' : `Its admin must allow it in ${source}'s Settings → Actions → General → Access.`}`,
   }

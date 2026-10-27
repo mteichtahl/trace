@@ -3,10 +3,11 @@
 # `<registry>/trace-gpu` (linux/amd64, AWS Batch), each tagged with the content tag of scripts/image-tag.mjs (the same
 # hash an installation computes), plus `latest` on main and `vX.Y.Z` on a release tag.
 #
-# Set up once with `trace release setup` (README "Publishing images"): it deploys TraceRelease (src/infra/release.ts:
-# the two ECR Public repositories and the release role), reads the registry's default alias, and sets this
-# repository's variables TRACE_RELEASE_ROLE and TRACE_IMAGE_REGISTRY (public.ecr.aws/<alias>). Until both are set this
-# workflow does nothing.
+# Set up by the owner's install itself, or `trace release setup` (README "Publishing images"): it deploys
+# TraceRelease (src/infra/release.ts: the two ECR Public repositories and the release role), reads the registry's
+# default alias, sets this repository's variables TRACE_RELEASE_ROLE and TRACE_IMAGE_REGISTRY (public.ecr.aws/<alias>),
+# and records the registry in the trace-images release, where installations find it. Until both variables are set
+# this workflow does nothing.
 #
 # It runs, like every job here, on trace's own CodeBuild runner project trace-ci (never a GitHub-hosted runner), which
 # `trace release setup` makes privileged for Docker. BuildKit builds both images (QEMU for arm64 on the x86 runner),

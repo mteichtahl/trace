@@ -4,7 +4,7 @@
  * variables, trace's own CodeBuild runner (privileged, through a connection or the token), and the first release.
  */
 import { describe, expect, it } from 'vitest'
-import { type RegistryInfo, type ReleaseDeps, defaultAlias, releaseSetup } from '../../src/installer/release.js'
+import { REGISTRY_TAG, type RegistryInfo, type ReleaseDeps, defaultAlias, parseRegistry, publishedRegistry, registryRecord, releaseSetup } from '../../src/installer/release.js'
 
 const ROLE = 'arn:aws:iam::123456789012:role/trace-release'
 const alias = (name: string, status = 'ACTIVE'): RegistryInfo => ({ registryId: '123456789012', aliases: [{ name, status, defaultRegistryAlias: true, primaryRegistryAlias: true }] })
@@ -23,6 +23,7 @@ function deps(over: Partial<ReleaseDeps> & { registriesSeq?: RegistryInfo[][] } 
     catalog: async (n) => { calls.push(`catalog ${n}`) },
     setVariable: async (repo, name, value) => { vars.set(`${repo}:${name}`, value); return 'created' },
     dispatch: async (repo, wf, ref) => { calls.push(`dispatch ${repo} ${wf} ${ref}`) },
+    recordRegistry: async (repo, body) => { calls.push(`record ${repo} ${parseRegistry(body)}`); return 'created' },
     runnerProject: async () => ({ privileged: true }),
     resolveConnection: async () => ({ name: 'trace-ci-github', ready: false, message: 'none authorized' }),
     sourceCredential: async (ours) => { calls.push(`credential ${ours}`); return { state: 'imported', detail: 'imported' } },
@@ -60,7 +61,8 @@ describe('trace release setup', () => {
     expect(Object.fromEntries(d.vars)).toEqual({ 'mteichtahl/trace:TRACE_RELEASE_ROLE': ROLE, 'mteichtahl/trace:TRACE_IMAGE_REGISTRY': 'public.ecr.aws/a1b2c3d4' })
     // trace-ci exists and is privileged: nothing deployed for it
     expect(d.calls.filter((c) => c.includes('TraceCi'))).toEqual([])
-    expect(d.calls.at(-1)).toBe('dispatch mteichtahl/trace release-images.yml main')
+    // the registry recorded where installations find it, before the first release starts
+    expect(d.calls.slice(-2)).toEqual(['record mteichtahl/trace public.ecr.aws/a1b2c3d4', 'dispatch mteichtahl/trace release-images.yml main'])
     expect(r).toMatchObject({
       registry: 'public.ecr.aws/a1b2c3d4', roleArn: ROLE, dispatched: true, credential: null,
       images: ['public.ecr.aws/a1b2c3d4/trace-agent', 'public.ecr.aws/a1b2c3d4/trace-gpu'],
@@ -95,5 +97,23 @@ describe('trace release setup', () => {
     await expect(releaseSetup(deps({ outputs: async () => null }), { account: '1', ciRegion: 'us-east-1' })).rejects.toThrow(/no output ReleaseRoleArn/)
     const r = await releaseSetup(deps({ catalog: async () => { throw new Error('denied') } }), { account: '1', ciRegion: 'us-east-1' })
     expect(r.registry).toBe('public.ecr.aws/a1b2c3d4')
+  })
+})
+
+describe('where installations find the published images', () => {
+  it('is the trace-images release, whose body names the registry for a person and in its marker line', async () => {
+    const body = registryRecord('public.ecr.aws/a1b2c3d4', 'mteichtahl/trace')
+    expect(body).toContain('`public.ecr.aws/a1b2c3d4/trace-agent`')
+    expect(parseRegistry(body)).toBe('public.ecr.aws/a1b2c3d4')
+    const asked: string[] = []
+    const get = (b: { body?: string | null } | null) => async (p: string) => { asked.push(p); return b }
+    expect(await publishedRegistry(get({ body }), 'mteichtahl/trace')).toBe('public.ecr.aws/a1b2c3d4')
+    expect(asked).toEqual([`/repos/mteichtahl/trace/releases/tags/${REGISTRY_TAG}`])
+    // no release (nothing published yet), or one whose body names no registry: build
+    expect(await publishedRegistry(get(null), 'mteichtahl/trace')).toBeNull()
+    expect(await publishedRegistry(get({ body: 'edited by hand' }), 'mteichtahl/trace')).toBeNull()
+    expect(await publishedRegistry(get({ body: null }), 'mteichtahl/trace')).toBeNull()
+    // only an ECR Public registry is taken from it
+    expect(parseRegistry('<!-- trace-registry: evil.example.com/x -->')).toBeNull()
   })
 })

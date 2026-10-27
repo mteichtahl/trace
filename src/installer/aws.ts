@@ -378,7 +378,11 @@ export async function liveFacts(creds: AwsCredentialIdentity, a: Answers, token:
   const region = a.aws.region || profileRegion || 'us-east-1'
   const d = await liveDeps(creds, region, token)
   const quiet = <T>(p: Promise<T>): Promise<T | undefined> => p.catch(() => undefined)
-  const [sts, info, email, models, gpuQuota, cpuQuota, s3vectors] = await Promise.all([
+  const gh = await import('./github.js')
+  const { SOURCE } = await import('../core/onboard.js')
+  const { PUBLISHED_REGISTRY } = await import('../infra/props.js')
+  const { publishedRegistry } = await import('./release.js')
+  const [sts, info, email, models, gpuQuota, cpuQuota, s3vectors, source, registry] = await Promise.all([
     d.sts(),
     a.github.login ? Promise.resolve(undefined) : quiet(d.token()),
     a.adminEmail ? Promise.resolve(undefined) : quiet(d.email()),
@@ -386,11 +390,14 @@ export async function liveFacts(creds: AwsCredentialIdentity, a: Answers, token:
     a.agents.gpuEnabled === null ? quiet(d.quota(a.agents.gpuSpot ? QUOTAS.gpuSpot : QUOTAS.gpuOnDemand)) : Promise.resolve(undefined),
     a.agents.cpuEnabled === null ? quiet(d.quota(a.agents.cpuSpot ? QUOTAS.cpuSpot : QUOTAS.cpuOnDemand)) : Promise.resolve(undefined),
     a.agents.knowledgeBase === null ? quiet(d.s3vectors()) : Promise.resolve(undefined),
+    a.agents.publishImages === null ? quiet(gh.sourceAccess(token, SOURCE)) : Promise.resolve(undefined),
+    a.agents.imageSource === 'prebuilt' && !a.agents.imageRegistry && !PUBLISHED_REGISTRY ? quiet(publishedRegistry((p) => gh.getOrNull(token, p), SOURCE)) : Promise.resolve(undefined),
   ])
   return {
     account: sts.account, ...(profileRegion ? { profileRegion } : {}),
     ...(info ? { login: info.login } : {}), ...(email !== undefined ? { email } : {}), ...(models ? { models } : {}),
     ...(gpuQuota !== undefined ? { gpuQuota } : {}), ...(cpuQuota !== undefined ? { cpuQuota } : {}), ...(s3vectors !== undefined ? { s3vectors } : {}),
+    ...(source !== undefined ? { sourceAdmin: source.admin } : {}), ...(registry !== undefined ? { publishedRegistry: registry } : {}),
   }
 }
 

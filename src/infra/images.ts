@@ -8,7 +8,7 @@
  *              registry and checks it against the manifest's bytes, the image is pulled by that digest (pinned: a tag
  *              moved meanwhile can't change what is copied), its digest checked again after the pull, re-tagged and
  *              pushed. Minutes instead of the build's 20–60. When the tag is not published (an unreleased commit, a
- *              fork, or no registry set: props.ts PUBLISHED_REGISTRY empty) it builds instead.
+ *              fork, or nothing published yet: no registry found) it builds instead.
  *
  *              Copied rather than run from ECR Public, although AgentCore's containerUri accepts public.ecr.aws: the
  *              runtimes and the Batch jobs then pull from the account's own registry in their region (no public pull

@@ -64,6 +64,24 @@ describe('the answers', () => {
     expect(wrong.missing.join(' ')).toMatch(/for account 222222222222, not 111111111111/)
   })
 
+  it('publish from the owner\'s install, and find the published images, with no prework', () => {
+    const base = { account: '123456789012', login: 'marc', email: 'marc@example.com' }
+    const a = AnswersSchema.parse({})
+    expect(a.agents.publishImages).toBeNull()
+    // the token administers the source repository: this install publishes; the images it finds, it copies
+    const owner = resolveAnswers(a, { ...base, sourceAdmin: true, publishedRegistry: 'public.ecr.aws/a1b2c3d4' })
+    expect(owner.answers.agents).toMatchObject({ publishImages: true, imageRegistry: 'public.ecr.aws/a1b2c3d4' })
+    expect(owner.derived.join(' ')).toMatch(/publishing trace's images from this account.*images copied from public\.ecr\.aws\/a1b2c3d4/)
+    // anyone else: no publishing; nothing published yet: built here
+    const other = resolveAnswers(a, { ...base, sourceAdmin: false, publishedRegistry: null })
+    expect(other.answers.agents).toMatchObject({ publishImages: false, imageRegistry: '' })
+    expect(other.derived.join(' ')).toMatch(/images built in this account/)
+    // an answer wins either way
+    const chosen = resolveAnswers(AnswersSchema.parse({ agents: { publishImages: false, imageRegistry: 'public.ecr.aws/mine' } }), { ...base, sourceAdmin: true, publishedRegistry: 'public.ecr.aws/a1b2c3d4' })
+    expect(chosen.answers.agents).toMatchObject({ publishImages: false, imageRegistry: 'public.ecr.aws/mine' })
+    expect(resolveAnswers(AnswersSchema.parse({ agents: { imageSource: 'build' } }), { ...base, publishedRegistry: 'public.ecr.aws/a1b2c3d4' }).answers.agents.imageRegistry).toBe('')
+  })
+
   it('pick the model by geography', () => {
     expect(geography('ap-southeast-2')).toBe('apac')
     expect(geography('eu-central-1')).toBe('eu')
@@ -104,6 +122,7 @@ function deps(over: Partial<PreflightDeps> = {}): PreflightDeps & { calls: strin
     email: t('email', 'marc@example.com'),
     repo: async (r) => { calls.push(`repo ${r}`); return full(r) },
     source: t('source', { ok: true, canFix: false, detail: '' }),
+    publishedRegistry: t('publishedRegistry', null),
     ...over,
   }
 }
@@ -118,6 +137,19 @@ describe('the preflight', () => {
     expect(r.facts).toMatchObject({ account: '123456789012', login: 'marc', email: 'marc@example.com', gpuQuota: 16, s3vectors: true, cdkBootstrapped: true })
     expect(d.calls).toEqual(expect.arrayContaining(['sts', 'agentCore', 'models', 'modelAccess', `quota ${QUOTAS.gpuOnDemand}`, `quota ${QUOTAS.cpuOnDemand}`, 's3vectors', 'cdk', 'stack', 'token', 'email', 'repo marc/board']))
     expect(r.checks.find((c) => c.id === 'bedrock.model')?.detail).toMatch(/us\.anthropic\.claude-sonnet-4-6: the account has access/)
+  })
+
+  it('says where the images come from, and that the owner\'s install publishes them', async () => {
+    const owner = await preflight(IN, deps({ source: async () => ({ ok: true, canFix: false, admin: true, detail: '' }), publishedRegistry: async () => 'public.ecr.aws/a1b2c3d4' }))
+    expect(owner.facts).toMatchObject({ sourceAdmin: true, publishedRegistry: 'public.ecr.aws/a1b2c3d4' })
+    expect(owner.checks.find((c) => c.id === 'images.source')?.detail).toMatch(/copied from public\.ecr\.aws\/a1b2c3d4 by digest/)
+    expect(owner.checks.find((c) => c.id === 'images.publish')?.detail).toMatch(/this install also publishes/)
+    const other = await preflight(IN, deps())
+    expect(other.facts).toMatchObject({ sourceAdmin: false, publishedRegistry: null })
+    expect(other.checks.find((c) => c.id === 'images.source')?.detail).toMatch(/published no images yet: they are built/)
+    expect(other.checks.some((c) => c.id === 'images.publish')).toBe(false)
+    // neither is a reason to stop
+    expect(owner.ok && other.ok).toBe(true)
   })
 
   it('offers to send Anthropic\'s use-case form, or to accept the agreement, and never blocks on model access', async () => {

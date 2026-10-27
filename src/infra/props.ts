@@ -78,10 +78,10 @@ export const ProjectSettingsSchema = z.object({
 }).strict()
 
 /**
- * Where trace's release workflow publishes its images (.github/workflows/release-images.yml, src/infra/release.ts):
- * `public.ecr.aws/<alias>`, the alias being the default one ECR Public gave the publishing account's registry, which
- * `trace release setup` prints. Set once at release time; empty until then, so every installation builds its images.
- * An installation can look elsewhere with Advanced → "Published images registry" (answers agents.imageRegistry).
+ * A pinned registry for trace's published images (`public.ecr.aws/<alias>`), for a fork that wants one. Empty (the
+ * default): nothing to set, ever: each install finds the registry in the source repository's trace-images release,
+ * which publishing writes (src/installer/release.ts publishedRegistry; src/installer/derive.ts), and builds when there
+ * is none. Advanced → "Published images registry" (answers agents.imageRegistry) overrides both.
  */
 export const PUBLISHED_REGISTRY = ''
 
@@ -191,7 +191,8 @@ export const InfraPropsSchema = z.object({
   images: z.object({
     source: z.enum(['prebuilt', 'build']).default('prebuilt'),
     /** where the published images are: `<registry>/trace-agent:<tag>` and `<registry>/trace-gpu:<tag>`; empty: none
-     * published yet (always built). PUBLISHED_REGISTRY unless overridden (answers agents.imageRegistry) */
+     * published yet (always built). The answers' (agents.imageRegistry, found at install time when not given), else
+     * PUBLISHED_REGISTRY */
     registry: z.string().regex(/^([a-z0-9.-]+(:\d+)?(\/[a-z0-9._-]+)*)?$/, 'a registry such as public.ecr.aws/<alias>, or empty').default(PUBLISHED_REGISTRY),
   }).strict().prefault({}),
   /** Where every GitHub Actions job of every project runs: an AWS CodeBuild runner project per repository

@@ -978,6 +978,22 @@ describe('no console step on the default path', () => {
     expect(lines.join('\n')).toMatch(/trace's images publish to public\.ecr\.aws\/a1b2c3d4/)
   })
 
+  it('publishes from the owner\'s install with nothing asked or set beforehand, and from no one else\'s', async () => {
+    for (const sourceAdmin of [true, false]) {
+      const events: { type: string; summary?: string[]; step?: { id: string; status: string } }[] = []
+      const released: string[] = []
+      const a = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, publishImages: null } })
+      const ok = await apply(a, SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
+        ...quiet, cdk: async () => 0, outputs: async () => OUTPUTS,
+        facts: async () => ({ account: '123456789012', login: 'marc', email: 'marc@example.com', sourceAdmin, publishedRegistry: null }),
+        release: async (o) => { released.push(o.account); return { registry: 'public.ecr.aws/a1b2c3d4', roleArn: 'arn:role', images: [], gallery: [], credential: null, dispatched: true } },
+      })
+      expect(ok).toBe(true)
+      expect(released).toEqual(sourceAdmin ? ['123456789012'] : [])
+      expect(events.filter((e) => e.step?.id === 'release').at(-1)?.step?.status).toBe(sourceAdmin ? 'done' : 'skipped')
+    }
+  })
+
   it('reports a failed publishing setup without failing the install', async () => {
     const events: { type: string; summary?: string[]; step?: { id: string; status: string } }[] = []
     const ok = await apply(AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, publishImages: true } }), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {

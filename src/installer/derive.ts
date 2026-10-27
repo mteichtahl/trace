@@ -12,7 +12,13 @@
  *   gpu / cpu      on when the account's quotas allow one job (G and VT instances for the GPU queue, standard
  *                  instances for the CPU queue); off at 0, with how to raise it
  *   knowledgeBase  on where the region has Amazon S3 Vectors
+ *   publishImages  on when the token administers trace's source repository: its owner's install publishes trace's
+ *                  images (src/installer/release.ts), with no prework
+ *   imageRegistry  where trace's images are published: the source's trace-images release (src/installer/release.ts
+ *                  publishedRegistry), unless props.ts PUBLISHED_REGISTRY pins one; none yet, so they are built
  */
+import { SOURCE } from '../core/onboard.js'
+import { PUBLISHED_REGISTRY } from '../infra/props.js'
 import type { Answers } from './answers.js'
 
 /** What the installer found out (each fact may be missing when its check could not run). */
@@ -28,6 +34,10 @@ export interface Facts {
   cpuQuota?: number | null
   /** whether the region has Amazon S3 Vectors, null when unknown */
   s3vectors?: boolean | null
+  /** whether the GitHub token administers trace's source repository (its owner installing: publish its images) */
+  sourceAdmin?: boolean | null
+  /** where the source's images are published (its trace-images release: src/installer/release.ts), null when nowhere */
+  publishedRegistry?: string | null
 }
 
 export const DEFAULT_REGION = 'us-east-1'
@@ -86,12 +96,22 @@ export function resolveAnswers(a: Answers, f: Facts): Resolved {
   if (a.agents.cpuEnabled === null) derived.push(`CPU jobs ${cpuEnabled ? 'on' : gpuEnabled ? `off (the account may run ${f.cpuQuota ?? 0} standard vCPUs; one job asks for ${a.agents.cpuVcpus})` : 'off (they share the GPU side\'s image)'}`)
   const knowledgeBase = a.agents.knowledgeBase ?? (f.s3vectors !== false)
   if (a.agents.knowledgeBase === null) derived.push(`knowledge bases ${knowledgeBase ? 'on' : `off (Amazon S3 Vectors is not available in ${region})`}`)
+  // publishing trace's images is part of its owner's install: on when the token administers the source repository
+  const publishImages = a.agents.publishImages ?? f.sourceAdmin === true
+  if (a.agents.publishImages === null && publishImages) derived.push(`publishing trace's images from this account (the token administers ${SOURCE})`)
+  // the published images: the answers' registry, else props.ts PUBLISHED_REGISTRY when set (infraInput), else the
+  // source's trace-images release; none: the images are built in this account
+  let imageRegistry = a.agents.imageRegistry
+  if (a.agents.imageSource === 'prebuilt' && !imageRegistry && !PUBLISHED_REGISTRY) {
+    if (f.publishedRegistry) { imageRegistry = f.publishedRegistry; derived.push(`images copied from ${imageRegistry} (${SOURCE}'s published images), or built when this version is not there`) }
+    else if (f.publishedRegistry === null) derived.push(`images built in this account (${SOURCE} has published none yet)`)
+  }
   return {
     answers: {
       ...a,
       github: { login },
       aws: { ...a.aws, region, account },
-      agents: { ...a.agents, model, gpuEnabled, cpuEnabled, knowledgeBase },
+      agents: { ...a.agents, model, gpuEnabled, cpuEnabled, knowledgeBase, publishImages, imageRegistry },
       adminEmail,
     },
     derived, missing,

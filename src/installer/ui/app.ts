@@ -30,7 +30,7 @@ interface Preflight {
   checks: Check[]; ok: boolean; token: TokenInfo | null; repos: RepoAccess[]; region: string; profileRegion: string
   facts: {
     account?: string; arn?: string; login?: string; email?: string | null; models?: { id: string; name: string }[]
-    gpuQuota?: number | null; cpuQuota?: number | null; s3vectors?: boolean | null; oidcProvider?: boolean; cdkBootstrapped?: boolean
+    gpuQuota?: number | null; cpuQuota?: number | null; s3vectors?: boolean | null; sourceAdmin?: boolean | null; publishedRegistry?: string | null; oidcProvider?: boolean; cdkBootstrapped?: boolean
     existing?: { status: string; outputs: Record<string, string> } | null
     runnerConnection?: string | null
   }
@@ -87,7 +87,7 @@ const s = {
     cpuEnabled: null as boolean | null, cpuMaxVcpus: 64, cpuSpot: false, cpuVcpus: 16, cpuMemoryMiB: 32_768,
     knowledgeBase: null as boolean | null, libraryGateway: false,
     observability: true, transactionSearch: true, samplingPercent: '', dashboard: true, migrateLayout: false,
-    imageSource: 'prebuilt' as 'prebuilt' | 'build', imageRegistry: '', publishImages: false,
+    imageSource: 'prebuilt' as 'prebuilt' | 'build', imageRegistry: '', publishImages: null as boolean | null,
   },
   /** how the build runners reach GitHub (answers runners): auth 'auto' = an authorized connection when there is one,
    * else the token; connectionArn '' = none named; computeType '' and privileged 'default' = the stack's defaults */
@@ -399,8 +399,9 @@ function advanced(): HTMLElement {
     checkbox('CPU: Spot instances', g.cpuSpot, (v) => { g.cpuSpot = v }),
     h('h3', {}, 'Images'),
     field('Agent and GPU images', select([{ value: 'prebuilt', label: 'trace\'s published images for this version, else built here' }, { value: 'build', label: 'Always build them here (CodeBuild)' }], g.imageSource, (v) => { g.imageSource = v === 'build' ? 'build' : 'prebuilt'; render() })),
-    g.imageSource === 'prebuilt' ? field('Published images registry', input('text', g.imageRegistry, (v) => { g.imageRegistry = v.trim() }, { placeholder: 'empty: trace\'s own (public.ecr.aws/<alias>)' }), 'copied by digest into this account\'s private ECR; built when this version is not there') : null,
-    checkbox('Publish trace\'s images from this account (ECR Public in us-east-1, the release role, and the source repository\'s release variables: all by API)', g.publishImages, (v) => { g.publishImages = v }),
+    g.imageSource === 'prebuilt' ? field('Published images registry', input('text', g.imageRegistry, (v) => { g.imageRegistry = v.trim() }, { placeholder: f?.publishedRegistry ? `empty: ${f.publishedRegistry} (trace's)` : 'empty: wherever trace publishes them (none yet: built here)' }), 'copied by digest into this account\'s private ECR; built when this version is not there') : null,
+    tri('Publish trace\'s images from this account', g.publishImages, f?.sourceAdmin ? 'on: your token administers trace\'s repository' : 'off: only trace\'s owner publishes', (v) => { g.publishImages = v }),
+    g.publishImages === false ? null : h('p', { class: 'muted' }, 'Publishing is part of the install, all by API: ECR Public repositories in us-east-1, a release role for trace\'s main branch and v* tags, the repository variables and release that tell every installation where the images are, and the first release run.'),
     ...buildRunners(),
     h('h3', {}, 'Knowledge bases, gateway, observability'),
     tri('Knowledge bases', g.knowledgeBase, f?.s3vectors === false ? 'off: no S3 Vectors here' : 'on where S3 Vectors is', (v) => { g.knowledgeBase = v }),

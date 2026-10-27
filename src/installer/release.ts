@@ -1,6 +1,7 @@
 /**
- * Publishing trace's images from this AWS account, set up end to end by API (no console step): `trace release setup`,
- * and the installer's Advanced option "Publish trace's images from this account" (src/installer/bootstrap.ts).
+ * Publishing trace's images from this AWS account, set up end to end by API (no console step, no prework): a step of
+ * the install itself whenever the installing token administers trace's source repository (src/installer/bootstrap.ts;
+ * Advanced "Publish trace's images" overrides it either way), and `trace release setup` on its own.
  *
  *   1 bootstrap   CDK in us-east-1 (ECR Public's only region), when it isn't
  *   2 stack       deploy TraceRelease (src/infra/release.ts): the ECR Public repositories trace-agent and trace-gpu,
@@ -15,7 +16,11 @@
  *                 privileged, for Docker) when it is not: TraceCi (src/infra/ci-app.ts) through an authorized GitHub
  *                 connection when there is one, else with the token as CodeBuild's GitHub source credential, so no
  *                 console step either way
- *   6 publish     optionally, the first release run (workflow_dispatch), and where the images will appear
+ *   6 record      the registry recorded where every installation finds it: the source repository's release
+ *                 `trace-images` (a pre-release, never "latest"), whose body names it in a marker line. Installers read
+ *                 it (publishedRegistry) when nothing else says where the images are, so nobody edits or commits a
+ *                 registry anywhere
+ *   7 publish     optionally, the first release run (workflow_dispatch), and where the images will appear
  *
  * Every step is safe to run again. Every AWS and GitHub call is a dependency, so the tests give fakes.
  */
@@ -47,6 +52,8 @@ export interface ReleaseDeps {
   /** GitHub: a repository variable; a workflow_dispatch */
   setVariable(repo: string, name: string, value: string): Promise<string>
   dispatch(repo: string, workflow: string, ref: string): Promise<void>
+  /** the release REGISTRY_TAG on the repository, its body this text (made, or its body updated): 'created' | 'updated' */
+  recordRegistry(repo: string, body: string): Promise<'created' | 'updated'>
   /** the runner project trace-ci in the CI region: null when there is none */
   runnerProject(): Promise<{ privileged: boolean } | null>
   /** the GitHub connection for TraceCi (src/installer/aws.ts resolveConnection with deploy:ci's preferences) */
@@ -71,6 +78,34 @@ export interface ReleaseOptions {
 }
 
 export interface ReleaseResult { registry: string; roleArn: string; images: string[]; gallery: string[]; credential: SourceCredential['state'] | null; dispatched: boolean }
+
+/** The source repository's release that records where its images are published. */
+export const REGISTRY_TAG = 'trace-images'
+
+const MARKER = /<!--\s*trace-registry:\s*(public\.ecr\.aws\/[a-z0-9][a-z0-9._-]*)\s*-->/
+
+/** The release's body: what it is, for a person, and the marker line installers read. */
+export function registryRecord(registry: string, repository: string): string {
+  const repos = Object.values(RELEASE_REPOSITORIES)
+  return [
+    `trace's container images are published to \`${registry}\` (${repos.map((r) => `\`${registry}/${r}\``).join(' and ')}) from ${repository}'s main branch and v* tags, tagged with each content tag, \`latest\` and \`vX.Y.Z\`.`,
+    '',
+    'Installers read this release to find them and copy the image for their version into their own account, pinned by digest; this release has no assets and is not a version of trace.',
+    '',
+    `<!-- trace-registry: ${registry} -->`,
+  ].join('\n')
+}
+
+/** The registry a release body names, or null. */
+export function parseRegistry(body: string | null | undefined): string | null {
+  return MARKER.exec(body ?? '')?.[1] ?? null
+}
+
+/** Where `source`'s images are published, from its REGISTRY_TAG release; null when it has none (nothing published:
+ * installations build their images). Any token that can read the repository can read it. */
+export async function publishedRegistry(get: (path: string) => Promise<{ body?: string | null } | null>, source: string): Promise<string | null> {
+  return parseRegistry((await get(`/repos/${source}/releases/tags/${REGISTRY_TAG}`))?.body)
+}
 
 /** How long to wait for ECR Public to assign the default alias after the first repository: 10 checks, 6 s apart. */
 export const ALIAS_TRIES = 10
@@ -143,7 +178,9 @@ export async function releaseSetup(d: ReleaseDeps, o: ReleaseOptions): Promise<R
   for (const [k, v] of [['TRACE_RELEASE_ROLE', roleArn], ['TRACE_IMAGE_REGISTRY', registry]] as const) d.log(`${repository}: ${k} ${await d.setVariable(repository, k, v)} (${v})`)
   // 5 — the runner it publishes on
   const credential = await ensureCiRunner(d, { repository, ciRegion: o.ciRegion, ...(o.credentialOurs !== undefined ? { credentialOurs: o.credentialOurs } : {}) })
-  // 6 — the first release
+  // 6 — where installations find the registry
+  d.log(`${repository}: release ${REGISTRY_TAG} ${await d.recordRegistry(repository, registryRecord(registry, repository))}: installations find the images there`)
+  // 7 — the first release
   const images = Object.values(RELEASE_REPOSITORIES).map((r) => `${registry}/${r}`)
   const gallery = Object.values(RELEASE_REPOSITORIES).map((r) => `https://gallery.ecr.aws/${alias}/${r}`)
   let dispatched = false
@@ -153,7 +190,6 @@ export async function releaseSetup(d: ReleaseDeps, o: ReleaseOptions): Promise<R
     d.log(`started the release workflow on ${repository} (main): https://github.com/${repository}/actions/workflows/release-images.yml`)
   }
   d.log(`the images will appear at ${images.join(' and ')} (${gallery.join(', ')}), tagged with the content tag, latest and each vX.Y.Z`)
-  d.log(`to have installations look there by default, set PUBLISHED_REGISTRY in src/infra/props.ts to ${registry}; meanwhile an installation can use Advanced → "Published images registry"`)
   return { registry, roleArn, images, gallery, credential, dispatched }
 }
 
@@ -197,6 +233,17 @@ export async function liveReleaseDeps(creds: AwsCredentialIdentity, ciRegion: st
     catalog: async (displayName) => { await ecr(signed.ecrPublic('PutRegistryCatalogData', { displayName })) },
     setVariable: (repo, name, value) => gh.setVariable(token, repo, name, value),
     dispatch: async (repo, workflow, ref) => { await new gh.Github(token).request('POST', `/repos/${repo}/actions/workflows/${workflow}/dispatches`, z.unknown(), { ref }) },
+    recordRegistry: async (repo, body) => {
+      const api = new gh.Github(token)
+      const Release = z.object({ id: z.number() }).loose()
+      let id: number | null = null
+      try { id = (await api.request('GET', `/repos/${repo}/releases/tags/${REGISTRY_TAG}`, Release)).data.id } catch (e) { if (!(e instanceof gh.GithubError && e.status === 404)) throw e }
+      if (id !== null) { await api.request('PATCH', `/repos/${repo}/releases/${id}`, z.unknown(), { body }); return 'updated' }
+      await api.request('POST', `/repos/${repo}/releases`, z.unknown(), {
+        tag_name: REGISTRY_TAG, target_commitish: 'main', name: 'trace\'s published images', body, prerelease: true, make_latest: 'false',
+      })
+      return 'created'
+    },
     runnerProject: async () => {
       const p = (await codebuild.send(new cb.BatchGetProjectsCommand({ names: [SELF_CI_PROJECT] }))).projects?.[0]
       return p ? { privileged: Boolean(p.environment?.privilegedMode) } : null

@@ -23,7 +23,7 @@
  */
 import type { AwsCredentialIdentity } from '@smithy/types'
 import { SOURCE } from '../core/onboard.js'
-import { stackName } from '../infra/props.js'
+import { PUBLISHED_REGISTRY, stackName } from '../infra/props.js'
 import type { Check, FixAction } from './answers.js'
 import type { Facts } from './derive.js'
 import { pickModel } from './derive.js'
@@ -72,7 +72,9 @@ export interface PreflightDeps {
   token(): Promise<TokenInfo>
   email(): Promise<string | null>
   repo(repo: string, kind: TokenInfo['kind']): Promise<RepoAccess>
-  source(): Promise<{ ok: boolean; canFix: boolean; detail: string }>
+  source(): Promise<{ ok: boolean; canFix: boolean; admin?: boolean; detail: string }>
+  /** where trace's images are published (its trace-images release), null when nowhere yet */
+  publishedRegistry(): Promise<string | null>
 }
 
 export interface PreflightResult {
@@ -130,6 +132,7 @@ export async function preflight(input: PreflightInput, d: PreflightDeps): Promis
     settle(d.sourceCredential()), input.runnerAuth === 'token' ? Promise.resolve({ ok: true as const, v: [] }) : settle(d.connections()),
     settle(d.token()), settle(d.email()), settle(d.source()),
   ])
+  const registry = await settle(PUBLISHED_REGISTRY ? Promise.resolve(PUBLISHED_REGISTRY) : d.publishedRegistry())
   const checks: Check[] = []
   const add = (c: Check): void => { checks.push(c) }
   const facts: PreflightResult['facts'] = {}
@@ -277,6 +280,13 @@ export async function preflight(input: PreflightInput, d: PreflightDeps): Promis
     for (const w of info.warnings) add({ id: 'github.token', status: 'warn', title: 'GitHub token', detail: w })
     if (!facts.email) add({ id: 'github.email', status: 'warn', title: 'First administrator', detail: 'The token cannot see its account\'s email, which becomes the first administrator\'s sign-in.', fix: `Enter the email under Advanced, or give the token ${info.kind === 'classic' ? 'the `user:email` scope' : '"Email addresses: read" (an account permission)'}.` })
   } else add({ id: 'github.token', status: 'fail', title: 'GitHub token', detail: msg(token.e), fix: 'Paste a token that works: a fine-grained token (github.com/settings/personal-access-tokens) or a classic one with `repo` and `workflow`.' })
+  // trace's images: copied from where they are published, else built; and whether this install is the one publishing
+  if (source.ok) facts.sourceAdmin = Boolean(source.v.admin)
+  if (registry.ok) {
+    facts.publishedRegistry = registry.v
+    add({ id: 'images.source', status: 'info', title: 'Images', detail: registry.v ? `copied from ${registry.v} by digest when this version is published there, else built in this account` : `${SOURCE} has published no images yet: they are built in this account (CodeBuild; the GPU image's first build takes 30–60 minutes)` })
+  }
+  if (facts.sourceAdmin) add({ id: 'images.publish', status: 'info', title: 'Publishing', detail: `the token administers ${SOURCE}, so this install also publishes trace's images (ECR Public in us-east-1, all by API) and starts the first release; Advanced turns it off` })
   if (source.ok && !source.v.ok) add({ id: 'github.source', status: 'warn', title: 'trace\'s actions', detail: source.v.detail, ...(source.v.canFix ? { action: { id: 'share-source' as FixAction, label: `Share ${SOURCE}'s actions` } } : {}) })
   const repos = info ? await mapLimit(input.repos, 6, (r) => d.repo(r, info?.kind ?? 'unknown').catch((e: unknown): RepoAccess => ({ repo: r, visible: false, configure: false, administer: false, webhooks: false, missing: [msg(e)] }))) : []
   for (const a of repos) {
@@ -395,6 +405,7 @@ export async function liveDeps(creds: AwsCredentialIdentity, region: string, tok
     email: () => gh.tokenEmail(token),
     repo: (r, kind) => gh.repoAccess(token, r, kind),
     source: () => gh.sourceAccess(token, SOURCE),
+    publishedRegistry: async () => (await import('./release.js')).publishedRegistry((p) => gh.getOrNull(token, p), SOURCE),
   }
 }
 

@@ -72,12 +72,13 @@ export const AgentAnswers = z.object({
   /** where the images come from (src/infra/images.ts): trace's published ones for this source when they exist, or a
    * build in this account */
   imageSource: z.enum(['prebuilt', 'build']).default('prebuilt'),
-  /** where to look for the published images instead of props.ts PUBLISHED_REGISTRY (`public.ecr.aws/<alias>`); empty:
-   * that constant */
+  /** where to look for the published images (`public.ecr.aws/<alias>`); empty: props.ts PUBLISHED_REGISTRY when set,
+   * else the source repository's trace-images release, found at install time (src/installer/derive.ts) */
   imageRegistry: z.string().trim().regex(/^([a-z0-9.-]+(:\d+)?(\/[a-z0-9._-]+)*)?$/, 'a registry such as public.ecr.aws/<alias>, or empty').default(''),
   /** also set this account up to publish trace's images (src/installer/release.ts, `trace release setup`): the
-   * TraceRelease stack in us-east-1, and the source repository's release variables */
-  publishImages: z.boolean().default(false),
+   * TraceRelease stack in us-east-1, the source repository's release variables and its trace-images release, and the
+   * first release run. null (the default): when the token administers the source repository (src/installer/derive.ts) */
+  publishImages: z.boolean().nullable().default(null),
 }).strict().prefault({})
 
 /** The CodeBuild compute types a runner job may have (props.ts runners.computeType; repeated here because this file is
