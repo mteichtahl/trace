@@ -22,6 +22,37 @@ const statementsOf = (t: Template, prefix: string): Statement[] => Object.entrie
 const policyText = (t: Template, prefix: string): string => JSON.stringify(statementsOf(t, prefix))
 const actionsOf = (s: Statement): string[] => (Array.isArray(s.Action) ? s.Action : [s.Action])
 
+/** The object paths a statement's resources name in the central bucket ("/projects/x/y/*"), from their Fn::Join tails. */
+const objectPaths = (st: Statement): string[] => {
+  const out: string[] = []
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) { v.forEach(walk); return }
+    if (v && typeof v === 'object') {
+      const j = (v as Record<string, unknown>)['Fn::Join'] as [string, unknown[]] | undefined
+      if (j) { const tail = j[1].at(-1); if (typeof tail === 'string' && tail.startsWith('/')) out.push(tail); return }
+      Object.values(v).forEach(walk)
+    }
+  }
+  walk(st.Resource)
+  return out
+}
+const glob = (pattern: string, path: string): boolean => new RegExp(`^${pattern.split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`).test(path)
+/**
+ * IAM, for one conditional put of the agents' facts (projects/<repo>/journey-agent/facts.db, with If-Match): some
+ * statement allows s3:PutObject on it, and no Deny applies to it (a Deny whose condition needs both conditional headers
+ * absent does not apply to a conditional put).
+ */
+function agentFactsWritable(s: Statement[], repo: string): boolean {
+  const key = `/projects/${repo}/journey-agent/facts.db`
+  const covers = (st: Statement): boolean => actionsOf(st).some((a) => a === 's3:PutObject' || a === 's3:*') && objectPaths(st).some((p) => glob(p, key))
+  const conditionalOnly = (st: Statement): boolean => JSON.stringify(st.Condition?.Null) === JSON.stringify({ 's3:if-match': 'true', 's3:if-none-match': 'true' })
+  const allowed = s.some((st) => st.Effect !== 'Deny' && covers(st))
+  const denied = s.some((st) => st.Effect === 'Deny' && covers(st) && !conditionalOnly(st))
+  // the same put without the headers is denied
+  const unconditionalDenied = s.some((st) => st.Effect === 'Deny' && covers(st))
+  return allowed && !denied && unconditionalDenied
+}
+
 let t: Template
 let syn: Synth
 beforeAll(() => {
@@ -140,7 +171,19 @@ describe('the trace stack', () => {
       expect(people).toMatchObject({ Effect: 'Deny', Action: ['s3:PutObject', 's3:DeleteObject', 's3:DeleteObjectVersion'] })
       expect(JSON.stringify(people?.Resource)).toContain(`/projects/${c.repo}/journey/*`)
       expect(JSON.stringify(people?.Resource)).toContain(`/projects/${c.repo}/chats/*`)
-      expect(s.filter((x) => x.Effect === 'Deny')).toHaveLength(2)
+      // what the agents contribute to the journey (projects/<slug>/journey-agent): written through projects/<slug>/*,
+      // which the people-records deny does not cover (journey/* is not journey-agent/*), but only with a conditional
+      // put, and never deleted
+      expect(JSON.stringify(people?.Resource)).not.toContain('journey-agent')
+      expect(agentFactsWritable(s, c.repo)).toBe(true)
+      // (the check sees a deny that would cover it: a people-records deny on journey* instead of journey/*)
+      expect(agentFactsWritable([...s, { Effect: 'Deny', Action: ['s3:PutObject'], Resource: { 'Fn::Join': ['', ['arn', `/projects/${c.repo}/journey*`]] } }], c.repo)).toBe(false)
+      expect(s.find((x) => x.Sid === 'AgentFactsConditional')).toMatchObject({
+        Effect: 'Deny', Action: 's3:PutObject', Condition: { Null: { 's3:if-match': 'true', 's3:if-none-match': 'true' } },
+      })
+      expect(JSON.stringify(s.find((x) => x.Sid === 'AgentFactsConditional')?.Resource)).toContain(`/projects/${c.repo}/journey-agent/*`)
+      expect(s.find((x) => x.Sid === 'AgentFactsNoDelete')).toMatchObject({ Effect: 'Deny', Action: ['s3:DeleteObject', 's3:DeleteObjectVersion'] })
+      expect(s.filter((x) => x.Effect === 'Deny')).toHaveLength(4)
       // the installation's prompt overrides (prompts/*): read and listed, never written
       expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes('/prompts/*'))).toBe(true)
       expect(s.filter((x) => actionsOf(x).includes('s3:ListBucket')).flatMap((x) => x.Condition?.StringLike?.['s3:prefix'] as string[])).toContain('prompts/*')
@@ -227,6 +270,9 @@ describe('the trace stack', () => {
       // nor the journey record or the chats
       expect(s.find((x) => x.Sid === 'PeopleRecordsReadOnly')).toMatchObject({ Effect: 'Deny' })
       expect(JSON.stringify(s.find((x) => x.Sid === 'PeopleRecordsReadOnly')?.Resource)).toContain(`/projects/${repo}/journey/*`)
+      // but they write the agents' facts (the worker.runner = actions fallback), conditionally, as the worker does
+      expect(agentFactsWritable(s, repo)).toBe(true)
+      expect(s.find((x) => x.Sid === 'AgentFactsConditional')).toMatchObject({ Effect: 'Deny', Condition: { Null: { 's3:if-match': 'true', 's3:if-none-match': 'true' } } })
       expect(text).not.toContain('/access/*')
       // the workflows read the installation's prompt overrides, and cannot write them
       expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes('/prompts/*'))).toBe(true)
@@ -277,7 +323,11 @@ describe('the trace stack', () => {
     expect(msPuts.map((x) => Object.keys(x.Condition?.Null ?? {})[0]).sort()).toEqual(['s3:if-match', 's3:if-none-match'])
     expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes(`/${MS}`))).toBe(true)
     expect(s.filter((x) => actionsOf(x).includes('s3:DeleteObject')).map((x) => JSON.stringify(x.Resource)).join()).not.toContain('memory-state')
-    expect(s.filter((x) => actionsOf(x).includes('s3:ListBucket')).flatMap((x) => x.Condition?.StringLike?.['s3:prefix'] as string[]).sort()).toEqual(['central/*', 'installation/pending-projects/*', 'projects/*/chats/*', 'projects/*/journey/*', MS, 'prompts/*'])
+    expect(s.filter((x) => actionsOf(x).includes('s3:ListBucket')).flatMap((x) => x.Condition?.StringLike?.['s3:prefix'] as string[]).sort()).toEqual(['central/*', 'installation/pending-projects/*', 'projects/*/chats/*', 'projects/*/journey-agent/*', 'projects/*/journey/*', MS, 'prompts/*'])
+    // the agents' facts (projects/*/journey-agent/*): read, never written or deleted by the API
+    const AF = 'projects/*/journey-agent/*'
+    expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes(`/${AF}`))).toBe(true)
+    expect(s.filter((x) => actionsOf(x).some((a) => a === 's3:PutObject' || a === 's3:DeleteObject')).map((x) => JSON.stringify(x.Resource)).join()).not.toContain('journey-agent')
     // the installation's prompt overrides (prompts.set, admins): read, and conditional puts only; no deletes
     const promptPuts = s.filter((x) => actionsOf(x).includes('s3:PutObject') && JSON.stringify(x.Resource).includes('/prompts/*'))
     expect(promptPuts.map((x) => Object.keys(x.Condition?.Null ?? {})[0]).sort()).toEqual(['s3:if-match', 's3:if-none-match'])
@@ -287,7 +337,8 @@ describe('the trace stack', () => {
     expect(text).not.toContain('CreateEvent')
     // no GPU, no project data, no project tokens (but each project's chats, kept outside its repository, and the projects
     // waiting to be created: conditional writes, as above)
-    const rest = text.replaceAll('/projects/*/chats/*', '').replaceAll('projects/*/chats/*', '').replaceAll('/projects/*/journey/*', '').replaceAll('projects/*/journey/*', '').replaceAll('pending-projects/*', '')
+    const rest = text.replaceAll('/projects/*/chats/*', '').replaceAll('projects/*/chats/*', '').replaceAll('/projects/*/journey/*', '').replaceAll('projects/*/journey/*', '')
+      .replaceAll('/projects/*/journey-agent/*', '').replaceAll('projects/*/journey-agent/*', '').replaceAll('pending-projects/*', '')
     for (const never of ['batch:', '/jobs/', '/projects/', `Project${HA}GithubToken`, `Project${HB}GithubToken`]) expect(rest.replaceAll(MS, '')).not.toContain(never)
     expect(rest.replaceAll(MS, '')).not.toContain('projects/')
   })

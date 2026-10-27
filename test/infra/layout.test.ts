@@ -263,7 +263,7 @@ describe('inactive memories in both layouts', () => {
       expect(api).toContain('/projects/*/memory-state/*')
       // and projects/*/chats/* (the web app's chats, conditional writes too; installation/pending-projects is not a
       // project's): nothing else of projects/
-      expect(api.replaceAll('projects/*/memory-state/*', '').replaceAll('projects/*/chats/*', '').replaceAll('projects/*/journey/*', '').replaceAll('installation/pending-projects/*', '')).not.toContain('projects/')
+      expect(api.replaceAll('projects/*/memory-state/*', '').replaceAll('projects/*/chats/*', '').replaceAll('projects/*/journey/*', '').replaceAll('projects/*/journey-agent/*', '').replaceAll('installation/pending-projects/*', '')).not.toContain('projects/')
       for (const [repo, h] of [[A, HA], [B, HB]] as const) {
         const tpl = layout === 'nested' ? nestedOf(s, repo) : s.parent
         for (const role of ['RuntimeRole', 'ActionsRole']) {
