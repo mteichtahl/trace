@@ -45,7 +45,7 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
       return byWhat[e.what] ?? [['journey.get', r]]
     }
     case 'job.updated':
-      return [['job'], ['journey.get', e.repo], ['tools.waits', e.repo], ['runs', e.repo]]
+      return [['job'], ['jobs.list', e.repo], ['journey.get', e.repo], ['tools.waits', e.repo], ['runs', e.repo]]
     case 'notification':
       return [['inbox'], ['journey.get', e.repo]]
   }

@@ -69,10 +69,10 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
     case 'job':
       return ok(a.id === JOB_ROUTE.id ? JOB_ROUTE : { id: a.id, kind: 'task', state: 'done', version: 1 })
     case 'job.control':
-      // as the API: only cancel can be done; the rest say why
+      // a job the project's index does not list (mock/jobs.ts answers the listed ones): as the API, cancel only
       return a.op === 'cancel'
         ? later(ok({ ok: true, state: 'aborted', kept: 'Commits the agent had already pushed stay on their branch.' }))
-        : ok({ ok: false, reason: a.op === 'move_up' ? 'Jobs are not queued: each starts as soon as it is asked for, so there is nothing to move up.' : 'A running job cannot be paused. Cancel it instead; commits it already pushed are kept.' })
+        : ok({ ok: false, reason: 'trace does not list this job, so it can only be cancelled while it runs.' })
     case 'skill.draft':
       drafts[`${repo}|${String(a.skill)}`] = a.data === null ? undefined : { step: Number(a.step ?? 0), data: a.data, saved: new Date().toISOString() }
       return ok({ kept: a.data !== null, saved: a.data === null ? null : new Date().toISOString() })

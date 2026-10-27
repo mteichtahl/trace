@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import answers from './api-answers.json'
 import { READERS, readFileUrl, readJourney } from './readers'
-import type { InboxItem, Journey, Member, MeDoc } from './types'
+import type { InboxItem, Journey, Member, MeDoc, ProjectJobs } from './types'
 import type { JourneyMore } from './types-s1'
 
 const read = <T>(action: keyof typeof answers): T => {
@@ -16,7 +16,9 @@ const read = <T>(action: keyof typeof answers): T => {
 describe('reading the API\'s answers', () => {
   it('journey.get: stages, gates with criteria and evidence, waivers, the next step, questions and decisions', () => {
     const j = read<JourneyMore>('journey.get')
-    expect(j).toMatchObject({ repo: 'acme/answers', name: 'Answers', template: 'board', revision: 'Rev A', current: 'define', jobs: [], hasMemory: false })
+    expect(j).toMatchObject({ repo: 'acme/answers', name: 'Answers', template: 'board', revision: 'Rev A', current: 'define', hasMemory: false })
+    // its jobs: the project's job index, as run lines
+    expect(j.jobs.map((r) => [r.title, r.state])).toEqual([['Check the ERC', 'running'], ['Check the DRC', 'queued'], ['Check the BOM', 'done']])
     expect(j.stages.map((s) => s.state)).toEqual(['current', 'queued', 'queued', 'queued', 'queued', 'queued', 'queued', 'queued', 'queued'])
     expect(j.stages[0]).toMatchObject({ id: 'define', name: 'Define', criteria: { met: 2, total: 2 } })
     const g = j.gates.find((x) => x.id === 'define')!
@@ -30,6 +32,17 @@ describe('reading the API\'s answers', () => {
     expect(j.questions).toEqual([expect.objectContaining({ text: 'What is the supply range?', recommended: { id: 'a', label: '2.7 to 3.6 V' }, blocks: 'sizing the regulator' })])
     expect(j.decisions?.[0]).toMatchObject({ kind: 'waiver', state: 'active' })
     expect(j.recent.length).toBeGreaterThan(0)
+  })
+
+  it('jobs.list: each job as a run line (its step, typical time, queue place and controls), and each agent\'s state', () => {
+    const r = read<ProjectJobs>('jobs.list')
+    const [run, queued, done] = r.jobs
+    expect(run).toMatchObject({ title: 'Check the ERC', state: 'running', step: 'running ERC on the main sheet', typicalS: 600, controls: ['pause', 'cancel'], agentName: 'Verification', yours: true, branch: 'claude/task-erc' })
+    expect(run!.id).toMatch(/^trace-api-[0-9a-f]{8}-[0-9a-f]{24}\.job-run$/)
+    expect(queued).toMatchObject({ state: 'queued', position: 1, startsWhen: expect.stringMatching(/already working/), controls: ['pause', 'cancel'] })
+    expect(queued!.step).toBeUndefined()
+    expect(done).toMatchObject({ state: 'done', controls: [], summary: 'verify: done in 9 turns' })
+    expect(r.agents.find((a) => a.id === 'verify')).toMatchObject({ status: 'working', now: [run!.id], queue: [queued!.id], today: { runs: 1, succeeded: 1 } })
   })
 
   it('journey.get without a journey says how one starts', () => {

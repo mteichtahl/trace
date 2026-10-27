@@ -7,7 +7,7 @@ import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { CircleHelp } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { NextStepCard } from '@/components/next-step-card'
-import { RunLine, cancelRun } from '@/components/run-line'
+import { RunLine, runControls } from '@/components/run-line'
 import { Section } from '@/components/shell/app-shell'
 import { StageRail } from '@/components/stage-rail'
 import { StatusBadge } from '@/components/status-badge'
@@ -90,7 +90,7 @@ function Overview() {
             ) : (
               <div className="divide-y rounded-xl border">
                 {running.map((r) => (
-                  <RunLine key={r.id} run={r} onCancel={part !== 'reviewer' ? (x) => cancelRun(x.id) : undefined} />
+                  <RunLine key={r.id} run={r} {...runControls(part !== 'reviewer')} />
                 ))}
                 {waits.data?.waits.map((w) => (
                   <WaitLine key={w.id} wait={w} onCheckNow={(x) => call('tools.check_now', { repo, waitId: x.id })} />
@@ -101,17 +101,12 @@ function Overview() {
 
           {queued.length > 0 && (
             <Section label="Queued" count={queued.length}>
-              <ul className="divide-y rounded-xl border">
+              {/* in each agent's queue order: Move up, Hold and Cancel for people allowed to */}
+              <div className="divide-y rounded-xl border">
                 {queued.map((r) => (
-                  <li key={r.id} className="flex flex-wrap items-center gap-3 px-5 py-3.5 text-sm" data-density-item>
-                    <StatusBadge status="queued" />
-                    <span className="font-medium">
-                      <Explained text={r.title} />
-                    </span>
-                    {r.startsWhen && <span className="text-muted-foreground">— {r.startsWhen}</span>}
-                  </li>
+                  <RunLine key={r.id} run={r} {...runControls(part !== 'reviewer')} />
                 ))}
-              </ul>
+              </div>
             </Section>
           )}
 

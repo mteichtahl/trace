@@ -740,7 +740,318 @@
           "by": "seed"
         }
       ],
-      "firmware_track": false
+      "firmware_track": false,
+      "jobs": [
+        {
+          "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-run",
+          "workerJobId": "job-run",
+          "kind": "task",
+          "repository": "acme/answers",
+          "agent": "verify",
+          "agentName": "Verification",
+          "title": "Check the ERC",
+          "number": null,
+          "startedBy": "user@example.com",
+          "yours": true,
+          "state": "running",
+          "step": "running ERC on the main sheet",
+          "held": false,
+          "queuedAt": "2026-10-27T00:00:00.000Z",
+          "startedAt": "2026-10-27T00:00:00.000Z",
+          "endedAt": null,
+          "typicalS": 600,
+          "where": null,
+          "branch": "claude/task-erc",
+          "queue": null,
+          "parentJob": null,
+          "resumeOf": null,
+          "resumedBy": null,
+          "summary": null,
+          "error": null,
+          "pausedBy": null,
+          "pausedAt": null,
+          "controls": [
+            "pause",
+            "cancel"
+          ]
+        },
+        {
+          "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-q",
+          "workerJobId": "job-q",
+          "kind": "task",
+          "repository": "acme/answers",
+          "agent": "verify",
+          "agentName": "Verification",
+          "title": "Check the DRC",
+          "number": null,
+          "startedBy": "user@example.com",
+          "yours": true,
+          "state": "queued",
+          "step": "queued: the verify agent is already working on this project (\"Check the ERC\")",
+          "held": false,
+          "queuedAt": "2026-10-27T00:00:00.000Z",
+          "startedAt": null,
+          "endedAt": null,
+          "typicalS": 600,
+          "where": null,
+          "branch": null,
+          "queue": {
+            "position": 1,
+            "of": 1,
+            "startsWhen": "the verify agent is already working on this project (\"Check the ERC\")"
+          },
+          "parentJob": null,
+          "resumeOf": null,
+          "resumedBy": null,
+          "summary": null,
+          "error": null,
+          "pausedBy": null,
+          "pausedAt": null,
+          "controls": [
+            "pause",
+            "cancel"
+          ]
+        },
+        {
+          "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-done",
+          "workerJobId": "job-done",
+          "kind": "task",
+          "repository": "acme/answers",
+          "agent": "verify",
+          "agentName": "Verification",
+          "title": "Check the BOM",
+          "number": null,
+          "startedBy": null,
+          "yours": false,
+          "state": "succeeded",
+          "step": null,
+          "held": false,
+          "queuedAt": "2026-10-27T00:00:00.000Z",
+          "startedAt": "2026-10-27T00:00:00.000Z",
+          "endedAt": "2026-10-27T00:00:00.000Z",
+          "typicalS": 600,
+          "where": null,
+          "branch": null,
+          "queue": null,
+          "parentJob": null,
+          "resumeOf": null,
+          "resumedBy": null,
+          "summary": "verify: done in 9 turns",
+          "error": null,
+          "pausedBy": null,
+          "pausedAt": null,
+          "controls": []
+        }
+      ]
+    }
+  },
+  "jobs.list": {
+    "args": {
+      "repo": "acme/answers"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "jobs": [
+        {
+          "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-run",
+          "workerJobId": "job-run",
+          "kind": "task",
+          "repository": "acme/answers",
+          "agent": "verify",
+          "agentName": "Verification",
+          "title": "Check the ERC",
+          "number": null,
+          "startedBy": "user@example.com",
+          "yours": true,
+          "state": "running",
+          "step": "running ERC on the main sheet",
+          "held": false,
+          "queuedAt": "2026-10-27T00:00:00.000Z",
+          "startedAt": "2026-10-27T00:00:00.000Z",
+          "endedAt": null,
+          "typicalS": 600,
+          "where": null,
+          "branch": "claude/task-erc",
+          "queue": null,
+          "parentJob": null,
+          "resumeOf": null,
+          "resumedBy": null,
+          "summary": null,
+          "error": null,
+          "pausedBy": null,
+          "pausedAt": null,
+          "controls": [
+            "pause",
+            "cancel"
+          ]
+        },
+        {
+          "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-q",
+          "workerJobId": "job-q",
+          "kind": "task",
+          "repository": "acme/answers",
+          "agent": "verify",
+          "agentName": "Verification",
+          "title": "Check the DRC",
+          "number": null,
+          "startedBy": "user@example.com",
+          "yours": true,
+          "state": "queued",
+          "step": "queued: the verify agent is already working on this project (\"Check the ERC\")",
+          "held": false,
+          "queuedAt": "2026-10-27T00:00:00.000Z",
+          "startedAt": null,
+          "endedAt": null,
+          "typicalS": 600,
+          "where": null,
+          "branch": null,
+          "queue": {
+            "position": 1,
+            "of": 1,
+            "startsWhen": "the verify agent is already working on this project (\"Check the ERC\")"
+          },
+          "parentJob": null,
+          "resumeOf": null,
+          "resumedBy": null,
+          "summary": null,
+          "error": null,
+          "pausedBy": null,
+          "pausedAt": null,
+          "controls": [
+            "pause",
+            "cancel"
+          ]
+        },
+        {
+          "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-done",
+          "workerJobId": "job-done",
+          "kind": "task",
+          "repository": "acme/answers",
+          "agent": "verify",
+          "agentName": "Verification",
+          "title": "Check the BOM",
+          "number": null,
+          "startedBy": null,
+          "yours": false,
+          "state": "succeeded",
+          "step": null,
+          "held": false,
+          "queuedAt": "2026-10-27T00:00:00.000Z",
+          "startedAt": "2026-10-27T00:00:00.000Z",
+          "endedAt": "2026-10-27T00:00:00.000Z",
+          "typicalS": 600,
+          "where": null,
+          "branch": null,
+          "queue": null,
+          "parentJob": null,
+          "resumeOf": null,
+          "resumedBy": null,
+          "summary": "verify: done in 9 turns",
+          "error": null,
+          "pausedBy": null,
+          "pausedAt": null,
+          "controls": []
+        }
+      ],
+      "agents": [
+        {
+          "id": "verify",
+          "name": "Verification",
+          "status": "working",
+          "says": "Working on \"Check the ERC\"",
+          "now": [
+            "trace-api-f05f4f8f-0123456789abcdef01234567.job-run"
+          ],
+          "queue": [
+            "trace-api-f05f4f8f-0123456789abcdef01234567.job-q"
+          ],
+          "today": {
+            "runs": 1,
+            "succeeded": 1,
+            "medianS": 600
+          }
+        },
+        {
+          "id": "impl",
+          "name": "Implementation",
+          "status": "idle",
+          "says": "Idle",
+          "now": [],
+          "queue": [],
+          "today": {
+            "runs": 0,
+            "succeeded": 0,
+            "medianS": null
+          }
+        },
+        {
+          "id": "ams",
+          "name": "Analog and mixed-signal",
+          "status": "idle",
+          "says": "Idle",
+          "now": [],
+          "queue": [],
+          "today": {
+            "runs": 0,
+            "succeeded": 0,
+            "medianS": null
+          }
+        },
+        {
+          "id": "emc",
+          "name": "EMC",
+          "status": "idle",
+          "says": "Idle",
+          "now": [],
+          "queue": [],
+          "today": {
+            "runs": 0,
+            "succeeded": 0,
+            "medianS": null
+          }
+        },
+        {
+          "id": "render",
+          "name": "Rendering",
+          "status": "idle",
+          "says": "Idle",
+          "now": [],
+          "queue": [],
+          "today": {
+            "runs": 0,
+            "succeeded": 0,
+            "medianS": null
+          }
+        },
+        {
+          "id": "thermal",
+          "name": "Thermal",
+          "status": "idle",
+          "says": "Idle",
+          "now": [],
+          "queue": [],
+          "today": {
+            "runs": 0,
+            "succeeded": 0,
+            "medianS": null
+          }
+        },
+        {
+          "id": "worker",
+          "name": "Worker",
+          "status": "idle",
+          "says": "Idle",
+          "now": [],
+          "queue": [],
+          "today": {
+            "runs": 0,
+            "succeeded": 0,
+            "medianS": null
+          }
+        }
+      ],
+      "batch": [],
+      "updatedAt": "2026-10-27T00:00:00.000Z"
     }
   },
   "inbox": {

@@ -39,7 +39,7 @@ export interface Actions {
   status: { args: Repo; result: { repo: string; default_branch: string; pulls: unknown[]; agent_fix_issues: unknown[]; runs: unknown[]; last_deploy: unknown } }
   'settings.get': { args: Repo; result: { repo: string; set: Record<string, unknown>; config: Record<string, unknown>; errors: string[] } }
   'settings.set': { args: Repo & { key: string; value?: unknown; unset?: boolean }; result: { branch: string; commit: string } }
-  runs: { args: Repo & { kind?: string; limit?: number }; result: Record<string, unknown>[] }
+  runs: { args: Repo & { kind?: string; limit?: number; agent?: string }; result: Record<string, unknown>[] }
   run: { args: Repo & { id: string }; result: Record<string, unknown> }
   artifact: { args: Repo & { id: string; name: string }; result: { id: string; name: string; mime: string | null; size: number; base64: string } }
   'tools.list': { args: Repo; result: { name: string; description: string; needs: 'read' | 'write'; input: unknown }[] }
@@ -124,8 +124,10 @@ export interface Actions {
   'order.record': { args: Repo & { order?: string; number: string; paid: number | null; ship: string | null }; result: { ok: true; wait?: Wait } }
   /** the stage timeline; money for admins; what is not recorded is null, with notes */
   'cost.get': { args: Repo; result: import('./types-s1').CostView }
-  /** cancel a running job; pause, resume and move up answer ok: false with the reason */
-  'job.control': { args: { id: string; op: JobOp; reason?: string }; result: { ok: boolean; kept?: string; reason?: string; state?: string | null } }
+  /** pause (a running task stops at its next safe point; a queued one is held), resume, move up, cancel */
+  'job.control': { args: { id: string; op: JobOp; reason?: string; repo?: string }; result: { ok: boolean; kept?: string; reason?: string; state?: string | null; pausing?: boolean; held?: boolean; jobId?: string; position?: number } }
+  /** the project's jobs (its job index), each agent's status, the remote jobs running */
+  'jobs.list': { args: Repo; result: import('./types').ProjectJobs }
   // installation policy and people (src/api/actions-me.ts, actions-people.ts)
   'policy.get': { args: Record<string, never>; result: { locks: Record<string, string>; updated: string | null; by: string | null } }
   'policy.set': { args: { key: string; reason: string | null }; result: { locks: Record<string, string>; changed: boolean } }

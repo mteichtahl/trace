@@ -1,9 +1,10 @@
 /**
  * Agents and tools (/agents): every agent and every tool trace has, what is happening right now, and whether each can
- * work. What the API gives today: the work running and queued on the person's projects (journey.get jobs, live
- * through job.updated events), what needs a person (inbox), each agent's memories, and the tool list with runs. What
- * it does not give yet (each agent's own status, its queue, today's numbers, the instruction layer in force) is shown
- * as "Not reported" with one line saying so, never invented.
+ * work. From the API: the work running, paused and queued on the person's projects and each agent's status there
+ * (jobs.list: the projects' job indexes, with the journey's questions and stuck reports; live through job.updated
+ * events), what needs a person (inbox), and the tool list with runs. Each agent's row: its status (Working, Queued,
+ * Waiting on a person, Stuck, Idle; the most pressing across the person's projects), what it is doing now, its queue
+ * (with Move up), and its last day's runs. Which instruction layer is in force is not reported yet: a dash, said so.
  */
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
@@ -13,12 +14,14 @@ import { DataTable, Highlight, useUrlView } from '@/components/data-table'
 import { ToolsCatalogue } from '@/components/agents/tools-catalogue'
 import { useWork } from '@/components/agents/use-agents'
 import { useTraceContext } from '@/components/chat/context'
-import { RunLine, cancelRun } from '@/components/run-line'
+import { RunLine, runControls } from '@/components/run-line'
 import { Column, Section } from '@/components/shell/app-shell'
 import { useCommands } from '@/components/shell/command-menu'
 import { NeedsBuilding } from '@/components/side-sheet'
 import { EmptyState, Loading, Partial, SkeletonRows } from '@/components/states'
-import { StatusBadge } from '@/components/status-badge'
+import { type Status, StatusBadge } from '@/components/status-badge'
+import { type AgentWork } from '@/components/agents/use-agents'
+import { duration } from '@/lib/format'
 import { DismissStuck, useDismissStuck } from '@/components/dismiss-stuck'
 import { useAuth } from '@/lib/auth'
 import { projectName } from '@/lib/api'
@@ -41,6 +44,21 @@ interface Row {
   queue: string
   today: string
   instructions: string
+  work: AgentWork | undefined
+}
+
+const STATUS_WORD: Record<AgentWork['status'], { status: Status; label: string }> = {
+  working: { status: 'working', label: 'Working' },
+  queued: { status: 'queued', label: 'Queued' },
+  waiting_person: { status: 'yours', label: 'Waiting on a person' },
+  stuck: { status: 'stuck', label: 'Stuck' },
+  idle: { status: 'idle', label: 'Idle' },
+}
+
+/** "3 runs, 2 succeeded, median 4 min" */
+export function todayText(t: AgentWork['today'] | undefined): string {
+  if (!t || t.runs === 0) return 'No runs'
+  return `${t.runs} run${t.runs === 1 ? '' : 's'}, ${t.succeeded} succeeded${t.medianS !== null ? `, median ${duration(t.medianS, { short: true })}` : ''}`
 }
 
 function Agents() {
@@ -56,14 +74,36 @@ function Agents() {
   const dismiss = useDismissStuck()
   const questions = (inbox.data ?? []).filter((i) => i.kind === 'question')
 
-  const rows: Row[] = AGENTS.map((a) => ({ id: a.id, name: a.name, does: a.does, status: 'Not reported', now: '', queue: '', today: '', instructions: '' }))
+  const rows: Row[] = AGENTS.map((a) => {
+    const w = work.agents.get(a.id)
+    const st = STATUS_WORD[w?.status ?? 'idle']
+    return {
+      id: a.id, name: a.name, does: a.does, status: st.label, work: w,
+      now: w?.now.map((x) => `${x.project}: ${x.run.title}`).join('; ') ?? '', queue: String(w?.queue.length ?? 0), today: todayText(w?.today), instructions: '',
+    }
+  })
   const columns: ColumnDef<Row, any>[] = [
-    { accessorKey: 'name', header: 'Agent', size: 200, meta: { label: 'Agent', kind: 'text' }, cell: ({ row }) => <Link to="/agents/$agent" params={{ agent: row.original.id }} className="font-medium hover:underline" onClick={(e) => e.stopPropagation()}><Highlight text={row.original.name} /></Link> },
-    { accessorKey: 'status', header: 'Status', size: 150, meta: { label: 'Status', kind: 'enum' }, cell: () => <StatusBadge status="idle" label="Not reported" /> },
-    { accessorKey: 'does', header: 'Does', size: 340, meta: { label: 'Does', kind: 'text' }, cell: ({ row }) => <span className="text-muted-foreground"><Highlight text={row.original.does} /></span> },
-    { accessorKey: 'queue', header: 'Queue', size: 90, meta: { label: 'Queue', kind: 'text' }, cell: () => <span className="text-muted-foreground">—</span> },
-    { accessorKey: 'today', header: 'Today', size: 110, meta: { label: 'Today', kind: 'text' }, cell: () => <span className="text-muted-foreground">—</span> },
-    { accessorKey: 'instructions', header: 'Instructions', size: 140, meta: { label: 'Instructions', kind: 'text' }, cell: () => <span className="text-muted-foreground">—</span> },
+    { accessorKey: 'name', header: 'Agent', size: 190, meta: { label: 'Agent', kind: 'text' }, cell: ({ row }) => <Link to="/agents/$agent" params={{ agent: row.original.id }} className="font-medium hover:underline" onClick={(e) => e.stopPropagation()}><Highlight text={row.original.name} /></Link> },
+    {
+      accessorKey: 'status', header: 'Status', size: 190, meta: { label: 'Status', kind: 'enum' },
+      cell: ({ row }) => {
+        const w = row.original.work
+        const st = STATUS_WORD[w?.status ?? 'idle']
+        return (
+          <span className="flex flex-col gap-1">
+            <StatusBadge status={st.status} label={st.label} />
+            {w && (w.status === 'stuck' || w.status === 'waiting_person') && <span className="line-clamp-2 text-xs text-muted-foreground">{w.project ? `${w.project}: ` : ''}{w.says.replace(/^(Stuck|Waiting on a person): /, '')}</span>}
+          </span>
+        )
+      },
+    },
+    {
+      accessorKey: 'now', header: 'Now', size: 300, meta: { label: 'Now', kind: 'text' },
+      cell: ({ row }) => (row.original.now ? <span className="line-clamp-2"><Highlight text={row.original.now} /></span> : <span className="text-muted-foreground">{row.original.does}</span>),
+    },
+    { accessorKey: 'queue', header: 'Queue', size: 90, meta: { label: 'Queue', kind: 'text' }, cell: ({ row }) => <span className={row.original.queue === '0' ? 'text-muted-foreground' : ''}>{row.original.queue === '0' ? '—' : `${row.original.queue} waiting`}</span> },
+    { accessorKey: 'today', header: 'Today', size: 200, meta: { label: 'Today', kind: 'text' }, cell: ({ row }) => <span className="text-muted-foreground">{row.original.today}</span> },
+    { accessorKey: 'instructions', header: 'Instructions', size: 120, meta: { label: 'Instructions', kind: 'text' }, cell: () => <span className="text-muted-foreground">—</span> },
   ]
 
   const summary = work.loading
@@ -106,6 +146,7 @@ function Agents() {
       )}
 
       <Section label="trace is doing now" count={work.running.length + work.queued.length} className="mt-8">
+        {/* running and paused first, then each agent's queue in order; the controls each job's view allows */}
         {work.failed.length > 0 && <Partial>Could not read what is running on {work.failed.map(projectName).join(', ')}.</Partial>}
         {work.loading ? (
           <Loading><SkeletonRows rows={2} /></Loading>
@@ -116,9 +157,9 @@ function Agents() {
             {[...work.running, ...work.queued].map((w) => (
               <RunLine
                 key={`${w.repo}:${w.run.id}`}
-                run={w.run}
+                run={{ ...w.run, title: w.run.agentName ? `${w.run.agentName}: ${w.run.title}` : w.run.title }}
                 project={w.project}
-                onCancel={!reviewerOnly && w.run.state === 'running' ? (x) => cancelRun(x.id) : undefined}
+                {...runControls(work.write.has(w.repo))}
               />
             ))}
           </div>
@@ -130,11 +171,11 @@ function Agents() {
         <p className="mb-3 flex gap-2 text-sm text-muted-foreground">
           <Info className="mt-0.5 size-4 shrink-0" aria-hidden />
           <span>
-            Each agent's own status, queue, today's numbers and which instructions are in force are not reported by trace's API yet, so they show as “Not reported” and dashes. What is running is listed above with its project.
+            Each agent's status is the most pressing one across your projects: Stuck, then Waiting on a person, Working, Queued, Idle. Today is the last 24 hours. Its queue, with Move up, is on its page and above.
           </span>
         </p>
         <DataTable id="agents" data={rows} columns={columns} getRowId={(r) => r.id} url={url} noun="agents" onRowClick={(r) => void navigate({ to: '/agents/$agent', params: { agent: r.id } })} />
-        <NeedsBuilding className="mt-2">agent status (Working, Idle, Queued, Waiting on a person, Stuck, Unavailable), its queue with Move up, today's runs and success rate, and the instruction layer in force.</NeedsBuilding>
+        <NeedsBuilding className="mt-2">which layer of each agent's instructions is in force (trace's default, the installation's, the project's): trace's API does not report it yet.</NeedsBuilding>
       </Section>
 
       <div id="tools" className="scroll-mt-20" />
