@@ -136,6 +136,18 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<Record<
   for (const c of children) if (c !== null && c !== undefined && c !== false) el.append(typeof c === 'string' ? document.createTextNode(c) : c)
   return el
 }
+/**
+ * A collapsible section that keeps whether the person opened or closed it. The page is rebuilt on every render (and the
+ * install view renders on every installer event), so a plain <details> would snap back to its default each time.
+ * `open` is the default until the person toggles it; after that their choice holds.
+ */
+const folds = new Map<string, boolean>()
+function fold(key: string, summary: HTMLElement, props: { open?: boolean; class?: string }, ...children: Child[]): HTMLDetailsElement {
+  const el = h('details', { class: props.class, open: folds.get(key) ?? props.open ?? false }, summary, ...children)
+  // only a person's click: the toggle a newly built, already-open section queues would otherwise pin the default
+  summary.addEventListener('click', () => { queueMicrotask(() => folds.set(key, el.open)) })
+  return el
+}
 const note = (kind: 'ok' | 'warn' | 'bad', ...children: Child[]): HTMLElement => h('div', { class: `note ${kind}` }, ...children)
 const field = (label: string, input: HTMLElement, hint?: string): HTMLElement => h('div', {}, h('label', {}, label, hint ? h('small', {}, ` — ${hint}`) : null), input)
 const input = (type: string, value: string, on: (v: string) => void, extra: Record<string, unknown> = {}): HTMLInputElement =>
@@ -319,7 +331,7 @@ function connect(): HTMLElement {
       field('Session token', input('password', a.session, (v) => { a.session = v.trim(); s.pre = null }), 'only for temporary credentials')) : null,
     field('GitHub token', input('password', s.github.token, (v) => { s.github.token = v.trim(); s.pre = null }, { placeholder: 'github_pat_… or ghp_…' }),
       'fine-grained: Contents, Pull requests, Issues, Workflows, Actions, Secrets, Variables, Administration and Webhooks read and write on the repositories, and "Email addresses: read"; classic: repo, workflow, user:email'),
-    h('details', {}, h('summary', { class: 'muted' }, `Region: ${a.region || profRegion || s.env?.defaultRegion || 'us-east-1'}${a.region ? '' : profRegion ? ' (the profile\'s)' : ' (the default)'}`),
+    fold('region', h('summary', { class: 'muted' }, `Region: ${a.region || profRegion || s.env?.defaultRegion || 'us-east-1'}${a.region ? '' : profRegion ? ' (the profile\'s)' : ' (the default)'}`), {},
       field('Region', select([{ value: '', label: `The profile's, else ${s.env?.defaultRegion ?? 'us-east-1'}` }, ...REGIONS.map((r) => ({ value: r, label: r }))], a.region, (v) => { a.region = v; s.pre = null; render() }), 'trace needs Bedrock AgentCore there')),
     h('div', { class: 'actions' }, h('button', { class: 'secondary', disabled: s.preBusy, onclick: () => void runPreflight() }, s.preBusy ? 'Checking everything…' : s.pre ? 'Check again' : 'Check')),
     progressView(),
@@ -354,7 +366,7 @@ function projects(): HTMLElement {
         p ? h('span', { class: 'opt' }, checkbox('repo settings', p.applySettings, (v) => { p.applySettings = v })) : h('span', {}))
     })),
     sampleCard(owner),
-    h('details', {}, h('summary', {}, 'Create a new project'),
+    fold('new-project', h('summary', {}, 'Create a new project'), {},
       h('div', { class: 'row' },
         field('Repository', input('text', n.name, (v) => { n.name = v.trim() }, { placeholder: `${owner || 'owner'}/new-board` })),
         field('Starts from', select([{ value: 'kicad', label: 'KiCad board' }, { value: 'rust', label: 'Rust firmware' }, { value: 'python', label: 'Python' }, { value: 'empty', label: 'Empty' }], n.template, (v) => { n.template = (['kicad', 'rust', 'python', 'empty'] as const).find((t) => t === v) ?? 'empty' })),
@@ -429,7 +441,7 @@ function advanced(): HTMLElement {
   const models = f?.models ?? []
   const repos = [...s.projects.keys()]
   const gpuAuto = f?.gpuQuota === undefined || f?.gpuQuota === null ? 'on' : f.gpuQuota >= 4 ? `on: ${f.gpuQuota} vCPUs allowed` : `off: the quota is ${f.gpuQuota}`
-  return h('details', { class: 'advanced' }, h('summary', {}, 'Advanced (every setting has a default)'),
+  return fold('advanced', h('summary', {}, 'Advanced (every setting has a default)'), { class: 'advanced' },
     h('h3', {}, 'Agents'),
     h('div', { class: 'row' },
       field('Prefix', input('text', g.prefix, (v) => { g.prefix = v.trim() }), 'on every resource; two installations in one account need two'),
@@ -655,7 +667,7 @@ function progressView(): HTMLElement | null {
     return note('ok',
       h('strong', {}, list.length ? `Checking… ${doneN} of ${list.length} done` : 'Starting the checks…'),
       running.length ? h('ul', { class: 'progress' }, ...running.map((p) => h('li', {}, h('span', { class: 'spin' }), ` ${p.label}`))) : null,
-      list.length ? h('details', {}, h('summary', { class: 'muted' }, 'Every check'),
+      list.length ? fold('every-check', h('summary', { class: 'muted' }, 'Every check'), {},
         h('ul', { class: 'progress' }, ...list.map((p) => h('li', {}, `${p.state === 'done' ? '✓' : p.state === 'failed' ? '✕' : '…'} ${p.label}`)))) : null)
   }
   return null
@@ -729,10 +741,17 @@ async function startInstall(): Promise<void> {
       if (e.wait.nextCheckAt) s.waits.set(e.step, { wait: e.wait, asked: false, error: '' })
       else s.waits.delete(e.step)
       s.log = [...s.log.slice(-800), `[${e.step}] ${e.line}`]
-    } else { s.result = { ok: e.ok, summary: e.summary }; s.appUrl = e.url ?? s.appUrl; s.waits.clear(); es.close() }
+    } else {
+      s.result = { ok: e.ok, summary: e.summary }; s.appUrl = e.url ?? s.appUrl; s.waits.clear(); es.close()
+      if (!e.ok) folds.set('log', true) // a failed install shows its log, whatever the section was before
+    }
+    // The log follows new lines only while the person is at its end; scrolled up to read, it stays where they are.
+    const before = document.querySelector<HTMLPreElement>('pre.log')
+    const follow = !before || before.scrollHeight - before.scrollTop - before.clientHeight < 24
+    const top = before?.scrollTop ?? 0
     render()
-    const pre = document.querySelector('pre.log')
-    if (pre) pre.scrollTop = pre.scrollHeight
+    const pre = document.querySelector<HTMLPreElement>('pre.log')
+    if (pre) pre.scrollTop = follow ? pre.scrollHeight : top
   }
 }
 
@@ -816,7 +835,7 @@ function install(): HTMLElement {
     h('ul', { class: 'progress' }, ...s.steps.map((st) => h('li', { class: `status-${st.status}` },
       h('span', { class: 'icon' }, STEP_ICON[st.status]), h('div', {}, h('strong', {}, st.title), h('div', { class: 'detail' }, st.detail))))),
     waits(),
-    s.log.length ? h('details', { open: s.result ? !s.result.ok : false }, h('summary', { class: 'muted' }, 'Log'), h('pre', { class: 'log' }, s.log.join('\n'))) : null)
+    s.log.length ? fold('log', h('summary', { class: 'muted' }, 'Log'), { open: s.result ? !s.result.ok : false }, h('pre', { class: 'log' }, s.log.join('\n'))) : null)
 }
 
 // ------------------------------------------------------------------ start
