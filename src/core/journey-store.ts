@@ -52,28 +52,33 @@ export interface JourneyStoreOptions {
   retries?: number
 }
 
-/** One project's journey store, in `store` (the central bucket at its `projects` prefix). */
-export class JourneyStore {
+/**
+ * One SQLite database in the central bucket, read and written with conditional puts (see the module comment): the
+ * journey store below and the agents' facts store (src/core/agent-facts.ts) are both this, with their own key and
+ * tables.
+ */
+export class BucketDb {
   readonly slug: string
   readonly key: string
-  private readonly retries: number
+  protected readonly retries: number
 
-  constructor(private readonly store: Backend, repo: string, private readonly o: JourneyStoreOptions = {}) {
+  constructor(protected readonly store: Backend, repo: string, protected readonly where: { folder: string; file: string; schema: (db: DatabaseSync) => void },
+    protected readonly o: Omit<JourneyStoreOptions, 'legacy'> = {}) {
     this.slug = projectSlug(repo)
-    this.key = `${this.slug}/${JOURNEY_FOLDER}/${JOURNEY_DB}`
+    this.key = `${this.slug}/${where.folder}/${where.file}`
     this.retries = o.retries ?? 5
   }
 
-  private temp(bytes: Uint8Array | null): { path: string; cleanup(): void } {
+  protected temp(bytes: Uint8Array | null): { path: string; cleanup(): void } {
     const dir = mkdtempSync(join(this.o.scratch ?? tmpdir(), 'trace-journey-'))
-    const path = join(dir, JOURNEY_DB)
+    const path = join(dir, this.where.file)
     if (bytes) writeFileSync(path, bytes)
     return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
   }
 
-  private static openAt(path: string): DatabaseSync {
+  protected openAt(path: string): DatabaseSync {
     const db = open(path, { wal: false })
-    applyJourneySchema(db, { store: true })
+    this.where.schema(db)
     return db
   }
 
@@ -81,18 +86,95 @@ export class JourneyStore {
     return Number((db.prepare('PRAGMA user_version').get() as { user_version?: unknown } | undefined)?.user_version ?? 0)
   }
 
+  /** The store's bytes and ETag (null: none yet). */
+  protected async fetch(): Promise<{ body: Uint8Array; etag: string } | null> {
+    return this.store.get(this.key)
+  }
+
+  /** After a write: forget anything remembered about the object being absent. */
+  protected written(): void { /* nothing remembered here */ }
+
+  /** Run fn on the database as it is now (read only), with its version (0: there is nothing yet). */
+  async read<T>(fn: (db: DatabaseSync) => T): Promise<{ result: T; version: number }> {
+    const got = await this.fetch()
+    const t = this.temp(got?.body ?? null)
+    try {
+      const db = this.openAt(t.path)
+      try {
+        return { result: fn(db), version: BucketDb.version(db) }
+      } finally {
+        db.close()
+      }
+    } finally {
+      t.cleanup()
+    }
+  }
+
+  /** The database's bytes as they are now, or null when there is none (the release copy reads it). */
+  async bytes(): Promise<Uint8Array | null> {
+    return (await this.fetch())?.body ?? null
+  }
+
+  /**
+   * Change the database: fn runs on a fresh copy (it opens its own transactions), and the copy is put back with a
+   * condition; a lost race runs fn again on a fresh copy. `changed: false` (nothing to do): nothing is written.
+   */
+  async update<T>(fn: (db: DatabaseSync) => { result: T; changed?: boolean }): Promise<{ result: T; version: number; changed: boolean }> {
+    let last: unknown = null
+    for (let attempt = 0; attempt <= this.retries; attempt++) {
+      const got = await this.fetch()
+      const t = this.temp(got?.body ?? null)
+      try {
+        const db = this.openAt(t.path)
+        let out: { result: T; changed?: boolean }
+        let version: number
+        try {
+          out = fn(db)
+          version = BucketDb.version(db)
+          if (out.changed !== false) db.exec(`PRAGMA user_version = ${++version}`)
+        } finally {
+          db.close()
+        }
+        if (out.changed === false) return { result: out.result, version, changed: false }
+        try {
+          await this.store.put(this.key, new Uint8Array(readFileSync(t.path)), {
+            ...(got ? { ifMatch: got.etag } : { ifNoneMatch: true }), contentType: 'application/vnd.sqlite3',
+          })
+          this.written()
+          return { result: out.result, version, changed: true }
+        } catch (e) {
+          if (!(e instanceof Conflict)) throw e
+          last = e
+          await sleep(Math.min(2000, 40 * 2 ** attempt) * (0.5 + Math.random()))
+        }
+      } finally {
+        t.cleanup()
+      }
+    }
+    throw new JourneyStoreError(`The ${this.where.folder === JOURNEY_FOLDER ? 'journey record' : 'record'} kept changing while this was being saved; try again. (${last instanceof Error ? last.message : String(last)})`)
+  }
+}
+
+/** One project's journey store, in `store` (the central bucket at its `projects` prefix). */
+export class JourneyStore extends BucketDb {
+  constructor(store: Backend, repo: string, private readonly legacyOf: JourneyStoreOptions = {}) {
+    super(store, repo, { folder: JOURNEY_FOLDER, file: JOURNEY_DB, schema: (db) => applyJourneySchema(db, { store: true }) }, legacyOf)
+  }
+
+  protected override written(): void { none.delete(this.slug) }
+
   /** The store's bytes and ETag, importing an older repository's journey the first time (see the module comment). */
-  private async fetch(): Promise<{ body: Uint8Array; etag: string } | null> {
+  protected override async fetch(): Promise<{ body: Uint8Array; etag: string } | null> {
     const got = await this.store.get(this.key)
-    if (got || !this.o.legacy) return got
+    if (got || !this.legacyOf.legacy) return got
     const seen = none.get(this.slug)
     if (seen !== undefined && Date.now() - seen < NO_JOURNEY_MS) return null
-    const legacy = await this.o.legacy()
+    const legacy = await this.legacyOf.legacy()
     if (!legacy) { none.set(this.slug, Date.now()); return null }
     const src = this.temp(legacy)
     const dst = this.temp(null)
     try {
-      const db = JourneyStore.openAt(dst.path)
+      const db = this.openAt(dst.path)
       let had: boolean
       try {
         had = copyJourneyTables(db, src.path)
@@ -112,65 +194,5 @@ export class JourneyStore {
       src.cleanup()
       dst.cleanup()
     }
-  }
-
-  /** Run fn on the journey as it is now (read only), with its version (0: there is no journey yet). */
-  async read<T>(fn: (db: DatabaseSync) => T): Promise<{ result: T; version: number }> {
-    const got = await this.fetch()
-    const t = this.temp(got?.body ?? null)
-    try {
-      const db = JourneyStore.openAt(t.path)
-      try {
-        return { result: fn(db), version: JourneyStore.version(db) }
-      } finally {
-        db.close()
-      }
-    } finally {
-      t.cleanup()
-    }
-  }
-
-  /** The record's bytes as they are now, or null when there is none (the release copy reads it). */
-  async bytes(): Promise<Uint8Array | null> {
-    return (await this.fetch())?.body ?? null
-  }
-
-  /**
-   * Change the journey: fn runs on a fresh copy (it opens its own transactions), and the copy is put back with a
-   * condition; a lost race runs fn again on a fresh copy. `changed: false` (nothing to do): nothing is written.
-   */
-  async update<T>(fn: (db: DatabaseSync) => { result: T; changed?: boolean }): Promise<{ result: T; version: number; changed: boolean }> {
-    let last: unknown = null
-    for (let attempt = 0; attempt <= this.retries; attempt++) {
-      const got = await this.fetch()
-      const t = this.temp(got?.body ?? null)
-      try {
-        const db = JourneyStore.openAt(t.path)
-        let out: { result: T; changed?: boolean }
-        let version: number
-        try {
-          out = fn(db)
-          version = JourneyStore.version(db)
-          if (out.changed !== false) db.exec(`PRAGMA user_version = ${++version}`)
-        } finally {
-          db.close()
-        }
-        if (out.changed === false) return { result: out.result, version, changed: false }
-        try {
-          await this.store.put(this.key, new Uint8Array(readFileSync(t.path)), {
-            ...(got ? { ifMatch: got.etag } : { ifNoneMatch: true }), contentType: 'application/vnd.sqlite3',
-          })
-          none.delete(this.slug)
-          return { result: out.result, version, changed: true }
-        } catch (e) {
-          if (!(e instanceof Conflict)) throw e
-          last = e
-          await sleep(Math.min(2000, 40 * 2 ** attempt) * (0.5 + Math.random()))
-        }
-      } finally {
-        t.cleanup()
-      }
-    }
-    throw new JourneyStoreError(`The journey record kept changing while this was being saved; try again. (${last instanceof Error ? last.message : String(last)})`)
   }
 }
