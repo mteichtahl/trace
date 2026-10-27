@@ -286,10 +286,15 @@ export function backendFor(location: string, s3?: S3Api): Backend {
 
 // ------------------------------------------------------------------ the central database
 
-const SCHEMAS: string[] = []
+/** A migration a statement cannot express (a column added to an existing table): it checks before it changes, so it
+ * can run on every read and update. */
+export type SchemaFn = (db: DatabaseSync) => void
 
-/** Register tables for the central database (CREATE … IF NOT EXISTS). Applied by every read and update after it. */
-export function ensureSchema(sql: string): void {
+const SCHEMAS: (string | SchemaFn)[] = []
+
+/** Register tables for the central database (CREATE … IF NOT EXISTS), or a migration function that checks before it
+ * changes anything. Applied, in registration order, by every read and update after it. */
+export function ensureSchema(sql: string | SchemaFn): void {
   if (!SCHEMAS.includes(sql)) SCHEMAS.push(sql)
 }
 
@@ -334,13 +339,16 @@ export class Central {
   }
 
   /** Add tables now (and for every later read and update). */
-  ensureSchema(sql: string): void {
+  ensureSchema(sql: string | SchemaFn): void {
     ensureSchema(sql)
     this.applied = -1
   }
 
   private applySchemas(db: DatabaseSync): void {
-    for (const sql of SCHEMAS) db.exec(sql)
+    for (const sql of SCHEMAS) {
+      if (typeof sql === 'string') db.exec(sql)
+      else sql(db)
+    }
   }
 
   // -- the S3 read copy
