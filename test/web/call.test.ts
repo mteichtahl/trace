@@ -102,6 +102,11 @@ describe('what is published', () => {
     expect(changeOf('status')).toBeNull()
     expect(changeOf('chats.list')).toBeNull()
     expect(changeOf('chats.rename')).toBe('chats')
+    expect(changeOf('order.record')).toBe('journey')
+    expect(changeOf('skill.submit')).toBe('journey')
+    expect(changeOf('job.control')).toBe('jobs')
+    expect(changeOf('policy.set')).toBe('preferences')
+    expect(changeOf('skill.draft')).toBeNull()
   })
 
   it('AppSync Events: POST https://<http>/event, SigV4 for appsync, events as JSON text', async () => {

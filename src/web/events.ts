@@ -37,6 +37,13 @@ const MUTATING: ReadonlyArray<readonly [string, What]> = [
   ['chats.append', 'chats'],
   ['chats.rename', 'chats'],
   ['me.set', 'preferences'],
+  // the record's build side and the guided skills (skill.draft is not here: it is saved on every keystroke)
+  ['order.record', 'journey'],
+  ['skill.submit', 'journey'],
+  // a job id names no project here, and policy.set is installation-wide: both reach the caller's own screens only
+  // (publishChange publishes to the project's members only when the arguments carry a repo)
+  ['job.control', 'jobs'],
+  ['policy.set', 'preferences'],
 ]
 
 /** Read-only actions under a mutating prefix. */
