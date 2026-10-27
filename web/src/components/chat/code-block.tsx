@@ -46,7 +46,7 @@ function getHighlighter(): Promise<Highlighter> {
   return highlighter
 }
 
-async function highlight(code: string, lang: Lang): Promise<string> {
+export async function highlight(code: string, lang: Lang): Promise<string> {
   const h = await getHighlighter()
   if (!h.getLoadedLanguages().includes(lang)) await h.loadLanguage((await LANG_LOADERS[lang]()).default)
   return h.codeToHtml(code, { lang, themes: { light: 'github-light', dark: 'github-dark' }, defaultColor: false })

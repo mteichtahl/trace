@@ -11,6 +11,8 @@ import { useMemo, type ReactNode } from 'react'
 import { AGENT_ID, FOCUS_AGENT_ID, createTraceAgent } from './agent'
 import { ContextBridge } from './context'
 import { ChatRenderers } from './renderers'
+// the File viewer draws every File card (components/files; the viewer itself loads on the first card)
+import '@/components/files/register'
 
 export function ChatProvider({ children }: { children: ReactNode }) {
   const agents = useMemo(() => ({ [AGENT_ID]: createTraceAgent(AGENT_ID), [FOCUS_AGENT_ID]: createTraceAgent(FOCUS_AGENT_ID) }), [])

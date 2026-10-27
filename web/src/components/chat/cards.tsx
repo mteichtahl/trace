@@ -218,18 +218,28 @@ export interface FileData {
   kind?: string
   size?: number
   url?: string
+  /** the project the file belongs to (else the project in view) */
+  repo?: string
+  /** a run's output: read through the artifact action */
+  run?: string
+  /** a cited PDF page */
+  page?: number
 }
 
 /**
  * The File viewer's card size. The viewers themselves (KiCanvas, PDF.js, three.js, …) are another piece of work:
  * register one with `registerFileViewer(kind, Component)` and the card draws it.
  */
-const viewers = new Map<string, (p: { file: FileData }) => ReactNode>()
-export const registerFileViewer = (kind: string, render: (p: { file: FileData }) => ReactNode) => viewers.set(kind, render)
+const viewers = new Map<string, { render: (p: { file: FileData }) => ReactNode; ownFrame: boolean }>()
+/** `kind` is an extension, or '*' for every file. `ownFrame`: the viewer draws its own card (name, size, actions). */
+export const registerFileViewer = (kind: string, render: (p: { file: FileData }) => ReactNode, o: { ownFrame?: boolean } = {}) =>
+  viewers.set(kind, { render, ownFrame: !!o.ownFrame })
 
 export function FileCard({ data }: { data: FileData }) {
   const ext = data.kind ?? data.path.split('.').pop() ?? ''
-  const Viewer = viewers.get(ext)
+  // a viewer for this kind, else one registered for every kind ('*', the File viewer)
+  const Viewer = viewers.get(ext) ?? viewers.get(data.path.split('.').pop() ?? '') ?? viewers.get('*')
+  if (Viewer?.ownFrame) return <>{Viewer.render({ file: data })}</>
   return (
     <Frame>
       <div className="flex items-center gap-2">
@@ -237,7 +247,7 @@ export function FileCard({ data }: { data: FileData }) {
         <span className="truncate font-mono text-xs">{data.path}</span>
         {data.size !== undefined && <span className="ml-auto text-xs text-muted-foreground">{eng(data.size, 'B')}</span>}
       </div>
-      {Viewer && <div className="mt-2">{Viewer({ file: data })}</div>}
+      {Viewer && <div className="mt-2">{Viewer.render({ file: data })}</div>}
     </Frame>
   )
 }
