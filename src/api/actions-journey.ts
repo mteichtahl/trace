@@ -95,7 +95,9 @@ export const JOURNEY_ACTIONS = {
     const viewer = await viewerOf(ctx.principal, repo)
     const r = await withJourneyDb(ctx, repo, (db) => loadJourney(db))
     if (!r) return { repo, ...NOT_STARTED }
-    return { repo, started: true, you: { admin: viewer.admin, part: viewer.part }, ...journeyView(r, viewer) }
+    // whether the project has agent memory here (the Memory tab): its memory is set up, not that a session has happened
+    const hasMemory = Boolean(ctx.deps.memory?.()?.forProject(repo))
+    return { repo, started: true, you: { admin: viewer.admin, part: viewer.part }, has_memory: hasMemory, ...journeyView(r, viewer) }
   }),
 
   'journey.criterion.open': def('read', Repo.extend({ criterion: Id.optional(), waiver: Id.optional() }).refine((a) => Boolean(a.criterion) !== Boolean(a.waiver), 'name a criterion or a waiver'), async (a, ctx) => {

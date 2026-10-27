@@ -31,6 +31,8 @@ describe('Sign the gate', () => {
   it('asks for the passkey again only at the gates that commit money', () => {
     expect(needsReauth('release')).toBe(true)
     expect(needsReauth('order')).toBe(true)
+    expect(needsReauth('signoff')).toBe(true)
+    expect(needsReauth('fabricate.order')).toBe(true)
     expect(needsReauth('schematic')).toBe(false)
   })
   it('a return must say what has to change', () => {

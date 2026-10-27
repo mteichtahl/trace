@@ -11,7 +11,9 @@ import { baseName } from './kinds'
 /** One version of a file, newest first in `FileRef.versions`. */
 export interface FileVersion {
   commit: string
-  at?: string
+  at?: string | null
+  /** who made the commit, as GitHub has it */
+  by?: string | null
   release?: string
   size?: number
   /** "Push abc123: 2 findings fixed" */
@@ -26,6 +28,8 @@ export interface FileFinding {
   x_mm: number
   y_mm: number
   ref?: string
+  /** a schematic finding: the sheet path KiCad gave it ('/', '/Power/') */
+  sheet?: string
 }
 
 /** Everything a viewer needs to know about a file. Only repo and path are required. */
@@ -90,8 +94,9 @@ export async function resolveUrl(f: FileRef, commit?: string): Promise<{ url: st
     artifactUrls.set(key, url)
     return { url, mime: a.mime, size: a.size }
   }
-  // `commit` asks for an earlier version; the documented action takes the path only (see the report)
-  const args = { repo: f.repo, path: f.path, ...(commit ? { commit } : {}) } as ArgsOf<'files.url'>
+  // `commit` asks for an earlier version. The API answers bytes (base64) up to 8 MB or GitHub's link above that;
+  // call() turns bytes into a local address (lib/readers.ts readFileUrl), so `url` is always there
+  const args: ArgsOf<'files.url'> = { repo: f.repo, path: f.path, ...(commit ? { commit } : {}) }
   return call('files.url', args)
 }
 

@@ -1,0 +1,923 @@
+{
+  "journey.get": {
+    "args": {
+      "repo": "acme/answers"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "started": true,
+      "you": {
+        "admin": false,
+        "part": "contributor"
+      },
+      "has_memory": false,
+      "template": "board",
+      "template_name": "Board",
+      "revision": "A",
+      "current_stage": "define",
+      "later": [],
+      "start": "idea",
+      "name": "Answers",
+      "description": null,
+      "icon": null,
+      "build": {
+        "quantity": 10,
+        "unit_cost": null,
+        "budget": null,
+        "currency": "USD",
+        "fab": "JLCPCB"
+      },
+      "stages": [
+        {
+          "id": "define",
+          "name": "Define",
+          "optional": false,
+          "state": "current",
+          "met": 2,
+          "total": 2,
+          "progress": "Define · 2 of 2 criteria met",
+          "started": "2026-10-27T00:00:00.000Z",
+          "finished": null,
+          "reopened": null,
+          "gates": [
+            "define"
+          ]
+        },
+        {
+          "id": "architect",
+          "name": "Architect",
+          "optional": false,
+          "state": "queued",
+          "met": 0,
+          "total": 3,
+          "progress": "Queued: starts when the requirements baseline gate is signed",
+          "started": null,
+          "finished": null,
+          "reopened": null,
+          "gates": [
+            "architect"
+          ]
+        },
+        {
+          "id": "capture",
+          "name": "Capture",
+          "optional": false,
+          "state": "queued",
+          "met": 0,
+          "total": 4,
+          "progress": "Queued: starts when the architecture review gate is signed",
+          "started": null,
+          "finished": null,
+          "reopened": null,
+          "gates": [
+            "capture"
+          ]
+        },
+        {
+          "id": "prove",
+          "name": "Prove",
+          "optional": false,
+          "state": "queued",
+          "met": 0,
+          "total": 2,
+          "progress": "Queued: starts when the schematic review gate is signed",
+          "started": null,
+          "finished": null,
+          "reopened": null,
+          "gates": [
+            "prove"
+          ]
+        },
+        {
+          "id": "layout",
+          "name": "Layout",
+          "optional": false,
+          "state": "queued",
+          "met": 0,
+          "total": 5,
+          "progress": "Queued: starts when the design proven gate is signed",
+          "started": null,
+          "finished": null,
+          "reopened": null,
+          "gates": [
+            "layout"
+          ]
+        },
+        {
+          "id": "signoff",
+          "name": "Sign-off",
+          "optional": false,
+          "state": "queued",
+          "met": 0,
+          "total": 4,
+          "progress": "Queued: starts when the layout review gate is signed",
+          "started": null,
+          "finished": null,
+          "reopened": null,
+          "gates": [
+            "signoff"
+          ]
+        },
+        {
+          "id": "release",
+          "name": "Release",
+          "optional": false,
+          "state": "queued",
+          "met": 0,
+          "total": 0,
+          "progress": "Queued: starts when the release approval gate is signed",
+          "started": null,
+          "finished": null,
+          "reopened": null,
+          "gates": []
+        },
+        {
+          "id": "fabricate",
+          "name": "Fabricate",
+          "optional": false,
+          "state": "queued",
+          "met": 0,
+          "total": 5,
+          "progress": "Queued: starts when the release approval gate is signed",
+          "started": null,
+          "finished": null,
+          "reopened": null,
+          "gates": [
+            "fabricate.order",
+            "fabricate.received"
+          ]
+        },
+        {
+          "id": "bringup",
+          "name": "Bring up",
+          "optional": false,
+          "state": "queued",
+          "met": 0,
+          "total": 1,
+          "progress": "Queued: starts when the boards received gate is signed",
+          "started": null,
+          "finished": null,
+          "reopened": null,
+          "gates": [
+            "bringup"
+          ]
+        }
+      ],
+      "gates": [
+        {
+          "id": "define",
+          "stage": "define",
+          "name": "requirements baseline",
+          "title": "the requirements baseline gate",
+          "state": "ready",
+          "met": 2,
+          "total": 2,
+          "criteria": [
+            {
+              "id": "define.accepted",
+              "text": "Every requirement is accepted or struck.",
+              "owner": "person",
+              "status": "met",
+              "evidence": [
+                {
+                  "kind": "run",
+                  "ref": "run-1",
+                  "label": "the requirements list"
+                }
+              ],
+              "evidence_label": "the requirements list",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": "2026-10-27T00:00:00.000Z"
+            },
+            {
+              "id": "define.measurable",
+              "text": "Every requirement has a criterion that can be measured, with a number and a unit.",
+              "owner": "person",
+              "status": "waived",
+              "evidence": [],
+              "evidence_label": "the requirements list",
+              "waiver": "0123456789abcdef",
+              "opened_by_you": false,
+              "checked_at": null
+            }
+          ],
+          "waivers": [
+            "0123456789abcdef"
+          ],
+          "signature": null,
+          "returned": null,
+          "may_sign": false,
+          "missing": [
+            "Only an admin can sign a gate.",
+            "Open the evidence for 2 more criteria.",
+            "Open 1 waiver taken in this stage.",
+            "Acknowledge 1 waiver taken in this stage."
+          ]
+        },
+        {
+          "id": "architect",
+          "stage": "architect",
+          "name": "architecture review",
+          "title": "the architecture review gate",
+          "state": "queued",
+          "met": 0,
+          "total": 3,
+          "criteria": [
+            {
+              "id": "architect.blocks",
+              "text": "The blocks and key parts are approved.",
+              "owner": "person",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the block diagram and key parts list",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            },
+            {
+              "id": "architect.mapped",
+              "text": "Every requirement maps to at least one block.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the requirement to block map",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            },
+            {
+              "id": "architect.stock",
+              "text": "Every key part is in stock for the build quantity, or its exception is signed.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the stock check",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            }
+          ],
+          "waivers": [],
+          "signature": null,
+          "returned": null,
+          "may_sign": false,
+          "missing": [
+            "Only an admin can sign a gate.",
+            "The architecture review gate is not in the current stage (Define).",
+            "3 criteria are not met or waived: the blocks and key parts are approved; every requirement maps to at least one block; every key part is in stock for the build quantity, or its exception is signed.",
+            "Open the evidence for 3 more criteria."
+          ]
+        },
+        {
+          "id": "capture",
+          "stage": "capture",
+          "name": "schematic review",
+          "title": "the schematic review gate",
+          "state": "queued",
+          "met": 0,
+          "total": 4,
+          "criteria": [
+            {
+              "id": "capture.erc",
+              "text": "The electrical rule check is clean, or each finding is waived with a reason.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the electrical rule check report",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            },
+            {
+              "id": "capture.datasheets",
+              "text": "No conflict with a part's datasheet is left open.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the datasheet limit check",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            },
+            {
+              "id": "capture.stock",
+              "text": "Every part is in stock for the build quantity, or its exception is signed.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the parts list stock check",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            },
+            {
+              "id": "capture.pins",
+              "text": "The pin plan matches the schematic.",
+              "owner": "person",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the pin plan",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            }
+          ],
+          "waivers": [],
+          "signature": null,
+          "returned": null,
+          "may_sign": false,
+          "missing": [
+            "Only an admin can sign a gate.",
+            "The schematic review gate is not in the current stage (Define).",
+            "4 criteria are not met or waived: the electrical rule check is clean, or each finding is waived with a reason; no conflict with a part's datasheet is left open; every part is in stock for the build quantity, or its exception is signed; the pin plan matches the schematic.",
+            "Open the evidence for 4 more criteria."
+          ]
+        },
+        {
+          "id": "prove",
+          "stage": "prove",
+          "name": "design proven",
+          "title": "the design proven gate",
+          "state": "queued",
+          "met": 0,
+          "total": 2,
+          "criteria": [
+            {
+              "id": "prove.verified",
+              "text": "Every requirement that can be checked before layout is verified or waived.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the coverage matrix",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            },
+            {
+              "id": "prove.failing",
+              "text": "No test item is failing.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the test plan results",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            }
+          ],
+          "waivers": [],
+          "signature": null,
+          "returned": null,
+          "may_sign": false,
+          "missing": [
+            "Only an admin can sign a gate.",
+            "The design proven gate is not in the current stage (Define).",
+            "2 criteria are not met or waived: every requirement that can be checked before layout is verified or waived; no test item is failing.",
+            "Open the evidence for 2 more criteria."
+          ]
+        },
+        {
+          "id": "layout",
+          "stage": "layout",
+          "name": "layout review",
+          "title": "the layout review gate",
+          "state": "queued",
+          "met": 0,
+          "total": 5,
+          "criteria": [
+            {
+              "id": "layout.routed",
+              "text": "Every connection is routed.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the routing report",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            },
+            {
+              "id": "layout.drc",
+              "text": "The design rule check is clean, or each finding is waived.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the design rule check report",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            },
+            {
+              "id": "layout.lengths",
+              "text": "Matched-length groups are within tolerance.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the length-match report",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            },
+            {
+              "id": "layout.fit",
+              "text": "The board fits its enclosure, or each clash is waived.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the fit check",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            },
+            {
+              "id": "layout.renders",
+              "text": "The board renders are approved.",
+              "owner": "person",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the board renders",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            }
+          ],
+          "waivers": [],
+          "signature": null,
+          "returned": null,
+          "may_sign": false,
+          "missing": [
+            "Only an admin can sign a gate.",
+            "The layout review gate is not in the current stage (Define).",
+            "5 criteria are not met or waived: every connection is routed; the design rule check is clean, or each finding is waived; matched-length groups are within tolerance; the board fits its enclosure, or each clash is waived; the board renders are approved.",
+            "Open the evidence for 5 more criteria."
+          ]
+        },
+        {
+          "id": "signoff",
+          "stage": "signoff",
+          "name": "release approval",
+          "title": "the release approval gate",
+          "state": "queued",
+          "met": 0,
+          "total": 4,
+          "criteria": [
+            {
+              "id": "signoff.coverage",
+              "text": "Every requirement is verified or waived.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the coverage matrix",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            },
+            {
+              "id": "signoff.emc",
+              "text": "The radio interference prechecks are run and within the target.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the interference precheck",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            },
+            {
+              "id": "signoff.bom",
+              "text": "The parts list is checked for cost and stock at the build quantity.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the parts list check",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            },
+            {
+              "id": "signoff.report",
+              "text": "The release report is reviewed: coverage, interference estimates, parts list and open waivers.",
+              "owner": "person",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the release report",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            }
+          ],
+          "waivers": [],
+          "signature": null,
+          "returned": null,
+          "may_sign": false,
+          "missing": [
+            "Only an admin can sign a gate.",
+            "The release approval gate is not in the current stage (Define).",
+            "4 criteria are not met or waived: every requirement is verified or waived; the radio interference prechecks are run and within the target; the parts list is checked for cost and stock at the build quantity; the release report is reviewed: coverage, interference estimates, parts list and open waivers.",
+            "Open the evidence for 4 more criteria."
+          ]
+        },
+        {
+          "id": "fabricate.order",
+          "stage": "fabricate",
+          "name": "order approval",
+          "title": "the order approval gate",
+          "state": "queued",
+          "met": 0,
+          "total": 3,
+          "criteria": [
+            {
+              "id": "fabricate.order.package",
+              "text": "The release package is built and stored.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the release package",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            },
+            {
+              "id": "fabricate.order.stock",
+              "text": "Stock and prices are checked again today, and every line is available.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "today's stock check",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            },
+            {
+              "id": "fabricate.order.sheet",
+              "text": "The order sheet matches the release.",
+              "owner": "person",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the order sheet",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            }
+          ],
+          "waivers": [],
+          "signature": null,
+          "returned": null,
+          "may_sign": false,
+          "missing": [
+            "Only an admin can sign a gate.",
+            "The order approval gate is not in the current stage (Define).",
+            "3 criteria are not met or waived: the release package is built and stored; stock and prices are checked again today, and every line is available; the order sheet matches the release.",
+            "Open the evidence for 3 more criteria."
+          ]
+        },
+        {
+          "id": "fabricate.received",
+          "stage": "fabricate",
+          "name": "boards received",
+          "title": "the boards received gate",
+          "state": "queued",
+          "met": 0,
+          "total": 2,
+          "criteria": [
+            {
+              "id": "fabricate.received.inspected",
+              "text": "The boards are received and inspected.",
+              "owner": "person",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the inspection record",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            },
+            {
+              "id": "fabricate.received.bench",
+              "text": "The bring-up plan, test scripts and bench are ready.",
+              "owner": "person",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the bring-up plan and bench setup",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            }
+          ],
+          "waivers": [],
+          "signature": null,
+          "returned": null,
+          "may_sign": false,
+          "missing": [
+            "Only an admin can sign a gate.",
+            "The boards received gate is not in the current stage (Define).",
+            "Sign the order approval gate first.",
+            "2 criteria are not met or waived: the boards are received and inspected; the bring-up plan, test scripts and bench are ready.",
+            "Open the evidence for 2 more criteria."
+          ]
+        },
+        {
+          "id": "bringup",
+          "stage": "bringup",
+          "name": "revision accepted",
+          "title": "the revision accepted gate",
+          "state": "queued",
+          "met": 0,
+          "total": 1,
+          "criteria": [
+            {
+              "id": "bringup.verified",
+              "text": "Every requirement is verified on hardware, or carried to the next revision as an issue.",
+              "owner": "trace",
+              "status": "not_met",
+              "evidence": [],
+              "evidence_label": "the coverage matrix with bench results",
+              "waiver": null,
+              "opened_by_you": false,
+              "checked_at": null
+            }
+          ],
+          "waivers": [],
+          "signature": null,
+          "returned": null,
+          "may_sign": false,
+          "missing": [
+            "Only an admin can sign a gate.",
+            "The revision accepted gate is not in the current stage (Define).",
+            "1 criterion is not met or waived: every requirement is verified on hardware, or carried to the next revision as an issue.",
+            "Open the evidence for 1 more criterion."
+          ]
+        }
+      ],
+      "next": {
+        "kind": "answer",
+        "belongs_to": "you",
+        "yours": true,
+        "summary": "the Analog specialist asks: What is the supply range?",
+        "why": "It blocks sizing the regulator.",
+        "recommendation": "trace recommends 2.7 to 3.6 V: datasheet",
+        "button": "Use 2.7 to 3.6 V",
+        "stage": "define",
+        "ref": {
+          "kind": "question",
+          "id": "0123456789abcdef"
+        }
+      },
+      "questions": [
+        {
+          "id": "0123456789abcdef",
+          "kind": "question",
+          "asked_by": "the Analog specialist",
+          "for_you": true,
+          "for": "contributors",
+          "stage": "define",
+          "text": "What is the supply range?",
+          "blocks": "sizing the regulator",
+          "options": [
+            {
+              "id": "a",
+              "label": "2.7 to 3.6 V",
+              "recommended": true,
+              "why": "datasheet"
+            },
+            {
+              "id": "b",
+              "label": "1.8 to 3.6 V",
+              "recommended": false,
+              "why": ""
+            }
+          ],
+          "recommended": {
+            "id": "a",
+            "label": "2.7 to 3.6 V",
+            "recommended": true,
+            "why": "datasheet"
+          },
+          "sources": [],
+          "job_id": null,
+          "asked_at": "2026-10-27T00:00:00.000Z",
+          "answered": null
+        }
+      ],
+      "waivers": [
+        {
+          "id": "0123456789abcdef",
+          "stage": "define",
+          "gate": "define",
+          "target": {
+            "kind": "criterion",
+            "id": "define.measurable"
+          },
+          "reason": "Two criteria wait for the bench.",
+          "risk": "A late finding.",
+          "severity": "degraded",
+          "caught_where": "Bring up",
+          "scope": "this revision only",
+          "by": "admin@example.com",
+          "at": "2026-10-27T00:00:00.000Z",
+          "acknowledged": null,
+          "closed": false,
+          "opened_by_you": false
+        }
+      ],
+      "decisions": [
+        {
+          "id": "0123456789abcdef",
+          "at": "2026-10-27T00:00:00.000Z",
+          "kind": "waiver.added",
+          "stage": "define",
+          "ref": "0123456789abcdef",
+          "summary": "A waiver was taken on criterion define.measurable (rated degraded): Two criteria wait for the bench.",
+          "by": "admin@example.com"
+        },
+        {
+          "id": "0123456789abcdef",
+          "at": "2026-10-27T00:00:00.000Z",
+          "kind": "journey.started",
+          "stage": "define",
+          "ref": null,
+          "summary": "The project started from the Board template, at Define.",
+          "by": "seed"
+        }
+      ],
+      "firmware_track": false
+    }
+  },
+  "inbox": {
+    "args": {},
+    "result": {
+      "summary": "1 thing needs you.",
+      "items": [
+        {
+          "id": "question:0123456789abcdef",
+          "kind": "question",
+          "repo": "acme/answers",
+          "project": "Answers",
+          "stage": "define",
+          "summary": "Answers: the Analog specialist asks: What is the supply range? It recommends 2.7 to 3.6 V.",
+          "since": "2026-10-27T00:00:00.000Z",
+          "waited": "just now",
+          "blocking": true,
+          "action": "Answer",
+          "ref": {
+            "kind": "question",
+            "id": "0123456789abcdef"
+          },
+          "recommended": {
+            "id": "a",
+            "label": "2.7 to 3.6 V"
+          }
+        }
+      ],
+      "unavailable": []
+    }
+  },
+  "me.get": {
+    "args": {},
+    "result": {
+      "preferences": {},
+      "updated": null,
+      "bytes": 2,
+      "limit": 65536,
+      "locks": {}
+    }
+  },
+  "project.members": {
+    "args": {
+      "repo": "acme/answers"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "members": [
+        {
+          "sub": "a-admin",
+          "email": "admin@example.com",
+          "class": "admin",
+          "part": "contributor",
+          "admin": true,
+          "can_sign": true
+        },
+        {
+          "sub": "a-user",
+          "email": "user@example.com",
+          "class": "user",
+          "part": "contributor",
+          "admin": false,
+          "can_sign": false
+        }
+      ]
+    }
+  },
+  "users.list": {
+    "args": {},
+    "result": [
+      {
+        "email": "admin@example.com",
+        "sub": "a-admin",
+        "status": "CONFIRMED",
+        "enabled": true,
+        "class": "admin",
+        "last_seen": null,
+        "name": "Ada Admin",
+        "projects": [],
+        "parts": []
+      },
+      {
+        "email": "user@example.com",
+        "sub": "a-user",
+        "status": "CONFIRMED",
+        "enabled": true,
+        "class": "user",
+        "last_seen": "2026-10-27T00:00:00.000Z",
+        "projects": [
+          "acme/answers"
+        ],
+        "parts": [
+          {
+            "repo": "acme/answers",
+            "part": "contributor"
+          }
+        ]
+      }
+    ]
+  },
+  "files.list": {
+    "args": {
+      "repo": "acme/answers"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "ref": "main",
+      "truncated": false,
+      "revision": "A",
+      "release": null,
+      "files": [
+        {
+          "path": "README.md",
+          "kind": "documents",
+          "size": 9,
+          "sha": "blob-64f513340e92",
+          "revision": "A"
+        }
+      ],
+      "groups": [
+        {
+          "kind": "design",
+          "files": []
+        },
+        {
+          "kind": "fabrication",
+          "files": []
+        },
+        {
+          "kind": "firmware",
+          "files": []
+        },
+        {
+          "kind": "documents",
+          "files": [
+            {
+              "path": "README.md",
+              "kind": "documents",
+              "size": 9,
+              "sha": "blob-64f513340e92",
+              "revision": "A"
+            }
+          ]
+        },
+        {
+          "kind": "models",
+          "files": []
+        },
+        {
+          "kind": "evidence",
+          "files": []
+        }
+      ],
+      "counts": {
+        "design": 0,
+        "fabrication": 0,
+        "firmware": 0,
+        "documents": 1,
+        "models": 0,
+        "evidence": 0
+      }
+    }
+  },
+  "files.url": {
+    "args": {
+      "repo": "acme/answers",
+      "path": "README.md"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "path": "README.md",
+      "ref": "main",
+      "kind": "documents",
+      "mime": "text/markdown",
+      "size": 9,
+      "sha": "blob-sha",
+      "base64": "IyBBbnN3ZXJz"
+    }
+  }
+}

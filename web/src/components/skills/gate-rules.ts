@@ -38,8 +38,12 @@ export function signBlockers(gate: Pick<Gate, 'criteria' | 'waivers'>, s: SignSt
   return out
 }
 
-/** The release and order gates commit money: signing asks for the passkey or second factor again. */
-export const needsReauth = (gateId: string): boolean => gateId === 'release' || gateId === 'order'
+/**
+ * The release and order gates commit money: signing asks for the passkey or second factor again. The journey's ids
+ * (src/core/journey.ts): signoff (release approval) and fabricate.order (order approval).
+ */
+export const MONEY_GATES = ['signoff', 'fabricate.order'] as const
+export const needsReauth = (gateId: string): boolean => (MONEY_GATES as readonly string[]).includes(gateId) || gateId === 'release' || gateId === 'order'
 
 /** A return must say what has to change. */
 export const returnReasonOk = (reason: string): boolean => reason.trim().length >= 10

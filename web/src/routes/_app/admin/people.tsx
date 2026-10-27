@@ -5,7 +5,7 @@
  * a sheet: email, class, and per project the part (users.invite, then assign with the part). A row opens the person:
  * their class, projects and parts to change, and their history.
  */
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
 import { Loader2, Lock, MoreHorizontal, Plus, UserPlus } from 'lucide-react'
@@ -32,7 +32,7 @@ import { call, projectName } from '@/lib/api'
 import type { UserRow } from '@/lib/admin-types'
 import { useAuth } from '@/lib/auth'
 import { ago, initials, plural } from '@/lib/format'
-import { useAction, useProjects } from '@/lib/queries'
+import { q, useAction, useProjects } from '@/lib/queries'
 import type { Part, PersonClass } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -387,6 +387,19 @@ function InviteSheet({ open, onOpenChange, projects, existing }: { open: boolean
   )
 }
 
+/** Who added them where, and every part and class change, from the assignment log (users.history), newest first. */
+function History({ who }: { who: string }) {
+  const h = useQuery({ ...q('users.history', { who }), retry: false })
+  if (h.isError) return <p className="text-xs text-muted-foreground">Their history could not be read: {h.error instanceof Error ? h.error.message : String(h.error)}</p>
+  if (!h.data) return <p className="text-xs text-muted-foreground">Reading their history…</p>
+  if (!h.data.entries.length) return <p className="text-xs text-muted-foreground">No assignments or class changes recorded.</p>
+  return (
+    <ul className="space-y-1 text-sm">
+      {h.data.entries.slice(0, 30).map((e, i) => <li key={`${e.at}-${i}`}><span className="text-muted-foreground">{ago(e.at)}: </span>{e.text}</li>)}
+    </ul>
+  )
+}
+
 /** One person: change their projects and parts, and their history. */
 function PersonSheet({ row, me, projects, onClose, onClass }: { row: UserRow | null; me?: string; projects: string[]; onClose: () => void; onClass: (row: UserRow, to: PersonClass) => void }) {
   const qc = useQueryClient()
@@ -443,9 +456,7 @@ function PersonSheet({ row, me, projects, onClose, onClass }: { row: UserRow | n
             <ul className="space-y-1 text-sm">
               <li className="text-muted-foreground">{row.status === 'FORCE_CHANGE_PASSWORD' ? 'Invited; has not signed in yet.' : row.lastSeen ? `Last seen ${ago(row.lastSeen)}.` : 'Has a sign-in.'}</li>
             </ul>
-            <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
-              Who added them where, and every class change, is kept in trace's assignment log, but the API cannot read it back yet. Showing it here needs an <span className="font-mono">assignments.log</span> action.
-            </p>
+            <History who={row.sub} />
           </div>
         </div>
       )}

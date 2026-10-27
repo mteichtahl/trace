@@ -246,7 +246,11 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
                         </div>
                       </div>
                       <Label className="mt-3 flex cursor-pointer items-center gap-2 border-t pt-3 font-normal">
-                        <Checkbox checked={ack} disabled={!!w.acknowledged} onCheckedChange={(v) => setAcknowledged((s) => { const n = new Set(s); if (v) n.add(w.id); else n.delete(w.id); return n })} />
+                        <Checkbox checked={ack} disabled={!!w.acknowledged} onCheckedChange={(v) => {
+                          setAcknowledged((s) => { const n = new Set(s); if (v) n.add(w.id); else n.delete(w.id); return n })
+                          // the record needs the signer to have opened each waiver of the stage, as for the evidence
+                          if (v) openCriterion.mutate({ repo, waiver: w.id }, { onError: () => toast.error('Could not record that you read this waiver. Tick it again when back online.') })
+                        }} />
                         Acknowledge: I've read this waiver and where it is caught.
                       </Label>
                     </li>
@@ -366,7 +370,7 @@ function SignDialog({ open, onOpenChange, journey: j, gate: g, to, notes, acknow
   const label = signLabel(g.name)
 
   const doSign = () =>
-    sign.mutate({ repo: j.repo, gate: g.id, notes: notes || undefined }, {
+    sign.mutate({ repo: j.repo, gate: g.id, notes: notes || undefined, acknowledge: acknowledged }, {
       onSuccess: (r) => {
         onOpenChange(false)
         toast(`${cap(g.name.replace(/^the /, ''))} signed.`, { description: r.started?.length ? `Started: ${r.started.join('; ')}` : `${to ?? 'The next stage'} starts now.` })

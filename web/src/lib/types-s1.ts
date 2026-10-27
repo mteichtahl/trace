@@ -48,6 +48,9 @@ export interface PictureFinding {
   text: string
   /** where on the picture, 0..1 */
   at?: { x: number; y: number }
+  /** where KiCad put it, in millimetres on its sheet or board (the API's; a picture maps it with its own scale) */
+  x_mm?: number
+  y_mm?: number
   where?: string
   source?: EvidenceRef
   /** the sheet or layer it is on */
@@ -99,14 +102,32 @@ export interface BenchReadout {
   max?: number
 }
 
+/** One quality-bar check as skill.get computes it from the record. */
+export interface SkillCheckView {
+  id: string
+  status: CriterionStatus
+  detail?: string
+  /** the check cannot be computed yet: what the record has to hold first */
+  unavailable?: string
+}
+
 export interface SkillView {
   skill: string
+  name?: string
+  steps?: { id: string; title: string }[]
+  met?: number
+  total?: number
+  /** this person's draft, kept in the journey store (skill.draft), and when */
+  draft?: Record<string, unknown> | null
+  saved?: string | null
+  /** Gate signing: the gate of the current stage */
+  gate?: string
   /** trace's summary of where the person is ("You're on step 3. The Power sheet has two findings left…") */
   summary?: string
   /** a recommendation where there is a choice */
   recommendation?: { question?: string; recommended: string; options: { id: string; label: string; detail?: string }[]; why?: string; evidence?: EvidenceRef[]; givesUp?: string }
   /** the checker's verdict for each check id in the skill definition */
-  checks?: { id: string; status: CriterionStatus; detail?: string }[]
+  checks?: SkillCheckView[]
   /** the person's step, as the record has it */
   step?: number
   items?: SkillItem[]
@@ -149,10 +170,29 @@ export interface CoverageResult {
   requirements: CoverageRow[]
 }
 
-/** requirements.trace (needs building): the intent lines and the planned link from each requirement to one. */
+/** One requirement with its evidence status (requirements.trace). */
+export interface TracedRequirement {
+  id: string
+  text: string
+  kind: string
+  acceptance: string | null
+  source: string | null
+  status: string
+  evidence: 'verified' | 'failing' | 'untested' | 'waived'
+  /** why, in words ("TST-001 failed on its last run.") */
+  why: string
+  tests: { id: string; title: string; method: string; status: string; last_run: string | null }[]
+  waiver: string | null
+}
+
+/** requirements.trace: the intent lines and each requirement's link to one, and each requirement's evidence. */
 export interface TraceView {
   intent: { id: string; topic: string; text: string }[]
   links: { requirement: string; intent: string }[]
+  /** why `intent` is empty: the record keeps no intent statements yet */
+  intent_note?: string
+  requirements?: TracedRequirement[]
+  summary?: { requirements: number; verified: number; failing: number; untested: number; waived: number }
 }
 
 // ------------------------------------------------------------------ design (design.get, needs building)
@@ -168,9 +208,14 @@ export interface Block {
 }
 export interface DesignView {
   architecture?: { option: string; blocks: Block[]; connections: { from: string; to: string; label: string }[] }
+  /** one per schematic file; `path`: a picture a run stored (runs/<id>/<name>), when there is one */
   sheets: { id: string; name: string; path?: string; serves?: string[]; findings: PictureFinding[] }[]
   pins?: { pin: string; net: string; fn: string; alt?: string; status: 'ok' | 'conflict' | 'spare' | 'waived'; note?: string }[]
-  board?: { path?: string; layers?: string[]; findings: PictureFinding[]; size?: string }
+  board?: { file?: string; path?: string; layers?: string[]; findings: PictureFinding[]; size?: string }
+  /** the latest rule checks the findings come from */
+  checks?: { erc: { run: string; at: string | null; status: string; summary: string | null } | null; drc: { run: string; at: string | null; status: string; summary: string | null } | null }
+  /** what the record does not hold yet, in words */
+  notes?: string[]
 }
 
 // ------------------------------------------------------------------ runs (run, assumed extras; job.control, needs building)
@@ -217,6 +262,9 @@ export interface OrderView {
   id: string
   release: string
   state: 'ready' | 'placed' | 'confirmed' | 'shipped' | 'delivered'
+  cancelled?: boolean
+  placedAt?: string | null
+  placedBy?: string
   boards: number
   total: number
   currency: string
@@ -228,28 +276,38 @@ export interface OrderView {
   files: string[]
   checkedAt?: string
   number?: string
-  paid?: number
-  ship?: string
-  wait?: Wait
+  paid?: number | null
+  ship?: string | null
+  /** waiting for the fab: `checkable: false` when nothing checks it on its own yet */
+  wait?: (Wait & { checkable?: boolean }) | null
   meanwhile?: { title: string; state: 'done' | 'running' | 'todo' }[]
 }
 export interface BuildView {
-  releases: { id: string; revision: string; at: string; commit: string; files: number; by: string; frozen: boolean }[]
+  /** `files`: null when the record does not count them */
+  releases: { id: string; revision: string; at: string; commit: string; branch?: string | null; files: number | null; by: string; frozen: boolean }[]
   orders: OrderView[]
   boards: { serial: string; order: string; state: 'received' | 'inspected' | 'brought_up' | 'failed'; note?: string }[]
   bench?: { configured: boolean; instruments: { name: string; kind: string; address: string; answered: boolean }[]; note?: string }
+  notes?: string[]
 }
 
 // ------------------------------------------------------------------ cost and time (cost.get, needs building)
 
+/** cost.get. Money is for admins only (`money: false`: every amount is null); what is not recorded is null, with notes. */
 export interface CostView {
+  money?: boolean
   currency: string
-  spent: { cloud: number; orders: number }
-  committed: number
-  forecast: number
+  /** cloud: null, cloud use is not recorded per project */
+  spent: { cloud: number | null; orders: number | null }
+  committed: number | null
+  /** the build: quantity × unit cost; null without a unit cost */
+  forecast: number | null
   budget?: number
-  stages: { stage: string; state: 'done' | 'current' | 'queued'; cloud: number; days: number; forecastDays?: number }[]
+  quantity?: number
+  unit_cost?: number | null
+  stages: { stage: string; id?: string; state: 'done' | 'current' | 'queued'; started?: string | null; finished?: string | null; cloud: number | null; days: number; forecastDays?: number | null }[]
   lines: { id: string; at: string; what: string; kind: 'agents' | 'gpu' | 'cpu' | 'order'; amount: number }[]
+  notes?: string[]
 }
 
 // ------------------------------------------------------------------ new project (projects.create)

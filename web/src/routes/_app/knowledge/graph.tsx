@@ -64,6 +64,9 @@ function GraphView() {
   const base = useQueries({ queries: repos.map((repo) => ({ ...q('graph.neighbourhood', { repo, focus, depth }), enabled: !!focus, retry: false })) })
   const [expanded, setExpanded] = useState<Graph>({ nodes: [], links: [] })
   useEffect(() => setExpanded({ nodes: [], links: [] }), [focus, depth])
+  // the API names the item it found for a bare id (R-006 → requirement:R-006): the address takes that name
+  const resolved = base.map((b) => (b.data as { focus?: string } | undefined)?.focus).find((f): f is string => !!f && f !== focus)
+  useEffect(() => { if (resolved) setSearch({ focus: resolved }) }, [resolved]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loaded = useMemo(() => {
     let g: Graph = { nodes: [], links: [] }

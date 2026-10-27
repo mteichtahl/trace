@@ -98,6 +98,18 @@ reviewer. `require_(p, repo, 'write')` needs the contributor part (or admin). `p
 | `me.get` / `me.set` | signed-in | the person's preferences (one JSON document, `key` paths), and per-table views |
 | `graph.neighbourhood` | read | `{ nodes, links }` around a focus item, depth 1–3, from the project record, memory and the knowledge base |
 | `files.list` / `files.url` | read | the project's files by kind, and a short-lived signed URL (or bytes) for one |
+| `job.control` | write on the job's project | `{ id, op }`: cancel aborts the job on its worker and terminates the Batch jobs its tools left running; pause, resume and move_up answer `{ ok: false, reason }` (a job cannot be held, and nothing is queued). Every job view carries `controls` |
+| `requirements.trace` | read | each requirement with its evidence status (verified, failing, untested, waived); `intent: []` and `intent_note` until the record keeps intent statements |
+| `design.get` | read | the KiCad files with the latest ERC and DRC findings, pictures runs stored, and `notes` for what is not recorded (block diagram, pin plan) |
+| `build.get` / `order.record` | read / write | releases (snapshots), orders (journey table `orders`), the order ready to place; recording an order answers a ship wait that nothing checks yet |
+| `cost.get` | read (money: admins) | the stage timeline for everyone; orders paid, committed and the build forecast (quantity x unit cost) for admins; cloud use is null (not recorded per project) |
+| `skill.get` / `skill.draft` / `skill.drafts` / `skill.submit` | read / read / read / write | a guided skill's bar computed from the record (`unavailable` where it cannot be yet), the person's draft in the journey store, and submit (refused unless every check is met or waived; Waiver and Question answer go through `waiver.add` and `question.answer`) |
+| `policy.get` / `policy.set` | signed-in / admin | the installation's locked settings (`me.get` answers them as `locks`; `me.set` refuses a locked key) |
+| `users.history` | admin | a person's assignment log in words |
+
+The app reads the answers whose shape differs from its screens' through `web/src/lib/readers.ts` (journey.get, inbox,
+me.get, project.members, users.list, files.list, files.url, gate.sign, projects.create), tested against real answers
+the API's own test writes to `web/src/lib/api-answers.json`.
 
 The journey record is new tables (`src/core/journey.ts`): `journey` (template, revision, current stage), `stages`,
 `gates`, `gate_criteria`, `criterion_opens`, `gate_signatures`, `questions`, `waivers`, `decisions`. Templates (Board,

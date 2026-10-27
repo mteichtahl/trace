@@ -135,6 +135,10 @@ export interface Waiver {
   risk: 'minor' | 'degraded' | 'major'
   caught: string
   acknowledged?: boolean
+  /** the record's own words: its severity (cosmetic | degraded | failure | safety), its risk, its scope */
+  severity?: string
+  riskText?: string
+  scope?: string
 }
 
 export interface Gate {
@@ -200,6 +204,8 @@ export interface RunSummary {
   where?: string
   /** queued: what it waits for ("starts when the schematic gate is signed") */
   startsWhen?: string
+  /** what job.control can do for it now (the job view's `controls`); absent: not known, the screen's own choice */
+  controls?: ('pause' | 'resume' | 'cancel' | 'move_up')[]
 }
 
 export interface RecentItem {

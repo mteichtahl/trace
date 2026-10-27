@@ -59,6 +59,21 @@ const blank = (owner: string): NewProjectDraft => ({
 
 type Created = { repo: string; done: string[]; waits: import('@/lib/types').Wait[] }
 
+/** What projects.create takes (src/api/actions-projects.ts), from the draft. */
+export function createArgs(d: NewProjectDraft) {
+  const later = (Object.entries(d.build.later) as [keyof NewProjectDraft['build']['later'], boolean][]).filter(([, on]) => on).map(([k]) => k)
+  return {
+    repo: `${d.repository.owner}/${d.repository.name}`, name: d.name.trim(), description: d.description.trim() || undefined, template: d.template,
+    start: d.start === 'design' ? 'import' as const : 'idea' as const,
+    // the icon is kept as its JSON: glyph and colour (an uploaded image is too large for the record)
+    icon: JSON.stringify({ glyph: d.icon.glyph, colour: d.icon.colour }),
+    ...(d.repository.mode === 'new' ? { new: { private: true } } : {}),
+    people: d.people.filter((p) => p.class !== 'admin').map((p) => ({ who: p.class === 'new' ? p.email : p.who, part: p.part, ...(p.class === 'new' ? { class: p.part === 'reviewer' ? 'guest' as const : 'user' as const } : {}) })),
+    build: { quantity: d.build.quantity, ...(d.build.unitCost !== undefined ? { unit_cost: d.build.unitCost } : {}), ...(d.build.budget !== undefined ? { budget: d.build.budget } : {}), fab: d.build.fab },
+    later, apply: d.advanced.applySettings,
+  }
+}
+
 function NewProject() {
   const { user } = useAuth()
   const router = useRouter()
@@ -96,13 +111,7 @@ function NewProject() {
       return go(draft.step + 1)
     }
     try {
-      const r = await create.mutateAsync({
-        name: d.name.trim(), description: d.description.trim() || undefined, template: d.template,
-        repository: { owner: d.repository.owner, name: d.repository.name, existing: d.repository.mode === 'existing' },
-        people: d.people.filter((p) => p.class !== 'admin').map((p) => ({ who: p.who, part: p.part })),
-        branch: d.repository.branch, icon: d.icon, start: d.start, advanced: d.advanced, build: d.build,
-        invite: d.people.filter((p) => p.class === 'new').map((p) => p.email),
-      })
+      const r = await create.mutateAsync(createArgs(d))
       setCreated(r)
       draft.discard()
     } catch {
