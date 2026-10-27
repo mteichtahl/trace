@@ -5,7 +5,9 @@
  *                            (TRACE_DELEGATE_URL, TRACE_DELEGATE_TOKEN)
  *   agent.delegate (src/tools/agent/tools.ts, in that MCP server)
  *                            POST /delegate        { token, brief, acceptance, branch? } → { accepted, jobId }
- *                            POST /delegate/status { token, jobId }                      → the worker job's state
+ *                            POST /delegate/wait   { token, jobId, timeoutS }            → the worker job's state the
+ *                                                  moment it ends, or as it stands after timeoutS (at most 240 s)
+ *                            POST /delegate/status { token, jobId }                      → the worker job's state now
  *                            POST /delegate/cancel { token, jobId, reason? }             → stops it (the tool's timeout)
  *   this module              checks the token, starts a worker job (a delegated task: the worker's own prompt,
  *                            src/agents/worker/prompt.ts, with the brief and acceptance criteria as its request),
@@ -59,6 +61,13 @@ export const DelegateRequest = z.object({
 export type DelegateRequest = z.infer<typeof DelegateRequest>
 
 export const DelegateStatusRequest = z.object({ token: z.string().min(16).max(200), jobId: z.string().min(1).max(64) }).strict()
+/**
+ * The longest one POST /delegate/wait holds (s): below undici's 300 s headers timeout, which a fetch that waits for
+ * an answer would otherwise hit. A longer timeoutS is held this long; the caller asks again.
+ */
+export const MAX_WAIT_S = 240
+/** POST /delegate/wait: the token's own worker job, answered the moment it ends (or when timeoutS passes). */
+export const DelegateWaitRequest = DelegateStatusRequest.extend({ timeoutS: z.number().min(0).max(24 * 3600) }).strict()
 /** POST /delegate/cancel: stop the token's own worker job (agent.delegate's timeout). */
 export const DelegateCancelRequest = DelegateStatusRequest.extend({ reason: z.string().min(1).max(500).optional() }).strict()
 
@@ -101,6 +110,8 @@ export interface Delegations {
   unregister(jobId: string): void
   /** The specialist job a delegated task belongs to (for the runner), or null once it ended. */
   parent(jobId: string): ParentJob | null
+  /** The specialist job holding this token (server.ts attributes a /delegate/wait's wait to it), or throws (403). */
+  parentOfToken(token: string): ParentJob
   /**
    * Start a worker job for the token's specialist: one at a time. With `jobStatus`, the active one is looked up first,
    * so a delegation that failed or was cancelled no longer blocks the next.
@@ -108,6 +119,12 @@ export interface Delegations {
   start(req: DelegateRequest, startJob: (p: JobPayload) => Accepted, jobStatus?: (id: string) => JobInfo[]): Accepted
   /** One of the token's own children (and where its delegation stands), or throws. */
   status(token: string, jobId: string, jobStatus: (id: string) => JobInfo[]): JobInfo & { delegation: DelegationState }
+  /**
+   * The same as status, once the child has ended (waitForEnd: an event, not a timer) or timeoutMs passed or the signal
+   * aborted (then as it stands, still running). The token is checked before anything waits.
+   */
+  wait(token: string, jobId: string, o: { timeoutMs: number; signal?: AbortSignal | undefined },
+    jobs: { jobStatus: (id: string) => JobInfo[]; waitForEnd: (id: string, o: { timeoutMs?: number; signal?: AbortSignal | undefined }) => Promise<JobInfo | null> }): Promise<JobInfo & { delegation: DelegationState }>
   /** Abort one of the token's own running children (jobs.abort) and mark its delegation cancelled. */
   cancel(token: string, jobId: string, reason: string, abort: (id: string, reason: string) => Promise<boolean>, jobStatus: (id: string) => JobInfo[]): Promise<DelegationState>
 }
@@ -126,6 +143,7 @@ export function createDelegations(): Delegations {
     },
     unregister(jobId) { byJob.delete(jobId) },
     parent(jobId) { return byJob.get(jobId)?.parent ?? null },
+    parentOfToken(token) { return byToken(token).parent },
     start(req, startJob, jobStatus) {
       const e = byToken(req.token)
       if (e.active && jobStatus) {
@@ -158,6 +176,12 @@ export function createDelegations(): Delegations {
       const state = known === 'cancelled' ? 'cancelled' : delegationStateOf(j)
       if (state !== 'running') settle(e, jobId, state)
       return { ...j, delegation: state }
+    },
+    async wait(token, jobId, o, jobs) {
+      const now = this.status(token, jobId, jobs.jobStatus)
+      if (now.delegation !== 'running') return now
+      await jobs.waitForEnd(jobId, o)
+      return this.status(token, jobId, jobs.jobStatus)
     },
     async cancel(token, jobId, reason, abort, jobStatus) {
       const e = byToken(token)

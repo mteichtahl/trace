@@ -5,9 +5,26 @@
  *   startJob(payload)  → { accepted, jobId }      (accepted false, with the running job's id, for a duplicate)
  *   jobStatus(jobId?)  → one job, or every job this process knows
  *
+ * Every change is an event (events: EventBus<JobEvent>), so nothing here is polled:
+ *
+ *   started   a job was accepted (its JobInfo)          log      one line into a job's log (the line, timestamped)
+ *   routed    a specialist job was routed (its Route)   ended    a job ended (its final JobInfo: state, summary, error)
+ *   wait      a wait opened, was checked or changed state, or ended (src/core/wait.ts): a job runs inside withJob, so
+ *             its waits carry its id and count as its changes; a wait outside any job (a tool call) has jobId ''
+ *
+ * Each event bumps `version()`, a counter that only grows (per process, from 0), and carries it; a job's own last
+ * change is `versionOf(jobId)`. On top of the events:
+ *
+ *   waitForEnd(jobId, { timeoutMs, signal })        → the finished JobInfo the moment the job ends; at once when it
+ *                                                     already has; null for an unknown job, on timeout or abort
+ *   waitForChange(afterVersion, { jobId?, ... })    → the version as soon as it passes afterVersion (for one job, or
+ *                                                     any); at once when it already has; the version as it stands on
+ *                                                     timeout or abort (a status answer that can hold: server.ts)
+ *
  * The runner that does the work is injected (createJobs), so tests drive the contract without git or a model.
  */
 import { randomBytes } from 'node:crypto'
+import { EventBus, type WaitChange, waitChanges, withJob } from '../../core/wait.js'
 import { ATTR, annotate } from '../../core/telemetry.js'
 import type { Route } from '../kinds.js'
 import { type PromptRecord, promptAttrs } from '../../prompts/telemetry.js'
@@ -34,9 +51,35 @@ export interface JobContext {
 /** Does one job; resolves with a one-line summary, rejects with the reason it failed. */
 export type JobRunner = (payload: JobPayload, ctx: JobContext) => Promise<string>
 
+/** One change to one job. `version` is the jobs' change counter after it (Jobs.version). */
+export type JobEvent =
+  | { type: 'started'; jobId: string; version: number; job: JobInfo }
+  | { type: 'log'; jobId: string; version: number; line: string }
+  | { type: 'routed'; jobId: string; version: number; route: Route }
+  | { type: 'ended'; jobId: string; version: number; job: JobInfo }
+  /** a wait opened, checked or ended (src/core/wait.ts): in a job (its jobId), or outside any job (jobId '') */
+  | { type: 'wait'; jobId: string; version: number; change: WaitChange }
+
+export type JobEnded = Extract<JobEvent, { type: 'ended' }>
+
+export interface WaitOptions { timeoutMs?: number; signal?: AbortSignal | undefined }
+
 export interface Jobs {
   startJob(payload: JobPayload): Accepted
   jobStatus(jobId?: string): JobInfo[]
+  /** Every change to every job, as it happens. Listeners must not throw (a throw is swallowed) and must not block. */
+  readonly events: EventBus<JobEvent>
+  /** The change counter: bumped by every event, never goes down. */
+  version(): number
+  /** The version of one job's latest change (0 for a job never seen). */
+  versionOf(jobId: string): number
+  /** The job once it has ended (at once if it has); null for an unknown job, on timeout or on abort. */
+  waitForEnd(jobId: string, o?: WaitOptions): Promise<JobInfo | null>
+  /**
+   * Resolves with the version as soon as it is above afterVersion (that job's own changes only, with jobId); at once if
+   * it already is. On timeout or abort, with the version as it stands (≤ afterVersion for that scope: nothing changed).
+   */
+  waitForChange(afterVersion: number, o?: WaitOptions & { jobId?: string | undefined }): Promise<number>
   /** True while any job runs (GET /ping answers HealthyBusy). */
   busy(): boolean
   /**
@@ -46,6 +89,8 @@ export interface Jobs {
   abort(jobId: string, reason: string, graceMs?: number): Promise<boolean>
   /** Abort every running job and wait (up to graceMs) for them to finish. */
   shutdown(graceMs?: number): Promise<void>
+  /** Stop listening to the process's wait changes (a registry that is thrown away, as in tests). */
+  dispose(): void
 }
 
 const KEEP_FINISHED = 200
@@ -90,8 +135,21 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
 
   const prune = (): void => {
     const finished = [...jobs.values()].filter((j) => j.state !== 'running')
-    for (const j of finished.slice(0, Math.max(0, finished.length - KEEP_FINISHED))) jobs.delete(j.id)
+    for (const j of finished.slice(0, Math.max(0, finished.length - KEEP_FINISHED))) { jobs.delete(j.id); versions.delete(j.id) }
   }
+
+  const events = new EventBus<JobEvent>()
+  let version = 0
+  const versions = new Map<string, number>()
+  type Unversioned = JobEvent extends infer E ? E extends JobEvent ? Omit<E, 'version'> : never : never
+  const emit = (e: Unversioned): void => {
+    version++
+    versions.set(e.jobId, version)
+    events.emit({ ...e, version } as JobEvent)
+  }
+  // every change to the record of open waits is a change here too, so a held status answer wakes on it
+  const unwatch = waitChanges.on((change) => emit({ type: 'wait', jobId: change.notice.jobId ?? '', change }))
+  const scopeVersion = (jobId: string | undefined): number => (jobId ? versions.get(jobId) ?? 0 : version)
 
   const self: Jobs = {
     startJob(payload) {
@@ -131,13 +189,16 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
         info.log.push(l)
         if (info.log.length > LOG_LINES) info.log.splice(0, info.log.length - LOG_LINES)
         echo(`[${id}] ${line}`)
+        emit({ type: 'log', jobId: id, line: l })
       }
       log(`started ${key}`)
+      emit({ type: 'started', jobId: id, job: info })
       const route = (r: Route): void => {
         info.route = r
         info.agent = r.kind
         log(`routed to ${r.kind} (${r.source}, confidence ${r.confidence.toFixed(2)}): ${r.reason}`)
         annotate({ [ATTR.agent]: r.kind, [ATTR.agentKind]: r.kind, [ATTR.routeReason]: r.reason, [ATTR.routeConfidence]: r.confidence, [ATTR.routeSource]: r.source })
+        emit({ type: 'routed', jobId: id, route: r })
       }
       const prompts = (used: readonly PromptRecord[]): void => {
         info.prompts = [...(info.prompts ?? []), ...used]
@@ -145,7 +206,7 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
       }
       const done = observeJob(payload, id, info.agent ?? 'specialist', () => info, async () => {
         try {
-          info.summary = await runner(payload, { jobId: id, signal: abort.signal, log, startJob: (p) => self.startJob(p), route, prompts })
+          info.summary = await withJob(id, () => runner(payload, { jobId: id, signal: abort.signal, log, startJob: (p) => self.startJob(p), route, prompts }))
           info.state = abort.signal.aborted ? 'aborted' : 'succeeded'
           if (abort.signal.aborted) info.error = abort.signal.reason instanceof Error ? abort.signal.reason.message : String(abort.signal.reason)
         } catch (e) {
@@ -160,6 +221,8 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
           children.delete(id)
           running.delete(key)
           prune()
+          // last: a listener sees the job ended, not busy, and its worker children on their way out
+          emit({ type: 'ended', jobId: id, job: info })
         }
       })
       running.set(key, { id, abort, done })
@@ -170,12 +233,34 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
       return [...jobs.values()].reverse()
     },
     busy: () => running.size > 0,
+    events,
+    version: () => version,
+    versionOf: (jobId) => versions.get(jobId) ?? 0,
+    async waitForEnd(jobId, o = {}) {
+      if (!jobs.has(jobId)) return null
+      const ended = (e: JobEvent): e is JobEnded => e.type === 'ended' && e.jobId === jobId
+      const e = await events.waitFor(ended, {
+        ...o,
+        // asked after listening starts: an end between the caller's look and the wait is not missed
+        already: () => { const j = jobs.get(jobId); return j && j.state !== 'running' ? { type: 'ended', jobId, version: versions.get(jobId) ?? version, job: j } : null },
+      })
+      return e?.job ?? null
+    },
+    async waitForChange(afterVersion, o = {}) {
+      const { jobId, ...w } = o
+      const e = await events.waitFor((x) => !jobId || x.jobId === jobId, {
+        ...w,
+        already: () => { const v = scopeVersion(jobId); return v > afterVersion ? { type: 'log', jobId: jobId ?? '', version: v, line: '' } : null },
+      })
+      return e?.version ?? scopeVersion(jobId)
+    },
     async abort(jobId, reason, graceMs = 30_000) {
       const done = abortOne(jobId, reason)
       if (!done) return false
       await Promise.race([done, new Promise((res) => setTimeout(res, graceMs).unref())])
       return true
     },
+    dispose: () => { unwatch() },
     async shutdown(graceMs = 20_000) {
       const live = [...running.values()]
       for (const r of live) r.abort.abort(new Error('the runtime is shutting down'))

@@ -10,9 +10,10 @@ import { GetConnectionCommand, ListConnectionsCommand, ListTagsForResourceComman
 import { DescribeSecretCommand, ResourceNotFoundException } from '@aws-sdk/client-secrets-manager'
 import { describe, expect, it } from 'vitest'
 import { AnswersSchema } from '../../src/installer/answers.js'
+import { type WaitNotice, activeWaits, checkNow } from '../../src/core/wait.js'
 import {
-  type ConnectionChoice, type NameClients, chooseRunnerAuth, clockTime, deployedProjects, ensureGpuImage, ensureSourceCredential, nameIndex, removeSourceCredential,
-  resolveConnection, reusableConnection, stackOutputs, waitForConnection,
+  CONNECTION_WAIT_WHY, GPU_WAIT_WHY, type ConnectionChoice, type NameClients, chooseRunnerAuth, clockTime, deployedProjects, ensureGpuImage, ensureSourceCredential, nameIndex,
+  removeSourceCredential, resolveConnection, reusableConnection, stackOutputs, waitForConnection,
 } from '../../src/installer/aws.js'
 import { chooseGenerations, projectNames } from '../../src/installer/bootstrap.js'
 import { InfraPropsSchema, projectHash, projectOutputs } from '../../src/infra/props.js'
@@ -198,6 +199,67 @@ describe('the GPU image build', () => {
     expect((await ensureGpuImage(cb, { buildId: 'trace-gpu-image:1', imageTag: 'abc', startedAfter: run, pollMs: 0, timeoutMs: -1 })).detail).toMatch(/still running/)
     expect((await ensureGpuImage(cb, { buildId: '', imageTag: 'abc', startedAfter: run })).ok).toBe(false)
   })
+
+  /** A clock that moves only when the wait sleeps; a sleep cut short (Check now) moves it by nothing. */
+  const clock = (start = Date.parse('2026-10-26T10:10:00Z')) => {
+    let t = start
+    const slept: number[] = []
+    return {
+      now: () => t, slept,
+      sleep: async (ms: number, early: AbortSignal) => { slept.push(ms); if (!early.aborted) t += ms },
+    }
+  }
+
+  it('is a declared timer: every 30 seconds by default, each check reported with when the next one is, and why', async () => {
+    let n = 0
+    const cb = fake((c) => (c instanceof BatchGetBuildsCommand ? build(n++ < 3 ? 'IN_PROGRESS' : 'SUCCEEDED', '2026-10-26T10:05:00Z') : null))
+    const c = clock()
+    const seen: WaitNotice[] = []
+    const r = await ensureGpuImage(cb, { buildId: 'trace-gpu-image:1', imageTag: 'abc', startedAfter: run, now: c.now, sleep: c.sleep, report: (x) => seen.push(x) })
+    expect(r.ok).toBe(true)
+    expect(c.slept).toEqual([30_000, 30_000, 30_000])
+    expect(seen.map((x) => x.checks)).toEqual([1, 2, 3, 4])
+    expect(seen.every((x) => x.source === 'timer' && x.why === GPU_WAIT_WHY && x.what === 'the GPU image abc to build')).toBe(true)
+    expect(seen[0]).toMatchObject({ state: 'IN_PROGRESS', lastCheckedAt: '2026-10-26T10:10:00.000Z', nextCheckAt: '2026-10-26T10:10:30.000Z', intervalMs: 30_000 })
+    expect(seen.at(-1)).toMatchObject({ state: 'SUCCEEDED', nextCheckAt: null })
+    // off the record once it ends
+    expect(activeWaits().some((x) => x.id === seen[0]?.id)).toBe(false)
+  })
+
+  it('checks a build it started again at once, and retries only once', async () => {
+    const c = clock()
+    const cb = fake((x) => {
+      if (x instanceof StartBuildCommand) return { build: { id: 'trace-gpu-image:2' } }
+      if (x instanceof BatchGetBuildsCommand) return build('FAILED', (x.input.ids as string[])[0] === 'trace-gpu-image:1' ? '2026-10-20T10:00:00Z' : '2026-10-20T11:00:00Z')
+      return null
+    })
+    const r = await ensureGpuImage(cb, { buildId: 'trace-gpu-image:1', imageTag: 'abc', startedAfter: run, now: c.now, sleep: c.sleep })
+    expect(r).toMatchObject({ ok: false, detail: expect.stringMatching(/^the GPU image build trace-gpu-image:2 failed/) })
+    expect(cb.sent.map((x) => x.name)).toEqual(['BatchGetBuildsCommand', 'StartBuildCommand', 'BatchGetBuildsCommand'])
+    expect(c.slept).toEqual([])
+  })
+
+  it('stops at its deadline (3 hours by default), on time, the build carrying on', async () => {
+    const c = clock()
+    const t0 = c.now()
+    const cb = fake(() => build('IN_PROGRESS', '2026-10-26T10:05:00Z'))
+    const r = await ensureGpuImage(cb, { buildId: 'trace-gpu-image:1', imageTag: 'abc', startedAfter: run, now: c.now, sleep: c.sleep })
+    expect(r.detail).toMatch(/is still running; run the installer again later/)
+    expect(c.now() - t0).toBe(3 * 3600_000)
+    expect(cb.sent).toHaveLength(3 * 3600_000 / 30_000 + 1)
+  })
+
+  it('checks now when asked (checkNow with the id it reported), without waiting out the interval', async () => {
+    let n = 0
+    const cb = fake((c) => (c instanceof BatchGetBuildsCommand ? build(n++ < 1 ? 'IN_PROGRESS' : 'SUCCEEDED', '2026-10-26T10:05:00Z') : null))
+    const started = Date.now()
+    const r = await ensureGpuImage(cb, {
+      buildId: 'trace-gpu-image:1', imageTag: 'abc', startedAfter: run, pollMs: 60_000, now: () => Date.now() - 10_000,
+      report: (x) => { if (x.nextCheckAt) setTimeout(() => expect(checkNow(x.id)).toBe(true), 5) },
+    })
+    expect(r.ok).toBe(true)
+    expect(Date.now() - started).toBeLessThan(5_000)
+  })
 })
 
 describe('the GitHub connection the CodeBuild runners use', () => {
@@ -311,6 +373,15 @@ describe('the GitHub connection the CodeBuild runners use', () => {
     expect(lines.filter((l) => l.startsWith('Waiting for')).map((l) => /at (\S+)\.$/.exec(l)?.[1])).toEqual(['10:43:00', '10:44:00', '10:45:00', '10:46:00', '10:47:00'])
     // the instructions are said once, not on every check
     expect(lines.filter((l) => l.includes('Update pending connection'))).toHaveLength(1)
+  })
+
+  it('puts each check on the record for the page (countdown, Check now), with why it is a timer', async () => {
+    const c = connections({ list: [{ arn: CONNECTION, name: 'trace-github', status: 'PENDING' }], statuses: ['PENDING', 'AVAILABLE'] })
+    const seen: WaitNotice[] = []
+    await waitForConnection(c, { arn: CONNECTION, name: 'trace-github', status: 'PENDING' }, { region: 'us-east-1', repos: [A], report: () => undefined, onWait: (n) => seen.push(n), pollMs: 60_000, ...clock() })
+    expect(seen[0]).toMatchObject({ what: 'trace-github to be authorized', source: 'timer', why: CONNECTION_WAIT_WHY, state: 'PENDING', intervalMs: 60_000 })
+    expect(seen[0]?.nextCheckAt).not.toBeNull()
+    expect(seen.at(-1)).toMatchObject({ state: 'AVAILABLE', nextCheckAt: null })
   })
 
   it('stops on a connection in ERROR', async () => {

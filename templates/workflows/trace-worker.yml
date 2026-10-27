@@ -22,7 +22,12 @@
 # Knowledge base (optional): with TRACE_KB_ID and TRACE_KB_DATA_SOURCE_ID (set by `trace install`), every push to
 # __TR_BRANCH__ syncs the project's knowledge base (job kb-sync: `trace kb sync` through TRACE_AWS_ROLE), whatever
 # worker.runner says; in the actions runner the agents also get kb_search and kb_status.
-# Also needs TRACE_TOKEN. An hourly schedule runs the pick as a backstop for events GitHub never sent.
+# Also needs TRACE_TOKEN.
+# How work is found: events. A finished trace-ci run (it labels a red PR or opens an issue), an issue labelled
+# __TR_AGENT_FIX__, and a push to __TR_BRANCH__ (which can put open PRs in conflict) each start the pick at once.
+# The schedule (minute 23 of every hour, UTC) is only a safety net: GitHub occasionally fails to deliver an event, and
+# that hourly pick finds whatever such a lost event left waiting (a PR still labelled __TR_CI_RED__, a PR still in
+# conflict, an __TR_AGENT_FIX__ issue nobody claimed). On a scheduled run with nothing waiting, the pick finds nothing.
 # Kill switch: variable TRACE_WORKER = 'false'.
 #
 # Runners: every job runs on AWS CodeBuild (a CodeBuild-hosted GitHub Actions runner in the installation's AWS account),
@@ -40,7 +45,7 @@ on:
   push:
     branches: [__TR_BRANCH__]
   schedule:
-    - cron: '23 * * * *'
+    - cron: '23 * * * *'       # safety net only: hourly, for events GitHub failed to deliver (see the header)
   workflow_dispatch:
 
 permissions: {}

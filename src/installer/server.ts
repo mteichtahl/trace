@@ -6,6 +6,8 @@
  *   - it listens on 127.0.0.1 and refuses requests whose Host is not localhost (no DNS rebinding);
  *   - every request carries the one-time key printed in the URL (the page sends it as a header), so another local
  *     process or browser tab can't drive it;
+ *   - the one wait it cannot hear the end of (the GPU image build: AWS cannot send this computer its events) is a
+ *     timer; the page shows when it checks next and can ask for a check now (POST /api/check-now);
  *   - secrets typed into the page stay in this process's memory: they are written only to AWS Secrets Manager and
  *     to GitHub (encrypted with the repository's key), and are never sent back to the page or saved to disk.
  */
@@ -15,6 +17,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { join } from 'node:path'
 import { z } from 'zod'
 import { answers as savedAnswers, installation } from '../core/client.js'
+import { checkNow } from '../core/wait.js'
 import { stackName } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import { IntegrationNameSchema, checkIntegration, valuesFor } from '../core/integrations.js'
@@ -166,6 +169,11 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
       }
       void apply(a, s, emit, opts.hooks ?? {}, { prev: previous() })
       return { started: true }
+    },
+    // a timer wait the page shows (a `wait` event): check now instead of at its next check
+    'POST /api/check-now': async (req) => {
+      const { waitId } = z.object({ waitId: z.string().regex(/^wait-[0-9a-f]{1,32}$/, 'expected a wait id') }).strict().parse(await body(req))
+      return { ok: checkNow(waitId) }
     },
   }
 

@@ -123,7 +123,10 @@ export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerRes
       entry.action = action
       if (typeof args.repo === 'string') entry.repo = args.repo.toLowerCase()
       try {
-        const r = await perform(action, args, { principal, deps: o.deps })
+        // a held call (job, tools.waits) stops holding the worker when its caller goes away
+        const left = new AbortController()
+        res.once('close', () => { if (!res.writableFinished) left.abort(new Error('the caller went away')) })
+        const r = await perform(action, args, { principal, deps: o.deps, signal: left.signal })
         if (r.repo) entry.repo = r.repo
         return done(200, { ok: true, result: r.result }, 'ok')
       } catch (e) {

@@ -5,9 +5,14 @@
  * TRACE_DELEGATE_TOKEN (that job's). Without them (a delegated worker, a GitHub Actions run, a local `trace mcp`) the
  * tool is not offered, which is what limits delegation to depth 1; the runtime refuses any other token too.
  *
- * The call blocks: it polls the worker job's status every TRACE_DELEGATE_POLL_MS (default 15 s) until it ends or
- * TRACE_DELEGATE_TIMEOUT_S passes (agents.delegate_timeout_minutes); then it cancels the worker (POST
- * /delegate/cancel) and returns, and the specialist may delegate again. Claude Code waits for it: the job runner sets
+ * The call blocks, on an event, not a timer: it asks POST /delegate/wait { token, jobId, timeoutS }, which the runtime
+ * holds until the worker job ends (jobs.ts waitForEnd) and answers that instant, or answers "still running" after
+ * timeoutS (at most 240 s a call, below undici's 300 s headers timeout); then it asks again with the time left. When
+ * TRACE_DELEGATE_TIMEOUT_S (agents.delegate_timeout_minutes) has passed it cancels the worker (POST /delegate/cancel)
+ * and returns, and the specialist may delegate again. While it waits, the wait is on the runtime's record, not this
+ * process's: the runtime's /delegate/wait handler opens it ("the worker job <id>", its latest log line as the state),
+ * attributed to the specialist's job, so it is listed once (this process's other waits reach the runtime through the
+ * wait relay, src/core/wait-report.ts). Claude Code waits for it: the job runner sets
  * MCP_TOOL_TIMEOUT (ms, the wall-clock limit of one MCP call) and CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT (ms; a stdio
  * server that answers nothing for 30 minutes is otherwise cut off) above the wait (src/agents/runtime/job.ts).
  */
@@ -33,16 +38,17 @@ export interface DelegateEnv {
   url: string
   token: string
   timeoutS: number
-  pollMs: number
 }
+
+/** The longest one /delegate/wait is held (the runtime caps it there too: delegation.ts MAX_WAIT_S). */
+const WAIT_S = 240
 
 export function delegateEnv(env: NodeJS.ProcessEnv = process.env): DelegateEnv | null {
   const url = env.TRACE_DELEGATE_URL?.trim()
   const token = env.TRACE_DELEGATE_TOKEN?.trim()
   if (!url || !token) return null
   const t = Number(env.TRACE_DELEGATE_TIMEOUT_S)
-  const p = Number(env.TRACE_DELEGATE_POLL_MS)
-  return { url: url.replace(/\/+$/, ''), token, timeoutS: Number.isFinite(t) && t > 0 ? t : 4 * 3600, pollMs: Number.isFinite(p) && p > 0 ? p : 15_000 }
+  return { url: url.replace(/\/+$/, ''), token, timeoutS: Number.isFinite(t) && t > 0 ? t : 4 * 3600 }
 }
 
 async function post(e: DelegateEnv, path: string, body: unknown): Promise<unknown> {
@@ -56,8 +62,6 @@ async function post(e: DelegateEnv, path: string, body: unknown): Promise<unknow
   if (!r.ok) throw new ToolError(`agent.delegate: ${ErrorBody.safeParse(json).data?.error ?? `the runtime answered ${r.status}`}`)
   return json
 }
-
-const sleep = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms))
 
 export const delegate = defineTool({
   name: 'agent.delegate',
@@ -75,7 +79,9 @@ export const delegate = defineTool({
     if (!started.accepted) throw new ToolError(`agent.delegate: not started (${started.reason ?? 'refused'}); the running job is ${started.jobId}`)
     const end = Date.now() + e.timeoutS * 1000
     for (;;) {
-      const s = Status.parse(await post(e, '/delegate/status', { token: e.token, jobId: started.jobId })).job
+      const left = Math.max(0, (end - Date.now()) / 1000)
+      // held by the runtime until the worker ends (answered that instant) or `left` passes: no timer here
+      const s = Status.parse(await post(e, '/delegate/wait', { token: e.token, jobId: started.jobId, timeoutS: Math.min(WAIT_S, left) })).job
       const state = s.delegation ?? (s.state === 'aborted' ? 'cancelled' : s.state)
       if (state !== 'running') {
         return {
@@ -93,7 +99,6 @@ export const delegate = defineTool({
           next: 'The worker ran out of time and was stopped. Look at what it committed (git log), then delegate again with a smaller brief, or escalate with this job id.',
         }
       }
-      await sleep(e.pollMs)
     }
   },
 })

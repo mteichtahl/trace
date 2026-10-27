@@ -13,7 +13,10 @@
  *   4. ingest    StartIngestionJob when anything changed, when the data source has never been ingested, when its
  *                last job failed or stopped or began before the newest upload kb_objects records, or with force; one already running (ConflictException) is waited for first. Then GetIngestionJob until it
  *                is COMPLETE, FAILED or STOPPED, or the wait runs out (the job carries on; `trace kb status` reports
- *                it). Its statistics and failure reasons are the report's.
+ *                it). Its statistics and failure reasons are the report's. Both waits are timers, every pollMs
+ *                (10 s), because Bedrock sends no event when an ingestion job ends: they are waitWithTimer's
+ *                (core/wait.ts), so each is on the record (activeWaits, checkNow) and `progress` gets a plain line
+ *                ("Waiting for … Checked just now; next check in 10 seconds.") whenever the job's state changes.
  *
  * kb_objects (the project database, registered with ensureProjectSchema) keeps one row per object: key, the repository
  * path it is for, its tracking hash, its ETag and when it was uploaded. `trace db merge` keeps, per key, the row
@@ -28,6 +31,7 @@ import {
 } from '@aws-sdk/client-bedrock-agent'
 import { ensureProjectSchema } from '../../core/store.js'
 import { ATTR, setAttrs, span } from '../../core/telemetry.js'
+import { type WaitNotice, describeWait, waitWithTimer } from '../../core/wait.js'
 import { type KbDoc, SIDECAR, sha256, sidecar, sidecarHash } from './content.js'
 import type { KbS3 } from './env.js'
 
@@ -119,6 +123,20 @@ export const viewOf = (j: IngestionJob | undefined): IngestionView | null => (j?
 
 const RUNNING = new Set(['STARTING', 'IN_PROGRESS', 'STOPPING'])
 
+/** Why the ingestion waits are timers. */
+export const WHY_TIMER = 'Bedrock sends no event when an ingestion job finishes'
+
+/** A wait's report as progress lines: one on the first check and one each time the awaited state changes. */
+const progressOf = (line: ((l: string) => void) | undefined, now: () => number): ((n: WaitNotice) => void) | undefined => {
+  if (!line) return undefined
+  let seen: string | null | undefined
+  return (n) => {
+    if (n.checks > 1 && n.state === seen) return
+    seen = n.state
+    line(describeWait(n, now()))
+  }
+}
+
 /** The data source's newest ingestion job, or null when it has none. */
 export async function lastIngestion(c: IngestClient, kb: string, ds: string): Promise<IngestionView | null> {
   const r = await c.send(new ListIngestionJobsCommand({ knowledgeBaseId: kb, dataSourceId: ds, sortBy: { attribute: 'STARTED_AT', order: 'DESCENDING' }, maxResults: 1 }))
@@ -138,6 +156,7 @@ export interface SyncDeps {
   /** the project database (kb_objects), or null to keep no rows */
   db: DatabaseSync | null
   now?: () => number
+  /** tests: the timer waits' sleep (waitWithTimer's; a check now does not cut it short) */
   sleep?: (ms: number) => Promise<void>
 }
 
@@ -147,7 +166,10 @@ export interface SyncOptions {
   force?: boolean
   /** how long to wait for the ingestion job (0: start it and return) */
   waitMs?: number
+  /** how often to check on the ingestion job: Bedrock sends no event when one finishes (default 10 s) */
   pollMs?: number
+  /** a line a person reads each time a wait's state changes: what is awaited, when it was checked, when it is next */
+  progress?: (line: string) => void
   /** work out what would change, and change nothing */
   dryRun?: boolean
 }
@@ -179,7 +201,6 @@ async function pool<T>(items: readonly T[], n: number, fn: (t: T) => Promise<voi
 
 export async function syncKb(t: SyncTarget, docs: readonly KbDoc[], d: SyncDeps, o: SyncOptions): Promise<SyncReport> {
   const now = d.now ?? Date.now
-  const sleep = d.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)))
   return span('trace.kb.sync', { [ATTR.kbDocuments]: docs.length }, async (s) => {
     const started = now()
     const want = wanted(docs, t.prefix, o.commit)
@@ -225,25 +246,45 @@ export async function syncKb(t: SyncTarget, docs: readonly KbDoc[], d: SyncDeps,
     const waitMs = o.waitMs ?? 15 * 60_000
     const pollMs = o.pollMs ?? 10_000
     const deadline = now() + Math.max(waitMs, 0)
-    // one job at a time per data source: a running one started before these uploads may miss them, so wait for it
-    let job: IngestionJob | undefined
-    for (;;) {
-      try {
-        job = (await d.ingest.send(new StartIngestionJobCommand({
-          knowledgeBaseId: t.knowledgeBaseId, dataSourceId: t.dataSourceId, description: `trace kb sync at ${o.commit.slice(0, 12)}`.slice(0, 200),
-        }))).ingestionJob
-        break
-      } catch (e) {
-        if (!(e instanceof ConflictException || (e as { name?: string }).name === 'ConflictException')) throw e
-        last = await lastIngestion(d.ingest, t.knowledgeBaseId, t.dataSourceId)
-        if (now() >= deadline) { report.ingestion = last; report.waiting = true; setAttrs(s, { [ATTR.kbIngestion]: 'busy' }); return report }
-        await sleep(pollMs)
-      }
+    // both waits are timers: Bedrock sends no event when an ingestion job finishes (waitWithTimer, core/wait.ts)
+    const sleep = d.sleep
+    const timer = {
+      why: WHY_TIMER, intervalMs: Math.max(pollMs, 1), deadlineAt: deadline, now,
+      ...(sleep ? { sleep: (ms: number) => sleep(ms) } : {}),
+      report: progressOf(o.progress, now),
     }
-    let view = viewOf(job)
-    while (view && RUNNING.has(view.status) && now() < deadline) {
-      await sleep(pollMs)
-      view = viewOf((await d.ingest.send(new GetIngestionJobCommand({ knowledgeBaseId: t.knowledgeBaseId, dataSourceId: t.dataSourceId, ingestionJobId: view.job_id }))).ingestionJob) ?? view
+    // one job at a time per data source: a running one started before these uploads may miss them, so wait for it
+    const start = await waitWithTimer<IngestionJob | undefined>({
+      ...timer,
+      what: 'the knowledge base\'s other ingestion job to finish before this one can start',
+      check: async () => {
+        try {
+          const job = (await d.ingest.send(new StartIngestionJobCommand({
+            knowledgeBaseId: t.knowledgeBaseId, dataSourceId: t.dataSourceId, description: `trace kb sync at ${o.commit.slice(0, 12)}`.slice(0, 200),
+          }))).ingestionJob
+          return { done: true, value: job }
+        } catch (e) {
+          if (!(e instanceof ConflictException || (e as { name?: string }).name === 'ConflictException')) throw e
+          last = await lastIngestion(d.ingest, t.knowledgeBaseId, t.dataSourceId)
+          return { done: false, state: last?.status ?? 'RUNNING' }
+        }
+      },
+    })
+    if (!start.done) { report.ingestion = last; report.waiting = true; setAttrs(s, { [ATTR.kbIngestion]: 'busy' }); return report }
+    let view = viewOf(start.value)
+    if (view && RUNNING.has(view.status)) {
+      // the first check is the job StartIngestionJob returned; GetIngestionJob from the second on
+      let first = true
+      await waitWithTimer<null>({
+        ...timer,
+        what: `the knowledge base ingestion job ${view.job_id}`,
+        check: async () => {
+          if (!first && view) view = viewOf((await d.ingest.send(new GetIngestionJobCommand({ knowledgeBaseId: t.knowledgeBaseId, dataSourceId: t.dataSourceId, ingestionJobId: view.job_id }))).ingestionJob) ?? view
+          first = false
+          const st = view?.status ?? 'UNKNOWN'
+          return RUNNING.has(st) ? { done: false, state: st } : { done: true, value: null, state: st }
+        },
+      })
     }
     report.ingestion = view
     report.waiting = Boolean(view && RUNNING.has(view.status))

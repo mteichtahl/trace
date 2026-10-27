@@ -9,9 +9,15 @@
  *   4 Review         the plan, how long it takes, and an "Advanced" disclosure with every other setting
  *
  * then the installation's progress, streamed. The answers are validated with the same zod schemas the server uses.
+ *
+ * Nothing here polls: the page asks the server only when the person acts, and hears the installation over one event
+ * stream (/api/events). The waits the installer itself does on a timer (the GPU image build, a GitHub connection
+ * being authorized: AWS cannot send this computer their events) arrive as `wait` events after every check; the page
+ * shows each with a countdown to the next check, worked out here from nextCheckAt and redrawn each second (a display
+ * tick: it asks the server nothing), and a Check now button (POST /api/check-now).
  */
 import { INTEGRATIONS, INTEGRATION_NAMES, type IntegrationName } from '../../core/integrations-catalog.js'
-import { type AnswersInput, AnswersSchema, type Check, type InstallEvent, RUNNER_AUTH, RUNNER_COMPUTE_TYPES, type Step } from '../answers.js'
+import { type AnswersInput, AnswersSchema, type Check, type InstallEvent, RUNNER_AUTH, RUNNER_COMPUTE_TYPES, type Step, type WaitNoticeView } from '../answers.js'
 
 // ------------------------------------------------------------------ the server's answers (shapes the page relies on)
 
@@ -96,6 +102,8 @@ const s = {
   log: [] as string[],
   ready: null as string[] | null,
   result: null as { ok: boolean; summary: string[] } | null,
+  /** the timer waits open now, by step: the latest notice, and whether a Check now is on its way */
+  waits: new Map<string, { wait: WaitNoticeView; asked: boolean; error: string }>(),
 }
 
 // ------------------------------------------------------------------ DOM helper
@@ -552,7 +560,7 @@ async function checkKey(n: IntegrationName): Promise<void> {
 
 async function startInstall(): Promise<void> {
   s.steps = s.plan ? s.plan.map((st) => ({ ...st })) : []
-  s.log = []; s.result = null; s.ready = null; s.tab = 'install'; render()
+  s.log = []; s.result = null; s.ready = null; s.waits.clear(); s.tab = 'install'; render()
   try {
     await api('POST', '/api/apply', { answers: answers(), secrets: secrets() })
   } catch (e) {
@@ -561,14 +569,91 @@ async function startInstall(): Promise<void> {
   const es = new EventSource(`/api/events?k=${encodeURIComponent(KEY)}`)
   es.onmessage = (m: MessageEvent<string>) => {
     const e = JSON.parse(m.data) as InstallEvent
-    if (e.type === 'step') s.steps = s.steps.some((st) => st.id === e.step.id) ? s.steps.map((st) => (st.id === e.step.id ? e.step : st)) : [...s.steps, e.step]
+    if (e.type === 'step') {
+      s.steps = s.steps.some((st) => st.id === e.step.id) ? s.steps.map((st) => (st.id === e.step.id ? e.step : st)) : [...s.steps, e.step]
+      // a step that is no longer running has no open wait, even if its last check failed before saying so
+      if (e.step.status !== 'running') s.waits.delete(e.step.id)
+    }
     else if (e.type === 'log') s.log = [...s.log.slice(-800), `[${e.step}] ${e.line}`]
     else if (e.type === 'ready') s.ready = e.summary
-    else { s.result = { ok: e.ok, summary: e.summary }; es.close() }
+    else if (e.type === 'wait') {
+      // a check of a timer wait: keep the latest; a wait with no next check has ended
+      if (e.wait.nextCheckAt) s.waits.set(e.step, { wait: e.wait, asked: false, error: '' })
+      else s.waits.delete(e.step)
+      s.log = [...s.log.slice(-800), `[${e.step}] ${e.line}`]
+    } else { s.result = { ok: e.ok, summary: e.summary }; s.waits.clear(); es.close() }
     render()
     const pre = document.querySelector('pre.log')
     if (pre) pre.scrollTop = pre.scrollHeight
   }
+}
+
+// ------------------------------------------------------------------ timer waits: the line, the countdown, Check now
+
+/** "just now", "40 seconds", "2 minutes", "1 hour 5 minutes" (core/wait.ts duration, which the page cannot import) */
+function duration(ms: number): string {
+  const sec = Math.max(0, Math.round(ms / 1000))
+  if (sec < 5) return 'just now'
+  if (sec < 60) return `${sec} seconds`
+  const m = Math.round(sec / 60)
+  if (m < 60) return m === 1 ? '1 minute' : `${m} minutes`
+  const hr = Math.floor(m / 60)
+  const rest = m % 60
+  return `${hr === 1 ? '1 hour' : `${hr} hours`}${rest ? ` ${rest === 1 ? '1 minute' : `${rest} minutes`}` : ''}`
+}
+
+/** The countdown to the next check, to the second: "2 minutes 5 seconds", "8 seconds", "now". */
+function countdown(ms: number): string {
+  const sec = Math.ceil(ms / 1000)
+  if (sec <= 0) return 'now'
+  const m = Math.floor(sec / 60)
+  const r = sec % 60
+  const part = (n: number, w: string): string => `${n} ${w}${n === 1 ? '' : 's'}`
+  return m ? `${part(m, 'minute')}${r ? ` ${part(r, 'second')}` : ''}` : part(r, 'second')
+}
+
+/** The line about one wait, as of now (describeWait's words, with the next check to the second). */
+function waitLine(w: WaitNoticeView, now: number): string {
+  const head = `Waiting for ${w.what}${w.state ? ` (${w.state.toLowerCase().replace(/_/g, ' ')})` : ''}.`
+  const last = w.lastCheckedAt ? `Checked ${((d) => (d === 'just now' ? d : `${d} ago`))(duration(now - Date.parse(w.lastCheckedAt)))}` : 'Not checked yet'
+  const next = w.nextCheckAt ? `next check in ${countdown(Date.parse(w.nextCheckAt) - now)}` : 'no further check is planned'
+  return `${head} ${last}; ${next}.`
+}
+
+async function checkWaitNow(step: string): Promise<void> {
+  const o = s.waits.get(step)
+  if (!o) return
+  o.asked = true; o.error = ''; render()
+  try {
+    const r = await api<{ ok: boolean }>('POST', '/api/check-now', { waitId: o.wait.id })
+    // false: that wait has just ended (its last event is on its way) or a check is already running
+    if (!r.ok && s.waits.get(step) === o) o.asked = false
+  } catch (e) {
+    o.asked = false; o.error = e instanceof Error ? e.message : String(e)
+  }
+  render()
+}
+
+// one display tick a second while a wait is open: it redraws the countdown and asks the server nothing
+let ticking: number | undefined
+function tick(): void {
+  const now = Date.now()
+  for (const el of document.querySelectorAll<HTMLElement>('[data-wait-step]')) {
+    const o = s.waits.get(el.dataset.waitStep ?? '')
+    if (o) el.textContent = waitLine(o.wait, now)
+  }
+  if (!s.waits.size && ticking !== undefined) { clearInterval(ticking); ticking = undefined }
+}
+
+function waits(): HTMLElement | null {
+  if (!s.waits.size) return null
+  if (ticking === undefined) ticking = window.setInterval(tick, 1000)
+  const now = Date.now()
+  return h('div', {}, ...[...s.waits].map(([step, o]) => note('warn',
+    h('div', { 'data-wait-step': step, 'aria-live': 'off' }, waitLine(o.wait, now)),
+    o.wait.why ? h('div', { class: 'muted' }, `Checked on a timer because ${o.wait.why}.`) : null,
+    o.error ? h('div', { class: 'muted' }, `Check now did not go through: ${o.error}`) : null,
+    h('div', { class: 'actions' }, h('button', { class: 'secondary', disabled: o.asked, onclick: () => void checkWaitNow(step) }, o.asked ? 'Checking…' : 'Check now')))))
 }
 
 const STEP_ICON: Record<Step['status'], string> = { pending: '·', running: '…', done: '✓', skipped: '–', failed: '✕' }
@@ -581,6 +666,7 @@ function install(): HTMLElement {
       : h('p', { class: 'lead' }, 'Keep this page open until it says trace is ready.'),
     h('ul', { class: 'progress' }, ...s.steps.map((st) => h('li', { class: `status-${st.status}` },
       h('span', { class: 'icon' }, STEP_ICON[st.status]), h('div', {}, h('strong', {}, st.title), h('div', { class: 'detail' }, st.detail))))),
+    waits(),
     s.log.length ? h('details', { open: s.result ? !s.result.ok : false }, h('summary', { class: 'muted' }, 'Log'), h('pre', { class: 'log' }, s.log.join('\n'))) : null)
 }
 

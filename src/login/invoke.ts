@@ -38,6 +38,8 @@ export interface InvokeOptions {
   /** Overrides the data-plane endpoint (tests; TRACE_AGENTCORE_ENDPOINT). */
   endpoint?: string
   token?: () => Promise<string>
+  /** Stops the call (a held one, say) when it aborts; the 15-minute limit applies either way. */
+  signal?: AbortSignal
 }
 
 export async function invokeApi(action: string, args: Record<string, unknown> = {}, o: InvokeOptions = {}): Promise<unknown> {
@@ -55,7 +57,7 @@ export async function invokeApi(action: string, args: Record<string, unknown> = 
       'x-amzn-bedrock-agentcore-runtime-session-id': SESSION_ID,
     },
     body: JSON.stringify({ ...args, action }),
-    signal: AbortSignal.timeout(15 * 60_000),
+    signal: o.signal ? AbortSignal.any([o.signal, AbortSignal.timeout(15 * 60_000)]) : AbortSignal.timeout(15 * 60_000),
   })
   const text = await r.text()
   let json: unknown = null

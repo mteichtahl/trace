@@ -143,6 +143,9 @@ describe('onboarding', () => {
     const prs = readFileSync(join(repo, '.github', 'workflows', 'trace-prs.yml'), 'utf8')
     expect(prs).toContain('me/trace/harness/actions/run@v9')
     expect(prs).not.toContain('__TR_')
+    // a finished build moves the update queue on, not only the schedule
+    expect(prs).toMatch(/workflow_run:\n\s+workflows: \["CI"\]\n\s+types: \[completed\]/)
+    expect(prs).toContain("github.event_name == 'workflow_run'")
     expect(readFileSync(join(repo, '.github', 'workflows', 'trace-ci.yml'), 'utf8')).toContain('workflows: ["CI"]')
     expect(readFileSync(join(repo, '.gitattributes'), 'utf8')).toContain('merge=trace-db')
     const claude = readFileSync(join(repo, 'CLAUDE.md'), 'utf8')

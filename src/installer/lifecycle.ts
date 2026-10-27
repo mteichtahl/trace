@@ -83,7 +83,7 @@ export function consoleEmit(write: (s: string) => void = out): (e: InstallEvent)
       if (seen.get(e.step.id) === e.step.status) return
       seen.set(e.step.id, e.step.status)
       write(`[${e.step.status.padEnd(7)}] ${e.step.title}${e.step.status === 'failed' || e.step.status === 'skipped' ? `: ${e.step.detail}` : ''}`)
-    } else if (e.type === 'log') write(`    ${e.step}: ${e.line}`)
+    } else if (e.type === 'log' || e.type === 'wait') write(`    ${e.step}: ${e.line}`)
     else if (e.type === 'ready') { write(''); write('trace is ready to use. Still going: the GPU image.') }
     else { write(''); for (const l of e.summary) write(`${e.ok ? '-' : '!'} ${l}`) }
   }

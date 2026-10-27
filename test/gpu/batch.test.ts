@@ -110,7 +110,18 @@ describe('runBatch with the runner', () => {
     const keys = [...s3.objects.keys()].map((k) => k.replace(spec.id, 'ID'))
     const P = 'central-bucket/jobs/acme/board/ID'
     expect(keys.sort()).toEqual([`${P}/exit`, `${P}/in/a.txt`, `${P}/log/stderr.txt`, `${P}/log/stdout.txt`, `${P}/out/b.txt`, `${P}/spec`])
-    expect(sleeps).toEqual([5000, 7500, 11250, 16875]) // backing off between the five looks
+    // no TRACE_BATCH_EVENTS_TOPIC: the timer (src/core/wait.ts), back at 5 s after each change of status
+    expect(sleeps).toEqual([5000, 5000, 5000, 5000])
+  })
+
+  it('backs off from 5 s to 30 s while the status stays the same, on the timer', async () => {
+    const s3 = new FakeS3()
+    const batch = new FakeBatch(s3)
+    batch.statuses = ['RUNNABLE', 'RUNNABLE', 'RUNNABLE', 'RUNNABLE', 'RUNNABLE', 'RUNNABLE', 'RUNNABLE', 'RUNNING', 'SUCCEEDED']
+    const sleeps: number[] = []
+    let t = 0
+    await runBatch(job(), { s3, batch, env: { ...env, TRACE_GPU_QUEUE_WAIT_S: '3600' }, now: () => t, sleep: async (ms) => { sleeps.push(ms); t += ms } })
+    expect(sleeps).toEqual([5000, 7500, 11250, 16875, 25313, 30000, 30000, 5000])
   })
 
   it('passes the program env through the spec only, however large', async () => {

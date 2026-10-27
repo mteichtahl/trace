@@ -9,6 +9,7 @@ import {
 import { mcpName as specialistMcpName } from '../../src/agents/specialist.js'
 import { type RouteInput, classificationPrompt, labelKind, route, routeJob, sdkClassifier } from '../../src/agents/router.js'
 import { createDelegations, delegatedRequest } from '../../src/agents/runtime/delegation.js'
+import { createWaitRelay } from '../../src/agents/runtime/wait-relay.js'
 import { type ClaudeOptions, type RunnerDeps, TOOLS, createRunner } from '../../src/agents/runtime/job.js'
 import { type JobRunner, createJobs } from '../../src/agents/runtime/jobs.js'
 import { DelegatedTaskPayload, InvocationSchema, type JobPayload, TaskPayload } from '../../src/agents/runtime/schemas.js'
@@ -316,7 +317,7 @@ describe('delegation', () => {
     const saved = { ...process.env }
     afterEach(async () => {
       await close?.(); close = null
-      for (const k of ['TRACE_DELEGATE_URL', 'TRACE_DELEGATE_TOKEN', 'TRACE_DELEGATE_POLL_MS', 'TRACE_DELEGATE_TIMEOUT_S']) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k] }
+      for (const k of ['TRACE_DELEGATE_URL', 'TRACE_DELEGATE_TOKEN', 'TRACE_DELEGATE_TIMEOUT_S']) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k] }
     })
 
     it('blocks until the worker ends and returns its summary; refuses without a token', async () => {
@@ -335,7 +336,6 @@ describe('delegation', () => {
 
       process.env.TRACE_DELEGATE_URL = url
       process.env.TRACE_DELEGATE_TOKEN = delegations.register(parent())
-      process.env.TRACE_DELEGATE_POLL_MS = '10'
       expect([...offered(allTools(), false).keys()]).toContain('agent_delegate')
       const call = allTools().call('agent.delegate', { brief: 'fix it', acceptance: ['kicad_drc: 0 errors'] }, { hardware: false, via: 'test' })
       // the tool's HTTP call reaches the runtime asynchronously: wait for the job rather than a fixed delay, which was
@@ -363,7 +363,6 @@ describe('delegation', () => {
       close = async () => { await jobs.shutdown(100); await new Promise((r) => s.close(() => r(undefined))) }
       process.env.TRACE_DELEGATE_URL = `http://127.0.0.1:${(s.address() as AddressInfo).port}`
       process.env.TRACE_DELEGATE_TOKEN = delegations.register(parent())
-      process.env.TRACE_DELEGATE_POLL_MS = '10'
       process.env.TRACE_DELEGATE_TIMEOUT_S = '0.05'
       const first = await delegate.run({ brief: 'x', acceptance: ['y'] }, { hardware: false, via: 'test' }) as { state: string; delegation: string; job_id: string; error: string }
       expect(first).toMatchObject({ state: 'timeout', delegation: 'cancelled' })
@@ -474,7 +473,7 @@ describe('delegation', () => {
         claude: (a) => { calls.push(a); return (async function* () { for (const m of messages) yield m })() },
         settingsOf: (dir) => { writeRules(dir); return cfgOf({ agents: { emc: { instructions: 'Target class B.', max_turns: 33, model: 'claude-emc' } } }) },
         remoteSettings: async () => cfgOf(), workspace: ws, persistent: false, cli: '/app/dist/cli.js', timeoutS: 60, env: { PATH: '/usr/bin' }, now: Date.now,
-        delegations, delegateUrl: 'http://127.0.0.1:8080',
+        delegations, delegateUrl: 'http://127.0.0.1:8080', waitRelay: createWaitRelay(),
       }
       return { d, calls, cmds, f, delegations, ws }
     }
@@ -487,9 +486,13 @@ describe('delegation', () => {
     it('runs the routed specialist with its prompt, rules, instructions, tools, model, memory actor and a delegation token', async () => {
       const h = setup()
       let tokenSeen: string | undefined
+      let waitsTokenSeen: string | undefined
       h.d.claude = (a) => {
         h.calls.push(a)
         tokenSeen = a.options.mcpServers.trace!.env?.TRACE_DELEGATE_TOKEN
+        waitsTokenSeen = a.options.mcpServers.trace!.env?.TRACE_WAITS_TOKEN
+        // while it runs, its wait relay token is live
+        expect(() => h.d.waitRelay!.report(waitsTokenSeen!, { type: 'ended', notice: { id: 'wait-x', what: 'x', source: 'event', startedAt: '', state: null, lastCheckedAt: null, nextCheckAt: null, intervalMs: null, checks: 0, why: null } })).not.toThrow()
         // while the specialist runs, its job is registered as a parent
         expect(h.delegations.parent('job-s')).toMatchObject({ kind: 'emc', branch: expect.stringMatching(/^claude\/task-/) as unknown, dir: expect.stringContaining(join(h.ws, 'o__r')) as unknown })
         return (async function* () { yield { type: 'result', subtype: 'success', is_error: false, result: 'Precheck clean.', num_turns: 4 } })()
@@ -508,6 +511,13 @@ describe('delegation', () => {
       expect(env.TRACE_MCP_TOOLS!.split(',')).toEqual(toolsOf(SPECIALISTS.emc))
       expect(env.TRACE_DELEGATE_URL).toBe('http://127.0.0.1:8080')
       expect(tokenSeen).toMatch(/^[0-9a-f]{64}$/)
+      // its MCP server reports its waits to this runtime, with a token of its own (the MCP server's env only)
+      expect(env.TRACE_WAITS_URL).toBe('http://127.0.0.1:8080')
+      expect(waitsTokenSeen).toMatch(/^[0-9a-f]{64}$/)
+      expect(waitsTokenSeen).not.toBe(tokenSeen)
+      expect(options.env.TRACE_WAITS_TOKEN).toBeUndefined()
+      // dead once the job ended
+      expect(() => h.d.waitRelay!.report(waitsTokenSeen!, { type: 'ended', notice: { id: 'wait-x', what: 'x', source: 'event', startedAt: '', state: null, lastCheckedAt: null, nextCheckAt: null, intervalMs: null, checks: 0, why: null } })).toThrow(/not a running job/)
       expect(Number(env.MCP_TOOL_TIMEOUT)).toBeGreaterThan(240 * 60 * 1000)
       // Claude Code's own limits on that call: milliseconds, above the wait (the stdio idle limit is 30 min otherwise)
       expect(options.env.MCP_TOOL_TIMEOUT).toBe(env.MCP_TOOL_TIMEOUT)
@@ -560,6 +570,9 @@ describe('delegation', () => {
       expect(options.env.TRACE_DELEGATE_TOKEN).toBeUndefined()
       expect(options.mcpServers.trace!.env?.TRACE_DELEGATE_TOKEN).toBeUndefined()
       expect(options.mcpServers.trace!.env?.TRACE_DELEGATE_URL).toBeUndefined()
+      // but its tools' waits are relayed like any job's
+      expect(options.mcpServers.trace!.env?.TRACE_WAITS_URL).toBe('http://127.0.0.1:8080')
+      expect(options.mcpServers.trace!.env?.TRACE_WAITS_TOKEN).toMatch(/^[0-9a-f]{64}$/)
       // the specialist's checkout: no clone, and nothing removed
       expect(h.cmds.some((c) => c.startsWith('clone'))).toBe(false)
       expect(h.f.called('issues.createComment')).toHaveLength(0)
