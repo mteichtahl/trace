@@ -13,21 +13,28 @@ import { Route as AppRouteImport } from './routes/_app'
 import { Route as FocusRouteImport } from './routes/_focus'
 import { Route as NoAccessRouteImport } from './routes/no-access'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
+import { Route as AppAdminRouteImport } from './routes/_app/admin'
 import { Route as AppInboxRouteImport } from './routes/_app/inbox'
 import { Route as AppMeRouteImport } from './routes/_app/me'
 import { Route as InviteTokenRouteImport } from './routes/invite.$token'
 import { Route as SignInIndexRouteImport } from './routes/sign-in/index'
 import { Route as SignInCodeRouteImport } from './routes/sign-in/code'
 import { Route as SignInResetRouteImport } from './routes/sign-in/reset'
+import { Route as AppAdminIndexRouteImport } from './routes/_app/admin/index'
+import { Route as AppAdminInstallationRouteImport } from './routes/_app/admin/installation'
 import { Route as AppAdminPeopleRouteImport } from './routes/_app/admin/people'
+import { Route as AppAdminPromptsRouteImport } from './routes/_app/admin/prompts'
+import { Route as AppAdminUsageRouteImport } from './routes/_app/admin/usage'
 import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents/index'
 import { Route as AppKnowledgeIndexRouteImport } from './routes/_app/knowledge/index'
 import { Route as AppOpsIndexRouteImport } from './routes/_app/ops/index'
+import { Route as AppOpsSectionRouteImport } from './routes/_app/ops/$section'
 import { Route as AppPIdRouteImport } from './routes/_app/p/$id'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects/index'
 import { Route as AppProjectsNewRouteImport } from './routes/_app/projects/new'
 import { Route as AppPIdIndexRouteImport } from './routes/_app/p/$id/index'
 import { Route as AppPIdSplatRouteImport } from './routes/_app/p/$id/$'
+import { Route as AppPIdSettingsPromptsRouteImport } from './routes/_app/p/$id/settings/prompts'
 import { Route as FocusPIdDoSkillRouteImport } from './routes/_focus/p/$id/do/$skill'
 import { Route as FocusPIdGatesGateRouteImport } from './routes/_focus/p/$id/gates/$gate'
 
@@ -47,6 +54,11 @@ const NoAccessRoute = NoAccessRouteImport.update({
 const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAdminRoute = AppAdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
   getParentRoute: () => AppRoute,
 } as any)
 const AppInboxRoute = AppInboxRouteImport.update({
@@ -79,10 +91,30 @@ const SignInResetRoute = SignInResetRouteImport.update({
   path: '/sign-in/reset',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppAdminIndexRoute = AppAdminIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppAdminRoute,
+} as any)
+const AppAdminInstallationRoute = AppAdminInstallationRouteImport.update({
+  id: '/installation',
+  path: '/installation',
+  getParentRoute: () => AppAdminRoute,
+} as any)
 const AppAdminPeopleRoute = AppAdminPeopleRouteImport.update({
-  id: '/admin/people',
-  path: '/admin/people',
-  getParentRoute: () => AppRoute,
+  id: '/people',
+  path: '/people',
+  getParentRoute: () => AppAdminRoute,
+} as any)
+const AppAdminPromptsRoute = AppAdminPromptsRouteImport.update({
+  id: '/prompts',
+  path: '/prompts',
+  getParentRoute: () => AppAdminRoute,
+} as any)
+const AppAdminUsageRoute = AppAdminUsageRouteImport.update({
+  id: '/usage',
+  path: '/usage',
+  getParentRoute: () => AppAdminRoute,
 } as any)
 const AppAgentsIndexRoute = AppAgentsIndexRouteImport.update({
   id: '/agents/',
@@ -97,6 +129,11 @@ const AppKnowledgeIndexRoute = AppKnowledgeIndexRouteImport.update({
 const AppOpsIndexRoute = AppOpsIndexRouteImport.update({
   id: '/ops/',
   path: '/ops/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppOpsSectionRoute = AppOpsSectionRouteImport.update({
+  id: '/ops/$section',
+  path: '/ops/$section',
   getParentRoute: () => AppRoute,
 } as any)
 const AppPIdRoute = AppPIdRouteImport.update({
@@ -124,6 +161,11 @@ const AppPIdSplatRoute = AppPIdSplatRouteImport.update({
   path: '/$',
   getParentRoute: () => AppPIdRoute,
 } as any)
+const AppPIdSettingsPromptsRoute = AppPIdSettingsPromptsRouteImport.update({
+  id: '/settings/prompts',
+  path: '/settings/prompts',
+  getParentRoute: () => AppPIdRoute,
+} as any)
 const FocusPIdDoSkillRoute = FocusPIdDoSkillRouteImport.update({
   id: '/p/$id/do/$skill',
   path: '/p/$id/do/$skill',
@@ -138,21 +180,28 @@ const FocusPIdGatesGateRoute = FocusPIdGatesGateRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/no-access': typeof NoAccessRoute
+  '/admin': typeof AppAdminRouteWithChildren
   '/inbox': typeof AppInboxRoute
   '/me': typeof AppMeRoute
   '/invite/$token': typeof InviteTokenRoute
   '/sign-in/code': typeof SignInCodeRoute
   '/sign-in/reset': typeof SignInResetRoute
   '/sign-in/': typeof SignInIndexRoute
+  '/admin/installation': typeof AppAdminInstallationRoute
   '/admin/people': typeof AppAdminPeopleRoute
+  '/admin/prompts': typeof AppAdminPromptsRoute
+  '/admin/usage': typeof AppAdminUsageRoute
+  '/ops/$section': typeof AppOpsSectionRoute
   '/p/$id': typeof AppPIdRouteWithChildren
   '/projects/new': typeof AppProjectsNewRoute
+  '/admin/': typeof AppAdminIndexRoute
   '/agents/': typeof AppAgentsIndexRoute
   '/knowledge/': typeof AppKnowledgeIndexRoute
   '/ops/': typeof AppOpsIndexRoute
   '/projects/': typeof AppProjectsIndexRoute
   '/p/$id/$': typeof AppPIdSplatRoute
   '/p/$id/': typeof AppPIdIndexRoute
+  '/p/$id/settings/prompts': typeof AppPIdSettingsPromptsRoute
   '/p/$id/do/$skill': typeof FocusPIdDoSkillRoute
   '/p/$id/gates/$gate': typeof FocusPIdGatesGateRoute
 }
@@ -165,14 +214,20 @@ export interface FileRoutesByTo {
   '/sign-in/code': typeof SignInCodeRoute
   '/sign-in/reset': typeof SignInResetRoute
   '/sign-in': typeof SignInIndexRoute
+  '/admin/installation': typeof AppAdminInstallationRoute
   '/admin/people': typeof AppAdminPeopleRoute
+  '/admin/prompts': typeof AppAdminPromptsRoute
+  '/admin/usage': typeof AppAdminUsageRoute
+  '/ops/$section': typeof AppOpsSectionRoute
   '/projects/new': typeof AppProjectsNewRoute
+  '/admin': typeof AppAdminIndexRoute
   '/agents': typeof AppAgentsIndexRoute
   '/knowledge': typeof AppKnowledgeIndexRoute
   '/ops': typeof AppOpsIndexRoute
   '/projects': typeof AppProjectsIndexRoute
   '/p/$id/$': typeof AppPIdSplatRoute
   '/p/$id': typeof AppPIdIndexRoute
+  '/p/$id/settings/prompts': typeof AppPIdSettingsPromptsRoute
   '/p/$id/do/$skill': typeof FocusPIdDoSkillRoute
   '/p/$id/gates/$gate': typeof FocusPIdGatesGateRoute
 }
@@ -181,6 +236,7 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteWithChildren
   '/_focus': typeof FocusRouteWithChildren
   '/no-access': typeof NoAccessRoute
+  '/_app/admin': typeof AppAdminRouteWithChildren
   '/_app/inbox': typeof AppInboxRoute
   '/_app/me': typeof AppMeRoute
   '/invite/$token': typeof InviteTokenRoute
@@ -188,15 +244,21 @@ export interface FileRoutesById {
   '/sign-in/reset': typeof SignInResetRoute
   '/_app/': typeof AppIndexRoute
   '/sign-in/': typeof SignInIndexRoute
+  '/_app/admin/installation': typeof AppAdminInstallationRoute
   '/_app/admin/people': typeof AppAdminPeopleRoute
+  '/_app/admin/prompts': typeof AppAdminPromptsRoute
+  '/_app/admin/usage': typeof AppAdminUsageRoute
+  '/_app/ops/$section': typeof AppOpsSectionRoute
   '/_app/p/$id': typeof AppPIdRouteWithChildren
   '/_app/projects/new': typeof AppProjectsNewRoute
+  '/_app/admin/': typeof AppAdminIndexRoute
   '/_app/agents/': typeof AppAgentsIndexRoute
   '/_app/knowledge/': typeof AppKnowledgeIndexRoute
   '/_app/ops/': typeof AppOpsIndexRoute
   '/_app/projects/': typeof AppProjectsIndexRoute
   '/_app/p/$id/$': typeof AppPIdSplatRoute
   '/_app/p/$id/': typeof AppPIdIndexRoute
+  '/_app/p/$id/settings/prompts': typeof AppPIdSettingsPromptsRoute
   '/_focus/p/$id/do/$skill': typeof FocusPIdDoSkillRoute
   '/_focus/p/$id/gates/$gate': typeof FocusPIdGatesGateRoute
 }
@@ -205,21 +267,28 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/no-access'
+    | '/admin'
     | '/inbox'
     | '/me'
     | '/invite/$token'
     | '/sign-in/code'
     | '/sign-in/reset'
     | '/sign-in/'
+    | '/admin/installation'
     | '/admin/people'
+    | '/admin/prompts'
+    | '/admin/usage'
+    | '/ops/$section'
     | '/p/$id'
     | '/projects/new'
+    | '/admin/'
     | '/agents/'
     | '/knowledge/'
     | '/ops/'
     | '/projects/'
     | '/p/$id/$'
     | '/p/$id/'
+    | '/p/$id/settings/prompts'
     | '/p/$id/do/$skill'
     | '/p/$id/gates/$gate'
   fileRoutesByTo: FileRoutesByTo
@@ -232,14 +301,20 @@ export interface FileRouteTypes {
     | '/sign-in/code'
     | '/sign-in/reset'
     | '/sign-in'
+    | '/admin/installation'
     | '/admin/people'
+    | '/admin/prompts'
+    | '/admin/usage'
+    | '/ops/$section'
     | '/projects/new'
+    | '/admin'
     | '/agents'
     | '/knowledge'
     | '/ops'
     | '/projects'
     | '/p/$id/$'
     | '/p/$id'
+    | '/p/$id/settings/prompts'
     | '/p/$id/do/$skill'
     | '/p/$id/gates/$gate'
   id:
@@ -247,6 +322,7 @@ export interface FileRouteTypes {
     | '/_app'
     | '/_focus'
     | '/no-access'
+    | '/_app/admin'
     | '/_app/inbox'
     | '/_app/me'
     | '/invite/$token'
@@ -254,15 +330,21 @@ export interface FileRouteTypes {
     | '/sign-in/reset'
     | '/_app/'
     | '/sign-in/'
+    | '/_app/admin/installation'
     | '/_app/admin/people'
+    | '/_app/admin/prompts'
+    | '/_app/admin/usage'
+    | '/_app/ops/$section'
     | '/_app/p/$id'
     | '/_app/projects/new'
+    | '/_app/admin/'
     | '/_app/agents/'
     | '/_app/knowledge/'
     | '/_app/ops/'
     | '/_app/projects/'
     | '/_app/p/$id/$'
     | '/_app/p/$id/'
+    | '/_app/p/$id/settings/prompts'
     | '/_focus/p/$id/do/$skill'
     | '/_focus/p/$id/gates/$gate'
   fileRoutesById: FileRoutesById
@@ -307,6 +389,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/admin': {
+      id: '/_app/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AppAdminRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/inbox': {
       id: '/_app/inbox'
       path: '/inbox'
@@ -349,12 +438,40 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignInResetRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/admin/': {
+      id: '/_app/admin/'
+      path: '/'
+      fullPath: '/admin/'
+      preLoaderRoute: typeof AppAdminIndexRouteImport
+      parentRoute: typeof AppAdminRoute
+    }
+    '/_app/admin/installation': {
+      id: '/_app/admin/installation'
+      path: '/installation'
+      fullPath: '/admin/installation'
+      preLoaderRoute: typeof AppAdminInstallationRouteImport
+      parentRoute: typeof AppAdminRoute
+    }
     '/_app/admin/people': {
       id: '/_app/admin/people'
-      path: '/admin/people'
+      path: '/people'
       fullPath: '/admin/people'
       preLoaderRoute: typeof AppAdminPeopleRouteImport
-      parentRoute: typeof AppRoute
+      parentRoute: typeof AppAdminRoute
+    }
+    '/_app/admin/prompts': {
+      id: '/_app/admin/prompts'
+      path: '/prompts'
+      fullPath: '/admin/prompts'
+      preLoaderRoute: typeof AppAdminPromptsRouteImport
+      parentRoute: typeof AppAdminRoute
+    }
+    '/_app/admin/usage': {
+      id: '/_app/admin/usage'
+      path: '/usage'
+      fullPath: '/admin/usage'
+      preLoaderRoute: typeof AppAdminUsageRouteImport
+      parentRoute: typeof AppAdminRoute
     }
     '/_app/agents/': {
       id: '/_app/agents/'
@@ -375,6 +492,13 @@ declare module '@tanstack/react-router' {
       path: '/ops'
       fullPath: '/ops/'
       preLoaderRoute: typeof AppOpsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/ops/$section': {
+      id: '/_app/ops/$section'
+      path: '/ops/$section'
+      fullPath: '/ops/$section'
+      preLoaderRoute: typeof AppOpsSectionRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/p/$id': {
@@ -412,6 +536,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPIdSplatRouteImport
       parentRoute: typeof AppPIdRoute
     }
+    '/_app/p/$id/settings/prompts': {
+      id: '/_app/p/$id/settings/prompts'
+      path: '/settings/prompts'
+      fullPath: '/p/$id/settings/prompts'
+      preLoaderRoute: typeof AppPIdSettingsPromptsRouteImport
+      parentRoute: typeof AppPIdRoute
+    }
     '/_focus/p/$id/do/$skill': {
       id: '/_focus/p/$id/do/$skill'
       path: '/p/$id/do/$skill'
@@ -429,24 +560,47 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AppAdminRouteChildren {
+  AppAdminInstallationRoute: typeof AppAdminInstallationRoute
+  AppAdminPeopleRoute: typeof AppAdminPeopleRoute
+  AppAdminPromptsRoute: typeof AppAdminPromptsRoute
+  AppAdminUsageRoute: typeof AppAdminUsageRoute
+  AppAdminIndexRoute: typeof AppAdminIndexRoute
+}
+
+const AppAdminRouteChildren: AppAdminRouteChildren = {
+  AppAdminInstallationRoute: AppAdminInstallationRoute,
+  AppAdminPeopleRoute: AppAdminPeopleRoute,
+  AppAdminPromptsRoute: AppAdminPromptsRoute,
+  AppAdminUsageRoute: AppAdminUsageRoute,
+  AppAdminIndexRoute: AppAdminIndexRoute,
+}
+
+const AppAdminRouteWithChildren = AppAdminRoute._addFileChildren(
+  AppAdminRouteChildren,
+)
+
 interface AppPIdRouteChildren {
   AppPIdSplatRoute: typeof AppPIdSplatRoute
   AppPIdIndexRoute: typeof AppPIdIndexRoute
+  AppPIdSettingsPromptsRoute: typeof AppPIdSettingsPromptsRoute
 }
 
 const AppPIdRouteChildren: AppPIdRouteChildren = {
   AppPIdSplatRoute: AppPIdSplatRoute,
   AppPIdIndexRoute: AppPIdIndexRoute,
+  AppPIdSettingsPromptsRoute: AppPIdSettingsPromptsRoute,
 }
 
 const AppPIdRouteWithChildren =
   AppPIdRoute._addFileChildren(AppPIdRouteChildren)
 
 interface AppRouteChildren {
+  AppAdminRoute: typeof AppAdminRouteWithChildren
   AppInboxRoute: typeof AppInboxRoute
   AppMeRoute: typeof AppMeRoute
   AppIndexRoute: typeof AppIndexRoute
-  AppAdminPeopleRoute: typeof AppAdminPeopleRoute
+  AppOpsSectionRoute: typeof AppOpsSectionRoute
   AppPIdRoute: typeof AppPIdRouteWithChildren
   AppProjectsNewRoute: typeof AppProjectsNewRoute
   AppAgentsIndexRoute: typeof AppAgentsIndexRoute
@@ -456,10 +610,11 @@ interface AppRouteChildren {
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppAdminRoute: AppAdminRouteWithChildren,
   AppInboxRoute: AppInboxRoute,
   AppMeRoute: AppMeRoute,
   AppIndexRoute: AppIndexRoute,
-  AppAdminPeopleRoute: AppAdminPeopleRoute,
+  AppOpsSectionRoute: AppOpsSectionRoute,
   AppPIdRoute: AppPIdRouteWithChildren,
   AppProjectsNewRoute: AppProjectsNewRoute,
   AppAgentsIndexRoute: AppAgentsIndexRoute,
