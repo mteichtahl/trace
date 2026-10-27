@@ -1,0 +1,8 @@
+export { ChatProvider } from './chat-provider'
+export { AskTrace, ContextStrip, DockedAskTrace } from './chat-panel'
+export { EmbeddedChat } from './embedded-chat'
+export { ChatView } from './chat-view'
+export { openPanel, usePanel } from './chat-state'
+export { useTraceContext, type ContextEntry } from './context'
+export { Markdown } from './markdown'
+export { FileCard, FindingsCard, HandOff, PartCard, PlotCard, RunCard, ToolRow, registerFileViewer } from './cards'
