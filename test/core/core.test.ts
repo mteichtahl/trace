@@ -227,7 +227,11 @@ describe('onboarding', () => {
     expect(f['secret TRACE_TOKEN']).toBe(true)
     expect(f['model access for the worker']).toBe(true)
     expect(f['TRACE_HOME (the central database)']).toBe(false)
-    expect(f['TRACE_CODEBUILD_PROJECT (the AWS CodeBuild runner its jobs run on)']).toBe(false)
+    // no AWS runner yet is a note, not a failure: the jobs run on GitHub-hosted runners until `trace install` adds it
+    const runner = doctor('o/r', run).find((x) => x.what.startsWith('TRACE_CODEBUILD_PROJECT'))
+    expect(runner).toEqual({ ok: true, note: true, what: 'TRACE_CODEBUILD_PROJECT is not set: its jobs run on GitHub-hosted runners', fix: 'They move to AWS by themselves once `trace install` (with o/r among the repositories) adds the AWS runner and sets the variable.' })
+    answers['repos/o/r/actions/variables'] = { variables: [{ name: 'TRACE_AWS_ROLE' }, { name: 'TRACE_CODEBUILD_PROJECT' }] }
+    expect(doctor('o/r', run).find((x) => x.what.startsWith('TRACE_CODEBUILD_PROJECT'))).toEqual({ ok: true, what: 'TRACE_CODEBUILD_PROJECT (the AWS CodeBuild runner its jobs run on)', fix: '' })
   })
 })
 

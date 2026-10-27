@@ -1,12 +1,11 @@
 # trace's own build: typecheck, the TypeScript tests (with KiCad, ngspice and Icarus installed so their tests run),
 # the Python bridge's tests, and a check that the committed harness bundle matches its source.
 #
-# Every job runs on AWS CodeBuild (a CodeBuild-hosted GitHub Actions runner in trace's AWS account), never on a
-# GitHub-hosted runner: the first runs-on label names the CodeBuild project trace-ci, the second keeps each job's
-# runner distinct within a run. It needs the TraceCi runner stack (`npm run deploy:ci`, src/infra/ci-app.ts: it needs
-# nothing up front, and shows where to authorize the GitHub connection if one is new); until that project exists the
-# jobs wait in the queue. The runner image is Ubuntu (aws/codebuild/standard), so the steps
-# use sudo and never assume the job user's name or home directory.
+# Runners: every job runs on AWS CodeBuild (a CodeBuild-hosted GitHub Actions runner in the installation's AWS account)
+# once `trace install` has set it up for this repository, and on GitHub's ubuntu-24.04 runners until then. The switch
+# is the repository variable TRACE_CODEBUILD_PROJECT, which the installer sets only once this repository's runner
+# project exists (and removes if it does not), exactly as in the workflows it writes for other repositories. Both
+# runners are Ubuntu, so the steps work on either: they use sudo, and never assume the job user's name or home.
 name: ci
 
 on:
@@ -20,9 +19,7 @@ permissions:
 
 jobs:
   typescript:
-    runs-on:
-      - codebuild-trace-ci-${{ github.run_id }}-${{ github.run_attempt }}
-      - typescript
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","typescript"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     timeout-minutes: 45
     env:
       # KiCad, ngspice, Icarus, and the verification/FPGA programs, so those tests run instead of skipping.
@@ -71,9 +68,7 @@ jobs:
           git diff --exit-code harness/dist || { echo "harness/dist is stale: run npm run build and commit it"; exit 1; }
 
   python-bridge:
-    runs-on:
-      - codebuild-trace-ci-${{ github.run_id }}-${{ github.run_attempt }}
-      - python-bridge
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","python-bridge"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -86,9 +81,7 @@ jobs:
     name: tests pass
     if: always()
     needs: [typescript, python-bridge]
-    runs-on:
-      - codebuild-trace-ci-${{ github.run_id }}-${{ github.run_attempt }}
-      - tests-pass
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","tests-pass"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     steps:
       - env:
           RESULTS: ${{ join(needs.*.result, ' ') }}

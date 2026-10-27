@@ -1,8 +1,10 @@
 /**
  * Where a repository's GitHub Actions jobs run: an AWS CodeBuild runner project, in the installation's own AWS account.
- * GitHub-hosted runners are never used (every build and every CI job of trace runs on AWS), so each workflow job
- * names one of these in `runs-on: codebuild-<project name>-${{ github.run_id }}-${{ github.run_attempt }}` (the
- * project name comes from the repository variable TRACE_CODEBUILD_PROJECT, src/core/project.ts RUNNER_VARIABLE).
+ * Each workflow job names one in `runs-on: codebuild-<project name>-${{ github.run_id }}-${{ github.run_attempt }}`
+ * when the repository variable TRACE_CODEBUILD_PROJECT (src/core/project.ts RUNNER_VARIABLE) names it, and runs on
+ * GitHub's ubuntu-24.04 runner while the variable is unset: the installer sets it only once the project exists, so
+ * jobs never wait for a runner that is not there. One per onboarded project (src/infra/project.ts), and one per
+ * build-only repository (`ciRepositories`, such as trace's own: src/infra/stack.ts).
  *
  *   project      a CodeBuild project whose source is the repository on GitHub and whose webhook (made by
  *                CloudFormation through Triggers) is filtered on EVENT = WORKFLOW_JOB_QUEUED: GitHub tells CodeBuild a
@@ -35,10 +37,9 @@
  *
  * The connection (GithubConnection below): a stack given `connectionArn` uses that one and manages nothing of it;
  * a stack given none creates `<prefix>-github` (AWS::CodeConnections::Connection, tagged trace:installation) and
- * outputs its ARN either way (props.ts CONNECTION_OUTPUT). The tools (the installer, `npm run deploy:ci`) look for an
- * authorized GitHub connection in the account and region first and pass it in, so a connection is authorized once per
- * account and region and reused by every installation and by trace's own CI; a stack creates its own only when there
- * is none. A connection a stack created is always kept (RETAIN, whatever retainData says) when the stack goes or stops
+ * outputs its ARN either way (props.ts CONNECTION_OUTPUT). The installer looks for an authorized GitHub connection
+ * in the account and region first and passes it in, so a connection is authorized once per account and region and
+ * reused by every installation; a stack creates its own only when there is none. A connection a stack created is always kept (RETAIN, whatever retainData says) when the stack goes or stops
  * using it: another stack may be reusing it.
  *
  * Why the runner projects can wait for a second deploy (runners.connectionReady): a new connection is PENDING until a
@@ -70,7 +71,7 @@ const PLACEHOLDER_BUILDSPEC = [
 ].join('\n')
 
 export interface RunnerProjectProps {
-  /** the CodeBuild project's name (runnerProjectName, or SELF_CI_PROJECT for trace's own repository) */
+  /** the CodeBuild project's name (runnerProjectName) */
   name: string
   /** OWNER/REPO */
   repository: string
@@ -177,7 +178,7 @@ export class RunnerProject extends Construct {
 
     this.project = new codebuild.CfnProject(this, 'Project', {
       name: p.name,
-      description: `GitHub Actions runner for ${p.repository} (trace: every job runs on AWS)`.slice(0, 255),
+      description: `GitHub Actions runner for ${p.repository} (trace: its jobs run on AWS)`.slice(0, 255),
       serviceRole: this.role.roleArn,
       source: {
         type: 'GITHUB',

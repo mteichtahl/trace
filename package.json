@@ -4,6 +4,7 @@
   "description": "trace: an autonomous repository harness and an electronics toolkit (KiCad, simulation, datasheets, parts, hardware-in-the-loop, firmware) for Claude Code",
   "type": "module",
   "license": "UNLICENSED",
+  "repository": "github:mteichtahl/trace",
   "private": true,
   "engines": {
     "node": ">=22.13"
@@ -26,7 +27,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.ui.json && tsc -p tsconfig.test.json --noEmit",
     "test": "vitest run",
     "check": "npm run typecheck && npm test",
-    "deploy:ci": "node scripts/deploy-ci.mjs",
     "prepare": "npm run build"
   },
   "dependencies": {

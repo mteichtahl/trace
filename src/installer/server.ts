@@ -24,9 +24,14 @@ import { AnswersSchema, AwsAnswers, type InstallEvent, SecretsSchema } from './a
 import { apply, plan } from './bootstrap.js'
 import { checkAws, credentials, profiles } from './aws.js'
 import { canConfigure, checkToken } from './github.js'
+import { traceRepository } from './source.js'
 import { page } from './page.js'
 
-export interface InstallerOptions { port?: number; host?: string; uiScript?: string }
+export interface InstallerOptions {
+  port?: number; host?: string; uiScript?: string
+  /** trace's own GitHub repository (default: src/installer/source.ts traceRepository) */
+  traceRepository?: () => string | null
+}
 
 interface RunState { events: InstallEvent[]; listeners: Set<ServerResponse>; done: boolean }
 
@@ -81,7 +86,11 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
       const { token, repos } = z.object({ token: z.string().min(20), repos: z.array(z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')).max(200).default([]) }).parse(await body(req))
       const info = await checkToken(token)
       const access = await Promise.all(repos.map(async (r) => ({ repo: r, ...(await canConfigure(token, r)) })))
-      return { ...info, access }
+      // trace's own repository, and whether this token can set its variables (the page's "build trace's own repository
+      // on AWS too", on by default when it can)
+      const own = (opts.traceRepository ?? (() => traceRepository({ root: REPO_ROOT })))()
+      const self = own ? { repo: own, ...(await canConfigure(token, own)) } : null
+      return { ...info, access, self }
     },
     'POST /api/aws/check': async (req) => {
       const b = z.object({ aws: AwsAnswers.pick({ mode: true, profile: true, region: true }), secrets: SecretsSchema.pick({ awsAccessKeyId: true, awsSecretAccessKey: true, awsSessionToken: true }).partial(), prefix: z.string().default('trace') }).parse(await body(req))

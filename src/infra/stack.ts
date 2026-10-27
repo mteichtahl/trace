@@ -10,8 +10,8 @@
  *   projects            one ProjectStack per repository (src/infra/project.ts): its worker runtime on Bedrock
  *                       AgentCore with its own execution role, its GitHub token secret, its GitHub OIDC role, its
  *                       AgentCore memory, its GPU job definition and job role, and its CodeBuild GitHub Actions
- *                       runner project (src/infra/runner.ts: every CI job runs on AWS, never on a GitHub-hosted
- *                       runner; its role gives a job no AWS access), once the GitHub connection is authorized
+ *                       runner project (src/infra/runner.ts: its CI jobs run on AWS, on GitHub's runners only until
+ *                       it exists; its role gives a job no AWS access), once the GitHub connection is authorized
  *                       (runners.connectionReady). Each role reaches that project's
  *                       resources only, so the line between projects holds in IAM even though the agent has Bash
  *                       and the role's credentials. Layout 'nested' (the default) puts each in its own nested stack,
@@ -20,6 +20,9 @@
  *   GitHub connection   the AWS CodeConnections connection the runners reach GitHub through: the one given
  *                       (runners.connectionArn), or `<prefix>-github`, created here and kept (Retain) when the stack
  *                       goes; its ARN is the GithubConnectionArn output (src/infra/runner.ts GithubConnection)
+ *   build-only runners  one CodeBuild runner project per `ciRepositories` entry (such as trace's own repository), in
+ *                       this stack in either layout, with its CiRunner<hash>Project output; nothing else of a
+ *                       project. Like the projects' runners, only once the connection is authorized
  *   agent memory        AgentCore Memory (src/infra/memory.ts): one per project, made by its ProjectStack, still
  *                       namespaced /trace/<owner>/<repo>/<agent>/; each worker may use only its own project's memory
  *   GPU                 one AWS Batch queue and compute environment shared by every project, and (cpu.enabled) a
@@ -61,16 +64,16 @@ import * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { Provider } from 'aws-cdk-lib/custom-resources'
 import type { Construct, IConstruct } from 'constructs'
 import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
-import { JOBS_PREFIX, PROJECTS_PREFIX, memoryName } from '../core/project.js'
+import { JOBS_PREFIX, PROJECTS_PREFIX, memoryName, projectHash, projectSlug, runnerProjectName } from '../core/project.js'
 import { LibraryGateway } from './gateway.js'
 import { GpuCompute } from './gpu.js'
 import { KB_RETRIEVE_ACTIONS, VectorStore, knowledgeBaseArn } from './knowledge.js'
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
-import { GithubConnection } from './runner.js'
+import { GithubConnection, RunnerProject } from './runner.js'
 import { ACCESS_PREFIX, CENTRAL_PREFIX, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
-  GPU_IMAGE_BUILD_OUTPUT, type InfraProps, LAYOUT_OUTPUT, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled,
+  GPU_IMAGE_BUILD_OUTPUT, type InfraProps, ciRunnerOutput, LAYOUT_OUTPUT, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled,
   kbEnabled, projectRefs, projectSettings,
 } from './props.js'
 
@@ -258,6 +261,18 @@ export class TraceStack extends Stack {
     // the GitHub connection the CodeBuild runners use (src/infra/runner.ts): given, or created here; the runner
     // projects only once it is authorized (runners.connectionReady)
     const connection = new GithubConnection(this, 'GithubConnection', { prefix: cfg.prefix, connectionArn: cfg.runners.connectionArn })
+    // the build-only repositories (ciRepositories): a runner project each, here in the parent, and its output
+    if (cfg.runners.connectionReady) {
+      const { computeType, image, privileged } = cfg.runners
+      for (const r of cfg.ciRepositories) {
+        const repository = projectSlug(r)
+        const runner = new RunnerProject(this, `CiRunner${projectHash(repository)}`, {
+          name: runnerProjectName(cfg.prefix, repository), repository, connectionArn: connection.connectionArn, computeType, image, privileged,
+          tags: { 'trace:installation': cfg.prefix, 'trace:ci': repository },
+        })
+        new CfnOutput(this, ciRunnerOutput(repository), { value: runner.projectName, description: `${repository}: its CodeBuild runner project (TRACE_CODEBUILD_PROJECT), build only` })
+      }
+    }
     const projectProps = (ref: (typeof refs)[number]): ProjectProps => ({
       cfg, project: ref, bucket: central, images: repo, imageUri: image.getAttString('ImageUri'), oidcProviderArn: oidc.openIdConnectProviderArn,
       gpu, vectorBucketArn: vectors?.arn ?? null, gateway: library?.ref ?? null,
