@@ -138,8 +138,8 @@ describe('the API server', () => {
   it('whoami and projects', async () => {
     const r = await call(user, { action: 'whoami' })
     expect(r).toMatchObject({ status: 200, body: { ok: true, result: { sub: 'user-1', email: 'user-1@example.com', class: 'user' } } })
-    expect((await call(guest, { action: 'projects' })).body.result).toEqual([{ repo: 'acme/board', role: 'read' }])
-    expect((await call(user, { action: 'projects' })).body.result).toEqual([{ repo: 'acme/board', role: 'write' }])
+    expect((await call(guest, { action: 'projects' })).body.result).toEqual([{ repo: 'acme/board', role: 'read', part: 'reviewer' }])
+    expect((await call(user, { action: 'projects' })).body.result).toEqual([{ repo: 'acme/board', role: 'write', part: 'contributor' }])
     expect((await call(nobody, { action: 'projects' })).body.result).toEqual([])
   })
 
