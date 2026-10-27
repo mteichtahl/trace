@@ -8,7 +8,7 @@
  * sim.* / ams.* (`name` of a measurement spec, or ams.opamp_check's fixed names such as phase_margin_deg). The
  * ams.corners and ams.montecarlo_yield tools take `spec_set` to judge their measurements against these rows.
  *
- * `trace db merge` merges the table by key, keeping the more recently updated row.
+ * `tracectl db merge` merges the table by key, keeping the more recently updated row.
  */
 import { z } from 'zod'
 

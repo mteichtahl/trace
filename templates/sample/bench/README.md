@@ -15,12 +15,12 @@ they would reach real instruments, through the project settings.
 ## Run it
 
 ```
-trace hil emulate --write-settings --serial &      # keep it running; Ctrl-C stops it
+tracectl hil emulate --write-settings --serial &      # keep it running; Ctrl-C stops it
 export TRACE_HARDWARE=1                            # hardware tools are refused without it
-trace tool hil.idn instrument=bench-psu
-trace tool hil.psu instrument=bench-psu voltage=12 current=0.1 output=on
-trace tool hil.dmm instrument=bench-dmm function=vdc          # about 3.0 V
-trace tool hil.serial_expect serial=bench-uart --args '{"steps":[{"send":"READ","expect":"adc raw=\\d+ mv=\\d+"}]}'
+tracectl tool hil.idn instrument=bench-psu
+tracectl tool hil.psu instrument=bench-psu voltage=12 current=0.1 output=on
+tracectl tool hil.dmm instrument=bench-dmm function=vdc          # about 3.0 V
+tracectl tool hil.serial_expect serial=bench-uart --args '{"steps":[{"send":"READ","expect":"adc raw=\\d+ mv=\\d+"}]}'
 ```
 
 `--write-settings` writes the `hil.*` settings above into `.trace/project.db`. The installer already put the same

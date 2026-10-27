@@ -667,8 +667,8 @@ describe('the library gateway', () => {
     })
     expect(ok).toBe(true)
     expect(secretWrites().map((x) => x.SecretId)).not.toContain(KEYS_ARN)
-    expect(events.find((e) => e.step?.id === 'integrations' && e.step.status === 'skipped')?.step?.detail).toMatch(/trace integrations set <name>/)
-    expect(events.at(-1)?.summary?.join(' ')).toMatch(/trace integrations set nexar/)
+    expect(events.find((e) => e.step?.id === 'integrations' && e.step.status === 'skipped')?.step?.detail).toMatch(/tracectl integrations set <name>/)
+    expect(events.at(-1)?.summary?.join(' ')).toMatch(/tracectl integrations set nexar/)
   })
 })
 
@@ -693,7 +693,7 @@ describe('the light install', () => {
     expect(infra[0]).toMatchObject({ account: '123456789012', region: 'us-east-1', adminEmail: 'marc@example.com', model: 'us.anthropic.claude-sonnet-4-6', repositories: [], gpu: { enabled: false } })
     expect(r.events.filter((e) => e.type === 'log' && e.line?.startsWith('derived:')).map((e) => e.line)).toEqual(expect.arrayContaining(['derived: account 123456789012 (the credentials\')', 'derived: first administrator marc@example.com (the token\'s primary email)']))
     expect(r.events.find((e) => e.step?.id === 'repos' && e.step.status === 'skipped')).toBeDefined()
-    expect(r.events.at(-1)?.summary?.join(' ')).toMatch(/No repositories yet: run `trace install` again/)
+    expect(r.events.at(-1)?.summary?.join(' ')).toMatch(/No repositories yet: run `tracectl install` again/)
     // the decision from the quota is not saved as an answer: the next run decides again
     expect(AnswersSchema.parse(savedAnswers().answers).agents.gpuEnabled).toBeNull()
     // and without an email visible to the token, it stops before anything is created and says what to give
@@ -1065,7 +1065,7 @@ describe('no console step on the default path', () => {
     })
     expect(ok).toBe(true)
     expect(events.find((e) => e.step?.id === 'release' && e.step.status === 'failed')).toBeDefined()
-    expect(events.at(-1)?.summary?.join('\n')).toMatch(/Publishing trace's images is not set up: cdk deploy TraceRelease exited 1.*trace release setup/)
+    expect(events.at(-1)?.summary?.join('\n')).toMatch(/Publishing trace's images is not set up: cdk deploy TraceRelease exited 1.*tracectl release setup/)
   })
 })
 

@@ -5,7 +5,7 @@
  *                                          and its run record — every simulation, check, build, capture and
  *                                          measurement, with artifacts (netlists, logs, waveforms, reports) as blobs.
  *                                          Rows have UUID keys, so two branches' records merge cleanly
- *                                          (`trace db merge`, wired up by onboarding as a git merge driver). It uses a
+ *                                          (`tracectl db merge`, wired up by onboarding as a git merge driver). It uses a
  *                                          rollback journal (not WAL), so the committed file is always whole.
  *   central  <TRACE_HOME>/central.db      one for everything all projects share: the datasheet library and the parts
  *                                          database (central.ts). TRACE_HOME is a directory or s3://bucket/prefix.
@@ -150,7 +150,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
 
 /**
  * Tables an area adds to the project database (CREATE … IF NOT EXISTS), applied after PROJECT_SCHEMA wherever the
- * project database is opened. `merge` is the SQL `trace db merge` runs for the table, with their database attached
+ * project database is opened. `merge` is the SQL `tracectl db merge` runs for the table, with their database attached
  * as `theirs` (e.g. an upsert keeping the newer row); without it a registered table is merged as a union
  * (INSERT OR IGNORE: on a key both sides have, ours is kept).
  */

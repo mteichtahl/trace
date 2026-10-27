@@ -5,7 +5,7 @@
  *   1 Connect        AWS credentials (a profile, or keys) and one GitHub token; "Check" runs the preflight
  *                    (src/installer/preflight.ts) and shows what was derived and every finding, with its fix
  *   2 Projects       the repositories the token sees (or a new one to create); none is fine
- *   3 Integrations   optional service keys (Nexar, Mouser, Digi-Key); skippable, and `trace integrations set` later
+ *   3 Integrations   optional service keys (Nexar, Mouser, Digi-Key); skippable, and `tracectl integrations set` later
  *   4 Review         the plan, how long it takes, and an "Advanced" disclosure with every other setting
  *
  * then the installation's progress, streamed. The answers are validated with the same zod schemas the server uses.
@@ -392,7 +392,7 @@ function sampleCard(owner: string): HTMLElement {
 function integrations(): HTMLElement {
   return h('section', { class: 'card' },
     h('h2', {}, 'Integrations (optional)'),
-    h('p', { class: 'lead' }, 'Keys for services some tools use. None is needed to install or deploy: without them the parts tools ask LCSC (no key) and say which key would add more. Add or change one any time with `trace integrations set <name>`. Each key is checked with its service and stored in AWS Secrets Manager (<prefix>/integrations/<name>).'),
+    h('p', { class: 'lead' }, 'Keys for services some tools use. None is needed to install or deploy: without them the parts tools ask LCSC (no key) and say which key would add more. Add or change one any time with `tracectl integrations set <name>`. Each key is checked with its service and stored in AWS Secrets Manager (<prefix>/integrations/<name>).'),
     ...INTEGRATION_NAMES.map((n) => {
       const i = INTEGRATIONS[n]
       const c = s.integrationCheck.get(n)
@@ -473,7 +473,7 @@ function advanced(): HTMLElement {
       return p ? field(`${r}: memory days`, input('number', p.memoryDays, (v) => { p.memoryDays = v.trim() }, { min: 3, max: 365, placeholder: '30' })) : null
     }),
     h('h3', {}, 'People'),
-    h('p', { class: 'muted' }, 'Everyone signs in with Amazon Cognito, which emails a temporary password. Admins can do everything; users read and change their projects; guests only read theirs. Admins can invite more later with `trace users invite`.'),
+    h('p', { class: 'muted' }, 'Everyone signs in with Amazon Cognito, which emails a temporary password. Admins can do everything; users read and change their projects; guests only read theirs. Admins can invite more later with `tracectl users invite`.'),
     h('table', { class: 'grid' },
       h('thead', {}, h('tr', {}, h('th', {}, 'Email'), h('th', {}, 'Class'), ...repos.map((r) => h('th', {}, r)), h('th', {}, ''))),
       h('tbody', {}, ...s.people.map((p, i) => h('tr', {},
@@ -538,7 +538,7 @@ function buildRunners(): (HTMLElement | null)[] {
       { value: 'auto', label: `Automatic: an authorized GitHub connection when there is one${found ? ` (${found})` : ''}, else the GitHub token` },
       { value: 'token', label: 'The GitHub token (no console step; the token is stored with CodeBuild)' },
       { value: 'connection', label: 'An AWS CodeConnections connection instead of the token (no token stored; needs one console authorization)' },
-    ], r.auth, (v) => { r.auth = (RUNNER_AUTH as readonly string[]).includes(v) ? v as (typeof RUNNER_AUTH)[number] : 'auto'; s.pre = null; render() }), 'change it later with `trace upgrade --runner-auth auto|token|connection`'),
+    ], r.auth, (v) => { r.auth = (RUNNER_AUTH as readonly string[]).includes(v) ? v as (typeof RUNNER_AUTH)[number] : 'auto'; s.pre = null; render() }), 'change it later with `tracectl upgrade --runner-auth auto|token|connection`'),
     r.auth === 'connection' ? note('warn', 'A new connection is authorized once per AWS account and region, in the AWS console. After the first deploy the installer shows the link (', h('a', { href: url, target: '_blank', rel: 'noopener' }, 'Connections'), `) and waits: choose ${r.connectionArn ? 'the connection' : name} and "Update pending connection", which installs the AWS Connector for GitHub app, and give that app access to every chosen repository. The installer then adds the build runners by itself.`) : null,
     r.auth !== 'token' ? field('Use this connection (optional)', input('text', r.connectionArn, (v) => { r.connectionArn = v.trim() }, { placeholder: `empty: reuse an authorized one${r.auth === 'connection' ? `, else create ${name}` : ''}` }), 'an existing GitHub connection\'s ARN') : null,
     r.auth !== 'connection' ? field('The token CodeBuild keeps', select([{ value: 'agent', label: 'The GitHub token above' }, { value: 'admin', label: 'The admin token' }], r.token, (v) => { r.token = v === 'admin' ? 'admin' : 'agent' }),
@@ -730,7 +730,7 @@ function install(): HTMLElement {
   return h('section', { class: 'card' },
     h('h2', {}, s.result ? (s.result.ok ? 'Installed' : 'Stopped') : s.ready ? 'Ready to use' : 'Installing'),
     s.result ? note(s.result.ok ? 'ok' : 'bad', h('ul', {}, ...s.result.summary.map((l) => h('li', {}, l))))
-      : s.ready ? note('ok', h('strong', {}, 'trace is ready: sign in with `trace login`. '), 'Only the GPU image is still being made.', h('ul', {}, ...s.ready.map((l) => h('li', {}, l))))
+      : s.ready ? note('ok', h('strong', {}, 'trace is ready: sign in with `tracectl login`. '), 'Only the GPU image is still being made.', h('ul', {}, ...s.ready.map((l) => h('li', {}, l))))
       : h('p', { class: 'lead' }, 'Keep this page open until it says trace is ready.'),
     h('ul', { class: 'progress' }, ...s.steps.map((st) => h('li', { class: `status-${st.status}` },
       h('span', { class: 'icon' }, STEP_ICON[st.status]), h('div', {}, h('strong', {}, st.title), h('div', { class: 'detail' }, st.detail))))),

@@ -45,7 +45,7 @@ export interface InvokeOptions {
 export async function invokeApi(action: string, args: Record<string, unknown> = {}, o: InvokeOptions = {}): Promise<unknown> {
   const i = installation()
   if (!i) throw new LoginError(NO_INSTALLATION)
-  if (!i.apiRuntimeArn) throw new LoginError('this installation has no API runtime ARN: run `trace connect` with --api')
+  if (!i.apiRuntimeArn) throw new LoginError('this installation has no API runtime ARN: run `tracectl connect` with --api')
   const f = o.fetch ?? fetch
   const token = await (o.token ?? (() => accessToken(f)))()
   const r = await f(invocationUrl(i.region, i.apiRuntimeArn, o.endpoint ?? process.env.TRACE_AGENTCORE_ENDPOINT), {
@@ -63,7 +63,7 @@ export async function invokeApi(action: string, args: Record<string, unknown> = 
   let json: unknown = null
   try { json = JSON.parse(text) } catch { /* not JSON */ }
   const a = Answer.safeParse(json)
-  if (r.status === 401) throw new ApiError(401, 'not signed in (or the session expired): run `trace login`')
+  if (r.status === 401) throw new ApiError(401, 'not signed in (or the session expired): run `tracectl login`')
   if (r.status === 403) throw new ApiError(403, a.success && !a.data.ok ? a.data.error : 'no access')
   if (!a.success) {
     const m = z.object({ message: z.string() }).loose().safeParse(json)

@@ -1,11 +1,11 @@
 /**
- * After installing: `trace upgrade` and `trace uninstall`, both from the answers the installer saved on this machine
+ * After installing: `tracectl upgrade` and `tracectl uninstall`, both from the answers the installer saved on this machine
  * (~/.trace/client.db) and your AWS credentials. Neither asks for a GitHub token: the installation's own copy is read
  * back from Secrets Manager (`<prefix>/github-token`, and each project's), which those credentials may read.
  *
- *   trace upgrade [--ref REF] [--check] [--no-pull] [--runner-auth auto|token|connection]
+ *   tracectl upgrade [--ref REF] [--check] [--no-pull] [--runner-auth auto|token|connection]
  *       1 pull: `npm install -g github:<source>#<ref>` (the ref the installation came from, v1 unless --ref), then
- *         run the new version's `trace upgrade --no-pull`
+ *         run the new version's `tracectl upgrade --no-pull`
  *       2 the installer's steps with the saved answers (src/installer/bootstrap.ts apply): the stack is updated (the
  *         images are copied or rebuilt from their cache only when trace changed), each repository's variables, runner
  *         and trace workflows are refreshed (a held PR when the workflows changed), people stay as they are
@@ -13,14 +13,14 @@
  *       --runner-auth switches how the CodeBuild runners reach GitHub (answers runners.auth, README "Where builds
  *         run"), saved for later runs: the runner projects are updated in place
  *
- *   trace release setup [--repo OWNER/REPO] [--region R] [--profile P] [--publish]
+ *   tracectl release setup [--repo OWNER/REPO] [--region R] [--profile P] [--publish]
  *       sets this AWS account up to publish trace's images (src/installer/release.ts): TraceRelease in us-east-1,
  *       the registry's default alias, the source repository's TRACE_RELEASE_ROLE and TRACE_IMAGE_REGISTRY, and its
  *       privileged CodeBuild runner; --publish starts the first release. The AWS credentials are the installation's
  *       (or --profile, or the environment's), the GitHub token TRACE_GITHUB_TOKEN / GITHUB_TOKEN or the
  *       installation's own; no console step
  *
- *   trace uninstall [--yes] [--delete-data]
+ *   tracectl uninstall [--yes] [--delete-data]
  *       deletes the optional integrations' secrets, each repository's trace variables (TRACE_CODEBUILD_PROJECT among
  *       them) and TRACE_TOKEN secret, trace's own repository's self-update variables (TRACE_UPDATE_ROLE, TRACE_STACK,
  *       TRACE_AWS_REGION: README "Staying up to date"), and the stack (with it the CodeBuild runner projects and their webhooks), then
@@ -60,14 +60,14 @@ const err = (s: string): void => { process.stderr.write(`${s}\n`) }
 /** The saved answers, or a clear error. */
 export function saved(): Answers {
   const raw = savedAnswers().answers
-  if (!raw) throw new Error('no installation answers on this machine: run `trace install` (upgrade and uninstall use what it saved)')
+  if (!raw) throw new Error('no installation answers on this machine: run `tracectl install` (upgrade and uninstall use what it saved)')
   return AnswersSchema.parse(raw)
 }
 
 /** The GitHub tokens the installation keeps: the API's (shared) one, and each project's own when it differs. */
 export async function storedTokens(a: Answers, get: (name: string) => Promise<string | null>): Promise<{ githubToken: string; projectTokens: Record<string, string> }> {
   const githubToken = await get(`${a.agents.prefix}/github-token`)
-  if (!githubToken) throw new Error(`the secret ${a.agents.prefix}/github-token has no token: run \`trace install\` instead`)
+  if (!githubToken) throw new Error(`the secret ${a.agents.prefix}/github-token has no token: run \`tracectl install\` instead`)
   const projectTokens: Record<string, string> = {}
   for (const p of a.projects) {
     const t = await get(githubSecretName(a.agents.prefix, p.repo, p.generation)).catch(() => null)
@@ -115,7 +115,7 @@ export async function cmdUpgrade(argv: string[]): Promise<number> {
       const r = spawnSync(npm, ['install', '-g', `github:${SOURCE}#${ref}`], { stdio: 'inherit' })
       if (r.status !== 0) { err(`trace: npm install exited ${r.status ?? 'abnormally'}`); return 1 }
       // the new version carries on (its stack, its workflows)
-      const next = spawnSync(process.platform === 'win32' ? 'trace.cmd' : 'trace', ['upgrade', '--no-pull', ...(auth !== undefined ? ['--runner-auth', auth] : [])], { stdio: 'inherit' })
+      const next = spawnSync(process.platform === 'win32' ? 'tracectl.cmd' : 'tracectl', ['upgrade', '--no-pull', ...(auth !== undefined ? ['--runner-auth', auth] : [])], { stdio: 'inherit' })
       return next.status ?? 1
     }
     const c = await creds(a)
@@ -213,7 +213,7 @@ export async function cmdUninstall(argv: string[]): Promise<number> {
       let status = ''
       try { status = (await cf.send(new cfn.DescribeStacksCommand({ StackName: stack }))).Stacks?.[0]?.StackStatus ?? '' } catch (e) { if (/does not exist/.test(String(e))) break; throw e }
       if (status === 'DELETE_COMPLETE') break
-      if (status === 'DELETE_FAILED') throw new Error(`${stack} is DELETE_FAILED: see its events in the CloudFormation console, fix the resource named there, and run \`trace uninstall\` again`)
+      if (status === 'DELETE_FAILED') throw new Error(`${stack} is DELETE_FAILED: see its events in the CloudFormation console, fix the resource named there, and run \`tracectl uninstall\` again`)
     }
     out(`${stack} is deleted`)
     // after the stack: deleting the runner projects removed their GitHub webhooks with this credential
@@ -241,7 +241,7 @@ export async function cmdUninstall(argv: string[]): Promise<number> {
       }
     }
     forgetInstallation()
-    out('Uninstalled. `trace install` installs again (the answers are kept on this machine).')
+    out('Uninstalled. `tracectl install` installs again (the answers are kept on this machine).')
     return 0
   } catch (e) {
     err(`trace: ${e instanceof Error ? e.message : String(e)}`)
@@ -251,7 +251,7 @@ export async function cmdUninstall(argv: string[]): Promise<number> {
 
 export async function cmdRelease(argv: string[]): Promise<number> {
   const [sub, ...rest] = argv
-  if (sub !== 'setup') { err('usage: trace release setup [--repo OWNER/REPO] [--region R] [--profile P] [--publish]'); return 2 }
+  if (sub !== 'setup') { err('usage: tracectl release setup [--repo OWNER/REPO] [--region R] [--profile P] [--publish]'); return 2 }
   const { values: o } = parseArgs({ args: rest, options: { repo: { type: 'string' }, region: { type: 'string' }, profile: { type: 'string' }, publish: { type: 'boolean' } } })
   try {
     const a = savedAnswers().answers ? saved() : null
@@ -268,7 +268,7 @@ export async function cmdRelease(argv: string[]): Promise<number> {
     const { createRequire } = await import('node:module')
     const cdkBin = createRequire(import.meta.url).resolve('aws-cdk/bin/cdk')
     const cdk = (args: string[], env: Record<string, string>): Promise<number> => Promise.resolve(spawnSync(process.execPath, [cdkBin, ...args], { cwd: REPO_ROOT, stdio: 'inherit', env: { ...process.env, ...env } }).status ?? 1)
-    // the release workflow runs on the repository's own AWS runner when the installation made it (`trace install`, with
+    // the release workflow runs on the repository's own AWS runner when the installation made it (`tracectl install`, with
     // publishing on, makes it Docker-capable), else on GitHub's runners
     const r = await releaseSetup(await liveReleaseDeps(c, token, { cdk, log: out }), {
       account, ...((o.repo || a?.runners.traceRepository) ? { repository: o.repo || a?.runners.traceRepository || "" } : {}), publish: Boolean(o.publish),

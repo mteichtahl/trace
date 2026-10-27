@@ -1,7 +1,7 @@
 /**
  * Publishing trace's images from this AWS account, set up end to end by API (no console step, no prework): a step of
  * the install itself whenever the installing token administers trace's source repository (src/installer/bootstrap.ts;
- * Advanced "Publish trace's images" overrides it either way), and `trace release setup` on its own.
+ * Advanced "Publish trace's images" overrides it either way), and `tracectl release setup` on its own.
  *
  *   1 bootstrap   CDK in us-east-1 (ECR Public's only region), when it isn't
  *   2 stack       deploy TraceRelease (src/infra/release.ts): the ECR Public repositories trace-agent and trace-gpu,
@@ -107,7 +107,7 @@ export async function defaultAlias(d: Pick<ReleaseDeps, 'registries' | 'sleep' |
     const aliases = regs.flatMap((r) => r.aliases)
     const pick = aliases.find((a) => a.defaultRegistryAlias && a.status === 'ACTIVE') ?? aliases.find((a) => a.primaryRegistryAlias && a.status === 'ACTIVE')
     if (pick) return pick.name
-    if (i >= tries) throw new Error(`ECR Public has assigned this account's registry no alias yet (${regs.length ? `status ${aliases.map((a) => a.status).join(', ') || 'none'}` : 'no registry'}): run \`trace release setup\` again in a few minutes`)
+    if (i >= tries) throw new Error(`ECR Public has assigned this account's registry no alias yet (${regs.length ? `status ${aliases.map((a) => a.status).join(', ') || 'none'}` : 'no registry'}): run \`tracectl release setup\` again in a few minutes`)
     d.log(`waiting for ECR Public to assign the registry's default alias (it does once the first public repository exists): check ${i} of ${tries}`)
     await d.sleep(waitMs)
   }

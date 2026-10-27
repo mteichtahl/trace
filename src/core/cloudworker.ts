@@ -6,8 +6,8 @@
  * hears from when something needs them across all projects. It honours the same claim and attempt markers as the
  * workflows, so the two never work on one item together.
  *
- *   trace worker-prompt                    every project in the central registry
- *   trace worker-prompt owner/a owner/b    just these
+ *   tracectl worker-prompt                    every project in the central registry
+ *   tracectl worker-prompt owner/a owner/b    just these
  *
  * Its text is the prompt catalog's (src/prompts/catalog.ts): cloudworker.prompt (editable) and cloudworker.guardrails
  * (locked, last). It spans projects, so only installation overrides apply.

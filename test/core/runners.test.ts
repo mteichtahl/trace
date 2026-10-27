@@ -1,5 +1,5 @@
 /**
- * Where every job runs: trace's own CI, the workflows `trace onboard` writes and the starter builds all name the
+ * Where every job runs: trace's own CI, the workflows `tracectl onboard` writes and the starter builds all name the
  * repository's AWS CodeBuild runner when the repository variable TRACE_CODEBUILD_PROJECT is set (the installer sets it
  * only once that runner exists), and GitHub's ubuntu-24.04 runner, the one fallback, until then. No other runner.
  */

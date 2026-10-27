@@ -212,7 +212,7 @@ describe.skipIf(!hasMake || !reg.get('firmware.build'))('sensor-node: firmware',
     expect(log).toContain('ALL TESTS PASSED')
   })
 
-  it.skipIf(!hasKicad)('`trace check`\'s steps all pass: ERC, DRC and the firmware build', async () => {
+  it.skipIf(!hasKicad)('`tracectl check`\'s steps all pass: ERC, DRC and the firmware build', async () => {
     const results: [string, boolean][] = []
     for (const kind of ['kicad.erc', 'kicad.drc']) {
       const r = await call(kind, { project: join(dir, 'hardware/sensor-node.kicad_pro') })

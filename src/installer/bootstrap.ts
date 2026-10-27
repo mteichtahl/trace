@@ -35,7 +35,7 @@
  *  10 onboard    the onboarding PR in each repository that asked for it, and its repository settings
  *  11 people     invite each person to Cognito, put them in their class's group (admin, user, guest), and record
  *                the projects they are assigned to
- *  12 local      save the installation on this machine so `trace login` and `trace remote …` work
+ *  12 local      save the installation on this machine so `tracectl login` and `tracectl remote …` work
  *  13 release    (agents.publishImages: by default, when the token administers trace's source repository) set this
  *                account up to publish trace's images and start the first release (src/installer/release.ts); a
  *                failure is reported, and everything else stays installed
@@ -516,13 +516,13 @@ export function plan(input: Answers, existing?: Existing | null, prev?: Answers 
     ['connection', 'Authorize the GitHub connection', connectionPlan(a)],
     ['runners', 'Add the build runners', `only if the GitHub connection was not authorized before the deploy: deploy ${stack} again once it is. That only adds each repository's CodeBuild runner project and its GitHub webhook; nothing else changes. ${GITHUB_RUNNERS_NOTE}`],
     ['token', 'Store the GitHub tokens', `the shared token in the API's secret, and each project's agent token in its own secret${props.gateway.enabled ? '; any distributor keys given in the library gateway\'s secret' : ''}`],
-    ['integrations', 'Store the optional integrations', 'any integration keys given (Nexar, Mouser, Digi-Key), each checked with its service and stored as <prefix>/integrations/<name>; none is needed, and they can be added later with `trace integrations set <name>`'],
+    ['integrations', 'Store the optional integrations', 'any integration keys given (Nexar, Mouser, Digi-Key), each checked with its service and stored as <prefix>/integrations/<name>; none is needed, and they can be added later with `tracectl integrations set <name>`'],
     ['repos', 'Configure the repositories', a.projects.length || buildRepositories(a).length
       ? `${a.projects.length ? `each repository's own TRACE_AWS_ROLE, TRACE_AGENT_RUNTIME_ARN, ${RUNNER_VARIABLE} (the CodeBuild runner project its workflows run on)${props.memory.enabled ? ', TRACE_MEMORY_ID' : ''}${props.knowledgeBase.enabled && props.layout === 'nested' ? ', TRACE_KB_ID and TRACE_KB_DATA_SOURCE_ID' : ''}, TRACE_AWS_REGION, TRACE_HOME, TRACE_AGENT_LOGIN and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}, several at once` : ''}${buildRepositories(a).length ? `${a.projects.length ? '; ' : ''}${RUNNER_VARIABLE} alone in ${buildRepositories(a).join(', ')}` : ''}${selfUpdateOf(a) ? `; ${UPDATE_ROLE_VARIABLE}, TRACE_AWS_REGION and ${UPDATE_STACK_VARIABLE} in ${selfUpdateOf(a)?.repository} (its ci workflow keeps this installation up to date)` : ''}. ${RUNNER_VARIABLE} is set only once the repository's runner exists, and removed where it does not, so its workflows run on GitHub's runners until then`
       : 'no repositories yet: run the installer again to add them'],
     ['onboard', 'Onboard the repositories', [onboarding.length ? `open (or refresh) the onboarding PR in ${onboarding.join(', ')}` : '', creating.length ? `create ${creating.join(', ')}` : ''].filter(Boolean).join('; ') || 'none chosen'],
     ['people', 'Invite people and assign projects', `${a.adminEmail || 'the token\'s email'} (admin)${a.people.length ? `, ${a.people.map((p) => `${p.email} (${p.class})`).join(', ')}` : ''}`],
-    ['local', 'Save this installation locally', '~/.trace/client.db, so `trace login` works here'],
+    ['local', 'Save this installation locally', '~/.trace/client.db, so `tracectl login` works here'],
     ['release', 'Publish trace\'s images', a.agents.publishImages
       ? `set this account up to publish trace's images, all by API: CDK in ${RELEASE_REGION} if needed, the ${RELEASE_STACK} stack there (ECR Public ${Object.values(RELEASE_REPOSITORIES).join(' and ')}, and a release role for ${releaseRepository(a)}'s main and v* tags), the registry's default alias, ${releaseRepository(a)}'s TRACE_RELEASE_ROLE and TRACE_IMAGE_REGISTRY and its trace-images release (where every installation finds the images), then the first release run, on ${selfBuild(a) ? 'its own AWS build runner (Docker-in-Docker)' : 'GitHub\'s runners until it has an AWS one'}`
       : `off: by default only the installation whose token administers ${releaseRepository(a)} publishes (Advanced → "Publish trace's images")`],
@@ -924,7 +924,7 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     const given = givenIntegrations(s)
     for (const w of given.incomplete) { log('integrations', w); summary.push(w) }
     const names_ = Object.keys(given.complete) as IntegrationName[]
-    if (!names_.length) set('integrations', 'skipped', 'none given: add one any time with `trace integrations set <name>`; the parts tools ask LCSC (no key) meanwhile')
+    if (!names_.length) set('integrations', 'skipped', 'none given: add one any time with `tracectl integrations set <name>`; the parts tools ask LCSC (no key) meanwhile')
     else {
       set('integrations', 'running')
       const store = hooks.integrations ?? new IntegrationStore(props.prefix, await secretsManagerApi({ region: a.aws.region, credentials: creds }))
@@ -933,7 +933,7 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
         const values = given.complete[n] ?? {}
         const c = await checkKey(n, values)
         log('integrations', `${INTEGRATIONS[n].title}: ${c.detail}`)
-        if (!c.ok) summary.push(`${INTEGRATIONS[n].title}: ${c.detail}. It is stored anyway; replace it with \`trace integrations set ${n}\`.`)
+        if (!c.ok) summary.push(`${INTEGRATIONS[n].title}: ${c.detail}. It is stored anyway; replace it with \`tracectl integrations set ${n}\`.`)
         log('integrations', `${n}: stored in ${await store.set(n, values)}`)
       }))
       set('integrations', 'done', names_.map((n) => INTEGRATIONS[n].title).join(', '))
@@ -1085,7 +1085,7 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       const stale = [...new Set((await assignments(installer)).filter((g) => g.email && !listed.has(g.email.toLowerCase()) && g.email.toLowerCase() !== a.adminEmail.toLowerCase()).map((g) => g.email!))]
       if (stale.length) {
         log('people', `not in this installation's list but still assigned: ${stale.join(', ')}`)
-        summary.push(`Still have project access though not listed here: ${stale.join(', ')} (remove with \`trace users unassign\`)`)
+        summary.push(`Still have project access though not listed here: ${stale.join(', ')} (remove with \`tracectl users unassign\`)`)
       }
       for (const p of a.projects) await register(p.repo, null)
     } finally {
@@ -1094,7 +1094,7 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
         else process.env[k] = saved[k]
       }
     }
-    if (!existing) summary.push(`${a.adminEmail} receives a temporary password from Cognito; sign in with \`trace login\`.`)
+    if (!existing) summary.push(`${a.adminEmail} receives a temporary password from Cognito; sign in with \`tracectl login\`.`)
     set('people', 'done')
 
     // 12 — this machine
@@ -1122,14 +1122,14 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       } catch (e) {
         const m = redact(e instanceof Error ? e.message : String(e), s)
         set('release', 'failed', m)
-        summary.push(`Publishing trace's images is not set up: ${m}. Everything else is installed; run \`trace release setup\` to finish it.`)
+        summary.push(`Publishing trace's images is not set up: ${m}. Everything else is installed; run \`tracectl release setup\` to finish it.`)
       }
     }
 
     summary.unshift(`trace is installed in ${a.aws.account} (${a.aws.region}) as ${stack}.`)
-    if (!a.projects.length) summary.push('No repositories yet: run `trace install` again and pick some (or create one).')
+    if (!a.projects.length) summary.push('No repositories yet: run `tracectl install` again and pick some (or create one).')
     else summary.push('Write each project\'s rules in .trace/rules.md (they start empty).')
-    if (!names_.length) summary.push('Optional: add a Nexar, Mouser or Digi-Key key for live stock and prices: `trace integrations set nexar` (see `trace integrations list`).')
+    if (!names_.length) summary.push('Optional: add a Nexar, Mouser or Digi-Key key for live stock and prices: `tracectl integrations set nexar` (see `tracectl integrations list`).')
 
     // 15 — the sample's tour, last (it runs after the GPU wait below): every agent and every simulation gets its task;
     // the GPU and CPU ones only when the GPU image is there to run them. A failure is reported; the rest stays installed

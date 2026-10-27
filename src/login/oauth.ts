@@ -136,13 +136,13 @@ export async function callbackServer(ports: readonly number[], state: string, ti
       res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }).end(page(title, text))
     }
     if (!sameState(state, q.get('state'))) {
-      answer(400, 'Sign-in not accepted', 'This sign-in did not come from the trace command that is waiting. Run <code>trace login</code> again.')
+      answer(400, 'Sign-in not accepted', 'This sign-in did not come from the trace command that is waiting. Run <code>tracectl login</code> again.')
       reject(new LoginError('the sign-in redirect carried the wrong state (not this login): refused'))
       return
     }
     const error = q.get('error')
     if (error) {
-      answer(400, 'Sign-in failed', 'You can close this tab and run <code>trace login</code> again.')
+      answer(400, 'Sign-in failed', 'You can close this tab and run <code>tracectl login</code> again.')
       reject(new LoginError(`sign-in failed: ${q.get('error_description') ?? error}`))
       return
     }
@@ -209,12 +209,12 @@ function need(): { i: Installation; s: Session } {
   const i = savedInstallation()
   if (!i) throw new LoginError(NO_INSTALLATION)
   const s = savedSession(i.name)
-  if (!s) throw new LoginError('not signed in: run `trace login`')
+  if (!s) throw new LoginError('not signed in: run `tracectl login`')
   return { i, s }
 }
 
-export const NO_INSTALLATION = 'no trace installation on this machine. Admins: `trace install`. Everyone else: ask an admin for the values and run\n' +
-  '  trace connect --region R --pool POOL_ID --client CLIENT_ID --domain https://….auth.R.amazoncognito.com --api API_RUNTIME_ARN'
+export const NO_INSTALLATION = 'no trace installation on this machine. Admins: `tracectl install`. Everyone else: ask an admin for the values and run\n' +
+  '  tracectl connect --region R --pool POOL_ID --client CLIENT_ID --domain https://….auth.R.amazoncognito.com --api API_RUNTIME_ARN'
 
 export async function refresh(f: typeof fetch = fetch): Promise<Session> {
   const { i, s } = need()
@@ -222,7 +222,7 @@ export async function refresh(f: typeof fetch = fetch): Promise<Session> {
   try {
     t = await tokenRequest(i, { grant_type: 'refresh_token', client_id: i.clientId, refresh_token: s.refreshToken }, f)
   } catch (e) {
-    throw new LoginError(`${e instanceof Error ? e.message : String(e)}: your session has ended; run \`trace login\``)
+    throw new LoginError(`${e instanceof Error ? e.message : String(e)}: your session has ended; run \`tracectl login\``)
   }
   const next = toSession(i, t, s)
   saveSession(next)

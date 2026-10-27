@@ -70,7 +70,7 @@ The installer put these in `.trace/project.db`, so the tour starts from a projec
 - The thermal envelope `enclosure` (0 to 50 °C, still air), part limits, the power budget `nominal` and U1's derating
   curve.
 
-Run `trace tool verify.run all=true` here. 23 items pass; the 2 bench items wait for `TRACE_HARDWARE=1` and the
+Run `tracectl tool verify.run all=true` here. 23 items pass; the 2 bench items wait for `TRACE_HARDWARE=1` and the
 emulator, and the 2 inspection items wait for a person's verdict.
 
 ## Numbers from the local tools

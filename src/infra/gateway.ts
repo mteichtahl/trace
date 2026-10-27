@@ -91,7 +91,7 @@ export class LibraryGateway extends Construct {
 
     this.keys = new secrets.Secret(this, 'Keys', {
       secretName: `${p.prefix}/library-keys`,
-      description: 'Distributor API keys for the shared parts library (MOUSER_API_KEY, DIGIKEY_CLIENT_ID/_SECRET, NEXAR_CLIENT_ID/_SECRET as JSON), written by `trace install`; read only by the library gateway\'s Lambda.',
+      description: 'Distributor API keys for the shared parts library (MOUSER_API_KEY, DIGIKEY_CLIENT_ID/_SECRET, NEXAR_CLIENT_ID/_SECRET as JSON), written by `tracectl install`; read only by the library gateway\'s Lambda.',
       // an empty object until the installer writes it (CloudFormation never holds a key)
       generateSecretString: { secretStringTemplate: '{}', generateStringKey: 'unused', passwordLength: 8, excludePunctuation: true },
       removalPolicy: RemovalPolicy.DESTROY,

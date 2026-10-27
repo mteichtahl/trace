@@ -109,7 +109,7 @@ describe('the envelope', () => {
   })
 })
 
-describe('trace mcp with a gateway', () => {
+describe('tracectl mcp with a gateway', () => {
   const reg = allTools()
   const fake = (answer: (name: string, args: Record<string, unknown>) => GatewayOutcome): GatewayCaller & { calls: [string, Record<string, unknown>][] } => {
     const calls: [string, Record<string, unknown>][] = []

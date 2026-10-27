@@ -1,5 +1,5 @@
 /**
- * `trace install`: a local web page that collects what installing trace needs, checks each answer as it is given,
+ * `tracectl install`: a local web page that collects what installing trace needs, checks each answer as it is given,
  * shows the plan, then runs it and streams progress.
  *
  * Local only, and guarded:
@@ -201,7 +201,7 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
       res.setHeader('x-content-type-options', 'nosniff')
       res.setHeader('referrer-policy', 'no-referrer')
       if (req.method === 'GET' && url.pathname === '/') {
-        if (!authorised(req, url)) return send(res, 401, { error: 'open the address printed by `trace install`' })
+        if (!authorised(req, url)) return send(res, 401, { error: 'open the address printed by `tracectl install`' })
         res.writeHead(200, {
           'content-type': 'text/html; charset=utf-8',
           'cache-control': 'no-store',

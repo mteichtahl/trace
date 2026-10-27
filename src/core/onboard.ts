@@ -1,14 +1,14 @@
 /**
- * Onboarding: put a repository under trace — an existing one (`trace onboard`) or a new one (`trace new`).
+ * Onboarding: put a repository under trace — an existing one (`tracectl onboard`) or a new one (`tracectl new`).
  *
  * What a repository gets:
- *   .trace/project.db              its own database: settings (detected, then changed with `trace config set`) and,
+ *   .trace/project.db              its own database: settings (detected, then changed with `tracectl config set`) and,
  *                                  later, its run record
  *   .trace/rules.md                EMPTY. The owner writes the rules; the agents read them as the authority.
  *   .github/workflows/trace-*.yml  four thin workflows that call the harness's actions in the trace repository:
  *                                  prs (open, auto-merge, update queue), ci (CI doctor), worker (Claude fixes what
  *                                  breaks), deploy (off until deploy.enabled)
- *   .gitattributes                 the project database merges with `trace db merge`
+ *   .gitattributes                 the project database merges with `tracectl db merge`
  *   CLAUDE.md                      a short pointer to the rules and the tools (appended, never replacing anything)
  * and, with --apply-settings, the repository settings the loop needs (auto-merge allowed, branches deleted on merge,
  * the labels, and a ruleset requiring the build's check on the default branch).
@@ -133,7 +133,7 @@ export async function detect(repo: string, branch?: string, run: Runner = runCom
   const chosen = prefer[0] ?? candidates[0]
   if (chosen) {
     d.build = chosen
-    if (candidates.length > 1) d.notes.push(`Several workflows build on push/PR; chose ${chosen.file}. Change with \`trace config set build.workflow <file>\`.`)
+    if (candidates.length > 1) d.notes.push(`Several workflows build on push/PR; chose ${chosen.file}. Change with \`tracectl config set build.workflow <file>\`.`)
     const gate = chosen.jobs.find((j) => /^(tests? pass(es|ed)?|all checks|ci ok|gate)$/i.test(j))
     if (gate) d.check = gate
     else if (chosen.jobs.length === 1) d.check = chosen.jobs[0] ?? ''
@@ -181,7 +181,7 @@ const tpl = (rel: string): string => readFileSync(join(TEMPLATES, rel), 'utf8')
 /** Write everything onboarding adds. Returns the paths written (relative). */
 export function writeFiles(repo: string, d: Detected, settings: Record<string, unknown>, source = SOURCE, ref = REF): string[] {
   const written: string[] = []
-  for (const [k, v] of Object.entries(settings)) setValue(k, v, repo, 'trace onboard')
+  for (const [k, v] of Object.entries(settings)) setValue(k, v, repo, 'tracectl onboard')
   let cfg: ResolvedConfig = load(repo)
   written.push('.trace/project.db')
   const rules = join(repo, '.trace', 'rules.md')
@@ -193,8 +193,8 @@ export function writeFiles(repo: string, d: Detected, settings: Record<string, u
     writeFileSync(join(wf, 'trace-build.yml'), render(tpl(starter), { BRANCH: cfg.branch, SOURCE: source, REF: ref }))
     written.push('.github/workflows/trace-build.yml')
     d.build = { file: 'trace-build.yml', name: 'build', jobs: ['tests pass'], triggers: ['push', 'pull_request'] }
-    setValue('build.workflow', 'trace-build.yml', repo, 'trace onboard')
-    setValue('build.required_check', 'tests pass', repo, 'trace onboard')
+    setValue('build.workflow', 'trace-build.yml', repo, 'tracectl onboard')
+    setValue('build.required_check', 'tests pass', repo, 'tracectl onboard')
     cfg = load(repo)
   }
   written.push(...writeWorkflows(repo, cfg, d.build.name, source, ref))

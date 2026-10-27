@@ -5,7 +5,7 @@
  *
  * The gateway calls it with the tool's arguments as the event and names the tool in the client context
  * (`bedrockAgentCoreToolName`, `library___datasheets_find`). It answers with an envelope (EnvelopeSchema) that the
- * worker's `trace mcp` unwraps, so a forwarded call reads the same as one run in-process. A ToolError is an answer
+ * worker's `tracectl mcp` unwraps, so a forwarded call reads the same as one run in-process. A ToolError is an answer
  * (`ok: false`); anything else is thrown and the gateway reports the call as failed.
  *
  * It never takes a local file or another store: an argument named in LOCAL_INPUTS is refused, whoever sends it. The

@@ -1,13 +1,13 @@
 /**
- * `trace agent …`: the specialists, for people.
+ * `tracectl agent …`: the specialists, for people.
  *
- *   trace agent list [--json]                 every specialist: what it does, whether it is enabled, model and
+ *   tracectl agent list [--json]                 every specialist: what it does, whether it is enabled, model and
  *                                             turn limit, memory agent, and its tools (MCP names)
- *   trace agent route <issue|pr|text> [--repo OWNER/REPO] [--labels a,b] [--files f,g] [--checks c,d] [--model]
+ *   tracectl agent route <issue|pr|text> [--repo OWNER/REPO] [--labels a,b] [--files f,g] [--checks c,d] [--model]
  *                                             a dry run of the router: a number reads that issue or PR from GitHub
  *                                             (gh: labels, text, changed files, failing checks); anything else is
  *                                             routed as text. --model asks the model when nothing else decides.
- *   trace agent prompt <kind> [--marked]      the composed prompt, with this project's settings, .trace/rules.md
+ *   tracectl agent prompt <kind> [--marked]      the composed prompt, with this project's settings, .trace/rules.md
  *                                             and the prompt overrides in force (this clone's and the
  *                                             installation's), for review; --marked heads each part with its id
  */
@@ -27,7 +27,7 @@ import { mcpName } from './specialist.js'
 const out = (s: string): void => { process.stdout.write(`${s}\n`) }
 const err = (s: string): void => { process.stderr.write(`${s}\n`) }
 
-const USAGE = 'usage: trace agent list [--json] | route <issue|pr|text> [--repo OWNER/REPO] [--labels a,b] [--files f,g] [--checks c,d] [--model] | prompt <kind> [--marked]'
+const USAGE = 'usage: tracectl agent list [--json] | route <issue|pr|text> [--repo OWNER/REPO] [--labels a,b] [--files f,g] [--checks c,d] [--model] | prompt <kind> [--marked]'
 
 const list = (v: string | undefined): string[] => (v ?? '').split(',').map((s) => s.trim()).filter(Boolean)
 
@@ -120,7 +120,7 @@ export async function cmdAgent(argv: string[]): Promise<number> {
     case 'prompt': {
       const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { marked: { type: 'boolean' } } })
       const k = SpecialistKindSchema.safeParse(positionals[0])
-      if (!k.success) { err(`trace agent prompt: one of ${SPECIALIST_KINDS.join(', ')}`); return 2 }
+      if (!k.success) { err(`tracectl agent prompt: one of ${SPECIALIST_KINDS.join(', ')}`); return 2 }
       const root = findRoot()
       const repository = (() => { try { return currentRepo() } catch { return 'OWNER/REPO' } })()
       const { localLayers } = await import('../prompts/cli.js')

@@ -13,7 +13,7 @@
  * page are all given (a datasheet in the shared library, read at that page), else null. protocol.spec_extract
  * proposes rows with full citations; a figure typed in from elsewhere stays verified: null.
  *
- * `trace db merge` merges the table by key, keeping the more recently updated row.
+ * `tracectl db merge` merges the table by key, keeping the more recently updated row.
  */
 import { z } from 'zod'
 

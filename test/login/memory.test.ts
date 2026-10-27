@@ -1,4 +1,4 @@
-/** The memory commands: `trace remote memory …` (what it asks the API) and `trace memory …` on a local installation. */
+/** The memory commands: `tracectl remote memory …` (what it asks the API) and `tracectl memory …` on a local installation. */
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -33,7 +33,7 @@ beforeEach(() => {
 })
 afterEach(() => { vi.restoreAllMocks() })
 
-describe('trace remote memory', () => {
+describe('tracectl remote memory', () => {
   it('lists (with --all, inactive ones marked), deactivates with a reason, reactivates', async () => {
     expect(await cmdRemote(['memory', 'list', 'Acme/Board', '--all'])).toBe(0)
     expect(calls[0]).toEqual({ action: 'memory.list', args: { repo: 'Acme/Board', includeInactive: true } })
@@ -52,7 +52,7 @@ describe('trace remote memory', () => {
   })
 })
 
-describe('trace memory (local)', () => {
+describe('tracectl memory (local)', () => {
   it('marks this project\'s records in the local store, after finding them in its memory', async () => {
     const home = mkdtempSync(join(tmpdir(), 'trace-cli-ms-'))
     const env = { TRACE_MEMORY_ID: 'trace_m_0000aaaa-abcdefghij', AWS_REGION: 'us-east-1', TRACE_MEMORY_STATE_HOME: home }

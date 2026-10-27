@@ -2,7 +2,7 @@
 # the Python bridge's tests, and a check that the committed harness bundle matches its source.
 #
 # Runners: every job runs on AWS CodeBuild (a CodeBuild-hosted GitHub Actions runner in the installation's AWS account)
-# once `trace install` has set it up for this repository, and on GitHub's ubuntu-24.04 runners until then. The switch
+# once `tracectl install` has set it up for this repository, and on GitHub's ubuntu-24.04 runners until then. The switch
 # is the repository variable TRACE_CODEBUILD_PROJECT, which the installer sets only once this repository's runner
 # project exists (and removes if it does not), exactly as in the workflows it writes for other repositories. Both
 # runners are Ubuntu, so the steps work on either: they use sudo, and never assume the job user's name or home.

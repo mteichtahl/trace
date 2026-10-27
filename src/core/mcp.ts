@@ -1,6 +1,6 @@
 /**
- * The trace MCP server: every tool in the registry, over stdio, for Claude Code (`trace mcp`;
- * `claude mcp add trace -- trace mcp`).
+ * The trace MCP server: every tool in the registry, over stdio, for Claude Code (`tracectl mcp`;
+ * `claude mcp add trace -- tracectl mcp`).
  *
  * MCP tool names may only use letters, digits, `_` and `-`, so `kicad.erc` is offered as `kicad_erc`. A ToolError
  * comes back as a tool result with isError set (the model reads it and adjusts); anything else is reported with its
@@ -83,7 +83,7 @@ async function viaGateway(gateway: GatewayCaller, t: AnyTool, args: unknown): Pr
   if (writesLibrary(name)) {
     return { content: [{ type: 'text', text: `${name} writes the shared library, which goes only through the library gateway, and the gateway can't be reached: ${out.reason}` }], isError: true }
   }
-  process.stderr.write(`trace mcp: the library gateway can't be reached (${out.reason.slice(0, 300)}); running ${name} here\n`)
+  process.stderr.write(`tracectl mcp: the library gateway can't be reached (${out.reason.slice(0, 300)}); running ${name} here\n`)
   return null
 }
 
