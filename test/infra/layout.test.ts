@@ -114,9 +114,9 @@ describe('the nested layout', () => {
     // policies of the API role (it names every knowledge base for Retrieve): three at 24 projects, four at 60
     // (each project's job-events topic, policy and rule are in its nested stack: none in the parent; the outputs
     // include GithubConnectionArn and GithubConnectionCreated: src/infra/runner.ts GithubConnection). The web app adds
-    // six resources (its nested stack, the events API and namespace, the publish policy, the settings parameter and the
-    // web client) and four outputs (WebUrl, WebDistributionId, EventsApiEndpoint, WebClientId)
-    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:93/25:0', '24:120/25:4', '60:156/25:4'])
+    // three resources (its nested stack, which holds the live events API too, the settings parameter and the web
+    // client) and four outputs (WebUrl, WebDistributionId, EventsApiEndpoint, WebClientId)
+    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:90/25:0', '24:117/25:4', '60:153/25:4'])
     // without a connection given, the stack creates one: one more resource of the parent's, and nothing more per project
     const created = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: {} }), 'Count1Created')
     expect(count(json(created.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0) + 1)
