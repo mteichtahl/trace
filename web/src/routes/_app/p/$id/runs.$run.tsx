@@ -58,11 +58,15 @@ function RunPage() {
     if (version != null) void qc.invalidateQueries({ queryKey: ['run', repo] })
   }, [version, qc, repo])
 
+  // only what job.control can do for this job (its view's controls); a refusal says why in plain words
+  const can = (op: 'pause' | 'cancel' | 'move_up') => (job.data?.controls ?? []).includes(op)
   const control = async (op: 'pause' | 'cancel' | 'move_up') => {
     if (!r?.jobId) return
     try {
       const res = await call('job.control', { id: r.jobId, op })
-      toast(op === 'pause' ? 'Paused. Routed nets are kept; resume any time.' : op === 'move_up' ? 'Moved up the queue.' : `Cancelled: ${r.title ?? r.kind}`, { description: res.kept })
+      if (!res.ok) { toast(`Could not ${op === 'move_up' ? 'move it up' : op}.`, { description: res.reason }); return }
+      toast(op === 'pause' ? 'Paused. Resume any time.' : op === 'move_up' ? 'Moved up the queue.' : `Cancelled: ${r.title ?? r.kind}`, { description: res.kept })
+      void qc.invalidateQueries({ queryKey: ['job'] })
     } catch (e) {
       toast.error(`Could not ${op === 'move_up' ? 'move it up' : op}.`, { description: e instanceof Error ? e.message : String(e) })
     }
@@ -70,8 +74,8 @@ function RunPage() {
 
   useTraceContext(r ? { label: r.id, description: 'The run the person is looking at', value: { id: r.id, kind: r.kind, status: r.status, summary: r.summary }, mono: true } : null, 'run')
   useCommands(r?.status === 'running' ? [
-    { id: 'run-pause', label: 'Pause this run', run: () => void control('pause') },
-    { id: 'run-cancel', label: 'Cancel this run', run: () => setConfirm(true) },
+    ...(can('pause') ? [{ id: 'run-pause', label: 'Pause this run', run: () => void control('pause') }] : []),
+    ...(can('cancel') ? [{ id: 'run-cancel', label: 'Cancel this run', run: () => setConfirm(true) }] : []),
   ] : [])
 
   if (run.isError) return <div className="mt-6"><QueryError error={run.error} what="this run" onRetry={() => void run.refetch()} /></div>
@@ -115,9 +119,9 @@ function RunPage() {
           </div>
           {running && r.jobId && (
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => void control('pause')}><Pause /> Pause</Button>
-              <Button variant="outline" onClick={() => setConfirm(true)}><X /> Cancel</Button>
-              <Button variant="outline" onClick={() => void control('move_up')}><ArrowUp /> Move up</Button>
+              {can('pause') && <Button variant="outline" onClick={() => void control('pause')}><Pause /> Pause</Button>}
+              {can('cancel') && <Button variant="outline" onClick={() => setConfirm(true)}><X /> Cancel</Button>}
+              {can('move_up') && <Button variant="outline" onClick={() => void control('move_up')}><ArrowUp /> Move up</Button>}
             </div>
           )}
         </div>
@@ -188,9 +192,10 @@ function RunPage() {
             <div className="rounded-xl border p-5 text-sm">
               <h2 className="font-semibold">What you can do</h2>
               <dl className="mt-3 space-y-3">
-                <div><dt className="font-medium">Pause</dt><dd className="text-muted-foreground">Keeps what is done. Resume any time.</dd></div>
-                <div><dt className="font-medium">Cancel</dt><dd className="text-muted-foreground">Stops within seconds and says what was kept.</dd></div>
-                <div><dt className="font-medium">Move up the queue</dt><dd className="text-muted-foreground">Runs before your other waiting jobs.</dd></div>
+                {can('pause') && <div><dt className="font-medium">Pause</dt><dd className="text-muted-foreground">Keeps what is done. Resume any time.</dd></div>}
+                <div><dt className="font-medium">Cancel</dt><dd className="text-muted-foreground">Stops within seconds and says what was kept: commits the agent already pushed stay on their branch.</dd></div>
+                {can('move_up') && <div><dt className="font-medium">Move up the queue</dt><dd className="text-muted-foreground">Runs before your other waiting jobs.</dd></div>}
+                {!can('pause') && <div><dt className="font-medium">Pause and Move up</dt><dd className="text-muted-foreground">Not available: a run is one agent session that cannot be held and resumed, and runs start as soon as they are asked for, so there is no queue to move up.</dd></div>}
               </dl>
             </div>
           )}

@@ -17,7 +17,7 @@ import { EmptyState, QueryError } from '@/components/states'
 import { projectId } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { type SkillDef, pictureOf } from './definitions'
-import { NoChecker, StepHeader, TraceIntro } from './parts'
+import { NoChecker, StepHeader, TraceIntro, Unavailable } from './parts'
 import { StepPicture } from './step-picture'
 import { type SkillDraftBase, qualityChecks, useSkill } from './use-skill'
 
@@ -95,6 +95,7 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
       </section>
 
       {!v?.checks?.length && <div className="mt-4"><NoChecker def={def} /></div>}
+      <div className="mt-4"><Unavailable checks={v?.checks} def={def} /></div>
 
       {!last && (
         <div className="mt-6 flex justify-end">

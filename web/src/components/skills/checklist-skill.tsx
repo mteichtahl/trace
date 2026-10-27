@@ -22,7 +22,7 @@ import { eng } from '@/lib/format'
 import type { BenchReadout } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
 import { type SkillDef, pictureOf } from './definitions'
-import { StepHeader, TraceIntro } from './parts'
+import { StepHeader, TraceIntro, Unavailable } from './parts'
 import { StepPicture } from './step-picture'
 import { type SkillDraftBase, qualityChecks, useSkill } from './use-skill'
 
@@ -135,6 +135,7 @@ export function ChecklistSkill({ repo, def }: { repo: string; def: SkillDef }) {
           <Button onClick={s.next} disabled={out.length > 0 || list.some((c) => !isTicked(c.id))}>Continue to {def.steps[s.stepIndex + 1]!.title.toLowerCase()} <ArrowRight /></Button>
         </div>
       )}
+      <div className="mt-4"><Unavailable checks={s.view.data?.checks} def={def} /></div>
     </FocusLayout>
   )
 }

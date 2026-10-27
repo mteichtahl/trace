@@ -23,6 +23,7 @@ for (const g of JOURNEYS['acme/motor-driver']!.gates as GateMore[])
 
 const gateOf = (repo: string, id: string): GateMore | undefined => JOURNEYS[repo]?.gates.find((g: Gate) => g.id === id) as GateMore | undefined
 let settings: Record<string, unknown> = { ...SETTINGS }
+const drafts: Record<string, { step: number; data: unknown; saved: string } | undefined> = {}
 
 export function s1Action(name: string, a: Record<string, unknown>): Response | undefined {
   const repo = a.repo as string
@@ -68,7 +69,19 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
     case 'job':
       return ok(a.id === JOB_ROUTE.id ? JOB_ROUTE : { id: a.id, kind: 'task', state: 'done', version: 1 })
     case 'job.control':
-      return later(ok({ ok: true, ...(a.op === 'cancel' ? { kept: 'Stage 1 kept: 48 nets routed and locked.' } : {}) }))
+      // as the API: only cancel can be done; the rest say why
+      return a.op === 'cancel'
+        ? later(ok({ ok: true, state: 'aborted', kept: 'Commits the agent had already pushed stay on their branch.' }))
+        : ok({ ok: false, reason: a.op === 'move_up' ? 'Jobs are not queued: each starts as soon as it is asked for, so there is nothing to move up.' : 'A running job cannot be paused. Cancel it instead; commits it already pushed are kept.' })
+    case 'skill.draft':
+      drafts[`${repo}|${String(a.skill)}`] = a.data === null ? undefined : { step: Number(a.step ?? 0), data: a.data, saved: new Date().toISOString() }
+      return ok({ kept: a.data !== null, saved: a.data === null ? null : new Date().toISOString() })
+    case 'skill.drafts':
+      return ok({ drafts: Object.entries(drafts).filter(([k, v]) => v && k.startsWith(`${repo}|`)).map(([k, v]) => ({ skill: k.split('|')[1], name: k.split('|')[1], step: v!.step, steps: 6, saved: v!.saved })) })
+    case 'policy.set':
+      return ok({ locks: {}, changed: true })
+    case 'users.history':
+      return ok({ sub: a.who, email: null, entries: [{ at: new Date(Date.now() - 86_400_000).toISOString(), by: 'marc@example.com', repo: 'acme/soil-sensor', action: 'assign', detail: 'part: contributor', text: 'marc@example.com added them to acme/soil-sensor as a contributor.' }] })
     case 'tool':
       if (a.name === 'verify.coverage') return repo === 'acme/soil-sensor' ? later(ok(COVERAGE), 200) : ok({ summary: {}, requirements: [] })
       return undefined
@@ -92,7 +105,8 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
     case 'skill.get': {
       const v = SKILL_VIEWS[String(a.skill)] ?? {}
       const question = String(a.skill) === 'question-answer' ? QUESTIONS[repo] : undefined
-      return ok({ skill: a.skill, ...v, ...(question ? { question } : {}) })
+      const d = drafts[`${repo}|${String(a.skill)}`]
+      return ok({ skill: a.skill, ...v, ...(question ? { question } : {}), ...(d ? { draft: d.data, step: d.step, saved: d.saved } : {}) })
     }
     case 'skill.submit':
       return later(ok({ ok: true, id: `rec_${Math.random().toString(16).slice(2, 6)}` }))

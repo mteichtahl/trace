@@ -33,7 +33,7 @@ import type { CriterionStatus } from '@/lib/types'
 import type { IntentDraft, IntentStatement } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
 import type { SkillDef } from './definitions'
-import { StepHeader } from './parts'
+import { StepHeader, Unavailable } from './parts'
 import { type SkillDraftBase, focusSteps, qualityChecks, useSkill } from './use-skill'
 
 // ------------------------------------------------------------------ the agent's shared state
@@ -153,6 +153,7 @@ export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
           </div>
         }
       />
+      <div className="mt-4"><Unavailable checks={s.view.data?.checks} def={def} /></div>
     </FocusLayout>
   )
 }
@@ -277,6 +278,7 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
         </div>
       )}
       {s.stepIndex < def.steps.length - 1 && <div className="mt-6 flex justify-end"><Button variant="outline" onClick={s.next}>Continue to {def.steps[s.stepIndex + 1]!.title.toLowerCase()} <ArrowRight /></Button></div>}
+      <div className="mt-4"><Unavailable checks={s.view.data?.checks} def={def} /></div>
     </FocusLayout>
   )
 }

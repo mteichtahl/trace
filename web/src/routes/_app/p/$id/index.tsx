@@ -5,10 +5,9 @@
  */
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { CircleHelp } from 'lucide-react'
-import { toast } from 'sonner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { NextStepCard } from '@/components/next-step-card'
-import { RunLine } from '@/components/run-line'
+import { RunLine, cancelRun } from '@/components/run-line'
 import { Section } from '@/components/shell/app-shell'
 import { StageRail } from '@/components/stage-rail'
 import { StatusBadge } from '@/components/status-badge'
@@ -91,7 +90,7 @@ function Overview() {
             ) : (
               <div className="divide-y rounded-xl border">
                 {running.map((r) => (
-                  <RunLine key={r.id} run={r} onPause={part !== 'reviewer' ? () => { toast('Pause asked for') } : undefined} onCancel={part !== 'reviewer' ? () => 'Nothing was kept.' : undefined} />
+                  <RunLine key={r.id} run={r} onCancel={part !== 'reviewer' ? (x) => cancelRun(x.id) : undefined} />
                 ))}
                 {waits.data?.waits.map((w) => (
                   <WaitLine key={w.id} wait={w} onCheckNow={(x) => call('tools.check_now', { repo, waitId: x.id })} />

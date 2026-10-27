@@ -99,7 +99,7 @@ describe('bench readouts', () => {
 })
 
 describe('drafts', () => {
-  it('keep under drafts.<project>.<skill> and say where to continue', () => {
+  it('say where to continue (New project keeps its own under drafts.<key>.<skill>)', () => {
     expect(draftKey('acme/soil-sensor', 'schematic-finish')).toBe('drafts.acme~soil-sensor.schematic-finish')
     expect(continueText({ name: 'Schematic finish', step: 3, steps: 6, savedAt: 0 })).toBe('Continue: Schematic finish, step 4 of 6')
   })

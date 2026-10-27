@@ -1,7 +1,8 @@
 /**
  * Long work, in one line: a spinner, the run's name in plain words, the current step, then a thin progress bar when
  * the size is known, otherwise elapsed and typical time ("12 min so far, usually 20"); where it runs, quietly. A menu
- * holds Pause, Cancel and Move up; Cancel asks once, then says what was kept.
+ * holds Pause, Cancel and Move up, each only when the job's view says job.control can do it (`run.controls`); Cancel
+ * asks once, then says what was kept.
  */
 import { Circle, Loader2, MoreHorizontal, PauseCircle, CircleX, CircleCheck } from 'lucide-react'
 import { useState } from 'react'
@@ -47,11 +48,16 @@ export function RunLine({ run, project, onPause, onCancel, onMoveUp, onOpen, cla
   const [confirm, setConfirm] = useState(false)
   const active = run.state === 'running'
   const Icon = run.state === 'running' ? Loader2 : run.state === 'paused' ? PauseCircle : run.state === 'failed' || run.state === 'cancelled' ? CircleX : run.state === 'done' ? CircleCheck : Circle
-  const controls = (onPause || onCancel || onMoveUp) && (run.state === 'running' || run.state === 'queued' || run.state === 'paused')
+  // only what the job system can do for this job, when its view says (job.control answers ok: false for the rest)
+  const can = (op: 'pause' | 'cancel' | 'move_up') => !run.controls || run.controls.includes(op)
+  const pause = can('pause') ? onPause : undefined
+  const cancelIt = can('cancel') ? onCancel : undefined
+  const moveUp = can('move_up') ? onMoveUp : undefined
+  const controls = (pause || cancelIt || moveUp) && (run.state === 'running' || run.state === 'queued' || run.state === 'paused')
 
   const cancel = async () => {
     setConfirm(false)
-    const kept = await onCancel?.(run)
+    const kept = await cancelIt?.(run)
     toast(`Cancelled: ${run.title}`, { description: kept || 'Nothing was kept.' })
   }
 
@@ -87,9 +93,9 @@ export function RunLine({ run, project, onPause, onCancel, onMoveUp, onOpen, cla
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {onPause && run.state === 'running' && <DropdownMenuItem onSelect={() => void onPause(run)}>Pause</DropdownMenuItem>}
-            {onMoveUp && run.state === 'queued' && <DropdownMenuItem onSelect={() => void onMoveUp(run)}>Move up the queue</DropdownMenuItem>}
-            {onCancel && (
+            {pause && run.state === 'running' && <DropdownMenuItem onSelect={() => void pause(run)}>Pause</DropdownMenuItem>}
+            {moveUp && run.state === 'queued' && <DropdownMenuItem onSelect={() => void moveUp(run)}>Move up the queue</DropdownMenuItem>}
+            {cancelIt && (
               <DropdownMenuItem variant="destructive" onSelect={() => setConfirm(true)}>
                 Cancel…
               </DropdownMenuItem>
@@ -113,4 +119,12 @@ export function RunLine({ run, project, onPause, onCancel, onMoveUp, onOpen, cla
       </AlertDialog>
     </div>
   )
+}
+
+/** Cancel a run's job through job.control: what was kept, or why it could not be cancelled (thrown, for the toast). */
+export async function cancelRun(jobId: string): Promise<string> {
+  const { call } = await import('@/lib/api')
+  const r = await call('job.control', { id: jobId, op: 'cancel' })
+  if (!r.ok) throw new Error(r.reason ?? 'The run could not be cancelled.')
+  return r.kept ?? 'Nothing was kept.'
 }

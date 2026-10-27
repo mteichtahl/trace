@@ -25,7 +25,7 @@ import { call } from '@/lib/api'
 import type { CriterionStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { type SkillDef, pictureOf } from './definitions'
-import { StepHeader, TraceIntro } from './parts'
+import { StepHeader, TraceIntro, Unavailable } from './parts'
 import { StepPicture } from './step-picture'
 import { type SkillDraftBase, qualityChecks, useSkill } from './use-skill'
 
@@ -76,7 +76,6 @@ export function WaiverSkill({ repo, def, about }: { repo: string; def: SkillDef;
   const againstRec = target?.recommendation === 'fix'
   const local = { ...waiverChecks(d), reasons: againstRec && (d.reasonAgainst ?? '').trim().length < 3 ? 'not_met' as const : 'met' as const }
   const checks = qualityChecks(def, v, local, s.goTo)
-  const title = d.what === 'other' ? d.custom ?? '' : target?.title ?? d.what ?? ''
 
   return (
     <FocusLayout
@@ -88,11 +87,7 @@ export function WaiverSkill({ repo, def, about }: { repo: string; def: SkillDef;
       submitLabel={def.submit}
       onClose={s.close}
       draftSavedAt={s.draft.savedAt}
-      onSubmit={() => s.submit(() => call('waiver.add', {
-        repo, finding: title, reason: d.reason.trim(), risk: d.risk.trim(), severity: d.severity!,
-        caught: d.caught === 'nowhere' ? 'Nowhere: accepted for good' : `${d.caught === 'bench' ? 'On the bench' : 'At a later stage'}: ${d.where.trim()}`
-          + (d.scope === 'condition' ? ` · until ${d.condition.trim()}` : ' · this revision only'),
-      }), 'Waiver taken. It is listed at every later gate until it closes.')}
+      onSubmit={() => s.submit(() => call('skill.submit', { repo, skill: def.id, draft: d }), 'Waiver taken. It is listed at every later gate until it closes.')}
       trace={<EmbeddedChat repo={repo} intro={<TraceIntro summary={v?.summary} step={s.step} def={def} />} />}
     >
       <StepHeader def={def} index={s.stepIndex} />
@@ -185,6 +180,7 @@ export function WaiverSkill({ repo, def, about }: { repo: string; def: SkillDef;
         )}
       </div>
       {s.stepIndex < def.steps.length - 1 && <div className="mt-6 flex justify-end"><Button onClick={s.next}>Continue to {def.steps[s.stepIndex + 1]!.title.toLowerCase()} <ArrowRight /></Button></div>}
+      <div className="mt-4"><Unavailable checks={s.view.data?.checks} def={def} /></div>
     </FocusLayout>
   )
 }
@@ -294,6 +290,7 @@ export function ChangeSkill({ repo, def, about }: { repo: string; def: SkillDef;
         )}
       </div>
       {s.stepIndex < def.steps.length - 1 && <div className="mt-6 flex justify-end"><Button onClick={s.next}>Continue to {def.steps[s.stepIndex + 1]!.title.toLowerCase()} <ArrowRight /></Button></div>}
+      <div className="mt-4"><Unavailable checks={s.view.data?.checks} def={def} /></div>
     </FocusLayout>
   )
 }

@@ -8,13 +8,12 @@
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
 import { Info } from 'lucide-react'
-import { toast } from 'sonner'
 import { z } from 'zod'
 import { DataTable, Highlight, useUrlView } from '@/components/data-table'
 import { ToolsCatalogue } from '@/components/agents/tools-catalogue'
 import { useWork } from '@/components/agents/use-agents'
 import { useTraceContext } from '@/components/chat/context'
-import { RunLine } from '@/components/run-line'
+import { RunLine, cancelRun } from '@/components/run-line'
 import { Column, Section } from '@/components/shell/app-shell'
 import { useCommands } from '@/components/shell/command-menu'
 import { NeedsBuilding } from '@/components/side-sheet'
@@ -116,8 +115,7 @@ function Agents() {
                 key={`${w.repo}:${w.run.id}`}
                 run={w.run}
                 project={w.project}
-                onPause={!reviewerOnly && w.run.state === 'running' ? () => { toast('Pause is not available from the app yet', { description: 'The API has no pause for a job; it can be cancelled from its run page.' }) } : undefined}
-                onMoveUp={!reviewerOnly && w.run.state === 'queued' ? () => { toast('Move up is not available yet', { description: 'The API does not reorder queues yet.' }) } : undefined}
+                onCancel={!reviewerOnly && w.run.state === 'running' ? (x) => cancelRun(x.id) : undefined}
               />
             ))}
           </div>

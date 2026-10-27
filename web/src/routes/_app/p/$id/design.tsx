@@ -1,8 +1,9 @@
 /**
  * Design (/p/:id/design): the block diagram, the schematic sheets, the pin plan and the board, each in its Canvas
  * frame with its findings drawn on it and listed beside it (tapping either selects both). The drawings are the SVGs
- * trace exports, fetched with files.url; the architecture record, the pin plan and the findings come from design.get,
- * which needs building — the tab says so rather than drawing made-up content.
+ * runs stored, fetched with files.url; the sheets, the board and the latest checks' findings come from design.get,
+ * whose notes say what the record does not hold yet (the architecture record, the pin plan, drawings of the sheets) —
+ * the tab says so rather than drawing made-up content.
  */
 import { createFileRoute } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
@@ -67,7 +68,7 @@ function Design() {
     return (
       <div className="mt-6 space-y-3">
         <EmptyState>The design's pictures appear here once trace has an architecture record and a KiCad export for this project.</EmptyState>
-        <NeedsBuilding>This tab reads the architecture record, pin plan and findings from design.get, which the API does not have yet.</NeedsBuilding>
+        <NeedsBuilding>This tab reads the sheets, the board and their findings from design.get, which could not be read.</NeedsBuilding>
       </div>
     )
   if (!data) return <TabSkeleton loading={d.isLoading} />
@@ -80,6 +81,7 @@ function Design() {
         {data.architecture ? <><span className="font-semibold">{data.architecture.option}.</span> </> : null}
         {data.sheets.length} schematic sheet{data.sheets.length === 1 ? '' : 's'}{data.board ? ', a board' : ''}; {open ? `${open} findings to fix or waive.` : 'no open findings.'}
       </p>
+      {data.notes?.length ? <div className="mt-3 space-y-1">{data.notes.map((n) => <NeedsBuilding key={n}>{n}</NeedsBuilding>)}</div> : null}
       <Tabs value={tab} onValueChange={setTab} className="mt-4">
         <TabsList className="max-w-full overflow-x-auto">
           <TabsTrigger value="architecture">Block diagram</TabsTrigger>

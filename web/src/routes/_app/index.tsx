@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer'
 import { Skeleton } from '@/components/ui/skeleton'
 import { NeedsYouCard } from '@/components/needs-you-card'
-import { RunLine } from '@/components/run-line'
+import { RunLine, cancelRun } from '@/components/run-line'
 import { Column, Section } from '@/components/shell/app-shell'
 import { StageRail } from '@/components/stage-rail'
 import { EmptyState, Loading, QueryError, SkeletonRows } from '@/components/states'
@@ -143,7 +143,7 @@ function InProgress({ running, waiting }: { running: { run: RunSummary; project:
   return (
     <div className="divide-y overflow-hidden rounded-xl border">
       {running.map(({ run, project }) => (
-        <RunLine key={run.id} run={run} project={project} onPause={() => { toast('Pause asked for') }} onCancel={() => 'Nothing was kept.'} />
+        <RunLine key={run.id} run={run} project={project} onCancel={(x) => cancelRun(x.id)} />
       ))}
       {waiting.map((w) => (
         <WaitLine

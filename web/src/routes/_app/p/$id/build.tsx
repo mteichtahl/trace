@@ -4,7 +4,8 @@
  * with any price change, the cost against the budget, "After you pay" to record the order, and the Wait line for
  * JLCPCB's confirmation with what trace does meanwhile. trace prepares the order but never pays.
  *
- * Data: build.get and order.record need building; the tab says so where they are missing.
+ * Data: build.get and order.record; build.get's notes say what the record does not hold yet (the order sheet's lines,
+ * boards by serial).
  */
 import { Link, createFileRoute } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
@@ -50,7 +51,7 @@ function Build() {
     return (
       <div className="mt-6 space-y-3">
         <EmptyState>Releases, orders and boards appear here from Release on.</EmptyState>
-        <NeedsBuilding>This tab reads releases, orders, boards and the bench from build.get, which the API does not have yet.</NeedsBuilding>
+        <NeedsBuilding>This tab reads releases, orders, boards and the bench from build.get, which could not be read.</NeedsBuilding>
       </div>
     )
   if (!data) return <TabSkeleton loading={b.isLoading} />
@@ -59,6 +60,7 @@ function Build() {
   return (
     <div className="pb-12">
       {ready && <OrderSheet repo={repo} order={ready} />}
+      {data.notes?.length ? <div className="mt-6 space-y-1">{data.notes.map((n) => <NeedsBuilding key={n}>{n}</NeedsBuilding>)}</div> : null}
 
       <Section label="Releases" count={data.releases.length} className="mt-10">
         {data.releases.length === 0 ? (
@@ -69,7 +71,7 @@ function Build() {
               <li key={r.id} className="flex flex-wrap items-center gap-3 px-5 py-3.5 text-sm">
                 <span className="font-semibold">{r.revision}</span>
                 <span className="font-mono text-xs text-muted-foreground">{r.commit}</span>
-                <span className="text-muted-foreground">{r.files} files · released by {r.by} {ago(r.at)}</span>
+                <span className="text-muted-foreground">{r.files !== null ? `${r.files} files · ` : ''}released by {r.by} {ago(r.at)}</span>
                 {r.frozen && <StatusBadge status="done" label="Frozen" className="ml-auto" />}
               </li>
             ))}
@@ -142,14 +144,16 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
   const id = projectId(repo)
   const { user } = useAuth()
   const j = useJourney(repo)
-  const orderGate = j.data?.gates.find((g) => g.id === 'order')
+  const orderGate = j.data?.gates.find((g) => g.id === 'fabricate.order' || g.id === 'order')
   const signed = orderGate?.state === 'signed' || o.state === 'placed'
   const [entered, setEntered] = useState<Set<string>>(new Set())
   const [number, setNumber] = useState(o.number ?? '')
-  const [paid, setPaid] = useState(o.paid?.toFixed(2) ?? o.total.toFixed(2))
+  const [paid, setPaid] = useState(o.paid != null ? o.paid.toFixed(2) : o.total.toFixed(2))
   const [ship, setShip] = useState(o.ship ?? '')
   const record = useCall('order.record', (a) => [['build.get', a.repo], ['journey.get', a.repo]])
-  const board = useFileUrl(repo, 'build/kicad/soil-sensor/pcb/top.svg')
+  // the board's picture: the one a run stored (design.get), never a guessed path
+  const design = useAction('design.get', { repo })
+  const board = useFileUrl(repo, design.data?.board?.path)
   const changedUp = o.parts.filter((p) => p.now > p.then)
   const optionCols = useMemo<ColumnDef<Option, any>[]>(() => [
     { accessorKey: 'option', header: 'Option', size: 200, meta: { label: 'Option', kind: 'text' } },
@@ -180,7 +184,7 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
 
   useCommands([
     { id: 'order-download', label: 'Download the order package', run: () => toast('The package downloads from the release files.') },
-    { id: 'order-sign', label: 'Sign the order gate', run: () => window.location.assign(`/p/${id}/gates/order`) },
+    { id: 'order-sign', label: 'Sign the order gate', run: () => window.location.assign(`/p/${id}/gates/${orderGate?.id ?? 'fabricate.order'}`) },
   ])
 
   const canRecord = signed && number.trim().length >= 4 && Number(paid) > 0 && !!ship
@@ -196,7 +200,7 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
           {o.changed && <p className="mt-1.5 flex flex-wrap items-center gap-2 text-sm"><StatusBadge status="warning" /> {o.changed}</p>}
         </div>
         <div className="flex flex-wrap gap-2">
-          {!signed && user?.class === 'admin' && <Button asChild><Link to="/p/$id/gates/$gate" params={{ id, gate: 'order' }}>Sign the order gate</Link></Button>}
+          {!signed && user?.class === 'admin' && <Button asChild><Link to="/p/$id/gates/$gate" params={{ id, gate: orderGate?.id ?? 'fabricate.order' }}>Sign the order gate</Link></Button>}
           <Button variant="outline" className="bg-background" onClick={() => toast('The package (Gerbers, parts list and placement file) downloads from the release.')}><Download /> Download the package</Button>
         </div>
       </section>
@@ -244,7 +248,7 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
               </>
             )}
           </div>
-          <form className="space-y-3 rounded-xl border p-5 text-sm" onSubmit={(e) => { e.preventDefault(); record.mutate({ repo, order: o.id, number: number.trim(), paid: Number(paid), ship }, { onSuccess: () => toast('Order recorded. trace is watching it.', { description: `Order ${number.trim()}: bring-up work starts.` }), onError: (er) => toast.error('Could not record the order. What you typed is kept.', { description: String(er) }) }) }}>
+          <form className="space-y-3 rounded-xl border p-5 text-sm" onSubmit={(e) => { e.preventDefault(); record.mutate({ repo, order: o.id, number: number.trim(), paid: Number(paid), ship: ship || null }, { onSuccess: () => toast('Order recorded. trace is watching it.', { description: `Order ${number.trim()}: bring-up work starts.` }), onError: (er) => toast.error('Could not record the order. What you typed is kept.', { description: String(er) }) }) }}>
             <h3 className="font-semibold">After you pay</h3>
             <p className="text-muted-foreground">Record the order so trace can watch it and start the bring-up work.</p>
             <div className="space-y-1.5"><Label htmlFor="order-number">Order number</Label><Input id="order-number" value={number} onChange={(e) => setNumber(e.target.value)} placeholder="e.g. Y12-4471058A" className="font-mono" disabled={!signed} /></div>
@@ -262,7 +266,7 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
       {o.wait && (
         <Section label="Once the order is recorded">
           <div className="rounded-xl border">
-            <WaitLine wait={{ ...o.wait, what: o.wait.what }} onCheckNow={o.state === 'placed' ? (w) => call('tools.check_now', { repo, waitId: w.id }) : undefined} />
+            <WaitLine wait={{ ...o.wait, what: o.wait.what }} onCheckNow={o.state === 'placed' && o.wait.checkable !== false ? (w) => call('tools.check_now', { repo, waitId: w.id }) : undefined} />
           </div>
           {o.meanwhile && (
             <div className="mt-3 rounded-xl border p-5">

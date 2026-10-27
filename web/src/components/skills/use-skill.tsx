@@ -26,8 +26,11 @@ export interface SkillDraftBase {
 export function qualityChecks(def: SkillDef, view: Pick<SkillView, 'checks'> | undefined, local: Record<string, CriterionStatus> = {}, jump?: (step: string) => void): QualityCheck[] {
   const from = new Map((view?.checks ?? []).map((c) => [c.id, c]))
   return checksOf(def).map((c) => {
-    const status: CriterionStatus = local[c.id] ?? from.get(c.id)?.status ?? (c.id === 'reasons' ? 'met' : 'not_met')
-    const detail = from.get(c.id)?.detail
+    // what the screen works out from the draft as it is typed wins over the record's last answer, except where the
+    // record cannot check it yet (unavailable): then it stays not met, as Submit would be refused
+    const api = from.get(c.id)
+    const status: CriterionStatus = api?.unavailable ? 'not_met' : local[c.id] ?? api?.status ?? (c.id === 'reasons' ? 'met' : 'not_met')
+    const detail = api?.unavailable ? `cannot be checked yet: needs ${api.unavailable}` : api?.detail
     return { id: c.id, text: status === 'not_met' && detail ? `${c.text} (${detail})` : c.text, status, onJump: c.step && jump ? () => jump(c.step!) : undefined }
   })
 }

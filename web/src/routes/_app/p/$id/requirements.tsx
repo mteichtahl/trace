@@ -4,8 +4,8 @@
  * requirement opens in a side sheet at its own address (/p/:id/requirements/:rid, the child route).
  *
  * Data: verify.coverage through the `tool` action (requirements, verdicts, tests); the intent lines and each
- * requirement's link to one come from requirements.trace, which needs building — without it the view draws
- * requirements and evidence only, and says so.
+ * requirement's link to one come from requirements.trace, which answers none yet (the record keeps no intent) with
+ * `intent_note` saying so — the view draws requirements and evidence only, and shows that note.
  */
 import { Link, Outlet, createFileRoute, useNavigate } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
@@ -126,6 +126,7 @@ function Requirements() {
             <span>Dashed: no test planned yet</span>
             <span>Drag to pan; Ctrl and scroll to zoom</span>
           </div>
+          {trace.data && !trace.data.intent.length && trace.data.intent_note && <div className="mt-3"><NeedsBuilding>{trace.data.intent_note}</NeedsBuilding></div>}
           {trace.isError && (notBuilt(trace.error) ? (
             <div className="mt-3"><NeedsBuilding>The intent column needs the planned link from each requirement to its intent line (requirements.trace); until then the view shows requirements and their evidence.</NeedsBuilding></div>
           ) : (
