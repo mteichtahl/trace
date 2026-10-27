@@ -86,6 +86,27 @@ function expectRunner(t: Template, name: string, repository: string, connection:
 }
 
 describe("each project's runner project", () => {
+  it("with runners.auth token, names no source credential (CodeBuild uses the account's GitHub source credential), and its role has no connection statement", () => {
+    const s = synth(InfraPropsSchema.parse({ ...base, runners: { auth: 'token' } }), 'RunnerToken')
+    // no connection at all: neither made nor named, and none of its outputs
+    expect(Object.keys(s.parent.findResources('AWS::CodeConnections::Connection'))).toEqual([])
+    const outs = Object.keys((s.parent.toJSON() as { Outputs: object }).Outputs)
+    expect(outs).not.toContain(CONNECTION_OUTPUT)
+    expect(outs).not.toContain(CONNECTION_CREATED_OUTPUT)
+    for (const repo of [A, B]) {
+      const t = nestedOf(s, repo)
+      const name = runnerProjectName('trace', repo)
+      const { project, statements } = runnerOf(t, name)
+      expect(project.Properties.Source).toMatchObject({ Type: 'GITHUB', Location: `https://github.com/${repo}` })
+      expect(project.Properties.Source).not.toHaveProperty('Auth')
+      expect(project.Properties.Triggers).toEqual({ Webhook: true, FilterGroups: [[{ Type: 'EVENT', Pattern: 'WORKFLOW_JOB_QUEUED' }]] })
+      expect(statements.flatMap((x) => list(x.Action)).sort()).toEqual(['logs:CreateLogStream', 'logs:PutLogEvents'])
+      expect((t.toJSON() as { Outputs: Record<string, { Value: unknown }> }).Outputs[projectOutputs(repo).runnerProject]?.Value).toBe(name)
+    }
+    // a connection is for auth connection only
+    expect(() => InfraPropsSchema.parse({ ...base, runners: { auth: 'token', connectionArn: CONNECTION_ARN } })).toThrow(/auth 'connection'/)
+  }, 300_000)
+
   for (const layout of LAYOUTS) {
     it(`is named runnerProjectName, reaches GitHub through the connection on WORKFLOW_JOB_QUEUED, and gives a job no AWS access (${layout})`, () => {
       const s = synth(InfraPropsSchema.parse({ ...base, layout }), `Runner${layout}`)
@@ -114,7 +135,7 @@ describe("each project's runner project", () => {
     expect(() => InfraPropsSchema.parse({ ...base, runners: { connectionArn: 'arn:aws:iam::123456789012:role/x' } })).toThrow(/CodeConnections connection ARN/)
     // nothing is needed up front: no connection (the stack creates one), and ready by default
     const { runners: _, ...noRunners } = base
-    expect(InfraPropsSchema.parse(noRunners).runners).toEqual({ connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false })
+    expect(InfraPropsSchema.parse(noRunners).runners).toEqual({ auth: 'connection', connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false, ciPrivileged: false })
     expect(RUNNER_VARIABLE).toBe('TRACE_CODEBUILD_PROJECT')
   }, 300_000)
 
@@ -223,6 +244,18 @@ describe('the build-only repositories (ciRepositories)', () => {
     const s = synth(InfraPropsSchema.parse({ ...only, ciRepositories: [C], runners: {} }), 'CiCreated')
     const [id] = Object.keys(s.parent.findResources('AWS::CodeConnections::Connection'))
     expectRunner(s.parent, runnerProjectName('trace', C), C, { 'Fn::GetAtt': [id, 'ConnectionArn'] })
+  }, 300_000)
+
+  it('with the token: a runner at once, on the account\'s GitHub credential; Docker for them alone with ciPrivileged', () => {
+    const s = synth(InfraPropsSchema.parse({ ...only, ciRepositories: [C], runners: { auth: 'token', ciPrivileged: true } }), 'CiToken')
+    expect(Object.keys(s.all.findResources('AWS::CodeConnections::Connection'))).toEqual([])
+    const ci = runnerOf(s.parent, runnerProjectName('trace', C)).project.Properties
+    expect(ci.Source).not.toHaveProperty('Auth')
+    expect(ci.Environment).toMatchObject({ PrivilegedMode: true })
+    expect(outputsOf(s.parent)[ciRunnerOutput(C)]?.Value).toBe(runnerProjectName('trace', C))
+    // the projects' runners keep runners.privileged (off)
+    const project = Object.values(s.all.findResources('AWS::CodeBuild::Project') as Record<string, Res>).find((r) => r.Properties.Name === runnerProjectName('trace', B))
+    expect(project?.Properties.Environment).toMatchObject({ PrivilegedMode: false })
   }, 300_000)
 
   it('refuses one that is a project, listed twice, not a repository, or too many; none by default', () => {

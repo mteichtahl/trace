@@ -8,3 +8,6 @@ __pycache__/
 *.db-journal
 /build/
 *.egg-info/
+# copies made by scripts/stage-image.mjs (npm never packs the originals)
+/agent/package-lock.json
+/agent/npmrc

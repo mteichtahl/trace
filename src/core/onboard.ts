@@ -197,15 +197,7 @@ export function writeFiles(repo: string, d: Detected, settings: Record<string, u
     setValue('build.required_check', 'tests pass', repo, 'trace onboard')
     cfg = load(repo)
   }
-  const values = {
-    SOURCE: source, REF: ref, BRANCH: cfg.branch, BUILD_NAME: d.build.name,
-    HOLD: cfg.labels.hold, CI_RED: cfg.labels.ci_red, AGENT_FIX: cfg.labels.agent_fix,
-    DEPLOY: cfg.labels.deploy, DEPLOY_HELD: cfg.labels.deploy_held, ENVIRONMENT: cfg.deploy.environment,
-  }
-  for (const f of readdirSync(join(TEMPLATES, 'workflows')).filter((n) => n.startsWith('trace-')).sort()) {
-    writeFileSync(join(wf, f), render(tpl(`workflows/${f}`), values))
-    written.push(`.github/workflows/${f}`)
-  }
+  written.push(...writeWorkflows(repo, cfg, d.build.name, source, ref))
   const ga = join(repo, '.gitattributes')
   const line = '.trace/project.db binary merge=trace-db'
   const existing = existsSync(ga) ? readFileSync(ga, 'utf8') : ''
@@ -220,6 +212,24 @@ export function writeFiles(repo: string, d: Detected, settings: Record<string, u
   if (!text.includes(CLAUDE_MARKER)) {
     writeFileSync(cm, `${text}${text && !text.endsWith('\n\n') ? (text.endsWith('\n') ? '\n' : '\n\n') : ''}${tpl('claude-section.md')}`)
     written.push('CLAUDE.md')
+  }
+  return written
+}
+
+/** The trace workflows (templates/workflows/trace-*.yml), rendered for this project's settings, into
+ * .github/workflows. `buildName`: the build workflow's name (what trace-ci watches). Returns the paths written. */
+export function writeWorkflows(repo: string, cfg: ResolvedConfig, buildName: string, source = SOURCE, ref = REF): string[] {
+  const values = {
+    SOURCE: source, REF: ref, BRANCH: cfg.branch, BUILD_NAME: buildName,
+    HOLD: cfg.labels.hold, CI_RED: cfg.labels.ci_red, AGENT_FIX: cfg.labels.agent_fix,
+    DEPLOY: cfg.labels.deploy, DEPLOY_HELD: cfg.labels.deploy_held, ENVIRONMENT: cfg.deploy.environment,
+  }
+  const wf = join(repo, '.github', 'workflows')
+  mkdirSync(wf, { recursive: true })
+  const written: string[] = []
+  for (const f of readdirSync(join(TEMPLATES, 'workflows')).filter((n) => n.startsWith('trace-')).sort()) {
+    writeFileSync(join(wf, f), render(tpl(`workflows/${f}`), values))
+    written.push(`.github/workflows/${f}`)
   }
   return written
 }

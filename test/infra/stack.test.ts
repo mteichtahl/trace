@@ -150,10 +150,14 @@ describe('the trace stack', () => {
       for (const st of memoryStatements) expect(Match.objectLike({ Resource: memoryArn }).test(st).isSuccess).toBe(true)
       // and no other statement names any memory
       expect(s.filter((x) => JSON.stringify(x).includes('MemoryArn'))).toHaveLength(2)
-      // its own secret only
-      const secretReads = s.filter((x) => actionsOf(x).includes('secretsmanager:GetSecretValue'))
+      // its own secret only, and (no library gateway) the installation's optional integrations
+      const secretReads = s.filter((x) => actionsOf(x).includes('secretsmanager:GetSecretValue') && x.Sid !== 'IntegrationsRead')
       expect(secretReads).toHaveLength(1)
       expect(JSON.stringify(secretReads[0]?.Resource)).toMatch(new RegExp(`^\\{"Ref":"Project${c.h}GithubToken`))
+      const integrations = s.filter((x) => x.Sid === 'IntegrationsRead')
+      expect(integrations).toHaveLength(1)
+      expect(actionsOf(integrations[0] as Statement)).toEqual(['secretsmanager:GetSecretValue'])
+      expect(JSON.stringify(integrations[0]?.Resource)).toMatch(/:secret:trace\/integrations\/\*/)
       // Batch: its own job definition on the shared queue, only tagged with its project
       const submit = s.find((x) => x.Sid === 'ProjectGpuSubmit')
       expect(JSON.stringify(submit?.Resource)).toContain(`job-definition/trace-gpu-${c.h}`)

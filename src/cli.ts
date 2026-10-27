@@ -3,7 +3,13 @@
  * The `trace` command.
  *
  *   Installation
- *     trace install [--port N] [--no-open]   a local web page that sets up AWS (CDK, AgentCore, Cognito) and GitHub
+ *     trace install [--port N] [--no-open]   a local web page that sets up AWS (CDK, AgentCore, Cognito) and GitHub:
+ *                                      it needs AWS credentials and one GitHub token, nothing else
+ *     trace upgrade [--ref REF] [--check]    pull a newer trace, redeploy with the saved answers, refresh repositories
+ *     trace release setup [--publish]        set this AWS account up to publish trace's images (ECR Public)
+ *     trace uninstall [--yes] [--keep-data|--delete-data]   remove the stack, runners and integrations (lists what stays)
+ *     trace integrations list | set NAME [KEY=VALUE ...] | check NAME | remove NAME [--remote]
+ *                                      optional service keys (nexar, mouser, digikey) for the parts tools
  *
  *   Repositories
  *     trace onboard OWNER/REPO [--path DIR] [--apply-settings] [--no-push] [--no-ruleset] [--escalate-to LOGIN]
@@ -296,6 +302,18 @@ async function main(argv: string[]): Promise<number> {
       return cmdAgent(rest)
     }
     case 'users': return cmdUsers(rest)
+    case 'integrations': {
+      const { cmdIntegrations } = await import('./login/integrations.js')
+      return cmdIntegrations(rest)
+    }
+    case 'upgrade': case 'uninstall': {
+      const { cmdUpgrade, cmdUninstall } = await import('./installer/lifecycle.js')
+      return cmd === 'upgrade' ? cmdUpgrade(rest) : cmdUninstall(rest)
+    }
+    case 'release': {
+      const { cmdRelease } = await import('./installer/lifecycle.js')
+      return cmdRelease(rest)
+    }
     case 'memory': return cmdMemory(rest)
     case 'kb': return cmdKb(rest)
     case 'worker-prompt': {

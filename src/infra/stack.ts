@@ -17,12 +17,15 @@
  *                       and the role's credentials. Layout 'nested' (the default) puts each in its own nested stack,
  *                       so this stack holds one resource per project and 60 fit; 'flat' keeps them here, as earlier
  *                       installations have them (about 20 fit)
- *   GitHub connection   the AWS CodeConnections connection the runners reach GitHub through: the one given
- *                       (runners.connectionArn), or `<prefix>-github`, created here and kept (Retain) when the stack
- *                       goes; its ARN is the GithubConnectionArn output (src/infra/runner.ts GithubConnection)
+ *   GitHub connection   runners.auth 'connection' only: the AWS CodeConnections connection the runners reach GitHub
+ *                       through: the one given (runners.connectionArn), or `<prefix>-github`, created here and kept
+ *                       (Retain) when the stack goes; its ARN is the GithubConnectionArn output (src/infra/runner.ts
+ *                       GithubConnection). With auth 'token' the runners use the account's CodeBuild GitHub source
+ *                       credential instead, and there is no connection
  *   build-only runners  one CodeBuild runner project per `ciRepositories` entry (such as trace's own repository), in
  *                       this stack in either layout, with its CiRunner<hash>Project output; nothing else of a
- *                       project. Like the projects' runners, only once the connection is authorized
+ *                       project. Like the projects' runners, only once the connection is authorized (or at once, with
+ *                       auth 'token'); privileged with runners.ciPrivileged
  *   agent memory        AgentCore Memory (src/infra/memory.ts): one per project, made by its ProjectStack, still
  *                       namespaced /trace/<owner>/<repo>/<agent>/; each worker may use only its own project's memory
  *   GPU                 one AWS Batch queue and compute environment shared by every project, and (cpu.enabled) a
@@ -64,8 +67,11 @@ import * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { Provider } from 'aws-cdk-lib/custom-resources'
 import type { Construct, IConstruct } from 'constructs'
 import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
+import { integrationsPrefix } from '../core/integrations.js'
 import { JOBS_PREFIX, PROJECTS_PREFIX, memoryName, projectHash, projectSlug, runnerProjectName } from '../core/project.js'
 import { LibraryGateway } from './gateway.js'
+import { imageBuildEnv, imageBuildSpec, imageContentTag } from './images.js'
+import { bundlingRoot } from './lockfile.js'
 import { GpuCompute } from './gpu.js'
 import { KB_RETRIEVE_ACTIONS, VectorStore, knowledgeBaseArn } from './knowledge.js'
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
@@ -179,6 +185,8 @@ export class TraceStack extends Stack {
       lifecycleRules: [{ maxImageCount: 10 }],
     })
     const source = new Asset(this, 'AgentSource', { path: REPO_ROOT, exclude: SOURCE_EXCLUDE })
+    // what the published images for this source are tagged (src/infra/images.ts; the release workflow tags them so)
+    const contentTag = imageContentTag(REPO_ROOT)
     const build = new codebuild.Project(this, 'AgentImageBuild', {
       projectName: `${cfg.prefix}-agent-image`,
       description: 'Builds the trace agent image (agent/Dockerfile) for AgentCore, on arm64',
@@ -188,23 +196,19 @@ export class TraceStack extends Stack {
         computeType: codebuild.ComputeType.LARGE,
         privileged: true,
       },
-      environmentVariables: { REPOSITORY_URI: { value: repo.repositoryUri }, IMAGE_TAG: { value: 'latest' } },
+      environmentVariables: { REPOSITORY_URI: { value: repo.repositoryUri }, IMAGE_TAG: { value: 'latest' }, ...imageBuildEnv(cfg.images, 'agent', contentTag) },
       timeout: Duration.minutes(90),
       logging: { cloudWatch: { logGroup: new logs.LogGroup(this, 'AgentImageBuildLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY }) } },
-      buildSpec: codebuild.BuildSpec.fromObject({
-        version: '0.2',
-        phases: {
-          pre_build: { commands: ['aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${REPOSITORY_URI%%/*}"'] },
-          build: { commands: ['docker build --platform linux/arm64 -f agent/Dockerfile -t "$REPOSITORY_URI:$IMAGE_TAG" .'] },
-          post_build: { commands: ['docker push "$REPOSITORY_URI:$IMAGE_TAG"'] },
-        },
-      }),
+      // the published image when there is one for this source, else a build cached on the previous image (images.ts)
+      buildSpec: codebuild.BuildSpec.fromObject(imageBuildSpec({ dockerfile: 'agent/Dockerfile', platform: 'linux/arm64' })),
+      cache: codebuild.Cache.local(codebuild.LocalCacheMode.DOCKER_LAYER),
     })
     repo.grantPullPush(build)
     source.grantRead(build)
 
     const builder = (name: string, handler: 'onEvent' | 'isComplete'): NodejsFunction => new NodejsFunction(this, name, {
       entry: join(REPO_ROOT, 'src', 'infra', 'lambda', 'image-build.ts'),
+      ...bundlingRoot(REPO_ROOT),
       handler,
       runtime: lambda.Runtime.NODEJS_22_X,
       architecture: lambda.Architecture.ARM_64,
@@ -222,7 +226,7 @@ export class TraceStack extends Stack {
     const gpu = cfg.gpu.enabled
       ? new GpuCompute(this, 'Gpu', {
           prefix: cfg.prefix, instanceTypes: cfg.gpu.instanceTypes, maxVcpus: cfg.gpu.maxVcpus, spot: cfg.gpu.spot,
-          bucket: central, source, buildProvider: provider, retainData: cfg.retainData,
+          bucket: central, source, buildProvider: provider, retainData: cfg.retainData, images: cfg.images, contentTag,
           allowBuild: (arn) => { for (const f of [start, poll]) f.addToRolePolicy(new iam.PolicyStatement({ actions: ['codebuild:StartBuild', 'codebuild:BatchGetBuilds'], resources: [arn] })) },
           environment: gpuTelemetryEnv(cfg),
           cpu: cpuEnabled(cfg) ? cfg.cpu : null,
@@ -258,16 +262,18 @@ export class TraceStack extends Stack {
     const vectors = refs.some((r) => kbEnabled(cfg, r.repository)) ? new VectorStore(this, 'KnowledgeVectors', { prefix: cfg.prefix, removalPolicy: keep }) : null
     // the library gateway (gateway.enabled): the shared datasheets and parts tools behind AgentCore Gateway
     const library = cfg.gateway.enabled ? new LibraryGateway(this, 'Library', { prefix: cfg.prefix, bucket: central, traceHome, root: REPO_ROOT }) : null
-    // the GitHub connection the CodeBuild runners use (src/infra/runner.ts): given, or created here; the runner
-    // projects only once it is authorized (runners.connectionReady)
-    const connection = new GithubConnection(this, 'GithubConnection', { prefix: cfg.prefix, connectionArn: cfg.runners.connectionArn })
+    // how the CodeBuild runners reach GitHub (src/infra/runner.ts). auth 'connection': the GitHub connection, given or
+    // created here, and the runner projects only once it is authorized (runners.connectionReady). auth 'token': the
+    // account's CodeBuild GitHub source credential (the installer imported it before the deploy), so no connection
+    const connection = cfg.runners.auth === 'connection' ? new GithubConnection(this, 'GithubConnection', { prefix: cfg.prefix, connectionArn: cfg.runners.connectionArn }) : null
+    const runnerSource = connection ? (cfg.runners.connectionReady ? { connectionArn: connection.connectionArn } : null) : { connectionArn: null }
     // the build-only repositories (ciRepositories): a runner project each, here in the parent, and its output
-    if (cfg.runners.connectionReady) {
-      const { computeType, image, privileged } = cfg.runners
+    if (runnerSource) {
+      const { computeType, image, privileged, ciPrivileged } = cfg.runners
       for (const r of cfg.ciRepositories) {
         const repository = projectSlug(r)
         const runner = new RunnerProject(this, `CiRunner${projectHash(repository)}`, {
-          name: runnerProjectName(cfg.prefix, repository), repository, connectionArn: connection.connectionArn, computeType, image, privileged,
+          name: runnerProjectName(cfg.prefix, repository), repository, connectionArn: runnerSource.connectionArn, computeType, image, privileged: privileged || ciPrivileged,
           tags: { 'trace:installation': cfg.prefix, 'trace:ci': repository },
         })
         new CfnOutput(this, ciRunnerOutput(repository), { value: runner.projectName, description: `${repository}: its CodeBuild runner project (TRACE_CODEBUILD_PROJECT), build only` })
@@ -276,7 +282,7 @@ export class TraceStack extends Stack {
     const projectProps = (ref: (typeof refs)[number]): ProjectProps => ({
       cfg, project: ref, bucket: central, images: repo, imageUri: image.getAttString('ImageUri'), oidcProviderArn: oidc.openIdConnectProviderArn,
       gpu, vectorBucketArn: vectors?.arn ?? null, gateway: library?.ref ?? null,
-      connectionArn: cfg.runners.connectionReady ? connection.connectionArn : null,
+      runnerSource,
       environment: {
         AWS_REGION: cfg.region, TRACE_HOME: traceHome, CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: cfg.model, TRACE_WORKSPACE: '/mnt/workspace',
       },
@@ -442,6 +448,7 @@ export class TraceStack extends Stack {
         TRACE_COGNITO_ISSUER: `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}`,
         TRACE_AWS_ACCOUNT: cfg.account,
         TRACE_WORKER_RUNTIMES: workerList,
+        TRACE_INTEGRATIONS_PREFIX: integrationsPrefix(cfg.prefix),
         ...memoryEnv,
       },
       tags: { [INSTALLATION_TAG]: cfg.prefix },
@@ -452,6 +459,13 @@ export class TraceStack extends Stack {
       const env = r.environmentVariables
       if (env && typeof env === 'object' && !('resolve' in env)) checkRuntimeEnv(r.agentRuntimeName, env, observabilityEnv)
     }
+    // the installation's optional integrations (src/core/integrations.ts, integrations.* for admins): create, overwrite,
+    // describe and delete them, never read their values
+    apiRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'ManageIntegrations',
+      actions: ['secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue', 'secretsmanager:DescribeSecret', 'secretsmanager:DeleteSecret', 'secretsmanager:TagResource'],
+      resources: [`arn:${this.partition}:secretsmanager:${cfg.region}:${cfg.account}:secret:${integrationsPrefix(cfg.prefix)}*`],
+    }))
     apiRole.addToPolicy(new iam.PolicyStatement({
       actions: ['cognito-idp:ListUsers', 'cognito-idp:ListUsersInGroup', 'cognito-idp:AdminGetUser', 'cognito-idp:AdminListGroupsForUser', 'cognito-idp:AdminCreateUser',
         'cognito-idp:AdminAddUserToGroup', 'cognito-idp:AdminRemoveUserFromGroup'],

@@ -105,6 +105,146 @@ export async function setVariable(token: string, repo: string, name: string, val
   }
 }
 
+// ------------------------------------------------------------------ what the token can do (the preflight)
+
+const Email = z.object({ email: z.string(), primary: z.boolean(), verified: z.boolean() }).loose()
+
+/** The token's verified primary email: GET /user/emails (classic `user:email`, fine-grained "Email addresses: read"),
+ * else the account's public email; null when neither is visible. */
+export async function tokenEmail(token: string, fetchImpl?: Fetch): Promise<string | null> {
+  const gh = new Github(token, fetchImpl)
+  try {
+    const { data } = await gh.request('GET', '/user/emails', z.array(Email))
+    const primary = data.find((e) => e.primary && e.verified) ?? data.find((e) => e.verified)
+    if (primary) return primary.email
+  } catch (e) {
+    if (!(e instanceof GithubError) || ![401, 403, 404].includes(e.status)) throw e
+  }
+  try {
+    const { data } = await gh.request('GET', '/user', z.object({ email: z.string().nullable().optional() }).loose())
+    return data.email || null
+  } catch {
+    return null
+  }
+}
+
+/** One repository: what installing needs of the token there, and which permission is missing for each part. */
+export interface RepoAccess {
+  repo: string
+  /** the token sees the repository at all */
+  visible: boolean
+  /** Actions variables and secrets can be written (what installing needs at least) */
+  configure: boolean
+  /** repository settings, the ruleset and CodeBuild's runner registration (Administration) */
+  administer: boolean
+  /** CodeBuild's webhook (Webhooks) */
+  webhooks: boolean
+  /** each missing permission, said the way GitHub's token settings say it */
+  missing: string[]
+}
+
+/**
+ * Probe what the token may do on a repository, without changing anything: each read stands for the permission
+ * installing needs (a fine-grained token's permissions are granted read-and-write for these in practice; a write
+ * can't be probed without writing). `kind`: the token's type, for the wording.
+ */
+export async function repoAccess(token: string, repo: string, kind: TokenInfo['kind'], fetchImpl?: Fetch): Promise<RepoAccess> {
+  const gh = new Github(token, fetchImpl)
+  const ok = async (path: string): Promise<boolean> => {
+    try { await gh.request('GET', path, z.unknown()); return true } catch (e) { if (e instanceof GithubError && [403, 404].includes(e.status)) return false; throw e }
+  }
+  let perms: { admin?: boolean | undefined; push?: boolean | undefined } = {}
+  try {
+    perms = (await gh.request('GET', `/repos/${repo}`, z.object({ permissions: z.object({ admin: z.boolean().optional(), push: z.boolean().optional() }).loose().optional() }).loose())).data.permissions ?? {}
+  } catch (e) {
+    if (e instanceof GithubError && [403, 404].includes(e.status)) {
+      return { repo, visible: false, configure: false, administer: false, webhooks: false, missing: [kind === 'fine-grained' ? `access to ${repo} (add it under "Repository access")` : `access to ${repo}`] }
+    }
+    throw e
+  }
+  const [secrets, variables, hooks, admin] = await Promise.all([
+    ok(`/repos/${repo}/actions/secrets/public-key`), ok(`/repos/${repo}/actions/variables?per_page=1`), ok(`/repos/${repo}/hooks?per_page=1`), ok(`/repos/${repo}/actions/permissions`),
+  ])
+  const missing: string[] = []
+  if (kind === 'classic') {
+    if (!perms.admin) missing.push(`admin on ${repo} (the token's account is not an admin there: its settings, Actions secrets, ruleset and webhooks need it)`)
+  } else {
+    if (!secrets) missing.push('Secrets: read and write')
+    if (!variables) missing.push('Variables: read and write')
+    if (!admin) missing.push('Administration: read and write')
+    if (!hooks) missing.push('Webhooks: read and write')
+  }
+  return { repo, visible: true, configure: secrets && variables, administer: admin && Boolean(perms.admin || kind !== 'classic'), webhooks: hooks, missing }
+}
+
+/** What a missing permission costs, in the plan and the summary. */
+export function accessNote(a: RepoAccess): string | null {
+  if (!a.missing.length) return null
+  const parts: string[] = []
+  if (!a.visible) return `${a.repo}: the token cannot see it: ${a.missing.join('; ')}.`
+  if (!a.configure) parts.push('its Actions variables and TRACE_TOKEN secret cannot be set (installing needs them: give the token Secrets and Variables, or an admin token)')
+  if (!a.administer) parts.push('its settings and the "trace" ruleset are left alone')
+  // CodeBuild makes the runner's webhook with its GitHub credential: with the token as that credential it needs both
+  if (!a.administer || !a.webhooks) parts.push('with the token as CodeBuild\'s GitHub credential its build runner can\'t be made (CodeBuild needs Administration and Webhooks: read and write), so the deploy fails; a GitHub connection (Advanced) needs neither')
+  return `${a.repo}: the token lacks ${a.missing.join(', ')}: ${parts.join('; ')}.`
+}
+
+/** GET a path, its JSON, or null on 404 (or 403: a token that cannot see it). */
+export async function getOrNull(token: string, path: string, fetchImpl?: Fetch): Promise<Record<string, unknown> | null> {
+  try { return (await new Github(token, fetchImpl).request('GET', path, z.record(z.string(), z.unknown()))).data } catch (e) {
+    if (e instanceof GithubError && [403, 404].includes(e.status)) return null
+    throw e
+  }
+}
+
+/** Can repositories outside trace's own use its actions (`uses: <source>/harness/actions/...`)? A public source:
+ * always. A private one: only with its Actions access level `user` or `organization`, which its admin may set. */
+export async function sourceAccess(token: string, source: string, fetchImpl?: Fetch): Promise<{ ok: boolean; private: boolean; level: string | null; canFix: boolean; admin: boolean; detail: string }> {
+  const gh = new Github(token, fetchImpl)
+  let repo: { private: boolean; permissions?: { admin?: boolean | undefined } | undefined; owner: { type: string } }
+  try {
+    repo = (await gh.request('GET', `/repos/${source}`, z.object({ private: z.boolean(), permissions: z.object({ admin: z.boolean().optional() }).loose().optional(), owner: z.object({ type: z.string() }).loose() }).loose())).data
+  } catch (e) {
+    if (e instanceof GithubError && [403, 404].includes(e.status)) return { ok: false, private: true, level: null, canFix: false, admin: false, detail: `the token cannot see ${source}, whose actions every trace workflow uses: ask its owner for access` }
+    throw e
+  }
+  if (!repo.private) return { ok: true, private: false, level: null, canFix: false, admin: Boolean(repo.permissions?.admin), detail: `${source} is public: every repository can use its actions` }
+  let level: string | null = null
+  try { level = (await gh.request('GET', `/repos/${source}/actions/permissions/access`, z.object({ access_level: z.string() }).loose())).data.access_level } catch { level = null }
+  const ok = level === 'user' || level === 'organization' || level === 'enterprise'
+  const admin = Boolean(repo.permissions?.admin)
+  return {
+    ok, private: true, level, canFix: !ok && admin, admin,
+    detail: ok ? `${source} is private and lets repositories of the same ${level === 'user' ? 'account' : level} use its actions`
+      : `${source} is private and its actions are not shared (access level ${level ?? 'unknown'}): workflows in other repositories cannot use them. ${admin ? 'trace can set its Actions access to "accessible from repositories owned by the same ' + (repo.owner.type === 'Organization' ? 'organization' : 'user') + '".' : `Its admin must allow it in ${source}'s Settings → Actions → General → Access.`}`,
+  }
+}
+
+/** Share a private source repository's actions with the repositories of its owner. */
+export async function shareSource(token: string, source: string, fetchImpl?: Fetch): Promise<void> {
+  const gh = new Github(token, fetchImpl)
+  const { data } = await gh.request('GET', `/repos/${source}`, z.object({ owner: z.object({ type: z.string() }).loose() }).loose())
+  await gh.request('PUT', `/repos/${source}/actions/permissions/access`, z.unknown(), { access_level: data.owner.type === 'Organization' ? 'organization' : 'user' })
+}
+
+/** Create a repository for a new project (the token's own account, or an organisation it may create in). */
+export async function createRepo(token: string, slug: string, o: { private: boolean; description?: string }, fetchImpl?: Fetch): Promise<{ fullName: string; defaultBranch: string; created: boolean }> {
+  const gh = new Github(token, fetchImpl)
+  const [owner, name] = slug.split('/')
+  if (!owner || !name) throw new GithubError(`expected OWNER/REPO, got ${slug}`, 400)
+  const Repo = z.object({ full_name: z.string(), default_branch: z.string().default('main') }).loose()
+  try {
+    const { data } = await gh.request('GET', `/repos/${slug}`, Repo)
+    return { fullName: data.full_name, defaultBranch: data.default_branch, created: false }
+  } catch (e) {
+    if (!(e instanceof GithubError) || e.status !== 404) throw e
+  }
+  const { data: me } = await gh.request('GET', '/user', User)
+  const path = me.login.toLowerCase() === owner.toLowerCase() ? '/user/repos' : `/orgs/${owner}/repos`
+  const { data } = await gh.request('POST', path, Repo, { name, private: o.private, auto_init: false, ...(o.description ? { description: o.description } : {}) })
+  return { fullName: data.full_name, defaultBranch: 'main', created: true }
+}
+
 /** Remove a repository's Actions variable. Returns whether there was one. */
 export async function deleteVariable(token: string, repo: string, name: string, fetchImpl?: Fetch): Promise<boolean> {
   const gh = new Github(token, fetchImpl)

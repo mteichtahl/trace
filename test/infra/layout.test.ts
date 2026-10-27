@@ -23,6 +23,15 @@ type Res = { Type: string; Properties?: Record<string, unknown>; DeletionPolicy?
 type Tpl = { Resources: Record<string, Res>; Outputs?: Record<string, unknown>; Parameters?: Record<string, unknown> }
 const json = (t: Template): Tpl => t.toJSON() as Tpl
 const count = (o: object | undefined): number => Object.keys(o ?? {}).length
+/** A nested stack's resources, less the managed policy CDK adds when its runtime role's statements outgrow the inline
+ * policy's 10 KB (Project<hash>RuntimeRoleOverflowPolicy<n>: the same statements, split): `own` counts the rest, and
+ * every other managed policy is a failure */
+const nestedResources = (o: Record<string, { Type?: string }> | undefined): { own: number; overflow: string[] } => {
+  const ids = Object.keys(o ?? {})
+  const overflow = ids.filter((id) => o?.[id]?.Type === 'AWS::IAM::ManagedPolicy')
+  for (const id of overflow) expect(id).toMatch(/^Project[0-9a-f]+RuntimeRoleOverflowPolicy\w+$/)
+  return { own: ids.length - overflow.length, overflow }
+}
 
 /** Every Ref and Fn::GetAtt target in a value. */
 function targets(v: unknown, out = new Set<string>()): Set<string> {
@@ -79,7 +88,7 @@ describe('the nested layout', () => {
         // 17, its CPU job definition, its knowledge base (index, service role and policy, knowledge base, data source),
         // its job events (topic, topic policy, EventBridge rule) and its CI runner (CodeBuild project, its role and its
         // log group: src/infra/runner.ts)
-        expect(count(j.Resources)).toBe(29)
+        expect(nestedResources(j.Resources).own).toBe(29)
         // its 13 (Project<hash>RunnerProject among them), its knowledge base's two (Project<hash>KnowledgeBaseId,
         // …DataSourceId), and the id the parent reads
         expect(count(j.Outputs)).toBe(16)
@@ -108,7 +117,13 @@ describe('the nested layout', () => {
     // without a connection given, the stack creates one: one more resource of the parent's, and nothing more per project
     const created = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: {} }), 'Count1Created')
     expect(count(json(created.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0) + 1)
-    for (const t of created.nested.values()) expect(count(json(t).Resources)).toBe(29)
+    for (const t of created.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(29)
+    // with the token as CodeBuild's credential (runners.auth token): no connection and none of its outputs, the same
+    // runner in each project's stack
+    const token = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: { auth: 'token' } }), 'Count1Token')
+    expect(count(json(token.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0))
+    expect(count(json(token.parent).Outputs)).toBe((sizes[0]?.outputs ?? 0) - 2)
+    for (const t of token.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(29)
     // none of a project's outputs is the parent's: each is its nested stack's, with the repository it is the project of
     const s = synth(cfg(2), 'Count2Outputs')
     const parentOutputs = Object.keys(json(s.parent).Outputs ?? {})
