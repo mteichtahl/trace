@@ -967,8 +967,8 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
         log('people', `${p.email}: ${p.class}`)
         const want = new Set(p.projects.map((r) => r.toLowerCase()))
         for (const repo of p.projects) {
-          await assign(installer, { sub, email: p.email }, repo)
-          log('people', `${p.email}: assigned to ${repo} (${p.class === 'guest' ? 'read' : 'read and write'})`)
+          const a = await assign(installer, { sub, email: p.email }, repo, { class: p.class })
+          log('people', `${p.email}: assigned to ${repo} as a ${a.part} (${a.part === 'reviewer' ? 'read' : 'read and write'})`)
         }
         // The answers are the whole truth for a listed person: projects no longer listed are taken away.
         for (const g of await assignments(installer, { sub })) {

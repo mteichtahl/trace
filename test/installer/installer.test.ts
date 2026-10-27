@@ -269,7 +269,7 @@ describe('installing', () => {
     await expect(require_(dev, 'mteichtahl/fw', 'read')).rejects.toThrow(/no read access/)
     expect(await require_(visitor, 'mteichtahl/fw', 'read')).toBe('read')
     await expect(require_(visitor, 'mteichtahl/fw', 'write')).rejects.toThrow(/no write access/)
-    expect(await projectsFor(visitor)).toEqual([{ repo: 'mteichtahl/fw', role: 'read' }])
+    expect(await projectsFor(visitor)).toEqual([{ repo: 'mteichtahl/fw', role: 'read', part: 'reviewer' }])
     expect(calls.variables).toContain('mteichtahl/board:TRACE_AGENT_LOGIN')
     // each repository gets its own project's role and runtime
     for (const repo of ['mteichtahl/board', 'mteichtahl/fw']) {

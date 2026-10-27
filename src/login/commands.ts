@@ -15,14 +15,14 @@
  *   trace remote kb search OWNER/REPO "query" [--top N] [--source S] [--kind K] [--path P] | sync OWNER/REPO [--force]
  *                                                       (src/login/kb.ts)
  *   trace users list | invite EMAIL [--class user|guest|admin] | class EMAIL CLASS
- *              | assign EMAIL OWNER/REPO | unassign EMAIL OWNER/REPO | assignments [OWNER/REPO]
+ *              | assign EMAIL OWNER/REPO [--part contributor|reviewer] | unassign EMAIL OWNER/REPO | assignments [OWNER/REPO]
  *
  * Each returns the exit code; problems are printed, never thrown to the caller.
  */
 import { parseArgs } from 'node:util'
 import { z } from 'zod'
 import { SpecialistKindSchema } from '../agents/kinds.js'
-import { CLASSES } from '../core/access.js'
+import { CLASSES, PARTS } from '../core/access.js'
 import { installation, saveInstallation, session } from '../core/client.js'
 import { parseCliValue } from '../core/config.js'
 import { ApiError, invokeApi } from './invoke.js'
@@ -125,9 +125,9 @@ export async function cmdRemote(argv: string[]): Promise<number> {
     const [sub, ...rest] = argv
     switch (sub) {
       case 'projects': {
-        const list = z.array(z.object({ repo: z.string(), role: z.string() })).parse(await invokeApi('projects'))
+        const list = z.array(z.object({ repo: z.string(), role: z.string(), part: z.string().optional() })).parse(await invokeApi('projects'))
         if (!list.length) out('No projects: ask an admin to assign you to one.')
-        for (const p of list) out(`${p.repo.padEnd(40)} ${p.role}`)
+        for (const p of list) out(`${p.repo.padEnd(40)} ${p.role.padEnd(6)} ${p.part ?? ''}`.trimEnd())
         return 0
       }
       case 'status': {
@@ -194,7 +194,8 @@ export async function cmdRemote(argv: string[]): Promise<number> {
 
 // ------------------------------------------------------------------ users (admins)
 
-const USERS_USAGE = 'usage: trace users list | invite EMAIL [--class user|guest|admin] | class EMAIL user|guest|admin | assign EMAIL OWNER/REPO | unassign EMAIL OWNER/REPO | assignments [OWNER/REPO]'
+const USERS_USAGE = 'usage: trace users list | invite EMAIL [--class user|guest|admin] | class EMAIL user|guest|admin | assign EMAIL OWNER/REPO [--part contributor|reviewer] | unassign EMAIL OWNER/REPO | assignments [OWNER/REPO]'
+const Part = z.enum(PARTS)
 const Cls = z.enum(CLASSES)
 
 export async function cmdUsers(argv: string[]): Promise<number> {
@@ -202,9 +203,14 @@ export async function cmdUsers(argv: string[]): Promise<number> {
     const [sub, ...rest] = argv
     switch (sub) {
       case 'list': {
-        const users = z.array(z.object({ email: z.string().nullable(), sub: z.string(), status: z.string().nullable(), class: z.string().nullable(), projects: z.array(z.string()) }).loose())
-          .parse(await invokeApi('users.list'))
-        for (const u of users) out(`${(u.email ?? u.sub).padEnd(36)} ${(u.class ?? 'none').padEnd(6)} ${(u.status ?? '').padEnd(22)} ${u.projects.join(', ')}`)
+        const users = z.array(z.object({
+          email: z.string().nullable(), sub: z.string(), status: z.string().nullable(), class: z.string().nullable(), projects: z.array(z.string()),
+          parts: z.array(z.object({ repo: z.string(), part: z.string() })).optional(),
+        }).loose()).parse(await invokeApi('users.list'))
+        for (const u of users) {
+          const projects = u.parts ? u.parts.map((p) => `${p.repo} (${p.part})`) : u.projects
+          out(`${(u.email ?? u.sub).padEnd(36)} ${(u.class ?? 'none').padEnd(6)} ${(u.status ?? '').padEnd(22)} ${projects.join(', ')}`)
+        }
         return 0
       }
       case 'invite': {
@@ -222,17 +228,20 @@ export async function cmdUsers(argv: string[]): Promise<number> {
         return 0
       }
       case 'assign': case 'unassign': {
-        const [who, repo] = rest
+        const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { part: { type: 'string' } } })
+        const [who, repo] = positionals
         if (!who || !repo) break
-        const r = await invokeApi(sub, { who, repo: Repo.parse(repo) })
-        if (sub === 'assign') out(`${who} is assigned to ${repo.toLowerCase()}.`)
+        if (sub === 'unassign' && values.part) break
+        const part = values.part ? Part.parse(values.part) : undefined
+        const r = await invokeApi(sub, { who, repo: Repo.parse(repo), ...(part ? { part } : {}) })
+        if (sub === 'assign') out(`${who} is assigned to ${repo.toLowerCase()} as a ${z.object({ part: z.string() }).loose().safeParse(r).data?.part ?? part ?? 'member'}.`)
         else out(z.object({ removed: z.boolean() }).loose().parse(r).removed ? `${who} is no longer assigned to ${repo.toLowerCase()}.` : `${who} was not assigned to ${repo.toLowerCase()}.`)
         return 0
       }
       case 'assignments': {
-        const list = z.array(z.object({ repo: z.string(), email: z.string().nullable(), sub: z.string(), class: z.string().nullable() }).loose())
+        const list = z.array(z.object({ repo: z.string(), email: z.string().nullable(), sub: z.string(), class: z.string().nullable(), part: z.string().optional() }).loose())
           .parse(await invokeApi('assignments', rest[0] ? { repo: Repo.parse(rest[0]) } : {}))
-        for (const a of list) out(`${a.repo.padEnd(40)} ${(a.email ?? a.sub).padEnd(36)} ${a.class ?? 'none'}`)
+        for (const a of list) out(`${a.repo.padEnd(40)} ${(a.email ?? a.sub).padEnd(36)} ${(a.class ?? 'none').padEnd(6)} ${a.part ?? ''}`.trimEnd())
         return 0
       }
     }

@@ -192,6 +192,14 @@ export async function start(): Promise<void> {
       },
     } : {}),
     scratch,
+    // projects.create: the installer's onboarding (src/installer/onboard-api.ts) with this runtime's GitHub token; git
+    // is in the image (the agents' image), and the token reaches it only through git's environment
+    onboard: async (repo, o) => {
+      const [{ onboardViaApi }, { Github }] = await Promise.all([import('../installer/onboard-api.js'), import('../installer/github.js')])
+      const t = await token()
+      const { data } = await new Github(t).request('GET', '/user', z.object({ login: z.string() }).loose())
+      return onboardViaApi(repo, { token: t, login: data.login, apply: o.apply, create: o.create })
+    },
   }
   const server = await listen({
     verifier: new Verifier({ issuer: env.TRACE_COGNITO_ISSUER, clientId: env.TRACE_COGNITO_CLIENT_ID }),
