@@ -1,23 +1,23 @@
 /**
- * `trace prompts …`: the prompt catalog and its overrides, for people.
+ * `tracectl prompts …`: the prompt catalog and its overrides, for people.
  *
- *   trace prompts list [--json]                          every prompt id: editable or locked, and where its text
+ *   tracectl prompts list [--json]                          every prompt id: editable or locked, and where its text
  *                                                        comes from now (default, installation or project, vN)
- *   trace prompts get ID [--json]                        its default, installation and project text, the effective
+ *   tracectl prompts get ID [--json]                        its default, installation and project text, the effective
  *                                                        text and the locked parts that always follow it
- *   trace prompts set ID --reason "why" [--file F]       override it (the text from --file, else stdin)
- *   trace prompts reset ID [--reason "why"]              back to the layer below
- *   trace prompts revert ID VERSION [--reason "why"]     back to an earlier version (a number or a history uid)
- *   trace prompts history ID [--json]                    every change in that layer
- *   trace prompts diff ID [FROM [TO]]                    FROM and TO: default, effective, or a version (vN or a
+ *   tracectl prompts set ID --reason "why" [--file F]       override it (the text from --file, else stdin)
+ *   tracectl prompts reset ID [--reason "why"]              back to the layer below
+ *   tracectl prompts revert ID VERSION [--reason "why"]     back to an earlier version (a number or a history uid)
+ *   tracectl prompts history ID [--json]                    every change in that layer
+ *   tracectl prompts diff ID [FROM [TO]]                    FROM and TO: default, effective, or a version (vN or a
  *                                                        uid); by default the default against the effective text
- *   trace prompts preview TARGET [--marked] [--json] [--request "…"]
+ *   tracectl prompts preview TARGET [--marked] [--json] [--request "…"]
  *                                                        a whole prompt as the model gets it: a specialist kind,
  *                                                        a prompt's name (worker.task, router, …) or an id
  *
- * Locally (`trace prompts`) the project layer is this clone's .trace/project.db (commit it: .trace/** is a protected
+ * Locally (`tracectl prompts`) the project layer is this clone's .trace/project.db (commit it: .trace/** is a protected
  * path, so its pull request waits for a person) and --installation works on the installation's store with your own
- * credentials (TRACE_HOME's sibling `prompts`, or TRACE_PROMPTS_HOME). Through the API (`trace remote prompts …
+ * credentials (TRACE_HOME's sibling `prompts`, or TRACE_PROMPTS_HOME). Through the API (`tracectl remote prompts …
  * [--repo OWNER/REPO]`, src/login/prompts.ts) the same commands run as the API's prompts.* actions.
  */
 import { readFileSync } from 'node:fs'
@@ -59,7 +59,7 @@ const History = z.object({ history: z.array(z.object({ uid: z.string(), version:
 const Preview = z.object({ text: z.string(), marked: z.string() }).loose()
 const Written = z.object({ version: z.number(), uid: z.string(), action: z.string(), branch: z.string().optional(), commit: z.string().optional() }).loose()
 
-export const PROMPTS_USAGE = 'usage: trace prompts list | get ID | set ID --reason "why" [--file F] | reset ID [--reason "why"] | revert ID VERSION [--reason "why"] | history ID | diff ID [FROM [TO]] | preview TARGET [--marked] [--request "…"]  (--installation: the installation\'s store; --json)'
+export const PROMPTS_USAGE = 'usage: tracectl prompts list | get ID | set ID --reason "why" [--file F] | reset ID [--reason "why"] | revert ID VERSION [--reason "why"] | history ID | diff ID [FROM [TO]] | preview TARGET [--marked] [--request "…"]  (--installation: the installation\'s store; --json)'
 
 const show = (v: unknown): void => out(JSON.stringify(v, null, 2))
 
@@ -103,7 +103,7 @@ export async function runPrompts(argv: string[], b: PromptBackend, usage = PROMP
       }
       case 'set': {
         if (!id) break
-        if (!values.reason) { err('trace prompts set: give --reason "why"'); return 2 }
+        if (!values.reason) { err('tracectl prompts set: give --reason "why"'); return 2 }
         const text = readText(values.file)
         report(Written.parse(await b.write(scope, { op: 'set', id, text, reason: values.reason, by })), scope, id)
         return 0

@@ -1,6 +1,6 @@
 /**
  * The shared library behind AgentCore Gateway (README "Library gateway"): which tools go there, what the gateway is
- * told about them, and the client a worker's `trace mcp` uses to reach it.
+ * told about them, and the client a worker's `tracectl mcp` uses to reach it.
  *
  * Only the shared library moves: the datasheets and parts tools that read and write the central database, which every
  * project shares on purpose. A Lambda or Smithy target runs with the gateway's own role, never the caller's, so a
@@ -10,7 +10,7 @@
  * so do the tools that hand back a local path or need Python or poppler (datasheets.get, .tables, .params,
  * .page_image).
  *
- * The worker's MCP configuration does not change: `trace mcp` stays its one server (src/core/mcp.ts) and forwards these
+ * The worker's MCP configuration does not change: `tracectl mcp` stays its one server (src/core/mcp.ts) and forwards these
  * calls, signed with SigV4 by the runtime's own credentials (the gateway's inbound auth is AWS_IAM, and an MCP client's
  * remote configuration takes static headers only). With TRACE_GATEWAY_URL unset (local runs, the GitHub Actions
  * fallback, an installation without the gateway) everything runs in-process, as before.

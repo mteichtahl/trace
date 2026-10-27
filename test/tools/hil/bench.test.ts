@@ -26,7 +26,7 @@ const canReach = (port: number): Promise<boolean> => new Promise((r) => {
 
 describe('the bench settings', () => {
   it('are exactly what the project settings take, on the default ports', async () => {
-    // the default ports, unless something on this machine (a running `trace hil emulate`) already has them
+    // the default ports, unless something on this machine (a running `tracectl hil emulate`) already has them
     const free = !(await canReach(5555) || await canReach(5556) || await canReach(5557))
     const bench = await startBench(free ? {} : { ports: { psu: 0, scope: 0, dmm: 0 } })
     try {

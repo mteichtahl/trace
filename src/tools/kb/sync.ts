@@ -1,5 +1,5 @@
 /**
- * `trace kb sync`: put the knowledge base's documents (content.ts) into S3 under projects/<slug>/kb/, changed ones
+ * `tracectl kb sync`: put the knowledge base's documents (content.ts) into S3 under projects/<slug>/kb/, changed ones
  * only, remove the ones that went away, then start an ingestion job and report how it went.
  *
  *   1. desired   every document, and its `.metadata.json` sidecar, each with a tracking hash: a document's is the
@@ -12,14 +12,14 @@
  *                that are not desired are deleted (DeleteObjects).
  *   4. ingest    StartIngestionJob when anything changed, when the data source has never been ingested, when its
  *                last job failed or stopped or began before the newest upload kb_objects records, or with force; one already running (ConflictException) is waited for first. Then GetIngestionJob until it
- *                is COMPLETE, FAILED or STOPPED, or the wait runs out (the job carries on; `trace kb status` reports
+ *                is COMPLETE, FAILED or STOPPED, or the wait runs out (the job carries on; `tracectl kb status` reports
  *                it). Its statistics and failure reasons are the report's. Both waits are timers, every pollMs
  *                (10 s), because Bedrock sends no event when an ingestion job ends: they are waitWithTimer's
  *                (core/wait.ts), so each is on the record (activeWaits, checkNow) and `progress` gets a plain line
  *                ("Waiting for … Checked just now; next check in 10 seconds.") whenever the job's state changes.
  *
  * kb_objects (the project database, registered with ensureProjectSchema) keeps one row per object: key, the repository
- * path it is for, its tracking hash, its ETag and when it was uploaded. `trace db merge` keeps, per key, the row
+ * path it is for, its tracking hash, its ETag and when it was uploaded. `tracectl db merge` keeps, per key, the row
  * uploaded last. It only saves HeadObject calls: S3 is what decides.
  *
  * Every call is observed as the span `trace.kb.sync` with counts and durations only, never paths or text.
@@ -260,7 +260,7 @@ export async function syncKb(t: SyncTarget, docs: readonly KbDoc[], d: SyncDeps,
       check: async () => {
         try {
           const job = (await d.ingest.send(new StartIngestionJobCommand({
-            knowledgeBaseId: t.knowledgeBaseId, dataSourceId: t.dataSourceId, description: `trace kb sync at ${o.commit.slice(0, 12)}`.slice(0, 200),
+            knowledgeBaseId: t.knowledgeBaseId, dataSourceId: t.dataSourceId, description: `tracectl kb sync at ${o.commit.slice(0, 12)}`.slice(0, 200),
           }))).ingestionJob
           return { done: true, value: job }
         } catch (e) {

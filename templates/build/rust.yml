@@ -2,7 +2,7 @@
 # requires; add your own jobs and list them under its `needs`.
 #
 # Runners: every job runs on AWS CodeBuild (a CodeBuild-hosted GitHub Actions runner in the installation's AWS account)
-# once `trace install` has set it up, and on GitHub's ubuntu-24.04 runners until then. The switch is the repository
+# once `tracectl install` has set it up, and on GitHub's ubuntu-24.04 runners until then. The switch is the repository
 # variable TRACE_CODEBUILD_PROJECT, which the installer sets only once the runner project exists (and removes if it
 # does not): set, runs-on names that project (codebuild-<project>-<run id>-<attempt>) and a label that keeps each
 # job's runner distinct; unset, ubuntu-24.04. Nothing in the workflow changes when the runner arrives.

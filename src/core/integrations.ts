@@ -12,7 +12,7 @@
  *
  * Where they live: one Secrets Manager secret per integration and installation, `<prefix>/integrations/<name>`, a JSON
  * object of the environment names the provider reads (NEXAR_CLIENT_ID, …). They are written by the installer, by
- * `trace integrations set <name>`, or by an admin through the API (integrations.set), and tagged with the
+ * `tracectl integrations set <name>`, or by an admin through the API (integrations.set), and tagged with the
  * installation. Nothing writes them into a CloudFormation template.
  *
  * Who reads them: with the library gateway off, each project's worker role may read `<prefix>/integrations/*` and
@@ -59,7 +59,7 @@ export async function checkIntegration(name: IntegrationName, values: Record<str
     if (!r.ok || errors.length) return { ok: false, detail: `Mouser refused this key (HTTP ${r.status}${errors.length ? `: ${JSON.stringify(errors[0]).slice(0, 120)}` : ''})` }
     return { ok: true, detail: 'Mouser accepted the key' }
   } catch (e) {
-    return { ok: false, detail: `could not reach ${INTEGRATIONS[name].title}: ${e instanceof Error ? e.message : String(e)} (stored anyway; check it later with \`trace integrations check ${name}\`)` }
+    return { ok: false, detail: `could not reach ${INTEGRATIONS[name].title}: ${e instanceof Error ? e.message : String(e)} (stored anyway; check it later with \`tracectl integrations check ${name}\`)` }
   }
 }
 

@@ -2,7 +2,7 @@
  * agent.delegate (MCP: agent_delegate): a specialist hands repository changes or long work to the retained worker,
  * waits for it, and gets its result back. It reaches the runtime it runs in (src/agents/runtime/delegation.ts)
  * through the environment the job runner gives a specialist's MCP server only: TRACE_DELEGATE_URL (loopback) and
- * TRACE_DELEGATE_TOKEN (that job's). Without them (a delegated worker, a GitHub Actions run, a local `trace mcp`) the
+ * TRACE_DELEGATE_TOKEN (that job's). Without them (a delegated worker, a GitHub Actions run, a local `tracectl mcp`) the
  * tool is not offered, which is what limits delegation to depth 1; the runtime refuses any other token too.
  *
  * The call blocks, on an event, not a timer: it asks POST /delegate/wait { token, jobId, timeoutS }, which the runtime

@@ -4,7 +4,7 @@
  *   installation  one SQLite database through the central store's machinery (src/core/central.ts), beside the access
  *                 store: s3://<bucket>/prompts in AWS (TRACE_HOME's sibling), $TRACE_HOME/prompts locally,
  *                 $TRACE_PROMPTS_HOME to name another place. Written by the API runtime (admins, after the access
- *                 check) and by an admin's own `trace prompts --installation`; the workers and the repositories'
+ *                 check) and by an admin's own `tracectl prompts --installation`; the workers and the repositories'
  *                 workflows only read it (their roles may not write prompts/*)
  *   project       the project's .trace/project.db, versioned in git with the repository. Through the API a change is
  *                 a commit on a trace/prompts-<slug>-<ts> branch, and .trace/** is a protected path, so its pull
@@ -18,7 +18,7 @@
  *   prompt_history  every set, reset and revert, append only: a uid, the id, the version it made, the text, by (a
  *                   person's 16-character hash through the API, the login locally), when and why
  *
- * Merging .trace/project.db (`trace db merge`): prompts keeps, per id, the row changed last (`updated`); history is
+ * Merging .trace/project.db (`tracectl db merge`): prompts keeps, per id, the row changed last (`updated`); history is
  * the union of both sides (uids never collide). Two branches can each make, say, v3 of one id: their history keeps
  * both, and `uid` tells them apart.
  */
@@ -110,7 +110,7 @@ export function readHistory(db: DatabaseSync, id: string): HistoryEntry[] {
 export function checkSet(id: string, text: string): void {
   PromptIdSchema.parse(id)
   const e = CATALOG.get(id)
-  if (!e) throw new PromptError(`no prompt ${id} in the catalog (trace prompts list)`)
+  if (!e) throw new PromptError(`no prompt ${id} in the catalog (tracectl prompts list)`)
   if (e.mode === 'locked') throw new PromptError(`${id} is locked: it can be read but not overridden`)
   const problem = overrideProblem(e, text)
   if (problem) throw new TemplateError(problem)
@@ -282,7 +282,7 @@ export const projectDbOf = (dir: string): string => projectPath(dir)
 
 // ------------------------------------------------------------------ diff
 
-/** A line diff of two texts (`-` theirs only, `+` ours only, ` ` both), for `trace prompts diff`. */
+/** A line diff of two texts (`-` theirs only, `+` ours only, ` ` both), for `tracectl prompts diff`. */
 export function diffLines(a: string, b: string): string {
   const x = a.split('\n')
   const y = b.split('\n')

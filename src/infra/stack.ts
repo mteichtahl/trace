@@ -172,7 +172,7 @@ export class TraceStack extends Stack {
     // own project's secret instead (src/infra/project.ts).
     const githubToken = new secrets.Secret(this, 'GithubToken', {
       secretName: `${cfg.prefix}/github-token`,
-      description: 'The GitHub token the trace API uses across projects (written by `trace install`, never by CloudFormation).',
+      description: 'The GitHub token the trace API uses across projects (written by `tracectl install`, never by CloudFormation).',
       removalPolicy: RemovalPolicy.RETAIN,
     })
 
@@ -331,7 +331,7 @@ export class TraceStack extends Stack {
       featurePlan: cognito.FeaturePlan.ESSENTIALS,
       userInvitation: {
         emailSubject: 'You have been invited to trace',
-        emailBody: 'Your trace user name is {username} and your temporary password is {####}. Sign in with `trace login`.',
+        emailBody: 'Your trace user name is {username} and your temporary password is {####}. Sign in with `tracectl login`.',
       },
       removalPolicy: RemovalPolicy.RETAIN,
     })
@@ -545,7 +545,7 @@ export class TraceStack extends Stack {
     new CfnOutput(this, 'TraceHome', { value: traceHome, description: 'TRACE_HOME: the central database location' })
     if (library) {
       new CfnOutput(this, LIBRARY_GATEWAY_OUTPUT, { value: library.ref.url, description: 'The library gateway (the workers\' TRACE_GATEWAY_URL)' })
-      new CfnOutput(this, LIBRARY_KEYS_OUTPUT, { value: library.keys.secretArn, description: 'The distributor keys the library gateway\'s Lambda reads (written by `trace install`)' })
+      new CfnOutput(this, LIBRARY_KEYS_OUTPUT, { value: library.keys.secretArn, description: 'The distributor keys the library gateway\'s Lambda reads (written by `tracectl install`)' })
     }
     new CfnOutput(this, CENTRAL_BUCKET_OUTPUT, { value: central.bucketName })
     new CfnOutput(this, 'GithubSecretArn', { value: githubToken.secretArn, description: 'The API\'s GitHub token (across projects); each project has its own (Project<hash>GithubSecretArn)' })

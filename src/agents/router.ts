@@ -3,7 +3,7 @@
  * classification call to the model, when nothing deterministic decided.
  *
  * Precedence:
- *   1. explicit   a kind the caller named (API task `agent`, `trace remote task --agent`, a pick that already routed)
+ *   1. explicit   a kind the caller named (API task `agent`, `tracectl remote task --agent`, a pick that already routed)
  *   2. label      agent:verify / agent:impl / agent:ams / agent:emc / agent:render / agent:thermal on the issue or PR (labels.agent_*)
  *   3. evidence   failing check or job names and their logs, and the changed files (EVIDENCE below)
  *   4. keyword    words in the issue, PR or task text (each specialist's `keywords`)

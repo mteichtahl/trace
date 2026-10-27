@@ -96,7 +96,7 @@ describe('upgrading and uninstalling', () => {
   it('reads the tokens back from the installation\'s own secrets', async () => {
     const store = new Map([['trace/github-token', 'shared-token'], ['trace/github-token/marc/board', 'shared-token'], ['trace/github-token/marc/fw@g1', 'fw-token']])
     expect(await storedTokens(a, async (n) => store.get(n) ?? null)).toEqual({ githubToken: 'shared-token', projectTokens: { 'marc/fw': 'fw-token' } })
-    await expect(storedTokens(a, async () => null)).rejects.toThrow(/run `trace install` instead/)
+    await expect(storedTokens(a, async () => null)).rejects.toThrow(/run `tracectl install` instead/)
   })
 
   it('says what uninstalling keeps', () => {

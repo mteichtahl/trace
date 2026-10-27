@@ -612,7 +612,7 @@ export const ACTIONS = {
     const u = await cog.createUser(a.email)
     await cog.addToGroup(u.username, GROUPS[a.class])
     await setClass(ctx.principal, { sub: u.sub, email: a.email }, a.class)
-    return { sub: u.sub, email: a.email, class: a.class, note: 'Cognito has emailed them a temporary password; they sign in with `trace login`.' }
+    return { sub: u.sub, email: a.email, class: a.class, note: 'Cognito has emailed them a temporary password; they sign in with `tracectl login`.' }
   }),
 
   'users.class': def('admin', z.object({ who: Who, class: Cls }), async (a, ctx) => {

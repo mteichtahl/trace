@@ -11,7 +11,7 @@ This repository is a demonstration: a small, finished board that exists to exerc
 - TRC-OPA1 and TRC-TMP1 are fictional parts. Their datasheets in `docs/datasheets/` were written for this sample.
   Never present their figures as a real vendor's, and keep every citation of them marked as fictional.
 - Figures typed in from memory stay `verified: null` until a datasheet page in the library backs them.
-- Hardware tools run only against the bench emulator (`trace hil emulate`), with TRACE_HARDWARE=1. There is no real
+- Hardware tools run only against the bench emulator (`tracectl hil emulate`), with TRACE_HARDWARE=1. There is no real
   instrument here.
 - Long runs (Blender renders, openEMS, CalculiX, OpenFOAM, the routers) go to the GPU or CPU job queue. Keep render
   sizes small (at most 800 x 500, 32 samples) so a run costs cents.

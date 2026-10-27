@@ -69,7 +69,7 @@ beforeAll(async () => {
     mkdirSync(dirname(join(dir, f.path)), { recursive: true })
     writeFileSync(join(dir, f.path), f.content)
   }
-  // onboarding as onboardSample does it: the database first (it marks the project root), then trace onboard's files
+  // onboarding as onboardSample does it: the database first (it marks the project root), then tracectl onboard's files
   mkdirSync(join(dir, '.trace'), { recursive: true })
   const db = open(join(dir, '.trace', 'project.db'), { wal: false })
   db.exec(PROJECT_SCHEMA)
@@ -98,7 +98,7 @@ describe('trace-sample: onboarding and seed', () => {
     expect(readFileSync(join(dir, '.trace', 'rules.md'), 'utf8')).toMatch(/fictional parts/)
   })
 
-  it('every key in settings.json is a valid setting, set one by one as trace config set would', () => {
+  it('every key in settings.json is a valid setting, set one by one as tracectl config set would', () => {
     const scratch = mkdtempSync(join(tmpdir(), 'trace-sample-settings-'))
     try {
       mkdirSync(join(scratch, '.trace'))

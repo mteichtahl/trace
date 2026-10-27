@@ -1,5 +1,5 @@
 /**
- * The wait relay, MCP server side: a job's `trace mcp` process reports its open waits to the runtime that started
+ * The wait relay, MCP server side: a job's `tracectl mcp` process reports its open waits to the runtime that started
  * the job, and takes check-now wakes back from it (the runtime side: src/agents/runtime/wait-relay.ts).
  *
  * Only when TRACE_WAITS_URL (the runtime, loopback) and TRACE_WAITS_TOKEN (that job's) are set, which the job runner
@@ -78,7 +78,7 @@ export interface WaitReporter {
  */
 export function startWaitReporter(e: WaitRelayEnv | null = waitRelayEnv(), o: { log?: (line: string) => void } = {}): WaitReporter | null {
   if (!e) return null
-  const log = o.log ?? ((l: string) => { process.stderr.write(`trace mcp: ${l}\n`) })
+  const log = o.log ?? ((l: string) => { process.stderr.write(`tracectl mcp: ${l}\n`) })
   const abort = new AbortController()
   let refused = false
   const refuse = (why: string): void => {

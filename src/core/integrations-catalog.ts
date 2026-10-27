@@ -47,7 +47,7 @@ export const integrationSecretName = (prefix: string, name: IntegrationName): st
 
 /** The message a tool gives when an integration's credentials are missing. */
 export const addKeyHint = (name: IntegrationName): string =>
-  `no ${INTEGRATIONS[name].title} credentials (${INTEGRATIONS[name].keys.join(' / ')}): add them with \`trace integrations set ${name}\` (${INTEGRATIONS[name].url})`
+  `no ${INTEGRATIONS[name].title} credentials (${INTEGRATIONS[name].keys.join(' / ')}): add them with \`tracectl integrations set ${name}\` (${INTEGRATIONS[name].url})`
 
 /** One integration's values: every key it needs, each non-empty. */
 export function valuesFor(name: IntegrationName, raw: Record<string, unknown>): Record<string, string> {

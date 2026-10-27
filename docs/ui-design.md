@@ -175,7 +175,7 @@ Signing in is one field and one button; everything after it adapts to what the p
 
 **Our own pages, not Cognito's.** Every sign-in screen is trace's, built with the same shadcn parts as the app. Cognito's hosted pages and domain are never shown. The pages talk to the user pool through its API: the choice-based sign-in flow (`InitiateAuth` with `USER_AUTH`, then `RespondToAuthChallenge`) for passkeys, email codes and passwords; `ConfirmForgotPassword` for resets; and the WebAuthn registration calls for adding a passkey. Tokens are held in memory and refreshed with the refresh token, which is kept in a secure, HTTP-only cookie set by trace's API, never in browser storage.
 
-One consequence for the build: the `trace login` command uses Cognito's hosted domain today (authorisation code with PKCE). It should move to the same pages: the command opens trace's own sign-in page with a one-time code, and the page hands the session back to the command's local callback. That keeps one sign-in look everywhere.
+One consequence for the build: the `tracectl login` command uses Cognito's hosted domain today (authorisation code with PKCE). It should move to the same pages: the command opens trace's own sign-in page with a one-time code, and the page hands the session back to the command's local callback. That keeps one sign-in look everywhere.
 
 **Sign in.** A centred card on a plain background: the trace wordmark, "Sign in to trace", an email field and Continue. After Continue, the card offers whatever this person has set up, best first: a passkey, a code to their authenticator app, or their password. No sign-up link, because trace is invitation only, and the card says so in one quiet line ("Ask an admin on your team for an invitation").
 
@@ -706,7 +706,7 @@ A person's own preferences are shown only to them. Another person's preferences 
 
 ## The installer
 
-The installer asks for two things, AWS credentials and a GitHub token, and makes every other choice for the person with a sensible default they can open and change. It is the same shadcn look as the app, served from the person's own machine by `trace install`.
+The installer asks for two things, AWS credentials and a GitHub token, and makes every other choice for the person with a sensible default they can open and change. It is the same shadcn look as the app, served from the person's own machine by `tracectl install`.
 
 **Layout.** A centred column, 640 px wide, with a step indicator at the top (seven dots) and Back and Continue at the foot. Each step checks its answer before Continue wakes up, and says in one line what it checked ("Signed in to account 1234 5678 9012 as marc. Bedrock AgentCore and Claude are available in ap-southeast-2.").
 
@@ -749,7 +749,7 @@ Everything a person can set for themselves lives on one Preferences screen (`/me
 | Profile | Language of the app | English first; others as translated | The browser's, else English |
 | Sign-in and security | Passkeys | Add, rename, remove | The one made at invitation |
 | Sign-in and security | Password and authenticator app | Set, change, remove | As set at invitation |
-| Sign-in and security | Where you are signed in | Each browser and `trace login` session, with Sign out | – |
+| Sign-in and security | Where you are signed in | Each browser and `tracectl login` session, with Sign out | – |
 | Notifications | Each of the four kinds (gate ready, question, spend, agent stuck) | In app, email, push, each on or off | In app and email on; push off |
 | Notifications | Email when unanswered for | Never, 15 min, 1 h, 4 h, next morning | 1 h |
 | Notifications | Quiet hours | A daily window and days | Off |
@@ -888,7 +888,7 @@ Twelve choices need an answer before the build starts; each has trace's recommen
 | Where CopilotKit's runtime runs | A small Lambda with response streaming, behind the same CloudFront address, registering each trace agent as an AG-UI `HttpAgent` | One place checks the person's token and project access before any agent sees a message | Browser talks to agents directly: every agent endpoint would need its own access checks |
 | How agents speak AG-UI | Add an AG-UI stream to trace's agent runtime, mapping its job steps, tool calls and questions onto AG-UI events | The interface reacts to typed events; questions become `useHumanInTheLoop` cards | Parse agent text in the browser: fragile, and loses the summary-first structure |
 | The one live connection | AWS AppSync Events (managed WebSocket channels, one per project, Cognito tokens accepted) | Managed fan-out with no servers; the API publishes record changes as they happen | API Gateway WebSockets: more to build (connection table, fan-out) for the same result |
-| Our own sign-in's backend | A small sign-in endpoint on the same address that calls Cognito's API and keeps the refresh token in an HTTP-only cookie; `trace login` moves to the same pages | Our look everywhere, passkeys included, with tokens out of browser storage | Pages calling Cognito from the browser alone: works, but the refresh token would have to live in browser storage |
+| Our own sign-in's backend | A small sign-in endpoint on the same address that calls Cognito's API and keeps the refresh token in an HTTP-only cookie; `tracectl login` moves to the same pages | Our look everywhere, passkeys included, with tokens out of browser storage | Pages calling Cognito from the browser alone: works, but the refresh token would have to live in browser storage |
 | Creating projects from the app | Add project onboarding to the API, admins only, reusing the installer's onboarding code | "Start your first project" can finish in the app | Keep it in the installer: every new project would mean re-running it |
 | The app's address | CloudFront's own address by default; a custom domain as an optional installer setting | Install stays two inputs | A domain required at install: adds DNS and certificates to the install |
 | Email notifications | Amazon SES, set up as an optional installer step; in-app only until it is | Email needs a verified sender, which a light install should not require | Email through Cognito's own sender: limited volume and wording |

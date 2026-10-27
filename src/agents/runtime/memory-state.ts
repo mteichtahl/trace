@@ -13,7 +13,7 @@
  *           memory_state_log  every deactivation and reactivation, append only
  *
  * Who writes it: the API runtime (memory.deactivate / memory.reactivate, after the access check and after the
- * record is verified to be this project's), and a person's own `trace memory` on a local installation. A project's
+ * record is verified to be this project's), and a person's own `tracectl memory` on a local installation. A project's
  * worker only reads it: its role may read projects/<slug>/*, and is denied writes under memory-state (an agent has
  * Bash and the role's credentials, and must not be able to bring a record back).
  *

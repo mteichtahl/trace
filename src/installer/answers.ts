@@ -75,7 +75,7 @@ export const AgentAnswers = z.object({
   /** where to look for the published images (`public.ecr.aws/<alias>`); empty: props.ts PUBLISHED_REGISTRY when set,
    * else the source repository's trace-images release, found at install time (src/installer/derive.ts) */
   imageRegistry: z.string().trim().regex(/^([a-z0-9.-]+(:\d+)?(\/[a-z0-9._-]+)*)?$/, 'a registry such as public.ecr.aws/<alias>, or empty').default(''),
-  /** also set this account up to publish trace's images (src/installer/release.ts, `trace release setup`): the
+  /** also set this account up to publish trace's images (src/installer/release.ts, `tracectl release setup`): the
    * TraceRelease stack in us-east-1, the source repository's release variables and its trace-images release, and the
    * first release run. null (the default): when the token administers the source repository (src/installer/derive.ts) */
   publishImages: z.boolean().nullable().default(null),
@@ -92,7 +92,7 @@ export const RUNNER_COMPUTE_TYPES = ['BUILD_GENERAL1_MEDIUM', 'BUILD_GENERAL1_LA
  *   token       always the token (no connection, no console step; the token is stored with CodeBuild)
  *   connection  always a connection (no token stored with CodeBuild; a new one needs one console authorization, and
  *               the installer waits for it after the first deploy)
- * Switch later with `trace upgrade --runner-auth <choice>` or by choosing again in `trace install`: the runner projects
+ * Switch later with `tracectl upgrade --runner-auth <choice>` or by choosing again in `tracectl install`: the runner projects
  * are updated in place. */
 export const RUNNER_AUTH = ['auto', 'token', 'connection'] as const
 

@@ -1,5 +1,5 @@
 /**
- * `trace doctor OWNER/REPO`: what the loop needs that the repository doesn't have yet, each with how to fix it.
+ * `tracectl doctor OWNER/REPO`: what the loop needs that the repository doesn't have yet, each with how to fix it.
  *
  * Read-only. Some checks need admin on the repository (secrets and rulesets are only listed to admins); a check it
  * cannot read is reported as such rather than guessed.
@@ -7,7 +7,7 @@
 import { type Runner, runCommand } from './onboard.js'
 import { RUNNER_VARIABLE } from './project.js'
 
-/** One check. `note`: not a failure, only worth knowing (shown, but `trace doctor` still exits 0 for it). */
+/** One check. `note`: not a failure, only worth knowing (shown, but `tracectl doctor` still exits 0 for it). */
 export interface Finding { ok: boolean; what: string; fix: string; note?: boolean }
 
 const WORKFLOWS = ['trace-prs.yml', 'trace-ci.yml', 'trace-worker.yml', 'trace-deploy.yml']
@@ -38,12 +38,12 @@ export function doctor(slug: string, run: Runner = runCommand): Finding[] {
   const repo = obj(api(`repos/${slug}`))
   if (!repo) return [{ ok: false, what: `${slug} is reachable`, fix: 'Check the name, and `gh auth status`.' }]
   const branch = String(repo.default_branch ?? 'main')
-  add(repo.allow_auto_merge === true, 'auto-merge is allowed', `trace onboard ${slug} --apply-settings (or Settings → General → Allow auto-merge).`)
+  add(repo.allow_auto_merge === true, 'auto-merge is allowed', `tracectl onboard ${slug} --apply-settings (or Settings → General → Allow auto-merge).`)
   add(repo.delete_branch_on_merge === true, 'merged branches are deleted', 'Settings → General → Automatically delete head branches.')
-  add(obj(api(`repos/${slug}/contents/.trace/project.db?ref=${branch}`)) !== null, `.trace/project.db is on ${branch}`, `Merge the onboarding PR (trace onboard ${slug}).`)
+  add(obj(api(`repos/${slug}/contents/.trace/project.db?ref=${branch}`)) !== null, `.trace/project.db is on ${branch}`, `Merge the onboarding PR (tracectl onboard ${slug}).`)
   const rules = obj(api(`repos/${slug}/contents/.trace/rules.md?ref=${branch}`))
   add(Number(rules?.size ?? 0) > 0, '.trace/rules.md has rules', 'Write the rules the agents must follow in .trace/rules.md.')
-  for (const wf of WORKFLOWS) add(obj(api(`repos/${slug}/contents/.github/workflows/${wf}?ref=${branch}`)) !== null, `workflow ${wf}`, `trace onboard ${slug} (it writes the workflows).`)
+  for (const wf of WORKFLOWS) add(obj(api(`repos/${slug}/contents/.github/workflows/${wf}?ref=${branch}`)) !== null, `workflow ${wf}`, `tracectl onboard ${slug} (it writes the workflows).`)
   const secrets = api(`repos/${slug}/actions/secrets`)
   if (obj(secrets)) {
     const s = names(secrets, 'secrets')
@@ -54,17 +54,17 @@ export function doctor(slug: string, run: Runner = runCommand): Finding[] {
     add(v.has('TRACE_HOME') || Boolean(orgHome?.value), 'TRACE_HOME (the central database)', 'Set TRACE_HOME = s3://<bucket>/<prefix> once for the organisation, or on this repository.')
     // with the variable, every job runs on the project's AWS CodeBuild runner; without it, on GitHub's runners: a note
     if (v.has(RUNNER_VARIABLE)) add(true, `${RUNNER_VARIABLE} (the AWS CodeBuild runner its jobs run on)`, '')
-    else out.push({ ok: true, note: true, what: `${RUNNER_VARIABLE} is not set: its jobs run on GitHub-hosted runners`, fix: `They move to AWS by themselves once \`trace install\` (with ${slug} among the repositories) adds the AWS runner and sets the variable.` })
+    else out.push({ ok: true, note: true, what: `${RUNNER_VARIABLE} is not set: its jobs run on GitHub-hosted runners`, fix: `They move to AWS by themselves once \`tracectl install\` (with ${slug} among the repositories) adds the AWS runner and sets the variable.` })
   } else {
     add(false, 'secrets and variables readable', 'Run doctor as an admin of the repository.')
   }
   const rulesets = api(`repos/${slug}/rulesets`)
-  if (Array.isArray(rulesets)) add(rulesets.some((r) => obj(r)?.name === 'trace'), "a ruleset requires the build's check", `trace onboard ${slug} --apply-settings (adds the "trace" ruleset).`)
+  if (Array.isArray(rulesets)) add(rulesets.some((r) => obj(r)?.name === 'trace'), "a ruleset requires the build's check", `tracectl onboard ${slug} --apply-settings (adds the "trace" ruleset).`)
   const labels = api(`repos/${slug}/labels?per_page=100`)
   if (Array.isArray(labels)) {
     const have = new Set(labels.map((l) => String(obj(l)?.name ?? '')))
     const missing = ['no-automerge', 'ci-red', 'agent-fix', 'deploy', 'deploy-held'].filter((l) => !have.has(l))
-    add(!missing.length, 'labels', `Missing ${missing.join(', ')}: trace onboard ${slug} --apply-settings.`)
+    add(!missing.length, 'labels', `Missing ${missing.join(', ')}: tracectl onboard ${slug} --apply-settings.`)
   }
   return out
 }

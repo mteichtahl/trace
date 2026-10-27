@@ -271,10 +271,10 @@ export async function start(opts: { port?: number; host?: string; jobs?: Jobs; p
   const jobs = opts.jobs ?? defaultJobs()
   const project = opts.project ?? (process.env.TRACE_PROJECT || undefined)
   const server = createAgentServer(jobs, { project })
-  if (project) process.stdout.write(`trace agent: serving ${project} only\n`)
+  if (project) process.stdout.write(`tracectl agent: serving ${project} only\n`)
   const port = opts.port ?? Number(process.env.PORT || 8080)
   await new Promise<void>((res) => server.listen(port, opts.host ?? '0.0.0.0', res))
-  process.stdout.write(`trace agent listening on ${opts.host ?? '0.0.0.0'}:${port}\n`)
+  process.stdout.write(`tracectl agent listening on ${opts.host ?? '0.0.0.0'}:${port}\n`)
   let stopping = false
   // ADOT (loaded with --require) shuts the OpenTelemetry SDK down as soon as SIGTERM arrives, which would drop the
   // spans of the jobs that end during the grace period. Its listener, and any other registered before this one, run

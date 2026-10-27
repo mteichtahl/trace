@@ -1,9 +1,9 @@
 /**
- * `trace db merge BASE OURS THEIRS`: a git merge driver for .trace/project.db, so two branches that both recorded runs
+ * `tracectl db merge BASE OURS THEIRS`: a git merge driver for .trace/project.db, so two branches that both recorded runs
  * or changed settings merge like text would, instead of as a binary conflict.
  *
  * Onboarding wires it up: `.gitattributes` names the driver for the file, and each clone (the worker's included) runs
- * `git config merge.trace-db.driver "trace db merge %O %A %B"`. Git calls it with the common ancestor, our version
+ * `git config merge.trace-db.driver "tracectl db merge %O %A %B"`. Git calls it with the common ancestor, our version
  * (the result is written back into it) and theirs.
  *
  *   runs, measurements, artifacts   union: their rows that ours lacks are added (keys are UUIDs, so nothing collides)
@@ -78,7 +78,7 @@ export function merge(base: string, ours: string, theirs: string): string[] {
 export function mergeMain(paths: readonly string[]): number {
   const [base, ours, theirs] = paths
   if (paths.length !== 3 || !base || !ours || !theirs) {
-    process.stderr.write('usage: trace db merge BASE OURS THEIRS\n')
+    process.stderr.write('usage: tracectl db merge BASE OURS THEIRS\n')
     return 2
   }
   const conflicts = merge(base, ours, theirs)

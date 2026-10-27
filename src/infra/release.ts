@@ -12,10 +12,10 @@
  *
  * The registry's address is `public.ecr.aws/<alias>`: its default alias, which ECR Public assigns by itself once the
  * account's first public repository exists (no console step; a custom alias is the only kind that needs the console,
- * and trace does not use one). CloudFormation can't read it, so `trace release setup` (src/installer/release.ts)
+ * and trace does not use one). CloudFormation can't read it, so `tracectl release setup` (src/installer/release.ts)
  * reads it with DescribeRegistries after the deploy and sets the source repository's TRACE_IMAGE_REGISTRY to it.
  *
- *   trace release setup         (deploys this stack and does the rest: README "Publishing images")
+ *   tracectl release setup         (deploys this stack and does the rest: README "Publishing images")
  *   npm run deploy:release      (this stack only: `cdk deploy TraceRelease --app "node dist/infra/release.js"`)
  *
  * Settings, from CDK context (-c) or the environment:
@@ -105,7 +105,7 @@ export class TraceReleaseStack extends Stack {
     new CfnOutput(this, RELEASE_ROLE_OUTPUT, { value: this.role.roleArn, description: 'The release workflow\'s role (the source repository\'s TRACE_RELEASE_ROLE)' })
     new CfnOutput(this, 'AgentRepositoryArn', { value: this.repositories.agent.attrArn })
     new CfnOutput(this, 'GpuRepositoryArn', { value: this.repositories.gpu.attrArn })
-    new CfnOutput(this, 'RegistryAlias', { value: 'aws ecr-public describe-registries --region us-east-1 (its default alias; trace release setup reads it)', description: 'The registry is public.ecr.aws/<its default alias>, which CloudFormation cannot read' })
+    new CfnOutput(this, 'RegistryAlias', { value: 'aws ecr-public describe-registries --region us-east-1 (its default alias; tracectl release setup reads it)', description: 'The registry is public.ecr.aws/<its default alias>, which CloudFormation cannot read' })
   }
 }
 

@@ -1,5 +1,5 @@
 /**
- * `trace update-installation`: an installation updates itself when trace's own repository's default branch changes,
+ * `tracectl update-installation`: an installation updates itself when trace's own repository's default branch changes,
  * with nobody running the installer (README "Staying up to date"). Run by the update-installation job of trace's own
  * .github/workflows/ci.yml, after the tests pass on a push to main, with the credentials of the installation's
  * `<prefix>-self-update` role (GitHub OIDC; src/infra/stack.ts). Non-interactive, and it asks nothing:

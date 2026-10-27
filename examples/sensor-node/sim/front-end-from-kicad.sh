@@ -11,7 +11,7 @@
 #   D2 and R4 (the status LED) are removed: they are not part of the analog path.
 # Run from examples/sensor-node.
 set -e
-trace tool sim.kicad_spice schematic=hardware/sensor-node.kicad_sch --args '{
+tracectl tool sim.kicad_spice schematic=hardware/sensor-node.kicad_sch --args '{
   "analyses": [".op", ".ac dec 50 1 1meg"],
   "replace": {
     "J1": "V1 /VIN 0 DC 6 AC 1",
