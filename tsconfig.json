@@ -28,6 +28,7 @@
     "src/**/*.ts"
   ],
   "exclude": [
+    "web/**",
     "src/**/*.test.ts",
     "src/installer/ui/**"
   ]

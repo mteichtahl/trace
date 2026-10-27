@@ -143,7 +143,7 @@ export function stackQuotaErrors(stack: Stack, hint: string): string[] {
 export const SOURCE_EXCLUDE = [
   '.env', '.env.*', '**/.env', '**/.env.*', '*.pem', '**/*.pem', '*.key', '**/*.key', '.aws', '**/.aws', '.npmrc.local', '**/id_rsa*',
   '.git', 'node_modules', '**/node_modules', 'dist', 'cdk.out', '.venv', '**/__pycache__', '**/*.pyc', 'test', 'python/tests',
-  '.trace', '*.db', '*.db-*', 'coverage',
+  '.trace', '*.db', '*.db-*', 'coverage', 'web/**',
 ]
 
 export class TraceStack extends Stack {
