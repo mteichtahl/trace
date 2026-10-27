@@ -35,6 +35,7 @@ const MUTATING: ReadonlyArray<readonly [string, What]> = [
   ['waiver.add', 'journey'],
   ['journey.criterion.open', 'journey'],
   ['chats.append', 'chats'],
+  ['chats.reply', 'chats'],
   ['chats.rename', 'chats'],
   ['me.set', 'preferences'],
   // the record's build side and the guided skills (skill.draft is not here: it is saved on every keystroke)

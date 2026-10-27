@@ -82,6 +82,13 @@ describe('/api/call', () => {
     expect(w.logs.some((l) => l.warning === 'publish: some events were not delivered')).toBe(true)
   })
 
+  it('never passes chats.reply on: trace\'s words are kept by the chat agent alone', async () => {
+    const w = world()
+    const r = await w.serve(call({ action: 'chats.reply', repo: 'acme/board', thread: 'abcdefgh', after: 'm', messages: [{ role: 'assistant', text: 'Started.' }] }))
+    expect(r.status).toBe(403)
+    expect(w.runtime.calls).toEqual([])
+  })
+
   it('rejects a body over 1 MB, and one with no action', async () => {
     const w = world()
     expect((await w.serve(call({ action: 'status', blob: 'x'.repeat(1024 * 1024) }))).status).toBe(413)

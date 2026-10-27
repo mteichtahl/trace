@@ -4,6 +4,7 @@
  * status and body, streamed through as it arrives.
  *
  *   before   the bearer is verified here (a fast reject; the runtime verifies it again and decides access)
+ *   refused  BACKEND_ONLY actions (chats.reply: trace's words are kept by the chat agent from what it said)
  *   session  one runtime session per person: `trace-web-<first 40 hex of sha256(sub)>`, stable across containers
  *   after    an ok answer to a mutating action (src/web/events.ts changeOf) publishes `record.changed` to every member
  *            of the project (`project.members`, asked with the same token) and to the caller; without a repo (an
@@ -16,9 +17,13 @@ import { invocationUrl } from '../api/runtime-url.js'
 import type { WebConfig } from './config.js'
 import { type WebDeps, signedIn } from './deps.js'
 import { changeOf, type LiveEvent, type Publisher, appsyncPublisher, userChannel } from './events.js'
-import { JSON_HEADERS, MB, parseBody, route } from './http.js'
+import { JSON_HEADERS, MB, WebError, parseBody, route } from './http.js'
 
 const Body = z.object({ action: z.string().min(1).max(64).regex(/^[a-z][a-z0-9_.]*$/, 'an action name') }).catchall(z.unknown())
+
+/** Actions only the web backend itself calls: trace's replies are kept by the chat agent (src/web/agui.ts) from what
+ * it said, never from what an app sends. */
+export const BACKEND_ONLY = new Set(['chats.reply'])
 
 const CALL_TIMEOUT_MS = 14 * 60_000
 
@@ -95,6 +100,7 @@ export function callRoutes(deps: WebDeps, publisher?: () => Publisher) {
     route('POST', '/api/call', async (req, ctx) => {
       const s = await signedIn(req, ctx, deps)
       const { action, ...args } = parseBody(req, Body, MB)
+      if (BACKEND_ONLY.has(action)) throw new WebError(403, 'that action is the chat agent\'s own', 'backend_only')
       const who: Caller = { config: s.config, token: s.token, sub: s.claims.sub }
       return {
         stream: async (sink) => {

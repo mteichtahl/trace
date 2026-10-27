@@ -19,7 +19,7 @@
  * List and conditional Put there).
  */
 import { z } from 'zod'
-import { type Author, ChatStore, MAX_MESSAGE_CHARS, MAX_USER_CHARS, ThreadId } from '../core/chats.js'
+import { type Author, type ChatMessage, ChatStore, MAX_MESSAGE_CHARS, MAX_USER_CHARS, ThreadId, isAuthor } from '../core/chats.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { ActionError, type Context, Repo, def, hashOf, hashesOf, label, plainly, storeAt } from './action-kit.js'
 
@@ -46,6 +46,16 @@ const limited = (ctx: Context): void => {
   if (!takeChatWrite(ctx.principal.sub)) throw new ActionError('Too many messages at once: wait a moment and try again.')
 }
 
+/** Each message with `yours`: a person's turn by its author; a reply by whom it answers (`for_hash`, else the turn
+ * before it). */
+export function markYours(messages: readonly ChatMessage[], who: Author): (ChatMessage & { yours: boolean })[] {
+  let turn = false
+  return messages.map((m) => {
+    if (m.role === 'user') { turn = isAuthor(who, m.by_hash); return { ...m, yours: turn } }
+    return { ...m, yours: m.for_hash ? isAuthor(who, m.for_hash) : turn }
+  })
+}
+
 const Parts = z.unknown().optional()
 /** A person's message: text only (any `role` sent is ignored: it is theirs). */
 const NewMessage = z.object({ text: z.string().max(MAX_USER_CHARS), parts: Parts })
@@ -55,10 +65,12 @@ export const CHAT_ACTIONS = {
   'chats.list': def('read', Repo.extend({ query: z.string().max(200).optional(), limit: z.number().int().min(1).max(500).default(100) }), async (a, ctx) =>
     ({ repo: a.repo, threads: await store(ctx, a.repo).list({ query: a.query, limit: a.limit }) })),
 
+  // each message says whether it is `yours`: your own turn, or trace's reply (and tool rows) to one of yours. The app
+  // replays only those as the conversation; the rest are other people's, quoted as data (src/web/agui.ts)
   'chats.get': def('read', Repo.extend({ thread: ThreadId, before: z.string().max(40).optional(), limit: z.number().int().min(1).max(500).default(50) }), async (a, ctx) => {
     const t = await store(ctx, a.repo).get(a.thread, { before: a.before, limit: a.limit })
     if (!t) throw new ActionError(`There is no conversation ${a.thread} on this project.`)
-    return { repo: a.repo, ...t }
+    return { repo: a.repo, ...t, messages: markYours(t.messages, author(ctx)) }
   }),
 
   'chats.append': def('read', Repo.extend({ thread: ThreadId.optional(), title: z.string().max(120).optional(), messages: z.array(NewMessage).min(1).max(20) }), async (a, ctx) => {
