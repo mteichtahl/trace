@@ -17,6 +17,8 @@ export interface WaitLineProps {
   project?: string
   /** runs the check (job.check_now / tools.check_now); the spinner shows until it resolves */
   onCheckNow?: (wait: Wait) => Promise<unknown>
+  /** the button's words (default "Check now"; "Sync now" for a knowledge base sync) */
+  checkLabel?: string
   className?: string
 }
 
@@ -27,7 +29,7 @@ export function waitDetail(w: Wait, now: number): string {
   return parts.join(' · ')
 }
 
-export function WaitLine({ wait, project, onCheckNow, className }: WaitLineProps) {
+export function WaitLine({ wait, project, onCheckNow, checkLabel = 'Check now', className }: WaitLineProps) {
   const now = useNow(1000)
   const [checking, setChecking] = useState(false)
   const detail = waitDetail(wait, now)
@@ -57,7 +59,7 @@ export function WaitLine({ wait, project, onCheckNow, className }: WaitLineProps
           }}
         >
           {checking && <Loader2 className="animate-spin" />}
-          {checking ? 'Checking' : 'Check now'}
+          {checking ? 'Checking' : checkLabel}
         </Button>
       )}
     </div>
