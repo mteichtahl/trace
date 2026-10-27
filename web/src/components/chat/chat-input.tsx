@@ -13,7 +13,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { usePrefs } from '@/lib/prefs'
 import { cn } from '@/lib/utils'
 import { type RecallState, dedupe, down, escape, initialRecall, up } from './recall'
-import { type Dictation, spokenCommand, startDictation } from './voice/dictation'
+import { type Dictation, type DictationWords, spokenCommand, startDictation } from './voice/dictation'
 import { stopSpeaking } from './voice/speech'
 
 export interface ChatInputProps {
@@ -37,6 +37,7 @@ export function ChatInput({ onSend, onStop, running, history, placeholder = 'Ask
   const [recall, setRecall] = useState<RecallState>(initialRecall)
   const [listening, setListening] = useState<'off' | 'starting' | 'on'>('off')
   const [level, setLevel] = useState(0)
+  const [words, setWords] = useState<DictationWords | null>(null)
   const ref = useRef<HTMLTextAreaElement>(null)
   const dict = useRef<Dictation | null>(null)
   const before = useRef('')
@@ -130,6 +131,7 @@ export function ChatInput({ onSend, onStop, running, history, placeholder = 'Ask
           setLevel(0)
         },
       })
+      setWords(dict.current.words)
       setListening('on')
     } catch (e) {
       setListening('off')
@@ -168,6 +170,11 @@ export function ChatInput({ onSend, onStop, running, history, placeholder = 'Ask
             ))}
           </span>
           {listening === 'starting' ? 'Starting the microphone…' : 'Listening…'}
+          {listening === 'on' && words && (
+            <span className="ml-auto text-muted-foreground" title={words.note}>
+              {words.used ? 'Using this project\'s part and net names' : words.state === 'PENDING' ? 'Project words: getting ready' : 'Without project words'}
+            </span>
+          )}
         </div>
       )}
       <Textarea

@@ -118,8 +118,9 @@ describe('the nested layout', () => {
     // client) and four outputs (WebUrl, WebDistributionId, EventsApiEndpoint, WebClientId). Cost and shipping add
     // thirteen, whatever the number of projects: the daily cost read and the hourly order watch (each its function,
     // role, policy, log group, schedule and invoke permission: src/infra/cost.ts, src/infra/order-watch.ts) and the
-    // API role's cost policy
-    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:103/25:0', '24:130/25:4', '60:166/25:4'])
+    // API role's cost policy. (The dictation vocabularies' read, src/infra/voice.ts, tips the API role's inline policy
+    // over sooner.)
+    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:104/25:1', '24:130/25:4', '60:166/25:4'])
     // without a connection given, the stack creates one: one more resource of the parent's, and nothing more per project
     const created = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: {} }), 'Count1Created')
     expect(count(json(created.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0) + 1)
@@ -206,7 +207,15 @@ describe('the nested layout', () => {
           if (c.Type === 'AWS::IAM::Policy') c.Properties.PolicyDocument.Statement = c.Properties.PolicyDocument.Statement.filter((x: { Sid?: string }) => !String(x.Sid).startsWith('ProjectGpuWait'))
           return c
         }
-        const nestedOwn = Object.entries(nt.Resources).filter(([, r]) => !jobEvents.includes(r.Type)).map(([id, r]) => [id, withoutJobEvents(r)] as const)
+        // the nested worker role's policy also has the job events' statements, so CDK moves what no longer fits its
+        // inline policy into a managed policy (…RuntimeRoleOverflowPolicy): folded back in to compare with flat's one
+        const folded = Object.fromEntries(Object.entries(nt.Resources).filter(([id]) => !/RuntimeRoleOverflowPolicy/.test(id)).map(([id, r]) => [id, JSON.parse(JSON.stringify(r)) as Res]))
+        for (const [id, r] of Object.entries(nt.Resources).filter(([oid]) => /RuntimeRoleOverflowPolicy/.test(oid))) {
+          const into = Object.entries(folded).find(([fid]) => /RuntimeRoleDefaultPolicy/.test(fid))?.[1] as (Res & { Properties: Record<string, any> }) | undefined
+          expect(into, id).toBeDefined()
+          into?.Properties.PolicyDocument.Statement.push(...(r as Res & { Properties: Record<string, any> }).Properties.PolicyDocument.Statement)
+        }
+        const nestedOwn = Object.entries(folded).filter(([, r]) => !jobEvents.includes(r.Type)).map(([id, r]) => [id, withoutJobEvents(r)] as const)
         expect(JSON.stringify(flatOwn)).not.toMatch(/ProjectGpuWait|TRACE_BATCH_EVENTS_TOPIC/)
         expect(Object.values(nt.Resources).filter((r) => jobEvents.includes(r.Type))).toHaveLength(4)
         expect(flatOwn.filter(([, r]) => jobEvents.includes(r.Type))).toHaveLength(0)
@@ -286,6 +295,9 @@ describe('inactive memories in both layouts', () => {
 describe('the flat layout and the move to nested stacks', () => {
   it('keeps every project in the parent, with every output, for installations made before nested stacks', () => {
     const s = synth(InfraPropsSchema.parse({ ...base, layout: 'flat' }), 'Flat')
+    // the API is told the layout, so the app can say what a flat installation gives a project (installation.layout)
+    const apiEnv = (Object.values(s.parent.findResources('AWS::BedrockAgentCore::Runtime')) as { Properties: { AgentRuntimeName: string; EnvironmentVariables: Record<string, unknown> } }[]).find((r) => r.Properties.EnvironmentVariables.TRACE_AGENT_MODE === 'api')
+    expect(apiEnv?.Properties.EnvironmentVariables.TRACE_LAYOUT).toBe('flat')
     expect(s.nested.size).toBe(0)
     const outputs = json(s.parent).Outputs ?? {}
     expect((outputs as Record<string, { Value: unknown }>).Layout?.Value).toBe('flat')

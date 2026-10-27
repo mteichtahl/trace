@@ -107,6 +107,10 @@ describe('the answers the web app reads', () => {
           'usage.month': { args: { month: '2026-10' }, result: await run(ADMIN, 'usage.month', { month: '2026-10' }) },
         }
       })()),
+      // the small gaps: what Admin › Installation and New project read, and what the backend reads for voice and chat
+      'installation.layout': { args: {}, result: (await perform('installation.layout', {}, { principal: USER, deps: { ...deps, layout: 'flat' } })).result },
+      'prompts.chat': { args: {}, result: await run(USER, 'prompts.chat') },
+      'voice.vocabulary': { args: { repo: REPO, language: 'en-AU' }, result: (await perform('voice.vocabulary', { repo: REPO, language: 'en-AU' }, { principal: USER, deps: { ...deps, installationPrefix: 'trace', vocabularies: async () => ({ get: async () => ({ state: 'READY' as const }) }) } })).result },
     }) as Record<string, unknown>
     if (process.env.TRACE_WRITE_ANSWERS) writeFileSync(OUT, `${JSON.stringify(answers, null, 2)}\n`)
     const kept = JSON.parse(readFileSync(OUT, 'utf8')) as Record<string, unknown>

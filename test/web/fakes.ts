@@ -58,6 +58,10 @@ export class FakeRuntime {
   calls: { action: string; args: Record<string, unknown>; headers: Record<string, string>; url: string }[] = []
   answers = new Map<string, (args: Record<string, unknown>) => { status?: number; body: unknown }>()
   appsync: { url: string; headers: Record<string, string>; body: string }[] = []
+  /** the chat agent's prompts.chat calls (src/web/chat-prompts.ts), kept apart from `calls` */
+  promptCalls: { headers: Record<string, string> }[] = []
+  /** what prompts.chat answers (default: no installation override) */
+  chatPrompts: () => { status?: number; body: unknown } = () => ({ body: { ok: true, result: { entries: [{ id: 'chat.role', text: null, version: null, sha: 'x' }] } } })
   fetch: typeof fetch = async (input, init) => {
     const url = String(input)
     const headers = Object.fromEntries(Object.entries((init?.headers ?? {}) as Record<string, string>).map(([k, v]) => [k.toLowerCase(), v]))
@@ -67,6 +71,11 @@ export class FakeRuntime {
       return new Response(JSON.stringify({ successful: [], failed: [] }), { status: 200 })
     }
     const { action, ...args } = JSON.parse(body) as { action: string } & Record<string, unknown>
+    if (action === 'prompts.chat' && !this.answers.has(action)) {
+      this.promptCalls.push({ headers })
+      const r = this.chatPrompts()
+      return new Response(JSON.stringify(r.body), { status: r.status ?? 200, headers: { 'content-type': 'application/json' } })
+    }
     this.calls.push({ action, args, headers, url })
     const a = this.answers.get(action)
     const r = a ? a(args) : { body: { ok: false, error: `unknown action ${JSON.stringify(action)}` } }

@@ -136,6 +136,7 @@ export interface Actions {
   'job.control': { args: { id: string; op: JobOp; reason?: string }; result: { ok: boolean; kept?: string; reason?: string; state?: string | null } }
   // installation policy and people (src/api/actions-me.ts, actions-people.ts)
   'policy.get': { args: Record<string, never>; result: { locks: Record<string, string>; updated: string | null; by: string | null } }
+  'installation.layout': { args: Record<string, never>; result: import('@/components/installation/layout').LayoutView }
   'policy.set': { args: { key: string; reason: string | null }; result: { locks: Record<string, string>; changed: boolean } }
   'users.history': { args: { who: string; limit?: number }; result: { sub: string; email: string | null; entries: { at: string; by: string; repo: string | null; action: 'assign' | 'unassign' | 'class'; detail: string | null; text: string }[] } }
 }

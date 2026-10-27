@@ -13,7 +13,8 @@
  *                 whether there is one): when the token is to be used and CodeBuild has none, it does not deploy, and
  *                 says to run the installer again, which imports it
  *   3 deploy      `cdk deploy` of the stack with those settings, from this checkout (so the agent image is built from the
- *                 commit that was merged), as the installer runs it
+ *                 commit that was merged), as the installer runs it; first, with the web app's WAF outside us-east-1,
+ *                 `<prefix>-edge` there (src/installer/edge.ts; it never bootstraps CDK in us-east-1: the installer does)
  *   4 runners     each repository with a build runner gets TRACE_CODEBUILD_PROJECT (and loses it where its runner is
  *                 gone), with the shared agent token from Secrets Manager. When that token may not change a repository's
  *                 variables, the job does not fail: the step summary says which variable to set to what, by hand
@@ -53,7 +54,8 @@ import {
 } from './aws.js'
 import { cdkBin, cdkDeployArgs, runStreaming } from './bootstrap.js'
 import { checkToken, deleteVariable, getVariable, repositoryDefaultBranch, setSecret, setVariable } from './github.js'
-import { type PendingEntry, type PendingIo, type PendingRecord, addPending, markAdded, markAttempt, parsePending, s3PendingIo } from './pending.js'
+import { deployEdge, withAcl } from './edge.js'
+import { FLAT_NOTE, type PendingEntry, type PendingIo, type PendingRecord, addPending, markAdded, markAttempt, parsePending, s3PendingIo } from './pending.js'
 import { InstallationRecordSchema } from './record.js'
 
 /** What the update talks to (tests replace every one). */
@@ -199,12 +201,14 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
   }
   // the ones an earlier update added first (they are projects of the stack now), then the new ones
   const carried = pending.filter((p) => p.record.status === 'added').map((p) => ({ ...p, record: { ...p.record, status: 'pending' as const, attempts: 0 } }))
-  const kept = addPending(props as InfraInput, carried, (r) => pending.find((p) => p.record.repo.toLowerCase() === r)?.record.branch ?? 'main')
+  const kept = addPending(props as InfraInput, carried, (r) => pending.find((p) => p.record.repo.toLowerCase() === r)?.record.branch ?? 'main', { deployed: true })
   const grown = addPending(kept.props, fresh, (r) => branches.get(r) ?? 'main')
   props = grown.props as Record<string, unknown>
   for (const k of kept.skipped) say(`${k.repo}, added by an earlier update, is no longer deployed by it: ${k.why}.`)
   for (const k of grown.skipped) say(`${k.repo} (created in the web app) is not added by this update: ${k.why}.`)
-  if (grown.added.length) say(`Adding ${grown.added.map((x) => x.repo).join(', ')} (created in the web app): ${grown.added.length === 1 ? 'its' : 'their'} agent, memory, knowledge base and build runner.`)
+  const flat = InfraPropsSchema.parse(props).layout === 'flat'
+  if (grown.added.length) say(`Adding ${grown.added.map((x) => x.repo).join(', ')} (created in the web app): ${grown.added.length === 1 ? 'its' : 'their'} agent, memory${flat ? '' : ', knowledge base'} and build runner${flat ? ' (this installation keeps every project in one stack, the flat layout: no knowledge base)' : ''}.`)
+  if (flat) d.summary(FLAT_NOTE)
   const mark = async (key: string, rec: PendingRecord): Promise<void> => {
     try { await d.pending?.put(creds, region, bucket, key, JSON.stringify(rec, null, 2)) } catch (e) { log(`Could not update ${key} (${redact(message(e))}).`) }
   }
@@ -234,9 +238,16 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
   const choice = auth.auth === 'connection' ? auth.connection : null
   const ready = choice ? choice.ready : true
 
-  // 3 — the deploy
-  log(`Deploying ${stack} from this commit${ready ? '' : ', without the build runners (the GitHub connection is not authorized yet)'}. When the agent image changed, CodeBuild builds it again: allow 20–40 minutes.`)
+  // 3 — the deploy: first the web app's WAF in us-east-1 when the installation is elsewhere (src/installer/edge.ts; it
+  // never bootstraps there, and a failure keeps the ACL the app had), then the stack
   const app = ['--app', `node ${join(REPO_ROOT, 'dist', 'infra', 'app.js')}`]
+  const edge = await deployEdge({
+    input, account: InfraPropsSchema.parse(input).account, app, env: { ...awsEnv(creds, region), CDK_DISABLE_VERSION_CHECK: '1', CI: '1' }, bootstrap: false,
+    deps: { cdk: d.cdk, outputs: async (name, r) => { try { return await d.outputs(creds, r, name) } catch (e) { if (/not found|does not exist/i.test(message(e))) return null; throw e } }, log: (l) => log(redact(l)) },
+  })
+  input = withAcl(input, edge.aclArn)
+  if (edge.note) { if (edge.ok) log(edge.note); else say(edge.note) }
+  log(`Deploying ${stack} from this commit${ready ? '' : ', without the build runners (the GitHub connection is not authorized yet)'}. When the agent image changed, CodeBuild builds it again: allow 20–40 minutes.`)
   const code = await d.cdk(cdkDeployArgs(stack, app), {
     ...awsEnv(creds, region), TRACE_INFRA: JSON.stringify(input), CDK_DISABLE_VERSION_CHECK: '1', CI: '1',
   }, (l) => log(redact(l)))

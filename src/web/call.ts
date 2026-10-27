@@ -9,13 +9,15 @@
  *   after    an ok answer to a mutating action (src/web/events.ts changeOf) publishes `record.changed` to every member
  *            of the project (`project.members`, asked with the same token) and to the caller; without a repo (an
  *            admin's people or integrations change, me.set) to the caller only. A failed publish is logged and never
- *            fails the call: the answer has already gone out.
+ *            fails the call: the answer has already gone out. A prompts write also clears this container's copy of
+ *            the chat agent's instructions (src/web/chat-prompts.ts)
  */
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { invocationUrl } from '../api/runtime-url.js'
 import type { WebConfig } from './config.js'
 import { type WebDeps, signedIn } from './deps.js'
+import { PROMPT_WRITES, chatPrompts } from './chat-prompts.js'
 import { changeOf, type LiveEvent, type Publisher, appsyncPublisher, userChannel } from './events.js'
 import { JSON_HEADERS, MB, WebError, parseBody, route } from './http.js'
 
@@ -109,6 +111,8 @@ export function callRoutes(deps: WebDeps, publisher?: () => Publisher) {
           const answer = await callApi(deps, who, action, args, { onStart: open, onChunk: (c) => sink.write(c) })
           open(answer.status)
           sink.end()
+          // a change to the prompts: the chat agent's instructions are asked for again (src/web/chat-prompts.ts)
+          if (PROMPT_WRITES.has(action) && answer.status === 200) chatPrompts(deps).invalidate()
           await publishChange(deps, who, action, args, answer, publisher?.())
         },
       }

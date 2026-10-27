@@ -69,7 +69,7 @@ All bodies are JSON unless noted. Errors: `{ ok: false, error, code? }` with a f
 | `POST /api/agui` | bearer, AG-UI `RunAgentInput` | `text/event-stream` of AG-UI events |
 | `GET /api/voice/voices?language=en-AU` | bearer | `{ voices: [{ id, name, gender, engines }] }` |
 | `POST /api/voice/speak` | bearer, `{ text, voice, engine?, rate? }` | `{ url, marks }` (signed S3 URL of the MP3, and word speech marks) |
-| `POST /api/voice/listen` | bearer, `{ language, repo? }` | `{ url }`: signed Transcribe streaming WebSocket URL, 5 minutes; vocabulary phrases from the project when `repo` |
+| `POST /api/voice/listen` | bearer, `{ language, repo? }` | `{ url, vocabulary? }`: signed Transcribe streaming WebSocket URL, 5 minutes; with `repo`, the project's custom vocabulary (`voice.vocabulary`, asked as the person) is named in it when READY, and `vocabulary: { state, used, note }` says whether |
 | `GET /api/ops?range=24h&repo=` | bearer | `{ status, tiles, alarms, sections: [{ id, title, widgets: [{ id, title, kind, unit, series: [{ label, repo?, points: [[t, v]] }] }] }], updatedAt, nextAt }` filtered by access |
 
 ## Live events (AppSync Events)
@@ -113,7 +113,7 @@ reviewer. `require_(p, repo, 'write')` needs the contributor part (or admin). `p
 | Action | Need | Does |
 | --- | --- | --- |
 | `project.members` | read | `[{ sub, email, name?, class, part }]` for the project, admins included and marked |
-| `projects.create` | admin | onboard a repository (new or existing; reuses `src/installer/onboard-api.ts`), register it, assign people with parts, write the journey record's first state from the template; returns what was done and what waits (the project's own cloud resources come with the next stack update, shown as a wait: the request is recorded at `installation/pending-projects/<owner>/<repo>.json`, which the self-update job adds to the deployed repositories and marks added, and the installer takes into its answers; `src/installer/pending.ts`. The wait says which comes next: with the self-update on (`TRACE_SELF_UPDATE`), its ci workflow at the next change to trace's main branch, or run by hand there; otherwise the next installer run) |
+| `projects.create` | admin | onboard a repository (new or existing; reuses `src/installer/onboard-api.ts`), register it, assign people with parts, write the journey record's first state from the template; returns what was done and what waits (the project's own cloud resources come with the next stack update, shown as a wait: the request is recorded at `installation/pending-projects/<owner>/<repo>.json`, which the self-update job adds to the deployed repositories and marks added, and the installer takes into its answers; `src/installer/pending.ts`. The wait says which comes next: with the self-update on (`TRACE_SELF_UPDATE`), its ci workflow at the next change to trace's main branch, or run by hand there; otherwise the next installer run. In a flat installation (`TRACE_LAYOUT`) it also says the project gets no knowledge base and that the update adds it only below 15 projects) |
 | `journey.get` | read | the project's journey: template, revision, stages (state, criteria met/total, reopened), gates (state, criteria, evidence, waivers, signature), next step, questions, waivers, decisions log |
 | `journey.criterion.open` | read | records that this person opened a criterion's evidence (the Sign button needs it) |
 | `gate.sign` / `gate.return` | admin / write | sign (every criterion met or waived, evidence opened, waivers acknowledged) or return with a reason; a signature that cuts a release also copies the record into the repository |
@@ -139,6 +139,9 @@ reviewer. `require_(p, repo, 'write')` needs the contributor part (or admin). `p
 | `skill.get` / `skill.draft` / `skill.drafts` / `skill.submit` | read / read / read / write | a guided skill's bar computed from the record (`unavailable` where it cannot be yet), the person's draft in the journey store, and submit (refused unless every check is met or waived; Waiver and Question answer go through `waiver.add` and `question.answer`) |
 | `policy.get` / `policy.set` | signed-in / admin | the installation's locked settings (`me.get` answers them as `locks`; `me.set` refuses a locked key) |
 | `users.history` | admin | a person's assignment log in words |
+| `voice.vocabulary` / `voice.vocabulary.sync` | read / write | the state of the project's dictation vocabulary for a language (`READY`, `PENDING`, `FAILED`, `NONE`, `usable`), and remaking it on the project's worker (`src/api/actions-voice.ts`, `src/tools/voice`) |
+| `installation.layout` | signed-in (a class) | `{ layout: 'flat'\|'nested', projects: { max, updateMax }, has: { knowledgeBase, cpuQueue, answerEvents }, note, recommendation?, move? }`: what a flat installation lacks and how to move (`src/api/actions-layout.ts`); shown on New project and Admin › Installation |
+| `prompts.chat` | signed-in (a class) | the installation's text of each editable `chat.*` entry (null: the default), never a locked one; the chat agent asks for it as the person and keeps it 60 s per container (`src/web/chat-prompts.ts`), cleared by a prompts write through that container |
 
 The app reads the answers whose shape differs from its screens' through `web/src/lib/readers.ts` (journey.get, inbox,
 me.get, project.members, users.list, files.list, files.url, gate.sign, projects.create), tested against real answers

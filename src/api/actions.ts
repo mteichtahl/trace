@@ -97,6 +97,9 @@
  *   actions-skills.ts    skill.get, skill.draft, skill.drafts, skill.submit
  *   actions-design.ts    design.decide
  *   actions-me.ts        also policy.get, policy.set
+ *   actions-prompts.ts   prompts.chat (the chat agent's editable instructions as the installation has them)
+ *   actions-voice.ts     voice.vocabulary, voice.vocabulary.sync (dictation's project words)
+ *   actions-layout.ts    installation.layout (flat or nested, what that means, and how to move)
  */
 import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -138,6 +141,9 @@ import { BUILD_ACTIONS } from './actions-build.js'
 import { COST_ACTIONS } from './actions-cost.js'
 import { SKILL_ACTIONS } from './actions-skills.js'
 import { PROJECT_ACTIONS } from './actions-projects.js'
+import { PROMPT_ACTIONS } from './actions-prompts.js'
+import { VOICE_ACTIONS } from './actions-voice.js'
+import { LAYOUT_ACTIONS } from './actions-layout.js'
 import type { CognitoUser } from './aws.js'
 
 export {
@@ -145,7 +151,7 @@ export {
 } from './action-kit.js'
 
 /** Tools that change state outside their scratch clone (the shared datasheet library and parts links): write. */
-export const WRITE_TOOLS: ReadonlySet<string> = new Set(['datasheets.add', 'datasheets.acknowledge', 'parts.fetch_datasheet', 'kb.sync'])
+export const WRITE_TOOLS: ReadonlySet<string> = new Set(['datasheets.add', 'datasheets.acknowledge', 'parts.fetch_datasheet', 'kb.sync', 'voice.vocabulary'])
 
 /** Tools scoped by the session's environment (a job's project and agent), not by the request: never through the API.
  * The API reaches memory through memory.list and memory.recall, scoped to the project the access check passed.
@@ -647,6 +653,9 @@ export const ACTIONS = {
   ...COST_ACTIONS,
   ...SKILL_ACTIONS,
   ...DESIGN_ACTIONS,
+  ...PROMPT_ACTIONS,
+  ...VOICE_ACTIONS,
+  ...LAYOUT_ACTIONS,
 } satisfies Record<string, Action<z.ZodType>>
 
 export type ActionName = keyof typeof ACTIONS

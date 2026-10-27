@@ -11,6 +11,7 @@
  *   dashboards              the CloudWatch dashboards Operations shows
  *   model                   the Bedrock model or inference profile for the chat agent (default below)
  *   features                passkeys, email, voice, ops
+ *   waf                     whether AWS WAF is in front of the app, and its limits per address (shown on Admin)
  */
 import { z } from 'zod'
 
@@ -33,6 +34,8 @@ export const WebConfig = z.object({
     voice: z.boolean().default(true),
     ops: z.boolean().default(true),
   }).default({ passkeys: true, email: true, voice: true, ops: true }),
+  /** the app's AWS WAF (src/infra/edge.ts): whether one is in front of it, and its limits; absent: an older stack */
+  waf: z.object({ enabled: z.boolean(), own: z.boolean().default(false), apiRequestsPer5Minutes: z.number(), authRequestsPer5Minutes: z.number() }).optional(),
 })
 export type WebConfig = z.output<typeof WebConfig>
 
@@ -44,6 +47,7 @@ export function publicConfig(c: WebConfig): Record<string, unknown> {
   return {
     region: c.region, prefix: c.prefix, userPoolId: c.userPoolId, clientId: c.clientId,
     events: { http: c.events.http, realtime: c.events.realtime }, features: c.features,
+    ...(c.waf ? { waf: c.waf } : {}),
   }
 }
 

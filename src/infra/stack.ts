@@ -84,6 +84,8 @@ import { GithubConnection, RunnerProject } from './runner.js'
 import { ACTUALS_OBJECTS, CostRead } from './cost.js'
 import { OrderWatch, WATCH_OBJECTS, orderWatchName } from './order-watch.js'
 import { orderWatchSecretsPrefix } from '../core/integrations-catalog.js'
+import { apiVocabularyStatement } from './voice.js'
+import { EDGE_REGION, edgeNeeded, edgeStackName } from './edge.js'
 import { SELF_WRITABLE, TraceWeb, addWebClient, traceWebProps } from './web.js'
 import { ACCESS_PREFIX, AGENT_FACTS, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
@@ -495,6 +497,8 @@ export class TraceStack extends Stack {
       }))
     }
     grantReadRecords(apiRole, memories)
+    // dictation: the state of each project's vocabulary for voice.vocabulary (after its access check), nothing more
+    apiRole.addToPolicy(apiVocabularyStatement({ partition: this.partition, region: cfg.region, account: cfg.account, prefix: cfg.prefix }))
     // kb.search on any project's knowledge base, after the access check (src/api/actions.ts); nothing else of them.
     // The ARN is made from the id, so the parent takes one output per knowledge base from its nested stack, not two.
     if (kbs.length) {
@@ -532,6 +536,10 @@ export class TraceStack extends Stack {
         TRACE_INTEGRATIONS_PREFIX: integrationsPrefix(cfg.prefix),
         // the order watch a check now invokes (order.check_now, src/api/actions-build.ts)
         TRACE_ORDER_WATCH: orderWatchName(cfg.prefix),
+        // names the projects' dictation vocabularies (<prefix>-<hash>-<language>: src/api/actions-voice.ts)
+        TRACE_PREFIX: cfg.prefix,
+        // what a project created in the web app gets, and how this installation can move (src/api/actions-layout.ts)
+        TRACE_LAYOUT: cfg.layout,
         // where this installation's self-update runs (projects.create says when a new project's agent arrives)
         ...(cfg.selfUpdate ? { TRACE_SELF_UPDATE: `${cfg.selfUpdate.repository}@${cfg.selfUpdate.branch}` } : {}),
         ...memoryEnv,
@@ -604,10 +612,19 @@ export class TraceStack extends Stack {
           StringLike: { [`${issuer}:job_workflow_ref`]: `${repository}/.github/workflows/ci.yml@refs/heads/${branch}` },
         }),
       })
+      // and, with the web app's WAF outside us-east-1, the bootstrap roles there and the edge stack's outputs
+      // (src/installer/edge.ts: <prefix>-edge, and whether CDKToolkit is there); nothing else in us-east-1
+      const edge = edgeNeeded(cfg)
       updater.addToPolicy(new iam.PolicyStatement({
         sid: 'CdkBootstrapRoles', actions: ['sts:AssumeRole'],
-        resources: [`arn:${partition}:iam::${account}:role/cdk-${CDK_QUALIFIER}-*-${account}-${region}`],
+        resources: [`arn:${partition}:iam::${account}:role/cdk-${CDK_QUALIFIER}-*-${account}-${region}`, ...(edge ? [`arn:${partition}:iam::${account}:role/cdk-${CDK_QUALIFIER}-*-${account}-${EDGE_REGION}`] : [])],
       }))
+      if (edge) {
+        updater.addToPolicy(new iam.PolicyStatement({
+          sid: 'EdgeStackOutputs', actions: ['cloudformation:DescribeStacks'],
+          resources: [`arn:${partition}:cloudformation:${EDGE_REGION}:${account}:stack/${edgeStackName(cfg.prefix)}/*`, `arn:${partition}:cloudformation:${EDGE_REGION}:${account}:stack/CDKToolkit/*`],
+        }))
+      }
       updater.addToPolicy(new iam.PolicyStatement({ sid: 'InstallationSettings', actions: ['s3:GetObject'], resources: [central.arnForObjects(`${INSTALLATION_PREFIX}/*`)] }))
       updater.addToPolicy(new iam.PolicyStatement({
         sid: 'StackOutputs', actions: ['cloudformation:DescribeStacks', 'cloudformation:ListStackResources'],

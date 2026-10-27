@@ -45,7 +45,7 @@ beforeAll(() => {
 describe('the web app', () => {
   it('is on by default, and a custom domain needs its certificate', () => {
     const p = InfraPropsSchema.parse(base)
-    expect(p.web).toEqual({ enabled: true, dashboards: [] })
+    expect(p.web).toEqual({ enabled: true, dashboards: [], waf: { enabled: true, apiRequestsPer5Minutes: 1000, authRequestsPer5Minutes: 100 } })
     expect(InfraPropsSchema.safeParse({ ...base, web: { domainName: 'trace.example.com' } }).success).toBe(false)
     expect(InfraPropsSchema.safeParse({ ...base, web: { certificateArn: CERT } }).success).toBe(false)
     expect(InfraPropsSchema.safeParse({ ...base, web: { domainName: 'trace.example.com', certificateArn: CERT } }).success).toBe(true)
@@ -229,6 +229,7 @@ describe('the web app', () => {
       events: { http: 'X', realtime: 'X', apiId: 'X' }, voiceBucket: 'X', voicePrefix: VOICE_PREFIX,
       dashboards: ['trace-agents'], model: 'us.anthropic.claude-sonnet-4-6', appUrl: 'https://X',
       features: { passkeys: true, email: false, voice: true, ops: true },
+      waf: { enabled: true, own: false, apiRequestsPer5Minutes: 1000, authRequestsPer5Minutes: 100 },
     })
     // the web client, not the CLI's; the events' host names, no scheme
     expect(text).toMatch(/"clientId":"<\{"Ref":"UsersWeb/)
@@ -303,7 +304,12 @@ describe('the web app', () => {
     expect(InfraPropsSchema.safeParse({ ...base, web: { webAclArn: acl.replace('us-east-1', 'eu-west-1') } }).success).toBe(false)
     const w = synth(InfraPropsSchema.parse({ ...base, web: { webAclArn: acl } }), 'WebWaf')
     expect((only(w.web!, 'AWS::CloudFront::Distribution').Properties.DistributionConfig as { WebACLId: string }).WebACLId).toBe(acl)
-    expect((only(web, 'AWS::CloudFront::Distribution').Properties.DistributionConfig as { WebACLId?: string }).WebACLId).toBeUndefined()
+    // without one of the person's own: this installation's (base is in us-east-1, so made in the web app's stack)
+    expect((only(web, 'AWS::CloudFront::Distribution').Properties.DistributionConfig as { WebACLId?: unknown }).WebACLId).toEqual({ 'Fn::GetAtt': [expect.stringMatching(/^WafAcl/), 'Arn'] })
+    // and with the WAF off, none
+    const off = synth(InfraPropsSchema.parse({ ...base, web: { waf: { enabled: false } } }), 'WebNoWaf')
+    expect((only(off.web!, 'AWS::CloudFront::Distribution').Properties.DistributionConfig as { WebACLId?: string }).WebACLId).toBeUndefined()
+    off.web!.resourceCountIs('AWS::WAFv2::WebACL', 0)
   }, 300_000)
 
   it('outputs the address, the distribution, the events endpoint and the web client', () => {

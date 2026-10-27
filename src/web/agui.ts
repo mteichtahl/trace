@@ -26,7 +26,9 @@
  *            thread come as forwardedProps.others ("who: text"), quoted as data in the system prompt (chat.others),
  *            and make the run read-only
  *   prompt   the catalog's `chat` prompt (src/prompts/chat.ts): chat.role, then the context entries and state fenced as
- *            data; system and developer messages from the app follow it
+ *            data; system and developer messages from the app follow it. chat.role is the installation's when an admin
+ *            changed it (prompts.chat, asked of the API and kept 60 s: src/web/chat-prompts.ts); the locked entries are
+ *            always the code's
  *   record   with forwardedProps { repo, thread, after } (`after`: the id chats.append gave the person's turn), the
  *            run's output (its replies, tool calls and results, and the tool results the app resumed it with) is kept
  *            with chats.reply, as the person: the API keeps it only after their own latest turn, named "trace"
@@ -41,6 +43,8 @@ import type { ContentBlock, ConverseStreamOutput, Message as BedrockMessage, Too
 import type { DocumentType } from '@smithy/types'
 import { z } from 'zod'
 import { composeChat, fenceResult } from '../prompts/chat.js'
+import type { Layers } from '../prompts/resolve.js'
+import { chatPrompts } from './chat-prompts.js'
 import { type WebDeps, signedIn } from './deps.js'
 import { type Caller, callApi, publishChange } from './call.js'
 import type { Publisher } from './events.js'
@@ -78,9 +82,9 @@ export type RunInput = z.output<typeof RunInput>
 
 // ------------------------------------------------------------------ the system prompt
 
-/** The system prompt: the catalog's chat entries (src/prompts/chat.ts) with the screen's context and shared state.
- * The installation's prompt overrides are not read here yet: the defaults are used. */
-export const systemPrompt = (context: readonly AguiContext[], state: unknown): string => composeChat(context, state).text
+/** The system prompt: the catalog's chat entries (src/prompts/chat.ts) with the screen's context and shared state, in
+ * the installation's layers (its editable chat entries only: src/web/chat-prompts.ts). */
+export const systemPrompt = (context: readonly AguiContext[], state: unknown, layers?: Layers): string => composeChat(context, state, layers).text
 
 // ------------------------------------------------------------------ backend tools
 
@@ -335,7 +339,8 @@ export async function runAgent(deps: WebDeps, who: Caller, input: RunInput, sink
     if (!converted.messages.length) throw Object.assign(new Error('there is no message from the person to answer'), { name: 'BadInput' })
     // the tool results the app resumed this run with (a decision, a confirmed task): kept with the run's own output
     for (const m of trailingToolResults(input.messages)) kept.push(m)
-    const system = [composeChat(input.context, input.state, undefined, { others, readOnly }).text, ...converted.system].join('\n\n')
+    const layers = await chatPrompts(deps).layers(who)
+    const system = [composeChat(input.context, input.state, layers, { others, readOnly }).text, ...converted.system].join('\n\n')
     const conversation = converted.messages
     const config = who.config
     const readTools = new Map<string, Set<string>>()

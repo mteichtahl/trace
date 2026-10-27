@@ -91,6 +91,8 @@ import {
 import { type Facts, resolveAnswers } from './derive.js'
 import { type TokenInfo, canConfigure, checkToken, createRepo, deleteVariable, repositoryDefaultBranch, setSecret, setVariable } from './github.js'
 import { type TourResult, startSampleJourney, startTour, tourPlan, withSample } from './sample.js'
+import { EDGE_REGION, edgeStackName } from '../infra/edge.js'
+import { type EdgeDeps, deployEdge, edgeLeftOver, wafPlan, withAcl } from './edge.js'
 import { type PendingEntry, type PendingIo, absorb, parsePending, s3PendingIo } from './pending.js'
 import { type ApiOnboardOptions, type ApiOnboardResult, onboardViaApi } from './onboard-api.js'
 import { CDK_BOOTSTRAP_MIN, mapLimit } from './preflight.js'
@@ -266,6 +268,7 @@ export function infraInput(a: Answers, existing?: Existing | null, deploy?: Layo
       enabled: a.agents.webEnabled,
       ...(a.agents.webDomain && a.agents.webCertificateArn ? { domainName: a.agents.webDomain, certificateArn: a.agents.webCertificateArn } : {}),
       ...(a.agents.webEmailFrom ? { sesFrom: a.agents.webEmailFrom } : {}),
+      waf: { enabled: a.agents.webWaf },
     },
     observability: {
       enabled: a.agents.observability, transactionSearch: a.agents.transactionSearch, dashboard: a.agents.dashboard,
@@ -372,7 +375,7 @@ export function observabilityPlan(o: InfraProps['observability'], prefix: string
 export function webPlan(props: InfraProps): string {
   if (!props.web.enabled) return '; no web app (sign in with `tracectl login` only)'
   const where = props.web.domainName ? `https://${props.web.domainName} (point its DNS at the distribution after the deploy)` : 'CloudFront\'s own address'
-  return `; the web app at ${where}: the static app on S3 behind CloudFront, its backend Lambda, live updates (AppSync Events), and sign-in with passkeys and passwords${props.web.sesFrom ? ` or a code by email (from ${props.web.sesFrom}, through SES)` : ''}`
+  return `; the web app at ${where}: the static app on S3 behind CloudFront, its backend Lambda, live updates (AppSync Events), and sign-in with passkeys and passwords${props.web.sesFrom ? ` or a code by email (from ${props.web.sesFrom}, through SES)` : ''}${wafPlan(props)}`
 }
 
 /** The agent token a project's worker and workflows use: its own when one was given, else the shared one. */
@@ -623,6 +626,24 @@ export interface Hooks {
   pending?: PendingIo
   /** the sample's first journey state (src/installer/sample.ts startSampleJourney) */
   sampleJourney?: (home: string, repo: string, by: string) => Promise<'started' | 'exists'>
+  /** the web app's WAF stack in us-east-1 (src/installer/edge.ts): a stack's outputs there, and deleting one left over */
+  edge?: { outputs: EdgeDeps['outputs']; remove: (stack: string, region: string) => Promise<void> }
+}
+
+/** The edge stack's outputs and its removal, in us-east-1 (CloudFormation). */
+export function liveEdgeIo(creds: AwsCredentialIdentity): NonNullable<Hooks['edge']> {
+  const client = async (region: string) => { const cfn = await import('@aws-sdk/client-cloudformation'); return { cfn, c: new cfn.CloudFormationClient({ region, credentials: creds }) } }
+  return {
+    outputs: async (name, region) => {
+      const { cfn, c } = await client(region)
+      try {
+        const st = (await c.send(new cfn.DescribeStacksCommand({ StackName: name }))).Stacks?.[0]
+        if (!st || st.StackStatus === 'DELETE_COMPLETE') return null
+        return Object.fromEntries((st.Outputs ?? []).flatMap((x) => (x.OutputKey ? [[x.OutputKey, x.OutputValue ?? '']] : [])))
+      } catch (e) { if (/does not exist/.test(String(e))) return null; throw e }
+    },
+    remove: async (name, region) => { const { cfn, c } = await client(region); await c.send(new cfn.DeleteStackCommand({ StackName: name })) },
+  }
 }
 
 /** Write the installation record to the central bucket. */
@@ -800,8 +821,10 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     log('check', runnerMessage)
     const runnersOf = (r: boolean): RunnersChoice => (choice ? { connectionArn: choice.pass, connectionReady: r } : { auth: 'token' })
     props = InfraPropsSchema.parse(infraInput(a, existing, undefined, runnersOf(ready)))
+    // the web app's web ACL, from <prefix>-edge in us-east-1 when the installation is elsewhere (deployEdge, step 4)
+    let webAcl: string | null = null
     const envFor = (d: LayoutDeploy, r = ready): Record<string, string> => ({
-      ...awsEnv(creds, a.aws.region), TRACE_INFRA: JSON.stringify(infraInput(a, existing, d, runnersOf(r))), CDK_DISABLE_VERSION_CHECK: '1', CI: '1',
+      ...awsEnv(creds, a.aws.region), TRACE_INFRA: JSON.stringify(withAcl(infraInput(a, existing, d, runnersOf(r)), webAcl)), CDK_DISABLE_VERSION_CHECK: '1', CI: '1',
     })
     const last = deploys.at(-1) ?? { layout: 'nested', why: '' }
     const env = envFor(last)
@@ -813,7 +836,7 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       const bucket = o[CENTRAL_BUCKET_OUTPUT]
       if (!bucket) throw new Error(`the stack has no output ${CENTRAL_BUCKET_OUTPUT}`)
       const record = installationRecord({
-        stack, region: a.aws.region, props: infraInput(a, existing, last, runnersOf(r)), runnerAuth: a.runners.auth, connectionArn: a.runners.connectionArn,
+        stack, region: a.aws.region, props: withAcl(infraInput(a, existing, last, runnersOf(r)), webAcl), runnerAuth: a.runners.auth, connectionArn: a.runners.connectionArn,
         traceRepository: a.runners.traceRepository, traceBranch: a.runners.traceBranch,
       })
       const text = JSON.stringify(record, null, 1)
@@ -859,6 +882,15 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     // for a connection nobody has authorized yet
     current = 'deploy'
     set('deploy', 'running', existing ? 'updating the stack: only what changed' : `the first deploy ${props.images.source === 'prebuilt' ? 'copies the agent image (or builds it when this version has none published): 15–40 minutes' : 'builds the agent image: expect 20–40 minutes'}`)
+    // the web app's WAF first: CloudFront takes a web ACL from us-east-1 only (src/installer/edge.ts). A failure is said
+    // and the main deploy goes ahead with the ACL the app had
+    const edgeIo = hooks.edge ?? liveEdgeIo(creds)
+    const edge = await deployEdge({
+      input: infraInput(a, existing, last, runnersOf(ready)), account: a.aws.account, app, env: { ...awsEnv(creds, a.aws.region), CDK_DISABLE_VERSION_CHECK: '1', CI: '1' }, bootstrap: true,
+      deps: { cdk, outputs: edgeIo.outputs, log: (l) => log('deploy', l) },
+    })
+    webAcl = edge.aclArn
+    if (edge.note) { log('deploy', edge.note); if (!edge.ok) summary.push(edge.note) }
     for (const [i, d] of deploys.entries()) {
       if (deploys.length > 1) log('deploy', `deploy ${i + 1} of ${deploys.length}: ${d.why}`)
       // the drain deleted every project's secret; one still in its recovery window would block the nested stack's
@@ -869,6 +901,14 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       const code = await cdk(deployArgs, envFor(d), (l) => log('deploy', l))
       if (code !== 0) throw new Error(`cdk deploy exited ${code}${deploys.length > 1 ? ` (deploy ${i + 1} of ${deploys.length}: ${d.why}; run the installer again to carry on)` : ''}`)
     }
+    // <prefix>-edge left over (the WAF turned off outside us-east-1): deleted once the app no longer points at its ACL
+    try {
+      const edgeStack = edgeStackName(props.prefix)
+      if (props.region !== EDGE_REGION && edgeLeftOver(props, Boolean(await edgeIo.outputs(edgeStack, EDGE_REGION)))) {
+        await edgeIo.remove(edgeStack, EDGE_REGION)
+        log('deploy', `${edgeStack} (${EDGE_REGION}) deleted: the web app no longer uses its web ACL`)
+      }
+    } catch (e) { log('deploy', `${edgeStackName(props.prefix)} could not be deleted (${e instanceof Error ? e.message : String(e)}): delete it in the CloudFormation console in ${EDGE_REGION}`) }
     const outputs = hooks.outputs ?? stackOutputs
     let out = await outputs(creds, a.aws.region, stack)
     await saveRecord('deploy', out, ready)

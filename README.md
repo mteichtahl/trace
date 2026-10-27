@@ -433,6 +433,17 @@ The move is therefore three deploys in a row, run by the installer:
 Workflows that run between the second deploy and the variable update fail; re-run them. If a deploy fails, run the
 installer again: it carries on from the layout the stack is then in.
 
+**What a flat installation gets, and why the move is the way on.** Projects created in the web app are added to a flat
+installation by the self-update too, while it holds fewer than 15 projects (`FLAT_UPDATE_MAX`, src/installer/pending.ts;
+each project is about 21 of the stack's 500 resources, and an unattended deploy keeps room for trace's own changes);
+past that, by the next installer run. They get their agent, memory and build runner, but no knowledge base, CPU queue or
+per-project events topic, so an agent waiting in `journey.ask` checks the record on its timer. Giving the flat layout
+those was rejected: the knowledge base (5 resources), the CPU job definition (1) and the events topic with its policy
+and rule (3) would take 20 projects past 500 resources, so the flat cap would drop to about 15 for every existing
+installation. The self-update never moves the layout, because the move deletes every project's memory records, which
+is a person's call; the installer offers it ("Move to one nested stack per project"), and the app says all of this on
+New project and Admin › Installation (`installation.layout`), with the move's steps and what it costs.
+
 **Upgrading an installation from before per-project roles.** The next installer run replaces the single worker
 runtime (`<prefix>_agent`), its role, the one GitHub OIDC role (`<prefix>-github-actions-<region>`) and the one GPU
 job definition with one of each per project, and rewrites every repository's `TRACE_AWS_ROLE` and
@@ -497,12 +508,38 @@ backend) when the stack is deployed, and lives in its own nested stack (`src/inf
 | Live updates | AppSync Events, `<prefix>-events`. People subscribe with their sign-in, each to `/trace/users/<their id>` only. Only the backend, and the agents' facts function below, can publish |
 | Agents' facts | When an agent records a journey fact (a question, a check, a stuck report), the central bucket's event reaches a small function, `<prefix>-journey-events`, through an EventBridge rule. It tells everyone on that project to refresh, and notifies the people a new question or stuck report is for. Its role may read the access store and the agents' facts files, and publish live events. Nothing else |
 | Sign-in | A Cognito app client of its own, `<prefix>-web`, using choice-based sign-in. People sign in with a passkey or a password, plus an email code when SES is set (see below). The CLI keeps its own client |
-| Voice | Polly speech kept 30 days in a small bucket of its own. The browser gets signed URLs for it and for Transcribe streaming |
+| Voice | Polly speech kept 30 days in a small bucket of its own. The browser gets signed URLs for it and for Transcribe streaming. Dictation in a project uses that project's own words (below) |
 
 The backend's role can read its settings and use Polly, Transcribe streaming, its voice cache, CloudWatch (read
 only), the chat model, and publishing live events. It cannot reach the access store, any project's data or Cognito's
 admin API. Anything about a project goes through the API runtime, with the person's own token, so the access checks
 stay in one place.
+
+**Dictation with the project's words.** Each project gets an Amazon Transcribe custom vocabulary made from its design,
+so dictation writes `U4`, `R14`, `STM32F405RGT6`, `VCC_3V3` or `REQ-LAY-001` as the design spells them. Every push to
+the default branch remakes it (the `voice-vocabulary` job of `trace-worker.yml`, `tracectl tool voice.vocabulary`, with
+the project's own role); `voice.vocabulary.sync` does it on demand through the API. The table
+(`projects/<owner>/<repo>/voice/<language>.txt`) has one row per way of saying a name: a reference designator's
+letters spelled and its number said digit by digit or as a number ("R one four", "R fourteen" → R14), a part number or
+net spelled with its words kept ("Buck E N" → Buck_EN), with Transcribe's rules for a phrase (letters and hyphens, single
+letters with periods, no digits, at most 256 characters, at most 50 KB in all; `SoundsLike` and `IPA` are left empty,
+since Transcribe no longer uses them). It is named `<prefix>-<project hash>-<language>`, for the languages in the
+project setting `voice.languages` (default `en-AU`; English only, as the spoken numbers are English; Transcribe allows
+100 vocabularies per account by default). When the microphone opens, the backend asks the API (`voice.vocabulary`, as
+the person) and names the vocabulary in the signed streaming URL only when it is ready; the app says whether the
+project's words are in use. Waiting for a vocabulary to be ready is a timer (every 10 seconds, growing to a minute),
+declared: Transcribe's "Vocabulary State Change" event is sent only when a vocabulary is first made, not when it is
+updated. IAM: each project's worker and OIDC roles may create vocabularies only tagged with their own project and
+update and read only their own names; the API role may only read their state; the backend role gets nothing new. Turn
+it off per project with `voice.vocabulary = false`.
+
+**Ask trace's instructions.** An admin's change to `chat.role` at installation scope (Admin › Prompts, or
+`prompts.set`) reaches the chat agent within a minute. The backend cannot read the prompts store, and is not given
+read access to it: the store is one database holding every prompt's override and its history, and S3 cannot grant
+part of one object. Instead it asks the API for `prompts.chat`, which answers only the editable chat entries, and
+keeps the answer for 60 seconds per Lambda container. A change made through the app clears that container's copy at
+once; other containers pick it up within the 60 seconds (the live `record.changed` event reaches browsers, not the
+Lambda). The locked chat entries (the data fences) always come from the code.
 
 Every response carries strict security headers: HSTS, `nosniff`, `X-Frame-Options: DENY`, and
 `strict-origin-when-cross-origin`. The content security policy allows only these:
@@ -514,6 +551,24 @@ Every response carries strict security headers: HSTS, `nosniff`, `X-Frame-Option
 - `data:` and `blob:` URLs
 - WebAssembly (PDF.js and Shiki)
 - inline styles
+
+**AWS WAF.** On by default (Advanced → Web app, "Protect the app with AWS WAF"; `web.waf`). The app's address is public
+and sign-in takes no token, so a web ACL sits in front of it (`src/infra/edge.ts`): AWS's managed rule groups (the core
+rule set, known bad inputs and the IP reputation list), at most 1,000 requests to `/api/*` and 100 to `/api/auth/*` per
+address in 5 minutes (`web.waf.apiRequestsPer5Minutes`, `authRequestsPer5Minutes`; over them a 429), and no request to
+`/api/*` declaring a body of 5 MB or more (the chat's limit is 4 MB). The core rule set's 8 KB body limit and its body
+cross-site-scripting rule only count, since a chat or a prompt is larger and people paste code; the app renders no HTML
+from them. It costs about US$11 a month (US$5 for the web ACL and US$1 for each of its six rules) and US$0.60 per
+million requests. That is the default because the alternative is sign-in with no limit per address; turn it off for a
+private trial. CloudFront takes web ACLs from us-east-1 only: in us-east-1 the web ACL is in the web app's own stack;
+elsewhere the installer deploys a small stack of its own, `<prefix>-edge`, in us-east-1 first (bootstrapping CDK there
+if needed), and deploys the main stack with its `WebAclArn` output as `web.waf.aclArn`. Passing that one value between
+two deploys was chosen over CDK's `crossRegionReferences`, which would add a custom resource (a Lambda and its role) and
+an SSM parameter the two stacks would then hold each other to. The self-update deploys `<prefix>-edge` too, with the
+CDK bootstrap roles of us-east-1 and the right to read that stack's outputs only; it never bootstraps us-east-1, so
+when that is missing it keeps the web ACL the app had and says to run the installer. A failed edge deploy never stops
+the main one. Turning the WAF off deletes `<prefix>-edge` after the main deploy, and `tracectl uninstall` deletes it
+too. A web ACL of your own (`web.webAclArn`) is used instead when given. Admin → Installation says whether it is on.
 
 **Custom domain.** Under Advanced → Web app, give a domain and its ACM certificate (it must be in us-east-1). After the
 deploy, point the domain's DNS at the distribution with a CNAME or alias (`WebDistributionId`). The props for this are
@@ -1606,6 +1661,7 @@ prompt is never recorded, as with every other prompt and tool argument (see [Obs
 | `prompts.reset { id, scope, repo?, reason? }` | the same | back to the layer below |
 | `prompts.revert { id, scope, version, repo?, reason? }` | the same | back to an earlier version (a number or a history uid) |
 | `prompts.history { id, scope, repo? }` | a user or an admin (installation), write (project) | every change to the id in that layer |
+| `prompts.chat {}` | any class | the installation's text of the chat agent's editable entries (`chat.role`), or null for the default: what the web app's backend applies to Ask trace |
 
 The access check comes first, as for every action: a project you are not assigned to and one that does not exist
 get the same "no access". The setting `agents.<kind>.instructions` stays as a lightweight addendum after the rules;

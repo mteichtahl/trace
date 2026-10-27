@@ -110,6 +110,7 @@
     "exercises": [
       "agent.delegate",
       "kb.sync",
+      "voice.vocabulary",
       "kicad.projects",
       "kicad.netlist",
       "kicad.components",
@@ -121,7 +122,7 @@
       "design.sheets"
     ],
     "remote": null,
-    "body": "Capture stage. The verification specialist cannot sync the knowledge base or list projects: it delegates this to the worker with agent.delegate.\n\n- Worker: kb.sync (wait for the ingestion), kicad.projects, kicad.netlist on `hardware/trace-sample.kicad_pro` (12 nets, 17 parts), firmware.detect path=firmware and firmware.targets.\n- Specialist, afterwards: kicad.components, kicad.board and kicad.net /ADC_IN to check what the worker reported.\n- Specialist: the microcontroller sits on the MCU board behind J2, so its pin plan is planned at J2: design.pins set part J2, each pin with the function the firmware gives it (`firmware/main.c`, `firmware/adc.c`: ADC_IN, SDA, SCL, TX, RX, LED) and its net, then design.pins check against the schematic (expect every pin on its net). design.sheets set `hardware/trace-sample.kicad_sch` with the requirements it serves.\n\nDone when: the knowledge base has the docs and the KiCad summary, firmware.detect finds the make target, and the netlist matches the schematic. Comment the numbers with their run ids on this issue, then close it."
+    "body": "Capture stage. The verification specialist cannot sync the knowledge base or list projects: it delegates this to the worker with agent.delegate.\n\n- Worker: kb.sync (wait for the ingestion), voice.vocabulary (the dictation words: say how many rows and its state), kicad.projects, kicad.netlist on `hardware/trace-sample.kicad_pro` (12 nets, 17 parts), firmware.detect path=firmware and firmware.targets.\n- Specialist, afterwards: kicad.components, kicad.board and kicad.net /ADC_IN to check what the worker reported.\n- Specialist: the microcontroller sits on the MCU board behind J2, so its pin plan is planned at J2: design.pins set part J2, each pin with the function the firmware gives it (`firmware/main.c`, `firmware/adc.c`: ADC_IN, SDA, SCL, TX, RX, LED) and its net, then design.pins check against the schematic (expect every pin on its net). design.sheets set `hardware/trace-sample.kicad_sch` with the requirements it serves.\n\nDone when: the knowledge base has the docs and the KiCad summary, firmware.detect finds the make target, and the netlist matches the schematic. Comment the numbers with their run ids on this issue, then close it."
   },
   {
     "id": "prove-front-end",

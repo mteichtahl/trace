@@ -180,16 +180,16 @@ describe('answers', () => {
 
   it('installs the web app by default, keeping the install at two inputs, with an optional custom domain and email codes', () => {
     const a = AnswersSchema.parse(ANSWERS)
-    expect(infraInput(a).web).toEqual({ enabled: true })
+    expect(infraInput(a).web).toEqual({ enabled: true, waf: { enabled: true } })
     expect(plan(a).find((s) => s.id === 'web')).toMatchObject({ title: 'Web app: the address people sign in at' })
     expect(plan(a).find((s) => s.id === 'deploy')?.detail).toMatch(/the web app at CloudFront's own address/)
     const custom = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, webDomain: 'trace.example.com', webCertificateArn: CERT, webEmailFrom: 'trace@example.com' } })
-    expect(infraInput(custom).web).toEqual({ enabled: true, domainName: 'trace.example.com', certificateArn: CERT, sesFrom: 'trace@example.com' })
+    expect(infraInput(custom).web).toEqual({ enabled: true, domainName: 'trace.example.com', certificateArn: CERT, sesFrom: 'trace@example.com', waf: { enabled: true } })
     expect(plan(custom).find((s) => s.id === 'web')?.detail).toContain('https://trace.example.com')
     expect(plan(custom).find((s) => s.id === 'deploy')?.detail).toMatch(/a code by email \(from trace@example.com, through SES\)/)
     expect(AnswersSchema.safeParse({ ...ANSWERS, agents: { ...ANSWERS.agents, webDomain: 'trace.example.com' } }).success).toBe(false)
     const off = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, webEnabled: false } })
-    expect(infraInput(off).web).toEqual({ enabled: false })
+    expect(infraInput(off).web).toEqual({ enabled: false, waf: { enabled: true } })
     expect(plan(off).map((s) => s.id)).not.toContain('web')
   })
 
@@ -1438,5 +1438,51 @@ describe('projects created in the web app', () => {
     } finally {
       calls.existing = null
     }
+  })
+})
+
+describe('the web app\'s WAF outside us-east-1', () => {
+  const ACL = 'arn:aws:wafv2:us-east-1:123456789012:global/webacl/trace-web/33333333-3333-3333-3333-333333333333'
+  const EU = { ...ANSWERS, aws: { ...ANSWERS.aws, region: 'eu-west-1' } }
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const run = async (a: unknown, edge: { toolkit: boolean; exists?: boolean }) => {
+    const deploys: { stack: string; infra: Record<string, unknown> }[] = []
+    const bootstraps: string[] = []
+    const removed: string[] = []
+    const saved: string[] = []
+    OUTPUTS.TraceHome = join(mkdtempSync(join(tmpdir(), 'trace-central-')), 'home')
+    const ok = await apply(AnswersSchema.parse(a), SecretsSchema.parse({ githubToken: TOKEN }), () => undefined, {
+      ...quiet,
+      cdk: async (args, env) => { if (args[0] === 'deploy') deploys.push({ stack: String(args[1]), infra: JSON.parse(env.TRACE_INFRA ?? '{}') }); if (args[0] === 'bootstrap') bootstraps.push(String(args[1])); return 0 },
+      outputs: async () => OUTPUTS,
+      saveRecord: async (_c, _r, _b, _k, text) => { saved.push(text) },
+      edge: {
+        outputs: async (stack) => (stack === 'CDKToolkit' ? (edge.toolkit ? ({ BootstrapVersion: '27' } as Record<string, string>) : null) : (edge.exists ?? true) ? ({ WebAclArn: ACL } as Record<string, string>) : null),
+        remove: async (stack) => { removed.push(stack) },
+      },
+    })
+    return { ok, deploys, bootstraps, removed, saved }
+  }
+
+  it('bootstraps us-east-1 when needed, deploys trace-edge there first, and the stack (and its saved settings) with its web ACL', async () => {
+    const r = await run(EU, { toolkit: false })
+    expect(r.ok).toBe(true)
+    expect(r.bootstraps).toContain('aws://123456789012/us-east-1')
+    expect(r.deploys.map((d) => d.stack)).toEqual(['trace-edge', 'TraceStack'])
+    expect((r.deploys[1]?.infra.web as { waf: { aclArn: string } }).waf.aclArn).toBe(ACL)
+    expect((JSON.parse(r.saved[0] ?? '{}') as { props: { web: { waf: { aclArn: string } } } }).props.web.waf.aclArn).toBe(ACL)
+    expect(r.removed).toEqual([])
+  })
+
+  it('with the WAF turned off, deploys no edge stack and deletes the one left over after the main deploy', async () => {
+    const r = await run({ ...EU, agents: { ...EU.agents, webWaf: false } }, { toolkit: true })
+    expect(r.deploys.map((d) => d.stack)).toEqual(['TraceStack'])
+    expect((r.deploys[0]?.infra.web as { waf: Record<string, unknown> }).waf).toEqual({ enabled: false })
+    expect(r.removed).toEqual(['trace-edge'])
+  })
+
+  it('shows the WAF and its cost in the plan, on by default', () => {
+    expect(plan(AnswersSchema.parse(EU)).find((s) => s.id === 'deploy')?.detail).toMatch(/protected by AWS WAF in its own small stack trace-edge in us-east-1.*about US\$11 a month/)
+    expect(plan(AnswersSchema.parse(ANSWERS)).find((s) => s.id === 'deploy')?.detail).toMatch(/protected by AWS WAF in the web app's stack/)
   })
 })

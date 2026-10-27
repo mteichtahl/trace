@@ -104,6 +104,12 @@ export interface ActionDeps {
   checkIntegration?: typeof checkIntegration
   /** The central bucket under one prefix (chats, pending projects); absent: bucketStore (beside TRACE_HOME). */
   store?: (prefix: string) => Backend
+  /** The stack's layout (TRACE_LAYOUT): 'flat' or 'nested' (src/api/actions-layout.ts) */
+  layout?: string
+  /** The installation's prefix (TRACE_PREFIX): names its dictation vocabularies (src/api/actions-voice.ts). */
+  installationPrefix?: string
+  /** Transcribe's GetVocabulary for the projects' dictation vocabularies; absent: voice.vocabulary answers NONE. */
+  vocabularies?: () => Promise<import('./actions-voice.js').VocabularyReader>
   /** Onboard a repository with the API's own GitHub token; absent: projects.create says this installation cannot. */
   onboard?: (repo: string, o: OnboardRequest) => Promise<ApiOnboardResult>
   /** Ask the order watch (src/infra/lambda/order-watch.ts) to check one order now; absent: there is none to ask. */

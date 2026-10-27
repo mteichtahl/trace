@@ -10,6 +10,7 @@ import { setPath } from '@/lib/prefs'
 import { adminHandle } from './admin'
 import { s1Action } from './s1'
 import { designAction } from './design'
+import { smallAction } from './small'
 import { filesAction, withFileThread } from './files'
 import { buildCostAction } from './build-cost'
 
@@ -30,6 +31,7 @@ function action(name: string, a: Record<string, unknown>): Response {
   const des = designAction(name, a); if (des) return des
   const bc = buildCostAction(name, a); if (bc) return bc
   const s1 = s1Action(name, a); if (s1) return s1
+  const small = smallAction(name, a); if (small) return small
   switch (name) {
     case 'whoami': return ok({ sub: ME.sub, email: ME.email, groups: ['trace-admins'], class: ME.class })
     case 'projects': return ok(PROJECTS)
@@ -96,7 +98,7 @@ export async function handle(path: string, init: RequestInit = {}): Promise<Resp
   const mine = await adminHandle(url.pathname + url.search, body, init, me); if (mine) return mine
   switch (url.pathname) {
     case '/api/config':
-      return json({ region: 'ap-southeast-2', prefix: 'trace', userPoolId: 'mock', clientId: 'mock', events: { http: '', realtime: '' }, features: { passkeys: true, email: true, voice: true, ops: true } })
+      return json({ region: 'ap-southeast-2', prefix: 'trace', userPoolId: 'mock', clientId: 'mock', events: { http: '', realtime: '' }, features: { passkeys: true, email: true, voice: true, ops: true }, waf: { enabled: true, own: false, apiRequestsPer5Minutes: 1000, authRequestsPer5Minutes: 100 } })
     case '/api/auth/refresh':
       return signedIn ? json(tokens()) : json({ ok: false, error: 'not signed in' }, 401)
     case '/api/auth/start':

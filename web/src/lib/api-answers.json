@@ -1581,5 +1581,59 @@
         "text": "Estimates use the price table of 2025-11-24 (Bedrock per million tokens per model; g6.xlarge on demand in us-east-1 (one job holds the instance); c7i on demand in us-east-1, per vCPU). It is more than six months old: an admin updates it with the stack setting cost.prices."
       }
     }
+  },
+  "installation.layout": {
+    "args": {},
+    "result": {
+      "layout": "flat",
+      "projects": {
+        "max": 20,
+        "updateMax": 15
+      },
+      "has": {
+        "knowledgeBase": false,
+        "cpuQueue": false,
+        "answerEvents": false
+      },
+      "note": "This installation keeps every project in one stack (the flat layout, from before nested stacks). About 20 projects fit; a project created here is added by the self-update only while there are fewer than 15, and otherwise by the next installer run. Projects have no knowledge base or CPU queue, and an agent waiting for a person's answer checks on a timer rather than being told at once.",
+      "recommendation": "Move to one nested stack per project when losing the agents' memory records is acceptable: it is the only way to more projects and the features above, and it is a one-off.",
+      "move": {
+        "how": "Run the installer (`tracectl install` or `tracectl upgrade`) and choose \"Move to one nested stack per project\" under Advanced.",
+        "steps": [
+          "With \"keep data\" on, a first deploy marks each project's memory and its log delivery for deletion; nothing else changes.",
+          "The next deploy removes every project from the stack: their agents, roles, token secrets and memories go, every memory record with them. The projects are offline from here.",
+          "The last deploy creates every project again, each in its own nested stack, with an empty memory; then the installer sets each repository's variables again."
+        ],
+        "costs": "Every project's memory records are deleted (AgentCore cannot copy them), and the projects are offline for the two deploys (about 30 to 60 minutes); workflows that run in between fail and need running again. Journeys, chats, settings, runs and the knowledge in the repositories are kept.",
+        "gives": "Room for 60 projects, projects created in the web app added by every update, a knowledge base per project, the CPU queue, and agents told at once when a person answers their question."
+      }
+    }
+  },
+  "prompts.chat": {
+    "args": {},
+    "result": {
+      "entries": [
+        {
+          "id": "chat.role",
+          "text": null,
+          "version": null,
+          "sha": "fbf7acf1518a"
+        }
+      ]
+    }
+  },
+  "voice.vocabulary": {
+    "args": {
+      "repo": "acme/answers",
+      "language": "en-AU"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "language": "en-AU",
+      "name": "trace-f05f4f8f-en-AU",
+      "state": "READY",
+      "usable": true,
+      "note": "Dictation uses this project's words (reference designators, part numbers, net names, requirement ids)."
+    }
   }
 }
