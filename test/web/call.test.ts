@@ -111,6 +111,7 @@ describe('what is published', () => {
     expect(changeOf('chats.rename')).toBe('chats')
     expect(changeOf('order.record')).toBe('journey')
     expect(changeOf('skill.submit')).toBe('journey')
+    expect(changeOf('design.decide')).toBe('journey')
     expect(changeOf('job.control')).toBe('jobs')
     expect(changeOf('policy.set')).toBe('preferences')
     expect(changeOf('skill.draft')).toBeNull()

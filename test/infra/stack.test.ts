@@ -206,7 +206,9 @@ describe('the trace stack', () => {
       const integrations = s.filter((x) => x.Sid === 'IntegrationsRead')
       expect(integrations).toHaveLength(1)
       expect(actionsOf(integrations[0] as Statement)).toEqual(['secretsmanager:GetSecretValue'])
+      // the tools' integrations by name, never the order watch's carrier key
       expect(JSON.stringify(integrations[0]?.Resource)).toMatch(/:secret:trace\/integrations\/\*/)
+      expect(JSON.stringify(integrations[0]?.Resource)).not.toContain('order-watch')
       // Batch: its own job definition on the shared queue, only tagged with its project
       const submit = s.find((x) => x.Sid === 'ProjectGpuSubmit')
       expect(JSON.stringify(submit?.Resource)).toContain(`job-definition/trace-gpu-${c.h}`)
@@ -325,7 +327,11 @@ describe('the trace stack', () => {
     expect(msPuts.map((x) => Object.keys(x.Condition?.Null ?? {})[0]).sort()).toEqual(['s3:if-match', 's3:if-none-match'])
     expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes(`/${MS}`))).toBe(true)
     expect(s.filter((x) => actionsOf(x).includes('s3:DeleteObject')).map((x) => JSON.stringify(x.Resource)).join()).not.toContain('memory-state')
-    expect(s.filter((x) => actionsOf(x).includes('s3:ListBucket')).flatMap((x) => x.Condition?.StringLike?.['s3:prefix'] as string[]).sort()).toEqual(['central/*', 'installation/pending-projects/*', 'projects/*/chats/*', 'projects/*/journey-agent/*', 'projects/*/journey/*', MS, 'prompts/*'])
+    expect(s.filter((x) => actionsOf(x).includes('s3:ListBucket')).flatMap((x) => x.Condition?.StringLike?.['s3:prefix'] as string[]).sort()).toEqual(['central/*', 'installation/cost/*', 'installation/pending-projects/*', 'installation/shipping/*', 'projects/*/chats/*', 'projects/*/journey-agent/*', 'projects/*/journey/*', MS, 'prompts/*'])
+    // the cost ledger's actuals (installation/cost/*): read only, never written by the API
+    expect(s.filter((x) => actionsOf(x).some((a) => a === 's3:PutObject' || a === 's3:DeleteObject')).map((x) => JSON.stringify(x.Resource)).join()).not.toMatch(/\/cost\//)
+    // the order watch: invoked, nothing else of Lambda
+    expect(s.find((x) => x.Sid === 'OrderWatchCheckNow')).toMatchObject({ Action: 'lambda:InvokeFunction' })
     // the agents' facts (projects/*/journey-agent/*): read, never written or deleted by the API
     const AF = 'projects/*/journey-agent/*'
     expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes(`/${AF}`))).toBe(true)
@@ -406,14 +412,16 @@ describe('the trace stack', () => {
   it("sends each project its own jobs' state changes, on its own topic that only its own rule may publish to", () => {
     // none in the parent: each project's are in its nested stack
     syn.parent.resourceCountIs('AWS::SNS::Topic', 0)
-    syn.parent.resourceCountIs('AWS::Events::Rule', 0)
+    // (the parent's two are schedules: the daily cost read and the hourly order watch)
+    syn.parent.resourceCountIs('AWS::Events::Rule', 2)
     t.resourceCountIs('AWS::SNS::Topic', 2)
-    // each project's two rules: its Batch jobs' state changes and its journey record's writes (journey.ask's wait)
-    t.resourceCountIs('AWS::Events::Rule', 4)
+    // each project's two rules: its Batch jobs' state changes and its journey record's writes (journey.ask's wait), and
+    // the parent's two schedules
+    t.resourceCountIs('AWS::Events::Rule', 6)
     t.resourceCountIs('AWS::SNS::TopicPolicy', 2)
     for (const [repo, h, oh] of [[A, HA, HB], [B, HB, HA]] as const) {
       const n = nestedOf(syn, repo)
-      n.hasResourceProperties('AWS::SNS::Topic', { TopicName: `trace-${h}-batch-events`, Tags: [{ Key: 'trace:project', Value: repo }] })
+      n.hasResourceProperties('AWS::SNS::Topic', { TopicName: `trace-${h}-batch-events`, Tags: Match.arrayWith([{ Key: 'trace:project', Value: repo }]) })
       const all = Object.entries(n.findResources('AWS::Events::Rule')) as [string, { Properties: { Name: string; EventPattern: Record<string, unknown>; Targets: { Arn: unknown }[] } }][]
       expect(all).toHaveLength(2)
       const rules = all.filter(([id]) => id.startsWith(`Project${h}JobEventsRule`))
@@ -444,11 +452,11 @@ describe('the trace stack', () => {
         expect.objectContaining({ Principal: { Service: 'events.amazonaws.com' }, Action: 'sns:Publish', Condition: { ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': [ruleId, 'Arn'] } } } }),
         expect.objectContaining({ Principal: { Service: 'events.amazonaws.com' }, Action: 'sns:Publish', Condition: { ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': [journeyId, 'Arn'] } } } }),
       ])
-      // its journey record's writes: the bucket's Object Created events of that one key, to its own topic
+      // its journey record's and its job index's writes: the bucket's Object Created events of those two keys, to its own topic
       expect(journeyRule?.Properties.Name).toBe(`trace-${h}-journey-events`)
       expect(journeyRule?.Properties.EventPattern).toEqual({
         source: ['aws.s3'], 'detail-type': ['Object Created'],
-        detail: { bucket: { name: [expect.anything()] }, object: { key: [`projects/${repo}/journey/journey.db`] } },
+        detail: { bucket: { name: [expect.anything()] }, object: { key: [`projects/${repo}/journey/journey.db`, `projects/${repo}/journey-agent/jobs.db`] } },
       })
       expect(journeyRule?.Properties.Targets).toEqual([expect.objectContaining({ Arn: { Ref: expect.stringMatching(new RegExp(`^Project${h}JobEvents`)) } })])
       expect(ruleId).toMatch(new RegExp(`^Project${h}JobEventsRule`))
@@ -478,8 +486,8 @@ describe('the trace stack', () => {
     t2.resourceCountIs('AWS::CloudFormation::CustomResource', 1)
     // each project keeps its events topic for its journey record's writes (journey.ask's wait), with no Batch rule
     t2.resourceCountIs('AWS::SNS::Topic', 2)
-    const rules = Object.values(t2.findResources('AWS::Events::Rule')) as { Properties: { EventPattern: { source: string[] } } }[]
-    expect(rules.map((r) => r.Properties.EventPattern.source)).toEqual([['aws.s3'], ['aws.s3']])
+    const rules = (Object.values(t2.findResources('AWS::Events::Rule')) as { Properties: { EventPattern?: { source: string[] } } }[]).filter((r) => r.Properties.EventPattern)
+    expect(rules.map((r) => r.Properties.EventPattern?.source)).toEqual([['aws.s3'], ['aws.s3']])
     const json = JSON.stringify(t2.toJSON())
     expect(json).not.toContain('TRACE_GPU_QUEUE')
     expect(json).not.toContain('batch:SubmitJob')

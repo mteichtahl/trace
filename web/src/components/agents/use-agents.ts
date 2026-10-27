@@ -1,15 +1,15 @@
 /**
- * Data for Agents and tools, from what the API gives today: the tool list (tools.list, per project, the same for every
- * project of an installation), each project's runs (runs: tool runs with kind, status and times, for "last used" and
- * the error rate), and each project's live and queued work (journey.get jobs, kept current by job.updated events).
- * The API does not report agents' own live status, queues, today's numbers or which instruction layer is in force;
- * the screens say so.
+ * Data for Agents and tools: the tool list (tools.list, per project, the same for every project of an installation),
+ * each project's runs (runs: tool runs with kind, status, times and the agent that made each, for "last used" and the
+ * error rate), and each project's jobs and agents (jobs.list: its job index, kept current by job.updated events),
+ * merged across the person's projects into one status per agent. Which instruction layer is in force is not reported
+ * by the API yet; the screen says so.
  */
 import { useQueries } from '@tanstack/react-query'
 import { useMemo } from 'react'
 import { projectName } from '@/lib/api'
 import { q, useProjects } from '@/lib/queries'
-import type { RunSummary } from '@/lib/types'
+import type { AgentState, RunSummary } from '@/lib/types'
 import type { ToolInfo } from '@/lib/tools-catalogue'
 
 export interface ToolRun {
@@ -20,6 +20,8 @@ export interface ToolRun {
   started: number
   finished: number | null
   summary: string | null
+  /** the agent whose session made it (null: a person's own run, or one from before agents were recorded) */
+  agent: string | null
 }
 
 export interface ToolUse {
@@ -42,7 +44,7 @@ export function useCatalogue() {
       repos.flatMap((repo, i) =>
         ((runs[i]?.data ?? []) as Record<string, unknown>[]).flatMap((r) =>
           typeof r.id === 'string' && typeof r.kind === 'string'
-            ? [{ id: r.id, repo, kind: r.kind, status: String(r.status ?? ''), started: Number(r.started ?? 0), finished: r.finished == null ? null : Number(r.finished), summary: typeof r.summary === 'string' ? r.summary : null }]
+            ? [{ id: r.id, repo, kind: r.kind, status: String(r.status ?? ''), started: Number(r.started ?? 0), finished: r.finished == null ? null : Number(r.finished), summary: typeof r.summary === 'string' ? r.summary : null, agent: typeof r.agent === 'string' ? r.agent : null }]
             : [],
         ),
       ),
@@ -80,16 +82,54 @@ export interface WorkItem {
   run: RunSummary
 }
 
-/** What trace is doing and has queued, across the person's projects (journey.get jobs). */
+const RANK: Record<AgentState['status'], number> = { stuck: 0, waiting_person: 1, working: 2, queued: 3, idle: 4 }
+
+/** One agent across the person's projects: the most pressing status, its work and queue, and its day summed. */
+export interface AgentWork {
+  id: string
+  status: AgentState['status']
+  /** the status's line on the project it comes from, with that project */
+  says: string
+  project: string | null
+  now: WorkItem[]
+  queue: WorkItem[]
+  today: { runs: number; succeeded: number; medianS: number | null }
+}
+
+/** Merge each project's agent states (jobs.list `agents`) into one per agent. */
+export function mergeAgents(per: { repo: string; project: string; agents: AgentState[]; jobs: RunSummary[] }[]): Map<string, AgentWork> {
+  const out = new Map<string, AgentWork>()
+  const most = new Map<string, number>()
+  for (const p of per) {
+    const byId = new Map(p.jobs.map((j) => [j.id, j]))
+    for (const a of p.agents) {
+      const w = out.get(a.id) ?? { id: a.id, status: 'idle' as const, says: 'Idle', project: null, now: [], queue: [], today: { runs: 0, succeeded: 0, medianS: null } }
+      if (RANK[a.status] < RANK[w.status]) { w.status = a.status; w.says = a.says; w.project = p.project }
+      for (const id of a.now) { const run = byId.get(id); if (run) w.now.push({ repo: p.repo, project: p.project, run }) }
+      for (const id of a.queue) { const run = byId.get(id); if (run) w.queue.push({ repo: p.repo, project: p.project, run }) }
+      // a median of medians is not a median: the median of the project where it ran most stands for its day
+      const busiest = a.today.medianS !== null && a.today.runs > (most.get(a.id) ?? 0)
+      if (busiest) most.set(a.id, a.today.runs)
+      w.today = { runs: w.today.runs + a.today.runs, succeeded: w.today.succeeded + a.today.succeeded, medianS: busiest ? a.today.medianS : w.today.medianS }
+      out.set(a.id, w)
+    }
+  }
+  return out
+}
+
+/** What trace is doing and has queued, across the person's projects (jobs.list), and each agent's state. */
 export function useWork() {
   const projects = useProjects()
   const repos = (projects.data ?? []).map((p) => p.repo)
-  const journeys = useQueries({ queries: repos.map((repo) => ({ ...q('journey.get', { repo }), retry: false })) })
-  const items: WorkItem[] = repos.flatMap((repo, i) => (journeys[i]?.data?.jobs ?? []).map((run) => ({ repo, project: journeys[i]?.data?.name ?? projectName(repo), run })))
+  const lists = useQueries({ queries: repos.map((repo) => ({ ...q('jobs.list', { repo }), retry: false })) })
+  const per = repos.map((repo, i) => ({ repo, project: projectName(repo), agents: lists[i]?.data?.agents ?? [], jobs: lists[i]?.data?.jobs ?? [] }))
+  const items: WorkItem[] = per.flatMap((p) => p.jobs.map((run) => ({ repo: p.repo, project: p.project, run })))
   return {
     running: items.filter((x) => x.run.state === 'running' || x.run.state === 'paused'),
     queued: items.filter((x) => x.run.state === 'queued'),
-    loading: journeys.some((j) => j.isLoading),
-    failed: repos.filter((_, i) => journeys[i]?.isError),
+    agents: mergeAgents(per),
+    write: new Set((projects.data ?? []).filter((p) => (p.part ?? 'contributor') !== 'reviewer').map((p) => p.repo)),
+    loading: lists.some((j) => j.isLoading),
+    failed: repos.filter((_, i) => lists[i]?.isError),
   }
 }

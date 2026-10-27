@@ -16,11 +16,11 @@ import { z } from 'zod'
 import { defineTool, ToolError, type AnyTool } from '../../core/registry.js'
 import { buildBom, bomCsv, jlcBomCsv, jlcCplCsv, placements } from './bom.js'
 import { drc, erc, type CheckReport } from './checks.js'
-import { EXPORT_KINDS, exportOne, listFiles, outDirFor, zipDir, type ExportKind } from './export.js'
+import { type Drawing, EXPORT_KINDS, drawingArtifacts, exportOne, listFiles, outDirFor, sheetPlaces, zipDir, type ExportKind } from './export.js'
 import { describeLayer, designRules, layerOf, loadBoard, Net, netNames, stackupKnown, type Board } from './pcb.js'
 import { candidates, fileVersion, findKicadCli, fromPath, kicadCliVersion, needPcb, needSch, relTo, resolveProject, summary, type Project } from './project.js'
 import { netlist, parts, powerNets, readSchematic, symbolSummary, type Symbol } from './schematic.js'
-import { cap, recorded } from './record.js'
+import { cap, recorded, type RunHandle } from './record.js'
 
 const project = z.string().optional().describe('path to a .kicad_pro, .kicad_sch or .kicad_pcb (or a folder with one project); omit for the configured/only project')
 const limit = (d: number) => z.number().int().min(1).max(5000).default(d).describe(`maximum items listed (default ${d}); totals are always given`)
@@ -314,12 +314,15 @@ const fab = defineTool({
       if (a.zip) zipDir(join(dir, 'gerbers'), join(dir, `${p.name}-gerbers.zip`))
       const warnings: string[] = []
       const pl = await placements(pcb)
+      // the parts the fab will not place: fitted by hand at Incoming inspection (src/core/boards.ts inspectionProblems)
+      let handPlaced: string[] = []
       if (p.sch) {
         const b = buildBom(readSchematic(p.sch, p.name))
         writeFileSync(join(dir, `${p.name}-bom.csv`), bomCsv(b))
         run.artifact('bom.csv', bomCsv(b), 'text/csv')
         const placed = new Set(pl.map((x) => x.ref))
         const unplaced = b.lines.flatMap((l) => l.refs).filter((r) => !placed.has(r))
+        handPlaced = unplaced
         if (unplaced.length) warnings.push(`${unplaced.length} BOM parts have no placement (not on the board, or through-hole excluded): ${unplaced.slice(0, 20).join(', ')}`)
         if (a.house === 'jlcpcb') {
           writeFileSync(join(dir, `${p.name}-jlc-bom.csv`), jlcBomCsv(b))
@@ -337,7 +340,7 @@ const fab = defineTool({
       run.measure('files', out.length)
       run.measure('placements', pl.length)
       return { status: 'pass' as const, summary: `${out.length} fab files in ${dir}`,
-        result: { project: p.name, out_dir: dir, house: a.house, placements: pl.length, warnings, files_total: out.length, files: out.slice(0, 80) } }
+        result: { project: p.name, out_dir: dir, house: a.house, placements: pl.length, hand_placed: handPlaced, warnings, files_total: out.length, files: out.slice(0, 80) } }
     })
   },
 })
@@ -436,7 +439,7 @@ const netLength = defineTool({
 
 const exportTool = defineTool({
   name: 'kicad.export',
-  description: `KiCad outputs written by kicad-cli into out_dir: ${EXPORT_KINDS.join(', ')} (render = 3D PNG, slow; only when asked). Returns the files written. Needs kicad-cli.`,
+  description: `KiCad outputs written by kicad-cli into out_dir: ${EXPORT_KINDS.join(', ')} (render = 3D PNG, slow; only when asked). Returns the files written. The schematic sheet SVGs (sch_svg), the board SVG (pcb_svg) and the render are also kept in the run record, one artifact per sheet, so people see them in the app. Needs kicad-cli.`,
   input: z.object({
     project,
     kinds: z.array(z.enum(EXPORT_KINDS)).min(1).describe('what to write'),
@@ -457,11 +460,32 @@ const exportTool = defineTool({
       run.artifact('files.txt', out.map((f) => `${f.path}\t${f.bytes}`).join('\n'))
       run.artifact('commands.txt', done.map((d) => `kicad-cli ${d.args.join(' ')}`).join('\n'))
       run.measure('files', out.length)
+      // the drawings people look at are kept in the run record too (the folder is a working copy, not committed)
+      const kept = keepDrawings(run, dir, p, root, a.kinds)
       return { status: 'pass' as const, summary: `${a.kinds.join(', ')} → ${dir}`,
-        result: { project: p.name, out_dir: dir, kinds: a.kinds, files_total: out.length, files: out.slice(0, 100) } }
+        result: { project: p.name, out_dir: dir, kinds: a.kinds, files_total: out.length, files: out.slice(0, 100), ...kept } }
     })
   },
 })
+
+/**
+ * Store each sheet's SVG, the board SVG and the render as artifacts of the export run, with drawings.json mapping
+ * each to its schematic file and sheet path (and the board's outline origin, so design rule findings in board
+ * millimetres can be placed on the fitted board SVG). design.get and the file viewer read them by artifact path.
+ */
+function keepDrawings(run: RunHandle, dir: string, p: Project, root: string, kinds: readonly ExportKind[]): { drawings?: Drawing[]; drawings_left_out?: string[] } {
+  if (!kinds.some((k) => k === 'sch_svg' || k === 'pcb_svg' || k === 'render')) return {}
+  let sheets: ReturnType<typeof sheetPlaces> = []
+  try { if (p.sch) sheets = sheetPlaces(readSchematic(p.sch, p.name), root) } catch { /* unreadable schematic: SVGs keep their own names */ }
+  const { keep, left } = drawingArtifacts(dir, { project: p.name, sheets })
+  let origin: { x_mm: number; y_mm: number } | null = null
+  try { const o = p.pcb ? loadBoard(p.pcb).outline : null; if (o) origin = { x_mm: o.min_x_mm, y_mm: o.min_y_mm } } catch { /* no board outline */ }
+  const drawings = keep.map((k) => (k.drawing.kind === 'board' && origin ? { ...k.drawing, origin_mm: origin } : k.drawing))
+  for (const k of keep) run.artifact(k.drawing.artifact, k.bytes, k.mime)
+  run.artifact('drawings.json', JSON.stringify({ project: p.name, drawings }), 'application/json')
+  run.measure('drawings', keep.length)
+  return { drawings, ...(left.length ? { drawings_left_out: left } : {}) }
+}
 
 /** The kicad tools. */
 export const tools: AnyTool[] = [projects, components, netlistTool, net, ercTool, drcTool, bom, fab, board, netLength, exportTool] as unknown as AnyTool[]

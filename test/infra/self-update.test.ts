@@ -124,6 +124,10 @@ describe('the self-update role', () => {
       // projects.create (src/api/actions-projects.ts) records requests under installation/pending-projects/, with
       // conditional writes, for the update to pick up; the settings (installation/props.json) stay the update's alone
       if (roles.includes(`"${api}"`)) r = r.replaceAll('installation/pending-projects/*', '')
+      // the cost ledger's actuals (read by the API, written by the cost read alone) and the order watch's rows (the API
+      // starts a watch, the order watch checks it): their own prefixes only (src/infra/cost.ts, src/infra/order-watch.ts)
+      if (roles.includes(`"${api}"`) || /CostReadRole/.test(roles)) r = r.replaceAll('installation/cost/*', '')
+      if (roles.includes(`"${api}"`) || /OrderWatchRole/.test(roles)) r = r.replaceAll('installation/shipping/*', '')
       expect(r, `${roles} ${s.Sid ?? ''}`).not.toMatch(/installation\//)
       // a grant on the whole central bucket would reach it too
       const actions = list(s.Action).filter((a) => a.startsWith('s3:') && !['s3:ListBucket'].includes(a))

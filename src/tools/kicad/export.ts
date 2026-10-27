@@ -3,9 +3,15 @@
  * drill files (optionally zipped together for a fab house), placement files, PDF/SVG plots of the schematic and the
  * board, a STEP model, and a 3D render (only when asked: it is slow). Every output goes through KiCad, so the files
  * are what KiCad would plot; this module only chooses sensible flags and reports the files written.
+ *
+ * The drawings people look at (each schematic sheet's SVG, the board's SVG and render) are also kept in the run record
+ * (`drawingArtifacts`), not only in the output folder, which is a working copy that is not committed: one artifact per
+ * sheet named sheets/<sheet file>.svg, board/<name>.svg and board/<name>.png, and drawings.json saying which
+ * schematic file each SVG draws, at which sheet path, and its page size in millimetres (from the SVG's own width and
+ * height), so findings in millimetres can be placed on it. Anything over the artifact limit is left out and listed.
  */
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { basename, join, relative, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { ToolError } from '../../core/registry.js'
 import { runCli } from './project.js'
 
@@ -158,3 +164,99 @@ export function outDirFor(path: string | undefined, fallbackRoot: string, name: 
 }
 
 export const fileName = basename
+
+// ------------------------------------------------------------------ drawings kept in the run record
+
+/** The most an artifact may hold for files.url to hand it back (src/api/action-kit.ts MAX_ARTIFACT). */
+export const DRAWING_LIMIT = 8 * 1024 * 1024
+
+export interface SheetPlace { file: string; path: string; name: string }
+export interface Drawing {
+  /** the artifact's name in the run: sheets/hw/power.kicad_sch.svg, board/demo.svg, board/demo-top.png */
+  artifact: string
+  kind: 'sheet' | 'board' | 'render'
+  /** sheet: the schematic file it draws (relative to the repository) and its sheet path ('/', '/Power/') */
+  file?: string | undefined
+  sheet?: string | undefined
+  /** the page (or fitted board) size in millimetres, from the SVG's width and height */
+  width_mm?: number | undefined
+  height_mm?: number | undefined
+  /** board: where the fitted SVG's top left corner is in board millimetres (the outline's corner) */
+  origin_mm?: { x_mm: number; y_mm: number } | undefined
+  bytes: number
+}
+
+const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '')
+
+/** An SVG's width and height in millimetres (kicad-cli writes them as "297.0022mm"), or null. */
+export function svgSizeMm(svg: string): { width_mm: number; height_mm: number } | null {
+  const head = svg.slice(0, 2000)
+  const w = /\bwidth="([\d.]+)mm"/.exec(head)
+  const h = /\bheight="([\d.]+)mm"/.exec(head)
+  // without millimetre units the size is not guessed at: findings are then listed, not placed
+  return w && h ? { width_mm: Number(w[1]), height_mm: Number(h[1]) } : null
+}
+
+/**
+ * Which sheet each SVG kicad-cli wrote draws. kicad-cli names the root sheet's SVG after the project and each
+ * sub-sheet's after the project and its sheet path (demo.svg, demo-Power.svg, demo-Power-Filter.svg); the match
+ * ignores case and separators, and falls back to the last sheet name alone. `sheets` are every sheet instance (the
+ * root first), each with its file relative to the repository.
+ */
+export function sheetOfSvg(svgName: string, project: string, sheets: readonly SheetPlace[]): SheetPlace | null {
+  const stem = norm(svgName.replace(/\.svg$/i, ''))
+  const root = sheets[0]
+  if (stem === norm(project) && root) return root
+  for (const s of sheets.slice(1)) {
+    const parts = s.path.split('/').filter(Boolean)
+    if (stem === norm(`${project}-${parts.join('-')}`) || stem === norm(`${project}-${parts[parts.length - 1] ?? ''}`)) return s
+  }
+  for (const s of sheets.slice(1)) if (stem.endsWith(norm(s.name)) && norm(s.name)) return s
+  return null
+}
+
+/**
+ * The drawings in an export folder, as artifacts to keep: each sheet SVG (named by the schematic file it draws), the
+ * board SVG and the render PNG. Returns what to store and what was left out (too large, or not matched to a sheet).
+ */
+export function drawingArtifacts(outDir: string, o: { project: string; sheets: readonly SheetPlace[] }): { keep: { drawing: Drawing; bytes: Uint8Array; mime: string }[]; left: string[] } {
+  const keep: { drawing: Drawing; bytes: Uint8Array; mime: string }[] = []
+  const left: string[] = []
+  const svgDir = join(outDir, 'schematic-svg')
+  const used = new Set<string>()
+  try {
+    for (const f of readdirSync(svgDir).filter((x) => x.toLowerCase().endsWith('.svg')).sort()) {
+      const bytes = readFileSync(join(svgDir, f))
+      const place = sheetOfSvg(f, o.project, o.sheets)
+      if (bytes.length > DRAWING_LIMIT) { left.push(`${f} (${Math.round(bytes.length / 1e6)} MB, over the 8 MB a drawing may be)`); continue }
+      // one drawing per file: a sheet placed twice (two channels) is drawn once
+      const name = place ? `sheets/${place.file}.svg` : `sheets/${f}`
+      if (used.has(name)) continue
+      used.add(name)
+      if (!place) left.push(`${f} (not matched to a sheet: kept under its own name)`)
+      keep.push({ drawing: { artifact: name, kind: 'sheet', ...(place ? { file: place.file, sheet: place.path } : {}), ...(svgSizeMm(bytes.toString('utf8')) ?? {}), bytes: bytes.length }, bytes, mime: 'image/svg+xml' })
+    }
+  } catch { /* no schematic SVGs asked for */ }
+  for (const e of readdirSync(outDir)) {
+    const full = join(outDir, e)
+    const board = e === `${o.project}-board.svg`
+    const render = new RegExp(`^${o.project.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-(top|bottom|left|right|front|back)\\.png$`).test(e)
+    if (!board && !render) continue
+    const bytes = readFileSync(full)
+    if (bytes.length > DRAWING_LIMIT) { left.push(`${e} (${Math.round(bytes.length / 1e6)} MB, over the 8 MB a drawing may be)`); continue }
+    keep.push({
+      drawing: { artifact: `board/${e}`, kind: board ? 'board' : 'render', ...(board ? svgSizeMm(bytes.toString('utf8')) ?? {} : {}), bytes: bytes.length },
+      bytes, mime: board ? 'image/svg+xml' : 'image/png',
+    })
+  }
+  return { keep, left }
+}
+
+/** Every sheet instance of a schematic (the root first), each with its file relative to `root`. */
+export function sheetPlaces(sch: { root: string; sheets: readonly { name: string; file: string; path: string }[] }, root: string): SheetPlace[] {
+  const rel = (f: string): string => relative(root, f).split('\\').join('/')
+  return [
+    { file: rel(sch.root), path: '/', name: basename(sch.root).replace(/\.kicad_sch$/, '') },
+    ...sch.sheets.map((s) => ({ file: rel(resolve(dirname(sch.root), s.file)), path: s.path, name: s.name })),
+  ]
+}

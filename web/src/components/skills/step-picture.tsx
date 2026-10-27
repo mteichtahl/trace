@@ -7,6 +7,7 @@
 import { useState } from 'react'
 import { openPanel } from '@/components/chat/chat-state'
 import { CanvasFrame } from '@/components/canvas/canvas-frame'
+import { drawn } from '@/components/project/architecture'
 import { BlockDiagram } from '@/components/project/block-diagram'
 import { useCoverage } from '@/components/project/shared'
 import { TRACE_WIDTH, Traceability } from '@/components/project/traceability'
@@ -37,7 +38,7 @@ export function StepPicture({ repo, kind, view, selected, onSelect, height = 340
   if (kind === 'block-diagram') {
     return (
       <CanvasFrame title="Block diagram" subtitle={d?.architecture?.option} height={height + 40} onAsk={() => openPanel(true)}>
-        {d?.architecture ? <div className="origin-center scale-[0.4] sm:scale-[0.7] 2xl:scale-90"><BlockDiagram blocks={d.architecture.blocks} connections={d.architecture.connections} /></div> : <Empty kind={kind} loading={design.isLoading} />}
+        {d?.architecture ? <div className="origin-center scale-[0.4] sm:scale-[0.7] 2xl:scale-90"><BlockDiagram {...drawn(d.architecture, d.architecture.id ?? null)} /></div> : <Empty kind={kind} loading={design.isLoading} />}
       </CanvasFrame>
     )
   }
@@ -48,8 +49,8 @@ export function StepPicture({ repo, kind, view, selected, onSelect, height = 340
         {pins.length ? (
           <div className="grid w-full grid-cols-2 gap-1.5 overflow-auto p-4 sm:grid-cols-4 lg:grid-cols-5">
             {pins.map((p) => (
-              <div key={p.pin} className={cn('rounded-md border bg-card p-2 text-xs', p.status === 'conflict' && 'border-destructive', p.status === 'spare' && 'border-dashed')}>
-                <p className="font-mono font-semibold">{p.pin}</p>
+              <div key={`${p.part ?? ''}.${p.pin}`} className={cn('rounded-md border bg-card p-2 text-xs', p.status === 'conflict' && 'border-destructive', p.status === 'spare' && 'border-dashed')}>
+                <p className="font-mono font-semibold">{p.part ? `${p.part}.` : ''}{p.pin}{p.name ? <span className="font-normal text-muted-foreground"> {p.name}</span> : null}</p>
                 <p className="truncate font-mono text-muted-foreground">{p.net}</p>
                 <p className="truncate">{p.fn}</p>
                 {p.status !== 'ok' && <StatusBadge plain status={p.status === 'conflict' ? 'failing' : p.status === 'waived' ? 'waived' : 'idle'} label={p.status === 'spare' ? 'Spare' : undefined} />}

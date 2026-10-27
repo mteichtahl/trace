@@ -39,7 +39,7 @@ export interface Actions {
   status: { args: Repo; result: { repo: string; default_branch: string; pulls: unknown[]; agent_fix_issues: unknown[]; runs: unknown[]; last_deploy: unknown } }
   'settings.get': { args: Repo; result: { repo: string; set: Record<string, unknown>; config: Record<string, unknown>; errors: string[] } }
   'settings.set': { args: Repo & { key: string; value?: unknown; unset?: boolean }; result: { branch: string; commit: string } }
-  runs: { args: Repo & { kind?: string; limit?: number }; result: Record<string, unknown>[] }
+  runs: { args: Repo & { kind?: string; limit?: number; agent?: string }; result: Record<string, unknown>[] }
   run: { args: Repo & { id: string }; result: Record<string, unknown> }
   artifact: { args: Repo & { id: string; name: string }; result: { id: string; name: string; mime: string | null; size: number; base64: string } }
   'tools.list': { args: Repo; result: { name: string; description: string; needs: 'read' | 'write'; input: unknown }[] }
@@ -114,20 +114,31 @@ export interface Actions {
   'skill.drafts': { args: Repo; result: { drafts: { skill: string; name: string; step: number; steps: number; saved: string }[] } }
   /** submit a skill's result: refused with what is missing unless every check is met or waived */
   'skill.submit': { args: Repo & { skill: string; draft: unknown }; result: { ok: true; id?: string; ref?: string; jobId?: string; started?: string[] } }
-  /** each requirement's evidence status; the intent lines (none recorded yet: intent_note says so) */
+  /** each requirement's evidence status and the intent lines it is derived from */
   'requirements.trace': { args: Repo; result: import('./types-s1').TraceView }
-  /** the sheets and the board with the latest checks' findings; what is not recorded, in notes */
+  /** the architecture, the sheets with their drawings and requirements, the pin plan, the board; what is not recorded, in notes */
   'design.get': { args: Repo; result: import('./types-s1').DesignView }
+  /** a person's decision about the design record: accept, edit or reject intent; strike a requirement; fix the criteria; choose an architecture; agree a pin plan */
+  'design.decide': { args: Repo & { decision: import('./types-s1').DesignDecisionInput }; result: { ok: true; decision: { id: string; kind: string; target: string; choice: string; by: string; at: string }; summary: string } }
   /** releases, orders, boards */
   'build.get': { args: Repo; result: import('./types-s1').BuildView }
   /** record a placed order (number, paid cost, ship date) */
   'order.record': { args: Repo & { order?: string; number: string; paid: number | null; ship: string | null }; result: { ok: true; wait?: Wait } }
-  /** the stage timeline; money for admins; what is not recorded is null, with notes */
+  /** the stage timeline; money for admins (cloud estimates and actuals from the cost ledger, orders); notes */
   'cost.get': { args: Repo; result: import('./types-s1').CostView }
-  /** cancel a running job; pause, resume and move up answer ok: false with the reason */
-  'job.control': { args: { id: string; op: JobOp; reason?: string }; result: { ok: boolean; kept?: string; reason?: string; state?: string | null } }
+  // the build after payment and cloud cost (src/api/actions-build.ts, actions-cost.ts)
+  'order.update': { args: Repo & { order: string; state?: 'shipped' | 'delivered' | 'cancelled'; carrier?: import('./types-s1').Carrier; tracking?: string; ship?: string | null; note?: string }; result: { ok: true; wait: Wait | null; note?: string } }
+  'order.check_now': { args: Repo & { order: string }; result: { ok: boolean; reason?: string } }
+  'board.record': { args: Repo & { serial: string; order?: string; status?: string; notes?: string; photos?: string[] }; result: { ok: true; created: boolean } }
+  'board.check': { args: Repo & { serial: string; check: string; kind: 'count' | 'visual' | 'fault' | 'hand' | 'label'; result: 'pass' | 'fail' | 'marked'; ref?: string; note?: string; photo?: string }; result: { ok: true } }
+  'usage.month': { args: { month?: string }; result: import('./types-s1').UsageMonth }
+  /** pause (a running task stops at its next safe point; a queued one is held), resume, move up, cancel */
+  'job.control': { args: { id: string; op: JobOp; reason?: string; repo?: string }; result: { ok: boolean; kept?: string; reason?: string; state?: string | null; pausing?: boolean; held?: boolean; jobId?: string; position?: number } }
+  /** the project's jobs (its job index), each agent's status, the remote jobs running */
+  'jobs.list': { args: Repo; result: import('./types').ProjectJobs }
   // installation policy and people (src/api/actions-me.ts, actions-people.ts)
   'policy.get': { args: Record<string, never>; result: { locks: Record<string, string>; updated: string | null; by: string | null } }
+  'installation.layout': { args: Record<string, never>; result: import('@/components/installation/layout').LayoutView }
   'policy.set': { args: { key: string; reason: string | null }; result: { locks: Record<string, string>; changed: boolean } }
   'users.history': { args: { who: string; limit?: number }; result: { sub: string; email: string | null; entries: { at: string; by: string; repo: string | null; action: 'assign' | 'unassign' | 'class'; detail: string | null; text: string }[] } }
 }

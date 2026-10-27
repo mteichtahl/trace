@@ -4,6 +4,7 @@
  * into Secrets Manager and GitHub after the deploy.
  */
 import { z } from 'zod'
+import { PriceOverridesSchema } from '../core/prices.js'
 import { projectHash, projectSlug } from '../core/project.js'
 
 export {
@@ -271,6 +272,20 @@ export const InfraPropsSchema = z.object({
      * outside this stack (e.g. AWS's managed common rules and a rate-based rule per address). Unset: no WAF; the
      * backend's own per-person limits still apply */
     webAclArn: z.string().regex(/^arn:aws[a-z-]*:wafv2:us-east-1:\d{12}:global\/webacl\/[\w-]+\/[0-9a-f-]{36}$/, 'a WAFv2 web ACL ARN of CLOUDFRONT scope (us-east-1, global/webacl/…)').optional(),
+    /** AWS WAF in front of the app (src/infra/edge.ts): AWS's managed rules, rate limits per address, a size limit.
+     * On by default (about US$11 a month and US$0.60 per million requests): the address is public and sign-in is not
+     * behind a token. In the installation's region when that is us-east-1, else in the stack `<prefix>-edge` there,
+     * whose output the tools pass back as aclArn. Ignored when webAclArn names a web ACL of your own */
+    waf: z.object({
+      enabled: z.boolean().default(true),
+      /** requests to /api/* per address in 5 minutes */
+      apiRequestsPer5Minutes: z.number().int().min(100).max(2_000_000_000).default(1000),
+      /** requests to /api/auth/* (sign-in) per address in 5 minutes */
+      authRequestsPer5Minutes: z.number().int().min(10).max(2_000_000_000).default(100),
+      /** the `<prefix>-edge` stack's web ACL (its WebAclArn output), set by the installer and the self-update before
+       * they deploy this stack; unset outside us-east-1, the app has no WAF until it is */
+      aclArn: z.string().regex(/^arn:aws[a-z-]*:wafv2:us-east-1:\d{12}:global\/webacl\/[\w-]+\/[0-9a-f-]{36}$/, 'a WAFv2 web ACL ARN of CLOUDFRONT scope').optional(),
+    }).strict().prefault({}),
     /** The regions a global or cross-region inference profile may route the chat model to (the backend may invoke the
      * model there); unset: any region */
     modelRegions: z.array(z.string().regex(/^[a-z]{2}(-gov)?-[a-z]+-\d$/, 'an AWS region')).max(30).optional(),
@@ -295,6 +310,20 @@ export const InfraPropsSchema = z.object({
     samplingPercent: z.number().min(0).max(100).optional(),
     /** a CloudWatch dashboard of invocations, latency, errors, tokens, tool calls and GPU jobs */
     dashboard: z.boolean().default(true),
+  }).strict().prefault({}),
+  /** Cloud cost per project (src/core/cost.ts, src/infra/cost.ts). */
+  cost: z.object({
+    /** overrides of the price table the estimates use (src/core/prices.ts DEFAULT_PRICES), with their date */
+    prices: PriceOverridesSchema.optional(),
+    /** a daily read of what AWS billed each project, from Cost Explorer by the trace:project cost allocation tag */
+    explorer: z.object({
+      enabled: z.boolean().default(true),
+      /** activate trace:project and trace:installation as cost allocation tags when they are not (needs the account
+       * to be allowed to: in an organization, only its management account is) */
+      activateTags: z.boolean().default(true),
+      /** when it reads, UTC, HH:MM */
+      at: z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/).default('06:17'),
+    }).strict().prefault({}),
   }).strict().prefault({}),
 }).strict().superRefine((p, ctx) => {
   if (p.runners.auth === 'token' && p.runners.connectionArn) ctx.addIssue({ code: 'custom', path: ['runners', 'connectionArn'], message: "runners.connectionArn is for auth 'connection': with auth 'token' the runners use CodeBuild's GitHub source credential" })

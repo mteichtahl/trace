@@ -207,6 +207,7 @@ carry on with what they have and say which key would add more ("no Nexar (Octopa
 | `nexar` | `NEXAR_CLIENT_ID`, `NEXAR_CLIENT_SECRET` | Stock, prices and lifecycle from every distributor Octopart lists (parts lookup, search, alternatives, BOM checks) | [portal.nexar.com](https://portal.nexar.com/) |
 | `mouser` | `MOUSER_API_KEY` | Mouser stock, prices, lifecycle, datasheet links | [mouser.com/api-hub](https://www.mouser.com/api-hub/) |
 | `digikey` | `DIGIKEY_CLIENT_ID`, `DIGIKEY_CLIENT_SECRET` | Digi-Key stock, prices, lifecycle, datasheet links | [developer.digikey.com](https://developer.digikey.com/) |
+| `dhl` | `DHL_API_KEY` | Following a shipped order's DHL parcel ([Cost and orders](#cost-and-orders)); read by the order watch only, kept as `<prefix>/order-watch/dhl`, never by a worker | [developer.dhl.com](https://developer.dhl.com/api-reference/shipment-tracking) |
 
 LCSC needs no key, and the datasheet tools fetch public URLs; those are every credential the tools read
 (`src/core/integrations-catalog.ts`, checked by `test/core/integrations.test.ts`).
@@ -432,6 +433,17 @@ The move is therefore three deploys in a row, run by the installer:
 Workflows that run between the second deploy and the variable update fail; re-run them. If a deploy fails, run the
 installer again: it carries on from the layout the stack is then in.
 
+**What a flat installation gets, and why the move is the way on.** Projects created in the web app are added to a flat
+installation by the self-update too, while it holds fewer than 15 projects (`FLAT_UPDATE_MAX`, src/installer/pending.ts;
+each project is about 21 of the stack's 500 resources, and an unattended deploy keeps room for trace's own changes);
+past that, by the next installer run. They get their agent, memory and build runner, but no knowledge base, CPU queue or
+per-project events topic, so an agent waiting in `journey.ask` checks the record on its timer. Giving the flat layout
+those was rejected: the knowledge base (5 resources), the CPU job definition (1) and the events topic with its policy
+and rule (3) would take 20 projects past 500 resources, so the flat cap would drop to about 15 for every existing
+installation. The self-update never moves the layout, because the move deletes every project's memory records, which
+is a person's call; the installer offers it ("Move to one nested stack per project"), and the app says all of this on
+New project and Admin › Installation (`installation.layout`), with the move's steps and what it costs.
+
 **Upgrading an installation from before per-project roles.** The next installer run replaces the single worker
 runtime (`<prefix>_agent`), its role, the one GitHub OIDC role (`<prefix>-github-actions-<region>`) and the one GPU
 job definition with one of each per project, and rewrites every repository's `TRACE_AWS_ROLE` and
@@ -496,12 +508,38 @@ backend) when the stack is deployed, and lives in its own nested stack (`src/inf
 | Live updates | AppSync Events, `<prefix>-events`. People subscribe with their sign-in, each to `/trace/users/<their id>` only. Only the backend, and the agents' facts function below, can publish |
 | Agents' facts | When an agent records a journey fact (a question, a check, a stuck report), the central bucket's event reaches a small function, `<prefix>-journey-events`, through an EventBridge rule. It tells everyone on that project to refresh, and notifies the people a new question or stuck report is for. Its role may read the access store and the agents' facts files, and publish live events. Nothing else |
 | Sign-in | A Cognito app client of its own, `<prefix>-web`, using choice-based sign-in. People sign in with a passkey or a password, plus an email code when SES is set (see below). The CLI keeps its own client |
-| Voice | Polly speech kept 30 days in a small bucket of its own. The browser gets signed URLs for it and for Transcribe streaming |
+| Voice | Polly speech kept 30 days in a small bucket of its own. The browser gets signed URLs for it and for Transcribe streaming. Dictation in a project uses that project's own words (below) |
 
 The backend's role can read its settings and use Polly, Transcribe streaming, its voice cache, CloudWatch (read
 only), the chat model, and publishing live events. It cannot reach the access store, any project's data or Cognito's
 admin API. Anything about a project goes through the API runtime, with the person's own token, so the access checks
 stay in one place.
+
+**Dictation with the project's words.** Each project gets an Amazon Transcribe custom vocabulary made from its design,
+so dictation writes `U4`, `R14`, `STM32F405RGT6`, `VCC_3V3` or `REQ-LAY-001` as the design spells them. Every push to
+the default branch remakes it (the `voice-vocabulary` job of `trace-worker.yml`, `tracectl tool voice.vocabulary`, with
+the project's own role); `voice.vocabulary.sync` does it on demand through the API. The table
+(`projects/<owner>/<repo>/voice/<language>.txt`) has one row per way of saying a name: a reference designator's
+letters spelled and its number said digit by digit or as a number ("R one four", "R fourteen" → R14), a part number or
+net spelled with its words kept ("Buck E N" → Buck_EN), with Transcribe's rules for a phrase (letters and hyphens, single
+letters with periods, no digits, at most 256 characters, at most 50 KB in all; `SoundsLike` and `IPA` are left empty,
+since Transcribe no longer uses them). It is named `<prefix>-<project hash>-<language>`, for the languages in the
+project setting `voice.languages` (default `en-AU`; English only, as the spoken numbers are English; Transcribe allows
+100 vocabularies per account by default). When the microphone opens, the backend asks the API (`voice.vocabulary`, as
+the person) and names the vocabulary in the signed streaming URL only when it is ready; the app says whether the
+project's words are in use. Waiting for a vocabulary to be ready is a timer (every 10 seconds, growing to a minute),
+declared: Transcribe's "Vocabulary State Change" event is sent only when a vocabulary is first made, not when it is
+updated. IAM: each project's worker and OIDC roles may create vocabularies only tagged with their own project and
+update and read only their own names; the API role may only read their state; the backend role gets nothing new. Turn
+it off per project with `voice.vocabulary = false`.
+
+**Ask trace's instructions.** An admin's change to `chat.role` at installation scope (Admin › Prompts, or
+`prompts.set`) reaches the chat agent within a minute. The backend cannot read the prompts store, and is not given
+read access to it: the store is one database holding every prompt's override and its history, and S3 cannot grant
+part of one object. Instead it asks the API for `prompts.chat`, which answers only the editable chat entries, and
+keeps the answer for 60 seconds per Lambda container. A change made through the app clears that container's copy at
+once; other containers pick it up within the 60 seconds (the live `record.changed` event reaches browsers, not the
+Lambda). The locked chat entries (the data fences) always come from the code.
 
 Every response carries strict security headers: HSTS, `nosniff`, `X-Frame-Options: DENY`, and
 `strict-origin-when-cross-origin`. The content security policy allows only these:
@@ -513,6 +551,24 @@ Every response carries strict security headers: HSTS, `nosniff`, `X-Frame-Option
 - `data:` and `blob:` URLs
 - WebAssembly (PDF.js and Shiki)
 - inline styles
+
+**AWS WAF.** On by default (Advanced → Web app, "Protect the app with AWS WAF"; `web.waf`). The app's address is public
+and sign-in takes no token, so a web ACL sits in front of it (`src/infra/edge.ts`): AWS's managed rule groups (the core
+rule set, known bad inputs and the IP reputation list), at most 1,000 requests to `/api/*` and 100 to `/api/auth/*` per
+address in 5 minutes (`web.waf.apiRequestsPer5Minutes`, `authRequestsPer5Minutes`; over them a 429), and no request to
+`/api/*` declaring a body of 5 MB or more (the chat's limit is 4 MB). The core rule set's 8 KB body limit and its body
+cross-site-scripting rule only count, since a chat or a prompt is larger and people paste code; the app renders no HTML
+from them. It costs about US$11 a month (US$5 for the web ACL and US$1 for each of its six rules) and US$0.60 per
+million requests. That is the default because the alternative is sign-in with no limit per address; turn it off for a
+private trial. CloudFront takes web ACLs from us-east-1 only: in us-east-1 the web ACL is in the web app's own stack;
+elsewhere the installer deploys a small stack of its own, `<prefix>-edge`, in us-east-1 first (bootstrapping CDK there
+if needed), and deploys the main stack with its `WebAclArn` output as `web.waf.aclArn`. Passing that one value between
+two deploys was chosen over CDK's `crossRegionReferences`, which would add a custom resource (a Lambda and its role) and
+an SSM parameter the two stacks would then hold each other to. The self-update deploys `<prefix>-edge` too, with the
+CDK bootstrap roles of us-east-1 and the right to read that stack's outputs only; it never bootstraps us-east-1, so
+when that is missing it keeps the web ACL the app had and says to run the installer. A failed edge deploy never stops
+the main one. Turning the WAF off deletes `<prefix>-edge` after the main deploy, and `tracectl uninstall` deletes it
+too. A web ACL of your own (`web.webAclArn`) is used instead when given. Admin → Installation says whether it is on.
 
 **Custom domain.** Under Advanced → Web app, give a domain and its ACM certificate (it must be in us-east-1). After the
 deploy, point the domain's DNS at the distribution with a CNAME or alias (`WebDistributionId`). The props for this are
@@ -530,6 +586,55 @@ The invitation email points at `https://<address>/invite` as well as `tracectl l
 Open trace button. Turn the app off with Advanced → Web app (`web.enabled: false`). Other stack settings:
 `web.model` (the chat model, which defaults to `model`) and `web.dashboards` (extra CloudWatch dashboards for the
 Operations page, beside `<prefix>-agents`).
+
+## Cost and orders
+
+**Cloud cost per project.** Each project's spend is kept in a cost ledger in the central bucket, beside its agents'
+facts (`projects/<slug>/journey-agent/cost.db`, `src/core/cost.ts`), not in the repository: money is for admins only.
+
+- **Agents.** Every Claude run records each model's tokens (the Agent SDK's result) with its job and agent, priced from
+  the price table.
+- **Graphics card and CPU jobs.** Every finished AWS Batch job records its running time (Batch's start and stop
+  times) times its pool's price: a graphics card job holds its instance, a CPU job pays for the vCPUs it asked for.
+- **The price table** (`src/core/prices.ts`) is one dated table: Bedrock prices per million tokens per model (with the
+  premium Bedrock charges for regional endpoints of the newer models) and the two pools' prices per hour. Its
+  defaults carry the date they were taken from the price pages. Override any part with the stack setting
+  `cost.prices` (a model entry, a region-only entry, a pool, and a new `asOf`), then run the installer: the workers get
+  it as `TRACE_PRICES`, and each row records the table date it was priced with. The screens say when the table is
+  more than six months old. Every figure from it is shown as an estimate.
+- **What AWS billed.** Every project resource carries the `trace:project` and `trace:installation` tags. A Lambda,
+  `<prefix>-cost-explorer`, reads Cost Explorer once a day (`cost.explorer.at`, default 06:17 UTC), grouped by
+  `trace:project` and service, and writes per-project actuals into `installation/cost/actuals.db`. Cost Explorer can
+  group by a tag only once it is **activated as a cost allocation tag**, a billing setting made once per account. With
+  `cost.explorer.activateTags` (default on) the Lambda activates it (`UpdateCostAllocationTagsStatus`); in a member
+  account of an AWS Organization only the management account may, so activate `trace:project` (and
+  `trace:installation`) once in the Billing and Cost Management console, under Cost allocation tags. Billing lists a
+  new tag up to a day after the first tagged resource exists, activation counts cost from then on only, and a day's
+  figures settle about 24 hours later. The screens say all of this, and when the next read is. Model use and the
+  shared job machines are not tagged per project, so for those the estimate is the per-project figure. Each run makes
+  two to four Cost Explorer requests (US$0.01 each).
+
+`cost.get` (Cost and time, and the gate's cost line) and `usage.month` (Admin › Usage and cost, and Operations' cost
+tile) answer from the ledger, for admins only.
+
+**Order status.** JLCPCB offers order status only through its Ordering API, for partner companies it approves on
+their order history and volume, so trace does not read JLCPCB. The person records the order after paying, then the
+carrier and tracking number from JLCPCB's shipping notice (Build tab, `order.update`), and marks it delivered. With
+the `dhl` integration set, an hourly Lambda, `<prefix>-order-watch`, follows each DHL parcel: its first check an hour
+after the number is recorded, then less often while nothing changes (up to every 12 hours), back to hourly when the
+status moves; a person can check now. The Wait line says when the next check is. It never changes an order: when DHL
+says delivered, the Build tab says so and the person records it. FedEx and UPS have tracking APIs that need an OAuth
+app with a shipping account; they are not built, and their parcels are not checked. Reading JLCPCB's notification
+emails would need inbound email (SES receiving and a domain's MX record), which an installation does not have, so it
+is not built either.
+
+**Boards and bring-up readings.** Boards are recorded by serial when they arrive (Incoming inspection: `board.record`,
+`board.check`), each check against a board: counted, labelled, a fault at its reference, each hand-placed part fitted
+or marked as left off. They are journey tables, people's entries. A hil tool given `bringup={board, step, min, max}`
+stores its reading against that board and bring-up step, with pass or fail, in the run record (`bringup_readings`, a
+measurement like any other), and copies it live beside the agents' facts so the Bring-up run screen shows it as it
+is taken; `hil.idn` stores each instrument's identity the same way. The Incoming inspection, Bench setup and
+Bring-up run checks are computed from these.
 
 ## Where builds run
 
@@ -897,6 +1002,25 @@ test items and coverage points follow, and the rename is listed as a merge note 
 | `verify.verilator` | Lint, plus build and run of a C++ or HDL testbench, with line, toggle and user coverage. |
 | `verify.cocotb` | cocotb tests on Icarus or Verilator. Per-test verdicts come from results.xml. |
 | `verify.formal` | A `.sby` file through SymbiYosys, or files + top in bmc, prove or cover mode. Without sby it runs yosys and yosys-smtbmc directly (the steps of sby's smtbmc engine). Counterexample traces come back as VCD artifacts. |
+
+Beside the requirements, the project database keeps the design record the agents propose for Define, Architect and
+Capture (`src/tools/design`): intent statements with their source, each requirement's link to the statement it is
+derived from, the architectures compared (blocks with their key parts and the requirements each serves, connections,
+criteria and scores), the pin plan, and which requirements each schematic sheet serves. It changes with the design, so
+it is committed and merged (newer row wins) like the requirements. Agents only propose: accepting intent, striking a
+requirement, fixing the criteria, choosing an architecture and agreeing a pin plan are a person's decisions, made in
+the guided skills (or `design.decide`) and kept in the journey record, which agents cannot write.
+
+| Tool | What it does |
+| --- | --- |
+| `design.intent` | Intent statements by topic (purpose, environment, power, interfaces, performance, physical, compliance, build, constraints, references): words, source, interface details, numeric limits, "don't care", "unknown, decide by", open questions with an owner, conflicts. Links a requirement to the statements it is derived from. Lists them with people's decisions where the journey is readable. |
+| `design.architecture` | Options (one recommended, with why and what it gives up), criteria with weights, a score with a reason per option and criterion, each option's blocks (role, key part numbers, requirements served, place on the diagram) and connections (what flows). |
+| `design.pins` | The pin plan: each pin's function, peripheral instance and use, net, reserved role (boot, reset, debug) and the alternate functions the datasheet allows. `check` compares it with the schematic's netlist through kicad-cli and records the findings as a run. |
+| `design.sheets` | Which requirements each schematic sheet serves, and its block (or why it serves none). |
+
+`kicad.export` keeps the drawings people look at in its run as well as in the output folder: one SVG per schematic
+sheet (`sheets/<file>.svg`), the board SVG and the render, with `drawings.json` naming the file and sheet each draws
+and its page size, so the app can place rule-check findings on them.
 
 HDL sources keep their folder layout in the job (named relative to the deepest folder holding all of them, include
 dirs walked into sub-folders, `` `include`` directives followed), and include dirs and source folders are passed as
@@ -1537,6 +1661,7 @@ prompt is never recorded, as with every other prompt and tool argument (see [Obs
 | `prompts.reset { id, scope, repo?, reason? }` | the same | back to the layer below |
 | `prompts.revert { id, scope, version, repo?, reason? }` | the same | back to an earlier version (a number or a history uid) |
 | `prompts.history { id, scope, repo? }` | a user or an admin (installation), write (project) | every change to the id in that layer |
+| `prompts.chat {}` | any class | the installation's text of the chat agent's editable entries (`chat.role`), or null for the default: what the web app's backend applies to Ask trace |
 
 The access check comes first, as for every action: a project you are not assigned to and one that does not exist
 get the same "no access". The setting `agents.<kind>.instructions` stays as a lightweight addendum after the rules;
@@ -1685,6 +1810,22 @@ trace id, so workflow → agent → tools → GPU jobs is one trace to search fo
 Metrics: `trace.invocations`, `trace.jobs` and `trace.job.duration`, `trace.tool.calls`, `trace.tool.errors` and
 `trace.tool.duration`, `gen_ai.client.token.usage` (by token type and model), `trace.claude.cost`, and
 `trace.gpu.jobs` and `trace.gpu.duration`. Their dimensions are kinds, agents, tool names and outcomes, never ids.
+
+Per project, each project's own worker also records `trace.project.jobs`, `trace.project.job.duration`,
+`trace.project.tool.calls`, `trace.project.tool.duration`, `trace.project.claude.cost`, `trace.project.gpu.jobs` and
+`trace.project.gpu.duration`, with two dimensions only: `trace.project` (`project-<8 hex>`, the project's hash, never
+its name) and the outcome. The aggregate series above are unchanged; these are separate names, so nothing is counted
+twice. The agents' dashboard draws them per project, and Operations names each series' project for the people on it:
+contributors and reviewers see their projects' jobs and tool calls; cost is for admins.
+
+What they cost: each combination of dimension values is one CloudWatch custom metric, $0.30 a month (first 10,000;
+prorated by the hour, and only for metrics that receive data that month). A project adds at most 15: jobs and job time
+by three outcomes (6), tool calls and tool time by two (4), Claude cost (1), remote jobs and their time by two (4). So
+at most $4.50 a month for a busy project, and $270 a month at the most projects an installation allows (60), all of
+them active every month; typically a few dollars. Metrics arrive as CloudWatch Logs (EMF), so the ingestion is a few
+bytes per job and tool call. Reading them is the larger cost at scale: GetMetricData is $0.01 per 1,000 metrics, and
+the six per-project widgets return up to 60 x 3 series each, so one Operations refresh at 60 busy projects reads about
+1,000 more metrics (1 cent); the page refreshes every 60 seconds while it is visible, slower when it is not.
 
 What is never recorded: prompts, tool arguments and results, file contents, tokens or keys, and email addresses. A
 person is a 16-character sha256 of their email, the same hash the agents' memory uses. Every attribute also passes a

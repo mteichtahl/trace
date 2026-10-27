@@ -20,7 +20,7 @@ import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { z } from 'zod'
 import { ToolError } from '../core/registry.js'
-import { ATTR, type Outcome, fail, recordMetric, setAttrs, span } from '../core/telemetry.js'
+import { ATTR, type Outcome, fail, recordProjectMetric, setAttrs, span } from '../core/telemetry.js'
 import { scratchDir } from '../core/store.js'
 
 export const JobKind = z.enum(['blender', 'freerouting', 'orthoroute',
@@ -182,7 +182,7 @@ export async function runJob(spec: GpuJob): Promise<JobResult> {
     throw e
   } finally {
     const dims = { [ATTR.gpuKind]: spec.kind, [ATTR.gpuBackend]: backend, [ATTR.outcome]: outcome }
-    recordMetric('trace.gpu.jobs', 1, dims)
-    recordMetric('trace.gpu.duration', (performance.now() - t0) / 1000, dims)
+    recordProjectMetric('trace.gpu.jobs', 1, dims)
+    recordProjectMetric('trace.gpu.duration', (performance.now() - t0) / 1000, dims)
   }
 }

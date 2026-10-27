@@ -36,7 +36,7 @@ import { ApiError, api, projectName } from '@/lib/api'
 import type { OpsAlarm, OpsAnswer, OpsWidget } from '@/lib/admin-types'
 import { useAuth } from '@/lib/auth'
 import { ago, time } from '@/lib/format'
-import { q, useProjects } from '@/lib/queries'
+import { q, useAction, useProjects } from '@/lib/queries'
 import { cn } from '@/lib/utils'
 import { LEVEL, RANGES, type Range, momentLabel, momentSummary, opsUrl, refreshIn, sectionTitle, stepOf, tileViews, type TileView } from './ops-model'
 
@@ -82,7 +82,10 @@ export function Operations({ section }: { section?: string }) {
   const data = ops.data
   const sections = data?.sections ?? []
   const current = sections.find((s) => s.id === section) ?? sections[0]
-  const tiles = useMemo(() => tileViews(data?.tiles ?? [], admin), [data?.tiles, admin])
+  // the month's cloud spend from the cost ledger (admins only: usage.month refuses anyone else)
+  const month = useAction('usage.month', {}, { enabled: admin })
+  const monthCost = month.data ? { estimated: month.data.totals.estimated, actual: month.data.totals.actual, currency: month.data.currency, projects: month.data.projects.length } : null
+  const tiles = useMemo(() => tileViews(data?.tiles ?? [], admin, monthCost), [data?.tiles, admin, monthCost?.estimated, monthCost?.actual])
 
   useTraceContext(
     {
@@ -192,7 +195,7 @@ export function Operations({ section }: { section?: string }) {
 
           <p className="mt-8 rounded-xl bg-muted/60 p-4 text-sm text-muted-foreground">
             <span className="font-medium text-foreground">Who sees what: </span>
-            admins see everything; contributors see their projects and installation health as a status line; reviewers see their projects' health and run counts, without cost, logs or traces.
+            admins see everything, cost included; contributors and reviewers see their projects' agent runs, jobs and tool calls (trace's own per-project series), and installation health as a status line, without cost, logs or traces.
           </p>
 
           <MomentSheet moment={moment} step={step} admin={admin} repos={repo ? [repo] : (projects.data ?? []).map((p) => p.repo)} onClose={() => setMoment(null)} />

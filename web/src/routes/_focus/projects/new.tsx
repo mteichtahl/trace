@@ -25,6 +25,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { EmbeddedChat } from '@/components/chat/embedded-chat'
 import { useTraceContext } from '@/components/chat/context'
 import { FocusLayout } from '@/components/focus/focus-layout'
+import { FlatNote } from '@/components/installation/layout'
 import { checks as allChecks, partsFor, recommendTemplate, slug, STEPS, type StepId } from '@/components/new-project/rules'
 import { IconPicker, ProjectIconView, recommendGlyph } from '@/components/project/project-icon'
 import { RunLine } from '@/components/run-line'
@@ -260,6 +261,7 @@ function NewProject() {
             </ol>
             <p className="mt-2 text-xs text-muted-foreground">Most of it takes under a minute; the pull request's checks may take a few more, shown as they run.</p>
           </div>
+          <FlatNote />
           {create.isError && <ErrorState title="The project was not created." kept="Everything you entered is kept." detail={String(create.error)} onRetry={() => void continueOrCreate()} />}
         </div>
       )}

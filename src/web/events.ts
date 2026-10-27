@@ -41,7 +41,11 @@ const MUTATING: ReadonlyArray<readonly [string, What]> = [
   ['me.set', 'preferences'],
   // the record's build side and the guided skills (skill.draft is not here: it is saved on every keystroke)
   ['order.record', 'journey'],
+  ['order.update', 'journey'],
+  ['board.record', 'journey'],
+  ['board.check', 'journey'],
   ['skill.submit', 'journey'],
+  ['design.decide', 'journey'],
   // a job id names no project here, and policy.set is installation-wide: both reach the caller's own screens only
   // (publishChange publishes to the project's members only when the arguments carry a repo)
   ['job.control', 'jobs'],
@@ -60,6 +64,7 @@ export function changeOf(action: string): What | null {
 
 export const userChannel = (sub: string): string => `/trace/users/${sub}`
 
+/** `job.updated`: { repo, jobId, state } (jobId and state null: several of the project's jobs changed at once). */
 export interface LiveEvent { type: 'record.changed' | 'job.updated' | 'notification'; repo?: string; at: string; [k: string]: unknown }
 
 export interface Publisher {

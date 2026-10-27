@@ -15,12 +15,15 @@
  *                      of its TRACES to X-Ray. The log group, sources, destinations and deliveries follow retainData
  *                      like the memory itself (Retain, or Delete, on stack deletion and on removal of the project)
  *   dashboard          invocations, latency, errors, jobs, tokens, cost, tool calls, GPU jobs, and the memories'
- *                      operations (one SEARCH across every project's memory)
+ *                      operations (one SEARCH across every project's memory); then the same jobs, tool calls, cost and
+ *                      GPU jobs per project (trace.project.*, dimension trace.project = project-<hash>: src/core/
+ *                      telemetry.ts PROJECT METRICS), one series per project, which Operations attributes to projects
  *
  * Disabled, nothing is created: only the two environment variables that keep the runtimes quiet.
  */
 import { join } from 'node:path'
-import { CfnOutput, CustomResource, Duration, Fn, RemovalPolicy, Stack } from 'aws-cdk-lib'
+import { CfnOutput, CustomResource, Duration, Fn, RemovalPolicy, Stack, Tags } from 'aws-cdk-lib'
+import { PROJECT_TAG } from '../core/project.js'
 import type { CfnRuntime } from 'aws-cdk-lib/aws-bedrockagentcore'
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch'
 import * as iam from 'aws-cdk-lib/aws-iam'
@@ -196,6 +199,8 @@ export class Observability extends Construct {
       const logsDelivery = new logs.CfnDelivery(at, `${pre}MemoryLogsDelivery`, { deliverySourceName: logsSource.name, deliveryDestinationArn: logsDest.attrArn })
       const tracesDelivery = new logs.CfnDelivery(at, `${pre}MemoryTracesDelivery`, { deliverySourceName: tracesSource.name, deliveryDestinationArn: tracesDest.attrArn })
       for (const r of [logsSource, tracesSource, logsDest, tracesDest, logsDelivery, tracesDelivery]) r.applyRemovalPolicy(keepDelivery)
+      // the project's cost allocation tags, in either layout (nested: its construct tags them already, src/infra/project.ts)
+      if (!m.scope) for (const r of [group, logsSource, tracesSource, logsDest, tracesDest, logsDelivery, tracesDelivery]) { Tags.of(r).add(PROJECT_TAG, m.repository.toLowerCase()); Tags.of(r).add('trace:installation', p.prefix) }
       logsDelivery.addDependency(logsSource)
       tracesDelivery.addDependency(tracesSource)
       // X-Ray as a destination needs Transaction Search (nested: CDK makes the project's nested stack wait for it)
@@ -293,14 +298,27 @@ export function dashboardBody(o: { region: string; runtimes: readonly string[]; 
     widgets.push(graph('GPU jobs by kind, backend and outcome', region, 16, 20, [search('gpu', METRIC_NAMESPACE, 'trace.gpu.jobs', 'Sum', ours)], { stacked: true }))
     widgets.push(graph('GPU job duration (p90, queue wait included)', region, 0, 26, [search('gdur', METRIC_NAMESPACE, 'trace.gpu.duration', 'p90', ours)], { w: 24, yLabel: 's' }))
   }
+  let y = o.gpu ? 32 : 26
   if (o.memories?.length) {
-    const y = o.gpu ? 32 : 26
     widgets.push(graph('Memory operations (every project\'s memory)', region, 0, y, [search('minv', RUNTIME_NAMESPACE, 'Invocations', 'Sum', memoryFilter)], { stacked: true }))
     widgets.push(graph('Memory latency (avg)', region, 8, y, [search('mlat', RUNTIME_NAMESPACE, 'Latency', 'Average', memoryFilter)], { yLabel: 'ms' }))
     widgets.push(graph('Memory errors and throttles', region, 16, y, [
       search('merr', RUNTIME_NAMESPACE, 'Errors', 'Sum', memoryFilter),
       search('mthr', RUNTIME_NAMESPACE, 'Throttles', 'Sum', memoryFilter),
     ]))
+    y += 6
   }
+  // per project: one series per project and outcome (the label carries project-<hash>: src/web/ops.ts attribute). Kept
+  // apart from the aggregate widgets above, which stay exactly as they were
+  const proj = '"trace.project"'
+  widgets.push({ type: 'text', x: 0, y, width: 24, height: 1, properties: { markdown: '### Per project (`trace.project` is the project\'s hash: Operations names the projects for the people on them)' } })
+  y += 1
+  widgets.push(graph('Jobs per project', region, 0, y, [search('pjobs', METRIC_NAMESPACE, 'trace.project.jobs', 'Sum', proj)], { stacked: true }))
+  widgets.push(graph('Job duration per project (p90)', region, 8, y, [search('pjdur', METRIC_NAMESPACE, 'trace.project.job.duration', 'p90', proj)], { yLabel: 's' }))
+  widgets.push(graph('Tool calls per project', region, 16, y, [search('ptools', METRIC_NAMESPACE, 'trace.project.tool.calls', 'Sum', proj)], { stacked: true }))
+  y += 6
+  widgets.push(graph('Tool duration per project (p90)', region, 0, y, [search('ptdur', METRIC_NAMESPACE, 'trace.project.tool.duration', 'p90', proj)], { yLabel: 'ms' }))
+  widgets.push(graph('Claude cost per project (estimate, USD)', region, 8, y, [search('pcost', METRIC_NAMESPACE, 'trace.project.claude.cost', 'Sum', proj)], { stacked: true }))
+  if (o.gpu) widgets.push(graph('GPU and CPU jobs per project', region, 16, y, [search('pgpu', METRIC_NAMESPACE, 'trace.project.gpu.jobs', 'Sum', proj)], { stacked: true }))
   return { widgets }
 }

@@ -11,6 +11,7 @@ import { SpanKind, SpanStatusCode, context, metrics, propagation, trace } from '
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks'
 import { CompositePropagator, W3CBaggagePropagator, W3CTraceContextPropagator } from '@opentelemetry/core'
 import { MeterProvider, MetricReader } from '@opentelemetry/sdk-metrics'
+import { projectHash } from '../../src/core/project.js'
 import { BasicTracerProvider, InMemorySpanExporter, type ReadableSpan, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
@@ -24,7 +25,7 @@ import { GpuJobSchema, runJob } from '../../src/gpu/jobs.js'
 import { observedMain } from '../../src/gpu/runner.js'
 import { Registry, ToolError, defineTool } from '../../src/core/registry.js'
 import {
-  addSecret, argShape, continueFromEnv, enabled, personHash, redact, resetMetricsCache, span, traceEnv, withSession,
+  addSecret, argShape, continueFromEnv, enabled, personHash, projectDimension, recordProjectMetric, redact, resetMetricsCache, span, traceEnv, withSession,
 } from '../../src/core/telemetry.js'
 import type { WorkItem } from '../../src/harness/worker.js'
 import { SHA, cfgOf, fakeGithub } from '../harness/fake.js'
@@ -153,6 +154,30 @@ describe('tool calls (Registry.call)', () => {
     expect(await total('trace.tool.errors')).toBe(3)
     expect(await total('trace.tool.errors', { 'trace.tool.name': 'files.fail', 'error.type': 'ToolError' })).toBe(1)
     expect(await total('trace.tool.calls', { 'trace.outcome': 'error' })).toBe(3)
+  })
+
+  it('on a project\'s runtime, also counts each call in its per-project series: the project\'s hash and the outcome only', async () => {
+    const was = process.env.TRACE_PROJECT
+    process.env.TRACE_PROJECT = 'Acme/Board'
+    resetMetricsCache()
+    try {
+      await reg.call('files.write', { path: 'a', content: 'b', token: 'c' }, { hardware: false, via: 'mcp' })
+      expect(projectDimension()).toBe(`project-${projectHash('acme/board')}`)
+      expect(await points('trace.project.tool.calls')).toEqual([{ attrs: { 'trace.project': `project-${projectHash('acme/board')}`, 'trace.outcome': 'ok' }, value: 1 }])
+      expect((await points('trace.project.tool.duration'))[0]?.count).toBe(1)
+      // the aggregate series is unchanged: no project on it
+      expect((await points('trace.tool.calls')).every((x) => !('trace.project' in x.attrs))).toBe(true)
+      // nothing else of the call (its tool's name, its arguments) reaches the per-project series
+      recordProjectMetric('trace.claude.cost', 0.5, { 'trace.agent': 'verify' })
+      expect(await points('trace.project.claude.cost')).toEqual([{ attrs: { 'trace.project': `project-${projectHash('acme/board')}` }, value: 0.5 }])
+    } finally {
+      if (was === undefined) delete process.env.TRACE_PROJECT
+      else process.env.TRACE_PROJECT = was
+      resetMetricsCache()
+    }
+    // a process that serves no one project (the CLI, the API runtime) records the aggregate only
+    expect(projectDimension({})).toBeNull()
+    expect(projectDimension({ TRACE_PROJECT: 'not a repo' })).toBeNull()
   })
 
   it('continues the trace a parent process passed in TRACEPARENT (the MCP server under Claude)', async () => {

@@ -16,7 +16,7 @@
  */
 import { existsSync, statSync } from 'node:fs'
 import type { DatabaseSync } from 'node:sqlite'
-import { PROJECT_SCHEMA, open, projectTables, transaction } from './store.js'
+import { applyProjectSchema, open, projectTables, transaction } from './store.js'
 
 interface Setting { value: string; updated: number; by: string | null }
 
@@ -27,8 +27,8 @@ function settings(db: DatabaseSync): Map<string, Setting> {
 
 function opened(path: string): DatabaseSync {
   const db = open(path, { wal: false })
-  db.exec(PROJECT_SCHEMA)
-  for (const t of projectTables()) db.exec(t.sql)
+  // the same columns on all three sides (runs.agent added to older ones), so SELECT * lines up
+  applyProjectSchema(db)
   return db
 }
 

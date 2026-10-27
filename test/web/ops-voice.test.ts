@@ -24,6 +24,8 @@ function data(q: MetricDataQuery): MetricDataResult[] {
     return [ha, hb, hc].map((h) => ({ Id: q.Id, Label: `trace_w_${h}-AbCdEf DEFAULT`, Timestamps: t, Values: [1, 2] }))
       .concat([{ Id: q.Id, Label: 'trace_api-XyZ DEFAULT', Timestamps: t, Values: [5, 5] }])
   }
+  // the per-project series: one per project, its label the project's hash (trace.project = project-<hash>)
+  if (expr.includes('trace.project.')) return [ha, hb, hc].map((h) => ({ Id: q.Id, Label: `project-${h} ok`, Timestamps: t, Values: [2, 3] }))
   if (expr.includes('trace.claude.cost')) return [{ Id: q.Id, Label: 'specialist verify', Timestamps: t, Values: [0.5, 0.25] }]
   if (expr.includes('Invocations') || expr.includes('Latency') || expr.includes('Errors') || expr.includes('Throttles')) {
     return [{ Id: q.Id, Label: `trace_m_${ha}-mem1 ListEvents`, Timestamps: t, Values: [3, 4] }, { Id: q.Id, Label: `trace_m_${hc}-mem2 ListEvents`, Timestamps: t, Values: [9, 9] }]
@@ -122,6 +124,21 @@ describe('Operations', () => {
     expect(o.alarms.map((a) => a.name)).toEqual([`trace-${ha}-runtime-errors`])
     expect(labels(o).some((x) => /cost/i.test(x))).toBe(false)
     expect(labels(o).filter((x) => x.startsWith('Runtime invocations|')).sort()).toEqual([`Runtime invocations|${A}`, `Runtime invocations|${B}`])
+  })
+
+  it('attributes trace\'s own per-project series: a contributor sees their projects\' jobs and tool calls, never cost; an admin sees cost per project', async () => {
+    expect(attribute(`project-${ha} ok`, 'trace', [A, B])).toBe(A)
+    expect(attribute(`myproject-${ha}`, 'trace', [A])).toBeNull()
+    const { get } = opsWorld('user', [{ repo: A, part: 'contributor' }, { repo: B, part: 'reviewer' }])
+    const l = labels((await get()).json() as Ops)
+    expect(l.filter((x) => x.startsWith('Jobs per project|')).sort()).toEqual([`Jobs per project|${A}`, `Jobs per project|${B}`])
+    expect(l.filter((x) => x.startsWith('Tool calls per project|')).sort()).toEqual([`Tool calls per project|${A}`, `Tool calls per project|${B}`])
+    expect(l.some((x) => /cost/i.test(x))).toBe(false)
+    const o = (await get()).json() as Ops
+    // the tiles from what they see: their projects' jobs and tool calls (2 projects x 5)
+    expect(o.tiles).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'jobs', value: 10 }), expect.objectContaining({ id: 'tools', value: 10 })]))
+    const admin = labels((await opsWorld('admin', [{ repo: A }, { repo: B }, { repo: C }]).get()).json() as Ops)
+    expect(admin.filter((x) => x.startsWith('Claude cost per project')).sort()).toEqual([A, B, C].map((r) => `Claude cost per project (estimate, USD)|${r}`).sort())
   })
 
   it('a contributor learns a shared alarm fires without seeing it', async () => {

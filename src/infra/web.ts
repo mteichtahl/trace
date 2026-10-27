@@ -26,14 +26,16 @@
  *                      namespace `trace`, whose onSubscribe handler allows /trace/users/<sub> to that <sub> alone
  *     journey events   `<prefix>-journey-events` (src/web/journey-events.ts) and its EventBridge rule: the central
  *                      bucket's "Object Created" events of each project's journey-agent/facts.db (an agent recorded a fact)
- *                      become `record.changed` (and `notification` for a new question or stuck report) on the channels
- *                      of the people on that project. Its role reads access/* and the agents' facts objects (S3 Get
- *                      only), and publishes to the namespace; nothing else
+ *                      become `record.changed` (and `notification` for a new question or stuck report), and of its
+ *                      job-index/jobs.db (a job changed) `job.updated`, on the channels of the people on that project.
+ *                      Its role reads access/*, the agents' facts objects and the job indexes (S3 Get only), and
+ *                      publishes to the namespace; nothing else
  *     content policy   names the events API's own two hosts, Transcribe streaming and the voice bucket; scripts only
  *                      from the app (the theme script is web/public/theme.js, not inline)
- *     WAF              web.webAclArn (a WAFv2 web ACL of CLOUDFRONT scope, made in us-east-1) attached when given: rate
- *                      limits per address belong there, since this stack's region is rarely us-east-1. The backend's
- *                      own per-person limit (src/web/agui.ts) is a soft one
+ *     WAF              web.waf (src/infra/edge.ts, on by default): made here in us-east-1, else the `<prefix>-edge`
+ *                      stack's web ACL (web.waf.aclArn, which the tools pass in); or web.webAclArn, a web ACL of the
+ *                      person's own. Without either, none (with a synth warning). The backend's own per-person limit
+ *                      (src/web/agui.ts) is a soft one
  *   in the parent      what names the pool (TraceWeb.attach):
  *     app client       `<prefix>-web`: choice-based sign-in (USER_AUTH) and refresh, no secret
  *     settings         the SSM parameter `/<prefix>/web/config` (webConfigParameter): the JSON the backend reads
@@ -46,7 +48,7 @@ import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { AssetHashType, CfnOutput, DockerImage, Duration, NestedStack, RemovalPolicy, Stack } from 'aws-cdk-lib'
+import { Annotations, AssetHashType, CfnOutput, DockerImage, Duration, NestedStack, RemovalPolicy, Stack } from 'aws-cdk-lib'
 import * as appsync from 'aws-cdk-lib/aws-appsync'
 import * as acm from 'aws-cdk-lib/aws-certificatemanager'
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront'
@@ -61,9 +63,12 @@ import * as events from 'aws-cdk-lib/aws-events'
 import * as targets from 'aws-cdk-lib/aws-events-targets'
 import * as ssm from 'aws-cdk-lib/aws-ssm'
 import { Construct } from 'constructs'
+import { BENCH_DB } from '../core/bench.js'
 import { AGENT_FACTS_DB, AGENT_FACTS_FOLDER } from '../core/agent-facts.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
+import { JOB_INDEX_DB, JOB_INDEX_FOLDER } from '../core/job-index.js'
 import { ACCESS_PREFIX } from './project.js'
+import { EDGE_REGION, TraceWebAcl, edgeStackName } from './edge.js'
 import { agentsDashboardName } from './observability.js'
 import { type InfraProps, WEB_OUTPUTS, webConfigParameter, webModel } from './props.js'
 
@@ -255,7 +260,8 @@ export class WebStack extends NestedStack {
       resources: [`arn:${partition}:ssm:${region}:${account}:parameter${webConfigParameter(p.prefix)}`],
     }))
     role.addToPolicy(new iam.PolicyStatement({ sid: 'Speech', actions: ['polly:DescribeVoices', 'polly:SynthesizeSpeech'], resources: ['*'] }))
-    // the browser streams to the signed URL the backend hands it: signed for this action
+    // the browser streams to the signed URL the backend hands it: signed for this action (no resource type, so "*"); it
+    // may name a project's custom vocabulary, which needs nothing more of this role (src/infra/voice.ts)
     role.addToPolicy(new iam.PolicyStatement({ sid: 'Transcription', actions: ['transcribe:StartStreamTranscriptionWebSocket'], resources: ['*'] }))
     role.addToPolicy(new iam.PolicyStatement({ sid: 'VoiceCache', actions: ['s3:GetObject', 's3:PutObject'], resources: [this.voiceBucket.arnForObjects(`${VOICE_PREFIX}/*`)] }))
     // a cache miss is a 404, not a 403, only with ListBucket
@@ -393,6 +399,12 @@ export class WebStack extends NestedStack {
       runtime: cloudfront.FunctionRuntime.JS_2_0,
       code: cloudfront.FunctionCode.fromInline(API_FUNCTION),
     })
+    // the web ACL: the person's own, else this installation's (here in us-east-1, else the edge stack's)
+    const webAcl = p.settings.webAclArn
+      ?? (!p.settings.waf.enabled ? undefined : region === EDGE_REGION ? new TraceWebAcl(this, 'Waf', { prefix: p.prefix, waf: p.settings.waf }).arn : p.settings.waf.aclArn)
+    if (p.settings.waf.enabled && !p.settings.webAclArn && !webAcl) {
+      Annotations.of(this).addWarning(`web.waf is on but there is no web ACL yet: ${edgeStackName(p.prefix)} (us-east-1) is deployed first by the installer and the self-update, which pass its ARN as web.waf.aclArn. Until then the app has no WAF.`)
+    }
     const custom = p.settings.domainName && p.settings.certificateArn
       ? { domainNames: [p.settings.domainName], certificate: acm.Certificate.fromCertificateArn(this, 'Certificate', p.settings.certificateArn) }
       : {}
@@ -403,7 +415,7 @@ export class WebStack extends NestedStack {
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
       minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
       ...custom,
-      ...(p.settings.webAclArn ? { webAclId: p.settings.webAclArn } : {}),
+      ...(webAcl ? { webAclId: webAcl } : {}),
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(this.siteBucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
@@ -456,6 +468,8 @@ export class WebStack extends NestedStack {
     }))
     // the facts object that changed (a new question or stuck report is told apart from a check), nothing else of a project
     fnRole.addToPolicy(new iam.PolicyStatement({ sid: 'AgentFactsRead', actions: ['s3:GetObject'], resources: [central.arnForObjects(AGENT_FACTS_KEYS)] }))
+    // the job index that changed (which jobs, and their state: job.updated), nothing else of a project
+    fnRole.addToPolicy(new iam.PolicyStatement({ sid: 'JobIndexRead', actions: ['s3:GetObject'], resources: [central.arnForObjects(JOB_INDEX_KEYS)] }))
     fnRole.addToPolicy(new iam.PolicyStatement({
       sid: 'PublishLiveEvents', actions: ['appsync:EventPublish'], resources: [`${this.events.apiArn}/channelNamespace/${EVENTS_NAMESPACE}`],
     }))
@@ -486,7 +500,7 @@ export class WebStack extends NestedStack {
       eventPattern: {
         source: ['aws.s3'],
         detailType: ['Object Created'],
-        detail: { bucket: { name: [central.bucketName] }, object: { key: events.Match.wildcard(AGENT_FACTS_KEYS) } },
+        detail: { bucket: { name: [central.bucketName] }, object: { key: events.Match.anyOf(events.Match.wildcard(AGENT_FACTS_KEYS), events.Match.wildcard(BENCH_KEYS), events.Match.wildcard(JOB_INDEX_KEYS)) } },
       },
     })
     rule.addTarget(new targets.LambdaFunction(fn, { retryAttempts: 2, maxEventAge: Duration.hours(1) }))
@@ -498,6 +512,10 @@ export interface TraceWebProps extends WebStackProps {}
 
 /** The agents' facts objects, as the JourneyEvents rule matches them (EventBridge wildcard). */
 export const AGENT_FACTS_KEYS = `${PROJECTS_PREFIX}/*/${AGENT_FACTS_FOLDER}/${AGENT_FACTS_DB}`
+/** The bench's live copies (src/core/bench.ts): a reading taken refreshes the Bring-up run screen; never read. */
+export const BENCH_KEYS = `${PROJECTS_PREFIX}/*/${AGENT_FACTS_FOLDER}/${BENCH_DB}`
+/** The projects' job indexes (src/core/job-index.ts), the same way: job.updated events. */
+export const JOB_INDEX_KEYS = `${PROJECTS_PREFIX}/*/${JOB_INDEX_FOLDER}/${JOB_INDEX_DB}`
 
 /** What attach needs of the parent: the pool and the web client, the API runtime, and the parent's outputs' stack. */
 export interface WebAttachProps {
@@ -523,6 +541,8 @@ export interface WebConfig {
   model: string
   appUrl: string
   features: { passkeys: boolean; email: boolean; voice: boolean; ops: boolean }
+  /** the app's AWS WAF: on (this installation's, or the person's own web ACL), or off (src/infra/edge.ts) */
+  waf: { enabled: boolean; own: boolean; apiRequestsPer5Minutes: number; authRequestsPer5Minutes: number }
 }
 
 /** What a person may write of their own Cognito profile through an app client: their email alone (a required
@@ -586,6 +606,11 @@ export class TraceWeb extends Construct {
       model: this.p.model,
       appUrl: this.url,
       features: { passkeys: true, email: a.email, voice: true, ops: true },
+      waf: {
+        enabled: Boolean(this.p.settings.webAclArn) || (this.p.settings.waf.enabled && (region === EDGE_REGION || Boolean(this.p.settings.waf.aclArn))),
+        own: Boolean(this.p.settings.webAclArn),
+        apiRequestsPer5Minutes: this.p.settings.waf.apiRequestsPer5Minutes, authRequestsPer5Minutes: this.p.settings.waf.authRequestsPer5Minutes,
+      },
     }
     this.config = new ssm.StringParameter(this, 'Config', {
       parameterName: webConfigParameter(this.p.prefix),

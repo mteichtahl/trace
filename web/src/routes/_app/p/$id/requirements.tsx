@@ -3,9 +3,9 @@
  * failing chains coloured back to the intent; filter to one status), then the requirements as a Data table. A
  * requirement opens in a side sheet at its own address (/p/:id/requirements/:rid, the child route).
  *
- * Data: verify.coverage through the `tool` action (requirements, verdicts, tests); the intent lines and each
- * requirement's link to one come from requirements.trace, which answers none yet (the record keeps no intent) with
- * `intent_note` saying so — the view draws requirements and evidence only, and shows that note.
+ * Data: verify.coverage through the `tool` action (requirements, verdicts, tests); the intent lines (each accepted by
+ * a person or still proposed by an agent) and each requirement's derived_from link come from requirements.trace.
+ * While no intent statement is recorded it answers `intent_note`, and the view draws requirements and evidence only.
  */
 import { Link, Outlet, createFileRoute, useNavigate } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
@@ -25,7 +25,7 @@ import { StatusBadge } from '@/components/status-badge'
 import { EmptyState, Partial, QueryError } from '@/components/states'
 import { repoOf } from '@/lib/api'
 import { useAction } from '@/lib/queries'
-import type { CoverageRow, Verdict } from '@/lib/types-s1'
+import type { CoverageRow, TraceView, Verdict } from '@/lib/types-s1'
 
 export const Route = createFileRoute('/_app/p/$id/requirements')({
   staticData: { crumb: 'Requirements' },
@@ -127,6 +127,7 @@ function Requirements() {
             <span>Drag to pan; Ctrl and scroll to zoom</span>
           </div>
           {trace.data && !trace.data.intent.length && trace.data.intent_note && <div className="mt-3"><NeedsBuilding>{trace.data.intent_note}</NeedsBuilding></div>}
+          {trace.data && trace.data.intent.length > 0 && <IntentLine trace={trace.data} id={id} />}
           {trace.isError && (notBuilt(trace.error) ? (
             <div className="mt-3"><NeedsBuilding>The intent column needs the planned link from each requirement to its intent line (requirements.trace); until then the view shows requirements and their evidence.</NeedsBuilding></div>
           ) : (
@@ -140,5 +141,24 @@ function Requirements() {
       )}
       <Outlet />
     </div>
+  )
+}
+
+/** One line under the view: how much of the intent a person accepted, what no requirement covers, what is unlinked. */
+function IntentLine({ trace, id }: { trace: TraceView; id: string }) {
+  const s = trace.summary
+  const proposed = trace.intent.filter((i) => i.state === 'proposed').length
+  const uncovered = trace.intent.filter((i) => !i.covered && i.uncovered === undefined)
+  return (
+    <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+      <span>{trace.intent.length} intent lines{proposed ? `, ${proposed} still proposed by trace` : ', all accepted'}.</span>
+      {uncovered.length > 0 && <StatusBadge status="warning" label={`${uncovered.length} not covered by a requirement`} />}
+      {(s?.unlinked ?? 0) > 0 && <StatusBadge status="warning" label={`${s!.unlinked} requirements not linked to an intent line`} />}
+      {(proposed > 0 || uncovered.length > 0) && (
+        <Link className="text-primary hover:underline" to="/p/$id/do/$skill" params={{ id, skill: proposed > 0 ? 'intent-builder' : 'requirements-review' }}>
+          {proposed > 0 ? 'Review the intent' : 'Cover the intent'}
+        </Link>
+      )}
+    </p>
   )
 }

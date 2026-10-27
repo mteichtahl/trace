@@ -1,8 +1,15 @@
 /**
- * Live updates when an agent records a fact: the Lambda `<prefix>-journey-events`. Agents write their facts beside the
- * journey record (projects/<slug>/journey-agent/facts.db, src/core/agent-facts.ts) straight to the central bucket, so
- * nothing passes the web backend that would tell people's screens. The bucket sends its object events to EventBridge;
- * a rule (src/infra/web.ts JourneyEvents) sends this function the "Object Created" events of those objects only.
+ * Live updates when an agent records a fact or a job changes: the Lambda `<prefix>-journey-events`. Agents write their
+ * facts beside the journey record (projects/<slug>/journey-agent/facts.db, src/core/agent-facts.ts), and a project's
+ * worker writes its job index (projects/<slug>/job-index/jobs.db, src/core/job-index.ts), straight to the central
+ * bucket, so nothing passes the web backend that would tell people's screens. The bucket sends its object events to
+ * EventBridge; a rule (src/infra/web.ts JourneyEvents) sends this function the "Object Created" events of those
+ * objects only.
+ *
+ *   job index  `job.updated { repo, jobId, state }` to every person on the project for each job the write changed
+ *              (rows updated within NEW_WITHIN_S of the event; at most MAX_JOB_EVENTS, then one for the project),
+ *              so Home's Running now, the project's "trace is doing" and Agents and tools refetch. The job id is the
+ *              API's (src/core/job-index.ts indexedHandle); the state is a word; no title or step leaves
  *
  *   project   from the key: projects/<owner>/<repo>/journey-agent/facts.db → owner/repo (src/core/project.ts slugs)
  *   people    the project's admins and the people assigned to it, from the access store (access/central.db: users
@@ -29,6 +36,8 @@ import { fromNodeProviderChain } from '@aws-sdk/credential-providers'
 import { Central, S3Backend, type S3Api } from '../core/central.js'
 import { AGENT_FACTS_DB, AGENT_FACTS_FOLDER, applyAgentFactsSchema } from '../core/agent-facts.js'
 import { BucketDb } from '../core/journey-store.js'
+import { BENCH_DB } from '../core/bench.js'
+import { JOB_INDEX_DB, JOB_INDEX_FOLDER, JobIndexStore, changedSince } from '../core/job-index.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { type LiveEvent, type Publisher, appsyncPublisher, userChannel } from './events.js'
 
@@ -38,11 +47,23 @@ export const NEW_WITHIN_S = 120
 /** The EventBridge event of an S3 object created (only the fields read here). */
 export interface S3ObjectEvent { 'detail-type'?: string; time?: string; detail?: { bucket?: { name?: string }; object?: { key?: string } } }
 
-const FACTS_KEY = new RegExp(`^${PROJECTS_PREFIX}/([A-Za-z0-9-]+/[A-Za-z0-9._-]+)/${AGENT_FACTS_FOLDER}/${AGENT_FACTS_DB.replace('.', '\\.')}$`)
+const FACTS_KEY = new RegExp(`^${PROJECTS_PREFIX}/([A-Za-z0-9-]+/[A-Za-z0-9._-]+)/${AGENT_FACTS_FOLDER}/(${AGENT_FACTS_DB.replace('.', '\\.')}|${BENCH_DB.replace('.', '\\.')})$`)
+const INDEX_KEY = new RegExp(`^${PROJECTS_PREFIX}/([A-Za-z0-9-]+/[A-Za-z0-9._-]+)/${JOB_INDEX_FOLDER}/${JOB_INDEX_DB.replace('.', '\\.')}$`)
+/** The most job.updated events one write sends each person (more: one for the project, with no job). */
+export const MAX_JOB_EVENTS = 10
 
 /** The project (owner/repo, lower case) whose facts the key is, or null for any other key. */
 export function projectOfKey(key: string): string | null {
   const m = FACTS_KEY.exec(key)
+  if (!m?.[1] || m[1].includes('..')) return null
+  return m[1].toLowerCase()
+}
+
+/** Whether the key is the bench's live copy (src/core/bench.ts): a reading was taken. Never read here. */
+export const isBenchKey = (key: string): boolean => key.endsWith(`/${AGENT_FACTS_FOLDER}/${BENCH_DB}`)
+/** The project whose job index the key is, or null for any other key. */
+export function projectOfIndexKey(key: string): string | null {
+  const m = INDEX_KEY.exec(key)
   if (!m?.[1] || m[1].includes('..')) return null
   return m[1].toLowerCase()
 }
@@ -102,19 +123,44 @@ export interface JourneyEventsDeps {
   scratch?: string | undefined
 }
 
+/** A write of a project's job index: job.updated to everyone on the project, for each job it changed. */
+async function onJobIndex(repo: string, e: S3ObjectEvent, d: JourneyEventsDeps): Promise<{ repo: string; changed: number; notified: number; jobs: number }> {
+  const projects = new S3Backend(d.bucket, PROJECTS_PREFIX, d.s3)
+  const access = new Central({ home: `s3://${d.bucket}/access`, ...(d.s3 ? { s3: d.s3 } : {}) })
+  const index = new JobIndexStore(projects, repo, d.scratch ? { scratch: d.scratch } : {})
+  const at = e.time ? Date.parse(e.time) / 1000 : d.now() / 1000
+  const [audience, changed] = await Promise.all([access.query((db) => audienceOf(db, repo)), index.read((db) => changedSince(db, repo, at - NEW_WITHIN_S)).then((r) => r.result)])
+  const everyone = [...new Set([...audience.admins, ...audience.contributors, ...audience.reviewers])]
+  const stamp = new Date(d.now()).toISOString()
+  // the newest change of each job, and at most MAX_JOB_EVENTS of them (more: the project's jobs as a whole)
+  const latest = [...new Map(changed.map((c) => [c.jobId, c])).values()]
+  const events: LiveEvent[] = latest.length > MAX_JOB_EVENTS
+    ? [{ type: 'job.updated', repo, jobId: null, state: null, at: stamp }]
+    : latest.map((c) => ({ type: 'job.updated', repo, jobId: c.jobId, state: c.state, at: stamp }))
+  if (!events.length) return { repo, changed: 0, notified: 0, jobs: 0 }
+  const results = await Promise.allSettled(everyone.map((sub) => d.publisher.publish(userChannel(sub), events)))
+  const failed = results.filter((r) => r.status === 'rejected').length
+  if (failed) d.log({ warning: 'journey-events: some job events were not delivered', repo, failed, of: everyone.length })
+  return { repo, changed: everyone.length, notified: 0, jobs: events.length }
+}
+
 /** One S3 event: what was published, to how many people (tests read it). */
-export async function onObjectCreated(e: S3ObjectEvent, d: JourneyEventsDeps): Promise<{ repo: string | null; changed: number; notified: number }> {
+export async function onObjectCreated(e: S3ObjectEvent, d: JourneyEventsDeps): Promise<{ repo: string | null; changed: number; notified: number; jobs?: number }> {
   const key = e.detail?.object?.key ?? ''
-  const repo = e.detail?.bucket?.name === d.bucket ? projectOfKey(key) : null
+  const ours = e.detail?.bucket?.name === d.bucket
+  const indexed = ours ? projectOfIndexKey(key) : null
+  if (indexed) return onJobIndex(indexed, e, d)
+  const repo = ours ? projectOfKey(key) : null
   if (!repo) {
-    d.log({ warning: 'journey-events: not an agents\' facts object of this installation', key })
+    d.log({ warning: 'journey-events: not an agents\' facts or job index object of this installation', key })
     return { repo: null, changed: 0, notified: 0 }
   }
   const projects = new S3Backend(d.bucket, PROJECTS_PREFIX, d.s3)
   const access = new Central({ home: `s3://${d.bucket}/access`, ...(d.s3 ? { s3: d.s3 } : {}) })
   const facts = new BucketDb(projects, repo, { folder: AGENT_FACTS_FOLDER, file: AGENT_FACTS_DB, schema: applyAgentFactsSchema }, d.scratch ? { scratch: d.scratch } : {})
   const at = e.time ? Date.parse(e.time) / 1000 : d.now() / 1000
-  const [audience, fresh] = await Promise.all([access.query((db) => audienceOf(db, repo)), facts.read((db) => newFacts(db, at)).then((r) => r.result)])
+  // a bench reading tells the screens to refetch, and notifies no one: nothing in it is read here
+  const [audience, fresh] = await Promise.all([access.query((db) => audienceOf(db, repo)), isBenchKey(key) ? Promise.resolve([] as NewFact[]) : facts.read((db) => newFacts(db, at)).then((r) => r.result)])
   const everyone = [...new Set([...audience.admins, ...audience.contributors, ...audience.reviewers])]
   const stamp = new Date(d.now()).toISOString()
   const per = new Map<string, LiveEvent[]>()

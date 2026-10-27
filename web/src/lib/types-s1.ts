@@ -100,6 +100,9 @@ export interface BenchReadout {
   unit: string
   min?: number
   max?: number
+  /** the bring-up step and when it was taken (bring-up readings) */
+  step?: string
+  at?: string
 }
 
 /** One quality-bar check as skill.get computes it from the record. */
@@ -138,13 +141,25 @@ export interface SkillView {
   /** the last push trace checked */
   push?: { sha: string; at: string; fixed: number; new: number }
   intent?: IntentDraft
+  /** Architecture choice: every option with its blocks and scores, the criteria, trace's recommendation */
+  architecture?: Omit<ArchitectureRecord, 'option' | 'blocks' | 'connections'> & { options: ArchOption[]; current: string | null }
+  /** decisions in the draft that Submit could not record (they name nothing, or lack their reason) */
+  pending_errors?: string[]
   question?: Question & { quantity?: { unit: string }; context?: string; searched?: EvidenceRef[] }
   /** Waiver: what can be waived here */
   waivable?: { id: string; kind: 'requirement' | 'finding' | 'test'; title: string; evidence?: EvidenceRef; recommendation?: 'waive' | 'fix'; why?: string }[]
   /** Change request: the impact trace traced */
   impact?: { stages: string[]; gates: string[]; stale: string[]; cost?: string; time?: string; released?: boolean; recommendation?: SkillView['recommendation'] }
   /** checklist on a picture (bench setup, bring-up, inspection) */
-  bench?: { powered: boolean; checklist: { id: string; text: string; by: 'person' | 'trace'; done: boolean; powered?: boolean }[]; readouts: BenchReadout[]; wires?: { id: string; from: string; to: string; net: string; power?: boolean; limit?: string; done?: boolean }[] }
+  bench?: {
+    powered: boolean; checklist: { id: string; text: string; by: 'person' | 'trace'; done: boolean; powered?: boolean }[]; readouts: BenchReadout[]; wires?: { id: string; from: string; to: string; net: string; power?: boolean; limit?: string; done?: boolean }[]
+    /** Bring-up run: the board on the bench now (the newest reading's), and every reading of it */
+    board?: string | null
+    readings?: ReadingView[]
+  }
+  /** Incoming inspection: the boards recorded, and the parts the fab does not place */
+  boards?: BoardView[]
+  handPlaced?: string[]
 }
 
 // ------------------------------------------------------------------ requirements and traceability
@@ -185,33 +200,110 @@ export interface TracedRequirement {
   waiver: string | null
 }
 
-/** requirements.trace: the intent lines and each requirement's link to one, and each requirement's evidence. */
-export interface TraceView {
-  intent: { id: string; topic: string; text: string }[]
-  links: { requirement: string; intent: string }[]
-  /** why `intent` is empty: the record keeps no intent statements yet */
-  intent_note?: string
-  requirements?: TracedRequirement[]
-  summary?: { requirements: number; verified: number; failing: number; untested: number; waived: number }
+/** One intent line (requirements.trace): agents propose it, a person accepts, edits or rejects it (Intent builder). */
+export interface TraceIntent {
+  id: string
+  topic: string
+  /** the words that stand: the person's own when they edited it */
+  text: string
+  /** accepted / edited: a person decided; proposed: an agent's, not yet decided */
+  state?: 'accepted' | 'edited' | 'proposed'
+  kind?: 'statement' | 'dont_care' | 'unknown'
+  /** what the Intent builder flags: needs_number, vague, conflict, not_testable, interface_incomplete */
+  flags?: string[]
+  source?: { kind: 'person' | 'brief' | 'document' | 'design'; ref?: string; quote?: string; page?: number } | null
+  decided?: { by: string; at: string; reason?: string }
+  /** a person left it without a requirement, with this reason */
+  uncovered?: string
+  /** a requirement is derived from it */
+  covered?: boolean
 }
 
-// ------------------------------------------------------------------ design (design.get, needs building)
+/** requirements.trace: the intent lines and each requirement's link to one, and each requirement's evidence. */
+export interface TraceView {
+  intent: TraceIntent[]
+  links: { requirement: string; intent: string }[]
+  /** said while no intent statement is recorded */
+  intent_note?: string
+  requirements?: (TracedRequirement & { derived_from?: string[] })[]
+  summary?: { requirements: number; verified: number; failing: number; untested: number; waived: number; intent?: number; accepted?: number; uncovered?: number; unlinked?: number }
+}
+
+// ------------------------------------------------------------------ design (design.get)
 
 export interface Block {
   id: string
   name: string
+  role?: string
+  /** the key part's number */
   part?: string
+  parts?: { mpn: string; role?: string; key?: boolean }[]
+  /** stock of the key part, where a parts check gave it (the record does not keep it per block) */
   stock?: 'in_stock' | 'low' | 'out'
   serves: string[]
   x: number
   y: number
 }
+export interface BlockConnection { from: string; to: string; label: string; kind?: string }
+export interface ArchOption {
+  id: string; name: string; summary: string; recommended: boolean; why: string | null; gives_up: string | null; risks: string[]
+  /** weighted total of its scores */
+  total: number
+  blocks: Block[]
+  connections: BlockConnection[]
+}
+export interface ArchitectureRecord {
+  /** "Option B: STM32WL", the option drawn */
+  option: string
+  id?: string
+  /** chosen by a person, or trace's proposal drawn until one is */
+  state?: 'chosen' | 'proposed'
+  blocks: Block[]
+  connections: BlockConnection[]
+  options?: ArchOption[]
+  criteria?: { id: string; name: string; weight: number; description: string | null }[]
+  fixed?: { by: string; at: string } | null
+  scores?: { option: string; criterion: string; score: number; reason: string; by: 'trace' | 'person' }[]
+  recommended?: string | null
+  chosen?: { option: string; reason: string; deciding: string[]; by: string; at: string; against: boolean } | null
+}
+export interface PinView {
+  part?: string
+  pin: string
+  name?: string | null
+  net: string
+  fn: string
+  peripheral?: string
+  use?: string
+  alt?: string
+  reserved?: string
+  status: 'ok' | 'conflict' | 'spare' | 'waived'
+  note?: string
+  findings?: { id: string; severity: 'blocks' | 'fix' | 'waived'; text: string }[]
+}
+/** design.decide's decision (src/api/actions-design.ts). */
+export type DesignDecisionInput =
+  | { kind: 'intent'; statement: string; choice: 'accept' | 'edit' | 'reject'; text?: string; reason?: string }
+  | { kind: 'uncovered'; statement: string; reason: string }
+  | { kind: 'requirement'; requirement: string; choice: 'accept' | 'strike'; reason?: string }
+  | { kind: 'criteria'; criteria: { id: string; name: string; weight: number; description?: string }[] }
+  | { kind: 'architecture'; option: string; reason: string; deciding: string[] }
+  | { kind: 'pins'; part: string }
+
 export interface DesignView {
-  architecture?: { option: string; blocks: Block[]; connections: { from: string; to: string; label: string }[] }
-  /** one per schematic file; `path`: a picture a run stored (runs/<id>/<name>), when there is one */
-  sheets: { id: string; name: string; path?: string; serves?: string[]; findings: PictureFinding[] }[]
-  pins?: { pin: string; net: string; fn: string; alt?: string; status: 'ok' | 'conflict' | 'spare' | 'waived'; note?: string }[]
-  board?: { file?: string; path?: string; layers?: string[]; findings: PictureFinding[]; size?: string }
+  architecture?: ArchitectureRecord
+  /** one per schematic file; `path`: its drawing (runs/<id>/sheets/<file>.svg) when an export kept one */
+  sheets: { id: string; name: string; path?: string; serves?: string[]; block?: string; serves_none?: string; findings: PictureFinding[] }[]
+  pins?: PinView[]
+  /** the pin plan's check against the schematic, and which parts' plans a person agreed */
+  pin_plan?: {
+    checked: { run: string; at: string | null } | null
+    parts: { part: string; pins: number; agreed: { by: string; at: string; stale: boolean } | null }[]
+    findings: { id: string; target: string; kind: string; severity: 'blocks' | 'fix' | 'waived'; text: string }[]
+  }
+  board?: { file?: string; path?: string; render?: string; layers?: string[]; findings: PictureFinding[]; size?: string }
+  /** the export run the drawings come from */
+  drawings?: { run: string; at: string | null }
   /** the latest rule checks the findings come from */
   checks?: { erc: { run: string; at: string | null; status: string; summary: string | null } | null; drc: { run: string; at: string | null; status: string; summary: string | null } | null }
   /** what the record does not hold yet, in words */
@@ -278,27 +370,79 @@ export interface OrderView {
   number?: string
   paid?: number | null
   ship?: string | null
-  /** waiting for the fab: `checkable: false` when nothing checks it on its own yet */
+  /** waiting for the fab or the carrier: `checkable: false` when nothing checks it on its own */
   wait?: (Wait & { checkable?: boolean }) | null
+  /** the shipping notice the person recorded (order.update), and what the carrier last said when trace follows it */
+  tracking?: { carrier: Carrier; number: string; checkable: boolean; status?: string; state?: string | null; eventAt?: string | null; eta?: string | null }
+  shippedAt?: string | null
+  deliveredAt?: string | null
   meanwhile?: { title: string; state: 'done' | 'running' | 'todo' }[]
 }
 export interface BuildView {
   /** `files`: null when the record does not count them */
   releases: { id: string; revision: string; at: string; commit: string; branch?: string | null; files: number | null; by: string; frozen: boolean }[]
   orders: OrderView[]
-  boards: { serial: string; order: string; state: 'received' | 'inspected' | 'brought_up' | 'failed'; note?: string }[]
-  bench?: { configured: boolean; instruments: { name: string; kind: string; address: string; answered: boolean }[]; note?: string }
+  boards: BoardView[]
+  bench?: {
+    configured: boolean
+    instruments: { name: string; kind: string; address: string; answered: boolean; identity?: { manufacturer: string | null; model: string | null; serial: string | null; firmware: string | null; at: string | null; run: string | null } }[]
+    note?: string
+    /** every bring-up reading, against its limits (build.get) */
+    readings?: ReadingView[]
+    /** per board: each step with readings, whether its newest readings pass */
+    boards?: { serial: string; steps: { step: BringupStep; readings: number; passed: boolean; failing: string[] }[] }[]
+  }
   notes?: string[]
 }
 
-// ------------------------------------------------------------------ cost and time (cost.get, needs building)
+export type Carrier = 'dhl' | 'fedex' | 'ups' | 'other'
+export type BringupStep = 'inspect' | 'unpowered' | 'rails' | 'clocks' | 'firmware' | 'tests'
+
+/** One board by its serial (board.record), with its incoming inspection (board.check). */
+export interface BoardView {
+  serial: string
+  order: string
+  state: 'received' | 'inspected' | 'brought_up' | 'failed'
+  status?: 'received' | 'inspected' | 'failed' | 'brought_up' | 'scrapped'
+  revision?: string
+  received?: string | null
+  note?: string
+  /** evidence paths (runs/<run>/<name>, or files) for files.url */
+  photos?: string[]
+  checks?: { id: string; check: string; kind: 'count' | 'visual' | 'fault' | 'hand' | 'label'; result: 'pass' | 'fail' | 'marked'; ref?: string; note?: string; photo?: string; by: string; at: string }[]
+  readings?: number
+  failing?: number
+}
+
+/** One bring-up reading (src/core/bench.ts): a hil tool's measurement against a board and step, with its limits. */
+export interface ReadingView {
+  id: string; board: string; step: BringupStep; instrument: string | null; quantity: string; value: number | null; unit: string | null
+  min?: number; max?: number; pass: boolean; at: string; by: string; run: string | null
+}
+
+// ------------------------------------------------------------------ cost and time (cost.get, usage.month)
+
+/** Cost Explorer's daily read, as the screens say it: when it read, when it reads next, whether the tag is active. */
+export interface ExplorerView { checkedAt: string | null; nextAt: string | null; ok: boolean; tag: 'active' | 'inactive' | 'not_found' | 'unknown'; text: string }
+/** The price table the estimates use: its date, and whether it is old. */
+export interface PricesView { asOf: string; stale: boolean; sources: string[]; text: string }
+/** Cloud spend: estimates by kind from the ledger, and what AWS billed (a day behind), or null before the first read. */
+export interface CloudSpend {
+  estimated: { agents: number; gpu: number; cpu: number; total: number }
+  actual: { total: number; byService: Record<string, number>; through: string | null; estimatedDays: number } | null
+  basis: 'estimate'
+}
 
 /** cost.get. Money is for admins only (`money: false`: every amount is null); what is not recorded is null, with notes. */
 export interface CostView {
   money?: boolean
   currency: string
-  /** cloud: null, cloud use is not recorded per project */
-  spent: { cloud: number | null; orders: number | null }
+  /** cloud: the estimated cloud spend (detail: by kind, and the actuals) */
+  spent: { cloud: number | null; orders: number | null; detail?: CloudSpend }
+  /** the currency of the orders when it is not the cloud's (USD) */
+  orderCurrency?: string
+  explorer?: ExplorerView
+  prices?: PricesView
   committed: number | null
   /** the build: quantity × unit cost; null without a unit cost */
   forecast: number | null
@@ -306,8 +450,19 @@ export interface CostView {
   quantity?: number
   unit_cost?: number | null
   stages: { stage: string; id?: string; state: 'done' | 'current' | 'queued'; started?: string | null; finished?: string | null; cloud: number | null; days: number; forecastDays?: number | null }[]
-  lines: { id: string; at: string; what: string; kind: 'agents' | 'gpu' | 'cpu' | 'order'; amount: number }[]
+  lines: { id: string; at: string; what: string; kind: 'agents' | 'gpu' | 'cpu' | 'order'; amount: number; estimate?: boolean }[]
   notes?: string[]
+}
+
+/** usage.month (admins): every project's spend this month. */
+export interface UsageMonth {
+  month: string
+  currency: string
+  projects: { repo: string; estimated: { agents: number; gpu: number; cpu: number; total: number }; actual: number | null; orders: number; orderCurrency: string; budget: number | null; started: boolean }[]
+  totals: { estimated: number; actual: number | null; orders: number }
+  shared?: { total: number; byService: Record<string, number>; text: string }
+  explorer: ExplorerView
+  prices: PricesView
 }
 
 // ------------------------------------------------------------------ new project (projects.create)

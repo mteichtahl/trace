@@ -13,8 +13,11 @@
  *             records people marked inactive) is read only: writes there are denied. prompts/* (the installation's
  *             prompt overrides) is read only too: nothing grants a write there. projects/<slug>/journey and /chats
  *             (what people decided and said) are read only as well. projects/<slug>/journey-agent (the agents' own
- *             facts about the journey: questions, criterion checks, stuck notes) is written, but only with a
- *             conditional put and never deleted (AgentFactsConditional), the way its store writes
+ *             facts about the journey: questions, criterion checks, stuck notes; and its job index, jobs.db) is
+ *             written, but only with a conditional put and never deleted (AgentFactsConditional), the way its stores
+ *             write; its cost ledger (journey-agent/cost.db, src/core/cost.ts: what each run and job cost) is there,
+ *             under the same rules; a paused job's transcript (projects/<slug>/job-sessions) is read and written as
+ *             the rest of it
  *   memory    its own memory only (<prefix>_m_<hash>), and on it still only events of actors `<owner>/<repo>/*` and
  *             records under `/trace/<owner>/<repo>/*` (the encodings of src/agents/runtime/memory.ts), as defence in depth
  *   secret    <prefix>/github-token/<slug> only
@@ -26,8 +29,9 @@
  *             ListQueues (no resource-level permission), to sweep its left-over wait queues
  *   events    (nested layout only) its own SNS topic <prefix>-<hash>-batch-events (made with or without GPU jobs), an
  *             EventBridge rule <prefix>-<hash>-journey-events sending it the central bucket's "Object Created" events of
- *             its journey record (projects/<slug>/journey/journey.db, which only the API writes), so a worker waiting in
- *             journey.ask is told when a person answers; and, with GPU jobs, an EventBridge rule (default bus) sending it the
+ *             its journey record (projects/<slug>/journey/journey.db, which only the API writes) and of its job index
+ *             (journey-agent/jobs.db), so a worker waiting in journey.ask is told when a person answers, and a queued job
+ *             when its turn may have come; and, with GPU jobs, an EventBridge rule (default bus) sending it the
  *             "Batch Job State Change" events of the stack's queues whose job definition is one of its own (prefix
  *             match on the definition's ARN without the revision): it submits only with those (ProjectGpuSubmit, and
  *             src/gpu/batch.ts placement uses only TRACE_GPU_JOB_DEFINITION / TRACE_CPU_JOB_DEFINITION, which are
@@ -92,7 +96,9 @@ import type { GatewayRef } from './gateway.js'
 import type { GpuCompute } from './gpu.js'
 import { ProjectKnowledgeBase } from './knowledge.js'
 import { EVENT_ACTIONS, RECORD_ACTIONS, TraceMemory } from './memory.js'
+import { projectVocabularyStatements, vocabularyBase } from './voice.js'
 import { RunnerProject } from './runner.js'
+import { jobIndexKey } from '../core/job-index.js'
 import {
   GPU_JOB_VCPUS, type InfraProps, type ProjectRef, REPOSITORY_OUTPUT, kbEnabled, kbOutputs, knowledgeBaseOf, projectOutputs, projectSettings,
 } from './props.js'
@@ -120,8 +126,10 @@ export const PROMPTS_PREFIX = 'prompts'
 
 const TELEMETRY_ACTIONS = ['xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets']
 
-/** Reading the installation's optional integrations (`<prefix>/integrations/*`, src/core/integrations.ts): each
- * worker's role when the library gateway is off, the gateway's Lambda when it is on, never both. */
+/** Reading the installation's optional integrations the tools use (`<prefix>/integrations/*`, src/core/integrations.ts):
+ * each worker's role when the library gateway is off, the gateway's Lambda when it is on, never both. The order watch's
+ * carrier key is kept under `<prefix>/order-watch/` instead, which this does not cover: only its own Lambda reads it
+ * (src/infra/order-watch.ts). */
 export function integrationsReadStatement(partition: string, region: string, account: string, prefix: string): iam.PolicyStatement {
   return new iam.PolicyStatement({
     sid: 'IntegrationsRead', actions: ['secretsmanager:GetSecretValue'],
@@ -141,7 +149,7 @@ export function modelAccess(account: string): iam.PolicyStatement {
  * S3 on the central bucket by prefix: `read` (Get), `readWrite` (Get, Put, Delete) and `conditional` (Get, and Put
  * only with If-Match or If-None-Match). Listing is allowed only under the prefixes named.
  */
-export function grantPrefixes(role: iam.IRole, bucket: s3.IBucket, o: { read?: string[]; readWrite?: string[]; conditional?: string[] }): void {
+export function grantPrefixes(role: { addToPrincipalPolicy(s: iam.PolicyStatement): unknown }, bucket: s3.IBucket, o: { read?: string[]; readWrite?: string[]; conditional?: string[] }): void {
   const obj = (p: string): string => bucket.arnForObjects(`${p}/*`)
   const all = [...(o.read ?? []), ...(o.readWrite ?? []), ...(o.conditional ?? [])]
   if (!all.length) return
@@ -257,6 +265,9 @@ export class ProjectStack extends Construct {
     grantPrefixes(role, bucket, { conditional: [CENTRAL_PREFIX], readWrite: [projectDataPrefix(repository), projectJobsPrefix(repository)] })
     // the installation's prompt overrides (src/prompts/store.ts): read only, so an agent can't change its own prompt
     grantPrefixes(role, bucket, { read: [PROMPTS_PREFIX] })
+    // dictation's project vocabularies (src/infra/voice.ts): create its own (tagged), update and read only its own names
+    const vocabulary = projectVocabularyStatements({ partition, region, account, prefix: cfg.prefix, hash, slug })
+    for (const st of vocabulary) role.addToPolicy(st)
     // which memory records are inactive (projects/<slug>/memory-state, src/agents/runtime/memory-state.ts): read, never
     // written, by the agent: it has Bash and these credentials, and must not bring back a record people turned off
     const memoryState = new iam.PolicyStatement({
@@ -274,14 +285,16 @@ export class ProjectStack extends Construct {
     // what the agents contribute to the journey (projects/<slug>/journey-agent, src/core/agent-facts.ts): written through
     // projects/<slug>/*, but only as its store writes, with a conditional put (If-Match / If-None-Match), and never
     // deleted, so a stray unconditional write from Bash cannot clobber another job's facts
+    // (its cost ledger is there too: projects/<slug>/journey-agent/cost.db, src/core/cost.ts, what each run and job cost)
+    const agentWritten = [bucket.arnForObjects(`${projectDataPrefix(repository)}/${AGENT_FACTS}/*`)]
     const agentFacts = new iam.PolicyStatement({
       sid: 'AgentFactsConditional', effect: iam.Effect.DENY, actions: ['s3:PutObject'],
-      resources: [bucket.arnForObjects(`${projectDataPrefix(repository)}/${AGENT_FACTS}/*`)],
+      resources: agentWritten,
       conditions: { Null: { 's3:if-match': 'true', 's3:if-none-match': 'true' } },
     })
     const agentFactsKept = new iam.PolicyStatement({
       sid: 'AgentFactsNoDelete', effect: iam.Effect.DENY, actions: ['s3:DeleteObject', 's3:DeleteObjectVersion'],
-      resources: [bucket.arnForObjects(`${projectDataPrefix(repository)}/${AGENT_FACTS}/*`)],
+      resources: agentWritten,
     })
     role.addToPolicy(agentFacts)
     role.addToPolicy(agentFactsKept)
@@ -428,16 +441,18 @@ export class ProjectStack extends Construct {
         })
         sendTo(rule, 'BatchJobEventsRule')
       }
-      // a person's act on the journey record (an answer, above all): the central bucket's own "Object Created" event
-      // for this project's journey.db (the bucket sends its events to EventBridge: src/infra/stack.ts), so a worker
-      // waiting in journey.ask is told at once. Only the API writes that object (PeopleRecordsReadOnly)
+      // a person's act on the journey record (an answer, a job held or moved up): the central bucket's own "Object
+      // Created" event for this project's journey.db (the bucket sends its events to EventBridge: src/infra/stack.ts),
+      // so a worker waiting in journey.ask, or a queued job, is told at once. Only the API writes that object
+      // (PeopleRecordsReadOnly). And its job index (journey-agent/jobs.db, its worker's), so a queued job is told when
+      // another ends: the same rule, two exact keys, no rule more per project
       const journeyRule = new events.Rule(this, 'JourneyEventsRule', {
         ruleName: journeyEventsRuleName(cfg.prefix, hash),
-        description: `trace: ${slug}'s journey record written (a person answered, signed, waived), to its events topic`.slice(0, 512),
+        description: `trace: ${slug}'s journey record or job index written (a person answered, a job changed), to its events topic`.slice(0, 512),
         eventPattern: {
           source: ['aws.s3'],
           detailType: ['Object Created'],
-          detail: { bucket: { name: [bucket.bucketName] }, object: { key: [journeyRecordKey(repository)] } },
+          detail: { bucket: { name: [bucket.bucketName] }, object: { key: [journeyRecordKey(repository), jobIndexKey(repository)] } },
         },
       })
       sendTo(journeyRule, 'JourneyEventsRule')
@@ -483,6 +498,7 @@ export class ProjectStack extends Construct {
         TRACE_PROJECT: slug,
         TRACE_PROJECT_HOME: `s3://${bucket.bucketName}/${projectDataPrefix(repository)}`,
         TRACE_GITHUB_SECRET_ARN: this.secret.secretArn,
+        TRACE_VOCABULARY_BASE: vocabularyBase(cfg.prefix, hash),
         ...memoryEnv,
         ...kbEnv,
         ...gpuEnv,
@@ -521,6 +537,8 @@ export class ProjectStack extends Construct {
     if (this.memory) for (const st of memoryStatements(this.memory)) this.actionsRole.addToPolicy(st)
     // and searches and syncs its own knowledge base (the kb-sync job on a push to the default branch, and the fallback)
     if (this.knowledgeBase) for (const st of this.knowledgeBase.statements()) this.actionsRole.addToPolicy(st)
+    // and makes its dictation vocabulary on that push too (the kb-sync job's voice.vocabulary step)
+    for (const st of vocabulary) this.actionsRole.addToPolicy(st.copy())
 
     // ------------------------------------------------------------------ its CI: the CodeBuild runner project (src/infra/runner.ts)
     // every GitHub Actions job of the repository runs here, in this account; its role gives a job no AWS access (a job
@@ -533,8 +551,10 @@ export class ProjectStack extends Construct {
         })
       : null
 
-    for (const r of [role, this.actionsRole]) Tags.of(r).add(PROJECT_TAG, slug)
-    Tags.of(this.secret).add(PROJECT_TAG, slug)
+    // every taggable resource of the project carries its project tag (and the installation's), so Cost Explorer can
+    // group what AWS bills by project once trace:project is a cost allocation tag (src/infra/cost.ts)
+    Tags.of(this).add(PROJECT_TAG, slug)
+    Tags.of(this).add('trace:installation', cfg.prefix)
 
     // ------------------------------------------------------------------ outputs (alphanumeric names: the hash)
     const stack = Stack.of(this)

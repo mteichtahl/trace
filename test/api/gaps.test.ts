@@ -166,11 +166,12 @@ describe('access to the new actions', () => {
 })
 
 describe('job.control', () => {
-  it('cancels a running job (the job view says it can), and says plainly why pause and move up cannot be done', async () => {
+  it('cancels a running job the index does not list (the job view says it can), and says plainly what it cannot do', async () => {
+    // this installation's API cannot pause (no pause in its jobs), and the job is not in the project's index
     expect(await run(USER, 'job', { id: JOB })).toMatchObject({ id: JOB, state: 'running', controls: ['cancel'] })
-    expect(await run(USER, 'job.control', { id: JOB, op: 'pause' })).toEqual({ ok: false, op: 'pause', reason: expect.stringMatching(/cannot be paused/) })
-    expect(await run(USER, 'job.control', { id: JOB, op: 'move_up' })).toEqual({ ok: false, op: 'move_up', reason: expect.stringMatching(/not queued/) })
-    expect(await run(USER, 'job.control', { id: JOB, op: 'cancel' })).toEqual({ ok: true, op: 'cancel', state: 'aborted', kept: expect.stringMatching(/already pushed/) })
+    expect(await run(USER, 'job.control', { id: JOB, op: 'pause' })).toEqual({ ok: false, op: 'pause', repo: REPO, reason: expect.stringMatching(/can only be cancelled/) })
+    expect(await run(USER, 'job.control', { id: JOB, op: 'move_up' })).toEqual({ ok: false, op: 'move_up', repo: REPO, reason: expect.stringMatching(/can only be cancelled/) })
+    expect(await run(USER, 'job.control', { id: JOB, op: 'cancel' })).toEqual({ ok: true, op: 'cancel', repo: REPO, state: 'aborted', kept: expect.stringMatching(/already pushed/) })
     expect(cancels).toEqual([`cancelled by ${USER.email}`])
     expect(await run(USER, 'job', { id: JOB })).toMatchObject({ state: 'aborted', controls: [] })
     expect(await run(ADMIN, 'job.control', { id: JOB, op: 'cancel' })).toMatchObject({ ok: false, reason: 'The job has already aborted.' })
@@ -178,7 +179,7 @@ describe('job.control', () => {
 })
 
 describe('requirements.trace', () => {
-  it('gives each live requirement its evidence status, counting a journey waiver, and says the intent is not recorded', async () => {
+  it('gives each live requirement its evidence status, counting a journey waiver, and says no intent is recorded yet', async () => {
     await journeyStore({ principal: ADMIN, deps }, REPO).update((db) => {
       db.prepare("INSERT INTO waivers (id, stage, gate, target_kind, target, reason, risk, severity, caught_where, scope, by, at, updated) VALUES ('w-rain', 'define', NULL, 'requirement', 'REQ-003', 'Rain proofing is the enclosure''s job.', 'Water ingress.', 'degraded', 'Bench', 'this revision only', 'seed', 1, 1)").run()
       return { result: null }
@@ -186,10 +187,10 @@ describe('requirements.trace', () => {
     const r = await run(REVIEWER, 'requirements.trace', { repo: REPO }) as { intent: unknown[]; links: unknown[]; intent_note: string; requirements: { id: string; evidence: string; why: string }[]; summary: Record<string, number> }
     expect(r.intent).toEqual([])
     expect(r.links).toEqual([])
-    expect(r.intent_note).toMatch(/no intent statements/)
+    expect(r.intent_note).toMatch(/No intent statements are recorded yet/)
     expect(r.requirements.map((q) => [q.id, q.evidence])).toEqual([['REQ-001', 'failing'], ['REQ-002', 'verified'], ['REQ-003', 'waived']])
     expect(r.requirements[0]?.why).toBe('TST-001 failed on its last run.')
-    expect(r.summary).toEqual({ requirements: 3, verified: 1, failing: 1, untested: 0, waived: 1 })
+    expect(r.summary).toEqual({ requirements: 3, verified: 1, failing: 1, untested: 0, waived: 1, intent: 0, accepted: 0, uncovered: 0, unlinked: 3 })
   })
 })
 
@@ -205,17 +206,18 @@ describe('design.get', () => {
     ])
     expect(d.board).toMatchObject({ file: 'hw/gaps.kicad_pcb', path: 'runs/run-render/top.png', size: '50 × 30 mm', layers: ['F.Cu', 'B.Cu'], findings: [{ severity: 'blocks' }] })
     expect(d.checks.erc.run).toBe('run-erc')
-    expect(d.notes.join(' ')).toMatch(/block diagram/)
-    expect(d.notes.join(' ')).toMatch(/pin plan/)
+    expect(d.notes.join(' ')).toMatch(/No architecture is recorded yet/)
+    expect(d.notes.join(' ')).toMatch(/No pin plan is recorded yet/)
+    expect(d.notes.join(' ')).toMatch(/kicad.export with sch_svg/)
   })
 })
 
 describe('orders, build and cost', () => {
-  it('order.record stores the order in the journey, logs it, and answers a ship wait that no one checks yet', async () => {
+  it('order.record stores the order in the journey, logs it, and answers a ship wait that says JLCPCB cannot be read', async () => {
     const o = await run(USER, 'order.record', { repo: REPO, order: 'next', number: 'Y12-4471058A', paid: 131.4, ship: '2026-11-04' }) as { created: boolean; order: Record<string, unknown>; wait: { what: string; text: string; nextCheckAt: null } }
     expect(o).toMatchObject({ ok: true, created: true, order: { number: 'Y12-4471058A', boards: 10, paid: 131.4, currency: 'USD', ship: '2026-11-04', state: 'placed' } })
     expect(o.wait).toMatchObject({ what: 'JLCPCB to ship order Y12-4471058A', nextCheckAt: null })
-    expect(o.wait.text).toMatch(/No automatic check exists yet/)
+    expect(o.wait.text).toMatch(/order status only to partner companies.*record the carrier and tracking number/)
     // the same number again corrects it rather than adding another
     expect(await run(USER, 'order.record', { repo: REPO, number: 'Y12-4471058A', paid: 133, ship: '2026-11-05' })).toMatchObject({ created: false, order: { paid: 133 } })
     await expect(run(USER, 'order.record', { repo: REPO, number: 'Y12', ship: 'soon' })).rejects.toThrow(/2026-11-04/)
@@ -232,15 +234,14 @@ describe('orders, build and cost', () => {
     expect(b.releases).toEqual([expect.objectContaining({ revision: 'A', commit: 'abc1234def', by: ADMIN.email, frozen: true })])
     expect(b.orders).toEqual([expect.objectContaining({ number: 'Y12-4471058A', state: 'placed', total: 133, ship: '2026-11-05' })])
     expect(b.boards).toEqual([])
-    expect(b.notes.join(' ')).toMatch(/Boards by serial/)
   })
 
-  it('cost.get: the stage timeline for everyone, money for admins only, cloud use null with the reason', async () => {
-    const a = await run(ADMIN, 'cost.get', { repo: REPO }) as { money: boolean; spent: { cloud: null; orders: number }; forecast: number; budget: number; stages: { stage: string; state: string; started: string | null }[]; lines: { kind: string; amount: number }[]; notes: string[] }
-    expect(a).toMatchObject({ money: true, spent: { cloud: null, orders: 133 }, forecast: 0, budget: 500 })
+  it('cost.get: the stage timeline for everyone, money for admins only, cloud use from the ledger with the reason', async () => {
+    const a = await run(ADMIN, 'cost.get', { repo: REPO }) as { money: boolean; spent: { cloud: number; orders: number }; forecast: number; budget: number; stages: { stage: string; state: string; started: string | null }[]; lines: { kind: string; amount: number }[]; notes: string[] }
+    expect(a).toMatchObject({ money: true, spent: { cloud: 0, orders: 133 }, forecast: 0, budget: 500 })
     expect(a.stages[0]).toMatchObject({ stage: 'Define', state: 'current', started: expect.any(String) })
     expect(a.lines).toEqual([expect.objectContaining({ kind: 'order', amount: 133 })])
-    expect(a.notes.join(' ')).toMatch(/Cloud use .* not recorded/)
+    expect(a.notes.join(' ')).toMatch(/Cloud estimates .* are estimates/)
     const u = await run(USER, 'cost.get', { repo: REPO }) as Record<string, unknown>
     expect(u).toMatchObject({ money: false, spent: { cloud: null, orders: null }, committed: null, forecast: null, lines: [] })
     expect((u.stages as unknown[]).length).toBe(9)
@@ -286,7 +287,7 @@ describe('guided skills', () => {
 
   it('skill.submit refuses what the bar does not pass, and takes the waiver through waiver.add when it does', async () => {
     await expect(run(USER, 'skill.submit', { repo: REPO, skill: 'waiver', draft: { what: 'requirement:REQ-001', reason: 'not needed' } })).rejects.toThrow(/cannot be submitted yet\. Not met: Reason given/)
-    await expect(run(USER, 'skill.submit', { repo: REPO, skill: 'intent-builder', draft: {} })).rejects.toThrow(/cannot be checked yet: needs the intent statements/)
+    await expect(run(USER, 'skill.submit', { repo: REPO, skill: 'intent-builder', draft: {} })).rejects.toThrow(/Intent builder cannot be submitted yet\. Not met: Every topic answered or marked \(No intent statements are recorded yet/)
     const draft = { what: 'requirement:REQ-001', reason: 'The range is tested at the field trial.', risk: 'A short range in the field.', severity: 'degraded', caught: 'later', where: 'Bring up', scope: 'revision' }
     const r = await run(USER, 'skill.submit', { repo: REPO, skill: 'waiver', draft }) as { ok: boolean; ref: string }
     expect(r).toMatchObject({ ok: true, skill: 'waiver', ref: expect.any(String) })

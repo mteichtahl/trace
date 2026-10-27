@@ -4,6 +4,7 @@ import { tools as agent } from './agent/tools.js'
 import { tools as memory } from './memory/tools.js'
 import { tools as calc } from './calc/tools.js'
 import { tools as datasheets } from './datasheets/tools.js'
+import { tools as design } from './design/tools.js'
 import { tools as firmware } from './firmware/tools.js'
 import { tools as hil } from './hil/tools.js'
 import { tools as journey } from './journey/tools.js'
@@ -21,10 +22,11 @@ import { tools as verify } from './verify/tools.js'
 import { tools as fpga } from './fpga/tools.js'
 import { tools as layout } from './layout/tools.js'
 import { tools as thermal } from './thermal/tools.js'
+import { tools as voice } from './voice/tools.js'
 
 let registry: Registry | null = null
 
 export function allTools(): Registry {
-  registry ??= new Registry([...calc, ...kicad, ...sim, ...datasheets, ...parts, ...hil, ...firmware, ...runs, ...render, ...pcb, ...memory, ...protocol, ...ams, ...emc, ...verify, ...fpga, ...layout, ...thermal, ...kb, ...journey, ...agent])
+  registry ??= new Registry([...calc, ...kicad, ...sim, ...datasheets, ...parts, ...hil, ...firmware, ...runs, ...render, ...pcb, ...memory, ...protocol, ...ams, ...emc, ...verify, ...design, ...fpga, ...layout, ...thermal, ...kb, ...voice, ...journey, ...agent])
   return registry
 }

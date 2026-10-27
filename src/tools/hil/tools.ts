@@ -20,6 +20,7 @@ import { canBus, instrument, serialPort, settings } from './resources.js'
 import { capture, faultLines, listPorts, runExpect, SerialSession, unescape } from './serial.js'
 import { drainErrors, idn, num, parseAddress, withTransport } from './scpi.js'
 import { pickDialect } from './instruments/base.js'
+import { BRINGUP_STEPS } from '../../core/bench.js'
 import { PSU_DIALECTS } from './instruments/psu.js'
 
 const instArgs = {
@@ -37,6 +38,15 @@ const canArgs = {
   channel: z.string().optional().describe('with interface: can0, PCAN_USBBUS1, …'),
   bitrate: z.number().int().positive().optional(),
 }
+/** A measurement taken for a bring-up step: stored against the board and step with its limits (src/core/bench.ts). */
+const Bringup = z.object({
+  board: z.string().regex(/^[A-Za-z0-9._-]{1,40}$/).describe('the board serial (SN-003)'),
+  step: z.enum(BRINGUP_STEPS).describe('the bring-up step: inspect, unpowered, rails, clocks, firmware, tests'),
+  quantity: z.string().min(2).max(120).optional().describe('what is measured, in words ("3V3 rail at TP4"); default: the reading\'s name'),
+  min: z.number().optional().describe('the lower limit, in the reading\'s unit'),
+  max: z.number().optional().describe('the upper limit, in the reading\'s unit'),
+}).strict().optional().describe('store this reading against a board serial and bring-up step, checked against its limits')
+
 const FilterIn = z.object({ id: z.union([z.number().int(), z.string()]), mask: z.number().int().optional(), extended: z.boolean().optional() }).strict()
 const toFilters = (f: z.output<typeof FilterIn>[] | undefined): Filter[] | undefined => f?.map((x) => ({ id: parseId(x.id), mask: x.mask, extended: x.extended }))
 
@@ -292,8 +302,10 @@ export const idnTool = defineTool({
   run: async (a) => {
     const inst = instrument(a.instrument, a.address)
     const transport = parseAddress(inst.address).kind
-    return record('hil.idn', { subject: inst.name, args: a }, async () => withTransport(inst.address, inst.timeout_s * 1000, async (t) => {
+    return record('hil.idn', { subject: inst.name, args: a }, async (rec) => withTransport(inst.address, inst.timeout_s * 1000, async (t) => {
       const id = await idn(t)
+      // the bench's record of who answered (Bench setup's identity check, src/api/skill-checks.ts)
+      rec.identity({ instrument: inst.name, manufacturer: id.manufacturer || null, model: id.model || null, serial: id.serial || null, firmware: id.firmware || null, ok: Boolean(id.manufacturer || id.model) })
       const stale = await drainErrors(t).catch(() => [])
       if (a.reset) { await t.write('*RST'); num(await t.query('*OPC?', 20_000)) }
       const key = { manufacturer: id.manufacturer, model: id.model, serial: id.serial, firmware: id.firmware, raw: id.raw }
@@ -321,6 +333,7 @@ export const psuTool = defineTool({
     current: z.number().min(0).optional().describe('current limit, A'),
     output: z.enum(['on', 'off']).optional(),
     measure: z.boolean().default(true),
+    bringup: Bringup,
   }),
   run: async (a) => {
     const inst = instrument(a.instrument, undefined, 'psu')
@@ -329,13 +342,19 @@ export const psuTool = defineTool({
       rec.measure('set_voltage', st.set.voltage_v, 'V')
       rec.measure('set_current', st.set.current_a, 'A')
       if (st.measured) { rec.measure('voltage', st.measured.voltage_v, 'V'); rec.measure('current', st.measured.current_a, 'A') }
+      // during bring-up: the measured current against the step's limit (or the voltage, when the quantity says so)
+      const reading = a.bringup && st.measured
+        ? /volt|rail|\bv\b/i.test(a.bringup.quantity ?? '')
+          ? rec.reading(a.bringup, { instrument: inst.name, quantity: `CH${a.channel} voltage`, value: st.measured.voltage_v, unit: 'V' })
+          : rec.reading(a.bringup, { instrument: inst.name, quantity: `CH${a.channel} current`, value: st.measured.current_a, unit: 'A' })
+        : null
       rec.artifact('session.txt', st.commands.join('\n'))
       const { commands: _c, ...compact } = st
       void _c
       return {
-        status: st.errors.length ? 'fail' : 'pass',
-        summary: `CH${a.channel} set ${st.set.voltage_v} V / ${st.set.current_a} A, output ${st.output}${st.measured ? `, measured ${round(st.measured.voltage_v, 4)} V ${round(st.measured.current_a, 4)} A` : ''}`,
-        result: compact,
+        status: st.errors.length || reading?.pass === false ? 'fail' : 'pass',
+        summary: `CH${a.channel} set ${st.set.voltage_v} V / ${st.set.current_a} A, output ${st.output}${st.measured ? `, measured ${round(st.measured.voltage_v, 4)} V ${round(st.measured.current_a, 4)} A` : ''}${reading ? `; ${reading.board} ${reading.step}: ${reading.pass ? 'in limits' : 'OUT OF LIMITS'}` : ''}`,
+        result: { ...compact, ...(reading ? { reading: { id: reading.id, board: reading.board, step: reading.step, pass: reading.pass } } : {}) },
       }
     })
   },
@@ -423,6 +442,7 @@ export const scopeMeasure = defineTool({
     channel: z.number().int().positive().default(1),
     measurements: z.array(z.enum(MEASURES)).min(1).default(['vpp', 'freq']),
     source: z.enum(['auto', 'instrument', 'waveform']).default('auto'),
+    bringup: Bringup.describe('store the first measurement against a board serial and bring-up step, checked against its limits'),
   }),
   run: async (a) => {
     const inst = instrument(a.instrument, a.address, 'scope')
@@ -441,10 +461,13 @@ export const scopeMeasure = defineTool({
       })
       for (const [k, m] of Object.entries(value)) rec.measure(`CH${a.channel}.${k}`, m.value, m.unit, { from: m.from })
       rec.artifact('session.txt', s.log.join('\n'))
+      const first = a.measurements[0]
+      const fm = first ? value[first] : undefined
+      const reading = a.bringup && first && fm ? rec.reading(a.bringup, { instrument: inst.name, quantity: `CH${a.channel} ${first}`, value: fm.value, unit: fm.unit }) : null
       return {
-        status: s.errors.length ? 'fail' : 'pass',
+        status: s.errors.length || reading?.pass === false ? 'fail' : 'pass',
         summary: Object.entries(value).map(([k, m]) => `${k} ${m.value === null ? '—' : round(m.value, 4)}${m.unit}`).join(', '),
-        result: { instrument: inst.name, dialect: s.dialect.id, channel: a.channel, measurements: value, errors: s.errors },
+        result: { instrument: inst.name, dialect: s.dialect.id, channel: a.channel, measurements: value, errors: s.errors, ...(reading ? { reading: { id: reading.id, board: reading.board, step: reading.step, pass: reading.pass } } : {}) },
       }
     })
   },
@@ -462,6 +485,7 @@ export const dmm = defineTool({
     range: z.union([z.number().positive(), z.literal('auto')]).default('auto'),
     nplc: z.number().positive().max(200).optional(),
     samples: z.number().int().min(1).max(1000).default(1),
+    bringup: Bringup,
   }),
   run: async (a) => {
     const inst = instrument(a.instrument, a.address, 'dmm')
@@ -479,14 +503,16 @@ export const dmm = defineTool({
       const mean = ok.length ? ok.reduce((x, y) => x + y, 0) / ok.length : null
       const sd = ok.length > 1 && mean !== null ? Math.sqrt(ok.reduce((x, y) => x + (y - mean) ** 2, 0) / (ok.length - 1)) : null
       rec.measure(fn, mean, unit, { samples: value.length, overloads: value.length - ok.length })
+      const reading = a.bringup ? rec.reading(a.bringup, { instrument: inst.name, quantity: fn, value: mean, unit }) : null
       if (value.length > 1) rec.artifact('readings.csv', `i,${fn}_${unit}\n${value.map((v, i) => `${i},${v ?? 'OL'}`).join('\n')}\n`, 'text/csv')
       return {
-        status: s.errors.length || mean === null ? 'fail' : 'pass',
-        summary: mean === null ? `${fn}: overload` : `${fn} ${round(mean, 6)} ${unit}${value.length > 1 ? ` (n=${value.length})` : ''}`,
+        status: s.errors.length || mean === null || reading?.pass === false ? 'fail' : 'pass',
+        summary: `${mean === null ? `${fn}: overload` : `${fn} ${round(mean, 6)} ${unit}${value.length > 1 ? ` (n=${value.length})` : ''}`}${reading ? `; ${reading.board} ${reading.step}: ${reading.pass ? 'in limits' : 'OUT OF LIMITS'}` : ''}`,
         result: {
           instrument: inst.name, dialect: s.dialect.id, function: fn, unit, value: mean === null ? null : round(mean, 7),
           ...(value.length > 1 ? { min: Math.min(...ok), max: Math.max(...ok), stdev: sd === null ? null : round(sd, 4), samples: value.length } : {}),
           overload: value.some((x) => x === null), errors: s.errors,
+          ...(reading ? { reading: { id: reading.id, board: reading.board, step: reading.step, pass: reading.pass } } : {}),
         },
       }
     })

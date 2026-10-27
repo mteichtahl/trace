@@ -6,6 +6,10 @@
  *
  * Stop asks trace to switch the supplies off (a `task` for the bench agent; the instruments themselves are driven
  * only on the bench machine, never from the web).
+ *
+ * The readouts are the bring-up readings recorded against the board and step (src/core/bench.ts): each arrives as a
+ * live event when the bench takes it, so the panel updates without asking. Incoming inspection records each board and
+ * check here (InspectionPanel); Bring-up run lists every reading of the board on the bench.
  */
 import { ArrowRight, Bot, Hand, OctagonX } from 'lucide-react'
 import { useState } from 'react'
@@ -25,6 +29,8 @@ import { type SkillDef, pictureOf } from './definitions'
 import { StepHeader, TraceIntro, Unavailable } from './parts'
 import { StepPicture } from './step-picture'
 import { type SkillDraftBase, qualityChecks, useSkill } from './use-skill'
+import { InspectionPanel } from './inspection-panel'
+import { BenchReadings } from '@/components/project/build-record'
 
 interface Draft extends SkillDraftBase { ticked: string[] }
 
@@ -59,7 +65,7 @@ export function ChecklistSkill({ repo, def }: { repo: string; def: SkillDef }) {
   const aside = (
     <div className="space-y-5">
       <section aria-labelledby="readouts">
-        <h2 id="readouts" className="text-sm font-semibold">Live readout</h2>
+        <h2 id="readouts" className="text-sm font-semibold">Live readout{bench?.board ? ` · ${bench.board}` : ''}</h2>
         {!bench?.readouts.length ? (
           <p className="mt-1 text-sm text-muted-foreground">No instruments are reporting. Bench setup connects them.</p>
         ) : (
@@ -128,6 +134,13 @@ export function ChecklistSkill({ repo, def }: { repo: string; def: SkillDef }) {
       <div className="mt-4">
         <StepPicture repo={repo} kind={pictureOf(def, s.step.id)} view={v} height={460} />
       </div>
+      {def.id === 'incoming-inspection' && <InspectionPanel repo={repo} step={s.step.id} boards={v?.boards ?? []} handPlaced={v?.handPlaced} />}
+      {def.id === 'bring-up-run' && bench?.readings?.length ? (
+        <section className="mt-6 rounded-xl border p-5" aria-label="Readings">
+          <h2 className="text-sm font-semibold">Every reading of {bench.board}</h2>
+          <BenchReadings bench={{ configured: true, instruments: [], readings: bench.readings }} />
+        </section>
+      ) : null}
       {/* the readout and checklist sit beside the picture from lg; under it on smaller screens */}
       <div className="mt-6 lg:hidden">{aside}</div>
       {s.stepIndex < def.steps.length - 1 && (

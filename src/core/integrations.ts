@@ -7,6 +7,9 @@
  *   mouser    Mouser's Search API, for the same tools (providers/mouser.ts)
  *   digikey   Digi-Key's Product Information API v4, for the same tools (providers/digikey.ts)
  *
+ *   dhl       DHL's Shipment Tracking - Unified API, for following a shipped order's parcel (src/core/shipping.ts and
+ *             the order-watch Lambda; not a tool, so the worker never reads it)
+ *
  * LCSC needs no key (providers/lcsc.ts), and the datasheet tools fetch public URLs, so neither is listed here. That is
  * every credential the tools read (src/tools/**; checked by test/core/integrations.test.ts).
  *
@@ -21,7 +24,7 @@
  * (src/infra/gateway.ts), so no agent can: the parts tools run there. README "Optional integrations".
  */
 import { z } from 'zod'
-import { INTEGRATIONS, INTEGRATION_NAMES, type IntegrationName, integrationSecretName, valuesFor } from './integrations-catalog.js'
+import { INTEGRATIONS, INTEGRATION_NAMES, TOOL_INTEGRATIONS, type IntegrationName, integrationSecretName, valuesFor } from './integrations-catalog.js'
 
 export * from './integrations-catalog.js'
 export const IntegrationNameSchema = z.enum(INTEGRATION_NAMES)
@@ -48,6 +51,12 @@ export async function checkIntegration(name: IntegrationName, values: Record<str
       const body = await r.text()
       if (!r.ok) return { ok: false, detail: `${INTEGRATIONS[name].title} refused these credentials (HTTP ${r.status}${/invalid_client/.test(body) ? ': invalid client' : ''})` }
       return /access_token/.test(body) ? { ok: true, detail: `${INTEGRATIONS[name].title} accepted the credentials` } : { ok: false, detail: `${INTEGRATIONS[name].title} answered without a token` }
+    }
+    if (name === 'dhl') {
+      // a known-unknown number: a working key answers 404 (no such shipment), a wrong one 401
+      const r = await fetchImpl('https://api-eu.dhl.com/track/shipments?trackingNumber=0000000000', { method: 'GET', signal: timeout(), headers: { 'DHL-API-Key': values.DHL_API_KEY ?? '', accept: 'application/json' } })
+      if (r.status === 401 || r.status === 403) return { ok: false, detail: `DHL refused this key (HTTP ${r.status})` }
+      return r.ok || r.status === 404 ? { ok: true, detail: 'DHL accepted the key' } : { ok: false, detail: `DHL answered HTTP ${r.status}` }
     }
     const r = await fetchImpl(`https://api.mouser.com/api/v1/search/partnumber?apiKey=${encodeURIComponent(values.MOUSER_API_KEY ?? '')}`, {
       method: 'POST', signal: timeout(), headers: { 'content-type': 'application/json', accept: 'application/json' },
@@ -161,7 +170,8 @@ export async function secretsManagerApi(o: { region?: string; credentials?: unkn
 export async function loadIntegrations(prefix: string, get: (name: string) => Promise<string | null>, env: NodeJS.ProcessEnv = process.env): Promise<{ loaded: IntegrationName[]; skipped: string[] }> {
   const loaded: IntegrationName[] = []
   const skipped: string[] = []
-  await Promise.all(INTEGRATION_NAMES.map(async (n) => {
+  // only what the tools read: the order watch's carrier key is read by its own Lambda, never put in a worker
+  await Promise.all(TOOL_INTEGRATIONS.map(async (n) => {
     try {
       const text = await get(`${prefix}${n}`)
       if (text === null) return

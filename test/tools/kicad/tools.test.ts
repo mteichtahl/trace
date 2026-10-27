@@ -136,4 +136,14 @@ describe.skipIf(!hasKicad)('kicad tools through kicad-cli', () => {
     for (const f of ['demo-schematic.pdf', 'demo-board.svg', 'demo.step']) expect(existsSync(join(out, f))).toBe(true)
     expect(r.files_total).toBeGreaterThanOrEqual(3)
   }, 300_000)
+
+  it('kicad.export keeps each sheet\'s drawing and the board\'s in its run, mapped to their files', async () => {
+    const out = mkdtempSync(join(tmpdir(), 'exp-'))
+    const r = await call('kicad.export', { project: DEMO_PRO, out_dir: out, kinds: ['sch_svg', 'pcb_svg'] })
+    const drawings = r.drawings as { artifact: string; kind: string; file?: string; width_mm?: number }[]
+    expect(drawings.some((d) => d.kind === 'sheet' && d.file?.endsWith('demo.kicad_sch') && (d.width_mm ?? 0) > 0)).toBe(true)
+    expect(drawings.some((d) => d.kind === 'board')).toBe(true)
+    const run = new Work().run(r.run_id as string)
+    expect(run?.artifacts.map((a) => a.name)).toEqual(expect.arrayContaining(['drawings.json', ...drawings.map((d) => d.artifact)]))
+  }, 300_000)
 })

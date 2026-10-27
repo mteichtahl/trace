@@ -9,7 +9,8 @@
  *                                       on each: write needs the contributor part (admins are contributors everywhere)
  *   status        read                  open PRs, open agent-fix issues, recent trace workflow runs, the last deploy
  *   settings.get  read                  the project's settings (.trace/project.db on the default branch), resolved
- *   runs          read                  the project's run record (newest first; kind, limit)
+ *   runs          read                  the project's run record (newest first; kind, limit, agent: one agent's runs;
+ *                                       each run names the agent whose session made it, null for a person's own)
  *   run           read                  one run: args, result, measurements, artifact list
  *   artifact      read                  one artifact's bytes (base64), at most 8 MB
  *   tools.list    read                  the tools (never the hardware ones), and which of them need write
@@ -89,11 +90,17 @@
  *   actions-me.ts        me.get, me.set
  *   actions-graph.ts     graph.neighbourhood
  *   actions-files.ts     files.list, files.url
- *   actions-jobs.ts      job.control
+ *   actions-jobs.ts      jobs.list, job.control
  *   actions-people.ts    users.history
- *   actions-record.ts    requirements.trace, design.get, build.get, order.record, cost.get
+ *   actions-record.ts    requirements.trace, design.get
+ *   actions-build.ts     build.get, order.record, order.update, order.check_now, board.record, board.check
+ *   actions-cost.ts      cost.get, usage.month
  *   actions-skills.ts    skill.get, skill.draft, skill.drafts, skill.submit
+ *   actions-design.ts    design.decide
  *   actions-me.ts        also policy.get, policy.set
+ *   actions-prompts.ts   prompts.chat (the chat agent's editable instructions as the installation has them)
+ *   actions-voice.ts     voice.vocabulary, voice.vocabulary.sync (dictation's project words)
+ *   actions-layout.ts    installation.layout (flat or nested, what that means, and how to move)
  */
 import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -123,6 +130,7 @@ import {
   type Action, ActionError, type Context, type JobView, type JobsApi, MAX_ARTIFACT, type Need, NO_ACCESS, PROJECT_DB_PATH, Repo, def, hashOf, hashesOf, memoryInclude, projectMemory, slugify, tempDb, withProjectDb,
 } from './action-kit.js'
 import { CHAT_ACTIONS } from './actions-chats.js'
+import { DESIGN_ACTIONS } from './actions-design.js'
 import { FILE_ACTIONS } from './actions-files.js'
 import { GRAPH_ACTIONS } from './actions-graph.js'
 import { JOURNEY_ACTIONS } from './actions-journey.js'
@@ -130,8 +138,13 @@ import { JOB_ACTIONS, withControls } from './actions-jobs.js'
 import { ME_ACTIONS } from './actions-me.js'
 import { PEOPLE_ACTIONS } from './actions-people.js'
 import { RECORD_ACTIONS } from './actions-record.js'
+import { BUILD_ACTIONS } from './actions-build.js'
+import { COST_ACTIONS } from './actions-cost.js'
 import { SKILL_ACTIONS } from './actions-skills.js'
 import { PROJECT_ACTIONS } from './actions-projects.js'
+import { PROMPT_ACTIONS } from './actions-prompts.js'
+import { VOICE_ACTIONS } from './actions-voice.js'
+import { LAYOUT_ACTIONS } from './actions-layout.js'
 import type { CognitoUser } from './aws.js'
 
 export {
@@ -139,7 +152,7 @@ export {
 } from './action-kit.js'
 
 /** Tools that change state outside their scratch clone (the shared datasheet library and parts links): write. */
-export const WRITE_TOOLS: ReadonlySet<string> = new Set(['datasheets.add', 'datasheets.acknowledge', 'parts.fetch_datasheet', 'kb.sync'])
+export const WRITE_TOOLS: ReadonlySet<string> = new Set(['datasheets.add', 'datasheets.acknowledge', 'parts.fetch_datasheet', 'kb.sync', 'voice.vocabulary'])
 
 /** Tools scoped by the session's environment (a job's project and agent), not by the request: never through the API.
  * The API reaches memory through memory.list and memory.recall, scoped to the project the access check passed.
@@ -362,8 +375,8 @@ export const ACTIONS = {
     return { repo, set: own, config, errors }
   })),
 
-  runs: def('read', Repo.extend({ kind: z.string().max(100).optional(), limit: z.number().int().min(1).max(500).default(20) }), async (a, ctx) =>
-    withProjectDb(ctx, a.repo, (db) => { const w = new Work(db); try { return w.runs(a.kind, a.limit) } finally { w.close() } })),
+  runs: def('read', Repo.extend({ kind: z.string().max(100).optional(), limit: z.number().int().min(1).max(500).default(20), agent: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/).optional() }), async (a, ctx) =>
+    withProjectDb(ctx, a.repo, (db) => { const w = new Work(db); try { return w.runs(a.kind, a.limit, a.agent) } finally { w.close() } })),
 
   run: def('read', Repo.extend({ id: z.string().min(1).max(64) }), async (a, ctx) => withProjectDb(ctx, a.repo, (db) => {
     const w = new Work(db)
@@ -637,7 +650,13 @@ export const ACTIONS = {
   ...JOB_ACTIONS,
   ...PEOPLE_ACTIONS,
   ...RECORD_ACTIONS,
+  ...BUILD_ACTIONS,
+  ...COST_ACTIONS,
   ...SKILL_ACTIONS,
+  ...DESIGN_ACTIONS,
+  ...PROMPT_ACTIONS,
+  ...VOICE_ACTIONS,
+  ...LAYOUT_ACTIONS,
 } satisfies Record<string, Action<z.ZodType>>
 
 export type ActionName = keyof typeof ACTIONS

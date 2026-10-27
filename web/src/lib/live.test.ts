@@ -4,7 +4,7 @@ import { applyEvent, connectLive, hostOf, invalidationsFor, liveStatus, subproto
 
 describe('live events → query invalidation', () => {
   it('maps each event to the queries it makes stale', () => {
-    expect(invalidationsFor({ type: 'record.changed', repo: 'a/b', what: 'journey', at: '' })).toEqual([['journey.get', 'a/b'], ['inbox'], ['runs', 'a/b']])
+    expect(invalidationsFor({ type: 'record.changed', repo: 'a/b', what: 'journey', at: '' })).toEqual([['journey.get', 'a/b'], ['inbox'], ['runs', 'a/b'], ['build.get', 'a/b'], ['skill.get', 'a/b']])
     expect(invalidationsFor({ type: 'record.changed', repo: 'a/b', what: 'chats', at: '' })).toContainEqual(['chats.recall', 'a/b'])
     expect(invalidationsFor({ type: 'job.updated', repo: 'a/b', jobId: 'j', state: 'done', at: '' })).toContainEqual(['tools.waits', 'a/b'])
     expect(invalidationsFor({ type: 'notification', id: 'n', kind: 'gate', repo: 'a/b', summary: '', at: '' })).toEqual([['inbox'], ['journey.get', 'a/b']])

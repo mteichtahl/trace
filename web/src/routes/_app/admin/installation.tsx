@@ -20,6 +20,7 @@ import { Loading, QueryError, SkeletonRows } from '@/components/states'
 import { type Status, StatusBadge } from '@/components/status-badge'
 import { WaitLine } from '@/components/wait-line'
 import { useTraceContext } from '@/components/chat/context'
+import { LayoutSection } from '@/components/installation/layout'
 import { call, projectName } from '@/lib/api'
 import type { IntegrationName, IntegrationStatus } from '@/lib/admin-types'
 import { loadConfig } from '@/lib/config'
@@ -32,7 +33,7 @@ export const Route = createFileRoute('/_app/admin/installation')({
   component: Installation,
 })
 
-interface HealthLine {
+export interface HealthLine {
   id: string
   what: string
   status: Status
@@ -44,6 +45,15 @@ interface HealthLine {
 
 /** "Optional: parts search works without it; adds live stock and prices from this distributor". */
 export const OPTIONAL_LINE = 'Optional: parts search works without it; adds live stock and prices from this distributor.'
+
+/** The health line for AWS WAF in front of the app (src/infra/edge.ts). */
+export function wafLine(waf: { enabled: boolean; own: boolean; apiRequestsPer5Minutes: number; authRequestsPer5Minutes: number } | undefined): HealthLine {
+  const what = 'Protection (AWS WAF in front of the app)'
+  if (!waf) return { id: 'waf', what, status: 'idle', word: 'Not reported', detail: 'This installation is older than the setting.', todo: 'Run the installer again: AWS WAF is on by default (about US$11 a month).' }
+  if (!waf.enabled) return { id: 'waf', what, status: 'idle', word: 'Off', detail: 'Only the app\'s own limits per person apply; sign-in has no limit per address.', todo: 'Turn on "Protect the app with AWS WAF" in the installer\'s Advanced › Web app (about US$11 a month, plus US$0.60 per million requests).' }
+  if (waf.own) return { id: 'waf', what, status: 'verified', word: 'On', detail: 'Your own web ACL is in front of the app.' }
+  return { id: 'waf', what, status: 'verified', word: 'On', detail: `AWS's managed rules; at most ${waf.apiRequestsPer5Minutes.toLocaleString()} requests to the API and ${waf.authRequestsPer5Minutes.toLocaleString()} sign-in requests per address in 5 minutes; no request body over 5 MB.` }
+}
 
 /** The key's last four characters, the only part ever shown again. */
 export const lastFour = (value: string): string => value.trim().slice(-4)
@@ -84,6 +94,7 @@ function Installation() {
     lines.push({ id: 'voice', what: 'Voice (reading aloud and dictation)', status: f.voice ? 'verified' : 'idle', word: f.voice ? 'On' : 'Off', todo: f.voice ? undefined : 'Turn it on in the installer\'s Advanced settings.' })
     lines.push({ id: 'email', what: 'Email notifications', status: f.email ? 'verified' : 'idle', word: f.email ? 'On' : 'Off', detail: f.email ? undefined : 'In-app only until a sender is verified.', todo: f.email ? undefined : 'Set up email in the installer\'s optional step.' })
     lines.push({ id: 'ops', what: 'Operations (CloudWatch dashboards)', status: f.ops ? 'verified' : 'idle', word: f.ops ? 'On' : 'Off' })
+    lines.push(wafLine(config.data.waf))
   }
   repos.forEach((repo, i) => {
     const s = statuses[i]
@@ -134,6 +145,10 @@ function Installation() {
         <p className="mt-2 text-xs text-muted-foreground">
           Not shown yet, because the API has no read for them: the graphics card image build, each project's knowledge base sync state and its build runner's own health. They will appear here as Wait lines when the API reports them.
         </p>
+      </Section>
+
+      <Section label="Projects">
+        <LayoutSection />
       </Section>
 
       <Section label="Optional keys">

@@ -8,14 +8,23 @@
  *                         from this person's draft. Skill-specific: `question` (Question answer: the oldest open
  *                         question for this person), `waivable` (Waiver: the criteria not met, the failing
  *                         requirements, the open findings), `findings` and `sheets` (Schematic finish, Board setup,
- *                         Placement adjust: the latest checks'), `gate` (Gate signing: the gate of the current stage)
+ *                         Placement adjust: the latest checks'), `gate` (Gate signing: the gate of the current stage),
+ *                         `intent` (Intent builder: the statements by topic, with their flags, and the open questions),
+ *                         `items` (Requirements review: the requirements to decide and the intent lines no requirement
+ *                         covers; Pin plan review: the pin plan's findings), `architecture` and `recommendation`
+ *                         (Architecture choice: every option, the criteria, the scores, trace's recommendation).
+ *                         The design decisions in the person's draft are laid over the record before the bar is
+ *                         checked, so it shows what Submit would record; one that cannot be recorded is listed in
+ *                         `pending_errors`
  *   skill.draft   read    { skill, step, data | null }: keep this person's draft in the journey store (null discards
  *                         it). Read access: a reviewer can draft a waiver to discuss, never submit it
  *   skill.drafts  read    this person's drafts on the project, newest first (the "Continue: … step 4 of 6" card)
  *   skill.submit  write   { skill, draft }: the draft is kept, the bar checked again from the record; any check not
  *                         met is refused with what is missing. Then the skill's own effect where an action exists
  *                         (Waiver → waiver.add, Question answer → question.answer, Change request → a task for the
- *                         agents), a decision logged for every skill, and the draft discarded
+ *                         agents; Intent builder, Requirements review, Architecture choice and Pin plan review → their
+ *                         design decisions, as design.decide records them: src/api/actions-design.ts), a decision
+ *                         logged for every skill, and the draft discarded
  */
 import { z } from 'zod'
 import {
@@ -23,10 +32,56 @@ import {
   questionIsFor,
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
-import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
+import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, storeAt, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { viewerOf } from './actions-journey.js'
-import { checkFindings, hasTable, latestRun, requirementEvidence, runResult } from './record-read.js'
+import { loadDesignDecisions, recordDesignDecision } from '../tools/design/decisions.js'
+import type { DesignRows } from '../tools/design/db.js'
+import { architectureView, intentDraft, intentView, linksView, pinCheck } from '../tools/design/record.js'
+import { type DecisionInput, Decision, prepare } from './actions-design.js'
+import { kicadFiles } from './actions-record.js'
+import { checkFindings, designOf, hasTable, latestNetlist, latestRun, requirementEvidence, runResult, struckRequirements } from './record-read.js'
+import { BenchStore, type InstrumentId, type Reading, idsFromRuns, latestByQuantity, loadIds, loadReadings, unionIds, unionReadings } from '../core/bench.js'
+import { loadBoards } from '../core/boards.js'
+import { PROJECTS_PREFIX } from '../core/project.js'
+import { boardView, readingView } from './actions-build.js'
+
+/** The skills that read the bench. */
+const HARDWARE_SKILLS = new Set(['bench-setup', 'bring-up-run', 'incoming-inspection'])
+
+async function liveBenchOf(ctx: Context, repo: string): Promise<{ readings: Reading[]; ids: InstrumentId[] }> {
+  try {
+    return (await new BenchStore(storeAt(ctx, PROJECTS_PREFIX), repo, { scratch: ctx.deps.scratch }).read((db) => ({ readings: loadReadings(db), ids: loadIds(db) }))).result
+  } catch { return { readings: [], ids: [] } }
+}
+
+/**
+ * The bench as the checklist skills draw it (BenchReadout, docs/ui-design.md "Checklist on a picture"): for Bring-up
+ * run, the board on the bench now (the one with the newest reading), each of its newest readings against its limits,
+ * and the checklist ticked by trace from those readings; for Bench setup, each instrument ticked when it answered its
+ * identity query. Readings arrive as the bench takes them (the live copy's writes are live events).
+ */
+function skillBench(skill: string, i: CheckInput) {
+  const rs = i.readings ?? []
+  if (skill === 'bench-setup') {
+    const ids = new Map((i.ids ?? []).map((x) => [x.instrument, x]))
+    return {
+      powered: false, readouts: [],
+      checklist: i.instruments.map((x) => ({ id: `idn-${x.name}`, text: `${x.name} answers its identity query${ids.get(x.name)?.model ? ` (${[ids.get(x.name)?.manufacturer, ids.get(x.name)?.model].filter(Boolean).join(' ')})` : ''}`, by: 'trace' as const, done: Boolean(ids.get(x.name)?.ok) })),
+    }
+  }
+  const board = rs.length ? (rs[rs.length - 1] as Reading).board : null
+  const mine = board ? latestByQuantity(rs.filter((r) => r.board === board)) : []
+  return {
+    board, powered: mine.some((r) => r.step !== 'inspect' && r.step !== 'unpowered'),
+    readouts: mine.map((r) => ({ id: r.id, label: `${r.quantity}${r.instrument ? ` (${r.instrument})` : ''}`, value: r.value, unit: r.unit ?? '', ...(r.min !== null ? { min: r.min } : {}), ...(r.max !== null ? { max: r.max } : {}), step: r.step, at: new Date(r.at * 1000).toISOString() })),
+    checklist: mine.map((r) => ({ id: `r-${r.id}`, text: `${r.quantity}${r.min !== null || r.max !== null ? ` within ${r.min ?? '…'} to ${r.max ?? '…'} ${r.unit ?? ''}`.trimEnd() : ''}`, by: 'trace' as const, done: r.pass, powered: r.step !== 'inspect' && r.step !== 'unpowered' })),
+    readings: rs.filter((r) => r.board === board).map(readingView),
+  }
+}
 import { type CheckInput, type CheckResult, checkSkill } from './skill-checks.js'
+
+/** The skills whose Submit records design decisions. */
+const DESIGN_SKILLS = new Set(['intent-builder', 'requirements-review', 'architecture-choice', 'pin-plan-review'])
 
 const SkillId = z.string().regex(/^[a-z][a-z-]{1,40}$/).refine((s) => SKILL_IDS.includes(s), 'one of the nineteen guided skills')
 const Data = z.record(z.string(), z.unknown())
@@ -38,19 +93,32 @@ const currentGate = (r: JourneyRecord | null): string | null => {
 }
 
 /** Everything the checks read, from the record database (repository + live journey), for this person and skill. */
-async function inputFor(ctx: Context, repo: string, skill: string, draftOverride?: Record<string, unknown>): Promise<CheckInput & { draftRow: { step: number; saved: string } | null; facts: AgentFacts }> {
+async function inputFor(ctx: Context, repo: string, skill: string, draftOverride?: Record<string, unknown>): Promise<CheckInput & { draftRow: { step: number; saved: string } | null; facts: AgentFacts; pendingErrors: string[] }> {
   const viewer: Viewer = await viewerOf(ctx.principal, repo)
   // drafts are the journey store's own (never copied into the repository), so they are read from it
   const row = await withJourneyDb(ctx, repo, (db) => getDraft(db, viewer.hash, skill))
   // the agents' questions and checks (src/core/agent-facts.ts), merged in as every view of the journey does
   const facts = await agentFacts(ctx, repo)
+  // Schematic finish names every sheet's requirements: the schematic files of the default branch
+  const sheetFiles = skill === 'schematic-finish' ? await kicadFiles(ctx, repo).then((f) => f.sch, () => null) : null
+  // what the bench measured and who answered, as taken (the bench's live copy beside the facts: src/core/bench.ts)
+  const bench = HARDWARE_SKILLS.has(skill) ? await liveBenchOf(ctx, repo) : { readings: [], ids: [] }
   return withRecordDb(ctx, repo, (db) => {
     const own = loadJourney(db)
     const r = own ? mergeAgentFacts(own, facts) : null
+    const draft = draftOverride ?? (row?.data && typeof row.data === 'object' ? row.data as Record<string, unknown> : null)
+    // this skill's own pending decisions, laid over the record (this copy of it is thrown away after): the bar shows
+    // what Submit would record. One a decision cannot be (it names nothing, or lacks its reason) is left out, and the
+    // check it feeds stays not met
+    const pendingErrors: string[] = []
+    for (const d of draft ? (() => { const x = designOf(db); return pendingDecisions(skill, draft, x.rows, x.decisions) })() : []) {
+      try {
+        const des = designOf(db)
+        recordDesignDecision(db, prepare(d, des.rows, new Set(requirementIds(db)), des.decisions), { label: viewer.label, hash: viewer.hash })
+      } catch (e) { pendingErrors.push(e instanceof Error ? e.message : String(e)) }
+    }
     const live = requirementEvidence(db, r)
-    const struck = hasTable(db, 'requirements')
-      ? (db.prepare("SELECT id, tags FROM requirements WHERE status IN ('rejected', 'obsolete')").all() as Record<string, unknown>[]).map((x) => ({ id: String(x.id), tags: [] as string[] }))
-      : []
+    const struck = struckRequirements(db)
     const erc = checkFindings(db, 'erc', r)
     const drc = checkFindings(db, 'drc', r)
     const bomRun = latestRun(db, 'kicad.bom')
@@ -63,18 +131,62 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
       if (Array.isArray(parsed)) instruments = parsed as CheckInput['instruments']
     } catch { /* unreadable settings: no instruments */ }
     const tests = hasTable(db, 'test_items') ? (db.prepare('SELECT id, method, status FROM test_items').all() as Record<string, unknown>[]).map((t) => ({ id: String(t.id), method: String(t.method), status: String(t.status) })) : []
-    const draft = draftOverride ?? (row?.data && typeof row.data === 'object' ? row.data as Record<string, unknown> : null)
     const question = r?.questions.find((q) => q.answeredAt === null && questionIsFor(q, viewer)) ?? null
+    const fab = latestRun(db, 'kicad.fab')
+    const fabResult = fab ? runResult(db, fab.id) : null
+    const handPlaced = Array.isArray(fabResult?.hand_placed) ? (fabResult.hand_placed as unknown[]).filter((x): x is string => typeof x === 'string') : null
     return {
+      boards: loadBoards(db), handPlaced, ids: unionIds(idsFromRuns(db), bench.ids), readings: unionReadings(loadReadings(db), bench.readings),
       r, viewer, requirements: live, struck,
       erc: erc.findings ? { findings: erc.findings, errors: erc.report.errors } : null,
       drc: drc.findings ? { findings: drc.findings, errors: drc.report.errors } : null,
       bom: bomRun ? runResult(db, bomRun.id) : null, board: boardRun ? runResult(db, boardRun.id) : null,
       placement: placement ? { status: placement.status, summary: placement.summary } : null,
       instruments, tests, orders: r ? loadOrders(db) : [], draft, gate: currentGate(r), question,
-      draftRow: row ? { step: row.step, saved: row.saved } : null, facts,
+      design: designOf(db), nets: latestNetlist(db)?.nets ?? null, sheetFiles,
+      draftRow: row ? { step: row.step, saved: row.saved } : null, facts, pendingErrors,
     }
   })
+}
+
+const requirementIds = (db: import('node:sqlite').DatabaseSync): string[] => (hasTable(db, 'requirements') ? (db.prepare('SELECT id FROM requirements').all() as { id: string }[]).map((x) => String(x.id)) : [])
+const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
+
+/**
+ * The design decisions a skill's draft makes, which Submit records (design.decide's shapes):
+ *   intent-builder       draft.decisions [{ statement, choice: accept | edit | reject, text?, reason? }]; every
+ *                        proposed statement not named there is accepted as worded (Submit intent accepts the draft)
+ *   requirements-review  draft.decisions [{ requirement, choice: accept | strike, reason? }], draft.uncovered
+ *                        [{ statement, reason }]
+ *   architecture-choice  draft.choice { option, reason } with draft.deciding [criterion ids], draft.scores?,
+ *                        draft.only_one?. The criteria are not part of Submit: they are fixed (design.decide) at the
+ *                        first step, before any score is read, which is what "criteria fixed before scoring" checks
+ *   pin-plan-review      every part in the plan, or draft.parts [part]: agreed as it stands
+ * Entries that are not decisions are left out (the bar then says what is missing).
+ */
+export function pendingDecisions(skill: string, draft: Record<string, unknown>, rows: DesignRows, decided: readonly import('../tools/design/decisions.js').DesignDecision[] = []): DecisionInput[] {
+  const parse = (x: unknown): DecisionInput[] => { const r = Decision.safeParse(x); return r.success ? [r.data] : [] }
+  switch (skill) {
+    case 'intent-builder': {
+      const named = list(draft.decisions).flatMap((d) => parse({ kind: 'intent', ...(d as object) }))
+      const inDraft = new Set(named.map((d) => (d.kind === 'intent' ? d.statement : '')))
+      const rest = intentView(rows, decided).filter((x) => x.state === 'proposed' && !inDraft.has(x.id)).map((x) => ({ kind: 'intent' as const, statement: x.id, choice: 'accept' as const }))
+      return [...named, ...rest]
+    }
+    case 'requirements-review':
+      return [...list(draft.decisions).flatMap((d) => parse({ kind: 'requirement', ...(d as object) })), ...list(draft.uncovered).flatMap((d) => parse({ kind: 'uncovered', ...(d as object) }))]
+    case 'architecture-choice': {
+      const c = draft.choice as { option?: unknown; reason?: unknown } | undefined
+      if (!c || typeof c.option !== 'string') return []
+      const reason = typeof c.reason === 'string' && c.reason.trim() ? c.reason : typeof draft.why === 'string' ? draft.why : ''
+      return parse({ kind: 'architecture', option: c.option, reason, deciding: list(draft.deciding), ...(draft.scores ? { scores: draft.scores } : {}), ...(typeof draft.only_one === 'string' ? { only_one: draft.only_one } : {}) })
+    }
+    case 'pin-plan-review': {
+      const parts = list(draft.parts).filter((x): x is string => typeof x === 'string')
+      return (parts.length ? parts : [...new Set(rows.pins.filter((p) => p.status !== 'withdrawn').map((p) => p.part))]).map((part) => ({ kind: 'pins' as const, part }))
+    }
+    default: return []
+  }
 }
 
 const finding = (f: NonNullable<CheckInput['erc']>['findings'][number]) => ({
@@ -108,9 +220,43 @@ function extras(skill: string, i: CheckInput): Record<string, unknown> {
         ],
       }
     }
+    case 'intent-builder': return i.design ? { intent: intentDraft(intentView(i.design.rows, i.design.decisions)) } : {}
+    case 'requirements-review': {
+      if (!i.design) return {}
+      const v = intentView(i.design.rows, i.design.decisions)
+      const links = linksView(i.design.rows)
+      return {
+        items: [
+          ...i.requirements.filter((q) => q.status !== 'accepted').map((q) => ({ id: `requirement:${q.id}`, title: `${q.id}: ${q.text}`, detail: `From ${links.filter((l) => l.requirement === q.id).map((l) => v.find((x) => x.id === l.intent)?.words ?? l.intent).join('; ') || q.source || 'no source given'}.`, status: 'open' as const })),
+          ...v.filter((x) => x.state !== 'rejected' && x.kind === 'statement' && x.uncovered === null && !links.some((l) => l.intent === x.id)).map((x) => ({ id: `intent:${x.id}`, title: `Not covered: ${x.words}`, detail: 'No requirement is derived from this intent line: add one, or leave it out with a reason.', status: 'open' as const })),
+        ],
+      }
+    }
+    case 'architecture-choice': {
+      if (!i.design) return {}
+      const a = architectureView(i.design.rows, i.design.decisions)
+      const rec = a.options.find((o) => o.recommended)
+      return {
+        architecture: a,
+        ...(a.options.length ? {
+          recommendation: {
+            question: 'Which architecture goes forward?', recommended: rec?.id ?? a.options[0]?.id ?? '',
+            options: a.options.map((o) => ({ id: o.id, label: `Option ${o.id}: ${o.name}`, detail: `${o.summary}${a.criteria.length ? ` Weighted score ${o.total}.` : ''}` })),
+            ...(rec?.why ? { why: rec.why } : {}), ...(rec?.gives_up ? { givesUp: rec.gives_up } : {}),
+          },
+        } : {}),
+      }
+    }
+    case 'pin-plan-review': {
+      if (!i.design) return {}
+      const waived = new Set((i.r?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'finding').map((w) => w.target))
+      return { items: pinCheck(i.design.rows.pins, i.nets ?? null).map((f) => ({ id: `finding:${f.id}`, title: f.text, detail: f.severity === 'blocks' ? 'Fix it in the plan or the schematic, or waive it.' : 'Fix or waive.', status: waived.has(f.id) ? 'waived' as const : 'open' as const })) }
+    }
     case 'schematic-finish': return { findings: (i.erc?.findings ?? []).map(finding) }
     case 'board-setup': case 'placement-adjust': return { findings: (i.drc?.findings ?? []).map(finding) }
     case 'gate-signing': return i.gate ? { gate: i.gate } : {}
+    case 'incoming-inspection': return { boards: (i.boards ?? []).map((b) => boardView(b, i.orders, i.readings ?? [])), ...(i.handPlaced ? { handPlaced: i.handPlaced } : {}) }
+    case 'bench-setup': case 'bring-up-run': return { bench: skillBench(skill, i) }
     default: return {}
   }
 }
@@ -141,6 +287,7 @@ export const SKILL_ACTIONS = {
       repo: a.repo, skill: sk.id, name: sk.name, stage: sk.stage,
       steps: sk.steps, step: i.draftRow?.step ?? 0,
       checks, met: checks.filter((c) => c.status !== 'not_met').length, total: checks.length, summary: summaryOf(checks),
+      ...(i.pendingErrors.length ? { pending_errors: i.pendingErrors } : {}),
       draft: i.draft, saved: i.draftRow?.saved ?? null,
       ...extras(a.skill, i),
     }
@@ -167,6 +314,7 @@ export const SKILL_ACTIONS = {
     const i = await inputFor(ctx, a.repo, a.skill, a.draft)
     const checks = checkSkill(a.skill, i) ?? []
     const missing = checks.filter((c) => c.status === 'not_met')
+    if (i.pendingErrors.length) throw new ActionError(`${sk.name} cannot be submitted yet: ${i.pendingErrors.join(' ')}`)
     if (missing.length) {
       const words = missing.map((c) => `${sk.checks.find((x) => x.id === c.id)?.text ?? c.id}${c.unavailable ? ` (cannot be checked yet: needs ${c.unavailable})` : c.detail ? ` (${c.detail})` : ''}`)
       throw new ActionError(`${sk.name} cannot be submitted yet. Not met: ${words.join('; ')}.`)
@@ -182,8 +330,16 @@ export const SKILL_ACTIONS = {
       jobId = r.jobId
       started = ['The agents raise the change request for approval.']
     }
+    const { rows: designRows, reqIds } = DESIGN_SKILLS.has(a.skill) ? await withRecordDb(ctx, a.repo, (db) => ({ rows: designOf(db).rows, reqIds: new Set(requirementIds(db)) })) : { rows: null as unknown as DesignRows, reqIds: new Set<string>() }
     const out = await plainly(() => writeJourney(ctx, a.repo, (db) => {
       let ref: string | null = null
+      // the design decisions the skill makes (Intent builder, Requirements review, Architecture choice, Pin plan
+      // review), recorded as design.decide would, each logged
+      for (const d of DESIGN_SKILLS.has(a.skill) ? pendingDecisions(a.skill, a.draft, designRows, loadDesignDecisions(db)) : []) {
+        const p = prepare(d, designRows, reqIds, loadDesignDecisions(db))
+        const rec = recordDesignDecision(db, p, by)
+        decide(db, { kind: `design.${p.kind}`, stage: loadJourney(db)?.journey.currentStage ?? null, ref: p.target, by: by.label, summary: p.summary, detail: { decision: rec.id, skill: a.skill } })
+      }
       if (a.skill === 'waiver') {
         const d = a.draft
         const sev = SEVERITIES.includes(d.severity as never) ? d.severity as (typeof SEVERITIES)[number] : (() => { throw new ActionError('Give the severity.') })()

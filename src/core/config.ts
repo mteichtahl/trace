@@ -135,6 +135,9 @@ export const KNOWLEDGE_EXCLUDE = [
   '**/requirements*.txt', '**/CMakeLists.txt',
 ] as const
 
+/** The dictation languages a project's custom vocabulary can be made for (Transcribe streaming's English variants). */
+export const VOICE_LANGUAGES = ['en-US', 'en-GB', 'en-AU', 'en-IN', 'en-IE', 'en-NZ', 'en-ZA', 'en-AB', 'en-WL'] as const
+
 // ------------------------------------------------------------------ every setting
 
 export const ConfigSchema = z.object({
@@ -270,6 +273,15 @@ export const ConfigSchema = z.object({
   }).strict().prefault({}),
   firmware: z.object({
     targets: z.array(FirmwareTargetSchema).default([]),
+  }).strict().prefault({}),
+  /** Dictation in the web app (src/tools/voice): the project's own words (reference designators, part numbers, net
+   * names, requirement ids) as an Amazon Transcribe custom vocabulary, one per language listed here. Transcribe keeps at
+   * most 100 vocabularies per account by default (a quota that can be raised), so one language per project by
+   * default: the app's own default dictation language. Only English variants: the spoken forms use English number
+   * words. */
+  voice: z.object({
+    vocabulary: z.boolean().default(true),
+    languages: z.array(z.enum(VOICE_LANGUAGES)).min(1).max(5).default(['en-AU']),
   }).strict().prefault({}),
   hil: z.object({
     serial: z.array(SerialPortSchema).default([]),

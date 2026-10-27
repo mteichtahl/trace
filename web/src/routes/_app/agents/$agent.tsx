@@ -1,7 +1,9 @@
 /**
- * One agent (/agents/:agent): what it does, the questions it is waiting on and stuck items that name it (from the
- * inbox), what it remembers on each of the person's projects (memory.list with its name), and what the API does not
- * report about it yet. /agents/tools opens the catalogue.
+ * One agent (/agents/:agent): its status across the person's projects and what it is doing now and has queued
+ * (jobs.list, with Pause, Resume, Move up and Cancel where allowed), the questions it is waiting on and stuck items
+ * that name it (from the inbox), its recent runs and the tools it used most (runs with its name: each run records the
+ * agent that made it), and what it remembers on each project (memory.list with its name). /agents/tools opens the
+ * catalogue.
  */
 import { useQueries } from '@tanstack/react-query'
 import { Link, Navigate, createFileRoute } from '@tanstack/react-router'
@@ -11,11 +13,12 @@ import { MemorySheet } from '@/components/memory/memory-sheet'
 import { NeedsYouCard } from '@/components/needs-you-card'
 import { useDismissStuck } from '@/components/dismiss-stuck'
 import { Column, Section } from '@/components/shell/app-shell'
-import { NeedsBuilding } from '@/components/side-sheet'
+import { RunLine, runControls } from '@/components/run-line'
+import { useWork } from '@/components/agents/use-agents'
 import { EmptyState, Loading, NotShared, SkeletonRows } from '@/components/states'
 import { StatusBadge } from '@/components/status-badge'
 import { projectId, projectName } from '@/lib/api'
-import { ago } from '@/lib/format'
+import { ago, duration } from '@/lib/format'
 import { AGENTS, type MemoryView, kindWord, readMemories } from '@/lib/knowledge'
 import { q, useInbox, useProjects } from '@/lib/queries'
 
@@ -31,6 +34,8 @@ function Agent() {
   const inbox = useInbox()
   const repos = (projects.data ?? []).map((p) => p.repo)
   const mems = useQueries({ queries: repos.map((repo) => ({ ...q('memory.list', { repo, agent, limit: 20 }), enabled: !!a, retry: false })) })
+  const runs = useQueries({ queries: repos.map((repo) => ({ ...q('runs', { repo, agent, limit: 50 }), enabled: !!a, retry: false })) })
+  const work = useWork()
   const [open, setOpen] = useState<MemoryView | null>(null)
   const dismiss = useDismissStuck()
   useTraceContext(a ? { label: a.name, description: 'The agent the person is looking at', value: { agent: a.id, name: a.name } } : null, 'agent')
@@ -38,14 +43,36 @@ function Agent() {
   if (!a) return <NotShared />
   const named = (inbox.data ?? []).filter((i) => (i.kind === 'question' || i.kind === 'stuck') && i.summary.toLowerCase().includes(a.name.split(' ')[0]!.toLowerCase()))
   const records = repos.flatMap((repo, i) => readMemories(mems[i]?.data?.records, repo))
+  const w = work.agents.get(a.id)
+  const STATUS = { working: ['working', 'Working'], queued: ['queued', 'Queued'], waiting_person: ['yours', 'Waiting on a person'], stuck: ['stuck', 'Stuck'], idle: ['idle', 'Idle'] } as const
+  const [st, word] = STATUS[w?.status ?? 'idle']
+  const recent = repos.flatMap((repo, i) => ((runs[i]?.data ?? []) as Record<string, unknown>[]).map((r) => ({
+    repo, id: String(r.id), kind: String(r.kind), status: String(r.status), started: Number(r.started), finished: r.finished == null ? null : Number(r.finished), summary: typeof r.summary === 'string' ? r.summary : null,
+  }))).sort((x, y) => y.started - x.started)
+  const used = [...recent.reduce((m, r) => m.set(r.kind, (m.get(r.kind) ?? 0) + 1), new Map<string, number>())].sort((x, y) => y[1] - x[1]).slice(0, 5)
+  const lines = [...(w?.now ?? []), ...(w?.queue ?? [])]
 
   return (
     <Column>
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-semibold tracking-tight">{a.name}</h1>
-        <StatusBadge status="idle" label="Status not reported" />
+        <StatusBadge status={st} label={work.loading ? 'Reading…' : word} />
       </div>
       <p className="mt-2 text-[15px] text-muted-foreground">{a.does}</p>
+      {w && w.status !== 'idle' && <p className="mt-1 text-sm">{w.project ? `${w.project}: ` : ''}{w.says}</p>}
+
+      <Section label="Now and queued" count={lines.length} className="mt-10">
+        {work.loading ? (
+          <Loading><SkeletonRows rows={1} /></Loading>
+        ) : lines.length === 0 ? (
+          <EmptyState>The {a.name} agent is not working on your projects and has nothing queued.</EmptyState>
+        ) : (
+          <div className="divide-y rounded-xl border">
+            {lines.map((x) => <RunLine key={`${x.repo}:${x.run.id}`} run={x.run} project={x.project} {...runControls(work.write.has(x.repo))} />)}
+          </div>
+        )}
+        {w && <p className="mt-2 text-sm text-muted-foreground">Last 24 hours: {w.today.runs === 0 ? 'no jobs ended' : `${w.today.runs} ${w.today.runs === 1 ? 'job' : 'jobs'} ended, ${w.today.succeeded} succeeded${w.today.medianS !== null ? `, median ${duration(w.today.medianS, { short: true })}` : ''}`}.</p>}
+      </Section>
 
       <Section label="Waiting on a person, or stuck" count={named.length} className="mt-10">
         {inbox.isLoading ? (
@@ -87,8 +114,28 @@ function Agent() {
         )}
       </Section>
 
-      <Section label="Recent runs and tools it used most">
-        <NeedsBuilding>runs do not record which agent made them yet, so this agent's recent runs, the tools it used most and, when stuck, why it stopped are not shown. What is running across your projects is on <Link to="/agents" className="not-italic text-primary hover:underline">Agents and tools</Link>.</NeedsBuilding>
+      <Section label="Recent runs and tools it used most" count={recent.length}>
+        {runs.some((r) => r.isLoading) && recent.length === 0 ? (
+          <Loading><SkeletonRows rows={2} /></Loading>
+        ) : recent.length === 0 ? (
+          <EmptyState>No runs by the {a.name} agent are recorded on your projects. Runs made before trace recorded which agent made them are not counted.</EmptyState>
+        ) : (
+          <>
+            <p className="mb-3 text-sm text-muted-foreground">Most used: {used.map(([k, n]) => `${k} (${n})`).join(', ')}.</p>
+            <ul className="divide-y rounded-xl border">
+              {recent.slice(0, 10).map((r) => (
+                <li key={`${r.repo}:${r.id}`}>
+                  <Link to="/p/$id/runs/$run" params={{ id: projectId(r.repo), run: r.id }} className="flex items-center gap-3 px-4 py-3 text-sm hover:bg-accent/50">
+                    <StatusBadge plain status={r.status === 'pass' ? 'passed' : r.status === 'running' ? 'running' : r.status === 'fail' ? 'failing' : 'warning'} label={r.status === 'pass' ? 'Passed' : r.status === 'fail' ? 'Failed' : r.status === 'running' ? 'Running' : 'Error'} />
+                    <code className="font-mono text-xs">{r.kind}</code>
+                    <span className="min-w-0 flex-1 truncate text-muted-foreground">{r.summary ?? ''}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">{projectName(r.repo)} · {ago(new Date(r.started * 1000).toISOString())}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
       </Section>
 
       <MemorySheet memory={open} onOpenChange={(o) => !o && setOpen(null)} />

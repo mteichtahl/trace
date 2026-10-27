@@ -28,7 +28,7 @@ import { AgentFactsStore, loadAgentFacts } from '../core/agent-facts.js'
 import { type AgentFacts, copyJourneyTables } from '../core/journey.js'
 import { JourneyStore } from '../core/journey-store.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
-import { PROJECT_SCHEMA, open, projectTables, traceHome } from '../core/store.js'
+import { applyProjectSchema, open, traceHome } from '../core/store.js'
 import type { InstallationPrompts } from '../prompts/store.js'
 import type { RetrieveClient } from '../tools/kb/search.js'
 import type { ApiOnboardResult } from '../installer/onboard-api.js'
@@ -48,7 +48,11 @@ export const NO_ACCESS = 'no access'
 export interface JobsApi {
   /** The project a job id belongs to (read from the id itself), or null for an id that is not one of ours. */
   repositoryOf(jobId: string): string | null
-  startJob(payload: { kind: 'task'; repository: string; request: string; requestedBy: string; requestedBySub?: string; agent?: (typeof TASK_AGENTS)[number] }): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined }>
+  startJob(payload: {
+    kind: 'task'; repository: string; request: string; requestedBy: string; requestedBySub?: string; agent?: (typeof TASK_AGENTS)[number]
+    /** a resumed task: the paused job's branch, and which paused job it carries on (job.control resume) */
+    branch?: string; resume?: { job: string; by: string }
+  }): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined }>
   jobStatus(jobId?: string): Promise<readonly JobView[]>
   /**
    * One job as jobStatus, with its worker's change counter and open waits; with afterVersion and waitS the worker
@@ -69,6 +73,11 @@ export interface JobsApi {
    * grace passed). Absent: this installation cannot cancel from the API.
    */
   cancel?(jobId: string, reason: string): Promise<{ ok: boolean; state: string | null; kept?: string | undefined; reason?: string | undefined }>
+  /**
+   * Ask a running task to pause at its next safe point (invocation kind `pause`): answered at once. Absent: this
+   * installation cannot pause from the API.
+   */
+  pause?(jobId: string, by: string): Promise<{ ok: boolean; state: string | null; kept?: string | undefined; reason?: string | undefined }>
   /** One tool call on the project's own worker runtime (invocation kind `tool`): its result, or throws ActionError.
    * Absent: this installation runs no tools for the API. */
   runTool?(payload: Omit<ToolJob, 'trace'>): Promise<unknown>
@@ -104,8 +113,16 @@ export interface ActionDeps {
   checkIntegration?: typeof checkIntegration
   /** The central bucket under one prefix (chats, pending projects); absent: bucketStore (beside TRACE_HOME). */
   store?: (prefix: string) => Backend
+  /** The stack's layout (TRACE_LAYOUT): 'flat' or 'nested' (src/api/actions-layout.ts) */
+  layout?: string
+  /** The installation's prefix (TRACE_PREFIX): names its dictation vocabularies (src/api/actions-voice.ts). */
+  installationPrefix?: string
+  /** Transcribe's GetVocabulary for the projects' dictation vocabularies; absent: voice.vocabulary answers NONE. */
+  vocabularies?: () => Promise<import('./actions-voice.js').VocabularyReader>
   /** Onboard a repository with the API's own GitHub token; absent: projects.create says this installation cannot. */
   onboard?: (repo: string, o: OnboardRequest) => Promise<ApiOnboardResult>
+  /** Ask the order watch (src/infra/lambda/order-watch.ts) to check one order now; absent: there is none to ask. */
+  orderWatch?: (repo: string, orderId: string) => Promise<void>
 }
 
 export interface Context {
@@ -271,8 +288,7 @@ export async function snapshotJourney(ctx: Context, repo: string, why: string): 
 /** The project database at `path` with every registered table (the journey's among them). */
 export function openProjectDb(path: string): DatabaseSync {
   const db = open(path, { wal: false })
-  db.exec(PROJECT_SCHEMA)
-  for (const t of projectTables()) db.exec(t.sql)
+  applyProjectSchema(db)
   return db
 }
 

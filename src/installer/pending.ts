@@ -14,9 +14,13 @@
  *                from then on; the records are deleted once the run is done
  *
  * What is checked before a project is added: it is not one already (then it is simply marked added), not a build-only
- * repository, the installation is in the nested layout (a flat stack has room for about 20 projects, and an update
- * cannot move it), and the settings with it still validate (at most 60 projects, no short-hash clash). A project's own
- * settings (projectSettings: memory expiry, generation) already in the saved settings are kept.
+ * repository, and the settings with it still validate (at most 60 projects, no short-hash clash). In the flat layout
+ * (every project in the one stack, which holds about 20 and cannot be moved by an update) an update adds projects only
+ * while the stack has fewer than FLAT_UPDATE_MAX of them: each adds about 21 resources to the stack's 500, and an
+ * unattended deploy keeps room for trace's own changes. Past that a project waits for the installer, whose move to
+ * one nested stack per project (agents.migrateLayout: three deploys, and every project's memory records are deleted)
+ * is the way on; the update never makes that move itself. A project's own settings (projectSettings: memory expiry,
+ * generation) already in the saved settings are kept.
  */
 import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import type { AwsCredentialIdentity } from '@smithy/types'
@@ -29,6 +33,16 @@ type ProjectAnswer = Answers['projects'][number]
 
 /** Under the central bucket (the API's PENDING_PREFIX + pendingKey). */
 export const PENDING_PROJECTS_PREFIX = 'installation/pending-projects/'
+
+/** The most projects an update leaves in a flat stack (src/infra/props.ts layout 'flat': about 20 fit). */
+export const FLAT_UPDATE_MAX = 15
+
+/** Why a flat installation's update does not add a project, and what to do. */
+export const flatFull = (n: number): string =>
+  `this installation keeps every project in one stack (the flat layout), which has ${n} projects; an update adds projects to it only up to ${FLAT_UPDATE_MAX}. Run the installer to add it, and choose "Move to one nested stack per project" there to make room for 60 (it deletes every project's memory records)`
+
+/** What a flat installation's update says every time: what the layout does not have, and how to move. */
+export const FLAT_NOTE = `This installation keeps every project in one stack (the flat layout): about 20 projects fit, updates add projects created in the web app only up to ${FLAT_UPDATE_MAX}, and it has no knowledge bases or CPU queue. The move to one nested stack per project is the installer's ("Move to one nested stack per project" under Advanced): three deploys, and every project's memory records are deleted. This job never makes it.`
 
 /** Failed deploys a pending project takes part in before the update stops adding it (the installer still does). */
 export const MAX_ATTEMPTS = 2
@@ -77,9 +91,10 @@ export interface AddResult {
 
 /**
  * The saved settings with the pending projects added to `repositories`, one at a time, each kept only when the
- * settings still validate. `branchOf` gives a repository's default branch (main when unknown).
+ * settings still validate. `branchOf` gives a repository's default branch (main when unknown). `deployed`: these are
+ * in the stack already (added by an earlier update), so the flat layout's cap does not apply to them.
  */
-export function addPending(props: InfraInput, pending: readonly PendingEntry[], branchOf: (repo: string) => string = () => 'main'): AddResult {
+export function addPending(props: InfraInput, pending: readonly PendingEntry[], branchOf: (repo: string) => string = () => 'main', o: { deployed?: boolean } = {}): AddResult {
   const r: AddResult = { props, added: [], already: [], skipped: [] }
   const layout = InfraPropsSchema.parse(props).layout
   for (const { key, record } of pending) {
@@ -88,7 +103,8 @@ export function addPending(props: InfraInput, pending: readonly PendingEntry[], 
     const repos = (r.props.repositories ?? []) as string[]
     if (repos.some((x) => repoOf(x) === repo)) { r.already.push({ key, repo }); continue }
     if ((r.props.ciRepositories ?? []).some((x) => x.toLowerCase() === repo)) { r.skipped.push({ key, repo, why: 'it is built here as a build-only repository; run the installer to make it a project' }); continue }
-    if (layout !== 'nested') { r.skipped.push({ key, repo, why: 'this installation keeps every project in one stack (the flat layout), which an update does not grow; run the installer' }); continue }
+    // (projects an earlier update added are in the stack already: never dropped for the cap, or the deploy would remove them)
+    if (layout !== 'nested' && !o.deployed && repos.length + 1 > FLAT_UPDATE_MAX) { r.skipped.push({ key, repo, why: flatFull(repos.length) }); continue }
     if (record.attempts >= MAX_ATTEMPTS) { r.skipped.push({ key, repo, why: `${record.attempts} updates with it failed${record.last_error ? ` (last: ${record.last_error})` : ''}; run the installer` }); continue }
     const branch = branchOf(repo) || 'main'
     const next: InfraInput = { ...r.props, repositories: [...repos, `${repo}@${branch}`] }

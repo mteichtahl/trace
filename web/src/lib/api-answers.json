@@ -740,7 +740,318 @@
           "by": "seed"
         }
       ],
-      "firmware_track": false
+      "firmware_track": false,
+      "jobs": [
+        {
+          "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-run",
+          "workerJobId": "job-run",
+          "kind": "task",
+          "repository": "acme/answers",
+          "agent": "verify",
+          "agentName": "Verification",
+          "title": "Check the ERC",
+          "number": null,
+          "startedBy": "user@example.com",
+          "yours": true,
+          "state": "running",
+          "step": "running ERC on the main sheet",
+          "held": false,
+          "queuedAt": "2026-10-27T00:00:00.000Z",
+          "startedAt": "2026-10-27T00:00:00.000Z",
+          "endedAt": null,
+          "typicalS": 600,
+          "where": null,
+          "branch": "claude/task-erc",
+          "queue": null,
+          "parentJob": null,
+          "resumeOf": null,
+          "resumedBy": null,
+          "summary": null,
+          "error": null,
+          "pausedBy": null,
+          "pausedAt": null,
+          "controls": [
+            "pause",
+            "cancel"
+          ]
+        },
+        {
+          "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-q",
+          "workerJobId": "job-q",
+          "kind": "task",
+          "repository": "acme/answers",
+          "agent": "verify",
+          "agentName": "Verification",
+          "title": "Check the DRC",
+          "number": null,
+          "startedBy": "user@example.com",
+          "yours": true,
+          "state": "queued",
+          "step": "queued: the verify agent is already working on this project (\"Check the ERC\")",
+          "held": false,
+          "queuedAt": "2026-10-27T00:00:00.000Z",
+          "startedAt": null,
+          "endedAt": null,
+          "typicalS": 600,
+          "where": null,
+          "branch": null,
+          "queue": {
+            "position": 1,
+            "of": 1,
+            "startsWhen": "the verify agent is already working on this project (\"Check the ERC\")"
+          },
+          "parentJob": null,
+          "resumeOf": null,
+          "resumedBy": null,
+          "summary": null,
+          "error": null,
+          "pausedBy": null,
+          "pausedAt": null,
+          "controls": [
+            "pause",
+            "cancel"
+          ]
+        },
+        {
+          "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-done",
+          "workerJobId": "job-done",
+          "kind": "task",
+          "repository": "acme/answers",
+          "agent": "verify",
+          "agentName": "Verification",
+          "title": "Check the BOM",
+          "number": null,
+          "startedBy": null,
+          "yours": false,
+          "state": "succeeded",
+          "step": null,
+          "held": false,
+          "queuedAt": "2026-10-27T00:00:00.000Z",
+          "startedAt": "2026-10-27T00:00:00.000Z",
+          "endedAt": "2026-10-27T00:00:00.000Z",
+          "typicalS": 600,
+          "where": null,
+          "branch": null,
+          "queue": null,
+          "parentJob": null,
+          "resumeOf": null,
+          "resumedBy": null,
+          "summary": "verify: done in 9 turns",
+          "error": null,
+          "pausedBy": null,
+          "pausedAt": null,
+          "controls": []
+        }
+      ]
+    }
+  },
+  "jobs.list": {
+    "args": {
+      "repo": "acme/answers"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "jobs": [
+        {
+          "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-run",
+          "workerJobId": "job-run",
+          "kind": "task",
+          "repository": "acme/answers",
+          "agent": "verify",
+          "agentName": "Verification",
+          "title": "Check the ERC",
+          "number": null,
+          "startedBy": "user@example.com",
+          "yours": true,
+          "state": "running",
+          "step": "running ERC on the main sheet",
+          "held": false,
+          "queuedAt": "2026-10-27T00:00:00.000Z",
+          "startedAt": "2026-10-27T00:00:00.000Z",
+          "endedAt": null,
+          "typicalS": 600,
+          "where": null,
+          "branch": "claude/task-erc",
+          "queue": null,
+          "parentJob": null,
+          "resumeOf": null,
+          "resumedBy": null,
+          "summary": null,
+          "error": null,
+          "pausedBy": null,
+          "pausedAt": null,
+          "controls": [
+            "pause",
+            "cancel"
+          ]
+        },
+        {
+          "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-q",
+          "workerJobId": "job-q",
+          "kind": "task",
+          "repository": "acme/answers",
+          "agent": "verify",
+          "agentName": "Verification",
+          "title": "Check the DRC",
+          "number": null,
+          "startedBy": "user@example.com",
+          "yours": true,
+          "state": "queued",
+          "step": "queued: the verify agent is already working on this project (\"Check the ERC\")",
+          "held": false,
+          "queuedAt": "2026-10-27T00:00:00.000Z",
+          "startedAt": null,
+          "endedAt": null,
+          "typicalS": 600,
+          "where": null,
+          "branch": null,
+          "queue": {
+            "position": 1,
+            "of": 1,
+            "startsWhen": "the verify agent is already working on this project (\"Check the ERC\")"
+          },
+          "parentJob": null,
+          "resumeOf": null,
+          "resumedBy": null,
+          "summary": null,
+          "error": null,
+          "pausedBy": null,
+          "pausedAt": null,
+          "controls": [
+            "pause",
+            "cancel"
+          ]
+        },
+        {
+          "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-done",
+          "workerJobId": "job-done",
+          "kind": "task",
+          "repository": "acme/answers",
+          "agent": "verify",
+          "agentName": "Verification",
+          "title": "Check the BOM",
+          "number": null,
+          "startedBy": null,
+          "yours": false,
+          "state": "succeeded",
+          "step": null,
+          "held": false,
+          "queuedAt": "2026-10-27T00:00:00.000Z",
+          "startedAt": "2026-10-27T00:00:00.000Z",
+          "endedAt": "2026-10-27T00:00:00.000Z",
+          "typicalS": 600,
+          "where": null,
+          "branch": null,
+          "queue": null,
+          "parentJob": null,
+          "resumeOf": null,
+          "resumedBy": null,
+          "summary": "verify: done in 9 turns",
+          "error": null,
+          "pausedBy": null,
+          "pausedAt": null,
+          "controls": []
+        }
+      ],
+      "agents": [
+        {
+          "id": "verify",
+          "name": "Verification",
+          "status": "working",
+          "says": "Working on \"Check the ERC\"",
+          "now": [
+            "trace-api-f05f4f8f-0123456789abcdef01234567.job-run"
+          ],
+          "queue": [
+            "trace-api-f05f4f8f-0123456789abcdef01234567.job-q"
+          ],
+          "today": {
+            "runs": 1,
+            "succeeded": 1,
+            "medianS": 600
+          }
+        },
+        {
+          "id": "impl",
+          "name": "Implementation",
+          "status": "idle",
+          "says": "Idle",
+          "now": [],
+          "queue": [],
+          "today": {
+            "runs": 0,
+            "succeeded": 0,
+            "medianS": null
+          }
+        },
+        {
+          "id": "ams",
+          "name": "Analog and mixed-signal",
+          "status": "idle",
+          "says": "Idle",
+          "now": [],
+          "queue": [],
+          "today": {
+            "runs": 0,
+            "succeeded": 0,
+            "medianS": null
+          }
+        },
+        {
+          "id": "emc",
+          "name": "EMC",
+          "status": "idle",
+          "says": "Idle",
+          "now": [],
+          "queue": [],
+          "today": {
+            "runs": 0,
+            "succeeded": 0,
+            "medianS": null
+          }
+        },
+        {
+          "id": "render",
+          "name": "Rendering",
+          "status": "idle",
+          "says": "Idle",
+          "now": [],
+          "queue": [],
+          "today": {
+            "runs": 0,
+            "succeeded": 0,
+            "medianS": null
+          }
+        },
+        {
+          "id": "thermal",
+          "name": "Thermal",
+          "status": "idle",
+          "says": "Idle",
+          "now": [],
+          "queue": [],
+          "today": {
+            "runs": 0,
+            "succeeded": 0,
+            "medianS": null
+          }
+        },
+        {
+          "id": "worker",
+          "name": "Worker",
+          "status": "idle",
+          "says": "Idle",
+          "now": [],
+          "queue": [],
+          "today": {
+            "runs": 0,
+            "succeeded": 0,
+            "medianS": null
+          }
+        }
+      ],
+      "batch": [],
+      "updatedAt": "2026-10-27T00:00:00.000Z"
     }
   },
   "inbox": {
@@ -853,6 +1164,13 @@
       "release": null,
       "files": [
         {
+          "path": "hw/answers.kicad_sch",
+          "kind": "design",
+          "size": 11,
+          "sha": "blob-c14a93933b9d",
+          "revision": "A"
+        },
+        {
           "path": "README.md",
           "kind": "documents",
           "size": 9,
@@ -863,7 +1181,15 @@
       "groups": [
         {
           "kind": "design",
-          "files": []
+          "files": [
+            {
+              "path": "hw/answers.kicad_sch",
+              "kind": "design",
+              "size": 11,
+              "sha": "blob-c14a93933b9d",
+              "revision": "A"
+            }
+          ]
         },
         {
           "kind": "fabrication",
@@ -895,7 +1221,7 @@
         }
       ],
       "counts": {
-        "design": 0,
+        "design": 1,
         "fabrication": 0,
         "firmware": 0,
         "documents": 1,
@@ -1086,6 +1412,539 @@
           "at": "2026-10-27T00:00:00.000Z"
         }
       ]
+    }
+  },
+  "requirements.trace": {
+    "args": {
+      "repo": "acme/answers"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "intent": [
+        {
+          "id": "INT-range",
+          "topic": "Performance",
+          "text": "Reaches a gateway 2 km away.",
+          "state": "proposed",
+          "kind": "statement",
+          "flags": [],
+          "source": {
+            "kind": "person",
+            "ref": "Ada"
+          },
+          "covered": true
+        }
+      ],
+      "links": [
+        {
+          "requirement": "REQ-1",
+          "intent": "INT-range"
+        }
+      ],
+      "requirements": [
+        {
+          "id": "REQ-1",
+          "text": "Range of 2 km line of sight",
+          "kind": "functional",
+          "acceptance": "at least 2 km",
+          "source": "intent",
+          "status": "accepted",
+          "evidence": "untested",
+          "why": "No test is planned for it yet.",
+          "tests": [],
+          "waiver": null,
+          "derived_from": [
+            "INT-range"
+          ]
+        }
+      ],
+      "summary": {
+        "requirements": 1,
+        "verified": 0,
+        "failing": 0,
+        "untested": 1,
+        "waived": 0,
+        "intent": 1,
+        "accepted": 0,
+        "uncovered": 0,
+        "unlinked": 0
+      }
+    }
+  },
+  "design.decide": {
+    "args": {
+      "repo": "acme/answers",
+      "decision": {
+        "kind": "intent",
+        "statement": "INT-range",
+        "choice": "accept"
+      }
+    },
+    "result": {
+      "ok": true,
+      "repo": "acme/answers",
+      "decision": {
+        "id": "0123456789abcdef",
+        "kind": "intent",
+        "target": "INT-range",
+        "choice": "accepted",
+        "by": "user@example.com",
+        "at": "2026-10-27T00:00:00.000Z"
+      },
+      "summary": "Intent INT-range was accepted as worded: Reaches a gateway 2 km away.",
+      "version": 3
+    }
+  },
+  "design.get": {
+    "args": {
+      "repo": "acme/answers"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "ref": "main",
+      "sheets": [
+        {
+          "id": "hw/answers.kicad_sch",
+          "name": "Answers",
+          "serves": [
+            "REQ-1"
+          ],
+          "findings": []
+        }
+      ],
+      "architecture": {
+        "option": "Option A: One chip",
+        "id": "A",
+        "state": "proposed",
+        "blocks": [
+          {
+            "id": "mcu",
+            "name": "MCU and radio",
+            "part": "STM32WLE5JCI6",
+            "parts": [
+              {
+                "mpn": "STM32WLE5JCI6",
+                "key": true
+              }
+            ],
+            "serves": [
+              "REQ-1"
+            ],
+            "x": 0.5,
+            "y": 0.5
+          }
+        ],
+        "connections": [],
+        "options": [
+          {
+            "id": "A",
+            "name": "One chip",
+            "summary": "An STM32WL with the radio inside.",
+            "recommended": true,
+            "why": "Fewer parts.",
+            "gives_up": null,
+            "risks": [],
+            "total": 0,
+            "blocks": [
+              {
+                "id": "mcu",
+                "name": "MCU and radio",
+                "part": "STM32WLE5JCI6",
+                "parts": [
+                  {
+                    "mpn": "STM32WLE5JCI6",
+                    "key": true
+                  }
+                ],
+                "serves": [
+                  "REQ-1"
+                ],
+                "x": 0.5,
+                "y": 0.5
+              }
+            ],
+            "connections": []
+          }
+        ],
+        "criteria": [],
+        "fixed": null,
+        "scores": [],
+        "recommended": "A",
+        "chosen": null
+      },
+      "pins": [
+        {
+          "part": "U1",
+          "pin": "30",
+          "name": "PA9",
+          "net": "/GPS_RX",
+          "fn": "USART1_TX",
+          "peripheral": "USART1",
+          "use": "GPS",
+          "alt": "USART1_TX",
+          "status": "ok",
+          "findings": []
+        }
+      ],
+      "pin_plan": {
+        "checked": null,
+        "parts": [
+          {
+            "part": "U1",
+            "pins": 1,
+            "agreed": null
+          }
+        ],
+        "findings": []
+      },
+      "checks": {
+        "erc": null,
+        "drc": null
+      },
+      "notes": [
+        "No electrical rule check is recorded yet.",
+        "No design rule check is recorded yet.",
+        "No drawing of the sheets is in the record yet: kicad.export with sch_svg keeps one per sheet in its run.",
+        "No architecture is chosen yet: the diagram shows trace's recommendation, until a person chooses in Architecture choice.",
+        "Stock per key part is not in the record: the parts check (parts.search) answers it when asked, and the architecture gate's stock criterion records it.",
+        "The pin plan has not been checked against the schematic yet: design.pins check (or kicad.netlist) stores the netlist it is compared with."
+      ]
+    }
+  },
+  "build.get": {
+    "args": {
+      "repo": "acme/answers"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "releases": [],
+      "orders": [
+        {
+          "id": "0123456789abcdef",
+          "release": "A",
+          "state": "shipped",
+          "cancelled": false,
+          "boards": 10,
+          "total": 40,
+          "currency": "USD",
+          "number": "Y12-0001",
+          "paid": 40,
+          "ship": "2026-11-04",
+          "placedAt": "2026-10-27T00:00:00.000Z",
+          "placedBy": "user@example.com",
+          "shippedAt": "2026-10-27T00:00:00.000Z",
+          "deliveredAt": null,
+          "tracking": {
+            "carrier": "dhl",
+            "number": "1234567890",
+            "checkable": false
+          },
+          "cost": [
+            {
+              "label": "Paid to JLCPCB",
+              "amount": 40
+            }
+          ],
+          "options": [],
+          "parts": [],
+          "files": [],
+          "wait": {
+            "id": "order-Y12-0001",
+            "what": "DHL to deliver order Y12-0001",
+            "source": "manual",
+            "nextCheckAt": null,
+            "lastCheckedAt": null,
+            "checkable": false,
+            "text": "Order Y12-0001 is with DHL, tracking 1234567890. trace checks DHL once an admin adds the DHL key (Admin › Integrations)."
+          }
+        }
+      ],
+      "boards": [
+        {
+          "serial": "SN-001",
+          "order": "Y12-0001",
+          "revision": "A",
+          "state": "received",
+          "status": "received",
+          "received": "2026-10-27T00:00:00.000Z",
+          "photos": [
+            "runs/abc/top.jpg"
+          ],
+          "checks": [
+            {
+              "id": "0123456789abcdef",
+              "check": "count",
+              "kind": "count",
+              "result": "pass",
+              "by": "user@example.com",
+              "at": "2026-10-27T00:00:00.000Z"
+            }
+          ],
+          "readings": 0,
+          "failing": 0
+        }
+      ],
+      "bench": {
+        "configured": false,
+        "instruments": [],
+        "note": "No instruments are set up (hil.instruments): Bench setup connects them.",
+        "readings": [],
+        "boards": []
+      },
+      "notes": []
+    }
+  },
+  "cost.get": {
+    "args": {
+      "repo": "acme/answers"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "money": true,
+      "currency": "USD",
+      "spent": {
+        "cloud": 0,
+        "orders": 40,
+        "detail": {
+          "estimated": {
+            "agents": 0,
+            "gpu": 0,
+            "cpu": 0,
+            "total": 0
+          },
+          "actual": null,
+          "basis": "estimate"
+        }
+      },
+      "committed": 0,
+      "forecast": 0,
+      "quantity": 10,
+      "unit_cost": null,
+      "stages": [
+        {
+          "stage": "Define",
+          "id": "define",
+          "state": "current",
+          "started": "2026-10-27T00:00:00.000Z",
+          "finished": null,
+          "days": 0,
+          "cloud": 0,
+          "forecastDays": null
+        },
+        {
+          "stage": "Architect",
+          "id": "architect",
+          "state": "queued",
+          "started": null,
+          "finished": null,
+          "days": 0,
+          "cloud": null,
+          "forecastDays": null
+        },
+        {
+          "stage": "Capture",
+          "id": "capture",
+          "state": "queued",
+          "started": null,
+          "finished": null,
+          "days": 0,
+          "cloud": null,
+          "forecastDays": null
+        },
+        {
+          "stage": "Prove",
+          "id": "prove",
+          "state": "queued",
+          "started": null,
+          "finished": null,
+          "days": 0,
+          "cloud": null,
+          "forecastDays": null
+        },
+        {
+          "stage": "Layout",
+          "id": "layout",
+          "state": "queued",
+          "started": null,
+          "finished": null,
+          "days": 0,
+          "cloud": null,
+          "forecastDays": null
+        },
+        {
+          "stage": "Sign-off",
+          "id": "signoff",
+          "state": "queued",
+          "started": null,
+          "finished": null,
+          "days": 0,
+          "cloud": null,
+          "forecastDays": null
+        },
+        {
+          "stage": "Release",
+          "id": "release",
+          "state": "queued",
+          "started": null,
+          "finished": null,
+          "days": 0,
+          "cloud": null,
+          "forecastDays": null
+        },
+        {
+          "stage": "Fabricate",
+          "id": "fabricate",
+          "state": "queued",
+          "started": null,
+          "finished": null,
+          "days": 0,
+          "cloud": null,
+          "forecastDays": null
+        },
+        {
+          "stage": "Bring up",
+          "id": "bringup",
+          "state": "queued",
+          "started": null,
+          "finished": null,
+          "days": 0,
+          "cloud": null,
+          "forecastDays": null
+        }
+      ],
+      "lines": [
+        {
+          "id": "0123456789abcdef",
+          "at": "2026-10-27T00:00:00.000Z",
+          "what": "Order Y12-0001 with JLCPCB: 10 boards of revision A",
+          "kind": "order",
+          "amount": 40,
+          "estimate": false
+        }
+      ],
+      "explorer": {
+        "checkedAt": null,
+        "nextAt": null,
+        "ok": false,
+        "tag": "unknown",
+        "text": "What AWS billed is read from Cost Explorer once a day; it has not run yet (it starts with the next stack update, at the time cost.explorer.at sets). Figures lag about 24 hours."
+      },
+      "prices": {
+        "asOf": "2025-11-24",
+        "stale": true,
+        "sources": [
+          "https://aws.amazon.com/bedrock/pricing/",
+          "https://www.anthropic.com/pricing",
+          "https://aws.amazon.com/ec2/pricing/on-demand/"
+        ],
+        "text": "Estimates use the price table of 2025-11-24 (Bedrock per million tokens per model; g6.xlarge on demand in us-east-1 (one job holds the instance); c7i on demand in us-east-1, per vCPU). It is more than six months old: an admin updates it with the stack setting cost.prices."
+      },
+      "notes": [
+        "Forecast days per stage are not computed yet: there is no history of how long each stage takes.",
+        "No unit cost is set in the build plan, so the build's forecast is unknown.",
+        "Cloud estimates (agents, graphics card and CPU jobs) are computed from each run's tokens and each job's running time with the price table; they are estimates. What AWS billed comes from Cost Explorer, a day behind, and counts only resources tagged with the project (Bedrock and the shared job instances are not tagged per project)."
+      ]
+    }
+  },
+  "usage.month": {
+    "args": {
+      "month": "2026-10"
+    },
+    "result": {
+      "month": "2026-10",
+      "currency": "USD",
+      "projects": [
+        {
+          "repo": "acme/answers",
+          "estimated": {
+            "agents": 0,
+            "gpu": 0,
+            "cpu": 0,
+            "total": 0
+          },
+          "actual": null,
+          "orders": 40,
+          "orderCurrency": "USD",
+          "budget": null,
+          "started": true
+        }
+      ],
+      "totals": {
+        "estimated": 0,
+        "actual": null,
+        "orders": 40
+      },
+      "explorer": {
+        "checkedAt": null,
+        "nextAt": null,
+        "ok": false,
+        "tag": "unknown",
+        "text": "What AWS billed is read from Cost Explorer once a day; it has not run yet (it starts with the next stack update, at the time cost.explorer.at sets). Figures lag about 24 hours."
+      },
+      "prices": {
+        "asOf": "2025-11-24",
+        "stale": true,
+        "sources": [
+          "https://aws.amazon.com/bedrock/pricing/",
+          "https://www.anthropic.com/pricing",
+          "https://aws.amazon.com/ec2/pricing/on-demand/"
+        ],
+        "text": "Estimates use the price table of 2025-11-24 (Bedrock per million tokens per model; g6.xlarge on demand in us-east-1 (one job holds the instance); c7i on demand in us-east-1, per vCPU). It is more than six months old: an admin updates it with the stack setting cost.prices."
+      }
+    }
+  },
+  "installation.layout": {
+    "args": {},
+    "result": {
+      "layout": "flat",
+      "projects": {
+        "max": 20,
+        "updateMax": 15
+      },
+      "has": {
+        "knowledgeBase": false,
+        "cpuQueue": false,
+        "answerEvents": false
+      },
+      "note": "This installation keeps every project in one stack (the flat layout, from before nested stacks). About 20 projects fit; a project created here is added by the self-update only while there are fewer than 15, and otherwise by the next installer run. Projects have no knowledge base or CPU queue, and an agent waiting for a person's answer checks on a timer rather than being told at once.",
+      "recommendation": "Move to one nested stack per project when losing the agents' memory records is acceptable: it is the only way to more projects and the features above, and it is a one-off.",
+      "move": {
+        "how": "Run the installer (`tracectl install` or `tracectl upgrade`) and choose \"Move to one nested stack per project\" under Advanced.",
+        "steps": [
+          "With \"keep data\" on, a first deploy marks each project's memory and its log delivery for deletion; nothing else changes.",
+          "The next deploy removes every project from the stack: their agents, roles, token secrets and memories go, every memory record with them. The projects are offline from here.",
+          "The last deploy creates every project again, each in its own nested stack, with an empty memory; then the installer sets each repository's variables again."
+        ],
+        "costs": "Every project's memory records are deleted (AgentCore cannot copy them), and the projects are offline for the two deploys (about 30 to 60 minutes); workflows that run in between fail and need running again. Journeys, chats, settings, runs and the knowledge in the repositories are kept.",
+        "gives": "Room for 60 projects, projects created in the web app added by every update, a knowledge base per project, the CPU queue, and agents told at once when a person answers their question."
+      }
+    }
+  },
+  "prompts.chat": {
+    "args": {},
+    "result": {
+      "entries": [
+        {
+          "id": "chat.role",
+          "text": null,
+          "version": null,
+          "sha": "fbf7acf1518a"
+        }
+      ]
+    }
+  },
+  "voice.vocabulary": {
+    "args": {
+      "repo": "acme/answers",
+      "language": "en-AU"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "language": "en-AU",
+      "name": "trace-f05f4f8f-en-AU",
+      "state": "READY",
+      "usable": true,
+      "note": "Dictation uses this project's words (reference designators, part numbers, net names, requirement ids)."
     }
   }
 }

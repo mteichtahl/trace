@@ -15,6 +15,7 @@
  * Shared by the local server and the browser page, so both validate the same way.
  */
 import { z } from 'zod'
+import { PriceOverridesSchema } from '../core/prices.js'
 
 export const Repo = z.string().trim().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')
 /** admin: everything, everywhere; user: read/write on assigned projects; guest: read on assigned projects. */
@@ -65,6 +66,10 @@ export const AgentAnswers = z.object({
   webCertificateArn: z.string().trim().regex(/^(arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[0-9a-f-]{36})?$/, 'an ACM certificate ARN in us-east-1, or empty').default(''),
   /** a verified Amazon SES sender for the user pool: then sign-in also offers a code by email; empty: passkeys and passwords */
   webEmailFrom: z.string().trim().refine((v) => v === '' || z.string().email().safeParse(v).success, 'a verified SES sender address, or empty').default(''),
+  /** AWS WAF in front of the web app (props.ts web.waf, src/infra/edge.ts): on by default. It costs about US$11 a month
+   * and US$0.60 per million requests, which is worth it for an address anyone can reach whose sign-in takes no token;
+   * turn it off for a private trial */
+  webWaf: z.boolean().default(true),
   /** AgentCore observability: OpenTelemetry traces and metrics to CloudWatch (GenAI Observability) */
   observability: z.boolean().default(true),
   /** turn on CloudWatch Transaction Search in the account and region (account-wide; never turned off) */
@@ -73,6 +78,12 @@ export const AgentAnswers = z.object({
   samplingPercent: z.number().min(0).max(100).nullable().default(null),
   /** a CloudWatch dashboard for the agents */
   dashboard: z.boolean().default(true),
+  /** cloud cost per project (props.ts cost, README "Cost and orders"): a daily Cost Explorer read by the trace:project
+   * tag, activating it as a cost allocation tag when the account may */
+  costExplorer: z.boolean().default(true),
+  costActivateTags: z.boolean().default(true),
+  /** overrides of the price table the estimates use (src/core/prices.ts), with their date; null: the defaults */
+  costPrices: PriceOverridesSchema.nullable().default(null),
   /** move an installation whose projects are all in one stack (layout flat) to one nested stack per project: three
    * deploys in a row, and every project's memory records are deleted (README "Project isolation"). Ignored for a new
    * installation, which is nested already. */

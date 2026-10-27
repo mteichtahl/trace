@@ -132,7 +132,8 @@ CREATE TABLE IF NOT EXISTS runs (
   summary TEXT,                   -- one line for people
   args TEXT,                      -- JSON text: the inputs
   result TEXT,                    -- JSON text: the compact result returned to the caller
-  git_sha TEXT
+  git_sha TEXT,
+  agent TEXT                      -- the agent whose session made it (TRACE_AGENT: verify, impl, …, worker), NULL for a person's own run
 );
 CREATE INDEX IF NOT EXISTS runs_kind ON runs(kind, started);
 CREATE TABLE IF NOT EXISTS measurements (
@@ -167,9 +168,23 @@ export function projectTables(): ProjectTable[] {
   return [...PROJECT_TABLES.values()]
 }
 
-function applyProjectSchema(db: DatabaseSync): void {
+/**
+ * The project schema, every registered table, and the columns added since a database was made: `runs.agent` (which
+ * agent made a run; databases from before it get the column, NULL on their old rows, always last so `SELECT *`
+ * merges line up).
+ */
+export function applyProjectSchema(db: DatabaseSync): void {
   db.exec(PROJECT_SCHEMA)
+  const cols = new Set((db.prepare("SELECT name FROM pragma_table_info('runs')").all() as { name: string }[]).map((c) => c.name))
+  if (!cols.has('agent')) db.exec('ALTER TABLE runs ADD COLUMN agent TEXT')
   for (const t of PROJECT_TABLES.values()) db.exec(t.sql)
+}
+
+/** Which agent is making runs in this process: TRACE_AGENT (a job's MCP server has it: src/agents/runtime/job.ts
+ * journeyAgentEnv), or none (a person's own CLI). */
+export const runAgent = (env: NodeJS.ProcessEnv = process.env): string | null => {
+  const a = env.TRACE_AGENT?.trim().toLowerCase()
+  return a && /^[a-z][a-z0-9-]{0,31}$/.test(a) ? a : null
 }
 
 export function openProject(root?: string): DatabaseSync {
@@ -188,6 +203,8 @@ export interface RunSummary {
   finished: number | null
   status: RunStatus
   summary: string | null
+  /** the agent whose session made it (null: a person's own run, or a run from before agents were recorded) */
+  agent: string | null
 }
 
 export interface Measurement {
@@ -223,10 +240,11 @@ export class Work {
     applyProjectSchema(this.db)
   }
 
-  start(kind: string, opts: { subject?: string; args?: unknown; gitSha?: string } = {}): string {
+  /** `agent`: who makes it (default runAgent(): the agent of the job this process serves, if any). */
+  start(kind: string, opts: { subject?: string; args?: unknown; gitSha?: string; agent?: string | null } = {}): string {
     const id = randomUUID().replaceAll('-', '').slice(0, 16)
-    this.db.prepare('INSERT INTO runs (id, kind, subject, started, args, git_sha) VALUES (?,?,?,?,?,?)')
-      .run(id, kind, opts.subject ?? null, now(), enc(opts.args), opts.gitSha ?? null)
+    this.db.prepare('INSERT INTO runs (id, kind, subject, started, args, git_sha, agent) VALUES (?,?,?,?,?,?,?)')
+      .run(id, kind, opts.subject ?? null, now(), enc(opts.args), opts.gitSha ?? null, opts.agent === undefined ? runAgent() : opts.agent)
     return id
   }
 
@@ -250,11 +268,12 @@ export class Work {
     return row ? (row.bytes as Uint8Array) : null
   }
 
-  runs(kind?: string, limit = 20): RunSummary[] {
-    const sql = 'SELECT id, kind, subject, started, finished, status, summary FROM runs' +
-      (kind ? ' WHERE kind LIKE ?' : '') + ' ORDER BY started DESC LIMIT ?'
-    const rows = kind ? this.db.prepare(sql).all(`${kind}%`, limit) : this.db.prepare(sql).all(limit)
-    return rows as unknown as RunSummary[]
+  /** The newest runs: of a kind (a prefix), and of one agent's sessions (`agent`), when given. */
+  runs(kind?: string, limit = 20, agent?: string): RunSummary[] {
+    const where = [...(kind ? ['kind LIKE ?'] : []), ...(agent ? ['agent = ?'] : [])]
+    const sql = `SELECT id, kind, subject, started, finished, status, summary, agent FROM runs${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY started DESC LIMIT ?`
+    const args = [...(kind ? [`${kind}%`] : []), ...(agent ? [agent] : []), limit]
+    return this.db.prepare(sql).all(...args) as unknown as RunSummary[]
   }
 
   run(id: string): RunRecord | null {

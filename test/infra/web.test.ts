@@ -45,7 +45,7 @@ beforeAll(() => {
 describe('the web app', () => {
   it('is on by default, and a custom domain needs its certificate', () => {
     const p = InfraPropsSchema.parse(base)
-    expect(p.web).toEqual({ enabled: true, dashboards: [] })
+    expect(p.web).toEqual({ enabled: true, dashboards: [], waf: { enabled: true, apiRequestsPer5Minutes: 1000, authRequestsPer5Minutes: 100 } })
     expect(InfraPropsSchema.safeParse({ ...base, web: { domainName: 'trace.example.com' } }).success).toBe(false)
     expect(InfraPropsSchema.safeParse({ ...base, web: { certificateArn: CERT } }).success).toBe(false)
     expect(InfraPropsSchema.safeParse({ ...base, web: { domainName: 'trace.example.com', certificateArn: CERT } }).success).toBe(true)
@@ -229,6 +229,7 @@ describe('the web app', () => {
       events: { http: 'X', realtime: 'X', apiId: 'X' }, voiceBucket: 'X', voicePrefix: VOICE_PREFIX,
       dashboards: ['trace-agents'], model: 'us.anthropic.claude-sonnet-4-6', appUrl: 'https://X',
       features: { passkeys: true, email: false, voice: true, ops: true },
+      waf: { enabled: true, own: false, apiRequestsPer5Minutes: 1000, authRequestsPer5Minutes: 100 },
     })
     // the web client, not the CLI's; the events' host names, no scheme
     expect(text).toMatch(/"clientId":"<\{"Ref":"UsersWeb/)
@@ -258,7 +259,7 @@ describe('the web app', () => {
     expect(JSON.stringify(by('PublishLiveEvents')?.Resource)).toMatch(/Events\w+","ApiArn"\]\},"\/channelNamespace\/trace"/)
   })
 
-  it('turns the agents\' facts writes into live events: the bucket\'s events, one rule, a Lambda that reads only who is on the project and that object', () => {
+  it('turns the agents\' facts and job index writes into live events: the bucket\'s events, one rule, a Lambda that reads only who is on the project and that object', () => {
     // the central bucket sends its object events to EventBridge (the bucket's own property: no custom resource)
     const central = Object.entries(on.parent.findResources('AWS::S3::Bucket')).find(([id]) => id.startsWith('Central'))?.[1] as Res
     expect(central.Properties.NotificationConfiguration).toEqual({ EventBridgeConfiguration: { EventBridgeEnabled: true } })
@@ -269,7 +270,7 @@ describe('the web app', () => {
     expect(rule.Name).toBe('trace-journey-events')
     expect(rule.EventPattern).toEqual({
       source: ['aws.s3'], 'detail-type': ['Object Created'],
-      detail: { bucket: { name: [{ Ref: expect.stringMatching(/Central/) }] }, object: { key: [{ wildcard: 'projects/*/journey-agent/facts.db' }] } },
+      detail: { bucket: { name: [{ Ref: expect.stringMatching(/Central/) }] }, object: { key: [{ wildcard: 'projects/*/journey-agent/facts.db' }, { wildcard: 'projects/*/journey-agent/bench.db' }, { wildcard: 'projects/*/journey-agent/jobs.db' }] } },
     })
     expect(rule.Targets).toEqual([expect.objectContaining({ Arn: { 'Fn::GetAtt': [expect.stringMatching(/^JourneyEvents[0-9A-F]{8}$/), 'Arn'] }, RetryPolicy: { MaximumEventAgeInSeconds: 3600, MaximumRetryAttempts: 2 } })])
     web.hasResourceProperties('AWS::Lambda::Function', {
@@ -278,11 +279,13 @@ describe('the web app', () => {
     })
     // its role: read access/* and the agents' facts objects, publish to the namespace, its log group. Nothing else
     const all = statements(web, 'JourneyEventsRole')
-    expect(all.flatMap(actions).sort()).toEqual(['appsync:EventPublish', 'logs:CreateLogStream', 'logs:PutLogEvents', 's3:GetObject', 's3:GetObject', 's3:ListBucket'])
+    expect(all.flatMap(actions).sort()).toEqual(['appsync:EventPublish', 'logs:CreateLogStream', 'logs:PutLogEvents', 's3:GetObject', 's3:GetObject', 's3:GetObject', 's3:ListBucket'])
     const by = (sid: string): Statement | undefined => all.find((x) => x.Sid === sid)
     expect(JSON.stringify(by('AccessStoreRead')?.Resource)).toMatch(/"\/access\/\*"/)
     expect(by('AccessStoreList')?.Condition).toEqual({ StringLike: { 's3:prefix': ['access/*'] } })
     expect(JSON.stringify(by('AgentFactsRead')?.Resource)).toMatch(/"\/projects\/\*\/journey-agent\/facts\.db"/)
+    // and the job index that changed (job.updated): that one object of each project
+    expect(JSON.stringify(by('JobIndexRead')?.Resource)).toMatch(/"\/projects\/\*\/journey-agent\/jobs\.db"/)
     expect(JSON.stringify(by('PublishLiveEvents')?.Resource)).toMatch(/Events\w+","ApiArn"\]\},"\/channelNamespace\/trace"/)
     const text = JSON.stringify(all)
     for (const never of ['s3:PutObject', 's3:DeleteObject', '/central/', '/journey/', '/chats/', 'cognito', 'bedrock', 'ssm:']) expect(text).not.toContain(never)
@@ -303,7 +306,12 @@ describe('the web app', () => {
     expect(InfraPropsSchema.safeParse({ ...base, web: { webAclArn: acl.replace('us-east-1', 'eu-west-1') } }).success).toBe(false)
     const w = synth(InfraPropsSchema.parse({ ...base, web: { webAclArn: acl } }), 'WebWaf')
     expect((only(w.web!, 'AWS::CloudFront::Distribution').Properties.DistributionConfig as { WebACLId: string }).WebACLId).toBe(acl)
-    expect((only(web, 'AWS::CloudFront::Distribution').Properties.DistributionConfig as { WebACLId?: string }).WebACLId).toBeUndefined()
+    // without one of the person's own: this installation's (base is in us-east-1, so made in the web app's stack)
+    expect((only(web, 'AWS::CloudFront::Distribution').Properties.DistributionConfig as { WebACLId?: unknown }).WebACLId).toEqual({ 'Fn::GetAtt': [expect.stringMatching(/^WafAcl/), 'Arn'] })
+    // and with the WAF off, none
+    const off = synth(InfraPropsSchema.parse({ ...base, web: { waf: { enabled: false } } }), 'WebNoWaf')
+    expect((only(off.web!, 'AWS::CloudFront::Distribution').Properties.DistributionConfig as { WebACLId?: string }).WebACLId).toBeUndefined()
+    off.web!.resourceCountIs('AWS::WAFv2::WebACL', 0)
   }, 300_000)
 
   it('outputs the address, the distribution, the events endpoint and the web client', () => {

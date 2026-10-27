@@ -9,7 +9,7 @@ import type { ConnectionChoice } from '../../src/installer/aws.js'
 import { type InfraInput, InfraPropsSchema, ciRunnerOutput, projectHash, projectOutputs } from '../../src/infra/props.js'
 import { installationRecord } from '../../src/installer/record.js'
 import { type UpdateDeps, updateInstallation, updateProps } from '../../src/installer/update.js'
-import { MAX_ATTEMPTS, absorb, addPending, parsePending } from '../../src/installer/pending.js'
+import { FLAT_UPDATE_MAX, MAX_ATTEMPTS, absorb, addPending, parsePending } from '../../src/installer/pending.js'
 
 const BOARD = 'mteichtahl/board'
 const TRACE = 'mteichtahl/trace'
@@ -240,12 +240,67 @@ describe('tracectl update-installation', () => {
     const entry = (repo: string, extra: Record<string, unknown> = {}) => parsePending([{ key: `k/${repo}`, text: JSON.stringify({ repo, ...extra }) }])
     expect(addPending(PROPS, entry(BOARD.toUpperCase()))).toMatchObject({ added: [], already: [{ repo: BOARD }] })
     expect(addPending(PROPS, entry(TRACE)).skipped[0]?.why).toMatch(/build-only/)
-    expect(addPending({ ...PROPS, layout: 'flat' }, entry(NEW)).skipped[0]?.why).toMatch(/flat layout/)
+    // the flat layout: added while it holds fewer than FLAT_UPDATE_MAX projects, then left for the installer and its move
+    expect(addPending({ ...PROPS, layout: 'flat' }, entry(NEW)).added).toEqual([{ key: `k/${NEW}`, repo: NEW, branch: 'main' }])
+    const flatFull = { ...PROPS, layout: 'flat' as const, repositories: Array.from({ length: FLAT_UPDATE_MAX }, (_, i) => `acme/p${i}@main`) }
+    expect(addPending(flatFull, entry(NEW)).skipped[0]?.why).toMatch(/flat layout.*only up to 15.*Move to one nested stack per project/)
+    // one an earlier update added is in the stack: never dropped for the cap
+    expect(addPending(flatFull, entry(NEW), () => 'main', { deployed: true }).added).toHaveLength(1)
     const full = { ...PROPS, repositories: Array.from({ length: 60 }, (_, i) => `acme/p${i}@main`) }
     expect(addPending(full, entry(NEW)).skipped[0]?.why).toMatch(/60/)
     expect(parsePending([{ key: 'bad', text: '{' }])).toEqual([])
     // the installer takes every record in as an existing, onboarded repository
     const taken = absorb([{ repo: BOARD }], [...entry(NEW, { status: 'added', branch: 'trunk' }), ...entry(BOARD)], (repo, branch) => ({ repo: `${repo}@${branch}` }))
     expect(taken).toEqual({ projects: [{ repo: BOARD }, { repo: `${NEW}@trunk` }], absorbed: [NEW] })
+  })
+})
+
+describe('a flat installation', () => {
+  const flatRecord = JSON.stringify(installationRecord({ stack: 'TraceStack', region: 'us-east-1', props: { ...PROPS, layout: 'flat' }, runnerAuth: 'connection', connectionArn: '', traceRepository: TRACE, traceBranch: 'main', now: new Date('2026-10-01T00:00:00Z') }))
+
+  it('adds a project created in the web app (no knowledge base), and says what the layout lacks and how to move', async () => {
+    const w = world({ record: flatRecord, pending: [{ repo: NEW, name: 'Fresh', status: 'pending' }] })
+    expect(await updateInstallation(w.deps)).toBe(0)
+    expect((w.infra.at(-1)?.repositories as string[])).toContain(`${NEW}@trunk`)
+    expect(w.infra.at(-1)?.layout).toBe('flat')
+    const said = w.summary.join('\n')
+    expect(said).toMatch(/Adding acme\/fresh \(created in the web app\): its agent, memory and build runner \(this installation keeps every project in one stack, the flat layout: no knowledge base\)/)
+    expect(said).toMatch(/flat layout.*Move to one nested stack per project.*memory records are deleted\. This job never makes it\./)
+    expect(JSON.parse(w.records.get(`installation/pending-projects/${NEW}.json`) ?? '{}')).toMatchObject({ status: 'added' })
+  })
+
+  it('never moves the layout itself', async () => {
+    const w = world({ record: flatRecord })
+    expect(await updateInstallation(w.deps)).toBe(0)
+    expect(w.infra.every((i) => i.layout === 'flat' && i.layoutMigration === undefined)).toBe(true)
+  })
+})
+
+describe('the web app\'s WAF outside us-east-1', () => {
+  const ACL = 'arn:aws:wafv2:us-east-1:123456789012:global/webacl/trace-web/22222222-2222-2222-2222-222222222222'
+  const record = (region: string) => JSON.stringify(installationRecord({ stack: 'TraceStack', region, props: { ...PROPS, region }, runnerAuth: 'connection', connectionArn: '', traceRepository: TRACE, traceBranch: 'main', now: new Date('2026-10-01T00:00:00Z') }))
+
+  it('deploys <prefix>-edge in us-east-1 first, then the stack with its web ACL', async () => {
+    const w = world({ record: record('eu-west-1'), env: { TRACE_AWS_REGION: 'eu-west-1' } })
+    const outputs = w.deps.outputs
+    w.deps.outputs = async (c, region, stack) => (stack === 'CDKToolkit' ? ({ BootstrapVersion: '27' } as Record<string, string>) : stack === 'trace-edge' ? ({ WebAclArn: ACL } as Record<string, string>) : outputs(c, region, stack))
+    expect(await updateInstallation(w.deps)).toBe(0)
+    expect(w.cdkArgs.map((a) => a.slice(0, 2).join(' '))).toEqual(['deploy trace-edge', 'deploy TraceStack'])
+    expect((w.infra[1]?.web as { waf?: { aclArn?: string } } | undefined)?.waf?.aclArn).toBe(ACL)
+  })
+
+  it('never bootstraps us-east-1: without CDK there it deploys the stack as it was, and says why', async () => {
+    const w = world({ record: record('eu-west-1'), env: { TRACE_AWS_REGION: 'eu-west-1' } })
+    const outputs = w.deps.outputs
+    w.deps.outputs = async (c, region, stack) => { if (stack === 'CDKToolkit' || stack === 'trace-edge') throw new Error(`Stack with id ${stack} does not exist`); return outputs(c, region, stack) }
+    expect(await updateInstallation(w.deps)).toBe(0)
+    expect(w.cdkArgs.map((a) => a.slice(0, 2).join(' '))).toEqual(['deploy TraceStack'])
+    expect(w.summary.join('\n')).toMatch(/AWS WAF was not set up: CDK is not bootstrapped in us-east-1, and this job may not bootstrap it/)
+  })
+
+  it('in us-east-1 the web ACL is in the stack: no edge deploy', async () => {
+    const w = world()
+    expect(await updateInstallation(w.deps)).toBe(0)
+    expect(w.cdkArgs.map((a) => a[1])).toEqual(['TraceStack'])
   })
 })

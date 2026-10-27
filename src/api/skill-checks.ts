@@ -8,10 +8,23 @@
  * A check is `met`, `not_met` or `waived` (the gate criterion it rests on is waived). Where nothing in the record says
  * what a check needs, it is `not_met` with `unavailable`: what has to be recorded first. The app shows that instead of
  * guessing, and Submit waits, as it does for any check not met. Pure: tested on its own.
+ *
+ * The design record (src/tools/design: the intent, the architecture, the pin plan, which requirements each sheet
+ * serves, with people's decisions over the agents' proposals) makes the Intent builder, Requirements review's
+ * coverage and struck reasons, Architecture choice, Pin plan review, Schematic finish's "every sheet names its
+ * requirements" and Board setup's size limits computable. A skill's own pending decision (the choice in the person's
+ * draft, the statements Submit accepts) is laid over the record first (`pending`), so the bar shows what Submit would
+ * record.
  */
+import type { InstrumentId, Reading } from '../core/bench.js'
+import { stepOrderProblems } from '../core/bench.js'
+import { type BoardRow, inspectionProblems } from '../core/boards.js'
 import type { JourneyRecord, OrderRow, QuestionRow, Viewer } from '../core/journey.js'
 import { signBlockers } from '../core/journey.js'
 import { type SkillCheckDef, skillDef } from '../core/skills.js'
+import { type DesignDecision, standing } from '../tools/design/decisions.js'
+import { type DesignRows, TOPIC_NAMES, INTENT_TOPICS } from '../tools/design/db.js'
+import { type PinFinding, architectureView, intentView, linksView, pinCheck } from '../tools/design/record.js'
 import type { Finding, TraceRequirement } from './record-read.js'
 
 export type CheckStatus = 'met' | 'not_met' | 'waived'
@@ -23,8 +36,15 @@ export interface CheckInput {
   viewer: Viewer
   /** every requirement, struck ones included, with its evidence (record-read.ts) */
   requirements: (TraceRequirement & { status: string })[]
-  /** the struck ones (rejected or obsolete), which requirementEvidence leaves out */
-  struck: { id: string; tags: string[] }[]
+  /** the struck ones (rejected or obsolete, or struck by a person), which requirementEvidence leaves out, each with the
+   * reason a person gave (null: none) */
+  struck: { id: string; reason: string | null }[]
+  /** the design record and people's decisions over it (null: the record could not be read) */
+  design?: { rows: DesignRows; decisions: DesignDecision[] } | null
+  /** the newest schematic netlist in the record (net → "<ref>.<pin>"), for the pin plan check */
+  nets?: ReadonlyMap<string, readonly string[]> | null
+  /** the default branch's schematic files (Schematic finish), null when not read */
+  sheetFiles?: string[] | null
   erc: { findings: Finding[]; errors: number } | null
   drc: { findings: Finding[]; errors: number } | null
   /** the latest kicad.bom run's result, kicad.board's, pcb.placement_check's status */
@@ -37,6 +57,14 @@ export interface CheckInput {
   orders: OrderRow[]
   /** a test item's method and status, for the hardware checks */
   tests: { id: string; method: string; status: string }[]
+  /** the boards by serial with their inspection checks (journey: boards, board_checks) */
+  boards?: BoardRow[]
+  /** the parts the fab does not place (the latest kicad.fab run's hand_placed), null when no run says */
+  handPlaced?: string[] | null
+  /** each instrument's newest identity answer (hil.idn), from the run record and the bench's live copy */
+  ids?: InstrumentId[]
+  /** the bring-up readings (bringup_readings), from the run record and the bench's live copy */
+  readings?: Reading[]
   /** the person's draft of this skill (its own shape per skill), or null */
   draft: Record<string, unknown> | null
   /** the gate Gate signing is about; the question Question answer is about */
@@ -82,10 +110,44 @@ function reasons(input: CheckInput): CheckResult {
 
 type Checker = (input: CheckInput) => CheckResult
 
-const NO_INTENT = 'the intent statements in the record (the Intent builder does not store them yet)'
-const NO_ARCH = 'an architecture record (options, criteria, scores and the block each requirement maps to); Architecture choice does not store one yet'
-const NO_PINS = 'a pin plan in the record (each pin with its net and function); Pin plan review does not store one yet'
-const NO_BOARDS = 'the boards received (each with its serial, photos and faults); Incoming inspection does not store them yet'
+const NO_PLAN = 'No pin plan is recorded yet: the firmware track proposes it with design.pins.'
+
+/** A check over the intent statements (with the person's pending decisions over them). */
+function withIntent(i: CheckInput, id: string, fn: (v: ReturnType<typeof intentView>) => CheckResult): CheckResult {
+  if (!i.design) return notMet(id, 'The design record could not be read.')
+  const v = intentView(i.design.rows, i.design.decisions)
+  if (!v.some((s) => s.state !== 'rejected')) return notMet(id, 'No intent statements are recorded yet: answer the topics and trace drafts them.')
+  return fn(v)
+}
+
+/** Statements carrying one flag, as a check. */
+function flagged(i: CheckInput, id: string, flag: Parameters<ReturnType<typeof intentView>[number]['flags']['includes']>[0], words: string, note?: string): CheckResult {
+  return withIntent(i, id, (v) => {
+    const open = v.filter((s) => s.state !== 'rejected' && s.flags.includes(flag))
+    return open.length ? notMet(id, `${plural(open.length, 'statement')} ${words}: ${ids(open)}.`) : met(id, note)
+  })
+}
+
+/** A check over the architecture record. */
+function withArch(i: CheckInput, id: string, fn: (a: ReturnType<typeof architectureView> & { fixedAt: number | null; chosenAt: number | null; onlyOne: string | null }) => CheckResult): CheckResult {
+  if (!i.design) return notMet(id, 'The design record could not be read.')
+  const a = architectureView(i.design.rows, i.design.decisions)
+  const f = standing(i.design.decisions, 'architecture.criteria').get('architecture')
+  const c = standing(i.design.decisions, 'architecture.choice').get('architecture')
+  return fn({ ...a, fixedAt: f?.at ?? null, chosenAt: c?.at ?? null, onlyOne: typeof c?.detail.only_one === 'string' ? c.detail.only_one : null })
+}
+
+/** The pin plan's findings of some kinds, as a check: each finding open, or waived (a journey waiver on its id). */
+function pinBar(i: CheckInput, id: string, kinds: readonly PinFinding['kind'][]): CheckResult {
+  if (!i.design) return notMet(id, 'The design record could not be read.')
+  const pins = i.design.rows.pins.filter((p) => p.status !== 'withdrawn')
+  if (!pins.length) return notMet(id, NO_PLAN)
+  const waived = new Set((i.r?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'finding').map((w) => w.target))
+  const mine = pinCheck(pins, kinds.some((k) => k === 'mismatch' || k === 'not_on_schematic' || k === 'missing_pin') ? i.nets ?? null : null).filter((f) => kinds.includes(f.kind))
+  const open = mine.filter((f) => !waived.has(f.id))
+  if (open.length) return notMet(id, `${open.slice(0, 3).map((f) => f.text).join(' ')}${open.length > 3 ? ` And ${open.length - 3} more.` : ''}`)
+  return mine.length ? { id, status: 'waived', detail: `${plural(mine.length, 'finding')} waived.` } : met(id)
+}
 
 /** Every check of every skill, by `<skill>/<check>`; the shared `reasons` check is the same for all. */
 export const CHECKS: Readonly<Record<string, Checker>> = {
@@ -104,14 +166,28 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     return unsigned.length ? notMet('earlier', `${plural(unsigned.length, 'earlier gate')} not signed: ${unsigned.map((g) => g.name).join(', ')}.`) : met('earlier')
   },
 
-  // ---- Intent builder: the record keeps no intent yet
-  'intent-builder/answered': () => unavailable('answered', NO_INTENT),
-  'intent-builder/quantities': () => unavailable('quantities', NO_INTENT),
-  'intent-builder/vague': () => unavailable('vague', NO_INTENT),
-  'intent-builder/interfaces': () => unavailable('interfaces', NO_INTENT),
-  'intent-builder/conflicts': () => unavailable('conflicts', NO_INTENT),
-  'intent-builder/testable': () => unavailable('testable', NO_INTENT),
-  'intent-builder/owners': () => unavailable('owners', NO_INTENT),
+  // ---- Intent builder: the statements in the record, with the person's draft decisions laid over them
+  'intent-builder/answered': (i) => withIntent(i, 'answered', (v) => {
+    const live = v.filter((s) => s.state !== 'rejected' && s.kind !== 'question')
+    const open = INTENT_TOPICS.filter((t) => !live.some((s) => s.topic === t))
+    const undated = live.filter((s) => s.kind === 'unknown' && !s.decide_by)
+    if (open.length) return notMet('answered', `${plural(open.length, 'topic')} not answered or marked: ${open.map((t) => TOPIC_NAMES[t]).join(', ')}.`)
+    return undated.length ? notMet('answered', `${plural(undated.length, 'unknown')} without the stage it is decided by: ${ids(undated)}.`) : met('answered')
+  }),
+  'intent-builder/quantities': (i) => flagged(i, 'quantities', 'needs_number', 'without a number and unit'),
+  'intent-builder/vague': (i) => flagged(i, 'vague', 'vague', 'with a vague word and no number'),
+  'intent-builder/interfaces': (i) => withIntent(i, 'interfaces', (v) => {
+    const live = v.filter((s) => s.state !== 'rejected' && s.topic === 'interfaces' && s.kind !== 'question')
+    if (!live.length) return notMet('interfaces', 'No interface is stated, nor is the topic marked "don\'t care".')
+    const open = live.filter((s) => s.flags.includes('interface_incomplete'))
+    return open.length ? notMet('interfaces', `${plural(open.length, 'interface')} without all of type, connector, protocol, rate and direction: ${ids(open)}.`) : met('interfaces')
+  }),
+  'intent-builder/conflicts': (i) => flagged(i, 'conflicts', 'conflict', 'in conflict with another, neither given way'),
+  'intent-builder/testable': (i) => flagged(i, 'testable', 'not_testable', 'that cannot become a testable requirement as worded', 'As the agents judged each statement.'),
+  'intent-builder/owners': (i) => withIntent(i, 'owners', (v) => {
+    const open = v.filter((s) => s.state !== 'rejected' && s.flags.includes('no_owner'))
+    return open.length ? notMet('owners', `${plural(open.length, 'open question')} without an owner: ${ids(open)}.`) : met('owners')
+  }),
 
   // ---- Requirements review
   'requirements-review/criterion': (i) => {
@@ -129,20 +205,63 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     const dups: string[] = []
     for (const q of i.requirements) { const k = norm(q.text); const o = seen.get(k); if (o) dups.push(`${o} and ${q.id}`); else seen.set(k, q.id) }
     if (dups.length) return notMet('conflicts', `Duplicates: ${dups.slice(0, 5).join('; ')}.`)
-    return unavailable('conflicts', 'a conflict check between requirements (duplicates are checked and there are none; no tool checks that two requirements can both hold)')
+    // requirements derived from intent lines still in conflict with each other conflict too
+    if (i.design) {
+      const v = intentView(i.design.rows, i.design.decisions)
+      const live = new Set(i.requirements.map((q) => q.id))
+      const links = linksView(i.design.rows).filter((l) => live.has(l.requirement))
+      const clash = v.filter((x) => x.flags.includes('conflict') && links.some((l) => l.intent === x.id))
+      if (clash.length) return notMet('conflicts', `Requirements derive from intent lines still in conflict: ${clash.map((x) => `${x.id} (${links.filter((l) => l.intent === x.id).map((l) => l.requirement).join(', ')})`).slice(0, 4).join('; ')}. Resolve it in the intent first.`)
+    }
+    return unavailable('conflicts', 'a check that two requirements can both hold (duplicates, and conflicts between the intent lines they come from, are checked and there are none; no tool checks the requirements\' own numbers against each other)')
   },
   'requirements-review/sources': (i) => {
     const none = i.requirements.filter((q) => !q.source)
     return !i.requirements.length ? notMet('sources', 'No requirements are recorded yet.') : none.length ? notMet('sources', `${plural(none.length, 'requirement')} without a source: ${ids(none)}.`) : met('sources')
   },
-  'requirements-review/covered': () => unavailable('covered', NO_INTENT),
-  'requirements-review/struck': () => unavailable('struck', 'a reason stored with each struck requirement (the requirements table has no place for it yet)'),
+  'requirements-review/covered': (i) => withIntent(i, 'covered', (v) => {
+    const live = new Set(i.requirements.map((q) => q.id))
+    const links = linksView(i.design!.rows).filter((l) => live.has(l.requirement))
+    const open = v.filter((s) => s.state !== 'rejected' && s.kind === 'statement' && s.uncovered === null && !links.some((l) => l.intent === s.id))
+    return open.length ? notMet('covered', `${plural(open.length, 'intent statement')} no requirement covers, and not left out with a reason: ${ids(open)}.`) : met('covered')
+  }),
+  'requirements-review/struck': (i) => {
+    const bare = i.struck.filter((q) => !q.reason?.trim())
+    if (!i.struck.length) return met('struck', 'No requirement is struck.')
+    return bare.length ? notMet('struck', `${plural(bare.length, 'struck requirement')} without a reason: ${ids(bare)}. Strike each again here with the reason.`) : met('struck')
+  },
 
   // ---- Architecture choice
-  'architecture-choice/two': () => unavailable('two', NO_ARCH),
-  'architecture-choice/fixed': () => unavailable('fixed', NO_ARCH),
-  'architecture-choice/scored': () => unavailable('scored', NO_ARCH),
-  'architecture-choice/mapped': (i) => criterion(i, 'mapped', 'architect.mapped'),
+  'architecture-choice/two': (i) => withArch(i, 'two', (a) => {
+    if (a.options.length >= 2) return met('two', `${a.options.length} options compared.`)
+    if (!a.options.length) return notMet('two', 'No architecture is proposed yet: the agents propose options with design.architecture.')
+    return a.chosen?.option && a.onlyOne ? met('two', `Only one option: ${a.onlyOne}`) : notMet('two', 'Only one option is proposed: compare a second, or say why only one is possible.')
+  }),
+  'architecture-choice/fixed': (i) => withArch(i, 'fixed', (a) => {
+    if (!a.fixed) return notMet('fixed', 'Fix the criteria and their weights first, before reading any score.')
+    if (a.chosen && a.fixedAt !== null && a.chosenAt !== null && a.fixedAt > a.chosenAt) return notMet('fixed', 'The criteria were changed after the choice: choose again on the fixed criteria.')
+    return met('fixed', `Fixed by ${a.fixed.by}.`)
+  }),
+  'architecture-choice/scored': (i) => withArch(i, 'scored', (a) => {
+    if (!a.criteria.length) return notMet('scored', 'There are no criteria to score on.')
+    const missing: string[] = []
+    for (const o of a.options) for (const c of a.criteria) { const sc = a.scores.find((x) => x.option === o.id && x.criterion === c.id); if (!sc || str(sc.reason).length < 3) missing.push(`${o.id} on ${c.name}`) }
+    if (missing.length) return notMet('scored', `${plural(missing.length, 'score')} missing or without a reason: ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? ` and ${missing.length - 5} more` : ''}.`)
+    if (!a.chosen) return notMet('scored', 'Choose an option and name the criteria that decided it.')
+    return a.chosen.deciding.length ? met('scored') : notMet('scored', 'Name the criteria that decided the choice.')
+  }),
+  'architecture-choice/mapped': (i) => {
+    const c = criterion(i, 'mapped', 'architect.mapped')
+    if (c.status === 'waived') return c
+    return withArch(i, 'mapped', (a) => {
+      const o = a.options.find((x) => x.id === a.current)
+      if (!o) return notMet('mapped', 'No architecture is proposed yet.')
+      const served = new Set(o.blocks.flatMap((b) => b.serves))
+      const open = i.requirements.filter((q) => !served.has(q.id))
+      if (!i.requirements.length) return notMet('mapped', 'No requirements are recorded yet.')
+      return open.length ? notMet('mapped', `${plural(open.length, 'requirement')} served by no block of option ${o.id}: ${ids(open)}.`) : met('mapped', `Every requirement maps to a block of option ${o.id}.`)
+    })
+  },
   'architecture-choice/stock': (i) => criterion(i, 'stock', 'architect.stock'),
 
   // ---- Schematic finish
@@ -158,13 +277,24 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     if (lcsc === undefined) return notMet('mpn', 'The last parts list check did not look at LCSC codes: run kicad.bom with jlc.')
     return Number(lcsc) ? notMet('mpn', `${plural(Number(lcsc), 'line')} without an LCSC code.`) : met('mpn')
   },
-  'schematic-finish/serves': () => unavailable('serves', 'which requirements each sheet serves, in the record; the architecture record does not exist yet'),
+  'schematic-finish/serves': (i) => {
+    if (!i.design) return notMet('serves', 'The design record could not be read.')
+    if (!i.sheetFiles) return unavailable('serves', 'the list of schematic files on the default branch, which could not be read')
+    if (!i.sheetFiles.length) return notMet('serves', 'There is no schematic on the default branch yet.')
+    const named = new Map(i.design.rows.sheets.map((x) => [x.sheet, x]))
+    const live = new Set(i.requirements.map((q) => q.id))
+    const open = i.sheetFiles.filter((f) => { const x = named.get(f); return !x || (!x.requirements.some((r) => live.has(r)) && !str(x.reason)) })
+    return open.length ? notMet('serves', `${plural(open.length, 'sheet')} without the requirements it serves: ${open.slice(0, 5).join(', ')}${open.length > 5 ? ` and ${open.length - 5} more` : ''}.`) : met('serves')
+  },
 
   // ---- Pin plan review
-  'pin-plan-review/functions': () => unavailable('functions', NO_PINS),
-  'pin-plan-review/instances': (i) => (i.r?.criteria.some((c) => c.id === 'capture.alternates') ? criterion(i, 'instances', 'capture.alternates') : unavailable('instances', NO_PINS)),
-  'pin-plan-review/boot': () => unavailable('boot', NO_PINS),
-  'pin-plan-review/match': () => unavailable('match', NO_PINS),
+  'pin-plan-review/functions': (i) => pinBar(i, 'functions', ['no_net', 'no_function', 'unsupported', 'unknown_alternates']),
+  'pin-plan-review/instances': (i) => pinBar(i, 'instances', ['claimed_twice', 'function_twice']),
+  'pin-plan-review/boot': (i) => pinBar(i, 'boot', ['reserved']),
+  'pin-plan-review/match': (i) => {
+    if (!i.nets) return i.design?.rows.pins.some((p) => p.status !== 'withdrawn') ? notMet('match', 'The pin plan has not been checked against the schematic yet: run design.pins check.') : notMet('match', NO_PLAN)
+    return pinBar(i, 'match', ['mismatch', 'not_on_schematic', 'missing_pin'])
+  },
 
   // ---- Waiver: the draft's own fields
   'waiver/what': (i) => (str(i.draft?.what) && (i.draft?.what !== 'other' || str(i.draft?.custom)) ? met('what') : notMet('what', 'Name what is waived.')),
@@ -192,7 +322,14 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     const o = i.board?.outline as { width_mm?: number; height_mm?: number } | null | undefined
     if (!i.board) return notMet('outline', 'No board check is recorded yet: run kicad.board.')
     if (!o?.width_mm) return notMet('outline', 'The board has no closed outline on Edge.Cuts.')
-    return unavailable('outline', `the size limits from the intent (the outline is ${o.width_mm} × ${o.height_mm} mm; the record keeps no limit to compare it with)`)
+    if (!i.design) return unavailable('outline', `the size limits from the intent (the outline is ${o.width_mm} × ${o.height_mm} mm), which could not be read`)
+    const v = intentView(i.design.rows, i.design.decisions).filter((s) => s.state !== 'rejected' && s.topic === 'physical')
+    const limits = v.flatMap((s) => s.limits)
+    const w = limits.find((l) => /^board_?(width|length|x)$/i.test(l.name) && l.unit === 'mm')
+    const h = limits.find((l) => /^board_?(height|depth|y)$/i.test(l.name) && l.unit === 'mm')
+    if (!w && !h) return v.some((s) => s.kind === 'dont_care') ? met('outline', `Closed, ${o.width_mm} × ${o.height_mm} mm; the intent sets no size limit.`) : notMet('outline', `The outline is ${o.width_mm} × ${o.height_mm} mm, but the intent gives no board size limit (Physical: board_width, board_height in mm) to check it against.`)
+    const over = [w && w.max !== undefined && Number(o.width_mm) > w.max ? `${o.width_mm} mm wide (at most ${w.max})` : '', h && h.max !== undefined && Number(o.height_mm) > h.max ? `${o.height_mm} mm high (at most ${h.max})` : ''].filter(Boolean)
+    return over.length ? notMet('outline', `The board is ${over.join(' and ')}.`) : met('outline', `${o.width_mm} × ${o.height_mm} mm, within the intent's limits.`)
   },
   'board-setup/stackup': (i) => (!i.board ? notMet('stackup', 'No board check is recorded yet: run kicad.board.') : i.board.stackup_known ? met('stackup', 'The stackup is complete; impedance widths are not checked against targets yet.') : notMet('stackup', 'The board file has no complete stackup.')),
   'board-setup/fixed': () => unavailable('fixed', 'the fixed parts with their mechanical reasons, in the record; Board setup does not store them yet'),
@@ -237,10 +374,15 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     return missing.length ? notMet('recorded', `Order ${o.number} has no ${missing.join(' or ')}.`) : met('recorded', `Order ${o.number}.`)
   },
 
-  // ---- Incoming inspection
-  'incoming-inspection/count': () => unavailable('count', NO_BOARDS),
-  'incoming-inspection/faults': () => unavailable('faults', NO_BOARDS),
-  'incoming-inspection/hand': () => unavailable('hand', NO_BOARDS),
+  // ---- Incoming inspection: the boards recorded (board.record, board.check)
+  'incoming-inspection/count': (i) => { const p = inspection(i).count; return p ? notMet('count', p) : met('count', `${plural(boardsOf(i).length, 'board')} recorded, each with a serial and a photo.`) },
+  'incoming-inspection/faults': (i) => { const p = inspection(i).faults; return p ? notMet('faults', p) : met('faults') },
+  'incoming-inspection/hand': (i) => {
+    if (i.handPlaced === null || i.handPlaced === undefined) return unavailable('hand', 'the parts the fab does not place: run kicad.fab so its result lists them')
+    if (!i.handPlaced.length) return boardsOf(i).length ? met('hand', 'The fab places every part.') : notMet('hand', 'No boards are recorded yet.')
+    const p = inspection(i).hand
+    return p ? notMet('hand', p) : met('hand')
+  },
 
   // ---- Bench setup
   'bench-setup/limits': (i) => {
@@ -249,13 +391,40 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     const open = psus.filter((p) => !(p.limits?.max_voltage_v && p.limits?.max_current_a))
     return open.length ? notMet('limits', `${open.map((p) => p.name).join(', ')} without both a voltage and a current limit.`) : met('limits')
   },
-  'bench-setup/idn': () => unavailable('idn', 'each instrument\'s answer to its identity query, recorded on this bench (hil runs do not store it yet)'),
+  'bench-setup/idn': (i) => {
+    if (!i.instruments.length) return notMet('idn', 'No instruments are set up in hil.instruments.')
+    const ids = new Map((i.ids ?? []).map((x) => [x.instrument, x]))
+    const silent = i.instruments.filter((x) => !ids.get(x.name)?.ok)
+    return silent.length ? notMet('idn', `${silent.map((x) => x.name).join(', ')} ${silent.length === 1 ? 'has' : 'have'} not answered its identity query: run hil.idn on the bench.`) : met('idn', i.instruments.map((x) => `${x.name}: ${[ids.get(x.name)?.manufacturer, ids.get(x.name)?.model].filter(Boolean).join(' ')}`).join('; '))
+  },
   'bench-setup/wired': () => unavailable('wired', 'the bench wiring (each connection with its net), in the record'),
   'bench-setup/hardware': () => unavailable('hardware', 'which machine the bench tools run on; the API cannot see the bench machine'),
 
   // ---- Bring-up run
-  'bring-up-run/limits': () => unavailable('limits', 'each bring-up step\'s readings against its limits, in the record'),
-  'bring-up-run/shorts': () => unavailable('shorts', 'the unpowered checks (resistance to ground per rail), in the record'),
+  'bring-up-run/limits': (i) => {
+    const rs = i.readings ?? []
+    if (!rs.length) return notMet('limits', 'No bring-up readings are recorded yet: the bring-up run takes them with the hil tools against each step\'s limits.')
+    const problems = [...new Set(rs.map((r) => r.board))].flatMap((b) => (stepOrderProblems(rs.filter((r) => r.board === b)) ?? []).map((p) => `${b} ${p}`))
+    return problems.length ? notMet('limits', `${problems.slice(0, 4).join('; ')}.`) : met('limits')
+  },
+  'bring-up-run/shorts': (i) => {
+    const rs = i.readings ?? []
+    const boards = [...new Set(rs.map((r) => r.board))]
+    if (!boards.length) return notMet('shorts', 'No bring-up readings are recorded yet.')
+    const bad: string[] = []
+    for (const b of boards) {
+      const mine = rs.filter((r) => r.board === b)
+      const powered = mine.filter((r) => r.step !== 'inspect' && r.step !== 'unpowered')
+      if (!powered.length) continue
+      const firstPowered = Math.min(...powered.map((r) => r.at))
+      const unpowered = mine.filter((r) => r.step === 'unpowered' && r.at < firstPowered)
+      if (!unpowered.length) bad.push(`${b} was powered with no unpowered check before it`)
+      else if (unpowered.some((r) => !r.pass && !unpowered.some((x) => x.quantity === r.quantity && x.at > r.at && x.pass))) bad.push(`${b} was powered with an unpowered check out of limits`)
+      if (powered.some((r) => r.step === 'rails' && r.unit === 'A' && r.max === null)) bad.push(`${b} had a rail's current read without a limit`)
+    }
+    if (!boards.some((b) => rs.some((r) => r.board === b && r.step !== 'inspect' && r.step !== 'unpowered'))) return rs.some((r) => r.step === 'unpowered') ? met('shorts', 'Unpowered checks recorded; nothing powered yet.') : notMet('shorts', 'No unpowered check is recorded yet.')
+    return bad.length ? notMet('shorts', `${bad.join('; ')}.`) : met('shorts')
+  },
   'bring-up-run/results': (i) => {
     const hw = i.tests.filter((t) => t.method === 'hil')
     if (!hw.length) return notMet('results', 'No hardware test is planned.')
@@ -294,6 +463,9 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
   },
   'question-answer/requirement': (i) => (str(i.draft?.lasts) ? met('requirement') : notMet('requirement', 'Say whether the answer is a one-off, a rule, or a requirement change.')),
 }
+
+const boardsOf = (i: CheckInput): BoardRow[] => (i.boards ?? []).filter((b) => !i.r || b.revision === i.r.journey.revision)
+const inspection = (i: CheckInput) => inspectionProblems(i.boards ?? [], i.orders, i.r?.journey.revision ?? 'A', i.handPlaced ?? [])
 
 function gateCheck(i: CheckInput, id: string, about: RegExp): CheckResult {
   if (!i.r) return notMet(id, 'The project has no journey yet.')

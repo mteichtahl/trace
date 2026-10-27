@@ -34,7 +34,9 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
     case 'record.changed': {
       const r = e.repo
       const byWhat: Record<typeof e.what, QueryKey[]> = {
-        journey: [['journey.get', r], ['inbox'], ['runs', r]],
+        // the journey's record and the agents' facts, and the bench's live readings (src/core/bench.ts): the Build tab and
+        // the guided skills (Bring-up run's live readout) read them too
+        journey: [['journey.get', r], ['inbox'], ['runs', r], ['build.get', r], ['skill.get', r]],
         settings: [['settings.get', r], ['journey.get', r]],
         memory: [['memory.list', r], ['memory.recall', r]],
         chats: [['chats.list', r], ['chats.get', r], ['chats.recall', r]],
@@ -45,7 +47,7 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
       return byWhat[e.what] ?? [['journey.get', r]]
     }
     case 'job.updated':
-      return [['job'], ['journey.get', e.repo], ['tools.waits', e.repo], ['runs', e.repo]]
+      return [['job'], ['jobs.list', e.repo], ['journey.get', e.repo], ['tools.waits', e.repo], ['runs', e.repo]]
     case 'notification':
       return [['inbox'], ['journey.get', e.repo]]
   }

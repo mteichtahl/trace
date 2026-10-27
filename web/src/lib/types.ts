@@ -25,6 +25,8 @@ export interface AppConfig {
   clientId: string
   events: { http: string; realtime: string }
   features: { passkeys: boolean; email: boolean; voice: boolean; ops: boolean }
+  /** AWS WAF in front of the app (absent: an installation from before it) */
+  waf?: { enabled: boolean; own: boolean; apiRequestsPer5Minutes: number; authRequestsPer5Minutes: number }
 }
 
 export type SignInChoice = 'passkey' | 'email_code' | 'password'
@@ -182,7 +184,7 @@ export interface RunSummary {
   repo?: string
   /** "checking timing on the FPGA" */
   title: string
-  state: 'running' | 'queued' | 'paused' | 'done' | 'failed' | 'cancelled'
+  state: 'running' | 'queued' | 'paused' | 'done' | 'failed' | 'cancelled' | 'lost'
   step?: string
   stepIndex?: number
   stepCount?: number
@@ -198,7 +200,37 @@ export interface RunSummary {
   startsWhen?: string
   /** what job.control can do for it now (the job view's `controls`); absent: not known, the screen's own choice */
   controls?: ('pause' | 'resume' | 'cancel' | 'move_up')[]
+  /** the agent doing it (verify, impl, …, worker) and its name in words (jobs.list) */
+  agent?: string
+  agentName?: string
+  /** who asked, and whether it is the person looking */
+  startedBy?: string
+  yours?: boolean
+  /** queued: held by a person (it starts when someone resumes it) */
+  held?: boolean
+  /** queued: its place in its agent's queue (1 is next) */
+  position?: number
+  /** paused: who paused it */
+  pausedBy?: string
+  branch?: string
+  summary?: string
+  endedAt?: string
 }
+
+/** One agent's state on a project (jobs.list `agents`). */
+export interface AgentState {
+  id: string
+  name: string
+  status: 'working' | 'queued' | 'waiting_person' | 'stuck' | 'idle'
+  says: string
+  /** job ids (RunSummary.id) */
+  now: string[]
+  queue: string[]
+  today: { runs: number; succeeded: number; medianS: number | null }
+}
+
+/** jobs.list, as the app reads it. */
+export interface ProjectJobs { repo: string; jobs: RunSummary[]; agents: AgentState[]; batch: { id: string; job: string | null; pool: 'gpu' | 'cpu'; state: string | null; submittedAt: string | null }[]; updatedAt: string }
 
 export interface RecentItem {
   id: string

@@ -81,6 +81,11 @@ import { KB_RETRIEVE_ACTIONS, VectorStore, knowledgeBaseArn } from './knowledge.
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
 import { GithubConnection, RunnerProject } from './runner.js'
+import { ACTUALS_OBJECTS, CostRead } from './cost.js'
+import { OrderWatch, WATCH_OBJECTS, orderWatchName } from './order-watch.js'
+import { orderWatchSecretsPrefix } from '../core/integrations-catalog.js'
+import { apiVocabularyStatement } from './voice.js'
+import { EDGE_REGION, edgeNeeded, edgeStackName } from './edge.js'
 import { SELF_WRITABLE, TraceWeb, addWebClient, traceWebProps } from './web.js'
 import { ACCESS_PREFIX, AGENT_FACTS, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
@@ -304,6 +309,8 @@ export class TraceStack extends Stack {
       runnerSource,
       environment: {
         AWS_REGION: cfg.region, TRACE_HOME: traceHome, CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: cfg.model, TRACE_WORKSPACE: '/mnt/workspace',
+        // the installation's price overrides for the cost ledger's estimates (src/core/prices.ts); the defaults otherwise
+        ...(cfg.cost.prices ? { TRACE_PRICES: JSON.stringify(cfg.cost.prices) } : {}),
       },
     })
     const nestedStacks: ProjectNestedStack[] = []
@@ -338,6 +345,10 @@ export class TraceStack extends Stack {
 
     // ------------------------------------------------------------------ the web app's address (src/infra/web.ts)
     // Its nested stack first: the pool takes its address as the passkey relying party, and nothing in it names the pool
+    // ------------------------------------------------------------------ cloud cost per project (src/infra/cost.ts)
+    if (cfg.cost.explorer.enabled) new CostRead(this, 'CostRead', { prefix: cfg.prefix, settings: cfg.cost.explorer, central, root: REPO_ROOT })
+    // ------------------------------------------------------------------ shipped orders, with their carrier (src/infra/order-watch.ts)
+    const orderWatch = new OrderWatch(this, 'OrderWatch', { prefix: cfg.prefix, central, root: REPO_ROOT })
     const web = cfg.web.enabled ? new TraceWeb(this, 'Web', { ...traceWebProps(cfg, REPO_ROOT), central }) : null
     // email one-time codes need the pool to send through SES (Cognito's own sender cannot send them)
     const emailCodes = Boolean(web && cfg.web.sesFrom)
@@ -450,9 +461,27 @@ export class TraceStack extends Stack {
     // waiting for the next stack update (projects.create): read, and write only with conditional puts
     // and each project's journey record (journey.*, docs/web-build.md), under projects/<slug>/journey/
     grantPrefixes(apiRole, central, { conditional: [`${PROJECTS_PREFIX}/*/${CHATS_PREFIX}`, `${PROJECTS_PREFIX}/*/${JOURNEY_PREFIX}`, PENDING_PROJECTS] })
-    // what each project's agents contribute to its journey (projects/<slug>/journey-agent, src/core/agent-facts.ts):
-    // read and merged into the journey's views, never written by the API
+    // what each project's agents contribute to its journey (projects/<slug>/journey-agent, src/core/agent-facts.ts),
+    // and its job index there (jobs.db, src/core/job-index.ts: jobs.list): read, never written by the API
+    // (and what the bench measured, live: projects/<slug>/journey-agent/bench.db, src/core/bench.ts)
     grantPrefixes(apiRole, central, { read: [`${PROJECTS_PREFIX}/*/${AGENT_FACTS}`] })
+    // cost and the build's shipping, in a policy of their own (the role's inline policy has a size limit, which CDK
+    // would otherwise meet by moving statements into an overflow policy):
+    //   the cost ledger (cost.get, usage.month; src/core/cost.ts): the installation's actuals, which the cost read writes
+    //   (src/infra/cost.ts), read only (each project's estimates are beside its agents' facts, read above); money for
+    //   admins only
+    //   the shipped orders followed with their carrier (order.update starts a watch, src/core/shipping.ts): read and
+    //   conditional writes on installation/shipping/; order.check_now invokes the order watch, that function only
+    const costPolicy = new iam.Policy(this, 'ApiRuntimeRoleCostPolicy', { roles: [apiRole] })
+    const intoCost = { addToPrincipalPolicy: (st: iam.PolicyStatement) => costPolicy.addStatements(st) }
+    grantPrefixes(intoCost, central, { read: [ACTUALS_OBJECTS], conditional: [WATCH_OBJECTS] })
+    costPolicy.addStatements(new iam.PolicyStatement({ sid: 'OrderWatchCheckNow', actions: ['lambda:InvokeFunction'], resources: [orderWatch.function.functionArn] }))
+    // the order watch's carrier key (integrations.set for `dhl`, src/core/integrations-catalog.ts orderWatchSecretsPrefix):
+    // admins set it, the API never reads it back
+    costPolicy.addStatements(new iam.PolicyStatement({
+      sid: 'ManageOrderWatchKey', actions: ['secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue', 'secretsmanager:DescribeSecret', 'secretsmanager:DeleteSecret', 'secretsmanager:TagResource'],
+      resources: [`arn:${this.partition}:secretsmanager:${cfg.region}:${cfg.account}:secret:${orderWatchSecretsPrefix(cfg.prefix)}*`],
+    }))
     // every project's worker runtime of this installation: by its exact ARN (from its nested stack's output, or the
     // runtime itself when flat), and on the runtime also by this installation's tag. InvokeAgentRuntime authorizes the
     // runtime and the runtime endpoint (Service Authorization Reference: both resource types take aws:ResourceTag);
@@ -468,6 +497,8 @@ export class TraceStack extends Stack {
       }))
     }
     grantReadRecords(apiRole, memories)
+    // dictation: the state of each project's vocabulary for voice.vocabulary (after its access check), nothing more
+    apiRole.addToPolicy(apiVocabularyStatement({ partition: this.partition, region: cfg.region, account: cfg.account, prefix: cfg.prefix }))
     // kb.search on any project's knowledge base, after the access check (src/api/actions.ts); nothing else of them.
     // The ARN is made from the id, so the parent takes one output per knowledge base from its nested stack, not two.
     if (kbs.length) {
@@ -503,6 +534,12 @@ export class TraceStack extends Stack {
         TRACE_AWS_ACCOUNT: cfg.account,
         TRACE_WORKER_RUNTIMES: workerList,
         TRACE_INTEGRATIONS_PREFIX: integrationsPrefix(cfg.prefix),
+        // the order watch a check now invokes (order.check_now, src/api/actions-build.ts)
+        TRACE_ORDER_WATCH: orderWatchName(cfg.prefix),
+        // names the projects' dictation vocabularies (<prefix>-<hash>-<language>: src/api/actions-voice.ts)
+        TRACE_PREFIX: cfg.prefix,
+        // what a project created in the web app gets, and how this installation can move (src/api/actions-layout.ts)
+        TRACE_LAYOUT: cfg.layout,
         // where this installation's self-update runs (projects.create says when a new project's agent arrives)
         ...(cfg.selfUpdate ? { TRACE_SELF_UPDATE: `${cfg.selfUpdate.repository}@${cfg.selfUpdate.branch}` } : {}),
         ...memoryEnv,
@@ -575,10 +612,19 @@ export class TraceStack extends Stack {
           StringLike: { [`${issuer}:job_workflow_ref`]: `${repository}/.github/workflows/ci.yml@refs/heads/${branch}` },
         }),
       })
+      // and, with the web app's WAF outside us-east-1, the bootstrap roles there and the edge stack's outputs
+      // (src/installer/edge.ts: <prefix>-edge, and whether CDKToolkit is there); nothing else in us-east-1
+      const edge = edgeNeeded(cfg)
       updater.addToPolicy(new iam.PolicyStatement({
         sid: 'CdkBootstrapRoles', actions: ['sts:AssumeRole'],
-        resources: [`arn:${partition}:iam::${account}:role/cdk-${CDK_QUALIFIER}-*-${account}-${region}`],
+        resources: [`arn:${partition}:iam::${account}:role/cdk-${CDK_QUALIFIER}-*-${account}-${region}`, ...(edge ? [`arn:${partition}:iam::${account}:role/cdk-${CDK_QUALIFIER}-*-${account}-${EDGE_REGION}`] : [])],
       }))
+      if (edge) {
+        updater.addToPolicy(new iam.PolicyStatement({
+          sid: 'EdgeStackOutputs', actions: ['cloudformation:DescribeStacks'],
+          resources: [`arn:${partition}:cloudformation:${EDGE_REGION}:${account}:stack/${edgeStackName(cfg.prefix)}/*`, `arn:${partition}:cloudformation:${EDGE_REGION}:${account}:stack/CDKToolkit/*`],
+        }))
+      }
       updater.addToPolicy(new iam.PolicyStatement({ sid: 'InstallationSettings', actions: ['s3:GetObject'], resources: [central.arnForObjects(`${INSTALLATION_PREFIX}/*`)] }))
       updater.addToPolicy(new iam.PolicyStatement({
         sid: 'StackOutputs', actions: ['cloudformation:DescribeStacks', 'cloudformation:ListStackResources'],

@@ -2,7 +2,8 @@
  * The traceability view (docs/user-journey.md, "Traceability view"): intent statements, requirements and evidence in
  * three columns, each requirement linked back to the intent line it came from and forward to the test that proves it.
  * A failing result colours its whole chain back to the intent, so the person sees which promise is at risk. Boxes are
- * HTML (they wrap and take focus); the links are one SVG beneath them, on the same coordinates.
+ * HTML (they wrap and take focus); the links are one SVG beneath them, on the same coordinates. An intent line trace
+ * proposed and no person has accepted yet is drawn dashed.
  */
 import { useMemo } from 'react'
 import { StatusBadge } from '@/components/status-badge'
@@ -22,7 +23,7 @@ export interface TraceNode {
 
 export interface TraceLayout {
   reqs: { row: CoverageRow; y: number; intent?: string; failing: boolean }[]
-  intents: { id: string; topic: string; text: string; y: number; failing: boolean; uncovered: boolean }[]
+  intents: { id: string; topic: string; text: string; y: number; failing: boolean; uncovered: boolean; proposed: boolean }[]
   height: number
 }
 
@@ -37,7 +38,7 @@ export function layoutTrace(rows: CoverageRow[], trace: TraceView | undefined, f
   const intents = (trace?.intent ?? []).map((it) => {
     const mine = reqs.filter((r) => r.intent === it.id)
     const y = mine.length ? (mine[0]!.y + mine[mine.length - 1]!.y) / 2 : spare++ * ROW
-    return { ...it, y, failing: mine.some((r) => r.failing), uncovered: mine.length === 0 && !filter }
+    return { id: it.id, topic: it.topic, text: it.text, y, failing: mine.some((r) => r.failing), uncovered: mine.length === 0 && !filter && it.uncovered === undefined, proposed: it.state === 'proposed' }
   }).filter((it) => !filter || reqs.some((r) => r.intent === it.id))
   const height = Math.max(reqs.length, ...intents.map((i) => i.y / ROW + 1), 1) * ROW
   return { reqs, intents, height }
@@ -76,8 +77,8 @@ export function Traceability({ rows, trace, filter, selected, onSelect }: {
           })}
         </svg>
         {l.intents.map((it) => (
-          <Box key={it.id} x={COL.intent.x} y={it.y} w={COL.intent.w} failing={it.failing} selected={selected === it.id} onClick={() => onSelect({ kind: 'intent', id: it.id })} label={`Intent ${it.topic}: ${it.text}`}>
-            <span className="block text-[11px] text-muted-foreground">{it.topic}{it.uncovered ? ' · not covered' : ''}</span>
+          <Box key={it.id} x={COL.intent.x} y={it.y} w={COL.intent.w} failing={it.failing} dashed={it.proposed} selected={selected === it.id} onClick={() => onSelect({ kind: 'intent', id: it.id })} label={`Intent ${it.topic}${it.proposed ? ', proposed by trace' : ''}: ${it.text}`}>
+            <span className="block text-[11px] text-muted-foreground">{it.topic}{it.proposed ? ' · proposed' : ''}{it.uncovered ? ' · not covered' : ''}</span>
             <span className="line-clamp-2">{it.text}</span>
           </Box>
         ))}
@@ -102,7 +103,7 @@ export function Traceability({ rows, trace, filter, selected, onSelect }: {
   )
 }
 
-function Box({ x, y, w, failing, selected, onClick, label, children }: { x: number; y: number; w: number; failing?: boolean; selected?: boolean; onClick: () => void; label: string; children: React.ReactNode }) {
+function Box({ x, y, w, failing, dashed, selected, onClick, label, children }: { x: number; y: number; w: number; failing?: boolean; dashed?: boolean; selected?: boolean; onClick: () => void; label: string; children: React.ReactNode }) {
   return (
     <button
       type="button"
@@ -112,6 +113,7 @@ function Box({ x, y, w, failing, selected, onClick, label, children }: { x: numb
       className={cn(
         'absolute overflow-hidden rounded-lg border bg-card px-2.5 py-1.5 text-left text-xs leading-snug shadow-xs hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         failing && 'border-destructive/60 bg-destructive/5',
+        dashed && 'border-dashed',
         selected && 'ring-2 ring-primary',
       )}
       style={{ left: x, top: y, width: w, height: BOX }}

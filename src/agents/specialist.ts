@@ -26,6 +26,9 @@ export const SHARED_TOOLS = [
   'kb.search', 'kb.status',
   // the project's journey: read it, ask people, check the criteria trace owns, say when stuck (src/tools/journey)
   'journey.status', 'journey.ask', 'journey.check', 'journey.stuck',
+  // the design record: propose intent, link requirements to it, architectures, the pin plan, sheet → requirements
+  // (src/tools/design). Agents propose; a person accepts, chooses and agrees through the guided skills
+  'design.intent', 'design.architecture', 'design.pins', 'design.sheets',
 ] as const
 
 /** The delegation tool (src/agents/delegate.ts): offered to a specialist on the runtime, never to the worker. */
@@ -93,7 +96,9 @@ export type SpecialistJob =
   | { kind: 'work-item'; item: { kind: 'ci-red' | 'conflict' | 'agent-fix'; number: number; ref: string; sha: string; title: string; own: boolean }
       /** The issue or PR body and its latest comments, read by the runner (the specialist has no shell). Data. */
       thread?: string | undefined }
-  | { kind: 'task'; request: string; requestedBy: string; issue?: number | undefined; branch: string }
+  | { kind: 'task'; request: string; requestedBy: string; issue?: number | undefined; branch: string
+      /** it carries on a paused job whose conversation was not kept: what was done (src/agents/runtime/job.ts) */
+      resumed?: Resumed | undefined }
   /** `tracectl agent prompt`: no job, for review. */
   | { kind: 'preview' }
 
@@ -144,6 +149,7 @@ function addJob(p: Composer, job: SpecialistJob, cfg: TraceConfig, repository: s
         from: JSON.stringify(job.requestedBy), request: quoted(job.request), branch: job.branch, default_branch: cfg.branch,
         asked_on: job.issue ? p.text('specialist.job.task.issue', { issue: job.issue }) : '',
       })
+      if (job.resumed) p.add('specialist.job.resumed', { paused_by: job.resumed.pausedBy, paused_at: job.resumed.pausedAt, commits: job.resumed.commits || '(none)', last_step: job.resumed.lastStep || '(not recorded)' })
       return
     case 'preview':
       p.add('specialist.job.preview')
@@ -188,4 +194,12 @@ export function composeSpecialist(s: Specialist, c: PromptContext): Composed {
 /** The specialist's prompt text (composeSpecialist without the provenance). */
 export function specialistPrompt(s: Specialist, c: PromptContext): string {
   return composeSpecialist(s, c).text
+}
+
+/** What a resumed task knows of the paused job it carries on. */
+export interface Resumed { pausedBy: string; pausedAt: string; resumedBy: string; commits: string; lastStep: string }
+
+/** The message that continues a paused job's own conversation (its transcript was kept and restored). */
+export function composeResumeNote(r: Resumed, branch: string, layers: Layers = NO_LAYERS): Composed {
+  return new Composer(layers).add('specialist.resume.continue', { paused_by: r.pausedBy, resumed_by: r.resumedBy, branch }).done()
 }

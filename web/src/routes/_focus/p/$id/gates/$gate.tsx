@@ -41,6 +41,7 @@ import { EmptyState, ErrorState, Loading, NotShared, OfflineBanner, QueryError }
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { ApiError, projectId, projectName, repoOf } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { gateSpendLine } from '@/components/project/gate-spend'
 import { ago, money } from '@/lib/format'
 import { useLiveStatus } from '@/lib/live'
 import { q, useCall, useJourney } from '@/lib/queries'
@@ -134,6 +135,9 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
   const to = from ? j.stages[j.stages.indexOf(from) + 1] : undefined
   const label = signLabel(g.name)
   const openCriterion = useCall('journey.criterion.open')
+  // the project's spend so far, for the cost line (admins only: cost.get carries no money for anyone else)
+  const cost = useQuery(q('cost.get', { repo }, { enabled: admin }))
+  const spendLine = admin && cost.data?.money ? gateSpendLine(cost.data) : null
 
   const state = { opened, acknowledged, admin, online: live.state !== 'offline' }
   const blockers = signBlockers(g, state)
@@ -260,7 +264,7 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
             )}
           </section>
 
-          {(g.forecast || g.spend) && (
+          {(g.forecast || g.spend || spendLine) && (
             <div className="mt-6 space-y-1 text-sm">
               {g.forecast && <p className="flex items-start gap-2"><Clock className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden /><span><Rich text={g.forecast} /></span></p>}
               {g.spend && (
@@ -269,6 +273,7 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
                   <span><strong>This gate commits {money(g.spend.total, g.spend.currency)}.</strong> {g.spend.changed}</span>
                 </p>
               )}
+              {spendLine && <p className="flex items-start gap-2 text-muted-foreground"><Clock className="mt-0.5 size-4 shrink-0" aria-hidden /><span>{spendLine}</span></p>}
             </div>
           )}
 
