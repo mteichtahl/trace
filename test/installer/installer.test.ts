@@ -468,11 +468,46 @@ describe('the local server', () => {
     const env = await call('/api/env', { key })
     expect(env.status).toBe(200)
     expect(JSON.parse(env.body)).toHaveProperty('profiles')
-    expect((await call('/api/plan', { method: 'POST', key, body: '{"answers":{}}' })).status).toBe(400)
+    // no account yet (the checks have not passed): a plain answer, not a schema error
+    const early = await call('/api/plan', { method: 'POST', key, body: '{"answers":{}}' })
+    expect(early.status).toBe(409)
+    expect(JSON.parse(early.body).error).toMatch(/checks have to pass first/)
+    expect((await call('/api/plan', { method: 'POST', key, body: '{"answers":[]}' })).status).toBe(400)
     expect((await call('/api/plan', { method: 'POST', key, body: 'x', type: 'text/plain' })).status).toBe(415)
     const planned = await call('/api/plan', { method: 'POST', key, body: JSON.stringify({ answers: ANSWERS }) })
     expect(JSON.parse(planned.body).steps).toHaveLength(14)
     expect(JSON.parse(planned.body).timeline.join(' ')).toMatch(/about 15 minutes of CloudFormation/)
+  })
+
+  it('streams what each check is doing, then the result, when the page asks for progress', async () => {
+    const i = createInstaller({
+      uiScript: '', traceRepository: () => null,
+      preflight: async (_in, t, onProgress) => {
+        if (t.startsWith('bad')) throw new Error('GitHub refused the token')
+        onProgress?.({ id: 'sts', label: 'Confirming which AWS account the credentials belong to', state: 'running' })
+        onProgress?.({ id: 'sts', label: 'Confirming which AWS account the credentials belong to', state: 'done' })
+        return { checks: [], facts: { account: '123456789012' }, token: null, repos: [], ok: true }
+      },
+    })
+    await new Promise<void>((r) => i.server.listen(0, '127.0.0.1', () => r()))
+    const port = (i.server.address() as AddressInfo).port
+    const post = (body: unknown): Promise<string> => new Promise((resolveP, reject) => {
+      const req = request({ host: '127.0.0.1', port, path: '/api/preflight', method: 'POST', headers: { host: `localhost:${port}`, 'x-trace-key': i.key, 'content-type': 'application/json', accept: 'application/x-ndjson' } },
+        (res) => { let b = ''; res.on('data', (d: Buffer) => { b += d.toString() }); res.on('end', () => resolveP(b)) })
+      req.on('error', reject)
+      req.end(JSON.stringify(body))
+    })
+    try {
+      const lines = (await post({ aws: { mode: 'keys' }, secrets: { awsAccessKeyId: 'AKIA', awsSecretAccessKey: 'x' }, token: TOKEN })).trim().split('\n').map((l) => JSON.parse(l) as { type: string; id?: string; state?: string; result?: { facts: { account: string } } })
+      expect(lines.filter((l) => l.type === 'progress').map((l) => `${l.id}:${l.state}`)).toEqual(['credentials:running', 'credentials:done', 'sts:running', 'sts:done'])
+      expect(lines.at(-1)?.result?.facts.account).toBe('123456789012')
+      // a check that can't run at all: said in plain words, as the stream's last line
+      const bad = (await post({ aws: { mode: 'keys' }, secrets: { awsAccessKeyId: 'AKIA', awsSecretAccessKey: 'x' }, token: `bad${TOKEN}` })).trim().split('\n').map((l) => JSON.parse(l) as { type: string; error?: string })
+      expect(bad.at(-1)).toMatchObject({ type: 'error' })
+      expect(bad.at(-1)?.error).toBe('GitHub refused the token')
+    } finally {
+      i.server.close()
+    }
   })
 
   it("says on the GitHub check which repository trace came from and whether the token can configure it", async () => {
