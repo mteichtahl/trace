@@ -344,8 +344,8 @@ export class TraceStack extends Stack {
 
     // ------------------------------------------------------------------ people: Cognito and the API runtime
     const signIn = web
-      ? 'To accept, open ' + web.url + '/invite and enter this email address and the temporary password; you then choose your own sign-in (a passkey, or a password with an authenticator app). You can also sign in with `trace login`.'
-      : 'Sign in with `trace login`.'
+      ? 'To accept, open ' + web.url + '/invite and enter this email address and the temporary password; you then choose your own sign-in (a passkey, or a password with an authenticator app). You can also sign in with `tracectl login`.'
+      : 'Sign in with `tracectl login`.'
     const users = new cognito.UserPool(this, 'Users', {
       userPoolName: `${cfg.prefix}-users`,
       selfSignUpEnabled: false,

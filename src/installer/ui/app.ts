@@ -467,7 +467,7 @@ function advanced(): HTMLElement {
     g.publishImages === false ? null : h('p', { class: 'muted' }, 'Publishing is part of the install, all by API: ECR Public repositories in us-east-1, a release role for trace\'s main branch and v* tags, the repository variables and release that tell every installation where the images are, and the first release run.'),
     ...buildRunners(),
     h('h3', {}, 'Web app'),
-    h('p', { class: 'muted' }, 'The address people sign in at, with passkeys or a password: CloudFront\'s own address unless you give a domain. `trace login` works either way.'),
+    h('p', { class: 'muted' }, 'The address people sign in at, with passkeys or a password: CloudFront\'s own address unless you give a domain. `tracectl login` works either way.'),
     checkbox('The web app (S3 and CloudFront, a small Lambda, live updates)', g.webEnabled, (v) => { g.webEnabled = v }),
     g.webEnabled ? h('div', {},
       h('div', { class: 'row' },

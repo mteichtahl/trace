@@ -1,6 +1,6 @@
 /**
  * The AWS Batch jobs this process has submitted and is still waiting on (src/gpu/batch.ts registers each one while it
- * waits). A job's tools run in its own tool server (`trace mcp`), so when the job is cancelled Claude stops, the
+ * waits). A job's tools run in its own tool server (`tracectl mcp`), so when the job is cancelled Claude stops, the
  * server's stdin ends, and terminateInFlight() terminates what it left running on the queue: a cancelled job never
  * leaves a graphics card job running (and billing) for hours. Nothing here loads the AWS SDK.
  */

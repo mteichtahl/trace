@@ -1,7 +1,7 @@
 /**
  * What the API runtime answers, read into the shapes the screens use. `call()` (lib/api.ts) passes every answer
  * through READERS[action] when there is one. The API's shapes stay as they are because other callers read them too
- * (the `trace` CLI, the chat agent's tools); the reading is here, once, rather than in each screen.
+ * (the `tracectl` CLI, the chat agent's tools); the reading is here, once, rather than in each screen.
  *
  * Each reader accepts an answer already in the app's shape and returns it unchanged, so mock mode (src/mock, which
  * answers in the app's shapes) and the tests keep working.

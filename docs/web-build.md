@@ -14,7 +14,7 @@ browser ──https──▶ CloudFront (one address)
                                      ├── /api/auth/*    our own sign-in: Cognito's user-pool API, refresh token in an
                                      │                  HTTP-only cookie
                                      ├── /api/call      { action, ...args } → the API runtime (AgentCore, the person's
-                                     │                  bearer token), exactly as `trace` CLI calls it
+                                     │                  bearer token), exactly as `tracectl` CLI calls it
                                      ├── /api/agui      the "trace" chat agent: AG-UI events over SSE; Claude on Bedrock
                                      │                  (ConverseStream); its tools are API actions called as the person
                                      ├── /api/voice/*   Polly speech (cached in S3) and signed Transcribe streaming URLs

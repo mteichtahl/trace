@@ -171,10 +171,10 @@ describe('the web app', () => {
     expect(pool.EmailConfiguration).toBeUndefined()
     expect(pool.UserPoolTier).toBe('ESSENTIALS')
     // the invitation points at the app's /invite page (the temporary password is typed there: no secret in a link), and
-    // still at `trace login`
+    // still at `tracectl login`
     const body = JSON.stringify((pool.AdminCreateUserConfig as { InviteMessageTemplate: { EmailMessage: unknown } }).InviteMessageTemplate.EmailMessage)
     expect(body).toMatch(/open https:\/\/".*\/invite and enter this email address and the temporary password/)
-    expect(body).toContain('`trace login`')
+    expect(body).toContain('`tracectl login`')
 
     const ses = synth(InfraPropsSchema.parse({ ...base, web: { sesFrom: 'trace@example.com', domainName: 'trace.example.com', certificateArn: CERT } }), 'WebSes')
     const p2 = only(ses.parent, 'AWS::Cognito::UserPool').Properties
@@ -354,7 +354,7 @@ describe('the web app', () => {
     const pool = only(off.parent, 'AWS::Cognito::UserPool').Properties
     expect(pool.WebAuthnRelyingPartyID).toBeUndefined()
     expect((pool.Policies as Record<string, unknown>).SignInPolicy).toBeUndefined()
-    expect(JSON.stringify(pool.AdminCreateUserConfig)).toContain('Sign in with `trace login`.')
+    expect(JSON.stringify(pool.AdminCreateUserConfig)).toContain('Sign in with `tracectl login`.')
     expect(off.parent.findOutputs(WEB_OUTPUTS.url)).toEqual({})
   }, 300_000)
 })

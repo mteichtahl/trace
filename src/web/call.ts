@@ -1,5 +1,5 @@
 /**
- * POST /api/call: `{ action, ...args }` to the API runtime as the signed-in person, exactly as the `trace` CLI calls it
+ * POST /api/call: `{ action, ...args }` to the API runtime as the signed-in person, exactly as the `tracectl` CLI calls it
  * (src/login/invoke.ts: InvokeAgentRuntime over HTTPS with the person's bearer token), and its answer back as is,
  * status and body, streamed through as it arrives.
  *

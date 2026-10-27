@@ -368,7 +368,7 @@ export function observabilityPlan(o: InfraProps['observability'], prefix: string
 
 /** The web app part of the deploy step's description. */
 export function webPlan(props: InfraProps): string {
-  if (!props.web.enabled) return '; no web app (sign in with `trace login` only)'
+  if (!props.web.enabled) return '; no web app (sign in with `tracectl login` only)'
   const where = props.web.domainName ? `https://${props.web.domainName} (point its DNS at the distribution after the deploy)` : 'CloudFront\'s own address'
   return `; the web app at ${where}: the static app on S3 behind CloudFront, its backend Lambda, live updates (AppSync Events), and sign-in with passkeys and passwords${props.web.sesFrom ? ` or a code by email (from ${props.web.sesFrom}, through SES)` : ''}`
 }

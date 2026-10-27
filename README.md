@@ -482,7 +482,7 @@ are the exception: they may mark those with read access alone (see [Inactive mem
 
 ## Web app
 
-The installer sets up a web app beside `trace login`: one address where people sign in and work with their projects.
+The installer sets up a web app beside `tracectl login`: one address where people sign in and work with their projects.
 It is on by default and needs nothing more at install time. It is built from `web/` (the app) and `src/web/` (its
 backend) when the stack is deployed, and lives in its own nested stack (`src/infra/web.ts`).
 
@@ -524,7 +524,7 @@ work.
 in with a passkey or a password, and Cognito's own sender still sends the invitations. To add codes by email, give a
 verified SES sender under Advanced (`web.sesFrom`). The pool then sends all its email through SES.
 
-The invitation email points at `https://<address>/invite` as well as `trace login`. The installer's last card has an
+The invitation email points at `https://<address>/invite` as well as `tracectl login`. The installer's last card has an
 Open trace button. Turn the app off with Advanced → Web app (`web.enabled: false`). Other stack settings:
 `web.model` (the chat model, which defaults to `model`) and `web.dashboards` (extra CloudWatch dashboards for the
 Operations page, beside `<prefix>-agents`).

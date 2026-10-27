@@ -38,7 +38,7 @@ export const SETTINGS: Setting[] = [
 
   { id: 'security.passkeys', group: 'security', label: 'Passkeys', line: 'Sign in with your device: nothing to remember and it cannot be phished.', keywords: ['webauthn', 'touch id', 'face id', 'security key'] },
   { id: 'security.password', group: 'security', label: 'Password and authenticator app', line: 'A password with a six-digit code from an app on your phone.', keywords: ['totp', 'two-factor', '2fa', 'mfa', 'code'] },
-  { id: 'security.sessions', group: 'security', label: 'Where you are signed in', line: 'Each browser and trace login session, with Sign out.', keywords: ['sessions', 'devices', 'sign out'] },
+  { id: 'security.sessions', group: 'security', label: 'Where you are signed in', line: 'Each browser and tracectl login session, with Sign out.', keywords: ['sessions', 'devices', 'sign out'] },
 
   { id: 'notifications.kinds', group: 'notifications', label: 'Each kind, and how', line: 'Gate ready, question, spend and agent stuck: in the app, by email, by push.', key: 'notifications.kinds', keywords: ['email', 'push', 'gate', 'question', 'spend', 'stuck'] },
   { id: 'notifications.emailAfter', group: 'notifications', label: 'Email when unanswered for', line: 'An email follows only if you have not acted in the app by then.', key: 'notifications.emailAfter' },
