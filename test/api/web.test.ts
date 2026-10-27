@@ -10,7 +10,7 @@ import { AgentMemory, type ProjectMemories, type SendClient } from '../../src/ag
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
 import { bucketStore, journeyStore } from '../../src/api/action-kit.js'
 import { kindOf } from '../../src/api/actions-files.js'
-import { neighbourhood, type GraphNode } from '../../src/api/actions-graph.js'
+import { neighbourhood, type GraphLink, type GraphNode } from '../../src/api/actions-graph.js'
 import { listen } from '../../src/api/server.js'
 import { AccessDenied, assign, standing } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
@@ -260,31 +260,38 @@ describe('me', () => {
 })
 
 describe('graph.neighbourhood', () => {
-  it('draws the record around a focus, with memories this person may see', async () => {
-    const r = await run(GUEST, 'graph.neighbourhood', { repo: 'acme/web', focus: 'requirement:REQ-001', depth: 2, memory: true }) as { nodes: { id: string; kind: string; distance: number }[]; links: { source: string; target: string; kind: string }[] }
+  it('draws the record around a focus in the app\'s vocabulary, with memories this person may see', async () => {
+    const r = await run(GUEST, 'graph.neighbourhood', { repo: 'acme/web', focus: 'requirement:REQ-001', depth: 2, memory: true }) as { nodes: { id: string; kind: string; status?: string; to?: string; distance: number }[]; links: { id: string; source: string; target: string; kind: string }[] }
     const ids = r.nodes.map((n) => n.id)
     expect(ids[0]).toBe('requirement:REQ-001')
     expect(ids).toEqual(expect.arrayContaining(['test:TST-001', 'run:run-1', 'run:run-0', 'gate:define', 'memory:mem-0']))
     expect(ids).not.toContain('memory:mem-1')
-    expect(r.links).toEqual(expect.arrayContaining([
-      { source: 'test:TST-001', target: 'requirement:REQ-001', kind: 'verifies' }, { source: 'run:run-1', target: 'requirement:REQ-001', kind: 'fails' },
-      { source: 'run:run-1', target: 'run:run-0', kind: 'uses' },
+    // the test item (still planned) serves the requirement; its failed run fails it; the run rests on the capture; the gate cites the run
+    expect(r.links.map(({ source, target, kind }) => ({ source, target, kind }))).toEqual(expect.arrayContaining([
+      { source: 'test:TST-001', target: 'requirement:REQ-001', kind: 'serves' }, { source: 'run:run-1', target: 'requirement:REQ-001', kind: 'fails' },
+      { source: 'run:run-1', target: 'run:run-0', kind: 'uses' }, { source: 'gate:define', target: 'run:run-1', kind: 'cites' },
+      { source: 'memory:mem-0', target: 'requirement:REQ-001', kind: 'related' },
     ]))
-    const one = await run(GUEST, 'graph.neighbourhood', { repo: 'acme/web', focus: 'requirement:REQ-001', depth: 1 }) as { nodes: { id: string }[] }
+    const byId = new Map(r.nodes.map((n) => [n.id, n]))
+    expect(byId.get('requirement:REQ-001')).toMatchObject({ kind: 'requirement', status: 'untested', to: '/p/acme~web/requirements/REQ-001' })
+    expect(byId.get('test:TST-001')).toMatchObject({ kind: 'run' })
+    expect(byId.get('gate:define')).toMatchObject({ kind: 'decision' })
+    const one = await run(GUEST, 'graph.neighbourhood', { repo: 'acme/web', focus: 'REQ-001', depth: 1 }) as { focus: string; nodes: { id: string }[] }
+    expect(one.focus).toBe('requirement:REQ-001')
     expect(one.nodes.map((n) => n.id).sort()).toEqual(['requirement:REQ-001', 'run:run-1', 'test:TST-001'])
     await expect(run(GUEST, 'graph.neighbourhood', { repo: 'acme/web', focus: 'requirement:NOPE' })).rejects.toThrow(/Nothing called/)
   })
 
   it('caps at 150 nodes, gathering the rest into groups by kind', () => {
-    const nodes = new Map<string, GraphNode>([['requirement:R', { id: 'requirement:R', kind: 'requirement', label: 'R', status: null, summary: null }]])
-    const links = []
+    const nodes = new Map<string, GraphNode>([['requirement:R', { id: 'requirement:R', kind: 'requirement', label: 'R' }]])
+    const links: GraphLink[] = []
     for (let i = 0; i < 400; i++) {
-      nodes.set(`run:${i}`, { id: `run:${i}`, kind: 'run', label: String(i), status: null, summary: null })
-      links.push({ source: `run:${i}`, target: 'requirement:R', kind: 'proves' as const })
+      nodes.set(`run:${i}`, { id: `run:${i}`, kind: 'run', label: String(i) })
+      links.push({ id: `l${i}`, source: `run:${i}`, target: 'requirement:R', kind: 'proves' })
     }
     const n = neighbourhood({ nodes, links }, 'requirement:R', 2)
-    expect(n.nodes.length).toBeLessThanOrEqual(150)
-    expect(n.nodes.at(-1)).toMatchObject({ kind: 'group', label: expect.stringMatching(/^\+\d+ more runs$/) })
+    expect(n.nodes.length).toBe(150)
+    expect(n.groups).toEqual([expect.objectContaining({ id: 'group:run', kind: 'run', parent: 'requirement:R', count: 251, label: '+251 more runs' })])
   })
 })
 

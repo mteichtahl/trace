@@ -4,14 +4,14 @@
  * from the focus (the Tab order), the shortest path between two items (in words), failing chains back to the intent,
  * and grouping beyond about 150 items into "+N more".
  *
- * The contract (docs/web-build.md) gives `{ nodes, links }` without fixing their fields; the shapes below are the
- * app's reading of them ("assumed"), and readGraph() accepts the obvious variants (source/target or from/to).
+ * graph.neighbourhood (src/api/actions-graph.ts) answers in this vocabulary: the API's NODE_KINDS and LINK_KINDS are
+ * these lists (test/api/graph-vocabulary.test.ts checks it). readGraph() still accepts from/to for source/target.
  */
 
 export const NODE_KINDS = ['intent', 'requirement', 'block', 'part', 'datasheet', 'run', 'decision', 'memory', 'document', 'person'] as const
 export type NodeKind = (typeof NODE_KINDS)[number]
 
-export const LINK_KINDS = ['derived_from', 'serves', 'uses', 'proves', 'fails', 'cites', 'decided_in', 'waives', 'learned_from', 'related'] as const
+export const LINK_KINDS = ['derived_from', 'serves', 'uses', 'proves', 'fails', 'cites', 'decided_in', 'decided_by', 'waives', 'learned_from', 'related'] as const
 export type LinkKind = (typeof LINK_KINDS)[number]
 
 export type NodeStatus = 'verified' | 'failing' | 'untested' | 'waived' | 'active' | 'inactive'
@@ -67,6 +67,7 @@ export const LINK_WORD: Record<LinkKind, string> = {
   fails: 'fails',
   cites: 'cites',
   decided_in: 'decided in',
+  decided_by: 'decided by',
   waives: 'waives',
   learned_from: 'learned from',
   related: 'related by meaning',

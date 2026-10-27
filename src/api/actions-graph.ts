@@ -1,41 +1,60 @@
 /**
- * graph.neighbourhood: what trace knows around one item, as nodes and links (docs/ui-design.md "Graph view").
+ * graph.neighbourhood: what trace knows around one item, as nodes and links (docs/ui-design.md "Graph view"), in the
+ * app's one vocabulary (web/src/lib/graph.ts NODE_KINDS and LINK_KINDS; test/api/graph-vocabulary.test.ts keeps the
+ * two equal).
  *
  * Built from ONE project's record after the read check, so it is filtered by access by construction: nothing of
  * another project is read, drawn, grouped or counted. From the project's database (default branch) and its journey record
  * (the journey store), like journey.get:
  *
- *   requirement   requirements                     test     test_items          run       runs (and test_results)
- *   gate          gates with their criteria        waiver   waivers             decision  decisions, answered questions
+ *   requirement   requirements (status: its evidence, record-read.ts)
+ *   run           runs, and test items ("Run or evidence": a planned test is evidence to come)
+ *   decision      gates (their signature), waivers, the decisions log, answered questions ("Decision or waiver")
  *   person        who signed, answered, waived (their email as the record has it)
  *   memory        with `memory: true`, the project's long-term memories most like the focus, through the same memory
  *                 the agents recall from, and only the ones this person may see (never another person's preferences)
+ *   (intent, block, part, datasheet, document: the record keeps none yet)
  *
- *   links   verifies (test → requirement), proves | fails (a result's run → each requirement of its test), ran (a
- *           result's run → its test), uses (a result's run → the tool runs it rests on), evidence (run → gate),
- *           waives (waiver → what it waives), decided in (decision → gate or question), signed | answered | waived
- *           (person → what they did), related (memory → the focus, by meaning: dashed)
+ *   links   proves | fails      a test item, or a run of it, against each requirement it covers (by the result) and a
+ *                               run against its test; a planned test `serves` its requirements
+ *           uses                a result's run → the tool runs it rests on
+ *           cites               a gate → the runs its criteria cite as evidence
+ *           waives              a waiver → what it waives
+ *           decided_in          a decision of the log → the gate it was made at
+ *           decided_by          a gate, an answer or a waiver → the person who signed, gave or took it
+ *           related             a memory → the focus, by meaning (dashed)
  *
- * The focus is "<kind>:<id>" (requirement:REQ-001, run:4f2a…, gate:capture, person:<email>); depth 1 to 3 (2 by
- * default). At most 150 nodes are returned, nearest first; past that, the rest of each kind gather into one group node
- * ("+12 more runs") with their ids, linked to the focus.
+ * The focus is "<kind>:<id>" as the nodes carry it (requirement:REQ-001, run:4f2a…, test:TST-1, gate:capture,
+ * person:<email>), or a bare id (REQ-001) found among them; depth 1 to 3 (2 by default). At most 150 nodes are
+ * returned, nearest first; past that, the rest of each kind gather into `groups` ({ id, kind, members, label, parent }:
+ * "+12 more runs"), the shape the app's own grouping uses.
  */
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
+import { loadJourney } from '../core/journey.js'
 import { ActionError, type Context, Repo, def, memoryInclude, projectMemory, withRecordDb } from './action-kit.js'
+import { requirementEvidence } from './record-read.js'
 
-export const NODE_KINDS = ['requirement', 'test', 'run', 'gate', 'waiver', 'decision', 'person', 'memory', 'group'] as const
+/** The app's vocabulary (web/src/lib/graph.ts). */
+export const NODE_KINDS = ['intent', 'requirement', 'block', 'part', 'datasheet', 'run', 'decision', 'memory', 'document', 'person'] as const
 export type NodeKind = (typeof NODE_KINDS)[number]
-export const LINK_KINDS = ['verifies', 'proves', 'fails', 'ran', 'uses', 'evidence', 'waives', 'decided in', 'signed', 'answered', 'waived', 'related', 'group'] as const
+export const LINK_KINDS = ['derived_from', 'serves', 'uses', 'proves', 'fails', 'cites', 'decided_in', 'decided_by', 'waives', 'learned_from', 'related'] as const
 export type LinkKind = (typeof LINK_KINDS)[number]
+export const NODE_STATUSES = ['verified', 'failing', 'untested', 'waived', 'active', 'inactive'] as const
+export type NodeStatus = (typeof NODE_STATUSES)[number]
 
-export interface GraphNode { id: string; kind: NodeKind; label: string; status: string | null; summary: string | null; members?: string[] | undefined; count?: number | undefined }
-export interface GraphLink { source: string; target: string; kind: LinkKind; dashed?: boolean | undefined }
+export interface GraphNode {
+  id: string; kind: NodeKind; label: string; title?: string | undefined; summary?: string | undefined; status?: NodeStatus | undefined
+  to?: string | undefined; facts?: Record<string, string> | undefined; repo?: string | undefined
+}
+export interface GraphLink { id: string; source: string; target: string; kind: LinkKind; dashed?: boolean | undefined }
+export interface GraphGroup { id: string; kind: NodeKind; members: string[]; label: string; parent: string; count: number }
 
 export const MAX_NODES = 150
 
 const KIND_WORDS: Readonly<Record<NodeKind, string>> = {
-  requirement: 'requirements', test: 'test items', run: 'runs', gate: 'gates', waiver: 'waivers', decision: 'decisions', person: 'people', memory: 'memories', group: 'groups',
+  intent: 'intent statements', requirement: 'requirements', block: 'blocks', part: 'parts', datasheet: 'datasheet pages', run: 'runs',
+  decision: 'decisions', memory: 'memories', document: 'documents', person: 'people',
 }
 
 const hasTable = (db: DatabaseSync, t: string): boolean => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t))
@@ -52,89 +71,95 @@ const evidenceRuns = (v: unknown): string[] => {
   } catch { return [] }
 }
 const short = (t: string, n = 80): string => (t.length > n ? `${t.slice(0, n - 1)}…` : t)
+/** A run's or test's status as the graph's: pass → verified, fail/error → failing, waived, else untested. */
+const resultStatus = (v: unknown): NodeStatus => (v === 'pass' ? 'verified' : v === 'fail' || v === 'error' ? 'failing' : v === 'waived' ? 'waived' : 'untested')
 
-/** The whole project graph from its database (bounded by what one project's record holds). */
-export function projectGraph(db: DatabaseSync): { nodes: Map<string, GraphNode>; links: GraphLink[] } {
+/** The whole project graph from its database (bounded by what one project's record holds). `repo` gives addresses. */
+export function projectGraph(db: DatabaseSync, repo?: string): { nodes: Map<string, GraphNode>; links: GraphLink[] } {
   const nodes = new Map<string, GraphNode>()
   const links: GraphLink[] = []
+  const pid = repo ? repo.replace('/', '~') : null
+  const at = (path: string): { to?: string; repo?: string } => (pid ? { to: `/p/${pid}${path}`, repo } : {})
   const node = (n: GraphNode): void => { if (!nodes.has(n.id)) nodes.set(n.id, n) }
-  const link = (source: string, target: string, kind: LinkKind): void => { links.push({ source, target, kind }) }
+  const link = (source: string, target: string, kind: LinkKind): void => { links.push({ id: `${source}>${kind}>${target}`, source, target, kind }) }
   const person = (who: string | null): string | null => {
     if (!who) return null
     const id = `person:${who}`
-    node({ id, kind: 'person', label: who, status: null, summary: null })
+    node({ id, kind: 'person', label: who, title: who, ...(repo ? { repo } : {}) })
     return id
   }
   const rows = (sql: string): Record<string, unknown>[] => db.prepare(sql).all() as Record<string, unknown>[]
+  const r = loadJourney(db)
 
-  if (hasTable(db, 'requirements')) {
-    for (const r of rows('SELECT id, text, kind, status FROM requirements')) {
-      node({ id: `requirement:${String(r.id)}`, kind: 'requirement', label: String(r.id), status: s(r.status), summary: short(String(r.text), 200) })
-    }
+  for (const q of requirementEvidence(db, r)) {
+    node({ id: `requirement:${q.id}`, kind: 'requirement', label: q.id, title: short(q.text, 120), summary: q.why, status: q.evidence, facts: { Kind: q.kind, Status: q.status, ...(q.source ? { Source: q.source } : {}) }, ...at(`/requirements/${encodeURIComponent(q.id)}`) })
   }
   const testReqs = new Map<string, string[]>()
   if (hasTable(db, 'test_items')) {
-    for (const t of rows('SELECT id, title, requirements, status FROM test_items')) {
+    for (const t of rows('SELECT id, title, requirements, method, status FROM test_items')) {
       const id = `test:${String(t.id)}`
-      node({ id, kind: 'test', label: String(t.id), status: s(t.status), summary: short(String(t.title), 200) })
+      const status = resultStatus(t.status)
+      node({ id, kind: 'run', label: String(t.id), title: short(String(t.title), 120), summary: `Test item (${String(t.method)}), ${String(t.status)}.`, status, facts: { 'Test item': String(t.id), Method: String(t.method), Status: String(t.status) }, ...(repo ? { repo } : {}) })
       const reqs = list(t.requirements)
       testReqs.set(String(t.id), reqs)
-      for (const req of reqs) link(id, `requirement:${req}`, 'verifies')
+      for (const req of reqs) link(id, `requirement:${req}`, status === 'verified' ? 'proves' : status === 'failing' ? 'fails' : 'serves')
     }
   }
   const runs = new Map<string, Record<string, unknown>>()
-  for (const r of rows('SELECT id, kind, subject, status, summary FROM runs ORDER BY started DESC LIMIT 2000')) runs.set(String(r.id), r)
+  for (const x of rows('SELECT id, kind, subject, status, summary FROM runs ORDER BY started DESC LIMIT 2000')) runs.set(String(x.id), x)
   const runNode = (id: string): string => {
-    const r = runs.get(id)
-    node({ id: `run:${id}`, kind: 'run', label: r ? `${String(r.kind)}${r.subject ? ` · ${String(r.subject)}` : ''}` : id, status: r ? s(r.status) : null, summary: r ? s(r.summary) : null })
+    const x = runs.get(id)
+    node({
+      id: `run:${id}`, kind: 'run', label: x ? `${String(x.kind)}${x.subject ? ` · ${String(x.subject)}` : ''}` : id, title: x ? String(x.kind) : id,
+      ...(x?.summary ? { summary: String(x.summary) } : {}), ...(x ? { status: resultStatus(x.status) } : {}), facts: { 'Run id': id, ...(x ? { Kind: String(x.kind) } : {}) }, ...at(`/runs/${encodeURIComponent(id)}`),
+    })
     return `run:${id}`
   }
   if (hasTable(db, 'test_results')) {
     for (const t of rows('SELECT run_id, test_id, status, evidence FROM test_results ORDER BY at DESC LIMIT 2000')) {
       const run = runNode(String(t.run_id))
-      link(run, `test:${String(t.test_id)}`, 'ran')
-      const verdict: LinkKind = t.status === 'pass' ? 'proves' : 'fails'
-      if (t.status === 'pass' || t.status === 'fail') for (const req of testReqs.get(String(t.test_id)) ?? []) link(run, `requirement:${req}`, verdict)
+      const verdict: LinkKind | null = t.status === 'pass' ? 'proves' : t.status === 'fail' || t.status === 'error' ? 'fails' : null
+      if (verdict) {
+        link(run, `test:${String(t.test_id)}`, verdict)
+        for (const req of testReqs.get(String(t.test_id)) ?? []) link(run, `requirement:${req}`, verdict)
+      }
       for (const e of list(t.evidence)) link(run, runNode(e), 'uses')
     }
   }
-  if (hasTable(db, 'gates')) {
-    for (const g of rows('SELECT id, name, stage FROM gates')) node({ id: `gate:${String(g.id)}`, kind: 'gate', label: `the ${String(g.name)} gate`, status: null, summary: null })
-    for (const c of rows('SELECT id, gate, text, status, evidence FROM gate_criteria')) {
-      for (const run of evidenceRuns(c.evidence)) link(runNode(run), `gate:${String(c.gate)}`, 'evidence')
+  if (r) {
+    const signed = new Map(r.signatures.filter((x) => x.supersededAt === null && x.revision === r.journey.revision).map((x) => [x.gate, x]))
+    for (const g of r.gates) {
+      const sig = signed.get(g.id)
+      node({ id: `gate:${g.id}`, kind: 'decision', label: `the ${g.name} gate`, title: `The ${g.name} gate`, summary: sig ? `Signed by ${sig.by}.` : 'Not signed yet.', status: sig ? 'verified' : 'untested', facts: { Gate: g.id, Stage: g.stage }, ...at(`/gates/${encodeURIComponent(g.id)}`) })
+      if (sig) { const p = person(sig.by); if (p) link(`gate:${g.id}`, p, 'decided_by') }
     }
-    for (const sig of rows('SELECT gate, by FROM gate_signatures WHERE superseded_at IS NULL')) {
-      const g = `gate:${String(sig.gate)}`
-      const n = nodes.get(g)
-      if (n) n.status = 'signed'
-      const p = person(s(sig.by))
-      if (p) link(p, g, 'signed')
-    }
-    for (const w of rows('SELECT id, target_kind, target, gate, reason, severity, by, closed_at FROM waivers')) {
-      const id = `waiver:${String(w.id)}`
-      node({ id, kind: 'waiver', label: `waiver on ${String(w.target)}`, status: w.closed_at === null ? s(w.severity) : 'closed', summary: short(String(w.reason), 200) })
-      const target = w.target_kind === 'criterion' ? `gate:${String(w.gate)}` : w.target_kind === 'requirement' ? `requirement:${String(w.target)}` : w.target_kind === 'test' ? `test:${String(w.target)}` : null
+    for (const c of r.criteria) for (const run of evidenceRuns(JSON.stringify(c.evidence))) link(`gate:${c.gate}`, runNode(run), 'cites')
+    for (const w of r.waivers) {
+      const id = `waiver:${w.id}`
+      node({ id, kind: 'decision', label: `waiver on ${w.target}`, title: `Waiver on ${w.target}`, summary: short(w.reason, 200), status: w.closedAt === null ? 'waived' : 'inactive', facts: { Severity: w.severity, Scope: w.scope }, ...(repo ? { repo } : {}) })
+      const target = w.targetKind === 'criterion' ? `gate:${w.gate ?? ''}` : w.targetKind === 'requirement' ? `requirement:${w.target}` : w.targetKind === 'test' ? `test:${w.target}` : null
       if (target) link(id, target, 'waives')
-      const p = person(s(w.by))
-      if (p) link(p, id, 'waived')
+      const p = person(w.by)
+      if (p) link(id, p, 'decided_by')
     }
-    for (const q of rows('SELECT id, text, answer, answered_by FROM questions WHERE answered_at IS NOT NULL')) {
-      const id = `decision:q-${String(q.id)}`
-      node({ id, kind: 'decision', label: short(String(q.answer ?? ''), 60), status: 'answered', summary: short(String(q.text), 200) })
-      const p = person(s(q.answered_by))
-      if (p) link(p, id, 'answered')
+    for (const q of r.questions.filter((x) => x.answeredAt !== null)) {
+      const id = `decision:q-${q.id}`
+      node({ id, kind: 'decision', label: short(q.answer ?? '', 60), title: short(q.text, 120), summary: `Answered: ${q.answer ?? ''}`, status: 'active', facts: { 'Asked by': q.askedBy }, ...(repo ? { repo } : {}) })
+      const p = person(q.answeredBy)
+      if (p) link(id, p, 'decided_by')
     }
-    for (const d of rows("SELECT id, kind, ref, summary, by FROM decisions WHERE kind IN ('gate.signed', 'gate.returned', 'stage.reopened') ORDER BY at DESC LIMIT 500")) {
-      const id = `decision:${String(d.id)}`
-      node({ id, kind: 'decision', label: short(String(d.summary), 60), status: String(d.kind).split('.')[1] ?? null, summary: String(d.summary) })
-      if (d.ref && nodes.has(`gate:${String(d.ref)}`)) link(id, `gate:${String(d.ref)}`, 'decided in')
+    for (const d of r.decisions.filter((x) => ['gate.signed', 'gate.returned', 'stage.reopened'].includes(x.kind)).slice(0, 500)) {
+      const id = `decision:${d.id}`
+      node({ id, kind: 'decision', label: short(d.summary, 60), title: short(d.summary, 120), summary: d.summary, facts: { Kind: d.kind }, ...(repo ? { repo } : {}) })
+      if (d.ref && nodes.has(`gate:${d.ref}`)) link(id, `gate:${d.ref}`, 'decided_in')
     }
   }
-  return { nodes, links: links.filter((l) => nodes.has(l.source) && nodes.has(l.target)) }
+  const seen = new Set<string>()
+  return { nodes, links: links.filter((l) => nodes.has(l.source) && nodes.has(l.target) && !seen.has(l.id) && Boolean(seen.add(l.id))) }
 }
 
 /** The neighbourhood of `focus` within `depth` links, nearest first, capped with groups. Pure. */
-export function neighbourhood(g: { nodes: Map<string, GraphNode>; links: GraphLink[] }, focus: string, depth: number, o: { kinds?: readonly NodeKind[] | undefined; max?: number | undefined } = {}): { nodes: GraphNode[]; links: GraphLink[]; distance: Map<string, number> } {
+export function neighbourhood(g: { nodes: Map<string, GraphNode>; links: GraphLink[] }, focus: string, depth: number, o: { kinds?: readonly NodeKind[] | undefined; max?: number | undefined } = {}): { nodes: GraphNode[]; links: GraphLink[]; groups: GraphGroup[]; distance: Map<string, number> } {
   const max = o.max ?? MAX_NODES
   const adj = new Map<string, GraphLink[]>()
   for (const l of g.links) {
@@ -159,27 +184,41 @@ export function neighbourhood(g: { nodes: Map<string, GraphNode>; links: GraphLi
     }
   }
   let kept = order
-  const groups: GraphNode[] = []
+  const groups: GraphGroup[] = []
   if (order.length > max) {
-    const overflow = order.slice(max - Math.min(NODE_KINDS.length, 8))
-    kept = order.slice(0, max - Math.min(NODE_KINDS.length, 8))
+    kept = order.slice(0, max)
+    const overflow = order.slice(max)
     const byKind = new Map<NodeKind, string[]>()
     for (const id of overflow) {
-      const k = g.nodes.get(id)?.kind ?? 'group'
-      byKind.set(k, [...(byKind.get(k) ?? []), id])
+      const k = g.nodes.get(id)?.kind
+      if (k) byKind.set(k, [...(byKind.get(k) ?? []), id])
     }
+    const keepSet = new Set(kept)
     for (const [k, ids] of byKind) {
-      groups.push({ id: `group:${k}`, kind: 'group', label: `+${ids.length} more ${KIND_WORDS[k]}`, status: null, summary: null, members: ids.slice(0, 500), count: ids.length })
+      // the drawn node most of them link to, else the focus
+      const votes = new Map<string, number>()
+      for (const l of g.links) {
+        const other = ids.includes(l.source) ? l.target : ids.includes(l.target) ? l.source : null
+        if (other && keepSet.has(other)) votes.set(other, (votes.get(other) ?? 0) + 1)
+      }
+      const parent = [...votes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? focus
+      groups.push({ id: `group:${k}`, kind: k, members: ids.slice(0, 500), count: ids.length, parent, label: `+${ids.length} more ${KIND_WORDS[k]}` })
     }
   }
   const keep = new Set(kept)
   const nodes = kept.map((id) => g.nodes.get(id)).filter((n): n is GraphNode => Boolean(n))
   const links = g.links.filter((l) => keep.has(l.source) && keep.has(l.target))
-  for (const grp of groups) { nodes.push(grp); links.push({ source: focus, target: grp.id, kind: 'group', dashed: true }) }
-  return { nodes, links, distance }
+  return { nodes, links, groups, distance }
 }
 
-const Focus = z.string().min(3).max(400).regex(/^[a-z]+:.+$/, 'a focus such as requirement:REQ-001')
+/** The node a focus names: its id, or a bare id (REQ-001) matched to "<kind>:REQ-001", requirements first. */
+export function resolveFocus(nodes: ReadonlyMap<string, GraphNode>, focus: string): string | null {
+  if (nodes.has(focus)) return focus
+  const hits = [...nodes.keys()].filter((id) => id.slice(id.indexOf(':') + 1) === focus)
+  return hits.find((id) => id.startsWith('requirement:')) ?? hits[0] ?? null
+}
+
+const Focus = z.string().min(1).max(400)
 
 export const GRAPH_ACTIONS = {
   'graph.neighbourhood': def('read', Repo.extend({
@@ -189,25 +228,27 @@ export const GRAPH_ACTIONS = {
     memory: z.boolean().default(false),
     memory_top_k: z.number().int().min(1).max(20).default(6),
   }), async (a, ctx: Context) => {
-    const g = await withRecordDb(ctx, a.repo, (db) => projectGraph(db))
-    if (!g.nodes.has(a.focus)) throw new ActionError(`Nothing called ${a.focus} is in this project's record.`)
+    const g = await withRecordDb(ctx, a.repo, (db) => projectGraph(db, a.repo))
+    const focus = resolveFocus(g.nodes, a.focus)
+    if (!focus) throw new ActionError(`Nothing called ${a.focus} is in this project's record.`)
     if (a.memory && (!a.kinds || a.kinds.includes('memory'))) {
       const mem = projectMemory(ctx, a.repo)
-      const focus = g.nodes.get(a.focus)
-      if (mem && focus) {
-        const records = await mem.longTerm.recallProject(a.repo, `${focus.label} ${focus.summary ?? ''}`.trim(), { agent: undefined, include: memoryInclude(ctx, a.repo), topK: a.memory_top_k })
+      const f = g.nodes.get(focus)
+      if (mem && f) {
+        const records = await mem.longTerm.recallProject(a.repo, `${f.title ?? f.label} ${f.summary ?? ''}`.trim(), { agent: undefined, include: memoryInclude(ctx, a.repo), topK: a.memory_top_k })
         for (const r of records) {
-          g.nodes.set(`memory:${r.id}`, { id: `memory:${r.id}`, kind: 'memory', label: short(r.text, 60), status: r.strategy, summary: short(r.text, 300) })
-          g.links.push({ source: `memory:${r.id}`, target: a.focus, kind: 'related', dashed: true })
+          g.nodes.set(`memory:${r.id}`, { id: `memory:${r.id}`, kind: 'memory', label: short(r.text, 60), title: short(r.text, 120), summary: short(r.text, 300), status: r.inactive ? 'inactive' : 'active', ...(r.strategy ? { facts: { Kind: r.strategy } } : {}), repo: a.repo })
+          g.links.push({ id: `memory:${r.id}>related>${focus}`, source: `memory:${r.id}`, target: focus, kind: 'related', dashed: true })
         }
       }
     }
-    const n = neighbourhood(g, a.focus, a.depth, { kinds: a.kinds ? [...a.kinds, 'group'] : undefined })
+    const n = neighbourhood(g, focus, a.depth, { kinds: a.kinds })
     return {
-      repo: a.repo, focus: a.focus, depth: a.depth,
+      repo: a.repo, focus, depth: a.depth,
       nodes: n.nodes.map((x) => ({ ...x, distance: n.distance.get(x.id) ?? 1 })),
       links: n.links,
-      truncated: n.nodes.some((x) => x.kind === 'group'),
+      groups: n.groups,
+      truncated: n.groups.length > 0,
     }
   }),
 }
