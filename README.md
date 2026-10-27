@@ -1686,6 +1686,22 @@ Metrics: `trace.invocations`, `trace.jobs` and `trace.job.duration`, `trace.tool
 `trace.tool.duration`, `gen_ai.client.token.usage` (by token type and model), `trace.claude.cost`, and
 `trace.gpu.jobs` and `trace.gpu.duration`. Their dimensions are kinds, agents, tool names and outcomes, never ids.
 
+Per project, each project's own worker also records `trace.project.jobs`, `trace.project.job.duration`,
+`trace.project.tool.calls`, `trace.project.tool.duration`, `trace.project.claude.cost`, `trace.project.gpu.jobs` and
+`trace.project.gpu.duration`, with two dimensions only: `trace.project` (`project-<8 hex>`, the project's hash, never
+its name) and the outcome. The aggregate series above are unchanged; these are separate names, so nothing is counted
+twice. The agents' dashboard draws them per project, and Operations names each series' project for the people on it:
+contributors and reviewers see their projects' jobs and tool calls; cost is for admins.
+
+What they cost: each combination of dimension values is one CloudWatch custom metric, $0.30 a month (first 10,000;
+prorated by the hour, and only for metrics that receive data that month). A project adds at most 15: jobs and job time
+by three outcomes (6), tool calls and tool time by two (4), Claude cost (1), remote jobs and their time by two (4). So
+at most $4.50 a month for a busy project, and $270 a month at the most projects an installation allows (60), all of
+them active every month; typically a few dollars. Metrics arrive as CloudWatch Logs (EMF), so the ingestion is a few
+bytes per job and tool call. Reading them is the larger cost at scale: GetMetricData is $0.01 per 1,000 metrics, and
+the six per-project widgets return up to 60 x 3 series each, so one Operations refresh at 60 busy projects reads about
+1,000 more metrics (1 cent); the page refreshes every 60 seconds while it is visible, slower when it is not.
+
 What is never recorded: prompts, tool arguments and results, file contents, tokens or keys, and email addresses. A
 person is a 16-character sha256 of their email, the same hash the agents' memory uses. Every attribute also passes a
 guard that truncates it and replaces anything shaped like a credential.

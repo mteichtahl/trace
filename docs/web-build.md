@@ -80,15 +80,19 @@ All bodies are JSON unless noted. Errors: `{ ok: false, error, code? }` with a f
 - Channel per person: `/trace/users/<sub>`. The namespace's `onSubscribe` handler refuses any channel whose `<sub>` is
   not the subscriber's own.
 - Event: `{ type, repo?, at, ...detail }` with `type` one of `record.changed` (`{ repo, what: 'journey'|'settings'|
-  'memory'|'chats'|'people'|'prompts'|'kb' }`), `job.updated` (`{ repo, jobId, state }`), `notification`
+  'memory'|'chats'|'people'|'prompts'|'kb' }`), `job.updated` (`{ repo, jobId, state }`; both null when more than ten
+  of the project's jobs changed at once), `notification`
   (`{ id, kind, repo, summary }`). The app treats each as "invalidate these queries" and refetches; payloads never
   carry project content.
 - Who publishes: the web backend, after an ok answer to a mutating `/api/call` (`src/web/events.ts` lists them, with
   `stuck.dismiss` among the journey's), to the project's members and the caller; and `<prefix>-journey-events`
   (`src/web/journey-events.ts`, in the web stack beside the events API) for what agents write. Agents write their facts
-  (`projects/<slug>/journey-agent/facts.db`) straight to the central bucket, which no backend sees. The bucket sends
-  its object events to EventBridge (its own `NotificationConfiguration`, no custom resource), and a rule on "Object
-  Created" of `projects/*/journey-agent/facts.db` in that bucket invokes the function. It takes the project from the
+  (`projects/<slug>/journey-agent/facts.db`) and each project's worker its job index (`journey-agent/jobs.db`) straight
+  to the central bucket, which no backend sees. The bucket sends its object events to EventBridge (its own
+  `NotificationConfiguration`, no custom resource), and a rule on "Object Created" of `projects/*/journey-agent/facts.db`
+  or `projects/*/journey-agent/jobs.db` in that bucket invokes the function. For a job index it publishes `job.updated`
+  for each job the write changed to everyone on the project, and reads only that object (role statement
+  `JobIndexRead`). It takes the project from the
   key, the people on it from the access store (admins, and the people assigned, by part), and publishes
   `record.changed { repo, what: 'journey' }` to each, plus `notification { id, kind: 'question'|'stuck', repo,
   summary }` (a fixed line, no project content) for a question or stuck report written in that change, to the people
@@ -125,7 +129,8 @@ reviewer. `require_(p, repo, 'write')` needs the contributor part (or admin). `p
 | `me.get` / `me.set` | signed-in | the person's preferences (one JSON document, `key` paths), and per-table views |
 | `graph.neighbourhood` | read | `{ nodes, links }` around a focus item, depth 1–3, from the project record, memory and the knowledge base |
 | `files.list` / `files.url` | read | the project's files by kind, and a short-lived signed URL (or bytes) for one |
-| `job.control` | write on the job's project | `{ id, op }`: cancel aborts the job on its worker and terminates the Batch jobs its tools left running; pause, resume and move_up answer `{ ok: false, reason }` (a job cannot be held, and nothing is queued). Every job view carries `controls` |
+| `jobs.list` | read | `{ repo, jobs, agents, batch, updatedAt }`: the project's job index (`projects/<slug>/journey-agent/jobs.db`, `src/core/job-index.ts`, written by its worker from its jobs' own events, with a heartbeat): running, paused, queued (in each agent's queue order, with why it waits) and the last day's finished jobs, each with its agent, who started it, current step, typical time (median of its last 20 that succeeded), branch and `controls`; each agent's status (Working, Queued, Waiting on a person, Stuck, Idle, from the index and the journey's questions and stuck reports) and its last day; the graphics card and CPU jobs running. `journey.get`'s `jobs` is the same list |
+| `job.control` | write on the job's project | `{ id, op }`: pause (a running task stops before Claude's next tool call, its work committed and pushed on its branch and its transcript kept; a queued one is held), resume (a paused task carries on as a new task on its branch, continuing its conversation when it was kept; a held one is released), move_up (one place up its agent's queue), cancel (aborts it on its worker and terminates its Batch jobs; a paused one is discarded). People's controls are the journey record's `job_controls`, never the agents' index. A workflow's job can only be cancelled. Every job view carries `controls` |
 | `requirements.trace` | read | each requirement with its evidence status (verified, failing, untested, waived); `intent: []` and `intent_note` until the record keeps intent statements |
 | `design.get` | read | the KiCad files with the latest ERC and DRC findings, pictures runs stored, and `notes` for what is not recorded (block diagram, pin plan) |
 | `build.get` / `order.record` | read / write | releases (snapshots), orders (journey table `orders`), the order ready to place; recording an order answers a ship wait that nothing checks yet |
