@@ -3,7 +3,8 @@
  * Gate signing, Release review, Order submit, Design import, Certification run, Production release): the step's
  * picture, what the step asks, the items trace prepared for it (from skill.get), trace beside it with the step's
  * summary and its recommendation, and the quality bar from the checker. Continue moves on; any done step can be
- * revisited; leaving keeps the draft.
+ * revisited; leaving keeps the draft. The design skills (Requirements review, Architecture choice) add their decisions
+ * (design-steps.tsx).
  */
 import { Link } from '@tanstack/react-router'
 import { ArrowRight, Check } from 'lucide-react'
@@ -18,10 +19,11 @@ import { projectId } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { type SkillDef, pictureOf } from './definitions'
 import { NoChecker, StepHeader, TraceIntro, Unavailable } from './parts'
+import { DesignSteps, type DesignDraft } from './design-steps'
 import { StepPicture } from './step-picture'
 import { type SkillDraftBase, qualityChecks, useSkill } from './use-skill'
 
-interface Draft extends SkillDraftBase {
+interface Draft extends SkillDraftBase, DesignDraft {
   resolved: string[]
   choice?: { option: string; reason?: string }
 }
@@ -68,6 +70,9 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
           onChoose={(c) => s.draft.setData((d) => ({ ...d, choice: { option: c.option, reason: c.reason } }))}
         />
       )}
+
+      <DesignSteps repo={repo} skill={def.id} step={s.step.id} view={v} draft={s.draft.data} setDraft={(fn) => s.draft.setData((d) => ({ ...d, ...fn(d) }))} />
+      {v?.pending_errors?.length ? <p className="mt-3 text-sm text-destructive">{v.pending_errors.join(' ')}</p> : null}
 
       <section className="mt-6" aria-labelledby="items">
         <h2 id="items" className="text-base font-semibold">For this step</h2>

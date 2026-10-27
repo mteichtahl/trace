@@ -898,6 +898,25 @@ test items and coverage points follow, and the rename is listed as a merge note 
 | `verify.cocotb` | cocotb tests on Icarus or Verilator. Per-test verdicts come from results.xml. |
 | `verify.formal` | A `.sby` file through SymbiYosys, or files + top in bmc, prove or cover mode. Without sby it runs yosys and yosys-smtbmc directly (the steps of sby's smtbmc engine). Counterexample traces come back as VCD artifacts. |
 
+Beside the requirements, the project database keeps the design record the agents propose for Define, Architect and
+Capture (`src/tools/design`): intent statements with their source, each requirement's link to the statement it is
+derived from, the architectures compared (blocks with their key parts and the requirements each serves, connections,
+criteria and scores), the pin plan, and which requirements each schematic sheet serves. It changes with the design, so
+it is committed and merged (newer row wins) like the requirements. Agents only propose: accepting intent, striking a
+requirement, fixing the criteria, choosing an architecture and agreeing a pin plan are a person's decisions, made in
+the guided skills (or `design.decide`) and kept in the journey record, which agents cannot write.
+
+| Tool | What it does |
+| --- | --- |
+| `design.intent` | Intent statements by topic (purpose, environment, power, interfaces, performance, physical, compliance, build, constraints, references): words, source, interface details, numeric limits, "don't care", "unknown, decide by", open questions with an owner, conflicts. Links a requirement to the statements it is derived from. Lists them with people's decisions where the journey is readable. |
+| `design.architecture` | Options (one recommended, with why and what it gives up), criteria with weights, a score with a reason per option and criterion, each option's blocks (role, key part numbers, requirements served, place on the diagram) and connections (what flows). |
+| `design.pins` | The pin plan: each pin's function, peripheral instance and use, net, reserved role (boot, reset, debug) and the alternate functions the datasheet allows. `check` compares it with the schematic's netlist through kicad-cli and records the findings as a run. |
+| `design.sheets` | Which requirements each schematic sheet serves, and its block (or why it serves none). |
+
+`kicad.export` keeps the drawings people look at in its run as well as in the output folder: one SVG per schematic
+sheet (`sheets/<file>.svg`), the board SVG and the render, with `drawings.json` naming the file and sheet each draws
+and its page size, so the app can place rule-check findings on them.
+
 HDL sources keep their folder layout in the job (named relative to the deepest folder holding all of them, include
 dirs walked into sub-folders, `` `include`` directives followed), and include dirs and source folders are passed as
 `-I`/`+incdir+`, so `` `include "sub/x.vh"`` resolves and two sources may share a basename.

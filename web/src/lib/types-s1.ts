@@ -138,6 +138,10 @@ export interface SkillView {
   /** the last push trace checked */
   push?: { sha: string; at: string; fixed: number; new: number }
   intent?: IntentDraft
+  /** Architecture choice: every option with its blocks and scores, the criteria, trace's recommendation */
+  architecture?: Omit<ArchitectureRecord, 'option' | 'blocks' | 'connections'> & { options: ArchOption[]; current: string | null }
+  /** decisions in the draft that Submit could not record (they name nothing, or lack their reason) */
+  pending_errors?: string[]
   question?: Question & { quantity?: { unit: string }; context?: string; searched?: EvidenceRef[] }
   /** Waiver: what can be waived here */
   waivable?: { id: string; kind: 'requirement' | 'finding' | 'test'; title: string; evidence?: EvidenceRef; recommendation?: 'waive' | 'fix'; why?: string }[]
@@ -185,33 +189,110 @@ export interface TracedRequirement {
   waiver: string | null
 }
 
-/** requirements.trace: the intent lines and each requirement's link to one, and each requirement's evidence. */
-export interface TraceView {
-  intent: { id: string; topic: string; text: string }[]
-  links: { requirement: string; intent: string }[]
-  /** why `intent` is empty: the record keeps no intent statements yet */
-  intent_note?: string
-  requirements?: TracedRequirement[]
-  summary?: { requirements: number; verified: number; failing: number; untested: number; waived: number }
+/** One intent line (requirements.trace): agents propose it, a person accepts, edits or rejects it (Intent builder). */
+export interface TraceIntent {
+  id: string
+  topic: string
+  /** the words that stand: the person's own when they edited it */
+  text: string
+  /** accepted / edited: a person decided; proposed: an agent's, not yet decided */
+  state?: 'accepted' | 'edited' | 'proposed'
+  kind?: 'statement' | 'dont_care' | 'unknown'
+  /** what the Intent builder flags: needs_number, vague, conflict, not_testable, interface_incomplete */
+  flags?: string[]
+  source?: { kind: 'person' | 'brief' | 'document' | 'design'; ref?: string; quote?: string; page?: number } | null
+  decided?: { by: string; at: string; reason?: string }
+  /** a person left it without a requirement, with this reason */
+  uncovered?: string
+  /** a requirement is derived from it */
+  covered?: boolean
 }
 
-// ------------------------------------------------------------------ design (design.get, needs building)
+/** requirements.trace: the intent lines and each requirement's link to one, and each requirement's evidence. */
+export interface TraceView {
+  intent: TraceIntent[]
+  links: { requirement: string; intent: string }[]
+  /** said while no intent statement is recorded */
+  intent_note?: string
+  requirements?: (TracedRequirement & { derived_from?: string[] })[]
+  summary?: { requirements: number; verified: number; failing: number; untested: number; waived: number; intent?: number; accepted?: number; uncovered?: number; unlinked?: number }
+}
+
+// ------------------------------------------------------------------ design (design.get)
 
 export interface Block {
   id: string
   name: string
+  role?: string
+  /** the key part's number */
   part?: string
+  parts?: { mpn: string; role?: string; key?: boolean }[]
+  /** stock of the key part, where a parts check gave it (the record does not keep it per block) */
   stock?: 'in_stock' | 'low' | 'out'
   serves: string[]
   x: number
   y: number
 }
+export interface BlockConnection { from: string; to: string; label: string; kind?: string }
+export interface ArchOption {
+  id: string; name: string; summary: string; recommended: boolean; why: string | null; gives_up: string | null; risks: string[]
+  /** weighted total of its scores */
+  total: number
+  blocks: Block[]
+  connections: BlockConnection[]
+}
+export interface ArchitectureRecord {
+  /** "Option B: STM32WL", the option drawn */
+  option: string
+  id?: string
+  /** chosen by a person, or trace's proposal drawn until one is */
+  state?: 'chosen' | 'proposed'
+  blocks: Block[]
+  connections: BlockConnection[]
+  options?: ArchOption[]
+  criteria?: { id: string; name: string; weight: number; description: string | null }[]
+  fixed?: { by: string; at: string } | null
+  scores?: { option: string; criterion: string; score: number; reason: string; by: 'trace' | 'person' }[]
+  recommended?: string | null
+  chosen?: { option: string; reason: string; deciding: string[]; by: string; at: string; against: boolean } | null
+}
+export interface PinView {
+  part?: string
+  pin: string
+  name?: string | null
+  net: string
+  fn: string
+  peripheral?: string
+  use?: string
+  alt?: string
+  reserved?: string
+  status: 'ok' | 'conflict' | 'spare' | 'waived'
+  note?: string
+  findings?: { id: string; severity: 'blocks' | 'fix' | 'waived'; text: string }[]
+}
+/** design.decide's decision (src/api/actions-design.ts). */
+export type DesignDecisionInput =
+  | { kind: 'intent'; statement: string; choice: 'accept' | 'edit' | 'reject'; text?: string; reason?: string }
+  | { kind: 'uncovered'; statement: string; reason: string }
+  | { kind: 'requirement'; requirement: string; choice: 'accept' | 'strike'; reason?: string }
+  | { kind: 'criteria'; criteria: { id: string; name: string; weight: number; description?: string }[] }
+  | { kind: 'architecture'; option: string; reason: string; deciding: string[] }
+  | { kind: 'pins'; part: string }
+
 export interface DesignView {
-  architecture?: { option: string; blocks: Block[]; connections: { from: string; to: string; label: string }[] }
-  /** one per schematic file; `path`: a picture a run stored (runs/<id>/<name>), when there is one */
-  sheets: { id: string; name: string; path?: string; serves?: string[]; findings: PictureFinding[] }[]
-  pins?: { pin: string; net: string; fn: string; alt?: string; status: 'ok' | 'conflict' | 'spare' | 'waived'; note?: string }[]
-  board?: { file?: string; path?: string; layers?: string[]; findings: PictureFinding[]; size?: string }
+  architecture?: ArchitectureRecord
+  /** one per schematic file; `path`: its drawing (runs/<id>/sheets/<file>.svg) when an export kept one */
+  sheets: { id: string; name: string; path?: string; serves?: string[]; block?: string; serves_none?: string; findings: PictureFinding[] }[]
+  pins?: PinView[]
+  /** the pin plan's check against the schematic, and which parts' plans a person agreed */
+  pin_plan?: {
+    checked: { run: string; at: string | null } | null
+    parts: { part: string; pins: number; agreed: { by: string; at: string; stale: boolean } | null }[]
+    findings: { id: string; target: string; kind: string; severity: 'blocks' | 'fix' | 'waived'; text: string }[]
+  }
+  board?: { file?: string; path?: string; render?: string; layers?: string[]; findings: PictureFinding[]; size?: string }
+  /** the export run the drawings come from */
+  drawings?: { run: string; at: string | null }
   /** the latest rule checks the findings come from */
   checks?: { erc: { run: string; at: string | null; status: string; summary: string | null } | null; drc: { run: string; at: string | null; status: string; summary: string | null } | null }
   /** what the record does not hold yet, in words */

@@ -126,8 +126,9 @@ reviewer. `require_(p, repo, 'write')` needs the contributor part (or admin). `p
 | `graph.neighbourhood` | read | `{ nodes, links }` around a focus item, depth 1–3, from the project record, memory and the knowledge base |
 | `files.list` / `files.url` | read | the project's files by kind, and a short-lived signed URL (or bytes) for one |
 | `job.control` | write on the job's project | `{ id, op }`: cancel aborts the job on its worker and terminates the Batch jobs its tools left running; pause, resume and move_up answer `{ ok: false, reason }` (a job cannot be held, and nothing is queued). Every job view carries `controls` |
-| `requirements.trace` | read | each requirement with its evidence status (verified, failing, untested, waived); `intent: []` and `intent_note` until the record keeps intent statements |
-| `design.get` | read | the KiCad files with the latest ERC and DRC findings, pictures runs stored, and `notes` for what is not recorded (block diagram, pin plan) |
+| `requirements.trace` | read | each requirement with its evidence status (verified, failing, untested, waived) and the intent lines it is derived from; the intent statements (proposed by agents, accepted, edited or rejected by people) with their flags and coverage; `intent_note` only while none is recorded |
+| `design.get` | read | the KiCad files with the latest ERC and DRC findings placed on the drawings the latest `kicad.export` kept (`runs/<id>/sheets/<file>.svg`), the requirements each sheet serves, the architecture (options, blocks, connections, scores, the chosen option), the pin plan checked against the newest netlist and who agreed it, and `notes` for what is still not recorded |
+| `design.decide` | write | a person's decision about the design record (accept, edit or reject an intent line; leave one uncovered; accept or strike a requirement with its reason; fix the architecture criteria; choose an architecture; agree a part's pin plan), kept in the journey record's `design_decisions` and logged; the design skills' Submit records the same |
 | `build.get` / `order.record` | read / write | releases (snapshots), orders (journey table `orders`), the order ready to place; recording an order answers a ship wait that nothing checks yet |
 | `cost.get` | read (money: admins) | the stage timeline for everyone; orders paid, committed and the build forecast (quantity x unit cost) for admins; cloud use is null (not recorded per project) |
 | `skill.get` / `skill.draft` / `skill.drafts` / `skill.submit` | read / read / read / write | a guided skill's bar computed from the record (`unavailable` where it cannot be yet), the person's draft in the journey store, and submit (refused unless every check is met or waived; Waiver and Question answer go through `waiver.add` and `question.answer`) |
@@ -139,7 +140,9 @@ me.get, project.members, users.list, files.list, files.url, gate.sign, projects.
 the API's own test writes to `web/src/lib/api-answers.json`.
 
 The journey record is new tables (`src/core/journey.ts`): `journey` (template, revision, current stage), `stages`,
-`gates`, `gate_criteria`, `criterion_opens`, `gate_signatures`, `questions`, `waivers`, `decisions`. Templates (Board,
+`gates`, `gate_criteria`, `criterion_opens`, `gate_signatures`, `questions`, `waivers`, `decisions`, and
+`design_decisions` (people's decisions over the agents' design record, which lives in the repository's
+`.trace/project.db` beside the requirements: `src/tools/design`). Templates (Board,
 FPGA, Firmware, Mixed) define stages and gate criteria as in [user-journey.md](user-journey.md). The live record is not
 in the repository: it is one SQLite database per project in the central bucket, `projects/<slug>/journey/journey.db`
 (`src/core/journey-store.ts`), read and written with conditional puts like the central store and chats (a lost race

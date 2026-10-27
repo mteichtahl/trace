@@ -853,6 +853,13 @@
       "release": null,
       "files": [
         {
+          "path": "hw/answers.kicad_sch",
+          "kind": "design",
+          "size": 11,
+          "sha": "blob-c14a93933b9d",
+          "revision": "A"
+        },
+        {
           "path": "README.md",
           "kind": "documents",
           "size": 9,
@@ -863,7 +870,15 @@
       "groups": [
         {
           "kind": "design",
-          "files": []
+          "files": [
+            {
+              "path": "hw/answers.kicad_sch",
+              "kind": "design",
+              "size": 11,
+              "sha": "blob-c14a93933b9d",
+              "revision": "A"
+            }
+          ]
         },
         {
           "kind": "fabrication",
@@ -895,7 +910,7 @@
         }
       ],
       "counts": {
-        "design": 0,
+        "design": 1,
         "fabrication": 0,
         "firmware": 0,
         "documents": 1,
@@ -1085,6 +1100,203 @@
           "thread": "0123456789abcdef0123",
           "at": "2026-10-27T00:00:00.000Z"
         }
+      ]
+    }
+  },
+  "requirements.trace": {
+    "args": {
+      "repo": "acme/answers"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "intent": [
+        {
+          "id": "INT-range",
+          "topic": "Performance",
+          "text": "Reaches a gateway 2 km away.",
+          "state": "proposed",
+          "kind": "statement",
+          "flags": [],
+          "source": {
+            "kind": "person",
+            "ref": "Ada"
+          },
+          "covered": true
+        }
+      ],
+      "links": [
+        {
+          "requirement": "REQ-1",
+          "intent": "INT-range"
+        }
+      ],
+      "requirements": [
+        {
+          "id": "REQ-1",
+          "text": "Range of 2 km line of sight",
+          "kind": "functional",
+          "acceptance": "at least 2 km",
+          "source": "intent",
+          "status": "accepted",
+          "evidence": "untested",
+          "why": "No test is planned for it yet.",
+          "tests": [],
+          "waiver": null,
+          "derived_from": [
+            "INT-range"
+          ]
+        }
+      ],
+      "summary": {
+        "requirements": 1,
+        "verified": 0,
+        "failing": 0,
+        "untested": 1,
+        "waived": 0,
+        "intent": 1,
+        "accepted": 0,
+        "uncovered": 0,
+        "unlinked": 0
+      }
+    }
+  },
+  "design.decide": {
+    "args": {
+      "repo": "acme/answers",
+      "decision": {
+        "kind": "intent",
+        "statement": "INT-range",
+        "choice": "accept"
+      }
+    },
+    "result": {
+      "ok": true,
+      "repo": "acme/answers",
+      "decision": {
+        "id": "0123456789abcdef",
+        "kind": "intent",
+        "target": "INT-range",
+        "choice": "accepted",
+        "by": "user@example.com",
+        "at": "2026-10-27T00:00:00.000Z"
+      },
+      "summary": "Intent INT-range was accepted as worded: Reaches a gateway 2 km away.",
+      "version": 3
+    }
+  },
+  "design.get": {
+    "args": {
+      "repo": "acme/answers"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "ref": "main",
+      "sheets": [
+        {
+          "id": "hw/answers.kicad_sch",
+          "name": "Answers",
+          "serves": [
+            "REQ-1"
+          ],
+          "findings": []
+        }
+      ],
+      "architecture": {
+        "option": "Option A: One chip",
+        "id": "A",
+        "state": "proposed",
+        "blocks": [
+          {
+            "id": "mcu",
+            "name": "MCU and radio",
+            "part": "STM32WLE5JCI6",
+            "parts": [
+              {
+                "mpn": "STM32WLE5JCI6",
+                "key": true
+              }
+            ],
+            "serves": [
+              "REQ-1"
+            ],
+            "x": 0.5,
+            "y": 0.5
+          }
+        ],
+        "connections": [],
+        "options": [
+          {
+            "id": "A",
+            "name": "One chip",
+            "summary": "An STM32WL with the radio inside.",
+            "recommended": true,
+            "why": "Fewer parts.",
+            "gives_up": null,
+            "risks": [],
+            "total": 0,
+            "blocks": [
+              {
+                "id": "mcu",
+                "name": "MCU and radio",
+                "part": "STM32WLE5JCI6",
+                "parts": [
+                  {
+                    "mpn": "STM32WLE5JCI6",
+                    "key": true
+                  }
+                ],
+                "serves": [
+                  "REQ-1"
+                ],
+                "x": 0.5,
+                "y": 0.5
+              }
+            ],
+            "connections": []
+          }
+        ],
+        "criteria": [],
+        "fixed": null,
+        "scores": [],
+        "recommended": "A",
+        "chosen": null
+      },
+      "pins": [
+        {
+          "part": "U1",
+          "pin": "30",
+          "name": "PA9",
+          "net": "/GPS_RX",
+          "fn": "USART1_TX",
+          "peripheral": "USART1",
+          "use": "GPS",
+          "alt": "USART1_TX",
+          "status": "ok",
+          "findings": []
+        }
+      ],
+      "pin_plan": {
+        "checked": null,
+        "parts": [
+          {
+            "part": "U1",
+            "pins": 1,
+            "agreed": null
+          }
+        ],
+        "findings": []
+      },
+      "checks": {
+        "erc": null,
+        "drc": null
+      },
+      "notes": [
+        "No electrical rule check is recorded yet.",
+        "No design rule check is recorded yet.",
+        "No drawing of the sheets is in the record yet: kicad.export with sch_svg keeps one per sheet in its run.",
+        "No architecture is chosen yet: the diagram shows trace's recommendation, until a person chooses in Architecture choice.",
+        "Stock per key part is not in the record: the parts check (parts.search) answers it when asked, and the architecture gate's stock criterion records it.",
+        "The pin plan has not been checked against the schematic yet: design.pins check (or kicad.netlist) stores the netlist it is compared with."
       ]
     }
   }

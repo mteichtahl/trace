@@ -62,7 +62,9 @@ describe('reading the API\'s answers', () => {
   })
 
   it('files.list is a flat list; files.url\'s bytes become an address', () => {
-    expect(read<{ path: string; kind: string; revision?: string }[]>('files.list')).toEqual([expect.objectContaining({ path: 'README.md', kind: 'documents', revision: 'A' })])
+    expect(read<{ path: string; kind: string; revision?: string }[]>('files.list')).toEqual([
+      expect.objectContaining({ path: 'hw/answers.kicad_sch', kind: 'design', revision: 'A' }), expect.objectContaining({ path: 'README.md', kind: 'documents', revision: 'A' }),
+    ])
     const u = read<{ url: string; mime: string }>('files.url')
     expect(u.mime).toBe('text/markdown')
     expect(u.url).toMatch(/^(blob:|data:text\/markdown;base64,)/)

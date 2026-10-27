@@ -9,6 +9,7 @@ import { INBOX, JOURNEYS, ME, ME_DOC, MEMBERS, PROJECTS, RECALL, THREADS, THREAD
 import { setPath } from '@/lib/prefs'
 import { adminHandle } from './admin'
 import { s1Action } from './s1'
+import { designAction } from './design'
 import { filesAction, withFileThread } from './files'
 
 let signedIn = typeof sessionStorage !== 'undefined' && sessionStorage.getItem('trace.mock.signedOut') !== '1'
@@ -25,6 +26,7 @@ function action(name: string, a: Record<string, unknown>): Response {
   const repo = a.repo as string
   const files = filesAction(name, a); if (files) return files
   const k = knowledgeAction(name, a); if (k !== undefined) return k && typeof k === 'object' && '__error' in k ? json({ ok: false, error: (k as { __error: string }).__error }, 403) : ok(k)
+  const des = designAction(name, a); if (des) return des
   const s1 = s1Action(name, a); if (s1) return s1
   switch (name) {
     case 'whoami': return ok({ sub: ME.sub, email: ME.email, groups: ['trace-admins'], class: ME.class })

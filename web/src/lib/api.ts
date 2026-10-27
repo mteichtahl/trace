@@ -114,10 +114,12 @@ export interface Actions {
   'skill.drafts': { args: Repo; result: { drafts: { skill: string; name: string; step: number; steps: number; saved: string }[] } }
   /** submit a skill's result: refused with what is missing unless every check is met or waived */
   'skill.submit': { args: Repo & { skill: string; draft: unknown }; result: { ok: true; id?: string; ref?: string; jobId?: string; started?: string[] } }
-  /** each requirement's evidence status; the intent lines (none recorded yet: intent_note says so) */
+  /** each requirement's evidence status and the intent lines it is derived from */
   'requirements.trace': { args: Repo; result: import('./types-s1').TraceView }
-  /** the sheets and the board with the latest checks' findings; what is not recorded, in notes */
+  /** the architecture, the sheets with their drawings and requirements, the pin plan, the board; what is not recorded, in notes */
   'design.get': { args: Repo; result: import('./types-s1').DesignView }
+  /** a person's decision about the design record: accept, edit or reject intent; strike a requirement; fix the criteria; choose an architecture; agree a pin plan */
+  'design.decide': { args: Repo & { decision: import('./types-s1').DesignDecisionInput }; result: { ok: true; decision: { id: string; kind: string; target: string; choice: string; by: string; at: string }; summary: string } }
   /** releases, orders, boards */
   'build.get': { args: Repo; result: import('./types-s1').BuildView }
   /** record a placed order (number, paid cost, ship date) */

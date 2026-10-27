@@ -1,11 +1,18 @@
 /**
  * Design (/p/:id/design): the block diagram, the schematic sheets, the pin plan and the board, each in its Canvas
- * frame with its findings drawn on it and listed beside it (tapping either selects both). The drawings are the SVGs
- * runs stored, fetched with files.url; the sheets, the board and the latest checks' findings come from design.get,
- * whose notes say what the record does not hold yet (the architecture record, the pin plan, drawings of the sheets) —
- * the tab says so rather than drawing made-up content.
+ * frame with its findings drawn on it and listed beside it (tapping either selects both). All from design.get:
+ *
+ *   Block diagram  the architecture record: the option a person chose (else trace's recommendation), switchable
+ *                  between options with the layout held still, the options compared on the criteria below it
+ *   Sheets         each schematic file with its drawing (the SVG the latest kicad.export kept in its run, fetched with
+ *                  files.url), the electrical rule check's findings placed on it, and the requirements it serves
+ *   Pin plan       each pin's function, peripheral, net and status from the pin plan check against the schematic's
+ *                  netlist, and which parts' plans a person agreed (stale when the plan changed since)
+ *   Board          the board drawing (or render) with the design rule check's findings
+ *
+ * design.get's notes say what the record still does not hold; the tab shows them rather than drawing made-up content.
  */
-import { createFileRoute } from '@tanstack/react-router'
+import { Link, createFileRoute } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useState } from 'react'
 import { z } from 'zod'
@@ -14,6 +21,8 @@ import { useTraceContext } from '@/components/chat/context'
 import { openPanel } from '@/components/chat/chat-state'
 import { CanvasFrame } from '@/components/canvas/canvas-frame'
 import { DataTable, useUrlView } from '@/components/data-table'
+import { Button } from '@/components/ui/button'
+import { ArchitectureSummary, OptionSwitch, OptionsTable, drawn, useOption } from '@/components/project/architecture'
 import { BlockDiagram } from '@/components/project/block-diagram'
 import { NeedsBuilding, TabSkeleton, notBuilt } from '@/components/project/shared'
 import { useCommands } from '@/components/shell/command-menu'
@@ -36,9 +45,12 @@ const PIN_STATUS: Record<Pin['status'], { status: 'met' | 'failing' | 'idle' | '
   ok: { status: 'met', label: 'Agreed' }, conflict: { status: 'failing', label: 'Conflict' }, spare: { status: 'idle', label: 'Spare' }, waived: { status: 'waived', label: 'Waived' },
 }
 const pinColumns: ColumnDef<Pin, any>[] = [
-  { accessorKey: 'pin', header: 'Pin', size: 80, meta: { label: 'Pin', kind: 'text', mono: true } },
+  { id: 'part', accessorFn: (p) => p.part ?? '', header: 'Part', size: 70, meta: { label: 'Part', kind: 'text', mono: true } },
+  { accessorKey: 'pin', header: 'Pin', size: 70, meta: { label: 'Pin', kind: 'text', mono: true } },
+  { id: 'name', accessorFn: (p) => p.name ?? '', header: 'Name', size: 80, meta: { label: 'Name', kind: 'text', mono: true } },
   { accessorKey: 'net', header: 'Net', size: 140, meta: { label: 'Net', kind: 'text', mono: true } },
   { accessorKey: 'fn', header: 'Function', size: 140, meta: { label: 'Function', kind: 'text', mono: true } },
+  { id: 'use', accessorFn: (p) => [p.peripheral, p.use].filter(Boolean).join(' · '), header: 'Peripheral', size: 160, meta: { label: 'Peripheral', kind: 'text' } },
   { id: 'status', accessorFn: (p) => PIN_STATUS[p.status].label, header: 'Status', size: 120, meta: { label: 'Status', kind: 'enum' }, cell: ({ row }) => <StatusBadge status={PIN_STATUS[row.original.status].status} label={PIN_STATUS[row.original.status].label} /> },
   { accessorKey: 'note', header: 'Note', size: 280, meta: { label: 'Note', kind: 'text' } },
 ]
@@ -54,6 +66,8 @@ function Design() {
   const [layers, setLayers] = useState<Record<string, boolean>>({})
   const pinUrl = useUrlView('pins')
   const data = d.data
+  const [option, setOption] = useOption(data?.architecture)
+  const reqs = useAction('requirements.trace', { repo }, { enabled: tab === 'architecture' })
   const current = data?.sheets.find((s) => s.id === sheet) ?? data?.sheets[0]
 
   useTraceContext({ label: 'Design', description: 'The project tab on screen', value: { tab: 'design', view: tab, sheet: current?.name ?? null, finding: selected } }, 'screen')
@@ -90,22 +104,30 @@ function Design() {
           <TabsTrigger value="board">Board</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="architecture" className="mt-4">
+        <TabsContent value="architecture" className="mt-4 space-y-4">
           {data.architecture ? (
-            <CanvasFrame
-              title="Block diagram"
-              subtitle={data.architecture.option}
-              height={440}
-              onAsk={() => openPanel(true)}
-              detail={block ? { title: block.name, body: <BlockDetail block={block} /> } : null}
-              onDetailClose={() => setBlock(null)}
-            >
-              <div className="origin-center scale-[0.42] sm:scale-75 lg:scale-100">
-                <BlockDiagram blocks={data.architecture.blocks} connections={data.architecture.connections} selected={block?.id} onSelect={setBlock} />
+            <>
+              <CanvasFrame
+                title="Block diagram"
+                subtitle={data.architecture.options?.find((o) => o.id === option)?.name ? `Option ${option}: ${data.architecture.options.find((o) => o.id === option)!.name}` : data.architecture.option}
+                height={440}
+                onAsk={() => openPanel(true)}
+                detail={block ? { title: block.name, body: <BlockDetail block={block} /> } : null}
+                onDetailClose={() => setBlock(null)}
+              >
+                <div className="origin-center scale-[0.42] sm:scale-75 lg:scale-100">
+                  <BlockDiagram {...drawn(data.architecture, option)} selected={block?.id} onSelect={setBlock} />
+                </div>
+              </CanvasFrame>
+              <div className="flex flex-wrap items-center gap-3">
+                <OptionSwitch a={data.architecture} value={option} onChange={(o) => { setOption(o); setBlock(null) }} />
+                <Button asChild size="sm" variant={data.architecture.chosen ? 'outline' : 'default'}><Link to="/p/$id/do/$skill" params={{ id, skill: 'architecture-choice' }}>{data.architecture.chosen ? 'Review the choice' : 'Choose an architecture'}</Link></Button>
               </div>
-            </CanvasFrame>
+              <ArchitectureSummary a={data.architecture} current={option} requirements={(reqs.data?.requirements ?? []).map((r) => r.id)} />
+              <OptionsTable a={data.architecture} current={option} />
+            </>
           ) : (
-            <EmptyState>No architecture record yet. Architecture choice writes it in Architect.</EmptyState>
+            <EmptyState>No architecture record yet. The agents propose options in Architect, and Architecture choice records the one chosen.</EmptyState>
           )}
         </TabsContent>
 
@@ -127,7 +149,12 @@ function Design() {
               </nav>
               {current && (
                 <div className="min-w-0 space-y-4">
-                  <FindingsPicture repo={repo} title={current.name} subtitle={`Sheet ${data.sheets.indexOf(current) + 1} of ${data.sheets.length}${current.serves?.length ? ` · serves ${current.serves.join(', ')}` : ''}`} path={current.path} findings={current.findings} selected={selected} onSelect={setSelected} onAsk={() => openPanel(true)} emptyText="No drawing of this sheet yet: trace exports it after the next push." />
+                  <FindingsPicture repo={repo} title={current.name} subtitle={`Sheet ${data.sheets.indexOf(current) + 1} of ${data.sheets.length}${current.block ? ` · block ${current.block}` : ''}`} path={current.path} findings={current.findings} selected={selected} onSelect={setSelected} onAsk={() => openPanel(true)} emptyText="No drawing of this sheet yet: kicad.export with sch_svg keeps one in its run." />
+                  <p className="text-sm">
+                    {current.serves?.length ? <>Serves <span className="font-mono">{current.serves.join(', ')}</span>.</>
+                      : current.serves_none ? <>Serves no requirement: {current.serves_none}</>
+                        : <StatusBadge status="warning" label="Names no requirement yet" />}
+                  </p>
                   <FindingsList findings={current.findings} selected={selected} onSelect={setSelected} empty="This sheet is clean." />
                 </div>
               )}
@@ -135,11 +162,28 @@ function Design() {
           )}
         </TabsContent>
 
-        <TabsContent value="pins" className="mt-4">
+        <TabsContent value="pins" className="mt-4 space-y-3">
           {data.pins?.length ? (
-            <DataTable id="pins" url={pinUrl} data={data.pins} columns={pinColumns} getRowId={(p) => p.pin} noun="pins" />
+            <>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                {(data.pin_plan?.parts ?? []).map((p) => (
+                  <span key={p.part} className="flex items-center gap-1.5">
+                    <span className="font-mono">{p.part}</span>
+                    {p.agreed ? <StatusBadge status={p.agreed.stale ? 'warning' : 'met'} label={p.agreed.stale ? `Agreed by ${p.agreed.by}, changed since` : `Agreed by ${p.agreed.by}`} /> : <StatusBadge status="yours" label="Not agreed yet" />}
+                  </span>
+                ))}
+                <span className="text-muted-foreground">{data.pin_plan?.checked ? `Checked against the schematic in run ${data.pin_plan.checked.run.slice(0, 8)}.` : 'Not checked against the schematic yet.'}</span>
+                <Button asChild size="sm" variant="outline" className="ml-auto"><Link to="/p/$id/do/$skill" params={{ id, skill: 'pin-plan-review' }}>Review the pin plan</Link></Button>
+              </div>
+              <DataTable id="pins" url={pinUrl} data={data.pins} columns={pinColumns} getRowId={(p) => `${p.part ?? ''}.${p.pin}`} noun="pins" />
+              {(data.pin_plan?.findings ?? []).filter((f) => f.kind === 'missing_pin').length > 0 && (
+                <ul className="space-y-1 text-sm">
+                  {data.pin_plan!.findings.filter((f) => f.kind === 'missing_pin').map((f) => <li key={f.id} className="flex items-center gap-2"><StatusBadge plain status={f.severity === 'waived' ? 'waived' : 'fix'} />{f.text}</li>)}
+                </ul>
+              )}
+            </>
           ) : (
-            <EmptyState>No pin plan yet. Pin plan review agrees it with the firmware in Capture.</EmptyState>
+            <EmptyState>No pin plan yet. The firmware track proposes it in Capture, and Pin plan review agrees it with the schematic.</EmptyState>
           )}
         </TabsContent>
 
@@ -174,8 +218,10 @@ function Design() {
 function BlockDetail({ block: b }: { block: Block }) {
   return (
     <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+      {b.role && <><dt className="text-muted-foreground">Role</dt><dd>{b.role}</dd></>}
       <dt className="text-muted-foreground">Key part</dt><dd className="font-mono">{b.part ?? '—'}</dd>
-      <dt className="text-muted-foreground">Stock</dt><dd>{b.stock ? <StatusBadge status={b.stock === 'in_stock' ? 'met' : b.stock === 'low' ? 'warning' : 'failing'} label={b.stock === 'in_stock' ? 'In stock for the build' : b.stock === 'low' ? 'Low stock' : 'Out of stock'} /> : '—'}</dd>
+      {(b.parts?.length ?? 0) > 1 && <><dt className="text-muted-foreground">Parts</dt><dd className="font-mono">{b.parts!.map((p) => p.mpn).join(', ')}</dd></>}
+      <dt className="text-muted-foreground">Stock</dt><dd>{b.stock ? <StatusBadge status={b.stock === 'in_stock' ? 'met' : b.stock === 'low' ? 'warning' : 'failing'} label={b.stock === 'in_stock' ? 'In stock for the build' : b.stock === 'low' ? 'Low stock' : 'Out of stock'} /> : 'Not in the record: the parts check answers it'}</dd>
       <dt className="text-muted-foreground">Serves</dt><dd className="font-mono">{b.serves.join(', ') || 'No requirement: map one or remove the block'}</dd>
       <dt className="col-span-2 mt-2 text-xs text-muted-foreground">Price breaks and alternatives come from the parts search (Knowledge › Datasheets and parts).</dt>
     </dl>
