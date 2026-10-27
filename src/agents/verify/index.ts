@@ -35,6 +35,10 @@ export const verify: Specialist = {
       + ' candidates against the source, and add only the ones the source actually states (action=add), each with'
       + ' its acceptance criterion and its source page. Do not invent requirements; ask (ESCALATE) when the spec is'
       + ' ambiguous about a limit.',
+    'Intent: design_intent action=list. Link every requirement to the intent statement it is derived from'
+      + ' (action=link); a requirement no statement explains, or a statement no requirement covers, is a gap to'
+      + ' report. Propose a statement only from the person\'s or the brief\'s own words (action=add, with its source);'
+      + ' never mark one accepted: the person does that in the Intent builder.',
     'Test plan: verify_plan action=list. Every requirement in scope needs at least one item with a method (sim,'
       + ' formal, spice, hil, inspection, drc) and a concrete tool call or command; add the missing ones'
       + ' (action=add). Prefer formal (verify_formal) for control logic and protocol invariants, a testbench'

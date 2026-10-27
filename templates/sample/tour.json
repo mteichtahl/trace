@@ -16,10 +16,11 @@
       "memory.remember",
       "trace.runs",
       "journey.status",
-      "journey.ask"
+      "journey.ask",
+      "design.intent"
     ],
     "remote": null,
-    "body": "Define stage. The installer stored 19 requirements and a 27-item test plan. Check them against the documents.\n\n- Run verify.requirements action=extract on `docs/spec.md` and compare the candidates with verify.requirements action=list. Every REQ-* in the file should be in the database with the same acceptance criterion.\n- Run verify.plan action=list. Confirm every method (sim, formal, spice, hil, inspection, drc) has at least one item and every requirement has a test.\n- Use kb.status and kb.search (\"input voltage range\") to find where `docs/intent.md` states each number, and memory.remember one fact about the board.\n- Read journey.status (the project's stage and its gates). If you find a gap, journey.ask the contributors which document is right, with options and one recommended, without wait_minutes.\n\nDone when: no requirement is missing or different, and you list any gap you found. Comment the numbers with their run ids on this issue, then close it."
+    "body": "Define stage. The installer stored 19 requirements and a 27-item test plan. Check them against the documents.\n\n- Run verify.requirements action=extract on `docs/spec.md` and compare the candidates with verify.requirements action=list. Every REQ-* in the file should be in the database with the same acceptance criterion.\n- Run verify.plan action=list. Confirm every method (sim, formal, spice, hil, inspection, drc) has at least one item and every requirement has a test.\n- Use kb.status and kb.search (\"input voltage range\") to find where `docs/intent.md` states each number, and memory.remember one fact about the board.\n- design.intent: add the purpose, power and interfaces statements from `docs/intent.md` (source kind brief, each with its line), and link each REQ-* to the statement it comes from (action=link). Propose only: the person accepts them in the Intent builder.\n- Read journey.status (the project's stage and its gates). If you find a gap, journey.ask the contributors which document is right, with options and one recommended, without wait_minutes.\n\nDone when: no requirement is missing or different, and you list any gap you found. Comment the numbers with their run ids on this issue, then close it."
   },
   {
     "id": "define-datasheets",
@@ -72,10 +73,11 @@
       "parts.lookup",
       "parts.search",
       "parts.alternatives",
-      "parts.bom_check"
+      "parts.bom_check",
+      "design.architecture"
     ],
     "remote": null,
-    "body": "Architect stage. Show each value on the schematic comes from a calculation.\n\n- calc.divider vin=12 vout=3 (39k/13k), calc.rc_filter r=15950 c=10n (~1 kHz), calc.led_resistor 3.3 V 2.0 V 2 mA (680), calc.opamp_gain follower, calc.adc 12 bits 3.3 V, calc.i2c_pullup 3.3 V 50 pF fast, calc.ldo_thermal 12 V to 3.3 V at 43.4 mA.\n- Compare the LDO with a switcher: calc.buck and calc.boost; and calc.power battery life of a 2000 mAh cell at 48 mA. Try calc.regulator_feedback, calc.active_filter (1 kHz Butterworth), calc.lc_filter, calc.rc_timing, calc.crystal_caps for an 8 MHz crystal as alternatives.\n- parts.lookup U1 and U2, parts.search a SOT-23-5 3.3 V LDO, parts.alternatives AMS1117-3.3, parts.bom_check for 10 boards.\n\nDone when: every value matches. Comment the numbers with their run ids on this issue, then close it."
+    "body": "Architect stage. Show each value on the schematic comes from a calculation.\n\n- calc.divider vin=12 vout=3 (39k/13k), calc.rc_filter r=15950 c=10n (~1 kHz), calc.led_resistor 3.3 V 2.0 V 2 mA (680), calc.opamp_gain follower, calc.adc 12 bits 3.3 V, calc.i2c_pullup 3.3 V 50 pF fast, calc.ldo_thermal 12 V to 3.3 V at 43.4 mA.\n- Compare the LDO with a switcher: calc.buck and calc.boost; and calc.power battery life of a 2000 mAh cell at 48 mA. Try calc.regulator_feedback, calc.active_filter (1 kHz Butterworth), calc.lc_filter, calc.rc_timing, calc.crystal_caps for an 8 MHz crystal as alternatives.\n- parts.lookup U1 and U2, parts.search a SOT-23-5 3.3 V LDO, parts.alternatives AMS1117-3.3, parts.bom_check for 10 boards.\n- design.architecture: record the LDO design as option A and the buck as option B (set_option, one recommended with why and what it gives up), criteria cost, power and size (set_criteria), a score with a reason for each (set_scores), and option A's blocks (rail input, regulator U1, buffer, sensor, MCU header) with their part numbers and the requirements each serves, and what flows between them.\n\nDone when: every value matches, and every requirement maps to a block of option A. Comment the numbers with their run ids on this issue, then close it."
   },
   {
     "id": "architect-thermal-envelope",
@@ -114,10 +116,12 @@
       "kicad.board",
       "kicad.net",
       "firmware.detect",
-      "firmware.targets"
+      "firmware.targets",
+      "design.pins",
+      "design.sheets"
     ],
     "remote": null,
-    "body": "Capture stage. The verification specialist cannot sync the knowledge base or list projects: it delegates this to the worker with agent.delegate.\n\n- Worker: kb.sync (wait for the ingestion), kicad.projects, kicad.netlist on `hardware/trace-sample.kicad_pro` (12 nets, 17 parts), firmware.detect path=firmware and firmware.targets.\n- Specialist, afterwards: kicad.components, kicad.board and kicad.net /ADC_IN to check what the worker reported.\n\nDone when: the knowledge base has the docs and the KiCad summary, firmware.detect finds the make target, and the netlist matches the schematic. Comment the numbers with their run ids on this issue, then close it."
+    "body": "Capture stage. The verification specialist cannot sync the knowledge base or list projects: it delegates this to the worker with agent.delegate.\n\n- Worker: kb.sync (wait for the ingestion), kicad.projects, kicad.netlist on `hardware/trace-sample.kicad_pro` (12 nets, 17 parts), firmware.detect path=firmware and firmware.targets.\n- Specialist, afterwards: kicad.components, kicad.board and kicad.net /ADC_IN to check what the worker reported.\n- Specialist: the microcontroller sits on the MCU board behind J2, so its pin plan is planned at J2: design.pins set part J2, each pin with the function the firmware gives it (`firmware/main.c`, `firmware/adc.c`: ADC_IN, SDA, SCL, TX, RX, LED) and its net, then design.pins check against the schematic (expect every pin on its net). design.sheets set `hardware/trace-sample.kicad_sch` with the requirements it serves.\n\nDone when: the knowledge base has the docs and the KiCad summary, firmware.detect finds the make target, and the netlist matches the schematic. Comment the numbers with their run ids on this issue, then close it."
   },
   {
     "id": "prove-front-end",

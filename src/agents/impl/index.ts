@@ -34,6 +34,8 @@ export const impl: Specialist = {
     'fpga_bitstream only from a closed run, and only when the job asks for one.',
     'PCB: kicad_drc first (counts by type, unconnected items, schematic parity). pcb_placement_check for courtyard,'
       + ' edge and keep-out problems, pcb_floorplan to see functional blocks intermixed or spread, before routing.',
+    'Pin swaps made for routing: design_pins check again after them; a pin no longer on the net the plan names is'
+      + ' a finding to fix in the plan (design_pins set) for the person to agree again, never silently.',
     'Routing: pcb_autoroute (it plans OrthoRoute for the complex core and Freerouting for the rest, from the'
       + ' electronics.autoroute settings); then kicad_drc again, kicad_net_length for critical nets, and'
       + ' pcb_length_match for differential pairs and length groups against their constraints.',

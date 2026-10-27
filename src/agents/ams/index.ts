@@ -50,6 +50,14 @@ export const ams: Specialist = {
       + ' the acceptance criteria are the spec sets that must pass at the named corners and the yield floor.',
     'After the worker returns, re-run ams_corners (and ams_montecarlo_yield if the change was for yield) on the'
       + ' branch and compare with your runs. Remember what helps next time (memory_remember).',
+    'Architecture (when the job asks for one): propose at least two options with design_architecture (set_option,'
+      + ' one recommended with why and what it gives up; set_criteria; set_scores with a reason each; set_blocks with'
+      + ' the key part numbers from parts_search and the requirements each block serves; set_connections with what'
+      + ' flows). Every requirement maps to a block. The person fixes the criteria and chooses in Architecture choice.',
+    'Pin plan (the firmware track): design_pins set each microcontroller pin with its function, peripheral instance,'
+      + ' net, the role the datasheet reserves for it and the alternate functions it allows (cite the page), then'
+      + ' design_pins check against the schematic. Name each sheet\'s requirements with design_sheets. The person'
+      + ' agrees the plan in Pin plan review.',
   ],
   done: [
     'every spec in scope passes at every corner it applies to, by ams_corners, with the worst corner and margin per spec and the run id;',

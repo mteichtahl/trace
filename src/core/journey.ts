@@ -332,8 +332,29 @@ CREATE TABLE IF NOT EXISTS stuck_dismissals (
   at REAL NOT NULL
 );` })
 
+/**
+ * A person's decision about what the agents proposed in the design record (src/tools/design/db.ts, in the repository):
+ * accepting, editing or rejecting an intent statement, leaving one uncovered, striking a requirement with its reason,
+ * fixing the architecture criteria, choosing an architecture, agreeing the pin plan. The newest decision on a target
+ * stands; the ones before it are kept (superseded) so the log shows how it was reached. src/tools/design/record.ts
+ * merges them over the agents' proposals.
+ */
+ensureProjectSchema({ table: 'design_decisions', sql: `
+CREATE TABLE IF NOT EXISTS design_decisions (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,             -- intent | intent.uncovered | requirement.strike | architecture.criteria | architecture.choice | pins.agreed
+  target TEXT NOT NULL,           -- the statement, requirement or option id; 'architecture' or the part for the plan-wide ones
+  choice TEXT NOT NULL,           -- accepted | edited | rejected | left_out | struck | fixed | chosen | agreed
+  detail TEXT,                    -- JSON: the text seen or edited, the reason, the criteria and weights, the scores
+  by TEXT NOT NULL, by_hash TEXT NOT NULL,
+  at REAL NOT NULL,
+  superseded_at REAL,
+  updated REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS design_decisions_target ON design_decisions(kind, target, at);`, merge: newer('design_decisions', 'id', ['kind', 'target', 'choice', 'detail', 'by', 'by_hash', 'at', 'superseded_at', 'updated']) })
+
 /** The journey's tables, in the order they are created and copied. */
-export const JOURNEY_TABLES = ['journey', 'stages', 'gates', 'gate_criteria', 'criterion_opens', 'gate_signatures', 'questions', 'waivers', 'decisions', 'orders', 'stuck_dismissals'] as const
+export const JOURNEY_TABLES = ['journey', 'stages', 'gates', 'gate_criteria', 'criterion_opens', 'gate_signatures', 'questions', 'waivers', 'decisions', 'orders', 'stuck_dismissals', 'design_decisions'] as const
 
 /**
  * Tables only the journey store keeps: each person's unsubmitted guided-skill drafts. They are never copied into the

@@ -26,6 +26,9 @@ export const SHARED_TOOLS = [
   'kb.search', 'kb.status',
   // the project's journey: read it, ask people, check the criteria trace owns, say when stuck (src/tools/journey)
   'journey.status', 'journey.ask', 'journey.check', 'journey.stuck',
+  // the design record: propose intent, link requirements to it, architectures, the pin plan, sheet → requirements
+  // (src/tools/design). Agents propose; a person accepts, chooses and agrees through the guided skills
+  'design.intent', 'design.architecture', 'design.pins', 'design.sheets',
 ] as const
 
 /** The delegation tool (src/agents/delegate.ts): offered to a specialist on the runtime, never to the worker. */
