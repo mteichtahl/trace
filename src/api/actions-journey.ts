@@ -17,6 +17,8 @@
  *   question.answer         write    answer an agent's question: an option (the recommended one, or another with a
  *                                    reason) or an answer in words
  *   waiver.add              write    take a waiver: reason, risk, severity, where it is caught instead, scope
+ *   stuck.dismiss           write    dismiss a stuck agent's report with a reason in one line: it leaves Home and the
+ *                                    inbox, and the agent reads the dismissal and its reason (journey.status)
  *   inbox                   signed in  the four kinds that earn a notification (a gate ready, a question blocking
  *                                    work, money about to be spent, an agent stuck) across the person's projects,
  *                                    most blocking and oldest first. Each project's database is read once, in
@@ -42,7 +44,7 @@ import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
   INBOX_KINDS, type InboxItem, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
-  journeyView, loadJourney, recordOpen, returnGate, signGate, sortInbox,
+  dismissStuck, journeyView, loadJourney, recordOpen, returnGate, signGate, sortInbox,
 } from '../core/journey.js'
 import { type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, label, plainly, snapshotJourney, withJourneyDb, writeJourney } from './action-kit.js'
 
@@ -151,6 +153,15 @@ export const JOURNEY_ACTIONS = {
     return journeyWrite(ctx, a.repo, (db) => {
       const q = answerQuestion(db, a.question, signer(ctx), { option: a.option, answer: a.answer, reason: a.reason }, { facts })
       return { result: { repo: a.repo, question: q, summary: 'Answered. The agent carries on.' } }
+    })
+  }),
+
+  'stuck.dismiss': def('write', Repo.extend({ job: Id, reason: z.string().trim().min(3).max(300) }), async (a, ctx) => {
+    // `job`: the stuck agent's job id, or the stuck item's own id (its question id in the views, which the app has)
+    const facts = await agentFacts(ctx, a.repo)
+    return journeyWrite(ctx, a.repo, (db) => {
+      const d = dismissStuck(db, a.job, signer(ctx), a.reason, { facts })
+      return { result: { repo: a.repo, dismissed: d, summary: 'Dismissed. The agent is told why.' } }
     })
   }),
 

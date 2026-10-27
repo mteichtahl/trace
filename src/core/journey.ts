@@ -31,6 +31,9 @@
  *   waivers          reason, risk, severity, where it is caught instead, scope; who acknowledged it at the gate
  *   decisions        the log: every start, signature, return, answer and waiver, in plain words
  *   orders           each order placed with the fab: its number, boards, what was paid, the ship date, its state
+ *   stuck_dismissals a person's dismissal of a stuck agent's report (stuck.dismiss): the stuck item's id, the reason
+ *                    in one line, who and when. A dismissed item leaves Home and the inbox; the agent reads the
+ *                    dismissal and its reason with journey.status
  *   skill_drafts     (the store only, never copied into the repository) each person's unsubmitted guided-skill draft
  *
  * People are named by the memory hash of their email (or sub) where the record only needs to match them (opens,
@@ -319,8 +322,18 @@ CREATE TABLE IF NOT EXISTS orders (
   updated REAL NOT NULL
 );`, merge: newer('orders', 'id', ORDER_COLS) })
 
+ensureProjectSchema({ table: 'stuck_dismissals', sql: `
+CREATE TABLE IF NOT EXISTS stuck_dismissals (
+  stuck_id TEXT PRIMARY KEY,      -- the stuck item: an agent's stuck fact, or a stuck row of questions
+  job_id TEXT,                    -- the job that was stuck, for the agent to find it
+  reason TEXT NOT NULL,           -- one line, the person's words
+  by TEXT NOT NULL,               -- email (or sub), for people to read
+  by_hash TEXT NOT NULL,
+  at REAL NOT NULL
+);` })
+
 /** The journey's tables, in the order they are created and copied. */
-export const JOURNEY_TABLES = ['journey', 'stages', 'gates', 'gate_criteria', 'criterion_opens', 'gate_signatures', 'questions', 'waivers', 'decisions', 'orders'] as const
+export const JOURNEY_TABLES = ['journey', 'stages', 'gates', 'gate_criteria', 'criterion_opens', 'gate_signatures', 'questions', 'waivers', 'decisions', 'orders', 'stuck_dismissals'] as const
 
 /**
  * Tables only the journey store keeps: each person's unsubmitted guided-skill drafts. They are never copied into the
@@ -431,12 +444,18 @@ export interface WaiverRow {
   caughtWhere: string | null; scope: string; by: string; at: number; acknowledgedBy: string | null; acknowledgedAt: number | null; closedAt: number | null
 }
 export interface DecisionRow { id: string; at: number; kind: string; stage: string | null; ref: string | null; summary: string; by: string | null; detail: unknown }
+/** A person's dismissal of a stuck agent's report. */
+export interface DismissalRow { stuckId: string; jobId: string | null; reason: string; by: string; byHash: string; at: number }
 
 /** Everything the journey record holds, as rows. */
 export interface JourneyRecord {
   journey: JourneyRow; stages: StageRow[]; gates: GateRow[]; criteria: CriterionRow[]
   opens: { item: string; who: string; at: number }[]; signatures: SignatureRow[]; questions: QuestionRow[]; waivers: WaiverRow[]; decisions: DecisionRow[]
+  /** dismissed stuck reports (absent in a record written before they existed: none) */
+  dismissals?: DismissalRow[] | undefined
 }
+
+const tableExists = (db: DatabaseSync, t: string): boolean => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t))
 
 const hasJourney = (db: DatabaseSync): boolean =>
   Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='journey'").get()) && Boolean(db.prepare("SELECT 1 FROM journey WHERE id='current'").get())
@@ -481,6 +500,9 @@ export function loadJourney(db: DatabaseSync): JourneyRecord | null {
     })),
     decisions: rows('SELECT * FROM decisions ORDER BY at DESC, rowid DESC').map((r) => ({
       id: String(r.id), at: Number(r.at), kind: String(r.kind), stage: str(r.stage), ref: str(r.ref), summary: String(r.summary), by: str(r.by), detail: json<unknown>(r.detail, null),
+    })),
+    dismissals: (tableExists(db, 'stuck_dismissals') ? rows('SELECT * FROM stuck_dismissals ORDER BY at') : []).map((r) => ({
+      stuckId: String(r.stuck_id), jobId: str(r.job_id), reason: String(r.reason), by: String(r.by), byHash: String(r.by_hash), at: Number(r.at),
     })),
   }
 }
@@ -762,7 +784,7 @@ const cap = (s: string): string => `${s[0]?.toUpperCase() ?? ''}${s.slice(1)}`
 
 /** The whole journey as people see it, for this viewer (`facts`: the agents' facts, merged in first). */
 export function journeyView(r0: JourneyRecord, viewer: Viewer, at: number = now(), facts?: AgentFacts | null): JourneyView {
-  const r = facts ? mergeAgentFacts(r0, facts) : r0
+  const r = withoutDismissed(facts ? mergeAgentFacts(r0, facts) : r0)
   const curOrd = r.stages.find((s) => s.id === r.journey.currentStage)?.ord ?? 0
   const gates = r.gates.map((g) => gateView(r, g.id, viewer))
   const stages: StageView[] = r.stages.map((s) => {
@@ -1151,7 +1173,7 @@ export interface InboxItem {
  * and spend go to admins; questions and stuck agents to the person asked, or the contributors when no one was.
  */
 export function inboxItems(repo: string, r0: JourneyRecord, viewer: Viewer, at: number = now(), facts?: AgentFacts | null): InboxItem[] {
-  const r = facts ? mergeAgentFacts(r0, facts) : r0
+  const r = withoutDismissed(facts ? mergeAgentFacts(r0, facts) : r0)
   const out: InboxItem[] = []
   const project = r.journey.name ?? repo
   const stage = r.journey.currentStage
@@ -1209,6 +1231,38 @@ export interface AgentFacts { questions: AgentQuestion[]; checks: CriterionCheck
 export const NO_AGENT_FACTS: AgentFacts = { questions: [], checks: [], stuck: [] }
 
 const withFacts = (r: JourneyRecord, f: AgentFacts | null | undefined): JourneyRecord => (f ? mergeAgentFacts(r, f) : r)
+
+/** The record without the stuck items a person dismissed (stuck.dismiss): what Home, the inbox and journey.get show. */
+export function withoutDismissed(r: JourneyRecord): JourneyRecord {
+  if (!r.dismissals?.length) return r
+  const gone = new Set(r.dismissals.map((d) => d.stuckId))
+  return { ...r, questions: r.questions.filter((q) => q.kind !== 'stuck' || !gone.has(q.id)) }
+}
+
+/**
+ * A person dismisses a stuck agent's report, with a reason in one line: it leaves every view (withoutDismissed), the
+ * decisions log keeps it, and the agent reads the dismissal and its reason (journey.status). The agent's own fact is
+ * not changed (people never write the agents' facts); a newer stuck report of the same job is a new item.
+ */
+export function dismissStuck(db: DatabaseSync, id: string, by: Signer, reason: string, o: { facts?: AgentFacts | null | undefined } = {}): { id: string; job_id: string | null; reason: string; by: string; at: string } {
+  const r = withFacts(need(db), o.facts)
+  const dismissed = new Set((r.dismissals ?? []).map((d) => d.stuckId))
+  // the stuck item's own id, or its job's (the newest of that job's not yet dismissed)
+  const stuck = r.questions.filter((x) => x.kind === 'stuck')
+  const q = stuck.find((x) => x.id === id) ?? stuck.filter((x) => x.jobId === id && !dismissed.has(x.id)).at(-1)
+  if (!q) throw new JourneyError(`There is no stuck report of ${id} in this project.`)
+  if (dismissed.has(q.id)) throw new JourneyError('This stuck report is already dismissed.')
+  if (q.answeredAt !== null) throw new JourneyError('This stuck report is already answered.')
+  const why = reason.trim()
+  if (why.length < 3 || VAGUE.test(why)) throw new JourneyError('Say in a line why it can be dismissed, so the agent knows what to do instead.')
+  if (/[\r\n]/.test(why)) throw new JourneyError('Keep the reason to one line.')
+  const t = now()
+  transaction(db, () => {
+    db.prepare('INSERT INTO stuck_dismissals (stuck_id, job_id, reason, by, by_hash, at) VALUES (?,?,?,?,?,?)').run(q.id, q.jobId, why, by.label, by.hash, t)
+    decide(db, { kind: 'stuck.dismissed', stage: q.stage, ref: q.id, by: by.label, summary: `${cap(q.askedBy)} was stuck: ${q.text} Dismissed: ${why}` })
+  })
+  return { id: q.id, job_id: q.jobId, reason: why, by: by.label, at: isoN(t) }
+}
 
 /**
  * The record with the agents' facts merged in, the rules every view follows:

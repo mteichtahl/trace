@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   type JourneyRecord, type Viewer, addWaiver, answerQuestion, askQuestion, gateView, inboxItems, journeyView, loadJourney, nextStep, recordOpen,
   returnGate, setCriterion, signBlockers, signGate, sortInbox, startJourney, templateStages, applyJourneySchema, copyJourneyTables, getDraft, loadOrders, putDraft,
-  recordOrder,
+  recordOrder, dismissStuck, JOURNEY_TABLES,
 } from '../../src/core/journey.js'
 import { openProject } from '../../src/core/store.js'
 import { merge } from '../../src/core/dbmerge.js'
@@ -222,6 +222,23 @@ describe('the inbox', () => {
     expect(inboxItems('acme/board', rec(), USER).map((i) => i.kind).sort()).toEqual(['question', 'stuck'])
     expect(inboxItems('acme/board', rec(), REVIEWER)).toEqual([])
     expect(inboxItems('acme/board', rec(), { ...REVIEWER, hash: 'someone-else' }).map((i) => i.summary)).toEqual(['Soil sensor: the router asks: Which way?'])
+  })
+
+  it('a dismissed stuck report leaves the inbox and the views; the log keeps it, with the reason', () => {
+    const stuck = askQuestion(db, { askedBy: 'the router', kind: 'stuck', text: '3 nets cannot fit between U4\'s pins.', jobId: 'job-3' })
+    const q = askQuestion(db, { askedBy: 'the router', text: 'Which way?', blocks: 'routing' })
+    expect(inboxItems('acme/board', rec(), USER).map((i) => i.ref.id).sort()).toEqual([q, stuck].sort())
+    expect(() => dismissStuck(db, q, signer, 'Not a stuck report at all.')).toThrow(/no stuck report/)
+    expect(() => dismissStuck(db, stuck, signer, 'ok')).toThrow(/why it can be dismissed/)
+    expect(() => dismissStuck(db, stuck, signer, 'two\nlines')).toThrow(/one line/)
+    expect(dismissStuck(db, 'job-3', signer, 'U4 moves to the other side; the router is rerun.')).toMatchObject({ id: stuck, job_id: 'job-3', by: ADMIN.label })
+    expect(inboxItems('acme/board', rec(), USER).map((i) => i.ref.id)).toEqual([q])
+    expect(journeyView(rec(), USER).questions.map((x) => x.id)).toEqual([q])
+    expect(rec().dismissals).toEqual([expect.objectContaining({ stuckId: stuck, reason: 'U4 moves to the other side; the router is rerun.' })])
+    expect(rec().decisions[0]).toMatchObject({ kind: 'stuck.dismissed', ref: stuck, summary: expect.stringMatching(/^The router was stuck: .* Dismissed: U4 moves/) })
+    expect(() => dismissStuck(db, stuck, signer, 'Again, for the record.')).toThrow(/already dismissed/)
+    // the dismissal is part of the record a release copies into the repository
+    expect(JOURNEY_TABLES).toContain('stuck_dismissals')
   })
 
   it('the order gate is money about to be spent', () => {

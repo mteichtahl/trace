@@ -314,6 +314,28 @@ describe('the agents\' facts in the journey', () => {
     expect(items.map((i) => i.summary)).toContain('Motor driver: the Verification specialist is stuck: The test bench is not reachable from the runtime. It recommends: Connect the bench to the network.')
   })
 
+  it('stuck.dismiss: a contributor dismisses a stuck report with a reason; it leaves the views, the log keeps it; reviewers are refused', async () => {
+    const r = (await journeyStore({ principal: ADMIN, deps }, 'acme/other').read((db) => loadJourney(db))).result
+    const by = { agent: 'verify', label: 'the Verification specialist', jobId: 'job-12' }
+    const id = (await facts().update((db) => ({ result: addStuck(db, by, { why: 'The scope does not answer on the bench network.', recommendation: 'Power-cycle the scope.' }, r) }))).result
+    const stuckIds = async (who: Context['principal']) => (await run(who, 'inbox', { kinds: ['stuck'] }) as { items: { ref: { id: string } }[] }).items.map((i) => i.ref.id)
+    expect(await stuckIds(USER)).toContain(id)
+    await expect(run(REVIEWER, 'stuck.dismiss', { repo: 'acme/other', job: 'job-12', reason: 'the scope is retired' })).rejects.toThrow(AccessDenied)
+    await expect(run(USER, 'stuck.dismiss', { repo: 'acme/other', job: 'job-12', reason: 'no' })).rejects.toThrow()
+    await expect(run(USER, 'stuck.dismiss', { repo: 'acme/other', job: 'job-nothing', reason: 'the scope is retired' })).rejects.toThrow(/no stuck report/)
+    // by its job, as the agent knows it (the app may name the item's own id too)
+    const out = await run(USER, 'stuck.dismiss', { repo: 'acme/other', job: 'job-12', reason: 'The scope is retired; use the bench meter instead.' }) as { dismissed: { id: string; job_id: string; reason: string; by: string } }
+    expect(out.dismissed).toMatchObject({ id, job_id: 'job-12', reason: 'The scope is retired; use the bench meter instead.', by: USER.email })
+    expect(await stuckIds(USER)).not.toContain(id)
+    expect(await stuckIds(ADMIN)).not.toContain(id)
+    const j = await run(USER, 'journey.get', { repo: 'acme/other' }) as { questions: { id: string }[]; decisions: { kind: string; ref: string; summary: string }[] }
+    expect(j.questions.map((q) => q.id)).not.toContain(id)
+    expect(j.decisions.find((d) => d.kind === 'stuck.dismissed')).toMatchObject({ ref: id, summary: expect.stringMatching(/Dismissed: The scope is retired/) })
+    await expect(run(USER, 'stuck.dismiss', { repo: 'acme/other', job: id, reason: 'The scope is retired, again.' })).rejects.toThrow(/no stuck report|already dismissed/)
+    // the agent's own fact is untouched: the API never writes the agents' facts
+    expect((await facts().read((db) => loadAgentFacts(db))).result.stuck.find((x) => x.id === id)?.resolvedAt).toBeNull()
+  })
+
   it('access is unchanged: no access to another project\'s facts, and the journey tools are never run through the API', async () => {
     await expect(run(OUTSIDER, 'journey.get', { repo: 'acme/other' })).rejects.toThrow(AccessDenied)
     const withTools: ActionDeps = { ...deps, tools: () => allTools(), jobs: async () => ({ repositoryOf: () => null, startJob: async () => ({ accepted: true, jobId: 'j' }), jobStatus: async () => [], runTool: async () => { throw new Error('must not be forwarded') } }) }
