@@ -4,6 +4,8 @@
  *   signature   RS256, against the user pool's JWKS (${issuer}/.well-known/jwks.json), cached; an unknown `kid`
  *               refetches the set at most once a minute (key rotation)
  *   claims      iss = the pool, token_use = 'access', client_id = the CLI app client, exp/nbf with 60 s leeway
+ *               (verifyId: an id token, token_use = 'id' and aud = the app client; the web backend reads who signed in
+ *               from it)
  *
  * Nothing here logs or returns the token.
  */
@@ -34,6 +36,20 @@ export const AccessClaims = z.object({
   'cognito:groups': z.array(z.string()).optional(),
 }).loose()
 export type AccessClaims = z.output<typeof AccessClaims>
+
+export const IdClaims = z.object({
+  sub: z.string().min(1),
+  iss: z.string(),
+  token_use: z.string(),
+  aud: z.string(),
+  exp: z.number(),
+  nbf: z.number().optional(),
+  iat: z.number().optional(),
+  email: z.string().optional(),
+  'cognito:username': z.string().optional(),
+  'cognito:groups': z.array(z.string()).optional(),
+}).loose()
+export type IdClaims = z.output<typeof IdClaims>
 
 export type JwksFetcher = (url: string) => Promise<unknown>
 
@@ -112,6 +128,22 @@ export class Verifier {
 
   /** The verified claims of a Cognito access token; throws AuthError otherwise. */
   async verify(token: string): Promise<AccessClaims> {
+    const c = await this.checked(token, AccessClaims)
+    if (c.token_use !== 'access') throw new AuthError('not an access token')
+    if (c.client_id !== this.clientId) throw new AuthError('wrong client')
+    return c
+  }
+
+  /** The verified claims of a Cognito id token (token_use 'id', aud = the app client); throws AuthError otherwise. */
+  async verifyId(token: string): Promise<IdClaims> {
+    const c = await this.checked(token, IdClaims)
+    if (c.token_use !== 'id') throw new AuthError('not an id token')
+    if (c.aud !== this.clientId) throw new AuthError('wrong client')
+    return c
+  }
+
+  /** Signature, issuer and time checks shared by both kinds of token. */
+  private async checked<S extends typeof AccessClaims | typeof IdClaims>(token: string, schema: S): Promise<z.output<S>> {
     const parts = token.split('.')
     if (parts.length !== 3) throw new AuthError('malformed token')
     const [h, p, s] = parts as [string, string, string]
@@ -121,12 +153,10 @@ export class Verifier {
     const key = await this.key(header.data.kid)
     const ok = createVerify('RSA-SHA256').update(`${h}.${p}`).verify(key, b64url(s))
     if (!ok) throw new AuthError('bad signature')
-    const claims = AccessClaims.safeParse(decodeJson(p, 'payload'))
+    const claims = schema.safeParse(decodeJson(p, 'payload'))
     if (!claims.success) throw new AuthError('malformed token claims')
-    const c = claims.data
+    const c = claims.data as z.output<S>
     if (c.iss !== this.issuer) throw new AuthError('wrong issuer')
-    if (c.token_use !== 'access') throw new AuthError('not an access token')
-    if (c.client_id !== this.clientId) throw new AuthError('wrong client')
     const t = this.now() / 1000
     if (c.exp + LEEWAY_S < t) throw new AuthError('token expired')
     if (c.nbf !== undefined && c.nbf - LEEWAY_S > t) throw new AuthError('token not yet valid')
