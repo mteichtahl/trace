@@ -106,6 +106,8 @@ export interface ActionDeps {
   store?: (prefix: string) => Backend
   /** Onboard a repository with the API's own GitHub token; absent: projects.create says this installation cannot. */
   onboard?: (repo: string, o: OnboardRequest) => Promise<ApiOnboardResult>
+  /** Ask the order watch (src/infra/lambda/order-watch.ts) to check one order now; absent: there is none to ask. */
+  orderWatch?: (repo: string, orderId: string) => Promise<void>
 }
 
 export interface Context {

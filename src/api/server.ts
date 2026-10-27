@@ -194,6 +194,14 @@ export async function start(): Promise<void> {
       },
     } : {}),
     scratch,
+    // order.check_now: the order watch Lambda, invoked for one order (src/infra/order-watch.ts)
+    ...(process.env.TRACE_ORDER_WATCH ? {
+      orderWatch: async (repo: string, orderId: string) => {
+        const l = await import('@aws-sdk/client-lambda')
+        const out = await new l.LambdaClient({ region: env.AWS_REGION }).send(new l.InvokeCommand({ FunctionName: process.env.TRACE_ORDER_WATCH, Payload: new TextEncoder().encode(JSON.stringify({ repo, orderId })) }))
+        if (out.FunctionError) throw new Error(`the order watch failed: ${out.FunctionError}`)
+      },
+    } : {}),
     // projects.create: the installer's onboarding (src/installer/onboard-api.ts) with this runtime's GitHub token; git
     // is in the image (the agents' image), and the token reaches it only through git's environment
     onboard: async (repo, o) => {

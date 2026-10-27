@@ -269,7 +269,7 @@ describe('the web app', () => {
     expect(rule.Name).toBe('trace-journey-events')
     expect(rule.EventPattern).toEqual({
       source: ['aws.s3'], 'detail-type': ['Object Created'],
-      detail: { bucket: { name: [{ Ref: expect.stringMatching(/Central/) }] }, object: { key: [{ wildcard: 'projects/*/journey-agent/facts.db' }] } },
+      detail: { bucket: { name: [{ Ref: expect.stringMatching(/Central/) }] }, object: { key: [{ wildcard: 'projects/*/journey-agent/facts.db' }, { wildcard: 'projects/*/journey-agent/bench.db' }] } },
     })
     expect(rule.Targets).toEqual([expect.objectContaining({ Arn: { 'Fn::GetAtt': [expect.stringMatching(/^JourneyEvents[0-9A-F]{8}$/), 'Arn'] }, RetryPolicy: { MaximumEventAgeInSeconds: 3600, MaximumRetryAttempts: 2 } })])
     web.hasResourceProperties('AWS::Lambda::Function', {

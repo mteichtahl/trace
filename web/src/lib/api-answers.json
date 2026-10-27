@@ -1087,5 +1087,287 @@
         }
       ]
     }
+  },
+  "build.get": {
+    "args": {
+      "repo": "acme/answers"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "releases": [],
+      "orders": [
+        {
+          "id": "0123456789abcdef",
+          "release": "A",
+          "state": "shipped",
+          "cancelled": false,
+          "boards": 10,
+          "total": 40,
+          "currency": "USD",
+          "number": "Y12-0001",
+          "paid": 40,
+          "ship": "2026-11-04",
+          "placedAt": "2026-10-27T00:00:00.000Z",
+          "placedBy": "user@example.com",
+          "shippedAt": "2026-10-27T00:00:00.000Z",
+          "deliveredAt": null,
+          "tracking": {
+            "carrier": "dhl",
+            "number": "1234567890",
+            "checkable": false
+          },
+          "cost": [
+            {
+              "label": "Paid to JLCPCB",
+              "amount": 40
+            }
+          ],
+          "options": [],
+          "parts": [],
+          "files": [],
+          "wait": {
+            "id": "order-Y12-0001",
+            "what": "DHL to deliver order Y12-0001",
+            "source": "manual",
+            "nextCheckAt": null,
+            "lastCheckedAt": null,
+            "checkable": false,
+            "text": "Order Y12-0001 is with DHL, tracking 1234567890. trace checks DHL once an admin adds the DHL key (Admin › Integrations)."
+          }
+        }
+      ],
+      "boards": [
+        {
+          "serial": "SN-001",
+          "order": "Y12-0001",
+          "revision": "A",
+          "state": "received",
+          "status": "received",
+          "received": "2026-10-27T00:00:00.000Z",
+          "photos": [
+            "runs/abc/top.jpg"
+          ],
+          "checks": [
+            {
+              "id": "0123456789abcdef",
+              "check": "count",
+              "kind": "count",
+              "result": "pass",
+              "by": "user@example.com",
+              "at": "2026-10-27T00:00:00.000Z"
+            }
+          ],
+          "readings": 0,
+          "failing": 0
+        }
+      ],
+      "bench": {
+        "configured": false,
+        "instruments": [],
+        "note": "No instruments are set up (hil.instruments): Bench setup connects them.",
+        "readings": [],
+        "boards": []
+      },
+      "notes": []
+    }
+  },
+  "cost.get": {
+    "args": {
+      "repo": "acme/answers"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "money": true,
+      "currency": "USD",
+      "spent": {
+        "cloud": 0,
+        "orders": 40,
+        "detail": {
+          "estimated": {
+            "agents": 0,
+            "gpu": 0,
+            "cpu": 0,
+            "total": 0
+          },
+          "actual": null,
+          "basis": "estimate"
+        }
+      },
+      "committed": 0,
+      "forecast": 0,
+      "quantity": 10,
+      "unit_cost": null,
+      "stages": [
+        {
+          "stage": "Define",
+          "id": "define",
+          "state": "current",
+          "started": "2026-10-27T00:00:00.000Z",
+          "finished": null,
+          "days": 0,
+          "cloud": 0,
+          "forecastDays": null
+        },
+        {
+          "stage": "Architect",
+          "id": "architect",
+          "state": "queued",
+          "started": null,
+          "finished": null,
+          "days": 0,
+          "cloud": null,
+          "forecastDays": null
+        },
+        {
+          "stage": "Capture",
+          "id": "capture",
+          "state": "queued",
+          "started": null,
+          "finished": null,
+          "days": 0,
+          "cloud": null,
+          "forecastDays": null
+        },
+        {
+          "stage": "Prove",
+          "id": "prove",
+          "state": "queued",
+          "started": null,
+          "finished": null,
+          "days": 0,
+          "cloud": null,
+          "forecastDays": null
+        },
+        {
+          "stage": "Layout",
+          "id": "layout",
+          "state": "queued",
+          "started": null,
+          "finished": null,
+          "days": 0,
+          "cloud": null,
+          "forecastDays": null
+        },
+        {
+          "stage": "Sign-off",
+          "id": "signoff",
+          "state": "queued",
+          "started": null,
+          "finished": null,
+          "days": 0,
+          "cloud": null,
+          "forecastDays": null
+        },
+        {
+          "stage": "Release",
+          "id": "release",
+          "state": "queued",
+          "started": null,
+          "finished": null,
+          "days": 0,
+          "cloud": null,
+          "forecastDays": null
+        },
+        {
+          "stage": "Fabricate",
+          "id": "fabricate",
+          "state": "queued",
+          "started": null,
+          "finished": null,
+          "days": 0,
+          "cloud": null,
+          "forecastDays": null
+        },
+        {
+          "stage": "Bring up",
+          "id": "bringup",
+          "state": "queued",
+          "started": null,
+          "finished": null,
+          "days": 0,
+          "cloud": null,
+          "forecastDays": null
+        }
+      ],
+      "lines": [
+        {
+          "id": "0123456789abcdef",
+          "at": "2026-10-27T00:00:00.000Z",
+          "what": "Order Y12-0001 with JLCPCB: 10 boards of revision A",
+          "kind": "order",
+          "amount": 40,
+          "estimate": false
+        }
+      ],
+      "explorer": {
+        "checkedAt": null,
+        "nextAt": null,
+        "ok": false,
+        "tag": "unknown",
+        "text": "What AWS billed is read from Cost Explorer once a day; it has not run yet (it starts with the next stack update, at the time cost.explorer.at sets). Figures lag about 24 hours."
+      },
+      "prices": {
+        "asOf": "2025-11-24",
+        "stale": true,
+        "sources": [
+          "https://aws.amazon.com/bedrock/pricing/",
+          "https://www.anthropic.com/pricing",
+          "https://aws.amazon.com/ec2/pricing/on-demand/"
+        ],
+        "text": "Estimates use the price table of 2025-11-24 (Bedrock per million tokens per model; g6.xlarge on demand in us-east-1 (one job holds the instance); c7i on demand in us-east-1, per vCPU). It is more than six months old: an admin updates it with the stack setting cost.prices."
+      },
+      "notes": [
+        "Forecast days per stage are not computed yet: there is no history of how long each stage takes.",
+        "No unit cost is set in the build plan, so the build's forecast is unknown.",
+        "Cloud estimates (agents, graphics card and CPU jobs) are computed from each run's tokens and each job's running time with the price table; they are estimates. What AWS billed comes from Cost Explorer, a day behind, and counts only resources tagged with the project (Bedrock and the shared job instances are not tagged per project)."
+      ]
+    }
+  },
+  "usage.month": {
+    "args": {
+      "month": "2026-10"
+    },
+    "result": {
+      "month": "2026-10",
+      "currency": "USD",
+      "projects": [
+        {
+          "repo": "acme/answers",
+          "estimated": {
+            "agents": 0,
+            "gpu": 0,
+            "cpu": 0,
+            "total": 0
+          },
+          "actual": null,
+          "orders": 40,
+          "orderCurrency": "USD",
+          "budget": null,
+          "started": true
+        }
+      ],
+      "totals": {
+        "estimated": 0,
+        "actual": null,
+        "orders": 40
+      },
+      "explorer": {
+        "checkedAt": null,
+        "nextAt": null,
+        "ok": false,
+        "tag": "unknown",
+        "text": "What AWS billed is read from Cost Explorer once a day; it has not run yet (it starts with the next stack update, at the time cost.explorer.at sets). Figures lag about 24 hours."
+      },
+      "prices": {
+        "asOf": "2025-11-24",
+        "stale": true,
+        "sources": [
+          "https://aws.amazon.com/bedrock/pricing/",
+          "https://www.anthropic.com/pricing",
+          "https://aws.amazon.com/ec2/pricing/on-demand/"
+        ],
+        "text": "Estimates use the price table of 2025-11-24 (Bedrock per million tokens per model; g6.xlarge on demand in us-east-1 (one job holds the instance); c7i on demand in us-east-1, per vCPU). It is more than six months old: an admin updates it with the stack setting cost.prices."
+      }
+    }
   }
 }

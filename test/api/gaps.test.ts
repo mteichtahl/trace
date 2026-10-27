@@ -211,11 +211,11 @@ describe('design.get', () => {
 })
 
 describe('orders, build and cost', () => {
-  it('order.record stores the order in the journey, logs it, and answers a ship wait that no one checks yet', async () => {
+  it('order.record stores the order in the journey, logs it, and answers a ship wait that says JLCPCB cannot be read', async () => {
     const o = await run(USER, 'order.record', { repo: REPO, order: 'next', number: 'Y12-4471058A', paid: 131.4, ship: '2026-11-04' }) as { created: boolean; order: Record<string, unknown>; wait: { what: string; text: string; nextCheckAt: null } }
     expect(o).toMatchObject({ ok: true, created: true, order: { number: 'Y12-4471058A', boards: 10, paid: 131.4, currency: 'USD', ship: '2026-11-04', state: 'placed' } })
     expect(o.wait).toMatchObject({ what: 'JLCPCB to ship order Y12-4471058A', nextCheckAt: null })
-    expect(o.wait.text).toMatch(/No automatic check exists yet/)
+    expect(o.wait.text).toMatch(/order status only to partner companies.*record the carrier and tracking number/)
     // the same number again corrects it rather than adding another
     expect(await run(USER, 'order.record', { repo: REPO, number: 'Y12-4471058A', paid: 133, ship: '2026-11-05' })).toMatchObject({ created: false, order: { paid: 133 } })
     await expect(run(USER, 'order.record', { repo: REPO, number: 'Y12', ship: 'soon' })).rejects.toThrow(/2026-11-04/)
@@ -232,15 +232,14 @@ describe('orders, build and cost', () => {
     expect(b.releases).toEqual([expect.objectContaining({ revision: 'A', commit: 'abc1234def', by: ADMIN.email, frozen: true })])
     expect(b.orders).toEqual([expect.objectContaining({ number: 'Y12-4471058A', state: 'placed', total: 133, ship: '2026-11-05' })])
     expect(b.boards).toEqual([])
-    expect(b.notes.join(' ')).toMatch(/Boards by serial/)
   })
 
-  it('cost.get: the stage timeline for everyone, money for admins only, cloud use null with the reason', async () => {
-    const a = await run(ADMIN, 'cost.get', { repo: REPO }) as { money: boolean; spent: { cloud: null; orders: number }; forecast: number; budget: number; stages: { stage: string; state: string; started: string | null }[]; lines: { kind: string; amount: number }[]; notes: string[] }
-    expect(a).toMatchObject({ money: true, spent: { cloud: null, orders: 133 }, forecast: 0, budget: 500 })
+  it('cost.get: the stage timeline for everyone, money for admins only, cloud use from the ledger with the reason', async () => {
+    const a = await run(ADMIN, 'cost.get', { repo: REPO }) as { money: boolean; spent: { cloud: number; orders: number }; forecast: number; budget: number; stages: { stage: string; state: string; started: string | null }[]; lines: { kind: string; amount: number }[]; notes: string[] }
+    expect(a).toMatchObject({ money: true, spent: { cloud: 0, orders: 133 }, forecast: 0, budget: 500 })
     expect(a.stages[0]).toMatchObject({ stage: 'Define', state: 'current', started: expect.any(String) })
     expect(a.lines).toEqual([expect.objectContaining({ kind: 'order', amount: 133 })])
-    expect(a.notes.join(' ')).toMatch(/Cloud use .* not recorded/)
+    expect(a.notes.join(' ')).toMatch(/Cloud estimates .* are estimates/)
     const u = await run(USER, 'cost.get', { repo: REPO }) as Record<string, unknown>
     expect(u).toMatchObject({ money: false, spent: { cloud: null, orders: null }, committed: null, forecast: null, lines: [] })
     expect((u.stages as unknown[]).length).toBe(9)

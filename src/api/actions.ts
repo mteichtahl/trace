@@ -91,7 +91,9 @@
  *   actions-files.ts     files.list, files.url
  *   actions-jobs.ts      job.control
  *   actions-people.ts    users.history
- *   actions-record.ts    requirements.trace, design.get, build.get, order.record, cost.get
+ *   actions-record.ts    requirements.trace, design.get
+ *   actions-build.ts     build.get, order.record, order.update, order.check_now, board.record, board.check
+ *   actions-cost.ts      cost.get, usage.month
  *   actions-skills.ts    skill.get, skill.draft, skill.drafts, skill.submit
  *   actions-me.ts        also policy.get, policy.set
  */
@@ -130,6 +132,8 @@ import { JOB_ACTIONS, withControls } from './actions-jobs.js'
 import { ME_ACTIONS } from './actions-me.js'
 import { PEOPLE_ACTIONS } from './actions-people.js'
 import { RECORD_ACTIONS } from './actions-record.js'
+import { BUILD_ACTIONS } from './actions-build.js'
+import { COST_ACTIONS } from './actions-cost.js'
 import { SKILL_ACTIONS } from './actions-skills.js'
 import { PROJECT_ACTIONS } from './actions-projects.js'
 import type { CognitoUser } from './aws.js'
@@ -637,6 +641,8 @@ export const ACTIONS = {
   ...JOB_ACTIONS,
   ...PEOPLE_ACTIONS,
   ...RECORD_ACTIONS,
+  ...BUILD_ACTIONS,
+  ...COST_ACTIONS,
   ...SKILL_ACTIONS,
 } satisfies Record<string, Action<z.ZodType>>
 
