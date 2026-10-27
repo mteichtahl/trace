@@ -16,7 +16,8 @@ const props = InfraPropsSchema.parse({
 })
 
 type Statement = { Sid?: string; Effect?: string; Action: string | string[]; Resource?: unknown; Condition?: Record<string, Record<string, unknown>> }
-const statementsOf = (t: Template, prefix: string): Statement[] => Object.entries(t.findResources('AWS::IAM::Policy')).filter(([id]) => id.startsWith(prefix))
+// a role's inline policy and, once CDK splits a long one, its overflow managed policies (RoleOverflowPolicy<n>)
+const statementsOf = (t: Template, prefix: string): Statement[] => Object.entries({ ...t.findResources('AWS::IAM::Policy'), ...t.findResources('AWS::IAM::ManagedPolicy') }).filter(([id]) => id.startsWith(prefix))
   .flatMap(([, p]) => (p as { Properties: { PolicyDocument: { Statement: Statement[] } } }).Properties.PolicyDocument.Statement)
 const policyText = (t: Template, prefix: string): string => JSON.stringify(statementsOf(t, prefix))
 const actionsOf = (s: Statement): string[] => (Array.isArray(s.Action) ? s.Action : [s.Action])
@@ -134,7 +135,12 @@ describe('the trace stack', () => {
       expect(deny).toHaveLength(1)
       expect(deny[0]).toMatchObject({ Effect: 'Deny', Action: ['s3:PutObject', 's3:DeleteObject', 's3:DeleteObjectVersion'] })
       expect(JSON.stringify(deny[0]?.Resource)).toContain(`/projects/${c.repo}/memory-state/*`)
-      expect(s.filter((x) => x.Effect === 'Deny')).toHaveLength(1)
+      // what people decided and said (projects/<slug>/journey, /chats): read through projects/<slug>/*, never written
+      const people = s.find((x) => x.Sid === 'PeopleRecordsReadOnly')
+      expect(people).toMatchObject({ Effect: 'Deny', Action: ['s3:PutObject', 's3:DeleteObject', 's3:DeleteObjectVersion'] })
+      expect(JSON.stringify(people?.Resource)).toContain(`/projects/${c.repo}/journey/*`)
+      expect(JSON.stringify(people?.Resource)).toContain(`/projects/${c.repo}/chats/*`)
+      expect(s.filter((x) => x.Effect === 'Deny')).toHaveLength(2)
       // the installation's prompt overrides (prompts/*): read and listed, never written
       expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes('/prompts/*'))).toBe(true)
       expect(s.filter((x) => actionsOf(x).includes('s3:ListBucket')).flatMap((x) => x.Condition?.StringLike?.['s3:prefix'] as string[])).toContain('prompts/*')
@@ -218,6 +224,9 @@ describe('the trace stack', () => {
       // the workflows cannot change which memory records are inactive either
       expect(s.find((x) => x.Sid === 'MemoryStateReadOnly')).toMatchObject({ Effect: 'Deny', Action: ['s3:PutObject', 's3:DeleteObject', 's3:DeleteObjectVersion'] })
       expect(JSON.stringify(s.find((x) => x.Sid === 'MemoryStateReadOnly')?.Resource)).toContain(`/projects/${repo}/memory-state/*`)
+      // nor the journey record or the chats
+      expect(s.find((x) => x.Sid === 'PeopleRecordsReadOnly')).toMatchObject({ Effect: 'Deny' })
+      expect(JSON.stringify(s.find((x) => x.Sid === 'PeopleRecordsReadOnly')?.Resource)).toContain(`/projects/${repo}/journey/*`)
       expect(text).not.toContain('/access/*')
       // the workflows read the installation's prompt overrides, and cannot write them
       expect(s.some((x) => actionsOf(x).includes('s3:GetObject') && JSON.stringify(x.Resource).includes('/prompts/*'))).toBe(true)

@@ -82,7 +82,7 @@ import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
 import { GithubConnection, RunnerProject } from './runner.js'
 import { TraceWeb, addWebClient, traceWebProps } from './web.js'
-import { ACCESS_PREFIX, CENTRAL_PREFIX, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
+import { ACCESS_PREFIX, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
   GPU_IMAGE_BUILD_OUTPUT, type InfraProps, ciRunnerOutput, LAYOUT_OUTPUT, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled,
   kbEnabled, projectRefs, projectSettings,
@@ -153,8 +153,8 @@ export const SOURCE_EXCLUDE = [
 
 /** Where the API keeps each project's chats (projects/<slug>/chats/) and the projects created from the app that wait for
  * the next stack update (installation/pending-projects/): docs/web-build.md. */
-export const CHATS_PREFIX = 'chats'
-export const JOURNEY_PREFIX = 'journey'
+export const CHATS_PREFIX: (typeof PEOPLE_RECORDS)[number] = 'chats'
+export const JOURNEY_PREFIX: (typeof PEOPLE_RECORDS)[number] = 'journey'
 export const PENDING_PROJECTS = 'installation/pending-projects'
 
 export class TraceStack extends Stack {

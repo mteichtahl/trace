@@ -90,6 +90,9 @@ import {
 
 /** A project's job-events topic, and its EventBridge rule: `<prefix>-<hash>-batch-events` (src/gpu/batch.ts reads the
  * prefix and hash back from the topic's name to name its wait queues). */
+
+/** A project's records that only people change, through the API (src/infra/stack.ts CHATS_PREFIX, JOURNEY_PREFIX). */
+export const PEOPLE_RECORDS = ['journey', 'chats'] as const
 export const batchEventsTopicName = (prefix: string, hash: string): string => `${prefix}-${hash}-batch-events`
 
 /** The central bucket's prefixes: the shared database, the access store beside it (src/core/access.ts), and the
@@ -244,6 +247,13 @@ export class ProjectStack extends Construct {
       resources: [bucket.arnForObjects(`${projectDataPrefix(repository)}/${MEMORY_STATE}/*`)],
     })
     role.addToPolicy(memoryState)
+    // what people decided and said (projects/<slug>/journey: gate signatures, waivers, answers; projects/<slug>/chats):
+    // the agent reads them, never writes them; they change only through the API, after its access check
+    const peopleRecords = new iam.PolicyStatement({
+      sid: 'PeopleRecordsReadOnly', effect: iam.Effect.DENY, actions: ['s3:PutObject', 's3:DeleteObject', 's3:DeleteObjectVersion'],
+      resources: PEOPLE_RECORDS.map((p) => bucket.arnForObjects(`${projectDataPrefix(repository)}/${p}/*`)),
+    })
+    role.addToPolicy(peopleRecords)
 
     // ------------------------------------------------------------------ its memory (src/infra/memory.ts)
     this.memory = cfg.memory.enabled
@@ -454,6 +464,7 @@ export class ProjectStack extends Construct {
     grantPrefixes(this.actionsRole, bucket, { conditional: [CENTRAL_PREFIX], readWrite: [projectDataPrefix(repository)] })
     grantPrefixes(this.actionsRole, bucket, { read: [PROMPTS_PREFIX] })
     this.actionsRole.addToPolicy(memoryState.copy())
+    this.actionsRole.addToPolicy(peopleRecords.copy())
     // the in-Actions fallback remembers as the worker does: its own memory, its own actors and namespaces
     if (this.memory) for (const st of memoryStatements(this.memory)) this.actionsRole.addToPolicy(st)
     // and searches and syncs its own knowledge base (the kb-sync job on a push to the default branch, and the fallback)
