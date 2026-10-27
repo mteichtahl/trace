@@ -139,6 +139,18 @@ describe('observability in the stack', () => {
     expect(JSON.stringify(t.toJSON().Outputs)).toContain('#dashboards/dashboard/trace-agents')
   })
 
+  it('adds per-project widgets of trace\'s own job, tool, cost and GPU metrics, keeping the aggregate ones as they were', () => {
+    const d = dashboardBody({ region: 'us-east-1', runtimes: ['trace_w_aaaaaaaa'], memories: ['aaaaaaaa'], gpu: true })
+    const titles = d.widgets.map((w) => (w.properties as { title?: string }).title).filter(Boolean)
+    for (const t of ['Jobs by kind and outcome', 'Tool calls', 'Claude cost (estimate, USD)']) expect(titles).toContain(t)
+    const per = d.widgets.filter((w) => /per project/.test(String((w.properties as { title?: string }).title)))
+    expect(per.map((w) => (w.properties as { title: string }).title)).toEqual(['Jobs per project', 'Job duration per project (p90)', 'Tool calls per project', 'Tool duration per project (p90)', 'Claude cost per project (estimate, USD)', 'GPU and CPU jobs per project'])
+    for (const w of per) expect(JSON.stringify(w)).toMatch(/SEARCH\('Namespace=\\"bedrock-agentcore\\" MetricName=\\"trace\.project\.[a-z.]+\\" \\"trace\.project\\"'/)
+    // laid out below everything else, in the 24-column grid
+    const bottom = Math.max(...d.widgets.filter((w) => !per.includes(w)).map((w) => Number(w.y) + Number(w.height)))
+    for (const w of per) expect(Number(w.y)).toBeGreaterThanOrEqual(bottom)
+  })
+
   it('creates nothing when off, and tells the runtimes to stay quiet', () => {
     const off = synth(InfraPropsSchema.parse({ ...base, observability: { enabled: false } }), 'NoObs').all
     for (const r of ['Custom::TransactionSearch', 'AWS::CloudWatch::Dashboard', 'AWS::Logs::DeliverySource', 'AWS::Logs::DeliveryDestination', 'AWS::Logs::Delivery']) off.resourceCountIs(r, 0)

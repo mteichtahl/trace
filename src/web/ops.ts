@@ -8,12 +8,16 @@
  *             project's hash (src/core/project.ts projectHash): its worker runtime `<prefix>_w_<hash>`, its memory
  *             `<prefix>_m_<hash>`, and `-ci-`, `-gpu-`, `-cpu-`, `-kb-<hash>`. A SEARCH result's label is its
  *             dimension values, so the runtime and memory names are in it. trace's own metrics (namespace
- *             bedrock-agentcore) carry no repository on purpose (low cardinality), so they cannot be attributed.
+ *             bedrock-agentcore) carry no repository on purpose (low cardinality): their aggregate series cannot be
+ *             attributed (admins only), and their per-project series (trace.project.*: jobs, job time, tool calls,
+ *             tool time, Claude cost, remote jobs) carry `project-<hash>` (src/core/telemetry.ts PROJECT METRICS),
+ *             which is attributed like a resource name.
  *   filter    the person's class (`whoami`) and projects (`projects`), asked as them through the API runtime:
  *               admin        everything
  *               contributor  only series attributed to one of their projects; a widget mixing projects keeps only
- *                            theirs, each labelled with its project; unattributed series are admin-only
- *               reviewer     the same, without cost series (a cost metric, or a widget titled with cost or spend)
+ *                            theirs, each labelled with its project; unattributed series are admin-only; no cost
+ *                            series (a cost metric, or a widget titled with cost or spend): money is for admins
+ *               reviewer     the same
  *             Alarms (DescribeAlarms, ALARM and INSUFFICIENT_DATA, names starting with the prefix) the same way, by
  *             their name and dimension values.
  *   answer    { status: { level, text }, tiles, alarms, sections: [{ id, title, widgets: [{ id, title, kind, unit,
@@ -65,7 +69,8 @@ const markPattern = (prefix: string): RegExp => {
   const esc = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const under = esc(prefix.replace(/-/g, '_').toLowerCase())
   const dash = esc(prefix.toLowerCase())
-  return new RegExp(`(?:${under}_[wm]_|${dash}-(?:ci|gpu|cpu|kb|m)-)([0-9a-f]{8})`, 'g')
+  // `project-<hash>`: the per-project metrics' dimension (trace.project), the same hash with no installation prefix
+  return new RegExp(`(?:${under}_[wm]_|${dash}-(?:ci|gpu|cpu|kb|m)-|\\bproject-)([0-9a-f]{8})`, 'g')
 }
 
 /**
@@ -184,7 +189,8 @@ export function filterSeries(series: readonly Series[], widgetTitle: string, acc
     const cost = COST.test(widgetTitle) || COST.test(s.metric ?? '') || COST.test(s.label)
     if (!access.admin) {
       if (!repo) continue
-      if (cost && access.projects.get(repo) === 'reviewer') continue
+      // money is for admins (docs/ui-design.md Operations): a contributor's project's spend is on its Cost tab for admins
+      if (cost) continue
     }
     out.push({ ...s, ...(repo ? { repo } : {}) })
   }
@@ -214,9 +220,13 @@ export function tiles(widgets: readonly { series: readonly Series[] }[], access:
     { id: 'runs', label: 'Agent runs', value: total, unit: 'runs', detail: total ? { successRate: Math.max(0, 1 - failed / total) } : null, spark: spark(runs), status: total && failed / total > 0.1 ? 'warn' : 'ok' },
     { id: 'latency', label: 'Median run time', value: lat.length ? lat[Math.floor(lat.length / 2)] : null, unit: 'ms', spark: spark(latency), status: 'ok' },
   ]
-  const jobs = of('trace.jobs')
+  // the aggregate where the person sees it (admins), else the per-project series of their projects: never both
+  const pick = (aggregate: string, perProject: string): Series[] => { const a = of(aggregate); return a.length ? a : of(perProject) }
+  const jobs = pick('trace.jobs', 'trace.project.jobs')
   if (jobs.length) out.push({ id: 'jobs', label: 'Jobs finished', value: sum(values(jobs)), unit: 'jobs', spark: spark(jobs), status: 'ok' })
-  const cost = of('trace.claude.cost')
+  const calls = pick('trace.tool.calls', 'trace.project.tool.calls')
+  if (calls.length) out.push({ id: 'tools', label: 'Tool calls', value: sum(values(calls)), unit: 'calls', spark: spark(calls), status: 'ok' })
+  const cost = pick('trace.claude.cost', 'trace.project.claude.cost')
   if (access.admin && cost.length) out.push({ id: 'cost', label: 'Claude spend (estimate)', value: Math.round(sum(values(cost)) * 100) / 100, unit: 'USD', spark: spark(cost), status: 'ok' })
   return out
 }
