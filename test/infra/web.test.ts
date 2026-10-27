@@ -161,9 +161,11 @@ describe('the web app', () => {
     expect(JSON.stringify(pool.WebAuthnRelyingPartyID)).toMatch(/WebStack.*DistributionDomainName|Distribution.*DomainName/)
     expect(pool.EmailConfiguration).toBeUndefined()
     expect(pool.UserPoolTier).toBe('ESSENTIALS')
-    // the invitation points at the app, and still at `trace login`
+    // the invitation points at the app's /invite page (the temporary password is typed there: no secret in a link), and
+    // still at `trace login`
     const body = JSON.stringify((pool.AdminCreateUserConfig as { InviteMessageTemplate: { EmailMessage: unknown } }).InviteMessageTemplate.EmailMessage)
-    expect(body).toMatch(/Sign in at https:\/\/".*\/invite, or with `trace login`/)
+    expect(body).toMatch(/open https:\/\/".*\/invite and enter this email address and the temporary password/)
+    expect(body).toContain('`trace login`')
 
     const ses = synth(InfraPropsSchema.parse({ ...base, web: { sesFrom: 'trace@example.com', domainName: 'trace.example.com', certificateArn: CERT } }), 'WebSes')
     const p2 = only(ses.parent, 'AWS::Cognito::UserPool').Properties
