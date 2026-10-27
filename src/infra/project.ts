@@ -24,7 +24,10 @@
  *             (src/gpu/batch.ts), SQS on queues named <prefix>-<hash>-wait-* only, and Subscribe (its own wait queues
  *             as the only endpoint), Unsubscribe and ListSubscriptionsByTopic on its own job-events topic only;
  *             ListQueues (no resource-level permission), to sweep its left-over wait queues
- *   events    (nested layout only) its own SNS topic <prefix>-<hash>-batch-events, and an EventBridge rule (default bus) sending it the
+ *   events    (nested layout only) its own SNS topic <prefix>-<hash>-batch-events (made with or without GPU jobs), an
+ *             EventBridge rule <prefix>-<hash>-journey-events sending it the central bucket's "Object Created" events of
+ *             its journey record (projects/<slug>/journey/journey.db, which only the API writes), so a worker waiting in
+ *             journey.ask is told when a person answers; and, with GPU jobs, an EventBridge rule (default bus) sending it the
  *             "Batch Job State Change" events of the stack's queues whose job definition is one of its own (prefix
  *             match on the definition's ARN without the revision): it submits only with those (ProjectGpuSubmit, and
  *             src/gpu/batch.ts placement uses only TRACE_GPU_JOB_DEFINITION / TRACE_CPU_JOB_DEFINITION, which are
@@ -101,6 +104,10 @@ export const PEOPLE_RECORDS = ['journey', 'chats'] as const
  * projects/<slug>/journey/* does not match projects/<slug>/journey-agent/*. */
 export const AGENT_FACTS = 'journey-agent'
 export const batchEventsTopicName = (prefix: string, hash: string): string => `${prefix}-${hash}-batch-events`
+/** The rule sending a project's journey-record writes to that topic (journey.ask's wait, src/tools/journey/tools.ts). */
+export const journeyEventsRuleName = (prefix: string, hash: string): string => `${prefix}-${hash}-journey-events`
+/** The object the API writes for each change to a project's journey record (src/core/journey-store.ts). */
+export const journeyRecordKey = (repository: string): string => `${projectDataPrefix(repository)}/${PEOPLE_RECORDS[0]}/journey.db`
 
 /** The central bucket's prefixes: the shared database, the access store beside it (src/core/access.ts), and the
  * installation's prompt overrides (src/prompts/store.ts). */
@@ -336,6 +343,7 @@ export class ProjectStack extends Construct {
 
     // ------------------------------------------------------------------ GPU jobs: its own definition and job role
     const gpuEnv: Record<string, string> = {}
+    const jobDefinitions: string[] = []
     this.jobDefinitionName = null
     this.cpuJobDefinitionName = null
     if (p.gpu) {
@@ -376,19 +384,34 @@ export class ProjectStack extends Construct {
       }))
       // DescribeJobs has no resource-level permissions
       role.addToPolicy(new iam.PolicyStatement({ sid: 'ProjectGpuDescribe', actions: ['batch:DescribeJobs'], resources: ['*'] }))
-      // ---------------------------------------------------------------- its jobs' state changes, as events
-      // nested layout only, like the CPU queue and the knowledge base: a flat stack of about 24 projects has no room
-      // for three more resources per project. A flat project's jobs are waited on with the timer (src/gpu/batch.ts)
-      if (cfg.layout === 'nested') {
-        // its own topic and rule (see the header). The rule matches its definitions by ARN prefix, revision left out
-        // (`<arn>:`): a job submitted by name runs the latest revision, and its event names the revision's ARN
-        const definitions = [job.jobDefinitionName, ...(job.cpu && p.gpu.cpuQueue ? [job.cpu.jobDefinitionName] : [])]
-        const topic = new sns.Topic(this, 'JobEvents', {
-          topicName: batchEventsTopicName(cfg.prefix, hash),
-          displayName: `trace: AWS Batch job state changes of ${slug}'s jobs`.slice(0, 100),
-          enforceSSL: true,
-        })
-        // EventBridge: one rule per project on the default bus (300 per region by default; at most 60 projects)
+      // its jobs' state changes go to its events topic (below), nested layout only
+      if (cfg.layout === 'nested') jobDefinitions.push(job.jobDefinitionName, ...(job.cpu && p.gpu.cpuQueue ? [job.cpu.jobDefinitionName] : []))
+      // the definitions' vCPUs: src/gpu/batch.ts caps a job's `vcpus` hint at them
+      Object.assign(gpuEnv, { TRACE_GPU_QUEUE: p.gpu.queue.jobQueueArn, TRACE_GPU_JOB_DEFINITION: job.jobDefinitionName, TRACE_GPU_BUCKET: bucket.bucketName, TRACE_GPU_JOB_MAX_VCPUS: String(GPU_JOB_VCPUS) })
+    }
+
+    // ------------------------------------------------------------------ its events topic: jobs' state changes, people's answers
+    // nested layout only, like the CPU queue and the knowledge base: a flat stack of about 24 projects has no room
+    // for three more resources per project. A flat project's worker waits on a timer (src/gpu/batch.ts, journey.ask)
+    const eventsEnv: Record<string, string> = {}
+    if (cfg.layout === 'nested') {
+      const topic = new sns.Topic(this, 'JobEvents', {
+        topicName: batchEventsTopicName(cfg.prefix, hash),
+        displayName: `trace: ${slug}'s job state changes and journey record changes`.slice(0, 100),
+        enforceSSL: true,
+      })
+      // a target without CDK's SnsTopic helper, whose publish grant has no condition: each is for its own rule only
+      const sendTo = (rule: events.Rule, sid: string): void => {
+        rule.addTarget({ bind: () => ({ arn: topic.topicArn }) })
+        topic.addToResourcePolicy(new iam.PolicyStatement({
+          sid, principals: [new iam.ServicePrincipal('events.amazonaws.com')], actions: ['sns:Publish'], resources: [topic.topicArn],
+          conditions: { ArnEquals: { 'aws:SourceArn': rule.ruleArn } },
+        }))
+      }
+      if (p.gpu && jobDefinitions.length) {
+        // EventBridge: one rule per project on the default bus (300 per region by default; at most 60 projects, two
+        // rules each). It matches its definitions by ARN prefix, revision left out (`<arn>:`): a job submitted by name
+        // runs the latest revision, and its event names the revision's ARN
         const rule = new events.Rule(this, 'JobEventsRule', {
           ruleName: batchEventsTopicName(cfg.prefix, hash),
           description: `trace: state changes of ${slug}'s jobs on the trace job queues, to its batch-events topic`.slice(0, 512),
@@ -397,46 +420,49 @@ export class ProjectStack extends Construct {
             detailType: ['Batch Job State Change'],
             detail: {
               jobQueue: p.gpu.jobQueueArns,
-              jobDefinition: definitions.map((d) => ({ prefix: `arn:${partition}:batch:${region}:${account}:job-definition/${d}:` })),
+              jobDefinition: jobDefinitions.map((d) => ({ prefix: `arn:${partition}:batch:${region}:${account}:job-definition/${d}:` })),
             },
           },
         })
-        // the target without CDK's SnsTopic helper, whose publish grant has no condition: this one is for this rule only
-        rule.addTarget({ bind: () => ({ arn: topic.topicArn }) })
-        topic.addToResourcePolicy(new iam.PolicyStatement({
-          sid: 'BatchJobEventsRule',
-          principals: [new iam.ServicePrincipal('events.amazonaws.com')],
-          actions: ['sns:Publish'],
-          resources: [topic.topicArn],
-          conditions: { ArnEquals: { 'aws:SourceArn': rule.ruleArn } },
-        }))
-        Tags.of(topic).add(PROJECT_TAG, slug)
-        this.jobEventsTopic = topic
-        // waiting on them (src/gpu/batch.ts): its own short-lived queues, by name prefix, subscribed to its own topic
-        const waitPrefix = `${cfg.prefix}-${hash}-wait-`
-        const waitQueues = `arn:${partition}:sqs:${region}:${account}:${waitPrefix}*`
-        role.addToPolicy(new iam.PolicyStatement({
-          sid: 'ProjectGpuWaitQueues',
-          actions: ['sqs:CreateQueue', 'sqs:DeleteQueue', 'sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes', 'sqs:SetQueueAttributes', 'sqs:TagQueue'],
-          resources: [waitQueues],
-        }))
-        // the sweep of its wait queues left over by a killed process (src/gpu/batch.ts sweepWaitQueues): ListQueues has
-        // no resource-level permission, so "*"; it lists names only, and the sweep asks with this project's prefix
-        role.addToPolicy(new iam.PolicyStatement({ sid: 'ProjectGpuWaitListQueues', actions: ['sqs:ListQueues'], resources: ['*'] }))
-        role.addToPolicy(new iam.PolicyStatement({ sid: 'ProjectGpuWaitListSubscriptions', actions: ['sns:ListSubscriptionsByTopic'], resources: [topic.topicArn] }))
-        role.addToPolicy(new iam.PolicyStatement({
-          sid: 'ProjectGpuWaitSubscribe', actions: ['sns:Subscribe'], resources: [topic.topicArn],
-          conditions: { StringEquals: { 'sns:Protocol': 'sqs' }, StringLike: { 'sns:Endpoint': waitQueues } },
-        }))
-        // Unsubscribe names the subscription (<topic arn>:<id>): safe on its own topic, whose subscriptions are all its own
-        role.addToPolicy(new iam.PolicyStatement({
-          sid: 'ProjectGpuWaitUnsubscribe', actions: ['sns:Unsubscribe'], resources: [topic.topicArn, `${topic.topicArn}:*`],
-        }))
-        // the wait queues' names follow from it: <prefix>-<hash>-batch-events (src/gpu/batch.ts waitQueueName)
-        gpuEnv.TRACE_BATCH_EVENTS_TOPIC = topic.topicArn
+        sendTo(rule, 'BatchJobEventsRule')
       }
-      // the definitions' vCPUs: src/gpu/batch.ts caps a job's `vcpus` hint at them
-      Object.assign(gpuEnv, { TRACE_GPU_QUEUE: p.gpu.queue.jobQueueArn, TRACE_GPU_JOB_DEFINITION: job.jobDefinitionName, TRACE_GPU_BUCKET: bucket.bucketName, TRACE_GPU_JOB_MAX_VCPUS: String(GPU_JOB_VCPUS) })
+      // a person's act on the journey record (an answer, above all): the central bucket's own "Object Created" event
+      // for this project's journey.db (the bucket sends its events to EventBridge: src/infra/stack.ts), so a worker
+      // waiting in journey.ask is told at once. Only the API writes that object (PeopleRecordsReadOnly)
+      const journeyRule = new events.Rule(this, 'JourneyEventsRule', {
+        ruleName: journeyEventsRuleName(cfg.prefix, hash),
+        description: `trace: ${slug}'s journey record written (a person answered, signed, waived), to its events topic`.slice(0, 512),
+        eventPattern: {
+          source: ['aws.s3'],
+          detailType: ['Object Created'],
+          detail: { bucket: { name: [bucket.bucketName] }, object: { key: [journeyRecordKey(repository)] } },
+        },
+      })
+      sendTo(journeyRule, 'JourneyEventsRule')
+      Tags.of(topic).add(PROJECT_TAG, slug)
+      this.jobEventsTopic = topic
+      // waiting on them (src/gpu/batch.ts openWaitQueue): its own short-lived queues, by name prefix, subscribed to its own topic
+      const waitPrefix = `${cfg.prefix}-${hash}-wait-`
+      const waitQueues = `arn:${partition}:sqs:${region}:${account}:${waitPrefix}*`
+      role.addToPolicy(new iam.PolicyStatement({
+        sid: 'ProjectGpuWaitQueues',
+        actions: ['sqs:CreateQueue', 'sqs:DeleteQueue', 'sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes', 'sqs:SetQueueAttributes', 'sqs:TagQueue'],
+        resources: [waitQueues],
+      }))
+      // the sweep of its wait queues left over by a killed process (src/gpu/batch.ts sweepWaitQueues): ListQueues has
+      // no resource-level permission, so "*"; it lists names only, and the sweep asks with this project's prefix
+      role.addToPolicy(new iam.PolicyStatement({ sid: 'ProjectGpuWaitListQueues', actions: ['sqs:ListQueues'], resources: ['*'] }))
+      role.addToPolicy(new iam.PolicyStatement({ sid: 'ProjectGpuWaitListSubscriptions', actions: ['sns:ListSubscriptionsByTopic'], resources: [topic.topicArn] }))
+      role.addToPolicy(new iam.PolicyStatement({
+        sid: 'ProjectGpuWaitSubscribe', actions: ['sns:Subscribe'], resources: [topic.topicArn],
+        conditions: { StringEquals: { 'sns:Protocol': 'sqs' }, StringLike: { 'sns:Endpoint': waitQueues } },
+      }))
+      // Unsubscribe names the subscription (<topic arn>:<id>): safe on its own topic, whose subscriptions are all its own
+      role.addToPolicy(new iam.PolicyStatement({
+        sid: 'ProjectGpuWaitUnsubscribe', actions: ['sns:Unsubscribe'], resources: [topic.topicArn, `${topic.topicArn}:*`],
+      }))
+      // the wait queues' names follow from it: <prefix>-<hash>-batch-events (src/gpu/batch.ts waitQueueName)
+      eventsEnv.TRACE_BATCH_EVENTS_TOPIC = topic.topicArn
     }
 
     // ------------------------------------------------------------------ the worker runtime
@@ -458,6 +484,7 @@ export class ProjectStack extends Construct {
         ...memoryEnv,
         ...kbEnv,
         ...gpuEnv,
+        ...eventsEnv,
         ...gatewayEnv,
       },
       tags: { [PROJECT_TAG]: slug, 'trace:installation': cfg.prefix },

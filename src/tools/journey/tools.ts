@@ -5,11 +5,18 @@
  *
  *   journey.status  the journey as it stands, with every agent's facts merged in: the current stage, the next step,
  *                   the gates of the stage with each criterion (who owns it, its status and evidence), the open
- *                   questions with their answers, the agents that are stuck
+ *                   questions with their answers, the agents that are stuck, and the stuck reports a person dismissed
+ *                   (stuck.dismiss) with the reason, so the agent knows to stop waiting on them and why
  *   journey.ask     ask a person (by Cognito sub) or the project's contributors or admins: what it blocks, the options
  *                   with exactly one recommended and a reason for each, the sources read. Answers the question id; with
- *                   wait_minutes it waits for the answer (read from the journey record), checking on a timer it
- *                   declares (a person's answer sends the worker no event), and says when it will look next
+ *                   wait_minutes it waits for the answer (read from the journey record). On events where the project
+ *                   has its events topic (TRACE_BATCH_EVENTS_TOPIC, nested layout): a person's answer is a write of
+ *                   projects/<slug>/journey/journey.db, whose S3 "Object Created" event an EventBridge rule sends to
+ *                   that topic (src/infra/project.ts JourneyEventsRule); a short-lived queue of this wait's own
+ *                   (src/gpu/batch.ts openWaitQueue) receives it, and the record is read once per write. In case a
+ *                   message is lost it also reads the record 30 s and 90 s after subscribing, then every 5 minutes.
+ *                   Without the topic, or when subscribing fails, it reads the record on a timer (30 s, doubling to
+ *                   5 minutes). Either way it says when it will look next
  *   journey.check   record a criterion trace owns as met or not met, with its evidence (a run id, an artifact, a file);
  *                   a person-owned criterion is refused. The newest check of a criterion supersedes the ones before
  *   journey.stuck   say the agent cannot go on: why, what it recommends, its options; or (resolved) that it moved on
@@ -31,7 +38,9 @@ import { type AgentFacts, EvidenceSchema, type JourneyRecord, JourneyError, jour
 import { JourneyStore, JourneyStoreError } from '../../core/journey-store.js'
 import { ToolError, defineTool } from '../../core/registry.js'
 import { Work, findRoot, projectPath } from '../../core/store.js'
-import { type WaitOutcome, waitWithTimer } from '../../core/wait.js'
+import { randomBytes } from 'node:crypto'
+import { type WaitOutcome, trackEventWait, waitWithTimer } from '../../core/wait.js'
+import { type SnsApi, type SqsApi, SAFETY_CHECK_MS, WARMUP_CHECKS_MS, openWaitQueue, staleAfterMs, waitQueueName } from '../../gpu/batch.js'
 
 const configured = (): boolean => projectsFromEnv() !== null
 
@@ -109,7 +118,7 @@ export const status = defineTool({
     if (a.question) {
       const q = merged.questions.find((x) => x.id === a.question)
       if (!q) throw new ToolError(`journey: no question ${a.question} in this project`)
-      return { question: answerOf(q) }
+      return { question: answerOf(q, r) }
     }
     const v = journeyView(r, { hash: '', label: s.asker.label, admin: false, part: null }, undefined, f)
     const stage = v.current_stage
@@ -120,22 +129,31 @@ export const status = defineTool({
         id: g.id, title: g.title, state: g.state, met: g.met, total: g.total,
         criteria: g.criteria.map((c) => ({ id: c.id, owner: c.owner, status: c.status, text: c.text, evidence: c.evidence, checked_at: c.checked_at })),
       })),
-      questions: merged.questions.filter((q) => q.answeredAt === null || q.askedAt > Date.now() / 1000 - 7 * 86400).map(answerOf),
+      questions: merged.questions.filter((q) => q.kind === 'question' && (q.answeredAt === null || q.askedAt > Date.now() / 1000 - 7 * 86400)).map((q) => answerOf(q, r)),
+      stuck: merged.questions.filter((q) => q.kind === 'stuck' && (q.answeredAt === null || q.askedAt > Date.now() / 1000 - 7 * 86400)).map((q) => answerOf(q, r)),
       later_stages: v.stages.filter((x) => x.state === 'queued').map((x) => x.id),
     }
   }),
 })
 
 interface Answer { answer: string | null; option: string | null; reason: string | null; by: string | null; at: string }
-const answerOf = (q: JourneyRecord['questions'][number]): { id: string; kind: string; asked_by: string; text: string; blocks: string | null; job_id: string | null; asked_at: string; answered: Answer | null } => ({
-  id: q.id, kind: q.kind, asked_by: q.askedBy, text: q.text, blocks: q.blocks, job_id: q.jobId, asked_at: new Date(q.askedAt * 1000).toISOString(),
-  answered: q.answeredAt !== null ? { answer: q.answer, option: q.optionId, reason: q.answerReason, by: q.answeredBy, at: new Date(q.answeredAt * 1000).toISOString() } : null,
-})
+interface Dismissed { reason: string; by: string; at: string }
+const answerOf = (q: JourneyRecord['questions'][number], r?: JourneyRecord): { id: string; kind: string; asked_by: string; text: string; blocks: string | null; job_id: string | null; asked_at: string; answered: Answer | null; dismissed?: Dismissed } => {
+  const d = q.kind === 'stuck' ? r?.dismissals?.find((x) => x.stuckId === q.id) : undefined
+  return {
+    id: q.id, kind: q.kind, asked_by: q.askedBy, text: q.text, blocks: q.blocks, job_id: q.jobId, asked_at: new Date(q.askedAt * 1000).toISOString(),
+    answered: q.answeredAt !== null ? { answer: q.answer, option: q.optionId, reason: q.answerReason, by: q.answeredBy, at: new Date(q.answeredAt * 1000).toISOString() } : null,
+    // a person dismissed this stuck report: the agent stops waiting on it and acts on the reason
+    ...(d ? { dismissed: { reason: d.reason, by: d.by, at: new Date(d.at * 1000).toISOString() } } : {}),
+  }
+}
 
 // ------------------------------------------------------------------ journey.ask
 
-/** How a waiting journey.ask checks the journey record: a person's answer sends the worker no event. */
+/** How a waiting journey.ask checks the journey record where no event reaches it (no events topic, or subscribing failed). */
 export const ASK_CHECK = { intervalMs: 30_000, factor: 2, maxIntervalMs: 5 * 60_000 }
+/** What a journey-record write looks like on the project's topic (an S3 event through EventBridge, delivered raw). */
+export const JOURNEY_WRITE_FILTER = { source: ['aws.s3'], 'detail-type': ['Object Created'] }
 
 export const ask = defineTool({
   name: 'journey.ask',
@@ -159,34 +177,130 @@ export const ask = defineTool({
     }))
     const asked = { question_id: id, for: a.sub ? 'one person' : `the ${a.ask}` }
     if (!a.wait_minutes) return { ...asked, answered: null, next: `Asked. Read the answer later with journey.status { question: "${id}" }, or ask again with wait_minutes.` }
-    const out = await waitForAnswer(s, id, a.wait_minutes * 60_000)
+    const out = await waitForAnswer(s, id, a.wait_minutes * 60_000, { events: eventsOf(process.env, s.repository) })
     return { ...asked, ...out }
   }),
 })
 
-/** Wait for a person's answer to question `id`, reading the journey record on the declared timer. */
-export async function waitForAnswer(s: Pick<Scope, 'journey'>, id: string, ms: number, o: { sleep?: (ms: number, early: AbortSignal) => Promise<void>; now?: () => number } = {}): Promise<{ answered: Answer | null; next: string; next_check_at?: string | null }> {
+/** Where a person's answer arrives as an event: the project's own topic and the wait queue's name (null: none here). */
+export interface AnswerEvents { topic: string; queueName: string; project: string; sqs?: SqsApi | undefined; sns?: SnsApi | undefined; staleMs?: number | undefined }
+
+/** The events of this project, from the worker's environment: null without TRACE_BATCH_EVENTS_TOPIC (a flat layout,
+ * an older stack, a laptop) or when the topic is not this project's. */
+export function eventsOf(env: Record<string, string | undefined>, repository: string): AnswerEvents | null {
+  const topic = env.TRACE_BATCH_EVENTS_TOPIC?.trim()
+  if (!topic) return null
+  // a queue of this wait's own: two waits on one question (two jobs) never share one
+  const queueName = waitQueueName(topic, repository, `ask-${randomBytes(4).toString('hex')}`)
+  return queueName ? { topic, queueName, project: repository.toLowerCase(), staleMs: staleAfterMs(env as NodeJS.ProcessEnv) } : null
+}
+
+interface WaitOptions {
+  sleep?: (ms: number, early: AbortSignal) => Promise<void>
+  now?: () => number
+  /** wait on the project's events (null or absent: on the timer) */
+  events?: AnswerEvents | null | undefined
+  log?: (line: string) => void
+}
+
+type AnswerWait = { answered: Answer | null; next: string; next_check_at?: string | null; waited_on?: 'events' | 'timer'; why_timer?: string }
+
+const readAnswer = async (s: Pick<Scope, 'journey'>, id: string): Promise<Answer | null> => {
+  const q = (await s.journey.read((db) => loadJourney(db)?.questions.find((x) => x.id === id) ?? null)).result
+  return q ? answerOf(q).answered : null
+}
+
+const notAnswered = (id: string, ms: number): string =>
+  `Not answered within ${Math.round(ms / 60_000)} minutes. Carry on with what it does not block, read it later with journey.status { question: "${id}" }, or end your report with what waits on it. Never take the recommended option as the answer.`
+
+/** Wait for a person's answer to question `id`: on the project's events where it has them, else on the declared timer. */
+export async function waitForAnswer(s: Pick<Scope, 'journey'>, id: string, ms: number, o: WaitOptions = {}): Promise<AnswerWait> {
+  const now = o.now ?? Date.now
+  const log = o.log ?? ((line: string) => { process.stderr.write(`journey.ask: ${line}\n`) })
+  const deadline = now() + ms
+  let why = 'this project sends the worker no event when its journey record changes (no events topic: an older or flat installation)'
+  if (o.events) {
+    const out = await waitOnEvents(s, id, ms, o.events, { now, log })
+    if ('answered' in out) return out
+    why = out.why
+    log(`waiting on a timer: ${why}`)
+  }
+  // the timer carries on for what is left of the wait
+  return { ...(await waitOnTimer(s, id, Math.max(0, deadline - now()), why, o)), waited_on: 'timer', why_timer: why }
+}
+
+/** The event wait: told of every write of the journey record, read once per write, with a few safety reads. */
+async function waitOnEvents(s: Pick<Scope, 'journey'>, id: string, ms: number, e: AnswerEvents, c: { now: () => number; log: (line: string) => void }): Promise<AnswerWait | { why: string }> {
+  const { now, log } = c
+  const deadline = now() + ms
+  let queue: Awaited<ReturnType<typeof openWaitQueue>>
+  try {
+    queue = await openWaitQueue({
+      topic: e.topic, queueName: e.queueName, sweepPrefix: e.queueName.slice(0, e.queueName.indexOf('-wait-') + '-wait-'.length), project: e.project,
+      filterPolicy: JOURNEY_WRITE_FILTER, sqs: e.sqs, sns: e.sns, now, staleMs: e.staleMs ?? staleAfterMs({}), log,
+    })
+  } catch (err) {
+    return { why: `setting up its event subscription failed (${err instanceof Error ? err.message : String(err)})` }
+  }
+  const wait = trackEventWait({ what: `a person's answer to question ${id}`, state: 'not answered yet', now })
+  try {
+    // the one read that closes the gap before the subscription existed
+    let answered = await readAnswer(s, id)
+    if (answered) return { answered, next: 'Answered: carry on with it, and cite the question id where you act on it.', waited_on: 'events' }
+    const subscribedAt = now()
+    const warmups = WARMUP_CHECKS_MS.map((x) => subscribedAt + x)
+    let nextSafety = warmups.shift() ?? subscribedAt + SAFETY_CHECK_MS
+    log(`waiting for question ${id} to be answered: told when the journey record changes; in case a message is lost, also reading it ${WARMUP_CHECKS_MS.map((x) => `${x / 1000} seconds`).join(' and ')} after subscribing, then every ${Math.round(SAFETY_CHECK_MS / 60_000)} minutes (next at ${new Date(nextSafety).toISOString()})`)
+    for (;;) {
+      const t = now()
+      if (t >= deadline) {
+        answered = await readAnswer(s, id)
+        if (answered) return { answered, next: 'Answered: carry on with it, and cite the question id where you act on it.', waited_on: 'events' }
+        return { answered: null, next_check_at: null, waited_on: 'events', next: `${notAnswered(id, ms)} (trace was waiting on the journey record's change events; no further check is planned.)` }
+      }
+      let look = t >= nextSafety
+      if (!look) {
+        const waitS = Math.max(1, Math.min(20, Math.ceil((Math.min(nextSafety, deadline) - t) / 1000)))
+        try {
+          look = (await queue.receive(waitS)).length > 0
+        } catch (err) {
+          return { why: `receiving its events failed (${err instanceof Error ? err.message : String(err)})` }
+        }
+      } else {
+        nextSafety = warmups.shift() ?? now() + SAFETY_CHECK_MS
+      }
+      if (!look) continue
+      answered = await readAnswer(s, id)
+      if (answered) {
+        wait.update('answered')
+        return { answered, next: 'Answered: carry on with it, and cite the question id where you act on it.', waited_on: 'events' }
+      }
+    }
+  } finally {
+    wait.end()
+    await queue.close()
+  }
+}
+
+/** The timer wait: the journey record read on the declared timer (ASK_CHECK), saying why there is no event. */
+async function waitOnTimer(s: Pick<Scope, 'journey'>, id: string, ms: number, why: string, o: WaitOptions): Promise<AnswerWait> {
   let lastNext: string | null = null
   const outcome: WaitOutcome<Answer> = await waitWithTimer<Answer>({
     what: `a person's answer to question ${id}`,
-    why: 'a person answers in the web app, which sends the worker no event; trace reads the journey record instead',
+    why,
     intervalMs: ASK_CHECK.intervalMs, factor: ASK_CHECK.factor, maxIntervalMs: ASK_CHECK.maxIntervalMs,
     deadlineAt: (o.now ?? Date.now)() + ms,
     ...(o.sleep ? { sleep: o.sleep } : {}), ...(o.now ? { now: o.now } : {}),
     report: (n) => { lastNext = n.nextCheckAt },
     check: async () => {
-      const q = (await s.journey.read((db) => loadJourney(db)?.questions.find((x) => x.id === id) ?? null)).result
-      const answered = q ? answerOf(q).answered : null
+      const answered = await readAnswer(s, id)
       if (answered) return { done: true, value: answered, state: 'answered' }
       return { done: false, state: 'not answered yet' }
     },
   })
   if (outcome.done) return { answered: outcome.value, next: 'Answered: carry on with it, and cite the question id where you act on it.' }
   const after = new Date((o.now ?? Date.now)() + ASK_CHECK.maxIntervalMs).toISOString()
-  return {
-    answered: null, next_check_at: lastNext ?? after,
-    next: `Not answered within ${Math.round(ms / 60_000)} minutes. Carry on with what it does not block, read it later with journey.status { question: "${id}" }, or end your report with what waits on it. Never take the recommended option as the answer.`,
-  }
+  return { answered: null, next_check_at: lastNext ?? after, next: notAnswered(id, ms) }
 }
 
 // ------------------------------------------------------------------ journey.check

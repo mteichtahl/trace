@@ -408,12 +408,15 @@ describe('the trace stack', () => {
     syn.parent.resourceCountIs('AWS::SNS::Topic', 0)
     syn.parent.resourceCountIs('AWS::Events::Rule', 0)
     t.resourceCountIs('AWS::SNS::Topic', 2)
-    t.resourceCountIs('AWS::Events::Rule', 2)
+    // each project's two rules: its Batch jobs' state changes and its journey record's writes (journey.ask's wait)
+    t.resourceCountIs('AWS::Events::Rule', 4)
     t.resourceCountIs('AWS::SNS::TopicPolicy', 2)
     for (const [repo, h, oh] of [[A, HA, HB], [B, HB, HA]] as const) {
       const n = nestedOf(syn, repo)
       n.hasResourceProperties('AWS::SNS::Topic', { TopicName: `trace-${h}-batch-events`, Tags: [{ Key: 'trace:project', Value: repo }] })
-      const rules = Object.entries(n.findResources('AWS::Events::Rule')) as [string, { Properties: { Name: string; EventPattern: Record<string, unknown>; Targets: { Arn: unknown }[] } }][]
+      const all = Object.entries(n.findResources('AWS::Events::Rule')) as [string, { Properties: { Name: string; EventPattern: Record<string, unknown>; Targets: { Arn: unknown }[] } }][]
+      expect(all).toHaveLength(2)
+      const rules = all.filter(([id]) => id.startsWith(`Project${h}JobEventsRule`))
       expect(rules).toHaveLength(1)
       const [ruleId, rule] = rules[0] as (typeof rules)[number]
       expect(rule.Properties.Name).toBe(`trace-${h}-batch-events`)
@@ -436,9 +439,18 @@ describe('the trace stack', () => {
       expect(policies).toHaveLength(1)
       expect(policies[0]?.Properties.Topics).toEqual([{ Ref: expect.stringMatching(new RegExp(`^Project${h}JobEvents`)) }])
       const allow = policies[0]?.Properties.PolicyDocument.Statement.filter((x) => x.Effect === 'Allow') ?? []
-      expect(allow).toEqual([expect.objectContaining({
-        Principal: { Service: 'events.amazonaws.com' }, Action: 'sns:Publish', Condition: { ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': [ruleId, 'Arn'] } } },
-      })])
+      const [journeyId, journeyRule] = all.find(([id]) => id.startsWith(`Project${h}JourneyEventsRule`)) ?? []
+      expect(allow).toEqual([
+        expect.objectContaining({ Principal: { Service: 'events.amazonaws.com' }, Action: 'sns:Publish', Condition: { ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': [ruleId, 'Arn'] } } } }),
+        expect.objectContaining({ Principal: { Service: 'events.amazonaws.com' }, Action: 'sns:Publish', Condition: { ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': [journeyId, 'Arn'] } } } }),
+      ])
+      // its journey record's writes: the bucket's Object Created events of that one key, to its own topic
+      expect(journeyRule?.Properties.Name).toBe(`trace-${h}-journey-events`)
+      expect(journeyRule?.Properties.EventPattern).toEqual({
+        source: ['aws.s3'], 'detail-type': ['Object Created'],
+        detail: { bucket: { name: [expect.anything()] }, object: { key: [`projects/${repo}/journey/journey.db`] } },
+      })
+      expect(journeyRule?.Properties.Targets).toEqual([expect.objectContaining({ Arn: { Ref: expect.stringMatching(new RegExp(`^Project${h}JobEvents`)) } })])
       expect(ruleId).toMatch(new RegExp(`^Project${h}JobEventsRule`))
       // its worker is told its own topic
       n.hasResourceProperties('AWS::BedrockAgentCore::Runtime', { EnvironmentVariables: Match.objectLike({ TRACE_BATCH_EVENTS_TOPIC: { Ref: Match.stringLikeRegexp(`^Project${h}JobEvents`) } }) })
@@ -462,13 +474,16 @@ describe('the trace stack', () => {
   it('creates none of the GPU side when gpu.enabled is false', () => {
     const off = InfraPropsSchema.parse({ ...props, gpu: { enabled: false } })
     const t2 = synth(off, 'NoGpu').all
-    for (const r of ['AWS::Batch::ComputeEnvironment', 'AWS::Batch::JobQueue', 'AWS::Batch::JobDefinition', 'AWS::EC2::VPC', 'AWS::SNS::Topic', 'AWS::Events::Rule']) t2.resourceCountIs(r, 0)
+    for (const r of ['AWS::Batch::ComputeEnvironment', 'AWS::Batch::JobQueue', 'AWS::Batch::JobDefinition', 'AWS::EC2::VPC']) t2.resourceCountIs(r, 0)
     t2.resourceCountIs('AWS::CloudFormation::CustomResource', 1)
+    // each project keeps its events topic for its journey record's writes (journey.ask's wait), with no Batch rule
+    t2.resourceCountIs('AWS::SNS::Topic', 2)
+    const rules = Object.values(t2.findResources('AWS::Events::Rule')) as { Properties: { EventPattern: { source: string[] } } }[]
+    expect(rules.map((r) => r.Properties.EventPattern.source)).toEqual([['aws.s3'], ['aws.s3']])
     const json = JSON.stringify(t2.toJSON())
     expect(json).not.toContain('TRACE_GPU_QUEUE')
-    expect(json).not.toContain('TRACE_BATCH_EVENTS_TOPIC')
-    expect(json).not.toContain('sqs:')
     expect(json).not.toContain('batch:SubmitJob')
+    expect(json).not.toContain('aws.batch')
     const outputs = Object.keys(t2.toJSON().Outputs as Record<string, unknown>)
     expect(outputs).not.toContain('GpuJobQueue')
     expect(outputs).not.toContain(projectOutputs(A).jobDefinition)

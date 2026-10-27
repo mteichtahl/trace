@@ -88,7 +88,7 @@ describe('the nested layout', () => {
         // 17, its CPU job definition, its knowledge base (index, service role and policy, knowledge base, data source),
         // its job events (topic, topic policy, EventBridge rule) and its CI runner (CodeBuild project, its role and its
         // log group: src/infra/runner.ts)
-        expect(nestedResources(j.Resources).own).toBe(29)
+        expect(nestedResources(j.Resources).own).toBe(30)
         // its 13 (Project<hash>RunnerProject among them), its knowledge base's two (Project<hash>KnowledgeBaseId,
         // …DataSourceId), and the id the parent reads
         expect(count(j.Outputs)).toBe(16)
@@ -120,13 +120,13 @@ describe('the nested layout', () => {
     // without a connection given, the stack creates one: one more resource of the parent's, and nothing more per project
     const created = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: {} }), 'Count1Created')
     expect(count(json(created.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0) + 1)
-    for (const t of created.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(29)
+    for (const t of created.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(30)
     // with the token as CodeBuild's credential (runners.auth token): no connection and none of its outputs, the same
     // runner in each project's stack
     const token = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: { auth: 'token' } }), 'Count1Token')
     expect(count(json(token.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0))
     expect(count(json(token.parent).Outputs)).toBe((sizes[0]?.outputs ?? 0) - 2)
-    for (const t of token.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(29)
+    for (const t of token.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(30)
     // none of a project's outputs is the parent's: each is its nested stack's, with the repository it is the project of
     const s = synth(cfg(2), 'Count2Outputs')
     const parentOutputs = Object.keys(json(s.parent).Outputs ?? {})
@@ -192,7 +192,7 @@ describe('the nested layout', () => {
         // flat: the project's construct, and its memory's delivery under Observability
         const flatOwn = Object.entries(fp.Resources).filter(([id]) => id.startsWith(`Project${h}`) || id.startsWith(`ObservabilityProject${h}`))
         const nt = json(nestedOf(nested, repo))
-        // the job events (topic, its policy, its rule) are the nested layout's only too (src/infra/project.ts)
+        // the job events (topic, its policy, its two rules) are the nested layout's only too (src/infra/project.ts)
         const jobEvents = ['AWS::SNS::Topic', 'AWS::SNS::TopicPolicy', 'AWS::Events::Rule']
         // and so are what the worker gets for them: TRACE_BATCH_EVENTS_TOPIC and the ProjectGpuWait* statements
         const withoutJobEvents = (r: Res): Res => {
@@ -203,7 +203,7 @@ describe('the nested layout', () => {
         }
         const nestedOwn = Object.entries(nt.Resources).filter(([, r]) => !jobEvents.includes(r.Type)).map(([id, r]) => [id, withoutJobEvents(r)] as const)
         expect(JSON.stringify(flatOwn)).not.toMatch(/ProjectGpuWait|TRACE_BATCH_EVENTS_TOPIC/)
-        expect(Object.values(nt.Resources).filter((r) => jobEvents.includes(r.Type))).toHaveLength(3)
+        expect(Object.values(nt.Resources).filter((r) => jobEvents.includes(r.Type))).toHaveLength(4)
         expect(flatOwn.filter(([, r]) => jobEvents.includes(r.Type))).toHaveLength(0)
         const params = (json(nested.parent).Resources[nestedResourceId(nested, h)]?.Properties?.Parameters ?? {}) as Record<string, unknown>
         expect(nestedOwn.length).toBe(flatOwn.length)
