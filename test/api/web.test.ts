@@ -466,7 +466,7 @@ describe('projects.create', () => {
       { who: 'new-person@example.com', sub: 'sub-new-person@example.com', part: 'contributor', invited: true, error: null },
       { who: ADMIN.email, sub: ADMIN.sub, part: 'contributor', invited: false, error: null },
     ])
-    expect(r.waits[0]?.text).toBe('The project\'s agent and knowledge base are added at the next update of the installation.')
+    expect(r.waits[0]?.text).toMatch(/^The project's agent and knowledge base are added the next time an admin runs the installer/)
     expect(r.journey).toMatchObject({ template: 'mixed', build: { quantity: 25 } })
     expect(r.steps.find((s) => s.id === 'journey')?.detail).toBe('Started from the Mixed template at Define.')
     expect(github.files.has('acme/fresh:trace/onboard:.trace/project.db')).toBe(false)

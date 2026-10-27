@@ -503,6 +503,8 @@ export class TraceStack extends Stack {
         TRACE_AWS_ACCOUNT: cfg.account,
         TRACE_WORKER_RUNTIMES: workerList,
         TRACE_INTEGRATIONS_PREFIX: integrationsPrefix(cfg.prefix),
+        // where this installation's self-update runs (projects.create says when a new project's agent arrives)
+        ...(cfg.selfUpdate ? { TRACE_SELF_UPDATE: `${cfg.selfUpdate.repository}@${cfg.selfUpdate.branch}` } : {}),
         ...memoryEnv,
       },
       tags: { [INSTALLATION_TAG]: cfg.prefix },
@@ -555,7 +557,10 @@ export class TraceStack extends Stack {
     //   cfn        DescribeStacks and ListStackResources on this stack and its nested stacks (their outputs)
     //   github     the CodeConnections reads the installer makes to tell whether the GitHub connection is authorized, and
     //              (runners.auth token) whether CodeBuild has a GitHub source credential; never importing or changing one
-    //   secret     GetSecretValue on the shared agent token (TRACE_CODEBUILD_PROJECT on the repositories)
+    //   secret     GetSecretValue on the shared agent token (TRACE_CODEBUILD_PROJECT on the repositories), and
+    //              PutSecretValue on the projects' token secrets (<prefix>/github-token/*: a project created in the web app
+    //              gets a copy of the shared token, as the installer gives it)
+    //   pending    list installation/pending-projects/* and put (mark) its records: the projects created in the web app
     // Whoever can merge to that branch can therefore change this installation: README "Staying up to date".
     if (cfg.selfUpdate) {
       const { repository, branch } = cfg.selfUpdate
@@ -589,6 +594,19 @@ export class TraceStack extends Stack {
       // resource-level permission and returns no token)
       updater.addToPolicy(new iam.PolicyStatement({ sid: 'CodeBuildSourceCredential', actions: ['codebuild:ListSourceCredentials'], resources: ['*'] }))
       updater.addToPolicy(new iam.PolicyStatement({ sid: 'SharedAgentToken', actions: ['secretsmanager:GetSecretValue'], resources: [githubToken.secretArn] }))
+      // projects created in the web app (projects.create, src/installer/pending.ts): list the requests the API recorded
+      // under installation/pending-projects/ and mark them added (or count a failed attempt) after the deploy; nothing
+      // else of the bucket is listed or written
+      updater.addToPolicy(new iam.PolicyStatement({
+        sid: 'PendingProjectsList', actions: ['s3:ListBucket'], resources: [central.bucketArn], conditions: { StringLike: { 's3:prefix': [`${PENDING_PROJECTS}/*`] } },
+      }))
+      updater.addToPolicy(new iam.PolicyStatement({ sid: 'PendingProjectsMark', actions: ['s3:PutObject'], resources: [central.arnForObjects(`${PENDING_PROJECTS}/*`)] }))
+      // a project it adds gets its token secret written as the installer writes it (a copy of the shared token): only
+      // the projects' secrets (<prefix>/github-token/<owner>/<repo>…), never their values read
+      updater.addToPolicy(new iam.PolicyStatement({
+        sid: 'ProjectTokenSecrets', actions: ['secretsmanager:PutSecretValue'],
+        resources: [`arn:${partition}:secretsmanager:${region}:${account}:secret:${cfg.prefix}/github-token/*`],
+      }))
       new CfnOutput(this, SELF_UPDATE_OUTPUT, { value: updater.roleArn, description: `${repository}'s TRACE_UPDATE_ROLE: keeps this installation up to date from its ci workflow on ${branch}` })
     }
 

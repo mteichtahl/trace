@@ -14,7 +14,8 @@
  *                                  (the central bucket: src/core/journey-store.ts)
  *                               5. record the request under installation/pending-projects/ for the next update of the
  *                                  installation, which adds the project's own agent, memory, knowledge base and build
- *                                  runner (per-project cloud resources need the stack deployed again)
+ *                                  runner (per-project cloud resources need the stack deployed again): the self-update
+ *                                  job, or the installer (src/installer/pending.ts; cloudWait says which, and when)
  *                             and answers each step's outcome, plus that last part as a wait. A step that fails stops
  *                             the ones that depend on it and says so; the request can be sent again (every step is
  *                             safe to repeat).
@@ -82,6 +83,17 @@ async function recordPending(ctx: Context, repo: string, body: Record<string, un
     }
   }
   throw new ActionError('the list of pending projects kept changing; try again')
+}
+
+/**
+ * When the project's own cloud resources arrive (src/installer/pending.ts): with the self-update on (TRACE_SELF_UPDATE,
+ * `owner/repo@branch` of trace's own repository), the next run of its update-installation job, which a change to that
+ * branch starts (or an admin, running its ci workflow on that branch by hand); without it, the next run of the installer.
+ */
+export function cloudWait(selfUpdate: string | undefined = process.env.TRACE_SELF_UPDATE): string {
+  const m = /^([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)@(.+)$/.exec(selfUpdate?.trim() ?? '')
+  if (!m) return 'The project\'s agent and knowledge base are added the next time an admin runs the installer (`tracectl install`), which takes in every project created here.'
+  return `The project's agent and knowledge base are added at the next update of the installation: when ${m[1]}'s ${m[2]} branch next changes, its ci workflow deploys the installation with this project (usually within an hour of the merge). An admin can start it now by running that workflow on ${m[2]} by hand (Actions → ci → Run workflow), or by running the installer.`
 }
 
 const DEFAULT_SCAFFOLD: Readonly<Record<Template, 'empty' | 'kicad'>> = { board: 'kicad', mixed: 'kicad', fpga: 'empty', firmware: 'empty' }
@@ -195,14 +207,14 @@ export const PROJECT_ACTIONS = {
         repo, name: a.name, template: a.template, requested_by: label(ctx.principal), requested_at: new Date().toISOString(),
         needs: ['worker runtime', 'memory', 'knowledge base', 'build runner'],
       })
-      step('cloud', 'Set up the project\'s agent and knowledge base', 'waiting', 'The project\'s agent and knowledge base are added at the next update of the installation.')
+      step('cloud', 'Set up the project\'s agent and knowledge base', 'waiting', cloudWait())
     } catch (e) {
       step('cloud', 'Set up the project\'s agent and knowledge base', 'failed', message(e))
     }
 
     return {
       repo, ok: !steps.some((s) => s.state === 'failed'), steps, people,
-      waits: [{ id: 'installation-update', what: 'the project\'s agent and knowledge base', text: 'The project\'s agent and knowledge base are added at the next update of the installation.' }],
+      waits: [{ id: 'installation-update', what: 'the project\'s agent and knowledge base', text: cloudWait() }],
       journey,
     }
   }),

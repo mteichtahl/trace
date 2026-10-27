@@ -634,16 +634,26 @@ repositories, people and integrations or changes a setting.
   removed where its runner is gone) with the shared agent token. If the token may not change a repository's variables,
   the job still succeeds, and its summary lists which variable to set to what. It starts the GPU image build when that
   image changed, and does not wait for it.
-- **What it can't do.** It cannot add repositories or people, change secrets, integrations, rulesets or onboarding pull
-  requests, import CodeBuild's GitHub credential, or change any setting. Run the installer for those, and it saves the
+- **Projects created in the web app.** A project made there (Projects → New) is onboarded at once, but its own agent,
+  memory, knowledge base and build runner need the stack deployed again. Its request waits in the central bucket
+  (`installation/pending-projects/`), and the next update adds it: the job deploys with the saved settings plus every
+  such project (nested layout only, at most 60 projects), marks each request added, writes the project's token secret
+  (a copy of the shared token) and sets its repository's variables and `TRACE_TOKEN`; what it cannot set, the step
+  summary lists. A deploy that fails counts against the request; after two, the job leaves it to the installer. To add
+  a project now rather than at the next merge, run the `ci` workflow on main by hand (Actions → ci → Run workflow). The
+  next run of the installer takes every such project into its own answers and clears the requests.
+- **What it can't do.** It cannot add repositories (other than those created in the web app) or people, change
+  integrations, rulesets or onboarding pull requests, import CodeBuild's GitHub credential, or change any setting. Run the installer for those, and it saves the
   new settings for the next update. The job fails only when the deploy fails (CloudFormation then rolls the stack back
   to how it was), or when it cannot deploy faithfully (no saved settings, or the token's credential is missing).
 - **Security.** The job signs in to AWS as `<prefix>-self-update`. That role can be used only by the `ci` workflow
   of trace's own repository running on its default branch: its trust policy checks the repository, the branch and
   the workflow file. It may use CDK's deployment roles in this account and region, read `installation/*`, read the
   stack's outputs, check the GitHub connection, see whether CodeBuild has a GitHub source credential (never its token)
-  and read the shared agent token. Nothing else in the account trusts it, and no project's role can read or write
-  `installation/*`. Deploying through CDK's roles can change anything the stack holds, so **whoever can merge to
+  and read the shared agent token. For projects created in the web app it may also list and rewrite the requests under
+  `installation/pending-projects/` and write (never read) the projects' token secrets (`<prefix>/github-token/*`).
+  Nothing else in the account trusts it, and no project's role can read or write `installation/*` (the API may only
+  write requests under `installation/pending-projects/`, with conditional writes). Deploying through CDK's roles can change anything the stack holds, so **whoever can merge to
   trace's default branch can change this AWS installation.** Protect that branch as you would the AWS account.
 - **Turning it off.** Untick "Keep this installation up to date when trace's main branch changes" (Advanced → Build
   runners, under "Build trace's own repository on AWS too") and run the installer again. The role goes with that

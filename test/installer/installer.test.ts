@@ -1197,6 +1197,7 @@ describe('the sample project', () => {
     expect(saved.sample).toMatchObject({ enabled: true, tour: true })
   })
 
+
   it('names the sample after the login derived at install, and reports a tour that could not start without failing the install', async () => {
     const created: string[] = []
     const r = await run({ ...ANSWERS, projects: [], people: [], agents: { ...ANSWERS.agents, gpuEnabled: false }, sample: { enabled: true } }, {
@@ -1384,3 +1385,40 @@ describe('keeping the installation up to date', () => {
   })
 })
 
+describe('projects created in the web app', () => {
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const NEW = 'acme/fresh'
+
+  it('takes them in as existing, onboarded projects, deploys them, and removes their records once the run is done', async () => {
+    const records = new Map([[`installation/pending-projects/${NEW}.json`, JSON.stringify({ repo: NEW, name: 'Fresh', status: 'added', branch: 'trunk' })], ['installation/pending-projects/x.json', '{']])
+    const removed: string[] = []
+    const infra: Record<string, unknown>[] = []
+    const onboarded: string[] = []
+    calls.existing = { stack: 'TraceStack', status: 'UPDATE_COMPLETE', outputs: { ...OUTPUTS, Layout: 'nested' } }
+    OUTPUTS.TraceHome = join(mkdtempSync(join(tmpdir(), 'trace-central-')), 'home')
+    try {
+      const events: { type: string; line?: string; summary?: string[] }[] = []
+      const ok = await apply(AnswersSchema.parse(ANSWERS), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
+        ...quiet, cdk: async (args, env) => { if (args[0] === 'deploy') infra.push(JSON.parse(env.TRACE_INFRA ?? '{}')); return 0 },
+        outputs: async () => { const o = { ...OUTPUTS }; for (const r of ['mteichtahl/board', 'mteichtahl/fw', NEW]) { const p = projectOutputs(r); Object.assign(o, { [p.runtimeArn]: 'arn:rt', [p.roleArn]: 'arn:role', [p.secretArn]: 'arn:secret', [p.memoryId]: 'm', [p.runnerProject]: 'ci' }) } return o },
+        onboard: async (repo) => { onboarded.push(repo); return { repo, state: 'opened', pr: null, settings: [], notes: [] } },
+        pending: {
+          list: async (_c, _r, bucket) => { expect(bucket).toBe('trace-central-bucket'); return [...records].map(([key, text]) => ({ key, text })) },
+          put: async () => undefined,
+          remove: async (_c, _r, _b, key) => { removed.push(key); records.delete(key) },
+        },
+      })
+      expect(ok).toBe(true)
+      expect(infra.at(-1)?.repositories).toEqual(['mteichtahl/board@main', 'mteichtahl/fw@main', `${NEW}@trunk`])
+      // the API onboarded it already: no pull request from here
+      expect(onboarded).not.toContain(NEW)
+      expect(calls.variables).toContain(`${NEW}:TRACE_AGENT_RUNTIME_ARN`)
+      expect(events.at(-1)?.summary?.join('\n')).toMatch(/Adding the project created in the web app: acme\/fresh\./)
+      // the saved answers list it, so the next run keeps it, and its record is done (the unreadable one is kept)
+      expect(AnswersSchema.parse(savedAnswers().answers).projects.find((p) => p.repo === NEW)).toMatchObject({ branch: 'trunk', onboard: false, create: null })
+      expect(removed).toEqual([`installation/pending-projects/${NEW}.json`])
+    } finally {
+      calls.existing = null
+    }
+  })
+})

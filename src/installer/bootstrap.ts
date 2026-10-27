@@ -91,6 +91,7 @@ import {
 import { type Facts, resolveAnswers } from './derive.js'
 import { type TokenInfo, canConfigure, checkToken, createRepo, deleteVariable, repositoryDefaultBranch, setSecret, setVariable } from './github.js'
 import { type TourResult, startTour, tourPlan, withSample } from './sample.js'
+import { type PendingEntry, type PendingIo, absorb, parsePending, s3PendingIo } from './pending.js'
 import { type ApiOnboardOptions, type ApiOnboardResult, onboardViaApi } from './onboard-api.js'
 import { CDK_BOOTSTRAP_MIN, mapLimit } from './preflight.js'
 import { checkNoSecrets, installationRecord } from './record.js'
@@ -617,6 +618,8 @@ export interface Hooks {
   self?: SelfRepositoryDeps
   /** save the installation record (src/installer/record.ts) in the central bucket (default: S3 PutObject) */
   saveRecord?: (creds: AwsCredentialIdentity, region: string, bucket: string, key: string, text: string) => Promise<void>
+  /** the projects created in the web app that wait for a deploy (src/installer/pending.ts; default: S3) */
+  pending?: PendingIo
 }
 
 /** Write the installation record to the central bucket. */
@@ -725,6 +728,23 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     if (self.note) log('check', self.note)
     // the whole plan, now that every answer is known
     const existing = check.existing ?? null
+    // projects created in the web app since the last deploy (src/installer/pending.ts): taken in as existing, already
+    // onboarded repositories, so this deploy keeps or adds them and the saved answers list them from now on
+    const pendingIo = hooks.pending ?? s3PendingIo
+    const pendingBucket = existing?.outputs[CENTRAL_BUCKET_OUTPUT] ?? ''
+    let pending: PendingEntry[] = []
+    if (pendingBucket) {
+      try { pending = parsePending(await pendingIo.list(creds, a.aws.region, pendingBucket), (l) => log('check', l)) } catch (e) { log('check', `the projects created in the web app could not be read (${redact(e instanceof Error ? e.message : String(e), s)}); run the installer again to add them`) }
+    }
+    if (pending.length) {
+      const taken = absorb(a.projects, pending, (repo, branch) => ({ repo, branch, onboard: false, applySettings: false, memoryEventExpiryDays: null, generation: 0, create: null }))
+      a = { ...a, projects: taken.projects }
+      if (taken.absorbed.length) {
+        const line = `Adding the project${taken.absorbed.length === 1 ? '' : 's'} created in the web app: ${taken.absorbed.join(', ')}.`
+        log('check', line)
+        summary.push(line)
+      }
+    }
     steps = plan(a, existing, opts.prev ?? null)
     byId = new Map(steps.map((st) => [st.id, st]))
     for (const st of steps) emit({ type: 'step', step: { ...st } })
@@ -1126,6 +1146,10 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       githubSecretArn: need('GithubSecretArn'), memoryIds, callbackPorts: props.callbackPorts,
     })
     remember(a, true)
+    // the web app's projects are the installer's own now (in the saved answers and the record): their requests are done
+    for (const p of pending) {
+      try { await pendingIo.remove(creds, a.aws.region, pendingBucket, p.key) } catch (e) { log('local', `${p.key} could not be removed (${redact(e instanceof Error ? e.message : String(e), s)}); the next update marks it added`) }
+    }
     saveAnswers({ traceVersion: (await import('./lifecycle.js')).traceVersion(), ...(runnerCredential ? { runnerCredential } : {}) })
     set('local', 'done')
     // 13 — publishing trace's images from this account (its owner's install, or when asked); never fatal: trace is installed
