@@ -13,6 +13,7 @@ import { useProjects } from '@/lib/queries'
 import { createStore, useStore } from '@/lib/store'
 import { openPanel } from '@/components/chat/chat-state'
 import { AREAS } from './nav'
+import { GROUPS as SETTING_GROUPS, SETTINGS } from '@/lib/settings-catalog'
 
 export interface CommandAction {
   id: string
@@ -95,6 +96,16 @@ export function CommandMenu() {
             <ArrowRight /> Preferences
           </CommandItem>
         </CommandGroup>
+        {text.trim().length > 1 && (
+          <CommandGroup heading="Settings">
+            {SETTINGS.map((st) => (
+              <CommandItem key={st.id} value={`setting ${st.label} ${st.keywords?.join(' ') ?? ''}`} onSelect={() => go(() => void navigate({ to: '/me', search: { group: st.group, setting: st.id } }))}>
+                <ArrowRight /> {st.label}
+                <span className="ml-auto text-xs text-muted-foreground">{SETTING_GROUPS.find((g) => g.id === st.group)?.label}</span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
         <CommandGroup heading="Actions">
           <CommandItem value="ask trace chat" onSelect={() => go(() => openPanel(true))}>
             <Sparkles /> Ask trace <CommandShortcut>⌘J</CommandShortcut>
