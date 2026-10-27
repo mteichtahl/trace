@@ -12,7 +12,7 @@ import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useTraceContext } from '@/components/chat/context'
-import { explorerLine } from '@/components/project/cloud-cost'
+import { explorerLine, pricesLine } from '@/components/project/cloud-cost'
 import { projectId, projectName } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { money } from '@/lib/format'
@@ -36,6 +36,7 @@ function Usage() {
   if (!admin) return <Column><NotShared /></Column>
   const d = u.data
   const ex = explorerLine(d?.explorer)
+  const pl = pricesLine(d?.prices)
   return (
     <Column>
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -53,14 +54,16 @@ function Usage() {
       {d && (
         <>
           <div className="mt-6 grid gap-3 sm:grid-cols-3">
-            <Tile label="Cloud use, estimated" value={money(d.totals.estimated, d.currency)} hint="Each run and job, priced from the price table" />
+            <Tile label="Cloud use, estimated" value={money(d.totals.estimated, d.currency)} hint={d.prices.source === 'price-list' ? 'Each run and job, priced from the AWS price list' : 'Each run and job, priced from the price table'} />
             <Tile label="Billed by AWS" value={d.totals.actual === null ? 'not yet' : money(d.totals.actual, d.currency)} hint="Cost Explorer, about a day behind" />
             <Tile label="Orders paid" value={money(d.totals.orders, d.currency)} hint="Recorded with each order" />
           </div>
           <p className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <StatusBadge plain status={ex.status} label={ex.label} /> <span>{d.explorer.text}</span>
           </p>
-          <p className="mt-1 text-xs text-muted-foreground">{d.prices.text}{d.prices.stale ? ' The table is more than six months old.' : ''}</p>
+          <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <StatusBadge plain status={pl.status} label={pl.label} /> <span>{d.prices.text}{d.prices.stale && !d.prices.source ? ' The table is more than six months old.' : ''}</span>
+          </p>
           <Section label="Projects" count={d.projects.length} className="mt-8">
             {d.projects.length === 0 ? (
               <EmptyState>No projects yet.</EmptyState>

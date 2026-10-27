@@ -19,17 +19,21 @@
  *                                                               estimate)
  *                                         explorer              the daily read's status: when it read, when it reads
  *                                                               next, whether the trace:project tag is active
- *                                         prices                the table's date and whether it is old
+ *                                         prices                where the prices come from (the AWS price list, fetched
+ *                                                               when; or the built-in table, and why), the table's date,
+ *                                                               whether it is old, the admin's overrides, and which
+ *                                                               source priced this project's rows
  *   usage.month  admin                  every project the admin sees: this month's estimated and actual cloud spend,
  *                                       orders paid, and the budget, for Admin › Usage and cost
  */
 import { z } from 'zod'
 import { isAdmin, projectsFor } from '../core/access.js'
 import {
-  ACTUALS_PREFIX, ActualsStore, CostLedger, type ActualRow, type ExplorerStatus, type UsageRow, actualTotals, estimateTotals, loadActuals, loadExplorerStatus, loadUsage, usageLine,
+  ACTUALS_PREFIX, ActualsStore, CostLedger, type ActualRow, type ExplorerStatus, type PricedBySource, type UsageRow, actualTotals, estimateTotals, loadActuals, loadExplorerStatus, loadUsage, usageLine,
 } from '../core/cost.js'
 import { type JourneyRecord, STAGE_NAMES, type StageId, loadJourney, loadOrders } from '../core/journey.js'
-import { isStale, pricesFromEnv } from '../core/prices.js'
+import { type PriceSource, type PriceTable, DEFAULT_PRICES, isStale } from '../core/prices.js'
+import { type PricesInUse, PRICES_PREFIX, pricesFor } from '../core/prices-store.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { type Context, Repo, def, storeAt, withJourneyDb } from './action-kit.js'
 
@@ -65,12 +69,66 @@ export function explorerView(s: ExplorerStatus | null) {
   }
 }
 
-/** The price table as the screens show it. */
-function pricesView(now = Date.now()) {
-  const t = pricesFromEnv()
+const at = (t: number | null | undefined): string => (t ? `${iso(t)?.slice(0, 16).replace('T', ' ')} UTC` : '')
+const SOURCE_WORDS: Record<PriceSource | 'sdk' | 'unknown', string> = { fetched: 'the AWS price list', 'built-in': 'the built-in table', override: 'an admin\'s prices (cost.prices)', sdk: 'the Agent SDK\'s own figure', unknown: 'a table of before sources were kept' }
+
+/** Which sources priced the rows, in words: "12 from the AWS price list, 3 from the built-in table". */
+export function pricedByText(by: PricedBySource): string {
+  return (Object.entries(by) as [keyof PricedBySource, number][]).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1])
+    .map(([s, n]) => `${n} from ${SOURCE_WORDS[s]}`).join(', ')
+}
+
+/** The table in use for the API (TRACE_PRICES over the fetched table over the built-in one), never failing. */
+async function pricesInUse(ctx: Context): Promise<PricesInUse> {
+  try {
+    return await pricesFor(process.env, { store: storeAt(ctx, PRICES_PREFIX) })
+  } catch (e) {
+    return { table: DEFAULT_PRICES, fetched: { file: null, error: e instanceof Error ? e.message : String(e) }, overrides: null }
+  }
+}
+
+/**
+ * Where the prices come from, as the screens say it: the AWS price list (fetched when, next fetch), or the built-in
+ * table and why (not fetched yet, the fetch failed and when it tries again, the price list is off), an admin's prices
+ * over either, and which sources priced the rows counted (`by`). Pure but for `enabled` (TRACE_PRICE_LIST).
+ */
+export function pricesView(p: PricesInUse, o: { now?: number; by?: PricedBySource; enabled?: boolean } = {}) {
+  const now = o.now ?? Date.now()
+  const t: PriceTable = p.table
+  const f = p.fetched.file
+  const enabled = o.enabled ?? process.env.TRACE_PRICE_LIST !== '0'
+  const fetchedTable = f?.table ?? null
+  const stale = isStale(t, now)
+  const what = `Claude on Bedrock per million tokens per model; ${t.gpu.basis}; ${t.cpu.basis}`
+  let source: 'price-list' | 'built-in'
+  let status: 'met' | 'warning' | 'waiting'
+  let text: string
+  const failed = f && !f.tried.ok ? { at: iso(f.tried.at), error: f.tried.error } : null
+  if (fetchedTable) {
+    source = 'price-list'
+    status = failed ? 'warning' : 'met'
+    text = `Estimates use prices from the AWS price list, fetched ${fetchedTable.asOf} for ${f?.region ?? 'this region'} (${what}).`
+    if (failed) text += ` The latest fetch, ${at(f?.tried.at)}, failed (${(failed.error ?? 'no reason given').slice(0, 160)}), so these are the last prices fetched; next try ${at(f?.nextAt)}.`
+    else if (f?.nextAt) text += ` Next fetch ${at(f.nextAt)}.`
+    if (f?.notes.length) text += ` The price list lacks ${f.notes.length === 1 ? 'one entry' : `${f.notes.length} entries`}; the built-in table's prices are used for ${f.notes.length === 1 ? 'it' : 'them'} (see the notes).`
+  } else {
+    source = 'built-in'
+    status = 'waiting'
+    text = `Estimates use the built-in price table of ${DEFAULT_PRICES.asOf} (${what})`
+    if (p.fetched.error) { status = 'warning'; text += `: the fetched price list could not be read (${p.fetched.error.slice(0, 160)}).` }
+    else if (failed) { status = 'warning'; text += `: the AWS price list could not be fetched ${at(f?.tried.at)} (${(failed.error ?? 'no reason given').slice(0, 160)}). Next try ${at(f?.nextAt)}.` }
+    else if (!enabled) text += ': fetching prices from the AWS price list is off (the stack setting cost.priceList.enabled).'
+    else text += ': the AWS price list has not been fetched yet. It is fetched once a day with the Cost Explorer read (cost.explorer.at), from the next stack update.'
+    if (stale) { status = 'warning'; text += ' The built-in table is more than six months old.' }
+  }
+  if (p.overrides) text += ` Prices an admin set with the stack setting cost.prices${p.overrides.asOf ? ` (of ${p.overrides.asOf})` : ''} come first.`
+  const by = o.by && Object.keys(o.by).length ? o.by : null
+  if (by) text += ` Priced here: ${pricedByText(by)}.`
   return {
-    asOf: t.asOf, stale: isStale(t, now), sources: t.sources,
-    text: `Estimates use the price table of ${t.asOf} (Bedrock per million tokens per model; ${t.gpu.basis}; ${t.cpu.basis}).${isStale(t, now) ? ' It is more than six months old: an admin updates it with the stack setting cost.prices.' : ''}`,
+    asOf: t.asOf, stale, sources: t.sources, source, status,
+    fetchedAt: iso(f?.fetchedAt ?? null), nextAt: iso(f?.nextAt ?? null), failed,
+    overrides: Boolean(p.overrides), notes: f?.notes ?? [], pricedBy: by ?? {},
+    text,
   }
 }
 
@@ -78,7 +136,7 @@ export const COST_ACTIONS = {
   'cost.get': def('read', Repo, async ({ repo }, ctx) => {
     const money = isAdmin(ctx.principal)
     // the ledger and the actuals are read only for admins: nobody else's answer carries money
-    const [usage, actuals] = money ? await Promise.all([usageOf(ctx, repo), actualsOf(ctx, { repo })]) : [{ rows: [], error: null }, { rows: [], status: null }]
+    const [usage, actuals, prices] = money ? await Promise.all([usageOf(ctx, repo), actualsOf(ctx, { repo }), pricesInUse(ctx)]) : [{ rows: [], error: null }, { rows: [], status: null }, null]
     return withJourneyDb(ctx, repo, (db) => {
       const r = loadJourney(db)
       const notes: string[] = []
@@ -113,6 +171,8 @@ export const COST_ACTIONS = {
       if (usage.error) notes.push(`The cost ledger could not be read (${usage.error.slice(0, 160)}), so cloud estimates are missing.`)
       if (e.unpriced) notes.push(`${e.unpriced} run${e.unpriced === 1 ? '' : 's'} could not be priced: the price table has no entry for its model and the Agent SDK gave no figure.`)
       notes.push('Cloud estimates (agents, graphics card and CPU jobs) are computed from each run\'s tokens and each job\'s running time with the price table; they are estimates. What AWS billed comes from Cost Explorer, a day behind, and counts only resources tagged with the project (Bedrock and the shared job instances are not tagged per project).')
+      const pv = prices ? pricesView(prices, { by: e.bySource }) : null
+      if (pv?.notes.length) notes.push(...pv.notes.map((n) => `Price list: ${n}`))
       const cloud = {
         estimated: { ...e.byKind, total: e.total },
         actual: a ? { total: a.total, byService: a.byService, through: a.lastDay, estimatedDays: a.estimatedDays } : null,
@@ -132,7 +192,7 @@ export const COST_ACTIONS = {
           ...usage.rows.map(usageLine),
         ],
         explorer: explorerView(actuals.status),
-        prices: pricesView(),
+        ...(pv ? { prices: pv } : {}),
         notes,
       }
     })
@@ -144,7 +204,7 @@ export const COST_ACTIONS = {
     const [y, m] = month.split('-').map(Number) as [number, number]
     const end = Date.UTC(m === 12 ? y + 1 : y, m === 12 ? 0 : m, 1) / 1000
     const projects = await projectsFor(ctx.principal)
-    const actuals = await actualsOf(ctx, { since: `${month}-01` })
+    const [actuals, prices] = await Promise.all([actualsOf(ctx, { since: `${month}-01` }), pricesInUse(ctx)])
     const inMonth = actuals.rows.filter((r) => r.day < new Date(end * 1000).toISOString().slice(0, 10))
     const rows = await Promise.all(projects.map(async (p) => {
       const [u, j] = await Promise.all([
@@ -155,17 +215,20 @@ export const COST_ACTIONS = {
       const act = actualTotals(inMonth.filter((x) => x.repo === p.repo.toLowerCase()))
       const orders = j.orders.filter((o) => o.state !== 'cancelled' && o.placedAt >= start && o.placedAt < end).reduce((n, o) => n + (o.paid ?? 0), 0)
       return {
+        bySource: e.bySource,
         repo: p.repo, estimated: { ...e.byKind, total: e.total }, actual: act.lastDay ? act.total : null, orders: cents(orders),
         orderCurrency: j.r?.journey.build.currency ?? 'USD', budget: j.r?.journey.build.budget ?? null, started: Boolean(j.r),
       }
     }))
     const untagged = actualTotals(inMonth.filter((x) => x.repo === ''))
+    const by: PricedBySource = {}
+    for (const r of rows) for (const [k, n] of Object.entries(r.bySource) as [keyof PricedBySource, number][]) by[k] = (by[k] ?? 0) + n
     return {
-      month, currency: 'USD', projects: rows,
+      month, currency: 'USD', projects: rows.map(({ bySource: _, ...r }) => r),
       totals: { estimated: cents(rows.reduce((n, r) => n + r.estimated.total, 0)), actual: inMonth.length ? cents(rows.reduce((n, r) => n + (r.actual ?? 0), 0) + untagged.total) : null, orders: cents(rows.reduce((n, r) => n + r.orders, 0)) },
       ...(untagged.lastDay ? { shared: { total: untagged.total, byService: untagged.byService, text: 'This installation\'s spend that carries no project tag: the shared job queues, the web app, the API.' } } : {}),
       explorer: explorerView(actuals.status),
-      prices: pricesView(),
+      prices: pricesView(prices, { by }),
     }
   }),
 }

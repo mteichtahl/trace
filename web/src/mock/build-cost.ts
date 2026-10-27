@@ -77,7 +77,11 @@ const SOIL_COST: CostView = {
   spent: { cloud: 38.12, orders: 0, detail: { estimated: { agents: 31.4, gpu: 2.4, cpu: 4.32, total: 38.12 }, actual: { total: 9.86, byService: { 'Amazon Bedrock AgentCore': 7.2, 'AWS CodeBuild': 1.9, 'AWS Secrets Manager': 0.76 }, through: ago(DAY).slice(0, 10), estimatedDays: 1 }, basis: 'estimate' } },
   lines: COST.lines.map((l) => ({ ...l, estimate: true })),
   explorer: { checkedAt: ago(3 * HOUR), nextAt: ahead(21 * HOUR), ok: true, tag: 'active', text: `Read from Cost Explorer by the trace:project cost allocation tag. A day's figures settle about 24 hours later, so the latest days may still change. Read ${ago(3 * HOUR).slice(0, 16).replace('T', ' ')} UTC; next read ${ahead(21 * HOUR).slice(0, 16).replace('T', ' ')} UTC.` },
-  prices: { asOf: '2025-11-24', stale: false, sources: ['https://aws.amazon.com/bedrock/pricing/'], text: 'Estimates use the price table of 2025-11-24 (Bedrock per million tokens per model; g6.xlarge on demand in us-east-1 (one job holds the instance); c7i on demand in us-east-1, per vCPU).' },
+  prices: {
+    asOf: ago(6 * HOUR).slice(0, 10), stale: false, sources: ['https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/price-changes.html'],
+    source: 'price-list', status: 'met', fetchedAt: ago(6 * HOUR), nextAt: ahead(18 * HOUR), failed: null, overrides: false, notes: [], pricedBy: { fetched: 41, 'built-in': 2 },
+    text: `Estimates use prices from the AWS price list, fetched ${ago(6 * HOUR).slice(0, 10)} for us-east-1 (Claude on Bedrock per million tokens per model; g6.xlarge on demand in us-east-1 (one job holds the instance); c7i.xlarge on demand in us-east-1, per vCPU (0.1785 an hour for 4)). Next fetch ${ahead(18 * HOUR).slice(0, 16).replace('T', ' ')} UTC. Priced here: 41 from the AWS price list, 2 from the built-in table.`,
+  },
   notes: ['Cloud estimates (agents, graphics card and CPU jobs) are computed from each run\'s tokens and each job\'s running time with the price table; they are estimates. What AWS billed comes from Cost Explorer, a day behind, and counts only resources tagged with the project (Bedrock and the shared job instances are not tagged per project).'],
 }
 

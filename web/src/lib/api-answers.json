@@ -1837,7 +1837,15 @@
           "https://www.anthropic.com/pricing",
           "https://aws.amazon.com/ec2/pricing/on-demand/"
         ],
-        "text": "Estimates use the price table of 2025-11-24 (Bedrock per million tokens per model; g6.xlarge on demand in us-east-1 (one job holds the instance); c7i on demand in us-east-1, per vCPU). It is more than six months old: an admin updates it with the stack setting cost.prices."
+        "source": "built-in",
+        "status": "warning",
+        "fetchedAt": null,
+        "nextAt": null,
+        "failed": null,
+        "overrides": false,
+        "notes": [],
+        "pricedBy": {},
+        "text": "Estimates use the built-in price table of 2025-11-24 (Claude on Bedrock per million tokens per model; g6.xlarge on demand in us-east-1 (one job holds the instance); c7i on demand in us-east-1, per vCPU): the AWS price list has not been fetched yet. It is fetched once a day with the Cost Explorer read (cost.explorer.at), from the next stack update. The built-in table is more than six months old."
       },
       "notes": [
         "Forecast days per stage are not computed yet: there is no history of how long each stage takes.",
@@ -1889,7 +1897,15 @@
           "https://www.anthropic.com/pricing",
           "https://aws.amazon.com/ec2/pricing/on-demand/"
         ],
-        "text": "Estimates use the price table of 2025-11-24 (Bedrock per million tokens per model; g6.xlarge on demand in us-east-1 (one job holds the instance); c7i on demand in us-east-1, per vCPU). It is more than six months old: an admin updates it with the stack setting cost.prices."
+        "source": "built-in",
+        "status": "warning",
+        "fetchedAt": null,
+        "nextAt": null,
+        "failed": null,
+        "overrides": false,
+        "notes": [],
+        "pricedBy": {},
+        "text": "Estimates use the built-in price table of 2025-11-24 (Claude on Bedrock per million tokens per model; g6.xlarge on demand in us-east-1 (one job holds the instance); c7i on demand in us-east-1, per vCPU): the AWS price list has not been fetched yet. It is fetched once a day with the Cost Explorer read (cost.explorer.at), from the next stack update. The built-in table is more than six months old."
       }
     }
   },
