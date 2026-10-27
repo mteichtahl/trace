@@ -387,7 +387,7 @@ export function loadJourney(db: DatabaseSync): JourneyRecord | null {
       risk: String(r.risk), severity: r.severity as Severity, caughtWhere: str(r.caught_where), scope: String(r.scope), by: String(r.by), at: Number(r.at),
       acknowledgedBy: str(r.acknowledged_by), acknowledgedAt: num(r.acknowledged_at), closedAt: num(r.closed_at),
     })),
-    decisions: rows('SELECT * FROM decisions ORDER BY at DESC, id').map((r) => ({
+    decisions: rows('SELECT * FROM decisions ORDER BY at DESC, rowid DESC').map((r) => ({
       id: String(r.id), at: Number(r.at), kind: String(r.kind), stage: str(r.stage), ref: str(r.ref), summary: String(r.summary), by: str(r.by), detail: json<unknown>(r.detail, null),
     })),
   }
