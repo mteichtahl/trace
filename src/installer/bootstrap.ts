@@ -13,20 +13,23 @@
  *                project the stack does not have yet whose fixed names are taken in the account (a removed copy's
  *                retained memory, delivery sources or destinations, or secret in its recovery window) gets the next
  *                generation of names, saved with the answers (chooseGenerations). Also before it, the GitHub connection
- *                the CodeBuild runners use (every GitHub Actions job runs on AWS CodeBuild, never on a GitHub-hosted
- *                runner; src/installer/aws.ts resolveConnection): the answers', else the one the stack created on an
+ *                the CodeBuild runners use (every GitHub Actions job runs on AWS CodeBuild once its runner exists, and
+ *                on GitHub's runners until then; src/installer/aws.ts resolveConnection): the answers', else the one the stack created on an
  *                earlier run, else one already authorized in the account and region (reused: it is authorized once
  *                per account and region), else none and the stack creates `<prefix>-github`. Nothing is created
  *                here. The deploy makes the runners only when that connection is AVAILABLE (runners.connectionReady)
  *   4 connection only when it was not: read the connection from the stack's output and wait, with the console link
  *                and the time of the next check, until a person authorizes it once (it installs the AWS Connector for
- *                GitHub app). A timeout stops here; running the installer again resumes with the same connection
+ *                GitHub app). A timeout does not stop the installation: everything else is set up, the workflows run on
+ *                GitHub's runners meanwhile, and running the installer again resumes with the same connection
  *   5 runners    then deploy again with the runners: that only adds each repository's runner project and its webhook
  *   6 token      write the GitHub tokens into Secrets Manager: the shared one (the API's), and each project's own
  *                (its own token when one was given, else a copy of the shared one)
  *   7 repos      each repository's Actions variables (its own role, runtime, memory and CodeBuild runner project, from
  *                its project's outputs, which are its nested stack's in the nested layout; region, TRACE_HOME) and its
- *                TRACE_TOKEN secret
+ *                TRACE_TOKEN secret; each build-only repository's (trace's own, by default) TRACE_CODEBUILD_PROJECT
+ *                alone. TRACE_CODEBUILD_PROJECT is set only where the runner project exists, and removed where it does
+ *                not: the workflows run on AWS when it is set and on GitHub's runners when it is not
  *   8 onboard    the onboarding PR in each repository that asked for it, and its repository settings; the sample
  *                instead gets the trace files committed straight onto its default branch (the installer made it, and
  *                its tour must run without anyone merging first)
@@ -53,23 +56,24 @@ import {
 import { GetSecretValueCommand, PutSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
 import type { AwsCredentialIdentity } from '@smithy/types'
 import { type Principal, GROUPS, assign, assignments, setClass, unassign } from '../core/access.js'
-import { saveAnswers, saveInstallation } from '../core/client.js'
+import { answers as savedAnswers, saveAnswers, saveInstallation } from '../core/client.js'
 import { type WaitNotice, describeWait } from '../core/wait.js'
 import { onboard, register } from '../core/onboard.js'
 import { RUNNER_VARIABLE } from '../core/project.js'
 import {
-  CONNECTION_OUTPUT, GPU_IMAGE_BUILD_OUTPUT, type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, LIBRARY_KEYS_OUTPUT, cpuEnabled, githubSecretName,
+  CONNECTION_OUTPUT, GPU_IMAGE_BUILD_OUTPUT, ciRunnerOutput, type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, LIBRARY_KEYS_OUTPUT, cpuEnabled, githubSecretName,
   kbOutputs, memoryDeliveryName, memoryName, projectHash, projectOutputs, stackName,
 } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
-import type { Answers, InstallEvent, Secrets, Step } from './answers.js'
+import { type Answers, AnswersSchema, type InstallEvent, type Secrets, type Step } from './answers.js'
 import {
   type ConnectionChoice, type ConnectionWait, type ProjectNames, awsEnv, cfnClient, checkAws, codebuildClient, connectionName, connectionsClient,
   connectionsConsoleUrl, connectorAccessNote, credentials, deployedProjects, ensureGpuImage, freeSecretNames, nameClients, nameIndex, resolveConnection,
   stackOutputs, waitForConnection,
 } from './aws.js'
-import { type TokenInfo, checkToken, ensureRepo, setSecret, setVariable } from './github.js'
+import { type TokenInfo, canConfigure, checkToken, deleteVariable, ensureRepo, setSecret, setVariable } from './github.js'
 import { type SampleOnboard, type TourResult, SAMPLE_DESCRIPTION, pushSample, onboardSample, sampleRepo, startTour, tourPlan, withSample } from './sample.js'
+import { traceRepository } from './source.js'
 
 /** What the installer knows of the stack already in the account (checkAws), when there is one. */
 export interface Existing { outputs: Record<string, string> }
@@ -129,6 +133,51 @@ export function layoutNote(a: Answers, existing?: Existing | null): string | nul
     + 'The projects are offline from the second deploy until the repositories\' variables are rewritten; workflows that run in between fail: re-run them.'
 }
 
+/** What the installer tells the person while a repository has no AWS build runner yet. */
+export const GITHUB_RUNNERS_NOTE = 'Until the build runners are added, workflows run on GitHub\'s runners.'
+
+/** trace's own repository, when it is built on AWS too: runners.buildTrace, the repository the installer found (and the
+ * token can configure), and not one of the projects (a project has its own runner already). */
+export function selfBuild(a: Answers): string | null {
+  const r = a.runners.traceRepository
+  if (!a.runners.buildTrace || !r) return null
+  return a.projects.some((p) => p.repo.toLowerCase() === r.toLowerCase()) ? null : r
+}
+
+/** The build-only repositories (props.ts ciRepositories): trace's own when it is built on AWS too, then the others the
+ * answers add; none of them a project, none twice. */
+export function buildRepositories(a: Answers): string[] {
+  const projects = new Set(a.projects.map((p) => p.repo.toLowerCase()))
+  const out: string[] = []
+  for (const r of [selfBuild(a), ...a.runners.ciRepositories]) {
+    if (r && !projects.has(r.toLowerCase()) && !out.some((x) => x.toLowerCase() === r.toLowerCase())) out.push(r)
+  }
+  return out
+}
+
+/** How the installer finds trace's own repository and whether it may build it (tests replace both). */
+export interface SelfRepositoryDeps {
+  /** the GitHub repository the running trace came from (src/installer/source.ts traceRepository) */
+  source: () => string | null
+  /** whether the token can set that repository's Actions variables (src/installer/github.ts canConfigure) */
+  canConfigure: (token: string, repo: string) => Promise<{ ok: boolean; reason: string }>
+}
+
+/**
+ * Before deploying: trace's own repository for the answers (runners.traceRepository), when it is to be built on AWS
+ * (runners.buildTrace) and the token can configure it; '' otherwise. Returns the answers and what to tell the person.
+ */
+export async function resolveSelfBuild(a: Answers, token: string, d: SelfRepositoryDeps): Promise<{ answers: Answers; note: string | null }> {
+  const set = (traceRepository: string): Answers => ({ ...a, runners: { ...a.runners, traceRepository } })
+  if (!a.runners.buildTrace) return { answers: set(''), note: null }
+  const repo = d.source()
+  if (!repo) return { answers: set(''), note: 'trace\'s own repository is not built on AWS: the installer could not tell which GitHub repository this trace was installed from.' }
+  if (a.projects.some((p) => p.repo.toLowerCase() === repo.toLowerCase())) return { answers: set(''), note: `trace's own repository (${repo}) is one of the projects: it builds on its own runner.` }
+  const access = await d.canConfigure(token, repo)
+  if (!access.ok) return { answers: set(''), note: `trace's own repository (${repo}) stays on GitHub's runners: the token cannot set its variables (${access.reason}).` }
+  return { answers: set(repo), note: `Building trace's own repository (${repo}) on AWS too: a build runner for it alone.` }
+}
+
 /** The stack's settings from the answers (and, for the legacy memory's way out and the layout, what is deployed already).
  * `runners`: the GitHub connection apply chose (resolveConnection: unset when the stack uses or creates its own) and
  * whether it is authorized; without it, the answers' connection and the stack's default (ready). */
@@ -142,6 +191,7 @@ export function infraInput(a: Answers, existing?: Existing | null, deploy?: Layo
     account: a.aws.account,
     region: a.aws.region,
     repositories: a.projects.map((p) => `${p.repo}@${p.branch}`),
+    ...(buildRepositories(a).length ? { ciRepositories: buildRepositories(a) } : {}),
     createOidcProvider: a.agents.createOidcProvider,
     model: a.agents.model,
     ...(a.agents.centralBucketName ? { centralBucketName: a.agents.centralBucketName } : {}),
@@ -309,8 +359,15 @@ function layoutPlan(a: Answers, existing?: Existing | null): string {
 
 /** The connection step's description. */
 function connectionPlan(a: Answers): string {
-  const repos = a.projects.map((p) => p.repo).join(', ')
+  const repos = [...a.projects.map((p) => p.repo), ...buildRepositories(a)].join(', ')
   return `only if the GitHub connection is not authorized yet (a new one never is): it is authorized once per AWS account and region, by a person, in the AWS console (${connectionsConsoleUrl(a.aws.region)}, choose it, then "Update pending connection"), which installs the AWS Connector for GitHub app. After the deploy the installer shows the link and waits, checking every 15 seconds, for up to 30 minutes. Give that app access to ${repos}`
+}
+
+/** The build-only repositories, as the plan says them. */
+function buildPlan(a: Answers): string {
+  const self = selfBuild(a)
+  const others = buildRepositories(a).filter((r) => r !== self)
+  return `${self ? ` Build trace's own repository on AWS too (${self}): a build runner for it alone, nothing else.` : ''}${others.length ? ` Build ${others.join(', ')} on AWS too, without agents: a build runner each, nothing else.` : ''}`
 }
 
 /** The connection the deploy uses, as the plan says it. */
@@ -331,11 +388,11 @@ export function plan(answers: Answers, existing?: Existing | null): Step[] {
     ['check', 'Check the AWS account', `${a.aws.account} in ${a.aws.region}`],
     ...(sample ? [['sample', 'Create the sample project', `${sample} (${answers.sample.private ? 'private' : 'public'}; created if it does not exist, an existing one is used as it is): ${SAMPLE_DESCRIPTION} Its files are committed onto its default branch; nothing in it is deleted`] as [string, string, string]] : []),
     ['cdk', 'Bootstrap CDK', `aws://${a.aws.account}/${a.aws.region} (only if it isn't already)`],
-    ['deploy', `Deploy ${stack}`, `central bucket, agent image (CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and job definitions' : ''}, and its own AWS CodeBuild runner project that runs every one of its GitHub Actions jobs (${props.runners.computeType}${props.runners.privileged ? ', Docker-in-Docker' : ''}; no job runs on GitHub's own runners) once the GitHub connection is authorized, ${connectionUse(a)}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64 without holding up the deploy; one queue for every project)${cpuPlan(props)}` : ''}${props.gateway.enabled ? ', the library gateway (AgentCore Gateway and a Lambda for the shared datasheets and parts tools)' : ''}${kbPlan(props)}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}${generationsPlan(a)}${layoutPlan(a, existing)}. A project added again after being removed gets new names if its old memory, log delivery or token secret still holds them: the old memory is kept and orphaned, and the new one starts empty`],
+    ['deploy', `Deploy ${stack}`, `central bucket, agent image (CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and job definitions' : ''}, and its own AWS CodeBuild runner project that runs every one of its GitHub Actions jobs (${props.runners.computeType}${props.runners.privileged ? ', Docker-in-Docker' : ''}; its jobs run on GitHub's own runners until it exists) once the GitHub connection is authorized, ${connectionUse(a)}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image built on amd64 without holding up the deploy; one queue for every project)${cpuPlan(props)}` : ''}${props.gateway.enabled ? ', the library gateway (AgentCore Gateway and a Lambda for the shared datasheets and parts tools)' : ''}${kbPlan(props)}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}${generationsPlan(a)}${layoutPlan(a, existing)}. A project added again after being removed gets new names if its old memory, log delivery or token secret still holds them: the old memory is kept and orphaned, and the new one starts empty.${buildPlan(a)}`],
     ['connection', 'Authorize the GitHub connection', connectionPlan(a)],
-    ['runners', 'Add the build runners', `only if the connection was not authorized before the deploy: deploy ${stack} again once it is. That only adds each repository's CodeBuild runner project and its GitHub webhook; nothing else changes`],
+    ['runners', 'Add the build runners', `only if the connection was not authorized before the deploy: deploy ${stack} again once it is. That only adds each repository's CodeBuild runner project and its GitHub webhook; nothing else changes. ${GITHUB_RUNNERS_NOTE}`],
     ['token', 'Store the GitHub tokens', `the shared token in the API's secret, and each project's agent token in its own secret${props.gateway.enabled ? '; any distributor keys given in the library gateway\'s secret' : ''}`],
-    ['repos', 'Configure the repositories', `each repository's own TRACE_AWS_ROLE, TRACE_AGENT_RUNTIME_ARN, ${RUNNER_VARIABLE} (the CodeBuild runner project its workflows run on)${props.memory.enabled ? ', TRACE_MEMORY_ID' : ''}${props.knowledgeBase.enabled && props.layout === 'nested' ? ', TRACE_KB_ID and TRACE_KB_DATA_SOURCE_ID' : ''}, TRACE_AWS_REGION, TRACE_HOME and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}`],
+    ['repos', 'Configure the repositories', `each repository's own TRACE_AWS_ROLE, TRACE_AGENT_RUNTIME_ARN, ${RUNNER_VARIABLE} (the CodeBuild runner project its workflows run on)${props.memory.enabled ? ', TRACE_MEMORY_ID' : ''}${props.knowledgeBase.enabled && props.layout === 'nested' ? ', TRACE_KB_ID and TRACE_KB_DATA_SOURCE_ID' : ''}, TRACE_AWS_REGION, TRACE_HOME and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}${buildRepositories(a).length ? `; ${RUNNER_VARIABLE} alone in ${buildRepositories(a).join(', ')}` : ''}. ${RUNNER_VARIABLE} is set only once the repository's runner exists, and removed where it does not, so its workflows run on GitHub's runners until then`],
     ['onboard', 'Onboard the repositories', [
       ...(onboarding.length ? [`open the onboarding PR in ${onboarding.join(', ')}`] : []),
       ...(sample ? [`put ${sample} under trace straight away (the trace files committed onto its default branch, and its repository settings)`] : []),
@@ -403,6 +460,15 @@ export interface Hooks {
   }
   /** the library keys stored now (readSecretJson) */
   readSecret?: (sm: SecretsManagerClient, arn: string) => Promise<Record<string, string>>
+  /** trace's own repository and whether the token can configure it (resolveSelfBuild) */
+  self?: SelfRepositoryDeps
+}
+
+/** The repositories an earlier run gave a build runner to (its saved answers' projects and build-only repositories):
+ * any no longer built now must lose TRACE_CODEBUILD_PROJECT, or its jobs would wait for a runner that is gone. */
+export function earlierRepositories(saved: unknown): string[] {
+  const prev = AnswersSchema.safeParse(saved)
+  return prev.success ? [...prev.data.projects.map((p) => p.repo), ...buildRepositories(prev.data)] : []
 }
 
 /** A secret's JSON object of strings ({} when it holds anything else). */
@@ -426,6 +492,8 @@ export function mergeLibraryKeys(stored: Record<string, string>, given: Record<s
 
 export async function apply(answers: Answers, s: Secrets, emit: Emit, hooks: Hooks = {}): Promise<boolean> {
   const started = new Date()
+  // read before this run saves its own answers over them
+  const earlier = earlierRepositories(savedAnswers().answers)
   const steps = plan(answers)
   // the sample, when asked for, is one more project from here on (its branch is set once its repository is seen)
   let a = withSample(answers)
@@ -459,6 +527,11 @@ export async function apply(answers: Answers, s: Secrets, emit: Emit, hooks: Hoo
     if (!check.agentCore.ok) throw new Error(`Bedrock AgentCore is not available to these credentials in ${a.aws.region}: ${check.agentCore.reason}`)
     const own = await checkProjectTokens(a, s)
     for (const w of own.warnings) { log('check', w); summary.push(w) }
+    // trace's own repository, built on AWS too when the token can configure it (runners.buildTrace)
+    const adminToken = s.githubAdminToken || s.githubToken
+    const self = await resolveSelfBuild(a, adminToken, hooks.self ?? { source: () => traceRepository({ root: REPO_ROOT }), canConfigure: (t, r) => canConfigure(t, r) })
+    a = self.answers
+    if (self.note) log('check', self.note)
     set('check', 'done', `${check.arn}`)
 
     // the sample's repository and its design files, before the deploy: the stack makes its runtime and roles for it
@@ -500,7 +573,7 @@ export async function apply(answers: Answers, s: Secrets, emit: Emit, hooks: Hoo
 
     // the GitHub connection the CodeBuild runners use (nothing is created here: the stack creates its own when there is
     // none to reuse), and whether it is authorized, which decides whether this deploy makes the runners
-    const repos = a.projects.map((p) => p.repo)
+    const repos = [...a.projects.map((p) => p.repo), ...buildRepositories(a)]
     const connections = hooks.connection ?? (() => {
       const c = connectionsClient(creds, a.aws.region)
       return { resolve: (o: Parameters<typeof resolveConnection>[1]) => resolveConnection(c, o), wait: (conn: Parameters<typeof waitForConnection>[1], o: ConnectionWait) => waitForConnection(c, conn, o) }
@@ -550,9 +623,11 @@ export async function apply(answers: Answers, s: Secrets, emit: Emit, hooks: Hoo
     }))
     for (const [repo, id] of Object.entries(memoryIds)) log('deploy', `${repo}: memory ${id}`)
     if (props.memory.enabled && Object.keys(memoryIds).length !== a.projects.length) throw new Error('the stack has no memory output for every project')
-    set('deploy', 'done', `${stack} is up${choice.ready ? '' : ', without the build runners until the GitHub connection is authorized'}`)
+    set('deploy', 'done', `${stack} is up${choice.ready ? '' : `, without the build runners until the GitHub connection is authorized. ${GITHUB_RUNNERS_NOTE}`}`)
 
     const access = connectorAccessNote(repos)
+    // whether every repository's build runner exists now: only then is TRACE_CODEBUILD_PROJECT set (step 7)
+    let runnersReady = choice.ready
     if (choice.ready) {
       set('connection', 'skipped', choice.message)
       set('runners', 'skipped', 'added with the deploy: the connection was authorized already')
@@ -563,7 +638,9 @@ export async function apply(answers: Answers, s: Secrets, emit: Emit, hooks: Hoo
       const arn = out[CONNECTION_OUTPUT]
       if (!arn) throw new Error(`the stack has no output ${CONNECTION_OUTPUT}`)
       let todo = ''
-      await connections.wait({ arn, name: choice.name, status: '' }, {
+      let authorized = false
+      try {
+        await connections.wait({ arn, name: choice.name, status: '' }, {
         region: a.aws.region, repos,
         report: (l) => {
           log('connection', l)
@@ -574,18 +651,31 @@ export async function apply(answers: Answers, s: Secrets, emit: Emit, hooks: Hoo
         },
         // after every check the page gets the wait: its countdown, and Check now for right after authorizing
         onWait: (n) => emit({ type: 'wait', step: 'connection', wait: n, line: redact(describeWait(n), s) }),
-      })
-      log('connection', access)
-      set('connection', 'done', `${choice.name} is authorized (${arn})`)
+        })
+        authorized = true
+      } catch (e) {
+        // not authorized in time (or the connection broke): the rest is installed all the same, and the workflows run
+        // on GitHub's runners until a later run adds the build runners
+        const m = redact(e instanceof Error ? e.message : String(e), s)
+        log('connection', m)
+        set('connection', 'failed', `${m} ${GITHUB_RUNNERS_NOTE}`)
+        set('runners', 'skipped', `not added: the GitHub connection is not authorized yet. ${GITHUB_RUNNERS_NOTE}`)
+        summary.push(`The build runners are not added yet: the GitHub connection ${choice.name} is not authorized. ${GITHUB_RUNNERS_NOTE} Authorize it at ${connectionsConsoleUrl(a.aws.region)} ("Update pending connection"), then run the installer again: it adds them and switches the workflows to AWS.`)
+      }
+      if (authorized) {
+        log('connection', access)
+        set('connection', 'done', `${choice.name} is authorized (${arn})`)
 
-      // 5 — the runners, now that CodeBuild can make their webhooks
-      current = 'runners'
-      set('runners', 'running', 'deploying again: this only adds each repository\'s CodeBuild runner project and its GitHub webhook')
-      props = InfraPropsSchema.parse(infraInput(a, existing, undefined, runnersOf(true)))
-      const code = await cdk(deployArgs, envFor(last, true), (l) => log('runners', l))
-      if (code !== 0) throw new Error(`cdk deploy exited ${code} adding the build runners (run the installer again to carry on)`)
-      out = await outputs(creds, a.aws.region, stack)
-      set('runners', 'done', `${a.projects.length} runner project${a.projects.length === 1 ? '' : 's'} added`)
+        // 5 — the runners, now that CodeBuild can make their webhooks
+        current = 'runners'
+        set('runners', 'running', 'deploying again: this only adds each repository\'s CodeBuild runner project and its GitHub webhook')
+        props = InfraPropsSchema.parse(infraInput(a, existing, undefined, runnersOf(true)))
+        const code = await cdk(deployArgs, envFor(last, true), (l) => log('runners', l))
+        if (code !== 0) throw new Error(`cdk deploy exited ${code} adding the build runners (run the installer again to carry on)`)
+        out = await outputs(creds, a.aws.region, stack)
+        runnersReady = true
+        set('runners', 'done', `${repos.length} runner project${repos.length === 1 ? '' : 's'} added`)
+      }
     }
     summary.push(access)
     const need = (k: string): string => {
@@ -626,7 +716,11 @@ export async function apply(answers: Answers, s: Secrets, emit: Emit, hooks: Hoo
     // 7 — repositories
     current = 'repos'
     set('repos', 'running')
-    const adminToken = s.githubAdminToken || s.githubToken
+    // TRACE_CODEBUILD_PROJECT is the workflows' switch to AWS: set only where the runner project exists, and removed
+    // where it does not, so those jobs run on GitHub's runners instead of waiting for one
+    const noRunner = async (repo: string): Promise<void> => {
+      if (await deleteVariable(adminToken, repo, RUNNER_VARIABLE)) log('repos', `${repo}: ${RUNNER_VARIABLE} removed (no build runner yet: its workflows run on GitHub's runners)`)
+    }
     const agentLogin = (await checkToken(s.githubToken)).login
     const adminLogin = adminToken === s.githubToken ? agentLogin : (await checkToken(adminToken)).login
     if (adminLogin.toLowerCase() === agentLogin.toLowerCase()) {
@@ -641,8 +735,8 @@ export async function apply(answers: Answers, s: Secrets, emit: Emit, hooks: Hoo
       const vars: Record<string, string> = {
         // this project's own role and runtime: neither reaches any other project
         TRACE_AWS_ROLE: need(o.roleArn), TRACE_AWS_REGION: a.aws.region, TRACE_HOME: need('TraceHome'), TRACE_AGENT_RUNTIME_ARN: need(o.runtimeArn),
-        // its own CodeBuild runner project: every job of its workflows runs there (`runs-on: codebuild-<project>-…`)
-        [RUNNER_VARIABLE]: need(o.runnerProject),
+        // its own CodeBuild runner project, once it exists: every job of its workflows runs there (`runs-on: codebuild-<project>-…`)
+        ...(runnersReady ? { [RUNNER_VARIABLE]: need(o.runnerProject) } : {}),
         // The worker trusts claim markers and refuses deploy approvals from this login (the agents' own account).
         TRACE_AGENT_LOGIN: login,
         // its own memory, for the worker.runner = actions fallback (its OIDC role may use that memory only)
@@ -651,10 +745,23 @@ export async function apply(answers: Answers, s: Secrets, emit: Emit, hooks: Hoo
         ...(out[kbOutputs(p.repo).knowledgeBaseId] ? { TRACE_KB_ID: out[kbOutputs(p.repo).knowledgeBaseId] ?? '', TRACE_KB_DATA_SOURCE_ID: out[kbOutputs(p.repo).dataSourceId] ?? '' } : {}),
       }
       for (const [k, v] of Object.entries(vars)) log('repos', `${p.repo}: ${k} ${await setVariable(adminToken, p.repo, k, v)}`)
+      if (!runnersReady) await noRunner(p.repo)
       await setSecret(adminToken, p.repo, 'TRACE_TOKEN', projectToken(s, p.repo))
       log('repos', `${p.repo}: TRACE_TOKEN set`)
     }
-    set('repos', 'done')
+    // the build-only repositories (trace's own, by default): their runner project alone
+    for (const r of buildRepositories(a)) {
+      if (runnersReady) log('repos', `${r}: ${RUNNER_VARIABLE} ${await setVariable(adminToken, r, RUNNER_VARIABLE, need(ciRunnerOutput(r)))} (built on AWS, without agents)`)
+      else await noRunner(r)
+    }
+    // repositories an earlier run built that this one does not (a project removed, trace's own turned off): their
+    // runner goes with this deploy. Best effort: the token may no longer reach them
+    const now = new Set([...a.projects.map((p) => p.repo), ...buildRepositories(a)].map((r) => r.toLowerCase()))
+    for (const r of earlier.filter((x) => !now.has(x.toLowerCase()))) {
+      try { await noRunner(r) } catch (e) { log('repos', `${r}: could not remove ${RUNNER_VARIABLE} (${redact(e instanceof Error ? e.message : String(e), s)}): remove it by hand, or its jobs wait for a runner that is gone`) }
+    }
+    if (!runnersReady) log('repos', GITHUB_RUNNERS_NOTE)
+    set('repos', 'done', runnersReady ? undefined : GITHUB_RUNNERS_NOTE)
 
     // 8 — onboarding PRs (gh CLI, with the admin token in this process's environment only for the duration)
     current = 'onboard'

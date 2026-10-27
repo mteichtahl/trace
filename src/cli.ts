@@ -330,7 +330,7 @@ async function main(argv: string[]): Promise<number> {
     case 'doctor': {
       if (!rest[0]) break
       const findings = doctor(rest[0])
-      for (const f of findings) out(`${f.ok ? 'ok ' : 'NO '} ${f.what}${f.ok ? '' : `\n     → ${f.fix}`}`)
+      for (const f of findings) out(`${f.note ? 'note' : f.ok ? 'ok ' : 'NO '} ${f.what}${f.ok && !f.note ? '' : `\n     → ${f.fix}`}`)
       return findings.every((f) => f.ok) ? 0 : 1
     }
     case 'projects':

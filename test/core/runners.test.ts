@@ -1,19 +1,41 @@
 /**
- * Every build and automation job runs on AWS: trace's own CI, the workflows `trace onboard` writes and the starter
- * builds all name an AWS CodeBuild-hosted runner, never a GitHub-hosted one, and nothing falls back to one.
+ * Where every job runs: trace's own CI, the workflows `trace onboard` writes and the starter builds all name the
+ * repository's AWS CodeBuild runner when the repository variable TRACE_CODEBUILD_PROJECT is set (the installer sets it
+ * only once that runner exists), and GitHub's ubuntu-24.04 runner, the one fallback, until then. No other runner.
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 import { z } from 'zod'
-import { RUNNER_VARIABLE, SELF_CI_PROJECT } from '../../src/core/project.js'
+import { GITHUB_HOSTED_FALLBACK, RUNNER_VARIABLE } from '../../src/core/project.js'
 
 const root = join(import.meta.dirname, '..', '..')
-const RUN = '${{ github.run_id }}-${{ github.run_attempt }}'
 const dirs = ['.github/workflows', 'templates/workflows', 'templates/build']
 const files = dirs.flatMap((d) => readdirSync(join(root, d)).filter((f) => /\.ya?ml$/.test(f)).map((f) => `${d}/${f}`))
 const Workflow = z.object({ jobs: z.record(z.string(), z.object({ 'runs-on': z.unknown() }).loose()) }).loose()
+
+/** The one runs-on a job may have: the CodeBuild labels when the variable is set, else the GitHub-hosted fallback.
+ * `label` is the job's own label inside the format string; `extra` the format arguments after the run attempt. */
+const expected = (label: string, extra: string[] = []): string =>
+  `\${{ vars.${RUNNER_VARIABLE} && fromJSON(format('["codebuild-{0}-{1}-{2}","${label}"]', ${['vars.' + RUNNER_VARIABLE, 'github.run_id', 'github.run_attempt', ...extra].join(', ')})) || '${GITHUB_HOSTED_FALLBACK}' }}`
+
+/** Parse a job's runs-on into its parts, or null when it is not the pattern. */
+const PATTERN = new RegExp(
+  '^\\$\\{\\{ vars\\.' + RUNNER_VARIABLE + " && fromJSON\\(format\\('\\[\"codebuild-\\{0\\}-\\{1\\}-\\{2\\}\",\"([a-z0-9-]+(?:\\{3\\})?)\"\\]', "
+  + 'vars\\.' + RUNNER_VARIABLE + ', github\\.run_id, github\\.run_attempt((?:, [a-z_.]+)?)\\)\\) \\|\\| \'' + GITHUB_HOSTED_FALLBACK.replace(/\./g, '\\.') + "' \\}\\}$",
+)
+
+/** What GitHub makes of the expression (format, fromJSON, && and ||), for one value of the variable. */
+function evaluate(runsOn: string, vars: Record<string, string>, ctx: { run_id: string; run_attempt: string; extra?: string }): unknown {
+  const m = PATTERN.exec(runsOn)
+  if (!m) throw new Error(`not the pattern: ${runsOn}`)
+  const project = vars[RUNNER_VARIABLE] ?? ''
+  if (!project) return GITHUB_HOSTED_FALLBACK
+  const args = [project, ctx.run_id, ctx.run_attempt, ctx.extra ?? '']
+  const text = `["codebuild-{0}-{1}-{2}","${m[1] ?? ''}"]`.replace(/\{(\d)\}/g, (_, i: string) => args[Number(i)] ?? '')
+  return JSON.parse(text) as unknown
+}
 
 describe('runners', () => {
   it('finds the workflows', () => {
@@ -22,24 +44,38 @@ describe('runners', () => {
     expect(files.filter((f) => f.startsWith('templates/build/')).length).toBeGreaterThanOrEqual(4)
   })
 
+  it('evaluates to the CodeBuild labels with the variable, and to ubuntu-24.04 without it', () => {
+    const plain = expected('check')
+    expect(evaluate(plain, { [RUNNER_VARIABLE]: 'trace-ci-0123abcd' }, { run_id: '42', run_attempt: '1' })).toEqual(['codebuild-trace-ci-0123abcd-42-1', 'check'])
+    expect(evaluate(plain, {}, { run_id: '42', run_attempt: '1' })).toBe('ubuntu-24.04')
+    expect(evaluate(plain, { [RUNNER_VARIABLE]: '' }, { run_id: '42', run_attempt: '1' })).toBe('ubuntu-24.04')
+    const matrix = expected('work-{3}', ['matrix.item.number'])
+    expect(evaluate(matrix, { [RUNNER_VARIABLE]: 'lab-ci-0123abcd' }, { run_id: '7', run_attempt: '2', extra: '19' })).toEqual(['codebuild-lab-ci-0123abcd-7-2', 'work-19'])
+  })
+
   for (const file of files) {
-    it(`${file}: every job runs on an AWS CodeBuild runner`, () => {
+    it(`${file}: every job runs on the AWS CodeBuild runner when it exists, else on ubuntu-24.04 alone`, () => {
       const text = readFileSync(join(root, file), 'utf8')
       expect(text).not.toContain('TRACE_RUNNER')
-      expect(text).not.toMatch(/ubuntu-(latest|\d)|windows-|macos-|self-hosted/)
+      // no other runner: no other GitHub-hosted image, no self-hosted runner, no codebuild label outside the pattern
+      const code = text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
+      const withoutFallback = code.split(`'${GITHUB_HOSTED_FALLBACK}'`).join('')
+      expect(withoutFallback).not.toMatch(/ubuntu-(latest|\d)|windows-|macos-|self-hosted/)
       const wf = Workflow.parse(parse(text))
-      const project = file.startsWith('.github/') ? SELF_CI_PROJECT : `\${{ vars.${RUNNER_VARIABLE} }}`
       const seen = new Set<string>()
       for (const [id, job] of Object.entries(wf.jobs)) {
-        const labels = z.array(z.string()).min(2).parse(job['runs-on'])
-        const [first, unique] = labels
-        expect(first, `${file} job ${id}`).toMatch(/^codebuild-/)
-        expect(first, `${file} job ${id}`).toContain(RUN)
-        expect(first, `${file} job ${id}`).toBe(`codebuild-${project}-${RUN}`)
-        // the second label keeps the job's runner apart from the run's other jobs
-        expect(unique, `${file} job ${id}`).toMatch(new RegExp(`^${id}(-|$)`))
-        expect(seen.has(unique ?? ''), `${file} job ${id}: label ${unique} is used twice`).toBe(false)
-        seen.add(unique ?? '')
+        const runsOn = z.string().parse(job['runs-on'])
+        const m = PATTERN.exec(runsOn)
+        expect(m, `${file} job ${id}: ${runsOn}`).not.toBeNull()
+        const label = m?.[1] ?? ''
+        const extra = (m?.[2] ?? '').replace(/^, /, '')
+        expect(runsOn, `${file} job ${id}`).toBe(expected(label, extra ? [extra] : []))
+        // the job's own label keeps its runner apart from the run's other jobs; a matrix job's carries its item
+        expect(label, `${file} job ${id}`).toMatch(new RegExp(`^${id}(-\\{3\\})?$`))
+        if (label.endsWith('{3}')) expect(extra, `${file} job ${id}`).toMatch(/^matrix\./)
+        else expect(extra, `${file} job ${id}`).toBe('')
+        expect(seen.has(label), `${file} job ${id}: label ${label} is used twice`).toBe(false)
+        seen.add(label)
       }
     })
   }

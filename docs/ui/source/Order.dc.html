@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>trace · Order</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2563eb;text-decoration:none}a:hover{color:#1d4ed8}
+</style>
+</helmet>
+<div style="font-family: Geist, system-ui, sans-serif; color: #0a0a0a; background: #ffffff; min-height: 1000px; display: flex; flex-wrap: wrap; font-size: 14px; line-height: 1.5">
+
+  <nav aria-label="Main" style="flex: 1 1 232px; max-width: 260px; background: #fafafa; border-right: 1px solid #e5e5e5; padding: 16px 12px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px">
+    <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px 18px">
+      <div style="width: 24px; height: 24px; border-radius: 6px; background: #0a0a0a; color: #fff; display: flex; align-items: center; justify-content: center; font-family: 'Geist Mono', monospace; font-size: 13px; font-weight: 600">t</div>
+      <span style="font-weight: 600; font-size: 15px">trace</span>
+    </div>
+    <a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/></svg>Home</a>
+    <a href="Project.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; background: #f0f0f0; color: #0a0a0a; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Projects</a>
+    <a href="Knowledge.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h10a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z"/><path d="M4 16a4 4 0 0 1 4-4h10"/></svg>Knowledge</a>
+    <a href="Agents.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01"/></svg>Agents</a>
+    <a href="Operations.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Operations</a>
+    <a href="People.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>Admin</a>
+    <div style="margin: 20px 8px 6px; font-size: 12px; color: #737373; font-weight: 500">Pinned</div>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Soil sensor</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Motor driver</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Panel controller</span></a>
+    <div style="flex-grow: 1"></div>
+    <a href="Preferences.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040">
+      <span style="width: 28px; height: 28px; border-radius: 14px; background: #e5e5e5; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600">MT</span>
+      <span style="display: flex; flex-direction: column; line-height: 1.3"><span style="font-weight: 500; color: #0a0a0a">Marc Teichtahl</span><span style="font-size: 12px; color: #737373">Admin</span></span>
+    </a>
+  </nav>
+
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="height: 56px; border-bottom: 1px solid #e5e5e5; display: flex; align-items: center; gap: 12px; padding: 0 24px; box-sizing: border-box">
+      <span style="font-weight: 500"><a href="Project.dc.html" style="color: #525252; font-weight: 400">Soil sensor</a> <span style="color: #a3a3a3">·</span> <span style="color: #525252; font-weight: 400">Rev A</span> <span style="color: #a3a3a3">·</span> <span style="color: #525252; font-weight: 400">Fabricate</span> <span style="color: #a3a3a3">·</span> Order</span>
+      <div style="flex-grow: 1"></div>
+      <button type="button" style="display: flex; align-items: center; gap: 8px; height: 36px; width: 280px; max-width: 40%; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; color: #737373; font: inherit; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span style="flex-grow: 1; text-align: left">Search or run a command</span><kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; border: 1px solid #e5e5e5; border-radius: 4px; padding: 0 4px">⌘K</kbd></button>
+      <span title="Live: every screen updates as the record changes" style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #15803d"><span style="width: 8px; height: 8px; border-radius: 4px; background: #16a34a"></span>Live</span>
+      <button type="button" aria-label="Notifications, 2 new" style="position: relative; width: 36px; height: 36px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #0a0a0a"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><span style="position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 4px; background: #2563eb"></span></button>
+      <a href="Chat.dc.html" style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; color: #0a0a0a; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>Ask trace <kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373">⌘J</kbd></a>
+    </header>
+
+    <main style="width: 100%; max-width: 1180px; margin: 0 auto; padding: 28px 24px 56px; box-sizing: border-box; display: flex; flex-direction: column; gap: 20px">
+
+      <section aria-labelledby="order-summary" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px 24px; display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap">
+        <span style="width: 8px; height: 8px; border-radius: 4px; background: #2563eb; margin-top: 8px; flex: 0 0 8px" aria-hidden="true"></span>
+        <div style="flex: 1 1 380px; min-width: 0">
+          <div style="font-size: 12px; color: #737373">Order gate · trace prepares, you place and pay on JLCPCB</div>
+          <h1 id="order-summary" style="margin: 4px 0 0; font-size: 18px; font-weight: 600; line-height: 1.4">The order for 10 boards is ready to place on JLCPCB. Expected cost about US$184.</h1>
+          <p style="margin: 4px 0 0; font-size: 14px; color: #525252; display: flex; align-items: center; gap: 6px; flex-wrap: wrap"><span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; color: #a16207; background: #fefce8; border-radius: 6px; padding: 1px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 2 21h20z"/><path d="M12 10v4M12 17h.01"/></svg>Warning</span>Two prices changed since sign-off (+US$3.10). Both parts are still in stock.</p>
+        </div>
+        <div style="flex: 0 0 auto; display: flex; gap: 8px; flex-wrap: wrap">
+          <a href="Gate.dc.html" style="display: inline-flex; align-items: center; height: 36px; padding: 0 16px; border-radius: 8px; background: #2563eb; color: #fff; font-weight: 500">Sign the order gate</a>
+          <button type="button" style="display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid #e5e5e5; background: #fff; color: #0a0a0a; font: inherit; font-weight: 500; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12M6 10l6 6 6-6M4 20h16"/></svg>Download the package</button>
+        </div>
+      </section>
+
+      <div style="display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start">
+
+        <div style="flex: 999 1 540px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+
+          <section aria-labelledby="options" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px 24px; display: flex; flex-direction: column; gap: 12px">
+            <div>
+              <h2 id="options" style="margin: 0; font-size: 16px; font-weight: 600">Board options to enter on JLCPCB</h2>
+              <p style="margin: 2px 0 0; font-size: 13px; color: #525252">Copy these into JLCPCB's order form and tick each one as you go. They come from the signed release; 0 of 8 entered.</p>
+            </div>
+            <div style="border: 1px solid #e5e5e5; border-radius: 8px; overflow: hidden">
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 10px; border-bottom: 1px solid #f0f0f0">
+                <label style="display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px; border: 1px solid #e5e5e5; border-radius: 8px; flex: 0 1 200px; min-width: 0; color: #737373"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Search options</span><input type="search" placeholder="Search…" style="border: 0; outline: 0; font: inherit; font-size: 13px; width: 100%; min-width: 0; background: transparent"></label>
+                <button type="button" style="display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 8px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; color: #0a0a0a"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>Filter</button>
+                <button type="button" style="display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 8px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; color: #0a0a0a"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/></svg>Columns</button>
+                <button type="button" style="height: 30px; padding: 0 6px; border: 0; background: transparent; font: inherit; font-size: 12px; cursor: pointer; color: #525252">Reset view</button>
+                <span style="margin-left: auto; font-size: 12px; color: #737373">8 of 8 options</span>
+              </div>
+              <div style="overflow-x: auto">
+                <table style="width: 100%; border-collapse: collapse; font-size: 13px">
+                  <thead>
+                    <tr>
+                      <th scope="col" aria-sort="none" style="position: relative; text-align: left; padding: 0; border-bottom: 1px solid #e5e5e5; background: #fafafa; width: 36%"><button type="button" style="display: flex; align-items: center; gap: 4px; width: 100%; height: 34px; padding: 0 12px; border: 0; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #525252; cursor: pointer">Option</button><span aria-hidden="true" style="position: absolute; right: 0; top: 8px; width: 2px; height: 18px; background: #e5e5e5"></span></th>
+                      <th scope="col" aria-sort="none" style="position: relative; text-align: left; padding: 0; border-bottom: 1px solid #e5e5e5; background: #fafafa"><button type="button" style="display: flex; align-items: center; gap: 4px; width: 100%; height: 34px; padding: 0 12px; border: 0; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #525252; cursor: pointer">Value</button><span aria-hidden="true" style="position: absolute; right: 0; top: 8px; width: 2px; height: 18px; background: #e5e5e5"></span></th>
+                      <th scope="col" aria-sort="none" style="text-align: left; padding: 0; border-bottom: 1px solid #e5e5e5; background: #fafafa; width: 90px"><button type="button" style="display: flex; align-items: center; gap: 4px; width: 100%; height: 34px; padding: 0 12px; border: 0; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #525252; cursor: pointer">Entered</button></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <sc-for list="{{options}}" as="o" hint-placeholder-count="8">
+                      <tr>
+                        <td style="padding: 9px 12px; border-bottom: 1px solid #f0f0f0; color: #525252">{{o.name}}</td>
+                        <td style="padding: 9px 12px; border-bottom: 1px solid #f0f0f0; font-weight: 500">{{o.value}}</td>
+                        <td style="padding: 9px 12px; border-bottom: 1px solid #f0f0f0"><label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer"><input type="checkbox" style="width: 16px; height: 16px; accent-color: #2563eb; margin: 0"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">{{o.name}} entered</span></label></td>
+                      </tr>
+                    </sc-for>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div>
+              <div style="font-size: 12px; font-weight: 500; color: #737373; margin-bottom: 6px">Files</div>
+              <div style="display: flex; gap: 8px; flex-wrap: wrap">
+                <a href="FileViewer.dc.html" style="display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 6px; color: #0a0a0a; font-family: 'Geist Mono', monospace; font-size: 12px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>gerbers.zip</a>
+                <a href="FileViewer.dc.html" style="display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 6px; color: #0a0a0a; font-family: 'Geist Mono', monospace; font-size: 12px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>bom-jlcpcb.csv</a>
+                <a href="FileViewer.dc.html" style="display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 6px; color: #0a0a0a; font-family: 'Geist Mono', monospace; font-size: 12px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>cpl-jlcpcb.csv</a>
+              </div>
+              <p style="margin: 6px 0 0; font-size: 12px; color: #737373">The parts list (BOM) and placement file (CPL) are in JLCPCB's own format.</p>
+            </div>
+          </section>
+
+          <section aria-labelledby="parts" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px 24px; display: flex; flex-direction: column; gap: 12px">
+            <div>
+              <h2 id="parts" style="margin: 0; font-size: 16px; font-weight: 600">Parts re-checked today at 09:12</h2>
+              <p style="margin: 2px 0 0; font-size: 13px; color: #525252">All 6 lines are in stock at LCSC. Two prices went up since sign-off, adding US$3.10 for 10 boards.</p>
+            </div>
+            <div style="border: 1px solid #e5e5e5; border-radius: 8px; overflow: hidden">
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 10px; border-bottom: 1px solid #f0f0f0">
+                <label style="display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px; border: 1px solid #e5e5e5; border-radius: 8px; flex: 0 1 200px; min-width: 0; color: #737373"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Search parts</span><input type="search" placeholder="Search…" style="border: 0; outline: 0; font: inherit; font-size: 13px; width: 100%; min-width: 0; background: transparent"></label>
+                <button type="button" style="display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 8px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; color: #0a0a0a"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>Filter</button>
+                <button type="button" style="display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 8px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; color: #0a0a0a"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/></svg>Columns</button>
+                <button type="button" style="height: 30px; padding: 0 6px; border: 0; background: transparent; font: inherit; font-size: 12px; cursor: pointer; color: #525252">Reset view</button>
+                <span style="margin-left: auto; font-size: 12px; color: #737373">6 of 6 lines</span>
+              </div>
+              <div style="overflow-x: auto">
+                <table style="width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px">
+                  <thead>
+                    <tr>
+                      <th scope="col" aria-sort="ascending" style="position: relative; text-align: left; padding: 0; border-bottom: 1px solid #e5e5e5; background: #fafafa"><button type="button" style="display: flex; align-items: center; gap: 4px; width: 100%; height: 34px; padding: 0 12px; border: 0; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #0a0a0a; cursor: pointer">Ref<span aria-hidden="true">↑</span></button><span aria-hidden="true" style="position: absolute; right: 0; top: 8px; width: 2px; height: 18px; background: #e5e5e5"></span></th>
+                      <th scope="col" aria-sort="none" style="position: relative; text-align: left; padding: 0; border-bottom: 1px solid #e5e5e5; background: #fafafa"><button type="button" style="display: flex; align-items: center; gap: 4px; width: 100%; height: 34px; padding: 0 12px; border: 0; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #525252; cursor: pointer">LCSC</button><span aria-hidden="true" style="position: absolute; right: 0; top: 8px; width: 2px; height: 18px; background: #e5e5e5"></span></th>
+                      <th scope="col" aria-sort="none" style="position: relative; text-align: right; padding: 0; border-bottom: 1px solid #e5e5e5; background: #fafafa"><button type="button" style="display: flex; align-items: center; justify-content: flex-end; gap: 4px; width: 100%; height: 34px; padding: 0 12px; border: 0; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #525252; cursor: pointer">Stock</button><span aria-hidden="true" style="position: absolute; right: 0; top: 8px; width: 2px; height: 18px; background: #e5e5e5"></span></th>
+                      <th scope="col" aria-sort="none" style="position: relative; text-align: right; padding: 0; border-bottom: 1px solid #e5e5e5; background: #fafafa"><button type="button" style="display: flex; align-items: center; justify-content: flex-end; gap: 4px; width: 100%; height: 34px; padding: 0 12px; border: 0; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #525252; cursor: pointer">Price then</button><span aria-hidden="true" style="position: absolute; right: 0; top: 8px; width: 2px; height: 18px; background: #e5e5e5"></span></th>
+                      <th scope="col" aria-sort="none" style="position: relative; text-align: right; padding: 0; border-bottom: 1px solid #e5e5e5; background: #fafafa"><button type="button" style="display: flex; align-items: center; justify-content: flex-end; gap: 4px; width: 100%; height: 34px; padding: 0 12px; border: 0; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #525252; cursor: pointer">Price now</button><span aria-hidden="true" style="position: absolute; right: 0; top: 8px; width: 2px; height: 18px; background: #e5e5e5"></span></th>
+                      <th scope="col" aria-sort="none" style="text-align: left; padding: 0; border-bottom: 1px solid #e5e5e5; background: #fafafa"><button type="button" style="display: flex; align-items: center; gap: 4px; width: 100%; height: 34px; padding: 0 12px; border: 0; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #525252; cursor: pointer">Status</button></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <sc-for list="{{parts}}" as="p" hint-placeholder-count="6">
+                      <tr>
+                        <td style="padding: 9px 12px; border-bottom: 1px solid #f0f0f0"><div style="font-family: 'Geist Mono', monospace; font-size: 12px; font-weight: 500">{{p.ref}}</div><div style="font-size: 12px; color: #737373">{{p.what}}</div></td>
+                        <td style="padding: 9px 12px; border-bottom: 1px solid #f0f0f0; font-family: 'Geist Mono', monospace; font-size: 12px">{{p.lcsc}}</td>
+                        <td style="padding: 9px 12px; border-bottom: 1px solid #f0f0f0; text-align: right; font-variant-numeric: tabular-nums">{{p.stock}}</td>
+                        <td style="padding: 9px 12px; border-bottom: 1px solid #f0f0f0; text-align: right; font-variant-numeric: tabular-nums; color: #525252">{{p.then}}</td>
+                        <td style="padding: 9px 12px; border-bottom: 1px solid #f0f0f0; text-align: right; font-variant-numeric: tabular-nums">{{p.now}}</td>
+                        <td style="padding: 9px 12px; border-bottom: 1px solid #f0f0f0"><span style="{{p.badgeStyle}}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{p.icon}}"/></svg>{{p.status}}</span></td>
+                      </tr>
+                    </sc-for>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <aside style="flex: 1 1 320px; max-width: 380px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+
+          <section aria-labelledby="render" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 8px">
+            <div style="display: flex; align-items: baseline; justify-content: space-between">
+              <h2 id="render" style="margin: 0; font-size: 14px; font-weight: 600">Soil sensor Rev A · top</h2>
+              <a href="FileViewer.dc.html" style="font-size: 12px">Open in viewer</a>
+            </div>
+            <svg role="img" aria-label="Top view of the green 4-layer board, 50 by 30 millimetres, with the microcontroller in the centre, LoRa radio and antenna connector on the right, regulator and battery connector on the left, and the soil probe pads at the bottom edge" viewBox="0 0 320 200" width="100%" style="display: block; background: #f5f5f5; border-radius: 8px; font-family: 'Geist Mono', monospace">
+              <rect x="30" y="20" width="260" height="156" rx="8" fill="#2f5d3a"/>
+              <rect x="34" y="24" width="252" height="148" rx="6" fill="none" stroke="#3f7a4c" stroke-width="1"/>
+              <g fill="#c9a94a"><circle cx="44" cy="34" r="5"/><circle cx="276" cy="34" r="5"/><circle cx="44" cy="162" r="5"/><circle cx="276" cy="162" r="5"/></g>
+              <g fill="none" stroke="#5c9a6a" stroke-width="1.6" stroke-linecap="round"><path d="M110 95h30M180 95h36M160 120v24M78 70h40v14M216 70h20"/></g>
+              <rect x="140" y="76" width="40" height="40" rx="2" fill="#1f1f1f"/><text x="160" y="100" font-size="9" fill="#d4d4d4" text-anchor="middle">U1</text>
+              <rect x="216" y="80" width="40" height="30" rx="2" fill="#8a8a8a"/><text x="236" y="99" font-size="9" fill="#1f1f1f" text-anchor="middle">U2</text>
+              <rect x="262" y="52" width="18" height="22" rx="2" fill="#c9a94a"/><text x="271" y="88" font-size="8" fill="#e5e5e5" text-anchor="middle">J2</text>
+              <rect x="86" y="84" width="20" height="16" rx="1" fill="#1f1f1f"/><text x="96" y="114" font-size="8" fill="#e5e5e5" text-anchor="middle">U3</text>
+              <rect x="44" y="60" width="26" height="20" rx="2" fill="#e5e5e5"/><text x="57" y="94" font-size="8" fill="#e5e5e5" text-anchor="middle">J1</text>
+              <g fill="#d6b45a"><rect x="124" y="150" width="20" height="14" rx="2"/><rect x="152" y="150" width="20" height="14" rx="2"/><rect x="180" y="150" width="20" height="14" rx="2"/></g>
+              <g fill="#b07040"><rect x="190" y="70" width="8" height="4"/><rect x="190" y="118" width="8" height="4"/><rect x="122" y="70" width="8" height="4"/><rect x="122" y="118" width="8" height="4"/><rect x="112" y="130" width="8" height="4"/><rect x="206" y="128" width="8" height="4"/></g>
+              <text x="160" y="192" font-size="9" fill="#737373" text-anchor="middle">50 × 30 mm · 4 layers · ENIG</text>
+            </svg>
+          </section>
+
+          <section aria-labelledby="cost" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 10px">
+            <h2 id="cost" style="margin: 0; font-size: 14px; font-weight: 600">Cost</h2>
+            <dl style="margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; font-size: 13px; font-variant-numeric: tabular-nums">
+              <dt style="color: #525252">Boards</dt><dd style="margin: 0; text-align: right">US$38</dd>
+              <dt style="color: #525252">Assembly</dt><dd style="margin: 0; text-align: right">US$61</dd>
+              <dt style="color: #525252">Parts</dt><dd style="margin: 0; text-align: right">US$71</dd>
+              <dt style="color: #525252">Shipping</dt><dd style="margin: 0; text-align: right">US$14</dd>
+              <dt style="font-weight: 600; border-top: 1px solid #e5e5e5; padding-top: 8px">Total</dt><dd style="margin: 0; text-align: right; font-weight: 600; border-top: 1px solid #e5e5e5; padding-top: 8px">US$184</dd>
+            </dl>
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: #525252">
+              <span>Budget for Rev A US$400 ·</span>
+              <span style="display: inline-flex; align-items: center; gap: 4px; font-weight: 500; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 1px 6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>within budget</span>
+            </div>
+            <div style="height: 6px; border-radius: 3px; background: #f0f0f0" role="img" aria-label="US$184 of US$400 budget, 46 percent"><div style="width: 46%; height: 6px; border-radius: 3px; background: #525252"></div></div>
+          </section>
+
+          <section aria-labelledby="after" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px">
+            <div>
+              <h2 id="after" style="margin: 0; font-size: 14px; font-weight: 600">After you pay</h2>
+              <p style="margin: 2px 0 0; font-size: 13px; color: #525252">Record the order so trace can watch it and start the bring-up work.</p>
+            </div>
+            <label style="display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 500">Order number
+              <input type="text" placeholder="e.g. Y12-4471058A" style="height: 36px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; font: inherit; font-size: 14px; font-weight: 400; font-family: 'Geist Mono', monospace; box-sizing: border-box">
+            </label>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap">
+              <label style="flex: 1 1 110px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 500">Paid (US$)
+                <input type="text" inputmode="decimal" placeholder="184.00" style="height: 36px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; font: inherit; font-size: 14px; font-weight: 400; box-sizing: border-box; width: 100%">
+              </label>
+              <label style="flex: 1 1 130px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 500">Quoted ship date
+                <input type="date" style="height: 36px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; font: inherit; font-size: 14px; font-weight: 400; box-sizing: border-box; width: 100%">
+              </label>
+            </div>
+            <button type="button" style="height: 36px; padding: 0 16px; border-radius: 8px; border: 1px solid #e5e5e5; background: #fff; color: #0a0a0a; font: inherit; font-weight: 500; cursor: pointer">Record order</button>
+            <p style="margin: 0; font-size: 12px; color: #737373">Available once the order gate is signed.</p>
+          </section>
+        </aside>
+      </div>
+
+      <section aria-labelledby="after-recorded" style="display: flex; flex-direction: column; gap: 12px">
+        <h2 id="after-recorded" style="margin: 0; font-size: 13px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 0.04em">Once the order is recorded</h2>
+        <div style="border: 1px solid #e5e5e5; border-radius: 12px; display: flex; align-items: center; gap: 14px; padding: 14px 20px; flex-wrap: wrap">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#737373" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          <div style="flex: 1 1 300px; min-width: 0">Waiting for JLCPCB to confirm the order. <span style="color: #737373">Checked 2 minutes ago; next check in 13 minutes.</span></div>
+          <button type="button" style="height: 32px; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 13px; cursor: pointer">Check now</button>
+        </div>
+
+        <div style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px 24px; display: flex; flex-direction: column; gap: 10px">
+          <div>
+            <h3 style="margin: 0; font-size: 14px; font-weight: 600">Meanwhile</h3>
+            <p style="margin: 2px 0 0; font-size: 13px; color: #525252">While the boards are made, trace gets bring-up ready so the first power-on is short. 1 of 4 done.</p>
+          </div>
+          <ul style="list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px">
+            <li style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #f0f0f0; border-radius: 8px">
+              <span style="width: 18px; height: 18px; border-radius: 9px; background: #0a0a0a; color: #fff; display: flex; align-items: center; justify-content: center; flex: 0 0 18px"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
+              <span style="flex-grow: 1">Bring-up firmware build</span><span style="font-size: 12px; color: #15803d">Done</span>
+            </li>
+            <li style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #f0f0f0; border-radius: 8px">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2.4" stroke-linecap="round" aria-hidden="true" style="flex: 0 0 18px"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+              <span style="flex-grow: 1">Bring-up plan</span><span style="font-size: 12px; color: #525252">In progress</span>
+            </li>
+            <li style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #f0f0f0; border-radius: 8px">
+              <span style="width: 18px; height: 18px; border-radius: 9px; border: 1.5px solid #d4d4d4; box-sizing: border-box; flex: 0 0 18px"></span>
+              <span style="flex-grow: 1">Bench wiring view</span><span style="font-size: 12px; color: #737373">To do</span>
+            </li>
+            <li style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #f0f0f0; border-radius: 8px">
+              <span style="width: 18px; height: 18px; border-radius: 9px; border: 1.5px solid #d4d4d4; box-sizing: border-box; flex: 0 0 18px"></span>
+              <span style="flex-grow: 1">Test scripts dry-run</span><span style="font-size: 12px; color: #737373">To do</span>
+            </li>
+          </ul>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var ok = 'display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:500;color:#15803d;background:#f0fdf4;border-radius:6px;padding:1px 6px;white-space:nowrap;';
+    var warn = 'display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:500;color:#a16207;background:#fefce8;border-radius:6px;padding:1px 6px;white-space:nowrap;';
+    var check = 'M20 6 9 17l-5-5';
+    var up = 'M12 19V5M5 12l7-7 7 7';
+    return {
+      options: [
+        { name: 'Layers', value: '4' },
+        { name: 'Thickness', value: '1.6 mm' },
+        { name: 'Colour', value: 'Green' },
+        { name: 'Surface finish', value: 'ENIG' },
+        { name: 'Outer copper', value: '1 oz' },
+        { name: 'Impedance control', value: 'Yes (JLC04161H-7628)' },
+        { name: 'Quantity', value: '10' },
+        { name: 'Assembly', value: 'Top side' }
+      ],
+      parts: [
+        { ref: 'U1', what: 'Microcontroller', lcsc: 'C2652091', stock: '3,140', then: 'US$3.86', now: 'US$3.98', status: 'In stock · +US$0.12', badgeStyle: warn, icon: up },
+        { ref: 'U2', what: 'LoRa radio module', lcsc: 'C2939786', stock: '1,208', then: 'US$1.92', now: 'US$2.11', status: 'In stock · +US$0.19', badgeStyle: warn, icon: up },
+        { ref: 'U3', what: 'Low-dropout regulator (LDO)', lcsc: 'C82942', stock: '48,920', then: 'US$0.21', now: 'US$0.21', status: 'In stock', badgeStyle: ok, icon: check },
+        { ref: 'J1', what: 'Battery connector', lcsc: 'C131337', stock: '22,605', then: 'US$0.06', now: 'US$0.06', status: 'In stock', badgeStyle: ok, icon: check },
+        { ref: 'J2', what: 'Antenna connector', lcsc: 'C88374', stock: '9,771', then: 'US$0.18', now: 'US$0.18', status: 'In stock', badgeStyle: ok, icon: check },
+        { ref: 'C1–C14', what: '100 nF capacitors, 0402', lcsc: 'C1525', stock: '9,830,112', then: 'US$0.002', now: 'US$0.002', status: 'In stock', badgeStyle: ok, icon: check }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -15,10 +15,11 @@
 # (minutes 17 and 47 of every hour, UTC) is only a safety net and runs update-queue alone: it catches a queue left
 # standing when GitHub failed to deliver one of those events.
 #
-# Runners: every job runs on AWS CodeBuild (a CodeBuild-hosted GitHub Actions runner in the installation's AWS account),
-# never on a GitHub-hosted runner. The first runs-on label names the project's CodeBuild runner project through the
-# repository variable TRACE_CODEBUILD_PROJECT, which `trace install` sets; the second keeps each job's runner distinct.
-# Without that variable the jobs wait in the queue: there is no GitHub-hosted fallback, by design.
+# Runners: every job runs on AWS CodeBuild (a CodeBuild-hosted GitHub Actions runner in the installation's AWS account)
+# once `trace install` has set it up, and on GitHub's ubuntu-24.04 runners until then. The switch is the repository
+# variable TRACE_CODEBUILD_PROJECT, which the installer sets only once the runner project exists (and removes if it
+# does not): set, runs-on names that project (codebuild-<project>-<run id>-<attempt>) and a label that keeps each
+# job's runner distinct; unset, ubuntu-24.04. Nothing in the workflow changes when the runner arrives.
 name: trace-prs
 
 on:
@@ -39,9 +40,7 @@ permissions: {}
 jobs:
   open-pr:
     if: vars.TRACE_PRS != 'false' && github.event_name == 'push' && github.ref != 'refs/heads/__TR_BRANCH__'
-    runs-on:
-      - codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}
-      - open-pr
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","open-pr"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     timeout-minutes: 5
     concurrency: { group: 'trace-open-${{ github.ref }}', cancel-in-progress: false }
     permissions:
@@ -55,9 +54,7 @@ jobs:
 
   automerge:
     if: vars.TRACE_PRS != 'false' && github.event_name == 'pull_request'
-    runs-on:
-      - codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}
-      - automerge
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","automerge"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     timeout-minutes: 5
     concurrency: { group: 'trace-automerge-${{ github.event.pull_request.number }}', cancel-in-progress: true }
     permissions:
@@ -74,9 +71,7 @@ jobs:
       vars.TRACE_PRS != 'false' &&
       (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_run' ||
        (github.event_name == 'push' && github.ref == 'refs/heads/__TR_BRANCH__'))
-    runs-on:
-      - codebuild-${{ vars.TRACE_CODEBUILD_PROJECT }}-${{ github.run_id }}-${{ github.run_attempt }}
-      - update-queue
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","update-queue"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     timeout-minutes: 10
     concurrency: { group: trace-update-queue, cancel-in-progress: false }
     permissions:

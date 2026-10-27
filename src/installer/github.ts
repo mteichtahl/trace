@@ -206,3 +206,15 @@ export async function setVariable(token: string, repo: string, name: string, val
     return 'created'
   }
 }
+
+/** Remove a repository's Actions variable. Returns whether there was one. */
+export async function deleteVariable(token: string, repo: string, name: string, fetchImpl?: Fetch): Promise<boolean> {
+  const gh = new Github(token, fetchImpl)
+  try {
+    await gh.request('DELETE', `/repos/${repo}/actions/variables/${name}`, z.unknown())
+    return true
+  } catch (e) {
+    if (e instanceof GithubError && e.status === 404) return false
+    throw e
+  }
+}

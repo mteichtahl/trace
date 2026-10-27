@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>trace · New project</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2563eb;text-decoration:none}a:hover{color:#1d4ed8}
+</style>
+</helmet>
+<div style="font-family: Geist, system-ui, sans-serif; color: #0a0a0a; background: #ffffff; min-height: 1150px; display: flex; flex-direction: column; font-size: 14px; line-height: 1.5">
+
+  <header style="height: 56px; border-bottom: 1px solid #e5e5e5; display: flex; align-items: center; gap: 12px; padding: 0 16px; box-sizing: border-box">
+    <a href="Main.dc.html" aria-label="Close and return" style="width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #525252"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></a>
+    <span style="font-weight: 600">New project</span>
+    <span style="color: #737373">Step 6 of 7</span>
+    <div style="flex-grow: 1"></div>
+    <span style="font-size: 12px; color: #737373">Draft saved 3 seconds ago</span>
+  </header>
+
+  <div style="flex-grow: 1; display: flex; flex-wrap: wrap; min-height: 0">
+
+    <nav aria-label="Steps" style="flex: 1 1 240px; max-width: 260px; border-right: 1px solid #e5e5e5; padding: 24px 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 2px; background: #fafafa">
+      <sc-for list="{{steps}}" as="s" hint-placeholder-count="7">
+        <div style="display: flex; gap: 12px; padding: 8px; border-radius: 8px; background: {{s.bg}}">
+          <span style="{{s.dot}}">{{s.mark}}</span>
+          <span style="display: flex; flex-direction: column; line-height: 1.35; min-width: 0">
+            <span style="font-weight: {{s.weight}}; color: {{s.color}}">{{s.name}}</span>
+            <span style="font-size: 12px; color: #737373">{{s.summary}}</span>
+          </span>
+        </div>
+      </sc-for>
+    </nav>
+
+    <main style="flex: 999 1 560px; min-width: 0; padding: 32px 32px 120px; box-sizing: border-box; display: flex; flex-direction: column; gap: 24px; max-width: 900px">
+
+      <section aria-label="Basics" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px; display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap">
+        <div style="width: 56px; height: 56px; border-radius: 12px; background: #dcfce7; color: #15803d; display: flex; align-items: center; justify-content: center; flex: 0 0 56px" role="img" aria-label="Project icon: sensor, green">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V11"/><path d="M8 21h8"/><path d="M12 11a4 4 0 0 0 4-4V3H8v4a4 4 0 0 0 4 4z"/><path d="M5 9a7 7 0 0 0 2 4M19 9a7 7 0 0 1-2 4"/></svg>
+        </div>
+        <div style="flex: 1 1 300px; min-width: 0">
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+            <span style="font-size: 18px; font-weight: 600">Soil sensor</span>
+            <span style="font-size: 12px; border: 1px solid #e5e5e5; border-radius: 6px; padding: 0 8px; color: #525252">Board template</span>
+            <span style="font-size: 12px; border: 1px solid #e5e5e5; border-radius: 6px; padding: 0 8px; color: #525252">Start from an idea</span>
+          </div>
+          <p style="margin: 4px 0 0; color: #404040">A battery-powered soil moisture sensor for farms that reports over LoRa to a gateway every 15 minutes.</p>
+          <div style="margin-top: 6px; font-size: 12px; color: #737373">New repository <span style="font-family: 'Geist Mono', monospace">mteichtahl/soil-sensor</span> · 10 boards per run · JLCPCB · no budget set</div>
+        </div>
+        <a href="NewProject.dc.html" style="flex: 0 0 auto; font-size: 13px">Edit basics</a>
+      </section>
+
+      <div>
+        <h1 style="margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.01em">People and access</h1>
+        <p style="margin: 4px 0 0; color: #525252">Who works on Soil sensor, and what each person can do. A person's class is theirs across trace; adding them here gives them this project.</p>
+      </div>
+
+      <div style="display: flex; gap: 8px; flex-wrap: wrap">
+        <label for="add" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Add people</label>
+        <input id="add" type="text" placeholder="Add people by name or email, or type a new email to invite" style="flex: 1 1 320px; height: 40px; padding: 0 12px; border: 1px solid #d4d4d4; border-radius: 8px; font: inherit">
+        <button type="button" style="height: 40px; padding: 0 16px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-weight: 500; cursor: pointer">Add</button>
+      </div>
+
+      <div style="border: 1px solid #e5e5e5; border-radius: 12px; overflow-x: auto">
+        <table style="width: 100%; border-collapse: collapse; min-width: 640px">
+          <thead>
+            <tr style="text-align: left; font-size: 12px; color: #737373">
+              <th style="padding: 10px 16px; font-weight: 500; border-bottom: 1px solid #e5e5e5">Person</th>
+              <th style="padding: 10px 16px; font-weight: 500; border-bottom: 1px solid #e5e5e5">Class (across trace)</th>
+              <th style="padding: 10px 16px; font-weight: 500; border-bottom: 1px solid #e5e5e5">On this project they</th>
+              <th style="padding: 10px 16px; font-weight: 500; border-bottom: 1px solid #e5e5e5">Gets</th>
+              <th style="padding: 10px 16px; border-bottom: 1px solid #e5e5e5"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Remove</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style="padding: 12px 16px; border-bottom: 1px solid #f0f0f0"><div style="display: flex; align-items: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 14px; background: #e5e5e5; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600">PS</span><span style="display: flex; flex-direction: column; line-height: 1.3"><span style="font-weight: 500">Priya Shah</span><span style="font-size: 12px; color: #737373">priya@example.com</span></span></div></td>
+              <td style="padding: 12px 16px; border-bottom: 1px solid #f0f0f0"><button type="button" style="height: 32px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; cursor: pointer">User ▾</button></td>
+              <td style="padding: 12px 16px; border-bottom: 1px solid #f0f0f0; color: #404040">Change the design, answer questions, start work</td>
+              <td style="padding: 12px 16px; border-bottom: 1px solid #f0f0f0; font-size: 13px; color: #525252">Questions first</td>
+              <td style="padding: 12px 16px; border-bottom: 1px solid #f0f0f0"><button type="button" aria-label="Remove Priya Shah" style="width: 32px; height: 32px; border: 0; background: transparent; border-radius: 8px; color: #737373; cursor: pointer">×</button></td>
+            </tr>
+            <tr>
+              <td style="padding: 12px 16px; border-bottom: 1px solid #f0f0f0"><div style="display: flex; align-items: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 14px; background: #e5e5e5; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600">TL</span><span style="display: flex; flex-direction: column; line-height: 1.3"><span style="font-weight: 500">Tom Lee</span><span style="font-size: 12px; color: #737373">tom@example.com</span></span></div></td>
+              <td style="padding: 12px 16px; border-bottom: 1px solid #f0f0f0"><button type="button" style="height: 32px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; cursor: pointer">Guest ▾</button></td>
+              <td style="padding: 12px 16px; border-bottom: 1px solid #f0f0f0; color: #404040">Read everything, comment at gates</td>
+              <td style="padding: 12px 16px; border-bottom: 1px solid #f0f0f0; font-size: 13px; color: #525252">Gate summaries</td>
+              <td style="padding: 12px 16px; border-bottom: 1px solid #f0f0f0"><button type="button" aria-label="Remove Tom Lee" style="width: 32px; height: 32px; border: 0; background: transparent; border-radius: 8px; color: #737373; cursor: pointer">×</button></td>
+            </tr>
+            <tr>
+              <td style="padding: 12px 16px"><div style="display: flex; align-items: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 14px; border: 1px dashed #a3a3a3; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #737373">@</span><span style="display: flex; flex-direction: column; line-height: 1.3"><span style="font-weight: 500">sam@farmtech.example</span><span style="font-size: 12px; color: #2563eb">New: will be invited</span></span></div></td>
+              <td style="padding: 12px 16px"><button type="button" style="height: 32px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; cursor: pointer">User ▾</button></td>
+              <td style="padding: 12px 16px; color: #404040">Change the design, answer questions, start work</td>
+              <td style="padding: 12px 16px; font-size: 13px; color: #525252">Questions</td>
+              <td style="padding: 12px 16px"><button type="button" aria-label="Remove sam@farmtech.example" style="width: 32px; height: 32px; border: 0; background: transparent; border-radius: 8px; color: #737373; cursor: pointer">×</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div style="display: flex; gap: 10px; align-items: flex-start; padding: 14px 16px; border-radius: 12px; background: #fafafa; border: 1px solid #e5e5e5">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#525252" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-top: 3px; flex: 0 0 16px"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>
+        <div style="color: #404040"><strong style="font-weight: 600">Admins reach every project without being added:</strong> Marc Teichtahl (you). Admins sign gates and approve spend; they get gate and spend notifications for Soil sensor.</div>
+      </div>
+
+      <details style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 14px 16px">
+        <summary style="cursor: pointer; font-weight: 500">What each class can do</summary>
+        <div style="margin-top: 10px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; font-size: 13px; color: #404040">
+          <div><div style="font-weight: 600; color: #0a0a0a">Admin</div>Every project. Signs gates, approves spend, manages people.</div>
+          <div><div style="font-weight: 600; color: #0a0a0a">User</div>Projects they are on. Changes the design, answers questions, starts and stops work.</div>
+          <div><div style="font-weight: 600; color: #0a0a0a">Guest</div>Projects they are on. Reads everything and comments at gates; changes nothing.</div>
+        </div>
+      </details>
+
+      <details style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 14px 16px">
+        <summary style="cursor: pointer; font-weight: 500">More settings <span style="font-weight: 400; color: #737373">· tags, agent rules, notifications, knowledge sources, agent token</span></summary>
+      </details>
+    </main>
+
+    <aside aria-label="trace" style="flex: 1 1 340px; max-width: 400px; border-left: 1px solid #e5e5e5; padding: 24px 20px 120px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; background: #ffffff">
+      <div style="display: flex; align-items: center; gap: 8px; font-weight: 600"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>trace</div>
+      <div style="border: 1px solid #bfdbfe; background: #eff4ff; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 8px">
+        <span style="align-self: flex-start; font-size: 12px; font-weight: 600; color: #1d4ed8; background: #fff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 0 8px">trace recommends</span>
+        <p style="margin: 0">Give the project a second person who can answer questions while you are away. Priya is already a User on Motor driver, so she can start at once.</p>
+        <div style="font-size: 12px; color: #525252"><strong style="font-weight: 600">What it gives up:</strong> nothing; you can remove her later.</div>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap"><span style="font-size: 12px; border: 1px solid #bfdbfe; background: #fff; border-radius: 6px; padding: 0 8px; color: #404040">Questions waited 2 days on Motor driver</span></div>
+      </div>
+      <p style="margin: 0; font-size: 13px; color: #525252">Inviting sam@farmtech.example sends one email. Sam signs in with a passkey and lands on Soil sensor.</p>
+      <div style="flex-grow: 1"></div>
+      <div style="border: 1px solid #e5e5e5; border-radius: 12px; display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 12px">
+        <label for="ask" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Ask about this step</label>
+        <input id="ask" type="text" placeholder="Ask about this step…" style="flex-grow: 1; border: 0; font: inherit; min-width: 0; outline: none">
+        <button type="button" aria-label="Dictate" style="width: 32px; height: 32px; border: 0; background: transparent; border-radius: 8px; color: #525252; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+      </div>
+    </aside>
+  </div>
+
+  <footer style="border-top: 1px solid #e5e5e5; background: #fff; padding: 12px 24px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap">
+    <span style="font-weight: 600">6 of 6 met</span>
+    <div style="display: flex; gap: 6px; flex-wrap: wrap; flex: 1 1 400px">
+      <span style="font-size: 12px; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 2px 8px">✓ Name not used by another project</span>
+      <span style="font-size: 12px; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 2px 8px">✓ Description is a full sentence</span>
+      <span style="font-size: 12px; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 2px 8px">✓ Repository reachable</span>
+      <span style="font-size: 12px; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 2px 8px">✓ Template chosen</span>
+      <span style="font-size: 12px; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 2px 8px">✓ Build quantity set</span>
+      <span style="font-size: 12px; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 2px 8px">✓ Everyone has a class</span>
+    </div>
+    <a href="NewProject.dc.html" style="display: inline-flex; align-items: center; height: 36px; padding: 0 14px; border: 1px solid #e5e5e5; border-radius: 8px; color: #0a0a0a; font-weight: 500">Back</a>
+    <a href="Project.dc.html" style="display: inline-flex; align-items: center; height: 36px; padding: 0 16px; border-radius: 8px; background: #2563eb; color: #fff; font-weight: 500">Continue to review</a>
+  </footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1150}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var done = 'width:22px;height:22px;border-radius:11px;background:#0a0a0a;color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center;flex:0 0 22px;';
+    var cur = 'width:22px;height:22px;border-radius:11px;background:#fff;border:2px solid #2563eb;color:#2563eb;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;box-sizing:border-box;flex:0 0 22px;';
+    var todo = 'width:22px;height:22px;border-radius:11px;background:#fff;border:1.5px solid #d4d4d4;color:#737373;font-size:12px;display:flex;align-items:center;justify-content:center;box-sizing:border-box;flex:0 0 22px;';
+    function s(name, summary, state, n) {
+      return { name: name, summary: summary, dot: state === 'done' ? done : state === 'cur' ? cur : todo, mark: state === 'done' ? '✓' : String(n), weight: state === 'cur' ? '600' : '500', color: state === 'todo' ? '#737373' : '#0a0a0a', bg: state === 'cur' ? '#eff4ff' : 'transparent' };
+    }
+    return {
+      steps: [
+        s('Basics', 'Name, description, icon', 'done', 1),
+        s('Start from', 'An idea', 'done', 2),
+        s('Template and stages', 'Board, 9 stages', 'done', 3),
+        s('Repository', 'New: soil-sensor', 'done', 4),
+        s('Build', '10 boards, JLCPCB', 'done', 5),
+        s('People and access', '3 people, 1 to invite', 'cur', 6),
+        s('Review and create', 'What will be set up', 'todo', 7)
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

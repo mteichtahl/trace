@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>trace · Soil sensor</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2563eb;text-decoration:none}a:hover{color:#1d4ed8}
+</style>
+</helmet>
+<div style="font-family: Geist, system-ui, sans-serif; color: #0a0a0a; background: #ffffff; min-height: 1100px; display: flex; flex-wrap: wrap; font-size: 14px; line-height: 1.5">
+
+  <nav aria-label="Main" style="flex: 1 1 232px; max-width: 260px; background: #fafafa; border-right: 1px solid #e5e5e5; padding: 16px 12px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px">
+    <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px 18px">
+      <div style="width: 24px; height: 24px; border-radius: 6px; background: #0a0a0a; color: #fff; display: flex; align-items: center; justify-content: center; font-family: 'Geist Mono', monospace; font-size: 13px; font-weight: 600">t</div>
+      <span style="font-weight: 600; font-size: 15px">trace</span>
+    </div>
+    <a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/></svg>Home</a>
+    <a href="Project.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; background: #f0f0f0; color: #0a0a0a; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Projects</a>
+    <a href="Knowledge.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h10a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z"/><path d="M4 16a4 4 0 0 1 4-4h10"/></svg>Knowledge</a>
+    <a href="Agents.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01"/></svg>Agents</a>
+    <a href="Operations.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Operations</a>
+    <a href="People.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>Admin</a>
+    <div style="margin: 20px 8px 6px; font-size: 12px; color: #737373; font-weight: 500">Pinned</div>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #0a0a0a; font-weight: 500"><span>Soil sensor</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Motor driver</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Panel controller</span></a>
+    <div style="flex-grow: 1"></div>
+    <a href="Preferences.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040">
+      <span style="width: 28px; height: 28px; border-radius: 14px; background: #e5e5e5; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600">MT</span>
+      <span style="display: flex; flex-direction: column; line-height: 1.3"><span style="font-weight: 500; color: #0a0a0a">Marc Teichtahl</span><span style="font-size: 12px; color: #737373">Admin</span></span>
+    </a>
+  </nav>
+
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="height: 56px; border-bottom: 1px solid #e5e5e5; display: flex; align-items: center; gap: 12px; padding: 0 24px; box-sizing: border-box">
+      <nav aria-label="Breadcrumb" style="display: flex; align-items: center; gap: 6px; font-size: 14px"><a href="Project.dc.html" style="color: #737373">Projects</a><span style="color: #a3a3a3" aria-hidden="true">/</span><span style="font-weight: 500">Soil sensor · Rev A</span></nav>
+      <div style="flex-grow: 1"></div>
+      <button type="button" style="display: flex; align-items: center; gap: 8px; height: 36px; width: 280px; max-width: 40%; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; color: #737373; font: inherit; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span style="flex-grow: 1; text-align: left">Search or run a command</span><kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; border: 1px solid #e5e5e5; border-radius: 4px; padding: 0 4px">⌘K</kbd></button>
+      <span title="Live: every screen updates as the record changes" style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #15803d"><span style="width: 8px; height: 8px; border-radius: 4px; background: #16a34a"></span>Live</span>
+      <button type="button" aria-label="Notifications, 2 new" style="position: relative; width: 36px; height: 36px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #0a0a0a"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><span style="position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 4px; background: #2563eb"></span></button>
+      <a href="Chat.dc.html" style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; color: #0a0a0a; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>Ask trace <kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373">⌘J</kbd></a>
+    </header>
+
+    <main style="width: 100%; max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; box-sizing: border-box; display: flex; flex-direction: column; gap: 24px">
+
+      <!-- Project header -->
+      <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+        <h1 style="margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.02em">Soil sensor</h1>
+        <span style="font-size: 12px; font-weight: 500; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1px 8px; background: #fafafa">Rev A</span>
+        <span style="font-size: 13px; color: #737373">Board template</span>
+        <div style="flex-grow: 1"></div>
+        <div style="display: flex" role="img" aria-label="3 people: Marc Teichtahl, Priya Shah, Tom Lee">
+          <span style="width: 28px; height: 28px; border-radius: 14px; background: #e5e5e5; border: 2px solid #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600">MT</span>
+          <span style="width: 28px; height: 28px; border-radius: 14px; background: #f0f0f0; border: 2px solid #fff; margin-left: -8px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600">PS</span>
+          <span style="width: 28px; height: 28px; border-radius: 14px; background: #fafafa; border: 2px solid #fff; outline: 1px solid #e5e5e5; margin-left: -8px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: #525252">TL</span>
+        </div>
+        <div style="position: relative">
+          <button type="button" aria-label="Project actions" aria-haspopup="menu" style="width: 36px; height: 36px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; color: #525252; cursor: pointer">•••</button>
+          <div role="menu" aria-label="Project actions" style="display: none">
+            <button type="button" role="menuitem">Raise a change</button>
+            <button type="button" role="menuitem">Start next revision</button>
+            <button type="button" role="menuitem">Export the record</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tabs -->
+      <div style="display: flex; align-items: flex-end; gap: 16px; border-bottom: 1px solid #e5e5e5; flex-wrap: wrap; margin-top: -8px">
+        <div role="tablist" aria-label="Project sections" style="display: flex; gap: 4px; flex-wrap: wrap">
+          <button type="button" role="tab" aria-selected="true" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid #0a0a0a; background: transparent; font: inherit; font-weight: 500; color: #0a0a0a; cursor: pointer">Overview</button>
+          <button type="button" role="tab" aria-selected="false" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: #525252; cursor: pointer">Requirements</button>
+          <button type="button" role="tab" aria-selected="false" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: #525252; cursor: pointer">Design</button>
+          <button type="button" role="tab" aria-selected="false" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: #525252; cursor: pointer">Decisions</button>
+          <button type="button" role="tab" aria-selected="false" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: #525252; cursor: pointer">Settings</button>
+          <button type="button" role="tab" aria-selected="false" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: #525252; cursor: pointer">Cost and time</button>
+        </div>
+        <span style="font-size: 12px; color: #a3a3a3; padding-bottom: 10px">More tabs appear as the project reaches later stages</span>
+      </div>
+
+      <!-- Stage rail -->
+      <section aria-label="Stages" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px">
+        <div style="overflow-x: auto">
+          <ol role="list" aria-label="Stage 3 of 9, Capture, 6 of 6 criteria met" style="list-style: none; margin: 0; padding: 0; display: flex; align-items: flex-start; min-width: 860px">
+            <sc-for list="{{stages}}" as="s" hint-placeholder-count="9">
+              <li style="flex: 1 1 0; display: flex; align-items: flex-start">
+                <div style="flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; min-width: 0">
+                  <span style="{{s.dot}}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="{{s.check}}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg></span>
+                  <span style="font-size: 13px; font-weight: {{s.weight}}; color: {{s.color}}">{{s.name}}</span>
+                  <span style="font-size: 12px; color: {{s.subColor}}; line-height: 1.3">{{s.sub}}</span>
+                </div>
+                <span title="{{s.gateLabel}}" style="{{s.gate}}"></span>
+              </li>
+            </sc-for>
+          </ol>
+        </div>
+        <div style="display: flex; align-items: center; gap: 16px; padding-top: 12px; border-top: 1px solid #f0f0f0; flex-wrap: wrap; font-size: 12px; color: #525252">
+          <span style="font-weight: 500; color: #737373">Firmware track</span>
+          <span style="display: flex; align-items: center; gap: 6px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#15803d" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>Define · Requirements accepted</span>
+          <span style="color: #d4d4d4" aria-hidden="true">—</span>
+          <span style="display: flex; align-items: center; gap: 6px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#15803d" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>Architect · Peripherals budgeted</span>
+          <span style="color: #d4d4d4" aria-hidden="true">—</span>
+          <span style="display: flex; align-items: center; gap: 6px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#15803d" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>Capture · Pin plan agreed</span>
+        </div>
+      </section>
+
+      <div style="display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start">
+        <!-- Left column -->
+        <div style="flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 32px">
+
+          <!-- Next step -->
+          <section aria-labelledby="next" style="border: 1px solid #93b4f5; background: #eff4ff; border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 14px">
+            <div style="display: flex; align-items: center; gap: 8px">
+              <span style="width: 8px; height: 8px; border-radius: 4px; background: #2563eb" aria-hidden="true"></span>
+              <h2 id="next" style="margin: 0; font-size: 12px; font-weight: 600; color: #2563eb; text-transform: uppercase; letter-spacing: 0.04em">Next step · waiting on you</h2>
+            </div>
+            <p style="margin: 0; font-size: 18px; line-height: 1.45; font-weight: 500">The schematic gate is ready. All 6 criteria are met and 1 waiver was taken. <strong style="font-weight: 700">trace recommends signing.</strong></p>
+            <p style="margin: 0; font-size: 13px; color: #525252"><span style="font-weight: 600; color: #0a0a0a">Why:</span> <span style="text-decoration: underline dotted #a3a3a3; text-underline-offset: 3px">ERC</span> clean, no datasheet conflicts, every part in stock for 10 boards, pin plan matches.</p>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap">
+              <a href="Gate.dc.html" style="display: inline-flex; align-items: center; height: 36px; padding: 0 16px; border-radius: 8px; background: #2563eb; color: #fff; font-weight: 500">Review and sign</a>
+              <a href="Gate.dc.html" style="display: inline-flex; align-items: center; height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid #e5e5e5; background: #fff; color: #0a0a0a; font-weight: 500">Read the evidence</a>
+            </div>
+          </section>
+
+          <!-- Waiting on people -->
+          <section aria-labelledby="waiting" style="display: flex; flex-direction: column; gap: 10px">
+            <h2 id="waiting" style="margin: 0; font-size: 13px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 0.04em">Waiting on people (1)</h2>
+            <div style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 14px 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#525252" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14"/><path d="M12 17h.01"/></svg>
+              <div style="flex: 1 1 300px; min-width: 0">
+                <div><span style="font-weight: 500">Question to Priya:</span> which antenna connector, u.FL or SMA?</div>
+                <div style="font-size: 12px; color: #737373">Asked 2 days ago · blocks nothing yet; Layout needs it</div>
+              </div>
+              <a href="PhoneAsk.dc.html" style="font-size: 13px; font-weight: 500">Answer it</a>
+            </div>
+          </section>
+
+          <!-- trace is doing -->
+          <section aria-labelledby="doing" style="display: flex; flex-direction: column; gap: 10px">
+            <h2 id="doing" style="margin: 0; font-size: 13px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 0.04em">trace is doing (1)</h2>
+            <div style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 14px 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+              <div style="flex: 1 1 300px; min-width: 0">
+                <div><a href="Run.dc.html" style="color: #0a0a0a; font-weight: 500">Rendering the board for the gate</a></div>
+                <div style="font-size: 12px; color: #737373">On a graphics card · about 3 minutes left</div>
+                <div role="progressbar" aria-label="Rendering progress" aria-valuenow="60" aria-valuemin="0" aria-valuemax="100" style="margin-top: 6px; height: 4px; border-radius: 2px; background: #f0f0f0; max-width: 360px"><div style="width: 60%; height: 4px; border-radius: 2px; background: #2563eb"></div></div>
+              </div>
+              <button type="button" aria-label="Run options: Pause, Cancel, Move up" style="width: 32px; height: 32px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; color: #525252">•••</button>
+            </div>
+          </section>
+
+          <!-- Queued -->
+          <section aria-labelledby="queued" style="display: flex; flex-direction: column; gap: 10px">
+            <h2 id="queued" style="margin: 0; font-size: 13px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 0.04em">Queued (2)</h2>
+            <div style="border: 1px solid #e5e5e5; border-radius: 12px; overflow: hidden">
+              <div style="padding: 12px 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap">
+                <span style="font-size: 12px; color: #737373; background: #f5f5f5; border-radius: 6px; padding: 1px 8px; display: inline-flex; align-items: center; gap: 4px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/></svg>Queued</span>
+                <div style="flex: 1 1 300px; min-width: 0"><span style="font-weight: 500">Write the test plan for Prove</span> <span style="color: #737373; font-size: 13px">— starts when the schematic gate is signed</span></div>
+              </div>
+              <div style="padding: 12px 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; border-top: 1px solid #f0f0f0">
+                <span style="font-size: 12px; color: #737373; background: #f5f5f5; border-radius: 6px; padding: 1px 8px; display: inline-flex; align-items: center; gap: 4px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/></svg>Queued</span>
+                <div style="flex: 1 1 300px; min-width: 0"><span style="font-weight: 500">Run <span style="text-decoration: underline dotted #a3a3a3; text-underline-offset: 3px">SPICE</span> corners on the LDO</span> <span style="color: #737373; font-size: 13px">— starts when the test plan is written</span></div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Recently -->
+          <section aria-labelledby="recent" style="display: flex; flex-direction: column; gap: 10px">
+            <div style="display: flex; align-items: baseline; justify-content: space-between">
+              <h2 id="recent" style="margin: 0; font-size: 13px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 0.04em">Recently</h2>
+              <a href="Project.dc.html" style="font-size: 13px">Full history</a>
+            </div>
+            <div style="border: 1px solid #e5e5e5; border-radius: 12px; overflow: hidden">
+              <sc-for list="{{recent}}" as="r" hint-placeholder-count="5">
+                <div style="display: flex; align-items: center; gap: 14px; padding: 12px 20px; border-top: {{r.divider}}; flex-wrap: wrap">
+                  <span style="flex: 0 0 28px; height: 28px; border-radius: 14px; background: #f5f5f5; color: #525252; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600" aria-hidden="true">{{r.who}}</span>
+                  <div style="flex: 1 1 300px; min-width: 0">{{r.text}} <span style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #525252">{{r.mono}}</span></div>
+                  <span style="font-size: 12px; color: #737373">{{r.when}}</span>
+                </div>
+              </sc-for>
+            </div>
+          </section>
+        </div>
+
+        <!-- Right column -->
+        <aside aria-label="Project summary" style="flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+          <section aria-labelledby="req" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px">
+            <div style="display: flex; align-items: baseline; justify-content: space-between">
+              <h2 id="req" style="margin: 0; font-size: 14px; font-weight: 600">Requirements</h2>
+              <a href="Project.dc.html" style="font-size: 13px">Open</a>
+            </div>
+            <p style="margin: 0; font-size: 13px; color: #525252"><span style="font-size: 24px; font-weight: 600; color: #0a0a0a">24</span> accepted. None verified yet; testing starts in Prove.</p>
+            <div role="img" aria-label="Coverage: 0 verified, 24 untested" style="height: 8px; border-radius: 4px; background: #e5e5e5; overflow: hidden; display: flex"><div style="width: 0%; background: #15803d"></div></div>
+            <div style="display: flex; gap: 16px; font-size: 12px; color: #525252">
+              <span style="display: flex; align-items: center; gap: 6px"><span style="width: 8px; height: 8px; border-radius: 2px; background: #15803d" aria-hidden="true"></span>Verified 0</span>
+              <span style="display: flex; align-items: center; gap: 6px"><span style="width: 8px; height: 8px; border-radius: 2px; background: #e5e5e5" aria-hidden="true"></span>Untested 24</span>
+            </div>
+          </section>
+
+          <section aria-labelledby="cost" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px">
+            <h2 id="cost" style="margin: 0; font-size: 14px; font-weight: 600">Cost so far</h2>
+            <dl style="margin: 0; display: grid; grid-template-columns: 1fr auto; row-gap: 8px; font-size: 13px">
+              <dt style="color: #525252">Cloud use to date</dt><dd style="margin: 0; font-weight: 600; text-align: right">US$38</dd>
+              <dt style="color: #525252">Forecast to release</dt><dd style="margin: 0; font-weight: 500; text-align: right">US$120</dd>
+              <dt style="color: #525252">Parts list (BOM) for 10 boards</dt><dd style="margin: 0; font-weight: 500; text-align: right">US$142</dd>
+            </dl>
+            <a href="Project.dc.html" style="font-size: 13px; font-weight: 500">Cost and time</a>
+          </section>
+        </aside>
+      </div>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1100}}'>
+class Component extends DCLogic {
+  stages() {
+    var names = ['Define', 'Architect', 'Capture', 'Prove', 'Layout', 'Sign-off', 'Release', 'Fabricate', 'Bring up'];
+    var out = [];
+    for (var i = 0; i < names.length; i++) {
+      var dotBase = 'width:24px;height:24px;border-radius:12px;display:flex;align-items:center;justify-content:center;box-sizing:border-box;';
+      var gateBase = 'flex:0 0 8px;width:8px;height:8px;margin:8px 0 0;transform:rotate(45deg);box-sizing:border-box;';
+      var s = { name: names[i], weight: '400', color: '#525252', subColor: '#737373', check: 'transparent', gateLabel: '' };
+      if (i < 2) {
+        s.dot = dotBase + 'background:#0a0a0a;';
+        s.check = '#ffffff';
+        s.sub = 'Done';
+        s.color = '#0a0a0a';
+      } else if (i === 2) {
+        s.dot = dotBase + 'background:#fff;border:3px solid #2563eb;';
+        s.sub = '6 of 6 criteria met';
+        s.weight = '600';
+        s.color = '#2563eb';
+        s.subColor = '#2563eb';
+      } else {
+        s.dot = dotBase + 'background:#fff;border:1.5px solid #d4d4d4;';
+        s.sub = 'Queued';
+        s.color = '#737373';
+        s.subColor = '#a3a3a3';
+      }
+      if (i === names.length - 1) s.gate = 'display:none;';
+      else if (i < 2) { s.gate = gateBase + 'background:#0a0a0a;'; s.gateLabel = names[i] + ' gate signed'; }
+      else if (i === 2) { s.gate = gateBase + 'background:#eff4ff;border:2px solid #2563eb;'; s.gateLabel = 'Schematic gate ready to sign'; }
+      else { s.gate = gateBase + 'background:#fff;border:1.5px solid #d4d4d4;'; s.gateLabel = names[i] + ' gate'; }
+      out.push(s);
+    }
+    return out;
+  }
+  renderVals() {
+    return {
+      stages: this.stages(),
+      recent: [
+        { who: 'PS', text: 'Push by Priya: 2 findings fixed', mono: 'abc123', when: '2 hours ago', divider: '0' },
+        { who: 'MT', text: 'Waiver W-3 taken for ERC pin-not-driven on U2', mono: 'VBAT', when: '5 hours ago', divider: '1px solid #f0f0f0' },
+        { who: 't', text: 'trace re-checked the parts list: all 31 lines in stock for 10 boards', mono: 'run_77b0', when: 'Today 09:12', divider: '1px solid #f0f0f0' },
+        { who: 'PS', text: 'Pin plan agreed with the firmware track', mono: '', when: 'Yesterday', divider: '1px solid #f0f0f0' },
+        { who: 'MT', text: 'Architecture gate signed by Marc', mono: '', when: '12 Oct', divider: '1px solid #f0f0f0' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>trace · Soil sensor · Recent activity</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2563eb;text-decoration:none}a:hover{color:#1d4ed8}
+</style>
+</helmet>
+<div style="font-family: Geist, system-ui, sans-serif; color: #0a0a0a; background: #ffffff; min-height: 1000px; display: flex; flex-wrap: wrap; font-size: 14px; line-height: 1.5">
+
+  <nav aria-label="Main" style="flex: 1 1 232px; max-width: 260px; background: #fafafa; border-right: 1px solid #e5e5e5; padding: 16px 12px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px">
+    <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px 18px">
+      <div style="width: 24px; height: 24px; border-radius: 6px; background: #0a0a0a; color: #fff; display: flex; align-items: center; justify-content: center; font-family: 'Geist Mono', monospace; font-size: 13px; font-weight: 600">t</div>
+      <span style="font-weight: 600; font-size: 15px">trace</span>
+    </div>
+    <a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/></svg>Home</a>
+    <a href="Project.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; background: #f0f0f0; color: #0a0a0a; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Projects</a>
+    <a href="Knowledge.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h10a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z"/><path d="M4 16a4 4 0 0 1 4-4h10"/></svg>Knowledge</a>
+    <a href="Agents.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01"/></svg>Agents</a>
+    <a href="Operations.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Operations</a>
+    <a href="People.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>Admin</a>
+    <div style="margin: 20px 8px 6px; font-size: 12px; color: #737373; font-weight: 500">Pinned</div>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #0a0a0a; font-weight: 500"><span>Soil sensor</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Motor driver</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Panel controller</span></a>
+    <div style="flex-grow: 1"></div>
+    <a href="Preferences.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040">
+      <span style="width: 28px; height: 28px; border-radius: 14px; background: #e5e5e5; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600">MT</span>
+      <span style="display: flex; flex-direction: column; line-height: 1.3"><span style="font-weight: 500; color: #0a0a0a">Marc Teichtahl</span><span style="font-size: 12px; color: #737373">Admin</span></span>
+    </a>
+  </nav>
+
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="height: 56px; border-bottom: 1px solid #e5e5e5; display: flex; align-items: center; gap: 12px; padding: 0 24px; box-sizing: border-box">
+      <nav aria-label="Breadcrumb" style="display: flex; align-items: center; gap: 6px; font-size: 14px"><a href="Project.dc.html" style="color: #737373">Soil sensor · Rev A</a><span style="color: #a3a3a3" aria-hidden="true">·</span><a href="Memory.dc.html" style="color: #737373">Memory</a><span style="color: #a3a3a3" aria-hidden="true">·</span><span style="font-weight: 500">Recent activity</span></nav>
+      <div style="flex-grow: 1"></div>
+      <button type="button" style="display: flex; align-items: center; gap: 8px; height: 36px; width: 280px; max-width: 40%; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; color: #737373; font: inherit; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span style="flex-grow: 1; text-align: left">Search or run a command</span><kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; border: 1px solid #e5e5e5; border-radius: 4px; padding: 0 4px">⌘K</kbd></button>
+      <span title="Live: every screen updates as the record changes" style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #15803d"><span style="width: 8px; height: 8px; border-radius: 4px; background: #16a34a"></span>Live</span>
+      <button type="button" aria-label="Notifications, 2 new" style="position: relative; width: 36px; height: 36px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #0a0a0a"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><span style="position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 4px; background: #2563eb"></span></button>
+      <a href="Chat.dc.html" style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; color: #0a0a0a; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>Ask trace <kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373">⌘J</kbd></a>
+    </header>
+
+    <main style="width: 100%; max-width: 1200px; margin: 0 auto; padding: 28px 24px 56px; box-sizing: border-box; display: flex; flex-direction: column; gap: 20px">
+
+      <!-- Project header -->
+      <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+        <h1 style="margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.02em">Soil sensor</h1>
+        <span style="font-size: 12px; font-weight: 500; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1px 8px; background: #fafafa">Rev A</span>
+        <span style="font-size: 13px; color: #737373">Board template</span>
+      </div>
+
+      <!-- Tabs -->
+      <div role="tablist" aria-label="Project sections" style="display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid #e5e5e5; margin-top: -8px">
+        <a href="Project.dc.html" role="tab" aria-selected="false" style="display: inline-flex; align-items: center; height: 40px; padding: 0 12px; border-bottom: 2px solid transparent; color: #525252; box-sizing: border-box">Overview</a>
+        <button type="button" role="tab" aria-selected="false" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: #525252; cursor: pointer">Requirements</button>
+        <button type="button" role="tab" aria-selected="false" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: #525252; cursor: pointer">Design</button>
+        <button type="button" role="tab" aria-selected="false" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: #525252; cursor: pointer">Decisions</button>
+        <a href="Memory.dc.html" role="tab" aria-selected="true" style="display: inline-flex; align-items: center; height: 40px; padding: 0 12px; border-bottom: 2px solid #0a0a0a; color: #0a0a0a; font-weight: 500; box-sizing: border-box">Memory</a>
+        <button type="button" role="tab" aria-selected="false" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: #525252; cursor: pointer">Settings</button>
+      </div>
+
+      <!-- Summary + segmented control -->
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap">
+        <p style="margin: 0; font-size: 15px; flex: 1 1 380px">Recent events are what each agent saw and did in a session. They are kept for 30 days, then removed. <a href="Project.dc.html" style="font-size: 13px; font-weight: 500">Change how long (Settings)</a></p>
+        <div role="group" aria-label="Memory view" style="display: inline-flex; padding: 3px; gap: 2px; background: #f5f5f5; border-radius: 8px">
+          <a href="Memory.dc.html" style="display: inline-flex; align-items: center; height: 30px; padding: 0 12px; border-radius: 6px; font-size: 13px; color: #525252">Long-term (214)</a>
+          <button type="button" aria-pressed="true" style="height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.04); font: inherit; font-size: 13px; font-weight: 500; color: #0a0a0a; cursor: pointer">Recent activity (1,320)</button>
+          <button type="button" aria-pressed="false" style="height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; font: inherit; font-size: 13px; color: #525252; cursor: pointer">Changes (12)</button>
+        </div>
+      </div>
+
+      <!-- Filters -->
+      <div style="display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap">
+        <div style="display: flex; flex-direction: column; gap: 4px">
+          <label for="agent" style="font-size: 12px; color: #525252; font-weight: 500">Agent</label>
+          <select id="agent" style="height: 34px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 13px; min-width: 180px">
+            <option>All agents</option>
+            <option>Verification</option>
+            <option>Implementation</option>
+            <option>Analog and mixed-signal</option>
+            <option>EMC</option>
+            <option>Rendering</option>
+            <option>Thermal</option>
+            <option>Worker</option>
+          </select>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 4px">
+          <label for="range" style="font-size: 12px; color: #525252; font-weight: 500">When</label>
+          <button id="range" type="button" style="display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 13px; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Last 7 days<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#737373" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 4px; flex: 1 1 260px; max-width: 360px">
+          <label for="rq" style="font-size: 12px; color: #525252; font-weight: 500">Search events</label>
+          <div style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; box-sizing: border-box">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#737373" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input id="rq" type="search" placeholder="Search…" style="border: 0; outline: none; font: inherit; font-size: 13px; min-width: 0; flex-grow: 1; background: transparent">
+          </div>
+        </div>
+        <span style="font-size: 12px; color: #737373; padding-bottom: 8px">31 sessions · 418 events in this range</span>
+      </div>
+
+      <div style="display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start">
+        <!-- Sessions -->
+        <div style="flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+
+          <!-- Today -->
+          <section aria-labelledby="g-today" style="display: flex; flex-direction: column; gap: 10px">
+            <button type="button" aria-expanded="true" id="g-today" style="display: flex; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; font: inherit; font-size: 13px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>Today <span style="font-weight: 400; text-transform: none; letter-spacing: 0">· 6 sessions</span></button>
+
+            <!-- Expanded session -->
+            <article style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px">
+              <div style="display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap">
+                <span style="flex: 0 0 32px; height: 32px; border-radius: 8px; background: #f5f5f5; color: #404040; display: flex; align-items: center; justify-content: center" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3"/></svg></span>
+                <div style="flex: 1 1 300px; min-width: 0">
+                  <div style="font-weight: 600">Verification</div>
+                  <div style="font-size: 12px; color: #737373">Session 10:42 · 14 events · started by Priya (chat)</div>
+                </div>
+                <span style="font-size: 12px; color: #525252; background: #f5f5f5; border-radius: 6px; padding: 1px 8px; display: inline-flex; align-items: center; gap: 4px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Expires in 29 days</span>
+                <button type="button" aria-expanded="true" aria-label="Collapse session" style="width: 28px; height: 28px; border: 0; background: transparent; border-radius: 6px; color: #525252; cursor: pointer; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg></button>
+              </div>
+              <p style="margin: 0; font-size: 13px; color: #525252">Priya asked why R-006 (2 km radio range) is failing. The agent read the radio datasheet and the last range test, found the link 0.6 km short, and suggested raising transmit power to +20 dBm.</p>
+
+              <ol aria-label="Events in this session" style="list-style: none; margin: 4px 0 0; padding: 0 0 0 4px; display: flex; flex-direction: column">
+                <li style="display: flex; gap: 12px; align-items: flex-start">
+                  <span style="flex: 0 0 44px; font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373; padding-top: 2px">10:42</span>
+                  <span style="display: flex; flex-direction: column; align-items: center; align-self: stretch"><span style="width: 24px; height: 24px; border-radius: 12px; border: 1px solid #e5e5e5; background: #fff; display: flex; align-items: center; justify-content: center; color: #525252"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17h.01"/></svg></span><span style="flex-grow: 1; width: 1px; background: #e5e5e5; min-height: 10px"></span></span>
+                  <span style="flex: 1 1 auto; font-size: 13px; padding: 2px 0 12px"><span style="font-weight: 500">Asked:</span> Why is <span style="font-family: 'Geist Mono', monospace">R-006</span> failing?</span>
+                </li>
+                <li style="display: flex; gap: 12px; align-items: flex-start">
+                  <span style="flex: 0 0 44px; font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373; padding-top: 2px">10:42</span>
+                  <span style="display: flex; flex-direction: column; align-items: center; align-self: stretch"><span style="width: 24px; height: 24px; border-radius: 12px; border: 1px solid #e5e5e5; background: #fff; display: flex; align-items: center; justify-content: center; color: #525252"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/></svg></span><span style="flex-grow: 1; width: 1px; background: #e5e5e5; min-height: 10px"></span></span>
+                  <span style="flex: 1 1 auto; font-size: 13px; padding: 2px 0 12px"><span style="font-weight: 500">Tool:</span> Read 3 datasheet pages <span style="color: #737373">(radio, pages 18–20)</span></span>
+                </li>
+                <li style="display: flex; gap: 12px; align-items: flex-start">
+                  <span style="flex: 0 0 44px; font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373; padding-top: 2px">10:43</span>
+                  <span style="display: flex; flex-direction: column; align-items: center; align-self: stretch"><span style="width: 24px; height: 24px; border-radius: 12px; border: 1px solid #e5e5e5; background: #fff; display: flex; align-items: center; justify-content: center; color: #525252"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/></svg></span><span style="flex-grow: 1; width: 1px; background: #e5e5e5; min-height: 10px"></span></span>
+                  <span style="flex: 1 1 auto; font-size: 13px; padding: 2px 0 12px"><span style="font-weight: 500">Tool:</span> Opened range test results <a href="Run.dc.html" style="font-family: 'Geist Mono', monospace; font-size: 12px">run_5e72</a></span>
+                </li>
+                <li style="display: flex; gap: 12px; align-items: flex-start">
+                  <span style="flex: 0 0 44px; font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373; padding-top: 2px">10:44</span>
+                  <span style="display: flex; flex-direction: column; align-items: center; align-self: stretch"><span style="width: 24px; height: 24px; border-radius: 12px; border: 1px solid #e5e5e5; background: #fff; display: flex; align-items: center; justify-content: center; color: #525252"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V5M4 19h16M8 15l3-4 3 2 5-6"/></svg></span><span style="flex-grow: 1; width: 1px; background: #e5e5e5; min-height: 10px"></span></span>
+                  <span style="flex: 1 1 auto; font-size: 13px; padding: 2px 0 12px"><span style="font-weight: 500">Result:</span> range test 1.4 km, short of 2 km</span>
+                </li>
+                <li style="display: flex; gap: 12px; align-items: flex-start">
+                  <span style="flex: 0 0 44px; font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373; padding-top: 2px">10:46</span>
+                  <span style="display: flex; flex-direction: column; align-items: center; align-self: stretch"><span style="width: 24px; height: 24px; border-radius: 12px; border: 1px solid #e5e5e5; background: #fff; display: flex; align-items: center; justify-content: center; color: #525252"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg></span><span style="flex-grow: 1; width: 1px; background: transparent; min-height: 4px"></span></span>
+                  <span style="flex: 1 1 auto; font-size: 13px; padding: 2px 0 4px"><span style="font-weight: 500">Answered:</span> raise transmit power to +20 dBm and re-run the range test; battery life drops by about 6%.</span>
+                </li>
+              </ol>
+              <div style="display: flex; align-items: center; gap: 16px; padding-top: 10px; border-top: 1px solid #f0f0f0; font-size: 13px; flex-wrap: wrap">
+                <span style="color: #737373">Showing 5 of 14 events</span>
+                <button type="button" style="padding: 0; border: 0; background: transparent; font: inherit; font-size: 13px; color: #2563eb; cursor: pointer">Show all 14</button>
+                <div style="flex-grow: 1"></div>
+                <a href="Chat.dc.html" style="font-weight: 500">Open the conversation</a>
+              </div>
+            </article>
+
+            <!-- Summarised session -->
+            <article style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px">
+              <div style="display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap">
+                <span style="flex: 0 0 32px; height: 32px; border-radius: 8px; background: #f5f5f5; color: #404040; display: flex; align-items: center; justify-content: center" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg></span>
+                <div style="flex: 1 1 300px; min-width: 0">
+                  <div style="font-weight: 600">Implementation</div>
+                  <div style="font-size: 12px; color: #737373">Session 08:15 · 22 events · started by a push</div>
+                </div>
+                <span style="font-size: 12px; color: #525252; background: #f5f5f5; border-radius: 6px; padding: 1px 8px; display: inline-flex; align-items: center; gap: 4px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Expires in 29 days</span>
+                <button type="button" aria-expanded="false" aria-label="Expand session" style="width: 28px; height: 28px; border: 0; background: transparent; border-radius: 6px; color: #525252; cursor: pointer; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+              </div>
+              <p style="margin: 0; font-size: 13px; color: #525252">Priya's push <span style="font-family: 'Geist Mono', monospace; font-size: 12px">abc123</span> moved the regulator. The agent re-ran the design rule check, fixed 2 clearance findings and re-routed the <span style="font-family: 'Geist Mono', monospace; font-size: 12px">VBAT</span> net.</p>
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px">
+                <span style="display: inline-flex; align-items: center; gap: 4px; color: #15803d; font-weight: 500"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>Summarised → 2 long-term memories</span>
+                <a href="Memory.dc.html" style="display: inline-flex; align-items: center; gap: 4px; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1px 8px; color: #404040">Session summary: regulator move and re-route</a>
+                <a href="Memory.dc.html" style="display: inline-flex; align-items: center; gap: 4px; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1px 8px; color: #404040">Fact: keep 0.5 mm clearance around U2</a>
+              </div>
+            </article>
+
+            <!-- Being summarised -->
+            <article style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px">
+              <div style="display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap">
+                <span style="flex: 0 0 32px; height: 32px; border-radius: 8px; background: #f5f5f5; color: #404040; display: flex; align-items: center; justify-content: center" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></span>
+                <div style="flex: 1 1 300px; min-width: 0">
+                  <div style="font-weight: 600">Analog and mixed-signal</div>
+                  <div style="font-size: 12px; color: #737373">Session 07:58 · 9 events · started by Marc (chat)</div>
+                </div>
+                <span style="font-size: 12px; color: #525252; background: #f5f5f5; border-radius: 6px; padding: 1px 8px; display: inline-flex; align-items: center; gap: 4px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Expires in 29 days</span>
+                <button type="button" aria-expanded="false" aria-label="Expand session" style="width: 28px; height: 28px; border: 0; background: transparent; border-radius: 6px; color: #525252; cursor: pointer; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+              </div>
+              <p style="margin: 0; font-size: 13px; color: #525252">You asked whether the LDO quiescent current fits the 2-year battery target. The agent checked the sleep budget and said it fits with 18% margin.</p>
+              <span style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #737373"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>Being summarised into long-term memory</span>
+            </article>
+            <button type="button" style="align-self: flex-start; padding: 0; border: 0; background: transparent; font: inherit; font-size: 13px; color: #2563eb; cursor: pointer">Show 3 more sessions from today</button>
+          </section>
+
+          <!-- Yesterday -->
+          <section aria-labelledby="g-yday" style="display: flex; flex-direction: column; gap: 10px">
+            <button type="button" aria-expanded="true" id="g-yday" style="display: flex; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; font: inherit; font-size: 13px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>Yesterday <span style="font-weight: 400; text-transform: none; letter-spacing: 0">· 4 sessions</span></button>
+            <article style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px">
+              <div style="display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap">
+                <span style="flex: 0 0 32px; height: 32px; border-radius: 8px; background: #f5f5f5; color: #404040; display: flex; align-items: center; justify-content: center" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12a7 7 0 0 1 14 0M8.5 12a3.5 3.5 0 0 1 7 0"/><circle cx="12" cy="12" r="1"/><path d="M12 13v8"/></svg></span>
+                <div style="flex: 1 1 300px; min-width: 0">
+                  <div style="font-weight: 600"><span style="text-decoration: underline dotted #a3a3a3; text-underline-offset: 3px" title="Electromagnetic compatibility">EMC</span></div>
+                  <div style="font-size: 12px; color: #737373">Session 16:20 · 11 events · started by Tom (chat)</div>
+                </div>
+                <span style="font-size: 12px; color: #525252; background: #f5f5f5; border-radius: 6px; padding: 1px 8px; display: inline-flex; align-items: center; gap: 4px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Expires in 28 days</span>
+                <button type="button" aria-expanded="false" aria-label="Expand session" style="width: 28px; height: 28px; border: 0; background: transparent; border-radius: 6px; color: #525252; cursor: pointer; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+              </div>
+              <p style="margin: 0; font-size: 13px; color: #525252">Tom asked whether the antenna keep-out is wide enough. The agent compared the layout against the radio module guide and flagged one ground pour that enters the keep-out.</p>
+            </article>
+          </section>
+
+          <!-- 22 Oct collapsed -->
+          <section aria-labelledby="g-22" style="display: flex; flex-direction: column; gap: 10px">
+            <button type="button" aria-expanded="false" id="g-22" style="display: flex; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; font: inherit; font-size: 13px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>22 Oct <span style="font-weight: 400; text-transform: none; letter-spacing: 0">· 7 sessions · Thermal, Rendering, Worker and 2 more</span></button>
+          </section>
+        </div>
+
+        <!-- Right column -->
+        <aside aria-label="About recent activity" style="flex: 1 1 320px; max-width: 320px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+          <section aria-labelledby="ret" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 10px">
+            <h2 id="ret" style="margin: 0; font-size: 14px; font-weight: 600">Retention</h2>
+            <p style="margin: 0; font-size: 13px; color: #525252"><span style="font-size: 20px; font-weight: 600; color: #0a0a0a">30 days</span> (project setting) · events older than this are removed automatically.</p>
+            <p style="margin: 0; font-size: 12px; color: #737373">Recent events can't be switched off or deleted one by one today; they expire.</p>
+            <a href="Project.dc.html" style="font-size: 13px; font-weight: 500">Change how long (Settings)</a>
+          </section>
+
+          <section aria-labelledby="wait" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 10px">
+            <h2 id="wait" style="margin: 0; font-size: 14px; font-weight: 600">What's waiting</h2>
+            <div style="display: flex; align-items: center; gap: 10px; font-size: 13px">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+              <span>3 sessions being summarised</span>
+            </div>
+            <p style="margin: 0; font-size: 12px; color: #737373">Their long-term memories usually appear within a few minutes.</p>
+          </section>
+
+          <section aria-labelledby="who" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 10px">
+            <h2 id="who" style="margin: 0; font-size: 14px; font-weight: 600">Who sees what</h2>
+            <p style="margin: 0; font-size: 13px; color: #525252">Everyone on the project sees agents' sessions. Your own chat sessions show your words; others see them only on projects they're on.</p>
+          </section>
+        </aside>
+      </div>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>
