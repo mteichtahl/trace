@@ -4,8 +4,12 @@
  * with any price change, the cost against the budget, "After you pay" to record the order, and the Wait line for
  * JLCPCB's confirmation with what trace does meanwhile. trace prepares the order but never pays.
  *
- * Data: build.get and order.record; build.get's notes say what the record does not hold yet (the order sheet's lines,
- * boards by serial).
+ * After payment: the shipping as the person records it (order.update) with the Wait line for the carrier, boards by
+ * serial with their incoming inspection (src/components/project/build-record.tsx), and the bench with each
+ * instrument's identity answer and the bring-up readings against their limits.
+ *
+ * Data: build.get, order.record, order.update; build.get's notes say what the record does not hold yet (the order
+ * sheet's lines).
  */
 import { Link, createFileRoute } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
@@ -26,12 +30,13 @@ import { useFileUrl } from '@/components/skills/findings'
 import { StatusBadge } from '@/components/status-badge'
 import { EmptyState, QueryError } from '@/components/states'
 import { WaitLine } from '@/components/wait-line'
-import { call, projectId, repoOf } from '@/lib/api'
+import { projectId, repoOf } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { ago, money } from '@/lib/format'
 import { useAction, useCall, useJourney } from '@/lib/queries'
 import type { OrderView } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
+import { BenchReadings, BoardList, PlacedOrders } from '@/components/project/build-record'
 
 export const Route = createFileRoute('/_app/p/$id/build')({
   staticData: { crumb: 'Build' },
@@ -56,11 +61,13 @@ function Build() {
     )
   if (!data) return <TabSkeleton loading={b.isLoading} />
 
-  const ready = data.orders.find((o) => o.state === 'ready' || o.state === 'placed')
+  const ready = data.orders.find((o) => o.state === 'ready')
   return (
     <div className="pb-12">
       {ready && <OrderSheet repo={repo} order={ready} />}
       {data.notes?.length ? <div className="mt-6 space-y-1">{data.notes.map((n) => <NeedsBuilding key={n}>{n}</NeedsBuilding>)}</div> : null}
+
+      <PlacedOrders repo={repo} orders={data.orders} />
 
       <Section label="Releases" count={data.releases.length} className="mt-10">
         {data.releases.length === 0 ? (
@@ -97,16 +104,7 @@ function Build() {
       </Section>
 
       <Section label="Boards" count={data.boards.length}>
-        {data.boards.length === 0 ? (
-          <EmptyState>No boards yet. Each board gets a serial at Incoming inspection, so every later result belongs to one board.</EmptyState>
-        ) : (
-          <DataTable id="boards" data={data.boards} getRowId={(r) => r.serial} noun="boards" columns={[
-            { accessorKey: 'serial', header: 'Serial', size: 120, meta: { label: 'Serial', kind: 'text', mono: true } },
-            { accessorKey: 'order', header: 'Order', size: 140, meta: { label: 'Order', kind: 'text' } },
-            { accessorKey: 'state', header: 'State', size: 140, meta: { label: 'State', kind: 'enum' } },
-            { accessorKey: 'note', header: 'Note', size: 280, meta: { label: 'Note', kind: 'text' } },
-          ]} />
-        )}
+        <BoardList boards={data.boards} />
       </Section>
 
       <Section label="Bench">
@@ -120,11 +118,16 @@ function Build() {
                 <li key={i.name} className="flex flex-wrap items-center gap-3">
                   <span className="font-medium">{i.name}</span>
                   <span className="font-mono text-xs text-muted-foreground">{i.address}</span>
+                  {i.identity && <span className="text-xs text-muted-foreground">{[i.identity.manufacturer, i.identity.model, i.identity.serial && `serial ${i.identity.serial}`].filter(Boolean).join(' ')}</span>}
                   <StatusBadge plain status={i.answered ? 'met' : 'untested'} label={i.answered ? 'Answered its identity query' : 'Not answered yet'} className="ml-auto" />
                 </li>
               ))}
             </ul>
-            <Button asChild variant="outline" className="mt-4"><Link to="/p/$id/do/$skill" params={{ id, skill: 'bench-setup' }}>Open Bench setup</Link></Button>
+            <BenchReadings bench={data.bench} />
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button asChild variant="outline"><Link to="/p/$id/do/$skill" params={{ id, skill: 'bench-setup' }}>Open Bench setup</Link></Button>
+              {data.boards.length > 0 && <Button asChild variant="outline"><Link to="/p/$id/do/$skill" params={{ id, skill: 'bring-up-run' }}>Open Bring-up run</Link></Button>}
+            </div>
           </div>
         )}
       </Section>
@@ -263,10 +266,10 @@ function OrderSheet({ repo, order: o }: { repo: string; order: OrderView }) {
         </aside>
       </div>
 
-      {o.wait && (
+      {o.wait && o.state === 'ready' && (
         <Section label="Once the order is recorded">
           <div className="rounded-xl border">
-            <WaitLine wait={{ ...o.wait, what: o.wait.what }} onCheckNow={o.state === 'placed' && o.wait.checkable !== false ? (w) => call('tools.check_now', { repo, waitId: w.id }) : undefined} />
+            <WaitLine wait={{ ...o.wait, what: o.wait.what }} />
           </div>
           {o.meanwhile && (
             <div className="mt-3 rounded-xl border p-5">

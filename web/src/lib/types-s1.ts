@@ -100,6 +100,9 @@ export interface BenchReadout {
   unit: string
   min?: number
   max?: number
+  /** the bring-up step and when it was taken (bring-up readings) */
+  step?: string
+  at?: string
 }
 
 /** One quality-bar check as skill.get computes it from the record. */
@@ -144,7 +147,15 @@ export interface SkillView {
   /** Change request: the impact trace traced */
   impact?: { stages: string[]; gates: string[]; stale: string[]; cost?: string; time?: string; released?: boolean; recommendation?: SkillView['recommendation'] }
   /** checklist on a picture (bench setup, bring-up, inspection) */
-  bench?: { powered: boolean; checklist: { id: string; text: string; by: 'person' | 'trace'; done: boolean; powered?: boolean }[]; readouts: BenchReadout[]; wires?: { id: string; from: string; to: string; net: string; power?: boolean; limit?: string; done?: boolean }[] }
+  bench?: {
+    powered: boolean; checklist: { id: string; text: string; by: 'person' | 'trace'; done: boolean; powered?: boolean }[]; readouts: BenchReadout[]; wires?: { id: string; from: string; to: string; net: string; power?: boolean; limit?: string; done?: boolean }[]
+    /** Bring-up run: the board on the bench now (the newest reading's), and every reading of it */
+    board?: string | null
+    readings?: ReadingView[]
+  }
+  /** Incoming inspection: the boards recorded, and the parts the fab does not place */
+  boards?: BoardView[]
+  handPlaced?: string[]
 }
 
 // ------------------------------------------------------------------ requirements and traceability
@@ -278,27 +289,79 @@ export interface OrderView {
   number?: string
   paid?: number | null
   ship?: string | null
-  /** waiting for the fab: `checkable: false` when nothing checks it on its own yet */
+  /** waiting for the fab or the carrier: `checkable: false` when nothing checks it on its own */
   wait?: (Wait & { checkable?: boolean }) | null
+  /** the shipping notice the person recorded (order.update), and what the carrier last said when trace follows it */
+  tracking?: { carrier: Carrier; number: string; checkable: boolean; status?: string; state?: string | null; eventAt?: string | null; eta?: string | null }
+  shippedAt?: string | null
+  deliveredAt?: string | null
   meanwhile?: { title: string; state: 'done' | 'running' | 'todo' }[]
 }
 export interface BuildView {
   /** `files`: null when the record does not count them */
   releases: { id: string; revision: string; at: string; commit: string; branch?: string | null; files: number | null; by: string; frozen: boolean }[]
   orders: OrderView[]
-  boards: { serial: string; order: string; state: 'received' | 'inspected' | 'brought_up' | 'failed'; note?: string }[]
-  bench?: { configured: boolean; instruments: { name: string; kind: string; address: string; answered: boolean }[]; note?: string }
+  boards: BoardView[]
+  bench?: {
+    configured: boolean
+    instruments: { name: string; kind: string; address: string; answered: boolean; identity?: { manufacturer: string | null; model: string | null; serial: string | null; firmware: string | null; at: string | null; run: string | null } }[]
+    note?: string
+    /** every bring-up reading, against its limits (build.get) */
+    readings?: ReadingView[]
+    /** per board: each step with readings, whether its newest readings pass */
+    boards?: { serial: string; steps: { step: BringupStep; readings: number; passed: boolean; failing: string[] }[] }[]
+  }
   notes?: string[]
 }
 
-// ------------------------------------------------------------------ cost and time (cost.get, needs building)
+export type Carrier = 'dhl' | 'fedex' | 'ups' | 'other'
+export type BringupStep = 'inspect' | 'unpowered' | 'rails' | 'clocks' | 'firmware' | 'tests'
+
+/** One board by its serial (board.record), with its incoming inspection (board.check). */
+export interface BoardView {
+  serial: string
+  order: string
+  state: 'received' | 'inspected' | 'brought_up' | 'failed'
+  status?: 'received' | 'inspected' | 'failed' | 'brought_up' | 'scrapped'
+  revision?: string
+  received?: string | null
+  note?: string
+  /** evidence paths (runs/<run>/<name>, or files) for files.url */
+  photos?: string[]
+  checks?: { id: string; check: string; kind: 'count' | 'visual' | 'fault' | 'hand' | 'label'; result: 'pass' | 'fail' | 'marked'; ref?: string; note?: string; photo?: string; by: string; at: string }[]
+  readings?: number
+  failing?: number
+}
+
+/** One bring-up reading (src/core/bench.ts): a hil tool's measurement against a board and step, with its limits. */
+export interface ReadingView {
+  id: string; board: string; step: BringupStep; instrument: string | null; quantity: string; value: number | null; unit: string | null
+  min?: number; max?: number; pass: boolean; at: string; by: string; run: string | null
+}
+
+// ------------------------------------------------------------------ cost and time (cost.get, usage.month)
+
+/** Cost Explorer's daily read, as the screens say it: when it read, when it reads next, whether the tag is active. */
+export interface ExplorerView { checkedAt: string | null; nextAt: string | null; ok: boolean; tag: 'active' | 'inactive' | 'not_found' | 'unknown'; text: string }
+/** The price table the estimates use: its date, and whether it is old. */
+export interface PricesView { asOf: string; stale: boolean; sources: string[]; text: string }
+/** Cloud spend: estimates by kind from the ledger, and what AWS billed (a day behind), or null before the first read. */
+export interface CloudSpend {
+  estimated: { agents: number; gpu: number; cpu: number; total: number }
+  actual: { total: number; byService: Record<string, number>; through: string | null; estimatedDays: number } | null
+  basis: 'estimate'
+}
 
 /** cost.get. Money is for admins only (`money: false`: every amount is null); what is not recorded is null, with notes. */
 export interface CostView {
   money?: boolean
   currency: string
-  /** cloud: null, cloud use is not recorded per project */
-  spent: { cloud: number | null; orders: number | null }
+  /** cloud: the estimated cloud spend (detail: by kind, and the actuals) */
+  spent: { cloud: number | null; orders: number | null; detail?: CloudSpend }
+  /** the currency of the orders when it is not the cloud's (USD) */
+  orderCurrency?: string
+  explorer?: ExplorerView
+  prices?: PricesView
   committed: number | null
   /** the build: quantity × unit cost; null without a unit cost */
   forecast: number | null
@@ -306,8 +369,19 @@ export interface CostView {
   quantity?: number
   unit_cost?: number | null
   stages: { stage: string; id?: string; state: 'done' | 'current' | 'queued'; started?: string | null; finished?: string | null; cloud: number | null; days: number; forecastDays?: number | null }[]
-  lines: { id: string; at: string; what: string; kind: 'agents' | 'gpu' | 'cpu' | 'order'; amount: number }[]
+  lines: { id: string; at: string; what: string; kind: 'agents' | 'gpu' | 'cpu' | 'order'; amount: number; estimate?: boolean }[]
   notes?: string[]
+}
+
+/** usage.month (admins): every project's spend this month. */
+export interface UsageMonth {
+  month: string
+  currency: string
+  projects: { repo: string; estimated: { agents: number; gpu: number; cpu: number; total: number }; actual: number | null; orders: number; orderCurrency: string; budget: number | null; started: boolean }[]
+  totals: { estimated: number; actual: number | null; orders: number }
+  shared?: { total: number; byService: Record<string, number>; text: string }
+  explorer: ExplorerView
+  prices: PricesView
 }
 
 // ------------------------------------------------------------------ new project (projects.create)
