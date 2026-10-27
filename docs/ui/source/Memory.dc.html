@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>trace · Soil sensor · Memory</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2563eb;text-decoration:none}a:hover{color:#1d4ed8}
+</style>
+</helmet>
+<div style="font-family: Geist, system-ui, sans-serif; color: #0a0a0a; background: #ffffff; min-height: 1050px; display: flex; flex-wrap: wrap; font-size: 14px; line-height: 1.5">
+
+  <nav aria-label="Main" style="flex: 1 1 232px; max-width: 260px; background: #fafafa; border-right: 1px solid #e5e5e5; padding: 16px 12px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px">
+    <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px 18px">
+      <div style="width: 24px; height: 24px; border-radius: 6px; background: #0a0a0a; color: #fff; display: flex; align-items: center; justify-content: center; font-family: 'Geist Mono', monospace; font-size: 13px; font-weight: 600">t</div>
+      <span style="font-weight: 600; font-size: 15px">trace</span>
+    </div>
+    <a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/></svg>Home</a>
+    <a href="Project.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; background: #f0f0f0; color: #0a0a0a; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Projects</a>
+    <a href="Knowledge.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h10a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z"/><path d="M4 16a4 4 0 0 1 4-4h10"/></svg>Knowledge</a>
+    <a href="Agents.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01"/></svg>Agents</a>
+    <a href="Operations.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Operations</a>
+    <a href="People.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>Admin</a>
+    <div style="margin: 20px 8px 6px; font-size: 12px; color: #737373; font-weight: 500">Pinned</div>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #0a0a0a; font-weight: 500"><span>Soil sensor</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Motor driver</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Panel controller</span></a>
+    <div style="flex-grow: 1"></div>
+    <a href="Preferences.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040">
+      <span style="width: 28px; height: 28px; border-radius: 14px; background: #e5e5e5; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600">MT</span>
+      <span style="display: flex; flex-direction: column; line-height: 1.3"><span style="font-weight: 500; color: #0a0a0a">Marc Teichtahl</span><span style="font-size: 12px; color: #737373">Admin</span></span>
+    </a>
+  </nav>
+
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="height: 56px; border-bottom: 1px solid #e5e5e5; display: flex; align-items: center; gap: 12px; padding: 0 24px; box-sizing: border-box">
+      <nav aria-label="Breadcrumb" style="display: flex; align-items: center; gap: 6px; font-size: 14px"><a href="Project.dc.html" style="color: #737373">Soil sensor · Rev A</a><span style="color: #a3a3a3" aria-hidden="true">·</span><span style="font-weight: 500">Memory</span></nav>
+      <div style="flex-grow: 1"></div>
+      <button type="button" style="display: flex; align-items: center; gap: 8px; height: 36px; width: 280px; max-width: 40%; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; color: #737373; font: inherit; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span style="flex-grow: 1; text-align: left">Search or run a command</span><kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; border: 1px solid #e5e5e5; border-radius: 4px; padding: 0 4px">⌘K</kbd></button>
+      <span title="Live: every screen updates as the record changes" style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #15803d"><span style="width: 8px; height: 8px; border-radius: 4px; background: #16a34a"></span>Live</span>
+      <button type="button" aria-label="Notifications, 2 new" style="position: relative; width: 36px; height: 36px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #0a0a0a"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><span style="position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 4px; background: #2563eb"></span></button>
+      <a href="Chat.dc.html" style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; color: #0a0a0a; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>Ask trace <kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373">⌘J</kbd></a>
+    </header>
+
+    <div style="display: flex; flex-wrap: wrap; align-items: stretch; flex-grow: 1">
+    <main style="flex: 999 1 560px; min-width: 0; padding: 28px 24px 48px; box-sizing: border-box; display: flex; flex-direction: column; gap: 20px">
+
+      <!-- Project header -->
+      <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+        <h1 style="margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.02em">Soil sensor</h1>
+        <span style="font-size: 12px; font-weight: 500; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1px 8px; background: #fafafa">Rev A</span>
+        <span style="font-size: 13px; color: #737373">Board template</span>
+      </div>
+
+      <!-- Tabs -->
+      <div role="tablist" aria-label="Project sections" style="display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid #e5e5e5; margin-top: -8px">
+        <a href="Project.dc.html" role="tab" aria-selected="false" style="display: inline-flex; align-items: center; height: 40px; padding: 0 12px; border-bottom: 2px solid transparent; color: #525252; box-sizing: border-box">Overview</a>
+        <button type="button" role="tab" aria-selected="false" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: #525252; cursor: pointer">Requirements</button>
+        <button type="button" role="tab" aria-selected="false" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: #525252; cursor: pointer">Design</button>
+        <button type="button" role="tab" aria-selected="false" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: #525252; cursor: pointer">Decisions</button>
+        <button type="button" role="tab" aria-selected="true" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid #0a0a0a; background: transparent; font: inherit; font-weight: 500; color: #0a0a0a; cursor: pointer">Memory</button>
+        <button type="button" role="tab" aria-selected="false" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: #525252; cursor: pointer">Settings</button>
+      </div>
+
+      <!-- Summary + segmented control -->
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap">
+        <p style="margin: 0; font-size: 15px; color: #0a0a0a; flex: 1 1 380px">Soil sensor's agents remember <strong style="font-weight: 600">214 things</strong> long term and <strong style="font-weight: 600">1,320 recent events</strong>. Recent events are kept for 30 days.</p>
+        <div role="group" aria-label="Memory view" style="display: inline-flex; padding: 3px; gap: 2px; background: #f5f5f5; border-radius: 8px">
+          <button type="button" aria-pressed="true" style="height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.04); font: inherit; font-size: 13px; font-weight: 500; color: #0a0a0a; cursor: pointer">Long-term (214)</button>
+          <a href="MemoryRecent.dc.html" style="display: inline-flex; align-items: center; height: 30px; padding: 0 12px; border-radius: 6px; font-size: 13px; color: #525252">Recent activity (1,320)</a>
+          <button type="button" aria-pressed="false" style="height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; font: inherit; font-size: 13px; color: #525252; cursor: pointer">Changes (12)</button>
+        </div>
+      </div>
+
+      <!-- Semantic search -->
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <label for="memq" style="font-size: 13px; font-weight: 500">Find what the agents remember about…</label>
+        <div style="display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px; border: 2px solid #2563eb; border-radius: 8px; background: #fff; max-width: 640px; box-sizing: border-box">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#525252" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>
+          <input id="memq" type="search" value="output capacitor" style="flex-grow: 1; border: 0; outline: none; font: inherit; font-size: 15px; color: #0a0a0a; background: transparent; min-width: 0">
+          <button type="button" aria-label="Clear search" style="width: 24px; height: 24px; border: 0; background: transparent; color: #737373; cursor: pointer; display: flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+        <span style="font-size: 12px; color: #737373">Searches by meaning, not exact words</span>
+      </div>
+
+      <!-- Wait line -->
+      <div style="display: flex; align-items: center; gap: 12px; padding: 10px 16px; border: 1px solid #e5e5e5; border-radius: 12px; background: #fafafa; flex-wrap: wrap">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#737373" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        <span style="flex: 1 1 300px; font-size: 13px; color: #525252">3 sessions finished in the last 10 minutes; their memories appear once extracted, usually within a few minutes.</span>
+        <button type="button" style="height: 32px; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 13px; cursor: pointer">Check now</button>
+      </div>
+
+      <!-- Data table -->
+      <section aria-label="Long-term memories" style="display: flex; flex-direction: column; gap: 10px">
+        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+          <div style="display: flex; align-items: center; gap: 8px; height: 32px; width: 200px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; box-sizing: border-box">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#737373" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <label for="tq" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Search these rows</label>
+            <input id="tq" type="search" placeholder="Search…" style="border: 0; outline: none; font: inherit; font-size: 13px; min-width: 0; flex-grow: 1; background: transparent">
+          </div>
+          <button type="button" style="display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 13px; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16l-6 8v6l-4-2v-4z"/></svg>Filter</button>
+          <span style="display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px dashed #d4d4d4; border-radius: 6px; font-size: 12px; color: #525252">Kind: All</span>
+          <span style="display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px dashed #d4d4d4; border-radius: 6px; font-size: 12px; color: #525252">Agent: All</span>
+          <span style="display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 4px 0 8px; border: 1px solid #e5e5e5; border-radius: 6px; background: #f5f5f5; font-size: 12px; color: #0a0a0a">Status: Active and switched off<button type="button" aria-label="Remove filter Status" style="width: 18px; height: 18px; border: 0; background: transparent; color: #525252; cursor: pointer; font: inherit; font-size: 13px; line-height: 1">×</button></span>
+          <div style="flex-grow: 1"></div>
+          <button type="button" style="display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 13px; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/></svg>Columns</button>
+          <button type="button" style="height: 32px; padding: 0 10px; border: 0; background: transparent; font: inherit; font-size: 13px; color: #525252; cursor: pointer">Reset view</button>
+          <span style="font-size: 12px; color: #737373">8 of 214 rows</span>
+        </div>
+
+        <!-- Bulk bar -->
+        <div role="region" aria-label="Selection" style="display: flex; align-items: center; gap: 12px; padding: 8px 12px; border: 1px solid #93b4f5; background: #eff4ff; border-radius: 8px; font-size: 13px; flex-wrap: wrap">
+          <span style="font-weight: 500">2 selected</span>
+          <span style="color: #a3a3a3" aria-hidden="true">·</span>
+          <button type="button" style="height: 28px; padding: 0 10px; border: 1px solid #fca5a5; border-radius: 8px; background: #fff; color: #b91c1c; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer">Switch off…</button>
+          <div style="flex-grow: 1"></div>
+          <button type="button" style="height: 28px; padding: 0 8px; border: 0; background: transparent; color: #525252; font: inherit; font-size: 13px; cursor: pointer">Clear selection</button>
+        </div>
+
+        <div style="overflow-x: auto; border: 1px solid #e5e5e5; border-radius: 12px">
+          <table style="width: 100%; min-width: 900px; border-collapse: collapse; font-size: 13px">
+            <thead>
+              <tr style="background: #fafafa; text-align: left; color: #525252">
+                <th scope="col" style="width: 36px; padding: 10px 0 10px 14px; border-bottom: 1px solid #e5e5e5"><input type="checkbox" aria-label="Select all rows" style="margin: 0"></th>
+                <th scope="col" aria-sort="descending" title="Sorted by closest match to your search" style="position: relative; padding: 10px 12px; font-weight: 500; border-bottom: 1px solid #e5e5e5; color: #0a0a0a">Memory <span style="font-size: 11px; color: #737373">best match ↓</span><span aria-hidden="true" style="position: absolute; right: 0; top: 8px; bottom: 8px; width: 2px; background: #e5e5e5"></span></th>
+                <th scope="col" style="position: relative; width: 120px; padding: 10px 12px; font-weight: 500; border-bottom: 1px solid #e5e5e5">Kind<span aria-hidden="true" style="position: absolute; right: 0; top: 8px; bottom: 8px; width: 2px; background: #e5e5e5"></span></th>
+                <th scope="col" style="position: relative; width: 112px; padding: 10px 12px; font-weight: 500; border-bottom: 1px solid #e5e5e5">Agent<span aria-hidden="true" style="position: absolute; right: 0; top: 8px; bottom: 8px; width: 2px; background: #e5e5e5"></span></th>
+                <th scope="col" style="position: relative; width: 150px; padding: 10px 12px; font-weight: 500; border-bottom: 1px solid #e5e5e5">Learned from<span aria-hidden="true" style="position: absolute; right: 0; top: 8px; bottom: 8px; width: 2px; background: #e5e5e5"></span></th>
+                <th scope="col" style="position: relative; width: 70px; padding: 10px 12px; font-weight: 500; border-bottom: 1px solid #e5e5e5">Learned<span aria-hidden="true" style="position: absolute; right: 0; top: 8px; bottom: 8px; width: 2px; background: #e5e5e5"></span></th>
+                <th scope="col" style="position: relative; width: 116px; padding: 10px 12px; font-weight: 500; border-bottom: 1px solid #e5e5e5">Status<span aria-hidden="true" style="position: absolute; right: 0; top: 8px; bottom: 8px; width: 2px; background: #e5e5e5"></span></th>
+                <th scope="col" style="width: 40px; padding: 10px 8px; border-bottom: 1px solid #e5e5e5"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <!-- Row 1: selected and open in sheet -->
+              <tr style="background: #eff4ff; vertical-align: top">
+                <td style="padding: 12px 0 12px 14px; border-bottom: 1px solid #f0f0f0"><input type="checkbox" checked aria-label="Select: output capacitor at least 2.2 µF" style="margin: 0"></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0; font-weight: 500">Output capacitor on the 3.3 V regulator must be at least 2.2 µF (<span style="font-family: 'Geist Mono', monospace; font-weight: 400">TLV755</span> datasheet p.12)</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border: 1px solid #e5e5e5; background: #fff; border-radius: 6px; padding: 1px 8px; color: #404040; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>Fact</span></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0">Analog</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><a href="Run.dc.html" style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border: 1px solid #e5e5e5; background: #fff; border-radius: 6px; padding: 1px 8px; color: #404040; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 5l12 7-12 7z"/></svg>Run <span style="font-family: 'Geist Mono', monospace">run_4a11</span></a></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0; color: #525252; white-space: nowrap">16 Oct</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 1px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>Active</span></td>
+                <td style="padding: 8px; border-bottom: 1px solid #f0f0f0"><button type="button" aria-label="Row actions" style="width: 28px; height: 28px; border: 0; background: transparent; border-radius: 6px; color: #525252; cursor: pointer">•••</button></td>
+              </tr>
+              <!-- Row 2: switched off, selected -->
+              <tr style="background: #f8faff; vertical-align: top">
+                <td style="padding: 12px 0 12px 14px; border-bottom: 1px solid #f0f0f0"><input type="checkbox" checked aria-label="Select: use 1 µF output capacitor" style="margin: 0"></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0; color: #737373">
+                  <div>Use 1 µF output capacitor</div>
+                  <div style="font-size: 12px; margin-top: 2px" title="Who switched it is stored privately">Switched off by You · 16 Oct: “datasheet minimum is 2.2 µF”</div>
+                </td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border: 1px solid #e5e5e5; background: #fff; border-radius: 6px; padding: 1px 8px; color: #404040; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>Fact</span></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0; color: #737373">Analog</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><a href="Chat.dc.html" style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border: 1px solid #e5e5e5; background: #fff; border-radius: 6px; padding: 1px 8px; color: #404040; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>Chat: LDO choice</a></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0; color: #737373; white-space: nowrap">14 Oct</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; color: #737373; background: #f5f5f5; border-radius: 6px; padding: 1px 8px; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v8"/><path d="M6.4 6.6a8 8 0 1 0 11.2 0"/></svg>Switched off</span></td>
+                <td style="padding: 8px; border-bottom: 1px solid #f0f0f0"><button type="button" aria-label="Row actions" style="width: 28px; height: 28px; border: 0; background: transparent; border-radius: 6px; color: #525252; cursor: pointer">•••</button></td>
+              </tr>
+              <!-- Row 3 -->
+              <tr style="vertical-align: top">
+                <td style="padding: 12px 0 12px 14px; border-bottom: 1px solid #f0f0f0"><input type="checkbox" aria-label="Select: prefers 0603 passives" style="margin: 0"></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0">The team prefers 0603 passives unless a part needs more</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border: 1px solid #e5e5e5; background: #fafafa; border-radius: 6px; padding: 1px 8px; color: #404040; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>Preference</span></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0">Implementation</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><a href="MemoryRecent.dc.html" style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1px 8px; color: #404040; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Session 12 Oct</a></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0; color: #525252; white-space: nowrap">12 Oct</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 1px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>Active</span></td>
+                <td style="padding: 8px; border-bottom: 1px solid #f0f0f0"><button type="button" aria-label="Row actions" style="width: 28px; height: 28px; border: 0; background: transparent; border-radius: 6px; color: #525252; cursor: pointer">•••</button></td>
+              </tr>
+              <!-- Row 4 -->
+              <tr style="vertical-align: top">
+                <td style="padding: 12px 0 12px 14px; border-bottom: 1px solid #f0f0f0"><input type="checkbox" aria-label="Select: routing session summary" style="margin: 0"></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0">Routing session: OrthoRoute handled the <span style="font-family: 'Geist Mono', monospace">U4</span> core; 3 nets fell through to Freerouting</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border: 1px solid #e5e5e5; background: #f5f5f5; border-radius: 6px; padding: 1px 8px; color: #404040; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 4h14v16H5zM9 9h6M9 13h6M9 17h3"/></svg>Session summary</span></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0">Implementation</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><a href="Run.dc.html" style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1px 8px; color: #404040; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 5l12 7-12 7z"/></svg>Run <span style="font-family: 'Geist Mono', monospace">run_6d20</span></a></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0; color: #525252; white-space: nowrap">20 Oct</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 1px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>Active</span></td>
+                <td style="padding: 8px; border-bottom: 1px solid #f0f0f0"><button type="button" aria-label="Row actions" style="width: 28px; height: 28px; border: 0; background: transparent; border-radius: 6px; color: #525252; cursor: pointer">•••</button></td>
+              </tr>
+              <!-- Row 5 -->
+              <tr style="vertical-align: top">
+                <td style="padding: 12px 0 12px 14px; border-bottom: 1px solid #f0f0f0"><input type="checkbox" aria-label="Select: antenna on board edge" style="margin: 0"></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0">Antenna must sit on the board edge, away from the battery</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border: 1px solid #e5e5e5; background: #fff; border-radius: 6px; padding: 1px 8px; color: #404040; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>Fact</span></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><span style="text-decoration: underline dotted #a3a3a3; text-underline-offset: 3px" title="Electromagnetic compatibility: keeping the board from causing or catching radio interference">EMC</span></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><a href="Chat.dc.html" style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1px 8px; color: #404040; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>Chat: antenna placement</a></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0; color: #525252; white-space: nowrap">18 Oct</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 1px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>Active</span></td>
+                <td style="padding: 8px; border-bottom: 1px solid #f0f0f0"><button type="button" aria-label="Row actions" style="width: 28px; height: 28px; border: 0; background: transparent; border-radius: 6px; color: #525252; cursor: pointer">•••</button></td>
+              </tr>
+              <!-- Row 6 -->
+              <tr style="vertical-align: top">
+                <td style="padding: 12px 0 12px 14px; border-bottom: 1px solid #f0f0f0"><input type="checkbox" aria-label="Select: bench supply 100 mA" style="margin: 0"></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0">Bench supply limited to 100 mA at first power-on</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border: 1px solid #e5e5e5; background: #fafafa; border-radius: 6px; padding: 1px 8px; color: #404040; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>Preference</span></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0">Verification</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><a href="MemoryRecent.dc.html" style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1px 8px; color: #404040; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Session 15 Oct</a></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0; color: #525252; white-space: nowrap">15 Oct</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 1px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>Active</span></td>
+                <td style="padding: 8px; border-bottom: 1px solid #f0f0f0"><button type="button" aria-label="Row actions" style="width: 28px; height: 28px; border: 0; background: transparent; border-radius: 6px; color: #525252; cursor: pointer">•••</button></td>
+              </tr>
+              <!-- Row 7 -->
+              <tr style="vertical-align: top">
+                <td style="padding: 12px 0 12px 14px; border-bottom: 1px solid #f0f0f0"><input type="checkbox" aria-label="Select: build quantity 10" style="margin: 0"></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0">Build quantity is 10 per run</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border: 1px solid #e5e5e5; background: #fff; border-radius: 6px; padding: 1px 8px; color: #404040; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>Fact</span></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0">Worker</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><a href="Project.dc.html" style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1px 8px; color: #404040; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg>Settings change</a></td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0; color: #525252; white-space: nowrap">10 Oct</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0"><span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 1px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>Active</span></td>
+                <td style="padding: 8px; border-bottom: 1px solid #f0f0f0"><button type="button" aria-label="Row actions" style="width: 28px; height: 28px; border: 0; background: transparent; border-radius: 6px; color: #525252; cursor: pointer">•••</button></td>
+              </tr>
+              <!-- Row 8: personal preference -->
+              <tr style="vertical-align: top">
+                <td style="padding: 12px 0 12px 14px"><input type="checkbox" aria-label="Select: plain-words test results" style="margin: 0"></td>
+                <td style="padding: 12px">
+                  <div>Explain test results in plain words, no acronyms</div>
+                  <span style="display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; font-size: 11px; color: #525252; background: #f5f5f5; border-radius: 6px; padding: 0 6px"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Only you see this</span>
+                </td>
+                <td style="padding: 12px"><span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border: 1px solid #e5e5e5; background: #fafafa; border-radius: 6px; padding: 1px 8px; color: #404040; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>Preference</span></td>
+                <td style="padding: 12px">You <span style="color: #737373">(your own)</span></td>
+                <td style="padding: 12px"><a href="MemoryRecent.dc.html" style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1px 8px; color: #404040; white-space: nowrap"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Session 11 Oct</a></td>
+                <td style="padding: 12px; color: #525252; white-space: nowrap">11 Oct</td>
+                <td style="padding: 12px"><span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 1px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>Active</span></td>
+                <td style="padding: 8px"><button type="button" aria-label="Row actions" style="width: 28px; height: 28px; border: 0; background: transparent; border-radius: 6px; color: #525252; cursor: pointer">•••</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p style="margin: 0; font-size: 12px; color: #737373">Memories are what the agents extracted; they may be stale. Switching one off never deletes it.</p>
+      </section>
+    </main>
+
+    <!-- Side sheet -->
+    <aside aria-labelledby="sheet-title" style="flex: 1 1 360px; max-width: 440px; border-left: 1px solid #e5e5e5; background: #fff; box-sizing: border-box; padding: 20px 24px 32px; display: flex; flex-direction: column; gap: 20px">
+      <div style="display: flex; align-items: center; gap: 8px">
+        <h2 id="sheet-title" style="margin: 0; font-size: 16px; font-weight: 600; flex-grow: 1">Memory</h2>
+        <span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; color: #15803d; background: #f0fdf4; border-radius: 6px; padding: 1px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>Active</span>
+        <button type="button" aria-label="Close" style="width: 32px; height: 32px; border: 0; background: transparent; border-radius: 8px; color: #525252; cursor: pointer; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      </div>
+
+      <p style="margin: 0; font-size: 15px; line-height: 1.55">Output capacitor on the 3.3 V regulator must be at least 2.2 µF (<span style="font-family: 'Geist Mono', monospace">TLV755</span> datasheet p.12). Below that the regulator can oscillate under load.</p>
+
+      <dl style="margin: 0; display: grid; grid-template-columns: 112px 1fr; row-gap: 8px; font-size: 13px">
+        <dt style="color: #737373">Kind</dt><dd style="margin: 0">Fact</dd>
+        <dt style="color: #737373">Agent</dt><dd style="margin: 0">Analog and mixed-signal</dd>
+        <dt style="color: #737373">Learned from</dt><dd style="margin: 0"><a href="Run.dc.html">Run <span style="font-family: 'Geist Mono', monospace">run_4a11</span></a> <span style="color: #737373">· LDO stability check</span></dd>
+        <dt style="color: #737373">Learned</dt><dd style="margin: 0">16 Oct, 14:08</dd>
+      </dl>
+
+      <section aria-labelledby="usedby" style="display: flex; flex-direction: column; gap: 8px; padding-top: 16px; border-top: 1px solid #f0f0f0">
+        <h3 id="usedby" style="margin: 0; font-size: 13px; font-weight: 600">Used by</h3>
+        <ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 13px">
+          <li style="display: flex; justify-content: space-between; gap: 8px"><a href="Run.dc.html" style="font-family: 'Geist Mono', monospace; font-size: 12px">run_7c03</a><span style="color: #525252; flex-grow: 1">Parts list (BOM) check</span><span style="color: #737373">21 Oct</span></li>
+          <li style="display: flex; justify-content: space-between; gap: 8px"><a href="Run.dc.html" style="font-family: 'Geist Mono', monospace; font-size: 12px">run_8f2c</a><span style="color: #525252; flex-grow: 1">Schematic review</span><span style="color: #737373">23 Oct</span></li>
+          <li style="display: flex; justify-content: space-between; gap: 8px"><a href="Run.dc.html" style="font-family: 'Geist Mono', monospace; font-size: 12px">run_9b14</a><span style="color: #525252; flex-grow: 1">Gate evidence pack</span><span style="color: #737373">25 Oct</span></li>
+        </ul>
+        <span style="font-size: 12px; color: #737373; font-style: italic">Needs building: trace does not record recalls yet</span>
+      </section>
+
+      <section aria-labelledby="hist" style="display: flex; flex-direction: column; gap: 6px; padding-top: 16px; border-top: 1px solid #f0f0f0">
+        <h3 id="hist" style="margin: 0; font-size: 13px; font-weight: 600">History</h3>
+        <span style="font-size: 13px; color: #525252">Learned 16 Oct · no changes</span>
+      </section>
+
+      <section aria-labelledby="off" style="display: flex; flex-direction: column; gap: 10px; padding-top: 16px; border-top: 1px solid #f0f0f0">
+        <h3 id="off" style="margin: 0; font-size: 13px; font-weight: 600">Switch off this memory</h3>
+        <label for="why" style="font-size: 13px; font-weight: 500">Why should the agents stop using this? <span style="color: #b91c1c">*</span><span style="font-weight: 400; color: #737373"> (required)</span></label>
+        <textarea id="why" required rows="3" placeholder="For example: superseded by the new regulator choice" style="font: inherit; font-size: 13px; padding: 8px 10px; border: 1px solid #e5e5e5; border-radius: 8px; resize: vertical; color: #0a0a0a"></textarea>
+        <span style="font-size: 12px; color: #737373">Agents will not use it from their next step. You can switch it back on.</span>
+        <div style="display: flex; gap: 8px">
+          <button type="button" style="height: 36px; padding: 0 16px; border: 1px solid #fca5a5; border-radius: 8px; background: #fff; color: #b91c1c; font: inherit; font-weight: 500; cursor: pointer">Switch off</button>
+          <button type="button" style="height: 36px; padding: 0 14px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; color: #0a0a0a; font: inherit; font-weight: 500; cursor: pointer">Cancel</button>
+        </div>
+        <span style="font-size: 12px; color: #737373">Every switch is logged. Guests can read memories but not switch them.</span>
+      </section>
+
+      <section style="display: flex; flex-direction: column; gap: 4px; padding-top: 16px; border-top: 1px solid #f0f0f0">
+        <a href="Project.dc.html" style="font-size: 13px; font-weight: 500">Correct it instead: add a project rule</a>
+        <span style="font-size: 12px; color: #737373">Memories can't be edited. A rule or a requirement change is how a correction lasts.</span>
+      </section>
+    </aside>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1050}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

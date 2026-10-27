@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>trace · Knowledge graph</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2563eb;text-decoration:none}a:hover{color:#1d4ed8}
+</style>
+</helmet>
+<div style="font-family: Geist, system-ui, sans-serif; color: #0a0a0a; background: #ffffff; min-height: 1050px; display: flex; flex-wrap: wrap; font-size: 14px; line-height: 1.5">
+
+  <nav aria-label="Main" style="flex: 1 1 232px; max-width: 260px; background: #fafafa; border-right: 1px solid #e5e5e5; padding: 16px 12px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px">
+    <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px 18px">
+      <div style="width: 24px; height: 24px; border-radius: 6px; background: #0a0a0a; color: #fff; display: flex; align-items: center; justify-content: center; font-family: 'Geist Mono', monospace; font-size: 13px; font-weight: 600">t</div>
+      <span style="font-weight: 600; font-size: 15px">trace</span>
+    </div>
+    <a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/></svg>Home</a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Projects</a>
+    <a href="Knowledge.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; background: #f0f0f0; color: #0a0a0a; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h10a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z"/><path d="M4 16a4 4 0 0 1 4-4h10"/></svg>Knowledge</a>
+    <a href="Agents.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01"/></svg>Agents</a>
+    <a href="Operations.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Operations</a>
+    <a href="People.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>Admin</a>
+    <div style="margin: 20px 8px 6px; font-size: 12px; color: #737373; font-weight: 500">Pinned</div>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Soil sensor</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Motor driver</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Panel controller</span></a>
+    <div style="flex-grow: 1"></div>
+    <a href="Preferences.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040">
+      <span style="width: 28px; height: 28px; border-radius: 14px; background: #e5e5e5; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600">MT</span>
+      <span style="display: flex; flex-direction: column; line-height: 1.3"><span style="font-weight: 500; color: #0a0a0a">Marc Teichtahl</span><span style="font-size: 12px; color: #737373">Admin</span></span>
+    </a>
+  </nav>
+
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="height: 56px; border-bottom: 1px solid #e5e5e5; display: flex; align-items: center; gap: 12px; padding: 0 24px; box-sizing: border-box">
+      <span style="font-weight: 500"><a href="Knowledge.dc.html" style="color: #525252; font-weight: 400">Knowledge</a> · Graph</span>
+      <div style="flex-grow: 1"></div>
+      <button type="button" style="display: flex; align-items: center; gap: 8px; height: 36px; width: 280px; max-width: 40%; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; color: #737373; font: inherit; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span style="flex-grow: 1; text-align: left">Search or run a command</span><kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; border: 1px solid #e5e5e5; border-radius: 4px; padding: 0 4px">⌘K</kbd></button>
+      <span title="Live: every screen updates as the record changes" style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #15803d"><span style="width: 8px; height: 8px; border-radius: 4px; background: #16a34a"></span>Live</span>
+      <button type="button" aria-label="Notifications, 2 new" style="position: relative; width: 36px; height: 36px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #0a0a0a"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><span style="position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 4px; background: #2563eb"></span></button>
+      <a href="Chat.dc.html" style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; color: #0a0a0a; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>Ask trace <kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373">⌘J</kbd></a>
+    </header>
+
+    <!-- Knowledge page top -->
+    <div style="padding: 24px 24px 0; display: flex; flex-direction: column; gap: 14px; box-sizing: border-box">
+      <div>
+        <h1 style="margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.01em">Knowledge</h1>
+        <p style="margin: 2px 0 0; color: #525252">See how requirements, parts, runs, decisions and memories connect.</p>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 10px">
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+          <label for="kstart" style="font-size: 13px; font-weight: 500; color: #404040">Start from…</label>
+          <div style="flex: 1 1 420px; min-width: 0; display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 16px; border: 1px solid #2563eb; border-radius: 12px; background: #fff; box-sizing: border-box">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#525252" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <span style="display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 4px 0 10px; border: 1px solid #e5e5e5; border-radius: 6px; background: #f5f5f5; font-size: 14px; white-space: nowrap">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3f4a6b" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/></svg>
+              <span style="font-family: 'Geist Mono', monospace; font-size: 13px">R-006</span>Range to gateway
+              <button type="button" aria-label="Remove R-006 Range to gateway" style="width: 22px; height: 22px; border: 0; border-radius: 4px; background: transparent; color: #737373; font: inherit; cursor: pointer">×</button>
+            </span>
+            <input id="kstart" type="search" placeholder="Add an item…" style="flex-grow: 1; min-width: 0; border: 0; outline: 0; font: inherit; font-size: 15px; background: transparent">
+          </div>
+          <button type="button" style="border: 0; background: transparent; padding: 0; font: inherit; font-size: 13px; color: #2563eb; cursor: pointer">Add a second item to see how they connect</button>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+          <div role="radiogroup" aria-label="Search scope" style="display: inline-flex; background: #f5f5f5; border-radius: 8px; padding: 3px; font-size: 13px">
+            <button type="button" role="radio" aria-checked="true" style="height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.04); font: inherit; font-weight: 500; color: #0a0a0a; cursor: pointer">This project: Soil sensor</button>
+            <button type="button" role="radio" aria-checked="false" style="height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; font: inherit; color: #525252; cursor: pointer">All my projects</button>
+            <button type="button" role="radio" aria-checked="false" style="height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; font: inherit; color: #525252; cursor: pointer">Shared library</button>
+          </div>
+          <div style="flex-grow: 1"></div>
+          <button type="button" role="switch" aria-checked="true" style="display: inline-flex; align-items: center; gap: 8px; border: 0; background: transparent; font: inherit; font-size: 13px; color: #0a0a0a; cursor: pointer; padding: 0"><span aria-hidden="true" style="width: 32px; height: 18px; border-radius: 9px; background: #0a0a0a; position: relative; display: inline-block"><span style="position: absolute; right: 2px; top: 2px; width: 14px; height: 14px; border-radius: 7px; background: #fff"></span></span>Include inactive</button>
+        </div>
+      </div>
+
+      <div role="tablist" aria-label="Result types" style="display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid #e5e5e5">
+        <a href="Knowledge.dc.html" role="tab" aria-selected="false" style="display: inline-flex; align-items: center; height: 40px; padding: 0 12px; border-bottom: 2px solid transparent; color: #525252; box-sizing: border-box">All results</a>
+        <button type="button" role="tab" aria-selected="false" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: #525252; cursor: pointer">Documents</button>
+        <button type="button" role="tab" aria-selected="false" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: #525252; cursor: pointer">Datasheets and parts</button>
+        <button type="button" role="tab" aria-selected="false" style="height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: #525252; cursor: pointer">Agent memory</button>
+        <button type="button" role="tab" aria-selected="true" style="display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid #0a0a0a; background: transparent; font: inherit; font-weight: 500; color: #0a0a0a; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="10" cy="18" r="2.5"/><path d="M8.3 7.1 15.6 7.6M7 8.3l2.2 7.4M16.6 10.1l-5 6"/></svg>Graph</button>
+      </div>
+    </div>
+
+    <!-- Graph + side sheet -->
+    <div style="display: flex; flex-wrap: wrap; flex-grow: 1; min-height: 0">
+
+      <section aria-label="Graph" style="flex: 999 1 560px; min-width: 0; padding: 16px 20px 20px 24px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px">
+
+        <!-- Toolbar -->
+        <div role="toolbar" aria-label="Graph controls" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px">
+          <div style="display: inline-flex; align-items: center; gap: 6px">
+            <span id="depth-l" style="color: #525252">Depth</span>
+            <div role="radiogroup" aria-labelledby="depth-l" style="display: inline-flex; background: #f5f5f5; border-radius: 8px; padding: 3px">
+              <button type="button" role="radio" aria-checked="false" style="height: 26px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font: inherit; color: #525252; cursor: pointer">1</button>
+              <button type="button" role="radio" aria-checked="true" style="height: 26px; padding: 0 10px; border: 0; border-radius: 6px; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.04); font: inherit; font-weight: 500; color: #0a0a0a; cursor: pointer">2</button>
+              <button type="button" role="radio" aria-checked="false" style="height: 26px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font: inherit; color: #525252; cursor: pointer">3 hops</button>
+            </div>
+          </div>
+          <button type="button" aria-haspopup="listbox" style="display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; cursor: pointer"><span style="color: #525252">Kinds</span><span style="font-weight: 500">9 of 10 kinds</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+          <button type="button" aria-haspopup="listbox" style="display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; cursor: pointer"><span style="color: #525252">Links</span><span style="font-weight: 500">All links</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+          <button type="button" role="switch" aria-checked="true" style="display: inline-flex; align-items: center; gap: 8px; height: 32px; border: 0; background: transparent; font: inherit; color: #0a0a0a; cursor: pointer; padding: 0 4px"><span aria-hidden="true" style="width: 32px; height: 18px; border-radius: 9px; background: #0a0a0a; position: relative; display: inline-block"><span style="position: absolute; right: 2px; top: 2px; width: 14px; height: 14px; border-radius: 7px; background: #fff"></span></span>Show failing chains</button>
+          <button type="button" role="switch" aria-checked="true" style="display: inline-flex; align-items: center; gap: 8px; height: 32px; border: 0; background: transparent; font: inherit; color: #0a0a0a; cursor: pointer; padding: 0 4px"><span aria-hidden="true" style="width: 32px; height: 18px; border-radius: 9px; background: #0a0a0a; position: relative; display: inline-block"><span style="position: absolute; right: 2px; top: 2px; width: 14px; height: 14px; border-radius: 7px; background: #fff"></span></span>Related by meaning (dashed)</button>
+          <div style="flex-grow: 1"></div>
+          <button type="button" style="height: 32px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; cursor: pointer">Fit</button>
+          <div style="display: inline-flex; border: 1px solid #e5e5e5; border-radius: 8px; overflow: hidden">
+            <button type="button" aria-label="Zoom out" style="width: 32px; height: 30px; border: 0; border-right: 1px solid #e5e5e5; background: #fff; font: inherit; cursor: pointer">−</button>
+            <button type="button" aria-label="Zoom in" style="width: 32px; height: 30px; border: 0; background: #fff; font: inherit; cursor: pointer">+</button>
+          </div>
+          <button type="button" aria-pressed="false" style="display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5M9 3h6l-1 6 4 4H6l4-4z"/></svg>Pin layout</button>
+          <div role="radiogroup" aria-label="View" style="display: inline-flex; background: #f5f5f5; border-radius: 8px; padding: 3px">
+            <button type="button" role="radio" aria-checked="true" style="height: 26px; padding: 0 10px; border: 0; border-radius: 6px; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.04); font: inherit; font-weight: 500; color: #0a0a0a; cursor: pointer">Graph</button>
+            <button type="button" role="radio" aria-checked="false" title="The same items and links as a table, for keyboard and screen readers" style="height: 26px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font: inherit; color: #525252; cursor: pointer">List</button>
+          </div>
+        </div>
+        <div style="font-size: 12px; color: #737373">34 items shown · 12 more grouped · only from Soil sensor and the shared library</div>
+
+        <!-- Canvas -->
+        <div style="position: relative; height: 540px; border: 1px solid #e5e5e5; border-radius: 12px; background: #fafafa; overflow: hidden">
+          <svg role="img" aria-label="Graph centred on requirement R-006, reaches a gateway 2 km away. It is derived from the intent 2 km line of sight. The bench range test fails it, shown as a red failing chain from the intent through R-006 to the bench range test. Run run_c19e link budget proves it. Waiver W-5 antenna clearance waives it, granted by Priya Shah. The Radio block and Antenna block serve it; Radio uses the SX1262 part and 12 more grouped parts, Antenna uses the u.FL connector. Architecture option B was decided in the Radio block. Memory TX power 14 dBm default was learned from the bench range test and cites datasheet SX1262 page 18. Related by meaning: rf-notes.md with the TX power memory, and the memory Antenna must sit on board edge with the datasheet page. R-002, 2 years on 2 AA batteries, is also derived from the intent." viewBox="0 0 760 540" preserveAspectRatio="xMidYMid meet" style="width: 100%; height: 100%; display: block" font-family="Geist, system-ui, sans-serif">
+            <defs>
+              <pattern id="kg-dots" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="#e5e5e5"/></pattern>
+            </defs>
+            <rect x="0" y="0" width="760" height="540" fill="url(#kg-dots)"/>
+
+            <!-- Edges (neutral) -->
+            <g stroke="#a3a3a3" stroke-width="1.25" fill="none">
+              <line x1="70" y1="190" x2="150" y2="70"/>
+              <line x1="440" y1="70" x2="360" y2="240"/>
+              <line x1="300" y1="60" x2="440" y2="70"/>
+              <line x1="230" y1="170" x2="360" y2="240"/>
+              <line x1="300" y1="380" x2="360" y2="240"/>
+              <line x1="520" y1="370" x2="360" y2="240"/>
+              <line x1="300" y1="380" x2="400" y2="460"/>
+              <line x1="520" y1="370" x2="620" y2="420"/>
+              <line x1="300" y1="380" x2="80" y2="370"/>
+              <line x1="190" y1="290" x2="300" y2="380"/>
+              <line x1="700" y1="210" x2="580" y2="150"/>
+              <line x1="700" y1="210" x2="690" y2="310"/>
+              <line x1="560" y1="270" x2="520" y2="370"/>
+            </g>
+            <!-- Related by meaning (dashed) -->
+            <g stroke="#a3a3a3" stroke-width="1.25" fill="none" stroke-dasharray="4 4">
+              <line x1="690" y1="80" x2="700" y2="210"/>
+              <line x1="560" y1="270" x2="690" y2="310"/>
+            </g>
+            <!-- Failing chain -->
+            <g stroke="#b91c1c" stroke-width="2.5" fill="none" stroke-linecap="round">
+              <line x1="150" y1="70" x2="360" y2="240"/>
+              <line x1="360" y1="240" x2="580" y2="150"/>
+            </g>
+
+            <!-- Edge labels -->
+            <g font-size="10" fill="#737373" paint-order="stroke" stroke="#fafafa" stroke-width="4" stroke-linejoin="round" text-anchor="middle">
+              <text x="110" y="132">derived from</text>
+              <text x="410" y="156">waives</text>
+              <text x="370" y="58">granted</text>
+              <text x="300" y="214">proves</text>
+              <text x="322" y="335">serves</text>
+              <text x="446" y="310">serves</text>
+              <text x="352" y="424">uses</text>
+              <text x="574" y="402">uses</text>
+              <text x="236" y="342">decided in</text>
+              <text x="646" y="172">learned from</text>
+              <text x="712" y="264">cites</text>
+              <text x="626" y="292">related by meaning</text>
+            </g>
+            <g font-size="10" font-weight="500" fill="#b91c1c" paint-order="stroke" stroke="#fafafa" stroke-width="4" stroke-linejoin="round" text-anchor="middle">
+              <text x="218" y="118">derived from</text>
+              <text x="474" y="186">fails</text>
+            </g>
+
+            <!-- Intent statement: rounded rect -->
+            <rect x="82" y="54" width="136" height="32" rx="10" fill="#f3f0fa" stroke="#b91c1c" stroke-width="2"/>
+            <text x="150" y="74" font-size="12" font-weight="500" fill="#0a0a0a" text-anchor="middle">2 km line of sight</text>
+
+            <!-- R-002 requirement -->
+            <circle cx="70" cy="190" r="18" fill="#edeff4" stroke="#3f4a6b" stroke-width="1.5"/>
+            <text x="70" y="194" font-size="9.5" font-family="'Geist Mono', monospace" fill="#3f4a6b" text-anchor="middle">R-002</text>
+            <text x="70" y="222" font-size="11" fill="#404040" text-anchor="middle">2 years on 2×AA</text>
+
+            <!-- Person PS -->
+            <circle cx="300" cy="60" r="15" fill="#f5f5f5" stroke="#404040" stroke-width="1.5"/>
+            <text x="300" y="64" font-size="11" font-weight="600" fill="#404040" text-anchor="middle">PS</text>
+            <text x="300" y="90" font-size="11" fill="#404040" text-anchor="middle">Priya Shah</text>
+
+            <!-- Waiver W-5: triangle -->
+            <polygon points="440,54 457,82 423,82" fill="#fbf0f5" stroke="#8e4d6c" stroke-width="1.5" stroke-linejoin="round"/>
+            <text x="440" y="98" font-size="11" fill="#404040" text-anchor="middle">W-5 antenna clearance</text>
+
+            <!-- Focus: R-006 -->
+            <circle cx="360" cy="240" r="35" fill="none" stroke="#2563eb" stroke-width="2.5"/>
+            <circle cx="360" cy="240" r="28" fill="#edeff4" stroke="#3f4a6b" stroke-width="1.5"/>
+            <text x="360" y="245" font-size="13" font-weight="600" font-family="'Geist Mono', monospace" fill="#0a0a0a" text-anchor="middle">R-006</text>
+            <text x="360" y="294" font-size="12.5" font-weight="600" fill="#0a0a0a" text-anchor="middle" paint-order="stroke" stroke="#fafafa" stroke-width="4">Reaches a gateway 2 km away</text>
+
+            <!-- Run: run_c19e (verified) -->
+            <polygon points="230,154 246,170 230,186 214,170" fill="#f0fdf4" stroke="#15803d" stroke-width="1.75" stroke-linejoin="round"/>
+            <text x="230" y="202" font-size="10.5" font-family="'Geist Mono', monospace" fill="#404040" text-anchor="middle" paint-order="stroke" stroke="#fafafa" stroke-width="4">run_c19e link budget</text>
+            <text x="230" y="216" font-size="10.5" font-weight="500" fill="#15803d" text-anchor="middle" paint-order="stroke" stroke="#fafafa" stroke-width="4">✓ Verified</text>
+
+            <!-- Run: Bench range test (failing, selected) -->
+            <polygon points="580,125 605,150 580,175 555,150" fill="none" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="3 2"/>
+            <polygon points="580,134 596,150 580,166 564,150" fill="#fef2f2" stroke="#b91c1c" stroke-width="2.25" stroke-linejoin="round"/>
+            <text x="580" y="190" font-size="11.5" font-weight="500" fill="#0a0a0a" text-anchor="middle" paint-order="stroke" stroke="#fafafa" stroke-width="4">Bench range test</text>
+            <rect x="551" y="196" width="58" height="17" rx="4" fill="#fef2f2" stroke="#fecaca"/>
+            <path d="M558 201.5l6 6M564 201.5l-6 6" stroke="#b91c1c" stroke-width="1.5" stroke-linecap="round"/>
+            <text x="568" y="208.5" font-size="10.5" font-weight="500" fill="#b91c1c">Failing</text>
+
+            <!-- Document: rf-notes.md -->
+            <rect x="677" y="64" width="26" height="32" rx="3" fill="#f5f5f4" stroke="#6b665e" stroke-width="1.5"/>
+            <path d="M682 74h16M682 80h16M682 86h10" stroke="#6b665e" stroke-width="1.25" stroke-linecap="round"/>
+            <text x="690" y="112" font-size="10.5" font-family="'Geist Mono', monospace" fill="#404040" text-anchor="middle">rf-notes.md</text>
+
+            <!-- Memory: TX power -->
+            <circle cx="700" cy="210" r="10" fill="#eaf2f6" stroke="#3c6e85" stroke-width="1.5"/>
+            <circle cx="700" cy="210" r="3" fill="#3c6e85"/>
+            <text x="714" y="236" font-size="11" fill="#404040" text-anchor="end" paint-order="stroke" stroke="#fafafa" stroke-width="4">TX power 14 dBm default</text>
+
+            <!-- Memory: antenna edge -->
+            <circle cx="560" cy="270" r="10" fill="#eaf2f6" stroke="#3c6e85" stroke-width="1.5"/>
+            <circle cx="560" cy="270" r="3" fill="#3c6e85"/>
+            <text x="560" y="296" font-size="11" fill="#404040" text-anchor="middle" paint-order="stroke" stroke="#fafafa" stroke-width="4">Antenna must sit on board edge</text>
+
+            <!-- Datasheet page: folded rect -->
+            <path d="M677 294h18l8 8v24h-26z" fill="#f4f4f5" stroke="#52525b" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M695 294v8h8" fill="none" stroke="#52525b" stroke-width="1.25" stroke-linejoin="round"/>
+            <text x="690" y="342" font-size="11" fill="#404040" text-anchor="middle" paint-order="stroke" stroke="#fafafa" stroke-width="4">SX1262 p.18</text>
+
+            <!-- Decision: Architecture option B -->
+            <polygon points="190,274 207,302 173,302" fill="#fbf0f5" stroke="#8e4d6c" stroke-width="1.5" stroke-linejoin="round"/>
+            <text x="190" y="318" font-size="11" fill="#404040" text-anchor="middle" paint-order="stroke" stroke="#fafafa" stroke-width="4">Architecture option B</text>
+
+            <!-- Grouped bundle -->
+            <rect x="30" y="356" width="100" height="28" rx="14" fill="#ffffff" stroke="#8a6a43" stroke-width="1.25" stroke-dasharray="4 3"/>
+            <text x="80" y="374" font-size="11" font-weight="500" fill="#404040" text-anchor="middle">+12 more parts</text>
+
+            <!-- Block: Radio -->
+            <rect x="284" y="364" width="32" height="32" rx="3" fill="#e9f3f3" stroke="#3f7474" stroke-width="1.5"/>
+            <text x="300" y="412" font-size="11.5" font-weight="500" fill="#0a0a0a" text-anchor="middle" paint-order="stroke" stroke="#fafafa" stroke-width="4">Radio</text>
+
+            <!-- Block: Antenna -->
+            <rect x="504" y="354" width="32" height="32" rx="3" fill="#e9f3f3" stroke="#3f7474" stroke-width="1.5"/>
+            <text x="520" y="402" font-size="11.5" font-weight="500" fill="#0a0a0a" text-anchor="middle" paint-order="stroke" stroke="#fafafa" stroke-width="4">Antenna</text>
+
+            <!-- Part: u.FL connector -->
+            <polygon points="603,420 611.5,405.3 628.5,405.3 637,420 628.5,434.7 611.5,434.7" fill="#f6f1ea" stroke="#8a6a43" stroke-width="1.5" stroke-linejoin="round"/>
+            <text x="642" y="424" font-size="11" fill="#404040" paint-order="stroke" stroke="#fafafa" stroke-width="4">u.FL connector</text>
+
+            <!-- Part: SX1262 (hovered) -->
+            <polygon points="383,460 391.5,445.3 408.5,445.3 417,460 408.5,474.7 391.5,474.7" fill="#f6f1ea" stroke="#5c4429" stroke-width="2.75" stroke-linejoin="round"/>
+            <text x="378" y="464" font-size="11" font-family="'Geist Mono', monospace" font-weight="500" fill="#0a0a0a" text-anchor="end" paint-order="stroke" stroke="#fafafa" stroke-width="4">SX1262</text>
+
+            <!-- Tooltip for hovered SX1262 -->
+            <g>
+              <path d="M418 462 l8 -6 v12 z" fill="#0a0a0a"/>
+              <rect x="426" y="434" width="174" height="58" rx="6" fill="#0a0a0a"/>
+              <text x="436" y="452" font-size="11" font-weight="600" fill="#ffffff"><tspan font-family="'Geist Mono', monospace">SX1262</tspan> · LoRa transceiver</text>
+              <text x="436" y="468" font-size="11" fill="#d4d4d4">In stock 3,400</text>
+              <text x="436" y="483" font-size="11" fill="#d4d4d4">Used by 2 of your projects</text>
+            </g>
+          </svg>
+
+          <!-- Ask pill -->
+          <button type="button" style="position: absolute; top: 12px; right: 12px; display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 14px; border: 1px solid #e5e5e5; border-radius: 16px; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.04); font: inherit; font-size: 13px; font-weight: 500; color: #0a0a0a; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>Ask trace about this view</button>
+
+          <!-- Legend -->
+          <div role="group" aria-label="Legend" style="position: absolute; left: 12px; bottom: 12px; background: #fff; border: 1px solid #e5e5e5; border-radius: 8px; padding: 8px 10px; display: grid; grid-template-columns: auto auto; column-gap: 14px; row-gap: 2px; font-size: 11px; color: #404040; line-height: 1.4">
+            <span style="display: flex; align-items: center; gap: 6px"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><rect x="1" y="3.5" width="12" height="7" rx="3" fill="#f3f0fa" stroke="#6d5f9e" stroke-width="1.25"/></svg>Intent statement</span>
+            <span style="display: flex; align-items: center; gap: 6px"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1.5 12.5 7 7 12.5 1.5 7z" fill="#f5f5f5" stroke="#525252" stroke-width="1.25"/></svg>Run or evidence</span>
+            <span style="display: flex; align-items: center; gap: 6px"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="#edeff4" stroke="#3f4a6b" stroke-width="1.25"/></svg>Requirement</span>
+            <span style="display: flex; align-items: center; gap: 6px"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1.5 12.5 12H1.5z" fill="#fbf0f5" stroke="#8e4d6c" stroke-width="1.25" stroke-linejoin="round"/></svg>Decision or waiver</span>
+            <span style="display: flex; align-items: center; gap: 6px"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><rect x="2" y="2" width="10" height="10" rx="1" fill="#e9f3f3" stroke="#3f7474" stroke-width="1.25"/></svg>Block</span>
+            <span style="display: flex; align-items: center; gap: 6px"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="#eaf2f6" stroke="#3c6e85" stroke-width="1.25"/><circle cx="7" cy="7" r="1.5" fill="#3c6e85"/></svg>Memory</span>
+            <span style="display: flex; align-items: center; gap: 6px"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M1.5 7 4.25 2.25h5.5L12.5 7l-2.75 4.75h-5.5z" fill="#f6f1ea" stroke="#8a6a43" stroke-width="1.25"/></svg>Part</span>
+            <span style="display: flex; align-items: center; gap: 6px"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><rect x="2.5" y="1.5" width="9" height="11" rx="1" fill="#f5f5f4" stroke="#6b665e" stroke-width="1.25"/><path d="M4.5 5h5M4.5 7.5h5M4.5 10h3" stroke="#6b665e" stroke-width="1"/></svg>Document</span>
+            <span style="display: flex; align-items: center; gap: 6px"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2.5 1.5h6l3 3v8h-9z" fill="#f4f4f5" stroke="#52525b" stroke-width="1.25" stroke-linejoin="round"/><path d="M8.5 1.5v3h3" fill="none" stroke="#52525b" stroke-width="1"/></svg>Datasheet page</span>
+            <span style="display: flex; align-items: center; gap: 6px"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="#f5f5f5" stroke="#404040" stroke-width="1.25"/><text x="7" y="9" font-size="5" font-weight="700" text-anchor="middle" fill="#404040">PS</text></svg>Person</span>
+            <span style="grid-column: 1 / span 2; display: flex; gap: 12px; margin-top: 4px; padding-top: 4px; border-top: 1px solid #f0f0f0; color: #525252">
+              <span style="display: flex; align-items: center; gap: 6px"><svg width="20" height="8" viewBox="0 0 20 8" aria-hidden="true"><line x1="0" y1="4" x2="20" y2="4" stroke="#b91c1c" stroke-width="2.5"/></svg>Failing chain</span>
+              <span style="display: flex; align-items: center; gap: 6px"><svg width="20" height="8" viewBox="0 0 20 8" aria-hidden="true"><line x1="0" y1="4" x2="20" y2="4" stroke="#a3a3a3" stroke-width="1.5" stroke-dasharray="3 3"/></svg>Related by meaning</span>
+            </span>
+          </div>
+
+          <!-- Mini-map -->
+          <div role="img" aria-label="Mini-map: the view shows the centre of the graph" style="position: absolute; right: 12px; bottom: 12px; width: 112px; height: 72px; background: #fff; border: 1px solid #e5e5e5; border-radius: 6px; overflow: hidden">
+            <svg width="112" height="72" viewBox="0 0 112 72" aria-hidden="true">
+              <g fill="#a3a3a3">
+                <circle cx="20" cy="18" r="2"/><circle cx="14" cy="30" r="2"/><circle cx="40" cy="14" r="2"/><circle cx="58" cy="16" r="2"/>
+                <circle cx="80" cy="22" r="2"/><circle cx="96" cy="14" r="2"/><circle cx="98" cy="32" r="2"/><circle cx="34" cy="28" r="2"/>
+                <circle cx="44" cy="52" r="2"/><circle cx="72" cy="52" r="2"/><circle cx="58" cy="60" r="2"/><circle cx="88" cy="56" r="2"/>
+                <circle cx="16" cy="50" r="2"/><circle cx="96" cy="44" r="2"/><circle cx="78" cy="38" r="2"/><circle cx="28" cy="40" r="2"/>
+                <circle cx="8" cy="62" r="1.5"/><circle cx="104" cy="64" r="1.5"/>
+              </g>
+              <circle cx="52" cy="34" r="3.5" fill="#2563eb"/>
+              <rect x="10" y="8" width="92" height="56" rx="2" fill="none" stroke="#2563eb" stroke-width="1.5"/>
+            </svg>
+          </div>
+        </div>
+
+        <p style="margin: 0; display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: #737373">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: 0 0 16px; margin-top: 2px"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span>Only items from projects you're on and the shared library appear. Items from other projects are never shown, not even as grouped counts.</span>
+        </p>
+        <p style="margin: 0; font-size: 12px; color: #737373"><kbd style="font-family: 'Geist Mono', monospace; border: 1px solid #e5e5e5; border-radius: 4px; padding: 0 4px">Tab</kbd> moves between items · <kbd style="font-family: 'Geist Mono', monospace; border: 1px solid #e5e5e5; border-radius: 4px; padding: 0 4px">Enter</kbd> opens · <kbd style="font-family: 'Geist Mono', monospace; border: 1px solid #e5e5e5; border-radius: 4px; padding: 0 4px">E</kbd> expands · <kbd style="font-family: 'Geist Mono', monospace; border: 1px solid #e5e5e5; border-radius: 4px; padding: 0 4px">Esc</kbd> closes the panel</p>
+      </section>
+
+      <!-- Side sheet -->
+      <aside aria-labelledby="sheet-h" style="flex: 0 1 400px; max-width: 400px; min-width: 0; border-left: 1px solid #e5e5e5; background: #fff; padding: 20px 24px 24px; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px">
+        <div style="display: flex; align-items: flex-start; gap: 8px">
+          <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 8px">
+            <span style="align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; background: #fef2f2; color: #b91c1c; border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 500"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 3 21 12 12 21 3 12z"/><path d="M10 10l4 4M14 10l-4 4"/></svg>Run · Failing</span>
+            <h2 id="sheet-h" style="margin: 0; font-size: 18px; font-weight: 600">Bench range test</h2>
+          </div>
+          <button type="button" aria-label="Close panel" style="width: 32px; height: 32px; border: 0; border-radius: 8px; background: transparent; color: #525252; cursor: pointer; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+        <p style="margin: 0">Reached 1.4 km against the 2 km requirement on 22 Oct.</p>
+
+        <dl style="margin: 0; display: grid; grid-template-columns: 96px 1fr; row-gap: 6px; font-size: 13px">
+          <dt style="color: #737373">Run id</dt><dd style="margin: 0; font-family: 'Geist Mono', monospace">run_8e14</dd>
+          <dt style="color: #737373">Agent</dt><dd style="margin: 0">Verification</dd>
+          <dt style="color: #737373">Kind</dt><dd style="margin: 0">Bench session</dd>
+          <dt style="color: #737373">Date</dt><dd style="margin: 0">22 Oct, 14:10</dd>
+        </dl>
+
+        <div style="display: flex; gap: 8px; flex-wrap: wrap">
+          <a href="Run.dc.html" style="display: inline-flex; align-items: center; height: 36px; padding: 0 16px; border-radius: 8px; background: #2563eb; color: #fff; font-weight: 500">Open the run</a>
+          <button type="button" style="height: 36px; padding: 0 14px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-weight: 500; cursor: pointer">Expand its links</button>
+          <button type="button" style="height: 36px; padding: 0 14px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; color: #525252; cursor: pointer">Hide from view</button>
+        </div>
+
+        <section aria-labelledby="conn-h" style="display: flex; flex-direction: column; gap: 10px; border-top: 1px solid #f0f0f0; padding-top: 14px">
+          <h3 id="conn-h" style="margin: 0; font-size: 14px; font-weight: 600">Connected to (5)</h3>
+
+          <div style="display: flex; flex-direction: column; gap: 4px">
+            <div style="font-size: 12px; color: #737373">proves</div>
+            <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid #f0f0f0; border-radius: 8px; font-size: 13px">
+              <svg width="16" height="16" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="#edeff4" stroke="#3f4a6b" stroke-width="1.25"/></svg>
+              <span style="flex-grow: 1; min-width: 0"><span style="font-family: 'Geist Mono', monospace">R-006</span> Reaches a gateway 2 km away</span>
+              <button type="button" style="border: 0; background: transparent; padding: 0; font: inherit; font-size: 12px; color: #2563eb; cursor: pointer; white-space: nowrap">Show in graph</button>
+            </div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 4px">
+            <div style="font-size: 12px; color: #737373">measured with</div>
+            <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid #f0f0f0; border-radius: 8px; font-size: 13px">
+              <svg width="16" height="16" viewBox="0 0 14 14" aria-hidden="true"><rect x="2.5" y="1.5" width="9" height="11" rx="1" fill="#f5f5f4" stroke="#6b665e" stroke-width="1.25"/><path d="M4.5 5h5M4.5 7.5h5M4.5 10h3" stroke="#6b665e" stroke-width="1"/></svg>
+              <span style="flex-grow: 1; min-width: 0">Bench wiring view</span>
+              <button type="button" style="border: 0; background: transparent; padding: 0; font: inherit; font-size: 12px; color: #2563eb; cursor: pointer; white-space: nowrap">Show in graph</button>
+            </div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 4px">
+            <div style="font-size: 12px; color: #737373">learned</div>
+            <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid #f0f0f0; border-radius: 8px; font-size: 13px">
+              <svg width="16" height="16" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="#eaf2f6" stroke="#3c6e85" stroke-width="1.25"/><circle cx="7" cy="7" r="1.5" fill="#3c6e85"/></svg>
+              <span style="flex-grow: 1; min-width: 0">Memory · TX power 14 dBm default</span>
+              <button type="button" style="border: 0; background: transparent; padding: 0; font: inherit; font-size: 12px; color: #2563eb; cursor: pointer; white-space: nowrap">Show in graph</button>
+            </div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 4px">
+            <div style="font-size: 12px; color: #737373">raised</div>
+            <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid #f0f0f0; border-radius: 8px; font-size: 13px">
+              <svg width="16" height="16" viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1.5 12.5 12H1.5z" fill="#fbf0f5" stroke="#8e4d6c" stroke-width="1.25" stroke-linejoin="round"/></svg>
+              <span style="flex-grow: 1; min-width: 0">Change request <span style="font-family: 'Geist Mono', monospace">CR-3</span> · Raise TX power</span>
+              <button type="button" style="border: 0; background: transparent; padding: 0; font: inherit; font-size: 12px; color: #2563eb; cursor: pointer; white-space: nowrap">Show in graph</button>
+            </div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 4px">
+            <div style="font-size: 12px; color: #737373">related by meaning</div>
+            <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px dashed #e5e5e5; border-radius: 8px; font-size: 13px">
+              <svg width="16" height="16" viewBox="0 0 14 14" aria-hidden="true"><rect x="2.5" y="1.5" width="9" height="11" rx="1" fill="#f5f5f4" stroke="#6b665e" stroke-width="1.25"/><path d="M4.5 5h5M4.5 7.5h5M4.5 10h3" stroke="#6b665e" stroke-width="1"/></svg>
+              <span style="flex-grow: 1; min-width: 0; font-family: 'Geist Mono', monospace">rf-notes.md</span>
+              <button type="button" style="border: 0; background: transparent; padding: 0; font: inherit; font-size: 12px; color: #2563eb; cursor: pointer; white-space: nowrap">Show in graph</button>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="path-h" style="display: flex; flex-direction: column; gap: 8px; border-top: 1px solid #f0f0f0; padding-top: 14px">
+          <h3 id="path-h" style="margin: 0; font-size: 14px; font-weight: 600">How is this connected to…</h3>
+          <label for="kpath" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Find how Bench range test connects to another item</label>
+          <input id="kpath" type="text" value="u.FL connector" style="height: 36px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; font: inherit; font-size: 13px; box-sizing: border-box">
+          <div style="background: #fafafa; border-radius: 8px; padding: 10px 12px; font-size: 13px; display: flex; flex-direction: column; gap: 4px">
+            <span style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px">Bench range test <span aria-hidden="true" style="color: #737373">→</span> <span style="font-family: 'Geist Mono', monospace">R-006</span> <span aria-hidden="true" style="color: #737373">→</span> Antenna block <span aria-hidden="true" style="color: #737373">→</span> u.FL connector</span>
+            <span style="display: flex; gap: 12px; font-size: 12px; color: #737373">3 links<button type="button" style="border: 0; background: transparent; padding: 0; font: inherit; color: #2563eb; cursor: pointer">Show path in graph</button></span>
+          </div>
+        </section>
+      </aside>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1050}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

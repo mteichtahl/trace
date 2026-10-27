@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>trace · Routing run</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2563eb;text-decoration:none}a:hover{color:#1d4ed8}
+</style>
+</helmet>
+<div style="font-family: Geist, system-ui, sans-serif; color: #0a0a0a; background: #ffffff; min-height: 1000px; display: flex; flex-wrap: wrap; font-size: 14px; line-height: 1.5">
+
+  <nav aria-label="Main" style="flex: 1 1 232px; max-width: 260px; background: #fafafa; border-right: 1px solid #e5e5e5; padding: 16px 12px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px">
+    <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px 18px">
+      <div style="width: 24px; height: 24px; border-radius: 6px; background: #0a0a0a; color: #fff; display: flex; align-items: center; justify-content: center; font-family: 'Geist Mono', monospace; font-size: 13px; font-weight: 600">t</div>
+      <span style="font-weight: 600; font-size: 15px">trace</span>
+    </div>
+    <a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/></svg>Home</a>
+    <a href="Project.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; background: #f0f0f0; color: #0a0a0a; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Projects</a>
+    <a href="Knowledge.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h10a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z"/><path d="M4 16a4 4 0 0 1 4-4h10"/></svg>Knowledge</a>
+    <a href="Agents.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01"/></svg>Agents</a>
+    <a href="Operations.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Operations</a>
+    <a href="People.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>Admin</a>
+    <div style="margin: 20px 8px 6px; font-size: 12px; color: #737373; font-weight: 500">Pinned</div>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Soil sensor</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Motor driver</span><span style="min-width: 20px; height: 20px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; font-weight: 600" aria-label="1 waiting on you">1</span></a>
+    <a href="Project.dc.html" style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; color: #404040"><span>Panel controller</span></a>
+    <div style="flex-grow: 1"></div>
+    <a href="Preferences.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; color: #404040">
+      <span style="width: 28px; height: 28px; border-radius: 14px; background: #e5e5e5; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600">MT</span>
+      <span style="display: flex; flex-direction: column; line-height: 1.3"><span style="font-weight: 500; color: #0a0a0a">Marc Teichtahl</span><span style="font-size: 12px; color: #737373">Admin</span></span>
+    </a>
+  </nav>
+
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="height: 56px; border-bottom: 1px solid #e5e5e5; display: flex; align-items: center; gap: 12px; padding: 0 24px; box-sizing: border-box">
+      <span style="font-weight: 500"><span style="color: #737373; font-weight: 400">Soil sensor · Rev A · Layout · </span>Routing the board</span>
+      <div style="flex-grow: 1"></div>
+      <button type="button" style="display: flex; align-items: center; gap: 8px; height: 36px; width: 280px; max-width: 40%; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; color: #737373; font: inherit; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span style="flex-grow: 1; text-align: left">Search or run a command</span><kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; border: 1px solid #e5e5e5; border-radius: 4px; padding: 0 4px">⌘K</kbd></button>
+      <span title="Live: every screen updates as the record changes" style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #15803d"><span style="width: 8px; height: 8px; border-radius: 4px; background: #16a34a"></span>Live</span>
+      <button type="button" aria-label="Notifications, 2 new" style="position: relative; width: 36px; height: 36px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #0a0a0a"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><span style="position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 4px; background: #2563eb"></span></button>
+      <a href="Chat.dc.html" style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 8px; color: #0a0a0a; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>Ask trace <kbd style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373">⌘J</kbd></a>
+    </header>
+
+    <main style="width: 100%; max-width: 1120px; margin: 0 auto; padding: 28px 24px 56px; box-sizing: border-box; display: flex; flex-direction: column; gap: 24px">
+
+      <!-- Run line, full size -->
+      <section aria-labelledby="run-h" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px 24px; display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2.4" stroke-linecap="round" aria-hidden="true" style="margin-top: 4px"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+        <div style="flex: 1 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+            <h1 id="run-h" style="margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.01em">Routing the board</h1>
+            <span style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1px 8px; color: #404040"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 17v3M11 17v3M15 17v3M7 11h4"/></svg>On a graphics card</span>
+            <span style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #737373">run_7b02</span>
+          </div>
+          <p style="margin: 0; font-size: 15px">Stage 1 of 2: <span style="text-decoration: underline dotted #a3a3a3; text-underline-offset: 3px">OrthoRoute</span> on the dense core near U4 (the microcontroller)</p>
+          <div style="font-size: 13px; color: #737373">12 minutes so far, usually 20</div>
+          <div style="display: flex; align-items: center; gap: 10px; max-width: 560px">
+            <div role="progressbar" aria-valuenow="55" aria-valuemin="0" aria-valuemax="100" aria-label="Routing progress" style="flex-grow: 1; height: 4px; border-radius: 2px; background: #f0f0f0"><div style="width: 55%; height: 4px; border-radius: 2px; background: #2563eb"></div></div>
+            <span style="font-size: 12px; color: #525252; font-family: 'Geist Mono', monospace">55%</span>
+          </div>
+        </div>
+        <div style="flex: 0 0 auto; display: flex; gap: 8px; flex-wrap: wrap">
+          <button type="button" style="display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid #e5e5e5; background: #fff; color: #0a0a0a; font: inherit; font-weight: 500; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 5v14M15 5v14"/></svg>Pause</button>
+          <button type="button" style="display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid #e5e5e5; background: #fff; color: #0a0a0a; font: inherit; font-weight: 500; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>Cancel</button>
+          <button type="button" style="display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid #e5e5e5; background: #fff; color: #0a0a0a; font: inherit; font-weight: 500; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>Move up</button>
+        </div>
+      </section>
+
+      <div style="display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start">
+        <!-- Main column -->
+        <div style="flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 24px">
+          <section aria-labelledby="steps-h" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px 24px">
+            <h2 id="steps-h" style="margin: 0 0 4px; font-size: 18px; font-weight: 600">Steps</h2>
+            <p style="margin: 0 0 16px; color: #525252">Five steps. The plan is done and the first router is about three quarters through the core nets.</p>
+            <ol style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column">
+              <li style="display: flex; gap: 14px">
+                <div style="display: flex; flex-direction: column; align-items: center; flex: 0 0 20px">
+                  <span style="width: 20px; height: 20px; border-radius: 10px; background: #0a0a0a; color: #fff; display: flex; align-items: center; justify-content: center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg></span>
+                  <span style="flex-grow: 1; width: 1px; background: #e5e5e5; min-height: 16px"></span>
+                </div>
+                <div style="flex: 1 1 auto; min-width: 0; padding-bottom: 16px">
+                  <div style="display: flex; justify-content: space-between; gap: 8px"><span style="font-weight: 500">Plan the routing</span><span style="font-size: 12px; color: #737373; font-family: 'Geist Mono', monospace">✓ 0:40</span></div>
+                  <div style="font-size: 13px; color: #525252">Found a dense core: U4, 0.5 mm pitch, 48 pads; a graphics card is free, so both routers.</div>
+                </div>
+              </li>
+              <li style="display: flex; gap: 14px">
+                <div style="display: flex; flex-direction: column; align-items: center; flex: 0 0 20px">
+                  <span style="width: 20px; height: 20px; border-radius: 10px; background: #fff; border: 3px solid #2563eb; box-sizing: border-box"></span>
+                  <span style="flex-grow: 1; width: 1px; background: #e5e5e5; min-height: 16px"></span>
+                </div>
+                <div style="flex: 1 1 auto; min-width: 0; padding-bottom: 16px">
+                  <div style="display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap"><span style="font-weight: 600">Stage 1: OrthoRoute on 31 core nets</span><span style="font-size: 12px; color: #2563eb; font-weight: 500">Running · 11:20</span></div>
+                  <div style="font-size: 13px; color: #525252">48 of 62 nets routed</div>
+                  <div style="margin-top: 6px; height: 4px; border-radius: 2px; background: #f0f0f0; max-width: 320px"><div style="width: 77%; height: 4px; border-radius: 2px; background: #2563eb"></div></div>
+                </div>
+              </li>
+              <li style="display: flex; gap: 14px">
+                <div style="display: flex; flex-direction: column; align-items: center; flex: 0 0 20px">
+                  <span style="width: 20px; height: 20px; border-radius: 10px; background: #fff; border: 1.5px solid #d4d4d4; box-sizing: border-box"></span>
+                  <span style="flex-grow: 1; width: 1px; background: #e5e5e5; min-height: 16px"></span>
+                </div>
+                <div style="flex: 1 1 auto; min-width: 0; padding-bottom: 16px; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap">
+                  <span style="color: #525252">Stage 2: <span style="text-decoration: underline dotted #a3a3a3; text-underline-offset: 3px">Freerouting</span> on the rest</span>
+                  <span style="font-size: 12px; color: #737373; background: #f5f5f5; border-radius: 6px; padding: 0 8px">○ Queued</span>
+                </div>
+              </li>
+              <li style="display: flex; gap: 14px">
+                <div style="display: flex; flex-direction: column; align-items: center; flex: 0 0 20px">
+                  <span style="width: 20px; height: 20px; border-radius: 10px; background: #fff; border: 1.5px solid #d4d4d4; box-sizing: border-box"></span>
+                  <span style="flex-grow: 1; width: 1px; background: #e5e5e5; min-height: 16px"></span>
+                </div>
+                <div style="flex: 1 1 auto; min-width: 0; padding-bottom: 16px; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap">
+                  <span style="color: #525252">Check locked tracks are unchanged</span>
+                  <span style="font-size: 12px; color: #737373; background: #f5f5f5; border-radius: 6px; padding: 0 8px">○ Queued</span>
+                </div>
+              </li>
+              <li style="display: flex; gap: 14px">
+                <div style="display: flex; flex-direction: column; align-items: center; flex: 0 0 20px">
+                  <span style="width: 20px; height: 20px; border-radius: 10px; background: #fff; border: 1.5px solid #d4d4d4; box-sizing: border-box"></span>
+                </div>
+                <div style="flex: 1 1 auto; min-width: 0; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap">
+                  <span style="color: #525252"><span style="text-decoration: underline dotted #a3a3a3; text-underline-offset: 3px">Design rule check</span> with schematic parity</span>
+                  <span style="font-size: 12px; color: #737373; background: #f5f5f5; border-radius: 6px; padding: 0 8px">○ Queued</span>
+                </div>
+              </li>
+            </ol>
+          </section>
+
+          <section aria-labelledby="log-h" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px 24px; display: flex; flex-direction: column; gap: 14px">
+            <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px">
+              <h2 id="log-h" style="margin: 0; font-size: 18px; font-weight: 600">Agent log</h2>
+              <span style="font-size: 12px; color: #737373">Layout specialist · newest last</span>
+            </div>
+            <div role="log" aria-label="Agent log" style="display: flex; flex-direction: column; gap: 12px">
+              <div style="display: flex; flex-direction: column; gap: 4px">
+                <div style="font-size: 12px; color: #737373">10:02 · trace · Layout specialist</div>
+                <p style="margin: 0">The core around U4 is too tight for the general router alone, so I'm sending its 31 nets to OrthoRoute on a graphics card first, then the remaining nets to Freerouting.</p>
+                <button type="button" aria-expanded="false" style="align-self: flex-start; display: flex; align-items: center; gap: 8px; padding: 2px 0; border: 0; background: transparent; font: inherit; font-size: 13px; color: #525252; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>Exported the board for the router ▸</button>
+                <button type="button" aria-expanded="false" style="align-self: flex-start; display: flex; align-items: center; gap: 8px; padding: 2px 0; border: 0; background: transparent; font: inherit; font-size: 13px; color: #525252; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Locked 18 tracks ▸</button>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 4px">
+                <div style="font-size: 12px; color: #737373">10:11 · trace · Layout specialist</div>
+                <p style="margin: 0">48 of 62 nets are in. The antenna feed and the USB pair are locked, so the router is working around them. Here is the top layer so far.</p>
+                <button type="button" aria-expanded="false" style="align-self: flex-start; display: flex; align-items: center; gap: 8px; padding: 2px 0; border: 0; background: transparent; font: inherit; font-size: 13px; color: #525252; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.5 1 2.5h6c0-1 .3-1.8 1-2.5A6 6 0 0 0 12 3z"/></svg>Show reasoning ▸</button>
+              </div>
+              <figure style="margin: 0; border: 1px solid #e5e5e5; border-radius: 12px; overflow: hidden">
+                <div style="display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid #f0f0f0">
+                  <figcaption style="font-weight: 600; font-size: 13px">Top layer · 10:11</figcaption>
+                  <span style="font-size: 12px; color: #737373">48 of 62 nets</span>
+                  <div style="flex-grow: 1"></div>
+                  <a href="FileViewer.dc.html" style="font-size: 12px; font-weight: 500">Open in viewer</a>
+                </div>
+                <div style="background: #fafafa; padding: 16px">
+                  <svg viewBox="-10 -10 520 370" width="100%" style="display: block; max-width: 620px; margin: 0 auto" role="img" aria-label="Top copper layer of the 50 by 35 mm board with traces partly routed around U4; unrouted connections shown as thin dashed lines.">
+                    <defs>
+                      <pattern id="runhatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="8" stroke="#e7c9b8" stroke-width="1.5"/></pattern>
+                    </defs>
+                    <rect x="0" y="0" width="500" height="350" rx="20" fill="#fff" stroke="#0a0a0a" stroke-width="2"/>
+                    <rect x="10" y="230" width="380" height="110" rx="10" fill="url(#runhatch)"/>
+                    <rect x="400" y="0" width="100" height="110" fill="none" stroke="#a3a3a3" stroke-dasharray="4 4"/>
+                    <path d="M420 90 V20 H440 V80 H460 V20 H480 V90" fill="none" stroke="#d97757" stroke-width="3"/>
+                    <!-- U4 -->
+                    <rect x="180" y="120" width="70" height="70" rx="3" fill="#fff" stroke="#525252"/>
+                    <g fill="#d97757">
+                      <rect x="186" y="114" width="3" height="6"/><rect x="194" y="114" width="3" height="6"/><rect x="202" y="114" width="3" height="6"/><rect x="210" y="114" width="3" height="6"/><rect x="218" y="114" width="3" height="6"/><rect x="226" y="114" width="3" height="6"/><rect x="234" y="114" width="3" height="6"/><rect x="242" y="114" width="3" height="6"/>
+                      <rect x="186" y="190" width="3" height="6"/><rect x="194" y="190" width="3" height="6"/><rect x="202" y="190" width="3" height="6"/><rect x="210" y="190" width="3" height="6"/><rect x="218" y="190" width="3" height="6"/><rect x="226" y="190" width="3" height="6"/><rect x="234" y="190" width="3" height="6"/><rect x="242" y="190" width="3" height="6"/>
+                      <rect x="174" y="126" width="6" height="3"/><rect x="174" y="134" width="6" height="3"/><rect x="174" y="142" width="6" height="3"/><rect x="174" y="150" width="6" height="3"/><rect x="174" y="158" width="6" height="3"/><rect x="174" y="166" width="6" height="3"/><rect x="174" y="174" width="6" height="3"/><rect x="174" y="182" width="6" height="3"/>
+                      <rect x="250" y="126" width="6" height="3"/><rect x="250" y="134" width="6" height="3"/><rect x="250" y="142" width="6" height="3"/><rect x="250" y="150" width="6" height="3"/><rect x="250" y="158" width="6" height="3"/><rect x="250" y="166" width="6" height="3"/><rect x="250" y="174" width="6" height="3"/><rect x="250" y="182" width="6" height="3"/>
+                    </g>
+                    <text x="215" y="160" font-size="14" text-anchor="middle" fill="#525252" font-family="Geist Mono, monospace">U4</text>
+                    <!-- Radio U5 -->
+                    <rect x="300" y="40" width="60" height="60" rx="3" fill="#fff" stroke="#525252"/>
+                    <text x="330" y="75" font-size="13" text-anchor="middle" fill="#525252" font-family="Geist Mono, monospace">U5</text>
+                    <!-- U2 -->
+                    <rect x="80" y="60" width="34" height="22" rx="2" fill="#fff" stroke="#525252"/>
+                    <text x="97" y="76" font-size="11" text-anchor="middle" fill="#525252" font-family="Geist Mono, monospace">U2</text>
+                    <!-- J1 -->
+                    <rect x="-4" y="140" width="40" height="56" rx="4" fill="#fff" stroke="#525252"/>
+                    <text x="16" y="172" font-size="11" text-anchor="middle" fill="#525252" font-family="Geist Mono, monospace">J1</text>
+                    <!-- routed (locked darker) -->
+                    <g fill="none" stroke="#d97757" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M360 60 H410 V90"/>
+                      <path d="M36 160 H120 L140 140 H174"/>
+                      <path d="M36 172 H130 L146 150 H174"/>
+                      <path d="M187 114 V96 L200 84 H300"/>
+                      <path d="M195 114 V100 L206 90 H300"/>
+                      <path d="M203 114 V104 L210 96 H300"/>
+                      <path d="M256 127 H300 V100"/>
+                      <path d="M256 135 H312 V100"/>
+                      <path d="M256 143 H324 V100"/>
+                      <path d="M114 70 H150 V128 H174"/>
+                      <path d="M187 196 V230"/>
+                      <path d="M195 196 V240 H260"/>
+                    </g>
+                    <g fill="none" stroke="#b25537" stroke-width="3.5" stroke-linecap="round" opacity="0.9">
+                      <path d="M36 160 H120 L140 140 H174"/>
+                      <path d="M360 60 H410 V90"/>
+                    </g>
+                    <!-- unrouted ratsnest -->
+                    <g stroke="#a3a3a3" stroke-width="1" stroke-dasharray="3 3">
+                      <line x1="211" y1="196" x2="300" y2="300"/>
+                      <line x1="219" y1="196" x2="330" y2="300"/>
+                      <line x1="227" y1="196" x2="420" y2="260"/>
+                      <line x1="256" y1="167" x2="440" y2="200"/>
+                      <line x1="256" y1="175" x2="440" y2="220"/>
+                      <line x1="174" y1="183" x2="60" y2="290"/>
+                    </g>
+                    <g font-size="11" fill="#737373" font-family="Geist, system-ui, sans-serif">
+                      <text x="404" y="128">Antenna keep-out</text>
+                      <text x="16" y="330">Ground pour</text>
+                    </g>
+                  </svg>
+                </div>
+                <div style="display: flex; gap: 16px; flex-wrap: wrap; padding: 8px 14px; border-top: 1px solid #f0f0f0; font-size: 12px; color: #525252">
+                  <span style="display: inline-flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 16px; height: 3px; background: #d97757"></span>Routed</span>
+                  <span style="display: inline-flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 16px; height: 3px; background: #b25537"></span>Locked by you</span>
+                  <span style="display: inline-flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 16px; border-top: 1px dashed #a3a3a3"></span>Not yet routed</span>
+                </div>
+              </figure>
+              <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #737373">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+                Routing the last 14 core nets…
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- Right column -->
+        <aside aria-label="Run controls" style="flex: 1 1 280px; max-width: 340px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+          <section aria-labelledby="can-h" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px">
+            <h2 id="can-h" style="margin: 0; font-size: 15px; font-weight: 600">What you can do</h2>
+            <div style="display: flex; gap: 10px; align-items: flex-start">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" style="margin-top: 3px; flex: 0 0 16px"><path d="M9 5v14M15 5v14"/></svg>
+              <div><div style="font-weight: 500">Pause</div><div style="font-size: 13px; color: #525252">Keeps routed nets. Resume any time.</div></div>
+            </div>
+            <div style="display: flex; gap: 10px; align-items: flex-start">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" style="margin-top: 3px; flex: 0 0 16px"><path d="M6 6l12 12M18 6 6 18"/></svg>
+              <div><div style="font-weight: 500">Cancel</div><div style="font-size: 13px; color: #525252">Stops within seconds and keeps routed nets.</div></div>
+            </div>
+            <div style="display: flex; gap: 10px; align-items: flex-start">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-top: 3px; flex: 0 0 16px"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+              <div><div style="font-weight: 500">Move up the queue</div><div style="font-size: 13px; color: #525252">Runs before your other waiting jobs.</div></div>
+            </div>
+          </section>
+          <section aria-labelledby="where-h" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 6px">
+            <h2 id="where-h" style="margin: 0; font-size: 15px; font-weight: 600">Where it runs</h2>
+            <p style="margin: 0; color: #525252">AWS Batch graphics card queue</p>
+            <div style="font-size: 12px; color: #737373">Started 10:00 by trace for Marc Teichtahl</div>
+          </section>
+          <p style="margin: 0; display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: #525252">
+            <span style="width: 8px; height: 8px; border-radius: 4px; background: #16a34a; margin-top: 6px; flex: 0 0 8px" aria-hidden="true"></span>
+            Updates live as the job reports each step.
+          </p>
+        </aside>
+      </div>
+
+      <!-- Finished run summary -->
+      <section aria-labelledby="prev-h" style="border: 1px solid #e5e5e5; border-radius: 12px; padding: 16px 20px; display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap">
+        <span style="flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: #b91c1c; background: #fef2f2; border-radius: 6px; padding: 1px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m15 9-6 6M9 9l6 6"/></svg>Failed</span>
+        <div style="flex: 1 1 360px; min-width: 0">
+          <h2 id="prev-h" style="margin: 0; font-size: 14px; font-weight: 500">Earlier run <span style="font-family: 'Geist Mono', monospace">run_6d20</span> · Failed · 3 nets could not fit between U4's pins</h2>
+          <p style="margin: 2px 0 0; font-size: 13px; color: #525252">trace suggested moving U4 2 mm left · <span style="color: #15803d; font-weight: 500">✓ You accepted</span> · yesterday 16:40</p>
+        </div>
+        <button type="button" style="flex: 0 0 auto; border: 0; background: transparent; font: inherit; font-size: 13px; color: #525252; cursor: pointer">Details ▸</button>
+      </section>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>
