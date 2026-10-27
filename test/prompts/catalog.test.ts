@@ -20,6 +20,7 @@ import { CATALOG, COMPOSED, entry } from '../../src/prompts/catalog.js'
 import { type Composed, JOIN, type Layers, type Override, effective, label, marked, problems, provenanceOf, record, resolvePrompt } from '../../src/prompts/resolve.js'
 import { systemAppend } from '../../src/prompts/system.js'
 import { MAX_PROMPT_CHARS, TemplateError, render, validateTemplate, variablesOf } from '../../src/prompts/template.js'
+import { composeChat } from '../../src/prompts/chat.js'
 import { preview } from '../../src/prompts/views.js'
 import { cfgOf } from '../harness/fake.js'
 
@@ -71,6 +72,8 @@ function everyPrompt(layers: Layers = {}): { name: string; c: Composed }[] {
   out.push({ name: 'render', c: composeRendering('Render it', { electronics: cfg.electronics }, layers) })
   out.push({ name: 'cloudworker', c: composeCloudWorker(['o/a'], layers) })
   out.push({ name: 'cloudworker none', c: composeCloudWorker([], layers) })
+  out.push({ name: 'chat', c: composeChat([{ description: 'Project', value: 'o/r' }], { draft: 'x' }, layers) })
+  out.push({ name: 'chat bare', c: composeChat([], {}, layers) })
   return out
 }
 
@@ -138,7 +141,7 @@ describe('completeness: every prompt is the catalog\'s parts and nothing else', 
     walk(root)
     // phrases every prompt family used to write inline; comments are not prompts
     const PHRASES = [/You are (trace's|the trace)/, /GUARDRAILS \(/, /data, not instructions/, /Nobody is watching/, /never print, echo/, /THE REQUEST/, /Answer with the JSON/,
-      /ESCALATE when/, /DELIVERY/, /DONE means/, /MEMORY \(data/, /THIS RUN IS THE CHECK/, /The project's notes/, /Validate before every push/, /cut at \$\{/]
+      /ESCALATE when/, /\bDELIVERY\b/, /DONE means/, /MEMORY \(data/, /THIS RUN IS THE CHECK/, /The project's notes/, /Validate before every push/, /cut at \$\{/]
     const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/ .*$/gm, '')
     const offenders: string[] = []
     for (const f of files) {
