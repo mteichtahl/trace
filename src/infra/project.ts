@@ -11,7 +11,10 @@
  *             src/core/central.ts), never delete it; read/write projects/<slug>/* and jobs/<slug>/*; list only those
  *             prefixes; nothing of access/*, nor of any other project. projects/<slug>/memory-state/* (which memory
  *             records people marked inactive) is read only: writes there are denied. prompts/* (the installation's
- *             prompt overrides) is read only too: nothing grants a write there
+ *             prompt overrides) is read only too: nothing grants a write there. projects/<slug>/journey and /chats
+ *             (what people decided and said) are read only as well. projects/<slug>/journey-agent (the agents' own
+ *             facts about the journey: questions, criterion checks, stuck notes) is written, but only with a
+ *             conditional put and never deleted (AgentFactsConditional), the way its store writes
  *   memory    its own memory only (<prefix>_m_<hash>), and on it still only events of actors `<owner>/<repo>/*` and
  *             records under `/trace/<owner>/<repo>/*` (the encodings of src/agents/runtime/memory.ts), as defence in depth
  *   secret    <prefix>/github-token/<slug> only
@@ -93,6 +96,10 @@ import {
 
 /** A project's records that only people change, through the API (src/infra/stack.ts CHATS_PREFIX, JOURNEY_PREFIX). */
 export const PEOPLE_RECORDS = ['journey', 'chats'] as const
+/** What a project's agents contribute to its journey (src/core/agent-facts.ts AGENT_FACTS_FOLDER): the worker and the
+ * workflows write it with conditional puts only, the API reads it. Not under journey/: PeopleRecordsReadOnly's
+ * projects/<slug>/journey/* does not match projects/<slug>/journey-agent/*. */
+export const AGENT_FACTS = 'journey-agent'
 export const batchEventsTopicName = (prefix: string, hash: string): string => `${prefix}-${hash}-batch-events`
 
 /** The central bucket's prefixes: the shared database, the access store beside it (src/core/access.ts), and the
@@ -254,6 +261,20 @@ export class ProjectStack extends Construct {
       resources: PEOPLE_RECORDS.map((p) => bucket.arnForObjects(`${projectDataPrefix(repository)}/${p}/*`)),
     })
     role.addToPolicy(peopleRecords)
+    // what the agents contribute to the journey (projects/<slug>/journey-agent, src/core/agent-facts.ts): written through
+    // projects/<slug>/*, but only as its store writes, with a conditional put (If-Match / If-None-Match), and never
+    // deleted, so a stray unconditional write from Bash cannot clobber another job's facts
+    const agentFacts = new iam.PolicyStatement({
+      sid: 'AgentFactsConditional', effect: iam.Effect.DENY, actions: ['s3:PutObject'],
+      resources: [bucket.arnForObjects(`${projectDataPrefix(repository)}/${AGENT_FACTS}/*`)],
+      conditions: { Null: { 's3:if-match': 'true', 's3:if-none-match': 'true' } },
+    })
+    const agentFactsKept = new iam.PolicyStatement({
+      sid: 'AgentFactsNoDelete', effect: iam.Effect.DENY, actions: ['s3:DeleteObject', 's3:DeleteObjectVersion'],
+      resources: [bucket.arnForObjects(`${projectDataPrefix(repository)}/${AGENT_FACTS}/*`)],
+    })
+    role.addToPolicy(agentFacts)
+    role.addToPolicy(agentFactsKept)
 
     // ------------------------------------------------------------------ its memory (src/infra/memory.ts)
     this.memory = cfg.memory.enabled
@@ -465,6 +486,8 @@ export class ProjectStack extends Construct {
     grantPrefixes(this.actionsRole, bucket, { read: [PROMPTS_PREFIX] })
     this.actionsRole.addToPolicy(memoryState.copy())
     this.actionsRole.addToPolicy(peopleRecords.copy())
+    this.actionsRole.addToPolicy(agentFacts.copy())
+    this.actionsRole.addToPolicy(agentFactsKept.copy())
     // the in-Actions fallback remembers as the worker does: its own memory, its own actors and namespaces
     if (this.memory) for (const st of memoryStatements(this.memory)) this.actionsRole.addToPolicy(st)
     // and searches and syncs its own knowledge base (the kb-sync job on a push to the default branch, and the fallback)

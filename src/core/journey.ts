@@ -38,6 +38,13 @@
  * same label settings use (`by`: their email). The computations here are pure: stage states, criteria counts, the one
  * next step and whether a gate may be signed are worked out from the rows on every read, never stored.
  *
+ * What agents contribute is not in this record: they cannot write it (src/infra/project.ts PeopleRecordsReadOnly). They
+ * keep their own facts beside it (src/core/agent-facts.ts: their questions, their checks of the criteria trace owns,
+ * and when they are stuck), and every view here takes those facts as input (mergeAgentFacts, below): an agent's
+ * question is a question, its newer check of a trace-owned criterion sets that criterion's status, and a stuck agent is
+ * a stuck item. A person's answer to an agent's question is written here, under the agent's question id. Person-owned
+ * criteria never move from an agent's fact.
+ *
  * All person-facing words follow the design's plain language: no unexplained acronyms, the point first.
  */
 import { randomUUID } from 'node:crypto'
@@ -408,7 +415,14 @@ export interface QuestionRow {
   id: string; kind: 'question' | 'stuck'; askedBy: string; askedOf: string | null; stage: StageId | null; text: string; blocks: string | null
   options: OptionRow[]; sources: Evidence[]; jobId: string | null; askedAt: number
   answer: string | null; optionId: string | null; answerReason: string | null; answeredBy: string | null; answeredByHash: string | null; answeredAt: number | null
+  /** an agent's fact (src/core/agent-facts.ts), merged in: who it is for by Cognito sub, or by part, and a stuck agent's recommendation */
+  askedOfSub?: string | null | undefined
+  askedPart?: AskedPart | null | undefined
+  recommendation?: string | null | undefined
+  from?: 'agent' | undefined
 }
+/** Who an agent's question is for when it names no one: the project's contributors (admins too), or its admins. */
+export type AskedPart = 'contributors' | 'admins'
 export const SEVERITIES = ['cosmetic', 'degraded', 'failure', 'safety'] as const
 export type Severity = (typeof SEVERITIES)[number]
 export const WAIVER_TARGETS = ['criterion', 'requirement', 'finding', 'test'] as const
@@ -473,11 +487,13 @@ export function loadJourney(db: DatabaseSync): JourneyRecord | null {
 
 // ------------------------------------------------------------------ the computed view (pure)
 
-/** Who is looking: what the next step and the inbox are worked out for. */
+/** Who is looking: what the next step and the inbox are worked out for (`sub`: their Cognito sub, which an agent's
+ * question may be asked of). */
 export interface Viewer {
   /** the person's 16-character hash (of their Cognito sub): what new marks are written under */
   hash: string
   label: string; admin: boolean; part: 'contributor' | 'reviewer' | null
+  sub?: string | undefined
   /** other hashes the person's earlier marks may carry (the email's, from before identity was keyed on the sub) */
   also?: readonly string[] | undefined
 }
@@ -518,9 +534,11 @@ export interface NextStep {
   ref: { kind: 'gate' | 'criterion' | 'question' | 'stage'; id: string } | null
 }
 export interface QuestionView {
-  id: string; kind: 'question' | 'stuck'; asked_by: string; for_you: boolean; for: 'you' | 'person' | 'contributors'; stage: StageId | null
+  id: string; kind: 'question' | 'stuck'; asked_by: string; for_you: boolean; for: 'you' | 'person' | 'contributors' | 'admins'; stage: StageId | null
   text: string; blocks: string | null; options: OptionRow[]; recommended: OptionRow | null; sources: Evidence[]; job_id: string | null; asked_at: string
   answered: { answer: string; option_id: string | null; reason: string | null; by: string | null; at: string } | null
+  /** a stuck agent's recommendation, in its words (agent facts) */
+  recommendation?: string | undefined
 }
 export interface WaiverView {
   id: string; stage: StageId; gate: string | null; target: { kind: string; id: string }; reason: string; risk: string; severity: Severity
@@ -606,8 +624,9 @@ function criterionViews(r: JourneyRecord, gate: string, viewer: Viewer): Criteri
 
 const isMet = (c: CriterionView): boolean => c.status === 'met' || c.status === 'waived'
 
-/** One gate as people see it. */
-export function gateView(r: JourneyRecord, id: string, viewer: Viewer): GateView {
+/** One gate as people see it (`facts`: the agents' facts, merged in first). */
+export function gateView(r0: JourneyRecord, id: string, viewer: Viewer, facts?: AgentFacts | null): GateView {
+  const r = facts ? mergeAgentFacts(r0, facts) : r0
   const g = r.gates.find((x) => x.id === id)
   if (!g) throw new JourneyError(`There is no gate called ${id} in this project.`)
   const criteria = criterionViews(r, id, viewer)
@@ -626,15 +645,28 @@ export function gateView(r: JourneyRecord, id: string, viewer: Viewer): GateView
   }
 }
 
-/** Whether a question is for this viewer: asked of them, or of no one and they are a contributor (or an admin). */
-const questionFor = (q: QuestionRow, v: Viewer): boolean => (q.askedOf ? isViewer(v, q.askedOf) : v.admin || v.part === 'contributor')
+/**
+ * Whether a question is for this viewer: asked of them (by sub, or by hash: their sub's, or their email's on questions asked before), of the admins and they are one, or of no
+ * one and they are a contributor (or an admin).
+ */
+const questionFor = (q: QuestionRow, v: Viewer): boolean => {
+  if (q.askedOfSub) return q.askedOfSub === v.sub
+  if (q.askedOf) return isViewer(v, q.askedOf)
+  if (q.askedPart === 'admins') return v.admin
+  return v.admin || v.part === 'contributor'
+}
+/** Whether a question (an agent's included) is for this viewer to answer. */
+export const questionIsFor = (q: QuestionRow, v: Viewer): boolean => questionFor(q, v)
+const questionForWhom = (q: QuestionRow, v: Viewer): QuestionView['for'] =>
+  q.askedOfSub || q.askedOf ? (questionFor(q, v) ? 'you' : 'person') : q.askedPart === 'admins' ? 'admins' : 'contributors'
 
 function questionView(q: QuestionRow, v: Viewer): QuestionView {
   return {
-    id: q.id, kind: q.kind, asked_by: q.askedBy, for_you: questionFor(q, v), for: q.askedOf ? (isViewer(v, q.askedOf) ? 'you' : 'person') : 'contributors',
+    id: q.id, kind: q.kind, asked_by: q.askedBy, for_you: questionFor(q, v), for: questionForWhom(q, v),
     stage: q.stage, text: q.text, blocks: q.blocks, options: q.options, recommended: q.options.find((o) => o.recommended) ?? null,
     sources: q.sources, job_id: q.jobId, asked_at: isoN(q.askedAt),
     answered: q.answeredAt !== null ? { answer: q.answer ?? '', option_id: q.optionId, reason: q.answerReason, by: q.answeredBy, at: isoN(q.answeredAt) } : null,
+    ...(q.recommendation ? { recommendation: q.recommendation } : {}),
   }
 }
 
@@ -673,12 +705,13 @@ export function nextStep(r: JourneyRecord, viewer: Viewer, at: number = now()): 
     if (forYou) {
       return {
         kind: 'answer', belongs_to: 'you', yours: true, summary: `${verb}: ${q.text}`, why: q.blocks ? `It blocks ${q.blocks.replace(/\.$/, '')}.` : 'The agent cannot go on without it.',
-        recommendation: rec ? `trace recommends ${rec.label}${rec.why ? `: ${rec.why}` : ''}` : null, button: rec ? `Use ${rec.label}` : 'Answer', stage: q.stage, ref: { kind: 'question', id: q.id },
+        recommendation: rec ? `trace recommends ${rec.label}${rec.why ? `: ${rec.why}` : ''}` : q.recommendation ? `${q.askedBy} recommends: ${q.recommendation}` : null,
+        button: rec ? `Use ${rec.label}` : 'Answer', stage: q.stage, ref: { kind: 'question', id: q.id },
       }
     }
     return {
-      kind: 'waiting_person', belongs_to: q.askedOf ? 'person' : 'contributors', yours: false,
-      summary: `Waiting for ${q.askedOf ? 'a person on the project' : 'a contributor'} to answer: ${q.text} Asked ${ago(q.askedAt, at)}.`,
+      kind: 'waiting_person', belongs_to: q.askedOf || q.askedOfSub ? 'person' : q.askedPart === 'admins' ? 'admins' : 'contributors', yours: false,
+      summary: `Waiting for ${q.askedOf || q.askedOfSub ? 'a person on the project' : q.askedPart === 'admins' ? 'an admin' : 'a contributor'} to answer: ${q.text} Asked ${ago(q.askedAt, at)}.`,
       why: q.blocks ? `It blocks ${q.blocks.replace(/\.$/, '')}.` : 'The agent cannot go on without it.', recommendation: null,
       button: viewer.admin ? 'Answer it for them' : 'Read the question', stage: q.stage, ref: { kind: 'question', id: q.id },
     }
@@ -727,8 +760,9 @@ export function nextStep(r: JourneyRecord, viewer: Viewer, at: number = now()): 
 
 const cap = (s: string): string => `${s[0]?.toUpperCase() ?? ''}${s.slice(1)}`
 
-/** The whole journey as people see it, for this viewer. */
-export function journeyView(r: JourneyRecord, viewer: Viewer, at: number = now()): JourneyView {
+/** The whole journey as people see it, for this viewer (`facts`: the agents' facts, merged in first). */
+export function journeyView(r0: JourneyRecord, viewer: Viewer, at: number = now(), facts?: AgentFacts | null): JourneyView {
+  const r = facts ? mergeAgentFacts(r0, facts) : r0
   const curOrd = r.stages.find((s) => s.id === r.journey.currentStage)?.ord ?? 0
   const gates = r.gates.map((g) => gateView(r, g.id, viewer))
   const stages: StageView[] = r.stages.map((s) => {
@@ -843,8 +877,9 @@ export function setCriterion(db: DatabaseSync, id: string, status: 'met' | 'not_
 export interface Signer { hash: string; label: string; also?: readonly string[] | undefined }
 
 /** Sign a gate (the caller has checked the signer is an admin). Moves the project on when it closes the stage. */
-export function signGate(db: DatabaseSync, id: string, signer: Signer, o: { acknowledged?: readonly string[] | undefined; notes?: string | null | undefined } = {}): { gate: GateView; advanced_to: StageId | null; released: boolean; summary: string } {
-  const r = need(db)
+export function signGate(db: DatabaseSync, id: string, signer: Signer, o: { acknowledged?: readonly string[] | undefined; notes?: string | null | undefined; facts?: AgentFacts | null | undefined } = {}): { gate: GateView; advanced_to: StageId | null; released: boolean; summary: string } {
+  // the agents' checks of the criteria trace owns count; the signing rules are the same
+  const r = withFacts(need(db), o.facts)
   const viewer: Viewer = { hash: signer.hash, label: signer.label, also: signer.also, admin: true, part: 'contributor' }
   const blockers = signBlockers(r, id, viewer, o.acknowledged ?? [])
   if (blockers.length) throw new JourneyError(`The gate cannot be signed yet. ${blockers.join(' ')}`)
@@ -866,7 +901,7 @@ export function signGate(db: DatabaseSync, id: string, signer: Signer, o: { ackn
       detail: { notes: o.notes ?? null },
     })
   })
-  const after = need(db)
+  const after = withFacts(need(db), o.facts)
   // the Release stage has no gate of its own: it is passed by the signature before it, and that is when a release is cut
   const ord = (st: StageId | null): number => r.stages.find((x) => x.id === st)?.ord ?? -1
   const released = advanced !== null && r.stages.some((x) => x.id === 'release') && ord(gate.stage) < ord('release') && ord('release') < ord(advanced)
@@ -934,8 +969,20 @@ function reopenStage(db: DatabaseSync, r: JourneyRecord, stage: StageId, reason:
 
 const VAGUE = /^(it depends|you decide|not needed|n\/?a|none|no|ok|yes|whatever)\.?$/i
 
-/** Answer an agent's question: the recommended option, another option with a reason, or an answer in words with a reason. */
-export function answerQuestion(db: DatabaseSync, id: string, by: Signer, a: { option?: string | undefined; answer?: string | undefined; reason?: string | undefined }): QuestionView {
+/**
+ * Answer an agent's question: the recommended option, another option with a reason, or an answer in words with a reason.
+ * With `facts`, a question an agent keeps in its own facts (src/core/agent-facts.ts) is answered here under its id: the
+ * question is copied into this record with the answer, so the record keeps what was asked and the agent reads the answer.
+ */
+export function answerQuestion(db: DatabaseSync, id: string, by: Signer, a: { option?: string | undefined; answer?: string | undefined; reason?: string | undefined }, o: { facts?: AgentFacts | null | undefined } = {}): QuestionView {
+  const r0 = need(db)
+  if (!r0.questions.some((x) => x.id === id) && o.facts) {
+    const fact = withFacts(r0, o.facts).questions.find((x) => x.id === id)
+    if (fact) {
+      db.prepare(`INSERT INTO questions (id, kind, asked_by, asked_of, stage, text, blocks, options, sources, job_id, asked_at, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(id, fact.kind, fact.askedBy, null, fact.stage, fact.text, fact.blocks, JSON.stringify(fact.options), JSON.stringify(fact.sources), fact.jobId, fact.askedAt, now())
+    }
+  }
   const r = need(db)
   const q = r.questions.find((x) => x.id === id)
   if (!q) throw new JourneyError(`There is no question ${id} in this project.`)
@@ -958,7 +1005,7 @@ export function answerQuestion(db: DatabaseSync, id: string, by: Signer, a: { op
       summary: `${q.askedBy} asked: ${q.text} Answered: ${text}${differs && recommended ? ` (not the recommended ${recommended.label}, because ${reason})` : ''}.`,
     })
   })
-  const after = need(db).questions.find((x) => x.id === id) as QuestionRow
+  const after = withFacts(need(db), o.facts).questions.find((x) => x.id === id) as QuestionRow
   return questionView(after, { hash: by.hash, label: by.label, also: by.also, admin: false, part: 'contributor' })
 }
 
@@ -973,8 +1020,8 @@ export interface WaiverInput {
 }
 
 /** Take a waiver (the Waiver skill's quality bar is checked here). */
-export function addWaiver(db: DatabaseSync, w: WaiverInput, by: Signer): WaiverView {
-  const r = need(db)
+export function addWaiver(db: DatabaseSync, w: WaiverInput, by: Signer, o: { facts?: AgentFacts | null | undefined } = {}): WaiverView {
+  const r = withFacts(need(db), o.facts)
   const reason = w.reason.trim()
   if (reason.length < 10 || VAGUE.test(reason)) throw new JourneyError('Give the reason it cannot or need not be met now; "not needed" alone is not enough.')
   if (w.risk.trim().length < 5) throw new JourneyError('Say what goes wrong if the reason is mistaken.')
@@ -1103,7 +1150,8 @@ export interface InboxItem {
  * The four kinds that earn a notification on one project, for one viewer (docs/ui-design.md "Notifications"): gates
  * and spend go to admins; questions and stuck agents to the person asked, or the contributors when no one was.
  */
-export function inboxItems(repo: string, r: JourneyRecord, viewer: Viewer, at: number = now()): InboxItem[] {
+export function inboxItems(repo: string, r0: JourneyRecord, viewer: Viewer, at: number = now(), facts?: AgentFacts | null): InboxItem[] {
+  const r = facts ? mergeAgentFacts(r0, facts) : r0
   const out: InboxItem[] = []
   const project = r.journey.name ?? repo
   const stage = r.journey.currentStage
@@ -1128,7 +1176,7 @@ export function inboxItems(repo: string, r: JourneyRecord, viewer: Viewer, at: n
     const rec = q.options.find((o) => o.recommended)
     out.push({
       id: `question:${q.id}`, kind: q.kind === 'stuck' ? 'stuck' : 'question', repo, project, stage: q.stage ?? stage,
-      summary: `${lead}${q.kind === 'stuck' ? `${q.askedBy} is stuck: ` : `${q.askedBy} asks: `}${q.text}${rec ? ` It recommends ${rec.label}.` : ''}`,
+      summary: `${lead}${q.kind === 'stuck' ? `${q.askedBy} is stuck: ` : `${q.askedBy} asks: `}${q.text}${rec ? ` It recommends ${rec.label}.` : q.recommendation ? ` It recommends: ${q.recommendation.replace(/\.$/, '')}.` : ''}`,
       since: isoN(q.askedAt), waited: ago(q.askedAt, at), blocking: q.kind === 'stuck' || Boolean(q.blocks?.trim()), action: q.kind === 'stuck' ? 'See options' : 'Answer',
       ref: { kind: 'question', id: q.id }, ...(rec ? { recommended: { id: rec.id, label: rec.label } } : {}),
     })
@@ -1139,3 +1187,73 @@ export function inboxItems(repo: string, r: JourneyRecord, viewer: Viewer, at: n
 /** Most blocking first, then the oldest. */
 export const sortInbox = (items: InboxItem[]): InboxItem[] =>
   [...items].sort((a, b) => Number(b.blocking) - Number(a.blocking) || a.since.localeCompare(b.since))
+
+// ------------------------------------------------------------------ the agents' facts (src/core/agent-facts.ts)
+
+/** An agent's question for a person, the project's contributors or its admins (its own facts, never this record). */
+export interface AgentQuestion {
+  id: string; askedBy: string; askedOfSub: string | null; askedPart: AskedPart; stage: StageId | null; text: string; blocks: string | null
+  options: OptionRow[]; sources: Evidence[]; jobId: string | null; askedAt: number
+}
+/** An agent's check of a criterion trace owns: the newest one for a criterion supersedes the ones before it. */
+export interface CriterionCheck {
+  id: string; criterion: string; status: 'met' | 'not_met'; evidence: Evidence[]; checkedAt: number; by: string; jobId: string | null; revision: string | null
+}
+/** An agent that is stuck: why, what it recommends, and its options when it has any. */
+export interface StuckFact {
+  id: string; jobId: string | null; agent: string; why: string; recommendation: string; options: OptionRow[]; sources: Evidence[]
+  stage: StageId | null; at: number; resolvedAt: number | null
+}
+/** What the agents contributed to one project (the newest check per criterion only). */
+export interface AgentFacts { questions: AgentQuestion[]; checks: CriterionCheck[]; stuck: StuckFact[] }
+export const NO_AGENT_FACTS: AgentFacts = { questions: [], checks: [], stuck: [] }
+
+const withFacts = (r: JourneyRecord, f: AgentFacts | null | undefined): JourneyRecord => (f ? mergeAgentFacts(r, f) : r)
+
+/**
+ * The record with the agents' facts merged in, the rules every view follows:
+ *
+ *   questions   each agent question is a question (from: 'agent'), for the person whose sub it names, else for its
+ *               part. A person's answer is the record's row under the same id: its answer is kept, the agent's
+ *               routing and words stand
+ *   checks      for a criterion trace owns, the agent's check sets status, evidence, when and by whom when it is newer
+ *               than the record's own, was made on this revision, and is not older than the reopening of the
+ *               criterion's stage. A person-owned criterion is never moved by an agent's fact
+ *   stuck       an agent that is stuck and not resolved (or that a person answered) is a 'stuck' item for the
+ *               contributors, its recommendation with it
+ */
+export function mergeAgentFacts(r: JourneyRecord, f: AgentFacts): JourneyRecord {
+  const own = new Map(r.questions.map((q) => [q.id, q]))
+  const answer = (id: string): Partial<QuestionRow> => {
+    const p = own.get(id)
+    return p ? { answer: p.answer, optionId: p.optionId, answerReason: p.answerReason, answeredBy: p.answeredBy, answeredByHash: p.answeredByHash, answeredAt: p.answeredAt } : {}
+  }
+  const unanswered = { answer: null, optionId: null, answerReason: null, answeredBy: null, answeredByHash: null, answeredAt: null }
+  const asked: QuestionRow[] = f.questions.map((q) => ({
+    id: q.id, kind: 'question', askedBy: q.askedBy, askedOf: null, askedOfSub: q.askedOfSub, askedPart: q.askedPart, stage: q.stage, text: q.text, blocks: q.blocks,
+    options: q.options, sources: q.sources, jobId: q.jobId, askedAt: q.askedAt, from: 'agent', ...unanswered, ...answer(q.id),
+  }))
+  const stuck: QuestionRow[] = f.stuck.filter((s) => s.resolvedAt === null || own.get(s.id)?.answeredAt != null).map((s) => ({
+    id: s.id, kind: 'stuck', askedBy: s.agent, askedOf: null, askedOfSub: null, askedPart: 'contributors', stage: s.stage, text: s.why,
+    blocks: s.jobId ? `the job ${s.jobId}` : null, options: s.options, sources: s.sources, jobId: s.jobId, askedAt: s.at, recommendation: s.recommendation,
+    from: 'agent', ...unanswered, ...answer(s.id),
+  }))
+  const theirs = new Set([...asked, ...stuck].map((q) => q.id))
+  const questions = [...r.questions.filter((q) => !theirs.has(q.id)), ...asked, ...stuck].sort((a, b) => a.askedAt - b.askedAt)
+
+  const newest = new Map<string, CriterionCheck>()
+  for (const c of f.checks) {
+    const was = newest.get(c.criterion)
+    if (!was || c.checkedAt >= was.checkedAt) newest.set(c.criterion, c)
+  }
+  const criteria = r.criteria.map((c) => {
+    const k = newest.get(c.id)
+    if (!k || c.owner !== 'trace') return c
+    if (k.revision !== null && k.revision !== r.journey.revision) return c
+    const stage = r.stages.find((s) => s.id === r.gates.find((g) => g.id === c.gate)?.stage)
+    if (stage?.reopenedAt != null && k.checkedAt < stage.reopenedAt) return c
+    if (c.checkedAt !== null && c.checkedAt > k.checkedAt) return c
+    return { ...c, status: k.status, evidence: k.evidence, checkedAt: k.checkedAt, checkedBy: k.by }
+  })
+  return { ...r, questions, criteria }
+}

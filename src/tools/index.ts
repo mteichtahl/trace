@@ -6,6 +6,7 @@ import { tools as calc } from './calc/tools.js'
 import { tools as datasheets } from './datasheets/tools.js'
 import { tools as firmware } from './firmware/tools.js'
 import { tools as hil } from './hil/tools.js'
+import { tools as journey } from './journey/tools.js'
 import { tools as kb } from './kb/tools.js'
 import { tools as kicad } from './kicad/tools.js'
 import { tools as parts } from './parts/tools.js'
@@ -24,6 +25,6 @@ import { tools as thermal } from './thermal/tools.js'
 let registry: Registry | null = null
 
 export function allTools(): Registry {
-  registry ??= new Registry([...calc, ...kicad, ...sim, ...datasheets, ...parts, ...hil, ...firmware, ...runs, ...render, ...pcb, ...memory, ...protocol, ...ams, ...emc, ...verify, ...fpga, ...layout, ...thermal, ...kb, ...agent])
+  registry ??= new Registry([...calc, ...kicad, ...sim, ...datasheets, ...parts, ...hil, ...firmware, ...runs, ...render, ...pcb, ...memory, ...protocol, ...ams, ...emc, ...verify, ...fpga, ...layout, ...thermal, ...kb, ...journey, ...agent])
   return registry
 }

@@ -4,7 +4,7 @@
  *
  *   the API      checks the person's access (read, or write for WRITE_TOOLS), then InvokeAgentRuntime on the
  *                project's own worker runtime, in one session per project (src/api/workers.ts)
- *   this module  refuses hardware tools and the session-scoped ones (memory.*, agent.*), refuses paths outside the
+ *   this module  refuses hardware tools and the session-scoped ones (memory.*, agent.*, journey.*), refuses paths outside the
  *                clone, clones (or fetches) the default branch, and runs the tool through the registry there: no
  *                model, no job. Calls run one at a time, since tools resolve the project from the working directory.
  *
@@ -16,8 +16,10 @@ import type { Registry } from '../../core/registry.js'
 import type { Exec } from './job.js'
 import type { ToolJob } from './schemas.js'
 
-/** Tools scoped by a job's environment (its project, agent, session or delegation token): never through the API. */
-export const API_HIDDEN_TOOLS: ReadonlySet<string> = new Set(['memory.recall', 'memory.remember', 'agent.delegate'])
+/** Tools scoped by a job's environment (its project, agent, session or delegation token): never through the API. The
+ * journey.* tools record what an agent contributes (src/tools/journey); people act through question.answer and the
+ * other journey actions instead. */
+export const API_HIDDEN_TOOLS: ReadonlySet<string> = new Set(['memory.recall', 'memory.remember', 'agent.delegate', 'journey.status', 'journey.ask', 'journey.check', 'journey.stuck'])
 
 /** Tool arguments that name files: they must stay inside the clone. `library` (another store) is refused outright. */
 export const PATH_KEYS: ReadonlySet<string> = new Set(['path', 'file', 'files', 'schematic', 'project', 'board', 'pcb', 'out_dir', 'models', 'include_dirs', 'dir', 'root'])

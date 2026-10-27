@@ -82,7 +82,7 @@ import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
 import { GithubConnection, RunnerProject } from './runner.js'
 import { SELF_WRITABLE, TraceWeb, addWebClient, traceWebProps } from './web.js'
-import { ACCESS_PREFIX, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
+import { ACCESS_PREFIX, AGENT_FACTS, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
   GPU_IMAGE_BUILD_OUTPUT, type InfraProps, ciRunnerOutput, LAYOUT_OUTPUT, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled,
   kbEnabled, projectRefs, projectSettings,
@@ -442,6 +442,9 @@ export class TraceStack extends Stack {
     // waiting for the next stack update (projects.create): read, and write only with conditional puts
     // and each project's journey record (journey.*, docs/web-build.md), under projects/<slug>/journey/
     grantPrefixes(apiRole, central, { conditional: [`${PROJECTS_PREFIX}/*/${CHATS_PREFIX}`, `${PROJECTS_PREFIX}/*/${JOURNEY_PREFIX}`, PENDING_PROJECTS] })
+    // what each project's agents contribute to its journey (projects/<slug>/journey-agent, src/core/agent-facts.ts):
+    // read and merged into the journey's views, never written by the API
+    grantPrefixes(apiRole, central, { read: [`${PROJECTS_PREFIX}/*/${AGENT_FACTS}`] })
     // every project's worker runtime of this installation: by its exact ARN (from its nested stack's output, or the
     // runtime itself when flat), and on the runtime also by this installation's tag. InvokeAgentRuntime authorizes the
     // runtime and the runtime endpoint (Service Authorization Reference: both resource types take aws:ResourceTag);

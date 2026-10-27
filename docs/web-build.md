@@ -120,7 +120,21 @@ is re-run on a fresh copy); every write answers the record's `version`. When a r
 Release stage follows) the record is copied into the repository: the default branch's `.trace/project.db` with its
 journey tables replaced, committed on `trace/release-<revision>-<time>` the way `settings.set` writes, and the commit
 logged in the decisions; `journey.snapshot` (admin) makes the same copy on demand. A project whose journey an older
-install kept in `.trace/project.db` has it imported into the bucket on first read. Chats and preferences are not in
+install kept in `.trace/project.db` has it imported into the bucket on first read.
+
+**What agents contribute** is kept beside the record, never in it (agents may read the record but not write it, so
+they can never sign, waive or answer for a person): `projects/<slug>/journey-agent/facts.db` (`src/core/agent-facts.ts`,
+the same conditional-write store), with `agent_questions` (options with exactly one recommended and a reason each,
+sources, what it blocks, asked of a person by Cognito sub or of the contributors or admins), `criterion_checks` (a
+criterion trace owns met or not met, with evidence, the agent and its job; the newest check of a criterion stands) and
+`stuck` (why, the recommendation, options). Agents write it through the worker tools `journey.status`, `journey.ask`
+(optionally waiting for the answer on a declared timer), `journey.check` and `journey.stuck`, which the API's `tool`
+action never runs. The worker and workflow roles may write it only with conditional puts and never delete it; the API
+role reads it. Every journey view (`journey.get`, the inbox, `gate.sign`, `waiver.add`, the guided skills) merges the
+facts in: an agent's question is a question, a check sets a trace-owned criterion's status (on its revision, not from
+before its stage was reopened, not over a newer row of the record), a stuck agent is a `stuck` item. `question.answer`
+writes the answer into the record under the agent's question id, which is where the agent reads it. A person-owned
+criterion never moves from an agent's fact. Chats and preferences are not in
 the repository either: chats in the central bucket under `projects/<slug>/chats/`, preferences in the access store.
 
 ## The app (`web/`)
