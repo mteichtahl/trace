@@ -29,6 +29,21 @@
  * its waits (src/core/wait-report.ts), the runtime mirrors them as that job's, and a check now reaches them. The
  * token dies, and the mirrors end, when the job ends.
  *
+ * QUEUE. A person's task, once routed (its agent known), asks for its turn in the project's queue (ctx.admit:
+ * src/agents/runtime/job-index.ts queueAdmit) before Claude starts: it waits while the project has a job of the same
+ * agent running, or worker.max_parallel jobs in all, or a person holds it. Work items are not queued (the workflows
+ * already limit them).
+ *
+ * PAUSE. A person may pause a running task (invocation kind `pause`): ctx.pauseSignal fires, and a PreToolUse hook
+ * stops Claude before its next tool call (`continue: false`), so the step in progress finishes and nothing is cut in
+ * half. The runner then commits what the checkout has (a "paused" commit) and pushes it on the task's branch (never
+ * the default branch), keeps Claude's transcript in the project's area (job-sessions/, worker only) and ends the job
+ * `paused` (JobPaused). Resume starts a task with `resume: { job, by }`: it checks out the same branch, restores the
+ * transcript and continues the same conversation (the Agent SDK's `resume`) with a short note that the files may
+ * have changed; without a kept transcript it starts fresh with what the branch has and the paused job's last step.
+ * A step that waits a long time (a graphics card job, a delegated worker) is not cut short: a delegated worker is
+ * paused with its specialist, and a remote job finishes its step first. A work item cannot be paused, only cancelled.
+ *
  * A sweep runs the worker-pick scan for each repository (same claims and attempt markers as the workflows) and starts
  * one work-item job per claimed item.
  *
@@ -44,13 +59,13 @@ import { type TraceConfig, load } from '../../core/config.js'
 import { loadConfig } from '../../harness/index.js'
 import type { Context, Core, GitHub } from '../../harness/types.js'
 import { type WorkItem, WorkItemSchema, pick } from '../../harness/worker.js'
-import type { JobContext, JobRunner } from './jobs.js'
+import { type JobContext, JobPaused, type JobRunner } from './jobs.js'
 import { addSecret } from '../../core/telemetry.js'
 import { claudeTelemetry } from './observe.js'
 import { type AgentMemory, type Actor, type JobMemory, NO_MEMORY, agentActor, memoryFromEnv, openJobMemory, personActor, sessionIdFor } from './memory.js'
 import { composeTask, taskBranch } from '../worker/prompt.js'
 import { SPECIALISTS, SPECIALIST_BUILTINS, type Specialist, allowedToolsOf, toolsOf } from '../index.js'
-import { composeSpecialist } from '../specialist.js'
+import { type Resumed, composeResumeNote, composeSpecialist } from '../specialist.js'
 import { type Composed, type Layers, NO_LAYERS, type Provenance, provenanceOf, record } from '../../prompts/resolve.js'
 import { InstallationPrompts, loadLayers } from '../../prompts/store.js'
 import { systemAppend } from '../../prompts/system.js'
@@ -88,7 +103,13 @@ export interface ClaudeOptions {
   settingSources: never[]
   systemPrompt: { type: 'preset'; preset: 'claude_code'; append: string }
   stderr: (data: string) => void
+  /** The pause hook: before each tool call, stop when a person has asked the job to pause. */
+  hooks?: { PreToolUse: { hooks: PauseHook[] }[] }
+  /** An Agent SDK session to continue (a resumed task). */
+  resume?: string
 }
+/** A PreToolUse hook (the SDK's HookCallback, as much of it as is used): `continue: false` stops Claude there. */
+export type PauseHook = (input: unknown, toolUseId: string | undefined, o: { signal: AbortSignal }) => Promise<{ continue?: boolean; stopReason?: string }>
 export type RunClaude = (args: { prompt: string; options: ClaudeOptions }) => AsyncIterable<unknown>
 
 export interface RunnerDeps {
@@ -134,6 +155,21 @@ export interface RunnerDeps {
    * (src/prompts/store.ts); absent: the catalog's defaults only.
    */
   prompts?: ((dir: string) => Promise<Layers>) | undefined
+  /**
+   * Where a paused job's transcript is kept and a resumed job finds what it carries on (src/agents/runtime/job-index.ts,
+   * the project's area); absent: a paused job keeps only its branch, and a resumed one starts fresh from it.
+   */
+  paused?: PausedWork | undefined
+}
+
+/** A paused job's kept work, beyond its branch. */
+export interface PausedWork {
+  /** keep the transcript of `session` (run in `cwd`); false when there was none to keep */
+  save(jobId: string, session: string, cwd: string): Promise<boolean>
+  /** put it back for a resumed job working in `cwd`; false when none was kept */
+  restore(jobId: string, session: string, cwd: string): Promise<boolean>
+  /** the paused job as the index has it: its branch, last step, who paused it, its kept session */
+  read(jobId: string): Promise<{ branch: string | null; step: string | null; pausedBy: string | null; pausedAt: string | null; session: string | null } | null>
 }
 
 /** The delegated worker's tools: everything, as before the specialists (the MCP server offers no agent.delegate to it). */
@@ -246,7 +282,13 @@ const ResultMessage = z.object({
   errors: z.array(z.string()).optional(),
 }).loose()
 
-export interface ClaudeOutcome { ok: boolean; text: string; turns: number }
+/**
+ * `paused`: it stopped at a safe point because a person asked (the pause hook ran); `session`: its Agent SDK session
+ * id (from the init or result message), what a resumed task continues.
+ */
+export interface ClaudeOutcome { ok: boolean; text: string; turns: number; paused?: boolean; session?: string | undefined }
+
+const SessionOf = z.object({ session_id: z.string().regex(/^[0-9a-f-]{8,64}$/) }).loose()
 
 export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS' | 'model' | 'env'>, o: {
   prompt: string; cwd: string; cfg: TraceConfig; token: string; signal: AbortSignal; log: (l: string) => void; redact: (s: string) => string
@@ -262,6 +304,10 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
   agent?: string
   /** Overrides: the model, the turn limit (else worker.max_turns), and the tools (a specialist's; else TOOLS). */
   model?: string | undefined
+  /** A person asked the job to pause: stop before Claude's next tool call (a PreToolUse hook), keep the session. */
+  pause?: AbortSignal | undefined
+  /** Continue this Agent SDK session (its transcript restored where Claude Code looks for it) rather than start one. */
+  resume?: string | undefined
   /** The system prompt's addition (systemAppend); absent: the catalog's defaults with these notes. */
   system?: Composed
   maxTurns?: number
@@ -274,6 +320,13 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
   const timer = setTimeout(() => stop(`stopping Claude: it ran longer than ${d.timeoutS} s`), d.timeoutS * 1000)
   timer.unref()
   const model = o.model || d.model || o.cfg.worker.model || undefined
+  let pausedHere = false
+  const pauseHook: PauseHook = async () => {
+    if (!o.pause?.aborted) return {}
+    if (!pausedHere) o.log('pausing here, before the next step: a person asked')
+    pausedHere = true
+    return { continue: false, stopReason: 'Paused by a person: the work so far is kept and the job carries on when it is resumed.' }
+  }
   // Spans for the query, each model response and each tool use (a no-op without an OpenTelemetry SDK); the MCP
   // server gets the trace context so its tool spans join this trace.
   const tel = await claudeTelemetry({ model, agent: o.agent })
@@ -293,13 +346,17 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
     settingSources: [],
     systemPrompt: { type: 'preset', preset: 'claude_code', append: (o.system ?? systemAppend(o.notes)).text },
     stderr: (s) => { const l = s.trim(); if (l) o.log(`claude: ${o.redact(l).slice(0, 500)}`) },
+    ...(o.pause ? { hooks: { PreToolUse: [{ hooks: [pauseHook] }] } } : {}),
+    ...(o.resume ? { resume: o.resume } : {}),
   }
   let last: z.infer<typeof ResultMessage> | null = null
+  let session: string | undefined
   let thrown: unknown
   try {
     for await (const m of d.claude({ prompt: o.prompt, options })) {
       try { o.onMessage?.(m) } catch { /* an observer never stops the job */ }
       tel.observe(m)
+      session ??= SessionOf.safeParse(m).data?.session_id
       const r = ResultMessage.safeParse(m)
       if (r.success) last = r.data
     }
@@ -313,10 +370,12 @@ export async function runClaude(d: Pick<RunnerDeps, 'claude' | 'cli' | 'timeoutS
     tel.end({ aborted: abort.signal.aborted, ...(abort.signal.aborted ? { error: abort.signal.reason } : thrown !== undefined ? { error: thrown } : {}) })
   }
   if (abort.signal.aborted) return { ok: false, text: errText(abort.signal.reason), turns: last?.num_turns ?? 0 }
+  // stopped by the pause hook: whatever the result message says, the job is paused, not finished
+  if (pausedHere) return { ok: false, paused: true, text: last?.result ?? 'paused', turns: last?.num_turns ?? 0, session }
   if (!last) return { ok: false, text: 'Claude ended without a result', turns: 0 }
   const ok = last.subtype === 'success' && !last.is_error
   const text = ok ? (last.result ?? '') : [`Claude stopped (${last.subtype})`, ...(last.errors ?? []), last.is_error ? last.result ?? '' : ''].filter(Boolean).join(': ')
-  return { ok, text, turns: last.num_turns ?? 0 }
+  return { ok, text, turns: last.num_turns ?? 0, session }
 }
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
@@ -518,12 +577,18 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     let branch = p.kind === 'task' ? taskBranch(p, cfg) : prep.branch
     if (prep.from !== 'none') branch = await checkoutBranch({ ...g, defaultBranch: base.defaultBranch, branch, from: prep.from })
     else branch = base.defaultBranch
+    ctx.branch?.(branch)
+    // a resumed task: the paused job it carries on (its branch is this one: the API resumes it with that branch)
+    const resumeOf = p.kind === 'task' && p.resume ? p.resume : null
+    const prior = resumeOf ? await d.paused?.read(resumeOf.job).catch(() => null) ?? null : null
 
     // the item's labels, body and latest comments: for the router (when the pick did not route it) and the prompt
     const thread = p.kind === 'work-item' ? await threadOf(gh, p.repository, p.item.number, log) : null
     const input: RouteInput = thread ? { ...prep.routeInput, labels: thread.labels, text: `${p.kind === 'work-item' ? p.item.title : ''}\n\n${thread.body}`.trim() } : prep.routeInput
     const r = prep.route ?? await routeJob(input, cfg, d.classifier?.(cfg) ?? null, layers)
     ctx.route?.(r)
+    // a person's task waits its turn in the project's queue (its agent is known now); work items are not queued
+    if (p.kind === 'task') await ctx.admit?.(r.kind, { maxParallel: cfg.worker.max_parallel })
     const s = SPECIALISTS[r.kind]
     const settings = cfg.agents[r.kind]
     acting = { s, r, escalateTo: cfg.worker.escalate_to }
@@ -540,7 +605,19 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
       : undefined
     const waits = openWaitRelay(d, ctx.jobId)
     try {
-      const prompt = composeSpecialist(s, { cfg, repository: p.repository, job: prep.job(branch, thread?.text), rules, route: r, hardware, delivery: 'delegate', prompts: layers })
+      // resuming: the paused conversation itself when its transcript was kept, else a fresh one told what was done
+      let resumed: Resumed | null = null
+      let continueSession: string | undefined
+      if (resumeOf) {
+        const commits = await gitIn(g)(['log', '--format=%h %s', '-n', '20', `origin/${base.defaultBranch}..HEAD`]).then((x) => x.stdout.trim()).catch(() => '')
+        resumed = { pausedBy: prior?.pausedBy ?? 'a person', pausedAt: prior?.pausedAt ?? 'an earlier time', resumedBy: resumeOf.by, commits, lastStep: (prior?.step ?? '').slice(0, 500) }
+        if (prior?.session && d.paused && await d.paused.restore(resumeOf.job, prior.session, dir).catch(() => false)) continueSession = prior.session
+        log(`resuming ${resumeOf.job} on ${branch}: ${continueSession ? 'its conversation was kept and carries on' : 'its conversation was not kept, so a new one starts from what the branch has'}`)
+      }
+      const job = prep.job(branch, thread?.text)
+      const prompt = continueSession && resumed
+        ? composeResumeNote(resumed, branch, layers)
+        : composeSpecialist(s, { cfg, repository: p.repository, job: job.kind === 'task' && resumed ? { ...job, resumed } : job, rules, route: r, hardware, delivery: 'delegate', prompts: layers })
       const system = systemAppend(notes, layers)
       const asked = prep.route === null && r.source === 'model'
       const used = [...(asked ? provenanceOf(['router.classify', 'router.contract'], layers) : []), ...prompt.provenance, ...system.provenance,
@@ -558,7 +635,14 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
         onMessage: (m) => mem.observe(m), agent: r.kind,
         model: settings.model || d.model || cfg.worker.model || undefined, maxTurns: settings.max_turns,
         tools: { builtins: [...SPECIALIST_BUILTINS], allowed: allowedToolsOf(s, { hardware, delegate }) },
+        pause: p.kind === 'task' ? ctx.pauseSignal : undefined, resume: continueSession,
       })
+      if (out.paused) {
+        const kept = await keepPaused(d, { g, dir, branch, defaultBranch: base.defaultBranch, jobId: ctx.jobId, session: out.session, by: errText(ctx.pauseSignal?.reason) })
+        await mem.finish(false, `paused: ${kept}`)
+        mem = NO_MEMORY
+        throw new JobPaused(kept)
+      }
       const summary = redact(out.text)
       await mem.finish(out.ok, summary)
       mem = NO_MEMORY
@@ -570,6 +654,8 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
       if (dtoken) delegations?.unregister(ctx.jobId)
     }
   } catch (e) {
+    // paused: not a failure, and nothing to report on the item yet
+    if (e instanceof JobPaused) throw e
     const msg = redact(errText(e))
     await mem.finish(false, msg)
     if (prep?.issue) {
@@ -616,7 +702,10 @@ export async function runDelegated(d: RunnerDeps, p: DelegatedTaskJob, ctx: JobC
     const out = await runClaude(d, {
       prompt: `${prompt.text}${mem.context}`, cwd: parent.dir, cfg: parent.cfg, token, signal: ctx.signal, log, redact, notes: parent.notes ?? null, system,
       extraEnv: { ...mem.env, ...journeyAgentEnv(WORKER, 'the trace worker', ctx.jobId) }, mcpEnv: waits.env, onMessage: (m) => mem.observe(m), agent: WORKER,
+      pause: ctx.pauseSignal,
     }).finally(() => waits.close())
+    // paused with its specialist: what it changed stays in the checkout, which the specialist commits as it pauses
+    if (out.paused) throw new JobPaused('paused with its specialist: its changes are in the checkout')
     const summary = redact(out.text)
     await mem.finish(out.ok, summary)
     mem = NO_MEMORY
@@ -625,10 +714,44 @@ export async function runDelegated(d: RunnerDeps, p: DelegatedTaskJob, ctx: JobC
     if (!out.ok) throw new Error(summary)
     return [`branch ${branch}, done in ${out.turns} turns`, ...(commits ? [`commits:\n${commits}`] : []), summary.slice(0, 6000)].join('\n')
   } catch (e) {
+    if (e instanceof JobPaused) { await mem.finish(false, e.message); throw e }
     const msg = redact(errText(e))
     await mem.finish(false, msg)
     throw new Error(msg)
   }
+}
+
+/**
+ * A paused job's work, kept: everything in the checkout committed ("paused" commit, when there is anything) and
+ * pushed on its branch (never the default branch), and its transcript saved for Resume. Answers what was kept, in
+ * words. A push or save that fails is said, never thrown: the job is paused either way.
+ */
+export async function keepPaused(d: Pick<RunnerDeps, 'paused'>, o: { g: GitOpts; dir: string; branch: string; defaultBranch: string; jobId: string; session: string | undefined; by: string }): Promise<string> {
+  // the git commands must run even though the job is stopping: not on its signal
+  const git = gitIn({ ...o.g, signal: undefined })
+  const said: string[] = []
+  if (o.branch === o.defaultBranch) {
+    said.push(`its work is left uncommitted in its checkout: it was on the default branch (${o.branch}), which trace never pushes to`)
+  } else {
+    try {
+      const dirty = (await git(['status', '--porcelain'])).stdout.trim() !== ''
+      if (dirty) {
+        await git(['add', '-A'])
+        await git(['commit', '-m', `trace: paused (${o.jobId})
+
+${o.by}. The job carries on from this commit when it is resumed.`])
+      }
+      await git(['push', 'origin', `HEAD:refs/heads/${o.branch}`])
+      const head = (await git(['rev-parse', '--short', 'HEAD'])).stdout.trim()
+      said.push(`its work is on ${o.branch} (${head}${dirty ? ', with a "paused" commit of what was not committed yet' : ''})`)
+    } catch (e) {
+      said.push(`its work could not be pushed (${errText(e).slice(0, 200)}): Resume starts from what ${o.branch} has`)
+    }
+  }
+  let kept = false
+  if (o.session && d.paused) kept = await d.paused.save(o.jobId, o.session, o.dir).catch(() => false)
+  said.push(kept ? 'its conversation is kept, so Resume continues it' : 'its conversation was not kept, so Resume starts a new one that is told what was done')
+  return `Paused at a safe point: ${said.join('; ')}.`
 }
 
 /** The worker-pick scan for each repository; each claimed item becomes its own work-item job. */
@@ -714,7 +837,8 @@ export function secretsToken(arn: string | undefined, region?: string): () => Pr
   }
 }
 
-export function realRunner(env: Record<string, string | undefined> = process.env): JobRunner {
+/** `paused`: where a paused job's transcript is kept (src/agents/runtime/job-index.ts workerIndex); absent: not kept. */
+export function realRunner(env: Record<string, string | undefined> = process.env, paused?: PausedWork): JobRunner {
   const ws = workspaceDir(env)
   const requested = Number(env.TRACE_JOB_TIMEOUT_S ?? '')
   const timeoutS = Number.isFinite(requested) && requested > 0 ? Math.min(requested, MAX_LIFETIME_S - 600) : MAX_LIFETIME_S - 1800
@@ -744,6 +868,7 @@ export function realRunner(env: Record<string, string | undefined> = process.env
     waitsUrl: `http://127.0.0.1:${Number(env.PORT || 8080)}`,
     hardware: ['1', 'true', 'yes'].includes(env.TRACE_HARDWARE ?? ''),
     prompts: realPromptLayers(),
+    ...(paused ? { paused } : {}),
   })
 }
 

@@ -15,7 +15,7 @@ import { z } from 'zod'
 import type { IncomingHttpHeaders } from 'node:http'
 import { context, trace } from '@opentelemetry/api'
 import {
-  ATTR, type Attrs, type Outcome, type Span, SpanKind, childNodeArgs, fail, fromHeaders, ok, parentContext, personHash, recordMetric, setAttrs, span, startSpan, traceEnv, withSession,
+  ATTR, type Attrs, type Outcome, type Span, SpanKind, childNodeArgs, fail, fromHeaders, ok, parentContext, personHash, recordMetric, recordProjectMetric, setAttrs, span, startSpan, traceEnv, withSession,
 } from '../../core/telemetry.js'
 import type { JobPayload, TraceContext } from './schemas.js'
 
@@ -144,8 +144,8 @@ export async function observeJob(p: JobPayload, jobId: string, agent: string, st
   } finally {
     // the agent once routed (the specialist), else the one it started as
     const dims = { [ATTR.jobKind]: p.kind, [ATTR.agent]: state().agent ?? agent, [ATTR.outcome]: outcome }
-    recordMetric('trace.jobs', 1, dims)
-    recordMetric('trace.job.duration', (performance.now() - t0) / 1000, dims)
+    recordProjectMetric('trace.jobs', 1, dims)
+    recordProjectMetric('trace.job.duration', (performance.now() - t0) / 1000, dims)
   }
 }
 
@@ -316,7 +316,7 @@ export async function claudeTelemetry(o: ClaudeTelemetryOptions = {}): Promise<C
         if (n > 0) recordMetric('gen_ai.client.token.usage', n, { ...dims, [ATTR.genAiTokenType]: type })
       }
     }
-    if (m.total_cost_usd !== undefined) recordMetric('trace.claude.cost', m.total_cost_usd, { [ATTR.agent]: agent })
+    if (m.total_cost_usd !== undefined) recordProjectMetric('trace.claude.cost', m.total_cost_usd, { [ATTR.agent]: agent })
     setAttrs(root, {
       [ATTR.claudeSubtype]: m.subtype,
       [ATTR.genAiInputTokens]: totals.input, [ATTR.genAiOutputTokens]: totals.output,
