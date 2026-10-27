@@ -48,7 +48,8 @@ import type { GpuJobSchema, JobResult } from './jobs.js'
 import type { z } from 'zod'
 import { trackInFlight } from './inflight.js'
 import { type UsageRow, jobRow, ledgerFromEnv, recordUsage } from '../core/cost.js'
-import { pricesFromEnv } from '../core/prices.js'
+import { type PriceTable, pricesFromEnv } from '../core/prices.js'
+import { pricesFor } from '../core/prices-store.js'
 import { encodeSpec, ExitRecordSchema, jobKeys, jobsLocation, type ExitRecord, type RemoteSpec } from './protocol.js'
 
 export type ParsedJob = z.output<typeof GpuJobSchema>
@@ -116,15 +117,16 @@ export interface BatchDeps {
 
 /**
  * What a finished job cost, for the ledger: its running time (Batch's startedAt to stoppedAt; a job that never
- * started ran on no instance and costs nothing) x its pool's price (src/core/prices.ts). An estimate: the instance
- * may have been up longer (scaling down is not counted), and a Spot price is lower.
+ * started ran on no instance and costs nothing) x its pool's price (src/core/prices.ts; `prices`: the table in use,
+ * else the overrides over the built-in table). An estimate: the instance may have been up longer (scaling down is not
+ * counted), and a Spot price is lower.
  */
-export function batchCostRow(o: { pool: 'gpu' | 'cpu'; detail: BatchJobDetail | undefined; vcpus: number | null; id: string; kind: string; env: NodeJS.ProcessEnv }): UsageRow | null {
+export function batchCostRow(o: { pool: 'gpu' | 'cpu'; detail: BatchJobDetail | undefined; vcpus: number | null; id: string; kind: string; env: NodeJS.ProcessEnv; prices?: PriceTable }): UsageRow | null {
   const d = o.detail
   if (!d?.startedAt) return null
   const seconds = Math.max(0, ((d.stoppedAt ?? d.startedAt) - d.startedAt) / 1000)
   const vcpus = o.vcpus ?? (Number(o.env[o.pool === 'cpu' ? 'TRACE_CPU_JOB_MAX_VCPUS' : 'TRACE_GPU_JOB_MAX_VCPUS']) || 1)
-  return jobRow(pricesFromEnv(o.env), { pool: o.pool, seconds, vcpus, at: (d.stoppedAt ?? d.startedAt) / 1000, jobId: o.id, kind: o.kind, region: o.env.AWS_REGION ?? null })
+  return jobRow(o.prices ?? pricesFromEnv(o.env), { pool: o.pool, seconds, vcpus, at: (d.stoppedAt ?? d.startedAt) / 1000, jobId: o.id, kind: o.kind, region: o.env.AWS_REGION ?? null })
 }
 
 async function awsBatch(): Promise<BatchApi> {
@@ -302,7 +304,9 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
   const detail = last.detail
   // its cost, as it ended (best effort: recording never fails the job)
   if (TERMINAL.has(last.status)) {
-    const row = batchCostRow({ pool: place.pool, detail, vcpus: place.vcpus, id, kind: job.kind, env })
+    // priced with the table in use: the overrides, the fetched price list, the built-in table (src/core/prices-store.ts)
+    const prices = detail?.startedAt ? (await pricesFor(env).catch(() => null))?.table : undefined
+    const row = batchCostRow({ pool: place.pool, detail, vcpus: place.vcpus, id, kind: job.kind, env, ...(prices ? { prices } : {}) })
     if (row) await (deps.recordCost ?? ((r: UsageRow) => recordUsage([r], { ledger: ledgerFromEnv(env), log })))(row).catch(() => undefined)
   }
   if (!TERMINAL.has(last.status)) {

@@ -31,11 +31,11 @@ describe('the price table', () => {
     expect(modelPrice(DEFAULT_PRICES, 'meta.llama3')).toBeNull()
     const tok = { input: 1_000_000, output: 100_000, cacheRead: 2_000_000, cacheWrite: 0 }
     // 3 + 1.5 + 0.6 = 5.10 on a global profile, and 10% more in-region
-    expect(modelCost(DEFAULT_PRICES, 'global.anthropic.claude-sonnet-4-5-v1:0', tok)).toEqual({ amount: 5.1, basis: 'table', match: 'claude-sonnet-4-5' })
+    expect(modelCost(DEFAULT_PRICES, 'global.anthropic.claude-sonnet-4-5-v1:0', tok)).toEqual({ amount: 5.1, basis: 'table', match: 'claude-sonnet-4-5', by: { source: 'built-in', asOf: DEFAULT_PRICES.asOf } })
     expect(modelCost(DEFAULT_PRICES, 'us.anthropic.claude-sonnet-4-5-v1:0', tok).amount).toBeCloseTo(5.61, 6)
     // an unknown model falls back to the Agent SDK's own figure, else is unpriced
-    expect(modelCost(DEFAULT_PRICES, 'x.unknown', tok, { sdkCost: 0.42 })).toEqual({ amount: 0.42, basis: 'sdk', match: null })
-    expect(modelCost(DEFAULT_PRICES, 'x.unknown', tok)).toEqual({ amount: null, basis: 'none', match: null })
+    expect(modelCost(DEFAULT_PRICES, 'x.unknown', tok, { sdkCost: 0.42 })).toEqual({ amount: 0.42, basis: 'sdk', match: null, by: null })
+    expect(modelCost(DEFAULT_PRICES, 'x.unknown', tok)).toEqual({ amount: null, basis: 'none', match: null, by: null })
   })
 
   it('takes an installation\'s overrides (a model, a region-only entry, a pool, a date), and says when it is old', () => {
@@ -64,7 +64,7 @@ describe('the ledger', () => {
     expect(uses).toHaveLength(2)
     expect(await recordModelUse(uses, { jobId: 'job-1', agent: 'verify', env: { AWS_REGION: 'us-east-1' }, ledger, now: Date.parse('2026-10-20T00:00:00Z') })).toBe(true)
     const row = batchCostRow({ pool: 'gpu', detail: { status: 'SUCCEEDED', startedAt: Date.parse('2026-10-21T00:00:00Z'), stoppedAt: Date.parse('2026-10-21T00:30:00Z') }, vcpus: null, id: 'blender-1', kind: 'blender', env: { AWS_REGION: 'us-east-1' } })
-    expect(row).toMatchObject({ kind: 'gpu', seconds: 1800, basis: 'table', pricesAsOf: DEFAULT_PRICES.asOf })
+    expect(row).toMatchObject({ kind: 'gpu', seconds: 1800, basis: 'table', pricesAsOf: DEFAULT_PRICES.asOf, pricesSource: 'built-in' })
     expect(batchCostRow({ pool: 'gpu', detail: { status: 'FAILED' }, vcpus: null, id: 'x', kind: 'blender', env: {} })).toBeNull()
     await recordUsage([row!], { ledger })
     const rows = (await ledger.read((db) => loadUsage(db))).result

@@ -1,0 +1,148 @@
+{
+ "source": "AWS Price List, AmazonEC2, us-east-1, effective 2026-10-01 (https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/current/us-east-1/index.json): g6.xlarge and c7i.xlarge, Linux, shared tenancy, on demand, as GetProducts returns them",
+ "PriceList": [
+  {
+   "product": {
+    "sku": "TPKUC6XYSUQ3VFK2",
+    "productFamily": "Compute Instance",
+    "attributes": {
+     "servicecode": "AmazonEC2",
+     "location": "US East (N. Virginia)",
+     "locationType": "AWS Region",
+     "instanceType": "g6.xlarge",
+     "currentGeneration": "Yes",
+     "instanceFamily": "GPU instance",
+     "vcpu": "4",
+     "physicalProcessor": "AMD EPYC 7R13 Processor",
+     "clockSpeed": "2.6 GHz",
+     "memory": "16 GiB",
+     "storage": "1 x 250 GB NVMe SSD",
+     "networkPerformance": "Up to 10 Gigabit",
+     "processorArchitecture": "64-bit",
+     "tenancy": "Shared",
+     "operatingSystem": "Linux",
+     "licenseModel": "No License required",
+     "usagetype": "BoxUsage:g6.xlarge",
+     "operation": "RunInstances",
+     "availabilityzone": "NA",
+     "capacitystatus": "Used",
+     "classicnetworkingsupport": "false",
+     "dedicatedEbsThroughput": "Up to 5000 Mbps",
+     "dedicatedEbsThroughputDescription": "1000 Mbps",
+     "ecu": "NA",
+     "enhancedNetworkingSupported": "Yes",
+     "gpu": "1",
+     "gpuMemory": "24 GB",
+     "instanceFamilyCategory": "Accelerated Computing",
+     "intelAvxAvailable": "No",
+     "intelAvx2Available": "No",
+     "intelTurboAvailable": "No",
+     "marketoption": "OnDemand",
+     "normalizationSizeFactor": "1",
+     "preInstalledSw": "NA",
+     "processorFeatures": "AMD Turbo; AVX; AVX2",
+     "regionCode": "us-east-1",
+     "servicename": "Amazon Elastic Compute Cloud",
+     "vpcnetworkingsupport": "true"
+    }
+   },
+   "serviceCode": "AmazonEC2",
+   "terms": {
+    "OnDemand": {
+     "TPKUC6XYSUQ3VFK2.JRTCKXETXF": {
+      "offerTermCode": "JRTCKXETXF",
+      "sku": "TPKUC6XYSUQ3VFK2",
+      "effectiveDate": "2026-10-01T00:00:00Z",
+      "priceDimensions": {
+       "TPKUC6XYSUQ3VFK2.JRTCKXETXF.6YS6EN2CT7": {
+        "rateCode": "TPKUC6XYSUQ3VFK2.JRTCKXETXF.6YS6EN2CT7",
+        "description": "$0.8048 per On Demand Linux g6.xlarge Instance Hour",
+        "beginRange": "0",
+        "endRange": "Inf",
+        "unit": "Hrs",
+        "pricePerUnit": {
+         "USD": "0.8048000000"
+        },
+        "appliesTo": []
+       }
+      },
+      "termAttributes": {}
+     }
+    }
+   },
+   "version": "20261001000000",
+   "publicationDate": "2026-10-01T00:00:00Z"
+  },
+  {
+   "product": {
+    "sku": "D8WVCVBE32N227KA",
+    "productFamily": "Compute Instance",
+    "attributes": {
+     "servicecode": "AmazonEC2",
+     "location": "US East (N. Virginia)",
+     "locationType": "AWS Region",
+     "instanceType": "c7i.xlarge",
+     "currentGeneration": "Yes",
+     "instanceFamily": "Compute optimized",
+     "vcpu": "4",
+     "physicalProcessor": "Intel Xeon Scalable (Sapphire Rapids)",
+     "clockSpeed": "3.2 GHz",
+     "memory": "8 GiB",
+     "storage": "EBS only",
+     "networkPerformance": "Up to 12500 Megabit",
+     "processorArchitecture": "64-bit",
+     "tenancy": "Shared",
+     "operatingSystem": "Linux",
+     "licenseModel": "No License required",
+     "usagetype": "BoxUsage:c7i.xlarge",
+     "operation": "RunInstances",
+     "availabilityzone": "NA",
+     "capacitystatus": "Used",
+     "classicnetworkingsupport": "false",
+     "dedicatedEbsThroughput": "Up to 10000 Mbps",
+     "dedicatedEbsThroughputDescription": "1250 Mbps",
+     "ecu": "NA",
+     "enhancedNetworkingSupported": "Yes",
+     "gpuMemory": "NA",
+     "instanceFamilyCategory": "Compute Optimized",
+     "intelAvxAvailable": "Yes",
+     "intelAvx2Available": "Yes",
+     "intelTurboAvailable": "Yes",
+     "marketoption": "OnDemand",
+     "normalizationSizeFactor": "8",
+     "preInstalledSw": "NA",
+     "processorFeatures": "Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo; Intel AMX",
+     "regionCode": "us-east-1",
+     "servicename": "Amazon Elastic Compute Cloud",
+     "vpcnetworkingsupport": "true"
+    }
+   },
+   "serviceCode": "AmazonEC2",
+   "terms": {
+    "OnDemand": {
+     "D8WVCVBE32N227KA.JRTCKXETXF": {
+      "offerTermCode": "JRTCKXETXF",
+      "sku": "D8WVCVBE32N227KA",
+      "effectiveDate": "2026-10-01T00:00:00Z",
+      "priceDimensions": {
+       "D8WVCVBE32N227KA.JRTCKXETXF.6YS6EN2CT7": {
+        "rateCode": "D8WVCVBE32N227KA.JRTCKXETXF.6YS6EN2CT7",
+        "description": "$0.1785 per On Demand Linux c7i.xlarge Instance Hour",
+        "beginRange": "0",
+        "endRange": "Inf",
+        "unit": "Hrs",
+        "pricePerUnit": {
+         "USD": "0.1785000000"
+        },
+        "appliesTo": []
+       }
+      },
+      "termAttributes": {}
+     }
+    }
+   },
+   "version": "20261001000000",
+   "publicationDate": "2026-10-01T00:00:00Z"
+  }
+ ]
+}
