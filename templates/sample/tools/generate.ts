@@ -1,14 +1,18 @@
 /**
- * Generates the sensor-node KiCad project (hardware/): schematic, board, project file and project library tables.
+ * Generates the trace-sample KiCad project: schematic, board, project file and project library tables, into
+ * hardware/ (routed) or, with UNROUTED=1, into layout/ (the same placement with no tracks or vias: pcb.autoroute's
+ * input). It grew from trace's examples/sensor-node generator. To the sensor-node front end it adds the 12 V to 3.3 V
+ * regulator U1 with its capacitors, the buffer U2 and the I2C/UART headers J2 and J3 with pull-ups.
  *
- * Run once from the repository root with `npx tsx examples/sensor-node/tools/generate.ts`. The committed KiCad files
- * are this script's output, finished by KiCad itself: the board's ground pour is filled by
- * `kicad-cli pcb drc --refill-zones --save-board`, so the file on disk is what KiCad would save. The script ends by
- * running ERC and DRC (with schematic parity) and fails unless both report zero errors.
+ * Run from the repository root: `npx tsx tools/generate.ts` (and `UNROUTED=1 npx tsx tools/generate.ts`). The
+ * committed KiCad files are this script's output, finished by KiCad itself: the board's ground pour is filled by
+ * `kicad-cli pcb drc --refill-zones --save-board`. It ends by running ERC and DRC (with schematic parity) and fails
+ * unless both report zero errors (for layout/, every unrouted connection is expected and not counted).
  *
- * Why a script: the symbols and footprints are copied from KiCad's own standard libraries (so ERC and DRC can check
- * them against the library), and the board's placement and routing are written out as coordinates, so the whole
- * design can be read and re-made from one file. The circuit and the reasons for each value are in ../README.md.
+ * The symbols and footprints are copied from KiCad's own standard libraries (so ERC and DRC check them against the
+ * library), and placement and routing are written out as coordinates, so the whole design is one readable file.
+ * U1 uses the AP1117-15 symbol (AMS1117-3.3 shares its pinout) and U2 the MCP6L91T-EOT symbol (the MCP6001's
+ * SOT-23-5 pinout); their Value fields carry the real part numbers.
  *
  * Needs KiCad 10 (kicad-cli on PATH, its libraries at $KICAD_SHARE or /usr/share/kicad).
  */
@@ -529,7 +533,7 @@ function main(): void {
   cli(['pcb', 'drc', '--refill-zones', '--save-board', '--format', 'json', '-o', join(OUT, 'fill-drc.json'), pcb])
   rmSync(join(OUT, 'fill-drc.json'), { force: true })
   rmSync(join(OUT, `${NAME}.kicad_prl`), { force: true })
-  // the checks the README promises
+  // ERC and DRC
   const report = (args: string[], file: string): { errors: number; warnings: number; lines: string[] } => {
     const out = join(OUT, file)
     cli([...args.slice(0, -1), '--format', 'json', '--severity-all', '-o', out, args[args.length - 1] as string])

@@ -84,9 +84,9 @@ export const SAMPLE_TESTS: readonly Plan[] = [
   { id: 'TST-PWR-002', title: '3V3 holds across the input range (sim.sweep)', requirements: ['REQ-PWR-001'], method: 'spice', tool: 'sim.sweep',
     args: { path: 'power/ldo.cir', analyses: ['.op'], axes: [{ param: 'vin', values: [4.5, 12, 13] }], measurements: [{ name: 'v3v3', kind: 'value_at', vector: 'v(3v3)', analysis: 'op' }] },
     note: 'U1 is modelled as ideal regulation above dropout; the bench (TST-HIL-001) is the real proof' },
-  { id: 'TST-THM-001', title: "U1's junction at 50 C ambient (calc.ldo_thermal)", requirements: ['REQ-THM-001'], method: 'spice', tool: 'calc.ldo_thermal',
-    args: { vin: 12, vout: 3.3, current: 0.0434, iq: 0.005, theta_ja: 90, ambient: 50, tj_max: 125 },
-    note: 'a hand calculation through theta-JA; the thermal specialist replaces it with thermal.check on the board model' },
+  { id: 'TST-THM-001', title: "U1's junction across the envelope (thermal.junction, budget nominal)", requirements: ['REQ-THM-001'], method: 'spice', tool: 'thermal.junction',
+    args: { envelope: 'enclosure', scenario: 'nominal' },
+    note: 'theta-JA from the stored limits; the thermal specialist replaces it with thermal.check on the board model' },
   // sim: logic and protocols
   { id: 'TST-FW-002', title: 'Moving average testbench (sim.logic)', requirements: ['REQ-FW-002'], method: 'sim', tool: 'sim.logic',
     args: { files: ['logic/moving_average.v', 'logic/moving_average_tb.v'], top: 'moving_average_tb', pass: 'ALL TESTS PASSED' } },
