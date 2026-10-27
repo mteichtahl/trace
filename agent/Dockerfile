@@ -67,7 +67,10 @@ RUN useradd --create-home --uid 10001 --shell /bin/bash trace \
 WORKDIR /app
 
 # Dependencies first (cached while package*.json are unchanged); scripts skipped until the sources are in.
-COPY package.json package-lock.json .npmrc ./
+# agent/package-lock.json and agent/npmrc: copies scripts/stage-image.mjs makes (npm never packs the originals, so an
+# installed trace has only these)
+COPY package.json agent/package-lock.json agent/npmrc ./
+RUN mv npmrc .npmrc
 RUN npm ci --ignore-scripts
 
 COPY . .

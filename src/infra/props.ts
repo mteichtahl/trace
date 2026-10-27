@@ -81,6 +81,14 @@ export const ProjectSettingsSchema = z.object({
   generation: z.number().int().min(0).max(99).optional(),
 }).strict()
 
+/**
+ * A pinned registry for trace's published images (`public.ecr.aws/<alias>`), for a fork that wants one. Empty (the
+ * default): nothing to set, ever: each install finds the registry in the source repository's trace-images release,
+ * which publishing writes (src/installer/release.ts publishedRegistry; src/installer/derive.ts), and builds when there
+ * is none. Advanced → "Published images registry" (answers agents.imageRegistry) overrides both.
+ */
+export const PUBLISHED_REGISTRY = ''
+
 export const InfraPropsSchema = z.object({
   /** A short name prefixed to every resource: lets two installations share an account. */
   prefix: z.string().regex(/^[a-z][a-z0-9-]{1,20}$/, 'lower-case letters, digits and dashes, 2–21 characters').default('trace'),
@@ -93,7 +101,7 @@ export const InfraPropsSchema = z.object({
    * layout 'nested' each project is its own nested stack (one resource and no output of the parent's), so 60 fit; with
    * layout 'flat' CloudFormation's 500 resources and 200 outputs per stack bind at about 20 projects (checked when the
    * stack is built). */
-  repositories: z.array(repoSlug).min(1).max(60).superRefine((rs, ctx) => {
+  repositories: z.array(repoSlug).max(60).superRefine((rs, ctx) => {
     const seen = new Map<string, string>()
     for (const r of rs) {
       const slug = projectSlug(r.split('@')[0] ?? '')
@@ -199,12 +207,30 @@ export const InfraPropsSchema = z.object({
   gateway: z.object({
     enabled: z.boolean().default(false),
   }).strict().prefault({}),
+  /** Where the agent and GPU images come from (src/infra/images.ts): 'prebuilt' copies trace's published images for
+   * this exact source when they exist, and builds otherwise; 'build' always builds (with BuildKit's inline cache). */
+  images: z.object({
+    source: z.enum(['prebuilt', 'build']).default('prebuilt'),
+    /** where the published images are: `<registry>/trace-agent:<tag>` and `<registry>/trace-gpu:<tag>`; empty: none
+     * published yet (always built). The answers' (agents.imageRegistry, found at install time when not given), else
+     * PUBLISHED_REGISTRY */
+    registry: z.string().regex(/^([a-z0-9.-]+(:\d+)?(\/[a-z0-9._-]+)*)?$/, 'a registry such as public.ecr.aws/<alias>, or empty').default(PUBLISHED_REGISTRY),
+  }).strict().prefault({}),
   /** Where every GitHub Actions job of every project (and of each `ciRepositories` entry) runs: an AWS CodeBuild runner
    * project per repository (src/infra/runner.ts); until it exists, the workflows fall back to GitHub's ubuntu-24.04
-   * runner. CodeBuild reaches GitHub through an AWS CodeConnections connection (the AWS Connector for GitHub app), so no
-   * GitHub token is stored for it. */
+   * runner. CodeBuild reaches GitHub through an AWS CodeConnections connection (the AWS Connector for GitHub app), or
+   * through the GitHub token the installer imported as CodeBuild's GitHub source credential (auth 'token'; README
+   * "Where builds run"). */
   runners: z.object({
-    /** An existing connection to reuse; unset: the stack creates `<prefix>-github` (connectionName) itself. Either
+    /** How CodeBuild reaches GitHub for the runners' webhooks, runner registration and source:
+     *   'connection'  an AWS CodeConnections connection (connectionArn, or `<prefix>-github` the stack creates): no token
+     *                 stored, but a new connection needs one console authorization per account and region
+     *   'token'       the account's CodeBuild GitHub source credential (ImportSourceCredentials, a personal access
+     *                 token, imported by the installer before the deploy): no console step, the token is stored with
+     *                 CodeBuild. The stack makes no connection, and the runner projects name no source auth
+     * 'connection' by default, so a plain `cdk deploy` of an installation made that way keeps its connection. */
+    auth: z.enum(['connection', 'token']).default('connection'),
+    /** auth 'connection': an existing connection to reuse; unset: the stack creates `<prefix>-github` (connectionName) itself. Either
      * way its ARN is the stack's CONNECTION_OUTPUT. */
     connectionArn: z.string().regex(/^arn:aws[a-z-]*:(codeconnections|codestar-connections):[a-z0-9-]+:\d{12}:connection\/[0-9a-f-]{36}$/, 'an AWS CodeConnections connection ARN').optional(),
     /** Whether the connection is authorized (AVAILABLE), so the runner projects can be made. A new connection is
@@ -218,6 +244,9 @@ export const InfraPropsSchema = z.object({
     image: z.string().min(3).default('aws/codebuild/standard:7.0'),
     /** Docker-in-Docker for jobs that build containers */
     privileged: z.boolean().default(false),
+    /** Docker-in-Docker for the build-only repositories' runners (`ciRepositories`) alone: trace's own builds its images
+     * there when this installation publishes them (src/installer/release.ts) */
+    ciPrivileged: z.boolean().default(false),
   }).strict().prefault({}),
   /** Keeping the installation up to date (README "Staying up to date"): when set, the stack has the role
    * `<prefix>-self-update` (SelfUpdateRoleArn), which only trace's own repository's ci workflow (.github/workflows/ci.yml)
@@ -241,6 +270,7 @@ export const InfraPropsSchema = z.object({
     dashboard: z.boolean().default(true),
   }).strict().prefault({}),
 }).strict().superRefine((p, ctx) => {
+  if (p.runners.auth === 'token' && p.runners.connectionArn) ctx.addIssue({ code: 'custom', path: ['runners', 'connectionArn'], message: "runners.connectionArn is for auth 'connection': with auth 'token' the runners use CodeBuild's GitHub source credential" })
   if (p.layoutMigration && p.layout !== 'flat') ctx.addIssue({ code: 'custom', path: ['layoutMigration'], message: 'layoutMigration moves a flat installation: it needs layout flat' })
   // the library gateway's name (`<prefix>-library`) must match AgentCore's ^([0-9a-zA-Z][-]?){1,48}$
   if (p.gateway.enabled && !/^([0-9a-zA-Z][-]?){1,48}$/.test(`${p.prefix}-library`)) ctx.addIssue({ code: 'custom', path: ['prefix'], message: 'with the library gateway, the prefix can\'t end with a dash or have two in a row' })

@@ -142,7 +142,10 @@ ENV OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2412/etc/bashrc
 RUN useradd --create-home --uid 10001 --shell /bin/bash trace
 WORKDIR /app
 
-COPY package.json package-lock.json .npmrc ./
+# agent/package-lock.json and agent/npmrc: copies scripts/stage-image.mjs makes (npm never packs the originals, so an
+# installed trace has only these)
+COPY package.json agent/package-lock.json agent/npmrc ./
+RUN mv npmrc .npmrc
 RUN npm ci --ignore-scripts
 COPY . .
 RUN npm run build \

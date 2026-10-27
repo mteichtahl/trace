@@ -79,10 +79,10 @@ describe('the self-update role', () => {
     expect(c).not.toContain('*')
   })
 
-  it('may only assume the CDK bootstrap roles, read installation/*, read the stack, check the connection and read the shared token', () => {
+  it('may only assume the CDK bootstrap roles, read installation/*, read the stack, check the connection and CodeBuild\'s credential, and read the shared token', () => {
     const { statements } = roleOf(on.parent, 'trace-self-update')
     const bySid = Object.fromEntries(statements.map((s) => [s.Sid ?? '', s]))
-    expect(Object.keys(bySid).sort()).toEqual(['CdkBootstrapRoles', 'GithubConnection', 'GithubConnections', 'InstallationSettings', 'SharedAgentToken', 'StackOutputs'])
+    expect(Object.keys(bySid).sort()).toEqual(['CdkBootstrapRoles', 'CodeBuildSourceCredential', 'GithubConnection', 'GithubConnections', 'InstallationSettings', 'SharedAgentToken', 'StackOutputs'])
     for (const s of statements) {
       expect(s.Effect).toBe('Allow')
       for (const a of list(s.Action)) expect(a, `${s.Sid}`).not.toContain('*')
@@ -100,6 +100,8 @@ describe('the self-update role', () => {
     expect(text(bySid.GithubConnection?.Resource)).toContain(':codeconnections:us-east-1:123456789012:connection/*')
     // ListConnections has no resource-level permission
     expect(bySid.GithubConnections).toMatchObject({ Action: 'codeconnections:ListConnections', Resource: '*' })
+    // runners.auth token: whether CodeBuild has a GitHub source credential; never importing, changing or deleting one
+    expect(bySid.CodeBuildSourceCredential).toMatchObject({ Action: 'codebuild:ListSourceCredentials', Resource: '*' })
     expect(bySid.SharedAgentToken?.Action).toBe('secretsmanager:GetSecretValue')
     expect(text(bySid.SharedAgentToken?.Resource)).toMatch(/^\{"Ref":"GithubToken[0-9A-F]+"\}$/)
   })

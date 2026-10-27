@@ -42,13 +42,14 @@
  * jobs/<slug>/* only.
  *
  * Its CodeBuild runner project (src/infra/runner.ts, named runnerProjectName: <prefix>-ci-<hash>) is where every
- * GitHub Actions job of the repository runs once it exists (GitHub's runners until then). CodeBuild reaches GitHub through the
- * installation's CodeConnections connection (the one given in `runners.connectionArn`, or the one the stack created:
- * the parent's, passed in like its other shared values); the runner's service role may write its own log group and
- * use that connection, nothing else in AWS, so a job still reaches AWS only by assuming the OIDC role above, exactly
- * as on a GitHub-hosted runner. The installer sets the repository variable TRACE_CODEBUILD_PROJECT from its
- * Project<hash>RunnerProject output, and only then: the variable is what moves the workflows from GitHub's runners to
- * this one. It exists only once the connection is authorized (`runners.connectionReady`,
+ * GitHub Actions job of the repository runs once it exists (GitHub's runners until then). CodeBuild reaches GitHub
+ * through the installation's CodeConnections connection (runners.auth 'connection': the one given in
+ * `runners.connectionArn`, or the one the stack created: the parent's, passed in like its other shared values), or
+ * through the account's CodeBuild GitHub source credential (runners.auth 'token'); the runner's service role may write
+ * its own log group and use that connection, nothing else in AWS, so a job still reaches AWS only by assuming the OIDC
+ * role above, exactly as on a GitHub-hosted runner. The installer sets the repository variable TRACE_CODEBUILD_PROJECT
+ * from its Project<hash>RunnerProject output, and only then: the variable is what moves the workflows from GitHub's
+ * runners to this one. With a connection it exists only once that is authorized (`runners.connectionReady`,
  * src/infra/runner.ts): until then the project has no runner, no runner role or log group, and no such output.
  *
  * Its names that can outlive it in the account (its memory, kept with retainData; its memory's delivery sources and
@@ -77,6 +78,7 @@ import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
 import {
   PROJECT_TAG, githubSecretName, memoryName, projectDataPrefix, projectJobsPrefix, runnerProjectName, workerRuntimeName,
 } from '../core/project.js'
+import { integrationsPrefix } from '../core/integrations.js'
 import type { GatewayRef } from './gateway.js'
 import type { GpuCompute } from './gpu.js'
 import { ProjectKnowledgeBase } from './knowledge.js'
@@ -97,6 +99,15 @@ export const ACCESS_PREFIX = 'access'
 export const PROMPTS_PREFIX = 'prompts'
 
 const TELEMETRY_ACTIONS = ['xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets']
+
+/** Reading the installation's optional integrations (`<prefix>/integrations/*`, src/core/integrations.ts): each
+ * worker's role when the library gateway is off, the gateway's Lambda when it is on, never both. */
+export function integrationsReadStatement(partition: string, region: string, account: string, prefix: string): iam.PolicyStatement {
+  return new iam.PolicyStatement({
+    sid: 'IntegrationsRead', actions: ['secretsmanager:GetSecretValue'],
+    resources: [`arn:${partition}:secretsmanager:${region}:${account}:secret:${integrationsPrefix(prefix)}*`],
+  })
+}
 
 /** The Bedrock model access the agents need (also the worker.runner=actions fallback). */
 export function modelAccess(account: string): iam.PolicyStatement {
@@ -150,9 +161,10 @@ export interface ProjectProps {
   environment: Record<string, string>
   /** the installation's library gateway (src/infra/gateway.ts): null without one */
   gateway?: GatewayRef | null
-  /** the GitHub connection its runner reaches GitHub through (src/infra/runner.ts GithubConnection): null while it is
-   * not authorized yet (runners.connectionReady false), when the project gets no runner */
-  connectionArn: string | null
+  /** how its runner reaches GitHub: the connection (src/infra/runner.ts GithubConnection), or connectionArn null for the
+   * account's CodeBuild GitHub source credential (runners.auth 'token'); null while the connection is not authorized
+   * yet (runners.connectionReady false), when the project gets no runner */
+  runnerSource: { connectionArn: string | null } | null
 }
 
 export class ProjectStack extends Construct {
@@ -284,6 +296,11 @@ export class ProjectStack extends Construct {
     if (p.gateway) {
       role.addToPolicy(new iam.PolicyStatement({ sid: 'LibraryGateway', actions: ['bedrock-agentcore:InvokeGateway'], resources: [p.gateway.arn] }))
       gatewayEnv.TRACE_GATEWAY_URL = p.gateway.url
+    } else {
+      // no gateway: the parts tools run here, so this worker reads the installation's optional integrations itself
+      // (the agent can then read them too; with the gateway on, only its Lambda can). README "Optional integrations"
+      role.addToPolicy(integrationsReadStatement(partition, region, account, cfg.prefix))
+      gatewayEnv.TRACE_INTEGRATIONS_PREFIX = integrationsPrefix(cfg.prefix)
     }
 
     // ------------------------------------------------------------------ GPU jobs: its own definition and job role
@@ -444,11 +461,11 @@ export class ProjectStack extends Construct {
 
     // ------------------------------------------------------------------ its CI: the CodeBuild runner project (src/infra/runner.ts)
     // every GitHub Actions job of the repository runs here, in this account; its role gives a job no AWS access (a job
-    // assumes the OIDC role above for that, as before). Only once the connection is authorized (connectionReady)
+    // assumes the OIDC role above for that, as before). With a connection, only once it is authorized (connectionReady)
     const { computeType, image, privileged } = cfg.runners
-    this.runner = p.connectionArn
+    this.runner = p.runnerSource
       ? new RunnerProject(this, 'Runner', {
-          name: runnerProjectName(cfg.prefix, repository), repository, connectionArn: p.connectionArn, computeType, image, privileged,
+          name: runnerProjectName(cfg.prefix, repository), repository, connectionArn: p.runnerSource.connectionArn, computeType, image, privileged,
           tags: { [PROJECT_TAG]: slug, 'trace:installation': cfg.prefix },
         })
       : null

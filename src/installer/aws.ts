@@ -6,8 +6,9 @@
  * projects the stack has and which of a project's fixed names are already taken in the account (a removed project's
  * retained memory, its delivery sources and destinations, its secret in its recovery window), the stack's outputs
  * with each nested project stack's, the GPU image build the deploy started (a declared timer wait: AWS cannot send
- * this computer CodeBuild's events), and the AWS CodeConnections connection to GitHub that the CodeBuild runners use
- * (an authorized one reused, or the stack's own, waited on after the deploy until a person authorizes it).
+ * this computer CodeBuild's events), and how the CodeBuild runners reach GitHub: the AWS CodeConnections connection
+ * (an authorized one reused, or the stack's own, waited on after the deploy until a person authorizes it), or
+ * CodeBuild's GitHub source credential, the token imported with ImportSourceCredentials.
  *
  * The functions that call AWS around the deploy take their SDK clients as a parameter, so tests give them fakes.
  */
@@ -15,7 +16,9 @@ import { BedrockClient, ListInferenceProfilesCommand } from '@aws-sdk/client-bed
 import { BedrockAgentCoreControlClient, ListAgentRuntimesCommand, ListMemoriesCommand } from '@aws-sdk/client-bedrock-agentcore-control'
 import { CloudFormationClient, DescribeStacksCommand, ListStackResourcesCommand, type Stack } from '@aws-sdk/client-cloudformation'
 import { CloudWatchLogsClient, DescribeDeliveryDestinationsCommand, DescribeDeliverySourcesCommand } from '@aws-sdk/client-cloudwatch-logs'
-import { BatchGetBuildsCommand, CodeBuildClient, StartBuildCommand } from '@aws-sdk/client-codebuild'
+import {
+  BatchGetBuildsCommand, CodeBuildClient, DeleteSourceCredentialsCommand, ImportSourceCredentialsCommand, ListSourceCredentialsCommand, StartBuildCommand,
+} from '@aws-sdk/client-codebuild'
 import { CodeConnectionsClient, GetConnectionCommand, ListConnectionsCommand, ListTagsForResourceCommand } from '@aws-sdk/client-codeconnections'
 import { IAMClient, ListOpenIDConnectProvidersCommand } from '@aws-sdk/client-iam'
 import { DeleteSecretCommand, DescribeSecretCommand, ResourceNotFoundException, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
@@ -63,7 +66,12 @@ export interface AwsCheck {
   agentCore: { ok: boolean; reason: string }
   models: { id: string; name: string }[]
   oidcProvider: boolean
+  /** the provider is the trace stack's own resource (an earlier deploy made it): it must stay in the stack, or
+   * CloudFormation deletes it */
+  oidcInStack?: boolean
   cdkBootstrapped: boolean
+  /** the CDKToolkit stack's BootstrapVersion output (null when there is none) */
+  cdkVersion?: number | null
   existing: { stack: string; status: string; outputs: Record<string, string> } | null
   warnings: string[]
 }
@@ -109,9 +117,18 @@ export async function checkAws(creds: AwsCredentialIdentity, region: string, sta
   }
   const toolkit = await describe('CDKToolkit')
   const existing = await describe(stack)
+  let oidcInStack = false
+  if (existing) {
+    try {
+      oidcInStack = (await stackResources(cfn, stack)).some((r) => r.logicalId.startsWith('GithubOidc') && r.type !== 'AWS::CloudFormation::Stack')
+    } catch (e) {
+      warnings.push(`Could not list the stack's resources: ${msg(e)}`)
+    }
+  }
   return {
-    account: id.Account ?? '', arn: id.Arn ?? '', region, agentCore, models, oidcProvider,
+    account: id.Account ?? '', arn: id.Arn ?? '', region, agentCore, models, oidcProvider, oidcInStack,
     cdkBootstrapped: Boolean(toolkit && !toolkit.status.startsWith('DELETE')),
+    cdkVersion: toolkit?.outputs.BootstrapVersion ? Number(toolkit.outputs.BootstrapVersion) : null,
     existing: existing ? { stack, ...existing } : null, warnings,
   }
 }
@@ -349,6 +366,40 @@ export async function freeSecretNames(creds: AwsCredentialIdentity, region: stri
   return out
 }
 
+/**
+ * The facts derive.ts needs that the answers leave open, and only those (src/installer/derive.ts resolveAnswers):
+ * the account always (STS), the profile's region, the token's login and email, the region's models, the GPU and CPU
+ * quotas, and whether the region has S3 Vectors. A fact that cannot be read is left out (its default applies).
+ */
+export async function liveFacts(creds: AwsCredentialIdentity, a: Answers, token: string): Promise<import('./derive.js').Facts> {
+  const { liveDeps, QUOTAS } = await import('./preflight.js')
+  const profileRegion = a.aws.mode === 'profile' ? (await profiles()).regions[a.aws.profile] ?? '' : ''
+  const region = a.aws.region || profileRegion || 'us-east-1'
+  const d = await liveDeps(creds, region, token)
+  const quiet = <T>(p: Promise<T>): Promise<T | undefined> => p.catch(() => undefined)
+  const gh = await import('./github.js')
+  const { SOURCE } = await import('../core/onboard.js')
+  const { PUBLISHED_REGISTRY } = await import('../infra/props.js')
+  const { publishedRegistry } = await import('./release.js')
+  const [sts, info, email, models, gpuQuota, cpuQuota, s3vectors, source, registry] = await Promise.all([
+    d.sts(),
+    a.github.login ? Promise.resolve(undefined) : quiet(d.token()),
+    a.adminEmail ? Promise.resolve(undefined) : quiet(d.email()),
+    a.agents.model ? Promise.resolve(undefined) : quiet(d.models()),
+    a.agents.gpuEnabled === null ? quiet(d.quota(a.agents.gpuSpot ? QUOTAS.gpuSpot : QUOTAS.gpuOnDemand)) : Promise.resolve(undefined),
+    a.agents.cpuEnabled === null ? quiet(d.quota(a.agents.cpuSpot ? QUOTAS.cpuSpot : QUOTAS.cpuOnDemand)) : Promise.resolve(undefined),
+    a.agents.knowledgeBase === null ? quiet(d.s3vectors()) : Promise.resolve(undefined),
+    a.agents.publishImages === null ? quiet(gh.sourceAccess(token, SOURCE)) : Promise.resolve(undefined),
+    a.agents.imageSource === 'prebuilt' && !a.agents.imageRegistry && !PUBLISHED_REGISTRY ? quiet(publishedRegistry((p) => gh.getOrNull(token, p), SOURCE)) : Promise.resolve(undefined),
+  ])
+  return {
+    account: sts.account, ...(profileRegion ? { profileRegion } : {}),
+    ...(info ? { login: info.login } : {}), ...(email !== undefined ? { email } : {}), ...(models ? { models } : {}),
+    ...(gpuQuota !== undefined ? { gpuQuota } : {}), ...(cpuQuota !== undefined ? { cpuQuota } : {}), ...(s3vectors !== undefined ? { s3vectors } : {}),
+    ...(source !== undefined ? { sourceAdmin: source.admin } : {}), ...(registry !== undefined ? { publishedRegistry: registry } : {}),
+  }
+}
+
 /** The AWS CodeConnections side: the connection to GitHub through which CodeBuild runs every GitHub Actions job of the
  * onboarded repositories (src/infra/runner.ts). No GitHub token is stored for it: a person authorizes it once in the
  * AWS console, which installs (or picks) the AWS Connector for GitHub app on their account or organization. One
@@ -551,3 +602,62 @@ export async function waitForConnection(c: Connections, conn: { arn: string; nam
 
 /** Why the connection wait is a timer (shown with it). */
 export const CONNECTION_WAIT_WHY = 'AWS sends no event when a person authorizes a GitHub connection'
+/**
+ * The token side (runners.auth 'token', README "Where builds run"): CodeBuild's account-level GitHub source
+ * credential, a personal access token imported with ImportSourceCredentials (serverType GITHUB, authType
+ * PERSONAL_ACCESS_TOKEN). CodeBuild uses it, for every project without a Source.Auth of its own, to make the runner
+ * project's GitHub webhook, register each job's just-in-time runner and fetch the source; CodeBuild keeps it itself,
+ * so no job (and no role) can read it. Done by API, before the deploy, so the first deploy has the runners and nobody
+ * opens the console. An account that already has a GitHub source credential keeps it (it may be another team's:
+ * overwriting it would break their projects), unless trace imported it itself (`ours`), when it is refreshed.
+ */
+type CodeBuild = Pick<CodeBuildClient, 'send'>
+
+export interface SourceCredential { state: 'imported' | 'refreshed' | 'existing'; detail: string }
+
+export async function ensureSourceCredential(cb: CodeBuild, token: string, ours: boolean): Promise<SourceCredential> {
+  const list = (await cb.send(new ListSourceCredentialsCommand({}))).sourceCredentialsInfos ?? []
+  const github = list.find((c) => c.serverType === 'GITHUB')
+  if (github && !ours) return { state: 'existing', detail: `CodeBuild already has a GitHub ${String(github.authType ?? 'credential').toLowerCase().replace(/_/g, ' ')} in this account and region; the runners use it, and trace leaves it alone` }
+  await cb.send(new ImportSourceCredentialsCommand({ serverType: 'GITHUB', authType: 'PERSONAL_ACCESS_TOKEN', token, shouldOverwrite: true }))
+  return github
+    ? { state: 'refreshed', detail: 'CodeBuild\'s GitHub source credential (trace\'s) refreshed with the token' }
+    : { state: 'imported', detail: 'the token imported as CodeBuild\'s GitHub source credential (this account and region): no console step' }
+}
+
+/** Remove CodeBuild's GitHub source credential (uninstall, when trace imported it). Whether there was one. */
+export async function removeSourceCredential(cb: CodeBuild): Promise<boolean> {
+  const list = (await cb.send(new ListSourceCredentialsCommand({}))).sourceCredentialsInfos ?? []
+  const arn = list.find((x) => x.serverType === 'GITHUB')?.arn
+  if (!arn) return false
+  await cb.send(new DeleteSourceCredentialsCommand({ arn }))
+  return true
+}
+
+/** How the runners reach GitHub for this deploy: the token (CodeBuild's source credential), or a connection. */
+export type RunnerAuthChoice = { auth: 'token'; message: string } | { auth: 'connection'; connection: ConnectionChoice }
+
+/**
+ * The answers' runners.auth, made concrete before the deploy:
+ *   token       the token
+ *   connection  resolveConnection's choice, authorized or not (the installer waits for it after the deploy)
+ *   auto        a connection given in the answers: as connection. Else resolveConnection's choice when it is
+ *               authorized already (one this stack uses, or one reused from the account and region); else the token,
+ *               so the first deploy has the runners with no console step
+ */
+export async function chooseRunnerAuth(
+  mode: 'auto' | 'token' | 'connection',
+  o: { prefix: string; given?: string; deployed: Record<string, string> | null },
+  resolve: (o: { prefix: string; given?: string; deployed: Record<string, string> | null }) => Promise<ConnectionChoice>,
+): Promise<RunnerAuthChoice> {
+  const token = (why: string): RunnerAuthChoice => ({ auth: 'token', message: `${why}CodeBuild reaches GitHub with the GitHub token, as its GitHub source credential: the runners come with the first deploy, with no console step.` })
+  if (mode === 'token') return token('')
+  if (mode === 'connection' || o.given) return { auth: 'connection', connection: await resolve(o) }
+  let c: ConnectionChoice
+  try {
+    c = await resolve({ prefix: o.prefix, deployed: o.deployed })
+  } catch (e) {
+    return token(`The GitHub connection can't be used (${e instanceof Error ? e.message : String(e)}). `)
+  }
+  return c.ready ? { auth: 'connection', connection: c } : token('No authorized GitHub connection in this account and region. ')
+}

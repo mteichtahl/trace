@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { Central } from '../../../src/core/central.js'
+import { addKeyHint } from '../../../src/core/integrations.js'
 import { Registry } from '../../../src/core/registry.js'
 import { PartsDb } from '../../../src/tools/parts/db.js'
 import { alternatives, bomCheck, buyQuantity, lookup, parseBomCsv, unitPriceAt, type LookupOptions } from '../../../src/tools/parts/lookup.js'
@@ -99,9 +100,9 @@ describe('lookup', () => {
     const r = await lookup('TPS62130RGTR', opts(f, { env: {} }))
     expect(r.providers).toEqual([
       { provider: 'lcsc', ok: true },
-      { provider: 'mouser', ok: false, note: 'skipped: no MOUSER_API_KEY set' },
-      { provider: 'digikey', ok: false, note: 'skipped: no DIGIKEY_CLIENT_ID / DIGIKEY_CLIENT_SECRET set' },
-      { provider: 'nexar', ok: false, note: 'skipped: no NEXAR_CLIENT_ID / NEXAR_CLIENT_SECRET set' },
+      { provider: 'mouser', ok: false, note: `skipped: ${addKeyHint('mouser')}` },
+      { provider: 'digikey', ok: false, note: `skipped: ${addKeyHint('digikey')}` },
+      { provider: 'nexar', ok: false, note: `skipped: ${addKeyHint('nexar')}` },
     ])
     expect(f.calls.every((c) => c.url === JLC_SEARCH_URL)).toBe(true)
   })

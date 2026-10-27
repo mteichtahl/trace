@@ -1,5 +1,5 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": { "lib": ["ES2023", "DOM", "DOM.Iterable"], "types": [], "noEmit": true },
-  "include": ["src/installer/ui/**/*.ts", "src/installer/answers.ts"]
+  "include": ["src/installer/ui/**/*.ts", "src/installer/answers.ts", "src/core/integrations-catalog.ts"]
 }

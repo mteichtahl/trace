@@ -1,7 +1,8 @@
 /**
  * `trace update-installation` (src/installer/update.ts): the self-update job of trace's own ci workflow, with fakes for
- * AWS, CDK and GitHub. It deploys with the saved settings and the connection decided now, sets the runners' variables
- * when it can and writes them to the step summary when it cannot, and fails only when the deploy does.
+ * AWS, CDK and GitHub. It deploys with the saved settings and the runners' way to GitHub decided now (runners.auth, as
+ * the installer decides it), sets the runners' variables when it can and writes them to the step summary when it
+ * cannot, and fails only when the deploy does (or would deploy runners with a credential CodeBuild does not have).
  */
 import { describe, expect, it } from 'vitest'
 import type { ConnectionChoice } from '../../src/installer/aws.js'
@@ -18,7 +19,7 @@ const PROPS: InfraInput = {
   selfUpdate: { repository: TRACE, branch: 'main' }, model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com',
   runners: { connectionReady: false, computeType: 'BUILD_GENERAL1_XLARGE' },
 }
-const RECORD = JSON.stringify(installationRecord({ stack: 'TraceStack', region: 'us-east-1', props: PROPS, connectionArn: '', traceRepository: TRACE, traceBranch: 'main', now: new Date('2026-10-01T00:00:00Z') }))
+const RECORD = JSON.stringify(installationRecord({ stack: 'TraceStack', region: 'us-east-1', props: PROPS, runnerAuth: 'connection', connectionArn: '', traceRepository: TRACE, traceBranch: 'main', now: new Date('2026-10-01T00:00:00Z') }))
 const BASE_OUTPUTS = { CentralBucket: 'trace-central', GithubSecretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:trace/github-token', GithubConnectionArn: CONN }
 const WITH_RUNNERS = { ...BASE_OUTPUTS, [projectOutputs(BOARD).runnerProject]: `trace-ci-${projectHash(BOARD)}`, [ciRunnerOutput(TRACE)]: `trace-ci-${projectHash(TRACE)}` }
 
@@ -35,15 +36,16 @@ interface World {
   asked: { prefix: string; given?: string; deployed: Record<string, string> | null }[]
 }
 
-function world(o: { choice?: ConnectionChoice; cdk?: number; githubFails?: boolean; record?: string; env?: Record<string, string>; vars?: Record<string, string> } = {}): World {
+function world(o: { choice?: ConnectionChoice; cdk?: number; githubFails?: boolean; record?: string; env?: Record<string, string>; vars?: Record<string, string>; sourceCredential?: boolean } = {}): World {
   const w: World = { deps: undefined as unknown as UpdateDeps, infra: [], cdkArgs: [], vars: new Map(Object.entries(o.vars ?? {})), log: [], summary: [], asked: [] }
   let deployed = false
   w.deps = {
     env: { TRACE_STACK: 'TraceStack', TRACE_AWS_REGION: 'us-east-1', ...(o.env ?? {}) },
     credentials: async () => ({ accessKeyId: 'ASIAEXAMPLE', secretAccessKey: 'secret-from-oidc-0123', sessionToken: 'session' }),
-    outputs: async () => (deployed && (o.choice ?? ready).ready ? WITH_RUNNERS : BASE_OUTPUTS),
+    outputs: async () => (deployed && ((o.choice ?? ready).ready || w.infra.some((i) => (i.runners as Record<string, unknown>).auth === 'token')) ? WITH_RUNNERS : BASE_OUTPUTS),
     readRecord: async (_c, _r, bucket, key) => { expect([bucket, key]).toEqual(['trace-central', 'installation/props.json']); return o.record ?? RECORD },
     resolveConnection: async (_c, _r, q) => { w.asked.push(q); return o.choice ?? ready },
+    hasSourceCredential: async () => o.sourceCredential ?? true,
     cdk: async (args, env, onLine) => {
       w.cdkArgs.push(args)
       w.infra.push(JSON.parse(env.TRACE_INFRA ?? '{}') as Record<string, unknown>)
@@ -91,7 +93,10 @@ describe('trace update-installation', () => {
     expect(await updateInstallation(given.deps)).toBe(0)
     expect(given.asked[0]?.given).toBe(CONN)
     expect((given.infra[0]?.runners as Record<string, unknown>).connectionArn).toBe(CONN)
-    expect(updateProps({ ...PROPS, runners: { connectionArn: 'arn:old', connectionReady: true } }, pending).runners).toEqual({ connectionReady: false })
+    expect(updateProps({ ...PROPS, runners: { connectionArn: 'arn:old', connectionReady: true } }, { auth: 'connection', connection: pending }).runners).toEqual({ connectionReady: false })
+    expect(updateProps({ ...PROPS, runners: { auth: 'token', computeType: 'BUILD_GENERAL1_XLARGE' } }, { auth: 'connection', connection: { ...ready, pass: CONN } }).runners)
+      .toEqual({ connectionArn: CONN, connectionReady: true, computeType: 'BUILD_GENERAL1_XLARGE' })
+    expect(updateProps({ ...PROPS, runners: { connectionArn: CONN, connectionReady: true } }, { auth: 'token', message: '' }).runners).toEqual({ auth: 'token' })
   })
 
   it('with the connection not authorized: deploys without the runners, removes their variables, and says where to authorize it', async () => {
@@ -132,6 +137,44 @@ describe('trace update-installation', () => {
   })
 
   it('reads settings that are valid stack settings', () => {
-    expect(InfraPropsSchema.parse(updateProps(PROPS, ready)).selfUpdate).toEqual({ repository: TRACE, branch: 'main' })
+    expect(InfraPropsSchema.parse(updateProps(PROPS, { auth: 'connection', connection: ready })).selfUpdate).toEqual({ repository: TRACE, branch: 'main' })
+  })
+
+  it('runners.auth auto: an authorized connection when there is one, else the token CodeBuild already has, as the installer decides', async () => {
+    const auto = (choice: ConnectionChoice, sourceCredential = true): World => world({
+      choice, sourceCredential, record: JSON.stringify({ ...JSON.parse(RECORD), runnerAuth: 'auto', props: { ...PROPS, runners: { auth: 'token', computeType: 'BUILD_GENERAL1_XLARGE' } } }),
+    })
+    const conn = auto(ready)
+    expect(await updateInstallation(conn.deps)).toBe(0)
+    expect(conn.infra[0]?.runners).toEqual({ connectionReady: true, computeType: 'BUILD_GENERAL1_XLARGE' })
+
+    // no authorized connection: the token (CodeBuild's source credential, imported by the installer), runners and all
+    const token = auto(pending)
+    expect(await updateInstallation(token.deps)).toBe(0)
+    expect(token.infra[0]?.runners).toEqual({ auth: 'token', computeType: 'BUILD_GENERAL1_XLARGE' })
+    expect(token.vars.get(`${BOARD}:TRACE_CODEBUILD_PROJECT`)).toBe(`trace-ci-${projectHash(BOARD)}`)
+    expect(token.summary.join('\n')).not.toMatch(/not authorized/)
+    expect(token.log.join('\n')).toMatch(/CodeBuild reaches GitHub with the GitHub token/)
+  })
+
+  it('runners.auth token: never asks for a connection, and does not deploy when CodeBuild has no GitHub credential (it imports none)', async () => {
+    const record = JSON.stringify({ ...JSON.parse(RECORD), runnerAuth: 'token', props: { ...PROPS, runners: { auth: 'token' } } })
+    const w = world({ record })
+    expect(await updateInstallation(w.deps)).toBe(0)
+    expect(w.asked).toEqual([])
+    expect(w.infra[0]?.runners).toEqual({ auth: 'token' })
+
+    const none = world({ record, sourceCredential: false })
+    expect(await updateInstallation(none.deps)).toBe(1)
+    expect(none.cdkArgs).toEqual([])
+    expect(none.summary.join('\n')).toMatch(/CodeBuild has none in us-east-1\. This job does not import tokens: run the installer again/)
+  })
+
+  it('a record from before runners.auth deploys with a connection, as it was made', async () => {
+    const { runnerAuth: _a, ...old } = JSON.parse(RECORD) as Record<string, unknown>
+    const w = world({ record: JSON.stringify(old), choice: pending })
+    expect(await updateInstallation(w.deps)).toBe(0)
+    expect(w.asked).toHaveLength(1)
+    expect((w.infra[0]?.runners as Record<string, unknown>).connectionReady).toBe(false)
   })
 })

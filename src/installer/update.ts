@@ -6,8 +6,12 @@
  *
  *   1 settings    the stack's outputs (TRACE_STACK, in TRACE_AWS_REGION) name the central bucket; the settings the
  *                 installer last deployed with are at installation/props.json there (src/installer/record.ts)
- *   2 connection  whether the GitHub connection is authorized, decided exactly as the installer decides it
- *                 (src/installer/aws.ts resolveConnection): the runners are deployed only when it is
+ *   2 github      how the runners reach GitHub, decided from the saved runners.auth exactly as the installer decides
+ *                 it (src/installer/aws.ts chooseRunnerAuth): a GitHub connection (the runners are deployed only once
+ *                 it is authorized), or the GitHub token the installer imported as CodeBuild's GitHub source
+ *                 credential. This job never imports or changes that credential (the self-update role may only see
+ *                 whether there is one): when the token is to be used and CodeBuild has none, it does not deploy, and
+ *                 says to run the installer again, which imports it
  *   3 deploy      `cdk deploy` of the stack with those settings, from this checkout (so the agent image is built from the
  *                 commit that was merged), as the installer runs it
  *   4 runners     each repository with a build runner gets TRACE_CODEBUILD_PROJECT (and loses it where its runner is
@@ -32,8 +36,12 @@ import {
   CENTRAL_BUCKET_OUTPUT, GPU_IMAGE_BUILD_OUTPUT, INSTALLATION_RECORD_KEY, type InfraInput, InfraPropsSchema, ciRunnerOutput, projectOutputs, projectRefs,
 } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
-import { type ConnectionChoice, awsEnv, connectionsClient, connectionsConsoleUrl, resolveConnection, stackOutputs } from './aws.js'
-import { cdkBin, runStreaming } from './bootstrap.js'
+import { ListSourceCredentialsCommand } from '@aws-sdk/client-codebuild'
+import type { RUNNER_AUTH } from './answers.js'
+import {
+  type ConnectionChoice, type RunnerAuthChoice, awsEnv, chooseRunnerAuth, codebuildClient, connectionsClient, connectionsConsoleUrl, resolveConnection, stackOutputs,
+} from './aws.js'
+import { cdkBin, cdkDeployArgs, runStreaming } from './bootstrap.js'
 import { deleteVariable, getVariable, setVariable } from './github.js'
 import { InstallationRecordSchema } from './record.js'
 
@@ -45,6 +53,8 @@ export interface UpdateDeps {
   /** the installation record's text */
   readRecord: (creds: AwsCredentialIdentity, region: string, bucket: string, key: string) => Promise<string>
   resolveConnection: (creds: AwsCredentialIdentity, region: string, o: { prefix: string; given?: string; deployed: Record<string, string> | null }) => Promise<ConnectionChoice>
+  /** whether CodeBuild has a GitHub source credential in this account and region (what runners.auth token uses) */
+  hasSourceCredential: (creds: AwsCredentialIdentity, region: string) => Promise<boolean>
   cdk: (args: string[], env: Record<string, string>, onLine: (l: string) => void) => Promise<number>
   /** the shared agent token (the stack's GithubSecretArn) */
   sharedToken: (creds: AwsCredentialIdentity, region: string, secretArn: string) => Promise<string>
@@ -67,6 +77,7 @@ export const defaultUpdateDeps = (env: NodeJS.ProcessEnv = process.env): UpdateD
     return (await r.Body?.transformToString('utf8')) ?? ''
   },
   resolveConnection: (creds, region, o) => resolveConnection(connectionsClient(creds, region), o),
+  hasSourceCredential: async (creds, region) => ((await codebuildClient(creds, region).send(new ListSourceCredentialsCommand({}))).sourceCredentialsInfos ?? []).some((c) => c.serverType === 'GITHUB'),
   cdk: (args, e, onLine) => runStreaming(process.execPath, [cdkBin(), ...args], e, onLine),
   sharedToken: async (creds, region, secretArn) => (await new SecretsManagerClient({ region, credentials: creds }).send(new GetSecretValueCommand({ SecretId: secretArn }))).SecretString ?? '',
   github: { get: (t, r, n) => getVariable(t, r, n), set: (t, r, n, v) => setVariable(t, r, n, v), delete: (t, r, n) => deleteVariable(t, r, n) },
@@ -79,11 +90,15 @@ export const defaultUpdateDeps = (env: NodeJS.ProcessEnv = process.env): UpdateD
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
-/** The settings to deploy with: the record's, with the connection as resolved now (as bootstrap.ts runnersOf). */
-export function updateProps(props: Record<string, unknown>, choice: ConnectionChoice): InfraInput {
+/** The settings to deploy with: the record's, with the runners' way to GitHub as decided now (as bootstrap.ts
+ * runnersOf and infraInput): the token, or the connection to pass (if any) and whether it is authorized. */
+export function updateProps(props: Record<string, unknown>, choice: RunnerAuthChoice): InfraInput {
   const runners = (props.runners && typeof props.runners === 'object' ? props.runners : {}) as Record<string, unknown>
-  const { connectionArn: _given, connectionReady: _ready, ...rest } = runners
-  return { ...(props as InfraInput), runners: { ...rest, ...(choice.pass ? { connectionArn: choice.pass } : {}), connectionReady: choice.ready } }
+  const { auth: _auth, connectionArn: _given, connectionReady: _ready, ...rest } = runners
+  const how = choice.auth === 'token'
+    ? { auth: 'token' as const }
+    : { ...(choice.connection.pass ? { connectionArn: choice.connection.pass } : {}), connectionReady: choice.connection.ready }
+  return { ...(props as InfraInput), runners: { ...how, ...rest } }
 }
 
 /** Each repository with a build runner (the projects and the build-only repositories) and its runner's output. */
@@ -112,6 +127,7 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
   let creds: AwsCredentialIdentity
   let props: Record<string, unknown>
   let given = ''
+  let mode: (typeof RUNNER_AUTH)[number] = 'connection'
   let before: Record<string, string>
   try {
     creds = await d.credentials()
@@ -123,30 +139,42 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
     if (record.stack !== stack) throw new Error(`the saved settings are for ${record.stack}, not ${stack}`)
     props = record.props
     given = record.connectionArn
+    mode = record.runnerAuth
     log(`Read the settings the installer saved on ${record.savedAt} (s3://${bucket}/${INSTALLATION_RECORD_KEY}).`)
   } catch (e) {
     say(`Could not update the installation: its saved settings could not be read (${redact(message(e))}). Run the installer again: it saves them.`)
     return 1
   }
 
-  // 2 — the GitHub connection, decided as the installer decides it
-  let choice: ConnectionChoice
+  // 2 — how the runners reach GitHub, decided as the installer decides it
+  let auth: RunnerAuthChoice
   let input: InfraInput
   try {
     const prefix = InfraPropsSchema.parse(props).prefix
-    choice = await d.resolveConnection(creds, region, { prefix, ...(given ? { given } : {}), deployed: before })
-    log(choice.message)
-    input = updateProps(props, choice)
+    auth = await chooseRunnerAuth(mode, { prefix, ...(given ? { given } : {}), deployed: before }, (o) => d.resolveConnection(creds, region, o))
+    log(auth.auth === 'connection' ? auth.connection.message : auth.message)
+    input = updateProps(props, auth)
     InfraPropsSchema.parse(input)
   } catch (e) {
     say(`Could not update the installation: ${redact(message(e))}`)
     return 1
   }
+  // the token as CodeBuild's source credential: the installer imports it before its deploy; this job may not
+  if (auth.auth === 'token') {
+    let has = false
+    try { has = await d.hasSourceCredential(creds, region) } catch (e) { log(`Could not check CodeBuild's GitHub source credential (${redact(message(e))}).`) }
+    if (!has) {
+      say(`The installation was not updated: its build runners reach GitHub with the GitHub token as CodeBuild's GitHub source credential, and CodeBuild has none in ${region}. This job does not import tokens: run the installer again (it imports the token), or authorize a GitHub connection, then merge again or re-run this job.`)
+      return 1
+    }
+  }
+  const choice = auth.auth === 'connection' ? auth.connection : null
+  const ready = choice ? choice.ready : true
 
   // 3 — the deploy
-  log(`Deploying ${stack} from this commit${choice.ready ? '' : ', without the build runners (the GitHub connection is not authorized yet)'}. When the agent image changed, CodeBuild builds it again: allow 20–40 minutes.`)
+  log(`Deploying ${stack} from this commit${ready ? '' : ', without the build runners (the GitHub connection is not authorized yet)'}. When the agent image changed, CodeBuild builds it again: allow 20–40 minutes.`)
   const app = ['--app', `node ${join(REPO_ROOT, 'dist', 'infra', 'app.js')}`]
-  const code = await d.cdk(['deploy', stack, ...app, '--require-approval', 'never', '--progress', 'events'], {
+  const code = await d.cdk(cdkDeployArgs(stack, app), {
     ...awsEnv(creds, region), TRACE_INFRA: JSON.stringify(input), CDK_DISABLE_VERSION_CHECK: '1', CI: '1',
   }, (l) => log(redact(l)))
   if (code !== 0) {
@@ -158,11 +186,11 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
   // 4 — the runners' variables (best effort from here on: the deploy is done)
   let after: Record<string, string> = {}
   try { after = await d.outputs(creds, region, stack) } catch (e) { say(`The deploy is done, but its outputs could not be read (${redact(message(e))}): the repositories' ${RUNNER_VARIABLE} were not checked.`) }
-  if (!choice.ready) {
+  if (choice && !choice.ready) {
     say(`The build runners are not added yet: the GitHub connection ${choice.name} is not authorized, so the workflows keep running on GitHub's runners. Authorize it at ${connectionsConsoleUrl(region)} (choose ${choice.name}, then "Update pending connection"); the next merge to main, or re-running this job, adds the runners.`)
   }
   if (Object.keys(after).length) {
-    const want = runnerOutputs(input).map((r) => ({ repo: r.repo, value: choice.ready ? after[r.output] ?? '' : '' }))
+    const want = runnerOutputs(input).map((r) => ({ repo: r.repo, value: ready ? after[r.output] ?? '' : '' }))
     let token = ''
     const secretArn = after.GithubSecretArn ?? before.GithubSecretArn ?? ''
     try {

@@ -60,7 +60,7 @@ Chat is the only two-way stream; record changes come back on the one live channe
 | Live record | One live connection per browser carrying record events | Every screen updates the moment the record changes; Query's cache is patched from the events |
 | Charts and plots | shadcn Chart (Recharts) | Run plots with limit lines, margins and hover values in the same theme |
 | Sheets and boards | The SVG trace already exports (`kicad.export`) with an overlay layer drawn by the app | Findings sit on the drawing; zoom and pan are the app's |
-| Sign-in | trace's own sign-in pages, calling the Cognito user pool's API directly; Cognito's hosted pages are never shown | The same identity and the same three classes the API enforces |
+| Sign-in | trace's own sign-in pages, calling the Cognito user pool's API directly; Cognito's hosted pages are never shown | The same identity, its account class, and each project's part (Contributor or Reviewer), all enforced by the API |
 
 **How CopilotKit is used.** Each piece maps to one job:
 
@@ -150,9 +150,9 @@ Forty screens cover the whole system, but most are one of six shared layouts, so
 | Project | Cost and time | `/p/:id/cost` | Shell + column | Admins | No |
 | Project | Settings | `/p/:id/settings` | Shell + column | Assigned (edit: admins) | No |
 | Gate | Gate review and signing | `/p/:id/gates/:gate` | Focus mode | Admins sign; others read | Yes |
-| Skills | Each of the 19 guided skills | `/p/:id/do/:skill` | Focus mode | Users and admins | Yes (3) |
+| Skills | Each of the 19 guided skills | `/p/:id/do/:skill` | Focus mode | Contributors and admins | Yes (3) |
 | Chat | Ask trace panel | Over any screen | Docked panel / drawer | Everyone | Yes |
-| Chat | Question from an agent | In chat, Home and Inbox | Decision card | Users and admins | Yes |
+| Chat | Question from an agent | In chat, Home and Inbox | Decision card | Contributors and admins | Yes |
 | Library | Parts search | `/library/parts` | Shell + list | Everyone | No |
 | Library | Part detail: stock, prices, lifecycle, datasheet | `/library/parts/:mpn` | Side sheet | Everyone | No |
 | Library | Datasheet viewer | `/library/datasheets/:id` | Shell + canvas | Everyone | No |
@@ -165,7 +165,7 @@ Forty screens cover the whole system, but most are one of six shared layouts, so
 | Operations | Operations: status, alarms, tiles, dashboard sections | /ops, /ops/:section | Shell + column | Everyone, filtered by access | Yes |
 | Knowledge | Knowledge: search, documents, datasheets and parts, agent memory, graph | /knowledge, /knowledge/:tab | Shell + list | Everyone, filtered by access | Yes |
 | Agents | Agents and tools: live statuses, queues, catalogue, Try it | /agents, /agents/:agent, /agents/tools/:tool | Shell + list | Everyone, filtered by access | Yes |
-| Project | Memory: long-term, recent activity, changes | /p/:id/memory, /p/:id/memory/recent, /p/:id/memory/changes | Shell + list | Assigned (switching: users and admins) | Yes (2) |
+| Project | Memory: long-term, recent activity, changes | /p/:id/memory, /p/:id/memory/recent, /p/:id/memory/changes | Shell + list | Assigned (switching: contributors and admins) | Yes (2) |
 
 Files have two more screens: \*\*Files\*\* (\`/p/:id/files\`, every file in the project and its releases, by kind) and the \*\*File viewer\*\* (\`/p/:id/files/:path\`, full screen, any format), which is the same viewer that opens in place inside a chat. The nineteen skills share one Focus mode layout in three variants: **stepped** (most skills), **conversational** (Intent builder, Question answer) and **checklist on a picture** (Bench setup, Bring-up run, Incoming inspection).
 
@@ -183,13 +183,13 @@ One consequence for the build: the `trace login` command uses Cognito's hosted d
 
 **Accepting an invitation.** The invitation email links to a card that already shows the person's email and who invited them. They choose how to sign in: a passkey (recommended, "nothing to remember and it cannot be phished"), or a password with an authenticator app. Then they are signed in.
 
-**No access yet.** A signed-in person with no class, or a class but no project, sees one card explaining which, naming the admins who can fix it, with a Copy request button that puts a ready-made message on the clipboard. They never see an empty Home.
+**No access yet.** A signed-in person with no account class, or a class but no project, sees one card explaining which, naming the admins who can fix it, with a Copy request button that puts a ready-made message on the clipboard. They never see an empty Home.
 
 **First run, by role.**
 
 - **The installing admin, no projects yet:** Home shows one card, "Start your first project", with two choices: from an idea (opens the Intent builder) or from an existing KiCad design (opens Design import). trace recommends one based on whether the chosen repository already holds a KiCad project.
-- **A user invited to an existing project:** Home opens with that project and a three-line welcome: what stage it is in, what the person can do here, and the one thing waiting on them, if any. A Show me around link runs a four-stop tour (the next step card, the stage rail, Ask trace, the bell). It is offered once and never forced.
-- **A guest (reviewer):** the same, worded for reading: "You can read everything and comment at gates. You cannot change the design." Buttons that change things are not shown to guests at all, rather than shown disabled.
+- **A contributor added to an existing project:** Home opens with that project and a three-line welcome: what stage it is in, what the person can do here, and the one thing waiting on them, if any. A Show me around link runs a four-stop tour (the next step card, the stage rail, Ask trace, the bell). It is offered once and never forced.
+- **A reviewer (and anyone with a Guest account, who can only review):** the same, worded for reading: "You can read everything and comment at gates. You cannot change the design." Buttons that change things are not shown to reviewers at all, rather than shown disabled.
 
 **Session behaviour.** Tokens refresh quietly in the background. When a refresh fails, a non-blocking banner says "Your session has ended. Sign in again to keep working", and any unsent text or form input stays where it was.
 
@@ -218,34 +218,6 @@ Each card shows the project and stage as small text above the summary, the summa
 
 **On a phone** the order is the same; cards take the full width, the stage rail shrinks to a progress bar with the stage's name, and Running now folds to one line ("3 running") that opens a drawer.
 
-## Creating a project
-
-New project (`/projects/new`, admins) is a guided skill in Focus mode with seven short steps. Every field has a default or a recommendation with its reason, so an admin can create a project in under two minutes and change anything later in the project's Settings.
-
-| Step | Asks for | Default or recommendation | Required |
-| --- | --- | --- | --- |
-| 1. Basics | **Name** (shown everywhere), **short description** (one or two sentences: what it is and who it is for), **icon** (pick from a set of electronics icons such as board, chip, sensor, motor, radio, power, or upload an image) and its **colour** from six theme-safe colours | Icon suggested from the description ("soil moisture sensor" → sensor); colour picked to differ from the person's other projects | Name and description |
-| 2. Start from | An idea (opens the Intent builder after creation) or an existing KiCad design (opens Design import) | Recommended from the repository chosen in step 4: "This repository already holds a KiCad project, so start from the existing design" | Yes |
-| 3. Template and stages | Board, FPGA, Firmware or Mixed, each with its stages drawn as a mini stage rail; optional stages after acceptance: Certify, Produce, Sustain | Board; optional stages off for a prototype, with "Turn these on for a product" | Yes |
-| 4. Repository | Create a new repository (owner and name) or choose an existing one the installation's token can reach; its default branch | A new repository named from the project name (`soil-sensor`) | Yes |
-| 5. Build | Build quantity per run, target unit cost, budget for the first revision, currency, board maker and assembler | 10 boards; no budget; US dollars; JLCPCB (the only one supported today, shown as such) | Quantity |
-| 6. People and access | Who works on the project, each with their access shown and changeable here | The creator; anyone named in step 1's description is not guessed | At least one admin can reach it (always true: admins reach every project) |
-| 7. Review and create | Nothing: the summary of everything above, and what will be created | – | – |
-
-**People and access in step 6.** A list with an Add people field that searches everyone in the installation by name or email and also accepts a new email address (which sends an invitation).
-
-- Each person shows their **class**, which is theirs across trace (Admin, User, Guest), with its meaning in a line: "User: can change this project's design", "Guest: can read and comment at gates", "Admin: reaches every project, signs gates and approves spend".
-- Adding someone to the project assigns them to it. Their class can be changed from the same row by an admin, with a note that it applies to every project they are on, and a confirmation when it grants Admin.
-- A new invitee picks up the class chosen here (User by default).
-- Admins appear in a separate, read-only line ("Admins: Marc Teichtahl, plus everyone else with admin") because they reach every project without being added.
-- Optional per person: who receives this project's questions first, and who is notified of gates (defaults: users get questions, admins get gates and spend).
-
-**What else a project carries,** shown folded as "More settings" in step 7 with defaults and editable later: tags (for filtering on Home and in Operations), the project's own agent rules (starts empty, written by the project), notification routing, the knowledge base's extra sources (attach specs and datasheets now or later), and a separate agent token for the repository (recommended: "keeps this project's agents out of your other repositories").
-
-**Quality bar:** a name that no other project uses; a description of at least one full sentence; a repository trace can reach with the needed permissions (checked live, with what is missing if not); a template chosen; a build quantity above zero; every person added has a class.
-
-**Creating.** Create opens a Run line, because a project gets its own agent runtime, memory, knowledge base and build runner in AWS and its repository is onboarded: "Creating Soil sensor: setting up its agent and knowledge base, a few minutes (the estimate comes from earlier creations). You can leave this page." Each step ticks as it finishes. When it is done the person lands on the new project, whose next step card opens the Intent builder or Design import, and the people added receive one notification each: "Marc added you to Soil sensor as a User."
-
 ## Project page
 
 The project's Overview answers three questions top to bottom: where is it, what is the one next step, and what is happening around it.
@@ -273,7 +245,7 @@ Tapping any stage opens that stage's page: what happened, its gate record, and i
 | Waiting on outside | "Waiting for JLCPCB to ship. Checked 2 hours ago; next check in 4 hours." | Check now; and "Meanwhile: 3 fab-wait tasks" |
 | Something failed | "The power test failed on the bench. This reopens Capture as Rev B." | See what failed |
 
-A guest sees the same card in reading form ("The schematic gate is waiting for an admin to sign") with Read the evidence as its button.
+A reviewer sees the same card in reading form ("The schematic gate is waiting for an admin to sign") with Read the evidence as its button.
 
 **Around it.** Under the card, three short lists, each with a count and a fold:
 
@@ -351,7 +323,7 @@ A gate is the Gate signing skill in Focus mode, and its one job is to make the s
 
 **Signing.** Sign opens a small confirmation dialog that restates the act in a sentence ("You are signing the schematic gate for Soil sensor Rev A. Layout work starts as soon as you sign.") with Sign and Cancel. Passkey or second-factor confirmation is asked again for the release and order gates, the two that commit money. After signing, the gate diamond fills on the stage rail, the queued work starts, and a toast shows what started.
 
-**What non-signers see.** Users and guests can open the gate and all its evidence, and can leave notes. In place of Sign they see "Waiting for an admin to sign" with the admins' names.
+**What non-signers see.** Contributors and reviewers can open the gate and all its evidence, and can leave notes. In place of Sign they see "Waiting for an admin to sign" with the admins' names.
 
 **A gate record afterwards** reads as a receipt: who signed, when, every criterion with its evidence link, the waivers acknowledged and the notes. It lives under Decisions and on the stage rail.
 
@@ -501,7 +473,7 @@ The countdown ticks live. When checks slow down because nothing has changed, the
 
 Admin is four plain screens for admins only, each a view of something trace already holds: people and access, the agents' instructions, the installation's health, and usage across projects.
 
-**People and access.** A table of people: name and email, class (Admin, User, Guest) as a dropdown, the projects they are on as chips, last seen. Invite opens a short sheet: email, class, projects, with each class explained in one line ("User: can change the design on the projects they are on"). A person's row opens their history from the assignment log. Changing someone to Admin asks for confirmation and says what it grants (every project, signing every gate). A person cannot remove their own admin class.
+**People and access.** A table of people: name and email, account class (Admin, User, Guest) as a dropdown, the projects they are on as chips showing their part on each ("Soil sensor · Contributor", "Motor driver · Reviewer"), last seen. The class is a ceiling: a User can be a Contributor or a Reviewer on each project, a Guest only a Reviewer, and an Admin is on every project. Invite opens a short sheet: email, class, and for each project chosen the part, each explained in one line ("Contributor: changes the design, answers questions, runs tools"; "Reviewer: reads everything and comments at gates"). A person's row opens their history from the assignment log. Changing someone to Admin asks for confirmation and says what it grants (every project, signing every gate). A person cannot remove their own admin class.
 
 **Agent instructions.** Every instruction and system prompt the agents receive, managed per installation and per project; specified in full in Agent instructions and system prompts below.
 
@@ -524,7 +496,7 @@ Three layers decide each entry's text; the most specific one with a usable chang
 | --- | --- | --- | --- |
 | trace's default | Nobody in the app; it ships with trace | trace's code | Always present underneath |
 | Installation | Admins | trace's installation store | At once, for every project's next job |
-| Project | Users and admins on that project | The project's repository | Through a pull request that a person reviews, because trace's settings are protected in the repository; agents use it once merged |
+| Project | Contributors and admins on that project | The project's repository | Through a pull request that a person reviews, because trace's settings are protected in the repository; agents use it once merged |
 
 **The screen.**
 
@@ -546,7 +518,7 @@ Three layers decide each entry's text; the most specific one with a usable chang
 
 **Every run records what it used.** A run page lists the entries, layers and versions its agent received (never the text), so "why did the agent do that?" can be traced to the exact wording.
 
-**Who sees and does what.** Anyone with a class can read the catalog and the installation's instructions; a project's instructions need access to the project. Admins change installation instructions. Users and admins on a project change its instructions. History is hidden from guests. Locked parts change for nobody.
+**Who sees and does what.** Anyone with a class can read the catalog and the installation's instructions; a project's instructions need access to the project. Admins change installation instructions. Contributors and admins on a project change its instructions. History is hidden from reviewers. Locked parts change for nobody.
 
 **Reached from:** Admin, a project's Settings, each agent on Agents and tools ("Instructions in force"), and a run page's list of what it used.
 
@@ -561,8 +533,8 @@ Operations (`/ops`) shows how trace itself is running: its agents, job queues, b
 | Person | Sees |
 | --- | --- |
 | Admin | Everything: every project, plus the installation-wide metrics (graphics card and CPU queues, build runners, the API, sign-in, account spend), alarms, and links to logs and traces |
-| User | Their projects only: agent runs, job waits and builds for those projects, and installation-wide health as a single status line ("Job queues healthy") without numbers from other projects |
-| Guest | Their projects' health summary and run counts; no cost, logs or traces |
+| Contributor | Their projects only: agent runs, job waits and builds for those projects, and installation-wide health as a single status line ("Job queues healthy") without numbers from other projects |
+| Reviewer | Their projects' health summary and run counts; no cost, logs or traces |
 
 The filtering is done by trace's API on every request, using the same project assignments as the rest of the app: each widget's metrics are matched to projects through the dimensions and tags trace puts on every resource (one agent runtime, memory, knowledge base and runner per project). A widget that mixes projects is split per project for non-admins, and a widget that cannot be attributed to a project is shown to admins only.
 
@@ -606,7 +578,7 @@ Opening an agent shows its recent runs, the questions it is waiting on, the tool
 - **last used** and its error rate over the selected period;
 - a **Try it** button for read-only tools, which runs it on the person's project from a short form built from the tool's own input description and shows the result in its viewer.
 
-**Only what the person may see and use.** The catalogue comes from the API's tool list, which already leaves out bench tools and tools hidden from the API. Guests see agents' statuses and the catalogue but no Try it and no controls; users can try read-only tools and pause or cancel work on their projects; admins can do everything, on every project. Status for another project's work shows only as "Busy" with the wait, never what the other project is doing.
+**Only what the person may see and use.** The catalogue comes from the API's tool list, which already leaves out bench tools and tools hidden from the API. Reviewers see agents' statuses and the catalogue but no Try it and no controls; contributors can try read-only tools and pause or cancel work on their projects; admins can do everything, on every project. Status for another project's work shows only as "Busy" with the wait, never what the other project is doing.
 
 **Where else it appears.** The project page's "trace is doing" list links here filtered to that project. In chat, every tool row and hand-off links to the tool or agent. In Operations, the Agents tab charts the same agents over time; this page is the live view.
 
@@ -637,9 +609,9 @@ Knowledge (`/knowledge`) is where a person explores everything trace's agents kn
 
 **Changing what the agents know.**
 
-- Users and admins can switch a memory off or back on, with a one-line reason, which is kept. Switching off is the safe way to correct an agent that keeps using an outdated fact; it is never deleted here.
+- Contributors and admins can switch a memory off or back on, with a one-line reason, which is kept. Switching off is the safe way to correct an agent that keeps using an outdated fact; it is never deleted here.
 - Adding a document is done by adding it to the project's repository or attaching it in chat (which asks first); the knowledge base syncs on the next push.
-- Guests can search and read; they cannot change anything.
+- Reviewers can search and read; they cannot change anything.
 
 **On a phone** the search box leads, results are full-width cards, and opening one opens its viewer in a drawer at the cited page.
 
@@ -719,8 +691,8 @@ Each project has a Memory tab (`/p/:id/memory`) where people see and manage what
 | Person | Long-term | Recent activity | Switch off and on |
 | --- | --- | --- | --- |
 | Admin | Every project's agents' memories | All sessions | Any memory on any project |
-| User | Their projects' agents' memories, and their own preferences | Their projects' sessions | Agents' memories on their projects; their own preferences |
-| Guest | Their projects' agents' memories | Their projects' sessions | No |
+| Contributor | Their projects' agents' memories, and their own preferences | Their projects' sessions | Agents' memories on their projects; their own preferences |
+| Reviewer | Their projects' agents' memories | Their projects' sessions | No |
 
 A person's own preferences are shown only to them. Another person's preferences never appear, not even as a count.
 
@@ -923,10 +895,10 @@ Twelve choices need an answer before the build starts; each has trace's recommen
 | Phone experience | The responsive web app, installable to the home screen, with web push | One codebase; every decision already works on a phone | Native apps: more to build and release for little gain |
 | How voice reaches AWS | trace's API makes Polly speech for a message and voice (kept in S3 so a replay costs nothing), and hands the browser a short-lived signed address for a Transcribe streaming session | No AWS keys in the browser; the same voices and accuracy in every browser; custom vocabulary per project | The browser's own speech features: free, but voices and accuracy differ by browser, and some send audio outside AWS |
 | How Operations uses CloudWatch | trace's API reads each CloudWatch dashboard's definition and the metric data behind it, filters both by the person's access, and the app draws the widgets with shadcn charts | Same look as the app; access per widget and per project, not per dashboard; no second sign-in | Embedding CloudWatch's shared dashboards: a different look, all-or-nothing access per dashboard, and a separate sign-in |
-| Permissions per project | Keep the account class (admin, user, guest) and add a part per project assignment, Contributor or Reviewer, capped by the class; the API checks both | Lets one person contribute to one project and review another, which the create flow asks for; today an assignment always carries the class's full rights | Class only: simpler, but a user is a contributor everywhere they are added |
+| Permissions per project (decided 27 Oct: per-project parts) | Keep the account class (admin, user, guest) and add a part per project assignment, Contributor or Reviewer, capped by the class; the API checks both | Lets one person contribute to one project and review another, which the create flow asks for; today an assignment always carries the class's full rights | Class only: simpler, but a user is a contributor everywhere they are added |
 | Drawing the knowledge graph | Cytoscape.js with a force-directed layout, fed by a new API read that returns the neighbourhood of a focus item, filtered by access | Mature, handles thousands of items, has the layouts, grouping and path-finding the view needs | React Flow: excellent for hand-arranged diagrams, weaker at automatic network layout and large graphs |
 
-Not yet decided and worth a conversation: whether guests may comment in chat or only at gates, and whether a project's chats are visible to everyone on the project (recommended) or only to their author.
+Not yet decided and worth a conversation: whether reviewers may comment in chat or only at gates, and whether a project's chats are visible to everyone on the project (recommended) or only to their author.
 
 ## Screens
 
