@@ -31,9 +31,10 @@
  *                      only), and publishes to the namespace; nothing else
  *     content policy   names the events API's own two hosts, Transcribe streaming and the voice bucket; scripts only
  *                      from the app (the theme script is web/public/theme.js, not inline)
- *     WAF              web.webAclArn (a WAFv2 web ACL of CLOUDFRONT scope, made in us-east-1) attached when given: rate
- *                      limits per address belong there, since this stack's region is rarely us-east-1. The backend's
- *                      own per-person limit (src/web/agui.ts) is a soft one
+ *     WAF              web.waf (src/infra/edge.ts, on by default): made here in us-east-1, else the `<prefix>-edge`
+ *                      stack's web ACL (web.waf.aclArn, which the tools pass in); or web.webAclArn, a web ACL of the
+ *                      person's own. Without either, none (with a synth warning). The backend's own per-person limit
+ *                      (src/web/agui.ts) is a soft one
  *   in the parent      what names the pool (TraceWeb.attach):
  *     app client       `<prefix>-web`: choice-based sign-in (USER_AUTH) and refresh, no secret
  *     settings         the SSM parameter `/<prefix>/web/config` (webConfigParameter): the JSON the backend reads
@@ -46,7 +47,7 @@ import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { AssetHashType, CfnOutput, DockerImage, Duration, NestedStack, RemovalPolicy, Stack } from 'aws-cdk-lib'
+import { Annotations, AssetHashType, CfnOutput, DockerImage, Duration, NestedStack, RemovalPolicy, Stack } from 'aws-cdk-lib'
 import * as appsync from 'aws-cdk-lib/aws-appsync'
 import * as acm from 'aws-cdk-lib/aws-certificatemanager'
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront'
@@ -64,6 +65,7 @@ import { Construct } from 'constructs'
 import { AGENT_FACTS_DB, AGENT_FACTS_FOLDER } from '../core/agent-facts.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { ACCESS_PREFIX } from './project.js'
+import { EDGE_REGION, TraceWebAcl, edgeStackName } from './edge.js'
 import { agentsDashboardName } from './observability.js'
 import { type InfraProps, WEB_OUTPUTS, webConfigParameter, webModel } from './props.js'
 
@@ -394,6 +396,12 @@ export class WebStack extends NestedStack {
       runtime: cloudfront.FunctionRuntime.JS_2_0,
       code: cloudfront.FunctionCode.fromInline(API_FUNCTION),
     })
+    // the web ACL: the person's own, else this installation's (here in us-east-1, else the edge stack's)
+    const webAcl = p.settings.webAclArn
+      ?? (!p.settings.waf.enabled ? undefined : region === EDGE_REGION ? new TraceWebAcl(this, 'Waf', { prefix: p.prefix, waf: p.settings.waf }).arn : p.settings.waf.aclArn)
+    if (p.settings.waf.enabled && !p.settings.webAclArn && !webAcl) {
+      Annotations.of(this).addWarning(`web.waf is on but there is no web ACL yet: ${edgeStackName(p.prefix)} (us-east-1) is deployed first by the installer and the self-update, which pass its ARN as web.waf.aclArn. Until then the app has no WAF.`)
+    }
     const custom = p.settings.domainName && p.settings.certificateArn
       ? { domainNames: [p.settings.domainName], certificate: acm.Certificate.fromCertificateArn(this, 'Certificate', p.settings.certificateArn) }
       : {}
@@ -404,7 +412,7 @@ export class WebStack extends NestedStack {
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
       minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
       ...custom,
-      ...(p.settings.webAclArn ? { webAclId: p.settings.webAclArn } : {}),
+      ...(webAcl ? { webAclId: webAcl } : {}),
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(this.siteBucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
@@ -524,6 +532,8 @@ export interface WebConfig {
   model: string
   appUrl: string
   features: { passkeys: boolean; email: boolean; voice: boolean; ops: boolean }
+  /** the app's AWS WAF: on (this installation's, or the person's own web ACL), or off (src/infra/edge.ts) */
+  waf: { enabled: boolean; own: boolean; apiRequestsPer5Minutes: number; authRequestsPer5Minutes: number }
 }
 
 /** What a person may write of their own Cognito profile through an app client: their email alone (a required
@@ -587,6 +597,11 @@ export class TraceWeb extends Construct {
       model: this.p.model,
       appUrl: this.url,
       features: { passkeys: true, email: a.email, voice: true, ops: true },
+      waf: {
+        enabled: Boolean(this.p.settings.webAclArn) || (this.p.settings.waf.enabled && (region === EDGE_REGION || Boolean(this.p.settings.waf.aclArn))),
+        own: Boolean(this.p.settings.webAclArn),
+        apiRequestsPer5Minutes: this.p.settings.waf.apiRequestsPer5Minutes, authRequestsPer5Minutes: this.p.settings.waf.authRequestsPer5Minutes,
+      },
     }
     this.config = new ssm.StringParameter(this, 'Config', {
       parameterName: webConfigParameter(this.p.prefix),

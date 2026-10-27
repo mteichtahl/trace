@@ -92,7 +92,7 @@ export async function handle(path: string, init: RequestInit = {}): Promise<Resp
   const mine = await adminHandle(url.pathname + url.search, body, init, me); if (mine) return mine
   switch (url.pathname) {
     case '/api/config':
-      return json({ region: 'ap-southeast-2', prefix: 'trace', userPoolId: 'mock', clientId: 'mock', events: { http: '', realtime: '' }, features: { passkeys: true, email: true, voice: true, ops: true } })
+      return json({ region: 'ap-southeast-2', prefix: 'trace', userPoolId: 'mock', clientId: 'mock', events: { http: '', realtime: '' }, features: { passkeys: true, email: true, voice: true, ops: true }, waf: { enabled: true, own: false, apiRequestsPer5Minutes: 1000, authRequestsPer5Minutes: 100 } })
     case '/api/auth/refresh':
       return signedIn ? json(tokens()) : json({ ok: false, error: 'not signed in' }, 401)
     case '/api/auth/start':

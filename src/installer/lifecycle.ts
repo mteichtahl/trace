@@ -42,6 +42,7 @@ import { answers as savedAnswers, forgetInstallation, installation } from '../co
 import { INTEGRATION_NAMES, IntegrationStore, secretsManagerApi } from '../core/integrations.js'
 import { REF, SOURCE } from '../core/onboard.js'
 import { githubSecretName, stackName } from '../infra/props.js'
+import { EDGE_REGION, edgeStackName } from '../infra/edge.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import { RUNNER_VARIABLE } from '../core/project.js'
 import { type Answers, AnswersSchema, type InstallEvent, RUNNER_AUTH, SecretsSchema } from './answers.js'
@@ -216,6 +217,13 @@ export async function cmdUninstall(argv: string[]): Promise<number> {
       if (status === 'DELETE_FAILED') throw new Error(`${stack} is DELETE_FAILED: see its events in the CloudFormation console, fix the resource named there, and run \`tracectl uninstall\` again`)
     }
     out(`${stack} is deleted`)
+    // the web app's WAF stack in us-east-1, when there is one (src/infra/edge.ts): nothing points at its web ACL now
+    try {
+      const edge = new cfn.CloudFormationClient({ region: EDGE_REGION, credentials: c })
+      const name = edgeStackName(a.agents.prefix)
+      const st = (await edge.send(new cfn.DescribeStacksCommand({ StackName: name })).catch(() => null))?.Stacks?.[0]
+      if (st && st.StackStatus !== 'DELETE_COMPLETE') { await edge.send(new cfn.DeleteStackCommand({ StackName: name })); out(`deleting ${name} in ${EDGE_REGION} (the web app's AWS WAF)`) }
+    } catch (e) { out(`${edgeStackName(a.agents.prefix)} in ${EDGE_REGION} could not be deleted: ${e instanceof Error ? e.message : String(e)}; delete it in the CloudFormation console`) }
     // after the stack: deleting the runner projects removed their GitHub webhooks with this credential
     if (savedAnswers().runnerCredential === 'imported') {
       const { CodeBuildClient } = await import('@aws-sdk/client-codebuild')

@@ -82,6 +82,7 @@ import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
 import { GithubConnection, RunnerProject } from './runner.js'
 import { apiVocabularyStatement } from './voice.js'
+import { EDGE_REGION, edgeNeeded, edgeStackName } from './edge.js'
 import { SELF_WRITABLE, TraceWeb, addWebClient, traceWebProps } from './web.js'
 import { ACCESS_PREFIX, AGENT_FACTS, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
@@ -580,10 +581,19 @@ export class TraceStack extends Stack {
           StringLike: { [`${issuer}:job_workflow_ref`]: `${repository}/.github/workflows/ci.yml@refs/heads/${branch}` },
         }),
       })
+      // and, with the web app's WAF outside us-east-1, the bootstrap roles there and the edge stack's outputs
+      // (src/installer/edge.ts: <prefix>-edge, and whether CDKToolkit is there); nothing else in us-east-1
+      const edge = edgeNeeded(cfg)
       updater.addToPolicy(new iam.PolicyStatement({
         sid: 'CdkBootstrapRoles', actions: ['sts:AssumeRole'],
-        resources: [`arn:${partition}:iam::${account}:role/cdk-${CDK_QUALIFIER}-*-${account}-${region}`],
+        resources: [`arn:${partition}:iam::${account}:role/cdk-${CDK_QUALIFIER}-*-${account}-${region}`, ...(edge ? [`arn:${partition}:iam::${account}:role/cdk-${CDK_QUALIFIER}-*-${account}-${EDGE_REGION}`] : [])],
       }))
+      if (edge) {
+        updater.addToPolicy(new iam.PolicyStatement({
+          sid: 'EdgeStackOutputs', actions: ['cloudformation:DescribeStacks'],
+          resources: [`arn:${partition}:cloudformation:${EDGE_REGION}:${account}:stack/${edgeStackName(cfg.prefix)}/*`, `arn:${partition}:cloudformation:${EDGE_REGION}:${account}:stack/CDKToolkit/*`],
+        }))
+      }
       updater.addToPolicy(new iam.PolicyStatement({ sid: 'InstallationSettings', actions: ['s3:GetObject'], resources: [central.arnForObjects(`${INSTALLATION_PREFIX}/*`)] }))
       updater.addToPolicy(new iam.PolicyStatement({
         sid: 'StackOutputs', actions: ['cloudformation:DescribeStacks', 'cloudformation:ListStackResources'],

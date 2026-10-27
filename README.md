@@ -540,6 +540,24 @@ Every response carries strict security headers: HSTS, `nosniff`, `X-Frame-Option
 - WebAssembly (PDF.js and Shiki)
 - inline styles
 
+**AWS WAF.** On by default (Advanced → Web app, "Protect the app with AWS WAF"; `web.waf`). The app's address is public
+and sign-in takes no token, so a web ACL sits in front of it (`src/infra/edge.ts`): AWS's managed rule groups (the core
+rule set, known bad inputs and the IP reputation list), at most 1,000 requests to `/api/*` and 100 to `/api/auth/*` per
+address in 5 minutes (`web.waf.apiRequestsPer5Minutes`, `authRequestsPer5Minutes`; over them a 429), and no request to
+`/api/*` declaring a body of 5 MB or more (the chat's limit is 4 MB). The core rule set's 8 KB body limit and its body
+cross-site-scripting rule only count, since a chat or a prompt is larger and people paste code; the app renders no HTML
+from them. It costs about US$11 a month (US$5 for the web ACL and US$1 for each of its six rules) and US$0.60 per
+million requests. That is the default because the alternative is sign-in with no limit per address; turn it off for a
+private trial. CloudFront takes web ACLs from us-east-1 only: in us-east-1 the web ACL is in the web app's own stack;
+elsewhere the installer deploys a small stack of its own, `<prefix>-edge`, in us-east-1 first (bootstrapping CDK there
+if needed), and deploys the main stack with its `WebAclArn` output as `web.waf.aclArn`. Passing that one value between
+two deploys was chosen over CDK's `crossRegionReferences`, which would add a custom resource (a Lambda and its role) and
+an SSM parameter the two stacks would then hold each other to. The self-update deploys `<prefix>-edge` too, with the
+CDK bootstrap roles of us-east-1 and the right to read that stack's outputs only; it never bootstraps us-east-1, so
+when that is missing it keeps the web ACL the app had and says to run the installer. A failed edge deploy never stops
+the main one. Turning the WAF off deletes `<prefix>-edge` after the main deploy, and `tracectl uninstall` deletes it
+too. A web ACL of your own (`web.webAclArn`) is used instead when given. Admin → Installation says whether it is on.
+
 **Custom domain.** Under Advanced → Web app, give a domain and its ACM certificate (it must be in us-east-1). After the
 deploy, point the domain's DNS at the distribution with a CNAME or alias (`WebDistributionId`). The props for this are
 `web.domainName` and `web.certificateArn`.

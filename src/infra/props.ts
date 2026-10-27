@@ -271,6 +271,20 @@ export const InfraPropsSchema = z.object({
      * outside this stack (e.g. AWS's managed common rules and a rate-based rule per address). Unset: no WAF; the
      * backend's own per-person limits still apply */
     webAclArn: z.string().regex(/^arn:aws[a-z-]*:wafv2:us-east-1:\d{12}:global\/webacl\/[\w-]+\/[0-9a-f-]{36}$/, 'a WAFv2 web ACL ARN of CLOUDFRONT scope (us-east-1, global/webacl/…)').optional(),
+    /** AWS WAF in front of the app (src/infra/edge.ts): AWS's managed rules, rate limits per address, a size limit.
+     * On by default (about US$11 a month and US$0.60 per million requests): the address is public and sign-in is not
+     * behind a token. In the installation's region when that is us-east-1, else in the stack `<prefix>-edge` there,
+     * whose output the tools pass back as aclArn. Ignored when webAclArn names a web ACL of your own */
+    waf: z.object({
+      enabled: z.boolean().default(true),
+      /** requests to /api/* per address in 5 minutes */
+      apiRequestsPer5Minutes: z.number().int().min(100).max(2_000_000_000).default(1000),
+      /** requests to /api/auth/* (sign-in) per address in 5 minutes */
+      authRequestsPer5Minutes: z.number().int().min(10).max(2_000_000_000).default(100),
+      /** the `<prefix>-edge` stack's web ACL (its WebAclArn output), set by the installer and the self-update before
+       * they deploy this stack; unset outside us-east-1, the app has no WAF until it is */
+      aclArn: z.string().regex(/^arn:aws[a-z-]*:wafv2:us-east-1:\d{12}:global\/webacl\/[\w-]+\/[0-9a-f-]{36}$/, 'a WAFv2 web ACL ARN of CLOUDFRONT scope').optional(),
+    }).strict().prefault({}),
     /** The regions a global or cross-region inference profile may route the chat model to (the backend may invoke the
      * model there); unset: any region */
     modelRegions: z.array(z.string().regex(/^[a-z]{2}(-gov)?-[a-z]+-\d$/, 'an AWS region')).max(30).optional(),
