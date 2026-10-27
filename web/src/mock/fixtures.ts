@@ -86,7 +86,7 @@ export const JOURNEYS: Record<string, Journey> = {
       { id: 'r4', who: 'Priya Shah', text: 'Pin plan agreed with the firmware track', at: ago(DAY + 2 * HOUR) },
       { id: 'r5', who: 'Marc Teichtahl', text: 'Architecture gate signed by Marc', at: ago(15 * DAY) },
     ],
-    hasMemory: false,
+    hasMemory: true,
     summary: {
       requirements: { accepted: 24, verified: 0, failing: 0, untested: 24 },
       cost: { cloudToDate: 38, forecast: 120, bom: 142, currency: 'USD', quantity: 10 },

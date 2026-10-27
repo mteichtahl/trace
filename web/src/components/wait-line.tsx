@@ -21,6 +21,8 @@ export interface WaitLineProps {
   words?: WaitWords
   /** one line, no padding: the detail as the sentence (Operations' refresh line) */
   compact?: boolean
+  /** the button's words (default "Check now"; "Sync now" for a knowledge base sync); words.now wins */
+  checkLabel?: string
   className?: string
 }
 
@@ -43,7 +45,7 @@ export function waitDetail(w: Wait, now: number, words: WaitWords = {}): string 
   return parts.join(words.next ? '; ' : ' · ')
 }
 
-export function WaitLine({ wait, project, onCheckNow, words, compact, className }: WaitLineProps) {
+export function WaitLine({ wait, project, onCheckNow, words, compact, checkLabel = 'Check now', className }: WaitLineProps) {
   const now = useNow(1000)
   const [checking, setChecking] = useState(false)
   const detail = waitDetail(wait, now, words)
@@ -80,7 +82,7 @@ export function WaitLine({ wait, project, onCheckNow, words, compact, className 
           }}
         >
           {checking && <Loader2 className="animate-spin" />}
-          {checking ? (words?.busy ?? 'Checking') : (words?.now ?? 'Check now')}
+          {checking ? (words?.busy ?? 'Checking') : (words?.now ?? checkLabel)}
         </Button>
       )}
     </div>

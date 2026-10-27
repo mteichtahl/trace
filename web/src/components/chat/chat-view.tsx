@@ -22,7 +22,9 @@ import { usePrefs } from '@/lib/prefs'
 import type { ChatMessage } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { ChatInput } from './chat-input'
-import { setThread, useRecallHistory } from './chat-state'
+import { AGENT_ID } from './agent'
+import { pendingAsk, setThread, useRecallHistory } from './chat-state'
+import { useStore } from '@/lib/store'
 import { Markdown } from './markdown'
 import { enqueueSpeech, speak, speakable, stopSpeaking, useSpeech } from './voice/speech'
 
@@ -153,6 +155,15 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
     agent.setMessages(ms.slice(0, lastUser + 1) as Message[])
     void run()
   }
+
+  // a question handed over by a screen (askTrace): the main panel sends it once
+  const pending = useStore(pendingAsk)
+  useEffect(() => {
+    if (agentId !== AGENT_ID || !pending || running) return
+    pendingAsk.set(null)
+    send(pending.text)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending, agentId])
 
   // keep the newest message in view while it streams
   useEffect(() => {

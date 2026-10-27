@@ -15,6 +15,7 @@ import { Route as NoAccessRouteImport } from './routes/no-access'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppAdminRouteImport } from './routes/_app/admin'
 import { Route as AppInboxRouteImport } from './routes/_app/inbox'
+import { Route as AppKnowledgeRouteImport } from './routes/_app/knowledge'
 import { Route as AppMeRouteImport } from './routes/_app/me'
 import { Route as InviteTokenRouteImport } from './routes/invite.$token'
 import { Route as SignInIndexRouteImport } from './routes/sign-in/index'
@@ -26,14 +27,22 @@ import { Route as AppAdminPeopleRouteImport } from './routes/_app/admin/people'
 import { Route as AppAdminPromptsRouteImport } from './routes/_app/admin/prompts'
 import { Route as AppAdminUsageRouteImport } from './routes/_app/admin/usage'
 import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents/index'
+import { Route as AppAgentsAgentRouteImport } from './routes/_app/agents/$agent'
 import { Route as AppKnowledgeIndexRouteImport } from './routes/_app/knowledge/index'
+import { Route as AppKnowledgeTabRouteImport } from './routes/_app/knowledge/$tab'
+import { Route as AppKnowledgeGraphRouteImport } from './routes/_app/knowledge/graph'
 import { Route as AppOpsIndexRouteImport } from './routes/_app/ops/index'
 import { Route as AppOpsSectionRouteImport } from './routes/_app/ops/$section'
 import { Route as AppPIdRouteImport } from './routes/_app/p/$id'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects/index'
 import { Route as AppProjectsNewRouteImport } from './routes/_app/projects/new'
+import { Route as AppAgentsToolsToolRouteImport } from './routes/_app/agents/tools/$tool'
 import { Route as AppPIdIndexRouteImport } from './routes/_app/p/$id/index'
 import { Route as AppPIdSplatRouteImport } from './routes/_app/p/$id/$'
+import { Route as AppPIdMemoryRouteImport } from './routes/_app/p/$id/memory'
+import { Route as AppPIdMemoryIndexRouteImport } from './routes/_app/p/$id/memory/index'
+import { Route as AppPIdMemoryChangesRouteImport } from './routes/_app/p/$id/memory/changes'
+import { Route as AppPIdMemoryRecentRouteImport } from './routes/_app/p/$id/memory/recent'
 import { Route as AppPIdSettingsPromptsRouteImport } from './routes/_app/p/$id/settings/prompts'
 import { Route as FocusPIdDoSkillRouteImport } from './routes/_focus/p/$id/do/$skill'
 import { Route as FocusPIdGatesGateRouteImport } from './routes/_focus/p/$id/gates/$gate'
@@ -64,6 +73,11 @@ const AppAdminRoute = AppAdminRouteImport.update({
 const AppInboxRoute = AppInboxRouteImport.update({
   id: '/inbox',
   path: '/inbox',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppKnowledgeRoute = AppKnowledgeRouteImport.update({
+  id: '/knowledge',
+  path: '/knowledge',
   getParentRoute: () => AppRoute,
 } as any)
 const AppMeRoute = AppMeRouteImport.update({
@@ -121,10 +135,25 @@ const AppAgentsIndexRoute = AppAgentsIndexRouteImport.update({
   path: '/agents/',
   getParentRoute: () => AppRoute,
 } as any)
-const AppKnowledgeIndexRoute = AppKnowledgeIndexRouteImport.update({
-  id: '/knowledge/',
-  path: '/knowledge/',
+const AppAgentsAgentRoute = AppAgentsAgentRouteImport.update({
+  id: '/agents/$agent',
+  path: '/agents/$agent',
   getParentRoute: () => AppRoute,
+} as any)
+const AppKnowledgeIndexRoute = AppKnowledgeIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppKnowledgeRoute,
+} as any)
+const AppKnowledgeTabRoute = AppKnowledgeTabRouteImport.update({
+  id: '/$tab',
+  path: '/$tab',
+  getParentRoute: () => AppKnowledgeRoute,
+} as any)
+const AppKnowledgeGraphRoute = AppKnowledgeGraphRouteImport.update({
+  id: '/graph',
+  path: '/graph',
+  getParentRoute: () => AppKnowledgeRoute,
 } as any)
 const AppOpsIndexRoute = AppOpsIndexRouteImport.update({
   id: '/ops/',
@@ -151,6 +180,11 @@ const AppProjectsNewRoute = AppProjectsNewRouteImport.update({
   path: '/projects/new',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAgentsToolsToolRoute = AppAgentsToolsToolRouteImport.update({
+  id: '/agents/tools/$tool',
+  path: '/agents/tools/$tool',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppPIdIndexRoute = AppPIdIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -160,6 +194,26 @@ const AppPIdSplatRoute = AppPIdSplatRouteImport.update({
   id: '/$',
   path: '/$',
   getParentRoute: () => AppPIdRoute,
+} as any)
+const AppPIdMemoryRoute = AppPIdMemoryRouteImport.update({
+  id: '/memory',
+  path: '/memory',
+  getParentRoute: () => AppPIdRoute,
+} as any)
+const AppPIdMemoryIndexRoute = AppPIdMemoryIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppPIdMemoryRoute,
+} as any)
+const AppPIdMemoryChangesRoute = AppPIdMemoryChangesRouteImport.update({
+  id: '/changes',
+  path: '/changes',
+  getParentRoute: () => AppPIdMemoryRoute,
+} as any)
+const AppPIdMemoryRecentRoute = AppPIdMemoryRecentRouteImport.update({
+  id: '/recent',
+  path: '/recent',
+  getParentRoute: () => AppPIdMemoryRoute,
 } as any)
 const AppPIdSettingsPromptsRoute = AppPIdSettingsPromptsRouteImport.update({
   id: '/settings/prompts',
@@ -182,6 +236,7 @@ export interface FileRoutesByFullPath {
   '/no-access': typeof NoAccessRoute
   '/admin': typeof AppAdminRouteWithChildren
   '/inbox': typeof AppInboxRoute
+  '/knowledge': typeof AppKnowledgeRouteWithChildren
   '/me': typeof AppMeRoute
   '/invite/$token': typeof InviteTokenRoute
   '/sign-in/code': typeof SignInCodeRoute
@@ -191,6 +246,9 @@ export interface FileRoutesByFullPath {
   '/admin/people': typeof AppAdminPeopleRoute
   '/admin/prompts': typeof AppAdminPromptsRoute
   '/admin/usage': typeof AppAdminUsageRoute
+  '/agents/$agent': typeof AppAgentsAgentRoute
+  '/knowledge/$tab': typeof AppKnowledgeTabRoute
+  '/knowledge/graph': typeof AppKnowledgeGraphRoute
   '/ops/$section': typeof AppOpsSectionRoute
   '/p/$id': typeof AppPIdRouteWithChildren
   '/projects/new': typeof AppProjectsNewRoute
@@ -199,11 +257,16 @@ export interface FileRoutesByFullPath {
   '/knowledge/': typeof AppKnowledgeIndexRoute
   '/ops/': typeof AppOpsIndexRoute
   '/projects/': typeof AppProjectsIndexRoute
+  '/agents/tools/$tool': typeof AppAgentsToolsToolRoute
   '/p/$id/$': typeof AppPIdSplatRoute
+  '/p/$id/memory': typeof AppPIdMemoryRouteWithChildren
   '/p/$id/': typeof AppPIdIndexRoute
+  '/p/$id/memory/changes': typeof AppPIdMemoryChangesRoute
+  '/p/$id/memory/recent': typeof AppPIdMemoryRecentRoute
   '/p/$id/settings/prompts': typeof AppPIdSettingsPromptsRoute
   '/p/$id/do/$skill': typeof FocusPIdDoSkillRoute
   '/p/$id/gates/$gate': typeof FocusPIdGatesGateRoute
+  '/p/$id/memory/': typeof AppPIdMemoryIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
@@ -218,6 +281,9 @@ export interface FileRoutesByTo {
   '/admin/people': typeof AppAdminPeopleRoute
   '/admin/prompts': typeof AppAdminPromptsRoute
   '/admin/usage': typeof AppAdminUsageRoute
+  '/agents/$agent': typeof AppAgentsAgentRoute
+  '/knowledge/$tab': typeof AppKnowledgeTabRoute
+  '/knowledge/graph': typeof AppKnowledgeGraphRoute
   '/ops/$section': typeof AppOpsSectionRoute
   '/projects/new': typeof AppProjectsNewRoute
   '/admin': typeof AppAdminIndexRoute
@@ -225,11 +291,15 @@ export interface FileRoutesByTo {
   '/knowledge': typeof AppKnowledgeIndexRoute
   '/ops': typeof AppOpsIndexRoute
   '/projects': typeof AppProjectsIndexRoute
+  '/agents/tools/$tool': typeof AppAgentsToolsToolRoute
   '/p/$id/$': typeof AppPIdSplatRoute
   '/p/$id': typeof AppPIdIndexRoute
+  '/p/$id/memory/changes': typeof AppPIdMemoryChangesRoute
+  '/p/$id/memory/recent': typeof AppPIdMemoryRecentRoute
   '/p/$id/settings/prompts': typeof AppPIdSettingsPromptsRoute
   '/p/$id/do/$skill': typeof FocusPIdDoSkillRoute
   '/p/$id/gates/$gate': typeof FocusPIdGatesGateRoute
+  '/p/$id/memory': typeof AppPIdMemoryIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -238,6 +308,7 @@ export interface FileRoutesById {
   '/no-access': typeof NoAccessRoute
   '/_app/admin': typeof AppAdminRouteWithChildren
   '/_app/inbox': typeof AppInboxRoute
+  '/_app/knowledge': typeof AppKnowledgeRouteWithChildren
   '/_app/me': typeof AppMeRoute
   '/invite/$token': typeof InviteTokenRoute
   '/sign-in/code': typeof SignInCodeRoute
@@ -248,6 +319,9 @@ export interface FileRoutesById {
   '/_app/admin/people': typeof AppAdminPeopleRoute
   '/_app/admin/prompts': typeof AppAdminPromptsRoute
   '/_app/admin/usage': typeof AppAdminUsageRoute
+  '/_app/agents/$agent': typeof AppAgentsAgentRoute
+  '/_app/knowledge/$tab': typeof AppKnowledgeTabRoute
+  '/_app/knowledge/graph': typeof AppKnowledgeGraphRoute
   '/_app/ops/$section': typeof AppOpsSectionRoute
   '/_app/p/$id': typeof AppPIdRouteWithChildren
   '/_app/projects/new': typeof AppProjectsNewRoute
@@ -256,11 +330,16 @@ export interface FileRoutesById {
   '/_app/knowledge/': typeof AppKnowledgeIndexRoute
   '/_app/ops/': typeof AppOpsIndexRoute
   '/_app/projects/': typeof AppProjectsIndexRoute
+  '/_app/agents/tools/$tool': typeof AppAgentsToolsToolRoute
   '/_app/p/$id/$': typeof AppPIdSplatRoute
+  '/_app/p/$id/memory': typeof AppPIdMemoryRouteWithChildren
   '/_app/p/$id/': typeof AppPIdIndexRoute
+  '/_app/p/$id/memory/changes': typeof AppPIdMemoryChangesRoute
+  '/_app/p/$id/memory/recent': typeof AppPIdMemoryRecentRoute
   '/_app/p/$id/settings/prompts': typeof AppPIdSettingsPromptsRoute
   '/_focus/p/$id/do/$skill': typeof FocusPIdDoSkillRoute
   '/_focus/p/$id/gates/$gate': typeof FocusPIdGatesGateRoute
+  '/_app/p/$id/memory/': typeof AppPIdMemoryIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -269,6 +348,7 @@ export interface FileRouteTypes {
     | '/no-access'
     | '/admin'
     | '/inbox'
+    | '/knowledge'
     | '/me'
     | '/invite/$token'
     | '/sign-in/code'
@@ -278,6 +358,9 @@ export interface FileRouteTypes {
     | '/admin/people'
     | '/admin/prompts'
     | '/admin/usage'
+    | '/agents/$agent'
+    | '/knowledge/$tab'
+    | '/knowledge/graph'
     | '/ops/$section'
     | '/p/$id'
     | '/projects/new'
@@ -286,11 +369,16 @@ export interface FileRouteTypes {
     | '/knowledge/'
     | '/ops/'
     | '/projects/'
+    | '/agents/tools/$tool'
     | '/p/$id/$'
+    | '/p/$id/memory'
     | '/p/$id/'
+    | '/p/$id/memory/changes'
+    | '/p/$id/memory/recent'
     | '/p/$id/settings/prompts'
     | '/p/$id/do/$skill'
     | '/p/$id/gates/$gate'
+    | '/p/$id/memory/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -305,6 +393,9 @@ export interface FileRouteTypes {
     | '/admin/people'
     | '/admin/prompts'
     | '/admin/usage'
+    | '/agents/$agent'
+    | '/knowledge/$tab'
+    | '/knowledge/graph'
     | '/ops/$section'
     | '/projects/new'
     | '/admin'
@@ -312,11 +403,15 @@ export interface FileRouteTypes {
     | '/knowledge'
     | '/ops'
     | '/projects'
+    | '/agents/tools/$tool'
     | '/p/$id/$'
     | '/p/$id'
+    | '/p/$id/memory/changes'
+    | '/p/$id/memory/recent'
     | '/p/$id/settings/prompts'
     | '/p/$id/do/$skill'
     | '/p/$id/gates/$gate'
+    | '/p/$id/memory'
   id:
     | '__root__'
     | '/_app'
@@ -324,6 +419,7 @@ export interface FileRouteTypes {
     | '/no-access'
     | '/_app/admin'
     | '/_app/inbox'
+    | '/_app/knowledge'
     | '/_app/me'
     | '/invite/$token'
     | '/sign-in/code'
@@ -334,6 +430,9 @@ export interface FileRouteTypes {
     | '/_app/admin/people'
     | '/_app/admin/prompts'
     | '/_app/admin/usage'
+    | '/_app/agents/$agent'
+    | '/_app/knowledge/$tab'
+    | '/_app/knowledge/graph'
     | '/_app/ops/$section'
     | '/_app/p/$id'
     | '/_app/projects/new'
@@ -342,11 +441,16 @@ export interface FileRouteTypes {
     | '/_app/knowledge/'
     | '/_app/ops/'
     | '/_app/projects/'
+    | '/_app/agents/tools/$tool'
     | '/_app/p/$id/$'
+    | '/_app/p/$id/memory'
     | '/_app/p/$id/'
+    | '/_app/p/$id/memory/changes'
+    | '/_app/p/$id/memory/recent'
     | '/_app/p/$id/settings/prompts'
     | '/_focus/p/$id/do/$skill'
     | '/_focus/p/$id/gates/$gate'
+    | '/_app/p/$id/memory/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -401,6 +505,13 @@ declare module '@tanstack/react-router' {
       path: '/inbox'
       fullPath: '/inbox'
       preLoaderRoute: typeof AppInboxRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/knowledge': {
+      id: '/_app/knowledge'
+      path: '/knowledge'
+      fullPath: '/knowledge'
+      preLoaderRoute: typeof AppKnowledgeRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/me': {
@@ -480,12 +591,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAgentsIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/agents/$agent': {
+      id: '/_app/agents/$agent'
+      path: '/agents/$agent'
+      fullPath: '/agents/$agent'
+      preLoaderRoute: typeof AppAgentsAgentRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/knowledge/': {
       id: '/_app/knowledge/'
-      path: '/knowledge'
+      path: '/'
       fullPath: '/knowledge/'
       preLoaderRoute: typeof AppKnowledgeIndexRouteImport
-      parentRoute: typeof AppRoute
+      parentRoute: typeof AppKnowledgeRoute
+    }
+    '/_app/knowledge/$tab': {
+      id: '/_app/knowledge/$tab'
+      path: '/$tab'
+      fullPath: '/knowledge/$tab'
+      preLoaderRoute: typeof AppKnowledgeTabRouteImport
+      parentRoute: typeof AppKnowledgeRoute
+    }
+    '/_app/knowledge/graph': {
+      id: '/_app/knowledge/graph'
+      path: '/graph'
+      fullPath: '/knowledge/graph'
+      preLoaderRoute: typeof AppKnowledgeGraphRouteImport
+      parentRoute: typeof AppKnowledgeRoute
     }
     '/_app/ops/': {
       id: '/_app/ops/'
@@ -522,6 +654,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProjectsNewRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/agents/tools/$tool': {
+      id: '/_app/agents/tools/$tool'
+      path: '/agents/tools/$tool'
+      fullPath: '/agents/tools/$tool'
+      preLoaderRoute: typeof AppAgentsToolsToolRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/p/$id/': {
       id: '/_app/p/$id/'
       path: '/'
@@ -535,6 +674,34 @@ declare module '@tanstack/react-router' {
       fullPath: '/p/$id/$'
       preLoaderRoute: typeof AppPIdSplatRouteImport
       parentRoute: typeof AppPIdRoute
+    }
+    '/_app/p/$id/memory': {
+      id: '/_app/p/$id/memory'
+      path: '/memory'
+      fullPath: '/p/$id/memory'
+      preLoaderRoute: typeof AppPIdMemoryRouteImport
+      parentRoute: typeof AppPIdRoute
+    }
+    '/_app/p/$id/memory/': {
+      id: '/_app/p/$id/memory/'
+      path: '/'
+      fullPath: '/p/$id/memory/'
+      preLoaderRoute: typeof AppPIdMemoryIndexRouteImport
+      parentRoute: typeof AppPIdMemoryRoute
+    }
+    '/_app/p/$id/memory/changes': {
+      id: '/_app/p/$id/memory/changes'
+      path: '/changes'
+      fullPath: '/p/$id/memory/changes'
+      preLoaderRoute: typeof AppPIdMemoryChangesRouteImport
+      parentRoute: typeof AppPIdMemoryRoute
+    }
+    '/_app/p/$id/memory/recent': {
+      id: '/_app/p/$id/memory/recent'
+      path: '/recent'
+      fullPath: '/p/$id/memory/recent'
+      preLoaderRoute: typeof AppPIdMemoryRecentRouteImport
+      parentRoute: typeof AppPIdMemoryRoute
     }
     '/_app/p/$id/settings/prompts': {
       id: '/_app/p/$id/settings/prompts'
@@ -580,14 +747,48 @@ const AppAdminRouteWithChildren = AppAdminRoute._addFileChildren(
   AppAdminRouteChildren,
 )
 
+interface AppKnowledgeRouteChildren {
+  AppKnowledgeTabRoute: typeof AppKnowledgeTabRoute
+  AppKnowledgeGraphRoute: typeof AppKnowledgeGraphRoute
+  AppKnowledgeIndexRoute: typeof AppKnowledgeIndexRoute
+}
+
+const AppKnowledgeRouteChildren: AppKnowledgeRouteChildren = {
+  AppKnowledgeTabRoute: AppKnowledgeTabRoute,
+  AppKnowledgeGraphRoute: AppKnowledgeGraphRoute,
+  AppKnowledgeIndexRoute: AppKnowledgeIndexRoute,
+}
+
+const AppKnowledgeRouteWithChildren = AppKnowledgeRoute._addFileChildren(
+  AppKnowledgeRouteChildren,
+)
+
+interface AppPIdMemoryRouteChildren {
+  AppPIdMemoryChangesRoute: typeof AppPIdMemoryChangesRoute
+  AppPIdMemoryRecentRoute: typeof AppPIdMemoryRecentRoute
+  AppPIdMemoryIndexRoute: typeof AppPIdMemoryIndexRoute
+}
+
+const AppPIdMemoryRouteChildren: AppPIdMemoryRouteChildren = {
+  AppPIdMemoryChangesRoute: AppPIdMemoryChangesRoute,
+  AppPIdMemoryRecentRoute: AppPIdMemoryRecentRoute,
+  AppPIdMemoryIndexRoute: AppPIdMemoryIndexRoute,
+}
+
+const AppPIdMemoryRouteWithChildren = AppPIdMemoryRoute._addFileChildren(
+  AppPIdMemoryRouteChildren,
+)
+
 interface AppPIdRouteChildren {
   AppPIdSplatRoute: typeof AppPIdSplatRoute
+  AppPIdMemoryRoute: typeof AppPIdMemoryRouteWithChildren
   AppPIdIndexRoute: typeof AppPIdIndexRoute
   AppPIdSettingsPromptsRoute: typeof AppPIdSettingsPromptsRoute
 }
 
 const AppPIdRouteChildren: AppPIdRouteChildren = {
   AppPIdSplatRoute: AppPIdSplatRoute,
+  AppPIdMemoryRoute: AppPIdMemoryRouteWithChildren,
   AppPIdIndexRoute: AppPIdIndexRoute,
   AppPIdSettingsPromptsRoute: AppPIdSettingsPromptsRoute,
 }
@@ -598,29 +799,33 @@ const AppPIdRouteWithChildren =
 interface AppRouteChildren {
   AppAdminRoute: typeof AppAdminRouteWithChildren
   AppInboxRoute: typeof AppInboxRoute
+  AppKnowledgeRoute: typeof AppKnowledgeRouteWithChildren
   AppMeRoute: typeof AppMeRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppAgentsAgentRoute: typeof AppAgentsAgentRoute
   AppOpsSectionRoute: typeof AppOpsSectionRoute
   AppPIdRoute: typeof AppPIdRouteWithChildren
   AppProjectsNewRoute: typeof AppProjectsNewRoute
   AppAgentsIndexRoute: typeof AppAgentsIndexRoute
-  AppKnowledgeIndexRoute: typeof AppKnowledgeIndexRoute
   AppOpsIndexRoute: typeof AppOpsIndexRoute
   AppProjectsIndexRoute: typeof AppProjectsIndexRoute
+  AppAgentsToolsToolRoute: typeof AppAgentsToolsToolRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppAdminRoute: AppAdminRouteWithChildren,
   AppInboxRoute: AppInboxRoute,
+  AppKnowledgeRoute: AppKnowledgeRouteWithChildren,
   AppMeRoute: AppMeRoute,
   AppIndexRoute: AppIndexRoute,
+  AppAgentsAgentRoute: AppAgentsAgentRoute,
   AppOpsSectionRoute: AppOpsSectionRoute,
   AppPIdRoute: AppPIdRouteWithChildren,
   AppProjectsNewRoute: AppProjectsNewRoute,
   AppAgentsIndexRoute: AppAgentsIndexRoute,
-  AppKnowledgeIndexRoute: AppKnowledgeIndexRoute,
   AppOpsIndexRoute: AppOpsIndexRoute,
   AppProjectsIndexRoute: AppProjectsIndexRoute,
+  AppAgentsToolsToolRoute: AppAgentsToolsToolRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

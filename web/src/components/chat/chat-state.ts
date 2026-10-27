@@ -32,6 +32,13 @@ export const panel = createStore<PanelState>({ open: false, width: typeof window
 export const usePanel = () => useStore(panel)
 
 export const openPanel = (open?: boolean) => panel.set((s) => ({ ...s, open: open ?? !s.open }))
+
+/** A question a screen hands to Ask trace ("Ask trace about these results"): the panel opens and sends it once. */
+export const pendingAsk = createStore<{ id: number; text: string } | null>(null)
+export function askTrace(text: string) {
+  pendingAsk.set({ id: Date.now(), text })
+  panel.set((s) => ({ ...s, open: true, history: false }))
+}
 export function setPanelWidth(width: number) {
   const w = Math.round(Math.min(560, Math.max(380, width)))
   panel.set((s) => ({ ...s, width: w }))
