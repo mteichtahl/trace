@@ -1,11 +1,13 @@
 /**
  * One item that needs the person (Home, Inbox, the bell): the project and stage as small text, the summary, how long
  * it has waited, and one primary button. A question with a clear recommendation shows the recommended answer as its
- * own button ("Use 4.2 A") with "Other answer" beside it, so most questions are answered in one tap.
+ * own button ("Use 4.2 A") with "Other answer" beside it, so most questions are answered in one tap. A stuck agent's
+ * report can be dismissed with a reason in one line (onDismiss: stuck.dismiss).
  */
 import { Link } from '@tanstack/react-router'
 import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { DismissStuck } from '@/components/dismiss-stuck'
 import { EvidenceChip } from '@/components/evidence-chip'
 import { Rich } from '@/components/rich'
 import { waited } from '@/lib/format'
@@ -21,11 +23,13 @@ export interface NeedsYouCardProps {
   answering?: boolean
   /** "Other answer": opens Question answer */
   onOther?: (item: InboxItem) => void
+  /** a stuck report: dismiss it with a reason (useDismissStuck); absent: no Dismiss */
+  onDismiss?: (item: InboxItem, reason: string) => Promise<void>
   compact?: boolean
   className?: string
 }
 
-export function NeedsYouCard({ item, onAnswer, answering, onOther, compact, className }: NeedsYouCardProps) {
+export function NeedsYouCard({ item, onAnswer, answering, onOther, onDismiss, compact, className }: NeedsYouCardProps) {
   const stuck = item.kind === 'stuck'
   const meta = [item.project, item.revision, item.stage, KIND[item.kind], compact ? waited(item.createdAt) : `waiting ${waited(item.createdAt)}`].filter(Boolean).join(' · ')
   const chips = [...(item.sources ?? []), ...(item.blocks ? [{ kind: 'record' as const, label: `Blocks: ${item.blocks}` }] : [])]
@@ -48,6 +52,7 @@ export function NeedsYouCard({ item, onAnswer, answering, onOther, compact, clas
             ))}
           </div>
         )}
+        {stuck && onDismiss && item.questionId && <DismissStuck item={item} onDismiss={onDismiss} className="mt-3" />}
       </div>
       <div className="flex shrink-0 gap-2 max-sm:[&>*]:flex-1">
         {item.recommended && onAnswer ? (

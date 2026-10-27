@@ -9,6 +9,7 @@ import { useState } from 'react'
 import { useTraceContext } from '@/components/chat/context'
 import { MemorySheet } from '@/components/memory/memory-sheet'
 import { NeedsYouCard } from '@/components/needs-you-card'
+import { useDismissStuck } from '@/components/dismiss-stuck'
 import { Column, Section } from '@/components/shell/app-shell'
 import { NeedsBuilding } from '@/components/side-sheet'
 import { EmptyState, Loading, NotShared, SkeletonRows } from '@/components/states'
@@ -31,6 +32,7 @@ function Agent() {
   const repos = (projects.data ?? []).map((p) => p.repo)
   const mems = useQueries({ queries: repos.map((repo) => ({ ...q('memory.list', { repo, agent, limit: 20 }), enabled: !!a, retry: false })) })
   const [open, setOpen] = useState<MemoryView | null>(null)
+  const dismiss = useDismissStuck()
   useTraceContext(a ? { label: a.name, description: 'The agent the person is looking at', value: { agent: a.id, name: a.name } } : null, 'agent')
   if (agent === 'tools') return <Navigate to="/agents" hash="tools" />
   if (!a) return <NotShared />
@@ -51,7 +53,7 @@ function Agent() {
         ) : named.length === 0 ? (
           <EmptyState>Nothing that names the {a.name} agent is waiting on anyone.</EmptyState>
         ) : (
-          <div className="space-y-3">{named.map((i) => <NeedsYouCard key={i.id} item={i} />)}</div>
+          <div className="space-y-3">{named.map((i) => <NeedsYouCard key={i.id} item={i} onDismiss={dismiss} />)}</div>
         )}
       </Section>
 

@@ -19,6 +19,7 @@ import { useCommands } from '@/components/shell/command-menu'
 import { NeedsBuilding } from '@/components/side-sheet'
 import { EmptyState, Loading, Partial, SkeletonRows } from '@/components/states'
 import { StatusBadge } from '@/components/status-badge'
+import { DismissStuck, useDismissStuck } from '@/components/dismiss-stuck'
 import { useAuth } from '@/lib/auth'
 import { projectName } from '@/lib/api'
 import { AGENTS } from '@/lib/knowledge'
@@ -52,6 +53,7 @@ function Agents() {
   const admin = user?.class === 'admin'
   const reviewerOnly = !admin && (projects.data ?? []).every((p) => (p.part ?? 'contributor') === 'reviewer')
   const stuck = (inbox.data ?? []).filter((i) => i.kind === 'stuck')
+  const dismiss = useDismissStuck()
   const questions = (inbox.data ?? []).filter((i) => i.kind === 'question')
 
   const rows: Row[] = AGENTS.map((a) => ({ id: a.id, name: a.name, does: a.does, status: 'Not reported', now: '', queue: '', today: '', instructions: '' }))
@@ -96,6 +98,7 @@ function Agents() {
                 <span className="font-medium">{s.project}</span>
                 <span className="min-w-0 flex-1">{s.summary.replace(/\*\*/g, '')}</span>
                 {s.action.to && <Link to={s.action.to} className="text-primary hover:underline">{s.action.label}</Link>}
+                {!reviewerOnly && s.questionId && <DismissStuck item={s} onDismiss={dismiss} className="basis-full sm:basis-auto" />}
               </li>
             ))}
           </ul>

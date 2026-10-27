@@ -3,7 +3,8 @@
  * blocks work, money is about to be spent — each the same item that sits on Home and in the bell. Acted on in place:
  * a question with a recommendation answers in one tap; Other answer opens the Decision card, which asks for a reason
  * when the answer is not the recommendation (question.answer). Answering here clears it everywhere: the item leaves
- * the inbox cache at once, and the live connection's notification and journey events refetch every other screen.
+ * the inbox cache at once, and the live connection's notification and journey events refetch every other screen. A
+ * stuck agent's report can be dismissed with a reason in one line (stuck.dismiss), which the agent reads.
  * The phone's fourth tab.
  */
 import { useQueries, useQueryClient } from '@tanstack/react-query'
@@ -12,6 +13,7 @@ import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { DecisionCard, type Decision, type DecisionChoice } from '@/components/decision-card'
 import { NeedsYouCard } from '@/components/needs-you-card'
+import { useDismissStuck } from '@/components/dismiss-stuck'
 import { Column, Section } from '@/components/shell/app-shell'
 import { useCommands } from '@/components/shell/command-menu'
 import { EmptyState, Loading, QueryError, SkeletonRows } from '@/components/states'
@@ -56,6 +58,7 @@ function Inbox() {
   const phone = useMediaQuery('(max-width: 767px)')
   const live = useLiveStatus()
   const [answering, setAnswering] = useState<string | null>(null)
+  const dismiss = useDismissStuck()
   const [busy, setBusy] = useState<string | null>(null)
   const items = useMemo(() => inboxItems(inbox.data), [inbox.data])
   const qRepos = [...new Set(items.filter((i) => i.kind === 'question').map((i) => i.repo))]
@@ -114,6 +117,7 @@ function Inbox() {
                       answering={busy === i.id}
                       onAnswer={offline ? undefined : (it) => void answer(it, { option: it.recommended!.id, recommended: true }).catch(() => undefined)}
                       onOther={(it) => setAnswering(answering === it.id ? null : it.id)}
+                      onDismiss={offline ? undefined : dismiss}
                     />
                     {answering === i.id && (
                       <DecisionCard
