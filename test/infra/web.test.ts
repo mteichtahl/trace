@@ -258,6 +258,36 @@ describe('the web app', () => {
     expect(JSON.stringify(by('PublishLiveEvents')?.Resource)).toMatch(/Events\w+","ApiArn"\]\},"\/channelNamespace\/trace"/)
   })
 
+  it('turns the agents\' facts writes into live events: the bucket\'s events, one rule, a Lambda that reads only who is on the project and that object', () => {
+    // the central bucket sends its object events to EventBridge (the bucket's own property: no custom resource)
+    const central = Object.entries(on.parent.findResources('AWS::S3::Bucket')).find(([id]) => id.startsWith('Central'))?.[1] as Res
+    expect(central.Properties.NotificationConfiguration).toEqual({ EventBridgeConfiguration: { EventBridgeEnabled: true } })
+    on.parent.resourceCountIs('Custom::S3BucketNotifications', 0)
+    // the rule: Object Created of the agents' facts objects in that bucket only (not the journey record: the backend
+    // publishes people's writes, so they are not sent twice)
+    const rule = only(web, 'AWS::Events::Rule').Properties as { Name: string; EventPattern: unknown; Targets: { Arn: unknown; RetryPolicy: unknown }[] }
+    expect(rule.Name).toBe('trace-journey-events')
+    expect(rule.EventPattern).toEqual({
+      source: ['aws.s3'], 'detail-type': ['Object Created'],
+      detail: { bucket: { name: [{ Ref: expect.stringMatching(/Central/) }] }, object: { key: [{ wildcard: 'projects/*/journey-agent/facts.db' }] } },
+    })
+    expect(rule.Targets).toEqual([expect.objectContaining({ Arn: { 'Fn::GetAtt': [expect.stringMatching(/^JourneyEvents[0-9A-F]{8}$/), 'Arn'] }, RetryPolicy: { MaximumEventAgeInSeconds: 3600, MaximumRetryAttempts: 2 } })])
+    web.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'trace-journey-events', Handler: 'journey-events.handler', Runtime: 'nodejs22.x', Architectures: ['arm64'],
+      Environment: { Variables: Match.objectLike({ TRACE_CENTRAL_BUCKET: { Ref: Match.stringLikeRegexp('Central') }, TRACE_EVENTS_HTTP: { 'Fn::GetAtt': [Match.stringLikeRegexp('^Events'), 'Dns.Http'] } }) },
+    })
+    // its role: read access/* and the agents' facts objects, publish to the namespace, its log group. Nothing else
+    const all = statements(web, 'JourneyEventsRole')
+    expect(all.flatMap(actions).sort()).toEqual(['appsync:EventPublish', 'logs:CreateLogStream', 'logs:PutLogEvents', 's3:GetObject', 's3:GetObject', 's3:ListBucket'])
+    const by = (sid: string): Statement | undefined => all.find((x) => x.Sid === sid)
+    expect(JSON.stringify(by('AccessStoreRead')?.Resource)).toMatch(/"\/access\/\*"/)
+    expect(by('AccessStoreList')?.Condition).toEqual({ StringLike: { 's3:prefix': ['access/*'] } })
+    expect(JSON.stringify(by('AgentFactsRead')?.Resource)).toMatch(/"\/projects\/\*\/journey-agent\/facts\.db"/)
+    expect(JSON.stringify(by('PublishLiveEvents')?.Resource)).toMatch(/Events\w+","ApiArn"\]\},"\/channelNamespace\/trace"/)
+    const text = JSON.stringify(all)
+    for (const never of ['s3:PutObject', 's3:DeleteObject', '/central/', '/journey/', '/chats/', 'cognito', 'bedrock', 'ssm:']) expect(text).not.toContain(never)
+  })
+
   it('scopes the chat model to the configured model, and attaches a given WAF web ACL', () => {
     const o = { partition: 'aws', region: 'eu-west-1', account: '111122223333' }
     expect(modelResources('global.anthropic.claude-sonnet-4-5-20250929-v1:0', o)).toEqual([
@@ -290,10 +320,11 @@ describe('the web app', () => {
     expect(nested).toBeDefined()
     const t = JSON.stringify(Template.fromStack(nested as Stack).toJSON())
     expect(t).not.toMatch(/Users[0-9A-F]{8}|UserPool|ApiRuntime/)
-    // the parent gives the web stack no parameters: it names nothing of the parent's
-    const res = Object.values(on.parent.findResources('AWS::CloudFormation::Stack')) as Res[]
-    const webRes = res.find((r) => JSON.stringify(r).includes('WebStack') || !r.Properties.Parameters)
-    expect(webRes?.Properties.Parameters).toBeUndefined()
+    // the parent gives the web stack the central bucket only (its agents' facts become live events): it names nothing
+    // else of the parent's, and nothing in the parent names the web stack's resources but its outputs' consumers
+    const webRes = Object.entries(on.parent.findResources('AWS::CloudFormation::Stack')).find(([id]) => id.startsWith('WebWebStack'))?.[1] as Res | undefined
+    expect(webRes).toBeDefined()
+    expect(Object.values(webRes?.Properties.Parameters as Record<string, unknown>)).toEqual([{ 'Fn::GetAtt': [expect.stringMatching(/^Central/), 'Arn'] }, { Ref: expect.stringMatching(/^Central/) }])
   }, 300_000)
 
   it('bundles the backend with src/web/bundle.ts bundleWebBackend(root, out), and says when it is missing', () => {

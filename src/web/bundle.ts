@@ -1,6 +1,7 @@
 /**
  * Bundles the web backend (src/web/lambda.ts) with esbuild into `out/index.mjs`, and the live events' authorizer
- * (src/web/events-auth.ts) into `out/authorizer.mjs`: ESM, node22, everything bundled,
+ * (src/web/events-auth.ts) into `out/authorizer.mjs`, and the agents' facts' live updates (src/web/journey-events.ts)
+ * into `out/journey-events.mjs`: ESM, node22, everything bundled,
  * the AWS SDK v3 clients included, so the function runs the versions this repository pins rather than whichever the
  * Lambda runtime carries. The CDK construct calls it from a local bundling step, as bundleLibraryLambda
  * (src/infra/gateway.ts); scripts/bundle-web-backend.mjs runs it by hand.
@@ -11,7 +12,7 @@ import { join } from 'node:path'
 export function bundleWebBackend(root: string, out: string): void {
   const req = createRequire(join(root, 'package.json'))
   const esbuild = req('esbuild') as typeof import('esbuild')
-  for (const [entry, file] of [['lambda.ts', 'index.mjs'], ['events-auth.ts', 'authorizer.mjs']] as const) build(esbuild, join(root, 'src', 'web', entry), join(out, file))
+  for (const [entry, file] of [['lambda.ts', 'index.mjs'], ['events-auth.ts', 'authorizer.mjs'], ['journey-events.ts', 'journey-events.mjs']] as const) build(esbuild, join(root, 'src', 'web', entry), join(out, file))
 }
 
 function build(esbuild: typeof import('esbuild'), entry: string, outfile: string): void {

@@ -24,6 +24,11 @@
  *                      (src/web/events-auth.ts) that checks the app's Cognito id token against the settings parameter,
  *                      so the API names nothing of the pool and lives here; publish with IAM (the backend's role only);
  *                      namespace `trace`, whose onSubscribe handler allows /trace/users/<sub> to that <sub> alone
+ *     journey events   `<prefix>-journey-events` (src/web/journey-events.ts) and its EventBridge rule: the central
+ *                      bucket's "Object Created" events of each project's journey-agent/facts.db (an agent recorded a fact)
+ *                      become `record.changed` (and `notification` for a new question or stuck report) on the channels
+ *                      of the people on that project. Its role reads access/* and the agents' facts objects (S3 Get
+ *                      only), and publishes to the namespace; nothing else
  *     content policy   names the events API's own two hosts, Transcribe streaming and the voice bucket; scripts only
  *                      from the app (the theme script is web/public/theme.js, not inline)
  *     WAF              web.webAclArn (a WAFv2 web ACL of CLOUDFRONT scope, made in us-east-1) attached when given: rate
@@ -52,8 +57,13 @@ import * as lambda from 'aws-cdk-lib/aws-lambda'
 import * as logs from 'aws-cdk-lib/aws-logs'
 import * as s3 from 'aws-cdk-lib/aws-s3'
 import * as deploy from 'aws-cdk-lib/aws-s3-deployment'
+import * as events from 'aws-cdk-lib/aws-events'
+import * as targets from 'aws-cdk-lib/aws-events-targets'
 import * as ssm from 'aws-cdk-lib/aws-ssm'
 import { Construct } from 'constructs'
+import { AGENT_FACTS_DB, AGENT_FACTS_FOLDER } from '../core/agent-facts.js'
+import { PROJECTS_PREFIX } from '../core/project.js'
+import { ACCESS_PREFIX } from './project.js'
 import { agentsDashboardName } from './observability.js'
 import { type InfraProps, WEB_OUTPUTS, webConfigParameter, webModel } from './props.js'
 
@@ -187,6 +197,8 @@ export interface WebStackProps {
   modelRegions?: readonly string[]
   /** build the app and bundle the backend; false: a placeholder of each (default: unless SKIP_BUNDLE_ENV is 1) */
   bundle?: boolean
+  /** the central bucket (the parent's): its agents' facts writes become live events (JourneyEvents). Absent: none */
+  central?: s3.IBucket | undefined
 }
 
 /** What the address is made of (see the file's comment). Names nothing of the parent's. */
@@ -199,6 +211,8 @@ export class WebStack extends NestedStack {
   readonly distribution: cloudfront.Distribution
   readonly events: appsync.EventApi
   readonly authorizer: lambda.Function
+  /** `<prefix>-journey-events`: the agents' facts written → live events (with `central` only) */
+  readonly journeyEvents: lambda.Function | null = null
   /** the app's host name: web.domainName, else CloudFront's */
   readonly domain: string
   readonly contentSecurityPolicy: string
@@ -337,6 +351,12 @@ export class WebStack extends NestedStack {
       sid: 'PublishLiveEvents', actions: ['appsync:EventPublish'], resources: [`${this.events.apiArn}/channelNamespace/${EVENTS_NAMESPACE}`],
     }))
 
+    // ------------------------------------------------------------------ the agents' facts, as live events
+    // src/web/journey-events.ts: an agent's write of projects/<slug>/journey-agent/facts.db reaches no backend, so the
+    // bucket's own "Object Created" event (EventBridge, src/infra/stack.ts) does. The journey record itself is not
+    // matched: people change it through the API, and the backend publishes those (src/web/call.ts)
+    if (p.central) this.journeyEvents = this.addJourneyEvents(p, p.central, code, bundle)
+
     // ------------------------------------------------------------------ the static app
     const site = bundle
       ? deploy.Source.asset(join(p.root, 'web'), {
@@ -422,9 +442,62 @@ export class WebStack extends NestedStack {
       distribution: this.distribution, distributionPaths: ['/', '/index.html'],
     })
   }
+
+  /** The Lambda `<prefix>-journey-events` and the rule that sends it the agents' facts writes (see the file's comment). */
+  private addJourneyEvents(p: WebStackProps, central: s3.IBucket, code: lambda.Code, bundle: boolean): lambda.Function {
+    const fnRole = new iam.Role(this, 'JourneyEventsRole', {
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      description: 'trace: live events for the agents\' facts: reads the access store and the facts that changed, publishes live events',
+    })
+    // who is on the project: the access store, read only (S3 answers a missing object 404 only with ListBucket there)
+    fnRole.addToPolicy(new iam.PolicyStatement({ sid: 'AccessStoreRead', actions: ['s3:GetObject'], resources: [central.arnForObjects(`${ACCESS_PREFIX}/*`)] }))
+    fnRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AccessStoreList', actions: ['s3:ListBucket'], resources: [central.bucketArn], conditions: { StringLike: { 's3:prefix': [`${ACCESS_PREFIX}/*`] } },
+    }))
+    // the facts object that changed (a new question or stuck report is told apart from a check), nothing else of a project
+    fnRole.addToPolicy(new iam.PolicyStatement({ sid: 'AgentFactsRead', actions: ['s3:GetObject'], resources: [central.arnForObjects(AGENT_FACTS_KEYS)] }))
+    fnRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'PublishLiveEvents', actions: ['appsync:EventPublish'], resources: [`${this.events.apiArn}/channelNamespace/${EVENTS_NAMESPACE}`],
+    }))
+    const fnLogs = new logs.LogGroup(this, 'JourneyEventsLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY })
+    fnLogs.grantWrite(fnRole)
+    const fn = new lambda.Function(this, 'JourneyEvents', {
+      functionName: `${p.prefix}-journey-events`,
+      description: 'trace: an agent recorded a journey fact; tells the people on the project (src/web/journey-events.ts)',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      handler: 'journey-events.handler',
+      code: bundle ? code : lambda.Code.fromAsset(placeholder('journey-events.mjs', 'export const handler = async () => undefined\n')),
+      role: fnRole,
+      memorySize: 512,
+      timeout: Duration.seconds(30),
+      logGroup: fnLogs,
+      environment: {
+        TRACE_CENTRAL_BUCKET: central.bucketName,
+        TRACE_EVENTS_HTTP: this.events.httpDns,
+        // the access store's read copy is cached in the one writable folder
+        XDG_CACHE_HOME: '/tmp',
+        NODE_OPTIONS: '--enable-source-maps',
+      },
+    })
+    const rule = new events.Rule(this, 'JourneyEventsRule', {
+      ruleName: `${p.prefix}-journey-events`,
+      description: 'trace: the agents\' journey facts written in the central bucket, to live events',
+      eventPattern: {
+        source: ['aws.s3'],
+        detailType: ['Object Created'],
+        detail: { bucket: { name: [central.bucketName] }, object: { key: events.Match.wildcard(AGENT_FACTS_KEYS) } },
+      },
+    })
+    rule.addTarget(new targets.LambdaFunction(fn, { retryAttempts: 2, maxEventAge: Duration.hours(1) }))
+    return fn
+  }
 }
 
 export interface TraceWebProps extends WebStackProps {}
+
+/** The agents' facts objects, as the JourneyEvents rule matches them (EventBridge wildcard). */
+export const AGENT_FACTS_KEYS = `${PROJECTS_PREFIX}/*/${AGENT_FACTS_FOLDER}/${AGENT_FACTS_DB}`
 
 /** What attach needs of the parent: the pool and the web client, the API runtime, and the parent's outputs' stack. */
 export interface WebAttachProps {

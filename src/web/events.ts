@@ -32,6 +32,7 @@ const MUTATING: ReadonlyArray<readonly [string, What]> = [
   ['projects.create', 'projects'],
   ['gate.', 'journey'],
   ['question.answer', 'journey'],
+  ['stuck.dismiss', 'journey'],
   ['waiver.add', 'journey'],
   ['journey.criterion.open', 'journey'],
   ['chats.append', 'chats'],
@@ -68,7 +69,7 @@ export interface Publisher {
 const MAX_PER_REQUEST = 5
 
 /** The AppSync Events HTTP publisher (SigV4, service appsync). */
-export function appsyncPublisher(c: WebConfig, credentials: Credentials, f: typeof fetch): Publisher {
+export function appsyncPublisher(c: Pick<WebConfig, 'region'> & { events: Pick<WebConfig['events'], 'http'> }, credentials: Credentials, f: typeof fetch): Publisher {
   const signer = new SignatureV4({ service: 'appsync', region: c.region, credentials, sha256: Sha256 })
   const host = c.events.http.replace(/^https?:\/\//, '').replace(/\/.*$/, '')
   return {

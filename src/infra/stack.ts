@@ -177,6 +177,14 @@ export class TraceStack extends Stack {
         { prefix: `${JOBS_PREFIX}/`, expiration: Duration.days(7), noncurrentVersionExpiration: Duration.days(1) },
       ],
     })
+    // Its object events go to EventBridge (default bus), where rules pick the few that matter: a project's journey
+    // record written (src/infra/project.ts JourneyEventsRule: journey.ask's wait) and its journey or agents' facts
+    // written (src/infra/web.ts JourneyEvents: live updates on people's screens). Set as the bucket's own CloudFormation
+    // property rather than CDK's eventBridgeEnabled, whose custom resource would add a Lambda to this stack. It is an
+    // in-place update of the bucket (no interruption); like any change to a bucket's notification configuration it
+    // replaces one made outside the stack, and this stack configures none
+    const centralCfn = central.node.defaultChild as s3.CfnBucket
+    centralCfn.addPropertyOverride('NotificationConfiguration.EventBridgeConfiguration.EventBridgeEnabled', true)
     const traceHome = `s3://${central.bucketName}/${CENTRAL_PREFIX}`
 
     // The API's token: it reads and writes every project's settings (after its access check). Each worker has its
@@ -330,7 +338,7 @@ export class TraceStack extends Stack {
 
     // ------------------------------------------------------------------ the web app's address (src/infra/web.ts)
     // Its nested stack first: the pool takes its address as the passkey relying party, and nothing in it names the pool
-    const web = cfg.web.enabled ? new TraceWeb(this, 'Web', traceWebProps(cfg, REPO_ROOT)) : null
+    const web = cfg.web.enabled ? new TraceWeb(this, 'Web', { ...traceWebProps(cfg, REPO_ROOT), central }) : null
     // email one-time codes need the pool to send through SES (Cognito's own sender cannot send them)
     const emailCodes = Boolean(web && cfg.web.sesFrom)
 
