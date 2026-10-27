@@ -1,14 +1,13 @@
 /**
- * The CodeBuild GitHub Actions runner projects (src/infra/runner.ts): one per project in both layouts, and trace's own
- * (src/infra/ci-app.ts), once the GitHub connection (given, or created by the stack) is ready. Every job runs on AWS, CodeBuild reaches GitHub through the CodeConnections connection, and
+ * The CodeBuild GitHub Actions runner projects (src/infra/runner.ts): one per project in both layouts, and one per
+ * build-only repository (ciRepositories, such as trace's own) in the parent, once the GitHub connection (given, or
+ * created by the stack) is ready. CodeBuild reaches GitHub through the CodeConnections connection, and
  * the runner's role gives a job nothing in AWS beyond its logs and that connection.
  */
-import { App } from 'aws-cdk-lib'
-import { Template } from 'aws-cdk-lib/assertions'
+import type { Template } from 'aws-cdk-lib/assertions'
 import { describe, expect, it } from 'vitest'
-import { RUNNER_VARIABLE, SELF_CI_PROJECT, runnerProjectName } from '../../src/core/project.js'
-import { CI_STACK, TraceCiStack, ciSettings } from '../../src/infra/ci-app.js'
-import { CONNECTION_CREATED_OUTPUT, CONNECTION_OUTPUT, InfraPropsSchema, projectHash, projectOutputs } from '../../src/infra/props.js'
+import { RUNNER_VARIABLE, runnerProjectName } from '../../src/core/project.js'
+import { CI_REPOSITORIES_MAX, CONNECTION_CREATED_OUTPUT, CONNECTION_OUTPUT, InfraPropsSchema, ciRunnerOutput, projectHash, projectOutputs } from '../../src/infra/props.js'
 import { connectionArns } from '../../src/infra/runner.js'
 import { CONNECTION_ARN, RUNNERS, nestedOf, nestedResourceId, synth } from './templates.js'
 
@@ -81,7 +80,7 @@ function expectRunner(t: Template, name: string, repository: string, connection:
   const logs = statements.find((s) => s.Sid === 'RunnerLogs')
   for (const r of list(logs?.Resource)) {
     expect(r).not.toBe('*')
-    expect(JSON.stringify(r)).toMatch(/RunnerLogs|\/aws\/codebuild\//)
+    expect(JSON.stringify(r)).toMatch(/Runner(?:[0-9a-f]{8})?Logs|\/aws\/codebuild\//)
   }
   for (const s of statements) expect(list(s.Resource)).not.toContain('*')
 }
@@ -187,47 +186,53 @@ describe("the installation's GitHub connection", () => {
   }
 })
 
-describe("trace's own CI stack", () => {
-  const ctx = (o: Record<string, unknown>) => (k: string): unknown => o[k]
+describe('the build-only repositories (ciRepositories)', () => {
+  const C = 'mteichtahl/trace-tools'
+  const TRACE = 'MTeichtahl/Trace'
+  const only = { ...base, repositories: [B] }
+  const ciRunners = (t: Template): string[] => Object.values(t.findResources('AWS::CodeBuild::Project') as Record<string, Res>).map((r) => String(r.Properties.Name)).filter((n) => /^trace-ci-[0-9a-f]{8}$/.test(n))
 
-  it('is one runner project named trace-ci for mteichtahl/trace by default', () => {
-    const s = ciSettings(ctx({ connectionArn: CONNECTION_ARN }), {})
-    expect(s).toEqual({ repository: 'mteichtahl/trace', connectionArn: CONNECTION_ARN, connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false })
-    const t = Template.fromStack(new TraceCiStack(new App(), CI_STACK, s, { account: '123456789012', region: 'us-east-1' }))
-    t.resourceCountIs('AWS::CodeBuild::Project', 1)
-    t.resourceCountIs('AWS::IAM::Policy', 0)
-    t.resourceCountIs('AWS::CodeConnections::Connection', 0)
-    expect(outputsOf(t)[CONNECTION_OUTPUT]?.Value).toBe(CONNECTION_ARN)
-    expect(SELF_CI_PROJECT).toBe('trace-ci')
-    expectRunner(t, SELF_CI_PROJECT, 'mteichtahl/trace')
-  })
+  for (const layout of LAYOUTS) {
+    it(`get a runner project each in the parent, named runnerProjectName, with its output, and nothing else of a project (${layout})`, () => {
+      const s = synth(InfraPropsSchema.parse({ ...only, layout, ciRepositories: [TRACE, C] }), `Ci${layout}`)
+      for (const repo of ['mteichtahl/trace', C]) {
+        const name = runnerProjectName('trace', repo)
+        expectRunner(s.parent, name, repo)
+        expect(outputsOf(s.parent)[ciRunnerOutput(repo)]?.Value).toBe(name)
+        expect(ciRunnerOutput(repo)).toBe(`CiRunner${projectHash(repo)}Project`)
+        // no worker, roles, secret, memory or job definition of its own
+        const own = JSON.stringify(s.all.toJSON()).match(new RegExp(`Project${projectHash(repo)}`, 'g')) ?? []
+        expect(own).toEqual([])
+      }
+      // the parent holds them in either layout; the project's runner stays where it was
+      expect(ciRunners(s.parent).sort()).toEqual([runnerProjectName('trace', 'mteichtahl/trace'), runnerProjectName('trace', C), ...(layout === 'flat' ? [runnerProjectName('trace', B)] : [])].sort())
+      expect(ciRunners(s.all)).toHaveLength(3)
+      s.all.resourceCountIs('AWS::BedrockAgentCore::Runtime', 2) // B's worker and the API: none for the build-only ones
+    }, 300_000)
 
-  it('needs nothing up front: creates trace-ci-github and its runner, or only the connection while it is not ready', () => {
-    const s = ciSettings(ctx({}), {})
-    expect(s).toEqual({ repository: 'mteichtahl/trace', connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false })
-    const t = Template.fromStack(new TraceCiStack(new App(), CI_STACK, s, { account: '123456789012', region: 'us-east-1' }))
-    const conns = Object.entries(t.findResources('AWS::CodeConnections::Connection') as Record<string, Res & { DeletionPolicy?: string }>)
-    expect(conns).toHaveLength(1)
-    const [id, conn] = conns[0] as [string, Res & { DeletionPolicy?: string }]
-    expect(conn.Properties).toMatchObject({ ConnectionName: 'trace-ci-github', ProviderType: 'GitHub' })
-    expect(conn.DeletionPolicy).toBe('Retain')
-    expectRunner(t, SELF_CI_PROJECT, 'mteichtahl/trace', { 'Fn::GetAtt': [id, 'ConnectionArn'] })
-    expect(outputsOf(t)[CONNECTION_OUTPUT]?.Value).toEqual({ 'Fn::GetAtt': [id, 'ConnectionArn'] })
-    // connectionReady=false (context, or TRACE_CONNECTION_READY): the connection alone
-    for (const pending of [ciSettings(ctx({ connectionReady: 'false' }), {}), ciSettings(ctx({}), { TRACE_CONNECTION_READY: 'false' })]) {
-      expect(pending.connectionReady).toBe(false)
-      const p = Template.fromStack(new TraceCiStack(new App(), CI_STACK, pending, { account: '123456789012', region: 'us-east-1' }))
-      p.resourceCountIs('AWS::CodeConnections::Connection', 1)
-      for (const r of ['AWS::CodeBuild::Project', 'AWS::IAM::Role', 'AWS::Logs::LogGroup']) p.resourceCountIs(r, 0)
-    }
-    expect(() => ciSettings(ctx({ connectionReady: 'maybe' }), {})).toThrow(/connectionReady must be true or false/)
-  })
+    it(`get no runner, role, log group or output until the connection is ready (${layout})`, () => {
+      const s = synth(InfraPropsSchema.parse({ ...only, layout, ciRepositories: [C], runners: { connectionReady: false } }), `CiPending${layout}`)
+      expect(ciRunners(s.all)).toEqual([])
+      expect(Object.keys(outputsOf(s.all))).not.toContain(ciRunnerOutput(C))
+      const roles = Object.values(s.all.findResources('AWS::IAM::Role') as Record<string, Res>).map((r) => String(r.Properties.RoleName ?? ''))
+      expect(roles.some((n) => n.startsWith(runnerProjectName('trace', C)))).toBe(false)
+    }, 300_000)
+  }
 
-  it('takes the connection and repository from the environment, and refuses a connection that is not one', () => {
-    const s = ciSettings(ctx({}), { TRACE_CONNECTION_ARN: CONNECTION_ARN, TRACE_CI_REPOSITORY: 'Other/Repo', TRACE_CI_PRIVILEGED: 'true' })
-    expect(s).toMatchObject({ repository: 'other/repo', connectionArn: CONNECTION_ARN, privileged: true })
-    // context wins over the environment
-    expect(ciSettings(ctx({ repository: 'a/b', connectionArn: CONNECTION_ARN }), { TRACE_CI_REPOSITORY: 'c/d' }).repository).toBe('a/b')
-    expect(() => ciSettings(ctx({ connectionArn: 'nope' }), {})).toThrow(/CodeConnections connection ARN/)
+  it('uses the connection the stack created, like the projects\' runners', () => {
+    const s = synth(InfraPropsSchema.parse({ ...only, ciRepositories: [C], runners: {} }), 'CiCreated')
+    const [id] = Object.keys(s.parent.findResources('AWS::CodeConnections::Connection'))
+    expectRunner(s.parent, runnerProjectName('trace', C), C, { 'Fn::GetAtt': [id, 'ConnectionArn'] })
+  }, 300_000)
+
+  it('refuses one that is a project, listed twice, not a repository, or too many; none by default', () => {
+    expect(InfraPropsSchema.parse(only).ciRepositories).toEqual([])
+    expect(() => InfraPropsSchema.parse({ ...base, ciRepositories: ['MTEICHTAHL/trace'] })).toThrow(/is one of the repositories already/)
+    expect(() => InfraPropsSchema.parse({ ...only, ciRepositories: [C, C.toUpperCase()] })).toThrow(/listed twice/)
+    expect(() => InfraPropsSchema.parse({ ...only, ciRepositories: ['not a repo'] })).toThrow(/OWNER\/REPO/)
+    expect(() => InfraPropsSchema.parse({ ...only, ciRepositories: ['a/..'] })).toThrow()
+    const many = Array.from({ length: CI_REPOSITORIES_MAX + 1 }, (_, i) => `o/r${i}`)
+    expect(() => InfraPropsSchema.parse({ ...only, ciRepositories: many })).toThrow()
+    expect(InfraPropsSchema.parse({ ...only, ciRepositories: many.slice(1) }).ciRepositories).toHaveLength(CI_REPOSITORIES_MAX)
   })
 })

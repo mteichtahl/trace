@@ -63,9 +63,20 @@ export const AgentAnswers = z.object({
  * bundled into the page, which does not load the stack's settings). */
 export const RUNNER_COMPUTE_TYPES = ['BUILD_GENERAL1_MEDIUM', 'BUILD_GENERAL1_LARGE', 'BUILD_GENERAL1_XLARGE', 'BUILD_GENERAL1_2XLARGE'] as const
 
-/** Where every GitHub Actions job runs: AWS CodeBuild runners in the installation's account (props.ts runners), never
- * GitHub-hosted runners. CodeBuild reaches GitHub through an AWS CodeConnections connection. */
+/** The most build-only repositories the answers may add besides trace's own (props.ts ciRepositories takes 10). */
+export const EXTRA_BUILD_REPOSITORIES_MAX = 9
+
+/** Where every GitHub Actions job runs: AWS CodeBuild runners in the installation's account (props.ts runners), once
+ * they exist; GitHub's own runners until then. CodeBuild reaches GitHub through an AWS CodeConnections connection. */
 export const RunnerAnswers = z.object({
+  /** Build trace's own repository on AWS too (a build runner for it alone: props.ts ciRepositories), when the tokens can
+   * configure it. On by default. */
+  buildTrace: z.boolean().default(true),
+  /** trace's own repository as the installer found it (src/installer/source.ts traceRepository) and the token can
+   * configure; '' when it found none it can. The installer checks it again before using it. */
+  traceRepository: z.union([Repo, z.literal('')]).default(''),
+  /** Other repositories to build on AWS without making them projects: each gets a build runner and nothing else. */
+  ciRepositories: z.array(Repo).max(EXTRA_BUILD_REPOSITORIES_MAX).default([]),
   /** An existing GitHub connection to use; empty: the installer reuses one already authorized in the account and region
    * (`<prefix>-github` first), else the stack creates `<prefix>-github` and the installer waits after the deploy for a
    * person to authorize it. */
@@ -116,6 +127,11 @@ export const AnswersSchema = z.object({
   const emails = a.people.map((p) => p.email.toLowerCase())
   if (new Set(emails).size !== emails.length) ctx.addIssue({ code: 'custom', path: ['people'], message: 'a person is listed twice' })
   if (emails.includes(a.adminEmail.toLowerCase())) ctx.addIssue({ code: 'custom', path: ['people'], message: 'the first administrator is already an admin: leave them out of the list' })
+  const extra = a.runners.ciRepositories.map((r) => r.toLowerCase())
+  extra.forEach((r, i) => {
+    if (repos.has(r)) ctx.addIssue({ code: 'custom', path: ['runners', 'ciRepositories', i], message: `${a.runners.ciRepositories[i]} is one of the projects already: it has its own build runner` })
+    else if (extra.indexOf(r) !== i) ctx.addIssue({ code: 'custom', path: ['runners', 'ciRepositories', i], message: `${a.runners.ciRepositories[i]} is listed twice` })
+  })
   if (a.agents.cpuVcpus > a.agents.cpuMaxVcpus) ctx.addIssue({ code: 'custom', path: ['agents', 'cpuVcpus'], message: 'a CPU job cannot ask for more vCPUs than the CPU queue may run at once' })
 })
 export type Answers = z.output<typeof AnswersSchema>

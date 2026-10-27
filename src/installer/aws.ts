@@ -8,7 +8,6 @@
  * with each nested project stack's, the GPU image build the deploy started (a declared timer wait: AWS cannot send
  * this computer CodeBuild's events), and the AWS CodeConnections connection to GitHub that the CodeBuild runners use
  * (an authorized one reused, or the stack's own, waited on after the deploy until a person authorizes it).
- * `npm run deploy:ci` (src/infra/ci-deploy.ts) uses the same connection helpers.
  *
  * The functions that call AWS around the deploy take their SDK clients as a parameter, so tests give them fakes.
  */
@@ -353,7 +352,7 @@ export async function freeSecretNames(creds: AwsCredentialIdentity, region: stri
 /** The AWS CodeConnections side: the connection to GitHub through which CodeBuild runs every GitHub Actions job of the
  * onboarded repositories (src/infra/runner.ts). No GitHub token is stored for it: a person authorizes it once in the
  * AWS console, which installs (or picks) the AWS Connector for GitHub app on their account or organization. One
- * authorized connection serves every installation in the account and region, and trace's own CI: the tools reuse it
+ * authorized connection serves every installation in the account and region: the installer reuses it
  * (resolveConnection), and a stack creates its own only when there is none. */
 type Connections = Pick<CodeConnectionsClient, 'send'>
 
@@ -361,7 +360,8 @@ export const connectionsClient = (creds: AwsCredentialIdentity, region: string):
 
 export { connectionName }
 
-/** The connection trace's own CI stack creates when it finds none to reuse (src/infra/ci-app.ts). */
+/** The connection the separate CI stack of earlier versions (TraceCi) created: reused like an installation's own, so an
+ * account that has it authorized needs no new one. */
 export const CI_CONNECTION_NAME = connectionName('trace-ci')
 
 /** Where a person authorizes a pending connection. */
@@ -407,7 +407,7 @@ async function tracesOwn(c: Connections, arn: string): Promise<boolean> {
 
 /**
  * The authorized (AVAILABLE) GitHub connection to reuse, in this order: the names in `prefer` (the installer's:
- * `<prefix>-github`, then trace's own CI's `trace-ci-github`), any other tagged trace:installation, any other. Null
+ * `<prefix>-github`, then the earlier versions' CI stack's `trace-ci-github`), any other tagged trace:installation, any other. Null
  * when none is AVAILABLE.
  */
 export async function reusableConnection(c: Connections, prefer: readonly string[], all?: GithubConnection[]): Promise<GithubConnection | null> {
@@ -435,7 +435,7 @@ export interface ConnectionChoice {
 
 /**
  * The connection for a deploy, before it, with no connection ever created here (a stack creates its own):
- *   given        the answers' (deploy:ci: TRACE_CONNECTION_ARN or `-c connectionArn=`): it must exist and be GitHub's
+ *   given        the answers': it must exist and be GitHub's
  *   the stack's  the connection the deployed stack created (its CONNECTION_CREATED_OUTPUT), kept on every later run,
  *                authorized or not (a run that stopped waiting for it resumes with it); or the one it was given before,
  *                while that is still AVAILABLE

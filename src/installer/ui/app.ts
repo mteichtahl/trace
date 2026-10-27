@@ -17,6 +17,8 @@ interface TokenInfo {
   login: string; name: string | null; kind: string; scopes: string[]; warnings: string[]
   repos: { fullName: string; private: boolean; admin: boolean; push: boolean; defaultBranch: string }[]
   access: { repo: string; ok: boolean; reason: string }[]
+  /** trace's own repository, and whether the token can set its variables (null: the installer could not tell which) */
+  self: { repo: string; ok: boolean; reason: string } | null
 }
 interface AwsCheck {
   account: string; arn: string; region: string; agentCore: { ok: boolean; reason: string }
@@ -66,7 +68,9 @@ const s = {
   aws: { mode: 'profile' as 'profile' | 'keys', profile: 'default', region: 'us-east-1', keyId: '', secret: '', session: '', check: null as AwsCheck | null, confirmed: false, busy: false, error: '' },
   /** where the GitHub Actions jobs run (AWS CodeBuild): connectionArn '' = reuse an authorized connection, else the stack creates `<prefix>-github`; computeType
    * '' and privileged 'default' = the stack's defaults */
-  runners: { connectionArn: '', computeType: '' as '' | (typeof RUNNER_COMPUTE_TYPES)[number], privileged: 'default' as 'default' | 'on' | 'off' },
+  runners: { connectionArn: '', computeType: '' as '' | (typeof RUNNER_COMPUTE_TYPES)[number], privileged: 'default' as 'default' | 'on' | 'off',
+    /** build trace's own repository on AWS too; null: not chosen yet (on when the token can configure it) */
+    buildTrace: null as boolean | null },
   agents: { prefix: 'trace', model: '', maxLifetimeHours: 8, idleMinutes: 15, centralBucketName: '', retainData: true, escalateTo: '', gpuEnabled: true, gpuMaxVcpus: 16, gpuSpot: false,
     cpuEnabled: true, cpuMaxVcpus: 64, cpuSpot: false, cpuVcpus: 16, cpuMemoryMiB: 32_768, knowledgeBase: true, libraryGateway: false,
     observability: true, transactionSearch: true, samplingPercent: '', dashboard: true, migrateLayout: false },
@@ -137,6 +141,7 @@ function answers(): AnswersInput {
     runners: {
       connectionArn: s.runners.connectionArn, computeType: s.runners.computeType || null,
       privileged: s.runners.privileged === 'default' ? null : s.runners.privileged === 'on',
+      buildTrace: buildTrace(), traceRepository: buildTrace() ? selfRepo()?.repo ?? '' : '',
     },
     projects: [...s.projects].map(([repo, { memoryDays, ...p }]) => ({ repo, ...p, memoryEventExpiryDays: memoryDays.trim() === '' ? null : Number(memoryDays) })),
     adminEmail: s.adminEmail,
@@ -147,6 +152,15 @@ function answers(): AnswersInput {
     escalateTo: s.agents.escalateTo,
   }
 }
+
+/** trace's own repository as the GitHub check found it, when the token can configure it and it is not a project. */
+function selfRepo(): { repo: string; ok: boolean; reason: string } | null {
+  const own = s.github.info?.self ?? null
+  if (!own || !own.ok || s.projects.has(own.repo)) return null
+  return own
+}
+/** Whether trace's own repository is built on AWS too: the person's choice, else on when it can be. */
+const buildTrace = (): boolean => (selfRepo() ? s.runners.buildTrace ?? true : false)
 
 const secrets = (): Record<string, unknown> => ({
   githubToken: s.github.token, githubAdminToken: s.github.adminToken,
@@ -240,6 +254,8 @@ async function checkGithub(): Promise<void> {
   s.github.busy = true; s.github.error = ''; render()
   try {
     s.github.info = await api<TokenInfo>('POST', '/api/github/check', { token: s.github.token, repos: [...s.projects.keys()] })
+    // what the installer will configure with: the admin token, when one is given
+    if (s.github.adminToken) void checkAccess()
   } catch (e) {
     s.github.error = e instanceof Error ? e.message : String(e)
   } finally {
@@ -251,7 +267,7 @@ async function checkAccess(): Promise<void> {
   if (!s.github.info) return
   try {
     const r = await api<TokenInfo>('POST', '/api/github/check', { token: s.github.adminToken || s.github.token, repos: [...s.projects.keys()] })
-    s.github.info = { ...s.github.info, access: r.access }
+    s.github.info = { ...s.github.info, access: r.access, self: r.self }
     render()
   } catch { /* shown on the next check */ }
 }
@@ -303,14 +319,26 @@ function runners(): HTMLElement {
   const url = `https://${s.aws.region}.console.aws.amazon.com/codesuite/settings/connections?region=${s.aws.region}`
   return h('div', {},
     h('h3', {}, 'Where the workflows run'),
-    h('p', { class: 'lead' }, `Every GitHub Actions job of the repositories runs on AWS CodeBuild in this account, never on GitHub's own runners: each repository gets its own CodeBuild runner project. CodeBuild reaches GitHub through an AWS CodeConnections connection, so no GitHub token is stored for it. You need nothing here: the installer reuses a connection already authorized in this account and region (${name} first), and if there is none the stack creates ${name}.`),
-    note('warn', 'A new connection is authorized once per AWS account and region, by you, in the AWS console. After the first deploy the installer shows the link (', h('a', { href: url, target: '_blank', rel: 'noopener' }, 'Connections'), `) and waits: you choose ${r.connectionArn ? 'the connection' : name} and "Update pending connection", which installs the AWS Connector for GitHub app, and the installer adds the build runners by itself. Give that app access to every repository chosen in step 1${s.projects.size ? ` (${[...s.projects.keys()].join(', ')})` : ''}: a repository it cannot reach gets no runner.`),
+    h('p', { class: 'lead' }, `Every GitHub Actions job of the repositories runs on AWS CodeBuild in this account: each repository gets its own CodeBuild runner project. Until its runner exists, its jobs run on GitHub's own runners, and they move to AWS by themselves once it does. CodeBuild reaches GitHub through an AWS CodeConnections connection, so no GitHub token is stored for it. You need nothing here: the installer reuses a connection already authorized in this account and region (${name} first), and if there is none the stack creates ${name}.`),
+    note('warn', 'A new connection is authorized once per AWS account and region, by you, in the AWS console. After the first deploy the installer shows the link (', h('a', { href: url, target: '_blank', rel: 'noopener' }, 'Connections'), `) and waits: you choose ${r.connectionArn ? 'the connection' : name} and "Update pending connection", which installs the AWS Connector for GitHub app, and the installer adds the build runners by itself. Give that app access to every repository chosen in step 1${s.projects.size ? ` (${[...s.projects.keys()].join(', ')})` : ''}${buildTrace() ? ` and to ${selfRepo()?.repo ?? ''}` : ''}: a repository it cannot reach gets no runner.`),
+    selfBuild(),
     field('Use an existing connection (optional)', input('text', r.connectionArn, (v) => { r.connectionArn = v.trim() }, { placeholder: `empty: reuse an authorized one, or create ${name}` }), 'an existing GitHub connection\'s ARN, only if you want that one'),
     h('div', { class: 'row' },
       field('Job size', select([{ value: '', label: 'Default (Large)' }, ...RUNNER_COMPUTE_TYPES.map((t) => ({ value: t, label: COMPUTE_LABEL[t] }))], r.computeType,
         (v) => { r.computeType = (RUNNER_COMPUTE_TYPES as readonly string[]).includes(v) ? v as (typeof RUNNER_COMPUTE_TYPES)[number] : '' }), 'a job can ask for another with an instance-size label'),
       field('Docker in jobs', select([{ value: 'default', label: 'Default (off)' }, { value: 'on', label: 'On (privileged, for jobs that build containers)' }, { value: 'off', label: 'Off' }], r.privileged,
         (v) => { r.privileged = v === 'on' || v === 'off' ? v : 'default' }))))
+}
+
+/** The "build trace's own repository on AWS too" checkbox, or why there is none. */
+function selfBuild(): HTMLElement | null {
+  const own = s.github.info?.self ?? null
+  if (!own) return null
+  if (s.projects.has(own.repo)) return h('p', { class: 'muted' }, `trace's own repository (${own.repo}) is one of the projects, so it gets its build runner with them.`)
+  if (!own.ok) return h('p', { class: 'muted' }, `trace's own repository (${own.repo}) stays on GitHub's runners: the token can't set its variables.`)
+  return h('div', {},
+    checkbox(`Build trace's own repository on AWS too (${own.repo})`, buildTrace(), (v) => { s.runners.buildTrace = v; render() }),
+    h('p', { class: 'muted' }, 'Its workflows then run on a build runner in this account as well (a runner only: no agents); until that runner exists they run on GitHub\'s runners.'))
 }
 
 async function checkAws(): Promise<void> {
@@ -578,6 +606,7 @@ async function boot(): Promise<void> {
         s.runners.connectionArn = saved.runners.connectionArn ?? ''
         s.runners.computeType = saved.runners.computeType ?? ''
         s.runners.privileged = saved.runners.privileged === true ? 'on' : saved.runners.privileged === false ? 'off' : 'default'
+        s.runners.buildTrace = saved.runners.buildTrace ?? null
       }
       s.adminEmail = saved.adminEmail
       s.people = (saved.people ?? []).map((p) => ({ email: p.email, class: p.class ?? 'user', projects: new Set(p.projects ?? []) }))

@@ -42,12 +42,13 @@
  * jobs/<slug>/* only.
  *
  * Its CodeBuild runner project (src/infra/runner.ts, named runnerProjectName: <prefix>-ci-<hash>) is where every
- * GitHub Actions job of the repository runs: GitHub-hosted runners are never used. CodeBuild reaches GitHub through the
+ * GitHub Actions job of the repository runs once it exists (GitHub's runners until then). CodeBuild reaches GitHub through the
  * installation's CodeConnections connection (the one given in `runners.connectionArn`, or the one the stack created:
  * the parent's, passed in like its other shared values); the runner's service role may write its own log group and
  * use that connection, nothing else in AWS, so a job still reaches AWS only by assuming the OIDC role above, exactly
  * as on a GitHub-hosted runner. The installer sets the repository variable TRACE_CODEBUILD_PROJECT from its
- * Project<hash>RunnerProject output. It exists only once the connection is authorized (`runners.connectionReady`,
+ * Project<hash>RunnerProject output, and only then: the variable is what moves the workflows from GitHub's runners to
+ * this one. It exists only once the connection is authorized (`runners.connectionReady`,
  * src/infra/runner.ts): until then the project has no runner, no runner role or log group, and no such output.
  *
  * Its names that can outlive it in the account (its memory, kept with retainData; its memory's delivery sources and
