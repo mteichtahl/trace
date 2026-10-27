@@ -12,7 +12,7 @@ import { Match, Template } from 'aws-cdk-lib/assertions'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { InfraPropsSchema, WEB_OUTPUTS, stackName, webConfigParameter } from '../../src/infra/props.js'
 import { TraceStack } from '../../src/infra/stack.js'
-import { API_FUNCTION, FORWARDED_AUTH_HEADER, bundleBackend, SPA_FUNCTION, SUBSCRIBE_HANDLER, VOICE_PREFIX, contentSecurityPolicy } from '../../src/infra/web.js'
+import { API_FUNCTION, FORWARDED_AUTH_HEADER, bundleBackend, SPA_FUNCTION, SUBSCRIBE_HANDLER, VOICE_PREFIX, contentSecurityPolicy, modelResources } from '../../src/infra/web.js'
 import { RUNNERS, type Synth, synth } from './templates.js'
 
 const base = { account: '123456789012', region: 'us-east-1', repositories: ['mteichtahl/trace'], model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com', runners: RUNNERS }
@@ -129,13 +129,22 @@ describe('the web app', () => {
     const csp = JSON.stringify(sec.ContentSecurityPolicy?.ContentSecurityPolicy)
     for (const part of [
       "default-src 'self'", "script-src 'self' 'wasm-unsafe-eval'", "style-src 'self' 'unsafe-inline'", "frame-ancestors 'none'", "object-src 'none'",
-      'https://*.appsync-api.us-east-1.amazonaws.com', 'wss://*.appsync-realtime-api.us-east-1.amazonaws.com', 'wss://transcribestreaming.us-east-1.amazonaws.com:8443',
+      'wss://transcribestreaming.us-east-1.amazonaws.com:8443', 'https://raw.githubusercontent.com https://objects.githubusercontent.com',
       'data: blob:', "worker-src 'self' blob:",
     ]) expect(csp).toContain(part)
+    // the live events: that API's own two hosts, no wildcard
+    expect(csp).not.toContain('*.appsync')
+    expect(csp).toContain('connect-src \'self\' https://",{"Fn::GetAtt":["Events')
+    expect(csp).toMatch(/"Dns\.Http"\]\}," wss:\/\/",\{"Fn::GetAtt":\["Events\w+","Dns\.Realtime"/)
     // the voice bucket's host, for the signed speech URLs
     expect(csp).toMatch(/media-src 'self' blob: https:\/\/".*Voice.*RegionalDomainName/)
     // scripts never inline, never eval
-    expect(contentSecurityPolicy('us-east-1', 'v.s3.amazonaws.com')).not.toMatch(/script-src[^;]*'unsafe-(inline|eval)'/)
+    expect(contentSecurityPolicy('us-east-1', 'v.s3.amazonaws.com', { http: 'a.appsync-api.us-east-1.amazonaws.com', realtime: 'a.appsync-realtime-api.us-east-1.amazonaws.com' })).not.toMatch(/script-src[^;]*'unsafe-(inline|eval)'/)
+    // and the app has no inline script for it to need: the theme script is a file
+    const html = readFileSync(join(import.meta.dirname, '..', '..', 'web', 'index.html'), 'utf8')
+    expect(html).not.toMatch(/<script>(?!<)/)
+    expect(html).toContain('<script src="/theme.js"></script>')
+    expect(existsSync(join(import.meta.dirname, '..', '..', 'web', 'public', 'theme.js'))).toBe(true)
   })
 
   it('has a web client of its own: choice-based sign-in and refresh, no secret, no hosted pages', () => {
@@ -180,20 +189,24 @@ describe('the web app', () => {
     expect(cfg).toContain('\\"email\\":true')
   }, 300_000)
 
-  it('has live events: the pool\'s tokens subscribe to their own channel only, IAM publishes', () => {
-    const api = only(on.parent, 'AWS::AppSync::Api').Properties
+  it('has live events in the web stack: the Lambda authorizer checks the id token, a person subscribes to their own channel only, IAM publishes', () => {
+    const api = only(web, 'AWS::AppSync::Api').Properties
     expect(api.Name).toBe('trace-events')
     expect(api.EventConfig).toMatchObject({
-      AuthProviders: [{ AuthType: 'AMAZON_COGNITO_USER_POOLS', CognitoConfig: { UserPoolId: { Ref: expect.stringMatching(/^Users[0-9A-F]{8}$/) } } }, { AuthType: 'AWS_IAM' }],
-      DefaultPublishAuthModes: [{ AuthType: 'AWS_IAM' }], DefaultSubscribeAuthModes: [{ AuthType: 'AMAZON_COGNITO_USER_POOLS' }],
+      AuthProviders: [{ AuthType: 'AWS_LAMBDA', LambdaAuthorizerConfig: { AuthorizerUri: { 'Fn::GetAtt': [expect.stringMatching(/^EventsAuthorizer/), 'Arn'] }, AuthorizerResultTtlInSeconds: 60 } }, { AuthType: 'AWS_IAM' }],
+      DefaultPublishAuthModes: [{ AuthType: 'AWS_IAM' }], DefaultSubscribeAuthModes: [{ AuthType: 'AWS_LAMBDA' }],
     })
-    const ns = only(on.parent, 'AWS::AppSync::ChannelNamespace').Properties
-    expect(ns).toMatchObject({ Name: 'trace', CodeHandlers: SUBSCRIBE_HANDLER, PublishAuthModes: [{ AuthType: 'AWS_IAM' }], SubscribeAuthModes: [{ AuthType: 'AMAZON_COGNITO_USER_POOLS' }] })
-    // the handler's rule, run against AppSync's context
+    const ns = only(web, 'AWS::AppSync::ChannelNamespace').Properties
+    expect(ns).toMatchObject({ Name: 'trace', CodeHandlers: SUBSCRIBE_HANDLER, PublishAuthModes: [{ AuthType: 'AWS_IAM' }], SubscribeAuthModes: [{ AuthType: 'AWS_LAMBDA' }] })
+    on.parent.resourceCountIs('AWS::AppSync::Api', 0)
+    // the authorizer reads the settings parameter and nothing else
+    const auth = statements(web, 'EventsAuthorizerRole')
+    expect(auth.flatMap(actions).sort()).toEqual(['logs:CreateLogStream', 'logs:PutLogEvents', 'ssm:GetParameter'])
+    // the handler's rule, run against AppSync's context (the authorizer's handlerContext)
     const handler = new Function('util', `${SUBSCRIBE_HANDLER.replace(/^import .*$/m, '').replace('export function', 'function')}; return onSubscribe`)
     const check = (sub: string | undefined, path: string): boolean => {
       let refused = false
-      handler({ unauthorized: () => { refused = true } })({ identity: sub ? { sub } : undefined, info: { channel: { path } } })
+      handler({ unauthorized: () => { refused = true } })({ identity: sub ? { handlerContext: { sub } } : undefined, info: { channel: { path } } })
       return !refused
     }
     expect(check('abc', '/trace/users/abc')).toBe(true)
@@ -219,14 +232,12 @@ describe('the web app', () => {
     })
     // the web client, not the CLI's; the events' host names, no scheme
     expect(text).toMatch(/"clientId":"<\{"Ref":"UsersWeb/)
-    expect(text).toMatch(/"http":"<\{"Fn::GetAtt":\["WebEvents\w+","Dns.Http"\]\}>"/)
-    expect(text).toMatch(/"realtime":"<\{"Fn::GetAtt":\["WebEvents\w+","Dns.Realtime"\]\}>"/)
+    expect(text).toMatch(/"http":"<\{"Fn::GetAtt":\["WebWebStack\w+","Outputs\.\w*Events\w*DnsHttp"\]\}>"/)
+    expect(text).toMatch(/"realtime":"<\{"Fn::GetAtt":\["WebWebStack\w+","Outputs\.\w*Events\w*DnsRealtime"\]\}>"/)
   })
 
   it('gives the backend exactly what it needs: nothing of the access store, any project, or Cognito', () => {
-    const own = statements(web, 'BackendRole')
-    const publish = statements(on.parent, 'WebBackendPublish')
-    const all = [...own, ...publish]
+    const all = statements(web, 'BackendRole')
     expect(all.flatMap(actions).sort()).toEqual([
       'appsync:EventPublish', 'bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:DescribeAlarms', 'cloudwatch:GetDashboard', 'cloudwatch:GetMetricData',
       'logs:CreateLogStream', 'logs:PutLogEvents', 'polly:DescribeVoices', 'polly:SynthesizeSpeech', 's3:GetObject', 's3:ListBucket', 's3:PutObject', 'ssm:GetParameter',
@@ -239,9 +250,31 @@ describe('the web app', () => {
     expect(JSON.stringify(by('VoiceCache')?.Resource)).toContain(`/${VOICE_PREFIX}/*`)
     expect(by('VoiceCacheList')?.Condition).toEqual({ StringLike: { 's3:prefix': [`${VOICE_PREFIX}/*`] } })
     expect(JSON.stringify(by('OpsDashboards')?.Resource)).toContain(':cloudwatch::123456789012:dashboard/trace-agents')
-    expect(JSON.stringify(by('ChatModel')?.Resource)).toMatch(/bedrock:\*::foundation-model\/anthropic\.\*.*inference-profile\/\*/)
-    expect(JSON.stringify(by('PublishLiveEvents')?.Resource)).toMatch(/WebEvents\w+","ApiArn"\]\},"\/channelNamespace\/trace"/)
+    // the configured model only: the profile in this account, and the foundation model it routes to
+    const model = JSON.stringify(by('ChatModel')?.Resource)
+    expect(model).toContain(':bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-6')
+    expect(model).toContain(':bedrock:*::foundation-model/anthropic.claude-sonnet-4-6')
+    expect(model).not.toMatch(/anthropic\.\*|inference-profile\/\*/)
+    expect(JSON.stringify(by('PublishLiveEvents')?.Resource)).toMatch(/Events\w+","ApiArn"\]\},"\/channelNamespace\/trace"/)
   })
+
+  it('scopes the chat model to the configured model, and attaches a given WAF web ACL', () => {
+    const o = { partition: 'aws', region: 'eu-west-1', account: '111122223333' }
+    expect(modelResources('global.anthropic.claude-sonnet-4-5-20250929-v1:0', o)).toEqual([
+      'arn:aws:bedrock:eu-west-1:111122223333:inference-profile/global.anthropic.claude-sonnet-4-5-20250929-v1:0',
+      'arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0',
+    ])
+    expect(modelResources('eu.anthropic.claude-x', { ...o, regions: ['eu-west-1', 'eu-central-1'] })).toEqual([
+      'arn:aws:bedrock:eu-west-1:111122223333:inference-profile/eu.anthropic.claude-x',
+      'arn:aws:bedrock:eu-west-1::foundation-model/anthropic.claude-x', 'arn:aws:bedrock:eu-central-1::foundation-model/anthropic.claude-x',
+    ])
+    expect(modelResources('anthropic.claude-x', o)).toEqual(['arn:aws:bedrock:eu-west-1::foundation-model/anthropic.claude-x'])
+    const acl = 'arn:aws:wafv2:us-east-1:123456789012:global/webacl/trace-web/00000000-0000-0000-0000-000000000000'
+    expect(InfraPropsSchema.safeParse({ ...base, web: { webAclArn: acl.replace('us-east-1', 'eu-west-1') } }).success).toBe(false)
+    const w = synth(InfraPropsSchema.parse({ ...base, web: { webAclArn: acl } }), 'WebWaf')
+    expect((only(w.web!, 'AWS::CloudFront::Distribution').Properties.DistributionConfig as { WebACLId: string }).WebACLId).toBe(acl)
+    expect((only(web, 'AWS::CloudFront::Distribution').Properties.DistributionConfig as { WebACLId?: string }).WebACLId).toBeUndefined()
+  }, 300_000)
 
   it('outputs the address, the distribution, the events endpoint and the web client', () => {
     for (const o of Object.values(WEB_OUTPUTS)) expect(Object.keys(on.parent.findOutputs(o))).toEqual([o])
@@ -256,7 +289,7 @@ describe('the web app', () => {
     const nested = s.node.findAll().find((c) => c instanceof Stack && c !== s && c.node.id === 'WebStack') as Stack | undefined
     expect(nested).toBeDefined()
     const t = JSON.stringify(Template.fromStack(nested as Stack).toJSON())
-    expect(t).not.toMatch(/Users[0-9A-F]{8}|UserPool|ApiRuntime|WebEvents/)
+    expect(t).not.toMatch(/Users[0-9A-F]{8}|UserPool|ApiRuntime/)
     // the parent gives the web stack no parameters: it names nothing of the parent's
     const res = Object.values(on.parent.findResources('AWS::CloudFormation::Stack')) as Res[]
     const webRes = res.find((r) => JSON.stringify(r).includes('WebStack') || !r.Properties.Parameters)
@@ -286,6 +319,7 @@ describe('the web app', () => {
     const off = synth(InfraPropsSchema.parse({ ...base, web: { enabled: false } }), 'WebOff')
     expect(off.web).toBeNull()
     for (const r of ['AWS::AppSync::Api', 'AWS::SSM::Parameter', 'AWS::CloudFront::Distribution']) off.parent.resourceCountIs(r, 0)
+    expect(off.web).toBeNull()
     const pool = only(off.parent, 'AWS::Cognito::UserPool').Properties
     expect(pool.WebAuthnRelyingPartyID).toBeUndefined()
     expect((pool.Policies as Record<string, unknown>).SignInPolicy).toBeUndefined()

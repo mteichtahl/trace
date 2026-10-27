@@ -174,6 +174,10 @@ describe('the bundle', () => {
       expect(js).toContain('streamifyResponse')
       expect(js).not.toContain('node:sqlite')
       expect(js).not.toMatch(/from\s*["']@aws-sdk\//)
+      // and the live events' authorizer beside it
+      const auth = readFileSync(join(out, 'authorizer.mjs'), 'utf8')
+      expect(auth).toContain('EVENT_SUBSCRIBE')
+      expect(auth).not.toContain('node:sqlite')
     } finally {
       rmSync(out, { recursive: true, force: true })
     }

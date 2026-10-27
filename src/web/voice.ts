@@ -25,12 +25,14 @@ import { WebError, parseBody, route } from './http.js'
 import type { Credentials } from './ports.js'
 
 export const MAX_TEXT = 3000
+/** The most one speak request reads aloud (a long reply is read a piece at a time). */
+export const MAX_SPEAK = 10_000
 const URL_SECONDS = 300
 const ENGINES = ['neural', 'generative'] as const
 
 const Language = z.string().regex(/^[a-z]{2,3}-[A-Z]{2}$/, 'a language code such as en-AU')
 const Speak = z.object({
-  text: z.string().min(1).max(100_000),
+  text: z.string().min(1).max(MAX_SPEAK),
   voice: z.string().min(1).max(64).regex(/^[A-Za-z-]+$/),
   engine: z.enum(ENGINES).default('neural'),
   rate: z.number().min(0.75).max(1.5).default(1),

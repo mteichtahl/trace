@@ -267,6 +267,13 @@ export const InfraPropsSchema = z.object({
      * one-time codes as a first sign-in factor need it (Cognito sends them only through SES): unset, sign-in offers
      * passkeys and passwords, and Cognito's own sender keeps sending the invitations. */
     sesFrom: z.string().email().optional(),
+    /** An AWS WAF (WAFv2) web ACL to put in front of the app's address: CLOUDFRONT scope, so it is made in us-east-1,
+     * outside this stack (e.g. AWS's managed common rules and a rate-based rule per address). Unset: no WAF; the
+     * backend's own per-person limits still apply */
+    webAclArn: z.string().regex(/^arn:aws[a-z-]*:wafv2:us-east-1:\d{12}:global\/webacl\/[\w-]+\/[0-9a-f-]{36}$/, 'a WAFv2 web ACL ARN of CLOUDFRONT scope (us-east-1, global/webacl/…)').optional(),
+    /** The regions a global or cross-region inference profile may route the chat model to (the backend may invoke the
+     * model there); unset: any region */
+    modelRegions: z.array(z.string().regex(/^[a-z]{2}(-gov)?-[a-z]+-\d$/, 'an AWS region')).max(30).optional(),
   }).strict().prefault({}),
   /** AgentCore observability: OpenTelemetry (ADOT) traces and metrics to CloudWatch (src/infra/observability.ts). */
   observability: z.object({

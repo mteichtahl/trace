@@ -20,7 +20,7 @@ browser ──https──▶ CloudFront (one address)
                                      ├── /api/voice/*   Polly speech (cached in S3) and signed Transcribe streaming URLs
                                      ├── /api/ops       CloudWatch dashboards and metric data, filtered by access
                                      └── /api/config    what the app needs to start (no secrets)
-browser ──wss──▶ AppSync Events (Cognito tokens): the one live connection, channel /trace/users/<sub>
+browser ──wss──▶ AppSync Events (the id token, checked by a Lambda authorizer): the one live connection, channel /trace/users/<sub>
 ```
 
 Rules every piece keeps:
@@ -28,12 +28,22 @@ Rules every piece keeps:
 - **The API runtime stays the one place that decides access.** The web backend never reads the access store or a
   project's database itself. Anything per project goes through `/api/call` (or the chat agent's tools, which call the
   same thing with the person's token). The backend's own AWS reach is Polly, Transcribe, CloudWatch read, its voice
-  cache prefix, AppSync publish and one SSM parameter.
+  cache prefix, AppSync publish, the configured chat model and one SSM parameter. Every authenticated endpoint but the
+  person's own sign-in settings needs an account class (403 "no access" otherwise).
 - **No circular references in the stack.** The backend reads its settings (user pool and client ids, the API runtime's
   ARN, the AppSync endpoints, the voice bucket) from one SSM parameter, `/<prefix>/web/config`, whose name is fixed.
-  CloudFront → Lambda URL; the user pool → CloudFront's domain (the passkey relying party); nothing points back.
+  CloudFront → Lambda URL; the user pool → CloudFront's domain (the passkey relying party); nothing points back. The
+  live events API lives in the web stack with a Lambda authorizer (it names nothing of the pool), so the content
+  security policy names its exact hosts.
 - **Tokens never in browser storage.** Access and id tokens live in memory; the refresh token is an HTTP-only,
-  Secure, SameSite=Strict cookie `trace_rt` scoped to `/api/auth`.
+  Secure, SameSite=Strict cookie `__Secure-trace_rt` scoped to `/api/auth` (a name sent twice is ignored; the old name
+  `trace_rt` is read once and moved).
+- **People are their Cognito sub.** Every match (opened evidence, questions asked of a person, chat authorship, memory
+  marks, person memory) is on the hash of the sub; the email is for display. Records made before carry the email's
+  hash and are accepted on read. The pool keeps an email change pending until it is verified.
+- **Nothing a model reads starts work.** The chat agent's `start_task` is shown to the person as a confirm card with
+  the exact request; only their Confirm calls `task`. Tool results and other people's messages reach the model fenced
+  as data.
 - **Every mutating `/api/call` publishes a live event** to the people on that project (from `project.members`), so
   screens update without asking again.
 
@@ -45,7 +55,7 @@ All bodies are JSON unless noted. Errors: `{ ok: false, error, code? }` with a f
 | Endpoint | Body / query | Answer |
 | --- | --- | --- |
 | `GET /api/config` | – | `{ region, prefix, userPoolId, clientId, events: { http, realtime }, features: { passkeys, email, voice, ops } }` |
-| `POST /api/auth/start` | `{ email }` | `{ session, choices: ('passkey'\|'email_code'\|'password')[] }`: `InitiateAuth` USER_AUTH without a preferred factor |
+| `POST /api/auth/start` | `{ email }` | `{ session, choices: ('passkey'\|'email_code'\|'password')[] }`: `InitiateAuth` USER_AUTH without a preferred factor; `choices` are the pool's, the same for every address (a choice the account lacks fails at respond with `choice_unavailable`) |
 | `POST /api/auth/respond` | `{ email, session, kind: 'password'\|'email_code'\|'passkey'\|'totp'\|'new_password', answer }` (`answer` for passkey: the WebAuthn assertion JSON) | signed in: `{ signedIn: true, accessToken, idToken, expiresIn, user: { sub, email, class } }` and the cookie; or the next step: `{ signedIn: false, next: 'email_code'\|'totp'\|'new_password'\|'passkey', session, options? }` |
 | `POST /api/auth/refresh` | – (cookie) | `{ accessToken, idToken, expiresIn, user }` or 401 |
 | `POST /api/auth/sign-out` | – | revokes the refresh token, clears the cookie |
@@ -64,8 +74,9 @@ All bodies are JSON unless noted. Errors: `{ ok: false, error, code? }` with a f
 
 ## Live events (AppSync Events)
 
-- One API, namespace `trace`. Subscribe auth: the user pool (the app passes its id token). Publish auth: IAM (the web
-  backend's role only).
+- One API, namespace `trace`, in the web stack. Connect and subscribe auth: a Lambda authorizer
+  (`src/web/events-auth.ts`) that checks the app's id token (the web client's) and allows `/trace/users/<its sub>`
+  only. Publish auth: IAM (the web backend's role only).
 - Channel per person: `/trace/users/<sub>`. The namespace's `onSubscribe` handler refuses any channel whose `<sub>` is
   not the subscriber's own.
 - Event: `{ type, repo?, at, ...detail }` with `type` one of `record.changed` (`{ repo, what: 'journey'|'settings'|
@@ -94,7 +105,8 @@ reviewer. `require_(p, repo, 'write')` needs the contributor part (or admin). `p
 | `question.answer` | write | answer an agent's question (the recommended option or another with a reason) |
 | `waiver.add` | write | a waiver with reason, risk, severity, where it is caught instead |
 | `inbox` | signed-in | the four kinds that earn a notification across the person's projects, oldest and most blocking first |
-| `chats.list` / `chats.get` / `chats.append` / `chats.rename` / `chats.recall` | read | threads per project (visible to everyone on it), messages, the person's own sent messages newest first |
+| `chats.list` / `chats.get` / `chats.append` / `chats.rename` / `chats.recall` | read | threads per project (visible to everyone on it), messages (each marked `yours`), the person's own sent messages newest first. `chats.append` keeps the caller's own words only (role user, by them); at most 500 threads per person per project |
+| `chats.reply` | read | trace's reply and tool rows after the caller's own latest turn, by "trace": called by the chat agent only (`/api/call` refuses it) |
 | `me.get` / `me.set` | signed-in | the person's preferences (one JSON document, `key` paths), and per-table views |
 | `graph.neighbourhood` | read | `{ nodes, links }` around a focus item, depth 1–3, from the project record, memory and the knowledge base |
 | `files.list` / `files.url` | read | the project's files by kind, and a short-lived signed URL (or bytes) for one |

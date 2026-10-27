@@ -39,7 +39,7 @@ import type { DocumentType } from '@smithy/types'
 import { z } from 'zod'
 import { AuthError } from '../api/jwt.js'
 import type { WebConfig } from './config.js'
-import { type WebDeps, signedIn } from './deps.js'
+import { type WebClass, type WebDeps, classOfGroups, signedIn } from './deps.js'
 import { type Reply, type WebRequest, WebError, cookie, parseBody, route, whoHash } from './http.js'
 
 export const REFRESH_COOKIE = '__Secure-trace_rt'
@@ -48,10 +48,7 @@ export const OLD_REFRESH_COOKIE = 'trace_rt'
 export const REFRESH_PATH = '/api/auth'
 export const REFRESH_MAX_AGE = 30 * 24 * 3600
 
-/** The account classes' Cognito groups, highest first (the same as src/core/access.ts GROUPS; a test keeps them so). */
-export const CLASS_GROUPS = [['admin', 'trace-admins'], ['user', 'trace-users'], ['guest', 'trace-guests']] as const
-export type WebClass = (typeof CLASS_GROUPS)[number][0]
-export const classOfGroups = (groups: readonly string[]): WebClass | null => CLASS_GROUPS.find(([, g]) => groups.includes(g))?.[0] ?? null
+export { CLASS_GROUPS, type WebClass, classOfGroups } from './deps.js'
 
 const Email = z.string().trim().min(3).max(320).email()
 const Kind = z.enum(['password', 'email_code', 'passkey', 'totp', 'new_password'])
@@ -269,20 +266,20 @@ export function authRoutes(deps: WebDeps) {
     }),
 
     route('POST', '/api/auth/passkeys/start', async (req, ctx) => {
-      const s = await signedIn(req, ctx, deps)
+      const s = await signedIn(req, ctx, deps, { anyone: true })
       const out = await cognitoCall(() => deps.cognito(s.config).startWebAuthnRegistration({ AccessToken: s.token }))
       return { body: { options: out.CredentialCreationOptions } }
     }),
 
     route('POST', '/api/auth/passkeys/finish', async (req, ctx) => {
-      const s = await signedIn(req, ctx, deps)
+      const s = await signedIn(req, ctx, deps, { anyone: true })
       const b = parseBody(req, Credential)
       await cognitoCall(() => deps.cognito(s.config).completeWebAuthnRegistration({ AccessToken: s.token, Credential: b.credential as DocumentType }))
       return { body: { ok: true } }
     }),
 
     route('GET', '/api/auth/passkeys', async (req, ctx) => {
-      const s = await signedIn(req, ctx, deps)
+      const s = await signedIn(req, ctx, deps, { anyone: true })
       const passkeys: Record<string, unknown>[] = []
       let next: string | undefined
       do {
@@ -299,7 +296,7 @@ export function authRoutes(deps: WebDeps) {
     }),
 
     route('DELETE', '/api/auth/passkeys/:id', async (req, ctx) => {
-      const s = await signedIn(req, ctx, deps)
+      const s = await signedIn(req, ctx, deps, { anyone: true })
       const id = ctx.params.id ?? ''
       if (!id || id.length > 1024) throw new WebError(400, 'which passkey?', 'bad_request')
       await cognitoCall(() => deps.cognito(s.config).deleteWebAuthnCredential({ AccessToken: s.token, CredentialId: id }))
@@ -307,7 +304,7 @@ export function authRoutes(deps: WebDeps) {
     }),
 
     route('POST', '/api/auth/totp/start', async (req, ctx) => {
-      const s = await signedIn(req, ctx, deps)
+      const s = await signedIn(req, ctx, deps, { anyone: true })
       const out = await cognitoCall(() => deps.cognito(s.config).associateSoftwareToken({ AccessToken: s.token }))
       if (!out.SecretCode) throw new WebError(500, 'Cognito answered without a secret', 'cognito')
       const label = encodeURIComponent(`trace:${s.claims.username ?? s.claims.sub}`)
@@ -315,7 +312,7 @@ export function authRoutes(deps: WebDeps) {
     }),
 
     route('POST', '/api/auth/totp/verify', async (req, ctx) => {
-      const s = await signedIn(req, ctx, deps)
+      const s = await signedIn(req, ctx, deps, { anyone: true })
       const b = parseBody(req, TotpVerify)
       const out = await cognitoCall(() => deps.cognito(s.config).verifySoftwareToken({ AccessToken: s.token, UserCode: b.code, FriendlyDeviceName: b.name ?? 'Authenticator app' }))
       if (out.Status !== 'SUCCESS') return { body: { ok: false } }

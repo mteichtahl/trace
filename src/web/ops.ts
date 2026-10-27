@@ -29,6 +29,8 @@ import { WebError, route } from './http.js'
 
 export const REFRESH_S = 60
 const MAX_POINTS = 720
+/** The longest range asked for at once (each range is a GetMetricData bill). */
+export const MAX_RANGE_DAYS = 30
 const RANGES: Readonly<Record<string, number>> = { '1h': 3600, '24h': 86_400, '7d': 7 * 86_400, '30d': 30 * 86_400 }
 
 // ------------------------------------------------------------------ who may see what
@@ -58,15 +60,26 @@ export async function accessOf(deps: WebDeps, who: Caller): Promise<Access> {
   return { admin: wa.data.result.class === 'admin', projects }
 }
 
-/** The project a name or label belongs to, among `repos`, by the hash in trace's resource names; null if none. */
+/** The marks of trace's resource names any project's hash could leave in a label: `<prefix>_w_<8 hex>` and the rest. */
+const markPattern = (prefix: string): RegExp => {
+  const esc = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const under = esc(prefix.replace(/-/g, '_').toLowerCase())
+  const dash = esc(prefix.toLowerCase())
+  return new RegExp(`(?:${under}_[wm]_|${dash}-(?:ci|gpu|cpu|kb|m)-)([0-9a-f]{8})`, 'g')
+}
+
+/**
+ * The project a name or label belongs to, among `repos`, by the hash in trace's resource names; null if none, and null
+ * too when the text carries the marks of more than one project (of any project, the person's or not): a series that
+ * mixes projects is never shown as one of them (only to an admin, who sees everything).
+ */
 export function attribute(text: string, prefix: string, repos: Iterable<string>): string | null {
-  const under = prefix.replace(/-/g, '_')
   const t = text.toLowerCase()
+  const hashes = new Set([...t.matchAll(markPattern(prefix))].map((m) => m[1]))
+  if (hashes.size !== 1) return null
+  const [h] = hashes
   for (const repo of repos) {
-    let h: string
-    try { h = projectHash(repo) } catch { continue }
-    const marks = [`${under}_w_${h}`, `${under}_m_${h}`, `${prefix}-ci-${h}`, `${prefix}-gpu-${h}`, `${prefix}-cpu-${h}`, `${prefix}-kb-${h}`, `${prefix}-m-${h}`]
-    if (marks.some((m) => t.includes(m.toLowerCase()))) return repo
+    try { if (projectHash(repo) === h) return repo } catch { continue }
   }
   return null
 }
@@ -247,7 +260,7 @@ function rangeOf(q: URLSearchParams, now: number): { start: Date; end: Date; sec
   if (from || to) {
     const end = to ? Date.parse(to) : now
     const start = from ? Date.parse(from) : end - 86_400_000
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || end - start > 455 * 86_400_000) throw new WebError(400, 'start and end: two ISO times, start first, at most 455 days apart', 'bad_request')
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || end - start > MAX_RANGE_DAYS * 86_400_000) throw new WebError(400, `start and end: two ISO times, start first, at most ${MAX_RANGE_DAYS} days apart`, 'bad_request')
     return { start: new Date(start), end: new Date(end), seconds: Math.round((end - start) / 1000) }
   }
   const r = q.get('range') ?? '24h'

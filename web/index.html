@@ -6,24 +6,8 @@
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>trace</title>
-    <script>
-      // No flash: set the theme class (and the display preferences) before anything paints. The stored choice is a
-      // copy of the person's preference (me.get), kept only so this first paint is right; the account is the source.
-      (function () {
-        try {
-          var d = document.documentElement
-          var p = JSON.parse(localStorage.getItem('trace.display') || '{}')
-          var t = p.theme || 'system'
-          var dark = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
-          if (dark) d.classList.add('dark')
-          d.style.colorScheme = dark ? 'dark' : 'light'
-          if (p.density) d.dataset.density = p.density
-          if (p.motion) d.dataset.motion = p.motion
-          if (p.contrast) d.dataset.contrast = p.contrast
-          if (p.textSize) d.style.setProperty('--text-scale', String(p.textSize))
-        } catch (e) {}
-      })()
-    </script>
+    <!-- before anything paints: the theme and display preferences (a file, so script-src needs no 'unsafe-inline') -->
+    <script src="/theme.js"></script>
   </head>
   <body>
     <div id="root"></div>

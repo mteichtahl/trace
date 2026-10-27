@@ -77,6 +77,10 @@ describe('Operations', () => {
     expect(attribute(`trace-ci-${ha}`, 'trace', [A])).toBe(A)
     expect(attribute('trace_api-XyZ', 'trace', [A, B])).toBeNull()
     expect(attribute(`trace_w_${hc}`, 'trace', [A, B])).toBeNull()
+    // a series carrying the marks of two projects belongs to neither (another project's, or two of the person's)
+    expect(attribute(`trace_w_${ha} trace_w_${hc}`, 'trace', [A, B])).toBeNull()
+    expect(attribute(`trace_w_${ha} trace-ci-${hb}`, 'trace', [A, B])).toBeNull()
+    expect(attribute(`trace_w_${ha} trace-ci-${ha}`, 'trace', [A, B])).toBe(A)
   })
 
   it('an admin sees every series, unattributed and cost included, and every alarm', async () => {
@@ -219,5 +223,33 @@ describe('voice', () => {
 
   it('reads speech marks leniently', () => {
     expect(parseMarks('{"time":1,"type":"word","value":"a"}\nnot json\n\n')).toEqual([{ time: 1, type: 'word', value: 'a' }])
+  })
+})
+
+describe('cost endpoints need an account class, and keep their limits', () => {
+  it('a signed-in account without a class gets "no access" from ops, voice and the chat agent, before anything is spent', async () => {
+    const w = world()
+    const none = accessToken('sub-nobody', [])
+    for (const [method, path, body] of [['GET', '/api/ops', ''], ['POST', '/api/voice/speak', JSON.stringify({ text: 'hi', voice: 'Olivia' })], ['POST', '/api/agui', JSON.stringify({ threadId: 't', runId: 'r', messages: [{ role: 'user', content: 'hi' }] })], ['POST', '/api/call', JSON.stringify({ action: 'whoami' })]] as const) {
+      const r = await w.serve({ method, path, headers: bearerOf(none), body })
+      expect(r.status, path).toBe(403)
+      expect(r.json()).toMatchObject({ error: 'no access' })
+    }
+    expect(w.polly.synth).toEqual([])
+    expect(w.bedrock.inputs).toEqual([])
+    expect(w.cw.queries).toEqual([])
+    expect(w.runtime.calls).toEqual([])
+    // their own sign-in settings stay theirs (a passkey, an authenticator app)
+    w.cognito.answers.set('ListWebAuthnCredentials', () => ({ Credentials: [] }))
+    expect((await w.serve({ method: 'GET', path: '/api/auth/passkeys', headers: bearerOf(none) })).status).toBe(200)
+  })
+
+  it('speak reads at most 10,000 characters; ops ranges are at most 30 days', async () => {
+    const w = world()
+    const tok = accessToken('sub-ada', ['trace-admins'])
+    expect((await w.serve({ method: 'POST', path: '/api/voice/speak', headers: bearerOf(tok), body: JSON.stringify({ text: 'x'.repeat(10_001), voice: 'Olivia' }) })).status).toBe(400)
+    const q = (s: string) => w.serve({ method: 'GET', path: '/api/ops', headers: bearerOf(tok), query: new URLSearchParams(s) })
+    expect((await q('start=2026-01-01T00:00:00Z&end=2026-03-01T00:00:00Z')).status).toBe(400)
+    expect((await q('range=90d')).status).toBe(400)
   })
 })

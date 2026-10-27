@@ -16,16 +16,22 @@
  *                      security headers and a content security policy on both. HTTP/2 and HTTP/3, price class 100,
  *                      CloudFront's own address or web.domainName with its certificate
  *     backend role     its settings parameter (by name), Polly, Transcribe streaming, its voice prefix, CloudWatch
- *                      dashboards and metrics (read), the chat model, its own log group. Nothing of the access store,
- *                      any project's data, or Cognito's admin API: per project, it goes through the API runtime
+ *                      dashboards and metrics (read), the chat model (that model or inference profile only, and the
+ *                      foundation models a profile routes to), publishing live events, its own log group. Nothing of
+ *                      the access store, any project's data, or Cognito's admin API: per project, it goes through the
+ *                      API runtime
+ *     events           AppSync Events `<prefix>-events`: connect and subscribe with a Lambda authorizer
+ *                      (src/web/events-auth.ts) that checks the app's Cognito id token against the settings parameter,
+ *                      so the API names nothing of the pool and lives here; publish with IAM (the backend's role only);
+ *                      namespace `trace`, whose onSubscribe handler allows /trace/users/<sub> to that <sub> alone
+ *     content policy   names the events API's own two hosts, Transcribe streaming and the voice bucket; scripts only
+ *                      from the app (the theme script is web/public/theme.js, not inline)
+ *     WAF              web.webAclArn (a WAFv2 web ACL of CLOUDFRONT scope, made in us-east-1) attached when given: rate
+ *                      limits per address belong there, since this stack's region is rarely us-east-1. The backend's
+ *                      own per-person limit (src/web/agui.ts) is a soft one
  *   in the parent      what names the pool (TraceWeb.attach):
  *     app client       `<prefix>-web`: choice-based sign-in (USER_AUTH) and refresh, no secret
- *     events           AppSync Events `<prefix>-events`: subscribe with the pool's tokens, publish with IAM (the
- *                      backend's role only); namespace `trace`, whose onSubscribe handler allows /trace/users/<sub>
- *                      to that <sub> alone
  *     settings         the SSM parameter `/<prefix>/web/config` (webConfigParameter): the JSON the backend reads
- *     publish grant    appsync:EventPublish on the namespace, a policy of its own on the backend role (so the backend
- *                      does not wait for it, and the nested stack names nothing of the parent's)
  *
  * The pool itself (src/infra/stack.ts) takes this construct's `domain` as its passkey relying party and offers
  * passkeys and passwords first (email codes too with web.sesFrom: Cognito sends them only through SES).
@@ -66,11 +72,12 @@ export const VOICE_DAYS = 30
  * streamed chat must send something (an SSE comment) at least this often. */
 export const API_READ_TIMEOUT_SECONDS = 60
 
-/** The live events' onSubscribe handler (APPSYNC_JS): a person may subscribe to /trace/users/<their own sub> only. */
+/** The live events' onSubscribe handler (APPSYNC_JS): a person may subscribe to /trace/users/<their own sub> only. The
+ * sub is the Lambda authorizer's (src/web/events-auth.ts, handlerContext.sub), which checked the id token. */
 export const SUBSCRIBE_HANDLER = `import { util } from '@aws-appsync/utils'
 
 export function onSubscribe(ctx) {
-  const sub = ctx.identity && ctx.identity.sub
+  const sub = ctx.identity && ctx.identity.handlerContext && ctx.identity.handlerContext.sub
   const segments = ctx.info.channel.path.split('/').filter((s) => s.length > 0)
   if (!sub || segments.length !== 3 || segments[0] !== '${EVENTS_NAMESPACE}' || segments[1] !== 'users' || segments[2] !== sub) {
     util.unauthorized()
@@ -98,11 +105,15 @@ export const API_FUNCTION = `function handler(event) {
 }
 `
 
-/** The content security policy: the app's own files, the live events (any AppSync API in the region: the events API names
- * the pool, so the nested stack cannot name it), Transcribe streaming, the voice bucket's signed URLs, data: and blob:
- * for images and workers, WebAssembly for PDF.js and Shiki, and inline styles only. */
-export function contentSecurityPolicy(region: string, voiceHost: string): string {
-  const events = [`https://*.appsync-api.${region}.amazonaws.com`, `wss://*.appsync-realtime-api.${region}.amazonaws.com`]
+/**
+ * The content security policy: the app's own files, the live events (that API's two hosts exactly), Transcribe
+ * streaming, the voice bucket's signed URLs, data: and blob: for images and workers, WebAssembly for PDF.js and Shiki,
+ * and inline styles only. Large repository files are fetched from GitHub's own short-lived links (files.url): its two
+ * download hosts are allowed for connect only, never for scripts.
+ */
+export const GITHUB_DOWNLOAD_HOSTS = ['https://raw.githubusercontent.com', 'https://objects.githubusercontent.com']
+export function contentSecurityPolicy(region: string, voiceHost: string, events: { http: string; realtime: string }): string {
+  const live = [`https://${events.http}`, `wss://${events.realtime}`]
   return [
     "default-src 'self'",
     "script-src 'self' 'wasm-unsafe-eval'",
@@ -110,7 +121,7 @@ export function contentSecurityPolicy(region: string, voiceHost: string): string
     `img-src 'self' data: blob: https://${voiceHost}`,
     "font-src 'self' data:",
     `media-src 'self' blob: https://${voiceHost}`,
-    `connect-src 'self' ${events.join(' ')} wss://transcribestreaming.${region}.amazonaws.com:8443 https://${voiceHost}`,
+    `connect-src 'self' ${live.join(' ')} wss://transcribestreaming.${region}.amazonaws.com:8443 https://${voiceHost} ${GITHUB_DOWNLOAD_HOSTS.join(' ')}`,
     "worker-src 'self' blob:",
     "manifest-src 'self'",
     "object-src 'none'",
@@ -172,6 +183,8 @@ export interface WebStackProps {
   dashboards: readonly string[]
   /** keep the site bucket when the stack is deleted (retainData) */
   retainData: boolean
+  /** the Bedrock regions a global or cross-region inference profile may route the chat model to (default: all) */
+  modelRegions?: readonly string[]
   /** build the app and bundle the backend; false: a placeholder of each (default: unless SKIP_BUNDLE_ENV is 1) */
   bundle?: boolean
 }
@@ -184,6 +197,8 @@ export class WebStack extends NestedStack {
   readonly backendRole: iam.Role
   readonly functionUrl: lambda.FunctionUrl
   readonly distribution: cloudfront.Distribution
+  readonly events: appsync.EventApi
+  readonly authorizer: lambda.Function
   /** the app's host name: web.domainName, else CloudFront's */
   readonly domain: string
   readonly contentSecurityPolicy: string
@@ -240,11 +255,11 @@ export class WebStack extends NestedStack {
         sid: 'OpsDashboards', actions: ['cloudwatch:GetDashboard'], resources: p.dashboards.map((d) => `arn:${partition}:cloudwatch::${account}:dashboard/${d}`),
       }))
     }
-    // the chat model: Anthropic's models and the account's inference profiles, as the workers (src/infra/project.ts
-    // modelAccess), so changing the model is a setting, not a policy change
+    // the chat model: that model or inference profile, and the foundation model a profile routes to (in any region it
+    // may route to); a model change is a stack update
     role.addToPolicy(new iam.PolicyStatement({
       sid: 'ChatModel', actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-      resources: [`arn:${partition}:bedrock:*::foundation-model/anthropic.*`, `arn:${partition}:bedrock:*:${account}:inference-profile/*`],
+      resources: modelResources(p.model, { partition, region, account, regions: p.modelRegions }),
     }))
     const logGroup = new logs.LogGroup(this, 'BackendLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY })
     logGroup.grantWrite(role)
@@ -273,6 +288,55 @@ export class WebStack extends NestedStack {
     })
     this.functionUrl = this.backend.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.AWS_IAM, invokeMode: lambda.InvokeMode.RESPONSE_STREAM })
 
+    // ------------------------------------------------------------------ live events
+    // Lambda authorization (the app's id token, checked against the settings parameter) so the API names nothing of
+    // the pool: it lives here, and the content security policy can name its hosts
+    const authRole = new iam.Role(this, 'EventsAuthorizerRole', {
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      description: 'The trace live events\' authorizer: reads the web app\'s settings parameter, nothing else',
+    })
+    authRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'WebConfig', actions: ['ssm:GetParameter'], resources: [`arn:${partition}:ssm:${region}:${account}:parameter${webConfigParameter(p.prefix)}`],
+    }))
+    const authLogs = new logs.LogGroup(this, 'EventsAuthorizerLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY })
+    authLogs.grantWrite(authRole)
+    this.authorizer = new lambda.Function(this, 'EventsAuthorizer', {
+      functionName: `${p.prefix}-events-auth`,
+      description: 'trace: the live events\' authorizer (src/web/events-auth.ts): a person subscribes to their own channel only',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      handler: 'authorizer.handler',
+      code: bundle ? code : lambda.Code.fromAsset(placeholder('authorizer.mjs', 'export const handler = async () => ({ isAuthorized: false })\n')),
+      role: authRole,
+      memorySize: 256,
+      timeout: Duration.seconds(5),
+      logGroup: authLogs,
+      environment: { TRACE_WEB_CONFIG_PARAM: webConfigParameter(p.prefix) },
+    })
+    this.events = new appsync.EventApi(this, 'Events', {
+      apiName: `${p.prefix}-events`,
+      authorizationConfig: {
+        authProviders: [
+          { authorizationType: appsync.AppSyncAuthorizationType.LAMBDA, lambdaAuthorizerConfig: { handler: this.authorizer, resultsCacheTtl: Duration.seconds(60) } },
+          { authorizationType: appsync.AppSyncAuthorizationType.IAM },
+        ],
+        connectionAuthModeTypes: [appsync.AppSyncAuthorizationType.LAMBDA, appsync.AppSyncAuthorizationType.IAM],
+        defaultPublishAuthModeTypes: [appsync.AppSyncAuthorizationType.IAM],
+        defaultSubscribeAuthModeTypes: [appsync.AppSyncAuthorizationType.LAMBDA],
+      },
+    })
+    this.events.addChannelNamespace('Namespace', {
+      channelNamespaceName: EVENTS_NAMESPACE,
+      code: appsync.Code.fromInline(SUBSCRIBE_HANDLER),
+      authorizationConfig: {
+        publishAuthModeTypes: [appsync.AppSyncAuthorizationType.IAM],
+        subscribeAuthModeTypes: [appsync.AppSyncAuthorizationType.LAMBDA],
+      },
+    })
+    role.addToPolicy(new iam.PolicyStatement({
+      sid: 'PublishLiveEvents', actions: ['appsync:EventPublish'], resources: [`${this.events.apiArn}/channelNamespace/${EVENTS_NAMESPACE}`],
+    }))
+
     // ------------------------------------------------------------------ the static app
     const site = bundle
       ? deploy.Source.asset(join(p.root, 'web'), {
@@ -287,7 +351,7 @@ export class WebStack extends NestedStack {
       : deploy.Source.asset(placeholder('index.html', '<!doctype html><title>trace</title><p>The web app was not built.</p>\n'))
 
     // ------------------------------------------------------------------ CloudFront
-    this.contentSecurityPolicy = contentSecurityPolicy(region, this.voiceBucket.bucketRegionalDomainName)
+    this.contentSecurityPolicy = contentSecurityPolicy(region, this.voiceBucket.bucketRegionalDomainName, { http: this.events.httpDns, realtime: this.events.realtimeDns })
     const headers = new cloudfront.ResponseHeadersPolicy(this, 'SecurityHeaders', {
       responseHeadersPolicyName: `${p.prefix}-web-security`,
       comment: 'trace web app: strict security headers and its content security policy',
@@ -319,6 +383,7 @@ export class WebStack extends NestedStack {
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
       minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
       ...custom,
+      ...(p.settings.webAclArn ? { webAclId: p.settings.webAclArn } : {}),
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(this.siteBucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
@@ -418,7 +483,6 @@ export class TraceWeb extends Construct {
   /** the app's host name (the pool's passkey relying party) */
   readonly domain: string
   readonly url: string
-  events: appsync.EventApi | null = null
   config: ssm.StringParameter | null = null
   private readonly p: TraceWebProps
 
@@ -433,35 +497,7 @@ export class TraceWeb extends Construct {
   attach(a: WebAttachProps): void {
     const parent = Stack.of(this)
     const { region } = parent
-
-    // ------------------------------------------------------------------ live events
-    this.events = new appsync.EventApi(this, 'Events', {
-      apiName: `${this.p.prefix}-events`,
-      authorizationConfig: {
-        authProviders: [
-          { authorizationType: appsync.AppSyncAuthorizationType.USER_POOL, cognitoConfig: { userPool: a.pool } },
-          { authorizationType: appsync.AppSyncAuthorizationType.IAM },
-        ],
-        connectionAuthModeTypes: [appsync.AppSyncAuthorizationType.USER_POOL, appsync.AppSyncAuthorizationType.IAM],
-        defaultPublishAuthModeTypes: [appsync.AppSyncAuthorizationType.IAM],
-        defaultSubscribeAuthModeTypes: [appsync.AppSyncAuthorizationType.USER_POOL],
-      },
-    })
-    this.events.addChannelNamespace('Namespace', {
-      channelNamespaceName: EVENTS_NAMESPACE,
-      code: appsync.Code.fromInline(SUBSCRIBE_HANDLER),
-      authorizationConfig: {
-        publishAuthModeTypes: [appsync.AppSyncAuthorizationType.IAM],
-        subscribeAuthModeTypes: [appsync.AppSyncAuthorizationType.USER_POOL],
-      },
-    })
-    // the backend's role publishes; a policy of its own, so the backend (in the nested stack) never waits on it
-    new iam.Policy(this, 'BackendPublish', {
-      roles: [this.stack.backendRole],
-      statements: [new iam.PolicyStatement({
-        sid: 'PublishLiveEvents', actions: ['appsync:EventPublish'], resources: [`${this.events.apiArn}/channelNamespace/${EVENTS_NAMESPACE}`],
-      })],
-    })
+    void a.pool
 
     // ------------------------------------------------------------------ the backend's settings
     const config: WebConfig = {
@@ -470,7 +506,7 @@ export class TraceWeb extends Construct {
       userPoolId: a.pool.userPoolId,
       clientId: a.client.userPoolClientId,
       apiRuntimeArn: a.apiRuntimeArn,
-      events: { http: this.events.httpDns, realtime: this.events.realtimeDns, apiId: this.events.apiId },
+      events: { http: this.stack.events.httpDns, realtime: this.stack.events.realtimeDns, apiId: this.stack.events.apiId },
       voiceBucket: this.stack.voiceBucket.bucketName,
       voicePrefix: VOICE_PREFIX,
       dashboards: [...this.p.dashboards],
@@ -486,7 +522,7 @@ export class TraceWeb extends Construct {
 
     new CfnOutput(parent, WEB_OUTPUTS.url, { value: this.url, description: 'The web app: the address people sign in at' })
     new CfnOutput(parent, WEB_OUTPUTS.distributionId, { value: this.stack.distribution.distributionId, description: 'The web app\'s CloudFront distribution' })
-    new CfnOutput(parent, WEB_OUTPUTS.eventsEndpoint, { value: `https://${this.events.httpDns}/event`, description: 'The live events\' HTTP endpoint (AppSync Events)' })
+    new CfnOutput(parent, WEB_OUTPUTS.eventsEndpoint, { value: `https://${this.stack.events.httpDns}/event`, description: 'The live events\' HTTP endpoint (AppSync Events)' })
     new CfnOutput(parent, WEB_OUTPUTS.clientId, { value: a.client.userPoolClientId, description: 'The web app\'s Cognito app client' })
   }
 }
@@ -497,7 +533,25 @@ export function webDashboards(cfg: Pick<InfraProps, 'prefix' | 'observability' |
   return [...new Set([...own, ...cfg.web.dashboards])]
 }
 
+/**
+ * The resources the chat model is invoked on: the model id as given (a foundation model, or an inference profile in
+ * this account), and for a profile (`global.`, `us.`, `eu.`, `apac.` …) the foundation model it routes to, in the
+ * regions it may route to (`regions`, default all: a global profile may route anywhere).
+ */
+export function modelResources(model: string, o: { partition: string; region: string; account: string; regions?: readonly string[] | undefined }): string[] {
+  if (model.startsWith('arn:')) return [model]
+  const profile = /^(global|us|eu|apac|us-gov|ca|jp|au)\.(.+)$/.exec(model)
+  const where = (o.regions?.length ? o.regions : ['*'])
+  if (!profile) return [`arn:${o.partition}:bedrock:${o.region}::foundation-model/${model}`]
+  const base = profile[2] as string
+  return [
+    `arn:${o.partition}:bedrock:${o.region}:${o.account}:inference-profile/${model}`,
+    ...where.map((r) => `arn:${o.partition}:bedrock:${r}::foundation-model/${base}`),
+  ]
+}
+
 /** The props of TraceWeb from the stack's settings. */
 export const traceWebProps = (cfg: InfraProps, root: string): TraceWebProps => ({
   prefix: cfg.prefix, root, settings: cfg.web, model: webModel(cfg), dashboards: webDashboards(cfg), retainData: cfg.retainData,
+  ...(cfg.web.modelRegions ? { modelRegions: cfg.web.modelRegions } : {}),
 })
