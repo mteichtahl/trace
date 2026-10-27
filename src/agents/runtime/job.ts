@@ -450,6 +450,11 @@ async function threadOf(gh: GitHub, repository: string, n: number, log: (l: stri
   }
 }
 
+/** Who is acting, for the journey tools (src/tools/journey): the agent, in words, and its job. */
+export function journeyAgentEnv(agent: string, label: string, jobId: string): Record<string, string> {
+  return { TRACE_AGENT: agent, TRACE_AGENT_LABEL: label, TRACE_JOB_ID: jobId }
+}
+
 /** The environment that lets a specialist's MCP server delegate (agent.delegate) and limits it to its own tools. */
 export function specialistEnv(o: { tools: readonly string[]; delegateUrl?: string | undefined; token?: string | undefined; timeoutMinutes: number }): Record<string, string> {
   const timeoutS = o.timeoutMinutes * 60
@@ -545,7 +550,10 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
       log(`running the ${r.kind} specialist on ${p.repository} ${branch} (max ${settings.max_turns} turns, ${tools.length} tools)`)
       const out = await runClaude(d, {
         prompt: `${prompt.text}${mem.context}`, cwd: dir, cfg, token, signal: ctx.signal, log, redact, notes, system,
-        extraEnv: { ...mem.env, ...specialistEnv({ tools, delegateUrl: d.delegateUrl, token: dtoken, timeoutMinutes: cfg.agents.delegate_timeout_minutes }) },
+        extraEnv: {
+          ...mem.env, ...journeyAgentEnv(r.kind, `the ${s.title} specialist`, ctx.jobId),
+          ...specialistEnv({ tools, delegateUrl: d.delegateUrl, token: dtoken, timeoutMinutes: cfg.agents.delegate_timeout_minutes }),
+        },
         mcpEnv: waits.env,
         onMessage: (m) => mem.observe(m), agent: r.kind,
         model: settings.model || d.model || cfg.worker.model || undefined, maxTurns: settings.max_turns,
@@ -607,7 +615,7 @@ export async function runDelegated(d: RunnerDeps, p: DelegatedTaskJob, ctx: JobC
     const waits = openWaitRelay(d, ctx.jobId)
     const out = await runClaude(d, {
       prompt: `${prompt.text}${mem.context}`, cwd: parent.dir, cfg: parent.cfg, token, signal: ctx.signal, log, redact, notes: parent.notes ?? null, system,
-      extraEnv: mem.env, mcpEnv: waits.env, onMessage: (m) => mem.observe(m), agent: WORKER,
+      extraEnv: { ...mem.env, ...journeyAgentEnv(WORKER, 'the trace worker', ctx.jobId) }, mcpEnv: waits.env, onMessage: (m) => mem.observe(m), agent: WORKER,
     }).finally(() => waits.close())
     const summary = redact(out.text)
     await mem.finish(out.ok, summary)
