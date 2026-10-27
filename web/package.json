@@ -23,6 +23,8 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
+    "cytoscape": "^3.34.4",
+    "cytoscape-fcose": "^2.2.0",
     "input-otp": "^1.5.0",
     "katex": "^0.19.1",
     "lucide-react": "^1.61.0",
