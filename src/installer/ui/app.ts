@@ -100,6 +100,8 @@ const s = {
     computeType: '' as '' | (typeof RUNNER_COMPUTE_TYPES)[number], privileged: 'default' as 'default' | 'on' | 'off',
     /** build trace's own repository on AWS too; null: not chosen (on when the token can configure it) */
     buildTrace: null as boolean | null,
+    /** keep this installation up to date from trace's own repository's ci workflow (on by default while it is built) */
+    selfUpdate: true,
   },
   adminEmail: '',
   people: [] as Person[],
@@ -176,7 +178,7 @@ function answers(): AnswersInput {
       auth: s.runners.auth, token: s.runners.token,
       connectionArn: s.runners.auth === 'token' ? '' : s.runners.connectionArn, computeType: s.runners.computeType || null,
       privileged: s.runners.privileged === 'default' ? null : s.runners.privileged === 'on',
-      buildTrace: buildTrace(), traceRepository: buildTrace() ? selfRepo()?.repo ?? '' : '',
+      buildTrace: buildTrace(), traceRepository: buildTrace() ? selfRepo()?.repo ?? '' : '', selfUpdate: s.runners.selfUpdate,
     },
     projects: [...s.projects].map(([repo, { memoryDays, ...p }]) => ({ repo, ...p, memoryEventExpiryDays: memoryDays.trim() === '' ? null : Number(memoryDays) })),
     sample: { enabled: Boolean(sampleRepo()), repo: sampleRepo() ?? '', private: s.sample.private, tour: s.sample.tour },
@@ -549,13 +551,17 @@ function buildRunners(): (HTMLElement | null)[] {
   ]
 }
 
-/** The "build trace's own repository on AWS too" checkbox, or why there is none. */
+/** The "build trace's own repository on AWS too" checkbox, or why there is none; while it is built, the "keep this
+ * installation up to date" one (README "Staying up to date"). */
 function ownRepository(): HTMLElement | null {
   const own = s.pre?.self ?? null
   if (!own) return null
   if (s.projects.has(own.repo)) return h('p', { class: 'muted' }, `trace's own repository (${own.repo}) is one of the projects, so it gets its build runner with them.`)
   if (!own.ok) return h('p', { class: 'muted' }, `trace's own repository (${own.repo}) stays on GitHub's runners: the token can't set its variables.`)
-  return checkbox(`Build trace's own repository on AWS too (${own.repo}): a build runner for it alone, no agents`, buildTrace(), (v) => { s.runners.buildTrace = v; render() })
+  return h('div', {},
+    checkbox(`Build trace's own repository on AWS too (${own.repo}): a build runner for it alone, no agents`, buildTrace(), (v) => { s.runners.buildTrace = v; render() }),
+    buildTrace() ? checkbox('Keep this installation up to date when trace\'s main branch changes', s.runners.selfUpdate, (v) => { s.runners.selfUpdate = v; render() }) : null,
+    buildTrace() ? h('p', { class: 'muted' }, `When ${own.repo}'s default branch changes and its tests pass, its ci workflow deploys this installation again with the settings this installer saves, so you don't have to run the installer for every update. Only that workflow on that branch can do it, which means anyone who can merge there can change this installation. The installer is still needed to add repositories or people.`) : null)
 }
 
 async function runPreflight(): Promise<void> {
@@ -756,6 +762,7 @@ async function boot(): Promise<void> {
         s.runners.computeType = sr.computeType ?? ''
         s.runners.privileged = sr.privileged === true ? 'on' : sr.privileged === false ? 'off' : 'default'
         s.runners.buildTrace = sr.buildTrace ?? null
+        s.runners.selfUpdate = sr.selfUpdate ?? true
       }
       for (const p of saved.projects ?? []) {
         s.projects.set(p.repo, {

@@ -22,7 +22,8 @@
  *
  *   trace uninstall [--yes] [--delete-data]
  *       deletes the optional integrations' secrets, each repository's trace variables (TRACE_CODEBUILD_PROJECT among
- *       them) and TRACE_TOKEN secret, and the stack (with it the CodeBuild runner projects and their webhooks), then
+ *       them) and TRACE_TOKEN secret, trace's own repository's self-update variables (TRACE_UPDATE_ROLE, TRACE_STACK,
+ *       TRACE_AWS_REGION: README "Staying up to date"), and the stack (with it the CodeBuild runner projects and their webhooks), then
  *       CodeBuild's GitHub credential when trace imported it; then lists what stays (a GitHub connection the stack
  *       created among it): with keep data (retainData) the
  *       central bucket, the image repositories, each project's memory, log groups and knowledge base vectors; always
@@ -44,7 +45,7 @@ import { githubSecretName, stackName } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import { RUNNER_VARIABLE } from '../core/project.js'
 import { type Answers, AnswersSchema, type InstallEvent, RUNNER_AUTH, SecretsSchema } from './answers.js'
-import { apply } from './bootstrap.js'
+import { UPDATE_ROLE_VARIABLE, UPDATE_STACK_VARIABLE, apply, selfUpdateOf } from './bootstrap.js'
 import { credentials, removeSourceCredential } from './aws.js'
 import { deleteVariable } from './github.js'
 
@@ -192,6 +193,12 @@ export async function cmdUninstall(argv: string[]): Promise<number> {
         }
         await gh.request('DELETE', `/repos/${p}/actions/secrets/TRACE_TOKEN`, z.unknown()).catch(() => undefined)
         out(`${p}: trace's variables and TRACE_TOKEN removed`)
+      }
+      // the self-update job's: its role goes with the stack, so trace's own ci workflow must stop trying to use it
+      const update = selfUpdateOf(a)
+      if (update) {
+        for (const v of [UPDATE_ROLE_VARIABLE, UPDATE_STACK_VARIABLE, 'TRACE_AWS_REGION']) await deleteVariable(token, update.repository, v).catch(() => false)
+        out(`${update.repository}: ${UPDATE_ROLE_VARIABLE}, ${UPDATE_STACK_VARIABLE} and TRACE_AWS_REGION removed (the installation no longer updates itself)`)
       }
     } else out('(no GitHub token stored: each repository\'s TRACE_* variables and TRACE_TOKEN secret are left; remove them in its Settings)')
     const integrations = new IntegrationStore(a.agents.prefix, sm)

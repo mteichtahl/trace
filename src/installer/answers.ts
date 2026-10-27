@@ -113,6 +113,12 @@ export const RunnerAnswers = z.object({
   /** trace's own repository as the installer found it (src/installer/source.ts traceRepository) and the token can
    * configure; '' when it found none it can. The installer checks it again before using it. */
   traceRepository: z.union([Repo, z.literal('')]).default(''),
+  /** that repository's default branch, as the installer found it ('' until it has looked) */
+  traceBranch: z.union([z.string().regex(/^[A-Za-z0-9._\/-]+$/), z.literal('')]).default(''),
+  /** Keep this installation up to date when trace's own repository's default branch changes (README "Staying up to
+   * date"): its ci workflow deploys the stack again with the settings this installer saved. Only while trace's own
+   * repository is built on AWS too (buildTrace, and the token can configure it). On by default. */
+  selfUpdate: z.boolean().default(true),
   /** Other repositories to build on AWS without making them projects: each gets a build runner and nothing else. */
   ciRepositories: z.array(Repo).max(EXTRA_BUILD_REPOSITORIES_MAX).default([]),
   /** An existing GitHub connection to use (auth auto or connection); empty: the installer reuses one already authorized
