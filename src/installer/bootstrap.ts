@@ -45,6 +45,13 @@
  *                this computer the build's events), and each check is streamed to the page as a `wait` event: what
  *                is awaited, when it was checked, when it is next, and the id the page's Check now button sends
  *
+ * After the deploy succeeds (4: after the last of its deploys) and after the runners' deploy (6), the stack settings it
+ * deployed with are saved in the central bucket at installation/props.json (src/installer/record.ts: no secret is in
+ * them), with how the runners reach GitHub (runners.auth), trace's own repository and its default branch: what the
+ * self-update job of trace's own ci workflow deploys with (src/installer/update.ts, README "Staying up to date"). When
+ * that is on (runners.selfUpdate, while trace's own repository is built on AWS), step 9 also sets that repository's
+ * TRACE_UPDATE_ROLE, TRACE_AWS_REGION and TRACE_STACK, and removes TRACE_UPDATE_ROLE where it is off.
+ *
  * Secrets never leave memory except to their destination (Secrets Manager, GitHub's sealed-box API).
  */
 import { spawn } from 'node:child_process'
@@ -54,6 +61,7 @@ import {
   AdminAddUserToGroupCommand, AdminCreateUserCommand, AdminGetUserCommand, AdminListGroupsForUserCommand, AdminRemoveUserFromGroupCommand,
   CognitoIdentityProviderClient, UserNotFoundException,
 } from '@aws-sdk/client-cognito-identity-provider'
+import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { GetSecretValueCommand, PutSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
 import type { AwsCredentialIdentity } from '@smithy/types'
 import { type Principal, GROUPS, assign, assignments, setClass, unassign } from '../core/access.js'
@@ -64,8 +72,8 @@ import { RUNNER_VARIABLE } from '../core/project.js'
 import { type WaitNotice, describeWait } from '../core/wait.js'
 import { RELEASE_REGION, RELEASE_REPOSITORIES, RELEASE_STACK } from '../infra/release.js'
 import {
-  CONNECTION_OUTPUT, GPU_IMAGE_BUILD_OUTPUT, ciRunnerOutput, type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, cpuEnabled, githubSecretName,
-  kbOutputs, memoryDeliveryName, memoryName, projectHash, projectOutputs, stackName,
+  CENTRAL_BUCKET_OUTPUT, CONNECTION_OUTPUT, GPU_IMAGE_BUILD_OUTPUT, INSTALLATION_RECORD_KEY, SELF_UPDATE_OUTPUT, ciRunnerOutput, type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, cpuEnabled, githubSecretName,
+  kbOutputs, memoryDeliveryName, memoryName, projectHash, projectOutputs, selfUpdateRoleName, stackName,
 } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import { type Answers, AnswersSchema, type InstallEvent, type Secrets, type Step } from './answers.js'
@@ -75,9 +83,10 @@ import {
   nameClients, nameIndex, resolveConnection, stackOutputs, waitForConnection,
 } from './aws.js'
 import { type Facts, resolveAnswers } from './derive.js'
-import { type TokenInfo, canConfigure, checkToken, createRepo, deleteVariable, setSecret, setVariable } from './github.js'
+import { type TokenInfo, canConfigure, checkToken, createRepo, deleteVariable, repositoryDefaultBranch, setSecret, setVariable } from './github.js'
 import { type ApiOnboardOptions, type ApiOnboardResult, onboardViaApi } from './onboard-api.js'
 import { CDK_BOOTSTRAP_MIN, mapLimit } from './preflight.js'
+import { checkNoSecrets, installationRecord } from './record.js'
 import { type ReleaseResult, liveReleaseDeps, releaseSetup } from './release.js'
 import { traceRepository } from './source.js'
 
@@ -177,6 +186,20 @@ export interface SelfRepositoryDeps {
   source: () => string | null
   /** whether the token can set that repository's Actions variables (src/installer/github.ts canConfigure) */
   canConfigure: (token: string, repo: string) => Promise<{ ok: boolean; reason: string }>
+  /** its default branch (src/installer/github.ts repositoryDefaultBranch); absent or failing: main */
+  branch?: (token: string, repo: string) => Promise<string>
+}
+
+/** The repository variables the self-update job reads (.github/workflows/ci.yml update-installation). */
+export const UPDATE_ROLE_VARIABLE = 'TRACE_UPDATE_ROLE'
+export const UPDATE_STACK_VARIABLE = 'TRACE_STACK'
+
+/** Keeping the installation up to date (README "Staying up to date"): trace's own repository and the branch whose ci
+ * workflow may deploy it again, when trace's own repository is built on AWS (selfBuild) and runners.selfUpdate is on;
+ * null otherwise. */
+export function selfUpdateOf(a: Answers): { repository: string; branch: string } | null {
+  const r = selfBuild(a)
+  return r && a.runners.selfUpdate ? { repository: r, branch: a.runners.traceBranch || 'main' } : null
 }
 
 /**
@@ -184,14 +207,16 @@ export interface SelfRepositoryDeps {
  * (runners.buildTrace) and the token can configure it; '' otherwise. Returns the answers and what to tell the person.
  */
 export async function resolveSelfBuild(a: Answers, token: string, d: SelfRepositoryDeps): Promise<{ answers: Answers; note: string | null }> {
-  const set = (traceRepository: string): Answers => ({ ...a, runners: { ...a.runners, traceRepository } })
+  const set = (traceRepository: string, traceBranch = ''): Answers => ({ ...a, runners: { ...a.runners, traceRepository, traceBranch } })
   if (!a.runners.buildTrace) return { answers: set(''), note: null }
   const repo = d.source()
   if (!repo) return { answers: set(''), note: 'trace\'s own repository is not built on AWS: the installer could not tell which GitHub repository this trace was installed from.' }
   if (a.projects.some((p) => p.repo.toLowerCase() === repo.toLowerCase())) return { answers: set(''), note: `trace's own repository (${repo}) is one of the projects: it builds on its own runner.` }
   const access = await d.canConfigure(token, repo)
   if (!access.ok) return { answers: set(''), note: `trace's own repository (${repo}) stays on GitHub's runners: the token cannot set its variables (${access.reason}).` }
-  return { answers: set(repo), note: `Building trace's own repository (${repo}) on AWS too: a build runner for it alone.` }
+  let branch = 'main'
+  try { if (d.branch) branch = await d.branch(token, repo) || 'main' } catch { /* main */ }
+  return { answers: set(repo, branch), note: `Building trace's own repository (${repo}) on AWS too: a build runner for it alone.` }
 }
 
 /** The stack's settings from the answers (and, for the legacy memory's way out and the layout, what is deployed already).
@@ -207,6 +232,7 @@ export function infraInput(a: Answers, existing?: Existing | null, deploy?: Layo
     region: a.aws.region,
     repositories: a.projects.map((p) => `${p.repo}@${p.branch}`),
     ...(buildRepositories(a).length ? { ciRepositories: buildRepositories(a) } : {}),
+    ...(selfUpdateOf(a) ? { selfUpdate: selfUpdateOf(a) ?? undefined } : {}),
     createOidcProvider: a.agents.createOidcProvider,
     model: a.agents.model,
     ...(a.agents.centralBucketName ? { centralBucketName: a.agents.centralBucketName } : {}),
@@ -415,6 +441,13 @@ function buildPlan(a: Answers): string {
   return `${self ? ` Build trace's own repository on AWS too (${self}): a build runner for it alone, nothing else.` : ''}${others.length ? ` Build ${others.join(', ')} on AWS too, without agents: a build runner each, nothing else.` : ''}`
 }
 
+/** Keeping the installation up to date, as the plan says it. */
+export function selfUpdatePlan(a: Answers): string {
+  const u = selfUpdateOf(a)
+  if (!u) return ''
+  return ` Keep this installation up to date: when ${u.repository}'s ${u.branch} branch changes and its tests pass, its ci workflow deploys this stack again with the settings this installer saves in the central bucket (installation/props.json, no tokens in it). It uses the role ${selfUpdateRoleName(a.agents.prefix)}, which only that workflow on ${u.branch} can use, so whoever can merge to ${u.branch} there can change this installation.`
+}
+
 /** What changed since the answers of the last installation from this machine (null: none known), in words. */
 export function changesSince(prev: Answers | null, next: Answers): string[] {
   if (!prev) return []
@@ -464,13 +497,13 @@ export function plan(a: Answers, existing?: Existing | null, prev?: Answers | nu
     ['check', 'Check the AWS account', `${a.aws.account || 'the credentials\' account'} in ${a.aws.region || 'the profile\'s region'}`],
     ['cdk', 'Bootstrap CDK', `aws://${a.aws.account}/${a.aws.region} (only if it isn't already, or is older than version 6)`],
     ['github', 'Connect CodeBuild to GitHub', githubPlan(a)],
-    ['deploy', existing ? `Update ${stack}` : `Deploy ${stack}`, existing ? `${changes.length ? `This run ${changes.join('; ')}. ` : 'No answer changed since the last run from here: CloudFormation leaves unchanged resources alone. '}${deployWhat}.${buildPlan(a)}` : `${deployWhat}.${buildPlan(a)}`],
+    ['deploy', existing ? `Update ${stack}` : `Deploy ${stack}`, existing ? `${changes.length ? `This run ${changes.join('; ')}. ` : 'No answer changed since the last run from here: CloudFormation leaves unchanged resources alone. '}${deployWhat}.${buildPlan(a)}${selfUpdatePlan(a)}` : `${deployWhat}.${buildPlan(a)}${selfUpdatePlan(a)}`],
     ['connection', 'Authorize the GitHub connection', connectionPlan(a)],
     ['runners', 'Add the build runners', `only if the GitHub connection was not authorized before the deploy: deploy ${stack} again once it is. That only adds each repository's CodeBuild runner project and its GitHub webhook; nothing else changes. ${GITHUB_RUNNERS_NOTE}`],
     ['token', 'Store the GitHub tokens', `the shared token in the API's secret, and each project's agent token in its own secret${props.gateway.enabled ? '; any distributor keys given in the library gateway\'s secret' : ''}`],
     ['integrations', 'Store the optional integrations', 'any integration keys given (Nexar, Mouser, Digi-Key), each checked with its service and stored as <prefix>/integrations/<name>; none is needed, and they can be added later with `trace integrations set <name>`'],
     ['repos', 'Configure the repositories', a.projects.length || buildRepositories(a).length
-      ? `${a.projects.length ? `each repository's own TRACE_AWS_ROLE, TRACE_AGENT_RUNTIME_ARN, ${RUNNER_VARIABLE} (the CodeBuild runner project its workflows run on)${props.memory.enabled ? ', TRACE_MEMORY_ID' : ''}${props.knowledgeBase.enabled && props.layout === 'nested' ? ', TRACE_KB_ID and TRACE_KB_DATA_SOURCE_ID' : ''}, TRACE_AWS_REGION, TRACE_HOME, TRACE_AGENT_LOGIN and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}, several at once` : ''}${buildRepositories(a).length ? `${a.projects.length ? '; ' : ''}${RUNNER_VARIABLE} alone in ${buildRepositories(a).join(', ')}` : ''}. ${RUNNER_VARIABLE} is set only once the repository's runner exists, and removed where it does not, so its workflows run on GitHub's runners until then`
+      ? `${a.projects.length ? `each repository's own TRACE_AWS_ROLE, TRACE_AGENT_RUNTIME_ARN, ${RUNNER_VARIABLE} (the CodeBuild runner project its workflows run on)${props.memory.enabled ? ', TRACE_MEMORY_ID' : ''}${props.knowledgeBase.enabled && props.layout === 'nested' ? ', TRACE_KB_ID and TRACE_KB_DATA_SOURCE_ID' : ''}, TRACE_AWS_REGION, TRACE_HOME, TRACE_AGENT_LOGIN and secret TRACE_TOKEN in ${a.projects.map((p) => p.repo).join(', ')}, several at once` : ''}${buildRepositories(a).length ? `${a.projects.length ? '; ' : ''}${RUNNER_VARIABLE} alone in ${buildRepositories(a).join(', ')}` : ''}${selfUpdateOf(a) ? `; ${UPDATE_ROLE_VARIABLE}, TRACE_AWS_REGION and ${UPDATE_STACK_VARIABLE} in ${selfUpdateOf(a)?.repository} (its ci workflow keeps this installation up to date)` : ''}. ${RUNNER_VARIABLE} is set only once the repository's runner exists, and removed where it does not, so its workflows run on GitHub's runners until then`
       : 'no repositories yet: run the installer again to add them'],
     ['onboard', 'Onboard the repositories', [onboarding.length ? `open (or refresh) the onboarding PR in ${onboarding.join(', ')}` : '', creating.length ? `create ${creating.join(', ')}` : ''].filter(Boolean).join('; ') || 'none chosen'],
     ['people', 'Invite people and assign projects', `${a.adminEmail || 'the token\'s email'} (admin)${a.people.length ? `, ${a.people.map((p) => `${p.email} (${p.class})`).join(', ')}` : ''}`],
@@ -487,9 +520,12 @@ export function plan(a: Answers, existing?: Existing | null, prev?: Answers | nu
 
 type Emit = (e: InstallEvent) => void
 
-const cdkBin = (): string => createRequire(import.meta.url).resolve('aws-cdk/bin/cdk')
+/** `cdk deploy`'s arguments for the stack and app (the installer and the self-update job deploy alike). */
+export const cdkDeployArgs = (stack: string, app: readonly string[]): string[] => ['deploy', stack, ...app, '--require-approval', 'never', '--progress', 'events', '--concurrency', '10']
 
-function runStreaming(cmd: string, args: string[], env: Record<string, string>, onLine: (l: string) => void): Promise<number> {
+export const cdkBin = (): string => createRequire(import.meta.url).resolve('aws-cdk/bin/cdk')
+
+export function runStreaming(cmd: string, args: string[], env: Record<string, string>, onLine: (l: string) => void): Promise<number> {
   return new Promise((resolveP, reject) => {
     const p = spawn(cmd, args, { cwd: REPO_ROOT, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] })
     let buf = ''
@@ -546,6 +582,19 @@ export interface Hooks {
   createRepo?: typeof createRepo
   /** trace's own repository and whether the token can configure it (resolveSelfBuild) */
   self?: SelfRepositoryDeps
+  /** save the installation record (src/installer/record.ts) in the central bucket (default: S3 PutObject) */
+  saveRecord?: (creds: AwsCredentialIdentity, region: string, bucket: string, key: string, text: string) => Promise<void>
+}
+
+/** Write the installation record to the central bucket. */
+export async function putRecord(creds: AwsCredentialIdentity, region: string, bucket: string, key: string, text: string): Promise<void> {
+  await new S3Client({ region, credentials: creds }).send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: text, ContentType: 'application/json' }))
+}
+
+/** The repository whose self-update an earlier run turned on (its saved answers), or null. */
+export function earlierSelfUpdate(saved: unknown): string | null {
+  const prev = AnswersSchema.safeParse(saved)
+  return prev.success ? selfUpdateOf(prev.data)?.repository ?? null : null
 }
 
 /** The repositories an earlier run gave a build runner to (its saved answers' projects and build-only repositories):
@@ -601,6 +650,7 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
   let a = input
   // read before this run saves its own answers over them
   const earlier = earlierRepositories(savedAnswers().answers)
+  const earlierUpdate = earlierSelfUpdate(savedAnswers().answers)
   let steps: Step[] = [{ id: 'check', title: 'Check the AWS account', detail: 'credentials, account and region', status: 'pending' }]
   let byId = new Map(steps.map((st) => [st.id, st]))
   const set = (id: string, status: Step['status'], detail?: string): void => {
@@ -634,7 +684,9 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     if (a.agents.createOidcProvider !== makeOidc) { log('check', makeOidc ? 'GitHub\'s OIDC provider: the stack makes (or keeps) it' : 'GitHub\'s OIDC provider exists in the account: the stack uses it'); a = { ...a, agents: { ...a.agents, createOidcProvider: makeOidc } } }
     // trace's own repository, built on AWS too when the token can configure it (runners.buildTrace)
     const adminToken = s.githubAdminToken || s.githubToken
-    const self = await resolveSelfBuild(a, adminToken, hooks.self ?? { source: () => traceRepository({ root: REPO_ROOT }), canConfigure: (t, r) => canConfigure(t, r) })
+    const self = await resolveSelfBuild(a, adminToken, hooks.self ?? {
+      source: () => traceRepository({ root: REPO_ROOT }), canConfigure: (t, r) => canConfigure(t, r), branch: (t, r) => repositoryDefaultBranch(t, r),
+    })
     a = self.answers
     if (self.note) log('check', self.note)
     // the whole plan, now that every answer is known
@@ -697,7 +749,21 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     const last = deploys.at(-1) ?? { layout: 'nested', why: '' }
     const env = envFor(last)
     const app = ['--app', `node ${join(REPO_ROOT, 'dist', 'infra', 'app.js')}`]
-    const deployArgs = ['deploy', stack, ...app, '--require-approval', 'never', '--progress', 'events', '--concurrency', '10']
+    const deployArgs = cdkDeployArgs(stack, app)
+    // after a deploy that succeeded: the settings it deployed with, and how the runners' way to GitHub is decided again
+    // (runners.auth), for the self-update job (src/installer/record.ts, src/installer/update.ts)
+    const saveRecord = async (step: string, o: Record<string, string>, r: boolean): Promise<void> => {
+      const bucket = o[CENTRAL_BUCKET_OUTPUT]
+      if (!bucket) throw new Error(`the stack has no output ${CENTRAL_BUCKET_OUTPUT}`)
+      const record = installationRecord({
+        stack, region: a.aws.region, props: infraInput(a, existing, last, runnersOf(r)), runnerAuth: a.runners.auth, connectionArn: a.runners.connectionArn,
+        traceRepository: a.runners.traceRepository, traceBranch: a.runners.traceBranch,
+      })
+      const text = JSON.stringify(record, null, 1)
+      checkNoSecrets(text, s)
+      await (hooks.saveRecord ?? putRecord)(creds, a.aws.region, bucket, INSTALLATION_RECORD_KEY, text)
+      log(step, `the installation's settings saved in s3://${bucket}/${INSTALLATION_RECORD_KEY} (no tokens in them)`)
+    }
 
     // 2 — CDK bootstrap (nested stacks' templates are file assets in its bucket, like the agent source); again when it
     // is older than the deploy needs
@@ -748,6 +814,7 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     }
     const outputs = hooks.outputs ?? stackOutputs
     let out = await outputs(creds, a.aws.region, stack)
+    await saveRecord('deploy', out, ready)
     // each project's own memory (none when memory is off)
     const memoryIds = Object.fromEntries(a.projects.flatMap((p) => {
       const id = out[projectOutputs(p.repo).memoryId]
@@ -805,6 +872,7 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
         const code = await cdk(deployArgs, envFor(last, true), (l) => log('runners', l))
         if (code !== 0) throw new Error(`cdk deploy exited ${code} adding the build runners (run the installer again to carry on)`)
         out = await outputs(creds, a.aws.region, stack)
+        await saveRecord('runners', out, true)
         runnersReady = true
         set('runners', 'done', `${repos.length} runner project${repos.length === 1 ? '' : 's'} added`)
       }
@@ -896,8 +964,23 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
         if (runnersReady) log('repos', `${r}: ${RUNNER_VARIABLE} ${await setVariable(adminToken, r, RUNNER_VARIABLE, need(ciRunnerOutput(r)))} (built on AWS, without agents)`)
         else await noRunner(r)
       }
+      // keeping the installation up to date (README "Staying up to date"): trace's own repository's ci workflow reads these
+      const update = selfUpdateOf(a)
+      if (update) {
+        const vars = { [UPDATE_ROLE_VARIABLE]: need(SELF_UPDATE_OUTPUT), TRACE_AWS_REGION: a.aws.region, [UPDATE_STACK_VARIABLE]: stack }
+        await Promise.all(Object.entries(vars).map(async ([k, v]) => log('repos', `${update.repository}: ${k} ${await setVariable(adminToken, update.repository, k, v)} (keeps this installation up to date when its ${update.branch} branch changes)`)))
+      }
       if (!runnersReady) log('repos', GITHUB_RUNNERS_NOTE)
       set('repos', 'done', runnersReady ? undefined : GITHUB_RUNNERS_NOTE)
+    }
+    // self-update turned off (or trace's own repository moved): the role is gone with this deploy, so that repository's
+    // workflow must stop trying to use it. Best effort
+    const updating = selfUpdateOf(a)?.repository.toLowerCase()
+    const stale = [earlierUpdate, a.runners.traceRepository].filter((x): x is string => Boolean(x) && x?.toLowerCase() !== updating)
+    for (const r of stale.filter((x, i) => stale.findIndex((y) => y.toLowerCase() === x.toLowerCase()) === i)) {
+      try {
+        if (await deleteVariable(adminToken, r, UPDATE_ROLE_VARIABLE)) log('repos', `${r}: ${UPDATE_ROLE_VARIABLE} removed (this installation no longer updates itself from it)`)
+      } catch (e) { log('repos', `${r}: could not remove ${UPDATE_ROLE_VARIABLE} (${redact(e instanceof Error ? e.message : String(e), s)}): remove it by hand`) }
     }
     // repositories an earlier run built that this one does not (a project removed, trace's own turned off): their
     // runner goes with this deploy. Best effort: the token may no longer reach them

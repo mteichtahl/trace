@@ -248,6 +248,16 @@ export const InfraPropsSchema = z.object({
      * there when this installation publishes them (src/installer/release.ts) */
     ciPrivileged: z.boolean().default(false),
   }).strict().prefault({}),
+  /** Keeping the installation up to date (README "Staying up to date"): when set, the stack has the role
+   * `<prefix>-self-update` (SelfUpdateRoleArn), which only trace's own repository's ci workflow (.github/workflows/ci.yml)
+   * on `branch` can assume through GitHub OIDC. That job reads the settings the installer saved (installation/props.json
+   * in the central bucket) and deploys this stack again with them (src/installer/update.ts). Unset: no such role. */
+  selfUpdate: z.object({
+    /** trace's own repository, OWNER/REPO (the installer's src/installer/source.ts) */
+    repository: z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO'),
+    /** the branch whose ci workflow may update the installation */
+    branch: z.string().regex(/^[A-Za-z0-9._\/-]+$/, 'a branch name').default('main'),
+  }).strict().optional(),
   /** AgentCore observability: OpenTelemetry (ADOT) traces and metrics to CloudWatch (src/infra/observability.ts). */
   observability: z.object({
     enabled: z.boolean().default(true),
@@ -389,6 +399,23 @@ export const CONNECTION_OUTPUT = 'GithubConnectionArn'
 /** 'true' when the stack created that connection itself (no runners.connectionArn): the tools then keep using it,
  * without passing its ARN, so the stack keeps managing it. */
 export const CONNECTION_CREATED_OUTPUT = 'GithubConnectionCreated'
+
+/** The installation's own settings, as the installer last deployed them (installation/props.json in the central bucket:
+ * no secret in it), for the self-update job (src/installer/update.ts). Here, not in src/core/project.ts, so the harness
+ * bundle does not carry it. No project's role, the API's or a job's may read or write it: only the installer (the
+ * person's own credentials) writes it and only the self-update role reads it. */
+export const INSTALLATION_PREFIX = 'installation'
+export const INSTALLATION_RECORD_KEY = `${INSTALLATION_PREFIX}/props.json`
+
+/** The self-update role's ARN (selfUpdate): the installer sets it as trace's own repository's TRACE_UPDATE_ROLE. */
+export const SELF_UPDATE_OUTPUT = 'SelfUpdateRoleArn'
+/** The self-update role's name: one per installation (its prefix). */
+export const selfUpdateRoleName = (prefix: string): string => `${prefix}-self-update`
+/** The central bucket's name, an output: where the installer saves the installation's settings (INSTALLATION_PREFIX). */
+export const CENTRAL_BUCKET_OUTPUT = 'CentralBucket'
+/** The CDK bootstrap qualifier the installer bootstraps with (`cdk bootstrap` without --qualifier: CDK's default), which
+ * names the bootstrap roles a deploy assumes: cdk-<qualifier>-{deploy,file-publishing,image-publishing,lookup}-role-<account>-<region>. */
+export const CDK_QUALIFIER = 'hnb659fds'
 
 /** The stack's layout ('flat' or 'nested'), an output so the installer can tell which an installation has. */
 export const LAYOUT_OUTPUT = 'Layout'
