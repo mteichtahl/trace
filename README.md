@@ -147,6 +147,8 @@ quickest way to see the whole system work before you bring your own design, and 
   its own runtime, roles, memory, knowledge base and build runner; you can assign people to it. Onboarding fills it
   with the sample's files and settings, seeds its project database (requirements, a test plan using every method,
   analog and protocol specifications, thermal data) and pushes it all to `main`, with no pull request to merge.
+  Its journey starts too, as a project made in the web app does: the Mixed template, at Define, so the web app shows
+  its stages and gates from the start.
 - **The tour,** last, opens one task per step of the journey (define, architect, capture, prove, layout, sign-off,
   release, bring-up), each labelled for the agent that takes it. Together they run every agent and every tool,
   every simulation included: circuit (ngspice), mixed-signal, logic, formal and coverage, FPGA synthesis and place

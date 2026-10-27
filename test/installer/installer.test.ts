@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync } from 'node:fs'
 import { request } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -1195,8 +1195,26 @@ describe('the sample project', () => {
     const saved = AnswersSchema.parse(savedAnswers().answers)
     expect(saved.projects.find((p) => p.repo === SAMPLE)?.create).toBeNull()
     expect(saved.sample).toMatchObject({ enabled: true, tour: true })
+    // its journey's first state, as projects.create writes one, where the API reads it (projects/<slug>/journey/: in S3
+    // beside central/, locally inside TRACE_HOME, as bucketStore puts it)
+    expect(existsSync(join(OUTPUTS.TraceHome ?? '', 'projects', 'trace-agent', 'trace-sample', 'journey', 'journey.db'))).toBe(true)
+    expect(r.events.some((e) => e.type === 'log' && e.line === `${SAMPLE}: its journey started (Mixed template, at Define)`)).toBe(true)
   })
 
+  it('starts the sample\'s journey once, and reports one that could not start without failing the install', async () => {
+    const asked: string[] = []
+    const ok = await run({ ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: false }, github: { login: 'trace-agent' }, sample: { enabled: true, tour: false } }, {
+      sampleJourney: async (_home, repo, by) => { asked.push(`${repo} by ${by}`); return 'exists' },
+    })
+    expect(ok.ok).toBe(true)
+    expect(asked).toEqual([`${SAMPLE} by marc@example.com`])
+    expect(ok.events.some((e) => e.type === 'log' && e.line === `${SAMPLE}: its journey is there already`)).toBe(true)
+    const failed = await run({ ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: false }, github: { login: 'trace-agent' }, sample: { enabled: true, tour: false } }, {
+      sampleJourney: async () => { throw new Error('PutObject: AccessDenied') },
+    })
+    expect(failed.ok).toBe(true)
+    expect(failed.events.at(-1)?.summary?.join('\n')).toMatch(/The sample's journey could not be started \(PutObject: AccessDenied\)/)
+  })
 
   it('names the sample after the login derived at install, and reports a tour that could not start without failing the install', async () => {
     const created: string[] = []

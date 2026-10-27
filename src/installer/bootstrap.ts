@@ -90,7 +90,7 @@ import {
 } from './aws.js'
 import { type Facts, resolveAnswers } from './derive.js'
 import { type TokenInfo, canConfigure, checkToken, createRepo, deleteVariable, repositoryDefaultBranch, setSecret, setVariable } from './github.js'
-import { type TourResult, startTour, tourPlan, withSample } from './sample.js'
+import { type TourResult, startSampleJourney, startTour, tourPlan, withSample } from './sample.js'
 import { type PendingEntry, type PendingIo, absorb, parsePending, s3PendingIo } from './pending.js'
 import { type ApiOnboardOptions, type ApiOnboardResult, onboardViaApi } from './onboard-api.js'
 import { CDK_BOOTSTRAP_MIN, mapLimit } from './preflight.js'
@@ -620,6 +620,8 @@ export interface Hooks {
   saveRecord?: (creds: AwsCredentialIdentity, region: string, bucket: string, key: string, text: string) => Promise<void>
   /** the projects created in the web app that wait for a deploy (src/installer/pending.ts; default: S3) */
   pending?: PendingIo
+  /** the sample's first journey state (src/installer/sample.ts startSampleJourney) */
+  sampleJourney?: (home: string, repo: string, by: string) => Promise<'started' | 'exists'>
 }
 
 /** Write the installation record to the central bucket. */
@@ -1123,6 +1125,18 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
         summary.push(`Still have project access though not listed here: ${stale.join(', ')} (remove with \`tracectl users unassign\`)`)
       }
       for (const p of a.projects) await register(p.repo, null)
+      // the sample's first journey state, as projects.create starts one, so the web app shows its stages and gates
+      const sample = sampleRepoOf(a)
+      if (sample) {
+        try {
+          const j = await (hooks.sampleJourney ?? startSampleJourney)(need('TraceHome'), sample, a.adminEmail || 'the installer')
+          log('people', `${sample}: ${j === 'started' ? 'its journey started (Mixed template, at Define)' : 'its journey is there already'}`)
+        } catch (e) {
+          const m = redact(e instanceof Error ? e.message : String(e), s)
+          log('people', `${sample}: its journey could not be started (${m})`)
+          summary.push(`The sample's journey could not be started (${m}): run the installer again, or start it from the web app.`)
+        }
+      }
     } finally {
       for (const k of ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION', 'AWS_DEFAULT_REGION', 'TRACE_HOME']) {
         if (saved[k] === undefined) delete process.env[k]
