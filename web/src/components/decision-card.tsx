@@ -63,6 +63,8 @@ export interface DecisionCardProps {
   label?: string
   /** primary button words for the recommendation (defaults to the option's label) */
   acceptLabel?: string
+  /** false: no buttons or choosing here (a gate, where Sign and Return sit below); alternatives list as text */
+  actions?: boolean
   className?: string
 }
 
@@ -74,7 +76,7 @@ export function canSubmit(decision: Decision, option: string | null, reason: str
   return reason.trim().length >= 3
 }
 
-export function DecisionCard({ decision, onChoose, chosen, detail = 'short', label = 'trace recommends', acceptLabel, className }: DecisionCardProps) {
+export function DecisionCard({ decision, onChoose, chosen, detail = 'short', label = 'trace recommends', acceptLabel, actions = true, className }: DecisionCardProps) {
   const rec = decision.options.find((o) => o.id === decision.recommended) ?? decision.options[0]!
   const alternatives = decision.options.filter((o) => o.id !== rec.id)
   const [other, setOther] = useState<string | null>(null)
@@ -143,12 +145,22 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
 
       {alternatives.length > 0 && (
         <Collapsible open={open} onOpenChange={setOpen} className="mt-3">
-          <CollapsibleTrigger className="group flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+          <CollapsibleTrigger className="group flex w-full min-w-0 items-center gap-1 text-left text-sm text-muted-foreground hover:text-foreground">
             <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" aria-hidden />
-            {alternatives.length} alternative{alternatives.length > 1 ? 's' : ''}
-            {!open && <span className="truncate">: {alternatives.map((a) => a.label).join(', ')}</span>}
+            <span className="shrink-0 whitespace-nowrap">{alternatives.length} alternative{alternatives.length > 1 ? 's' : ''}</span>
+            {!open && <span className="min-w-0 truncate">: {alternatives.map((a) => a.label).join(', ')}</span>}
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-2">
+            {!actions ? (
+              <ul className="space-y-1.5 text-sm">
+                {alternatives.map((a) => (
+                  <li key={a.id} className="rounded-md border p-2.5">
+                    <span className="font-medium">{a.label}</span>
+                    {a.detail && <span className="block text-xs text-muted-foreground">{a.detail}</span>}
+                  </li>
+                ))}
+              </ul>
+            ) : (
             <RadioGroup value={other ?? ''} onValueChange={(v) => setOther(v)} aria-label="Alternatives">
               {alternatives.map((a) => (
                 <Label key={a.id} htmlFor={`${reasonId}-${a.id}`} className="flex cursor-pointer items-start gap-2 rounded-md border p-2.5 font-normal has-[[data-state=checked]]:border-primary">
@@ -160,6 +172,7 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
                 </Label>
               ))}
             </RadioGroup>
+            )}
           </CollapsibleContent>
         </Collapsible>
       )}
@@ -185,7 +198,7 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
         </div>
       )}
 
-      <div className="mt-4 flex flex-wrap gap-2">
+      {actions && <div className="mt-4 flex flex-wrap gap-2">
         {other ? (
           <>
             <Button disabled={!canSubmit(decision, other, reason, answer) || busy} onClick={() => void send({ option: other, recommended: false, reason: reason.trim(), ...(free ? { answer: answer.trim() } : {}) })}>
@@ -209,7 +222,7 @@ export function DecisionCard({ decision, onChoose, chosen, detail = 'short', lab
             )}
           </>
         )}
-      </div>
+      </div>}
     </div>
   )
 }

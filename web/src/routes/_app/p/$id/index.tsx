@@ -19,6 +19,7 @@ import { call, repoOf } from '@/lib/api'
 import { ago, initials, money, waited } from '@/lib/format'
 import { useJourney, useProjects, useWaits } from '@/lib/queries'
 import type { Journey } from '@/lib/types'
+import { continueText, useProjectDrafts } from '@/components/skills/draft'
 
 export const Route = createFileRoute('/_app/p/$id/')({
   component: Overview,
@@ -32,6 +33,7 @@ function Overview() {
   const projects = useProjects()
   const navigate = useNavigate()
   const part = projects.data?.find((p) => p.repo === repo)?.part
+  const draft = useProjectDrafts(repo)[0]
 
   if (!j.data)
     return (
@@ -56,7 +58,7 @@ function Overview() {
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0">
-          <NextStepCard step={d.next} part={part} run={nextRun} />
+          <NextStepCard step={d.next} part={part} run={nextRun} resume={draft ? { label: continueText(draft), to: `/p/${id}/do/${draft.skill}` } : undefined} />
 
           <Section label="Waiting on people" count={d.questions.length} className="mt-10">
             {d.questions.length === 0 ? (

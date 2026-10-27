@@ -53,10 +53,12 @@ export interface FocusLayoutProps {
   draftSavedAt?: number | null
   /** checklist on a picture: a large Stop while powered */
   stop?: { visible: boolean; onStop: () => void }
+  /** 'fill': the centre is not padded or scrolled, so a chat can take its full height (conversational skills) */
+  centre?: 'padded' | 'fill'
 }
 
 export function FocusLayout({
-  title, context, variant = 'stepped', steps, onStep, stepsExtra, children, trace, aside, checks, onSubmit, submitLabel, onClose, draftSavedAt, stop,
+  title, context, variant = 'stepped', steps, onStep, stepsExtra, children, trace, aside, checks, onSubmit, submitLabel, onClose, draftSavedAt, stop, centre = 'padded',
 }: FocusLayoutProps) {
   const now = useNow(5000)
   const [traceOpen, setTraceOpen] = useState(true)
@@ -115,7 +117,7 @@ export function FocusLayout({
   const right = variant === 'conversational' ? aside : trace
   const draft = draftSavedAt ? (
     <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" aria-live="polite">
-      <Check className="size-3.5" aria-hidden /> Draft saved {ago(draftSavedAt, now)}
+      <Check className="size-3.5" aria-hidden /> Draft saved {ago(Math.min(draftSavedAt, now), now)}
     </span>
   ) : null
 
@@ -147,9 +149,13 @@ export function FocusLayout({
 
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-[240px] shrink-0 overflow-y-auto border-r bg-sidebar p-3 md:block lg:w-[240px]">{stepList}</aside>
-        <div className="min-w-0 flex-1 overflow-y-auto">
-          <div className={cn('mx-auto w-full px-4 py-6 md:px-6', variant === 'checklist' ? 'max-w-none' : 'max-w-[960px]')}>{children}</div>
-        </div>
+        {centre === 'fill' ? (
+          <div className="flex min-w-0 flex-1 flex-col">{children}</div>
+        ) : (
+          <div className="min-w-0 flex-1 overflow-y-auto">
+            <div className={cn('mx-auto w-full px-4 py-6 md:px-6', variant === 'checklist' ? 'max-w-none' : 'max-w-[960px]')}>{children}</div>
+          </div>
+        )}
         {variant === 'checklist' && aside && <aside className="hidden w-[320px] shrink-0 overflow-y-auto border-l p-4 lg:block">{aside}</aside>}
         {right && traceOpen && variant !== 'checklist' && (
           <aside className="hidden w-[380px] shrink-0 flex-col border-l xl:flex" aria-label={variant === 'conversational' ? 'What is being built' : 'trace'}>

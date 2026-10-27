@@ -27,10 +27,12 @@ export interface NextStepCardProps {
   run?: RunSummary
   /** extra content under the summary */
   children?: ReactNode
+  /** a guided skill left part-way: "Continue: Schematic finish, step 4 of 6" (Focus mode keeps drafts) */
+  resume?: { label: string; to: string }
   className?: string
 }
 
-export function NextStepCard({ step, part, run, children, className }: NextStepCardProps) {
+export function NextStepCard({ step, part, run, children, resume, className }: NextStepCardProps) {
   const reviewer = part === 'reviewer' && step.reviewer
   const summary = reviewer ? step.reviewer!.summary : step.summary
   const action = reviewer ? step.reviewer!.action : step.action
@@ -62,6 +64,12 @@ export function NextStepCard({ step, part, run, children, className }: NextStepC
       {step.kind === 'working' && run && <RunLine run={run} className="mt-4 rounded-lg border bg-background" />}
       {step.kind === 'waiting_outside' && step.wait && <WaitLine wait={step.wait} className="mt-4 rounded-lg border bg-background" />}
       {children}
+      {resume && !reviewer && (
+        <p className="mt-4 text-sm">
+          <Link to={resume.to} className="font-medium text-primary hover:underline">{resume.label}</Link>
+          <span className="text-muted-foreground"> · your draft is kept</span>
+        </p>
+      )}
       {(action || step.secondary) && (
         <div className="mt-5 flex flex-wrap gap-2">
           {action && (

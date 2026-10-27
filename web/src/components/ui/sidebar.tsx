@@ -218,7 +218,10 @@ function Sidebar({
       <div
         data-slot="sidebar-gap"
         className={cn(
-          "relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear",
+          // the gap carries the rail's background down the full height of long pages (the fixed rail itself is one
+          // viewport tall, which left the rest of the column white in full-page views and when the page overscrolls)
+          "relative h-full min-h-svh w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear",
+          variant === "sidebar" && "group-data-[side=left]:border-r group-data-[side=left]:bg-sidebar",
           "group-data-[collapsible=offcanvas]:w-0",
           "group-data-[side=right]:rotate-180",
           variant === "floating" || variant === "inset"
