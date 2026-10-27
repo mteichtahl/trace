@@ -59,6 +59,7 @@ steps, and only the first asks for anything:
 | Knowledge bases | On where the region has Amazon S3 Vectors |
 | Prefix, session limits, bucket, observability, images | Their defaults (`trace`, 8 h, 15 min, a named bucket, on, prebuilt) |
 | How the build runners reach GitHub | An authorized GitHub connection in the account and region, else the token ([Where builds run](#where-builds-run)) |
+| Web app | On, at CloudFront's own address; a custom domain and email sign-in codes are optional ([Web app](#web-app)) |
 
 **The preflight** checks, in parallel: the credentials; Bedrock AgentCore in the region; the model's inference
 profile and the account's access to it (`GetFoundationModelAvailability`; for Anthropic, whether the one-time use-case
@@ -446,6 +447,54 @@ guests can list, read and preview them (see [Managing prompts](#managing-prompts
 
 Marking an agent memory inactive (`trace remote memory deactivate`) takes write access. A person's own preferences
 are the exception: they may mark those with read access alone (see [Inactive memories](#inactive-memories)).
+
+## Web app
+
+The installer sets up a web app beside `trace login`: one address where people sign in and work with their projects.
+It is on by default and needs nothing more at install time. It is built from `web/` (the app) and `src/web/` (its
+backend) when the stack is deployed, and lives in its own nested stack (`src/infra/web.ts`).
+
+| Part | What it is |
+| --- | --- |
+| Address | A CloudFront distribution: CloudFront's own address (`https://<id>.cloudfront.net`, the `WebUrl` output) unless a custom domain is set. HTTP/2 and HTTP/3, price class 100 |
+| The app | A private S3 bucket that only this distribution can read (origin access control). `index.html` is never cached; Vite's hashed files under `assets/` are cached for a year. Any path without a dot loads the app |
+| Backend | A Lambda function (Node.js 22, arm64, response streaming) behind `/api/*` on the same address. Only CloudFront can call its function URL (IAM auth, origin access control). It reads its settings from one SSM parameter, `/<prefix>/web/config` |
+| Live updates | AppSync Events, `<prefix>-events`. People subscribe with their sign-in, each to `/trace/users/<their id>` only. Only the backend can publish |
+| Sign-in | A Cognito app client of its own, `<prefix>-web`, using choice-based sign-in. People sign in with a passkey or a password, plus an email code when SES is set (see below). The CLI keeps its own client |
+| Voice | Polly speech kept 30 days in a small bucket of its own. The browser gets signed URLs for it and for Transcribe streaming |
+
+The backend's role can read its settings and use Polly, Transcribe streaming, its voice cache, CloudWatch (read
+only), the chat model, and publishing live events. It cannot reach the access store, any project's data or Cognito's
+admin API. Anything about a project goes through the API runtime, with the person's own token, so the access checks
+stay in one place.
+
+Every response carries strict security headers: HSTS, `nosniff`, `X-Frame-Options: DENY`, and
+`strict-origin-when-cross-origin`. The content security policy allows only these:
+
+- the app itself
+- AppSync in the stack's region
+- Transcribe streaming
+- the voice bucket
+- `data:` and `blob:` URLs
+- WebAssembly (PDF.js and Shiki)
+- inline styles
+
+**Custom domain.** Under Advanced → Web app, give a domain and its ACM certificate (it must be in us-east-1). After the
+deploy, point the domain's DNS at the distribution with a CNAME or alias (`WebDistributionId`). The props for this are
+`web.domainName` and `web.certificateArn`.
+
+**Passkeys.** Each passkey belongs to the app's address, which is the user pool's relying party. If you move from
+CloudFront's address to a custom domain later, people have to register their passkeys again. Their passwords still
+work.
+
+**Email codes.** Cognito sends sign-in codes by email only through Amazon SES. Without SES (the default), people sign
+in with a passkey or a password, and Cognito's own sender still sends the invitations. To add codes by email, give a
+verified SES sender under Advanced (`web.sesFrom`). The pool then sends all its email through SES.
+
+The invitation email points at `https://<address>/invite` as well as `trace login`. The installer's last card has an
+Open trace button. Turn the app off with Advanced → Web app (`web.enabled: false`). Other stack settings:
+`web.model` (the chat model, which defaults to `model`) and `web.dashboards` (extra CloudWatch dashboards for the
+Operations page, beside `<prefix>-agents`).
 
 ## Where builds run
 
