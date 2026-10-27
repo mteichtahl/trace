@@ -19,10 +19,11 @@
  */
 import { z } from 'zod'
 import {
-  type JourneyRecord, SEVERITIES, type Viewer, addWaiver, answerQuestion, decide, getDraft, loadJourney, loadOrders, putDraft,
+  type AgentFacts, type JourneyRecord, SEVERITIES, type Viewer, addWaiver, answerQuestion, decide, getDraft, loadJourney, loadOrders, mergeAgentFacts, putDraft,
+  questionIsFor,
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
-import { ActionError, type Context, Repo, def, hashOf, label, plainly, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
+import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { viewerOf } from './actions-journey.js'
 import { checkFindings, hasTable, latestRun, requirementEvidence, runResult } from './record-read.js'
 import { type CheckInput, type CheckResult, checkSkill } from './skill-checks.js'
@@ -37,12 +38,15 @@ const currentGate = (r: JourneyRecord | null): string | null => {
 }
 
 /** Everything the checks read, from the record database (repository + live journey), for this person and skill. */
-async function inputFor(ctx: Context, repo: string, skill: string, draftOverride?: Record<string, unknown>): Promise<CheckInput & { draftRow: { step: number; saved: string } | null }> {
+async function inputFor(ctx: Context, repo: string, skill: string, draftOverride?: Record<string, unknown>): Promise<CheckInput & { draftRow: { step: number; saved: string } | null; facts: AgentFacts }> {
   const viewer: Viewer = await viewerOf(ctx.principal, repo)
   // drafts are the journey store's own (never copied into the repository), so they are read from it
   const row = await withJourneyDb(ctx, repo, (db) => getDraft(db, viewer.hash, skill))
+  // the agents' questions and checks (src/core/agent-facts.ts), merged in as every view of the journey does
+  const facts = await agentFacts(ctx, repo)
   return withRecordDb(ctx, repo, (db) => {
-    const r = loadJourney(db)
+    const own = loadJourney(db)
+    const r = own ? mergeAgentFacts(own, facts) : null
     const live = requirementEvidence(db, r)
     const struck = hasTable(db, 'requirements')
       ? (db.prepare("SELECT id, tags FROM requirements WHERE status IN ('rejected', 'obsolete')").all() as Record<string, unknown>[]).map((x) => ({ id: String(x.id), tags: [] as string[] }))
@@ -60,7 +64,7 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
     } catch { /* unreadable settings: no instruments */ }
     const tests = hasTable(db, 'test_items') ? (db.prepare('SELECT id, method, status FROM test_items').all() as Record<string, unknown>[]).map((t) => ({ id: String(t.id), method: String(t.method), status: String(t.status) })) : []
     const draft = draftOverride ?? (row?.data && typeof row.data === 'object' ? row.data as Record<string, unknown> : null)
-    const question = r?.questions.find((q) => q.answeredAt === null && (q.askedOf ? q.askedOf === viewer.hash : true)) ?? null
+    const question = r?.questions.find((q) => q.answeredAt === null && questionIsFor(q, viewer)) ?? null
     return {
       r, viewer, requirements: live, struck,
       erc: erc.findings ? { findings: erc.findings, errors: erc.report.errors } : null,
@@ -68,7 +72,7 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
       bom: bomRun ? runResult(db, bomRun.id) : null, board: boardRun ? runResult(db, boardRun.id) : null,
       placement: placement ? { status: placement.status, summary: placement.summary } : null,
       instruments, tests, orders: r ? loadOrders(db) : [], draft, gate: currentGate(r), question,
-      draftRow: row ? { step: row.step, saved: row.saved } : null,
+      draftRow: row ? { step: row.step, saved: row.saved } : null, facts,
     }
   })
 }
@@ -87,7 +91,7 @@ function extras(skill: string, i: CheckInput): Record<string, unknown> {
       const rec = q.options.find((o) => o.recommended)
       return {
         question: {
-          id: q.id, to: q.askedOf ? 'you' : 'the contributors', text: q.text, askedAt: new Date(q.askedAt * 1000).toISOString(), ...(q.blocks ? { blocks: q.blocks } : {}),
+          id: q.id, to: q.askedOf || q.askedOfSub ? 'you' : q.askedPart === 'admins' ? 'the admins' : 'the contributors', text: q.text, askedAt: new Date(q.askedAt * 1000).toISOString(), ...(q.blocks ? { blocks: q.blocks } : {}),
           ...(rec ? { recommended: { id: rec.id, label: rec.label } } : {}), options: q.options.map((o) => ({ id: o.id, label: o.label, ...(o.why ? { detail: o.why } : {}) })),
           sources: q.sources.map((s) => ({ kind: s.kind === 'run' ? 'run' : 'record', label: s.label ?? s.ref, id: s.ref })), context: `Asked by ${q.askedBy}.`,
         },
@@ -184,14 +188,14 @@ export const SKILL_ACTIONS = {
         const d = a.draft
         const sev = SEVERITIES.includes(d.severity as never) ? d.severity as (typeof SEVERITIES)[number] : (() => { throw new ActionError('Give the severity.') })()
         const caught = d.caught === 'nowhere' ? null : `${d.caught === 'bench' ? 'On the bench' : 'At a later stage'}: ${String(d.where ?? '').trim()}`
-        const w = addWaiver(db, { target: waiverTarget(d), reason: String(d.reason), risk: String(d.risk), severity: sev, caught_where: caught, scope: d.scope === 'condition' ? `until ${String(d.condition).trim()}` : 'this revision only' }, by)
+        const w = addWaiver(db, { target: waiverTarget(d), reason: String(d.reason), risk: String(d.risk), severity: sev, caught_where: caught, scope: d.scope === 'condition' ? `until ${String(d.condition).trim()}` : 'this revision only' }, by, { facts: i.facts })
         ref = w.id
       } else if (a.skill === 'question-answer') {
         if (!i.question) throw new ActionError('There is no open question to answer.')
         const d = a.draft
         const opt = typeof d.option === 'string' && d.option !== 'other' ? d.option : undefined
         const text = opt ? undefined : [d.value ? String(d.value) : '', String(d.answer ?? '')].filter((x) => x.trim()).join(': ') + (d.source ? ` (source: ${String(d.source)})` : '')
-        answerQuestion(db, i.question.id, by, { option: opt, answer: text, reason: typeof d.reason === 'string' ? d.reason : undefined })
+        answerQuestion(db, i.question.id, by, { option: opt, answer: text, reason: typeof d.reason === 'string' ? d.reason : undefined }, { facts: i.facts })
         ref = i.question.id
       }
       const id = decide(db, {

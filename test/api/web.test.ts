@@ -14,7 +14,9 @@ import { neighbourhood, type GraphLink, type GraphNode } from '../../src/api/act
 import { listen } from '../../src/api/server.js'
 import { AccessDenied, assign, standing } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
-import { askQuestion, setCriterion, startJourney } from '../../src/core/journey.js'
+import { AgentFactsStore, addAgentQuestion, addCriterionCheck, addStuck, loadAgentFacts } from '../../src/core/agent-facts.js'
+import { askQuestion, loadJourney, setCriterion, startJourney } from '../../src/core/journey.js'
+import { allTools } from '../../src/tools/index.js'
 import { Registry } from '../../src/core/registry.js'
 import { openProject } from '../../src/core/store.js'
 import '../../src/tools/verify/db.js'
@@ -229,6 +231,71 @@ describe('inbox', () => {
     expect(github.calls).toEqual([])
     expect(await run(GUEST, 'inbox')).toMatchObject({ items: [], summary: 'Nothing needs you. trace will tell you when something does.' })
     await expect(run({ sub: 'x', email: null, groups: [] }, 'inbox')).rejects.toThrow(AccessDenied)
+  })
+})
+
+describe('the agents\' facts in the journey', () => {
+  const facts = () => new AgentFactsStore(backendFor(join(bucket, 'projects')), 'acme/other')
+  const opts = [
+    { id: 'a', label: 'Use the internal oscillator', recommended: true, why: 'it saves a part and the timing allows it' },
+    { id: 'b', label: 'Add a 16 MHz crystal', why: 'if the USB clock must be accurate' },
+  ]
+
+  it('an agent\'s question appears for the right person; question.answer writes the answer in the record under its id', async () => {
+    const r = await journeyStore({ principal: ADMIN, deps }, 'acme/other').read((db) => loadJourney(db))
+    const ids = await facts().update((db) => ({
+      result: [
+        addAgentQuestion(db, { agent: 'impl', label: 'the Implementation specialist', jobId: 'job-9' }, { text: 'Which clock source should the board use?', blocks: 'the clock tree', options: opts }, r.result),
+        addAgentQuestion(db, { agent: 'impl', label: 'the Implementation specialist', jobId: 'job-9' }, { text: 'May the order exceed the budget by US$12?', blocks: 'the order', options: opts, askedPart: 'admins' }, r.result),
+        addAgentQuestion(db, { agent: 'impl', label: 'the Implementation specialist', jobId: 'job-9' }, { text: 'Is the enclosure height 22 mm?', blocks: 'the fit check', options: opts, askedOfSub: ADMIN.sub }, r.result),
+      ],
+    }))
+    const [mine, admins, admin1] = ids.result
+    const inbox = async (who: Context['principal']) => (await run(who, 'inbox', { kinds: ['question'] }) as { items: { ref: { id: string } }[] }).items.map((i) => i.ref.id)
+    expect(await inbox(USER)).toEqual([mine])
+    expect(new Set(await inbox(ADMIN))).toEqual(new Set([mine, admins, admin1]))
+    const j = await run(USER, 'journey.get', { repo: 'acme/other' }) as { questions: { id: string; for: string; for_you: boolean }[] }
+    expect(j.questions.filter((q) => ids.result.includes(q.id)).map((q) => [q.for, q.for_you])).toEqual([['contributors', true], ['admins', false], ['person', false]])
+    // a reviewer cannot answer; a contributor answers through the API, into the people's record
+    const reviewer = { ...REVIEWER }
+    await assign(ADMIN, reviewer, 'acme/other', { part: 'reviewer', class: 'user' })
+    await expect(run(REVIEWER, 'question.answer', { repo: 'acme/other', question: mine, option: 'a' })).rejects.toThrow(AccessDenied)
+    expect(await run(USER, 'question.answer', { repo: 'acme/other', question: mine, option: 'a' })).toMatchObject({ question: { id: mine, answered: { answer: 'Use the internal oscillator', by: USER.email } } })
+    const rec = (await journeyStore({ principal: ADMIN, deps }, 'acme/other').read((db) => loadJourney(db))).result!
+    expect(rec.questions.find((q) => q.id === mine)).toMatchObject({ text: 'Which clock source should the board use?', answer: 'Use the internal oscillator' })
+    expect(await inbox(USER)).toEqual([])
+    // an id that is neither the record's nor an agent's
+    await expect(run(USER, 'question.answer', { repo: 'acme/other', question: 'aqnothing', option: 'a' })).rejects.toThrow(/no question/)
+    // the API never writes the agents' facts
+    expect((await facts().read((db) => loadAgentFacts(db))).result.questions).toHaveLength(3)
+  })
+
+  it('an agent\'s check of a criterion trace owns moves journey.get; a person\'s criterion is refused', async () => {
+    const r = (await journeyStore({ principal: ADMIN, deps }, 'acme/other').read((db) => loadJourney(db))).result
+    const by = { agent: 'verify', label: 'the Verification specialist', jobId: 'job-10' }
+    await expect(facts().update((db) => ({ result: addCriterionCheck(db, by, { criterion: 'define.accepted', status: 'met', evidence: [{ kind: 'run', ref: 'x' }] }, r) }))).rejects.toThrow(/a person's to meet/)
+    // Firmware template: define is all person-owned; architect.mapped is trace's
+    await facts().update((db) => ({ result: addCriterionCheck(db, by, { criterion: 'architect.mapped', status: 'met', evidence: [{ kind: 'run', ref: 'run-map' }] }, r) }))
+    const j = await run(USER, 'journey.get', { repo: 'acme/other' }) as { gates: { id: string; criteria: { id: string; status: string; evidence: unknown[] }[] }[] }
+    expect(j.gates.find((g) => g.id === 'architect')?.criteria.find((c) => c.id === 'architect.mapped')).toMatchObject({ status: 'met', evidence: [{ kind: 'run', ref: 'run-map' }] })
+    expect(j.gates.find((g) => g.id === 'define')?.criteria.every((c) => c.status === 'not_met')).toBe(true)
+  })
+
+  it('a stuck agent is in the inbox as stuck, with its recommendation', async () => {
+    const r = (await journeyStore({ principal: ADMIN, deps }, 'acme/other').read((db) => loadJourney(db))).result
+    await facts().update((db) => ({ result: addStuck(db, { agent: 'verify', label: 'the Verification specialist', jobId: 'job-11' }, { why: 'The test bench is not reachable from the runtime.', recommendation: 'Connect the bench to the network.' }, r) }))
+    const items = (await run(USER, 'inbox', { kinds: ['stuck'] }) as { items: { kind: string; summary: string }[] }).items
+    expect(items.map((i) => i.summary)).toContain('Motor driver: the Verification specialist is stuck: The test bench is not reachable from the runtime. It recommends: Connect the bench to the network.')
+  })
+
+  it('access is unchanged: no access to another project\'s facts, and the journey tools are never run through the API', async () => {
+    await expect(run(OUTSIDER, 'journey.get', { repo: 'acme/other' })).rejects.toThrow(AccessDenied)
+    const withTools: ActionDeps = { ...deps, tools: () => allTools(), jobs: async () => ({ repositoryOf: () => null, startJob: async () => ({ accepted: true, jobId: 'j' }), jobStatus: async () => [], runTool: async () => { throw new Error('must not be forwarded') } }) }
+    for (const name of ['journey.status', 'journey.ask', 'journey.check', 'journey.stuck']) {
+      await expect(perform('tool', { repo: 'acme/other', name, args: {} }, { principal: ADMIN, deps: withTools }), name).rejects.toThrow(`no tool ${name}`)
+    }
+    const listed = (await perform('tools.list', { repo: 'acme/other' }, { principal: ADMIN, deps: withTools })).result as { name: string }[]
+    expect(listed.some((t) => t.name.startsWith('journey.'))).toBe(false)
   })
 })
 

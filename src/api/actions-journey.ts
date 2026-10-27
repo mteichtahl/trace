@@ -30,7 +30,10 @@
  *                                    on its own: a failed copy is reported with the signature and never undoes it
  *
  * The record lives in the central bucket (src/core/journey-store.ts): every write is a conditional put of the
- * project's journey database, re-run on a lost race, and answers the record's `version`.
+ * project's journey database, re-run on a lost race, and answers the record's `version`. The agents' facts
+ * (src/core/agent-facts.ts: their questions, checks of the criteria trace owns, stuck notes) are read beside it and
+ * merged into journey.get, gate.sign, waiver.add and the inbox; question.answer answers an agent's question in the
+ * record under its id. The API never writes the agents' facts, and an agent's fact never meets a person's criterion.
  * Who did it is recorded as their email for the record people read, and as their 16-character hash where the record
  * only matches them (opened evidence), never as anything else.
  */
@@ -40,14 +43,14 @@ import {
   INBOX_KINDS, type InboxItem, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
   journeyView, loadJourney, recordOpen, returnGate, signGate, sortInbox,
 } from '../core/journey.js'
-import { type Context, NO_ACCESS, Repo, def, hashOf, label, plainly, snapshotJourney, withJourneyDb, writeJourney } from './action-kit.js'
+import { type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, label, plainly, snapshotJourney, withJourneyDb, writeJourney } from './action-kit.js'
 
 const Id = z.string().min(1).max(80)
 
 /** Who is looking, for the journey's computations. */
 export async function viewerOf(p: Principal, repo: string): Promise<Viewer> {
   const s = await standing(p, repo)
-  return { hash: hashOf(p), label: label(p), admin: isAdmin(p), part: s?.part ?? null }
+  return { hash: hashOf(p), label: label(p), admin: isAdmin(p), part: s?.part ?? null, sub: p.sub }
 }
 
 const NOT_STARTED = {
@@ -93,11 +96,11 @@ async function mapLimit<T, R>(items: readonly T[], n: number, fn: (t: T) => Prom
 export const JOURNEY_ACTIONS = {
   'journey.get': def('read', Repo, async ({ repo }, ctx) => {
     const viewer = await viewerOf(ctx.principal, repo)
-    const r = await withJourneyDb(ctx, repo, (db) => loadJourney(db))
+    const [r, facts] = await Promise.all([withJourneyDb(ctx, repo, (db) => loadJourney(db)), agentFacts(ctx, repo)])
     if (!r) return { repo, ...NOT_STARTED }
     // whether the project has agent memory here (the Memory tab): its memory is set up, not that a session has happened
     const hasMemory = Boolean(ctx.deps.memory?.()?.forProject(repo))
-    return { repo, started: true, you: { admin: viewer.admin, part: viewer.part }, has_memory: hasMemory, ...journeyView(r, viewer) }
+    return { repo, started: true, you: { admin: viewer.admin, part: viewer.part }, has_memory: hasMemory, ...journeyView(r, viewer, undefined, facts) }
   }),
 
   'journey.criterion.open': def('read', Repo.extend({ criterion: Id.optional(), waiver: Id.optional() }).refine((a) => Boolean(a.criterion) !== Boolean(a.waiver), 'name a criterion or a waiver'), async (a, ctx) => {
@@ -114,8 +117,10 @@ export const JOURNEY_ACTIONS = {
   }),
 
   'gate.sign': def('admin', Repo.extend({ gate: Id, acknowledge: z.array(Id).max(100).default([]), notes: z.string().trim().max(4000).optional() }), async (a, ctx) => {
+    // the agents' checks of the criteria trace owns count towards the gate; the signing rules are the record's own
+    const facts = await agentFacts(ctx, a.repo)
     const signed = await journeyWrite(ctx, a.repo, (db) => {
-      const r = signGate(db, a.gate, signer(ctx), { acknowledged: a.acknowledge, notes: a.notes ?? null })
+      const r = signGate(db, a.gate, signer(ctx), { acknowledged: a.acknowledge, notes: a.notes ?? null, facts })
       return { result: { repo: a.repo, ...r } }
     })
     if (!signed.released) return { ...signed, snapshot: null }
@@ -139,11 +144,14 @@ export const JOURNEY_ACTIONS = {
 
   'question.answer': def('write', Repo.extend({
     question: Id, option: Id.optional(), answer: z.string().trim().max(4000).optional(), reason: z.string().trim().max(2000).optional(),
-  }), async (a, ctx) =>
-    journeyWrite(ctx, a.repo, (db) => {
-      const q = answerQuestion(db, a.question, signer(ctx), { option: a.option, answer: a.answer, reason: a.reason })
+  }), async (a, ctx) => {
+    // an agent's question lives in its facts; the answer is written here, in the record, under the same id
+    const facts = await agentFacts(ctx, a.repo)
+    return journeyWrite(ctx, a.repo, (db) => {
+      const q = answerQuestion(db, a.question, signer(ctx), { option: a.option, answer: a.answer, reason: a.reason }, { facts })
       return { result: { repo: a.repo, question: q, summary: 'Answered. The agent carries on.' } }
-    })),
+    })
+  }),
 
   'waiver.add': def('write', Repo.extend({
     target: z.object({ kind: z.enum(WAIVER_TARGETS), id: Id }),
@@ -152,11 +160,13 @@ export const JOURNEY_ACTIONS = {
     severity: z.enum(SEVERITIES),
     caught_where: z.string().trim().max(300).nullable(),
     scope: z.string().trim().min(1).max(300).default('this revision only'),
-  }), async (a, ctx) =>
-    journeyWrite(ctx, a.repo, (db) => {
-      const w = addWaiver(db, { target: a.target, reason: a.reason, risk: a.risk, severity: a.severity, caught_where: a.caught_where, scope: a.scope }, signer(ctx))
+  }), async (a, ctx) => {
+    const facts = await agentFacts(ctx, a.repo)
+    return journeyWrite(ctx, a.repo, (db) => {
+      const w = addWaiver(db, { target: a.target, reason: a.reason, risk: a.risk, severity: a.severity, caught_where: a.caught_where, scope: a.scope }, signer(ctx), { facts })
       return { result: { repo: a.repo, waiver: w } }
-    })),
+    })
+  }),
 
   inbox: def('signed-in', z.object({ kinds: z.array(z.enum(INBOX_KINDS)).optional(), limit: z.number().int().min(1).max(200).default(50) }), async (a, ctx) => {
     if (classOf(ctx.principal) === null) throw new AccessDenied(NO_ACCESS)
@@ -166,7 +176,8 @@ export const JOURNEY_ACTIONS = {
       try {
         const r: JourneyRecord | null = await withJourneyDb(ctx, p.repo, (db) => loadJourney(db))
         if (!r) return []
-        return inboxItems(p.repo, r, { hash: hashOf(ctx.principal), label: label(ctx.principal), admin: isAdmin(ctx.principal), part: p.part })
+        const facts = await agentFacts(ctx, p.repo)
+        return inboxItems(p.repo, r, { hash: hashOf(ctx.principal), label: label(ctx.principal), admin: isAdmin(ctx.principal), part: p.part, sub: ctx.principal.sub }, undefined, facts)
       } catch (e) {
         unavailable.push({ repo: p.repo, reason: (e instanceof Error ? e.message : String(e)).slice(0, 200) })
         return []

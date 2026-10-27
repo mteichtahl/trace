@@ -11,7 +11,8 @@
  * protected path.
  *
  * The journey record is not in the repository while it is live: it is in the central bucket (src/core/journey-store.ts,
- * projects/<slug>/journey/journey.db, conditional puts), and copied into .trace/project.db when a release is cut.
+ * projects/<slug>/journey/journey.db, conditional puts), and copied into .trace/project.db when a release is cut. The
+ * agents' facts (src/core/agent-facts.ts, projects/<slug>/journey-agent/facts.db) are read beside it and merged in.
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -23,7 +24,8 @@ import { AccessDenied, type Principal, RepoSlug, isAdmin } from '../core/access.
 import { type Backend, backendFor } from '../core/central.js'
 import type { IntegrationStore, checkIntegration } from '../core/integrations.js'
 import type { Registry } from '../core/registry.js'
-import { copyJourneyTables } from '../core/journey.js'
+import { AgentFactsStore, loadAgentFacts } from '../core/agent-facts.js'
+import { type AgentFacts, copyJourneyTables } from '../core/journey.js'
 import { JourneyStore } from '../core/journey-store.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { PROJECT_SCHEMA, open, projectTables, traceHome } from '../core/store.js'
@@ -175,6 +177,18 @@ export function journeyStore(ctx: Context, repo: string): JourneyStore {
   })
 }
 
+/**
+ * One project's agent facts (src/core/agent-facts.ts: projects/<slug>/journey-agent/facts.db): what its agents asked,
+ * checked and got stuck on. The API only reads them (its role may not write there), and merges them into every view
+ * of the journey.
+ */
+export const agentFactsStore = (ctx: Context, repo: string): AgentFactsStore => new AgentFactsStore(storeAt(ctx, PROJECTS_PREFIX), repo, { scratch: ctx.deps.scratch })
+
+/** The agents' facts of one project as they are now (none yet: empty). */
+export async function agentFacts(ctx: Context, repo: string): Promise<AgentFacts> {
+  return (await agentFactsStore(ctx, repo).read((db) => loadAgentFacts(db))).result
+}
+
 /** Run fn on the journey as it is now (read only), with the record's version. */
 export async function withJourneyDb<T>(ctx: Context, repo: string, fn: (db: DatabaseSync) => T): Promise<T> {
   return (await journeyStore(ctx, repo).read(fn)).result
@@ -259,7 +273,7 @@ export async function plainly<T>(fn: () => T | Promise<T>): Promise<T> {
   try {
     return await fn()
   } catch (e) {
-    if (e instanceof Error && ['JourneyError', 'JourneyStoreError', 'PreferenceError', 'PartRefused', 'ChatError'].includes(e.name)) throw new ActionError(e.message)
+    if (e instanceof Error && ['JourneyError', 'JourneyStoreError', 'AgentFactError', 'PreferenceError', 'PartRefused', 'ChatError'].includes(e.name)) throw new ActionError(e.message)
     throw e
   }
 }
