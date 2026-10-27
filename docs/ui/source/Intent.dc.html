@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>trace · Intent builder</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#2563eb;text-decoration:none}a:hover{color:#1d4ed8}
+</style>
+</helmet>
+<div style="font-family: Geist, system-ui, sans-serif; color: #0a0a0a; background: #ffffff; min-height: 960px; display: flex; flex-wrap: wrap; font-size: 14px; line-height: 1.5">
+
+  <header style="flex: 1 1 100%; height: 52px; border-bottom: 1px solid #e5e5e5; display: flex; align-items: center; gap: 12px; padding: 0 16px; box-sizing: border-box">
+    <a href="Project.dc.html" aria-label="Close and return" style="width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #525252; border: 1px solid #e5e5e5"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></a>
+    <span style="font-weight: 600">Intent builder</span>
+    <span style="font-size: 13px; color: #737373">Soil sensor · Rev A · Define</span>
+    <div style="flex-grow: 1"></div>
+    <span style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: #737373"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Draft saved 2 seconds ago</span>
+  </header>
+
+  <aside aria-label="Topics" style="flex: 1 1 240px; max-width: 240px; background: #fafafa; border-right: 1px solid #e5e5e5; padding: 20px 16px; box-sizing: border-box">
+    <div style="font-size: 12px; color: #737373; font-weight: 500; margin-bottom: 10px">Topics · 3 of 10 answered</div>
+    <ol style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px">
+      <sc-for list="{{topics}}" as="t" hint-placeholder-count="10">
+        <li style="{{t.rowStyle}}"><span style="{{t.dotStyle}}">{{t.mark}}</span><span>{{t.name}}</span></li>
+      </sc-for>
+    </ol>
+    <p style="margin: 20px 0 0; font-size: 12px; color: #737373">You can stop at any time. The draft is kept and trace picks up at the topic you left.</p>
+  </aside>
+
+  <main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; box-sizing: border-box">
+    <div style="height: 48px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; gap: 12px; padding: 0 24px; flex-wrap: wrap">
+      <span style="font-weight: 500">Interfaces</span>
+      <span style="font-size: 13px; color: #737373">Topic 4 of 10</span>
+      <div style="flex-grow: 1"></div>
+      <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #404040; cursor: pointer">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>
+        Read replies aloud
+        <span role="switch" aria-checked="true" style="width: 32px; height: 18px; border-radius: 9px; background: #2563eb; position: relative; display: inline-block"><span style="position: absolute; top: 2px; left: 16px; width: 14px; height: 14px; border-radius: 7px; background: #fff"></span></span>
+      </label>
+      <button type="button" aria-haspopup="listbox" style="height: 30px; padding: 0 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; font: inherit; font-size: 13px; cursor: pointer; color: #0a0a0a">Voice: Olivia ▾</button>
+    </div>
+
+    <div style="flex-grow: 1; padding: 24px; display: flex; flex-direction: column">
+      <div style="width: 100%; max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px">
+
+        <div style="display: flex; gap: 12px; align-items: flex-start">
+          <span style="width: 28px; height: 28px; border-radius: 14px; background: #eff4ff; color: #2563eb; display: flex; align-items: center; justify-content: center; flex: 0 0 28px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg></span>
+          <div style="flex: 1 1 auto; min-width: 0">
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #737373"><span style="font-weight: 600; color: #0a0a0a">trace</span>10:42<button type="button" aria-label="Play this reply" style="width: 24px; height: 24px; border: 0; background: transparent; border-radius: 6px; color: #737373; cursor: pointer; display: flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg></button></div>
+            <p style="margin: 2px 0 0">Power is done. Next, <strong style="font-weight: 600">interfaces</strong>: what does the board connect to? For each one I'll need the type, connector, protocol, rate and direction.</p>
+          </div>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end">
+          <div style="max-width: 80%; background: #f5f5f5; border-radius: 12px; padding: 10px 14px">
+            <div style="font-size: 12px; color: #737373; margin-bottom: 2px">Marc · 10:43</div>
+            It talks LoRa to a gateway and has a USB-C port for charging and setup.
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 12px; align-items: flex-start">
+          <span style="width: 28px; height: 28px; border-radius: 14px; background: #eff4ff; color: #2563eb; display: flex; align-items: center; justify-content: center; flex: 0 0 28px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg></span>
+          <div style="flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 10px">
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #737373"><span style="font-weight: 600; color: #0a0a0a">trace</span>10:43<button type="button" aria-label="Play this reply" style="width: 24px; height: 24px; border: 0; background: transparent; border-radius: 6px; color: #2563eb; cursor: pointer; display: flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg></button><span style="color: #2563eb">Playing</span></div>
+            <p style="margin: 0">Here's what I heard, as two interfaces:</p>
+            <div style="overflow-x: auto; border: 1px solid #e5e5e5; border-radius: 8px">
+              <table style="width: 100%; border-collapse: collapse; font-size: 13px">
+                <thead>
+                  <tr style="background: #fafafa; text-align: left">
+                    <th style="padding: 8px 12px; font-weight: 500; color: #525252; border-bottom: 1px solid #e5e5e5">Interface</th>
+                    <th style="padding: 8px 12px; font-weight: 500; color: #525252; border-bottom: 1px solid #e5e5e5">Type</th>
+                    <th style="padding: 8px 12px; font-weight: 500; color: #525252; border-bottom: 1px solid #e5e5e5">Connector</th>
+                    <th style="padding: 8px 12px; font-weight: 500; color: #525252; border-bottom: 1px solid #e5e5e5">Rate</th>
+                    <th style="padding: 8px 12px; font-weight: 500; color: #525252; border-bottom: 1px solid #e5e5e5">Direction</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style="padding: 8px 12px; border-bottom: 1px solid #f0f0f0">LoRa radio</td>
+                    <td style="padding: 8px 12px; border-bottom: 1px solid #f0f0f0">Wireless</td>
+                    <td style="padding: 8px 12px; border-bottom: 1px solid #f0f0f0; font-family: 'Geist Mono', monospace">u.FL antenna</td>
+                    <td style="padding: 8px 12px; border-bottom: 1px solid #f0f0f0">5.5 kbit/s</td>
+                    <td style="padding: 8px 12px; border-bottom: 1px solid #f0f0f0">Both</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 12px">USB</td>
+                    <td style="padding: 8px 12px">Wired</td>
+                    <td style="padding: 8px 12px; font-family: 'Geist Mono', monospace">USB-C</td>
+                    <td style="padding: 8px 12px">12 Mbit/s</td>
+                    <td style="padding: 8px 12px">Both</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p style="margin: 0"><strong style="font-weight: 600">'LoRa' needs a band and a range.</strong> Which region's band, and what range must it reach? For a farm sensor in Australia trace recommends <strong style="font-weight: 600">AU915</strong> and <strong style="font-weight: 600">2 km line of sight</strong>, from your purpose statement.</p>
+            <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 13px; color: #525252">
+              Also flagged from Power:
+              <span style="display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; color: #a16207; background: #fefce8; border-radius: 6px; padding: 1px 8px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/></svg>'low power' needs a number</span>
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap">
+              <button type="button" style="height: 32px; padding: 0 14px; border-radius: 8px; background: #2563eb; color: #fff; border: 0; font: inherit; font-weight: 500; cursor: pointer">AU915, 2 km</button>
+              <button type="button" style="height: 32px; padding: 0 14px; border-radius: 8px; background: #fff; border: 1px solid #e5e5e5; font: inherit; font-weight: 500; cursor: pointer">Other answer</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="padding: 12px 24px 20px">
+      <div style="width: 100%; max-width: 720px; margin: 0 auto">
+        <div style="display: flex; align-items: center; gap: 6px; border: 1px solid #e5e5e5; border-radius: 12px; padding: 6px 6px 6px 14px; box-shadow: 0 1px 2px rgba(0,0,0,0.04)">
+          <label for="intent-input" style="position: absolute; left: -9999px">Answer trace</label>
+          <input id="intent-input" type="text" placeholder="Answer, or ask trace a question…" style="flex: 1 1 auto; min-width: 0; border: 0; font: inherit; height: 34px; outline: none; background: transparent">
+          <button type="button" aria-label="Dictate" style="width: 34px; height: 34px; border: 0; border-radius: 8px; background: transparent; color: #525252; cursor: pointer; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+          <button type="button" aria-label="Send" style="width: 34px; height: 34px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+        </div>
+        <div style="margin-top: 6px; font-size: 12px; color: #737373"><kbd style="font-family: 'Geist Mono', monospace">↑ ↓</kbd> recall earlier messages</div>
+      </div>
+    </div>
+  </main>
+
+  <aside aria-label="Draft intent" style="flex: 1 1 360px; max-width: 400px; border-left: 1px solid #e5e5e5; background: #ffffff; display: flex; flex-direction: column; box-sizing: border-box">
+    <div style="height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; border-bottom: 1px solid #f0f0f0">
+      <span style="font-weight: 600">Draft intent</span>
+      <span style="font-size: 12px; color: #737373">7 statements</span>
+    </div>
+    <div style="flex-grow: 1; padding: 16px 20px; display: flex; flex-direction: column; gap: 16px">
+      <sc-for list="{{groups}}" as="g" hint-placeholder-count="4">
+        <div>
+          <div style="font-size: 12px; color: #737373; font-weight: 500; margin-bottom: 6px">{{g.topic}}</div>
+          <div style="display: flex; flex-direction: column; gap: 6px">
+            <sc-for list="{{g.items}}" as="s" hint-placeholder-count="2">
+              <div style="display: flex; gap: 8px; align-items: flex-start; justify-content: space-between">
+                <span style="font-size: 13px; flex: 1 1 auto; min-width: 0">{{s.text}}</span>
+                <span style="{{s.badgeStyle}}">{{s.badge}}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-for>
+
+      <div style="border-top: 1px solid #f0f0f0; padding-top: 14px">
+        <div style="font-size: 13px; font-weight: 600; margin-bottom: 8px">Open questions (2)</div>
+        <div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px">
+          <div style="display: flex; justify-content: space-between; gap: 8px"><span>Which gateway model will the farm use?</span><span style="color: #737373; white-space: nowrap">Owner: Marc</span></div>
+          <div style="display: flex; justify-content: space-between; gap: 8px"><span>Must the enclosure be IP67 or IP65?</span><span style="color: #737373; white-space: nowrap">Owner: Priya Shah</span></div>
+        </div>
+      </div>
+
+      <div style="border-top: 1px solid #f0f0f0; padding-top: 14px">
+        <div style="font-size: 13px; font-weight: 600; margin-bottom: 8px">Quality bar · 3 of 7 met</div>
+        <ul style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px">
+          <sc-for list="{{checks}}" as="c" hint-placeholder-count="7">
+            <li style="display: flex; align-items: center; gap: 8px"><span style="{{c.iconStyle}}">{{c.icon}}</span><span style="flex: 1 1 auto">{{c.label}}</span><span style="font-size: 12px; color: {{c.noteColor}}">{{c.note}}</span></li>
+          </sc-for>
+        </ul>
+      </div>
+    </div>
+    <div style="padding: 14px 20px; border-top: 1px solid #e5e5e5; display: flex; align-items: center; justify-content: space-between; gap: 12px">
+      <span style="font-size: 12px; color: #737373">4 checks left</span>
+      <button type="button" aria-disabled="true" title="4 checks left" style="height: 36px; padding: 0 16px; border-radius: 8px; background: #93b4f5; color: #fff; border: 0; font: inherit; font-weight: 500; cursor: not-allowed">Submit intent</button>
+    </div>
+  </aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":960}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var names = ['Purpose', 'Environment', 'Power', 'Interfaces', 'Performance', 'Physical', 'Compliance', 'Build', 'Constraints', 'References'];
+    var topics = names.map(function (n, i) {
+      var row = 'display:flex;gap:10px;align-items:center;padding:6px 8px;border-radius:8px;';
+      var dot = 'width:20px;height:20px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex:0 0 20px;font-size:11px;box-sizing:border-box;';
+      if (i < 3) return { name: n, mark: '✓', rowStyle: row + 'color:#525252;', dotStyle: dot + 'background:#0a0a0a;color:#fff;font-weight:600;' };
+      if (i === 3) return { name: n, mark: '4', rowStyle: row + 'background:#eff4ff;color:#0a0a0a;font-weight:500;', dotStyle: dot + 'border:2px solid #2563eb;color:#2563eb;font-weight:600;' };
+      return { name: n, mark: String(i + 1), rowStyle: row + 'color:#737373;', dotStyle: dot + 'border:1.5px solid #d4d4d4;' };
+    });
+    var b = 'flex:0 0 auto;font-size:12px;font-weight:500;border-radius:6px;padding:0 8px;white-space:nowrap;';
+    var acc = { badge: '✓ Accepted', badgeStyle: b + 'background:#f0fdf4;color:#15803d;' };
+    var dr = { badge: 'Draft', badgeStyle: b + 'background:#eff4ff;color:#2563eb;' };
+    var num = { badge: '! Needs a number', badgeStyle: b + 'background:#fefce8;color:#a16207;' };
+    function s(text, k) { return { text: text, badge: k.badge, badgeStyle: k.badgeStyle }; }
+    var ok = 'width:18px;height:18px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;flex:0 0 18px;';
+    function c(label, state, note) {
+      if (state === 'met') return { label: label, icon: '✓', iconStyle: ok + 'background:#f0fdf4;color:#15803d;', note: 'Met', noteColor: '#15803d' };
+      if (state === 'prog') return { label: label, icon: '◐', iconStyle: ok + 'background:#eff4ff;color:#2563eb;', note: note, noteColor: '#2563eb' };
+      return { label: label, icon: '○', iconStyle: ok + 'background:#f5f5f5;color:#737373;', note: note, noteColor: '#737373' };
+    }
+    return {
+      topics: topics,
+      groups: [
+        { topic: 'Purpose', items: [s('Measures soil moisture in a farm paddock and reports it to a LoRa gateway; used by the farm manager.', acc)] },
+        { topic: 'Environment', items: [s('Operates from −10 °C to 60 °C, outdoors, buried to 150 mm.', acc)] },
+        { topic: 'Power', items: [s('Runs from one 3.7 V lithium cell, 2,000 mAh.', acc), s('Battery life of at least 2 years at one reading every 15 minutes.', dr), s('"Low power" sleep mode.', num)] },
+        { topic: 'Interfaces', items: [s('LoRa radio, u.FL antenna, 5.5 kbit/s, both directions; band and range to confirm.', num), s('USB-C, 12 Mbit/s, both directions, for charging and setup.', dr)] }
+      ],
+      checks: [
+        c('Every topic answered or marked', 'todo', '6 left'),
+        c('Every quantity has a number and unit', 'todo', '1 left'),
+        c('No vague words', 'todo', '1 left'),
+        c('Interfaces fully specified', 'prog', 'In progress'),
+        c('No conflicts', 'met'),
+        c('Each statement testable', 'met'),
+        c('Open questions have an owner', 'met')
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>
