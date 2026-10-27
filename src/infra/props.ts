@@ -313,8 +313,17 @@ export const InfraPropsSchema = z.object({
   }).strict().prefault({}),
   /** Cloud cost per project (src/core/cost.ts, src/infra/cost.ts). */
   cost: z.object({
-    /** overrides of the price table the estimates use (src/core/prices.ts DEFAULT_PRICES), with their date */
+    /** overrides of the price table the estimates use (src/core/prices.ts), with their date: they win over the price
+     * list and the built-in table */
     prices: PriceOverridesSchema.optional(),
+    /** the price table from the AWS price list (Price List Query API, GetProducts), refreshed once a day by the cost
+     * Lambda at cost.explorer.at into installation/cost/prices.json (src/core/price-list.ts, src/core/prices-store.ts);
+     * off: the built-in table and the overrides only */
+    priceList: z.object({
+      enabled: z.boolean().default(true),
+      /** the Price List endpoint asked; unset: the nearest of the three to the installation's region */
+      endpoint: z.enum(['us-east-1', 'eu-central-1', 'ap-south-1']).optional(),
+    }).strict().prefault({}),
     /** a daily read of what AWS billed each project, from Cost Explorer by the trace:project cost allocation tag */
     explorer: z.object({
       enabled: z.boolean().default(true),

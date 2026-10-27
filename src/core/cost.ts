@@ -4,7 +4,9 @@
  *
  *   estimates  projects/<slug>/journey-agent/cost.db  one row per agent run (each model's tokens, priced from the one
  *                                                  price table, src/core/prices.ts) and per finished AWS Batch job
- *                                                  (its running time x the pool's price). Written by the worker (and
+ *                                                  (its running time x the pool's price), each with the date and the
+ *                                                  source (override, fetched, built-in) of the price that priced it.
+ *                                                  Written by the worker (and
  *                                                  the in-Actions fallback) that ran it, with conditional puts like the
  *                                                  agents' facts, never deleted (the same rules as the facts beside
  *                                                  it: src/infra/project.ts AgentFactsConditional).
@@ -14,7 +16,10 @@
  *                                                  once a day by the `<prefix>-cost-explorer` Lambda
  *                                                  (src/infra/lambda/cost-explorer.ts), which also keeps its own status:
  *                                                  whether the tag is active for cost allocation, when it read last and
- *                                                  reads next. No worker can reach installation/*
+ *                                                  reads next. No worker can reach installation/*, but for the one
+ *   prices     installation/cost/prices.json        the price table fetched from the AWS price list by the same
+ *                                                  Lambda once a day (src/core/prices-store.ts), which the workers
+ *                                                  read to price their rows
  *
  * Why the bucket and not the run record (.trace/project.db): the run record travels with the repository and its pull
  * requests (reviewers read it), a run's row is written in a clone that may never be pushed, and two branches would
@@ -31,7 +36,8 @@ import type { DatabaseSync } from 'node:sqlite'
 import { type Backend } from './central.js'
 import { projectsBackend, projectsFromEnv } from './agent-facts.js'
 import { BucketDb } from './journey-store.js'
-import { type PriceTable, type Tokens, jobCost, modelCost, pricesFromEnv } from './prices.js'
+import { type PriceSource, type PriceTable, type Tokens, jobCost, modelCost, poolPricedBy, pricesFromEnv } from './prices.js'
+import { pricesFor } from './prices-store.js'
 import { transaction } from './store.js'
 
 /** The ledger is beside the agents' facts: like them it is written by the project's agents (conditional puts, never
@@ -60,7 +66,8 @@ CREATE TABLE IF NOT EXISTS usage (
   vcpus INTEGER,                   -- what a CPU job asked for
   amount REAL,                     -- USD, an estimate; NULL: not priced (no table entry, no SDK figure)
   basis TEXT NOT NULL,             -- table | sdk | none
-  prices_as_of TEXT,               -- the price table's date
+  prices_as_of TEXT,               -- the date of the price that priced it
+  prices_source TEXT,              -- where that price came from: override | fetched | built-in (NULL: before sources)
   sdk_cost REAL,                   -- the Agent SDK's own figure (agents), kept for comparison
   region TEXT
 );
@@ -85,7 +92,12 @@ CREATE TABLE IF NOT EXISTS status (
   message TEXT
 );`
 
-export const applyUsageSchema = (db: DatabaseSync): void => { db.exec(USAGE_SQL) }
+export const applyUsageSchema = (db: DatabaseSync): void => {
+  db.exec(USAGE_SQL)
+  // a ledger written before rows kept their price's source
+  const cols = new Set((db.prepare("SELECT name FROM pragma_table_info('usage')").all() as { name: string }[]).map((c) => c.name))
+  if (!cols.has('prices_source')) db.exec('ALTER TABLE usage ADD COLUMN prices_source TEXT')
+}
 export const applyActualsSchema = (db: DatabaseSync): void => { db.exec(ACTUALS_SQL) }
 
 /** One project's estimates, in `store` (the central bucket at its `projects` prefix). */
@@ -109,7 +121,7 @@ export interface ModelUse { model: string; tokens: Tokens; sdkCost: number | nul
 export interface UsageRow {
   id: string; at: number; kind: UsageKind; jobId: string | null; agent: string | null; model: string | null
   tokens: Tokens | null; seconds: number | null; vcpus: number | null; amount: number | null; basis: 'table' | 'sdk' | 'none'
-  pricesAsOf: string | null; sdkCost: number | null; region: string | null
+  pricesAsOf: string | null; pricesSource: PriceSource | null; sdkCost: number | null; region: string | null
 }
 
 const newId = (): string => randomUUID().replaceAll('-', '').slice(0, 16)
@@ -120,26 +132,27 @@ export function modelRows(t: PriceTable, uses: readonly ModelUse[], o: { at: num
     const c = modelCost(t, u.model, u.tokens, { region: o.region, sdkCost: u.sdkCost })
     return {
       id: newId(), at: o.at, kind: 'agents', jobId: o.jobId, agent: o.agent, model: u.model, tokens: u.tokens, seconds: null, vcpus: null,
-      amount: c.amount, basis: c.basis, pricesAsOf: c.basis === 'table' ? t.asOf : null, sdkCost: u.sdkCost, region: o.region,
+      amount: c.amount, basis: c.basis, pricesAsOf: c.by?.asOf ?? null, pricesSource: c.by?.source ?? null, sdkCost: u.sdkCost, region: o.region,
     }
   })
 }
 
 /** The row one finished Batch job makes. Pure. */
 export function jobRow(t: PriceTable, j: { pool: 'gpu' | 'cpu'; seconds: number; vcpus: number; at: number; jobId: string; kind: string; region: string | null }): UsageRow {
+  const by = poolPricedBy(t, j.pool)
   return {
     id: newId(), at: j.at, kind: j.pool, jobId: j.jobId, agent: j.kind, model: null, tokens: null, seconds: j.seconds, vcpus: j.pool === 'cpu' ? j.vcpus : null,
-    amount: jobCost(t, j.pool, j.seconds, j.vcpus), basis: 'table', pricesAsOf: t.asOf, sdkCost: null, region: j.region,
+    amount: jobCost(t, j.pool, j.seconds, j.vcpus), basis: 'table', pricesAsOf: by.asOf, pricesSource: by.source, sdkCost: null, region: j.region,
   }
 }
 
 export function insertUsage(db: DatabaseSync, rows: readonly UsageRow[]): void {
-  const ins = db.prepare(`INSERT OR IGNORE INTO usage (id, at, kind, job_id, agent, model, input, output, cache_read, cache_write, seconds, vcpus, amount, basis, prices_as_of, sdk_cost, region)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+  const ins = db.prepare(`INSERT OR IGNORE INTO usage (id, at, kind, job_id, agent, model, input, output, cache_read, cache_write, seconds, vcpus, amount, basis, prices_as_of, prices_source, sdk_cost, region)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
   transaction(db, () => {
     for (const r of rows) {
       ins.run(r.id, r.at, r.kind, r.jobId, r.agent, r.model, r.tokens?.input ?? null, r.tokens?.output ?? null, r.tokens?.cacheRead ?? null, r.tokens?.cacheWrite ?? null,
-        r.seconds, r.vcpus, r.amount, r.basis, r.pricesAsOf, r.sdkCost, r.region)
+        r.seconds, r.vcpus, r.amount, r.basis, r.pricesAsOf, r.pricesSource, r.sdkCost, r.region)
     }
   })
 }
@@ -167,10 +180,16 @@ export async function recordUsage(rows: readonly UsageRow[], o: { ledger?: CostL
   }
 }
 
-/** Record one agent run's model use (the Agent SDK's result message: modelUsage, total_cost_usd). */
-export async function recordModelUse(uses: readonly ModelUse[], o: { jobId: string | null; agent: string | null; env?: Record<string, string | undefined>; ledger?: CostLedger | null; log?: (l: string) => void; now?: number }): Promise<boolean> {
+/**
+ * Record one agent run's model use (the Agent SDK's result message: modelUsage, total_cost_usd), priced with the table
+ * in use (src/core/prices-store.ts pricesFor: the overrides, the fetched price list, the built-in table); `prices`
+ * gives it instead.
+ */
+export async function recordModelUse(uses: readonly ModelUse[], o: { jobId: string | null; agent: string | null; env?: Record<string, string | undefined>; ledger?: CostLedger | null; log?: (l: string) => void; now?: number; prices?: PriceTable }): Promise<boolean> {
   const env = o.env ?? process.env
-  const rows = modelRows(pricesFromEnv(env), uses.filter((u) => u.tokens.input + u.tokens.output + u.tokens.cacheRead + u.tokens.cacheWrite > 0 || (u.sdkCost ?? 0) > 0),
+  // the price read never fails the run: without it, the overrides over the built-in table
+  const table = o.prices ?? (await pricesFor(env).catch(() => null))?.table ?? pricesFromEnv(env)
+  const rows = modelRows(table, uses.filter((u) => u.tokens.input + u.tokens.output + u.tokens.cacheRead + u.tokens.cacheWrite > 0 || (u.sdkCost ?? 0) > 0),
     { at: (o.now ?? Date.now()) / 1000, jobId: o.jobId, agent: o.agent, region: env.AWS_REGION ?? null })
   return recordUsage(rows, { ...(o.ledger !== undefined ? { ledger: o.ledger } : { ledger: ledgerFromEnv(env) }), ...(o.log ? { log: o.log } : {}) })
 }
@@ -183,7 +202,8 @@ export function loadUsage(db: DatabaseSync, since = 0): UsageRow[] {
     model: r.model === null ? null : String(r.model),
     tokens: r.input === null ? null : { input: Number(r.input), output: Number(r.output ?? 0), cacheRead: Number(r.cache_read ?? 0), cacheWrite: Number(r.cache_write ?? 0) },
     seconds: r.seconds === null ? null : Number(r.seconds), vcpus: r.vcpus === null ? null : Number(r.vcpus), amount: r.amount === null ? null : Number(r.amount),
-    basis: (r.basis as UsageRow['basis']) ?? 'none', pricesAsOf: r.prices_as_of === null ? null : String(r.prices_as_of), sdkCost: r.sdk_cost === null ? null : Number(r.sdk_cost),
+    basis: (r.basis as UsageRow['basis']) ?? 'none', pricesAsOf: r.prices_as_of === null ? null : String(r.prices_as_of),
+    pricesSource: r.prices_source === null || r.prices_source === undefined ? null : (String(r.prices_source) as PriceSource), sdkCost: r.sdk_cost === null ? null : Number(r.sdk_cost),
     region: r.region === null ? null : String(r.region),
   }))
 }
@@ -220,18 +240,25 @@ export function writeActuals(db: DatabaseSync, rows: readonly ActualRow[], days:
 
 const cents = (n: number): number => Math.round(n * 100) / 100
 
-/** A project's estimated spend by kind, and how much of it is unpriced. Pure. */
-export function estimateTotals(rows: readonly UsageRow[]): { byKind: Record<UsageKind, number>; total: number; unpriced: number; oldestTable: string | null } {
+/** Which source priced how many rows: override, fetched, built-in; 'sdk' for the Agent SDK's figure; 'unknown' for
+ * rows written before rows kept their source. */
+export type PricedBySource = Partial<Record<PriceSource | 'sdk' | 'unknown', number>>
+
+/** A project's estimated spend by kind, how much of it is unpriced, and which sources priced it. Pure. */
+export function estimateTotals(rows: readonly UsageRow[]): { byKind: Record<UsageKind, number>; total: number; unpriced: number; oldestTable: string | null; bySource: PricedBySource } {
   const byKind: Record<UsageKind, number> = { agents: 0, gpu: 0, cpu: 0 }
+  const bySource: PricedBySource = {}
   let unpriced = 0
   let oldest: string | null = null
   for (const r of rows) {
     if (r.amount === null) { unpriced++; continue }
     byKind[r.kind] += r.amount
+    const s = r.basis === 'sdk' ? 'sdk' : (r.pricesSource ?? 'unknown')
+    bySource[s] = (bySource[s] ?? 0) + 1
     if (r.pricesAsOf && (!oldest || r.pricesAsOf < oldest)) oldest = r.pricesAsOf
   }
   for (const k of USAGE_KINDS) byKind[k] = cents(byKind[k])
-  return { byKind, total: cents(byKind.agents + byKind.gpu + byKind.cpu), unpriced, oldestTable: oldest }
+  return { byKind, total: cents(byKind.agents + byKind.gpu + byKind.cpu), unpriced, oldestTable: oldest, bySource }
 }
 
 /** Actual spend by service, and in all. Pure. */

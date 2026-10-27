@@ -1,7 +1,8 @@
 /**
  * Cloud cost per project and the order watch, as synthesized (src/infra/cost.ts, src/infra/order-watch.ts): the two
- * scheduled Lambdas' roles are least privilege, the API reads the ledger and starts watches but writes no cost, the
- * workers never read the carrier key, and every project resource carries the project's cost allocation tag.
+ * scheduled Lambdas' roles are least privilege, the cost Lambda also reads the AWS price list, the API reads the ledger
+ * and the fetched prices and starts watches but writes no cost, the workers read the fetched price table and nothing
+ * else of installation/, never the carrier key, and every project resource carries the project's cost allocation tag.
  */
 import { Match, type Template } from 'aws-cdk-lib/assertions'
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -30,16 +31,22 @@ let syn: Synth
 beforeAll(() => { syn = synth(InfraPropsSchema.parse(base), 'CostStack') }, 300_000)
 
 describe('the daily cost read', () => {
-  it('is a function on a daily schedule, told the bucket, the prefix and whether it may activate the tags', () => {
-    syn.parent.hasResourceProperties('AWS::Lambda::Function', { FunctionName: 'trace-cost-explorer', Runtime: 'nodejs22.x', Environment: { Variables: { TRACE_PREFIX: 'trace', TRACE_COST_ACTIVATE_TAGS: '1', TRACE_COST_SCHEDULE: '6:17', TRACE_CENTRAL_BUCKET: { Ref: Match.stringLikeRegexp('^Central') }, XDG_CACHE_HOME: '/tmp' } } })
+  it('is a function on a daily schedule, told the bucket, the prefix, whether it may activate the tags, and what to price', () => {
+    syn.parent.hasResourceProperties('AWS::Lambda::Function', { FunctionName: 'trace-cost-explorer', Runtime: 'nodejs22.x', Environment: { Variables: {
+      TRACE_PREFIX: 'trace', TRACE_COST_EXPLORER: '1', TRACE_COST_ACTIVATE_TAGS: '1', TRACE_COST_SCHEDULE: '6:17', TRACE_CENTRAL_BUCKET: { Ref: Match.stringLikeRegexp('^Central') }, XDG_CACHE_HOME: '/tmp',
+      // the price list: the region, its nearest endpoint, the configured models, the pools' instances
+      TRACE_PRICE_LIST: '1', TRACE_REGION: 'us-east-1', TRACE_PRICING_ENDPOINT: 'us-east-1', TRACE_PRICE_MODELS: 'us.anthropic.claude-sonnet-4-6',
+      TRACE_GPU_INSTANCE_TYPES: 'g6.xlarge,g5.xlarge,g4dn.xlarge', TRACE_CPU_INSTANCE_TYPES: 'c7i,c6i,m7i',
+    } } })
     syn.parent.hasResourceProperties('AWS::Events::Rule', { Name: 'trace-cost-explorer', ScheduleExpression: 'cron(17 6 * * ? *)' })
   })
 
-  it('may read Cost Explorer and activate the cost allocation tags, and write installation/cost/ with conditional puts only', () => {
+  it('may read Cost Explorer and the price list and activate the cost allocation tags, and write installation/cost/ with conditional puts only', () => {
     const s = statementsOfRole(syn.parent, 'CostReadRole')
-    expect(actions(s)).toEqual(['ce:GetCostAndUsage', 'ce:ListCostAllocationTags', 'ce:UpdateCostAllocationTagsStatus', 'logs:CreateLogStream', 'logs:PutLogEvents', 's3:GetObject', 's3:ListBucket', 's3:PutObject', 's3:PutObject'])
-    // Cost Explorer has no resource-level permissions for these
-    for (const x of s.filter((y) => list(y.Action).some((a) => a.startsWith('ce:')))) expect(x.Resource).toBe('*')
+    expect(actions(s)).toEqual(['ce:GetCostAndUsage', 'ce:ListCostAllocationTags', 'ce:UpdateCostAllocationTagsStatus', 'logs:CreateLogStream', 'logs:PutLogEvents', 'pricing:GetProducts', 's3:GetObject', 's3:ListBucket', 's3:PutObject', 's3:PutObject'])
+    // Cost Explorer and the Price List service have no resource-level permissions for these
+    for (const x of s.filter((y) => list(y.Action).some((a) => a.startsWith('ce:') || a.startsWith('pricing:')))) expect(x.Resource).toBe('*')
+    expect(s.find((y) => y.Sid === 'PriceListRead')).toMatchObject({ Effect: 'Allow', Action: 'pricing:GetProducts', Resource: '*' })
     for (const x of s.filter((y) => list(y.Action).some((a) => a.startsWith('s3:') && a !== 's3:ListBucket'))) expect(text(x.Resource)).toMatch(/"\/installation\/cost\/\*"/)
     const puts = s.filter((y) => list(y.Action).includes('s3:PutObject'))
     expect(puts.map((p) => Object.keys(p.Condition?.Null ?? {})[0]).sort()).toEqual(['s3:if-match', 's3:if-none-match'])
@@ -47,19 +54,27 @@ describe('the daily cost read', () => {
     expect(text(s)).not.toMatch(/projects\/|access\/|secretsmanager|DeleteObject/)
   })
 
-  it('may not activate the tags when cost.explorer.activateTags is false, and is absent when the read is off', () => {
+  it('may not activate the tags when cost.explorer.activateTags is false; reads only prices with the read off; is absent with both off', () => {
     const noAct = synth(InfraPropsSchema.parse({ ...base, cost: { explorer: { activateTags: false } } }), 'CostNoActivate')
     expect(actions(statementsOfRole(noAct.parent, 'CostReadRole'))).not.toContain('ce:UpdateCostAllocationTagsStatus')
-    const off = synth(InfraPropsSchema.parse({ ...base, cost: { explorer: { enabled: false } } }), 'CostOff')
+    const pricesOnly = synth(InfraPropsSchema.parse({ ...base, region: 'ap-southeast-2', model: 'apac.anthropic.claude-sonnet-4-6', cost: { explorer: { enabled: false } } }), 'CostPricesOnly')
+    expect(actions(statementsOfRole(pricesOnly.parent, 'CostReadRole')).filter((a) => !a.startsWith('logs:') && !a.startsWith('s3:'))).toEqual(['pricing:GetProducts'])
+    // the Price List endpoint nearest Sydney
+    pricesOnly.parent.hasResourceProperties('AWS::Lambda::Function', { FunctionName: 'trace-cost-explorer', Environment: { Variables: Match.objectLike({ TRACE_COST_EXPLORER: '0', TRACE_PRICING_ENDPOINT: 'ap-south-1', TRACE_REGION: 'ap-southeast-2' }) } })
+    const off = synth(InfraPropsSchema.parse({ ...base, cost: { explorer: { enabled: false }, priceList: { enabled: false } } }), 'CostOff')
     expect(Object.keys(off.parent.findResources('AWS::IAM::Role')).some((k) => k.startsWith('CostReadRole'))).toBe(false)
-    expect(text(off.parent.toJSON())).not.toContain('ce:GetCostAndUsage')
+    expect(text(off.parent.toJSON())).not.toMatch(/ce:GetCostAndUsage|pricing:GetProducts/)
   }, 300_000)
 
-  it('hands the price overrides to the workers, dated', () => {
+  it('hands the price overrides to the workers and the API, dated', () => {
     const prices = { asOf: '2026-10-01', gpu: { perHour: 1.2, basis: 'g6.xlarge, our negotiated rate' } }
     const s = synth(InfraPropsSchema.parse({ ...base, cost: { prices } }), 'CostPrices')
-    const rt = Object.values(nestedOf(s, A).findResources('AWS::BedrockAgentCore::Runtime') as Record<string, { Properties: { EnvironmentVariables: Record<string, unknown> } }>)[0]
+    type Rt = Record<string, { Properties: { AgentRuntimeName: string; EnvironmentVariables: Record<string, unknown> } }>
+    const rt = Object.values(nestedOf(s, A).findResources('AWS::BedrockAgentCore::Runtime') as Rt)[0]
     expect(JSON.parse(String(rt?.Properties.EnvironmentVariables.TRACE_PRICES))).toEqual(prices)
+    const api = Object.values(s.parent.findResources('AWS::BedrockAgentCore::Runtime') as Rt)[0]
+    expect(JSON.parse(String(api?.Properties.EnvironmentVariables.TRACE_PRICES))).toEqual(prices)
+    expect(api?.Properties.EnvironmentVariables.TRACE_PRICE_LIST).toBe('1')
   }, 300_000)
 })
 
@@ -87,6 +102,7 @@ describe('the API', () => {
   it('reads the actuals, starts watches with conditional puts, invokes the order watch, and sets the carrier key without reading it', () => {
     const s = Object.entries(syn.parent.findResources('AWS::IAM::Policy') as Record<string, Res>).filter(([k]) => k.startsWith('ApiRuntimeRoleCostPolicy'))
       .flatMap(([, p]) => (p.Properties.PolicyDocument as { Statement: Statement[] }).Statement)
+    // installation/cost/* holds the actuals and the fetched price table (prices.json): read only
     expect(text(s.filter((x) => list(x.Action).includes('s3:GetObject')).map((x) => x.Resource))).toMatch(/installation\/cost\/\*.*installation\/shipping\/\*/)
     const puts = s.filter((x) => list(x.Action).includes('s3:PutObject'))
     expect(puts.map((p) => Object.keys(p.Condition?.Null ?? {})[0]).sort()).toEqual(['s3:if-match', 's3:if-none-match'])
@@ -95,6 +111,28 @@ describe('the API', () => {
     const key = s.find((x) => x.Sid === 'ManageOrderWatchKey')
     expect(list(key?.Action ?? [])).not.toContain('secretsmanager:GetSecretValue')
     expect(text(key?.Resource)).toMatch(/secret:trace\/order-watch\/\*/)
+  })
+})
+
+describe('the workers and the fetched prices', () => {
+  it('read installation/cost/prices.json and nothing else of installation/, and never write it', () => {
+    const n = nestedOf(syn, A)
+    const roles = Object.keys(n.findResources('AWS::IAM::Role'))
+    for (const prefix of ['RuntimeRole', 'ActionsRole']) {
+      const id = roles.find((k) => k.includes(prefix))
+      expect(id, prefix).toBeDefined()
+      const all = [...Object.values(n.findResources('AWS::IAM::Policy') as Record<string, Res>), ...Object.values(n.findResources('AWS::IAM::ManagedPolicy') as Record<string, Res>)]
+        .filter((p) => text(p.Properties.Roles ?? []).includes(`"${id}"`))
+        .flatMap((p) => (p.Properties.PolicyDocument as { Statement: Statement[] }).Statement)
+      const reads = all.filter((x) => x.Sid === 'PricesRead')
+      expect(reads, prefix).toHaveLength(1)
+      expect(reads[0]).toMatchObject({ Effect: 'Allow', Action: 's3:GetObject' })
+      expect(text(reads[0]?.Resource)).toMatch(/"\/installation\/cost\/prices\.json"\]/)
+      expect(all.find((x) => x.Sid === 'PricesList')).toMatchObject({ Action: 's3:ListBucket', Condition: { StringEquals: { 's3:prefix': ['installation/cost/prices.json'] } } })
+      // nothing else of installation/: not the actuals, not shipping, no write
+      const installation = all.filter((x) => text(x.Resource).includes('installation/') || text(x.Condition ?? {}).includes('installation/'))
+      expect(installation.map((x) => x.Sid).sort(), prefix).toEqual(['PricesList', 'PricesRead'])
+    }
   })
 })
 

@@ -424,8 +424,22 @@ export interface ReadingView {
 
 /** Cost Explorer's daily read, as the screens say it: when it read, when it reads next, whether the tag is active. */
 export interface ExplorerView { checkedAt: string | null; nextAt: string | null; ok: boolean; tag: 'active' | 'inactive' | 'not_found' | 'unknown'; text: string }
-/** The price table the estimates use: its date, and whether it is old. */
-export interface PricesView { asOf: string; stale: boolean; sources: string[]; text: string }
+/** Where a price came from: an admin's (cost.prices), the AWS price list (fetched daily), or the built-in table. */
+export type PriceSource = 'override' | 'fetched' | 'built-in'
+/** The price table the estimates use: where it comes from (the AWS price list, fetched when; or the built-in table,
+ * and why), its date, whether it is old, and which source priced the rows counted. */
+export interface PricesView {
+  asOf: string; stale: boolean; sources: string[]; text: string
+  /** absent in answers of before the price list */
+  source?: 'price-list' | 'built-in'
+  status?: 'met' | 'warning' | 'waiting'
+  fetchedAt?: string | null
+  nextAt?: string | null
+  failed?: { at: string | null; error: string | null } | null
+  overrides?: boolean
+  notes?: string[]
+  pricedBy?: Partial<Record<PriceSource | 'sdk' | 'unknown', number>>
+}
 /** Cloud spend: estimates by kind from the ledger, and what AWS billed (a day behind), or null before the first read. */
 export interface CloudSpend {
   estimated: { agents: number; gpu: number; cpu: number; total: number }

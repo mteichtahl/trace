@@ -14,7 +14,8 @@ import { costTile } from '@/components/ops/ops-model'
 import { checkId } from '@/components/skills/inspection-panel'
 import { handle } from '@/mock/handlers'
 import { BenchReadings, BoardList, PlacedOrders, limitText } from './build-record'
-import { CloudBreakdown, explorerLine } from './cloud-cost'
+import { CloudBreakdown, explorerLine, pricesLine } from './cloud-cost'
+import { ago } from '@/lib/format'
 import { gateSpendLine } from './gate-spend'
 
 const wrap = (n: ReactNode) => <QueryClientProvider client={new QueryClient()}>{n}</QueryClientProvider>
@@ -34,13 +35,16 @@ describe('the API\'s build and cost answers, as the app reads them', () => {
     expect(screen.queryByRole('button', { name: 'Check now' })).toBeNull()
   })
 
-  it('cost.get: the estimate by kind, nothing billed yet, and the price table\'s date', () => {
+  it('cost.get: the estimate by kind, nothing billed yet, and where the prices come from', () => {
     const c = real<CostView>('cost.get')
     expect(c.spent.detail?.estimated).toEqual({ agents: 0, gpu: 0, cpu: 0, total: 0 })
     render(<CloudBreakdown detail={c.spent.detail!} currency={c.currency} explorer={c.explorer} prices={c.prices} />)
     expect(screen.getByText('Cloud use, estimated')).toBeInTheDocument()
     expect(screen.getByText('Nothing billed with this project\'s tag yet.')).toBeInTheDocument()
-    expect(screen.getByText(/price table of 2025-11-24/)).toBeInTheDocument()
+    // no price list fetched yet in the API's test installation: the built-in table, old, and when it will be fetched
+    expect(screen.getByText(/built-in price table of 2025-11-24 .*the AWS price list has not been fetched yet/)).toBeInTheDocument()
+    expect(pricesLine(c.prices)).toEqual({ status: 'warning', label: 'Built-in prices' })
+    expect(screen.getByText('Built-in prices')).toBeInTheDocument()
     expect(explorerLine(c.explorer)).toMatchObject({ status: 'waiting', label: 'Not read yet' })
     expect(gateSpendLine(c)).toBe('Spent so far US$40, US$40 on orders.')
   })
@@ -49,6 +53,18 @@ describe('the API\'s build and cost answers, as the app reads them', () => {
     const m = real<UsageMonth>('usage.month')
     expect(m.projects).toEqual([expect.objectContaining({ repo: 'acme/answers', actual: null, orders: 40 })])
     expect(costTile({ estimated: m.totals.estimated, actual: m.totals.actual, currency: m.currency, projects: m.projects.length })).toMatchObject({ id: 'cost', label: 'Cloud spend this month', sub: 'Estimate across 1 project · not billed by AWS yet' })
+  })
+})
+
+describe('the prices\' badge', () => {
+  const base = { asOf: '2026-10-27', stale: false, sources: [], text: '' }
+  it('says the AWS price list and when, a failed fetch, the built-in table, and reads answers of before the price list', () => {
+    const now = Date.parse('2026-10-27T12:00:00Z')
+    expect(pricesLine({ ...base, source: 'price-list', status: 'met', fetchedAt: '2026-10-27T06:20:00Z', failed: null }, now)).toEqual({ status: 'met', label: `AWS price list, fetched ${ago('2026-10-27T06:20:00Z', now)}` })
+    expect(pricesLine({ ...base, source: 'price-list', status: 'warning', failed: { at: '2026-10-27T06:20:00Z', error: 'denied' } }, now)).toEqual({ status: 'warning', label: 'Price list fetch failed' })
+    expect(pricesLine({ ...base, source: 'built-in', status: 'warning', failed: { at: null, error: 'x' } }, now)).toEqual({ status: 'warning', label: 'Built-in prices: fetch failed' })
+    expect(pricesLine({ ...base, stale: true }, now)).toEqual({ status: 'warning', label: 'Price table more than six months old' })
+    expect(pricesLine({ ...base }, now)).toEqual({ status: 'met', label: 'Price table of 2026-10-27' })
   })
 })
 
