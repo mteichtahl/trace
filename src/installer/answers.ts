@@ -15,6 +15,7 @@
  * Shared by the local server and the browser page, so both validate the same way.
  */
 import { z } from 'zod'
+import { PriceOverridesSchema } from '../core/prices.js'
 
 export const Repo = z.string().trim().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')
 /** admin: everything, everywhere; user: read/write on assigned projects; guest: read on assigned projects. */
@@ -73,6 +74,12 @@ export const AgentAnswers = z.object({
   samplingPercent: z.number().min(0).max(100).nullable().default(null),
   /** a CloudWatch dashboard for the agents */
   dashboard: z.boolean().default(true),
+  /** cloud cost per project (props.ts cost, README "Cost and orders"): a daily Cost Explorer read by the trace:project
+   * tag, activating it as a cost allocation tag when the account may */
+  costExplorer: z.boolean().default(true),
+  costActivateTags: z.boolean().default(true),
+  /** overrides of the price table the estimates use (src/core/prices.ts), with their date; null: the defaults */
+  costPrices: PriceOverridesSchema.nullable().default(null),
   /** move an installation whose projects are all in one stack (layout flat) to one nested stack per project: three
    * deploys in a row, and every project's memory records are deleted (README "Project isolation"). Ignored for a new
    * installation, which is nested already. */

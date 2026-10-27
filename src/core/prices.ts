@@ -14,6 +14,8 @@
  *     as TRACE_PRICES, so a change is one installer run, and every row records the table date it was priced with
  *   - when the table in use is older than STALE_DAYS, cost.get says so on screen ("the price table is from …")
  *
+ * Plain data and pure functions (the installer's page loads the overrides' schema too: no Node here).
+ *
  * Model entries match on the model id with its routing prefix removed (us., eu., apac., global.): an entry's `match`
  * is a substring ("claude-sonnet-4-5"); the longest match wins, and an entry with `regions` wins over one without
  * when the run's region is listed. `regional` multiplies the price when the model is called through a regional (not
@@ -94,7 +96,7 @@ export function mergePrices(base: PriceTable, o: PriceOverrides | null | undefin
 }
 
 /** The table in use: TRACE_PRICES (the stack's merged table) when it parses, else the defaults. */
-export function pricesFromEnv(env: Record<string, string | undefined> = process.env): PriceTable {
+export function pricesFromEnv(env: Record<string, string | undefined> = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {}): PriceTable {
   const raw = env.TRACE_PRICES
   if (!raw) return DEFAULT_PRICES
   try {

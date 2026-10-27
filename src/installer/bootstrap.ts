@@ -271,6 +271,7 @@ export function infraInput(a: Answers, existing?: Existing | null, deploy?: Layo
       enabled: a.agents.observability, transactionSearch: a.agents.transactionSearch, dashboard: a.agents.dashboard,
       ...(a.agents.samplingPercent !== null ? { samplingPercent: a.agents.samplingPercent } : {}),
     },
+    cost: { explorer: { enabled: a.agents.costExplorer, activateTags: a.agents.costActivateTags }, ...(a.agents.costPrices ? { prices: a.agents.costPrices } : {}) },
     ...(a.agents.retainData && sharedMemoryOf(existing) ? { memory: { legacySharedMemory: true } } : {}),
     ...(own.length ? {
       projectSettings: Object.fromEntries(own.map((p) => [p.repo, {
