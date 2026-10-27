@@ -10,7 +10,8 @@
  *   onboarded       the trace workflows are rendered again from the repository's own settings; when they differ
  *                   from the default branch's (a newer trace, e.g. the CodeBuild runners' `runs-on`), a branch
  *                   trace/refresh and its pull request; when they do not, nothing
- *   new (create)    the repository is created, scaffolded from its template and pushed to main
+ *   new (create)    the repository is created, scaffolded from its template and pushed to main; the sample project
+ *                   (template 'sample', src/installer/sample.ts) gets the sample's files, settings and seeded tables
  * and, with `apply`, the repository settings the loop needs (auto-merge, branch deletion, labels, the ruleset). The
  * central registry of projects is written by the installer's people step, with the installation's credentials.
  */
@@ -25,6 +26,8 @@ import {
   ONBOARD_BRANCH, type Runner, OnboardError, REF, SOURCE, checklist, detect, readWorkflow, scaffold, settingsFor, writeFiles, writeWorkflows,
 } from '../core/onboard.js'
 import { Github, GithubError, createRepo } from './github.js'
+import { sampleSettings, scaffoldSample } from './sample.js'
+import { seedSample } from './sample-seed.js'
 
 export const REFRESH_BRANCH = 'trace/refresh'
 
@@ -61,7 +64,7 @@ export interface ApiOnboardOptions {
   apply: boolean
   escalateTo?: string
   /** a repository to create (null: it exists) */
-  create?: { template: 'empty' | 'python' | 'kicad' | 'rust'; private: boolean } | null
+  create?: { template: 'empty' | 'python' | 'kicad' | 'rust' | 'sample'; private: boolean } | null
   source?: string
   ref?: string
   /** tests: git and GitHub */
@@ -132,16 +135,21 @@ export async function onboardViaApi(slug: string, o: ApiOnboardOptions): Promise
     if (o.create) {
       await createRepo(o.token, slug, { private: o.create.private, description: 'Put under trace by `trace install`' }, o.fetchImpl)
       git(['git', 'init', '-q', '-b', 'main', repo])
-      scaffold(repo, o.create.template, slug.split('/')[1] ?? 'project')
+      const template = o.create.template
+      const sample = template === 'sample'
+      if (template === 'sample') scaffoldSample(repo)
+      else scaffold(repo, template, slug.split('/')[1] ?? 'project')
       const d = await detect(repo, 'main', git)
-      d.language = o.create.template
+      // the sample is a KiCad project with firmware: its build is the KiCad one
+      d.language = template === 'sample' ? 'kicad' : template
       d.build = null
-      writeFiles(repo, d, settingsFor(d, o.escalateTo), source, ref)
+      writeFiles(repo, d, { ...settingsFor(d, o.escalateTo), ...(sample ? sampleSettings() : {}) }, source, ref)
+      const notes = sample ? seedSample(repo) : []
       git(['git', 'add', '-A'], { cwd: repo })
       git(['git', 'commit', '-q', '-m', `Start ${slug} under trace`], { cwd: repo })
       git(['git', 'push', '-q', `https://github.com/${slug}.git`, 'HEAD:refs/heads/main'], { cwd: repo })
       const settings = o.apply ? await applySettingsApi(gh, slug, load(repo)) : []
-      return { repo: slug, state: 'created', pr: null, settings, notes: [] }
+      return { repo: slug, state: 'created', pr: null, settings, notes }
     }
     git(['git', 'clone', '-q', '--depth', '50', `https://github.com/${slug}.git`, repo])
     const onboarded = existsSync(join(repo, '.trace', 'project.db'))

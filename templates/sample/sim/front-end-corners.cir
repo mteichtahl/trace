@@ -1,0 +1,16 @@
+trace-sample front end across component corners, the 3V3 rail and temperature (ams.corners)
+* The same circuit as front-end.cir with each value scaled by the corner's k_ factors (corners/component.lib).
+.lib corners/component.lib tt
+.param vin_dc=6 vdd=3.3
+V1 vin 0 DC {vin_dc} AC 1
+V2 3v3 0 DC {vdd}
+R1 vin div {39k*k_r1}
+R2 div 0 {13k*k_r2}
+R3 div filt {6.2k*k_r3}
+C1 filt 0 {10n*k_c1}
+XD1 0 3v3 filt BAT54S
+XU2 filt adc_in 3v3 0 adc_in TRC_OPA1
+C2 3v3 0 100n
+Rload adc_in 0 1meg
+.op
+.ac dec 50 1 1meg

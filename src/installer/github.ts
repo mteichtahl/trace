@@ -93,6 +93,27 @@ export async function setSecret(token: string, repo: string, name: string, value
   await gh.request('PUT', `/repos/${repo}/actions/secrets/${name}`, z.unknown(), { encrypted_value: await seal(key.key, value), key_id: key.key_id })
 }
 
+const Issue = z.object({ number: z.number(), html_url: z.string(), title: z.string(), labels: z.array(z.union([z.string(), z.object({ name: z.string() }).loose()])).default([]) }).loose()
+
+/** Open issues in a repository (pull requests left out), up to 300. */
+export async function listIssues(token: string, slug: string, fetchImpl?: Fetch): Promise<{ number: number; url: string; title: string; labels: string[] }[]> {
+  const gh = new Github(token, fetchImpl)
+  const out: { number: number; url: string; title: string; labels: string[] }[] = []
+  for (let page = 1; page <= 3; page++) {
+    const { data } = await gh.request('GET', `/repos/${slug}/issues?state=all&per_page=100&page=${page}`, z.array(Issue.extend({ pull_request: z.unknown().optional() }).loose()))
+    for (const i of data) if (!i.pull_request) out.push({ number: i.number, url: i.html_url, title: i.title, labels: i.labels.map((l) => typeof l === 'string' ? l : l.name) })
+    if (data.length < 100) break
+  }
+  return out
+}
+
+/** Open an issue, with labels (GitHub creates a label that does not exist yet). */
+export async function openIssue(token: string, slug: string, issue: { title: string; body: string; labels: readonly string[] }, fetchImpl?: Fetch): Promise<{ number: number; url: string }> {
+  const gh = new Github(token, fetchImpl)
+  const { data } = await gh.request('POST', `/repos/${slug}/issues`, Issue, { title: issue.title, body: issue.body, labels: [...issue.labels] })
+  return { number: data.number, url: data.html_url }
+}
+
 export async function setVariable(token: string, repo: string, name: string, value: string, fetchImpl?: Fetch): Promise<'created' | 'updated'> {
   const gh = new Github(token, fetchImpl)
   try {

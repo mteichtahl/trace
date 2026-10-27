@@ -1,0 +1,407 @@
+[
+  {
+    "id": "define-requirements",
+    "title": "Tour 1: check the requirements against the spec",
+    "agent": "verify",
+    "labels": [
+      "agent-fix",
+      "agent:verify"
+    ],
+    "exercises": [
+      "verify.requirements",
+      "verify.plan",
+      "kb.status",
+      "kb.search",
+      "memory.recall",
+      "memory.remember",
+      "trace.runs"
+    ],
+    "remote": null,
+    "body": "Define stage. The installer stored 19 requirements and a 27-item test plan. Check them against the documents.\n\n- Run verify.requirements action=extract on `docs/spec.md` and compare the candidates with verify.requirements action=list. Every REQ-* in the file should be in the database with the same acceptance criterion.\n- Run verify.plan action=list. Confirm every method (sim, formal, spice, hil, inspection, drc) has at least one item and every requirement has a test.\n- Use kb.status and kb.search (\"input voltage range\") to find where `docs/intent.md` states each number, and memory.remember one fact about the board.\n\nDone when: no requirement is missing or different, and you list any gap you found. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "define-datasheets",
+    "title": "Tour 2: load the two fictional datasheets",
+    "agent": "ams",
+    "labels": [
+      "agent-fix",
+      "agent:ams"
+    ],
+    "exercises": [
+      "datasheets.add",
+      "datasheets.list",
+      "datasheets.get",
+      "datasheets.find",
+      "datasheets.text",
+      "datasheets.tables",
+      "datasheets.params",
+      "datasheets.page_image",
+      "datasheets.history",
+      "datasheets.acknowledge",
+      "parts.fetch_datasheet"
+    ],
+    "remote": null,
+    "body": "Define stage. `docs/datasheets/TRC-OPA1.pdf` and `docs/datasheets/TRC-TMP1.pdf` describe two FICTIONAL parts written for this sample.\n\n- datasheets.add both (manufacturer \"trace sample (fictional)\"), then datasheets.list, datasheets.history and datasheets.acknowledge.\n- On TRC-OPA1 read GBW, slew rate and phase margin with datasheets.params, datasheets.tables page 2 and datasheets.find; look at page 3's gain plot with datasheets.page_image; read TRC-TMP1 page 1 with datasheets.text and datasheets.get.\n- parts.fetch_datasheet for MCP6001T-I/OT (the real op-amp TRC-OPA1 stands in for).\n\nDone when: both are in the library and GBW reads 1.0 MHz typ. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "architect-values",
+    "title": "Tour 3: re-derive every value with the calculators",
+    "agent": "ams",
+    "labels": [
+      "agent-fix",
+      "agent:ams"
+    ],
+    "exercises": [
+      "calc.divider",
+      "calc.rc_filter",
+      "calc.led_resistor",
+      "calc.opamp_gain",
+      "calc.adc",
+      "calc.i2c_pullup",
+      "calc.ldo_thermal",
+      "calc.regulator_feedback",
+      "calc.active_filter",
+      "calc.lc_filter",
+      "calc.rc_timing",
+      "calc.crystal_caps",
+      "calc.buck",
+      "calc.boost",
+      "calc.power",
+      "parts.lookup",
+      "parts.search",
+      "parts.alternatives",
+      "parts.bom_check"
+    ],
+    "remote": null,
+    "body": "Architect stage. Show each value on the schematic comes from a calculation.\n\n- calc.divider vin=12 vout=3 (39k/13k), calc.rc_filter r=15950 c=10n (~1 kHz), calc.led_resistor 3.3 V 2.0 V 2 mA (680), calc.opamp_gain follower, calc.adc 12 bits 3.3 V, calc.i2c_pullup 3.3 V 50 pF fast, calc.ldo_thermal 12 V to 3.3 V at 43.4 mA.\n- Compare the LDO with a switcher: calc.buck and calc.boost; and calc.power battery life of a 2000 mAh cell at 48 mA. Try calc.regulator_feedback, calc.active_filter (1 kHz Butterworth), calc.lc_filter, calc.rc_timing, calc.crystal_caps for an 8 MHz crystal as alternatives.\n- parts.lookup U1 and U2, parts.search a SOT-23-5 3.3 V LDO, parts.alternatives AMS1117-3.3, parts.bom_check for 10 boards.\n\nDone when: every value matches. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "architect-thermal-envelope",
+    "title": "Tour 4: the thermal envelope and power budget",
+    "agent": "thermal",
+    "labels": [
+      "agent-fix",
+      "agent:thermal"
+    ],
+    "exercises": [
+      "thermal.envelope",
+      "thermal.budget",
+      "thermal.junction",
+      "thermal.derating",
+      "thermal.pcb",
+      "calc.trace_width",
+      "calc.via"
+    ],
+    "remote": null,
+    "body": "Architect stage. The installer stored envelope \"enclosure\" (0 to 50 C, still air, vertical), limits for U1, U2, R1, R2 and budget \"nominal\".\n\n- thermal.envelope action=get, then action=from_datasheet for U2 with mpn TRC-OPA1 (after Tour 2 loaded it).\n- Recompute the budget from `power/ldo.cir` with thermal.budget (spice devices: U1 vector v(p_u1), R1, R2) and compare with the stored one (about 0.44 W).\n- thermal.junction envelope=enclosure scenario=nominal; thermal.derating action=check ref=U1 at 50 C, 0.44 W.\n- thermal.pcb calc=copper_area for 60 C/W under U1, calc.trace_width for 50 mA, calc.via for a 0.3 mm via.\n\nDone when: U1's junction is at most 105 C at 50 C ambient (REQ-THM-001). Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "capture-project-files",
+    "title": "Tour 5: index the project for every agent",
+    "agent": "worker",
+    "labels": [
+      "agent-fix",
+      "agent:verify"
+    ],
+    "exercises": [
+      "agent.delegate",
+      "kb.sync",
+      "kicad.projects",
+      "kicad.netlist",
+      "kicad.components",
+      "kicad.board",
+      "kicad.net",
+      "firmware.detect",
+      "firmware.targets"
+    ],
+    "remote": null,
+    "body": "Capture stage. The verification specialist cannot sync the knowledge base or list projects: it delegates this to the worker with agent.delegate.\n\n- Worker: kb.sync (wait for the ingestion), kicad.projects, kicad.netlist on `hardware/trace-sample.kicad_pro` (12 nets, 17 parts), firmware.detect path=firmware and firmware.targets.\n- Specialist, afterwards: kicad.components, kicad.board and kicad.net /ADC_IN to check what the worker reported.\n\nDone when: the knowledge base has the docs and the KiCad summary, firmware.detect finds the make target, and the netlist matches the schematic. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "prove-front-end",
+    "title": "Tour 6: prove the analog front end",
+    "agent": "ams",
+    "labels": [
+      "agent-fix",
+      "agent:ams"
+    ],
+    "exercises": [
+      "sim.spice",
+      "sim.sweep",
+      "sim.montecarlo",
+      "sim.measure",
+      "sim.kicad_spice",
+      "ams.spec",
+      "ams.corners",
+      "ams.montecarlo_yield",
+      "ams.opamp_check",
+      "ams.noise"
+    ],
+    "remote": null,
+    "body": "Prove stage. `sim/front-end.cir` is the divider, RC filter, BAT54S clamp and the TRC_OPA1 buffer (`sim/models/TRC_OPA1.lib`).\n\n- sim.spice: ADC_IN at 12 V (about 2.995 V) and the -3 dB point at vin_dc=6 (about 994 Hz); sim.measure on that run.\n- sim.kicad_spice on `hardware/trace-sample.kicad_sch`, replacing J1, U1, D1, U2 and dropping J2, J3, D2, R4: the same 1.5 V.\n- sim.sweep vin_dc 0 to 13 V; sim.montecarlo R1/R2 1 %.\n- ams.spec action=get spec_set=front-end, then ams.corners on `sim/front-end-corners.cir` (sections tt/ff/ss of `sim/corners/component.lib`, vdd ±5 %, -20/25/70 C) and ams.montecarlo_yield (R 1 %, C1 10 %).\n- ams.opamp_check on TRC_OPA1 (spec_set buffer), ams.noise on `sim/noise.cir`.\n\nDone when: corners pass, yield ≥ 99 %, phase margin ≥ 45 degrees, noise ≤ 80 µV rms. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "prove-mixed-signal",
+    "title": "Tour 7: front end into the averaging filter",
+    "agent": "ams",
+    "labels": [
+      "agent-fix",
+      "agent:ams"
+    ],
+    "exercises": [
+      "ams.mixed"
+    ],
+    "remote": null,
+    "body": "Prove stage. Run the analog front end and the logic together in one ngspice transient.\n\n- ams.mixed path `sim/front-end.cir`, verilog `logic/moving_average.v`, top moving_average, parameters WIDTH 12, adc input adc_in, 12 bits, vref 3.3, port sample, clock clk 10 kHz, drive valid 1, tstop 5 ms.\n- Without Verilator's d_cosim it runs the analog and ADC part only (cosim: false): say which happened.\n\nDone when: the final code is 3714 to 3718 and the average equals it. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "prove-logic",
+    "title": "Tour 8: verify the logic: simulation, cocotb, formal, coverage",
+    "agent": "verify",
+    "labels": [
+      "agent-fix",
+      "agent:verify"
+    ],
+    "exercises": [
+      "sim.logic",
+      "sim.wave_read",
+      "verify.verilator",
+      "verify.cocotb",
+      "verify.formal",
+      "verify.coverage"
+    ],
+    "remote": "cpu",
+    "body": "Prove stage. These run as CPU jobs.\n\n- sim.logic on `logic/moving_average_tb.v` and on `logic/sample_top_tb.v` (with `logic/spi_adc_slave.v`, `logic/sample_top.v`); sim.wave_read the VCD.\n- verify.verilator: the moving average testbench with coverage, and lint of sample_top.\n- verify.cocotb with `logic/test_moving_average.py` (3 tests).\n- verify.formal with `logic/moving_average.sby` (or files + top moving_average_props), bmc and cover.\n- verify.coverage: COV-001 to COV-008 must be hit.\n\nDone when: everything passes and REQ-FW-002 shows verified. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "prove-protocols",
+    "title": "Tour 9: check the I2C, UART and CAN interfaces",
+    "agent": "verify",
+    "labels": [
+      "agent-fix",
+      "agent:verify"
+    ],
+    "exercises": [
+      "protocol.spec",
+      "protocol.spec_extract",
+      "protocol.model",
+      "protocol.check",
+      "protocol.compat",
+      "protocol.diagram",
+      "protocol.testbench",
+      "protocol.bus_analog",
+      "sim.wave_decode",
+      "sim.wave_timing"
+    ],
+    "remote": null,
+    "body": "Prove stage. The captures are `protocol/i2c-tmp1-read.vcd`, `protocol/uart-console.csv` and `protocol/can-status.vcd`.\n\n- sim.wave_decode each (TRC-TMP1 at 0x48 returns 0x0C80 = 25.0 C; the console line; CAN id 0x321) and sim.wave_timing on the I2C SCL.\n- protocol.spec_extract TRC-TMP1 i2c (Tour 2 loaded it) and protocol.spec action=set with those rows, replacing the unverified ones.\n- protocol.check the I2C capture against device TRC-TMP1 and fast mode, with protocol.bus_analog rp 4700, cb 50 pF as analog_runs; protocol.diagram of the read.\n- Add an I2C master fixture with protocol.spec, then protocol.compat at 400 kHz.\n- protocol.model + protocol.testbench a UART transaction and run it.\n\nDone when: every check passes. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "prove-fpga",
+    "title": "Tour 10: build the logic for the iCE40",
+    "agent": "impl",
+    "labels": [
+      "agent-fix",
+      "agent:impl"
+    ],
+    "exercises": [
+      "fpga.synth",
+      "fpga.pnr",
+      "fpga.timing",
+      "fpga.closure",
+      "fpga.bitstream"
+    ],
+    "remote": "cpu",
+    "body": "Prove stage, implementation. These run as CPU jobs (yosys, nextpnr, icepack).\n\n- fpga.synth family ice40, files `logic/moving_average.v` and `logic/sample_top.v`, top sample_top (yosys synth_ice40, about 435 cells).\n- fpga.pnr (nextpnr place and route) device up5k package sg48 with `fpga/sample_top.pcf`, clocks clk 12 MHz; fpga.timing on it.\n- fpga.closure at 48 MHz over seeds 1 to 4: how close does it get?\n- fpga.bitstream of the 12 MHz run (icepack).\n\nDone when: 12 MHz closes with positive slack (REQ-FW-003) and the bitstream is stored. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "layout-autoroute",
+    "title": "Tour 11: route the unrouted board and check the layout",
+    "agent": "impl",
+    "labels": [
+      "agent-fix",
+      "agent:impl"
+    ],
+    "exercises": [
+      "pcb.autoroute",
+      "pcb.placement_check",
+      "pcb.floorplan",
+      "pcb.length_match",
+      "kicad.net_length",
+      "kicad.drc",
+      "protocol.compat",
+      "protocol.check",
+      "protocol.diagram"
+    ],
+    "remote": "gpu",
+    "body": "Layout stage. `layout/trace-sample.kicad_pcb` is the board with every part placed and no copper.\n\n- pcb.autoroute project `layout/trace-sample.kicad_pcb` engine=both (OrthoRoute then Freerouting, GPU jobs), ignore_nets [\"GND\"] (the B.Cu pour joins it). Never route over `hardware/`.\n- pcb.placement_check and pcb.floorplan (blocks power, sense, io) on the routed result.\n- pcb.length_match against `hardware/trace-sample.kicad_dru` (ADC line ≤ 50 mm, header buses ≤ 40 mm); kicad.net_length /ADC_IN.\n- kicad.drc on the routed board; then protocol.compat, protocol.check and protocol.diagram for I2C with the routed lengths.\n\nDone when: no net is left unrouted, DRC has no errors, and the length rules pass. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "emc-precheck",
+    "title": "Tour 12: EMC rule check, spectrum and signal integrity",
+    "agent": "emc",
+    "labels": [
+      "agent-fix",
+      "agent:emc"
+    ],
+    "exercises": [
+      "emc.precheck",
+      "emc.spectrum",
+      "emc.si",
+      "calc.impedance",
+      "protocol.pullup",
+      "protocol.bus_analog",
+      "kicad.board"
+    ],
+    "remote": null,
+    "body": "Layout stage, EMC. See `emc/README.md`.\n\n- emc.precheck on `hardware/trace-sample.kicad_pcb` with SCL (400 kHz, 200 ns rise) and TX (57.6 kHz, 5 ns) as edges.\n- emc.spectrum for the I2C clock (3.3 V, 400 kHz, 200 ns), a 200 mm² loop and a 0.3 m cable, CISPR 32 class B.\n- emc.si on `emc/adc_in-line.s2p`: TDR from port 1 and insertion loss to 1 GHz. calc.impedance for the 0.25 mm trace (about 128 ohm).\n- protocol.pullup and protocol.bus_analog for 4k7 on 50 pF.\n\nDone when: you report the class B margin (REQ-EMC-001) and explain the line's mismatch. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "emc-field-solve",
+    "title": "Tour 13: field-solve the ADC line with openEMS",
+    "agent": "emc",
+    "labels": [
+      "agent-fix",
+      "agent:emc"
+    ],
+    "exercises": [
+      "emc.setup",
+      "emc.run",
+      "kicad.net"
+    ],
+    "remote": "cpu",
+    "body": "Layout stage, EMC. A full-wave run of the longest signal. emc.run is an openEMS job on the CPU queue.\n\n- emc.setup board `hardware/trace-sample.kicad_pcb`, nets [\"/ADC_IN\"], ports U2.1 and the point [153, 119.24] on F.Cu (J2's pad is through-hole), fstop 1 GHz, 200 points. Report the mesh and the time estimate.\n- emc.run on that setup (remote always), frequencies 100 MHz, 500 MHz and 1 GHz, drive 3.3 V 1 MHz 5 ns.\n- emc.si on the run, compared with Tour 12's analytic file.\n\nDone when: the S-parameters agree with `emc/adc_in-line.s2p` within 1 dB to 500 MHz, or you explain why not. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "thermal-board",
+    "title": "Tour 14: thermal model of the board and the bench log",
+    "agent": "thermal",
+    "labels": [
+      "agent-fix",
+      "agent:thermal"
+    ],
+    "exercises": [
+      "thermal.board",
+      "thermal.check",
+      "thermal.compare",
+      "thermal.validate"
+    ],
+    "remote": null,
+    "body": "Layout stage, thermal. U1 dissipates about 0.44 W on a 60 x 40 mm 2-layer board.\n\n- thermal.validate solver 2.5d (slab, fin, plate).\n- thermal.board solver 2.5d on `hardware/trace-sample.kicad_pcb`, envelope enclosure, scenario nominal, cell_mm 1 (U1 about 84 C at 50 C), and again with ambient_c 25 and a 1800 s transient, dt 30 s.\n- thermal.check envelope enclosure, scenario nominal.\n- Read `thermal/u1-bench-log.csv` (U1 tab, 25 C ambient) and pass its time and u1_tab_c columns as points to thermal.compare against the transient's U1 column.\n\nDone when: the check passes for U1 and the model is within 5 C of the log at steady state. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "thermal-solvers",
+    "title": "Tour 15: CalculiX and CFD cross-checks",
+    "agent": "thermal",
+    "labels": [
+      "agent-fix",
+      "agent:thermal"
+    ],
+    "exercises": [
+      "thermal.board",
+      "thermal.validate"
+    ],
+    "remote": "cpu",
+    "body": "Sign-off stage, thermal. Check the fast model with the slow ones (CPU jobs, minutes to hours).\n\n- thermal.board solver calculix on `hardware/trace-sample.kicad_pcb`, envelope enclosure, scenario nominal, ambient_c 25, cell_mm 1. Compare U1's board temperature with the 2.5d answer from Tour 14 (within about 15 %).\n- thermal.board solver cfd (OpenFOAM conjugate heat transfer) with the board vertical in still air, remote always. Its effective h becomes the envelope's correction.\n- thermal.validate solver cfd (the vertical plate against Churchill & Chu).\n\nDone when: the three solvers agree on U1 within 15 %, or you say which one to trust and why. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "thermal-render",
+    "title": "Tour 16: render the board's temperature map",
+    "agent": "thermal",
+    "labels": [
+      "agent-fix",
+      "agent:thermal"
+    ],
+    "exercises": [
+      "thermal.render"
+    ],
+    "remote": "gpu",
+    "body": "Sign-off stage. Render the thermal result in Blender, as a GPU job.\n\n- thermal.render on Tour 14's 2.5d run (steady state, 50 C ambient): views top and iso, 800 x 500, 32 samples.\n\nDone when: the images are stored and show the hot spot at U1. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "render-board",
+    "title": "Tour 17: photographic renders of the board and enclosure",
+    "agent": "render",
+    "labels": [
+      "agent-fix",
+      "agent:render"
+    ],
+    "exercises": [
+      "render.status",
+      "render.board",
+      "render.model",
+      "render.turntable"
+    ],
+    "remote": "gpu",
+    "body": "Sign-off stage. Renders with Blender run as GPU jobs. Keep them small.\n\n- render.status first.\n- render.board on `hardware/trace-sample.kicad_pro`, views top, bottom, iso, 800 x 500, 32 samples.\n- render.model on `mech/enclosure.stl` (mm, clay), view iso.\n- render.turntable of the board, 24 frames, 4 s.\n\nDone when: the images and the movie are stored and the board looks right: 17 parts and three headers. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "signoff-verification",
+    "title": "Tour 18: run the test plan and write the report",
+    "agent": "verify",
+    "labels": [
+      "agent-fix",
+      "agent:verify"
+    ],
+    "exercises": [
+      "verify.run",
+      "verify.coverage",
+      "verify.report",
+      "kicad.erc",
+      "kicad.drc",
+      "trace.run",
+      "trace.artifact"
+    ],
+    "remote": null,
+    "body": "Sign-off stage. Run everything that can run without a bench or a person.\n\n- kicad.erc and kicad.drc (0 errors).\n- verify.run all=true. The hil items stay blocked without TRACE_HARDWARE=1 (Tour 20 runs them) and the inspection items need a verdict: give TST-LAY-004 one from Tour 3's parts.bom_check, and TST-THM-002 one from Tour 14's thermal.compare.\n- verify.coverage, then verify.report with path docs/verification.md (ask the worker to commit it).\n- Use trace.run and trace.artifact to quote the evidence for any failure.\n\nDone when: every requirement is verified except REQ-HIL-001, or you list what blocks it. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "release-fab",
+    "title": "Tour 19: fabrication package and firmware build",
+    "agent": "worker",
+    "labels": [
+      "agent-fix",
+      "agent:verify"
+    ],
+    "exercises": [
+      "agent.delegate",
+      "kicad.fab",
+      "kicad.export",
+      "kicad.bom",
+      "firmware.build",
+      "firmware.size"
+    ],
+    "remote": null,
+    "body": "Release stage. The verification specialist delegates this to the worker with agent.delegate, then checks the files.\n\n- Worker: kicad.fab house jlcpcb (Gerbers and drill zipped, BOM, CPL), kicad.export sch_pdf, pcb_pdf and step, kicad.bom jlc=true (17 parts, 15 lines, every one with an LCSC code).\n- Worker: firmware.build target trace-sample-fw (make all test, from `firmware/Makefile`), then firmware.size (`firmware/memory.x` gives the MCU's 64K flash).\n- Specialist: confirm every part has a placement and the unit test printed ALL TESTS PASSED.\n\nDone when: the package is complete with no warnings and the build passes. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "bringup-bench",
+    "title": "Tour 20: bring-up on the emulated bench",
+    "agent": "worker",
+    "labels": [
+      "agent-fix",
+      "agent:verify"
+    ],
+    "exercises": [
+      "agent.delegate",
+      "hil.ports",
+      "hil.idn",
+      "hil.psu",
+      "hil.dmm",
+      "hil.scope_capture",
+      "hil.scope_measure",
+      "hil.scpi",
+      "hil.serial_capture",
+      "hil.serial_expect",
+      "hil.can_send",
+      "hil.can_capture",
+      "protocol.capture",
+      "firmware.flash",
+      "firmware.logs",
+      "thermal.measure",
+      "verify.run"
+    ],
+    "remote": null,
+    "body": "Bring-up. The verification specialist delegates this to the worker. See `bench/README.md`.\n\n- Worker: start `trace hil emulate --write-settings --serial` in the background and export TRACE_HARDWARE=1.\n- hil.ports, hil.idn each instrument, hil.psu bench-psu 12 V 0.1 A on, hil.dmm bench-dmm vdc (about 3.0 V), hil.scpi a *IDN? query.\n- Step the PSU 0 to 12 V, then hil.scope_capture and hil.scope_measure CH1 rise time (about 350 µs); protocol.capture source scope.\n- firmware.build, firmware.flash, firmware.logs until \"adc raw\"; hil.serial_capture and hil.serial_expect READ (raw 3722, mv 11998).\n- hil.can_send id 0x321 data 0E8A2EDE and hil.can_capture in the same trace process (the virtual bus is in-process).\n- thermal.measure via bench-dmm; verify.run requirement=REQ-HIL-001 with hardware allowed.\n\nDone when: the bench readings are within 1 % of 12 V. Comment the numbers with their run ids on this issue, then close it."
+  }
+]

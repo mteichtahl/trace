@@ -64,7 +64,7 @@ const TABS: { id: Tab; title: string }[] = [
 
 type PersonClass = 'admin' | 'user' | 'guest'
 interface Person { email: string; class: PersonClass; projects: Set<string> }
-type Template = 'empty' | 'python' | 'kicad' | 'rust'
+type Template = 'empty' | 'python' | 'kicad' | 'rust' | 'sample'
 interface Project { branch: string; onboard: boolean; applySettings: boolean; memoryDays: string; generation: number; create: { template: Template; private: boolean } | null }
 
 const s = {
@@ -79,7 +79,9 @@ const s = {
   /** memoryDays: the field's text ('' = the installation's default); generation: kept from the saved answers */
   projects: new Map<string, Project>(),
   filter: '',
-  newRepo: { name: '', template: 'kicad' as Template, private: true },
+  newRepo: { name: '', template: 'kicad' as Exclude<Template, 'sample'>, private: true },
+  /** the sample project (installer/sample.ts): a new repository among s.projects (template 'sample'), and its tour */
+  sample: { name: '', private: true, tour: true, repo: '' },
   projectTokens: new Map<string, string>(),
   integrations: Object.fromEntries(INTEGRATION_NAMES.map((n) => [n, Object.fromEntries(INTEGRATIONS[n].keys.map((k) => [k, '']))])) as Record<IntegrationName, Record<string, string>>,
   integrationCheck: new Map<IntegrationName, { ok: boolean; detail: string } | 'busy'>(),
@@ -179,6 +181,7 @@ function answers(): AnswersInput {
       buildTrace: buildTrace(), traceRepository: buildTrace() ? selfRepo()?.repo ?? '' : '', selfUpdate: s.runners.selfUpdate,
     },
     projects: [...s.projects].map(([repo, { memoryDays, ...p }]) => ({ repo, ...p, memoryEventExpiryDays: memoryDays.trim() === '' ? null : Number(memoryDays) })),
+    sample: { enabled: Boolean(sampleRepo()), repo: sampleRepo() ?? '', private: s.sample.private, tour: s.sample.tour },
     adminEmail: s.adminEmail || s.pre?.facts.email || '',
     people: s.people.filter((p) => p.email.trim()).map((p) => ({
       email: p.email.trim(), class: p.class,
@@ -186,6 +189,12 @@ function answers(): AnswersInput {
     })),
     escalateTo: g.escalateTo,
   }
+}
+
+/** The sample project's repository: the one being created, else the one an earlier run created. */
+function sampleRepo(): string | null {
+  const creating = [...s.projects].find(([, p]) => p.create?.template === 'sample')?.[0]
+  return creating ?? (s.sample.repo && s.projects.has(s.sample.repo) ? s.sample.repo : null)
 }
 
 /** trace's own repository as the GitHub check found it, when the token can configure it and it is not a project. */
@@ -335,6 +344,7 @@ function projects(): HTMLElement {
         p ? h('span', { class: 'opt' }, checkbox('onboarding PR', p.onboard, (v) => { p.onboard = v })) : h('span', {}),
         p ? h('span', { class: 'opt' }, checkbox('repo settings', p.applySettings, (v) => { p.applySettings = v })) : h('span', {}))
     })),
+    sampleCard(owner),
     h('details', {}, h('summary', {}, 'Create a new project'),
       h('div', { class: 'row' },
         field('Repository', input('text', n.name, (v) => { n.name = v.trim() }, { placeholder: `${owner || 'owner'}/new-board` })),
@@ -346,10 +356,37 @@ function projects(): HTMLElement {
         n.name = ''
         void runPreflight()
       } }, 'Add it'))),
-    ...[...s.projects].filter(([, p]) => p.create).map(([r, p]) => note('ok', `${r}: created from the ${p.create?.template} template when installing.`, ' ', h('button', { class: 'link', onclick: () => { s.projects.delete(r); render() } }, 'remove'))),
+    ...[...s.projects].filter(([, p]) => p.create && p.create.template !== 'sample').map(([r, p]) => note('ok', `${r}: created from the ${p.create?.template} template when installing.`, ' ', h('button', { class: 'link', onclick: () => { s.projects.delete(r); render() } }, 'remove'))),
     h('div', { class: 'actions' }, h('button', { class: 'secondary', disabled: s.preBusy || !s.projects.size, onclick: () => void runPreflight() }, s.preBusy ? 'Checking…' : 'Check access to these')),
     ...(s.pre?.checks ?? []).filter((c) => (c.id.startsWith('github.repo:') || c.id.startsWith('github.create:')) && s.projects.has(c.title)).map(checkView),
     next('projects', 'integrations'))
+}
+
+/** The sample project: one small board that exercises every agent and every simulation, in a new repository. */
+function sampleCard(owner: string): HTMLElement {
+  const x = s.sample
+  const repo = sampleRepo()
+  const name = x.name.includes('/') ? x.name : `${owner || 'owner'}/${x.name || 'trace-sample'}`
+  const add = (): void => {
+    for (const [r, p] of s.projects) if (p.create?.template === 'sample') s.projects.delete(r)
+    s.projects.set(name, { branch: 'main', onboard: true, applySettings: true, memoryDays: '', generation: 0, create: { template: 'sample', private: x.private } })
+    x.repo = name
+    void runPreflight()
+  }
+  return h('div', { class: 'sub' },
+    h('h3', {}, 'Sample project (recommended for a first installation)'),
+    h('p', { class: 'muted' }, 'A small, finished sensor board in a new repository, from intent to fabrication files. Once trace is installed it starts a tour: one task for every agent and every simulation (circuit, mixed-signal, logic and formal, FPGA, protocols, thermal, electromagnetic, autorouting, rendering, firmware, and hardware in the loop on an emulated bench), so you see the whole system work before you bring your own design.'),
+    repo
+      ? h('div', {},
+        note('ok', `${repo}: ${s.projects.get(repo)?.create ? 'created and filled with the sample when installing' : 'installed by an earlier run'}.`, ' ',
+          s.projects.get(repo)?.create ? h('button', { class: 'link', onclick: () => { s.projects.delete(repo); x.repo = ''; render() } }, 'remove') : null),
+        checkbox('Start the tour once installed', x.tour, (v) => { x.tour = v }),
+        x.tour ? h('p', { class: 'muted small' }, 'The tour runs every agent and every simulation once, on AWS like any other work, so it costs what that work costs (the GPU and CPU jobs most of all). Running the installer again opens only the tasks that are missing.') : null)
+      : h('div', {},
+        h('div', { class: 'row' },
+          field('Repository', input('text', x.name, (v) => { x.name = v.trim() }, { placeholder: `${owner || 'owner'}/trace-sample` }), 'a new repository: the installer creates it'),
+          field('Visibility', checkbox('Private', x.private, (v) => { x.private = v }))),
+        h('div', { class: 'actions left' }, h('button', { class: 'secondary', disabled: !/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(name) || !owner && !x.name.includes('/'), onclick: add }, 'Install the sample project'))))
 }
 
 function integrations(): HTMLElement {
@@ -734,6 +771,7 @@ async function boot(): Promise<void> {
           generation: p.generation ?? 0, create: null,
         })
       }
+      if (saved.sample?.enabled && saved.sample.repo) Object.assign(s.sample, { repo: saved.sample.repo, private: saved.sample.private ?? true, tour: saved.sample.tour ?? true })
       s.adminEmail = saved.adminEmail ?? ''
       s.people = (saved.people ?? []).map((p) => ({ email: p.email, class: p.class ?? 'user', projects: new Set(p.projects ?? []) }))
     }

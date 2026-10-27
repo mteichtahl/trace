@@ -40,8 +40,9 @@ steps, and only the first asks for anything:
    is created, and each finding says what to do (`src/installer/preflight.ts`); where the installer can fix it itself
    it offers a button, and does nothing until you press it.
 2. **Projects.** The repositories the token sees, to tick, or **Create a new project** (a repository made and
-   scaffolded from a KiCad, Rust, Python or empty template). None is fine: install now, add repositories by running
-   the installer again.
+   scaffolded from a KiCad, Rust, Python or empty template), or **Install the sample project** (see
+   [The sample project](#the-sample-project)). None is fine: install now, add repositories by running the installer
+   again.
 3. **Integrations (optional).** Keys for Nexar, Mouser or Digi-Key, each checked with its service. Skippable; see
    [Optional integrations](#optional-integrations).
 4. **Review.** The plan, how long it takes, and **Advanced**, which holds every other setting with its default.
@@ -130,6 +131,28 @@ job definitions and runner.
 
 Tokens and keys stay in the installer's memory. They are written only to Secrets Manager, to GitHub (encrypted), and,
 when the build runners use the token, as CodeBuild's GitHub source credential (see [Where builds run](#where-builds-run)).
+
+### The sample project
+
+**Install the sample project**, on the Projects step, adds a new repository (`<your login>/trace-sample` unless you
+name another): a small, finished sensor board from intent to fabrication files (`templates/sample`). It is the
+quickest way to see the whole system work before you bring your own design, and it can be the only project.
+
+- **It is a new project like any other:** the installer creates the repository with the other new ones, and it gets
+  its own runtime, roles, memory, knowledge base and build runner; you can assign people to it. Onboarding fills it
+  with the sample's files and settings, seeds its project database (requirements, a test plan using every method,
+  analog and protocol specifications, thermal data) and pushes it all to `main`, with no pull request to merge.
+- **The tour,** last, opens one task per step of the journey (define, architect, capture, prove, layout, sign-off,
+  release, bring-up), each labelled for the agent that takes it. Together they run every agent and every tool,
+  every simulation included: circuit (ngspice), mixed-signal, logic, formal and coverage, FPGA synthesis and place
+  and route, protocols, thermal (2.5D, CalculiX and CFD), electromagnetic (openEMS), autorouting (Freerouting and
+  OrthoRoute), rendering (Blender), firmware, and hardware in the loop on an emulated bench (`trace hil emulate`).
+  The tasks that need GPU or CPU jobs wait for the GPU image (and are left out when GPU jobs are off). The tour runs
+  on AWS like any other work and costs what that work costs; untick **Start the tour** to install the sample without
+  it. Running the installer again opens only the tasks that are missing.
+
+`test/installer/sample-tour.test.ts` keeps the tour complete: a tool, agent or kind of remote job added without a
+tour task fails it.
 
 ### Tokens and permissions
 
@@ -625,6 +648,34 @@ claude mcp add trace -- trace mcp             # give Claude Code all of them
 Tools that drive real hardware (instruments, buses, flashing a target) are refused, and hidden from MCP, unless
 `TRACE_HARDWARE=1`. Run them only on a machine wired to the bench. Configure the bench with `trace config set` for
 `hil.instruments`, `hil.serial` and `hil.can`. Every power supply must have voltage and current limits.
+
+### Hardware in the loop without hardware
+
+`trace hil emulate` starts a pretend bench on your own machine, so the hardware tools can run with no instruments.
+That is how the sample project tests its board. Run it inside the project's clone:
+
+```sh
+trace hil emulate --write-settings --serial      # keep it running; Ctrl-C stops it
+TRACE_HARDWARE=1 trace tool hil.psu instrument=bench-psu voltage=12 current=0.05 output=on
+TRACE_HARDWARE=1 trace tool hil.dmm instrument=bench-dmm          # about 3.0 V
+```
+
+The bench copies the sample board's input stage. A 39k/13k divider and an RC filter bring the 0-12 V input down to
+the microcontroller's ADC pin, and a diode clamps that pin at 3.3 V.
+
+| Name | Pretends to be | What it shows |
+|---|---|---|
+| `bench-psu` | Rigol DP832 power supply, port 5555 | Channel 1 powers the board. Limits are 13 V and 0.1 A. |
+| `bench-dmm` | Keysight 34465A multimeter, port 5557 | The ADC pin: a quarter of the input with the supply on, 0 V with it off. It also reads the board current, and a temperature of 25 °C. |
+| `bench-scope` | Rigol DS1104Z oscilloscope, port 5556 | Channel 1 is the ADC pin, showing the last input change as it passes the filter (rise time about 0.35 ms). Channel 2 is a 1 kHz, 3.2 V test square wave. |
+| `bench-uart` (with `--serial`) | The board's firmware console | Once the input is at 4 V or more, it prints `adc raw=3722 mv=11998` every second and a temperature every 5 seconds. It answers `READ`, `ID` and `HELP`. |
+| `bench-can` | A CAN bus | python-can's `virtual` bus. It carries frames only between the CAN tools of a single trace process, and nothing on the bench answers. |
+
+The command prints the settings these names need. `--write-settings` saves them into `.trace/project.db` and keeps
+your other instruments. To use other ports, pass `--psu-port`, `--scope-port` and `--dmm-port`; 0 picks any free
+port. `--host` sets the address the instruments listen on. The serial console needs Linux or macOS and `python3`
+(standard library only). It is a pseudo-terminal, reached through a fixed link at `/tmp/trace-bench-uart-<psu port>`.
+Tests start the same bench with `startBench()` from `src/tools/hil/emulator/bench.ts`.
 
 ## Library gateway
 

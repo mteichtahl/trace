@@ -1,0 +1,11 @@
+# trace-sample logic on an iCE40 UP5K, SG48 package (fpga.pnr family=ice40 device=up5k package=sg48).
+# Pins follow a common UP5K breakout layout: the 12 MHz oscillator on pin 35, the user button on pin 10, an SPI ADC
+# on the left bank, the UART to the host on the right, the LED on the RGB driver pin 39 (used as a plain output).
+set_io -nowarn clk 35
+set_io -nowarn rst_n 10
+set_io -nowarn adc_sck 44
+set_io -nowarn adc_cs_n 46
+set_io -nowarn adc_mosi 47
+set_io -nowarn adc_miso 45
+set_io -nowarn uart_tx 9
+set_io -nowarn led 11

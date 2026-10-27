@@ -45,6 +45,12 @@
  *                this computer the build's events), and each check is streamed to the page as a `wait` event: what
  *                is awaited, when it was checked, when it is next, and the id the page's Check now button sends
  *
+ *  15 tour       (only with the sample project and its tour; src/installer/sample.ts) one issue per task of the
+ *                sample's tour, each labelled for the agent that takes it, so every agent and every simulation runs
+ *                once; the GPU and CPU tasks only when the GPU image is there. The sample itself is a new repository
+ *                like any other (ProjectAnswer.create, template 'sample'): created in step 3, filled, put under trace
+ *                and its project database seeded in step 10
+ *
  * After the deploy succeeds (4: after the last of its deploys) and after the runners' deploy (6), the stack settings it
  * deployed with are saved in the central bucket at installation/props.json (src/installer/record.ts: no secret is in
  * them), with how the runners reach GitHub (runners.auth), trace's own repository and its default branch: what the
@@ -84,6 +90,7 @@ import {
 } from './aws.js'
 import { type Facts, resolveAnswers } from './derive.js'
 import { type TokenInfo, canConfigure, checkToken, createRepo, deleteVariable, repositoryDefaultBranch, setSecret, setVariable } from './github.js'
+import { type TourResult, startTour, tourPlan, withSample } from './sample.js'
 import { type ApiOnboardOptions, type ApiOnboardResult, onboardViaApi } from './onboard-api.js'
 import { CDK_BOOTSTRAP_MIN, mapLimit } from './preflight.js'
 import { checkNoSecrets, installationRecord } from './record.js'
@@ -417,6 +424,12 @@ function runnersPlan(a: Answers, props: InfraProps): string {
 }
 
 /** The github step's description. */
+/** The sample project's repository when it is being installed and its name is known. */
+function sampleRepoOf(a: Answers): string | null {
+  return a.projects.find((p) => p.create?.template === 'sample')?.repo
+    ?? (a.sample.enabled && a.sample.repo ? a.sample.repo : null)
+}
+
 function githubPlan(a: Answers): string {
   const created = a.projects.filter((p) => p.create).map((p) => p.repo)
   const how = a.runners.auth === 'connection' || a.runners.connectionArn
@@ -486,7 +499,9 @@ export function timeline(a: Answers, existing?: Existing | null, o: { cdkBootstr
 
 /** What will happen, before anything does. `existing`: the stack already in the account, when the check found one;
  * `prev`: the answers of the last installation from this machine, so a re-run says what changes. */
-export function plan(a: Answers, existing?: Existing | null, prev?: Answers | null): Step[] {
+export function plan(input: Answers, existing?: Existing | null, prev?: Answers | null): Step[] {
+  // the sample project is one more new repository, once its name is known (its owner may be the login still to derive)
+  const a = input.sample.enabled && (input.sample.repo || input.github.login) ? withSample(input) : input
   const props = InfraPropsSchema.parse(infraInput(a, existing))
   const stack = stackName(props.prefix)
   const onboarding = a.projects.filter((p) => p.onboard && !p.create).map((p) => p.repo)
@@ -514,6 +529,7 @@ export function plan(a: Answers, existing?: Existing | null, prev?: Answers | nu
     ['gpu', 'The GPU image', props.gpu.enabled
       ? 'after trace is ready: wait for the GPU image the deploy started (copied, or built on amd64: the first build takes 30–60 minutes) and start it again if an earlier one failed. GPU and CPU jobs need it, nothing else does: you can use trace meanwhile'
       : 'GPU jobs are off'],
+    ...(sampleRepoOf(a) && a.sample.tour ? [['tour', 'Start the sample\'s tour', tourPlan(sampleRepoOf(a) ?? '', props.gpu.enabled)] as [string, string, string]] : []),
   ]
   return steps.map(([id, title, detail]) => ({ id, title, detail, status: 'pending' as const }))
 }
@@ -578,6 +594,8 @@ export interface Hooks {
   sourceCredential?: (token: string, ours: boolean) => Promise<SourceCredential>
   /** onboarding one repository (src/installer/onboard-api.ts onboardViaApi) */
   onboard?: (repo: string, o: Omit<ApiOnboardOptions, 'token' | 'login'>) => Promise<ApiOnboardResult>
+  /** opening the sample project's tour (src/installer/sample.ts startTour) */
+  tour?: (token: string, repo: string, o: { gpu: boolean }) => Promise<TourResult>
   /** creating a new project's repository before its variables are set */
   createRepo?: typeof createRepo
   /** trace's own repository and whether the token can configure it (resolveSelfBuild) */
@@ -673,7 +691,8 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     if (!a.github.login && !facts.login) facts.login = (await checkToken(s.githubToken)).login
     const resolved = resolveAnswers(a, facts)
     if (resolved.missing.length) throw new Error(resolved.missing.join('; '))
-    a = resolved.answers
+    // the sample project, when asked for: one more new repository (its owner is the login, derived just now if need be)
+    a = withSample(resolved.answers)
     for (const d of resolved.derived) log('check', `derived: ${d}`)
     const check = await checkAws(creds, a.aws.region, stack)
     if (check.account !== a.aws.account) throw new Error(`these credentials are for account ${check.account}, not the confirmed ${a.aws.account}`)
@@ -1001,7 +1020,8 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
         log('onboard', `${p.repo}: ${r.state}${r.pr ? ` ${r.pr}` : ''}${r.settings.length ? ` (${r.settings.join('; ')})` : ''}`)
         if (r.pr && r.state !== 'refreshed') summary.push(`Merge the onboarding PR: ${r.pr}`)
         if (r.pr && r.state === 'refreshed') summary.push(`Merge the workflow refresh: ${r.pr}`)
-        if (r.state === 'created') summary.push(`Created ${p.repo} under trace.`)
+        for (const n of r.notes) log('onboard', `${p.repo}: ${n}`)
+        if (r.state === 'created') summary.push(p.create?.template === 'sample' ? `Created the sample project, ${p.repo}, under trace.` : `Created ${p.repo} under trace.`)
       })
       set('onboard', 'done')
     }
@@ -1111,11 +1131,34 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     else summary.push('Write each project\'s rules in .trace/rules.md (they start empty).')
     if (!names_.length) summary.push('Optional: add a Nexar, Mouser or Digi-Key key for live stock and prices: `trace integrations set nexar` (see `trace integrations list`).')
 
+    // 15 — the sample's tour, last (it runs after the GPU wait below): every agent and every simulation gets its task;
+    // the GPU and CPU ones only when the GPU image is there to run them. A failure is reported; the rest stays installed
+    const tour = async (gpu: boolean): Promise<void> => {
+      const repo = sampleRepoOf(a)
+      if (!repo || !a.sample.tour) return
+      current = 'tour'
+      set('tour', 'running')
+      try {
+        const t = await (hooks.tour ?? startTour)(adminToken, repo, { gpu })
+        for (const l of t.lines) log('tour', l)
+        set('tour', 'done', `${t.opened} task${t.opened === 1 ? '' : 's'} opened${t.existing ? `, ${t.existing} already there` : ''}: ${t.url}`)
+        summary.push(`The sample's tour has started: every agent and every simulation has a task in ${t.url}. The tasks close as the agents finish them.`)
+        if (t.skipped.length) summary.push(props.gpu.enabled
+          ? `Not in the tour yet, because the GPU image is not built (${t.skipped.join('; ')}): run the installer again once it is, to add them.`
+          : `Not in the tour, because GPU jobs are off: ${t.skipped.join('; ')}.`)
+      } catch (e) {
+        const m = redact(e instanceof Error ? e.message : String(e), s)
+        set('tour', 'failed', m)
+        summary.push(`The sample's tour did not start: ${m}. Everything else is installed; run the installer again to open its tasks.`)
+      }
+    }
+
     // 14 — the GPU image: the deploy started its build and did not wait (src/infra/gpu.ts). trace is usable now; the
     // page says so, and the wait goes on underneath
     current = 'gpu'
     if (!props.gpu.enabled) {
       set('gpu', 'skipped')
+      await tour(false)
       emit({ type: 'done', ok: true, summary })
       return true
     }
@@ -1132,6 +1175,7 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       set('gpu', 'failed', r.detail)
       summary.push(`GPU and CPU jobs cannot run until the GPU image is built: ${r.detail}. Everything else is installed; fix the cause and run the installer again to build it.`)
     }
+    await tour(r.ok)
     emit({ type: 'done', ok: true, summary })
     return true
   } catch (e) {

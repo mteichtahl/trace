@@ -1069,6 +1069,92 @@ describe('no console step on the default path', () => {
   })
 })
 
+describe('the sample project', () => {
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const SAMPLE = 'trace-agent/trace-sample'
+  type Ev = { type: string; line?: string; summary?: string[]; step?: { id: string; status: string; detail: string } }
+  const outputsFor = (repos: string[]): Record<string, string> => {
+    const out = { ...OUTPUTS }
+    for (const repo of repos) {
+      const o = projectOutputs(repo)
+      Object.assign(out, { [o.runtimeArn]: `arn:rt/${repo}`, [o.roleArn]: `arn:role/${repo}`, [o.secretArn]: `arn:secret/${repo}`, [o.memoryId]: `m-${projectHash(repo)}`, [o.runnerProject]: `trace-ci-${projectHash(repo)}` })
+    }
+    return out
+  }
+  const run = async (a: unknown, hooks: Parameters<typeof apply>[3] = {}): Promise<{ ok: boolean; events: Ev[] }> => {
+    OUTPUTS.TraceHome = join(mkdtempSync(join(tmpdir(), 'trace-central-')), 'home')
+    const events: Ev[] = []
+    const ok = await apply(AnswersSchema.parse(a), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), { cdk: async () => 0, outputs: async () => outputsFor(['mteichtahl/board', 'mteichtahl/fw', SAMPLE]), ...quiet, ...hooks })
+    return { ok, events }
+  }
+
+  it('is off by default, and when on is one more new repository, named after the token\'s account', async () => {
+    const { sampleRepo, withSample } = await import('../../src/installer/sample.js')
+    expect(AnswersSchema.parse(ANSWERS).sample).toEqual({ enabled: false, repo: '', private: true, tour: true })
+    const only = AnswersSchema.parse({ ...ANSWERS, projects: [], people: [], github: { login: 'trace-agent' }, sample: { enabled: true, private: false } })
+    expect(sampleRepo(only)).toBe(SAMPLE)
+    expect(withSample(only).projects).toEqual([{ repo: SAMPLE, branch: 'main', onboard: true, applySettings: true, memoryEventExpiryDays: null, generation: 0, create: { template: 'sample', private: false } }])
+    expect(sampleRepo(AnswersSchema.parse({ ...ANSWERS, sample: { enabled: true, repo: 'acme/demo' } }))).toBe('acme/demo')
+    // the login may still be to derive: the answers are valid, and the name waits for it
+    expect(AnswersSchema.safeParse({ ...ANSWERS, sample: { enabled: true } }).success).toBe(true)
+    // people may be assigned to it; listed already (an earlier run created it) it is not doubled
+    expect(AnswersSchema.safeParse({ ...only, people: [{ email: 'dev@example.com', projects: [SAMPLE] }] }).success).toBe(true)
+    const again = AnswersSchema.parse({ ...only, projects: [{ repo: SAMPLE, branch: 'trunk' }] })
+    expect(withSample(again).projects.map((p) => `${p.repo}@${p.branch}:${p.create ? 'new' : 'existing'}`)).toEqual([`${SAMPLE}@trunk:existing`])
+    expect(AnswersSchema.safeParse({ ...ANSWERS, sample: { enabled: true, repo: 'not a repo' } }).success).toBe(false)
+  })
+
+  it('plans it with the new repositories, and its tour last', () => {
+    const a = AnswersSchema.parse({ ...ANSWERS, github: { login: 'trace-agent' }, sample: { enabled: true } })
+    const steps = plan(a)
+    expect(steps.at(-1)?.id).toBe('tour')
+    expect(steps.find((x) => x.id === 'github')?.detail).toContain(`create ${SAMPLE} first`)
+    expect(steps.find((x) => x.id === 'onboard')?.detail).toContain(`create ${SAMPLE} (sample)`)
+    expect(steps.find((x) => x.id === 'tour')?.detail).toMatch(/open \d+ tasks in trace-agent\/trace-sample, each labelled for the agent that takes it/)
+    expect(plan(AnswersSchema.parse({ ...ANSWERS, github: { login: 'x' }, sample: { enabled: true, tour: false } })).map((x) => x.id)).not.toContain('tour')
+    expect(plan(AnswersSchema.parse(ANSWERS)).map((x) => x.id)).not.toContain('tour')
+    expect(plan(AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: false }, github: { login: 'x' }, sample: { enabled: true } })).find((x) => x.id === 'tour')?.detail).toMatch(/left out because GPU jobs are off/)
+  })
+
+  it('creates it before the deploy, onboards it from the sample template, and opens the tour after the GPU image', async () => {
+    const order: string[] = []
+    const onboarded: { repo: string; create: unknown }[] = []
+    const r = await run({ ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: true }, github: { login: 'trace-agent' }, sample: { enabled: true }, people: [{ email: 'dev@example.com', projects: [SAMPLE] }] }, {
+      createRepo: async (_t, slug, o) => { order.push(`create ${slug} ${o.private ? 'private' : 'public'}`); return { fullName: slug, defaultBranch: 'main', created: true } },
+      cdk: async (args) => { if (args[0] === 'deploy') order.push('deploy'); return 0 },
+      outputs: async () => ({ ...outputsFor(['mteichtahl/board', 'mteichtahl/fw', SAMPLE]), GpuImageBuild: 'trace-gpu-image:1', GpuImageUri: 'x/trace-gpu:abc' }),
+      onboard: async (repo, o) => { onboarded.push({ repo, create: o.create ?? null }); return { repo, state: o.create ? 'created' : 'opened', pr: o.create ? null : `https://github.com/${repo}/pull/1`, settings: [], notes: o.create ? ['19 requirements'] : [] } },
+      gpuImage: async () => { order.push('gpu'); return { ok: true, detail: 'built' } },
+      tour: async (_t, repo, o) => { order.push(`tour ${repo} gpu=${o.gpu}`); return { url: `https://github.com/${repo}/issues`, opened: 20, existing: 0, skipped: [], lines: [] } },
+    })
+    expect(r.ok).toBe(true)
+    expect(order).toEqual([`create ${SAMPLE} private`, 'deploy', 'gpu', `tour ${SAMPLE} gpu=true`])
+    expect(onboarded.find((x) => x.repo === SAMPLE)?.create).toEqual({ template: 'sample', private: true })
+    expect(calls.variables).toContain(`${SAMPLE}:TRACE_AGENT_RUNTIME_ARN`)
+    expect(r.events.some((e) => e.type === 'log' && e.line === `${SAMPLE}: 19 requirements`)).toBe(true)
+    const summary = r.events.at(-1)?.summary?.join('\n') ?? ''
+    expect(summary).toMatch(/Created the sample project, trace-agent\/trace-sample, under trace/)
+    expect(summary).toMatch(/sample's tour has started: every agent and every simulation has a task in https:\/\/github.com\/trace-agent\/trace-sample\/issues/)
+    // once onboarded it is saved as an existing repository, so the next run does not create it again
+    const saved = AnswersSchema.parse(savedAnswers().answers)
+    expect(saved.projects.find((p) => p.repo === SAMPLE)?.create).toBeNull()
+    expect(saved.sample).toMatchObject({ enabled: true, tour: true })
+  })
+
+  it('names the sample after the login derived at install, and reports a tour that could not start without failing the install', async () => {
+    const created: string[] = []
+    const r = await run({ ...ANSWERS, projects: [], people: [], agents: { ...ANSWERS.agents, gpuEnabled: false }, sample: { enabled: true } }, {
+      facts: async () => ({ account: '123456789012', login: 'trace-agent', email: 'marc@example.com', models: [{ id: 'us.anthropic.claude-sonnet-4-6', name: 'S' }], gpuQuota: 0 }),
+      createRepo: async (_t, slug) => { created.push(slug); return { fullName: slug, defaultBranch: 'main', created: true } },
+      tour: async () => { throw new Error('POST /repos/trace-agent/trace-sample/issues: 403 Resource not accessible') },
+    })
+    expect(r.ok).toBe(true)
+    expect(created).toEqual([SAMPLE])
+    expect(r.events.find((e) => e.step?.id === 'tour' && e.step.status === 'failed')?.step?.detail).toMatch(/403/)
+    expect(r.events.at(-1)?.summary?.join('\n')).toMatch(/The sample's tour did not start: .*run the installer again to open its tasks/)
+  })
+})
+
 describe("trace's own repository", () => {
   const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
   const TRACE = 'mteichtahl/trace'

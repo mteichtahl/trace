@@ -1,0 +1,10 @@
+(version 1)
+# trace-sample's custom rules (KiCad DRC reads them; pcb.length_match checks the length constraints).
+# The buffered ADC line stays short so the op-amp sees little capacitance (docs/spec.md REQ-LAY-001).
+(rule "adc line length"
+  (constraint length (max 50mm))
+  (condition "A.NetName == '/ADC_IN'"))
+# The I2C and UART lines between the headers stay under 40 mm, keeping the bus capacitance in budget (REQ-IF-003).
+(rule "header bus length"
+  (constraint length (max 40mm))
+  (condition "A.NetName == '/SDA' || A.NetName == '/SCL' || A.NetName == '/TX' || A.NetName == '/RX'"))
