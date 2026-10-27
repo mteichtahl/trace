@@ -10,14 +10,18 @@ the loop that runs Potroller.
 - **The tools.** These cover KiCad (reading schematics and boards, ERC/DRC, BOM, fabrication outputs), component
   calculators, SPICE and Verilog simulation, a datasheet library and parts database shared by every project,
   hardware-in-the-loop (serial, CAN, and SCPI power supplies, scopes and meters), and the firmware loop (build, flash,
-  logs). They are reachable from the `trace` CLI and, for Claude Code, from the `trace` MCP server.
+  logs). They are reachable from the `tracectl` CLI and, for Claude Code, from the `trace` MCP server.
 
 ## Installing
 
 ```sh
-npm install -g github:mteichtahl/trace#v1      # the `trace` CLI (Node 22.13+; git, which this needs anyway)
-trace install                                  # opens the installer in your browser
+npm install -g github:mteichtahl/trace#v1      # the `tracectl` CLI (Node 22.13+; git, which this needs anyway)
+tracectl install                               # opens the installer in your browser
 ```
+
+The command is `tracectl`, not `trace`: macOS ships its own `/usr/bin/trace` (kernel tracing), and a `trace` on
+`PATH` would shadow it, or be shadowed by it wherever nvm's directory is not first (sudo, cron, launchd). The
+product, the MCP server (`claude mcp add trace -- tracectl mcp`) and `.trace/` keep the name.
 
 **What you need:** AWS credentials (a profile, SSO included, or access keys; an administrator is simplest) and one
 GitHub token. Nothing else: no Docker, no `gh` CLI, no KiCad or Python on this machine (the images build in
@@ -40,8 +44,9 @@ steps, and only the first asks for anything:
    is created, and each finding says what to do (`src/installer/preflight.ts`); where the installer can fix it itself
    it offers a button, and does nothing until you press it.
 2. **Projects.** The repositories the token sees, to tick, or **Create a new project** (a repository made and
-   scaffolded from a KiCad, Rust, Python or empty template). None is fine: install now, add repositories by running
-   the installer again.
+   scaffolded from a KiCad, Rust, Python or empty template), or **Install the sample project** (see
+   [The sample project](#the-sample-project)). None is fine: install now, add repositories by running the installer
+   again.
 3. **Integrations (optional).** Keys for Nexar, Mouser or Digi-Key, each checked with its service. Skippable; see
    [Optional integrations](#optional-integrations).
 4. **Review.** The plan, how long it takes, and **Advanced**, which holds every other setting with its default.
@@ -99,10 +104,13 @@ It then runs the plan:
   `TRACE_AGENT_RUNTIME_ARN`, `TRACE_MEMORY_ID`, `TRACE_KB_ID`, `TRACE_KB_DATA_SOURCE_ID` and `TRACE_CODEBUILD_PROJECT`,
   all its own project's, `TRACE_AWS_REGION`, `TRACE_HOME`, `TRACE_AGENT_LOGIN`) and its `TRACE_TOKEN` secret (its
   project's agent token, encrypted with the repository's key); and its onboarding pull request, or, when it is onboarded already and the trace workflows
-  have changed, a held pull request refreshing them (`src/installer/onboard-api.ts`).
+  have changed, a held pull request refreshing them (`src/installer/onboard-api.ts`). trace's own repository gets
+  `TRACE_CODEBUILD_PROJECT` alone, and `TRACE_UPDATE_ROLE`, `TRACE_AWS_REGION` and `TRACE_STACK` so the installation
+  keeps itself up to date (see [Staying up to date](#staying-up-to-date)). `TRACE_CODEBUILD_PROJECT` is set only once
+  the repository's build runner exists.
 - **People:** Cognito invitations into each person's class group, at once, and project assignments recorded in the
   central database, one after another (it is one file).
-- **Ready.** The page says trace is ready to use (`trace login`). Only then does it wait for **the GPU image**: the
+- **Ready.** The page says trace is ready to use (`tracectl login`). Only then does it wait for **the GPU image**: the
   deploy starts it and does not wait for it (see [GPU jobs](#gpu-jobs-rendering-and-autorouting)), and it starts it
   again if an earlier one failed. A failed GPU image leaves GPU and CPU jobs unavailable and everything else
   installed.
@@ -128,6 +136,28 @@ job definitions and runner.
 
 Tokens and keys stay in the installer's memory. They are written only to Secrets Manager, to GitHub (encrypted), and,
 when the build runners use the token, as CodeBuild's GitHub source credential (see [Where builds run](#where-builds-run)).
+
+### The sample project
+
+**Install the sample project**, on the Projects step, adds a new repository (`<your login>/trace-sample` unless you
+name another): a small, finished sensor board from intent to fabrication files (`templates/sample`). It is the
+quickest way to see the whole system work before you bring your own design, and it can be the only project.
+
+- **It is a new project like any other:** the installer creates the repository with the other new ones, and it gets
+  its own runtime, roles, memory, knowledge base and build runner; you can assign people to it. Onboarding fills it
+  with the sample's files and settings, seeds its project database (requirements, a test plan using every method,
+  analog and protocol specifications, thermal data) and pushes it all to `main`, with no pull request to merge.
+- **The tour,** last, opens one task per step of the journey (define, architect, capture, prove, layout, sign-off,
+  release, bring-up), each labelled for the agent that takes it. Together they run every agent and every tool,
+  every simulation included: circuit (ngspice), mixed-signal, logic, formal and coverage, FPGA synthesis and place
+  and route, protocols, thermal (2.5D, CalculiX and CFD), electromagnetic (openEMS), autorouting (Freerouting and
+  OrthoRoute), rendering (Blender), firmware, and hardware in the loop on an emulated bench (`tracectl hil emulate`).
+  The tasks that need GPU or CPU jobs wait for the GPU image (and are left out when GPU jobs are off). The tour runs
+  on AWS like any other work and costs what that work costs; untick **Start the tour** to install the sample without
+  it. Running the installer again opens only the tasks that are missing.
+
+`test/installer/sample-tour.test.ts` keeps the tour complete: a tool, agent or kind of remote job added without a
+tour task fails it.
 
 ### Tokens and permissions
 
@@ -168,7 +198,7 @@ still decides, and why:
 
 Keys for external services some tools use. None is needed to install or deploy; without one, the tools that use it
 carry on with what they have and say which key would add more ("no Nexar (Octopart) credentials …: add them with
-`trace integrations set nexar`").
+`tracectl integrations set nexar`").
 
 | Integration | Keys | Enables | Get one |
 | --- | --- | --- | --- |
@@ -180,11 +210,11 @@ LCSC needs no key, and the datasheet tools fetch public URLs; those are every cr
 (`src/core/integrations-catalog.ts`, checked by `test/core/integrations.test.ts`).
 
 ```sh
-trace integrations list                      # which are set, what each enables
-trace integrations set nexar                 # asks for the keys (or NEXAR_CLIENT_ID=… NEXAR_CLIENT_SECRET=…)
-trace integrations check nexar               # the stored keys, checked with Nexar
-trace integrations remove nexar
-trace integrations set mouser --remote       # through the API, as a signed-in admin
+tracectl integrations list                      # which are set, what each enables
+tracectl integrations set nexar                 # asks for the keys (or NEXAR_CLIENT_ID=… NEXAR_CLIENT_SECRET=…)
+tracectl integrations check nexar               # the stored keys, checked with Nexar
+tracectl integrations remove nexar
+tracectl integrations set mouser --remote       # through the API, as a signed-in admin
 ```
 
 Each is one Secrets Manager secret, `<prefix>/integrations/<name>`, written by the installer, the CLI (your AWS
@@ -229,7 +259,7 @@ trace's own images are published to Amazon ECR Public from one AWS account, the 
 installation can copy them. Publishing is a step of the install itself, with no prework: when the GitHub token you
 install with administers trace's source repository, the installer sets publishing up from that account and starts
 the first release (the preflight says so, and Advanced → "Publish trace's images" turns it on or off). Nothing is
-done in the console, and nothing is edited or committed. `trace release setup --publish` does the same on its own.
+done in the console, and nothing is edited or committed. `tracectl release setup --publish` does the same on its own.
 
 It (`src/installer/release.ts`):
 
@@ -260,16 +290,17 @@ themselves: each install reads the `trace-images` release, and copies its versio
 ### Upgrading and uninstalling
 
 ```sh
-trace upgrade              # pull the newer trace (npm install -g github:mteichtahl/trace#v1), then redeploy with the
+tracectl upgrade              # pull the newer trace (npm install -g github:mteichtahl/trace#v1), then redeploy with the
                            # saved answers and refresh each repository's variables and workflows
-trace upgrade --check      # what it would change, without changing anything
-trace upgrade --runner-auth token|connection|auto   # switch how the build runners reach GitHub (Where builds run)
-trace uninstall            # remove it (asks you to type the stack's name; --yes to skip)
+tracectl upgrade --check      # what it would change, without changing anything
+tracectl upgrade --runner-auth token|connection|auto   # switch how the build runners reach GitHub (Where builds run)
+tracectl uninstall            # remove it (asks you to type the stack's name; --yes to skip)
 ```
 
 Both use the answers saved on this machine and your AWS credentials; the GitHub token is read back from the
-installation's own secret, so neither asks for it. `trace uninstall` removes the integrations' secrets, each
-repository's trace variables (`TRACE_CODEBUILD_PROJECT` among them) and `TRACE_TOKEN`, the stack (and with it the
+installation's own secret, so neither asks for it. `tracectl uninstall` removes the integrations' secrets, each
+repository's trace variables (`TRACE_CODEBUILD_PROJECT` among them) and `TRACE_TOKEN`, trace's own repository's
+`TRACE_UPDATE_ROLE`, `TRACE_STACK` and `TRACE_AWS_REGION` (see [Staying up to date](#staying-up-to-date)), the stack (and with it the
 build runners and their webhooks), then CodeBuild's GitHub credential when trace imported it, and lists what stays (a
 GitHub connection the stack created among it): with keep data (`retainData`, the default) the central
 bucket, the image repositories, each project's memory, log groups and knowledge-base vectors; always the Cognito user
@@ -412,7 +443,7 @@ the old one's records.
 
 ## People and permissions
 
-Everyone signs in with Amazon Cognito (`trace login`). Each person is in one of three classes:
+Everyone signs in with Amazon Cognito (`tracectl login`). Each person is in one of three classes:
 
 | Class | What they can do |
 | --- | --- |
@@ -421,7 +452,7 @@ Everyone signs in with Amazon Cognito (`trace login`). Each person is in one of 
 | **guest** | Read only, only on the projects they are assigned to. |
 
 - **Read** means seeing a project's status, settings, runs and artifacts, and using the read-only tools.
-- **Write** also allows changing settings, giving the agents work (`trace remote task`), and using the tools that
+- **Write** also allows changing settings, giving the agents work (`tracectl remote task`), and using the tools that
   record runs.
 
 A person's class is their Cognito group (`trace-admins`, `trace-users`, `trace-guests`), so it travels inside their
@@ -433,12 +464,12 @@ worker runtime, through IAM, so a person's sign-in never acts as the loop, and t
 people with:
 
 ```sh
-trace users invite EMAIL --class user|guest|admin
-trace users class EMAIL guest
-trace users assign EMAIL OWNER/REPO
-trace users unassign EMAIL OWNER/REPO
-trace users list
-trace users assignments
+tracectl users invite EMAIL --class user|guest|admin
+tracectl users class EMAIL guest
+tracectl users assign EMAIL OWNER/REPO
+tracectl users unassign EMAIL OWNER/REPO
+tracectl users list
+tracectl users assignments
 ```
 
 The installer sets up the first admin and anyone else you list, with their classes and projects.
@@ -446,7 +477,7 @@ The installer sets up the first admin and anyone else you list, with their class
 Changing a project's prompts takes write access on it, and the installation's prompts only an admin can change;
 guests can list, read and preview them (see [Managing prompts](#managing-prompts)).
 
-Marking an agent memory inactive (`trace remote memory deactivate`) takes write access. A person's own preferences
+Marking an agent memory inactive (`tracectl remote memory deactivate`) takes write access. A person's own preferences
 are the exception: they may mark those with read access alone (see [Inactive memories](#inactive-memories)).
 
 ## Web app
@@ -537,7 +568,7 @@ container runs the job and is discarded.
   install needs only the AWS credentials and the token. **The token** always uses the token. **A connection**
   (Advanced: "use an AWS CodeConnections connection instead of the token; needs one console authorization") always
   uses one, and creates `<prefix>-github` when there is none. Switch later with
-  `trace upgrade --runner-auth auto|token|connection` (or by choosing again in `trace install`): the runner projects
+  `tracectl upgrade --runner-auth auto|token|connection` (or by choosing again in `tracectl install`): the runner projects
   are updated in place.
 - **With the token**, the installer imports it before the deploy as CodeBuild's account-level GitHub source credential
   (`ImportSourceCredentials`, server type `GITHUB`, auth type `PERSONAL_ACCESS_TOKEN`; Advanced chooses the agents'
@@ -546,7 +577,7 @@ container runs the job and is discarded.
   ([multiple access tokens](https://docs.aws.amazon.com/codebuild/latest/userguide/multiple-access-tokens.html):
   account credentials "will be used on a project when no project or source level credentials are specified"). An
   account that already has a GitHub source credential keeps it: it may be another team's, so trace uses it and leaves
-  it alone, and the preflight says so. One trace imported is refreshed on every run and removed by `trace uninstall`.
+  it alone, and the preflight says so. One trace imported is refreshed on every run and removed by `tracectl uninstall`.
   CodeBuild keeps the token itself: no job and no role can read it. The preflight stops when the token lacks
   Administration or Webhooks on a chosen repository, because CodeBuild could not make that runner and the deploy would
   fail.
@@ -573,18 +604,61 @@ container runs the job and is discarded.
 - **Bigger machines:** `runners.computeType` sets every job's default size (large unless changed); a job can ask for
   another with an `instance-size:` label. `runners.privileged` turns on Docker for jobs that build containers.
 
-`trace doctor owner/repo` notes when a repository has no AWS runner yet. A guard test fails the build if any workflow
+`tracectl doctor owner/repo` notes when a repository has no AWS runner yet. A guard test fails the build if any workflow
 here or in `templates/` names a runner other than its CodeBuild runner or the `ubuntu-24.04` fallback.
+
+### Staying up to date
+
+An installation updates itself when trace's own repository changes, so nobody has to run the installer (or
+`tracectl upgrade`) for every update. The installer is still what makes the first installation, and what adds or removes
+repositories, people and integrations or changes a setting.
+
+- **What triggers it.** A push to trace's own default branch (a merged pull request). Once the tests pass, the
+  `update-installation` job of `.github/workflows/ci.yml` deploys the stack again from that commit. It runs only in
+  trace's own repository, and only once the installer has set that repository's `TRACE_UPDATE_ROLE`. One update runs
+  at a time; a newer merge waits for the one before it.
+- **What it deploys.** After its deploy (and after the second deploy that adds the build runners, when there is one),
+  the installer saves the settings it deployed with in the central bucket (`installation/props.json`), with how the
+  build runners reach GitHub (Advanced → Build runners: automatic, the token or a connection) and the connection named
+  there, if any. No token or key is in it: the installer refuses to save a record any of them would be in. The job
+  deploys with exactly those settings and this commit's code, so the images, the stack and the workflows' helpers move
+  to the new version.
+- **How the runners reach GitHub** is decided again, exactly as the installer decides it (see
+  [Where builds run](#where-builds-run)). With **automatic**, a GitHub connection already authorized in the account and
+  region is used when there is one, else the token CodeBuild already holds. With **a connection**, the runners are
+  deployed only once it is authorized; if it is not, the summary says where to authorize it, and the next merge (or
+  re-running the job) adds them. With **the token**, the job uses the GitHub source credential the installer imported:
+  it never imports or changes one itself, so if CodeBuild has none in the region it does not deploy, and its summary
+  says to run the installer again.
+- **What it does besides.** Once the build runners exist, each repository's `TRACE_CODEBUILD_PROJECT` is set (or
+  removed where its runner is gone) with the shared agent token. If the token may not change a repository's variables,
+  the job still succeeds, and its summary lists which variable to set to what. It starts the GPU image build when that
+  image changed, and does not wait for it.
+- **What it can't do.** It cannot add repositories or people, change secrets, integrations, rulesets or onboarding pull
+  requests, import CodeBuild's GitHub credential, or change any setting. Run the installer for those, and it saves the
+  new settings for the next update. The job fails only when the deploy fails (CloudFormation then rolls the stack back
+  to how it was), or when it cannot deploy faithfully (no saved settings, or the token's credential is missing).
+- **Security.** The job signs in to AWS as `<prefix>-self-update`. That role can be used only by the `ci` workflow
+  of trace's own repository running on its default branch: its trust policy checks the repository, the branch and
+  the workflow file. It may use CDK's deployment roles in this account and region, read `installation/*`, read the
+  stack's outputs, check the GitHub connection, see whether CodeBuild has a GitHub source credential (never its token)
+  and read the shared agent token. Nothing else in the account trusts it, and no project's role can read or write
+  `installation/*`. Deploying through CDK's roles can change anything the stack holds, so **whoever can merge to
+  trace's default branch can change this AWS installation.** Protect that branch as you would the AWS account.
+- **Turning it off.** Untick "Keep this installation up to date when trace's main branch changes" (Advanced → Build
+  runners, under "Build trace's own repository on AWS too") and run the installer again. The role goes with that
+  deploy, and the installer removes `TRACE_UPDATE_ROLE`, so the job no longer runs. It is on by default whenever trace's
+  own repository is built on AWS; `tracectl uninstall` removes the job's variables with everything else.
 
 ## Putting another repository under trace
 
 ```sh
-trace onboard owner/repo --apply-settings      # an existing repository: opens a held PR with what it adds
-trace new owner/board --template kicad         # a new one: created, scaffolded and pushed
-trace doctor owner/repo                        # what is still missing, and how to fix each item
+tracectl onboard owner/repo --apply-settings      # an existing repository: opens a held PR with what it adds
+tracectl new owner/board --template kicad         # a new one: created, scaffolded and pushed
+tracectl doctor owner/repo                        # what is still missing, and how to fix each item
 ```
 
-`trace onboard` and `trace new` reach GitHub with the `gh` CLI, signed in as you. `trace install` does the same
+`tracectl onboard` and `tracectl new` reach GitHub with the `gh` CLI, signed in as you. `tracectl install` does the same
 onboarding through GitHub's API and `git` with the installer's token, so it needs no `gh`.
 
 Onboarding adds the following:
@@ -594,12 +668,12 @@ Onboarding adds the following:
 | `.trace/project.db` | The project's own SQLite database. It holds the detected settings and, later, every tool run. |
 | `.trace/rules.md` | **Empty.** You write the rules. Agents treat them as the authority on what to do and when to ask you. |
 | `.github/workflows/trace-*.yml` | Four thin workflows that call this repository's actions: `prs`, `ci`, `worker`, `deploy`. |
-| `.gitattributes` | Makes `project.db` merge row by row (`trace db merge`) instead of conflicting as a binary file. |
+| `.gitattributes` | Makes `project.db` merge row by row (`tracectl db merge`) instead of conflicting as a binary file. |
 | `CLAUDE.md` section | A pointer to the rules and the tools. It is appended; nothing already there is replaced. |
 
-Settings are changed with `trace config set <key> <value>` (`trace config keys` lists them all). Each workflow has a
+Settings are changed with `tracectl config set <key> <value>` (`tracectl config keys` lists them all). Each workflow has a
 kill switch, a repository variable set to `false`: `TRACE_PRS`, `TRACE_CI`, `TRACE_WORKER`, `TRACE_DEPLOY`. Work is
-done by a specialist agent (see [Specialist agents](#specialist-agents)) on AgentCore by default; `trace config set worker.runner actions` runs it as a GitHub Actions job instead, which
+done by a specialist agent (see [Specialist agents](#specialist-agents)) on AgentCore by default; `tracectl config set worker.runner actions` runs it as a GitHub Actions job instead, which
 runs on the project's CodeBuild runner in AWS like every other job (or on GitHub's runners until that exists).
 
 ## Data
@@ -607,8 +681,8 @@ runs on the project's CodeBuild runner in AWS like every other job (or on GitHub
 Everything is stored in SQLite. There are no JSON or YAML data files.
 
 - **Project database** (`.trace/project.db`): one per project. It holds settings plus the run record: every
-  simulation, check, build and capture, with its measurements and artifacts stored as blobs. Use `trace runs`,
-  `trace run <id>` and `trace artifact <id> <name>` to read it.
+  simulation, check, build and capture, with its measurements and artifacts stored as blobs. Use `tracectl runs`,
+  `tracectl run <id>` and `tracectl artifact <id> <name>` to read it.
 - **Central database** (`$TRACE_HOME/central.db`): one for everything. It holds the datasheet library (PDFs by
   sha256, page text, version history) and the parts database (stock, prices, lifecycle). Every project reads and
   writes the same one. Figures taken from a datasheet are cited by part number, sha256 and page.
@@ -620,15 +694,43 @@ The only YAML is what GitHub requires (workflow and action files). The only JSON
 ## Tools
 
 ```sh
-trace tools                                   # every tool
-trace tool calc.divider vin=12 vout=3.3       # run one
-trace tool kicad.drc project=hw/board.kicad_pro
-claude mcp add trace -- trace mcp             # give Claude Code all of them
+tracectl tools                                   # every tool
+tracectl tool calc.divider vin=12 vout=3.3       # run one
+tracectl tool kicad.drc project=hw/board.kicad_pro
+claude mcp add trace -- tracectl mcp             # give Claude Code all of them
 ```
 
 Tools that drive real hardware (instruments, buses, flashing a target) are refused, and hidden from MCP, unless
-`TRACE_HARDWARE=1`. Run them only on a machine wired to the bench. Configure the bench with `trace config set` for
+`TRACE_HARDWARE=1`. Run them only on a machine wired to the bench. Configure the bench with `tracectl config set` for
 `hil.instruments`, `hil.serial` and `hil.can`. Every power supply must have voltage and current limits.
+
+### Hardware in the loop without hardware
+
+`tracectl hil emulate` starts a pretend bench on your own machine, so the hardware tools can run with no instruments.
+That is how the sample project tests its board. Run it inside the project's clone:
+
+```sh
+tracectl hil emulate --write-settings --serial      # keep it running; Ctrl-C stops it
+TRACE_HARDWARE=1 trace tool hil.psu instrument=bench-psu voltage=12 current=0.05 output=on
+TRACE_HARDWARE=1 trace tool hil.dmm instrument=bench-dmm          # about 3.0 V
+```
+
+The bench copies the sample board's input stage. A 39k/13k divider and an RC filter bring the 0-12 V input down to
+the microcontroller's ADC pin, and a diode clamps that pin at 3.3 V.
+
+| Name | Pretends to be | What it shows |
+|---|---|---|
+| `bench-psu` | Rigol DP832 power supply, port 5555 | Channel 1 powers the board. Limits are 13 V and 0.1 A. |
+| `bench-dmm` | Keysight 34465A multimeter, port 5557 | The ADC pin: a quarter of the input with the supply on, 0 V with it off. It also reads the board current, and a temperature of 25 °C. |
+| `bench-scope` | Rigol DS1104Z oscilloscope, port 5556 | Channel 1 is the ADC pin, showing the last input change as it passes the filter (rise time about 0.35 ms). Channel 2 is a 1 kHz, 3.2 V test square wave. |
+| `bench-uart` (with `--serial`) | The board's firmware console | Once the input is at 4 V or more, it prints `adc raw=3722 mv=11998` every second and a temperature every 5 seconds. It answers `READ`, `ID` and `HELP`. |
+| `bench-can` | A CAN bus | python-can's `virtual` bus. It carries frames only between the CAN tools of a single trace process, and nothing on the bench answers. |
+
+The command prints the settings these names need. `--write-settings` saves them into `.trace/project.db` and keeps
+your other instruments. To use other ports, pass `--psu-port`, `--scope-port` and `--dmm-port`; 0 picks any free
+port. `--host` sets the address the instruments listen on. The serial console needs Linux or macOS and `python3`
+(standard library only). It is a pseudo-terminal, reached through a fixed link at `/tmp/trace-bench-uart-<psu port>`.
+Tests start the same bench with `startBench()` from `src/tools/hil/emulator/bench.ts`.
 
 ## Library gateway
 
@@ -648,17 +750,17 @@ called. A per-project tool behind a shared gateway would need a role that reache
 [Project isolation](#project-isolation) draws in IAM. The central database is shared by every project already, so the
 gateway's Lambda reaches nothing a worker can't.
 
-**How a call gets there.** The agent's MCP configuration does not change: `trace mcp` stays its one server. With
-`TRACE_GATEWAY_URL` set (the stack sets it on every worker), `trace mcp` forwards these calls to the gateway as MCP
+**How a call gets there.** The agent's MCP configuration does not change: `tracectl mcp` stays its one server. With
+`TRACE_GATEWAY_URL` set (the stack sets it on every worker), `tracectl mcp` forwards these calls to the gateway as MCP
 `tools/call` on `library___<tool>`, signed with SigV4 by the runtime's own credentials (the gateway's inbound auth is
 `AWS_IAM`; an MCP client's remote configuration takes static headers only, so the signing has to be done here).
 Parts calls carry the project's `parts.providers` and `parts.currency`, since the Lambda has no project. The Lambda
-(`src/library/lambda.ts`) answers in an envelope that `trace mcp` unwraps, so a forwarded call reads the same as one run
+(`src/library/lambda.ts`) answers in an envelope that `tracectl mcp` unwraps, so a forwarded call reads the same as one run
 in-process, and refuses any `file`, `path` or `library` whoever sends it.
 
 **When a call fails.** Only a failure that means the call never ran counts as unreachable: the session could not be
 opened, the connection was refused, or the gateway answered 401, 403, 429 or 503. A read then runs in the worker
-instead, and `trace mcp` says so on stderr; a write (`datasheets.add`, `.acknowledge`, `parts.fetch_datasheet`)
+instead, and `tracectl mcp` says so on stderr; a write (`datasheets.add`, `.acknowledge`, `parts.fetch_datasheet`)
 reports the error. Anything else (an MCP error, the Lambda timing out, another HTTP status) may have run behind the
 gateway, so it is answered as an error and never run a second time here. An expired session (404) is opened again and
 the call sent once more. So while the gateway is on, library-tool writes without local inputs go only through it. A
@@ -697,7 +799,7 @@ signature. Still to confirm on AWS:
 - that the gateway accepts the generated tool schema and lists `library___<tool>` as expected;
 - that `bedrock-agentcore:InvokeGateway` on the gateway ARN is all a worker role needs to call it with SigV4;
 - that the `nodejs22.x` Lambda runtime has `node:sqlite` without a flag (Node 22.13 and later);
-- how the gateway wraps the Lambda's answer (`trace mcp` unwraps the envelope only when it finds it, and passes
+- how the gateway wraps the Lambda's answer (`tracectl mcp` unwraps the envelope only when it finds it, and passes
   anything else through unchanged).
 
 ## GPU jobs: rendering and autorouting
@@ -767,7 +869,7 @@ unrouted count and KiCad's DRC. The tool writes `<name>.routed.kicad_pcb` and ne
 ## Verification and FPGA implementation
 
 The Verification agent keeps a project's requirements, test plan and evidence in the project database. The tables are
-`requirements`, `test_items`, `test_results`, `coverage_points` and `coverage_hits`, and `trace db merge` merges them
+`requirements`, `test_items`, `test_results`, `coverage_points` and `coverage_hits`, and `tracectl db merge` merges them
 like everything else. Requirements, tests and points keep the newer row; results and hits are unioned. New
 requirement ids are random (`REQ-<6 hex>`), so branches do not collide; older ids (`REQ-001`) are kept. When two
 branches still added different requirements under one id, the merge keeps both: theirs is renamed `<id>-<6 hex>`, its
@@ -813,7 +915,7 @@ The Analog/Mixed-Signal agent's tools run ngspice (built and tested against ngsp
 
 | Tool | What it does |
 | --- | --- |
-| `ams.spec` | Analog specs in the project database (table `ams_specs`): min/typ/max, unit, conditions and source per spec set and measure. `trace db merge` keeps the newer row. |
+| `ams.spec` | Analog specs in the project database (table `ams_specs`): min/typ/max, unit, conditions and source per spec set and measure. `tracectl db merge` keeps the newer row. |
 | `ams.corners` | PVT corners: `.lib` sections (tt/ff/ss from the netlist's or `electronics.models` libraries) or `.param` sets, × supply values, × temperatures. Returns a table, and per spec the worst corner (least margin). |
 | `ams.montecarlo_yield` | Monte Carlo yield against specs, with a Wilson confidence interval, and per measure a sensitivity ranking (correlation over the runs, and/or one-at-a-time ±tol runs). |
 | `ams.opamp_check` | Generated benches around a subcircuit: loop gain by Middlebrook double injection (crossover, phase and gain margin), Aol/GBW, CMRR, PSRR±, slew, output swing, input common-mode range. |
@@ -863,7 +965,7 @@ and `verify.*` read; the analog layer runs through `sim.spice`; datasheet figure
 `sim.wave_decode` gained the CAN, 1-Wire, I2S and dual/quad SPI decoders (`src/tools/sim/decode.ts`) and mark/space
 parity. `sim/wave.ts` `i2cDecode` now also says where each worst UM10204 value was seen.
 
-The table is `protocol_specs` (key: device, protocol, parameter), registered with `ensureProjectSchema`. `trace db
+The table is `protocol_specs` (key: device, protocol, parameter), registered with `ensureProjectSchema`. `tracectl db
 merge` keeps the newer row.
 
 **Verification numbers** (`test/tools/protocol`, `test/examples/sensor-node-protocol.test.ts`):
@@ -946,7 +1048,7 @@ stored as the envelope's correction and used by later 2.5D and CalculiX runs.
 | `thermal.compare` | Two time series (runs' CSVs, or inline measurements) overlaid, as Antmicro's `tpost compare-csv` does: max, RMS and end difference, and the plot. |
 | `thermal.render` | A `thermal.board` run's temperature-coloured GLB through the Blender pipeline (`runJob` kind `blender`), as stills or a turntable, with the colour bar. |
 
-`trace db merge` merges the five thermal tables by key, keeping the newer row.
+`tracectl db merge` merges the five thermal tables by key, keeping the newer row.
 
 ### The models and their limits
 
@@ -1042,7 +1144,7 @@ Write, Edit or Task. The allowlist is enforced three ways. The Agent SDK's `tool
 In GitHub Actions (`worker.runner actions`) the same three hold: claude-code-action passes `--tools`,
 `--allowedTools` and `--disallowedTools` (Bash, Write, Edit, MultiEdit, NotebookEdit, Task, WebFetch, WebSearch) to
 Claude Code, and the install action's MCP config sets `TRACE_MCP_TOOLS` (see [Delegation to the worker](#delegation-to-the-worker)).
-`trace agent list` shows each specialist, its settings and its tools.
+`tracectl agent list` shows each specialist, its settings and its tools.
 
 Each specialist's prompt (`src/agents/<kind>/index.ts`, composed by `src/agents/specialist.ts` from the prompt catalog,
 see [Managing prompts](#managing-prompts)) has these parts:
@@ -1053,7 +1155,7 @@ see [Managing prompts](#managing-prompts)) has these parts:
 - the project's `.trace/rules.md`, read from the default branch and included in full;
 - the setting `agents.<kind>.instructions`, a short text that may be empty. The rules win where the two differ.
 
-`trace agent prompt <kind>` prints the composed prompt for review, with the prompt overrides in force (`--marked` heads
+`tracectl agent prompt <kind>` prints the composed prompt for review, with the prompt overrides in force (`--marked` heads
 each part with its id, layer and version). Each specialist has its own memory actor,
 `<owner>/<repo>/<kind>`.
 
@@ -1061,7 +1163,7 @@ each part with its id, layer and version). Each specialist has its own memory ac
 
 `src/agents/router.ts` picks the specialist. It tries these in order, and the first that decides wins:
 
-1. **An explicit kind.** This is `trace remote task --agent <kind>`, the API's `task` with `agent`, or a route that
+1. **An explicit kind.** This is `tracectl remote task --agent <kind>`, the API's `task` with `agent`, or a route that
    worker-pick already made.
 2. **A label** on the issue or PR: `agent:verify`, `agent:impl`, `agent:ams`, `agent:emc`, `agent:render` or `agent:thermal`. The names
    are the settings `labels.agent_<kind>`, and onboarding creates the labels.
@@ -1099,8 +1201,8 @@ report a specialist posts starts with which specialist acted and why it was rout
 To force a specialist, do one of these:
 
 - label the issue or PR `agent:<kind>`;
-- start the task with `trace remote task OWNER/REPO --agent <kind> "…"` (or `agent` in the API's `task`);
-- for a dry run, use `trace agent route <issue|pr number|"text"> [--labels …] [--files …] [--checks …] [--model]`.
+- start the task with `tracectl remote task OWNER/REPO --agent <kind> "…"` (or `agent` in the API's `task`);
+- for a dry run, use `tracectl agent route <issue|pr number|"text"> [--labels …] [--files …] [--checks …] [--model]`.
 
 ### Delegation to the worker
 
@@ -1255,15 +1357,15 @@ A long-term record can be marked inactive: wrong, stale or no longer wanted. No 
 is not deleted, and reactivating it brings it back as it was.
 
 ```sh
-trace remote memory list OWNER/REPO [--all]          # --all also lists inactive records, with why, who and when
-trace remote memory deactivate OWNER/REPO RECORD_ID --reason "the rail is 3V3, not 5V"
-trace remote memory reactivate OWNER/REPO RECORD_ID
+tracectl remote memory list OWNER/REPO [--all]          # --all also lists inactive records, with why, who and when
+tracectl remote memory deactivate OWNER/REPO RECORD_ID --reason "the rail is 3V3, not 5V"
+tracectl remote memory reactivate OWNER/REPO RECORD_ID
 ```
 
 These are the API actions `memory.deactivate { repo, recordId, reason }`, `memory.reactivate { repo, recordId }` and
 `memory.list { repo, includeInactive }`. Each record that `memory.list` returns has `active`, and an inactive one
 also has `inactive: { reason, by, by_you, at }`, where `by` is the person's hash, not their email. On a local
-installation that has no API, `trace memory list|deactivate|reactivate` does the same with your own AWS credentials
+installation that has no API, `tracectl memory list|deactivate|reactivate` does the same with your own AWS credentials
 (`TRACE_MEMORY_ID`, with the project taken from `--repo` or the clone's origin).
 
 - **What "not considered" covers:** the recall at the start of a job and the memory block in its prompt (the
@@ -1331,15 +1433,15 @@ their prompt from a composer. Tool descriptions, which the MCP server gives the 
 the catalog.
 
 ```sh
-trace prompts list                                   # every id: editable or locked, and where its text comes from
-trace prompts get specialist.verify.workflow         # the default, each layer's text, the effective text and the locked parts after it
-trace prompts set specialist.verify.workflow --reason "our order" --file workflow.txt   # or the text on stdin
-trace prompts history specialist.verify.workflow
-trace prompts diff specialist.verify.workflow v1 v2  # or: default, effective
-trace prompts revert specialist.verify.workflow 1    # a version, or a history uid
-trace prompts reset specialist.verify.workflow       # back to the layer below
-trace prompts preview verify --marked                # the whole prompt as the model gets it, each part headed by its id
-trace remote prompts … [--repo OWNER/REPO | --installation]   # the same through the API
+tracectl prompts list                                   # every id: editable or locked, and where its text comes from
+tracectl prompts get specialist.verify.workflow         # the default, each layer's text, the effective text and the locked parts after it
+tracectl prompts set specialist.verify.workflow --reason "our order" --file workflow.txt   # or the text on stdin
+tracectl prompts history specialist.verify.workflow
+tracectl prompts diff specialist.verify.workflow v1 v2  # or: default, effective
+tracectl prompts revert specialist.verify.workflow 1    # a version, or a history uid
+tracectl prompts reset specialist.verify.workflow       # back to the layer below
+tracectl prompts preview verify --marked                # the whole prompt as the model gets it, each part headed by its id
+tracectl remote prompts … [--repo OWNER/REPO | --installation]   # the same through the API
 ```
 
 ### The catalog
@@ -1359,7 +1461,7 @@ trace remote prompts … [--repo OWNER/REPO | --installation]   # the same throu
 | `memory.block`, `memory.legacy`, `memory.more` | locked | the memory block: data, not instructions |
 | `system.append`, `system.notes` | locked | what the runtime adds to Claude Code's system prompt: never print the token; the default branch's `CLAUDE.md`, fenced |
 | `render.instructions` / `render.request`, `render.projects.all` | editable / locked | the rendering agent |
-| `cloudworker.prompt` / `cloudworker.guardrails`, `cloudworker.none` | editable / locked | the hourly cloud worker (`trace worker-prompt`), which spans projects, so only installation overrides apply to it |
+| `cloudworker.prompt` / `cloudworker.guardrails`, `cloudworker.none` | editable / locked | the hourly cloud worker (`tracectl worker-prompt`), which spans projects, so only installation overrides apply to it |
 | `fence.cut`, `mention.to`, `mention.starting` | locked | small fragments other parts use |
 
 Each editable entry names the locked entries that come after it (`then`, shown by `prompts.get`), and every prompt
@@ -1373,7 +1475,7 @@ and the MCP server, not by any text.
 
 A template has one feature: `{{name}}` is replaced by that variable's value. There are no expressions, filters,
 loops or conditionals, so nothing runs. Each entry declares its variables, typed (`text`, `number`, `list`, one item
-per line), and `trace prompts get` lists them. A template that uses an unknown variable, or a malformed placeholder,
+per line), and `tracectl prompts get` lists them. A template that uses an unknown variable, or a malformed placeholder,
 is refused with the variable's name, when it is saved and again when it is rendered. Values are substituted once and
 never read as a template, so a request, a rules file or a title that contains `{{…}}` stays text. A variable an
 override leaves out is simply not used: what must reach the model (the request, the rules, the item) is in locked
@@ -1391,16 +1493,16 @@ The most specific layer that has an override wins, per id. Jobs read the project
 branch, never from a pull request's tree, the same way they read the settings. A project change through the API is a
 commit of `.trace/project.db` on a branch of its own (`trace/prompts-<slug>-<ts>`), never the default branch, and
 `.trace/**` is a protected path, so its pull request waits for a person, as `settings.set` does. Locally,
-`trace prompts set` writes the clone's database and you commit it. `--installation` writes the installation's store
+`tracectl prompts set` writes the clone's database and you commit it. `--installation` writes the installation's store
 with your own credentials.
 
 Every change (set, reset, revert) is a row in `prompt_history`: the id, the version it made, the text, who (a
 person's 16-character hash through the API, the login locally), when and why. A reset is recorded as an override
-with no text, so it merges like any change. `trace db merge` keeps, per id, the row changed last, and the union of
+with no text, so it merges like any change. `tracectl db merge` keeps, per id, the row changed last, and the union of
 both histories; two branches can each make a v3 of one id, and their history keeps both, told apart by `uid`.
 
 An override that can't be used is reported, never used: one of an id the catalog no longer has, one of a locked id,
-or one that no longer validates (a variable its entry dropped). `prompts.list` and `trace prompts list` list them,
+or one that no longer validates (a variable its entry dropped). `prompts.list` and `tracectl prompts list` list them,
 the job's log names each one it skipped, and the layer below decides. A layer that can't be read (a step without
 `TRACE_HOME`, credentials that can't read `prompts/*`) is left out, and the log says so.
 
@@ -1428,7 +1530,7 @@ The access check comes first, as for every action: a project you are not assigne
 get the same "no access". The setting `agents.<kind>.instructions` stays as a lightweight addendum after the rules;
 overrides are the full mechanism.
 
-**Upgrading.** Workflows written by an earlier `trace onboard` do not pass `TRACE_HOME` to the `worker-prompt` and
+**Upgrading.** Workflows written by an earlier `tracectl onboard` do not pass `TRACE_HOME` to the `worker-prompt` and
 `worker-delegate` steps, so in GitHub Actions only the project's overrides apply until the workflow is updated
 (`templates/workflows/trace-worker.yml`). The runtime reads both layers either way.
 
@@ -1472,7 +1574,7 @@ chunking with S3 Vectors.
 
 | From | Into `projects/<owner>/<repo>/kb/` | `source`, `kind` |
 | --- | --- | --- |
-| Repository files matching `knowledge.include` and not `knowledge.exclude` (what `git ls-files` lists). By default: markdown, `.rst`, `.adoc`, `.txt`, HTML under `docs/`, `CLAUDE.md` and `.trace/rules.md`, without `node_modules`, build output, licences and changelogs. Firmware sources only when a glob names them (`trace config set knowledge.include '[…, "firmware/**/*.c"]'`). | `repo/<path>`, with `.txt` appended to anything that is not `.md`, `.txt`, `.html` or `.csv` (Bedrock reads those as text) | `repo`; `markdown`, `doc`, `rules`, `claude` or `source` |
+| Repository files matching `knowledge.include` and not `knowledge.exclude` (what `git ls-files` lists). By default: markdown, `.rst`, `.adoc`, `.txt`, HTML under `docs/`, `CLAUDE.md` and `.trace/rules.md`, without `node_modules`, build output, licences and changelogs. Firmware sources only when a glob names them (`tracectl config set knowledge.include '[…, "firmware/**/*.c"]'`). | `repo/<path>`, with `.txt` appended to anything that is not `.md`, `.txt`, `.html` or `.csv` (Bedrock reads those as text) | `repo`; `markdown`, `doc`, `rules`, `claude` or `source` |
 | Each KiCad project (`electronics.projects`, else every `.kicad_pro`): its title block, sheets, BOM (quantity, references, value, footprint, MPN, manufacturer, LCSC, description), parts left out, power nets, net labels and the board's nets, written by the KiCad readers trace already has. Raw KiCad files are never uploaded. `knowledge.kicad` | `summary/<path of the .kicad_pro>.md` | `summary`, `kicad` |
 | The current datasheet, in the shared library, of every MPN in those BOMs: one object per page of its text, at most `knowledge.max_datasheet_pages`. `knowledge.datasheets` | `datasheets/<part>/<first 16 of its sha256>/p<page>.txt` | `datasheet`, `datasheet` |
 
@@ -1483,28 +1585,28 @@ synced from), `dir1`…`dir6` (the first 16 hex digits of the sha256 of each enc
 `part`, `mpn`, `sha256` and `page`. `path` and `part` are embedded with each chunk; the rest is for filtering and
 citing.
 
-**How sync works** (`src/tools/kb/sync.ts`). `trace kb sync` collects the above from the checkout, then:
+**How sync works** (`src/tools/kb/sync.ts`). `tracectl kb sync` collects the above from the checkout, then:
 
 1. lists the prefix (ListObjectsV2) and compares each object's content hash: a document's is the sha256 of its bytes,
    kept in the object's metadata (`x-amz-meta-trace-sha256`); a sidecar's covers its document and attributes but not
    the commit, so an unchanged document is not uploaded again on every push. The project database's `kb_objects`
-   table (`s3_key`, `path`, `hash`, `etag`, `uploaded_at`; `trace db merge` keeps the newer row per key) saves the
+   table (`s3_key`, `path`, `hash`, `etag`, `uploaded_at`; `tracectl db merge` keeps the newer row per key) saves the
    HeadObject calls when its row and the listed ETag agree; without rows (a fresh checkout) HeadObject decides;
 2. uploads what changed, deletes what is no longer wanted (DeleteObjects);
 3. starts an ingestion job (StartIngestionJob) when anything changed, when the data source has never been ingested,
    when its last job failed or was stopped or began before the newest upload `kb_objects` records, or with `--force`. One job runs at a time per data source, so a running one is waited for first. It then polls
    GetIngestionJob until the job is complete, failed or stopped, or `--wait` minutes (15) pass, and reports the job's
    statistics (scanned, indexed, deleted, failed) and failure reasons. A job that outlives the wait carries on;
-   `trace kb status` shows it.
+   `tracectl kb status` shows it.
 
 The sync refuses a checkout that is not the default branch (`--allow-branch` overrides it): the knowledge base holds
 the default branch. It runs:
 
 - **on every push to the default branch**, as the `kb-sync` job of `trace-worker.yml`, with the repository's own GitHub
   OIDC role (`TRACE_AWS_ROLE`, `TRACE_KB_ID`, `TRACE_KB_DATA_SOURCE_ID`, `TRACE_HOME`), whatever `worker.runner` says.
-  Repositories onboarded before this need `trace onboard --refresh` to get the job;
-- **by hand**: `trace kb sync [--force] [--dry-run] [--wait MINUTES]` in a clone, with your own credentials and those
-  variables, or `trace remote kb sync OWNER/REPO` (write access), which runs the `kb.sync` tool on the project's own
+  Repositories onboarded before this need `tracectl onboard --refresh` to get the job;
+- **by hand**: `tracectl kb sync [--force] [--dry-run] [--wait MINUTES]` in a clone, with your own credentials and those
+  variables, or `tracectl remote kb sync OWNER/REPO` (write access), which runs the `kb.sync` tool on the project's own
   worker runtime, on its clone of the default branch;
 - **from the worker**: the `kb.sync` tool, for repairs. No specialist has it.
 
@@ -1515,8 +1617,8 @@ They are offered only when `TRACE_KB_ID` is set. Every specialist has `kb.search
 an agent is given can mark or change the knowledge base, apart from the worker's `kb.sync` of the default branch.
 S3 Vectors has no `startsWith` filter, so `path_prefix` is a folder in whole segments (`docs/power`) or one file's exact
 path: an equals on that folder's `dir<n>` hash, or on `path`; folders deeper than six levels are filtered on their
-first six and narrowed afterwards. From the command line: `trace kb search "query" [--source S] [--kind K] [--path P]`
-and `trace kb status` locally, `trace remote kb search OWNER/REPO "query"` through the API (read access). The API's
+first six and narrowed afterwards. From the command line: `tracectl kb search "query" [--source S] [--kind K] [--path P]`
+and `tracectl kb status` locally, `tracectl remote kb search OWNER/REPO "query"` through the API (read access). The API's
 `kb.search` runs Retrieve itself, on the knowledge base of the project asked for (from `TRACE_PROJECT_KBS`), after the
 access check; a project without a knowledge base in the installation gets the same 403 as one you are not assigned to.
 
@@ -1627,13 +1729,13 @@ outside AgentCore, either set `OTEL_SDK_DISABLED=true` or give it the variables 
 | --- | --- |
 | `src/core` | Settings, SQLite stores, the tool registry, the MCP server, onboarding, access control, the Python bridge client |
 | `src/infra` | The CDK stack (Cognito, the central bucket, the image builds, the API runtime, the AWS Batch GPU queue in `gpu.ts`) and, per project, `project.ts` (its worker runtime, roles, token secret and GPU job definition) |
-| `src/installer` | `trace install`: the local web installer |
-| `src/prompts` | The prompt catalog (every prompt part's id, default, variables and whether it is locked), the `{{var}}` templates, the layers (installation and project overrides) and their stores, and `trace prompts` |
+| `src/installer` | `tracectl install`: the local web installer; `tracectl update-installation` (`update.ts`): the self-update job of trace's own ci workflow |
+| `src/prompts` | The prompt catalog (every prompt part's id, default, variables and whether it is locked), the `{{var}}` templates, the layers (installation and project overrides) and their stores, and `tracectl prompts` |
 | `src/agents` | The specialists (`verify`, `impl`, `ams`, `emc`, `render`, each in its own folder; `index.ts` lists them), the router, the retained worker's prompt (`worker`), and the runtime (`runtime`: server, jobs, delegation, memory, observability) |
 | `src/api`, `agent/Dockerfile` | The people-facing API, and the image AgentCore runs |
-| `src/login` | `trace login`, `trace remote …`, `trace users …` |
+| `src/login` | `tracectl login`, `tracectl remote …`, `tracectl users …` |
 | `src/harness` | The loop's logic, bundled into `harness/dist` for the GitHub actions in `harness/actions` |
-| `src/infra/gateway.ts`, `src/core/gateway.ts`, `src/library` | The library gateway: its CDK resources, which calls `trace mcp` forwards and how (SigV4, fallback), and the Lambda behind it |
+| `src/infra/gateway.ts`, `src/core/gateway.ts`, `src/library` | The library gateway: its CDK resources, which calls `tracectl mcp` forwards and how (SigV4, fallback), and the Lambda behind it |
 | `src/infra/knowledge.ts`, `src/tools/kb` | Each project's knowledge base: its CDK resources, and what goes in it, the sync, search and the kb tools |
 | `src/tools/calc`, `src/tools/kicad`, `src/tools/pcb`, `src/tools/sim`, `src/tools/protocol`, `src/tools/datasheets`, `src/tools/parts`, `src/tools/hil`, `src/tools/firmware`, `src/tools/runs` | The tools |
 | `src/gpu`, `agent/Dockerfile.gpu` | GPU jobs: local or AWS Batch (`runJob`, `runBatch`), the in-container runner, and its image |

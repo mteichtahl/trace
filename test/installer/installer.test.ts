@@ -30,6 +30,12 @@ const calls = vi.hoisted(() => ({
   connection: [] as { prefix: string; given?: string; deployed: Record<string, string> | null }[],
   /** repository variables the installer removed (repo:NAME), and which ones existed to remove */
   deleted: [] as string[], existingVars: new Set<string>(),
+  /** what was written to S3 (the installation record): bucket, key and text */
+  s3: [] as { Bucket: string; Key: string; Body: string }[],
+}))
+vi.mock('@aws-sdk/client-s3', async (orig) => ({
+  ...(await orig<typeof import('@aws-sdk/client-s3')>()),
+  S3Client: class { async send(c: { input: { Bucket: string; Key: string; Body: string } }) { calls.s3.push(c.input); return {} } },
 }))
 
 vi.mock('../../src/installer/aws.js', async (orig) => { const real = await orig<typeof import('../../src/installer/aws.js')>(); return {
@@ -104,6 +110,7 @@ vi.mock('../../src/installer/github.js', async (orig) => ({
   deleteVariable: async (_t: string, repo: string, name: string) => { calls.deleted.push(`${repo}:${name}`); return calls.existingVars.has(`${repo}:${name}`) },
   // the token can configure every repository unless a test says otherwise (only reached without a `self` hook)
   canConfigure: async () => ({ ok: true, reason: '' }),
+  repositoryDefaultBranch: async () => 'main',
   checkToken: async (token: string) => {
     const t = calls.tokens.get(token) ?? { login: 'trace-agent', repos: [] }
     return { login: t.login, name: null, kind: 'fine-grained', scopes: [], repos: t.repos.map((fullName) => ({ fullName, private: true, admin: false, push: true, defaultBranch: 'main' })), warnings: [] }
@@ -140,6 +147,7 @@ const OUTPUTS: Record<string, string> = {
   ApiRuntimeArn: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/trace_api-abc',
   UserPoolId: 'us-east-1_abc', UserPoolClientId: 'client123', CognitoDomain: 'https://trace-123456789012.auth.us-east-1.amazoncognito.com',
   WebUrl: 'https://d111111abcdef8.cloudfront.net', WebDistributionId: 'E1ABCDEF', WebClientId: 'web123',
+  CentralBucket: 'trace-central-bucket', SelfUpdateRoleArn: 'arn:aws:iam::123456789012:role/trace-self-update',
 }
 // each project's own outputs, named by its hash
 for (const repo of ['mteichtahl/board', 'mteichtahl/fw']) {
@@ -477,11 +485,46 @@ describe('the local server', () => {
     const env = await call('/api/env', { key })
     expect(env.status).toBe(200)
     expect(JSON.parse(env.body)).toHaveProperty('profiles')
-    expect((await call('/api/plan', { method: 'POST', key, body: '{"answers":{}}' })).status).toBe(400)
+    // no account yet (the checks have not passed): a plain answer, not a schema error
+    const early = await call('/api/plan', { method: 'POST', key, body: '{"answers":{}}' })
+    expect(early.status).toBe(409)
+    expect(JSON.parse(early.body).error).toMatch(/checks have to pass first/)
+    expect((await call('/api/plan', { method: 'POST', key, body: '{"answers":[]}' })).status).toBe(400)
     expect((await call('/api/plan', { method: 'POST', key, body: 'x', type: 'text/plain' })).status).toBe(415)
     const planned = await call('/api/plan', { method: 'POST', key, body: JSON.stringify({ answers: ANSWERS }) })
     expect(JSON.parse(planned.body).steps).toHaveLength(15)
     expect(JSON.parse(planned.body).timeline.join(' ')).toMatch(/about 15 minutes of CloudFormation/)
+  })
+
+  it('streams what each check is doing, then the result, when the page asks for progress', async () => {
+    const i = createInstaller({
+      uiScript: '', traceRepository: () => null,
+      preflight: async (_in, t, onProgress) => {
+        if (t.startsWith('bad')) throw new Error('GitHub refused the token')
+        onProgress?.({ id: 'sts', label: 'Confirming which AWS account the credentials belong to', state: 'running' })
+        onProgress?.({ id: 'sts', label: 'Confirming which AWS account the credentials belong to', state: 'done' })
+        return { checks: [], facts: { account: '123456789012' }, token: null, repos: [], ok: true }
+      },
+    })
+    await new Promise<void>((r) => i.server.listen(0, '127.0.0.1', () => r()))
+    const port = (i.server.address() as AddressInfo).port
+    const post = (body: unknown): Promise<string> => new Promise((resolveP, reject) => {
+      const req = request({ host: '127.0.0.1', port, path: '/api/preflight', method: 'POST', headers: { host: `localhost:${port}`, 'x-trace-key': i.key, 'content-type': 'application/json', accept: 'application/x-ndjson' } },
+        (res) => { let b = ''; res.on('data', (d: Buffer) => { b += d.toString() }); res.on('end', () => resolveP(b)) })
+      req.on('error', reject)
+      req.end(JSON.stringify(body))
+    })
+    try {
+      const lines = (await post({ aws: { mode: 'keys' }, secrets: { awsAccessKeyId: 'AKIA', awsSecretAccessKey: 'x' }, token: TOKEN })).trim().split('\n').map((l) => JSON.parse(l) as { type: string; id?: string; state?: string; result?: { facts: { account: string } } })
+      expect(lines.filter((l) => l.type === 'progress').map((l) => `${l.id}:${l.state}`)).toEqual(['credentials:running', 'credentials:done', 'sts:running', 'sts:done'])
+      expect(lines.at(-1)?.result?.facts.account).toBe('123456789012')
+      // a check that can't run at all: said in plain words, as the stream's last line
+      const bad = (await post({ aws: { mode: 'keys' }, secrets: { awsAccessKeyId: 'AKIA', awsSecretAccessKey: 'x' }, token: `bad${TOKEN}` })).trim().split('\n').map((l) => JSON.parse(l) as { type: string; error?: string })
+      expect(bad.at(-1)).toMatchObject({ type: 'error' })
+      expect(bad.at(-1)?.error).toBe('GitHub refused the token')
+    } finally {
+      i.server.close()
+    }
   })
 
   it("says on the GitHub check which repository trace came from and whether the token can configure it", async () => {
@@ -680,8 +723,8 @@ describe('the library gateway', () => {
     })
     expect(ok).toBe(true)
     expect(secretWrites().map((x) => x.SecretId)).not.toContain(KEYS_ARN)
-    expect(events.find((e) => e.step?.id === 'integrations' && e.step.status === 'skipped')?.step?.detail).toMatch(/trace integrations set <name>/)
-    expect(events.at(-1)?.summary?.join(' ')).toMatch(/trace integrations set nexar/)
+    expect(events.find((e) => e.step?.id === 'integrations' && e.step.status === 'skipped')?.step?.detail).toMatch(/tracectl integrations set <name>/)
+    expect(events.at(-1)?.summary?.join(' ')).toMatch(/tracectl integrations set nexar/)
   })
 })
 
@@ -706,7 +749,7 @@ describe('the light install', () => {
     expect(infra[0]).toMatchObject({ account: '123456789012', region: 'us-east-1', adminEmail: 'marc@example.com', model: 'us.anthropic.claude-sonnet-4-6', repositories: [], gpu: { enabled: false } })
     expect(r.events.filter((e) => e.type === 'log' && e.line?.startsWith('derived:')).map((e) => e.line)).toEqual(expect.arrayContaining(['derived: account 123456789012 (the credentials\')', 'derived: first administrator marc@example.com (the token\'s primary email)']))
     expect(r.events.find((e) => e.step?.id === 'repos' && e.step.status === 'skipped')).toBeDefined()
-    expect(r.events.at(-1)?.summary?.join(' ')).toMatch(/No repositories yet: run `trace install` again/)
+    expect(r.events.at(-1)?.summary?.join(' ')).toMatch(/No repositories yet: run `tracectl install` again/)
     // the decision from the quota is not saved as an answer: the next run decides again
     expect(AnswersSchema.parse(savedAnswers().answers).agents.gpuEnabled).toBeNull()
     // and without an email visible to the token, it stops before anything is created and says what to give
@@ -856,7 +899,7 @@ describe('the CodeBuild runners', () => {
 
   it('takes the runner settings from the answers, and plans the connection after the deploy, then the runners', () => {
     const a = AnswersSchema.parse(ANSWERS)
-    expect(a.runners).toEqual({ auth: 'auto', token: 'agent', buildTrace: true, traceRepository: '', ciRepositories: [], connectionArn: '', computeType: null, privileged: null })
+    expect(a.runners).toEqual({ auth: 'auto', token: 'agent', buildTrace: true, traceRepository: '', traceBranch: '', selfUpdate: true, ciRepositories: [], connectionArn: '', computeType: null, privileged: null })
     // nothing is needed up front: no connection ARN (the stack creates one), ready by default
     const props = InfraPropsSchema.parse(infraInput(a))
     expect(props.runners).toEqual({ auth: 'connection', connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false, ciPrivileged: false })
@@ -1078,7 +1121,93 @@ describe('no console step on the default path', () => {
     })
     expect(ok).toBe(true)
     expect(events.find((e) => e.step?.id === 'release' && e.step.status === 'failed')).toBeDefined()
-    expect(events.at(-1)?.summary?.join('\n')).toMatch(/Publishing trace's images is not set up: cdk deploy TraceRelease exited 1.*trace release setup/)
+    expect(events.at(-1)?.summary?.join('\n')).toMatch(/Publishing trace's images is not set up: cdk deploy TraceRelease exited 1.*tracectl release setup/)
+  })
+})
+
+describe('the sample project', () => {
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const SAMPLE = 'trace-agent/trace-sample'
+  type Ev = { type: string; line?: string; summary?: string[]; step?: { id: string; status: string; detail: string } }
+  const outputsFor = (repos: string[]): Record<string, string> => {
+    const out = { ...OUTPUTS }
+    for (const repo of repos) {
+      const o = projectOutputs(repo)
+      Object.assign(out, { [o.runtimeArn]: `arn:rt/${repo}`, [o.roleArn]: `arn:role/${repo}`, [o.secretArn]: `arn:secret/${repo}`, [o.memoryId]: `m-${projectHash(repo)}`, [o.runnerProject]: `trace-ci-${projectHash(repo)}` })
+    }
+    return out
+  }
+  const run = async (a: unknown, hooks: Parameters<typeof apply>[3] = {}): Promise<{ ok: boolean; events: Ev[] }> => {
+    OUTPUTS.TraceHome = join(mkdtempSync(join(tmpdir(), 'trace-central-')), 'home')
+    const events: Ev[] = []
+    const ok = await apply(AnswersSchema.parse(a), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), { cdk: async () => 0, outputs: async () => outputsFor(['mteichtahl/board', 'mteichtahl/fw', SAMPLE]), ...quiet, ...hooks })
+    return { ok, events }
+  }
+
+  it('is off by default, and when on is one more new repository, named after the token\'s account', async () => {
+    const { sampleRepo, withSample } = await import('../../src/installer/sample.js')
+    expect(AnswersSchema.parse(ANSWERS).sample).toEqual({ enabled: false, repo: '', private: true, tour: true })
+    const only = AnswersSchema.parse({ ...ANSWERS, projects: [], people: [], github: { login: 'trace-agent' }, sample: { enabled: true, private: false } })
+    expect(sampleRepo(only)).toBe(SAMPLE)
+    expect(withSample(only).projects).toEqual([{ repo: SAMPLE, branch: 'main', onboard: true, applySettings: true, memoryEventExpiryDays: null, generation: 0, create: { template: 'sample', private: false } }])
+    expect(sampleRepo(AnswersSchema.parse({ ...ANSWERS, sample: { enabled: true, repo: 'acme/demo' } }))).toBe('acme/demo')
+    // the login may still be to derive: the answers are valid, and the name waits for it
+    expect(AnswersSchema.safeParse({ ...ANSWERS, sample: { enabled: true } }).success).toBe(true)
+    // people may be assigned to it; listed already (an earlier run created it) it is not doubled
+    expect(AnswersSchema.safeParse({ ...only, people: [{ email: 'dev@example.com', projects: [SAMPLE] }] }).success).toBe(true)
+    const again = AnswersSchema.parse({ ...only, projects: [{ repo: SAMPLE, branch: 'trunk' }] })
+    expect(withSample(again).projects.map((p) => `${p.repo}@${p.branch}:${p.create ? 'new' : 'existing'}`)).toEqual([`${SAMPLE}@trunk:existing`])
+    expect(AnswersSchema.safeParse({ ...ANSWERS, sample: { enabled: true, repo: 'not a repo' } }).success).toBe(false)
+  })
+
+  it('plans it with the new repositories, and its tour last', () => {
+    const a = AnswersSchema.parse({ ...ANSWERS, github: { login: 'trace-agent' }, sample: { enabled: true } })
+    const steps = plan(a)
+    expect(steps.at(-1)?.id).toBe('tour')
+    expect(steps.find((x) => x.id === 'github')?.detail).toContain(`create ${SAMPLE} first`)
+    expect(steps.find((x) => x.id === 'onboard')?.detail).toContain(`create ${SAMPLE} (sample)`)
+    expect(steps.find((x) => x.id === 'tour')?.detail).toMatch(/open \d+ tasks in trace-agent\/trace-sample, each labelled for the agent that takes it/)
+    expect(plan(AnswersSchema.parse({ ...ANSWERS, github: { login: 'x' }, sample: { enabled: true, tour: false } })).map((x) => x.id)).not.toContain('tour')
+    expect(plan(AnswersSchema.parse(ANSWERS)).map((x) => x.id)).not.toContain('tour')
+    expect(plan(AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: false }, github: { login: 'x' }, sample: { enabled: true } })).find((x) => x.id === 'tour')?.detail).toMatch(/left out because GPU jobs are off/)
+  })
+
+  it('creates it before the deploy, onboards it from the sample template, and opens the tour after the GPU image', async () => {
+    const order: string[] = []
+    const onboarded: { repo: string; create: unknown }[] = []
+    const r = await run({ ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: true }, github: { login: 'trace-agent' }, sample: { enabled: true }, people: [{ email: 'dev@example.com', projects: [SAMPLE] }] }, {
+      createRepo: async (_t, slug, o) => { order.push(`create ${slug} ${o.private ? 'private' : 'public'}`); return { fullName: slug, defaultBranch: 'main', created: true } },
+      cdk: async (args) => { if (args[0] === 'deploy') order.push('deploy'); return 0 },
+      outputs: async () => ({ ...outputsFor(['mteichtahl/board', 'mteichtahl/fw', SAMPLE]), GpuImageBuild: 'trace-gpu-image:1', GpuImageUri: 'x/trace-gpu:abc' }),
+      onboard: async (repo, o) => { onboarded.push({ repo, create: o.create ?? null }); return { repo, state: o.create ? 'created' : 'opened', pr: o.create ? null : `https://github.com/${repo}/pull/1`, settings: [], notes: o.create ? ['19 requirements'] : [] } },
+      gpuImage: async () => { order.push('gpu'); return { ok: true, detail: 'built' } },
+      tour: async (_t, repo, o) => { order.push(`tour ${repo} gpu=${o.gpu}`); return { url: `https://github.com/${repo}/issues`, opened: 20, existing: 0, skipped: [], lines: [] } },
+    })
+    expect(r.ok).toBe(true)
+    expect(order).toEqual([`create ${SAMPLE} private`, 'deploy', 'gpu', `tour ${SAMPLE} gpu=true`])
+    expect(onboarded.find((x) => x.repo === SAMPLE)?.create).toEqual({ template: 'sample', private: true })
+    expect(calls.variables).toContain(`${SAMPLE}:TRACE_AGENT_RUNTIME_ARN`)
+    expect(r.events.some((e) => e.type === 'log' && e.line === `${SAMPLE}: 19 requirements`)).toBe(true)
+    const summary = r.events.at(-1)?.summary?.join('\n') ?? ''
+    expect(summary).toMatch(/Created the sample project, trace-agent\/trace-sample, under trace/)
+    expect(summary).toMatch(/sample's tour has started: every agent and every simulation has a task in https:\/\/github.com\/trace-agent\/trace-sample\/issues/)
+    // once onboarded it is saved as an existing repository, so the next run does not create it again
+    const saved = AnswersSchema.parse(savedAnswers().answers)
+    expect(saved.projects.find((p) => p.repo === SAMPLE)?.create).toBeNull()
+    expect(saved.sample).toMatchObject({ enabled: true, tour: true })
+  })
+
+  it('names the sample after the login derived at install, and reports a tour that could not start without failing the install', async () => {
+    const created: string[] = []
+    const r = await run({ ...ANSWERS, projects: [], people: [], agents: { ...ANSWERS.agents, gpuEnabled: false }, sample: { enabled: true } }, {
+      facts: async () => ({ account: '123456789012', login: 'trace-agent', email: 'marc@example.com', models: [{ id: 'us.anthropic.claude-sonnet-4-6', name: 'S' }], gpuQuota: 0 }),
+      createRepo: async (_t, slug) => { created.push(slug); return { fullName: slug, defaultBranch: 'main', created: true } },
+      tour: async () => { throw new Error('POST /repos/trace-agent/trace-sample/issues: 403 Resource not accessible') },
+    })
+    expect(r.ok).toBe(true)
+    expect(created).toEqual([SAMPLE])
+    expect(r.events.find((e) => e.step?.id === 'tour' && e.step.status === 'failed')?.step?.detail).toMatch(/403/)
+    expect(r.events.at(-1)?.summary?.join('\n')).toMatch(/The sample's tour did not start: .*run the installer again to open its tasks/)
   })
 })
 
@@ -1121,14 +1250,14 @@ describe("trace's own repository", () => {
   it('says so in the plan, in plain words; adds other build-only repositories; refuses a project or a repeat among them', () => {
     const a = AnswersSchema.parse({ ...ANSWERS, runners: { auth: 'connection', traceRepository: TRACE } })
     const deploy = plan(a).find((x) => x.id === 'deploy')?.detail ?? ''
-    expect(deploy).toMatch(/ Build trace's own repository on AWS too \(mteichtahl\/trace\): a build runner for it alone, nothing else\.$/)
-    expect(plan(a).find((x) => x.id === 'repos')?.detail).toMatch(/; TRACE_CODEBUILD_PROJECT alone in mteichtahl\/trace\./)
+    expect(deploy).toMatch(/ Build trace's own repository on AWS too \(mteichtahl\/trace\): a build runner for it alone, nothing else\. Keep this installation up to date: /)
+    expect(plan(a).find((x) => x.id === 'repos')?.detail).toMatch(/; TRACE_CODEBUILD_PROJECT alone in mteichtahl\/trace; TRACE_UPDATE_ROLE, TRACE_AWS_REGION and TRACE_STACK in mteichtahl\/trace \(its ci workflow keeps this installation up to date\)\./)
     expect(plan(a).find((x) => x.id === 'connection')?.detail).toMatch(/Give that app access to mteichtahl\/board, mteichtahl\/fw, mteichtahl\/trace$/)
     const none = AnswersSchema.parse({ ...ANSWERS, runners: { buildTrace: false, traceRepository: TRACE } })
     expect(plan(none).find((x) => x.id === 'deploy')?.detail).not.toMatch(/trace's own repository/)
     const more = AnswersSchema.parse({ ...ANSWERS, runners: { traceRepository: TRACE, ciRepositories: ['mteichtahl/tools', 'MTEICHTAHL/trace'] } })
     expect(buildRepositories(more)).toEqual([TRACE, 'mteichtahl/tools'])
-    expect(plan(more).find((x) => x.id === 'deploy')?.detail).toMatch(/Build mteichtahl\/tools on AWS too, without agents: a build runner each, nothing else\.$/)
+    expect(plan(more).find((x) => x.id === 'deploy')?.detail).toMatch(/Build mteichtahl\/tools on AWS too, without agents: a build runner each, nothing else\. Keep/)
     expect(AnswersSchema.safeParse({ ...ANSWERS, runners: { ciRepositories: ['mteichtahl/board'] } }).success).toBe(false)
     expect(AnswersSchema.safeParse({ ...ANSWERS, runners: { ciRepositories: ['a/b', 'A/b'] } }).success).toBe(false)
     expect(AnswersSchema.safeParse({ ...ANSWERS, runners: { traceRepository: 'not a repo' } }).success).toBe(false)
@@ -1146,7 +1275,8 @@ describe("trace's own repository", () => {
     expect(ok).toBe(true)
     expect(infra[0]?.ciRepositories).toEqual([TRACE])
     expect(calls.values.get(`${TRACE}:TRACE_CODEBUILD_PROJECT`)).toBe(`trace-ci-${projectHash(TRACE)}`)
-    expect([...calls.values.keys()].filter((k) => k.startsWith(`${TRACE}:`))).toEqual([`${TRACE}:TRACE_CODEBUILD_PROJECT`])
+    // its runner, and (keeping the installation up to date, on by default) the self-update job's variables: nothing of a project
+    expect([...calls.values.keys()].filter((k) => k.startsWith(`${TRACE}:`)).sort()).toEqual([`${TRACE}:TRACE_AWS_REGION`, `${TRACE}:TRACE_CODEBUILD_PROJECT`, `${TRACE}:TRACE_STACK`, `${TRACE}:TRACE_UPDATE_ROLE`])
     expect(calls.ghSecrets.filter((k) => k.startsWith(`${TRACE}:`))).toEqual([])
     expect(events.filter((e) => e.type === 'log').map((e) => e.line)).toContain(`Building trace's own repository (${TRACE}) on AWS too: a build runner for it alone.`)
     // saved with the answers, so the page shows it next time
@@ -1163,7 +1293,8 @@ describe("trace's own repository", () => {
     expect(off).toBe(true)
     expect(infra[0]?.ciRepositories).toBeUndefined()
     expect(calls.values.has(`${TRACE}:TRACE_CODEBUILD_PROJECT`)).toBe(false)
-    expect(calls.deleted).toEqual([`${TRACE}:TRACE_CODEBUILD_PROJECT`])
+    // and the self-update role goes with it (selfUpdate needs trace's own repository built), so its variable goes too
+    expect(calls.deleted.sort()).toEqual([`${TRACE}:TRACE_CODEBUILD_PROJECT`, `${TRACE}:TRACE_UPDATE_ROLE`])
   })
 
   it('reads which repositories an earlier run built from its saved answers', () => {
@@ -1172,3 +1303,84 @@ describe("trace's own repository", () => {
     expect(earlierRepositories({ ...ANSWERS, runners: { traceRepository: TRACE } })).toEqual(['mteichtahl/board', 'mteichtahl/fw', TRACE])
   })
 })
+
+describe('keeping the installation up to date', () => {
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const TRACE = 'mteichtahl/trace'
+  const yes = async () => ({ ok: true, reason: '' })
+  const ADMIN = ['ghp', 'ADMINFAKEFAKEFAKE0123456789'].join('_')
+  const OWN = ['github', 'pat', '22OWNFAKEFAKE0123456789'].join('_')
+  const KEY = 'secret-key-value-1234'
+
+  it('saves exactly the settings it deployed with, and never a token or key, in installation/props.json', async () => {
+    calls.values.clear()
+    calls.tokens.set(OWN, { login: 'board-bot', repos: ['mteichtahl/board'] })
+    const saved: { bucket: string; key: string; text: string }[] = []
+    const infra: string[] = []
+    const ok = await apply(AnswersSchema.parse(ANSWERS), SecretsSchema.parse({
+      githubToken: TOKEN, githubAdminToken: ADMIN, projectTokens: { 'mteichtahl/board': OWN }, awsAccessKeyId: 'AKIAEXAMPLE', awsSecretAccessKey: KEY,
+      libraryKeys: { MOUSER_API_KEY: 'mouser-key-0123456789' }, integrations: { nexar: { NEXAR_CLIENT_ID: 'nexar-id-0123456789', NEXAR_CLIENT_SECRET: 'nexar-secret-0123456789' } },
+    }), () => undefined, {
+      ...quiet, self: { source: () => TRACE, canConfigure: yes, branch: async () => 'trunk' },
+      cdk: async (args, env) => { if (args[0] === 'deploy') infra.push(env.TRACE_INFRA ?? ''); return 0 }, outputs: async () => OUTPUTS,
+      saveRecord: async (_c, _r, bucket, key, text) => { saved.push({ bucket, key, text }) },
+      integrations: { set: async (name) => `trace/integrations/${name}` }, checkIntegration: async () => ({ ok: true, detail: 'accepted' }),
+    })
+    expect(ok).toBe(true)
+    expect(saved).toHaveLength(1)
+    expect(saved[0]?.bucket).toBe('trace-central-bucket')
+    expect(saved[0]?.key).toBe('installation/props.json')
+    const record = JSON.parse(saved[0]?.text ?? '{}') as { props: Record<string, unknown>; stack: string; region: string; runnerAuth: string; traceRepository: string; traceBranch: string; connectionArn: string }
+    // exactly what the deploy was given
+    expect(record.props).toEqual(JSON.parse(infra.at(-1) ?? '{}'))
+    expect(record).toMatchObject({ stack: 'TraceStack', region: 'us-east-1', runnerAuth: 'auto', traceRepository: TRACE, traceBranch: 'trunk', connectionArn: '' })
+    expect(record.props.selfUpdate).toEqual({ repository: TRACE, branch: 'trunk' })
+    for (const v of [TOKEN, ADMIN, OWN, KEY, 'AKIAEXAMPLE', 'mouser-key-0123456789', 'nexar-id-0123456789', 'nexar-secret-0123456789']) expect(saved[0]?.text).not.toContain(v)
+    // the repository's variables for the update job
+    expect(calls.values.get(`${TRACE}:TRACE_UPDATE_ROLE`)).toBe(OUTPUTS.SelfUpdateRoleArn)
+    expect(calls.values.get(`${TRACE}:TRACE_AWS_REGION`)).toBe('us-east-1')
+    expect(calls.values.get(`${TRACE}:TRACE_STACK`)).toBe('TraceStack')
+  })
+
+  it('refuses to save a record a secret would be in', async () => {
+    const { checkNoSecrets, installationRecord } = await import('../../src/installer/record.js')
+    const s = SecretsSchema.parse({ githubToken: TOKEN })
+    const r = installationRecord({ stack: 'TraceStack', region: 'us-east-1', props: infraInput(AnswersSchema.parse(ANSWERS)), runnerAuth: 'auto', connectionArn: '', traceRepository: '', traceBranch: '' })
+    expect(() => checkNoSecrets(JSON.stringify(r), s)).not.toThrow()
+    expect(() => checkNoSecrets(JSON.stringify({ ...r, props: { ...r.props, model: TOKEN } }), s)).toThrow(/token or key/)
+    expect(() => checkNoSecrets(JSON.stringify({ ...r, note: ['ghp', 'abcdefghijklmnop'].join('_') }), s)).toThrow(/token or key/)
+  })
+
+  it('asks the stack for the role only while trace\'s own repository is built and the option is on, and plans it in plain words', () => {
+    const on = AnswersSchema.parse({ ...ANSWERS, runners: { traceRepository: TRACE, traceBranch: 'main' } })
+    expect(infraInput(on).selfUpdate).toEqual({ repository: TRACE, branch: 'main' })
+    expect(plan(on).find((x) => x.id === 'deploy')?.detail).toMatch(/Keep this installation up to date: when mteichtahl\/trace's main branch changes and its tests pass, its ci workflow deploys this stack again .* only that workflow on main can use, so whoever can merge to main there can change this installation\.$/)
+    const optedOut = AnswersSchema.parse({ ...ANSWERS, runners: { traceRepository: TRACE, selfUpdate: false } })
+    expect(infraInput(optedOut).selfUpdate).toBeUndefined()
+    expect(plan(optedOut).find((x) => x.id === 'deploy')?.detail).not.toMatch(/up to date/)
+    expect(plan(optedOut).find((x) => x.id === 'repos')?.detail).not.toMatch(/TRACE_UPDATE_ROLE/)
+    const notBuilt = AnswersSchema.parse({ ...ANSWERS, runners: { buildTrace: false, traceRepository: TRACE } })
+    expect(infraInput(notBuilt).selfUpdate).toBeUndefined()
+  })
+
+  it('opted out: no role asked for, no variables set, and the earlier TRACE_UPDATE_ROLE removed', async () => {
+    calls.values.clear()
+    calls.deleted.length = 0
+    calls.existingVars.add(`${TRACE}:TRACE_UPDATE_ROLE`)
+    const infra: Record<string, unknown>[] = []
+    const events: { type: string; line?: string }[] = []
+    const ok = await apply(AnswersSchema.parse({ ...ANSWERS, runners: { selfUpdate: false } }), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
+      ...quiet, self: { source: () => TRACE, canConfigure: yes },
+      cdk: async (args, env) => { if (args[0] === 'deploy') infra.push(JSON.parse(env.TRACE_INFRA ?? '{}')); return 0 }, outputs: async () => OUTPUTS,
+      saveRecord: async () => undefined,
+    })
+    calls.existingVars.delete(`${TRACE}:TRACE_UPDATE_ROLE`)
+    expect(ok).toBe(true)
+    expect(infra[0]?.selfUpdate).toBeUndefined()
+    expect(infra[0]?.ciRepositories).toEqual([TRACE])
+    expect([...calls.values.keys()].filter((k) => k.startsWith(`${TRACE}:`))).toEqual([`${TRACE}:TRACE_CODEBUILD_PROJECT`])
+    expect(calls.deleted).toContain(`${TRACE}:TRACE_UPDATE_ROLE`)
+    expect(events.filter((e) => e.type === 'log').map((e) => e.line)).toContain(`${TRACE}: TRACE_UPDATE_ROLE removed (this installation no longer updates itself from it)`)
+  })
+})
+

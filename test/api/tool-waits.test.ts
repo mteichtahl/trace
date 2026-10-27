@@ -75,7 +75,7 @@ describe('tools.waits and tools.check_now', () => {
   })
 })
 
-describe('followToolWaits (trace remote kb sync)', () => {
+describe('followToolWaits (tracectl remote kb sync)', () => {
   it('prints each knowledge base line, holds on the version it got, and stops when aborted', async () => {
     const stop = new AbortController()
     const asked: Record<string, unknown>[] = []

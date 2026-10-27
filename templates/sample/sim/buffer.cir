@@ -1,0 +1,10 @@
+trace-sample buffer U2 alone: TRC_OPA1 as a unity-gain follower with the ADC's load, for stability and step response
+.param vdd=3.3 cload=10p
+V2 3v3 0 DC {vdd}
+Vin inp 0 DC 1.65 AC 1 PULSE(0.5 2.5 10u 10n 10n 100u 200u)
+XU2 inp out 3v3 0 out TRC_OPA1
+Rload out 0 1meg
+Cload out 0 {cload}
+.op
+.ac dec 50 1 100meg
+.tran 10n 40u

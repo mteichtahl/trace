@@ -160,7 +160,7 @@ describe('tool calls (Registry.call)', () => {
     const was = process.env.TRACEPARENT
     process.env.TRACEPARENT = parent.TRACEPARENT
     try {
-      // an inherited TRACEPARENT is ignored until the process says it continues one (trace mcp, the GPU runner)
+      // an inherited TRACEPARENT is ignored until the process says it continues one (tracectl mcp, the GPU runner)
       await reg.call('files.write', { path: 'p', content: 'c', token: 't' }, { hardware: false, via: 'mcp' })
       expect(one('execute_tool files.write').parentSpanContext).toBeUndefined()
       spans.reset()

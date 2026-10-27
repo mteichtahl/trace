@@ -1,57 +1,66 @@
 #!/usr/bin/env node
 /**
- * The `trace` command.
+ * The `tracectl` command (not `trace`: macOS has its own /usr/bin/trace).
  *
  *   Installation
- *     trace install [--port N] [--no-open]   a local web page that sets up AWS (CDK, AgentCore, Cognito) and GitHub:
+ *     tracectl install [--port N] [--no-open]   a local web page that sets up AWS (CDK, AgentCore, Cognito) and GitHub:
  *                                      it needs AWS credentials and one GitHub token, nothing else
- *     trace upgrade [--ref REF] [--check]    pull a newer trace, redeploy with the saved answers, refresh repositories
- *     trace release setup [--publish]        set this AWS account up to publish trace's images (ECR Public)
- *     trace uninstall [--yes] [--keep-data|--delete-data]   remove the stack, runners and integrations (lists what stays)
- *     trace integrations list | set NAME [KEY=VALUE ...] | check NAME | remove NAME [--remote]
+ *     tracectl update-installation        deploy the installation again with the settings the installer saved (run by
+ *                                      trace's own ci workflow on main: README "Staying up to date")
+ *     tracectl upgrade [--ref REF] [--check]    pull a newer trace, redeploy with the saved answers, refresh repositories
+ *     tracectl release setup [--publish]        set this AWS account up to publish trace's images (ECR Public)
+ *     tracectl uninstall [--yes] [--keep-data|--delete-data]   remove the stack, runners and integrations (lists what stays)
+ *     tracectl integrations list | set NAME [KEY=VALUE ...] | check NAME | remove NAME [--remote]
  *                                      optional service keys (nexar, mouser, digikey) for the parts tools
  *
  *   Repositories
- *     trace onboard OWNER/REPO [--path DIR] [--apply-settings] [--no-push] [--no-ruleset] [--escalate-to LOGIN]
- *     trace new OWNER/REPO [--template empty|python|kicad|rust] [--public] [--description TEXT]
- *     trace doctor OWNER/REPO          what's missing for the loop to run
- *     trace projects                   every onboarded repository (central database)
- *     trace worker-prompt [OWNER/REPO ...]   the hourly cloud worker's prompt
+ *     tracectl onboard OWNER/REPO [--path DIR] [--apply-settings] [--no-push] [--no-ruleset] [--escalate-to LOGIN]
+ *     tracectl new OWNER/REPO [--template empty|python|kicad|rust] [--public] [--description TEXT]
+ *     tracectl doctor OWNER/REPO          what's missing for the loop to run
+ *     tracectl projects                   every onboarded repository (central database)
+ *     tracectl worker-prompt [OWNER/REPO ...]   the hourly cloud worker's prompt
  *
  *   This project (run inside its clone)
- *     trace config show | keys | get KEY | set KEY VALUE | unset KEY     settings in .trace/project.db
- *     trace check                      ERC/DRC on every KiCad project and a build of every firmware target
- *     trace runs [--kind K] [--limit N] | trace run ID | trace artifact ID NAME [--out PATH]
- *     trace db merge BASE OURS THEIRS | trace db prune [--keep N]
+ *     tracectl config show | keys | get KEY | set KEY VALUE | unset KEY     settings in .trace/project.db
+ *     tracectl check                      ERC/DRC on every KiCad project and a build of every firmware target
+ *     tracectl runs [--kind K] [--limit N] | tracectl run ID | tracectl artifact ID NAME [--out PATH]
+ *     tracectl db merge BASE OURS THEIRS | tracectl db prune [--keep N]
  *
  *   Prompts (the catalog of every prompt the agents get, and its overrides: README "Managing prompts")
- *     trace prompts list | get ID | set ID --reason "why" [--file F] | reset ID | revert ID VERSION | history ID
+ *     tracectl prompts list | get ID | set ID --reason "why" [--file F] | reset ID | revert ID VERSION | history ID
  *                 | diff ID [FROM [TO]] | preview TARGET [--marked]      this clone's .trace/project.db, or with
  *                                      --installation the installation's store (your own credentials)
  *
  *   Specialist agents (verify, impl, ams, emc, render, thermal)
- *     trace agent list [--json]        each specialist, its settings and its tools
- *     trace agent route <issue|pr|text> [--repo OWNER/REPO] [--labels a,b] [--files f,g] [--checks c,d] [--model]
+ *     tracectl agent list [--json]        each specialist, its settings and its tools
+ *     tracectl agent route <issue|pr|text> [--repo OWNER/REPO] [--labels a,b] [--files f,g] [--checks c,d] [--model]
  *                                      a dry run of the router
- *     trace agent prompt <kind>        the composed system prompt, for review
+ *     tracectl agent prompt <kind>        the composed system prompt, for review
+ *
+ *   Hardware in the loop
+ *     tracectl hil emulate [--write-settings] [--host H] [--psu-port N] [--scope-port N] [--dmm-port N] [--serial]
+ *                                      a bench without instruments: a PSU, scope and DMM on local ports (5555-5557)
+ *                                      wired to the sample board, and with --serial its firmware console on a pty;
+ *                                      prints the hil settings (--write-settings puts them in .trace/project.db);
+ *                                      runs until Ctrl-C. The hil tools use it with TRACE_HARDWARE=1
  *
  *   Tools
- *     trace tools [--hardware]         every tool (the set the MCP server offers)
- *     trace tool NAME [key=value ...] [--args '{...}'] [--hardware]
- *     trace mcp                        the MCP server on stdio (claude mcp add trace -- trace mcp)
+ *     tracectl tools [--hardware]         every tool (the set the MCP server offers)
+ *     tracectl tool NAME [key=value ...] [--args '{...}'] [--hardware]
+ *     tracectl mcp                        the MCP server on stdio (claude mcp add trace -- tracectl mcp)
  *
- *   Agent memory (a local installation: your credentials, TRACE_MEMORY_ID; through the API: trace remote memory)
- *     trace memory list [--repo OWNER/REPO] [--all] | deactivate RECORD_ID --reason "…" | reactivate RECORD_ID
+ *   Agent memory (a local installation: your credentials, TRACE_MEMORY_ID; through the API: tracectl remote memory)
+ *     tracectl memory list [--repo OWNER/REPO] [--all] | deactivate RECORD_ID --reason "…" | reactivate RECORD_ID
  *
- *   The project's knowledge base (your credentials, or the workflow's role; TRACE_KB_ID; through the API: trace remote kb)
- *     trace kb sync [--force] [--dry-run] [--wait MINUTES] | search "query" [--source S] [--kind K] [--path P] | status
+ *   The project's knowledge base (your credentials, or the workflow's role; TRACE_KB_ID; through the API: tracectl remote kb)
+ *     tracectl kb sync [--force] [--dry-run] [--wait MINUTES] | search "query" [--source S] [--kind K] [--path P] | status
  */
 import { readdirSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { parseArgs } from 'node:util'
 import { ConfigError, changed, leaves, load, parseCliValue, resolve, setValue, unset } from './core/config.js'
 import { mergeMain } from './core/dbmerge.js'
-// registers the prompts tables of .trace/project.db, so `trace db merge` merges them by their rule
+// registers the prompts tables of .trace/project.db, so `tracectl db merge` merges them by their rule
 import './prompts/store.js'
 import { workerPrompt } from './core/cloudworker.js'
 import { doctor } from './core/doctor.js'
@@ -104,7 +113,7 @@ const hardwareEnv = (): boolean => ['1', 'true', 'yes'].includes(process.env.TRA
 async function cmdTool(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { args: { type: 'string' }, hardware: { type: 'boolean' }, json: { type: 'boolean' } } })
   const [name, ...pairs] = positionals
-  if (!name) { err('usage: trace tool NAME [key=value ...]'); return 2 }
+  if (!name) { err('usage: tracectl tool NAME [key=value ...]'); return 2 }
   const args = { ...(values.args ? (JSON.parse(values.args) as Record<string, unknown>) : {}), ...kvArgs(pairs) }
   const result = await allTools().call(name, args, { hardware: Boolean(values.hardware) || hardwareEnv(), via: 'cli' })
   if (values.json) out(JSON.stringify(result, null, 1))
@@ -154,7 +163,7 @@ function cmdConfig(argv: string[]): number {
       out(`${key}: ${unset(key) ? 'back to its default' : 'was not set'}`)
       return 0
   }
-  err('usage: trace config show | keys | get KEY | set KEY VALUE | unset KEY')
+  err('usage: tracectl config show | keys | get KEY | set KEY VALUE | unset KEY')
   return 2
 }
 
@@ -226,8 +235,57 @@ function cmdDb(argv: string[]): number {
     out(`removed ${n} older runs (kept the newest ${keep} of each kind)`)
     return 0
   }
-  err('usage: trace db merge BASE OURS THEIRS | trace db prune [--keep N]')
+  err('usage: tracectl db merge BASE OURS THEIRS | tracectl db prune [--keep N]')
   return 2
+}
+
+/** `tracectl hil emulate`: the bench emulator (src/tools/hil/emulator/bench.ts) until SIGINT/SIGTERM. */
+async function cmdHil(argv: string[]): Promise<number> {
+  const [action, ...rest] = argv
+  const usage = 'usage: tracectl hil emulate [--write-settings] [--host H] [--psu-port N] [--scope-port N] [--dmm-port N] [--serial]'
+  if (action !== 'emulate') { err(usage); return 2 }
+  const { values } = parseArgs({ args: rest, options: {
+    'write-settings': { type: 'boolean' }, host: { type: 'string' }, 'psu-port': { type: 'string' }, 'scope-port': { type: 'string' },
+    'dmm-port': { type: 'string' }, serial: { type: 'boolean' } } })
+  const port = (flag: 'psu-port' | 'scope-port' | 'dmm-port'): number | undefined => {
+    const v = values[flag]
+    if (v === undefined) return undefined
+    const n = Number(v)
+    if (!Number.isInteger(n) || n < 0 || n > 65535) throw new ToolError(`--${flag} ${v}: expected a TCP port (0-65535, 0 = any free port)`)
+    return n
+  }
+  const { startBench, writeBenchSettings } = await import('./tools/hil/emulator/bench.js')
+  const ports = { psu: port('psu-port'), scope: port('scope-port'), dmm: port('dmm-port') }
+  let bench
+  try {
+    bench = await startBench({
+      ...(values.host ? { host: values.host } : {}),
+      ports: Object.fromEntries(Object.entries(ports).filter(([, v]) => v !== undefined)),
+      serial: Boolean(values.serial),
+    })
+  } catch (e) {
+    throw new ToolError(`the bench could not start: ${e instanceof Error ? e.message : String(e)}`)
+  }
+  out(JSON.stringify(bench.settings, null, 2))
+  if (values['write-settings']) {
+    try {
+      const keys = writeBenchSettings(bench.settings)
+      out(`Wrote ${keys.join(', ')} to this project's settings (.trace/project.db).`)
+    } catch (e) {
+      await bench.stop()
+      throw e
+    }
+  }
+  const names = bench.settings['hil.instruments'].map((i) => i.name)
+  if (bench.settings['hil.serial']) names.push(...bench.settings['hil.serial'].map((s) => s.name))
+  const next = values['write-settings'] ? 'Set TRACE_HARDWARE=1 to use it.'
+    : 'Put the settings above in the project (or run again with --write-settings), then set TRACE_HARDWARE=1 to use it.'
+  out(`The bench is running: ${names.join(', ')} (and the virtual CAN bus bench-can) model the sample board, with the PSU's channel 1 as its input. ${next} Ctrl-C stops it.`)
+  return new Promise<number>((resolve) => {
+    const stop = (): void => { void bench.stop().then(() => { out('The bench has stopped.'); resolve(0) }) }
+    process.once('SIGINT', stop)
+    process.once('SIGTERM', stop)
+  })
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -254,6 +312,7 @@ async function main(argv: string[]): Promise<number> {
       return 0
     }
     case 'db': return cmdDb(rest)
+    case 'hil': return cmdHil(rest)
     case 'onboard': {
       const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: {
         path: { type: 'string' }, 'no-push': { type: 'boolean' }, 'apply-settings': { type: 'boolean' }, 'no-ruleset': { type: 'boolean' },
@@ -269,7 +328,7 @@ async function main(argv: string[]): Promise<number> {
       const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: {
         template: { type: 'string' }, public: { type: 'boolean' }, description: { type: 'string' }, 'escalate-to': { type: 'string' }, ref: { type: 'string' } } })
       const template = (values.template ?? 'empty') as Scaffold
-      if (!positionals[0] || !SCAFFOLDS.includes(template)) { err(`usage: trace new OWNER/REPO [--template ${SCAFFOLDS.join('|')}]`); return 2 }
+      if (!positionals[0] || !SCAFFOLDS.includes(template)) { err(`usage: tracectl new OWNER/REPO [--template ${SCAFFOLDS.join('|')}]`); return 2 }
       pretty(await createNew(positionals[0], {
         template, private: !values.public, ...(values.description ? { description: values.description } : {}),
         ...(values['escalate-to'] ? { escalateTo: values['escalate-to'] } : {}), ...(values.ref ? { ref: values.ref } : {}),
@@ -291,6 +350,10 @@ async function main(argv: string[]): Promise<number> {
       const { url } = await startInstaller({ ...(values.port ? { port: Number(values.port) } : {}), open: !values['no-open'] })
       out(`The installer is at ${url}\n(keep this running until it says it is done; Ctrl-C to stop)`)
       return new Promise<number>(() => undefined)
+    }
+    case 'update-installation': {
+      const { updateInstallation } = await import('./installer/update.js')
+      return updateInstallation()
     }
     case 'connect': return cmdConnect(rest)
     case 'login': return cmdLogin(rest)
@@ -336,7 +399,7 @@ async function main(argv: string[]): Promise<number> {
       return 0
     }
   }
-  err(`trace: unknown command or missing argument: ${argv.join(' ')} (trace help)`)
+  err(`trace: unknown command or missing argument: ${argv.join(' ')} (tracectl help)`)
   return 2
 }
 

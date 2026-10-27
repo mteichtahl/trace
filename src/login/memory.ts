@@ -1,13 +1,13 @@
 /**
  * The memory commands: which long-term records the agents consider, and turning one off or on again.
  *
- *   trace remote memory list OWNER/REPO [--all] [--agent A] [--limit N]     through the API (signed in)
- *   trace remote memory deactivate OWNER/REPO RECORD_ID --reason "…"
- *   trace remote memory reactivate OWNER/REPO RECORD_ID
+ *   tracectl remote memory list OWNER/REPO [--all] [--agent A] [--limit N]     through the API (signed in)
+ *   tracectl remote memory deactivate OWNER/REPO RECORD_ID --reason "…"
+ *   tracectl remote memory reactivate OWNER/REPO RECORD_ID
  *
- *   trace memory list [--repo OWNER/REPO] [--all] [--agent A] [--limit N]   a local installation, without the API:
- *   trace memory deactivate RECORD_ID --reason "…" [--repo OWNER/REPO]      your own AWS credentials, the memory in
- *   trace memory reactivate RECORD_ID [--repo OWNER/REPO]                   TRACE_MEMORY_ID and the marks under
+ *   tracectl memory list [--repo OWNER/REPO] [--all] [--agent A] [--limit N]   a local installation, without the API:
+ *   tracectl memory deactivate RECORD_ID --reason "…" [--repo OWNER/REPO]      your own AWS credentials, the memory in
+ *   tracectl memory reactivate RECORD_ID [--repo OWNER/REPO]                   TRACE_MEMORY_ID and the marks under
  *                                                                           TRACE_HOME; the project is --repo, else
  *                                                                           TRACE_MEMORY_REPOSITORY, GITHUB_REPOSITORY
  *                                                                           or this clone's origin
@@ -27,8 +27,8 @@ const err = (s: string): void => { process.stderr.write(`${s}\n`) }
 
 const Repo = z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')
 
-export const REMOTE_MEMORY_USAGE = 'usage: trace remote memory list OWNER/REPO [--all] [--agent A] [--limit N] | deactivate OWNER/REPO RECORD_ID --reason "why" | reactivate OWNER/REPO RECORD_ID'
-export const MEMORY_USAGE = 'usage: trace memory list [--repo OWNER/REPO] [--all] [--agent A] [--limit N] | deactivate RECORD_ID --reason "why" [--repo OWNER/REPO] | reactivate RECORD_ID [--repo OWNER/REPO]'
+export const REMOTE_MEMORY_USAGE = 'usage: tracectl remote memory list OWNER/REPO [--all] [--agent A] [--limit N] | deactivate OWNER/REPO RECORD_ID --reason "why" | reactivate OWNER/REPO RECORD_ID'
+export const MEMORY_USAGE = 'usage: tracectl memory list [--repo OWNER/REPO] [--all] [--agent A] [--limit N] | deactivate RECORD_ID --reason "why" [--repo OWNER/REPO] | reactivate RECORD_ID [--repo OWNER/REPO]'
 
 const Row = z.object({
   id: z.string(), strategy: z.string().nullable(), actor: z.string().nullable(), text: z.string(), created_at: z.string().nullable(),
@@ -46,7 +46,7 @@ function printRows(rows: readonly Row[]): void {
   }
 }
 
-/** `trace remote memory …` (the caller handles errors and prints usage on 2). */
+/** `tracectl remote memory …` (the caller handles errors and prints usage on 2). */
 export async function remoteMemory(argv: string[]): Promise<number> {
   const [sub, ...rest] = argv
   const { values, positionals } = parseArgs({
@@ -67,7 +67,7 @@ export async function remoteMemory(argv: string[]): Promise<number> {
     }
     case 'deactivate': {
       if (!repo || !id) break
-      if (!values.reason) { err('trace remote memory deactivate: give --reason "why"'); return 2 }
+      if (!values.reason) { err('tracectl remote memory deactivate: give --reason "why"'); return 2 }
       const r = z.object({ id: z.string(), changed: z.boolean() }).loose().parse(await invokeApi('memory.deactivate', { repo: Repo.parse(repo), recordId: RecordIdSchema.parse(id), reason: ReasonSchema.parse(values.reason) }))
       out(r.changed ? `${r.id} is inactive: no agent considers it until it is reactivated.` : `${r.id} was already inactive.`)
       return 0
@@ -111,7 +111,7 @@ const rowOf = (r: MemoryRecord, repo: string, me: string): Row => ({
   ...(r.inactive ? { inactive: { reason: r.inactive.reason, by: r.inactive.by, by_you: r.inactive.by === me, at: new Date(r.inactive.at * 1000).toISOString() } } : {}),
 })
 
-/** `trace memory …` on a local installation (your own credentials; no access model beyond them). */
+/** `tracectl memory …` on a local installation (your own credentials; no access model beyond them). */
 export async function cmdMemory(argv: string[], env: Record<string, string | undefined> = process.env): Promise<number> {
   const [sub, ...rest] = argv
   let parsed
@@ -121,16 +121,16 @@ export async function cmdMemory(argv: string[], env: Record<string, string | und
       options: { repo: { type: 'string' }, all: { type: 'boolean' }, agent: { type: 'string' }, limit: { type: 'string' }, reason: { type: 'string' } },
     })
   } catch (e) {
-    err(`trace memory: ${e instanceof Error ? e.message : String(e)}`)
+    err(`tracectl memory: ${e instanceof Error ? e.message : String(e)}`)
     return 2
   }
   const { values, positionals } = parsed
   if (sub !== 'list' && sub !== 'deactivate' && sub !== 'reactivate') { err(MEMORY_USAGE); return 2 }
   const mem = memoryFromEnv(env)
-  if (!mem) { err('trace memory: no memory here (TRACE_MEMORY_ID is not set); through the API use `trace remote memory`'); return 1 }
+  if (!mem) { err('tracectl memory: no memory here (TRACE_MEMORY_ID is not set); through the API use `tracectl remote memory`'); return 1 }
   const raw = values.repo ?? env.TRACE_MEMORY_REPOSITORY ?? env.GITHUB_REPOSITORY ?? originRepository()
   const repo = Repo.safeParse(raw ?? '')
-  if (!repo.success) { err('trace memory: which project? give --repo OWNER/REPO'); return 2 }
+  if (!repo.success) { err('tracectl memory: which project? give --repo OWNER/REPO'); return 2 }
   const slug = repo.data.toLowerCase()
   const me = personHash(localPerson())
   try {
@@ -145,9 +145,9 @@ export async function cmdMemory(argv: string[], env: Record<string, string | und
     const state = memoryState(slug)
     if (sub === 'deactivate') {
       const reason = ReasonSchema.safeParse(values.reason ?? '')
-      if (!reason.success) { err('trace memory deactivate: give --reason "why"'); return 2 }
+      if (!reason.success) { err('tracectl memory deactivate: give --reason "why"'); return 2 }
       const r = await mem.longTerm.find(slug, id.data)
-      if (!r) { err(`trace memory: no record ${id.data} in ${slug}'s memory`); return 1 }
+      if (!r) { err(`tracectl memory: no record ${id.data} in ${slug}'s memory`); return 1 }
       const { changed } = await state.deactivate({ recordId: r.id, namespace: r.namespace, reason: reason.data, by: me })
       out(changed ? `${r.id} is inactive: no agent considers it until it is reactivated.` : `${r.id} was already inactive.`)
       return 0
@@ -156,7 +156,7 @@ export async function cmdMemory(argv: string[], env: Record<string, string | und
     out(removed ? `${id.data} is active again.` : `${id.data} was not inactive.`)
     return 0
   } catch (e) {
-    err(`trace memory: ${e instanceof Error ? e.message : String(e)}`)
+    err(`tracectl memory: ${e instanceof Error ? e.message : String(e)}`)
     return 1
   }
 }

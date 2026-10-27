@@ -1,20 +1,20 @@
 /**
  * The people-facing CLI commands (wired in src/cli.ts, one case each):
  *
- *   trace connect --region R --pool ID --client ID --domain URL --api ARN [--name N] [--ports 47821,47822]
- *   trace login | trace logout | trace whoami
- *   trace remote projects
- *   trace remote status OWNER/REPO
- *   trace remote settings OWNER/REPO [KEY [VALUE]]      (VALUE "--unset" removes the setting)
- *   trace remote runs OWNER/REPO [--kind K] [--limit N]
- *   trace remote task OWNER/REPO "request…"
- *   trace remote job ID
- *   trace remote memory list OWNER/REPO [--all] | deactivate OWNER/REPO RECORD_ID --reason "…" | reactivate OWNER/REPO RECORD_ID
+ *   tracectl connect --region R --pool ID --client ID --domain URL --api ARN [--name N] [--ports 47821,47822]
+ *   tracectl login | tracectl logout | tracectl whoami
+ *   tracectl remote projects
+ *   tracectl remote status OWNER/REPO
+ *   tracectl remote settings OWNER/REPO [KEY [VALUE]]      (VALUE "--unset" removes the setting)
+ *   tracectl remote runs OWNER/REPO [--kind K] [--limit N]
+ *   tracectl remote task OWNER/REPO "request…"
+ *   tracectl remote job ID
+ *   tracectl remote memory list OWNER/REPO [--all] | deactivate OWNER/REPO RECORD_ID --reason "…" | reactivate OWNER/REPO RECORD_ID
  *                                                       (src/login/memory.ts)
- *   trace remote prompts list|get|set|reset|revert|history|diff|preview …  (src/login/prompts.ts)
- *   trace remote kb search OWNER/REPO "query" [--top N] [--source S] [--kind K] [--path P] | sync OWNER/REPO [--force]
+ *   tracectl remote prompts list|get|set|reset|revert|history|diff|preview …  (src/login/prompts.ts)
+ *   tracectl remote kb search OWNER/REPO "query" [--top N] [--source S] [--kind K] [--path P] | sync OWNER/REPO [--force]
  *                                                       (src/login/kb.ts)
- *   trace users list | invite EMAIL [--class user|guest|admin] | class EMAIL CLASS
+ *   tracectl users list | invite EMAIL [--class user|guest|admin] | class EMAIL CLASS
  *              | assign EMAIL OWNER/REPO [--part contributor|reviewer] | unassign EMAIL OWNER/REPO | assignments [OWNER/REPO]
  *
  * Each returns the exit code; problems are printed, never thrown to the caller.
@@ -73,8 +73,8 @@ export async function cmdConnect(argv: string[]): Promise<number> {
     } })
     const parsed = ConnectArgs.safeParse(values)
     if (!parsed.success) {
-      err(`trace connect: ${parsed.error.issues.map((i) => `--${i.path.join('.')}: ${i.message}`).join('; ')}`)
-      err('usage: trace connect --region R --pool POOL_ID --client CLIENT_ID --domain https://….amazoncognito.com --api API_RUNTIME_ARN')
+      err(`tracectl connect: ${parsed.error.issues.map((i) => `--${i.path.join('.')}: ${i.message}`).join('; ')}`)
+      err('usage: tracectl connect --region R --pool POOL_ID --client CLIENT_ID --domain https://….amazoncognito.com --api API_RUNTIME_ARN')
       return 2
     }
     const a = parsed.data
@@ -84,7 +84,7 @@ export async function cmdConnect(argv: string[]): Promise<number> {
       cognitoDomain: a.domain, apiRuntimeArn: a.api, workerRuntimeArn: a.worker, actionsRoleArn: '', githubSecretArn: '',
       callbackPorts: a.ports.split(',').map(Number),
     })
-    out(`Connected to the trace installation "${a.name}" (${a.region}). Next: trace login`)
+    out(`Connected to the trace installation "${a.name}" (${a.region}). Next: tracectl login`)
     return 0
   })
 }
@@ -109,7 +109,7 @@ export async function cmdLogout(_argv: string[]): Promise<number> {
 export async function cmdWhoami(_argv: string[]): Promise<number> {
   return guarded(async () => {
     if (!installation()) { err(NO_INSTALLATION); return 1 }
-    if (!session()) { err('Not signed in: run `trace login`.'); return 1 }
+    if (!session()) { err('Not signed in: run `tracectl login`.'); return 1 }
     const r = z.object({ sub: z.string(), email: z.string().nullable(), class: z.string().nullable(), groups: z.array(z.string()) }).loose().parse(await invokeApi('whoami'))
     out(`${r.email ?? r.sub}  class: ${r.class ?? 'none (no access)'}  sub: ${r.sub}`)
     return 0
@@ -118,7 +118,7 @@ export async function cmdWhoami(_argv: string[]): Promise<number> {
 
 // ------------------------------------------------------------------ remote
 
-const REMOTE_USAGE = 'usage: trace remote projects | status OWNER/REPO | settings OWNER/REPO [KEY [VALUE|--unset]] | runs OWNER/REPO [--kind K] [--limit N] | task OWNER/REPO [--agent verify|impl|ams|emc|render|thermal] "request" | job ID | memory list|deactivate|reactivate OWNER/REPO … | prompts list|get|set|reset|revert|history|diff|preview … | kb search|sync OWNER/REPO …'
+const REMOTE_USAGE = 'usage: tracectl remote projects | status OWNER/REPO | settings OWNER/REPO [KEY [VALUE|--unset]] | runs OWNER/REPO [--kind K] [--limit N] | task OWNER/REPO [--agent verify|impl|ams|emc|render|thermal] "request" | job ID | memory list|deactivate|reactivate OWNER/REPO … | prompts list|get|set|reset|revert|history|diff|preview … | kb search|sync OWNER/REPO …'
 
 export async function cmdRemote(argv: string[]): Promise<number> {
   return guarded(async () => {
@@ -171,11 +171,11 @@ export async function cmdRemote(argv: string[]): Promise<number> {
         const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { agent: { type: 'string' } } })
         const [repo, ...words] = positionals
         if (!repo || !words.length) break
-        // without --agent the runtime routes it to a specialist (trace agent route "<request>" shows where)
+        // without --agent the runtime routes it to a specialist (tracectl agent route "<request>" shows where)
         const agent = values.agent === undefined ? undefined : SpecialistKindSchema.parse(values.agent)
         const r = z.object({ accepted: z.boolean(), jobId: z.string(), reason: z.string().optional() }).loose()
           .parse(await invokeApi('task', { repo: Repo.parse(repo), request: words.join(' '), ...(agent ? { agent } : {}) }))
-        out(r.accepted ? `Started ${r.jobId}. Follow it with: trace remote job ${r.jobId}` : `Not started (${r.reason ?? 'refused'}); the running job is ${r.jobId}.`)
+        out(r.accepted ? `Started ${r.jobId}. Follow it with: tracectl remote job ${r.jobId}` : `Not started (${r.reason ?? 'refused'}); the running job is ${r.jobId}.`)
         return 0
       }
       case 'memory': return remoteMemory(rest)
@@ -194,7 +194,7 @@ export async function cmdRemote(argv: string[]): Promise<number> {
 
 // ------------------------------------------------------------------ users (admins)
 
-const USERS_USAGE = 'usage: trace users list | invite EMAIL [--class user|guest|admin] | class EMAIL user|guest|admin | assign EMAIL OWNER/REPO [--part contributor|reviewer] | unassign EMAIL OWNER/REPO | assignments [OWNER/REPO]'
+const USERS_USAGE = 'usage: tracectl users list | invite EMAIL [--class user|guest|admin] | class EMAIL user|guest|admin | assign EMAIL OWNER/REPO [--part contributor|reviewer] | unassign EMAIL OWNER/REPO | assignments [OWNER/REPO]'
 const Part = z.enum(PARTS)
 const Cls = z.enum(CLASSES)
 

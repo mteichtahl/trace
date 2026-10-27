@@ -1,5 +1,5 @@
 /**
- * `trace release setup` (src/installer/release.ts) against fakes: the us-east-1 bootstrap, TraceRelease, the
+ * `tracectl release setup` (src/installer/release.ts) against fakes: the us-east-1 bootstrap, TraceRelease, the
  * registry's default alias (there already, or assigned once the first repository exists), the source repository's
  * variables, trace's own CodeBuild runner (privileged, through a connection or the token), and the first release.
  */
@@ -42,13 +42,13 @@ describe('the registry alias', () => {
     expect(await defaultAlias(d, 5, 10)).toBe('z9y8x7w6')
     expect(d.calls.filter((c) => c.startsWith('sleep'))).toEqual(['sleep 10', 'sleep 10'])
     // never assigned within the tries: says to run again, without guessing one
-    await expect(defaultAlias(deps({ registriesSeq: [[]] }), 3, 1)).rejects.toThrow(/no alias yet .*run `trace release setup` again/)
+    await expect(defaultAlias(deps({ registriesSeq: [[]] }), 3, 1)).rejects.toThrow(/no alias yet .*run `tracectl release setup` again/)
     // a pending alias is not one to publish to
     await expect(defaultAlias(deps({ registriesSeq: [[alias('pending1', 'PENDING')]] }), 2, 1)).rejects.toThrow(/status PENDING/)
   })
 })
 
-describe('trace release setup', () => {
+describe('tracectl release setup', () => {
   it('deploys TraceRelease in us-east-1, sets both variables, records the registry, and starts the first release', async () => {
     const d = deps({ bootstrapped: async () => false })
     const r = await releaseSetup(d, { account: '123456789012', publish: true })

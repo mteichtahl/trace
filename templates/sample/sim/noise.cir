@@ -1,0 +1,11 @@
+trace-sample front end noise (ams.noise): the divider, filter and buffer at mid-scale, output ADC_IN, input V1
+* The divider's and R3's thermal noise, shaped by the RC filter, plus the buffer's 28 nV/rtHz, against the ADC's
+* LSB (3.3 V / 4096 = 806 uV).
+V1 vin 0 DC 6 AC 1
+V2 3v3 0 DC 3.3
+R1 vin div 39k
+R2 div 0 13k
+R3 div filt 6.2k
+C1 filt 0 10n
+XU2 filt adc_in 3v3 0 adc_in TRC_OPA1
+Rload adc_in 0 1meg

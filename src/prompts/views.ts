@@ -1,5 +1,5 @@
 /**
- * What people see of the prompts (the API's prompts.* actions and `trace prompts`): the catalog with each id's
+ * What people see of the prompts (the API's prompts.* actions and `tracectl prompts`): the catalog with each id's
  * effective layer, one id in every layer, and a whole prompt composed with the overrides, its parts marked.
  */
 import { z } from 'zod'

@@ -25,7 +25,7 @@ J2.4 LED ──R4 680── D2 red LED ── GND           J2: 1 3V3, 2 GND, 3 
 | `tools/` | `generate.ts` writes the KiCad files. `setup-db.ts` writes `.trace/project.db`. |
 | `.trace/` | `project.db` holds the settings below and records every tool run. `rules.md` is left for the owner to write. |
 
-Settings (`trace config show`):
+Settings (`tracectl config show`):
 
 - `electronics.projects` is `["hardware/sensor-node.kicad_pro"]`.
 - `electronics.models` is `["sim/models"]`, so the BAT54S model is in every simulation.
@@ -96,9 +96,9 @@ length_mm: 26.175 (the whole net)   path R3.2 → J2.3: 20.175 mm, 0 vias, 117 p
 
 ERC is clean because the design is complete, not because anything was waived. PWR_FLAGs mark 3V3 and GND as supplied
 through J2 and J1, and every pin is connected, so no pin needs a no-connect flag. All 10 parts have an MPN and an LCSC
-code, checked with `trace tool parts.lookup`, so the BOM has one line per part.
+code, checked with `tracectl tool parts.lookup`, so the BOM has one line per part.
 
-For a fab and assembly package, run `trace tool kicad.fab out_dir=build/fab`. It writes 17 files: Gerbers and drill zipped, the BOM, the JLCPCB BOM and CPL, and the placement file. All 10 parts get a placement, and there are no warnings.
+For a fab and assembly package, run `tracectl tool kicad.fab out_dir=build/fab`. It writes 17 files: Gerbers and drill zipped, the BOM, the JLCPCB BOM and CPL, and the placement file. All 10 parts get a placement, and there are no warnings.
 
 ## 3. Simulate it
 
@@ -171,12 +171,12 @@ to `>> 3` makes it fail at the first step sample (`MISMATCH after sample 3723: a
 ## 5. Everything at once, and the record
 
 ```
-$ trace check
+$ tracectl check
 ok     kicad.erc hardware/sensor-node.kicad_pro: 0 errors, 0 warnings
 ok     kicad.drc hardware/sensor-node.kicad_pro: 0 errors, 0 warnings
 ok     firmware.build adc-convert:
 
-$ trace runs
+$ tracectl runs
 eac8b0e1cd634b14  2026-10-26 07:40  pass    firmware.build    adc-convert  adc-convert: ok, 0 errors, 0 warnings, flash 221 B
 2533a6604b4c4fcc  2026-10-26 07:39  pass    sim.logic         moving_average_tb  moving_average_tb: output matched the pass pattern: ALL TESTS PASSED
 b27486a2e6804359  2026-10-26 07:39  pass    sim.kicad_spice   hardware/sensor-node.kicad_sch  hardware/sensor-node.kicad_sch: op+ac vadc=1.5 V, f3db=993.6 Hz
@@ -184,7 +184,7 @@ b27486a2e6804359  2026-10-26 07:39  pass    sim.kicad_spice   hardware/sensor-no
 ```
 
 Each run keeps its full outputs in `.trace/project.db`: the ERC/DRC JSON reports, the BOM CSV, the netlists, the
-ngspice logs and raw data, the VCD, and the build log. Look at one with `trace run ID` or `trace artifact ID NAME`.
+ngspice logs and raw data, the VCD, and the build log. Look at one with `tracectl run ID` or `tracectl artifact ID NAME`.
 
 ## 6. Thermal
 

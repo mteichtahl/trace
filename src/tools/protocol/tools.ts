@@ -5,7 +5,7 @@
  * budgets; timing diagrams; captures from real buses; and testbenches for HDL peripherals.
  *
  * Every tool that computes something records a run (protocol.model, protocol.check, …) with its measurements and
- * artifacts in the project database, so trends show across commits (trace runs protocol.check) and verify.run can
+ * artifacts in the project database, so trends show across commits (tracectl runs protocol.check) and verify.run can
  * take any of them as a test item (it reads `pass` and the run ids).
  */
 import { writeFileSync } from 'node:fs'

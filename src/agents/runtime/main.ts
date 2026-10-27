@@ -34,6 +34,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((e: unknown) => {
-  process.stderr.write(`trace agent failed to start: ${e instanceof Error ? e.stack ?? e.message : String(e)}\n`)
+  process.stderr.write(`tracectl agent failed to start: ${e instanceof Error ? e.stack ?? e.message : String(e)}\n`)
   process.exit(1)
 })

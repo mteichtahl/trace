@@ -3,7 +3,7 @@
 # `<registry>/trace-gpu` (linux/amd64, AWS Batch), each tagged with the content tag of scripts/image-tag.mjs (the same
 # hash an installation computes), plus `latest` on main and `vX.Y.Z` on a release tag.
 #
-# Set up by the owner's install itself, or `trace release setup` (README "Publishing images"): it deploys
+# Set up by the owner's install itself, or `tracectl release setup` (README "Publishing images"): it deploys
 # TraceRelease (src/infra/release.ts: the two ECR Public repositories and the release role), reads the registry's
 # default alias, sets this repository's variables TRACE_RELEASE_ROLE and TRACE_IMAGE_REGISTRY (public.ecr.aws/<alias>),
 # and records the registry in the trace-images release, where installations find it. Until both variables are set

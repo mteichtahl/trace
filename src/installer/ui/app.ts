@@ -5,7 +5,7 @@
  *   1 Connect        AWS credentials (a profile, or keys) and one GitHub token; "Check" runs the preflight
  *                    (src/installer/preflight.ts) and shows what was derived and every finding, with its fix
  *   2 Projects       the repositories the token sees (or a new one to create); none is fine
- *   3 Integrations   optional service keys (Nexar, Mouser, Digi-Key); skippable, and `trace integrations set` later
+ *   3 Integrations   optional service keys (Nexar, Mouser, Digi-Key); skippable, and `tracectl integrations set` later
  *   4 Review         the plan, how long it takes, and an "Advanced" disclosure with every other setting
  *
  * then the installation's progress, streamed. The answers are validated with the same zod schemas the server uses.
@@ -37,6 +37,7 @@ interface Preflight {
     runnerConnection?: string | null
   }
 }
+interface Progress { id: string; label: string; state: 'running' | 'done' | 'failed'; detail?: string }
 interface Env { profiles: { names: string[]; regions: Record<string, string> }; saved: AnswersInput | null; installed: { stack: string; region: string } | null; node: string; defaultRegion: string }
 
 const KEY = document.querySelector<HTMLMetaElement>('meta[name="trace-key"]')?.content ?? ''
@@ -64,7 +65,7 @@ const TABS: { id: Tab; title: string }[] = [
 
 type PersonClass = 'admin' | 'user' | 'guest'
 interface Person { email: string; class: PersonClass; projects: Set<string> }
-type Template = 'empty' | 'python' | 'kicad' | 'rust'
+type Template = 'empty' | 'python' | 'kicad' | 'rust' | 'sample'
 interface Project { branch: string; onboard: boolean; applySettings: boolean; memoryDays: string; generation: number; create: { template: Template; private: boolean } | null }
 
 const s = {
@@ -74,12 +75,16 @@ const s = {
   aws: { mode: 'profile' as 'profile' | 'keys', profile: 'default', region: '', keyId: '', secret: '', session: '' },
   github: { token: '', adminToken: '' },
   pre: null as Preflight | null, preBusy: false, preError: '',
+  /** each check of the running (or last) preflight, as the installer reports it */
+  preProgress: [] as Progress[],
   fixBusy: '', fixNote: new Map<string, string>(),
   useCase: { open: false, companyName: '', companyWebsite: '', intendedUsers: '0' as '0' | '1' | '2', industryOption: 'Technology', otherIndustryOption: '', useCases: 'Autonomous coding agents that maintain our own electronics and firmware repositories (fixing CI failures, reviewing designs) on Amazon Bedrock AgentCore.' },
   /** memoryDays: the field's text ('' = the installation's default); generation: kept from the saved answers */
   projects: new Map<string, Project>(),
   filter: '',
-  newRepo: { name: '', template: 'kicad' as Template, private: true },
+  newRepo: { name: '', template: 'kicad' as Exclude<Template, 'sample'>, private: true },
+  /** the sample project (installer/sample.ts): a new repository among s.projects (template 'sample'), and its tour */
+  sample: { name: '', private: true, tour: true, repo: '' },
   projectTokens: new Map<string, string>(),
   integrations: Object.fromEntries(INTEGRATION_NAMES.map((n) => [n, Object.fromEntries(INTEGRATIONS[n].keys.map((k) => [k, '']))])) as Record<IntegrationName, Record<string, string>>,
   integrationCheck: new Map<IntegrationName, { ok: boolean; detail: string } | 'busy'>(),
@@ -99,10 +104,12 @@ const s = {
     computeType: '' as '' | (typeof RUNNER_COMPUTE_TYPES)[number], privileged: 'default' as 'default' | 'on' | 'off',
     /** build trace's own repository on AWS too; null: not chosen (on when the token can configure it) */
     buildTrace: null as boolean | null,
+    /** keep this installation up to date from trace's own repository's ci workflow (on by default while it is built) */
+    selfUpdate: true,
   },
   adminEmail: '',
   people: [] as Person[],
-  plan: null as Step[] | null, timeline: [] as string[], changes: [] as string[], planError: '',
+  plan: null as Step[] | null, timeline: [] as string[], changes: [] as string[], planError: '', planBusy: false,
   steps: [] as Step[],
   log: [] as string[],
   ready: null as string[] | null,
@@ -178,9 +185,10 @@ function answers(): AnswersInput {
       auth: s.runners.auth, token: s.runners.token,
       connectionArn: s.runners.auth === 'token' ? '' : s.runners.connectionArn, computeType: s.runners.computeType || null,
       privileged: s.runners.privileged === 'default' ? null : s.runners.privileged === 'on',
-      buildTrace: buildTrace(), traceRepository: buildTrace() ? selfRepo()?.repo ?? '' : '',
+      buildTrace: buildTrace(), traceRepository: buildTrace() ? selfRepo()?.repo ?? '' : '', selfUpdate: s.runners.selfUpdate,
     },
     projects: [...s.projects].map(([repo, { memoryDays, ...p }]) => ({ repo, ...p, memoryEventExpiryDays: memoryDays.trim() === '' ? null : Number(memoryDays) })),
+    sample: { enabled: Boolean(sampleRepo()), repo: sampleRepo() ?? '', private: s.sample.private, tour: s.sample.tour },
     adminEmail: s.adminEmail || s.pre?.facts.email || '',
     people: s.people.filter((p) => p.email.trim()).map((p) => ({
       email: p.email.trim(), class: p.class,
@@ -188,6 +196,12 @@ function answers(): AnswersInput {
     })),
     escalateTo: g.escalateTo,
   }
+}
+
+/** The sample project's repository: the one being created, else the one an earlier run created. */
+function sampleRepo(): string | null {
+  const creating = [...s.projects].find(([, p]) => p.create?.template === 'sample')?.[0]
+  return creating ?? (s.sample.repo && s.projects.has(s.sample.repo) ? s.sample.repo : null)
 }
 
 /** trace's own repository as the GitHub check found it, when the token can configure it and it is not a project. */
@@ -308,7 +322,8 @@ function connect(): HTMLElement {
     h('details', {}, h('summary', { class: 'muted' }, `Region: ${a.region || profRegion || s.env?.defaultRegion || 'us-east-1'}${a.region ? '' : profRegion ? ' (the profile\'s)' : ' (the default)'}`),
       field('Region', select([{ value: '', label: `The profile's, else ${s.env?.defaultRegion ?? 'us-east-1'}` }, ...REGIONS.map((r) => ({ value: r, label: r }))], a.region, (v) => { a.region = v; s.pre = null; render() }), 'trace needs Bedrock AgentCore there')),
     h('div', { class: 'actions' }, h('button', { class: 'secondary', disabled: s.preBusy, onclick: () => void runPreflight() }, s.preBusy ? 'Checking everything…' : s.pre ? 'Check again' : 'Check')),
-    s.preError ? note('bad', s.preError) : null,
+    progressView(),
+    s.preError ? note('bad', h('strong', {}, 'The checks could not run: '), s.preError) : null,
     f?.account ? note('ok', h('strong', {}, `Installing into ${f.account} in ${s.pre?.region}`), ` as ${f.arn ?? ''}${f.login ? `; GitHub: ${f.login}` : ''}${f.email ? `; first administrator: ${f.email}` : ''}.`) : null,
     ...(s.pre?.checks ?? []).filter((c) => !c.id.startsWith('github.repo:') && !c.id.startsWith('github.create:')).map(checkView),
     next('connect', 'projects'))
@@ -338,6 +353,7 @@ function projects(): HTMLElement {
         p ? h('span', { class: 'opt' }, checkbox('onboarding PR', p.onboard, (v) => { p.onboard = v })) : h('span', {}),
         p ? h('span', { class: 'opt' }, checkbox('repo settings', p.applySettings, (v) => { p.applySettings = v })) : h('span', {}))
     })),
+    sampleCard(owner),
     h('details', {}, h('summary', {}, 'Create a new project'),
       h('div', { class: 'row' },
         field('Repository', input('text', n.name, (v) => { n.name = v.trim() }, { placeholder: `${owner || 'owner'}/new-board` })),
@@ -349,16 +365,44 @@ function projects(): HTMLElement {
         n.name = ''
         void runPreflight()
       } }, 'Add it'))),
-    ...[...s.projects].filter(([, p]) => p.create).map(([r, p]) => note('ok', `${r}: created from the ${p.create?.template} template when installing.`, ' ', h('button', { class: 'link', onclick: () => { s.projects.delete(r); render() } }, 'remove'))),
+    ...[...s.projects].filter(([, p]) => p.create && p.create.template !== 'sample').map(([r, p]) => note('ok', `${r}: created from the ${p.create?.template} template when installing.`, ' ', h('button', { class: 'link', onclick: () => { s.projects.delete(r); render() } }, 'remove'))),
     h('div', { class: 'actions' }, h('button', { class: 'secondary', disabled: s.preBusy || !s.projects.size, onclick: () => void runPreflight() }, s.preBusy ? 'Checking…' : 'Check access to these')),
+    s.tab === 'projects' ? progressView() : null,
     ...(s.pre?.checks ?? []).filter((c) => (c.id.startsWith('github.repo:') || c.id.startsWith('github.create:')) && s.projects.has(c.title)).map(checkView),
     next('projects', 'integrations'))
+}
+
+/** The sample project: one small board that exercises every agent and every simulation, in a new repository. */
+function sampleCard(owner: string): HTMLElement {
+  const x = s.sample
+  const repo = sampleRepo()
+  const name = x.name.includes('/') ? x.name : `${owner || 'owner'}/${x.name || 'trace-sample'}`
+  const add = (): void => {
+    for (const [r, p] of s.projects) if (p.create?.template === 'sample') s.projects.delete(r)
+    s.projects.set(name, { branch: 'main', onboard: true, applySettings: true, memoryDays: '', generation: 0, create: { template: 'sample', private: x.private } })
+    x.repo = name
+    void runPreflight()
+  }
+  return h('div', { class: 'sub' },
+    h('h3', {}, 'Sample project (recommended for a first installation)'),
+    h('p', { class: 'muted' }, 'A small, finished sensor board in a new repository, from intent to fabrication files. Once trace is installed it starts a tour: one task for every agent and every simulation (circuit, mixed-signal, logic and formal, FPGA, protocols, thermal, electromagnetic, autorouting, rendering, firmware, and hardware in the loop on an emulated bench), so you see the whole system work before you bring your own design.'),
+    repo
+      ? h('div', {},
+        note('ok', `${repo}: ${s.projects.get(repo)?.create ? 'created and filled with the sample when installing' : 'installed by an earlier run'}.`, ' ',
+          s.projects.get(repo)?.create ? h('button', { class: 'link', onclick: () => { s.projects.delete(repo); x.repo = ''; render() } }, 'remove') : null),
+        checkbox('Start the tour once installed', x.tour, (v) => { x.tour = v }),
+        x.tour ? h('p', { class: 'muted small' }, 'The tour runs every agent and every simulation once, on AWS like any other work, so it costs what that work costs (the GPU and CPU jobs most of all). Running the installer again opens only the tasks that are missing.') : null)
+      : h('div', {},
+        h('div', { class: 'row' },
+          field('Repository', input('text', x.name, (v) => { x.name = v.trim() }, { placeholder: `${owner || 'owner'}/trace-sample` }), 'a new repository: the installer creates it'),
+          field('Visibility', checkbox('Private', x.private, (v) => { x.private = v }))),
+        h('div', { class: 'actions left' }, h('button', { class: 'secondary', disabled: !/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(name) || !owner && !x.name.includes('/'), onclick: add }, 'Install the sample project'))))
 }
 
 function integrations(): HTMLElement {
   return h('section', { class: 'card' },
     h('h2', {}, 'Integrations (optional)'),
-    h('p', { class: 'lead' }, 'Keys for services some tools use. None is needed to install or deploy: without them the parts tools ask LCSC (no key) and say which key would add more. Add or change one any time with `trace integrations set <name>`. Each key is checked with its service and stored in AWS Secrets Manager (<prefix>/integrations/<name>).'),
+    h('p', { class: 'lead' }, 'Keys for services some tools use. None is needed to install or deploy: without them the parts tools ask LCSC (no key) and say which key would add more. Add or change one any time with `tracectl integrations set <name>`. Each key is checked with its service and stored in AWS Secrets Manager (<prefix>/integrations/<name>).'),
     ...INTEGRATION_NAMES.map((n) => {
       const i = INTEGRATIONS[n]
       const c = s.integrationCheck.get(n)
@@ -448,7 +492,7 @@ function advanced(): HTMLElement {
       return p ? field(`${r}: memory days`, input('number', p.memoryDays, (v) => { p.memoryDays = v.trim() }, { min: 3, max: 365, placeholder: '30' })) : null
     }),
     h('h3', {}, 'People'),
-    h('p', { class: 'muted' }, 'Everyone signs in with Amazon Cognito, which emails a temporary password. Admins can do everything; users read and change their projects; guests only read theirs. Admins can invite more later with `trace users invite`.'),
+    h('p', { class: 'muted' }, 'Everyone signs in with Amazon Cognito, which emails a temporary password. Admins can do everything; users read and change their projects; guests only read theirs. Admins can invite more later with `tracectl users invite`.'),
     h('table', { class: 'grid' },
       h('thead', {}, h('tr', {}, h('th', {}, 'Email'), h('th', {}, 'Class'), ...repos.map((r) => h('th', {}, r)), h('th', {}, ''))),
       h('tbody', {}, ...s.people.map((p, i) => h('tr', {},
@@ -463,16 +507,20 @@ function advanced(): HTMLElement {
 }
 
 async function loadPlan(): Promise<void> {
-  s.plan = null; s.planError = ''
-  const parsed = AnswersSchema.safeParse(answers())
-  if (!parsed.success) { s.planError = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '); render(); return }
+  s.plan = null; s.planError = ''; s.planBusy = true; render()
   try {
-    const r = await api<{ steps: Step[]; timeline: string[]; changes: string[] }>('POST', '/api/plan', { answers: answers(), existing: s.pre?.facts.existing ?? null, cdkBootstrapped: s.pre?.facts.cdkBootstrapped ?? false })
+    // the plan needs the account the checks found: run them first when they have not (or no longer) passed
+    if (!s.pre?.facts.account) await runPreflight()
+    if (!s.pre?.facts.account) { s.planError = s.preError ? `The checks could not run, so there is no plan yet: ${s.preError}` : 'The AWS account is not known yet: run the checks on Connect.'; return }
+    const parsed = AnswersSchema.safeParse(answers())
+    if (!parsed.success) { s.planError = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '); return }
+    const r = await api<{ steps: Step[]; timeline: string[]; changes: string[] }>('POST', '/api/plan', { answers: answers(), existing: s.pre.facts.existing ?? null, cdkBootstrapped: s.pre.facts.cdkBootstrapped ?? false })
     s.plan = r.steps; s.timeline = r.timeline; s.changes = r.changes
   } catch (e) {
     s.planError = e instanceof Error ? e.message : String(e)
+  } finally {
+    s.planBusy = false; render()
   }
-  render()
 }
 
 function review(): HTMLElement {
@@ -483,8 +531,10 @@ function review(): HTMLElement {
     h('p', { class: 'lead' }, f?.existing ? 'trace is installed here: this updates it, and changes only what the plan says. Every step can be run again safely.' : 'What installing will do. Every step can be run again safely: if one fails, fix the cause and install again.'),
     s.changes.length ? note('ok', h('strong', {}, 'Changes since the last run: '), s.changes.join('; ')) : null,
     s.timeline.length ? note('ok', h('strong', {}, 'How long: '), h('ul', {}, ...s.timeline.map((l) => h('li', {}, l)))) : null,
-    s.planError ? note('bad', s.planError) : null,
-    s.plan ? h('ol', { class: 'plan' }, ...s.plan.map((st) => h('li', {}, h('strong', {}, st.title), h('div', { class: 'muted' }, st.detail)))) : h('p', { class: 'muted' }, 'Working out the plan…'),
+    s.preBusy ? progressView() : null,
+    s.planError ? note('bad', s.planError, h('div', { class: 'actions left' }, h('button', { class: 'secondary', disabled: s.planBusy, onclick: () => void loadPlan() }, 'Try again'))) : null,
+    s.plan ? h('ol', { class: 'plan' }, ...s.plan.map((st) => h('li', {}, h('strong', {}, st.title), h('div', { class: 'muted' }, st.detail))))
+      : s.planBusy && !s.preBusy ? h('p', { class: 'muted' }, h('span', { class: 'spin' }), ' Working out the plan…') : null,
     advanced(),
     h('div', { class: 'actions' },
       blockers.length ? h('span', { class: 'muted' }, blockers[0] ?? '') : null,
@@ -513,7 +563,7 @@ function buildRunners(): (HTMLElement | null)[] {
       { value: 'auto', label: `Automatic: an authorized GitHub connection when there is one${found ? ` (${found})` : ''}, else the GitHub token` },
       { value: 'token', label: 'The GitHub token (no console step; the token is stored with CodeBuild)' },
       { value: 'connection', label: 'An AWS CodeConnections connection instead of the token (no token stored; needs one console authorization)' },
-    ], r.auth, (v) => { r.auth = (RUNNER_AUTH as readonly string[]).includes(v) ? v as (typeof RUNNER_AUTH)[number] : 'auto'; s.pre = null; render() }), 'change it later with `trace upgrade --runner-auth auto|token|connection`'),
+    ], r.auth, (v) => { r.auth = (RUNNER_AUTH as readonly string[]).includes(v) ? v as (typeof RUNNER_AUTH)[number] : 'auto'; render(); void runPreflight().then(() => loadPlan()) }), 'change it later with `tracectl upgrade --runner-auth auto|token|connection`'),
     r.auth === 'connection' ? note('warn', 'A new connection is authorized once per AWS account and region, in the AWS console. After the first deploy the installer shows the link (', h('a', { href: url, target: '_blank', rel: 'noopener' }, 'Connections'), `) and waits: choose ${r.connectionArn ? 'the connection' : name} and "Update pending connection", which installs the AWS Connector for GitHub app, and give that app access to every chosen repository. The installer then adds the build runners by itself.`) : null,
     r.auth !== 'token' ? field('Use this connection (optional)', input('text', r.connectionArn, (v) => { r.connectionArn = v.trim() }, { placeholder: `empty: reuse an authorized one${r.auth === 'connection' ? `, else create ${name}` : ''}` }), 'an existing GitHub connection\'s ARN') : null,
     r.auth !== 'connection' ? field('The token CodeBuild keeps', select([{ value: 'agent', label: 'The GitHub token above' }, { value: 'admin', label: 'The admin token' }], r.token, (v) => { r.token = v === 'admin' ? 'admin' : 'agent' }),
@@ -526,30 +576,87 @@ function buildRunners(): (HTMLElement | null)[] {
   ]
 }
 
-/** The "build trace's own repository on AWS too" checkbox, or why there is none. */
+/** The "build trace's own repository on AWS too" checkbox, or why there is none; while it is built, the "keep this
+ * installation up to date" one (README "Staying up to date"). */
 function ownRepository(): HTMLElement | null {
   const own = s.pre?.self ?? null
   if (!own) return null
   if (s.projects.has(own.repo)) return h('p', { class: 'muted' }, `trace's own repository (${own.repo}) is one of the projects, so it gets its build runner with them.`)
   if (!own.ok) return h('p', { class: 'muted' }, `trace's own repository (${own.repo}) stays on GitHub's runners: the token can't set its variables.`)
-  return checkbox(`Build trace's own repository on AWS too (${own.repo}): a build runner for it alone, no agents`, buildTrace(), (v) => { s.runners.buildTrace = v; render() })
+  return h('div', {},
+    checkbox(`Build trace's own repository on AWS too (${own.repo}): a build runner for it alone, no agents`, buildTrace(), (v) => { s.runners.buildTrace = v; render() }),
+    buildTrace() ? checkbox('Keep this installation up to date when trace\'s main branch changes', s.runners.selfUpdate, (v) => { s.runners.selfUpdate = v; render() }) : null,
+    buildTrace() ? h('p', { class: 'muted' }, `When ${own.repo}'s default branch changes and its tests pass, its ci workflow deploys this installation again with the settings this installer saves, so you don't have to run the installer for every update. Only that workflow on that branch can do it, which means anyone who can merge there can change this installation. The installer is still needed to add repositories or people.`) : null)
 }
 
 async function runPreflight(): Promise<void> {
   if (s.github.token.length < 20) { s.preError = 'Paste a GitHub token first.'; render(); return }
-  s.preBusy = true; s.preError = ''; render()
+  if (s.preBusy) return
+  s.preBusy = true; s.preError = ''; s.preProgress = []; render()
   try {
     const g = s.agents
-    s.pre = await api<Preflight>('POST', '/api/preflight', {
+    s.pre = await streamPreflight({
       ...awsBody(), token: s.github.token, adminToken: s.github.adminToken, prefix: g.prefix, model: g.model,
       gpuEnabled: g.gpuEnabled, gpuSpot: g.gpuSpot, cpuSpot: g.cpuSpot, cpuVcpus: g.cpuVcpus, runnerAuth: s.runners.auth,
       repos: [...s.projects].filter(([, p]) => !p.create).map(([r]) => r), create: [...s.projects].filter(([, p]) => p.create).map(([r]) => r),
     })
   } catch (e) {
+    s.pre = null
     s.preError = e instanceof Error ? e.message : String(e)
   } finally {
     s.preBusy = false; render()
   }
+}
+
+/** POST /api/preflight, reading each check's progress as the installer reports it, then the result. */
+async function streamPreflight(body: unknown): Promise<Preflight> {
+  const r = await fetch('/api/preflight', {
+    method: 'POST',
+    headers: { 'x-trace-key': KEY, 'content-type': 'application/json', accept: 'application/x-ndjson' },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok || !r.body) {
+    const data = (await r.json().catch(() => ({}))) as { error?: string }
+    throw new Error(data.error ?? `The installer did not answer the checks (${r.status}).`)
+  }
+  const reader = r.body.pipeThrough(new TextDecoderStream()).getReader()
+  let buffer = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += value
+    let nl = buffer.indexOf('\n')
+    while (nl >= 0) {
+      const line = buffer.slice(0, nl).trim()
+      buffer = buffer.slice(nl + 1)
+      nl = buffer.indexOf('\n')
+      if (!line) continue
+      const m = JSON.parse(line) as ({ type: 'progress' } & Progress) | { type: 'result'; result: Preflight } | { type: 'error'; error: string }
+      if (m.type === 'result') return m.result
+      if (m.type === 'error') throw new Error(m.error)
+      const { type: _t, ...p } = m
+      const i = s.preProgress.findIndex((x) => x.id === p.id)
+      if (i >= 0) s.preProgress[i] = p
+      else s.preProgress.push(p)
+      render()
+    }
+  }
+  throw new Error('The installer stopped before the checks finished: is `tracectl install` still running?')
+}
+
+/** What the checks are doing right now (while they run), or which ones could not be done (after). */
+function progressView(): HTMLElement | null {
+  const list = s.preProgress
+  if (s.preBusy) {
+    const doneN = list.filter((p) => p.state !== 'running').length
+    const running = list.filter((p) => p.state === 'running')
+    return note('ok',
+      h('strong', {}, list.length ? `Checking… ${doneN} of ${list.length} done` : 'Starting the checks…'),
+      running.length ? h('ul', { class: 'progress' }, ...running.map((p) => h('li', {}, h('span', { class: 'spin' }), ` ${p.label}`))) : null,
+      list.length ? h('details', {}, h('summary', { class: 'muted' }, 'Every check'),
+        h('ul', { class: 'progress' }, ...list.map((p) => h('li', {}, `${p.state === 'done' ? '✓' : p.state === 'failed' ? '✕' : '…'} ${p.label}`)))) : null)
+  }
+  return null
 }
 
 async function runFix(c: Check): Promise<void> {
@@ -702,7 +809,7 @@ function install(): HTMLElement {
     h('h2', {}, s.result ? (s.result.ok ? 'Installed' : 'Stopped') : s.ready ? 'Ready to use' : 'Installing'),
     s.appUrl && (s.ready || s.result?.ok) ? h('div', { class: 'actions' }, h('a', { class: 'button primary', href: s.appUrl, target: '_blank', rel: 'noopener' }, 'Open trace'), h('span', { class: 'muted' }, ` ${s.appUrl}`)) : null,
     s.result ? note(s.result.ok ? 'ok' : 'bad', h('ul', {}, ...s.result.summary.map((l) => h('li', {}, l))))
-      : s.ready ? note('ok', h('strong', {}, s.appUrl ? `trace is ready: sign in at ${s.appUrl} or with \`trace login\`. ` : 'trace is ready: sign in with `trace login`. '), 'Only the GPU image is still being made.', h('ul', {}, ...s.ready.map((l) => h('li', {}, l))))
+      : s.ready ? note('ok', h('strong', {}, s.appUrl ? `trace is ready: sign in at ${s.appUrl} or with \`tracectl login\`. ` : 'trace is ready: sign in with `tracectl login`. '), 'Only the GPU image is still being made.', h('ul', {}, ...s.ready.map((l) => h('li', {}, l))))
       : h('p', { class: 'lead' }, 'Keep this page open until it says trace is ready.'),
     h('ul', { class: 'progress' }, ...s.steps.map((st) => h('li', { class: `status-${st.status}` },
       h('span', { class: 'icon' }, STEP_ICON[st.status]), h('div', {}, h('strong', {}, st.title), h('div', { class: 'detail' }, st.detail))))),
@@ -734,6 +841,7 @@ async function boot(): Promise<void> {
         s.runners.computeType = sr.computeType ?? ''
         s.runners.privileged = sr.privileged === true ? 'on' : sr.privileged === false ? 'off' : 'default'
         s.runners.buildTrace = sr.buildTrace ?? null
+        s.runners.selfUpdate = sr.selfUpdate ?? true
       }
       for (const p of saved.projects ?? []) {
         s.projects.set(p.repo, {
@@ -742,6 +850,7 @@ async function boot(): Promise<void> {
           generation: p.generation ?? 0, create: null,
         })
       }
+      if (saved.sample?.enabled && saved.sample.repo) Object.assign(s.sample, { repo: saved.sample.repo, private: saved.sample.private ?? true, tour: saved.sample.tour ?? true })
       s.adminEmail = saved.adminEmail ?? ''
       s.people = (saved.people ?? []).map((p) => ({ email: p.email, class: p.class ?? 'user', projects: new Set(p.projects ?? []) }))
     }

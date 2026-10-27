@@ -2,7 +2,7 @@
  * The wait relay, runtime side: the waits a job's tools open in its MCP server process, mirrored on this process's
  * record of open waits (src/core/wait.ts), so a status invocation for that job lists them and check-now reaches them.
  *
- * A job's tools (gpu.*, kb.sync, …) run in the `trace mcp` child its Claude session starts (job.ts runClaude), and
+ * A job's tools (gpu.*, kb.sync, …) run in the `tracectl mcp` child its Claude session starts (job.ts runClaude), and
  * their waits land in that child's own record. So every job, specialist or worker, is registered here while it runs
  * (job.ts), which gives it a token; the child gets TRACE_WAITS_URL (this runtime, loopback) and TRACE_WAITS_TOKEN,
  * and its relay (src/core/wait-report.ts) talks to two loopback-only endpoints (server.ts):

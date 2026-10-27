@@ -93,9 +93,9 @@ describe('the store and loading at run time', () => {
   it('makes the parts tools say which key to add', async () => {
     const r = await lookup('LM358', { env: {}, currency: 'USD', providers: ['mouser', 'nexar'], fetch: async () => new Response('{}', { status: 200 }), db: new PartsDb(new Central({ home: mkdtempSync(join(tmpdir(), 'trace-parts-')) })) }).catch((e: unknown) => e)
     const text = JSON.stringify(r)
-    expect(text).toContain('trace integrations set mouser')
-    expect(text).toContain('trace integrations set nexar')
-    expect(addKeyHint('digikey')).toMatch(/^no Digi-Key credentials \(DIGIKEY_CLIENT_ID \/ DIGIKEY_CLIENT_SECRET\): add them with `trace integrations set digikey`/)
+    expect(text).toContain('tracectl integrations set mouser')
+    expect(text).toContain('tracectl integrations set nexar')
+    expect(addKeyHint('digikey')).toMatch(/^no Digi-Key credentials \(DIGIKEY_CLIENT_ID \/ DIGIKEY_CLIENT_SECRET\): add them with `tracectl integrations set digikey`/)
   })
 })
 

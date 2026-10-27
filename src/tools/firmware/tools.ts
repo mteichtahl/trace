@@ -39,7 +39,7 @@ export const detect = defineTool({
       found: found.length,
       targets: found.map((d) => d.target),
       evidence: Object.fromEntries(found.map((d) => [d.target.name, d.evidence])),
-      ...(found.length ? { configure: `trace config set firmware.targets '${JSON.stringify(found.map((d) => d.target))}'` } : {}),
+      ...(found.length ? { configure: `tracectl config set firmware.targets '${JSON.stringify(found.map((d) => d.target))}'` } : {}),
     }
   },
 })

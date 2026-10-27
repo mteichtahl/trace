@@ -2,10 +2,16 @@
 # the Python bridge's tests, and a check that the committed harness bundle matches its source.
 #
 # Runners: every job runs on AWS CodeBuild (a CodeBuild-hosted GitHub Actions runner in the installation's AWS account)
-# once `trace install` has set it up for this repository, and on GitHub's ubuntu-24.04 runners until then. The switch
+# once `tracectl install` has set it up for this repository, and on GitHub's ubuntu-24.04 runners until then. The switch
 # is the repository variable TRACE_CODEBUILD_PROJECT, which the installer sets only once this repository's runner
 # project exists (and removes if it does not), exactly as in the workflows it writes for other repositories. Both
 # runners are Ubuntu, so the steps work on either: they use sudo, and never assume the job user's name or home.
+#
+# Keeping the installation up to date: after the tests pass on a push to main, the update-installation job deploys the
+# AWS installation again from this commit, with the settings the installer saved (README "Staying up to date"). It runs
+# only when the installer has set this repository's TRACE_UPDATE_ROLE, and it signs in to AWS as that role, which only
+# this workflow on main can use. Nobody has to run the installer for an update; it is still needed to add repositories
+# or people.
 name: ci
 
 on:
@@ -86,3 +92,32 @@ jobs:
       - env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: for r in $RESULTS; do [ "$r" = success ] || { echo "a job ended $r"; exit 1; }; done
+
+  update-installation:
+    needs: tests-pass
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.TRACE_UPDATE_ROLE != ''
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","update-installation"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
+    timeout-minutes: 60
+    # one update at a time, in order: a newer merge waits for the one deploying now instead of cancelling it
+    concurrency:
+      group: trace-update-installation
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "22", cache: npm }
+      - run: npm ci
+      - run: npm run build
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.TRACE_UPDATE_ROLE }}
+          aws-region: ${{ vars.TRACE_AWS_REGION }}
+          role-session-name: trace-update-installation
+      - name: Update the installation
+        env:
+          TRACE_STACK: ${{ vars.TRACE_STACK }}
+          TRACE_AWS_REGION: ${{ vars.TRACE_AWS_REGION }}
+        run: node dist/bin.js update-installation

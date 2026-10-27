@@ -83,7 +83,7 @@ export const AgentAnswers = z.object({
   /** where to look for the published images (`public.ecr.aws/<alias>`); empty: props.ts PUBLISHED_REGISTRY when set,
    * else the source repository's trace-images release, found at install time (src/installer/derive.ts) */
   imageRegistry: z.string().trim().regex(/^([a-z0-9.-]+(:\d+)?(\/[a-z0-9._-]+)*)?$/, 'a registry such as public.ecr.aws/<alias>, or empty').default(''),
-  /** also set this account up to publish trace's images (src/installer/release.ts, `trace release setup`): the
+  /** also set this account up to publish trace's images (src/installer/release.ts, `tracectl release setup`): the
    * TraceRelease stack in us-east-1, the source repository's release variables and its trace-images release, and the
    * first release run. null (the default): when the token administers the source repository (src/installer/derive.ts) */
   publishImages: z.boolean().nullable().default(null),
@@ -100,7 +100,7 @@ export const RUNNER_COMPUTE_TYPES = ['BUILD_GENERAL1_MEDIUM', 'BUILD_GENERAL1_LA
  *   token       always the token (no connection, no console step; the token is stored with CodeBuild)
  *   connection  always a connection (no token stored with CodeBuild; a new one needs one console authorization, and
  *               the installer waits for it after the first deploy)
- * Switch later with `trace upgrade --runner-auth <choice>` or by choosing again in `trace install`: the runner projects
+ * Switch later with `tracectl upgrade --runner-auth <choice>` or by choosing again in `tracectl install`: the runner projects
  * are updated in place. */
 export const RUNNER_AUTH = ['auto', 'token', 'connection'] as const
 
@@ -121,6 +121,12 @@ export const RunnerAnswers = z.object({
   /** trace's own repository as the installer found it (src/installer/source.ts traceRepository) and the token can
    * configure; '' when it found none it can. The installer checks it again before using it. */
   traceRepository: z.union([Repo, z.literal('')]).default(''),
+  /** that repository's default branch, as the installer found it ('' until it has looked) */
+  traceBranch: z.union([z.string().regex(/^[A-Za-z0-9._\/-]+$/), z.literal('')]).default(''),
+  /** Keep this installation up to date when trace's own repository's default branch changes (README "Staying up to
+   * date"): its ci workflow deploys the stack again with the settings this installer saved. Only while trace's own
+   * repository is built on AWS too (buildTrace, and the token can configure it). On by default. */
+  selfUpdate: z.boolean().default(true),
   /** Other repositories to build on AWS without making them projects: each gets a build runner and nothing else. */
   ciRepositories: z.array(Repo).max(EXTRA_BUILD_REPOSITORIES_MAX).default([]),
   /** An existing GitHub connection to use (auth auto or connection); empty: the installer reuses one already authorized
@@ -149,7 +155,8 @@ export const ProjectAnswer = z.object({
   /** A new repository: created (and scaffolded from this template) by the installer instead of onboarded with a PR.
    * null: it exists already. */
   create: z.object({
-    template: z.enum(['empty', 'python', 'kicad', 'rust']).default('empty'),
+    /** 'sample': the sample project (src/installer/sample.ts), never a starter of your own */
+    template: z.enum(['empty', 'python', 'kicad', 'rust', 'sample']).default('empty'),
     private: z.boolean().default(true),
   }).strict().nullable().default(null),
 }).strict()
@@ -161,6 +168,19 @@ export const PersonAnswer = z.object({
   projects: z.array(Repo).default([]),
 }).strict()
 
+/** The sample project (src/installer/sample.ts): a repository the installer creates and fills with a small board design
+ * that exercises every agent and every tool, every simulation included, then onboards like any other project. */
+export const SampleAnswers = z.object({
+  enabled: z.boolean().default(false),
+  /** OWNER/NAME of the sample's repository; empty: the GitHub token's own account, `<login>/trace-sample`. The installer
+   * creates it, so it must not exist yet (or be empty). */
+  repo: z.union([Repo, z.literal('')]).default(''),
+  /** private (the default) or public, when the installer creates it */
+  private: z.boolean().default(true),
+  /** once installed, start the sample's tour: one task per agent and per simulation, so every one of them runs */
+  tour: z.boolean().default(true),
+}).strict()
+
 export const AnswersSchema = z.object({
   github: z.object({ login: z.string().default('') }).strict().default({ login: '' }),
   aws: AwsAnswers,
@@ -169,12 +189,17 @@ export const AnswersSchema = z.object({
   /** none is fine: trace installs, and repositories are added by running the installer again */
   projects: z.array(ProjectAnswer).max(60).default([]),
   /** empty: the token's verified primary email (GitHub /user/emails) */
+  sample: SampleAnswers.prefault({}),
   adminEmail: z.string().trim().refine((v) => v === '' || z.string().email().safeParse(v).success, 'the first administrator\'s email').default(''),
   people: z.array(PersonAnswer).default([]),
   escalateTo: z.string().regex(/^(@?[A-Za-z0-9-]+(\/[A-Za-z0-9._-]+)?)?$/, 'a GitHub login or @org/team').default(''),
 }).strict().superRefine((a, ctx) => {
-  const repos = new Set(a.projects.map((p) => p.repo.toLowerCase()))
-  if (repos.size !== a.projects.length) ctx.addIssue({ code: 'custom', path: ['projects'], message: 'a repository is listed twice' })
+  // the sample is a project too (it may already be listed, from an earlier run): people may be assigned to it
+  // (its name waits for the GitHub login when that is still to be derived)
+  const sample = a.sample.enabled ? (a.sample.repo || (a.github.login ? `${a.github.login}/trace-sample` : '')).toLowerCase() : ''
+  const listed = new Set(a.projects.map((p) => p.repo.toLowerCase()))
+  if (listed.size !== a.projects.length) ctx.addIssue({ code: 'custom', path: ['projects'], message: 'a repository is listed twice' })
+  const repos = new Set([...listed, ...(sample ? [sample] : [])])
   a.people.forEach((p, i) => p.projects.forEach((r, j) => {
     if (!repos.has(r.toLowerCase())) ctx.addIssue({ code: 'custom', path: ['people', i, 'projects', j], message: `${r} is not one of the projects being installed` })
   }))

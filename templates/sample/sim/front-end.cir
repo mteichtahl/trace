@@ -1,0 +1,26 @@
+trace-sample analog front end: J1 VIN -> R1/R2 divider -> R3/C1 anti-alias filter -> BAT54S clamp -> U2 buffer -> ADC_IN
+* Values are the schematic's (hardware/trace-sample.kicad_sch); node names follow its nets (FILT is the filter node,
+* ADC_IN the buffer's output on J2 pin 7). The models come from sim/models (electronics.models): BAT54S is Diodes
+* Incorporated's, TRC_OPA1 is the sample's own behavioural op-amp.
+*
+* V1 is J1: vin_dc for .op (and the bias of the AC sweep), AC 1 for the sweep, a 0 -> 12 V step at 1 ms for .tran.
+.param vin_dc=12 vdd=3.3
+V1 vin 0 DC {vin_dc} AC 1 PULSE(0 12 1m 1u 1u 10m 20m)
+* the 3V3 rail (U1's output), which the clamp returns to and which supplies the buffer
+V2 3v3 0 DC {vdd}
+
+R1 vin div 39k
+R2 div 0 13k
+R3 div filt 6.2k
+C1 filt 0 10n
+* D1 BAT54S: pin 1 (A) to GND, pin 2 (K) to 3V3, pin 3 (COM) on FILT
+XD1 0 3v3 filt BAT54S
+* U2: follower, + on FILT, output and - on ADC_IN
+XU2 filt adc_in 3v3 0 adc_in TRC_OPA1
+C2 3v3 0 100n
+* the MCU's ADC input: its sample capacitor and switch, as a light load
+Rload adc_in 0 1meg
+
+.op
+.ac dec 50 1 1meg
+.tran 2u 5m

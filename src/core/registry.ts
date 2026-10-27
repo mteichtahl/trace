@@ -1,5 +1,5 @@
 /**
- * The one list of tools trace offers. The CLI (`trace tool <name> key=value ...`) and the MCP server (`trace mcp`,
+ * The one list of tools trace offers. The CLI (`tracectl tool <name> key=value ...`) and the MCP server (`tracectl mcp`,
  * which Claude Code uses) are both generated from it, so a tool is written once.
  *
  * An area defines its tools in its own `tools.ts`:
@@ -100,7 +100,7 @@ export class Registry {
     return t.available ? t.available() : true
   }
 
-  /** The tool's input as JSON Schema (for MCP and `trace tools --schema`). */
+  /** The tool's input as JSON Schema (for MCP and `tracectl tools --schema`). */
   static jsonSchema(t: AnyTool): Record<string, unknown> {
     return z.toJSONSchema(t.input.strict(), { io: 'input' }) as Record<string, unknown>
   }

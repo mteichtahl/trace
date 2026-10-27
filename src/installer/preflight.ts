@@ -47,6 +47,34 @@ export interface PreflightInput {
   hasAdminToken: boolean
 }
 
+/** One check as it runs, for the page to show what the installer is doing (POST /api/preflight, streamed). */
+export interface PreflightProgress { id: string; label: string; state: 'running' | 'done' | 'failed'; detail?: string }
+export type OnProgress = (p: PreflightProgress) => void
+
+/** What each check is doing, in plain words: shown while it runs. */
+export const PROGRESS_LABELS: Record<string, string> = {
+  sts: 'Confirming which AWS account the credentials belong to',
+  agentCore: 'Checking Bedrock AgentCore is available in the region',
+  models: 'Listing the Claude models the region offers',
+  gpuQuota: 'Reading the GPU instance quota',
+  cpuQuota: 'Reading the CPU instance quota',
+  vpcs: 'Counting the region\'s networks (VPCs) against its limit',
+  s3vectors: 'Checking S3 Vectors (for the knowledge bases)',
+  cdk: 'Checking the CDK bootstrap',
+  stack: 'Looking for an existing trace installation',
+  oidc: 'Looking for GitHub\'s sign-in provider in AWS',
+  leftovers: 'Looking for leftovers of an earlier installation',
+  credential: 'Checking how AWS CodeBuild reaches GitHub',
+  connections: 'Looking for an authorized GitHub connection',
+  token: 'Checking the GitHub token',
+  email: 'Finding the first administrator\'s email',
+  source: 'Checking trace\'s own repository',
+  registry: 'Finding trace\'s published images',
+  modelAccess: 'Checking the account may use the model',
+  cognito: 'Checking the sign-in domain is free',
+  repos: 'Checking the token\'s access to each repository',
+}
+
 export interface ModelAccess { status: 'AVAILABLE' | 'PENDING' | 'NOT_AVAILABLE' | 'ERROR' | 'UNKNOWN'; useCase: boolean | null; detail: string }
 export interface StackState { status: string; outputs: Record<string, string> }
 
@@ -119,20 +147,27 @@ export async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (t:
 /** The foundation model behind an inference profile id (us.anthropic.claude-… → anthropic.claude-…). */
 export const foundationModelOf = (id: string): string => id.replace(/^(global|us|eu|apac|ca|us-gov|jp|au)\./, '')
 
-export async function preflight(input: PreflightInput, d: PreflightDeps): Promise<PreflightResult> {
+export async function preflight(input: PreflightInput, d: PreflightDeps, onProgress: OnProgress = () => undefined): Promise<PreflightResult> {
   const { region, prefix } = input
-  const settle = <T>(p: Promise<T>): Promise<{ ok: true; v: T } | { ok: false; e: unknown }> => p.then((v) => ({ ok: true as const, v }), (e: unknown) => ({ ok: false as const, e }))
+  // each check says when it starts and how it ended, so the page can show what is happening
+  const track = <T>(id: string, f: () => Promise<T>): Promise<T> => {
+    const label = PROGRESS_LABELS[id] ?? id
+    onProgress({ id, label, state: 'running' })
+    return f().then((v) => { onProgress({ id, label, state: 'done' }); return v }, (e: unknown) => { onProgress({ id, label, state: 'failed', detail: msg(e) }); throw e })
+  }
+  const settleRaw = <T>(p: Promise<T>): Promise<{ ok: true; v: T } | { ok: false; e: unknown }> => p.then((v) => ({ ok: true as const, v }), (e: unknown) => ({ ok: false as const, e }))
+  const settle = <T>(id: string, f: () => Promise<T>): Promise<{ ok: true; v: T } | { ok: false; e: unknown }> => settleRaw(track(id, f))
   const stack = stackName(prefix)
   const gpuCode = input.gpuSpot ? QUOTAS.gpuSpot : QUOTAS.gpuOnDemand
   const cpuCode = input.cpuSpot ? QUOTAS.cpuSpot : QUOTAS.cpuOnDemand
   // everything that does not depend on another answer, at once
   const [sts, agentCore, models, gpuQuota, cpuQuota, vpcs, s3v, cdk, existing, oidc, leftovers, credential, conns, token, email, source] = await Promise.all([
-    settle(d.sts()), settle(d.agentCore()), settle(d.models()), settle(d.quota(gpuCode)), settle(d.quota(cpuCode)), settle(d.vpcs()),
-    settle(d.s3vectors()), settle(d.cdk()), settle(d.stack(stack)), settle(d.oidcProvider()), settle(d.leftovers(prefix)),
-    settle(d.sourceCredential()), input.runnerAuth === 'token' ? Promise.resolve({ ok: true as const, v: [] }) : settle(d.connections()),
-    settle(d.token()), settle(d.email()), settle(d.source()),
+    settle('sts', () => d.sts()), settle('agentCore', () => d.agentCore()), settle('models', () => d.models()), settle('gpuQuota', () => d.quota(gpuCode)), settle('cpuQuota', () => d.quota(cpuCode)), settle('vpcs', () => d.vpcs()),
+    settle('s3vectors', () => d.s3vectors()), settle('cdk', () => d.cdk()), settle('stack', () => d.stack(stack)), settle('oidc', () => d.oidcProvider()), settle('leftovers', () => d.leftovers(prefix)),
+    settle('credential', () => d.sourceCredential()), input.runnerAuth === 'token' ? Promise.resolve({ ok: true as const, v: [] }) : settle('connections', () => d.connections()),
+    settle('token', () => d.token()), settle('email', () => d.email()), settle('source', () => d.source()),
   ])
-  const registry = await settle(PUBLISHED_REGISTRY ? Promise.resolve(PUBLISHED_REGISTRY) : d.publishedRegistry())
+  const registry = await settle('registry', () => (PUBLISHED_REGISTRY ? Promise.resolve(PUBLISHED_REGISTRY) : d.publishedRegistry()))
   const checks: Check[] = []
   const add = (c: Check): void => { checks.push(c) }
   const facts: PreflightResult['facts'] = {}
@@ -162,7 +197,7 @@ export async function preflight(input: PreflightInput, d: PreflightDeps): Promis
   if (!models.ok) add({ id: 'bedrock.model', status: 'warn', title: 'Bedrock model', detail: `could not list the inference profiles: ${msg(models.e)}`, fix: `The agents use ${model}; check that it exists in ${region}.` })
   else {
     if (input.model && !modelList.some((m) => m.id === input.model)) add({ id: 'bedrock.profile', status: 'warn', title: 'Bedrock model', detail: `${input.model} is not an active Anthropic inference profile in ${region} (${modelList.length} are).`, fix: 'Choose one of the listed models under Advanced, or leave it empty for the newest Sonnet.' })
-    const access = await d.modelAccess(foundationModelOf(model)).catch((e: unknown): ModelAccess => ({ status: 'UNKNOWN', useCase: null, detail: msg(e) }))
+    const access = await track('modelAccess', () => d.modelAccess(foundationModelOf(model))).catch((e: unknown): ModelAccess => ({ status: 'UNKNOWN', useCase: null, detail: msg(e) }))
     if (access.status === 'AVAILABLE') add({ id: 'bedrock.model', status: 'ok', title: 'Bedrock model', detail: `${model}: the account has access` })
     else if (access.status === 'PENDING') add({ id: 'bedrock.model', status: 'warn', title: 'Bedrock model', detail: `${model}: access is being set up (Anthropic's agreement is pending; AWS emails when it is done).`, fix: 'Install now: the agents work once access is granted, usually within minutes.' })
     else if (access.useCase === false) {
@@ -250,7 +285,7 @@ export async function preflight(input: PreflightInput, d: PreflightDeps): Promis
   if (/aws|amazon|cognito/.test(prefix)) add({ id: 'cognito.domain', status: 'fail', title: 'Sign-in domain', detail: `Cognito domain prefixes may not contain "aws", "amazon" or "cognito", and the prefix "${prefix}" does.`, fix: 'Choose another prefix under Advanced.' })
   else if (facts.account) {
     const domain = `${prefix}-${facts.account}`
-    const taken = await d.cognitoDomain(domain).catch(() => null)
+    const taken = await track('cognito', () => d.cognitoDomain(domain)).catch(() => null)
     const ours = taken && stackNow?.outputs.UserPoolId === taken.userPoolId
     if (taken && !ours) add({ id: 'cognito.domain', status: 'fail', title: 'Sign-in domain', detail: `the Cognito domain ${domain} belongs to user pool ${taken.userPoolId}, not this installation's${stackNow ? '' : ' (a removed installation kept its user pool)'}.`, fix: stackNow ? 'Choose another prefix under Advanced (that domain is another user pool\'s).' : 'Delete that domain (the installer does, with DeleteUserPoolDomain: the pool and its users stay), or choose another prefix under Advanced.', ...(stackNow ? {} : { action: { id: 'delete-cognito-domain' as FixAction, label: `Delete the domain ${domain}`, params: { domain, userPoolId: taken.userPoolId } } }) })
   }
@@ -288,7 +323,7 @@ export async function preflight(input: PreflightInput, d: PreflightDeps): Promis
   }
   if (facts.sourceAdmin) add({ id: 'images.publish', status: 'info', title: 'Publishing', detail: `the token administers ${SOURCE}, so this install also publishes trace's images (ECR Public in us-east-1, all by API) and starts the first release; Advanced turns it off` })
   if (source.ok && !source.v.ok) add({ id: 'github.source', status: 'warn', title: 'trace\'s actions', detail: source.v.detail, ...(source.v.canFix ? { action: { id: 'share-source' as FixAction, label: `Share ${SOURCE}'s actions` } } : {}) })
-  const repos = info ? await mapLimit(input.repos, 6, (r) => d.repo(r, info?.kind ?? 'unknown').catch((e: unknown): RepoAccess => ({ repo: r, visible: false, configure: false, administer: false, webhooks: false, missing: [msg(e)] }))) : []
+  const repos = info && input.repos.length ? await track('repos', () => mapLimit(input.repos, 6, (r) => d.repo(r, info?.kind ?? 'unknown').catch((e: unknown): RepoAccess => ({ repo: r, visible: false, configure: false, administer: false, webhooks: false, missing: [msg(e)] })))) : []
   for (const a of repos) {
     const note = accessNote(a)
     if (!note) { add({ id: `github.repo:${a.repo}`, status: 'ok', title: a.repo, detail: 'the token can configure it, apply its settings and give it a CodeBuild runner' }); continue }

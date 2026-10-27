@@ -1,8 +1,8 @@
 /**
- * Writes the sample's settings into its project database, .trace/project.db, the way `trace config set` would:
+ * Writes the sample's settings into its project database, .trace/project.db, the way `tracectl config set` would:
  * through config.setValue, which checks every value against the settings schema before storing it.
  *
- *   electronics.projects  the KiCad project the kicad.* tools and `trace check` use
+ *   electronics.projects  the KiCad project the kicad.* tools and `tracectl check` use
  *   electronics.models    SPICE models included in every simulation (the BAT54S clamp diode)
  *   firmware.targets      the C module, built and unit-tested on the host with make
  *   thermal               the envelope "bench" (0 to 60 C, natural convection, horizontal), the parts' thermal

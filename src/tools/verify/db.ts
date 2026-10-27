@@ -16,7 +16,7 @@
  * Line, toggle and branch coverage are not rows: they stay in each run's coverage.dat artifact, and verify.coverage
  * merges those files, so the database committed with the repository does not grow by a row per toggled bit.
  *
- * `trace db merge` merges requirements, test_items and coverage_points by id, keeping the more recently updated row,
+ * `tracectl db merge` merges requirements, test_items and coverage_points by id, keeping the more recently updated row,
  * and takes the union of test_results and coverage_hits (keyed by run id). New requirement ids are random
  * (REQ-<6 hex>), so two branches do not hand out the same one; ids written before that (REQ-001, a project's own
  * numbering) are kept. Two different requirements that still share an id (different text and created time: each

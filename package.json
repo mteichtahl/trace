@@ -10,7 +10,7 @@
     "node": ">=22.13"
   },
   "bin": {
-    "trace": "dist/bin.js"
+    "tracectl": "dist/bin.js"
   },
   "files": [
     "dist",
@@ -30,7 +30,7 @@
     "build:web": "npm --prefix web ci && npm --prefix web run build",
     "test:web": "npm --prefix web test",
     "deploy:release": "node scripts/deploy-release.mjs",
-    "prepare": "npm run build"
+    "prepare": "node scripts/prepare.mjs"
   },
   "dependencies": {
     "@ag-ui/core": "^1.0.3",

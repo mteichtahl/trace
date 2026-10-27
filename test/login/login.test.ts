@@ -127,7 +127,7 @@ describe('login, refresh, access token and logout', () => {
     expect(new URLSearchParams(seen[0]!.body).get('grant_type')).toBe('refresh_token')
     expect(session()).toMatchObject({ refreshToken: 'refresh-1', groups: ['trace-admins'] })
     tokenAnswer = { status: 400, body: { error: 'invalid_grant' } }
-    await expect(refresh()).rejects.toThrow(/trace login/)
+    await expect(refresh()).rejects.toThrow(/tracectl login/)
   })
 
   it('logout revokes the refresh token and clears the session', async () => {
@@ -161,11 +161,11 @@ describe('invokeApi', () => {
     apiAnswer = { status: 403, body: { ok: false, error: 'no access' } }
     await expect(invokeApi('x', {}, { endpoint: base, token: async () => 't' })).rejects.toThrow('no access')
     apiAnswer = { status: 401, body: { ok: false, error: 'bad' } }
-    await expect(invokeApi('x', {}, { endpoint: base, token: async () => 't' })).rejects.toThrow(/trace login/)
+    await expect(invokeApi('x', {}, { endpoint: base, token: async () => 't' })).rejects.toThrow(/tracectl login/)
   })
 })
 
-describe('trace connect', () => {
+describe('tracectl connect', () => {
   it('saves an installation from shared values, leaving the optional fields empty', async () => {
     const code = await cmdConnect(['--region', 'us-west-2', '--pool', 'us-west-2_X', '--client', 'c9', '--domain', 'https://t.auth.us-west-2.amazoncognito.com',
       '--api', 'arn:aws:bedrock-agentcore:us-west-2:210987654321:runtime/trace_api-x', '--name', 'lab'])

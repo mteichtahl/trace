@@ -1,0 +1,13 @@
+# build outputs (trace keeps every run's outputs in .trace/project.db)
+build/
+firmware/build/
+*.kicad_prl
+*-backups/
+fp-info-cache
+*.routed.kicad_pcb
+*.vcd
+!protocol/*.vcd
+sim_build/
+results.xml
+__pycache__/
+.venv/

@@ -1,5 +1,5 @@
 // `npm run deploy:release [-- <cdk deploy arguments>]`: builds, then deploys TraceRelease (src/infra/release.ts) in
-// us-east-1, the stack alone. `trace release setup` does this and everything after it (the registry alias, the source
+// us-east-1, the stack alone. `tracectl release setup` does this and everything after it (the registry alias, the source
 // repository's variables, the runner); this is for deploying the stack by hand.
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
