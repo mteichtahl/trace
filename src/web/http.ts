@@ -78,18 +78,25 @@ export function parseBody<S extends z.ZodType>(req: WebRequest, schema: S, limit
   return r.data
 }
 
-/** Cookies from a Cookie header value or Lambda's `cookies` list. */
+/**
+ * Cookies from a Cookie header value or Lambda's `cookies` list. A name sent more than once is dropped altogether: a
+ * second cookie of the same name can only come from somewhere else (a sibling host, another path) trying to stand in
+ * for ours, and which one the browser lists first is not ours to guess.
+ */
 export function parseCookies(values: readonly string[]): Record<string, string> {
   const out: Record<string, string> = {}
+  const twice = new Set<string>()
   for (const v of values) {
     for (const part of v.split(';')) {
       const i = part.indexOf('=')
       if (i <= 0) continue
       const k = part.slice(0, i).trim()
       const raw = part.slice(i + 1).trim()
+      if (Object.hasOwn(out, k)) twice.add(k)
       try { out[k] = decodeURIComponent(raw) } catch { out[k] = raw }
     }
   }
+  for (const k of twice) delete out[k]
   return out
 }
 

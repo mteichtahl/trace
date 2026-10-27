@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { GROUPS } from '../../src/core/access.js'
 import { CLASS_GROUPS, REFRESH_COOKIE } from '../../src/web/auth.js'
+import { parseCookies } from '../../src/web/http.js'
 import { accessToken } from '../api/fixtures.js'
 import { CONFIG, awsError, bearerOf, idToken, world } from './fakes.js'
 
@@ -15,7 +16,7 @@ describe('sign-in', () => {
     expect(Object.fromEntries(CLASS_GROUPS)).toEqual(GROUPS)
   })
 
-  it('start asks USER_AUTH with no preferred challenge and offers the choices, best first', async () => {
+  it('start asks USER_AUTH with no preferred challenge and offers the pool\'s choices, best first, the same for any address', async () => {
     const w = world()
     w.cognito.answers.set('InitiateAuth', () => ({ ChallengeName: 'SELECT_CHALLENGE', Session: 's1', AvailableChallenges: ['PASSWORD_SRP', 'PASSWORD', 'EMAIL_OTP', 'WEB_AUTHN'] }))
     const r = await w.serve(post('/api/auth/start', { email: EMAIL }))
@@ -23,6 +24,21 @@ describe('sign-in', () => {
     expect(r.json()).toEqual({ session: 's1', choices: ['passkey', 'email_code', 'password'] })
     expect(w.cognito.calls[0]).toEqual({ op: 'InitiateAuth', input: { AuthFlow: 'USER_AUTH', ClientId: CONFIG.clientId, AuthParameters: { USERNAME: EMAIL } } })
     expect(r.headers['cache-control']).toBe('no-store')
+    // an address without an account gets a random pick of the pool's challenges from Cognito: the answer is the same
+    w.cognito.answers.set('InitiateAuth', () => ({ ChallengeName: 'SELECT_CHALLENGE', Session: 's1', AvailableChallenges: ['EMAIL_OTP'] }))
+    expect((await w.serve(post('/api/auth/start', { email: 'nobody@example.com' }))).json()).toEqual({ session: 's1', choices: ['passkey', 'email_code', 'password'] })
+    // a pool without passkeys or email codes offers what it has
+    w.deps.config = async () => ({ ...CONFIG, features: { ...CONFIG.features, passkeys: false, email: false } })
+    expect((await w.serve(post('/api/auth/start', { email: EMAIL }))).json()).toMatchObject({ choices: ['password'] })
+  })
+
+  it('a choice the account has not set up is said as such, so the app offers the others', async () => {
+    const w = world()
+    w.cognito.answers.set('RespondToAuthChallenge', () => { throw awsError('InvalidParameterException') })
+    const r = await w.serve(post('/api/auth/respond', { email: EMAIL, session: 's1', kind: 'passkey' }))
+    expect(r.status).toBe(400)
+    expect(r.json()).toMatchObject({ code: 'choice_unavailable' })
+    expect(r.body).not.toContain('must not leak')
   })
 
   it('a password signs in: tokens in the body, the refresh token only in the cookie, the person from the id token', async () => {
@@ -125,7 +141,7 @@ describe('the session cookie', () => {
     const w = world()
     w.cognito.answers.set('InitiateAuth', () => ({ AuthenticationResult: { ...tokens(), RefreshToken: 'rotated-456' } }))
     const r = await w.serve({ method: 'POST', path: '/api/auth/refresh', cookies: { [REFRESH_COOKIE]: 'refresh-secret-123' } })
-    expect(r.cookies[0]).toMatch(/^trace_rt=rotated-456; HttpOnly; Secure; SameSite=Strict; Path=\/api\/auth; Max-Age=2592000$/)
+    expect(r.cookies[0]).toMatch(/^__Secure-trace_rt=rotated-456; HttpOnly; Secure; SameSite=Strict; Path=\/api\/auth; Max-Age=2592000$/)
   })
 
   it('refresh without a cookie, or with a revoked one, is 401 (and the cookie is cleared)', async () => {
@@ -134,7 +150,22 @@ describe('the session cookie', () => {
     w.cognito.answers.set('InitiateAuth', () => { throw awsError('NotAuthorizedException') })
     const r = await w.serve({ method: 'POST', path: '/api/auth/refresh', cookies: { [REFRESH_COOKIE]: 'old' } })
     expect(r.status).toBe(401)
-    expect(r.cookies).toEqual(['trace_rt=; HttpOnly; Secure; SameSite=Strict; Path=/api/auth; Max-Age=0'])
+    expect(r.cookies).toEqual(['__Secure-trace_rt=; HttpOnly; Secure; SameSite=Strict; Path=/api/auth; Max-Age=0'])
+  })
+
+  it('the cookie is __Secure-trace_rt; the old name is read once and moved; a name sent twice is ignored', async () => {
+    expect(REFRESH_COOKIE).toBe('__Secure-trace_rt')
+    const w = world()
+    w.cognito.answers.set('InitiateAuth', () => ({ AuthenticationResult: { ...tokens(), RefreshToken: undefined } }))
+    const r = await w.serve({ method: 'POST', path: '/api/auth/refresh', cookies: { trace_rt: 'refresh-secret-123' } })
+    expect(r.status).toBe(200)
+    expect(r.cookies).toEqual([
+      '__Secure-trace_rt=refresh-secret-123; HttpOnly; Secure; SameSite=Strict; Path=/api/auth; Max-Age=2592000',
+      'trace_rt=; HttpOnly; Secure; SameSite=Strict; Path=/api/auth; Max-Age=0',
+    ])
+    // two cookies of the same name (one planted from elsewhere): neither is used
+    expect(parseCookies(['__Secure-trace_rt=a; other=1', '__Secure-trace_rt=b'])).toEqual({ other: '1' })
+    expect((await w.serve({ method: 'POST', path: '/api/auth/refresh', cookies: parseCookies(['__Secure-trace_rt=a; __Secure-trace_rt=b']) })).status).toBe(401)
   })
 
   it('sign-out revokes the refresh token and clears the cookie, even when the revoke fails', async () => {

@@ -1,8 +1,12 @@
 /**
  * trace's own sign-in: Cognito's user-pool API, called from here so the refresh token never reaches browser storage.
  *
- *   start        InitiateAuth USER_AUTH with no preferred challenge → SELECT_CHALLENGE and AvailableChallenges, mapped
- *                to choices: WEB_AUTHN → passkey, EMAIL_OTP → email_code, PASSWORD / PASSWORD_SRP → password
+ *   start        InitiateAuth USER_AUTH with no preferred challenge → its session, and the choices the pool offers
+ *                (FIXED_CHOICES: passkey when passkeys are on, email_code when email codes are, password), the same
+ *                for every address. Cognito's own AvailableChallenges are not passed on: for an address without an
+ *                account (preventUserExistenceErrors) they are a random pick of the pool's, for a real one the
+ *                person's own, so they would tell the two apart. A choice the account has not set up fails at
+ *                respond (choice_unavailable) and the app starts again and offers the others
  *   respond      one step, inferred from `kind` and whether an `answer` came with it:
  *                  password + answer          SELECT_CHALLENGE  ANSWER=PASSWORD, PASSWORD
  *                  email_code, no answer      SELECT_CHALLENGE  ANSWER=EMAIL_OTP (Cognito emails a code) → next email_code
@@ -12,11 +16,16 @@
  *                  passkey + answer           WEB_AUTHN         CREDENTIAL (the AuthenticationResponseJSON)
  *                  totp + answer              SOFTWARE_TOKEN_MFA SOFTWARE_TOKEN_MFA_CODE
  *                  new_password + answer      NEW_PASSWORD_REQUIRED NEW_PASSWORD
- *                Signed in: the access and id tokens in the body, the refresh token in the `trace_rt` cookie
+ *                Signed in: the access and id tokens in the body, the refresh token in the `__Secure-trace_rt` cookie
  *                (HttpOnly; Secure; SameSite=Strict; Path=/api/auth; 30 days), and the person from the verified id
  *                token. Otherwise the next step and its session.
  *   refresh      REFRESH_TOKEN_AUTH with the cookie. The web app client has no secret, so no USERNAME or SECRET_HASH
- *                is needed and the cookie holds the refresh token alone
+ *                is needed and the cookie holds the refresh token alone. A cookie name sent twice is ignored
+ *                (src/web/http.ts parseCookies). The old name, `trace_rt`, is read once when the new one is absent:
+ *                the answer sets the new cookie and clears the old
+ *   invitation   no route of its own: the invitation email sends people to the app's /invite page, where they enter
+ *                their email and the temporary password (start, then respond password → new_password), and then add
+ *                a passkey or an authenticator app with the routes below. Nothing secret is ever in a link
  *   sign-out     RevokeToken, and the cookie cleared (whether or not the revoke worked)
  *   forgot/reset ForgotPassword (always { sent: true }: no telling who has an account) / ConfirmForgotPassword
  *   passkeys     Start/CompleteWebAuthnRegistration, List/DeleteWebAuthnCredential with the person's access token
@@ -31,9 +40,11 @@ import { z } from 'zod'
 import { AuthError } from '../api/jwt.js'
 import type { WebConfig } from './config.js'
 import { type WebDeps, signedIn } from './deps.js'
-import { type Reply, WebError, cookie, parseBody, route, whoHash } from './http.js'
+import { type Reply, type WebRequest, WebError, cookie, parseBody, route, whoHash } from './http.js'
 
-export const REFRESH_COOKIE = 'trace_rt'
+export const REFRESH_COOKIE = '__Secure-trace_rt'
+/** The cookie's name before it took the __Secure- prefix: read once, then cleared. */
+export const OLD_REFRESH_COOKIE = 'trace_rt'
 export const REFRESH_PATH = '/api/auth'
 export const REFRESH_MAX_AGE = 30 * 24 * 3600
 
@@ -62,6 +73,9 @@ const TotpVerify = z.object({ code: z.string().trim().regex(/^\d{6}$/, 'six digi
 const CHOICE: Partial<Record<string, Choice>> = { WEB_AUTHN: 'passkey', EMAIL_OTP: 'email_code', PASSWORD: 'password', PASSWORD_SRP: 'password' }
 const NEXT: Partial<Record<string, Kind>> = { EMAIL_OTP: 'email_code', SOFTWARE_TOKEN_MFA: 'totp', NEW_PASSWORD_REQUIRED: 'new_password', WEB_AUTHN: 'passkey' }
 const ORDER: readonly Choice[] = ['passkey', 'email_code', 'password']
+
+/** The choices start offers for every address alike: the pool's first factors (src/infra/stack.ts signInPolicy). */
+export const fixedChoices = (c: Pick<WebConfig, 'features'>): Choice[] => ORDER.filter((x) => x === 'password' || (x === 'passkey' ? c.features.passkeys : c.features.email))
 
 /** Cognito's errors as answers: the error's name decides, never its text when it could echo an input. */
 export function cognitoError(e: unknown): WebError {
@@ -96,6 +110,15 @@ async function cognitoCall<T>(fn: () => Promise<T>): Promise<T> {
 
 const refreshCookie = (token: string): string => cookie(REFRESH_COOKIE, token, { path: REFRESH_PATH, maxAge: REFRESH_MAX_AGE })
 const clearCookie = (): string => cookie(REFRESH_COOKIE, '', { path: REFRESH_PATH, maxAge: 0 })
+const clearOldCookie = (): string => cookie(OLD_REFRESH_COOKIE, '', { path: REFRESH_PATH, maxAge: 0 })
+
+/** The refresh token the request carries: the cookie, else (once) the old name's; and whether it was the old one. */
+const refreshTokenOf = (req: WebRequest): { token: string; old: boolean } | null => {
+  const now = req.cookies[REFRESH_COOKIE]
+  if (now) return { token: now, old: false }
+  const old = req.cookies[OLD_REFRESH_COOKIE]
+  return old ? { token: old, old: true } : null
+}
 
 /** The signed-in answer: tokens, the person from the verified id token, and (when Cognito gave one) the cookie. */
 async function signedInReply(r: AuthenticationResultType, deps: WebDeps, c: WebConfig): Promise<Reply> {
@@ -166,7 +189,7 @@ export function authRoutes(deps: WebDeps) {
       if (out.AuthenticationResult) return signedInReply(out.AuthenticationResult, deps, c)
       if (!out.Session) throw new WebError(500, 'Cognito answered without a session', 'cognito')
       if (out.ChallengeName && out.ChallengeName !== 'SELECT_CHALLENGE') return stepReply({ ...out, $metadata: out.$metadata }, deps, c)
-      return { body: { session: out.Session, choices: choices(out.AvailableChallenges) } }
+      return { body: { session: out.Session, choices: fixedChoices(c) } }
     }),
 
     route('POST', '/api/auth/respond', async (req, ctx) => {
@@ -174,13 +197,25 @@ export function authRoutes(deps: WebDeps) {
       const c = await deps.config()
       ctx.who = whoHash(b.email)
       const { name, responses } = challengeFor(b.kind, b.email, b.answer)
-      const out = await cognitoCall(() => deps.cognito(c).respondToAuthChallenge({ ClientId: c.clientId, ChallengeName: name, Session: b.session, ChallengeResponses: responses }))
+      let out: RespondToAuthChallengeCommandOutput
+      try {
+        out = await deps.cognito(c).respondToAuthChallenge({ ClientId: c.clientId, ChallengeName: name, Session: b.session, ChallengeResponses: responses })
+      } catch (e) {
+        const we = cognitoError(e)
+        // choosing a way this account has not set up (a passkey it has none of): said as such, the same for an
+        // address without an account, so the app offers the other ways
+        if (name === 'SELECT_CHALLENGE' && b.answer === undefined && (we.code === 'invalid_parameter' || we.code === 'passkeys_unavailable' || we.code === 'not_authorized')) {
+          throw new WebError(400, 'that way of signing in is not set up for this account: choose another', 'choice_unavailable')
+        }
+        throw we
+      }
       return stepReply(out, deps, c)
     }),
 
     route('POST', '/api/auth/refresh', async (req, ctx) => {
-      const rt = req.cookies[REFRESH_COOKIE]
-      if (!rt) throw new WebError(401, 'not signed in', 'unauthenticated')
+      const found = refreshTokenOf(req)
+      if (!found) throw new WebError(401, 'not signed in', 'unauthenticated')
+      const rt = found.token
       const c = await deps.config()
       try {
         const out = await deps.cognito(c).initiateAuth({ AuthFlow: 'REFRESH_TOKEN_AUTH', ClientId: c.clientId, AuthParameters: { REFRESH_TOKEN: rt } })
@@ -189,24 +224,26 @@ export function authRoutes(deps: WebDeps) {
         const body = reply.body as { user: { sub: string }; signedIn?: boolean }
         ctx.who = whoHash(body.user.sub)
         const { signedIn: _s, ...rest } = body
-        return { body: rest, ...(reply.cookies ? { cookies: reply.cookies } : {}) }
+        // the old name: moved to the new one (Cognito sends no new refresh token unless rotation is on), and cleared
+        const cookies = [...(reply.cookies ?? (found.old ? [refreshCookie(rt)] : [])), ...(found.old ? [clearOldCookie()] : [])]
+        return { body: rest, ...(cookies.length ? { cookies } : {}) }
       } catch (e) {
         const we = e instanceof WebError ? e : cognitoError(e)
         // an expired or revoked refresh token ends the session: the cookie goes with it
-        if (we.status === 401) return { status: 401, body: { ok: false, error: 'the session has ended: sign in again', code: 'unauthenticated' }, cookies: [clearCookie()] }
+        if (we.status === 401) return { status: 401, body: { ok: false, error: 'the session has ended: sign in again', code: 'unauthenticated' }, cookies: [clearCookie(), ...(found.old ? [clearOldCookie()] : [])] }
         throw we
       }
     }),
 
     route('POST', '/api/auth/sign-out', async (req) => {
-      const rt = req.cookies[REFRESH_COOKIE]
+      const rt = refreshTokenOf(req)?.token
       if (rt) {
         const c = await deps.config()
         await deps.cognito(c).revokeToken({ ClientId: c.clientId, Token: rt }).catch((e: unknown) => {
           deps.log({ warning: 'sign-out: RevokeToken failed', error: e instanceof Error ? e.name : 'Error' })
         })
       }
-      return { body: { ok: true }, cookies: [clearCookie()] }
+      return { body: { ok: true }, cookies: [clearCookie(), clearOldCookie()] }
     }),
 
     route('POST', '/api/auth/forgot', async (req, ctx) => {
