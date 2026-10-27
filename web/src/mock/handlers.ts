@@ -9,6 +9,7 @@ import { INBOX, JOURNEYS, ME, ME_DOC, MEMBERS, PROJECTS, RECALL, THREADS, THREAD
 import { setPath } from '@/lib/prefs'
 import { adminHandle } from './admin'
 import { s1Action } from './s1'
+import { filesAction, withFileThread } from './files'
 
 let signedIn = typeof sessionStorage !== 'undefined' && sessionStorage.getItem('trace.mock.signedOut') !== '1'
 let inbox: InboxItem[] = [...INBOX]
@@ -22,6 +23,7 @@ const tokens = () => ({ accessToken: 'mock-access', idToken: 'mock-id', expiresI
 
 function action(name: string, a: Record<string, unknown>): Response {
   const repo = a.repo as string
+  const files = filesAction(name, a); if (files) return files
   const k = knowledgeAction(name, a); if (k !== undefined) return k && typeof k === 'object' && '__error' in k ? json({ ok: false, error: (k as { __error: string }).__error }, 403) : ok(k)
   const s1 = s1Action(name, a); if (s1) return s1
   switch (name) {
@@ -35,7 +37,7 @@ function action(name: string, a: Record<string, unknown>): Response {
     case 'question.answer': inbox = inbox.filter((i) => i.questionId !== a.question); return ok({ ok: true })
     case 'me.get': return ok(me)
     case 'me.set': me = setPath(me, String(a.key), a.value); return ok({ ok: true })
-    case 'chats.list': return ok(threads.filter((t) => t.repo === repo))
+    case 'chats.list': return ok(withFileThread(repo, threads.filter((t) => t.repo === repo)))
     case 'chats.get': return ok({ thread: threads.find((t) => t.id === a.id), messages: messages[String(a.id)] ?? [] })
     case 'chats.recall': return ok(RECALL)
     case 'chats.append': {

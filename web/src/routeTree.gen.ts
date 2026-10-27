@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as FocusRouteImport } from './routes/_focus'
 import { Route as NoAccessRouteImport } from './routes/no-access'
+import { Route as ViewRouteImport } from './routes/view'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppAdminRouteImport } from './routes/_app/admin'
 import { Route as AppInboxRouteImport } from './routes/_app/inbox'
@@ -46,6 +47,7 @@ import { Route as AppPIdDesignRouteImport } from './routes/_app/p/$id/design'
 import { Route as AppPIdEvidenceRouteImport } from './routes/_app/p/$id/evidence'
 import { Route as AppPIdMemoryRouteImport } from './routes/_app/p/$id/memory'
 import { Route as AppPIdRequirementsRouteImport } from './routes/_app/p/$id/requirements'
+import { Route as AppPIdFilesIndexRouteImport } from './routes/_app/p/$id/files/index'
 import { Route as AppPIdMemoryIndexRouteImport } from './routes/_app/p/$id/memory/index'
 import { Route as AppPIdMemoryChangesRouteImport } from './routes/_app/p/$id/memory/changes'
 import { Route as AppPIdMemoryRecentRouteImport } from './routes/_app/p/$id/memory/recent'
@@ -53,8 +55,10 @@ import { Route as AppPIdRequirementsRidRouteImport } from './routes/_app/p/$id/r
 import { Route as AppPIdRunsRunRouteImport } from './routes/_app/p/$id/runs.$run'
 import { Route as AppPIdSettingsIndexRouteImport } from './routes/_app/p/$id/settings/index'
 import { Route as AppPIdSettingsPromptsRouteImport } from './routes/_app/p/$id/settings/prompts'
+import { Route as AppPIdFilesSplatRouteImport } from './routes/_app/p/$id_/files/$'
 import { Route as FocusPIdDoSkillRouteImport } from './routes/_focus/p/$id/do/$skill'
 import { Route as FocusPIdGatesGateRouteImport } from './routes/_focus/p/$id/gates/$gate'
+import { Route as ViewPIdFilesSplatRouteImport } from './routes/view/p/$id/files/$'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -67,6 +71,11 @@ const FocusRoute = FocusRouteImport.update({
 const NoAccessRoute = NoAccessRouteImport.update({
   id: '/no-access',
   path: '/no-access',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ViewRoute = ViewRouteImport.update({
+  id: '/view',
+  path: '/view',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppIndexRoute = AppIndexRouteImport.update({
@@ -239,6 +248,11 @@ const AppPIdRequirementsRoute = AppPIdRequirementsRouteImport.update({
   path: '/requirements',
   getParentRoute: () => AppPIdRoute,
 } as any)
+const AppPIdFilesIndexRoute = AppPIdFilesIndexRouteImport.update({
+  id: '/files/',
+  path: '/files/',
+  getParentRoute: () => AppPIdRoute,
+} as any)
 const AppPIdMemoryIndexRoute = AppPIdMemoryIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -274,6 +288,11 @@ const AppPIdSettingsPromptsRoute = AppPIdSettingsPromptsRouteImport.update({
   path: '/settings/prompts',
   getParentRoute: () => AppPIdRoute,
 } as any)
+const AppPIdFilesSplatRoute = AppPIdFilesSplatRouteImport.update({
+  id: '/p/$id_/files/$',
+  path: '/p/$id/files/$',
+  getParentRoute: () => AppRoute,
+} as any)
 const FocusPIdDoSkillRoute = FocusPIdDoSkillRouteImport.update({
   id: '/p/$id/do/$skill',
   path: '/p/$id/do/$skill',
@@ -284,10 +303,16 @@ const FocusPIdGatesGateRoute = FocusPIdGatesGateRouteImport.update({
   path: '/p/$id/gates/$gate',
   getParentRoute: () => FocusRoute,
 } as any)
+const ViewPIdFilesSplatRoute = ViewPIdFilesSplatRouteImport.update({
+  id: '/p/$id/files/$',
+  path: '/p/$id/files/$',
+  getParentRoute: () => ViewRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/no-access': typeof NoAccessRoute
+  '/view': typeof ViewRouteWithChildren
   '/admin': typeof AppAdminRouteWithChildren
   '/inbox': typeof AppInboxRoute
   '/knowledge': typeof AppKnowledgeRouteWithChildren
@@ -326,14 +351,18 @@ export interface FileRoutesByFullPath {
   '/p/$id/requirements/$rid': typeof AppPIdRequirementsRidRoute
   '/p/$id/runs/$run': typeof AppPIdRunsRunRoute
   '/p/$id/settings/prompts': typeof AppPIdSettingsPromptsRoute
+  '/p/$id/files/$': typeof AppPIdFilesSplatRoute
   '/p/$id/do/$skill': typeof FocusPIdDoSkillRoute
   '/p/$id/gates/$gate': typeof FocusPIdGatesGateRoute
+  '/view/p/$id/files/$': typeof ViewPIdFilesSplatRoute
+  '/p/$id/files/': typeof AppPIdFilesIndexRoute
   '/p/$id/memory/': typeof AppPIdMemoryIndexRoute
   '/p/$id/settings/': typeof AppPIdSettingsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
   '/no-access': typeof NoAccessRoute
+  '/view': typeof ViewRouteWithChildren
   '/inbox': typeof AppInboxRoute
   '/me': typeof AppMeRoute
   '/invite/$token': typeof InviteTokenRoute
@@ -368,8 +397,11 @@ export interface FileRoutesByTo {
   '/p/$id/requirements/$rid': typeof AppPIdRequirementsRidRoute
   '/p/$id/runs/$run': typeof AppPIdRunsRunRoute
   '/p/$id/settings/prompts': typeof AppPIdSettingsPromptsRoute
+  '/p/$id/files/$': typeof AppPIdFilesSplatRoute
   '/p/$id/do/$skill': typeof FocusPIdDoSkillRoute
   '/p/$id/gates/$gate': typeof FocusPIdGatesGateRoute
+  '/view/p/$id/files/$': typeof ViewPIdFilesSplatRoute
+  '/p/$id/files': typeof AppPIdFilesIndexRoute
   '/p/$id/memory': typeof AppPIdMemoryIndexRoute
   '/p/$id/settings': typeof AppPIdSettingsIndexRoute
 }
@@ -378,6 +410,7 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteWithChildren
   '/_focus': typeof FocusRouteWithChildren
   '/no-access': typeof NoAccessRoute
+  '/view': typeof ViewRouteWithChildren
   '/_app/admin': typeof AppAdminRouteWithChildren
   '/_app/inbox': typeof AppInboxRoute
   '/_app/knowledge': typeof AppKnowledgeRouteWithChildren
@@ -417,8 +450,11 @@ export interface FileRoutesById {
   '/_app/p/$id/requirements/$rid': typeof AppPIdRequirementsRidRoute
   '/_app/p/$id/runs/$run': typeof AppPIdRunsRunRoute
   '/_app/p/$id/settings/prompts': typeof AppPIdSettingsPromptsRoute
+  '/_app/p/$id_/files/$': typeof AppPIdFilesSplatRoute
   '/_focus/p/$id/do/$skill': typeof FocusPIdDoSkillRoute
   '/_focus/p/$id/gates/$gate': typeof FocusPIdGatesGateRoute
+  '/view/p/$id/files/$': typeof ViewPIdFilesSplatRoute
+  '/_app/p/$id/files/': typeof AppPIdFilesIndexRoute
   '/_app/p/$id/memory/': typeof AppPIdMemoryIndexRoute
   '/_app/p/$id/settings/': typeof AppPIdSettingsIndexRoute
 }
@@ -427,6 +463,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/no-access'
+    | '/view'
     | '/admin'
     | '/inbox'
     | '/knowledge'
@@ -465,14 +502,18 @@ export interface FileRouteTypes {
     | '/p/$id/requirements/$rid'
     | '/p/$id/runs/$run'
     | '/p/$id/settings/prompts'
+    | '/p/$id/files/$'
     | '/p/$id/do/$skill'
     | '/p/$id/gates/$gate'
+    | '/view/p/$id/files/$'
+    | '/p/$id/files/'
     | '/p/$id/memory/'
     | '/p/$id/settings/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/no-access'
+    | '/view'
     | '/inbox'
     | '/me'
     | '/invite/$token'
@@ -507,8 +548,11 @@ export interface FileRouteTypes {
     | '/p/$id/requirements/$rid'
     | '/p/$id/runs/$run'
     | '/p/$id/settings/prompts'
+    | '/p/$id/files/$'
     | '/p/$id/do/$skill'
     | '/p/$id/gates/$gate'
+    | '/view/p/$id/files/$'
+    | '/p/$id/files'
     | '/p/$id/memory'
     | '/p/$id/settings'
   id:
@@ -516,6 +560,7 @@ export interface FileRouteTypes {
     | '/_app'
     | '/_focus'
     | '/no-access'
+    | '/view'
     | '/_app/admin'
     | '/_app/inbox'
     | '/_app/knowledge'
@@ -555,8 +600,11 @@ export interface FileRouteTypes {
     | '/_app/p/$id/requirements/$rid'
     | '/_app/p/$id/runs/$run'
     | '/_app/p/$id/settings/prompts'
+    | '/_app/p/$id_/files/$'
     | '/_focus/p/$id/do/$skill'
     | '/_focus/p/$id/gates/$gate'
+    | '/view/p/$id/files/$'
+    | '/_app/p/$id/files/'
     | '/_app/p/$id/memory/'
     | '/_app/p/$id/settings/'
   fileRoutesById: FileRoutesById
@@ -565,6 +613,7 @@ export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
   FocusRoute: typeof FocusRouteWithChildren
   NoAccessRoute: typeof NoAccessRoute
+  ViewRoute: typeof ViewRouteWithChildren
   InviteTokenRoute: typeof InviteTokenRoute
   SignInCodeRoute: typeof SignInCodeRoute
   SignInResetRoute: typeof SignInResetRoute
@@ -592,6 +641,13 @@ declare module '@tanstack/react-router' {
       path: '/no-access'
       fullPath: '/no-access'
       preLoaderRoute: typeof NoAccessRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/view': {
+      id: '/view'
+      path: '/view'
+      fullPath: '/view'
+      preLoaderRoute: typeof ViewRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app/': {
@@ -832,6 +888,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPIdRequirementsRouteImport
       parentRoute: typeof AppPIdRoute
     }
+    '/_app/p/$id/files/': {
+      id: '/_app/p/$id/files/'
+      path: '/files'
+      fullPath: '/p/$id/files/'
+      preLoaderRoute: typeof AppPIdFilesIndexRouteImport
+      parentRoute: typeof AppPIdRoute
+    }
     '/_app/p/$id/memory/': {
       id: '/_app/p/$id/memory/'
       path: '/'
@@ -881,6 +944,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPIdSettingsPromptsRouteImport
       parentRoute: typeof AppPIdRoute
     }
+    '/_app/p/$id_/files/$': {
+      id: '/_app/p/$id_/files/$'
+      path: '/p/$id/files/$'
+      fullPath: '/p/$id/files/$'
+      preLoaderRoute: typeof AppPIdFilesSplatRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_focus/p/$id/do/$skill': {
       id: '/_focus/p/$id/do/$skill'
       path: '/p/$id/do/$skill'
@@ -894,6 +964,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/p/$id/gates/$gate'
       preLoaderRoute: typeof FocusPIdGatesGateRouteImport
       parentRoute: typeof FocusRoute
+    }
+    '/view/p/$id/files/$': {
+      id: '/view/p/$id/files/$'
+      path: '/p/$id/files/$'
+      fullPath: '/view/p/$id/files/$'
+      preLoaderRoute: typeof ViewPIdFilesSplatRouteImport
+      parentRoute: typeof ViewRoute
     }
   }
 }
@@ -973,6 +1050,7 @@ interface AppPIdRouteChildren {
   AppPIdIndexRoute: typeof AppPIdIndexRoute
   AppPIdRunsRunRoute: typeof AppPIdRunsRunRoute
   AppPIdSettingsPromptsRoute: typeof AppPIdSettingsPromptsRoute
+  AppPIdFilesIndexRoute: typeof AppPIdFilesIndexRoute
   AppPIdSettingsIndexRoute: typeof AppPIdSettingsIndexRoute
 }
 
@@ -988,6 +1066,7 @@ const AppPIdRouteChildren: AppPIdRouteChildren = {
   AppPIdIndexRoute: AppPIdIndexRoute,
   AppPIdRunsRunRoute: AppPIdRunsRunRoute,
   AppPIdSettingsPromptsRoute: AppPIdSettingsPromptsRoute,
+  AppPIdFilesIndexRoute: AppPIdFilesIndexRoute,
   AppPIdSettingsIndexRoute: AppPIdSettingsIndexRoute,
 }
 
@@ -1007,6 +1086,7 @@ interface AppRouteChildren {
   AppOpsIndexRoute: typeof AppOpsIndexRoute
   AppProjectsIndexRoute: typeof AppProjectsIndexRoute
   AppAgentsToolsToolRoute: typeof AppAgentsToolsToolRoute
+  AppPIdFilesSplatRoute: typeof AppPIdFilesSplatRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -1022,6 +1102,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppOpsIndexRoute: AppOpsIndexRoute,
   AppProjectsIndexRoute: AppProjectsIndexRoute,
   AppAgentsToolsToolRoute: AppAgentsToolsToolRoute,
+  AppPIdFilesSplatRoute: AppPIdFilesSplatRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
@@ -1040,10 +1121,21 @@ const FocusRouteChildren: FocusRouteChildren = {
 
 const FocusRouteWithChildren = FocusRoute._addFileChildren(FocusRouteChildren)
 
+interface ViewRouteChildren {
+  ViewPIdFilesSplatRoute: typeof ViewPIdFilesSplatRoute
+}
+
+const ViewRouteChildren: ViewRouteChildren = {
+  ViewPIdFilesSplatRoute: ViewPIdFilesSplatRoute,
+}
+
+const ViewRouteWithChildren = ViewRoute._addFileChildren(ViewRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
   FocusRoute: FocusRouteWithChildren,
   NoAccessRoute: NoAccessRoute,
+  ViewRoute: ViewRouteWithChildren,
   InviteTokenRoute: InviteTokenRoute,
   SignInCodeRoute: SignInCodeRoute,
   SignInResetRoute: SignInResetRoute,

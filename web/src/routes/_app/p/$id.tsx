@@ -49,6 +49,7 @@ export function visibleTabs(j: Journey, o: { admin: boolean }): ProjectTab[] {
     { id: 'evidence', label: 'Evidence', to: '/evidence', show: reached(j, ['prove']) },
     { id: 'build', label: 'Build', to: '/build', show: reached(j, ['release']) },
     { id: 'decisions', label: 'Decisions', to: '/decisions', show: j.gates.some((g) => g.state === 'signed') },
+    { id: 'files', label: 'Files', to: '/files', show: true },
     { id: 'settings', label: 'Settings', to: '/settings', show: true },
     { id: 'cost', label: 'Cost and time', to: '/cost', show: o.admin },
     { id: 'memory', label: 'Memory', to: '/memory', show: !!j.hasMemory },
