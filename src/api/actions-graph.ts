@@ -13,7 +13,12 @@
  *   person        who signed, answered, waived (their email as the record has it)
  *   memory        with `memory: true`, the project's long-term memories most like the focus, through the same memory
  *                 the agents recall from, and only the ones this person may see (never another person's preferences)
- *   (intent, block, part, datasheet, document: the record keeps none yet)
+ *   intent        the intent statements (src/tools/design), rejected ones left out; status: verified when every
+ *                 requirement derived from it is, failing when one fails, untested otherwise
+ *   block         the blocks of the architecture drawn (the chosen option, else trace's recommendation)
+ *   part          each block's parts by part number
+ *   document      the schematic sheets that name the requirements they serve (design.sheets)
+ *   (datasheet: the record keeps no link from a part to its datasheet page yet)
  *
  *   links   proves | fails      a test item, or a run of it, against each requirement it covers (by the result) and a
  *                               run against its test; a planned test `serves` its requirements
@@ -23,9 +28,12 @@
  *           decided_in          a decision of the log → the gate it was made at
  *           decided_by          a gate, an answer or a waiver → the person who signed, gave or took it
  *           related             a memory → the focus, by meaning (dashed)
+ *           derived_from        a requirement → the intent statement it came from
+ *           serves              a block, or a sheet, → each requirement it serves; a sheet → its block
+ *           uses                a block → its parts (and a result's run → the tool runs it rests on)
  *
  * The focus is "<kind>:<id>" as the nodes carry it (requirement:REQ-001, run:4f2a…, test:TST-1, gate:capture,
- * person:<email>), or a bare id (REQ-001) found among them; depth 1 to 3 (2 by default). At most 150 nodes are
+ * person:<email>, intent:INT-1a2b3c, block:mcu, part:<part number>, sheet:<file>), or a bare id (REQ-001) found among them; depth 1 to 3 (2 by default). At most 150 nodes are
  * returned, nearest first; past that, the rest of each kind gather into `groups` ({ id, kind, members, label, parent }:
  * "+12 more runs"), the shape the app's own grouping uses.
  */
@@ -33,7 +41,9 @@ import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import { loadJourney } from '../core/journey.js'
 import { ActionError, type Context, Repo, def, memoryInclude, projectMemory, withRecordDb } from './action-kit.js'
-import { requirementEvidence } from './record-read.js'
+import { TOPIC_NAMES } from '../tools/design/db.js'
+import { architectureView, intentView, linksView } from '../tools/design/record.js'
+import { designOf, requirementEvidence } from './record-read.js'
 
 /** The app's vocabulary (web/src/lib/graph.ts). */
 export const NODE_KINDS = ['intent', 'requirement', 'block', 'part', 'datasheet', 'run', 'decision', 'memory', 'document', 'person'] as const
@@ -153,6 +163,33 @@ export function projectGraph(db: DatabaseSync, repo?: string): { nodes: Map<stri
       node({ id, kind: 'decision', label: short(d.summary, 60), title: short(d.summary, 120), summary: d.summary, facts: { Kind: d.kind }, ...(repo ? { repo } : {}) })
       if (d.ref && nodes.has(`gate:${d.ref}`)) link(id, `gate:${d.ref}`, 'decided_in')
     }
+  }
+  // the design record: intent, the architecture drawn, its parts, and the sheets that name what they serve
+  const design = designOf(db)
+  const evidence = new Map([...nodes.values()].filter((x) => x.kind === 'requirement').map((x) => [x.id, x.status]))
+  const derived = linksView(design.rows)
+  for (const st of intentView(design.rows, design.decisions).filter((x) => x.state !== 'rejected' && x.kind !== 'question')) {
+    const reqs = derived.filter((l) => l.intent === st.id).map((l) => evidence.get(`requirement:${l.requirement}`))
+    const status: NodeStatus = reqs.includes('failing') ? 'failing' : reqs.length && reqs.every((x) => x === 'verified' || x === 'waived') ? 'verified' : 'untested'
+    node({ id: `intent:${st.id}`, kind: 'intent', label: short(st.words, 60), title: short(st.words, 120), summary: `${TOPIC_NAMES[st.topic]} · ${st.state === 'accepted' || st.state === 'edited' ? 'accepted' : 'proposed'}${st.source ? ` · from ${st.source.kind === 'person' ? 'the person' : st.source.kind}` : ''}`, status, facts: { Topic: TOPIC_NAMES[st.topic], State: st.state }, ...at('/requirements') })
+  }
+  for (const l of derived) link(`requirement:${l.requirement}`, `intent:${l.intent}`, 'derived_from')
+  const arch = architectureView(design.rows, design.decisions)
+  const shown = arch.options.find((o) => o.id === arch.current)
+  for (const b of shown?.blocks ?? []) {
+    const id = `block:${b.id}`
+    node({ id, kind: 'block', label: b.name, title: b.name, summary: `${b.role ?? 'A block'} in option ${shown?.id}${arch.chosen?.option === shown?.id ? ' (chosen)' : ' (proposed)'}.`, status: b.serves.length ? 'active' : 'inactive', facts: { Option: shown?.id ?? '', ...(b.parts.length ? { Parts: b.parts.map((p) => p.mpn).join(', ') } : {}) }, ...at('/design') })
+    for (const r of b.serves) link(id, `requirement:${r}`, 'serves')
+    for (const p of b.parts) {
+      node({ id: `part:${p.mpn}`, kind: 'part', label: p.mpn, title: p.mpn, summary: p.role ?? (p.key ? 'A key part.' : 'A part.'), facts: { 'Part number': p.mpn, ...(p.key ? { Key: 'yes' } : {}) }, ...(repo ? { repo } : {}) })
+      link(id, `part:${p.mpn}`, 'uses')
+    }
+  }
+  for (const sh of design.rows.sheets) {
+    const id = `sheet:${sh.sheet}`
+    node({ id, kind: 'document', label: sh.sheet.split('/').pop() ?? sh.sheet, title: `Schematic sheet ${sh.sheet}`, summary: sh.requirements.length ? `Serves ${sh.requirements.join(', ')}.` : `Serves no requirement: ${sh.reason ?? ''}`, facts: { Sheet: sh.sheet, ...(sh.block ? { Block: sh.block } : {}) }, ...at('/design') })
+    for (const r of sh.requirements) link(id, `requirement:${r}`, 'serves')
+    if (sh.block && nodes.has(`block:${sh.block}`)) link(id, `block:${sh.block}`, 'serves')
   }
   const seen = new Set<string>()
   return { nodes, links: links.filter((l) => nodes.has(l.source) && nodes.has(l.target) && !seen.has(l.id) && Boolean(seen.add(l.id))) }

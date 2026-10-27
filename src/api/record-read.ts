@@ -3,9 +3,18 @@
  * skill.get): each requirement's evidence status, and the findings of the latest electrical and design rule checks.
  * Pure functions over an open record database (src/api/action-kit.ts withRecordDb: the repository's project database
  * with the live journey tables), so they are tested on their own.
+ *
+ * The design record (src/tools/design: intent, architecture, pin plan, sheet → requirements) is read here too, with
+ * people's decisions over it: they are journey tables (design_decisions), so withRecordDb's copy already holds them
+ * beside the agents' rows. A requirement a person struck in Requirements review is struck here, whatever the
+ * repository's row says, and one they accepted is accepted.
  */
 import type { DatabaseSync } from 'node:sqlite'
 import type { JourneyRecord } from '../core/journey.js'
+import { type DesignDecision, loadDesignDecisions } from '../tools/design/decisions.js'
+import { type DesignRows, readDesignRows } from '../tools/design/db.js'
+import { parseNets, requirementDecisions } from '../tools/design/record.js'
+import type { Drawing } from '../tools/kicad/export.js'
 import { type CheckReport, parseDrc, parseErc } from '../tools/kicad/checks.js'
 
 export const hasTable = (db: DatabaseSync, t: string): boolean => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t))
@@ -40,7 +49,13 @@ export function requirementEvidence(db: DatabaseSync, r: JourneyRecord | null): 
   if (!hasTable(db, 'requirements')) return []
   const tests = hasTable(db, 'test_items') ? rows(db, 'SELECT id, title, requirements, method, status, last_run FROM test_items ORDER BY id') : []
   const waived = new Map((r?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'requirement').map((w) => [w.target, w]))
-  return rows(db, "SELECT id, text, kind, acceptance, source, status FROM requirements WHERE status NOT IN ('rejected', 'obsolete') ORDER BY id").map((q) => {
+  const decided = requirementDecisions(loadDesignDecisions(db))
+  return rows(db, 'SELECT id, text, kind, acceptance, source, status FROM requirements ORDER BY id').flatMap((q) => {
+    const d = decided.get(String(q.id))
+    // a person's decision stands over the agents' row; without one, the row's own status
+    if (d ? d.choice === 'struck' : q.status === 'rejected' || q.status === 'obsolete') return []
+    return [{ ...q, status: d?.choice === 'accepted' ? 'accepted' : q.status } as Record<string, unknown>]
+  }).map((q) => {
     const id = String(q.id)
     const mine = tests.filter((t) => list(t.requirements).includes(id)).map((t) => ({
       id: String(t.id), title: String(t.title), method: String(t.method), status: String(t.status), last_run: t.last_run === null ? null : String(t.last_run),
@@ -166,4 +181,58 @@ export function runImages(db: DatabaseSync, kinds: readonly string[]): { path: s
   if (!kinds.length) return []
   const q = `SELECT a.run_id, a.name, a.mime, r.kind FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.kind IN (${kinds.map(() => '?').join(',')}) AND (a.mime LIKE 'image/svg%' OR a.mime = 'image/png') ORDER BY r.started DESC, a.name LIMIT 200`
   return rows(db, q, ...kinds).map((x) => ({ path: `runs/${String(x.run_id)}/${String(x.name)}`, run: String(x.run_id), kind: String(x.kind), name: String(x.name), mime: String(x.mime) }))
+}
+
+/** The struck requirements (the repository's rejected or obsolete rows, and those a person struck), each with the
+ * reason a person gave when they struck it (null: struck without one, by an agent or before reasons were kept). */
+export function struckRequirements(db: DatabaseSync): { id: string; reason: string | null; by: string | null }[] {
+  if (!hasTable(db, 'requirements')) return []
+  const decided = requirementDecisions(loadDesignDecisions(db))
+  return rows(db, 'SELECT id, status FROM requirements ORDER BY id').flatMap((q) => {
+    const d = decided.get(String(q.id))
+    const struck = d ? d.choice === 'struck' : q.status === 'rejected' || q.status === 'obsolete'
+    return struck ? [{ id: String(q.id), reason: d?.choice === 'struck' ? d.reason : null, by: d?.by ?? null }] : []
+  })
+}
+
+// ------------------------------------------------------------------ the design record
+
+/** The agents' design rows and people's decisions about them. */
+export function designOf(db: DatabaseSync): { rows: DesignRows; decisions: DesignDecision[] } {
+  return { rows: readDesignRows(db), decisions: loadDesignDecisions(db) }
+}
+
+/** The newest schematic netlist in the record (kicad.netlist's or design.pins_check's nets.tsv), with its run. */
+export function latestNetlist(db: DatabaseSync): { run: CheckRun; nets: Map<string, string[]> } | null {
+  const r = db.prepare("SELECT a.run_id FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE a.name = 'nets.tsv' AND r.kind IN ('kicad.netlist', 'design.pins_check') ORDER BY r.started DESC LIMIT 1").get() as { run_id?: string } | undefined
+  if (!r?.run_id) return null
+  const run = db.prepare('SELECT id, kind, subject, status, summary, started, finished FROM runs WHERE id=?').get(r.run_id) as Record<string, unknown>
+  const text = artifactText(db, r.run_id, 'nets.tsv') ?? ''
+  return {
+    run: { id: String(run.id), kind: String(run.kind), subject: run.subject === null ? null : String(run.subject), status: String(run.status), summary: run.summary === null ? null : String(run.summary), started: Number(run.started), finished: run.finished === null ? null : Number(run.finished) },
+    nets: parseNets(text),
+  }
+}
+
+/** The drawings the newest kicad.export run that kept any stored (drawings.json), as artifact paths for files.url. */
+export function latestDrawings(db: DatabaseSync): { run: CheckRun; drawings: (Drawing & { path: string })[] } | null {
+  const r = db.prepare("SELECT a.run_id FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE a.name = 'drawings.json' AND r.kind = 'kicad.export' ORDER BY r.started DESC LIMIT 1").get() as { run_id?: string } | undefined
+  if (!r?.run_id) return null
+  const run = latestRunById(db, r.run_id)
+  const v = jsonOf(artifactText(db, r.run_id, 'drawings.json')) as { drawings?: Drawing[] } | null
+  const drawings = (Array.isArray(v?.drawings) ? v.drawings : []).filter((d) => typeof d.artifact === 'string').map((d) => ({ ...d, path: `runs/${r.run_id}/${d.artifact}` }))
+  return run ? { run, drawings } : null
+}
+
+function latestRunById(db: DatabaseSync, id: string): CheckRun | null {
+  const r = db.prepare('SELECT id, kind, subject, status, summary, started, finished FROM runs WHERE id=?').get(id) as Record<string, unknown> | undefined
+  return r ? { id: String(r.id), kind: String(r.kind), subject: r.subject === null ? null : String(r.subject), status: String(r.status), summary: r.summary === null ? null : String(r.summary), started: Number(r.started), finished: r.finished === null ? null : Number(r.finished) } : null
+}
+
+/** Where a finding in millimetres sits on a drawing of known size, as fractions (0..1); null when it cannot be placed. */
+export function placeOn(f: { x_mm: number | null; y_mm: number | null }, d: { width_mm?: number | undefined; height_mm?: number | undefined; origin_mm?: { x_mm: number; y_mm: number } | undefined } | null | undefined): { x: number; y: number } | null {
+  if (!d?.width_mm || !d.height_mm || f.x_mm === null || f.y_mm === null) return null
+  const x = (f.x_mm - (d.origin_mm?.x_mm ?? 0)) / d.width_mm
+  const y = (f.y_mm - (d.origin_mm?.y_mm ?? 0)) / d.height_mm
+  return x >= 0 && x <= 1 && y >= 0 && y <= 1 ? { x: Math.round(x * 10000) / 10000, y: Math.round(y * 10000) / 10000 } : null
 }

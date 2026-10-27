@@ -14,6 +14,7 @@ import { backendFor } from '../../src/core/central.js'
 import { askQuestion, setCriterion, startJourney } from '../../src/core/journey.js'
 import { Registry } from '../../src/core/registry.js'
 import { openProject } from '../../src/core/store.js'
+import { DesignDb } from '../../src/tools/design/db.js'
 import '../../src/tools/verify/db.js'
 import { FakeCognito, FakeGitHub } from './fixtures.js'
 
@@ -49,9 +50,21 @@ beforeAll(async () => {
   startJourney(db, { template: 'board', by: 'seed', name: 'Answers' })
   setCriterion(db, 'define.accepted', 'met', [{ kind: 'run', ref: 'run-1', label: 'the requirements list' }], 'trace')
   askQuestion(db, { askedBy: 'the Analog specialist', text: 'What is the supply range?', blocks: 'sizing the regulator', options: [{ id: 'a', label: '2.7 to 3.6 V', recommended: true, why: 'datasheet' }, { id: 'b', label: '1.8 to 3.6 V' }] })
+  // the design record: intent with a requirement derived from it, an architecture, a pin plan, a sheet's requirements
+  const t = Date.now() / 1000
+  db.prepare("INSERT INTO requirements (id, text, kind, acceptance, source, status, created, updated) VALUES ('REQ-1', 'Range of 2 km line of sight', 'functional', 'at least 2 km', 'intent', 'accepted', ?, ?)").run(t, t)
+  const d = new DesignDb(dir)
+  d.addIntent([{ id: 'INT-range', topic: 'performance', text: 'Reaches a gateway 2 km away.', source: { kind: 'person', ref: 'Ada' } }])
+  d.link('REQ-1', ['INT-range'])
+  d.setOption({ id: 'A', name: 'One chip', summary: 'An STM32WL with the radio inside.', recommended: true, why: 'Fewer parts.' })
+  d.setBlocks('A', [{ id: 'mcu', name: 'MCU and radio', parts: [{ mpn: 'STM32WLE5JCI6', key: true }], requirements: ['REQ-1'], x: 0.5, y: 0.5 }])
+  d.setPins([{ part: 'U1', pin: '30', name: 'PA9', function: 'USART1_TX', peripheral: 'USART1', use: 'GPS', net: '/GPS_RX', alternates: ['USART1_TX'] }])
+  d.setSheet({ sheet: 'hw/answers.kicad_sch', requirements: ['REQ-1'] })
+  d.close()
   db.close()
   github.files.set(`${REPO}:main:.trace/project.db`, readFileSync(join(dir, '.trace', 'project.db')))
   github.files.set(`${REPO}:main:README.md`, new TextEncoder().encode('# Answers'))
+  github.files.set(`${REPO}:main:hw/answers.kicad_sch`, new TextEncoder().encode('(kicad_sch)'))
   rmSync(dir, { recursive: true, force: true })
 })
 afterAll(() => { rmSync(scratch, { recursive: true, force: true }); rmSync(bucket, { recursive: true, force: true }) })
@@ -79,6 +92,9 @@ describe('the answers the web app reads', () => {
       'chats.append': { args: { repo: REPO, messages: [{ text: 'A new question' }] }, result: await run(USER, 'chats.append', { repo: REPO, messages: [{ text: 'A new question' }] }) },
       'chats.rename': { args: { repo: REPO, thread: t.thread.id, title: 'Regulator' }, result: await run(USER, 'chats.rename', { repo: REPO, thread: t.thread.id, title: 'Regulator' }) },
       'chats.recall': { args: { repo: REPO }, result: await run(USER, 'chats.recall', { repo: REPO }) },
+      'requirements.trace': { args: { repo: REPO }, result: await run(USER, 'requirements.trace', { repo: REPO }) },
+      'design.decide': { args: { repo: REPO, decision: { kind: 'intent', statement: 'INT-range', choice: 'accept' } }, result: await run(USER, 'design.decide', { repo: REPO, decision: { kind: 'intent', statement: 'INT-range', choice: 'accept' } }) },
+      'design.get': { args: { repo: REPO }, result: await run(USER, 'design.get', { repo: REPO }) },
     }) as Record<string, unknown>
     if (process.env.TRACE_WRITE_ANSWERS) writeFileSync(OUT, `${JSON.stringify(answers, null, 2)}\n`)
     const kept = JSON.parse(readFileSync(OUT, 'utf8')) as Record<string, unknown>

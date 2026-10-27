@@ -93,6 +93,7 @@
  *   actions-people.ts    users.history
  *   actions-record.ts    requirements.trace, design.get, build.get, order.record, cost.get
  *   actions-skills.ts    skill.get, skill.draft, skill.drafts, skill.submit
+ *   actions-design.ts    design.decide
  *   actions-me.ts        also policy.get, policy.set
  */
 import { readFileSync } from 'node:fs'
@@ -123,6 +124,7 @@ import {
   type Action, ActionError, type Context, type JobView, type JobsApi, MAX_ARTIFACT, type Need, NO_ACCESS, PROJECT_DB_PATH, Repo, def, hashOf, hashesOf, memoryInclude, projectMemory, slugify, tempDb, withProjectDb,
 } from './action-kit.js'
 import { CHAT_ACTIONS } from './actions-chats.js'
+import { DESIGN_ACTIONS } from './actions-design.js'
 import { FILE_ACTIONS } from './actions-files.js'
 import { GRAPH_ACTIONS } from './actions-graph.js'
 import { JOURNEY_ACTIONS } from './actions-journey.js'
@@ -638,6 +640,7 @@ export const ACTIONS = {
   ...PEOPLE_ACTIONS,
   ...RECORD_ACTIONS,
   ...SKILL_ACTIONS,
+  ...DESIGN_ACTIONS,
 } satisfies Record<string, Action<z.ZodType>>
 
 export type ActionName = keyof typeof ACTIONS

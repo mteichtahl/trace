@@ -178,7 +178,7 @@ describe('job.control', () => {
 })
 
 describe('requirements.trace', () => {
-  it('gives each live requirement its evidence status, counting a journey waiver, and says the intent is not recorded', async () => {
+  it('gives each live requirement its evidence status, counting a journey waiver, and says no intent is recorded yet', async () => {
     await journeyStore({ principal: ADMIN, deps }, REPO).update((db) => {
       db.prepare("INSERT INTO waivers (id, stage, gate, target_kind, target, reason, risk, severity, caught_where, scope, by, at, updated) VALUES ('w-rain', 'define', NULL, 'requirement', 'REQ-003', 'Rain proofing is the enclosure''s job.', 'Water ingress.', 'degraded', 'Bench', 'this revision only', 'seed', 1, 1)").run()
       return { result: null }
@@ -186,10 +186,10 @@ describe('requirements.trace', () => {
     const r = await run(REVIEWER, 'requirements.trace', { repo: REPO }) as { intent: unknown[]; links: unknown[]; intent_note: string; requirements: { id: string; evidence: string; why: string }[]; summary: Record<string, number> }
     expect(r.intent).toEqual([])
     expect(r.links).toEqual([])
-    expect(r.intent_note).toMatch(/no intent statements/)
+    expect(r.intent_note).toMatch(/No intent statements are recorded yet/)
     expect(r.requirements.map((q) => [q.id, q.evidence])).toEqual([['REQ-001', 'failing'], ['REQ-002', 'verified'], ['REQ-003', 'waived']])
     expect(r.requirements[0]?.why).toBe('TST-001 failed on its last run.')
-    expect(r.summary).toEqual({ requirements: 3, verified: 1, failing: 1, untested: 0, waived: 1 })
+    expect(r.summary).toEqual({ requirements: 3, verified: 1, failing: 1, untested: 0, waived: 1, intent: 0, accepted: 0, uncovered: 0, unlinked: 3 })
   })
 })
 
@@ -205,8 +205,9 @@ describe('design.get', () => {
     ])
     expect(d.board).toMatchObject({ file: 'hw/gaps.kicad_pcb', path: 'runs/run-render/top.png', size: '50 × 30 mm', layers: ['F.Cu', 'B.Cu'], findings: [{ severity: 'blocks' }] })
     expect(d.checks.erc.run).toBe('run-erc')
-    expect(d.notes.join(' ')).toMatch(/block diagram/)
-    expect(d.notes.join(' ')).toMatch(/pin plan/)
+    expect(d.notes.join(' ')).toMatch(/No architecture is recorded yet/)
+    expect(d.notes.join(' ')).toMatch(/No pin plan is recorded yet/)
+    expect(d.notes.join(' ')).toMatch(/kicad.export with sch_svg/)
   })
 })
 
@@ -286,7 +287,7 @@ describe('guided skills', () => {
 
   it('skill.submit refuses what the bar does not pass, and takes the waiver through waiver.add when it does', async () => {
     await expect(run(USER, 'skill.submit', { repo: REPO, skill: 'waiver', draft: { what: 'requirement:REQ-001', reason: 'not needed' } })).rejects.toThrow(/cannot be submitted yet\. Not met: Reason given/)
-    await expect(run(USER, 'skill.submit', { repo: REPO, skill: 'intent-builder', draft: {} })).rejects.toThrow(/cannot be checked yet: needs the intent statements/)
+    await expect(run(USER, 'skill.submit', { repo: REPO, skill: 'intent-builder', draft: {} })).rejects.toThrow(/Intent builder cannot be submitted yet\. Not met: Every topic answered or marked \(No intent statements are recorded yet/)
     const draft = { what: 'requirement:REQ-001', reason: 'The range is tested at the field trial.', risk: 'A short range in the field.', severity: 'degraded', caught: 'later', where: 'Bring up', scope: 'revision' }
     const r = await run(USER, 'skill.submit', { repo: REPO, skill: 'waiver', draft }) as { ok: boolean; ref: string }
     expect(r).toMatchObject({ ok: true, skill: 'waiver', ref: expect.any(String) })
