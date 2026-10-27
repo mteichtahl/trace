@@ -89,7 +89,7 @@ import { EDGE_REGION, edgeNeeded, edgeStackName } from './edge.js'
 import { SELF_WRITABLE, TraceWeb, addWebClient, traceWebProps } from './web.js'
 import { ACCESS_PREFIX, AGENT_FACTS, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
-  CDK_QUALIFIER, CENTRAL_BUCKET_OUTPUT, INSTALLATION_PREFIX, GPU_IMAGE_BUILD_OUTPUT, type InfraProps, SELF_UPDATE_OUTPUT, ciRunnerOutput, LAYOUT_OUTPUT, selfUpdateRoleName, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled,
+  CDK_QUALIFIER, CENTRAL_BUCKET_OUTPUT, INSTALLATION_PREFIX, GPU_IMAGE_BUILD_OUTPUT, type InfraProps, SELF_UPDATE_OUTPUT, ciRunnerOutput, LAYOUT_OUTPUT, selfUpdateRoleName, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled, webModel,
   kbEnabled, projectRefs, projectSettings,
 } from './props.js'
 
@@ -309,7 +309,8 @@ export class TraceStack extends Stack {
       runnerSource,
       environment: {
         AWS_REGION: cfg.region, TRACE_HOME: traceHome, CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: cfg.model, TRACE_WORKSPACE: '/mnt/workspace',
-        // the installation's price overrides for the cost ledger's estimates (src/core/prices.ts); the defaults otherwise
+        // the installation's price overrides for the cost ledger's estimates (src/core/prices.ts), which win over the
+        // price list the workers read from installation/cost/prices.json and over the built-in table
         ...(cfg.cost.prices ? { TRACE_PRICES: JSON.stringify(cfg.cost.prices) } : {}),
       },
     })
@@ -346,7 +347,16 @@ export class TraceStack extends Stack {
     // ------------------------------------------------------------------ the web app's address (src/infra/web.ts)
     // Its nested stack first: the pool takes its address as the passkey relying party, and nothing in it names the pool
     // ------------------------------------------------------------------ cloud cost per project (src/infra/cost.ts)
-    if (cfg.cost.explorer.enabled) new CostRead(this, 'CostRead', { prefix: cfg.prefix, settings: cfg.cost.explorer, central, root: REPO_ROOT })
+    // (and the AWS price list, refreshed by the same Lambda on the same daily schedule: cost.priceList)
+    if (cfg.cost.explorer.enabled || cfg.cost.priceList.enabled) {
+      new CostRead(this, 'CostRead', {
+        prefix: cfg.prefix, settings: cfg.cost.explorer, central, root: REPO_ROOT,
+        priceList: {
+          ...cfg.cost.priceList, region: cfg.region, models: [cfg.model, webModel(cfg)],
+          gpuTypes: cfg.gpu.enabled ? cfg.gpu.instanceTypes : [], cpuTypes: cpuEnabled(cfg) ? cfg.cpu.instanceTypes : [],
+        },
+      })
+    }
     // ------------------------------------------------------------------ shipped orders, with their carrier (src/infra/order-watch.ts)
     const orderWatch = new OrderWatch(this, 'OrderWatch', { prefix: cfg.prefix, central, root: REPO_ROOT })
     const web = cfg.web.enabled ? new TraceWeb(this, 'Web', { ...traceWebProps(cfg, REPO_ROOT), central }) : null
@@ -467,7 +477,8 @@ export class TraceStack extends Stack {
     grantPrefixes(apiRole, central, { read: [`${PROJECTS_PREFIX}/*/${AGENT_FACTS}`] })
     // cost and the build's shipping, in a policy of their own (the role's inline policy has a size limit, which CDK
     // would otherwise meet by moving statements into an overflow policy):
-    //   the cost ledger (cost.get, usage.month; src/core/cost.ts): the installation's actuals, which the cost read writes
+    //   the cost ledger (cost.get, usage.month; src/core/cost.ts): the installation's actuals and the price table fetched
+    //   from the AWS price list (installation/cost/actuals.db, prices.json), which the cost read writes
     //   (src/infra/cost.ts), read only (each project's estimates are beside its agents' facts, read above); money for
     //   admins only
     //   the shipped orders followed with their carrier (order.update starts a watch, src/core/shipping.ts): read and
@@ -540,6 +551,10 @@ export class TraceStack extends Stack {
         TRACE_PREFIX: cfg.prefix,
         // what a project created in the web app gets, and how this installation can move (src/api/actions-layout.ts)
         TRACE_LAYOUT: cfg.layout,
+        // the price table's other two sources (cost.get, usage.month: src/api/actions-cost.ts): the admin's overrides,
+        // and whether the price list is fetched (the fetched table itself is read from installation/cost/prices.json)
+        ...(cfg.cost.prices ? { TRACE_PRICES: JSON.stringify(cfg.cost.prices) } : {}),
+        TRACE_PRICE_LIST: cfg.cost.priceList.enabled ? '1' : '0',
         // where this installation's self-update runs (projects.create says when a new project's agent arrives)
         ...(cfg.selfUpdate ? { TRACE_SELF_UPDATE: `${cfg.selfUpdate.repository}@${cfg.selfUpdate.branch}` } : {}),
         ...memoryEnv,

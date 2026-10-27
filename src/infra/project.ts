@@ -17,7 +17,8 @@
  *             written, but only with a conditional put and never deleted (AgentFactsConditional), the way its stores
  *             write; its cost ledger (journey-agent/cost.db, src/core/cost.ts: what each run and job cost) is there,
  *             under the same rules; a paused job's transcript (projects/<slug>/job-sessions) is read and written as
- *             the rest of it
+ *             the rest of it. Of installation/*, only installation/cost/prices.json (the price table fetched from the
+ *             AWS price list, which the ledger prices with), read only
  *   memory    its own memory only (<prefix>_m_<hash>), and on it still only events of actors `<owner>/<repo>/*` and
  *             records under `/trace/<owner>/<repo>/*` (the encodings of src/agents/runtime/memory.ts), as defence in depth
  *   secret    <prefix>/github-token/<slug> only
@@ -99,6 +100,7 @@ import { EVENT_ACTIONS, RECORD_ACTIONS, TraceMemory } from './memory.js'
 import { projectVocabularyStatements, vocabularyBase } from './voice.js'
 import { RunnerProject } from './runner.js'
 import { jobIndexKey } from '../core/job-index.js'
+import { PRICES_KEY, PRICES_PREFIX } from '../core/prices-store.js'
 import {
   GPU_JOB_VCPUS, type InfraProps, type ProjectRef, REPOSITORY_OUTPUT, kbEnabled, kbOutputs, knowledgeBaseOf, projectOutputs, projectSettings,
 } from './props.js'
@@ -171,6 +173,15 @@ export function grantPrefixes(role: { addToPrincipalPolicy(s: iam.PolicyStatemen
       actions: ['s3:PutObject'], resources: o.conditional.map(obj), conditions: { Null: { [key]: 'false' } },
     }))
   }
+}
+
+/** Read the fetched price table, installation/cost/prices.json, and nothing else of installation/. */
+export function pricesReadStatements(bucket: s3.IBucket): iam.PolicyStatement[] {
+  const key = `${PRICES_PREFIX}/${PRICES_KEY}`
+  return [
+    new iam.PolicyStatement({ sid: 'PricesRead', actions: ['s3:GetObject'], resources: [bucket.arnForObjects(key)] }),
+    new iam.PolicyStatement({ sid: 'PricesList', actions: ['s3:ListBucket'], resources: [bucket.bucketArn], conditions: { StringEquals: { 's3:prefix': [key] } } }),
+  ]
 }
 
 export interface ProjectProps {
@@ -298,6 +309,11 @@ export class ProjectStack extends Construct {
     })
     role.addToPolicy(agentFacts)
     role.addToPolicy(agentFactsKept)
+    // the price table fetched from the AWS price list (installation/cost/prices.json, src/core/prices-store.ts), which
+    // the ledger prices each run and job with: that one key, read only, and listing only it (S3 answers 403 for a
+    // missing object without it, and the reader then lists the key to tell "not there yet" from "refused")
+    const pricesRead = pricesReadStatements(bucket)
+    for (const st of pricesRead) role.addToPolicy(st)
 
     // ------------------------------------------------------------------ its memory (src/infra/memory.ts)
     this.memory = cfg.memory.enabled
@@ -533,6 +549,7 @@ export class ProjectStack extends Construct {
     this.actionsRole.addToPolicy(peopleRecords.copy())
     this.actionsRole.addToPolicy(agentFacts.copy())
     this.actionsRole.addToPolicy(agentFactsKept.copy())
+    for (const st of pricesRead) this.actionsRole.addToPolicy(st.copy())
     // the in-Actions fallback remembers as the worker does: its own memory, its own actors and namespaces
     if (this.memory) for (const st of memoryStatements(this.memory)) this.actionsRole.addToPolicy(st)
     // and searches and syncs its own knowledge base (the kb-sync job on a push to the default branch, and the fallback)

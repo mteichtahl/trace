@@ -128,6 +128,12 @@ describe('the self-update role', () => {
       // starts a watch, the order watch checks it): their own prefixes only (src/infra/cost.ts, src/infra/order-watch.ts)
       if (roles.includes(`"${api}"`) || /CostReadRole/.test(roles)) r = r.replaceAll('installation/cost/*', '')
       if (roles.includes(`"${api}"`) || /OrderWatchRole/.test(roles)) r = r.replaceAll('installation/shipping/*', '')
+      // the price table fetched from the AWS price list: every worker may read (and list) that one key, nothing else
+      // (src/infra/project.ts pricesReadStatements); the statement grants s3:GetObject or s3:ListBucket alone
+      if (s.Sid === 'PricesRead' || s.Sid === 'PricesList') {
+        expect(list(s.Action), `${roles} ${s.Sid}`).toEqual([s.Sid === 'PricesRead' ? 's3:GetObject' : 's3:ListBucket'])
+        r = r.replaceAll('installation/cost/prices.json', '')
+      }
       expect(r, `${roles} ${s.Sid ?? ''}`).not.toMatch(/installation\//)
       // a grant on the whole central bucket would reach it too
       const actions = list(s.Action).filter((a) => a.startsWith('s3:') && !['s3:ListBucket'].includes(a))
