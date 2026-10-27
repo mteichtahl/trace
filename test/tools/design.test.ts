@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { merge } from '../../src/core/dbmerge.js'
 import '../../src/core/journey.js'
 import { openProject } from '../../src/core/store.js'
@@ -22,6 +22,13 @@ type Dict = Record<string, unknown>
 const reg = allTools()
 const call = async (name: string, args: Dict): Promise<Dict> => (await reg.call(name, args, { hardware: false, via: 'test' })) as Dict
 const by = { label: 'priya@example.com', hash: 'h-priya' }
+
+// No project in scope: the tools read people's decisions only when the session names its project (TRACE_PROJECT, or
+// GITHUB_REPOSITORY on a runner, with TRACE_HOME), so these tests clear what a CI runner sets and see every row as proposed.
+beforeEach(() => {
+  for (const k of ['TRACE_PROJECT', 'TRACE_MEMORY_REPOSITORY', 'GITHUB_REPOSITORY', 'TRACE_PROJECT_HOME']) vi.stubEnv(k, '')
+})
+afterEach(() => { vi.unstubAllEnvs() })
 
 function freshDb(): string {
   const dir = mkdtempSync(join(tmpdir(), 'trace-design-'))
