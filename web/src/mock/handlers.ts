@@ -116,8 +116,6 @@ export async function handle(path: string, init: RequestInit = {}): Promise<Resp
     case '/api/auth/totp/verify':
     case '/api/auth/passkeys/finish':
       return json({ ok: true })
-    case '/api/auth/invite':
-      return json({ email: 'new.person@example.com', invitedBy: 'Marc Teichtahl', class: 'user', projects: [{ name: 'Soil sensor', part: 'contributor' }] })
     case '/api/call':
       return action(String(body.action), body)
     case '/api/agui':
@@ -125,8 +123,6 @@ export async function handle(path: string, init: RequestInit = {}): Promise<Resp
     case '/api/voice/voices':
       return json({ voices: [{ id: 'Olivia', name: 'Olivia', gender: 'Female', engines: ['neural'] }, { id: 'Matthew', name: 'Matthew', gender: 'Male', engines: ['neural', 'generative'] }] })
     default:
-      if (url.pathname.startsWith('/api/auth/invite/'))
-        return json({ email: 'new.person@example.com', invitedBy: 'Marc Teichtahl', class: 'user', projects: [{ name: 'Soil sensor', part: 'contributor' }] })
       return json({ ok: false, error: `mock: no handler for ${url.pathname}` }, 404)
   }
 }

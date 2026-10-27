@@ -65,14 +65,6 @@ export interface PublicKeyCredentialCreationOptionsJSONish {
   [k: string]: unknown
 }
 
-/** assumed: GET /api/auth/invite/:token */
-export interface InviteInfo {
-  email: string
-  invitedBy: string
-  projects?: { name: string; part: Part }[]
-  class: PersonClass
-}
-
 // ------------------------------------------------------------------ projects and the journey
 
 export interface ProjectRef {

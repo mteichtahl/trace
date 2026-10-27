@@ -30,8 +30,22 @@ const CHOICES: Record<SignInChoice, { title: string; detail: string; icon: Compo
 
 const errText = (e: unknown) => (e instanceof HttpError ? e.message : e instanceof Error ? e.message : 'Something went wrong. Try again.')
 
-/** Where to go after signing in: only an address inside the app. */
-export const safeNext = (next?: string): string => (next && next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/sign-in') ? next : '/')
+/**
+ * Where to go after signing in: only a path inside the app. It must start with one slash not followed by another slash,
+ * a backslash or white space (`//evil`, `/\\evil`, `/\tevil` all reach another host in some browser), resolve to this
+ * origin, and not be a sign-in page.
+ */
+export function safeNext(next?: string, origin: string = typeof window === 'undefined' ? 'https://app.invalid' : window.location.origin): string {
+  if (!next || !/^\/(?![\\/\s])/.test(next) || /[\u0000-\u001f\\]/.test(next)) return '/'
+  let u: URL
+  try {
+    u = new URL(next, origin)
+  } catch {
+    return '/'
+  }
+  if (u.origin !== origin || u.pathname.startsWith('/sign-in') || u.pathname.startsWith('/invite')) return '/'
+  return `${u.pathname}${u.search}${u.hash}`
+}
 
 function SignIn() {
   const { next } = Route.useSearch()
@@ -85,6 +99,19 @@ function SignIn() {
       if (r.signedIn) done()
       else setError('That passkey did not work. Choose another way to sign in.')
     } catch (err) {
+      if (err instanceof HttpError && err.code === 'choice_unavailable') {
+        // the pool offers every way to every address; this account has not set this one up: start again without it
+        const left = choices.filter((x) => x !== c)
+        try {
+          const r = await startSignIn(email.trim())
+          setSession(r.session)
+        } catch {
+          // the next choice starts its own session if this fails
+        }
+        setChoices(left)
+        setError(c === 'passkey' ? 'There is no passkey for this account on record. Choose another way to sign in.' : 'That way of signing in is not set up for this account. Choose another.')
+        return
+      }
       setError(err instanceof DOMException && err.name === 'NotAllowedError' ? 'The passkey was not used. Try again, or choose another way.' : errText(err))
     } finally {
       setBusy(null)

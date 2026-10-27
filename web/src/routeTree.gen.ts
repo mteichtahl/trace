@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as FocusRouteImport } from './routes/_focus'
+import { Route as InviteRouteImport } from './routes/invite'
 import { Route as NoAccessRouteImport } from './routes/no-access'
 import { Route as ViewRouteImport } from './routes/view'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
@@ -18,7 +19,6 @@ import { Route as AppAdminRouteImport } from './routes/_app/admin'
 import { Route as AppInboxRouteImport } from './routes/_app/inbox'
 import { Route as AppKnowledgeRouteImport } from './routes/_app/knowledge'
 import { Route as AppMeRouteImport } from './routes/_app/me'
-import { Route as InviteTokenRouteImport } from './routes/invite.$token'
 import { Route as SignInIndexRouteImport } from './routes/sign-in/index'
 import { Route as SignInCodeRouteImport } from './routes/sign-in/code'
 import { Route as SignInResetRouteImport } from './routes/sign-in/reset'
@@ -68,6 +68,11 @@ const FocusRoute = FocusRouteImport.update({
   id: '/_focus',
   getParentRoute: () => rootRouteImport,
 } as any)
+const InviteRoute = InviteRouteImport.update({
+  id: '/invite',
+  path: '/invite',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const NoAccessRoute = NoAccessRouteImport.update({
   id: '/no-access',
   path: '/no-access',
@@ -102,11 +107,6 @@ const AppMeRoute = AppMeRouteImport.update({
   id: '/me',
   path: '/me',
   getParentRoute: () => AppRoute,
-} as any)
-const InviteTokenRoute = InviteTokenRouteImport.update({
-  id: '/invite/$token',
-  path: '/invite/$token',
-  getParentRoute: () => rootRouteImport,
 } as any)
 const SignInIndexRoute = SignInIndexRouteImport.update({
   id: '/sign-in/',
@@ -311,13 +311,13 @@ const ViewPIdFilesSplatRoute = ViewPIdFilesSplatRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
+  '/invite': typeof InviteRoute
   '/no-access': typeof NoAccessRoute
   '/view': typeof ViewRouteWithChildren
   '/admin': typeof AppAdminRouteWithChildren
   '/inbox': typeof AppInboxRoute
   '/knowledge': typeof AppKnowledgeRouteWithChildren
   '/me': typeof AppMeRoute
-  '/invite/$token': typeof InviteTokenRoute
   '/sign-in/code': typeof SignInCodeRoute
   '/sign-in/reset': typeof SignInResetRoute
   '/sign-in/': typeof SignInIndexRoute
@@ -361,11 +361,11 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
+  '/invite': typeof InviteRoute
   '/no-access': typeof NoAccessRoute
   '/view': typeof ViewRouteWithChildren
   '/inbox': typeof AppInboxRoute
   '/me': typeof AppMeRoute
-  '/invite/$token': typeof InviteTokenRoute
   '/sign-in/code': typeof SignInCodeRoute
   '/sign-in/reset': typeof SignInResetRoute
   '/sign-in': typeof SignInIndexRoute
@@ -409,13 +409,13 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/_focus': typeof FocusRouteWithChildren
+  '/invite': typeof InviteRoute
   '/no-access': typeof NoAccessRoute
   '/view': typeof ViewRouteWithChildren
   '/_app/admin': typeof AppAdminRouteWithChildren
   '/_app/inbox': typeof AppInboxRoute
   '/_app/knowledge': typeof AppKnowledgeRouteWithChildren
   '/_app/me': typeof AppMeRoute
-  '/invite/$token': typeof InviteTokenRoute
   '/sign-in/code': typeof SignInCodeRoute
   '/sign-in/reset': typeof SignInResetRoute
   '/_app/': typeof AppIndexRoute
@@ -462,13 +462,13 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/invite'
     | '/no-access'
     | '/view'
     | '/admin'
     | '/inbox'
     | '/knowledge'
     | '/me'
-    | '/invite/$token'
     | '/sign-in/code'
     | '/sign-in/reset'
     | '/sign-in/'
@@ -512,11 +512,11 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/invite'
     | '/no-access'
     | '/view'
     | '/inbox'
     | '/me'
-    | '/invite/$token'
     | '/sign-in/code'
     | '/sign-in/reset'
     | '/sign-in'
@@ -559,13 +559,13 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_app'
     | '/_focus'
+    | '/invite'
     | '/no-access'
     | '/view'
     | '/_app/admin'
     | '/_app/inbox'
     | '/_app/knowledge'
     | '/_app/me'
-    | '/invite/$token'
     | '/sign-in/code'
     | '/sign-in/reset'
     | '/_app/'
@@ -612,9 +612,9 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
   FocusRoute: typeof FocusRouteWithChildren
+  InviteRoute: typeof InviteRoute
   NoAccessRoute: typeof NoAccessRoute
   ViewRoute: typeof ViewRouteWithChildren
-  InviteTokenRoute: typeof InviteTokenRoute
   SignInCodeRoute: typeof SignInCodeRoute
   SignInResetRoute: typeof SignInResetRoute
   SignInIndexRoute: typeof SignInIndexRoute
@@ -634,6 +634,13 @@ declare module '@tanstack/react-router' {
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof FocusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/invite': {
+      id: '/invite'
+      path: '/invite'
+      fullPath: '/invite'
+      preLoaderRoute: typeof InviteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/no-access': {
@@ -684,13 +691,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/me'
       preLoaderRoute: typeof AppMeRouteImport
       parentRoute: typeof AppRoute
-    }
-    '/invite/$token': {
-      id: '/invite/$token'
-      path: '/invite/$token'
-      fullPath: '/invite/$token'
-      preLoaderRoute: typeof InviteTokenRouteImport
-      parentRoute: typeof rootRouteImport
     }
     '/sign-in/': {
       id: '/sign-in/'
@@ -1134,9 +1134,9 @@ const ViewRouteWithChildren = ViewRoute._addFileChildren(ViewRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
   FocusRoute: FocusRouteWithChildren,
+  InviteRoute: InviteRoute,
   NoAccessRoute: NoAccessRoute,
   ViewRoute: ViewRouteWithChildren,
-  InviteTokenRoute: InviteTokenRoute,
   SignInCodeRoute: SignInCodeRoute,
   SignInResetRoute: SignInResetRoute,
   SignInIndexRoute: SignInIndexRoute,
