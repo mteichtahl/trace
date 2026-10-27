@@ -43,7 +43,7 @@ export function filesAction(name: string, a: Record<string, unknown>): Response 
     }
     // one extra conversation whose tool results are files, so the chat's File card shows in mock mode
     case 'chats.get':
-      return a.id === FILE_THREAD.id ? ok({ thread: FILE_THREAD, messages: FILE_THREAD_MESSAGES }) : undefined
+      return (a.thread ?? a.id) === FILE_THREAD.id ? ok({ thread: FILE_THREAD, messages: FILE_THREAD_MESSAGES }) : undefined
     case 'tool':
       if (a.name === 'firmware.size') return ok({ status: 'pass', summary: 'flash 87616 B, RAM 11080 B', result: FIRMWARE_SIZE })
       return undefined

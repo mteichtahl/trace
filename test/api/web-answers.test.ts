@@ -33,7 +33,7 @@ function stable(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(stable)
   if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, stable(x)]))
   if (typeof v === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(v)) return '2026-10-27T00:00:00.000Z'
-  if (typeof v === 'string' && /[0-9a-f]{16}/.test(v)) return v.replace(/[0-9a-f]{16}/g, '0123456789abcdef')
+  if (typeof v === 'string' && /[0-9a-f]{16}/.test(v)) return v.replace(/[0-9a-f]{16,}/g, (m) => '0123456789abcdef0123456789abcdef'.slice(0, m.length))
   if (typeof v === 'string' && /^\d+ (minute|hour|day)s? ago$|^just now$/.test(v)) return 'just now'
   return v
 }
@@ -59,6 +59,13 @@ afterAll(() => { rmSync(scratch, { recursive: true, force: true }); rmSync(bucke
 describe('the answers the web app reads', () => {
   it('are current in web/src/lib/api-answers.json', async () => {
     await run(ADMIN, 'waiver.add', { repo: REPO, target: { kind: 'criterion', id: 'define.measurable' }, reason: 'Two criteria wait for the bench.', risk: 'A late finding.', severity: 'degraded', caught_where: 'Bring up' })
+    const t = await run(USER, 'chats.append', { repo: REPO, messages: [{ text: 'Why this regulator?' }] }) as { thread: { id: string }; ids: string[] }
+    await run(USER, 'chats.reply', { repo: REPO, thread: t.thread.id, after: t.ids[0], messages: [
+      { role: 'assistant', text: 'Let me look.', parts: { toolCalls: [{ id: 'tu1', name: 'journey_get', args: '{"repo":"acme/answers"}' }] } },
+      { role: 'tool', text: '{"stage":"define"}', parts: { toolCallId: 'tu1', name: 'journey_get' } },
+      { role: 'assistant', text: 'It carries 1 A.' },
+    ] })
+    await run(ADMIN, 'chats.append', { repo: REPO, thread: t.thread.id, messages: [{ text: 'And the heat?' }] })
     const answers = stable({
       'journey.get': { args: { repo: REPO }, result: await run(USER, 'journey.get', { repo: REPO }) },
       inbox: { args: {}, result: await run(USER, 'inbox') },
@@ -67,6 +74,11 @@ describe('the answers the web app reads', () => {
       'users.list': { args: {}, result: await run(ADMIN, 'users.list') },
       'files.list': { args: { repo: REPO }, result: await run(USER, 'files.list', { repo: REPO }) },
       'files.url': { args: { repo: REPO, path: 'README.md' }, result: await run(USER, 'files.url', { repo: REPO, path: 'README.md' }) },
+      'chats.list': { args: { repo: REPO }, result: await run(USER, 'chats.list', { repo: REPO }) },
+      'chats.get': { args: { repo: REPO, thread: t.thread.id }, result: await run(USER, 'chats.get', { repo: REPO, thread: t.thread.id }) },
+      'chats.append': { args: { repo: REPO, messages: [{ text: 'A new question' }] }, result: await run(USER, 'chats.append', { repo: REPO, messages: [{ text: 'A new question' }] }) },
+      'chats.rename': { args: { repo: REPO, thread: t.thread.id, title: 'Regulator' }, result: await run(USER, 'chats.rename', { repo: REPO, thread: t.thread.id, title: 'Regulator' }) },
+      'chats.recall': { args: { repo: REPO }, result: await run(USER, 'chats.recall', { repo: REPO }) },
     }) as Record<string, unknown>
     if (process.env.TRACE_WRITE_ANSWERS) writeFileSync(OUT, `${JSON.stringify(answers, null, 2)}\n`)
     const kept = JSON.parse(readFileSync(OUT, 'utf8')) as Record<string, unknown>

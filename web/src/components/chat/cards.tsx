@@ -86,6 +86,60 @@ export function RunCard({ data }: { data: RunCardData }) {
   return <RunLine run={data.run} className="my-2 rounded-xl border bg-card px-3 py-3" />
 }
 
+// ------------------------------------------------------------------ Start work: trace asks, the person confirms
+
+export interface TaskRequest {
+  repo: string
+  request: string
+  agent?: string
+}
+
+/** What a confirm card answers trace with (the start_task tool's result). */
+export type TaskAnswer = { confirmed: true; accepted: boolean; jobId?: string; reason?: string } | { confirmed: false; reason: string }
+
+const AGENT_NAMES: Record<string, string> = { verify: 'Verification', impl: 'Implementation', ams: 'Analog and mixed-signal', emc: 'EMC', render: 'Rendering', thermal: 'Thermal' }
+
+/**
+ * trace offers to start work: the exact request and agent, and nothing starts until the person presses Confirm (then
+ * `onConfirm` calls `task` as them). Done: the run, or what happened instead.
+ */
+export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readOnly }: {
+  task: Partial<TaskRequest>
+  answer?: TaskAnswer
+  onConfirm?: () => void
+  onCancel?: () => void
+  busy?: boolean
+  readOnly?: boolean
+}) {
+  const agent = task.agent ? AGENT_NAMES[task.agent] ?? task.agent : 'chosen by trace'
+  if (answer?.confirmed && answer.accepted && answer.jobId) {
+    return <RunCard data={{ run: { id: answer.jobId, repo: task.repo, title: task.request ?? 'Task', state: 'queued' } }} />
+  }
+  return (
+    <Frame>
+      <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <GitBranch className="size-3.5" aria-hidden /> trace offers to start work{task.repo ? ` on ${task.repo}` : ''}
+      </p>
+      <blockquote className="whitespace-pre-wrap rounded-md border-l-2 bg-muted/40 px-3 py-2 font-mono text-xs" aria-label="The exact request">{task.request ?? ''}</blockquote>
+      <p className="mt-1.5 text-xs text-muted-foreground">Agent: {agent}. It works on a branch and opens a pull request.</p>
+      {answer ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {answer.confirmed ? `Not started: ${answer.reason ?? 'the job was not accepted'}.` : answer.reason === 'cancelled' ? 'You cancelled this.' : `Not started: ${answer.reason}.`}
+        </p>
+      ) : readOnly ? (
+        <p className="mt-2 text-xs text-muted-foreground">Work can't be started from this conversation.</p>
+      ) : (
+        <div className="mt-3 flex gap-2">
+          <button type="button" className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-60" disabled={busy || !task.repo || !task.request} onClick={onConfirm}>
+            {busy ? <Loader2 className="inline size-3 animate-spin" aria-hidden /> : null} Confirm and start
+          </button>
+          <button type="button" className="rounded-md border px-3 py-1.5 text-xs" disabled={busy} onClick={onCancel}>Cancel</button>
+        </div>
+      )}
+    </Frame>
+  )
+}
+
 // ------------------------------------------------------------------ Plot card (Recharts, lazy)
 
 export interface PlotData {

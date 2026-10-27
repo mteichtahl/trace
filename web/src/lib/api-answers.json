@@ -919,5 +919,173 @@
       "sha": "blob-sha",
       "base64": "IyBBbnN3ZXJz"
     }
+  },
+  "chats.list": {
+    "args": {
+      "repo": "acme/answers"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "threads": [
+        {
+          "id": "0123456789abcdef0123",
+          "title": "Why this regulator?",
+          "created": "2026-10-27T00:00:00.000Z",
+          "updated": "2026-10-27T00:00:00.000Z",
+          "by": "user@example.com",
+          "by_hash": "0123456789abcdef",
+          "count": 5,
+          "last": "And the heat?"
+        }
+      ]
+    }
+  },
+  "chats.get": {
+    "args": {
+      "repo": "acme/answers",
+      "thread": "0123456789abcdef0123"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "thread": {
+        "id": "0123456789abcdef0123",
+        "title": "Why this regulator?",
+        "created": "2026-10-27T00:00:00.000Z",
+        "updated": "2026-10-27T00:00:00.000Z",
+        "by": "user@example.com",
+        "by_hash": "0123456789abcdef"
+      },
+      "messages": [
+        {
+          "id": "0123456789abcdef",
+          "role": "user",
+          "text": "Why this regulator?",
+          "by": "user@example.com",
+          "by_hash": "0123456789abcdef",
+          "at": "2026-10-27T00:00:00.000Z",
+          "yours": true
+        },
+        {
+          "id": "0123456789abcdef",
+          "role": "assistant",
+          "text": "Let me look.",
+          "by": "trace",
+          "by_hash": null,
+          "at": "2026-10-27T00:00:00.000Z",
+          "for_hash": "0123456789abcdef",
+          "parts": {
+            "toolCalls": [
+              {
+                "id": "tu1",
+                "name": "journey_get",
+                "args": "{\"repo\":\"acme/answers\"}"
+              }
+            ]
+          },
+          "yours": true
+        },
+        {
+          "id": "0123456789abcdef",
+          "role": "tool",
+          "text": "{\"stage\":\"define\"}",
+          "by": "trace",
+          "by_hash": null,
+          "at": "2026-10-27T00:00:00.000Z",
+          "for_hash": "0123456789abcdef",
+          "parts": {
+            "toolCallId": "tu1",
+            "name": "journey_get"
+          },
+          "yours": true
+        },
+        {
+          "id": "0123456789abcdef",
+          "role": "assistant",
+          "text": "It carries 1 A.",
+          "by": "trace",
+          "by_hash": null,
+          "at": "2026-10-27T00:00:00.000Z",
+          "for_hash": "0123456789abcdef",
+          "yours": true
+        },
+        {
+          "id": "0123456789abcdef",
+          "role": "user",
+          "text": "And the heat?",
+          "by": "admin@example.com",
+          "by_hash": "0123456789abcdef",
+          "at": "2026-10-27T00:00:00.000Z",
+          "yours": false
+        }
+      ],
+      "more": false
+    }
+  },
+  "chats.append": {
+    "args": {
+      "repo": "acme/answers",
+      "messages": [
+        {
+          "text": "A new question"
+        }
+      ]
+    },
+    "result": {
+      "repo": "acme/answers",
+      "thread": {
+        "id": "0123456789abcdef0123",
+        "title": "A new question",
+        "created": "2026-10-27T00:00:00.000Z",
+        "updated": "2026-10-27T00:00:00.000Z",
+        "by": "user@example.com",
+        "by_hash": "0123456789abcdef",
+        "count": 1,
+        "last": "A new question"
+      },
+      "ids": [
+        "0123456789abcdef"
+      ],
+      "created": true
+    }
+  },
+  "chats.rename": {
+    "args": {
+      "repo": "acme/answers",
+      "thread": "0123456789abcdef0123",
+      "title": "Regulator"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "thread": {
+        "id": "0123456789abcdef0123",
+        "title": "Regulator",
+        "created": "2026-10-27T00:00:00.000Z",
+        "updated": "2026-10-27T00:00:00.000Z",
+        "by": "user@example.com",
+        "by_hash": "0123456789abcdef",
+        "count": 5,
+        "last": "And the heat?"
+      }
+    }
+  },
+  "chats.recall": {
+    "args": {
+      "repo": "acme/answers"
+    },
+    "result": {
+      "repo": "acme/answers",
+      "messages": [
+        {
+          "text": "A new question",
+          "thread": "0123456789abcdef0123",
+          "at": "2026-10-27T00:00:00.000Z"
+        },
+        {
+          "text": "Why this regulator?",
+          "thread": "0123456789abcdef0123",
+          "at": "2026-10-27T00:00:00.000Z"
+        }
+      ]
+    }
   }
 }

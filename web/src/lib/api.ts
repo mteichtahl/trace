@@ -79,10 +79,13 @@ export interface Actions {
   'question.answer': { args: Repo & { question: string; option?: string; answer?: string; reason?: string }; result: { repo: string; summary: string } }
   'waiver.add': { args: Repo & { target: { kind: 'criterion' | 'requirement' | 'finding' | 'test'; id: string }; reason: string; risk: string; severity: 'cosmetic' | 'degraded' | 'failure' | 'safety'; caught_where: string | null; scope?: string }; result: { repo: string; waiver: { id: string } } }
   inbox: { args: Record<string, never>; result: InboxItem[] }
-  'chats.list': { args: Repo; result: ChatThread[] }
-  'chats.get': { args: Repo & { id: string; before?: string; limit?: number }; result: { thread: ChatThread; messages: ChatMessage[]; more?: boolean } }
-  'chats.append': { args: Repo & { id?: string; title?: string; message: Omit<ChatMessage, 'id' | 'at'> & { id?: string } }; result: { id: string; messageId: string } }
-  'chats.rename': { args: Repo & { id: string; title: string }; result: { ok: true } }
+  // the API's own shapes are read by lib/readers.ts (readThreads, readThread, readAppended, readRecall)
+  'chats.list': { args: Repo & { query?: string; limit?: number }; result: ChatThread[] }
+  'chats.get': { args: Repo & { thread: string; before?: string; limit?: number }; result: { thread: ChatThread; messages: ChatMessage[]; more?: boolean } }
+  /** the person's own messages only (the API stores them as theirs whatever is sent); trace's replies are kept by the
+   * chat agent itself (chats.reply, never callable from the app) */
+  'chats.append': { args: Repo & { thread?: string; title?: string; messages: { text: string }[] }; result: { id: string; messageId: string; created?: boolean } }
+  'chats.rename': { args: Repo & { thread: string; title: string }; result: unknown }
   'chats.recall': { args: Repo & { limit?: number }; result: string[] }
   'me.get': { args: Record<string, never>; result: MeDoc & { locks: Record<string, string> } }
   'me.set': { args: { key: string; value?: unknown; unset?: boolean }; result: { changed: boolean } }

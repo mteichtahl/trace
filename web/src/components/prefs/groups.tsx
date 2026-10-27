@@ -637,8 +637,8 @@ export function DataGroup() {
           const threads = await call('chats.list', { repo: p.repo })
           const full = []
           for (const t of threads) {
-            const g = await call('chats.get', { repo: p.repo, id: t.id, limit: 500 })
-            const mine = g.messages.filter((m) => m.role === 'user' && (!m.author || m.author === user?.email || m.author === user?.name))
+            const g = await call('chats.get', { repo: p.repo, thread: t.id, limit: 500 })
+            const mine = g.messages.filter((m) => m.role === 'user' && m.yours !== false)
             if (mine.length) full.push({ thread: t.title, id: t.id, messages: g.messages.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, at: m.at, author: m.author, content: m.content })) })
           }
           ;(out.projects as unknown[]).push({ repo: p.repo, threads: full })

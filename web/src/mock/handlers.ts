@@ -38,19 +38,19 @@ function action(name: string, a: Record<string, unknown>): Response {
     case 'me.get': return ok(me)
     case 'me.set': me = setPath(me, String(a.key), a.value); return ok({ ok: true })
     case 'chats.list': return ok(withFileThread(repo, threads.filter((t) => t.repo === repo)))
-    case 'chats.get': return ok({ thread: threads.find((t) => t.id === a.id), messages: messages[String(a.id)] ?? [] })
+    case 'chats.get': return ok({ thread: threads.find((t) => t.id === (a.thread ?? a.id)), messages: messages[String(a.thread ?? a.id)] ?? [] })
     case 'chats.recall': return ok(RECALL)
     case 'chats.append': {
-      let id = a.id as string | undefined
+      // the person's own words only, as the API keeps them
+      let id = (a.thread ?? a.id) as string | undefined
       if (!id) {
         id = `t${threads.length + 1}`
         threads.unshift({ id, repo, title: String(a.title ?? 'New conversation'), updatedAt: new Date().toISOString() })
         messages[id] = []
       }
-      const m = a.message as ChatMessage
-      const mid = m.id ?? crypto.randomUUID()
-      messages[id]!.push({ ...m, id: mid, at: new Date().toISOString() })
-      return ok({ id, messageId: mid })
+      const mid = crypto.randomUUID()
+      for (const m of (a.messages as { text: string }[] | undefined) ?? []) messages[id]!.push({ id: mid, role: 'user', content: m.text, at: new Date().toISOString() })
+      return ok({ id, messageId: mid, created: !(a.thread ?? a.id) })
     }
     case 'runs': return ok([])
     default: return json({ ok: false, error: `mock: no fixture for ${name}` })

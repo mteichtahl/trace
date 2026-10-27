@@ -305,7 +305,11 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'tool' | 'system'
   content: string
   at: string
+  /** who wrote it (a person's email; "trace" for trace's replies): display only */
   author?: string
+  /** the viewer's own turn, or trace's reply to one of theirs; false: someone else's (quoted, never replayed as theirs).
+   * Absent: theirs (mock mode and messages of this session) */
+  yours?: boolean
   /** AG-UI tool calls on an assistant message, kept so a thread replays with its cards */
   toolCalls?: { id: string; name: string; args: string }[]
   toolCallId?: string

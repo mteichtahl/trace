@@ -67,4 +67,4 @@ export function useRecallHistory(repo: string | undefined) {
   return { history: query.data ?? [], push }
 }
 
-export const loadThread = (repo: string, id: string) => call('chats.get', { repo, id })
+export const loadThread = (repo: string, id: string) => call('chats.get', { repo, thread: id })

@@ -6,7 +6,7 @@
  * Each reader accepts an answer already in the app's shape and returns it unchanged, so mock mode (src/mock, which
  * answers in the app's shapes) and the tests keep working.
  */
-import type { EvidenceRef, Gate, InboxItem, Journey, Member, MeDoc, NextStep, Question, Stage, Waiver } from './types'
+import type { ChatMessage, ChatThread, EvidenceRef, Gate, InboxItem, Journey, Member, MeDoc, NextStep, Question, Stage, Waiver } from './types'
 import type { DecisionEntry, JourneyMore } from './types-s1'
 
 type Obj = Record<string, unknown>
@@ -227,6 +227,55 @@ export function readCreated(raw: unknown): unknown {
   return { ...raw, done: steps.filter((s) => s.state === 'done').map((s) => String(s.detail || s.title)), failed: failed.map((s) => `${String(s.title)}: ${String(s.detail)}`), waits: Array.isArray(raw.waits) ? raw.waits : [] }
 }
 
+// ------------------------------------------------------------------ chats
+
+/** chats.list: { threads: [{ id, title, updated, by }] } → the threads, newest first. */
+export function readThreads(raw: unknown, args?: { repo?: string }): ChatThread[] {
+  if (Array.isArray(raw)) return raw as ChatThread[]
+  const repo = (isObj(raw) ? str(raw.repo) : undefined) ?? args?.repo ?? ''
+  return arr(isObj(raw) ? raw.threads : []).map((t) => ({ id: String(t.id), repo, title: str(t.title) ?? 'Conversation', updatedAt: str(t.updated) ?? str(t.updatedAt) ?? '', ...(str(t.by) ? { author: str(t.by) } : {}) }))
+}
+
+/** One stored message (text, by, parts) as the app's: tool calls and the tool call answered come from its parts. */
+export function readChatMessage(m: Obj): ChatMessage {
+  if ('content' in m && !('text' in m)) return m as unknown as ChatMessage
+  const parts = isObj(m.parts) ? m.parts : {}
+  const calls = arr(parts.toolCalls).map((c) => ({ id: String(c.id), name: String(c.name), args: typeof c.args === 'string' ? c.args : JSON.stringify(c.args ?? {}) }))
+  const role = (['user', 'assistant', 'tool', 'system'].includes(String(m.role)) ? m.role : 'assistant') as ChatMessage['role']
+  return {
+    id: String(m.id), role, content: String(m.text ?? ''), at: str(m.at) ?? '',
+    ...(str(m.by) ? { author: str(m.by) } : {}),
+    ...(typeof m.yours === 'boolean' ? { yours: m.yours } : {}),
+    ...(calls.length ? { toolCalls: calls } : {}),
+    ...(str(parts.toolCallId) ? { toolCallId: str(parts.toolCallId) } : {}),
+  }
+}
+
+/** chats.get: { thread, messages: [{ id, role, text, by, at, parts, yours }], more } → the app's thread. */
+export function readThread(raw: unknown, args?: { repo?: string }): { thread: ChatThread; messages: ChatMessage[]; more?: boolean } {
+  if (!isObj(raw)) return { thread: { id: '', repo: args?.repo ?? '', title: '', updatedAt: '' }, messages: [] }
+  const t = isObj(raw.thread) ? raw.thread : {}
+  const repo = str(raw.repo) ?? args?.repo ?? ''
+  return {
+    thread: { id: String(t.id ?? ''), repo: str(t.repo) ?? repo, title: str(t.title) ?? '', updatedAt: str(t.updated) ?? str(t.updatedAt) ?? '', ...(str(t.by) ?? str(t.author) ? { author: str(t.by) ?? str(t.author) } : {}) },
+    messages: arr(raw.messages).map(readChatMessage),
+    ...(typeof raw.more === 'boolean' ? { more: raw.more } : {}),
+  }
+}
+
+/** chats.append: { thread: { id }, ids, created } → { id (the thread), messageId (the person's message), created }. */
+export function readAppended(raw: unknown): { id: string; messageId: string; created?: boolean } {
+  if (!isObj(raw) || !isObj(raw.thread)) return raw as { id: string; messageId: string }
+  const ids = Array.isArray(raw.ids) ? raw.ids.map(String) : []
+  return { id: String(raw.thread.id), messageId: ids[0] ?? '', created: Boolean(raw.created) }
+}
+
+/** chats.recall: { messages: [{ text }] } → the texts, newest first. */
+export function readRecall(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map(String)
+  return arr(isObj(raw) ? raw.messages : []).map((m) => String(m.text ?? ''))
+}
+
 /** The readers, by action. */
 export const READERS: Partial<Record<string, (raw: unknown, args: Record<string, unknown>) => unknown>> = {
   'journey.get': (r, a) => readJourney(r, a as { repo?: string }),
@@ -238,4 +287,8 @@ export const READERS: Partial<Record<string, (raw: unknown, args: Record<string,
   'files.url': readFileUrl,
   'gate.sign': readSigned,
   'projects.create': readCreated,
+  'chats.list': (r, a) => readThreads(r, a as { repo?: string }),
+  'chats.get': (r, a) => readThread(r, a as { repo?: string }),
+  'chats.append': readAppended,
+  'chats.recall': readRecall,
 }

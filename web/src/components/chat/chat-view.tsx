@@ -3,8 +3,11 @@
  *
  * - Messages come from the agent (`useAgent`); every reply streams in as markdown (markdown.tsx), tool calls draw as
  *   interface parts (`useRenderToolCall`, see renderers.tsx), reasoning is hidden or folded per preference.
- * - Every message is kept with the project: the thread is created on the first message (chats.append) and each
- *   message after it is appended, so the conversation is there on any device. Opening a thread loads it (chats.get).
+ * - Every message is kept with the project, so the conversation is there on any device: the person's own messages
+ *   with chats.append (the thread is made on the first), trace's replies by the chat agent itself as it answers
+ *   (chats.reply in src/web/agui.ts). Opening a thread loads it (chats.get): the viewer's own turns and trace's
+ *   replies to them replay as the conversation; other people's show beside them and reach trace only as quoted data
+ *   (thread.ts, agent.ts), so nobody's words become someone else's request.
  * - Controls: Stop while replying; per reply: read aloud (with the spoken word highlighted), Copy as markdown,
  *   Retry (the last reply), thumbs down with a reason.
  */
@@ -19,13 +22,13 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Textarea } from '@/components/ui/textarea'
 import { call } from '@/lib/api'
 import { usePrefs } from '@/lib/prefs'
-import type { ChatMessage } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { ChatInput } from './chat-input'
-import { AGENT_ID } from './agent'
+import { AGENT_ID, resetWire, setWire } from './agent'
 import { pendingAsk, setThread, useRecallHistory } from './chat-state'
 import { useStore } from '@/lib/store'
 import { Markdown } from './markdown'
+import { toReplay } from './thread'
 import { enqueueSpeech, speak, speakable, stopSpeaking, useSpeech } from './voice/speech'
 
 type AnyMsg = Message & { content?: unknown; toolCalls?: { id: string; type: 'function'; function: { name: string; arguments: string } }[]; toolCallId?: string }
@@ -33,25 +36,7 @@ type AnyMsg = Message & { content?: unknown; toolCalls?: { id: string; type: 'fu
 const textOf = (m: AnyMsg): string =>
   typeof m.content === 'string' ? m.content : Array.isArray(m.content) ? (m.content as { type: string; text?: string }[]).filter((p) => p.type === 'text').map((p) => p.text ?? '').join('') : ''
 
-/** Stored messages → AG-UI messages, so a thread replays with its cards. */
-export function toAgui(ms: ChatMessage[]): Message[] {
-  return ms
-    .filter((m) => m.role !== 'system')
-    .map((m) => {
-      if (m.role === 'tool') return { id: m.id, role: 'tool', content: m.content, toolCallId: m.toolCallId ?? '' } as Message
-      if (m.role === 'assistant')
-        return { id: m.id, role: 'assistant', content: m.content, ...(m.toolCalls?.length ? { toolCalls: m.toolCalls.map((t) => ({ id: t.id, type: 'function', function: { name: t.name, arguments: t.args } })) } : {}) } as Message
-      return { id: m.id, role: 'user', content: m.content } as Message
-    })
-}
-
-/** AG-UI message → what chats.append stores. */
-export function fromAgui(m: AnyMsg): Omit<ChatMessage, 'at'> | null {
-  if (m.role === 'user') return { id: m.id, role: 'user', content: textOf(m) }
-  if (m.role === 'assistant') return { id: m.id, role: 'assistant', content: textOf(m), ...(m.toolCalls?.length ? { toolCalls: m.toolCalls.map((t) => ({ id: t.id, name: t.function.name, args: t.function.arguments })) } : {}) }
-  if (m.role === 'tool') return { id: m.id, role: 'tool', content: textOf(m), toolCallId: m.toolCallId }
-  return null
-}
+export { toAgui, toReplay } from './thread'
 
 export interface ChatViewProps {
   agentId: string
@@ -73,58 +58,61 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
   const speaking = useSpeech()
   const messages = agent.messages as AnyMsg[]
   const running = agent.isRunning
-  const saved = useRef(new Set<string>())
   const thread = useRef<string | undefined>(threadId)
   const scroller = useRef<HTMLDivElement>(null)
   const [loaded, setLoaded] = useState<string | undefined>()
+  /** messages by other people on the project, shown but never sent to trace as the viewer's */
+  const [foreign, setForeign] = useState<Map<string, string>>(new Map())
 
-  // open a stored thread
+  // open a stored thread: the viewer's own turns (and trace's replies to them) are the conversation; other people's
+  // are quoted to trace as data, and make the thread read-only for trace
   useEffect(() => {
     thread.current = threadId
     if (!repo || !threadId || loaded === threadId) return
     let live = true
-    void call('chats.get', { repo, id: threadId })
+    void call('chats.get', { repo, thread: threadId, limit: 500 })
       .then((r) => {
         if (!live) return
+        const replay = toReplay(r.messages)
         agent.threadId = threadId
-        agent.setMessages(toAgui(r.messages))
-        saved.current = new Set(r.messages.map((m) => m.id))
+        resetWire(agentId, { repo, thread: threadId, foreign: replay.foreign, ...(replay.after ? { after: replay.after } : {}) })
+        agent.setMessages(replay.messages)
+        setForeign(replay.foreign)
         setLoaded(threadId)
       })
       .catch(() => toast.error('Could not load that conversation.'))
     return () => {
       live = false
     }
-  }, [agent, repo, threadId, loaded])
+  }, [agent, agentId, repo, threadId, loaded])
 
   // a new conversation (no thread chosen): start clean
   useEffect(() => {
     if (threadId) return
     agent.setMessages([])
-    saved.current = new Set()
+    resetWire(agentId, repo ? { repo } : {})
+    setForeign(new Map())
     setLoaded(undefined)
-  }, [agent, threadId])
+  }, [agent, agentId, repo, threadId])
 
-  const persist = useCallback(async () => {
-    if (!repo) return
-    for (const m of agent.messages as AnyMsg[]) {
-      if (saved.current.has(m.id)) continue
-      const stored = fromAgui(m)
-      if (!stored) continue
-      saved.current.add(m.id)
-      try {
-        const r = await call('chats.append', { repo, ...(thread.current ? { id: thread.current } : { title: stored.content.slice(0, 60) }), message: stored })
-        if (!thread.current) {
-          thread.current = r.id
-          agent.threadId = r.id
-          setLoaded(r.id)
-          setThread(repo, r.id)
-        }
-      } catch {
-        saved.current.delete(m.id)
+  /** Keep the person's own message (their words only: trace's reply is kept by the chat agent itself). */
+  const keep = useCallback(async (text: string): Promise<boolean> => {
+    if (!repo) return true
+    try {
+      const r = await call('chats.append', { repo, ...(thread.current ? { thread: thread.current } : { title: text.slice(0, 60) }), messages: [{ text }] })
+      setWire(agentId, { repo, thread: r.id, after: r.messageId })
+      if (!thread.current) {
+        thread.current = r.id
+        agent.threadId = r.id
+        setLoaded(r.id)
+        setThread(repo, r.id)
       }
+      return true
+    } catch (e) {
+      toast.error('Your message could not be kept', { description: e instanceof Error ? e.message : String(e) })
+      return false
     }
-  }, [agent, repo])
+  }, [agent, agentId, repo])
 
   const run = useCallback(async () => {
     try {
@@ -132,26 +120,26 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
     } catch (e) {
       toast.error('trace could not reply', { description: e instanceof Error ? e.message : String(e) })
     }
-    await persist()
     const last = [...(agent.messages as AnyMsg[])].reverse().find((m) => m.role === 'assistant' && textOf(m))
     if (last && prefs.voice.readAloud !== 'off') {
       const text = textOf(last)
       enqueueSpeech(last.id, prefs.voice.readAloud === 'summary' ? (text.split(/\n\n/)[0] ?? text) : text)
     }
-  }, [agent, copilotkit, persist, prefs.voice.readAloud])
+  }, [agent, copilotkit, prefs.voice.readAloud])
 
-  const send = (text: string) => {
+  const send = async (text: string) => {
     stopSpeaking()
     agent.addMessage({ id: crypto.randomUUID(), role: 'user', content: text })
     push(text)
-    void persist()
+    // kept first, so the chat agent knows which turn its reply follows
+    await keep(text)
     void run()
   }
 
   const retry = () => {
     const ms = agent.messages as AnyMsg[]
-    const lastUser = ms.map((m) => m.role).lastIndexOf('user')
-    if (lastUser < 0) return
+    const lastUser = ms.map((m, i) => (m.role === 'user' && !foreign.has(m.id) ? i : -1)).reduce((a, b) => Math.max(a, b), -1)
+    if (lastUser < 0 || lastUser !== ms.map((m) => m.role).lastIndexOf('user')) return
     agent.setMessages(ms.slice(0, lastUser + 1) as Message[])
     void run()
   }
@@ -161,7 +149,7 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
   useEffect(() => {
     if (agentId !== AGENT_ID || !pending || running) return
     pendingAsk.set(null)
-    send(pending.text)
+    void send(pending.text)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, agentId])
 
@@ -180,7 +168,17 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
       <div ref={scroller} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4" aria-live="polite" aria-busy={running}>
         {messages.length === 0 && intro}
         {messages.map((m, i) => {
-          if (m.role === 'user')
+          if (m.role === 'user') {
+            const by = foreign.get(m.id)
+            if (by !== undefined)
+              return (
+                <div key={m.id} className="flex justify-start">
+                  <div className="max-w-[85%] rounded-2xl border px-3.5 py-2">
+                    <p className="mb-0.5 text-xs text-muted-foreground">{by.split(': ')[0]}</p>
+                    <Markdown text={textOf(m)} />
+                  </div>
+                </div>
+              )
             return (
               <div key={m.id} className="flex justify-end">
                 <div className="max-w-[85%] rounded-2xl bg-muted px-3.5 py-2">
@@ -188,6 +186,7 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
                 </div>
               </div>
             )
+          }
           if (m.role === 'reasoning') {
             if (prefs.chat.reasoning === 'hidden') return null
             return (
@@ -220,8 +219,8 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
                   onCopy={() => void navigator.clipboard?.writeText(text).then(() => toast('Copied as markdown'))}
                   onRetry={m.id === lastAssistant ? retry : undefined}
                   onFeedback={(reason) => {
-                    if (!repo || !thread.current) return
-                    void call('chats.append', { repo, id: thread.current, message: { role: 'system', content: JSON.stringify({ feedback: 'down', messageId: m.id, reason }) } })
+                    // kept with the person's own preferences (the latest one; never as a message in the shared thread)
+                    void call('me.set', { key: 'feedback.chat.last', value: { down: true, messageId: m.id, reason: reason.slice(0, 500), thread: thread.current ?? null, at: new Date().toISOString() } })
                     toast('Thanks. That helps trace improve.')
                   }}
                 />

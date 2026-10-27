@@ -1,5 +1,7 @@
 /**
- * Registers how tool calls draw in the conversation, and the one human-in-the-loop tool, `ask_person`.
+ * Registers how tool calls draw in the conversation, and the human-in-the-loop tools: `ask_person` (a Decision card)
+ * and `start_task` (trace offers to start work: the exact request and agent, and only the person's Confirm calls `task`
+ * as them; the job, or Cancel, goes back to trace as the tool's result and shows as a Run card).
  *
  * Tool calls are drawn by the shape of their result, so any tool that returns one of these shapes gets its card
  * without a registration per tool:
@@ -12,10 +14,15 @@
  * Explicit `show_*` tools (the agent asking to show a card) are matched by name first.
  */
 import { useHumanInTheLoop, useRenderTool } from '@copilotkit/react-core/v2'
+import { useState } from 'react'
 import { z } from 'zod'
 import { DecisionCard, type Decision } from '@/components/decision-card'
+import { call } from '@/lib/api'
 import { usePrefs } from '@/lib/prefs'
-import { FileCard, FindingsCard, type FileData, type FindingsData, PartCard, type PartData, PlotCard, type PlotData, RunCard, type RunCardData, ToolRow, type ToolStatus, parseResult } from './cards'
+import {
+  FileCard, FindingsCard, type FileData, type FindingsData, PartCard, type PartData, PlotCard, type PlotData, RunCard, type RunCardData, type TaskAnswer, TaskConfirmCard, ToolRow,
+  type ToolStatus, parseResult,
+} from './cards'
 
 type Shape = { kind: 'plot'; data: PlotData } | { kind: 'findings'; data: FindingsData } | { kind: 'part'; data: PartData } | { kind: 'file'; data: FileData } | { kind: 'run'; data: RunCardData } | null
 
@@ -79,5 +86,38 @@ export function ChatRenderers() {
     },
     [detail],
   )
+  useHumanInTheLoop<TaskArgs>(
+    {
+      name: 'start_task',
+      // the backend offers its own description and schema for this name; these only describe it to CopilotKit
+      description: 'Offer to start a task on the project. The person confirms or cancels.',
+      parameters: StartTask,
+      render: ({ args, status, respond, result }) => <StartTaskCard args={args} status={status} respond={respond} result={result} />,
+    },
+    [],
+  )
   return null
+}
+
+const StartTask = z.object({ repo: z.string(), request: z.string(), agent: z.string().optional() })
+type TaskArgs = z.infer<typeof StartTask>
+
+/** start_task's card: the person's Confirm calls `task` as them; the answer (the job, or why not) goes back to trace. */
+export function StartTaskCard({ args, status, respond, result, readOnly }: { args: Partial<TaskArgs>; status: string; respond?: (r: unknown) => unknown; result?: string; readOnly?: boolean }) {
+  const [busy, setBusy] = useState(false)
+  if (status === 'complete') return <TaskConfirmCard task={args} answer={parseResult<TaskAnswer>(result)} />
+  if (status !== 'executing' || !respond) return <TaskConfirmCard task={args} readOnly={readOnly} busy />
+  const confirm = async () => {
+    if (!args.repo || !args.request) return
+    setBusy(true)
+    try {
+      const r = await call('task', { repo: args.repo, request: args.request, ...(args.agent ? { agent: args.agent } : {}) })
+      respond({ confirmed: true, accepted: r.accepted, jobId: r.jobId, ...(r.reason ? { reason: r.reason } : {}) } satisfies TaskAnswer)
+    } catch (e) {
+      respond({ confirmed: true, accepted: false, reason: e instanceof Error ? e.message : 'the task could not be started' } satisfies TaskAnswer)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return <TaskConfirmCard task={args} busy={busy} readOnly={readOnly} onConfirm={() => void confirm()} onCancel={() => respond({ confirmed: false, reason: 'cancelled' } satisfies TaskAnswer)} />
 }
