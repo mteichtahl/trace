@@ -70,7 +70,9 @@ const s = {
    * '' and privileged 'default' = the stack's defaults */
   runners: { connectionArn: '', computeType: '' as '' | (typeof RUNNER_COMPUTE_TYPES)[number], privileged: 'default' as 'default' | 'on' | 'off',
     /** build trace's own repository on AWS too; null: not chosen yet (on when the token can configure it) */
-    buildTrace: null as boolean | null },
+    buildTrace: null as boolean | null,
+    /** keep this installation up to date from trace's own repository's ci workflow (on by default while it is built) */
+    selfUpdate: true },
   agents: { prefix: 'trace', model: '', maxLifetimeHours: 8, idleMinutes: 15, centralBucketName: '', retainData: true, escalateTo: '', gpuEnabled: true, gpuMaxVcpus: 16, gpuSpot: false,
     cpuEnabled: true, cpuMaxVcpus: 64, cpuSpot: false, cpuVcpus: 16, cpuMemoryMiB: 32_768, knowledgeBase: true, libraryGateway: false,
     observability: true, transactionSearch: true, samplingPercent: '', dashboard: true, migrateLayout: false },
@@ -141,7 +143,7 @@ function answers(): AnswersInput {
     runners: {
       connectionArn: s.runners.connectionArn, computeType: s.runners.computeType || null,
       privileged: s.runners.privileged === 'default' ? null : s.runners.privileged === 'on',
-      buildTrace: buildTrace(), traceRepository: buildTrace() ? selfRepo()?.repo ?? '' : '',
+      buildTrace: buildTrace(), traceRepository: buildTrace() ? selfRepo()?.repo ?? '' : '', selfUpdate: s.runners.selfUpdate,
     },
     projects: [...s.projects].map(([repo, { memoryDays, ...p }]) => ({ repo, ...p, memoryEventExpiryDays: memoryDays.trim() === '' ? null : Number(memoryDays) })),
     adminEmail: s.adminEmail,
@@ -338,7 +340,9 @@ function selfBuild(): HTMLElement | null {
   if (!own.ok) return h('p', { class: 'muted' }, `trace's own repository (${own.repo}) stays on GitHub's runners: the token can't set its variables.`)
   return h('div', {},
     checkbox(`Build trace's own repository on AWS too (${own.repo})`, buildTrace(), (v) => { s.runners.buildTrace = v; render() }),
-    h('p', { class: 'muted' }, 'Its workflows then run on a build runner in this account as well (a runner only: no agents); until that runner exists they run on GitHub\'s runners.'))
+    h('p', { class: 'muted' }, 'Its workflows then run on a build runner in this account as well (a runner only: no agents); until that runner exists they run on GitHub\'s runners.'),
+    buildTrace() ? checkbox('Keep this installation up to date when trace\'s main branch changes', s.runners.selfUpdate, (v) => { s.runners.selfUpdate = v; render() }) : null,
+    buildTrace() ? h('p', { class: 'muted' }, `When ${own.repo}'s default branch changes and its tests pass, its ci workflow deploys this installation again with the settings this installer saves, so you don't have to run the installer for every update. Only that workflow on that branch can do it, which means anyone who can merge there can change this installation. The installer is still needed to add repositories or people.`) : null)
 }
 
 async function checkAws(): Promise<void> {
@@ -607,6 +611,7 @@ async function boot(): Promise<void> {
         s.runners.computeType = saved.runners.computeType ?? ''
         s.runners.privileged = saved.runners.privileged === true ? 'on' : saved.runners.privileged === false ? 'off' : 'default'
         s.runners.buildTrace = saved.runners.buildTrace ?? null
+        s.runners.selfUpdate = saved.runners.selfUpdate ?? true
       }
       s.adminEmail = saved.adminEmail
       s.people = (saved.people ?? []).map((p) => ({ email: p.email, class: p.class ?? 'user', projects: new Set(p.projects ?? []) }))

@@ -116,3 +116,22 @@ export async function deleteVariable(token: string, repo: string, name: string, 
     throw e
   }
 }
+
+/** A repository's Actions variable's value, or null when it has none. */
+export async function getVariable(token: string, repo: string, name: string, fetchImpl?: Fetch): Promise<string | null> {
+  const gh = new Github(token, fetchImpl)
+  try {
+    const { data } = await gh.request('GET', `/repos/${repo}/actions/variables/${name}`, z.object({ value: z.string() }).loose())
+    return data.value
+  } catch (e) {
+    if (e instanceof GithubError && e.status === 404) return null
+    throw e
+  }
+}
+
+/** A repository's default branch. */
+export async function repositoryDefaultBranch(token: string, repo: string, fetchImpl?: Fetch): Promise<string> {
+  const gh = new Github(token, fetchImpl)
+  const { data } = await gh.request('GET', `/repos/${repo}`, z.object({ default_branch: z.string() }).loose())
+  return data.default_branch
+}

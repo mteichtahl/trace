@@ -26,6 +26,12 @@ const calls = vi.hoisted(() => ({
   connection: [] as { prefix: string; given?: string; deployed: Record<string, string> | null }[],
   /** repository variables the installer removed (repo:NAME), and which ones existed to remove */
   deleted: [] as string[], existingVars: new Set<string>(),
+  /** what was written to S3 (the installation record): bucket, key and text */
+  s3: [] as { Bucket: string; Key: string; Body: string }[],
+}))
+vi.mock('@aws-sdk/client-s3', async (orig) => ({
+  ...(await orig<typeof import('@aws-sdk/client-s3')>()),
+  S3Client: class { async send(c: { input: { Bucket: string; Key: string; Body: string } }) { calls.s3.push(c.input); return {} } },
 }))
 
 vi.mock('../../src/installer/aws.js', () => ({
@@ -92,6 +98,7 @@ vi.mock('../../src/installer/github.js', async (orig) => ({
   deleteVariable: async (_t: string, repo: string, name: string) => { calls.deleted.push(`${repo}:${name}`); return calls.existingVars.has(`${repo}:${name}`) },
   // the token can configure every repository unless a test says otherwise (only reached without a `self` hook)
   canConfigure: async () => ({ ok: true, reason: '' }),
+  repositoryDefaultBranch: async () => 'main',
   checkToken: async (token: string) => {
     const t = calls.tokens.get(token) ?? { login: 'trace-agent', repos: [] }
     return { login: t.login, name: null, kind: 'fine-grained', scopes: [], repos: t.repos.map((fullName) => ({ fullName, private: true, admin: false, push: true, defaultBranch: 'main' })), warnings: [] }
@@ -130,6 +137,7 @@ const OUTPUTS: Record<string, string> = {
   TraceHome: '', GithubSecretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:trace/github-token',
   ApiRuntimeArn: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/trace_api-abc',
   UserPoolId: 'us-east-1_abc', UserPoolClientId: 'client123', CognitoDomain: 'https://trace-123456789012.auth.us-east-1.amazoncognito.com',
+  CentralBucket: 'trace-central-bucket', SelfUpdateRoleArn: 'arn:aws:iam::123456789012:role/trace-self-update',
 }
 // each project's own outputs, named by its hash
 for (const repo of ['mteichtahl/board', 'mteichtahl/fw']) {
@@ -679,7 +687,7 @@ describe('the CodeBuild runners', () => {
 
   it('takes the runner settings from the answers, and plans the connection after the deploy, then the runners', () => {
     const a = AnswersSchema.parse(ANSWERS)
-    expect(a.runners).toEqual({ buildTrace: true, traceRepository: '', ciRepositories: [], connectionArn: '', computeType: null, privileged: null })
+    expect(a.runners).toEqual({ buildTrace: true, traceRepository: '', traceBranch: '', selfUpdate: true, ciRepositories: [], connectionArn: '', computeType: null, privileged: null })
     // nothing is needed up front: no connection ARN (the stack creates one), ready by default
     const props = InfraPropsSchema.parse(infraInput(a))
     expect(props.runners).toEqual({ connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false })
@@ -871,14 +879,14 @@ describe("trace's own repository", () => {
   it('says so in the plan, in plain words; adds other build-only repositories; refuses a project or a repeat among them', () => {
     const a = AnswersSchema.parse({ ...ANSWERS, runners: { traceRepository: TRACE } })
     const deploy = plan(a).find((x) => x.id === 'deploy')?.detail ?? ''
-    expect(deploy).toMatch(/ Build trace's own repository on AWS too \(mteichtahl\/trace\): a build runner for it alone, nothing else\.$/)
-    expect(plan(a).find((x) => x.id === 'repos')?.detail).toMatch(/; TRACE_CODEBUILD_PROJECT alone in mteichtahl\/trace\./)
+    expect(deploy).toMatch(/ Build trace's own repository on AWS too \(mteichtahl\/trace\): a build runner for it alone, nothing else\. Keep this installation up to date: /)
+    expect(plan(a).find((x) => x.id === 'repos')?.detail).toMatch(/; TRACE_CODEBUILD_PROJECT alone in mteichtahl\/trace; TRACE_UPDATE_ROLE, TRACE_AWS_REGION and TRACE_STACK in mteichtahl\/trace \(its ci workflow keeps this installation up to date\)\./)
     expect(plan(a).find((x) => x.id === 'connection')?.detail).toMatch(/Give that app access to mteichtahl\/board, mteichtahl\/fw, mteichtahl\/trace$/)
     const none = AnswersSchema.parse({ ...ANSWERS, runners: { buildTrace: false, traceRepository: TRACE } })
     expect(plan(none).find((x) => x.id === 'deploy')?.detail).not.toMatch(/trace's own repository/)
     const more = AnswersSchema.parse({ ...ANSWERS, runners: { traceRepository: TRACE, ciRepositories: ['mteichtahl/tools', 'MTEICHTAHL/trace'] } })
     expect(buildRepositories(more)).toEqual([TRACE, 'mteichtahl/tools'])
-    expect(plan(more).find((x) => x.id === 'deploy')?.detail).toMatch(/Build mteichtahl\/tools on AWS too, without agents: a build runner each, nothing else\.$/)
+    expect(plan(more).find((x) => x.id === 'deploy')?.detail).toMatch(/Build mteichtahl\/tools on AWS too, without agents: a build runner each, nothing else\. Keep/)
     expect(AnswersSchema.safeParse({ ...ANSWERS, runners: { ciRepositories: ['mteichtahl/board'] } }).success).toBe(false)
     expect(AnswersSchema.safeParse({ ...ANSWERS, runners: { ciRepositories: ['a/b', 'A/b'] } }).success).toBe(false)
     expect(AnswersSchema.safeParse({ ...ANSWERS, runners: { traceRepository: 'not a repo' } }).success).toBe(false)
@@ -896,7 +904,8 @@ describe("trace's own repository", () => {
     expect(ok).toBe(true)
     expect(infra[0]?.ciRepositories).toEqual([TRACE])
     expect(calls.values.get(`${TRACE}:TRACE_CODEBUILD_PROJECT`)).toBe(`trace-ci-${projectHash(TRACE)}`)
-    expect([...calls.values.keys()].filter((k) => k.startsWith(`${TRACE}:`))).toEqual([`${TRACE}:TRACE_CODEBUILD_PROJECT`])
+    // its runner, and (keeping the installation up to date, on by default) the self-update job's variables: nothing of a project
+    expect([...calls.values.keys()].filter((k) => k.startsWith(`${TRACE}:`)).sort()).toEqual([`${TRACE}:TRACE_AWS_REGION`, `${TRACE}:TRACE_CODEBUILD_PROJECT`, `${TRACE}:TRACE_STACK`, `${TRACE}:TRACE_UPDATE_ROLE`])
     expect(calls.ghSecrets.filter((k) => k.startsWith(`${TRACE}:`))).toEqual([])
     expect(events.filter((e) => e.type === 'log').map((e) => e.line)).toContain(`Building trace's own repository (${TRACE}) on AWS too: a build runner for it alone.`)
     // saved with the answers, so the page shows it next time
@@ -913,7 +922,8 @@ describe("trace's own repository", () => {
     expect(off).toBe(true)
     expect(infra[0]?.ciRepositories).toBeUndefined()
     expect(calls.values.has(`${TRACE}:TRACE_CODEBUILD_PROJECT`)).toBe(false)
-    expect(calls.deleted).toEqual([`${TRACE}:TRACE_CODEBUILD_PROJECT`])
+    // and the self-update role goes with it (selfUpdate needs trace's own repository built), so its variable goes too
+    expect(calls.deleted.sort()).toEqual([`${TRACE}:TRACE_CODEBUILD_PROJECT`, `${TRACE}:TRACE_UPDATE_ROLE`])
   })
 
   it('reads which repositories an earlier run built from its saved answers', () => {
@@ -922,3 +932,83 @@ describe("trace's own repository", () => {
     expect(earlierRepositories({ ...ANSWERS, runners: { traceRepository: TRACE } })).toEqual(['mteichtahl/board', 'mteichtahl/fw', TRACE])
   })
 })
+
+describe('keeping the installation up to date', () => {
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const TRACE = 'mteichtahl/trace'
+  const yes = async () => ({ ok: true, reason: '' })
+  const ADMIN = ['ghp', 'ADMINFAKEFAKEFAKE0123456789'].join('_')
+  const OWN = ['github', 'pat', '22OWNFAKEFAKE0123456789'].join('_')
+  const KEY = 'secret-key-value-1234'
+
+  it('saves exactly the settings it deployed with, and never a token or key, in installation/props.json', async () => {
+    calls.values.clear()
+    calls.tokens.set(OWN, { login: 'board-bot', repos: ['mteichtahl/board'] })
+    const saved: { bucket: string; key: string; text: string }[] = []
+    const infra: string[] = []
+    const ok = await apply(AnswersSchema.parse(ANSWERS), SecretsSchema.parse({
+      githubToken: TOKEN, githubAdminToken: ADMIN, projectTokens: { 'mteichtahl/board': OWN }, awsAccessKeyId: 'AKIAEXAMPLE', awsSecretAccessKey: KEY,
+      libraryKeys: { MOUSER_API_KEY: 'mouser-key-0123456789' },
+    }), () => undefined, {
+      ...quiet, self: { source: () => TRACE, canConfigure: yes, branch: async () => 'trunk' },
+      cdk: async (args, env) => { if (args[0] === 'deploy') infra.push(env.TRACE_INFRA ?? ''); return 0 }, outputs: async () => OUTPUTS,
+      saveRecord: async (_c, _r, bucket, key, text) => { saved.push({ bucket, key, text }) },
+    })
+    expect(ok).toBe(true)
+    expect(saved).toHaveLength(1)
+    expect(saved[0]?.bucket).toBe('trace-central-bucket')
+    expect(saved[0]?.key).toBe('installation/props.json')
+    const record = JSON.parse(saved[0]?.text ?? '{}') as { props: Record<string, unknown>; stack: string; region: string; traceRepository: string; traceBranch: string; connectionArn: string }
+    // exactly what the deploy was given
+    expect(record.props).toEqual(JSON.parse(infra.at(-1) ?? '{}'))
+    expect(record).toMatchObject({ stack: 'TraceStack', region: 'us-east-1', traceRepository: TRACE, traceBranch: 'trunk', connectionArn: '' })
+    expect(record.props.selfUpdate).toEqual({ repository: TRACE, branch: 'trunk' })
+    for (const v of [TOKEN, ADMIN, OWN, KEY, 'AKIAEXAMPLE', 'mouser-key-0123456789']) expect(saved[0]?.text).not.toContain(v)
+    // the repository's variables for the update job
+    expect(calls.values.get(`${TRACE}:TRACE_UPDATE_ROLE`)).toBe(OUTPUTS.SelfUpdateRoleArn)
+    expect(calls.values.get(`${TRACE}:TRACE_AWS_REGION`)).toBe('us-east-1')
+    expect(calls.values.get(`${TRACE}:TRACE_STACK`)).toBe('TraceStack')
+  })
+
+  it('refuses to save a record a secret would be in', async () => {
+    const { checkNoSecrets, installationRecord } = await import('../../src/installer/record.js')
+    const s = SecretsSchema.parse({ githubToken: TOKEN })
+    const r = installationRecord({ stack: 'TraceStack', region: 'us-east-1', props: infraInput(AnswersSchema.parse(ANSWERS)), connectionArn: '', traceRepository: '', traceBranch: '' })
+    expect(() => checkNoSecrets(JSON.stringify(r), s)).not.toThrow()
+    expect(() => checkNoSecrets(JSON.stringify({ ...r, props: { ...r.props, model: TOKEN } }), s)).toThrow(/token or key/)
+    expect(() => checkNoSecrets(JSON.stringify({ ...r, note: ['ghp', 'abcdefghijklmnop'].join('_') }), s)).toThrow(/token or key/)
+  })
+
+  it('asks the stack for the role only while trace\'s own repository is built and the option is on, and plans it in plain words', () => {
+    const on = AnswersSchema.parse({ ...ANSWERS, runners: { traceRepository: TRACE, traceBranch: 'main' } })
+    expect(infraInput(on).selfUpdate).toEqual({ repository: TRACE, branch: 'main' })
+    expect(plan(on).find((x) => x.id === 'deploy')?.detail).toMatch(/Keep this installation up to date: when mteichtahl\/trace's main branch changes and its tests pass, its ci workflow deploys this stack again .* only that workflow on main can use, so whoever can merge to main there can change this installation\.$/)
+    const optedOut = AnswersSchema.parse({ ...ANSWERS, runners: { traceRepository: TRACE, selfUpdate: false } })
+    expect(infraInput(optedOut).selfUpdate).toBeUndefined()
+    expect(plan(optedOut).find((x) => x.id === 'deploy')?.detail).not.toMatch(/up to date/)
+    expect(plan(optedOut).find((x) => x.id === 'repos')?.detail).not.toMatch(/TRACE_UPDATE_ROLE/)
+    const notBuilt = AnswersSchema.parse({ ...ANSWERS, runners: { buildTrace: false, traceRepository: TRACE } })
+    expect(infraInput(notBuilt).selfUpdate).toBeUndefined()
+  })
+
+  it('opted out: no role asked for, no variables set, and the earlier TRACE_UPDATE_ROLE removed', async () => {
+    calls.values.clear()
+    calls.deleted.length = 0
+    calls.existingVars.add(`${TRACE}:TRACE_UPDATE_ROLE`)
+    const infra: Record<string, unknown>[] = []
+    const events: { type: string; line?: string }[] = []
+    const ok = await apply(AnswersSchema.parse({ ...ANSWERS, runners: { selfUpdate: false } }), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
+      ...quiet, self: { source: () => TRACE, canConfigure: yes },
+      cdk: async (args, env) => { if (args[0] === 'deploy') infra.push(JSON.parse(env.TRACE_INFRA ?? '{}')); return 0 }, outputs: async () => OUTPUTS,
+      saveRecord: async () => undefined,
+    })
+    calls.existingVars.delete(`${TRACE}:TRACE_UPDATE_ROLE`)
+    expect(ok).toBe(true)
+    expect(infra[0]?.selfUpdate).toBeUndefined()
+    expect(infra[0]?.ciRepositories).toEqual([TRACE])
+    expect([...calls.values.keys()].filter((k) => k.startsWith(`${TRACE}:`))).toEqual([`${TRACE}:TRACE_CODEBUILD_PROJECT`])
+    expect(calls.deleted).toContain(`${TRACE}:TRACE_UPDATE_ROLE`)
+    expect(events.filter((e) => e.type === 'log').map((e) => e.line)).toContain(`${TRACE}: TRACE_UPDATE_ROLE removed (this installation no longer updates itself from it)`)
+  })
+})
+

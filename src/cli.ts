@@ -4,6 +4,8 @@
  *
  *   Installation
  *     trace install [--port N] [--no-open]   a local web page that sets up AWS (CDK, AgentCore, Cognito) and GitHub
+ *     trace update-installation        deploy the installation again with the settings the installer saved (run by
+ *                                      trace's own ci workflow on main: README "Staying up to date")
  *
  *   Repositories
  *     trace onboard OWNER/REPO [--path DIR] [--apply-settings] [--no-push] [--no-ruleset] [--escalate-to LOGIN]
@@ -285,6 +287,10 @@ async function main(argv: string[]): Promise<number> {
       const { url } = await startInstaller({ ...(values.port ? { port: Number(values.port) } : {}), open: !values['no-open'] })
       out(`The installer is at ${url}\n(keep this running until it says it is done; Ctrl-C to stop)`)
       return new Promise<number>(() => undefined)
+    }
+    case 'update-installation': {
+      const { updateInstallation } = await import('./installer/update.js')
+      return updateInstallation()
     }
     case 'connect': return cmdConnect(rest)
     case 'login': return cmdLogin(rest)

@@ -73,7 +73,7 @@ import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './obs
 import { GithubConnection, RunnerProject } from './runner.js'
 import { ACCESS_PREFIX, CENTRAL_PREFIX, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
-  GPU_IMAGE_BUILD_OUTPUT, type InfraProps, ciRunnerOutput, LAYOUT_OUTPUT, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled,
+  CDK_QUALIFIER, CENTRAL_BUCKET_OUTPUT, INSTALLATION_PREFIX, GPU_IMAGE_BUILD_OUTPUT, type InfraProps, SELF_UPDATE_OUTPUT, ciRunnerOutput, LAYOUT_OUTPUT, selfUpdateRoleName, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled,
   kbEnabled, projectRefs, projectSettings,
 } from './props.js'
 
@@ -474,6 +474,48 @@ export class TraceStack extends Stack {
       ],
     })
 
+    // ------------------------------------------------------------------ keeping the installation up to date (selfUpdate)
+    // The role trace's own repository's ci workflow assumes, on `branch` only, to deploy this stack again with the
+    // settings the installer saved (src/installer/update.ts). It may do exactly what that takes and nothing else:
+    //   sts        AssumeRole on this account and region's CDK bootstrap roles (cdk-<qualifier>-*-role-<account>-<region>):
+    //              the deploy itself runs as CDK's deploy role and CloudFormation's execution role, as the installer's does
+    //   s3         GetObject on installation/* of the central bucket (the saved settings), nothing else of the bucket
+    //   cfn        DescribeStacks and ListStackResources on this stack and its nested stacks (their outputs)
+    //   github     the CodeConnections reads the installer makes to tell whether the GitHub connection is authorized
+    //   secret     GetSecretValue on the shared agent token (TRACE_CODEBUILD_PROJECT on the repositories)
+    // Whoever can merge to that branch can therefore change this installation: README "Staying up to date".
+    if (cfg.selfUpdate) {
+      const { repository, branch } = cfg.selfUpdate
+      const { partition, account, region } = this
+      const updater = new iam.Role(this, 'SelfUpdateRole', {
+        roleName: selfUpdateRoleName(cfg.prefix),
+        maxSessionDuration: Duration.hours(1),
+        description: `Assumed only by ${repository}'s ci workflow on ${branch} (GitHub OIDC), to keep this trace installation up to date`.slice(0, 1000),
+        assumedBy: new iam.WebIdentityPrincipal(oidc.openIdConnectProviderArn, {
+          StringEquals: { [`${issuer}:aud`]: 'sts.amazonaws.com', [`${issuer}:sub`]: `repo:${repository}:ref:refs/heads/${branch}` },
+          // the workflow file the job comes from, at that branch: only .github/workflows/ci.yml, not another workflow there
+          StringLike: { [`${issuer}:job_workflow_ref`]: `${repository}/.github/workflows/ci.yml@refs/heads/${branch}` },
+        }),
+      })
+      updater.addToPolicy(new iam.PolicyStatement({
+        sid: 'CdkBootstrapRoles', actions: ['sts:AssumeRole'],
+        resources: [`arn:${partition}:iam::${account}:role/cdk-${CDK_QUALIFIER}-*-${account}-${region}`],
+      }))
+      updater.addToPolicy(new iam.PolicyStatement({ sid: 'InstallationSettings', actions: ['s3:GetObject'], resources: [central.arnForObjects(`${INSTALLATION_PREFIX}/*`)] }))
+      updater.addToPolicy(new iam.PolicyStatement({
+        sid: 'StackOutputs', actions: ['cloudformation:DescribeStacks', 'cloudformation:ListStackResources'],
+        resources: [`arn:${partition}:cloudformation:${region}:${account}:stack/${this.stackName}/*`, `arn:${partition}:cloudformation:${region}:${account}:stack/${this.stackName}-*/*`],
+      }))
+      updater.addToPolicy(new iam.PolicyStatement({
+        sid: 'GithubConnection', actions: ['codeconnections:GetConnection', 'codeconnections:ListTagsForResource'],
+        resources: [`arn:${partition}:codeconnections:${region}:${account}:connection/*`, `arn:${partition}:codestar-connections:${region}:${account}:connection/*`],
+      }))
+      // ListConnections has no resource-level permission
+      updater.addToPolicy(new iam.PolicyStatement({ sid: 'GithubConnections', actions: ['codeconnections:ListConnections'], resources: ['*'] }))
+      updater.addToPolicy(new iam.PolicyStatement({ sid: 'SharedAgentToken', actions: ['secretsmanager:GetSecretValue'], resources: [githubToken.secretArn] }))
+      new CfnOutput(this, SELF_UPDATE_OUTPUT, { value: updater.roleArn, description: `${repository}'s TRACE_UPDATE_ROLE: keeps this installation up to date from its ci workflow on ${branch}` })
+    }
+
     // ------------------------------------------------------------------ outputs
     new CfnOutput(this, LAYOUT_OUTPUT, { value: cfg.layout, description: 'Where each project\'s resources are: nested (a nested stack each) or flat (this stack)' })
     // Nested: the parent carries none of a project's outputs (Project<hash>RuntimeArn, ActionsRoleArn, MemoryId, …):
@@ -487,7 +529,7 @@ export class TraceStack extends Stack {
       new CfnOutput(this, LIBRARY_GATEWAY_OUTPUT, { value: library.ref.url, description: 'The library gateway (the workers\' TRACE_GATEWAY_URL)' })
       new CfnOutput(this, LIBRARY_KEYS_OUTPUT, { value: library.keys.secretArn, description: 'The distributor keys the library gateway\'s Lambda reads (written by `trace install`)' })
     }
-    new CfnOutput(this, 'CentralBucket', { value: central.bucketName })
+    new CfnOutput(this, CENTRAL_BUCKET_OUTPUT, { value: central.bucketName })
     new CfnOutput(this, 'GithubSecretArn', { value: githubToken.secretArn, description: 'The API\'s GitHub token (across projects); each project has its own (Project<hash>GithubSecretArn)' })
     new CfnOutput(this, 'AgentImageUri', { value: imageUri })
     new CfnOutput(this, 'Region', { value: cfg.region })

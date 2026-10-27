@@ -47,7 +47,9 @@ It then shows the plan and runs it:
 - **GitHub:** each repository's Actions variables (`TRACE_AWS_ROLE`, `TRACE_AGENT_RUNTIME_ARN`, `TRACE_MEMORY_ID`,
   `TRACE_KB_ID`, `TRACE_KB_DATA_SOURCE_ID` and `TRACE_CODEBUILD_PROJECT`, all its own project's, `TRACE_AWS_REGION`, `TRACE_HOME`) and its `TRACE_TOKEN` secret (its project's agent token,
   encrypted with the repository's key), plus the onboarding pull request. trace's own repository gets
-  `TRACE_CODEBUILD_PROJECT` alone. That variable is set only once the repository's build runner exists.
+  `TRACE_CODEBUILD_PROJECT`, and `TRACE_UPDATE_ROLE`, `TRACE_AWS_REGION` and `TRACE_STACK` so the installation keeps
+  itself up to date (see [Staying up to date](#staying-up-to-date)). `TRACE_CODEBUILD_PROJECT` is set only once the
+  repository's build runner exists.
 - **The GPU image**, last: the deploy starts its build and does not wait for it (see [GPU jobs](#gpu-jobs-rendering-and-autorouting)),
   so the installer waits for it once everything else is set up, and starts it again if an earlier one failed. A failed
   GPU image leaves GPU and CPU jobs unavailable and everything else installed.
@@ -276,6 +278,37 @@ container runs the job and is discarded.
 
 `trace doctor owner/repo` notes when a repository has no AWS runner yet. A guard test fails the build if any workflow
 here or in `templates/` names a runner other than its CodeBuild runner or the `ubuntu-24.04` fallback.
+
+### Staying up to date
+
+An installation updates itself when trace's own repository changes, so nobody has to run the installer for every
+update. The installer is still what makes the first installation, and what adds or removes repositories and people.
+
+- **What triggers it.** A push to trace's own default branch (a merged pull request). Once the tests pass, the
+  `update-installation` job of `.github/workflows/ci.yml` deploys the stack again from that commit. It runs only in
+  trace's own repository, and only once the installer has set that repository's `TRACE_UPDATE_ROLE`. One update runs
+  at a time; a newer merge waits for the one before it.
+- **What it deploys.** After every deploy, the installer saves the settings it deployed with in the central bucket
+  (`installation/props.json`; no tokens or keys are in it). The job deploys with exactly those settings and this
+  commit's code, so the agent image, the stack and the workflows' helpers move to the new version.
+- **What it can do besides.** It checks whether the GitHub connection is authorized, as the installer does. If it is,
+  the build runners are deployed and each repository's `TRACE_CODEBUILD_PROJECT` is set with the shared agent token.
+  If the token may not change a repository's variables, the job still succeeds, and its summary lists which variable to
+  set to what. If the connection is not authorized, the summary says where to authorize it, and the next merge (or
+  re-running the job) adds the runners. It starts the GPU image build when that image changed, and does not wait for it.
+- **What it can't do.** It cannot add repositories or people, change secrets, rulesets or onboarding pull requests, or
+  change any setting. Run the installer for those, and it saves the new settings for the next update. The job fails
+  only when the deploy fails, and CloudFormation then rolls the stack back to how it was.
+- **Security.** The job signs in to AWS as `<prefix>-self-update`. That role can be used only by the `ci` workflow
+  of trace's own repository running on its default branch: its trust policy checks the repository, the branch and
+  the workflow file. It may use CDK's deployment roles in this account and region, read `installation/*`, read the
+  stack's outputs, check the GitHub connection and read the shared agent token. Nothing else in the account trusts
+  it, and no project's role can read or write `installation/*`. Deploying through CDK's roles can change anything the
+  stack holds, so **whoever can merge to trace's default branch can change this AWS installation.** Protect that
+  branch as you would the AWS account.
+- **Turning it off.** Untick "Keep this installation up to date when trace's main branch changes" (under "Where the
+  workflows run") and run the installer again. The role goes with that deploy, and the installer removes
+  `TRACE_UPDATE_ROLE`, so the job no longer runs. It is on by default whenever trace's own repository is built on AWS.
 
 ## Putting another repository under trace
 
@@ -1324,7 +1357,7 @@ outside AgentCore, either set `OTEL_SDK_DISABLED=true` or give it the variables 
 | --- | --- |
 | `src/core` | Settings, SQLite stores, the tool registry, the MCP server, onboarding, access control, the Python bridge client |
 | `src/infra` | The CDK stack (Cognito, the central bucket, the image builds, the API runtime, the AWS Batch GPU queue in `gpu.ts`) and, per project, `project.ts` (its worker runtime, roles, token secret and GPU job definition) |
-| `src/installer` | `trace install`: the local web installer |
+| `src/installer` | `trace install`: the local web installer; `trace update-installation` (`update.ts`): the self-update job of trace's own ci workflow |
 | `src/prompts` | The prompt catalog (every prompt part's id, default, variables and whether it is locked), the `{{var}}` templates, the layers (installation and project overrides) and their stores, and `trace prompts` |
 | `src/agents` | The specialists (`verify`, `impl`, `ams`, `emc`, `render`, each in its own folder; `index.ts` lists them), the router, the retained worker's prompt (`worker`), and the runtime (`runtime`: server, jobs, delegation, memory, observability) |
 | `src/api`, `agent/Dockerfile` | The people-facing API, and the image AgentCore runs |
