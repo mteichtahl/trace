@@ -29,14 +29,14 @@ import { FixRequest, fix } from './fix.js'
 import { canConfigure, checkToken } from './github.js'
 import { traceRepository } from './source.js'
 import { page } from './page.js'
-import { type PreflightInput, type PreflightResult, liveDeps, preflight } from './preflight.js'
+import { type OnProgress, type PreflightInput, type PreflightResult, liveDeps, preflight } from './preflight.js'
 
 export interface InstallerOptions {
   port?: number
   host?: string
   uiScript?: string
   /** tests: the preflight, the fixes, the integration checks and the install's hooks */
-  preflight?: (i: PreflightInput, token: string) => Promise<PreflightResult>
+  preflight?: (i: PreflightInput, token: string, onProgress?: OnProgress) => Promise<PreflightResult>
   fix?: typeof fix
   checkIntegration?: typeof checkIntegration
   hooks?: Hooks
@@ -91,6 +91,18 @@ function send(res: ServerResponse, status: number, data: unknown): void {
   res.end(JSON.stringify(data))
 }
 
+/** The AWS credentials the page chose, or an error that says what to do about it. */
+async function resolveCredentials(aws: { mode: 'profile' | 'keys'; profile: string }, secrets: Parameters<typeof credentials>[1]): Promise<Awaited<ReturnType<typeof credentials>>> {
+  try {
+    return await credentials(aws, secrets)
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e)
+    if (aws.mode === 'keys') throw new HttpError(400, `The AWS access keys can't be used: ${m}`)
+    const sso = /sso|token.*(expired|refresh)|expired/i.test(m)
+    throw new HttpError(400, `The AWS profile "${aws.profile}" can't be used: ${m}. ${sso ? `Its sign-in has probably expired: run \`aws sso login --profile ${aws.profile}\` and check again.` : `Check it works with \`aws sts get-caller-identity --profile ${aws.profile}\`, or choose another profile.`}`)
+  }
+}
+
 const errorText = (e: unknown): string => (e instanceof z.ZodError ? e.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') : e instanceof Error ? e.message : String(e))
 
 export function createInstaller(opts: InstallerOptions = {}): { server: ReturnType<typeof createServer>; key: string } {
@@ -106,6 +118,27 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
     const a = Buffer.from(given)
     const b = Buffer.from(key)
     return a.length === b.length && timingSafeEqual(a, b)
+  }
+
+  // everything at once, before anything is created (src/installer/preflight.ts): what is derived, and each finding;
+  // onProgress hears each check start and end (the page shows them while it waits)
+  const runPreflight = async (raw: unknown, onProgress: OnProgress = () => undefined): Promise<unknown> => {
+    const b = PreflightBody.parse(raw)
+    onProgress({ id: 'credentials', label: b.aws.mode === 'profile' ? `Reading the AWS profile "${b.aws.profile}"` : 'Reading the AWS access keys', state: 'running' })
+    const creds = await resolveCredentials(b.aws, { awsAccessKeyId: '', awsSecretAccessKey: '', awsSessionToken: '', ...b.secrets })
+      .catch((e: unknown) => { onProgress({ id: 'credentials', label: 'Reading the AWS credentials', state: 'failed', detail: errorText(e) }); throw e })
+    onProgress({ id: 'credentials', label: 'Reading the AWS credentials', state: 'done' })
+    const prof = b.aws.mode === 'profile' ? (await profiles()).regions[b.aws.profile] ?? '' : ''
+    const region = b.aws.region || prof || DEFAULT_REGION
+    const r = await (opts.preflight ?? (async (i: PreflightInput, t: string, p?: OnProgress) => preflight(i, await liveDeps(creds, region, t), p)))({
+      region, prefix: b.prefix, model: b.model, gpuSpot: b.gpuSpot, cpuSpot: b.cpuSpot, cpuVcpus: b.cpuVcpus, gpuEnabled: b.gpuEnabled,
+      runnerAuth: b.runnerAuth, repos: b.repos, create: b.create, hasAdminToken: Boolean(b.adminToken),
+    }, b.token, onProgress)
+    // trace's own repository, and whether the token that configures repositories can set its variables (the page's
+    // "build trace's own repository on AWS too", on by default when it can)
+    const own = (opts.traceRepository ?? (() => traceRepository({ root: REPO_ROOT })))()
+    const self = own ? { repo: own, ...(await canConfigure(b.adminToken || b.token, own).catch((e: unknown) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }))) } : null
+    return { ...r, region, profileRegion: prof, self }
   }
 
   const routes: Record<string, (req: IncomingMessage) => Promise<unknown>> = {
@@ -128,29 +161,15 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
     },
     'POST /api/aws/check': async (req) => {
       const b = z.object({ aws: AwsAnswers.unwrap().pick({ mode: true, profile: true, region: true }), secrets: SecretsSchema.pick({ awsAccessKeyId: true, awsSecretAccessKey: true, awsSessionToken: true }).partial(), prefix: z.string().default('trace') }).parse(await body(req))
-      const creds = await credentials(b.aws, { awsAccessKeyId: '', awsSecretAccessKey: '', awsSessionToken: '', ...b.secrets })
+      const creds = await resolveCredentials(b.aws, { awsAccessKeyId: '', awsSecretAccessKey: '', awsSessionToken: '', ...b.secrets })
       return checkAws(creds, b.aws.region, stackName(b.prefix))
     },
     // everything at once, before anything is created (src/installer/preflight.ts): what is derived, and each finding
-    'POST /api/preflight': async (req) => {
-      const b = PreflightBody.parse(await body(req))
-      const creds = await credentials(b.aws, { awsAccessKeyId: '', awsSecretAccessKey: '', awsSessionToken: '', ...b.secrets })
-      const prof = b.aws.mode === 'profile' ? (await profiles()).regions[b.aws.profile] ?? '' : ''
-      const region = b.aws.region || prof || DEFAULT_REGION
-      const r = await (opts.preflight ?? (async (i: PreflightInput, t: string) => preflight(i, await liveDeps(creds, region, t))))({
-        region, prefix: b.prefix, model: b.model, gpuSpot: b.gpuSpot, cpuSpot: b.cpuSpot, cpuVcpus: b.cpuVcpus, gpuEnabled: b.gpuEnabled,
-        runnerAuth: b.runnerAuth, repos: b.repos, create: b.create, hasAdminToken: Boolean(b.adminToken),
-      }, b.token)
-      // trace's own repository, and whether the token that configures repositories can set its variables (the page's
-      // "build trace's own repository on AWS too", on by default when it can)
-      const own = (opts.traceRepository ?? (() => traceRepository({ root: REPO_ROOT })))()
-      const self = own ? { repo: own, ...(await canConfigure(b.adminToken || b.token, own).catch((e: unknown) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }))) } : null
-      return { ...r, region, profileRegion: prof, self }
-    },
+    'POST /api/preflight': async (req) => runPreflight(await body(req)),
     // what the preflight offered to fix, when the person asks
     'POST /api/fix': async (req) => {
       const b = z.object({ aws: AwsAnswers.unwrap().pick({ mode: true, profile: true, region: true }), secrets: SecretsSchema.pick({ awsAccessKeyId: true, awsSecretAccessKey: true, awsSessionToken: true }).partial().default({}), token: z.string().default(''), fix: FixRequest }).parse(await body(req))
-      const creds = await credentials(b.aws, { awsAccessKeyId: '', awsSecretAccessKey: '', awsSessionToken: '', ...b.secrets })
+      const creds = await resolveCredentials(b.aws, { awsAccessKeyId: '', awsSecretAccessKey: '', awsSessionToken: '', ...b.secrets })
       const region = b.aws.region || (await profiles()).regions[b.aws.profile] || DEFAULT_REGION
       return { detail: await (opts.fix ?? fix)(b.fix, { creds, region, token: b.token }) }
     },
@@ -162,6 +181,8 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
     'POST /api/plan': async (req) => {
       const b = z.object({ answers: z.unknown(), existing: z.object({ outputs: z.record(z.string(), z.string()) }).loose().nullable().default(null), cdkBootstrapped: z.boolean().default(false) }).parse(await body(req))
       const a = AnswersSchema.parse(b.answers)
+      // the account comes from the checks: without them there is nothing to plan for
+      if (!a.aws.account) throw new HttpError(409, 'The AWS account is not known yet: the checks have to pass first (Connect → Check).')
       const prev = previous()
       return { steps: plan(a, b.existing, prev), timeline: timeline(a, b.existing, { cdkBootstrapped: b.cdkBootstrapped }), changes: b.existing ? changesSince(prev, a) : [] }
     },
@@ -224,7 +245,19 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
         req.on('close', () => run?.listeners.delete(res))
         return
       }
-      const route = routes[`${req.method} ${url.pathname}`]
+      // the checks, streamed: one line per check as it starts and ends, then the result (or the error)
+      if (req.method === 'POST' && url.pathname === '/api/preflight' && String(req.headers.accept ?? '').includes('application/x-ndjson')) {
+        res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' })
+        const line = (o: unknown): void => { if (!res.writableEnded) res.write(`${JSON.stringify(o)}\n`) }
+        try {
+          const result = await runPreflight(await body(req), (p) => line({ type: 'progress', ...p }))
+          line({ type: 'result', result })
+        } catch (e) {
+          line({ type: 'error', error: errorText(e) })
+        }
+        return res.end()
+      }
+            const route = routes[`${req.method} ${url.pathname}`]
       if (!route) return send(res, 404, { error: 'not found' })
       if (req.method === 'POST' && !(req.headers['content-type'] ?? '').startsWith('application/json')) return send(res, 415, { error: 'JSON only' })
       try {

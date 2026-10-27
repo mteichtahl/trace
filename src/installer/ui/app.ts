@@ -37,6 +37,7 @@ interface Preflight {
     runnerConnection?: string | null
   }
 }
+interface Progress { id: string; label: string; state: 'running' | 'done' | 'failed'; detail?: string }
 interface Env { profiles: { names: string[]; regions: Record<string, string> }; saved: AnswersInput | null; installed: { stack: string; region: string } | null; node: string; defaultRegion: string }
 
 const KEY = document.querySelector<HTMLMetaElement>('meta[name="trace-key"]')?.content ?? ''
@@ -74,6 +75,8 @@ const s = {
   aws: { mode: 'profile' as 'profile' | 'keys', profile: 'default', region: '', keyId: '', secret: '', session: '' },
   github: { token: '', adminToken: '' },
   pre: null as Preflight | null, preBusy: false, preError: '',
+  /** each check of the running (or last) preflight, as the installer reports it */
+  preProgress: [] as Progress[],
   fixBusy: '', fixNote: new Map<string, string>(),
   useCase: { open: false, companyName: '', companyWebsite: '', intendedUsers: '0' as '0' | '1' | '2', industryOption: 'Technology', otherIndustryOption: '', useCases: 'Autonomous coding agents that maintain our own electronics and firmware repositories (fixing CI failures, reviewing designs) on Amazon Bedrock AgentCore.' },
   /** memoryDays: the field's text ('' = the installation's default); generation: kept from the saved answers */
@@ -105,7 +108,7 @@ const s = {
   },
   adminEmail: '',
   people: [] as Person[],
-  plan: null as Step[] | null, timeline: [] as string[], changes: [] as string[], planError: '',
+  plan: null as Step[] | null, timeline: [] as string[], changes: [] as string[], planError: '', planBusy: false,
   steps: [] as Step[],
   log: [] as string[],
   ready: null as string[] | null,
@@ -314,7 +317,8 @@ function connect(): HTMLElement {
     h('details', {}, h('summary', { class: 'muted' }, `Region: ${a.region || profRegion || s.env?.defaultRegion || 'us-east-1'}${a.region ? '' : profRegion ? ' (the profile\'s)' : ' (the default)'}`),
       field('Region', select([{ value: '', label: `The profile's, else ${s.env?.defaultRegion ?? 'us-east-1'}` }, ...REGIONS.map((r) => ({ value: r, label: r }))], a.region, (v) => { a.region = v; s.pre = null; render() }), 'trace needs Bedrock AgentCore there')),
     h('div', { class: 'actions' }, h('button', { class: 'secondary', disabled: s.preBusy, onclick: () => void runPreflight() }, s.preBusy ? 'Checking everything…' : s.pre ? 'Check again' : 'Check')),
-    s.preError ? note('bad', s.preError) : null,
+    progressView(),
+    s.preError ? note('bad', h('strong', {}, 'The checks could not run: '), s.preError) : null,
     f?.account ? note('ok', h('strong', {}, `Installing into ${f.account} in ${s.pre?.region}`), ` as ${f.arn ?? ''}${f.login ? `; GitHub: ${f.login}` : ''}${f.email ? `; first administrator: ${f.email}` : ''}.`) : null,
     ...(s.pre?.checks ?? []).filter((c) => !c.id.startsWith('github.repo:') && !c.id.startsWith('github.create:')).map(checkView),
     next('connect', 'projects'))
@@ -358,6 +362,7 @@ function projects(): HTMLElement {
       } }, 'Add it'))),
     ...[...s.projects].filter(([, p]) => p.create && p.create.template !== 'sample').map(([r, p]) => note('ok', `${r}: created from the ${p.create?.template} template when installing.`, ' ', h('button', { class: 'link', onclick: () => { s.projects.delete(r); render() } }, 'remove'))),
     h('div', { class: 'actions' }, h('button', { class: 'secondary', disabled: s.preBusy || !s.projects.size, onclick: () => void runPreflight() }, s.preBusy ? 'Checking…' : 'Check access to these')),
+    s.tab === 'projects' ? progressView() : null,
     ...(s.pre?.checks ?? []).filter((c) => (c.id.startsWith('github.repo:') || c.id.startsWith('github.create:')) && s.projects.has(c.title)).map(checkView),
     next('projects', 'integrations'))
 }
@@ -488,16 +493,20 @@ function advanced(): HTMLElement {
 }
 
 async function loadPlan(): Promise<void> {
-  s.plan = null; s.planError = ''
-  const parsed = AnswersSchema.safeParse(answers())
-  if (!parsed.success) { s.planError = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '); render(); return }
+  s.plan = null; s.planError = ''; s.planBusy = true; render()
   try {
-    const r = await api<{ steps: Step[]; timeline: string[]; changes: string[] }>('POST', '/api/plan', { answers: answers(), existing: s.pre?.facts.existing ?? null, cdkBootstrapped: s.pre?.facts.cdkBootstrapped ?? false })
+    // the plan needs the account the checks found: run them first when they have not (or no longer) passed
+    if (!s.pre?.facts.account) await runPreflight()
+    if (!s.pre?.facts.account) { s.planError = s.preError ? `The checks could not run, so there is no plan yet: ${s.preError}` : 'The AWS account is not known yet: run the checks on Connect.'; return }
+    const parsed = AnswersSchema.safeParse(answers())
+    if (!parsed.success) { s.planError = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '); return }
+    const r = await api<{ steps: Step[]; timeline: string[]; changes: string[] }>('POST', '/api/plan', { answers: answers(), existing: s.pre.facts.existing ?? null, cdkBootstrapped: s.pre.facts.cdkBootstrapped ?? false })
     s.plan = r.steps; s.timeline = r.timeline; s.changes = r.changes
   } catch (e) {
     s.planError = e instanceof Error ? e.message : String(e)
+  } finally {
+    s.planBusy = false; render()
   }
-  render()
 }
 
 function review(): HTMLElement {
@@ -508,8 +517,10 @@ function review(): HTMLElement {
     h('p', { class: 'lead' }, f?.existing ? 'trace is installed here: this updates it, and changes only what the plan says. Every step can be run again safely.' : 'What installing will do. Every step can be run again safely: if one fails, fix the cause and install again.'),
     s.changes.length ? note('ok', h('strong', {}, 'Changes since the last run: '), s.changes.join('; ')) : null,
     s.timeline.length ? note('ok', h('strong', {}, 'How long: '), h('ul', {}, ...s.timeline.map((l) => h('li', {}, l)))) : null,
-    s.planError ? note('bad', s.planError) : null,
-    s.plan ? h('ol', { class: 'plan' }, ...s.plan.map((st) => h('li', {}, h('strong', {}, st.title), h('div', { class: 'muted' }, st.detail)))) : h('p', { class: 'muted' }, 'Working out the plan…'),
+    s.preBusy ? progressView() : null,
+    s.planError ? note('bad', s.planError, h('div', { class: 'actions left' }, h('button', { class: 'secondary', disabled: s.planBusy, onclick: () => void loadPlan() }, 'Try again'))) : null,
+    s.plan ? h('ol', { class: 'plan' }, ...s.plan.map((st) => h('li', {}, h('strong', {}, st.title), h('div', { class: 'muted' }, st.detail))))
+      : s.planBusy && !s.preBusy ? h('p', { class: 'muted' }, h('span', { class: 'spin' }), ' Working out the plan…') : null,
     advanced(),
     h('div', { class: 'actions' },
       blockers.length ? h('span', { class: 'muted' }, blockers[0] ?? '') : null,
@@ -538,7 +549,7 @@ function buildRunners(): (HTMLElement | null)[] {
       { value: 'auto', label: `Automatic: an authorized GitHub connection when there is one${found ? ` (${found})` : ''}, else the GitHub token` },
       { value: 'token', label: 'The GitHub token (no console step; the token is stored with CodeBuild)' },
       { value: 'connection', label: 'An AWS CodeConnections connection instead of the token (no token stored; needs one console authorization)' },
-    ], r.auth, (v) => { r.auth = (RUNNER_AUTH as readonly string[]).includes(v) ? v as (typeof RUNNER_AUTH)[number] : 'auto'; s.pre = null; render() }), 'change it later with `tracectl upgrade --runner-auth auto|token|connection`'),
+    ], r.auth, (v) => { r.auth = (RUNNER_AUTH as readonly string[]).includes(v) ? v as (typeof RUNNER_AUTH)[number] : 'auto'; render(); void runPreflight().then(() => loadPlan()) }), 'change it later with `tracectl upgrade --runner-auth auto|token|connection`'),
     r.auth === 'connection' ? note('warn', 'A new connection is authorized once per AWS account and region, in the AWS console. After the first deploy the installer shows the link (', h('a', { href: url, target: '_blank', rel: 'noopener' }, 'Connections'), `) and waits: choose ${r.connectionArn ? 'the connection' : name} and "Update pending connection", which installs the AWS Connector for GitHub app, and give that app access to every chosen repository. The installer then adds the build runners by itself.`) : null,
     r.auth !== 'token' ? field('Use this connection (optional)', input('text', r.connectionArn, (v) => { r.connectionArn = v.trim() }, { placeholder: `empty: reuse an authorized one${r.auth === 'connection' ? `, else create ${name}` : ''}` }), 'an existing GitHub connection\'s ARN') : null,
     r.auth !== 'connection' ? field('The token CodeBuild keeps', select([{ value: 'agent', label: 'The GitHub token above' }, { value: 'admin', label: 'The admin token' }], r.token, (v) => { r.token = v === 'admin' ? 'admin' : 'agent' }),
@@ -566,19 +577,72 @@ function ownRepository(): HTMLElement | null {
 
 async function runPreflight(): Promise<void> {
   if (s.github.token.length < 20) { s.preError = 'Paste a GitHub token first.'; render(); return }
-  s.preBusy = true; s.preError = ''; render()
+  if (s.preBusy) return
+  s.preBusy = true; s.preError = ''; s.preProgress = []; render()
   try {
     const g = s.agents
-    s.pre = await api<Preflight>('POST', '/api/preflight', {
+    s.pre = await streamPreflight({
       ...awsBody(), token: s.github.token, adminToken: s.github.adminToken, prefix: g.prefix, model: g.model,
       gpuEnabled: g.gpuEnabled, gpuSpot: g.gpuSpot, cpuSpot: g.cpuSpot, cpuVcpus: g.cpuVcpus, runnerAuth: s.runners.auth,
       repos: [...s.projects].filter(([, p]) => !p.create).map(([r]) => r), create: [...s.projects].filter(([, p]) => p.create).map(([r]) => r),
     })
   } catch (e) {
+    s.pre = null
     s.preError = e instanceof Error ? e.message : String(e)
   } finally {
     s.preBusy = false; render()
   }
+}
+
+/** POST /api/preflight, reading each check's progress as the installer reports it, then the result. */
+async function streamPreflight(body: unknown): Promise<Preflight> {
+  const r = await fetch('/api/preflight', {
+    method: 'POST',
+    headers: { 'x-trace-key': KEY, 'content-type': 'application/json', accept: 'application/x-ndjson' },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok || !r.body) {
+    const data = (await r.json().catch(() => ({}))) as { error?: string }
+    throw new Error(data.error ?? `The installer did not answer the checks (${r.status}).`)
+  }
+  const reader = r.body.pipeThrough(new TextDecoderStream()).getReader()
+  let buffer = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += value
+    let nl = buffer.indexOf('\n')
+    while (nl >= 0) {
+      const line = buffer.slice(0, nl).trim()
+      buffer = buffer.slice(nl + 1)
+      nl = buffer.indexOf('\n')
+      if (!line) continue
+      const m = JSON.parse(line) as ({ type: 'progress' } & Progress) | { type: 'result'; result: Preflight } | { type: 'error'; error: string }
+      if (m.type === 'result') return m.result
+      if (m.type === 'error') throw new Error(m.error)
+      const { type: _t, ...p } = m
+      const i = s.preProgress.findIndex((x) => x.id === p.id)
+      if (i >= 0) s.preProgress[i] = p
+      else s.preProgress.push(p)
+      render()
+    }
+  }
+  throw new Error('The installer stopped before the checks finished: is `tracectl install` still running?')
+}
+
+/** What the checks are doing right now (while they run), or which ones could not be done (after). */
+function progressView(): HTMLElement | null {
+  const list = s.preProgress
+  if (s.preBusy) {
+    const doneN = list.filter((p) => p.state !== 'running').length
+    const running = list.filter((p) => p.state === 'running')
+    return note('ok',
+      h('strong', {}, list.length ? `Checking… ${doneN} of ${list.length} done` : 'Starting the checks…'),
+      running.length ? h('ul', { class: 'progress' }, ...running.map((p) => h('li', {}, h('span', { class: 'spin' }), ` ${p.label}`))) : null,
+      list.length ? h('details', {}, h('summary', { class: 'muted' }, 'Every check'),
+        h('ul', { class: 'progress' }, ...list.map((p) => h('li', {}, `${p.state === 'done' ? '✓' : p.state === 'failed' ? '✕' : '…'} ${p.label}`)))) : null)
+  }
+  return null
 }
 
 async function runFix(c: Check): Promise<void> {

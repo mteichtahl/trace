@@ -46,6 +46,10 @@ button.primary { background: var(--accent); color: var(--accent-ink); }
 button.secondary { background: transparent; color: var(--accent); }
 button:disabled { opacity: .5; cursor: default; }
 .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
+.spin { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--muted, #888); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -1px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+ul.progress { margin: 6px 0 0; padding-left: 18px; font-size: 13px; } ul.progress li { margin: 2px 0; }
 .note { border-radius: 8px; padding: 10px 12px; margin: 10px 0; font-size: 14px; background: var(--soft); }
 .note.ok { border-left: 3px solid var(--ok); } .note.warn { border-left: 3px solid var(--warn); } .note.bad { border-left: 3px solid var(--bad); }
 .repos { max-height: 280px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
