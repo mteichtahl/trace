@@ -1,0 +1,31 @@
+/*
+ * The installer's styles: Tailwind on the web app's own design tokens (web/src/theme.css), so it looks like the app.
+ * Built by scripts/bundle-ui.mjs; the classes come from this folder and the shared shadcn components.
+ */
+@import "tailwindcss" source(none);
+@import "tw-animate-css";
+@import "../../../web/src/theme.css";
+
+@source "./";
+@source "../../../web/src/components/ui";
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-size: 0.875rem;
+    line-height: 1.5;
+  }
+  code, kbd, samp, pre {
+    @apply font-mono;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

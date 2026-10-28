@@ -28,13 +28,15 @@ import { DEFAULT_REGION } from './derive.js'
 import { FixRequest, fix } from './fix.js'
 import { canConfigure, checkToken } from './github.js'
 import { traceRepository } from './source.js'
-import { page } from './page.js'
+import { THEME_SCRIPT, page } from './page.js'
 import { type OnProgress, type PreflightInput, type PreflightResult, liveDeps, preflight } from './preflight.js'
 
 export interface InstallerOptions {
   port?: number
   host?: string
   uiScript?: string
+  /** the page's styles (default: dist/installer/ui.css; none when only uiScript is given, as in tests) */
+  uiStyles?: string
   /** tests: the preflight, the fixes, the integration checks and the install's hooks */
   preflight?: (i: PreflightInput, token: string, onProgress?: OnProgress) => Promise<PreflightResult>
   fix?: typeof fix
@@ -108,6 +110,7 @@ const errorText = (e: unknown): string => (e instanceof z.ZodError ? e.issues.ma
 export function createInstaller(opts: InstallerOptions = {}): { server: ReturnType<typeof createServer>; key: string } {
   const key = randomBytes(24).toString('base64url')
   const ui = opts.uiScript ?? readFileSync(join(REPO_ROOT, 'dist', 'installer', 'ui.js'), 'utf8')
+  const css = opts.uiStyles ?? (opts.uiScript !== undefined ? '' : readFileSync(join(REPO_ROOT, 'dist', 'installer', 'ui.css'), 'utf8'))
   let run: RunState | null = null
 
   // The key travels in the query only where a browser can't set a header (opening the page, EventSource); the API
@@ -226,7 +229,8 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
         res.writeHead(200, {
           'content-type': 'text/html; charset=utf-8',
           'cache-control': 'no-store',
-          'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+          // styles: the page's own, and the inline positions its menus and popovers set; fonts: inlined in ui.css
+          'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src data:; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
         })
         return res.end(page(key))
       }
@@ -234,6 +238,14 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
       if (req.method === 'GET' && url.pathname === '/ui.js') {
         res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' })
         return res.end(ui)
+      }
+      if (req.method === 'GET' && url.pathname === '/ui.css') {
+        res.writeHead(200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-store' })
+        return res.end(css)
+      }
+      if (req.method === 'GET' && url.pathname === '/theme.js') {
+        res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' })
+        return res.end(THEME_SCRIPT)
       }
       if (!authorised(req, url)) return send(res, 401, { error: 'missing or wrong installer key' })
       if (req.method === 'GET' && url.pathname === '/api/events') {
@@ -257,7 +269,7 @@ export function createInstaller(opts: InstallerOptions = {}): { server: ReturnTy
         }
         return res.end()
       }
-            const route = routes[`${req.method} ${url.pathname}`]
+      const route = routes[`${req.method} ${url.pathname}`]
       if (!route) return send(res, 404, { error: 'not found' })
       if (req.method === 'POST' && !(req.headers['content-type'] ?? '').startsWith('application/json')) return send(res, 415, { error: 'JSON only' })
       try {

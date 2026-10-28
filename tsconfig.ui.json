@@ -1,5 +1,31 @@
 {
   "extends": "./tsconfig.json",
-  "compilerOptions": { "lib": ["ES2023", "DOM", "DOM.Iterable"], "types": [], "noEmit": true },
-  "include": ["src/installer/ui/**/*.ts", "src/installer/answers.ts", "src/core/integrations-catalog.ts"]
+  "compilerOptions": {
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [],
+    "noEmit": true,
+    "rootDir": ".",
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "declaration": false,
+    "paths": {
+      "@/*": [
+        "./web/src/*"
+      ]
+    }
+  },
+  "include": [
+    "src/installer/ui/**/*.ts",
+    "src/installer/ui/**/*.tsx",
+    "src/installer/answers.ts",
+    "src/core/integrations-catalog.ts"
+  ],
+  "exclude": [
+    "web/node_modules"
+  ]
 }
