@@ -8,6 +8,7 @@ import { SPECIALISTS } from '../agents/index.js'
 import { SPECIALIST_KINDS, type SpecialistKind, SpecialistKindSchema } from '../agents/kinds.js'
 import { composeRendering } from '../agents/render/prompt.js'
 import { composeDelegated } from '../agents/runtime/delegation.js'
+import type { Handoff } from '../agents/runtime/schemas.js'
 import { composeClassification } from '../agents/router.js'
 import { composeSpecialist } from '../agents/specialist.js'
 import { composeTask } from '../agents/worker/prompt.js'
@@ -89,6 +90,12 @@ export interface PreviewInput {
 const SAMPLE_ITEM = { kind: 'ci-red' as const, number: 1, ref: 'claude/example', sha: '0'.repeat(40), own: true, title: '(the item\'s title)' }
 
 /** The composed prompt a target stands for, with the overrides applied: what the model would be sent. */
+/** The hand-off a preview of a hand-off job shows. */
+const SAMPLE_HANDOFF = (from: SpecialistKind): Handoff => ({
+  id: 'ho0123456789abcd', from, fromJob: 'job-preview', question: '(the question the other specialist asked)', blocks: '(what it blocks)',
+  evidence: [{ kind: 'run', ref: '(a run id)' }], recommendation: null, acceptance: ['(what a good answer contains)'], depth: 1,
+})
+
 export function preview(i: PreviewInput): { prompt: ComposedName; kind?: SpecialistKind; composed: Composed; marked: string } {
   const { cfg, repository, layers } = i
   let name: ComposedName
@@ -105,11 +112,16 @@ export function preview(i: PreviewInput): { prompt: ComposedName; kind?: Special
   const item = i.job?.kind === 'work-item' ? i.job.item : { ...SAMPLE_ITEM, ...(itemKind ? { kind: itemKind } : {}) }
   const task = { repository, request: i.job?.kind === 'task' ? i.job.request : '(the request)', requestedBy: i.job?.kind === 'task' ? i.job.requestedBy ?? '(who asked)' : '(who asked)', ...(i.job?.kind === 'task' && i.job.issue ? { issue: i.job.issue } : {}) }
   const s = SPECIALISTS[kind ?? cfg.agents.default]
+  // a hand-off's own parts are previewed as the job a hand-off started; every other preview as an asking specialist
+  const answering = i.target === 'specialist.job.handoff' || i.target === 'specialist.handoff.answer'
+  const asker = SPECIALIST_KINDS.find((k) => k !== s.kind) ?? s.kind
   const specialist = (delivery: 'delegate' | 'actions'): Composed => composeSpecialist(s, {
     cfg, repository, rules: i.rules, hardware: false, delivery, prompts: layers, ...(delivery === 'actions' ? { where: 'in GitHub Actions' } : {}),
     route: { kind: s.kind, reason: '(why the job was routed here)', confidence: 1, source: 'explicit' },
-    job: i.job?.kind === 'task' ? { kind: 'task', request: task.request, requestedBy: task.requestedBy, issue: task.issue, branch: 'claude/task-preview' }
-      : i.job?.kind === 'work-item' ? { kind: 'work-item', item: i.job.item } : { kind: 'preview' },
+    handoff: answering ? 'answer' : 'ask',
+    job: answering ? { kind: 'handoff', branch: 'claude/handoff-preview', handoff: SAMPLE_HANDOFF(asker) }
+      : i.job?.kind === 'task' ? { kind: 'task', request: task.request, requestedBy: task.requestedBy, issue: task.issue, branch: 'claude/task-preview' }
+        : i.job?.kind === 'work-item' ? { kind: 'work-item', item: i.job.item } : { kind: 'preview' },
   })
   const brief = { brief: '(the specialist\'s brief)', acceptance: ['(an acceptance criterion)'] }
   let composed: Composed

@@ -22,6 +22,13 @@
  * it continues one, are appended to the prompt as a fenced data block; the request, key tool outcomes and the result
  * are recorded as events, scrubbed and bounded. A memory failure is logged once and never fails the job.
  *
+ * HAND-OFFS. A specialist job on the runtime may ask another specialist (journey.handoff): it is registered on this
+ * process's hand-offs (handoff.ts) and its MCP server gets TRACE_HANDOFF_URL and TRACE_HANDOFF_TOKEN (that job's, the
+ * MCP server's environment only), with agents.enabled and the limits. The receiving job is a task with `handoff`: it
+ * is routed to the asked specialist, waits its turn in the queue, checks at its turn that no person declined it, runs
+ * on a branch of its own (claude/handoff-<id>) with the hand-off as its job and journey.handoff_answer (TRACE_HANDOFF_ID)
+ * instead of journey.handoff, and when it ends without answering, closes its hand-off as failed with how it ended.
+ *
  * WAITS. Every job's tools run in the MCP server its Claude session starts (`tracectl mcp`), so the waits they open
  * (gpu.*, kb.sync, …) are on that child's record. While a specialist or worker job runs it is registered on the wait
  * relay (wait-relay.ts; openWaitRelay), and its MCP server gets TRACE_WAITS_URL (this runtime, loopback: the same base
@@ -78,7 +85,10 @@ import { readProjectNotes, readRules } from '../rules.js'
 import type { SpecialistJob } from '../specialist.js'
 import { type Delegations, defaultDelegations } from './delegation.js'
 import { type WaitRelay, defaultWaitRelay } from './wait-relay.js'
-import { BranchSchema, type DelegatedTaskJob, type JobPayload, type SweepJob, type TaskJob, type WorkItemJob, checkProject, isDelegated } from './schemas.js'
+import { type HandoffRuntime, defaultHandoffRuntime, endedWithout } from './handoff.js'
+import { handoffAskEnv } from '../../tools/journey/tools.js'
+import { type HandoffRole } from '../specialist.js'
+import { BranchSchema, type DelegatedTaskJob, type JobPayload, type SweepJob, type TaskJob, type WorkItemJob, checkProject, isDelegated, isHandoff } from './schemas.js'
 
 // ------------------------------------------------------------------ injected pieces
 
@@ -145,6 +155,11 @@ export interface RunnerDeps {
   delegations?: Delegations | undefined
   /** Where agent.delegate reaches this runtime (http://127.0.0.1:<port>); absent: no delegation. */
   delegateUrl?: string | undefined
+  /**
+   * This process's hand-offs between specialists (handoff.ts); absent: specialists raise none, and a hand-off job's
+   * hand-off is not closed by this runtime when it ends. Reached at delegateUrl, as agent.delegate is.
+   */
+  handoffs?: HandoffRuntime | null | undefined
   /** This process's wait relay (wait-relay.ts); absent: a job's tool waits stay in its MCP server process. */
   waitRelay?: WaitRelay | undefined
   /** Where a job's MCP server reports its waits (http://127.0.0.1:<port>; default delegateUrl); absent: no relay. */
@@ -491,6 +506,16 @@ function prepared(p: WorkItemJob | TaskJob): Prepared {
       request: `${ITEM_WHAT[it.kind]} #${it.number}: ${it.title}${pr ? ` (branch ${it.ref})` : ''}`,
     }
   }
+  if (isHandoff(p)) {
+    const h = p.handoff
+    return {
+      slot: `handoff-${h.id}`, branch: '', from: 'maybe',
+      route: null, routeInput: { kind: p.agent, text: p.request },
+      job: (branch) => ({ kind: 'handoff', handoff: h, branch }),
+      session: () => `handoff-${h.id}`, query: p.request,
+      request: `The ${h.from} specialist asked (hand-off ${h.id}): ${p.request}`,
+    }
+  }
   return {
     slot: `task-${(p.branch ?? p.request).replace(/[^A-Za-z0-9]+/g, '-').slice(0, 30)}`,
     branch: '', from: 'maybe', ...(p.issue ? { issue: p.issue } : {}),
@@ -581,6 +606,10 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
   const gh = d.github(token)
   const { owner, repo } = split(p.repository)
   const delegations = d.delegations ?? null
+  const handoffs = d.handoffs ?? null
+  // a job a hand-off started answers it; it never raises one (depth 1)
+  const answering = isHandoff(p) ? p.handoff : null
+  let settled = false
   let prep: Prepared | null = null
   let dir: string | null = null
   let mem: JobMemory = NO_MEMORY
@@ -597,7 +626,8 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     const notes = readProjectNotes(base.dir)
     // the prompt overrides: the default branch's (read before the item's branch is checked out) and the installation's
     const layers = await jobLayers(d, base.dir, log)
-    let branch = p.kind === 'task' ? taskBranch(p, cfg) : prep.branch
+    // a hand-off job works on a branch of its own, never the asker's
+    let branch = isHandoff(p) ? `${cfg.worker.own_branch_prefix || 'claude/'}handoff-${p.handoff.id}` : p.kind === 'task' ? taskBranch(p, cfg) : prep.branch
     if (prep.from !== 'none') branch = await checkoutBranch({ ...g, defaultBranch: base.defaultBranch, branch, from: prep.from })
     else branch = base.defaultBranch
     ctx.branch?.(branch)
@@ -612,6 +642,15 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     ctx.route?.(r)
     // a person's task waits its turn in the project's queue (its agent is known now); work items are not queued
     if (p.kind === 'task') await ctx.admit?.(r.kind, { maxParallel: cfg.worker.max_parallel })
+    // a hand-off job, at its turn: a person may have declined it while it was queued (then nothing runs)
+    if (answering && handoffs) {
+      const { declined } = await handoffs.begin(answering.id, ctx.jobId)
+      if (declined) {
+        settled = true
+        log(`hand-off ${answering.id} was declined by ${declined.by} (${declined.reason}): not run`)
+        return `${r.kind}: hand-off ${answering.id} declined by ${declined.by}: ${declined.reason}`
+      }
+    }
     const s = SPECIALISTS[r.kind]
     const settings = cfg.agents[r.kind]
     acting = { s, r, escalateTo: cfg.worker.escalate_to }
@@ -622,10 +661,15 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
 
     const hardware = Boolean(d.hardware)
     const delegate = Boolean(delegations && d.delegateUrl)
-    const tools = toolsOf(s, { hardware, delegate })
+    const limits = { perJob: cfg.agents.handoff_max_per_job, perProject: cfg.agents.handoff_max_per_project }
+    const role: HandoffRole = answering ? 'answer' : handoffs && d.delegateUrl && limits.perJob > 0 && limits.perProject > 0 && cfg.agents.enabled.some((k) => k !== r.kind) ? 'ask' : 'none'
+    const tools = toolsOf(s, { hardware, delegate, handoff: role })
     const dtoken = delegate && delegations
       ? delegations.register({ jobId: ctx.jobId, kind: r.kind, repository: p.repository, dir, cfg, branch, defaultBranch: base.defaultBranch, session, notes, prompts: layers })
       : undefined
+    const htoken = role === 'ask' && handoffs ? handoffs.register({ jobId: ctx.jobId, kind: r.kind, repository: p.repository, enabled: cfg.agents.enabled, limits }) : undefined
+    const handoffEnvOf: Record<string, string> = role === 'answer' && answering ? { TRACE_HANDOFF_ID: answering.id }
+      : htoken && d.delegateUrl ? handoffAskEnv({ url: d.delegateUrl, token: htoken, enabled: cfg.agents.enabled, limits }) : {}
     const waits = openWaitRelay(d, ctx.jobId)
     try {
       // resuming: the paused conversation itself when its transcript was kept, else a fresh one told what was done
@@ -640,7 +684,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
       const job = prep.job(branch, thread?.text)
       const prompt = continueSession && resumed
         ? composeResumeNote(resumed, branch, layers)
-        : composeSpecialist(s, { cfg, repository: p.repository, job: job.kind === 'task' && resumed ? { ...job, resumed } : job, rules, route: r, hardware, delivery: 'delegate', prompts: layers })
+        : composeSpecialist(s, { cfg, repository: p.repository, job: job.kind === 'task' && resumed ? { ...job, resumed } : job, rules, route: r, hardware, delivery: 'delegate', handoff: role, prompts: layers })
       const system = systemAppend(notes, layers)
       const asked = prep.route === null && r.source === 'model'
       const used = [...(asked ? provenanceOf(['router.classify', 'router.contract'], layers) : []), ...prompt.provenance, ...system.provenance,
@@ -654,7 +698,8 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
           ...mem.env, ...journeyAgentEnv(r.kind, `the ${s.title} specialist`, ctx.jobId),
           ...specialistEnv({ tools, delegateUrl: d.delegateUrl, token: dtoken, timeoutMinutes: cfg.agents.delegate_timeout_minutes }),
         },
-        mcpEnv: waits.env,
+        // the hand-off token (or the hand-off this job answers): the MCP server's environment only
+        mcpEnv: { ...waits.env, ...handoffEnvOf },
         onMessage: (m) => mem.observe(m), agent: r.kind,
         model: settings.model || d.model || cfg.worker.model || undefined, maxTurns: settings.max_turns,
         tools: { builtins: [...SPECIALIST_BUILTINS], allowed: allowedToolsOf(s, { hardware, delegate }) },
@@ -671,16 +716,20 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
       mem = NO_MEMORY
       if (prep.issue) await specialistComment(gh, p.repository, prep.issue, ctx.jobId, s, r, out.ok, summary, cfg.worker.escalate_to, prep.runUrl)
       if (!out.ok) throw new Error(summary)
+      // a hand-off job that finished without answering: its hand-off is closed, so the asker is told
+      if (answering && handoffs) { settled = true; await handoffs.settle(answering.id, endedWithout('succeeded', summary)).catch(() => false) }
       return `${r.kind}: done in ${out.turns} turns${escalation(summary) ? ' (escalated)' : ''}${prep.issue ? '' : `: ${summary.slice(0, 2000)}`}`
     } finally {
       waits.close()
       if (dtoken) delegations?.unregister(ctx.jobId)
+      if (htoken) handoffs?.unregister(ctx.jobId)
     }
   } catch (e) {
     // paused: not a failure, and nothing to report on the item yet
     if (e instanceof JobPaused) throw e
     const msg = redact(errText(e))
     await mem.finish(false, msg)
+    if (answering && handoffs && !settled) await handoffs.settle(answering.id, endedWithout(ctx.signal.aborted ? 'aborted' : 'failed', msg)).catch(() => false)
     if (prep?.issue) {
       const n = prep.issue
       const post = acting
@@ -887,6 +936,7 @@ export function realRunner(env: Record<string, string | undefined> = process.env
     }),
     delegations: defaultDelegations(),
     delegateUrl: `http://127.0.0.1:${Number(env.PORT || 8080)}`,
+    handoffs: defaultHandoffRuntime(env),
     waitRelay: defaultWaitRelay(),
     waitsUrl: `http://127.0.0.1:${Number(env.PORT || 8080)}`,
     hardware: ['1', 'true', 'yes'].includes(env.TRACE_HARDWARE ?? ''),

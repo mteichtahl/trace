@@ -137,6 +137,38 @@ export const DelegatedTaskPayload = TaskPayload.omit({ agent: true, issue: true,
   delegation: DelegationSchema,
 }).strict()
 
+/** Evidence a hand-off cites (src/core/handoffs.ts): { kind, ref, label? }. */
+const HandoffEvidence = z.object({ kind: z.string().min(1).max(40), ref: z.string().min(1).max(300), label: z.string().max(300).optional() }).strict()
+
+/**
+ * What a specialist asked another for (src/core/handoffs.ts), as the receiving job carries it: the recorded request,
+ * read back from the agents' facts by the runtime that starts the job (src/agents/runtime/handoff.ts), never from a
+ * caller. `depth` is always 1: a job a hand-off started raises none.
+ */
+export const HandoffSchema = z.object({
+  id: z.string().regex(/^ho[0-9a-f]{14}$/, 'a hand-off id'),
+  from: SpecialistKindSchema,
+  fromJob: z.string().min(1).max(64),
+  question: z.string().min(1).max(4000),
+  blocks: z.string().min(1).max(1000),
+  evidence: z.array(HandoffEvidence).min(1).max(20),
+  recommendation: z.string().max(2000).nullable(),
+  acceptance: z.array(z.string().min(1).max(1000)).min(1).max(10),
+  depth: z.literal(1),
+}).strict()
+export type Handoff = z.infer<typeof HandoffSchema>
+
+/**
+ * A specialist job another specialist asked for (internal only: never accepted on /invocations or through the API). It
+ * is a person's task in every other way: it waits its turn in the project's queue, a person may hold, move up or
+ * cancel it, and it runs the asked specialist with its own prompt and tools. It is never paused (Cancel instead).
+ * `request` is the question; `issue` and `resume` are never set.
+ */
+export const HandoffTaskPayload = TaskPayload.extend({
+  agent: SpecialistKindSchema,
+  handoff: HandoffSchema,
+}).strict()
+
 /**
  * One tool call the API forwards to the project's worker runtime (src/agents/runtime/tool.ts): no model and no job,
  * the tool's answer in the response. The worker clones the project's default branch, refuses hardware tools and
@@ -157,8 +189,12 @@ export type WorkItemJob = z.infer<typeof WorkItemPayload>
 export type SweepJob = z.infer<typeof SweepPayload>
 export type TaskJob = z.infer<typeof TaskPayload>
 export type DelegatedTaskJob = z.infer<typeof DelegatedTaskPayload>
-/** What can be started as a job (everything but status, check-now, cancel, pause and tool); a delegated task only from inside the runtime. */
-export type JobPayload = WorkItemJob | SweepJob | TaskJob | DelegatedTaskJob
+export type HandoffTaskJob = z.infer<typeof HandoffTaskPayload>
+/**
+ * What can be started as a job (everything but status, check-now, cancel, pause and tool); a delegated task and a
+ * hand-off task only from inside the runtime.
+ */
+export type JobPayload = WorkItemJob | SweepJob | TaskJob | DelegatedTaskJob | HandoffTaskJob
 
 export const AcceptedSchema = z.object({
   accepted: z.boolean(),
@@ -200,6 +236,8 @@ export interface JobInfo {
   route?: Route
   /** A delegated job: the specialist job that started it. */
   parentJobId?: string
+  /** A hand-off job: the hand-off it answers (src/core/handoffs.ts). */
+  handoffId?: string
   /** Which prompt versions its model calls were built from: id, layer, version and the template's sha (never the text). */
   prompts?: PromptRecord[]
   log: string[]
@@ -207,6 +245,8 @@ export interface JobInfo {
 
 /** A delegated worker job (from agent.delegate). */
 export const isDelegated = (p: JobPayload): p is DelegatedTaskJob => p.kind === 'task' && 'delegation' in p
+/** A job another specialist asked for (journey.handoff). */
+export const isHandoff = (p: JobPayload): p is HandoffTaskJob => p.kind === 'task' && 'handoff' in p && p.handoff !== undefined
 
 // ------------------------------------------------------------------ single-project mode
 

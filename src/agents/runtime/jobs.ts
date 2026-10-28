@@ -28,6 +28,10 @@
  * stops Claude before its next tool call and keeps the work on its branch); a runner that stopped for it rejects with
  * JobPaused and the job ends `paused`. Its delegated worker is asked to pause with it. Without `admit` nothing queues.
  *
+ * HAND-OFFS. A specialist may ask another for something in that one's area (journey.handoff): the runtime starts the
+ * receiving specialist as a job of its own on this process (src/agents/runtime/handoff.ts), queued like a person's task.
+ * It is never paused (only held, moved up or cancelled), and its key is the hand-off's, so one hand-off is one job.
+ *
  * The runner that does the work is injected (createJobs), so tests drive the contract without git or a model.
  */
 import { randomBytes } from 'node:crypto'
@@ -38,7 +42,7 @@ import { type PromptRecord, promptAttrs } from '../../prompts/telemetry.js'
 import { realRunner } from './job.js'
 import { workerIndex } from './job-index.js'
 import { observeJob } from './observe.js'
-import { type Accepted, type JobInfo, type JobPayload, checkProject, isDelegated } from './schemas.js'
+import { type Accepted, type JobInfo, type JobPayload, checkProject, isDelegated, isHandoff } from './schemas.js'
 
 export { AcceptedSchema, InvocationSchema, SweepPayload, StatusPayload, TaskPayload, WorkItemPayload } from './schemas.js'
 export type { Accepted, Invocation, JobInfo, JobPayload, JobState, SweepJob, TaskJob, WorkItemJob } from './schemas.js'
@@ -144,13 +148,17 @@ export function jobKey(p: JobPayload): string {
     case 'work-item': return `${p.repository.toLowerCase()}#${p.item.number}`
     case 'task': return isDelegated(p)
       ? `${p.repository.toLowerCase()}:delegate:${p.delegation.parentJobId}`
-      : `${p.repository.toLowerCase()}:task:${p.agent ?? 'auto'}:${p.branch ?? p.request}`
+      : isHandoff(p) ? `${p.repository.toLowerCase()}:handoff:${p.handoff.id}`
+        : `${p.repository.toLowerCase()}:task:${p.agent ?? 'auto'}:${p.branch ?? p.request}`
     case 'sweep': return `sweep:${[...p.repositories].map((r) => r.toLowerCase()).sort().join(',')}`
   }
 }
 
-/** Whether a job can be paused: a person's own task (not a delegated worker, not a work item or a sweep). */
-export const pausable = (p: JobPayload): boolean => p.kind === 'task' && !isDelegated(p)
+/**
+ * Whether a job can be paused: a person's own task (not a delegated worker, not a hand-off job, which is cancelled
+ * instead, so its asker is told at once; not a work item or a sweep).
+ */
+export const pausable = (p: JobPayload): boolean => p.kind === 'task' && !isDelegated(p) && !isHandoff(p)
 
 /**
  * `project`: the one project jobs may be for (TRACE_PROJECT); startJob throws WrongProject for any other. `admit`:
@@ -207,6 +215,7 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
         ...(payload.kind === 'work-item' ? { number: payload.item.number } : payload.kind === 'task' && !isDelegated(payload) && payload.issue ? { number: payload.issue } : {}),
         agent: jobAgent(payload),
         ...(isDelegated(payload) ? { parentJobId: payload.delegation.parentJobId } : {}),
+        ...(isHandoff(payload) ? { handoffId: payload.handoff.id } : {}),
         ...(session ? { session } : {}),
         ...(payload.kind === 'task' && payload.branch ? { branch: payload.branch } : {}),
       }

@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   where_ TEXT,                    -- where it runs now, in words
   branch TEXT,
   parent_job TEXT,                -- a delegated worker's specialist job
+  handoff TEXT,                   -- a hand-off job: the hand-off it answers (src/core/handoffs.ts)
   resume_of TEXT,                 -- the paused job this one carries on
   resumed_by TEXT,                -- the job that carried this paused one on
   summary TEXT,
@@ -99,7 +100,12 @@ CREATE TABLE IF NOT EXISTS batch (
 );
 `
 
-export const applyJobIndexSchema = (db: DatabaseSync): void => { db.exec(SCHEMA) }
+export const applyJobIndexSchema = (db: DatabaseSync): void => {
+  db.exec(SCHEMA)
+  // added with hand-offs: an index made before has no such column
+  const cols = new Set((db.prepare("SELECT name FROM pragma_table_info('jobs')").all() as { name: string }[]).map((c) => c.name))
+  if (!cols.has('handoff')) db.exec('ALTER TABLE jobs ADD COLUMN handoff TEXT')
+}
 
 /** One project's job index, in `store` (the central bucket at its `projects` prefix). */
 export class JobIndexStore extends BucketDb {
@@ -114,7 +120,7 @@ export interface JobRow {
   id: string; handle: string | null; session: string | null; kind: string; agent: string | null; title: string; number: number | null
   requestedBySub: string | null; requestedBy: string | null; state: IndexState; step: string | null
   queuedAt: number | null; startedAt: number | null; endedAt: number | null; beatAt: number | null; where: string | null
-  branch: string | null; parentJob: string | null; resumeOf: string | null; resumedBy: string | null
+  branch: string | null; parentJob: string | null; handoff: string | null; resumeOf: string | null; resumedBy: string | null
   summary: string | null; error: string | null; payload: string | null; claudeSession: string | null
   pausedBy: string | null; pausedAt: number | null; updatedAt: number
 }
@@ -128,7 +134,7 @@ export function loadJobs(db: DatabaseSync): JobRow[] {
     id: String(r.id), handle: str(r.handle), session: str(r.session), kind: String(r.kind), agent: str(r.agent), title: String(r.title), number: num(r.number),
     requestedBySub: str(r.requested_by_sub), requestedBy: str(r.requested_by), state: String(r.state) as IndexState, step: str(r.step),
     queuedAt: num(r.queued_at), startedAt: num(r.started_at), endedAt: num(r.ended_at), beatAt: num(r.beat_at), where: str(r.where_),
-    branch: str(r.branch), parentJob: str(r.parent_job), resumeOf: str(r.resume_of), resumedBy: str(r.resumed_by),
+    branch: str(r.branch), parentJob: str(r.parent_job), handoff: str(r.handoff), resumeOf: str(r.resume_of), resumedBy: str(r.resumed_by),
     summary: str(r.summary), error: str(r.error), payload: str(r.payload), claudeSession: str(r.claude_session),
     pausedBy: str(r.paused_by), pausedAt: num(r.paused_at), updatedAt: Number(r.updated_at),
   }))
@@ -143,7 +149,7 @@ export function loadBatch(db: DatabaseSync): BatchRow[] {
 const COLUMN: Record<keyof Omit<JobRow, 'id'>, string> = {
   handle: 'handle', session: 'session', kind: 'kind', agent: 'agent', title: 'title', number: 'number', requestedBySub: 'requested_by_sub', requestedBy: 'requested_by',
   state: 'state', step: 'step', queuedAt: 'queued_at', startedAt: 'started_at', endedAt: 'ended_at', beatAt: 'beat_at', where: 'where_', branch: 'branch',
-  parentJob: 'parent_job', resumeOf: 'resume_of', resumedBy: 'resumed_by', summary: 'summary', error: 'error', payload: 'payload', claudeSession: 'claude_session',
+  parentJob: 'parent_job', handoff: 'handoff', resumeOf: 'resume_of', resumedBy: 'resumed_by', summary: 'summary', error: 'error', payload: 'payload', claudeSession: 'claude_session',
   pausedBy: 'paused_by', pausedAt: 'paused_at', updatedAt: 'updated_at',
 }
 
