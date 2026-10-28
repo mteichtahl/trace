@@ -4,7 +4,11 @@
  */
 import { GetLogEventsCommand } from '@aws-sdk/client-cloudwatch-logs'
 import { describe, expect, it } from 'vitest'
-import { LOG_TAIL_CHARS, type LogsClient, buildLogTail } from '../../src/infra/lambda/image-build.js'
+import { BatchGetBuildsCommand } from '@aws-sdk/client-codebuild'
+import type { CloudFormationCustomResourceEvent } from 'aws-lambda'
+import { type BuildsClient, LOG_TAIL_CHARS, type LogsClient, buildLogTail, checkBuild, isComplete } from '../../src/infra/lambda/image-build.js'
+import { onEvent as runnerWebhook } from '../../src/infra/lambda/runner-webhook.js'
+import { onEvent as transactionSearch } from '../../src/infra/lambda/transaction-search.js'
 import { InfraPropsSchema } from '../../src/infra/props.js'
 import { RUNNERS, synth } from './templates.js'
 
@@ -72,4 +76,32 @@ describe("a failed image build's log tail", () => {
     expect(JSON.stringify(st?.Resource)).toMatch(/AgentImageBuildLogs/)
     expect(JSON.stringify(st?.Resource)).not.toContain('"*"')
   }, 300_000)
+
+  const pollEvent = (wait: boolean) => ({
+    RequestType: 'Create', PhysicalResourceId: 'uri#trace-agent-image:42',
+    ResourceProperties: { ServiceToken: 'x', ProjectName: 'trace-agent-image', ImageUri: 'uri', SourceHash: 'h', Wait: String(wait) },
+  }) as unknown as CloudFormationCustomResourceEvent & { PhysicalResourceId: string }
+  const failed: BuildsClient = {
+    send: (async (cmd: unknown) => {
+      if (!(cmd instanceof BatchGetBuildsCommand)) throw new Error('unexpected command')
+      return { builds: [{ buildStatus: 'FAILED', phases: [{ phaseType: 'BUILD', phaseStatus: 'FAILED', contexts: [{ message: 'Error while executing command: docker build … exit status 1' }] }], logs: { groupName: 'g', streamName: 's', deepLink: 'https://console/link' } }] }
+    }) as BuildsClient['send'],
+  }
+
+  it('fails a failed build with its phase, its link and the end of its log', async () => {
+    const logs = logsWith(['Step 3/9 : RUN apt-get update\n', 'E: Failed to fetch http://ports.ubuntu.com/… 503 Service Unavailable\n']).client
+    const err = await checkBuild(pollEvent(true), { codebuild: failed, logs }).then(() => null, (e: unknown) => e as Error)
+    expect(err?.message).toMatch(/^the image build failed in BUILD: Error while executing command: docker build … exit status 1 \(logs: https:\/\/console\/link\)/)
+    expect(err?.message).toMatch(/The end of its log:\nStep 3\/9 : RUN apt-get update\nE: Failed to fetch .* 503 Service Unavailable$/)
+  })
+
+  it('takes the event only, as Lambda calls it: its callback is never mistaken for a client', async () => {
+    // Lambda calls every handler (event, context, callback): a handler with a parameter for anything else gets the
+    // callback there, and calling it ends the invocation with null ("Cannot read properties of null (reading
+    // 'IsComplete')" in the Provider framework)
+    for (const h of [isComplete, runnerWebhook, transactionSearch]) expect(h.length).toBeLessThanOrEqual(1)
+    const callback = (): never => { throw new Error('Lambda\'s callback was called') }
+    const handler = isComplete as unknown as (e: unknown, ctx: unknown, cb: unknown) => ReturnType<typeof isComplete>
+    expect(await handler(pollEvent(false), {}, callback)).toEqual({ IsComplete: true, Data: { ImageUri: 'uri', BuildId: 'trace-agent-image:42' } })
+  })
 })
