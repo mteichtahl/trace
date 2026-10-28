@@ -42,7 +42,7 @@ import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-sec
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers'
 import type { AwsCredentialIdentity } from '@smithy/types'
 import { PutSecretValueCommand } from '@aws-sdk/client-secrets-manager'
-import { RUNNER_VARIABLE } from '../core/project.js'
+import { RUNNER_NONE, RUNNER_VARIABLE, runnerOf } from '../core/project.js'
 import {
   CENTRAL_BUCKET_OUTPUT, GPU_IMAGE_BUILD_OUTPUT, INSTALLATION_RECORD_KEY, type InfraInput, InfraPropsSchema, ciRunnerOutput, kbOutputs, projectOutputs, projectRefs,
 } from '../infra/props.js'
@@ -50,7 +50,7 @@ import { REPO_ROOT } from '../infra/stack.js'
 import { ListSourceCredentialsCommand } from '@aws-sdk/client-codebuild'
 import type { RUNNER_AUTH } from './answers.js'
 import {
-  type ConnectionChoice, type RunnerAuthChoice, awsEnv, chooseRunnerAuth, codebuildClient, connectionsClient, connectionsConsoleUrl, resolveConnection, stackOutputs,
+  type ConnectionChoice, type RunnerAuthChoice, awsEnv, chooseRunnerAuth, codebuildClient, connectionsClient, connectionsConsoleUrl, connectorAccessNote, resolveConnection, stackOutputs, webhookRefusedNote,
 } from './aws.js'
 import { cdkBin, cdkDeployArgs, runStreaming } from './bootstrap.js'
 import { checkToken, deleteVariable, getVariable, repositoryDefaultBranch, setSecret, setVariable } from './github.js'
@@ -277,7 +277,11 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
     say(`The build runners are not added yet: the GitHub connection ${choice.name} is not authorized, so the workflows keep running on GitHub's runners. Authorize it at ${connectionsConsoleUrl(region)} (choose ${choice.name}, then "Update pending connection"); the next merge to main, or re-running this job, adds the runners.`)
   }
   if (Object.keys(after).length) {
-    const want = runnerOutputs(input).map((r) => ({ repo: r.repo, value: ready ? after[r.output] ?? '' : '' }))
+    const runners = runnerOutputs(input)
+    // a runner GitHub refused the webhook of has `none` for its output: its repository stays on GitHub's runners
+    const want = runners.map((r) => ({ repo: r.repo, value: ready ? runnerOf(after[r.output]) ?? '' : '' }))
+    const refused = ready ? runners.filter((r) => after[r.output] === RUNNER_NONE).map((r) => r.repo) : []
+    if (refused.length) say(webhookRefusedNote(refused, choice ? connectorAccessNote(refused) : null))
     const secretArn = after.GithubSecretArn ?? before.GithubSecretArn ?? ''
     const token = await readShared(secretArn)
     if (!token) log('The shared agent token is empty or could not be read.')

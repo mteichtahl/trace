@@ -96,7 +96,7 @@ export interface PreflightDeps {
   leftovers(prefix: string): Promise<string[]>
   sourceCredential(): Promise<string | null>
   /** the account and region's GitHub connections (CodeConnections) */
-  connections(): Promise<{ name: string; status: string }[]>
+  connections(): Promise<{ name: string; status: string; arn?: string }[]>
   token(): Promise<TokenInfo>
   email(): Promise<string | null>
   repo(repo: string, kind: TokenInfo['kind']): Promise<RepoAccess>
@@ -107,7 +107,7 @@ export interface PreflightDeps {
 
 export interface PreflightResult {
   checks: Check[]
-  facts: Facts & { arn?: string; oidcProvider?: boolean; cdkBootstrapped?: boolean; cdkVersion?: number | null; existing?: StackState | null; sourceCredential?: string | null; runnerConnection?: string | null }
+  facts: Facts & { arn?: string; oidcProvider?: boolean; cdkBootstrapped?: boolean; cdkVersion?: number | null; existing?: StackState | null; sourceCredential?: string | null; runnerConnection?: string | null; githubConnections?: { name: string; status: string; arn: string }[] }
   token: TokenInfo | null
   repos: RepoAccess[]
   /** installing is refused while any check fails */
@@ -295,6 +295,8 @@ export async function preflight(input: PreflightInput, d: PreflightDeps, onProgr
   const reuse = available.find((c) => c.name === `${prefix}-github`) ?? available[0] ?? null
   facts.sourceCredential = credential.ok ? credential.v : null
   facts.runnerConnection = input.runnerAuth !== 'token' && reuse ? reuse.name : null
+  // every GitHub connection there, for the page to choose from (Advanced > Build runners)
+  facts.githubConnections = conns.ok ? conns.v.filter((c) => c.arn).map((c) => ({ name: c.name, status: c.status, arn: c.arn ?? '' })) : []
   /** whether the deploy will make the runners' webhooks with this token (so it must be allowed to) */
   let tokenMakesWebhooks = false
   if (facts.runnerConnection) add({ id: 'codebuild.github', status: 'info', title: 'Build runners', detail: `CodeBuild reaches GitHub through the authorized GitHub connection ${facts.runnerConnection}: no token stored with CodeBuild, and no console step` })
@@ -426,11 +428,11 @@ export async function liveDeps(creds: AwsCredentialIdentity, region: string, tok
     connections: async () => {
       const cc = await import('@aws-sdk/client-codeconnections')
       const client = new cc.CodeConnectionsClient(cfg)
-      const out: { name: string; status: string }[] = []
+      const out: { name: string; status: string; arn: string }[] = []
       let NextToken: string | undefined
       do {
         const r = await client.send(new cc.ListConnectionsCommand({ ProviderTypeFilter: 'GitHub', MaxResults: 100, ...(NextToken ? { NextToken } : {}) }))
-        for (const x of r.Connections ?? []) out.push({ name: x.ConnectionName ?? '', status: x.ConnectionStatus ?? '' })
+        for (const x of r.Connections ?? []) out.push({ name: x.ConnectionName ?? '', status: x.ConnectionStatus ?? '', arn: x.ConnectionArn ?? '' })
         NextToken = r.NextToken
       } while (NextToken)
       return out

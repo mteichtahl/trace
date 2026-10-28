@@ -297,6 +297,7 @@ tracectl upgrade              # pull the newer trace (npm install -g github:mtei
                            # saved answers and refresh each repository's variables and workflows
 tracectl upgrade --check      # what it would change, without changing anything
 tracectl upgrade --runner-auth token|connection|auto   # switch how the build runners reach GitHub (Where builds run)
+tracectl upgrade --connection ARN|auto   # choose the GitHub connection the build runners use (auto: the installer's pick)
 tracectl uninstall            # remove it (asks you to type the stack's name; --yes to skip)
 ```
 
@@ -700,6 +701,20 @@ container runs the job and is discarded.
   uses one, and creates `<prefix>-github` when there is none. Switch later with
   `tracectl upgrade --runner-auth auto|token|connection` (or by choosing again in `tracectl install`): the runner projects
   are updated in place.
+
+  **Which connection**: Advanced → Build runners → GitHub connection lists every GitHub connection in the account and
+  region with whether it is authorized. Leave it on Automatic, which says which one the installer would reuse, or pick
+  one (or type another's ARN). An account can hold several, each the AWS Connector app of a different GitHub account
+  or organization, and only one whose app can reach your repositories makes their runners. Change it later with
+  `tracectl upgrade --connection ARN` (`--connection auto` goes back to the installer's pick).
+- **When GitHub refuses a runner's webhook** (the AWS Connector app not allowed on the repository, a token without
+  admin rights on it, an old CodeBuild webhook left on the repository, or GitHub's limit on a repository's hooks), the
+  deploy still finishes. Each build-only repository's runner, and each project's runner in the nested layout, gets its
+  webhook from a small custom resource (`src/infra/lambda/runner-webhook.ts`) rather than from CloudFormation, which
+  would roll the whole stack back. The runner project is made, its `TRACE_CODEBUILD_PROJECT` output says `none`, the
+  installer and the self-update leave that repository's jobs on GitHub's runners and say why, and every later deploy
+  tries again. The flat layout's projects keep CloudFormation's own webhook: a flat stack of 20 projects has no room
+  for one more resource each.
 - **With the token**, the installer imports it before the deploy as CodeBuild's account-level GitHub source credential
   (`ImportSourceCredentials`, server type `GITHUB`, auth type `PERSONAL_ACCESS_TOKEN`; Advanced chooses the agents'
   token or the admin token). The runner projects then name no source credential of their own, so CodeBuild uses that

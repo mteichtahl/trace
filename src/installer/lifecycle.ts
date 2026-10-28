@@ -3,7 +3,7 @@
  * (~/.trace/client.db) and your AWS credentials. Neither asks for a GitHub token: the installation's own copy is read
  * back from Secrets Manager (`<prefix>/github-token`, and each project's), which those credentials may read.
  *
- *   tracectl upgrade [--ref REF] [--check] [--no-pull] [--runner-auth auto|token|connection]
+ *   tracectl upgrade [--ref REF] [--check] [--no-pull] [--runner-auth auto|token|connection] [--connection ARN|auto]
  *       1 pull: `npm install -g github:<source>#<ref>` (the ref the installation came from, v1 unless --ref), then
  *         run the new version's `tracectl upgrade --no-pull`
  *       2 the installer's steps with the saved answers (src/installer/bootstrap.ts apply): the stack is updated (the
@@ -12,6 +12,8 @@
  *       --check prints what would change and stops
  *       --runner-auth switches how the CodeBuild runners reach GitHub (answers runners.auth, README "Where builds
  *         run"), saved for later runs: the runner projects are updated in place
+ *       --connection chooses the GitHub connection (AWS CodeConnections) the runners use (answers runners.connectionArn),
+ *         saved for later runs; `auto` goes back to the installer's choice (an authorized one, else a new one)
  *
  *   tracectl release setup [--repo OWNER/REPO] [--region R] [--profile P] [--publish]
  *       sets this AWS account up to publish trace's images (src/installer/release.ts): TraceRelease in us-east-1,
@@ -101,13 +103,18 @@ async function creds(a: Answers): Promise<AwsCredentialIdentity> {
 }
 
 export async function cmdUpgrade(argv: string[]): Promise<number> {
-  const { values: o } = parseArgs({ args: argv, options: { ref: { type: 'string' }, check: { type: 'boolean' }, 'no-pull': { type: 'boolean' }, 'runner-auth': { type: 'string' } } })
+  const { values: o } = parseArgs({ args: argv, options: { ref: { type: 'string' }, check: { type: 'boolean' }, 'no-pull': { type: 'boolean' }, 'runner-auth': { type: 'string' }, connection: { type: 'string' } } })
   try {
     let a = saved()
     const auth = o['runner-auth']
     if (auth !== undefined) {
       if (!(RUNNER_AUTH as readonly string[]).includes(auth)) throw new Error(`--runner-auth is one of ${RUNNER_AUTH.join(', ')}, not ${auth}`)
       a = AnswersSchema.parse({ ...a, runners: { ...a.runners, auth, ...(auth === 'token' ? { connectionArn: '' } : {}) } })
+    }
+    const connection = o.connection
+    if (connection !== undefined) {
+      if (a.runners.auth === 'token' && connection !== 'auto') throw new Error('--connection is for the runners\' GitHub connection: with --runner-auth token they use the GitHub token (choose auto or connection)')
+      a = AnswersSchema.parse({ ...a, runners: { ...a.runners, connectionArn: connection === 'auto' ? '' : connection.trim() } })
     }
     if (!o['no-pull'] && !o.check) {
       const ref = o.ref ?? REF
@@ -116,7 +123,7 @@ export async function cmdUpgrade(argv: string[]): Promise<number> {
       const r = spawnSync(npm, ['install', '-g', `github:${SOURCE}#${ref}`], { stdio: 'inherit' })
       if (r.status !== 0) { err(`trace: npm install exited ${r.status ?? 'abnormally'}`); return 1 }
       // the new version carries on (its stack, its workflows)
-      const next = spawnSync(process.platform === 'win32' ? 'tracectl.cmd' : 'tracectl', ['upgrade', '--no-pull', ...(auth !== undefined ? ['--runner-auth', auth] : [])], { stdio: 'inherit' })
+      const next = spawnSync(process.platform === 'win32' ? 'tracectl.cmd' : 'tracectl', ['upgrade', '--no-pull', ...(auth !== undefined ? ['--runner-auth', auth] : []), ...(connection !== undefined ? ['--connection', connection] : [])], { stdio: 'inherit' })
       return next.status ?? 1
     }
     const c = await creds(a)

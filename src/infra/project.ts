@@ -206,7 +206,7 @@ export interface ProjectProps {
   /** how its runner reaches GitHub: the connection (src/infra/runner.ts GithubConnection), or connectionArn null for the
    * account's CodeBuild GitHub source credential (runners.auth 'token'); null while the connection is not authorized
    * yet (runners.connectionReady false), when the project gets no runner */
-  runnerSource: { connectionArn: string | null } | null
+  runnerSource: { connectionArn: string | null; webhooks: string | null } | null
 }
 
 export class ProjectStack extends Construct {
@@ -567,7 +567,8 @@ export class ProjectStack extends Construct {
     const { computeType, image, privileged } = cfg.runners
     this.runner = p.runnerSource
       ? new RunnerProject(this, 'Runner', {
-          name: runnerProjectName(cfg.prefix, repository), repository, connectionArn: p.runnerSource.connectionArn, computeType, image, privileged,
+          name: runnerProjectName(cfg.prefix, repository), repository, connectionArn: p.runnerSource.connectionArn, webhooks: p.runnerSource.webhooks,
+          computeType, image, privileged, ...(cfg.runners.webhookAttempt ? { attempt: cfg.runners.webhookAttempt } : {}),
           tags: { [PROJECT_TAG]: slug, 'trace:installation': cfg.prefix },
         })
       : null
@@ -583,7 +584,7 @@ export class ProjectStack extends Construct {
     new CfnOutput(stack, outputs.roleArn, { value: this.actionsRole.roleArn, description: `${slug}: its GitHub OIDC role (TRACE_AWS_ROLE)` })
     new CfnOutput(stack, outputs.secretArn, { value: this.secret.secretArn, description: `${slug}: its GitHub token secret` })
     if (this.jobDefinitionName) new CfnOutput(stack, outputs.jobDefinition, { value: this.jobDefinitionName, description: `${slug}: its GPU job definition` })
-    if (this.runner) new CfnOutput(stack, outputs.runnerProject, { value: this.runner.projectName, description: `${slug}: its CodeBuild runner project (TRACE_CODEBUILD_PROJECT)` })
+    if (this.runner) new CfnOutput(stack, outputs.runnerProject, { value: this.runner.runner, description: `${slug}: its CodeBuild runner project (TRACE_CODEBUILD_PROJECT); none while GitHub refuses its webhook` })
     if (this.memory) new CfnOutput(stack, outputs.memoryId, { value: this.memory.memoryId, description: `${slug}: its AgentCore memory (its worker's TRACE_MEMORY_ID)` })
     // nested layout only, so these are always its nested stack's outputs, never the parent's
     if (this.knowledgeBase) {

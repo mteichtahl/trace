@@ -86,14 +86,15 @@ describe('the nested layout', () => {
       for (const t of s.nested.values()) {
         const j = json(t)
         // 17, its CPU job definition, its knowledge base (index, service role and policy, knowledge base, data source),
-        // its job events (topic, topic policy, EventBridge rule) and its CI runner (CodeBuild project, its role and its
-        // log group: src/infra/runner.ts)
-        expect(nestedResources(j.Resources).own).toBe(30)
+        // its job events (topic, topic policy, EventBridge rule) and its CI runner (CodeBuild project, its role, its
+        // log group and its webhook: src/infra/runner.ts)
+        expect(nestedResources(j.Resources).own).toBe(31)
         // its 13 (Project<hash>RunnerProject among them), its knowledge base's two (Project<hash>KnowledgeBaseId,
         // …DataSourceId), and the id the parent reads
         expect(count(j.Outputs)).toBe(16)
-        // its 11, and the vector bucket (its job-events topic is its own; the queues' ARNs were parameters already)
-        expect(count(j.Parameters)).toBe(12)
+        // its 11, the vector bucket and the runner webhooks' provider (its job-events topic is its own; the queues' ARNs
+        // were parameters already)
+        expect(count(j.Parameters)).toBe(13)
       }
       // CDK moves what no longer fits the API role's inline policy (every memory's ARN) into a managed policy
       const overflow = Object.keys(s.parent.findResources('AWS::IAM::ManagedPolicy'))
@@ -118,19 +119,21 @@ describe('the nested layout', () => {
     // client) and four outputs (WebUrl, WebDistributionId, EventsApiEndpoint, WebClientId). Cost and shipping add
     // thirteen, whatever the number of projects: the daily cost read and the hourly order watch (each its function,
     // role, policy, log group, schedule and invoke permission: src/infra/cost.ts, src/infra/order-watch.ts) and the
-    // API role's cost policy. (The dictation vocabularies' read, src/infra/voice.ts, tips the API role's inline policy
-    // over sooner.)
-    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:104/25:1', '24:130/25:4', '60:166/25:4'])
+    // API role's cost policy. The runner webhooks' provider adds seven, whatever the number of projects (its function,
+    // role, policy and log group, and the provider framework's function, role and policy: src/infra/runner.ts
+    // RunnerWebhooks). (The dictation vocabularies' read, src/infra/voice.ts, tips the API role's inline policy over
+    // sooner.)
+    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:111/25:1', '24:137/25:4', '60:173/25:4'])
     // without a connection given, the stack creates one: one more resource of the parent's, and nothing more per project
     const created = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: {} }), 'Count1Created')
     expect(count(json(created.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0) + 1)
-    for (const t of created.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(30)
+    for (const t of created.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(31)
     // with the token as CodeBuild's credential (runners.auth token): no connection and none of its outputs, the same
     // runner in each project's stack
     const token = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: { auth: 'token' } }), 'Count1Token')
     expect(count(json(token.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0))
     expect(count(json(token.parent).Outputs)).toBe((sizes[0]?.outputs ?? 0) - 2)
-    for (const t of token.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(30)
+    for (const t of token.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(31)
     // none of a project's outputs is the parent's: each is its nested stack's, with the repository it is the project of
     const s = synth(cfg(2), 'Count2Outputs')
     const parentOutputs = Object.keys(json(s.parent).Outputs ?? {})
@@ -199,11 +202,14 @@ describe('the nested layout', () => {
         const flatOwn = Object.entries(fp.Resources).filter(([id]) => id.startsWith(`Project${h}`) || id.startsWith(`ObservabilityProject${h}`))
         const nt = json(nestedOf(nested, repo))
         // the job events (topic, its policy, its two rules) are the nested layout's only too (src/infra/project.ts)
-        const jobEvents = ['AWS::SNS::Topic', 'AWS::SNS::TopicPolicy', 'AWS::Events::Rule']
+        // and so is the runner's webhook as a custom resource: a flat project's runner keeps CloudFormation's Triggers
+        // (src/infra/runner.ts), so the project is compared without either
+        const jobEvents = ['AWS::SNS::Topic', 'AWS::SNS::TopicPolicy', 'AWS::Events::Rule', 'Custom::RunnerWebhook']
         // and so are what the worker gets for them: TRACE_BATCH_EVENTS_TOPIC and the ProjectGpuWait* statements
         const withoutJobEvents = (r: Res): Res => {
           const c = JSON.parse(JSON.stringify(r)) as Res & { Properties: Record<string, any> }
           if (c.Type === 'AWS::BedrockAgentCore::Runtime') delete c.Properties.EnvironmentVariables?.TRACE_BATCH_EVENTS_TOPIC
+          if (c.Type === 'AWS::CodeBuild::Project') delete c.Properties.Triggers
           if (c.Type === 'AWS::IAM::Policy') c.Properties.PolicyDocument.Statement = c.Properties.PolicyDocument.Statement.filter((x: { Sid?: string }) => !String(x.Sid).startsWith('ProjectGpuWait'))
           return c
         }
@@ -217,11 +223,11 @@ describe('the nested layout', () => {
         }
         const nestedOwn = Object.entries(folded).filter(([, r]) => !jobEvents.includes(r.Type)).map(([id, r]) => [id, withoutJobEvents(r)] as const)
         expect(JSON.stringify(flatOwn)).not.toMatch(/ProjectGpuWait|TRACE_BATCH_EVENTS_TOPIC/)
-        expect(Object.values(nt.Resources).filter((r) => jobEvents.includes(r.Type))).toHaveLength(4)
+        expect(Object.values(nt.Resources).filter((r) => jobEvents.includes(r.Type))).toHaveLength(5)
         expect(flatOwn.filter(([, r]) => jobEvents.includes(r.Type))).toHaveLength(0)
         const params = (json(nested.parent).Resources[nestedResourceId(nested, h)]?.Properties?.Parameters ?? {}) as Record<string, unknown>
         expect(nestedOwn.length).toBe(flatOwn.length)
-        expect(nestedOwn.map(([, r]) => shape(r, nt, { tpl: json(nested.parent), params })).sort()).toEqual(flatOwn.map(([, r]) => shape(r, fp)).sort())
+        expect(nestedOwn.map(([, r]) => shape(r, nt, { tpl: json(nested.parent), params })).sort()).toEqual(flatOwn.map(([, r]) => shape(withoutJobEvents(r), fp)).sort())
         // and the logical ids inside the nested template are the flat ones, but for the delivery's
         const strip = (id: string): string => id.replace(/^Observability/, '')
         expect(nestedOwn.map(([id]) => id.replace(/[0-9A-F]{8}$/, '')).sort()).toEqual(flatOwn.map(([id]) => strip(id).replace(/[0-9A-F]{8}$/, '')).sort())

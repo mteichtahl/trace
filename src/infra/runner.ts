@@ -6,8 +6,9 @@
  * jobs never wait for a runner that is not there. One per onboarded project (src/infra/project.ts), and one per
  * build-only repository (`ciRepositories`, such as trace's own: src/infra/stack.ts).
  *
- *   project      a CodeBuild project whose source is the repository on GitHub and whose webhook (made by
- *                CloudFormation through Triggers) is filtered on EVENT = WORKFLOW_JOB_QUEUED: GitHub tells CodeBuild a
+ *   project      a CodeBuild project whose source is the repository on GitHub and whose webhook (made by the
+ *                RunnerWebhooks custom resource below, not by CloudFormation's Triggers) is filtered on
+ *                EVENT = WORKFLOW_JOB_QUEUED: GitHub tells CodeBuild a
  *                job is queued, CodeBuild starts a build that registers itself as a just-in-time runner for that one
  *                job, runs it, and is gone. The buildspec is ignored for runner builds (CodeBuild runs the runner agent;
  *                a job could only bring a buildspec back with the `buildspec-override:true` label), so the project's
@@ -46,6 +47,13 @@
  * reused by every installation; a stack creates its own only when there is none. A connection a stack created is always kept (RETAIN, whatever retainData says) when the stack goes or stops
  * using it: another stack may be reusing it.
  *
+ * Why the webhook is a custom resource (src/infra/lambda/runner-webhook.ts): an authorized connection says nothing about
+ * whether the AWS Connector app can reach the repository, and when GitHub refuses the webhook CloudFormation's Triggers
+ * fail the project, and with it the whole stack ("Failed to create webhook. GitHub API limit reached or permission
+ * issue"). A runner is only a faster place to run the jobs, so a refused webhook must never stop a deploy: the
+ * project is made, the custom resource reports Runner = RUNNER_NONE, the runner's output says so, the tools leave
+ * TRACE_CODEBUILD_PROJECT unset (jobs stay on GitHub's runners) and say why, and every later deploy tries again.
+ *
  * Why the runner projects can wait for a second deploy (runners.connectionReady): a new connection is PENDING until a
  * person authorizes it once in the AWS console, and CodeBuild cannot make a runner project's webhook against a pending
  * connection (and may refuse the project). So when the connection is not AVAILABLE the tools deploy with
@@ -53,13 +61,18 @@
  * person the link and wait, then deploy again with true, which only adds the runners and their webhooks. It is true
  * by default, so a plain `cdk deploy` never removes runners that exist.
  */
-import { CfnOutput, Fn, RemovalPolicy, Stack, Tags, Token } from 'aws-cdk-lib'
+import { join } from 'node:path'
+import { CfnOutput, CustomResource, Duration, Fn, RemovalPolicy, Stack, Tags, Token } from 'aws-cdk-lib'
 import * as codebuild from 'aws-cdk-lib/aws-codebuild'
 import { CfnConnection } from 'aws-cdk-lib/aws-codeconnections'
 import * as iam from 'aws-cdk-lib/aws-iam'
+import * as lambda from 'aws-cdk-lib/aws-lambda'
+import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs'
 import * as logs from 'aws-cdk-lib/aws-logs'
+import { Provider } from 'aws-cdk-lib/custom-resources'
 import { Construct } from 'constructs'
 import { connectionName } from '../core/project.js'
+import { bundlingRoot } from './lockfile.js'
 import { CONNECTION_CREATED_OUTPUT, CONNECTION_OUTPUT } from './props.js'
 
 /** How long a runner build may take: longer than any job of the workflows (the longest asks for 150 minutes). */
@@ -85,6 +98,13 @@ export interface RunnerProjectProps {
   computeType: string
   image: string
   privileged: boolean
+  /** the RunnerWebhooks provider's service token, which gives the project its webhook; null: CloudFormation's own
+   * Triggers make it, and GitHub refusing it fails the deploy (the flat layout's projects, which have no room for the
+   * custom resource: a flat stack of 20 projects is at CloudFormation's 500 resources already) */
+  webhooks: string | null
+  /** what the webhook resource's Attempt property is: changed on every deploy (the default), so a project GitHub
+   * refused a webhook is tried again; fixed in tests, so templates compare */
+  attempt?: string
   /** more tags for the project and its role */
   tags?: Record<string, string>
   /** the log group's (DESTROY by default: build logs are not data) */
@@ -135,11 +155,57 @@ export class GithubConnection extends Construct {
   }
 }
 
+/**
+ * The Lambda that gives runner projects their webhooks (src/infra/lambda/runner-webhook.ts), one per stack that has
+ * runners: it may read, make and remove the webhooks of this installation's runner projects (`<prefix>-ci-*`) only,
+ * and use the GitHub connection for that (CodeBuild makes the hook through it).
+ */
+export class RunnerWebhooks extends Construct {
+  readonly serviceToken: string
+
+  constructor(scope: Construct, id: string, p: { prefix: string; root: string; connectionArn: string | null }) {
+    super(scope, id)
+    const { partition, region, account } = Stack.of(this)
+    const fn = new NodejsFunction(this, 'Fn', {
+      entry: join(p.root, 'src', 'infra', 'lambda', 'runner-webhook.ts'),
+      ...bundlingRoot(p.root),
+      handler: 'onEvent',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      timeout: Duration.minutes(2),
+      bundling: { format: OutputFormat.CJS, target: 'node22', externalModules: ['@aws-sdk/*'] },
+      logGroup: new logs.LogGroup(this, 'FnLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY }),
+      description: 'trace: gives the CodeBuild runner projects their GitHub webhooks, without failing a deploy over one',
+    })
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'RunnerWebhooks',
+      actions: ['codebuild:BatchGetProjects', 'codebuild:CreateWebhook', 'codebuild:DeleteWebhook'],
+      resources: [`arn:${partition}:codebuild:${region}:${account}:project/${p.prefix}-ci-*`],
+    }))
+    if (p.connectionArn) {
+      fn.addToRolePolicy(new iam.PolicyStatement({
+        sid: 'RunnerWebhooksConnection',
+        actions: [
+          'codeconnections:UseConnection', 'codeconnections:GetConnectionToken', 'codeconnections:GetConnection', 'codeconnections:PassConnection',
+          'codestar-connections:UseConnection', 'codestar-connections:GetConnectionToken', 'codestar-connections:GetConnection', 'codestar-connections:PassConnection',
+        ],
+        resources: connectionArns(p.connectionArn, Stack.of(this)),
+      }))
+    }
+    this.serviceToken = new Provider(this, 'Provider', { onEventHandler: fn }).serviceToken
+  }
+}
+
 export class RunnerProject extends Construct {
   readonly project: codebuild.CfnProject
   readonly role: iam.Role
   readonly logGroup: logs.LogGroup
   readonly projectName: string
+  /** the value of the runner's TRACE_CODEBUILD_PROJECT output: the project's name once it has its webhook, RUNNER_NONE
+   * while GitHub refuses it (core/project.ts runnerOf) */
+  readonly runner: string
+  /** why it has no webhook ('' when it has one) */
+  readonly webhookReason: string
 
   constructor(scope: Construct, id: string, p: RunnerProjectProps) {
     super(scope, id)
@@ -192,10 +258,8 @@ export class RunnerProject extends Construct {
         ...(p.connectionArn ? { auth: { type: 'CODECONNECTIONS', resource: p.connectionArn } } : {}),
         buildSpec: PLACEHOLDER_BUILDSPEC,
       },
-      triggers: {
-        webhook: true,
-        filterGroups: [[{ type: 'EVENT', pattern: 'WORKFLOW_JOB_QUEUED' }]],
-      },
+      // with a provider, no Triggers: the webhook is the custom resource's below, so GitHub refusing it cannot fail the stack
+      ...(p.webhooks ? {} : { triggers: { webhook: true, filterGroups: [[{ type: 'EVENT', pattern: 'WORKFLOW_JOB_QUEUED' }]] } }),
       artifacts: { type: 'NO_ARTIFACTS' },
       environment: {
         type: 'LINUX_CONTAINER',
@@ -207,8 +271,22 @@ export class RunnerProject extends Construct {
       logsConfig: { cloudWatchLogs: { status: 'ENABLED', groupName: this.logGroup.logGroupName }, s3Logs: { status: 'DISABLED' } },
       timeoutInMinutes: RUNNER_TIMEOUT_MINUTES,
     })
-    // the role's policy must be in place before CodeBuild checks it, and the webhook is made with the project
+    // the role's policy must be in place before CodeBuild checks it
     this.project.node.addDependency(this.role)
+
+    if (p.webhooks) {
+      const webhook = new CustomResource(this, 'Webhook', {
+        serviceToken: p.webhooks,
+        resourceType: 'Custom::RunnerWebhook',
+        properties: { ProjectName: p.name, Attempt: p.attempt ?? new Date().toISOString() },
+      })
+      webhook.node.addDependency(this.project)
+      this.runner = webhook.getAttString('Runner')
+      this.webhookReason = webhook.getAttString('Reason')
+    } else {
+      this.runner = p.name
+      this.webhookReason = ''
+    }
 
     for (const [k, v] of Object.entries(p.tags ?? {})) {
       Tags.of(this.project).add(k, v)

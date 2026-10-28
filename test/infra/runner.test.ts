@@ -35,13 +35,40 @@ function runnerOf(t: Template, name: string): { project: Res; role: Res; stateme
   return { project, role, statements: [...inline, ...attached] }
 }
 
+/** How a runner gets its webhook: the RunnerWebhook custom resource (the nested layout's projects and the build-only
+ * repositories: GitHub refusing it never fails the deploy), or CloudFormation's Triggers (the flat layout's projects). */
+type Hook = 'custom' | 'triggers'
+
+/** Checks the runner's webhook is made the one way `how` says and not the other, and returns what the runner's
+ * TRACE_CODEBUILD_PROJECT output must be: the custom resource's Runner attribute (the name, or `none` while GitHub
+ * refuses the webhook), or the project's name. */
+function webhookOf(t: Template, name: string, how: Hook): unknown {
+  const { project } = runnerOf(t, name)
+  const hooks = Object.entries(t.findResources('Custom::RunnerWebhook') as Record<string, Res & { DependsOn?: string[] }>).filter(([, r]) => r.Properties.ProjectName === name)
+  if (how === 'triggers') {
+    expect(hooks).toEqual([])
+    expect(project.Properties.Triggers).toEqual({ Webhook: true, FilterGroups: [[{ Type: 'EVENT', Pattern: 'WORKFLOW_JOB_QUEUED' }]] })
+    return name
+  }
+  expect(project.Properties).not.toHaveProperty('Triggers')
+  expect(hooks).toHaveLength(1)
+  const [id, hook] = hooks[0] as [string, Res & { DependsOn?: string[] }]
+  expect(hook.Properties.ServiceToken).toBeDefined()
+  // a new Attempt every deploy, so a refused webhook is tried again (fixed by the test synth)
+  expect(hook.Properties.Attempt).toBe('test')
+  // made after the project
+  const projectId = Object.entries(t.findResources('AWS::CodeBuild::Project') as Record<string, Res>).find(([, r]) => r.Properties.Name === name)?.[0]
+  expect(hook.DependsOn).toContain(projectId)
+  return { 'Fn::GetAtt': [id, 'Runner'] }
+}
+
 /** Every check a runner project must pass, whatever template it is in. `connection`: the ARN as the template says it
  * (the given one by default; a reference when the stack created the connection). */
-function expectRunner(t: Template, name: string, repository: string, connection: unknown = CONNECTION_ARN): void {
+function expectRunner(t: Template, name: string, repository: string, how: Hook, connection: unknown = CONNECTION_ARN): void {
   const { project, role, statements } = runnerOf(t, name)
   const p = project.Properties
   expect(p.Source).toMatchObject({ Type: 'GITHUB', Location: `https://github.com/${repository}`, Auth: { Type: 'CODECONNECTIONS', Resource: connection } })
-  expect(p.Triggers).toEqual({ Webhook: true, FilterGroups: [[{ Type: 'EVENT', Pattern: 'WORKFLOW_JOB_QUEUED' }]] })
+  webhookOf(t, name, how)
   expect(p.Artifacts).toEqual({ Type: 'NO_ARTIFACTS' })
   expect(p.Environment).toMatchObject({ Type: 'LINUX_CONTAINER', ComputeType: 'BUILD_GENERAL1_LARGE', Image: 'aws/codebuild/standard:7.0', PrivilegedMode: false })
   // its own log group (by reference, so it is made first), kept a month
@@ -99,9 +126,9 @@ describe("each project's runner project", () => {
       const { project, statements } = runnerOf(t, name)
       expect(project.Properties.Source).toMatchObject({ Type: 'GITHUB', Location: `https://github.com/${repo}` })
       expect(project.Properties.Source).not.toHaveProperty('Auth')
-      expect(project.Properties.Triggers).toEqual({ Webhook: true, FilterGroups: [[{ Type: 'EVENT', Pattern: 'WORKFLOW_JOB_QUEUED' }]] })
+      const value = webhookOf(t, name, 'custom')
       expect(statements.flatMap((x) => list(x.Action)).sort()).toEqual(['logs:CreateLogStream', 'logs:PutLogEvents'])
-      expect((t.toJSON() as { Outputs: Record<string, { Value: unknown }> }).Outputs[projectOutputs(repo).runnerProject]?.Value).toBe(name)
+      expect((t.toJSON() as { Outputs: Record<string, { Value: unknown }> }).Outputs[projectOutputs(repo).runnerProject]?.Value).toEqual(value)
     }
     // a connection is for auth connection only
     expect(() => InfraPropsSchema.parse({ ...base, runners: { auth: 'token', connectionArn: CONNECTION_ARN } })).toThrow(/auth 'connection'/)
@@ -114,10 +141,11 @@ describe("each project's runner project", () => {
         const t = layout === 'nested' ? nestedOf(s, repo) : s.parent
         const name = runnerProjectName('trace', repo)
         expect(name).toBe(`trace-ci-${projectHash(repo)}`)
-        expectRunner(t, name, repo)
+        const how: Hook = layout === 'nested' ? 'custom' : 'triggers'
+        expectRunner(t, name, repo, how)
         // its output: the nested stack's in the nested layout (never the parent's), the stack's own when flat
         const outputs = (t.toJSON() as { Outputs: Record<string, { Value: unknown }> }).Outputs
-        expect(outputs[projectOutputs(repo).runnerProject]?.Value).toBe(name)
+        expect(outputs[projectOutputs(repo).runnerProject]?.Value).toEqual(webhookOf(t, name, how))
         if (layout === 'nested') expect(Object.keys((s.parent.toJSON() as { Outputs: object }).Outputs)).not.toContain(projectOutputs(repo).runnerProject)
       }
       // the other project's runner is not in this project's nested stack
@@ -171,14 +199,14 @@ describe("the installation's GitHub connection", () => {
         expect(outputsOf(s.parent)[CONNECTION_OUTPUT]?.Value).toEqual(ref)
         expect(outputsOf(s.parent)[CONNECTION_CREATED_OUTPUT]?.Value).toBe('true')
         for (const repo of [A, B]) {
-          if (layout === 'flat') expectRunner(s.parent, runnerProjectName('lab', repo), repo, ref)
+          if (layout === 'flat') expectRunner(s.parent, runnerProjectName('lab', repo), repo, 'triggers', ref)
           else {
             // a parameter of its nested stack, which the parent sets to the connection's ARN
             const t = nestedOf(s, repo)
             const { project } = runnerOf(t, runnerProjectName('lab', repo))
             const param = (project.Properties.Source as { Auth: { Resource: { Ref: string } } }).Auth.Resource.Ref
             expect(Object.keys((t.toJSON() as { Parameters: object }).Parameters)).toContain(param)
-            expectRunner(t, runnerProjectName('lab', repo), repo, { Ref: param })
+            expectRunner(t, runnerProjectName('lab', repo), repo, 'custom', { Ref: param })
             const passed = (s.parent.toJSON() as { Resources: Record<string, Res> }).Resources[nestedResourceId(s, projectHash(repo))]?.Properties.Parameters as Record<string, unknown>
             expect(passed[param]).toEqual(ref)
           }
@@ -218,8 +246,9 @@ describe('the build-only repositories (ciRepositories)', () => {
       const s = synth(InfraPropsSchema.parse({ ...only, layout, ciRepositories: [TRACE, C] }), `Ci${layout}`)
       for (const repo of ['mteichtahl/trace', C]) {
         const name = runnerProjectName('trace', repo)
-        expectRunner(s.parent, name, repo)
-        expect(outputsOf(s.parent)[ciRunnerOutput(repo)]?.Value).toBe(name)
+        // in either layout through the custom resource: GitHub refusing its webhook never fails the deploy
+        expectRunner(s.parent, name, repo, 'custom')
+        expect(outputsOf(s.parent)[ciRunnerOutput(repo)]?.Value).toEqual(webhookOf(s.parent, name, 'custom'))
         expect(ciRunnerOutput(repo)).toBe(`CiRunner${projectHash(repo)}Project`)
         // no worker, roles, secret, memory or job definition of its own
         const own = JSON.stringify(s.all.toJSON()).match(new RegExp(`Project${projectHash(repo)}`, 'g')) ?? []
@@ -243,7 +272,7 @@ describe('the build-only repositories (ciRepositories)', () => {
   it('uses the connection the stack created, like the projects\' runners', () => {
     const s = synth(InfraPropsSchema.parse({ ...only, ciRepositories: [C], runners: {} }), 'CiCreated')
     const [id] = Object.keys(s.parent.findResources('AWS::CodeConnections::Connection'))
-    expectRunner(s.parent, runnerProjectName('trace', C), C, { 'Fn::GetAtt': [id, 'ConnectionArn'] })
+    expectRunner(s.parent, runnerProjectName('trace', C), C, 'custom', { 'Fn::GetAtt': [id, 'ConnectionArn'] })
   }, 300_000)
 
   it('with the token: a runner at once, on the account\'s GitHub credential; Docker for them alone with ciPrivileged', () => {
@@ -252,7 +281,7 @@ describe('the build-only repositories (ciRepositories)', () => {
     const ci = runnerOf(s.parent, runnerProjectName('trace', C)).project.Properties
     expect(ci.Source).not.toHaveProperty('Auth')
     expect(ci.Environment).toMatchObject({ PrivilegedMode: true })
-    expect(outputsOf(s.parent)[ciRunnerOutput(C)]?.Value).toBe(runnerProjectName('trace', C))
+    expect(outputsOf(s.parent)[ciRunnerOutput(C)]?.Value).toEqual(webhookOf(s.parent, runnerProjectName('trace', C), 'custom'))
     // the projects' runners keep runners.privileged (off)
     const project = Object.values(s.all.findResources('AWS::CodeBuild::Project') as Record<string, Res>).find((r) => r.Properties.Name === runnerProjectName('trace', B))
     expect(project?.Properties.Environment).toMatchObject({ PrivilegedMode: false })
@@ -268,4 +297,36 @@ describe('the build-only repositories (ciRepositories)', () => {
     expect(() => InfraPropsSchema.parse({ ...only, ciRepositories: many })).toThrow()
     expect(InfraPropsSchema.parse({ ...only, ciRepositories: many.slice(1) }).ciRepositories).toHaveLength(CI_REPOSITORIES_MAX)
   })
+})
+
+describe("the runners' webhooks (RunnerWebhooks)", () => {
+  /** The provider's function's statements (the one whose description names the webhooks). */
+  const webhookStatements = (t: Template): Statement[] => {
+    const fns = Object.entries(t.findResources('AWS::Lambda::Function') as Record<string, Res>).filter(([, r]) => String(r.Properties.Description).includes('GitHub webhooks'))
+    expect(fns).toHaveLength(1)
+    const roleId = ((fns[0] as [string, Res])[1].Properties.Role as { 'Fn::GetAtt': [string, string] })['Fn::GetAtt'][0]
+    return Object.values(t.findResources('AWS::IAM::Policy') as Record<string, Res>)
+      .filter((p) => JSON.stringify(p.Properties.Roles).includes(roleId))
+      .flatMap((p) => (p.Properties.PolicyDocument as { Statement: Statement[] }).Statement)
+  }
+
+  it("may touch only this installation's runner projects' webhooks, and the connection", () => {
+    const s = synth(InfraPropsSchema.parse(base), 'Hooks')
+    const st = webhookStatements(s.parent)
+    const hooks = st.find((x) => x.Sid === 'RunnerWebhooks')
+    expect(list(hooks?.Action).sort()).toEqual(['codebuild:BatchGetProjects', 'codebuild:CreateWebhook', 'codebuild:DeleteWebhook'])
+    expect(JSON.stringify(hooks?.Resource)).toContain(':project/trace-ci-*')
+    expect(list(st.find((x) => x.Sid === 'RunnerWebhooksConnection')?.Resource).sort()).toEqual([CONNECTION_ARN, CODESTAR_ARN].sort())
+    for (const x of st) expect(list(x.Resource)).not.toContain('*')
+    // and with the token, no connection statement
+    const token = webhookStatements(synth(InfraPropsSchema.parse({ ...base, runners: { auth: 'token' } }), 'HooksToken').parent)
+    expect(token.map((x) => x.Sid)).not.toContain('RunnerWebhooksConnection')
+  }, 300_000)
+
+  it('is made only where a runner uses it: not while the connection is pending, nor for a flat stack with no build-only repository', () => {
+    const fns = (t: Template): number => Object.values(t.findResources('AWS::Lambda::Function') as Record<string, Res>).filter((r) => String(r.Properties.Description).includes('GitHub webhooks')).length
+    expect(fns(synth(InfraPropsSchema.parse({ ...base, runners: { connectionReady: false } }), 'HooksPending').all)).toBe(0)
+    expect(fns(synth(InfraPropsSchema.parse({ ...base, layout: 'flat' }), 'HooksFlat').all)).toBe(0)
+    expect(fns(synth(InfraPropsSchema.parse({ ...base, layout: 'flat', repositories: [B], ciRepositories: [A] }), 'HooksFlatCi').all)).toBe(1)
+  }, 600_000)
 })

@@ -239,6 +239,9 @@ export const InfraPropsSchema = z.object({
      * against a pending one, so the tools deploy with false first (the connection, no runners), wait for the person,
      * and deploy again with true. True by default, so a plain `cdk deploy` never removes runners that exist. */
     connectionReady: z.boolean().default(true),
+    /** The runner webhooks' Attempt (src/infra/runner.ts): unset, a new one every deploy, so a webhook GitHub refused
+     * is tried again on the next deploy; set only to keep templates the same between synths (tests). */
+    webhookAttempt: z.string().min(1).optional(),
     /** the CodeBuild compute type of a job (a job can ask for another with an `instance-size:` label) */
     computeType: z.enum(['BUILD_GENERAL1_MEDIUM', 'BUILD_GENERAL1_LARGE', 'BUILD_GENERAL1_XLARGE', 'BUILD_GENERAL1_2XLARGE']).default('BUILD_GENERAL1_LARGE'),
     /** the CodeBuild image jobs run on (Ubuntu, like the GitHub-hosted runners the workflows were written for) */
