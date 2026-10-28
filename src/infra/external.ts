@@ -32,7 +32,7 @@ export const EXTERNAL_ALLOWED_SCOPES = [`${EXTERNAL_RESOURCE_SERVER}/read`, `${E
 
 /** What the API role may do with the pool's app clients: the connected systems' keys (services.*, admins only). */
 export const CONNECTED_SYSTEM_CLIENT_ACTIONS = [
-  'cognito-idp:CreateUserPoolClient', 'cognito-idp:UpdateUserPoolClient', 'cognito-idp:DeleteUserPoolClient', 'cognito-idp:DescribeUserPoolClient',
+  'cognito-idp:CreateUserPoolClient', 'cognito-idp:UpdateUserPoolClient', 'cognito-idp:DeleteUserPoolClient',
   'cognito-idp:AddUserPoolClientSecret', 'cognito-idp:DeleteUserPoolClientSecret', 'cognito-idp:ListUserPoolClientSecrets',
 ] as const
 

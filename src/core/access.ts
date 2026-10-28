@@ -30,6 +30,14 @@
  *
  * This module only decides. The user-facing API (src/api) enforces it on every request, and changes the Cognito
  * group membership when an admin changes someone's class.
+ *
+ * Connected systems (docs/external-access.md) are outside systems that call trace with a client-credentials token. Each
+ * is a row in `services` (its Cognito app client id is its `sub`) and is assigned to projects in the same
+ * `assignments` table, with a part, like a person. Its class is never stored: it is derived from its scopes, write →
+ * user (it may be a contributor), read only → guest (always a reviewer). A system is never an admin, whatever its
+ * token's groups say. Who did something is shown as `service:<name>` where a person's email would be. Changes to a
+ * system (created, scopes changed, disabled, secrets rotated, deleted) go to `service_log`; its assignments to the
+ * assignment log as for a person.
  */
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
@@ -63,16 +71,32 @@ export class PartRefused extends Error {
 
 export const RepoSlug = z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO').transform((s) => s.toLowerCase())
 
-/** The signed-in person, from a verified Cognito token. */
+/** The scopes a connected system may hold (the resource server's `read` and `write`). */
+export const SERVICE_SCOPES = ['read', 'write'] as const
+export type ServiceScope = (typeof SERVICE_SCOPES)[number]
+
+/** The signed-in person (from a verified Cognito token), or a connected system (kind 'service'). */
 export interface Principal {
   sub: string
   email: string | null
   groups: readonly string[]
+  /** 'service': a connected system (src/api/service-auth.ts); absent or 'person': a person */
+  kind?: 'person' | 'service' | undefined
+  /** a connected system's name (for logs and records: service:<name>) */
+  name?: string | undefined
+  /** a connected system's scopes for this request: its token's, within what it has now */
+  scopes?: readonly ServiceScope[] | undefined
 }
 
-/** A person's class from their groups; the highest wins when they are in several. Null: no access at all. */
+export const isService = (p: Principal): boolean => p.kind === 'service'
+
+/** Who did it, for people to read: a person's email (else their sub), or `service:<name>` for a connected system. */
+export const who = (p: Principal): string => (isService(p) ? `service:${p.name ?? p.sub}` : p.email ?? p.sub)
+
+/** A person's class from their groups; the highest wins when they are in several. Null: no access at all. A
+ * connected system is never an admin, whatever its groups say. */
 export function classOf(p: Principal): PersonClass | null {
-  for (const c of CLASSES) if (p.groups.includes(GROUPS[c])) return c
+  for (const c of CLASSES) if (p.groups.includes(GROUPS[c]) && !(c === 'admin' && isService(p))) return c
   return null
 }
 
@@ -98,6 +122,20 @@ CREATE INDEX IF NOT EXISTS assignments_repo ON assignments(repo);
 CREATE TABLE IF NOT EXISTS assignment_log (
   at REAL NOT NULL, by TEXT NOT NULL, sub TEXT NOT NULL, repo TEXT,
   action TEXT NOT NULL CHECK (action IN ('assign', 'unassign', 'class')), detail TEXT   -- assign: "part: reviewer → contributor"
+);
+CREATE TABLE IF NOT EXISTS services (
+  client_id TEXT PRIMARY KEY,     -- the Cognito app client id; also its sub
+  name TEXT NOT NULL UNIQUE,      -- service:<name> in logs and records
+  description TEXT NOT NULL DEFAULT '',
+  scopes TEXT NOT NULL CHECK (scopes IN ('read', 'read write')),   -- write → class user, read only → guest
+  disabled INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL,
+  created_at REAL NOT NULL,
+  last_used REAL
+);
+CREATE TABLE IF NOT EXISTS service_log (
+  at REAL NOT NULL, by TEXT NOT NULL, client_id TEXT NOT NULL, name TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('create', 'update', 'rotate', 'retire_secret', 'delete')), detail TEXT
 );
 CREATE TABLE IF NOT EXISTS preferences (
   sub TEXT PRIMARY KEY,           -- Cognito sub
@@ -157,7 +195,13 @@ function rowToAssignment(r: Record<string, unknown>): Assignment {
   }
 }
 
-const by = (p: Principal): string => p.email ?? p.sub
+const by = who
+
+/** The email and class of an assignment's holder: a person's from `users`, a connected system's derived from it
+ * (`service:<name>`; write → user, read only → guest). Joined as `u` and `s`. */
+const HOLDER = `COALESCE(u.email, 'service:' || s.name) AS email,
+  COALESCE(u.class, CASE WHEN s.client_id IS NULL THEN NULL WHEN s.scopes = 'read write' THEN 'user' ELSE 'guest' END) AS class`
+const HOLDER_JOIN = 'LEFT JOIN users u ON u.sub = a.sub LEFT JOIN services s ON s.client_id = a.sub'
 
 function requireAdmin(p: Principal, what: string): void {
   if (!isAdmin(p)) throw new AccessDenied(`only an admin can ${what}`)
@@ -283,7 +327,7 @@ export async function assign(admin: Principal, target: { sub: string; email?: st
       .run(target.sub, slug, by(admin), now(), part)
     const detail = before === null ? `part: ${part}` : before !== part ? `part: ${before} → ${part}` : null
     db.prepare('INSERT INTO assignment_log VALUES (?,?,?,?,?,?)').run(now(), by(admin), target.sub, slug, 'assign', detail)
-    const r = db.prepare('SELECT a.*, u.email, u.class FROM assignments a LEFT JOIN users u ON u.sub = a.sub WHERE a.sub=? AND a.repo=?').get(target.sub, slug)
+    const r = db.prepare(`SELECT a.*, ${HOLDER} FROM assignments a ${HOLDER_JOIN} WHERE a.sub=? AND a.repo=?`).get(target.sub, slug)
     return rowToAssignment(r as Record<string, unknown>)
   })
 }
@@ -308,7 +352,7 @@ export async function assignments(admin: Principal, filter: { repo?: string; sub
     const args: string[] = []
     if (filter.repo) { where.push('a.repo=?'); args.push(RepoSlug.parse(filter.repo)) }
     if (filter.sub) { where.push('a.sub=?'); args.push(filter.sub) }
-    return db.prepare(`SELECT a.*, u.email, u.class FROM assignments a LEFT JOIN users u ON u.sub = a.sub${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY a.repo, u.email`)
+    return db.prepare(`SELECT a.*, ${HOLDER} FROM assignments a ${HOLDER_JOIN}${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY a.repo, email`)
       .all(...args).map((r) => rowToAssignment(r as Record<string, unknown>))
   } finally {
     db.close()
@@ -366,12 +410,215 @@ export async function membersOf(repo: string): Promise<Member[]> {
   const slug = RepoSlug.parse(repo)
   const db = await read()
   try {
-    return db.prepare('SELECT a.sub, a.part, u.email, u.class FROM assignments a LEFT JOIN users u ON u.sub = a.sub WHERE a.repo=? ORDER BY u.email, a.sub')
+    return db.prepare(`SELECT a.sub, a.part, ${HOLDER} FROM assignments a ${HOLDER_JOIN} WHERE a.repo=? ORDER BY email, a.sub`)
       .all(slug).map((r) => {
         const cls = asClass(r.class)
         return { sub: String(r.sub), email: r.email === null || r.email === undefined ? null : String(r.email), class: cls, part: capped(cls, asPart(r.part) ?? defaultPart(cls)) }
       })
   } finally {
     db.close()
+  }
+}
+
+// ------------------------------------------------------------------ connected systems
+
+/** A connected system's name: short, lower case, unique (docs/external-access.md). */
+export const ServiceName = z.string().regex(/^[a-z][a-z0-9-]{1,39}$/, 'a name of 2 to 40 lower-case letters, digits and dashes, starting with a letter')
+
+export interface Service {
+  client_id: string
+  name: string
+  description: string
+  scopes: ServiceScope[]
+  disabled: boolean
+  created_by: string
+  created_at: string
+  last_used: string | null
+}
+
+/** The scopes as stored ('read' | 'read write'): write always brings read. */
+const scopesText = (s: readonly ServiceScope[]): 'read' | 'read write' => (s.includes('write') ? 'read write' : 'read')
+const scopesOf = (v: unknown): ServiceScope[] => (v === 'read write' ? ['read', 'write'] : ['read'])
+/** A system's class, from its scopes: write → user (it may be a contributor), read only → guest (always a reviewer). */
+export const serviceClass = (s: readonly ServiceScope[]): PersonClass => (s.includes('write') ? 'user' : 'guest')
+
+const iso = (v: unknown): string | null => (v === null || v === undefined ? null : new Date(Number(v) * 1000).toISOString())
+
+function rowToService(r: Record<string, unknown>): Service {
+  return {
+    client_id: String(r.client_id), name: String(r.name), description: String(r.description ?? ''), scopes: scopesOf(r.scopes),
+    disabled: Number(r.disabled) === 1, created_by: String(r.created_by), created_at: iso(r.created_at) ?? '', last_used: iso(r.last_used),
+  }
+}
+
+/** Already a connected system by that name. */
+export class ServiceExists extends Error {
+  override name = 'ServiceExists'
+}
+
+const logService = (db: DatabaseSync, admin: Principal, s: { client_id: string; name: string }, action: 'create' | 'update' | 'rotate' | 'retire_secret' | 'delete', detail: string | null): void => {
+  db.prepare('INSERT INTO service_log VALUES (?,?,?,?,?,?)').run(now(), by(admin), s.client_id, s.name, action, detail)
+}
+
+/** Record a new connected system (admins only); its Cognito app client exists already (the caller made it). */
+export async function createService(admin: Principal, s: { client_id: string; name: string; description?: string | undefined; scopes: readonly ServiceScope[] }): Promise<Service> {
+  requireAdmin(admin, 'connect systems')
+  const name = ServiceName.parse(s.name)
+  return update((db) => {
+    if (db.prepare('SELECT 1 FROM services WHERE name=? OR client_id=?').get(name, s.client_id)) throw new ServiceExists(`a connected system called ${name} exists already`)
+    db.prepare('INSERT INTO services (client_id, name, description, scopes, disabled, created_by, created_at, last_used) VALUES (?,?,?,?,0,?,?,NULL)')
+      .run(s.client_id, name, s.description ?? '', scopesText(s.scopes), by(admin), now())
+    logService(db, admin, { client_id: s.client_id, name }, 'create', `scopes: ${scopesText(s.scopes)}`)
+    return rowToService(db.prepare('SELECT * FROM services WHERE client_id=?').get(s.client_id) as Record<string, unknown>)
+  })
+}
+
+/** A connected system by its client id (the token's client_id), or null. No admin check: the verifier asks. */
+export async function getService(clientId: string): Promise<Service | null> {
+  const db = await read()
+  try {
+    const r = db.prepare('SELECT * FROM services WHERE client_id=?').get(clientId)
+    return r ? rowToService(r as Record<string, unknown>) : null
+  } finally {
+    db.close()
+  }
+}
+
+/** A connected system by its name, or null (admins only). */
+export async function serviceByName(admin: Principal, name: string): Promise<Service | null> {
+  requireAdmin(admin, 'read connected systems')
+  const db = await read()
+  try {
+    const r = db.prepare('SELECT * FROM services WHERE name=?').get(name)
+    return r ? rowToService(r as Record<string, unknown>) : null
+  } finally {
+    db.close()
+  }
+}
+
+/** Every connected system, by name (admins only). */
+export async function listServices(admin: Principal): Promise<Service[]> {
+  requireAdmin(admin, 'list connected systems')
+  const db = await read()
+  try {
+    return (db.prepare('SELECT * FROM services ORDER BY name').all() as Record<string, unknown>[]).map(rowToService)
+  } finally {
+    db.close()
+  }
+}
+
+/**
+ * Change a connected system's description, scopes or disabled flag (admins only). Losing write makes it a guest: every
+ * part it holds becomes reviewer (written, and logged as a part change), and the cap holds at every check besides.
+ */
+export async function updateService(admin: Principal, name: string, change: { description?: string | undefined; scopes?: readonly ServiceScope[] | undefined; disabled?: boolean | undefined }): Promise<Service> {
+  requireAdmin(admin, 'change connected systems')
+  return update((db) => {
+    const r = db.prepare('SELECT * FROM services WHERE name=?').get(name)
+    if (!r) throw new AccessDenied(`no connected system called ${name}`)
+    const before = rowToService(r as Record<string, unknown>)
+    const words: string[] = []
+    if (change.description !== undefined && change.description !== before.description) words.push('description')
+    if (change.scopes !== undefined && scopesText(change.scopes) !== scopesText(before.scopes)) words.push(`scopes: ${scopesText(before.scopes)} → ${scopesText(change.scopes)}`)
+    if (change.disabled !== undefined && change.disabled !== before.disabled) words.push(change.disabled ? 'disabled' : 'enabled')
+    db.prepare('UPDATE services SET description=?, scopes=?, disabled=? WHERE client_id=?').run(
+      change.description ?? before.description, scopesText(change.scopes ?? before.scopes), (change.disabled ?? before.disabled) ? 1 : 0, before.client_id)
+    if (words.length) logService(db, admin, before, 'update', words.join('; '))
+    // down to read only: a guest, so every part it holds is a reviewer's, written and logged as a part change
+    if (change.scopes !== undefined && !change.scopes.includes('write')) {
+      for (const a of db.prepare("SELECT repo FROM assignments WHERE sub=? AND part='contributor'").all(before.client_id)) {
+        db.prepare("UPDATE assignments SET part='reviewer', assigned_by=?, assigned_at=? WHERE sub=? AND repo=?").run(by(admin), now(), before.client_id, String(a.repo))
+        db.prepare('INSERT INTO assignment_log VALUES (?,?,?,?,?,?)').run(now(), by(admin), before.client_id, String(a.repo), 'assign', 'part: contributor → reviewer')
+      }
+    }
+    return rowToService(db.prepare('SELECT * FROM services WHERE client_id=?').get(before.client_id) as Record<string, unknown>)
+  })
+}
+
+/** Note a secret rotated or retired (admins only): the log keeps the secret's id and never its value. */
+export async function logServiceSecret(admin: Principal, s: Service, action: 'rotate' | 'retire_secret', secretId: string | null): Promise<void> {
+  requireAdmin(admin, 'change connected systems')
+  await update((db) => { logService(db, admin, s, action, secretId ? `secret ${secretId}` : null) })
+}
+
+/** Remove a connected system and every assignment it holds (admins only), each logged. Returns whether it existed. */
+export async function deleteService(admin: Principal, name: string): Promise<boolean> {
+  requireAdmin(admin, 'remove connected systems')
+  return update((db) => {
+    const r = db.prepare('SELECT * FROM services WHERE name=?').get(name)
+    if (!r) return false
+    const s = rowToService(r as Record<string, unknown>)
+    for (const a of db.prepare('SELECT repo FROM assignments WHERE sub=?').all(s.client_id)) {
+      db.prepare('INSERT INTO assignment_log VALUES (?,?,?,?,?,?)').run(now(), by(admin), s.client_id, String(a.repo), 'unassign', null)
+    }
+    db.prepare('DELETE FROM assignments WHERE sub=?').run(s.client_id)
+    db.prepare('DELETE FROM services WHERE client_id=?').run(s.client_id)
+    logService(db, admin, s, 'delete', null)
+    return true
+  })
+}
+
+const lastTouched = new Map<string, number>()
+
+/** Record that a connected system called (at most once a minute per system per process). Never throws. */
+export async function touchLastUsed(clientId: string, at: number = Date.now()): Promise<boolean> {
+  const before = lastTouched.get(clientId)
+  if (before !== undefined && at - before < 60_000) return false
+  lastTouched.set(clientId, at)
+  try {
+    await update((db) => { db.prepare('UPDATE services SET last_used=? WHERE client_id=?').run(at / 1000, clientId) })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Put a connected system on `repo` with a part (admins only). A read-only system is a guest, so always a reviewer:
+ * asking for contributor is refused (PartRefused), as for a guest person. Logged in the assignment log.
+ */
+export async function assignService(admin: Principal, s: Service, repo: string, part?: Part | undefined): Promise<Assignment> {
+  requireAdmin(admin, 'assign connected systems to projects')
+  const slug = RepoSlug.parse(repo)
+  const cls = serviceClass(s.scopes)
+  if (cls === 'guest' && part === 'contributor') throw new PartRefused(READ_ONLY_REVIEWER)
+  return update((db) => {
+    const before = asPart(db.prepare('SELECT part FROM assignments WHERE sub=? AND repo=?').get(s.client_id, slug)?.part)
+    const p = capped(cls, part ?? before ?? defaultPart(cls))
+    db.prepare(`INSERT INTO assignments (sub, repo, assigned_by, assigned_at, part) VALUES (?,?,?,?,?)
+      ON CONFLICT(sub, repo) DO UPDATE SET assigned_by=excluded.assigned_by, assigned_at=excluded.assigned_at, part=excluded.part`)
+      .run(s.client_id, slug, by(admin), now(), p)
+    const detail = before === null ? `part: ${p}` : before !== p ? `part: ${before} → ${p}` : null
+    db.prepare('INSERT INTO assignment_log VALUES (?,?,?,?,?,?)').run(now(), by(admin), s.client_id, slug, 'assign', detail)
+    const r = db.prepare(`SELECT a.*, ${HOLDER} FROM assignments a ${HOLDER_JOIN} WHERE a.sub=? AND a.repo=?`).get(s.client_id, slug)
+    return rowToAssignment(r as Record<string, unknown>)
+  })
+}
+
+/** The words refusing a read-only system as a contributor. */
+export const READ_ONLY_REVIEWER = 'A system with only the read scope can only be a reviewer. Give it the write scope first, then make it a contributor.'
+
+/** A connected system's own log (created, scopes, disabled, secrets, deleted), newest first, in words (admins only). */
+export async function serviceLog(admin: Principal, clientId: string, limit = 200): Promise<{ at: string; by: string; action: string; detail: string | null; text: string }[]> {
+  requireAdmin(admin, 'read the connected systems\' log')
+  const db = await read()
+  try {
+    return (db.prepare('SELECT at, by, action, detail FROM service_log WHERE client_id=? ORDER BY at DESC LIMIT ?').all(clientId, limit) as Record<string, unknown>[]).map((r) => {
+      const e = { at: new Date(Number(r.at) * 1000).toISOString(), by: String(r.by), action: String(r.action), detail: r.detail === null ? null : String(r.detail) }
+      return { ...e, text: serviceWords(e) }
+    })
+  } finally {
+    db.close()
+  }
+}
+
+function serviceWords(e: { by: string; action: string; detail: string | null }): string {
+  switch (e.action) {
+    case 'create': return `${e.by} connected it (${e.detail ?? 'read'}).`
+    case 'update': return `${e.by} changed it: ${e.detail ?? 'nothing'}.`
+    case 'rotate': return `${e.by} added a new secret${e.detail ? ` (${e.detail})` : ''}.`
+    case 'retire_secret': return `${e.by} removed an old secret${e.detail ? ` (${e.detail})` : ''}.`
+    case 'delete': return `${e.by} deleted it.`
+    default: return `${e.by}: ${e.action}.`
   }
 }
