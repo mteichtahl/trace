@@ -163,10 +163,10 @@ function System({ s, tokenUrl }: { s: Service; tokenUrl?: string }) {
         <p className="mt-2 text-xs text-muted-foreground">{scope === 'read' ? 'A read-only system is always a reviewer.' : `Contributor: ${PART_LINES.contributor.line.toLowerCase()} Reviewer: ${PART_LINES.reviewer.line.toLowerCase()}`}</p>
       </Section>
 
-      <Section label="Keys" action={<Button size="sm" variant="outline" onClick={() => void rotate()} disabled={busy === 'rotate' || secrets.length >= 2}>{busy === 'rotate' ? <Loader2 className="animate-spin" /> : <RotateCw />} Make a new secret</Button>}>
+      <Section label="Keys" action={<Button size="sm" variant="outline" onClick={() => void rotate()} disabled={busy === 'rotate' || secrets.length >= 2} title={secrets.length >= 2 ? 'It already has two secrets: retire the old one first' : undefined}>{busy === 'rotate' ? <Loader2 className="animate-spin" /> : <RotateCw />} Make a new secret</Button>}>
         {secrets.length >= 2 && (
           <div className="mb-3 rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm">
-            <p><strong className="font-semibold">Retire the older secret once {s.name} uses the new one.</strong> Two secrets work at once so the system can switch without stopping; leaving the old one in place keeps a key you no longer need. A system can have two secrets at most.</p>
+            <p><strong className="font-semibold">Retire the older secret once {s.name} uses the new one.</strong> Two secrets work at once so the system can switch without stopping; leaving the old one in place keeps a key you no longer need. A system can have two secrets at most, so retire the old one before making another.</p>
           </div>
         )}
         {secrets.length === 0 ? (
