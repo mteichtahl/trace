@@ -1,6 +1,6 @@
 /** `tracectl services …`: what it asks the API (a fake one) and what it prints. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cmdServices, keysText, parseProject, since } from '../../src/login/services.js'
+import { cmdServices, keysText, parseProject, plain, since } from '../../src/login/services.js'
 import { ApiError } from '../../src/login/invoke.js'
 
 const NOW = Date.parse('2026-10-28T10:00:00Z')
@@ -124,6 +124,17 @@ describe('tracectl services', () => {
     expect(text()).toContain('Secret:     NEW-SECRET')
     expect(text()).toMatch(/shown once/)
     expect(text()).toMatch(/scope=trace-external\/read"/)
+    // what to do when the old secret leaked
+    expect(text()).toMatch(/If the old secret leaked: disable ci-dashboard first .*then rotate, retire the old secret, and enable it again/)
+  })
+
+  it('prints a description without its control characters or escape sequences', async () => {
+    const evil = 'Wall screen\u001b[2J\u001b[1;1H\u001b]0;pwned\u0007\rFAKE\u0000\u009b31m line'
+    answer = (action) => (action === 'services.list' ? { services: [{ ...SERVICES[0], description: evil, created_by: 'x\u001b[31m@y' }] } : {})
+    expect(await run(['show', 'ci-dashboard'])).toBe(0)
+    expect(text()).toContain('Wall screen FAKE line')
+    expect(text()).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/)
+    expect(plain('a\u001b[0mb\u001bPc\td\ne')).toBe('abc d e')
   })
 
   it('asks before deleting unless --yes', async () => {

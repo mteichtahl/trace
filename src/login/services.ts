@@ -16,6 +16,8 @@
  *   tracectl services history NAME                           its assignment log, in words
  *
  * `--json` prints the API's answer as it came. The secret is printed to the terminal only: never to a file or a log.
+ * Text an admin typed (a description, who did what) is printed through `plain`: control characters and terminal escape
+ * sequences are taken out, so a description cannot move the cursor, rewrite earlier lines or change the terminal.
  */
 import { createInterface } from 'node:readline'
 import { parseArgs } from 'node:util'
@@ -35,6 +37,21 @@ export const SERVICES_USAGE = [
   '         | rotate NAME | retire-secret NAME SECRET_ID | delete NAME [--yes] | history NAME',
   '       (add --json for the API\'s answer as it came)',
 ].join('\n')
+
+/** Text for the terminal: escape sequences (CSI, OSC, and other ESC sequences) and control characters (C0, DEL, C1)
+ * taken out, a line break or tab made a space. */
+export function plain(s: string): string {
+  return s
+    // eslint-disable-next-line no-control-regex
+    .replace(/(\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/g, '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/\u001b\][^\u0007\u001b]*(\u0007|\u001b\\)?/g, '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/\u001b[@-_]?/g, '')
+    .replace(/[\t\n\r]/g, ' ')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+}
 
 /** What the API says when the installation has not turned external access on (src/api; docs/external-access.md). */
 export const OFF = /external access is off/i
@@ -125,7 +142,7 @@ export function keysText(o: { name: string; client_id: string; secret: string; s
 }
 
 function listLine(s: ServiceRow, now = Date.now()): string {
-  return `${s.name.padEnd(24)} ${canWords(s.scopes).padEnd(15)} ${(s.disabled ? 'disabled' : 'active').padEnd(9)} ${String(s.projects.length).padStart(2)} project${s.projects.length === 1 ? ' ' : 's'}  last used ${since(s.last_used, now)}`
+  return `${plain(s.name).padEnd(24)} ${canWords(s.scopes).padEnd(15)} ${(s.disabled ? 'disabled' : 'active').padEnd(9)} ${String(s.projects.length).padStart(2)} project${s.projects.length === 1 ? ' ' : 's'}  last used ${since(s.last_used, now)}`
 }
 
 async function confirmDelete(name: string): Promise<boolean> {
@@ -171,12 +188,12 @@ export async function cmdServices(argv: string[], deps: ServicesDeps = {}): Prom
         const s = z.object({ services: z.array(ServiceSchema) }).loose().parse(r).services.find((x) => x.name === n)
         if (!s) { err(`trace: no connected system called ${n} (tracectl services list)`); return 1 }
         if (values.json) { json(s); return 0 }
-        out(`${s.name}  ${s.disabled ? 'disabled: its keys are refused' : 'active'}`)
-        if (s.description) out(`  ${s.description}`)
+        out(`${plain(s.name)}  ${s.disabled ? 'disabled: its keys are refused' : 'active'}`)
+        if (s.description) out(`  ${plain(s.description)}`)
         out(`  Can:        ${canWords(s.scopes)}`)
         out(`  Client id:  ${s.client_id}`)
         out(`  Last used:  ${since(s.last_used, now)}`)
-        if (s.created_at) out(`  Created:    ${s.created_at.slice(0, 16).replace('T', ' ')}${s.created_by ? ` by ${s.created_by}` : ''}`)
+        if (s.created_at) out(`  Created:    ${s.created_at.slice(0, 16).replace('T', ' ')}${s.created_by ? ` by ${plain(s.created_by)}` : ''}`)
         out(s.projects.length ? '  Projects:' : '  Projects:   none yet: it sees nothing until you put it on one (tracectl services assign)')
         for (const p of s.projects) out(`    ${p.repo.padEnd(40)} ${p.part}`)
         if (s.secrets) {
@@ -250,6 +267,7 @@ export async function cmdServices(argv: string[], deps: ServicesDeps = {}): Prom
         out(`A new secret for ${n} (id ${c.secret_id}). The old one keeps working until you retire it.\n`)
         out(keysText({ name: n, client_id: clientId, scopes, ...c, token_url: c.token_url ?? tokenUrlFallback() }))
         out(`\nOnce ${n} uses the new secret, retire the old one: tracectl services show ${n} lists the ids, then tracectl services retire-secret ${n} OLD_ID`)
+        out(`If the old secret leaked: disable ${n} first (tracectl services disable ${n}), then rotate, retire the old secret, and enable it again.`)
         return 0
       }
       case 'retire-secret': {
@@ -276,7 +294,7 @@ export async function cmdServices(argv: string[], deps: ServicesDeps = {}): Prom
         if (values.json) { json(r); return 0 }
         const entries = z.object({ entries: z.array(z.object({ at: z.string(), text: z.string() }).loose()) }).loose().parse(r).entries
         if (!entries.length) out(`Nothing recorded for ${n} yet.`)
-        for (const e of entries) out(`${e.at.slice(0, 16).replace('T', ' ')}  ${e.text}`)
+        for (const e of entries) out(`${plain(e.at.slice(0, 16)).replace('T', ' ')}  ${plain(e.text)}`)
         return 0
       }
     }

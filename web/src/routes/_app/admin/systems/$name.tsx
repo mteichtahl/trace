@@ -190,6 +190,7 @@ function System({ s, tokenUrl }: { s: Service; tokenUrl?: string }) {
           </ul>
         )}
         <p className="mt-2 text-xs text-muted-foreground">Secret values are shown once, when they are made, and never again. Lost one? Make a new secret, switch the system to it, then retire the old one.</p>
+        <p className="mt-1 text-xs text-muted-foreground"><strong className="font-medium text-foreground">Leaked one?</strong> Disable {s.name} first (Danger zone), then make a new secret, retire the old one, and enable it again. Until the old secret is retired it still works, and disabling also stops tokens already given out.</p>
       </Section>
 
       <Section label="History">

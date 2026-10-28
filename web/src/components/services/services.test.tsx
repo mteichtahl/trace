@@ -151,6 +151,11 @@ describe('Keys panel', () => {
     expect(onDone).toHaveBeenCalled()
   })
 
+  it('after a rotation, says to keep the system disabled until the old secret is retired if it leaked', () => {
+    wrap(<KeysPanel keys={{ ...keys, secret_id: 's2' }} onDone={() => undefined} />)
+    expect(screen.getByText(/If the old one leaked, keep the system disabled until the old secret is retired\./)).toBeInTheDocument()
+  })
+
   it('makes the three snippets from the addresses and scopes', () => {
     const s = snippets({ ...keys, scopes: ['read', 'write'] })
     expect(s.token).toContain('-u "client-123:$TRACE_CLIENT_SECRET"')

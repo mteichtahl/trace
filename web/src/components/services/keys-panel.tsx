@@ -67,7 +67,7 @@ export function KeysPanel({ keys, onDone, className }: { keys: ShownKeys; onDone
         <div className="min-w-0">
           <h2 id="keys-title" className="font-semibold">{keys.secret_id ? `A new secret for ${keys.name}` : `Keys for ${keys.name}`}</h2>
           <p className="text-sm text-muted-foreground">
-            {keys.secret_id ? 'The old secret keeps working until you retire it, so the system can switch over without stopping.' : 'Give these to the system. It swaps them for a sign-in token, then calls trace with the token.'}
+            {keys.secret_id ? 'The old secret keeps working until you retire it, so the system can switch over without stopping. If the old one leaked, keep the system disabled until the old secret is retired.' : 'Give these to the system. It swaps them for a sign-in token, then calls trace with the token.'}
           </p>
         </div>
       </div>
