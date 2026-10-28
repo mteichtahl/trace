@@ -78,6 +78,17 @@ describe('observability in the stack', () => {
     expect(cr.Properties?.SamplingPercent).toBeUndefined()
     const fn = Object.entries(t.findResources('AWS::IAM::Policy')).filter(([id]) => id.startsWith('ObservabilityTransactionSearchFn')).map(([, p]) => JSON.stringify(p)).join()
     for (const a of ['xray:GetTraceSegmentDestination', 'xray:UpdateTraceSegmentDestination', 'xray:UpdateIndexingRule', 'logs:PutResourcePolicy', 'logs:DescribeResourcePolicies']) expect(fn).toContain(a)
+    // the rest of AWS's documented role for turning it on: UpdateTraceSegmentDestination makes the span log groups and
+    // sets their retention with the caller's credentials, scoped to those two groups in this account and region only
+    const statements = Object.entries(t.findResources('AWS::IAM::Policy') as Record<string, { Properties: { PolicyDocument: { Statement: { Sid?: string; Action: string | string[]; Resource: unknown; Condition?: unknown }[] } } }>)
+      .filter(([id]) => id.startsWith('ObservabilityTransactionSearchFn')).flatMap(([, p]) => p.Properties.PolicyDocument.Statement)
+    const groups = statements.find((x) => x.Sid === 'TransactionSearchLogGroups')
+    expect([groups?.Action].flat().sort()).toEqual(['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutRetentionPolicy'])
+    const where = JSON.stringify(groups?.Resource)
+    for (const g of ['log-group:aws/spans', 'log-group:aws/spans:*', 'log-group:/aws/application-signals/data', 'log-group:/aws/application-signals/data:*']) expect(where).toContain(g)
+    expect(where).not.toContain('"*"')
+    expect(statements.find((x) => x.Sid === 'TransactionSearchSignalsRole')?.Condition).toEqual({ StringLike: { 'iam:AWSServiceName': 'application-signals.cloudwatch.amazonaws.com' } })
+    expect(JSON.stringify(statements.find((x) => x.Sid === 'TransactionSearchSignalsChannel')?.Resource)).toContain('channel/aws-service-channel/application-signals/*')
     // the image builds are still the only CloudFormation::CustomResource ones
     t.resourceCountIs('AWS::CloudFormation::CustomResource', 2)
   })
