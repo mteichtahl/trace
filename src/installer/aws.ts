@@ -550,6 +550,12 @@ export interface ConnectionWait {
 export const CONNECTION_POLL_MS = 15_000
 export const CONNECTION_TIMEOUT_MS = 30 * 60_000
 
+/** What to tell the person when GitHub refused some runners' webhooks (src/infra/lambda/runner-webhook.ts): those
+ * repositories' jobs stay on GitHub's runners, and every later deploy tries again. `access`: connectorAccessNote, with
+ * a connection (null with the token). */
+export const webhookRefusedNote = (repos: readonly string[], access: string | null): string =>
+  `GitHub refused the build runner's webhook for ${repos.join(', ')}, so ${repos.length === 1 ? 'its' : 'their'} workflows keep running on GitHub's runners for now; the next deploy (a merge to main, or running the installer again) tries again. ${access ?? 'The GitHub token CodeBuild uses needs admin rights on the repository (the admin:repo_hook scope).'} An old CodeBuild webhook left on the repository (Settings > Webhooks) also blocks a new one: delete it.`
+
 /** What to tell the person about the AWS Connector for GitHub app's repository access. */
 export const connectorAccessNote = (repos: readonly string[]): string =>
   `The AWS Connector for GitHub app must be allowed to reach every onboarded repository (${repos.join(', ')}): a repository it cannot reach gets no runner, and its workflow jobs never start. Check it on GitHub under Settings > Applications > AWS Connector for GitHub > Configure (the organization's settings for an organization's repositories).`

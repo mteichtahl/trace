@@ -28,7 +28,8 @@ export interface Synth {
 process.env.TRACE_WEB_SKIP_BUNDLE = '1'
 
 export function synth(cfg: InfraProps, id = 'TraceStack'): Synth {
-  const stack = new TraceStack(new App(), id, cfg)
+  // the runners' webhook Attempt is a new timestamp every deploy (src/infra/runner.ts): fixed here, so templates compare
+  const stack = new TraceStack(new App(), id, { ...cfg, runners: { ...cfg.runners, webhookAttempt: cfg.runners.webhookAttempt ?? 'test' } })
   const parent = Template.fromStack(stack)
   const nested = new Map<string, Template>()
   const nestedStacks = new Map<string, NestedStack>()

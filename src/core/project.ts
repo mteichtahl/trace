@@ -78,6 +78,12 @@ export const runnerProjectName = (prefix: string, repository: string): string =>
 /** The repository variable naming that runner project. The installer sets it only once the runner project exists, so
  * it is the workflows' "the AWS runner is there" signal: set, every job runs on it; unset, on GITHUB_HOSTED_FALLBACK. */
 export const RUNNER_VARIABLE = 'TRACE_CODEBUILD_PROJECT'
+/** What a runner project's output says when the project exists but GitHub refused its webhook (src/infra/lambda/
+ * runner-webhook.ts): there is no runner to send jobs to, so the variable stays unset. */
+export const RUNNER_NONE = 'none'
+/** The runner project a repository's TRACE_CODEBUILD_PROJECT should name, from its stack output: null when there is
+ * none (no output, or RUNNER_NONE), when the repository's jobs stay on GitHub's runners. */
+export const runnerOf = (output: string | null | undefined): string | null => (output && output !== RUNNER_NONE ? output : null)
 /** The GitHub-hosted runner every workflow job uses while its repository has no AWS CodeBuild runner yet. */
 export const GITHUB_HOSTED_FALLBACK = 'ubuntu-24.04'
 /** The AWS CodeConnections connection to GitHub a stack creates when it is given none (src/infra/runner.ts

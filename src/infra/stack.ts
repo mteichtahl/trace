@@ -80,7 +80,7 @@ import { GpuCompute } from './gpu.js'
 import { KB_RETRIEVE_ACTIONS, VectorStore, knowledgeBaseArn } from './knowledge.js'
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
-import { GithubConnection, RunnerProject } from './runner.js'
+import { GithubConnection, RunnerProject, RunnerWebhooks } from './runner.js'
 import { ACTUALS_OBJECTS, CostRead } from './cost.js'
 import { OrderWatch, WATCH_OBJECTS, orderWatchName } from './order-watch.js'
 import { orderWatchSecretsPrefix } from '../core/integrations-catalog.js'
@@ -290,17 +290,28 @@ export class TraceStack extends Stack {
     // created here, and the runner projects only once it is authorized (runners.connectionReady). auth 'token': the
     // account's CodeBuild GitHub source credential (the installer imported it before the deploy), so no connection
     const connection = cfg.runners.auth === 'connection' ? new GithubConnection(this, 'GithubConnection', { prefix: cfg.prefix, connectionArn: cfg.runners.connectionArn }) : null
-    const runnerSource = connection ? (cfg.runners.connectionReady ? { connectionArn: connection.connectionArn } : null) : { connectionArn: null }
+    const runnerAuth = connection ? (cfg.runners.connectionReady ? { connectionArn: connection.connectionArn } : null) : { connectionArn: null }
+    // the runners' webhooks, made by one custom resource provider here (src/infra/runner.ts RunnerWebhooks), so GitHub
+    // refusing one leaves its repository on GitHub's runners instead of failing the deploy. For the build-only
+    // repositories and the nested layout's projects; the flat layout's projects keep CloudFormation's own webhook (a flat
+    // stack of 20 projects is at its 500 resources already, so it has no room for a custom resource each)
+    const webhooks = runnerAuth && (cfg.ciRepositories.length || (nested && refs.length))
+      ? new RunnerWebhooks(this, 'RunnerWebhooks', { prefix: cfg.prefix, root: REPO_ROOT, connectionArn: runnerAuth.connectionArn }).serviceToken
+      : null
+    const runnerSource = runnerAuth ? { ...runnerAuth, webhooks: nested ? webhooks : null } : null
     // the build-only repositories (ciRepositories): a runner project each, here in the parent, and its output
     if (runnerSource) {
       const { computeType, image, privileged, ciPrivileged } = cfg.runners
       for (const r of cfg.ciRepositories) {
         const repository = projectSlug(r)
         const runner = new RunnerProject(this, `CiRunner${projectHash(repository)}`, {
-          name: runnerProjectName(cfg.prefix, repository), repository, connectionArn: runnerSource.connectionArn, computeType, image, privileged: privileged || ciPrivileged,
+          name: runnerProjectName(cfg.prefix, repository), repository, connectionArn: runnerSource.connectionArn, webhooks,
+          computeType, image, privileged: privileged || ciPrivileged,
+          ...(cfg.runners.webhookAttempt ? { attempt: cfg.runners.webhookAttempt } : {}),
           tags: { 'trace:installation': cfg.prefix, 'trace:ci': repository },
         })
-        new CfnOutput(this, ciRunnerOutput(repository), { value: runner.projectName, description: `${repository}: its CodeBuild runner project (TRACE_CODEBUILD_PROJECT), build only` })
+        // its project's name once it has its webhook, `none` while GitHub refuses it (core/project.ts runnerOf)
+        new CfnOutput(this, ciRunnerOutput(repository), { value: runner.runner, description: `${repository}: its CodeBuild runner project (TRACE_CODEBUILD_PROJECT), build only; none while GitHub refuses its webhook` })
       }
     }
     const projectProps = (ref: (typeof refs)[number]): ProjectProps => ({

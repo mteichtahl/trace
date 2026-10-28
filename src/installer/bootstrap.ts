@@ -74,7 +74,7 @@ import { type Principal, GROUPS, assign, assignments, setClass, unassign } from 
 import { answers as savedAnswers, saveAnswers, saveInstallation } from '../core/client.js'
 import { INTEGRATIONS, INTEGRATION_NAMES, type IntegrationName, IntegrationStore, checkIntegration, secretsManagerApi } from '../core/integrations.js'
 import { SOURCE, register } from '../core/onboard.js'
-import { RUNNER_VARIABLE } from '../core/project.js'
+import { RUNNER_VARIABLE, runnerOf } from '../core/project.js'
 import { type WaitNotice, describeWait } from '../core/wait.js'
 import { RELEASE_REGION, RELEASE_REPOSITORIES, RELEASE_STACK } from '../infra/release.js'
 import {
@@ -85,7 +85,7 @@ import { REPO_ROOT } from '../infra/stack.js'
 import { type Answers, AnswersSchema, type InstallEvent, type Secrets, type Step } from './answers.js'
 import {
   type ConnectionChoice, type ConnectionWait, type ProjectNames, type SourceCredential, awsEnv, cfnClient, checkAws, chooseRunnerAuth, codebuildClient, connectionName,
-  connectionsClient, connectionsConsoleUrl, connectorAccessNote, credentials, deployedProjects, ensureGpuImage, ensureSourceCredential, freeSecretNames, liveFacts,
+  connectionsClient, connectionsConsoleUrl, connectorAccessNote, webhookRefusedNote, credentials, deployedProjects, ensureGpuImage, ensureSourceCredential, freeSecretNames, liveFacts,
   nameClients, nameIndex, resolveConnection, stackOutputs, waitForConnection,
 } from './aws.js'
 import { type Facts, resolveAnswers } from './derive.js'
@@ -1025,6 +1025,15 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     const noRunner = async (repo: string): Promise<void> => {
       if (await deleteVariable(adminToken, repo, RUNNER_VARIABLE)) log('repos', `${repo}: ${RUNNER_VARIABLE} removed (no build runner yet: its workflows run on GitHub's runners)`)
     }
+    // the runner project a repository's jobs go to: its output names it once GitHub accepted its webhook, and says
+    // `none` while GitHub refuses it (src/infra/lambda/runner-webhook.ts), when the jobs stay on GitHub's runners
+    const refused: string[] = []
+    const runnerFor = (repo: string, output: string): string | null => {
+      if (!runnersReady) return null
+      const r = runnerOf(need(output))
+      if (!r) refused.push(repo)
+      return r
+    }
     const agentLogin = (await checkToken(s.githubToken)).login
     const adminLogin = adminToken === s.githubToken ? agentLogin : (await checkToken(adminToken)).login
     if (!a.projects.length && !buildRepositories(a).length) set('repos', 'skipped', 'no repositories yet')
@@ -1039,11 +1048,12 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
         if (login.toLowerCase() === adminLogin.toLowerCase() && login !== agentLogin) {
           summary.push(`${p.repo}'s own token belongs to ${login}, so /approve from ${login} is refused on its deploys.`)
         }
+        const runner = runnerFor(p.repo, o.runnerProject)
         const vars: Record<string, string> = {
           // this project's own role and runtime: neither reaches any other project
           TRACE_AWS_ROLE: need(o.roleArn), TRACE_AWS_REGION: a.aws.region, TRACE_HOME: need('TraceHome'), TRACE_AGENT_RUNTIME_ARN: need(o.runtimeArn),
           // its own CodeBuild runner project, once it exists: every job of its workflows runs there (`runs-on: codebuild-<project>-…`)
-          ...(runnersReady ? { [RUNNER_VARIABLE]: need(o.runnerProject) } : {}),
+          ...(runner ? { [RUNNER_VARIABLE]: runner } : {}),
           // The worker trusts claim markers and refuses deploy approvals from this login (the agents' own account).
           TRACE_AGENT_LOGIN: login,
           // its own memory, for the worker.runner = actions fallback (its OIDC role may use that memory only)
@@ -1052,13 +1062,14 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
           ...(out[kbOutputs(p.repo).knowledgeBaseId] ? { TRACE_KB_ID: out[kbOutputs(p.repo).knowledgeBaseId] ?? '', TRACE_KB_DATA_SOURCE_ID: out[kbOutputs(p.repo).dataSourceId] ?? '' } : {}),
         }
         for (const [k, v] of Object.entries(vars)) log('repos', `${p.repo}: ${k} ${await setVariable(adminToken, p.repo, k, v)}`)
-        if (!runnersReady) await noRunner(p.repo)
+        if (!runner) await noRunner(p.repo)
         await setSecret(adminToken, p.repo, 'TRACE_TOKEN', projectToken(s, p.repo))
         log('repos', `${p.repo}: TRACE_TOKEN set`)
       })
       // the build-only repositories (trace's own, by default): their runner project alone
       for (const r of buildRepositories(a)) {
-        if (runnersReady) log('repos', `${r}: ${RUNNER_VARIABLE} ${await setVariable(adminToken, r, RUNNER_VARIABLE, need(ciRunnerOutput(r)))} (built on AWS, without agents)`)
+        const runner = runnerFor(r, ciRunnerOutput(r))
+        if (runner) log('repos', `${r}: ${RUNNER_VARIABLE} ${await setVariable(adminToken, r, RUNNER_VARIABLE, runner)} (built on AWS, without agents)`)
         else await noRunner(r)
       }
       // keeping the installation up to date (README "Staying up to date"): trace's own repository's ci workflow reads these
@@ -1068,7 +1079,9 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
         await Promise.all(Object.entries(vars).map(async ([k, v]) => log('repos', `${update.repository}: ${k} ${await setVariable(adminToken, update.repository, k, v)} (keeps this installation up to date when its ${update.branch} branch changes)`)))
       }
       if (!runnersReady) log('repos', GITHUB_RUNNERS_NOTE)
-      set('repos', 'done', runnersReady ? undefined : GITHUB_RUNNERS_NOTE)
+      const refusedNote = refused.length ? webhookRefusedNote(refused, access) : null
+      if (refusedNote) { log('repos', refusedNote); summary.push(refusedNote) }
+      set('repos', 'done', runnersReady ? (refusedNote ?? undefined) : GITHUB_RUNNERS_NOTE)
     }
     // self-update turned off (or trace's own repository moved): the role is gone with this deploy, so that repository's
     // workflow must stop trying to use it. Best effort

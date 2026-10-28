@@ -228,6 +228,12 @@ describe('the preflight', () => {
     expect(viaConnection.checks.find((c) => c.id === 'github.repo:marc/fw')?.status).toBe('warn')
     expect(viaConnection.checks.find((c) => c.id === 'codebuild.github')?.detail).toMatch(/through the authorized GitHub connection trace-github: no token stored with CodeBuild, and no console step/)
     expect(viaConnection.facts.runnerConnection).toBe('trace-github')
+    // every GitHub connection there, with its ARN and status, for the page to choose from
+    const arn = 'arn:aws:codeconnections:us-east-1:123456789012:connection/00000000-0000-0000-0000-000000000001'
+    const listed = await preflight({ ...IN, repos: ['marc/fw'] }, deps({ repo: async () => noHooks, connections: async () => [{ name: 'other-org', status: 'AVAILABLE', arn }, { name: 'trace-github', status: 'PENDING', arn: arn.replace(/1$/, '2') }] }))
+    expect(listed.facts.githubConnections).toEqual([{ name: 'other-org', status: 'AVAILABLE', arn }, { name: 'trace-github', status: 'PENDING', arn: arn.replace(/1$/, '2') }])
+    // automatic picks an authorized one, whoever's it is: which is why the page shows it and lets you choose
+    expect(listed.facts.runnerConnection).toBe('other-org')
     expect(r.checks.find((c) => c.id === 'github.repo:marc/board')).toMatchObject({ status: 'fail', fix: expect.stringMatching(/Give the token Secrets: read and write on marc\/board \(or add an admin token under Advanced\)/) })
     // with an admin token the same gap only warns
     expect((await preflight({ ...IN, hasAdminToken: true }, deps({ repo: async () => noSecrets }))).checks.find((c) => c.id === 'github.repo:marc/board')?.status).toBe('warn')

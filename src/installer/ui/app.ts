@@ -35,6 +35,8 @@ interface Preflight {
     gpuQuota?: number | null; cpuQuota?: number | null; s3vectors?: boolean | null; sourceAdmin?: boolean | null; publishedRegistry?: string | null; oidcProvider?: boolean; cdkBootstrapped?: boolean
     existing?: { status: string; outputs: Record<string, string> } | null
     runnerConnection?: string | null
+    /** every GitHub connection in the account and region, to choose from */
+    githubConnections?: { name: string; status: string; arn: string }[]
   }
 }
 interface Progress { id: string; label: string; state: 'running' | 'done' | 'failed'; detail?: string }
@@ -101,6 +103,8 @@ const s = {
    * else the token; connectionArn '' = none named; computeType '' and privileged 'default' = the stack's defaults */
   runners: {
     auth: 'auto' as (typeof RUNNER_AUTH)[number], token: 'agent' as 'agent' | 'admin', connectionArn: '',
+    /** the connection is typed in (one not listed) rather than chosen from the account's */
+    connectionOther: false,
     computeType: '' as '' | (typeof RUNNER_COMPUTE_TYPES)[number], privileged: 'default' as 'default' | 'on' | 'off',
     /** build trace's own repository on AWS too; null: not chosen (on when the token can configure it) */
     buildTrace: null as boolean | null,
@@ -579,7 +583,7 @@ function buildRunners(): (HTMLElement | null)[] {
       { value: 'connection', label: 'An AWS CodeConnections connection instead of the token (no token stored; needs one console authorization)' },
     ], r.auth, (v) => { r.auth = (RUNNER_AUTH as readonly string[]).includes(v) ? v as (typeof RUNNER_AUTH)[number] : 'auto'; render(); void runPreflight().then(() => loadPlan()) }), 'change it later with `tracectl upgrade --runner-auth auto|token|connection`'),
     r.auth === 'connection' ? note('warn', 'A new connection is authorized once per AWS account and region, in the AWS console. After the first deploy the installer shows the link (', h('a', { href: url, target: '_blank', rel: 'noopener' }, 'Connections'), `) and waits: choose ${r.connectionArn ? 'the connection' : name} and "Update pending connection", which installs the AWS Connector for GitHub app, and give that app access to every chosen repository. The installer then adds the build runners by itself.`) : null,
-    r.auth !== 'token' ? field('Use this connection (optional)', input('text', r.connectionArn, (v) => { r.connectionArn = v.trim() }, { placeholder: `empty: reuse an authorized one${r.auth === 'connection' ? `, else create ${name}` : ''}` }), 'an existing GitHub connection\'s ARN') : null,
+    ...(r.auth !== 'token' ? connectionChooser(name, found ?? null, url) : []),
     r.auth !== 'connection' ? field('The token CodeBuild keeps', select([{ value: 'agent', label: 'The GitHub token above' }, { value: 'admin', label: 'The admin token' }], r.token, (v) => { r.token = v === 'admin' ? 'admin' : 'agent' }),
       'it needs Administration, Webhooks and Commit statuses (read and write) and Contents (read) on each repository; an account that has a GitHub credential already keeps it') : null,
     h('div', { class: 'row' },
@@ -587,6 +591,41 @@ function buildRunners(): (HTMLElement | null)[] {
         (v) => { r.computeType = (RUNNER_COMPUTE_TYPES as readonly string[]).includes(v) ? v as (typeof RUNNER_COMPUTE_TYPES)[number] : '' }), 'a job can ask for another with an instance-size label'),
       field('Docker in jobs', select([{ value: 'default', label: 'Default (off)' }, { value: 'on', label: 'On (privileged, for jobs that build containers)' }, { value: 'off', label: 'Off' }], r.privileged,
         (v) => { r.privileged = v === 'on' || v === 'off' ? v : 'default' }))),
+  ]
+}
+
+const CONNECTION_STATUS: Record<string, string> = { AVAILABLE: 'authorized', PENDING: 'not authorized yet', ERROR: 'in error' }
+
+/** Which GitHub connection CodeBuild uses: automatic (the installer reuses an authorized one, else creates one or
+ * uses the token), one of the account and region's (listed by the checks), or another typed in. Automatic may pick a
+ * connection whose AWS Connector app cannot reach these repositories, so the choice is shown and can be made here. */
+function connectionChooser(name: string, found: string | null, consoleUrl: string): (HTMLElement | null)[] {
+  const r = s.runners
+  const list = s.pre?.facts.githubConnections ?? []
+  const OTHER = '__other__'
+  const listed = list.find((c) => c.arn === r.connectionArn) ?? null
+  const value = r.connectionOther || (r.connectionArn && !listed) ? OTHER : r.connectionArn
+  const automatic = found
+    ? `reuse ${found}, the authorized one the installer would pick`
+    : r.auth === 'connection' ? `create ${name}, authorized once after the deploy` : 'the GitHub token, as no connection is authorized'
+  const hint = list.length
+    ? `${list.length} GitHub connection${list.length === 1 ? '' : 's'} in this account and region`
+    : s.pre ? 'none in this account and region yet' : 'run the checks to list this account\'s connections'
+  return [
+    field('GitHub connection', select([
+      { value: '', label: `Automatic: ${automatic}` },
+      ...list.map((c) => ({ value: c.arn, label: `${c.name || c.arn} (${CONNECTION_STATUS[c.status] ?? c.status.toLowerCase()})` })),
+      { value: OTHER, label: 'Another connection (enter its ARN)' },
+    ], value, (v) => {
+      r.connectionOther = v === OTHER
+      if (v !== OTHER) r.connectionArn = v
+      else if (listed) r.connectionArn = ''
+      render()
+    }), hint),
+    value === OTHER ? field('Connection ARN', input('text', r.connectionArn, (v) => { r.connectionArn = v.trim() }, { placeholder: 'arn:aws:codeconnections:<region>:<account>:connection/<id>' })) : null,
+    listed && listed.status === 'PENDING' ? note('warn', `${listed.name} is not authorized yet: the deploy goes ahead without the build runners, then authorize it once in `, h('a', { href: consoleUrl, target: '_blank', rel: 'noopener' }, 'Connections'), ' ("Update pending connection") and the installer adds them.') : null,
+    listed && listed.status === 'ERROR' ? note('bad', `${listed.name} is in error: choose another, or delete it in `, h('a', { href: consoleUrl, target: '_blank', rel: 'noopener' }, 'Connections'), ' and choose again.') : null,
+    note('ok', 'The AWS Connector for GitHub app behind the connection must be allowed to reach every chosen repository (on GitHub: Settings > Applications > AWS Connector for GitHub > Configure). If it cannot, GitHub refuses that repository\'s runner webhook: the deploy still finishes, the repository\'s jobs stay on GitHub\'s runners, and the next deploy tries again.'),
   ]
 }
 

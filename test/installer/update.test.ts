@@ -40,7 +40,7 @@ interface World {
   secrets: Map<string, string>
 }
 
-function world(o: { choice?: ConnectionChoice; cdk?: number; githubFails?: boolean; record?: string; env?: Record<string, string>; vars?: Record<string, string>; sourceCredential?: boolean; pending?: Record<string, unknown>[] } = {}): World {
+function world(o: { choice?: ConnectionChoice; refused?: string[]; cdk?: number; githubFails?: boolean; record?: string; env?: Record<string, string>; vars?: Record<string, string>; sourceCredential?: boolean; pending?: Record<string, unknown>[] } = {}): World {
   const w: World = { deps: undefined as unknown as UpdateDeps, infra: [], cdkArgs: [], vars: new Map(Object.entries(o.vars ?? {})), log: [], summary: [], asked: [], records: new Map(), secrets: new Map() }
   for (const r of o.pending ?? []) w.records.set(`installation/pending-projects/${String(r.repo).toLowerCase()}.json`, JSON.stringify(r))
   let deployed = false
@@ -48,7 +48,9 @@ function world(o: { choice?: ConnectionChoice; cdk?: number; githubFails?: boole
     env: { TRACE_STACK: 'TraceStack', TRACE_AWS_REGION: 'us-east-1', ...(o.env ?? {}) },
     credentials: async () => ({ accessKeyId: 'ASIAEXAMPLE', secretAccessKey: 'secret-from-oidc-0123', sessionToken: 'session' }),
     outputs: async () => {
-      const base = deployed && ((o.choice ?? ready).ready || w.infra.some((i) => (i.runners as Record<string, unknown>).auth === 'token')) ? WITH_RUNNERS : BASE_OUTPUTS
+      const made = deployed && ((o.choice ?? ready).ready || w.infra.some((i) => (i.runners as Record<string, unknown>).auth === 'token')) ? WITH_RUNNERS : BASE_OUTPUTS
+      // a runner GitHub refused the webhook of: its output says none (src/infra/lambda/runner-webhook.ts)
+      const base = made === WITH_RUNNERS ? { ...made, ...Object.fromEntries((o.refused ?? []).map((r) => [r === TRACE ? ciRunnerOutput(r) : projectOutputs(r).runnerProject, 'none'])) } : made
       const withNew = deployed && w.infra.some((i) => (i.repositories as string[]).some((r) => r.startsWith(`${NEW}@`)))
       if (!withNew) return base
       const p = projectOutputs(NEW)
@@ -101,6 +103,20 @@ describe('tracectl update-installation', () => {
     // the token never reaches the log
     expect(w.log.join('\n')).not.toContain(TOKEN)
     expect(w.log).toContain(`${BOARD}: TRACE_CODEBUILD_PROJECT set to trace-ci-${projectHash(BOARD)} (its jobs now run on AWS)`)
+  })
+
+  it('when GitHub refused a runner\'s webhook: still succeeds, leaves that repository on GitHub\'s runners, and says why', async () => {
+    const w = world({ refused: [TRACE], vars: { [`${TRACE}:TRACE_CODEBUILD_PROJECT`]: `trace-ci-${projectHash(TRACE)}` } })
+    expect(await updateInstallation(w.deps)).toBe(0)
+    // the refused one: its variable removed (its jobs must not wait for a runner GitHub never tells), never set to none
+    expect(w.vars.has(`${TRACE}:TRACE_CODEBUILD_PROJECT`)).toBe(false)
+    expect([...w.vars.values()]).not.toContain('none')
+    // the other runner is used as before
+    expect(w.vars.get(`${BOARD}:TRACE_CODEBUILD_PROJECT`)).toBe(`trace-ci-${projectHash(BOARD)}`)
+    const said = [...w.summary, ...w.log].join('\n')
+    expect(said).toMatch(new RegExp(`GitHub refused the build runner's webhook for ${TRACE}`))
+    expect(said).toMatch(/AWS Connector for GitHub app must be allowed to reach every onboarded repository/)
+    expect(said).toMatch(/the next deploy .* tries again/)
   })
 
   it('leaves a variable that is right alone', async () => {
