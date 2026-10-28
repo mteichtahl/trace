@@ -215,6 +215,40 @@ export interface RunSummary {
   branch?: string
   summary?: string
   endedAt?: string
+  /** a job another specialist asked for: the hand-off it answers and who asked (its title says so too) */
+  handoff?: { id: string; from?: string; fromName?: string }
+}
+
+/** Where a hand-off between specialists stands (src/core/handoffs.ts). */
+export type HandoffState = 'requested' | 'queued' | 'running' | 'answered' | 'unanswered' | 'declined' | 'failed'
+
+/** One hand-off between specialists (jobs.list and journey.get `handoffs`): who asked whom, for what, and the answer. */
+export interface Handoff {
+  id: string
+  from: string
+  fromName: string
+  to: string
+  toName: string
+  question: string
+  blocks: string
+  evidence: EvidenceRef[]
+  recommendation?: string
+  acceptance: string[]
+  /** "Thermal → Analog and mixed-signal: …" */
+  summary: string
+  state: HandoffState
+  /** what happens next, or why it ended, in words */
+  says: string
+  createdAt: string
+  /** the receiving job (RunSummary.id when the index lists it), and its worker job id */
+  jobId?: string
+  workerJobId?: string
+  /** the asking job (RunSummary.id when the index lists it), and its worker job id */
+  fromJobId?: string
+  fromWorkerJobId: string
+  answer?: { answered: boolean; text: string; summary: string; evidence: EvidenceRef[]; confidence?: number; acceptanceMet?: boolean; unmet?: string; at: string }
+  declined?: { reason: string; by: string; at: string }
+  why?: string
 }
 
 /** One agent's state on a project (jobs.list `agents`). */
@@ -230,7 +264,7 @@ export interface AgentState {
 }
 
 /** jobs.list, as the app reads it. */
-export interface ProjectJobs { repo: string; jobs: RunSummary[]; agents: AgentState[]; batch: { id: string; job: string | null; pool: 'gpu' | 'cpu'; state: string | null; submittedAt: string | null }[]; updatedAt: string }
+export interface ProjectJobs { repo: string; jobs: RunSummary[]; agents: AgentState[]; handoffs: Handoff[]; batch: { id: string; job: string | null; pool: 'gpu' | 'cpu'; state: string | null; submittedAt: string | null }[]; updatedAt: string }
 
 export interface RecentItem {
   id: string
@@ -255,6 +289,8 @@ export interface Journey {
   waivers: Waiver[]
   /** live and queued jobs for this project (assumed part of journey.get) */
   jobs: RunSummary[]
+  /** the hand-offs between its specialists (journey.get `handoffs`; absent in older answers and mocks) */
+  handoffs?: Handoff[]
   recent: RecentItem[]
   /** has an agent session happened yet (the Memory tab appears) */
   hasMemory?: boolean

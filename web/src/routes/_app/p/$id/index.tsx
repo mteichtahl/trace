@@ -1,6 +1,8 @@
 /**
  * Project overview: where is it (stage rail), what is the one next step (the card), and what is happening around it
- * (Waiting on people, trace is doing, Queued, Recently). A side column holds the requirements and cost summaries.
+ * (Waiting on people, trace is doing, Queued, Recently). A job one specialist asked another for reads "Asked by the …
+ * specialist: …" (its title), and a queued one can be declined there. A side column holds the requirements and cost
+ * summaries.
  * Reference screen for a project tab.
  */
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
@@ -19,6 +21,7 @@ import { ago, initials, money, waited } from '@/lib/format'
 import { useJourney, useProjects, useWaits } from '@/lib/queries'
 import type { Journey } from '@/lib/types'
 import { continueText, useProjectDrafts } from '@/components/skills/draft'
+import { DeclineHandoff, declinable, useDeclineHandoffs } from '@/components/handoff'
 
 export const Route = createFileRoute('/_app/p/$id/')({
   component: Overview,
@@ -33,6 +36,7 @@ function Overview() {
   const navigate = useNavigate()
   const part = projects.data?.find((p) => p.repo === repo)?.part
   const draft = useProjectDrafts(repo)[0]
+  const decline = useDeclineHandoffs()
 
   if (!j.data)
     return (
@@ -47,6 +51,9 @@ function Overview() {
   const running = d.jobs.filter((r) => r.state === 'running' || r.state === 'paused')
   const queued = d.jobs.filter((r) => r.state === 'queued')
   const nextRun = d.next.jobId ? d.jobs.find((r) => r.id === d.next.jobId) : undefined
+  // a job another specialist asked for, by the hand-off it answers (journey.get `handoffs`)
+  const handoffOf = (r: { handoff?: { id: string } }) => (r.handoff ? d.handoffs?.find((h) => h.id === r.handoff!.id) : undefined)
+  const write = part !== 'reviewer'
 
   return (
     <div className="pb-12">
@@ -90,7 +97,7 @@ function Overview() {
             ) : (
               <div className="divide-y rounded-xl border">
                 {running.map((r) => (
-                  <RunLine key={r.id} run={r} {...runControls(part !== 'reviewer')} />
+                  <RunLine key={r.id} run={r} {...runControls(write)} />
                 ))}
                 {waits.data?.waits.map((w) => (
                   <WaitLine key={w.id} wait={w} onCheckNow={(x) => call('tools.check_now', { repo, waitId: x.id })} />
@@ -103,9 +110,16 @@ function Overview() {
             <Section label="Queued" count={queued.length}>
               {/* in each agent's queue order: Move up, Hold and Cancel for people allowed to */}
               <div className="divide-y rounded-xl border">
-                {queued.map((r) => (
-                  <RunLine key={r.id} run={r} {...runControls(part !== 'reviewer')} />
-                ))}
+                {queued.map((r) => {
+                  const h = handoffOf(r)
+                  return (
+                    <div key={r.id}>
+                      <RunLine run={r} {...runControls(write)} />
+                      {/* a hand-off waiting its turn: a person may decline it, with a reason the asking specialist reads */}
+                      {h && write && declinable(h) && <DeclineHandoff handoff={h} onDecline={(x, why) => decline(repo, x, why)} className="px-5 pb-4" />}
+                    </div>
+                  )
+                })}
               </div>
             </Section>
           )}

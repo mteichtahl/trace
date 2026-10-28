@@ -2,14 +2,15 @@
  * Data for Agents and tools: the tool list (tools.list, per project, the same for every project of an installation),
  * each project's runs (runs: tool runs with kind, status, times and the agent that made each, for "last used" and the
  * error rate), and each project's jobs and agents (jobs.list: its job index, kept current by job.updated events),
- * merged across the person's projects into one status per agent. Which instruction layer is in force is not reported
+ * merged across the person's projects into one status per agent, and the hand-offs between agents (jobs.list
+ * `handoffs`): who asked whom, open first. Which instruction layer is in force is not reported
  * by the API yet; the screen says so.
  */
 import { useQueries } from '@tanstack/react-query'
 import { useMemo } from 'react'
 import { projectName } from '@/lib/api'
 import { q, useProjects } from '@/lib/queries'
-import type { AgentState, RunSummary } from '@/lib/types'
+import type { AgentState, Handoff, RunSummary } from '@/lib/types'
 import type { ToolInfo } from '@/lib/tools-catalogue'
 
 export interface ToolRun {
@@ -76,6 +77,11 @@ export function useCatalogue() {
   }
 }
 
+/** One hand-off between specialists, with its project. */
+export interface HandoffItem { repo: string; project: string; handoff: Handoff }
+
+const isOpenHandoff = (h: Pick<Handoff, 'state'>): boolean => h.state === 'requested' || h.state === 'queued' || h.state === 'running'
+
 export interface WorkItem {
   repo: string
   project: string
@@ -124,7 +130,11 @@ export function useWork() {
   const lists = useQueries({ queries: repos.map((repo) => ({ ...q('jobs.list', { repo }), retry: false })) })
   const per = repos.map((repo, i) => ({ repo, project: projectName(repo), agents: lists[i]?.data?.agents ?? [], jobs: lists[i]?.data?.jobs ?? [] }))
   const items: WorkItem[] = per.flatMap((p) => p.jobs.map((run) => ({ repo: p.repo, project: p.project, run })))
+  // the hand-offs between agents on every project: open ones first, then the newest
+  const handoffs: HandoffItem[] = repos.flatMap((repo, i) => (lists[i]?.data?.handoffs ?? []).map((handoff) => ({ repo, project: projectName(repo), handoff })))
+    .sort((a, b) => Number(isOpenHandoff(b.handoff)) - Number(isOpenHandoff(a.handoff)) || b.handoff.createdAt.localeCompare(a.handoff.createdAt))
   return {
+    handoffs,
     running: items.filter((x) => x.run.state === 'running' || x.run.state === 'paused'),
     queued: items.filter((x) => x.run.state === 'queued'),
     agents: mergeAgents(per),

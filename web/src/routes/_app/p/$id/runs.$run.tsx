@@ -2,7 +2,8 @@
  * Run detail (/p/:id/runs/:run): the Run line at full size. The header names the run, where it runs and its current
  * step with progress, and holds Pause, Cancel and Move up. Below: the steps as a timeline with each step's duration;
  * once finished, the result at the top (the verdict in a sentence), the plots with their limit lines (Recharts, lazy),
- * the findings and the files; and the agent's own log as a chat thread.
+ * the findings and the files; the hand-offs between specialists its job answers or raised (the request and the answer,
+ * Decline for a pending one); and the agent's own log as a chat thread.
  *
  * Live: the run's job is read with `job`, whose key the live connection invalidates on job.updated; when the job's
  * version moves on, the run is read again. Nothing polls.
@@ -29,10 +30,11 @@ import { Term } from '@/components/term'
 import { useNow } from '@/components/use-now'
 import { call, repoOf } from '@/lib/api'
 import { duration, eng, time } from '@/lib/format'
-import { q, useAction } from '@/lib/queries'
+import { q, useAction, useProjects } from '@/lib/queries'
 import type { RunRecordView, RunStep } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
 import { RUN_STATUS } from './evidence'
+import { HandoffRow, useDeclineHandoffs } from '@/components/handoff'
 
 const PlotCard = lazy(() => import('@/components/chat/cards').then((m) => ({ default: m.PlotCard })))
 
@@ -49,6 +51,14 @@ function RunPage() {
   const r = run.data as RunRecordView | undefined
   const job = useQuery({ ...q('job', { id: r?.jobId ?? '' }), enabled: !!r?.jobId && r.status === 'running' })
   const now = useNow(1000)
+  // hand-offs between specialists that concern this run's job: the one it answers, and the ones it raised
+  const jobs = useQuery({ ...q('jobs.list', { repo }), enabled: !!r?.jobId })
+  const projects = useProjects()
+  const decline = useDeclineHandoffs()
+  const write = (projects.data?.find((p) => p.repo === repo)?.part ?? 'contributor') !== 'reviewer'
+  const workerJob = r?.jobId?.split('.').at(-1)
+  const answers = (jobs.data?.handoffs ?? []).filter((h) => workerJob && (h.workerJobId === workerJob || h.jobId === r?.jobId))
+  const raised = (jobs.data?.handoffs ?? []).filter((h) => workerJob && (h.fromWorkerJobId === workerJob || h.fromJobId === r?.jobId))
   const [confirm, setConfirm] = useState(false)
   useCrumb('/_app/p/$id/runs/$run', r?.title ?? runId)
 
@@ -159,6 +169,20 @@ function RunPage() {
             <section aria-labelledby="findings">
               <h2 id="findings" className="mb-3 text-lg font-semibold">Findings</h2>
               <FindingsList findings={r.findings} />
+            </section>
+          )}
+
+          {answers.length + raised.length > 0 && (
+            <section className="rounded-xl border" aria-labelledby="handoffs">
+              <h2 id="handoffs" className="px-5 pt-5 text-lg font-semibold">Hand-offs</h2>
+              <p className="px-5 text-sm text-muted-foreground">
+                {answers.length ? 'Another specialist asked for this job. ' : ''}{raised.length ? `It asked ${raised.length === 1 ? 'another specialist' : `${raised.length} times`} for an answer in their area.` : ''}
+              </p>
+              <div className="mt-2 divide-y border-t">
+                {[...answers, ...raised].map((h) => (
+                  <HandoffRow key={h.id} handoff={h} defaultOpen={answers.includes(h)} {...(write ? { onDecline: (x, why) => decline(repo, x, why) } : {})} />
+                ))}
+              </div>
             </section>
           )}
 

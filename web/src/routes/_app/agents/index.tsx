@@ -4,7 +4,9 @@
  * (jobs.list: the projects' job indexes, with the journey's questions and stuck reports; live through job.updated
  * events), what needs a person (inbox), and the tool list with runs. Each agent's row: its status (Working, Queued,
  * Waiting on a person, Stuck, Idle; the most pressing across the person's projects), what it is doing now, its queue
- * (with Move up), and its last day's runs. Which instruction layer is in force is not reported yet: a dash, said so.
+ * (with Move up), and its last day's runs. The hand-offs between agents (jobs.list `handoffs`): who asked whom, for what,
+ * open or answered, with Decline (a reason in one line) for people who may change the project. Which instruction
+ * layer is in force is not reported yet: a dash, said so.
  */
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
@@ -23,6 +25,7 @@ import { type Status, StatusBadge } from '@/components/status-badge'
 import { type AgentWork } from '@/components/agents/use-agents'
 import { duration } from '@/lib/format'
 import { DismissStuck, useDismissStuck } from '@/components/dismiss-stuck'
+import { HandoffRow, isOpen, useDeclineHandoffs } from '@/components/handoff'
 import { useAuth } from '@/lib/auth'
 import { projectName } from '@/lib/api'
 import { AGENTS } from '@/lib/knowledge'
@@ -73,6 +76,8 @@ function Agents() {
   const stuck = (inbox.data ?? []).filter((i) => i.kind === 'stuck')
   const dismiss = useDismissStuck()
   const questions = (inbox.data ?? []).filter((i) => i.kind === 'question')
+  const decline = useDeclineHandoffs()
+  const openHandoffs = work.handoffs.filter((h) => isOpen(h.handoff)).length
 
   const rows: Row[] = AGENTS.map((a) => {
     const w = work.agents.get(a.id)
@@ -161,6 +166,25 @@ function Agents() {
                 project={w.project}
                 {...runControls(work.write.has(w.repo))}
               />
+            ))}
+          </div>
+        )}
+      </Section>
+
+      <Section label="Hand-offs between agents" count={work.handoffs.length} className="mt-10">
+        {/* one specialist asked another, in writing: open ones first; a pending one can be declined with a reason */}
+        <p className="mb-3 flex gap-2 text-sm text-muted-foreground">
+          <Info className="mt-0.5 size-4 shrink-0" aria-hidden />
+          <span>
+            {work.handoffs.length === 0
+              ? 'When one specialist needs another\'s answer, it asks in writing and the answer is recorded here.'
+              : `${openHandoffs === 0 ? 'None open' : `${openHandoffs} open`}. A specialist asks another only through a recorded request; the asked one runs as a queued job, and its answer is kept for the one that asked.`}
+          </span>
+        </p>
+        {work.handoffs.length > 0 && (
+          <div className="divide-y rounded-xl border">
+            {work.handoffs.map((x) => (
+              <HandoffRow key={`${x.repo}:${x.handoff.id}`} handoff={x.handoff} project={x.project} {...(work.write.has(x.repo) ? { onDecline: (h, why) => decline(x.repo, h, why) } : {})} />
             ))}
           </div>
         )}
