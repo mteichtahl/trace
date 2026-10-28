@@ -36,7 +36,7 @@ export function ReviewStep() {
           {sample ? <span className="block text-xs text-muted-foreground">including the sample{s.sample.tour ? ', with its tour' : ''}</span> : null}
         </Row>
         <Row label="People" step="people">{a.adminEmail || <span className="text-destructive">first administrator missing</span>} (admin){s.people.length ? `, and ${s.people.length} other${s.people.length === 1 ? '' : 's'}` : ''}</Row>
-        <Row label="Optional" step="optional">{keys.length ? `${keys.length} distributor key${keys.length === 1 ? '' : 's'}` : 'no distributor keys'}; {s.agents.webEnabled ? `web app${s.agents.webDomain ? ` at ${s.agents.webDomain}` : ''}${s.agents.webWaf ? ' with AWS WAF' : ''}` : 'no web app'}; prefix <span className="font-mono">{s.agents.prefix}</span></Row>
+        <Row label="Optional" step="optional">{keys.length ? `${keys.length} distributor key${keys.length === 1 ? '' : 's'}` : 'no distributor keys'}; {s.agents.webEnabled ? `web app${s.agents.webDomain ? ` at ${s.agents.webDomain}` : ''}${s.agents.webWaf ? ' with AWS WAF' : ''}` : 'no web app'}; external access {s.agents.externalAccess ? 'on' : 'off'}; prefix <span className="font-mono">{s.agents.prefix}</span></Row>
       </dl>
 
       {reasons.length ? (

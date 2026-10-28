@@ -79,7 +79,7 @@ import { type WaitNotice, describeWait } from '../core/wait.js'
 import { RELEASE_REGION, RELEASE_REPOSITORIES, RELEASE_STACK } from '../infra/release.js'
 import {
   CENTRAL_BUCKET_OUTPUT, CONNECTION_OUTPUT, GPU_IMAGE_BUILD_OUTPUT, INSTALLATION_RECORD_KEY, SELF_UPDATE_OUTPUT, ciRunnerOutput, type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, cpuEnabled, githubSecretName,
-  kbOutputs, memoryDeliveryName, memoryName, projectHash, projectOutputs, selfUpdateRoleName, stackName, WEB_OUTPUTS,
+  kbOutputs, memoryDeliveryName, memoryName, projectHash, projectOutputs, selfUpdateRoleName, stackName, WEB_OUTPUTS, EXTERNAL_OUTPUTS,
 } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import { type Answers, AnswersSchema, type InstallEvent, type Secrets, type Step } from './answers.js'
@@ -254,6 +254,7 @@ export function infraInput(a: Answers, existing?: Existing | null, deploy?: Layo
     cpu: { enabled: a.agents.cpuEnabled ?? true, maxVcpus: a.agents.cpuMaxVcpus, spot: a.agents.cpuSpot, vcpus: a.agents.cpuVcpus, memoryMiB: a.agents.cpuMemoryMiB },
     knowledgeBase: { enabled: a.agents.knowledgeBase ?? true },
     gateway: { enabled: a.agents.libraryGateway },
+    external: { enabled: a.agents.externalAccess },
     images: { source: a.agents.imageSource, ...(a.agents.imageSource === 'prebuilt' && a.agents.imageRegistry ? { registry: a.agents.imageRegistry } : {}) },
     runners: {
       ...(runners
@@ -524,7 +525,7 @@ export function plan(input: Answers, existing?: Existing | null, prev?: Answers 
   const onboarding = a.projects.filter((p) => p.onboard && !p.create).map((p) => p.repo)
   const creating = a.projects.filter((p) => p.create).map((p) => `${p.repo} (${p.create?.template})`)
   const changes = existing ? changesSince(prev ?? null, a) : []
-  const deployWhat = `central bucket, agent image (${props.images.source === 'prebuilt' ? 'trace\'s published image for this version when there is one, else built' : 'built'} by CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and job definitions' : ''}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image made without holding up the deploy; one queue for every project)${cpuPlan(props)}` : ', no GPU or CPU jobs'}${props.gateway.enabled ? ', the library gateway (AgentCore Gateway and a Lambda for the shared datasheets and parts tools)' : ''}${kbPlan(props)}${webPlan(props)}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}${runnersPlan(a, props)}${generationsPlan(a)}${layoutPlan(a, existing)}. A project added again after being removed gets new names if its old memory, log delivery or token secret still holds them: the old memory is kept and orphaned, and the new one starts empty`
+  const deployWhat = `central bucket, agent image (${props.images.source === 'prebuilt' ? 'trace\'s published image for this version when there is one, else built' : 'built'} by CodeBuild, arm64), for each of the ${props.repositories.length} repositories its own AgentCore worker runtime, execution role, GitHub OIDC role and token secret${props.gpu.enabled ? ' and job definitions' : ''}, the API runtime and Cognito${props.gpu.enabled ? `, GPU jobs on AWS Batch (${props.gpu.instanceTypes.join('/')}, up to ${props.gpu.maxVcpus} vCPUs${props.gpu.spot ? ', Spot' : ''}, image made without holding up the deploy; one queue for every project)${cpuPlan(props)}` : ', no GPU or CPU jobs'}${props.gateway.enabled ? ', the library gateway (AgentCore Gateway and a Lambda for the shared datasheets and parts tools)' : ''}${props.external.enabled ? ', external access (an API and an MCP endpoint for connected systems, each its own AgentCore runtime, and their scopes in Cognito)' : ''}${kbPlan(props)}${webPlan(props)}${observabilityPlan(props.observability, props.prefix)}${memoryPlan(a, props, existing)}${runnersPlan(a, props)}${generationsPlan(a)}${layoutPlan(a, existing)}. A project added again after being removed gets new names if its old memory, log delivery or token secret still holds them: the old memory is kept and orphaned, and the new one starts empty`
   const steps: [string, string, string][] = [
     ['check', 'Check the AWS account', `${a.aws.account || 'the credentials\' account'} in ${a.aws.region || 'the profile\'s region'}`],
     ['cdk', 'Bootstrap CDK', `aws://${a.aws.account}/${a.aws.region} (only if it isn't already, or is older than version 6)`],
@@ -1239,6 +1240,13 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
 
     summary.unshift(`trace is installed in ${a.aws.account} (${a.aws.region}) as ${stack}.${webUrl ? ` Open trace: ${webUrl}` : ''}`)
     if (webUrl && props.web.domainName) summary.push(`Point ${props.web.domainName}'s DNS (a CNAME or alias) at the CloudFront distribution ${out[WEB_OUTPUTS.distributionId] ?? ''}.`)
+    // external access: where systems come in, and that nothing can until an admin adds one
+    if (props.external.enabled) {
+      const api = out[EXTERNAL_OUTPUTS.apiUrl]
+      summary.push(api
+        ? `External access is on: no system can connect until an admin adds it${webUrl ? ' in the web app (Admin → Connected systems)' : ' with `tracectl services create`'}. Systems call ${api}, or the MCP endpoint ${out[EXTERNAL_OUTPUTS.mcpUrl] ?? ''}, with a token from ${out[EXTERNAL_OUTPUTS.tokenUrl] ?? ''}.`
+        : `External access is on, but the stack has no output ${EXTERNAL_OUTPUTS.apiUrl} yet: run the installer again once the deploy has it.`)
+    }
     if (!a.projects.length) summary.push('No repositories yet: run `tracectl install` again and pick some (or create one).')
     else summary.push('Write each project\'s rules in .trace/rules.md (they start empty).')
     if (!names_.length) summary.push('Optional: add a Nexar, Mouser or Digi-Key key for live stock and prices: `tracectl integrations set nexar` (see `tracectl integrations list`).')
