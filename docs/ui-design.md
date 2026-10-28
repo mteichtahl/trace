@@ -708,7 +708,9 @@ A person's own preferences are shown only to them. Another person's preferences 
 
 ## The installer
 
-The installer asks for two things, AWS credentials and a GitHub token, and makes every other choice for the person with a sensible default they can open and change. It is the same shadcn look as the app, served from the person's own machine by `tracectl install`.
+The installer asks for two things, AWS credentials and a GitHub token, and makes every other choice for the person with a sensible default they can open and change. It is the same shadcn look as the app, served from the person's own machine by `tracectl install`. It is built from the app's own shadcn components (`web/src/components/ui`) and design tokens (`web/src/theme.css`), so the two cannot drift apart; light, dark and the system's theme are offered in its header.
+
+**Checking answers.** Every field says what is wrong with it beside it, in words, once the person leaves it or tries to continue: first the shape of what was typed (a token or access key that cannot be one, a number out of range, an email that is not one), then the same schemas the installer itself uses, then what only AWS and GitHub can say (the checks' findings, each with what to do and, where the installer can, a button that does it). Continue names the first thing stopping it. Each question has a "How to…" fold with the exact steps, links and commands to answer it (making the token with its permissions, setting up an AWS single sign-on profile).
 
 **Layout.** A centred column, 640 px wide, with a step indicator at the top (seven dots) and Back and Continue at the foot. Each step checks its answer before Continue wakes up, and says in one line what it checked ("Signed in to account 1234 5678 9012 as marc. Bedrock AgentCore and Claude are available in ap-southeast-2.").
 

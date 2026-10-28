@@ -1,0 +1,15 @@
+/* The app's typefaces (Geist, Geist Mono), Latin only, inlined into ui.css by scripts/bundle-ui.mjs. */
+@font-face {
+  font-family: "Geist Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("../../../node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2") format("woff2-variations");
+}
+@font-face {
+  font-family: "Geist Mono Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("../../../node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2") format("woff2-variations");
+}
