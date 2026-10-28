@@ -211,6 +211,7 @@ export class TraceStack extends Stack {
     const source = new Asset(this, 'AgentSource', { path: REPO_ROOT, exclude: SOURCE_EXCLUDE })
     // what the published images for this source are tagged (src/infra/images.ts; the release workflow tags them so)
     const contentTag = imageContentTag(REPO_ROOT)
+    const buildLogs = new logs.LogGroup(this, 'AgentImageBuildLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY })
     const build = new codebuild.Project(this, 'AgentImageBuild', {
       projectName: `${cfg.prefix}-agent-image`,
       description: 'Builds the trace agent image (agent/Dockerfile) for AgentCore, on arm64',
@@ -222,7 +223,7 @@ export class TraceStack extends Stack {
       },
       environmentVariables: { REPOSITORY_URI: { value: repo.repositoryUri }, IMAGE_TAG: { value: 'latest' }, ...imageBuildEnv(cfg.images, 'agent', contentTag) },
       timeout: Duration.minutes(90),
-      logging: { cloudWatch: { logGroup: new logs.LogGroup(this, 'AgentImageBuildLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY }) } },
+      logging: { cloudWatch: { logGroup: buildLogs } },
       // the published image when there is one for this source, else a build cached on the previous image (images.ts)
       buildSpec: codebuild.BuildSpec.fromObject(imageBuildSpec({ dockerfile: 'agent/Dockerfile', platform: 'linux/arm64' })),
       cache: codebuild.Cache.local(codebuild.LocalCacheMode.DOCKER_LAYER),
@@ -243,6 +244,9 @@ export class TraceStack extends Stack {
     const start = builder('ImageBuildStart', 'onEvent')
     const poll = builder('ImageBuildPoll', 'isComplete')
     for (const f of [start, poll]) f.addToRolePolicy(new iam.PolicyStatement({ actions: ['codebuild:StartBuild', 'codebuild:BatchGetBuilds'], resources: [build.projectArn] }))
+    // a failed build's message carries the end of its log (lambda/image-build.ts buildLogTail): the rollback deletes it.
+    // The group's ARN ends in :* and so covers its streams
+    poll.addToRolePolicy(new iam.PolicyStatement({ sid: 'ImageBuildLogTail', actions: ['logs:GetLogEvents'], resources: [buildLogs.logGroupArn] }))
     const provider = new Provider(this, 'ImageBuildProvider', { onEventHandler: start, isCompleteHandler: poll, queryInterval: Duration.seconds(30), totalTimeout: Duration.minutes(100) })
     const imageUri = `${repo.repositoryUri}:${source.assetHash}`
 
