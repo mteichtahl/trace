@@ -62,7 +62,8 @@ A connected system is a row in the access store (`services` table) plus a Cognit
 | `description` | what it is for, up to 500 characters |
 | `scopes` | `read`, or `read` and `write` |
 | `disabled` | stops it at once |
-| `created_by`, `created_at`, `last_used` | for the audit trail and the admin screen |
+| `created_by`, `created_at` | for the audit trail and the admin screen |
+| last used | not a column: one small object per system beside the store, `access/services-seen/<client_id>.json` (below, "External API") |
 
 Its project assignments live in the existing `assignments` table, keyed by its `sub`, with a part. Its class is
 derived, never stored as admin: a system with the `write` scope counts as a **user** (so it can be a contributor), one
@@ -97,6 +98,7 @@ records show `service:<name>` where they would show a person's email. A token is
    `trace-external/read` or `trace-external/write`;
 3. `client_id` is a connected system in the access store, and it is not disabled;
 4. the token's scopes are a subset of the scopes the system has now (an admin who removed `write` is obeyed at once).
+   Write always brings read: a token that asked for `write` alone is given both, as the store holds them.
 
 ## What a system may do
 
@@ -106,7 +108,16 @@ The allow-list (`SERVICE_ACTIONS` in `src/api/service-policy.ts`) and the scope 
 | Scope | Actions |
 | --- | --- |
 | `read` | `whoami`, `projects`, `installation.layout`, `status`, `settings.get`, `runs`, `run`, `artifact`, `jobs.list`, `job`, `journey.get`, `requirements.trace`, `design.get`, `build.get`, `cost.get`, `files.list`, `files.url`, `graph.neighbourhood`, `kb.search`, `tools.list`, `tools.waits`, `tool` (read-only tools) |
-| `write` | `task`, `job.control` (its own jobs), `settings.set` (opens a pull request a person merges), `kb.sync`, `tool` (tools that record runs) |
+| `write` | `task` (at most 3 queued or running per project), `job.control` (its own jobs), `settings.set` (opens a pull request a person merges), `kb.sync`, `tool` (tools that record runs) |
+
+`tool` never runs the tools of the shared datasheet library or the parts search (`parts.*`, `datasheets.*`,
+`SHARED_TOOL_PREFIXES`), whatever the scope: they read and write the library every project shares, and the parts
+search spends the installation's paid distributor quota. `tools.list` leaves them out for a system and the MCP tools'
+descriptions never offer them; a person still uses them as before.
+
+`task` by a system is refused, in words, when it already has three tasks queued or running on that project ("This
+system already has 3 tasks running on owner/repo. Wait for one to finish."), counted from the project's job index
+(`taskCap`). A running job whose heartbeat stopped is not counted, so a lost one never blocks a system for good.
 
 Never, whatever the scope: anything that needs an admin; signing or returning gates; answering questions; waivers;
 design decisions; orders; chats; preferences and `me.*`; memory; prompts; skills; people and assignments; voice; the
@@ -124,7 +135,9 @@ must be one it started (the job index's `requestedBySub` is its client id).
 
 `POST /invocations` on the `external` runtime, exactly the people's API contract (`src/api/server.ts`): body
 `{ action, ...args }`, `Authorization: Bearer <access token>`, answers `{ ok, result | error }`, 401 for a token that
-isn't accepted, 403 `no access`. `GET /ping` for health.
+isn't accepted, 403 `no access`. `GET /ping` for health. One difference: an unexpected error answers
+`internal error (ref <8 hex digits>)`, and the detail is only in the runtime's log, on the line with that `ref`; the
+people's runtime still says what went wrong.
 
 Same code: `TRACE_AGENT_MODE=external` starts the API server (`startExternal` in `src/api/server.ts`, the same handler
 with the principal resolution injected) with the service verifier in place of the people's. It runs with its own role
@@ -132,9 +145,31 @@ with the principal resolution injected) with the service verifier in place of th
 `trace-external`) and `TRACE_RATE_TABLE`; services.* answer "External access is off" there (a system is never an admin
 anyway, and the role could not do them).
 
-Per-system soft limit: 10 requests per second, bursting to 20, per container; over it answers 429 with
-`Retry-After`. Every request is logged as the API logs (who is `service:<name>`), and `last_used` is updated at most
-once a minute.
+Request limits, per system, in two lines (`src/api/rate-limit.ts`); over either, 429 with `Retry-After`:
+
+- **In the container**: a token bucket, 10 requests a second bursting to 20. Cheap, and it turns a flood away before
+  anything else is asked. On its own it would not be enough: AgentCore starts a container per runtime session, and the
+  caller picks the session id, so a system that sends a new one with every request reaches a fresh container each time.
+- **Shared, across every container**: fixed windows counted in DynamoDB (`<prefix>-external-limits`,
+  `TRACE_RATE_TABLE`): at most 10 requests in any one second and 300 in any one minute. Each window is one item
+  (`<client_id>#s#<second>`, `<client_id>#m#<minute>`), counted with `UpdateItem ADD n :1` on the condition
+  `attribute_not_exists(n) OR n < :limit`; a refused condition is the limit (`Retry-After` 1 s, or the rest of the
+  minute). Items expire by TTL a few minutes after their window. **When DynamoDB itself fails** (throttled,
+  unreachable, the table missing) the request goes ahead (**fail open**) and the runtime logs it once, then again
+  only after it has answered and failed anew. The limit protects capacity and cost, not access (the verifier and the
+  allow-list decide that on every call); failing closed would let an outage of the counter shut every system out,
+  and the container's bucket still holds.
+
+Every request is logged as the API logs (who is `service:<name>`). When a system last called is written as one small
+object per system beside the access store, `access/services-seen/<client_id>.json`, with a plain put, at most once
+every five minutes per system per container; `services.list` reads them. Never a write to the access store on the
+request path: its writes are a download, a change and a conditional put, and racing them from every fresh container
+could make people's admin changes fail.
+
+The API copies a project's database from GitHub to read it. In the external runtime those copies go in a fresh
+temporary folder under `/tmp/trace-external/svc-<hash of the client id>/`, never in the session storage
+(`/mnt/workspace`): AgentCore keeps that per runtime session id, which the caller chooses, so two systems sending the
+same id would otherwise share it.
 
 ## MCP endpoint
 
@@ -147,9 +182,11 @@ once a minute.
 - **Calls**: forwarded to the `external` runtime with the caller's own bearer token
   (`src/api/runtime-url.ts`), and the answer returned as pretty JSON text (cut above about 200 KB, saying so). An
   `ok: false` answer (and a 429) is a tool result with `isError` set, so the model reads it and adjusts. A 401 or 403
-  becomes an MCP error ("not allowed: …"). Timeout 120 s. The runtime session id sent onward is derived from the
-  client's `mcp-session-id` when it sends one, else random.
-- The token's `scope` claim is read **unverified**, only to shape `tools/list`; access is decided by the `external`
+  becomes an MCP error ("not allowed: …"). Timeout 120 s. The runtime session id sent onward is a hash of the token's
+  `client_id` claim and the client's `mcp-session-id` when it sends one, else random; never the client's own id, so
+  two systems that pick the same MCP session id never share a runtime session (or its storage).
+- The token's `scope` and `client_id` claims are read **unverified**, only to shape `tools/list` and the session id
+  (AgentCore's authorizer has checked the token before the request arrives); access is decided by the `external`
   runtime on every call.
 - The runtime's role can write its own logs and traces and nothing else; it makes no AWS call. It finds the `external` runtime
   from `TRACE_EXTERNAL_RUNTIME_ARN` and `AWS_REGION` (`invocationUrl`), or `TRACE_EXTERNAL_URL` when set (an override).
@@ -169,14 +206,14 @@ API actions, admins only:
 
 | Action | Arguments | Result |
 | --- | --- | --- |
-| `services.list` | | `{ enabled, services, token_url, api_url, mcp_url, resource_server }`: every system with its scopes, projects and parts, disabled, last used, and `secrets: [{ id, created_at }]` (never a value) |
+| `services.list` | | `{ enabled, services, token_url, api_url, mcp_url, resource_server }`: every system with its scopes, projects and parts, disabled, last used (to within about five minutes), and `secrets: [{ id, created_at }]` (never a value) |
 | `services.create` | `name`, `description?`, `scopes`, `projects?: [{ repo, part? }]` | `{ service, client_id, secret (only here), token_url, api_url, mcp_url, resource_server, scope }`; the app client is deleted again if the record cannot be written |
 | `services.update` | `name`, `description?`, `scopes?`, `disabled?` | `{ service }`; a scope change updates the app client (full configuration); down to read only, every part becomes reviewer |
 | `services.assign` | `name`, `repo`, `part?` | `{ name, repo, part, … }` (a read-only system is always a reviewer) |
 | `services.unassign` | `name`, `repo` | `{ removed }` |
 | `services.rotate` | `name` | `{ secret, secret_id, … addresses }`, shown once; the old one keeps working |
 | `services.retire_secret` | `name`, `secret_id` | `{ removed: true }`; never the last secret |
-| `services.delete` | `name` | `{ deleted, app_client: 'deleted' \| 'already gone' }`: deletes the Cognito client (already gone: fine), then the record and every assignment; logged |
+| `services.delete` | `name` | `{ deleted, app_client: 'deleted' \| 'already gone' }`: disables the system first, then deletes the Cognito client (already gone: fine), then the record and every assignment; logged. A failure part way leaves it disabled, never still let in |
 | `services.history` | `name` | `{ entries: [{ at, by, action, repo, detail, text }] }`: its assignment log and its own log, newest first, in words |
 
 With external access off (no `TRACE_EXTERNAL_RUNTIME_ARN` on the API runtime), every one but `list` and `history`
@@ -197,6 +234,13 @@ API and MCP addresses, and three ready-made snippets: get a token with curl, cal
 to an MCP client. Each system's page shows its projects and parts, scopes, last used, secrets (by id and date, never
 the value), its history, and Disable, Rotate secret and Delete (with a typed confirmation).
 
+### A leaked secret
+
+Disable the system first (it is shut out within 30 seconds, whatever its tokens), then rotate (a new secret), retire
+the old secret, give the new one to the system, and enable it again. Rotating alone is not enough: the old secret keeps
+working until it is retired, and a token already issued with it lasts up to an hour, which disabling stops. The admin
+screen's Keys section and `tracectl services rotate` say the same.
+
 ## Infrastructure
 
 Only with `external.enabled` (`src/infra/external.ts`, the `ExternalAccess` construct; the installer's **External
@@ -205,11 +249,13 @@ access** switch). With it off the template is the same as without the feature (`
 - A Cognito resource server on the people's pool, identifier `trace-external`, scopes `read` ("read the projects the
   system is on") and `write` ("start work and change settings on the projects the system contributes to").
 - `CfnRuntime` `<prefix>_external` (dashes become underscores, as for `<prefix>_api`): the agent image, its own role
-  `<prefix>-agent-external-<region>` (below), HTTP protocol, the API's network, session limits and file system, `Authorization` passed through. Authorizer
+  `<prefix>-agent-external-<region>` (below), HTTP protocol, the API's network, session limits and file system,
+  `Authorization` passed through. Authorizer
   `{ discoveryUrl (the API's), allowedScopes: ['trace-external/read', 'trace-external/write'] }`, with no
   `allowedClients`: connected systems' clients are made at run time, and AgentCore requires every configured check to
   pass. Its environment is the API's (built once in `stack.ts`) with `TRACE_AGENT_MODE=external`, plus
-  `TRACE_TOKEN_URL` and `TRACE_EXTERNAL_RESOURCE_SERVER`. It is never told its own ARN or the MCP runtime's.
+  `TRACE_TOKEN_URL`, `TRACE_EXTERNAL_RESOURCE_SERVER` and `TRACE_RATE_TABLE` (the rate-limit table). It is never told
+  its own ARN or the MCP runtime's.
 - `CfnRuntime` `<prefix>_mcp`: same image, MCP protocol, the same authorizer, its own role `<prefix>-agent-mcp-<region>`
   (pull the agent image, write its own runtime's logs, X-Ray spans, `cloudwatch:PutMetricData` in the
   `bedrock-agentcore` namespace, and the span destination's `logs:PutResourcePolicy`; nothing else). Environment:

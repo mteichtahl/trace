@@ -4,8 +4,9 @@
  * credentials only, with a secret, one-hour access tokens, named <prefix>-svc-<name>) and a row in the access store.
  *
  *   services.list           admin   { services, token_url, api_url, mcp_url, resource_server }: every system with its
- *                                   scopes, projects and parts, disabled, created, last used, and its secrets by id
- *                                   and date (never a value; Cognito holds at most two)
+ *                                   scopes, projects and parts, disabled, created, last used (src/core/services-seen.ts:
+ *                                   right to within about five minutes), and its secrets by id and date (never a value;
+ *                                   Cognito holds at most two)
  *   services.create         admin   { name, description?, scopes: ['read'] | ['read','write'], projects?: [{ repo, part? }] }
  *                                   → { service, client_id, secret, token_url, api_url, mcp_url }. The secret is here
  *                                   only: trace never stores it, and it is never logged
@@ -17,8 +18,10 @@
  *   services.rotate         admin   { name } → { secret, secret_id, addresses }: shown once; the old secret keeps
  *                                   working until retired
  *   services.retire_secret  admin   { name, secret_id }: removes one secret (never the last)
- *   services.delete         admin   { name }: deletes its app client (already gone: fine), then the system and every
- *                                   assignment, logged
+ *   services.delete         admin   { name }: disables it first (its tokens stop within 30 seconds, whatever happens
+ *                                   next), then deletes its app client (already gone: fine), then the system and every
+ *                                   assignment, logged. A failure part way leaves it disabled, never half deleted and
+ *                                   still let in
  *   services.history        admin   { name }: its assignment log and its own log, newest first, in words
  *
  * With external access off (no TRACE_EXTERNAL_RUNTIME_ARN), every one but list and history answers that it is off;
@@ -29,6 +32,7 @@ import {
   AccessDenied, PARTS, PartRefused, SERVICE_SCOPES, type Service, ServiceExists, ServiceName, type ServiceScope, RepoSlug,
   assignService, assignmentLog, assignments, createService, deleteService, listServices, logServiceSecret, serviceByName, serviceLog, unassign, updateService,
 } from '../core/access.js'
+import { servicesSeen } from '../core/services-seen.js'
 import { ActionError, type Context, type ExternalAccess, def } from './action-kit.js'
 import { CognitoError, serviceClientName } from './aws.js'
 import { invocationUrl } from './runtime-url.js'
@@ -96,10 +100,16 @@ const refusedPart = async <T>(fn: () => Promise<T>): Promise<T> => {
   }
 }
 
+/** When a system last called: what the external runtime noted (services-seen), else what an older one stored. */
+const lastUsed = (s: Service, seen: ReadonlyMap<string, string | null> | undefined): string | null => {
+  const noted = seen?.get(s.client_id) ?? null
+  return noted && (!s.last_used || noted > s.last_used) ? noted : s.last_used
+}
+
 /** One system with its projects and parts, for the admin screen. */
-async function view(ctx: Context, s: Service, all?: Awaited<ReturnType<typeof assignments>>) {
+async function view(ctx: Context, s: Service, all?: Awaited<ReturnType<typeof assignments>>, seen?: ReadonlyMap<string, string | null>) {
   const mine = (all ?? await assignments(ctx.principal, { sub: s.client_id })).filter((a) => a.sub === s.client_id)
-  return { ...s, projects: mine.map((a) => ({ repo: a.repo, part: a.part })) }
+  return { ...s, last_used: lastUsed(s, seen), projects: mine.map((a) => ({ repo: a.repo, part: a.part })) }
 }
 
 const Project = z.object({ repo: RepoSlug, part: z.enum(PARTS).optional() })
@@ -122,9 +132,10 @@ async function secretsOf(ctx: Context, s: Service): Promise<{ id: string; create
 export const SERVICE_ADMIN_ACTIONS = {
   'services.list': def('admin', z.object({}), async (_a, ctx) => {
     const [list, all] = await Promise.all([listServices(ctx.principal), assignments(ctx.principal)])
+    const seen = await servicesSeen(list.map((s) => s.client_id))
     const services = await Promise.all(list.map(async (s) => {
       const secrets = await secretsOf(ctx, s)
-      return { ...(await view(ctx, s, all)), ...(secrets ? { secrets } : {}) }
+      return { ...(await view(ctx, s, all, seen)), ...(secrets ? { secrets } : {}) }
     }))
     return { enabled: Boolean(ctx.deps.external), services, ...addresses(ctx.deps.external) }
   }),
@@ -202,7 +213,9 @@ export const SERVICE_ADMIN_ACTIONS = {
   'services.delete': def('admin', Named, async (a, ctx) => {
     external(ctx)
     const s = await system(ctx, a.name)
-    const clientDeleted = await cognito('deleting its app client', () => ctx.deps.cognito().deleteServiceClient(s.client_id))
+    // disabled first: if deleting the app client or the record fails, the system is still shut out
+    if (!s.disabled) await updateService(ctx.principal, s.name, { disabled: true })
+    const clientDeleted = await cognito('deleting its app client (it is disabled meanwhile)', () => ctx.deps.cognito().deleteServiceClient(s.client_id))
     const deleted = await deleteService(ctx.principal, s.name)
     return { name: s.name, client_id: s.client_id, deleted, app_client: clientDeleted ? 'deleted' : 'already gone' }
   }),

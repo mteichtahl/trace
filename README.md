@@ -546,12 +546,18 @@ artifacts, jobs, requirements, design, build and cost records, files, the knowle
 With read and change it can also, where it is a contributor, give the agents work, pause or cancel its own jobs,
 propose a settings change (as a pull request a person merges), sync the knowledge base and run tools that record
 runs. Never, whatever it may do: anything that needs an admin, signing gates, answering questions, waivers, design
-decisions, orders, chats, preferences, memory, prompts, people and assignments. Those stay with a person. Anything
-else answers "no access", the same words as a project that isn't yours.
+decisions, orders, chats, preferences, memory, prompts, people and assignments, or the tools of the shared datasheet
+library and the parts search (shared by every project, and the parts search spends the installation's paid quota).
+Those stay with a person. Anything else answers "no access", the same words as a project that isn't yours.
 
-**Stopping and rotating.** Disabling a system stops it within 30 seconds; deleting it also removes its keys and takes
-it off every project. A new secret works beside the old one, so the system can switch without stopping; retire the old
-one once it has:
+**Limits.** Each system may make 10 requests a second and 300 a minute, counted across the whole installation; over
+that it is answered 429 with `Retry-After`, the number of seconds to wait. It may have at most three tasks queued or
+running on one project; a fourth is refused until one finishes. An unexpected failure is answered
+`internal error (ref …)`: the reference finds the details in the external runtime's log (`ExternalLogGroup`).
+
+**Stopping and rotating.** Disabling a system stops it within 30 seconds; deleting it disables it first, then removes
+its keys and takes it off every project. A new secret works beside the old one, so the system can switch without
+stopping; retire the old one once it has:
 
 ```sh
 tracectl services disable release-bot          # enable to let it in again
@@ -563,8 +569,23 @@ tracectl services history build-dashboard
 
 Every command takes `--json`. The web app has the same on each system's page.
 
+**A leaked secret.** Disable the system first, then rotate, retire the old secret, give the new one to the system, and
+enable it again. Rotating alone is not enough: the old secret keeps working until it is retired, and a token already
+issued lasts up to an hour, which disabling stops at once.
+
+```sh
+tracectl services disable build-dashboard
+tracectl services rotate build-dashboard
+tracectl services retire-secret build-dashboard OLD_SECRET_ID
+tracectl services enable build-dashboard
+```
+
 **Cost.** Each system's keys are checked with Amazon Cognito, which charges a small amount per system and per sign-in.
-A system that reuses its token for the hour makes about 720 sign-ins a month.
+A system that reuses its token for the hour makes about 720 sign-ins a month. The shared request limit is a small
+DynamoDB table, billed per request (two small writes per call).
+
+**What it runs as.** The external API has an AWS role of its own, with only what systems' actions need: it cannot
+manage people or keys in Cognito at all. The details are in [docs/external-access.md](docs/external-access.md).
 
 ## Web app
 

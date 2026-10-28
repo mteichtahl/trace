@@ -8,7 +8,8 @@
  *   3. its client_id is a connected system in the access store, and it is not disabled (looked up at most every 30 s
  *      per system, so a disabled system is shut out within 30 seconds, not when its token expires)
  *   4. its scopes, as used, are what the token carries AND what the system has now: an admin who removed write is
- *      obeyed at the next lookup
+ *      obeyed at the next lookup. Write always brings read (as in the store, and as services.create gives them), so
+ *      a token that asked for write alone still reads
  *
  * The principal: { sub: client_id, email: null, groups: [trace-users] with write, else [trace-guests], kind: 'service',
  * name, scopes }. Never an admin. A person's token is refused here (rule 2), and a system's is refused by the people's
@@ -65,7 +66,9 @@ export class ServiceVerifier {
     const s = await this.service(c.client_id)
     if (!s) throw new AuthError('not a connected system')
     if (s.disabled) throw new AuthError('this connected system is disabled')
-    const scopes = granted.filter((g) => s.scopes.includes(g))
+    const held = granted.filter((g) => s.scopes.includes(g))
+    // write always brings read (whenever the system holds read, which it always does)
+    const scopes: ServiceScope[] = held.includes('write') && s.scopes.includes('read') && !held.includes('read') ? ['read', 'write'] : held
     if (!scopes.length) throw new AuthError('the token\'s scopes were removed from this connected system')
     return { sub: s.client_id, email: null, groups: [scopes.includes('write') ? GROUPS.user : GROUPS.guest], kind: 'service', name: s.name, scopes }
   }

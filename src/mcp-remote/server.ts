@@ -15,8 +15,14 @@
  * (TRACE_EXTERNAL_URL, else TRACE_EXTERNAL_RUNTIME_ARN and AWS_REGION through invocationUrl).
  *
  * Stateless: a new MCP server and transport per request (sessionIdGenerator undefined), so any container can answer
- * any request. The runtime session id sent onward is derived from the client's MCP session id when it sends one, else
- * random.
+ * any request. The runtime session id sent onward is a hash of the token's client_id and the client's MCP session id
+ * when it sends one (else random), never the client's id itself: AgentCore keeps a session's storage per runtime
+ * session id, so two systems that pick the same MCP session id still never share one. The client_id is read from the
+ * token like the scope (AgentCore's authorizer has checked the token's signature before the request gets here, and
+ * the external runtime checks it again).
+ *
+ * tools/list and the `tool` tool's description never offer the shared library's or the parts search's tools
+ * (src/api/service-policy.ts SHARED_TOOL_PREFIXES): a system may not run them.
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { type IncomingMessage, type Server as HttpServer, type ServerResponse, createServer } from 'node:http'
@@ -44,17 +50,28 @@ const INSTRUCTIONS = 'trace: electronics projects from requirements to boards. C
 /** An action's MCP tool name: trace_ + the action with every non-alphanumeric character as `_` (journey.get → trace_journey_get). */
 export const toolName = (action: string): string => `trace_${action.replace(/[^A-Za-z0-9]/g, '_')}`
 
-/** The resource-server scopes a bearer token claims, read without verifying it: it only shapes the tool list. */
-export function claimedScopes(token: string | null, resourceServer = DEFAULT_RESOURCE_SERVER): ServiceScope[] {
+const Claims = z.object({ scope: z.string().optional(), client_id: z.string().optional() }).loose()
+
+/** A bearer token's claims, read without verifying them (null when unreadable). */
+function claims(token: string | null): z.output<typeof Claims> | null {
   const payload = token?.split('.')[1]
-  if (!payload) return []
+  if (!payload) return null
   try {
-    const c = z.object({ scope: z.string().optional() }).loose().safeParse(JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')))
-    return c.success ? tokenScopes(c.data.scope, resourceServer) : []
+    const c = Claims.safeParse(JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')))
+    return c.success ? c.data : null
   } catch {
-    return []
+    return null
   }
 }
+
+/** The resource-server scopes a bearer token claims, read without verifying it: it only shapes the tool list. */
+export function claimedScopes(token: string | null, resourceServer = DEFAULT_RESOURCE_SERVER): ServiceScope[] {
+  const c = claims(token)
+  return c ? tokenScopes(c.scope, resourceServer) : []
+}
+
+/** The token's client_id claim (the connected system), or null. */
+export const claimedClient = (token: string | null): string | null => claims(token)?.client_id ?? null
 
 /** The input schema of an action's arguments as MCP wants it: JSON Schema of what the caller sends (defaults optional). */
 export function inputSchema(action: string): Tool['inputSchema'] {
@@ -119,10 +136,14 @@ export async function forward(f: Forwarder, token: string, action: string, args:
   return { content: [{ type: 'text', text: resultText(a.data.result) }], isError: false }
 }
 
-/** The runtime session id sent onward: one per MCP session when the client keeps one (33+ characters), else random. */
-export function sessionFor(mcpSession: string | string[] | undefined): string {
+/**
+ * The runtime session id sent onward (33+ characters): one per system and MCP session when the client keeps one, a
+ * hash of both, so another system that sends the same MCP session id gets another runtime session; else random.
+ */
+export function sessionFor(clientId: string | null, mcpSession: string | string[] | undefined): string {
   const s = Array.isArray(mcpSession) ? mcpSession[0] : mcpSession
-  return s ? `trace-mcp-${createHash('sha256').update(s).digest('hex').slice(0, 40)}` : `trace-mcp-${randomUUID()}`
+  if (!s || !clientId) return `trace-mcp-${randomUUID()}`
+  return `trace-mcp-${createHash('sha256').update(JSON.stringify([clientId, s])).digest('hex').slice(0, 40)}`
 }
 
 export interface McpOptions {
@@ -158,7 +179,7 @@ export function handler(o: McpOptions): (req: IncomingMessage, res: ServerRespon
     const token = bearer(req.headers.authorization)
     if (!token) return send(res, 401, { jsonrpc: '2.0', error: { code: -32001, message: 'not allowed: no bearer token' }, id: null })
     const t0 = Date.now()
-    const server = mcpServer(o, token, sessionFor(req.headers['mcp-session-id']))
+    const server = mcpServer(o, token, sessionFor(claimedClient(token), req.headers['mcp-session-id']))
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
     res.on('close', () => { void transport.close(); void server.close() })
     void (async () => {

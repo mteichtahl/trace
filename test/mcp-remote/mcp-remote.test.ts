@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ACTION_NAMES } from '../../src/api/actions.js'
 import { SERVICE_ACTIONS } from '../../src/api/service-policy.js'
 import { DESCRIPTIONS } from '../../src/mcp-remote/descriptions.js'
-import { MAX_TEXT, claimedScopes, externalUrl, inputSchema, listen, resultText, sessionFor, toolName, toolsFor } from '../../src/mcp-remote/server.js'
+import { MAX_TEXT, claimedClient, claimedScopes, externalUrl, inputSchema, listen, resultText, sessionFor, toolName, toolsFor } from '../../src/mcp-remote/server.js'
 
 const b64 = (o: unknown): string => Buffer.from(JSON.stringify(o)).toString('base64url')
 /** A token-shaped string: the MCP runtime reads only its scope, unverified. */
@@ -55,10 +55,22 @@ describe('the tool list', () => {
     expect(t).toMatch(/\[cut:/)
     expect(resultText({ a: 1 })).toBe('{\n  "a": 1\n}')
   })
-  it('gives a runtime session id of at least 33 characters', () => {
-    expect(sessionFor('abc').length).toBeGreaterThanOrEqual(33)
-    expect(sessionFor('abc')).toBe(sessionFor('abc'))
-    expect(sessionFor(undefined).length).toBeGreaterThanOrEqual(33)
+  it('gives a runtime session id of at least 33 characters, one per system and MCP session, never the client\'s own id', () => {
+    expect(sessionFor('c1', 'abc').length).toBeGreaterThanOrEqual(33)
+    expect(sessionFor('c1', 'abc')).toBe(sessionFor('c1', 'abc'))
+    // two systems that pick the same MCP session id get different runtime sessions (their own session storage)
+    expect(sessionFor('c1', 'abc')).not.toBe(sessionFor('c2', 'abc'))
+    expect(sessionFor('c1', 'abc')).not.toContain('abc')
+    expect(sessionFor('c1', undefined).length).toBeGreaterThanOrEqual(33)
+    expect(sessionFor(null, 'abc')).not.toBe(sessionFor(null, 'abc'))
+    expect(claimedClient(READ)).toBe('c1')
+    expect(claimedClient('garbage')).toBeNull()
+  })
+  it('never offers the shared library\'s or the parts search\'s tools', () => {
+    const tool = toolsFor(['read', 'write']).find((t) => t.name === 'trace_tool')
+    const list = toolsFor(['read']).find((t) => t.name === 'trace_tools_list')
+    expect(list?.description).toMatch(/never .*shared datasheet library or the parts search/)
+    expect(tool?.description).not.toMatch(/shared library/)
   })
   it('finds the external runtime from TRACE_EXTERNAL_URL, else its ARN and region', () => {
     expect(externalUrl({ TRACE_EXTERNAL_URL: 'https://x.example/inv' })).toBe('https://x.example/inv')

@@ -1,9 +1,12 @@
-/** Connected systems in the access store (src/core/access.ts): records, derived class, assignments and their log. */
+/** Connected systems in the access store (src/core/access.ts): records, derived class, assignments and their log; and
+ * when each last called, beside it (src/core/services-seen.ts), never in it. */
 import { describe, expect, it } from 'vitest'
 import {
   AccessDenied, type Principal, assignService, assignmentLog, createService, deleteService, getService, listServices, membersOf, projectsFor,
-  require_, serviceByName, touchLastUsed, updateService,
+  require_, serviceByName, updateService,
 } from '../../src/core/access.js'
+import { accessStore } from '../../src/core/access.js'
+import { SEEN_EVERY_MS, noteServiceSeen, resetServicesSeen, servicesSeen } from '../../src/core/services-seen.js'
 
 const admin: Principal = { sub: 'a', email: 'admin@example.com', groups: ['trace-admins'] }
 const user: Principal = { sub: 'u', email: 'user@example.com', groups: ['trace-users'] }
@@ -32,9 +35,18 @@ describe('connected systems in the access store', () => {
     await expect(assignService(admin, ro, 'o/sys', 'contributor')).rejects.toThrow(/only be a reviewer/)
     expect((await assignmentLog(admin, 'cs1')).map((e) => e.text)).toContain('admin@example.com changed their part on o/sys from contributor to reviewer.')
 
-    expect(await touchLastUsed('cs1', 1_000_000)).toBe(true)
-    expect(await touchLastUsed('cs1', 1_030_000)).toBe(false)
-    expect((await getService('cs1'))?.last_used).toBe(new Date(1_000_000).toISOString())
+    // last used: one small object per system beside the access store, never a write to the store itself
+    resetServicesSeen()
+    const before = await accessStore().read().then((db) => { try { return JSON.stringify(db.prepare('SELECT * FROM services').all()) } finally { db.close() } })
+    expect(await noteServiceSeen('cs1', 1_000_000)).toBe(true)
+    expect(await noteServiceSeen('cs1', 1_000_000 + SEEN_EVERY_MS - 1)).toBe(false)
+    expect(await noteServiceSeen('cs1', 1_000_000 + SEEN_EVERY_MS)).toBe(true)
+    expect(await noteServiceSeen('../escape', 1_000_000)).toBe(false)
+    expect((await servicesSeen(['cs1', 'never'])).get('cs1')).toBe(new Date(1_000_000 + SEEN_EVERY_MS).toISOString())
+    expect((await servicesSeen(['cs1', 'never'])).get('never')).toBeNull()
+    expect((await getService('cs1'))?.last_used).toBeNull()
+    const after = await accessStore().read().then((db) => { try { return JSON.stringify(db.prepare('SELECT * FROM services').all()) } finally { db.close() } })
+    expect(after).toBe(before)
 
     expect(await deleteService(admin, 'store-sys')).toBe(true)
     expect(await serviceByName(admin, 'store-sys')).toBeNull()

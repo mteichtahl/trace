@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS services (
   disabled INTEGER NOT NULL DEFAULT 0,
   created_by TEXT NOT NULL,
   created_at REAL NOT NULL,
-  last_used REAL
+  last_used REAL                  -- no longer written: when a system last called is in services-seen/ (src/core/services-seen.ts)
 );
 CREATE TABLE IF NOT EXISTS service_log (
   at REAL NOT NULL, by TEXT NOT NULL, client_id TEXT NOT NULL, name TEXT NOT NULL,
@@ -556,21 +556,6 @@ export async function deleteService(admin: Principal, name: string): Promise<boo
     logService(db, admin, s, 'delete', null)
     return true
   })
-}
-
-const lastTouched = new Map<string, number>()
-
-/** Record that a connected system called (at most once a minute per system per process). Never throws. */
-export async function touchLastUsed(clientId: string, at: number = Date.now()): Promise<boolean> {
-  const before = lastTouched.get(clientId)
-  if (before !== undefined && at - before < 60_000) return false
-  lastTouched.set(clientId, at)
-  try {
-    await update((db) => { db.prepare('UPDATE services SET last_used=? WHERE client_id=?').run(at / 1000, clientId) })
-    return true
-  } catch {
-    return false
-  }
 }
 
 /**

@@ -152,7 +152,7 @@ import { VOICE_ACTIONS } from './actions-voice.js'
 import { LAYOUT_ACTIONS } from './actions-layout.js'
 import type { CognitoUser } from './aws.js'
 import { SERVICE_ADMIN_ACTIONS } from './actions-services.js'
-import { SERVICE_ACTIONS, checkService } from './service-policy.js'
+import { SERVICE_ACTIONS, checkService, taskCap, toolOpenToSystems } from './service-policy.js'
 
 export {
   ActionError, NO_ACCESS, PROJECT_DB_PATH, type ActionDeps, type Context, type JobView, type JobsApi, type OnboardRequest, type WaitView,
@@ -405,7 +405,8 @@ export const ACTIONS = {
     } finally { w.close() }
   })),
 
-  'tools.list': def('read', Repo, async (_a, ctx) => ctx.deps.tools().list().filter((t) => !t.hardware && !API_HIDDEN_TOOLS.has(t.name)).map((t) => ({
+  // a connected system is not shown the shared library's and the parts search's tools: it may not run them
+  'tools.list': def('read', Repo, async (_a, ctx) => ctx.deps.tools().list().filter((t) => !t.hardware && !API_HIDDEN_TOOLS.has(t.name) && (!isService(ctx.principal) || toolOpenToSystems(t.name))).map((t) => ({
     name: t.name, description: t.description, needs: toolNeed(t), input: Registry.jsonSchema(t),
   }))),
 
@@ -447,10 +448,13 @@ export const ACTIONS = {
     }
   }),
 
-  task: def('write', Repo.extend({ request: z.string().min(1).max(20_000), agent: z.enum(TASK_AGENTS).optional() }), async (a, ctx) =>
-    (await ctx.deps.jobs()).startJob({
+  task: def('write', Repo.extend({ request: z.string().min(1).max(20_000), agent: z.enum(TASK_AGENTS).optional() }), async (a, ctx) => {
+    // a connected system: at most three tasks queued or running on one project (src/api/service-policy.ts)
+    await taskCap(ctx.principal, a.repo, ctx)
+    return (await ctx.deps.jobs()).startJob({
       kind: 'task', repository: a.repo, request: a.request, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub, ...(a.agent ? { agent: a.agent } : {}),
-    })),
+    })
+  }),
 
   'memory.list': def('read', MemoryArgs.extend({ limit: z.number().int().min(1).max(200).default(50), includeInactive: z.boolean().default(false) }), async (a, ctx) => {
     const mem = projectMemory(ctx, a.repo)
