@@ -33,6 +33,7 @@ const MUTATING: ReadonlyArray<readonly [string, What]> = [
   ['gate.', 'journey'],
   ['question.answer', 'journey'],
   ['stuck.dismiss', 'journey'],
+  ['handoff.decline', 'journey'],
   ['waiver.add', 'journey'],
   ['journey.criterion.open', 'journey'],
   ['chats.append', 'chats'],

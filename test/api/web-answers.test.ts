@@ -14,6 +14,8 @@ import { backendFor } from '../../src/core/central.js'
 import { askQuestion, setCriterion, startJourney } from '../../src/core/journey.js'
 import { Registry } from '../../src/core/registry.js'
 import { JobIndexStore, putJob } from '../../src/core/job-index.js'
+import { AgentFactsStore } from '../../src/core/agent-facts.js'
+import { addHandoff, answerHandoff, handoffTitle, markStarted } from '../../src/core/handoffs.js'
 import { projectHash } from '../../src/core/project.js'
 import { openProject } from '../../src/core/store.js'
 import { DesignDb } from '../../src/tools/design/db.js'
@@ -30,12 +32,17 @@ const bucket = mkdtempSync(join(tmpdir(), 'trace-answers-bucket-'))
 const deps: ActionDeps = { github: async () => github, cognito: () => cognito, jobs: async () => ({ repositoryOf: () => null, startJob: async () => ({ accepted: true, jobId: 'j' }), jobStatus: async () => [], cancel: async () => ({ ok: true, state: 'aborted' }), pause: async () => ({ ok: true, state: 'running' }) }), tools: () => new Registry([]), scratch, store: (p) => backendFor(join(bucket, p)) }
 const run = async (who: Context['principal'], action: string, args: Record<string, unknown> = {}): Promise<unknown> => (await perform(action, args, { principal: who, deps })).result
 const OUT = join(import.meta.dirname, '../../web/src/lib/api-answers.json')
+/** The queued hand-off the answers decline (seeded below). */
+let pending = ''
 
+const handoffIds: string[] = []
 /** Times and ids change on every run: fixed, so the file only changes when a shape does. */
 function stable(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(stable)
   if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, stable(x)]))
   if (typeof v === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(v)) return '2026-10-27T00:00:00.000Z'
+  // a hand-off's id (ho + 14 hex): its order kept, so the two seeded ones stay apart
+  if (typeof v === 'string' && /^ho[0-9a-f]{14}$/.test(v)) return `ho${String(handoffIds.indexOf(v) === -1 ? handoffIds.push(v) - 1 : handoffIds.indexOf(v)).padStart(14, '0')}`
   if (typeof v === 'string' && /[0-9a-f]{16}/.test(v)) return v.replace(/[0-9a-f]{16,}/g, (m) => '0123456789abcdef0123456789abcdef'.slice(0, m.length))
   if (typeof v === 'string' && /^\d+ (minute|hour|day)s? ago$|^just now$/.test(v)) return 'just now'
   return v
@@ -77,6 +84,24 @@ beforeAll(async () => {
     putJob(db, 'job-done', { kind: 'task', agent: 'verify', title: 'Check the BOM', state: 'succeeded', session: S('c'), queuedAt: now - 3000, startedAt: now - 3000, endedAt: now - 2400, summary: 'verify: done in 9 turns' }, now)
     return { result: null }
   })
+  // a hand-off between specialists: the Thermal specialist asked the Analog one; its job is queued, and one answered
+  const projects = backendFor(join(bucket, 'projects'))
+  const OPEN = { enabled: ['verify', 'impl', 'ams', 'emc', 'render', 'thermal'] as const, limits: { perJob: 3, perProject: 10 }, declined: new Set<string>() }
+  const asked = { evidence: [{ kind: 'run', ref: 'run-1', label: 'the thermal run' }], blocks: 'the junction temperature check of U3', acceptance: ['the dissipation in watts at 500 mA, with the run id'] }
+  const [q, a] = (await new AgentFactsStore(projects, REPO).update((db) => {
+    const one = addHandoff(db, { agent: 'thermal', label: 'the Thermal specialist', jobId: 'job-th' }, { to: 'ams', question: 'What is the worst-case dissipation of the LDO U3 at 85 °C ambient?', ...asked }, OPEN)
+    const two = addHandoff(db, { agent: 'thermal', label: 'the Thermal specialist', jobId: 'job-th' }, { to: 'ams', question: 'What is the quiescent current of U3 at 85 °C, from its datasheet?', ...asked }, OPEN)
+    markStarted(db, one.id, 'job-ho')
+    markStarted(db, two.id, 'job-ho2')
+    answerHandoff(db, two.id, 'job-ho2', { answered: true, text: '15 µA typical at 85 °C (datasheet page 5).', evidence: [{ kind: 'run', ref: 'run-1' }], confidence: 0.9, acceptanceMet: true })
+    return { result: [one, two] }
+  })).result
+  pending = q!.id
+  await new JobIndexStore(projects, REPO).update((db) => {
+    putJob(db, 'job-ho', { kind: 'task', agent: 'ams', title: handoffTitle('thermal', q!.question), handoff: q!.id, state: 'queued', session: S('d'), requestedBy: 'the Thermal specialist (job job-th)', queuedAt: now - 30 }, now)
+    putJob(db, 'job-ho2', { kind: 'task', agent: 'ams', title: handoffTitle('thermal', a!.question), handoff: a!.id, state: 'succeeded', session: S('e'), requestedBy: 'the Thermal specialist (job job-th)', queuedAt: now - 900, startedAt: now - 900, endedAt: now - 600, summary: 'ams: done in 4 turns' }, now)
+    return { result: null }
+  })
 })
 afterAll(() => { rmSync(scratch, { recursive: true, force: true }); rmSync(bucket, { recursive: true, force: true }) })
 
@@ -93,6 +118,7 @@ describe('the answers the web app reads', () => {
     const answers = stable({
       'journey.get': { args: { repo: REPO }, result: await run(USER, 'journey.get', { repo: REPO }) },
       'jobs.list': { args: { repo: REPO }, result: await run(USER, 'jobs.list', { repo: REPO }) },
+      'handoff.decline': { args: { repo: REPO, id: pending, reason: 'The bench measures it on Friday.' }, result: await run(USER, 'handoff.decline', { repo: REPO, id: pending, reason: 'The bench measures it on Friday.' }) },
       inbox: { args: {}, result: await run(USER, 'inbox') },
       'me.get': { args: {}, result: await run(USER, 'me.get') },
       'project.members': { args: { repo: REPO }, result: await run(USER, 'project.members', { repo: REPO }) },

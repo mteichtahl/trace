@@ -15,6 +15,9 @@ import { listen } from '../../src/api/server.js'
 import { AccessDenied, assign, standing } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
 import { AgentFactsStore, addAgentQuestion, addCriterionCheck, addStuck, loadAgentFacts } from '../../src/core/agent-facts.js'
+import { addHandoff, handoffTitle, loadHandoffs, markStarted } from '../../src/core/handoffs.js'
+import { JobIndexStore, putJob } from '../../src/core/job-index.js'
+import { projectHash } from '../../src/core/project.js'
 import { askQuestion, loadJourney, setCriterion, startJourney } from '../../src/core/journey.js'
 import { allTools } from '../../src/tools/index.js'
 import { Registry } from '../../src/core/registry.js'
@@ -336,10 +339,64 @@ describe('the agents\' facts in the journey', () => {
     expect((await facts().read((db) => loadAgentFacts(db))).result.stuck.find((x) => x.id === id)?.resolvedAt).toBeNull()
   })
 
+  it('hand-offs between specialists: listed in jobs.list and journey.get, with their job; handoff.decline by a contributor only', async () => {
+    const OPEN = { enabled: ['verify', 'impl', 'ams', 'emc', 'render', 'thermal'] as const, limits: { perJob: 3, perProject: 10 }, declined: new Set<string>() }
+    const req = (q: string) => ({ to: 'ams', question: q, evidence: [{ kind: 'run', ref: 'run-42' }], blocks: 'the junction temperature check of U3', acceptance: ['the dissipation in watts, with the run id'] })
+    const thermal = { agent: 'thermal', label: 'the Thermal specialist', jobId: 'job-th1' }
+    const [queued, running, fresh] = (await facts().update((db) => ({
+      result: [
+        addHandoff(db, thermal, req('What is the worst-case dissipation of the LDO U3 at 85 °C ambient?'), OPEN),
+        addHandoff(db, thermal, { ...req('Does the 2 MHz switcher on the 5 V rail pass class B at 30 MHz?'), to: 'emc' }, OPEN),
+        addHandoff(db, thermal, { ...req('Can U3 move 10 mm away from Q1 without breaking the routing?'), to: 'impl' }, OPEN),
+      ],
+    }))).result
+    await facts().update((db) => { markStarted(db, queued!.id, 'job-a1'); markStarted(db, running!.id, 'job-e1'); return { result: null } })
+    const S = `trace-api-${projectHash('acme/other')}-${'d'.repeat(24)}`
+    const now = Date.now() / 1000
+    await new JobIndexStore(backendFor(join(bucket, 'projects')), 'acme/other').update((db) => {
+      putJob(db, 'job-a1', { kind: 'task', agent: 'ams', title: handoffTitle('thermal', queued!.question), handoff: queued!.id, state: 'queued', session: S, queuedAt: now - 30 }, now)
+      putJob(db, 'job-e1', { kind: 'task', agent: 'emc', title: handoffTitle('thermal', running!.question), handoff: running!.id, state: 'running', session: S, startedAt: now - 60, beatAt: now }, now)
+      return { result: null }
+    })
+    const l = await run(USER, 'jobs.list', { repo: 'acme/other' }) as { jobs: { workerJobId: string; title: string; handoff: unknown; controls: string[] }[]; handoffs: { id: string; state: string; from: string; to: string; summary: string; job: { handle: string | null } | null }[] }
+    expect(l.handoffs.map((h) => [h.id, h.state])).toEqual([[fresh!.id, 'requested'], [running!.id, 'running'], [queued!.id, 'queued']])
+    expect(l.handoffs.find((h) => h.id === queued!.id)).toMatchObject({ from: 'thermal', to: 'ams', summary: expect.stringMatching(/^Thermal → Analog and mixed-signal: /), job: { handle: `${S}.job-a1` } })
+    const a1 = l.jobs.find((j) => j.workerJobId === 'job-a1')!
+    expect(a1).toMatchObject({ title: expect.stringMatching(/^Asked by the Thermal specialist: What is the worst-case/), handoff: { id: queued!.id, from: 'thermal', fromName: 'Thermal' } })
+    // people's controls on a hand-off job: hold, move up, cancel; a running one is never paused
+    expect(a1.controls).toContain('pause')
+    expect(l.jobs.find((j) => j.workerJobId === 'job-e1')?.controls).not.toContain('pause')
+    const j = await run(USER, 'journey.get', { repo: 'acme/other' }) as { handoffs: { id: string }[] }
+    expect(j.handoffs.map((h) => h.id)).toEqual(l.handoffs.map((h) => h.id))
+    // decline: reviewers refused; nonexistent and unassigned the same "no access"/refusal; a running one refused
+    await expect(run(REVIEWER, 'handoff.decline', { repo: 'acme/other', id: queued!.id, reason: 'The bench measures it.' })).rejects.toThrow(AccessDenied)
+    await expect(run(OUTSIDER, 'handoff.decline', { repo: 'acme/other', id: queued!.id, reason: 'The bench measures it.' })).rejects.toThrow(AccessDenied)
+    await expect(run(OUTSIDER, 'handoff.decline', { repo: 'acme/nothing', id: queued!.id, reason: 'The bench measures it.' })).rejects.toThrow(AccessDenied)
+    await expect(run(USER, 'handoff.decline', { repo: 'acme/other', id: 'ho0000000000000f', reason: 'The bench measures it.' })).rejects.toThrow(/no such hand-off/)
+    await expect(run(USER, 'handoff.decline', { repo: 'acme/other', id: running!.id, reason: 'The lab measures it.' })).rejects.toThrow(/already running: cancel that job/)
+    await expect(run(USER, 'handoff.decline', { repo: 'acme/other', id: queued!.id, reason: 'ok' })).rejects.toThrow()
+    const out = await run(USER, 'handoff.decline', { repo: 'acme/other', id: queued!.id, reason: 'The bench measures it on Friday.' }) as { declined: { id: string; by: string }; job: { cancelled: boolean } }
+    expect(out).toMatchObject({ declined: { id: queued!.id, by: USER.email }, job: { cancelled: false } })
+    const after = await run(USER, 'jobs.list', { repo: 'acme/other' }) as { handoffs: { id: string; state: string; declined: { reason: string } | null }[] }
+    expect(after.handoffs.find((h) => h.id === queued!.id)).toMatchObject({ state: 'declined', declined: { reason: 'The bench measures it on Friday.' } })
+    const rec = (await journeyStore({ principal: ADMIN, deps }, 'acme/other').read((db) => loadJourney(db))).result!
+    expect(rec.decisions.find((d) => d.kind === 'handoff.declined')).toMatchObject({ ref: queued!.id, by: USER.email })
+    // the agents' facts are not written by the API
+    expect((await facts().read((db) => loadHandoffs(db))).result.find((x) => x.id === queued!.id)?.state).toBe('started')
+    // with a worker to reach, its queued job is cancelled at once
+    const cancelled: string[] = []
+    const withJobs: ActionDeps = { ...deps, jobs: async () => ({ repositoryOf: () => 'acme/other', startJob: async () => ({ accepted: true, jobId: 'j' }), jobStatus: async () => [], cancel: async (id) => { cancelled.push(id); return { ok: true, state: 'aborted' } } }) }
+    await facts().update((db) => { markStarted(db, fresh!.id, 'job-i1'); return { result: null } })
+    await new JobIndexStore(backendFor(join(bucket, 'projects')), 'acme/other').update((db) => { putJob(db, 'job-i1', { kind: 'task', agent: 'impl', title: 'x', handoff: fresh!.id, state: 'queued', session: S, queuedAt: now }, now); return { result: null } })
+    const two = (await perform('handoff.decline', { repo: 'acme/other', id: fresh!.id, reason: 'Layout is frozen this week.' }, { principal: ADMIN, deps: withJobs })).result
+    expect(two).toMatchObject({ job: { cancelled: true } })
+    expect(cancelled).toEqual([`${S}.job-i1`])
+  })
+
   it('access is unchanged: no access to another project\'s facts, and the journey tools are never run through the API', async () => {
     await expect(run(OUTSIDER, 'journey.get', { repo: 'acme/other' })).rejects.toThrow(AccessDenied)
     const withTools: ActionDeps = { ...deps, tools: () => allTools(), jobs: async () => ({ repositoryOf: () => null, startJob: async () => ({ accepted: true, jobId: 'j' }), jobStatus: async () => [], runTool: async () => { throw new Error('must not be forwarded') } }) }
-    for (const name of ['journey.status', 'journey.ask', 'journey.check', 'journey.stuck']) {
+    for (const name of ['journey.status', 'journey.ask', 'journey.check', 'journey.stuck', 'journey.handoff', 'journey.handoff_answer']) {
       await expect(perform('tool', { repo: 'acme/other', name, args: {} }, { principal: ADMIN, deps: withTools }), name).rejects.toThrow(`no tool ${name}`)
     }
     const listed = (await perform('tools.list', { repo: 'acme/other' }, { principal: ADMIN, deps: withTools })).result as { name: string }[]
