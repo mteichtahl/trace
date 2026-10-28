@@ -134,8 +134,10 @@ export interface Actions {
   'usage.month': { args: { month?: string }; result: import('./types-s1').UsageMonth }
   /** pause (a running task stops at its next safe point; a queued one is held), resume, move up, cancel */
   'job.control': { args: { id: string; op: JobOp; reason?: string; repo?: string }; result: { ok: boolean; kept?: string; reason?: string; state?: string | null; pausing?: boolean; held?: boolean; jobId?: string; position?: number } }
-  /** the project's jobs (its job index), each agent's status, the remote jobs running */
+  /** the project's jobs (its job index), each agent's status, the hand-offs between its specialists, the remote jobs running */
   'jobs.list': { args: Repo; result: import('./types').ProjectJobs }
+  /** decline a pending hand-off between specialists, with a reason in one line (contributors and admins) */
+  'handoff.decline': { args: Repo & { id: string; reason: string }; result: { repo: string; declined: { id: string; reason: string; by: string; at: string }; job?: { cancelled: boolean; note: string }; summary: string } }
   // installation policy and people (src/api/actions-me.ts, actions-people.ts)
   'policy.get': { args: Record<string, never>; result: { locks: Record<string, string>; updated: string | null; by: string | null } }
   'installation.layout': { args: Record<string, never>; result: import('@/components/installation/layout').LayoutView }

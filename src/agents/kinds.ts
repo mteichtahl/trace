@@ -18,6 +18,11 @@ export const SPECIALIST_KINDS = ['verify', 'impl', 'ams', 'emc', 'render', 'ther
 export type SpecialistKind = (typeof SPECIALIST_KINDS)[number]
 export const SpecialistKindSchema = z.enum(SPECIALIST_KINDS)
 
+/** Each specialist in the words people read ("Asked by the Analog and mixed-signal specialist: …"). */
+export const SPECIALIST_WORDS: Readonly<Record<SpecialistKind, string>> = {
+  verify: 'Verification', impl: 'Implementation', ams: 'Analog and mixed-signal', emc: 'EMC', render: 'Rendering', thermal: 'Thermal',
+}
+
 /** How a job came to its specialist: an explicit request, a label, the evidence, keywords, the model, or the default. */
 export const ROUTE_SOURCES = ['explicit', 'label', 'evidence', 'keyword', 'model', 'default'] as const
 export type RouteSource = (typeof ROUTE_SOURCES)[number]

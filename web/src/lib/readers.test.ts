@@ -17,8 +17,8 @@ describe('reading the API\'s answers', () => {
   it('journey.get: stages, gates with criteria and evidence, waivers, the next step, questions and decisions', () => {
     const j = read<JourneyMore>('journey.get')
     expect(j).toMatchObject({ repo: 'acme/answers', name: 'Answers', template: 'board', revision: 'Rev A', current: 'define', hasMemory: false })
-    // its jobs: the project's job index, as run lines
-    expect(j.jobs.map((r) => [r.title, r.state])).toEqual([['Check the ERC', 'running'], ['Check the DRC', 'queued'], ['Check the BOM', 'done']])
+    // its jobs: the project's job index, as run lines (a hand-off job among them)
+    expect(j.jobs.filter((r) => !r.handoff).map((r) => [r.title, r.state])).toEqual([['Check the ERC', 'running'], ['Check the DRC', 'queued'], ['Check the BOM', 'done']])
     expect(j.stages.map((s) => s.state)).toEqual(['current', 'queued', 'queued', 'queued', 'queued', 'queued', 'queued', 'queued', 'queued'])
     expect(j.stages[0]).toMatchObject({ id: 'define', name: 'Define', criteria: { met: 2, total: 2 } })
     const g = j.gates.find((x) => x.id === 'define')!
@@ -36,13 +36,32 @@ describe('reading the API\'s answers', () => {
 
   it('jobs.list: each job as a run line (its step, typical time, queue place and controls), and each agent\'s state', () => {
     const r = read<ProjectJobs>('jobs.list')
-    const [run, queued, done] = r.jobs
+    const [run, queued, done] = r.jobs.filter((j) => !j.handoff)
     expect(run).toMatchObject({ title: 'Check the ERC', state: 'running', step: 'running ERC on the main sheet', typicalS: 600, controls: ['pause', 'cancel'], agentName: 'Verification', yours: true, branch: 'claude/task-erc' })
     expect(run!.id).toMatch(/^trace-api-[0-9a-f]{8}-[0-9a-f]{24}\.job-run$/)
     expect(queued).toMatchObject({ state: 'queued', position: 1, startsWhen: expect.stringMatching(/already working/), controls: ['pause', 'cancel'] })
     expect(queued!.step).toBeUndefined()
     expect(done).toMatchObject({ state: 'done', controls: [], summary: 'verify: done in 9 turns' })
     expect(r.agents.find((a) => a.id === 'verify')).toMatchObject({ status: 'working', now: [run!.id], queue: [queued!.id], today: { runs: 1, succeeded: 1 } })
+  })
+
+  it('jobs.list and journey.get: the hand-offs between specialists, and a hand-off job that says who asked', () => {
+    const r = read<ProjectJobs>('jobs.list')
+    expect(r.handoffs.map((h) => [h.fromName, h.toName, h.state])).toEqual([['Thermal', 'Analog and mixed-signal', 'answered'], ['Thermal', 'Analog and mixed-signal', 'queued']])
+    const [answered, queued] = r.handoffs
+    expect(answered).toMatchObject({
+      from: 'thermal', to: 'ams', summary: expect.stringMatching(/^Thermal → Analog and mixed-signal: /), fromWorkerJobId: 'job-th', workerJobId: 'job-ho2',
+      evidence: [{ kind: 'run', id: 'run-1', label: 'the thermal run', to: '/p/acme~answers/runs/run-1' }], acceptance: ['the dissipation in watts at 500 mA, with the run id'],
+      answer: { answered: true, text: '15 µA typical at 85 °C (datasheet page 5).', confidence: 0.9, acceptanceMet: true },
+    })
+    expect(answered!.jobId).toMatch(/^trace-api-[0-9a-f]{8}-[0-9a-f]{24}\.job-ho2$/)
+    expect(queued).toMatchObject({ state: 'queued', says: expect.stringMatching(/^Queued for the Analog and mixed-signal specialist/) })
+    expect(queued!.answer).toBeUndefined()
+    const job = r.jobs.find((j) => j.handoff)!
+    expect(job).toMatchObject({ title: expect.stringMatching(/^Asked by the Thermal specialist: /), state: 'queued', handoff: { id: queued!.id, from: 'thermal', fromName: 'Thermal' } })
+    expect(read<JourneyMore>('journey.get').handoffs?.map((h) => h.id)).toEqual(r.handoffs.map((h) => h.id))
+    const d = (answers['handoff.decline'] as { result: { declined: { reason: string }; summary: string } }).result
+    expect(d).toMatchObject({ declined: { reason: 'The bench measures it on Friday.' }, summary: expect.stringMatching(/^Declined: the Analog and mixed-signal specialist will not answer it/) })
   })
 
   it('journey.get without a journey says how one starts', () => {

@@ -11,7 +11,8 @@ import { EvidenceChip } from '@/components/evidence-chip'
 import { RunLine } from '@/components/run-line'
 import { StatusBadge } from '@/components/status-badge'
 import { count, eng, money } from '@/lib/format'
-import type { EvidenceRef, RunSummary } from '@/lib/types'
+import type { EvidenceRef, Handoff, RunSummary } from '@/lib/types'
+import { HANDOFF_STATUS, HandoffDetail } from '@/components/handoff'
 import { cn } from '@/lib/utils'
 
 export type ToolStatus = 'inProgress' | 'executing' | 'complete'
@@ -306,25 +307,39 @@ export function FileCard({ data }: { data: FileData }) {
   )
 }
 
-// ------------------------------------------------------------------ Hand-off (SUBAGENT_* events)
+// ------------------------------------------------------------------ Hand-off (SUBAGENT_* events, or a recorded hand-off)
 
-export function HandOff({ specialist, steps, state }: { specialist: string; steps: string[]; state: 'running' | 'done' | 'error' }) {
+/**
+ * A hand-off in chat: "Handed to the Analog specialist" with its steps nested and folded. With `handoff` (a recorded
+ * hand-off between specialists, src/core/handoffs.ts) it says who asked whom and shows the request and the answer.
+ */
+export function HandOff({ specialist, steps, state, handoff }: { specialist: string; steps: string[]; state: 'running' | 'done' | 'error'; handoff?: Handoff }) {
   return (
     <Collapsible className="my-2 rounded-xl border bg-card p-3 text-sm">
       <CollapsibleTrigger className="group flex w-full items-center gap-2 text-left">
         {state === 'running' ? <Loader2 className="size-4 animate-spin text-primary" aria-hidden /> : state === 'error' ? <TriangleAlert className="size-4 text-warning-foreground" aria-hidden /> : <GitBranch className="size-4 text-muted-foreground" aria-hidden />}
         <span>
-          Handed to the <span className="font-medium">{specialist}</span>
+          {handoff ? <>The <span className="font-medium">{handoff.fromName}</span> specialist asked the </> : 'Handed to the '}
+          <span className="font-medium">{specialist}</span>
+          {handoff && <span className="text-muted-foreground">: {handoff.says}</span>}
         </span>
-        <span className="ml-auto text-xs text-muted-foreground">{steps.length} steps</span>
+        <span className="ml-auto shrink-0 text-xs text-muted-foreground">{handoff ? HANDOFF_STATUS[handoff.state].label : `${steps.length} steps`}</span>
         <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" aria-hidden />
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <ol className="mt-2 space-y-1 border-l pl-3 text-xs text-muted-foreground">
-          {steps.map((s, i) => (
-            <li key={i}>{s}</li>
-          ))}
-        </ol>
+        {handoff && (
+          <div className="mt-2 border-l pl-3">
+            <p>{handoff.question}</p>
+            <HandoffDetail handoff={handoff} className="mt-2" />
+          </div>
+        )}
+        {steps.length > 0 && (
+          <ol className="mt-2 space-y-1 border-l pl-3 text-xs text-muted-foreground">
+            {steps.map((s, i) => (
+              <li key={i}>{s}</li>
+            ))}
+          </ol>
+        )}
       </CollapsibleContent>
     </Collapsible>
   )

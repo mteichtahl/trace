@@ -6,7 +6,8 @@
  *   journey.get             read     the journey for this person: template, revision, stages (state, criteria
  *                                    met/total, reopened), gates (state, criteria, evidence, waivers, signature, what
  *                                    still stops this person signing), the next step, questions, waivers, decisions,
- *                                    and the project's jobs (jobs.list's, src/api/actions-jobs.ts).
+ *                                    the project's jobs and the hand-offs between its specialists (jobs.list's,
+ *                                    src/api/actions-jobs.ts).
  *                                    A project with no journey yet: { started: false } and what starts one
  *   journey.criterion.open  read     record that this person opened a criterion's (or a waiver's) evidence: the Sign
  *                                    button needs every one opened by the signer. Reviewers may open evidence too
@@ -47,7 +48,7 @@ import {
   INBOX_KINDS, type InboxItem, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
   dismissStuck, journeyView, loadJourney, recordOpen, returnGate, signGate, sortInbox,
 } from '../core/journey.js'
-import { listJobs } from './actions-jobs.js'
+import { listJobs, projectHandoffs } from './actions-jobs.js'
 import { type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, label, plainly, snapshotJourney, withJourneyDb, writeJourney } from './action-kit.js'
 
 const Id = z.string().min(1).max(80)
@@ -104,13 +105,15 @@ export const JOURNEY_ACTIONS = {
     // the project's jobs (src/api/actions-jobs.ts listJobs: its job index); an index that cannot be read leaves the
     // journey as it is and says so in jobs_unavailable
     const [r, facts, jobs] = await Promise.all([withJourneyDb(ctx, repo, (db) => loadJourney(db)), agentFacts(ctx, repo),
-      listJobs(ctx, repo).then((x) => ({ jobs: x.jobs, error: null }), (e: unknown) => ({ jobs: [], error: e instanceof Error ? e.message : String(e) }))])
-    if (!r) return { repo, ...NOT_STARTED, jobs: jobs.jobs }
+      listJobs(ctx, repo).then((x) => ({ jobs: x.jobs, rows: x.rows, error: null }), (e: unknown) => ({ jobs: [], rows: [], error: e instanceof Error ? e.message : String(e) }))])
+    // the hand-offs between specialists (jobs.list's): who asked whom, for what, and the answer
+    const handoffs = projectHandoffs(repo, facts, r, jobs.rows)
+    if (!r) return { repo, ...NOT_STARTED, jobs: jobs.jobs, handoffs }
     // whether the project has agent memory here (the Memory tab): its memory is set up, not that a session has happened
     const hasMemory = Boolean(ctx.deps.memory?.()?.forProject(repo))
     return {
       repo, started: true, you: { admin: viewer.admin, part: viewer.part }, has_memory: hasMemory, ...journeyView(r, viewer, undefined, facts),
-      jobs: jobs.jobs, ...(jobs.error ? { jobs_unavailable: jobs.error.slice(0, 200) } : {}),
+      jobs: jobs.jobs, handoffs, ...(jobs.error ? { jobs_unavailable: jobs.error.slice(0, 200) } : {}),
     }
   }),
 

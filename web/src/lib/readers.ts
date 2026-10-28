@@ -6,7 +6,7 @@
  * Each reader accepts an answer already in the app's shape and returns it unchanged, so mock mode (src/mock, which
  * answers in the app's shapes) and the tests keep working.
  */
-import type { AgentState, ChatMessage, ChatThread, EvidenceRef, Gate, InboxItem, Journey, Member, MeDoc, NextStep, ProjectJobs, Question, RunSummary, Stage, Waiver } from './types'
+import type { AgentState, ChatMessage, ChatThread, EvidenceRef, Gate, Handoff, HandoffState, InboxItem, Journey, Member, MeDoc, NextStep, ProjectJobs, Question, RunSummary, Stage, Waiver } from './types'
 import type { DecisionEntry, JourneyMore } from './types-s1'
 
 type Obj = Record<string, unknown>
@@ -130,8 +130,9 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
     template: String(raw.template) as Journey['template'],
     revision: /^rev/i.test(String(raw.revision)) ? String(raw.revision) : `Rev ${String(raw.revision)}`,
     stages, gates, current: String(raw.current_stage), next, questions, waivers,
-    // the project's jobs (jobs.list's, from its job index)
+    // the project's jobs (jobs.list's, from its job index), and the hand-offs between its specialists
     jobs: arr(raw.jobs).map(readJob),
+    handoffs: arr(raw.handoffs).map((h) => readHandoff(h, repo)),
     recent: decisions.slice(0, 5).map((d) => ({ id: String(d.id), who: str(d.by) ?? 'trace', text: String(d.summary), at: String(d.at) })),
     hasMemory: Boolean(raw.has_memory),
     decisions: decisions.map((d) => ({
@@ -166,14 +167,47 @@ export function readJob(j: Obj): RunSummary {
     ...(str(j.startedBy) ? { startedBy: String(j.startedBy) } : {}), yours: Boolean(j.yours), held: Boolean(j.held),
     ...(str(j.pausedBy) ? { pausedBy: String(j.pausedBy) } : {}), ...(str(j.branch) ? { branch: String(j.branch) } : {}),
     ...(str(j.summary) ? { summary: String(j.summary) } : {}), ...(str(j.endedAt) ? { endedAt: String(j.endedAt) } : {}),
+    ...(isObj(j.handoff) && str(j.handoff.id) ? { handoff: { id: String(j.handoff.id), ...(str(j.handoff.from) ? { from: String(j.handoff.from) } : {}), ...(str(j.handoff.fromName) ? { fromName: String(j.handoff.fromName) } : {}) } } : {}),
+  }
+}
+
+const HANDOFF_STATES = new Set<HandoffState>(['requested', 'queued', 'running', 'answered', 'unanswered', 'declined', 'failed'])
+
+/** One hand-off of the API (src/core/handoffs.ts HandoffView) as the app reads it. */
+export function readHandoff(h: Obj, repo: string): Handoff {
+  if ('fromName' in h) return h as unknown as Handoff
+  const a = isObj(h.answer) ? h.answer : null
+  const d = isObj(h.declined) ? h.declined : null
+  const job = isObj(h.job) ? h.job : null
+  const state = String(h.state) as HandoffState
+  return {
+    id: String(h.id), from: String(h.from), fromName: String(h.from_name ?? h.from), to: String(h.to), toName: String(h.to_name ?? h.to),
+    question: String(h.question ?? ''), blocks: String(h.blocks ?? ''), evidence: arr(h.evidence).map((e) => readEvidence(e, repo)),
+    ...(str(h.recommendation) ? { recommendation: String(h.recommendation) } : {}),
+    acceptance: (Array.isArray(h.acceptance) ? h.acceptance : []).map(String),
+    summary: String(h.summary ?? ''), state: HANDOFF_STATES.has(state) ? state : 'failed', says: String(h.says ?? ''), createdAt: String(h.created_at ?? ''),
+    ...(job && (str(job.handle) ?? str(job.id)) ? { jobId: String(job.handle ?? job.id) } : {}),
+    ...(job && str(job.id) ? { workerJobId: String(job.id) } : {}),
+    ...(str(h.from_job_handle) ? { fromJobId: String(h.from_job_handle) } : {}),
+    fromWorkerJobId: String(h.from_job ?? ''),
+    ...(a ? {
+      answer: {
+        answered: Boolean(a.answered), text: String(a.text ?? ''), summary: String(a.summary ?? a.text ?? ''), evidence: arr(a.evidence).map((e) => readEvidence(e, repo)), at: String(a.at ?? ''),
+        ...(typeof a.confidence === 'number' ? { confidence: a.confidence } : {}), ...(typeof a.acceptance_met === 'boolean' ? { acceptanceMet: a.acceptance_met } : {}),
+        ...(str(a.unmet) ? { unmet: String(a.unmet) } : {}),
+      },
+    } : {}),
+    ...(d ? { declined: { reason: String(d.reason), by: String(d.by), at: String(d.at) } } : {}),
+    ...(str(h.why) ? { why: String(h.why) } : {}),
   }
 }
 
 /** jobs.list: the jobs as run lines, the agents and the remote jobs as they are. */
 export function readJobs(raw: unknown, args?: { repo?: string }): ProjectJobs {
-  if (!isObj(raw)) return { repo: args?.repo ?? '', jobs: [], agents: [], batch: [], updatedAt: '' }
+  if (!isObj(raw)) return { repo: args?.repo ?? '', jobs: [], agents: [], handoffs: [], batch: [], updatedAt: '' }
+  const repo = str(raw.repo) ?? args?.repo ?? ''
   return {
-    repo: str(raw.repo) ?? args?.repo ?? '', jobs: arr(raw.jobs).map(readJob), agents: arr(raw.agents) as unknown as AgentState[],
+    repo, jobs: arr(raw.jobs).map(readJob), agents: arr(raw.agents) as unknown as AgentState[], handoffs: arr(raw.handoffs).map((h) => readHandoff(h, repo)),
     batch: arr(raw.batch) as unknown as ProjectJobs['batch'], updatedAt: str(raw.updatedAt) ?? '',
   }
 }

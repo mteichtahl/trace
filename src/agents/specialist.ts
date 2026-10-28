@@ -12,7 +12,8 @@
  * overrides; every sentence of the prompt comes from the prompt catalog (src/prompts/catalog.ts).
  */
 import type { TraceConfig } from '../core/config.js'
-import type { Route, SpecialistKind } from './kinds.js'
+import { type Route, SPECIALIST_WORDS, type SpecialistKind } from './kinds.js'
+import type { Handoff } from './runtime/schemas.js'
 import { type Composed, Composer, type Layers, NO_LAYERS } from '../prompts/resolve.js'
 
 /** Read tools every specialist has, whatever its area. */
@@ -33,6 +34,15 @@ export const SHARED_TOOLS = [
 
 /** The delegation tool (src/agents/delegate.ts): offered to a specialist on the runtime, never to the worker. */
 export const DELEGATE_TOOL = 'agent.delegate'
+
+/**
+ * The hand-off tools (src/tools/journey/tools.ts, src/core/handoffs.ts): journey.handoff to ask another specialist, for
+ * a specialist job on the runtime that was not itself started by a hand-off; journey.handoff_answer for the job a
+ * hand-off started, and only that one.
+ */
+export const HANDOFF_TOOL = 'journey.handoff'
+export const HANDOFF_ANSWER_TOOL = 'journey.handoff_answer'
+export type HandoffRole = 'ask' | 'answer' | 'none'
 
 /** Claude Code's own tools a specialist gets: reading only. No Bash, Write, Edit or Task. */
 export const SPECIALIST_BUILTINS = ['Read', 'Glob', 'Grep', 'TodoWrite'] as const
@@ -77,11 +87,14 @@ export interface ToolOptions {
   hardware?: boolean
   /** agent.delegate is offered (on the runtime; not in a GitHub Actions run, not in a preview). Default true. */
   delegate?: boolean
+  /** ask: journey.handoff is offered; answer: journey.handoff_answer (a job a hand-off started); none (default): neither. */
+  handoff?: HandoffRole
 }
 
 /** The trace tools (registry names) a specialist may call, sorted, without duplicates. */
 export function toolsOf(s: Specialist, o: ToolOptions = {}): string[] {
-  const all = new Set<string>([...s.tools, ...SHARED_TOOLS, ...(o.hardware ? s.hardwareTools ?? [] : []), ...(o.delegate === false ? [] : [DELEGATE_TOOL])])
+  const handoff = o.handoff === 'ask' ? [HANDOFF_TOOL] : o.handoff === 'answer' ? [HANDOFF_ANSWER_TOOL] : []
+  const all = new Set<string>([...s.tools, ...SHARED_TOOLS, ...(o.hardware ? s.hardwareTools ?? [] : []), ...(o.delegate === false ? [] : [DELEGATE_TOOL]), ...handoff])
   return [...all].sort()
 }
 
@@ -99,6 +112,8 @@ export type SpecialistJob =
   | { kind: 'task'; request: string; requestedBy: string; issue?: number | undefined; branch: string
       /** it carries on a paused job whose conversation was not kept: what was done (src/agents/runtime/job.ts) */
       resumed?: Resumed | undefined }
+  /** Another specialist asked for it (journey.handoff): the recorded request, which it answers with journey.handoff_answer. */
+  | { kind: 'handoff'; handoff: Handoff; branch: string }
   /** `tracectl agent prompt`: no job, for review. */
   | { kind: 'preview' }
 
@@ -118,6 +133,13 @@ export interface PromptContext {
    */
   delivery?: 'delegate' | 'actions'
   hardware?: boolean
+  /**
+   * Hand-offs between specialists: ask (it may raise one: the specialist.handoff part), answer (a job a hand-off started:
+   * how to answer), none (default: a GitHub Actions run, a delegated worker's specialist without a runtime).
+   */
+  handoff?: HandoffRole
+  /** The specialists it may ask (agents.enabled without itself), for the ask part. */
+  enabled?: readonly SpecialistKind[]
   /** The prompt overrides in force (src/prompts): the installation's and the project's default branch's. */
   prompts?: Layers | undefined
 }
@@ -151,6 +173,16 @@ function addJob(p: Composer, job: SpecialistJob, cfg: TraceConfig, repository: s
       })
       if (job.resumed) p.add('specialist.job.resumed', { paused_by: job.resumed.pausedBy, paused_at: job.resumed.pausedAt, commits: job.resumed.commits || '(none)', last_step: job.resumed.lastStep || '(not recorded)' })
       return
+    case 'handoff': {
+      const h = job.handoff
+      p.add('specialist.job.handoff', {
+        from: SPECIALIST_WORDS[h.from], from_job: h.fromJob, id: h.id, question: quoted(h.question), blocks: h.blocks,
+        evidence: h.evidence.map((e) => `- ${e.kind} ${e.ref}${e.label ? ` (${e.label})` : ''}`),
+        recommendation: h.recommendation ? quoted(h.recommendation) : '(none given)',
+        acceptance: h.acceptance.map((a, i) => `${i + 1}. ${a}`), branch: job.branch, default_branch: cfg.branch,
+      })
+      return
+    }
     case 'preview':
       p.add('specialist.job.preview')
   }
@@ -167,7 +199,8 @@ export function composeSpecialist(s: Specialist, c: PromptContext): Composed {
   const p = new Composer(c.prompts ?? NO_LAYERS)
   const settings = cfg.agents[s.kind]
   const delivery = c.delivery ?? 'delegate'
-  const tools = toolsOf(s, { hardware: Boolean(c.hardware), delegate: delivery === 'delegate' })
+  const handoff: HandoffRole = delivery === 'delegate' ? c.handoff ?? 'none' : 'none'
+  const tools = toolsOf(s, { hardware: Boolean(c.hardware), delegate: delivery === 'delegate', handoff })
   const role = { repository, where: c.where ?? 'on Amazon Bedrock AgentCore Runtime', title: s.title, kind: s.kind }
   p.add(`specialist.${s.kind}.role`, role).add('specialist.unattended')
   if (c.route) p.add('specialist.route', { reason: c.route.reason, source: c.route.source, confidence: c.route.confidence.toFixed(2) })
@@ -181,6 +214,16 @@ export function composeSpecialist(s: Specialist, c: PromptContext): Composed {
   p.add('specialist.knowledge', { search_tool: mcpName('kb.search'), status_tool: mcpName('kb.status') }).add('specialist.knowledge.data')
   p.add('specialist.journey', { status_tool: mcpName('journey.status'), ask_tool: mcpName('journey.ask'), check_tool: mcpName('journey.check'), stuck_tool: mcpName('journey.stuck') })
     .add('specialist.journey.people')
+  if (handoff === 'ask') {
+    const others = (c.enabled ?? cfg.agents.enabled).filter((k) => k !== s.kind)
+    if (others.length) {
+      p.add('specialist.handoff', { tool: mcpName(HANDOFF_TOOL), status_tool: mcpName('journey.status'), ask_tool: mcpName('journey.ask'), specialists: others.map((k) => `- ${k}: the ${SPECIALIST_WORDS[k]} specialist`) })
+        .add('specialist.handoff.rules', { ask_tool: mcpName('journey.ask') })
+    }
+  }
+  if (handoff === 'answer' && c.job.kind === 'handoff') {
+    p.add('specialist.handoff.answer', { tool: mcpName(HANDOFF_ANSWER_TOOL), from: SPECIALIST_WORDS[c.job.handoff.from], id: c.job.handoff.id, title: s.title })
+  }
   const branchPrefix = cfg.worker.own_branch_prefix || 'claude/'
   if (delivery === 'actions') p.add('specialist.delivery.actions', { branch_prefix: branchPrefix })
   else p.add('specialist.delivery.delegate', { tool: mcpName(DELEGATE_TOOL), branch_prefix: branchPrefix, timeout: cfg.agents.delegate_timeout_minutes })

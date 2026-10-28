@@ -31,8 +31,9 @@
  *   events    (nested layout only) its own SNS topic <prefix>-<hash>-batch-events (made with or without GPU jobs), an
  *             EventBridge rule <prefix>-<hash>-journey-events sending it the central bucket's "Object Created" events of
  *             its journey record (projects/<slug>/journey/journey.db, which only the API writes) and of its job index
- *             (journey-agent/jobs.db), so a worker waiting in journey.ask is told when a person answers, and a queued job
- *             when its turn may have come; and, with GPU jobs, an EventBridge rule (default bus) sending it the
+ *             (journey-agent/jobs.db), and of its agents' facts (journey-agent/facts.db), so a worker waiting in
+ *             journey.ask is told when a person answers, a queued job when its turn may have come, and a specialist
+ *             waiting on a hand-off when it is answered; and, with GPU jobs, an EventBridge rule (default bus) sending it the
  *             "Batch Job State Change" events of the stack's queues whose job definition is one of its own (prefix
  *             match on the definition's ARN without the revision): it submits only with those (ProjectGpuSubmit, and
  *             src/gpu/batch.ts placement uses only TRACE_GPU_JOB_DEFINITION / TRACE_CPU_JOB_DEFINITION, which are
@@ -119,6 +120,8 @@ export const batchEventsTopicName = (prefix: string, hash: string): string => `$
 export const journeyEventsRuleName = (prefix: string, hash: string): string => `${prefix}-${hash}-journey-events`
 /** The object the API writes for each change to a project's journey record (src/core/journey-store.ts). */
 export const journeyRecordKey = (repository: string): string => `${projectDataPrefix(repository)}/${PEOPLE_RECORDS[0]}/journey.db`
+/** The agents' facts object (src/core/agent-facts.ts), whose writes include a hand-off's answer. */
+export const agentFactsKey = (repository: string): string => `${projectDataPrefix(repository)}/${AGENT_FACTS}/facts.db`
 
 /** The central bucket's prefixes: the shared database, the access store beside it (src/core/access.ts), and the
  * installation's prompt overrides (src/prompts/store.ts). */
@@ -461,14 +464,15 @@ export class ProjectStack extends Construct {
       // Created" event for this project's journey.db (the bucket sends its events to EventBridge: src/infra/stack.ts),
       // so a worker waiting in journey.ask, or a queued job, is told at once. Only the API writes that object
       // (PeopleRecordsReadOnly). And its job index (journey-agent/jobs.db, its worker's), so a queued job is told when
-      // another ends: the same rule, two exact keys, no rule more per project
+      // another ends; and its agents' facts (journey-agent/facts.db), so a specialist waiting on a hand-off is told when
+      // the other specialist answers (src/core/handoffs.ts): the same rule, three exact keys, no rule more per project
       const journeyRule = new events.Rule(this, 'JourneyEventsRule', {
         ruleName: journeyEventsRuleName(cfg.prefix, hash),
-        description: `trace: ${slug}'s journey record or job index written (a person answered, a job changed), to its events topic`.slice(0, 512),
+        description: `trace: ${slug}'s journey record, job index or agents' facts written (a person answered, a job changed, a hand-off answered), to its events topic`.slice(0, 512),
         eventPattern: {
           source: ['aws.s3'],
           detailType: ['Object Created'],
-          detail: { bucket: { name: [bucket.bucketName] }, object: { key: [journeyRecordKey(repository), jobIndexKey(repository)] } },
+          detail: { bucket: { name: [bucket.bucketName] }, object: { key: [journeyRecordKey(repository), jobIndexKey(repository), agentFactsKey(repository)] } },
         },
       })
       sendTo(journeyRule, 'JourneyEventsRule')

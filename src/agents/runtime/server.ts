@@ -36,6 +36,11 @@
  * While /delegate/wait holds, the wait for the worker is on this process's record (status `waits`), attributed to the
  * specialist's job (the token's), its state the worker's latest log line.
  *
+ * Hand-offs between specialists (handoff.ts), loopback callers only (an asking specialist's own MCP server):
+ *   POST /handoff           { token, id }                          → { accepted, jobId, handoff } (the receiving
+ *                                                                    specialist's job, started on this runtime in the
+ *                                                                    asking job's session, from the recorded request)
+ *
  * The wait relay (wait-relay.ts), loopback callers only (any job's own MCP server, src/core/wait-report.ts): the waits
  * a job's tools open in that child process are mirrored here, attributed to the job, so `status` lists them and
  * `check-now` wakes them.
@@ -56,6 +61,7 @@ import { invocationHeaders, observeInvocation, sessionOf } from './observe.js'
 import { InvocationSchema, WrongProject, checkProject } from './schemas.js'
 import { ToolRefused, type ToolRunner } from './tool.js'
 import { MAX_WAKES_S, RelayError, type WaitRelay, WaitReportRequest, WaitWakesRequest, defaultWaitRelay } from './wait-relay.js'
+import { HandoffStartError, HandoffStartRequest, type HandoffRuntime, defaultHandoffRuntime } from './handoff.js'
 
 const MAX_BODY = 1024 * 1024
 /** How long a cancel waits for the job to end before it answers. */
@@ -93,6 +99,8 @@ export interface HandlerOptions {
   tool?: ToolRunner
   /** The wait relay of this process (default: the process's own, wait-relay.ts). */
   waitRelay?: WaitRelay
+  /** The hand-offs of this process (default: the process's own, handoff.ts; null: none here). */
+  handoffs?: HandoffRuntime | null
 }
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
@@ -194,6 +202,27 @@ async function relay(req: IncomingMessage, res: ServerResponse, path: string, wa
   }
 }
 
+async function handoff(req: IncomingMessage, res: ServerResponse, jobs: Jobs, handoffs: HandoffRuntime | null): Promise<void> {
+  if (!LOOPBACK.has(req.socket.remoteAddress ?? '')) return send(res, 403, { error: 'hand-offs are for this runtime\'s own specialists' })
+  if (!handoffs) return send(res, 404, { error: 'this runtime starts no hand-offs (no project in scope)' })
+  let raw: unknown
+  try {
+    raw = JSON.parse(await readBody(req))
+  } catch {
+    return send(res, 400, { error: 'the body is not JSON' })
+  }
+  const r = HandoffStartRequest.safeParse(raw)
+  if (!r.success) return send(res, 400, { error: 'invalid hand-off request' })
+  try {
+    // the receiving job runs on this runtime, in the asking job's session, so people's Cancel reaches it here
+    const out = await handoffs.start(r.data.token, r.data.id, (p, asker) => jobs.startJob(p, jobs.jobStatus(asker.jobId)[0]?.session))
+    return send(res, 200, out)
+  } catch (e) {
+    if (e instanceof HandoffStartError) return send(res, e.status, { error: e.message })
+    throw e
+  }
+}
+
 export function handler(jobs: Jobs, o: HandlerOptions = {}): (req: IncomingMessage, res: ServerResponse) => void {
   const log = o.log ?? ((l: string) => { process.stdout.write(`${l}\n`) })
   let tool: ToolRunner | null = o.tool ?? null
@@ -205,6 +234,11 @@ export function handler(jobs: Jobs, o: HandlerOptions = {}): (req: IncomingMessa
     }
     if (req.method === 'POST' && (path === '/delegate' || path === '/delegate/status' || path === '/delegate/wait' || path === '/delegate/cancel')) {
       void delegate(req, res, path, jobs, o.delegations ?? defaultDelegations())
+        .catch((e: unknown) => { if (!res.headersSent) send(res, 500, { error: e instanceof Error ? e.message : String(e) }) })
+      return
+    }
+    if (req.method === 'POST' && path === '/handoff') {
+      void handoff(req, res, jobs, o.handoffs === undefined ? defaultHandoffRuntime() : o.handoffs)
         .catch((e: unknown) => { if (!res.headersSent) send(res, 500, { error: e instanceof Error ? e.message : String(e) }) })
       return
     }

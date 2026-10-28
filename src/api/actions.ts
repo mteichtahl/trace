@@ -90,7 +90,7 @@
  *   actions-me.ts        me.get, me.set
  *   actions-graph.ts     graph.neighbourhood
  *   actions-files.ts     files.list, files.url
- *   actions-jobs.ts      jobs.list, job.control
+ *   actions-jobs.ts      jobs.list, job.control, handoff.decline
  *   actions-people.ts    users.history
  *   actions-record.ts    requirements.trace, design.get
  *   actions-build.ts     build.get, order.record, order.update, order.check_now, board.record, board.check

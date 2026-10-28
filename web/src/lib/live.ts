@@ -35,8 +35,9 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
       const r = e.repo
       const byWhat: Record<typeof e.what, QueryKey[]> = {
         // the journey's record and the agents' facts, and the bench's live readings (src/core/bench.ts): the Build tab and
-        // the guided skills (Bring-up run's live readout) read them too
-        journey: [['journey.get', r], ['inbox'], ['runs', r], ['build.get', r], ['skill.get', r]],
+        // the guided skills (Bring-up run's live readout) read them too; and jobs.list, whose hand-offs between
+        // specialists are agents' facts (an answer) or the record (a decline)
+        journey: [['journey.get', r], ['inbox'], ['runs', r], ['build.get', r], ['skill.get', r], ['jobs.list', r]],
         settings: [['settings.get', r], ['journey.get', r]],
         memory: [['memory.list', r], ['memory.recall', r]],
         chats: [['chats.list', r], ['chats.get', r], ['chats.recall', r]],

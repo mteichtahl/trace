@@ -34,6 +34,9 @@
  *   stuck_dismissals a person's dismissal of a stuck agent's report (stuck.dismiss): the stuck item's id, the reason
  *                    in one line, who and when. A dismissed item leaves Home and the inbox; the agent reads the
  *                    dismissal and its reason with journey.status
+ *   handoff_declines a person's decline of a pending hand-off between specialists (handoff.decline): the hand-off's
+ *                    id, the reason, who and when. The asking agent reads it with journey.status and may ask a person
+ *                    instead; the receiving job, if it was queued, is not run (src/core/handoffs.ts)
  *   skill_drafts     (the store only, never copied into the repository) each person's unsubmitted guided-skill draft
  *
  * People are named by the memory hash of their email (or sub) where the record only needs to match them (opens,
@@ -56,6 +59,7 @@ import { z } from 'zod'
 import { ensureProjectSchema, projectTables, transaction } from './store.js'
 // order tracking, boards by serial and their inspection: journey tables too (src/core/build-tables.ts, src/core/boards.ts)
 import { BUILD_TABLES } from './build-tables.js'
+import type { HandoffFact } from './handoffs.js'
 
 // ------------------------------------------------------------------ templates
 
@@ -334,6 +338,15 @@ CREATE TABLE IF NOT EXISTS stuck_dismissals (
   at REAL NOT NULL
 );` })
 
+ensureProjectSchema({ table: 'handoff_declines', sql: `
+CREATE TABLE IF NOT EXISTS handoff_declines (
+  handoff_id TEXT PRIMARY KEY,    -- the hand-off (src/core/handoffs.ts), in the agents' facts
+  reason TEXT NOT NULL,           -- one line, the person's words
+  by TEXT NOT NULL,               -- email (or sub), for people to read
+  by_hash TEXT NOT NULL,
+  at REAL NOT NULL
+);` })
+
 /**
  * A person's decision about what the agents proposed in the design record (src/tools/design/db.ts, in the repository):
  * accepting, editing or rejecting an intent statement, leaving one uncovered, striking a requirement with its reason,
@@ -356,7 +369,7 @@ CREATE TABLE IF NOT EXISTS design_decisions (
 CREATE INDEX IF NOT EXISTS design_decisions_target ON design_decisions(kind, target, at);`, merge: newer('design_decisions', 'id', ['kind', 'target', 'choice', 'detail', 'by', 'by_hash', 'at', 'superseded_at', 'updated']) })
 
 /** The journey's tables, in the order they are created and copied. */
-export const JOURNEY_TABLES = ['journey', 'stages', 'gates', 'gate_criteria', 'criterion_opens', 'gate_signatures', 'questions', 'waivers', 'decisions', 'orders', 'stuck_dismissals', 'design_decisions', ...BUILD_TABLES] as const
+export const JOURNEY_TABLES = ['journey', 'stages', 'gates', 'gate_criteria', 'criterion_opens', 'gate_signatures', 'questions', 'waivers', 'decisions', 'orders', 'stuck_dismissals', 'handoff_declines', 'design_decisions', ...BUILD_TABLES] as const
 
 /**
  * Tables only the journey store keeps: each person's unsubmitted guided-skill drafts. They are never copied into the
@@ -469,6 +482,8 @@ export interface WaiverRow {
 export interface DecisionRow { id: string; at: number; kind: string; stage: string | null; ref: string | null; summary: string; by: string | null; detail: unknown }
 /** A person's dismissal of a stuck agent's report. */
 export interface DismissalRow { stuckId: string; jobId: string | null; reason: string; by: string; byHash: string; at: number }
+/** A person's decline of a pending hand-off between specialists. */
+export interface DeclineRow { handoffId: string; reason: string; by: string; byHash: string; at: number }
 
 /** Everything the journey record holds, as rows. */
 export interface JourneyRecord {
@@ -476,6 +491,8 @@ export interface JourneyRecord {
   opens: { item: string; who: string; at: number }[]; signatures: SignatureRow[]; questions: QuestionRow[]; waivers: WaiverRow[]; decisions: DecisionRow[]
   /** dismissed stuck reports (absent in a record written before they existed: none) */
   dismissals?: DismissalRow[] | undefined
+  /** declined hand-offs (absent in a record written before they existed: none) */
+  declines?: DeclineRow[] | undefined
 }
 
 const tableExists = (db: DatabaseSync, t: string): boolean => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t))
@@ -526,6 +543,9 @@ export function loadJourney(db: DatabaseSync): JourneyRecord | null {
     })),
     dismissals: (tableExists(db, 'stuck_dismissals') ? rows('SELECT * FROM stuck_dismissals ORDER BY at') : []).map((r) => ({
       stuckId: String(r.stuck_id), jobId: str(r.job_id), reason: String(r.reason), by: String(r.by), byHash: String(r.by_hash), at: Number(r.at),
+    })),
+    declines: (tableExists(db, 'handoff_declines') ? rows('SELECT * FROM handoff_declines ORDER BY at') : []).map((r) => ({
+      handoffId: String(r.handoff_id), reason: String(r.reason), by: String(r.by), byHash: String(r.by_hash), at: Number(r.at),
     })),
   }
 }
@@ -1012,7 +1032,7 @@ function reopenStage(db: DatabaseSync, r: JourneyRecord, stage: StageId, reason:
   decide(db, { kind: 'stage.reopened', stage, ref: stage, by, summary: `${STAGE_NAMES[stage]} was reopened: ${reason}` })
 }
 
-const VAGUE = /^(it depends|you decide|not needed|n\/?a|none|no|ok|yes|whatever)\.?$/i
+export const VAGUE = /^(it depends|you decide|not needed|n\/?a|none|no|ok|yes|whatever)\.?$/i
 
 /**
  * Answer an agent's question: the recommended option, another option with a reason, or an answer in words with a reason.
@@ -1249,8 +1269,8 @@ export interface StuckFact {
   id: string; jobId: string | null; agent: string; why: string; recommendation: string; options: OptionRow[]; sources: Evidence[]
   stage: StageId | null; at: number; resolvedAt: number | null
 }
-/** What the agents contributed to one project (the newest check per criterion only). */
-export interface AgentFacts { questions: AgentQuestion[]; checks: CriterionCheck[]; stuck: StuckFact[] }
+/** What the agents contributed to one project (the newest check per criterion only), and their hand-offs to each other. */
+export interface AgentFacts { questions: AgentQuestion[]; checks: CriterionCheck[]; stuck: StuckFact[]; handoffs?: HandoffFact[] | undefined }
 export const NO_AGENT_FACTS: AgentFacts = { questions: [], checks: [], stuck: [] }
 
 const withFacts = (r: JourneyRecord, f: AgentFacts | null | undefined): JourneyRecord => (f ? mergeAgentFacts(r, f) : r)

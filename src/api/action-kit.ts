@@ -297,7 +297,7 @@ export async function plainly<T>(fn: () => T | Promise<T>): Promise<T> {
   try {
     return await fn()
   } catch (e) {
-    if (e instanceof Error && ['JourneyError', 'JourneyStoreError', 'AgentFactError', 'PreferenceError', 'PartRefused', 'ChatError'].includes(e.name)) throw new ActionError(e.message)
+    if (e instanceof Error && ['JourneyError', 'JourneyStoreError', 'AgentFactError', 'HandoffError', 'PreferenceError', 'PartRefused', 'ChatError'].includes(e.name)) throw new ActionError(e.message)
     throw e
   }
 }

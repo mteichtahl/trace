@@ -19,7 +19,7 @@ import type { ToolJob } from './schemas.js'
 /** Tools scoped by a job's environment (its project, agent, session or delegation token): never through the API. The
  * journey.* tools record what an agent contributes (src/tools/journey); people act through question.answer and the
  * other journey actions instead. */
-export const API_HIDDEN_TOOLS: ReadonlySet<string> = new Set(['memory.recall', 'memory.remember', 'agent.delegate', 'journey.status', 'journey.ask', 'journey.check', 'journey.stuck'])
+export const API_HIDDEN_TOOLS: ReadonlySet<string> = new Set(['memory.recall', 'memory.remember', 'agent.delegate', 'journey.status', 'journey.ask', 'journey.check', 'journey.stuck', 'journey.handoff', 'journey.handoff_answer'])
 
 /** Tool arguments that name files: they must stay inside the clone. `library` (another store) is refused outright. */
 export const PATH_KEYS: ReadonlySet<string> = new Set(['path', 'file', 'files', 'schematic', 'project', 'board', 'pcb', 'out_dir', 'models', 'include_dirs', 'dir', 'root'])

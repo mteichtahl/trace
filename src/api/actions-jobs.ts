@@ -1,13 +1,20 @@
 /**
  * A project's jobs, and controlling them: what the job system can genuinely do, and nothing it cannot.
  *
- *   jobs.list     read                   { repo } → { repo, jobs, agents, batch, updatedAt }: the project's job index
+ *   jobs.list     read                   { repo } → { repo, jobs, agents, handoffs, batch, updatedAt }: the project's job index
  *                                        (src/core/job-index.ts, written by its worker as its jobs change): running,
  *                                        queued, paused and the last day's finished jobs, newest first, each with its
  *                                        controls; per agent its status (Working, Queued, Waiting on a person, Stuck,
  *                                        Idle), what it is doing now, its queue in order, and the last day's runs; the
- *                                        graphics card and CPU jobs (AWS Batch) its jobs have running. Reviewers see it
- *                                        all with no controls
+ *                                        graphics card and CPU jobs (AWS Batch) its jobs have running; the hand-offs
+ *                                        between specialists (src/core/handoffs.ts: who asked whom, the request, its
+ *                                        state, the answer). Reviewers see it all with no controls
+ *   handoff.decline write on its project { repo, id, reason } → { declined }: a person declines a pending hand-off
+ *                                        (requested, or its job queued) with a reason in one line. It is written in the
+ *                                        journey record (people's), never the agents' facts; a queued receiving job is
+ *                                        cancelled at once where the API can reach it, and otherwise does not run at its
+ *                                        turn. The asking specialist reads the decline in journey.status and may ask a
+ *                                        person instead. A running one is refused: cancel its job. Reviewers cannot
  *   job.control   write on its project   { id, op, repo? }: pause | resume | cancel | move_up → { ok, kept? } or
  *                                        { ok: false, reason } in plain words. Reviewers cannot (write is needed);
  *                                        another project's job, and one that does not exist, get "no access"
@@ -28,7 +35,8 @@
  *   move_up   queued job     one place up its agent's queue (job_controls.ord)
  *
  * A work item (a workflow's) can only be cancelled: the workflows claim it and would dispatch it again. A delegated
- * worker is controlled through its specialist's job. Every job view (here, `job`, journey.get's jobs) carries
+ * worker is controlled through its specialist's job. A hand-off job (one specialist asked another) is held, moved up and
+ * cancelled like a person's task, but never paused: cancelled, its asker is told it was not answered. Every job view (here, `job`, journey.get's jobs) carries
  * `controls`: the ops this person can do for it now, so the app shows only those.
  *
  * People's controls are in the journey record, never in the index: the index is written by an agent's worker, and
@@ -39,10 +47,12 @@ import { AccessDenied, isAdmin, require_, standing } from '../core/access.js'
 import {
   type BatchRow, type JobControl, type JobRow, JobIndexStore, STALE_AFTER_S, indexedHandle, isLive, loadBatch, loadControls, loadJobs, moveUpOrder, putControl, queueOrder, typicalSeconds,
 } from '../core/job-index.js'
-import { type AgentFacts, loadJourney } from '../core/journey.js'
+import { type AgentFacts, type JourneyRecord, loadJourney } from '../core/journey.js'
+import { type HandoffView, declineHandoff, handoffViews } from '../core/handoffs.js'
+import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { PROJECTS_PREFIX, projectSlug } from '../core/project.js'
 import { TaskPayload } from '../agents/runtime/schemas.js'
-import { type Context, type JobView, type JobsApi, NO_ACCESS, Repo, agentFacts, def, journeyStore, label, plainly, storeAt, withJourneyDb, writeJourney } from './action-kit.js'
+import { type Context, type JobView, type JobsApi, NO_ACCESS, Repo, agentFacts, def, hashOf, label, plainly, storeAt, withJourneyDb, writeJourney } from './action-kit.js'
 
 export const JOB_OPS = ['pause', 'resume', 'cancel', 'move_up'] as const
 export type JobOp = (typeof JOB_OPS)[number]
@@ -70,10 +80,28 @@ export interface IndexedJob extends JobView {
   queue: { position: number; of: number; startsWhen: string } | null
   parentJob: string | null; resumeOf: string | null; resumedBy: string | null; summary: string | null; error: string | null
   pausedBy: string | null; pausedAt: string | null
+  /** a hand-off job: the hand-off it answers and who asked (its title says so too: "Asked by the … specialist: …") */
+  handoff: { id: string; from: string | null; fromName: string | null } | null
   controls: JobOp[]
 }
 
 const iso = (t: number | null): string | null => (t === null ? null : new Date(t * 1000).toISOString())
+
+/** A hand-off job's hand-off, from its row: its id, and who asked (from its title, "Asked by the … specialist: …"). */
+function handoffOf(j: Pick<JobRow, 'handoff' | 'title'>): IndexedJob['handoff'] {
+  const from = SPECIALIST_KINDS.find((k) => j.title.startsWith(`Asked by the ${SPECIALIST_WORDS[k]} specialist:`)) ?? null
+  return { id: j.handoff as string, from, fromName: from ? SPECIALIST_WORDS[from] : null }
+}
+
+/**
+ * The project's hand-offs between specialists as people read them (src/core/handoffs.ts handoffViews): the agents'
+ * facts, people's declines (the journey record) and each receiving job's state in the index, with the API's job ids.
+ */
+export function projectHandoffs(repo: string, facts: AgentFacts, record: Pick<JourneyRecord, 'declines'> | null, rows: readonly JobRow[]): HandoffView[] {
+  const at = Date.now() / 1000
+  const jobs = new Map(rows.map((r) => [r.id, { state: r.state === 'running' && !isLive(r, at) ? 'lost' : r.state, handle: indexedHandle(repo, r.session, r.id) }]))
+  return handoffViews(facts.handoffs ?? [], record?.declines ?? [], jobs)
+}
 
 /** Why a running job's state is not what its row says: its heartbeat stopped. */
 const LOST = `trace lost contact with it: its runtime stopped without a word for more than ${Math.round(STALE_AFTER_S / 60)} minutes`
@@ -82,13 +110,14 @@ const LOST = `trace lost contact with it: its runtime stopped without a word for
  * The ops a person may do on a job as it is now. `write`: they may change the project (contributors, admins); `can`:
  * what this installation's API can reach (a worker to pause or cancel).
  */
-export function controlsOf(j: Pick<JobRow, 'kind' | 'state' | 'parentJob' | 'resumedBy' | 'session'> & { held: boolean; discarded: boolean; lost: boolean; first: boolean },
+export function controlsOf(j: Pick<JobRow, 'kind' | 'state' | 'parentJob' | 'resumedBy' | 'session'> & Partial<Pick<JobRow, 'handoff'>> & { held: boolean; discarded: boolean; lost: boolean; first: boolean },
   o: { write: boolean; pause: boolean; cancel: boolean }): JobOp[] {
   if (!o.write || j.parentJob || j.lost) return []
   const task = j.kind === 'task'
   const reach = j.session !== null
   switch (j.state) {
-    case 'running': return [...(task && o.pause && reach ? ['pause' as const] : []), ...(o.cancel && reach ? ['cancel' as const] : [])]
+    // a running hand-off job is cancelled, never paused: its asker is told at once (src/core/handoffs.ts)
+    case 'running': return [...(task && !j.handoff && o.pause && reach ? ['pause' as const] : []), ...(o.cancel && reach ? ['cancel' as const] : [])]
     case 'queued': return [...(task ? [j.held ? 'resume' as const : 'pause' as const] : []), ...(!j.first ? ['move_up' as const] : []), ...(o.cancel && reach ? ['cancel' as const] : [])]
     case 'paused': return j.discarded || j.resumedBy ? [] : ['resume', 'cancel']
     default: return []
@@ -125,6 +154,7 @@ export function jobViews(repo: string, rows: readonly JobRow[], controls: Readon
       typicalS: typicalSeconds(rows, j.kind, j.agent), where: j.where, branch: j.branch, queue,
       parentJob: j.parentJob, resumeOf: j.resumeOf, resumedBy: j.resumedBy, summary: j.summary, error: lost ? LOST : j.error,
       pausedBy: j.pausedBy, pausedAt: iso(j.pausedAt),
+      handoff: j.handoff ? handoffOf(j) : null,
       controls: controlsOf({ ...j, held: Boolean(c?.held), discarded, lost, first }, o),
     })
   }
@@ -231,7 +261,7 @@ const Resumable = TaskPayload.pick({ request: true, requestedBy: true, requested
 export const JOB_ACTIONS = {
   'jobs.list': def('read', Repo, async ({ repo }, ctx) => {
     const at = Date.now() / 1000
-    const [{ jobs, batch }, facts, record] = await Promise.all([
+    const [{ jobs, batch, rows }, facts, record] = await Promise.all([
       listJobs(ctx, repo, { at }),
       agentFacts(ctx, repo).catch((): AgentFacts => ({ questions: [], checks: [], stuck: [] })),
       withJourneyDb(ctx, repo, (db) => loadJourney(db)).catch(() => null),
@@ -240,9 +270,29 @@ export const JOB_ACTIONS = {
     const dismissed = new Set((record?.dismissals ?? []).map((d) => d.stuckId))
     return {
       repo, jobs, agents: agentViews(jobs, facts, answered, dismissed, at),
+      // the hand-offs between specialists: who asked whom, for what, where each stands and its answer
+      handoffs: projectHandoffs(repo, facts, record, rows),
       batch: batch.map((b) => ({ id: b.id, job: jobs.find((j) => j.workerJobId === b.jobId)?.id ?? null, pool: b.pool, state: b.state, submittedAt: iso(b.submittedAt) })),
       updatedAt: new Date(at * 1000).toISOString(),
     }
+  }),
+
+  'handoff.decline': def('write', Repo.extend({ id: z.string().regex(/^ho[0-9a-f]{14}$/, 'a hand-off id'), reason: z.string().trim().min(3).max(300) }), async (a, ctx) => {
+    const by = label(ctx.principal)
+    const [facts, { rows }, jobs] = await Promise.all([agentFacts(ctx, a.repo), listJobs(ctx, a.repo), ctx.deps.jobs()])
+    const h = (facts.handoffs ?? []).find((x) => x.id === a.id)
+    const row = h?.jobId ? rows.find((r) => r.id === h.jobId) : undefined
+    const jobState = row ? (row.state === 'running' && !isLive(row, Date.now() / 1000) ? 'lost' : row.state) : null
+    const declined = await plainly(() => writeJourney(ctx, a.repo, (db) => ({ result: declineHandoff(db, h, { hash: hashOf(ctx.principal), label: by }, a.reason, { jobState }) })))
+    // its queued job leaves the queue now where the API can reach it; otherwise it does not run at its turn (job.ts)
+    let job: { cancelled: boolean; note: string } | null = null
+    if (row && row.state === 'queued') {
+      const handle = indexedHandle(a.repo, row.session, row.id)
+      const r = jobs.cancel && row.session ? await jobs.cancel(handle, `hand-off declined by ${by}: ${declined.reason}`).catch(() => null) : null
+      job = r?.ok ? { cancelled: true, note: 'Its queued job was cancelled.' } : { cancelled: false, note: 'Its queued job will not run: it stops at its turn.' }
+    }
+    const to = h ? `the ${SPECIALIST_WORDS[h.toKind]} specialist` : 'the specialist asked'
+    return { repo: a.repo, declined, ...(job ? { job } : {}), summary: `Declined: ${to} will not answer it, and the asking specialist is told why.` }
   }),
 
   'job.control': def('job', z.object({ id: z.string().min(1).max(400), op: z.enum(JOB_OPS), reason: z.string().trim().max(300).optional(), repo: z.string().max(140).optional() }), async (a, ctx) => {
@@ -313,8 +363,9 @@ export const JOB_ACTIONS = {
 }
 
 /** Why an op cannot be done for this job now, in plain words. */
-export function cannot(op: JobOp, j: Pick<IndexedJob, 'state' | 'kind' | 'parentJob' | 'resumedBy' | 'queue'>, jobs: Pick<JobsApi, 'cancel' | 'pause'>): string {
+export function cannot(op: JobOp, j: Pick<IndexedJob, 'state' | 'kind' | 'parentJob' | 'resumedBy' | 'queue'> & Partial<Pick<IndexedJob, 'handoff'>>, jobs: Pick<JobsApi, 'cancel' | 'pause'>): string {
   if (j.parentJob) return 'A worker job belongs to the specialist that asked for it: pause or cancel that job instead.'
+  if (op === 'pause' && j.handoff && j.state === 'running') return 'A job another specialist asked for is not paused: cancel it, and the asking specialist is told it was not answered.'
   if (j.state === 'lost') return 'trace lost contact with this job; there is nothing to control. Start it again if it is still needed.'
   switch (op) {
     case 'pause':

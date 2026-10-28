@@ -770,6 +770,49 @@
           "error": null,
           "pausedBy": null,
           "pausedAt": null,
+          "handoff": null,
+          "controls": [
+            "pause",
+            "cancel"
+          ]
+        },
+        {
+          "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-ho",
+          "workerJobId": "job-ho",
+          "kind": "task",
+          "repository": "acme/answers",
+          "agent": "ams",
+          "agentName": "Analog and mixed-signal",
+          "title": "Asked by the Thermal specialist: What is the worst-case dissipation of the LDO U3 at 85 °C ambient?",
+          "number": null,
+          "startedBy": "the Thermal specialist (job job-th)",
+          "yours": false,
+          "state": "queued",
+          "step": null,
+          "held": false,
+          "queuedAt": "2026-10-27T00:00:00.000Z",
+          "startedAt": null,
+          "endedAt": null,
+          "typicalS": 300,
+          "where": null,
+          "branch": null,
+          "queue": {
+            "position": 1,
+            "of": 1,
+            "startsWhen": "starts when it is its turn"
+          },
+          "parentJob": null,
+          "resumeOf": null,
+          "resumedBy": null,
+          "summary": null,
+          "error": null,
+          "pausedBy": null,
+          "pausedAt": null,
+          "handoff": {
+            "id": "ho00000000000000",
+            "from": "thermal",
+            "fromName": "Thermal"
+          },
           "controls": [
             "pause",
             "cancel"
@@ -807,10 +850,46 @@
           "error": null,
           "pausedBy": null,
           "pausedAt": null,
+          "handoff": null,
           "controls": [
             "pause",
             "cancel"
           ]
+        },
+        {
+          "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-ho2",
+          "workerJobId": "job-ho2",
+          "kind": "task",
+          "repository": "acme/answers",
+          "agent": "ams",
+          "agentName": "Analog and mixed-signal",
+          "title": "Asked by the Thermal specialist: What is the quiescent current of U3 at 85 °C, from its datasheet?",
+          "number": null,
+          "startedBy": "the Thermal specialist (job job-th)",
+          "yours": false,
+          "state": "succeeded",
+          "step": null,
+          "held": false,
+          "queuedAt": "2026-10-27T00:00:00.000Z",
+          "startedAt": "2026-10-27T00:00:00.000Z",
+          "endedAt": "2026-10-27T00:00:00.000Z",
+          "typicalS": 300,
+          "where": null,
+          "branch": null,
+          "queue": null,
+          "parentJob": null,
+          "resumeOf": null,
+          "resumedBy": null,
+          "summary": "ams: done in 4 turns",
+          "error": null,
+          "pausedBy": null,
+          "pausedAt": null,
+          "handoff": {
+            "id": "ho00000000000001",
+            "from": "thermal",
+            "fromName": "Thermal"
+          },
+          "controls": []
         },
         {
           "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-done",
@@ -840,7 +919,90 @@
           "error": null,
           "pausedBy": null,
           "pausedAt": null,
+          "handoff": null,
           "controls": []
+        }
+      ],
+      "handoffs": [
+        {
+          "id": "ho00000000000001",
+          "from": "thermal",
+          "from_name": "Thermal",
+          "from_job": "job-th",
+          "from_job_handle": null,
+          "to": "ams",
+          "to_name": "Analog and mixed-signal",
+          "question": "What is the quiescent current of U3 at 85 °C, from its datasheet?",
+          "blocks": "the junction temperature check of U3",
+          "evidence": [
+            {
+              "kind": "run",
+              "ref": "run-1",
+              "label": "the thermal run"
+            }
+          ],
+          "recommendation": null,
+          "acceptance": [
+            "the dissipation in watts at 500 mA, with the run id"
+          ],
+          "summary": "Thermal → Analog and mixed-signal: What is the quiescent current of U3 at 85 °C, from its datasheet?",
+          "state": "answered",
+          "says": "Answered.",
+          "created_at": "2026-10-27T00:00:00.000Z",
+          "job": {
+            "id": "job-ho2",
+            "handle": "trace-api-f05f4f8f-0123456789abcdef01234567.job-ho2"
+          },
+          "answer": {
+            "answered": true,
+            "text": "15 µA typical at 85 °C (datasheet page 5).",
+            "summary": "15 µA typical at 85 °C (datasheet page 5).",
+            "evidence": [
+              {
+                "kind": "run",
+                "ref": "run-1"
+              }
+            ],
+            "confidence": 0.9,
+            "acceptance_met": true,
+            "unmet": null,
+            "at": "2026-10-27T00:00:00.000Z"
+          },
+          "declined": null,
+          "why": null
+        },
+        {
+          "id": "ho00000000000000",
+          "from": "thermal",
+          "from_name": "Thermal",
+          "from_job": "job-th",
+          "from_job_handle": null,
+          "to": "ams",
+          "to_name": "Analog and mixed-signal",
+          "question": "What is the worst-case dissipation of the LDO U3 at 85 °C ambient?",
+          "blocks": "the junction temperature check of U3",
+          "evidence": [
+            {
+              "kind": "run",
+              "ref": "run-1",
+              "label": "the thermal run"
+            }
+          ],
+          "recommendation": null,
+          "acceptance": [
+            "the dissipation in watts at 500 mA, with the run id"
+          ],
+          "summary": "Thermal → Analog and mixed-signal: What is the worst-case dissipation of the LDO U3 at 85 °C ambient?",
+          "state": "queued",
+          "says": "Queued for the Analog and mixed-signal specialist: it starts at its turn in the project's queue.",
+          "created_at": "2026-10-27T00:00:00.000Z",
+          "job": {
+            "id": "job-ho",
+            "handle": "trace-api-f05f4f8f-0123456789abcdef01234567.job-ho"
+          },
+          "answer": null,
+          "declined": null,
+          "why": null
         }
       ]
     }
@@ -880,6 +1042,49 @@
           "error": null,
           "pausedBy": null,
           "pausedAt": null,
+          "handoff": null,
+          "controls": [
+            "pause",
+            "cancel"
+          ]
+        },
+        {
+          "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-ho",
+          "workerJobId": "job-ho",
+          "kind": "task",
+          "repository": "acme/answers",
+          "agent": "ams",
+          "agentName": "Analog and mixed-signal",
+          "title": "Asked by the Thermal specialist: What is the worst-case dissipation of the LDO U3 at 85 °C ambient?",
+          "number": null,
+          "startedBy": "the Thermal specialist (job job-th)",
+          "yours": false,
+          "state": "queued",
+          "step": null,
+          "held": false,
+          "queuedAt": "2026-10-27T00:00:00.000Z",
+          "startedAt": null,
+          "endedAt": null,
+          "typicalS": 300,
+          "where": null,
+          "branch": null,
+          "queue": {
+            "position": 1,
+            "of": 1,
+            "startsWhen": "starts when it is its turn"
+          },
+          "parentJob": null,
+          "resumeOf": null,
+          "resumedBy": null,
+          "summary": null,
+          "error": null,
+          "pausedBy": null,
+          "pausedAt": null,
+          "handoff": {
+            "id": "ho00000000000000",
+            "from": "thermal",
+            "fromName": "Thermal"
+          },
           "controls": [
             "pause",
             "cancel"
@@ -917,10 +1122,46 @@
           "error": null,
           "pausedBy": null,
           "pausedAt": null,
+          "handoff": null,
           "controls": [
             "pause",
             "cancel"
           ]
+        },
+        {
+          "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-ho2",
+          "workerJobId": "job-ho2",
+          "kind": "task",
+          "repository": "acme/answers",
+          "agent": "ams",
+          "agentName": "Analog and mixed-signal",
+          "title": "Asked by the Thermal specialist: What is the quiescent current of U3 at 85 °C, from its datasheet?",
+          "number": null,
+          "startedBy": "the Thermal specialist (job job-th)",
+          "yours": false,
+          "state": "succeeded",
+          "step": null,
+          "held": false,
+          "queuedAt": "2026-10-27T00:00:00.000Z",
+          "startedAt": "2026-10-27T00:00:00.000Z",
+          "endedAt": "2026-10-27T00:00:00.000Z",
+          "typicalS": 300,
+          "where": null,
+          "branch": null,
+          "queue": null,
+          "parentJob": null,
+          "resumeOf": null,
+          "resumedBy": null,
+          "summary": "ams: done in 4 turns",
+          "error": null,
+          "pausedBy": null,
+          "pausedAt": null,
+          "handoff": {
+            "id": "ho00000000000001",
+            "from": "thermal",
+            "fromName": "Thermal"
+          },
+          "controls": []
         },
         {
           "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-done",
@@ -950,6 +1191,7 @@
           "error": null,
           "pausedBy": null,
           "pausedAt": null,
+          "handoff": null,
           "controls": []
         }
       ],
@@ -987,14 +1229,16 @@
         {
           "id": "ams",
           "name": "Analog and mixed-signal",
-          "status": "idle",
-          "says": "Idle",
+          "status": "queued",
+          "says": "1 queued; next: \"Asked by the Thermal specialist: What is the worst-case dissipation of the LDO U3 at 85 °C ambient?\"",
           "now": [],
-          "queue": [],
+          "queue": [
+            "trace-api-f05f4f8f-0123456789abcdef01234567.job-ho"
+          ],
           "today": {
-            "runs": 0,
-            "succeeded": 0,
-            "medianS": null
+            "runs": 1,
+            "succeeded": 1,
+            "medianS": 300
           }
         },
         {
@@ -1050,8 +1294,112 @@
           }
         }
       ],
+      "handoffs": [
+        {
+          "id": "ho00000000000001",
+          "from": "thermal",
+          "from_name": "Thermal",
+          "from_job": "job-th",
+          "from_job_handle": null,
+          "to": "ams",
+          "to_name": "Analog and mixed-signal",
+          "question": "What is the quiescent current of U3 at 85 °C, from its datasheet?",
+          "blocks": "the junction temperature check of U3",
+          "evidence": [
+            {
+              "kind": "run",
+              "ref": "run-1",
+              "label": "the thermal run"
+            }
+          ],
+          "recommendation": null,
+          "acceptance": [
+            "the dissipation in watts at 500 mA, with the run id"
+          ],
+          "summary": "Thermal → Analog and mixed-signal: What is the quiescent current of U3 at 85 °C, from its datasheet?",
+          "state": "answered",
+          "says": "Answered.",
+          "created_at": "2026-10-27T00:00:00.000Z",
+          "job": {
+            "id": "job-ho2",
+            "handle": "trace-api-f05f4f8f-0123456789abcdef01234567.job-ho2"
+          },
+          "answer": {
+            "answered": true,
+            "text": "15 µA typical at 85 °C (datasheet page 5).",
+            "summary": "15 µA typical at 85 °C (datasheet page 5).",
+            "evidence": [
+              {
+                "kind": "run",
+                "ref": "run-1"
+              }
+            ],
+            "confidence": 0.9,
+            "acceptance_met": true,
+            "unmet": null,
+            "at": "2026-10-27T00:00:00.000Z"
+          },
+          "declined": null,
+          "why": null
+        },
+        {
+          "id": "ho00000000000000",
+          "from": "thermal",
+          "from_name": "Thermal",
+          "from_job": "job-th",
+          "from_job_handle": null,
+          "to": "ams",
+          "to_name": "Analog and mixed-signal",
+          "question": "What is the worst-case dissipation of the LDO U3 at 85 °C ambient?",
+          "blocks": "the junction temperature check of U3",
+          "evidence": [
+            {
+              "kind": "run",
+              "ref": "run-1",
+              "label": "the thermal run"
+            }
+          ],
+          "recommendation": null,
+          "acceptance": [
+            "the dissipation in watts at 500 mA, with the run id"
+          ],
+          "summary": "Thermal → Analog and mixed-signal: What is the worst-case dissipation of the LDO U3 at 85 °C ambient?",
+          "state": "queued",
+          "says": "Queued for the Analog and mixed-signal specialist: it starts at its turn in the project's queue.",
+          "created_at": "2026-10-27T00:00:00.000Z",
+          "job": {
+            "id": "job-ho",
+            "handle": "trace-api-f05f4f8f-0123456789abcdef01234567.job-ho"
+          },
+          "answer": null,
+          "declined": null,
+          "why": null
+        }
+      ],
       "batch": [],
       "updatedAt": "2026-10-27T00:00:00.000Z"
+    }
+  },
+  "handoff.decline": {
+    "args": {
+      "repo": "acme/answers",
+      "id": "ho00000000000000",
+      "reason": "The bench measures it on Friday."
+    },
+    "result": {
+      "repo": "acme/answers",
+      "declined": {
+        "id": "ho00000000000000",
+        "reason": "The bench measures it on Friday.",
+        "by": "user@example.com",
+        "at": "2026-10-27T00:00:00.000Z",
+        "version": 3
+      },
+      "job": {
+        "cancelled": true,
+        "note": "Its queued job was cancelled."
+      },
+      "summary": "Declined: the Analog and mixed-signal specialist will not answer it, and the asking specialist is told why."
     }
   },
   "inbox": {
@@ -1492,7 +1840,7 @@
         "at": "2026-10-27T00:00:00.000Z"
       },
       "summary": "Intent INT-range was accepted as worded: Reaches a gateway 2 km away.",
-      "version": 3
+      "version": 4
     }
   },
   "design.get": {

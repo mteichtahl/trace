@@ -38,7 +38,8 @@ import { projectSlug } from '../../core/project.js'
 import { type WaitChange, waitWithTimer } from '../../core/wait.js'
 import { type SnsApi, type SqsApi, openWaitQueue, staleAfterMs, waitQueueName } from '../../gpu/batch.js'
 import type { Admit, JobEvent, Jobs } from './jobs.js'
-import { type JobInfo, type JobPayload, isDelegated } from './schemas.js'
+import { type JobInfo, type JobPayload, isDelegated, isHandoff } from './schemas.js'
+import { handoffTitle } from '../../core/handoffs.js'
 
 export const STEP_EVERY_MS = 15_000
 /** Where a queued job looks when no event reaches it (no events topic, or subscribing failed). */
@@ -52,15 +53,16 @@ const errText = (e: unknown): string => (e instanceof Error ? e.message : String
 /** The request in one line, for a person. */
 export function titleOf(p: JobPayload): string {
   switch (p.kind) {
-    case 'task': return p.request.replace(/\s+/g, ' ').trim().slice(0, 200)
+    case 'task': return isHandoff(p) ? handoffTitle(p.handoff.from, p.handoff.question) : p.request.replace(/\s+/g, ' ').trim().slice(0, 200)
     case 'work-item': return `${p.item.kind === 'agent-fix' ? 'Issue' : 'Pull request'} #${p.item.number}: ${p.item.title}`.slice(0, 200)
     case 'sweep': return `Looking for work on ${p.repositories.length === 1 ? p.repositories[0] : `${p.repositories.length} projects`}`
   }
 }
 
-/** A task's request as Resume needs it again (its trace context and any earlier resume left out). */
+/** A task's request as Resume needs it again (its trace context and any earlier resume left out). A hand-off job's is
+ * not kept: it is never paused, so never resumed. */
 export function resumablePayload(p: JobPayload): string | null {
-  if (p.kind !== 'task' || isDelegated(p)) return null
+  if (p.kind !== 'task' || isDelegated(p) || isHandoff(p)) return null
   const { trace: _t, resume: _r, ...rest } = p
   return JSON.stringify(rest)
 }
@@ -111,7 +113,7 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
       kind: j.kind, agent: j.agent ?? null, title: p ? titleOf(p) : j.key, number: j.number ?? null,
       requestedBySub: p?.kind === 'task' ? p.requestedBySub ?? null : null, requestedBy: p?.kind === 'task' ? p.requestedBy : null,
       state: j.state, step: j.step ?? null, startedAt: iso(j.runningAt ?? j.startedAt), endedAt: iso(j.endedAt), where: WHERE,
-      branch: j.branch ?? null, parentJob: j.parentJobId ?? null, session: j.session ?? null, summary: j.summary?.slice(0, 2000) ?? null, error: j.error?.slice(0, 2000) ?? null,
+      branch: j.branch ?? null, parentJob: j.parentJobId ?? null, handoff: j.handoffId ?? null, session: j.session ?? null, summary: j.summary?.slice(0, 2000) ?? null, error: j.error?.slice(0, 2000) ?? null,
       ...(p?.kind === 'task' && !isDelegated(p) ? { payload: resumablePayload(p), resumeOf: p.resume?.job ?? null } : {}),
       ...(j.pause ? { pausedBy: j.pause.by, pausedAt: iso(j.pause.at) } : {}),
     }

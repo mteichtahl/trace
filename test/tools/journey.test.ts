@@ -12,7 +12,10 @@ import { JourneyStore } from '../../src/core/journey-store.js'
 import { Registry, ToolError } from '../../src/core/registry.js'
 import { Work } from '../../src/core/store.js'
 import { allTools } from '../../src/tools/index.js'
-import { JOURNEY_WRITE_FILTER, eventsOf, journeyScope, tools, waitForAnswer } from '../../src/tools/journey/tools.js'
+import { JOURNEY_WRITE_FILTER, eventsOf, handoffAskEnv, handoffEnv, journeyScope, tools, waitForAnswer, waitForHandoff } from '../../src/tools/journey/tools.js'
+import { answerHandoff, declineHandoff, loadHandoffs, markStarted } from '../../src/core/handoffs.js'
+import { type Server, createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { type SnsApi, type SqsApi, sweepInFlight } from '../../src/gpu/batch.js'
 import { projectHash } from '../../src/core/project.js'
 import { activeWaits } from '../../src/core/wait.js'
@@ -273,5 +276,170 @@ describe('journey.ask waits on events where the project has them', () => {
     await sweepInFlight()
     expect(out).toMatchObject({ answered: { option: 'a' }, waited_on: 'timer', why_timer: expect.stringMatching(/receiving its events failed/) })
     expect(k.unsubscribed).toHaveLength(1)
+  })
+})
+
+// ------------------------------------------------------------------ hand-offs between specialists
+
+describe('journey.handoff and journey.handoff_answer', () => {
+  const REQ = {
+    to: 'ams', question: 'What is the worst-case dissipation of the LDO U3 at 85 °C ambient with a 500 mA load?',
+    blocks: 'the junction temperature check of U3', acceptance: ['the dissipation in watts at 500 mA and 85 °C, with the run id'],
+    recommendation: 'About 0.9 W.',
+  }
+  const KEYS = ['TRACE_HANDOFF_URL', 'TRACE_HANDOFF_TOKEN', 'TRACE_HANDOFF_ENABLED', 'TRACE_HANDOFF_LIMITS', 'TRACE_HANDOFF_ID', 'TRACE_AGENT', 'TRACE_AGENT_LABEL', 'TRACE_JOB_ID']
+  const was: Record<string, string | undefined> = {}
+  let server: Server | null = null
+  let started: { token: string; id: string }[] = []
+  let answer: (b: { id: string }) => unknown = (b) => ({ accepted: true, jobId: `job-r-${b.id.slice(-4)}`, handoff: b.id })
+
+  beforeAll(async () => {
+    for (const k of KEYS) was[k] = process.env[k]
+    server = createServer((req, res) => {
+      void (async () => {
+        const chunks: Buffer[] = []
+        for await (const c of req) chunks.push(c as Buffer)
+        const b = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { token: string; id: string }
+        started.push(b)
+        // what the runtime does (src/agents/runtime/handoff.ts start): the hand-off is started with its job
+        const out = answer(b) as { accepted: boolean; jobId: string }
+        if (out.accepted) await facts.update((db) => { markStarted(db, b.id, out.jobId); return { result: null } })
+        res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(out))
+      })()
+    })
+    await new Promise<void>((r) => server!.listen(0, '127.0.0.1', r))
+  })
+  afterAll(async () => {
+    for (const k of KEYS) { if (was[k] === undefined) delete process.env[k]; else process.env[k] = was[k] }
+    await new Promise((r) => server!.close(() => r(undefined)))
+  })
+  const asThermal = (job = 'job-th1'): void => {
+    Object.assign(process.env, { TRACE_AGENT: 'thermal', TRACE_AGENT_LABEL: 'the Thermal specialist', TRACE_JOB_ID: job })
+    Object.assign(process.env, handoffAskEnv({ url: `http://127.0.0.1:${(server!.address() as AddressInfo).port}`, token: 't'.repeat(64), enabled: ['verify', 'ams', 'emc', 'thermal'], limits: { perJob: 2, perProject: 10 } }))
+    delete process.env.TRACE_HANDOFF_ID
+  }
+  const asReceiver = (id: string, job: string): void => {
+    for (const k of ['TRACE_HANDOFF_URL', 'TRACE_HANDOFF_TOKEN']) delete process.env[k]
+    Object.assign(process.env, { TRACE_AGENT: 'ams', TRACE_AGENT_LABEL: 'the Analog & Mixed-Signal specialist', TRACE_JOB_ID: job, TRACE_HANDOFF_ID: id })
+  }
+
+  it('are offered only where the runner set them up: journey.handoff to an asking specialist, the answer tool to a hand-off job', () => {
+    for (const k of KEYS.slice(0, 5)) delete process.env[k]
+    expect(Registry.available(allTools().get('journey.handoff')!)).toBe(false)
+    expect(Registry.available(allTools().get('journey.handoff_answer')!)).toBe(false)
+    for (const t of ['journey.handoff', 'journey.handoff_answer']) { expect(API_HIDDEN_TOOLS.has(t)).toBe(true); expect(apiTool(allTools().get(t))).toBe(false) }
+    asThermal()
+    expect(Registry.available(allTools().get('journey.handoff')!)).toBe(true)
+    expect(handoffEnv()).toMatchObject({ enabled: ['verify', 'ams', 'emc', 'thermal'], limits: { perJob: 2, perProject: 10 } })
+  })
+
+  it('refuses a vague request with what is missing, and evidence that is not in the checkout, before anything is written', async () => {
+    asThermal()
+    started = []
+    await expect(call('journey.handoff', { to: 'ams', question: 'LDO?' })).rejects.toThrow(/not specific enough[\s\S]*the question or task[\s\S]*the evidence[\s\S]*what it blocks[\s\S]*acceptance/)
+    await expect(call('journey.handoff', { ...REQ, evidence: [{ kind: 'run', ref: 'no-such-run' }] })).rejects.toThrow(/no run "no-such-run"/)
+    await expect(call('journey.handoff', { ...REQ, to: 'thermal', evidence: [{ kind: 'run', ref: runId }] })).rejects.toThrow(/cannot hand off to yourself/)
+    await expect(call('journey.handoff', { ...REQ, to: 'impl', evidence: [{ kind: 'run', ref: runId }] })).rejects.toThrow(/not enabled on this project/)
+    expect(started).toEqual([])
+    expect((await facts.read((db) => loadHandoffs(db))).result).toEqual([])
+  })
+
+  it('records the request, has the runtime start the receiver, and returns at once by default', async () => {
+    asThermal()
+    started = []
+    const r = await call('journey.handoff', { ...REQ, evidence: [{ kind: 'run', ref: runId }, { kind: 'file', ref: 'package.json' }] }) as { handoff_id: string; state: string; job_id: string; next: string }
+    expect(r).toMatchObject({ state: 'queued', to: 'ams', to_name: 'Analog and mixed-signal', job_id: expect.stringMatching(/^job-r-/), next: expect.stringMatching(/recorded for your next job/) })
+    expect(started).toEqual([{ token: 't'.repeat(64), id: r.handoff_id }])
+    const [h] = (await facts.read((db) => loadHandoffs(db))).result
+    expect(h).toMatchObject({ id: r.handoff_id, fromAgent: 'thermal', fromJob: 'job-th1', toKind: 'ams', state: 'started', jobId: r.job_id, depth: 1 })
+    // the journey record is never written by the tool
+    expect((await journey.read((db) => loadJourney(db)?.declines)).result).toEqual([])
+    // journey.status lists what it raised, open
+    const st = await call('journey.status', {}) as { handoffs: { raised: { id: string; state: string; next: string }[] } }
+    expect(st.handoffs.raised).toEqual([expect.objectContaining({ id: r.handoff_id, state: 'queued', next: expect.stringMatching(/Not answered yet/) })])
+  })
+
+  it('only the job started for the hand-off answers it; the asker reads the answer in journey.status', async () => {
+    const [h] = (await facts.read((db) => loadHandoffs(db))).result
+    asReceiver(h!.id, 'job-wrong')
+    expect(Registry.available(allTools().get('journey.handoff')!)).toBe(false)
+    await expect(call('journey.handoff_answer', { handoff: h!.id, answer: '0.85 W at 500 mA and 85 °C ambient.', evidence: [{ kind: 'run', ref: runId }], confidence: 0.8, acceptance_met: true })).rejects.toThrow(/Only the job started for hand-off/)
+    await expect(call('journey.handoff_answer', { handoff: 'ho0000000000000f', answer: 'x'.repeat(30) })).rejects.toThrow(/this job answers hand-off/)
+    asReceiver(h!.id, h!.jobId!)
+    await expect(call('journey.handoff_answer', { handoff: h!.id, answer: '0.85 W at 500 mA and 85 °C ambient.' })).rejects.toThrow(/not complete[\s\S]*evidence/)
+    const out = await call('journey.handoff_answer', { handoff: h!.id, answer: '0.85 W at 500 mA and 85 °C ambient, 5.0 V input.', evidence: [{ kind: 'run', ref: runId }], confidence: 0.8, acceptance_met: true })
+    expect(out).toMatchObject({ handoff_id: h!.id, state: 'answered' })
+    asThermal('job-th2')
+    const st = await call('journey.status', { handoff: h!.id }) as { handoff: { state: string; answer: { text: string; confidence: number }; next: string } }
+    expect(st.handoff).toMatchObject({ state: 'answered', answer: { text: '0.85 W at 500 mA and 85 °C ambient, 5.0 V input.', confidence: 0.8 }, next: expect.stringMatching(/Use the answer/) })
+  })
+
+  it('a job a hand-off started cannot hand off (depth 1), and a declined question is not asked again', async () => {
+    const [h] = (await facts.read((db) => loadHandoffs(db))).result
+    // the receiver with a token by mistake: its row still says it was started by a hand-off
+    asThermal()
+    Object.assign(process.env, { TRACE_AGENT: 'ams', TRACE_JOB_ID: h!.jobId! })
+    await expect(call('journey.handoff', { ...REQ, to: 'thermal', evidence: [{ kind: 'run', ref: runId }] })).rejects.toThrow(/cannot hand it back/)
+    await expect(call('journey.handoff', { ...REQ, to: 'emc', evidence: [{ kind: 'run', ref: runId }] })).rejects.toThrow(/raises none/)
+    // a person declines a new one; asking the same again is refused
+    asThermal('job-th3')
+    const r = await call('journey.handoff', { ...REQ, to: 'emc', question: 'Does the 2 MHz switcher on the 5 V rail pass the class B limit at 30 MHz?', evidence: [{ kind: 'run', ref: runId }] }) as { handoff_id: string }
+    const got = (await facts.read((db) => loadHandoffs(db))).result.find((x) => x.id === r.handoff_id)
+    await journey.update((db) => ({ result: declineHandoff(db, got, { hash: 'h', label: 'u@example.com' }, 'EMC is measured at the lab.', { jobState: 'queued' }) }))
+    const st = await call('journey.status', { handoff: r.handoff_id }) as { handoff: { state: string; declined: { reason: string }; next: string } }
+    expect(st.handoff).toMatchObject({ state: 'declined', declined: { reason: 'EMC is measured at the lab.' }, next: expect.stringMatching(/ask a person with journey.ask/) })
+    await expect(call('journey.handoff', { ...REQ, to: 'emc', question: 'Does the 2 MHz switcher on the 5 V rail pass the class B limit at 30 MHz?', evidence: [{ kind: 'run', ref: runId }] }))
+      .rejects.toThrow(/declined by a person. Do not ask again/)
+  })
+
+  it('a receiver the runtime could not start leaves the hand-off failed, never open', async () => {
+    asThermal('job-th4')
+    answer = () => ({ accepted: false, jobId: '', reason: 'the runtime is shutting down' })
+    const r = await call('journey.handoff', { ...REQ, to: 'verify', question: 'Is the LDO U3 thermal shutdown covered by a test item in the plan?', evidence: [{ kind: 'run', ref: runId }] }) as { handoff_id: string; state: string }
+    expect(r.state).toBe('failed')
+    answer = (b) => ({ accepted: true, jobId: `job-r-${b.id.slice(-4)}`, handoff: b.id })
+  })
+
+  it('waits for the answer when asked to: on the declared timer, never past wait_minutes', async () => {
+    asThermal('job-th5')
+    const r = await call('journey.handoff', { ...REQ, question: 'What is the quiescent current of U3 at 85 °C, from its datasheet?', evidence: [{ kind: 'run', ref: runId }] }) as { handoff_id: string; job_id: string }
+    let t = 2_000_000
+    const sleeps: number[] = []
+    const none = await waitForHandoff(journeyScope(), r.handoff_id, 60_000, { now: () => t, sleep: async (ms) => { sleeps.push(ms); t += ms } })
+    expect(none).toMatchObject({ state: 'queued', answer: null, next: expect.stringMatching(/Not answered within 1 minutes[\s\S]*Never take your own recommendation/), waited_on: 'timer' })
+    expect(sleeps[0]).toBe(30_000)
+    expect(sleeps.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(60_000)
+    let n = 0
+    const got = await waitForHandoff(journeyScope(), r.handoff_id, 3_600_000, {
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms
+        if (++n === 2) await facts.update((db) => ({ result: answerHandoff(db, r.handoff_id, r.job_id, { answered: true, text: '15 µA typical at 85 °C (datasheet page 5).', evidence: [{ kind: 'run', ref: runId }], confidence: 0.9, acceptanceMet: true }) }))
+      },
+    })
+    expect(got).toMatchObject({ id: r.handoff_id, state: 'answered', answer: { text: '15 µA typical at 85 °C (datasheet page 5).' } })
+  })
+
+  it('waits on the project\'s events where it has them: told of the facts\' write, reads once, returns the answer', async () => {
+    asThermal('job-th6')
+    const r = await call('journey.handoff', { ...REQ, question: 'What is the dropout of U3 at 500 mA and 85 °C, from its datasheet?', evidence: [{ kind: 'run', ref: runId }] }) as { handoff_id: string; job_id: string }
+    const FACTS_WRITE = JSON.stringify({ source: 'aws.s3', 'detail-type': 'Object Created', detail: { bucket: { name: 'central' }, object: { key: 'projects/acme/board/journey-agent/facts.db' } } })
+    const k = new Fakes([null, async () => {
+      await facts.update((db) => ({ result: answerHandoff(db, r.handoff_id, r.job_id, { answered: true, text: '260 mV at 500 mA and 85 °C (datasheet page 6).', evidence: [{ kind: 'run', ref: runId }], confidence: 0.9, acceptanceMet: true }) }))
+      return [FACTS_WRITE]
+    }])
+    const out = await waitForHandoff(journeyScope(), r.handoff_id, 3_600_000, { now: k.now, log: () => undefined, events: { ...eventsOf({ TRACE_BATCH_EVENTS_TOPIC: TOPIC }, 'acme/board')!, sqs: k.sqs, sns: k.sns } })
+    await sweepInFlight()
+    expect(out).toMatchObject({ state: 'answered', waited_on: 'events', answer: { text: '260 mV at 500 mA and 85 °C (datasheet page 6).' } })
+    expect(k.receives).toHaveLength(2)
+    expect(k.unsubscribed).toHaveLength(1)
+    expect(k.deleted).toHaveLength(1)
+  })
+
+  it('journey.status shows a hand-off job the one it answers', async () => {
+    const [h] = (await facts.read((db) => loadHandoffs(db))).result
+    asReceiver(h!.id, h!.jobId!)
+    const st = await call('journey.status', {}) as { handoffs: { answering: { id: string; from: string; acceptance: string[] }[] } }
+    expect(st.handoffs.answering).toEqual([expect.objectContaining({ id: h!.id, from: 'thermal', acceptance: REQ.acceptance })])
   })
 })

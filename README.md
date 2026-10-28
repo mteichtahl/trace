@@ -322,7 +322,7 @@ projects is therefore drawn in IAM, not only in code (`src/infra/project.ts`):
 | **Memory** | One AgentCore Memory per repository (`<prefix>_m_<hash>`, tagged `trace:project`), its own event expiry, and its own log group and log delivery. The worker is told only its own (`TRACE_MEMORY_ID`) and its role may use only that memory's ARN. On it, the role may still create and list events only for actors `<owner>/<repo>/*`, and recall and list records only under `/trace/<owner>/<repo>/*` (the condition keys `bedrock-agentcore:actorId` and `bedrock-agentcore:namespace`), as defence in depth. The actor comes from `TRACE_PROJECT`, never from the request. The GitHub OIDC role has the same grants on the same memory, for the `worker.runner = actions` fallback (the repository variable `TRACE_MEMORY_ID`). |
 | **S3** | Read and write `projects/<owner>/<repo>/*` and `jobs/<owner>/<repo>/*`, and list only those prefixes and `central/*`. Read, never write, `prompts/*` (the installation's prompt overrides, see [Managing prompts](#managing-prompts)). Nothing under `access/*`, and nothing of another project. |
 | **GPU and CPU jobs** | Two AWS Batch job definitions per project (`<prefix>-gpu-<hash>`, and `<prefix>-cpu-<hash>` with the CPU queue), with one job role that reads and writes only that project's `jobs/<owner>/<repo>/*`. A project's role may submit only with its own definitions, only jobs tagged `trace:project=<owner>/<repo>`, and may stop only jobs carrying that tag. SubmitJob cannot override a definition's job role. |
-| **Events** | Nested layout only. One SNS topic per project, `<prefix>-<hash>-batch-events`, and up to two EventBridge rules sending it events: its own Batch jobs' state changes (with GPU jobs), and `<prefix>-<hash>-journey-events`, the central bucket's "Object Created" event for its journey record (`projects/<owner>/<repo>/journey/journey.db`, which only the API writes). Only those rules may publish to it. A worker waiting on a job, or on a person's answer in `journey.ask`, subscribes a short-lived queue of its own (`<prefix>-<hash>-wait-*`) and is told at once. It still checks on a slow timer (30 seconds and 90 seconds after subscribing, then every 5 minutes) in case a message is lost. Without the topic (flat layout, or an older stack) it checks on a timer and says when it will look next. |
+| **Events** | Nested layout only. One SNS topic per project, `<prefix>-<hash>-batch-events`, and up to two EventBridge rules sending it events: its own Batch jobs' state changes (with GPU jobs), and `<prefix>-<hash>-journey-events`, the central bucket's "Object Created" event for its journey record (`projects/<owner>/<repo>/journey/journey.db`, which only the API writes), its job index (`journey-agent/jobs.db`) and its agents' facts (`journey-agent/facts.db`, where a hand-off's answer is written). Only those rules may publish to it. A worker waiting on a job, on a person's answer in `journey.ask`, or on a hand-off's answer in `journey.handoff`, subscribes a short-lived queue of its own (`<prefix>-<hash>-wait-*`) and is told at once. It still checks on a slow timer (30 seconds and 90 seconds after subscribing, then every 5 minutes) in case a message is lost. Without the topic (flat layout, or an older stack) it checks on a timer and says when it will look next. |
 | **Knowledge base** | One Amazon Bedrock knowledge base per repository (`<prefix>-kb-<hash>`, nested layout only), with its own service role (`<prefix>-kb-<hash>-<region>`) that reads only `projects/<owner>/<repo>/kb/*` and its own S3 Vectors index, and invokes only the embedding model. The worker role and the OIDC role may `bedrock:Retrieve` and start, get and list ingestion jobs on that knowledge base's ARN only. See [Knowledge base](#knowledge-base). |
 | **Library gateway** | Off by default (`gateway.enabled`). When on, each worker role may `bedrock-agentcore:InvokeGateway` on the installation's one library gateway and nothing else of it; the gateway serves only the shared datasheets and parts tools. See [Library gateway](#library-gateway). |
 | **GitHub OIDC role** | One per repository, trusted only for `repo:OWNER/REPO:ref:refs/heads/BRANCH`. It may invoke only that project's runtime, read and write only that project's prefix (and the central database), and use only that project's memory and knowledge base, as its worker does. |
@@ -1390,6 +1390,47 @@ When a job needs the repository changed, or long mechanical work, the specialist
   `agent.delegate`, and the runtime refuses any token it did not issue. A specialist runs one delegation at a time.
 - **Internal only.** `/invocations` and the API never accept a worker task (`agent: 'worker'`).
 
+### How specialists consult each other
+
+A specialist never calls another directly. When a question in another specialist's area blocks its work, or would
+materially change it, it raises a **recorded hand-off** with `journey.handoff`, and the answer is recorded too
+(`src/core/handoffs.ts`). Marc chose this over direct calls between agents and over the status quo (a person relays):
+every consultation is visible, controllable by people, and cannot loop.
+
+- **The request.** The specialist asked (an enabled one, never itself), the question in plain words, the evidence
+  (run ids, files, artifacts, datasheet pages; checked against the checkout like `journey.check`'s), what it blocks,
+  the asker's recommended answer if it has one, and acceptance: what a good answer contains. A vague request is
+  refused with everything that is missing, before anything is written (guard 2).
+- **The guards** (guard 1), checked on the same conditional write as the row: a job started by a hand-off raises none
+  (depth 1, so A→B→A cannot happen; it is not offered the tool, and its row refuses it too); never to the asking
+  specialist itself; at most `agents.handoff_max_per_job` (3) open hand-offs per asking job and
+  `agents.handoff_max_per_project` (10) per project; and the same question is never asked again of a specialist that
+  declined, failed or could not answer it.
+- **Where it lives.** A row of the agents' facts, `projects/<slug>/journey-agent/facts.db` table `handoffs` (who
+  asked, from which job, of which specialist, the request, depth, state, and later the receiving job and its answer).
+  Agents may write it; the API only reads it.
+- **The receiving job.** The asking job's own runtime starts it, the way a sweep starts its items: the tool posts
+  `POST /handoff { token, id }` on loopback with the job's token (`src/agents/runtime/handoff.ts`), and the runtime
+  reads the request back from the facts and starts a task for the asked specialist, carrying `handoff` (the recorded
+  request, depth 1). It is an ordinary queued job of the project: it waits its turn in the project's queue, shows in
+  the queue as "Asked by the Thermal specialist: …", and people may Hold, Move up or Cancel it (never Pause: cancelled,
+  its asker is told it was not answered). It runs on a branch of its own (`claude/handoff-<id>`), with a header saying
+  who asked for what and `journey.handoff_answer` instead of `journey.handoff`. No new permission: the worker's role
+  already reaches the project's queue and facts.
+- **The answer.** `journey.handoff_answer`, by the job started for that hand-off only (its id and job id): the answer,
+  evidence, a confidence and whether the acceptance is met; or `answered: false` with why. A receiving job that ends
+  without answering closes its hand-off as failed, with how it ended.
+- **Waiting is optional** (guard 3). By default the asker does not wait: it records the hand-off and carries on or
+  finishes, and the answer is recorded for its next job (`journey.status` lists the hand-offs it raised, with their
+  answers). With `wait_minutes` it waits like `journey.ask`: on the project's events topic (the project's journey
+  events rule also sends the writes of `journey-agent/facts.db`), with the declared timer fallback, and never past
+  `wait_minutes`. The asker's queue slot is never held for the receiver: each has its own.
+- **People.** A contributor or admin may decline a pending hand-off (`handoff.decline { repo, id, reason }`, a reason
+  in one line; reviewers refused). The decline is in the journey record, never the agents' facts; a queued receiving
+  job is cancelled, or stops at its turn. A running one is cancelled instead.
+- **Escalation.** When a hand-off is declined, fails or cannot be answered, the asker sees it in `journey.status` and
+  may ask a person (`journey.ask`) instead: it never asks the same specialist again.
+
 **Under `worker.runner actions`** there is no runtime to delegate to, so the workflow's `work` job runs the same
 pattern in steps (`src/harness/actions.ts`, `templates/workflows/trace-worker.yml`):
 
@@ -1422,6 +1463,8 @@ memory under the AgentCore job's actors and session (`<owner>/<repo>/<kind>`, `<
 | `agents.route_with_model` | `true` | ask the model when labels, evidence and keywords do not decide |
 | `agents.router_model` | `''` | its model (else `worker.model`, then the runtime's) |
 | `agents.delegate_timeout_minutes` | `240` | how long `agent.delegate` waits for the worker |
+| `agents.handoff_max_per_job` | `3` | open hand-offs one asking job may have ([How specialists consult each other](#how-specialists-consult-each-other)); 0 turns them off |
+| `agents.handoff_max_per_project` | `10` | open hand-offs a project may have; 0 turns them off |
 | `agents.<kind>.model` | `''` | the specialist's model (else the runtime's `ANTHROPIC_MODEL`, then `worker.model`) |
 | `agents.<kind>.max_turns` | `120` | its turn limit (the delegated worker keeps `worker.max_turns`) |
 | `agents.<kind>.instructions` | `''` | project instructions for that specialist, after `.trace/rules.md`: a short addendum. Prompt overrides ([Managing prompts](#managing-prompts)) are the full mechanism |

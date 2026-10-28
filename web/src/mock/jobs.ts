@@ -3,7 +3,7 @@
  * four ops, in memory for the session, so Home's Running now, a project's "trace is doing" and Queued, and Agents and
  * tools show running, paused, held and queued work and react to Pause, Resume, Move up and Cancel.
  */
-import type { AgentState, ProjectJobs, RunSummary } from '@/lib/types'
+import type { AgentState, Handoff, ProjectJobs, RunSummary } from '@/lib/types'
 
 const MIN = 60_000
 const ago = (ms: number): string => new Date(Date.now() - ms).toISOString()
@@ -15,11 +15,35 @@ const JOBS: Record<string, RunSummary[]> = {
     { id: 'job_q1', title: 'Write the test plan for Prove', state: 'queued', agent: 'verify', agentName: 'Verification', position: 1, startsWhen: 'the Verification agent is already working on this project ("Check the ERC")', controls: ['pause', 'cancel'], startedBy: 'marc@example.com', yours: true },
     { id: 'job_q2', title: 'Run SPICE corners on the LDO', state: 'queued', agent: 'verify', agentName: 'Verification', position: 2, startsWhen: '"Write the test plan for Prove" is ahead of it in the queue', controls: ['pause', 'move_up', 'cancel'], startedBy: 'priya@example.com' },
     { id: 'job_v1', title: 'Check the ERC', state: 'running', agent: 'verify', agentName: 'Verification', step: 'Running ERC on the power sheet', startedAt: ago(9 * MIN), typicalS: 600, controls: ['pause', 'cancel'], startedBy: 'priya@example.com' },
+    { id: 'job_h1', title: 'Asked by the Thermal specialist: What is the worst-case dissipation of the LDO U3 at 85 °C with a 500 mA load?', state: 'queued', agent: 'ams', agentName: 'Analog and mixed-signal', position: 1, startsWhen: 'starts when it is its turn', controls: ['pause', 'cancel'], startedBy: 'the Thermal specialist (job job_th1)', handoff: { id: 'ho_mock_1', from: 'thermal', fromName: 'Thermal' } },
   ],
   'acme/panel-controller': [
     { id: 'job_t1', title: 'checking timing on the FPGA', state: 'running', agent: 'impl', agentName: 'Implementation', stepIndex: 2, stepCount: 4, etaS: 900, progress: 0.45, controls: ['cancel'] },
   ],
 }
+
+/** Each project's hand-offs between specialists, newest first: one queued (declinable), one answered. */
+const HANDOFFS: Record<string, Handoff[]> = {
+  'acme/soil-sensor': [
+    {
+      id: 'ho_mock_1', from: 'thermal', fromName: 'Thermal', to: 'ams', toName: 'Analog and mixed-signal', question: 'What is the worst-case dissipation of the LDO U3 at 85 °C with a 500 mA load?',
+      blocks: 'the junction temperature check of U3', evidence: [{ kind: 'run', id: 'run_th7', label: 'thermal corners, run_th7', to: '/p/acme~soil-sensor/runs/run_th7' }],
+      recommendation: 'About 0.9 W from the 5 V to 3.3 V drop.', acceptance: ['the dissipation in watts at 500 mA and 85 °C, with the run id', 'the input voltage it assumes'],
+      summary: 'Thermal → Analog and mixed-signal: What is the worst-case dissipation of the LDO U3 at 85 °C with a 500 mA load?', state: 'queued',
+      says: 'Queued for the Analog and mixed-signal specialist: it starts at its turn in the project\'s queue.', createdAt: ago(6 * MIN), jobId: 'job_h1', workerJobId: 'job_h1', fromWorkerJobId: 'job_th1',
+    },
+    {
+      id: 'ho_mock_0', from: 'verify', fromName: 'Verification', to: 'emc', toName: 'EMC', question: 'Does the 2 MHz switcher on the 5 V rail pass the class B limit at 30 MHz?',
+      blocks: 'the interference item T7 of the test plan', evidence: [{ kind: 'run', id: 'run_v3', label: 'test plan, run_v3', to: '/p/acme~soil-sensor/runs/run_v3' }],
+      acceptance: ['the margin to the class B limit at 30 MHz, in dB, with the run id'], summary: 'Verification → EMC: Does the 2 MHz switcher on the 5 V rail pass the class B limit at 30 MHz?',
+      state: 'answered', says: 'Answered.', createdAt: ago(90 * MIN), fromWorkerJobId: 'job_v1',
+      answer: { answered: true, text: 'Yes: 6.2 dB below the class B limit at 30 MHz in the precheck (run_e2), with the input filter as drawn.', summary: 'Yes: 6.2 dB below the class B limit at 30 MHz in the precheck (run_e2), with the input filter as drawn.', evidence: [{ kind: 'run', id: 'run_e2', label: 'run_e2', to: '/p/acme~soil-sensor/runs/run_e2' }], confidence: 0.7, acceptanceMet: true, at: ago(70 * MIN) },
+    },
+  ],
+}
+
+/** The project's hand-offs as journey.get carries them. */
+export const handoffsOf = (repo: string): Handoff[] => HANDOFFS[repo] ?? []
 
 const AGENT_IDS = ['verify', 'impl', 'ams', 'emc', 'render', 'thermal', 'worker'] as const
 const NAMES: Record<string, string> = { verify: 'Verification', impl: 'Implementation', ams: 'Analog and mixed-signal', emc: 'EMC', render: 'Rendering', thermal: 'Thermal', worker: 'Worker' }
@@ -54,7 +78,18 @@ export function jobsAction(name: string, a: Record<string, unknown>): Answer | u
   if (name === 'jobs.list') {
     const repo = String(a.repo)
     const jobs = jobsOf(repo)
-    return { ok: true, result: { repo, jobs, agents: agentsOf(repo, jobs), batch: [], updatedAt: new Date().toISOString() } satisfies ProjectJobs }
+    return { ok: true, result: { repo, jobs, agents: agentsOf(repo, jobs), handoffs: handoffsOf(repo), batch: [], updatedAt: new Date().toISOString() } satisfies ProjectJobs }
+  }
+  if (name === 'handoff.decline') {
+    const repo = String(a.repo)
+    const h = handoffsOf(repo).find((x) => x.id === a.id)
+    if (!h) return { ok: false, error: 'There is no such hand-off in this project.' }
+    if (h.state !== 'requested' && h.state !== 'queued') return { ok: false, error: h.state === 'running' ? 'Its job is already running: cancel that job instead.' : 'This hand-off has already ended.' }
+    Object.assign(h, { state: 'declined', declined: { reason: String(a.reason), by: 'you', at: new Date().toISOString() }, says: `Declined by you: ${String(a.reason)}` })
+    const list = JOBS[repo] ?? []
+    const j = list.findIndex((x) => x.id === h.jobId)
+    if (j >= 0) { list.splice(j, 1); renumber(list) }
+    return { ok: true, result: { repo, declined: { id: h.id, reason: String(a.reason), by: 'you', at: new Date().toISOString() }, job: { cancelled: true, note: 'Its queued job was cancelled.' }, summary: `Declined: the ${h.toName} specialist will not answer it, and the asking specialist is told why.` } }
   }
   if (name !== 'job.control') return undefined
   const all = Object.values(JOBS).flat()
