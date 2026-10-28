@@ -46,7 +46,9 @@ describe("a failed image build's log tail", () => {
     expect(tail).not.toContain('no published image')
     // then the last 8, ending with the command that failed
     expect(lines.slice(2)).toHaveLength(8)
-    expect(lines.at(-1)).toMatch(/Command did not exit successfully/)
+    // CodeBuild's own closing line is left out: the message's first line already has its phase and command
+    expect(lines.at(-1)).toMatch(/step 39$/)
+    expect(tail).not.toContain('[Container]')
     // the noise in between is left out
     expect(tail).not.toContain('step 5')
   })
@@ -152,4 +154,34 @@ describe("a failed image build's log tail", () => {
     expect(groups).toHaveLength(1)
     expect(groups[0]?.[1]).toMatchObject({ DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' })
   }, 300_000)
+
+  it("names the cause when a stack trace and CodeBuild's own lines end the log", async () => {
+    // the shape of a real failure: esbuild names what it could not resolve, Node prints the error's stack, and
+    // CodeBuild closes with its phase lines; the stack ("failureErrorWithLog") and the phase lines both look like
+    // errors, and once crowded the cause out of the message
+    const step = (l: string): string => `#13 3.027 ${l}\n`
+    const log = [
+      step('> node scripts/stage-image.mjs && tsc -p tsconfig.json && node scripts/bundle-harness.mjs && node scripts/bundle-ui.mjs'),
+      ...['badge', 'button', 'card', 'tooltip'].flatMap((c) => [step(`✘ [ERROR] Could not resolve "./components/ui/${c}" [plugin trace-shared-ui]`), step(`    web/src/components/${c}.tsx:3:20:`)]),
+      // the same line once for each file that imports the missing one
+      ...Array.from({ length: 30 }, () => step('✘ [ERROR] Could not resolve "./lib/utils" [plugin trace-shared-ui]')),
+      ...Array.from({ length: 15 }, (_, i) => step(`    at failureErrorWithLog (/app/node_modules/esbuild/lib/main.js:${1752 + i}:15)`)),
+      step('    at addChunk (node:internal/streams/readable:561:12) {'),
+      step('  errors: [Getter/Setter],'),
+      `#13 ERROR: process "/bin/sh -c npm run build:image && ${'x'.repeat(650)}" did not complete successfully: exit code: 1\n`,
+      `ERROR: failed to build: failed to solve: process "/bin/sh -c npm run build:image && ${'x'.repeat(650)}" did not complete successfully: exit code: 1\n`,
+      ...Array.from({ length: 14 }, (_, i) => `[Container] 2026/10/28 23:36:55.1489${i} Phase complete: BUILD State: FAILED\n`),
+    ]
+    const tail = await buildLogTail(logsWith(log).client, 'g', 's')
+    const message = buildFailure(`the image build failed in BUILD: ${'c'.repeat(199)}… (logs: ${link})`, tail).message
+    for (const c of ['badge', 'button', 'card', 'tooltip', 'lib/utils']) expect(message).toContain(`Could not resolve "./${c.includes('/') ? c : `components/ui/${c}`}"`)
+    // said once, though the log says it thirty times
+    expect(message.match(/lib\/utils/g)).toHaveLength(1)
+    expect(message).not.toContain('[Container]')
+    expect(message).not.toMatch(/\bat (failureErrorWithLog|addChunk)\b/)
+    // a long log line keeps only its start (the first line is the message's own, with the log's link)
+    const logLines = message.split('The end of its log:\n')[1]?.split('\n') ?? []
+    expect(logLines.length).toBeGreaterThan(5)
+    expect(logLines.every((l) => l.length <= 300)).toBe(true)
+  })
 })

@@ -65,6 +65,22 @@ describe('the images', () => {
     }
   })
 
+  it('build with build:image: the whole build but the installer page, whose web app components the image leaves out', () => {
+    // scripts/bundle-ui.mjs bundles the installer page from web/src, which the image's source excludes (web/**) and an
+    // installed trace never has: in the image it fails ("Could not resolve ./components/ui/badge"), and only
+    // `tracectl install` serves the page
+    const scripts = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { scripts: Record<string, string> }).scripts
+    expect(scripts['build:image']).not.toContain('bundle-ui')
+    // the same steps as build, which only adds the page, so the two never drift apart
+    expect(scripts.build).toBe(`${scripts['build:image']} && node scripts/bundle-ui.mjs`)
+    for (const f of ['Dockerfile', 'Dockerfile.gpu']) {
+      const dockerfile = readFileSync(join(ROOT, 'agent', f), 'utf8')
+      expect(dockerfile, f).toMatch(/^RUN npm run build:image\b/m)
+      // no command runs the full build (a comment may still name it)
+      expect(dockerfile, f).not.toMatch(/^RUN .*npm run build(?!:image)\b/m)
+    }
+  })
+
   it('build cocotb from source on arm64, with the Python headers it needs', () => {
     // cocotb publishes no arm64 Linux wheel, so the agent image (linux/arm64) builds it from source, and its C++
     // extensions include Python.h: without python3-dev the build fails ("fatal error: Python.h: No such file or

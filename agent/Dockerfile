@@ -75,7 +75,9 @@ RUN mv npmrc .npmrc
 RUN npm ci --ignore-scripts
 
 COPY . .
-RUN npm run build \
+# build:image: everything `npm run build` makes but the installer page (scripts/bundle-ui.mjs), which only `tracectl
+# install` serves, and which needs the web app's components (web/src), left out of the image's source
+RUN npm run build:image \
  && npm prune --omit=dev \
  && npm rebuild \
  && python3 -m venv /opt/trace-venv \

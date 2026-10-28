@@ -36,17 +36,36 @@ export const LOG_TAIL_CHARS = 2400
 const TELLING = /error|fail|denied|not found|no such|unauthori[sz]ed|forbidden|toomanyrequests|rate limit|timed? ?out|cannot|could not|unable|ERR!|exit code|returned a non-zero/i
 /** apt's error prefix, case-sensitive and at a line's start (or after BuildKit's step prefix), so `source: x` is not one */
 const APT_ERROR = /(^|\s)E: /
+/** BuildKit's prefix on a RUN step's output: its step number and seconds (`#13 3.027 `) */
+const STEP_PREFIX = /^#\d+\s+(\d+\.\d+\s+)?/
+/**
+ * Lines that crowd the cause out of a tail and never are it: CodeBuild's own phase lines (`[Container] …`, whose
+ * phase and command the message's first line has already), and a stack trace's frames (`at build (…/main.js:1752:15)`,
+ * "telling" only because a function is called failureErrorWithLog).
+ */
+const NOISE = [/^\[Container\] /, /^at\s+(\S+\s+\()?\S*:\d+:\d+\)?(\s*\{)?$/]
+/** The most of one log line a tail keeps (BuildKit repeats a failed step's whole command, 700 characters) */
+const LINE_MAX = 300
 
 /**
  * The end of a failed build's log, for its error message: the lines that look like the cause (TELLING) among the
- * last 200, then the last 8 whatever they say, in log order, trimmed from the front to LOG_TAIL_CHARS. '' when the
- * log cannot be read: the message still has the phase and the link.
+ * last 200, then the last 8 whatever they say, in log order, trimmed from the front to LOG_TAIL_CHARS. Left out
+ * first: NOISE, a line said already, and the rest of a line past LINE_MAX. '' when the log cannot be read: the
+ * message still has the phase and the link.
  */
 export async function buildLogTail(logs: LogsClient, group: string | undefined, stream: string | undefined): Promise<string> {
   if (!group || !stream) return ''
   try {
     const r = await logs.send(new GetLogEventsCommand({ logGroupName: group, logStreamName: stream, startFromHead: false, limit: 200 }))
-    const lines = (r.events ?? []).flatMap((e) => (e.message ?? '').split('\n')).map((l) => l.trimEnd()).filter((l) => l.trim())
+    const seen = new Set<string>()
+    const lines = (r.events ?? []).flatMap((e) => (e.message ?? '').split('\n')).map((l) => l.trimEnd()).filter((l) => {
+      const bare = l.replace(STEP_PREFIX, '').trim()
+      if (!bare || NOISE.some((n) => n.test(bare))) return false
+      // a line said again (esbuild names a missing file once for each file importing it): once is enough
+      if (seen.has(bare)) return false
+      seen.add(bare)
+      return true
+    }).map((l) => (l.length > LINE_MAX ? `${l.slice(0, LINE_MAX - 1)}…` : l))
     // the last 8 lines (all of them, in a shorter log)
     const lastFrom = Math.max(0, lines.length - 8)
     const keep = lines.filter((l, i) => TELLING.test(l) || APT_ERROR.test(l) || i >= lastFrom)
