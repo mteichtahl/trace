@@ -38,8 +38,9 @@ export async function buildLogTail(logs: LogsClient, group: string | undefined, 
   try {
     const r = await logs.send(new GetLogEventsCommand({ logGroupName: group, logStreamName: stream, startFromHead: false, limit: 200 }))
     const lines = (r.events ?? []).flatMap((e) => (e.message ?? '').split('\n')).map((l) => l.trimEnd()).filter((l) => l.trim())
-    const last = new Set(lines.slice(-8).map((_, i) => lines.length - 8 + i))
-    const keep = lines.filter((l, i) => TELLING.test(l) || APT_ERROR.test(l) || last.has(i))
+    // the last 8 lines (all of them, in a shorter log)
+    const lastFrom = Math.max(0, lines.length - 8)
+    const keep = lines.filter((l, i) => TELLING.test(l) || APT_ERROR.test(l) || i >= lastFrom)
     let text = keep.join('\n')
     if (text.length > LOG_TAIL_CHARS) text = `…${text.slice(text.length - LOG_TAIL_CHARS)}`
     return text
@@ -65,17 +66,28 @@ export async function onEvent(event: CloudFormationCustomResourceEvent): Promise
   return { PhysicalResourceId: `${p.ImageUri}#${id}`, Data: { ImageUri: p.ImageUri, BuildId: id } }
 }
 
-export async function isComplete(event: CloudFormationCustomResourceEvent & { PhysicalResourceId?: string }, _context?: unknown, logs: () => LogsClient = realLogs): Promise<{ IsComplete: boolean; Data?: Record<string, string> }> {
+export type BuildsClient = Pick<CodeBuildClient, 'send'>
+
+/**
+ * The Provider's isComplete handler. It takes the event only: Lambda calls every handler with (event, context,
+ * callback), so a third parameter here would receive Lambda's callback, and calling it ends the invocation with null
+ * (which the Provider framework then fails on: "Cannot read properties of null (reading 'IsComplete')"). The clients
+ * are checkBuild's, for tests.
+ */
+export const isComplete = (event: CloudFormationCustomResourceEvent & { PhysicalResourceId?: string }): ReturnType<typeof checkBuild> =>
+  checkBuild(event, { codebuild: cb, logs: realLogs() })
+
+export async function checkBuild(event: CloudFormationCustomResourceEvent & { PhysicalResourceId?: string }, c: { codebuild: BuildsClient; logs: LogsClient }): Promise<{ IsComplete: boolean; Data?: Record<string, string> }> {
   if (event.RequestType === 'Delete') return { IsComplete: true }
   const buildId = (event.PhysicalResourceId ?? '').split('#')[1]
   if (!buildId) throw new Error('no build id on the resource')
   if (!props(event).Wait) return { IsComplete: true, Data: { ImageUri: props(event).ImageUri, BuildId: buildId } }
-  const b = (await cb.send(new BatchGetBuildsCommand({ ids: [buildId] }))).builds?.[0]
+  const b = (await c.codebuild.send(new BatchGetBuildsCommand({ ids: [buildId] }))).builds?.[0]
   const status = b?.buildStatus
   if (status === 'IN_PROGRESS' || !status) return { IsComplete: false }
   if (status !== 'SUCCEEDED') {
     const phase = b?.phases?.find((ph) => ph.phaseStatus && ph.phaseStatus !== 'SUCCEEDED')
-    const tail = await buildLogTail(logs(), b?.logs?.groupName, b?.logs?.streamName)
+    const tail = await buildLogTail(c.logs, b?.logs?.groupName, b?.logs?.streamName)
     throw new Error(`the image build ${status.toLowerCase()} in ${phase?.phaseType ?? 'an unknown phase'}: ${phase?.contexts?.map((c) => c.message).join('; ') ?? ''} (logs: ${b?.logs?.deepLink ?? 'CodeBuild console'})${tail ? `\nThe end of its log:\n${tail}` : ''}`)
   }
   return { IsComplete: true, Data: { ImageUri: props(event).ImageUri, BuildId: buildId } }
