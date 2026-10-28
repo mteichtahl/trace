@@ -13,6 +13,11 @@
  *                             only: the newest check of a criterion supersedes the ones before it
  *           stuck             an agent that cannot go on: its job, why, what it recommends, its options. Appended;
  *                             `resolved_at` is set when the agent moves on
+ *           handoffs          a specialist's recorded request to another specialist (src/core/handoffs.ts: the rules,
+ *                             the guards and the views): who asked, from which job, of which specialist, the question,
+ *                             its evidence, what it blocks, the asker's recommended answer, what a good answer contains;
+ *                             the receiving job, and its answer. Written by the asker's tool, the runtime that starts
+ *                             the receiving job, and that job's own answer; a person's decline is in the journey record
  *
  * The API merges these facts into every view of the journey (src/core/journey.ts mergeAgentFacts): an agent's question
  * is a question on Home and in the inbox, an agent's check sets a trace-owned criterion's status (so a gate can be
@@ -32,6 +37,7 @@ import {
   type StageId, type StuckFact,
 } from './journey.js'
 import { BucketDb, type JourneyStoreOptions } from './journey-store.js'
+import { loadHandoffs } from './handoffs.js'
 import { PROJECTS_PREFIX, projectSlug } from './project.js'
 import { transaction } from './store.js'
 
@@ -81,7 +87,32 @@ CREATE TABLE IF NOT EXISTS stuck (
   stage TEXT,
   at REAL NOT NULL,
   resolved_at REAL, resolution TEXT
-);`
+);
+CREATE TABLE IF NOT EXISTS handoffs (
+  id TEXT PRIMARY KEY,
+  from_agent TEXT NOT NULL,       -- the asking specialist's kind
+  from_label TEXT NOT NULL,       -- in words
+  from_job TEXT NOT NULL,         -- the asking job (a hand-off is always raised in a job)
+  to_kind TEXT NOT NULL,          -- the specialist asked
+  question TEXT NOT NULL,
+  evidence TEXT NOT NULL,         -- JSON list: [{ kind, ref, label }]
+  blocks TEXT NOT NULL,
+  recommendation TEXT,            -- the asker's recommended answer (optional)
+  acceptance TEXT NOT NULL,       -- JSON list: what a good answer contains
+  depth INTEGER NOT NULL,         -- the receiving job's depth: always 1
+  state TEXT NOT NULL CHECK (state IN ('requested', 'started', 'answered', 'unanswered', 'failed')),
+  created_at REAL NOT NULL,
+  job_id TEXT,                    -- the receiving job, once started
+  started_at REAL,
+  answer TEXT,                    -- the answer, or why it could not be answered (unanswered)
+  answer_evidence TEXT,           -- JSON list
+  confidence REAL,
+  acceptance_met INTEGER,
+  answered_at REAL,
+  why TEXT,                       -- failed: why (it could not start, or its job ended without an answer)
+  ended_at REAL
+);
+CREATE INDEX IF NOT EXISTS handoffs_from ON handoffs(from_job, state);`
 
 export const applyAgentFactsSchema = (db: DatabaseSync): void => { db.exec(SCHEMA) }
 
@@ -127,6 +158,7 @@ export function loadAgentFacts(db: DatabaseSync): AgentFacts {
       options: json<OptionRow[]>(r.options, []), sources: json<Evidence[]>(r.sources, []), stage: str(r.stage) as StageId | null, at: Number(r.at),
       resolvedAt: r.resolved_at === null || r.resolved_at === undefined ? null : Number(r.resolved_at),
     })),
+    handoffs: loadHandoffs(db),
   }
 }
 

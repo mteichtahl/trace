@@ -217,6 +217,12 @@ export const ConfigSchema = z.object({
     router_model: z.string().default(''),
     /** How long agent.delegate waits for the worker before it gives up on it. */
     delegate_timeout_minutes: z.number().int().min(5).max(420).default(240),
+    /**
+     * Recorded hand-offs between specialists (journey.handoff, src/core/handoffs.ts): at most this many open at once
+     * per asking job, and per project. 0 turns hand-offs off (the tool is not offered).
+     */
+    handoff_max_per_job: z.number().int().min(0).max(10).default(3),
+    handoff_max_per_project: z.number().int().min(0).max(50).default(10),
     verify: SpecialistSettingsSchema,
     impl: SpecialistSettingsSchema,
     ams: SpecialistSettingsSchema,
