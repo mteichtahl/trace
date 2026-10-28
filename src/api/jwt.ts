@@ -34,6 +34,8 @@ export const AccessClaims = z.object({
   iat: z.number().optional(),
   username: z.string().optional(),
   'cognito:groups': z.array(z.string()).optional(),
+  /** space-separated OAuth scopes (a client-credentials token's resource-server scopes) */
+  scope: z.string().optional(),
 }).loose()
 export type AccessClaims = z.output<typeof AccessClaims>
 
@@ -55,10 +57,13 @@ export type JwksFetcher = (url: string) => Promise<unknown>
 
 export interface VerifierOptions {
   issuer: string
-  /** The app client (or clients) whose tokens are accepted: the CLI's, and the web app's when it exists. */
+  /** The app client (or clients) whose tokens are accepted: the CLI's, and the web app's when it exists. Empty: none
+   * (only verifySigned is used, by the connected systems' verifier). */
   clientId: string | readonly string[]
   fetchJwks?: JwksFetcher
   now?: () => number
+  /** true: no client id is given, because only verifySigned is called (src/api/service-auth.ts) */
+  anyClient?: boolean
 }
 
 const b64url = (s: string): Buffer => Buffer.from(s, 'base64url')
@@ -88,7 +93,7 @@ export class Verifier {
 
   constructor(o: VerifierOptions) {
     const ids = (typeof o.clientId === 'string' ? [o.clientId] : [...o.clientId]).filter(Boolean)
-    if (!o.issuer || !ids.length) throw new Error('the verifier needs the Cognito issuer and client id')
+    if (!o.issuer || (!ids.length && !o.anyClient)) throw new Error('the verifier needs the Cognito issuer and client id')
     this.issuer = o.issuer.replace(/\/+$/, '')
     this.clientIds = new Set(ids)
     this.fetchJwks = o.fetchJwks ?? defaultFetch
@@ -133,6 +138,17 @@ export class Verifier {
     const c = await this.checked(token, AccessClaims)
     if (c.token_use !== 'access') throw new AuthError('not an access token')
     if (c.client_id === undefined || !this.clientIds.has(c.client_id)) throw new AuthError('wrong client')
+    return c
+  }
+
+  /**
+   * The claims of a Cognito access token after the signature, issuer, time and token_use checks only, whatever its
+   * client: for the connected systems' verifier (src/api/service-auth.ts), which checks the client against the access
+   * store instead. Never use this alone to let anyone in.
+   */
+  async verifySigned(token: string): Promise<AccessClaims> {
+    const c = await this.checked(token, AccessClaims)
+    if (c.token_use !== 'access') throw new AuthError('not an access token')
     return c
   }
 

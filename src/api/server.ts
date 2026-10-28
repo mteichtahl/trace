@@ -14,11 +14,17 @@
  * a project follows the access check. It runs no model, no agent and no tool: tasks and tool calls go to the
  * project's worker (src/api/workers.ts). Every request is logged as one JSON line: who, action, repo,
  * outcome, duration. Tokens are never logged.
+ *
+ * The same server is the external runtime (TRACE_AGENT_MODE=external, docs/external-access.md), for connected
+ * systems: `startExternal` gives it the connected systems' verifier (src/api/service-auth.ts) in place of the people's,
+ * a per-system soft limit (10 requests a second, bursting to 20, per container: over it, 429 with Retry-After), and
+ * last_used in place of `seen`. perform applies the systems' allow-list (src/api/service-policy.ts) for any service
+ * principal, wherever it comes from. Who is logged as service:<name>.
  */
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http'
 import { z } from 'zod'
 import { projectMemoriesFromEnv } from '../agents/runtime/memory.js'
-import { AccessDenied, type Principal, seen } from '../core/access.js'
+import { AccessDenied, type Principal, isService, seen, touchLastUsed, who } from '../core/access.js'
 import { ConfigError } from '../core/config.js'
 import { ToolError } from '../core/registry.js'
 import { ATTR, type Attrs, type Outcome, type Span, flush, personHash, setAttrs } from '../core/telemetry.js'
@@ -27,6 +33,8 @@ import { ActionError, type ActionDeps, NO_ACCESS, defaultScratch, perform, proje
 import { type CognitoAdmin, HttpCognito, githubToken } from './aws.js'
 import { HttpGitHub } from './github.js'
 import { AuthError, Verifier, bearer } from './jwt.js'
+import { externalFromEnv } from './actions-services.js'
+import { ServiceVerifier } from './service-auth.js'
 import { parseWorkerRuntimes, remoteJobs } from './workers.js'
 
 const MAX_BODY = 2 * 1024 * 1024
@@ -34,16 +42,44 @@ const MAX_BODY = 2 * 1024 * 1024
 const Body = z.object({ action: z.string().min(1).max(64) }).catchall(z.unknown())
 
 export interface ServerOptions {
-  verifier: Verifier
+  /** the people's verifier (the CLI's and the web app's app clients) */
+  verifier?: Verifier
+  /** who a token is, in place of the people's verifier (the external runtime: connected systems); throws AuthError */
+  principal?: (token: string) => Promise<Principal>
   deps: ActionDeps
   /** Email for a sub when the token has none (AdminGetUser), cached by the caller. */
   emailOf?: (sub: string, username: string | undefined) => Promise<string | null>
   log?: (line: Record<string, unknown>) => void
+  /** a per-caller soft limit: over it, 429 with Retry-After (the external runtime's) */
+  limiter?: RateLimiter
+  /** the runtime's name in telemetry */
+  runtime?: 'api' | 'external'
 }
 
-function send(res: ServerResponse, status: number, body: unknown): void {
+/**
+ * A token bucket per caller (by sub), in this container only: `rate` requests a second, bursting to `burst`. A soft
+ * limit: it keeps one busy system from crowding out the rest, not a quota.
+ */
+export class RateLimiter {
+  private readonly buckets = new Map<string, { tokens: number; at: number }>()
+  constructor(private readonly rate = 10, private readonly burst = 20, private readonly now: () => number = Date.now) {}
+
+  /** 0 when the call may go ahead (and it is counted), else the seconds to wait. */
+  take(key: string): number {
+    const t = this.now()
+    const b = this.buckets.get(key) ?? { tokens: this.burst, at: t }
+    b.tokens = Math.min(this.burst, b.tokens + ((t - b.at) / 1000) * this.rate)
+    b.at = t
+    this.buckets.set(key, b)
+    if (this.buckets.size > 10_000) this.buckets.delete(this.buckets.keys().next().value as string)
+    if (b.tokens >= 1) { b.tokens -= 1; return 0 }
+    return Math.max(1, Math.ceil((1 - b.tokens) / this.rate))
+  }
+}
+
+function send(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   const text = JSON.stringify(body)
-  res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text) })
+  res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text), ...headers })
   res.end(text)
 }
 
@@ -67,6 +103,8 @@ export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerRes
   const emails = new Map<string, string | null>()
 
   const principalOf = async (token: string): Promise<Principal> => {
+    if (o.principal) return o.principal(token)
+    if (!o.verifier) throw new AuthError('no verifier')
     const c = await o.verifier.verify(token)
     let email: string | null = c.username && c.username.includes('@') ? c.username : null
     if (!email && o.emailOf) {
@@ -83,17 +121,17 @@ export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerRes
     const t0 = Date.now()
     const entry: Record<string, unknown> = { at: new Date(t0).toISOString(), who: null, action: null, repo: null }
     let obs: { span: Span; outcome: (o: Outcome, more?: Attrs) => void } | null = null
-    const done = (status: number, body: { ok: boolean; result?: unknown; error?: string }, outcome: string): void => {
+    const done = (status: number, body: { ok: boolean; result?: unknown; error?: string }, outcome: string, headers?: Record<string, string>): void => {
       log({ ...entry, outcome, status, ms: Date.now() - t0, ...(body.ok ? {} : { error: body.error }) })
       obs?.outcome(apiOutcome(outcome), {
         [ATTR.status]: status,
         ...(typeof entry.action === 'string' ? { [ATTR.action]: entry.action } : {}),
         ...(typeof entry.repo === 'string' ? { [ATTR.repository]: entry.repo } : {}),
       })
-      send(res, status, body)
+      send(res, status, body, headers)
     }
     // One span per request, continuing the caller's trace with the AgentCore session in baggage (src/agents/runtime/observe.ts).
-    void observeInvocation('api', req.headers, {}, async (span, outcome) => {
+    void observeInvocation(o.runtime ?? 'api', req.headers, {}, async (span, outcome) => {
       obs = { span, outcome }
       let principal: Principal
       try {
@@ -103,13 +141,18 @@ export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerRes
       } catch (e) {
         return done(401, { ok: false, error: e instanceof AuthError ? `not signed in: ${e.message}` : 'not signed in' }, 'unauthenticated')
       }
-      entry.who = principal.email ?? principal.sub
+      entry.who = who(principal)
       // who, as a hash (never the email), and their class
       if (obs) setAttrs(obs.span, { [ATTR.principal]: personHash(principal.sub), [ATTR.principalClass]: principal.groups.join(',') })
-      if (!seenOnce.has(principal.sub)) {
+      if (isService(principal)) {
+        // a connected system: when it last called (at most once a minute), never the people's table
+        void touchLastUsed(principal.sub)
+      } else if (!seenOnce.has(principal.sub)) {
         seenOnce.add(principal.sub)
         seen(principal).catch((e: unknown) => { log({ ...entry, warning: `seen: ${message(e)}` }) })
       }
+      const wait = o.limiter?.take(principal.sub) ?? 0
+      if (wait > 0) return done(429, { ok: false, error: `too many requests: try again in ${wait} s` }, 'limited', { 'retry-after': String(wait) })
       let body: z.output<typeof Body>
       try {
         const text = await readBody(req)
@@ -144,7 +187,7 @@ export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerRes
 function apiOutcome(o: string): Outcome {
   if (o === 'ok') return 'ok'
   if (o === 'unauthenticated' || o.startsWith('denied')) return 'denied'
-  if (o === 'bad-request') return 'rejected'
+  if (o === 'bad-request' || o === 'limited') return 'rejected'
   return 'error'
 }
 
@@ -169,10 +212,9 @@ const Env = z.object({
   PORT: z.coerce.number().int().default(8080),
 })
 
-/** The API runtime's entry (src/agents/runtime/main.ts, TRACE_AGENT_MODE=api). */
-export async function start(): Promise<void> {
+/** The API runtime's dependencies from its environment (the people's runtime and the external one share them). */
+async function depsFromEnv(env: z.output<typeof Env>): Promise<{ deps: ActionDeps; cog: () => CognitoAdmin }> {
   const { allTools } = await import('../tools/index.js')
-  const env = Env.parse(process.env)
   let cognito: CognitoAdmin | null = null
   const cog = (): CognitoAdmin => (cognito ??= new HttpCognito({ region: env.AWS_REGION, poolId: env.TRACE_COGNITO_POOL_ID }))
   const scratch = defaultScratch()
@@ -212,14 +254,45 @@ export async function start(): Promise<void> {
       const { data } = await new Github(t).request('GET', '/user', z.object({ login: z.string() }).loose())
       return onboardViaApi(repo, { token: t, login: data.login, apply: o.apply, create: o.create })
     },
+    // connected systems' addresses (services.*): null when external access is off
+    external: externalFromEnv(process.env),
   }
+  return { deps, cog }
+}
+
+function stopOnSignal(server: Server): void {
+  const stop = (): void => { server.close(); void flush().finally(() => process.exit(0)) }
+  process.once('SIGTERM', stop)
+  process.once('SIGINT', stop)
+}
+
+/** The API runtime's entry (src/agents/runtime/main.ts, TRACE_AGENT_MODE=api). */
+export async function start(): Promise<void> {
+  const env = Env.parse(process.env)
+  const { deps, cog } = await depsFromEnv(env)
   const server = await listen({
     verifier: new Verifier({ issuer: env.TRACE_COGNITO_ISSUER, clientId: [env.TRACE_COGNITO_CLIENT_ID, ...(env.TRACE_COGNITO_WEB_CLIENT_ID ? [env.TRACE_COGNITO_WEB_CLIENT_ID] : [])] }),
     deps,
     emailOf: async (sub, username) => (await cog().getUser(username ?? sub))?.email ?? null,
   }, env.PORT)
   process.stdout.write(`trace api listening on 0.0.0.0:${env.PORT}\n`)
-  const stop = (): void => { server.close(); void flush().finally(() => process.exit(0)) }
-  process.once('SIGTERM', stop)
-  process.once('SIGINT', stop)
+  stopOnSignal(server)
+}
+
+/**
+ * The external runtime's entry (TRACE_AGENT_MODE=external): the same server and actions, for connected systems only.
+ * It reads the API runtime's environment, plus TRACE_EXTERNAL_RESOURCE_SERVER (default trace-external). A person's
+ * token is refused (it has a username); the people's client ids are not used here.
+ */
+export async function startExternal(): Promise<void> {
+  const env = Env.parse(process.env)
+  const { deps } = await depsFromEnv(env)
+  const services = new ServiceVerifier({
+    verifier: new Verifier({ issuer: env.TRACE_COGNITO_ISSUER, clientId: [], anyClient: true }),
+    resourceServer: process.env.TRACE_EXTERNAL_RESOURCE_SERVER,
+  })
+  // a system never manages systems, but the external runtime has no addresses of its own to give either
+  const server = await listen({ principal: (t) => services.principal(t), deps: { ...deps, external: null }, limiter: new RateLimiter(10, 20), runtime: 'external' }, env.PORT)
+  process.stdout.write(`trace external api listening on 0.0.0.0:${env.PORT}\n`)
+  stopOnSignal(server)
 }
