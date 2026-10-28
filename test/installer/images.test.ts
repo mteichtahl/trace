@@ -65,6 +65,16 @@ describe('the images', () => {
     }
   })
 
+  it('build cocotb from source on arm64, with the Python headers it needs', () => {
+    // cocotb publishes no arm64 Linux wheel, so the agent image (linux/arm64) builds it from source, and its C++
+    // extensions include Python.h: without python3-dev the build fails ("fatal error: Python.h: No such file or
+    // directory", then "Could not build wheels for cocotb") and so does the deploy
+    const dockerfile = readFileSync(join(ROOT, 'agent', 'Dockerfile'), 'utf8')
+    const headers = dockerfile.search(/apt-get install[^\n]*(\\\n[^\n]*)*\bpython3-dev\b/)
+    expect(headers).toBeGreaterThan(-1)
+    expect(dockerfile.indexOf("'cocotb==")).toBeGreaterThan(headers)
+  })
+
   it('build from the lock file npm leaves out of an installed trace', () => {
     // scripts/stage-image.mjs (npm run build) copies it, and .npmrc, into agent/, which npm does pack
     expect(existsSync(join(ROOT, 'agent', 'package-lock.json'))).toBe(true)
