@@ -13,6 +13,16 @@
  *     tracectl integrations list | set NAME [KEY=VALUE ...] | check NAME | remove NAME [--remote]
  *                                      optional service keys (nexar, mouser, digikey) for the parts tools
  *
+ *   People and connected systems (admins, through the API: tracectl login first)
+ *     tracectl users list | invite EMAIL [--class user|guest|admin] | class EMAIL CLASS
+ *                 | assign EMAIL OWNER/REPO [--part contributor|reviewer] | unassign EMAIL OWNER/REPO | assignments [OWNER/REPO]
+ *     tracectl services list | show NAME | create NAME --scope read|write [--description TEXT]
+ *                 [--project OWNER/REPO[:reviewer|:contributor]]... | disable NAME | enable NAME | scopes NAME read|write
+ *                 | assign NAME OWNER/REPO [--part reviewer|contributor] | unassign NAME OWNER/REPO | rotate NAME
+ *                 | retire-secret NAME SECRET_ID | delete NAME [--yes] | history NAME        [--json]
+ *                                      other systems and AI agents that call trace with their own keys (README
+ *                                      "Connecting other systems"); create and rotate print the secret once
+ *
  *   Repositories
  *     tracectl onboard OWNER/REPO [--path DIR] [--apply-settings] [--no-push] [--no-ruleset] [--escalate-to LOGIN]
  *     tracectl new OWNER/REPO [--template empty|python|kicad|rust] [--public] [--description TEXT]
@@ -365,6 +375,10 @@ async function main(argv: string[]): Promise<number> {
       return cmdAgent(rest)
     }
     case 'users': return cmdUsers(rest)
+    case 'services': {
+      const { cmdServices } = await import('./login/services.js')
+      return cmdServices(rest)
+    }
     case 'integrations': {
       const { cmdIntegrations } = await import('./login/integrations.js')
       return cmdIntegrations(rest)

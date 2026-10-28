@@ -14,6 +14,7 @@ npm run dev:mock                                                    # no backend
 npm test                                                            # vitest + Testing Library (jsdom)
 npm run build                                                       # tsc -b && vite build → web/dist
 npm run screenshots                                                 # with dev:mock running: Playwright shots into screenshots/
+node scripts/shots-systems.mjs                                      # the same for Admin › Connected systems (light, dark, phone)
 ```
 
 From the repository root: `npm run build:web`, `npm run test:web`.

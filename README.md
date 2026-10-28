@@ -495,6 +495,77 @@ guests can list, read and preview them (see [Managing prompts](#managing-prompts
 Marking an agent memory inactive (`tracectl remote memory deactivate`) takes write access. A person's own preferences
 are the exception: they may mark those with read access alone (see [Inactive memories](#inactive-memories)).
 
+## Connecting other systems
+
+A **connected system** is another system or AI agent that calls trace with its own keys: a build dashboard, a release
+pipeline, a script, an MCP client. Each one has a name, what it may do (read, or read and change) and the projects it
+is on, as a reviewer or a contributor, exactly like a person. A project it is not on does not exist for it. The design
+is in [docs/external-access.md](docs/external-access.md).
+
+**Turning it on.** External access is off until an admin turns it on: run `tracectl install`, open **External
+access**, switch it on and deploy. That adds a sign-in for systems and two addresses, one for scripts (the external
+API) and one for AI agents (the MCP endpoint). Both cost nothing while nobody calls them. With it off, the admin screen
+and `tracectl services` say so, and nothing outside can get in.
+
+**Connecting one.** In the web app, **Admin → Connected systems → Connect a system**: a name, what it is for, what it
+may do (Read only is recommended: it can look but not change anything) and its projects. A read-only system is always
+a reviewer. Or from the command line:
+
+```sh
+tracectl services create build-dashboard --scope read --project acme/soil-sensor --description "The lab's wall screen"
+tracectl services create release-bot --scope write --project acme/soil-sensor:contributor
+tracectl services list
+tracectl services show build-dashboard
+```
+
+Both show the client id and the **secret once**, with the sign-in (token) address, the API address and the MCP
+address. trace does not keep the secret: store it at once, in a password manager or the other system's secret store.
+
+**Getting a token.** The system swaps its client id and secret for a sign-in token that lasts an hour:
+
+```sh
+curl -s -u "$CLIENT_ID:$TRACE_CLIENT_SECRET" -d grant_type=client_credentials \
+  --data-urlencode "scope=trace-external/read" "$TOKEN_URL"          # trace-external/read trace-external/write to change things
+```
+
+**Calling the API.** The same `{ action, ...args }` JSON as the app, with the token:
+
+```sh
+curl -s -X POST "$API_URL" -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"action":"projects"}'
+```
+
+**Connecting an AI agent.** Point an MCP client (Claude Code, for example) at the MCP address. It gets one tool per
+action the system may use:
+
+```json
+{ "type": "http", "url": "<MCP address>", "headers": { "Authorization": "Bearer <token>" } }
+```
+
+**What a system can and can't do.** With read it can see the projects it is on: their status, settings, runs and
+artifacts, jobs, requirements, design, build and cost records, files, the knowledge base, and the read-only tools.
+With read and change it can also, where it is a contributor, give the agents work, pause or cancel its own jobs,
+propose a settings change (as a pull request a person merges), sync the knowledge base and run tools that record
+runs. Never, whatever it may do: anything that needs an admin, signing gates, answering questions, waivers, design
+decisions, orders, chats, preferences, memory, prompts, people and assignments. Those stay with a person. Anything
+else answers "no access", the same words as a project that isn't yours.
+
+**Stopping and rotating.** Disabling a system stops it within 30 seconds; deleting it also removes its keys and takes
+it off every project. A new secret works beside the old one, so the system can switch without stopping; retire the old
+one once it has:
+
+```sh
+tracectl services disable release-bot          # enable to let it in again
+tracectl services rotate build-dashboard       # prints the new secret, once
+tracectl services retire-secret build-dashboard OLD_SECRET_ID
+tracectl services delete release-bot           # asks you to type the name; --yes skips that
+tracectl services history build-dashboard
+```
+
+Every command takes `--json`. The web app has the same on each system's page.
+
+**Cost.** Each system's keys are checked with Amazon Cognito, which charges a small amount per system and per sign-in.
+A system that reuses its token for the hour makes about 720 sign-ins a month.
+
 ## Web app
 
 The installer sets up a web app beside `tracectl login`: one address where people sign in and work with their projects.

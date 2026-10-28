@@ -8,6 +8,7 @@ import { knowledgeAction } from './knowledge'
 import { INBOX, JOURNEYS, ME, ME_DOC, MEMBERS, PROJECTS, RECALL, THREADS, THREAD_MESSAGES, WAITS } from './fixtures'
 import { setPath } from '@/lib/prefs'
 import { adminHandle } from './admin'
+import { servicesAction } from './services'
 import { s1Action } from './s1'
 import { designAction } from './design'
 import { smallAction } from './small'
@@ -97,6 +98,7 @@ function agui(body: { threadId: string; runId: string; messages: { role: string;
 export async function handle(path: string, init: RequestInit = {}): Promise<Response> {
   const body = init.body ? JSON.parse(String(init.body)) : {}
   const url = new URL(path, 'http://mock')
+  if (url.pathname === '/api/call') { const svc = await servicesAction(String(body.action), body); if (svc) return svc }
   const mine = await adminHandle(url.pathname + url.search, body, init, me); if (mine) return mine
   switch (url.pathname) {
     case '/api/config':
