@@ -6,7 +6,7 @@
 import { App } from 'aws-cdk-lib'
 import { Template } from 'aws-cdk-lib/assertions'
 import { describe, expect, it } from 'vitest'
-import { BODY_TOO_LARGE, EDGE_ACL_OUTPUT, MAX_BODY_BYTES, TraceEdgeStack, edgeNeeded, edgeStackName } from '../../src/infra/edge.js'
+import { BODY_TOO_LARGE, WAF_DESCRIPTION, wafDescription, EDGE_ACL_OUTPUT, MAX_BODY_BYTES, TraceEdgeStack, edgeNeeded, edgeStackName } from '../../src/infra/edge.js'
 import { InfraPropsSchema } from '../../src/infra/props.js'
 import { deployEdge, edgeLeftOver, wafPlan, withAcl } from '../../src/installer/edge.js'
 import { RUNNERS, synth } from './templates.js'
@@ -18,7 +18,7 @@ type Rule = { Name: string; Priority: number; Action?: Record<string, unknown>; 
 describe('the edge stack', () => {
   const props = InfraPropsSchema.parse(base)
   const t = Template.fromStack(new TraceEdgeStack(new App(), props))
-  const acl = Object.values(t.findResources('AWS::WAFv2::WebACL'))[0] as { Properties: { Scope: string; Name: string; DefaultAction: unknown; Rules: Rule[] } }
+  const acl = Object.values(t.findResources('AWS::WAFv2::WebACL'))[0] as { Properties: { Scope: string; Name: string; Description: string; DefaultAction: unknown; Rules: Rule[] } }
 
   it('is <prefix>-edge in us-east-1, with one CLOUDFRONT web ACL and its ARN as an output', () => {
     const stack = new TraceEdgeStack(new App(), props)
@@ -46,6 +46,13 @@ describe('the edge stack', () => {
     expect(rules[5]!.Statement.ManagedRuleGroupStatement.RuleActionOverrides).toEqual([
       { Name: 'SizeRestrictions_BODY', ActionToUse: { Count: {} } }, { Name: 'CrossSiteScripting_BODY', ActionToUse: { Count: {} } },
     ])
+  })
+
+  it('has a description AWS WAF accepts', () => {
+    const d = acl.Properties.Description
+    expect(d).toMatch(WAF_DESCRIPTION)
+    expect(wafDescription("trace web app (dev): AWS's rules ")).toBe('trace web app dev: AWSs rules')
+    expect(wafDescription('x'.repeat(300))).toHaveLength(256)
   })
 
   it('takes its limits from the settings', () => {

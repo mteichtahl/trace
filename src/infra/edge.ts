@@ -51,6 +51,12 @@ export const BODY_TOO_LARGE = '^(\\d{8,}|[5-9]\\d{6})$'
 export const EDGE_COST = { monthly: 11, perMillion: 0.6 } as const
 
 /** Whether the app gets the WAF this stack makes (not when web.webAclArn names one of the person's own). */
+/** The pattern AWS WAF holds every description to: letters, digits, spaces and `+=:#@/-,.` only, no space at either end. */
+export const WAF_DESCRIPTION = /^[\w+=:#@/\-,.][\w+=:#@/\-,.\s]+[\w+=:#@/\-,.]$/
+/** `text` made fit for a WAF description: other characters dropped, spaces collapsed, 256 characters at most. */
+export const wafDescription = (text: string): string =>
+  text.replace(/[^\w+=:#@/\-,.\s]/g, '').replace(/\s+/g, ' ').trim().slice(0, 256).trim()
+
 export const wafEnabled = (cfg: Pick<InfraProps, 'web'>): boolean => cfg.web.enabled && cfg.web.waf.enabled && !cfg.web.webAclArn
 /** Whether the WAF is in a stack of its own in us-east-1 (the installation is elsewhere). */
 export const edgeNeeded = (cfg: Pick<InfraProps, 'web' | 'region'>): boolean => wafEnabled(cfg) && cfg.region !== EDGE_REGION
@@ -73,7 +79,7 @@ export class TraceWebAcl extends Construct {
     const tooMany = { customResponse: { responseCode: 429 } }
     this.acl = new wafv2.CfnWebACL(this, 'Acl', {
       name: webAclName(p.prefix),
-      description: `trace web app (${p.prefix}): AWS's managed rules, rate limits per address, and a request size limit`,
+      description: wafDescription(`trace web app, ${p.prefix}: AWS managed rules, rate limits per address, and a request size limit`),
       scope: 'CLOUDFRONT',
       defaultAction: { allow: {} },
       visibilityConfig: visibility(`${p.prefix}-web`),
