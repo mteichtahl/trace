@@ -58,6 +58,9 @@ export const AgentAnswers = z.object({
   knowledgeBase: z.boolean().nullable().default(null),
   /** The library gateway (props.ts gateway): the shared datasheets and parts tools behind AgentCore Gateway */
   libraryGateway: z.boolean().default(false),
+  /** External access (props.ts external): other systems and AI agents connect to trace with their own keys. Off until
+   * chosen; admins then add each system in the web app */
+  externalAccess: z.boolean().default(false),
   /** The web app (props.ts web): the address people sign in at, CloudFront's own unless webDomain is set */
   webEnabled: z.boolean().default(true),
   /** a custom domain for the web app (e.g. trace.example.com), with webCertificateArn; empty: CloudFront's address */

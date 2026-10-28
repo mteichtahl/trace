@@ -77,7 +77,7 @@ export function sessionOf(headers: IncomingHttpHeaders): string | undefined {
  * the request headers (traceparent, X-Amzn-Trace-Id, baggage) with the AgentCore session id in baggage session.id,
  * so every span below it (jobs started from it included) carries the session. Counts trace.invocations.
  */
-export async function observeInvocation<T>(runtime: 'worker' | 'api', headers: IncomingHttpHeaders, attrs: Attrs,
+export async function observeInvocation<T>(runtime: 'worker' | 'api' | 'external' | 'mcp', headers: IncomingHttpHeaders, attrs: Attrs,
   fn: (s: Span, outcome: (o: Outcome, more?: Attrs) => void) => Promise<T> | T): Promise<T> {
   const session = sessionOf(headers)
   const system = genAiSystem()

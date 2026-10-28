@@ -20,10 +20,10 @@ import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import { type AgentMemory, type ProjectMemories, actorIn, personHash } from '../agents/runtime/memory.js'
 import type { TASK_AGENTS, ToolJob } from '../agents/runtime/schemas.js'
-import { AccessDenied, type Principal, RepoSlug, isAdmin } from '../core/access.js'
+import { AccessDenied, type Principal, RepoSlug, type Role, isAdmin, who } from '../core/access.js'
 import { type Backend, backendFor } from '../core/central.js'
 import type { IntegrationStore, checkIntegration } from '../core/integrations.js'
-import type { Registry } from '../core/registry.js'
+import type { AnyTool, Registry } from '../core/registry.js'
 import { AgentFactsStore, loadAgentFacts } from '../core/agent-facts.js'
 import { type AgentFacts, copyJourneyTables } from '../core/journey.js'
 import { JourneyStore } from '../core/journey-store.js'
@@ -123,6 +123,23 @@ export interface ActionDeps {
   onboard?: (repo: string, o: OnboardRequest) => Promise<ApiOnboardResult>
   /** Ask the order watch (src/infra/lambda/order-watch.ts) to check one order now; absent: there is none to ask. */
   orderWatch?: (repo: string, orderId: string) => Promise<void>
+  /** External access (connected systems, docs/external-access.md): its addresses; absent or null: it is off, and
+   * services.* other than list and history say so (src/api/actions-services.ts externalFromEnv). */
+  external?: ExternalAccess | null
+}
+
+/** Where connected systems get tokens and call trace, and how their Cognito app clients are named. */
+export interface ExternalAccess {
+  /** the user pool's /oauth2/token address (TRACE_TOKEN_URL); null when the stack gave none */
+  tokenUrl: string | null
+  /** the external runtime's invocation URL */
+  apiUrl: string
+  /** the MCP runtime's invocation URL, or null when there is none */
+  mcpUrl: string | null
+  /** the resource server's identifier (TRACE_EXTERNAL_RESOURCE_SERVER, default trace-external) */
+  resourceServer: string
+  /** the installation's prefix (TRACE_PREFIX): app clients are named <prefix>-svc-<name> */
+  prefix: string
 }
 
 export interface Context {
@@ -147,9 +164,15 @@ export const def = <S extends z.ZodType>(need: Need, args: S, run: (a: z.output<
 
 export const Repo = z.object({ repo: RepoSlug })
 
-/** Who did it, for people to read in a commit or a record: the email (else the sub). Display only: never matched on,
- * because a person's email can change and the sub cannot. */
-export const label = (p: Principal): string => p.email ?? p.sub
+/** Who did it, for people to read in a commit or a record: the email (else the sub), or service:<name> for a connected
+ * system. Display only: never matched on, because a person's email can change and the sub cannot. */
+export const label = (p: Principal): string => who(p)
+
+/** Tools that change state outside their scratch clone (the shared datasheet library and parts links): write. */
+export const WRITE_TOOLS: ReadonlySet<string> = new Set(['datasheets.add', 'datasheets.acknowledge', 'parts.fetch_datasheet', 'kb.sync', 'voice.vocabulary'])
+
+/** The access a tool call needs: write for WRITE_TOOLS, read otherwise. */
+export const toolNeed = (t: Pick<AnyTool, 'name'>): Role => (WRITE_TOOLS.has(t.name) ? 'write' : 'read')
 /** Who did it, where only a match is needed: the agents' memory hash of the person's sub (Cognito's immutable id).
  * Never the email. */
 export const hashOf = (p: Principal): string => personHash(p.sub)

@@ -325,7 +325,7 @@ export const SKILL_ACTIONS = {
     if (a.skill === 'change-request') {
       const d = a.draft
       const request = `Change request (${String(d.what)}): ${String(d.change)}\n\nWhy: ${String(d.why)}\nScope: ${d.revision === 'next' ? 'the next revision' : 'this revision'}, ${d.covers === 'firmware' ? 'firmware only' : 'hardware and firmware'}.\nRaise it for approval at a gate; change nothing before it is approved.`
-      const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: a.repo, request, requestedBy: ctx.principal.email ?? ctx.principal.sub, requestedBySub: ctx.principal.sub })
+      const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: a.repo, request, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
       if (!r.accepted) throw new ActionError(r.reason ?? 'trace did not accept the change request.')
       jobId = r.jobId
       started = ['The agents raise the change request for approval.']

@@ -143,6 +143,16 @@ export interface Actions {
   'installation.layout': { args: Record<string, never>; result: import('@/components/installation/layout').LayoutView }
   'policy.set': { args: { key: string; reason: string | null }; result: { locks: Record<string, string>; changed: boolean } }
   'users.history': { args: { who: string; limit?: number }; result: { sub: string; email: string | null; entries: { at: string; by: string; repo: string | null; action: 'assign' | 'unassign' | 'class'; detail: string | null; text: string }[] } }
+  // connected systems, admins only (docs/external-access.md "Managing connected systems"; shapes in lib/services.ts)
+  'services.list': { args: Record<string, never>; result: import('./services').ServiceList }
+  'services.create': { args: { name: string; description?: string; scopes: import('./services').Scope[]; projects?: { repo: string; part: Part }[] }; result: import('./services').ServiceCreated }
+  'services.update': { args: { name: string; description?: string; scopes?: import('./services').Scope[]; disabled?: boolean }; result: { service: import('./services').Service } }
+  'services.assign': { args: { name: string; repo: string; part?: Part }; result: { name?: string; repo: string; part: Part } }
+  'services.unassign': { args: { name: string; repo: string }; result: { removed: boolean } }
+  'services.rotate': { args: { name: string }; result: { secret: string; secret_id: string } & import('./services').ServiceAddresses }
+  'services.retire_secret': { args: { name: string; secret_id: string }; result: { removed: boolean } }
+  'services.delete': { args: { name: string }; result: { deleted: true } }
+  'services.history': { args: { name: string }; result: { entries: import('./services').ServiceHistoryEntry[] } }
 }
 
 export type ActionName = keyof Actions

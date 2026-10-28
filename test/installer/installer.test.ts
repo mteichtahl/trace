@@ -731,6 +731,32 @@ describe('the library gateway', () => {
   })
 })
 
+describe('external access', () => {
+  const EXT = { ...ANSWERS, agents: { ...ANSWERS.agents, externalAccess: true } }
+  const URLS = { ExternalApiUrl: 'https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/x/invocations?qualifier=DEFAULT', McpUrl: 'https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/y/invocations?qualifier=DEFAULT', TokenUrl: 'https://trace-123456789012.auth.us-east-1.amazoncognito.com/oauth2/token' }
+
+  it('is off unless chosen, and asked of the stack when it is', () => {
+    expect(AnswersSchema.parse(ANSWERS).agents.externalAccess).toBe(false)
+    expect(infraInput(AnswersSchema.parse(ANSWERS)).external).toEqual({ enabled: false })
+    expect(infraInput(AnswersSchema.parse(EXT)).external).toEqual({ enabled: true })
+    expect(plan(AnswersSchema.parse(EXT)).find((x) => x.id === 'deploy')?.detail).toContain('external access')
+    expect(plan(AnswersSchema.parse(ANSWERS)).find((x) => x.id === 'deploy')?.detail).not.toContain('external access')
+  })
+
+  it('deploys with it on and says where systems come in, and that an admin adds each', async () => {
+    OUTPUTS.TraceHome = join(mkdtempSync(join(tmpdir(), 'trace-central-')), 'home')
+    const events: { type: string; summary?: string[] }[] = []
+    const ok = await apply(AnswersSchema.parse(EXT), SecretsSchema.parse({ githubToken: TOKEN }), (e) => events.push(e as never), {
+      cdk: async (args, env) => { if (args[0] === 'deploy') expect(JSON.parse(env.TRACE_INFRA ?? '{}').external).toEqual({ enabled: true }); return 0 },
+      outputs: async () => ({ ...OUTPUTS, ...URLS }),
+    })
+    expect(ok).toBe(true)
+    const summary = events.at(-1)?.summary?.join(' ') ?? ''
+    expect(summary).toContain('External access is on')
+    for (const u of Object.values(URLS)) expect(summary).toContain(u)
+  })
+})
+
 describe('the light install', () => {
   const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
   const run = async (a: unknown, s: Record<string, unknown> = {}, hooks: Parameters<typeof apply>[3] = {}): Promise<{ ok: boolean; events: { type: string; line?: string; summary?: string[]; step?: { id: string; status: string; detail: string } }[] }> => {

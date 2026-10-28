@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AnswersSchema } from '../../src/installer/answers.js'
-import { answers, awsErrors, blockers, fieldErrors, githubTokenError, initialState, newRepoError, numberError, preflightKey } from '../../src/installer/ui/model.js'
+import { answers, awsErrors, blockers, fieldErrors, githubTokenError, initialState, newRepoError, loadSaved, numberError, preflightKey } from '../../src/installer/ui/model.js'
 
 const FINE = `github_pat_11AAAAAAA0${'a'.repeat(70)}`
 const CLASSIC = `ghp_${'A1'.repeat(18)}`
@@ -55,6 +55,21 @@ describe('the installer page: the answers and what stops each step', () => {
     expect(AnswersSchema.safeParse(answers(s)).success).toBe(true)
     expect(answers(s).adminEmail).toBe('me@example.com')
     expect(fieldErrors(s).size).toBe(0)
+  })
+
+  it('keeps the external access switch off by default, and round-trips it through the saved answers', () => {
+    const s = initialState()
+    s.pre = { checks: [], ok: true, token: null, repos: [], region: 'us-east-1', profileRegion: '', self: null, facts: { account: '123456789012', email: 'me@example.com', login: 'me' } }
+    expect(s.agents.externalAccess).toBe(false)
+    expect(AnswersSchema.parse(answers(s)).agents.externalAccess).toBe(false)
+    s.agents.externalAccess = true
+    const saved = answers(s)
+    expect(AnswersSchema.parse(saved).agents.externalAccess).toBe(true)
+    const again = initialState()
+    loadSaved(again, { profiles: { names: ['default'], regions: {} }, saved, installed: null, node: 'v22', defaultRegion: 'us-east-1' })
+    expect(again.agents.externalAccess).toBe(true)
+    loadSaved(again, { profiles: { names: ['default'], regions: {} }, saved: { ...saved, agents: { ...saved.agents, externalAccess: undefined } }, installed: null, node: 'v22', defaultRegion: 'us-east-1' })
+    expect(again.agents.externalAccess).toBe(false)
   })
 
   it('puts each problem on its field and its step', () => {

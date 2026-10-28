@@ -14,12 +14,25 @@
  * a project follows the access check. It runs no model, no agent and no tool: tasks and tool calls go to the
  * project's worker (src/api/workers.ts). Every request is logged as one JSON line: who, action, repo,
  * outcome, duration. Tokens are never logged.
+ *
+ * The same server is the external runtime (TRACE_AGENT_MODE=external, docs/external-access.md), for connected
+ * systems: `startExternal` gives it the connected systems' verifier (src/api/service-auth.ts) in place of the people's,
+ * two request limits per system (src/api/rate-limit.ts: a token bucket in this container, 10 a second bursting to 20,
+ * then the shared one in DynamoDB over every container, 10 a second and 300 a minute; over either, 429 with
+ * Retry-After), and last used in place of `seen` (src/core/services-seen.ts: never a write to the access store). Its
+ * unexpected errors answer `internal error (ref <id>)`, with the detail only in its log. perform applies the systems'
+ * allow-list (src/api/service-policy.ts) for any service principal, wherever it comes from. Who is logged as
+ * service:<name>.
  */
+import { createHash, randomBytes } from 'node:crypto'
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { z } from 'zod'
 import { projectMemoriesFromEnv } from '../agents/runtime/memory.js'
-import { AccessDenied, type Principal, seen } from '../core/access.js'
+import { AccessDenied, type Principal, isService, seen, who } from '../core/access.js'
 import { ConfigError } from '../core/config.js'
+import { noteServiceSeen } from '../core/services-seen.js'
 import { ToolError } from '../core/registry.js'
 import { ATTR, type Attrs, type Outcome, type Span, flush, personHash, setAttrs } from '../core/telemetry.js'
 import { observeInvocation } from '../agents/runtime/observe.js'
@@ -27,6 +40,9 @@ import { ActionError, type ActionDeps, NO_ACCESS, defaultScratch, perform, proje
 import { type CognitoAdmin, HttpCognito, githubToken } from './aws.js'
 import { HttpGitHub } from './github.js'
 import { AuthError, Verifier, bearer } from './jwt.js'
+import { externalFromEnv } from './actions-services.js'
+import { SharedLimit } from './rate-limit.js'
+import { ServiceVerifier } from './service-auth.js'
 import { parseWorkerRuntimes, remoteJobs } from './workers.js'
 
 const MAX_BODY = 2 * 1024 * 1024
@@ -34,16 +50,49 @@ const MAX_BODY = 2 * 1024 * 1024
 const Body = z.object({ action: z.string().min(1).max(64) }).catchall(z.unknown())
 
 export interface ServerOptions {
-  verifier: Verifier
+  /** the people's verifier (the CLI's and the web app's app clients) */
+  verifier?: Verifier
+  /** who a token is, in place of the people's verifier (the external runtime: connected systems); throws AuthError */
+  principal?: (token: string) => Promise<Principal>
   deps: ActionDeps
   /** Email for a sub when the token has none (AdminGetUser), cached by the caller. */
   emailOf?: (sub: string, username: string | undefined) => Promise<string | null>
   log?: (line: Record<string, unknown>) => void
+  /** a per-caller soft limit in this container: over it, 429 with Retry-After (the external runtime's) */
+  limiter?: RateLimiter
+  /** the limit shared by every container (the external runtime's, src/api/rate-limit.ts): checked after `limiter` */
+  shared?: Pick<SharedLimit, 'take'>
+  /** a connected system called (the external runtime's: src/core/services-seen.ts); never awaited */
+  serviceSeen?: (clientId: string) => Promise<unknown>
+  /** the runtime's name in telemetry; 'external' also hides unexpected errors' detail from the caller */
+  runtime?: 'api' | 'external'
 }
 
-function send(res: ServerResponse, status: number, body: unknown): void {
+/**
+ * A token bucket per caller (by sub), in this container only: `rate` requests a second, bursting to `burst`. The first,
+ * cheap line: a caller that sends a new session id with every request reaches a new container each time, so the
+ * external runtime also counts in DynamoDB (src/api/rate-limit.ts), over every container.
+ */
+export class RateLimiter {
+  private readonly buckets = new Map<string, { tokens: number; at: number }>()
+  constructor(private readonly rate = 10, private readonly burst = 20, private readonly now: () => number = Date.now) {}
+
+  /** 0 when the call may go ahead (and it is counted), else the seconds to wait. */
+  take(key: string): number {
+    const t = this.now()
+    const b = this.buckets.get(key) ?? { tokens: this.burst, at: t }
+    b.tokens = Math.min(this.burst, b.tokens + ((t - b.at) / 1000) * this.rate)
+    b.at = t
+    this.buckets.set(key, b)
+    if (this.buckets.size > 10_000) this.buckets.delete(this.buckets.keys().next().value as string)
+    if (b.tokens >= 1) { b.tokens -= 1; return 0 }
+    return Math.max(1, Math.ceil((1 - b.tokens) / this.rate))
+  }
+}
+
+function send(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   const text = JSON.stringify(body)
-  res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text) })
+  res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text), ...headers })
   res.end(text)
 }
 
@@ -60,6 +109,18 @@ async function readBody(req: IncomingMessage): Promise<string> {
 }
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+/** A short id that ties an answer to its log line. */
+const errorRef = (): string => randomBytes(4).toString('hex')
+
+/**
+ * Where the external runtime copies project databases: under /tmp, never the session storage (/mnt/workspace), which
+ * AgentCore keeps per runtime session id, and the caller picks that id: two systems sending the same one would share
+ * it. Each request's copy is a fresh temporary folder inside it (action-kit.ts tempDb), in a folder of the system's own
+ * (scratchFor).
+ */
+export const externalScratch = (): string => join(tmpdir(), 'trace-external')
+/** A connected system's own scratch folder, named by a hash of its client id. */
+export const scratchFor = (base: string, clientId: string): string => join(base, `svc-${createHash('sha256').update(clientId).digest('hex').slice(0, 16)}`)
 
 export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerResponse) => void {
   const log = o.log ?? ((l) => { process.stdout.write(`${JSON.stringify(l)}\n`) })
@@ -67,6 +128,8 @@ export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerRes
   const emails = new Map<string, string | null>()
 
   const principalOf = async (token: string): Promise<Principal> => {
+    if (o.principal) return o.principal(token)
+    if (!o.verifier) throw new AuthError('no verifier')
     const c = await o.verifier.verify(token)
     let email: string | null = c.username && c.username.includes('@') ? c.username : null
     if (!email && o.emailOf) {
@@ -83,17 +146,17 @@ export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerRes
     const t0 = Date.now()
     const entry: Record<string, unknown> = { at: new Date(t0).toISOString(), who: null, action: null, repo: null }
     let obs: { span: Span; outcome: (o: Outcome, more?: Attrs) => void } | null = null
-    const done = (status: number, body: { ok: boolean; result?: unknown; error?: string }, outcome: string): void => {
+    const done = (status: number, body: { ok: boolean; result?: unknown; error?: string }, outcome: string, headers?: Record<string, string>): void => {
       log({ ...entry, outcome, status, ms: Date.now() - t0, ...(body.ok ? {} : { error: body.error }) })
       obs?.outcome(apiOutcome(outcome), {
         [ATTR.status]: status,
         ...(typeof entry.action === 'string' ? { [ATTR.action]: entry.action } : {}),
         ...(typeof entry.repo === 'string' ? { [ATTR.repository]: entry.repo } : {}),
       })
-      send(res, status, body)
+      send(res, status, body, headers)
     }
     // One span per request, continuing the caller's trace with the AgentCore session in baggage (src/agents/runtime/observe.ts).
-    void observeInvocation('api', req.headers, {}, async (span, outcome) => {
+    void observeInvocation(o.runtime ?? 'api', req.headers, {}, async (span, outcome) => {
       obs = { span, outcome }
       let principal: Principal
       try {
@@ -103,13 +166,20 @@ export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerRes
       } catch (e) {
         return done(401, { ok: false, error: e instanceof AuthError ? `not signed in: ${e.message}` : 'not signed in' }, 'unauthenticated')
       }
-      entry.who = principal.email ?? principal.sub
+      entry.who = who(principal)
       // who, as a hash (never the email), and their class
       if (obs) setAttrs(obs.span, { [ATTR.principal]: personHash(principal.sub), [ATTR.principalClass]: principal.groups.join(',') })
-      if (!seenOnce.has(principal.sub)) {
+      if (isService(principal)) {
+        // a connected system: when it last called (src/core/services-seen.ts), never the access store
+        void o.serviceSeen?.(principal.sub).catch(() => undefined)
+      } else if (!seenOnce.has(principal.sub)) {
         seenOnce.add(principal.sub)
         seen(principal).catch((e: unknown) => { log({ ...entry, warning: `seen: ${message(e)}` }) })
       }
+      const wait = o.limiter?.take(principal.sub) ?? 0
+      if (wait > 0) return done(429, { ok: false, error: `too many requests: try again in ${wait} s` }, 'limited', { 'retry-after': String(wait) })
+      const over = await o.shared?.take(principal.sub)
+      if (over) return done(429, { ok: false, error: `too many requests (at most ${over.window === 'second' ? 'ten a second' : '300 a minute'}): try again in ${over.wait} s` }, 'limited', { 'retry-after': String(over.wait) })
       let body: z.output<typeof Body>
       try {
         const text = await readBody(req)
@@ -126,13 +196,22 @@ export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerRes
         // a held call (job, tools.waits) stops holding the worker when its caller goes away
         const left = new AbortController()
         res.once('close', () => { if (!res.writableFinished) left.abort(new Error('the caller went away')) })
-        const r = await perform(action, args, { principal, deps: o.deps, signal: left.signal })
+        // the external runtime: each system's copies in a folder of its own (externalScratch)
+        const deps = o.runtime === 'external' && isService(principal) ? { ...o.deps, scratch: scratchFor(o.deps.scratch, principal.sub) } : o.deps
+        const r = await perform(action, args, { principal, deps, signal: left.signal })
         if (r.repo) entry.repo = r.repo
         return done(200, { ok: true, result: r.result }, 'ok')
       } catch (e) {
         if (e instanceof AccessDenied) return done(403, { ok: false, error: NO_ACCESS }, `denied: ${e.message}`)
         if (e instanceof ActionError || e instanceof ToolError || e instanceof ConfigError || e instanceof z.ZodError) {
           return done(200, { ok: false, error: message(e) }, 'error')
+        }
+        // an outside system is never told what went wrong inside: a reference to the log line instead
+        if (o.runtime === 'external') {
+          const ref = errorRef()
+          entry.ref = ref
+          entry.detail = message(e)
+          return done(200, { ok: false, error: `internal error (ref ${ref})` }, 'failed')
         }
         return done(200, { ok: false, error: `internal error: ${message(e)}` }, 'failed')
       }
@@ -144,7 +223,7 @@ export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerRes
 function apiOutcome(o: string): Outcome {
   if (o === 'ok') return 'ok'
   if (o === 'unauthenticated' || o.startsWith('denied')) return 'denied'
-  if (o === 'bad-request') return 'rejected'
+  if (o === 'bad-request' || o === 'limited') return 'rejected'
   return 'error'
 }
 
@@ -169,12 +248,11 @@ const Env = z.object({
   PORT: z.coerce.number().int().default(8080),
 })
 
-/** The API runtime's entry (src/agents/runtime/main.ts, TRACE_AGENT_MODE=api). */
-export async function start(): Promise<void> {
+/** The API runtime's dependencies from its environment (the people's runtime and the external one share them). */
+async function depsFromEnv(env: z.output<typeof Env>): Promise<{ deps: ActionDeps; cog: () => CognitoAdmin }> {
   const { allTools } = await import('../tools/index.js')
-  const env = Env.parse(process.env)
   let cognito: CognitoAdmin | null = null
-  const cog = (): CognitoAdmin => (cognito ??= new HttpCognito({ region: env.AWS_REGION, poolId: env.TRACE_COGNITO_POOL_ID }))
+  const cog = (): CognitoAdmin => (cognito ??= new HttpCognito({ region: env.AWS_REGION, poolId: env.TRACE_COGNITO_POOL_ID, prefix: process.env.TRACE_PREFIX?.trim() || 'trace' }))
   const scratch = defaultScratch()
   const token = (): Promise<string> => githubToken(env.TRACE_GITHUB_SECRET_ARN)
   const jobs = remoteJobs({ runtimes: parseWorkerRuntimes(env.TRACE_WORKER_RUNTIMES), region: env.AWS_REGION, account: env.TRACE_AWS_ACCOUNT })
@@ -212,14 +290,52 @@ export async function start(): Promise<void> {
       const { data } = await new Github(t).request('GET', '/user', z.object({ login: z.string() }).loose())
       return onboardViaApi(repo, { token: t, login: data.login, apply: o.apply, create: o.create })
     },
+    // connected systems' addresses (services.*): null when external access is off
+    external: externalFromEnv(process.env),
   }
+  return { deps, cog }
+}
+
+function stopOnSignal(server: Server): void {
+  const stop = (): void => { server.close(); void flush().finally(() => process.exit(0)) }
+  process.once('SIGTERM', stop)
+  process.once('SIGINT', stop)
+}
+
+/** The API runtime's entry (src/agents/runtime/main.ts, TRACE_AGENT_MODE=api). */
+export async function start(): Promise<void> {
+  const env = Env.parse(process.env)
+  const { deps, cog } = await depsFromEnv(env)
   const server = await listen({
     verifier: new Verifier({ issuer: env.TRACE_COGNITO_ISSUER, clientId: [env.TRACE_COGNITO_CLIENT_ID, ...(env.TRACE_COGNITO_WEB_CLIENT_ID ? [env.TRACE_COGNITO_WEB_CLIENT_ID] : [])] }),
     deps,
     emailOf: async (sub, username) => (await cog().getUser(username ?? sub))?.email ?? null,
   }, env.PORT)
   process.stdout.write(`trace api listening on 0.0.0.0:${env.PORT}\n`)
-  const stop = (): void => { server.close(); void flush().finally(() => process.exit(0)) }
-  process.once('SIGTERM', stop)
-  process.once('SIGINT', stop)
+  stopOnSignal(server)
+}
+
+/**
+ * The external runtime's entry (TRACE_AGENT_MODE=external): the same server and actions, for connected systems only.
+ * It reads the API runtime's environment, plus TRACE_EXTERNAL_RESOURCE_SERVER (default trace-external). A person's
+ * token is refused (it has a username); the people's client ids are not used here.
+ */
+export async function startExternal(): Promise<void> {
+  const env = Env.parse(process.env)
+  const { deps } = await depsFromEnv(env)
+  const services = new ServiceVerifier({
+    verifier: new Verifier({ issuer: env.TRACE_COGNITO_ISSUER, clientId: [], anyClient: true }),
+    resourceServer: process.env.TRACE_EXTERNAL_RESOURCE_SERVER,
+  })
+  const log = (l: Record<string, unknown>): void => { process.stdout.write(`${JSON.stringify(l)}\n`) }
+  const table = process.env.TRACE_RATE_TABLE?.trim()
+  if (!table) log({ at: new Date().toISOString(), warning: 'TRACE_RATE_TABLE is not set: only the per-container request limit applies' })
+  // a system never manages systems, but the external runtime has no addresses of its own to give either
+  const server = await listen({
+    principal: (t) => services.principal(t), deps: { ...deps, external: null, scratch: externalScratch() }, log,
+    limiter: new RateLimiter(10, 20), ...(table ? { shared: new SharedLimit({ table, region: env.AWS_REGION, log }) } : {}),
+    serviceSeen: (id) => noteServiceSeen(id), runtime: 'external',
+  }, env.PORT)
+  process.stdout.write(`trace external api listening on 0.0.0.0:${env.PORT}\n`)
+  stopOnSignal(server)
 }

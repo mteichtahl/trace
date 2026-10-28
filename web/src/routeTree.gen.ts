@@ -37,6 +37,8 @@ import { Route as AppOpsSectionRouteImport } from './routes/_app/ops/$section'
 import { Route as AppPIdRouteImport } from './routes/_app/p/$id'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects/index'
 import { Route as FocusProjectsNewRouteImport } from './routes/_focus/projects/new'
+import { Route as AppAdminSystemsIndexRouteImport } from './routes/_app/admin/systems/index'
+import { Route as AppAdminSystemsNameRouteImport } from './routes/_app/admin/systems/$name'
 import { Route as AppAgentsToolsToolRouteImport } from './routes/_app/agents/tools/$tool'
 import { Route as AppPIdIndexRouteImport } from './routes/_app/p/$id/index'
 import { Route as AppPIdSplatRouteImport } from './routes/_app/p/$id/$'
@@ -198,6 +200,16 @@ const FocusProjectsNewRoute = FocusProjectsNewRouteImport.update({
   path: '/projects/new',
   getParentRoute: () => FocusRoute,
 } as any)
+const AppAdminSystemsIndexRoute = AppAdminSystemsIndexRouteImport.update({
+  id: '/systems/',
+  path: '/systems/',
+  getParentRoute: () => AppAdminRoute,
+} as any)
+const AppAdminSystemsNameRoute = AppAdminSystemsNameRouteImport.update({
+  id: '/systems/$name',
+  path: '/systems/$name',
+  getParentRoute: () => AppAdminRoute,
+} as any)
 const AppAgentsToolsToolRoute = AppAgentsToolsToolRouteImport.update({
   id: '/agents/tools/$tool',
   path: '/agents/tools/$tool',
@@ -336,6 +348,7 @@ export interface FileRoutesByFullPath {
   '/knowledge/': typeof AppKnowledgeIndexRoute
   '/ops/': typeof AppOpsIndexRoute
   '/projects/': typeof AppProjectsIndexRoute
+  '/admin/systems/$name': typeof AppAdminSystemsNameRoute
   '/agents/tools/$tool': typeof AppAgentsToolsToolRoute
   '/p/$id/$': typeof AppPIdSplatRoute
   '/p/$id/build': typeof AppPIdBuildRoute
@@ -345,6 +358,7 @@ export interface FileRoutesByFullPath {
   '/p/$id/evidence': typeof AppPIdEvidenceRoute
   '/p/$id/memory': typeof AppPIdMemoryRouteWithChildren
   '/p/$id/requirements': typeof AppPIdRequirementsRouteWithChildren
+  '/admin/systems/': typeof AppAdminSystemsIndexRoute
   '/p/$id/': typeof AppPIdIndexRoute
   '/p/$id/memory/changes': typeof AppPIdMemoryChangesRoute
   '/p/$id/memory/recent': typeof AppPIdMemoryRecentRoute
@@ -383,6 +397,7 @@ export interface FileRoutesByTo {
   '/knowledge': typeof AppKnowledgeIndexRoute
   '/ops': typeof AppOpsIndexRoute
   '/projects': typeof AppProjectsIndexRoute
+  '/admin/systems/$name': typeof AppAdminSystemsNameRoute
   '/agents/tools/$tool': typeof AppAgentsToolsToolRoute
   '/p/$id/$': typeof AppPIdSplatRoute
   '/p/$id/build': typeof AppPIdBuildRoute
@@ -391,6 +406,7 @@ export interface FileRoutesByTo {
   '/p/$id/design': typeof AppPIdDesignRoute
   '/p/$id/evidence': typeof AppPIdEvidenceRoute
   '/p/$id/requirements': typeof AppPIdRequirementsRouteWithChildren
+  '/admin/systems': typeof AppAdminSystemsIndexRoute
   '/p/$id': typeof AppPIdIndexRoute
   '/p/$id/memory/changes': typeof AppPIdMemoryChangesRoute
   '/p/$id/memory/recent': typeof AppPIdMemoryRecentRoute
@@ -435,6 +451,7 @@ export interface FileRoutesById {
   '/_app/knowledge/': typeof AppKnowledgeIndexRoute
   '/_app/ops/': typeof AppOpsIndexRoute
   '/_app/projects/': typeof AppProjectsIndexRoute
+  '/_app/admin/systems/$name': typeof AppAdminSystemsNameRoute
   '/_app/agents/tools/$tool': typeof AppAgentsToolsToolRoute
   '/_app/p/$id/$': typeof AppPIdSplatRoute
   '/_app/p/$id/build': typeof AppPIdBuildRoute
@@ -444,6 +461,7 @@ export interface FileRoutesById {
   '/_app/p/$id/evidence': typeof AppPIdEvidenceRoute
   '/_app/p/$id/memory': typeof AppPIdMemoryRouteWithChildren
   '/_app/p/$id/requirements': typeof AppPIdRequirementsRouteWithChildren
+  '/_app/admin/systems/': typeof AppAdminSystemsIndexRoute
   '/_app/p/$id/': typeof AppPIdIndexRoute
   '/_app/p/$id/memory/changes': typeof AppPIdMemoryChangesRoute
   '/_app/p/$id/memory/recent': typeof AppPIdMemoryRecentRoute
@@ -487,6 +505,7 @@ export interface FileRouteTypes {
     | '/knowledge/'
     | '/ops/'
     | '/projects/'
+    | '/admin/systems/$name'
     | '/agents/tools/$tool'
     | '/p/$id/$'
     | '/p/$id/build'
@@ -496,6 +515,7 @@ export interface FileRouteTypes {
     | '/p/$id/evidence'
     | '/p/$id/memory'
     | '/p/$id/requirements'
+    | '/admin/systems/'
     | '/p/$id/'
     | '/p/$id/memory/changes'
     | '/p/$id/memory/recent'
@@ -534,6 +554,7 @@ export interface FileRouteTypes {
     | '/knowledge'
     | '/ops'
     | '/projects'
+    | '/admin/systems/$name'
     | '/agents/tools/$tool'
     | '/p/$id/$'
     | '/p/$id/build'
@@ -542,6 +563,7 @@ export interface FileRouteTypes {
     | '/p/$id/design'
     | '/p/$id/evidence'
     | '/p/$id/requirements'
+    | '/admin/systems'
     | '/p/$id'
     | '/p/$id/memory/changes'
     | '/p/$id/memory/recent'
@@ -585,6 +607,7 @@ export interface FileRouteTypes {
     | '/_app/knowledge/'
     | '/_app/ops/'
     | '/_app/projects/'
+    | '/_app/admin/systems/$name'
     | '/_app/agents/tools/$tool'
     | '/_app/p/$id/$'
     | '/_app/p/$id/build'
@@ -594,6 +617,7 @@ export interface FileRouteTypes {
     | '/_app/p/$id/evidence'
     | '/_app/p/$id/memory'
     | '/_app/p/$id/requirements'
+    | '/_app/admin/systems/'
     | '/_app/p/$id/'
     | '/_app/p/$id/memory/changes'
     | '/_app/p/$id/memory/recent'
@@ -818,6 +842,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof FocusProjectsNewRouteImport
       parentRoute: typeof FocusRoute
     }
+    '/_app/admin/systems/': {
+      id: '/_app/admin/systems/'
+      path: '/systems'
+      fullPath: '/admin/systems/'
+      preLoaderRoute: typeof AppAdminSystemsIndexRouteImport
+      parentRoute: typeof AppAdminRoute
+    }
+    '/_app/admin/systems/$name': {
+      id: '/_app/admin/systems/$name'
+      path: '/systems/$name'
+      fullPath: '/admin/systems/$name'
+      preLoaderRoute: typeof AppAdminSystemsNameRouteImport
+      parentRoute: typeof AppAdminRoute
+    }
     '/_app/agents/tools/$tool': {
       id: '/_app/agents/tools/$tool'
       path: '/agents/tools/$tool'
@@ -981,6 +1019,8 @@ interface AppAdminRouteChildren {
   AppAdminPromptsRoute: typeof AppAdminPromptsRoute
   AppAdminUsageRoute: typeof AppAdminUsageRoute
   AppAdminIndexRoute: typeof AppAdminIndexRoute
+  AppAdminSystemsNameRoute: typeof AppAdminSystemsNameRoute
+  AppAdminSystemsIndexRoute: typeof AppAdminSystemsIndexRoute
 }
 
 const AppAdminRouteChildren: AppAdminRouteChildren = {
@@ -989,6 +1029,8 @@ const AppAdminRouteChildren: AppAdminRouteChildren = {
   AppAdminPromptsRoute: AppAdminPromptsRoute,
   AppAdminUsageRoute: AppAdminUsageRoute,
   AppAdminIndexRoute: AppAdminIndexRoute,
+  AppAdminSystemsNameRoute: AppAdminSystemsNameRoute,
+  AppAdminSystemsIndexRoute: AppAdminSystemsIndexRoute,
 }
 
 const AppAdminRouteWithChildren = AppAdminRoute._addFileChildren(

@@ -1,6 +1,6 @@
 /** Shared test fixtures: an RSA key, a fake JWKS, Cognito-shaped tokens, and fake GitHub/Cognito/jobs clients. */
 import { createHash, createSign, generateKeyPairSync, type KeyObject } from 'node:crypto'
-import type { CognitoAdmin, CognitoUser } from '../../src/api/aws.js'
+import type { ClientSecret, CognitoAdmin, CognitoUser, ServiceClientConfig } from '../../src/api/aws.js'
 import type { CommitSummary, GitHubApi, TreeEntry } from '../../src/api/github.js'
 import { Verifier } from '../../src/api/jwt.js'
 
@@ -51,6 +51,40 @@ export class FakeCognito implements CognitoAdmin {
   }
   async removeFromGroup(username: string, group: string): Promise<void> { this.calls.push(`remove ${username} ${group}`); this.groups.get(username)?.delete(group) }
   async signOut(username: string): Promise<void> { this.calls.push(`signout ${username}`) }
+
+  /** connected systems' app clients: id → config and secrets (values kept only to check they never leak) */
+  clients = new Map<string, { config: ServiceClientConfig; secrets: (ClientSecret & { value: string })[] }>()
+  private n = 0
+  async createServiceClient(c: ServiceClientConfig): Promise<{ clientId: string; secret: string }> {
+    const clientId = `svcclient${++this.n}`
+    const value = `SECRET-${clientId}-${this.n}-xyzzy`
+    this.clients.set(clientId, { config: c, secrets: [{ secretId: `${clientId}-s1`, createdAt: '2026-10-28T00:00:00.000Z', value }] })
+    this.calls.push(`createClient ${c.clientName} ${c.scopes.join(' ')}`)
+    return { clientId, secret: value }
+  }
+  async updateServiceClient(clientId: string, c: ServiceClientConfig): Promise<void> {
+    const x = this.clients.get(clientId)
+    if (!x) throw new Error('ResourceNotFoundException')
+    x.config = c
+    this.calls.push(`updateClient ${clientId} ${c.scopes.join(' ')}`)
+  }
+  async deleteServiceClient(clientId: string): Promise<boolean> { this.calls.push(`deleteClient ${clientId}`); return this.clients.delete(clientId) }
+  async addClientSecret(clientId: string): Promise<ClientSecret & { secret: string }> {
+    const x = this.clients.get(clientId)
+    if (!x) throw new Error('ResourceNotFoundException')
+    const k = { secretId: `${clientId}-s${x.secrets.length + 1}-${++this.n}`, createdAt: '2026-10-28T01:00:00.000Z', value: `SECRET-${clientId}-rot-${this.n}-xyzzy` }
+    x.secrets.push(k)
+    this.calls.push(`addSecret ${clientId}`)
+    return { secretId: k.secretId, createdAt: k.createdAt, secret: k.value }
+  }
+  async deleteClientSecret(clientId: string, secretId: string): Promise<void> {
+    const x = this.clients.get(clientId)
+    if (x) x.secrets = x.secrets.filter((k) => k.secretId !== secretId)
+    this.calls.push(`deleteSecret ${clientId} ${secretId}`)
+  }
+  async listClientSecrets(clientId: string): Promise<ClientSecret[]> {
+    return (this.clients.get(clientId)?.secrets ?? []).map(({ secretId, createdAt }) => ({ secretId, createdAt }))
+  }
 }
 
 export class FakeGitHub implements GitHubApi {

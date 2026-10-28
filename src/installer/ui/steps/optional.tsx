@@ -66,7 +66,7 @@ const GROUPS: { id: Group; title: string; keys: RegExp }[] = [
   { id: 'jobs', title: 'Graphics card and CPU jobs', keys: /^agents\.(gpu|cpu|image|publish)/ },
   { id: 'builds', title: 'Builds', keys: /^runners\./ },
   { id: 'web', title: 'Web app', keys: /^agents\.web/ },
-  { id: 'knowledge', title: 'Knowledge and monitoring', keys: /^agents\.(knowledgeBase|libraryGateway|observability|transactionSearch|dashboard|samplingPercent)$/ },
+  { id: 'knowledge', title: 'Knowledge and monitoring', keys: /^agents\.(knowledgeBase|libraryGateway|externalAccess|observability|transactionSearch|dashboard|samplingPercent)$/ },
   { id: 'tokens', title: 'Tokens and memory', keys: /^(github\.adminToken|projectTokens\.|projects\.)/ },
 ]
 
@@ -79,7 +79,7 @@ function reset(g: Group): void {
     if (g === 'jobs') pick('gpuEnabled', 'gpuMaxVcpus', 'gpuSpot', 'cpuEnabled', 'cpuMaxVcpus', 'cpuSpot', 'cpuVcpus', 'cpuMemoryMiB', 'imageSource', 'imageRegistry', 'publishImages')
     if (g === 'builds') s.runners = d.runners
     if (g === 'web') pick('webEnabled', 'webDomain', 'webCertificateArn', 'webEmailFrom', 'webWaf')
-    if (g === 'knowledge') pick('knowledgeBase', 'libraryGateway', 'observability', 'transactionSearch', 'dashboard', 'samplingPercent')
+    if (g === 'knowledge') pick('knowledgeBase', 'libraryGateway', 'externalAccess', 'observability', 'transactionSearch', 'dashboard', 'samplingPercent')
     if (g === 'tokens') { s.github.adminToken = ''; s.projectTokens.clear(); for (const p of s.projects.values()) p.memoryDays = '' }
   })
 }
@@ -254,6 +254,7 @@ function KnowledgeGroup() {
     <div className="grid gap-4">
       <TriChoice label="Knowledge bases" value={g.knowledgeBase} auto={s.pre?.facts.s3vectors === false ? 'off: no Amazon S3 Vectors in this region' : 'on where Amazon S3 Vectors is'} onChange={(v) => update((x) => { x.agents.knowledgeBase = v })} />
       <Toggle label="Serve the datasheets and parts tools through AgentCore Gateway" description="Then only its Lambda can read the distributor keys." checked={g.libraryGateway} onChange={(v) => update((x) => { x.agents.libraryGateway = v })} />
+      <Toggle label="External access" description="Let other systems and AI agents connect to trace with their own keys. Off until you turn it on; admins then add each system in the web app." checked={g.externalAccess} onChange={(v) => update((x) => { x.agents.externalAccess = v })} />
       <Toggle label="Traces and metrics to CloudWatch" description="Amazon Bedrock AgentCore observability, for the Operations screen." checked={g.observability} onChange={(v) => update((x) => { x.agents.observability = v })} />
       {g.observability ? (
         <>

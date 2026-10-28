@@ -101,6 +101,11 @@
  *   actions-prompts.ts   prompts.chat (the chat agent's editable instructions as the installation has them)
  *   actions-voice.ts     voice.vocabulary, voice.vocabulary.sync (dictation's project words)
  *   actions-layout.ts    installation.layout (flat or nested, what that means, and how to move)
+ *   actions-services.ts  services.list, services.create, services.update, services.assign, services.unassign,
+ *                        services.rotate, services.retire_secret, services.delete, services.history (connected systems)
+ *
+ * A connected system (an outside system with a client-credentials token, docs/external-access.md) reaches only the
+ * actions in src/api/service-policy.ts's allow-list, with the scope each needs, checked in perform before anything else.
  */
 import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -108,7 +113,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import {
   AccessDenied, CLASSES, GROUPS, PARTS, PartRefused, type PersonClass, type Principal, RepoSlug, type Role,
-  assign, assignments, classOf, isAdmin, lastSeen, projectsFor, require_, setClass, unassign,
+  assign, assignments, classOf, isAdmin, isService, lastSeen, projectsFor, require_, setClass, unassign,
 } from '../core/access.js'
 import { readSettings, resolve, setValue, unset } from '../core/config.js'
 import { IntegrationNameSchema, type IntegrationStore, checkIntegration, valuesFor } from '../core/integrations.js'
@@ -127,7 +132,7 @@ import { PreviewJob, PreviewTarget, getView, listView, preview } from '../prompt
 import { parseProjectKbs } from '../tools/kb/env.js'
 import { FilterSchema, searchKb } from '../tools/kb/search.js'
 import {
-  type Action, ActionError, type Context, type JobView, type JobsApi, MAX_ARTIFACT, type Need, NO_ACCESS, PROJECT_DB_PATH, Repo, def, hashOf, hashesOf, memoryInclude, projectMemory, slugify, tempDb, withProjectDb,
+  type Action, ActionError, type Context, type JobView, type JobsApi, MAX_ARTIFACT, type Need, NO_ACCESS, PROJECT_DB_PATH, Repo, def, hashOf, hashesOf, label, memoryInclude, projectMemory, slugify, toolNeed, tempDb, withProjectDb,
 } from './action-kit.js'
 import { CHAT_ACTIONS } from './actions-chats.js'
 import { DESIGN_ACTIONS } from './actions-design.js'
@@ -146,13 +151,14 @@ import { PROMPT_ACTIONS } from './actions-prompts.js'
 import { VOICE_ACTIONS } from './actions-voice.js'
 import { LAYOUT_ACTIONS } from './actions-layout.js'
 import type { CognitoUser } from './aws.js'
+import { SERVICE_ADMIN_ACTIONS } from './actions-services.js'
+import { SERVICE_ACTIONS, checkService, taskCap, toolOpenToSystems } from './service-policy.js'
 
 export {
   ActionError, NO_ACCESS, PROJECT_DB_PATH, type ActionDeps, type Context, type JobView, type JobsApi, type OnboardRequest, type WaitView,
 } from './action-kit.js'
 
-/** Tools that change state outside their scratch clone (the shared datasheet library and parts links): write. */
-export const WRITE_TOOLS: ReadonlySet<string> = new Set(['datasheets.add', 'datasheets.acknowledge', 'parts.fetch_datasheet', 'kb.sync', 'voice.vocabulary'])
+export { WRITE_TOOLS } from './action-kit.js'
 
 /** Tools scoped by the session's environment (a job's project and agent), not by the request: never through the API.
  * The API reaches memory through memory.list and memory.recall, scoped to the project the access check passed.
@@ -262,7 +268,6 @@ export async function classNow(ctx: Context, u: CognitoUser): Promise<PersonClas
   return CLASSES.find((c) => groups.includes(GROUPS[c])) ?? null
 }
 
-const toolNeed = (t: AnyTool): Role => (WRITE_TOOLS.has(t.name) ? 'write' : 'read')
 
 // ------------------------------------------------------------------ prompts
 
@@ -337,7 +342,7 @@ async function writePrompt(ctx: Context, scope: 'installation' | 'project', repo
     const branch = `trace/prompts-${slugify(w.id)}-${Date.now().toString(36)}`
     if (branch === base) throw new ActionError('refusing to write the default branch')
     await gh.createBranch(r, branch, sha)
-    const message = `prompts: ${w.op} ${w.id} (v${h.version})\n\n${h.reason ?? ''}\n\nRequested by ${ctx.principal.email ?? ctx.principal.sub} through the trace API.`
+    const message = `prompts: ${w.op} ${w.id} (v${h.version})\n\n${h.reason ?? ''}\n\nRequested by ${label(ctx.principal)} through the trace API.`
     const { commit } = await gh.putFile(r, { path: PROJECT_DB_PATH, branch, content: readFileSync(t.db), message, sha: blob })
     return { scope, repo: r, id: w.id, version: h.version, uid: h.uid, action: h.action, branch, commit, note: '.trace/** is a protected path: the pull request waits for a person to merge it.' }
   } finally {
@@ -350,7 +355,9 @@ async function writePrompt(ctx: Context, scope: 'installation' | 'project', repo
 const ToolArgs = z.object({ repo: RepoSlug, name: z.string().regex(/^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/), args: z.record(z.string(), z.unknown()).default({}) })
 
 export const ACTIONS = {
-  whoami: def('signed-in', z.object({}), async (_a, { principal: p }) => ({ sub: p.sub, email: p.email, groups: p.groups, class: classOf(p) })),
+  whoami: def('signed-in', z.object({}), async (_a, { principal: p }) => ({
+    sub: p.sub, email: p.email, groups: p.groups, class: classOf(p), ...(isService(p) ? { kind: 'service', name: p.name ?? null, scopes: p.scopes ?? [] } : {}),
+  })),
 
   projects: def('signed-in', z.object({}), async (_a, { principal }) => projectsFor(principal)),
 
@@ -398,7 +405,8 @@ export const ACTIONS = {
     } finally { w.close() }
   })),
 
-  'tools.list': def('read', Repo, async (_a, ctx) => ctx.deps.tools().list().filter((t) => !t.hardware && !API_HIDDEN_TOOLS.has(t.name)).map((t) => ({
+  // a connected system is not shown the shared library's and the parts search's tools: it may not run them
+  'tools.list': def('read', Repo, async (_a, ctx) => ctx.deps.tools().list().filter((t) => !t.hardware && !API_HIDDEN_TOOLS.has(t.name) && (!isService(ctx.principal) || toolOpenToSystems(t.name))).map((t) => ({
     name: t.name, description: t.description, needs: toolNeed(t), input: Registry.jsonSchema(t),
   }))),
 
@@ -423,7 +431,7 @@ export const ACTIONS = {
     const blob = await gh.fileSha(a.repo, PROJECT_DB_PATH, base)
     const t = tempDb(ctx.deps.scratch, await gh.rawFile(a.repo, PROJECT_DB_PATH, base))
     try {
-      const by = ctx.principal.email ?? ctx.principal.sub
+      const by = label(ctx.principal)
       if (a.unset) {
         if (!unset(a.key, t.root)) throw new ActionError(`${a.key} is not set`)
       } else {
@@ -440,10 +448,13 @@ export const ACTIONS = {
     }
   }),
 
-  task: def('write', Repo.extend({ request: z.string().min(1).max(20_000), agent: z.enum(TASK_AGENTS).optional() }), async (a, ctx) =>
-    (await ctx.deps.jobs()).startJob({
-      kind: 'task', repository: a.repo, request: a.request, requestedBy: ctx.principal.email ?? ctx.principal.sub, requestedBySub: ctx.principal.sub, ...(a.agent ? { agent: a.agent } : {}),
-    })),
+  task: def('write', Repo.extend({ request: z.string().min(1).max(20_000), agent: z.enum(TASK_AGENTS).optional() }), async (a, ctx) => {
+    // a connected system: at most three tasks queued or running on one project (src/api/service-policy.ts)
+    await taskCap(ctx.principal, a.repo, ctx)
+    return (await ctx.deps.jobs()).startJob({
+      kind: 'task', repository: a.repo, request: a.request, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub, ...(a.agent ? { agent: a.agent } : {}),
+    })
+  }),
 
   'memory.list': def('read', MemoryArgs.extend({ limit: z.number().int().min(1).max(200).default(50), includeInactive: z.boolean().default(false) }), async (a, ctx) => {
     const mem = projectMemory(ctx, a.repo)
@@ -657,6 +668,7 @@ export const ACTIONS = {
   ...PROMPT_ACTIONS,
   ...VOICE_ACTIONS,
   ...LAYOUT_ACTIONS,
+  ...SERVICE_ADMIN_ACTIONS,
 } satisfies Record<string, Action<z.ZodType>>
 
 export type ActionName = keyof typeof ACTIONS
@@ -673,11 +685,16 @@ export interface Outcome { ok: true; result: unknown }
 export async function perform(name: string, raw: Record<string, unknown>, ctx: Context): Promise<{ repo: string | null; result: unknown }> {
   if (!Object.hasOwn(ACTIONS, name)) throw new ActionError(`unknown action ${JSON.stringify(name)}`)
   const action = ACTIONS[name as ActionName] as Action<z.ZodType>
+  // a connected system is refused an action not open to systems before its arguments are even read
+  if (isService(ctx.principal) && !Object.hasOwn(SERVICE_ACTIONS, name)) throw new AccessDenied(`${name} is not open to connected systems`)
   const parsed = action.args.safeParse(raw)
   if (!parsed.success) throw new ActionError(`${name}: ${parsed.error.issues.map((i) => `${i.path.join('.') || 'args'}: ${i.message}`).join('; ')}`)
   const args = parsed.data as Record<string, unknown>
   const repo = typeof args.repo === 'string' ? args.repo : null
   const p = ctx.principal
+  // a connected system: only the actions open to systems, with the scope each needs (fails closed), then the same
+  // checks as anyone (src/api/service-policy.ts)
+  await checkService(p, name, args, ctx)
   switch (action.need) {
     case 'signed-in': case 'job': break
     case 'prompts': if (!action.authorize) throw new AccessDenied(NO_ACCESS); await action.authorize(args, p); break
