@@ -7,24 +7,32 @@
  *                 API at run time when an admin adds the system, with one or both scopes
  *   external      the AgentCore runtime `<prefix>_external`: the agent image in `external` mode, which runs the API
  *                 server for connected systems (the people's API code, its checks, and the systems' allow-list). It
- *                 runs with the API's own role. Its authorizer takes any token of the pool that carries one of the
- *                 scopes: no allowed clients, because the systems' clients are made after the deploy and AgentCore
- *                 requires every check it is given to pass
+ *                 is internet-facing, so it runs with a role of its own, `<prefix>-agent-external-<region>`, made by
+ *                 the same function as the API's (src/infra/api-grants.ts) with only what the actions open to systems
+ *                 need: no Cognito at all, no central database, no prompts, chats, order watch, integrations or
+ *                 dictation. Its authorizer takes any token of the pool that carries one of the scopes: no allowed
+ *                 clients, because the systems' clients are made after the deploy and AgentCore requires every check
+ *                 it is given to pass
+ *   limits        a DynamoDB table `<prefix>-external-limits` (on demand, items expire by TTL): the shared request
+ *                 counters of every external container, per system per second and per minute (src/api/rate-limit.ts).
+ *                 Only the external role may update it
  *   mcp           the AgentCore runtime `<prefix>_mcp`: the same image in `mcp` mode, an MCP server that forwards each
  *                 tool call to the external runtime with the caller's own token. Same authorizer. Its own role, which
  *                 may pull the image and write its logs, metrics and spans, and nothing else
- *   API role      may create, change, describe and delete the pool's app clients and their secrets (the connected
- *                 systems' keys), and write the external runtime's logs (it runs that runtime too)
+ *   API role      the people's: may create, change, describe and delete the pool's app clients and their secrets
+ *                 (the connected systems' keys; services.*, admins only). The external role never may
  *
  * The addresses (externalUrl, mcpUrl) are AgentCore's data-plane invocation URLs, made in the template from each
  * runtime's ARN with ':' and '/' encoded, as encodeURIComponent encodes them (src/api/runtime-url.ts).
  */
-import { CfnOutput, Fn, Stack } from 'aws-cdk-lib'
+import { CfnOutput, Fn, RemovalPolicy, Stack } from 'aws-cdk-lib'
 import { CfnRuntime } from 'aws-cdk-lib/aws-bedrockagentcore'
 import * as cognito from 'aws-cdk-lib/aws-cognito'
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'
 import type * as ecr from 'aws-cdk-lib/aws-ecr'
 import * as iam from 'aws-cdk-lib/aws-iam'
 import { Construct } from 'constructs'
+import { type ApiGrantsProps, grantApiRuntime } from './api-grants.js'
 import { EXTERNAL_OUTPUTS, EXTERNAL_RESOURCE_SERVER, externalRuntimeName, mcpRuntimeName } from './props.js'
 
 /** The scopes a connected system's token must carry one of (`trace-external/read`, `trace-external/write`). */
@@ -58,8 +66,10 @@ export interface ExternalAccessProps {
   /** the agent image: its repository (the MCP role pulls from it) and its URI */
   images: ecr.IRepository
   imageUri: string
-  /** the API's role: the external runtime runs with it */
+  /** the people's API role: it manages the connected systems' app clients (services.*) */
   apiRole: iam.Role
+  /** what the API's code is granted (src/infra/api-grants.ts): the external role gets the systems' part of it */
+  grants: Omit<ApiGrantsProps, 'runtimeName'>
   /** the API runtime's environment: the external runtime's is the same, in `external` mode */
   apiEnvironment: Readonly<Record<string, string>>
   /** the API runtime's session limits and file system */
@@ -73,6 +83,10 @@ export class ExternalAccess extends Construct {
   readonly external: CfnRuntime
   readonly mcp: CfnRuntime
   readonly mcpRole: iam.Role
+  /** the external runtime's own role */
+  readonly externalRole: iam.Role
+  /** the shared request counters (src/api/rate-limit.ts) */
+  readonly limits: dynamodb.Table
   readonly externalName: string
   readonly mcpName: string
   /** the two runtimes' invocation URLs */
@@ -99,29 +113,50 @@ export class ExternalAccess extends Construct {
     // checks itself on every call. No allowedClients: the systems' clients are made at run time
     const authorizerConfiguration = { customJwtAuthorizer: { discoveryUrl: p.discoveryUrl, allowedScopes: [...EXTERNAL_ALLOWED_SCOPES] } }
 
-    // ------------------------------------------------------------------ the API role: the systems' keys, and the external runtime's logs
+    // ------------------------------------------------------------------ the people's API role: the systems' keys
     p.apiRole.addToPolicy(new iam.PolicyStatement({ sid: 'ManageConnectedSystemClients', actions: [...CONNECTED_SYSTEM_CLIENT_ACTIONS], resources: [p.pool.userPoolArn] }))
-    const externalLogs = `arn:${partition}:logs:${p.region}:${p.account}:log-group:/aws/bedrock-agentcore/runtimes/${this.externalName}-*`
-    p.apiRole.addToPolicy(new iam.PolicyStatement({
-      sid: 'ExternalRuntimeLogs', actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams'], resources: [externalLogs, `${externalLogs}:log-stream:*`],
-    }))
+
+    // ------------------------------------------------------------------ the external runtime's own role: the systems' part of the API's grants
+    this.externalRole = new iam.Role(this, 'ExternalRuntimeRole', {
+      roleName: `${p.prefix}-agent-external-${p.region}`,
+      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', {
+        conditions: {
+          StringEquals: { 'aws:SourceAccount': p.account },
+          ArnLike: { 'aws:SourceArn': `arn:${partition}:bedrock-agentcore:${p.region}:${p.account}:*` },
+        },
+      }),
+      description: 'Run by the trace external API on Bedrock AgentCore (connected systems, after their allow-list and project check): no Cognito',
+    })
+    grantApiRuntime(this.externalRole, { ...p.grants, runtimeName: this.externalName }, { people: false })
+
+    // ------------------------------------------------------------------ the shared request limit (src/api/rate-limit.ts)
+    // one item per system per window (`<client_id>#s#<second>`, `<client_id>#m#<minute>`), counted with a conditional
+    // ADD; each expires by TTL a few minutes after its window. Nothing else is kept in it, so it is never retained
+    this.limits = new dynamodb.Table(this, 'Limits', {
+      tableName: `${p.prefix}-external-limits`,
+      partitionKey: { name: 'k', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: 'ttl',
+      removalPolicy: RemovalPolicy.DESTROY,
+    })
+    this.externalRole.addToPolicy(new iam.PolicyStatement({ sid: 'ExternalRateLimit', actions: ['dynamodb:UpdateItem'], resources: [this.limits.tableArn] }))
 
     // ------------------------------------------------------------------ the external API: the people's API code, for systems
     this.external = new CfnRuntime(this, 'ExternalRuntime', {
       agentRuntimeName: this.externalName,
       description: 'trace: the API for connected systems, behind their scoped tokens and per-project grants',
       agentRuntimeArtifact: { containerConfiguration: { containerUri: p.imageUri } },
-      roleArn: p.apiRole.roleArn,
+      roleArn: this.externalRole.roleArn,
       networkConfiguration: { networkMode: 'PUBLIC' },
       protocolConfiguration: 'HTTP',
       authorizerConfiguration,
       requestHeaderConfiguration: { requestHeaderAllowlist: ['Authorization'] },
       lifecycleConfiguration: p.lifecycle,
       filesystemConfigurations: p.filesystems,
-      environmentVariables: { ...p.apiEnvironment, TRACE_AGENT_MODE: 'external' },
+      environmentVariables: { ...p.apiEnvironment, TRACE_AGENT_MODE: 'external', TRACE_RATE_TABLE: this.limits.tableName },
       tags: p.tags,
     })
-    this.external.node.addDependency(p.apiRole)
+    this.external.node.addDependency(this.externalRole)
     this.externalUrl = runtimeInvocationUrl(p.region, this.external.attrAgentRuntimeArn)
 
     // ------------------------------------------------------------------ the MCP endpoint: its own role, logs and spans only

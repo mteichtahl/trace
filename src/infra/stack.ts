@@ -73,6 +73,7 @@ import type { Construct, IConstruct } from 'constructs'
 import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
 import { integrationsPrefix } from '../core/integrations.js'
 import { JOBS_PREFIX, PROJECTS_PREFIX, memoryName, projectHash, projectSlug, runnerProjectName } from '../core/project.js'
+import { grantApiRuntime } from './api-grants.js'
 import { ExternalAccess } from './external.js'
 import { LibraryGateway } from './gateway.js'
 import { imageBuildEnv, imageBuildSpec, imageContentTag } from './images.js'
@@ -463,79 +464,14 @@ export class TraceStack extends Stack {
       description: 'Run by the trace API on Bedrock AgentCore (signed-in people, every project after the access check)',
     })
     const apiName = apiRuntimeName(cfg.prefix)
-    repo.grantPull(apiRole)
-    apiRole.addToPolicy(new iam.PolicyStatement({ actions: ['ecr:GetAuthorizationToken'], resources: ['*'] }))
-    const apiLogs = `arn:aws:logs:${cfg.region}:${cfg.account}:log-group:/aws/bedrock-agentcore/runtimes/${apiName}-*`
-    apiRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams'], resources: [apiLogs, `${apiLogs}:log-stream:*`],
-    }))
-    apiRole.addToPolicy(new iam.PolicyStatement({ actions: ['logs:DescribeLogGroups'], resources: [`arn:aws:logs:${cfg.region}:${cfg.account}:log-group:*`] }))
-    apiRole.addToPolicy(new iam.PolicyStatement({ actions: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets'], resources: ['*'] }))
-    apiRole.addToPolicy(new iam.PolicyStatement({ actions: ['cloudwatch:PutMetricData'], resources: ['*'], conditions: { StringEquals: { 'cloudwatch:namespace': 'bedrock-agentcore' } } }))
-    apiRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['bedrock-agentcore:GetWorkloadAccessToken', 'bedrock-agentcore:GetWorkloadAccessTokenForJWT', 'bedrock-agentcore:GetWorkloadAccessTokenForUserId'],
-      resources: [`arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:workload-identity-directory/default`, `arn:aws:bedrock-agentcore:${cfg.region}:${cfg.account}:workload-identity-directory/default/workload-identity/*`],
-    }))
-    githubToken.grantRead(apiRole)
-    grantPrefixes(apiRole, central, { conditional: [CENTRAL_PREFIX] })
-    central.grantReadWrite(apiRole, `${ACCESS_PREFIX}/*`)
-    // the installation's prompt overrides (prompts.set / reset / revert, admins only, src/prompts/store.ts): read, and
-    // write only with conditional puts (the central store's way); the workers and workflows only read them
-    grantPrefixes(apiRole, central, { conditional: [PROMPTS_PREFIX] })
-    // which memory records are inactive, per project (memory.deactivate / reactivate, src/agents/runtime/memory-state.ts):
-    // read and conditional writes under projects/<slug>/memory-state/ only, nothing else of projects/
-    grantPrefixes(apiRole, central, { conditional: [`${PROJECTS_PREFIX}/*/${MEMORY_STATE}`] })
-    // each project's chats (chats.*, docs/web-build.md: not in the repository) and the projects created from the app
-    // waiting for the next stack update (projects.create): read, and write only with conditional puts
-    // and each project's journey record (journey.*, docs/web-build.md), under projects/<slug>/journey/
-    grantPrefixes(apiRole, central, { conditional: [`${PROJECTS_PREFIX}/*/${CHATS_PREFIX}`, `${PROJECTS_PREFIX}/*/${JOURNEY_PREFIX}`, PENDING_PROJECTS] })
-    // what each project's agents contribute to its journey (projects/<slug>/journey-agent, src/core/agent-facts.ts),
-    // and its job index there (jobs.db, src/core/job-index.ts: jobs.list): read, never written by the API
-    // (and what the bench measured, live: projects/<slug>/journey-agent/bench.db, src/core/bench.ts)
-    grantPrefixes(apiRole, central, { read: [`${PROJECTS_PREFIX}/*/${AGENT_FACTS}`] })
-    // cost and the build's shipping, in a policy of their own (the role's inline policy has a size limit, which CDK
-    // would otherwise meet by moving statements into an overflow policy):
-    //   the cost ledger (cost.get, usage.month; src/core/cost.ts): the installation's actuals and the price table fetched
-    //   from the AWS price list (installation/cost/actuals.db, prices.json), which the cost read writes
-    //   (src/infra/cost.ts), read only (each project's estimates are beside its agents' facts, read above); money for
-    //   admins only
-    //   the shipped orders followed with their carrier (order.update starts a watch, src/core/shipping.ts): read and
-    //   conditional writes on installation/shipping/; order.check_now invokes the order watch, that function only
-    const costPolicy = new iam.Policy(this, 'ApiRuntimeRoleCostPolicy', { roles: [apiRole] })
-    const intoCost = { addToPrincipalPolicy: (st: iam.PolicyStatement) => costPolicy.addStatements(st) }
-    grantPrefixes(intoCost, central, { read: [ACTUALS_OBJECTS], conditional: [WATCH_OBJECTS] })
-    costPolicy.addStatements(new iam.PolicyStatement({ sid: 'OrderWatchCheckNow', actions: ['lambda:InvokeFunction'], resources: [orderWatch.function.functionArn] }))
-    // the order watch's carrier key (integrations.set for `dhl`, src/core/integrations-catalog.ts orderWatchSecretsPrefix):
-    // admins set it, the API never reads it back
-    costPolicy.addStatements(new iam.PolicyStatement({
-      sid: 'ManageOrderWatchKey', actions: ['secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue', 'secretsmanager:DescribeSecret', 'secretsmanager:DeleteSecret', 'secretsmanager:TagResource'],
-      resources: [`arn:${this.partition}:secretsmanager:${cfg.region}:${cfg.account}:secret:${orderWatchSecretsPrefix(cfg.prefix)}*`],
-    }))
-    // every project's worker runtime of this installation: by its exact ARN (from its nested stack's output, or the
-    // runtime itself when flat), and on the runtime also by this installation's tag. InvokeAgentRuntime authorizes the
-    // runtime and the runtime endpoint (Service Authorization Reference: both resource types take aws:ResourceTag);
-    // the endpoint (DEFAULT, made by AgentCore) is not tagged by this stack, so its statement has the ARNs only
-    if (projects.length) {
-      const arns = projects.map((p) => p.runtime.attrAgentRuntimeArn)
-      apiRole.addToPolicy(new iam.PolicyStatement({
-        sid: 'InvokeProjectWorkers', actions: ['bedrock-agentcore:InvokeAgentRuntime'], resources: arns,
-        conditions: { StringEquals: { [`aws:ResourceTag/${INSTALLATION_TAG}`]: cfg.prefix } },
-      }))
-      apiRole.addToPolicy(new iam.PolicyStatement({
-        sid: 'InvokeProjectWorkerEndpoints', actions: ['bedrock-agentcore:InvokeAgentRuntime'], resources: arns.map((a) => `${a}/runtime-endpoint/*`),
-      }))
+    // what the API's code may do (src/infra/api-grants.ts), made once for both roles that run it: this one, the
+    // people's, gets every statement; the external runtime's (external.enabled) only what connected systems' actions need
+    const apiGrants = {
+      scope: this, region: cfg.region, account: cfg.account, partition: this.partition, prefix: cfg.prefix, installationTag: INSTALLATION_TAG,
+      images: repo, central, githubToken, workers: projects.map((p) => p.runtime.attrAgentRuntimeArn), memories,
+      knowledgeBases: kbs.map((k) => k.kb.knowledgeBaseId), orderWatchArn: orderWatch.function.functionArn,
     }
-    grantReadRecords(apiRole, memories)
-    // dictation: the state of each project's vocabulary for voice.vocabulary (after its access check), nothing more
-    apiRole.addToPolicy(apiVocabularyStatement({ partition: this.partition, region: cfg.region, account: cfg.account, prefix: cfg.prefix }))
-    // kb.search on any project's knowledge base, after the access check (src/api/actions.ts); nothing else of them.
-    // The ARN is made from the id, so the parent takes one output per knowledge base from its nested stack, not two.
-    if (kbs.length) {
-      apiRole.addToPolicy(new iam.PolicyStatement({
-        sid: 'RetrieveProjectKnowledgeBases', actions: [...KB_RETRIEVE_ACTIONS],
-        resources: kbs.map((k) => knowledgeBaseArn(this.partition, cfg.region, cfg.account, k.kb.knowledgeBaseId)),
-      }))
-    }
+    grantApiRuntime(apiRole, { ...apiGrants, runtimeName: apiName }, { people: true })
 
     const discoveryUrl = `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}/.well-known/openid-configuration`
     // the API's environment, built once: the people's API runtime has it, and (external.enabled) the external runtime
@@ -572,7 +508,9 @@ export class TraceStack extends Stack {
     const filesystems = [{ sessionStorage: { mountPath: '/mnt/workspace' } }]
 
     // ------------------------------------------------------------------ external access (external.enabled, src/infra/external.ts)
-    // connected systems' scopes, the external API and MCP runtimes, and the API role's grant on the systems' app clients.
+    // connected systems' scopes, the external API and MCP runtimes (the external one with a role of its own, made from
+    // the same grants as the API's minus everything only people's actions need), and the API role's grant on the
+    // systems' app clients.
     // The external runtime gets the API's environment, plus the token address and the resource server; never its own
     // ARN or the MCP runtime's (the MCP runtime names it: that would be a cycle)
     const tokenUrl = `${domain.baseUrl()}/oauth2/token`
@@ -580,7 +518,7 @@ export class TraceStack extends Stack {
     const external = cfg.external.enabled
       ? new ExternalAccess(this, 'External', {
           prefix: cfg.prefix, region: cfg.region, account: cfg.account, pool: users, tokenUrl, discoveryUrl,
-          images: repo, imageUri: image.getAttString('ImageUri'), apiRole, apiEnvironment: { ...apiEnv, ...externalEnv },
+          images: repo, imageUri: image.getAttString('ImageUri'), apiRole, grants: apiGrants, apiEnvironment: { ...apiEnv, ...externalEnv },
           lifecycle, filesystems, tags: { [INSTALLATION_TAG]: cfg.prefix },
         })
       : null
@@ -639,7 +577,7 @@ export class TraceStack extends Stack {
         ...projects.map((p) => ({ id: p.node.id, runtime: p.runtime, name: p.runtimeName, role: p.role })),
         { id: 'Api', runtime: api, name: apiName, role: apiRole },
         ...(external
-          ? [{ id: 'External', runtime: external.external, name: external.externalName, role: apiRole }, { id: 'Mcp', runtime: external.mcp, name: external.mcpName, role: external.mcpRole }]
+          ? [{ id: 'External', runtime: external.external, name: external.externalName, role: external.externalRole }, { id: 'Mcp', runtime: external.mcp, name: external.mcpName, role: external.mcpRole }]
           : []),
       ],
     })

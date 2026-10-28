@@ -1,8 +1,9 @@
 /**
  * External access in the stack (external.enabled, src/infra/external.ts): the `trace-external` scopes on the pool,
- * the external API and MCP runtimes behind them, the MCP runtime's own role (logs and spans only), the API role's
- * grant on the connected systems' app clients, the environment each runtime is told, and the outputs. Off by default,
- * and then the template is what it was without the feature.
+ * the external API and MCP runtimes behind them, the external runtime's own role (the systems' part of the API's
+ * grants: no Cognito, no order watch), the MCP runtime's own role (logs and spans only), the shared rate-limit table,
+ * the API role's grant on the connected systems' app clients, the environment each runtime is told, and the outputs.
+ * Off by default, and then the template is what it was without the feature.
  */
 import { Match, type Template } from 'aws-cdk-lib/assertions'
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -80,7 +81,8 @@ describe('external access: off', () => {
     const added = Object.keys(after.Resources).filter((k) => !(k in before.Resources)).sort()
     expect(Object.keys(before.Resources).filter((k) => !(k in after.Resources))).toEqual([])
     expect(added.map((k) => after.Resources[k]?.Type).sort()).toEqual([
-      'AWS::BedrockAgentCore::Runtime', 'AWS::BedrockAgentCore::Runtime', 'AWS::Cognito::UserPoolResourceServer', 'AWS::IAM::Policy', 'AWS::IAM::Role',
+      'AWS::BedrockAgentCore::Runtime', 'AWS::BedrockAgentCore::Runtime', 'AWS::Cognito::UserPoolResourceServer', 'AWS::DynamoDB::Table',
+      'AWS::IAM::Policy', 'AWS::IAM::Policy', 'AWS::IAM::Role', 'AWS::IAM::Role',
     ])
     const changed = Object.keys(before.Resources).filter((k) => sameApartFromAssets(before.Resources[k]) !== sameApartFromAssets(after.Resources[k]))
     expect(changed.map((k) => k.replace(/[0-9A-F]{8}$/, '')).sort()).toEqual(['ApiRuntime', 'ApiRuntimeRoleOverflowPolicy1', 'ObservabilityDashboard'])
@@ -105,13 +107,15 @@ describe('external access: on', () => {
     expect(EXTERNAL_ALLOWED_SCOPES).toEqual(['trace-external/read', 'trace-external/write'])
   })
 
-  it('runs the external API with the API\'s image, role, session limits and file system, over HTTP, authorized by scope alone', () => {
+  it('runs the external API with the API\'s image, session limits and file system, its own role, over HTTP, authorized by scope alone', () => {
     const p = json(on.parent)
     const [, api] = runtimeNamed(p, apiRuntimeName('trace'))
     const [, ext] = runtimeNamed(p, externalRuntimeName('trace'))
-    for (const k of ['AgentRuntimeArtifact', 'RoleArn', 'NetworkConfiguration', 'LifecycleConfiguration', 'FilesystemConfigurations', 'RequestHeaderConfiguration', 'Tags']) {
+    for (const k of ['AgentRuntimeArtifact', 'NetworkConfiguration', 'LifecycleConfiguration', 'FilesystemConfigurations', 'RequestHeaderConfiguration', 'Tags']) {
       expect(ext.Properties[k], k).toEqual(api.Properties[k])
     }
+    expect(target(ext.Properties.RoleArn)).toMatch(/^ExternalExternalRuntimeRole/)
+    expect(ext.Properties.RoleArn).not.toEqual(api.Properties.RoleArn)
     expect(ext.Properties.ProtocolConfiguration).toBe('HTTP')
     const auth = (ext.Properties.AuthorizerConfiguration as { CustomJWTAuthorizer: Record<string, unknown> }).CustomJWTAuthorizer
     expect(auth.AllowedScopes).toEqual(['trace-external/read', 'trace-external/write'])
@@ -139,6 +143,9 @@ describe('external access: on', () => {
       if (k === 'TRACE_AGENT_MODE' || k === 'TRACE_EXTERNAL_RUNTIME_ARN' || k === 'TRACE_MCP_RUNTIME_ARN') continue
       expect(env[k], k).toEqual(v)
     }
+    // the shared rate limit's table, and only the external runtime is told it
+    expect(target(env.TRACE_RATE_TABLE)).toMatch(/^ExternalLimits/)
+    expect(apiEnv).not.toHaveProperty('TRACE_RATE_TABLE')
     expect(env).not.toHaveProperty('TRACE_EXTERNAL_RUNTIME_ARN')
     expect(env).not.toHaveProperty('TRACE_MCP_RUNTIME_ARN')
     expect(JSON.stringify(env)).not.toContain(extId)
@@ -205,11 +212,54 @@ describe('external access: on', () => {
     expect(grant[0]?.Resource).toEqual({ 'Fn::GetAtt': [expect.stringMatching(/^Users[0-9A-F]{8}$/), 'Arn'] })
     // no other statement of it names the client actions
     for (const s of sts.filter((x) => x.Sid !== 'ManageConnectedSystemClients')) for (const a of CONNECTED_SYSTEM_CLIENT_ACTIONS) expect(actions(s)).not.toContain(a)
-    // and it writes the external runtime's logs (it runs that runtime too)
-    expect(sts.some((s) => actions(s).includes('logs:PutLogEvents') && JSON.stringify(s.Resource).includes('runtimes/trace_external-*'))).toBe(true)
+    // and it does not run the external runtime: none of that runtime's logs
+    expect(JSON.stringify(sts)).not.toContain('runtimes/trace_external-*')
     // off: none of it
     const offRole = Object.keys(json(off.parent).Resources).find((k) => /^ApiRuntimeRole[0-9A-F]{8}$/.test(k)) ?? ''
     expect(roleStatements(json(off.parent), offRole).flatMap(actions)).not.toContain('cognito-idp:CreateUserPoolClient')
+  })
+
+  it('gives the external runtime its own role: what the systems\' actions need, no Cognito, no order watch, nothing only people use', () => {
+    const p = json(on.parent)
+    const role = Object.keys(p.Resources).find((k) => /^ExternalExternalRuntimeRole[0-9A-F]{8}$/.test(k) && p.Resources[k]?.Type === 'AWS::IAM::Role') ?? ''
+    expect(p.Resources[role]?.Properties.RoleName).toBe('trace-agent-external-us-east-1')
+    const sts = roleStatements(p, role)
+    const all = sts.flatMap(actions)
+    // no Cognito at all (not the admin actions, not the app clients), no order watch, integrations or dictation
+    expect(all.filter((a) => a.startsWith('cognito-idp:'))).toEqual([])
+    for (const a of ['lambda:InvokeFunction', 'secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue', 'secretsmanager:DeleteSecret', 'transcribe:GetVocabulary', 's3:DeleteObject']) expect(all, a).not.toContain(a)
+    const text = JSON.stringify(sts)
+    for (const x of ['order-watch', 'integrations', '/central/*', '/prompts/*', '/chats/*', 'pending-projects', 'actuals']) expect(text, x).not.toContain(x)
+    // what the systems' actions need: the GitHub token, invoking the workers, memory records, knowledge bases, the stores
+    expect(all).toEqual(expect.arrayContaining(['secretsmanager:GetSecretValue', 'bedrock-agentcore:InvokeAgentRuntime', 'bedrock-agentcore:RetrieveMemoryRecords', 's3:GetObject', 'dynamodb:UpdateItem']))
+    // writes: the journey record (conditional), when each system was last seen, and the rate-limit table; nothing else
+    const puts = sts.filter((s) => actions(s).includes('s3:PutObject')).map((s) => JSON.stringify(s.Resource))
+    expect(puts.every((r) => r.includes('/projects/*/journey/*') || r.includes('/access/services-seen/*'))).toBe(true)
+    expect(puts.some((r) => r.includes('/access/services-seen/*'))).toBe(true)
+    // the access store itself is read only
+    expect(sts.filter((s) => actions(s).includes('s3:PutObject')).map((s) => JSON.stringify(s.Resource)).join()).not.toMatch(/\/access\/\*/)
+    const ddb = sts.filter((s) => actions(s).some((a) => a.startsWith('dynamodb:')))
+    expect(ddb).toHaveLength(1)
+    expect(actions(ddb[0] as Statement)).toEqual(['dynamodb:UpdateItem'])
+    expect(target(ddb[0]?.Resource)).toMatch(/^ExternalLimits/)
+    // and the people's API role may not touch the table
+    const apiRole = Object.keys(p.Resources).find((k) => /^ApiRuntimeRole[0-9A-F]{8}$/.test(k)) ?? ''
+    expect(roleStatements(p, apiRole).flatMap(actions).filter((a) => a.startsWith('dynamodb:'))).toEqual([])
+  })
+
+  it('keeps the people\'s API role as it is without the feature, plus the app clients\' grant', () => {
+    const roleOf = (t: Tpl): string => Object.keys(t.Resources).find((k) => /^ApiRuntimeRole[0-9A-F]{8}$/.test(k)) ?? ''
+    const norm = (t: Tpl): string[] => roleStatements(t, roleOf(t)).map((s) => sameApartFromAssets(s)).sort()
+    const withIt = norm(json(on.parent)).filter((s) => !s.includes('ManageConnectedSystemClients'))
+    expect(withIt).toEqual(norm(json(off.parent)))
+  })
+
+  it('makes the rate-limit table on demand, with a TTL, and only with the setting', () => {
+    on.parent.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'trace-external-limits', BillingMode: 'PAY_PER_REQUEST', KeySchema: [{ AttributeName: 'k', KeyType: 'HASH' }],
+      TimeToLiveSpecification: { AttributeName: 'ttl', Enabled: true },
+    })
+    expect(Object.values(json(off.parent).Resources).filter((r) => r.Type === 'AWS::DynamoDB::Table')).toEqual([])
   })
 
   it('outputs the two addresses (encoded ARNs), the token address and the resource server', () => {
@@ -238,10 +288,13 @@ describe('external access: on', () => {
     expect(p.Outputs).toHaveProperty('McpLogGroup')
     const body = JSON.stringify(Object.values(p.Resources).find((r) => r.Type === 'AWS::CloudWatch::Dashboard')?.Properties.DashboardBody)
     for (const n of ['trace_api', 'trace_external', 'trace_mcp']) expect(body).toContain(n)
-    // each role that runs a runtime may let X-Ray deliver its spans to that runtime's log group (unique sids)
-    const apiRole = Object.keys(p.Resources).find((k) => /^ApiRuntimeRole[0-9A-F]{8}$/.test(k)) ?? ''
-    const spans = roleStatements(p, apiRole).filter((s) => actions(s).includes('logs:PutResourcePolicy'))
-    expect(spans.map((s) => s.Sid).sort()).toEqual(['AgentCoreSpanDestination', 'AgentCoreSpanDestinationExternal'])
+    // each role that runs a runtime may let X-Ray deliver its spans to that runtime's log group
+    for (const [role, name] of [[/^ApiRuntimeRole[0-9A-F]{8}$/, 'trace_api'], [/^ExternalExternalRuntimeRole[0-9A-F]{8}$/, 'trace_external']] as const) {
+      const id = Object.keys(p.Resources).find((k) => role.test(k)) ?? ''
+      const spans = roleStatements(p, id).filter((s) => actions(s).includes('logs:PutResourcePolicy'))
+      expect(spans.map((s) => s.Sid)).toEqual(['AgentCoreSpanDestination'])
+      expect(JSON.stringify(spans[0]?.Resource)).toContain(`runtimes/${name}-*`)
+    }
   })
 
   it('works in the flat layout too, within CloudFormation\'s quotas', () => {

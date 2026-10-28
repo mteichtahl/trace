@@ -6,7 +6,12 @@
  *                 with SigV4 here (the Cognito SDK client is not a dependency; credentials come from the runtime role
  *                 via the SDK chain); for connected systems (docs/external-access.md): CreateUserPoolClient,
  *                 UpdateUserPoolClient, DeleteUserPoolClient, AddUserPoolClientSecret, DeleteUserPoolClientSecret,
- *                 ListUserPoolClientSecrets. A client secret is returned to the caller and never logged here
+ *                 ListUserPoolClientSecrets. A client secret is returned to the caller and never logged here.
+ *                 Those six touch only a connected system's own client (a backstop under services.*'s admin check,
+ *                 so a bug there can never reach the people's CLI or web client): a new client must be named
+ *                 <prefix>-svc-<name>, and every other call must name a client that is a connected system in the
+ *                 access store (and an update must keep the name its record gives). The one exception: a client this
+ *                 process just made may be deleted again before its record exists (services.create undoing itself)
  *   Secrets       the GitHub token (TRACE_GITHUB_SECRET_ARN), cached for 10 minutes
  */
 import { createHash, createHmac } from 'node:crypto'
@@ -115,8 +120,50 @@ export class CognitoError extends Error {
   constructor(readonly type: string, message: string) { super(message) }
 }
 
+/** A connected system's app client name: <prefix>-svc-<name>, the name as access.ts ServiceName allows it. */
+export const serviceClientName = (prefix: string, name: string): string => `${prefix}-svc-${name}`
+const SERVICE_NAME = /^[a-z][a-z0-9-]{1,39}$/
+
+/** Refused by the backstop: not a connected system's client. Never sent to Cognito. */
+export class NotAServiceClient extends CognitoError {
+  constructor(message: string) { super('NotAServiceClient', message) }
+}
+
+export interface HttpCognitoOptions {
+  region: string
+  poolId: string
+  credentials?: () => Promise<Credentials>
+  fetch?: typeof fetch
+  /** the installation's prefix: connected systems' clients are <prefix>-svc-<name> (TRACE_PREFIX, default trace) */
+  prefix?: string
+  /** the connected system with this client id in the access store, or null (default: access.ts getService) */
+  service?: (clientId: string) => Promise<{ name: string } | null>
+}
+
 export class HttpCognito implements CognitoAdmin {
-  constructor(private readonly o: { region: string; poolId: string; credentials?: () => Promise<Credentials>; fetch?: typeof fetch }) {}
+  /** the clients this process made and has not deleted: services.create may undo one before its record exists */
+  private readonly made = new Set<string>()
+  constructor(private readonly o: HttpCognitoOptions) {}
+
+  private get prefix(): string { return this.o.prefix || 'trace' }
+
+  /** A new client's name must be <prefix>-svc-<name>. */
+  private checkNewName(clientName: string): void {
+    const pre = serviceClientName(this.prefix, '')
+    if (!clientName.startsWith(pre) || !SERVICE_NAME.test(clientName.slice(pre.length))) {
+      throw new NotAServiceClient(`refusing to make an app client named ${JSON.stringify(clientName)}: a connected system's is ${pre}<name>`)
+    }
+  }
+
+  /** The client must be a connected system's: in the access store, with a name that makes <prefix>-svc-<name>. */
+  private async checkService(clientId: string, clientName?: string): Promise<void> {
+    const lookup = this.o.service ?? (async (id: string) => (await import('../core/access.js')).getService(id))
+    const s = await lookup(clientId)
+    if (!s) throw new NotAServiceClient(`refusing: app client ${clientId} is not a connected system`)
+    if (!SERVICE_NAME.test(s.name)) throw new NotAServiceClient(`refusing: connected system ${JSON.stringify(s.name)} has a name trace would not give a system`)
+    const want = serviceClientName(this.prefix, s.name)
+    if (clientName !== undefined && clientName !== want) throw new NotAServiceClient(`refusing to rename app client ${clientId} to ${JSON.stringify(clientName)}: its record makes it ${want}`)
+  }
 
   private async call(op: string, body: Record<string, unknown>): Promise<unknown> {
     const host = `cognito-idp.${this.o.region}.amazonaws.com`
@@ -194,18 +241,24 @@ export class HttpCognito implements CognitoAdmin {
   async signOut(username: string): Promise<void> { await this.call('AdminUserGlobalSignOut', { Username: username }) }
 
   async createServiceClient(c: ServiceClientConfig): Promise<{ clientId: string; secret: string }> {
+    this.checkNewName(c.clientName)
     const r = z.object({ UserPoolClient: z.object({ ClientId: z.string(), ClientSecret: z.string() }).loose() }).loose()
       .parse(await this.call('CreateUserPoolClient', { ...serviceClientBody(c), GenerateSecret: true }))
+    this.made.add(r.UserPoolClient.ClientId)
     return { clientId: r.UserPoolClient.ClientId, secret: r.UserPoolClient.ClientSecret }
   }
 
   async updateServiceClient(clientId: string, c: ServiceClientConfig): Promise<void> {
+    this.checkNewName(c.clientName)
+    await this.checkService(clientId, c.clientName)
     await this.call('UpdateUserPoolClient', { ClientId: clientId, ...serviceClientBody(c) })
   }
 
   async deleteServiceClient(clientId: string): Promise<boolean> {
+    if (!this.made.has(clientId)) await this.checkService(clientId)
     try {
       await this.call('DeleteUserPoolClient', { ClientId: clientId })
+      this.made.delete(clientId)
       return true
     } catch (e) {
       if (e instanceof CognitoError && e.type === 'ResourceNotFoundException') return false
@@ -214,16 +267,19 @@ export class HttpCognito implements CognitoAdmin {
   }
 
   async addClientSecret(clientId: string): Promise<ClientSecret & { secret: string }> {
+    await this.checkService(clientId)
     const r = z.object({ ClientSecretDescriptor: SecretShape.extend({ ClientSecretValue: z.string() }) }).loose()
       .parse(await this.call('AddUserPoolClientSecret', { ClientId: clientId }))
     return { ...toSecret(r.ClientSecretDescriptor), secret: r.ClientSecretDescriptor.ClientSecretValue }
   }
 
   async deleteClientSecret(clientId: string, secretId: string): Promise<void> {
+    await this.checkService(clientId)
     await this.call('DeleteUserPoolClientSecret', { ClientId: clientId, ClientSecretId: secretId })
   }
 
   async listClientSecrets(clientId: string): Promise<ClientSecret[]> {
+    await this.checkService(clientId)
     const Page = z.object({ ClientSecrets: z.array(SecretShape).optional(), NextToken: z.string().optional() }).loose()
     const out: ClientSecret[] = []
     let token: string | undefined

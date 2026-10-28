@@ -29,7 +29,8 @@ People keep using the existing API runtime and web app. Nothing about how a pers
     authorizer: scope trace-external/read|write                        authorizer: same scopes
     verifies again; looks up the connected system                      no AWS permissions of its own
     perform(action) with the system's principal  ◀──── forwards each tool call with the caller's token
-    (the API role: same code, same checks)
+    (the API's code and checks, its own role:
+     no Cognito, only what systems' actions need)
 ```
 
 ## Decisions
@@ -41,6 +42,7 @@ Each has the recommendation that was taken, and the alternative not taken.
 | How a system proves who it is | OAuth client credentials: one Cognito app client per connected system, with a secret | The standard for machine-to-machine; every MCP client and HTTP library supports it; Cognito rotates secrets (two at a time) and revokes by deleting the client | API keys stored by trace: a second credential system to build and secure; signing in as a "robot person": passwords and refresh tokens, and no scopes |
 | Where systems come in | Two new AgentCore runtimes, `external` and `mcp`, beside the people's API runtime | The people's runtime keeps its exact authorizer (its two app clients). A mistake in the new door can't lock people out | Widening the people's runtime's authorizer to scopes: one door for both, but a fault there stops every person |
 | How the MCP endpoint enforces access | It forwards every tool call to the `external` runtime with the caller's own token | One place decides access (the `external` runtime, running the API's `perform`); the MCP runtime holds no AWS permissions | Running `perform` in the MCP runtime too: one hop less, but a second copy of the API role to keep tight |
+| What the `external` runtime may do in AWS | A role of its own, made by the same function as the API's (`src/infra/api-grants.ts`) with only what the actions open to systems touch, and no Cognito at all | It faces the internet: a bug in the allow-list must not hand an outside system the people's admin powers (creating people, changing groups, signing people out, managing app clients) | Running it with the API's role: one role less, but every Cognito admin action one bug away from the internet |
 | Library gateway | Unchanged | It runs with its own role and can't tell callers apart, so it stays internal (README "Library gateway") | Opening it to systems: it would reach the shared library for anyone with a token |
 | What a system can be on | Projects, with a part, exactly like a person; never an admin | The existing access model applies unchanged: a reviewer reads, a contributor writes; a project it's not on does not exist for it | A per-system policy language: more to learn, and a second model to audit |
 | What a system can do at all | A fixed list of actions (below), further limited by its scopes | Some actions are a person's by nature: signing gates, answering questions asked of a person, waivers, decisions, orders, chats, preferences. An allow-list fails closed when new actions are added | A deny-list: every new action would be open to systems by default |
@@ -125,9 +127,10 @@ must be one it started (the job index's `requestedBySub` is its client id).
 isn't accepted, 403 `no access`. `GET /ping` for health.
 
 Same code: `TRACE_AGENT_MODE=external` starts the API server (`startExternal` in `src/api/server.ts`, the same handler
-with the principal resolution injected) with the service verifier in place of the people's. It runs with the API's role
-and reads the API runtime's environment plus `TRACE_EXTERNAL_RESOURCE_SERVER` (default `trace-external`); services.*
-answer "External access is off" there (a system is never an admin anyway).
+with the principal resolution injected) with the service verifier in place of the people's. It runs with its own role
+(below, "Infrastructure") and reads the API runtime's environment plus `TRACE_EXTERNAL_RESOURCE_SERVER` (default
+`trace-external`) and `TRACE_RATE_TABLE`; services.* answer "External access is off" there (a system is never an admin
+anyway, and the role could not do them).
 
 Per-system soft limit: 10 requests per second, bursting to 20, per container; over it answers 429 with
 `Retry-After`. Every request is logged as the API logs (who is `service:<name>`), and `last_used` is updated at most
@@ -201,8 +204,8 @@ access** switch). With it off the template is the same as without the feature (`
 
 - A Cognito resource server on the people's pool, identifier `trace-external`, scopes `read` ("read the projects the
   system is on") and `write` ("start work and change settings on the projects the system contributes to").
-- `CfnRuntime` `<prefix>_external` (dashes become underscores, as for `<prefix>_api`): the agent image, the API's role,
-  HTTP protocol, the API's network, session limits and file system, `Authorization` passed through. Authorizer
+- `CfnRuntime` `<prefix>_external` (dashes become underscores, as for `<prefix>_api`): the agent image, its own role
+  `<prefix>-agent-external-<region>` (below), HTTP protocol, the API's network, session limits and file system, `Authorization` passed through. Authorizer
   `{ discoveryUrl (the API's), allowedScopes: ['trace-external/read', 'trace-external/write'] }`, with no
   `allowedClients`: connected systems' clients are made at run time, and AgentCore requires every configured check to
   pass. Its environment is the API's (built once in `stack.ts`) with `TRACE_AGENT_MODE=external`, plus
@@ -214,10 +217,24 @@ access** switch). With it off the template is the same as without the feature (`
   makes its address with `src/api/runtime-url.ts`), `TRACE_EXTERNAL_RESOURCE_SERVER`, `TRACE_COGNITO_ISSUER`,
   `TRACE_TOKEN_URL`, and the observability settings every runtime gets. It listens on port 8000; `TRACE_EXTERNAL_URL`
   overrides the address when set.
-- The API role gains one statement, `ManageConnectedSystemClients`: `cognito-idp:CreateUserPoolClient`,
+- The external runtime's role, `<prefix>-agent-external-<region>`: `grantApiRuntime` in `src/infra/api-grants.ts`, the
+  function that also makes the people's API role, without what only people's actions need. Traced from each allowed
+  action: pull the image, its own runtime's logs and spans, the GitHub token, the access store read only (the
+  verifier's lookup, `projects`), `PutObject` on `access/services-seen/*` only (last used, below), each project's
+  journey record (read, conditional writes: its first import, `job.control`'s holds), the agents' facts, job index
+  and bench (read), the shipped orders' watches (read: `build.get`'s wait lines), the memory records and their inactive
+  marks (read: `graph.neighbourhood` with `memory`), Retrieve on the knowledge bases, `InvokeAgentRuntime` on the
+  workers, and `dynamodb:UpdateItem` on the rate-limit table. **No `cognito-idp:*` at all**, nothing of the central
+  database, prompts, chats, pending projects, cost actuals, the order watch or its key, integrations or dictation.
+- A DynamoDB table `<prefix>-external-limits` (on demand, TTL attribute `ttl`): the shared rate limit's counters
+  (below). Only the external role may update it; it holds nothing worth keeping and is deleted with the stack.
+- The people's API role gains one statement, `ManageConnectedSystemClients`: `cognito-idp:CreateUserPoolClient`,
   `UpdateUserPoolClient`, `DeleteUserPoolClient`, `AddUserPoolClientSecret`,
-  `DeleteUserPoolClientSecret`, `ListUserPoolClientSecrets` on the pool's ARN; and the external runtime's log group
-  (it runs that runtime too).
+  `DeleteUserPoolClientSecret`, `ListUserPoolClientSecrets` on the pool's ARN. Nothing else of it changes. Under that
+  grant the code holds a backstop (`HttpCognito` in `src/api/aws.ts`): a new client must be named
+  `<prefix>-svc-<name>`, and every other of those calls must name a client that is a connected system in the access
+  store, with the name its record gives (one exception: `services.create` may delete a client it has just made, before
+  its record exists). So a bug in `services.*` can never change or delete the people's CLI or web client.
 - The people's API runtime gets `TRACE_EXTERNAL_RUNTIME_ARN`, `TRACE_MCP_RUNTIME_ARN`, `TRACE_TOKEN_URL`
   (`<the pool's domain>/oauth2/token`) and `TRACE_EXTERNAL_RESOURCE_SERVER` (it has `TRACE_PREFIX` already), so
   `services.create` can give the addresses.

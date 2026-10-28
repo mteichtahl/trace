@@ -30,7 +30,7 @@ import {
   assignService, assignmentLog, assignments, createService, deleteService, listServices, logServiceSecret, serviceByName, serviceLog, unassign, updateService,
 } from '../core/access.js'
 import { ActionError, type Context, type ExternalAccess, def } from './action-kit.js'
-import { CognitoError } from './aws.js'
+import { CognitoError, serviceClientName } from './aws.js'
 import { invocationUrl } from './runtime-url.js'
 
 export const EXTERNAL_OFF = 'External access is off for this installation. Turn it on in the installer (External access).'
@@ -67,7 +67,7 @@ const Named = z.object({ name: ServiceName })
 
 /** The app client's configuration for a system: its name, and its scopes on the resource server. */
 const clientConfig = (x: ExternalAccess, name: string, scopes: readonly ServiceScope[]) =>
-  ({ clientName: `${x.prefix}-svc-${name}`, scopes: scopes.map((s) => `${x.resourceServer}/${s}`) })
+  ({ clientName: serviceClientName(x.prefix, name), scopes: scopes.map((s) => `${x.resourceServer}/${s}`) })
 
 async function system(ctx: Context, name: string): Promise<Service> {
   const s = await serviceByName(ctx.principal, name)

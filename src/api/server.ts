@@ -216,7 +216,7 @@ const Env = z.object({
 async function depsFromEnv(env: z.output<typeof Env>): Promise<{ deps: ActionDeps; cog: () => CognitoAdmin }> {
   const { allTools } = await import('../tools/index.js')
   let cognito: CognitoAdmin | null = null
-  const cog = (): CognitoAdmin => (cognito ??= new HttpCognito({ region: env.AWS_REGION, poolId: env.TRACE_COGNITO_POOL_ID }))
+  const cog = (): CognitoAdmin => (cognito ??= new HttpCognito({ region: env.AWS_REGION, poolId: env.TRACE_COGNITO_POOL_ID, prefix: process.env.TRACE_PREFIX?.trim() || 'trace' }))
   const scratch = defaultScratch()
   const token = (): Promise<string> => githubToken(env.TRACE_GITHUB_SECRET_ARN)
   const jobs = remoteJobs({ runtimes: parseWorkerRuntimes(env.TRACE_WORKER_RUNTIMES), region: env.AWS_REGION, account: env.TRACE_AWS_ACCOUNT })
