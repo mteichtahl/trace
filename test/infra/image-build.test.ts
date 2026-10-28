@@ -6,7 +6,7 @@ import { GetLogEventsCommand } from '@aws-sdk/client-cloudwatch-logs'
 import { describe, expect, it } from 'vitest'
 import { BatchGetBuildsCommand } from '@aws-sdk/client-codebuild'
 import type { CloudFormationCustomResourceEvent } from 'aws-lambda'
-import { type BuildsClient, LOG_TAIL_CHARS, type LogsClient, buildLogTail, checkBuild, isComplete } from '../../src/infra/lambda/image-build.js'
+import { type BuildsClient, CONTEXT_MAX, LOG_TAIL_CHARS, type LogsClient, buildFailure, buildLogTail, checkBuild, isComplete } from '../../src/infra/lambda/image-build.js'
 import { onEvent as runnerWebhook } from '../../src/infra/lambda/runner-webhook.js'
 import { onEvent as transactionSearch } from '../../src/infra/lambda/transaction-search.js'
 import { InfraPropsSchema } from '../../src/infra/props.js'
@@ -104,4 +104,52 @@ describe("a failed image build's log tail", () => {
     const handler = isComplete as unknown as (e: unknown, ctx: unknown, cb: unknown) => ReturnType<typeof isComplete>
     expect(await handler(pollEvent(false), {}, callback)).toEqual({ IsComplete: true, Data: { ImageUri: 'uri', BuildId: 'trace-agent-image:42' } })
   })
+
+  /** What CloudFormation receives for a failed resource, as the Provider framework builds it (aws-cdk-lib
+   * custom-resources provider-framework runtime): the handler's message, a blank line, its Logs line and a blank
+   * line, then the error's stack after its first line (Lambda's trace), in a response with the stack, request and
+   * physical ids. CloudFormation refuses one over 4096 bytes ("Response object is too long"). */
+  const responseBytes = (e: Error): number => {
+    const message = [e.message, '', `Logs: /aws/lambda/TraceStack-ImageBuildPollAF9FCDC2-${'M'.repeat(12)}`, ''].join('\n')
+    const trace = (e.stack ?? '').split('\n')
+    const reason = [message, ...trace.slice(1)].join('\n')
+    return Buffer.byteLength(JSON.stringify({
+      Status: 'FAILED', Reason: reason,
+      StackId: `arn:aws:cloudformation:ap-southeast-2:346073464284:stack/TraceStack/${'0'.repeat(8)}-${'0'.repeat(4)}-${'0'.repeat(4)}-${'0'.repeat(4)}-${'0'.repeat(12)}`,
+      RequestId: '8ff0f4f7-27ea-4cd6-a232-d197a6118285',
+      PhysicalResourceId: `346073464284.dkr.ecr.ap-southeast-2.amazonaws.com/trace-agent:${'a'.repeat(64)}#trace-agent-image:${'b'.repeat(36)}`,
+      LogicalResourceId: 'AgentImage', NoEcho: false,
+    }), 'utf8')
+  }
+  const link = `https://console.aws.amazon.com/cloudwatch/home?region=ap-southeast-2#logsV2:log-groups/log-group/TraceStack-AgentImageBuildLogsFB8FD3E5-${'x'.repeat(12)}/log-events/${'8'.repeat(36)}`
+
+  it('fits what CloudFormation accepts, however long the command and the log', async () => {
+    // the buildspec command (about 700 characters), clipped as checkBuild clips it
+    const command = `Error while executing command: export DOCKER_BUILDKIT=1 PINNED="" ${'x'.repeat(700)}. Reason: exit status 1`
+    const head = `the image build failed in BUILD: ${command.slice(0, CONTEXT_MAX - 1)}… (logs: ${link})`
+    const cases = {
+      // a long log, every line telling, with quotes, backslashes and multi-byte characters JSON and UTF-8 make longer
+      quoted: Array.from({ length: 200 }, (_, i) => `npm ERR! "step ${i}" failed \\ ✗ ${'é'.repeat(30)}`).join('\n'),
+      // one line longer than the whole budget
+      oneLine: `#9 ERROR: ${'ü'.repeat(5000)} the end`,
+      empty: '',
+    }
+    for (const [name, tail] of Object.entries(cases)) {
+      const e = buildFailure(head, tail)
+      expect(responseBytes(e), name).toBeLessThanOrEqual(4096)
+      // the cause is still there: the head whole, and the end of the log
+      expect(e.message.startsWith(head), name).toBe(true)
+      if (name === 'quoted') expect(e.message).toMatch(/"step 199" failed/)
+      if (name === 'oneLine') expect(e.message).toMatch(/the end$/)
+      // a one-line stack: the framework would send a multi-line message's later lines twice
+      expect(e.stack?.split('\n'), name).toHaveLength(1)
+    }
+  })
+
+  it('keeps the build log group when the stack rolls back, so the whole log can be read', () => {
+    const s = synth(InfraPropsSchema.parse({ account: '123456789012', region: 'us-east-1', repositories: ['a/b'], model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'm@example.com', runners: RUNNERS }), 'ImageLogsKept')
+    const groups = Object.entries(s.parent.findResources('AWS::Logs::LogGroup') as Record<string, { DeletionPolicy?: string; UpdateReplacePolicy?: string }>).filter(([id]) => id.startsWith('AgentImageBuildLogs'))
+    expect(groups).toHaveLength(1)
+    expect(groups[0]?.[1]).toMatchObject({ DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' })
+  }, 300_000)
 })

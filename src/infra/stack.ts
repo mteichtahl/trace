@@ -211,7 +211,9 @@ export class TraceStack extends Stack {
     const source = new Asset(this, 'AgentSource', { path: REPO_ROOT, exclude: SOURCE_EXCLUDE })
     // what the published images for this source are tagged (src/infra/images.ts; the release workflow tags them so)
     const contentTag = imageContentTag(REPO_ROOT)
-    const buildLogs = new logs.LogGroup(this, 'AgentImageBuildLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY })
+    // Kept when the stack goes or rolls back (RETAIN): a failed image build fails the deploy, and the rollback would
+    // otherwise delete the one log that says why. Its events expire after a month; the empty group stays until removed
+    const buildLogs = new logs.LogGroup(this, 'AgentImageBuildLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.RETAIN })
     const build = new codebuild.Project(this, 'AgentImageBuild', {
       projectName: `${cfg.prefix}-agent-image`,
       description: 'Builds the trace agent image (agent/Dockerfile) for AgentCore, on arm64',

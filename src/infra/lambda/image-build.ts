@@ -7,8 +7,13 @@
  * build then cannot fail the deploy and roll back the core with it. The installer waits for that build afterwards
  * (its id is the resource's BuildId) and starts it again if it failed (src/installer/aws.ts ensureGpuImage).
  *
- * A failed build's message carries the end of its log (buildLogTail): CloudFormation rolls the stack back, which
- * deletes the build project and its log group, so the reason must reach the deploy's own output before it goes.
+ * A failed build's message carries the end of its log (buildLogTail), so the reason is in the deploy's own output;
+ * the log group is kept when the stack rolls back (src/infra/stack.ts), so the whole log can be read too.
+ *
+ * The message must fit CloudFormation's custom resource response, 4096 bytes in all with the stack and request ids:
+ * too long, and CloudFormation shows only "Response object is too long" and the reason is lost. The Provider framework
+ * sends the message, a Logs line, and the error's stack after its first line (so a multi-line message's later lines
+ * would go twice). buildFailure keeps the message to MESSAGE_MAX as JSON, and gives the error a one-line stack.
  */
 import { CloudWatchLogsClient, GetLogEventsCommand } from '@aws-sdk/client-cloudwatch-logs'
 import { BatchGetBuildsCommand, CodeBuildClient, StartBuildCommand } from '@aws-sdk/client-codebuild'
@@ -20,8 +25,12 @@ export type LogsClient = Pick<CloudWatchLogsClient, 'send'>
 let logsClient: LogsClient | null = null
 const realLogs = (): LogsClient => (logsClient ??= new CloudWatchLogsClient({}))
 
-/** How much of a failed build's log goes in its message: CloudFormation shows a resource's reason up to about 4 KB,
- * and the command and the log link take some of that. */
+/** The most a failed build's message may be, in UTF-8 bytes as JSON (escaped newlines and quotes counted): what is left of
+ * CloudFormation's 4096 bytes after the stack, request and physical ids, the Logs line and the JSON around them. */
+export const MESSAGE_MAX = 2400
+/** The most of a failed phase's context (the buildspec command, which runs to 700 characters) the message keeps. */
+export const CONTEXT_MAX = 200
+/** The most log a tail is read to, before buildFailure trims it to what fits. */
 export const LOG_TAIL_CHARS = 2400
 /** A log line that says what went wrong (Docker, apt, npm, pip, a shell `set -e` exit). */
 const TELLING = /error|fail|denied|not found|no such|unauthori[sz]ed|forbidden|toomanyrequests|rate limit|timed? ?out|cannot|could not|unable|ERR!|exit code|returned a non-zero/i
@@ -88,7 +97,39 @@ export async function checkBuild(event: CloudFormationCustomResourceEvent & { Ph
   if (status !== 'SUCCEEDED') {
     const phase = b?.phases?.find((ph) => ph.phaseStatus && ph.phaseStatus !== 'SUCCEEDED')
     const tail = await buildLogTail(c.logs, b?.logs?.groupName, b?.logs?.streamName)
-    throw new Error(`the image build ${status.toLowerCase()} in ${phase?.phaseType ?? 'an unknown phase'}: ${phase?.contexts?.map((c) => c.message).join('; ') ?? ''} (logs: ${b?.logs?.deepLink ?? 'CodeBuild console'})${tail ? `\nThe end of its log:\n${tail}` : ''}`)
+    const context = phase?.contexts?.map((x) => x.message).join('; ') ?? ''
+    throw buildFailure(`the image build ${status.toLowerCase()} in ${phase?.phaseType ?? 'an unknown phase'}: ${clip(context, CONTEXT_MAX)} (logs: ${b?.logs?.deepLink ?? 'CodeBuild console'})`, tail)
   }
   return { IsComplete: true, Data: { ImageUri: props(event).ImageUri, BuildId: buildId } }
+}
+
+const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
+
+/**
+ * The error a failed build ends in: `head` (the phase, the clipped command and the log link), then as much of the
+ * log's tail as keeps the message within MESSAGE_MAX as JSON, trimmed from the front. Its stack is one line, so the
+ * Provider framework does not send the message's later lines a second time.
+ */
+export function buildFailure(head: string, tail: string): Error {
+  // CloudFormation counts bytes: as JSON (escapes) in UTF-8 (… and a log's own characters are more than one)
+  const size = (m: string): number => Buffer.byteLength(JSON.stringify(m), 'utf8')
+  let message = head
+  while (size(message) > MESSAGE_MAX) message = clip(message, message.length - 50)
+  if (tail) {
+    const lines = tail.split('\n')
+    const withTail = (from: number): string => `${message}\nThe end of its log:\n${from > 0 ? '…\n' : ''}${lines.slice(from).join('\n')}`
+    // drop whole lines from the front until it fits; when not even the last line fits whole, the end of it
+    let from = 0
+    while (from < lines.length && size(withTail(from)) > MESSAGE_MAX) from++
+    if (from < lines.length) message = withTail(from)
+    else {
+      let last = lines.at(-1) ?? ''
+      const end = (l: string): string => `${message}\nThe end of its log:\n…${l}`
+      while (last && size(end(last)) > MESSAGE_MAX) last = last.slice(Math.min(last.length, 50))
+      if (last) message = end(last)
+    }
+  }
+  const e = new Error(message)
+  e.stack = `Error: ${message.split('\n')[0]}`
+  return e
 }
