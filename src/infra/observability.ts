@@ -164,6 +164,30 @@ export class Observability extends Construct {
         resources: ['*'],
       }))
       fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['logs:DescribeResourcePolicies', 'logs:PutResourcePolicy'], resources: ['*'] }))
+      // The rest of the role AWS documents for turning Transaction Search on
+      // (https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Enable-TransactionSearch.html): X-Ray's
+      // UpdateTraceSegmentDestination makes the span log groups and sets their retention with the caller's own
+      // credentials (without these it fails "not authorized to perform: logs:PutRetentionPolicy on … aws/spans"), and
+      // starts Application Signals discovery, whose service-linked role and CloudTrail channel it may need to create.
+      // Each is scoped to what it names, in this account and region.
+      const spanGroups = ['aws/spans', '/aws/application-signals/data'].flatMap((g) => [
+        `arn:${partition}:logs:${region}:${account}:log-group:${g}`, `arn:${partition}:logs:${region}:${account}:log-group:${g}:*`,
+      ])
+      fn.addToRolePolicy(new iam.PolicyStatement({
+        sid: 'TransactionSearchLogGroups', actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutRetentionPolicy'], resources: spanGroups,
+      }))
+      // StartDiscovery has no resource-level permission
+      fn.addToRolePolicy(new iam.PolicyStatement({ sid: 'TransactionSearchDiscovery', actions: ['application-signals:StartDiscovery'], resources: ['*'] }))
+      const signalsRole = `arn:${partition}:iam::${account}:role/aws-service-role/application-signals.cloudwatch.amazonaws.com/AWSServiceRoleForCloudWatchApplicationSignals`
+      fn.addToRolePolicy(new iam.PolicyStatement({
+        sid: 'TransactionSearchSignalsRole', actions: ['iam:CreateServiceLinkedRole'], resources: [signalsRole],
+        conditions: { StringLike: { 'iam:AWSServiceName': 'application-signals.cloudwatch.amazonaws.com' } },
+      }))
+      fn.addToRolePolicy(new iam.PolicyStatement({ sid: 'TransactionSearchSignalsRoleRead', actions: ['iam:GetRole'], resources: [signalsRole] }))
+      fn.addToRolePolicy(new iam.PolicyStatement({
+        sid: 'TransactionSearchSignalsChannel', actions: ['cloudtrail:CreateServiceLinkedChannel'],
+        resources: [`arn:${partition}:cloudtrail:${region}:${account}:channel/aws-service-channel/application-signals/*`],
+      }))
       const provider = new Provider(this, 'TransactionSearchProvider', { onEventHandler: fn })
       this.transactionSearch = new CustomResource(this, 'TransactionSearch', {
         serviceToken: provider.serviceToken,
