@@ -129,8 +129,8 @@ once a minute.
 - **Calls**: forwarded to the `external` runtime with the caller's own bearer token
   (`src/api/runtime-url.ts`), and the answer returned as text JSON. An `ok: false` answer is a tool result with
   `isError` set, so the model reads it and adjusts. A 401 or 403 becomes an MCP error.
-- The runtime's role can write its own logs and nothing else. It has the `external` runtime's URL in its
-  environment.
+- The runtime's role can write its own logs and traces and nothing else. It has the `external` runtime's ARN in its
+  environment (`TRACE_EXTERNAL_RUNTIME_ARN`), and makes the address from it.
 
 Connecting an MCP client (Claude Code, for example):
 
@@ -167,19 +167,38 @@ the value), its history, and Disable, Rotate secret and Delete (with a typed con
 
 ## Infrastructure
 
-Only with `external.enabled`:
+Only with `external.enabled` (`src/infra/external.ts`, the `ExternalAccess` construct; the installer's **External
+access** switch). With it off the template is the same as without the feature (`test/infra/external.test.ts`).
 
-- `users.addResourceServer('ExternalScopes', { identifier: 'trace-external', scopes: read, write })`.
-- `CfnRuntime` `<prefix>_external`: the agent image, `TRACE_AGENT_MODE=external`, the API's role, HTTP protocol,
-  authorizer `{ discoveryUrl, allowedScopes: ['trace-external/read', 'trace-external/write'] }`, the API's environment
-  plus `TRACE_EXTERNAL_RESOURCE_SERVER`.
-- `CfnRuntime` `<prefix>_mcp`: same image, `TRACE_AGENT_MODE=mcp`, MCP protocol, the same authorizer, its own role
-  (logs and traces only), `TRACE_EXTERNAL_URL` set to the external runtime's invocation URL.
-- The API role gains `cognito-idp:CreateUserPoolClient`, `UpdateUserPoolClient`, `DeleteUserPoolClient`,
-  `DescribeUserPoolClient`, `AddUserPoolClientSecret`, `DeleteUserPoolClientSecret`, `ListUserPoolClientSecrets` on
-  the pool, and the people's API runtime gets `TRACE_EXTERNAL_*` so `services.create` can give the addresses.
-- Outputs: `ExternalApiUrl`, `McpUrl`, `TokenUrl`.
-- Observability: both runtimes join the dashboard and log groups as the API does.
+- A Cognito resource server on the people's pool, identifier `trace-external`, scopes `read` ("read the projects the
+  system is on") and `write` ("start work and change settings on the projects the system contributes to").
+- `CfnRuntime` `<prefix>_external` (dashes become underscores, as for `<prefix>_api`): the agent image, the API's role,
+  HTTP protocol, the API's network, session limits and file system, `Authorization` passed through. Authorizer
+  `{ discoveryUrl (the API's), allowedScopes: ['trace-external/read', 'trace-external/write'] }`, with no
+  `allowedClients`: connected systems' clients are made at run time, and AgentCore requires every configured check to
+  pass. Its environment is the API's (built once in `stack.ts`) with `TRACE_AGENT_MODE=external`, plus
+  `TRACE_TOKEN_URL` and `TRACE_EXTERNAL_RESOURCE_SERVER`. It is never told its own ARN or the MCP runtime's.
+- `CfnRuntime` `<prefix>_mcp`: same image, MCP protocol, the same authorizer, its own role `<prefix>-agent-mcp-<region>`
+  (pull the agent image, write its own runtime's logs, X-Ray spans, `cloudwatch:PutMetricData` in the
+  `bedrock-agentcore` namespace, and the span destination's `logs:PutResourcePolicy`; nothing else). Environment:
+  `AWS_REGION`, `TRACE_AGENT_MODE=mcp`, `TRACE_PREFIX`, `TRACE_EXTERNAL_RUNTIME_ARN` (the external runtime: the code
+  makes its address with `src/api/runtime-url.ts`), `TRACE_EXTERNAL_RESOURCE_SERVER`, `TRACE_COGNITO_ISSUER`,
+  `TRACE_TOKEN_URL`, and the observability settings every runtime gets.
+- The API role gains one statement, `ManageConnectedSystemClients`: `cognito-idp:CreateUserPoolClient`,
+  `UpdateUserPoolClient`, `DeleteUserPoolClient`, `DescribeUserPoolClient`, `AddUserPoolClientSecret`,
+  `DeleteUserPoolClientSecret`, `ListUserPoolClientSecrets` on the pool's ARN; and the external runtime's log group
+  (it runs that runtime too).
+- The people's API runtime gets `TRACE_EXTERNAL_RUNTIME_ARN`, `TRACE_MCP_RUNTIME_ARN`, `TRACE_TOKEN_URL`
+  (`<the pool's domain>/oauth2/token`) and `TRACE_EXTERNAL_RESOURCE_SERVER` (it has `TRACE_PREFIX` already), so
+  `services.create` can give the addresses.
+- Outputs: `ExternalApiUrl` and `McpUrl` (the full invocation URLs,
+  `https://bedrock-agentcore.<region>.amazonaws.com/runtimes/<ARN, ':' and '/' encoded>/invocations?qualifier=DEFAULT`,
+  made in the template with `Fn::Split`/`Fn::Join`: what `encodeURIComponent` makes of a runtime ARN), `TokenUrl`,
+  `ExternalResourceServer`.
+- Observability: both runtimes join the dashboard and get `ExternalLogGroup` and `McpLogGroup` outputs, as the API's
+  `ApiLogGroup`.
+- Names: the prefix must make runtime names AgentCore accepts (`^[a-zA-Z][a-zA-Z0-9_]{0,47}$`); the settings refuse one
+  that doesn't, rather than cutting it short. Every prefix the settings accept (21 characters at most) fits.
 
 ## Cost
 

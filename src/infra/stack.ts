@@ -73,6 +73,7 @@ import type { Construct, IConstruct } from 'constructs'
 import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
 import { integrationsPrefix } from '../core/integrations.js'
 import { JOBS_PREFIX, PROJECTS_PREFIX, memoryName, projectHash, projectSlug, runnerProjectName } from '../core/project.js'
+import { ExternalAccess } from './external.js'
 import { LibraryGateway } from './gateway.js'
 import { imageBuildEnv, imageBuildSpec, imageContentTag } from './images.js'
 import { bundlingRoot } from './lockfile.js'
@@ -89,7 +90,7 @@ import { EDGE_REGION, edgeNeeded, edgeStackName } from './edge.js'
 import { SELF_WRITABLE, TraceWeb, addWebClient, traceWebProps } from './web.js'
 import { ACCESS_PREFIX, AGENT_FACTS, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
-  CDK_QUALIFIER, CENTRAL_BUCKET_OUTPUT, INSTALLATION_PREFIX, GPU_IMAGE_BUILD_OUTPUT, type InfraProps, SELF_UPDATE_OUTPUT, ciRunnerOutput, LAYOUT_OUTPUT, selfUpdateRoleName, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, cpuEnabled, webModel,
+  CDK_QUALIFIER, CENTRAL_BUCKET_OUTPUT, INSTALLATION_PREFIX, GPU_IMAGE_BUILD_OUTPUT, type InfraProps, SELF_UPDATE_OUTPUT, ciRunnerOutput, LAYOUT_OUTPUT, selfUpdateRoleName, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, EXTERNAL_RESOURCE_SERVER, cpuEnabled, webModel,
   kbEnabled, projectRefs, projectSettings,
 } from './props.js'
 
@@ -537,6 +538,53 @@ export class TraceStack extends Stack {
     }
 
     const discoveryUrl = `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}/.well-known/openid-configuration`
+    // the API's environment, built once: the people's API runtime has it, and (external.enabled) the external runtime
+    // runs the same code with the same, in its own mode
+    const apiEnv: Record<string, string> = {
+      AWS_REGION: cfg.region,
+      TRACE_HOME: traceHome,
+      TRACE_GITHUB_SECRET_ARN: githubToken.secretArn,
+      TRACE_WORKSPACE: '/mnt/workspace',
+      TRACE_AGENT_MODE: 'api',
+      TRACE_COGNITO_POOL_ID: users.userPoolId,
+      TRACE_COGNITO_CLIENT_ID: client.userPoolClientId,
+      ...(webClient ? { TRACE_COGNITO_WEB_CLIENT_ID: webClient.userPoolClientId } : {}),
+      TRACE_COGNITO_ISSUER: `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}`,
+      TRACE_AWS_ACCOUNT: cfg.account,
+      TRACE_WORKER_RUNTIMES: workerList,
+      TRACE_INTEGRATIONS_PREFIX: integrationsPrefix(cfg.prefix),
+      // the order watch a check now invokes (order.check_now, src/api/actions-build.ts)
+      TRACE_ORDER_WATCH: orderWatchName(cfg.prefix),
+      // names the projects' dictation vocabularies (<prefix>-<hash>-<language>: src/api/actions-voice.ts), and (external
+      // access) the connected systems' app clients (<prefix>-svc-<name>)
+      TRACE_PREFIX: cfg.prefix,
+      // what a project created in the web app gets, and how this installation can move (src/api/actions-layout.ts)
+      TRACE_LAYOUT: cfg.layout,
+      // the price table's other two sources (cost.get, usage.month: src/api/actions-cost.ts): the admin's overrides,
+      // and whether the price list is fetched (the fetched table itself is read from installation/cost/prices.json)
+      ...(cfg.cost.prices ? { TRACE_PRICES: JSON.stringify(cfg.cost.prices) } : {}),
+      TRACE_PRICE_LIST: cfg.cost.priceList.enabled ? '1' : '0',
+      // where this installation's self-update runs (projects.create says when a new project's agent arrives)
+      ...(cfg.selfUpdate ? { TRACE_SELF_UPDATE: `${cfg.selfUpdate.repository}@${cfg.selfUpdate.branch}` } : {}),
+      ...memoryEnv,
+    }
+    const lifecycle = { idleRuntimeSessionTimeout: cfg.idleTimeoutSeconds, maxLifetime: cfg.maxLifetimeSeconds }
+    const filesystems = [{ sessionStorage: { mountPath: '/mnt/workspace' } }]
+
+    // ------------------------------------------------------------------ external access (external.enabled, src/infra/external.ts)
+    // connected systems' scopes, the external API and MCP runtimes, and the API role's grant on the systems' app clients.
+    // The external runtime gets the API's environment, plus the token address and the resource server; never its own
+    // ARN or the MCP runtime's (the MCP runtime names it: that would be a cycle)
+    const tokenUrl = `${domain.baseUrl()}/oauth2/token`
+    const externalEnv: Record<string, string> = { TRACE_TOKEN_URL: tokenUrl, TRACE_EXTERNAL_RESOURCE_SERVER: EXTERNAL_RESOURCE_SERVER }
+    const external = cfg.external.enabled
+      ? new ExternalAccess(this, 'External', {
+          prefix: cfg.prefix, region: cfg.region, account: cfg.account, pool: users, tokenUrl, discoveryUrl,
+          images: repo, imageUri: image.getAttString('ImageUri'), apiRole, apiEnvironment: { ...apiEnv, ...externalEnv },
+          lifecycle, filesystems, tags: { [INSTALLATION_TAG]: cfg.prefix },
+        })
+      : null
+
     const api = new CfnRuntime(this, 'ApiRuntime', {
       agentRuntimeName: apiName,
       description: 'trace: what people do with their projects, behind Cognito and per-project grants',
@@ -547,40 +595,18 @@ export class TraceStack extends Stack {
       // the CLI's client, and the web app's (its backend calls the API with the person's token)
       authorizerConfiguration: { customJwtAuthorizer: { discoveryUrl, allowedClients: [client.userPoolClientId, ...(webClient ? [webClient.userPoolClientId] : [])] } },
       requestHeaderConfiguration: { requestHeaderAllowlist: ['Authorization'] },
-      lifecycleConfiguration: { idleRuntimeSessionTimeout: cfg.idleTimeoutSeconds, maxLifetime: cfg.maxLifetimeSeconds },
-      filesystemConfigurations: [{ sessionStorage: { mountPath: '/mnt/workspace' } }],
-      environmentVariables: {
-        AWS_REGION: cfg.region,
-        TRACE_HOME: traceHome,
-        TRACE_GITHUB_SECRET_ARN: githubToken.secretArn,
-        TRACE_WORKSPACE: '/mnt/workspace',
-        TRACE_AGENT_MODE: 'api',
-        TRACE_COGNITO_POOL_ID: users.userPoolId,
-        TRACE_COGNITO_CLIENT_ID: client.userPoolClientId,
-        ...(webClient ? { TRACE_COGNITO_WEB_CLIENT_ID: webClient.userPoolClientId } : {}),
-        TRACE_COGNITO_ISSUER: `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}`,
-        TRACE_AWS_ACCOUNT: cfg.account,
-        TRACE_WORKER_RUNTIMES: workerList,
-        TRACE_INTEGRATIONS_PREFIX: integrationsPrefix(cfg.prefix),
-        // the order watch a check now invokes (order.check_now, src/api/actions-build.ts)
-        TRACE_ORDER_WATCH: orderWatchName(cfg.prefix),
-        // names the projects' dictation vocabularies (<prefix>-<hash>-<language>: src/api/actions-voice.ts)
-        TRACE_PREFIX: cfg.prefix,
-        // what a project created in the web app gets, and how this installation can move (src/api/actions-layout.ts)
-        TRACE_LAYOUT: cfg.layout,
-        // the price table's other two sources (cost.get, usage.month: src/api/actions-cost.ts): the admin's overrides,
-        // and whether the price list is fetched (the fetched table itself is read from installation/cost/prices.json)
-        ...(cfg.cost.prices ? { TRACE_PRICES: JSON.stringify(cfg.cost.prices) } : {}),
-        TRACE_PRICE_LIST: cfg.cost.priceList.enabled ? '1' : '0',
-        // where this installation's self-update runs (projects.create says when a new project's agent arrives)
-        ...(cfg.selfUpdate ? { TRACE_SELF_UPDATE: `${cfg.selfUpdate.repository}@${cfg.selfUpdate.branch}` } : {}),
-        ...memoryEnv,
-      },
+      lifecycleConfiguration: lifecycle,
+      filesystemConfigurations: filesystems,
+      // with external access, what services.create tells an admin: the two runtimes (their addresses), the token
+      // address and the scopes' resource server
+      environmentVariables: external
+        ? { ...apiEnv, TRACE_EXTERNAL_RUNTIME_ARN: external.external.attrAgentRuntimeArn, TRACE_MCP_RUNTIME_ARN: external.mcp.attrAgentRuntimeArn, ...externalEnv }
+        : apiEnv,
       tags: { [INSTALLATION_TAG]: cfg.prefix },
     })
     api.node.addDependency(apiRole)
     const observabilityEnv = Math.max(Object.keys(ENABLED_ENV).length, Object.keys(DISABLED_ENV).length)
-    for (const r of [api, ...projects.map((p) => p.runtime)]) {
+    for (const r of [api, ...(external ? [external.external, external.mcp] : []), ...projects.map((p) => p.runtime)]) {
       const env = r.environmentVariables
       if (env && typeof env === 'object' && !('resolve' in env)) checkRuntimeEnv(r.agentRuntimeName, env, observabilityEnv)
     }
@@ -612,6 +638,9 @@ export class TraceStack extends Stack {
       runtimes: [
         ...projects.map((p) => ({ id: p.node.id, runtime: p.runtime, name: p.runtimeName, role: p.role })),
         { id: 'Api', runtime: api, name: apiName, role: apiRole },
+        ...(external
+          ? [{ id: 'External', runtime: external.external, name: external.externalName, role: apiRole }, { id: 'Mcp', runtime: external.mcp, name: external.mcpName, role: external.mcpRole }]
+          : []),
       ],
     })
 
@@ -710,6 +739,7 @@ export class TraceStack extends Stack {
     new CfnOutput(this, 'UserPoolId', { value: users.userPoolId })
     new CfnOutput(this, 'UserPoolClientId', { value: client.userPoolClientId })
     new CfnOutput(this, 'CognitoDomain', { value: domain.baseUrl() })
+    if (external) external.addOutputs(this, tokenUrl)
     // each project's own memory is its Project<hash>MemoryId output (src/infra/project.ts)
     if (legacy) new CfnOutput(this, 'LegacyMemoryId', { value: legacy.memoryId, description: 'The installation-wide memory of earlier versions: retained, unused; left in the account by the next deploy' })
     if (gpu) {

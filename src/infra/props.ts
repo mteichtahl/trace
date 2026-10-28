@@ -208,6 +208,14 @@ export const InfraPropsSchema = z.object({
   gateway: z.object({
     enabled: z.boolean().default(false),
   }).strict().prefault({}),
+  /** External access (src/infra/external.ts, docs/external-access.md): other systems and AI agents call trace with
+   * their own keys (a Cognito app client per connected system, which admins add in the web app). With it on the stack
+   * has the `trace-external` scopes on the user pool and two more AgentCore runtimes, `<prefix>_external` (the API for
+   * connected systems) and `<prefix>_mcp` (an MCP endpoint in front of it), and the API may manage the systems' app
+   * clients. Off by default: with it off none of that exists, and nothing outside can get in. */
+  external: z.object({
+    enabled: z.boolean().default(false),
+  }).strict().prefault({}),
   /** Where the agent and GPU images come from (src/infra/images.ts): 'prebuilt' copies trace's published images for
    * this exact source when they exist, and builds otherwise; 'build' always builds (with BuildKit's inline cache). */
   images: z.object({
@@ -342,6 +350,12 @@ export const InfraPropsSchema = z.object({
   if (p.layoutMigration && p.layout !== 'flat') ctx.addIssue({ code: 'custom', path: ['layoutMigration'], message: 'layoutMigration moves a flat installation: it needs layout flat' })
   // the library gateway's name (`<prefix>-library`) must match AgentCore's ^([0-9a-zA-Z][-]?){1,48}$
   if (p.gateway.enabled && !/^([0-9a-zA-Z][-]?){1,48}$/.test(`${p.prefix}-library`)) ctx.addIssue({ code: 'custom', path: ['prefix'], message: 'with the library gateway, the prefix can\'t end with a dash or have two in a row' })
+  // external access's runtimes (`<prefix>_external`, `<prefix>_mcp`) must match AgentCore's runtime name pattern
+  if (p.external.enabled) {
+    for (const name of [externalRuntimeName(p.prefix), mcpRuntimeName(p.prefix)]) {
+      if (!RUNTIME_NAME.test(name)) ctx.addIssue({ code: 'custom', path: ['prefix'], message: `with external access, the runtime name ${name} must be a letter then at most 47 letters, digits or underscores: use a shorter prefix` })
+    }
+  }
   // a custom domain is served with its certificate: one without the other is a mistake
   if (Boolean(p.web.domainName) !== Boolean(p.web.certificateArn)) ctx.addIssue({ code: 'custom', path: ['web', p.web.domainName ? 'certificateArn' : 'domainName'], message: 'web.domainName and web.certificateArn go together: the custom domain needs its us-east-1 certificate' })
   if (p.cpu.vcpus > p.cpu.maxVcpus)ctx.addIssue({ code: 'custom', path: ['cpu', 'vcpus'], message: `a CPU job asks for ${p.cpu.vcpus} vCPUs, more than cpu.maxVcpus (${p.cpu.maxVcpus})` })
@@ -404,6 +418,22 @@ export function infraPropsFromEnv(env: NodeJS.ProcessEnv = process.env): InfraPr
 /** AgentCore runtime names: a letter, then letters, digits and underscores, at most 48 characters. The API runtime's;
  * the workers' are workerRuntimeName (one per project). */
 export const apiRuntimeName = (prefix: string): string => `${prefix.replace(/-/g, '_')}_api`.slice(0, 48)
+
+/** AgentCore's pattern for a runtime's name. */
+export const RUNTIME_NAME = /^[a-zA-Z][a-zA-Z0-9_]{0,47}$/
+
+/** External access's runtimes (external.enabled), named from the prefix as the API's is, but never cut short: a name
+ * too long is refused when the settings are read (the schema's check), not silently made to collide. */
+export const externalRuntimeName = (prefix: string): string => `${prefix.replace(/-/g, '_')}_external`
+export const mcpRuntimeName = (prefix: string): string => `${prefix.replace(/-/g, '_')}_mcp`
+
+/** The Cognito resource server connected systems' scopes belong to (`trace-external/read`, `trace-external/write`). */
+export const EXTERNAL_RESOURCE_SERVER = 'trace-external'
+export const EXTERNAL_SCOPES = ['read', 'write'] as const
+
+/** External access's outputs (external.enabled): the two addresses connected systems call, the token address they get
+ * a token at, and the resource server their scopes belong to. */
+export const EXTERNAL_OUTPUTS = { apiUrl: 'ExternalApiUrl', mcpUrl: 'McpUrl', tokenUrl: 'TokenUrl', resourceServer: 'ExternalResourceServer' } as const
 
 /** The model the web app's chat agent uses: web.model, else the agents'. */
 export const webModel = (cfg: Pick<InfraProps, 'model' | 'web'>): string => cfg.web.model ?? cfg.model

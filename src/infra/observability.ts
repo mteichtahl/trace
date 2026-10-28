@@ -1,7 +1,8 @@
 /**
  * AgentCore observability for the stack (OpenTelemetry through ADOT; the code side is src/core/telemetry.ts):
  *
- *   runtimes           the image loads ADOT (`node --require …/register`, agent/Dockerfile); AgentCore Runtime
+ *   runtimes           every runtime: the projects' workers, the API, and (external access) the external API and MCP
+ *                      endpoint, each with its log group output and on the dashboard. The image loads ADOT (`node --require …/register`, agent/Dockerfile); AgentCore Runtime
  *                      supplies its OTEL_* settings, and this adds AGENT_OBSERVABILITY_ENABLED=true and turns
  *                      GenAI message-content capture off. Disabled: DISABLE_ADOT_OBSERVABILITY=true (AgentCore's
  *                      defaults unset) and OTEL_SDK_DISABLED=true (ADOT starts nothing).
@@ -69,7 +70,7 @@ export function gpuTelemetryEnv(cfg: Pick<InfraProps, 'observability' | 'region'
 }
 
 export interface ObservedRuntime {
-  /** Api, or a project's construct id (Project<hash>): names the `<id>LogGroup` output */
+  /** Api, External, Mcp, or a project's construct id (Project<hash>): names the `<id>LogGroup` output */
   id: string
   runtime: CfnRuntime
   /** the runtime's name (agentRuntimeName), for its log group's ARN pattern */
@@ -129,11 +130,16 @@ export class Observability extends Construct {
       for (const r of p.runtimes) for (const [k, v] of Object.entries(DISABLED_ENV)) r.runtime.addPropertyOverride(`EnvironmentVariables.${k}`, v)
       return
     }
+    // a role that runs more than one runtime (the API's runs the external one too) gets a statement per runtime, each
+    // with its own sid (a policy's sids must be unique)
+    const roles = new Set<iam.IRole>()
     for (const r of p.runtimes) {
       for (const [k, v] of Object.entries(ENABLED_ENV)) r.runtime.addPropertyOverride(`EnvironmentVariables.${k}`, v)
       // AgentCore delivers the agent's spans to its own log group and needs to let X-Ray write there
+      const again = roles.has(r.role)
+      roles.add(r.role)
       r.role.addToPrincipalPolicy(new iam.PolicyStatement({
-        sid: 'AgentCoreSpanDestination',
+        sid: again ? `AgentCoreSpanDestination${r.id}` : 'AgentCoreSpanDestination',
         actions: ['logs:PutResourcePolicy'],
         resources: [`arn:${partition}:logs:${region}:${account}:log-group:/aws/bedrock-agentcore/runtimes/${r.name}-*`],
       }))
