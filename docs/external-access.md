@@ -64,7 +64,11 @@ A connected system is a row in the access store (`services` table) plus a Cognit
 
 Its project assignments live in the existing `assignments` table, keyed by its `sub`, with a part. Its class is
 derived, never stored as admin: a system with the `write` scope counts as a **user** (so it can be a contributor), one
-with only `read` counts as a **guest** (always a reviewer). The assignment log records every change, as for people.
+with only `read` counts as a **guest** (always a reviewer). Taking `write` away writes every part it holds down to
+reviewer (logged as a part change), and the class caps it at every check besides. The assignment log records every
+change, as for people; the system's own changes (connected, scopes, disabled, secrets added and removed, deleted, never
+a secret's value) go to a `service_log` table beside it. `classOf` never answers admin for a service principal,
+whatever groups it carries.
 
 Cognito side: one resource server `trace-external` with scopes `read` and `write`, created by the stack. Each
 connected system's app client is created by the API runtime when an admin asks (`CreateUserPoolClient`, client
@@ -75,8 +79,13 @@ credentials only, a secret, the chosen scopes, access tokens of one hour), named
 A verified service token becomes a `Principal` like a person's, with two more fields:
 
 ```ts
-{ sub: client_id, email: null, groups: ['trace-users'] | ['trace-guests'], kind: 'service', name: 'ci-dashboard' }
+{ sub: client_id, email: null, groups: ['trace-users'] | ['trace-guests'], kind: 'service', name: 'ci-dashboard',
+  scopes: ['read'] | ['read', 'write'] }   // scopes: the token's, within what the system has now
 ```
+
+`src/api/service-auth.ts` (`ServiceVerifier`) builds it: `Verifier.verifySigned` checks signature, issuer, time and
+`token_use` without a client list, and the access store decides the client. `whoami` answers `kind`, `name` and
+`scopes` for a system.
 
 So every existing check (`require_`, `partIn`, `projectsFor`, the `job` ownership check) works unchanged. Logs and
 records show `service:<name>` where they would show a person's email. A token is accepted only when all of these hold:
@@ -103,7 +112,11 @@ inbox. These are a person's by the rules in `docs/user-journey.md` (gates are si
 and a person submits them).
 
 The scope is checked first, then the project part, so `write` on a project where the system is a reviewer still reads
-only.
+only. In `perform` (`src/api/actions.ts`) a service principal is refused an action off the list before its arguments
+are parsed, then the scope is checked on the parsed arguments (`tool`: by the tool), then the usual access check runs;
+so the policy holds wherever a service principal comes from. A test enumerates every action not on the list and checks
+it is refused to a system with both scopes. `job.control` by a system also needs write on the job's project and the job
+must be one it started (the job index's `requestedBySub` is its client id).
 
 ## External API
 
@@ -111,8 +124,10 @@ only.
 `{ action, ...args }`, `Authorization: Bearer <access token>`, answers `{ ok, result | error }`, 401 for a token that
 isn't accepted, 403 `no access`. `GET /ping` for health.
 
-Same code: `TRACE_AGENT_MODE=external` starts the API server with the service verifier in place of the people's, and
-the service policy in front of `perform`. It runs with the API's role.
+Same code: `TRACE_AGENT_MODE=external` starts the API server (`startExternal` in `src/api/server.ts`, the same handler
+with the principal resolution injected) with the service verifier in place of the people's. It runs with the API's role
+and reads the API runtime's environment plus `TRACE_EXTERNAL_RESOURCE_SERVER` (default `trace-external`); services.*
+answer "External access is off" there (a system is never an admin anyway).
 
 Per-system soft limit: 10 requests per second, bursting to 20, per container; over it answers 429 with
 `Retry-After`. Every request is logged as the API logs (who is `service:<name>`), and `last_used` is updated at most
@@ -127,10 +142,15 @@ once a minute.
   (`trace_journey_get`), described in plain words (`src/mcp-remote/descriptions.ts`), with an input schema made from
   the action's zod arguments (`z.toJSONSchema`). `tools/list` hides write tools from a read-only system.
 - **Calls**: forwarded to the `external` runtime with the caller's own bearer token
-  (`src/api/runtime-url.ts`), and the answer returned as text JSON. An `ok: false` answer is a tool result with
-  `isError` set, so the model reads it and adjusts. A 401 or 403 becomes an MCP error.
-- The runtime's role can write its own logs and nothing else. It has the `external` runtime's URL in its
-  environment.
+  (`src/api/runtime-url.ts`), and the answer returned as pretty JSON text (cut above about 200 KB, saying so). An
+  `ok: false` answer (and a 429) is a tool result with `isError` set, so the model reads it and adjusts. A 401 or 403
+  becomes an MCP error ("not allowed: …"). Timeout 120 s. The runtime session id sent onward is derived from the
+  client's `mcp-session-id` when it sends one, else random.
+- The token's `scope` claim is read **unverified**, only to shape `tools/list`; access is decided by the `external`
+  runtime on every call.
+- The runtime's role can write its own logs and nothing else; it makes no AWS call. It finds the `external` runtime
+  from `TRACE_EXTERNAL_RUNTIME_ARN` and `AWS_REGION` (`invocationUrl`), or `TRACE_EXTERNAL_URL` when set (an override).
+  `GET /ping` answers health.
 
 Connecting an MCP client (Claude Code, for example):
 
@@ -146,15 +166,24 @@ API actions, admins only:
 
 | Action | Arguments | Result |
 | --- | --- | --- |
-| `services.list` | | every system with its scopes, projects and parts, disabled, last used |
-| `services.create` | `name`, `description?`, `scopes`, `projects?: [{ repo, part }]` | the system, its `client_id`, its `secret` (only here), the token, API and MCP addresses |
-| `services.update` | `name`, `description?`, `scopes?`, `disabled?` | the system |
-| `services.assign` | `name`, `repo`, `part?` | the assignment (a read-only system is always a reviewer) |
-| `services.unassign` | `name`, `repo` | whether it was on it |
-| `services.rotate` | `name` | a new `secret`, shown once; the old one keeps working |
-| `services.retire_secret` | `name`, `secret_id` | removes an old secret |
-| `services.delete` | `name` | deletes the Cognito client and every assignment; logged |
-| `services.history` | `name` | its assignment log, in words |
+| `services.list` | | `{ enabled, services, token_url, api_url, mcp_url, resource_server }`: every system with its scopes, projects and parts, disabled, last used, and `secrets: [{ id, created_at }]` (never a value) |
+| `services.create` | `name`, `description?`, `scopes`, `projects?: [{ repo, part? }]` | `{ service, client_id, secret (only here), token_url, api_url, mcp_url, resource_server, scope }`; the app client is deleted again if the record cannot be written |
+| `services.update` | `name`, `description?`, `scopes?`, `disabled?` | `{ service }`; a scope change updates the app client (full configuration); down to read only, every part becomes reviewer |
+| `services.assign` | `name`, `repo`, `part?` | `{ name, repo, part, … }` (a read-only system is always a reviewer) |
+| `services.unassign` | `name`, `repo` | `{ removed }` |
+| `services.rotate` | `name` | `{ secret, secret_id, … addresses }`, shown once; the old one keeps working |
+| `services.retire_secret` | `name`, `secret_id` | `{ removed: true }`; never the last secret |
+| `services.delete` | `name` | `{ deleted, app_client: 'deleted' \| 'already gone' }`: deletes the Cognito client (already gone: fine), then the record and every assignment; logged |
+| `services.history` | `name` | `{ entries: [{ at, by, action, repo, detail, text }] }`: its assignment log and its own log, newest first, in words |
+
+With external access off (no `TRACE_EXTERNAL_RUNTIME_ARN` on the API runtime), every one but `list` and `history`
+answers "External access is off for this installation. Turn it on in the installer (External access)."
+
+App clients are created with `GenerateSecret`, `AllowedOAuthFlows: ['client_credentials']`,
+`AllowedOAuthFlowsUserPoolClient: true`, `AllowedOAuthScopes` (`<rs>/read`, and `<rs>/write`), `AccessTokenValidity: 60`
+with `TokenValidityUnits.AccessToken: 'minutes'`, `ExplicitAuthFlows: ['ALLOW_REFRESH_TOKEN_AUTH']`,
+`PreventUserExistenceErrors: 'ENABLED'`, `EnableTokenRevocation: true`. `UpdateUserPoolClient` resets whatever is left
+out, so every update sends that whole configuration again (`serviceClientBody` in `src/api/aws.ts`).
 
 The same from the command line: `tracectl services create NAME --scope read|write --project OWNER/REPO[:reviewer]`,
 `list`, `show`, `disable`, `enable`, `assign`, `unassign`, `rotate`, `retire-secret`, `delete`.
@@ -174,10 +203,16 @@ Only with `external.enabled`:
   authorizer `{ discoveryUrl, allowedScopes: ['trace-external/read', 'trace-external/write'] }`, the API's environment
   plus `TRACE_EXTERNAL_RESOURCE_SERVER`.
 - `CfnRuntime` `<prefix>_mcp`: same image, `TRACE_AGENT_MODE=mcp`, MCP protocol, the same authorizer, its own role
-  (logs and traces only), `TRACE_EXTERNAL_URL` set to the external runtime's invocation URL.
+  (logs and traces only), `TRACE_EXTERNAL_RUNTIME_ARN` and `AWS_REGION` to find the external runtime.
 - The API role gains `cognito-idp:CreateUserPoolClient`, `UpdateUserPoolClient`, `DeleteUserPoolClient`,
-  `DescribeUserPoolClient`, `AddUserPoolClientSecret`, `DeleteUserPoolClientSecret`, `ListUserPoolClientSecrets` on
-  the pool, and the people's API runtime gets `TRACE_EXTERNAL_*` so `services.create` can give the addresses.
+  `AddUserPoolClientSecret`, `DeleteUserPoolClientSecret`, `ListUserPoolClientSecrets` on the pool
+  (`DescribeUserPoolClient` is not called: updates send the whole configuration; granting it is harmless), and the
+  people's API runtime gets `TRACE_EXTERNAL_RUNTIME_ARN`, `TRACE_MCP_RUNTIME_ARN`, `TRACE_TOKEN_URL` and
+  `TRACE_EXTERNAL_RESOURCE_SERVER` (with `TRACE_PREFIX`, which names the app clients `<prefix>-svc-<name>`) so
+  `services.*` can give the addresses.
+- The MCP runtime's environment: `TRACE_AGENT_MODE=mcp`, `TRACE_EXTERNAL_RUNTIME_ARN`, `AWS_REGION`,
+  `TRACE_EXTERNAL_RESOURCE_SERVER` (optional: `TRACE_EXTERNAL_URL` overrides the address, `TRACE_AGENTCORE_ENDPOINT`
+  the data-plane host). It listens on port 8000.
 - Outputs: `ExternalApiUrl`, `McpUrl`, `TokenUrl`.
 - Observability: both runtimes join the dashboard and log groups as the API does.
 
