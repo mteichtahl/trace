@@ -250,7 +250,7 @@ A reviewer sees the same card in reading form ("The schematic gate is waiting fo
 **Around it.** Under the card, three short lists, each with a count and a fold:
 
 - **Waiting on people:** each open question, gate and change request, with who it waits on and for how long, oldest first.
-- **trace is doing:** live jobs for this project, each with its current step and controls.
+- **trace is doing:** live jobs for this project, each with its current step and controls. A job one specialist asked another for reads "Asked by the Thermal specialist: …"; while it is queued, Decline (with a reason in one line) sits under it for contributors and admins.
 - **Recently:** the last five things that changed the record (a gate signed, a run finished, a requirement edited), each one tap from its detail.
 
 **The firmware track** shows as a thin second line under the stage rail when the template has one, with its own small status per stage ("Pin plan agreed", "Builds clean, 82% of flash"). It has no diamonds because it adds criteria to the hardware gates rather than having its own.
@@ -355,7 +355,7 @@ There is one chat, Ask trace, and it appears in three places: docked beside any 
 | Part card | `useRenderTool` on parts tools | Part, stock for the build quantity, price, lifecycle, datasheet link, alternatives |
 | File card | Any tool that writes or reads a file | The file's inline viewer (see File viewers) |
 | Tool row | Any other tool call | One quiet line ("Read 3 datasheet pages"), folded, with arguments and result inside |
-| Hand-off | `SUBAGENT_*` events | "Handed to the Analog specialist", with its steps nested and folded |
+| Hand-off | `SUBAGENT_*` events, or a recorded hand-off between specialists | "Handed to the Analog specialist", with its steps nested and folded; for a recorded hand-off, "The Thermal specialist asked the Analog and mixed-signal: …" with the request, the answer and where it stands |
 
 **Questions from agents.** When an agent asks a person something, the question appears in three places at once and is answered once: the chat of whoever is in that project, the Needs you list on Home, and the Inbox. The question shows what it blocks, what the agent already read (as source chips), and its options with the recommended one first. Answering anywhere answers everywhere, and the agent continues.
 
@@ -579,6 +579,8 @@ Opening an agent shows its recent runs, the questions it is waiting on, the tool
 - a **Try it** button for read-only tools, which runs it on the person's project from a short form built from the tool's own input description and shows the result in its viewer.
 
 **Only what the person may see and use.** The catalogue comes from the API's tool list, which already leaves out bench tools and tools hidden from the API. Reviewers see agents' statuses and the catalogue but no Try it and no controls; contributors can try read-only tools and pause or cancel work on their projects; admins can do everything, on every project. Status for another project's work shows only as "Busy" with the wait, never what the other project is doing.
+
+**Hand-offs between agents.** Specialists consult each other only through recorded hand-offs, and they are listed here: who asked whom, the question, and where it stands (Requested, Queued, Working on it, Answered, Could not answer, Declined, Not answered), open ones first. Unfolded, a hand-off shows what it blocks, its evidence, the asker's recommended answer, what a good answer contains, and the answer with its evidence and confidence. A pending one has Decline for contributors and admins: the reason is required, one line, and the asking specialist reads it. A run page shows the hand-off its job answers, or the ones it raised, the same way.
 
 **Where else it appears.** The project page's "trace is doing" list links here filtered to that project. In chat, every tool row and hand-off links to the tool or agent. In Operations, the Agents tab charts the same agents over time; this page is the live view.
 
