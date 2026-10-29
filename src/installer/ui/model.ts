@@ -94,6 +94,8 @@ export function initialState() {
     github: { token: '', adminToken: '' },
     /** the GitHub step's check, and the token it was for */
     gh: null as GithubCheck | null, ghFor: '', ghBusy: false, ghError: '',
+    /** what each automatic check last ran for (so a failed one is not repeated until what was typed changes) */
+    ghTried: '', preTried: '', integrationTried: new Map<IntegrationName, string>(),
     /** the preflight's result, and the inputs it was for (preflightKey): stale once they change */
     pre: null as Preflight | null, preKey: '', preBusy: false, preError: '',
     preProgress: [] as Progress[],
@@ -427,15 +429,15 @@ export function blockers(s: State, step: StepId, errors = fieldErrors(s)): Block
     case 'github': {
       const e = githubTokenError(s.github.token)
       if (e) add(e)
-      else if (s.ghBusy) add('Checking the token with GitHub…')
-      else if (!ghCurrent(s)) add('Check the token with GitHub.')
+      else if (s.ghBusy || !ghCurrent(s) && s.ghTried !== s.github.token.trim()) add('Checking the token with GitHub…')
+      else if (!ghCurrent(s)) add(s.ghError ? 'GitHub refused the token: paste another, or check it again.' : 'Check the token with GitHub.')
       break
     }
     case 'aws': {
       const e = Object.values(awsErrors(s.aws, s.env?.profiles.names))
       if (e.length) e.forEach(add)
-      else if (s.preBusy) add('Checking the account…')
-      else if (!preCurrent(s)) add('Check the AWS account.')
+      else if (s.preBusy || !preCurrent(s) && s.preTried !== preflightKey(s)) add('Checking the account…')
+      else if (!preCurrent(s)) add(s.preError ? `The checks could not run: ${s.preError}` : 'Check the AWS account.')
       else for (const c of fails(s, (x) => !isRepoCheck(x))) add(`${c.title}: ${c.fix ?? c.detail}`)
       break
     }
@@ -459,6 +461,38 @@ export function blockers(s: State, step: StepId, errors = fieldErrors(s)): Block
     default:
   }
   return out
+}
+
+// ------------------------------------------------------------------ checks that run by themselves
+
+/** The values an integration's check is for, once every key it needs is filled in ('' until then). */
+export function integrationKey(s: State, n: IntegrationName): string {
+  const v = s.integrations[n]
+  const keys = INTEGRATIONS[n].keys
+  return keys.every((k) => (v[k] ?? '').trim()) ? JSON.stringify(keys.map((k) => (v[k] ?? '').trim())) : ''
+}
+
+/**
+ * The checks due now, each by the input it is for: what was typed is complete and valid, it has not been checked as it
+ * stands, and its check is not running. A check that failed is not repeated until the input changes (Check again
+ * forces one). The page runs each after a short pause, so a check never starts on half-typed input.
+ *   github     the token, from the GitHub step on
+ *   preflight  the account and the projects, on the AWS and Projects steps (Review runs its own, for its plan)
+ *   integrations  a distributor's keys, once all of them are in
+ */
+export function dueChecks(s: State): { github: string; preflight: string; integrations: [IntegrationName, string][] } {
+  const token = s.github.token.trim()
+  const on = (st: StepId): boolean => s.step === st
+  const github = s.step !== 'welcome' && !githubTokenError(token) && !s.ghBusy && s.ghTried !== token && !ghCurrent(s) ? token : ''
+  const key = preflightKey(s)
+  const awsOk = !Object.keys(awsErrors(s.aws, s.env?.profiles.names)).length
+  const preflight = (on('aws') || on('projects')) && awsOk && ghCurrent(s) && !s.preBusy && s.preTried !== key && !preCurrent(s) ? key : ''
+  const errors = fieldErrors(s)
+  const integrations = INTEGRATION_NAMES.flatMap((n): [IntegrationName, string][] => {
+    const k = integrationKey(s, n)
+    return k && s.integrationTried.get(n) !== k && s.integrationCheck.get(n) !== 'busy' && !errors.has(`integrations.${n}`) ? [[n, k]] : []
+  })
+  return { github, preflight, integrations }
 }
 
 // ------------------------------------------------------------------ the saved answers of an earlier run

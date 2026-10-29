@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, Loader2, ShieldCheck } from 'lucide-react'
+import { ChevronDown, Loader2, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Label } from '@/components/ui/label'
@@ -90,11 +90,12 @@ export function AwsStep() {
         hint="trace needs Amazon Bedrock AgentCore there; the checks confirm it. Choose the region closest to you."
         options={[{ value: '', label: profRegion ? `The profile's region (${profRegion})` : `The default (${defaultRegion})` }, ...REGIONS.map((r) => ({ value: r.id, label: `${r.name}  ·  ${r.id}` }))]} />
 
-      <div className="flex flex-wrap items-center gap-3">
-        <Button variant={fresh ? 'outline' : 'default'} disabled={Object.keys(e).length > 0 || s.preBusy} onClick={() => void runPreflight()}>
-          {s.preBusy ? <Loader2 className="animate-spin" /> : <ShieldCheck />}{s.preBusy ? 'Checking…' : fresh ? 'Check again' : 'Check the account'}
-        </Button>
-        {s.pre && !fresh && !s.preBusy ? <span className="text-xs text-muted-foreground">Something changed since the last check: check again.</span> : null}
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
+        {Object.keys(e).length
+          ? <span>The account is checked as soon as these details are complete.</span>
+          : !s.preBusy && (fresh || s.preError)
+            ? <Button variant="ghost" size="xs" onClick={() => void runPreflight()}><RefreshCw />Check again</Button>
+            : !s.preBusy ? <span className="flex items-center gap-2"><Loader2 className="size-3.5 animate-spin text-primary" />Checking the account…</span> : null}
       </div>
       <CheckProgress />
       {s.preError && !s.preBusy ? <Note tone="fail" title="The checks could not run">{s.preError}</Note> : null}

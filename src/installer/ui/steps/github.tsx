@@ -1,4 +1,4 @@
-import { Loader2, ShieldCheck } from 'lucide-react'
+import { Loader2, RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { checkGithub } from '../actions.js'
@@ -25,14 +25,14 @@ export function GithubStep() {
       <div className="grid gap-3">
         <TextField id="github.token" label="GitHub token" secret mono autoFocus value={s.github.token} placeholder="github_pat_… or ghp_…"
           error={s.touched.has('github.token') || s.tried.has('github') ? typed : ''}
-          hint={note || 'Paste it, then check it. It is held in memory only.'}
+          hint={note || 'Paste it: it is checked with GitHub as soon as it is complete. It is held in memory only.'}
           onChange={(v) => update((x) => { x.github.token = v; x.ghError = '' })} />
-        <div className="flex flex-wrap items-center gap-3">
-          <Button variant={fresh ? 'outline' : 'default'} disabled={Boolean(typed) || s.ghBusy} onClick={() => void checkGithub()}>
-            {s.ghBusy ? <Loader2 className="animate-spin" /> : <ShieldCheck />}{s.ghBusy ? 'Checking with GitHub…' : fresh ? 'Check again' : 'Check the token'}
-          </Button>
-          {s.github.token && !typed && !fresh && !s.ghBusy && s.gh ? <span className="text-xs text-muted-foreground">The token changed: check it again.</span> : null}
-        </div>
+        {typed ? null : (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
+            {s.ghBusy || !fresh && !s.ghError ? <><Loader2 className="size-3.5 animate-spin text-primary" />Checking with GitHub…</> : null}
+            {!s.ghBusy && (fresh || s.ghError) ? <Button variant="ghost" size="xs" onClick={() => void checkGithub()}><RefreshCw />Check again</Button> : null}
+          </div>
+        )}
       </div>
 
       {s.ghError ? <Note tone="fail" title="GitHub refused the token">{s.ghError}</Note> : null}

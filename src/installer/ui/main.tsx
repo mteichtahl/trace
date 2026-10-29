@@ -4,11 +4,11 @@
  */
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { boot } from './actions.js'
+import { boot, startAutoChecks } from './actions.js'
 import { App } from './app.js'
 
 const root = document.getElementById('app')
 if (root) {
   createRoot(root).render(<StrictMode><App /></StrictMode>)
-  void boot()
+  void boot().then(() => { startAutoChecks() })
 }

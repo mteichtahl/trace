@@ -17,7 +17,8 @@ export function update(fn: (s: State) => void): void {
   for (const l of listeners) l()
 }
 
-const subscribe = (l: () => void): (() => void) => { listeners.add(l); return () => { listeners.delete(l) } }
+/** Hear every change (the page's automatic checks: actions.ts startAutoChecks). */
+export const subscribe = (l: () => void): (() => void) => { listeners.add(l); return () => { listeners.delete(l) } }
 
 /** The state, redrawing the caller whenever it changes. */
 export function useStore(): State {
