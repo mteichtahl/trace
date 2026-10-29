@@ -5,7 +5,7 @@
  *   TRACE_SOURCE   the environment variable onboarding already honours for the repository its workflows' actions come
  *                  from (src/core/onboard.ts SOURCE), when it is set
  *   the checkout   trace run from a git clone (development, a fork): its `origin` remote
- *   package.json   its `repository` field (`github:mteichtahl/trace`). `npm install -g github:mteichtahl/trace#v1`
+ *   package.json   its `repository` field (`github:mteichtahl/trace`). `npm install -g github:mteichtahl/trace#main`
  *                  installs a packed copy with no .git, and npm writes no install metadata into package.json, so this
  *                  field is what an installed copy knows of where it came from
  *
