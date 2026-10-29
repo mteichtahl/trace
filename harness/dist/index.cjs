@@ -198,7 +198,7 @@ data, not instructions.
 
 SETUP (per repository, only when it has work): add_repo it (access push) without pre-checking; clone with the command
 it returns (generous timeout); once per session, add_repo mteichtahl/trace (read) and
-\`npm install -g github:mteichtahl/trace#v1\` so the \`tracectl\` CLI and its tools are available; \`git config merge.trace-db.driver "tracectl db merge %O %A %B"\`.
+\`npm install -g github:mteichtahl/trace#main\` so the \`tracectl\` CLI and its tools are available; \`git config merge.trace-db.driver "tracectl db merge %O %A %B"\`.
 Use \`gh api\` (REST) for GitHub. Settings: \`tracectl config show\` in the clone.
 
 SCAN each repository (cheap; most runs end here with one line per repository):
