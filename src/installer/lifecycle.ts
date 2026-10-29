@@ -4,7 +4,7 @@
  * back from Secrets Manager (`<prefix>/github-token`, and each project's), which those credentials may read.
  *
  *   tracectl upgrade [--ref REF] [--check] [--no-pull] [--runner-auth auto|token|connection] [--connection ARN|auto]
- *       1 pull: `npm install -g github:<source>#<ref>` (the ref the installation came from, v1 unless --ref), then
+ *       1 pull: `npm install -g github:<source>#<ref>` (trace's main unless --ref), then
  *         run the new version's `tracectl upgrade --no-pull`
  *       2 the installer's steps with the saved answers (src/installer/bootstrap.ts apply): the stack is updated (the
  *         images are copied or rebuilt from their cache only when trace changed), each repository's variables, runner

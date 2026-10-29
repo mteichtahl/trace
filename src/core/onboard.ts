@@ -29,7 +29,7 @@ import type { z } from 'zod'
 
 export const TEMPLATES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'templates')
 export const SOURCE = process.env.TRACE_SOURCE || 'mteichtahl/trace'
-export const REF = process.env.TRACE_REF || 'v1'
+export const REF = process.env.TRACE_REF || 'main'
 export const ONBOARD_BRANCH = 'trace/onboard'
 export const CLAUDE_MARKER = '<!-- trace -->'
 

@@ -15,7 +15,7 @@ the loop that runs Potroller.
 ## Installing
 
 ```sh
-npm install -g github:mteichtahl/trace#v1      # the `tracectl` CLI (Node 22.13+; git, which this needs anyway)
+npm install -g github:mteichtahl/trace#main    # the `tracectl` CLI (Node 22.13+; git, which this needs anyway)
 tracectl install                               # opens the installer in your browser
 ```
 
@@ -295,7 +295,7 @@ themselves: each install reads the `trace-images` release, and copies its versio
 ### Upgrading and uninstalling
 
 ```sh
-tracectl upgrade              # pull the newer trace (npm install -g github:mteichtahl/trace#v1), then redeploy with the
+tracectl upgrade              # pull the newer trace (npm install -g github:mteichtahl/trace#main), then redeploy with the
                            # saved answers and refresh each repository's variables and workflows
 tracectl upgrade --check      # what it would change, without changing anything
 tracectl upgrade --runner-auth token|connection|auto   # switch how the build runners reach GitHub (Where builds run)
