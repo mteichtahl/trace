@@ -46,13 +46,16 @@ import { composeChat, fenceResult } from '../prompts/chat.js'
 import type { Layers } from '../prompts/resolve.js'
 import { chatPrompts } from './chat-prompts.js'
 import { type WebDeps, signedIn } from './deps.js'
-import { type Caller, callApi, publishChange } from './call.js'
+import { API_UNAVAILABLE, type Caller, callApi, publishChange } from './call.js'
 import type { Publisher } from './events.js'
 import { MB, type Sink, WebError, parseBody, route } from './http.js'
 
 export const AGENT_NAME = 'trace'
 export const MAX_ROUNDS = 8
 export const HEARTBEAT_MS = 15_000
+/** How long a chat tool's API call may wait for the runtime to start answering: longer than /api/call's, as the chat's
+ * stream is kept alive by its heartbeat meanwhile (src/web/call.ts API_FIRST_BYTE_MS). */
+export const TOOL_FIRST_BYTE_MS = 3 * 60_000
 const MAX_RESULT_CHARS = 60_000
 
 // ------------------------------------------------------------------ the input
@@ -137,7 +140,7 @@ async function runBackendTool(deps: WebDeps, who: Caller, name: string, input: R
     const r = typeof input.repo === 'string' ? input.repo.toLowerCase() : ''
     let read = readTools.get(r)
     if (!read) {
-      const list = await callApi(deps, who, 'tools.list', { repo: r })
+      const list = await callApi(deps, who, 'tools.list', { repo: r }, { firstByteMs: TOOL_FIRST_BYTE_MS })
       const a = ApiAnswer.safeParse(list.json)
       if (!a.success || !a.data.ok) return { text: JSON.stringify(a.success ? a.data : { ok: false, error: `the API answered ${list.status}` }), error: true }
       const tools = ToolList.safeParse(a.data.result)
@@ -147,7 +150,7 @@ async function runBackendTool(deps: WebDeps, who: Caller, name: string, input: R
     if (!read.has(String(input.name))) return { text: JSON.stringify({ ok: false, error: `${String(input.name)} is not a read-only tool: the chat runs read-only tools only` }), error: true }
     args = { repo: input.repo, name: input.name, args: input.args ?? {} }
   }
-  const answer = await callApi(deps, who, t.action, args)
+  const answer = await callApi(deps, who, t.action, args, { firstByteMs: TOOL_FIRST_BYTE_MS })
   const a = ApiAnswer.safeParse(answer.json)
   if (!a.success) return { text: JSON.stringify({ ok: false, error: `the API answered ${answer.status}` }), error: true }
   let out = a.data.ok ? JSON.stringify(a.data.result ?? null) : JSON.stringify({ ok: false, error: a.data.error })
@@ -369,7 +372,7 @@ export async function runAgent(deps: WebDeps, who: Caller, input: RunInput, sink
             ? { text: JSON.stringify({ ok: false, error: `${u.name} is not available in this conversation` }), error: true }
             : await runBackendTool(deps, who, u.name, args, readTools).catch((e: unknown) => {
               deps.log({ warning: 'agui tool failed', tool: u.name, error: e instanceof Error ? e.name : 'Error', message: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) })
-              return { text: JSON.stringify({ ok: false, error: TOOL_FAILED }), error: true }
+              return { text: JSON.stringify({ ok: false, error: e instanceof WebError && e.code === 'api_unavailable' ? API_UNAVAILABLE : TOOL_FAILED }), error: true }
             })
           emit({ type: EventType.TOOL_CALL_RESULT, messageId: randomUUID(), toolCallId: u.id, content: r.text, role: 'tool' })
           kept.push({ role: 'tool', text: r.text, parts: { toolCallId: u.id, name: u.name } })

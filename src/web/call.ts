@@ -29,6 +29,17 @@ export const BACKEND_ONLY = new Set(['chats.reply'])
 
 const CALL_TIMEOUT_MS = 14 * 60_000
 
+/**
+ * How long the API runtime has to start answering (its status and headers) before the call fails with 503
+ * `api_unavailable`. Under CloudFront's 60 s wait for the backend (src/infra/web.ts API_READ_TIMEOUT_SECONDS; a test
+ * keeps it there), so a runtime that is not starting gives the app these words instead of CloudFront's bare 504. Once
+ * the answer has started it may take as long as CALL_TIMEOUT_MS.
+ */
+export const API_FIRST_BYTE_MS = 50_000
+
+/** What the app shows when the API runtime does not answer in time, or cannot be reached. */
+export const API_UNAVAILABLE = 'trace\'s service is not answering just now. It may still be starting: try again in a minute. If this keeps happening, an admin can look at the API runtime\'s logs.'
+
 /** The person's stable runtime session id (AgentCore needs 33 to 256 characters). */
 export const runtimeSession = (sub: string): string => `trace-web-${createHash('sha256').update(sub).digest('hex').slice(0, 40)}`
 
@@ -36,21 +47,44 @@ export interface CallAnswer { status: number; text: string; json: unknown }
 
 export interface Caller { config: WebConfig; token: string; sub: string }
 
-/** One action through the API runtime as the person. With `onChunk`, the body is passed on as it arrives. */
-export async function callApi(deps: WebDeps, who: Caller, action: string, args: Record<string, unknown>, o: { signal?: AbortSignal; onStart?: (status: number) => void; onChunk?: (s: string) => void } = {}): Promise<CallAnswer> {
+/**
+ * One action through the API runtime as the person. With `onChunk`, the body is passed on as it arrives.
+ *
+ * The runtime must start answering within `firstByteMs` (default API_FIRST_BYTE_MS): if it does not, or cannot be
+ * reached at all, the call throws WebError 503 `api_unavailable` and logs why (never the token). A call the caller
+ * itself abandons (`signal`) is not the runtime's fault and rethrows as it was.
+ */
+export async function callApi(deps: WebDeps, who: Caller, action: string, args: Record<string, unknown>, o: { signal?: AbortSignal; firstByteMs?: number; onStart?: (status: number) => void; onChunk?: (s: string) => void } = {}): Promise<CallAnswer> {
   const url = invocationUrl(who.config.region, who.config.apiRuntimeArn, deps.agentcoreEndpoint)
-  const signal = o.signal ? AbortSignal.any([o.signal, AbortSignal.timeout(CALL_TIMEOUT_MS)]) : AbortSignal.timeout(CALL_TIMEOUT_MS)
-  const r = await deps.fetch(url, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${who.token}`,
-      'content-type': 'application/json',
-      accept: 'application/json',
-      'x-amzn-bedrock-agentcore-runtime-session-id': runtimeSession(who.sub),
-    },
-    body: JSON.stringify({ ...args, action }),
-    signal,
-  })
+  const firstByteMs = o.firstByteMs ?? API_FIRST_BYTE_MS
+  const first = new AbortController()
+  const timer = setTimeout(() => { first.abort() }, firstByteMs)
+  const signal = AbortSignal.any([...(o.signal ? [o.signal] : []), AbortSignal.timeout(CALL_TIMEOUT_MS), first.signal])
+  const t0 = deps.now()
+  let r: Response
+  try {
+    r = await deps.fetch(url, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${who.token}`,
+        'content-type': 'application/json',
+        accept: 'application/json',
+        'x-amzn-bedrock-agentcore-runtime-session-id': runtimeSession(who.sub),
+      },
+      body: JSON.stringify({ ...args, action }),
+      signal,
+    })
+  } catch (e) {
+    if (o.signal?.aborted) throw e
+    deps.log({
+      warning: first.signal.aborted ? 'api runtime: no answer in time' : 'api runtime: not reachable',
+      action, ms: deps.now() - t0, firstByteMs, runtime: who.config.apiRuntimeArn,
+      ...(first.signal.aborted ? {} : { error: e instanceof Error ? `${e.name}: ${e.message}`.slice(0, 300) : String(e).slice(0, 300) }),
+    })
+    throw new WebError(503, API_UNAVAILABLE, 'api_unavailable')
+  } finally {
+    clearTimeout(timer)
+  }
   o.onStart?.(r.status)
   let text = ''
   if (r.body && o.onChunk) {
