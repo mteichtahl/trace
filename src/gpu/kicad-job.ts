@@ -4,8 +4,8 @@
  *   node kicad-job.js {in:project.tar} {out:out.tar} {dir} <output name> <file|dir> -- <kicad-cli arguments>
  *
  * The project archive (the KiCad files under the project's repository or folder, src/tools/kicad/remote.ts packProject)
- * is unpacked into {dir}/project; in the arguments @PROJECT@ stands for that folder and @OUT@ for {dir}/out, where
- * kicad-cli writes its output (a file, or a folder made first when the output is one). Then everything in {dir}/out,
+ * is unpacked into {dir}/project; in the arguments @PROJECT@ stands for that folder and @OUT@ for {dir}/kicad-out, where
+ * kicad-cli writes its output (a file, or a folder made first when the output is one). Then everything in {dir}/kicad-out,
  * and .trace-kicad-job.json naming the two folders (the caller puts its own paths back where KiCad wrote these), goes
  * into out.tar. The exit code is kicad-cli's (127: it could not be started).
  */
@@ -39,7 +39,8 @@ const tar = (args: string[]): void => {
 /** Run it; resolves to kicad-cli's exit code. */
 export async function run(a: KicadJobArgs, o: { kicadCli?: string } = {}): Promise<number> {
   const project = join(a.work, 'project')
-  const out = join(a.work, 'out')
+  // not {dir}/out, where the runner collects the job's outputs (out.tar among them)
+  const out = join(a.work, 'kicad-out')
   mkdirSync(project, { recursive: true })
   mkdirSync(out, { recursive: true })
   tar(['-xf', a.projectTar, '-C', project])

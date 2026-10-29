@@ -49,7 +49,7 @@ export async function handle(event: unknown, o: { workRoot?: string; run?: typeo
   if (typeof e.spec !== 'string' || !e.spec.startsWith('s3://')) throw new Error('the event names no job spec (expected {"spec": "s3://…"})')
   const dir = mkdtempSync(join(o.workRoot ?? tmpdir(), 'job-'))
   try {
-    const env: NodeJS.ProcessEnv = { ...process.env, TRACE_GPU_JOB_URI: e.spec }
+    const env: NodeJS.ProcessEnv = { ...process.env, TRACE_GPU_JOB_URI: e.spec, TRACE_JOB_BACKEND: 'function' }
     if (typeof e.traceparent === 'string') env.TRACEPARENT = e.traceparent
     else delete env.TRACEPARENT
     const exitCode = await (o.run ?? observedMain)({ env, workRoot: dir })
@@ -88,11 +88,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.error('trace tools function: AWS_LAMBDA_RUNTIME_API is not set: this runs only as a Lambda function')
     process.exit(2)
   }
+  // an init error is reported as one (the Runtime API takes /runtime/init/error only before the first /next); a
+  // failure of the loop after that just ends the process, and Lambda starts a new one for the next invocation
   void startSdkIfConfigured()
-    .then(() => serve({ api }))
-    .catch(async (e: unknown) => {
-      console.error(`trace tools function: ${e instanceof Error ? e.message : String(e)}`)
-      await call(api, 'POST', '/runtime/init/error', errorBody(e), { 'Lambda-Runtime-Function-Error-Type': 'Runtime.InitError' }).catch(() => undefined)
-      process.exit(1)
-    })
+    .then(
+      () => serve({ api }).catch((e: unknown) => {
+        console.error(`trace tools function: ${e instanceof Error ? e.message : String(e)}`)
+        process.exit(1)
+      }),
+      async (e: unknown) => {
+        console.error(`trace tools function: ${e instanceof Error ? e.message : String(e)}`)
+        await call(api, 'POST', '/runtime/init/error', errorBody(e), { 'Lambda-Runtime-Function-Error-Type': 'Runtime.InitError' }).catch(() => undefined)
+        process.exit(1)
+      },
+    )
 }

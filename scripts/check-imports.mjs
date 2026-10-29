@@ -19,13 +19,36 @@ if (wi >= 0) { without = (args[wi + 1] ?? '').split(',').filter(Boolean); args.s
 if (!args.length) { console.error('usage: check-imports.mjs [--without a,b] <entry.js>…'); process.exit(2) }
 
 const STATIC = /^\s*(?:import|export)\s+(?!type\b)(?:[^'"()]*?\sfrom\s+)?['"]([^'"]+)['"]/gm
+/** The text with its comments blanked (strings and template literals kept as they are), so a comment inside an import's
+ * braces (tsc keeps comments), or a quote in one, can't hide the import from STATIC. */
+function stripComments(t) {
+  let out = ''
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i]
+    if (c === '"' || c === "'" || c === '`') {
+      let j = i + 1
+      while (j < t.length && t[j] !== c) j += t[j] === '\\' ? 2 : 1
+      out += t.slice(i, j + 1)
+      i = j
+    } else if (c === '/' && t[i + 1] === '/') {
+      while (i < t.length && t[i] !== '\n') i++
+      out += '\n'
+    } else if (c === '/' && t[i + 1] === '*') {
+      const end = t.indexOf('*/', i + 2)
+      const body = t.slice(i, end < 0 ? t.length : end + 2)
+      out += body.replace(/[^\n]/g, ' ')
+      i = end < 0 ? t.length : end + 1
+    } else out += c
+  }
+  return out
+}
 const pkg = (spec) => (spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0])
 const seen = new Map()
 const bad = []
 const walk = (file, from) => {
   if (seen.has(file)) return
   seen.set(file, from)
-  const text = readFileSync(file, 'utf8')
+  const text = stripComments(readFileSync(file, 'utf8'))
   for (const m of text.matchAll(STATIC)) {
     const spec = m[1]
     if (spec.startsWith('.')) {

@@ -56,7 +56,14 @@ describe('each project\'s tools function', () => {
         FunctionName: toolsFunctionName('trace', projectHash(repo)), PackageType: 'Image', Architectures: ['arm64'],
         Timeout: 900, MemorySize: 4096, EphemeralStorage: { Size: 10240 },
       })
-      expect(JSON.stringify(fn.Code.ImageUri)).toMatch(/trace-tools|ToolsImages|referenceto/i)
+      // the tag is the ToolsImage build's (a parameter from the parent, whose value is that resource's ImageUri), so
+      // the function is made only once its image exists
+      const uri = JSON.stringify(fn.Code.ImageUri)
+      const param = /"Ref":"([^"]*ToolsImage[^"]*ImageUri[^"]*)"/i.exec(uri)?.[1]
+      expect(param).toBeDefined()
+      const stackRes = Object.values(s.parent.findResources('AWS::CloudFormation::Stack') as Record<string, Res>)
+        .find((r) => JSON.stringify(r.Properties.Parameters ?? {}).includes(param as string))
+      expect(JSON.stringify(stackRes?.Properties.Parameters[param as string])).toMatch(/"Fn::GetAtt":\["ToolsImage[0-9A-F]*","ImageUri"\]/)
       // one try per call: no asynchronous retries configured, and no extra resource for it
       expect(resources(t, 'AWS::Lambda::EventInvokeConfig')).toEqual([])
     }

@@ -137,7 +137,7 @@ describe('a kicad-cli run on the tools function', () => {
     // kicad-cli saw the job's folders
     const seen = readFileSync(f.log, 'utf8').split('\n')
     expect(seen.slice(0, 5)).toEqual(['sch', 'export', 'netlist', '--format', 'kicadxml'])
-    expect(seen[6]).toMatch(/\/out\/netlist\.xml$/)
+    expect(seen[6]).toMatch(/\/kicad-out\/netlist\.xml$/)
     expect(seen[7]).toMatch(/\/project\/hw\/My Board\.kicad_sch$/)
   })
 

@@ -158,6 +158,9 @@ async function renderRun(p: Plan): Promise<Record<string, unknown>> {
   if (where === 'function' && want === 'gpu') {
     throw new ToolError('this installation has no GPU queue, so renders run on the tools function, which has no graphics card: use device=cpu or auto')
   }
+  if (where === 'function' && p.engine === 'eevee') {
+    throw new ToolError('this installation has no GPU queue, so renders run on the tools function, where EEVEE cannot render (no display or graphics card): use engine=cycles')
+  }
   if (where === 'local' && (want === 'gpu' || p.engine === 'eevee')) {
     if (!findBlender()) throw new ToolError('Blender is not installed here (or set TRACE_BLENDER to its path)')
     const pr = await probe()

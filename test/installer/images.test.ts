@@ -144,7 +144,7 @@ describe('the images', () => {
     const { TOOLS_IMAGE_PROGRAMS } = await import('../../src/tools/verify/job.js')
     const tools = readFileSync(join(ROOT, 'agent', 'Dockerfile.tools'), 'utf8').split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
     const from: Record<string, string> = {
-      yosys: 'yosys', 'yosys-smtbmc': 'yosys', 'yosys-abc': 'yosys', sby: 'YosysHQ/sby', z3: 'z3', verilator: 'verilator',
+      yosys: 'yosys', 'yosys-smtbmc': 'yosys', 'yosys-abc': 'yosys', z3: 'z3', verilator: 'verilator',
       iverilog: 'iverilog', vvp: 'iverilog', 'cocotb-config': "'cocotb==", 'nextpnr-ice40': 'nextpnr-ice40',
       'nextpnr-ecp5': 'nextpnr-ecp5', 'nextpnr-gowin': 'nextpnr-gowin', icepack: 'fpga-icestorm', ecppack: 'fpga-trellis',
       gowin_pack: "'apycula==", ccx: 'calculix-ccx',

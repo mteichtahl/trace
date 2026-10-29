@@ -291,7 +291,8 @@ export interface CcxRun { frd: string; log: string; where: Backend; seconds: num
 /** Run ccx on a deck through runJob (kind calculix, CPU). */
 export async function runCcx(inp: string, o: { elements: number; threads?: number; timeoutSeconds?: number; remote?: 'auto' | 'always' | 'never' }): Promise<CcxRun> {
   const mode = o.remote ?? 'auto'
-  const wantRemote = mode === 'always' || (mode === 'auto' && (o.elements > localMaxElements() || !ccxInstalled()))
+  // not installed here: the queue, unless the project's tools function has it (backendFor sends it there)
+  const wantRemote = mode === 'always' || (mode === 'auto' && (o.elements > localMaxElements() || (!ccxInstalled() && !process.env.TRACE_TOOLS_FUNCTION)))
   const where = backendFor({ kind: 'calculix', gpu: false, remote: wantRemote })
   if (where === 'local' && !ccxInstalled()) throw new ToolError('CalculiX (ccx) is not installed here (apt install calculix-ccx, or set TRACE_CCX; with TRACE_GPU_QUEUE set, runs go to the CPU queue)')
   const dir = scratchDir('trace-ccx-in-')

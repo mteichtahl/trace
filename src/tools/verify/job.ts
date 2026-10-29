@@ -190,7 +190,7 @@ export function includeArgs(h: Pick<HdlStage, 'incdirs' | 'sources' | 'followed'
  * installs each.
  */
 export const TOOLS_IMAGE_PROGRAMS: ReadonlySet<string> = new Set([
-  'yosys', 'yosys-smtbmc', 'yosys-abc', 'sby', 'z3', 'verilator', 'iverilog', 'vvp', 'cocotb-config',
+  'yosys', 'yosys-smtbmc', 'yosys-abc', 'z3', 'verilator', 'iverilog', 'vvp', 'cocotb-config',
   'nextpnr-ice40', 'nextpnr-ecp5', 'nextpnr-gowin', 'icepack', 'ecppack', 'gowin_pack', 'ccx',
 ])
 

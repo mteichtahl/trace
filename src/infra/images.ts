@@ -86,7 +86,9 @@ export function imageBuildSpec(o: { dockerfile: string; platform: 'linux/arm64' 
     '  docker push "$REPOSITORY_URI:cache"',
     'fi',
     ...(o.maxBytes ? [
-      'SIZE="$(docker image inspect --format "{{.Size}}" "$REPOSITORY_URI:$IMAGE_TAG")"',
+      // no image (the build above failed): fail here, not on the size test below, whose error the if would swallow
+      'SIZE="$(docker image inspect --format "{{.Size}}" "$REPOSITORY_URI:$IMAGE_TAG")" || exit 1',
+      '[ -n "$SIZE" ] || exit 1',
       `echo "trace: the image is $SIZE bytes unpacked (at most ${o.maxBytes})"`,
       `if [ "$SIZE" -gt ${o.maxBytes} ]; then echo "trace: the image is over ${o.maxBytes} bytes, more than AgentCore Runtime accepts (2 GB): move the largest programs to agent/Dockerfile.tools"; docker history --no-trunc --format "{{.Size}}\t{{.CreatedBy}}" "$REPOSITORY_URI:$IMAGE_TAG" | head -20 | cut -c1-200; exit 1; fi`,
     ] : []),

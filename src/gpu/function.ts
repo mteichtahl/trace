@@ -49,7 +49,10 @@ export interface FunctionEvent { spec: string; traceparent?: string }
 async function awsLambda(): Promise<FunctionApi> {
   const l = await import('@aws-sdk/client-lambda')
   // a call lasts as long as its job: no request timeout shorter than the function's own
-  const client = new l.LambdaClient({ requestHandler: { requestTimeout: (FUNCTION_MAX_SECONDS + 120) * 1000, connectionTimeout: 10_000 } })
+  const client = new l.LambdaClient({
+    // one attempt: a retried invoke would run the job a second time, beside the first, on the same S3 keys
+    maxAttempts: 1,
+    requestHandler: { requestTimeout: (FUNCTION_MAX_SECONDS + 120) * 1000, connectionTimeout: 10_000 } })
   return { invoke: (i) => client.send(new l.InvokeCommand({ ...i, InvocationType: 'RequestResponse' })) }
 }
 

@@ -15,13 +15,14 @@ ARG DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=UTC
 
 # Base tools. build-essential and verilator: the mixed-signal co-simulation (src/tools/ams/mixed.ts) builds a
-# Verilator model into ngspice's d_cosim in this process, so both stay here. Everything larger (KiCad, Blender, the FPGA
+# Verilator model into ngspice's d_cosim in this process, so both stay here; iverilog (a few MB): sim.logic runs it
+# here (src/tools/sim/logic.ts). Everything larger (KiCad, Blender, the FPGA
 # and formal tools, CalculiX, ffmpeg) is in the tools image (agent/Dockerfile.tools), which each project's tools
 # function runs: AgentCore Runtime refuses an image over 2 GB, and the build checks this one is under it
 # (src/infra/images.ts AGENT_IMAGE_MAX_BYTES).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl gnupg git openssh-client jq unzip xz-utils \
-      build-essential python3 python3-venv python3-pip ngspice verilator poppler-utils \
+      build-essential python3 python3-venv python3-pip ngspice verilator iverilog poppler-utils \
  && verilator --version \
  && rm -rf /var/lib/apt/lists/*
 

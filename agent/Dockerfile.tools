@@ -45,7 +45,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends blender python3
 # Verification and FPGA implementation (src/tools/verify, src/tools/fpga): Verilator, Yosys, nextpnr for ice40, ECP5
 # and Gowin, the IceStorm and Trellis packers, and z3 for formal (yosys-smtbmc). SymbiYosys from its repository at the
 # tag matching Ubuntu's Yosys; without that tag, verify.formal runs yosys + yosys-smtbmc directly.
-# src/tools/verify/job.ts TOOLS_IMAGE_PROGRAMS lists what this layer and the venv below provide.
+# src/tools/verify/job.ts TOOLS_IMAGE_PROGRAMS lists what this layer and the venv below provide (not sby, which may be
+# missing: formal on the function uses the smtbmc engine).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends verilator yosys nextpnr-ice40 nextpnr-ecp5 nextpnr-gowin fpga-icestorm fpga-trellis z3 \
  && rm -rf /var/lib/apt/lists/* \

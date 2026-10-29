@@ -112,7 +112,7 @@ export async function observedMain(deps: RunnerDeps = {}): Promise<number> {
   const parent = envContext(env)
   const spec = await readSpec(env, deps.s3)
   const kind = spec.kind
-  return span(`trace.gpu.run ${kind}`, { [ATTR.gpuKind]: kind, [ATTR.gpuBackend]: 'batch' }, async (s) => {
+  return span(`trace.gpu.run ${kind}`, { [ATTR.gpuKind]: kind, [ATTR.gpuBackend]: env.TRACE_JOB_BACKEND === 'function' ? 'function' : 'batch' }, async (s) => {
     const code = await main(deps, spec)
     setAttrs(s, { [ATTR.gpuExitCode]: code, [ATTR.outcome]: code === 0 ? 'ok' : 'error' })
     if (code !== 0) fail(s, new Error(`exit code ${code}`), 'exit_code')
