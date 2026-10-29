@@ -11,7 +11,7 @@ import {
 } from '@aws-sdk/client-bedrock-agentcore'
 import { context, trace } from '@opentelemetry/api'
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks'
-import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base'
+import { TracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MEMORY_STATE, MemoryState, memoryStateHome } from '../../src/agents/runtime/memory-state.js'
 import {
@@ -217,7 +217,7 @@ describe('telemetry', () => {
   const cm = new AsyncLocalStorageContextManager()
   beforeAll(() => {
     context.setGlobalContextManager(cm.enable())
-    trace.setGlobalTracerProvider(new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(spans)] }))
+    trace.setGlobalTracerProvider(new TracerProvider({ spanProcessors: [new SimpleSpanProcessor({ exporter: spans })] }))
   })
   afterAll(() => { trace.disable(); context.disable() })
 

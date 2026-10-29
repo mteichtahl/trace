@@ -14,7 +14,10 @@ export default function StageChart({ stages, currency }: { stages: CostView['sta
           <YAxis stroke="var(--muted-foreground)" fontSize={11} allowDecimals={false} label={{ value: 'days', angle: -90, position: 'insideLeft', offset: 20, fill: 'var(--muted-foreground)', fontSize: 11 }} />
           <Tooltip
             contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}
-            formatter={(v: number, name: string, p: { payload?: { cloud: number | null } }) => (name === 'Days so far' ? [`${v} days${p.payload?.cloud != null ? ` · ${money(p.payload.cloud, currency)}` : ''}`, name] : [`${v} days`, name])}
+            formatter={(v, name, p) => {
+              const cloud = (p.payload as { cloud?: number | null } | undefined)?.cloud
+              return name === 'Days so far' ? [`${v} days${cloud != null ? ` · ${money(cloud, currency)}` : ''}`, name] : [`${v} days`, name]
+            }}
           />
           <Legend />
           <Bar dataKey="days" name="Days so far" stackId="a" fill="var(--chart-1)" radius={[0, 0, 0, 0]} isAnimationActive={false} />

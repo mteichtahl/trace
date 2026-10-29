@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { context as otelContext, trace } from '@opentelemetry/api'
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks'
-import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base'
+import { TracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { SPECIALISTS, allowedToolsOf } from '../../src/agents/index.js'
 import { type ClaudeOptions, type Exec, type RunnerDeps, createRunner } from '../../src/agents/runtime/job.js'
@@ -92,7 +92,7 @@ describe('provenance on the job\'s record and its span', () => {
   const spans = new InMemorySpanExporter()
   beforeAll(() => {
     otelContext.setGlobalContextManager(new AsyncLocalStorageContextManager().enable())
-    trace.setGlobalTracerProvider(new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(spans)] }))
+    trace.setGlobalTracerProvider(new TracerProvider({ spanProcessors: [new SimpleSpanProcessor({ exporter: spans })] }))
   })
   afterAll(() => { trace.disable(); otelContext.disable() })
 

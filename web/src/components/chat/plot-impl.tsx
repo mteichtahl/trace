@@ -24,8 +24,8 @@ export default function PlotImpl({ data }: { data: PlotData }) {
           <YAxis tickFormatter={(v: number) => eng(v, data.y.unit)} stroke="var(--muted-foreground)" fontSize={11} width={56} />
           <Tooltip
             contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}
-            formatter={(v: number) => eng(v, data.y.unit)}
-            labelFormatter={(v: number) => `${data.x.label} ${eng(v, data.x.unit)}`}
+            formatter={(v) => eng(Number(v), data.y.unit)}
+            labelFormatter={(v) => `${data.x.label} ${eng(Number(v), data.x.unit)}`}
           />
           {data.series.length > 1 && <Legend />}
           {data.series.map((s, i) => (
