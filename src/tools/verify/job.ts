@@ -184,15 +184,31 @@ export function includeArgs(h: Pick<HdlStage, 'incdirs' | 'sources' | 'followed'
   return [...new Set(dirs)].map((d) => `${flag}{dir}/in${d === '.' ? '' : `/${d}`}`)
 }
 
-/** A program is needed here only when the job runs here; on the queue the job image provides it. */
+/**
+ * The verification and FPGA programs of the tools image (agent/Dockerfile.tools), where these jobs run when the
+ * project has its tools function: what haveProgram answers then. test/installer/images.test.ts checks the image
+ * installs each.
+ */
+export const TOOLS_IMAGE_PROGRAMS: ReadonlySet<string> = new Set([
+  'yosys', 'yosys-smtbmc', 'yosys-abc', 'z3', 'verilator', 'iverilog', 'vvp', 'cocotb-config',
+  'nextpnr-ice40', 'nextpnr-ecp5', 'nextpnr-gowin', 'icepack', 'ecppack', 'gowin_pack', 'ccx',
+])
+
+/** Where this module's jobs run: every verification and FPGA kind is a FUNCTION_KINDS kind, so all go where one does. */
+const jobsWhere = () => backendFor({ kind: 'verilator', gpu: false })
+
+/** A program is needed here only when the job runs here; on the function or the queue the job's image provides it. */
 export function needProgram(name: string, hint: string, envVar?: string): string {
-  if (backendFor({ gpu: false }) !== 'local') return name
+  if (jobsWhere() !== 'local') return name
   const p = which(name, envVar)
   if (!p) throw new ToolError(`${name} is not installed here: ${hint}`)
   return p
 }
 
+/** Whether a program is there where the jobs run: this machine, or the tools image's (TOOLS_IMAGE_PROGRAMS; the GPU
+ * image has the same set). */
 export function haveProgram(name: string, envVar?: string): boolean {
+  if (jobsWhere() !== 'local') return TOOLS_IMAGE_PROGRAMS.has(name)
   return which(name, envVar) !== null
 }
 

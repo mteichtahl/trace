@@ -24,7 +24,12 @@ const JOB_REACH: Record<JobKind, { tools: string[]; says: RegExp }> = {
   thermal: { tools: ['thermal.board'], says: /2\.5d|thermal\.board/i },
   calculix: { tools: ['thermal.board'], says: /calculix/i },
   openfoam: { tools: ['thermal.board'], says: /cfd|openfoam/i },
+  // the tools function's own kinds (src/gpu/jobs.ts FUNCTION_KINDS) where the agent image has no kicad-cli or ffmpeg:
+  // not sent to the queue, so not marked remote (TOOLS_FUNCTION_ONLY)
+  kicad: { tools: ['kicad.erc', 'kicad.drc', 'kicad.export'], says: /erc|drc|kicad|export/i },
+  ffmpeg: { tools: ['render.turntable'], says: /turntable/i },
 }
+const TOOLS_FUNCTION_ONLY: ReadonlySet<JobKind> = new Set<JobKind>(['kicad', 'ffmpeg'])
 
 describe('the sample project\'s tour', () => {
   const tasks = tour()
@@ -65,7 +70,7 @@ describe('the sample project\'s tour', () => {
       const reach = JOB_REACH[kind]
       const hit = tasks.filter((t) => reach.tools.some((x) => t.exercises.includes(x)) && reach.says.test(t.body))
       expect(hit.length, `no task runs a ${kind} job`).toBeGreaterThan(0)
-      expect(hit.some((t) => t.remote !== null), `the ${kind} task must be marked remote`).toBe(true)
+      if (!TOOLS_FUNCTION_ONLY.has(kind)) expect(hit.some((t) => t.remote !== null), `the ${kind} task must be marked remote`).toBe(true)
     }
   })
 

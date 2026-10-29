@@ -18,7 +18,7 @@ import { buildBom, bomCsv, jlcBomCsv, jlcCplCsv, placements } from './bom.js'
 import { drc, erc, type CheckReport } from './checks.js'
 import { type Drawing, EXPORT_KINDS, drawingArtifacts, exportOne, listFiles, outDirFor, sheetPlaces, zipDir, type ExportKind } from './export.js'
 import { describeLayer, designRules, layerOf, loadBoard, Net, netNames, stackupKnown, type Board } from './pcb.js'
-import { candidates, fileVersion, findKicadCli, fromPath, kicadCliVersion, needPcb, needSch, relTo, resolveProject, summary, type Project } from './project.js'
+import { candidates, fileVersion, findKicadCli, fromPath, kicadCliVersion, kicadWhere, needPcb, needSch, relTo, resolveProject, summary, type Project } from './project.js'
 import { netlist, parts, powerNets, readSchematic, symbolSummary, type Symbol } from './schematic.js'
 import { cap, recorded, type RunHandle } from './record.js'
 
@@ -44,11 +44,13 @@ const projects = defineTool({
     const { root, files } = await candidates()
     const list = files.filter((f) => existsSync(f)).map((f) => summary(fromPath(f), root))
     const missing = files.filter((f) => !existsSync(f)).map((f) => relTo(root, f))
-    const cli = findKicadCli()
+    // here, or (an AgentCore runtime: KiCad is in the tools image) on the tools function or the queue
+    const where = kicadWhere()
+    const cli = findKicadCli() ?? (where ? `kicad-cli (on the ${where === 'function' ? 'tools function' : 'job queue'})` : null)
     return {
       status: 'pass' as const,
       summary: `${list.length} project(s)`,
-      result: { root, projects: list, missing, kicad_cli: cli, kicad_cli_version: cli ? await kicadCliVersion() : null },
+      result: { root, projects: list, missing, kicad_cli: cli, kicad_cli_version: where ? await kicadCliVersion() : null },
     }
   }),
 })

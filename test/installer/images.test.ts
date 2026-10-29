@@ -7,7 +7,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { imageBuildEnv, imageBuildSpec, imageContentTag, prebuiltImage } from '../../src/infra/images.js'
+import { AGENT_IMAGE_MAX_BYTES, imageBuildEnv, imageBuildSpec, imageContentTag, prebuiltImage } from '../../src/infra/images.js'
 import { lockFile } from '../../src/infra/lockfile.js'
 import { gitEnv } from '../../src/installer/onboard-api.js'
 import { InfraPropsSchema, PUBLISHED_REGISTRY } from '../../src/infra/props.js'
@@ -73,7 +73,7 @@ describe('the images', () => {
     expect(scripts['build:image']).not.toContain('bundle-ui')
     // the same steps as build, which only adds the page, so the two never drift apart
     expect(scripts.build).toBe(`${scripts['build:image']} && node scripts/bundle-ui.mjs`)
-    for (const f of ['Dockerfile', 'Dockerfile.gpu']) {
+    for (const f of ['Dockerfile', 'Dockerfile.tools', 'Dockerfile.gpu']) {
       const dockerfile = readFileSync(join(ROOT, 'agent', f), 'utf8')
       expect(dockerfile, f).toMatch(/^RUN npm run build:image\b/m)
       // no command runs the full build (a comment may still name it)
@@ -104,14 +104,61 @@ describe('the images', () => {
     expect(final).toMatch(/^CMD \["node", "--require", .*"\/app\/dist\/agents\/runtime\/main\.js"\]$/m)
   })
 
-  it('build cocotb from source on arm64, with the Python headers it needs', () => {
-    // cocotb publishes no arm64 Linux wheel, so the agent image (linux/arm64) builds it from source, and its C++
+  it('build cocotb from source on arm64, with the Python headers it needs, in the tools image', () => {
+    // cocotb publishes no arm64 Linux wheel, so the tools image (linux/arm64) builds it from source, and its C++
     // extensions include Python.h: without python3-dev the build fails ("fatal error: Python.h: No such file or
     // directory", then "Could not build wheels for cocotb") and so does the deploy
-    const dockerfile = readFileSync(join(ROOT, 'agent', 'Dockerfile'), 'utf8')
+    const dockerfile = readFileSync(join(ROOT, 'agent', 'Dockerfile.tools'), 'utf8')
     const headers = dockerfile.search(/apt-get install[^\n]*(\\\n[^\n]*)*\bpython3-dev\b/)
     expect(headers).toBeGreaterThan(-1)
     expect(dockerfile.indexOf("'cocotb==")).toBeGreaterThan(headers)
+    // and no longer the agent image, whose venv is trace's own Python only
+    expect(readFileSync(join(ROOT, 'agent', 'Dockerfile'), 'utf8')).not.toContain("'cocotb==")
+  })
+
+  it('leave the large programs out of the agent image, for the tools image, which has every one the jobs name', () => {
+    const agent = readFileSync(join(ROOT, 'agent', 'Dockerfile'), 'utf8')
+    const tools = readFileSync(join(ROOT, 'agent', 'Dockerfile.tools'), 'utf8')
+    const installs = (d: string): string => d.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
+    for (const big of ['kicad', 'blender', 'yosys', 'nextpnr', 'calculix-ccx', 'ffmpeg', 'z3', 'fpga-icestorm']) {
+      expect(installs(agent), big).not.toMatch(new RegExp(`\\b${big}\\b`))
+      expect(installs(tools), big).toMatch(new RegExp(`\\b${big}\\b`))
+    }
+    // the co-simulation builds a Verilator model here (src/tools/ams/mixed.ts): Verilator and g++ stay
+    expect(installs(agent)).toMatch(/\bverilator\b/)
+    expect(installs(agent)).toMatch(/\bbuild-essential\b/)
+    // the agent image says where they went, so its jobs of those kinds go to the queue without a tools function
+    expect(agent).toMatch(/TRACE_TOOLS_ELSEWHERE=1/)
+    // the CDK is dropped from both, and the build checks nothing they run imports it
+    for (const d of [agent, tools]) {
+      expect(d).toMatch(/rm -rf [^\n]*node_modules\/aws-cdk-lib node_modules\/aws-cdk node_modules\/@aws-cdk node_modules\/constructs/)
+      expect(d).toMatch(/node scripts\/check-imports\.mjs /)
+    }
+    // the tools function runs the Lambda runtime, everything under /tmp (Lambda's only writable folder)
+    expect(tools).toMatch(/^CMD \["node", "\/app\/dist\/gpu\/lambda\.js"\]$/m)
+    expect(tools).toMatch(/HOME=\/tmp/)
+    expect(tools.split(/^FROM /m).slice(1).map((x) => x.split('\n')[0])).toEqual(['--platform=linux/arm64 ubuntu:24.04 AS tools', 'tools AS build', 'tools'])
+  })
+
+  it('give the tools image every program the verification jobs take it to have (TOOLS_IMAGE_PROGRAMS)', async () => {
+    const { TOOLS_IMAGE_PROGRAMS } = await import('../../src/tools/verify/job.js')
+    const tools = readFileSync(join(ROOT, 'agent', 'Dockerfile.tools'), 'utf8').split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
+    const from: Record<string, string> = {
+      yosys: 'yosys', 'yosys-smtbmc': 'yosys', 'yosys-abc': 'yosys', z3: 'z3', verilator: 'verilator',
+      iverilog: 'iverilog', vvp: 'iverilog', 'cocotb-config': "'cocotb==", 'nextpnr-ice40': 'nextpnr-ice40',
+      'nextpnr-ecp5': 'nextpnr-ecp5', 'nextpnr-gowin': 'nextpnr-gowin', icepack: 'fpga-icestorm', ecppack: 'fpga-trellis',
+      gowin_pack: "'apycula==", ccx: 'calculix-ccx',
+    }
+    expect(Object.keys(from).sort()).toEqual([...TOOLS_IMAGE_PROGRAMS].sort())
+    for (const [program, source] of Object.entries(from)) expect(tools, program).toContain(source)
+  })
+
+  it('fail the agent image\'s build over AgentCore\'s 2 GB, and only that image\'s', () => {
+    const agent = JSON.stringify(imageBuildSpec({ dockerfile: 'agent/Dockerfile', platform: 'linux/arm64', maxBytes: AGENT_IMAGE_MAX_BYTES }))
+    expect(agent).toContain('docker image inspect --format \\"{{.Size}}\\"')
+    expect(agent).toContain(`-gt ${AGENT_IMAGE_MAX_BYTES} ]`)
+    expect(AGENT_IMAGE_MAX_BYTES).toBeLessThanOrEqual(2_000_000_000)
+    expect(JSON.stringify(imageBuildSpec({ dockerfile: 'agent/Dockerfile.tools', platform: 'linux/arm64' }))).not.toContain('{{.Size}}')
   })
 
   it('build from the lock file npm leaves out of an installed trace', () => {

@@ -14,6 +14,7 @@ const KINDS: { id: keyof Omit<CloudSpend['estimated'], 'total'>; label: string }
   { id: 'agents', label: 'Agents (Claude)' },
   { id: 'gpu', label: 'Graphics card jobs' },
   { id: 'cpu', label: 'CPU jobs' },
+  { id: 'tools', label: 'Tools function jobs' },
 ]
 
 /** The badge beside the prices' line: from the AWS price list (when fetched), or the built-in table, or a warning
@@ -46,7 +47,7 @@ export function CloudBreakdown({ detail, currency, explorer, prices }: { detail:
         </div>
         <dl className="mt-3 space-y-1.5 text-sm">
           {KINDS.map((k) => (
-            <div key={k.id} className="flex justify-between"><dt className="text-muted-foreground">{k.label}</dt><dd>{money(detail.estimated[k.id], currency)}</dd></div>
+            <div key={k.id} className="flex justify-between"><dt className="text-muted-foreground">{k.label}</dt><dd>{money(detail.estimated[k.id] ?? 0, currency)}</dd></div>
           ))}
         </dl>
         <p className="mt-3 flex items-start gap-1.5 text-xs text-muted-foreground">

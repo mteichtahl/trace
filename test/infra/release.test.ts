@@ -1,6 +1,6 @@
 /**
  * TraceRelease (src/infra/release.ts): the two ECR Public repositories with their catalog data, and the release role,
- * trusted only by the source repository's main and v* tags and allowed only to push to those two repositories.
+ * trusted only by the source repository's main and v* tags and allowed only to push to those three repositories.
  */
 import { App } from 'aws-cdk-lib'
 import { Template } from 'aws-cdk-lib/assertions'
@@ -19,12 +19,13 @@ const synth = (createOidcProvider = false): Template => {
 describe('the release stack', () => {
   const t = synth()
 
-  it('is in us-east-1, with trace-agent (arm64) and trace-gpu (x86-64) on ECR Public, described for the gallery', () => {
+  it('is in us-east-1, with trace-agent and trace-tools (arm64) and trace-gpu (x86-64) on ECR Public, described for the gallery', () => {
     expect(RELEASE_REGION).toBe('us-east-1')
     const repos = Object.values(t.findResources('AWS::ECR::PublicRepository') as Record<string, Res>)
-    expect(repos.map((r) => r.Properties.RepositoryName).sort()).toEqual(['trace-agent', 'trace-gpu'])
+    expect(repos.map((r) => r.Properties.RepositoryName).sort()).toEqual(['trace-agent', 'trace-gpu', 'trace-tools'])
     const byName = Object.fromEntries(repos.map((r) => [r.Properties.RepositoryName, r.Properties.RepositoryCatalogData as Record<string, unknown>]))
     expect(byName['trace-agent']).toMatchObject({ Architectures: ['ARM 64'], OperatingSystems: ['Linux'], RepositoryDescription: expect.stringContaining('AgentCore') })
+    expect(byName['trace-tools']).toMatchObject({ Architectures: ['ARM 64'], OperatingSystems: ['Linux'], RepositoryDescription: expect.stringContaining('AWS Lambda') })
     expect(byName['trace-gpu']).toMatchObject({ Architectures: ['x86-64'], OperatingSystems: ['Linux'], RepositoryDescription: expect.stringContaining('AWS Batch') })
     // no repository policy: public repositories are readable by anyone already, and nobody else may push
     for (const r of repos) expect(r.Properties).not.toHaveProperty('RepositoryPolicyText')
@@ -48,7 +49,7 @@ describe('the release stack', () => {
     expect(Object.keys(synth(true).findResources('Custom::AWSCDKOpenIdConnectProvider'))).toHaveLength(1)
   })
 
-  it('may only log in and push to the two repositories: no delete, no policy, no other repository', () => {
+  it('may only log in and push to the three repositories: no delete, no policy, no other repository', () => {
     const role = Object.values(t.findResources('AWS::IAM::Role') as Record<string, Res>)[0] as Res
     const statements = ((role.Properties.Policies ?? []) as { PolicyDocument: { Statement: Statement[] } }[]).flatMap((p) => p.PolicyDocument.Statement)
     expect(Object.keys(t.findResources('AWS::IAM::Policy'))).toEqual([])
@@ -58,8 +59,8 @@ describe('the release stack', () => {
     expect(by.BearerToken?.Condition).toEqual({ StringEquals: { 'sts:AWSServiceName': 'ecr-public.amazonaws.com' } })
     expect(list(by.Push?.Action).sort()).toEqual([...PUSH_ACTIONS].sort())
     const pushed = list(by.Push?.Resource).map((r) => JSON.stringify(r))
-    expect(pushed).toHaveLength(2)
-    expect(pushed.every((r) => /AgentRepository|GpuRepository/.test(r))).toBe(true)
+    expect(pushed).toHaveLength(3)
+    expect(pushed.every((r) => /AgentRepository|ToolsRepository|GpuRepository/.test(r))).toBe(true)
     const every = statements.flatMap((s) => list(s.Action))
     expect(every.filter((a) => /Delete|Policy|Create|\*$/.test(a))).toEqual([])
     expect(Object.keys((t.toJSON() as { Outputs: object }).Outputs)).toContain(RELEASE_ROLE_OUTPUT)

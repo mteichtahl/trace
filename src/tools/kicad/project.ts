@@ -14,6 +14,7 @@ import { execFile } from 'node:child_process'
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from 'node:fs'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { ToolError } from '../../core/registry.js'
+import { type Backend, backendFor } from '../../gpu/jobs.js'
 
 export const SKIP_DIRS = new Set(['.git', 'node_modules', '.venv', 'venv', '__pycache__', 'build', 'dist', '.trace'])
 
@@ -206,12 +207,35 @@ export function findKicadCli(): string | null {
   return onPath('kicad-cli') ?? INSTALL_PATHS.find((p) => existsSync(p)) ?? null
 }
 
+const NO_KICAD = 'this needs kicad-cli (KiCad 7 or newer), which is not installed or not on PATH (set KICAD_CLI to its path)'
+
 export function kicadCli(): string {
   const cli = findKicadCli()
-  if (!cli) {
-    throw new ToolError('this needs kicad-cli (KiCad 7 or newer), which is not installed or not on PATH (set KICAD_CLI to its path)')
-  }
+  if (!cli) throw new ToolError(NO_KICAD)
   return cli
+}
+
+/**
+ * Where kicad-cli runs: here when it is installed, else as a job (the tools function, or the queue: ./remote.ts) when
+ * this machine can send one there (an AgentCore runtime, whose image has no KiCad); null when neither.
+ */
+export function kicadWhere(): Backend | null {
+  if (findKicadCli()) return 'local'
+  const b = backendFor({ kind: 'kicad' })
+  return b === 'local' ? null : b
+}
+
+/** A clear error, before anything else, when kicad-cli can run nowhere. */
+export function requireKicad(): void {
+  if (!kicadWhere()) throw new ToolError(NO_KICAD)
+}
+
+/** Run kicad-cli wherever it runs (kicadWhere), never throwing for a non-zero exit (the caller decides). */
+export async function kicadRun(args: readonly string[], opts: { timeoutMs?: number; cwd?: string } = {}): Promise<CliResult> {
+  const cli = findKicadCli()
+  if (cli) return runProgram(cli, args, opts)
+  if (!kicadWhere()) throw new ToolError(NO_KICAD)
+  return (await import('./remote.js')).runKicadRemote(args, opts)
 }
 
 export interface CliResult {
@@ -238,7 +262,7 @@ export function runProgram(cmd: string, args: readonly string[], opts: { timeout
 
 /** Run kicad-cli; an exit code outside `okCodes` becomes a ToolError carrying its output. */
 export async function runCli(args: readonly string[], opts: { timeoutMs?: number; okCodes?: readonly number[]; cwd?: string } = {}): Promise<CliResult> {
-  const r = await runProgram(kicadCli(), args, opts)
+  const r = await kicadRun(args, opts)
   if (!(opts.okCodes ?? [0]).includes(r.code)) {
     const msg = (r.stderr || r.stdout).trim().slice(-1500)
     throw new ToolError(`kicad-cli ${args.slice(0, 3).join(' ')} failed (exit ${r.code}): ${msg}`)
@@ -248,14 +272,16 @@ export async function runCli(args: readonly string[], opts: { timeoutMs?: number
 
 let versionCache: { cli: string; version: string | null } | null = null
 
-/** kicad-cli's version ("10.0.7"), or null when it is missing or does not answer. */
+/** kicad-cli's version ("10.0.7") wherever it runs (kicadWhere; asked once per process), or null when it is missing
+ * or does not answer. */
 export async function kicadCliVersion(): Promise<string | null> {
-  const cli = findKicadCli()
-  if (!cli) return null
+  const where = kicadWhere()
+  if (!where) return null
+  const cli = findKicadCli() ?? `(${where})`
   if (versionCache?.cli === cli) return versionCache.version
   let version: string | null = null
   try {
-    const r = await runProgram(cli, ['version'], { timeoutMs: 60_000 })
+    const r = await kicadRun(['version'], { timeoutMs: 60_000 })
     version = r.code === 0 ? r.stdout.trim() || null : null
   } catch {
     version = null

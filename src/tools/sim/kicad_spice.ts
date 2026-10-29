@@ -12,11 +12,12 @@ import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 import { scratchDir } from '../../core/store.js'
-import { run, which } from './proc.js'
+import { findKicadCli, kicadRun, kicadWhere } from '../kicad/project.js'
 import { SpiceError } from './spice.js'
 
+/** kicad-cli on this machine (KICAD_CLI, PATH, the usual install folders), or null. */
 export function kicadCli(): string | null {
-  return which('kicad-cli', 'KICAD_CLI')
+  return findKicadCli()
 }
 
 export interface KicadNetlistOptions {
@@ -51,16 +52,21 @@ function unmodelled(line: string): boolean {
 }
 
 export async function exportSpice(o: KicadNetlistOptions): Promise<KicadNetlist> {
-  const exe = kicadCli()
-  if (!exe) throw new SpiceError('kicad-cli not found (install KiCad 8 or later, or set KICAD_CLI)')
+  // here, or as a job where this machine has no KiCad (src/tools/kicad/remote.ts)
+  if (!kicadWhere()) throw new SpiceError('kicad-cli not found (install KiCad 8 or later, or set KICAD_CLI)')
   const sch = resolve(o.schematic)
   if (!existsSync(sch)) throw new SpiceError(`no schematic ${sch}`)
   const dir = scratchDir('trace-kicad-')
   try {
     const out = join(dir, 'export.cir')
-    const p = await run(exe, ['sch', 'export', 'netlist', '--format', 'spice', '-o', out, sch], { timeoutMs: o.timeoutMs ?? 120_000 })
+    let p: { code: number; stdout: string; stderr: string }
+    try {
+      p = await kicadRun(['sch', 'export', 'netlist', '--format', 'spice', '-o', out, sch], { timeoutMs: o.timeoutMs ?? 120_000 })
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e)
+      throw new SpiceError(/timed out/.test(m) ? 'kicad-cli ran over its time limit' : m)
+    }
     const log = p.stdout + p.stderr
-    if (p.timedOut) throw new SpiceError('kicad-cli ran over its time limit', log)
     if (p.code !== 0 || !existsSync(out)) throw new SpiceError(`kicad-cli failed: ${log.trim().split('\n').pop() ?? ''}`, log)
     const exported = readFileSync(out, 'utf8')
     return transform(exported, o, log)

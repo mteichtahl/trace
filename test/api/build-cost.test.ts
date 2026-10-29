@@ -245,7 +245,7 @@ describe('cost', () => {
       return { result: null }
     })
     const a = await run(ADMIN, 'cost.get', { repo: REPO })
-    expect(a.spent.detail.estimated).toEqual({ agents: 3, gpu: 0, cpu: 0.45, total: 3.45 })
+    expect(a.spent.detail.estimated).toEqual({ agents: 3, gpu: 0, cpu: 0.45, tools: 0, total: 3.45 })
     expect(a.spent).toMatchObject({ cloud: 3.45, orders: 48.5 })
     expect(a.spent.detail.actual).toMatchObject({ total: 1.5, estimatedDays: 1 })
     expect(a.stages.find((s: { state: string }) => s.state === 'current').cloud).toBe(3.45)

@@ -37,7 +37,7 @@ describe('the API\'s build and cost answers, as the app reads them', () => {
 
   it('cost.get: the estimate by kind, nothing billed yet, and where the prices come from', () => {
     const c = real<CostView>('cost.get')
-    expect(c.spent.detail?.estimated).toEqual({ agents: 0, gpu: 0, cpu: 0, total: 0 })
+    expect(c.spent.detail?.estimated).toEqual({ agents: 0, gpu: 0, cpu: 0, tools: 0, total: 0 })
     render(<CloudBreakdown detail={c.spent.detail!} currency={c.currency} explorer={c.explorer} prices={c.prices} />)
     expect(screen.getByText('Cloud use, estimated')).toBeInTheDocument()
     expect(screen.getByText('Nothing billed with this project\'s tag yet.')).toBeInTheDocument()

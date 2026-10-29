@@ -1,8 +1,19 @@
 /**
- * Heavy jobs (Blender renders, the PCB autorouter, field and thermal solvers) run through here, so the same MCP tool works on a laptop and from
- * an AgentCore agent. AgentCore runtimes have no GPU, so when TRACE_GPU_QUEUE names an AWS Batch GPU job queue and
- * this machine has no usable GPU of its own, the job is shipped there: inputs go to S3, the job runs in the GPU image,
- * outputs come back. Otherwise the job runs here as a child process.
+ * Heavy jobs (KiCad's command line, Blender renders, the PCB autorouter, the FPGA and verification programs, field and
+ * thermal solvers) run through here, so the same MCP tool works on a laptop and from an AgentCore agent. Each job runs
+ * in one of three places (backendFor):
+ *
+ *   local      a child process here: a laptop, the CI runner, or the Batch and function containers themselves
+ *   function   the project's tools function (TRACE_TOOLS_FUNCTION, set by the stack on its worker runtime): an AWS
+ *              Lambda function from the tools image (agent/Dockerfile.tools, src/gpu/lambda.ts), for the kinds in
+ *              FUNCTION_KINDS. AgentCore takes images up to 2 GB, so KiCad, Blender, the FPGA toolchain and CalculiX
+ *              live in that image instead of the runtime's; a call is synchronous, at most FUNCTION_MAX_SECONDS, and
+ *              warm in about a second (./function.ts)
+ *   batch      the AWS Batch GPU queue (TRACE_GPU_QUEUE) for a job that wants a GPU this machine lacks, and the CPU
+ *              queue for a job the caller marks `remote` (too big for here, or for the function's time limit): the
+ *              GPU image, minutes to start from an idle queue (./batch.ts)
+ *
+ * Either remote way, the inputs go to S3, the job runs, the outputs come back (./protocol.ts has the layout).
  *
  *   const r = await runJob({ kind: 'blender', argv: ['blender', '-b', '-P', '{in:scene.py}', '--', '{out:frame.png}'],
  *     inputs: { 'scene.py': '/tmp/x/scene.py' }, outputs: ['frame.png'], gpu: true, timeoutSeconds: 1800 })
@@ -24,6 +35,11 @@ import { ATTR, type Outcome, fail, recordProjectMetric, setAttrs, span } from '.
 import { scratchDir } from '../core/store.js'
 
 export const JobKind = z.enum(['blender', 'freerouting', 'orthoroute',
+  // KiCad's command line (src/tools/kicad/project.ts runCli): exports, ERC, DRC and netlists, the project folder sent
+  // as one archive and run by src/gpu/kicad-job.ts
+  'kicad',
+  // encoding a render's frames into a video (src/tools/render/tools.ts)
+  'ffmpeg',
   // CPU jobs (gpu: false, so local unless TRACE_GPU_REMOTE=always): verification and FPGA implementation
   'verilator', 'cocotb', 'formal', 'yosys', 'nextpnr', 'fpga-pack',
   // the openEMS FDTD field solver (CPU, multithreaded): local, or the queue's many-core hosts when the caller asks (remote)
@@ -87,26 +103,51 @@ export interface JobResult {
   stderr: string
   /** output name → local path (missing when the job did not write it) */
   outputs: Record<string, string>
-  where: 'local' | 'batch'
-  /** the Batch job id when it ran there */
+  where: Backend
+  /** the Batch job id when it ran there (the function's request id when it ran there) */
   jobId?: string
   seconds: number
 }
 
-/** Where a job would run now. TRACE_GPU_REMOTE=always|never overrides the default (remote only without a local GPU,
- * or when the job asks for the queue with `remote`). */
-export function backendFor(job: { gpu?: boolean | undefined; remote?: boolean | undefined }): 'local' | 'batch' {
-  const queue = process.env.TRACE_GPU_QUEUE
-  const mode = process.env.TRACE_GPU_REMOTE ?? 'auto'
-  if (!queue || mode === 'never') return 'local'
-  if (mode === 'always') return 'batch'
-  return (job.gpu && !localGpu()) || job.remote ? 'batch' : 'local'
+export type Backend = 'local' | 'function' | 'batch'
+
+/** The kinds the tools function runs: what the tools image has (agent/Dockerfile.tools). */
+export const FUNCTION_KINDS: ReadonlySet<JobKind> = new Set<JobKind>([
+  'kicad', 'ffmpeg', 'blender', 'verilator', 'cocotb', 'formal', 'yosys', 'nextpnr', 'fpga-pack', 'calculix',
+])
+/** The longest a job runs on the function: Lambda ends a call at 900 s, and the runner still uploads after the program. */
+export const FUNCTION_MAX_SECONDS = 840
+
+/**
+ * Where a job would run now (the header's three places), first match:
+ *   TRACE_GPU_REMOTE=never                          local
+ *   TRACE_GPU_REMOTE=always, with a queue           batch
+ *   a queue, and the job wants a GPU this machine
+ *   lacks, or is marked `remote`                    batch
+ *   the tools function, and a kind it runs          function (a GPU job too, with no GPU here or queue: rendered on
+ *                                                   its CPU; a `remote` one with no queue: within its time limit)
+ *   TRACE_TOOLS_ELSEWHERE=1 (the agent image, which
+ *   has none of those programs), a queue, and one
+ *   of those kinds                                  batch (a project without the tools function: the flat layout)
+ *   otherwise                                       local
+ * Without the tools function and a queue this is local, as on a laptop.
+ */
+export function backendFor(job: { kind?: JobKind | undefined; gpu?: boolean | undefined; remote?: boolean | undefined }, env: NodeJS.ProcessEnv = process.env): Backend {
+  const queue = env.TRACE_GPU_QUEUE
+  const mode = env.TRACE_GPU_REMOTE ?? 'auto'
+  if (mode === 'never') return 'local'
+  if (queue && mode === 'always') return 'batch'
+  if (queue && ((job.gpu && !localGpu(env)) || job.remote)) return 'batch'
+  const tools = !!job.kind && FUNCTION_KINDS.has(job.kind)
+  if (env.TRACE_TOOLS_FUNCTION && tools && !(job.gpu && localGpu(env))) return 'function'
+  if (queue && tools && ['1', 'true', 'yes'].includes(env.TRACE_TOOLS_ELSEWHERE ?? '')) return 'batch'
+  return 'local'
 }
 
 /** A GPU this process can use: an NVIDIA device node, or TRACE_GPU=1 set by the GPU image. */
-export function localGpu(): boolean {
-  if (['1', 'true', 'yes'].includes(process.env.TRACE_GPU ?? '')) return true
-  if (['0', 'false', 'no'].includes(process.env.TRACE_GPU ?? '')) return false
+export function localGpu(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (['1', 'true', 'yes'].includes(env.TRACE_GPU ?? '')) return true
+  if (['0', 'false', 'no'].includes(env.TRACE_GPU ?? '')) return false
   return existsSync('/dev/nvidia0') || existsSync('/proc/driver/nvidia/version')
 }
 
@@ -144,7 +185,7 @@ export async function runLocal(spec: GpuJob): Promise<JobResult> {
     const timer = setTimeout(() => p.kill('SIGKILL'), job.timeoutSeconds * 1000)
     p.on('error', (e: NodeJS.ErrnoException) => {
       clearTimeout(timer)
-      reject(e.code === 'ENOENT' ? new ToolError(`${cmd} is not installed here${process.env.TRACE_GPU_QUEUE ? '' : ' (set TRACE_GPU_QUEUE to run it on the GPU queue)'}`) : e)
+      reject(e.code === 'ENOENT' ? new ToolError(`${cmd} is not installed here${process.env.TRACE_GPU_QUEUE || process.env.TRACE_TOOLS_FUNCTION ? '' : ' (set TRACE_GPU_QUEUE to run it on the GPU queue)'}`) : e)
     })
     p.on('close', (code) => {
       clearTimeout(timer)
@@ -168,7 +209,9 @@ export async function runJob(spec: GpuJob): Promise<JobResult> {
       [ATTR.gpuKind]: spec.kind, [ATTR.gpuBackend]: backend, [ATTR.gpuWanted]: spec.gpu ?? false,
       [ATTR.gpuInputs]: Object.keys(spec.inputs ?? {}).length, [ATTR.gpuOutputs]: (spec.outputs ?? []).length,
     }, async (s) => {
-      const r = backend === 'local' ? await runLocal(spec) : await (await import('./batch.js')).runBatch(GpuJobSchema.parse(spec))
+      const r = backend === 'local' ? await runLocal(spec)
+        : backend === 'function' ? await (await import('./function.js')).runFunction(GpuJobSchema.parse(spec))
+        : await (await import('./batch.js')).runBatch(GpuJobSchema.parse(spec))
       outcome = r.exitCode === 0 ? 'ok' : 'error'
       setAttrs(s, {
         [ATTR.gpuExitCode]: r.exitCode, [ATTR.gpuSeconds]: r.seconds, [ATTR.outcome]: outcome,

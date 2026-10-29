@@ -79,7 +79,7 @@ function Usage() {
                       return (
                         <tr key={p.repo}>
                           <td className="px-4 py-3 font-medium">{projectName(p.repo)}</td>
-                          <td className="px-4 py-3 text-right" title={`Agents ${money(p.estimated.agents, d.currency)}, graphics card ${money(p.estimated.gpu, d.currency)}, CPU ${money(p.estimated.cpu, d.currency)}`}>{money(p.estimated.total, d.currency)}</td>
+                          <td className="px-4 py-3 text-right" title={`Agents ${money(p.estimated.agents, d.currency)}, graphics card ${money(p.estimated.gpu, d.currency)}, CPU ${money(p.estimated.cpu, d.currency)}, tools function ${money(p.estimated.tools ?? 0, d.currency)}`}>{money(p.estimated.total, d.currency)}</td>
                           <td className="px-4 py-3 text-right">{p.actual === null ? <span className="text-muted-foreground">not yet</span> : money(p.actual, d.currency)}</td>
                           <td className="px-4 py-3 text-right">{money(p.orders, p.orderCurrency)}</td>
                           <td className="px-4 py-3">{p.budget === null ? <span className="text-muted-foreground">No budget set</span> : <StatusBadge plain status={spent <= p.budget ? 'met' : 'failing'} label={`${money(spent, d.currency)} of ${money(p.budget, p.orderCurrency)}`} />}</td>
