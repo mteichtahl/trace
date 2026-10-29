@@ -141,6 +141,8 @@ def run(facts: dict[str, Any], settings: dict[str, Any], capabilities: dict[str,
         raise InputError(f"unknown format(s) {', '.join(bad)} (known: {', '.join(FORMATS)})")
     res = resolve(settings, capabilities)
     board = load_board(facts)
+    if settings["source"] == "script":
+        shell.check_lip(board, settings)  # before any script runs: a lip deeper than the base cuts its floor away
 
     notes: list[str] = []
     if res["assembly_clearance_source"] is None:

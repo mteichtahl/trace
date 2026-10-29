@@ -447,3 +447,27 @@ def test_built_sections_are_measured(tmp_path):
     rows = {row["rule"]: row for row in r["rules"]}
     assert rows["wall"]["ok"] is True and rows["base_wall"]["ok"] is False
     assert rows["base_wall"]["measured"] == pytest.approx(1.0, abs=0.01)
+
+
+def test_lip_deeper_than_the_base_is_refused(tmp_path):
+    # The base has 1.6 + 3.0 (standoff) - 0.5 (margin) = 4.1 mm of room for the lip.
+    with pytest.raises(InputError, match=r"lip_h_mm 6 mm is deeper than the base has room for: 4.1 mm"):
+        run(board_facts(), settings(params={"lip_h_mm": 6.0}), CAPS, tmp_path / "a", formats=["step"])
+    board = load_board(board_facts())
+    s = mech.settings.normalize_settings(settings(params={"lip_h_mm": 4.1}))
+    mech.settings.resolve(s, CAPS)
+    case = shell.two_part(board, s)
+    base, lid = case.parts["base"], case.parts["lid"]
+    assert base.is_valid and lid.is_valid
+    assert lid.bounding_box().min.Z == pytest.approx(1.6 - 4.1)
+    # The floor is whole at the limit: solid under the board's centre and in the band the lip drops into.
+    for x, y in [(125, -120), (98.6, -120), (125, -140.6)]:
+        assert base.is_inside((x, y, -4.0)), (x, y)
+    rows = {row["rule"]: row for row in mech.rules_check(case, s, CAPS, board)}
+    assert rows["base_floor"]["measured"] == pytest.approx(2.0, abs=0.01)
+    assert rows["base_wall"]["ok"] is True
+
+
+def test_cli_rejects_a_deep_lip(tmp_path):
+    p, res = _cli(tmp_path, "--formats", "step", settings_obj=settings(params={"lip_h_mm": 10.0}))
+    assert p.returncode == 2 and "lip_h_mm 10 mm" in res["error"]
