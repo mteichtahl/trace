@@ -26,6 +26,7 @@ import { type DesignDecision, standing } from '../tools/design/decisions.js'
 import { type DesignRows, TOPIC_NAMES, INTENT_TOPICS } from '../tools/design/db.js'
 import { type PinFinding, architectureView, intentView, linksView, pinCheck } from '../tools/design/record.js'
 import type { Finding, TraceRequirement } from './record-read.js'
+import { staleSentence } from '../tools/mech/stale.js'
 
 export type CheckStatus = 'met' | 'not_met' | 'waived'
 export interface CheckResult { id: string; status: CheckStatus; detail?: string; unavailable?: string }
@@ -53,6 +54,9 @@ export interface CheckInput {
   placement: { status: string; summary: string | null } | null
   /** the latest mech.build run (Case design): its status, summary and result (process, fit, rules, warnings) */
   caseBuild?: { id: string; status: string; summary: string | null; result: Record<string, unknown> | null } | null
+  /** why that build no longer stands for the default branch (src/tools/mech/stale.ts staleReasons; empty: current;
+   * absent: not compared) */
+  caseStale?: string[] | null
   /** settings: hil.instruments */
   instruments: { name: string; kind: string; limits?: { max_voltage_v?: number; max_current_a?: number } }[]
   /** the orders recorded (journey.orders) */
@@ -363,6 +367,8 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
   'case-design/fit': (i) => {
     const b = i.caseBuild
     if (!b?.result) return notMet('fit', 'No case build is recorded yet: run mech.build.')
+    // a build of other files is no evidence for these (mech.fit's stale check)
+    if (i.caseStale?.length) return notMet('fit', staleSentence(i.caseStale))
     if (b.result.fit_status === 'pass') return met('fit', `Build ${b.id.slice(0, 8)}: no clash, every gap at its clearance.`)
     const waived = criterion(i, 'fit', 'layout.fit')
     if (waived.status === 'waived') return waived

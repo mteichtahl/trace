@@ -105,9 +105,12 @@ describe.skipIf(!engine.ok)('mech.init and mech.build on the sample board', () =
         expect(b.files, f).toContain(`mechanical/out/${f}`)
         expect(readFileSync(join(repo, 'mechanical', 'out', f)).length, f).toBeGreaterThan(0)
       }
-      expect(b.next).toMatch(b.passed ? /journey\.check criterion "layout\.fit"/ : /clashes and gaps/)
-      // each clash and failing gap is named by its part
-      for (const p of b.problems as string[]) expect(p).toMatch(/^(J|U|R|C|D|board)\w*/)
+      expect(b.next).toMatch(/journey\.check criterion "layout\.fit"/)
+      expect(b.problems).toEqual([])
+      // the build records what it was built from: files, facts, the capabilities' date and the engine
+      expect(b.inputs).toMatchObject({ board: 'hardware/trace-sample.kicad_pcb', capabilities_checked: '2026-10-29', engine: { ts: '1' } })
+      expect(b.inputs.facts_sha256).toMatch(/^[0-9a-f]{64}$/)
+      expect(b.inputs.engine.py_sha256).toMatch(/^[0-9a-f]{64}$/)
 
       const fit = await call('mech.fit', {})
       expect(fit).toMatchObject({ build_run: b.run_id, stale: false })
@@ -132,6 +135,12 @@ describe.skipIf(!engine.ok)('mech.init and mech.build on the sample board', () =
       await call('mech.settings', { clearance: [{ ref: 'J2', mm: 40, reason: 'room for a ribbon cable bend' }] })
       const f = await call('mech.build', { formats: ['step'] })
       expect(f.passed).toBe(false)
+      expect(f.fit_status).toBe('fail')
+      // the failure names the part: J2's 40 mm clearance is not met above it
+      expect(f.problems.length).toBeGreaterThan(0)
+      expect(f.problems.some((p: string) => /^J2 /.test(p)), f.problems.join('; ')).toBe(true)
+      for (const p of f.problems as string[]) expect(p).toMatch(/^(J|U|R|C|D|board)\w* /)
+      expect(f.next).toMatch(/clashes and gaps/)
       await expect(call('mech.order', {})).rejects.toThrow(/does not pass/)
       const o = await call('mech.order', { waiver: 'a first print to check the header heights', format: 'step' })
       expect(o.order).toMatchObject({ service: 'jlc3dp', process: 'MJF', material: 'PA12-HP', quantity: 5, files: ['mechanical/out/case-base.step', 'mechanical/out/case-lid.step'] })

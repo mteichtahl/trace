@@ -33,7 +33,10 @@ the images carry no KiCad 3D model library).
   "board": "hardware/x.kicad_pcb",          // repository-relative
   "sha256": "…",                            // of the board file: a build records it, so a stale build is detectable
   "thickness_mm": 1.6,                      // general/thickness, else 1.6 with a warning
-  "outline": [[x, y], …],                   // the Edge.Cuts outer loop, closed implicitly, arcs sampled every <= 0.5 mm
+  "outline": [[x, y], …],                   // the Edge.Cuts outer loop, closed implicitly, arcs sampled every <= 0.5 mm;
+                                            // ends join when within 0.01 mm of each other (by distance). Segments
+                                            // that close no loop are an error naming the open ends; every cutout and
+                                            // every part's centre must lie inside the outline, else an error
   "cutouts": [[[x, y], …], …],              // inner Edge.Cuts loops
   "holes": [{ "x": 3.5, "y": 3.5, "d": 3.2, "kind": "mounting" | "npth" | "pth", "ref": "H1" | null }],
   "parts": [{
@@ -59,7 +62,10 @@ tactile switches, crystals HC49/SMD, electrolytics by diameter where the name sa
 
 ## Case settings, `mechanical/case.json`
 
-Validated by zod in TypeScript (`src/tools/mech/settings.ts`, the source of truth) and re-checked in Python.
+Validated by zod in TypeScript (`src/tools/mech/settings.ts`, the source of truth) and re-checked in Python. `board`
+and `file` are repository paths: relative, no `..` or `.` segment, no leading `/`, no backslash. The process is stored
+as the capabilities spell it (`pa12-hp` given, `PA12-HP` kept). A per-part clearance or an `openings.skip` entry naming
+a reference that is not on the board is kept, with a warning in mech.settings' answer.
 
 ```jsonc
 {
@@ -214,7 +220,12 @@ installs `/app/python[mech]` into `/opt/trace-venv`. The agent image does not ge
   - `mech.build` — runs the engine, writes `mechanical/out/`, records `fit.json`, `result.json` and the STEP files as
     run artifacts, measures `clashes`, `gap_violations`, `assumed_heights`; run status `pass` / `fail` from the fit
     and rules. Its answer says, when it passes, to record `layout.fit` with `journey.check` and this run id.
-  - `mech.fit` — the latest `mech.build` run's fit, and whether it is stale (board sha256 or case files changed since).
+  - `mech.fit` — the latest `mech.build` run's fit, and whether it is stale (`src/tools/mech/stale.ts`): the build
+    records its `inputs` (the board and its sha256, the sha256 of case.json, case.py and a handed-in file, the facts'
+    sha256, the capabilities' `checked` date, and the engine: `ENGINE_VERSION` in stale.ts, `tracebridge.mech.__version__`
+    when the package states one, and a sha256 over `python/tracebridge/mech/**/*.py`); any that changed is a reason.
+    mech.order and the Case design skill's `fit` check use the same function (the skill compares the files on the
+    default branch).
   - `mech.hand_in` — copies a STEP (or a `case.py`) from a path in the repository into `mechanical/`, sets
     `source`/`file` (or replaces the script), and runs `mech.build`.
   - `mech.capabilities` — the table, its sources and whether it is stale; `mech.capabilities_check` fetches each
@@ -225,8 +236,12 @@ installs `/app/python[mech]` into `/opt/trace-venv`. The agent image does not ge
   an enclosure; build; read clashes; delegate script changes; journey.check layout.fit with the build run), keywords
   (enclosure, case, housing, fit check), escalation (a clash that needs the board outline or a part moved).
 - `tracectl check`: with `mechanical/case.json` present, runs `mech.build` and fails on a failing fit; when build123d
-  is not importable it says so and skips (not a failure). `templates/build/kicad.yml` installs it when the repository
-  has `mechanical/case.json`.
+  is not importable it says so and skips (not a failure); with `TRACE_CHECK_MECH=0` it skips with
+  `TRACE_CHECK_MECH_WHY` (or that variable) as the reason. `templates/build/kicad.yml` installs build123d when the
+  repository has `mechanical/case.json`, and sets `TRACE_CHECK_MECH=0` for a pull request from a fork (see Trust).
+- Paths (`src/tools/mech/paths.ts`): every file the mech tools read or write (hand_in's source and destination,
+  mech.init's two files, case.json, everything under `mechanical/out/` and its clean-up) is resolved by realpath
+  inside the repository's realpath, not under `.git/`, and is not a symbolic link; writes open with `O_NOFOLLOW`.
 - Skill `case-design` ("Case design", stage Layout, stepped, picture `render`): steps `process` (Process and material),
   `clearances` (Clearances), `case` (Review the case), `fit` (Fit check), `order` (Order files); checks `process`
   ("Process and material within JLC3DP's limits"), `clearances` ("Every clearance change has a reason"), `fit` ("Fit
@@ -234,6 +249,41 @@ installs `/app/python[mech]` into `/opt/trace-venv`. The agent image does not ge
   In `web/src/components/skills/definitions.ts`, `src/core/skills.ts` and `src/api/skill-checks.ts` (reading the
   latest `mech.build` run, as placement does with `pcb.placement_check`). Counts that say "nineteen" become twenty.
 - Docs: README "Enclosures" section; `docs/enclosure-cad.md` status line.
+
+## Trust
+
+`mechanical/case.py` is code: Python that a person, the worker or a pull request wrote, and that runs with whatever its
+process can reach. trace treats it as untrusted in all three places it runs.
+
+| Where | Who runs it | What the script can reach |
+| --- | --- | --- |
+| Tools function (Lambda) | `mech.build` from the worker, as a `cad` job | Its job folder (inputs, `out/`, a `home/` that is its HOME, TMPDIR and XDG folders) and the network the function has. Not the function's role credentials (no `AWS_*`, no `AWS_LAMBDA_RUNTIME_API`, `_HANDLER` or `AWS_CONTAINER_*`), not the Runtime API, not trace's tokens |
+| A laptop | `mech.build` or `tracectl check`, as a local `cad` job | The person's files and network (it runs as the person), but not the environment's credentials and tokens: `AWS_*`, `GITHUB_*`, `TRACE_TOKEN`, `ANTHROPIC_*` and the rest are not passed. Files such as `~/.aws/credentials` are readable, as by any program the person runs: review a script before building a case someone else wrote |
+| CI (`templates/build/kicad.yml`) | `tracectl check` on a push or a pull request | As on a laptop, on the runner: the workflow has `contents: read` only. A pull request from a fork runs no case script (`TRACE_CHECK_MECH=0`: "skip mech.build: pull request from a fork runs no case script"), and build123d is not installed for it |
+
+How (`src/gpu/jobs.ts`, `src/gpu/runner.ts`):
+
+- **A scrubbed environment.** A job with `isolate` (the default for kind `cad`, and only for it) starts its program
+  with `isolatedEnv`: an allowlist (PATH, HOME, USER, LANG/LC_*, TZ, TMPDIR, the XDG folders, PYTHONPATH,
+  PYTHONUNBUFFERED, PYTHONHOME, VIRTUAL_ENV and a few more a Python needs) plus the job's own `env`, which the tool
+  builds, never the project. On the function the runner keeps its credentials in its own process for the S3 downloads
+  and uploads; the child never has them. There it also gets HOME, TMPDIR and the XDG folders inside the job's folder
+  (removed after the job) and `PYTHONNOUSERSITE=1`, so nothing one job leaves in a warm container's HOME is imported
+  by the next.
+- **Nothing outlives the job.** The isolated program runs in a process group of its own (detached); when its main
+  process exits, fails or reaches the time limit, the whole group is killed (SIGKILL), so a background process the
+  script started does not survive into a warm function's next job.
+- **The fit check is not the script's to report.** The engine runs the case script in a separate Python process from
+  the one that loads the board, measures the fit and applies the rules: the script's process hands back the case's
+  solids (as files), and the checking process reads them, so a script cannot rewrite `fit_check`, `rules_check` or
+  `result.json` from inside (the engine's own design, `python/tracebridge/mech`).
+- **Files stay in the repository.** See Paths above: a handed-in file or a `mechanical/` path that is a symbolic link,
+  or that leads outside the repository or into `.git/`, is refused, so a script or a pull request cannot make the
+  tools read or overwrite files elsewhere.
+
+What this does not do: it is not a sandbox. On the function the script still has the function's network and its own
+job's files; on a laptop it runs as the person. A script someone else wrote is reviewed like any other code before
+it is built on a laptop, and a case from a pull request is built by CI only for branches of the repository itself.
 
 ## Tests
 

@@ -44,6 +44,8 @@ import { BenchStore, type InstrumentId, type Reading, idsFromRuns, latestByQuant
 import { loadBoards } from '../core/boards.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { boardView, readingView } from './actions-build.js'
+import { CAPABILITIES } from '../tools/mech/capabilities.js'
+import { type BuildInputs, filesNow, staleReasons } from '../tools/mech/stale.js'
 
 /** The skills that read the bench. */
 const HARDWARE_SKILLS = new Set(['bench-setup', 'bring-up-run', 'incoming-inspection'])
@@ -103,7 +105,7 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
   const sheetFiles = skill === 'schematic-finish' ? await kicadFiles(ctx, repo).then((f) => f.sch, () => null) : null
   // what the bench measured and who answered, as taken (the bench's live copy beside the facts: src/core/bench.ts)
   const bench = HARDWARE_SKILLS.has(skill) ? await liveBenchOf(ctx, repo) : { readings: [], ids: [] }
-  return withRecordDb(ctx, repo, (db) => {
+  const input: Awaited<ReturnType<typeof inputFor>> = await withRecordDb(ctx, repo, (db) => {
     const own = loadJourney(db)
     const r = own ? mergeAgentFacts(own, facts) : null
     const draft = draftOverride ?? (row?.data && typeof row.data === 'object' ? row.data as Record<string, unknown> : null)
@@ -151,6 +153,23 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
       draftRow: row ? { step: row.step, saved: row.saved } : null, facts, pendingErrors,
     }
   })
+  // Case design's fit: the build's recorded inputs against the default branch's files now
+  if (skill === 'case-design' && input.caseBuild?.result) input.caseStale = await caseStaleness(ctx, repo, input.caseBuild.result.inputs)
+  return input
+}
+
+/** Why the latest case build no longer stands for the default branch (src/tools/mech/stale.ts); null when the files
+ * cannot be read (not compared). */
+async function caseStaleness(ctx: Context, repo: string, was: unknown): Promise<string[] | null> {
+  if (!was || typeof was !== 'object') return ['the build recorded no inputs']
+  try {
+    const gh = await ctx.deps.github()
+    const { branch } = await gh.defaultBranch(repo)
+    const now = await filesNow(was as Partial<BuildInputs>, (p) => gh.rawFile(repo, p, branch), CAPABILITIES.checked)
+    return staleReasons(was as Partial<BuildInputs>, now)
+  } catch {
+    return null
+  }
 }
 
 const requirementIds = (db: import('node:sqlite').DatabaseSync): string[] => (hasTable(db, 'requirements') ? (db.prepare('SELECT id FROM requirements').all() as { id: string }[]).map((x) => String(x.id)) : [])

@@ -17,9 +17,8 @@
  * Paths are the repository's (relative to its root); the files written are in the working tree, for the person or the
  * worker to commit.
  */
-import { createHash } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { basename, extname, join } from 'node:path'
 import { z } from 'zod'
 import { defineTool, ToolError, type AnyTool } from '../../core/registry.js'
 import { Work } from '../../core/store.js'
@@ -29,7 +28,9 @@ import { type BoardFacts, boardFacts, repoPath } from './board.js'
 import {
   CAPABILITIES, FIGURES, type FigureStatus, RECOMMENDED, RECOMMENDED_WHY, SOURCES, UPLOAD, figureStatus, isCnc, pageText, processRow, staleness,
 } from './capabilities.js'
-import { ALL_ENGINE_FILES, type EngineResult, FORMATS, partsFor, runCase } from './engine.js'
+import { ALL_ENGINE_FILES, type EngineResult, FORMATS, PY_DIR, partsFor, runCase } from './engine.js'
+import { copyRepoFile, readRepoFile, removeRepoFile, repoDir, repoFile, writeRepoFile } from './paths.js'
+import { type BuildInputs, engineStamp, sha256, staleReasons } from './stale.js'
 import {
   CASE_JSON, CASE_PY, type CaseSettings, MECH_DIR, OUT_DIR, SETTABLE, defaults, describe, missingReasons, needSettings, readSettings,
   withClearance, withValue, writeSettings,
@@ -44,7 +45,8 @@ def build(board, settings):
     return case
 `
 
-const sha = (p: string): string | null => (existsSync(p) ? createHash('sha256').update(readFileSync(p)).digest('hex') : null)
+/** A repository file's sha256, null when it is not there (checked: no symbolic link, nothing outside the repository). */
+const sha = (r: string, p: string): string | null => (existsSync(join(r, p)) ? sha256(readRepoFile(r, p)) : null)
 const fmt = (n: number): string => String(Math.round(n * 100) / 100)
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`
 
@@ -52,13 +54,8 @@ async function root(): Promise<string> {
   return (await candidates()).root
 }
 
-/** A path a person gave, inside the repository: its absolute path and its repository path. */
-function inRepo(r: string, p: string): { abs: string; rel: string } {
-  const abs = isAbsolute(p) ? p : resolve(r, p)
-  const rel = relative(r, abs)
-  if (rel.startsWith('..') || isAbsolute(rel)) throw new ToolError(`${p} is outside the repository (${r})`)
-  return { abs, rel: rel.split('\\').join('/') }
-}
+/** A path a person gave, inside the repository (./paths.ts: by realpath, not a symbolic link, not under .git/). */
+const inRepo = (r: string, p: string, what?: string): { abs: string; rel: string } => repoFile(r, p, what)
 
 /** The board to use: the given path, else the project's one .kicad_pcb. */
 async function boardPath(r: string, board?: string): Promise<string> {
@@ -71,6 +68,14 @@ async function boardPath(r: string, board?: string): Promise<string> {
 }
 
 const processOk = (p: CaseSettings['process']): boolean => isCnc(p) || processRow(p) !== null
+
+/** The process as the capabilities spell it (a material or process given in another case: "pa12-hp" → "PA12-HP"). */
+function canonicalProcess(p: CaseSettings['process']): CaseSettings['process'] {
+  const row = processRow(p)
+  if (!row) return isCnc(p) ? { ...p, service: p.service.toLowerCase() } : p
+  const material = row.materials.find((m) => m.toLowerCase() === p.material.toLowerCase()) ?? p.material
+  return { service: row.service, process: row.process, material }
+}
 const processList = (): string => CAPABILITIES.processes.map((r) => `${r.process} ${r.materials.join('/')}`).join('; ')
 
 // ------------------------------------------------------------------ mech.board
@@ -128,11 +133,15 @@ export const initTool = defineTool({
       let s = defaults(board)
       if (a.process) {
         if (!processOk(a.process)) throw new ToolError(`mech.init: ${a.process.service} ${a.process.process} ${a.process.material} is not in the capabilities (${processList()}; or service jlccnc for CNC)`)
-        for (const k of ['service', 'process', 'material'] as const) if (a.process[k] !== s.process[k]) s = withValue(s, `process.${k}`, a.process[k], a.reason)
+        const given = canonicalProcess(a.process)
+        for (const k of ['service', 'process', 'material'] as const) if (given[k] !== s.process[k]) s = withValue(s, `process.${k}`, given[k], a.reason)
       }
       if (a.quantity !== undefined && a.quantity !== s.quantity) s = withValue(s, 'quantity', a.quantity, a.reason ?? 'the build quantity')
+      // both checked before either is written: a symbolic link at either refuses the whole call
+      repoFile(r, CASE_JSON)
+      repoFile(r, CASE_PY)
       writeSettings(r, s)
-      writeFileSync(join(r, CASE_PY), CASE_TEMPLATE)
+      writeRepoFile(r, CASE_PY, CASE_TEMPLATE)
       const p = s.process
       return {
         status: 'pass' as const,
@@ -163,44 +172,71 @@ export const settingsTool = defineTool({
     const before = needSettings(r)
     return recorded('mech.settings', before.board, a, async () => {
       let s = before
-      for (const c of a.set) s = withValue(s, c.path, c.value, c.reason)
+      for (const c of a.set) {
+        // a process value as the capabilities spell it, so case.json and the recommendation compare as equal
+        let v = c.value
+        if (typeof v === 'string' && c.path.startsWith('process.')) {
+          const k = c.path.slice('process.'.length) as keyof CaseSettings['process']
+          v = canonicalProcess({ ...s.process, [k]: v })[k]
+        }
+        s = withValue(s, c.path, v, c.reason)
+      }
       for (const c of a.clearance) s = withClearance(s, c.ref, c.mm, c.reason)
       if (!processOk(s.process)) throw new ToolError(`mech.settings: ${s.process.service} ${s.process.process} ${s.process.material} is not in the capabilities (${processList()}; or service jlccnc for CNC)`)
+      s = { ...s, process: canonicalProcess(s.process) }
       const changed = a.set.length + a.clearance.length > 0
       if (changed) writeSettings(r, s)
+      const warnings = unknownRefs(r, s, a)
       const rows = describe(s)
       const away = rows.filter((x) => x.changed)
       const unexplained = missingReasons(s)
       return {
         status: unexplained.length ? 'fail' as const : 'pass' as const,
-        summary: `${changed ? `${plural(a.set.length + a.clearance.length, 'change')} written; ` : ''}${plural(away.length, 'value')} away from the recommendation${unexplained.length ? `, ${unexplained.length} without a reason: ${unexplained.join(', ')}` : ''}`,
-        result: { settings: s, values: rows, without_reason: unexplained, ...(changed ? { written: CASE_JSON, next: 'mech.build to rebuild the case and check its fit.' } : {}) },
+        summary: `${changed ? `${plural(a.set.length + a.clearance.length, 'change')} written; ` : ''}${plural(away.length, 'value')} away from the recommendation${unexplained.length ? `, ${unexplained.length} without a reason: ${unexplained.join(', ')}` : ''}${warnings.length ? `; ${plural(warnings.length, 'warning')}` : ''}`,
+        result: { settings: s, values: rows, without_reason: unexplained, warnings, ...(changed ? { written: CASE_JSON, next: 'mech.build to rebuild the case and check its fit.' } : {}) },
       }
     })
   },
 })
 
-// ------------------------------------------------------------------ mech.build
-
-/** What the stale check compares: the board and the case's own files, as they were for the build. */
-interface Inputs { board: string; board_sha256: string; case_json_sha256: string | null; case_py_sha256: string | null; case_file: string | null; case_file_sha256: string | null }
-
-function currentInputs(r: string, s: CaseSettings): Inputs {
-  return {
-    board: s.board, board_sha256: sha(join(r, s.board)) ?? '',
-    case_json_sha256: sha(join(r, CASE_JSON)), case_py_sha256: s.source === 'script' ? sha(join(r, CASE_PY)) : null,
-    case_file: s.source === 'file' ? s.file ?? null : null, case_file_sha256: s.source === 'file' && s.file ? sha(join(r, s.file)) : null,
+/**
+ * References this call names (a per-part clearance, openings.skip) that are not parts of the board: a warning each, not
+ * a refusal (the part may be about to be placed). Nothing when the board cannot be read.
+ */
+function unknownRefs(r: string, s: CaseSettings, a: { set: { path: string; value: unknown }[]; clearance: { ref: string; mm: number | null }[] }): string[] {
+  const named = [
+    ...a.clearance.filter((c) => c.mm !== null).map((c) => ({ ref: c.ref, what: `clearance for ${c.ref}` })),
+    ...a.set.filter((c) => c.path === 'openings.skip' && Array.isArray(c.value)).flatMap((c) => (c.value as string[]).map((ref) => ({ ref, what: `openings.skip names ${ref}` }))),
+  ]
+  if (!named.length) return []
+  let refs: Set<string>
+  try {
+    refs = new Set(boardFacts(join(r, s.board), r).parts.map((p) => p.ref))
+  } catch {
+    return []
   }
+  return named.filter((n) => !refs.has(n.ref)).map((n) => `${n.what}: ${n.ref} is not a part on ${s.board} (it is kept; check the reference)`)
 }
 
-function staleReasons(was: Inputs, now: Inputs): string[] {
-  const out: string[] = []
-  if (was.board !== now.board) out.push(`the case's board is now ${now.board} (it was ${was.board})`)
-  else if (was.board_sha256 !== now.board_sha256) out.push(`${now.board} changed since the build`)
-  if (was.case_json_sha256 !== now.case_json_sha256) out.push(`${CASE_JSON} changed since the build`)
-  if (was.case_py_sha256 !== now.case_py_sha256) out.push(`${CASE_PY} changed since the build`)
-  if (was.case_file !== now.case_file || was.case_file_sha256 !== now.case_file_sha256) out.push(`the handed-in case file ${now.case_file ?? was.case_file ?? ''} changed since the build`)
-  return out
+// ------------------------------------------------------------------ mech.build
+
+/** What the stale check (./stale.ts) compares: the board, the case's own files, the facts, the capabilities' date and
+ * the engine, as they are now (`facts`: the facts as built, else read from the board now). */
+function currentInputs(r: string, s: CaseSettings, facts?: BoardFacts): BuildInputs {
+  let f = facts
+  if (!f) {
+    try {
+      f = boardFacts(join(r, s.board), r)
+    } catch { /* an unreadable board shows as a changed board */ }
+  }
+  return {
+    board: s.board, board_sha256: sha(r, s.board) ?? '',
+    case_json_sha256: sha(r, CASE_JSON), case_py_sha256: s.source === 'script' ? sha(r, CASE_PY) : null,
+    case_file: s.source === 'file' ? s.file ?? null : null, case_file_sha256: s.source === 'file' && s.file ? sha(r, s.file) : null,
+    facts_sha256: f ? sha256(JSON.stringify(f)) : '',
+    capabilities_checked: CAPABILITIES.checked,
+    engine: engineStamp(process.env.TRACE_MECH_PYTHONPATH || PY_DIR),
+  }
 }
 
 const Formats = z.array(z.enum(FORMATS)).min(1).default([...FORMATS])
@@ -216,21 +252,23 @@ function fitLines(f: EngineResult['fit']): string[] {
 
 async function build(r: string, s: CaseSettings, args: unknown, formats: readonly (typeof FORMATS)[number][]) {
   return recorded('mech.build', s.board, args, async (run) => {
-    const facts: BoardFacts = boardFacts(join(r, s.board), r)
-    const inputs = currentInputs(r, s)
-    const script = s.source === 'script' && existsSync(join(r, CASE_PY)) ? join(r, CASE_PY) : null
-    const caseFile = s.source === 'file' && s.file ? join(r, s.file) : null
+    const facts: BoardFacts = boardFacts(inRepo(r, s.board, 'the case\'s board').abs, r)
+    const inputs = currentInputs(r, s, facts)
+    // the script and the handed-in file: regular files in the repository (no symbolic link to something outside)
+    const script = s.source === 'script' && existsSync(join(r, CASE_PY)) ? inRepo(r, CASE_PY).abs : null
+    const caseFile = s.source === 'file' && s.file ? inRepo(r, s.file, 'the handed-in case').abs : null
     if (caseFile && !existsSync(caseFile)) throw new ToolError(`the handed-in case ${s.file} is missing (${CASE_JSON} names it): hand it in again with mech.hand_in, or set source back to script`)
+    // where the files go, checked before the engine runs: a linked mechanical/out is refused, not written through
+    repoFile(r, OUT_DIR)
     const c = await runCase({ facts, settings: s, script, caseFile, formats })
     const res = c.result
     // mechanical/out/: this build's files only
-    const out = join(r, OUT_DIR)
-    mkdirSync(out, { recursive: true })
-    for (const f of ALL_ENGINE_FILES) if (f !== 'result.json') rmSync(join(out, f), { force: true })
+    repoDir(r, OUT_DIR)
+    for (const f of ALL_ENGINE_FILES) if (f !== 'result.json') removeRepoFile(r, `${OUT_DIR}/${f}`)
     const written: string[] = []
     for (const [name, p] of Object.entries(c.outputs)) {
       if (name === 'result.json') continue
-      copyFileSync(p, join(out, name))
+      writeRepoFile(r, `${OUT_DIR}/${name}`, readFileSync(p))
       written.push(`${OUT_DIR}/${name}`)
     }
     written.sort()
@@ -306,7 +344,7 @@ export function latestBuild(): BuildRecord | null {
 
 export const fitTool = defineTool({
   name: 'mech.fit',
-  description: 'The latest mech.build run\'s fit check (clashes, gaps, openings, failing rules) and whether it is stale: the board file, the case settings, the case script or the handed-in file changed since that build (each by sha256). A stale fit is no evidence for layout.fit: run mech.build again. Recorded; returns run_id.',
+  description: 'The latest mech.build run\'s fit check (clashes, gaps, openings, failing rules) and whether it is stale: the board file, the case settings, the case script or the handed-in file changed since that build (each by sha256), or the board facts, the capabilities\' date or the enclosure engine did. A stale fit is no evidence for layout.fit: run mech.build again. Recorded; returns run_id.',
   input: z.object({}),
   run: async (a) => {
     const r = await root()
@@ -315,7 +353,7 @@ export const fitTool = defineTool({
       const b = latestBuild()
       if (!b) throw new ToolError('no mech.build run is recorded yet: run mech.build')
       const res = b.result
-      const reasons = staleReasons(res.inputs as Inputs, currentInputs(r, s))
+      const reasons = staleReasons(res.inputs as BuildInputs, currentInputs(r, s))
       run.measure('stale', reasons.length ? 1 : 0)
       const passed = b.status === 'pass' && !reasons.length
       return {
@@ -344,17 +382,17 @@ export const handInTool = defineTool({
   run: async (a) => {
     const r = await root()
     let s = needSettings(r)
-    const { abs, rel } = inRepo(r, a.path)
+    const { abs, rel } = inRepo(r, a.path, 'the handed-in file')
     if (!existsSync(abs)) throw new ToolError(`there is no file ${a.path} in the repository`)
     const ext = extname(abs).toLowerCase()
     let kept: string
     if (ext === '.step' || ext === '.stp') {
       kept = `${MECH_DIR}/${basename(abs)}`
-      if (resolve(r, kept) !== abs) copyFileSync(abs, join(r, kept))
+      copyRepoFile(r, rel, kept, { from: 'the handed-in file', to: 'the case file it is kept as' })
       s = { ...s, source: 'file', file: kept }
     } else if (ext === '.py') {
       kept = CASE_PY
-      if (resolve(r, CASE_PY) !== abs) copyFileSync(abs, join(r, CASE_PY))
+      copyRepoFile(r, rel, CASE_PY, { from: 'the handed-in file', to: CASE_PY })
       const { file: _drop, ...rest } = s
       s = { ...rest, source: 'script' } as CaseSettings
     } else throw new ToolError(`mech.hand_in takes a STEP (.step, .stp) or a case script (.py), not ${ext || 'a file without an extension'}`)
@@ -433,7 +471,7 @@ export const orderTool = defineTool({
     return recorded('mech.order', s.board, a, async (run) => {
       const b = latestBuild()
       if (!b) throw new ToolError('no mech.build run is recorded yet: run mech.build first')
-      const stale = staleReasons(b.result.inputs as Inputs, currentInputs(r, s))
+      const stale = staleReasons(b.result.inputs as BuildInputs, currentInputs(r, s))
       if (stale.length) throw new ToolError(`the latest build (${b.id}) is stale: ${stale.join('; ')}. Run mech.build again`)
       if (b.status !== 'pass' && !a.waiver) throw new ToolError(`the latest build (${b.id}) does not pass: ${String(b.result.fit_summary ?? '')}. Fix it, or give the waiver`)
       const files = partsFor(s.source).map((p) => `${OUT_DIR}/case-${p}.${a.format}`)
@@ -458,9 +496,8 @@ export const orderTool = defineTool({
         '## Files to upload', '', ...files.map((f) => `- \`${f}\``), '',
         '## After paying', '', 'Record the order number, what was paid and the ship date with the project\'s order (Order submit).', '',
       ].join('\n')
-      mkdirSync(join(r, OUT_DIR), { recursive: true })
-      writeFileSync(join(r, OUT_DIR, 'order.json'), `${JSON.stringify(order, null, 2)}\n`)
-      writeFileSync(join(r, OUT_DIR, 'order.md'), md)
+      writeRepoFile(r, `${OUT_DIR}/order.json`, `${JSON.stringify(order, null, 2)}\n`)
+      writeRepoFile(r, `${OUT_DIR}/order.md`, md)
       run.artifact('order.json', JSON.stringify(order, null, 1), 'application/json')
       run.artifact('order.md', md, 'text/markdown')
       return {
