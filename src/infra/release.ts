@@ -28,6 +28,7 @@ import { App, CfnOutput, Stack } from 'aws-cdk-lib'
 import { CfnPublicRepository } from 'aws-cdk-lib/aws-ecr'
 import * as iam from 'aws-cdk-lib/aws-iam'
 import { projectSlug } from '../core/project.js'
+import { IMMUTABLE_SUBJECT, githubSubjects } from './props.js'
 
 export const RELEASE_STACK = 'TraceRelease'
 /** ECR Public is in us-east-1 only. */
@@ -45,7 +46,9 @@ export const PUSH_ACTIONS = [
 
 const ISSUER = 'token.actions.githubusercontent.com'
 
-export interface ReleaseSettings { repository: string; createOidcProvider: boolean }
+/** `immutableSubject`: the repository's GitHub immutable OIDC subject prefix (src/infra/props.ts IMMUTABLE_SUBJECT), trusted
+ * beside its name form when set */
+export interface ReleaseSettings { repository: string; createOidcProvider: boolean; immutableSubject?: string }
 
 export function releaseSettings(context: (key: string) => unknown, env: NodeJS.ProcessEnv = process.env): ReleaseSettings {
   const get = (key: string, name: string): string | undefined => {
@@ -54,7 +57,12 @@ export function releaseSettings(context: (key: string) => unknown, env: NodeJS.P
   }
   const create = get('createOidcProvider', 'TRACE_CREATE_OIDC_PROVIDER')
   if (create !== undefined && create !== 'true' && create !== 'false') throw new Error(`createOidcProvider must be true or false, not ${create}`)
-  return { repository: projectSlug(get('repository', 'TRACE_RELEASE_REPOSITORY') ?? RELEASE_REPOSITORY), createOidcProvider: create === 'true' }
+  const immutable = get('immutableSubject', 'TRACE_RELEASE_IMMUTABLE_SUBJECT')
+  if (immutable !== undefined && !IMMUTABLE_SUBJECT.test(immutable)) throw new Error(`immutableSubject must be repo:OWNER@ID/REPO@ID, not ${immutable}`)
+  return {
+    repository: projectSlug(get('repository', 'TRACE_RELEASE_REPOSITORY') ?? RELEASE_REPOSITORY), createOidcProvider: create === 'true',
+    ...(immutable ? { immutableSubject: immutable } : {}),
+  }
 }
 
 const CATALOG = {
@@ -89,7 +97,7 @@ export class TraceReleaseStack extends Stack {
       description: `Pushes trace's images to ECR Public: ${s.repository}'s workflows on main and v* tags only`,
       assumedBy: new iam.WebIdentityPrincipal(provider.openIdConnectProviderArn, {
         StringEquals: { [`${ISSUER}:aud`]: 'sts.amazonaws.com' },
-        StringLike: { [`${ISSUER}:sub`]: [`repo:${s.repository}:ref:refs/heads/main`, `repo:${s.repository}:ref:refs/tags/v*`] },
+        StringLike: { [`${ISSUER}:sub`]: [':ref:refs/heads/main', ':ref:refs/tags/v*'].flatMap((ref) => [githubSubjects(s.repository, s.immutableSubject ? { [s.repository]: s.immutableSubject } : {}, ref)].flat()) },
       }),
       inlinePolicies: {
         Push: new iam.PolicyDocument({

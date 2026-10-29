@@ -92,7 +92,7 @@ import { SELF_WRITABLE, TraceWeb, addWebClient, traceWebProps } from './web.js'
 import { ACCESS_PREFIX, AGENT_FACTS, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
   CDK_QUALIFIER, CENTRAL_BUCKET_OUTPUT, INSTALLATION_PREFIX, GPU_IMAGE_BUILD_OUTPUT, type InfraProps, SELF_UPDATE_OUTPUT, ciRunnerOutput, LAYOUT_OUTPUT, selfUpdateRoleName, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, EXTERNAL_RESOURCE_SERVER, cpuEnabled, webModel,
-  kbEnabled, projectRefs, projectSettings,
+  githubSubjects, kbEnabled, projectRefs, projectSettings,
 } from './props.js'
 
 /** The tag every runtime (and memory) of an installation carries: its prefix. The API's grant on the workers is scoped
@@ -606,7 +606,7 @@ export class TraceStack extends Stack {
         maxSessionDuration: Duration.hours(1),
         description: `Assumed only by ${repository}'s ci workflow on ${branch} (GitHub OIDC), to keep this trace installation up to date`.slice(0, 1000),
         assumedBy: new iam.WebIdentityPrincipal(oidc.openIdConnectProviderArn, {
-          StringEquals: { [`${issuer}:aud`]: 'sts.amazonaws.com', [`${issuer}:sub`]: `repo:${repository}:ref:refs/heads/${branch}` },
+          StringEquals: { [`${issuer}:aud`]: 'sts.amazonaws.com', [`${issuer}:sub`]: githubSubjects(repository, cfg.githubSubjects, `:ref:refs/heads/${branch}`) },
           // the workflow file the job comes from, at that branch: only .github/workflows/ci.yml, not another workflow there
           StringLike: { [`${issuer}:job_workflow_ref`]: `${repository}/.github/workflows/ci.yml@refs/heads/${branch}` },
         }),

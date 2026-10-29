@@ -77,6 +77,20 @@ describe('tracectl release setup', () => {
     expect(d.calls.filter((c) => c.startsWith('dispatch'))).toEqual([])
   })
 
+  it('passes the repository\'s GitHub immutable subject to the release stack, and deploys with the name form only when GitHub cannot give it', async () => {
+    const SUBJECT = 'repo:mteichtahl@1817657/trace@1433970189'
+    const asked: string[] = []
+    const d = deps({ subject: async (repo) => { asked.push(repo); return SUBJECT } })
+    await releaseSetup(d, { account: '123456789012' })
+    expect(asked).toEqual(['mteichtahl/trace'])
+    expect(d.calls.find((c) => c.startsWith('cdk deploy TraceRelease'))).toBe(`cdk deploy TraceRelease --app node dist/infra/release.js --require-approval never -c repository=mteichtahl/trace -c createOidcProvider=false -c immutableSubject=${SUBJECT} @us-east-1`)
+    const lines: string[] = []
+    const failed = deps({ subject: async () => { throw new Error('GET /repos/mteichtahl/trace: 401 Bad credentials') }, log: (l) => lines.push(l) })
+    await releaseSetup(failed, { account: '123456789012' })
+    expect(failed.calls.find((c) => c.startsWith('cdk deploy TraceRelease'))).not.toContain('immutableSubject')
+    expect(lines.join('\n')).toMatch(/mteichtahl\/trace's GitHub ids could not be read \(GET \/repos\/mteichtahl\/trace: 401 Bad credentials\): the release role trusts repo:mteichtahl\/trace only/)
+  })
+
   it('stops, saying which step, when a deploy fails, and carries on when only the display name could not be set', async () => {
     await expect(releaseSetup(deps({ cdk: async (a) => (a.includes('TraceRelease') ? 1 : 0) }), { account: '1' })).rejects.toThrow(/cdk deploy TraceRelease exited 1/)
     await expect(releaseSetup(deps({ outputs: async () => null }), { account: '1' })).rejects.toThrow(/no output ReleaseRoleArn/)

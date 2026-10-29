@@ -53,7 +53,7 @@ import {
   type ConnectionChoice, type RunnerAuthChoice, awsEnv, chooseRunnerAuth, codebuildClient, connectionsClient, connectionsConsoleUrl, connectorAccessNote, resolveConnection, stackOutputs, webhookRefusedNote,
 } from './aws.js'
 import { cdkBin, cdkDeployArgs, runStreaming } from './bootstrap.js'
-import { checkToken, deleteVariable, getVariable, repositoryDefaultBranch, setSecret, setVariable } from './github.js'
+import { checkToken, deleteVariable, getVariable, immutableSubject, repositoryDefaultBranch, setSecret, setVariable } from './github.js'
 import { deployEdge, withAcl } from './edge.js'
 import { FLAT_NOTE, type PendingEntry, type PendingIo, type PendingRecord, addPending, markAdded, markAttempt, parsePending, s3PendingIo } from './pending.js'
 import { InstallationRecordSchema } from './record.js'
@@ -80,6 +80,8 @@ export interface UpdateDeps {
     /** the token's own login (TRACE_AGENT_LOGIN) and a repository's default branch */
     login?: (token: string) => Promise<string>
     branch?: (token: string, repo: string) => Promise<string>
+    /** a repository's immutable OIDC subject prefix (github.ts immutableSubject), for its roles' trust */
+    subject?: (token: string, repo: string) => Promise<string>
   }
   /** the projects created from the web app that wait for an update (installation/pending-projects/*): list, and write
    * one back (marked); absent, none */
@@ -106,6 +108,7 @@ export const defaultUpdateDeps = (env: NodeJS.ProcessEnv = process.env): UpdateD
   github: {
     get: (t, r, n) => getVariable(t, r, n), set: (t, r, n, v) => setVariable(t, r, n, v), delete: (t, r, n) => deleteVariable(t, r, n),
     setSecret: (t, r, n, v) => setSecret(t, r, n, v), login: async (t) => (await checkToken(t)).login, branch: (t, r) => repositoryDefaultBranch(t, r),
+    subject: (t, r) => immutableSubject(t, r),
   },
   pending: s3PendingIo,
   putSecret: async (creds, region, secretArn, value) => {
@@ -204,6 +207,19 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
   const kept = addPending(props as InfraInput, carried, (r) => pending.find((p) => p.record.repo.toLowerCase() === r)?.record.branch ?? 'main', { deployed: true })
   const grown = addPending(kept.props, fresh, (r) => branches.get(r) ?? 'main')
   props = grown.props as Record<string, unknown>
+  // each repository's GitHub immutable OIDC subject its roles trust beside repo:OWNER/REPO (src/core/github-subject.ts):
+  // the saved settings carry the installer's; a project created in the web app (or settings saved before there were
+  // any) gets it looked up here with the shared token. Best effort: one that cannot be read is trusted by its name only
+  const known = { ...((props.githubSubjects ?? {}) as Record<string, string>) }
+  const parsed = InfraPropsSchema.parse(props)
+  const wanted = [...projectRefs(parsed.repositories).map((r) => r.repository), ...(parsed.selfUpdate ? [parsed.selfUpdate.repository.toLowerCase()] : [])].filter((r) => !known[r])
+  if (wanted.length && d.github.subject) {
+    const t = await readShared(before.GithubSecretArn ?? '')
+    for (const r of t ? [...new Set(wanted)] : []) {
+      try { known[r] = await d.github.subject(t, r) } catch (e) { log(`${r}: its GitHub ids could not be read (${redact(message(e))}); its roles trust repo:${r} only`) }
+    }
+    if (Object.keys(known).length) props = { ...props, githubSubjects: known }
+  }
   for (const k of kept.skipped) say(`${k.repo}, added by an earlier update, is no longer deployed by it: ${k.why}.`)
   for (const k of grown.skipped) say(`${k.repo} (created in the web app) is not added by this update: ${k.why}.`)
   const flat = InfraPropsSchema.parse(props).layout === 'flat'

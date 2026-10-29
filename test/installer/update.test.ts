@@ -238,6 +238,25 @@ describe('tracectl update-installation', () => {
     expect(next.secrets.size).toBe(0)
   })
 
+  it('trusts each repository by its GitHub ids too: keeps the saved ones, looks up the missing (a web-app project too), and goes on without one GitHub cannot give', async () => {
+    const SAVED = 'repo:mteichtahl@1817657/trace@1433970189'
+    const record = JSON.stringify(installationRecord({ stack: 'TraceStack', region: 'us-east-1', props: { ...PROPS, githubSubjects: { [TRACE]: SAVED } }, runnerAuth: 'connection', connectionArn: '', traceRepository: TRACE, traceBranch: 'main', now: new Date('2026-10-01T00:00:00Z') }))
+    const w = world({ record, pending: [{ repo: NEW, name: 'Fresh', requested_by: 'marc@example.com', requested_at: '2026-10-20T00:00:00Z' }] })
+    const asked: string[] = []
+    w.deps.github.subject = async (t, repo) => {
+      expect(t).toBe(TOKEN)
+      asked.push(repo)
+      if (repo === BOARD) throw new Error('GET /repos/mteichtahl/board: 404 Not Found')
+      return `repo:acme@42/fresh@4242`
+    }
+    expect(await updateInstallation(w.deps)).toBe(0)
+    expect(asked.sort()).toEqual([NEW, BOARD].sort())
+    expect(w.infra[0]?.githubSubjects).toEqual({ [TRACE]: SAVED, [NEW]: 'repo:acme@42/fresh@4242' })
+    expect(InfraPropsSchema.parse(w.infra[0]).githubSubjects[NEW]).toBe('repo:acme@42/fresh@4242')
+    expect(w.log.join('\n')).toMatch(/mteichtahl\/board: its GitHub ids could not be read \(GET \/repos\/mteichtahl\/board: 404 Not Found\); its roles trust repo:mteichtahl\/board only/)
+    expect(w.log.join('\n')).not.toContain(TOKEN)
+  })
+
   it('a failed deploy counts an attempt; after the last one the update stops adding it, and says to run the installer', async () => {
     const w = world({ cdk: 1, pending: [{ repo: NEW }] })
     expect(await updateInstallation(w.deps)).toBe(1)

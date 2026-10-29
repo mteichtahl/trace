@@ -16,6 +16,7 @@
  */
 import { z } from 'zod'
 import { PriceOverridesSchema } from '../core/prices.js'
+import { IMMUTABLE_SUBJECT } from '../core/github-subject.js'
 
 export const Repo = z.string().trim().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO')
 /** admin: everything, everywhere; user: read/write on assigned projects; guest: read on assigned projects. */
@@ -196,7 +197,12 @@ export const SampleAnswers = z.object({
 }).strict()
 
 export const AnswersSchema = z.object({
-  github: z.object({ login: z.string().default('') }).strict().default({ login: '' }),
+  /** from GitHub: the token's login, and each repository's immutable OIDC subject prefix (src/infra/props.ts
+   * githubSubjects), looked up again by every run before the deploy */
+  github: z.object({
+    login: z.string().default(''),
+    subjects: z.record(z.string(), z.string().regex(IMMUTABLE_SUBJECT)).default({}),
+  }).strict().default({ login: '', subjects: {} }),
   aws: AwsAnswers,
   agents: AgentAnswers,
   runners: RunnerAnswers.prefault({}),
