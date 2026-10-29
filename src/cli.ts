@@ -223,8 +223,12 @@ async function cmdCheck(): Promise<number> {
     }
   }
   if (existsSync(join(root, CASE_JSON)) && reg.get('mech.build')) {
-    const engine = engineAvailable()
-    if (!engine.ok) out(`skip   mech.build ${CASE_JSON}: ${engine.why ?? 'the enclosure engine is not available'} (pip install 'build123d==0.13.0' and the repository's python/ package to check the case)`)
+    // the build's workflow sets TRACE_CHECK_MECH=0 for a pull request from a fork: case.py is code, and a fork's is not
+    // run (templates/build/kicad.yml; docs/enclosure-build.md "Trust")
+    const skipMech = ['0', 'false', 'no'].includes((process.env.TRACE_CHECK_MECH ?? '').trim().toLowerCase())
+    const engine = skipMech ? { ok: false, why: null } : engineAvailable()
+    if (skipMech) out(`skip   mech.build ${CASE_JSON}: ${process.env.TRACE_CHECK_MECH_WHY?.trim() || 'TRACE_CHECK_MECH=0, no case script is run'}`)
+    else if (!engine.ok) out(`skip   mech.build ${CASE_JSON}: ${engine.why ?? 'the enclosure engine is not available'} (pip install 'build123d==0.13.0' and the repository's python/ package to check the case)`)
     else {
       ran++
       try {

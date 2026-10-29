@@ -59,7 +59,7 @@ describe('where GPU jobs are staged', () => {
   })
 
   it('round-trips the spec, and refuses input names that leave the job folder', () => {
-    const s: RemoteSpec = { v: 1, id: 'blender-1', bucket: 'bkt', prefix: 'jobs', kind: 'blender', argv: ['x'], inputs: ['a.v', 'rtl/sub/x.vh'], outputs: [], env: {}, gpu: true, timeoutSeconds: 10 }
+    const s: RemoteSpec = { v: 1, id: 'blender-1', bucket: 'bkt', prefix: 'jobs', kind: 'blender', argv: ['x'], inputs: ['a.v', 'rtl/sub/x.vh'], outputs: [], env: {}, gpu: true, timeoutSeconds: 10, isolate: false }
     expect(decodeSpec(encodeSpec(s))).toEqual(s)
     expect(() => decodeSpec('nonsense')).toThrow(/not readable/)
     for (const bad of ['../x.v', 'a/../../x.v', '/etc/passwd', 'a\\b.v', 'a//b.v', './a.v', 'a/./b.v', '']) {

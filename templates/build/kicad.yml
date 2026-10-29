@@ -31,11 +31,15 @@ jobs:
       # The enclosure engine, only when the repository has a case (mechanical/case.json): build123d into the venv the
       # install step made for trace's Python package (TRACE_PYTHON), which already holds tracebridge and its mech module.
       - name: Enclosure engine (build123d)
-        if: hashFiles('mechanical/case.json') != ''
+        if: hashFiles('mechanical/case.json') != '' && !github.event.pull_request.head.repo.fork
         run: '"$TRACE_PYTHON" -m pip install -q "build123d==0.13.0"'
       # ERC and DRC on every KiCad project, a build of every firmware target, and the case's fit check when there is
-      # a case (tracectl check).
+      # a case (tracectl check). The case script (mechanical/case.py) is code: a pull request from a fork runs none
+      # (TRACE_CHECK_MECH=0), so a fork's script never runs on this repository's runner.
       - run: tracectl check
+        env:
+          TRACE_CHECK_MECH: ${{ github.event.pull_request.head.repo.fork && '0' || '1' }}
+          TRACE_CHECK_MECH_WHY: pull request from a fork runs no case script
 
   tests-pass:
     name: tests pass

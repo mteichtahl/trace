@@ -95,9 +95,15 @@ export const GpuJobSchema = z.object({
   env: z.record(z.string(), z.string()).default({}),
   /** on the queue: the vCPUs to ask for (a resource override, capped at the job definition's limit); ignored locally */
   vcpus: z.number().int().min(1).max(256).optional(),
+  /**
+   * The program is untrusted code (a project's case script): it runs with a scrubbed environment (isolatedEnv: no
+   * credentials, no tokens, nothing of the Lambda runtime), in a process group of its own that is killed whole when
+   * the job ends. Default: true for kind `cad`, false otherwise.
+   */
+  isolate: z.boolean().optional(),
 }).strict().superRefine((j, ctx) => {
   for (const m of nameClashes(Object.keys(j.inputs))) ctx.addIssue({ code: 'custom', path: ['inputs'], message: m })
-})
+}).transform((j) => ({ ...j, isolate: j.isolate ?? j.kind === 'cad' }))
 export type GpuJob = z.input<typeof GpuJobSchema>
 
 export interface JobResult {
@@ -164,6 +170,86 @@ export function substitute(argv: readonly string[], ins: Record<string, string>,
   }))
 }
 
+/**
+ * What an isolated job's program may see of its parent's environment: the names below and nothing else, so no AWS
+ * credentials (AWS_*, the Lambda runtime's AWS_LAMBDA_* and _HANDLER, the container credentials endpoint
+ * AWS_CONTAINER_*), no tokens (GITHUB_*, TRACE_TOKEN, ANTHROPIC_*) and no trace settings reach it. The job's own `env`
+ * (set by the tool that built the job, not by the project) is laid over it. `home`: a folder that replaces HOME, the
+ * XDG folders and TMPDIR (the runner's per-job folder, so nothing a job leaves in a warm container's HOME, a Python
+ * user site among it, is seen by the next job).
+ */
+export const ISOLATED_ENV = [
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LANGUAGE', 'TZ', 'TMPDIR', 'TMP', 'TEMP', 'TERM',
+  'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR',
+  'PYTHONPATH', 'PYTHONUNBUFFERED', 'PYTHONHOME', 'PYTHONDONTWRITEBYTECODE', 'VIRTUAL_ENV', 'PYENV_ROOT', 'PYENV_VERSION', 'CONDA_PREFIX',
+  'LD_LIBRARY_PATH', 'OMP_NUM_THREADS', 'SYSTEMROOT', 'COMSPEC', 'WINDIR',
+] as const
+
+export function isolatedEnv(env: NodeJS.ProcessEnv, own: Record<string, string> = {}, home?: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(env)) {
+    if (v === undefined) continue
+    if ((ISOLATED_ENV as readonly string[]).includes(k) || k.startsWith('LC_')) out[k] = v
+  }
+  if (home) {
+    Object.assign(out, {
+      HOME: home, TMPDIR: join(home, 'tmp'), XDG_CONFIG_HOME: join(home, '.config'), XDG_CACHE_HOME: join(home, '.cache'),
+      XDG_DATA_HOME: join(home, '.local', 'share'), XDG_STATE_HOME: join(home, '.local', 'state'), PYTHONNOUSERSITE: '1',
+    })
+    delete out.XDG_RUNTIME_DIR
+    delete out.TMP
+    delete out.TEMP
+    mkdirSync(join(home, 'tmp'), { recursive: true })
+  }
+  return { ...out, ...own }
+}
+
+/** Kill a detached child's whole process group (it leads it), quietly when it is gone already. */
+export function killGroup(pid: number | undefined): void {
+  if (!pid) return
+  try {
+    process.kill(-pid, 'SIGKILL')
+  } catch { /* the group is gone */ }
+}
+
+/**
+ * Spawn a job's program and collect its output. An isolated one (`isolate`) is detached into a process group of its
+ * own; when its main process exits (success, failure or the time limit), the group is killed, so nothing it started in
+ * the background lives on (a warm function's next job included). Output is read until the pipes close.
+ */
+export function spawnJob(cmd: string, args: string[], o: {
+  cwd: string; env: NodeJS.ProcessEnv; isolate: boolean; timeoutSeconds: number
+  onStdout: (d: Buffer) => void; onStderr: (d: Buffer) => void
+}): Promise<{ code: number | null; killed: boolean; error?: NodeJS.ErrnoException }> {
+  return new Promise((resolve) => {
+    const p = spawn(cmd, args, { cwd: o.cwd, env: o.env, stdio: ['ignore', 'pipe', 'pipe'], detached: o.isolate })
+    let killed = false
+    let exitCode: number | null = null
+    const kill = (): void => {
+      if (o.isolate) killGroup(p.pid)
+      else p.kill('SIGKILL')
+    }
+    const timer = setTimeout(() => { killed = true; kill() }, o.timeoutSeconds * 1000)
+    p.stdout.on('data', o.onStdout)
+    p.stderr.on('data', o.onStderr)
+    p.on('error', (e: NodeJS.ErrnoException) => {
+      clearTimeout(timer)
+      if (o.isolate) killGroup(p.pid)
+      resolve({ code: null, killed, error: e })
+    })
+    // the main process is done: what it left running goes with it (its pipes then close, and 'close' follows)
+    p.on('exit', (code) => {
+      exitCode = code
+      if (o.isolate) killGroup(p.pid)
+    })
+    p.on('close', (code) => {
+      clearTimeout(timer)
+      if (o.isolate) killGroup(p.pid)
+      resolve({ code: exitCode ?? code, killed })
+    })
+  })
+}
+
 export async function runLocal(spec: GpuJob): Promise<JobResult> {
   const job = GpuJobSchema.parse(spec)
   const dir = scratchDir(`trace-${job.kind}-`) // one fresh directory per job; the caller removes it when done
@@ -179,23 +265,18 @@ export async function runLocal(spec: GpuJob): Promise<JobResult> {
   const argv = substitute(job.argv, ins, outs, dir)
   const t0 = Date.now()
   const [cmd, ...args] = argv as [string, ...string[]]
-  return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { cwd: dir, env: { ...process.env, ...job.env }, stdio: ['ignore', 'pipe', 'pipe'] })
-    let stdout = ''
-    let stderr = ''
-    p.stdout.on('data', (d: Buffer) => { stdout = (stdout + d.toString()).slice(-200_000) })
-    p.stderr.on('data', (d: Buffer) => { stderr = (stderr + d.toString()).slice(-200_000) })
-    const timer = setTimeout(() => p.kill('SIGKILL'), job.timeoutSeconds * 1000)
-    p.on('error', (e: NodeJS.ErrnoException) => {
-      clearTimeout(timer)
-      reject(e.code === 'ENOENT' ? new ToolError(`${cmd} is not installed here${process.env.TRACE_GPU_QUEUE || process.env.TRACE_TOOLS_FUNCTION ? '' : ' (set TRACE_GPU_QUEUE to run it on the GPU queue)'}`) : e)
-    })
-    p.on('close', (code) => {
-      clearTimeout(timer)
-      const outputs = Object.fromEntries(Object.entries(outs).filter(([, f]) => existsSync(f)))
-      resolve({ exitCode: code ?? -1, stdout, stderr, outputs, where: 'local', seconds: (Date.now() - t0) / 1000 })
-    })
+  let stdout = ''
+  let stderr = ''
+  // an isolated job keeps this machine's HOME (a laptop's Python may live under it) but nothing else of its environment
+  const env = job.isolate ? isolatedEnv(process.env, job.env) : { ...process.env, ...job.env }
+  const r = await spawnJob(cmd, args, {
+    cwd: dir, env, isolate: job.isolate, timeoutSeconds: job.timeoutSeconds,
+    onStdout: (d) => { stdout = (stdout + d.toString()).slice(-200_000) },
+    onStderr: (d) => { stderr = (stderr + d.toString()).slice(-200_000) },
   })
+  if (r.error) throw r.error.code === 'ENOENT' ? new ToolError(`${cmd} is not installed here${process.env.TRACE_GPU_QUEUE || process.env.TRACE_TOOLS_FUNCTION ? '' : ' (set TRACE_GPU_QUEUE to run it on the GPU queue)'}`) : r.error
+  const outputs = Object.fromEntries(Object.entries(outs).filter(([, f]) => existsSync(f)))
+  return { exitCode: r.code ?? -1, stdout, stderr, outputs, where: 'local', seconds: (Date.now() - t0) / 1000 }
 }
 
 /**

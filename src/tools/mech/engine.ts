@@ -82,7 +82,8 @@ export function caseJob(input: CaseInput, dir: string, env: NodeJS.ProcessEnv = 
   const jobEnv: Record<string, string> = { PYTHONUNBUFFERED: '1' }
   if (where === 'local') jobEnv.PYTHONPATH = [env.TRACE_MECH_PYTHONPATH || PY_DIR, env.PYTHONPATH].filter(Boolean).join(':')
   return {
-    job: { kind: 'cad', argv, inputs: files, outputs: engineOutputs(input.settings.source, formats), timeoutSeconds: input.timeoutSeconds ?? 600, env: jobEnv },
+    // isolate: case.py is the project's own code; it runs with no credentials, and nothing it starts outlives the job
+    job: { kind: 'cad', argv, inputs: files, outputs: engineOutputs(input.settings.source, formats), timeoutSeconds: input.timeoutSeconds ?? 600, env: jobEnv, isolate: true },
     where,
   }
 }

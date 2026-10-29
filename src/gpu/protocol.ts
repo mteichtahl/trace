@@ -37,6 +37,9 @@ export const RemoteSpecSchema = z.object({
   env: z.record(z.string(), z.string()),
   gpu: z.boolean(),
   timeoutSeconds: z.number().int().positive(),
+  /** the program is untrusted (a case script): the runner gives it a scrubbed environment and a process group of its
+   * own, killed when the job ends (./jobs.ts isolatedEnv, spawnJob); the runner keeps its credentials for S3 */
+  isolate: z.boolean().default(false),
 }).strict().superRefine((s, ctx) => {
   for (const m of nameClashes(s.inputs)) ctx.addIssue({ code: 'custom', path: ['inputs'], message: m })
 })
