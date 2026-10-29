@@ -56,7 +56,8 @@ describe('the release stack', () => {
     const by = Object.fromEntries(statements.map((s) => [s.Sid, s]))
     expect(list(by.Login?.Action)).toEqual(['ecr-public:GetAuthorizationToken'])
     expect(list(by.BearerToken?.Action)).toEqual(['sts:GetServiceBearerToken'])
-    expect(by.BearerToken?.Condition).toEqual({ StringEquals: { 'sts:AWSServiceName': 'ecr-public.amazonaws.com' } })
+    // IfExists: ECR Public sends no sts:AWSServiceName today (StringEquals would deny every login); once it does, ECR Public only
+    expect(by.BearerToken?.Condition).toEqual({ StringEqualsIfExists: { 'sts:AWSServiceName': 'ecr-public.amazonaws.com' } })
     expect(list(by.Push?.Action).sort()).toEqual([...PUSH_ACTIONS].sort())
     const pushed = list(by.Push?.Resource).map((r) => JSON.stringify(r))
     expect(pushed).toHaveLength(3)
