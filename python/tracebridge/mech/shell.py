@@ -2,11 +2,13 @@
 
 Heights, in the case's frame (board bottom face at z = 0, top face at z = thickness):
 
-  floor top      -standoff, where standoff = max(bottom-side part + its clearance, through-hole leads + below_mm,
-                 3 mm): the board stands on bosses (or corner rests) this tall
+  floor top      -standoff, where standoff = max(bottom-side part + below_mm (or its own clearance), a top-side
+                 part's through-hole leads + max(above_tallest_mm, below_mm), 3 mm): the board stands on bosses (or corner rests) this tall
   split          the board's top face: the base's walls stop there and the lid's start, so the board drops into the
                  base and the lid closes over it
-  lid inner face top face + tallest top-side part + above_tallest_mm (a part's own clearance wins when larger)
+  lid inner face top face + the tallest of: a top-side part + above_tallest_mm (its own clearance when it has
+                 one), a bottom-side part's leads + max(above_tallest_mm, below_mm), a screw's pan head +
+                 above_tallest_mm
 
 In plan, the board sits in the inner cavity, the board outline grown by `edge_mm`. The lid's lip is a ring `lip_mm`
 wide on the lid's underside whose inner face is the inner cavity's edge, hanging `lip_h_mm` below the split; the
@@ -150,11 +152,19 @@ def screw_length(reach_mm: float) -> int:
     return fits[-1] if fits else SCREW_LENGTHS_MM[0]
 
 
+def lead_clearance(settings: dict[str, Any]) -> float:
+    """The room through-hole leads on the far face need, to the floor or the lid alike: max(above_tallest_mm,
+    below_mm), one requirement the shell builds and the fit checks, whichever face the leads come out of."""
+    c = settings["clearance"]
+    return max(c["above_tallest_mm"], c["below_mm"])
+
+
 def heights(board: Board, settings: dict[str, Any]) -> dict[str, float]:
     """The standoff (board bottom to floor top) and the lid's inner face, from the parts and the clearances."""
     c = settings["clearance"]
     t = board.top_z
     above, below = c["above_tallest_mm"], c["below_mm"]
+    lead_need = lead_clearance(settings)
     up = [above]  # room needed above the top face
     down = [MIN_STANDOFF_MM - below]  # so the standoff is at least 3 mm
     up_override: list[float] = []
@@ -167,12 +177,14 @@ def heights(board: Board, settings: dict[str, Any]) -> dict[str, float]:
         lead = float(p.get("below_mm") or 0.0) if p.get("mount") == "through_hole" else 0.0
         if p["side"] == "top":
             up.append(h + above)
-            down.append(lead)
+            if lead:
+                down_override.append(lead + lead_need)
             if own is not None:
                 up_override.append(h + own)
         else:
             down.append(h)
-            up.append(lead + above if lead else above)
+            if lead:
+                up.append(lead + lead_need)
             if own is not None:
                 down_override.append(h + own)
     standoff = max(max(down) + below, max(down_override, default=0.0), MIN_STANDOFF_MM)

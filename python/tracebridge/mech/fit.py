@@ -9,11 +9,13 @@ Two kinds of finding, each named by part reference so a person can waive them on
                           board outline, so bosses, rests and posts that hold the board's faces do not count)
            <ref> / above  a top-side part to the case in the column over it (its own clearance, else
                           above_tallest_mm)
-           <ref> / below  a bottom-side part, or a top-side part's through-hole leads, to the case in the column
-                          under it (below_mm, or the part's own clearance when larger)
+           <ref> / below  a bottom-side part to the case in the column under it (below_mm, or the part's own
+                          clearance when larger); a part's through-hole leads on the far face (below for a top-side
+                          part, above for a bottom-side one) against max(above_tallest_mm, below_mm), the room the
+                          shell builds for them
            screw <ref> / above   the pan head of the screw in a mounting hole (ISO 7045's largest, shell.PAN_HEADS)
                           to the case over it, against above_tallest_mm; heads are in the clash set too
-           <ref> / around a part to the case in every direction: for a part with its own clearance (it needs that
+           <ref> / around a part to the case in every direction on its own side of the board: for a part with its own clearance (it needs that
                           much room all round), and for a connector with an opening (its own clearance, default 0:
                           it may touch its opening)
 
@@ -40,7 +42,7 @@ from build123d import Shape
 from .board import Board, box, extrude, kicad_box
 from .probe import first_hit
 from .settings import part_clearance
-from .shell import FAR, Case, screw_heads
+from .shell import FAR, Case, lead_clearance, screw_heads
 
 CLASH_MIN_MM3 = 0.001
 GAP_TOL_MM = 1e-3
@@ -117,6 +119,14 @@ def _column(board: Board, p: dict[str, Any], up: bool) -> Shape:
     return kicad_box(p["box"], z0, z1)
 
 
+def _own_side(board: Board, p: dict[str, Any], solids: list[Shape]) -> list[Shape]:
+    """The case on the part's own side of the board (above its top face for a top-side part, below its bottom face
+    for a bottom-side one): a part's room all round is not measured through the board to a boss or rest under it."""
+    z0, z1 = (board.top_z, FAR) if p["side"] == "top" else (-FAR, board.bottom_z)
+    half = box(-FAR, -FAR, z0, FAR, FAR, z1)
+    return [c & half for c in solids]
+
+
 def _detect_opening(case_parts: list[Shape], board: Board, p: dict[str, Any]) -> bool:
     """For a handed-in case: is there a way out through the wall at the part's box (nothing of the case between the
     board edge and the outside)?"""
@@ -183,8 +193,9 @@ def fit_check(case: Case, board: Board, settings: dict[str, Any]) -> dict[str, A
         p = board.info[ref]
         env = board.parts[ref]
         own = part_clearance(settings, ref)
+        own_side = _own_side(board, p, solids)
         if ref in opened:
-            gaps.append(_gap(ref, "around", distance(env, solids), own or 0.0))
+            gaps.append(_gap(ref, "around", distance(env, own_side), own or 0.0))
             continue
         if p["side"] == "top":
             column = _column(board, p, up=True)
@@ -198,9 +209,10 @@ def fit_check(case: Case, board: Board, settings: dict[str, Any]) -> dict[str, A
             leads = board.leads[ref]
             column = _column(board, p, up=(p["side"] == "bottom"))
             gaps.append(_gap(ref, "below" if p["side"] == "top" else "above",
-                             distance(leads, [c & column for c in solids if _overlap(c, column)]), clr["below_mm"]))
+                             distance(leads, [c & column for c in solids if _overlap(c, column)]),
+                             lead_clearance(settings)))
         if own is not None:
-            gaps.append(_gap(ref, "around", distance(env, solids), own))
+            gaps.append(_gap(ref, "around", distance(env, own_side), own))
 
     for name, head in sorted(heads.items()):
         bb = head.bounding_box()

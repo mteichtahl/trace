@@ -521,3 +521,65 @@ def test_screw_heads_fit_on_a_low_profile_board(tmp_path):
     r = run(facts, settings(), CAPS, tmp_path / "b", script=script, formats=["step"])
     assert {c["ref"] for c in r["fit"]["clashes"]} >= {"screw H1", "screw H2", "screw H3", "screw H4"}
     assert "screw H1 with lid" in r["fit"]["summary"]
+
+
+def test_material_matches_case_insensitively(tmp_path):
+    r = run(board_facts(), settings(process={"service": "JLC3DP", "process": "mjf", "material": "pa12-hp"}), CAPS,
+            tmp_path, formats=["step"])
+    assert all(row["rule"] != "process" for row in r["rules"])
+    assert all(row["ok"] for row in r["rules"]), r["rules"]
+    assert not any("assumed" in n for n in r["notes"])
+
+
+def test_far_face_leads_use_one_requirement(tmp_path):
+    # r2 (a): a bottom-side through-hole part whose leads stand tallest on top, with above_tallest < below.
+    facts = board_facts()
+    facts["parts"] = [part("U1", 130, 115, 140, 125, 0.5),
+                      part("C9", 110, 110, 115, 115, 3.0, side="bottom", mount="through_hole")]
+    clr = {"above_tallest_mm": 0.5, "below_mm": 1.5}
+    board = load_board(facts)
+    s = mech.settings.normalize_settings(settings(clearance=clr))
+    # The leads (2 mm) + max(0.5, 1.5); the pan head (2.4) + 0.5 is lower.
+    assert shell.heights(board, s)["lid_inner_z"] == pytest.approx(1.6 + 2.0 + 1.5)
+    r = run(facts, settings(clearance=clr), CAPS, tmp_path, formats=["step"])
+    g = gap(r, "C9", "above")
+    assert g["required_mm"] == 1.5 and g["measured_mm"] == pytest.approx(1.5, abs=0.01) and g["ok"]
+    assert r["fit"]["status"] == "pass", r["fit"]["summary"]
+
+
+def test_around_is_measured_on_the_parts_own_side(tmp_path):
+    # r2 (d): Q1 sits over boss H1; its 2 mm room all round is to the wall (2.5 mm), not through the board.
+    facts = board_facts()
+    facts["parts"].append(part("Q1", 102, 102, 105, 105, 1.0))
+    r = run(facts, settings(clearance={"parts": {"Q1": {"mm": 2.0, "reason": "probe access"}}}), CAPS, tmp_path,
+            formats=["step"])
+    g = gap(r, "Q1", "around")
+    assert g["ok"] and g["measured_mm"] == pytest.approx(2.5, abs=0.01)
+
+
+def test_small_boss_fails_its_rule(tmp_path):
+    r = run(board_facts(), settings(params={"standoff_d_mm": 4.0}), CAPS, tmp_path, formats=["step"])
+    row = next(row for row in r["rules"] if row["rule"] == "standoff")
+    # M3 pilot 2.4 + 2 x 2.0 (MJF over 50 mm) = 6.4.
+    assert row["ok"] is False and row["limit"] == 6.4 and row["basis"] == "params"
+
+
+@pytest.mark.parametrize("over,match", [
+    ({"clearance": None}, "clearance must be an object"),
+    ({"params": [1, 2]}, "params must be an object"),
+    ({"openings": "J1"}, "openings must be an object"),
+    ({"process": None}, "process must be an object"),
+    ({"clearance": {"parts": {"J1": {"mm": 1, "reason": 5}}}}, "clearance.parts.J1"),
+    ({"quantity": "five"}, "quantity"),
+    ({"reasons": []}, "reasons"),
+])
+def test_wrong_typed_blocks_are_bad_input(over, match):
+    with pytest.raises(InputError, match=match):
+        mech.settings.normalize_settings(settings(**over))
+
+
+def test_unknown_refs_are_noted(tmp_path):
+    r = run(board_facts(), settings(clearance={"parts": {"J9": {"mm": 5, "reason": "plug"}}},
+                                    openings={"skip": ["J7"]}), CAPS, tmp_path, formats=["step"])
+    assert "clearance.parts names J9, which is not on the board: ignored" in r["notes"]
+    assert "openings.skip names J7, which is not on the board: ignored" in r["notes"]

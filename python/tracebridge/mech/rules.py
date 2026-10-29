@@ -158,6 +158,19 @@ def inner_radii(case: Case, board: Any, settings: dict[str, Any]) -> dict[str, d
     return out
 
 
+def _boss_row(case: Case, settings: dict[str, Any], wmin: float, who: str, src: str | None) -> list[dict[str, Any]]:
+    """The boss around each pilot hole: standoff_d_mm must leave the process's minimum wall on each side."""
+    if not case.fasteners:
+        return []
+    d = settings["params"]["standoff_d_mm"]
+    pilot = max(f["pilot_d_mm"] for f in case.fasteners)
+    need = round(pilot + 2 * wmin, 3)
+    ok = d >= need - 1e-9
+    return [_row("standoff", ok, f"boss {_fmt(d)} mm {'leaves' if ok else 'is under'} the {_fmt(need)} mm a "
+                 f"{_fmt(pilot)} mm pilot hole needs for {who}'s {_fmt(wmin)} mm wall each side", d, need, src,
+                 "params")]
+
+
 def _section_rows(case: Case, board: Any, settings: dict[str, Any], wmin: float, who: str, src: str | None,
                   kind_note: str) -> list[dict[str, Any]]:
     rows = []
@@ -208,6 +221,7 @@ def rules_check(case: Case, settings: dict[str, Any], capabilities: dict[str, An
                                  f"{_fmt(wmin)} mm minimum for {kind}", v, wmin, src, basis))
             if board is not None:
                 rows += _section_rows(case, board, settings, wmin, "CNC", src, f" minimum for {kind}")
+            rows += _boss_row(case, settings, wmin, "CNC", src)
         if not from_file and cnc.get("corner_radius"):
             if board is None:
                 rows.append(_row("corner_radius", None, "inside corner radius not measured (no board given)", None,
@@ -248,6 +262,7 @@ def rules_check(case: Case, settings: dict[str, Any], capabilities: dict[str, An
         if board is not None:
             rows += _section_rows(case, board, settings, wmin, proc["process"], src,
                                   f" for a {_fmt(round(largest))} mm part")
+        rows += _boss_row(case, settings, wmin, proc["process"], src)
 
     mx = row.get("max_mm")
     mn = row.get("min_mm")

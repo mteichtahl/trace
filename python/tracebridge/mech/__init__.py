@@ -67,7 +67,7 @@ from .export import FORMATS, export, import_case
 from .fit import fit_check
 from .records import records
 from .rules import rules_check
-from .settings import InputError, check_facts, normalize_settings, resolve
+from .settings import InputError, check_facts, normalize_settings, resolve, unknown_refs
 from .shell import Case
 
 __version__ = "1"  # bumped when the engine's results change for the same inputs (TypeScript's stale check reads it)
@@ -144,7 +144,7 @@ def run(facts: dict[str, Any], settings: dict[str, Any], capabilities: dict[str,
     if settings["source"] == "script":
         shell.check_lip(board, settings)  # before any script runs: a lip deeper than the base cuts its floor away
 
-    notes: list[str] = []
+    notes: list[str] = unknown_refs(settings, facts)
     if res["assembly_clearance_source"] is None:
         notes.append(f"no assembly clearance for {settings['process']['process']} {settings['process']['material']} "
                      f"in the capabilities: {res['assembly_clearance_mm']} mm assumed")

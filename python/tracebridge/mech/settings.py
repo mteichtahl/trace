@@ -18,7 +18,7 @@ DEFAULTS: dict[str, Any] = {
     "params": {
         "wall_mm": 2.0, "floor_mm": 2.0, "lid_mm": 2.0,
         "corner_radius_mm": 3.0,
-        "standoff_d_mm": 6.0,
+        "standoff_d_mm": 7.0,
         "lip_mm": 2.0, "lip_h_mm": 3.0,
     },
     "clearance": {"edge_mm": 0.5, "above_tallest_mm": 1.0, "below_mm": 1.0, "parts": {}},
@@ -51,7 +51,9 @@ def normalize_settings(raw: Any) -> dict[str, Any]:
         raise InputError("settings must be a JSON object")
     s = copy.deepcopy(DEFAULTS)
     for k, v in raw.items():
-        if k in ("params", "clearance", "openings", "process") and isinstance(v, dict):
+        if k in ("params", "clearance", "openings", "process"):
+            if not isinstance(v, dict):
+                raise InputError(f"settings {k} must be an object, got {v!r}")
             s[k] = {**s[k], **v}
         else:
             s[k] = v
@@ -74,14 +76,35 @@ def normalize_settings(raw: Any) -> dict[str, Any]:
     if not isinstance(c["parts"], dict):
         raise InputError("settings clearance.parts must be an object of ref -> {mm, reason}")
     for ref, v in c["parts"].items():
-        if not isinstance(v, dict) or "mm" not in v:
+        if not isinstance(v, dict) or "mm" not in v or not (v.get("reason") is None or isinstance(v["reason"], str)):
             raise InputError(f"settings clearance.parts.{ref} must be {{mm, reason}}")
         v["mm"] = _num(v["mm"], f"clearance.parts.{ref}.mm")
     o = s["openings"]
     if not isinstance(o["skip"], list) or not all(isinstance(r, str) for r in o["skip"]):
         raise InputError("settings openings.skip must be a list of part references")
     o["extra_mm"] = _num(o["extra_mm"], "openings.extra_mm")
+    q = s.get("quantity")
+    if isinstance(q, bool) or not isinstance(q, int) or q < 1:
+        raise InputError(f"settings quantity must be a whole number of at least 1, got {q!r}")
+    if not isinstance(s.get("reasons"), dict):
+        raise InputError("settings reasons must be an object of path -> reason")
+    for k in ("board", "file"):
+        if k in s and s[k] is not None and not isinstance(s[k], str):
+            raise InputError(f"settings {k} must be a repository path, got {s[k]!r}")
     return s
+
+
+def unknown_refs(settings: dict[str, Any], facts: dict[str, Any]) -> list[str]:
+    """Notes for per-part clearances and openings.skip entries naming a reference that is not on the board."""
+    refs = {p["ref"] for p in facts.get("parts") or []}
+    notes = []
+    for ref in sorted(settings["clearance"]["parts"]):
+        if ref not in refs:
+            notes.append(f"clearance.parts names {ref}, which is not on the board: ignored")
+    for ref in sorted(set(settings["openings"]["skip"])):
+        if ref not in refs:
+            notes.append(f"openings.skip names {ref}, which is not on the board: ignored")
+    return notes
 
 
 def part_clearance(settings: dict[str, Any], ref: str) -> float | None:
@@ -128,7 +151,7 @@ def find_process(settings: dict[str, Any], capabilities: dict[str, Any]) -> dict
     for row in capabilities.get("processes") or []:
         if (str(row.get("service", "")).lower() == want["service"].lower()
                 and str(row.get("process", "")).lower() == want["process"].lower()
-                and want["material"] in (row.get("materials") or [])):
+                and want["material"].lower() in [str(m).lower() for m in row.get("materials") or []]):
             return row
     return None
 
