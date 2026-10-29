@@ -81,6 +81,29 @@ describe('the images', () => {
     }
   })
 
+  it('keep each file of the agent image once, within what AgentCore Runtime accepts', () => {
+    // AgentCore Runtime refuses an image over 2 GB ("maxImageSizeMb limit exceeded"). Two layers once stored
+    // node_modules again: npm ci's, with the dev dependencies (about 1.4 GB, kept under the prune's deletions), and a
+    // final `chown -R trace:trace /app` (which rewrites every file into a layer of its own, about 1.2 GB)
+    const dockerfile = readFileSync(join(ROOT, 'agent', 'Dockerfile'), 'utf8')
+    const stages = dockerfile.split(/^FROM /m).slice(1)
+    expect(stages.map((x) => x.split('\n')[0])).toEqual(['--platform=linux/arm64 ubuntu:24.04 AS tools', 'tools AS build', 'tools'])
+    const [, build, final] = stages as [string, string, string]
+    // npm ci and the build happen in the build stage only
+    expect(build).toMatch(/^RUN npm ci\b/m)
+    expect(final).not.toMatch(/npm (ci|install|run)\b/)
+    // the final stage copies the built app in already owned by trace, and never chowns it after
+    expect(final).toContain('COPY --from=build --chown=trace:trace /app /app')
+    expect(final).toContain('COPY --from=build /opt/trace-venv /opt/trace-venv')
+    expect(dockerfile.split('\n').filter((l) => !l.trim().startsWith('#') && /chown -R/.test(l))).toEqual([])
+    // the musl copy of the Claude binary (about 270 MB) is dropped, and the build fails if the glibc one is missing
+    expect(build).toContain('rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl')
+    expect(build).toContain('test -x node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64/claude')
+    // what runs it is in the final stage
+    expect(final).toMatch(/^USER trace$/m)
+    expect(final).toMatch(/^CMD \["node", "--require", .*"\/app\/dist\/agents\/runtime\/main\.js"\]$/m)
+  })
+
   it('build cocotb from source on arm64, with the Python headers it needs', () => {
     // cocotb publishes no arm64 Linux wheel, so the agent image (linux/arm64) builds it from source, and its C++
     // extensions include Python.h: without python3-dev the build fails ("fatal error: Python.h: No such file or

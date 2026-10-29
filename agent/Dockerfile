@@ -2,7 +2,14 @@
 # Built by AWS CodeBuild from the CDK stack, with the repository root as the context:
 #   docker buildx build --platform linux/arm64 -f agent/Dockerfile .
 # One image serves both runtimes: TRACE_AGENT_MODE=worker (default) or api. See agent/README.md.
-FROM --platform=linux/arm64 ubuntu:24.04
+#
+# Three stages, so the image AgentCore runs holds each file once (AgentCore Runtime refuses an image over 2 GB:
+# "maxImageSizeMb limit exceeded"):
+#   tools  the system packages every stage needs: the tools the agents run, and the compilers the build uses
+#   build  npm ci with the dev dependencies, the build, the prune, and the Python venv; left behind
+#   final  tools, with the built /app and the venv copied in, already owned by the trace user (a `chown -R` in a
+#          layer of its own would store every file of /app a second time)
+FROM --platform=linux/arm64 ubuntu:24.04 AS tools
 
 ARG DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=UTC
@@ -65,6 +72,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends calculix-ccx=2.
 RUN useradd --create-home --uid 10001 --shell /bin/bash trace \
  && install -d -o trace -g trace /tmp/trace-work /home/trace/.trace
 
+# ------------------------------------------------------------------ build: the app and its Python venv
+FROM tools AS build
 WORKDIR /app
 
 # Dependencies first (cached while package*.json are unchanged); scripts skipped until the sources are in.
@@ -77,14 +86,25 @@ RUN npm ci --ignore-scripts
 COPY . .
 # build:image: everything `npm run build` makes but the installer page (scripts/bundle-ui.mjs), which only `tracectl
 # install` serves, and which needs the web app's components (web/src), left out of the image's source
+# The Claude Agent SDK installs its native binary for both C libraries of this platform; Ubuntu's is glibc, and the
+# SDK takes the glibc one first there, so the musl one (about 270 MB) is never run.
 RUN npm run build:image \
  && npm prune --omit=dev \
  && npm rebuild \
+ && rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl \
+ && test -x node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64/claude \
+ && chmod +x /app/dist/cli.js \
  && python3 -m venv /opt/trace-venv \
  && /opt/trace-venv/bin/pip install --no-cache-dir '/app/python[pdf]' 'cocotb==2.1.0' 'apycula==0.10.0' \
- && { test -d /app/python/blender || echo "note: /app/python/blender is not in the build context yet"; } \
- && ln -s /app/dist/cli.js /usr/local/bin/tracectl && ln -s tracectl /usr/local/bin/trace && chmod +x /app/dist/cli.js \
- && chown -R trace:trace /app
+ && { test -d /app/python/blender || echo "note: /app/python/blender is not in the build context yet"; }
+
+# ------------------------------------------------------------------ final: what AgentCore runs
+FROM tools
+WORKDIR /app
+COPY --from=build --chown=trace:trace /app /app
+# the venv at the same path it was made at (its scripts name /opt/trace-venv/bin/python)
+COPY --from=build /opt/trace-venv /opt/trace-venv
+RUN ln -s /app/dist/cli.js /usr/local/bin/tracectl && ln -s tracectl /usr/local/bin/trace
 
 ENV PATH=/opt/trace-venv/bin:$PATH \
     TRACE_PYTHON=/opt/trace-venv/bin/python \
