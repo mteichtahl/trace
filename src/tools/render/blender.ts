@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { ToolError } from '../../core/registry.js'
 import { scratchDir } from '../../core/store.js'
-import { backendFor, runJob, type JobResult } from '../../gpu/jobs.js'
+import { type Backend, backendFor, runJob, type JobResult } from '../../gpu/jobs.js'
 
 export const RESULT_PREFIX = 'TRACE_RESULT '
 export const SCRIPTS = ['render_board.py', 'render_model.py', 'probe.py'] as const
@@ -69,8 +69,8 @@ export function scriptsDir(): string {
 }
 
 /** Where a Blender job would run now, and the program to name in its argv. */
-export function blenderTarget(gpu = true): { where: 'local' | 'batch'; bin: string | null } {
-  const where = backendFor({ gpu })
+export function blenderTarget(gpu = true): { where: Backend; bin: string | null } {
+  const where = backendFor({ kind: 'blender', gpu })
   return { where, bin: where === 'local' ? findBlender() : 'blender' }
 }
 
@@ -135,7 +135,7 @@ export interface BlenderRun<T> {
   result: T
   /** output name → local path (read them, then call cleanup) */
   outputs: Record<string, string>
-  where: 'local' | 'batch'
+  where: Backend
   jobId?: string
   seconds: number
   cleanup: () => void

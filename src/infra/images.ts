@@ -1,9 +1,10 @@
 /**
- * How the two images (the agent image, agent/Dockerfile, arm64; the GPU/CPU job image, agent/Dockerfile.gpu, amd64)
- * get into the account's ECR, fastest first:
+ * How the three images (the agent image, agent/Dockerfile, arm64; the tools image, agent/Dockerfile.tools, arm64, run
+ * by each project's tools function; the GPU/CPU job image, agent/Dockerfile.gpu, amd64) get into the account's ECR,
+ * fastest first:
  *
  *   prebuilt   images.source 'prebuilt' (the default): CodeBuild copies trace's published image for exactly this
- *              source (`<images.registry>/trace-agent:<content tag>`, `/trace-gpu:`, on Amazon ECR Public) into the
+ *              source (`<images.registry>/trace-agent:<content tag>`, `/trace-tools:`, `/trace-gpu:`, on Amazon ECR Public) into the
  *              installation's own private repository: scripts/resolve-image.mjs reads the tag's digest from the
  *              registry and checks it against the manifest's bytes, the image is pulled by that digest (pinned: a tag
  *              moved meanwhile can't change what is copied), its digest checked again after the pull, re-tagged and
@@ -56,7 +57,12 @@ export function imageContentTag(root: string): string {
   return `v${version}-${h.digest('hex').slice(0, 16)}`
 }
 
-export type ImageKind = 'agent' | 'gpu'
+export type ImageKind = 'agent' | 'gpu' | 'tools'
+
+/** AgentCore Runtime refuses an image over 2 GB (not adjustable): the agent image's build fails first, with its size,
+ * instead of the deploy failing after it. Docker's size is the unpacked one, larger than the registry's compressed
+ * size, so an image under this is under AgentCore's limit whichever of the two it counts. */
+export const AGENT_IMAGE_MAX_BYTES = 2_000_000_000
 
 /** The published image for this content tag (the repositories of src/infra/release.ts). */
 export const prebuiltImage = (registry: string, kind: ImageKind, tag: string): string => `${registry}/trace-${kind}:${tag}`
@@ -65,7 +71,7 @@ export const prebuiltImage = (registry: string, kind: ImageKind, tag: string): s
  * The CodeBuild buildspec of one image: the published image when PREBUILT_IMAGE names one that exists, else a
  * cached build. REPOSITORY_URI and IMAGE_TAG come from the project and the build (src/infra/lambda/image-build.ts).
  */
-export function imageBuildSpec(o: { dockerfile: string; platform: 'linux/arm64' | 'linux/amd64' }): Record<string, unknown> {
+export function imageBuildSpec(o: { dockerfile: string; platform: 'linux/arm64' | 'linux/amd64'; maxBytes?: number }): Record<string, unknown> {
   const build = [
     'export DOCKER_BUILDKIT=1',
     // the tag's digest, checked against the published manifest (exit 3: not published, so build)
@@ -79,6 +85,13 @@ export function imageBuildSpec(o: { dockerfile: string; platform: 'linux/arm64' 
     `  docker build --platform ${o.platform} --build-arg BUILDKIT_INLINE_CACHE=1 --cache-from "$REPOSITORY_URI:cache" -f ${o.dockerfile} -t "$REPOSITORY_URI:$IMAGE_TAG" -t "$REPOSITORY_URI:cache" .`,
     '  docker push "$REPOSITORY_URI:cache"',
     'fi',
+    ...(o.maxBytes ? [
+      // no image (the build above failed): fail here, not on the size test below, whose error the if would swallow
+      'SIZE="$(docker image inspect --format "{{.Size}}" "$REPOSITORY_URI:$IMAGE_TAG")" || exit 1',
+      '[ -n "$SIZE" ] || exit 1',
+      `echo "trace: the image is $SIZE bytes unpacked (at most ${o.maxBytes})"`,
+      `if [ "$SIZE" -gt ${o.maxBytes} ]; then echo "trace: the image is over ${o.maxBytes} bytes, more than AgentCore Runtime accepts (2 GB): move the largest programs to agent/Dockerfile.tools"; docker history --no-trunc --format "{{.Size}}\t{{.CreatedBy}}" "$REPOSITORY_URI:$IMAGE_TAG" | head -20 | cut -c1-200; exit 1; fi`,
+    ] : []),
   ].join('\n')
   return {
     version: '0.2',

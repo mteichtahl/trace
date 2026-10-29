@@ -8,6 +8,7 @@ import { Template } from 'aws-cdk-lib/assertions'
 import { type InfraProps, projectHash } from '../../src/infra/props.js'
 import { TraceStack } from '../../src/infra/stack.js'
 import { WebStack } from '../../src/infra/web.js'
+import { FlatToolsStack } from '../../src/infra/tools.js'
 
 /** The `runners` every test installation has: a CodeConnections connection in the test account. */
 export const CONNECTION_ARN = 'arn:aws:codeconnections:us-east-1:123456789012:connection/00000000-0000-0000-0000-000000000000'
@@ -21,6 +22,8 @@ export interface Synth {
   nestedStacks: Map<string, NestedStack>
   /** the web app's nested stack (src/infra/web.ts WebStack), apart from the projects' and not in `all` */
   web: Template | null
+  /** the flat layout's tools functions' nested stack (src/infra/tools.ts FlatToolsStack), apart from the projects' and in `all` */
+  tools: Template | null
   all: Template
 }
 
@@ -34,8 +37,10 @@ export function synth(cfg: InfraProps, id = 'TraceStack'): Synth {
   const nested = new Map<string, Template>()
   const nestedStacks = new Map<string, NestedStack>()
   let web: Template | null = null
+  let tools: Template | null = null
   for (const n of stack.node.findAll().filter((c): c is NestedStack => c instanceof NestedStack)) {
     if (n instanceof WebStack) { web = Template.fromStack(n); continue }
+    if (n instanceof FlatToolsStack) { tools = Template.fromStack(n); continue }
     const h = /^Project([0-9a-f]{8})Stack$/.exec(n.node.id)?.[1] ?? n.node.id
     nested.set(h, Template.fromStack(n))
     nestedStacks.set(h, n)
@@ -43,7 +48,7 @@ export function synth(cfg: InfraProps, id = 'TraceStack'): Synth {
   const p = parent.toJSON() as { Resources: Record<string, unknown>; Outputs?: Record<string, unknown> }
   const resources: Record<string, unknown> = { ...p.Resources }
   const outputs: Record<string, unknown> = {}
-  for (const t of nested.values()) {
+  for (const t of [...nested.values(), ...(tools ? [tools] : [])]) {
     const j = t.toJSON() as { Resources: Record<string, unknown>; Outputs?: Record<string, unknown> }
     for (const [k, v] of Object.entries(j.Resources)) {
       if (k in resources) throw new Error(`logical id ${k} is in two templates`)
@@ -53,7 +58,7 @@ export function synth(cfg: InfraProps, id = 'TraceStack'): Synth {
   }
   Object.assign(outputs, p.Outputs ?? {})
   const all = Template.fromJSON({ ...p, Resources: resources, Outputs: outputs }, { skipCyclicalDependenciesCheck: true })
-  return { stack, parent, nested, nestedStacks, web, all }
+  return { stack, parent, nested, nestedStacks, web, tools, all }
 }
 
 /** A project's nested template (throws if it has none). */

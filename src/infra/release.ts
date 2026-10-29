@@ -1,13 +1,14 @@
 /**
- * TraceRelease: where trace's own release workflow (.github/workflows/release-images.yml) publishes the two images, so
+ * TraceRelease: where trace's own release workflow (.github/workflows/release-images.yml) publishes the three images, so
  * installations copy them instead of building them (src/infra/images.ts, images.source 'prebuilt'). One small stack,
  * deployed once by the project owner, in us-east-1 (the only region Amazon ECR Public has):
  *
- *   repositories  ECR Public `trace-agent` (linux/arm64, the AgentCore runtimes' image) and `trace-gpu` (linux/amd64,
- *                 the AWS Batch GPU and CPU jobs' image), with their gallery catalog data. Readable by anyone, from
+ *   repositories  ECR Public `trace-agent` (linux/arm64, the AgentCore runtimes' image), `trace-tools` (linux/arm64, the
+ *                 projects' tools functions' image) and `trace-gpu` (linux/amd64, the AWS Batch GPU and CPU jobs'
+ *                 image), with their gallery catalog data. Readable by anyone, from
  *                 any account, without credentials
  *   release role  `trace-release`, assumed with GitHub OIDC only by workflows of the source repository running on
- *                 main or on a `v*` tag; it may get the ECR Public push token and push to those two repositories,
+ *                 main or on a `v*` tag; it may get the ECR Public push token and push to those three repositories,
  *                 nothing else (no delete, no other repository, no policy changes)
  *
  * The registry's address is `public.ecr.aws/<alias>`: its default alias, which ECR Public assigns by itself once the
@@ -35,8 +36,8 @@ export const RELEASE_REGION = 'us-east-1'
 export const RELEASE_ROLE_NAME = 'trace-release'
 export const RELEASE_REPOSITORY = 'mteichtahl/trace'
 export const RELEASE_ROLE_OUTPUT = 'ReleaseRoleArn'
-/** The two repositories, by image kind (src/infra/images.ts ImageKind). */
-export const RELEASE_REPOSITORIES = { agent: 'trace-agent', gpu: 'trace-gpu' } as const
+/** The repositories, by image kind (src/infra/images.ts ImageKind). */
+export const RELEASE_REPOSITORIES = { agent: 'trace-agent', tools: 'trace-tools', gpu: 'trace-gpu' } as const
 /** The actions a push takes (ECR Public's "push an image" IAM requirements), on the repositories only. */
 export const PUSH_ACTIONS = [
   'ecr-public:BatchCheckLayerAvailability', 'ecr-public:InitiateLayerUpload', 'ecr-public:UploadLayerPart',
@@ -58,7 +59,8 @@ export function releaseSettings(context: (key: string) => unknown, env: NodeJS.P
 }
 
 const CATALOG = {
-  agent: { about: 'The trace agent image: the runtime Amazon Bedrock AgentCore runs for each project (Claude Code, KiCad, the verification tools).', architectures: ['ARM 64'] },
+  agent: { about: 'The trace agent image: the runtime Amazon Bedrock AgentCore runs for each project (Claude Code, ngspice, Verilator).', architectures: ['ARM 64'] },
+  tools: { about: 'The trace tools image: KiCad, Blender, the FPGA and verification tools, CalculiX and ffmpeg, run as each project\'s AWS Lambda tools function.', architectures: ['ARM 64'] },
   gpu: { about: 'The trace GPU and CPU job image: Blender, the PCB autorouters, openEMS and OpenFOAM, run as AWS Batch jobs.', architectures: ['x86-64'] },
 } as const
 
@@ -68,7 +70,7 @@ export class TraceReleaseStack extends Stack {
 
   constructor(scope: App, id: string, s: ReleaseSettings, env?: { account?: string }) {
     super(scope, id, { env: { ...env, region: RELEASE_REGION }, description: `trace's published images (ECR Public) and the role ${s.repository}'s release workflow pushes them with` })
-    const repo = (kind: keyof typeof RELEASE_REPOSITORIES): CfnPublicRepository => new CfnPublicRepository(this, `${kind === 'agent' ? 'Agent' : 'Gpu'}Repository`, {
+    const repo = (kind: keyof typeof RELEASE_REPOSITORIES): CfnPublicRepository => new CfnPublicRepository(this, `${({ agent: 'Agent', tools: 'Tools', gpu: 'Gpu' } as const)[kind]}Repository`, {
       repositoryName: RELEASE_REPOSITORIES[kind],
       repositoryCatalogData: {
         RepositoryDescription: `trace (${s.repository}): ${CATALOG[kind].about}`.slice(0, 1024),
@@ -79,7 +81,7 @@ export class TraceReleaseStack extends Stack {
       },
       tags: [{ key: 'trace:release', value: s.repository }],
     })
-    this.repositories = { agent: repo('agent'), gpu: repo('gpu') }
+    this.repositories = { agent: repo('agent'), tools: repo('tools'), gpu: repo('gpu') }
 
     const provider = s.createOidcProvider
       ? new iam.OpenIdConnectProvider(this, 'GithubOidc', { url: `https://${ISSUER}`, clientIds: ['sts.amazonaws.com'] })
@@ -104,6 +106,7 @@ export class TraceReleaseStack extends Stack {
     })
     new CfnOutput(this, RELEASE_ROLE_OUTPUT, { value: this.role.roleArn, description: 'The release workflow\'s role (the source repository\'s TRACE_RELEASE_ROLE)' })
     new CfnOutput(this, 'AgentRepositoryArn', { value: this.repositories.agent.attrArn })
+    new CfnOutput(this, 'ToolsRepositoryArn', { value: this.repositories.tools.attrArn })
     new CfnOutput(this, 'GpuRepositoryArn', { value: this.repositories.gpu.attrArn })
     new CfnOutput(this, 'RegistryAlias', { value: 'aws ecr-public describe-registries --region us-east-1 (its default alias; tracectl release setup reads it)', description: 'The registry is public.ecr.aws/<its default alias>, which CloudFormation cannot read' })
   }

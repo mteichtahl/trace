@@ -86,15 +86,16 @@ describe('the nested layout', () => {
       for (const t of s.nested.values()) {
         const j = json(t)
         // 17, its CPU job definition, its knowledge base (index, service role and policy, knowledge base, data source),
-        // its job events (topic, topic policy, EventBridge rule) and its CI runner (CodeBuild project, its role, its
-        // log group and its webhook: src/infra/runner.ts)
-        expect(nestedResources(j.Resources).own).toBe(31)
+        // its job events (topic, topic policy, EventBridge rule), its CI runner (CodeBuild project, its role, its
+        // log group and its webhook: src/infra/runner.ts) and its tools function (function, role, policy, log group:
+        // src/infra/tools.ts)
+        expect(nestedResources(j.Resources).own).toBe(35)
         // its 13 (Project<hash>RunnerProject among them), its knowledge base's two (Project<hash>KnowledgeBaseId,
         // …DataSourceId), and the id the parent reads
         expect(count(j.Outputs)).toBe(16)
         // its 11, the vector bucket and the runner webhooks' provider (its job-events topic is its own; the queues' ARNs
-        // were parameters already)
-        expect(count(j.Parameters)).toBe(13)
+        // were parameters already), and the tools image's repository (its ARN and name) and tag
+        expect(count(j.Parameters)).toBe(16)
       }
       // CDK moves what no longer fits the API role's inline policy (every memory's ARN) into a managed policy
       const overflow = Object.keys(s.parent.findResources('AWS::IAM::ManagedPolicy'))
@@ -123,17 +124,19 @@ describe('the nested layout', () => {
     // role, policy and log group, and the provider framework's function, role and policy: src/infra/runner.ts
     // RunnerWebhooks). (The dictation vocabularies' read, src/infra/voice.ts, tips the API role's inline policy over
     // sooner.)
-    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:111/25:1', '24:137/25:4', '60:173/25:4'])
+    // The tools image adds five (its repository, its CodeBuild project with its role and policy, and its image build:
+    // src/infra/stack.ts) and one output (ToolsImageUri), whatever the number of projects.
+    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:116/26:1', '24:142/26:4', '60:178/26:4'])
     // without a connection given, the stack creates one: one more resource of the parent's, and nothing more per project
     const created = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: {} }), 'Count1Created')
     expect(count(json(created.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0) + 1)
-    for (const t of created.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(31)
+    for (const t of created.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(35)
     // with the token as CodeBuild's credential (runners.auth token): no connection and none of its outputs, the same
     // runner in each project's stack
     const token = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: { auth: 'token' } }), 'Count1Token')
     expect(count(json(token.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0))
     expect(count(json(token.parent).Outputs)).toBe((sizes[0]?.outputs ?? 0) - 2)
-    for (const t of token.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(31)
+    for (const t of token.nested.values()) expect(nestedResources(json(t).Resources).own).toBe(35)
     // none of a project's outputs is the parent's: each is its nested stack's, with the repository it is the project of
     const s = synth(cfg(2), 'Count2Outputs')
     const parentOutputs = Object.keys(json(s.parent).Outputs ?? {})
@@ -187,8 +190,9 @@ describe('the nested layout', () => {
 
   it('makes every project resource the same as the flat layout does: names, IAM, removal policies', () => {
     for (const retainData of [true, false]) {
-      // the CPU queue and the knowledge bases are the nested layout's only (props.ts cpuEnabled, kbEnabled): compared without them
-      const nested = synth(InfraPropsSchema.parse({ ...base, retainData, cpu: { enabled: false }, knowledgeBase: { enabled: false } }), `SameNested${retainData}`)
+      // the CPU queue, the knowledge bases and the tools functions are the nested layout's only (props.ts cpuEnabled,
+      // kbEnabled, toolsEnabled): compared without them
+      const nested = synth(InfraPropsSchema.parse({ ...base, retainData, cpu: { enabled: false }, knowledgeBase: { enabled: false }, tools: { enabled: false } }), `SameNested${retainData}`)
       const flat = synth(InfraPropsSchema.parse({ ...base, retainData, layout: 'flat' }), `SameFlat${retainData}`)
       expect(flat.nested.size).toBe(0)
       const fp = json(flat.parent)
@@ -209,6 +213,9 @@ describe('the nested layout', () => {
         const withoutJobEvents = (r: Res): Res => {
           const c = JSON.parse(JSON.stringify(r)) as Res & { Properties: Record<string, any> }
           if (c.Type === 'AWS::BedrockAgentCore::Runtime') delete c.Properties.EnvironmentVariables?.TRACE_BATCH_EVENTS_TOPIC
+          // a flat project's tools function is in the flat layout's tools stack (src/infra/tools.ts FlatToolsStack): its
+          // worker is told it there; compared here with the nested layout's tools functions off
+          if (c.Type === 'AWS::BedrockAgentCore::Runtime') for (const k of ['TRACE_TOOLS_FUNCTION', 'TRACE_TOOLS_FUNCTION_MEMORY_MB', 'TRACE_TOOLS_FUNCTION_STORAGE_MB']) delete c.Properties.EnvironmentVariables?.[k]
           if (c.Type === 'AWS::CodeBuild::Project') delete c.Properties.Triggers
           if (c.Type === 'AWS::IAM::Policy') c.Properties.PolicyDocument.Statement = c.Properties.PolicyDocument.Statement.filter((x: { Sid?: string }) => !String(x.Sid).startsWith('ProjectGpuWait'))
           return c

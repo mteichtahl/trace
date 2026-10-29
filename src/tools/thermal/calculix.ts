@@ -20,7 +20,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ToolError } from '../../core/registry.js'
 import { scratchDir } from '../../core/store.js'
-import { backendFor, runJob } from '../../gpu/jobs.js'
+import { type Backend, backendFor, runJob } from '../../gpu/jobs.js'
 import type { GridModel } from './grid.js'
 import type { PerSurface } from './convection.js'
 import { MOLD } from './materials.js'
@@ -286,13 +286,14 @@ export function ccxInstalled(): boolean {
 /** Elements above which a run goes to the CPU queue (when TRACE_GPU_QUEUE is set). */
 export const localMaxElements = (): number => Number(process.env.TRACE_CALCULIX_LOCAL_MAX_ELEMENTS ?? 300_000)
 
-export interface CcxRun { frd: string; log: string; where: 'local' | 'batch'; seconds: number }
+export interface CcxRun { frd: string; log: string; where: Backend; seconds: number }
 
 /** Run ccx on a deck through runJob (kind calculix, CPU). */
 export async function runCcx(inp: string, o: { elements: number; threads?: number; timeoutSeconds?: number; remote?: 'auto' | 'always' | 'never' }): Promise<CcxRun> {
   const mode = o.remote ?? 'auto'
-  const wantRemote = mode === 'always' || (mode === 'auto' && (o.elements > localMaxElements() || !ccxInstalled()))
-  const where = backendFor({ gpu: false, remote: wantRemote })
+  // not installed here: the queue, unless the project's tools function has it (backendFor sends it there)
+  const wantRemote = mode === 'always' || (mode === 'auto' && (o.elements > localMaxElements() || (!ccxInstalled() && !process.env.TRACE_TOOLS_FUNCTION)))
+  const where = backendFor({ kind: 'calculix', gpu: false, remote: wantRemote })
   if (where === 'local' && !ccxInstalled()) throw new ToolError('CalculiX (ccx) is not installed here (apt install calculix-ccx, or set TRACE_CCX; with TRACE_GPU_QUEUE set, runs go to the CPU queue)')
   const dir = scratchDir('trace-ccx-in-')
   try {

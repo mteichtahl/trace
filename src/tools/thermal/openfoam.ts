@@ -35,7 +35,7 @@ import { spawnSync } from 'node:child_process'
 import { z } from 'zod'
 import { ToolError } from '../../core/registry.js'
 import { scratchDir } from '../../core/store.js'
-import { backendFor, runJob } from '../../gpu/jobs.js'
+import { type Backend, backendFor, runJob } from '../../gpu/jobs.js'
 import { churchillChu } from './validation.js'
 import { MOLD } from './materials.js'
 
@@ -483,7 +483,7 @@ export function openfoamInstalled(): boolean {
   return existsSync(rc) || spawnSync('sh', ['-c', 'command -v chtMultiRegionSimpleFoam'], { encoding: 'utf8' }).status === 0
 }
 
-export interface CfdRun { result: CfdResult; vtk: Uint8Array | null; logs: Uint8Array | null; post: Uint8Array | null; where: 'local' | 'batch'; seconds: number; cells_estimate: number; files: Map<string, string> }
+export interface CfdRun { result: CfdResult; vtk: Uint8Array | null; logs: Uint8Array | null; post: Uint8Array | null; where: Backend; seconds: number; cells_estimate: number; files: Map<string, string> }
 
 /** Write the case, run it through runJob (kind openfoam; the CPU queue by default) and read the results. */
 export async function runCfd(input: z.input<typeof CfdSetup>, o: { remote?: 'auto' | 'always' | 'never'; timeoutSeconds?: number; stl?: string } = {}): Promise<CfdRun> {

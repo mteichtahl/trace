@@ -16,8 +16,8 @@ import { extname, join, resolve } from 'node:path'
 import { z } from 'zod'
 import { defineTool, ToolError, type AnyTool } from '../../core/registry.js'
 import { scratchDir, Work } from '../../core/store.js'
-import { findKicadCli, kicadCliVersion, needPcb, resolveProject, runProgram } from '../kicad/project.js'
-import { backendFor } from '../../gpu/jobs.js'
+import { findKicadCli, kicadCliVersion, kicadWhere, needPcb, resolveProject, runProgram } from '../kicad/project.js'
+import { backendFor, runJob } from '../../gpu/jobs.js'
 import { findBlender, findFfmpeg, pngSize, runBlender, scriptsDir, type Script } from './blender.js'
 import { DEFAULTS, defaultDevice, DeviceWant, probe, selectDevice, type DeviceWant as Want } from './device.js'
 import { commitOf, exportBoard, inRepo, prepareModel, type BoardFormat, type Prepared } from './model.js'
@@ -122,14 +122,31 @@ async function chooseFormat(want: 'auto' | 'glb' | 'vrml'): Promise<BoardFormat>
   return p?.gltf_import ? 'glb' : 'wrl'
 }
 
+/** ffmpeg's arguments for a turntable: frames f_0001.png… from `input`, an H.264 MP4 to `out`. */
+export const mp4Args = (fps: number, input: string, out: string): string[] => ['-y', '-loglevel', 'error', '-framerate', String(fps), '-i', input,
+  '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', out]
+
+/** The frames as a turntable MP4: with ffmpeg here, else as a job on the tools function or the queue (where the
+ * runtime has no ffmpeg: agent/Dockerfile.tools and Dockerfile.gpu have it); null when none (the frames are still
+ * returned). */
 async function encodeMp4(frames: string[], fps: number, dir: string): Promise<Uint8Array | null> {
+  if (!frames.length) return null
   const ff = findFfmpeg()
-  if (!ff || !frames.length) return null
-  frames.forEach((f, i) => writeFileSync(join(dir, `f_${String(i + 1).padStart(4, '0')}.png`), readFileSync(f)))
+  const name = (i: number): string => `f_${String(i + 1).padStart(4, '0')}.png`
+  if (!ff) {
+    if (backendFor({ kind: 'ffmpeg' }) === 'local') return null
+    const r = await runJob({
+      kind: 'ffmpeg', timeoutSeconds: 600, outputs: ['turntable.mp4'],
+      inputs: Object.fromEntries(frames.map((f, i) => [name(i), f])),
+      argv: ['ffmpeg', ...mp4Args(fps, '{dir}/in/f_%04d.png', '{out:turntable.mp4}')],
+    })
+    const got = r.outputs['turntable.mp4']
+    if (r.exitCode !== 0 || !got) throw new ToolError(`ffmpeg could not encode the turntable: ${(r.stderr || r.stdout).trim().slice(-500)}`)
+    try { return readFileSync(got) } finally { rmSync(got, { force: true }) }
+  }
+  frames.forEach((f, i) => writeFileSync(join(dir, name(i)), readFileSync(f)))
   const out = join(dir, 'turntable.mp4')
-  const r = await runProgram(ff, ['-y', '-loglevel', 'error', '-framerate', String(fps), '-i', join(dir, 'f_%04d.png'),
-    '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
-    '-movflags', '+faststart', out], { timeoutMs: 600_000 })
+  const r = await runProgram(ff, mp4Args(fps, join(dir, 'f_%04d.png'), out), { timeoutMs: 600_000 })
   if (r.code !== 0 || !existsSync(out)) throw new ToolError(`ffmpeg could not encode the turntable: ${(r.stderr || r.stdout).trim().slice(-500)}`)
   return readFileSync(out)
 }
@@ -137,7 +154,14 @@ async function encodeMp4(frames: string[], fps: number, dir: string): Promise<Ui
 async function renderRun(p: Plan): Promise<Record<string, unknown>> {
   const want = p.device ?? defaultDevice()
   // fail early, before exporting anything, when the machine that would render cannot do what was asked
-  if (backendFor({ gpu: true }) === 'local' && (want === 'gpu' || p.engine === 'eevee')) {
+  const where = backendFor({ kind: 'blender', gpu: true })
+  if (where === 'function' && want === 'gpu') {
+    throw new ToolError('this installation has no GPU queue, so renders run on the tools function, which has no graphics card: use device=cpu or auto')
+  }
+  if (where === 'function' && p.engine === 'eevee') {
+    throw new ToolError('this installation has no GPU queue, so renders run on the tools function, where EEVEE cannot render (no display or graphics card): use engine=cycles')
+  }
+  if (where === 'local' && (want === 'gpu' || p.engine === 'eevee')) {
     if (!findBlender()) throw new ToolError('Blender is not installed here (or set TRACE_BLENDER to its path)')
     const pr = await probe()
     if (pr && want === 'gpu') selectDevice(pr.devices, 'gpu')
@@ -289,7 +313,7 @@ function modelPlan(a: { path: string; up_axis?: 'Y' | 'Z' | undefined; units?: '
   const path = inRepo(a.path)
   if (!existsSync(path)) throw new ToolError(`${a.path} does not exist`)
   const isStep = /\.(step|stp)$/i.test(path)
-  if (isStep && !findKicadCli()) throw new ToolError('a STEP model is tessellated by kicad-cli (Blender has no STEP importer), which is not installed')
+  if (isStep && !kicadWhere()) throw new ToolError('a STEP model is tessellated by kicad-cli (Blender has no STEP importer), which is not installed')
   return {
     subject: path,
     repoPath: path,
@@ -393,15 +417,16 @@ const status = defineTool({
   description: 'Can this machine render? Blender (path, version, where renders run), its engines, every Cycles device per backend and the device device=auto would use, EEVEE headless, glTF import, denoisers, ffmpeg and kicad-cli. Probed once an hour.',
   input: z.object({ refresh: z.boolean().default(false).describe('probe again instead of using the cached answer') }),
   run: async (a) => {
-    const where = backendFor({ gpu: true })
+    const where = backendFor({ kind: 'blender', gpu: true })
     const local = findBlender()
+    const kicad = kicadWhere()
     const base = {
       where,
-      blender_path: where === 'local' ? local : 'blender (on the GPU queue)',
+      blender_path: where === 'local' ? local : where === 'function' ? 'blender (on the tools function, CPU only)' : 'blender (on the GPU queue)',
       scripts: scriptsDir(),
-      ffmpeg: findFfmpeg(),
-      kicad_cli: findKicadCli(),
-      kicad_cli_version: findKicadCli() ? await kicadCliVersion() : null,
+      ffmpeg: findFfmpeg() ?? ({ function: 'ffmpeg (on the tools function)', batch: 'ffmpeg (on the job queue)', local: null } as const)[backendFor({ kind: 'ffmpeg' })],
+      kicad_cli: findKicadCli() ?? (kicad ? `kicad-cli (on the ${kicad === 'function' ? 'tools function' : 'job queue'})` : null),
+      kicad_cli_version: kicad ? await kicadCliVersion() : null,
       default_device: process.env.TRACE_RENDER_DEVICE ? defaultDevice() : 'auto',
       defaults: DEFAULTS,
     }

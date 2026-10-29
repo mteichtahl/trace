@@ -35,24 +35,19 @@
  * The SDK clients are injected for tests; the real ones are loaded only when a job is shipped (SQS and SNS only when
  * the job is waited on by events).
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { randomBytes } from 'node:crypto'
-import { S3Backend, type S3Api } from '../core/central.js'
+import { type S3Api } from '../core/central.js'
 import { PROJECT_TAG, projectHash } from '../core/project.js'
 import { ToolError } from '../core/registry.js'
 import { ATTR, annotate, traceEnv } from '../core/telemetry.js'
 import { describeWait, trackEventWait, waitWithTimer } from '../core/wait.js'
-import { scratchDir } from '../core/store.js'
-import type { GpuJobSchema, JobResult } from './jobs.js'
-import type { z } from 'zod'
+import type { JobResult } from './jobs.js'
 import { trackInFlight } from './inflight.js'
 import { type UsageRow, jobRow, ledgerFromEnv, recordUsage } from '../core/cost.js'
 import { type PriceTable, pricesFromEnv } from '../core/prices.js'
 import { pricesFor } from '../core/prices-store.js'
-import { encodeSpec, ExitRecordSchema, jobKeys, jobsLocation, type ExitRecord, type RemoteSpec } from './protocol.js'
+import { type ParsedJob, fetchOutputs, readResult, stageJob } from './staging.js'
 
-export type ParsedJob = z.output<typeof GpuJobSchema>
+export { newJobId, type ParsedJob } from './staging.js'
 
 /** The three Batch calls used, in the SDK's own shapes (only the fields read here). */
 export interface BatchApi {
@@ -192,13 +187,6 @@ const errText = (e: unknown): string => (e instanceof Error ? e.message : String
 const TERMINAL = new Set(['SUCCEEDED', 'FAILED'])
 
 /** A job id that sorts by time and is safe in S3 keys and Batch job names. */
-export function newJobId(kind: string, now = Date.now()): string {
-  const t = new Date(now).toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-')
-  return `${kind}-${t}-${randomBytes(4).toString('hex')}`
-}
-
-const text = (b: Uint8Array | undefined): string => (b ? new TextDecoder().decode(b) : '')
-
 export interface Placement {
   queue: string
   definition: string
@@ -233,31 +221,13 @@ export function placement(job: { gpu: boolean; vcpus?: number | undefined }, env
 export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<JobResult> {
   const env = deps.env ?? process.env
   const place = placement(job, env)
-  const { bucket, prefix, project } = jobsLocation(env)
-  const store = new S3Backend(bucket, prefix, deps.s3)
-  const batch = deps.batch ?? (await awsBatch())
   const now = deps.now ?? Date.now
   const log = deps.log ?? (() => undefined)
   const t0 = now()
-
-  const id = newJobId(job.kind, t0)
-  const keys = jobKeys(id)
-  for (const [name, path] of Object.entries(job.inputs)) {
-    let body: Uint8Array
-    try {
-      body = readFileSync(path)
-    } catch {
-      throw new ToolError(`input ${name}: ${path} cannot be read`)
-    }
-    await store.put(keys.input(name), body)
-  }
-  const spec: RemoteSpec = {
-    v: 1, id, bucket, prefix, kind: job.kind, argv: job.argv, inputs: Object.keys(job.inputs), outputs: job.outputs,
-    env: job.env, gpu: job.gpu, timeoutSeconds: job.timeoutSeconds,
-  }
-  // the spec stays in the project's prefix: the job is given only where it is (see the header)
-  await store.put(keys.spec, new TextEncoder().encode(encodeSpec(spec)), { contentType: 'application/json' })
-  const environment = [{ name: 'TRACE_GPU_JOB_URI', value: `${store.url}/${keys.spec}` }]
+  const batch = deps.batch ?? (await awsBatch())
+  const staged = await stageJob(job, { env, s3: deps.s3, now: t0 })
+  const { id, project } = staged
+  const environment = [{ name: 'TRACE_GPU_JOB_URI', value: staged.specUri }]
   // the trace context, so the runner's span continues this trace (src/core/telemetry.ts; nothing without a span).
   // Only TRACEPARENT: baggage carries the session id, which other projects have no business reading.
   const parent = traceEnv().TRACEPARENT
@@ -316,14 +286,7 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
       + (status === 'RUNNABLE' ? `: no ${place.pool.toUpperCase()} instance came up (check the compute environment's instance types, vCPU quota and Spot capacity)` : ''))
   }
 
-  const exitBody = await store.get(keys.exit)
-  let exit: ExitRecord | null = null
-  if (exitBody) {
-    const r = ExitRecordSchema.safeParse((() => { try { return JSON.parse(text(exitBody.body)) } catch { return null } })())
-    exit = r.success ? r.data : null
-  }
-  const stdout = text((await store.get(keys.stdout))?.body).slice(-200_000)
-  const stderr = text((await store.get(keys.stderr))?.body).slice(-200_000)
+  const { exit, stdout, stderr } = await readResult(staged)
   if (!exit) {
     const why = [detail?.statusReason, detail?.container?.reason].filter(Boolean).join('; ')
     throw new ToolError(`the GPU job ${id} (Batch ${jobId}) ${(detail?.status ?? 'ended').toLowerCase()} before its runner finished${why ? `: ${why}` : ''}`
@@ -331,18 +294,7 @@ export async function runBatch(job: ParsedJob, deps: BatchDeps = {}): Promise<Jo
   }
   if (exit.error && exit.exitCode === 127) throw new ToolError(`the GPU job ${id}: ${exit.error}`)
 
-  const dir = scratchDir(`gpu-${job.kind}-`)
-  mkdirSync(join(dir, 'out'), { recursive: true })
-  const outputs: Record<string, string> = {}
-  for (const name of job.outputs) {
-    const o = await store.get(keys.output(name))
-    if (!o) continue
-    const p = join(dir, 'out', name)
-    writeFileSync(p, o.body)
-    outputs[name] = p
-  }
-  writeFileSync(join(dir, 'stdout.txt'), stdout)
-  writeFileSync(join(dir, 'stderr.txt'), stderr)
+  const outputs = await fetchOutputs(staged, job, { stdout, stderr })
   return {
     exitCode: exit.exitCode,
     stdout,

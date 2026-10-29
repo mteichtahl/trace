@@ -6,7 +6,10 @@
  *                       who may do what (the API's only); prompts/ for the installation's prompt overrides (the API
  *                       writes them, conditionally; workers and workflows read them)
  *   agent image         built from this repository by AWS CodeBuild on arm64 (no local Docker), pushed to ECR; every
- *                       runtime runs it
+ *                       runtime runs it. At most 2 GB (AgentCore's limit; its build fails over AGENT_IMAGE_MAX_BYTES)
+ *   tools image         (nested layout) built the same way from agent/Dockerfile.tools: KiCad, Blender, the FPGA and
+ *                       verification tools, CalculiX and ffmpeg, which each project's tools function runs (its own AWS
+ *                       Lambda function, src/infra/tools.ts) for the worker
  *   projects            one ProjectStack per repository (src/infra/project.ts): its worker runtime on Bedrock
  *                       AgentCore with its own execution role, its GitHub token secret, its GitHub OIDC role, its
  *                       AgentCore memory, its GPU job definition and job role, and its CodeBuild GitHub Actions
@@ -76,7 +79,8 @@ import { JOBS_PREFIX, PROJECTS_PREFIX, memoryName, projectHash, projectSlug, run
 import { grantApiRuntime } from './api-grants.js'
 import { ExternalAccess } from './external.js'
 import { LibraryGateway } from './gateway.js'
-import { imageBuildEnv, imageBuildSpec, imageContentTag } from './images.js'
+import { AGENT_IMAGE_MAX_BYTES, imageBuildEnv, imageBuildSpec, imageContentTag } from './images.js'
+import { FlatToolsStack, type ToolsImage, buildToolsImage, flatToolsFit, toolsImageProjectArn } from './tools.js'
 import { bundlingRoot } from './lockfile.js'
 import { GpuCompute } from './gpu.js'
 import { KB_RETRIEVE_ACTIONS, VectorStore, knowledgeBaseArn } from './knowledge.js'
@@ -91,7 +95,7 @@ import { EDGE_REGION, edgeNeeded, edgeStackName } from './edge.js'
 import { SELF_WRITABLE, TraceWeb, addWebClient, traceWebProps } from './web.js'
 import { ACCESS_PREFIX, AGENT_FACTS, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
-  CDK_QUALIFIER, CENTRAL_BUCKET_OUTPUT, INSTALLATION_PREFIX, GPU_IMAGE_BUILD_OUTPUT, type InfraProps, SELF_UPDATE_OUTPUT, ciRunnerOutput, LAYOUT_OUTPUT, selfUpdateRoleName, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, EXTERNAL_RESOURCE_SERVER, cpuEnabled, webModel,
+  CDK_QUALIFIER, CENTRAL_BUCKET_OUTPUT, INSTALLATION_PREFIX, GPU_IMAGE_BUILD_OUTPUT, type InfraProps, SELF_UPDATE_OUTPUT, ciRunnerOutput, LAYOUT_OUTPUT, selfUpdateRoleName, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, EXTERNAL_RESOURCE_SERVER, cpuEnabled, toolsEnabled, webModel,
   kbEnabled, projectRefs, projectSettings,
 } from './props.js'
 
@@ -229,7 +233,7 @@ export class TraceStack extends Stack {
       timeout: Duration.minutes(90),
       logging: { cloudWatch: { logGroup: buildLogs } },
       // the published image when there is one for this source, else a build cached on the previous image (images.ts)
-      buildSpec: codebuild.BuildSpec.fromObject(imageBuildSpec({ dockerfile: 'agent/Dockerfile', platform: 'linux/arm64' })),
+      buildSpec: codebuild.BuildSpec.fromObject(imageBuildSpec({ dockerfile: 'agent/Dockerfile', platform: 'linux/arm64', maxBytes: AGENT_IMAGE_MAX_BYTES })),
       cache: codebuild.Cache.local(codebuild.LocalCacheMode.DOCKER_LAYER),
     })
     repo.grantPullPush(build)
@@ -282,6 +286,21 @@ export class TraceStack extends Stack {
       properties: { ProjectName: build.projectName, ImageUri: imageUri, SourceHash: source.assetHash },
     })
 
+    // ------------------------------------------------------------------ the tools image (CodeBuild, arm64): the tools functions'
+    // KiCad, Blender, the FPGA and verification tools, CalculiX and ffmpeg (agent/Dockerfile.tools, src/infra/tools.ts),
+    // which AgentCore's 2 GB image limit keeps out of the agent image. Waited for, like the agent image: a function
+    // can't be made before its image is in the repository. Nested layout only (props.ts toolsEnabled)
+    const toolsBuild = (scope: Construct): ToolsImage => {
+      // its build is started and polled by the image-build provider: by the project's name (the same in either layout,
+      // and no reference to the flat layout's tools stack, which takes the provider's token from this one)
+      for (const f of [start, poll]) f.addToRolePolicy(new iam.PolicyStatement({ actions: ['codebuild:StartBuild', 'codebuild:BatchGetBuilds'], resources: [toolsImageProjectArn(this, cfg.prefix)] }))
+      return buildToolsImage(scope, {
+        prefix: cfg.prefix, keep, retainData: cfg.retainData, source, buildLogs, serviceToken: provider.serviceToken,
+        environment: imageBuildEnv(cfg.images, 'tools', contentTag),
+      })
+    }
+    const tools = toolsEnabled(cfg) ? toolsBuild(this) : null
+
     // ------------------------------------------------------------------ the projects (one worker runtime and its roles each)
     const issuer = 'token.actions.githubusercontent.com'
     const oidc = cfg.createOidcProvider
@@ -325,6 +344,7 @@ export class TraceStack extends Stack {
     const projectProps = (ref: (typeof refs)[number]): ProjectProps => ({
       cfg, project: ref, bucket: central, images: repo, imageUri: image.getAttString('ImageUri'), oidcProviderArn: oidc.openIdConnectProviderArn,
       gpu, vectorBucketArn: vectors?.arn ?? null, gateway: library?.ref ?? null,
+      tools: tools ? { images: tools.images, tag: tools.tag } : null,
       runnerSource,
       environment: {
         AWS_REGION: cfg.region, TRACE_HOME: traceHome, CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: cfg.model, TRACE_WORKSPACE: '/mnt/workspace',
@@ -660,6 +680,16 @@ export class TraceStack extends Stack {
     // Nested: the parent carries none of a project's outputs (Project<hash>RuntimeArn, ActionsRoleArn, MemoryId, …):
     // they are its nested stack's, and the installer reads them there (src/installer/aws.ts stackOutputs), so the
     // parent's outputs do not grow with the projects. Flat: the stack's own, as they always were (src/infra/project.ts).
+    // The flat layout's tools functions: every project's in one nested stack of its own (with the tools image's build),
+    // so the parent pays one resource for them all, and only when the parent has room for it (flatToolsFit). Without
+    // it a flat project's KiCad and the rest go to the queue (src/gpu/jobs.ts TRACE_TOOLS_ELSEWHERE)
+    const flatTools = !nested && cfg.tools.enabled && projects.length && flatToolsFit(this)
+      ? new FlatToolsStack(this, 'ToolsStack', {
+          cfg, bucket: central, build: toolsBuild,
+          projects: projects.map((p, i) => ({ ref: refs[i] as (typeof refs)[number], project: p })),
+        })
+      : null
+    if (flatTools) flatTools.node.addValidation({ validate: () => stackQuotaErrors(flatTools, '') })
     const hint = nested ? '' : `: with layout 'flat' about 20 projects fit; see README "Project isolation" for the move to layout 'nested'`
     this.node.addValidation({ validate: () => stackQuotaErrors(this, hint) })
     for (const n of nestedStacks) n.node.addValidation({ validate: () => stackQuotaErrors(n, '') })
@@ -672,6 +702,7 @@ export class TraceStack extends Stack {
     new CfnOutput(this, CENTRAL_BUCKET_OUTPUT, { value: central.bucketName })
     new CfnOutput(this, 'GithubSecretArn', { value: githubToken.secretArn, description: 'The API\'s GitHub token (across projects); each project has its own (Project<hash>GithubSecretArn)' })
     new CfnOutput(this, 'AgentImageUri', { value: imageUri })
+    if (tools) new CfnOutput(this, 'ToolsImageUri', { value: tools.uri, description: 'The projects\' tools functions\' image (agent/Dockerfile.tools)' })
     new CfnOutput(this, 'Region', { value: cfg.region })
     new CfnOutput(this, 'ApiRuntimeArn', { value: api.attrAgentRuntimeArn })
     new CfnOutput(this, 'UserPoolId', { value: users.userPoolId })

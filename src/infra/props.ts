@@ -174,6 +174,21 @@ export const InfraPropsSchema = z.object({
     vcpus: z.number().int().min(1).max(192).default(16),
     memoryMiB: z.number().int().min(1024).max(1_572_864).default(32_768),
   }).strict().prefault({}),
+  /** Each project's tools function (src/infra/tools.ts): an AWS Lambda function running the tools image
+   * (agent/Dockerfile.tools: KiCad, Blender, the FPGA and verification tools, CalculiX, ffmpeg), which AgentCore's
+   * 2 GB image limit keeps out of the agent image. A job of those kinds (src/gpu/jobs.ts FUNCTION_KINDS) runs there,
+   * one invocation each, for at most 840 s; a longer one, or a GPU render, goes to the queue. Its role reaches only the
+   * project's jobs/<slug>/ and its log group. In layout 'nested' each is in its project's nested stack (toolsEnabled
+   * below); in layout 'flat', whose stack has no room for four more resources per project, all of them are in one
+   * nested stack of their own, made when the flat stack has room for that one resource (src/infra/tools.ts
+   * FlatToolsStack: not at 20 flat projects with everything on, whose projects then send those jobs to the queue). */
+  tools: z.object({
+    enabled: z.boolean().default(true),
+    /** the function's memory (MB): its CPU share grows with it, a full vCPU at 1769 MB, six at 10240 */
+    memoryMb: z.number().int().min(1024).max(10_240).default(4096),
+    /** its /tmp (MB): a job's inputs, its work (a KiCad project unpacked) and its outputs */
+    ephemeralMb: z.number().int().min(512).max(10_240).default(10_240),
+  }).strict().prefault({}),
   /** The agents' memory: one AgentCore Memory per project (short-term events, long-term facts, session summaries,
    * preferences; src/infra/memory.ts). */
   memory: z.object({
@@ -469,6 +484,10 @@ export function projectSettings(cfg: Pick<InfraProps, 'projectSettings' | 'memor
 export const GPU_JOB_VCPUS = 4
 
 /** Whether the CPU queue exists: cpu.enabled, with the GPU side it shares, in the nested layout (see `cpu`). */
+/** Whether the projects have their tools function: tools.enabled, in the nested layout only (the props' tools above). */
+export const toolsEnabled = (cfg: Pick<InfraProps, 'tools' | 'layout' | 'layoutMigration'>): boolean =>
+  cfg.tools.enabled && cfg.layout === 'nested' && cfg.layoutMigration === undefined
+
 export const cpuEnabled = (cfg: Pick<InfraProps, 'cpu' | 'gpu' | 'layout'>): boolean => cfg.cpu.enabled && cfg.gpu.enabled && cfg.layout === 'nested'
 
 /** The CloudFormation output names of one project (alphanumeric only, so the hash rather than the slug). In the nested

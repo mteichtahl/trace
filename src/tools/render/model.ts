@@ -9,7 +9,7 @@
  * the 3D model of one footprint on an otherwise empty board and that board is exported (GLB without a board body, or
  * VRML, whose stand-in board the script drops).
  */
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import { ToolError } from '../../core/registry.js'
 import { findRoot } from '../../core/store.js'
@@ -48,12 +48,16 @@ export async function exportBoard(pcb: string, dir: string, format: BoardFormat)
 export async function stepToMesh(step: string, dir: string, format: BoardFormat): Promise<Prepared> {
   const pcb = join(dir, 'step-wrapper.kicad_pcb')
   const q = (s: string): string => JSON.stringify(s)
+  // the model beside the wrapper, named relative to it: where kicad-cli runs elsewhere (the tools function), the
+  // wrapper's folder is what travels with the job (src/tools/kicad/remote.ts)
+  const local = `model${extname(step).toLowerCase() || '.step'}`
+  copyFileSync(resolve(step), join(dir, local))
   writeFileSync(pcb, `(kicad_pcb (version 20240108) (generator "trace") (generator_version "8.0")
   (general (thickness 1.6))
   (paper "A4")
   (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
   (footprint "trace:model" (layer "F.Cu") (at 0 0)
-    (model ${q(resolve(step))} (offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0)))
+    (model ${q(`\${KIPRJMOD}/${local}`)} (offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0)))
   )
 )
 `)

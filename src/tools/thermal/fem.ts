@@ -10,6 +10,7 @@ import { plateOf, type PartResult } from './model.js'
 import { rasterise, type RasterOptions, type Rasterised } from './raster.js'
 import type { GridModel } from './grid.js'
 import { metrics, type SeriesMetrics } from './transient.js'
+import type { Backend } from '../../gpu/jobs.js'
 
 export interface FemInput extends Omit<RasterOptions, 'emissivity'> {
   board: string
@@ -39,7 +40,7 @@ export interface FemRun {
   inp: string
   frd: string
   log: string
-  where: 'local' | 'batch'
+  where: Backend
   ccx_seconds: number
   ccx_runs: number
   transient?: { metrics: SeriesMetrics[]; frames: { t_s: number; max_c: number; min_c: number; parts: Record<string, number> }[] }
@@ -57,7 +58,7 @@ export async function runModelCalculix(m: GridModel, i: Omit<FemInput, 'board' |
   const mesh = buildMesh(m, { sublayers: i.sublayers ?? 2, bodies: i.bodies })
   const plate = plateOf(m)
   const total = m.parts.reduce((s, p) => s + p.power_w, 0)
-  const holder: { last: { frd: string; log: string; where: 'local' | 'batch'; seconds: number; inp: string; opts: InpOptions; T: Map<number, number> } | null } = { last: null }
+  const holder: { last: { frd: string; log: string; where: Backend; seconds: number; inp: string; opts: InpOptions; T: Map<number, number> } | null } = { last: null }
   let runs = 0
   let seconds = 0
   const env = i.environment

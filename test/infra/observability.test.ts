@@ -89,8 +89,8 @@ describe('observability in the stack', () => {
     expect(where).not.toContain('"*"')
     expect(statements.find((x) => x.Sid === 'TransactionSearchSignalsRole')?.Condition).toEqual({ StringLike: { 'iam:AWSServiceName': 'application-signals.cloudwatch.amazonaws.com' } })
     expect(JSON.stringify(statements.find((x) => x.Sid === 'TransactionSearchSignalsChannel')?.Resource)).toContain('channel/aws-service-channel/application-signals/*')
-    // the image builds are still the only CloudFormation::CustomResource ones
-    t.resourceCountIs('AWS::CloudFormation::CustomResource', 2)
+    // the image builds (the agent's, the tools' and the GPU one's) are still the only CloudFormation::CustomResource ones
+    t.resourceCountIs('AWS::CloudFormation::CustomResource', 3)
   })
 
   it('delivers each project memory\'s application logs to its own log group and its traces to X-Ray', () => {

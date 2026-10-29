@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { ToolError } from '../../core/registry.js'
 import { open, scratchDir } from '../../core/store.js'
-import { backendFor, runJob } from '../../gpu/jobs.js'
+import { type Backend, backendFor, runJob } from '../../gpu/jobs.js'
 import type { Environment } from './convection.js'
 import { type BoardInput, type BoardRun, runBoard } from './model.js'
 import { rasterise } from './raster.js'
@@ -79,7 +79,7 @@ export function readResult(resultPath: string, boardPath: string, a: JobArgs): B
 export const localMaxCells = (): number => Number(process.env.TRACE_THERMAL_LOCAL_MAX_CELLS ?? 400_000)
 
 /** runBoard here, or on the CPU queue when the grid is larger than TRACE_THERMAL_LOCAL_MAX_CELLS and a queue is set. */
-export async function runBoardWhere(i: BoardInput, cells: number, mode: 'auto' | 'always' | 'never' = 'auto'): Promise<BoardRun & { where: 'local' | 'batch' }> {
+export async function runBoardWhere(i: BoardInput, cells: number, mode: 'auto' | 'always' | 'never' = 'auto'): Promise<BoardRun & { where: Backend }> {
   const remote = mode === 'always' || (mode === 'auto' && cells > localMaxCells())
   if (mode === 'never' || backendFor({ gpu: false, remote }) === 'local') return { ...(await runBoard(i)), where: 'local' }
   const dir = scratchDir('trace-thermal-')

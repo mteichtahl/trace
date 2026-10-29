@@ -5,7 +5,7 @@
 #
 # Three stages, so the image AgentCore runs holds each file once (AgentCore Runtime refuses an image over 2 GB:
 # "maxImageSizeMb limit exceeded"):
-#   tools  the system packages every stage needs: the tools the agents run, and the compilers the build uses
+#   tools  the system packages every stage needs: the tools the agents run here, and the compilers the build uses
 #   build  npm ci with the dev dependencies, the build, the prune, and the Python venv; left behind
 #   final  tools, with the built /app and the venv copied in, already owned by the trace user (a `chown -R` in a
 #          layer of its own would store every file of /app a second time)
@@ -14,58 +14,29 @@ FROM --platform=linux/arm64 ubuntu:24.04 AS tools
 ARG DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=UTC
 
-# Base tools. python3-dev: cocotb publishes no arm64 Linux wheel, so pip builds it from source in the venv below, and
-# its C++ extensions need Python.h ("fatal error: Python.h: No such file or directory" without it).
+# Base tools. build-essential and verilator: the mixed-signal co-simulation (src/tools/ams/mixed.ts) builds a
+# Verilator model into ngspice's d_cosim in this process, so both stay here; iverilog (a few MB): sim.logic runs it
+# here (src/tools/sim/logic.ts). Everything larger (KiCad, Blender, the FPGA
+# and formal tools, CalculiX, ffmpeg) is in the tools image (agent/Dockerfile.tools), which each project's tools
+# function runs: AgentCore Runtime refuses an image over 2 GB, and the build checks this one is under it
+# (src/infra/images.ts AGENT_IMAGE_MAX_BYTES).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl gnupg git openssh-client jq unzip xz-utils \
-      build-essential python3 python3-dev python3-venv python3-pip ngspice iverilog poppler-utils ffmpeg \
+      build-essential python3 python3-venv python3-pip ngspice verilator iverilog poppler-utils \
+ && verilator --version \
  && rm -rf /var/lib/apt/lists/*
 
-# Node 22 (NodeSource), the GitHub CLI (its apt repository) and KiCad 10 (ppa:kicad/kicad-10.0-releases, which builds
-# arm64 for noble). The PPA is added by hand: add-apt-repository needs software-properties and a keyserver round trip.
+# Node 22 (NodeSource) and the GitHub CLI (its apt repository).
 RUN install -d -m 0755 /etc/apt/keyrings \
  && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
  && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
  && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
  && echo "deb [arch=arm64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
- && curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xFDA854F61C4D0D9572BB95E5245D5502FAD7A805" | gpg --dearmor -o /etc/apt/keyrings/kicad.gpg \
- && echo "deb [signed-by=/etc/apt/keyrings/kicad.gpg] https://ppa.launchpadcontent.net/kicad/kicad-10.0-releases/ubuntu noble main" > /etc/apt/sources.list.d/kicad-10.list \
  && apt-get update \
  && apt-get install -y --no-install-recommends nodejs gh \
- && (apt-get install -y --no-install-recommends kicad kicad-symbols kicad-footprints \
-     || (echo "KiCad 10 from the PPA is not installable here: falling back to Ubuntu's kicad" \
-         && rm /etc/apt/sources.list.d/kicad-10.list && apt-get update \
-         && apt-get install -y --no-install-recommends kicad kicad-symbols kicad-footprints)) \
- && kicad-cli version \
  && node --version && gh --version \
  && rm -rf /var/lib/apt/lists/*
-
-# --- Blender (the rendering agent: src/tools/render drives bpy scripts in /app/python/blender; Cycles on the CPU, no GPU).
-# python3-numpy: Ubuntu's Blender uses the system Python, and its glTF importer needs numpy.
-RUN apt-get update && apt-get install -y --no-install-recommends blender python3-numpy && blender --version && rm -rf /var/lib/apt/lists/*
-# --- end Blender
-
-# --- Verification and FPGA implementation (src/tools/verify, src/tools/fpga): Verilator, Yosys, nextpnr for ice40,
-# ECP5 and Gowin, IceStorm and Trellis packers, and z3 for formal (yosys-smtbmc). SymbiYosys is a Python front end,
-# installed from its repository at the tag matching Ubuntu's Yosys; if that tag is missing, verify.formal still runs
-# yosys + yosys-smtbmc directly.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends verilator yosys nextpnr-ice40 nextpnr-ecp5 nextpnr-gowin fpga-icestorm fpga-trellis z3 \
- && rm -rf /var/lib/apt/lists/* \
- && YV="$(yosys -V | sed -E 's/^Yosys ([0-9]+\.[0-9]+).*/\1/')" \
- && (git clone --depth 1 --branch "v${YV}" https://github.com/YosysHQ/sby.git /tmp/sby && make -C /tmp/sby install PREFIX=/usr/local \
-     || echo "note: SymbiYosys v${YV} not installed; verify.formal uses yosys-smtbmc directly") \
- && rm -rf /tmp/sby \
- && verilator --version && yosys -V && nextpnr-ice40 --version
-# --- end verification and FPGA
-
-# --- Thermal (src/tools/thermal): CalculiX ccx 2.21 for thermal.board solver=calculix, from Ubuntu noble's universe
-# (calculix-ccx 2.21-1, published for arm64 and amd64; about 18 MB with SPOOLES, ARPACK, BLAS/LAPACK and gfortran).
-# OpenFOAM (solver=cfd) is in the CPU/GPU job image only (agent/Dockerfile.gpu): CFD runs go to the queue.
-RUN apt-get update && apt-get install -y --no-install-recommends calculix-ccx=2.21-1 && rm -rf /var/lib/apt/lists/* \
- && command -v ccx
-# --- end thermal
 
 # A non-root user owns the app's runtime state; the workspace is /mnt/workspace (AgentCore session storage) when
 # mounted, else /tmp/trace-work.
@@ -82,21 +53,26 @@ WORKDIR /app
 COPY package.json agent/package-lock.json agent/npmrc ./
 RUN mv npmrc .npmrc
 RUN npm ci --ignore-scripts
+# Python.h, for a dependency pip may have to build from source (the venv below); the build stage's only
+RUN apt-get update && apt-get install -y --no-install-recommends python3-dev && rm -rf /var/lib/apt/lists/*
 
 COPY . .
 # build:image: everything `npm run build` makes but the installer page (scripts/bundle-ui.mjs), which only `tracectl
 # install` serves, and which needs the web app's components (web/src), left out of the image's source
 # The Claude Agent SDK installs its native binary for both C libraries of this platform; Ubuntu's is glibc, and the
-# SDK takes the glibc one first there, so the musl one (about 270 MB) is never run.
+# SDK takes the glibc one first there, so the musl one (about 270 MB) is never run. The CDK (aws-cdk-lib and the CLI,
+# about 210 MB) is what the installer deploys with, from a laptop or CodeBuild, never from a runtime:
+# scripts/check-imports.mjs fails the build if anything a runtime loads imports it.
 RUN npm run build:image \
  && npm prune --omit=dev \
  && npm rebuild \
  && rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl \
+ && rm -rf node_modules/aws-cdk-lib node_modules/aws-cdk node_modules/@aws-cdk node_modules/constructs \
+ && node scripts/check-imports.mjs dist/agents/runtime/main.js dist/cli.js dist/gpu/runner.js \
  && test -x node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64/claude \
  && chmod +x /app/dist/cli.js \
  && python3 -m venv /opt/trace-venv \
- && /opt/trace-venv/bin/pip install --no-cache-dir '/app/python[pdf]' 'cocotb==2.1.0' 'apycula==0.10.0' \
- && { test -d /app/python/blender || echo "note: /app/python/blender is not in the build context yet"; }
+ && /opt/trace-venv/bin/pip install --no-cache-dir '/app/python[pdf]'
 
 # ------------------------------------------------------------------ final: what AgentCore runs
 FROM tools
@@ -109,6 +85,7 @@ RUN ln -s /app/dist/cli.js /usr/local/bin/tracectl && ln -s tracectl /usr/local/
 ENV PATH=/opt/trace-venv/bin:$PATH \
     TRACE_PYTHON=/opt/trace-venv/bin/python \
     TRACE_CLI=/app/dist/cli.js \
+    TRACE_TOOLS_ELSEWHERE=1 \
     HOME=/home/trace \
     NODE_ENV=production \
     PORT=8080

@@ -147,3 +147,39 @@ describe('the daily Cost Explorer read', () => {
     expect(nextDaily(6, 17)(Date.parse('2026-10-27T05:00:00Z'))).toBe(Date.parse('2026-10-27T06:17:00Z'))
   })
 })
+
+describe('the tools function in the ledger', () => {
+  it('prices a call by its billed seconds, memory, /tmp over 512 MB and the call itself', async () => {
+    const { toolsRow } = await import('../../src/core/cost.js')
+    const { toolsCost, DEFAULT_TOOLS_PRICE } = await import('../../src/core/prices.js')
+    const r = toolsRow(DEFAULT_PRICES, { seconds: 100, memoryMb: 4096, storageMb: 10_240, at: 1, jobId: 'kicad-1', kind: 'kicad', region: 'us-east-1' })
+    const want = 100 * 4 * DEFAULT_TOOLS_PRICE.perGbSecond + DEFAULT_TOOLS_PRICE.perRequest + 100 * 9.5 * DEFAULT_TOOLS_PRICE.perStorageGbSecond
+    expect(r).toMatchObject({ kind: 'tools', agent: 'kicad', seconds: 100, memoryMb: 4096, basis: 'table', pricesSource: 'built-in' })
+    expect(r.amount).toBeCloseTo(want, 6)
+    // a table from before the tools function (fetched or overridden without it) still prices it, at the built-in price
+    const { tools: _, ...old } = DEFAULT_PRICES
+    expect(toolsCost(old as typeof DEFAULT_PRICES, 100, 4096, 10_240)).toBeCloseTo(want, 6)
+    expect(estimateTotals([r]).byKind.tools).toBe(Math.round(want * 100) / 100)
+    expect(usageLine(r).what).toBe('Tools function job kicad: 100 s with 4 GB')
+  })
+
+  it('opens a ledger made before it, keeping every row, and then takes its rows', async () => {
+    const { DatabaseSync } = await import('node:sqlite')
+    const { applyUsageSchema, insertUsage, toolsRow } = await import('../../src/core/cost.js')
+    const db = new DatabaseSync(':memory:')
+    // the schema as it was: no 'tools' in the CHECK, no memory_mb, no prices_source
+    db.exec(`CREATE TABLE usage (id TEXT PRIMARY KEY, at REAL NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('agents', 'gpu', 'cpu')), job_id TEXT, agent TEXT,
+      model TEXT, input INTEGER, output INTEGER, cache_read INTEGER, cache_write INTEGER, seconds REAL, vcpus INTEGER, amount REAL, basis TEXT NOT NULL,
+      prices_as_of TEXT, sdk_cost REAL, region TEXT); CREATE INDEX usage_at ON usage(at);`)
+    db.exec(`INSERT INTO usage (id, at, kind, agent, seconds, amount, basis) VALUES ('old1', 5, 'gpu', 'blender', 600, 0.13, 'table')`)
+    applyUsageSchema(db)
+    insertUsage(db, [toolsRow(DEFAULT_PRICES, { seconds: 3, memoryMb: 4096, storageMb: 512, at: 6, jobId: 'k', kind: 'kicad', region: null })])
+    const rows = loadUsage(db)
+    expect(rows.map((r) => [r.id === 'old1' ? 'old1' : 'new', r.kind])).toEqual([['old1', 'gpu'], ['new', 'tools']])
+    expect(rows[0]).toMatchObject({ seconds: 600, amount: 0.13, memoryMb: null })
+    // and again is a no-op
+    applyUsageSchema(db)
+    expect(loadUsage(db)).toHaveLength(2)
+    expect((db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'usage_at'").all())).toHaveLength(1)
+  })
+})

@@ -151,7 +151,7 @@ describe('without the gateway', () => {
 
   it('copies or caches the images (the parent holds only the image builds: each project\'s CI runner is in its nested stack)', () => {
     const builds = Object.values(off.parent.findResources('AWS::CodeBuild::Project') as Record<string, { Properties: { Name: string; Environment: { EnvironmentVariables: { Name: string; Value: string }[] }; Cache?: { Type: string; Modes: string[] }; Source: { BuildSpec: string } } }>)
-    expect(builds.map((b) => b.Properties.Name).sort()).toEqual(['trace-agent-image', 'trace-gpu-image'])
+    expect(builds.map((b) => b.Properties.Name).sort()).toEqual(['trace-agent-image', 'trace-gpu-image', 'trace-tools-image'])
     for (const b of builds) {
       // PUBLISHED_REGISTRY: nothing published yet, so no image to copy (an installation can name a registry: images.test.ts)
       expect(b.Properties.Environment.EnvironmentVariables.find((v) => v.Name === 'PREBUILT_IMAGE')?.Value).toBe(PUBLISHED_REGISTRY ? expect.stringContaining(PUBLISHED_REGISTRY) : '')
