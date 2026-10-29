@@ -14,6 +14,8 @@ import { InfraPropsSchema, PUBLISHED_REGISTRY } from '../../src/infra/props.js'
 import { AnswersSchema } from '../../src/installer/answers.js'
 import { infraInput } from '../../src/installer/bootstrap.js'
 import { ACCEPT, parseRef, resolveImage } from '../../scripts/resolve-image.mjs'
+import { withoutCredentials } from '../../scripts/npmrc.mjs'
+import { SOURCE_EXCLUDE } from '../../src/infra/stack.js'
 
 const ROOT = join(import.meta.dirname, '..', '..')
 
@@ -159,6 +161,22 @@ describe('the images', () => {
     expect(agent).toContain(`-gt ${AGENT_IMAGE_MAX_BYTES} ]`)
     expect(AGENT_IMAGE_MAX_BYTES).toBeLessThanOrEqual(2_000_000_000)
     expect(JSON.stringify(imageBuildSpec({ dockerfile: 'agent/Dockerfile.tools', platform: 'linux/arm64' }))).not.toContain('{{.Size}}')
+  })
+
+  it('get the .npmrc\'s settings, never a credential in it, and the source sent to AWS leaves .npmrc out', () => {
+    // a clone's .npmrc with a person's token: in the image it would sit in the build's layers, and once it expires
+    // every npm ci there fails with E401 (public packages too)
+    const local = ['legacy-peer-deps=true', '//registry.npmjs.org/:_authToken=npm_EXAMPLEEXAMPLEEXAMPLE', 'fund=false',
+      '_auth = dXNlcjpwYXNz', '//npm.pkg.github.com/:_authToken=ghp_EXAMPLE', '@acme:registry=https://npm.pkg.github.com', 'email=me@example.com', '# a comment', ''].join('\n')
+    const r = withoutCredentials(local)
+    expect(r.text.split('\n')).toEqual(['legacy-peer-deps=true', 'fund=false', '@acme:registry=https://npm.pkg.github.com', '# a comment', ''])
+    expect(r.dropped).toBe(4)
+    expect(r.text).not.toMatch(/npm_EXAMPLE|ghp_EXAMPLE|dXNlcjpwYXNz|_auth/)
+    // the repository's own .npmrc has no credential: staged as it is
+    const own = readFileSync(join(ROOT, '.npmrc'), 'utf8')
+    expect(withoutCredentials(own)).toEqual({ text: own, dropped: 0 })
+    expect(readFileSync(join(ROOT, 'agent', 'npmrc'), 'utf8')).toBe(own)
+    expect(SOURCE_EXCLUDE).toEqual(expect.arrayContaining(['.npmrc', '**/.npmrc']))
   })
 
   it('build from the lock file npm leaves out of an installed trace', () => {
