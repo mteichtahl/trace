@@ -99,9 +99,15 @@ function SampleCard() {
         <div className="grid gap-2">
           <div className="flex items-center gap-2 rounded-md bg-muted/60 px-3 py-2 text-sm">
             <span className="min-w-0 flex-1 truncate font-mono text-[0.8125rem]">{repo}</span>
-            <span className="text-xs text-muted-foreground">{s.projects.get(repo)?.create ? 'created when installing' : 'installed earlier'}</span>
-            {s.projects.get(repo)?.create ? <Button variant="ghost" size="icon-xs" aria-label="Remove the sample" onClick={() => update((st) => { st.projects.delete(repo); st.sample.repo = '' })}><X /></Button> : null}
+            <span className="text-xs text-muted-foreground">{x.gone ? 'created again when installing' : s.projects.get(repo)?.create ? 'created when installing' : 'installed earlier'}</span>
+            {s.projects.get(repo)?.create ? <Button variant="ghost" size="icon-xs" aria-label="Remove the sample" onClick={() => update((st) => { st.projects.delete(repo); st.sample.repo = ''; st.sample.gone = false })}><X /></Button> : null}
           </div>
+          {x.gone ? (
+            <Note tone="info" title={`${repo} is no longer on GitHub`}>
+              <p>It was deleted, or this token can't see it. Installing creates it again and fills it with the sample, and its project in trace carries on. Remove it here to leave the sample out instead.</p>
+              <p>If it still exists, give the token access to it and check the token again on the GitHub step.</p>
+            </Note>
+          ) : null}
           <Toggle label="Start the tour once installed" checked={x.tour} onChange={(v) => update((st) => { st.sample.tour = v })}
             description="It runs on AWS like any other work, so it costs what that work costs (graphics card and CPU jobs most of all)." />
         </div>
@@ -149,11 +155,18 @@ function NewProject() {
 
 export function ProjectsStep() {
   const s = useStore()
+  const dropped = s.dropped.filter((r) => !s.projects.has(r))
   const fresh = preCurrent(s)
   const findings = fresh ? (s.pre?.checks ?? []).filter((c) => isRepoCheck(c) && s.projects.has(c.title)) : []
   const fails = findings.filter((c) => c.status === 'fail')
   return (
     <>
+      {dropped.length ? (
+        <Note tone="warn" title={`${dropped.length === 1 ? 'A project' : `${dropped.length} projects`} from the last installation ${dropped.length === 1 ? 'is' : 'are'} no longer on GitHub`}>
+          <p><span className="font-mono">{dropped.join(', ')}</span>: deleted, or this token can't see {dropped.length === 1 ? 'it' : 'them'}. Left out, installing removes {dropped.length === 1 ? 'its' : 'their'} agents and runners from trace (data is kept when Keep the data is on).</p>
+          <p>To keep {dropped.length === 1 ? 'it' : 'them'}, give the token access and check it again on the GitHub step.</p>
+        </Note>
+      ) : null}
       <RepoPicker />
       <SampleCard />
       <NewProject />

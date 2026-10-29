@@ -102,7 +102,10 @@ export function initialState() {
     projects: new Map<string, Project>(),
     filter: '',
     newRepo: { name: '', template: 'kicad' as Exclude<Template, 'sample'>, private: true },
-    sample: { name: '', private: true, tour: true, repo: '' },
+    /** gone: the sample an earlier run created is no longer on GitHub, so installing creates it again */
+    sample: { name: '', private: true, tour: true, repo: '', gone: false },
+    /** projects an earlier run installed that the token no longer sees: left out of this run */
+    dropped: [] as string[],
     projectTokens: new Map<string, string>(),
     integrations: Object.fromEntries(INTEGRATION_NAMES.map((n) => [n, Object.fromEntries(INTEGRATIONS[n].keys.map((k) => [k, '']))])) as Record<IntegrationName, Record<string, string>>,
     integrationCheck: new Map<IntegrationName, { ok: boolean; detail: string } | 'busy'>(),
@@ -242,6 +245,34 @@ export function selfRepo(s: State): { repo: string; ok: boolean; reason: string 
   if (!own || !own.ok || s.projects.has(own.repo)) return null
   return own
 }
+/**
+ * The saved projects against what GitHub says now (the GitHub step's check, which was asked about each of them):
+ * one the token no longer sees is left out, said on the Projects step; the sample, gone because someone deleted it,
+ * is created again rather than configured as if it were there (the installer checks it again before creating it).
+ */
+export function reconcileProjects(s: State, r: GithubCheck): void {
+  const seen = new Set(r.repos.map((x) => x.fullName.toLowerCase()))
+  const access = new Map(r.access.map((x) => [x.repo.toLowerCase(), x]))
+  const gone = (repo: string): boolean => {
+    const a = access.get(repo.toLowerCase())
+    // asked about it: GitHub says whether the token can reach it; not asked: the token's list says
+    if (a && 'ok' in a) return !a.ok && /\b404\b|not found/i.test(a.reason)
+    return !seen.has(repo.toLowerCase()) && r.repos.length < 1000
+  }
+  for (const [repo, p] of s.projects) {
+    if (p.create || !gone(repo)) continue
+    if (s.sample.repo && repo.toLowerCase() === s.sample.repo.toLowerCase()) {
+      p.create = { template: 'sample', private: s.sample.private }
+      p.branch = 'main'
+      p.onboard = true
+      s.sample.gone = true
+    } else {
+      s.projects.delete(repo)
+      if (!s.dropped.includes(repo)) s.dropped.push(repo)
+    }
+  }
+}
+
 export const buildTrace = (s: State): boolean => (selfRepo(s) ? s.runners.buildTrace ?? true : false)
 
 // ------------------------------------------------------------------ what is sent

@@ -47,6 +47,24 @@ export function withSample(a: Answers): Answers {
   return { ...a, projects: [...a.projects, { repo, branch: 'main', onboard: true, applySettings: true, memoryEventExpiryDays: null, generation: 0, create: { template: 'sample', private: a.sample.private } }] }
 }
 
+/**
+ * The sample, created again when its repository is gone: an earlier run created it and onboarded it (so the saved
+ * answers list it as an existing project), then someone deleted it on GitHub. Listed as existing, the install would
+ * try to configure a repository that is not there; marked to be created, it is made and filled with the sample again,
+ * and the stack's project for it (same name) carries on. `exists` asks GitHub; null (it could not say) changes nothing.
+ * Returns the answers, and the repository when it is to be created again.
+ */
+export async function recreateMissingSample(a: Answers, exists: (repo: string) => Promise<boolean | null>): Promise<{ answers: Answers; recreated: string | null }> {
+  if (!a.sample.enabled) return { answers: a, recreated: null }
+  const repo = sampleRepo(a)
+  const i = a.projects.findIndex((p) => p.repo.toLowerCase() === repo.toLowerCase())
+  const p = a.projects[i]
+  if (!p || p.create) return { answers: a, recreated: null }
+  if ((await exists(p.repo).catch(() => null)) !== false) return { answers: a, recreated: null }
+  const projects = a.projects.map((x, j) => (j === i ? { ...x, branch: 'main', onboard: true, create: { template: 'sample' as const, private: a.sample.private } } : x))
+  return { answers: { ...a, projects }, recreated: p.repo }
+}
+
 // ------------------------------------------------------------------ the files
 
 /** Paths in templates/sample that are the installer's, not the sample repository's. */

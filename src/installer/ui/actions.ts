@@ -5,7 +5,7 @@
  */
 import type { IntegrationName } from '../../core/integrations-catalog.js'
 import type { Check, InstallEvent, Step } from '../answers.js'
-import { type Env, type GithubCheck, type Preflight, type Progress, type StepId, answers, awsBody, blockers, ghCurrent, loadSaved, planKey, preCurrent, preflightBody, preflightKey, secrets, githubTokenError, awsErrors } from './model.js'
+import { type Env, type GithubCheck, type Preflight, type Progress, type StepId, answers, awsBody, blockers, ghCurrent, loadSaved, planKey, preCurrent, preflightBody, preflightKey, secrets, githubTokenError, awsErrors, reconcileProjects } from './model.js'
 import { get, update } from './store.js'
 
 const KEY = document.querySelector<HTMLMetaElement>('meta[name="trace-key"]')?.content ?? ''
@@ -60,13 +60,10 @@ export async function checkGithub(): Promise<void> {
   if (githubTokenError(token) || get().ghBusy) return
   update((s) => { s.ghBusy = true; s.ghError = '' })
   try {
-    const r = await api<GithubCheck>('POST', '/api/github/check', { token })
-    update((s) => {
-      s.gh = r; s.ghFor = token
-      // keep only the projects the token still sees (or that the installer will create)
-      const seen = new Set(r.repos.map((x) => x.fullName))
-      for (const [repo, p] of s.projects) if (!p.create && !seen.has(repo) && repo !== s.sample.repo) s.projects.delete(repo)
-    })
+    // asked about each project an earlier run installed, so one deleted since is told apart from one merely unlisted
+    const saved = [...get().projects].filter(([, p]) => !p.create).map(([repo]) => repo).slice(0, 200)
+    const r = await api<GithubCheck>('POST', '/api/github/check', { token, repos: saved })
+    update((s) => { s.gh = r; s.ghFor = token; reconcileProjects(s, r) })
   } catch (e) {
     update((s) => { s.gh = null; s.ghFor = ''; s.ghError = humanGithub(message(e)) })
   } finally {
