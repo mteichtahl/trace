@@ -92,9 +92,9 @@ FAR = 1000.0  # past any case: an opening reaches this far outward, a column thi
 SCREWS = ((2.5, "M2", 2.0), (3.0, "M2.5", 2.5), (3.6, "M3", 3.0), (float("inf"), "M4", 4.0))
 PILOT_RATIO = 0.8
 # Pan head envelopes (head height k, head diameter dk), ISO 7045 (cross-recessed pan head screws), the standard's
-# maximum values, so a head of any maker within the standard fits the envelope: M2 k 1.6 dk 4.0, M2.5 k 1.75 dk 5.0,
-# M3 k 2.1 dk 5.6, M4 k 2.8 dk 8.0. The fit check stands one on the board's top face at each mounting hole.
-PAN_HEADS = {"M2": (1.6, 4.0), "M2.5": (1.75, 5.0), "M3": (2.1, 5.6), "M4": (2.8, 8.0)}
+# maximum values, so a head of any maker within the standard fits the envelope: M2 k 1.6 dk 4.0, M2.5 k 2.1 dk 5.0,
+# M3 k 2.4 dk 5.6, M4 k 3.1 dk 8.0. The fit check stands one on the board's top face at each mounting hole.
+PAN_HEADS = {"M2": (1.6, 4.0), "M2.5": (2.1, 5.0), "M3": (2.4, 5.6), "M4": (3.1, 8.0)}
 SCREW_LENGTHS_MM = (3, 4, 5, 6, 8, 10, 12, 14, 16, 20, 25, 30)
 
 

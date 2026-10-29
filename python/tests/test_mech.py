@@ -503,12 +503,12 @@ def test_cnc_sharp_corners_fail(tmp_path):
 
 
 def test_screw_heads_fit_on_a_low_profile_board(tmp_path):
-    # Parts 0.5 mm tall: the lid's inner face would be 1.5 mm over the board, under an M3 pan head (2.1 mm).
+    # Parts 0.5 mm tall: the lid's inner face would be 1.5 mm over the board, under an M3 pan head (2.4 mm).
     facts = board_facts()
     facts["parts"] = [part("U1", 130, 115, 140, 125, 0.5), part("R1", 112, 127, 113.6, 128.6, 0.5, side="bottom")]
     board = load_board(facts)
     s = mech.settings.normalize_settings(settings())
-    assert shell.heights(board, s)["lid_inner_z"] == pytest.approx(1.6 + 2.1 + 1.0)
+    assert shell.heights(board, s)["lid_inner_z"] == pytest.approx(1.6 + 2.4 + 1.0)
     r = run(facts, settings(), CAPS, tmp_path / "a", formats=["step"])
     assert r["fit"]["status"] == "pass", r["fit"]["summary"]
     g = gap(r, "screw H1", "above")
