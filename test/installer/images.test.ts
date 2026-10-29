@@ -2,6 +2,7 @@
  * The image builds' caching and published images (src/infra/images.ts), with the lock file an installed trace bundles
  * from (src/infra/lockfile.ts), and onboarding's git without the gh CLI (src/installer/onboard-api.ts).
  */
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -177,6 +178,29 @@ describe('the images', () => {
     expect(withoutCredentials(own)).toEqual({ text: own, dropped: 0 })
     expect(readFileSync(join(ROOT, 'agent', 'npmrc'), 'utf8')).toBe(own)
     expect(SOURCE_EXCLUDE).toEqual(expect.arrayContaining(['.npmrc', '**/.npmrc']))
+  })
+
+  it('get trace\'s committed .npmrc, not a clone\'s local registry or token', () => {
+    // a clone whose .npmrc a person pointed at a private registry with a token (CodeArtifact, a proxy): in the image
+    // build npm would go there without the token and every npm ci fails with E401
+    const clone = mkdtempSync(join(tmpdir(), 'trace-clone-'))
+    try {
+      mkdirSync(join(clone, 'scripts'))
+      mkdirSync(join(clone, 'agent'))
+      for (const f of ['stage-image.mjs', 'npmrc.mjs']) cpSync(join(ROOT, 'scripts', f), join(clone, 'scripts', f))
+      writeFileSync(join(clone, 'package-lock.json'), '{}')
+      writeFileSync(join(clone, '.npmrc'), 'legacy-peer-deps=true\nfund=false\n')
+      const git = (...a: string[]): void => { execFileSync('git', ['-C', clone, '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], { stdio: 'ignore' }) }
+      git('init', '-q')
+      git('add', '.')
+      git('commit', '-q', '-m', 'trace')
+      writeFileSync(join(clone, '.npmrc'), 'legacy-peer-deps=true\nfund=false\nregistry=https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/shared/\n//acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/shared/:_authToken=eyJEXAMPLE\n')
+      const r = spawnSync(process.execPath, [join(clone, 'scripts', 'stage-image.mjs')], { encoding: 'utf8' })
+      expect(r.status).toBe(0)
+      expect(r.stderr).toMatch(/local changes; the images get trace's committed .npmrc/)
+      expect(readFileSync(join(clone, 'agent', 'npmrc'), 'utf8')).toBe('legacy-peer-deps=true\nfund=false\n')
+      expect(readFileSync(join(clone, 'agent', 'package-lock.json'), 'utf8')).toBe('{}')
+    } finally { rmSync(clone, { recursive: true, force: true }) }
   })
 
   it('build from the lock file npm leaves out of an installed trace', () => {
