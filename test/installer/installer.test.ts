@@ -933,7 +933,7 @@ describe('the CodeBuild runners', () => {
     expect(a.runners).toEqual({ auth: 'auto', token: 'agent', buildTrace: true, traceRepository: '', traceBranch: '', selfUpdate: true, ciRepositories: [], connectionArn: '', computeType: null, privileged: null })
     // nothing is needed up front: no connection ARN (the stack creates one), ready by default
     const props = InfraPropsSchema.parse(infraInput(a))
-    expect(props.runners).toEqual({ auth: 'connection', connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false, ciPrivileged: false })
+    expect(props.runners).toEqual({ auth: 'connection', connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:8.0', privileged: false, ciPrivileged: false })
     // the token: no connection, whatever apply would otherwise pass
     expect(infraInput(a, null, undefined, { auth: 'token' }).runners).toEqual({ auth: 'token' })
     expect(infraInput(AnswersSchema.parse({ ...ANSWERS, runners: { auth: 'token' } })).runners).toEqual({ auth: 'token' })
