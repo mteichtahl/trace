@@ -11,6 +11,8 @@ Two kinds of finding, each named by part reference so a person can waive them on
                           above_tallest_mm)
            <ref> / below  a bottom-side part, or a top-side part's through-hole leads, to the case in the column
                           under it (below_mm, or the part's own clearance when larger)
+           screw <ref> / above   the pan head of the screw in a mounting hole (ISO 7045's largest, shell.PAN_HEADS)
+                          to the case over it, against above_tallest_mm; heads are in the clash set too
            <ref> / around a part to the case in every direction: for a part with its own clearance (it needs that
                           much room all round), and for a connector with an opening (its own clearance, default 0:
                           it may touch its opening)
@@ -38,7 +40,7 @@ from build123d import Shape
 from .board import Board, box, extrude, kicad_box
 from .probe import first_hit
 from .settings import part_clearance
-from .shell import FAR, Case
+from .shell import FAR, Case, screw_heads
 
 CLASH_MIN_MM3 = 0.001
 GAP_TOL_MM = 1e-3
@@ -146,6 +148,8 @@ def fit_check(case: Case, board: Board, settings: dict[str, Any]) -> dict[str, A
         things.append((ref, board.parts[ref]))
         if ref in board.leads:
             things.append((ref, board.leads[ref]))
+    heads = screw_heads(board)
+    things += sorted(heads.items())
     found: dict[tuple[str, str], float] = {}
     for ref, solid in things:
         for n, c in zip(names, solids):
@@ -197,6 +201,12 @@ def fit_check(case: Case, board: Board, settings: dict[str, Any]) -> dict[str, A
                              distance(leads, [c & column for c in solids if _overlap(c, column)]), clr["below_mm"]))
         if own is not None:
             gaps.append(_gap(ref, "around", distance(env, solids), own))
+
+    for name, head in sorted(heads.items()):
+        bb = head.bounding_box()
+        column = box(bb.min.X, bb.min.Y, board.top_z, bb.max.X, bb.max.Y, FAR)
+        gaps.append(_gap(name, "above", distance(head, [c & column for c in solids if _overlap(c, column)]),
+                         clr["above_tallest_mm"]))
 
     assumptions = [{"ref": p["ref"], "height_mm": p.get("height_mm"), "source": p.get("height_source")}
                    for p in board.facts.get("parts") or [] if p.get("height_source") == "default"]

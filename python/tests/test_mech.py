@@ -500,3 +500,24 @@ def test_cnc_sharp_corners_fail(tmp_path):
     corners = [row for row in r["rules"] if row["rule"] == "corner_radius"]
     assert corners and all(row["ok"] is False for row in corners)
     assert all(row["measured"] == pytest.approx(0.0, abs=0.02) for row in corners)
+
+
+def test_screw_heads_fit_on_a_low_profile_board(tmp_path):
+    # Parts 0.5 mm tall: the lid's inner face would be 1.5 mm over the board, under an M3 pan head (2.1 mm).
+    facts = board_facts()
+    facts["parts"] = [part("U1", 130, 115, 140, 125, 0.5), part("R1", 112, 127, 113.6, 128.6, 0.5, side="bottom")]
+    board = load_board(facts)
+    s = mech.settings.normalize_settings(settings())
+    assert shell.heights(board, s)["lid_inner_z"] == pytest.approx(1.6 + 2.1 + 1.0)
+    r = run(facts, settings(), CAPS, tmp_path / "a", formats=["step"])
+    assert r["fit"]["status"] == "pass", r["fit"]["summary"]
+    g = gap(r, "screw H1", "above")
+    assert g["ok"] and g["measured_mm"] == pytest.approx(1.0, abs=0.01)
+    # A script that lowers the lid onto the heads: each head clashes, by name.
+    script = tmp_path / "case.py"
+    script.write_text("from build123d import Pos\nfrom tracebridge.mech import shell\n\n"
+                      "def build(board, settings):\n    case = shell.two_part(board, settings)\n"
+                      "    case.parts['lid'] = Pos(0, 0, -1.5) * case.parts['lid']\n    return case\n")
+    r = run(facts, settings(), CAPS, tmp_path / "b", script=script, formats=["step"])
+    assert {c["ref"] for c in r["fit"]["clashes"]} >= {"screw H1", "screw H2", "screw H3", "screw H4"}
+    assert "screw H1 with lid" in r["fit"]["summary"]

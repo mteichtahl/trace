@@ -91,6 +91,10 @@ FAR = 1000.0  # past any case: an opening reaches this far outward, a column thi
 # at 0.8 x the nominal diameter.
 SCREWS = ((2.5, "M2", 2.0), (3.0, "M2.5", 2.5), (3.6, "M3", 3.0), (float("inf"), "M4", 4.0))
 PILOT_RATIO = 0.8
+# Pan head envelopes (head height k, head diameter dk), ISO 7045 (cross-recessed pan head screws), the standard's
+# maximum values, so a head of any maker within the standard fits the envelope: M2 k 1.6 dk 4.0, M2.5 k 1.75 dk 5.0,
+# M3 k 2.1 dk 5.6, M4 k 2.8 dk 8.0. The fit check stands one on the board's top face at each mounting hole.
+PAN_HEADS = {"M2": (1.6, 4.0), "M2.5": (1.75, 5.0), "M3": (2.1, 5.6), "M4": (2.8, 8.0)}
 SCREW_LENGTHS_MM = (3, 4, 5, 6, 8, 10, 12, 14, 16, 20, 25, 30)
 
 
@@ -123,6 +127,23 @@ def screw_for(d: float) -> tuple[str, float]:
     raise AssertionError("unreachable")
 
 
+def mounting_holes(board: Board) -> list[tuple[str, dict[str, Any]]]:
+    """The board's mounting holes with their names (the hole's ref, else hole<n>)."""
+    holes = [h for h in board.facts.get("holes") or [] if h.get("kind") == "mounting"]
+    return [(h.get("ref") or f"hole{i}", h) for i, h in enumerate(holes, 1)]
+
+
+def screw_heads(board: Board) -> dict[str, Solid]:
+    """A pan head envelope (PAN_HEADS) on the board's top face at each mounting hole, named "screw <ref>"."""
+    out = {}
+    for ref, h in mounting_holes(board):
+        size, _ = screw_for(float(h["d"]))
+        k, dk = PAN_HEADS[size]
+        x, y = case_xy(h["x"], h["y"])
+        out[f"screw {ref}"] = Pos(x, y, board.top_z) * Solid.make_cylinder(dk / 2, k)
+    return out
+
+
 def screw_length(reach_mm: float) -> int:
     """The longest standard length that does not pass through the boss into the floor."""
     fits = [n for n in SCREW_LENGTHS_MM if n <= reach_mm + 1e-9]
@@ -138,6 +159,8 @@ def heights(board: Board, settings: dict[str, Any]) -> dict[str, float]:
     down = [MIN_STANDOFF_MM - below]  # so the standoff is at least 3 mm
     up_override: list[float] = []
     down_override: list[float] = []
+    for _, hole in mounting_holes(board):
+        up.append(PAN_HEADS[screw_for(float(hole["d"]))[0]][0] + above)  # the screw's head on the top face
     for ref, p in board.info.items():
         h = float(p.get("height_mm") or 0.0)
         own = part_clearance(settings, ref)
@@ -323,13 +346,12 @@ def two_part(board: Board, settings: dict[str, Any]) -> Case:
     ring = ring_out - lid_pocket
     lid: Shape = ((outer & above_split) - lid_pocket) + ring
 
-    holes = [h for h in board.facts.get("holes") or [] if h.get("kind") == "mounting"]
+    holes = mounting_holes(board)
     standoff = hz["standoff_mm"]
     if holes:
         # Bosses stay inside the inner cavity, so one near the board edge never grows into the band the lip drops into.
         inside = extrude(cavity, floor_top - 1, t)
-        for i, h in enumerate(holes, 1):
-            ref = h.get("ref") or f"hole{i}"
+        for ref, h in holes:
             x, y = case_xy(h["x"], h["y"])
             size, pilot = screw_for(float(h["d"]))
             boss = Pos(x, y, floor_top - 0.01) * Solid.make_cylinder(prm["standoff_d_mm"] / 2, standoff + 0.01)
