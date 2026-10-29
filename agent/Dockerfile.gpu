@@ -9,7 +9,9 @@
 # pcbnew Python module for Specctra DSN/SES), openEMS v0.37.0 with its Python modules and scikit-rf, CalculiX ccx 2.21 and
 # ESI OpenFOAM v2412 (thermal), ffmpeg (render videos), and the trace dist. It runs every kind the tools image does
 # (agent/Dockerfile.tools), so a job too long for the tools function, or from a project without one, runs here.
-FROM --platform=linux/amd64 nvidia/cuda:12.9.2-runtime-ubuntu24.04
+# NVIDIA's own registry (NGC), the same image as Docker Hub's nvidia/cuda: Docker Hub's anonymous pull limit failed
+# builds on CodeBuild's shared addresses (429 Too Many Requests)
+FROM --platform=linux/amd64 nvcr.io/nvidia/cuda:12.9.2-runtime-ubuntu24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG BLENDER_VERSION=5.2.3
