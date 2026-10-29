@@ -712,4 +712,11 @@ export async function perform(name: string, raw: Record<string, unknown>, ctx: C
 
 export { ToolError }
 
-export const defaultScratch = (): string => process.env.TRACE_WORKSPACE ? join(process.env.TRACE_WORKSPACE, 'api') : join(tmpdir(), 'trace-api')
+/**
+ * Where the API copies project databases and stores for one request (tempDb, the bucket stores' scratch): the
+ * container's own /tmp, never TRACE_WORKSPACE. Each copy is a fresh temporary folder removed when the request ends, so
+ * nothing here needs to outlive the container, and on AgentCore's session storage (/mnt/workspace) every request's
+ * SQLite I/O went over its network file system: calls took minutes (the web app's 503s), and removing the folders
+ * failed with ENOTEMPTY. The external runtime's scratch is under /tmp for the same reason (server.ts externalScratch).
+ */
+export const defaultScratch = (): string => join(tmpdir(), 'trace-api')
