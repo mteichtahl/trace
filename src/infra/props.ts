@@ -252,8 +252,9 @@ export const InfraPropsSchema = z.object({
     webhookAttempt: z.string().min(1).optional(),
     /** the CodeBuild compute type of a job (a job can ask for another with an `instance-size:` label) */
     computeType: z.enum(['BUILD_GENERAL1_MEDIUM', 'BUILD_GENERAL1_LARGE', 'BUILD_GENERAL1_XLARGE', 'BUILD_GENERAL1_2XLARGE']).default('BUILD_GENERAL1_LARGE'),
-    /** the CodeBuild image jobs run on (Ubuntu, like the GitHub-hosted runners the workflows were written for) */
-    image: z.string().min(3).default('aws/codebuild/standard:7.0'),
+    /** the CodeBuild image jobs run on: Ubuntu 24.04 (standard:8.0), like the GitHub-hosted ubuntu-24.04 runners the workflows were
+     * written for (22.04's standard:7.0 has no nextpnr-ecp5, nextpnr-gowin or fpga-trellis, which CI installs) */
+    image: z.string().min(3).default('aws/codebuild/standard:8.0'),
     /** Docker-in-Docker for jobs that build containers */
     privileged: z.boolean().default(false),
     /** Docker-in-Docker for the build-only repositories' runners (`ciRepositories`) alone: trace's own builds its images
