@@ -126,7 +126,7 @@ pushed to the `<prefix>-gpu` ECR repository. It is based on `nvidia/cuda:12.9.2-
 - Node 22 and the trace dist; the job's command is `node /app/dist/gpu/runner.js`, which reads the spec from the S3
   object `TRACE_GPU_JOB_URI` names, downloads the inputs, runs the program, and uploads the outputs, both logs
   and the exit record. `TRACE_GPU=1` is set, so a job inside never ships itself again.
-- Blender 5.2.3, the official build from download.blender.org (sha256-checked): Cycles on CUDA/OptiX, OpenImageDenoise,
+- Blender 5.2.3, the official build from download.blender.org or its official mirrors (sha256-checked): Cycles on CUDA/OptiX, OpenImageDenoise,
   and its bundled Python with numpy (glTF import).
 - Java 25 (Ubuntu's `openjdk-25-jre-headless`) and Freerouting 2.5.0 at `/opt/freerouting/freerouting.jar`
   (sha256-checked). Freerouting is CPU-only; on the GPU host it uses the instance's cores.

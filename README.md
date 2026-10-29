@@ -1388,7 +1388,7 @@ plots and run comparison (`tpost`), Markdown reports (`tpre report`), and ParaVi
 See [Open source thermal simulation, analysis and visualization](https://antmicro.com/blog/2025/03/open-source-thermal-simulation-analysis-and-visualization)
 and [antmicro/thermal-simulation-scripts](https://github.com/antmicro/thermal-simulation-scripts) (Apache-2.0).
 trace does not run their FreeCAD-based `tpre`/`tpost`. It builds its models from the KiCad board directly, and the
-optional `pipeline: 'antmicro'` mode is left as future work.
+optional `pipeline: 'antmicro'` mode is left as future work. Enclosures use build123d rather than FreeCAD; see [docs/enclosure-cad.md](docs/enclosure-cad.md).
 
 ## Specialist agents
 

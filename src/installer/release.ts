@@ -173,7 +173,7 @@ export async function liveReleaseDeps(creds: AwsCredentialIdentity, token: strin
       const b = await outputs('CDKToolkit', RELEASE_REGION)
       return Boolean(b) && Number(b?.BootstrapVersion ?? 0) >= 6
     },
-    oidcProvider: async () => ((await new iam.IAMClient({ credentials: creds }).send(new iam.ListOpenIDConnectProvidersCommand({}))).OpenIDConnectProviderList ?? [])
+    oidcProvider: async () => ((await new iam.IAMClient({ region: RELEASE_REGION, credentials: creds }).send(new iam.ListOpenIDConnectProvidersCommand({}))).OpenIDConnectProviderList ?? [])
       .some((p) => (p.Arn ?? '').endsWith('/token.actions.githubusercontent.com')),
     cdk: (args, extra) => o.cdk(args, env(extra)),
     outputs,

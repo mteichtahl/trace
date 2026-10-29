@@ -70,7 +70,7 @@ function expectRunner(t: Template, name: string, repository: string, how: Hook, 
   expect(p.Source).toMatchObject({ Type: 'GITHUB', Location: `https://github.com/${repository}`, Auth: { Type: 'CODECONNECTIONS', Resource: connection } })
   webhookOf(t, name, how)
   expect(p.Artifacts).toEqual({ Type: 'NO_ARTIFACTS' })
-  expect(p.Environment).toMatchObject({ Type: 'LINUX_CONTAINER', ComputeType: 'BUILD_GENERAL1_LARGE', Image: 'aws/codebuild/standard:7.0', PrivilegedMode: false })
+  expect(p.Environment).toMatchObject({ Type: 'LINUX_CONTAINER', ComputeType: 'BUILD_GENERAL1_LARGE', Image: 'aws/codebuild/standard:8.0', PrivilegedMode: false })
   // its own log group (by reference, so it is made first), kept a month
   const group = (p.LogsConfig as { CloudWatchLogs: { Status: string; GroupName: { Ref: string } } }).CloudWatchLogs
   expect(group.Status).toBe('ENABLED')
@@ -163,7 +163,7 @@ describe("each project's runner project", () => {
     expect(() => InfraPropsSchema.parse({ ...base, runners: { connectionArn: 'arn:aws:iam::123456789012:role/x' } })).toThrow(/CodeConnections connection ARN/)
     // nothing is needed up front: no connection (the stack creates one), and ready by default
     const { runners: _, ...noRunners } = base
-    expect(InfraPropsSchema.parse(noRunners).runners).toEqual({ auth: 'connection', connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:7.0', privileged: false, ciPrivileged: false })
+    expect(InfraPropsSchema.parse(noRunners).runners).toEqual({ auth: 'connection', connectionReady: true, computeType: 'BUILD_GENERAL1_LARGE', image: 'aws/codebuild/standard:8.0', privileged: false, ciPrivileged: false })
     expect(RUNNER_VARIABLE).toBe('TRACE_CODEBUILD_PROJECT')
   }, 300_000)
 
