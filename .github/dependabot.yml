@@ -9,6 +9,14 @@
 #     0.8.1. They are ignored below until ADOT releases a version past them; then delete the ignore entries.
 #     (trace loads none of those database and messaging instrumentations' libraries: no pg, mysql, mongoose,
 #     oracledb, tedious, cassandra or knex.)
+#   - The same pin is why `npm ci` still prints three deprecation warnings (sdk-trace-base, sdk-trace-node and
+#     propagator-jaeger, all 2.8.0): OpenTelemetry JS 3 replaced them with @opentelemetry/sdk-trace and dropped the
+#     Jaeger propagator, and ADOT 0.13.0 has not moved to 3 yet. package.json "overrides" collapses ADOT's copies to one
+#     each (keep them equal to ADOT's pinned version), and trace's own code uses @opentelemetry/sdk-trace. When ADOT
+#     moves to OpenTelemetry 3, delete those two overrides and the warnings go with them.
+#     The other warnings were fixed at the source: glob 10 (overridden through rimraf 6, which gaxios lists but never
+#     loads), node-domexception (replaced by @nolyfill/domexception, Node's own DOMException) and the
+#     @types/libsodium-wrappers stub (libsodium-wrappers ships its own types).
 #   - undici 5 and @fastify/busboy 2 came only through @actions/core and @actions/github, development dependencies
 #     nothing imported. They were removed, which removes both packages from the lockfile.
 #
