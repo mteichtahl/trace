@@ -19,7 +19,7 @@ describe('case settings', () => {
     expect(s).toMatchObject({
       version: 1, board: 'hardware/x.kicad_pcb', template: 'printed-shell', source: 'script',
       process: { service: 'jlc3dp', process: 'MJF', material: 'PA12-HP' },
-      params: { wall_mm: 2, floor_mm: 2, lid_mm: 2, corner_radius_mm: 3, standoff_d_mm: 6, lip_mm: 1.2, lip_h_mm: 3 },
+      params: { wall_mm: 2, floor_mm: 2, lid_mm: 2, corner_radius_mm: 3, standoff_d_mm: 7, lip_mm: 2, lip_h_mm: 3 },
       clearance: { edge_mm: 0.5, above_tallest_mm: 1, below_mm: 1, parts: {} },
       openings: { skip: [], extra_mm: 0.5 }, quantity: 5, reasons: {},
     })

@@ -31,8 +31,8 @@ export const ParamsSchema = z.object({
   floor_mm: positive.default(2.0),
   lid_mm: positive.default(2.0),
   corner_radius_mm: nonNeg.default(3.0),
-  standoff_d_mm: positive.default(6.0),
-  lip_mm: positive.default(1.2),
+  standoff_d_mm: positive.default(7.0),
+  lip_mm: positive.default(2.0),
   lip_h_mm: positive.default(3.0),
 }).prefault({})
 

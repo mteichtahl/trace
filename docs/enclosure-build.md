@@ -78,8 +78,8 @@ a reference that is not on the board is kept, with a warning in mech.settings' a
   "params": {
     "wall_mm": 2.0, "floor_mm": 2.0, "lid_mm": 2.0,
     "corner_radius_mm": 3.0,                // outside vertical edges
-    "standoff_d_mm": 6.0,                   // boss diameter at each mounting hole
-    "lip_mm": 1.2, "lip_h_mm": 3.0          // the lid's inner lip that locates it in the base
+    "standoff_d_mm": 7.0,                   // boss diameter at each mounting hole
+    "lip_mm": 2.0, "lip_h_mm": 3.0          // the lid's lip, hanging inside the base's cavity, that locates it
   },
   "clearance": {
     "edge_mm": 0.5,                         // board edge to inner wall (default 0.5)
@@ -130,6 +130,12 @@ python -m tracebridge.mech run --facts facts.json --settings case.json --capabil
   [--script case.py] [--case-file handed-in.step] --out OUTDIR [--formats step,stl,3mf]
 ```
 
+A case script runs in a child process (`python -m tracebridge.mech build-only`, in a private temporary folder) that
+writes only one STEP per part and a `claims.json` (joints, fasteners, notes). The parent never imports the script: it
+reads those files strictly (fixed names, regular files, size caps), and runs the fit and the rules with its own copy of
+the facts, settings and capabilities, measuring the geometry; what the script claims is used for records and notes,
+never for a pass. The built-in template (no `--script`) runs in the parent on deep copies.
+
 Writes into OUTDIR: `result.json` (below), and the files it names. Exit 0 whenever it produced a result (a failing fit
 is a result, not an error); exit 2 with `{"error": "…"}` in `result.json` for bad input; anything else is a crash.
 
@@ -150,12 +156,18 @@ API in `tracebridge.mech` (public, documented in its module docstring):
   mid-thickness, for edge gaps), `.parts: dict[ref, Solid]` (envelope boxes), `.facts` (the dict), `.top_z`, `.bottom_z`.
 - `Case`: `.parts: dict[str, Solid]` (`base`, `lid`), `.joints: list[dict]`, `.fasteners: list[dict]`,
   `.notes: list[str]`.
-- `shell.two_part(board, settings) -> Case`: base (floor, walls up to the board's top face, a boss with a pilot hole
-  at each mounting hole: M2 for d < 2.5, M2.5 for d < 3.0, M3 for d < 3.6, else M4; with no mounting holes, four
-  corner rests under the board and four posts in the lid onto its top face), lid (top and walls down to the split,
-  an inner lip inset by the process's assembly clearance), openings through the wall for each `connector` with an
-  `edge` (its box grown by `openings.extra_mm` and its clearance, clipped to the wall), outside vertical edges
-  filleted. Standoff height = max(bottom-side part height and leads) + `below_mm`, at least 3 mm.
+- `shell.two_part(board, settings) -> Case`: base (floor, a full `wall_mm` wall up to the board's top face, a boss
+  with a pilot hole at each mounting hole: M2 for d < 2.5, M2.5 for d < 3.0, M3 for d < 3.6, else M4; with no mounting
+  holes, a rest under the board and a post in the lid near each corner, each at the nearest spot within 25 mm that
+  keeps every part's clearance), lid (top and walls down to the split, and a lip `lip_mm` thick hanging into the base:
+  the base's cavity is the inner cavity grown by `lip_mm` plus the process's assembly clearance, and the lip's inner
+  face sits on the inner cavity, so the board's edge gap is the same everywhere and no wall is thinned), openings
+  through the wall for each `connector` with an `edge` (its box grown by `openings.extra_mm` and its clearance, clipped
+  to the wall), outside vertical edges filleted; for a CNC process, inner vertical pocket edges filleted to
+  R = depth/10 + 0.5 (the edge gap grows so the board's corners keep `edge_mm` from the fillet, with a note). Standoff
+  height = max(bottom-side part height and leads) + `below_mm`, at least 3 mm. Lid inner face clears the tallest
+  top-side part and each screw's pan head (ISO 7045 maxima: M2 1.6, M2.5 2.1, M3 2.4, M4 3.1 mm) by
+  `above_tallest_mm`. `lip_h_mm` deeper than the split to the floor top less 0.5 mm is bad input (exit 2).
 - `fit_check(case, board, settings) -> dict`, `rules_check(case, settings, capabilities) -> list[dict]`,
   `export(case, out_dir, formats) -> list[str]`, `import_case(path) -> Case` (the whole STEP as `parts["case"]`).
 
@@ -186,12 +198,22 @@ Fit rules: a clash is any intersection over 0.001 mm³ between a part envelope o
 count) against `edge_mm`; each top-side part's distance to the case against its own clearance or `above_tallest_mm`;
 each bottom-side part (and through-hole leads, as a box `below_mm` deep under the part) against `below_mm`; a connector
 at an edge with an opening is measured against its per-part clearance only (default 0, it may touch its opening).
-`status` is `fail` when any clash or gap is not ok. For a handed-in file the same checks run against `parts["case"]`.
+Each screw's pan head is an envelope too (`screw H1`, clashes and an `above` gap). A part with nothing of the case over
+it (top side) or under it (bottom side) fails its gap with a `detail` ("nothing covers U1 from above"). The case must be
+around the board (`fit.enclosed`): rays from the board in ±x and ±y (three per side, so one opening is not a miss) and
+up and down from its faces must meet the case, and an edge gap over max(10 × `edge_mm`, 20 mm) fails as "the case is not
+around the board (likely a different origin or frame; KiCad's y is down)". A part's own `around` clearance is measured
+on its own side of the board only. Through-hole leads on the far face use max(`above_tallest_mm`, `below_mm`), in the
+shell and the fit alike. `status` is `fail` when any clash or gap is not ok or the case is not around the board. For a
+handed-in file the same checks run against `parts["case"]`.
 
-Rules (params-based for scripts, bbox-based for handed-in files, each saying which): the wall, floor and lid against
-the process's minimum wall for the case's largest dimension; the bounding box against the process's maximum (and FDM's
-minimum) size; pilot holes against the process's smallest hole; the lip gap against its assembly clearance; for CNC,
-walls against the plastic or metal minimum and the corner radius against R = H/10 + 0.5. A handed-in file's wall
+Rules (each row's `basis` says whether it is measured on the model, read from the parameters or from the bounding
+box): the built sections measured by rays on the model (`base_wall`, `lip_wall`, `lid_wall`, `base_floor`, `lid_top`)
+against the process's minimum wall for the case's largest dimension; the boss (`standoff`) against the pilot plus two
+minimum walls; the bounding box against the process's maximum (and FDM's
+minimum) size; pilot holes (measured) against the process's smallest hole; the lip gap (measured) against its assembly clearance;
+for CNC, walls against the plastic or metal minimum and each pocket's corner radius, measured on the model, against
+R = H/10 + 0.5. A handed-in file's wall
 thickness is not measured: one rule row says so (`ok: null`).
 
 Records (`case.jsonld`): `@context` `{"trace": "https://trace-eda.com/ns/trace#", "@vocab": "https://trace-eda.com/ns/trace#"}`;
