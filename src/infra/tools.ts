@@ -59,6 +59,9 @@ export interface ToolsImage { images: ecr.IRepository; tag: string; uri: string 
 export function buildToolsImage(scope: Construct, o: {
   prefix: string; keep: RemovalPolicy; retainData: boolean; source: Asset; buildLogs: logs.ILogGroup; serviceToken: string
   environment: Record<string, codebuild.BuildEnvironmentVariable>
+  /** what the build's start must wait for besides its project (the image-build provider's functions, whose policies
+   * gain this project in the same deploy) */
+  dependsOn?: IConstruct[]
 }): ToolsImage {
   const repo = new ecr.Repository(scope, 'ToolsImages', {
     repositoryName: `${o.prefix}-tools`, imageScanOnPush: true, removalPolicy: o.keep, emptyOnDelete: !o.retainData, lifecycleRules: [{ maxImageCount: 5 }],
@@ -80,6 +83,10 @@ export function buildToolsImage(scope: Construct, o: {
     serviceToken: o.serviceToken,
     properties: { ProjectName: build.projectName, ImageUri: `${repo.repositoryUri}:${o.source.assetHash}`, SourceHash: o.source.assetHash },
   })
+  // the build starts only once its project's role may write its logs and push (the role's policy is a resource of its
+  // own, which CloudFormation would otherwise make alongside: "Service role … does not allow AWS CodeBuild to create
+  // Amazon CloudWatch Logs log streams", the build failed in QUEUED), and once the provider may start it
+  image.node.addDependency(build, ...(o.dependsOn ?? []))
   // repository URI ':' tag (the URI has no other ':')
   return { images: repo, tag: Fn.select(1, Fn.split(':', image.getAttString('ImageUri'))), uri: image.getAttString('ImageUri') }
 }

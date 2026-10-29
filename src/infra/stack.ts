@@ -285,6 +285,8 @@ export class TraceStack extends Stack {
       serviceToken: provider.serviceToken,
       properties: { ProjectName: build.projectName, ImageUri: imageUri, SourceHash: source.assetHash },
     })
+    // started only once the project's role (its policy, a resource of its own) and the provider's may do their part
+    image.node.addDependency(build, start, poll)
 
     // ------------------------------------------------------------------ the tools image (CodeBuild, arm64): the tools functions'
     // KiCad, Blender, the FPGA and verification tools, CalculiX and ffmpeg (agent/Dockerfile.tools, src/infra/tools.ts),
@@ -296,7 +298,7 @@ export class TraceStack extends Stack {
       for (const f of [start, poll]) f.addToRolePolicy(new iam.PolicyStatement({ actions: ['codebuild:StartBuild', 'codebuild:BatchGetBuilds'], resources: [toolsImageProjectArn(this, cfg.prefix)] }))
       return buildToolsImage(scope, {
         prefix: cfg.prefix, keep, retainData: cfg.retainData, source, buildLogs, serviceToken: provider.serviceToken,
-        environment: imageBuildEnv(cfg.images, 'tools', contentTag),
+        environment: imageBuildEnv(cfg.images, 'tools', contentTag), dependsOn: [start, poll],
       })
     }
     const tools = toolsEnabled(cfg) ? toolsBuild(this) : null
