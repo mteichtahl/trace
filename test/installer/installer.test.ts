@@ -111,6 +111,8 @@ vi.mock('../../src/installer/github.js', async (orig) => ({
   // the token can configure every repository unless a test says otherwise (only reached without a `self` hook)
   canConfigure: async () => ({ ok: true, reason: '' }),
   repositoryDefaultBranch: async () => 'main',
+  // every repository is there unless a test says otherwise
+  repoExists: async () => true,
   checkToken: async (token: string) => {
     const t = calls.tokens.get(token) ?? { login: 'trace-agent', repos: [] }
     return { login: t.login, name: null, kind: 'fine-grained', scopes: [], repos: t.repos.map((fullName) => ({ fullName, private: true, admin: false, push: true, defaultBranch: 'main' })), warnings: [] }
@@ -1228,6 +1230,34 @@ describe('the sample project', () => {
     // beside central/, locally inside TRACE_HOME, as bucketStore puts it)
     expect(existsSync(join(OUTPUTS.TraceHome ?? '', 'projects', 'trace-agent', 'trace-sample', 'journey', 'journey.db'))).toBe(true)
     expect(r.events.some((e) => e.type === 'log' && e.line === `${SAMPLE}: its journey started (Mixed template, at Define)`)).toBe(true)
+  })
+
+  it('creates the sample again when it was deleted on GitHub after an earlier run, and leaves one that is there alone', async () => {
+    // an earlier run saved it as an existing project (create: null); someone has deleted the repository since
+    const again = { ...ANSWERS, agents: { ...ANSWERS.agents, gpuEnabled: false }, github: { login: 'trace-agent' }, sample: { enabled: true, repo: SAMPLE, tour: false, private: false },
+      projects: [...ANSWERS.projects, { repo: SAMPLE, branch: 'main', onboard: false, applySettings: true, create: null }] }
+    for (const there of [false, true]) {
+      const created: string[] = []
+      const onboarded: { repo: string; create: unknown }[] = []
+      const asked: string[] = []
+      const r = await run(again, {
+        repoExists: async (_t, repo) => { asked.push(repo); return there },
+        createRepo: async (_t, slug) => { created.push(slug); return { fullName: slug, defaultBranch: 'main', created: true } },
+        onboard: async (repo, o) => { onboarded.push({ repo, create: o.create ?? null }); return { repo, state: o.create ? 'created' : 'opened', pr: null, settings: [], notes: [] } },
+      })
+      expect(r.ok).toBe(true)
+      expect(asked).toEqual([SAMPLE])
+      if (there) {
+        expect(created).toEqual([])
+        expect(onboarded.some((x) => x.repo === SAMPLE)).toBe(false)
+        continue
+      }
+      expect(created).toEqual([SAMPLE])
+      expect(onboarded.find((x) => x.repo === SAMPLE)?.create).toEqual({ template: 'sample', private: false })
+      expect(r.events.some((e) => e.type === 'log' && e.line === `${SAMPLE} is no longer on GitHub: it is created again and filled with the sample`)).toBe(true)
+      // saved as an existing project again, so the run after this one does not create it twice
+      expect(AnswersSchema.parse(savedAnswers().answers).projects.find((p) => p.repo === SAMPLE)?.create).toBeNull()
+    }
   })
 
   it('starts the sample\'s journey once, and reports one that could not start without failing the install', async () => {

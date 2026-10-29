@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AnswersSchema } from '../../src/installer/answers.js'
-import { answers, awsErrors, blockers, fieldErrors, githubTokenError, initialState, newRepoError, loadSaved, numberError, preflightKey } from '../../src/installer/ui/model.js'
+import { answers, awsErrors, blockers, fieldErrors, githubTokenError, initialState, newRepoError, loadSaved, numberError, preflightBody, preflightKey, reconcileProjects } from '../../src/installer/ui/model.js'
 
 const FINE = `github_pat_11AAAAAAA0${'a'.repeat(70)}`
 const CLASSIC = `ghp_${'A1'.repeat(18)}`
@@ -104,5 +104,52 @@ describe('the installer page: the answers and what stops each step', () => {
     expect(blockers(s, 'projects').map((b) => b.text)).toEqual(['The projects changed: check access to them.', 'me/a: no access'])
     s.aws.region = 'eu-west-1'
     expect(blockers(s, 'aws')[0]?.text).toMatch(/Check the AWS account/)
+  })
+})
+
+describe('the installer page: projects an earlier run installed', () => {
+  const project = { branch: 'main', onboard: true, applySettings: true, memoryDays: '', generation: 0, create: null }
+  const check = (repos: string[], access: { repo: string; ok: boolean; reason: string }[]) => ({
+    login: 'me', name: null, kind: 'fine-grained', scopes: [], warnings: [], self: null, access,
+    repos: repos.map((fullName) => ({ fullName, private: true, admin: true, push: true, defaultBranch: 'main' })),
+  })
+  const savedRun = () => {
+    const s = initialState()
+    s.sample.repo = 'me/trace-sample'
+    s.sample.private = false
+    for (const r of ['me/board', 'me/trace-sample', 'me/old']) s.projects.set(r, { ...project })
+    return s
+  }
+
+  it('creates the sample again when it was deleted, and leaves out other projects the token no longer reaches', () => {
+    const s = savedRun()
+    reconcileProjects(s, check(['me/board'], [
+      { repo: 'me/board', ok: true, reason: '' },
+      { repo: 'me/trace-sample', ok: false, reason: 'GET /repos/me/trace-sample/actions/secrets/public-key: 404 Not Found' },
+      { repo: 'me/old', ok: false, reason: 'GET /repos/me/old/actions/secrets/public-key: 404 Not Found' },
+    ]))
+    expect(s.projects.get('me/trace-sample')?.create).toEqual({ template: 'sample', private: false })
+    expect(s.sample.gone).toBe(true)
+    expect([...s.projects.keys()]).toEqual(['me/board', 'me/trace-sample'])
+    expect(s.dropped).toEqual(['me/old'])
+    // what the installer is sent: the sample to create (so the checks look for it as a new repository), not to configure
+    expect(preflightBody(s)).toMatchObject({ repos: ['me/board'], create: ['me/trace-sample'] })
+    expect(answers(s).sample).toMatchObject({ enabled: true, repo: 'me/trace-sample' })
+    expect(AnswersSchema.safeParse(answers(s)).success).toBe(true)
+    // checking again changes nothing more
+    reconcileProjects(s, check(['me/board'], []))
+    expect(s.projects.get('me/trace-sample')?.create).toEqual({ template: 'sample', private: false })
+    expect(s.dropped).toEqual(['me/old'])
+  })
+
+  it('keeps a project GitHub refused for another reason (not a missing repository)', () => {
+    const s = savedRun()
+    reconcileProjects(s, check(['me/board', 'me/trace-sample', 'me/old'], [
+      { repo: 'me/trace-sample', ok: false, reason: 'GET /repos/me/trace-sample/actions/secrets/public-key: 403 Resource not accessible' },
+      { repo: 'me/old', ok: true, reason: '' },
+    ]))
+    expect(s.projects.get('me/trace-sample')?.create).toBeNull()
+    expect(s.sample.gone).toBe(false)
+    expect(s.dropped).toEqual([])
   })
 })

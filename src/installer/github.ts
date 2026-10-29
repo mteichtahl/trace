@@ -262,8 +262,28 @@ export async function createRepo(token: string, slug: string, o: { private: bool
   }
   const { data: me } = await gh.request('GET', '/user', User)
   const path = me.login.toLowerCase() === owner.toLowerCase() ? '/user/repos' : `/orgs/${owner}/repos`
-  const { data } = await gh.request('POST', path, Repo, { name, private: o.private, auto_init: false, ...(o.description ? { description: o.description } : {}) })
-  return { fullName: data.full_name, defaultBranch: 'main', created: true }
+  try {
+    const { data } = await gh.request('POST', path, Repo, { name, private: o.private, auto_init: false, ...(o.description ? { description: o.description } : {}) })
+    return { fullName: data.full_name, defaultBranch: 'main', created: true }
+  } catch (e) {
+    // GitHub answered 404 above, yet the name is taken: the repository is there, but this token may not see it (a
+    // fine-grained token limited to other repositories)
+    if (e instanceof GithubError && e.status === 422 && /already exists/i.test(e.message)) {
+      throw new GithubError(`${slug} exists on GitHub, but this token can't see it: give the token access to ${slug} (or use one that has it), or leave it out of trace's projects`, 422)
+    }
+    throw e
+  }
+}
+
+/** Whether the token can see a repository: true, false (GitHub says it is not there), or null (GitHub could not say). */
+export async function repoExists(token: string, slug: string, fetchImpl?: Fetch): Promise<boolean | null> {
+  const gh = new Github(token, fetchImpl)
+  try {
+    await gh.request('GET', `/repos/${slug}`, z.unknown())
+    return true
+  } catch (e) {
+    return e instanceof GithubError && e.status === 404 ? false : null
+  }
 }
 
 /** Remove a repository's Actions variable. Returns whether there was one. */

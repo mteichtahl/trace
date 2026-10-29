@@ -89,8 +89,8 @@ import {
   nameClients, nameIndex, resolveConnection, stackOutputs, waitForConnection,
 } from './aws.js'
 import { type Facts, resolveAnswers } from './derive.js'
-import { type TokenInfo, canConfigure, checkToken, createRepo, deleteVariable, repositoryDefaultBranch, setSecret, setVariable } from './github.js'
-import { type TourResult, startSampleJourney, startTour, tourPlan, withSample } from './sample.js'
+import { type TokenInfo, canConfigure, checkToken, createRepo, deleteVariable, repoExists, repositoryDefaultBranch, setSecret, setVariable } from './github.js'
+import { type TourResult, recreateMissingSample, startSampleJourney, startTour, tourPlan, withSample } from './sample.js'
 import { EDGE_REGION, edgeStackName } from '../infra/edge.js'
 import { type EdgeDeps, deployEdge, edgeLeftOver, wafPlan, withAcl } from './edge.js'
 import { type PendingEntry, type PendingIo, absorb, parsePending, s3PendingIo } from './pending.js'
@@ -619,6 +619,8 @@ export interface Hooks {
   tour?: (token: string, repo: string, o: { gpu: boolean }) => Promise<TourResult>
   /** creating a new project's repository before its variables are set */
   createRepo?: typeof createRepo
+  /** whether the token sees a repository (github.ts repoExists): the sample, when it may have been deleted */
+  repoExists?: typeof repoExists
   /** trace's own repository and whether the token can configure it (resolveSelfBuild) */
   self?: SelfRepositoryDeps
   /** save the installation record (src/installer/record.ts) in the central bucket (default: S3 PutObject) */
@@ -737,6 +739,10 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     // the sample project, when asked for: one more new repository (its owner is the login, derived just now if need be)
     a = withSample(resolved.answers)
     for (const d of resolved.derived) log('check', `derived: ${d}`)
+    // the sample an earlier run created, deleted on GitHub since: created and filled again, not configured as if there
+    const gone = await recreateMissingSample(a, (r) => (hooks.repoExists ?? repoExists)(s.githubAdminToken || s.githubToken, r))
+    a = gone.answers
+    if (gone.recreated) log('check', `${gone.recreated} is no longer on GitHub: it is created again and filled with the sample`)
     const check = await checkAws(creds, a.aws.region, stack)
     if (check.account !== a.aws.account) throw new Error(`these credentials are for account ${check.account}, not the confirmed ${a.aws.account}`)
     if (!check.agentCore.ok) throw new Error(`Bedrock AgentCore is not available to these credentials in ${a.aws.region}: ${check.agentCore.reason}`)
