@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AnswersSchema } from '../../src/installer/answers.js'
-import { answers, awsErrors, blockers, fieldErrors, githubTokenError, initialState, newRepoError, loadSaved, numberError, preflightBody, preflightKey, reconcileProjects } from '../../src/installer/ui/model.js'
+import { answers, awsErrors, blockers, dueChecks, fieldErrors, githubTokenError, initialState, newRepoError, loadSaved, numberError, preflightBody, preflightKey, reconcileProjects } from '../../src/installer/ui/model.js'
 
 const FINE = `github_pat_11AAAAAAA0${'a'.repeat(70)}`
 const CLASSIC = `ghp_${'A1'.repeat(18)}`
@@ -94,7 +94,7 @@ describe('the installer page: the answers and what stops each step', () => {
   it('asks for the checks again once what they checked has changed', () => {
     const s = initialState()
     s.github.token = CLASSIC
-    expect(blockers(s, 'github')[0]?.text).toMatch(/Check the token/)
+    expect(blockers(s, 'github')[0]?.text).toMatch(/Checking the token with GitHub/)
     s.pre = { checks: [{ id: 'github.repo:me/a', status: 'fail', title: 'me/a', detail: 'no access' }], ok: false, token: null, repos: [], region: 'us-east-1', profileRegion: '', self: null, facts: { account: '123456789012' } }
     s.preKey = preflightKey(s)
     expect(blockers(s, 'aws')).toEqual([])
@@ -103,7 +103,7 @@ describe('the installer page: the answers and what stops each step', () => {
     s.projects.set('me/a', { branch: 'main', onboard: true, applySettings: true, memoryDays: '', generation: 0, create: null })
     expect(blockers(s, 'projects').map((b) => b.text)).toEqual(['The projects changed: check access to them.', 'me/a: no access'])
     s.aws.region = 'eu-west-1'
-    expect(blockers(s, 'aws')[0]?.text).toMatch(/Check the AWS account/)
+    expect(blockers(s, 'aws')[0]?.text).toMatch(/Checking the account/)
   })
 })
 
@@ -151,5 +151,68 @@ describe('the installer page: projects an earlier run installed', () => {
     expect(s.projects.get('me/trace-sample')?.create).toBeNull()
     expect(s.sample.gone).toBe(false)
     expect(s.dropped).toEqual([])
+  })
+})
+
+describe('the installer page: checks that run by themselves', () => {
+  const ready = () => {
+    const s = initialState()
+    s.env = { profiles: { names: ['default'], regions: {} }, saved: null, installed: null, node: 'v22', defaultRegion: 'us-east-1' }
+    s.step = 'github'
+    return s
+  }
+
+  it('checks the token once it is complete and valid, and not again until it changes', () => {
+    const s = ready()
+    s.github.token = 'ghp_short'
+    expect(dueChecks(s).github).toBe('')
+    s.github.token = ` ${CLASSIC} `
+    expect(dueChecks(s).github).toBe(CLASSIC)
+    s.ghBusy = true
+    expect(dueChecks(s).github).toBe('')
+    // it failed: not tried again on its own, and the step says what to do
+    s.ghBusy = false; s.ghTried = CLASSIC; s.ghError = 'Bad credentials'
+    expect(dueChecks(s).github).toBe('')
+    expect(blockers(s, 'github')[0]?.text).toMatch(/GitHub refused the token/)
+    s.github.token = FINE
+    expect(dueChecks(s).github).toBe(FINE)
+    // checked and current: nothing due
+    s.gh = { login: 'me', name: null, kind: 'fine-grained', scopes: [], warnings: [], repos: [], access: [], self: null }
+    s.ghFor = FINE; s.ghTried = FINE; s.ghError = ''
+    expect(dueChecks(s).github).toBe('')
+    expect(blockers(s, 'github')).toEqual([])
+  })
+
+  it('checks the account on the AWS and Projects steps once the token is checked and the credentials are complete', () => {
+    const s = ready()
+    s.github.token = FINE
+    s.gh = { login: 'me', name: null, kind: 'fine-grained', scopes: [], warnings: [], repos: [], access: [], self: null }
+    s.ghFor = FINE
+    s.step = 'aws'
+    expect(dueChecks(s).preflight).toBe(preflightKey(s))
+    s.aws.mode = 'keys'
+    expect(dueChecks(s).preflight).toBe('')
+    s.aws.keyId = 'AKIAABCDEFGHIJKLMNOP'; s.aws.secret = 'a'.repeat(40)
+    const key = dueChecks(s).preflight
+    expect(key).toBe(preflightKey(s))
+    s.preTried = key
+    expect(dueChecks(s).preflight).toBe('')
+    // a project chosen changes what is checked: due again, on the Projects step too
+    s.step = 'projects'
+    s.projects.set('me/a', { branch: 'main', onboard: true, applySettings: true, memoryDays: '', generation: 0, create: null })
+    expect(dueChecks(s).preflight).toBe(preflightKey(s))
+    // never on the other steps (Review runs its own for its plan)
+    s.step = 'people'
+    expect(dueChecks(s).preflight).toBe('')
+  })
+
+  it('checks a distributor once every key it needs is in', () => {
+    const s = ready()
+    s.integrations.digikey.DIGIKEY_CLIENT_ID = 'id'
+    expect(dueChecks(s).integrations).toEqual([])
+    s.integrations.digikey.DIGIKEY_CLIENT_SECRET = 'secret'
+    expect(dueChecks(s).integrations.map(([n]) => n)).toEqual(['digikey'])
+    s.integrationTried.set('digikey', dueChecks(s).integrations[0]?.[1] ?? '')
+    expect(dueChecks(s).integrations).toEqual([])
   })
 })

@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from 'react'
-import { ChevronDown, Loader2, RotateCcw, Settings2, ShieldCheck } from 'lucide-react'
+import { ChevronDown, Loader2, RefreshCw, RotateCcw, Settings2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -40,8 +40,9 @@ function Integration({ n }: { n: IntegrationName }) {
       {e ? <p className="text-xs text-destructive" role="alert">{e}</p> : null}
       {complete ? (
         <div className="flex flex-wrap items-center gap-3">
-          <Button size="sm" variant="outline" disabled={c === 'busy'} onClick={() => void checkKey(n)}>{c === 'busy' ? <Loader2 className="animate-spin" /> : <ShieldCheck />}Check with {i.title.split(' ')[0]}</Button>
+          {!c || c === 'busy' ? <span className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin text-primary" />Checking with {i.title.split(' ')[0]}…</span> : null}
           {c && c !== 'busy' ? <span className={cn('text-xs', c.ok ? 'text-verified' : 'text-warning-foreground')}>{c.detail}{c.ok ? '' : ' It is stored anyway; installing never waits on it.'}</span> : null}
+          {c && c !== 'busy' ? <Button size="xs" variant="ghost" onClick={() => void checkKey(n)}><RefreshCw />Check again</Button> : null}
         </div>
       ) : null}
     </div>

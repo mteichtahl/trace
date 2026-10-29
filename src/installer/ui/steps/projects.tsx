@@ -1,4 +1,4 @@
-import { Loader2, Plus, Search, ShieldCheck, Sparkles, X } from 'lucide-react'
+import { Loader2, Plus, RefreshCw, Search, Sparkles, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -173,10 +173,9 @@ export function ProjectsStep() {
       {s.projects.size ? (
         <div className="grid gap-3">
           <div className="flex flex-wrap items-center gap-3">
-            <Button variant={fresh ? 'outline' : 'default'} disabled={s.preBusy} onClick={() => void runPreflight()}>
-              {s.preBusy ? <Loader2 className="animate-spin" /> : <ShieldCheck />}{s.preBusy ? 'Checking…' : fresh ? 'Check access again' : `Check access to ${s.projects.size === 1 ? 'it' : `these ${s.projects.size}`}`}
-            </Button>
-            <span className="text-xs text-muted-foreground">{fresh ? (fails.length ? `${fails.length} can't be installed as they are.` : 'The token can do what trace needs in each one.') : 'Checks the token can set each repository\'s secrets, variables and settings.'}</span>
+            {fresh && !s.preBusy ? <span className="text-xs text-muted-foreground">{fails.length ? `${fails.length} can't be installed as they are.` : 'The token can do what trace needs in each one.'}</span>
+              : !s.preBusy ? <span className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin text-primary" />Checking access to the projects chosen…</span> : null}
+            {!s.preBusy && (fresh || s.preError) ? <Button variant="ghost" size="xs" onClick={() => void runPreflight()}><RefreshCw />Check again</Button> : null}
           </div>
           <CheckProgress />
           {s.preError && !s.preBusy ? <Note tone="fail" title="The checks could not run">{s.preError}</Note> : null}

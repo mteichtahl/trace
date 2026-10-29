@@ -5,8 +5,8 @@
  */
 import type { IntegrationName } from '../../core/integrations-catalog.js'
 import type { Check, InstallEvent, Step } from '../answers.js'
-import { type Env, type GithubCheck, type Preflight, type Progress, type StepId, answers, awsBody, blockers, ghCurrent, loadSaved, planKey, preCurrent, preflightBody, preflightKey, secrets, githubTokenError, awsErrors, reconcileProjects } from './model.js'
-import { get, update } from './store.js'
+import { type Env, type GithubCheck, type Preflight, type Progress, type StepId, answers, awsBody, blockers, ghCurrent, loadSaved, planKey, preCurrent, preflightBody, preflightKey, secrets, githubTokenError, awsErrors, reconcileProjects, dueChecks, integrationKey } from './model.js'
+import { get, subscribe, update } from './store.js'
 
 const KEY = document.querySelector<HTMLMetaElement>('meta[name="trace-key"]')?.content ?? ''
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
@@ -58,7 +58,7 @@ export async function next(from: StepId, to: StepId): Promise<void> {
 export async function checkGithub(): Promise<void> {
   const token = get().github.token.trim()
   if (githubTokenError(token) || get().ghBusy) return
-  update((s) => { s.ghBusy = true; s.ghError = '' })
+  update((s) => { s.ghBusy = true; s.ghError = ''; s.ghTried = token })
   try {
     // asked about each project an earlier run installed, so one deleted since is told apart from one merely unlisted
     const saved = [...get().projects].filter(([, p]) => !p.create).map(([repo]) => repo).slice(0, 200)
@@ -85,7 +85,7 @@ export async function runPreflight(): Promise<void> {
   if (s0.preBusy || githubTokenError(s0.github.token) || Object.keys(awsErrors(s0.aws, s0.env?.profiles.names)).length) return
   const body = preflightBody(s0)
   const key = preflightKey(s0)
-  update((s) => { s.preBusy = true; s.preError = ''; s.preProgress = [] })
+  update((s) => { s.preBusy = true; s.preError = ''; s.preProgress = []; s.preTried = key })
   try {
     const pre = await streamPreflight(body)
     update((s) => { s.pre = pre; s.preKey = key; s.fixNote.clear() })
@@ -153,7 +153,8 @@ export async function runFix(c: Check): Promise<void> {
       : a === 'clear-leftovers' ? { action: a, prefix: p.prefix }
       : { action: a }
     const r = await api<{ detail: string }>('POST', '/api/fix', { ...awsBody(get()), token: get().github.token.trim(), fix })
-    update((s) => { s.fixNote.set(c.id, `${r.detail} Check again to confirm.`) })
+    update((s) => { s.fixNote.set(c.id, r.detail); s.preTried = '' })
+    // fixed: the checks run again by themselves, so what the fix changed shows
   } catch (e) {
     update((s) => { s.fixNote.set(c.id, `Could not: ${message(e)}`) })
   } finally {
@@ -166,7 +167,7 @@ export async function submitUseCase(c: Check): Promise<void> {
   update((s) => { s.fixBusy = `${c.id}:bedrock-use-case` })
   try {
     const r = await api<{ detail: string }>('POST', '/api/fix', { ...awsBody(get()), token: get().github.token.trim(), fix: { action: 'bedrock-use-case', form } })
-    update((s) => { s.fixNote.set(c.id, r.detail); s.useCase.open = false })
+    update((s) => { s.fixNote.set(c.id, r.detail); s.useCase.open = false; s.preTried = '' })
   } catch (e) {
     update((s) => { s.fixNote.set(c.id, `Could not submit it: ${message(e)}`) })
   } finally {
@@ -177,13 +178,44 @@ export async function submitUseCase(c: Check): Promise<void> {
 // ------------------------------------------------------------------ integrations
 
 export async function checkKey(n: IntegrationName): Promise<void> {
-  update((s) => { s.integrationCheck.set(n, 'busy') })
+  update((s) => { s.integrationCheck.set(n, 'busy'); s.integrationTried.set(n, integrationKey(s, n)) })
   try {
     const r = await api<{ ok: boolean; detail: string }>('POST', '/api/integrations/check', { name: n, values: get().integrations[n] })
     update((s) => { s.integrationCheck.set(n, r) })
   } catch (e) {
     update((s) => { s.integrationCheck.set(n, { ok: false, detail: message(e) }) })
   }
+}
+
+// ------------------------------------------------------------------ checks that run by themselves
+
+/** How long input has to stay as it is before its check starts: long enough not to check half-typed input. */
+const PAUSE = { github: 600, preflight: 900, integrations: 900 } as const
+const timers = new Map<string, { key: string; t: ReturnType<typeof setTimeout> }>()
+
+/** Run each check as soon as what it checks is complete and valid (model.ts dueChecks), after a short pause. A check
+ * already waiting for the same input keeps its timer; new input restarts it; input no longer due cancels it. */
+export function startAutoChecks(): () => void {
+  const plan = (id: string, key: string, ms: number, run: () => Promise<void>): void => {
+    const was = timers.get(id)
+    if (was?.key === key) return
+    if (was) { clearTimeout(was.t); timers.delete(id) }
+    if (!key) return
+    timers.set(id, { key, t: setTimeout(() => { timers.delete(id); void run() }, ms) })
+  }
+  const tick = (): void => {
+    const due = dueChecks(get())
+    plan('github', due.github, PAUSE.github, checkGithub)
+    plan('preflight', due.preflight, PAUSE.preflight, runPreflight)
+    const wanted = new Map(due.integrations)
+    for (const id of [...timers.keys()].filter((k) => k.startsWith('integration:'))) {
+      const n = id.slice('integration:'.length) as IntegrationName
+      if (!wanted.has(n)) plan(id, '', 0, async () => {})
+    }
+    for (const [n, key] of wanted) plan(`integration:${n}`, key, PAUSE.integrations, () => checkKey(n))
+  }
+  tick()
+  return subscribe(tick)
 }
 
 // ------------------------------------------------------------------ the plan, and the installation
