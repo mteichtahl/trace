@@ -99,8 +99,20 @@ backups, hidden folders or node_modules) travel as one archive, `src/gpu/kicad-j
 copy, and the output comes back where the caller asked, with the job's folders replaced by the caller's in its text
 files. A render's frames become the turntable video as an `ffmpeg` job the same way.
 
-In the flat layout there is no tools function (a flat stack has no room for four more resources per project): those
-jobs go to the queue (`agent/Dockerfile.gpu` has the same programs), or are unavailable without `gpu.enabled`.
+In the flat layout the tools functions are all in one nested stack of their own, `ToolsStack`
+(`src/infra/tools.ts FlatToolsStack`, with the tools image's build): the flat stack has no room for four more
+resources per project, but has for that one, except at 20 flat projects with everything on. There, the stack is left
+out and those jobs go to the queue (`agent/Dockerfile.gpu` has the same programs), or are unavailable without
+`gpu.enabled`; moving to the nested layout gives each project its function.
+
+What a call costs is in the project's ledger as kind `tools` (`src/core/cost.ts`): Lambda's billed duration (from
+the call's REPORT line, a cold start included) x the function's memory and its `/tmp` over 512 MB, and the call, at
+Lambda's arm64 prices (`cost.prices.tools` overrides them). Its job's span (`trace.gpu.run <kind>`) goes to X-Ray as
+the Batch jobs' do, in the worker's trace, under the service `<prefix>-tools`.
+
+An input of 1 MB or more (a KiCad project's archive, usually) is stored once a week by its content under
+`jobs/<slug>/cache/` (`src/gpu/protocol.ts`): a call that sends the same bytes again looks for it instead of uploading
+it, and a warm function keeps it in its `/tmp` (at most 3 GB), so it isn't downloaded again either.
 
 ## The GPU job image
 

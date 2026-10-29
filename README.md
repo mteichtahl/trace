@@ -384,8 +384,9 @@ runtime and knowledge base, into managed policies of that role: three at 24 and 
 by default. The tools functions add five resources and the `ToolsImageUri` output to the parent, for the tools image
 (its repository, its CodeBuild project with its role and policy, and its build), and to each nested stack four
 resources (the function, its role, policy and log group: `src/infra/tools.ts`) and three parameters (the tools
-image's repository and tag). The flat layout has no room for those four per project, so it has no tools functions:
-see `agent/README.md`.)
+image's repository and tag). The flat layout has no room for those four per project, so its tools functions are all
+in one nested stack, one resource of the parent's, left out when the parent has no room even for that: see
+`agent/README.md`.)
 
 CloudFormation allows 500 resources, 200 outputs and 200 parameters per template, and the stack checks all three
 when it is built. The parent carries none of a project's outputs, so its output count does not grow with the
@@ -695,10 +696,14 @@ facts (`projects/<slug>/journey-agent/cost.db`, `src/core/cost.ts`), not in the 
   the price table.
 - **Graphics card and CPU jobs.** Every finished AWS Batch job records its running time (Batch's start and stop
   times) times its pool's price: a graphics card job holds its instance, a CPU job pays for the vCPUs it asked for.
+- **Tools function jobs.** Every call of a project's tools function (KiCad, Blender on the CPU, the FPGA and
+  verification tools, CalculiX, ffmpeg: `agent/README.md`) records Lambda's billed duration (a cold start included)
+  times its memory and its `/tmp` over 512 MB, plus the call, at Lambda's arm64 prices. The price list fetch does not
+  ask for Lambda yet: the built-in price (us-east-1), or `cost.prices.tools`, prices them.
 - **The price table** (`src/core/prices.ts`) is one dated table: Claude on Bedrock per million tokens per model
   (input, output, cache write, cache read; a global inference profile's price and the higher in-region one) and the
   two pools' prices per hour. Its prices come from three places, highest first:
-  1. **An admin's prices**, the stack setting `cost.prices` (a model entry, a region-only entry, a pool, and an
+  1. **An admin's prices**, the stack setting `cost.prices` (a model entry, a region-only entry, a pool, `tools`, and an
      `asOf`; run the installer to apply): the workers and the API get them as `TRACE_PRICES`.
   2. **The AWS price list.** Once a day, the same Lambda that reads Cost Explorer (below, at `cost.explorer.at`) asks
      the AWS Price List Query API (`pricing:GetProducts`, free) for Claude on Bedrock in the installation's region

@@ -178,9 +178,10 @@ export const InfraPropsSchema = z.object({
    * (agent/Dockerfile.tools: KiCad, Blender, the FPGA and verification tools, CalculiX, ffmpeg), which AgentCore's
    * 2 GB image limit keeps out of the agent image. A job of those kinds (src/gpu/jobs.ts FUNCTION_KINDS) runs there,
    * one invocation each, for at most 840 s; a longer one, or a GPU render, goes to the queue. Its role reaches only the
-   * project's jobs/<slug>/ and its log group. Only in layout 'nested' (toolsEnabled below): a flat stack of 20
-   * projects has no room for four more resources per project, and a flat project sends those jobs to the queue
-   * (the GPU image has the same programs), or has none of them without gpu.enabled. */
+   * project's jobs/<slug>/ and its log group. In layout 'nested' each is in its project's nested stack (toolsEnabled
+   * below); in layout 'flat', whose stack has no room for four more resources per project, all of them are in one
+   * nested stack of their own, made when the flat stack has room for that one resource (src/infra/tools.ts
+   * FlatToolsStack: not at 20 flat projects with everything on, whose projects then send those jobs to the queue). */
   tools: z.object({
     enabled: z.boolean().default(true),
     /** the function's memory (MB): its CPU share grows with it, a full vCPU at 1769 MB, six at 10240 */

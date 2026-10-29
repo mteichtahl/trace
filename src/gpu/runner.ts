@@ -7,7 +7,7 @@
  * and, last, the exit record. It exits with the program's code, so a failed program also shows as FAILED in Batch.
  */
 import { spawn } from 'node:child_process'
-import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -23,6 +23,36 @@ export interface RunnerDeps {
   workRoot?: string
   /** echo the program's output to this process's stdout/stderr (default true: it is the container log) */
   echo?: boolean
+  /** a folder kept between jobs (a warm tools function's /tmp) where shared inputs are kept by their key, so a job
+   * sending the same bytes again reads them from here instead of S3; at most SHARED_CACHE_BYTES */
+  sharedCache?: string
+}
+
+/** The most a sharedCache folder keeps: the oldest-used go first. */
+export const SHARED_CACHE_BYTES = 3 * 1024 ** 3
+
+/** A shared input from the cache folder, else from S3 into it (the folder then trimmed to SHARED_CACHE_BYTES). */
+async function sharedInput(store: S3Backend, key: string, cache: string | undefined): Promise<Uint8Array | null> {
+  const local = cache ? join(cache, key.replaceAll('/', '_')) : null
+  if (local && existsSync(local)) {
+    const now = new Date()
+    utimesSync(local, now, now)
+    return readFileSync(local)
+  }
+  const o = await store.get(key)
+  if (!o) return null
+  if (local && cache) {
+    mkdirSync(cache, { recursive: true })
+    writeFileSync(`${local}.part`, o.body)
+    renameSync(`${local}.part`, local)
+    const files = readdirSync(cache).filter((f) => !f.endsWith('.part')).map((f) => ({ f, st: statSync(join(cache, f)) })).sort((a, b) => b.st.mtimeMs - a.st.mtimeMs)
+    let total = 0
+    for (const { f, st } of files) {
+      total += st.size
+      if (total > SHARED_CACHE_BYTES && join(cache, f) !== local) rmSync(join(cache, f), { force: true })
+    }
+  }
+  return o.body
 }
 
 /** The job's spec, from TRACE_GPU_JOB_URI. It must be the `spec` object of the job it describes. */
@@ -60,11 +90,12 @@ export async function main(deps: RunnerDeps = {}, given?: RemoteSpec): Promise<n
   mkdirSync(join(dir, 'out'), { recursive: true })
   const ins: Record<string, string> = {}
   for (const n of spec.inputs) {
-    const o = await store.get(keys.input(n))
-    if (!o) return finish({ exitCode: 127, seconds: 0, error: `input ${n} is missing from ${store.url}/${keys.input(n)}`, outputs: [] })
+    const sharedAt = spec.shared?.[n]
+    const body = sharedAt ? await sharedInput(store, sharedAt, deps.sharedCache) : (await store.get(keys.input(n)))?.body
+    if (!body) return finish({ exitCode: 127, seconds: 0, error: `input ${n} is missing from ${store.url}/${sharedAt ?? keys.input(n)}`, outputs: [] })
     ins[n] = join(dir, 'in', ...n.split('/')) // a relative path (checked by the spec's schema): the tree is kept
     mkdirSync(dirname(ins[n]), { recursive: true })
-    writeFileSync(ins[n], o.body)
+    writeFileSync(ins[n], body)
   }
   const outs = Object.fromEntries(spec.outputs.map((n) => [n, join(dir, 'out', n)]))
   let argv: string[]

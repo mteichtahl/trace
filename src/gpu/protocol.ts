@@ -10,6 +10,11 @@
  *   jobs/<slug>/<id>/log/stderr.txt
  *   jobs/<slug>/<id>/exit               the exit record (ExitRecord), written last: its presence means the runner finished
  *   jobs/<slug>/<id>/spec               the spec (RemoteSpec, JSON), written before the job is submitted
+ *   jobs/<slug>/cache/w<week>/<sha256>  a large input (SHARE_MIN_BYTES or more) by its content, shared by the jobs of
+ *                                       that week that send the same bytes (a KiCad project archive): uploaded once,
+ *                                       named in the spec's `shared` (jobs on the tools function only: ./staging.ts). The week (since the
+ *                                       epoch) is in the key so an object is used only while it is under a week
+ *                                       old: the jobs/ expiry never removes one a job is about to read
  *
  * The project is TRACE_PROJECT (set on each project's worker runtime). Without it (a laptop with admin credentials)
  * jobs go under jobs/_local/, which is never a project's.
@@ -37,6 +42,8 @@ export const RemoteSpecSchema = z.object({
   env: z.record(z.string(), z.string()),
   gpu: z.boolean(),
   timeoutSeconds: z.number().int().positive(),
+  /** inputs read from the shared cache instead of <id>/in/ (name → its key, cache/w<week>/<sha256>) */
+  shared: z.record(z.string(), z.string().regex(/^cache\/w\d+\/[0-9a-f]{64}$/)).optional(),
 }).strict().superRefine((s, ctx) => {
   for (const m of nameClashes(s.inputs)) ctx.addIssue({ code: 'custom', path: ['inputs'], message: m })
 })
@@ -53,6 +60,11 @@ export const ExitRecordSchema = z.object({
 export type ExitRecord = z.output<typeof ExitRecordSchema>
 
 /** Keys relative to the job's prefix (jobs/<slug>). */
+/** The smallest input shared by content (./staging.ts): below it, uploading again costs less than looking. */
+export const SHARE_MIN_BYTES = 1024 * 1024
+/** A shared input's key: its week since the epoch (UTC) and its sha256. */
+export const sharedKey = (sha256: string, now: number): string => `cache/w${Math.floor(now / (7 * 86_400_000))}/${sha256}`
+
 export const jobKeys = (id: string) => ({
   input: (n: string) => `${id}/in/${n}`,
   output: (n: string) => `${id}/out/${n}`,

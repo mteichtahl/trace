@@ -213,6 +213,9 @@ describe('the nested layout', () => {
         const withoutJobEvents = (r: Res): Res => {
           const c = JSON.parse(JSON.stringify(r)) as Res & { Properties: Record<string, any> }
           if (c.Type === 'AWS::BedrockAgentCore::Runtime') delete c.Properties.EnvironmentVariables?.TRACE_BATCH_EVENTS_TOPIC
+          // a flat project's tools function is in the flat layout's tools stack (src/infra/tools.ts FlatToolsStack): its
+          // worker is told it there; compared here with the nested layout's tools functions off
+          if (c.Type === 'AWS::BedrockAgentCore::Runtime') for (const k of ['TRACE_TOOLS_FUNCTION', 'TRACE_TOOLS_FUNCTION_MEMORY_MB', 'TRACE_TOOLS_FUNCTION_STORAGE_MB']) delete c.Properties.EnvironmentVariables?.[k]
           if (c.Type === 'AWS::CodeBuild::Project') delete c.Properties.Triggers
           if (c.Type === 'AWS::IAM::Policy') c.Properties.PolicyDocument.Statement = c.Properties.PolicyDocument.Statement.filter((x: { Sid?: string }) => !String(x.Sid).startsWith('ProjectGpuWait'))
           return c

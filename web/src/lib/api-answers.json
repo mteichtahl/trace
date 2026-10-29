@@ -2058,6 +2058,7 @@
             "agents": 0,
             "gpu": 0,
             "cpu": 0,
+            "tools": 0,
             "total": 0
           },
           "actual": null,
@@ -2183,7 +2184,8 @@
         "sources": [
           "https://aws.amazon.com/bedrock/pricing/",
           "https://www.anthropic.com/pricing",
-          "https://aws.amazon.com/ec2/pricing/on-demand/"
+          "https://aws.amazon.com/ec2/pricing/on-demand/",
+          "https://aws.amazon.com/lambda/pricing/"
         ],
         "source": "built-in",
         "status": "warning",
@@ -2216,6 +2218,7 @@
             "agents": 0,
             "gpu": 0,
             "cpu": 0,
+            "tools": 0,
             "total": 0
           },
           "actual": null,
@@ -2243,7 +2246,8 @@
         "sources": [
           "https://aws.amazon.com/bedrock/pricing/",
           "https://www.anthropic.com/pricing",
-          "https://aws.amazon.com/ec2/pricing/on-demand/"
+          "https://aws.amazon.com/ec2/pricing/on-demand/",
+          "https://aws.amazon.com/lambda/pricing/"
         ],
         "source": "built-in",
         "status": "warning",

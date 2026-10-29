@@ -80,6 +80,7 @@ import { grantApiRuntime } from './api-grants.js'
 import { ExternalAccess } from './external.js'
 import { LibraryGateway } from './gateway.js'
 import { AGENT_IMAGE_MAX_BYTES, imageBuildEnv, imageBuildSpec, imageContentTag } from './images.js'
+import { FlatToolsStack, type ToolsImage, buildToolsImage, flatToolsFit, toolsImageProjectArn } from './tools.js'
 import { bundlingRoot } from './lockfile.js'
 import { GpuCompute } from './gpu.js'
 import { KB_RETRIEVE_ACTIONS, VectorStore, knowledgeBaseArn } from './knowledge.js'
@@ -289,31 +290,16 @@ export class TraceStack extends Stack {
     // KiCad, Blender, the FPGA and verification tools, CalculiX and ffmpeg (agent/Dockerfile.tools, src/infra/tools.ts),
     // which AgentCore's 2 GB image limit keeps out of the agent image. Waited for, like the agent image: a function
     // can't be made before its image is in the repository. Nested layout only (props.ts toolsEnabled)
-    const tools = toolsEnabled(cfg) ? (() => {
-      const toolsRepo = new ecr.Repository(this, 'ToolsImages', {
-        repositoryName: `${cfg.prefix}-tools`, imageScanOnPush: true, removalPolicy: keep, emptyOnDelete: !cfg.retainData, lifecycleRules: [{ maxImageCount: 5 }],
+    const toolsBuild = (scope: Construct): ToolsImage => {
+      // its build is started and polled by the image-build provider: by the project's name (the same in either layout,
+      // and no reference to the flat layout's tools stack, which takes the provider's token from this one)
+      for (const f of [start, poll]) f.addToRolePolicy(new iam.PolicyStatement({ actions: ['codebuild:StartBuild', 'codebuild:BatchGetBuilds'], resources: [toolsImageProjectArn(this, cfg.prefix)] }))
+      return buildToolsImage(scope, {
+        prefix: cfg.prefix, keep, retainData: cfg.retainData, source, buildLogs, serviceToken: provider.serviceToken,
+        environment: imageBuildEnv(cfg.images, 'tools', contentTag),
       })
-      const toolsBuild = new codebuild.Project(this, 'ToolsImageBuild', {
-        projectName: `${cfg.prefix}-tools-image`,
-        description: 'Builds the trace tools image (agent/Dockerfile.tools: KiCad, Blender, FPGA and verification tools, CalculiX, ffmpeg) for the projects\' tools functions, on arm64',
-        source: codebuild.Source.s3({ bucket: source.bucket, path: source.s3ObjectKey }),
-        environment: { buildImage: codebuild.LinuxArmBuildImage.AMAZON_LINUX_2023_STANDARD_3_0, computeType: codebuild.ComputeType.LARGE, privileged: true },
-        environmentVariables: { REPOSITORY_URI: { value: toolsRepo.repositoryUri }, IMAGE_TAG: { value: 'latest' }, ...imageBuildEnv(cfg.images, 'tools', contentTag) },
-        timeout: Duration.minutes(90),
-        logging: { cloudWatch: { logGroup: buildLogs } },
-        buildSpec: codebuild.BuildSpec.fromObject(imageBuildSpec({ dockerfile: 'agent/Dockerfile.tools', platform: 'linux/arm64' })),
-        cache: codebuild.Cache.local(codebuild.LocalCacheMode.DOCKER_LAYER),
-      })
-      toolsRepo.grantPullPush(toolsBuild)
-      source.grantRead(toolsBuild)
-      for (const f of [start, poll]) f.addToRolePolicy(new iam.PolicyStatement({ actions: ['codebuild:StartBuild', 'codebuild:BatchGetBuilds'], resources: [toolsBuild.projectArn] }))
-      const toolsImage = new CustomResource(this, 'ToolsImage', {
-        serviceToken: provider.serviceToken,
-        properties: { ProjectName: toolsBuild.projectName, ImageUri: `${toolsRepo.repositoryUri}:${source.assetHash}`, SourceHash: source.assetHash },
-      })
-      // the tag, read from the resource (repository URI ':' tag), so each function waits for the build
-      return { images: toolsRepo, tag: Fn.select(1, Fn.split(':', toolsImage.getAttString('ImageUri'))), uri: toolsImage.getAttString('ImageUri') }
-    })() : null
+    }
+    const tools = toolsEnabled(cfg) ? toolsBuild(this) : null
 
     // ------------------------------------------------------------------ the projects (one worker runtime and its roles each)
     const issuer = 'token.actions.githubusercontent.com'
@@ -694,6 +680,16 @@ export class TraceStack extends Stack {
     // Nested: the parent carries none of a project's outputs (Project<hash>RuntimeArn, ActionsRoleArn, MemoryId, …):
     // they are its nested stack's, and the installer reads them there (src/installer/aws.ts stackOutputs), so the
     // parent's outputs do not grow with the projects. Flat: the stack's own, as they always were (src/infra/project.ts).
+    // The flat layout's tools functions: every project's in one nested stack of its own (with the tools image's build),
+    // so the parent pays one resource for them all, and only when the parent has room for it (flatToolsFit). Without
+    // it a flat project's KiCad and the rest go to the queue (src/gpu/jobs.ts TRACE_TOOLS_ELSEWHERE)
+    const flatTools = !nested && cfg.tools.enabled && projects.length && flatToolsFit(this)
+      ? new FlatToolsStack(this, 'ToolsStack', {
+          cfg, bucket: central, build: toolsBuild,
+          projects: projects.map((p, i) => ({ ref: refs[i] as (typeof refs)[number], project: p })),
+        })
+      : null
+    if (flatTools) flatTools.node.addValidation({ validate: () => stackQuotaErrors(flatTools, '') })
     const hint = nested ? '' : `: with layout 'flat' about 20 projects fit; see README "Project isolation" for the move to layout 'nested'`
     this.node.addValidation({ validate: () => stackQuotaErrors(this, hint) })
     for (const n of nestedStacks) n.node.addValidation({ validate: () => stackQuotaErrors(n, '') })

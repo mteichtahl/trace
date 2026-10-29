@@ -103,6 +103,7 @@ import { EVENT_ACTIONS, RECORD_ACTIONS, TraceMemory } from './memory.js'
 import { projectVocabularyStatements, vocabularyBase } from './voice.js'
 import { RunnerProject } from './runner.js'
 import { ToolsFunction } from './tools.js'
+import { gpuTelemetryEnv } from './observability.js'
 import { jobIndexKey } from '../core/job-index.js'
 import { PRICES_KEY, PRICES_PREFIX } from '../core/prices-store.js'
 import {
@@ -441,11 +442,16 @@ export class ProjectStack extends Construct {
       ? new ToolsFunction(this, 'Tools', {
           prefix: cfg.prefix, repository, slug, hash, bucket, images: p.tools.images, tag: p.tools.tag,
           memoryMb: cfg.tools.memoryMb, ephemeralMb: cfg.tools.ephemeralMb,
+          telemetry: Object.keys(gpuTelemetryEnv(cfg)).length ? { ...gpuTelemetryEnv(cfg), OTEL_SERVICE_NAME: `${cfg.prefix}-tools` } : {},
         })
       : null
     if (this.tools) {
       role.addToPolicy(new iam.PolicyStatement({ sid: 'ProjectToolsInvoke', actions: ['lambda:InvokeFunction'], resources: [this.tools.function.functionArn] }))
-      Object.assign(toolsEnv, { TRACE_TOOLS_FUNCTION: this.tools.functionName, TRACE_GPU_BUCKET: bucket.bucketName })
+      Object.assign(toolsEnv, {
+        TRACE_TOOLS_FUNCTION: this.tools.functionName, TRACE_GPU_BUCKET: bucket.bucketName,
+        // what its calls are priced with (src/gpu/function.ts functionCostRow), when a call's log has no REPORT line
+        TRACE_TOOLS_FUNCTION_MEMORY_MB: String(cfg.tools.memoryMb), TRACE_TOOLS_FUNCTION_STORAGE_MB: String(cfg.tools.ephemeralMb),
+      })
     }
 
     // ------------------------------------------------------------------ its events topic: jobs' state changes, people's answers
