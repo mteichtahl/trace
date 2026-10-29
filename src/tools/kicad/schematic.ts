@@ -24,7 +24,7 @@ import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { ToolError } from '../../core/registry.js'
 import { Cache, scratchDir } from '../../core/store.js'
-import { kicadCli, kicadCliVersion, runCli } from './project.js'
+import { kicadCliVersion, requireKicad, runCli } from './project.js'
 import * as sx from './sexpr.js'
 import type { SList } from './sexpr.js'
 import { child, childText, descendants, parseXml, XmlError } from './xml.js'
@@ -418,7 +418,7 @@ function sheetFiles(root: string): string[] {
 
 /** The schematic's nets, from kicad-cli, cached by the content of its sheet files and the kicad-cli version. */
 export async function netlist(schPath: string): Promise<Netlist> {
-  kicadCli() // a clear error before anything else
+  requireKicad() // a clear error before anything else
   const h = createHash('sha256').update((await kicadCliVersion()) ?? '')
   for (const f of sheetFiles(schPath)) h.update(f).update(readFileSync(f))
   const key = h.digest('hex')

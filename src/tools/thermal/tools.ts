@@ -50,6 +50,7 @@ import { compare, seriesFromCsv } from './transient.js'
 import { validate } from './validation.js'
 import { PdfReader } from '../datasheets/pdf.js'
 import { library } from '../datasheets/library.js'
+import type { Backend } from '../../gpu/jobs.js'
 
 const r4 = (x: number | null | undefined): number | null => (x === null || x === undefined || !Number.isFinite(x) ? null : Number(x.toPrecision(5)))
 
@@ -367,7 +368,7 @@ async function prepare(a: BoardArgs, extra: { h_multiplier?: number; ambient?: n
   return { path, env, environment, ambient, power: p.power, powerSource: p.source, cell: a.cell_mm ?? autoCell(path), notes: c.notes, evidence: c.evidence }
 }
 
-async function run25d(a: BoardArgs, p: Prepared): Promise<BoardRun & { where: 'local' | 'batch' }> {
+async function run25d(a: BoardArgs, p: Prepared): Promise<BoardRun & { where: Backend }> {
   const g = rasterise(p.path, { cell_mm: p.cell, power: new Map(), emissivity: p.environment.emissivity, samples: 1 })
   const cells = g.model.nx * g.model.ny * g.model.layers.length
   return runBoardWhere({ board: p.path, environment: p.environment, power: p.power, cell_mm: p.cell, samples: a.samples, ...(a.laminate ? { laminate: a.laminate } : {}), ...(a.heatsinks ? { heatsinks: a.heatsinks } : {}), ...(a.transient ? { transient: a.transient } : {}) }, cells, a.remote)

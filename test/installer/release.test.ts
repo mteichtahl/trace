@@ -62,8 +62,8 @@ describe('tracectl release setup', () => {
     expect(d.calls.slice(-2)).toEqual(['record mteichtahl/trace public.ecr.aws/a1b2c3d4', 'dispatch mteichtahl/trace release-images.yml main'])
     expect(r).toMatchObject({
       registry: 'public.ecr.aws/a1b2c3d4', roleArn: ROLE, dispatched: true,
-      images: ['public.ecr.aws/a1b2c3d4/trace-agent', 'public.ecr.aws/a1b2c3d4/trace-gpu'],
-      gallery: ['https://gallery.ecr.aws/a1b2c3d4/trace-agent', 'https://gallery.ecr.aws/a1b2c3d4/trace-gpu'],
+      images: ['public.ecr.aws/a1b2c3d4/trace-agent', 'public.ecr.aws/a1b2c3d4/trace-tools', 'public.ecr.aws/a1b2c3d4/trace-gpu'],
+      gallery: ['https://gallery.ecr.aws/a1b2c3d4/trace-agent', 'https://gallery.ecr.aws/a1b2c3d4/trace-tools', 'https://gallery.ecr.aws/a1b2c3d4/trace-gpu'],
     })
   })
 

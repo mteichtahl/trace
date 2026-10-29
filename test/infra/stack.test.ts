@@ -406,7 +406,7 @@ describe('the trace stack', () => {
     }
     t.resourceCountIs('AWS::EC2::NatGateway', 0)
     t.hasResourceProperties('AWS::CodeBuild::Project', { Environment: Match.objectLike({ Type: 'LINUX_CONTAINER', PrivilegedMode: true }) })
-    t.resourceCountIs('AWS::CloudFormation::CustomResource', 2) // the agent image and the GPU image
+    t.resourceCountIs('AWS::CloudFormation::CustomResource', 3) // the agent image, the tools image and the GPU image
   })
 
   it("sends each project its own jobs' state changes, on its own topic that only its own rule may publish to", () => {
@@ -483,7 +483,7 @@ describe('the trace stack', () => {
     const off = InfraPropsSchema.parse({ ...props, gpu: { enabled: false } })
     const t2 = synth(off, 'NoGpu').all
     for (const r of ['AWS::Batch::ComputeEnvironment', 'AWS::Batch::JobQueue', 'AWS::Batch::JobDefinition', 'AWS::EC2::VPC']) t2.resourceCountIs(r, 0)
-    t2.resourceCountIs('AWS::CloudFormation::CustomResource', 1)
+    t2.resourceCountIs('AWS::CloudFormation::CustomResource', 2) // the agent image and the tools image
     // each project keeps its events topic for its journey record's writes (journey.ask's wait), with no Batch rule
     t2.resourceCountIs('AWS::SNS::Topic', 2)
     const rules = (Object.values(t2.findResources('AWS::Events::Rule')) as { Properties: { EventPattern?: { source: string[] } } }[]).filter((r) => r.Properties.EventPattern)

@@ -60,12 +60,47 @@ The workflows need these repository variables: `TRACE_AWS_ROLE` (allowed `bedroc
 
 `agent/Dockerfile`, built for linux/arm64 with the repository root as the context. AWS CodeBuild builds it from the
 CDK stack, so no local Docker is needed. It contains Ubuntu 24.04, Node 22 (NodeSource), git, the GitHub CLI,
-python3 with a venv holding the bridge (`/app/python[pdf]`), ngspice, iverilog, CalculiX ccx 2.21 (`calculix-ccx 2.21-1`, about 18 MB with its libraries, for `thermal.board solver=calculix`), poppler-utils, ffmpeg, Blender (Ubuntu's package; Cycles renders on the CPU, and the bpy scripts are in `/app/python/blender`, copied in with the repository), and KiCad 10 from
-`ppa:kicad/kicad-10.0-releases`. That PPA publishes arm64 builds for noble (10.0.7 as of 2026-10-26). If it can't be
-installed, the build falls back to Ubuntu's own `kicad`. The image runs as the non-root user `trace`, and its entry
-point is `node --require …/aws-distro-opentelemetry-node-autoinstrumentation/build/src/register.js /app/dist/agents/runtime/main.js`:
+python3 with a venv holding the bridge (`/app/python[pdf]`), ngspice, Verilator with g++ (the mixed-signal
+co-simulation builds a Verilator model into ngspice's `d_cosim` in this process: `src/tools/ams/mixed.ts`) and
+poppler-utils. The image runs as the non-root user `trace`, and its entry point is
+`node --require …/aws-distro-opentelemetry-node-autoinstrumentation/build/src/register.js /app/dist/agents/runtime/main.js`:
 ADOT registers the OpenTelemetry SDK first (README "Observability"). The job hands the trace MCP server its trace
 context (`TRACEPARENT`) and the same `--require`, so tool calls join the job's trace.
+
+**At most 2 GB.** AgentCore Runtime refuses a larger image ("maxImageSizeMb limit exceeded"; the limit is not
+adjustable), so the build fails first when the image is over `AGENT_IMAGE_MAX_BYTES` (2,000,000,000 bytes unpacked,
+`src/infra/images.ts`), printing its largest layers. To stay under it the image leaves out the CDK (aws-cdk-lib and
+the CLI, about 210 MB: only the installer deploys, never a runtime; `scripts/check-imports.mjs` fails the build if
+anything a runtime loads imports it), the Agent SDK's musl binary, and the large programs, which are in the tools
+image below. `TRACE_TOOLS_ELSEWHERE=1` says so: a job for one of them goes to the project's tools function, else to
+the queue.
+
+## The tools image and the tools function
+
+`agent/Dockerfile.tools` (linux/arm64) holds what the agent image cannot: KiCad 10 with its symbol and footprint
+libraries (`ppa:kicad/kicad-10.0-releases`, falling back to Ubuntu's `kicad`), Blender (Ubuntu's package, Cycles on the
+CPU, with the bpy scripts in `/app/python/blender`), Verilator, Yosys, nextpnr (ice40, ECP5, Gowin), the IceStorm and
+Trellis packers, z3 and SymbiYosys, iverilog with cocotb 2.1.0 and apycula 0.10.0 in a venv, CalculiX ccx 2.21 and
+ffmpeg, with Node 22 and the job runner. About 4–5 GB; Lambda takes images up to 10 GB.
+
+Each project has its own **tools function** running it (`src/infra/tools.ts`, nested layout only): an AWS Lambda
+function `<prefix>-tools-<hash>`, arm64, 15 minutes, `tools.memoryMb` (4096) and `tools.ephemeralMb` (10240) of `/tmp`.
+Its role reads and writes the project's `jobs/<slug>/` and its own log group, nothing else, and the project's worker
+may invoke it and no other function. `runJob` (`src/gpu/jobs.ts backendFor`) sends it the job kinds it has
+(`FUNCTION_KINDS`: kicad, ffmpeg, blender, verilator, cocotb, formal, yosys, nextpnr, fpga-pack, calculix) when
+`TRACE_TOOLS_FUNCTION` is set, unless the job wants the queue (a GPU render with a GPU queue, or `remote`). A job runs
+over the same S3 protocol as a Batch job (`jobs/<slug>/<id>/`): `src/gpu/function.ts` stages it and invokes the
+function synchronously with the spec's address; `src/gpu/lambda.ts`, a small custom runtime, runs `src/gpu/runner.ts`
+on it. A job gets at most 840 s (`FUNCTION_MAX_SECONDS`), so the upload still fits in Lambda's 900 s.
+
+kicad-cli goes through it as kind `kicad` (`src/tools/kicad/remote.ts`): the project's KiCad files under its
+repository (its sheets, rules, library tables and the libraries they name, 3D and SPICE models; at most 1 GB, no
+backups, hidden folders or node_modules) travel as one archive, `src/gpu/kicad-job.ts` runs kicad-cli on the unpacked
+copy, and the output comes back where the caller asked, with the job's folders replaced by the caller's in its text
+files. A render's frames become the turntable video as an `ffmpeg` job the same way.
+
+In the flat layout there is no tools function (a flat stack has no room for four more resources per project): those
+jobs go to the queue (`agent/Dockerfile.gpu` has the same programs), or are unavailable without `gpu.enabled`.
 
 ## The GPU job image
 
@@ -98,6 +133,8 @@ pushed to the `<prefix>-gpu` ECR repository. It is based on `nvidia/cuda:12.9.2-
 - OrthoRoute v1.0.0 (commit f2dd80c) at `/opt/orthoroute`, with a venv at `/opt/orthoroute/venv` holding numpy,
   scipy, psutil and `cupy-cuda12x`. OrthoRoute is the router that uses the GPU.
 - KiCad 10 from the PPA: `kicad-cli`, and the `pcbnew` Python module for the Specctra DSN export and SES import.
+- ffmpeg, and the verification and FPGA tools: every kind the tools image runs, so a job too long for the tools
+  function, or from a project without one, runs here.
 - CalculiX ccx 2.21 (`calculix-ccx 2.21-1`) for the thermal FEM path (runJob kind `calculix`).
 - ESI-OpenCFD OpenFOAM v2412 (`openfoam2412 2412.260127-1` and `-common`, from dl.openfoam.com for noble/amd64,
   with Open MPI) for the thermal CFD path (runJob kind `openfoam`: `chtMultiRegionSimpleFoam`/`chtMultiRegionFoam`,

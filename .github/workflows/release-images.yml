@@ -1,17 +1,17 @@
-# Publishes trace's two images to Amazon ECR Public, so installations copy them instead of building them
-# (src/infra/images.ts, images.source 'prebuilt'): `<registry>/trace-agent` (linux/arm64, AgentCore) and
-# `<registry>/trace-gpu` (linux/amd64, AWS Batch), each tagged with the content tag of scripts/image-tag.mjs (the same
+# Publishes trace's three images to Amazon ECR Public, so installations copy them instead of building them
+# (src/infra/images.ts, images.source 'prebuilt'): `<registry>/trace-agent` (linux/arm64, AgentCore),
+# `<registry>/trace-tools` (linux/arm64, the projects' tools functions) and `<registry>/trace-gpu` (linux/amd64, AWS Batch), each tagged with the content tag of scripts/image-tag.mjs (the same
 # hash an installation computes), plus `latest` on main and `vX.Y.Z` on a release tag.
 #
 # Set up by the owner's install itself, or `tracectl release setup` (README "Publishing images"): it deploys
-# TraceRelease (src/infra/release.ts: the two ECR Public repositories and the release role), reads the registry's
+# TraceRelease (src/infra/release.ts: the three ECR Public repositories and the release role), reads the registry's
 # default alias, sets this repository's variables TRACE_RELEASE_ROLE and TRACE_IMAGE_REGISTRY (public.ecr.aws/<alias>),
 # and records the registry in the trace-images release, where installations find it. Until both variables are set
 # this workflow does nothing.
 #
 # It runs, like every job here, on this repository's AWS CodeBuild runner once the installation has made it (the
 # repository variable TRACE_CODEBUILD_PROJECT; Docker-in-Docker when that installation publishes: props.ts
-# runners.ciPrivileged), and on GitHub's ubuntu-24.04 runner until then. BuildKit builds both images (QEMU for arm64 on the x86 runner),
+# runners.ciPrivileged), and on GitHub's ubuntu-24.04 runner until then. BuildKit builds the images (QEMU for arm64 on the x86 runner),
 # caches in the registry itself (`:cache`, mode=max), attaches an OCI provenance attestation, and the job summary
 # records each pushed digest.
 name: release-images
@@ -63,7 +63,7 @@ jobs:
             refs/tags/v*) extra=("${REF#refs/tags/}") ;;
           esac
           echo "## Published images" >> "$GITHUB_STEP_SUMMARY"
-          for spec in "agent linux/arm64 agent/Dockerfile" "gpu linux/amd64 agent/Dockerfile.gpu"; do
+          for spec in "agent linux/arm64 agent/Dockerfile" "tools linux/arm64 agent/Dockerfile.tools" "gpu linux/amd64 agent/Dockerfile.gpu"; do
             set -- $spec
             repo="$REGISTRY/trace-$1"
             tags=(-t "$repo:$TAG")

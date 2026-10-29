@@ -90,10 +90,11 @@ Model access never blocks installing: the stack deploys without it, and the agen
 
 It then runs the plan:
 
-- **AWS (CDK):** one stack (bootstrapped first if needed). It contains the central bucket, the agent image (arm64, see
-  [Images](#images-copied-or-built)), and AgentCore runtimes from that image: one worker runtime per project, each with
-  its own execution role, GitHub OIDC role, GitHub token secret, memory, knowledge base, GPU and CPU job definitions
-  and CodeBuild build runner (see [Where builds run](#where-builds-run)), and the API runtime. Each project's
+- **AWS (CDK):** one stack (bootstrapped first if needed). It contains the central bucket, the agent image and the
+  tools image (both arm64, see [Images](#images-copied-or-built)), and AgentCore runtimes from the agent image: one
+  worker runtime per project, each with its own execution role, GitHub OIDC role, GitHub token secret, memory,
+  knowledge base, GPU and CPU job definitions, tools function (AWS Lambda, running the tools image: KiCad, Blender,
+  the FPGA and verification tools, CalculiX, ffmpeg; see `agent/README.md`) and CodeBuild build runner (see [Where builds run](#where-builds-run)), and the API runtime. Each project's
   resources are in a nested stack of their own (see [Stack layout](#stack-layout-and-limits)). A project's worker is
   invoked by that repository's workflows through IAM, and by the API. The API runtime is for people and is reached
   only with a Cognito sign-in. The stack also holds the Cognito user pool. Before the deploy, the token becomes
@@ -230,11 +231,12 @@ reaches workers at their next session and the Lambda at its next cold start; not
 
 ### Images: copied or built
 
-Both images (the agent's, arm64; the GPU and CPU jobs', amd64) are made by CodeBuild in your account
-(`src/infra/images.ts`):
+The three images (the agent's, arm64, at most 2 GB for AgentCore; the tools functions', arm64, with the programs too
+large for it; the GPU and CPU jobs', amd64) are made by CodeBuild in your account (`src/infra/images.ts`):
 
 - **Prebuilt** (the default): CodeBuild copies trace's published image for exactly this source from Amazon ECR Public,
-  `<registry>/trace-agent:<content tag>` and `/trace-gpu:`, into the installation's own private repository. The
+  `<registry>/trace-agent:<content tag>`, `/trace-tools:` and `/trace-gpu:`, into the installation's own private
+  repository. The
   content tag is a hash of what goes into the image, computed the same way by the stack and by trace's release
   workflow (`scripts/image-tag.mjs`), so a modified trace never takes an image that is not its own. The copy is pinned:
   `scripts/resolve-image.mjs` reads the tag's digest from the registry and checks it against the manifest's own
@@ -268,9 +270,9 @@ It (`src/installer/release.ts`):
 
 1. bootstraps CDK in us-east-1 (ECR Public's only region) when it isn't, and deploys **TraceRelease**
    (`src/infra/release.ts`; `npm run deploy:release` deploys it alone): the public repositories `trace-agent`
-   (linux/arm64) and `trace-gpu` (linux/amd64) with their gallery catalog data, and the release role `trace-release`,
+   and `trace-tools` (linux/arm64) and `trace-gpu` (linux/amd64) with their gallery catalog data, and the release role `trace-release`,
    which GitHub OIDC lets only the source repository's `main` and `v*` tags assume, and which may only log in and push
-   to those two repositories (the account's GitHub OIDC provider is used when it has one);
+   to those three repositories (the account's GitHub OIDC provider is used when it has one);
 2. reads the registry's address, `public.ecr.aws/<alias>`, with `DescribeRegistries`. The alias is the registry's
    default one, which ECR Public assigns by itself once the account's first public repository exists, so a new
    registry gets it right after the deploy (setup waits a minute for it). A custom alias is the only kind that needs
@@ -280,7 +282,7 @@ It (`src/installer/release.ts`):
 4. records the registry in the source repository's `trace-images` release (a pre-release, never "latest"), where every
    installer finds it;
 5. starts the first release (`workflow_dispatch`; the CLI with `--publish`) and prints where the images appear
-   (`public.ecr.aws/<alias>/trace-agent`, `https://gallery.ecr.aws/<alias>/trace-agent`, and the same for `trace-gpu`).
+   (`public.ecr.aws/<alias>/trace-agent`, `https://gallery.ecr.aws/<alias>/trace-agent`, and the same for `trace-tools` and `trace-gpu`).
 
 From then on every merge to `main` and every `v*` tag publishes (`.github/workflows/release-images.yml`, which does
 nothing until both variables are set). It runs on the source repository's own AWS build runner, which the
@@ -339,7 +341,7 @@ Shared on purpose:
 - **The GPU and CPU queues and compute environments**, and the GPU image (which both run).
 - **The S3 vector bucket** that holds every project's knowledge base index (one index per project; each service role
   reaches only its own index's ARN).
-- **The agent image**: every runtime runs the same one.
+- **The agent image**: every runtime runs the same one. **The tools image**: every project's tools function runs it.
 - **The API runtime.** It is the one component that spans projects. It holds the shared GitHub token, which admins
   need for `settings.get` and `settings.set` on any project. It reads (never writes) the records of every project's
   memory for `memory.list` and `memory.recall`, choosing the memory of the project asked for after the access check,
@@ -379,7 +381,11 @@ parent, and to each nested stack five resources, its two outputs `Project<hash>K
 `Project<hash>KnowledgeBaseDataSourceId`, the knowledge base id the parent reads for the API, and the vector bucket's
 parameter. From 24 projects, CDK moves part of the API role's policy, which names every project's memory, worker
 runtime and knowledge base, into managed policies of that role: three at 24 and four at 60, of the ten a role may have
-by default.)
+by default. The tools functions add five resources and the `ToolsImageUri` output to the parent, for the tools image
+(its repository, its CodeBuild project with its role and policy, and its build), and to each nested stack four
+resources (the function, its role, policy and log group: `src/infra/tools.ts`) and three parameters (the tools
+image's repository and tag). The flat layout has no room for those four per project, so it has no tools functions:
+see `agent/README.md`.)
 
 CloudFormation allows 500 resources, 200 outputs and 200 parameters per template, and the stack checks all three
 when it is built. The parent carries none of a project's outputs, so its output count does not grow with the

@@ -48,13 +48,15 @@
  *             src/infra/knowledge.ts); its documents are S3 under projects/<slug>/kb/, inside its own prefix
  *   gateway   bedrock-agentcore:InvokeGateway on the installation's library gateway only (gateway.enabled,
  *             src/infra/gateway.ts), which serves the shared datasheets and parts tools
+ *   tools     lambda:InvokeFunction on its own tools function only (nested layout, src/infra/tools.ts), whose role
+ *             reaches jobs/<slug>/* and its own log group, nothing else
  *
  * Its GitHub OIDC role (assumed by that repository's default-branch workflows only) may invoke only this runtime,
  * read the central store and write it the same conditional way (the worker.runner=actions fallback is the worker
  * in GitHub Actions), read/write projects/<slug>/*, and use its own project's memory exactly as the worker role may
  * (the same actions, actor and namespace conditions: the fallback is the worker, and remembers as it does; the
- * installer sets the repository variable TRACE_MEMORY_ID). Its job role (GPU and CPU jobs) may read/write
- * jobs/<slug>/* only.
+ * installer sets the repository variable TRACE_MEMORY_ID). Its job role (GPU and CPU jobs) and its tools function's role
+ * may read/write jobs/<slug>/* only.
  *
  * Its CodeBuild runner project (src/infra/runner.ts, named runnerProjectName: <prefix>-ci-<hash>) is where every
  * GitHub Actions job of the repository runs once it exists (GitHub's runners until then). CodeBuild reaches GitHub
@@ -100,6 +102,7 @@ import { ProjectKnowledgeBase } from './knowledge.js'
 import { EVENT_ACTIONS, RECORD_ACTIONS, TraceMemory } from './memory.js'
 import { projectVocabularyStatements, vocabularyBase } from './voice.js'
 import { RunnerProject } from './runner.js'
+import { ToolsFunction } from './tools.js'
 import { jobIndexKey } from '../core/job-index.js'
 import { PRICES_KEY, PRICES_PREFIX } from '../core/prices-store.js'
 import {
@@ -203,6 +206,9 @@ export interface ProjectProps {
   environment: Record<string, string>
   /** the installation's library gateway (src/infra/gateway.ts): null without one */
   gateway?: GatewayRef | null
+  /** the tools image (src/infra/tools.ts): its repository and this deploy's tag; null without tools functions
+   * (props.ts toolsEnabled: tools.enabled false, or the flat layout) */
+  tools?: { images: ecr.IRepository; tag: string } | null
   /** how its runner reaches GitHub: the connection (src/infra/runner.ts GithubConnection), or connectionArn null for the
    * account's CodeBuild GitHub source credential (runners.auth 'token'); null while the connection is not authorized
    * yet (runners.connectionReady false), when the project gets no runner */
@@ -228,6 +234,8 @@ export class ProjectStack extends Construct {
   readonly knowledgeBase: ProjectKnowledgeBase | null
   /** where its repository's GitHub Actions jobs run (src/infra/runner.ts); null until the connection is authorized */
   readonly runner: RunnerProject | null
+  /** where its KiCad, Blender, verification, CalculiX and ffmpeg jobs run (src/infra/tools.ts); null without one */
+  readonly tools: ToolsFunction | null
 
   constructor(scope: Construct, id: string, p: ProjectProps) {
     super(scope, id)
@@ -425,6 +433,21 @@ export class ProjectStack extends Construct {
       Object.assign(gpuEnv, { TRACE_GPU_QUEUE: p.gpu.queue.jobQueueArn, TRACE_GPU_JOB_DEFINITION: job.jobDefinitionName, TRACE_GPU_BUCKET: bucket.bucketName, TRACE_GPU_JOB_MAX_VCPUS: String(GPU_JOB_VCPUS) })
     }
 
+    // ------------------------------------------------------------------ its tools function (src/infra/tools.ts)
+    // the programs too large for the agent image; this role may invoke its own function only, and the function's role
+    // reaches only jobs/<slug>/, which this role reaches already (the job files it stages there)
+    const toolsEnv: Record<string, string> = {}
+    this.tools = p.tools
+      ? new ToolsFunction(this, 'Tools', {
+          prefix: cfg.prefix, repository, slug, hash, bucket, images: p.tools.images, tag: p.tools.tag,
+          memoryMb: cfg.tools.memoryMb, ephemeralMb: cfg.tools.ephemeralMb,
+        })
+      : null
+    if (this.tools) {
+      role.addToPolicy(new iam.PolicyStatement({ sid: 'ProjectToolsInvoke', actions: ['lambda:InvokeFunction'], resources: [this.tools.function.functionArn] }))
+      Object.assign(toolsEnv, { TRACE_TOOLS_FUNCTION: this.tools.functionName, TRACE_GPU_BUCKET: bucket.bucketName })
+    }
+
     // ------------------------------------------------------------------ its events topic: jobs' state changes, people's answers
     // nested layout only, like the CPU queue and the knowledge base: a flat stack of about 24 projects has no room
     // for three more resources per project. A flat project's worker waits on a timer (src/gpu/batch.ts, journey.ask)
@@ -522,6 +545,7 @@ export class ProjectStack extends Construct {
         ...memoryEnv,
         ...kbEnv,
         ...gpuEnv,
+        ...toolsEnv,
         ...eventsEnv,
         ...gatewayEnv,
       },
@@ -606,7 +630,7 @@ export class ProjectNestedStack extends NestedStack {
   readonly project: ProjectStack
 
   constructor(scope: Construct, id: string, p: ProjectProps) {
-    super(scope, id, { description: `trace: ${p.project.slug}'s worker runtime, roles, token secret, memory, knowledge base, job definitions and CI runner`.slice(0, 1024) })
+    super(scope, id, { description: `trace: ${p.project.slug}'s worker runtime, roles, token secret, memory, knowledge base, job definitions, tools function and CI runner`.slice(0, 1024) })
     this.project = new ProjectStack(this, `Project${p.project.hash}`, p)
     // whose nested stack this is: the installer reads each project's outputs here (the parent carries none of them)
     new CfnOutput(this, REPOSITORY_OUTPUT, { value: p.project.slug, description: 'The repository this nested stack is the project of' })

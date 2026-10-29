@@ -4,7 +4,7 @@
  * Advanced "Publish trace's images" overrides it either way), and `tracectl release setup` on its own.
  *
  *   1 bootstrap   CDK in us-east-1 (ECR Public's only region), when it isn't
- *   2 stack       deploy TraceRelease (src/infra/release.ts): the ECR Public repositories trace-agent and trace-gpu,
+ *   2 stack       deploy TraceRelease (src/infra/release.ts): the ECR Public repositories trace-agent, trace-tools and trace-gpu,
  *                 and the release role (GitHub OIDC, the source repository's main and v* tags; the account's OIDC
  *                 provider when it has one)
  *   3 registry    the registry's default alias (DescribeRegistries), which ECR Public assigns by itself once the
@@ -124,7 +124,7 @@ export async function releaseSetup(d: ReleaseDeps, o: ReleaseOptions): Promise<R
   }
   // 2 — the repositories and the role
   const createOidc = !(await d.oidcProvider())
-  d.log(`deploying ${RELEASE_STACK} in ${RELEASE_REGION}: ECR Public ${Object.values(RELEASE_REPOSITORIES).join(' and ')}, and the release role for ${repository} (main and v* tags)${createOidc ? ', with GitHub\'s OIDC provider (the account has none)' : ''}`)
+  d.log(`deploying ${RELEASE_STACK} in ${RELEASE_REGION}: ECR Public ${Object.values(RELEASE_REPOSITORIES).join(', ')}, and the release role for ${repository} (main and v* tags)${createOidc ? ', with GitHub\'s OIDC provider (the account has none)' : ''}`)
   const code = await d.cdk(['deploy', RELEASE_STACK, '--app', 'node dist/infra/release.js', '--require-approval', 'never', '-c', `repository=${repository}`, '-c', `createOidcProvider=${createOidc}`], region)
   if (code !== 0) throw new Error(`cdk deploy ${RELEASE_STACK} exited ${code}`)
   const out = await d.outputs(RELEASE_STACK, RELEASE_REGION)

@@ -12,6 +12,7 @@ import { z } from 'zod'
 import { ToolError } from '../../core/registry.js'
 import { Cache } from '../../core/store.js'
 import { blenderTarget, runBlender } from './blender.js'
+import type { Backend } from '../../gpu/jobs.js'
 
 export const GPU_ORDER = ['OPTIX', 'CUDA', 'HIP', 'ONEAPI', 'METAL'] as const
 export const DeviceWant = z.enum(['auto', 'gpu', 'cpu'])
@@ -76,8 +77,9 @@ export const DEFAULTS = {
 
 const PROBE_TTL_S = 3600
 
-function cacheKey(where: 'local' | 'batch', bin: string): string {
+function cacheKey(where: Backend, bin: string): string {
   if (where === 'batch') return `batch:${process.env.TRACE_GPU_QUEUE ?? ''}`
+  if (where === 'function') return `function:${process.env.TRACE_TOOLS_FUNCTION ?? ''}`
   try {
     const st = statSync(bin)
     return `local:${bin}:${st.size}:${Math.round(st.mtimeMs)}` // a new Blender build at the same path is a new key
@@ -87,7 +89,7 @@ function cacheKey(where: 'local' | 'batch', bin: string): string {
 }
 
 export interface ProbeOut extends Probe {
-  where: 'local' | 'batch'
+  where: Backend
   bin: string
   cached: boolean
 }
@@ -104,7 +106,7 @@ export async function probe(opts: { refresh?: boolean; allowRemote?: boolean } =
       const p = hit === undefined ? null : ProbeSchema.safeParse(hit)
       if (p?.success) return { ...p.data, where, bin, cached: true }
     }
-    if (where === 'batch' && opts.allowRemote === false) return null
+    if (where !== 'local' && opts.allowRemote === false) return null
     const r = await runBlender({
       script: 'probe.py', job: {}, args: ['eevee', '{out:eevee.png}'], outputs: ['eevee.png'], schema: ProbeSchema, timeoutSeconds: 180,
     })
