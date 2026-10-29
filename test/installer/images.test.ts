@@ -203,6 +203,40 @@ describe('the images', () => {
     } finally { rmSync(clone, { recursive: true, force: true }) }
   })
 
+  it('get the committed lock while package.json is as committed, and warn of a lock resolving from a private registry', () => {
+    // npm install with a private registry in ~/.npmrc rewrites the lock's resolved URLs to it: npm ci in the image build
+    // then fetches from there without a token (E401)
+    const clone = mkdtempSync(join(tmpdir(), 'trace-clone-'))
+    const PUBLIC = '{"packages":{"node_modules/zod":{"resolved":"https://registry.npmjs.org/zod/-/zod-4.0.0.tgz"}}}\n'
+    const PRIVATE = PUBLIC.replace('https://registry.npmjs.org/', 'https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/shared/')
+    try {
+      mkdirSync(join(clone, 'scripts'))
+      mkdirSync(join(clone, 'agent'))
+      for (const f of ['stage-image.mjs', 'npmrc.mjs']) cpSync(join(ROOT, 'scripts', f), join(clone, 'scripts', f))
+      writeFileSync(join(clone, 'package.json'), '{"name":"t","dependencies":{"zod":"4.0.0"}}\n')
+      writeFileSync(join(clone, 'package-lock.json'), PUBLIC)
+      writeFileSync(join(clone, '.npmrc'), 'fund=false\n')
+      const git = (...a: string[]): void => { execFileSync('git', ['-C', clone, '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], { stdio: 'ignore' }) }
+      git('init', '-q')
+      git('add', '.')
+      git('commit', '-q', '-m', 'trace')
+      const stage = (): { status: number | null; stderr: string } => spawnSync(process.execPath, [join(clone, 'scripts', 'stage-image.mjs')], { encoding: 'utf8' })
+      // the lock rewritten locally, package.json as committed: the committed lock
+      writeFileSync(join(clone, 'package-lock.json'), PRIVATE)
+      let r = stage()
+      expect(r.status).toBe(0)
+      expect(r.stderr).toMatch(/package-lock.json has local changes; the images get the committed lock/)
+      expect(r.stderr).not.toMatch(/WARNING/)
+      expect(readFileSync(join(clone, 'agent', 'package-lock.json'), 'utf8')).toBe(PUBLIC)
+      // dependencies changed locally: the clone's own lock, and a warning that names the registry
+      writeFileSync(join(clone, 'package.json'), '{"name":"t","dependencies":{"zod":"4.0.1"}}\n')
+      r = stage()
+      expect(r.status).toBe(0)
+      expect(r.stderr).toMatch(/WARNING agent\/package-lock.json resolves packages from https:\/\/acme-123456789012\.d\.codeartifact/)
+      expect(readFileSync(join(clone, 'agent', 'package-lock.json'), 'utf8')).toBe(PRIVATE)
+    } finally { rmSync(clone, { recursive: true, force: true }) }
+  })
+
   it('build from the lock file npm leaves out of an installed trace', () => {
     // scripts/stage-image.mjs (npm run build) copies it, and .npmrc, into agent/, which npm does pack
     expect(existsSync(join(ROOT, 'agent', 'package-lock.json'))).toBe(true)
