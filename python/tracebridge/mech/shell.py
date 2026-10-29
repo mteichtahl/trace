@@ -8,11 +8,23 @@ Heights, in the case's frame (board bottom face at z = 0, top face at z = thickn
                  base and the lid closes over it
   lid inner face top face + tallest top-side part + above_tallest_mm (a part's own clearance wins when larger)
 
-In plan, the cavity is the board outline grown by `edge_mm`, and the outside is the cavity grown by `wall_mm`, with
-its vertical edges filleted. The lid's lip is a ring `lip_mm` wide in the inner band of the wall, `lip_h_mm` deep
-below the split; the base's wall is cut back to make room for it with the process's assembly clearance (from the
-capabilities, through settings["resolved"]), so the lip's inner face stays flush with the cavity and the board's
-edge gap is the same everywhere.
+In plan, the board sits in the inner cavity, the board outline grown by `edge_mm`. The lid's lip is a ring `lip_mm`
+wide on the lid's underside whose inner face is the inner cavity's edge, hanging `lip_h_mm` below the split; the
+base's cavity is the inner cavity grown by `lip_mm` + the process's assembly clearance (from the capabilities,
+through settings["resolved"]), so the lip drops into the base with that clearance all round, and the base's wall
+outside it is the full `wall_mm` (the outside is the base's cavity grown by `wall_mm`, with its vertical edges
+filleted). Why this joint: the earlier design cut the lip's room out of the base's wall, leaving
+wall - lip - clearance (0.6 mm with the defaults) beside the lip, under every printing process's minimum wall for a
+case this size; here no section of the base or the lip is thinner than its own parameter, so a wall_mm and lip_mm
+that meet the process minimum give a case whose built sections do (the rules measure them on the model). The lip
+also stands beside the board's edge at edge_mm, so the board's edge gap is the same all round, to the lip where it
+hangs and to the lid's wall above. The lid's wall above the split runs from the outside in to the inner cavity, so
+it is wall_mm + clearance + lip_mm thick. The lip may hang no lower than the floor's top less LIP_FLOOR_MARGIN_MM
+(see lip_room).
+
+For a CNC process (service jlccnc or a process named CNC*) the inner vertical edges of the base's and lid's
+cavities are filleted to R = depth / 10 + 0.5 mm (R0.5 for a cavity up to 3 mm deep), JLCCNC's rule for a cutter
+reaching that deep, so the inside corners can be machined.
 
 Openings are cut for connectors at an edge, and only in the wall (never the floor, the lid's top or a boss), so an
 opening that spans the split is cut through both parts.
@@ -25,9 +37,13 @@ from typing import Any
 from build123d import Axis, Face, Kind, Pos, Shape, Solid, offset
 
 from .board import Board, box, case_xy, extrude, kicad_box
-from .settings import FALLBACK_ASSEMBLY_CLEARANCE_MM, part_clearance
+from .settings import FALLBACK_ASSEMBLY_CLEARANCE_MM, InputError, part_clearance
 
 MIN_STANDOFF_MM = 3.0
+# The lip's lowest point stays this far above the base's floor: the lid bears on the base's wall, not on its lip, and
+# 0.5 mm is more than the ±0.3 mm a printed part may be off by (JLC3DP's MJF tolerance, the loosest of the printing
+# rows up to 100 mm), so a part at the far end of its tolerance still seats on the wall.
+LIP_FLOOR_MARGIN_MM = 0.5
 # How far from a corner a rest and its post may move, along either edge, to keep clear of the parts.
 SUPPORT_SEARCH_MM = 25.0
 
@@ -140,7 +156,32 @@ def heights(board: Board, settings: dict[str, Any]) -> dict[str, float]:
     return {"standoff_mm": standoff, "floor_top_z": -standoff, "split_z": t, "lid_inner_z": lid_in}
 
 
-def _fillet(solid: Solid, r: float, notes: list[str]) -> Solid:
+def lip_room(hz: dict[str, float]) -> float:
+    """The deepest lip the base has room for: from the split down to the floor's top, less LIP_FLOOR_MARGIN_MM."""
+    return round(hz["split_z"] - hz["floor_top_z"] - LIP_FLOOR_MARGIN_MM, 3)
+
+
+def check_lip(board: Board, settings: dict[str, Any]) -> None:
+    """InputError when params.lip_h_mm is deeper than the base has room for (see lip_room)."""
+    room = lip_room(heights(board, settings))
+    lip_h = settings["params"]["lip_h_mm"]
+    if lip_h > room + 1e-9:
+        raise InputError(f"params.lip_h_mm {lip_h:g} mm is deeper than the base has room for: {room:g} mm from the "
+                         f"split to {LIP_FLOOR_MARGIN_MM:g} mm above the floor (raise clearance.below_mm or lower "
+                         f"the lip)")
+
+
+def is_cnc(settings: dict[str, Any]) -> bool:
+    p = settings["process"]
+    return p["service"].lower() == "jlccnc" or p["process"].lower().startswith("cnc")
+
+
+def cnc_radius(depth: float) -> float:
+    """JLCCNC's inside corner radius for a cavity `depth` deep: R = H / 10 + 0.5 mm, R0.5 up to 3 mm."""
+    return 0.5 if depth <= 3 else round(depth / 10 + 0.5, 3)
+
+
+def _fillet(solid: Solid, r: float, notes: list[str], what: str = "corner fillet") -> Solid:
     if r <= 0:
         return solid
     try:
@@ -149,7 +190,7 @@ def _fillet(solid: Solid, r: float, notes: list[str]) -> Solid:
             raise ValueError("invalid result")
         return out
     except Exception as e:  # noqa: BLE001 - OpenCascade raises several kinds for a fillet it cannot make
-        notes.append(f"corner fillet of {r} mm could not be made ({type(e).__name__}): the outside corners are sharp")
+        notes.append(f"{what} of {r} mm could not be made ({type(e).__name__}): those corners are sharp")
         return solid
 
 
@@ -190,29 +231,45 @@ def two_part(board: Board, settings: dict[str, Any]) -> Case:
     z_bot = floor_top - prm["floor_mm"]
     z_top = lid_in + prm["lid_mm"]
 
+    check_lip(board, settings)
     cavity = grow(board.outline, clr["edge_mm"])
-    outer = _fillet(extrude(grow(cavity, prm["wall_mm"]), z_bot, z_top), prm["corner_radius_mm"], notes)
+    lip_w = prm["lip_mm"]
+    base_cavity = grow(cavity, lip_w + fit_clr)
+    outer = _fillet(extrude(grow(base_cavity, prm["wall_mm"]), z_bot, z_top), prm["corner_radius_mm"], notes)
     bb = outer.bounding_box()
     below_split = box(bb.min.X - 1, bb.min.Y - 1, z_bot - 1, bb.max.X + 1, bb.max.Y + 1, t)
     above_split = box(bb.min.X - 1, bb.min.Y - 1, t, bb.max.X + 1, bb.max.Y + 1, z_top + 1)
 
-    base: Shape = (outer & below_split) - extrude(cavity, floor_top, t + 1)
-    lid: Shape = (outer & above_split) - extrude(cavity, t - 1, lid_in)
-
-    lip_made = prm["lip_mm"] + fit_clr < prm["wall_mm"]
-    if lip_made:
-        z_lip = t - prm["lip_h_mm"]
-        base = base - extrude(grow(cavity, prm["lip_mm"] + fit_clr), z_lip, t + 1)
-        ring = extrude(grow(cavity, prm["lip_mm"]), z_lip, t) - extrude(cavity, z_lip - 1, t + 1)
-        lid = lid + ring
-    else:
-        notes.append(f"no lip: lip {prm['lip_mm']} mm + clearance {fit_clr} mm leaves no wall of the "
-                     f"{prm['wall_mm']} mm base; the lid sits on the base's wall")
+    # The pockets: the base's down to the floor's top; the lid's up to its inner face and down to the lip's foot (so
+    # the lip's inner face is the inner cavity's edge, filleted with the lid's pocket on a CNC case).
+    z_lip = t - prm["lip_h_mm"]
+    base_pocket = extrude(base_cavity, floor_top, t + 1)
+    lid_pocket = extrude(cavity, z_lip - 1, lid_in)
+    inner_r: dict[str, float] = {}
+    if is_cnc(settings):
+        for name, depth in (("base", t - floor_top), ("lid", lid_in - z_lip)):
+            r = cnc_radius(depth)
+            pocket = base_pocket if name == "base" else lid_pocket
+            done = _fillet(pocket, r, notes, what=f"inner corner fillet ({name})")
+            if done is not pocket:
+                inner_r[name] = r
+            if name == "base":
+                base_pocket = done
+            else:
+                lid_pocket = done
+    base: Shape = (outer & below_split) - base_pocket
+    ring_out: Shape = extrude(grow(cavity, lip_w), z_lip, t + 0.01)
+    if "base" in inner_r and inner_r["base"] - fit_clr > 0.05:
+        # The base pocket's corners are rounded: round the lip's outside corners concentrically (R less the
+        # clearance), so the clearance is the same at a corner as along a side and the lip's corner does not bind.
+        ring_out = _fillet(ring_out, round(inner_r["base"] - fit_clr, 3), notes, what="lip corner fillet")
+    ring = ring_out - lid_pocket
+    lid: Shape = ((outer & above_split) - lid_pocket) + ring
 
     holes = [h for h in board.facts.get("holes") or [] if h.get("kind") == "mounting"]
     standoff = hz["standoff_mm"]
     if holes:
-        # Bosses stay inside the cavity, so one near the board edge never grows into the wall where the lid's lip sits.
+        # Bosses stay inside the inner cavity, so one near the board edge never grows into the band the lip drops into.
         inside = extrude(cavity, floor_top - 1, t)
         for i, h in enumerate(holes, 1):
             ref = h.get("ref") or f"hole{i}"
@@ -240,7 +297,7 @@ def two_part(board: Board, settings: dict[str, Any]) -> Case:
         if len(spots) < 3:
             notes.append("fewer than three supports: the board is not held level; add mounting holes or free a corner")
     case.joints.append({"id": "joint:lid-base", "type": "press_fit", "connects": ["lid", "base"],
-                        "clearance_mm": fit_clr if lip_made else None})
+                        "clearance_mm": fit_clr})
 
     wall_band = outer - extrude(cavity, z_bot - 1, z_top + 1)
     openings = []
@@ -269,7 +326,7 @@ def two_part(board: Board, settings: dict[str, Any]) -> Case:
     case.meta = {
         **hz, "floor_bottom_z": z_bot, "lid_top_z": z_top,
         "wall_mm": prm["wall_mm"], "floor_mm": prm["floor_mm"], "lid_mm": prm["lid_mm"],
-        "lip_gap_mm": fit_clr if lip_made else None, "lip_mm": prm["lip_mm"] if lip_made else None,
+        "lip_gap_mm": fit_clr, "lip_mm": lip_w, "lip_bottom_z": z_lip, "inner_radius_mm": inner_r,
         "base_cavity_depth_mm": t - floor_top, "lid_cavity_depth_mm": lid_in - t,
         "openings": openings,
     }

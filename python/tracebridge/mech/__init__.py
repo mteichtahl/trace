@@ -161,7 +161,7 @@ def run(facts: dict[str, Any], settings: dict[str, Any], capabilities: dict[str,
         case = child.build_in_child(script, facts, settings)
 
     fit = fit_check(case, board, settings)
-    rules = rules_check(case, settings, capabilities)
+    rules = rules_check(case, settings, capabilities, board if case.source == "script" else None)
     out = Path(out_dir)
     files = export(case, out, formats)  # may add a note (3MF skipped)
     notes += case.notes

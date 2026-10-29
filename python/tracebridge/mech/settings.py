@@ -19,7 +19,7 @@ DEFAULTS: dict[str, Any] = {
         "wall_mm": 2.0, "floor_mm": 2.0, "lid_mm": 2.0,
         "corner_radius_mm": 3.0,
         "standoff_d_mm": 6.0,
-        "lip_mm": 1.2, "lip_h_mm": 3.0,
+        "lip_mm": 2.0, "lip_h_mm": 3.0,
     },
     "clearance": {"edge_mm": 0.5, "above_tallest_mm": 1.0, "below_mm": 1.0, "parts": {}},
     "openings": {"skip": [], "extra_mm": 0.5},

@@ -109,11 +109,17 @@ def test_template_build_passes(built):
     assert r["source"] == "script" and r["board_sha256"] == "0" * 64
     names = [p["name"] for p in r["case"]["parts"]]
     assert names == ["base", "lid"]
-    # 50 x 40 board + 2 x 0.5 edge gap + 2 x 2.0 wall.
-    assert r["case"]["bbox_mm"][:2] == [55.0, 45.0]
+    # 50 x 40 board + 2 x (0.5 edge gap + 2.0 lip + 0.2 lip clearance + 2.0 base wall).
+    assert r["case"]["bbox_mm"][:2] == [59.4, 49.4]
     assert [f["size"] for f in r["fasteners"]] == ["M3"] * 4
     assert all(row["ok"] for row in r["rules"]), r["rules"]
     assert all(row["source"] == SOURCE for row in r["rules"])
+    # The built sections, measured on the model, each meet MJF's 2.0 mm for a part over 50 mm.
+    built = {row["rule"]: row for row in r["rules"] if row["basis"] == "model"}
+    for k in ("base_wall", "lip_wall", "lid_wall", "base_floor", "lid_top"):
+        assert built[k]["limit"] == 2.0 and built[k]["measured"] >= 2.0 - 1e-3, built[k]
+    assert built["base_wall"]["measured"] == pytest.approx(2.0, abs=0.01)
+    assert built["lip_wall"]["measured"] == pytest.approx(2.0, abs=0.01)
     assert r["_wall_seconds"] < 5.0
 
 
@@ -417,3 +423,27 @@ def test_bad_part_name_from_script(tmp_path):
 
 def test_version_is_a_string():
     assert isinstance(mech.__version__, str) and mech.__version__ == "1"
+
+
+def test_built_sections_are_measured(tmp_path):
+    # The old default lip (1.2 mm) is under MJF's 2.0 mm; the built row says so even though wall_mm meets it.
+    r = run(board_facts(), settings(params={"lip_mm": 1.2}), CAPS, tmp_path / "a", formats=["step"])
+    rows = {row["rule"]: row for row in r["rules"]}
+    assert rows["wall"]["ok"] is True
+    assert rows["lip_wall"]["ok"] is False and rows["lip_wall"]["measured"] == pytest.approx(1.2, abs=0.01)
+    assert rows["lip_wall"]["basis"] == "model"
+    # A script that thins the base's wall from outside: the parameter still says 2 mm, the model does not.
+    script = tmp_path / "case.py"
+    script.write_text(
+        "from build123d import Pos, Solid\n"
+        "from tracebridge.mech import shell\n\n"
+        "def build(board, settings):\n"
+        "    case = shell.two_part(board, settings)\n"
+        "    bb = case.parts['base'].bounding_box()\n"
+        "    case.parts['base'] = case.parts['base'] - Pos(bb.min.X - 1, bb.min.Y - 1, bb.min.Z - 1) * "
+        "Solid.make_box(2.0, bb.size.Y + 2, bb.size.Z + 2)\n"
+        "    return case\n")
+    r = run(board_facts(), settings(), CAPS, tmp_path / "b", script=script, formats=["step"])
+    rows = {row["rule"]: row for row in r["rules"]}
+    assert rows["wall"]["ok"] is True and rows["base_wall"]["ok"] is False
+    assert rows["base_wall"]["measured"] == pytest.approx(1.0, abs=0.01)

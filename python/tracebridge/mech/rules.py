@@ -7,15 +7,23 @@ A row is
   {"rule", "ok": true | false | null, "detail", "measured", "limit", "source", "basis": "params" | "bbox" | "model"}
 
 where `basis` says what was measured: the case script's parameters, the bounding box of a handed-in file, or the
-built model's own numbers (pilot holes, the lip gap). `ok: null` means the rule could not be checked (said in the
+built model's own numbers (pilot holes, the lip gap, and the built sections below).
+
+Built sections (basis "model", for a script's case, given the board): the thinnest solid stretch that rays through
+the model cross, measured in this process on the solids it read, at a few points on each side: `base_wall` (the
+base's outer wall, at heights beside the lid's lip and below it), `lip_wall` (the lid's lip, halfway down it),
+`lid_wall` (the lid's wall above the split), `base_floor` (the base's floor, under the board) and `lid_top` (the lid's
+top over the board). Each must meet the same minimum as the wall parameter. A section a ray does not find (a
+script that removed it) is reported with `ok: false`. `ok: null` means the rule could not be checked (said in the
 detail), and it does not fail the build.
 """
 from __future__ import annotations
 
 from typing import Any
 
+from .probe import intervals
 from .settings import find_process
-from .shell import Case
+from .shell import Case, heights, is_cnc
 
 METALS = ("alumin", "steel", "stainless", "brass", "copper", "titanium", "316l", "tc4", "6061", "7075", "magnesium")
 
@@ -44,17 +52,76 @@ def _min_wall(row: dict[str, Any], size: float) -> float | None:
     return table[-1][1] if table else None
 
 
-def _is_cnc(settings: dict[str, Any]) -> bool:
-    p = settings["process"]
-    return p["service"].lower() == "jlccnc" or p["process"].lower().startswith("cnc")
+_is_cnc = is_cnc
+
+SECTIONS = (("base_wall", "base", "the base's wall"), ("lip_wall", "lid", "the lid's lip"),
+            ("lid_wall", "lid", "the lid's wall"), ("base_floor", "base", "the base's floor"),
+            ("lid_top", "lid", "the lid's top"))
+
+
+def built_sections(case: Case, board: Any, settings: dict[str, Any]) -> dict[str, float | None]:
+    """The thinnest measured thickness of each built section (see the module docstring), or None when not found."""
+    hz = heights(board, settings)
+    t, floor_top, lid_in = hz["split_z"], hz["floor_top_z"], hz["lid_inner_z"]
+    z_lip = t - settings["params"]["lip_h_mm"]
+    bb = board.outline.bounding_box()
+    cx, cy = (bb.min.X + bb.max.X) / 2, (bb.min.Y + bb.max.Y) / 2
+    fx = [bb.min.X + f * bb.size.X for f in (0.25, 0.5, 0.75)]
+    fy = [bb.min.Y + f * bb.size.Y for f in (0.25, 0.5, 0.75)]
+
+    def side_rays(z: float):
+        return ([((cx, y, z), (s, 0, 0)) for y in fy for s in (-1, 1)]
+                + [((x, cy, z), (0, s, 0)) for x in fx for s in (-1, 1)])
+
+    def outermost(part: str, rays) -> float | None:
+        shape = case.parts.get(part)
+        ds = [iv[-1][1] - iv[-1][0] for o, d in rays if (iv := intervals(shape, o, d))]
+        return round(min(ds), 3) if ds else None
+
+    def first(part: str, rays) -> float | None:
+        shape = case.parts.get(part)
+        ds = [iv[0][1] - iv[0][0] for o, d in rays if (iv := intervals(shape, o, d))]
+        return round(min(ds), 3) if ds else None
+
+    lip_mid = (z_lip + t) / 2
+    below_lip = (floor_top + z_lip) / 2 if z_lip - floor_top > 0.2 else None
+    base_z = [lip_mid] + ([below_lip] if below_lip is not None else [])
+    walls = [outermost("base", side_rays(z)) for z in base_z]
+    walls = [w for w in walls if w is not None]
+    pts = [(x, y) for x in fx for y in fy]
+    return {
+        "base_wall": min(walls) if walls else None,
+        # From inside the cavity outward, the lip is the lid's first solid stretch halfway down it.
+        "lip_wall": first("lid", side_rays(lip_mid)),
+        "lid_wall": outermost("lid", side_rays(t + min(1.0, (lid_in - t) / 2))),
+        "base_floor": outermost("base", [((x, y, floor_top + 0.05), (0, 0, -1)) for x, y in pts]),
+        "lid_top": outermost("lid", [((x, y, lid_in - 0.05), (0, 0, 1)) for x, y in pts]),
+    }
+
+
+def _section_rows(case: Case, board: Any, settings: dict[str, Any], wmin: float, who: str, src: str | None,
+                  kind_note: str) -> list[dict[str, Any]]:
+    rows = []
+    found = built_sections(case, board, settings)
+    for rule, part, what in SECTIONS:
+        v = found[rule]
+        if v is None:
+            rows.append(_row(rule, False, f"{what} was not found in the {part} (a ray through it met no solid)",
+                             None, wmin, src, "model"))
+            continue
+        ok = v >= wmin - 1e-3
+        rows.append(_row(rule, ok, f"{what} as built is {_fmt(v)} mm, {'meeting' if ok else 'under'} {who}'s "
+                         f"{_fmt(wmin)} mm{kind_note}", v, wmin, src, "model"))
+    return rows
 
 
 def _fmt(v: float) -> str:
     return f"{v:g}"
 
 
-def rules_check(case: Case, settings: dict[str, Any], capabilities: dict[str, Any]) -> list[dict[str, Any]]:
-    """The rule rows for the case (see the module docstring)."""
+def rules_check(case: Case, settings: dict[str, Any], capabilities: dict[str, Any],
+                board: Any = None) -> list[dict[str, Any]]:
+    """The rule rows for the case (see the module docstring); with the board, a script's built sections too."""
     proc = settings["process"]
     label = f"{proc['process']} {proc['material']}"
     dims = _dims(case)
@@ -80,6 +147,8 @@ def rules_check(case: Case, settings: dict[str, Any], capabilities: dict[str, An
                 v = prm[f"{k}_mm"]
                 rows.append(_row(k, v >= wmin, f"{k} {_fmt(v)} mm {'meets' if v >= wmin else 'is under'} CNC's "
                                  f"{_fmt(wmin)} mm minimum for {kind}", v, wmin, src, basis))
+            if board is not None:
+                rows += _section_rows(case, board, settings, wmin, "CNC", src, f" minimum for {kind}")
         if not from_file and cnc.get("corner_radius"):
             depth = max(case.meta.get("base_cavity_depth_mm", 0.0), case.meta.get("lid_cavity_depth_mm", 0.0))
             need = 0.5 if depth <= 3 else round(depth / 10 + 0.5, 2)
@@ -107,6 +176,9 @@ def rules_check(case: Case, settings: dict[str, Any], capabilities: dict[str, An
             ok = v >= wmin
             rows.append(_row(k, ok, f"{k} {_fmt(v)} mm {'meets' if ok else 'is under'} {proc['process']}'s "
                              f"{_fmt(wmin)} mm for a {_fmt(round(largest))} mm part", v, wmin, src, basis))
+        if board is not None:
+            rows += _section_rows(case, board, settings, wmin, proc["process"], src,
+                                  f" for a {_fmt(round(largest))} mm part")
 
     mx = row.get("max_mm")
     mn = row.get("min_mm")
