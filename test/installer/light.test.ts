@@ -214,6 +214,14 @@ describe('the preflight', () => {
     expect(left.checks.find((c) => c.id === 'leftovers')).toMatchObject({ status: 'fail', action: { id: 'clear-leftovers' } })
     expect(left.checks.find((c) => c.id === 'cognito.domain')?.detail).toMatch(/trace-123456789012 belongs to user pool us-east-1_OLD/)
     expect((await preflight({ ...IN, prefix: 'my-aws-lab' }, deps())).checks.find((c) => c.id === 'cognito.domain')?.status).toBe('fail')
+    // a tools repository a failed deploy kept (the stack has no ToolsImageUri): offered for deletion, as nothing else
+    const tools = ['the ECR repository trace-agent', 'the ECR repository trace-tools']
+    const kept = await preflight(IN, deps({ leftovers: async () => tools, stack: async () => ({ status: 'UPDATE_ROLLBACK_COMPLETE', outputs: {} }) }))
+    expect(kept.checks.find((c) => c.id === 'leftovers.tools')).toMatchObject({ status: 'fail', action: { id: 'delete-tools-repository', params: { prefix: 'trace' } } })
+    expect(kept.checks.find((c) => c.id === 'leftovers')).toBeUndefined()
+    // the stack's own: nothing to say
+    const own = await preflight(IN, deps({ leftovers: async () => tools, stack: async () => ({ status: 'UPDATE_COMPLETE', outputs: { ToolsImageUri: '1.dkr.ecr.us-east-1.amazonaws.com/trace-tools:abc' } }) }))
+    expect(own.checks.find((c) => c.id === 'leftovers.tools')).toBeUndefined()
   })
 
   it('names the exact permission a repository is missing, and what that costs', async () => {

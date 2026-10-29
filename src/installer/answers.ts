@@ -307,7 +307,7 @@ export const EventSchema = z.discriminatedUnion('type', [
 export type InstallEvent = z.infer<typeof EventSchema>
 
 /** One preflight finding (src/installer/preflight.ts), as the page shows it. */
-export const FIX_ACTIONS = ['bedrock-use-case', 'bedrock-agreement', 'quota-increase', 'delete-failed-stack', 'continue-rollback', 'delete-cognito-domain', 'share-source', 'clear-leftovers'] as const
+export const FIX_ACTIONS = ['bedrock-use-case', 'bedrock-agreement', 'quota-increase', 'delete-failed-stack', 'continue-rollback', 'delete-cognito-domain', 'share-source', 'clear-leftovers', 'delete-tools-repository'] as const
 export type FixAction = (typeof FIX_ACTIONS)[number]
 export interface Check {
   id: string

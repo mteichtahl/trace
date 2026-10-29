@@ -187,7 +187,7 @@ export function Note({ tone, title, children, className }: { tone: Tone; title?:
   )
 }
 
-const DESTRUCTIVE = new Set(['delete-failed-stack', 'clear-leftovers', 'delete-cognito-domain'])
+const DESTRUCTIVE = new Set(['delete-failed-stack', 'clear-leftovers', 'delete-cognito-domain', 'delete-tools-repository'])
 
 /** One finding of the checks: what it is, what to do, and the installer's own fix when it has one. */
 export function Finding({ c, extra }: { c: Check; extra?: ReactNode }) {

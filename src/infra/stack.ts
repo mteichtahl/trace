@@ -95,7 +95,7 @@ import { EDGE_REGION, edgeNeeded, edgeStackName } from './edge.js'
 import { SELF_WRITABLE, TraceWeb, addWebClient, traceWebProps } from './web.js'
 import { ACCESS_PREFIX, AGENT_FACTS, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
-  CDK_QUALIFIER, CENTRAL_BUCKET_OUTPUT, INSTALLATION_PREFIX, GPU_IMAGE_BUILD_OUTPUT, type InfraProps, SELF_UPDATE_OUTPUT, ciRunnerOutput, LAYOUT_OUTPUT, selfUpdateRoleName, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, EXTERNAL_RESOURCE_SERVER, cpuEnabled, toolsEnabled, webModel,
+  CDK_QUALIFIER, CENTRAL_BUCKET_OUTPUT, INSTALLATION_PREFIX, GPU_IMAGE_BUILD_OUTPUT, type InfraProps, SELF_UPDATE_OUTPUT, ciRunnerOutput, LAYOUT_OUTPUT, selfUpdateRoleName, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, EXTERNAL_RESOURCE_SERVER, cpuEnabled, toolsEnabled, TOOLS_IMAGE_OUTPUT, webModel,
   githubSubjects, kbEnabled, projectRefs, projectSettings,
 } from './props.js'
 
@@ -297,7 +297,7 @@ export class TraceStack extends Stack {
       // and no reference to the flat layout's tools stack, which takes the provider's token from this one)
       for (const f of [start, poll]) f.addToRolePolicy(new iam.PolicyStatement({ actions: ['codebuild:StartBuild', 'codebuild:BatchGetBuilds'], resources: [toolsImageProjectArn(this, cfg.prefix)] }))
       return buildToolsImage(scope, {
-        prefix: cfg.prefix, keep, retainData: cfg.retainData, source, buildLogs, serviceToken: provider.serviceToken,
+        prefix: cfg.prefix, source, buildLogs, serviceToken: provider.serviceToken,
         environment: imageBuildEnv(cfg.images, 'tools', contentTag), dependsOn: [start, poll],
       })
     }
@@ -704,7 +704,9 @@ export class TraceStack extends Stack {
     new CfnOutput(this, CENTRAL_BUCKET_OUTPUT, { value: central.bucketName })
     new CfnOutput(this, 'GithubSecretArn', { value: githubToken.secretArn, description: 'The API\'s GitHub token (across projects); each project has its own (Project<hash>GithubSecretArn)' })
     new CfnOutput(this, 'AgentImageUri', { value: imageUri })
-    if (tools) new CfnOutput(this, 'ToolsImageUri', { value: tools.uri, description: 'The projects\' tools functions\' image (agent/Dockerfile.tools)' })
+    // in either layout: the installer reads it to tell its own tools repository from one a failed deploy left behind
+    const toolsUri = tools?.uri ?? flatTools?.imageUri
+    if (toolsUri) new CfnOutput(this, TOOLS_IMAGE_OUTPUT, { value: toolsUri, description: 'The projects\' tools functions\' image (agent/Dockerfile.tools)' })
     new CfnOutput(this, 'Region', { value: cfg.region })
     new CfnOutput(this, 'ApiRuntimeArn', { value: api.attrAgentRuntimeArn })
     new CfnOutput(this, 'UserPoolId', { value: users.userPoolId })
