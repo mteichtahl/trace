@@ -155,9 +155,10 @@ export function stackQuotaErrors(stack: Stack, hint: string): string[] {
   return errors
 }
 
-/** What the image build doesn't need (keeps the source asset small and its hash stable). */
+/** What the image build doesn't need (keeps the source asset small and its hash stable), and what must not reach it:
+ * credentials. `.npmrc` among them: the images read agent/npmrc, its settings without credentials (scripts/npmrc.mjs). */
 export const SOURCE_EXCLUDE = [
-  '.env', '.env.*', '**/.env', '**/.env.*', '*.pem', '**/*.pem', '*.key', '**/*.key', '.aws', '**/.aws', '.npmrc.local', '**/id_rsa*',
+  '.env', '.env.*', '**/.env', '**/.env.*', '*.pem', '**/*.pem', '*.key', '**/*.key', '.aws', '**/.aws', '.npmrc', '**/.npmrc', '.npmrc.local', '**/id_rsa*',
   '.git', 'node_modules', '**/node_modules', 'dist', 'cdk.out', '.venv', '**/__pycache__', '**/*.pyc', 'test', 'python/tests',
   '.trace', '*.db', '*.db-*', 'coverage', 'web/**',
 ]
