@@ -139,8 +139,19 @@ def test_no_mounting_holes_uses_rests_and_posts(tmp_path):
     facts["holes"] = []
     r = run(facts, settings(), CAPS, tmp_path, formats=["step"])
     assert r["fit"]["status"] == "pass", r["fit"]["summary"]
-    assert any("corner rests" in n for n in r["notes"])
+    assert any("4 rests" in n and "4 lid posts" in n for n in r["notes"])
     assert r["fasteners"] == []
+
+
+def test_supports_move_off_a_part_in_a_corner(tmp_path):
+    # A tall header in the north-east corner, where a fixed corner post would land on it (the sample board's J2).
+    facts = board_facts()
+    facts["holes"] = []
+    facts["parts"].append(part("J2", 144.0, 101.0, 148.0, 111.0, 11.0, mount="through_hole"))
+    r = run(facts, settings(), CAPS, tmp_path, formats=["step"])
+    assert r["fit"]["status"] == "pass", r["fit"]["summary"]
+    assert not [c for c in r["fit"]["clashes"] if c["ref"] == "J2"]
+    assert any("4 rests" in n for n in r["notes"])
 
 
 def test_too_tight_lid_clashes_and_names_part(tmp_path):

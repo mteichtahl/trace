@@ -97,7 +97,9 @@ describe.skipIf(!engine.ok)('mech.init and mech.build on the sample board', () =
 
       const b = await call('mech.build', {})
       expect(b.run_id).toMatch(/^[0-9a-f]{16}$/)
-      expect(['pass', 'fail']).toContain(b.fit_status)
+      // the sample board has no mounting holes and a tall header (J2) in a corner: the rests and posts move off it
+      expect(b.fit_status, b.fit_summary).toBe('pass')
+      expect(b.passed).toBe(true)
       expect(b.case.parts.map((p: Dict) => p.name).sort()).toEqual(['base', 'lid'])
       for (const f of ['case.step', 'case-base.step', 'case-lid.step', 'case-base.stl', 'case-lid.stl', 'fit.json', 'case.jsonld']) {
         expect(b.files, f).toContain(`mechanical/out/${f}`)
@@ -121,14 +123,18 @@ describe.skipIf(!engine.ok)('mech.init and mech.build on the sample board', () =
       expect(h.case.parts.map((p: Dict) => p.name).sort()).toEqual(['base', 'lid'])
       expect((await call('mech.fit', {})).stale).toBe(false)
 
-      // an order sheet only from a passing build, or with a waiver
-      if (h.passed) expect((await call('mech.order', {})).written).toEqual(['mechanical/out/order.json', 'mechanical/out/order.md'])
-      else {
-        await expect(call('mech.order', {})).rejects.toThrow(/does not pass/)
-        const o = await call('mech.order', { waiver: 'a first print to check the header heights', format: 'step' })
-        expect(o.order).toMatchObject({ service: 'jlc3dp', process: 'MJF', material: 'PA12-HP', quantity: 5, files: ['mechanical/out/case-base.step', 'mechanical/out/case-lid.step'] })
-        expect(readFileSync(join(repo, 'mechanical', 'out', 'order.md'), 'utf8')).toMatch(/trace places no order/)
-      }
+      // an order sheet from a passing build
+      expect(h.passed).toBe(true)
+      expect((await call('mech.order', {})).written).toEqual(['mechanical/out/order.json', 'mechanical/out/order.md'])
+      expect(readFileSync(join(repo, 'mechanical', 'out', 'order.md'), 'utf8')).toMatch(/trace places no order/)
+
+      // a failing build orders only with a waiver
+      await call('mech.settings', { clearance: [{ ref: 'J2', mm: 40, reason: 'room for a ribbon cable bend' }] })
+      const f = await call('mech.build', { formats: ['step'] })
+      expect(f.passed).toBe(false)
+      await expect(call('mech.order', {})).rejects.toThrow(/does not pass/)
+      const o = await call('mech.order', { waiver: 'a first print to check the header heights', format: 'step' })
+      expect(o.order).toMatchObject({ service: 'jlc3dp', process: 'MJF', material: 'PA12-HP', quantity: 5, files: ['mechanical/out/case-base.step', 'mechanical/out/case-lid.step'] })
     } finally {
       process.chdir(cwd)
     }

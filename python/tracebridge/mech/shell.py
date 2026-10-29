@@ -28,6 +28,47 @@ from .board import Board, box, case_xy, extrude, kicad_box
 from .settings import FALLBACK_ASSEMBLY_CLEARANCE_MM, part_clearance
 
 MIN_STANDOFF_MM = 3.0
+# How far from a corner a rest and its post may move, along either edge, to keep clear of the parts.
+SUPPORT_SEARCH_MM = 25.0
+
+
+def support_spots(board: Board, settings: dict[str, Any], side: float) -> list[tuple[float, float]]:
+    """For a board without mounting holes: the lower-left corner (case frame) of one square support `side` wide near
+    each corner of the outline, found by stepping in from the corner 0.5 mm at a time along both edges, nearest
+    first. A spot is clear when the square lies on the board and is at least each part's clearance away, in plan,
+    from that part: top-side bodies against the lid's post, bottom-side bodies and through-hole leads against the
+    floor's rest. Corners with no clear spot within SUPPORT_SEARCH_MM are left out."""
+    c = settings["clearance"]
+    keep_out: list[tuple[float, float, float, float]] = []  # case-frame rectangles grown by the clearance they need
+    for ref, p in board.info.items():
+        b = p["box"]
+        x0, y0 = case_xy(b["min_x"], b["max_y"])
+        x1, y1 = case_xy(b["max_x"], b["min_y"])
+        own = part_clearance(settings, ref)
+        need = max(c["above_tallest_mm"], c["below_mm"], own or 0.0)
+        keep_out.append((x0 - need, y0 - need, x1 + need, y1 + need))
+    outline = board.outline
+    area = side * side
+
+    def clear(x: float, y: float) -> bool:
+        if any(x < kx1 and x + side > kx0 and y < ky1 and y + side > ky0 for kx0, ky0, kx1, ky1 in keep_out):
+            return False
+        sq = Face.make_rect(side, side).moved(Pos(x + side / 2, y + side / 2, 0))
+        return abs((sq & outline).area - area) < 1e-6 * max(area, 1.0)
+
+    ob = outline.bounding_box()
+    steps = [i * 0.5 for i in range(int(SUPPORT_SEARCH_MM / 0.5) + 1)]
+    order = sorted(((dx, dy) for dx in steps for dy in steps), key=lambda d: (d[0] + d[1], d[0]))
+    spots: list[tuple[float, float]] = []
+    for sx_sign, sy_sign in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+        x_edge = ob.min.X if sx_sign > 0 else ob.max.X - side
+        y_edge = ob.min.Y if sy_sign > 0 else ob.max.Y - side
+        for dx, dy in order:
+            x, y = x_edge + sx_sign * dx, y_edge + sy_sign * dy
+            if clear(x, y) and all(abs(x - px) >= side or abs(y - py) >= side for px, py in spots):
+                spots.append((x, y))
+                break
+    return spots
 FAR = 1000.0  # past any case: an opening reaches this far outward, a column this far up
 # Screw sizes by mounting-hole diameter (the contract's table), with pilot holes for thread-forming screws in plastic
 # at 0.8 x the nominal diameter.
@@ -185,16 +226,19 @@ def two_part(board: Board, settings: dict[str, Any]) -> Case:
             case.joints.append({"id": f"joint:{ref}", "type": "fastened", "connects": ["board", "base"],
                                 "fastener": f"fastener:{ref}"})
     else:
-        # No mounting holes: the board is clamped between four rests on the floor and four posts in the lid.
-        ob = board.outline.bounding_box()
+        # No mounting holes: the board is clamped between rests on the floor and posts in the lid, one pair near each
+        # corner, each at the nearest spot that keeps every part's clearance (a connector often sits in a corner).
         side = prm["standoff_d_mm"]
-        footprint = extrude(board.outline, floor_top - 1, z_top + 1)
-        for cx, cy in ((ob.min.X, ob.min.Y), (ob.max.X, ob.min.Y), (ob.min.X, ob.max.Y), (ob.max.X, ob.max.Y)):
-            sx = cx if cx == ob.min.X else cx - side
-            sy = cy if cy == ob.min.Y else cy - side
-            base = base + (box(sx, sy, floor_top - 0.01, sx + side, sy + side, 0.0) & footprint)
-            lid = lid + (box(sx, sy, t, sx + side, sy + side, lid_in + 0.01) & footprint)
-        notes.append("no mounting holes: the board rests on four corner rests and is held by four lid posts")
+        spots = support_spots(board, settings, side)
+        for sx, sy in spots:
+            base = base + box(sx, sy, floor_top - 0.01, sx + side, sy + side, 0.0)
+            lid = lid + box(sx, sy, t, sx + side, sy + side, lid_in + 0.01)
+        missed = 4 - len(spots)
+        notes.append(f"no mounting holes: the board rests on {len(spots)} rests and is held by {len(spots)} lid posts"
+                     + (f"; {missed} corner{'s' if missed > 1 else ''} had no clear spot within "
+                        f"{SUPPORT_SEARCH_MM:g} mm" if missed else ""))
+        if len(spots) < 3:
+            notes.append("fewer than three supports: the board is not held level; add mounting holes or free a corner")
     case.joints.append({"id": "joint:lid-base", "type": "press_fit", "connects": ["lid", "base"],
                         "clearance_mm": fit_clr if lip_made else None})
 
