@@ -92,6 +92,7 @@ def test_template_build_passes(built):
     r, _ = built
     fit = r["fit"]
     assert fit["status"] == "pass", fit["summary"]
+    assert fit["enclosed"] is True
     assert fit["clashes"] == []
     assert all(g["ok"] for g in fit["gaps"])
     # The board's edge gap is the configured clearance, measured on the solids.
@@ -309,3 +310,38 @@ def test_cli_exit_codes(tmp_path):
 
     p, res = _cli(tmp_path / "missing", script=tmp_path / "nope.py")
     assert p.returncode == 2 and "no case script" in res["error"]
+
+
+def _foreign_step(built_out: Path, tmp_path: Path, name: str, move) -> Path:
+    from build123d import Compound, export_step, import_step
+    shape = import_step(built_out / "case.step")
+    moved = Compound(children=[move * s for s in shape.solids()])
+    path = tmp_path / f"{name}.step"
+    export_step(moved, path)
+    return path
+
+
+@pytest.mark.parametrize("name,move", [("offset", Pos(500, 0, 0)), ("unflipped", Pos(0, 240, 0))])
+def test_foreign_frame_step_fails_not_around(built, tmp_path, name, move):
+    # 500 mm away, or in KiCad's y-down frame (y 100..140 instead of -140..-100): every gap would measure nothing.
+    _, out = built
+    path = _foreign_step(out, tmp_path, name, move)
+    r = run(board_facts(), settings(source="file", file=f"mechanical/{name}.step"), CAPS, tmp_path / "out",
+            case_file=path, formats=["step"])
+    fit = r["fit"]
+    assert fit["status"] == "fail" and fit["enclosed"] is False
+    assert "the case is not around the board" in fit["summary"] and "KiCad's y is down" in fit["summary"]
+    assert gap(r, "board", "edge")["ok"] is False
+    assert gap(r, "U1", "above")["ok"] is False
+
+
+def test_script_deleting_the_lid_fails(tmp_path):
+    script = tmp_path / "case.py"
+    script.write_text("from tracebridge.mech import shell\n\ndef build(board, settings):\n"
+                      "    case = shell.two_part(board, settings)\n    del case.parts['lid']\n    return case\n")
+    r = run(board_facts(), settings(), CAPS, tmp_path / "out", script=script, formats=["step"])
+    fit = r["fit"]
+    assert fit["status"] == "fail" and fit["enclosed"] is False
+    assert "the case is not around the board" in fit["summary"]
+    u1 = gap(r, "U1", "above")
+    assert u1["ok"] is False and u1["measured_mm"] is None and u1["detail"] == "nothing covers U1 from above"

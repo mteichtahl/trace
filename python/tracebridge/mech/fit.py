@@ -15,6 +15,18 @@ Two kinds of finding, each named by part reference so a person can waive them on
                           much room all round), and for a connector with an opening (its own clearance, default 0:
                           it may touch its opening)
 
+A part with nothing of the case over it (top side) or under it (bottom side, or its leads on the far face) fails
+its gap: an open column is a missing lid or floor, not room enough ("nothing covers U1 from above").
+
+The case must be around the board: rays from the board's centre out through each side (±x, ±y at mid-thickness),
+and up from its top face and down from its bottom face, must each meet the case, and the board's edge gap must not
+be over EDGE_SANE_MAX (max(10 x edge_mm, 20 mm)). Otherwise the board/edge row fails with "the case is not around
+the board (likely a different origin or frame; KiCad's y is down)": a handed-in STEP exported in another origin, or
+in KiCad's own y-down frame, or a script that dropped the lid, would otherwise pass every gap by measuring nothing.
+The sane maximum is ten times the clearance asked for (a person who asks for a roomy case gets one), and never under
+20 mm (a case with an edge clearance of 0 may still have bays or cable room beside the board); a wall further than
+that from the board is not a case built around it.
+
 Measured with OpenCascade's exact distance query on the solids; every number is in millimetres, rounded to 0.001.
 """
 from __future__ import annotations
@@ -24,11 +36,18 @@ from typing import Any
 from build123d import Shape
 
 from .board import Board, box, extrude, kicad_box
+from .probe import first_hit
 from .settings import part_clearance
 from .shell import FAR, Case
 
 CLASH_MIN_MM3 = 0.001
 GAP_TOL_MM = 1e-3
+NOT_AROUND = "the case is not around the board (likely a different origin or frame; KiCad's y is down)"
+
+
+def edge_sane_max(edge_mm: float) -> float:
+    """The largest board edge gap that is still a case built around the board (see the module docstring)."""
+    return max(10.0 * edge_mm, 20.0)
 
 
 def _vol(s: Shape | None) -> float:
@@ -59,11 +78,35 @@ def distance(a: Shape, parts: list[Shape]) -> float | None:
     return min(ds) if ds else None
 
 
+_NOTHING = {"above": "from above", "below": "from below", "around": "anywhere", "edge": "at its edge"}
+
+
 def _gap(ref: str, where: str, measured: float | None, required: float) -> dict[str, Any]:
     m = None if measured is None else round(measured, 3)
-    # Nothing in that direction at all (an open column) is room enough.
-    ok = True if measured is None else measured >= required - GAP_TOL_MM
-    return {"ref": ref, "where": where, "measured_mm": m, "required_mm": round(required, 3), "ok": ok}
+    # Nothing of the case in that direction at all is a missing lid, floor or wall, not room enough.
+    ok = False if measured is None else measured >= required - GAP_TOL_MM
+    g = {"ref": ref, "where": where, "measured_mm": m, "required_mm": round(required, 3), "ok": ok}
+    if measured is None:
+        g["detail"] = f"nothing covers {ref} {_NOTHING[where]}"
+    return g
+
+
+def enclosure_misses(board: Board, solids: list[Shape]) -> list[str]:
+    """The directions in which nothing of the case is met from the board (see the module docstring): of west, east,
+    north, south (rays at mid-thickness from the board's centre line, three across each side so a connector's
+    opening on that line does not count as a miss), top and bottom (from the face's centre and two more points)."""
+    bb = board.outline.bounding_box()
+    cx, cy = (bb.min.X + bb.max.X) / 2, (bb.min.Y + bb.max.Y) / 2
+    zm = (board.top_z + board.bottom_z) / 2
+    fx = [bb.min.X + f * bb.size.X for f in (0.25, 0.5, 0.75)]
+    fy = [bb.min.Y + f * bb.size.Y for f in (0.25, 0.5, 0.75)]
+    rays = {
+        "west": [((cx, y, zm), (-1, 0, 0)) for y in fy], "east": [((cx, y, zm), (1, 0, 0)) for y in fy],
+        "north": [((x, cy, zm), (0, 1, 0)) for x in fx], "south": [((x, cy, zm), (0, -1, 0)) for x in fx],
+        "top": [((x, cy, board.top_z), (0, 0, 1)) for x in fx],
+        "bottom": [((x, cy, board.bottom_z), (0, 0, -1)) for x in fx],
+    }
+    return [side for side, rs in rays.items() if not any(first_hit(solids, o, d) is not None for o, d in rs)]
 
 
 def _column(board: Board, p: dict[str, Any], up: bool) -> Shape:
@@ -123,7 +166,17 @@ def fit_check(case: Case, board: Board, settings: dict[str, Any]) -> dict[str, A
     gaps = []
     footprint = extrude(board.outline, -FAR, FAR)
     walls = [c - footprint for c in solids]
-    gaps.append(_gap("board", "edge", distance(board.slice, walls), clr["edge_mm"]))
+    edge = _gap("board", "edge", distance(board.slice, walls), clr["edge_mm"])
+    misses = enclosure_misses(board, solids)
+    sane = edge_sane_max(clr["edge_mm"])
+    enclosed = not (misses or edge["measured_mm"] is None or edge["measured_mm"] > sane)
+    if not enclosed:
+        edge["ok"] = False
+        why = (f"nothing of the case {', '.join(misses)} of it" if misses else
+               "no wall beside it" if edge["measured_mm"] is None else
+               f"its edge gap {edge['measured_mm']:g} mm is over {sane:g} mm")
+        edge["detail"] = f"{NOT_AROUND}: {why}"
+    gaps.append(edge)
     for ref in sorted(board.parts):
         p = board.info[ref]
         env = board.parts[ref]
@@ -151,7 +204,8 @@ def fit_check(case: Case, board: Board, settings: dict[str, Any]) -> dict[str, A
                    for p in board.facts.get("parts") or [] if p.get("height_source") == "default"]
     bad = [g for g in gaps if not g["ok"]]
     status = "fail" if clashes or bad else "pass"
-    return {"status": status, "clashes": clashes, "gaps": gaps, "openings": openings,
+    return {"status": status, "enclosed": enclosed,
+            "clashes": clashes, "gaps": gaps, "openings": openings,
             "assumptions": assumptions, "summary": summarize(clashes, gaps, openings, assumptions)}
 
 
@@ -166,8 +220,13 @@ def summarize(clashes: list[dict], gaps: list[dict], openings: list[dict], assum
         each = "; ".join(f"{c['ref']} with {c['case_part']} {c['volume_mm3']:.2f} mm³" for c in clashes)
         parts.append(f"{_n(len(clashes), 'clash')} ({each})")
     bad = [g for g in gaps if not g["ok"]]
+    around = next((g for g in bad if g["ref"] == "board" and NOT_AROUND in g.get("detail", "")), None)
+    if around:
+        parts.append(around["detail"])
+        bad = [g for g in bad if g is not around]
     if bad:
-        each = "; ".join(f"{g['ref']} {g['where']} {g['measured_mm']:.2f} mm, needs {g['required_mm']:.2f} mm"
+        each = "; ".join(g["detail"] if g["measured_mm"] is None else
+                         f"{g['ref']} {g['where']} {g['measured_mm']:.2f} mm, needs {g['required_mm']:.2f} mm"
                          for g in bad)
         parts.append(f"{_n(len(bad), 'gap')} under {'its' if len(bad) == 1 else 'their'} clearance ({each})")
     if not parts:
