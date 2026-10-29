@@ -90,7 +90,7 @@ describe('the images', () => {
     // final `chown -R trace:trace /app` (which rewrites every file into a layer of its own, about 1.2 GB)
     const dockerfile = readFileSync(join(ROOT, 'agent', 'Dockerfile'), 'utf8')
     const stages = dockerfile.split(/^FROM /m).slice(1)
-    expect(stages.map((x) => x.split('\n')[0])).toEqual(['--platform=linux/arm64 ubuntu:24.04 AS tools', 'tools AS build', 'tools'])
+    expect(stages.map((x) => x.split('\n')[0])).toEqual(['--platform=linux/arm64 public.ecr.aws/docker/library/ubuntu:24.04 AS tools', 'tools AS build', 'tools'])
     const [, build, final] = stages as [string, string, string]
     // npm ci and the build happen in the build stage only
     expect(build).toMatch(/^RUN npm ci\b/m)
@@ -140,7 +140,7 @@ describe('the images', () => {
     // the tools function runs the Lambda runtime, everything under /tmp (Lambda's only writable folder)
     expect(tools).toMatch(/^CMD \["node", "\/app\/dist\/gpu\/lambda\.js"\]$/m)
     expect(tools).toMatch(/HOME=\/tmp/)
-    expect(tools.split(/^FROM /m).slice(1).map((x) => x.split('\n')[0])).toEqual(['--platform=linux/arm64 ubuntu:24.04 AS tools', 'tools AS build', 'tools'])
+    expect(tools.split(/^FROM /m).slice(1).map((x) => x.split('\n')[0])).toEqual(['--platform=linux/arm64 public.ecr.aws/docker/library/ubuntu:24.04 AS tools', 'tools AS build', 'tools'])
   })
 
   it('give the tools image every program the verification jobs take it to have (TOOLS_IMAGE_PROGRAMS)', async () => {

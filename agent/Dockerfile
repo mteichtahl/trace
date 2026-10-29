@@ -9,7 +9,9 @@
 #   build  npm ci with the dev dependencies, the build, the prune, and the Python venv; left behind
 #   final  tools, with the built /app and the venv copied in, already owned by the trace user (a `chown -R` in a
 #          layer of its own would store every file of /app a second time)
-FROM --platform=linux/arm64 ubuntu:24.04 AS tools
+# Docker Hub's official ubuntu image as mirrored on Amazon ECR Public: CodeBuild's shared addresses hit Docker Hub's
+# anonymous pull limit (429 toomanyrequests); ECR Public has none for AWS builds
+FROM --platform=linux/arm64 public.ecr.aws/docker/library/ubuntu:24.04 AS tools
 
 ARG DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=UTC

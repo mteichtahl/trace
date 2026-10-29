@@ -132,7 +132,7 @@ this machine has a GPU (or the job does not want one), and otherwise, when `TRAC
 | `TRACE_GPU_JOB_MAX_VCPUS` / `TRACE_CPU_JOB_MAX_VCPUS` | the cap for a job's `vcpus` hint on each queue; without it the hint is ignored |
 
 `agent/Dockerfile.gpu` is built for linux/amd64 by CodeBuild (the same custom resource as the agent image) and
-pushed to the `<prefix>-gpu` ECR repository. It is based on `nvidia/cuda:12.9.2-runtime-ubuntu24.04` with
+pushed to the `<prefix>-gpu` ECR repository. It is based on `nvcr.io/nvidia/cuda:12.9.2-runtime-ubuntu24.04` (NVIDIA's registry: no Docker Hub pull limit) with
 `NVIDIA_DRIVER_CAPABILITIES=all` (OptiX needs the graphics libraries), and contains:
 
 - Node 22 and the trace dist; the job's command is `node /app/dist/gpu/runner.js`, which reads the spec from the S3
