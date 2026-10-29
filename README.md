@@ -303,6 +303,8 @@ tracectl upgrade --connection ARN|auto   # choose the GitHub connection the buil
 tracectl uninstall            # remove it (asks you to type the stack's name; --yes to skip)
 ```
 
+Running trace from a clone (`npm link`)? `tracectl upgrade` doesn't pull it from GitHub: update the clone (`git pull && npm ci && npm run build`), then run `tracectl upgrade --no-pull`.
+
 Both use the answers saved on this machine and your AWS credentials; the GitHub token is read back from the
 installation's own secret, so neither asks for it. `tracectl uninstall` removes the integrations' secrets, each
 repository's trace variables (`TRACE_CODEBUILD_PROJECT` among them) and `TRACE_TOKEN`, trace's own repository's
