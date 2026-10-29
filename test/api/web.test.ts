@@ -113,6 +113,9 @@ beforeAll(async () => {
   github.files.set('acme/web:main:big/render.mp4', new Uint8Array([0]))
   github.sizes.set('acme/web:main:big/render.mp4', 50 * 1024 * 1024)
   server = await listen({ verifier: verifier(), deps, log: () => undefined }, 0, '127.0.0.1')
+  // Node's 5 s default would let a slow runner's synchronous stretch (SQLite, long tests) outlast it: when the event
+  // loop comes back, the server's idle timer and fetch's reuse of the same connection race, and the request is reset
+  server.keepAliveTimeout = 60_000
   url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/invocations`
 })
 afterAll(() => { server.close(); rmSync(scratch, { recursive: true, force: true }); rmSync(bucket, { recursive: true, force: true }) })
