@@ -345,3 +345,75 @@ def test_script_deleting_the_lid_fails(tmp_path):
     assert "the case is not around the board" in fit["summary"]
     u1 = gap(r, "U1", "above")
     assert u1["ok"] is False and u1["measured_mm"] is None and u1["detail"] == "nothing covers U1 from above"
+
+
+def test_script_cannot_mutate_the_checks(tmp_path):
+    # r1_mutate / r3: a script that drops C1 from the board, rewrites the settings and replaces fit_check, all in
+    # its own process; the parent measures with its own board and settings, so the sunk lid still clashes with C1.
+    script = tmp_path / "case.py"
+    script.write_text(
+        "import tracebridge.mech as m\n"
+        "from build123d import Pos\n"
+        "from tracebridge.mech import shell\n\n"
+        "def build(board, settings):\n"
+        "    case = shell.two_part(board, settings)\n"
+        "    case.parts['lid'] = Pos(0, 0, -2) * case.parts['lid']\n"
+        "    board.parts.pop('C1'); board.leads.pop('C1', None)\n"
+        "    settings['clearance']['above_tallest_mm'] = 0.0\n"
+        "    m.fit_check = lambda c, b, s: {'status': 'pass', 'clashes': [], 'gaps': [], 'openings': [],\n"
+        "                                   'assumptions': [], 'summary': 'fits'}\n"
+        "    m.rules_check = lambda c, s, k: []\n"
+        "    case.meta['openings'] = [{'ref': 'J1', 'side': 'south', 'made': True}]\n"
+        "    return case\n")
+    r = run(board_facts(), settings(), CAPS, tmp_path / "out", script=script, formats=["step"])
+    fit = r["fit"]
+    assert fit["status"] == "fail"
+    assert any(c["ref"] == "C1" and c["case_part"] == "lid" for c in fit["clashes"])
+    assert gap(r, "U1", "above")["required_mm"] == 1.0
+    assert r["rules"] and r["records"]["@graph"][-1]["status"] == "fail"
+
+
+def test_script_settings_change_is_measured_against_the_parents(tmp_path):
+    script = tmp_path / "case.py"
+    script.write_text(
+        "from tracebridge.mech import shell\n\n"
+        "def build(board, settings):\n"
+        "    settings['clearance']['edge_mm'] = 0.1\n"
+        "    return shell.two_part(board, settings)\n")
+    r = run(board_facts(), settings(), CAPS, tmp_path / "out", script=script, formats=["step"])
+    g = gap(r, "board", "edge")
+    assert g["required_mm"] == 0.5 and g["measured_mm"] == pytest.approx(0.1, abs=0.01) and g["ok"] is False
+
+
+def test_child_cannot_write_result_json(tmp_path):
+    # The child runs in a private folder and is not told OUTDIR; whatever it writes, the parent writes result.json.
+    script = tmp_path / "case.py"
+    script.write_text(
+        "import json, os\n"
+        "from tracebridge.mech import shell\n\n"
+        "def build(board, settings):\n"
+        "    open('result.json', 'w').write('{\"fit\": {\"status\": \"pass\"}}')\n"
+        "    open('claims.json.extra', 'w').write('x')\n"
+        "    case = shell.two_part(board, settings)\n"
+        "    del case.parts['lid']\n"
+        "    return case\n")
+    p, res = _cli(tmp_path, "--formats", "step", script=script)
+    assert p.returncode == 0, p.stderr
+    assert res["fit"]["status"] == "fail" and res["version"] == 1
+    assert not (tmp_path / "result.json").exists()
+
+
+def test_bad_part_name_from_script(tmp_path):
+    script = tmp_path / "case.py"
+    script.write_text(
+        "from tracebridge.mech import shell\n\n"
+        "def build(board, settings):\n"
+        "    case = shell.two_part(board, settings)\n"
+        "    case.parts['../result'] = case.parts.pop('lid')\n"
+        "    return case\n")
+    with pytest.raises(InputError, match="short lowercase name"):
+        run(board_facts(), settings(), CAPS, tmp_path / "out", script=script, formats=["step"])
+
+
+def test_version_is_a_string():
+    assert isinstance(mech.__version__, str) and mech.__version__ == "1"

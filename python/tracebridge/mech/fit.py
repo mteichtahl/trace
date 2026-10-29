@@ -155,12 +155,10 @@ def fit_check(case: Case, board: Board, settings: dict[str, Any]) -> dict[str, A
     for (ref, n), v in found.items():
         clashes.append({"ref": ref, "case_part": n, "volume_mm3": round(v, 3)})
 
-    # Openings: what the shell made, or for a handed-in case, what the geometry shows.
-    if case.source == "script" and "openings" in case.meta:
-        openings = [{"ref": o["ref"], "side": o["side"], "made": o["made"]} for o in case.meta["openings"]]
-    else:
-        openings = [{"ref": ref, "side": p["edge"]["side"], "made": _detect_opening(solids, board, p)}
-                    for ref, p in sorted(board.info.items()) if p.get("connector") and p.get("edge")]
+    # Openings: what the geometry shows (never what a script says it made: a claimed opening would let a connector
+    # be measured against its own clearance only).
+    openings = [{"ref": ref, "side": p["edge"]["side"], "made": _detect_opening(solids, board, p)}
+                for ref, p in sorted(board.info.items()) if p.get("connector") and p.get("edge")]
     opened = {o["ref"] for o in openings if o["made"]}
 
     gaps = []

@@ -39,11 +39,20 @@ Public API:
   import_case(path) -> Case                      a handed-in STEP as parts["case"]
   run(...) -> dict                               the whole job: what the CLI writes as result.json
 
+Trust: the case script runs in a child process (`python -m tracebridge.mech build-only`, see child.py), never in
+this one. The child loads the board and settings, calls build(), and writes one STEP per part and a claims.json
+(part names, joints, fasteners, notes, meta) into a private folder this process made; this process reads that
+folder strictly (only those names, regular files, size-capped, every value type-checked), loads the solids by their
+part names, and runs fit_check and rules_check with its own facts, settings and capabilities. Claims feed records
+and notes; pass and fail rest on the geometry measured here and on this process's own settings. Only this process
+writes OUTDIR. The built-in template (no --script) is the engine's own code and is built in-process.
+
 build123d needs Python 3.11 or later; it is imported only here, never by tracebridge itself or the bridge's
 dispatcher, so the rest of tracebridge keeps working on 3.10 without it.
 """
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import sys
@@ -52,7 +61,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from . import shell
+from . import child, shell
 from .board import Board, load_board
 from .export import FORMATS, export, import_case
 from .fit import fit_check
@@ -60,6 +69,8 @@ from .records import records
 from .rules import rules_check
 from .settings import InputError, check_facts, normalize_settings, resolve
 from .shell import Case
+
+__version__ = "1"  # bumped when the engine's results change for the same inputs (TypeScript's stale check reads it)
 
 __all__ = ["Board", "Case", "InputError", "export", "fit_check", "import_case", "load_board", "records",
            "rules_check", "run", "shell"]
@@ -139,17 +150,15 @@ def run(facts: dict[str, Any], settings: dict[str, Any], capabilities: dict[str,
         if case_file is None:
             raise InputError("settings source is 'file' but no --case-file was given")
         case = import_case(case_file)
-    else:
-        build = load_script(script) if script is not None else load_script(TEMPLATE)
-        try:
-            case = build(board, settings)
-        except InputError:
-            raise
-        except Exception as e:  # noqa: BLE001
-            raise InputError(f"case script build() raised:\n{_tail(e)}") from None
-        if not isinstance(case, Case) or not case.parts:
-            raise InputError(f"case script build() must return a Case with parts, got {type(case).__name__}")
+    elif script is None:
+        # The built-in template: the engine's own code, built in-process on copies so nothing it does to them
+        # reaches the checks.
+        case = shell.two_part(load_board(copy.deepcopy(facts)), copy.deepcopy(settings))
         case.source = "script"
+    else:
+        if not Path(script).is_file():
+            raise InputError(f"no case script {script}")
+        case = child.build_in_child(script, facts, settings)
 
     fit = fit_check(case, board, settings)
     rules = rules_check(case, settings, capabilities)
@@ -189,8 +198,15 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--case-file")
     r.add_argument("--out", required=True)
     r.add_argument("--formats", default=",".join(FORMATS))
+    b = sub.add_parser("build-only", help="(internal) run a case script and write its parts and claims, no checks")
+    b.add_argument("--facts", required=True)
+    b.add_argument("--settings", required=True)
+    b.add_argument("--script", required=True)
+    b.add_argument("--out", required=True)
     args = ap.parse_args(argv)
 
+    if args.cmd == "build-only":
+        return child.main(args)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     try:
