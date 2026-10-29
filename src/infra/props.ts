@@ -6,6 +6,7 @@
 import { z } from 'zod'
 import { PriceOverridesSchema } from '../core/prices.js'
 import { projectHash, projectSlug } from '../core/project.js'
+import { IMMUTABLE_SUBJECT } from '../core/github-subject.js'
 
 export {
   connectionName, cpuJobDefinitionName, gpuJobDefinitionName, githubSecretName, knowledgeBaseName, memoryDeliveryName, memoryName, projectDataPrefix, projectHash, projectJobsPrefix,
@@ -90,6 +91,16 @@ export const ProjectSettingsSchema = z.object({
  */
 export const PUBLISHED_REGISTRY = ''
 
+export { IMMUTABLE_SUBJECT }
+
+/** The OIDC subjects a role trusts for a repository's runs, `suffix` being the rest of the claim (`:ref:refs/heads/main`):
+ * the name form, and the immutable form when its ids are known (githubSubjects). Never a wildcard over the ids. The name
+ * form alone stays a string, so the roles of repositories without ids keep the template they had. */
+export function githubSubjects(repository: string, subjects: Readonly<Record<string, string>>, suffix: string): string | string[] {
+  const immutable = subjects[repository.toLowerCase()]
+  return immutable ? [`repo:${repository}${suffix}`, `${immutable}${suffix}`] : `repo:${repository}${suffix}`
+}
+
 export const InfraPropsSchema = z.object({
   /** A short name prefixed to every resource: lets two installations share an account. */
   prefix: z.string().regex(/^[a-z][a-z0-9-]{1,20}$/, 'lower-case letters, digits and dashes, 2–21 characters').default('trace'),
@@ -97,8 +108,9 @@ export const InfraPropsSchema = z.object({
   region: z.string().regex(/^[a-z]{2}(-[a-z]+)+-\d$/, 'an AWS region such as us-east-1'),
   /** The onboarded repositories. Each is one project with its own worker runtime, roles, GitHub token secret, memory
    * and GPU job definition (src/infra/project.ts); only its default branch's workflows may assume its GitHub OIDC role
-   * (subject `repo:OWNER/REPO:ref:refs/heads/BRANCH`). At most 60: the API runtime is told every worker runtime, and
-   * every project's memory, in one environment variable each (5000 characters; checked when the stack is built). With
+   * (subject `repo:OWNER/REPO:ref:refs/heads/BRANCH`, or its immutable form: githubSubjects). At most 60: the API
+   * runtime is told every worker runtime, and every project's memory, in one environment variable each (5000
+   * characters; checked when the stack is built). With
    * layout 'nested' each project is its own nested stack (one resource and no output of the parent's), so 60 fit; with
    * layout 'flat' CloudFormation's 500 resources and 200 outputs per stack bind at about 20 projects (checked when the
    * stack is built). */
@@ -327,6 +339,10 @@ export const InfraPropsSchema = z.object({
     /** the branch whose ci workflow may update the installation */
     branch: z.string().regex(/^[A-Za-z0-9._\/-]+$/, 'a branch name').default('main'),
   }).strict().optional(),
+  /** GitHub's immutable OIDC subject prefix (IMMUTABLE_SUBJECT) of each repository whose workflows assume a role here,
+   * by OWNER/REPO in lower case: its roles trust that form beside `repo:OWNER/REPO` (githubSubjects). A repository not
+   * listed is trusted by its name form only. */
+  githubSubjects: z.record(z.string().regex(/^[a-z0-9-]+\/[a-z0-9._-]+$/, 'OWNER/REPO in lower case'), z.string().regex(IMMUTABLE_SUBJECT, 'repo:OWNER@ID/REPO@ID')).default({}),
   /** AgentCore observability: OpenTelemetry (ADOT) traces and metrics to CloudWatch (src/infra/observability.ts). */
   observability: z.object({
     enabled: z.boolean().default(true),

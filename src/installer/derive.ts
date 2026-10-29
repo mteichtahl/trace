@@ -109,7 +109,7 @@ export function resolveAnswers(a: Answers, f: Facts): Resolved {
   return {
     answers: {
       ...a,
-      github: { login },
+      github: { ...a.github, login },
       aws: { ...a.aws, region, account },
       agents: { ...a.agents, model, gpuEnabled, cpuEnabled, knowledgeBase, publishImages, imageRegistry },
       adminEmail,

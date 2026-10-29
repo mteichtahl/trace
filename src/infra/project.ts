@@ -107,7 +107,7 @@ import { gpuTelemetryEnv } from './observability.js'
 import { jobIndexKey } from '../core/job-index.js'
 import { PRICES_KEY, PRICES_PREFIX } from '../core/prices-store.js'
 import {
-  GPU_JOB_VCPUS, type InfraProps, type ProjectRef, REPOSITORY_OUTPUT, kbEnabled, kbOutputs, knowledgeBaseOf, projectOutputs, projectSettings,
+  GPU_JOB_VCPUS, type InfraProps, githubSubjects, type ProjectRef, REPOSITORY_OUTPUT, kbEnabled, kbOutputs, knowledgeBaseOf, projectOutputs, projectSettings,
 } from './props.js'
 
 /** A project's job-events topic, and its EventBridge rule: `<prefix>-<hash>-batch-events` (src/gpu/batch.ts reads the
@@ -569,7 +569,7 @@ export class ProjectStack extends Construct {
         StringEquals: { [`${issuer}:aud`]: 'sts.amazonaws.com' },
         // Only runs on the repository's default branch: workflow_run, issues, schedule and pushes to it. A branch or a
         // pull request can't assume this role, so it can't reach the agent or the central store with its own code.
-        StringLike: { [`${issuer}:sub`]: `repo:${repository}:ref:refs/heads/${project.branch}` },
+        StringLike: { [`${issuer}:sub`]: githubSubjects(repository, cfg.githubSubjects, `:ref:refs/heads/${project.branch}`) },
       }),
     })
     this.actionsRole.addToPolicy(new iam.PolicyStatement({
