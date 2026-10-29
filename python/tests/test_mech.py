@@ -583,3 +583,23 @@ def test_unknown_refs_are_noted(tmp_path):
                                     openings={"skip": ["J7"]}), CAPS, tmp_path, formats=["step"])
     assert "clearance.parts names J9, which is not on the board: ignored" in r["notes"]
     assert "openings.skip names J7, which is not on the board: ignored" in r["notes"]
+
+
+def test_lip_gap_and_pilot_are_measured_not_claimed(tmp_path):
+    # The script builds a 0.05 mm lip gap and 1.0 mm pilots but claims the process's 0.2 mm and 2.4 mm.
+    script = tmp_path / "case.py"
+    script.write_text(
+        "from tracebridge.mech import shell\n\n"
+        "def build(board, settings):\n"
+        "    settings['resolved']['assembly_clearance_mm'] = 0.05\n"
+        "    shell.PILOT_RATIO = 1.0 / 3.0\n"
+        "    case = shell.two_part(board, settings)\n"
+        "    case.meta['lip_gap_mm'] = 0.2\n"
+        "    for f in case.fasteners:\n"
+        "        f['pilot_d_mm'] = 2.4\n"
+        "    return case\n")
+    r = run(board_facts(), settings(), CAPS, tmp_path / "out", script=script, formats=["step"])
+    rows = {row["rule"]: row for row in r["rules"]}
+    assert rows["lip"]["ok"] is False and rows["lip"]["measured"] == pytest.approx(0.05, abs=0.01)
+    assert rows["hole"]["ok"] is False and rows["hole"]["measured"] == pytest.approx(1.0, abs=0.01)
+    assert rows["lip"]["basis"] == rows["hole"]["basis"] == "model"

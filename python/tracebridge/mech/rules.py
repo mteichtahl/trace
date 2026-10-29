@@ -25,7 +25,8 @@ import math
 
 from .probe import first_hit, intervals
 from .settings import FALLBACK_ASSEMBLY_CLEARANCE_MM, find_process
-from .shell import Case, cavity_edge_mm, cnc_radius, convex_corners, grow, heights, is_cnc
+from .board import case_xy
+from .shell import Case, cavity_edge_mm, mounting_holes, screw_for, cnc_radius, convex_corners, grow, heights, is_cnc
 
 METALS = ("alumin", "steel", "stainless", "brass", "copper", "titanium", "316l", "tc4", "6061", "7075", "magnesium")
 
@@ -158,6 +159,49 @@ def inner_radii(case: Case, board: Any, settings: dict[str, Any]) -> dict[str, d
     return out
 
 
+def _hole_d(board: Any, ref: str) -> float:
+    return float(dict(mounting_holes(board))[ref]["d"])
+
+
+def measured_pilots(case: Case, board: Any, settings: dict[str, Any]) -> dict[str, float | None]:
+    """The pilot hole's diameter in the base at each of the board's mounting holes, measured halfway down the
+    standoff: twice the distance from the hole's axis to the boss in ±x and ±y (the smallest), None when the axis
+    is in solid (no hole)."""
+    base = case.parts.get("base")
+    hz = heights(board, settings)
+    z = hz["floor_top_z"] / 2
+    out: dict[str, float | None] = {}
+    for ref, h in mounting_holes(board):
+        x, y = case_xy(h["x"], h["y"])
+        if base is None or base.is_inside((x, y, z)):
+            out[ref] = None
+            continue
+        ds = [first_hit([base], (x, y, z), d, 10.0) for d in ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0))]
+        ds = [d for d in ds if d is not None]
+        out[ref] = round(2 * min(ds), 3) if ds else None
+    return out
+
+
+def lip_gap(case: Case, board: Any, settings: dict[str, Any]) -> float | None:
+    """The smallest gap between the lid's lip and the base's wall, halfway down the lip, on rays out through each
+    side: from where the lid's first solid stretch (its lip) ends to where the base's outermost one (its wall)
+    begins. None when either is not found."""
+    hz = heights(board, settings)
+    t = hz["split_z"]
+    z = t - settings["params"]["lip_h_mm"] / 2
+    bb = board.outline.bounding_box()
+    cx, cy = (bb.min.X + bb.max.X) / 2, (bb.min.Y + bb.max.Y) / 2
+    rays = ([((cx, bb.min.Y + f * bb.size.Y, z), (s, 0, 0)) for f in (0.25, 0.5, 0.75) for s in (-1, 1)]
+            + [((bb.min.X + f * bb.size.X, cy, z), (0, s, 0)) for f in (0.25, 0.5, 0.75) for s in (-1, 1)])
+    gaps = []
+    for o, d in rays:
+        lid_iv = intervals(case.parts.get("lid"), o, d)
+        base_iv = intervals(case.parts.get("base"), o, d)
+        if lid_iv and base_iv:
+            gaps.append(base_iv[-1][0] - lid_iv[0][1])
+    return round(min(gaps), 3) if gaps else None
+
+
 def _boss_row(case: Case, settings: dict[str, Any], wmin: float, who: str, src: str | None) -> list[dict[str, Any]]:
     """The boss around each pilot hole: standoff_d_mm must leave the process's minimum wall on each side."""
     if not case.fasteners:
@@ -282,22 +326,32 @@ def rules_check(case: Case, settings: dict[str, Any], capabilities: dict[str, An
                              f"{' × '.join(_fmt(v) for v in mn)} mm", d, mn, src, "bbox"))
 
     hmin = row.get("hole_min_d_mm")
-    if case.fasteners and hmin is not None:
-        smallest = min(case.fasteners, key=lambda f: f["pilot_d_mm"])
-        v = smallest["pilot_d_mm"]
-        ok = v >= hmin
-        rows.append(_row("hole", ok, f"pilot hole {_fmt(v)} mm ({smallest['ref']}, {smallest['size']}) "
-                         f"{'meets' if ok else 'is under'} {proc['process']}'s {_fmt(hmin)} mm smallest hole",
-                         v, hmin, src, "model"))
+    if hmin is not None:
+        if board is not None:
+            pilots = measured_pilots(case, board, settings)
+            if pilots:
+                ref, v = min(pilots.items(), key=lambda kv: kv[1] if kv[1] is not None else -1.0)
+                ok = v is not None and v >= hmin - 1e-3
+                rows.append(_row("hole", ok, f"pilot hole {'missing' if v is None else _fmt(v) + ' mm'} ({ref}, "
+                                 f"{screw_for(_hole_d(board, ref))[0]}, as built) {'meets' if ok else 'is under'} "
+                                 f"{proc['process']}'s {_fmt(hmin)} mm smallest hole", v, hmin, src, "model"))
+        elif case.fasteners:
+            smallest = min(case.fasteners, key=lambda f: f["pilot_d_mm"])
+            v = smallest["pilot_d_mm"]
+            ok = v >= hmin
+            rows.append(_row("hole", ok, f"pilot hole {_fmt(v)} mm ({smallest['ref']}, {smallest['size']}) "
+                             f"{'meets' if ok else 'is under'} {proc['process']}'s {_fmt(hmin)} mm smallest hole",
+                             v, hmin, src, "params"))
 
     aclr = row.get("assembly_clearance_mm")
-    gap = case.meta.get("lip_gap_mm")
     if not from_file and aclr is not None:
+        gap = lip_gap(case, board, settings) if board is not None else case.meta.get("lip_gap_mm")
+        lbasis = "model" if board is not None else "params"
         if gap is None:
-            rows.append(_row("lip", None, "the lid has no lip, so there is no lip gap to check", None, aclr, src,
-                             "model"))
+            rows.append(_row("lip", None, "no lip gap was found between the lid's lip and the base's wall", None,
+                             aclr, src, lbasis))
         else:
-            ok = gap >= aclr - 1e-9
+            ok = gap >= aclr - 1e-3
             rows.append(_row("lip", ok, f"lip gap {_fmt(gap)} mm {'meets' if ok else 'is under'} "
-                             f"{proc['process']}'s {_fmt(aclr)} mm assembly clearance", gap, aclr, src, "model"))
+                             f"{proc['process']}'s {_fmt(aclr)} mm assembly clearance", gap, aclr, src, lbasis))
     return rows
