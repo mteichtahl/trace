@@ -173,7 +173,7 @@ describe('trace-sample: onboarding and seed', () => {
   })
 
   it('the tour is the installer\'s and names real files', () => {
-    expect(tour().length).toBe(20)
+    expect(tour().length).toBe(21)
   })
 
   it('verify.requirements extract finds the spec\'s requirements', async () => {

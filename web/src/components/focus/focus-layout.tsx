@@ -1,5 +1,5 @@
 /**
- * Focus mode: one layout for all nineteen guided skills. The shell's rail and tabs fold away, leaving
+ * Focus mode: one layout for all twenty guided skills. The shell's rail and tabs fold away, leaving
  *   steps (left, 240 px) · the work (centre) · trace (right, 380 px, folds to a button) · the quality bar (bottom).
  * Escape or the close button returns to exactly where the person was; a draft is kept ("Draft saved 2 seconds ago").
  *

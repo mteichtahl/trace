@@ -1,5 +1,5 @@
 /**
- * The nineteen guided skills as the API knows them: each skill's steps and its quality bar's checks, by id. The app's
+ * The twenty guided skills as the API knows them: each skill's steps and its quality bar's checks, by id. The app's
  * table (web/src/components/skills/definitions.ts, with the shared "reasons" check appended by checksOf) is the
  * source of the words; a test (test/api/skills.test.ts) keeps the ids here equal to it, so the checker below answers
  * exactly the checks the screens show.
@@ -121,6 +121,17 @@ export const SKILL_DEFS: readonly SkillDef[] = [
       { id: 'check', text: 'Placement check passes or is waived', step: 'push' },
       { id: 'fixed', text: 'Fixed parts have not moved', step: 'critical' },
       { id: 'locked', text: 'Parts the router must not move are locked', step: 'lock' },
+      { id: 'reasons', text: 'Every choice against the recommendation has a reason' },
+    ],
+  },
+  {
+    id: 'case-design', name: 'Case design', stage: 'Layout',
+    steps: [{ id: 'process', title: 'Process and material' }, { id: 'clearances', title: 'Clearances' }, { id: 'case', title: 'Review the case' }, { id: 'fit', title: 'Fit check' }, { id: 'order', title: 'Order files' }],
+    checks: [
+      { id: 'process', text: "Process and material within JLC3DP's limits", step: 'process' },
+      { id: 'clearances', text: 'Every clearance change has a reason', step: 'clearances' },
+      { id: 'fit', text: 'Fit check passes or each clash is waived', step: 'fit' },
+      { id: 'rules', text: "Within the process's design rules", step: 'fit' },
       { id: 'reasons', text: 'Every choice against the recommendation has a reason' },
     ],
   },

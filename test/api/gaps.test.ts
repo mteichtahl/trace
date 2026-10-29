@@ -249,8 +249,8 @@ describe('orders, build and cost', () => {
 })
 
 describe('guided skills', () => {
-  it('the API checks every check of the nineteen skills the app shows, and no other', () => {
-    expect(SKILL_DEFS).toHaveLength(19)
+  it('the API checks every check of the twenty skills the app shows, and no other', () => {
+    expect(SKILL_DEFS).toHaveLength(20)
     for (const s of SKILL_DEFS) for (const c of s.checks) if (c.id !== 'reasons') expect(CHECKS[`${s.id}/${c.id}`], `${s.id}/${c.id}`).toBeTypeOf('function')
     const known = new Set(SKILL_DEFS.flatMap((s) => s.checks.map((c) => `${s.id}/${c.id}`)))
     for (const k of Object.keys(CHECKS)) expect(known.has(k), k).toBe(true)

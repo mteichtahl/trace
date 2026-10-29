@@ -1,5 +1,5 @@
 /**
- * The nineteen guided skills as data (docs/user-journey.md, "Guided skills for every person's task"): each skill's
+ * The twenty guided skills as data (docs/user-journey.md, "Guided skills for every person's task"): each skill's
  * stage, its Focus-mode variant, the picture each step opens with, its steps in order and its quality bar. The route
  * /p/:id/do/:skill reads this table; skills with their own screen (Intent builder, Question answer, Schematic finish,
  * Placement adjust, Waiver, Change request, Bring-up run) add to it, the rest render from it alone.
@@ -235,6 +235,23 @@ export const SKILLS: SkillDef[] = [
       { id: 'check', text: 'Placement check passes or is waived', step: 'push' },
       { id: 'fixed', text: 'Fixed parts have not moved', step: 'critical' },
       { id: 'locked', text: 'Parts the router must not move are locked', step: 'lock' },
+    ],
+  },
+  {
+    id: 'case-design', name: 'Case design', stage: 'Layout', variant: 'stepped', picture: 'render',
+    guides: 'Choosing how the case is made and what room the board needs', produces: "The case script and settings, the case's STEP, STL and 3MF files, a fit check for the layout gate, and the order sheet for JLC3DP.",
+    steps: [
+      { id: 'process', title: 'Process and material', detail: "trace recommends MJF PA12-HP at JLC3DP and says why; pick another print process or CNC, within the service's size and wall limits.", picture: 'report' },
+      { id: 'clearances', title: 'Clearances', detail: '0.5 mm from board edge to wall and 1.0 mm above the tallest part by default; give a part more room (a mating face, a heatsink) with its reason.', picture: 'board' },
+      { id: 'case', title: 'Review the case', detail: 'The case around the board, its openings for edge connectors and its screws; change it by its settings, in chat, by editing mechanical/case.py, or by handing in a STEP.' },
+      { id: 'fit', title: 'Fit check', detail: 'Every clash and every gap under its clearance, by part, with the design rules of the process; fix each, or waive it.', picture: 'report' },
+      { id: 'order', title: 'Order files', detail: 'The files to upload, the options and the quantity, on an order sheet a person submits and pays at JLC3DP.', picture: 'order-sheet' },
+    ],
+    checks: [
+      { id: 'process', text: "Process and material within JLC3DP's limits", step: 'process' },
+      { id: 'clearances', text: 'Every clearance change has a reason', step: 'clearances' },
+      { id: 'fit', text: 'Fit check passes or each clash is waived', step: 'fit' },
+      { id: 'rules', text: "Within the process's design rules", step: 'fit' },
     ],
   },
   {

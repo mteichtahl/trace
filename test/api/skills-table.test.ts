@@ -21,7 +21,7 @@ function appSkills(): { id: string; steps: string[]; checks: string[] }[] {
 describe('the guided skills', () => {
   it('have the same ids, steps and checks on both sides', () => {
     const app = appSkills()
-    expect(app).toHaveLength(19)
+    expect(app).toHaveLength(20)
     expect(SKILL_DEFS.map((s) => ({ id: s.id, steps: s.steps.map((x) => x.id), checks: s.checks.map((c) => c.id) }))).toEqual(app)
   })
 })
