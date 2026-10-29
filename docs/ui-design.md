@@ -150,7 +150,7 @@ Forty screens cover the whole system, but most are one of six shared layouts, so
 | Project | Cost and time | `/p/:id/cost` | Shell + column | Admins | No |
 | Project | Settings | `/p/:id/settings` | Shell + column | Assigned (edit: admins) | No |
 | Gate | Gate review and signing | `/p/:id/gates/:gate` | Focus mode | Admins sign; others read | Yes |
-| Skills | Each of the 19 guided skills | `/p/:id/do/:skill` | Focus mode | Contributors and admins | Yes (3) |
+| Skills | Each of the 20 guided skills | `/p/:id/do/:skill` | Focus mode | Contributors and admins | Yes (3) |
 | Chat | Ask trace panel | Over any screen | Docked panel / drawer | Everyone | Yes |
 | Chat | Question from an agent | In chat, Home and Inbox | Decision card | Contributors and admins | Yes |
 | Library | Parts search | `/library/parts` | Shell + list | Everyone | No |
@@ -167,7 +167,7 @@ Forty screens cover the whole system, but most are one of six shared layouts, so
 | Agents | Agents and tools: live statuses, queues, catalogue, Try it | /agents, /agents/:agent, /agents/tools/:tool | Shell + list | Everyone, filtered by access | Yes |
 | Project | Memory: long-term, recent activity, changes | /p/:id/memory, /p/:id/memory/recent, /p/:id/memory/changes | Shell + list | Assigned (switching: contributors and admins) | Yes (2) |
 
-Files have two more screens: \*\*Files\*\* (\`/p/:id/files\`, every file in the project and its releases, by kind) and the \*\*File viewer\*\* (\`/p/:id/files/:path\`, full screen, any format), which is the same viewer that opens in place inside a chat. The nineteen skills share one Focus mode layout in three variants: **stepped** (most skills), **conversational** (Intent builder, Question answer) and **checklist on a picture** (Bench setup, Bring-up run, Incoming inspection).
+Files have two more screens: \*\*Files\*\* (\`/p/:id/files\`, every file in the project and its releases, by kind) and the \*\*File viewer\*\* (\`/p/:id/files/:path\`, full screen, any format), which is the same viewer that opens in place inside a chat. The twenty skills share one Focus mode layout in three variants: **stepped** (most skills), **conversational** (Intent builder, Question answer) and **checklist on a picture** (Bench setup, Bring-up run, Incoming inspection).
 
 ## Sign-in and first run
 
@@ -283,7 +283,7 @@ New project is a six-step Focus mode flow for admins, and it ends with a working
 
 ## Focus mode: guided skills
 
-Every task a person does in trace opens in Focus mode, one layout shared by all nineteen skills: steps on the left, the work in the middle, trace on the right, and the quality bar along the bottom with Submit.
+Every task a person does in trace opens in Focus mode, one layout shared by all twenty skills: steps on the left, the work in the middle, trace on the right, and the quality bar along the bottom with Submit.
 
 **The four regions (desktop).**
 
@@ -296,7 +296,7 @@ Every task a person does in trace opens in Focus mode, one layout shared by all 
 
 | Variant | Used by | What changes |
 | --- | --- | --- |
-| Stepped | Requirements review, Architecture choice, Schematic finish, Pin plan review, Waiver, Change request, Board setup, Placement adjust, Gate signing, Release review, Order submit, Design import, Certification run, Production release | As described above |
+| Stepped | Requirements review, Architecture choice, Schematic finish, Pin plan review, Waiver, Change request, Board setup, Placement adjust, Case design, Gate signing, Release review, Order submit, Design import, Certification run, Production release | As described above |
 | Conversational | Intent builder, Question answer | The chat moves to the centre and becomes the work. The right panel shows what is being built: the draft intent statements, the topic checklist and the open questions, updating live from the agent's shared state |
 | Checklist on a picture | Bench setup, Bring-up run, Incoming inspection | The picture fills the centre and the steps become a checklist beside it, ticked by the person (a wire connected) or by trace (an instrument answered). A live readout panel shows the instruments' values against their limits. A large Stop button is always visible during powered steps |
 

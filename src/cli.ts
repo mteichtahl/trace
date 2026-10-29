@@ -32,7 +32,8 @@
  *
  *   This project (run inside its clone)
  *     tracectl config show | keys | get KEY | set KEY VALUE | unset KEY     settings in .trace/project.db
- *     tracectl check                      ERC/DRC on every KiCad project and a build of every firmware target
+ *     tracectl check                      ERC/DRC on every KiCad project, a build of every firmware target, and the
+ *                                      case's fit check when the repository has mechanical/case.json
  *     tracectl runs [--kind K] [--limit N] | tracectl run ID | tracectl artifact ID NAME [--out PATH]
  *     tracectl db merge BASE OURS THEIRS | tracectl db prune [--keep N]
  *
@@ -65,7 +66,7 @@
  *   The project's knowledge base (your credentials, or the workflow's role; TRACE_KB_ID; through the API: tracectl remote kb)
  *     tracectl kb sync [--force] [--dry-run] [--wait MINUTES] | search "query" [--source S] [--kind K] [--path P] | status
  */
-import { readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { parseArgs } from 'node:util'
 import { ConfigError, changed, leaves, load, parseCliValue, resolve, setValue, unset } from './core/config.js'
@@ -80,6 +81,8 @@ import { ToolError } from './core/registry.js'
 import { flush } from './core/telemetry.js'
 import { Work, transaction } from './core/store.js'
 import { allTools } from './tools/index.js'
+import { engineAvailable } from './tools/mech/engine.js'
+import { CASE_JSON } from './tools/mech/settings.js'
 import { cmdConnect, cmdLogin, cmdLogout, cmdRemote, cmdUsers, cmdWhoami } from './login/commands.js'
 import { cmdKb } from './login/kb.js'
 import { cmdMemory } from './login/memory.js'
@@ -177,8 +180,9 @@ function cmdConfig(argv: string[]): number {
   return 2
 }
 
-/** ERC and DRC on every KiCad project, and a build of every firmware target: what a hardware repository's build
- * runs. Exits 1 when any of them reports errors. */
+/** ERC and DRC on every KiCad project, a build of every firmware target, and with mechanical/case.json the case's
+ * build and fit check (mech.build): what a hardware repository's build runs. Exits 1 when any of them reports errors
+ * or the fit fails; without build123d here the case is skipped, said so, and not counted as a failure. */
 async function cmdCheck(): Promise<number> {
   const cfg = load()
   const reg = allTools()
@@ -218,7 +222,24 @@ async function cmdCheck(): Promise<number> {
       out(`FAIL   firmware.build ${t.name}: ${x instanceof Error ? x.message : String(x)}`)
     }
   }
-  if (!ran) out('Nothing to check: no KiCad projects and no firmware targets.')
+  if (existsSync(join(root, CASE_JSON)) && reg.get('mech.build')) {
+    const engine = engineAvailable()
+    if (!engine.ok) out(`skip   mech.build ${CASE_JSON}: ${engine.why ?? 'the enclosure engine is not available'} (pip install 'build123d==0.13.0' and the repository's python/ package to check the case)`)
+    else {
+      ran++
+      try {
+        const r = (await reg.call('mech.build', {}, { hardware: false, via: 'cli' })) as Record<string, unknown>
+        const ok = r.passed === true
+        failures += ok ? 0 : 1
+        const problems = Array.isArray(r.problems) ? (r.problems as string[]).slice(0, 5).join('; ') : ''
+        out(`${ok ? 'ok  ' : 'FAIL'}   mech.build ${CASE_JSON}: fit ${String(r.fit_status)}${problems ? ` (${problems})` : ''}; rules ${Array.isArray(r.rules_failing) && r.rules_failing.length ? `${r.rules_failing.length} failing` : 'within limits'} (run ${String(r.run_id)})`)
+      } catch (x) {
+        failures++
+        out(`FAIL   mech.build ${CASE_JSON}: ${x instanceof Error ? x.message : String(x)}`)
+      }
+    }
+  }
+  if (!ran) out('Nothing to check: no KiCad projects, no firmware targets and no case.')
   return failures ? 1 : 0
 }
 

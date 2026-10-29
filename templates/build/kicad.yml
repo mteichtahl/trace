@@ -28,7 +28,13 @@ jobs:
           sudo add-apt-repository -y ppa:kicad/kicad-10.0-releases
           sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends kicad ngspice iverilog
       - uses: __TR_SOURCE__/harness/actions/install@__TR_REF__
-      # ERC and DRC on every KiCad project, and a build of every firmware target (tracectl check).
+      # The enclosure engine, only when the repository has a case (mechanical/case.json): build123d into the venv the
+      # install step made for trace's Python package (TRACE_PYTHON), which already holds tracebridge and its mech module.
+      - name: Enclosure engine (build123d)
+        if: hashFiles('mechanical/case.json') != ''
+        run: '"$TRACE_PYTHON" -m pip install -q "build123d==0.13.0"'
+      # ERC and DRC on every KiCad project, a build of every firmware target, and the case's fit check when there is
+      # a case (tracectl check).
       - run: tracectl check
 
   tests-pass:

@@ -1,6 +1,6 @@
 /**
  * Heavy jobs (KiCad's command line, Blender renders, the PCB autorouter, the FPGA and verification programs, field and
- * thermal solvers) run through here, so the same MCP tool works on a laptop and from an AgentCore agent. Each job runs
+ * thermal solvers, the enclosure engine) run through here, so the same MCP tool works on a laptop and from an AgentCore agent. Each job runs
  * in one of three places (backendFor):
  *
  *   local      a child process here: a laptop, the CI runner, or the Batch and function containers themselves
@@ -46,7 +46,10 @@ export const JobKind = z.enum(['blender', 'freerouting', 'orthoroute',
   'openems',
   // thermal (src/tools/thermal), all CPU: the 2.5D board solver for grids too big for the caller (thermal), CalculiX
   // ccx for the 3D finite-element path (calculix), and OpenFOAM conjugate heat transfer for airflow (openfoam)
-  'thermal', 'calculix', 'openfoam'])
+  'thermal', 'calculix', 'openfoam',
+  // the enclosure engine (src/tools/mech/engine.ts): build123d and tracebridge.mech, building the case, its fit check
+  // and its STEP/STL/3MF files
+  'cad'])
 export type JobKind = z.output<typeof JobKind>
 
 const SEGMENT = /^[\w.-]+$/
@@ -113,7 +116,7 @@ export type Backend = 'local' | 'function' | 'batch'
 
 /** The kinds the tools function runs: what the tools image has (agent/Dockerfile.tools). */
 export const FUNCTION_KINDS: ReadonlySet<JobKind> = new Set<JobKind>([
-  'kicad', 'ffmpeg', 'blender', 'verilator', 'cocotb', 'formal', 'yosys', 'nextpnr', 'fpga-pack', 'calculix',
+  'kicad', 'ffmpeg', 'blender', 'verilator', 'cocotb', 'formal', 'yosys', 'nextpnr', 'fpga-pack', 'calculix', 'cad',
 ])
 /** The longest a job runs on the function: Lambda ends a call at 900 s, and the runner still uploads after the program. */
 export const FUNCTION_MAX_SECONDS = 840

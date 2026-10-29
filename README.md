@@ -94,7 +94,7 @@ It then runs the plan:
   tools image (both arm64, see [Images](#images-copied-or-built)), and AgentCore runtimes from the agent image: one
   worker runtime per project, each with its own execution role, GitHub OIDC role, GitHub token secret, memory,
   knowledge base, GPU and CPU job definitions, tools function (AWS Lambda, running the tools image: KiCad, Blender,
-  the FPGA and verification tools, CalculiX, ffmpeg; see `agent/README.md`) and CodeBuild build runner (see [Where builds run](#where-builds-run)), and the API runtime. Each project's
+  the FPGA and verification tools, CalculiX, ffmpeg, build123d; see `agent/README.md`) and CodeBuild build runner (see [Where builds run](#where-builds-run)), and the API runtime. Each project's
   resources are in a nested stack of their own (see [Stack layout](#stack-layout-and-limits)). A project's worker is
   invoked by that repository's workflows through IAM, and by the API. The API runtime is for people and is reached
   only with a Cognito sign-in. The stack also holds the Cognito user pool. Before the deploy, the token becomes
@@ -1388,7 +1388,69 @@ plots and run comparison (`tpost`), Markdown reports (`tpre report`), and ParaVi
 See [Open source thermal simulation, analysis and visualization](https://antmicro.com/blog/2025/03/open-source-thermal-simulation-analysis-and-visualization)
 and [antmicro/thermal-simulation-scripts](https://github.com/antmicro/thermal-simulation-scripts) (Apache-2.0).
 trace does not run their FreeCAD-based `tpre`/`tpost`. It builds its models from the KiCad board directly, and the
-optional `pipeline: 'antmicro'` mode is left as future work. Enclosures use build123d rather than FreeCAD; see [docs/enclosure-cad.md](docs/enclosure-cad.md).
+optional `pipeline: 'antmicro'` mode is left as future work. Enclosures use build123d rather than FreeCAD; see [Enclosures](#enclosures).
+
+## Enclosures
+
+A board's case is a build123d script in the project repository, rebuilt from the board, and its fit check is the
+layout gate's evidence for "The board fits its enclosure, or each clash is waived" (`layout.fit`). The design and the
+choice of build123d over FreeCAD are in [docs/enclosure-cad.md](docs/enclosure-cad.md); the build contract between the
+TypeScript tools and the Python engine is [docs/enclosure-build.md](docs/enclosure-build.md). The Implementation
+specialist runs the tools; a person works through the **Case design** skill.
+
+A project's case lives in `mechanical/`:
+
+| Path | What |
+| --- | --- |
+| `mechanical/case.json` | The settings: the board, the process and material, walls, clearances, openings, quantity, and a reason for each value changed from the recommendation |
+| `mechanical/case.py` | The case script, from the printed two-part shell template: `build(board, settings)` returns the base and lid; edit it to change the shape |
+| `mechanical/<name>.step` | A handed-in case, when a person hands one in instead of the script |
+| `mechanical/out/` | What `mech.build` writes: `case.step`, `case-base` and `case-lid` (or `case-case` for a handed-in file) as STEP, STL and 3MF, `fit.json`, `case.jsonld`, and `order.json` and `order.md` from `mech.order` |
+
+The board facts come from the `.kicad_pcb` alone (the images have no KiCad 3D model library): the Edge.Cuts outline
+and cutouts, the holes, and each part's courtyard box. A part's height is its footprint's `Height` field (mm), else
+the common-package table in `src/tools/mech/heights.ts`, else 5 mm, reported as assumed. Set a `Height` field in KiCad
+on any part whose height matters to the case.
+
+| Tool | What it does |
+| --- | --- |
+| `mech.board` | The board facts the engine reads, with the heights that are assumed |
+| `mech.init` | Writes `case.json` (the recommendation) and `case.py` (the template); refuses to overwrite without `replace: true` |
+| `mech.settings` | Every value with its recommendation and reason; changes values and per-part clearances, refusing a change away from the recommendation without a reason |
+| `mech.build` | Runs the engine (a `cad` job), writes `mechanical/out/`, and checks the fit and the process's design rules; status pass only when both pass. Measures `clashes`, `gap_violations` and `assumed_heights` |
+| `mech.fit` | The latest build's fit, and whether it is stale: the board, `case.json`, `case.py` or the handed-in file changed since |
+| `mech.hand_in` | Takes a STEP (the case body) or a `case.py` from the repository, then builds |
+| `mech.capabilities` | JLC3DP's printing rules and JLCCNC's machining rules as stored, their source pages and whether they are stale |
+| `mech.capabilities_check` | Fetches each source page and reports, figure by figure, whether the page still states it (`same`, `changed`, `unreadable`); changes nothing |
+| `mech.order` | Writes the order sheet (service, process, material, finish, quantity, files to upload, the fit run, the upload page) for a person to submit and pay; it never places an order |
+
+**The fit check.** A clash is any overlap over 0.001 mm³ between a part's envelope (its box, as tall as its height;
+through-hole leads 2 mm under the far face) or the board and a case part, named by part and volume. The gaps are the
+board's edge to the wall against `clearance.edge_mm` (default 0.5 mm), each top-side part to the lid against its own
+clearance or `above_tallest_mm` (default 1.0 mm), and bottom-side parts and leads to the floor against `below_mm`
+(default 1.0 mm). A connector within 1.5 mm of the outline gets an opening in the wall unless it is listed in
+`openings.skip`. Give a part more room (a mating face, a heatsink) with `mech.settings clearance=[{ref, mm, reason}]`.
+
+**Process rules.** The recommendation is MJF PA12-HP at JLC3DP: strong, isotropic nylon, printed without supports,
+which fits small enclosures within its 370 × 276 × 360 mm build. The rules come from JLC3DP's
+[3D printing design guideline](https://jlc3dp.com/help/article/3d-printing-design-guideline) and
+[service page](https://jlc3dp.com/capabilities/3d-printing-service), and JLCCNC's
+[machining guideline](https://jlccnc.com/help/article/CNC-Machining-Design-Guideline), read on 29 October 2026 and
+kept in `src/tools/mech/capabilities.ts` with each source. They cover the minimum wall by part size, build size,
+smallest hole, assembly clearance, and for CNC the wall and internal-corner radius. JLC3DP publishes no data feed, so
+the table is stale after 90 days; `mech.capabilities_check` says which figures a page no longer states, and a person
+updates the file. Screws go into pilot holes (self-tapping): JLC3DP recommends M6 as the smallest printed thread.
+
+**Where it runs.** The engine is Python (`python/tracebridge/mech`, `pip install 'python[mech]'`, build123d 0.13.0)
+and runs as a job of kind `cad`. On a project with a tools function it runs there, since the agent image does not
+carry build123d. Locally it runs with `TRACE_PYTHON` (else `python3`) and `PYTHONPATH` at the repository's `python/`.
+`tracectl check` builds the case when `mechanical/case.json` exists and fails on a failing fit. Without build123d it
+says so and skips the case. The KiCad build template installs build123d only in repositories that have a case.
+
+**Changing a case.** The three routes from the design all end in `mech.build`. A person edits `case.py` or the
+settings and pushes. In chat, the specialist changes the settings or delegates a script edit to the worker. A handed-in
+file goes through `mech.hand_in`. A handed-in STEP no longer follows the board, and its wall thickness is not measured
+(that rule row says so). Rebuild from the script to follow the board again.
 
 ## Specialist agents
 
@@ -1400,7 +1462,7 @@ delegates to it. The worker's prompt, guardrails and job runner are unchanged.
 | Kind | Specialist | What it does | Its trace tools (besides the shared ones) |
 | --- | --- | --- | --- |
 | `verify` | Verification | Turns specifications into requirements and a test plan, runs simulation, formal and rule checks against the plan, and closes functional and code coverage. It owns failing tests, testbenches, formal properties, coverage gaps and ERC. | `verify.*` (requirements, plan, run, coverage, report, verilator, cocotb, formal), `sim.*`, `kicad.erc`, `kicad.drc`, `protocol.*` but `pullup` (model, spec, spec_extract, check, compat, diagram, testbench, bus_analog); `hil.*` and `protocol.capture` only when hardware is allowed |
-| `impl` | Implementation | Runs FPGA synthesis, place and route, timing closure and bitstreams, and PCB placement, floor planning, routing and length matching. It owns timing failures, constraint files, unrouted nets and DRC. It renders the result for visual review. | `fpga.*`, `pcb.autoroute`, `pcb.placement_check`, `pcb.length_match`, `pcb.floorplan`, `kicad.drc`, `kicad.net_length`, `render.board`, `protocol.compat`, `protocol.check`, `protocol.diagram` (interface timing budgets) |
+| `impl` | Implementation | Runs FPGA synthesis, place and route, timing closure and bitstreams, PCB placement, floor planning, routing and length matching, and the board's enclosure (see [Enclosures](#enclosures)). It owns timing failures, constraint files, unrouted nets and DRC. It renders the result for visual review. | `fpga.*`, `pcb.autoroute`, `pcb.placement_check`, `pcb.length_match`, `pcb.floorplan`, `kicad.drc`, `kicad.net_length`, `render.board`, `protocol.compat`, `protocol.check`, `protocol.diagram` (interface timing budgets), `mech.*` |
 | `ams` | Analog & Mixed-Signal | Keeps analog specs and judges circuits against them: corners, Monte Carlo yield, op-amp stability, noise and ADC/digital co-simulation. It also chooses parts from the datasheet library. | `ams.*`, `sim.spice`, `sim.sweep`, `sim.measure`, `sim.kicad_spice`, `calc.*`, `datasheets.*`, `parts.*`, `protocol.bus_analog`, `protocol.pullup` |
 | `emc` | EMC & Simulation | Runs EMI rule prechecks and emission estimates, sets up openEMS models (region, stackup, ports, boundary conditions, mesh) and runs them, and checks signal integrity from S-parameters. | `emc.*`, `calc.impedance`, `calc.trace_width`, `calc.via`, `kicad.board`, `kicad.net`, `protocol.bus_analog`, `protocol.pullup` (edge rates of the bus as built) |
 | `render` | Rendering | Renders boards and models, and makes turntables. This was the rendering agent; it is kept as a specialist of its own, not folded into `impl`, because people ask for renders directly. | `render.*` |
@@ -2069,6 +2131,7 @@ outside AgentCore, either set `OTEL_SDK_DISABLED=true` or give it the variables 
 | `src/harness` | The loop's logic, bundled into `harness/dist` for the GitHub actions in `harness/actions` |
 | `src/infra/gateway.ts`, `src/core/gateway.ts`, `src/library` | The library gateway: its CDK resources, which calls `tracectl mcp` forwards and how (SigV4, fallback), and the Lambda behind it |
 | `src/infra/knowledge.ts`, `src/tools/kb` | Each project's knowledge base: its CDK resources, and what goes in it, the sync, search and the kb tools |
+| `src/tools/mech`, `python/tracebridge/mech` | Enclosures: board facts, case settings, JLC3DP's capabilities and the mech tools; the build123d engine they run |
 | `src/tools/calc`, `src/tools/kicad`, `src/tools/pcb`, `src/tools/sim`, `src/tools/protocol`, `src/tools/datasheets`, `src/tools/parts`, `src/tools/hil`, `src/tools/firmware`, `src/tools/runs` | The tools |
 | `src/gpu`, `agent/Dockerfile.gpu` | GPU jobs: local or AWS Batch (`runJob`, `runBatch`), the in-container runner, and its image |
 | `python/kicad`, `python/orthoroute` | The scripts the autorouter jobs run: Freerouting through KiCad's pcbnew, and OrthoRoute's headless mode |

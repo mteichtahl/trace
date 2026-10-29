@@ -51,7 +51,7 @@ The tour follows the journey:
 2. **Architect:** values from the calculators, then the thermal envelope.
 3. **Capture:** the project is indexed.
 4. **Prove:** the analog, mixed-signal, logic, protocol and FPGA work.
-5. **Layout:** autorouting, EMC and thermal.
+5. **Layout:** autorouting, EMC, thermal and the enclosure.
 6. **Sign-off:** solver cross-checks, renders and the test plan.
 7. **Release:** the fab package.
 8. **Bring-up:** on the emulated bench.

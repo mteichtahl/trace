@@ -377,6 +377,7 @@ The person is always free to choose otherwise. When they do, the skill asks for 
 | Change request | Any | Proposing a deliberate change to the design | What changes and why are stated; the impact (stages, gates, stale evidence, cost, time) has been reviewed |
 | Board setup | Layout | Outline, stackup, mounting and fixed parts | Outline closed; stackup has layer count, thickness and copper weights; each fixed part has a mechanical reason |
 | Placement adjust | Layout | Moving parts trace placed | Each move has a reason; placement check passes, or its findings are waived |
+| Case design | Layout | The board's enclosure: process, clearances, the case and its order files | Process and material within JLC3DP's limits; every clearance change has a reason; the fit check passes or each clash is waived; the case is within the process's design rules |
 | Gate signing | Every gate | Reviewing the evidence before signing | Every criterion shows its evidence run; every waiver taken at this stage has been opened and acknowledged |
 | Release review | Sign-off | Reading the release report | Coverage, EMC estimates, BOM cost and stock and open waivers each acknowledged |
 | Order submit | Fabricate | Placing the order on JLCPCB | The options entered match the order sheet; the order number and paid cost are recorded |
@@ -548,6 +549,32 @@ Quality bar:
 - Parts the router must not move are locked.
 
 Produces: the placed board at a recorded commit, ready for autorouting.
+
+### Case design
+
+The skill builds the board's enclosure with trace (docs/enclosure-cad.md; built as docs/enclosure-build.md describes)
+and shows the case as a render beside its fit check. The case is a script in the repository, rebuilt from the board.
+
+Steps:
+
+1. **Process and material:** trace recommends MJF PA12-HP at JLC3DP and says why; the person can pick another print
+   process or CNC, within the service's size and wall limits.
+2. **Clearances:** 0.5 mm from board edge to wall and 1.0 mm above the tallest part by default; a part that needs more
+   room (a mating face, a heatsink) gets its own, with its reason.
+3. **Review the case:** the case around the board, its openings and screws; changed by its settings, in chat, by
+   editing `mechanical/case.py`, or by handing in a STEP.
+4. **Fit check:** every clash and every gap under its clearance, named by part, with the process's design rules.
+5. **Order files:** the files to upload and the options, on an order sheet a person submits and pays.
+
+Quality bar:
+
+- Process and material within JLC3DP's limits.
+- Every clearance change has a reason.
+- Fit check passes, or each clash is waived.
+- Within the process's design rules.
+
+Produces: `mechanical/case.json`, `mechanical/case.py`, the case's STEP, STL and 3MF files, the fit check that is the
+layout gate's evidence for "the board fits its enclosure", and the order sheet.
 
 ### Gate signing
 

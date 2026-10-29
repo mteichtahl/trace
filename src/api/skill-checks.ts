@@ -1,6 +1,6 @@
 /**
  * The guided skills' quality bars, checked from the record (docs/user-journey.md: "The bar is checked by a tool that
- * returns pass or fail with the reasons, never by the model's opinion"). One function per check of the nineteen
+ * returns pass or fail with the reasons, never by the model's opinion"). One function per check of the twenty
  * skills (src/core/skills.ts), over what the record holds: the journey (gates, criteria, waivers, questions, orders,
  * decisions), the repository's project database (requirements, tests, runs and their reports, settings) and the
  * person's own draft of the skill.
@@ -51,6 +51,8 @@ export interface CheckInput {
   bom: Record<string, unknown> | null
   board: Record<string, unknown> | null
   placement: { status: string; summary: string | null } | null
+  /** the latest mech.build run (Case design): its status, summary and result (process, fit, rules, warnings) */
+  caseBuild?: { id: string; status: string; summary: string | null; result: Record<string, unknown> | null } | null
   /** settings: hil.instruments */
   instruments: { name: string; kind: string; limits?: { max_voltage_v?: number; max_current_a?: number } }[]
   /** the orders recorded (journey.orders) */
@@ -78,6 +80,7 @@ const unavailable = (id: string, needs: string): CheckResult => ({ id, status: '
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 const VAGUE = /^(not needed|n\/?a|none|no need|unnecessary|not required|later|tbd|it depends|you decide|whatever|-+)\.?$/i
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`
+const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
 const ids = (xs: { id: string }[], n = 5): string => `${xs.slice(0, n).map((x) => x.id).join(', ')}${xs.length > n ? ` and ${xs.length - n} more` : ''}`
 
 /** A gate criterion of the journey, as a check: met, waived (an open waiver on it), or not met with its words. */
@@ -340,6 +343,39 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
   'placement-adjust/check': (i) => (!i.placement ? notMet('check', 'No placement check is recorded yet: run pcb.placement_check.') : i.placement.status === 'pass' ? met('check') : notMet('check', i.placement.summary ?? 'The last placement check did not pass.')),
   'placement-adjust/fixed': () => unavailable('fixed', 'the fixed parts and where they must stay, in the record'),
   'placement-adjust/locked': () => unavailable('locked', 'which parts the router must not move, read from the board; no tool reports locks yet'),
+
+  // ---- Case design: the latest mech.build run (src/tools/mech), and the layout gate's fit criterion for waivers
+  'case-design/process': (i) => {
+    const b = i.caseBuild
+    if (!b?.result) return notMet('process', 'No case build is recorded yet: run mech.build (mech.init first if the project has no case).')
+    const p = b.result.process as { service?: string; process?: string; material?: string } | undefined
+    const rules = list(b.result.rules) as { rule?: string; ok?: boolean | null; detail?: string }[]
+    const bad = rules.filter((x) => (x.rule === 'process' || x.rule === 'size' || x.rule === 'min_size') && x.ok === false)
+    const what = p ? `${p.process ?? '?'} ${p.material ?? '?'} at ${p.service ?? '?'}` : 'the process'
+    return bad.length ? notMet('process', `${what}: ${bad.map((x) => x.detail ?? x.rule).join('; ')}.`) : met('process', `${what}, within its build size.`)
+  },
+  'case-design/clearances': (i) => {
+    const b = i.caseBuild
+    if (!b?.result) return notMet('clearances', 'No case build is recorded yet: run mech.build.')
+    const missing = list(b.result.warnings).filter((w): w is string => typeof w === 'string' && /^clearance\.\S+ .*without a reason/.test(w))
+    return missing.length ? notMet('clearances', `${plural(missing.length, 'clearance')} changed without a reason: ${missing.map((w) => w.split(' ')[0]).join(', ')}.`) : met('clearances')
+  },
+  'case-design/fit': (i) => {
+    const b = i.caseBuild
+    if (!b?.result) return notMet('fit', 'No case build is recorded yet: run mech.build.')
+    if (b.result.fit_status === 'pass') return met('fit', `Build ${b.id.slice(0, 8)}: no clash, every gap at its clearance.`)
+    const waived = criterion(i, 'fit', 'layout.fit')
+    if (waived.status === 'waived') return waived
+    const problems = list(b.result.problems).filter((x): x is string => typeof x === 'string')
+    return notMet('fit', problems.length ? `${problems.slice(0, 4).join('; ')}${problems.length > 4 ? ` and ${problems.length - 4} more` : ''}.` : String(b.result.fit_summary ?? b.summary ?? 'The fit check does not pass.'))
+  },
+  'case-design/rules': (i) => {
+    const b = i.caseBuild
+    if (!b?.result) return notMet('rules', 'No case build is recorded yet: run mech.build.')
+    const failing = (list(b.result.rules) as { ok?: boolean | null; detail?: string; rule?: string }[]).filter((x) => x.ok === false)
+    const unchecked = (list(b.result.rules) as { ok?: boolean | null }[]).filter((x) => x.ok === null).length
+    return failing.length ? notMet('rules', `${failing.map((x) => x.detail ?? x.rule).join('; ')}.`) : met('rules', unchecked ? `Within the rules; ${plural(unchecked, 'rule')} not checked (a handed-in file's walls are not measured).` : undefined)
+  },
 
   // ---- Gate signing: what still stops this person signing the gate (signBlockers)
   'gate-signing/met': (i) => gateCheck(i, 'met', /not met or waived/),

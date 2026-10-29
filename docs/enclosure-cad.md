@@ -1,6 +1,7 @@
 # Enclosure CAD engine for trace
 
-Status: design, October 2026. Decided 29 October 2026; nothing built yet.
+Status: design, October 2026. Decided 29 October 2026. Built on branch `claude/enclosure`, to the contract in
+[enclosure-build.md](enclosure-build.md).
 
 ## Summary
 

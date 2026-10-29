@@ -11,9 +11,9 @@ import { changesExplained } from './kicad-skill'
 import { qualityChecks } from './use-skill'
 
 describe('the skill table', () => {
-  it('holds all nineteen skills, each with steps and a quality bar', () => {
-    expect(SKILLS).toHaveLength(19)
-    expect(new Set(SKILLS.map((s) => s.id)).size).toBe(19)
+  it('holds all twenty skills, each with steps and a quality bar', () => {
+    expect(SKILLS).toHaveLength(20)
+    expect(new Set(SKILLS.map((s) => s.id)).size).toBe(20)
     for (const s of SKILLS) {
       expect(s.steps.length).toBeGreaterThan(1)
       expect(s.checks.length).toBeGreaterThan(1)
@@ -24,7 +24,7 @@ describe('the skill table', () => {
     const v = (id: string) => SKILLS.find((s) => s.id === id)!.variant
     expect(['intent-builder', 'question-answer'].map(v)).toEqual(['conversational', 'conversational'])
     expect(['bench-setup', 'bring-up-run', 'incoming-inspection'].map(v)).toEqual(['checklist', 'checklist', 'checklist'])
-    expect(SKILLS.filter((s) => s.variant === 'stepped')).toHaveLength(14)
+    expect(SKILLS.filter((s) => s.variant === 'stepped')).toHaveLength(15)
   })
   it('adds the shared reason rule to every bar but the intent', () => {
     expect(checksOf(SKILLS.find((s) => s.id === 'waiver')!).at(-1)!.id).toBe('reasons')
