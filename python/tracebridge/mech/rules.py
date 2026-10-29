@@ -21,9 +21,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from .probe import intervals
-from .settings import find_process
-from .shell import Case, heights, is_cnc
+import math
+
+from .probe import first_hit, intervals
+from .settings import FALLBACK_ASSEMBLY_CLEARANCE_MM, find_process
+from .shell import Case, cavity_edge_mm, cnc_radius, convex_corners, grow, heights, is_cnc
 
 METALS = ("alumin", "steel", "stainless", "brass", "copper", "titanium", "316l", "tc4", "6061", "7075", "magnesium")
 
@@ -99,6 +101,63 @@ def built_sections(case: Case, board: Any, settings: dict[str, Any]) -> dict[str
     }
 
 
+def _corner_radius(shape: Any, v, bis, ang, us, z: float, reach: float) -> float | None:
+    """One corner's radius, from where the model's walls are (not where they should be): a ray out to each of the
+    corner's two walls, `reach` along the edge from the corner, finds the wall's line; the lines meet at the sharp
+    corner; a ray along the bisector toward it stops R (1 / sin(θ/2) - 1) short of it."""
+    lines = []
+    for u in us:
+        d = bis[0] * u[0] + bis[1] * u[1]
+        nx, ny = bis[0] - d * u[0], bis[1] - d * u[1]  # inward normal of this edge
+        ln = math.hypot(nx, ny)
+        nx, ny = nx / ln, ny / ln
+        o = (v[0] + u[0] * reach + nx * reach, v[1] + u[1] * reach + ny * reach, z)
+        h = first_hit([shape], o, (-nx, -ny, 0), 2 * reach + 5.0)
+        if h is None:
+            return None
+        lines.append(((o[0] - nx * h, o[1] - ny * h), u))
+    (p0, u0), (p1, u1) = lines
+    den = u0[0] * u1[1] - u0[1] * u1[0]
+    if abs(den) < 1e-9:
+        return None
+    s = ((p1[0] - p0[0]) * u1[1] - (p1[1] - p0[1]) * u1[0]) / den
+    cx, cy = p0[0] + u0[0] * s, p0[1] + u0[1] * s
+    o = (cx + bis[0] * reach, cy + bis[1] * reach, z)
+    h = first_hit([shape], o, (-bis[0], -bis[1], 0), reach + 1.0)
+    if h is None:
+        return None
+    return max(reach - h, 0.0) / (1 / math.sin(ang / 2) - 1)
+
+
+def inner_radii(case: Case, board: Any, settings: dict[str, Any]) -> dict[str, dict[str, float | None]]:
+    """For the base and the lid: the smallest inside vertical corner radius of its cavity, measured on the model by
+    a ray along each corner's bisector toward the sharp corner (where it meets a fillet of radius R at an interior
+    angle θ, it stops R (1 / sin(θ/2) - 1) short of the corner), with the radius the cavity's depth needs.
+    Cavities and depths are the parent's own (from its board and settings), at a height where nothing else stands:
+    the base in the board's own thickness, the lid halfway down its lip."""
+    clr, prm = settings["clearance"], settings["params"]
+    fit = float((settings.get("resolved") or {}).get("assembly_clearance_mm", FALLBACK_ASSEMBLY_CLEARANCE_MM))
+    hz = heights(board, settings)
+    t, floor_top, lid_in = hz["split_z"], hz["floor_top_z"], hz["lid_inner_z"]
+    z_lip = t - prm["lip_h_mm"]
+    inner = grow(board.outline, cavity_edge_mm(board, settings))
+    spec = {"base": (grow(inner, prm["lip_mm"] + fit), (board.top_z + board.bottom_z) / 2, t - floor_top),
+            "lid": (inner, (z_lip + t) / 2, lid_in - z_lip)}
+    out: dict[str, dict[str, float | None]] = {}
+    for name, (face, z, depth) in spec.items():
+        need = cnc_radius(depth)
+        shape = case.parts.get(name)
+        rs = []
+        reach = 3 * need + 2.0
+        if shape is not None:
+            for v, bis, ang, us in convex_corners(face, with_edges=True):
+                r = _corner_radius(shape, v, bis, ang, us, z, reach)
+                if r is not None:
+                    rs.append(r)
+        out[name] = {"measured": round(min(rs), 3) if rs else None, "need": need, "depth": round(depth, 3)}
+    return out
+
+
 def _section_rows(case: Case, board: Any, settings: dict[str, Any], wmin: float, who: str, src: str | None,
                   kind_note: str) -> list[dict[str, Any]]:
     rows = []
@@ -150,11 +209,21 @@ def rules_check(case: Case, settings: dict[str, Any], capabilities: dict[str, An
             if board is not None:
                 rows += _section_rows(case, board, settings, wmin, "CNC", src, f" minimum for {kind}")
         if not from_file and cnc.get("corner_radius"):
-            depth = max(case.meta.get("base_cavity_depth_mm", 0.0), case.meta.get("lid_cavity_depth_mm", 0.0))
-            need = 0.5 if depth <= 3 else round(depth / 10 + 0.5, 2)
-            # The printed shell's cavity has sharp inside vertical corners: a cutter cannot make them.
-            rows.append(_row("corner_radius", False, f"inside corners are sharp; a {_fmt(round(depth, 2))} mm deep "
-                             f"cavity needs R{_fmt(need)} mm ({cnc['corner_radius']})", 0.0, need, src, "model"))
+            if board is None:
+                rows.append(_row("corner_radius", None, "inside corner radius not measured (no board given)", None,
+                                 None, src, "model"))
+            else:
+                for name, m in inner_radii(case, board, settings).items():
+                    v, need = m["measured"], m["need"]
+                    if v is None:
+                        rows.append(_row("corner_radius", False, f"the {name}'s inside corners were not found to "
+                                         f"measure; a {_fmt(m['depth'])} mm deep cavity needs R{_fmt(need)} mm "
+                                         f"({cnc['corner_radius']})", None, need, src, "model"))
+                        continue
+                    ok = v >= need - 0.02
+                    rows.append(_row("corner_radius", ok, f"the {name}'s inside corners are R{_fmt(v)} mm as built, "
+                                     f"{'meeting' if ok else 'under'} the R{_fmt(need)} mm a {_fmt(m['depth'])} mm "
+                                     f"deep cavity needs ({cnc['corner_radius']})", v, need, src, "model"))
         return rows
 
     row = find_process(settings, capabilities)

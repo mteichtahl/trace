@@ -471,3 +471,32 @@ def test_lip_deeper_than_the_base_is_refused(tmp_path):
 def test_cli_rejects_a_deep_lip(tmp_path):
     p, res = _cli(tmp_path, "--formats", "step", settings_obj=settings(params={"lip_h_mm": 10.0}))
     assert p.returncode == 2 and "lip_h_mm 10 mm" in res["error"]
+
+
+CNC_ALU = {"service": "jlccnc", "process": "CNC", "material": "Aluminum 6061"}
+
+
+def test_cnc_aluminium_template_passes_the_corner_rule(tmp_path):
+    r = run(board_facts(), settings(process=CNC_ALU), CAPS, tmp_path, formats=["step"])
+    corners = [row for row in r["rules"] if row["rule"] == "corner_radius"]
+    assert len(corners) == 2 and all(row["ok"] for row in corners), corners
+    # Base cavity 1.6 + 3.0 = 4.6 mm deep: R0.96; the lid's from the lip's foot (-1.4) to 14.6: R2.1.
+    by = {row["detail"].split("'s")[0].split()[-1]: row for row in corners}
+    assert by["base"]["limit"] == pytest.approx(0.96) and by["base"]["measured"] == pytest.approx(0.96, abs=0.03)
+    assert by["lid"]["limit"] == pytest.approx(2.1) and by["lid"]["measured"] == pytest.approx(2.1, abs=0.03)
+    assert all(row["ok"] for row in r["rules"]), r["rules"]
+    assert r["fit"]["status"] == "pass", r["fit"]["summary"]
+
+
+def test_cnc_sharp_corners_fail(tmp_path):
+    # A handed-in-style script that rebuilds the shell as if printed: sharp inside corners fail the rule.
+    script = tmp_path / "case.py"
+    script.write_text(
+        "from tracebridge.mech import shell\n\n"
+        "def build(board, settings):\n"
+        "    s = dict(settings, process={'service': 'jlc3dp', 'process': 'MJF', 'material': 'PA12-HP'})\n"
+        "    return shell.two_part(board, s)\n")
+    r = run(board_facts(), settings(process=CNC_ALU), CAPS, tmp_path / "out", script=script, formats=["step"])
+    corners = [row for row in r["rules"] if row["rule"] == "corner_radius"]
+    assert corners and all(row["ok"] is False for row in corners)
+    assert all(row["measured"] == pytest.approx(0.0, abs=0.02) for row in corners)

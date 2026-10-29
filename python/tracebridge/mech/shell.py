@@ -31,10 +31,11 @@ opening that spans the split is cut through both parts.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from build123d import Axis, Face, Kind, Pos, Shape, Solid, offset
+from build123d import Axis, Face, Kind, Pos, Shape, Solid, Vector, offset
 
 from .board import Board, box, case_xy, extrude, kicad_box
 from .settings import FALLBACK_ASSEMBLY_CLEARANCE_MM, InputError, part_clearance
@@ -181,6 +182,58 @@ def cnc_radius(depth: float) -> float:
     return 0.5 if depth <= 3 else round(depth / 10 + 0.5, 3)
 
 
+# Corners blunter than this are not measured: the radius a probe infers grows without bound as a corner flattens.
+CORNER_MAX_DEG = 135.0
+
+
+def convex_corners(face: Face, with_edges: bool = False) -> list[tuple]:
+    """The cavity outline's convex corners sharper than CORNER_MAX_DEG: (vertex, inward bisector, angle in rad)."""
+    edges = face.outer_wire().edges()
+    by_vertex: dict[tuple[float, float], list[tuple[float, float]]] = {}
+    for e in edges:
+        a, b = e.position_at(0), e.position_at(1)
+        ka, kb = (round(a.X, 6), round(a.Y, 6)), (round(b.X, 6), round(b.Y, 6))
+        by_vertex.setdefault(ka, []).append(kb)
+        by_vertex.setdefault(kb, []).append(ka)
+    out = []
+    for v, nb in by_vertex.items():
+        if len(nb) != 2:
+            continue
+        u = []
+        for n in nb:
+            dx, dy = n[0] - v[0], n[1] - v[1]
+            ln = math.hypot(dx, dy)
+            u.append((dx / ln, dy / ln))
+        ang = math.acos(max(-1.0, min(1.0, u[0][0] * u[1][0] + u[0][1] * u[1][1])))
+        bx, by = u[0][0] + u[1][0], u[0][1] + u[1][1]
+        bl = math.hypot(bx, by)
+        if bl < 1e-9 or math.degrees(ang) > CORNER_MAX_DEG:
+            continue
+        bis = (bx / bl, by / bl)
+        if not face.is_inside(Vector(v[0] + bis[0] * 0.01, v[1] + bis[1] * 0.01, 0)):
+            continue  # a reflex corner: the cutter leaves it sharp
+        out.append((v, bis, ang, u) if with_edges else (v, bis, ang))
+    return out
+
+
+def cavity_edge_mm(board: Board, settings: dict[str, Any]) -> float:
+    """How far the inner cavity stands off the board outline: edge_mm, or for a CNC case more where the lid pocket's
+    corner radius R (cnc_radius of its depth) is larger than edge_mm. A fillet of radius R in a corner of interior
+    angle θ comes R (1 / sin(θ/2) - 1) in from the sharp corner along its bisector, so to keep the board's own corner
+    edge_mm clear of it the whole outline stands off by R - sin(θ/2) (R - edge_mm), at the board's sharpest convex
+    corner. The gap is then the same all along the sides (only larger than asked), which the fit check reports."""
+    e = settings["clearance"]["edge_mm"]
+    if not is_cnc(settings):
+        return e
+    hz = heights(board, settings)
+    r = cnc_radius(hz["lid_inner_z"] - (hz["split_z"] - settings["params"]["lip_h_mm"]))
+    if r <= e:
+        return e
+    corners = convex_corners(board.outline)
+    s = min((math.sin(a / 2) for _, _, a in corners), default=1.0)
+    return round(r - s * (r - e), 3)
+
+
 def _fillet(solid: Solid, r: float, notes: list[str], what: str = "corner fillet") -> Solid:
     if r <= 0:
         return solid
@@ -232,7 +285,11 @@ def two_part(board: Board, settings: dict[str, Any]) -> Case:
     z_top = lid_in + prm["lid_mm"]
 
     check_lip(board, settings)
-    cavity = grow(board.outline, clr["edge_mm"])
+    edge = cavity_edge_mm(board, settings)
+    if edge > clr["edge_mm"] + 1e-9:
+        notes.append(f"CNC: the board's edge gap is {edge:g} mm, not {clr['edge_mm']:g} mm, so the cavity's R"
+                     f"{cnc_radius(lid_in - (t - prm['lip_h_mm'])):g} mm inside corners clear the board's corners")
+    cavity = grow(board.outline, edge)
     lip_w = prm["lip_mm"]
     base_cavity = grow(cavity, lip_w + fit_clr)
     outer = _fillet(extrude(grow(base_cavity, prm["wall_mm"]), z_bot, z_top), prm["corner_radius_mm"], notes)
