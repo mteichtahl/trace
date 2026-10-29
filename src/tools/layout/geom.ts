@@ -124,32 +124,81 @@ export function circlePoints(c: Pt, r: number, n = 32): Pt[] {
   return Array.from({ length: n }, (_, i) => [c[0] + r * Math.cos((2 * Math.PI * i) / n), c[1] + r * Math.sin((2 * Math.PI * i) / n)] as Pt)
 }
 
-/** Join segments end to end into closed loops (ends within `tol`); segments that close no loop are dropped. */
-export function loops(segs: readonly [Pt, Pt][], tol = 1e-3): Poly[] {
-  const key = (p: Pt): string => `${Math.round(p[0] / tol)},${Math.round(p[1] / tol)}`
+/**
+ * Join segments end to end into closed loops: two ends join when they are at most `tol` apart (by distance, so ends
+ * either side of a grid line still meet), the nearest unused end first. Segments that close no loop are left out of
+ * `loops` and returned in `open`, with `ends`: the ends of those segments that meet no other (where the drawing is open).
+ */
+export function chainLoops(segs: readonly [Pt, Pt][], tol = 1e-3): { loops: Poly[]; open: [Pt, Pt][]; ends: Pt[] } {
+  const cell = (v: number): number => Math.floor(v / tol)
   const left = segs.map((s) => [...s] as [Pt, Pt])
   const used = new Array<boolean>(left.length).fill(false)
-  const byEnd = new Map<string, number[]>()
+  // each end in its grid cell; a lookup searches the cell and its eight neighbours
+  const grid = new Map<string, { seg: number; end: 0 | 1 }[]>()
   left.forEach(([a, b], i) => {
-    for (const k of [key(a), key(b)]) (byEnd.get(k) ?? byEnd.set(k, []).get(k) as number[]).push(i)
+    for (const [e, p] of [[0, a], [1, b]] as const) {
+      const k = `${cell(p[0])},${cell(p[1])}`
+      ;(grid.get(k) ?? grid.set(k, []).get(k) as { seg: number; end: 0 | 1 }[]).push({ seg: i, end: e })
+    }
   })
-  const out: Poly[] = []
+  const near = (p: Pt, ok: (seg: number) => boolean): { seg: number; end: 0 | 1 } | null => {
+    let best: { seg: number; end: 0 | 1 } | null = null
+    let bd = Infinity
+    const cx = cell(p[0])
+    const cy = cell(p[1])
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (const h of grid.get(`${cx + dx},${cy + dy}`) ?? []) {
+          if (!ok(h.seg)) continue
+          const q = (left[h.seg] as [Pt, Pt])[h.end]
+          const d = Math.hypot(q[0] - p[0], q[1] - p[1])
+          if (d <= tol && d < bd) { bd = d; best = h }
+        }
+      }
+    }
+    return best
+  }
+  const meets = (a: Pt, b: Pt): boolean => Math.hypot(a[0] - b[0], a[1] - b[1]) <= tol
+  const loops: Poly[] = []
+  const inLoop = new Array<boolean>(left.length).fill(false)
   for (let i = 0; i < left.length; i++) {
     if (used[i]) continue
     used[i] = true
     const [s0, s1] = left[i] as [Pt, Pt]
     const ring: Pt[] = [s0, s1]
+    const members = [i]
     let end = s1
+    let closed = false
     for (let guard = 0; guard < left.length; guard++) {
-      if (key(end) === key(s0)) break
-      const next = (byEnd.get(key(end)) ?? []).find((j) => !used[j])
-      if (next === undefined) break
-      used[next] = true
-      const [a, b] = left[next] as [Pt, Pt]
-      end = key(a) === key(end) ? b : a
+      if (ring.length >= 3 && meets(end, s0)) { closed = true; break }
+      const next = near(end, (j) => !used[j])
+      if (!next) break
+      used[next.seg] = true
+      members.push(next.seg)
+      end = (left[next.seg] as [Pt, Pt])[next.end === 0 ? 1 : 0]
       ring.push(end)
     }
-    if (ring.length >= 4 && key(ring[ring.length - 1] as Pt) === key(s0)) out.push(ring.slice(0, -1))
+    if (!closed && ring.length >= 3 && meets(end, s0)) closed = true
+    if (closed && ring.length >= 4) {
+      loops.push(ring.slice(0, -1))
+      for (const m of members) inLoop[m] = true
+    }
   }
-  return out
+  const open = left.filter((_, i) => !inLoop[i])
+  const openIdx = new Set(left.map((_, i) => i).filter((i) => !inLoop[i]))
+  const ends: Pt[] = []
+  for (const i of openIdx) {
+    for (const e of [0, 1] as const) {
+      const p = (left[i] as [Pt, Pt])[e]
+      // an end no other open segment meets (a segment of zero length counts as its own two ends)
+      const other = near(p, (j) => openIdx.has(j) && j !== i)
+      if (!other) ends.push(p)
+    }
+  }
+  return { loops, open, ends }
+}
+
+/** Join segments end to end into closed loops (ends within `tol`, chainLoops); segments that close no loop are dropped. */
+export function loops(segs: readonly [Pt, Pt][], tol = 1e-3): Poly[] {
+  return chainLoops(segs, tol).loops
 }

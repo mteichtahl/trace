@@ -4,10 +4,11 @@
  * from it carries a reason in `reasons`, keyed by its path (`params.wall_mm`, `clearance.parts.J1`), and mech.settings
  * refuses the change without one, as every choice against a recommendation in trace does.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { z } from 'zod'
 import { ToolError } from '../../core/registry.js'
+import { isRepoRelative, readRepoFile, writeRepoFile } from './paths.js'
 
 export const MECH_DIR = 'mechanical'
 export const CASE_JSON = `${MECH_DIR}/case.json`
@@ -49,12 +50,15 @@ export const OpeningsSchema = z.object({
   extra_mm: nonNeg.default(0.5),
 }).prefault({})
 
+/** A path in the repository, relative to its root: no absolute path, no '..' or '.' segment, no backslash. */
+const RepoPath = z.string().min(1).max(512).refine(isRepoRelative, { message: "a path relative to the repository's root (no leading '/', no '..' segment, no backslash)" })
+
 export const CaseSettingsSchema = z.object({
   version: z.literal(1).default(1),
-  board: z.string().min(1),
+  board: RepoPath,
   template: z.literal('printed-shell').default('printed-shell'),
   source: z.enum(['script', 'file']).default('script'),
-  file: z.string().min(1).optional(),
+  file: RepoPath.optional(),
   process: ProcessSchema,
   params: ParamsSchema,
   clearance: ClearanceSchema,
@@ -165,9 +169,10 @@ export function describe(s: CaseSettings): { path: string; value: unknown; recom
 export function readSettings(root: string): CaseSettings | null {
   const p = join(root, CASE_JSON)
   if (!existsSync(p)) return null
+  const text = readRepoFile(root, CASE_JSON).toString('utf8')
   let raw: unknown
   try {
-    raw = JSON.parse(readFileSync(p, 'utf8'))
+    raw = JSON.parse(text)
   } catch (e) {
     throw new ToolError(`${CASE_JSON} is not valid JSON: ${e instanceof Error ? e.message : String(e)}`)
   }
@@ -183,8 +188,5 @@ export function needSettings(root: string): CaseSettings {
 }
 
 export function writeSettings(root: string, s: CaseSettings): string {
-  const p = join(root, CASE_JSON)
-  mkdirSync(dirname(p), { recursive: true })
-  writeFileSync(p, `${JSON.stringify(s, null, 2)}\n`)
-  return p
+  return writeRepoFile(root, CASE_JSON, `${JSON.stringify(s, null, 2)}\n`)
 }

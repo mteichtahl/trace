@@ -121,7 +121,43 @@ ${body}
   it('refuses a board with no closed outline', () => {
     const pcb = join(dir, 'open.kicad_pcb')
     writeFileSync(pcb, wrap('(gr_line (start 0 0) (end 10 0) (layer "Edge.Cuts"))\n(gr_line (start 10 0) (end 10 10) (layer "Edge.Cuts"))'))
+    expect(() => boardFacts(pcb, dir)).toThrow(/open\.kicad_pcb: the Edge\.Cuts outline does not close: ends at \(0, 0\) and \(10, 10\)/)
+    writeFileSync(pcb, wrap('(gr_line (start 0 0) (end 0 0) (layer "Edge.Cuts"))'))
     expect(() => boardFacts(pcb, dir)).toThrow(/no closed outline on Edge.Cuts/)
+  })
+
+  // the reviewer's case (loops2.ts): a 50 × 40 outline whose last line ends `off` from its first corner, and a slot
+  const L = (a: number[], b: number[]): string => `(gr_line (start ${a[0]} ${a[1]}) (end ${b[0]} ${b[1]}) (layer "Edge.Cuts"))`
+  const slot = '(gr_circle (center 125 120) (end 126.5 120) (layer "Edge.Cuts"))'
+  const outer = (off: number): string => [L([100, 100], [150, 100]), L([150, 100], [150, 140]), L([150, 140], [100, 140]), L([100, 140], [100 + off, 100])].join('\n')
+
+  it('joins ends by their distance, across a rounding boundary (0.004 and 0.006 mm apart)', () => {
+    for (const off of [0.004, 0.006, 0.0099]) {
+      const ls = edgeLoops(wrap(`${outer(off)}\n${slot}`))
+      expect(ls, String(off)).toHaveLength(2)
+      expect(area(ls[0]!)).toBeCloseTo(2000, 1)
+      expect(area(ls[1]!)).toBeCloseTo(Math.PI * 1.5 * 1.5, 0)
+    }
+    // ends 0.006 mm apart, the second segment reversed: still one loop
+    const ls = edgeLoops(wrap([L([0, 0], [10, 0]), L([10, 10], [10.006, 0]), L([10, 10], [0, 10]), L([0, 10], [0, 0.006])].join('\n')))
+    expect(ls).toHaveLength(1)
+    expect(area(ls[0]!)).toBeCloseTo(100, 1)
+  })
+
+  it('names the open ends when the outline does not close, instead of taking a cutout for the board', () => {
+    expect(() => edgeLoops(wrap(`${outer(0.02)}\n${slot}`))).toThrow(/the Edge\.Cuts outline does not close: ends at \(100, 100\) and \(100\.02, 100\)/)
+  })
+
+  it('refuses a loop outside the outline and a part off the board', () => {
+    const pcb = join(dir, 'two.kicad_pcb')
+    writeFileSync(pcb, wrap(`${outer(0)}\n(gr_rect (start 200 100) (end 210 110) (layer "Edge.Cuts"))`))
+    expect(() => boardFacts(pcb, dir)).toThrow(/an Edge\.Cuts loop at \(200, 100\) is outside the board outline/)
+    writeFileSync(pcb, wrap(`${outer(0)}
+(footprint "Resistor_SMD:R_0603_1608Metric" (layer "F.Cu") (at 300 300)
+\t(property "Reference" "R9" (at 0 0) (layer "F.SilkS"))
+\t(pad "1" smd rect (at -0.8 0) (size 0.8 0.9) (layers "F.Cu"))
+\t(pad "2" smd rect (at 0.8 0) (size 0.8 0.9) (layers "F.Cu")))`))
+    expect(() => boardFacts(pcb, dir)).toThrow(/R9 at \(300, 300\) is outside the Edge\.Cuts outline/)
   })
 
   it('reads mounting holes, npth, heights from fields and defaults, pads boxes, DNP and the bottom side', () => {

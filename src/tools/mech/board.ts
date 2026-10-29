@@ -2,9 +2,10 @@
  * Board facts for the enclosure engine (docs/enclosure-build.md, "Board facts"): what the Python engine needs from the
  * .kicad_pcb, read from the file alone (no kicad-cli, no 3D models), in KiCad's frame (x right, y down, mm).
  *
- *   outline   the Edge.Cuts loop with the largest area: lines and arcs chained end to end (ends within 0.01 mm),
- *             rects, circles and polygons as they are, arcs and circles sampled every 0.5 mm or less; footprint
- *             Edge.Cuts included. The other loops are cutouts
+ *   outline   the Edge.Cuts loop with the largest area: lines and arcs chained end to end (ends within 0.01 mm of
+ *             each other, by distance), rects, circles and polygons as they are, arcs and circles sampled every 0.5 mm
+ *             or less; footprint Edge.Cuts included. The other loops are cutouts, and must lie inside it, as must
+ *             every part's centre. Segments left over that close no loop are an error naming the open ends
  *   holes     non-plated pads (npth), every drilled pad of a MountingHole* footprint (mounting), and plated pads with a
  *             drill of 1 mm or more (pth); smaller plated drills and vias are left out
  *   parts     each placed footprint with pads that is not DNP, a mounting hole, a fiducial or only non-plated holes: its courtyard box (the
@@ -18,7 +19,7 @@ import { ToolError } from '../../core/registry.js'
 import * as sx from '../kicad/sexpr.js'
 import { loadBoard } from '../kicad/pcb.js'
 import { readLayout } from '../layout/board.js'
-import { area, bbox, loops, type Poly, type Pt } from '../layout/geom.js'
+import { area, bbox, chainLoops, inside, type Poly, type Pt } from '../layout/geom.js'
 import { partHeight } from './heights.js'
 
 export type Side = 'west' | 'east' | 'north' | 'south'
@@ -175,7 +176,10 @@ function edgeShape(node: sx.SList): { segs: [Pt, Pt][]; closed: Poly | null } {
   return { segs: [], closed: null }
 }
 
-/** The Edge.Cuts loops of a board file, largest first. */
+const at = (p: Pt): string => `(${r4(p[0])}, ${r4(p[1])})`
+
+/** The Edge.Cuts loops of a board file, largest first. Throws a ToolError naming the open ends when segments are left
+ * over that close no loop (the outline does not close). */
 export function edgeLoops(text: string): Poly[] {
   const tree = sx.parse(text)
   const segs: [Pt, Pt][] = []
@@ -194,8 +198,33 @@ export function edgeLoops(text: string): Poly[] {
       if ((sx.head(g) ?? '').startsWith('fp_') && layersOf(g).includes('Edge.Cuts')) add(edgeShape(g), (p) => rot(p[0], p[1], at[0], at[1], at[2]))
     }
   }
-  return [...closed, ...loops(segs, JOIN_TOL_MM)].filter((p) => area(p) > 1e-6).sort((a, b) => area(b) - area(a))
+  // zero-length segments (a stray click) join nothing and open nothing
+  const real = segs.filter(([a, b]) => Math.hypot(a[0] - b[0], a[1] - b[1]) > 1e-9)
+  const c = chainLoops(real, JOIN_TOL_MM)
+  if (c.open.length) {
+    const ends = c.ends.slice(0, 6)
+    throw new ToolError(`the Edge.Cuts outline does not close: ${ends.length ? `ends at ${ends.map(at).join(' and ')}${c.ends.length > ends.length ? ` and ${c.ends.length - ends.length} more` : ''}` : `${c.open.length} segment(s) join no loop`} (ends must meet within ${JOIN_TOL_MM} mm): join them in KiCad's board editor`)
+  }
+  return [...closed, ...c.loops].filter((p) => area(p) > 1e-6).sort((a, b) => area(b) - area(a))
 }
+
+/** Distance from a point to a polygon's outline. */
+function toOutline(p: Pt, poly: readonly Pt[]): number {
+  let m = Infinity
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i] as Pt
+    const b = poly[(i + 1) % poly.length] as Pt
+    const dx = b[0] - a[0]
+    const dy = b[1] - a[1]
+    const l2 = dx * dx + dy * dy
+    const t = l2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0
+    m = Math.min(m, Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy)))
+  }
+  return m
+}
+
+/** Whether `p` is inside the outline or on it (within the join tolerance). */
+const within = (p: Pt, outline: readonly Pt[]): boolean => inside(p, outline) || toOutline(p, outline) <= JOIN_TOL_MM
 
 /** The outline side nearest a box, when the box is within EDGE_NEAR_MM of it. */
 export function nearestSide(box: PartFacts['box'], o: { min_x: number; min_y: number; max_x: number; max_y: number }): PartFacts['edge'] {
@@ -216,9 +245,19 @@ export function boardFacts(pcbPath: string, root?: string): BoardFacts {
   const board = loadBoard(pcbPath)
   const layout = readLayout(pcbPath)
   const warnings: string[] = []
-  const ls = edgeLoops(readFileSync(board.path, 'utf8'))
+  let ls: Poly[]
+  try {
+    ls = edgeLoops(readFileSync(board.path, 'utf8'))
+  } catch (e) {
+    throw e instanceof ToolError ? new ToolError(`${repoPath(board.path, root)}: ${e.message}`) : e
+  }
   const outline = ls[0]
   if (!outline) throw new ToolError(`${repoPath(board.path, root)} has no closed outline on Edge.Cuts: draw the board edge as one closed loop`)
+  // every other loop is a cutout of this board: inside its outline (two boards in one file, or a stray loop, is not)
+  for (const l of ls.slice(1)) {
+    const out = l.find((p) => !within(p, outline))
+    if (out) throw new ToolError(`${repoPath(board.path, root)}: an Edge.Cuts loop at ${at(out)} is outside the board outline (the largest loop): a cutout must lie inside the board; remove the stray loop or draw one board per file`)
+  }
   const [ox0, oy0, ox1, oy1] = bbox(outline)
   const ob = { min_x: ox0, min_y: oy0, max_x: ox1, max_y: oy1 }
   let thickness = board.thickness_mm
@@ -270,6 +309,9 @@ export function boardFacts(pcbPath: string, root?: string): BoardFacts {
       connector: CONNECTOR_REF.test(f.ref) || CONNECTOR_LIB.test(lib), edge: nearestSide(box, ob),
     })
   })
+
+  const outside = parts.filter((p) => !within([p.x, p.y], outline))
+  if (outside.length) throw new ToolError(`${repoPath(board.path, root)}: ${outside.slice(0, 5).map((p) => `${p.ref} at ${at([p.x, p.y])}`).join(', ')}${outside.length > 5 ? ` and ${outside.length - 5} more` : ''} ${outside.length === 1 ? 'is' : 'are'} outside the Edge.Cuts outline: move ${outside.length === 1 ? 'it' : 'them'} onto the board, or fix the outline`)
 
   return {
     version: 1, board: repoPath(board.path, root), sha256: board.sha256, thickness_mm: thickness,
