@@ -11,6 +11,8 @@
  *                        user pool and users stay), which a new installation's pool needs
  *   share-source         trace's own private repository's actions, shared with its owner's repositories
  *   clear-leftovers      a removed installation's kept image repositories and token secret (preflight leftoverNames)
+ *   delete-tools-repository  the `<prefix>-tools` ECR repository a failed deploy left behind (it is not the stack's:
+ *                        preflight toolsLeftover), which the next deploy would collide with
  */
 import type { AwsCredentialIdentity } from '@smithy/types'
 import { z } from 'zod'
@@ -36,6 +38,7 @@ export const FixRequest = z.discriminatedUnion('action', [
   z.object({ action: z.literal('delete-cognito-domain'), domain: z.string().regex(/^[a-z0-9-]{1,63}$/), userPoolId: z.string().regex(/^[\w-]+_[0-9a-zA-Z]+$/) }),
   z.object({ action: z.literal('share-source') }),
   z.object({ action: z.literal('clear-leftovers'), prefix: z.string().regex(/^[a-z][a-z0-9-]{1,20}$/) }),
+  z.object({ action: z.literal('delete-tools-repository'), prefix: z.string().regex(/^[a-z][a-z0-9-]{1,20}$/) }),
 ])
 export type FixRequest = z.infer<typeof FixRequest>
 
@@ -95,7 +98,7 @@ export async function fix(r: FixRequest, ctx: { creds: AwsCredentialIdentity; re
       const [{ signedCaller, ecr }, sm] = await Promise.all([import('./signed.js'), import('@aws-sdk/client-secrets-manager')])
       const call = signedCaller(ctx.creds, ctx.region)
       const done: string[] = []
-      for (const name of [`${r.prefix}-agent`, `${r.prefix}-gpu`]) {
+      for (const name of [`${r.prefix}-agent`, `${r.prefix}-gpu`, `${r.prefix}-tools`]) {
         try { await call(ecr(ctx.region, 'DeleteRepository', { repositoryName: name, force: true })); done.push(`deleted the ECR repository ${name}`) } catch { /* not there */ }
       }
       try {
@@ -103,6 +106,14 @@ export async function fix(r: FixRequest, ctx: { creds: AwsCredentialIdentity; re
         done.push(`deleted the secret ${r.prefix}/github-token`)
       } catch { /* not there */ }
       return done.length ? `${done.join('; ')}. Check again.` : 'nothing was left to delete'
+    }
+    case 'delete-tools-repository': {
+      const { signedCaller, ecr } = await import('./signed.js')
+      const call = signedCaller(ctx.creds, ctx.region)
+      const name = `${r.prefix}-tools`
+      // its images are the tools image only, which the deploy copies or builds again
+      await call(ecr(ctx.region, 'DeleteRepository', { repositoryName: name, force: true }))
+      return `Deleted the ECR repository ${name}. Check again.`
     }
   }
 }

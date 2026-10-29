@@ -57,11 +57,16 @@ export interface ToolsImage { images: ecr.IRepository; tag: string; uri: string 
  * function made from it waits for the build.
  */
 export function buildToolsImage(scope: Construct, o: {
-  prefix: string; keep: RemovalPolicy; retainData: boolean; source: Asset; buildLogs: logs.ILogGroup; serviceToken: string
+  prefix: string; source: Asset; buildLogs: logs.ILogGroup; serviceToken: string
   environment: Record<string, codebuild.BuildEnvironmentVariable>
+  /** what the build's start must wait for besides its project (the image-build provider's functions, whose policies
+   * gain this project in the same deploy) */
+  dependsOn?: IConstruct[]
 }): ToolsImage {
+  // removed with the stack whatever retainData says: it holds only images the next deploy copies or builds again, and
+  // one kept after a failed first deploy (rolled back) would collide with the repository the next one makes
   const repo = new ecr.Repository(scope, 'ToolsImages', {
-    repositoryName: `${o.prefix}-tools`, imageScanOnPush: true, removalPolicy: o.keep, emptyOnDelete: !o.retainData, lifecycleRules: [{ maxImageCount: 5 }],
+    repositoryName: `${o.prefix}-tools`, imageScanOnPush: true, removalPolicy: RemovalPolicy.DESTROY, emptyOnDelete: true, lifecycleRules: [{ maxImageCount: 5 }],
   })
   const build = new codebuild.Project(scope, 'ToolsImageBuild', {
     projectName: `${o.prefix}-tools-image`,
@@ -80,6 +85,10 @@ export function buildToolsImage(scope: Construct, o: {
     serviceToken: o.serviceToken,
     properties: { ProjectName: build.projectName, ImageUri: `${repo.repositoryUri}:${o.source.assetHash}`, SourceHash: o.source.assetHash },
   })
+  // the build starts only once its project's role may write its logs and push (the role's policy is a resource of its
+  // own, which CloudFormation would otherwise make alongside: "Service role … does not allow AWS CodeBuild to create
+  // Amazon CloudWatch Logs log streams", the build failed in QUEUED), and once the provider may start it
+  image.node.addDependency(build, ...(o.dependsOn ?? []))
   // repository URI ':' tag (the URI has no other ':')
   return { images: repo, tag: Fn.select(1, Fn.split(':', image.getAttString('ImageUri'))), uri: image.getAttString('ImageUri') }
 }
@@ -154,11 +163,14 @@ export class ToolsFunction extends Construct {
  */
 export class FlatToolsStack extends NestedStack {
   readonly functions: ToolsFunction[]
+  /** the tools image's URI (the parent's ToolsImageUri output, as in the nested layout) */
+  readonly imageUri: string
 
   constructor(scope: Construct, id: string, p: { cfg: InfraProps; bucket: s3.IBucket; build: (scope: Construct) => ToolsImage; projects: { ref: ProjectRef; project: ProjectStack }[] }) {
     super(scope, id, { description: 'trace: the projects\' tools functions (the flat layout) and the tools image they run' })
     const { cfg } = p
     const image = p.build(this)
+    this.imageUri = image.uri
     const otel = gpuTelemetryEnv(cfg)
     this.functions = p.projects.map(({ ref, project }) => {
       const fn = new ToolsFunction(this, `Project${ref.hash}Tools`, {

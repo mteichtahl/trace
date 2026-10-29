@@ -39,6 +39,14 @@ describe('the tools image', () => {
     // the custom resource waits (no Wait: 'false', unlike the GPU image): a function needs its image to exist
     const image = resources(s.parent, 'AWS::CloudFormation::CustomResource').find(([id]) => id.startsWith('ToolsImage'))?.[1]
     expect(image?.Properties.Wait).toBeUndefined()
+    // and starts only once its project's role may write the build's logs and push (its policy is its own resource),
+    // and the provider's functions may start and poll it ("does not allow AWS CodeBuild to create … log streams")
+    const deps = (resources(s.parent, 'AWS::CloudFormation::CustomResource').find(([id]) => id.startsWith('ToolsImage'))?.[1] as Res & { DependsOn?: string[] }).DependsOn ?? []
+    for (const want of [/^ToolsImageBuildRoleDefaultPolicy/, /^ToolsImageBuild[0-9A-F]{8}$/, /^ImageBuildStartServiceRoleDefaultPolicy/, /^ImageBuildPollServiceRoleDefaultPolicy/]) {
+      expect(deps.some((d) => want.test(d)), String(want)).toBe(true)
+    }
+    const agent = (resources(s.parent, 'AWS::CloudFormation::CustomResource').find(([id]) => id === 'AgentImage')?.[1] as Res & { DependsOn?: string[] }).DependsOn ?? []
+    expect(agent.some((d) => /^AgentImageBuildRoleDefaultPolicy/.test(d))).toBe(true)
     // Lambda may pull from the repository (DockerImageCode.fromEcr)
     const repo = resources(s.parent, 'AWS::ECR::Repository').find(([, r]) => r.Properties.RepositoryName === 'trace-tools')?.[1]
     expect(JSON.stringify(repo?.Properties.RepositoryPolicyText)).toContain('lambda.amazonaws.com')

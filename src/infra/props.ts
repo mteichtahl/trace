@@ -566,6 +566,9 @@ export const CDK_QUALIFIER = 'hnb659fds'
 
 /** The stack's layout ('flat' or 'nested'), an output so the installer can tell which an installation has. */
 export const LAYOUT_OUTPUT = 'Layout'
+/** The tools image's URI, in both layouts when the stack has the tools image (src/infra/tools.ts): without it, a
+ * `<prefix>-tools` repository in the account is not the stack's (src/installer/preflight.ts). */
+export const TOOLS_IMAGE_OUTPUT = 'ToolsImageUri'
 
 /** CloudFormation's per-template quotas the stack checks when it is built. */
 export const STACK_RESOURCES_MAX = 500

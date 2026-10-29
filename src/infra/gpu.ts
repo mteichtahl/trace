@@ -130,6 +130,8 @@ export class GpuCompute extends Construct {
       serviceToken: p.buildProvider.serviceToken,
       properties: { ProjectName: build.projectName, ImageUri: this.imageUri, SourceHash: p.source.assetHash, Wait: 'false' },
     })
+    // started only once the project's role (its policy, a resource of its own) may write its logs and push
+    this.image.node.addDependency(build)
     this.imageBuildId = this.image.getAttString('BuildId')
 
     // ------------------------------------------------------------------ compute, queue, job definition
