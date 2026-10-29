@@ -106,10 +106,10 @@ export class TraceReleaseStack extends Stack {
           statements: [
             // the registry login (GetAuthorizationToken has no resource, and needs a service bearer token for ECR Public)
             new iam.PolicyStatement({ sid: 'Login', actions: ['ecr-public:GetAuthorizationToken'], resources: ['*'] }),
-            // IfExists: ECR Public does not send sts:AWSServiceName when it asks for the token (aws/containers-roadmap#2896,
-            // open), so StringEquals denies every login; with the key absent this allows it, and once AWS sends the key it
-            // holds the token to ECR Public again. A bearer token is only usable with the service that issued it anyway
-            new iam.PolicyStatement({ sid: 'BearerToken', actions: ['sts:GetServiceBearerToken'], resources: ['*'], conditions: { StringEqualsIfExists: { 'sts:AWSServiceName': 'ecr-public.amazonaws.com' } } }),
+            // No condition, as in AWS's managed AmazonElasticContainerRegistryPublicReadOnly: ECR Public makes this STS call
+            // itself and sends no sts:AWSServiceName (aws/containers-roadmap#2896, open), and neither StringEquals nor
+            // StringEqualsIfExists on it let the login through. A bearer token is only usable with the service that issued it
+            new iam.PolicyStatement({ sid: 'BearerToken', actions: ['sts:GetServiceBearerToken'], resources: ['*'] }),
             new iam.PolicyStatement({ sid: 'Push', actions: [...PUSH_ACTIONS], resources: Object.values(this.repositories).map((r) => r.attrArn) }),
           ],
         }),
