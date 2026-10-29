@@ -77,6 +77,10 @@ RUN npm run build:image \
  && node scripts/check-imports.mjs --without @anthropic-ai/claude-agent-sdk,@anthropic-ai/sdk,aws-cdk-lib,aws-cdk,constructs dist/gpu/lambda.js dist/gpu/kicad-job.js \
  && python3 -m venv /opt/trace-venv \
  && /opt/trace-venv/bin/pip install --no-cache-dir 'cocotb==2.1.0' 'apycula==0.10.0'
+# The enclosure engine (python -m tracebridge.mech, the `cad` job kind): tracebridge with its mech extra, which pins
+# build123d and pulls OpenCascade's arm64 wheels. Installed as a copy, not editable, so the venv does not point back
+# into /app's build tree; in its own layer because it is the largest thing in the venv.
+RUN /opt/trace-venv/bin/pip install --no-cache-dir '/app/python[mech]'
 
 # ------------------------------------------------------------------ final: what the tools function runs
 FROM tools
@@ -90,5 +94,6 @@ ENV PATH=/opt/trace-venv/bin:$PATH \
     XDG_DATA_HOME=/tmp/.local/share \
     NODE_ENV=production
 WORKDIR /tmp
-RUN test -f /app/dist/gpu/lambda.js && test -f /app/dist/gpu/kicad-job.js && test -d /app/python/blender && command -v kicad-cli blender ffmpeg yosys verilator ccx cocotb-config gowin_pack
+RUN test -f /app/dist/gpu/lambda.js && test -f /app/dist/gpu/kicad-job.js && test -d /app/python/blender && command -v kicad-cli blender ffmpeg yosys verilator ccx cocotb-config gowin_pack \
+ && /opt/trace-venv/bin/python -c "import build123d, tracebridge.mech"
 CMD ["node", "/app/dist/gpu/lambda.js"]
