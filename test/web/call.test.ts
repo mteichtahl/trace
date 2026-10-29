@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { SignatureV4 } from '@smithy/signature-v4'
-import { runtimeSession } from '../../src/web/call.js'
+import { API_FIRST_BYTE_MS, API_UNAVAILABLE, callApi, runtimeSession } from '../../src/web/call.js'
+import { API_READ_TIMEOUT_SECONDS } from '../../src/infra/web.js'
 import { appsyncPublisher, changeOf } from '../../src/web/events.js'
 import { EMPTY_SHA256, contentSha256 } from '../../src/web/content-hash.js'
 import { streamSink, toRequest } from '../../src/web/event.js'
@@ -182,5 +183,52 @@ describe('the bundle', () => {
     } finally {
       rmSync(out, { recursive: true, force: true })
     }
+  })
+})
+
+describe('/api/call when the API runtime does not answer', () => {
+  it('waits for the runtime\'s first byte for less than CloudFront waits for the backend, so the app never sees a bare 504', () => {
+    expect(API_FIRST_BYTE_MS).toBeLessThan(API_READ_TIMEOUT_SECONDS * 1000)
+    // and long enough for a cold start that does come up
+    expect(API_FIRST_BYTE_MS).toBeGreaterThanOrEqual(30_000)
+  })
+
+  it('a runtime that cannot be reached is 503 api_unavailable, in plain words, and the log says which runtime', async () => {
+    const w = world()
+    w.runtime.down.add('projects')
+    const r = await w.serve(call({ action: 'projects' }))
+    expect(r.status).toBe(503)
+    expect(r.json()).toEqual({ ok: false, error: API_UNAVAILABLE, code: 'api_unavailable' })
+    const line = w.logs.find((l) => l.warning === 'api runtime: not reachable')
+    expect(line).toMatchObject({ action: 'projects', runtime: CONFIG.apiRuntimeArn, error: 'TypeError: fetch failed' })
+    expect(JSON.stringify(w.logs)).not.toContain(tok)
+  })
+
+  it('a runtime that does not start answering in time is api_unavailable; one that answers late but in time is not', async () => {
+    const w = world()
+    const hang: typeof fetch = (_u, init) => new Promise((_res, rej) => {
+      init?.signal?.addEventListener('abort', () => { rej(new DOMException('aborted', 'AbortError')) })
+    })
+    const who = { config: CONFIG, token: tok, sub: 'sub-ada' }
+    const t0 = Date.now()
+    await expect(callApi({ ...w.deps, fetch: hang }, who, 'projects', {}, { firstByteMs: 30 })).rejects.toMatchObject({ status: 503, code: 'api_unavailable' })
+    expect(Date.now() - t0).toBeLessThan(5_000)
+    expect(w.logs.find((l) => l.warning === 'api runtime: no answer in time')).toMatchObject({ action: 'projects', firstByteMs: 30 })
+
+    const slow: typeof fetch = async () => { await new Promise((r) => setTimeout(r, 10)); return new Response('{"ok":true,"result":[]}', { status: 200 }) }
+    const a = await callApi({ ...w.deps, fetch: slow }, who, 'projects', {}, { firstByteMs: 1_000 })
+    expect(a).toMatchObject({ status: 200, json: { ok: true, result: [] } })
+  })
+
+  it('a call the caller abandons is not blamed on the runtime', async () => {
+    const w = world()
+    const hang: typeof fetch = (_u, init) => new Promise((_res, rej) => {
+      init?.signal?.addEventListener('abort', () => { rej(new DOMException('aborted', 'AbortError')) })
+    })
+    const gone = new AbortController()
+    const p = callApi({ ...w.deps, fetch: hang }, { config: CONFIG, token: tok, sub: 'sub-ada' }, 'projects', {}, { signal: gone.signal, firstByteMs: 60_000 })
+    gone.abort()
+    await expect(p).rejects.toMatchObject({ name: 'AbortError' })
+    expect(w.logs.filter((l) => typeof l.warning === 'string' && l.warning.startsWith('api runtime'))).toEqual([])
   })
 })

@@ -68,6 +68,12 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      # Every runtime mode starts from the built entry, as AgentCore starts the image: the API and MCP servers are
+      # loaded with a dynamic import() that only the built layout resolves, which no unit test exercises
+      - name: The runtimes start
+        run: |
+          npm run build:image
+          node scripts/check-runtime-start.mjs
       - name: The harness bundle is up to date
         run: |
           node scripts/bundle-harness.mjs

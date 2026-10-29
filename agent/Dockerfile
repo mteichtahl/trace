@@ -69,6 +69,7 @@ RUN npm run build:image \
  && rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl \
  && rm -rf node_modules/aws-cdk-lib node_modules/aws-cdk node_modules/@aws-cdk node_modules/constructs \
  && node scripts/check-imports.mjs dist/agents/runtime/main.js dist/cli.js dist/gpu/runner.js \
+ && node scripts/check-runtime-start.mjs --require /app/node_modules/@aws/aws-distro-opentelemetry-node-autoinstrumentation/build/src/register.js \
  && test -x node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64/claude \
  && chmod +x /app/dist/cli.js \
  && python3 -m venv /opt/trace-venv \
