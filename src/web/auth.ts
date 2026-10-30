@@ -37,7 +37,7 @@
 import type { AuthenticationResultType, ChallengeNameType, RespondToAuthChallengeCommandOutput } from '@aws-sdk/client-cognito-identity-provider'
 import type { DocumentType } from '@smithy/types'
 import { z } from 'zod'
-import { AuthError } from '../api/jwt.js'
+import { AuthError, KeysUnavailable } from '../api/jwt.js'
 import type { WebConfig } from './config.js'
 import { type WebClass, type WebDeps, classOfGroups, signedIn } from './deps.js'
 import { type Reply, type WebRequest, WebError, cookie, parseBody, route, whoHash } from './http.js'
@@ -125,6 +125,7 @@ async function signedInReply(r: AuthenticationResultType, deps: WebDeps, c: WebC
     const id = await deps.verifier(c).verifyId(r.IdToken)
     user = { sub: id.sub, email: id.email ?? null, class: classOfGroups(id['cognito:groups'] ?? []) }
   } catch (e) {
+    if (e instanceof KeysUnavailable) throw new WebError(503, 'sign-in cannot be checked just now: try again in a moment', 'auth_unavailable')
     throw e instanceof AuthError ? new WebError(401, `the id token did not verify: ${e.message}`, 'unauthenticated') : e
   }
   return {
@@ -216,7 +217,7 @@ export function authRoutes(deps: WebDeps) {
       const c = await deps.config()
       try {
         const out = await deps.cognito(c).initiateAuth({ AuthFlow: 'REFRESH_TOKEN_AUTH', ClientId: c.clientId, AuthParameters: { REFRESH_TOKEN: rt } })
-        if (!out.AuthenticationResult) throw new WebError(401, 'the session has ended', 'unauthenticated')
+        if (!out.AuthenticationResult) throw new WebError(401, 'the session has ended', 'session_ended')
         const reply = await signedInReply(out.AuthenticationResult, deps, c)
         const body = reply.body as { user: { sub: string }; signedIn?: boolean }
         ctx.who = whoHash(body.user.sub)
@@ -226,8 +227,10 @@ export function authRoutes(deps: WebDeps) {
         return { body: rest, ...(cookies.length ? { cookies } : {}) }
       } catch (e) {
         const we = e instanceof WebError ? e : cognitoError(e)
-        // an expired or revoked refresh token ends the session: the cookie goes with it
-        if (we.status === 401) return { status: 401, body: { ok: false, error: 'the session has ended: sign in again', code: 'unauthenticated' }, cookies: [clearCookie(), ...(found.old ? [clearOldCookie()] : [])] }
+        // Only Cognito refusing the refresh token (expired, revoked: NotAuthorizedException) ends the session, and the
+        // cookie goes with it. Anything else, the backend's own failure to check the new tokens among it (the signing
+        // keys not fetched: 503), keeps the cookie, so the next refresh can succeed
+        if (we.code === 'not_authorized' || we.code === 'session_ended') return { status: 401, body: { ok: false, error: 'the session has ended: sign in again', code: 'unauthenticated' }, cookies: [clearCookie(), ...(found.old ? [clearOldCookie()] : [])] }
         throw we
       }
     }),

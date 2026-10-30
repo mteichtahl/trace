@@ -1,7 +1,8 @@
 /**
  * Who is signed in. Access and id tokens live in memory only; the refresh token is the HTTP-only cookie `trace_rt`
  * that /api/auth sets, so a reload refreshes from the cookie. Tokens are refreshed a minute before they expire; when a
- * refresh fails while the person was signed in, the session-ended banner shows and nothing they typed is touched.
+ * refresh is refused (401) while the person was signed in, the session-ended banner shows and nothing they typed is
+ * touched. Any other failure (offline, 5xx, 429) keeps the session and tries again in 15 seconds.
  */
 import { HttpError, request } from './http'
 import { createStore, useStore } from './store'
@@ -48,8 +49,9 @@ export function refresh(): Promise<boolean> {
       accept(r)
       return true
     } catch (e) {
-      // offline: keep what we have and try again shortly
-      if (!(e instanceof HttpError) && was) {
+      // Only a 401 means the session has ended (the refresh token refused). Offline, or the backend not answering
+      // (5xx, 429): keep what we have and try again shortly, so a busy or restarting service never signs anyone out
+      if (!(e instanceof HttpError && e.status === 401) && was) {
         timer = setTimeout(() => void refresh(), 15_000)
         return false
       }
