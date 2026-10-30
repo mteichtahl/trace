@@ -20,7 +20,7 @@
  * The repository gets a copy of the record when a release is cut (journey.snapshot, src/api/actions-journey.ts), so a
  * released revision carries the record that approved it; the bucket stays the live record.
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
@@ -71,7 +71,11 @@ export class BucketDb {
   }
 
   protected temp(bytes: Uint8Array | null): { path: string; cleanup(): void } {
-    const dir = mkdtempSync(join(this.o.scratch ?? tmpdir(), 'trace-journey-'))
+    // the scratch folder is made here, as tempDb (src/api/action-kit.ts) makes its own: the API's is a folder of /tmp
+    // (defaultScratch) that nothing else creates, and mkdtemp in a missing folder fails with ENOENT
+    const scratch = this.o.scratch ?? tmpdir()
+    mkdirSync(scratch, { recursive: true })
+    const dir = mkdtempSync(join(scratch, 'trace-journey-'))
     const path = join(dir, this.where.file)
     if (bytes) writeFileSync(path, bytes)
     return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) }

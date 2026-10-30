@@ -29,6 +29,13 @@ describe('the journey store in the central bucket', () => {
     expect((await new JourneyStore(new S3Backend('bucket', 'projects', s3), 'acme/other').read((db) => loadJourney(db))).result).toBeNull()
   })
 
+  it('makes its scratch folder when it is not there yet (the API\'s, a folder of /tmp nothing else creates)', async () => {
+    const scratch = join(mkdtempSync(join(tmpdir(), 'trace-js-')), 'trace-api')
+    const store = new JourneyStore(new S3Backend('bucket', 'projects', new FakeS3()), 'acme/board', { scratch })
+    expect((await start(store)).version).toBe(1)
+    expect((await store.read((db) => loadJourney(db) !== null)).result).toBe(true)
+  })
+
   it('re-runs a change that lost a race on a fresh copy, keeping the other writer\'s change', async () => {
     const s3 = new FakeS3()
     const store = new JourneyStore(new S3Backend('bucket', 'projects', s3), 'acme/board')
