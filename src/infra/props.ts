@@ -193,7 +193,9 @@ export const InfraPropsSchema = z.object({
    * project's jobs/<slug>/ and its log group. In layout 'nested' each is in its project's nested stack (toolsEnabled
    * below); in layout 'flat', whose stack has no room for four more resources per project, all of them are in one
    * nested stack of their own, made when the flat stack has room for that one resource (src/infra/tools.ts
-   * FlatToolsStack: not at 20 flat projects with everything on, whose projects then send those jobs to the queue). */
+   * FlatToolsStack: not at 20 flat projects with everything on, whose projects then send those jobs to the queue).
+   * In the nested layout each project also has a cad function (src/infra/tools.ts CadFunction, the same image and
+   * sizes, four resources more) for its case script, on a role with nothing in it; the flat layout has none. */
   tools: z.object({
     enabled: z.boolean().default(true),
     /** the function's memory (MB): its CPU share grows with it, a full vCPU at 1769 MB, six at 10240 */

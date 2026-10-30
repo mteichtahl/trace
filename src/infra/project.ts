@@ -49,7 +49,8 @@
  *   gateway   bedrock-agentcore:InvokeGateway on the installation's library gateway only (gateway.enabled,
  *             src/infra/gateway.ts), which serves the shared datasheets and parts tools
  *   tools     lambda:InvokeFunction on its own tools function only (nested layout, src/infra/tools.ts), whose role
- *             reaches jobs/<slug>/* and its own log group, nothing else
+ *             reaches jobs/<slug>/* and its own log group, nothing else; and on its own cad function (nested layout,
+ *             the case script's), whose role writes its own log group and nothing else
  *
  * Its GitHub OIDC role (assumed by that repository's default-branch workflows only) may invoke only this runtime,
  * read the central store and write it the same conditional way (the worker.runner=actions fallback is the worker
@@ -102,7 +103,7 @@ import { ProjectKnowledgeBase } from './knowledge.js'
 import { EVENT_ACTIONS, RECORD_ACTIONS, TraceMemory } from './memory.js'
 import { projectVocabularyStatements, vocabularyBase } from './voice.js'
 import { RunnerProject } from './runner.js'
-import { ToolsFunction } from './tools.js'
+import { CadFunction, ToolsFunction } from './tools.js'
 import { gpuTelemetryEnv } from './observability.js'
 import { jobIndexKey } from '../core/job-index.js'
 import { PRICES_KEY, PRICES_PREFIX } from '../core/prices-store.js'
@@ -237,6 +238,8 @@ export class ProjectStack extends Construct {
   readonly runner: RunnerProject | null
   /** where its KiCad, Blender, verification, CalculiX and ffmpeg jobs run (src/infra/tools.ts); null without one */
   readonly tools: ToolsFunction | null
+  /** its cad function (the case script's), nested layout only */
+  readonly cad: CadFunction | null
 
   constructor(scope: Construct, id: string, p: ProjectProps) {
     super(scope, id)
@@ -453,6 +456,16 @@ export class ProjectStack extends Construct {
         TRACE_TOOLS_FUNCTION_MEMORY_MB: String(cfg.tools.memoryMb), TRACE_TOOLS_FUNCTION_STORAGE_MB: String(cfg.tools.ephemeralMb),
       })
     }
+    // its cad function (src/infra/tools.ts CadFunction): the case script, a project's own code, on a role with nothing
+    // in it; the worker signs URLs for the job's files and may invoke this function. Nested layout only: four more
+    // resources per project, which the flat layout has no room for (there a custom script builds on a laptop or in CI)
+    this.cad = p.tools && cfg.layout === 'nested'
+      ? new CadFunction(this, 'Cad', { prefix: cfg.prefix, slug, hash, images: p.tools.images, tag: p.tools.tag, memoryMb: cfg.tools.memoryMb, ephemeralMb: cfg.tools.ephemeralMb })
+      : null
+    if (this.cad) {
+      role.addToPolicy(new iam.PolicyStatement({ sid: 'ProjectCadInvoke', actions: ['lambda:InvokeFunction'], resources: [this.cad.function.functionArn] }))
+      Object.assign(toolsEnv, { TRACE_CAD_FUNCTION: this.cad.functionName, TRACE_CAD_FUNCTION_MEMORY_MB: String(cfg.tools.memoryMb) })
+    }
 
     // ------------------------------------------------------------------ its events topic: jobs' state changes, people's answers
     // nested layout only, like the CPU queue and the knowledge base: a flat stack of about 24 projects has no room
@@ -636,7 +649,7 @@ export class ProjectNestedStack extends NestedStack {
   readonly project: ProjectStack
 
   constructor(scope: Construct, id: string, p: ProjectProps) {
-    super(scope, id, { description: `trace: ${p.project.slug}'s worker runtime, roles, token secret, memory, knowledge base, job definitions, tools function and CI runner`.slice(0, 1024) })
+    super(scope, id, { description: `trace: ${p.project.slug}'s worker runtime, roles, token secret, memory, knowledge base, job definitions, tools and cad functions and CI runner`.slice(0, 1024) })
     this.project = new ProjectStack(this, `Project${p.project.hash}`, p)
     // whose nested stack this is: the installer reads each project's outputs here (the parent carries none of them)
     new CfnOutput(this, REPOSITORY_OUTPUT, { value: p.project.slug, description: 'The repository this nested stack is the project of' })
