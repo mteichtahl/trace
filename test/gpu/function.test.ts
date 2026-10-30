@@ -21,7 +21,7 @@ const env = { TRACE_TOOLS_FUNCTION: FN, TRACE_GPU_BUCKET: 'central-bucket', TRAC
 describe('where a job runs', () => {
   const at = (e: Record<string, string>, j: Parameters<typeof backendFor>[0]) => backendFor(j, { TRACE_GPU: '0', ...e })
   it('on the tools function for the kinds it has, when the project has one', () => {
-    for (const kind of ['kicad', 'ffmpeg', 'verilator', 'cocotb', 'formal', 'yosys', 'nextpnr', 'fpga-pack', 'calculix'] as const) {
+    for (const kind of ['kicad', 'ffmpeg', 'verilator', 'cocotb', 'formal', 'yosys', 'nextpnr', 'fpga-pack', 'calculix', 'cad'] as const) {
       expect(at(env, { kind, gpu: false })).toBe('function')
     }
     // a render with no GPU queue renders on its CPU; with one, on the queue

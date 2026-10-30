@@ -64,7 +64,7 @@ export async function stageJob(job: ParsedJob, o: { env: NodeJS.ProcessEnv; s3?:
   }
   const spec: RemoteSpec = {
     v: 1, id, bucket, prefix, kind: job.kind, argv: job.argv, inputs: Object.keys(job.inputs), outputs: job.outputs,
-    env: job.env, gpu: job.gpu, timeoutSeconds: o.timeoutSeconds ?? job.timeoutSeconds,
+    env: job.env, gpu: job.gpu, timeoutSeconds: o.timeoutSeconds ?? job.timeoutSeconds, isolate: job.isolate,
     ...(Object.keys(shared).length ? { shared } : {}),
   }
   // the spec stays in the project's prefix: the job is given only where it is (./protocol.ts)

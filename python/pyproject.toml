@@ -6,6 +6,8 @@ build-backend = "setuptools.build_meta"
 #   pdf  — reading tables and vector figures out of datasheet PDFs (pdfplumber, pypdf)
 #   visa — instruments over VXI-11, HiSLIP, USBTMC and GPIB (pyvisa, pyvisa-py)
 #   can  — CAN through vendor interfaces (PCAN, Kvaser, Vector, gs_usb, SocketCAN) and BLF/ASC logs (python-can)
+#   mech — the enclosure engine (build123d on OpenCascade), run as `python -m tracebridge.mech` in the tools image;
+#          not part of `all`, because it is about 850 MB and needs Python 3.11 or later (docs/enclosure-build.md)
 [project]
 name = "tracebridge"
 version = "0.1.0"
@@ -16,9 +18,14 @@ dependencies = []
 pdf = ["pdfplumber>=0.11.10", "pypdf>=6.21.2"]
 visa = ["pyvisa>=1.16.2", "pyvisa-py>=0.8.1", "pyserial>=3.5"]
 can = ["python-can>=4.6.1"]
+mech = ["build123d==0.13.0"]
 all = ["tracebridge[pdf,visa,can]"]
-dev = ["pytest>=9.1.1", "reportlab>=5.1.0", "tracebridge[all]"]
+dev = ["pytest>=9.1.1", "reportlab>=5.1.0", "tracebridge[all]", "tracebridge[mech]; python_version >= '3.11'"]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["tracebridge*"]
+
+# The case script template (tracebridge.mech.TEMPLATE) is read as text and copied into projects by mech.init.
+[tool.setuptools.package-data]
+"tracebridge.mech" = ["templates/*.py"]

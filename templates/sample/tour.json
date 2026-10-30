@@ -414,5 +414,27 @@
     ],
     "remote": null,
     "body": "Bring-up. The verification specialist delegates this to the worker. See `bench/README.md`.\n\n- Worker: start `tracectl hil emulate --write-settings --serial` in the background and export TRACE_HARDWARE=1.\n- hil.ports, hil.idn each instrument, hil.psu bench-psu 12 V 0.1 A on, hil.dmm bench-dmm vdc (about 3.0 V), hil.scpi a *IDN? query.\n- Step the PSU 0 to 12 V, then hil.scope_capture and hil.scope_measure CH1 rise time (about 350 µs); protocol.capture source scope.\n- firmware.build, firmware.flash, firmware.logs until \"adc raw\"; hil.serial_capture and hil.serial_expect READ (raw 3722, mv 11998).\n- hil.can_send id 0x321 data 0E8A2EDE and hil.can_capture in the same trace process (the virtual bus is in-process).\n- thermal.measure via bench-dmm; verify.run requirement=REQ-HIL-001 with hardware allowed.\n\nDone when: the bench readings are within 1 % of 12 V. Comment the numbers with their run ids on this issue, then close it."
+  },
+  {
+    "id": "layout-enclosure",
+    "title": "Tour 21: an enclosure for the board",
+    "agent": "impl",
+    "labels": [
+      "agent-fix",
+      "agent:impl"
+    ],
+    "exercises": [
+      "mech.board",
+      "mech.init",
+      "mech.settings",
+      "mech.build",
+      "mech.fit",
+      "mech.hand_in",
+      "mech.capabilities",
+      "mech.capabilities_check",
+      "mech.order"
+    ],
+    "remote": null,
+    "body": "Layout stage, enclosure. A printed two-part case for `hardware/trace-sample.kicad_pcb`, built by the enclosure engine (build123d, a cad job on the tools function).\n\n- mech.capabilities, then mech.capabilities_check: say whether any stored JLC3DP figure has changed.\n- mech.board: the outline, holes and part heights; name any height that is assumed.\n- mech.init with the recommended process (MJF PA12-HP), then mech.build. Read every clash and gap by part.\n- mech.settings: give J1 a 2 mm clearance with the reason \"mating face of the plug\", then mech.build again and mech.fit (it must say current, not stale).\n- mech.hand_in `mechanical/case.py` (the script as it stands) to show a handed-in script rebuilds the same case.\n- Ask the worker to add one line to `mechanical/case.py` (case.notes.append(\"tour\") before return), then mech.build: a changed case script runs as a cad-script job on the project's cad function, and the answer's stages show both jobs.\n- When a build passes: journey.check layout.fit met with that run id, then mech.order quantity 5. If it does not pass, list each clash with its part, volume and the change that would clear it, and ask the worker to commit `mechanical/` as it stands.\n\nDone when: the case builds, its fit is passed and recorded or each clash is explained, and the order sheet is written when it passes. Comment the numbers with their run ids on this issue, then close it."
   }
 ]

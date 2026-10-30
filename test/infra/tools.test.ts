@@ -1,8 +1,8 @@
 /**
  * The tools image and each project's tools function (src/infra/tools.ts, src/infra/stack.ts): the image built and
  * waited for like the agent image, one arm64 function per project running it, whose role reaches only that project's
- * job files and its own log group, and a worker that may invoke its own function and no other. None in the flat layout
- * or with tools.enabled false.
+ * job files and its own log group, and a worker that may invoke its own function (and its cad function:
+ * test/infra/cad.test.ts) and no other. None in the flat layout or with tools.enabled false.
  */
 import { Template } from 'aws-cdk-lib/assertions'
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -103,14 +103,15 @@ describe('each project\'s tools function', () => {
     }
   })
 
-  it('is the only function its worker may invoke, and its worker is told its name', () => {
+  it('and its cad function (test/infra/cad.test.ts) are the only functions its worker may invoke, and its worker is told its name', () => {
     for (const repo of [A, B]) {
       const t = nestedOf(s, repo)
       const h = projectHash(repo)
       const invoke = statements(t, `Project${h}RuntimeRole`).filter((x) => actions(x).some((a) => a.startsWith('lambda:')))
-      expect(invoke).toHaveLength(1)
-      expect(invoke[0]).toMatchObject({ Sid: 'ProjectToolsInvoke', Effect: 'Allow', Action: 'lambda:InvokeFunction' })
-      expect(JSON.stringify(invoke[0]?.Resource)).toContain(`Project${h}ToolsFunction`)
+      expect(invoke.map((x) => x.Sid).sort()).toEqual(['ProjectCadInvoke', 'ProjectToolsInvoke'])
+      const tools = invoke.find((x) => x.Sid === 'ProjectToolsInvoke')
+      expect(tools).toMatchObject({ Effect: 'Allow', Action: 'lambda:InvokeFunction' })
+      expect(JSON.stringify(tools?.Resource)).toContain(`Project${h}ToolsFunction`)
       const runtime = resources(t, 'AWS::BedrockAgentCore::Runtime')[0]?.[1]
       expect(runtime?.Properties.EnvironmentVariables).toMatchObject({ TRACE_TOOLS_FUNCTION: toolsFunctionName('trace', h) })
       expect(runtime?.Properties.EnvironmentVariables.TRACE_GPU_BUCKET).toBeDefined()

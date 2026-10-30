@@ -44,6 +44,8 @@ import { BenchStore, type InstrumentId, type Reading, idsFromRuns, latestByQuant
 import { loadBoards } from '../core/boards.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { boardView, readingView } from './actions-build.js'
+import { CAPABILITIES, capabilitiesStamp } from '../tools/mech/capabilities.js'
+import { type BuildInputs, filesNow, staleReasons } from '../tools/mech/stale.js'
 
 /** The skills that read the bench. */
 const HARDWARE_SKILLS = new Set(['bench-setup', 'bring-up-run', 'incoming-inspection'])
@@ -83,7 +85,7 @@ import { type CheckInput, type CheckResult, checkSkill } from './skill-checks.js
 /** The skills whose Submit records design decisions. */
 const DESIGN_SKILLS = new Set(['intent-builder', 'requirements-review', 'architecture-choice', 'pin-plan-review'])
 
-const SkillId = z.string().regex(/^[a-z][a-z-]{1,40}$/).refine((s) => SKILL_IDS.includes(s), 'one of the nineteen guided skills')
+const SkillId = z.string().regex(/^[a-z][a-z-]{1,40}$/).refine((s) => SKILL_IDS.includes(s), 'one of the twenty guided skills')
 const Data = z.record(z.string(), z.unknown())
 
 /** The gate a person signs now: the first unsigned gate of the current stage. */
@@ -103,7 +105,7 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
   const sheetFiles = skill === 'schematic-finish' ? await kicadFiles(ctx, repo).then((f) => f.sch, () => null) : null
   // what the bench measured and who answered, as taken (the bench's live copy beside the facts: src/core/bench.ts)
   const bench = HARDWARE_SKILLS.has(skill) ? await liveBenchOf(ctx, repo) : { readings: [], ids: [] }
-  return withRecordDb(ctx, repo, (db) => {
+  const input: Awaited<ReturnType<typeof inputFor>> = await withRecordDb(ctx, repo, (db) => {
     const own = loadJourney(db)
     const r = own ? mergeAgentFacts(own, facts) : null
     const draft = draftOverride ?? (row?.data && typeof row.data === 'object' ? row.data as Record<string, unknown> : null)
@@ -124,6 +126,9 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
     const bomRun = latestRun(db, 'kicad.bom')
     const boardRun = latestRun(db, 'kicad.board')
     const placement = latestRun(db, 'pcb.placement_check')
+    // the newest build that finished with a fit (an errored or running one has no result to read)
+    const caseRow = hasTable(db, 'runs') ? db.prepare("SELECT id, status, summary FROM runs WHERE kind='mech.build' AND status IN ('pass','fail') ORDER BY started DESC LIMIT 1").get() as { id: string; status: string; summary: string | null } | undefined : undefined
+    const caseRun = caseRow ? { id: String(caseRow.id), status: String(caseRow.status), summary: caseRow.summary === null ? null : String(caseRow.summary) } : null
     let instruments: CheckInput['instruments'] = []
     try {
       const v = hasTable(db, 'settings') ? db.prepare("SELECT value FROM settings WHERE key='hil.instruments'").get() as { value?: string } | undefined : undefined
@@ -142,11 +147,29 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
       drc: drc.findings ? { findings: drc.findings, errors: drc.report.errors } : null,
       bom: bomRun ? runResult(db, bomRun.id) : null, board: boardRun ? runResult(db, boardRun.id) : null,
       placement: placement ? { status: placement.status, summary: placement.summary } : null,
+      caseBuild: caseRun ? { id: caseRun.id, status: caseRun.status, summary: caseRun.summary, result: runResult(db, caseRun.id) } : null,
       instruments, tests, orders: r ? loadOrders(db) : [], draft, gate: currentGate(r), question,
       design: designOf(db), nets: latestNetlist(db)?.nets ?? null, sheetFiles,
       draftRow: row ? { step: row.step, saved: row.saved } : null, facts, pendingErrors,
     }
   })
+  // Case design's fit: the build's recorded inputs against the default branch's files now
+  if (skill === 'case-design' && input.caseBuild?.result) input.caseStale = await caseStaleness(ctx, repo, input.caseBuild.result.inputs)
+  return input
+}
+
+/** Why the latest case build no longer stands for the default branch (src/tools/mech/stale.ts); null when the files
+ * cannot be read (not compared). */
+async function caseStaleness(ctx: Context, repo: string, was: unknown): Promise<string[] | null> {
+  if (!was || typeof was !== 'object') return ['the build recorded no inputs']
+  try {
+    const gh = await ctx.deps.github()
+    const { branch } = await gh.defaultBranch(repo)
+    const now = await filesNow(was as Partial<BuildInputs>, (p) => gh.rawFile(repo, p, branch), { checked: CAPABILITIES.checked, sha256: capabilitiesStamp() })
+    return staleReasons(was as Partial<BuildInputs>, now)
+  } catch {
+    return null
+  }
 }
 
 const requirementIds = (db: import('node:sqlite').DatabaseSync): string[] => (hasTable(db, 'requirements') ? (db.prepare('SELECT id FROM requirements').all() as { id: string }[]).map((x) => String(x.id)) : [])
@@ -254,6 +277,12 @@ function extras(skill: string, i: CheckInput): Record<string, unknown> {
     }
     case 'schematic-finish': return { findings: (i.erc?.findings ?? []).map(finding) }
     case 'board-setup': case 'placement-adjust': return { findings: (i.drc?.findings ?? []).map(finding) }
+    case 'case-design': {
+      const b = i.caseBuild
+      if (!b?.result) return {}
+      const x = b.result
+      return { case: { run: b.id, status: b.status, summary: b.summary, process: x.process ?? null, fit: x.fit_status ?? null, problems: x.problems ?? [], rules_failing: x.rules_failing ?? [], files: x.files ?? [], case: x.case ?? null } }
+    }
     case 'gate-signing': return i.gate ? { gate: i.gate } : {}
     case 'incoming-inspection': return { boards: (i.boards ?? []).map((b) => boardView(b, i.orders, i.readings ?? [])), ...(i.handPlaced ? { handPlaced: i.handPlaced } : {}) }
     case 'bench-setup': case 'bring-up-run': return { bench: skillBench(skill, i) }

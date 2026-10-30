@@ -1,6 +1,6 @@
 /**
  * Heavy jobs (KiCad's command line, Blender renders, the PCB autorouter, the FPGA and verification programs, field and
- * thermal solvers) run through here, so the same MCP tool works on a laptop and from an AgentCore agent. Each job runs
+ * thermal solvers, the enclosure engine) run through here, so the same MCP tool works on a laptop and from an AgentCore agent. Each job runs
  * in one of three places (backendFor):
  *
  *   local      a child process here: a laptop, the CI runner, or the Batch and function containers themselves
@@ -46,7 +46,14 @@ export const JobKind = z.enum(['blender', 'freerouting', 'orthoroute',
   'openems',
   // thermal (src/tools/thermal), all CPU: the 2.5D board solver for grids too big for the caller (thermal), CalculiX
   // ccx for the 3D finite-element path (calculix), and OpenFOAM conjugate heat transfer for airflow (openfoam)
-  'thermal', 'calculix', 'openfoam'])
+  'thermal', 'calculix', 'openfoam',
+  // the enclosure engine (src/tools/mech/engine.ts, docs/enclosure-build.md "Trust"), two kinds:
+  //   cad         trace's own code only: the built-in template, the parts a cad-script job built (--built), or a
+  //               handed-in STEP; then the fit, the rules, the exports and the records. On the tools function
+  //   cad-script  the case script (mechanical/case.py: user code, `python -m tracebridge.mech build-only`), the board
+  //               facts and settings in, one STEP per part and claims.json out. On the project's cad function
+  //               (TRACE_CAD_FUNCTION: no credentials, no S3), else a local child process; never the queue
+  'cad', 'cad-script'])
 export type JobKind = z.output<typeof JobKind>
 
 const SEGMENT = /^[\w.-]+$/
@@ -92,9 +99,26 @@ export const GpuJobSchema = z.object({
   env: z.record(z.string(), z.string()).default({}),
   /** on the queue: the vCPUs to ask for (a resource override, capped at the job definition's limit); ignored locally */
   vcpus: z.number().int().min(1).max(256).optional(),
+  /**
+   * The program is untrusted code (a project's case script): it runs with a scrubbed environment (isolatedEnv: no
+   * credentials, no tokens, nothing of the Lambda runtime), in a process group of its own that is killed whole when
+   * the job ends. Default: true for kinds `cad` and `cad-script`, false otherwise.
+   */
+  isolate: z.boolean().optional(),
 }).strict().superRefine((j, ctx) => {
   for (const m of nameClashes(Object.keys(j.inputs))) ctx.addIssue({ code: 'custom', path: ['inputs'], message: m })
-})
+}).transform((j) => ({ ...j, isolate: j.isolate ?? ISOLATED_KINDS.has(j.kind) }))
+
+/** The kinds whose program is a project's own code: isolated by default. */
+export const ISOLATED_KINDS: ReadonlySet<JobKind> = new Set<JobKind>(['cad', 'cad-script'])
+
+/**
+ * What a `cad-script` job hands back (python/tracebridge/mech/child.py): one STEP per case part (`part-1.step` …
+ * `part-16.step`, numbered from 1, at most 16; the ones not written are simply absent) and `claims.json` (parts,
+ * joints, fasteners, notes, or {"error"}). The `cad` job that follows reads them strictly (`--built`); they are
+ * claims, never a pass.
+ */
+export const CAD_SCRIPT_OUTPUTS: readonly string[] = [...Array.from({ length: 16 }, (_, i) => `part-${i + 1}.step`), 'claims.json']
 export type GpuJob = z.input<typeof GpuJobSchema>
 
 export interface JobResult {
@@ -113,7 +137,7 @@ export type Backend = 'local' | 'function' | 'batch'
 
 /** The kinds the tools function runs: what the tools image has (agent/Dockerfile.tools). */
 export const FUNCTION_KINDS: ReadonlySet<JobKind> = new Set<JobKind>([
-  'kicad', 'ffmpeg', 'blender', 'verilator', 'cocotb', 'formal', 'yosys', 'nextpnr', 'fpga-pack', 'calculix',
+  'kicad', 'ffmpeg', 'blender', 'verilator', 'cocotb', 'formal', 'yosys', 'nextpnr', 'fpga-pack', 'calculix', 'cad',
 ])
 /** The longest a job runs on the function: Lambda ends a call at 900 s, and the runner still uploads after the program. */
 export const FUNCTION_MAX_SECONDS = 840
@@ -131,11 +155,16 @@ export const FUNCTION_MAX_SECONDS = 840
  *   of those kinds                                  batch (a project without the tools function: the flat layout)
  *   otherwise                                       local
  * Without the tools function and a queue this is local, as on a laptop.
+ *
+ * A `cad-script` job (a project's case script) is apart from all that: the project's cad function (TRACE_CAD_FUNCTION,
+ * nested layout) when there is one, else local; never the queue or the tools function, which hold credentials
+ * (docs/enclosure-build.md "Trust"). TRACE_GPU_REMOTE=never still means local.
  */
 export function backendFor(job: { kind?: JobKind | undefined; gpu?: boolean | undefined; remote?: boolean | undefined }, env: NodeJS.ProcessEnv = process.env): Backend {
   const queue = env.TRACE_GPU_QUEUE
   const mode = env.TRACE_GPU_REMOTE ?? 'auto'
   if (mode === 'never') return 'local'
+  if (job.kind === 'cad-script') return env.TRACE_CAD_FUNCTION ? 'function' : 'local'
   if (queue && mode === 'always') return 'batch'
   if (queue && ((job.gpu && !localGpu(env)) || job.remote)) return 'batch'
   const tools = !!job.kind && FUNCTION_KINDS.has(job.kind)
@@ -161,6 +190,86 @@ export function substitute(argv: readonly string[], ins: Record<string, string>,
   }))
 }
 
+/**
+ * What an isolated job's program may see of its parent's environment: the names below and nothing else, so no AWS
+ * credentials (AWS_*, the Lambda runtime's AWS_LAMBDA_* and _HANDLER, the container credentials endpoint
+ * AWS_CONTAINER_*), no tokens (GITHUB_*, TRACE_TOKEN, ANTHROPIC_*) and no trace settings reach it. The job's own `env`
+ * (set by the tool that built the job, not by the project) is laid over it. `home`: a folder that replaces HOME, the
+ * XDG folders and TMPDIR (the runner's per-job folder, so nothing a job leaves in a warm container's HOME, a Python
+ * user site among it, is seen by the next job).
+ */
+export const ISOLATED_ENV = [
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LANGUAGE', 'TZ', 'TMPDIR', 'TMP', 'TEMP', 'TERM',
+  'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR',
+  'PYTHONPATH', 'PYTHONUNBUFFERED', 'PYTHONHOME', 'PYTHONDONTWRITEBYTECODE', 'VIRTUAL_ENV', 'PYENV_ROOT', 'PYENV_VERSION', 'CONDA_PREFIX',
+  'LD_LIBRARY_PATH', 'OMP_NUM_THREADS', 'SYSTEMROOT', 'COMSPEC', 'WINDIR',
+] as const
+
+export function isolatedEnv(env: NodeJS.ProcessEnv, own: Record<string, string> = {}, home?: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(env)) {
+    if (v === undefined) continue
+    if ((ISOLATED_ENV as readonly string[]).includes(k) || k.startsWith('LC_')) out[k] = v
+  }
+  if (home) {
+    Object.assign(out, {
+      HOME: home, TMPDIR: join(home, 'tmp'), XDG_CONFIG_HOME: join(home, '.config'), XDG_CACHE_HOME: join(home, '.cache'),
+      XDG_DATA_HOME: join(home, '.local', 'share'), XDG_STATE_HOME: join(home, '.local', 'state'), PYTHONNOUSERSITE: '1',
+    })
+    delete out.XDG_RUNTIME_DIR
+    delete out.TMP
+    delete out.TEMP
+    mkdirSync(join(home, 'tmp'), { recursive: true })
+  }
+  return { ...out, ...own }
+}
+
+/** Kill a detached child's whole process group (it leads it), quietly when it is gone already. */
+export function killGroup(pid: number | undefined): void {
+  if (!pid) return
+  try {
+    process.kill(-pid, 'SIGKILL')
+  } catch { /* the group is gone */ }
+}
+
+/**
+ * Spawn a job's program and collect its output. An isolated one (`isolate`) is detached into a process group of its
+ * own; when its main process exits (success, failure or the time limit), the group is killed, so nothing it started in
+ * the background lives on (a warm function's next job included). Output is read until the pipes close.
+ */
+export function spawnJob(cmd: string, args: string[], o: {
+  cwd: string; env: NodeJS.ProcessEnv; isolate: boolean; timeoutSeconds: number
+  onStdout: (d: Buffer) => void; onStderr: (d: Buffer) => void
+}): Promise<{ code: number | null; killed: boolean; error?: NodeJS.ErrnoException }> {
+  return new Promise((resolve) => {
+    const p = spawn(cmd, args, { cwd: o.cwd, env: o.env, stdio: ['ignore', 'pipe', 'pipe'], detached: o.isolate })
+    let killed = false
+    let exitCode: number | null = null
+    const kill = (): void => {
+      if (o.isolate) killGroup(p.pid)
+      else p.kill('SIGKILL')
+    }
+    const timer = setTimeout(() => { killed = true; kill() }, o.timeoutSeconds * 1000)
+    p.stdout.on('data', o.onStdout)
+    p.stderr.on('data', o.onStderr)
+    p.on('error', (e: NodeJS.ErrnoException) => {
+      clearTimeout(timer)
+      if (o.isolate) killGroup(p.pid)
+      resolve({ code: null, killed, error: e })
+    })
+    // the main process is done: what it left running goes with it (its pipes then close, and 'close' follows)
+    p.on('exit', (code) => {
+      exitCode = code
+      if (o.isolate) killGroup(p.pid)
+    })
+    p.on('close', (code) => {
+      clearTimeout(timer)
+      if (o.isolate) killGroup(p.pid)
+      resolve({ code: exitCode ?? code, killed })
+    })
+  })
+}
+
 export async function runLocal(spec: GpuJob): Promise<JobResult> {
   const job = GpuJobSchema.parse(spec)
   const dir = scratchDir(`trace-${job.kind}-`) // one fresh directory per job; the caller removes it when done
@@ -176,23 +285,18 @@ export async function runLocal(spec: GpuJob): Promise<JobResult> {
   const argv = substitute(job.argv, ins, outs, dir)
   const t0 = Date.now()
   const [cmd, ...args] = argv as [string, ...string[]]
-  return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { cwd: dir, env: { ...process.env, ...job.env }, stdio: ['ignore', 'pipe', 'pipe'] })
-    let stdout = ''
-    let stderr = ''
-    p.stdout.on('data', (d: Buffer) => { stdout = (stdout + d.toString()).slice(-200_000) })
-    p.stderr.on('data', (d: Buffer) => { stderr = (stderr + d.toString()).slice(-200_000) })
-    const timer = setTimeout(() => p.kill('SIGKILL'), job.timeoutSeconds * 1000)
-    p.on('error', (e: NodeJS.ErrnoException) => {
-      clearTimeout(timer)
-      reject(e.code === 'ENOENT' ? new ToolError(`${cmd} is not installed here${process.env.TRACE_GPU_QUEUE || process.env.TRACE_TOOLS_FUNCTION ? '' : ' (set TRACE_GPU_QUEUE to run it on the GPU queue)'}`) : e)
-    })
-    p.on('close', (code) => {
-      clearTimeout(timer)
-      const outputs = Object.fromEntries(Object.entries(outs).filter(([, f]) => existsSync(f)))
-      resolve({ exitCode: code ?? -1, stdout, stderr, outputs, where: 'local', seconds: (Date.now() - t0) / 1000 })
-    })
+  let stdout = ''
+  let stderr = ''
+  // an isolated job keeps this machine's HOME (a laptop's Python may live under it) but nothing else of its environment
+  const env = job.isolate ? isolatedEnv(process.env, job.env) : { ...process.env, ...job.env }
+  const r = await spawnJob(cmd, args, {
+    cwd: dir, env, isolate: job.isolate, timeoutSeconds: job.timeoutSeconds,
+    onStdout: (d) => { stdout = (stdout + d.toString()).slice(-200_000) },
+    onStderr: (d) => { stderr = (stderr + d.toString()).slice(-200_000) },
   })
+  if (r.error) throw r.error.code === 'ENOENT' ? new ToolError(`${cmd} is not installed here${process.env.TRACE_GPU_QUEUE || process.env.TRACE_TOOLS_FUNCTION ? '' : ' (set TRACE_GPU_QUEUE to run it on the GPU queue)'}`) : r.error
+  const outputs = Object.fromEntries(Object.entries(outs).filter(([, f]) => existsSync(f)))
+  return { exitCode: r.code ?? -1, stdout, stderr, outputs, where: 'local', seconds: (Date.now() - t0) / 1000 }
 }
 
 /**
@@ -200,8 +304,14 @@ export async function runLocal(spec: GpuJob): Promise<JobResult> {
  * Each job is a span (`trace.gpu_job <kind>`: kind, backend, job ids, seconds, exit code) and counts trace.gpu.jobs and
  * trace.gpu.duration; a Batch job gets the span's trace context (TRACEPARENT), so its runner's span joins the trace.
  */
+/** The message for a case script where nothing may run it: the agent image (TRACE_TOOLS_ELSEWHERE) without a cad function. */
+export const NO_CAD_FUNCTION = "a custom case script (mechanical/case.py differs from the template) builds only with the project's cad function (nested layout), or on a laptop or in CI; this installation has none, so hand in a STEP, or put the case back to the template and its settings"
+
 export async function runJob(spec: GpuJob): Promise<JobResult> {
   const backend = backendFor(spec)
+  // the agent image has no build123d and no cad function to send the script to (the flat layout): a local run would
+  // only fail later and less clearly
+  if (spec.kind === 'cad-script' && backend === 'local' && ['1', 'true', 'yes'].includes(process.env.TRACE_TOOLS_ELSEWHERE ?? '')) throw new ToolError(NO_CAD_FUNCTION)
   let outcome: Outcome = 'ok'
   const t0 = performance.now()
   try {

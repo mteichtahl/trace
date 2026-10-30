@@ -28,8 +28,20 @@ jobs:
           sudo add-apt-repository -y ppa:kicad/kicad-10.0-releases
           sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends kicad ngspice iverilog
       - uses: __TR_SOURCE__/harness/actions/install@__TR_REF__
-      # ERC and DRC on every KiCad project, and a build of every firmware target (tracectl check).
+      # The enclosure engine, only when the repository has a case (mechanical/case.json): build123d into the venv the
+      # install step made for trace's Python package (TRACE_PYTHON), which already holds tracebridge and its mech module.
+      - name: Enclosure engine (build123d)
+        if: hashFiles('mechanical/case.json') != '' && !github.event.pull_request.head.repo.fork
+        run: '"$TRACE_PYTHON" -m pip install -q "build123d==0.13.0"'
+      # ERC and DRC on every KiCad project, a build of every firmware target, and the case's fit check when there is
+      # a case (tracectl check). The case script (mechanical/case.py) is code: in CI the check builds the case only
+      # when TRACE_CHECK_MECH is 1 (unset, it skips the case and says so), which this sets for pushes and for pull
+      # requests from this repository, and never for a fork's (0, with the reason), so a fork's script never runs on
+      # this repository's runner.
       - run: tracectl check
+        env:
+          TRACE_CHECK_MECH: ${{ github.event.pull_request.head.repo.fork && '0' || '1' }}
+          TRACE_CHECK_MECH_WHY: ${{ github.event.pull_request.head.repo.fork && 'pull request from a fork runs no case script' || '' }}
 
   tests-pass:
     name: tests pass

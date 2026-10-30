@@ -1,7 +1,7 @@
 # Enclosure CAD engine for trace
 
-Status: design, October 2026. Decided 29 October 2026; corrected 30 October 2026 (build123d goes in the tools image,
-not the agent image); nothing built yet.
+Status: design, October 2026. Decided 29 October 2026. Built on branch `claude/enclosure` (PR #81), to the contract
+in [enclosure-build.md](enclosure-build.md); build123d lives in the tools image, not the agent image.
 
 ## Summary
 
@@ -119,8 +119,11 @@ signed.
   ([ontology.md](ontology.md)) over trace's existing records, and the layout gate's fit criterion is backed by a SHACL
   shape over them.
 - **Who runs it.** The implementation specialist gains the `mech` tools, since it already owns placement and fixed
-  parts; a separate mechanical specialist can follow if case work grows. The tools run in the project's tools
-  function, like the KiCad jobs; a rebuild too large for it runs as a CPU job.
+  parts; a separate mechanical specialist can follow if case work grows.
+- **Where it runs.** Two job kinds (`src/gpu/jobs.ts`, [enclosure-build.md](enclosure-build.md) "Trust"): `cad-script`
+  runs the case script, code from the repository, on the project's **cad function** (`<prefix>-cad-<hash>`, a role
+  with no S3; its files move through URLs the worker presigned) or in a local child process; `cad` runs trace's own
+  code (the template, the fit check, the rules, the exports) on the tools function, like the KiCad jobs, or locally.
 
 The Board setup skill's "every fixed part has a mechanical reason" check gets its reason from here: a connector is fixed
 because the case has an opening for it.

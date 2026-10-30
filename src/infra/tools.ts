@@ -19,6 +19,18 @@
  * The worker's role may invoke this function and no other (src/infra/project.ts ProjectToolsInvoke); TRACE_TOOLS_FUNCTION
  * tells it the name.
  *
+ * The project's **cad function** (CadFunction, nested layout only, docs/enclosure-build.md "Trust") is the same
+ * image on a role with nothing in it: the case script (mechanical/case.py, a project's own code) runs there as a
+ * `cad-script` job, its files moved through URLs the worker presigned (src/gpu/urls.ts), so a script that reads the
+ * runner's credentials finds none, and one that leaves a daemon behind in the warm function has no key to use.
+ *
+ *   function   <prefix>-cad-<hash>, arm64, the same image and tag, 15 minutes, tools.memoryMb and tools.ephemeralMb,
+ *              TRACE_CAD_FUNCTION_ROLE=1 (src/gpu/lambda.ts refuses an S3 spec there), no telemetry settings
+ *   role       assumed by Lambda for this account only; writes its own log group and nothing else: no S3, no X-Ray
+ *
+ * The worker may invoke it (ProjectCadInvoke) and is told its name in TRACE_CAD_FUNCTION. Four resources more per
+ * project: the flat layout has no room, so it has none, and a custom case script builds there only on a laptop or in CI.
+ *
  * Where they are: in the nested layout each project's in its own nested stack, the tools image's build in the parent.
  * In the flat layout, whose stack has no room for four resources more per project, all of them and the image's build
  * are in one nested stack of their own (FlatToolsStack), one resource of the parent's, made only when the parent has
@@ -42,6 +54,8 @@ import { type InfraProps, type ProjectRef, STACK_RESOURCES_MAX } from './props.j
 
 /** The function's name: `<prefix>-tools-<hash>` (64 characters at most: the prefix is short). */
 export const toolsFunctionName = (prefix: string, hash: string): string => `${prefix}-tools-${hash}`
+/** The cad function's name: `<prefix>-cad-<hash>`. */
+export const cadFunctionName = (prefix: string, hash: string): string => `${prefix}-cad-${hash}`
 /** The tools image's CodeBuild project, `<prefix>-tools-image`, by ARN (the image-build provider is granted it by name). */
 export const toolsImageProjectArn = (scope: IConstruct, prefix: string): string => {
   const { partition, region, account } = Stack.of(scope)
@@ -152,6 +166,51 @@ export class ToolsFunction extends Construct {
       // no retryAttempts: only a synchronous call (src/gpu/function.ts) invokes it, which Lambda never retries, and an
       // EventInvokeConfig would be one more resource per project
       environment: { TRACE_PROJECT: p.slug, ...p.telemetry },
+    })
+  }
+}
+
+export interface CadFunctionProps {
+  prefix: string
+  slug: string
+  hash: string
+  images: ecr.IRepository
+  tag: string
+  memoryMb: number
+  ephemeralMb: number
+}
+
+/** The project's cad function (the header): the tools image on a role that may only write its own logs. */
+export class CadFunction extends Construct {
+  readonly function: lambda.DockerImageFunction
+  readonly role: iam.Role
+  readonly functionName: string
+
+  constructor(scope: Construct, id: string, p: CadFunctionProps) {
+    super(scope, id)
+    const { account } = Stack.of(this)
+    this.functionName = cadFunctionName(p.prefix, p.hash)
+    const logGroup = new logs.LogGroup(this, 'Logs', {
+      logGroupName: `/aws/lambda/${this.functionName}`, retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY,
+    })
+    this.role = new iam.Role(this, 'Role', {
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com', { conditions: { StringEquals: { 'aws:SourceAccount': account } } }),
+      description: `Run by ${p.slug}'s trace cad function, which runs the project's case script: its own log group and nothing else (no S3: the job's files come and go through presigned URLs)`.slice(0, 1000),
+    })
+    // logs only: no grantPrefixes, no X-Ray. The script runs with these credentials in reach and they open nothing
+    this.role.addToPolicy(new iam.PolicyStatement({ sid: 'CadLogs', actions: ['logs:CreateLogStream', 'logs:PutLogEvents'], resources: [logGroup.logGroupArn] }))
+    this.function = new lambda.DockerImageFunction(this, 'Function', {
+      functionName: this.functionName,
+      description: `trace: ${p.slug}'s case script (mechanical/case.py) built with build123d, with no credentials (agent/Dockerfile.tools)`.slice(0, 256),
+      code: lambda.DockerImageCode.fromEcr(p.images, { tagOrDigest: p.tag }),
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: p.memoryMb,
+      ephemeralStorageSize: Size.mebibytes(p.ephemeralMb),
+      timeout: Duration.minutes(15),
+      role: this.role,
+      logGroup,
+      // no telemetry settings: the runner would need X-Ray for them, and nothing of the worker's trace is for the script
+      environment: { TRACE_PROJECT: p.slug, TRACE_CAD_FUNCTION_ROLE: '1' },
     })
   }
 }

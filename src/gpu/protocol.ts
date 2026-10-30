@@ -42,6 +42,9 @@ export const RemoteSpecSchema = z.object({
   env: z.record(z.string(), z.string()),
   gpu: z.boolean(),
   timeoutSeconds: z.number().int().positive(),
+  /** the program is untrusted (a case script): the runner gives it a scrubbed environment and a process group of its
+   * own, killed when the job ends (./jobs.ts isolatedEnv, spawnJob); the runner keeps its credentials for S3 */
+  isolate: z.boolean().default(false),
   /** inputs read from the shared cache instead of <id>/in/ (name → its key, cache/w<week>/<sha256>) */
   shared: z.record(z.string(), z.string().regex(/^cache\/w\d+\/[0-9a-f]{64}$/)).optional(),
 }).strict().superRefine((s, ctx) => {

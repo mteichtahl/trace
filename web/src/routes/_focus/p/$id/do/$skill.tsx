@@ -1,5 +1,5 @@
 /**
- * A guided skill in Focus mode (/p/:id/do/:skill): one route for all nineteen, drawn from the skill table
+ * A guided skill in Focus mode (/p/:id/do/:skill): one route for all twenty, drawn from the skill table
  * (components/skills/definitions.ts). The variant picks the screen: conversational (Intent builder, Question
  * answer), checklist on a picture (Bench setup, Bring-up run, Incoming inspection), the KiCad skills (Schematic
  * finish, Placement adjust, Board setup), the form skills (Waiver, Change request), and the rest stepped from the
