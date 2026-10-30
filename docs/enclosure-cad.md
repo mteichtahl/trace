@@ -116,6 +116,10 @@ signed.
   fit check is a SHACL shape over those records.
 - **Who runs it.** The implementation specialist gains the `mech` tools, since it already owns placement and fixed
   parts; a separate mechanical specialist can follow if case work grows.
+- **Where it runs.** Two job kinds (`src/gpu/jobs.ts`, [enclosure-build.md](enclosure-build.md) "Trust"): `cad-script`
+  runs the case script, code from the repository, on the project's **cad function** (`<prefix>-cad-<hash>`, a role
+  with no S3; its files move through URLs the worker presigned) or in a local child process; `cad` runs trace's own
+  code (the template, the fit check, the rules, the exports) on the tools function or locally.
 
 The Board setup skill's "every fixed part has a mechanical reason" check gets its reason from here: a connector is fixed
 because the case has an opening for it.
