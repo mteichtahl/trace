@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { ToolError } from '../../../src/core/registry.js'
-import { isRepoRelative, repoFile, writeRepoFile } from '../../../src/tools/mech/paths.js'
+import { isRepoRelative, openedIsAt, repoFile, writeRepoFile } from '../../../src/tools/mech/paths.js'
 import { CaseSettingsSchema, defaults, readSettings, writeSettings } from '../../../src/tools/mech/settings.js'
 import { allTools } from '../../../src/tools/index.js'
 
@@ -53,7 +53,42 @@ describe('repository paths', () => {
     expect(() => repoFile(repo, 'linked/new.py')).toThrow(/resolves outside the repository/)
     expect(() => writeRepoFile(repo, 'linked/new.py', 'x')).toThrow(ToolError)
     expect(() => repoFile(repo, '.git/config')).toThrow(/inside \.git/)
+    // whatever its letter case (a case-insensitive file system has one .git under any spelling), at any depth
+    expect(() => repoFile(repo, '.GIT/config')).toThrow(/inside \.git/)
+    expect(() => repoFile(repo, '.Git/hooks/pre-commit')).toThrow(/inside \.git/)
+    expect(() => repoFile(repo, 'mechanical/.git/x')).toThrow(/inside \.git/)
     expect(repoFile(repo, 'mechanical/new.py').rel).toBe('mechanical/new.py')
+    expect(repoFile(repo, 'mechanical/gitfile.py').rel).toBe('mechanical/gitfile.py')
+  })
+
+  it('a write checks that what it opened is the file at that path (fstat against lstat)', async () => {
+    const { closeSync, openSync, constants } = await import('node:fs')
+    const { repo } = slRepro()
+    const a = join(repo, 'mechanical', 'a.txt')
+    const b = join(repo, 'mechanical', 'b.txt')
+    writeFileSync(a, 'a')
+    writeFileSync(b, 'b')
+    const fd = openSync(a, constants.O_RDONLY)
+    try {
+      expect(openedIsAt(fd, a)).toBe(true)
+      // another file at the path, or a link in its place, or nothing: not the file that was opened
+      expect(openedIsAt(fd, b)).toBe(false)
+      symlinkSync(b, join(repo, 'mechanical', 'link.txt'))
+      expect(openedIsAt(fd, join(repo, 'mechanical', 'link.txt'))).toBe(false)
+      expect(openedIsAt(fd, join(repo, 'mechanical', 'gone.txt'))).toBe(false)
+      // a folder is not a file
+      const dfd = openSync(join(repo, 'mechanical'), constants.O_RDONLY)
+      try {
+        expect(openedIsAt(dfd, join(repo, 'mechanical'))).toBe(false)
+      } finally {
+        closeSync(dfd)
+      }
+    } finally {
+      closeSync(fd)
+    }
+    // the ordinary write still goes through, and overwrites in place
+    expect(writeRepoFile(repo, 'mechanical/a.txt', 'again')).toBe(a)
+    expect(readFileSync(a, 'utf8')).toBe('again')
   })
 
   it('case.json: board and file are repository paths', () => {

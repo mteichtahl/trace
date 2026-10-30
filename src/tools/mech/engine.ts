@@ -272,3 +272,19 @@ export function engineAvailable(env: NodeJS.ProcessEnv = process.env): { ok: boo
   const line = (r.stderr ?? '').trim().split('\n').pop() || (r.error ? r.error.message : `exit ${r.status}`)
   return { ok: false, where, why: `${python} cannot import build123d and tracebridge.mech (${line})` }
 }
+
+/**
+ * Why `tracectl check` does not build the case here, or null when it does. mechanical/case.py is code
+ * (docs/enclosure-build.md "Trust"): in CI (GITHUB_ACTIONS or CI set) the case is built only when the workflow says so
+ * with TRACE_CHECK_MECH=1, which templates/build/kicad.yml does for pushes and for pull requests from the repository
+ * itself, never for a fork's; unset in CI, it is skipped (fail closed). On a laptop unset builds, and 0/false/no skips.
+ * TRACE_CHECK_MECH_WHY, when given, is the reason printed.
+ */
+export function mechSkipReason(env: NodeJS.ProcessEnv = process.env): string | null {
+  const v = (env.TRACE_CHECK_MECH ?? '').trim().toLowerCase()
+  const why = env.TRACE_CHECK_MECH_WHY?.trim()
+  if (['0', 'false', 'no'].includes(v)) return why || 'TRACE_CHECK_MECH=0, no case script is run'
+  const ci = !!(env.GITHUB_ACTIONS?.trim() || env.CI?.trim())
+  if (ci && !['1', 'true', 'yes'].includes(v)) return why || 'TRACE_CHECK_MECH is not set in CI'
+  return null
+}

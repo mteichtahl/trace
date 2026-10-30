@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { CAD_SCRIPT_OUTPUTS, FUNCTION_KINDS, GpuJobSchema, backendFor } from '../../../src/gpu/jobs.js'
 import { boardFacts } from '../../../src/tools/mech/board.js'
-import { PY_DIR, caseJob, engineAvailable, engineOutputs, pyDir, scriptIsTemplate, scriptJob, templatePath } from '../../../src/tools/mech/engine.js'
+import { PY_DIR, caseJob, engineAvailable, engineOutputs, mechSkipReason, pyDir, scriptIsTemplate, scriptJob, templatePath } from '../../../src/tools/mech/engine.js'
 import { CASE_TEMPLATE } from '../../../src/tools/mech/tools.js'
 import { CaseSettingsSchema, defaults } from '../../../src/tools/mech/settings.js'
 import { allTools } from '../../../src/tools/index.js'
@@ -114,6 +114,27 @@ describe('the job spec', () => {
     const t = caseJob({ facts, settings: defaults(facts.board), script: '/repo/mechanical/case.py' }, mkdtempSync(join(dir, 'c2-')), { TRACE_GPU: '0' })
     expect(t.job.argv).not.toContain('--script')
     expect(Object.keys(t.job.inputs ?? {})).not.toContain('case.py')
+  })
+})
+
+describe('tracectl check and the case', () => {
+  it('builds it on a laptop unless told not to, and in CI only when the workflow says TRACE_CHECK_MECH=1 (fail closed)', () => {
+    expect(mechSkipReason({})).toBeNull()
+    expect(mechSkipReason({ TRACE_CHECK_MECH: '1' })).toBeNull()
+    expect(mechSkipReason({ TRACE_CHECK_MECH: '0' })).toBe('TRACE_CHECK_MECH=0, no case script is run')
+    expect(mechSkipReason({ TRACE_CHECK_MECH: 'no', TRACE_CHECK_MECH_WHY: 'pull request from a fork runs no case script' })).toBe('pull request from a fork runs no case script')
+    for (const ci of [{ GITHUB_ACTIONS: 'true' }, { CI: 'true' }, { CI: '1' }]) {
+      expect(mechSkipReason(ci)).toBe('TRACE_CHECK_MECH is not set in CI')
+      expect(mechSkipReason({ ...ci, TRACE_CHECK_MECH: '' })).toBe('TRACE_CHECK_MECH is not set in CI')
+      expect(mechSkipReason({ ...ci, TRACE_CHECK_MECH: 'maybe' })).toBe('TRACE_CHECK_MECH is not set in CI')
+      expect(mechSkipReason({ ...ci, TRACE_CHECK_MECH_WHY: 'the workflow chose not to' })).toBe('the workflow chose not to')
+      for (const yes of ['1', 'true', 'yes', ' TRUE ']) expect(mechSkipReason({ ...ci, TRACE_CHECK_MECH: yes })).toBeNull()
+      expect(mechSkipReason({ ...ci, TRACE_CHECK_MECH: '0', TRACE_CHECK_MECH_WHY: 'fork' })).toBe('fork')
+    }
+    // the workflow template sets 1 for pushes and the repository's own pull requests, 0 with the reason for a fork's
+    const yml = readFileSync(join(ROOT, 'templates', 'build', 'kicad.yml'), 'utf8')
+    expect(yml).toContain("TRACE_CHECK_MECH: ${{ github.event.pull_request.head.repo.fork && '0' || '1' }}")
+    expect(yml).toMatch(/TRACE_CHECK_MECH_WHY: \$\{\{ github\.event\.pull_request\.head\.repo\.fork && 'pull request from a fork runs no case script' \|\| '' \}\}/)
   })
 })
 
