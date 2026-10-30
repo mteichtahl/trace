@@ -274,38 +274,52 @@ installs `/app/python[mech]` into `/opt/trace-venv`. The agent image does not ge
 
 ## Trust
 
-`mechanical/case.py` is code: Python that a person, the worker or a pull request wrote, and that runs with whatever its
-process can reach. trace treats it as untrusted in all three places it runs.
+`mechanical/case.py` is code: Python that a person, the worker or a pull request wrote. A review found that in one
+process, or one Lambda function, with the job runner, a script can read the runner's credentials from `/proc`, leave a
+daemon behind in a warm function, and rewrite `result.json` after the check. So in the cloud the script runs where there
+is nothing to take: a function of its own, with no credentials and no S3 access, that only hands back solids. Two job
+kinds (`src/gpu/jobs.ts`):
 
-| Where | Who runs it | What the script can reach |
-| --- | --- | --- |
-| Tools function (Lambda) | `mech.build` from the worker, as a `cad` job | Its job folder (inputs, `out/`, a `home/` that is its HOME, TMPDIR and XDG folders) and the network the function has. Not the function's role credentials (no `AWS_*`, no `AWS_LAMBDA_RUNTIME_API`, `_HANDLER` or `AWS_CONTAINER_*`), not the Runtime API, not trace's tokens |
-| A laptop | `mech.build` or `tracectl check`, as a local `cad` job | The person's files and network (it runs as the person), but not the environment's credentials and tokens: `AWS_*`, `GITHUB_*`, `TRACE_TOKEN`, `ANTHROPIC_*` and the rest are not passed. Files such as `~/.aws/credentials` are readable, as by any program the person runs: review a script before building a case someone else wrote |
-| CI (`templates/build/kicad.yml`) | `tracectl check` on a push or a pull request | As on a laptop, on the runner: the workflow has `contents: read` only. A pull request from a fork runs no case script (`TRACE_CHECK_MECH=0`: "skip mech.build: pull request from a fork runs no case script"), and build123d is not installed for it |
+| Kind | Runs | Where, in the cloud | Where, on a laptop or CI |
+| --- | --- | --- | --- |
+| `cad-script` | the case script (`python -m tracebridge.mech build-only`): the board facts and settings in, one STEP per part and `claims.json` out | the project's **cad function** (`<prefix>-cad-<hash>`, `src/infra/tools.ts CadFunction`), the tools image, a role that may write its own log group and nothing else | a local child process (as any repository code `tracectl check` runs: a firmware build) |
+| `cad` | trace's own code only: the built-in template in-process, or the parts of a `cad-script` job (`--built`), or a handed-in STEP; then the fit, the rules, the exports and the records | the tools function, as the other kinds | local |
 
-How (`src/gpu/jobs.ts`, `src/gpu/runner.ts`):
+`mech.build` runs one `cad` job when `case.py` is byte-for-byte the template (its sha256 against the packaged
+template's) or the case is a handed-in file, and a `cad-script` job followed by a `cad` job otherwise.
 
-- **A scrubbed environment.** A job with `isolate` (the default for kind `cad`, and only for it) starts its program
-  with `isolatedEnv`: an allowlist (PATH, HOME, USER, LANG/LC_*, TZ, TMPDIR, the XDG folders, PYTHONPATH,
-  PYTHONUNBUFFERED, PYTHONHOME, VIRTUAL_ENV and a few more a Python needs) plus the job's own `env`, which the tool
-  builds, never the project. On the function the runner keeps its credentials in its own process for the S3 downloads
-  and uploads; the child never has them. There it also gets HOME, TMPDIR and the XDG folders inside the job's folder
-  (removed after the job) and `PYTHONNOUSERSITE=1`, so nothing one job leaves in a warm container's HOME is imported
-  by the next.
-- **Nothing outlives the job.** The isolated program runs in a process group of its own (detached); when its main
-  process exits, fails or reaches the time limit, the whole group is killed (SIGKILL), so a background process the
-  script started does not survive into a warm function's next job.
-- **The fit check is not the script's to report.** The engine runs the case script in a separate Python process from
-  the one that loads the board, measures the fit and applies the rules: the script's process hands back the case's
-  solids (as files), and the checking process reads them, so a script cannot rewrite `fit_check`, `rules_check` or
-  `result.json` from inside (the engine's own design, `python/tracebridge/mech`).
-- **Files stay in the repository.** See Paths above: a handed-in file or a `mechanical/` path that is a symbolic link,
-  or that leads outside the repository or into `.git/`, is refused, so a script or a pull request cannot make the
-  tools read or overwrite files elsewhere.
+The cad function (`src/gpu/function.ts runCadScript`, `src/gpu/lambda.ts`, `src/gpu/runner.ts`):
 
-What this does not do: it is not a sandbox. On the function the script still has the function's network and its own
-job's files; on a laptop it runs as the person. A script someone else wrote is reviewed like any other code before
-it is built on a laptop, and a case from a pull request is built by CI only for branches of the repository itself.
+- **Credentials.** Its role has `logs:CreateLogStream` and `logs:PutLogEvents` on its log group, and nothing else: no
+  S3, no X-Ray. The worker stages the job under `jobs/<slug>/<id>/` as for every job, then signs URLs with its own
+  credentials (`@aws-sdk/s3-request-presigner`, 20 minutes): GET for the spec and each input, PUT for each output
+  (`part-1.step` … `part-16.step`, `claims.json`), stdout, stderr and the exit record. The event is
+  `{"urls": {"spec": …, "inputs": {name: url}, "outputs": {name: url}, "stdout": …, "stderr": …, "exit": …}, "traceparent"?}`.
+  The runner moves the files through those URLs (`UrlStore`, the same `get`/`put` as `S3Backend`); the function
+  never holds a key that reaches anything but this job's own files, and a script that reads the runner's memory or
+  `/proc` finds only its own job's URLs. The function refuses an event with `spec` (an S3 address): it has no S3.
+- **The script's outputs are claims.** The `cad` job that follows reads them with `read_private` (fixed names,
+  regular files opened once with `O_NOFOLLOW` and checked by `fstat`, size caps, part names `^[a-z][a-z0-9_-]{0,31}$`,
+  claims type-checked) and measures the geometry itself with its own copy of the facts, settings and capabilities,
+  on the tools function, which runs no script. Whatever a script, or a process it left behind in a warm cad function,
+  writes to those outputs can only change the solids the check measures.
+- **Nothing to inherit.** The job's program still runs with `isolate` (a scrubbed environment: PATH, HOME, the
+  locale, TMPDIR, the XDG folders and what Python needs; HOME, TMPDIR and XDG in the job's folder; its own process
+  group, killed when the job ends). On the cad function this is tidiness, not the boundary: the boundary is the role.
+- **Flat layout.** A flat stack has no room for four more resources per project, so there is no cad function there:
+  `mech.build` says that a custom `case.py` builds only on a laptop or in CI, and builds the template or a handed-in
+  file in the cloud.
+
+A laptop and CI run the script as a local child process (`child.py`): `tracectl check` already runs repository code
+there (firmware builds), and the person or the workflow chose to run it. In CI the script step runs only when the
+workflow sets `TRACE_CHECK_MECH=1`, which `templates/build/kicad.yml` does for pushes and for pull requests from the
+repository itself and never for a fork's (`github.event.pull_request.head.repo.fork`); unset, as on a laptop, it runs.
+A script someone else wrote is reviewed like any other code before it is built on a laptop.
+
+**Files stay in the repository** (`src/tools/mech/paths.ts`): a handed-in file or a `mechanical/` path that is a
+symbolic link, or that leads outside the repository or into `.git/` (any letter case), is refused; a write checks the
+real path before opening and, by `fstat` against `lstat`, that what it opened is the file at that path, so a folder
+swapped for a link between the check and the open is caught.
 
 ## Tests
 
