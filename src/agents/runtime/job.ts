@@ -60,7 +60,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk'
 import { Octokit } from '@octokit/rest'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { type TraceConfig, load } from '../../core/config.js'
 import { loadConfig } from '../../harness/index.js'
@@ -243,8 +243,10 @@ export function cloneDir(workspace: string, repository: string, slot: string): s
 
 interface GitOpts { exec: Exec; dir: string; auth: Record<string, string>; signal?: AbortSignal | undefined; log: (l: string) => void }
 
-const gitIn = (o: GitOpts) => (args: string[], cwd: string | undefined = o.dir): Promise<ExecResult> =>
-  o.exec('git', args, { ...(cwd ? { cwd } : {}), env: o.auth, ...(o.signal ? { signal: o.signal } : {}) })
+/** git in the clone (`dir`), or in `cwd` when given. Never in a folder that may not exist yet: the clone itself runs in
+ * the clone's parent, which cloneDefault makes first (spawning in a missing folder fails as \`spawn git ENOENT\`). */
+const gitIn = (o: GitOpts) => (args: string[], cwd: string = o.dir): Promise<ExecResult> =>
+  o.exec('git', args, { cwd, env: o.auth, ...(o.signal ? { signal: o.signal } : {}) })
 
 /**
  * Clone (or, in a kept workspace, fetch and reset) `repository` at its default branch into `dir`, and set the git
@@ -264,8 +266,11 @@ export async function cloneDefault(o: GitOpts & { repository: string; defaultBra
     await git(['checkout', '-B', db, `origin/${db}`])
   } else {
     o.log(`cloning ${o.repository} (${db})`)
-    mkdirSync(join(o.dir, '..'), { recursive: true })
-    await git(['clone', '--depth=300', '--branch', db, '--', url, o.dir], undefined)
+    // The clone runs in the parent (made here): passing undefined for cwd took gitIn's default, the clone folder
+    // itself, which does not exist yet, so every fresh clone failed with \`spawn git ENOENT\`
+    const parent = dirname(o.dir)
+    mkdirSync(parent, { recursive: true })
+    await git(['clone', '--depth=300', '--branch', db, '--', url, o.dir], parent)
     await git(['config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'])
   }
   await git(['config', 'user.name', 'trace worker (Claude)'])
