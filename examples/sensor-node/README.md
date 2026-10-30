@@ -36,10 +36,10 @@ Run everything below from this folder.
 ## 1. Choose the values
 
 ```
-$ trace tool calc.divider vin=12 vout=3.0 series=E24
+$ tracectl tool calc.divider vin=12 vout=3.0 series=E24
 summary: "R1 39 kΩ / R2 13 kΩ (E24) gives 3 V (+0.00 %), worst case 2.96 V to 3.05 V"
 
-$ trace tool calc.divider vin=12 r1=39k r2=13k
+$ tracectl tool calc.divider vin=12 r1=39k r2=13k
 r_thevenin_ohm: 9750
 summary: "Vout 3 V (worst case 2.96 V to 3.05 V at 1 %), divider current 231 µA"
 ```
@@ -48,21 +48,21 @@ The anti-alias filter's resistance is R3 plus the divider's Thevenin resistance 
 what drives the filter.
 
 ```
-$ trace tool calc.rc_filter fc=1k c=10n
+$ tracectl tool calc.rc_filter fc=1k c=10n
 summary: "R 16 kΩ, C 10 nF gives fc 995 Hz (-0.53 %)"
 ```
 
 16 kΩ − 9.75 kΩ = 6.25 kΩ, and the nearest E24 value is 6.2 kΩ:
 
 ```
-$ trace tool calc.rc_filter r=15950 c=10n
+$ tracectl tool calc.rc_filter r=15950 c=10n
 fc_hz: 997.84    rise_10_90_s: 0.000350    settle_time_s: 0.000735 (to 1 %)
 ```
 
 The LED is a KT-0603R red LED. Its LCSC listing gives Vf = 1.8–2.4 V at 20 mA; 2.0 V is assumed at 2 mA.
 
 ```
-$ trace tool calc.led_resistor vsupply=3.3 vf=2.0 current=2m
+$ tracectl tool calc.led_resistor vsupply=3.3 vf=2.0 current=2m
 summary: "680 Ω (E24) gives 1.91 mA, resistor dissipates 2.49 mW"
 ```
 
@@ -73,24 +73,24 @@ margin costs.
 ## 2. Check the design
 
 ```
-$ trace tool kicad.erc
+$ tracectl tool kicad.erc
 errors: 0   warnings: 0   excluded: 0
 
-$ trace tool kicad.drc            # with --schematic-parity
+$ tracectl tool kicad.drc            # with --schematic-parity
 errors: 0   warnings: 0   unconnected: 0   parity_issues: 0
 
-$ trace tool kicad.netlist
+$ tracectl tool kicad.netlist
 nets_total: 7   components_total: 10   single_pin_nets: 0
   /ADC_IN: C1.1 D1.3 J2.3 R3.2      /DIV: R1.2 R2.1 R3.1      GND: 7 pins ...
 
-$ trace tool kicad.bom jlc=true
+$ tracectl tool kicad.bom jlc=true
 total_parts: 10   unique_lines: 10   missing_part_number: 0   lines_without_lcsc: 0
 
-$ trace tool kicad.board trace_width_mm=0.25
+$ tracectl tool kicad.board trace_width_mm=0.25
 outline 40 × 25 mm, 2 copper layers, 10 footprints, 7 nets, 23 tracks, 7 vias, 1 copper zone
 F.Cu z0_ohm: 128.04 at 0.25 mm (microstrip over the 1.51 mm core)
 
-$ trace tool kicad.net_length nets='["/ADC_IN"]' from=R3.2 to=J2.3
+$ tracectl tool kicad.net_length nets='["/ADC_IN"]' from=R3.2 to=J2.3
 length_mm: 26.175 (the whole net)   path R3.2 → J2.3: 20.175 mm, 0 vias, 117 ps
 ```
 
@@ -105,7 +105,7 @@ For a fab and assembly package, run `tracectl tool kicad.fab out_dir=build/fab`.
 The hand-written netlist, at the 12 V full-scale point:
 
 ```
-$ trace tool sim.spice path=sim/front-end.cir --args '{"measurements":[
+$ tracectl tool sim.spice path=sim/front-end.cir --args '{"measurements":[
     {"name":"vadc_dc","kind":"value_at","vector":"v(adc_in)","analysis":"op"},
     {"name":"f3db","kind":"bandwidth","vector":"v(adc_in)"},
     {"name":"rise","kind":"rise_time","vector":"v(adc_in)","analysis":"tran"}]}'
@@ -117,7 +117,7 @@ rise:    0.349 ms      (calc.rc_filter: 0.350 ms)
 Mid-scale is the input range's middle, with no diode near conduction. Set `vin_dc` to 6:
 
 ```
-$ trace tool sim.spice path=sim/front-end.cir --args '{"params":{"vin_dc":6},"analyses":[".op",".ac dec 50 1 1meg"], ...}'
+$ tracectl tool sim.spice path=sim/front-end.cir --args '{"params":{"vin_dc":6},"analyses":[".op",".ac dec 50 1 1meg"], ...}'
 vadc: 1.50002 V        f3db: 993.6 Hz   (calc.rc_filter 997.8 Hz: −0.4 %)
 ```
 
@@ -131,7 +131,7 @@ does, but it overstates leakage. An error budget should use the datasheet's 2 µ
 The schematic can be simulated directly, without the hand-written netlist (`sim/front-end-from-kicad.sh`):
 
 ```
-$ trace tool sim.kicad_spice schematic=hardware/sensor-node.kicad_sch --args '{"analyses":[".op",".ac dec 50 1 1meg"],
+$ tracectl tool sim.kicad_spice schematic=hardware/sensor-node.kicad_sch --args '{"analyses":[".op",".ac dec 50 1 1meg"],
     "replace":{"J1":"V1 /VIN 0 DC 6 AC 1","J2":"V2 +3V3 0 DC 3.3","D1":"XD1 GND +3V3 /ADC_IN BAT54S","D2":null,"R4":null}, ...}'
 vadc: 1.50002 V        f3db: 993.566 Hz
 netlist: components 10, replaced J1 D1 J2, removed R4 D2
@@ -148,12 +148,12 @@ symbols, so those are replaced or removed:
 ## 4. The MCU side
 
 ```
-$ trace tool sim.logic --args '{"files":["logic/moving_average.v","logic/moving_average_tb.v"],"top":"moving_average_tb","pass":"ALL TESTS PASSED"}'
+$ tracectl tool sim.logic --args '{"files":["logic/moving_average.v","logic/moving_average_tb.v"],"top":"moving_average_tb","pass":"ALL TESTS PASSED"}'
 passed: true
 output: checked 254 samples / ALL TESTS PASSED
 vcd: moving_average_tb.vcd (stored with the run, for sim.wave_read)
 
-$ trace tool firmware.build target=adc-convert
+$ tracectl tool firmware.build target=adc-convert
 ok: true   command: "make all test"   errors: 0   warnings: 0
 size: flash_bytes 221 (llvm-size, host build)
 ```
@@ -193,9 +193,9 @@ parts' limits with their sources, the budget `nominal` and R4's power derating c
 them; README "Thermal specialist" in the repository root explains the tools):
 
 ```
-$ trace tool thermal.check envelope=bench scenario=nominal board=hardware/sensor-node.kicad_pcb cell_mm=0.5
+$ tracectl tool thermal.check envelope=bench scenario=nominal board=hardware/sensor-node.kicad_pcb cell_mm=0.5
 verdict: unknown    R1, R2, R4 pass (milliwatts: a fraction of a degree)    D2 unknown
-$ trace tool thermal.derating action=check ref=R4 curve=power_vs_ambient x=60 y=0.0033
+$ tracectl tool thermal.derating action=check ref=R4 curve=power_vs_ambient x=60 y=0.0033
 status: pass        allowed 0.1 W at 60 °C
 ```
 
@@ -216,21 +216,21 @@ and is `verified: null`. Replace them with a real part's using `protocol.spec_ex
 `protocol.spec action=set`.
 
 ```
-$ trace tool protocol.model --args '{"protocol":"spi","config":{"mode":0,"bits":16,"f_sck":1e6,"tv_slave":100e-9,
+$ tracectl tool protocol.model --args '{"protocol":"spi","config":{"mode":0,"bits":16,"f_sck":1e6,"tv_slave":100e-9,
     "tho_slave":10e-9,"t_css":500e-9,"t_csh":500e-9,"t_csd":1e-6},
     "transactions":[{"mosi":[32768],"miso":[3723]},{"mosi":[32769],"miso":[3723]}]}'
 roundtrip: match true      artifacts: model.vcd model.csv annotations.json
 
-$ trace tool protocol.check run_id=<model run> protocol=spi device="SPI-ADC-12 (fixture)" initiator="sensor-mcu (fixture)"
+$ tracectl tool protocol.check run_id=<model run> protocol=spi device="SPI-ADC-12 (fixture)" initiator="sensor-mcu (fixture)"
 pass: true    tv 100 ns (max 125 ns, margin 25 ns)    tcss 500 ns (min 100 ns)    fSCK 1 MHz (max 2 MHz)
 modes: initiator and responder share mode(s) 0, 3
 
-$ trace tool protocol.compat protocol=spi initiator="sensor-mcu (fixture)" responder="SPI-ADC-12 (fixture)" f=1e6 \
+$ tracectl tool protocol.compat protocol=spi initiator="sensor-mcu (fixture)" responder="SPI-ADC-12 (fixture)" f=1e6 \
     --args '{"impedance":{"structure":"microstrip","width":0.25e-3,"height":1.51e-3,"er":4.5},
              "flight":{"sck":{"length_m":0.05},"mosi":{"length_m":0.05},"miso":{"length_m":0.05}}}'
 pass: true    read-path fmax 3.43 MHz = 0.5 / (0.31 + 125 + 0.31 + 20 ns)
 
-$ trace tool protocol.diagram run_id=<model run> check_run_id=<check run> transaction=0 \
+$ tracectl tool protocol.diagram run_id=<model run> check_run_id=<check run> transaction=0 \
     --args '{"spec":{"device":"SPI-ADC-12 (fixture)","protocol":"spi"}}'
 diagram.svg: the read with its decoded words and the check's arrows, over the fixture's timing drawn at its limits
 ```
@@ -244,7 +244,7 @@ bits 1 ps before the MCU samples each one. It ends with `TRACE_COVER spi_tx_0`, 
 `spi_response_1`:
 
 ```
-$ trace tool sim.logic --args '{"files":["logic/spi_adc_slave.v","logic/spi_adc_slave_tb.v"],"top":"spi_adc_slave_tb","pass":"ALL TESTS PASSED"}'
+$ tracectl tool sim.logic --args '{"files":["logic/spi_adc_slave.v","logic/spi_adc_slave_tb.v"],"top":"spi_adc_slave_tb","pass":"ALL TESTS PASSED"}'
 passed: true    checked 32 response(s), 0 mismatch(es)
 ```
 
