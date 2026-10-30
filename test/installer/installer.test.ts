@@ -576,6 +576,26 @@ describe('adding a removed project again, its memory variable, the CPU queue and
   }
   const board = projectHash('mteichtahl/board')
 
+  it('trusts each repository by its GitHub ids too (the projects, and trace\'s own for the self-update role); one GitHub cannot give is trusted by name only', async () => {
+    OUTPUTS.TraceHome = join(mkdtempSync(join(tmpdir(), 'trace-central-')), 'home')
+    const order: string[] = []
+    const r = await run(ANSWERS, {
+      names: { deployed: async () => new Set<string>(), taken: async () => [] },
+      subject: async (t, repo) => {
+        expect(t).toBe(TOKEN)
+        order.push(repo)
+        if (repo === 'mteichtahl/fw') throw new Error('GET /repos/mteichtahl/fw: 404 Not Found')
+        return repo === 'mteichtahl/trace' ? 'repo:mteichtahl@1817657/trace@1433970189' : 'repo:mteichtahl@1817657/board@1500000001'
+      },
+    })
+    expect(r.ok).toBe(true)
+    // the projects, and trace's own repository for the self-update role
+    expect(order.sort()).toEqual(['mteichtahl/board', 'mteichtahl/fw', 'mteichtahl/trace'])
+    expect(r.infra[0]?.githubSubjects).toEqual({ 'mteichtahl/board': 'repo:mteichtahl@1817657/board@1500000001', 'mteichtahl/trace': 'repo:mteichtahl@1817657/trace@1433970189' })
+    expect(InfraPropsSchema.parse(r.infra[0]).githubSubjects['mteichtahl/board']).toBe('repo:mteichtahl@1817657/board@1500000001')
+    expect(r.events.some((e) => e.type === 'log' && /mteichtahl\/fw: its GitHub ids could not be read \(GET \/repos\/mteichtahl\/fw: 404 Not Found\)/.test(e.line ?? ''))).toBe(true)
+  })
+
   it("gives a project the stack does not have the next free generation, says the old memory is orphaned, and saves it", async () => {
     const asked: string[][] = []
     // board is new to the stack, and its generation-0 memory (retained) and secret (in its recovery window) are taken,

@@ -35,4 +35,20 @@ describe('dependencies', () => {
     expect(dependabot).toMatch(/open-pull-requests-limit: \d/)
     for (const eco of ['npm', 'pip', 'github-actions']) expect(dependabot).toContain(`package-ecosystem: ${eco}`)
   })
+
+  it('installs without deprecation warnings except the three ADOT pins, each installed once', () => {
+    const adot = lock.packages['node_modules/@aws/aws-distro-opentelemetry-node-autoinstrumentation']
+    const overrides = z.record(z.string(), z.string()).parse((pkg as { overrides?: unknown }).overrides ?? {})
+    // the overrides collapse ADOT's copies into one; they must track the version ADOT pins
+    expect(overrides['@opentelemetry/sdk-trace-base']).toBe(adot?.dependencies?.['@opentelemetry/sdk-trace-base'])
+    // trace's own tests use the replacement, not the deprecated package
+    expect(pkg.devDependencies['@opentelemetry/sdk-trace-base']).toBeUndefined()
+    expect(pkg.devDependencies['@types/libsodium-wrappers']).toBeUndefined()
+    const deprecated = Object.entries(lock.packages)
+      .filter(([, v]) => typeof (v as { deprecated?: unknown }).deprecated === 'string')
+      .map(([k]) => k.replace(/^.*node_modules\//, ''))
+      .sort()
+    expect(deprecated).toEqual(['@opentelemetry/propagator-jaeger', '@opentelemetry/sdk-trace-base', '@opentelemetry/sdk-trace-node'])
+    expect(dependabot).toMatch(/deprecat/i)
+  })
 })

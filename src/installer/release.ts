@@ -44,6 +44,9 @@ export interface ReleaseDeps {
   registries(): Promise<RegistryInfo[]>
   /** ECR Public PutRegistryCatalogData */
   catalog(displayName: string): Promise<void>
+  /** GitHub: the repository's immutable OIDC subject prefix (github.ts immutableSubject), which the role trusts beside its
+   * name form; absent in tests that do not need it */
+  subject?(repo: string): Promise<string>
   /** GitHub: a repository variable; a workflow_dispatch */
   setVariable(repo: string, name: string, value: string): Promise<string>
   dispatch(repo: string, workflow: string, ref: string): Promise<void>
@@ -125,7 +128,15 @@ export async function releaseSetup(d: ReleaseDeps, o: ReleaseOptions): Promise<R
   // 2 — the repositories and the role
   const createOidc = !(await d.oidcProvider())
   d.log(`deploying ${RELEASE_STACK} in ${RELEASE_REGION}: ECR Public ${Object.values(RELEASE_REPOSITORIES).join(', ')}, and the release role for ${repository} (main and v* tags)${createOidc ? ', with GitHub\'s OIDC provider (the account has none)' : ''}`)
-  const code = await d.cdk(['deploy', RELEASE_STACK, '--app', 'node dist/infra/release.js', '--require-approval', 'never', '-c', `repository=${repository}`, '-c', `createOidcProvider=${createOidc}`], region)
+  // the repository's immutable subject: GitHub sends it instead of repo:OWNER/REPO for repositories made, renamed or moved
+  // after 15 July 2026, or opted in, and the role trusts both. Best effort: without it, the name form only (and said)
+  let subject: string | null = null
+  if (d.subject) {
+    try { subject = await d.subject(repository) } catch (e) {
+      d.log(`${repository}'s GitHub ids could not be read (${e instanceof Error ? e.message : String(e)}): the release role trusts repo:${repository} only, which GitHub does not send when the repository uses immutable subjects`)
+    }
+  }
+  const code = await d.cdk(['deploy', RELEASE_STACK, '--app', 'node dist/infra/release.js', '--require-approval', 'never', '-c', `repository=${repository}`, '-c', `createOidcProvider=${createOidc}`, ...(subject ? ['-c', `immutableSubject=${subject}`] : [])], region)
   if (code !== 0) throw new Error(`cdk deploy ${RELEASE_STACK} exited ${code}`)
   const out = await d.outputs(RELEASE_STACK, RELEASE_REGION)
   const roleArn = out?.[RELEASE_ROLE_OUTPUT]
@@ -186,6 +197,7 @@ export async function liveReleaseDeps(creds: AwsCredentialIdentity, token: strin
       }))
     },
     catalog: async (displayName) => { await ecr(signed.ecrPublic('PutRegistryCatalogData', { displayName })) },
+    subject: (repo) => gh.immutableSubject(token, repo),
     setVariable: (repo, name, value) => gh.setVariable(token, repo, name, value),
     dispatch: async (repo, workflow, ref) => { await new gh.Github(token).request('POST', `/repos/${repo}/actions/workflows/${workflow}/dispatches`, z.unknown(), { ref }) },
     recordRegistry: async (repo, body) => {

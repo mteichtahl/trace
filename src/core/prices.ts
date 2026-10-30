@@ -67,6 +67,14 @@ export type ModelPrice = z.output<typeof ModelPriceSchema>
 
 const GpuPrice = z.object({ perHour: Usd, basis: z.string().max(200), source: Source.optional(), asOf: Day.optional() }).strict()
 const CpuPrice = z.object({ perVcpuHour: Usd, basis: z.string().max(200), source: Source.optional(), asOf: Day.optional() }).strict()
+/** A project's tools function (AWS Lambda, arm64): its memory by the GB-second, each call, and its /tmp above the
+ * 512 MB Lambda includes, by the GB-second. */
+const ToolsPrice = z.object({
+  perGbSecond: Usd, perRequest: Usd, perStorageGbSecond: Usd, basis: z.string().max(200), source: Source.optional(), asOf: Day.optional(),
+}).strict()
+/** The built-in price of the tools function: Lambda on arm64 in us-east-1 (also a table without one: tables written
+ * before the tools function, fetched or overridden, have none). */
+export const DEFAULT_TOOLS_PRICE = { perGbSecond: 0.0000133334, perRequest: 0.0000002, perStorageGbSecond: 0.0000000309, basis: 'AWS Lambda on arm64 in us-east-1 (memory GB-seconds, requests, /tmp over 512 MB)' }
 
 export const PriceTableSchema = z.object({
   /** when these prices were taken (YYYY-MM-DD): from the price pages (built-in), or fetched from the price list */
@@ -77,6 +85,8 @@ export const PriceTableSchema = z.object({
   gpu: GpuPrice,
   /** a CPU job is billed for the vCPUs it asked for */
   cpu: CpuPrice,
+  /** a job on the project's tools function is billed for its memory and /tmp by the second, and the call */
+  tools: ToolsPrice.optional(),
   sources: z.array(z.string().url()).max(10).default([]),
 }).strict()
 export type PriceTable = z.output<typeof PriceTableSchema>
@@ -87,6 +97,7 @@ export const PriceOverridesSchema = z.object({
   models: z.array(ModelPriceSchema).max(60).optional(),
   gpu: GpuPrice.optional(),
   cpu: CpuPrice.optional(),
+  tools: ToolsPrice.optional(),
 }).strict()
 export type PriceOverrides = z.output<typeof PriceOverridesSchema>
 
@@ -110,7 +121,8 @@ export const DEFAULT_PRICES: PriceTable = PriceTableSchema.parse({
   ],
   gpu: { perHour: 0.8048, basis: 'g6.xlarge on demand in us-east-1 (one job holds the instance)' },
   cpu: { perVcpuHour: 0.0446, basis: 'c7i on demand in us-east-1, per vCPU' },
-  sources: ['https://aws.amazon.com/bedrock/pricing/', 'https://www.anthropic.com/pricing', 'https://aws.amazon.com/ec2/pricing/on-demand/'],
+  tools: DEFAULT_TOOLS_PRICE,
+  sources: ['https://aws.amazon.com/bedrock/pricing/', 'https://www.anthropic.com/pricing', 'https://aws.amazon.com/ec2/pricing/on-demand/', 'https://aws.amazon.com/lambda/pricing/'],
 })
 
 /** The same entry: the same match and the same regions. */
@@ -124,11 +136,12 @@ function stamp(t: PriceTable, source: PriceSource): PriceTable {
     models: t.models.map((m) => ({ ...m, source: m.source ?? source, asOf: m.asOf ?? t.asOf })),
     gpu: { ...t.gpu, source: t.gpu.source ?? source, asOf: t.gpu.asOf ?? t.asOf },
     cpu: { ...t.cpu, source: t.cpu.source ?? source, asOf: t.cpu.asOf ?? t.asOf },
+    ...(t.tools ? { tools: { ...t.tools, source: t.tools.source ?? source, asOf: t.tools.asOf ?? t.asOf } } : {}),
   }
 }
 
 /** `top` laid over `base`: its models replace those with the same match (and regions), its pools replace whole. */
-function layer(base: PriceTable, top: { asOf?: string | undefined; models?: ModelPrice[] | undefined; gpu?: PriceTable['gpu'] | undefined; cpu?: PriceTable['cpu'] | undefined; sources?: string[] | undefined }): PriceTable {
+function layer(base: PriceTable, top: { asOf?: string | undefined; models?: ModelPrice[] | undefined; gpu?: PriceTable['gpu'] | undefined; cpu?: PriceTable['cpu'] | undefined; tools?: PriceTable['tools'] | undefined; sources?: string[] | undefined }): PriceTable {
   const over = top.models ?? []
   return PriceTableSchema.parse({
     ...base,
@@ -136,6 +149,7 @@ function layer(base: PriceTable, top: { asOf?: string | undefined; models?: Mode
     models: [...over, ...base.models.filter((m) => !over.some((x) => sameEntry(x, m)))].slice(0, 60),
     ...(top.gpu ? { gpu: top.gpu } : {}),
     ...(top.cpu ? { cpu: top.cpu } : {}),
+    ...(top.tools ? { tools: top.tools } : {}),
     sources: [...new Set([...(top.sources ?? []), ...base.sources])].slice(0, 10),
   })
 }
@@ -171,6 +185,7 @@ export function resolvePrices(fetched: PriceTable | null | undefined, overrides:
       ...(overrides.models ? { models: overrides.models.map((m) => ({ ...m, source: 'override' as const, asOf })) } : {}),
       ...(overrides.gpu ? { gpu: { ...overrides.gpu, source: 'override' as const, asOf } } : {}),
       ...(overrides.cpu ? { cpu: { ...overrides.cpu, source: 'override' as const, asOf } } : {}),
+      ...(overrides.tools ? { tools: { ...overrides.tools, source: 'override' as const, asOf } } : {}),
     })
   }
   return t
@@ -237,4 +252,15 @@ export const poolPricedBy = (t: PriceTable, pool: 'gpu' | 'cpu'): PricedBy => ({
 export function jobCost(t: PriceTable, pool: 'gpu' | 'cpu', seconds: number, vcpus: number): number {
   const h = Math.max(0, seconds) / 3600
   return round(pool === 'gpu' ? h * t.gpu.perHour : h * Math.max(1, vcpus) * t.cpu.perVcpuHour)
+}
+
+/** What priced the tools function's jobs (the built-in price when the table has none). */
+export const toolsPricedBy = (t: PriceTable): PricedBy => (t.tools ? { source: t.tools.source ?? 'built-in', asOf: t.tools.asOf ?? t.asOf } : { source: 'built-in', asOf: DEFAULT_PRICES.asOf })
+
+/** What a job on the tools function cost: its billed seconds x its memory, the call, and its /tmp over 512 MB. Always
+ * an estimate (the function's own start, a cold one's included in the billed time, is counted; nothing else is). */
+export function toolsCost(t: PriceTable, seconds: number, memoryMb: number, storageMb: number): number {
+  const p = t.tools ?? DEFAULT_TOOLS_PRICE
+  const s = Math.max(0, seconds)
+  return round(s * (Math.max(128, memoryMb) / 1024) * p.perGbSecond + p.perRequest + s * (Math.max(0, storageMb - 512) / 1024) * p.perStorageGbSecond)
 }

@@ -34,7 +34,7 @@ export const Route = createFileRoute('/_app/p/$id/cost')({
 })
 
 type Line = CostView['lines'][number]
-const KIND: Record<Line['kind'], string> = { agents: 'Agents', gpu: 'Graphics card', cpu: 'CPU job', order: 'Order' }
+const KIND: Record<Line['kind'], string> = { agents: 'Agents', gpu: 'Graphics card', cpu: 'CPU job', tools: 'Tools function', order: 'Order' }
 
 function Cost() {
   const { id } = Route.useParams()

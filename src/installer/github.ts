@@ -310,6 +310,15 @@ export async function getVariable(token: string, repo: string, name: string, fet
   }
 }
 
+/** A repository's GitHub immutable OIDC subject prefix, `repo:OWNER@OWNER_ID/REPO@REPO_ID` (src/infra/props.ts
+ * IMMUTABLE_SUBJECT), from its ids: what GitHub sends for repositories created, renamed or transferred after 15 July 2026,
+ * and for those opted in. Its roles trust it beside `repo:OWNER/REPO`, so they work whichever the repository uses. */
+export async function immutableSubject(token: string, repo: string, fetchImpl?: Fetch): Promise<string> {
+  const gh = new Github(token, fetchImpl)
+  const { data } = await gh.request('GET', `/repos/${repo}`, z.object({ id: z.number().int(), name: z.string(), owner: z.object({ id: z.number().int(), login: z.string() }).loose() }).loose())
+  return `repo:${data.owner.login}@${data.owner.id}/${data.name}@${data.id}`
+}
+
 /** A repository's default branch. */
 export async function repositoryDefaultBranch(token: string, repo: string, fetchImpl?: Fetch): Promise<string> {
   const gh = new Github(token, fetchImpl)

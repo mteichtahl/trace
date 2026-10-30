@@ -39,6 +39,14 @@ describe('the tools image', () => {
     // the custom resource waits (no Wait: 'false', unlike the GPU image): a function needs its image to exist
     const image = resources(s.parent, 'AWS::CloudFormation::CustomResource').find(([id]) => id.startsWith('ToolsImage'))?.[1]
     expect(image?.Properties.Wait).toBeUndefined()
+    // and starts only once its project's role may write the build's logs and push (its policy is its own resource),
+    // and the provider's functions may start and poll it ("does not allow AWS CodeBuild to create … log streams")
+    const deps = (resources(s.parent, 'AWS::CloudFormation::CustomResource').find(([id]) => id.startsWith('ToolsImage'))?.[1] as Res & { DependsOn?: string[] }).DependsOn ?? []
+    for (const want of [/^ToolsImageBuildRoleDefaultPolicy/, /^ToolsImageBuild[0-9A-F]{8}$/, /^ImageBuildStartServiceRoleDefaultPolicy/, /^ImageBuildPollServiceRoleDefaultPolicy/]) {
+      expect(deps.some((d) => want.test(d)), String(want)).toBe(true)
+    }
+    const agent = (resources(s.parent, 'AWS::CloudFormation::CustomResource').find(([id]) => id === 'AgentImage')?.[1] as Res & { DependsOn?: string[] }).DependsOn ?? []
+    expect(agent.some((d) => /^AgentImageBuildRoleDefaultPolicy/.test(d))).toBe(true)
     // Lambda may pull from the repository (DockerImageCode.fromEcr)
     const repo = resources(s.parent, 'AWS::ECR::Repository').find(([, r]) => r.Properties.RepositoryName === 'trace-tools')?.[1]
     expect(JSON.stringify(repo?.Properties.RepositoryPolicyText)).toContain('lambda.amazonaws.com')
@@ -64,6 +72,8 @@ describe('each project\'s tools function', () => {
       const stackRes = Object.values(s.parent.findResources('AWS::CloudFormation::Stack') as Record<string, Res>)
         .find((r) => JSON.stringify(r.Properties.Parameters ?? {}).includes(param as string))
       expect(JSON.stringify(stackRes?.Properties.Parameters[param as string])).toMatch(/"Fn::GetAtt":\["ToolsImage[0-9A-F]*","ImageUri"\]/)
+      // telemetry as the Batch jobs send it, under its own service name
+      expect(fn.Environment.Variables).toMatchObject({ OTEL_TRACES_EXPORTER: 'otlp', OTEL_SERVICE_NAME: 'trace-tools', OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'https://xray.us-east-1.amazonaws.com/v1/traces' })
       // one try per call: no asynchronous retries configured, and no extra resource for it
       expect(resources(t, 'AWS::Lambda::EventInvokeConfig')).toEqual([])
     }
@@ -79,7 +89,9 @@ describe('each project\'s tools function', () => {
       expect(text).not.toContain(other)
       expect(text).not.toMatch(/\/central\/\*|\/projects\//)
       const all = st.flatMap(actions)
-      expect(all.every((a) => a.startsWith('s3:') || a === 'logs:CreateLogStream' || a === 'logs:PutLogEvents')).toBe(true)
+      expect(all.every((a) => a.startsWith('s3:') || a === 'logs:CreateLogStream' || a === 'logs:PutLogEvents' || a.startsWith('xray:'))).toBe(true)
+      // its spans go to X-Ray, as the Batch jobs' do: write-only X-Ray actions, nothing that reads traces
+      expect(all.filter((a) => a.startsWith('xray:')).sort()).toEqual(['xray:GetSamplingRules', 'xray:GetSamplingTargets', 'xray:PutTelemetryRecords', 'xray:PutTraceSegments'])
       expect(all).not.toContain('s3:*')
       // trusted by Lambda in this account only
       const role = resources(t, 'AWS::IAM::Role').find(([id]) => id.startsWith(`Project${h}ToolsRole`))?.[1]
@@ -106,14 +118,42 @@ describe('each project\'s tools function', () => {
   })
 })
 
-describe('without tools functions', () => {
-  it('has none in the flat layout, or with tools.enabled false: no image build, no function, nothing told', () => {
-    for (const [cfg, id] of [[{ ...base, layout: 'flat' }, 'ToolsFlat'], [{ ...base, tools: { enabled: false } }, 'ToolsOff']] as const) {
-      const x = synth(InfraPropsSchema.parse(cfg), id)
-      const all = JSON.stringify([x.parent.toJSON(), ...[...x.nested.values()].map((t) => t.toJSON())])
-      expect(all).not.toContain('trace-tools')
-      expect(all).not.toContain('TRACE_TOOLS_FUNCTION')
-      expect(all).not.toContain('lambda:InvokeFunction"],"Effect":"Allow","Resource":{"Fn::GetAtt":["Project')
+describe('the flat layout\'s tools functions', () => {
+  it('are in one nested stack with the image build, each invocable by its own worker only, and its worker told', () => {
+    const x = synth(InfraPropsSchema.parse({ ...base, layout: 'flat' }), 'ToolsFlat')
+    expect(x.nested.size).toBe(0)
+    const t = x.tools as Template
+    expect(t).toBeTruthy()
+    // the parent pays one resource: the nested stack (no image build, no function of its own)
+    expect(JSON.stringify(x.parent.toJSON())).not.toMatch(/"Type":"AWS::(Lambda::Function|ECR::Repository)"[^}]*trace-tools/)
+    expect(resources(t, 'AWS::CodeBuild::Project').map(([, b]) => b.Properties.Name)).toEqual(['trace-tools-image'])
+    for (const repo of [A, B]) {
+      const h = projectHash(repo)
+      const fn = resources(t, 'AWS::Lambda::Function').find(([id]) => id.startsWith(`Project${h}Tools`))?.[1]
+      expect(fn?.Properties).toMatchObject({ FunctionName: toolsFunctionName('trace', h), Architectures: ['arm64'] })
+      // the function's own policy names its worker's role, nobody else
+      const perms = resources(t, 'AWS::Lambda::Permission').filter(([id]) => id.startsWith(`Project${h}Tools`))
+      expect(perms).toHaveLength(1)
+      expect(perms[0]?.[1].Properties.Action).toBe('lambda:InvokeFunction')
+      expect(JSON.stringify(perms[0]?.[1].Properties.Principal)).toMatch(new RegExp(`Project${h}RuntimeRole`))
+      // its role: its project's jobs only
+      const text = JSON.stringify(statements(t, `Project${h}ToolsRole`))
+      expect(text).toContain(`/jobs/${repo}/*`)
+      expect(text).not.toContain(repo === A ? B : A)
+      // its worker (in the parent) is told the name
+      const runtime = resources(x.parent, 'AWS::BedrockAgentCore::Runtime').find(([id]) => id.startsWith(`Project${h}`))?.[1]
+      expect(runtime?.Properties.EnvironmentVariables.TRACE_TOOLS_FUNCTION).toBe(toolsFunctionName('trace', h))
     }
   }, 300_000)
+
+  it('are left out when the parent has no room for their stack (20 flat projects), and with tools.enabled false', () => {
+    const repos = Array.from({ length: 20 }, (_, i) => `owner-${i}/repository-${i}`)
+    for (const [cfg, id] of [[{ ...base, layout: 'flat', repositories: repos }, 'ToolsFlat20'], [{ ...base, tools: { enabled: false } }, 'ToolsOff'], [{ ...base, layout: 'flat', tools: { enabled: false } }, 'ToolsFlatOff']] as const) {
+      const x = synth(InfraPropsSchema.parse(cfg), id)
+      expect(x.tools, id).toBeNull()
+      const all = JSON.stringify([x.parent.toJSON(), ...[...x.nested.values()].map((t) => t.toJSON())])
+      expect(all, id).not.toContain('trace-tools')
+      expect(all, id).not.toContain('TRACE_TOOLS_FUNCTION')
+    }
+  }, 600_000)
 })

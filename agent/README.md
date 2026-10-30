@@ -5,11 +5,16 @@ The container the repositories' worker items run in, instead of claude-code-acti
 before; its `dispatch` job (task `worker-dispatch`) sends each item here with InvokeAgentRuntime and comments
 "Dispatched to the trace agent on AgentCore (job …)" on it.
 
-One image, two runtimes, selected by `TRACE_AGENT_MODE`:
+One image, four kinds of runtime, selected by `TRACE_AGENT_MODE` (`src/agents/runtime/main.ts`):
 
-- `worker` (default): IAM-authenticated, invoked only by the workflows. `src/agents/runtime/server.ts`.
+- `worker` (default): a project's worker, IAM-authenticated, invoked by that repository's workflows and by the API;
+  `TRACE_PROJECT` names the one project it serves. `src/agents/runtime/server.ts`.
 - `api`: Cognito-JWT-authenticated, for people. `src/api/server.ts` (`start()`), which reuses the job machinery
   in-process (`startJob`, `jobStatus` and the payload schemas from `src/agents/runtime/jobs.ts`).
+- `external`: the same API for connected systems (client-credentials tokens, an allow-list of actions, a per-system
+  rate limit). `src/api/server.ts` (`startExternal()`).
+- `mcp`: the MCP endpoint for connected systems (streamable HTTP on `0.0.0.0:8000/mcp`), which forwards every tool
+  call to the external runtime. `src/mcp-remote/server.ts`. Both are in [docs/external-access.md](../docs/external-access.md).
 
 ## Contract (worker mode, 0.0.0.0:8080)
 
@@ -20,20 +25,35 @@ One image, two runtimes, selected by `TRACE_AGENT_MODE`:
   - `{ "kind": "sweep", "repositories": ["owner/repo", …] }`: the hourly backstop. Runs worker-pick for each
     repository whose `worker.runner` is agentcore (same `<!-- trace-claim -->` and attempt markers, so nothing is
     claimed twice), then starts one work-item job per claimed item.
-  - `{ "kind": "task", "repository", "request", "requestedBy", "branch"?, "issue"? }`: a person's request, done on
-    `claude/task-<slug>` off the default branch and pushed (the PR opens itself).
-  - `{ "kind": "status", "jobId"? }` returns `{ jobs: [...], busy }`.
+  - `{ "kind": "task", "repository", "request", "requestedBy", "requestedBySub"?, "branch"?, "issue"?, "agent"?,
+    "resume"? }`: a person's request, done on `claude/task-<slug>` off the default branch and pushed (the PR opens
+    itself). `agent` names the specialist; without it the job is routed. `resume` carries on a paused task on its
+    branch, continuing its conversation when its transcript was kept.
+  - `{ "kind": "tool", "repository", "name", "args" }`: one tool call the API forwards, with no model and no job. The
+    worker runs it on its clone of the default branch, refuses hardware tools and paths outside the clone, and answers
+    with the tool's result.
+  - `{ "kind": "status", "jobId"?, "afterVersion"?, "waitS"? }` returns `{ jobs: [...], busy, version, waits }`. With
+    `afterVersion` and `waitS` (at most 240 s) the answer is held until a job in scope changes after that version.
+  - `{ "kind": "check-now", "waitId" }` wakes one of this runtime's timer waits, as a person's Check now does.
+  - `{ "kind": "pause", "jobId", "by" }` stops a running task before Claude's next tool call, commits and pushes its
+    work on its branch and keeps its transcript. `{ "kind": "cancel", "jobId", "reason"? }` aborts a running job, the
+    worker it delegated to and the AWS Batch jobs its tools started.
 
   Work starts in the background, and the answer comes back at once as `{ "accepted": true, "jobId" }`. A second
   invocation for an item that is already running gets `{ "accepted": false, "jobId": <running job>, "reason" }`.
+- Loopback only, for the trace MCP server inside a job (with that job's token): `/delegate`, `/delegate/status`,
+  `/delegate/wait` and `/delegate/cancel` (a specialist's `agent.delegate`), `/handoff` (`journey.handoff`), and
+  `/waits/report` and `/waits/wakes` (the wait relay). A request from anywhere else is refused with a 403.
 - SIGTERM aborts Claude in every running job, posts their failure comments and exits.
 
 Per item, the job reads the GitHub token from Secrets Manager. The token reaches git only as an `http.extraHeader`
 passed through `GIT_CONFIG_*` environment variables, never in argv, a URL or a config file, and it is redacted from
 the logs. The job then clones the default branch (its `.trace/project.db` supplies the settings), checks out the
-item's branch, and sets the git identity and the `trace-db` merge driver. Next it runs Claude through the Agent SDK
-with the harness's `promptFor` prompt, the trace MCP server and `bypassPermissions` (the container is the sandbox),
-using `worker.max_turns` and a timeout below the 8-hour `maxLifetime`. If Claude left no comment, the job posts a
+item's branch, and sets the git identity and the `trace-db` merge driver. Next it routes the job to a specialist
+(`src/agents/router.ts`) and runs Claude through the Agent SDK with that specialist's prompt (`src/agents/specialist.ts`),
+its tools only, the trace MCP server and `bypassPermissions` (the container is the sandbox), using
+`agents.<kind>.max_turns` and a timeout below the 8-hour `maxLifetime`. A worker the specialist delegates to gets the
+worker's prompt and every tool (README "Specialist agents"). If Claude left no comment, the job posts a
 final one (`<!-- trace-agent-done: <jobId> -->`), including any failure reason. Clones are deleted afterwards, except
 under `/mnt/workspace`, where they are kept and fetched next time.
 
@@ -47,7 +67,7 @@ under `/mnt/workspace`, where they are kept and fetched next time.
 | `ANTHROPIC_MODEL` | the model (else `worker.model`, else the SDK's default) |
 | `TRACE_HOME` | the central trace database (directory or `s3://bucket/prefix`) |
 | `TRACE_WORKSPACE` | optional; clones go here (default `/mnt/workspace/trace` when mounted, else `/tmp/trace-work`) |
-| `TRACE_AGENT_MODE` | `worker` (default) or `api` |
+| `TRACE_AGENT_MODE` | `worker` (default), `api`, `external` or `mcp` |
 | `TRACE_JOB_TIMEOUT_S` | optional; Claude's time limit per job (default 27000 s, capped at 28200 s) |
 | `AGENT_OBSERVABILITY_ENABLED` | `true` (set by the stack): ADOT exports for AgentCore observability. AgentCore Runtime itself supplies `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_EXPORTER_OTLP_LOGS_HEADERS` and the rest of ADOT's defaults; the agent logs one `telemetry:` line at start saying whether they are there |
 | `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `false` (set by the stack): no prompts or completions on spans |
@@ -99,8 +119,20 @@ backups, hidden folders or node_modules) travel as one archive, `src/gpu/kicad-j
 copy, and the output comes back where the caller asked, with the job's folders replaced by the caller's in its text
 files. A render's frames become the turntable video as an `ffmpeg` job the same way.
 
-In the flat layout there is no tools function (a flat stack has no room for four more resources per project): those
-jobs go to the queue (`agent/Dockerfile.gpu` has the same programs), or are unavailable without `gpu.enabled`.
+In the flat layout the tools functions are all in one nested stack of their own, `ToolsStack`
+(`src/infra/tools.ts FlatToolsStack`, with the tools image's build): the flat stack has no room for four more
+resources per project, but has for that one, except at 20 flat projects with everything on. There, the stack is left
+out and those jobs go to the queue (`agent/Dockerfile.gpu` has the same programs), or are unavailable without
+`gpu.enabled`; moving to the nested layout gives each project its function.
+
+What a call costs is in the project's ledger as kind `tools` (`src/core/cost.ts`): Lambda's billed duration (from
+the call's REPORT line, a cold start included) x the function's memory and its `/tmp` over 512 MB, and the call, at
+Lambda's arm64 prices (`cost.prices.tools` overrides them). Its job's span (`trace.gpu.run <kind>`) goes to X-Ray as
+the Batch jobs' do, in the worker's trace, under the service `<prefix>-tools`.
+
+An input of 1 MB or more (a KiCad project's archive, usually) is stored once a week by its content under
+`jobs/<slug>/cache/` (`src/gpu/protocol.ts`): a call that sends the same bytes again looks for it instead of uploading
+it, and a warm function keeps it in its `/tmp` (at most 3 GB), so it isn't downloaded again either.
 
 ## The GPU job image
 
@@ -120,7 +152,7 @@ this machine has a GPU (or the job does not want one), and otherwise, when `TRAC
 | `TRACE_GPU_JOB_MAX_VCPUS` / `TRACE_CPU_JOB_MAX_VCPUS` | the cap for a job's `vcpus` hint on each queue; without it the hint is ignored |
 
 `agent/Dockerfile.gpu` is built for linux/amd64 by CodeBuild (the same custom resource as the agent image) and
-pushed to the `<prefix>-gpu` ECR repository. It is based on `nvidia/cuda:12.9.2-runtime-ubuntu24.04` with
+pushed to the `<prefix>-gpu` ECR repository. It is based on `nvcr.io/nvidia/cuda:12.9.2-runtime-ubuntu24.04` (NVIDIA's registry: no Docker Hub pull limit) with
 `NVIDIA_DRIVER_CAPABILITIES=all` (OptiX needs the graphics libraries), and contains:
 
 - Node 22 and the trace dist; the job's command is `node /app/dist/gpu/runner.js`, which reads the spec from the S3

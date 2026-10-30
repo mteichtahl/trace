@@ -9,7 +9,9 @@
 # pcbnew Python module for Specctra DSN/SES), openEMS v0.37.0 with its Python modules and scikit-rf, CalculiX ccx 2.21 and
 # ESI OpenFOAM v2412 (thermal), ffmpeg (render videos), and the trace dist. It runs every kind the tools image does
 # (agent/Dockerfile.tools), so a job too long for the tools function, or from a project without one, runs here.
-FROM --platform=linux/amd64 nvidia/cuda:12.9.2-runtime-ubuntu24.04
+# NVIDIA's own registry (NGC), the same image as Docker Hub's nvidia/cuda: Docker Hub's anonymous pull limit failed
+# builds on CodeBuild's shared addresses (429 Too Many Requests)
+FROM --platform=linux/amd64 nvcr.io/nvidia/cuda:12.9.2-runtime-ubuntu24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG BLENDER_VERSION=5.2.3
@@ -93,7 +95,9 @@ RUN git clone --filter=blob:none https://github.com/bbenchoff/OrthoRoute /opt/or
 # openEMS (FDTD field solver, CPU multithreaded) for emc.run: openEMS-Project v0.37.0 (CSXCAD 0.7.0) built from the
 # tag's commit without the Qt viewer, its Python modules in a venv with h5py and scikit-rf (also emc.si). The -dev
 # packages stay installed: they carry the runtime libraries (HDF5, VTK, Boost, CGAL headers, TinyXML) openEMS links.
-# `openems-python` on PATH is the interpreter src/tools/emc/python.ts looks for.
+# `openems-python` on PATH is the interpreter src/tools/emc/python.ts looks for: a wrapper that execs the venv's python,
+# not a symlink to it (Python started through a symlink outside the venv resolves past it to /usr/bin/python3 and
+# does not see the venv, so CSXCAD and openEMS would not import).
 ARG OPENEMS_COMMIT=974294ba7d812ef5a46a4760593057aee7ce6866
 RUN apt-get update \
  && apt-get install -y --no-install-recommends build-essential cmake libhdf5-dev libvtk9-dev libcgal-dev libtinyxml-dev \
@@ -109,7 +113,8 @@ RUN apt-get update \
  && cd /tmp/openems/CSXCAD/python && CSXCAD_INSTALL_PATH=/opt/openEMS CSXCAD_NOSCM=1 VIRTUAL_ENV=/opt/openEMS/venv /opt/openEMS/venv/bin/pip install --no-cache-dir --no-build-isolation . \
  && cd /tmp/openems/openEMS/python && OPENEMS_INSTALL_PATH=/opt/openEMS CSXCAD_INSTALL_PATH=/opt/openEMS OPENEMS_NOSCM=1 VIRTUAL_ENV=/opt/openEMS/venv /opt/openEMS/venv/bin/pip install --no-cache-dir --no-build-isolation . \
  && cd / && rm -rf /tmp/openems \
- && ln -s /opt/openEMS/venv/bin/python /usr/local/bin/openems-python \
+ && printf '#!/bin/sh\nexec /opt/openEMS/venv/bin/python "$@"\n' > /usr/local/bin/openems-python \
+ && chmod 0755 /usr/local/bin/openems-python \
  && openems-python -c 'import CSXCAD, skrf; from openEMS import openEMS; print("openEMS ok, scikit-rf", skrf.__version__)'
 
 # Optional (docker build --build-arg WITH_GERBER2EMS=1): Antmicro's gerber2ems at a pinned commit, in its own venv

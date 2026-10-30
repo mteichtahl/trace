@@ -4,8 +4,9 @@
  * back from Secrets Manager (`<prefix>/github-token`, and each project's), which those credentials may read.
  *
  *   tracectl upgrade [--ref REF] [--check] [--no-pull] [--runner-auth auto|token|connection] [--connection ARN|auto]
- *       1 pull: `npm install -g github:<source>#<ref>` (the ref the installation came from, v1 unless --ref), then
- *         run the new version's `tracectl upgrade --no-pull`
+ *       1 pull: `npm install -g github:<source>#<ref>` (trace's main unless --ref), then
+ *         run the new version's `tracectl upgrade --no-pull`. A trace run from a clone (npm link) is not pulled: it
+ *         says how to update the clone and deploy from it (git pull, npm ci, npm run build, upgrade --no-pull)
  *       2 the installer's steps with the saved answers (src/installer/bootstrap.ts apply): the stack is updated (the
  *         images are copied or rebuilt from their cache only when trace changed), each repository's variables, runner
  *         and trace workflows are refreshed (a held PR when the workflows changed), people stay as they are
@@ -35,7 +36,7 @@
  *       prints the commands for the rest.
  */
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { parseArgs } from 'node:util'
@@ -102,6 +103,12 @@ async function creds(a: Answers): Promise<AwsCredentialIdentity> {
   return credentials(a.aws, { awsAccessKeyId: '', awsSecretAccessKey: '', awsSessionToken: '' })
 }
 
+/** Whether trace runs from a git clone (linked with npm link, or run in its folder) rather than an npm-installed copy,
+ * which npm packs without .git: a clone is updated with git, not `npm install -g`. */
+export function isClone(root: string): boolean {
+  return existsSync(join(root, '.git'))
+}
+
 export async function cmdUpgrade(argv: string[]): Promise<number> {
   const { values: o } = parseArgs({ args: argv, options: { ref: { type: 'string' }, check: { type: 'boolean' }, 'no-pull': { type: 'boolean' }, 'runner-auth': { type: 'string' }, connection: { type: 'string' } } })
   try {
@@ -117,6 +124,14 @@ export async function cmdUpgrade(argv: string[]): Promise<number> {
       a = AnswersSchema.parse({ ...a, runners: { ...a.runners, connectionArn: connection === 'auto' ? '' : connection.trim() } })
     }
     if (!o['no-pull'] && !o.check) {
+      // a clone (npm link, or run from its folder) has .git; an npm-installed trace is packed without it. npm install -g
+      // over a linked clone fails (ENOTDIR renaming the link), and replacing it would lose the clone's link anyway
+      if (isClone(REPO_ROOT)) {
+        err(`trace runs from a clone (${REPO_ROOT}), so it is not pulled from GitHub. Update the clone, then deploy from it:\n`
+          + `  cd ${REPO_ROOT} && git pull && npm ci && npm run build\n`
+          + `  tracectl upgrade --no-pull${auth !== undefined ? ` --runner-auth ${auth}` : ''}${connection !== undefined ? ` --connection ${connection}` : ''}`)
+        return 1
+      }
       const ref = o.ref ?? REF
       out(`pulling trace from github:${SOURCE}#${ref} …`)
       const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'

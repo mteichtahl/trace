@@ -12,7 +12,7 @@ import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-ho
 import { CompositePropagator, W3CBaggagePropagator, W3CTraceContextPropagator } from '@opentelemetry/core'
 import { MeterProvider, MetricReader } from '@opentelemetry/sdk-metrics'
 import { projectHash } from '../../src/core/project.js'
-import { BasicTracerProvider, InMemorySpanExporter, type ReadableSpan, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base'
+import { TracerProvider, InMemorySpanExporter, type ReadableSpan, SimpleSpanProcessor } from '@opentelemetry/sdk-trace'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { type ClaudeOptions, type RunnerDeps, createRunner } from '../../src/agents/runtime/job.js'
@@ -44,7 +44,7 @@ beforeAll(() => {
   delete process.env.TRACEPARENT
   context.setGlobalContextManager(contextManager.enable())
   propagation.setGlobalPropagator(new CompositePropagator({ propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()] }))
-  trace.setGlobalTracerProvider(new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(spans)] }))
+  trace.setGlobalTracerProvider(new TracerProvider({ spanProcessors: [new SimpleSpanProcessor({ exporter: spans })] }))
 })
 afterAll(() => {
   trace.disable(); metrics.disable(); propagation.disable(); context.disable()

@@ -6,6 +6,7 @@
 import { z } from 'zod'
 import { PriceOverridesSchema } from '../core/prices.js'
 import { projectHash, projectSlug } from '../core/project.js'
+import { IMMUTABLE_SUBJECT } from '../core/github-subject.js'
 
 export {
   connectionName, cpuJobDefinitionName, gpuJobDefinitionName, githubSecretName, knowledgeBaseName, memoryDeliveryName, memoryName, projectDataPrefix, projectHash, projectJobsPrefix,
@@ -90,6 +91,16 @@ export const ProjectSettingsSchema = z.object({
  */
 export const PUBLISHED_REGISTRY = ''
 
+export { IMMUTABLE_SUBJECT }
+
+/** The OIDC subjects a role trusts for a repository's runs, `suffix` being the rest of the claim (`:ref:refs/heads/main`):
+ * the name form, and the immutable form when its ids are known (githubSubjects). Never a wildcard over the ids. The name
+ * form alone stays a string, so the roles of repositories without ids keep the template they had. */
+export function githubSubjects(repository: string, subjects: Readonly<Record<string, string>>, suffix: string): string | string[] {
+  const immutable = subjects[repository.toLowerCase()]
+  return immutable ? [`repo:${repository}${suffix}`, `${immutable}${suffix}`] : `repo:${repository}${suffix}`
+}
+
 export const InfraPropsSchema = z.object({
   /** A short name prefixed to every resource: lets two installations share an account. */
   prefix: z.string().regex(/^[a-z][a-z0-9-]{1,20}$/, 'lower-case letters, digits and dashes, 2–21 characters').default('trace'),
@@ -97,8 +108,9 @@ export const InfraPropsSchema = z.object({
   region: z.string().regex(/^[a-z]{2}(-[a-z]+)+-\d$/, 'an AWS region such as us-east-1'),
   /** The onboarded repositories. Each is one project with its own worker runtime, roles, GitHub token secret, memory
    * and GPU job definition (src/infra/project.ts); only its default branch's workflows may assume its GitHub OIDC role
-   * (subject `repo:OWNER/REPO:ref:refs/heads/BRANCH`). At most 60: the API runtime is told every worker runtime, and
-   * every project's memory, in one environment variable each (5000 characters; checked when the stack is built). With
+   * (subject `repo:OWNER/REPO:ref:refs/heads/BRANCH`, or its immutable form: githubSubjects). At most 60: the API
+   * runtime is told every worker runtime, and every project's memory, in one environment variable each (5000
+   * characters; checked when the stack is built). With
    * layout 'nested' each project is its own nested stack (one resource and no output of the parent's), so 60 fit; with
    * layout 'flat' CloudFormation's 500 resources and 200 outputs per stack bind at about 20 projects (checked when the
    * stack is built). */
@@ -178,9 +190,10 @@ export const InfraPropsSchema = z.object({
    * (agent/Dockerfile.tools: KiCad, Blender, the FPGA and verification tools, CalculiX, ffmpeg), which AgentCore's
    * 2 GB image limit keeps out of the agent image. A job of those kinds (src/gpu/jobs.ts FUNCTION_KINDS) runs there,
    * one invocation each, for at most 840 s; a longer one, or a GPU render, goes to the queue. Its role reaches only the
-   * project's jobs/<slug>/ and its log group. Only in layout 'nested' (toolsEnabled below): a flat stack of 20
-   * projects has no room for four more resources per project, and a flat project sends those jobs to the queue
-   * (the GPU image has the same programs), or has none of them without gpu.enabled. */
+   * project's jobs/<slug>/ and its log group. In layout 'nested' each is in its project's nested stack (toolsEnabled
+   * below); in layout 'flat', whose stack has no room for four more resources per project, all of them are in one
+   * nested stack of their own, made when the flat stack has room for that one resource (src/infra/tools.ts
+   * FlatToolsStack: not at 20 flat projects with everything on, whose projects then send those jobs to the queue). */
   tools: z.object({
     enabled: z.boolean().default(true),
     /** the function's memory (MB): its CPU share grows with it, a full vCPU at 1769 MB, six at 10240 */
@@ -326,6 +339,10 @@ export const InfraPropsSchema = z.object({
     /** the branch whose ci workflow may update the installation */
     branch: z.string().regex(/^[A-Za-z0-9._\/-]+$/, 'a branch name').default('main'),
   }).strict().optional(),
+  /** GitHub's immutable OIDC subject prefix (IMMUTABLE_SUBJECT) of each repository whose workflows assume a role here,
+   * by OWNER/REPO in lower case: its roles trust that form beside `repo:OWNER/REPO` (githubSubjects). A repository not
+   * listed is trusted by its name form only. */
+  githubSubjects: z.record(z.string().regex(/^[a-z0-9-]+\/[a-z0-9._-]+$/, 'OWNER/REPO in lower case'), z.string().regex(IMMUTABLE_SUBJECT, 'repo:OWNER@ID/REPO@ID')).default({}),
   /** AgentCore observability: OpenTelemetry (ADOT) traces and metrics to CloudWatch (src/infra/observability.ts). */
   observability: z.object({
     enabled: z.boolean().default(true),
@@ -549,6 +566,9 @@ export const CDK_QUALIFIER = 'hnb659fds'
 
 /** The stack's layout ('flat' or 'nested'), an output so the installer can tell which an installation has. */
 export const LAYOUT_OUTPUT = 'Layout'
+/** The tools image's URI, in both layouts when the stack has the tools image (src/infra/tools.ts): without it, a
+ * `<prefix>-tools` repository in the account is not the stack's (src/installer/preflight.ts). */
+export const TOOLS_IMAGE_OUTPUT = 'ToolsImageUri'
 
 /** CloudFormation's per-template quotas the stack checks when it is built. */
 export const STACK_RESOURCES_MAX = 500

@@ -442,7 +442,7 @@ export interface PricesView {
 }
 /** Cloud spend: estimates by kind from the ledger, and what AWS billed (a day behind), or null before the first read. */
 export interface CloudSpend {
-  estimated: { agents: number; gpu: number; cpu: number; total: number }
+  estimated: { agents: number; gpu: number; cpu: number; tools?: number; total: number }
   actual: { total: number; byService: Record<string, number>; through: string | null; estimatedDays: number } | null
   basis: 'estimate'
 }
@@ -464,7 +464,7 @@ export interface CostView {
   quantity?: number
   unit_cost?: number | null
   stages: { stage: string; id?: string; state: 'done' | 'current' | 'queued'; started?: string | null; finished?: string | null; cloud: number | null; days: number; forecastDays?: number | null }[]
-  lines: { id: string; at: string; what: string; kind: 'agents' | 'gpu' | 'cpu' | 'order'; amount: number; estimate?: boolean }[]
+  lines: { id: string; at: string; what: string; kind: 'agents' | 'gpu' | 'cpu' | 'tools' | 'order'; amount: number; estimate?: boolean }[]
   notes?: string[]
 }
 
@@ -472,7 +472,7 @@ export interface CostView {
 export interface UsageMonth {
   month: string
   currency: string
-  projects: { repo: string; estimated: { agents: number; gpu: number; cpu: number; total: number }; actual: number | null; orders: number; orderCurrency: string; budget: number | null; started: boolean }[]
+  projects: { repo: string; estimated: { agents: number; gpu: number; cpu: number; tools?: number; total: number }; actual: number | null; orders: number; orderCurrency: string; budget: number | null; started: boolean }[]
   totals: { estimated: number; actual: number | null; orders: number }
   shared?: { total: number; byService: Record<string, number>; text: string }
   explorer: ExplorerView

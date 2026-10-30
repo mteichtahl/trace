@@ -13,10 +13,17 @@
  *
  * A first call after an idle spell starts a new container from a large image (several seconds to tens of seconds);
  * later calls within minutes find it warm. Lambda calls cannot be cancelled: one whose caller goes away runs to its end.
+ *
+ * What the call cost goes into the project's ledger (src/core/cost.ts, kind tools): Lambda's billed duration (its REPORT
+ * line, in the log tail the call returns; a cold start's init is billed with it) x the function's memory and /tmp,
+ * and the call. Without the line, the call's own time and TRACE_TOOLS_FUNCTION_MEMORY_MB.
  */
 import { type S3Api } from '../core/central.js'
 import { ToolError } from '../core/registry.js'
 import { ATTR, annotate, traceEnv } from '../core/telemetry.js'
+import { type UsageRow, ledgerFromEnv, recordUsage, toolsRow } from '../core/cost.js'
+import { type PriceTable, pricesFromEnv } from '../core/prices.js'
+import { pricesFor } from '../core/prices-store.js'
 import { FUNCTION_MAX_SECONDS, type JobResult } from './jobs.js'
 import { type ParsedJob, fetchOutputs, readResult, stageJob } from './staging.js'
 
@@ -38,6 +45,28 @@ export interface FunctionDeps {
   env?: NodeJS.ProcessEnv
   now?: () => number
   log?: (line: string) => void
+  /** record what the call cost in the project's ledger; default: recordUsage into the session's ledger */
+  recordCost?: (row: UsageRow) => Promise<unknown>
+  /** the price table; default: the one in use (src/core/prices-store.ts pricesFor) */
+  prices?: PriceTable
+}
+
+/** Lambda's REPORT line in a call's log: its billed duration (s) and memory (MB), or null when the tail has none. */
+export function billedFromLog(tail: string): { seconds: number; memoryMb: number } | null {
+  const line = tail.split('\n').reverse().find((l) => l.startsWith('REPORT '))
+  if (!line) return null
+  const billed = /Billed Duration: ([\d.]+) ms/.exec(line)
+  const mem = /Memory Size: (\d+) MB/.exec(line)
+  if (!billed || !mem) return null
+  return { seconds: Number(billed[1]) / 1000, memoryMb: Number(mem[1]) }
+}
+
+/** The ledger's row for one call. Pure. */
+export function functionCostRow(o: { tail: string; wallSeconds: number; id: string; kind: string; env: NodeJS.ProcessEnv; at: number; prices: PriceTable }): UsageRow {
+  const b = billedFromLog(o.tail)
+  const memoryMb = b?.memoryMb ?? (Number(o.env.TRACE_TOOLS_FUNCTION_MEMORY_MB) || 4096)
+  const storageMb = Number(o.env.TRACE_TOOLS_FUNCTION_STORAGE_MB) || 512
+  return toolsRow(o.prices, { seconds: b?.seconds ?? o.wallSeconds, memoryMb, storageMb, at: o.at, jobId: o.id, kind: o.kind, region: o.env.AWS_REGION ?? null })
 }
 
 /** What a function's handler sends back: its exit code. The exit record in S3 is what counts. */
@@ -76,7 +105,7 @@ export async function runFunction(job: ParsedJob, deps: FunctionDeps = {}): Prom
   const timeoutSeconds = Math.min(job.timeoutSeconds, FUNCTION_MAX_SECONDS)
   if (timeoutSeconds < job.timeoutSeconds) log(`${job.kind}: the tools function runs a job for at most ${FUNCTION_MAX_SECONDS} s, so this one is limited to that (it asked for ${job.timeoutSeconds} s)`)
   const lambda = deps.lambda ?? (await awsLambda())
-  const staged = await stageJob(job, { env, s3: deps.s3, now: t0, timeoutSeconds })
+  const staged = await stageJob(job, { env, s3: deps.s3, now: t0, timeoutSeconds, share: true })
   annotate({ [ATTR.gpuJobId]: staged.id })
   const event: FunctionEvent = { spec: staged.specUri }
   // only TRACEPARENT, as for a Batch job: baggage carries the session id
@@ -85,8 +114,13 @@ export async function runFunction(job: ParsedJob, deps: FunctionDeps = {}): Prom
   log(`${staged.id}: running on the tools function`)
   const r = await lambda.invoke({ FunctionName: fn, Payload: new TextEncoder().encode(JSON.stringify(event)), LogType: 'Tail' })
   const requestId = r.$metadata?.requestId
+  const logTail = r.LogResult ? Buffer.from(r.LogResult, 'base64').toString('utf8') : ''
+  // the call ran (and was billed) whether the job succeeded or not: recorded first, never failing the job
+  const prices = deps.prices ?? (await pricesFor(env).catch(() => null))?.table ?? pricesFromEnv(env)
+  const row = functionCostRow({ tail: logTail, wallSeconds: (now() - t0) / 1000, id: staged.id, kind: job.kind, env, at: now() / 1000, prices })
+  await (deps.recordCost ?? ((x: UsageRow) => recordUsage([x], { ledger: ledgerFromEnv(env), log })))(row).catch(() => undefined)
   if (r.FunctionError) {
-    const tail = r.LogResult ? Buffer.from(r.LogResult, 'base64').toString('utf8').trim().slice(-1500) : ''
+    const tail = logTail.trim().slice(-1500)
     const { stderr } = await readResult(staged).catch(() => ({ stderr: '' }))
     throw new ToolError(`the tools function could not run ${staged.id}: ${functionErrorMessage(r.Payload)}`
       + (stderr ? `\n${stderr.slice(-1500)}` : tail ? `\n${tail}` : ''))

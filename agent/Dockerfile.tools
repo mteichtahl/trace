@@ -9,7 +9,9 @@
 # configuration and cache are under /tmp (HOME, XDG_*), and nothing in the image needs to be owned by that user.
 #
 # Three stages, as agent/Dockerfile: tools (the system packages), build (left behind), final.
-FROM --platform=linux/arm64 ubuntu:24.04 AS tools
+# Docker Hub's official ubuntu image as mirrored on Amazon ECR Public: CodeBuild's shared addresses hit Docker Hub's
+# anonymous pull limit (429 toomanyrequests); ECR Public has none for AWS builds
+FROM --platform=linux/arm64 public.ecr.aws/docker/library/ubuntu:24.04 AS tools
 
 ARG DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=UTC

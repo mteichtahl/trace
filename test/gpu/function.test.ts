@@ -152,3 +152,69 @@ describe('the tools function\'s runtime', () => {
     expect([...s3.objects.keys()].some((k) => k.endsWith(`${staged.id}/out/b.txt`))).toBe(true)
   })
 })
+
+describe('what a call on the tools function cost', () => {
+  it('is read from Lambda\'s REPORT line, else from the call\'s own time, and recorded once per call', async () => {
+    const { billedFromLog, functionCostRow } = await import('../../src/gpu/function.js')
+    const { DEFAULT_PRICES } = await import('../../src/core/prices.js')
+    const tail = 'START RequestId: x\nmade\nEND RequestId: x\nREPORT RequestId: x\tDuration: 2190.32 ms\tBilled Duration: 7311 ms\tMemory Size: 4096 MB\tMax Memory Used: 600 MB\tInit Duration: 5120.01 ms\n'
+    expect(billedFromLog(tail)).toEqual({ seconds: 7.311, memoryMb: 4096 })
+    expect(billedFromLog('no report')).toBeNull()
+    const r = functionCostRow({ tail: '', wallSeconds: 9, id: 'kicad-1', kind: 'kicad', env: { TRACE_TOOLS_FUNCTION_MEMORY_MB: '2048' }, at: 1, prices: DEFAULT_PRICES })
+    expect(r).toMatchObject({ kind: 'tools', seconds: 9, memoryMb: 2048 })
+    // runFunction records the call's row, even for a job that failed
+    const s3 = new FakeS3()
+    const rows: unknown[] = []
+    const lambda = new FakeLambda(s3)
+    const orig = lambda.invoke.bind(lambda)
+    lambda.invoke = async (i) => ({ ...(await orig(i)), LogResult: Buffer.from(tail).toString('base64') })
+    await runFunction(job(), { lambda, s3, env, prices: DEFAULT_PRICES, recordCost: async (x) => { rows.push(x) } })
+    await runFunction(job({ argv: ['sh', '-c', 'exit 3'] }), { lambda, s3, env, prices: DEFAULT_PRICES, recordCost: async (x) => { rows.push(x) } })
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ kind: 'tools', agent: 'kicad', seconds: 7.311, memoryMb: 4096 })
+  })
+})
+
+describe('a large input sent again', () => {
+  it('is uploaded once a week by its content, and a warm function reads it from its /tmp', async () => {
+    const { randomBytes } = await import('node:crypto')
+    const { SHARE_MIN_BYTES } = await import('../../src/gpu/protocol.js')
+    const s3 = new FakeS3()
+    const big = join(mkdtempSync(join(tmpdir(), 'fn-big-')), 'project.tar')
+    writeFileSync(big, randomBytes(SHARE_MIN_BYTES + 10))
+    const cache = mkdtempSync(join(tmpdir(), 'fn-cache-'))
+    // a function whose runner keeps a shared cache, as src/gpu/lambda.ts gives it
+    const lambda: FunctionApi = {
+      invoke: async (i) => {
+        const ev = JSON.parse(new TextDecoder().decode(i.Payload)) as FunctionEvent
+        const exitCode = await main({ s3, env: { TRACE_GPU_JOB_URI: ev.spec }, echo: false, sharedCache: cache })
+        return { StatusCode: 200, Payload: new TextEncoder().encode(JSON.stringify({ exitCode })), $metadata: { requestId: 'r' } }
+      },
+    }
+    const run = () => runFunction(GpuJobSchema.parse({
+      kind: 'kicad', timeoutSeconds: 60, argv: ['sh', '-c', 'cp "$0" "$1"', '{in:project.tar}', '{out:copy.tar}'], inputs: { 'project.tar': big }, outputs: ['copy.tar'],
+    }), { lambda, s3, env, recordCost: async () => undefined })
+    const first = await run()
+    expect(readFileSync(first.outputs['copy.tar'] as string)).toEqual(readFileSync(big))
+    const cached = () => [...s3.objects.keys()].filter((k) => /\/cache\/w\d+\/[0-9a-f]{64}$/.test(k))
+    expect(cached()).toHaveLength(1)
+    // not under the job's own in/
+    expect([...s3.objects.keys()].some((k) => k.endsWith('/in/project.tar'))).toBe(false)
+    // gone from S3 (expired): sent again, and the job still runs
+    s3.objects.delete(cached()[0] as string)
+    const second = await run()
+    expect(readFileSync(second.outputs['copy.tar'] as string)).toEqual(readFileSync(big))
+    expect(cached()).toHaveLength(1)
+    // the warm function's copy: the job runs even with the object gone after staging (its reads come from /tmp)
+    const { readdirSync } = await import('node:fs')
+    expect(readdirSync(cache)).toHaveLength(1)
+    // the third: the spec, logs, exit record and output are written; the archive itself is not sent again
+    const written: string[] = []
+    const put = s3.putObject.bind(s3)
+    s3.putObject = async (i) => { written.push(i.Key); return put(i) }
+    await run()
+    expect(written.length).toBeGreaterThan(0)
+    expect(written.filter((k) => k.includes('/cache/'))).toEqual([])
+    expect(cached()).toHaveLength(1)
+  })
+})

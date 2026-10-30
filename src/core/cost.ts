@@ -3,8 +3,10 @@
  * repository (money is for admins only, and a repository's record is readable by everyone on the project).
  *
  *   estimates  projects/<slug>/journey-agent/cost.db  one row per agent run (each model's tokens, priced from the one
- *                                                  price table, src/core/prices.ts) and per finished AWS Batch job
- *                                                  (its running time x the pool's price), each with the date and the
+ *                                                  price table, src/core/prices.ts), per finished AWS Batch job
+ *                                                  (its running time x the pool's price) and per job on the project's
+ *                                                  tools function (its billed time x its memory and /tmp, and the
+ *                                                  call: Lambda's prices), each with the date and the
  *                                                  source (override, fetched, built-in) of the price that priced it.
  *                                                  Written by the worker (and
  *                                                  the in-Actions fallback) that ran it, with conditional puts like the
@@ -36,7 +38,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { type Backend } from './central.js'
 import { projectsBackend, projectsFromEnv } from './agent-facts.js'
 import { BucketDb } from './journey-store.js'
-import { type PriceSource, type PriceTable, type Tokens, jobCost, modelCost, poolPricedBy, pricesFromEnv } from './prices.js'
+import { type PriceSource, type PriceTable, type Tokens, jobCost, modelCost, poolPricedBy, pricesFromEnv, toolsCost, toolsPricedBy } from './prices.js'
 import { pricesFor } from './prices-store.js'
 import { transaction } from './store.js'
 
@@ -50,20 +52,21 @@ export const ACTUALS_FOLDER = 'cost'
 export const ACTUALS_PREFIX = 'installation'
 export const ACTUALS_KEY = 'cost/actuals.db'
 
-export const USAGE_KINDS = ['agents', 'gpu', 'cpu'] as const
+export const USAGE_KINDS = ['agents', 'gpu', 'cpu', 'tools'] as const
 export type UsageKind = (typeof USAGE_KINDS)[number]
 
 const USAGE_SQL = `
 CREATE TABLE IF NOT EXISTS usage (
   id TEXT PRIMARY KEY,
   at REAL NOT NULL,                -- when the run or job finished
-  kind TEXT NOT NULL CHECK (kind IN ('agents', 'gpu', 'cpu')),
-  job_id TEXT,                     -- the agent's job, or the Batch job's trace id
-  agent TEXT,                      -- the specialist or worker (agents), the job kind (gpu, cpu)
+  kind TEXT NOT NULL CHECK (kind IN ('agents', 'gpu', 'cpu', 'tools')),
+  job_id TEXT,                     -- the agent's job, or the Batch job's (or tools function call's) trace id
+  agent TEXT,                      -- the specialist or worker (agents), the job kind (gpu, cpu, tools)
   model TEXT,                      -- the model id as called (agents)
   input INTEGER, output INTEGER, cache_read INTEGER, cache_write INTEGER,
-  seconds REAL,                    -- running time (gpu, cpu)
+  seconds REAL,                    -- running time (gpu, cpu; tools: Lambda's billed duration)
   vcpus INTEGER,                   -- what a CPU job asked for
+  memory_mb INTEGER,               -- the tools function's memory (tools)
   amount REAL,                     -- USD, an estimate; NULL: not priced (no table entry, no SDK figure)
   basis TEXT NOT NULL,             -- table | sdk | none
   prices_as_of TEXT,               -- the date of the price that priced it
@@ -94,9 +97,23 @@ CREATE TABLE IF NOT EXISTS status (
 
 export const applyUsageSchema = (db: DatabaseSync): void => {
   db.exec(USAGE_SQL)
-  // a ledger written before rows kept their price's source
+  // a ledger written before rows kept their price's source, or the tools function's memory
   const cols = new Set((db.prepare("SELECT name FROM pragma_table_info('usage')").all() as { name: string }[]).map((c) => c.name))
   if (!cols.has('prices_source')) db.exec('ALTER TABLE usage ADD COLUMN prices_source TEXT')
+  if (!cols.has('memory_mb')) db.exec('ALTER TABLE usage ADD COLUMN memory_mb INTEGER')
+  // a ledger made before the tools function: its CHECK refuses kind 'tools', and SQLite can't change a CHECK, so the
+  // table is made again with this one and its rows copied in (one transaction: all of it or none)
+  const sql = (db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'usage'").get() as { sql?: string } | undefined)?.sql ?? ''
+  if (!sql.includes("'tools'")) {
+    const all = 'id, at, kind, job_id, agent, model, input, output, cache_read, cache_write, seconds, vcpus, memory_mb, amount, basis, prices_as_of, prices_source, sdk_cost, region'
+    transaction(db, () => {
+      db.exec('DROP INDEX IF EXISTS usage_at')
+      db.exec('ALTER TABLE usage RENAME TO usage_before_tools')
+      db.exec(USAGE_SQL)
+      db.exec(`INSERT INTO usage (${all}) SELECT ${all} FROM usage_before_tools`)
+      db.exec('DROP TABLE usage_before_tools')
+    })
+  }
 }
 export const applyActualsSchema = (db: DatabaseSync): void => { db.exec(ACTUALS_SQL) }
 
@@ -120,7 +137,7 @@ export interface ModelUse { model: string; tokens: Tokens; sdkCost: number | nul
 
 export interface UsageRow {
   id: string; at: number; kind: UsageKind; jobId: string | null; agent: string | null; model: string | null
-  tokens: Tokens | null; seconds: number | null; vcpus: number | null; amount: number | null; basis: 'table' | 'sdk' | 'none'
+  tokens: Tokens | null; seconds: number | null; vcpus: number | null; memoryMb?: number | null; amount: number | null; basis: 'table' | 'sdk' | 'none'
   pricesAsOf: string | null; pricesSource: PriceSource | null; sdkCost: number | null; region: string | null
 }
 
@@ -146,13 +163,22 @@ export function jobRow(t: PriceTable, j: { pool: 'gpu' | 'cpu'; seconds: number;
   }
 }
 
+/** The row one job on the tools function makes: Lambda's billed seconds x its memory and /tmp, and the call. Pure. */
+export function toolsRow(t: PriceTable, j: { seconds: number; memoryMb: number; storageMb: number; at: number; jobId: string; kind: string; region: string | null }): UsageRow {
+  const by = toolsPricedBy(t)
+  return {
+    id: newId(), at: j.at, kind: 'tools', jobId: j.jobId, agent: j.kind, model: null, tokens: null, seconds: j.seconds, vcpus: null, memoryMb: j.memoryMb,
+    amount: toolsCost(t, j.seconds, j.memoryMb, j.storageMb), basis: 'table', pricesAsOf: by.asOf, pricesSource: by.source, sdkCost: null, region: j.region,
+  }
+}
+
 export function insertUsage(db: DatabaseSync, rows: readonly UsageRow[]): void {
-  const ins = db.prepare(`INSERT OR IGNORE INTO usage (id, at, kind, job_id, agent, model, input, output, cache_read, cache_write, seconds, vcpus, amount, basis, prices_as_of, prices_source, sdk_cost, region)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+  const ins = db.prepare(`INSERT OR IGNORE INTO usage (id, at, kind, job_id, agent, model, input, output, cache_read, cache_write, seconds, vcpus, memory_mb, amount, basis, prices_as_of, prices_source, sdk_cost, region)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
   transaction(db, () => {
     for (const r of rows) {
       ins.run(r.id, r.at, r.kind, r.jobId, r.agent, r.model, r.tokens?.input ?? null, r.tokens?.output ?? null, r.tokens?.cacheRead ?? null, r.tokens?.cacheWrite ?? null,
-        r.seconds, r.vcpus, r.amount, r.basis, r.pricesAsOf, r.pricesSource, r.sdkCost, r.region)
+        r.seconds, r.vcpus, r.memoryMb ?? null, r.amount, r.basis, r.pricesAsOf, r.pricesSource, r.sdkCost, r.region)
     }
   })
 }
@@ -201,7 +227,8 @@ export function loadUsage(db: DatabaseSync, since = 0): UsageRow[] {
     id: String(r.id), at: Number(r.at), kind: r.kind as UsageKind, jobId: r.job_id === null ? null : String(r.job_id), agent: r.agent === null ? null : String(r.agent),
     model: r.model === null ? null : String(r.model),
     tokens: r.input === null ? null : { input: Number(r.input), output: Number(r.output ?? 0), cacheRead: Number(r.cache_read ?? 0), cacheWrite: Number(r.cache_write ?? 0) },
-    seconds: r.seconds === null ? null : Number(r.seconds), vcpus: r.vcpus === null ? null : Number(r.vcpus), amount: r.amount === null ? null : Number(r.amount),
+    seconds: r.seconds === null ? null : Number(r.seconds), vcpus: r.vcpus === null ? null : Number(r.vcpus),
+    memoryMb: r.memory_mb === null || r.memory_mb === undefined ? null : Number(r.memory_mb), amount: r.amount === null ? null : Number(r.amount),
     basis: (r.basis as UsageRow['basis']) ?? 'none', pricesAsOf: r.prices_as_of === null ? null : String(r.prices_as_of),
     pricesSource: r.prices_source === null || r.prices_source === undefined ? null : (String(r.prices_source) as PriceSource), sdkCost: r.sdk_cost === null ? null : Number(r.sdk_cost),
     region: r.region === null ? null : String(r.region),
@@ -246,7 +273,7 @@ export type PricedBySource = Partial<Record<PriceSource | 'sdk' | 'unknown', num
 
 /** A project's estimated spend by kind, how much of it is unpriced, and which sources priced it. Pure. */
 export function estimateTotals(rows: readonly UsageRow[]): { byKind: Record<UsageKind, number>; total: number; unpriced: number; oldestTable: string | null; bySource: PricedBySource } {
-  const byKind: Record<UsageKind, number> = { agents: 0, gpu: 0, cpu: 0 }
+  const byKind: Record<UsageKind, number> = { agents: 0, gpu: 0, cpu: 0, tools: 0 }
   const bySource: PricedBySource = {}
   let unpriced = 0
   let oldest: string | null = null
@@ -258,7 +285,7 @@ export function estimateTotals(rows: readonly UsageRow[]): { byKind: Record<Usag
     if (r.pricesAsOf && (!oldest || r.pricesAsOf < oldest)) oldest = r.pricesAsOf
   }
   for (const k of USAGE_KINDS) byKind[k] = cents(byKind[k])
-  return { byKind, total: cents(byKind.agents + byKind.gpu + byKind.cpu), unpriced, oldestTable: oldest, bySource }
+  return { byKind, total: cents(byKind.agents + byKind.gpu + byKind.cpu + byKind.tools), unpriced, oldestTable: oldest, bySource }
 }
 
 /** Actual spend by service, and in all. Pure. */
@@ -280,6 +307,8 @@ export function usageLine(r: UsageRow): { id: string; at: string; what: string; 
   const tok = r.tokens ? r.tokens.input + r.tokens.output + r.tokens.cacheRead + r.tokens.cacheWrite : 0
   const what = r.kind === 'agents'
     ? `${r.agent ?? 'An agent'}${r.jobId ? ` (job ${r.jobId.slice(-8)})` : ''}: ${tok.toLocaleString('en-US')} tokens of ${r.model ?? 'a model'}${r.basis === 'sdk' ? ', priced by the Agent SDK (the price table has no entry for this model)' : r.basis === 'none' ? ', not priced' : ''}`
-    : `${r.kind === 'gpu' ? 'Graphics card' : 'CPU'} job ${r.agent ?? ''}: ${Math.round((r.seconds ?? 0) / 60)} min${r.kind === 'cpu' ? ` on ${r.vcpus ?? 1} vCPUs` : ''}`
+    : r.kind === 'tools'
+      ? `Tools function job ${r.agent ?? ''}: ${Math.round((r.seconds ?? 0) * 10) / 10} s${r.memoryMb ? ` with ${Math.round(r.memoryMb / 102.4) / 10} GB` : ''}`
+      : `${r.kind === 'gpu' ? 'Graphics card' : 'CPU'} job ${r.agent ?? ''}: ${Math.round((r.seconds ?? 0) / 60)} min${r.kind === 'cpu' ? ` on ${r.vcpus ?? 1} vCPUs` : ''}`
   return { id: r.id, at: new Date(r.at * 1000).toISOString(), what, kind: r.kind, amount: r.amount ?? 0, estimate: true, basis: r.basis }
 }

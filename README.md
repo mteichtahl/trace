@@ -15,7 +15,7 @@ the loop that runs Potroller.
 ## Installing
 
 ```sh
-npm install -g github:mteichtahl/trace#v1      # the `tracectl` CLI (Node 22.13+; git, which this needs anyway)
+npm install -g github:mteichtahl/trace#main    # the `tracectl` CLI (Node 22.13+; git, which this needs anyway)
 tracectl install                               # opens the installer in your browser
 ```
 
@@ -295,13 +295,15 @@ themselves: each install reads the `trace-images` release, and copies its versio
 ### Upgrading and uninstalling
 
 ```sh
-tracectl upgrade              # pull the newer trace (npm install -g github:mteichtahl/trace#v1), then redeploy with the
+tracectl upgrade              # pull the newer trace (npm install -g github:mteichtahl/trace#main), then redeploy with the
                            # saved answers and refresh each repository's variables and workflows
 tracectl upgrade --check      # what it would change, without changing anything
 tracectl upgrade --runner-auth token|connection|auto   # switch how the build runners reach GitHub (Where builds run)
 tracectl upgrade --connection ARN|auto   # choose the GitHub connection the build runners use (auto: the installer's pick)
 tracectl uninstall            # remove it (asks you to type the stack's name; --yes to skip)
 ```
+
+Running trace from a clone (`npm link`)? `tracectl upgrade` doesn't pull it from GitHub: update the clone (`git pull && npm ci && npm run build`), then run `tracectl upgrade --no-pull`.
 
 Both use the answers saved on this machine and your AWS credentials; the GitHub token is read back from the
 installation's own secret, so neither asks for it. `tracectl uninstall` removes the integrations' secrets, each
@@ -328,7 +330,7 @@ projects is therefore drawn in IAM, not only in code (`src/infra/project.ts`):
 | **Events** | Nested layout only. One SNS topic per project, `<prefix>-<hash>-batch-events`, and up to two EventBridge rules sending it events: its own Batch jobs' state changes (with GPU jobs), and `<prefix>-<hash>-journey-events`, the central bucket's "Object Created" event for its journey record (`projects/<owner>/<repo>/journey/journey.db`, which only the API writes), its job index (`journey-agent/jobs.db`) and its agents' facts (`journey-agent/facts.db`, where a hand-off's answer is written). Only those rules may publish to it. A worker waiting on a job, on a person's answer in `journey.ask`, or on a hand-off's answer in `journey.handoff`, subscribes a short-lived queue of its own (`<prefix>-<hash>-wait-*`) and is told at once. It still checks on a slow timer (30 seconds and 90 seconds after subscribing, then every 5 minutes) in case a message is lost. Without the topic (flat layout, or an older stack) it checks on a timer and says when it will look next. |
 | **Knowledge base** | One Amazon Bedrock knowledge base per repository (`<prefix>-kb-<hash>`, nested layout only), with its own service role (`<prefix>-kb-<hash>-<region>`) that reads only `projects/<owner>/<repo>/kb/*` and its own S3 Vectors index, and invokes only the embedding model. The worker role and the OIDC role may `bedrock:Retrieve` and start, get and list ingestion jobs on that knowledge base's ARN only. See [Knowledge base](#knowledge-base). |
 | **Library gateway** | Off by default (`gateway.enabled`). When on, each worker role may `bedrock-agentcore:InvokeGateway` on the installation's one library gateway and nothing else of it; the gateway serves only the shared datasheets and parts tools. See [Library gateway](#library-gateway). |
-| **GitHub OIDC role** | One per repository, trusted only for `repo:OWNER/REPO:ref:refs/heads/BRANCH`. It may invoke only that project's runtime, read and write only that project's prefix (and the central database), and use only that project's memory and knowledge base, as its worker does. |
+| **GitHub OIDC role** | One per repository, trusted only for `repo:OWNER/REPO:ref:refs/heads/BRANCH`, and for the same branch under GitHub's immutable subject `repo:OWNER@OWNER_ID/REPO@REPO_ID:…` (what GitHub sends for repositories created, renamed or transferred after 15 July 2026, or opted in; the installer reads the ids from GitHub). It may invoke only that project's runtime, read and write only that project's prefix (and the central database), and use only that project's memory and knowledge base, as its worker does. |
 | **GitHub token** | Each project has its own secret, `<prefix>/github-token/<owner>/<repo>`, and its worker reads only that one. This isolates GitHub access only when you give the project its own fine-grained token limited to that repository. By default the shared token is copied into every project's secret, and the installer's summary says so. A project token is checked: it must see its repository, and the installer warns if it can also see another project's. |
 
 Shared on purpose:
@@ -384,8 +386,9 @@ runtime and knowledge base, into managed policies of that role: three at 24 and 
 by default. The tools functions add five resources and the `ToolsImageUri` output to the parent, for the tools image
 (its repository, its CodeBuild project with its role and policy, and its build), and to each nested stack four
 resources (the function, its role, policy and log group: `src/infra/tools.ts`) and three parameters (the tools
-image's repository and tag). The flat layout has no room for those four per project, so it has no tools functions:
-see `agent/README.md`.)
+image's repository and tag). The flat layout has no room for those four per project, so its tools functions are all
+in one nested stack, one resource of the parent's, left out when the parent has no room even for that: see
+`agent/README.md`.)
 
 CloudFormation allows 500 resources, 200 outputs and 200 parameters per template, and the stack checks all three
 when it is built. The parent carries none of a project's outputs, so its output count does not grow with the
@@ -695,10 +698,14 @@ facts (`projects/<slug>/journey-agent/cost.db`, `src/core/cost.ts`), not in the 
   the price table.
 - **Graphics card and CPU jobs.** Every finished AWS Batch job records its running time (Batch's start and stop
   times) times its pool's price: a graphics card job holds its instance, a CPU job pays for the vCPUs it asked for.
+- **Tools function jobs.** Every call of a project's tools function (KiCad, Blender on the CPU, the FPGA and
+  verification tools, CalculiX, ffmpeg: `agent/README.md`) records Lambda's billed duration (a cold start included)
+  times its memory and its `/tmp` over 512 MB, plus the call, at Lambda's arm64 prices. The price list fetch does not
+  ask for Lambda yet: the built-in price (us-east-1), or `cost.prices.tools`, prices them.
 - **The price table** (`src/core/prices.ts`) is one dated table: Claude on Bedrock per million tokens per model
   (input, output, cache write, cache read; a global inference profile's price and the higher in-region one) and the
   two pools' prices per hour. Its prices come from three places, highest first:
-  1. **An admin's prices**, the stack setting `cost.prices` (a model entry, a region-only entry, a pool, and an
+  1. **An admin's prices**, the stack setting `cost.prices` (a model entry, a region-only entry, a pool, `tools`, and an
      `asOf`; run the installer to apply): the workers and the API get them as `TRACE_PRICES`.
   2. **The AWS price list.** Once a day, the same Lambda that reads Cost Explorer (below, at `cost.explorer.at`) asks
      the AWS Price List Query API (`pricing:GetProducts`, free) for Claude on Bedrock in the installation's region
@@ -931,7 +938,9 @@ runs on the project's CodeBuild runner in AWS like every other job (or on GitHub
 
 ## Data
 
-Everything is stored in SQLite. There are no JSON or YAML data files.
+trace's records are SQLite databases: the ones below, and beside them in the central bucket each project's journey
+record, agents' facts, job index and cost ledger, the prompt overrides and the memory marks. The few other files it
+keeps are listed after them.
 
 - **Project database** (`.trace/project.db`): one per project. It holds settings plus the run record: every
   simulation, check, build and capture, with its measurements and artifacts stored as blobs. Use `tracectl runs`,
@@ -941,8 +950,14 @@ Everything is stored in SQLite. There are no JSON or YAML data files.
   writes the same one. Figures taken from a datasheet are cited by part number, sha256 and page.
 - **Cache** (`~/.cache/tracekit/cache.db`): disposable data such as parsed boards and field-solver results.
 
-The only YAML is what GitHub requires (workflow and action files). The only JSON is what Node requires
-(`package.json`, `tsconfig.json`).
+The only YAML is what GitHub requires (workflow, action and Dependabot files). JSON is used only where another
+program or service needs it (`package.json` and the `tsconfig` files, shadcn's `web/components.json`, the job files
+trace hands Blender and the EMC scripts, kicad-cli's reports kept as run artifacts, and Bedrock's `<key>.metadata.json`
+sidecars); for a few small objects in the central bucket (the installer's saved settings `installation/props.json`,
+the price table `installation/cost/prices.json`, project requests under `installation/pending-projects/`, and when
+each connected system was last seen, under `access/services-seen/`); for the sample project's seed files, which the
+installer reads (`templates/sample/settings.json` and `tour.json`); for the design canvas's layout
+(`docs/ui/source/canvas.json`); and for test fixtures.
 
 ## Tools
 
@@ -964,8 +979,8 @@ That is how the sample project tests its board. Run it inside the project's clon
 
 ```sh
 tracectl hil emulate --write-settings --serial      # keep it running; Ctrl-C stops it
-TRACE_HARDWARE=1 trace tool hil.psu instrument=bench-psu voltage=12 current=0.05 output=on
-TRACE_HARDWARE=1 trace tool hil.dmm instrument=bench-dmm          # about 3.0 V
+TRACE_HARDWARE=1 tracectl tool hil.psu instrument=bench-psu voltage=12 current=0.05 output=on
+TRACE_HARDWARE=1 tracectl tool hil.dmm instrument=bench-dmm       # about 3.0 V
 ```
 
 The bench copies the sample board's input stage. A 39k/13k divider and an RC filter bring the 0-12 V input down to
@@ -1688,7 +1703,7 @@ is kept, so every record still says whose it is, and the existing checks still h
 
 | Actor | Who |
 | --- | --- |
-| `<owner>/<repo>/<agent>` | One agent on one project. The agents are the specialists `verify`, `impl`, `ams`, `emc` and `render` (every job), `worker` (a specialist's delegation, continuing its session) and `local` (a person's own Claude Code). `ci-doctor` and `conflict` hold what was remembered before the specialists. A specialist's recall (at the start of a job, and `memory_recall`) also searches `ci-doctor`, `conflict` and `worker`, read only, ranked after its own records and tagged `legacy` in the prompt block; nothing is migrated (AgentCore cannot copy records). |
+| `<owner>/<repo>/<agent>` | One agent on one project. The agents are the specialists `verify`, `impl`, `ams`, `emc`, `render` and `thermal` (every job), `worker` (a specialist's delegation, continuing its session) and `local` (a person's own Claude Code). `ci-doctor` and `conflict` hold what was remembered before the specialists. A specialist's recall (at the start of a job, and `memory_recall`) also searches `ci-doctor`, `conflict` and `worker`, read only, ranked after its own records and tagged `legacy` in the prompt block; nothing is migrated (AgentCore cannot copy records). |
 | `<owner>/<repo>/person/<hash>` | The person who started a task through the API: their own preferences, inside the project. The hash is part of the sha256 of their email, so the email itself never appears. |
 
 | Strategy | Namespace |
@@ -2121,21 +2136,22 @@ outside AgentCore, either set `OTEL_SDK_DISABLED=true` or give it the variables 
 
 | Path | What |
 | --- | --- |
-| `src/core` | Settings, SQLite stores, the tool registry, the MCP server, onboarding, access control, the Python bridge client |
-| `src/infra` | The CDK stack (Cognito, the central bucket, the image builds, the API runtime, the AWS Batch GPU queue in `gpu.ts`) and, per project, `project.ts` (its worker runtime, roles, token secret and GPU job definition) |
+| `src/core` | Settings, SQLite stores, the tool registry, the MCP server, onboarding, access control, the Python bridge client; the journey record and what agents write beside it (`journey.ts`, `agent-facts.ts`, `handoffs.ts`, `job-index.ts`), the guided skills (`skills.ts`), and the cost ledger and price table (`cost.ts`, `prices.ts`) |
+| `src/infra` | The CDK stack (Cognito, the central bucket, the image builds, the API runtime, the AWS Batch GPU queue in `gpu.ts`) and, per project, `project.ts` (its worker runtime, roles, token secret and GPU job definition); beside them the web app (`web.ts`, its WAF in `edge.ts`), external access (`external.ts`), the tools functions (`tools.ts`), the build runners (`runner.ts`), the cost read and the order watch (`cost.ts`, `order-watch.ts`), dictation's vocabularies (`voice.ts`) and where trace publishes its images (`release.ts`) |
 | `src/installer` | `tracectl install`: the local web installer; `tracectl update-installation` (`update.ts`): the self-update job of trace's own ci workflow |
 | `src/prompts` | The prompt catalog (every prompt part's id, default, variables and whether it is locked), the `{{var}}` templates, the layers (installation and project overrides) and their stores, and `tracectl prompts` |
-| `src/agents` | The specialists (`verify`, `impl`, `ams`, `emc`, `render`, each in its own folder; `index.ts` lists them), the router, the retained worker's prompt (`worker`), and the runtime (`runtime`: server, jobs, delegation, memory, observability) |
-| `src/api`, `agent/Dockerfile` | The people-facing API, and the image AgentCore runs |
+| `src/agents` | The specialists (`verify`, `impl`, `ams`, `emc`, `render`, `thermal`, each in its own folder; `index.ts` lists them), the router, the retained worker's prompt (`worker`), and the runtime (`runtime`: server, jobs, delegation, hand-offs, memory, observability) |
+| `src/api`, `src/mcp-remote`, `agent/Dockerfile` | The people-facing API; the external API and the MCP endpoint for connected systems (`service-auth.ts`, `service-policy.ts`, `src/mcp-remote`; [docs/external-access.md](docs/external-access.md)); and the image AgentCore runs |
+| `src/web`, `web` | The web app: its backend behind CloudFront (sign-in, `/api/call`, the chat agent at `/api/agui`, voice, Operations, live events) and the React app ([docs/web-build.md](docs/web-build.md), `web/README.md`) |
 | `src/login` | `tracectl login`, `tracectl remote …`, `tracectl users …` |
 | `src/harness` | The loop's logic, bundled into `harness/dist` for the GitHub actions in `harness/actions` |
 | `src/infra/gateway.ts`, `src/core/gateway.ts`, `src/library` | The library gateway: its CDK resources, which calls `tracectl mcp` forwards and how (SigV4, fallback), and the Lambda behind it |
 | `src/infra/knowledge.ts`, `src/tools/kb` | Each project's knowledge base: its CDK resources, and what goes in it, the sync, search and the kb tools |
 | `src/tools/mech`, `python/tracebridge/mech` | Enclosures: board facts, case settings, JLC3DP's capabilities and the mech tools; the build123d engine they run |
-| `src/tools/calc`, `src/tools/kicad`, `src/tools/pcb`, `src/tools/sim`, `src/tools/protocol`, `src/tools/datasheets`, `src/tools/parts`, `src/tools/hil`, `src/tools/firmware`, `src/tools/runs` | The tools |
-| `src/gpu`, `agent/Dockerfile.gpu` | GPU jobs: local or AWS Batch (`runJob`, `runBatch`), the in-container runner, and its image |
-| `python/kicad`, `python/orthoroute` | The scripts the autorouter jobs run: Freerouting through KiCad's pcbnew, and OrthoRoute's headless mode |
-| `python/tracebridge` | The only Python, used where Node has no maintained equivalent: PDF tables and figures (pdfplumber), VISA instruments (pyvisa), and CAN vendor interfaces (python-can) |
+| `src/tools` | The other tools, one folder per area, gathered into one registry by `index.ts`: `calc`, `kicad`, `sim`, `ams`, `emc`, `protocol`, `verify`, `fpga`, `pcb` (the autorouter) and `layout` (the `pcb.*` checks), `render`, `thermal`, `firmware`, `hil`, `datasheets`, `parts`, `design`, `journey`, `agent`, `memory`, `voice`, `runs` |
+| `src/gpu`, `agent/Dockerfile.gpu`, `agent/Dockerfile.tools` | GPU and CPU jobs: local, on the project's tools function or on AWS Batch (`runJob`, `runBatch`), the in-container runner, and the two images they run |
+| `python/kicad`, `python/orthoroute`, `python/blender`, `python/emc` | Scripts trace runs inside other programs: the autorouters (Freerouting through KiCad's pcbnew, and OrthoRoute's headless mode), the Blender renders, and the openEMS model and scikit-rf checks |
+| `python/tracebridge` | The Python bridge, used where Node has no maintained equivalent: PDF tables and figures (pdfplumber), VISA instruments (pyvisa), CAN vendor interfaces (python-can), and the bench emulator's serial console (`ptyrelay.py`, standard library only) |
 | `templates` | What onboarding writes: workflows, starter builds, scaffolds, the empty rules |
 
 Develop with `npm ci && npm run check`. The Python bridge has its own setup: `pip install -e 'python[dev]' && pytest python/tests`.

@@ -8,7 +8,8 @@
  * The Lambda Runtime API (AWS_LAMBDA_RUNTIME_API): GET …/runtime/invocation/next waits for the next event (with no
  * timeout of ours: Lambda freezes the process between events, and a timer counting through a freeze would misfire),
  * then POST …/<request id>/response or …/<request id>/error. Each job works in its own folder under /tmp, removed
- * after it: a warm container keeps /tmp between invocations.
+ * after it: a warm container keeps /tmp between invocations, where the shared inputs (./protocol.ts: a KiCad project's
+ * archive, the same from one call to the next) stay, up to ./runner.ts SHARED_CACHE_BYTES.
  */
 import { request } from 'node:http'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -44,7 +45,7 @@ const errorBody = (e: unknown): string => JSON.stringify({
 })
 
 /** One job: the runner on the event's spec, in a fresh folder under `workRoot`, removed after. */
-export async function handle(event: unknown, o: { workRoot?: string; run?: typeof observedMain } = {}): Promise<FunctionReply> {
+export async function handle(event: unknown, o: { workRoot?: string; run?: typeof observedMain; sharedCache?: string } = {}): Promise<FunctionReply> {
   const e = (event ?? {}) as Partial<FunctionEvent>
   if (typeof e.spec !== 'string' || !e.spec.startsWith('s3://')) throw new Error('the event names no job spec (expected {"spec": "s3://…"})')
   const dir = mkdtempSync(join(o.workRoot ?? tmpdir(), 'job-'))
@@ -52,7 +53,8 @@ export async function handle(event: unknown, o: { workRoot?: string; run?: typeo
     const env: NodeJS.ProcessEnv = { ...process.env, TRACE_GPU_JOB_URI: e.spec, TRACE_JOB_BACKEND: 'function' }
     if (typeof e.traceparent === 'string') env.TRACEPARENT = e.traceparent
     else delete env.TRACEPARENT
-    const exitCode = await (o.run ?? observedMain)({ env, workRoot: dir })
+    // shared inputs (a project archive sent again) kept in /tmp between the calls a warm container takes
+    const exitCode = await (o.run ?? observedMain)({ env, workRoot: dir, sharedCache: o.sharedCache ?? join(tmpdir(), 'trace-shared') })
     return { exitCode }
   } finally {
     rmSync(dir, { recursive: true, force: true })

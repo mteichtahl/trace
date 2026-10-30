@@ -60,6 +60,8 @@ export class FakeRuntime {
   appsync: { url: string; headers: Record<string, string>; body: string }[] = []
   /** the chat agent's prompts.chat calls (src/web/chat-prompts.ts), kept apart from `calls` */
   promptCalls: { headers: Record<string, string> }[] = []
+  /** actions whose call cannot reach the runtime at all (as fetch fails when nothing answers) */
+  down = new Set<string>()
   /** what prompts.chat answers (default: no installation override) */
   chatPrompts: () => { status?: number; body: unknown } = () => ({ body: { ok: true, result: { entries: [{ id: 'chat.role', text: null, version: null, sha: 'x' }] } } })
   fetch: typeof fetch = async (input, init) => {
@@ -76,6 +78,7 @@ export class FakeRuntime {
       const r = this.chatPrompts()
       return new Response(JSON.stringify(r.body), { status: r.status ?? 200, headers: { 'content-type': 'application/json' } })
     }
+    if (this.down.has(action)) throw new TypeError('fetch failed')
     this.calls.push({ action, args, headers, url })
     const a = this.answers.get(action)
     const r = a ? a(args) : { body: { ok: false, error: `unknown action ${JSON.stringify(action)}` } }

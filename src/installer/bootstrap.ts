@@ -89,7 +89,7 @@ import {
   nameClients, nameIndex, resolveConnection, stackOutputs, waitForConnection,
 } from './aws.js'
 import { type Facts, resolveAnswers } from './derive.js'
-import { type TokenInfo, canConfigure, checkToken, createRepo, deleteVariable, repoExists, repositoryDefaultBranch, setSecret, setVariable } from './github.js'
+import { type TokenInfo, canConfigure, checkToken, createRepo, deleteVariable, immutableSubject, repoExists, repositoryDefaultBranch, setSecret, setVariable } from './github.js'
 import { type TourResult, recreateMissingSample, startSampleJourney, startTour, tourPlan, withSample } from './sample.js'
 import { EDGE_REGION, edgeStackName } from '../infra/edge.js'
 import { type EdgeDeps, deployEdge, edgeLeftOver, wafPlan, withAcl } from './edge.js'
@@ -243,6 +243,7 @@ export function infraInput(a: Answers, existing?: Existing | null, deploy?: Layo
     repositories: a.projects.map((p) => `${p.repo}@${p.branch}`),
     ...(buildRepositories(a).length ? { ciRepositories: buildRepositories(a) } : {}),
     ...(selfUpdateOf(a) ? { selfUpdate: selfUpdateOf(a) ?? undefined } : {}),
+    ...(Object.keys(a.github.subjects).length ? { githubSubjects: a.github.subjects } : {}),
     createOidcProvider: a.agents.createOidcProvider,
     model: a.agents.model,
     ...(a.agents.centralBucketName ? { centralBucketName: a.agents.centralBucketName } : {}),
@@ -619,6 +620,8 @@ export interface Hooks {
   tour?: (token: string, repo: string, o: { gpu: boolean }) => Promise<TourResult>
   /** creating a new project's repository before its variables are set */
   createRepo?: typeof createRepo
+  /** a repository's GitHub immutable OIDC subject prefix (github.ts immutableSubject), for its roles' trust */
+  subject?: (token: string, repo: string) => Promise<string>
   /** whether the token sees a repository (github.ts repoExists): the sample, when it may have been deleted */
   repoExists?: typeof repoExists
   /** trace's own repository and whether the token can configure it (resolveSelfBuild) */
@@ -874,6 +877,17 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       const r = await (hooks.createRepo ?? createRepo)(adminToken, p.repo, { private: p.create?.private ?? true })
       log('github', `${p.repo}: ${r?.created === false ? 'exists already' : 'created'}`)
     }
+    // each repository's GitHub immutable OIDC subject (src/core/github-subject.ts), looked up again every run: its roles
+    // trust it beside repo:OWNER/REPO, so a repository GitHub sends ids for (made, renamed or moved after 15 July 2026, or
+    // opted in) can assume them. Best effort: one GitHub does not answer for is trusted by its name only, and said
+    const subjects: Record<string, string> = {}
+    const update = selfUpdateOf(a)
+    for (const r of [...new Set([...a.projects.map((p) => p.repo), ...(update ? [update.repository] : [])].map((x) => x.toLowerCase()))]) {
+      try { subjects[r] = await (hooks.subject ?? immutableSubject)(adminToken, r) } catch (e) {
+        log('github', `${r}: its GitHub ids could not be read (${redact(e instanceof Error ? e.message : String(e), s)}): its roles trust repo:${r} only, which GitHub does not send when the repository uses immutable subjects`)
+      }
+    }
+    a = { ...a, github: { ...a.github, subjects } }
     if (choice) set('github', 'done', runnerMessage)
     else if (!a.projects.length && !buildRepositories(a).length) set('github', 'skipped', 'no repositories yet, so no build runners')
     else {

@@ -13,7 +13,9 @@
  *   vpc.quota         the GPU side's VPC fits the region's VPC quota
  *   cdk.bootstrap     CDKToolkit: there, healthy, version 6 or later (else bootstrapped or updated first)
  *   stack             the trace stack: none (a new installation), updatable, or stuck (a failed first deploy)
- *   leftovers         names a removed installation kept (retainData) that a new stack would collide with
+ *   leftovers         names a removed installation kept (retainData) that a new stack would collide with; and, with
+ *                     the stack there, a `<prefix>-tools` repository that is not its own (no ToolsImageUri output: a
+ *                     failed deploy's rollback kept it), which the next deploy would make again and collide with
  *   cognito.domain    `<prefix>-<account>`: free, or this installation's
  *   github.token      the token: login, kind, scopes, and its email (the first administrator)
  *   github.source     trace's own repository: its actions are usable from the other repositories
@@ -23,7 +25,7 @@
  */
 import type { AwsCredentialIdentity } from '@smithy/types'
 import { SOURCE } from '../core/onboard.js'
-import { PUBLISHED_REGISTRY, stackName } from '../infra/props.js'
+import { PUBLISHED_REGISTRY, TOOLS_IMAGE_OUTPUT, stackName } from '../infra/props.js'
 import type { Check, FixAction } from './answers.js'
 import type { Facts } from './derive.js'
 import { pickModel } from './derive.js'
@@ -279,6 +281,15 @@ export async function preflight(input: PreflightInput, d: PreflightDeps, onProgr
       action: { id: 'clear-leftovers', label: `Delete ${leftovers.v.length === 1 ? 'it' : `these ${leftovers.v.length}`}`, params: { prefix } },
     })
   }
+  const toolsRepo = `the ECR repository ${prefix}-tools`
+  if (leftovers.ok && stackNow && leftovers.v.includes(toolsRepo) && !stackNow.outputs[TOOLS_IMAGE_OUTPUT]) {
+    add({
+      id: 'leftovers.tools', status: 'fail', title: 'The tools image repository',
+      detail: `The ECR repository ${prefix}-tools is in the account but not in ${stack}: a deploy that failed kept it when it rolled back, and the next deploy would make it again and fail ("already exists").`,
+      fix: 'Delete it: it holds only the tools image, which the deploy copies or builds again.',
+      action: { id: 'delete-tools-repository', label: `Delete ${prefix}-tools`, params: { prefix } },
+    })
+  }
   facts.oidcProvider = oidc.ok ? oidc.v : false
 
   // Cognito's domain prefix
@@ -450,7 +461,7 @@ export async function liveDeps(creds: AwsCredentialIdentity, region: string, tok
  * collide with: its image repositories and the API's GitHub token secret (RemovalPolicy RETAIN). */
 export async function leftoverNames(prefix: string, c: { ecr: (op: string, body: Record<string, unknown>) => Promise<Record<string, unknown>>; secrets: { send: (cmd: never) => Promise<unknown> } }): Promise<string[]> {
   const out: string[] = []
-  const repos = [`${prefix}-agent`, `${prefix}-gpu`]
+  const repos = [`${prefix}-agent`, `${prefix}-gpu`, `${prefix}-tools`]
   await Promise.all(repos.map(async (name) => {
     try { await c.ecr('DescribeRepositories', { repositoryNames: [name] }); out.push(`the ECR repository ${name}`) } catch { /* not there */ }
   }))

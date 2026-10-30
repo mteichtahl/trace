@@ -10,6 +10,14 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const jobs: { kind: string; argv: string[]; timeoutSeconds?: number }[] = []
+// a machine with KiCad installed (CI's runner) must look like one without it where a test says so: kicad-cli's install
+// paths (src/tools/kicad/project.ts INSTALL_PATHS) are hidden while hideInstalledKicad is set
+const hide = vi.hoisted(() => ({ on: false }))
+vi.mock('node:fs', async (orig) => {
+  const real = await orig<typeof import('node:fs')>()
+  const existsSync = (p: import('node:fs').PathLike): boolean => (hide.on && /[\\/]kicad-cli(\.exe)?$/.test(String(p)) && !String(p).includes('fakecli-') ? false : real.existsSync(p))
+  return { ...real, existsSync, default: { ...real, existsSync } }
+})
 let fakeCli = ''
 
 vi.mock('../../../src/gpu/jobs.js', async (orig) => {
@@ -80,7 +88,7 @@ function makeFakeCli(): { cli: string; log: string } {
   return { cli, log }
 }
 
-afterEach(() => { jobs.length = 0; vi.unstubAllEnvs() })
+afterEach(() => { jobs.length = 0; hide.on = false; vi.unstubAllEnvs() })
 
 describe('what goes with a remote kicad-cli run', () => {
   it('sends the repository\'s KiCad files, names as they are, without backups, hidden folders or node_modules', () => {
@@ -155,6 +163,7 @@ describe('a kicad-cli run on the tools function', () => {
 describe('where kicad-cli runs', () => {
   it('here when installed, else on the tools function when the project has one, else nowhere', async () => {
     const f = makeFakeCli()
+    hide.on = true
     vi.stubEnv('PATH', '/nonexistent')
     vi.stubEnv('KICAD_CLI', '')
     vi.stubEnv('TRACE_TOOLS_FUNCTION', '')

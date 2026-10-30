@@ -150,7 +150,7 @@ export async function runFix(c: Check): Promise<void> {
       : a === 'bedrock-agreement' ? { action: a, model: p.model }
       : a === 'delete-failed-stack' || a === 'continue-rollback' ? { action: a, stack: p.stack }
       : a === 'delete-cognito-domain' ? { action: a, domain: p.domain, userPoolId: p.userPoolId }
-      : a === 'clear-leftovers' ? { action: a, prefix: p.prefix }
+      : a === 'clear-leftovers' || a === 'delete-tools-repository' ? { action: a, prefix: p.prefix }
       : { action: a }
     const r = await api<{ detail: string }>('POST', '/api/fix', { ...awsBody(get()), token: get().github.token.trim(), fix })
     update((s) => { s.fixNote.set(c.id, r.detail); s.preTried = '' })

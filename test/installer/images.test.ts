@@ -2,6 +2,7 @@
  * The image builds' caching and published images (src/infra/images.ts), with the lock file an installed trace bundles
  * from (src/infra/lockfile.ts), and onboarding's git without the gh CLI (src/installer/onboard-api.ts).
  */
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -14,6 +15,8 @@ import { InfraPropsSchema, PUBLISHED_REGISTRY } from '../../src/infra/props.js'
 import { AnswersSchema } from '../../src/installer/answers.js'
 import { infraInput } from '../../src/installer/bootstrap.js'
 import { ACCEPT, parseRef, resolveImage } from '../../scripts/resolve-image.mjs'
+import { withoutCredentials } from '../../scripts/npmrc.mjs'
+import { SOURCE_EXCLUDE } from '../../src/infra/stack.js'
 
 const ROOT = join(import.meta.dirname, '..', '..')
 
@@ -87,7 +90,7 @@ describe('the images', () => {
     // final `chown -R trace:trace /app` (which rewrites every file into a layer of its own, about 1.2 GB)
     const dockerfile = readFileSync(join(ROOT, 'agent', 'Dockerfile'), 'utf8')
     const stages = dockerfile.split(/^FROM /m).slice(1)
-    expect(stages.map((x) => x.split('\n')[0])).toEqual(['--platform=linux/arm64 ubuntu:24.04 AS tools', 'tools AS build', 'tools'])
+    expect(stages.map((x) => x.split('\n')[0])).toEqual(['--platform=linux/arm64 public.ecr.aws/docker/library/ubuntu:24.04 AS tools', 'tools AS build', 'tools'])
     const [, build, final] = stages as [string, string, string]
     // npm ci and the build happen in the build stage only
     expect(build).toMatch(/^RUN npm ci\b/m)
@@ -137,7 +140,7 @@ describe('the images', () => {
     // the tools function runs the Lambda runtime, everything under /tmp (Lambda's only writable folder)
     expect(tools).toMatch(/^CMD \["node", "\/app\/dist\/gpu\/lambda\.js"\]$/m)
     expect(tools).toMatch(/HOME=\/tmp/)
-    expect(tools.split(/^FROM /m).slice(1).map((x) => x.split('\n')[0])).toEqual(['--platform=linux/arm64 ubuntu:24.04 AS tools', 'tools AS build', 'tools'])
+    expect(tools.split(/^FROM /m).slice(1).map((x) => x.split('\n')[0])).toEqual(['--platform=linux/arm64 public.ecr.aws/docker/library/ubuntu:24.04 AS tools', 'tools AS build', 'tools'])
   })
 
   it('give the tools image every program the verification jobs take it to have (TOOLS_IMAGE_PROGRAMS)', async () => {
@@ -159,6 +162,79 @@ describe('the images', () => {
     expect(agent).toContain(`-gt ${AGENT_IMAGE_MAX_BYTES} ]`)
     expect(AGENT_IMAGE_MAX_BYTES).toBeLessThanOrEqual(2_000_000_000)
     expect(JSON.stringify(imageBuildSpec({ dockerfile: 'agent/Dockerfile.tools', platform: 'linux/arm64' }))).not.toContain('{{.Size}}')
+  })
+
+  it('get the .npmrc\'s settings, never a credential in it, and the source sent to AWS leaves .npmrc out', () => {
+    // a clone's .npmrc with a person's token: in the image it would sit in the build's layers, and once it expires
+    // every npm ci there fails with E401 (public packages too)
+    const local = ['legacy-peer-deps=true', '//registry.npmjs.org/:_authToken=npm_EXAMPLEEXAMPLEEXAMPLE', 'fund=false',
+      '_auth = dXNlcjpwYXNz', '//npm.pkg.github.com/:_authToken=ghp_EXAMPLE', '@acme:registry=https://npm.pkg.github.com', 'email=me@example.com', '# a comment', ''].join('\n')
+    const r = withoutCredentials(local)
+    expect(r.text.split('\n')).toEqual(['legacy-peer-deps=true', 'fund=false', '@acme:registry=https://npm.pkg.github.com', '# a comment', ''])
+    expect(r.dropped).toBe(4)
+    expect(r.text).not.toMatch(/npm_EXAMPLE|ghp_EXAMPLE|dXNlcjpwYXNz|_auth/)
+    // the repository's own .npmrc has no credential: staged as it is
+    const own = readFileSync(join(ROOT, '.npmrc'), 'utf8')
+    expect(withoutCredentials(own)).toEqual({ text: own, dropped: 0 })
+    expect(readFileSync(join(ROOT, 'agent', 'npmrc'), 'utf8')).toBe(own)
+    expect(SOURCE_EXCLUDE).toEqual(expect.arrayContaining(['.npmrc', '**/.npmrc']))
+  })
+
+  it('get trace\'s committed .npmrc, not a clone\'s local registry or token', () => {
+    // a clone whose .npmrc a person pointed at a private registry with a token (CodeArtifact, a proxy): in the image
+    // build npm would go there without the token and every npm ci fails with E401
+    const clone = mkdtempSync(join(tmpdir(), 'trace-clone-'))
+    try {
+      mkdirSync(join(clone, 'scripts'))
+      mkdirSync(join(clone, 'agent'))
+      for (const f of ['stage-image.mjs', 'npmrc.mjs']) cpSync(join(ROOT, 'scripts', f), join(clone, 'scripts', f))
+      writeFileSync(join(clone, 'package-lock.json'), '{}')
+      writeFileSync(join(clone, '.npmrc'), 'legacy-peer-deps=true\nfund=false\n')
+      const git = (...a: string[]): void => { execFileSync('git', ['-C', clone, '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], { stdio: 'ignore' }) }
+      git('init', '-q')
+      git('add', '.')
+      git('commit', '-q', '-m', 'trace')
+      writeFileSync(join(clone, '.npmrc'), 'legacy-peer-deps=true\nfund=false\nregistry=https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/shared/\n//acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/shared/:_authToken=eyJEXAMPLE\n')
+      const r = spawnSync(process.execPath, [join(clone, 'scripts', 'stage-image.mjs')], { encoding: 'utf8' })
+      expect(r.status).toBe(0)
+      expect(r.stderr).toMatch(/local changes; the images get trace's committed .npmrc/)
+      expect(readFileSync(join(clone, 'agent', 'npmrc'), 'utf8')).toBe('legacy-peer-deps=true\nfund=false\n')
+      expect(readFileSync(join(clone, 'agent', 'package-lock.json'), 'utf8')).toBe('{}')
+    } finally { rmSync(clone, { recursive: true, force: true }) }
+  })
+
+  it('get the committed lock while package.json is as committed, and warn of a lock resolving from a private registry', () => {
+    // npm install with a private registry in ~/.npmrc rewrites the lock's resolved URLs to it: npm ci in the image build
+    // then fetches from there without a token (E401)
+    const clone = mkdtempSync(join(tmpdir(), 'trace-clone-'))
+    const PUBLIC = '{"packages":{"node_modules/zod":{"resolved":"https://registry.npmjs.org/zod/-/zod-4.0.0.tgz"}}}\n'
+    const PRIVATE = PUBLIC.replace('https://registry.npmjs.org/', 'https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/shared/')
+    try {
+      mkdirSync(join(clone, 'scripts'))
+      mkdirSync(join(clone, 'agent'))
+      for (const f of ['stage-image.mjs', 'npmrc.mjs']) cpSync(join(ROOT, 'scripts', f), join(clone, 'scripts', f))
+      writeFileSync(join(clone, 'package.json'), '{"name":"t","dependencies":{"zod":"4.0.0"}}\n')
+      writeFileSync(join(clone, 'package-lock.json'), PUBLIC)
+      writeFileSync(join(clone, '.npmrc'), 'fund=false\n')
+      const git = (...a: string[]): void => { execFileSync('git', ['-C', clone, '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], { stdio: 'ignore' }) }
+      git('init', '-q')
+      git('add', '.')
+      git('commit', '-q', '-m', 'trace')
+      const stage = (): { status: number | null; stderr: string } => spawnSync(process.execPath, [join(clone, 'scripts', 'stage-image.mjs')], { encoding: 'utf8' })
+      // the lock rewritten locally, package.json as committed: the committed lock
+      writeFileSync(join(clone, 'package-lock.json'), PRIVATE)
+      let r = stage()
+      expect(r.status).toBe(0)
+      expect(r.stderr).toMatch(/package-lock.json has local changes; the images get the committed lock/)
+      expect(r.stderr).not.toMatch(/WARNING/)
+      expect(readFileSync(join(clone, 'agent', 'package-lock.json'), 'utf8')).toBe(PUBLIC)
+      // dependencies changed locally: the clone's own lock, and a warning that names the registry
+      writeFileSync(join(clone, 'package.json'), '{"name":"t","dependencies":{"zod":"4.0.1"}}\n')
+      r = stage()
+      expect(r.status).toBe(0)
+      expect(r.stderr).toMatch(/WARNING agent\/package-lock.json resolves packages from https:\/\/acme-123456789012\.d\.codeartifact/)
+      expect(readFileSync(join(clone, 'agent', 'package-lock.json'), 'utf8')).toBe(PRIVATE)
+    } finally { rmSync(clone, { recursive: true, force: true }) }
   })
 
   it('build from the lock file npm leaves out of an installed trace', () => {

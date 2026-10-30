@@ -55,7 +55,7 @@ jobs:
         run: |
           set -euo pipefail
           aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
-          docker run --privileged --rm tonistiigi/binfmt --install arm64
+          docker run --privileged --rm public.ecr.aws/eks-distro-build-tooling/binfmt-misc:qemu-v9.2.2 --install arm64
           docker buildx create --use --name trace-release
           extra=()
           case "$REF" in

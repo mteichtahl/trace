@@ -1,6 +1,6 @@
 // `prepare` entry point: builds trace, making sure its build tools exist first.
 //
-// `npm install -g github:mteichtahl/trace#v1` clones the repo and runs `npm install` + `prepare` in the clone,
+// `npm install -g github:mteichtahl/trace#main` clones the repo and runs `npm install` + `prepare` in the clone,
 // but npm leaks the outer `--global` into that inner install (npm_config_global=true). It then installs the
 // clone as a global link, so devDependencies (TypeScript, Vite) never land in its node_modules and the build
 // fails with `tsc: command not found`; npm is also still filling that node_modules while `prepare` runs.
