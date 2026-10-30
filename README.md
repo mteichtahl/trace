@@ -940,7 +940,9 @@ runs on the project's CodeBuild runner in AWS like every other job (or on GitHub
 
 trace's records are SQLite databases: the ones below, and beside them in the central bucket each project's journey
 record, agents' facts, job index and cost ledger, the prompt overrides and the memory marks. The few other files it
-keeps are listed after them.
+keeps are listed after them. The ontology that names these records and the rules over them is designed in
+[docs/ontology.md](docs/ontology.md), with its build plan in [docs/ontology-plan.md](docs/ontology-plan.md); nothing of it is
+built yet.
 
 - **Project database** (`.trace/project.db`): one per project. It holds settings plus the run record: every
   simulation, check, build and capture, with its measurements and artifacts stored as blobs. Use `tracectl runs`,
