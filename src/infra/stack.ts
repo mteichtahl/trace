@@ -511,6 +511,8 @@ export class TraceStack extends Stack {
       TRACE_COGNITO_ISSUER: `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}`,
       TRACE_AWS_ACCOUNT: cfg.account,
       TRACE_WORKER_RUNTIMES: workerList,
+      // the workers' code version: tool calls move to a new session when it changes (src/api/workers.ts toolSession)
+      TRACE_WORKER_BUILD: contentTag,
       TRACE_INTEGRATIONS_PREFIX: integrationsPrefix(cfg.prefix),
       // the order watch a check now invokes (order.check_now, src/api/actions-build.ts)
       TRACE_ORDER_WATCH: orderWatchName(cfg.prefix),

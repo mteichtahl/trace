@@ -5,7 +5,8 @@ import { App } from 'aws-cdk-lib'
 import { Template } from 'aws-cdk-lib/assertions'
 import { describe, expect, it } from 'vitest'
 import { InfraPropsSchema, REPOSITORY_OUTPUT, projectHash, projectOutputs } from '../../src/infra/props.js'
-import { TraceStack } from '../../src/infra/stack.js'
+import { REPO_ROOT, TraceStack } from '../../src/infra/stack.js'
+import { imageContentTag } from '../../src/infra/images.js'
 import { RUNNERS, nestedOf, nestedResourceId, synth } from './templates.js'
 
 const A = 'mteichtahl/trace'
@@ -349,6 +350,8 @@ describe('the flat layout and the move to nested stacks', () => {
     const api = Object.values(j.Resources).find((r) => r.Properties?.AgentRuntimeName === 'trace_api')
     const env = api?.Properties?.EnvironmentVariables as Record<string, unknown>
     expect(env.TRACE_WORKER_RUNTIMES).toBe('')
+    // the workers' build: tool calls move to a new session when it changes (src/api/workers.ts toolSession)
+    expect(env.TRACE_WORKER_BUILD).toBe(imageContentTag(REPO_ROOT))
     expect(env.TRACE_PROJECT_MEMORIES).toBeUndefined()
     expect(j.Resources.Central7FB44904).toBeDefined()
     // a migration step is only for a flat stack

@@ -249,6 +249,8 @@ const Env = z.object({
   TRACE_GITHUB_SECRET_ARN: z.string().min(1),
   TRACE_AWS_ACCOUNT: z.string().regex(/^\d{12}$/),
   TRACE_WORKER_RUNTIMES: z.string().default(''),
+  /** The workers' image content tag: a deploy that changes it moves tool calls to a new session (src/api/workers.ts). */
+  TRACE_WORKER_BUILD: z.string().default(''),
   PORT: z.coerce.number().int().default(8080),
 })
 
@@ -259,7 +261,7 @@ async function depsFromEnv(env: z.output<typeof Env>): Promise<{ deps: ActionDep
   const cog = (): CognitoAdmin => (cognito ??= new HttpCognito({ region: env.AWS_REGION, poolId: env.TRACE_COGNITO_POOL_ID, prefix: process.env.TRACE_PREFIX?.trim() || 'trace' }))
   const scratch = defaultScratch()
   const token = (): Promise<string> => githubToken(env.TRACE_GITHUB_SECRET_ARN)
-  const jobs = remoteJobs({ runtimes: parseWorkerRuntimes(env.TRACE_WORKER_RUNTIMES), region: env.AWS_REGION, account: env.TRACE_AWS_ACCOUNT })
+  const jobs = remoteJobs({ runtimes: parseWorkerRuntimes(env.TRACE_WORKER_RUNTIMES), region: env.AWS_REGION, account: env.TRACE_AWS_ACCOUNT, build: env.TRACE_WORKER_BUILD })
   const deps: ActionDeps = {
     github: async () => new HttpGitHub(await token()),
     cognito: cog,
