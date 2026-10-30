@@ -1,9 +1,9 @@
 /**
  * Settings (/p/:id/settings): what the project is and who works on it. The template and repository are shown
  * read-only with the reason (the record depends on them). Name, description, icon, the people and their parts, the
- * build quantity, the budget and the later stages are editable by admins: each change is written with settings.set
- * (a branch and commit in the project's repository) or, for people, assign — and says "Saved" when it lands. Everyone
- * else reads. Agent instructions for this project are one link away.
+ * build quantity, the budget and the later stages are editable by admins: each change is written to the journey
+ * record with project.update (they are what the project is, not repository settings) or, for people, assign — and
+ * says "Saved" when it lands. Everyone else reads. Agent instructions for this project are one link away.
  */
 import { useQuery } from '@tanstack/react-query'
 import { Link, createFileRoute } from '@tanstack/react-router'
@@ -25,9 +25,10 @@ import { QueryError } from '@/components/states'
 import { repoOf } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { initials } from '@/lib/format'
+import type { ArgsOf } from '@/lib/api'
 import { q, useAction, useCall, useJourney } from '@/lib/queries'
 import type { Part } from '@/lib/types'
-import type { ProjectIcon } from '@/lib/types-s1'
+import type { JourneyMore, ProjectIcon } from '@/lib/types-s1'
 
 export const Route = createFileRoute('/_app/p/$id/settings/')({
   staticData: { crumb: 'Settings' },
@@ -44,25 +45,28 @@ function Settings() {
   const j = useJourney(repo)
   const s = useAction('settings.get', { repo })
   const members = useQuery(q('project.members', { repo }))
-  const set = useCall('settings.set', (a) => [['settings.get', a.repo], ['journey.get', a.repo]])
+  const update = useCall('project.update', (a) => [['journey.get', a.repo], ['projects']])
   const assign = useCall('assign', (a) => [['project.members', a.repo], ['assignments']])
   const [saved, setSaved] = useState<string | null>(null)
   useTraceContext({ label: 'Settings', description: 'The project tab on screen', value: { tab: 'settings' } }, 'screen')
 
-  const save = (key: string, value: unknown) =>
-    set.mutate({ repo, key, value }, {
-      onSuccess: (r) => { setSaved(key); toast('Saved', { description: `Committed ${r.commit.slice(0, 7)} on ${r.branch}` }) },
+  const [pending, setPending] = useState<string | null>(null)
+  /** one field of what the project is, by its name on this page: written to the journey record */
+  const save = (key: Field, patch: Omit<ArgsOf<'project.update'>, 'repo'>) => {
+    setPending(key)
+    update.mutate({ repo, ...patch }, {
+      onSuccess: () => { setSaved(key); toast('Saved', { description: 'The project record is updated for everyone on it.' }) },
       onError: (e) => toast.error('Not saved. Your change is still in the field.', { description: e instanceof Error ? e.message : String(e) }),
+      onSettled: () => setPending(null),
     })
+  }
 
   if (s.isError) return <div className="mt-6"><QueryError error={s.error} what="the settings" onRetry={() => void s.refetch()} /></div>
   if (!s.data || !j.data) return <TabSkeleton loading={s.isLoading || j.isLoading} />
-  const v = s.data.set
-  const str = (k: string, d = '') => (typeof v[k] === 'string' ? (v[k] as string) : d)
-  const num = (k: string) => (typeof v[k] === 'number' ? (v[k] as number) : undefined)
-  const later = (v['stages.later'] as { certify?: boolean; produce?: boolean; sustain?: boolean } | undefined) ?? {}
-  const icon = (v['project.icon'] as ProjectIcon | undefined) ?? { glyph: 'board', colour: 'blue' }
-  const pending = set.isPending ? set.variables?.key : null
+  const jm = j.data as JourneyMore
+  const icon: ProjectIcon = jm.icon ?? { glyph: 'board', colour: 'blue' }
+  const build = jm.build ?? { quantity: 10, unit_cost: null, budget: null }
+  const later = new Set(jm.later ?? [])
 
   return (
     <div className="max-w-[880px] pb-12">
@@ -71,11 +75,11 @@ function Settings() {
 
       <div className="h-8" aria-hidden /><Section label="About">
         <div className="space-y-5 rounded-xl border p-5">
-          <TextSetting label="Name" value={str('project.name', j.data.name)} disabled={!admin} saving={pending === 'project.name'} saved={saved === 'project.name'} onSave={(x) => save('project.name', x)} check={(x) => x.trim().length >= 2} />
-          <TextSetting multiline label="Short description" hint="One or two sentences: shown on Home and in notifications." value={str('project.description', j.data.description ?? '')} disabled={!admin} saving={pending === 'project.description'} saved={saved === 'project.description'} onSave={(x) => save('project.description', x)} check={(x) => /[.!?]$/.test(x.trim()) && x.trim().length <= 280} />
+          <TextSetting label="Name" value={j.data.name} disabled={!admin} saving={pending === 'name'} saved={saved === 'name'} onSave={(x) => save('name', { name: x })} check={(x) => x.trim().length >= 2} />
+          <TextSetting multiline label="Short description" hint="One or two sentences: shown on Home and in notifications." value={j.data.description ?? ''} disabled={!admin} saving={pending === 'description'} saved={saved === 'description'} onSave={(x) => save('description', { description: x })} check={(x) => /[.!?]$/.test(x.trim()) && x.trim().length <= 280} />
           <div className="flex items-start gap-4">
             <ProjectIconView icon={icon} size={48} />
-            <div className="flex-1"><IconPicker value={icon} disabled={!admin} onChange={(x) => save('project.icon', x)} /></div>
+            <div className="flex-1"><IconPicker value={icon} disabled={!admin || pending === 'icon'} onChange={(x) => save('icon', { icon: JSON.stringify({ glyph: x.glyph, colour: x.colour }) })} /></div>
           </div>
         </div>
       </Section>
@@ -124,9 +128,9 @@ function Settings() {
 
       <Section label="Build and budget">
         <div className="grid gap-5 rounded-xl border p-5 sm:grid-cols-2">
-          <NumberSetting label="Boards per build" value={num('build.quantity') ?? 10} disabled={!admin} saving={pending === 'build.quantity'} saved={saved === 'build.quantity'} onSave={(x) => save('build.quantity', x)} min={1} />
-          <NumberSetting label="Budget per revision (US$)" value={num('build.budget')} placeholder="No budget" disabled={!admin} saving={pending === 'build.budget'} saved={saved === 'build.budget'} onSave={(x) => save('build.budget', x)} min={0} />
-          <NumberSetting label="Target unit cost (US$)" value={num('build.unit_cost')} placeholder="None" disabled={!admin} saving={pending === 'build.unit_cost'} saved={saved === 'build.unit_cost'} onSave={(x) => save('build.unit_cost', x)} min={0} />
+          <NumberSetting label="Boards per build" value={build.quantity} disabled={!admin} saving={pending === 'quantity'} saved={saved === 'quantity'} onSave={(x) => save('quantity', { build: { quantity: Math.round(x) } })} min={1} />
+          <NumberSetting label="Budget per revision (US$)" value={build.budget ?? undefined} placeholder="No budget" disabled={!admin} saving={pending === 'budget'} saved={saved === 'budget'} onSave={(x) => save('budget', { build: { budget: x } })} min={0} />
+          <NumberSetting label="Target unit cost (US$)" value={build.unit_cost ?? undefined} placeholder="None" disabled={!admin} saving={pending === 'unit_cost'} saved={saved === 'unit_cost'} onSave={(x) => save('unit_cost', { build: { unit_cost: x } })} min={0} />
         </div>
       </Section>
 
@@ -135,7 +139,7 @@ function Settings() {
           {([['certify', 'Certify', 'Formal compliance testing at an accredited lab'], ['produce', 'Produce', 'Hand the design to volume manufacture'], ['sustain', 'Sustain', 'Keep it buildable: lifecycle, alternates, field issues']] as const).map(([k, name, what]) => (
             <li key={k} className="flex items-center gap-3 px-5 py-3">
               <span className="flex-1"><span className="block text-sm font-medium">{name}</span><span className="block text-xs text-muted-foreground">{what}</span></span>
-              <Switch checked={!!later[k]} disabled={!admin || pending === 'stages.later'} aria-label={name} onCheckedChange={(on) => save('stages.later', { ...later, [k]: on })} />
+              <Switch checked={later.has(k)} disabled={!admin || pending === 'later'} aria-label={name} onCheckedChange={(on) => save('later', { later: (['certify', 'produce', 'sustain'] as const).filter((x) => (x === k ? on : later.has(x))) })} />
             </li>
           ))}
         </ul>
@@ -150,6 +154,8 @@ function Settings() {
     </div>
   )
 }
+
+type Field = 'name' | 'description' | 'icon' | 'quantity' | 'budget' | 'unit_cost' | 'later'
 
 function Status({ saving, saved }: { saving?: boolean; saved?: boolean }) {
   if (saving) return <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="size-3 animate-spin" />Saving</span>

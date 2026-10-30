@@ -72,6 +72,11 @@ export interface Actions {
     /** read from the API's steps (lib/readers.ts readCreated): what was done, what failed, what waits */
     result: { repo: string; ok: boolean; done: string[]; failed: string[]; waits: Wait[] }
   }
+  /** admin: what the project is (Settings): written to the journey record, not the repository */
+  'project.update': {
+    args: Repo & { name?: string; description?: string; icon?: string; build?: { quantity?: number; unit_cost?: number | null; budget?: number | null }; later?: ('certify' | 'produce' | 'sustain')[] }
+    result: { repo: string; version: number }
+  }
   'journey.get': { args: Repo; result: Journey }
   'journey.criterion.open': { args: Repo & { gate?: string; criterion?: string; waiver?: string }; result: { repo: string; opened: string; at: string; version: number } }
   'gate.sign': { args: Repo & { gate: string; notes?: string; acknowledge?: string[] }; result: { ok: true; started?: string[]; advanced_to: string | null; released: boolean; summary: string; snapshot: unknown } }

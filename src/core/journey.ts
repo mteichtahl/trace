@@ -910,6 +910,86 @@ export function startJourney(db: DatabaseSync, o: StartOptions): JourneyRecord {
   return loadJourney(db) as JourneyRecord
 }
 
+/** What an admin may change about a project after it is made (Settings › About, Build and budget, Later stages). */
+export const AboutSchema = z.object({
+  name: z.string().trim().min(2).max(120).optional(),
+  description: z.string().trim().max(500).optional(),
+  /** the icon's JSON (glyph and colour), as projects.create keeps it */
+  icon: z.string().trim().max(200).optional(),
+  build: BuildSchema.partial().optional(),
+  later: z.array(z.enum(LATER_STAGES)).max(3).optional(),
+}).strict()
+export type AboutPatch = z.input<typeof AboutSchema>
+
+/**
+ * Change a project's name, description, icon, build plan or later stages. A later stage turned on is added after the
+ * last stage with its gates; one turned off is removed only while it has not started. Logged in the decisions.
+ */
+export function updateAbout(db: DatabaseSync, patch: AboutPatch, by: string): JourneyRecord {
+  const p = AboutSchema.parse(patch)
+  const r = need(db)
+  const j = r.journey
+  const t = now()
+  const changes: string[] = []
+  transaction(db, () => {
+    if (p.name !== undefined && p.name !== j.name) {
+      db.prepare("UPDATE journey SET name=? WHERE id='current'").run(p.name)
+      changes.push(`renamed the project to ${p.name}`)
+    }
+    if (p.description !== undefined && p.description !== (j.description ?? '')) {
+      db.prepare("UPDATE journey SET description=? WHERE id='current'").run(p.description || null)
+      changes.push('changed its description')
+    }
+    if (p.icon !== undefined && p.icon !== j.icon) {
+      db.prepare("UPDATE journey SET icon=? WHERE id='current'").run(p.icon || null)
+      changes.push('changed its icon')
+    }
+    if (p.build) {
+      const next = BuildSchema.parse({ ...j.build, ...p.build })
+      if (JSON.stringify(next) !== JSON.stringify(j.build)) {
+        db.prepare("UPDATE journey SET build=? WHERE id='current'").run(JSON.stringify(next))
+        changes.push('changed the build plan')
+      }
+    }
+    if (p.later) {
+      const want = LATER_STAGES.filter((s) => p.later!.includes(s))
+      const added = want.filter((s) => !j.later.includes(s))
+      const removed = j.later.filter((s) => !want.includes(s))
+      for (const id of removed) {
+        const s = r.stages.find((x) => x.id === id)
+        if (s?.started !== null && s?.started !== undefined) throw new JourneyError(`${STAGE_NAMES[id]} has already started, so it cannot be turned off.`)
+        const gates = r.gates.filter((g) => g.stage === id).map((g) => g.id)
+        for (const g of gates) db.prepare('DELETE FROM gate_criteria WHERE gate=?').run(g)
+        db.prepare('DELETE FROM gates WHERE stage=?').run(id)
+        db.prepare('DELETE FROM stages WHERE id=?').run(id)
+      }
+      let stageOrd = Math.max(-1, ...r.stages.map((s) => s.ord)) + 1
+      let gateOrd = Math.max(-1, ...r.gates.map((g) => g.ord)) + 1
+      for (const s of templateStages(j.template, added).filter((x) => added.includes(x.id as LaterStage))) {
+        db.prepare('INSERT OR REPLACE INTO stages (id, ord, revision, started, finished, updated) VALUES (?,?,?,NULL,NULL,?)').run(s.id, stageOrd++, j.revision, t)
+        for (const g of s.gates) {
+          db.prepare('INSERT OR REPLACE INTO gates (id, stage, ord, name, updated) VALUES (?,?,?,?,?)').run(g.id, s.id, gateOrd++, g.name, t)
+          g.criteria.forEach((c, k) => {
+            db.prepare("INSERT OR REPLACE INTO gate_criteria (id, gate, ord, text, owner, evidence_label, status, evidence, updated) VALUES (?,?,?,?,?,?,'not_met','[]',?)")
+              .run(c.id, g.id, k, c.text, c.owner, c.evidence, t)
+          })
+        }
+      }
+      if (added.length || removed.length) {
+        db.prepare("UPDATE journey SET later=? WHERE id='current'").run(JSON.stringify(want))
+        if (added.length) changes.push(`turned on ${added.map((s) => STAGE_NAMES[s]).join(' and ')}`)
+        if (removed.length) changes.push(`turned off ${removed.map((s) => STAGE_NAMES[s]).join(' and ')}`)
+      }
+    }
+    if (changes.length) {
+      db.prepare("UPDATE journey SET updated=?, by=? WHERE id='current'").run(t, by)
+      const summary = `${by} ${changes.join(', ')}.`
+      decide(db, { kind: 'project.updated', stage: null, ref: null, by, summary: summary.charAt(0).toUpperCase() + summary.slice(1), detail: p })
+    }
+  })
+  return loadJourney(db) as JourneyRecord
+}
+
 const need = (db: DatabaseSync): JourneyRecord => {
   const r = loadJourney(db)
   if (!r) throw new JourneyError('This project has no journey yet. An admin starts one by choosing a template.')

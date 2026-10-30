@@ -7,7 +7,7 @@
  * answers in the app's shapes) and the tests keep working.
  */
 import type { AgentState, ChatMessage, ChatThread, EvidenceRef, Gate, Handoff, HandoffState, InboxItem, Journey, Member, MeDoc, NextStep, ProjectJobs, Question, RunSummary, Stage, Waiver } from './types'
-import type { DecisionEntry, JourneyMore } from './types-s1'
+import type { DecisionEntry, JourneyMore, ProjectIcon } from './types-s1'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -55,6 +55,17 @@ function refTo(repo: string, ref: unknown, criteria?: Map<string, string>): stri
 
 const DECISION_KIND: Record<string, DecisionEntry['kind']> = { 'gate.signed': 'gate', 'gate.returned': 'gate', 'question.answered': 'question', 'waiver.added': 'waiver', 'skill.submitted': 'decision' }
 const DECISION_STATE: Record<string, DecisionEntry['state']> = { 'gate.signed': 'signed', 'gate.returned': 'returned', 'question.answered': 'answered', 'waiver.added': 'active' }
+
+/** The journey's icon: its JSON (glyph and colour), as projects.create keeps it. */
+function readIcon(v: unknown): { icon?: ProjectIcon } {
+  if (typeof v !== 'string') return {}
+  try {
+    const o = JSON.parse(v) as unknown
+    return isObj(o) && typeof o.colour === 'string' ? { icon: { colour: o.colour, ...(typeof o.glyph === 'string' ? { glyph: o.glyph } : {}) } as ProjectIcon } : {}
+  } catch {
+    return {}
+  }
+}
 
 /** journey.get: the API's journey view (src/core/journey.ts journeyView) as the app's Journey. */
 export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
@@ -135,6 +146,12 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
     handoffs: arr(raw.handoffs).map((h) => readHandoff(h, repo)),
     recent: decisions.slice(0, 5).map((d) => ({ id: String(d.id), who: str(d.by) ?? 'trace', text: String(d.summary), at: String(d.at) })),
     hasMemory: Boolean(raw.has_memory),
+    ...readIcon(raw.icon),
+    ...(isObj(raw.build) ? { build: {
+      quantity: Number(raw.build.quantity ?? 10), unit_cost: typeof raw.build.unit_cost === 'number' ? raw.build.unit_cost : null,
+      budget: typeof raw.build.budget === 'number' ? raw.build.budget : null, currency: str(raw.build.currency) ?? 'USD', fab: str(raw.build.fab) ?? 'JLCPCB',
+    } } : {}),
+    ...(Array.isArray(raw.later) ? { later: raw.later.map(String).filter((s): s is 'certify' | 'produce' | 'sustain' => ['certify', 'produce', 'sustain'].includes(s)) } : {}),
     decisions: decisions.map((d) => ({
       id: String(d.id), kind: DECISION_KIND[String(d.kind)] ?? 'decision', title: String(d.summary), by: str(d.by) ?? 'trace', at: String(d.at),
       ...(DECISION_STATE[String(d.kind)] ? { state: DECISION_STATE[String(d.kind)] } : {}),

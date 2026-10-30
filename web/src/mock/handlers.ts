@@ -40,6 +40,17 @@ function action(name: string, a: Record<string, unknown>): Response {
     case 'projects': return ok(PROJECTS)
     case 'inbox': return ok(inbox)
     case 'journey.get': return JOURNEYS[repo] ? ok({ ...JOURNEYS[repo], jobs: jobsOf(repo), handoffs: handoffsOf(repo) }) : json({ ok: false, error: 'no access' }, 403)
+    case 'project.update': {
+      // the mock journeys are already in the app's shape (lib/readers.ts passes them through), so patch that shape
+      const j = JOURNEYS[repo] as (typeof JOURNEYS)[string] & Record<string, unknown> | undefined
+      if (!j) return json({ ok: false, error: 'no access' }, 403)
+      if (typeof a.name === 'string') j.name = a.name
+      if (typeof a.description === 'string') j.description = a.description
+      if (typeof a.icon === 'string') j.icon = JSON.parse(a.icon) as unknown
+      if (a.build && typeof a.build === 'object') j.build = { quantity: 10, unit_cost: null, budget: null, currency: 'USD', fab: 'JLCPCB', ...(j.build as object | undefined), ...(a.build as object) }
+      if (Array.isArray(a.later)) j.later = a.later
+      return ok({ repo, version: 1 })
+    }
     case 'project.members': return ok(MEMBERS[repo] ?? MEMBERS['acme/soil-sensor'])
     case 'tools.waits': return ok({ repo, version: 1, waits: WAITS[repo] ?? [] })
     case 'tools.check_now': case 'job.check_now': return new Promise<Response>((r) => setTimeout(() => r(ok({ ok: true })), 900)) as unknown as Response
