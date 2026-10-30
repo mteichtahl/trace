@@ -1,6 +1,6 @@
 /**
  * The mechanical tools (docs/enclosure-build.md, "TypeScript"): a case for the board, built by the enclosure engine
- * (./engine.ts, build123d through a `cad` job), its fit check as the layout gate's evidence (criterion layout.fit), and
+ * (./engine.ts, build123d through a `cad` job, after a `cad-script` job for a custom case.py), its fit check as the layout gate's evidence (criterion layout.fit), and
  * the files and order sheet for JLCPCB's 3D printing and CNC service. Every call is a recorded run; each answer has
  * `run_id` and a one-line `summary`.
  *
@@ -301,7 +301,7 @@ async function build(r: string, s: CaseSettings, args: unknown, formats: readonl
         clashes: f.clashes, gaps: f.gaps, openings: f.openings, assumptions: f.assumptions,
         rules_failing: failingRules, rules_not_checked: unchecked, rules: res.rules,
         case: res.case, fasteners: res.fasteners ?? [], source: res.source, process: p,
-        files: written, where: c.where, engine_seconds: res.seconds, notes: res.notes ?? [],
+        files: written, where: c.where, stages: c.stages, engine_seconds: res.seconds, notes: res.notes ?? [],
         warnings: [...facts.warnings, ...unexplained.map((x) => `${x} differs from the recommendation without a reason in ${CASE_JSON} (set it with mech.settings)`)],
         inputs,
         next: passed
@@ -314,7 +314,7 @@ async function build(r: string, s: CaseSettings, args: unknown, formats: readonl
 
 export const buildTool = defineTool({
   name: 'mech.build',
-  description: `Build the case with the enclosure engine (build123d, a cad job: locally with TRACE_PYTHON, or on the tools function) from the board facts, ${CASE_JSON} and ${CASE_PY} (or the handed-in STEP), then check it: clashes (part envelopes or the board against case parts, mm³), gaps (board edge to wall, each part to the lid or floor, against its clearance), openings for edge connectors, and the process's design rules (wall, size, hole, lip gap; JLC3DP or JLCCNC). Writes ${OUT_DIR}/ (case.step, case-<part>.step/.stl/.3mf, fit.json, case.jsonld). Measures clashes, gap_violations, assumed_heights; status pass only when the fit passes and no rule fails. When it passes, record layout.fit with journey.check and this run id. Recorded; returns run_id.`,
+  description: `Build the case with the enclosure engine (build123d) from the board facts, ${CASE_JSON} and ${CASE_PY} (or the handed-in STEP), then check it. A ${CASE_PY} that differs from the template runs first as its own cad-script job (on the project's cad function, or locally; the cloud without one builds only the template or a handed-in STEP), then a cad job (the tools function, or locally) checks what it built; the answer's stages say where each ran. The check: clashes (part envelopes or the board against case parts, mm³), gaps (board edge to wall, each part to the lid or floor, against its clearance), openings for edge connectors, and the process's design rules (wall, size, hole, lip gap; JLC3DP or JLCCNC). Writes ${OUT_DIR}/ (case.step, case-<part>.step/.stl/.3mf, fit.json, case.jsonld). Measures clashes, gap_violations, assumed_heights; status pass only when the fit passes and no rule fails. When it passes, record layout.fit with journey.check and this run id. Recorded; returns run_id.`,
   input: z.object({ formats: Formats.describe('files to write (default step, stl and 3mf)') }),
   run: async (a) => {
     const r = await root()
