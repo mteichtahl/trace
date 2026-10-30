@@ -307,8 +307,9 @@ The cad function (`src/gpu/function.ts runCadScript`, `src/gpu/lambda.ts`, `src/
   locale, TMPDIR, the XDG folders and what Python needs; HOME, TMPDIR and XDG in the job's folder; its own process
   group, killed when the job ends). On the cad function this is tidiness, not the boundary: the boundary is the role.
 - **Flat layout.** A flat stack has no room for four more resources per project, so there is no cad function there:
-  `mech.build` says that a custom `case.py` builds only on a laptop or in CI, and builds the template or a handed-in
-  file in the cloud.
+  `mech.build` of a custom `case.py` is refused in the cloud with a message saying it builds on a laptop or in CI, and
+  that a handed-in STEP or the template builds anywhere. The tools function refuses a case script however it is asked
+  (a `urls` event, or a `cad-script` spec in S3), so a script never runs beside credentials.
 
 A laptop and CI run the script as a local child process (`child.py`): `tracectl check` already runs repository code
 there (firmware builds), and the person or the workflow chose to run it. In CI the script step runs only when the

@@ -9,7 +9,7 @@
  * path swapped for a link between the check and the open is caught, the descriptor closed and a file this call made
  * removed. The .git/ check ignores letter case (a case-insensitive file system has one .git whatever its spelling).
  */
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, unlinkSync, writeSync } from 'node:fs'
+import { closeSync, constants, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, unlinkSync, writeSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { ToolError } from '../../core/registry.js'
 
@@ -76,16 +76,19 @@ export function readRepoFile(root: string, p: string, what = p): Buffer {
   }
 }
 
-/** Whether the open descriptor is a regular file and the very file now at `path` (lstat: same device and inode). */
-export function openedIsAt(fd: number, path: string): boolean {
+/** Whether the open descriptor is a regular file that is the file now at `path` by its REAL path (every folder on the
+ * way resolved, so a folder swapped for a link after the check is seen), and that real path is under `realRoot`. */
+export function openedIsAt(fd: number, path: string, realRoot: string): boolean {
   const opened = fstatSync(fd)
+  let real: string
   let at: ReturnType<typeof lstatSync>
   try {
-    at = lstatSync(path)
+    real = realpathSync(path)
+    at = lstatSync(real)
   } catch {
     return false
   }
-  return opened.isFile() && at.isFile() && opened.dev === at.dev && opened.ino === at.ino
+  return under(realRoot, real) && opened.isFile() && at.isFile() && opened.dev === at.dev && opened.ino === at.ino
 }
 
 /** Write a repository file (its folders made as needed) after repoFile's checks, never through a symbolic link. */
@@ -95,11 +98,12 @@ export function writeRepoFile(root: string, p: string, data: string | Uint8Array
   // the folders just made are checked again: nothing on the path may lead out
   repoFile(root, p, what)
   const existed = existsSync(abs)
-  const fd = openSync(abs, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0), 0o644)
+  // opened without truncating: the file is emptied only once it is known to be the right one
+  const fd = openSync(abs, constants.O_WRONLY | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0), 0o644)
   try {
-    // what was opened is the file at that path now (same device and inode), and a regular file: a folder on the path
-    // replaced by a link between the check and the open would have opened something else
-    if (!openedIsAt(fd, abs)) {
+    // what was opened is the file at that path now, by its real path under the repository's (same device and inode),
+    // and a regular file: a folder on the path replaced by a link between the check and the open leads elsewhere
+    if (!openedIsAt(fd, abs, realpathSync(root))) {
       closeSync(fd)
       if (!existed) {
         try {
@@ -108,6 +112,7 @@ export function writeRepoFile(root: string, p: string, data: string | Uint8Array
       }
       throw new ToolError(`${what === p ? p : `${what} (${p})`} changed under the write (the path no longer leads to the file that was opened): nothing written`)
     }
+    ftruncateSync(fd, 0)
     const buf = typeof data === 'string' ? Buffer.from(data) : data
     let off = 0
     while (off < buf.length) off += writeSync(fd, buf, off, buf.length - off)

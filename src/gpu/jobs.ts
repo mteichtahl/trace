@@ -305,7 +305,7 @@ export async function runLocal(spec: GpuJob): Promise<JobResult> {
  * trace.gpu.duration; a Batch job gets the span's trace context (TRACEPARENT), so its runner's span joins the trace.
  */
 /** The message for a case script where nothing may run it: the agent image (TRACE_TOOLS_ELSEWHERE) without a cad function. */
-export const NO_CAD_FUNCTION = "a custom case script builds only with the project's cad function (nested layout) or on a laptop; the cloud builds the template or a handed-in STEP"
+export const NO_CAD_FUNCTION = "a custom case script (mechanical/case.py differs from the template) builds only with the project's cad function (nested layout), or on a laptop or in CI; this installation has none, so hand in a STEP, or put the case back to the template and its settings"
 
 export async function runJob(spec: GpuJob): Promise<JobResult> {
   const backend = backendFor(spec)

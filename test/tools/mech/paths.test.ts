@@ -61,25 +61,26 @@ describe('repository paths', () => {
     expect(repoFile(repo, 'mechanical/gitfile.py').rel).toBe('mechanical/gitfile.py')
   })
 
-  it('a write checks that what it opened is the file at that path (fstat against lstat)', async () => {
-    const { closeSync, openSync, constants } = await import('node:fs')
-    const { repo } = slRepro()
+  it('a write checks that what it opened is the file at that real path, under the repository', async () => {
+    const { closeSync, openSync, constants, realpathSync } = await import('node:fs')
+    const { repo, outside } = slRepro()
+    const realRoot = realpathSync(repo)
     const a = join(repo, 'mechanical', 'a.txt')
     const b = join(repo, 'mechanical', 'b.txt')
     writeFileSync(a, 'a')
     writeFileSync(b, 'b')
     const fd = openSync(a, constants.O_RDONLY)
     try {
-      expect(openedIsAt(fd, a)).toBe(true)
+      expect(openedIsAt(fd, a, realRoot)).toBe(true)
       // another file at the path, or a link in its place, or nothing: not the file that was opened
-      expect(openedIsAt(fd, b)).toBe(false)
+      expect(openedIsAt(fd, b, realRoot)).toBe(false)
       symlinkSync(b, join(repo, 'mechanical', 'link.txt'))
-      expect(openedIsAt(fd, join(repo, 'mechanical', 'link.txt'))).toBe(false)
-      expect(openedIsAt(fd, join(repo, 'mechanical', 'gone.txt'))).toBe(false)
+      expect(openedIsAt(fd, join(repo, 'mechanical', 'link.txt'), realRoot)).toBe(false)
+      expect(openedIsAt(fd, join(repo, 'mechanical', 'gone.txt'), realRoot)).toBe(false)
       // a folder is not a file
       const dfd = openSync(join(repo, 'mechanical'), constants.O_RDONLY)
       try {
-        expect(openedIsAt(dfd, join(repo, 'mechanical'))).toBe(false)
+        expect(openedIsAt(dfd, join(repo, 'mechanical'), realRoot)).toBe(false)
       } finally {
         closeSync(dfd)
       }
@@ -89,6 +90,23 @@ describe('repository paths', () => {
     // the ordinary write still goes through, and overwrites in place
     expect(writeRepoFile(repo, 'mechanical/a.txt', 'again')).toBe(a)
     expect(readFileSync(a, 'utf8')).toBe('again')
+
+    // a FOLDER on the path swapped for a link to outside, after the checks: the open lands outside the repository, by
+    // a real path that is not under it, so nothing is written and the outside file is not even truncated
+    const swapped = join(repo, 'swap')
+    mkdirSync(swapped)
+    writeFileSync(join(outside, 'target'), 'keep me')
+    const ofd = openSync(join(outside, 'target'), constants.O_WRONLY | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0))
+    try {
+      rmSync(swapped, { recursive: true })
+      symlinkSync(outside, swapped)
+      expect(openedIsAt(ofd, join(repo, 'swap', 'target'), realRoot)).toBe(false)
+    } finally {
+      closeSync(ofd)
+    }
+    expect(readFileSync(join(outside, 'target'), 'utf8')).toBe('keep me')
+    expect(() => writeRepoFile(repo, 'swap/target', 'x')).toThrow(/symbolic link|outside/)
+    expect(readFileSync(join(outside, 'target'), 'utf8')).toBe('keep me')
   })
 
   it('case.json: board and file are repository paths', () => {

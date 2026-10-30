@@ -206,7 +206,7 @@ async function runScript(input: CaseInput & { script: string }, dir: string): Pr
   const r = await runJob(job)
   const claimsPath = r.outputs['claims.json']
   const claims = claimsPath && existsSync(claimsPath) ? safeJson(readFileSync(claimsPath, 'utf8')) as { error?: unknown } | null : null
-  if (r.exitCode === 2) throw new ToolError(`the case script (mechanical/case.py) failed: ${String(claims?.error ?? tail(r.stderr) ?? 'no claims written')}`)
+  if (r.exitCode === 2) throw new ToolError(`the case script (mechanical/case.py) failed: ${typeof claims?.error === 'string' ? claims.error : (tail(r.stderr) || 'no claims written')}`)
   if (r.exitCode !== 0) {
     const m = missingModule(r.stderr, where)
     if (m) throw new ToolError(m)
