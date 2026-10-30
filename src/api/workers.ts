@@ -4,6 +4,8 @@
  * only its project (and has its GPU and CPU queues).
  *
  *   TRACE_WORKER_RUNTIMES   `owner/repo=<runtime id> …` (space-separated), written by the stack
+ *   TRACE_WORKER_BUILD      the workers' image content tag (src/infra/images.ts), written by the stack: part of the
+ *                           tool session's id, so a deploy that changes the workers' code moves tool calls to a new session
  *
  * A task runs in an AgentCore session of the project's runtime, and its job lives in that session (one microVM), so
  * the job id the API hands out names both: `<session>.<job id>`, where the session is
@@ -59,9 +61,13 @@ export function taskSession(t: Pick<TaskJob, 'repository' | 'request' | 'agent' 
  * The AgentCore session the API's tool calls on one project run in: one per project, so they reuse a warm microVM and
  * its clone. (A tool call is answered in the response: it has no job and no handle.)
  */
-export function toolSession(repository: string): string {
+export function toolSession(repository: string, build = ''): string {
   const slug = projectSlug(repository)
-  return `trace-api-${projectHash(slug)}-${createHash('sha256').update(`${slug}\ntool`).digest('hex').slice(0, 24)}`
+  // The build is in the id because a session keeps the runtime version it started on (AgentCore moves only new
+  // sessions to a new version), and the web app's held status calls keep this one session alive to its 8-hour limit:
+  // without it, a fix to the workers reached tool calls only hours after its deploy. Waits open in the old session end
+  // with it, and the new one clones the project afresh.
+  return `trace-api-${projectHash(slug)}-${createHash('sha256').update(build ? `${slug}\ntool\n${build}` : `${slug}\ntool`).digest('hex').slice(0, 24)}`
 }
 
 export const jobHandle = (session: string, jobId: string): string => `${session}.${jobId}`
@@ -96,6 +102,8 @@ export interface RemoteJobsOptions {
   region: string
   account: string
   partition?: string
+  /** the workers' image content tag (TRACE_WORKER_BUILD): part of the tool session's id (toolSession) */
+  build?: string
   client?: AgentCoreLike
 }
 
@@ -134,7 +142,7 @@ export function remoteJobs(o: RemoteJobsOptions): JobsApi {
     },
     async runTool(payload) {
       const slug = projectSlug(payload.repository)
-      const out = ToolOut.safeParse(await invoke({ ...payload }, toolSession(slug), opts(slug)))
+      const out = ToolOut.safeParse(await invoke({ ...payload }, toolSession(slug, o.build), opts(slug)))
       if (!out.success) throw new ActionError(`${payload.name}: the project's worker answered something unexpected`)
       if (!out.data.ok) throw new ActionError(out.data.error)
       return out.data.result
@@ -146,13 +154,13 @@ export function remoteJobs(o: RemoteJobsOptions): JobsApi {
     async watchTools(repository, w) {
       const slug = projectSlug(repository)
       const hold = w.afterVersion !== undefined && w.waitS ? { afterVersion: w.afterVersion, waitS: w.waitS } : {}
-      const out = StatusOut.parse(await invoke({ kind: 'status', ...hold }, toolSession(slug), { ...opts(slug), signal: w.signal }))
+      const out = StatusOut.parse(await invoke({ kind: 'status', ...hold }, toolSession(slug, o.build), { ...opts(slug), signal: w.signal }))
       // the tool session's own waits: those open outside any job (a job's waits are on its own handle)
       return { version: out.version ?? null, waits: out.waits.filter((x) => x.jobId === null || x.jobId === undefined) }
     },
     async checkToolWait(repository, waitId) {
       const slug = projectSlug(repository)
-      return CheckNowOut.parse(await invoke({ kind: 'check-now', waitId }, toolSession(slug), opts(slug))).ok
+      return CheckNowOut.parse(await invoke({ kind: 'check-now', waitId }, toolSession(slug, o.build), opts(slug))).ok
     },
     async pause(handle, by) {
       const h = parseHandle(handle)

@@ -85,6 +85,21 @@ describe('the API\'s remote jobs', () => {
     await expect(jobs.runTool!({ kind: 'tool', repository: 'other/repo', name: 'calc.via', args: {} })).rejects.toThrow(/no worker runtime/)
   })
 
+  it('moves tool calls to a new session when the workers\' build changes: a running session keeps its old code', async () => {
+    const f = fakeAgentCore()
+    const on = (build: string) => remoteJobs({ runtimes: parseWorkerRuntimes(RUNTIMES), region: 'us-east-1', account: '123456789012', client: f.client, build })
+    await on('v0.1.0-aaaaaaaaaaaaaaaa').runTool!({ kind: 'tool', repository: 'acme/board', name: 'calc.via', args: {} })
+    await on('v0.1.0-aaaaaaaaaaaaaaaa').watchTools!('acme/board', {})
+    await on('v0.1.0-bbbbbbbbbbbbbbbb').runTool!({ kind: 'tool', repository: 'acme/board', name: 'calc.via', args: {} })
+    expect(f.calls.map((c) => c.session)).toEqual([
+      toolSession('acme/board', 'v0.1.0-aaaaaaaaaaaaaaaa'), toolSession('acme/board', 'v0.1.0-aaaaaaaaaaaaaaaa'), toolSession('acme/board', 'v0.1.0-bbbbbbbbbbbbbbbb'),
+    ])
+    expect(f.calls[2]!.session).not.toBe(f.calls[0]!.session)
+    expect(toolSession('acme/board', 'v0.1.0-bbbbbbbbbbbbbbbb')).toMatch(new RegExp(`^trace-api-${projectHash('acme/board')}-[0-9a-f]{24}$`))
+    // without a build (an installation from before it was written): the same session as before
+    expect(toolSession('acme/board', '')).toBe(toolSession('acme/board'))
+  })
+
   it('cancels a job on its own worker, in its own session, and says what was kept', async () => {
     const f = fakeAgentCore()
     const jobs = remoteJobs({ runtimes: parseWorkerRuntimes(RUNTIMES), region: 'us-east-1', account: '123456789012', client: f.client })
