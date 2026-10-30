@@ -113,12 +113,12 @@ export const GpuJobSchema = z.object({
 export const ISOLATED_KINDS: ReadonlySet<JobKind> = new Set<JobKind>(['cad', 'cad-script'])
 
 /**
- * What a `cad-script` job hands back (python/tracebridge/mech/child.py): one STEP per case part (`part-<n>.step`, at
- * most 16 parts; the child numbers them from 0, so both numberings are listed and the ones not written are simply
- * absent) and `claims.json` (parts, joints, fasteners, notes, or {"error"}). The `cad` job that follows reads them
- * strictly (`--built`); they are claims, never a pass.
+ * What a `cad-script` job hands back (python/tracebridge/mech/child.py): one STEP per case part (`part-1.step` …
+ * `part-16.step`, numbered from 1, at most 16; the ones not written are simply absent) and `claims.json` (parts,
+ * joints, fasteners, notes, or {"error"}). The `cad` job that follows reads them strictly (`--built`); they are
+ * claims, never a pass.
  */
-export const CAD_SCRIPT_OUTPUTS: readonly string[] = [...Array.from({ length: 17 }, (_, i) => `part-${i}.step`), 'claims.json']
+export const CAD_SCRIPT_OUTPUTS: readonly string[] = [...Array.from({ length: 16 }, (_, i) => `part-${i + 1}.step`), 'claims.json']
 export type GpuJob = z.input<typeof GpuJobSchema>
 
 export interface JobResult {

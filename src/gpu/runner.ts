@@ -10,6 +10,10 @@
  * process's credentials or tokens (the runner keeps them, in its own process, for the S3 uploads), HOME and TMPDIR in
  * the job's folder, and in a process group of its own that is killed when the program ends, so nothing it started
  * survives into the next job of a warm function.
+ *
+ * On the cad function (a `cad-script` job: ./lambda.ts, docs/enclosure-build.md "Trust") the same runner moves the
+ * files through presigned URLs instead (RunnerDeps.store, a UrlStore: ./urls.ts): that function has no S3 access, and
+ * the runner's process holds nothing but this job's own URLs.
  */
 import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -19,9 +23,13 @@ import { S3Backend, type S3Api } from '../core/central.js'
 import { ATTR, SpanKind, continueFromEnv, envContext, fail, flush, setAttrs, span, startSdkIfConfigured } from '../core/telemetry.js'
 import { isolatedEnv, spawnJob, substitute } from './jobs.js'
 import { decodeSpec, jobKeys, type ExitRecord, type RemoteSpec } from './protocol.js'
+import type { JobStore } from './urls.js'
 
 export interface RunnerDeps {
   s3?: S3Api
+  /** the job's files through this store instead of S3 (the cad function: a UrlStore of presigned URLs, ./urls.ts);
+   * the caller then reads the spec itself (UrlStore.readSpec) and hands it to main as `given` */
+  store?: JobStore
   env?: NodeJS.ProcessEnv
   /** where the job's folder is made (default: the OS temp dir) */
   workRoot?: string
@@ -36,7 +44,7 @@ export interface RunnerDeps {
 export const SHARED_CACHE_BYTES = 3 * 1024 ** 3
 
 /** A shared input from the cache folder, else from S3 into it (the folder then trimmed to SHARED_CACHE_BYTES). */
-async function sharedInput(store: S3Backend, key: string, cache: string | undefined): Promise<Uint8Array | null> {
+async function sharedInput(store: JobStore, key: string, cache: string | undefined): Promise<Uint8Array | null> {
   const local = cache ? join(cache, key.replaceAll('/', '_')) : null
   if (local && existsSync(local)) {
     const now = new Date()
@@ -76,8 +84,9 @@ export async function readSpec(env: NodeJS.ProcessEnv, s3?: S3Api): Promise<Remo
 /** Run one job. Returns the program's exit code (127 when it could not be started). */
 export async function main(deps: RunnerDeps = {}, given?: RemoteSpec): Promise<number> {
   const env = deps.env ?? process.env
+  if (!given && deps.store) throw new Error('a runner on a URL store needs the spec given (read it with UrlStore.readSpec)')
   const spec = given ?? await readSpec(env, deps.s3)
-  const store = new S3Backend(spec.bucket, spec.prefix, deps.s3)
+  const store: JobStore = deps.store ?? new S3Backend(spec.bucket, spec.prefix, deps.s3)
   const keys = jobKeys(spec.id)
   const dir = mkdtempSync(join(deps.workRoot ?? tmpdir(), `${spec.kind}-`))
   const echo = deps.echo ?? true
@@ -136,10 +145,10 @@ export async function main(deps: RunnerDeps = {}, given?: RemoteSpec): Promise<n
  * main() as a span (`trace.gpu.run <kind>`), continuing the submitter's trace from TRACEPARENT/BAGGAGE (set by
  * ./batch.ts). With no SDK registered it is just main().
  */
-export async function observedMain(deps: RunnerDeps = {}): Promise<number> {
+export async function observedMain(deps: RunnerDeps = {}, given?: RemoteSpec): Promise<number> {
   const env = deps.env ?? process.env
   const parent = envContext(env)
-  const spec = await readSpec(env, deps.s3)
+  const spec = given ?? await readSpec(env, deps.s3)
   const kind = spec.kind
   return span(`trace.gpu.run ${kind}`, { [ATTR.gpuKind]: kind, [ATTR.gpuBackend]: env.TRACE_JOB_BACKEND === 'function' ? 'function' : 'batch' }, async (s) => {
     const code = await main(deps, spec)
