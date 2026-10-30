@@ -5,11 +5,16 @@ The container the repositories' worker items run in, instead of claude-code-acti
 before; its `dispatch` job (task `worker-dispatch`) sends each item here with InvokeAgentRuntime and comments
 "Dispatched to the trace agent on AgentCore (job …)" on it.
 
-One image, two runtimes, selected by `TRACE_AGENT_MODE`:
+One image, four kinds of runtime, selected by `TRACE_AGENT_MODE` (`src/agents/runtime/main.ts`):
 
-- `worker` (default): IAM-authenticated, invoked only by the workflows. `src/agents/runtime/server.ts`.
+- `worker` (default): a project's worker, IAM-authenticated, invoked by that repository's workflows and by the API;
+  `TRACE_PROJECT` names the one project it serves. `src/agents/runtime/server.ts`.
 - `api`: Cognito-JWT-authenticated, for people. `src/api/server.ts` (`start()`), which reuses the job machinery
   in-process (`startJob`, `jobStatus` and the payload schemas from `src/agents/runtime/jobs.ts`).
+- `external`: the same API for connected systems (client-credentials tokens, an allow-list of actions, a per-system
+  rate limit). `src/api/server.ts` (`startExternal()`).
+- `mcp`: the MCP endpoint for connected systems (streamable HTTP on `0.0.0.0:8000/mcp`), which forwards every tool
+  call to the external runtime. `src/mcp-remote/server.ts`. Both are in [docs/external-access.md](../docs/external-access.md).
 
 ## Contract (worker mode, 0.0.0.0:8080)
 
@@ -20,20 +25,35 @@ One image, two runtimes, selected by `TRACE_AGENT_MODE`:
   - `{ "kind": "sweep", "repositories": ["owner/repo", …] }`: the hourly backstop. Runs worker-pick for each
     repository whose `worker.runner` is agentcore (same `<!-- trace-claim -->` and attempt markers, so nothing is
     claimed twice), then starts one work-item job per claimed item.
-  - `{ "kind": "task", "repository", "request", "requestedBy", "branch"?, "issue"? }`: a person's request, done on
-    `claude/task-<slug>` off the default branch and pushed (the PR opens itself).
-  - `{ "kind": "status", "jobId"? }` returns `{ jobs: [...], busy }`.
+  - `{ "kind": "task", "repository", "request", "requestedBy", "requestedBySub"?, "branch"?, "issue"?, "agent"?,
+    "resume"? }`: a person's request, done on `claude/task-<slug>` off the default branch and pushed (the PR opens
+    itself). `agent` names the specialist; without it the job is routed. `resume` carries on a paused task on its
+    branch, continuing its conversation when its transcript was kept.
+  - `{ "kind": "tool", "repository", "name", "args" }`: one tool call the API forwards, with no model and no job. The
+    worker runs it on its clone of the default branch, refuses hardware tools and paths outside the clone, and answers
+    with the tool's result.
+  - `{ "kind": "status", "jobId"?, "afterVersion"?, "waitS"? }` returns `{ jobs: [...], busy, version, waits }`. With
+    `afterVersion` and `waitS` (at most 240 s) the answer is held until a job in scope changes after that version.
+  - `{ "kind": "check-now", "waitId" }` wakes one of this runtime's timer waits, as a person's Check now does.
+  - `{ "kind": "pause", "jobId", "by" }` stops a running task before Claude's next tool call, commits and pushes its
+    work on its branch and keeps its transcript. `{ "kind": "cancel", "jobId", "reason"? }` aborts a running job, the
+    worker it delegated to and the AWS Batch jobs its tools started.
 
   Work starts in the background, and the answer comes back at once as `{ "accepted": true, "jobId" }`. A second
   invocation for an item that is already running gets `{ "accepted": false, "jobId": <running job>, "reason" }`.
+- Loopback only, for the trace MCP server inside a job (with that job's token): `/delegate`, `/delegate/status`,
+  `/delegate/wait` and `/delegate/cancel` (a specialist's `agent.delegate`), `/handoff` (`journey.handoff`), and
+  `/waits/report` and `/waits/wakes` (the wait relay). A request from anywhere else is refused with a 403.
 - SIGTERM aborts Claude in every running job, posts their failure comments and exits.
 
 Per item, the job reads the GitHub token from Secrets Manager. The token reaches git only as an `http.extraHeader`
 passed through `GIT_CONFIG_*` environment variables, never in argv, a URL or a config file, and it is redacted from
 the logs. The job then clones the default branch (its `.trace/project.db` supplies the settings), checks out the
-item's branch, and sets the git identity and the `trace-db` merge driver. Next it runs Claude through the Agent SDK
-with the harness's `promptFor` prompt, the trace MCP server and `bypassPermissions` (the container is the sandbox),
-using `worker.max_turns` and a timeout below the 8-hour `maxLifetime`. If Claude left no comment, the job posts a
+item's branch, and sets the git identity and the `trace-db` merge driver. Next it routes the job to a specialist
+(`src/agents/router.ts`) and runs Claude through the Agent SDK with that specialist's prompt (`src/agents/specialist.ts`),
+its tools only, the trace MCP server and `bypassPermissions` (the container is the sandbox), using
+`agents.<kind>.max_turns` and a timeout below the 8-hour `maxLifetime`. A worker the specialist delegates to gets the
+worker's prompt and every tool (README "Specialist agents"). If Claude left no comment, the job posts a
 final one (`<!-- trace-agent-done: <jobId> -->`), including any failure reason. Clones are deleted afterwards, except
 under `/mnt/workspace`, where they are kept and fetched next time.
 
@@ -47,7 +67,7 @@ under `/mnt/workspace`, where they are kept and fetched next time.
 | `ANTHROPIC_MODEL` | the model (else `worker.model`, else the SDK's default) |
 | `TRACE_HOME` | the central trace database (directory or `s3://bucket/prefix`) |
 | `TRACE_WORKSPACE` | optional; clones go here (default `/mnt/workspace/trace` when mounted, else `/tmp/trace-work`) |
-| `TRACE_AGENT_MODE` | `worker` (default) or `api` |
+| `TRACE_AGENT_MODE` | `worker` (default), `api`, `external` or `mcp` |
 | `TRACE_JOB_TIMEOUT_S` | optional; Claude's time limit per job (default 27000 s, capped at 28200 s) |
 | `AGENT_OBSERVABILITY_ENABLED` | `true` (set by the stack): ADOT exports for AgentCore observability. AgentCore Runtime itself supplies `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_EXPORTER_OTLP_LOGS_HEADERS` and the rest of ADOT's defaults; the agent logs one `telemetry:` line at start saying whether they are there |
 | `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `false` (set by the stack): no prompts or completions on spans |
