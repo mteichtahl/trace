@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import subprocess
 import sys
 import time
@@ -249,12 +250,12 @@ def test_exports_exist_and_are_named(built):
     from build123d import import_step
     asm = import_step(out / "case.step")
     assert sorted(c.label for c in asm.children) == ["base", "lid"]
-    assert json.loads((out / "fit.json").read_text()) == r["fit"]
+    assert json.loads((out / "fit.json").read_text(encoding="utf-8")) == r["fit"]
 
 
 def test_records_have_expected_nodes(built):
     r, out = built
-    rec = json.loads((out / "case.jsonld").read_text())
+    rec = json.loads((out / "case.jsonld").read_text(encoding="utf-8"))
     assert rec == r["records"]
     by_id = {n["@id"]: n for n in rec["@graph"]}
     types = {n["@type"] for n in rec["@graph"]}
@@ -281,7 +282,7 @@ def test_bad_input():
 
 
 def test_template_matches_contract():
-    text = mech.TEMPLATE.read_text()
+    text = mech.TEMPLATE.read_text(encoding="utf-8")
     assert text.startswith("from tracebridge.mech import shell\n\ndef build(board, settings):\n")
     assert "case = shell.two_part(board, settings)" in text and "return case" in text
 
@@ -290,15 +291,16 @@ def _cli(tmp_path, *extra, script=None, settings_obj=None):
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "facts.json").write_text(json.dumps(board_facts()))
     (tmp_path / "case.json").write_text(json.dumps(settings_obj if settings_obj is not None else settings()))
-    (tmp_path / "caps.json").write_text(json.dumps(CAPS))
+    (tmp_path / "caps.json").write_text(json.dumps(CAPS), encoding="utf-8")
     args = [sys.executable, "-m", "tracebridge.mech", "run", "--facts", str(tmp_path / "facts.json"),
             "--settings", str(tmp_path / "case.json"), "--capabilities", str(tmp_path / "caps.json"),
             "--out", str(tmp_path / "out"), *extra]
     if script:
         args += ["--script", str(script)]
-    env = {"PYTHONPATH": str(PYTHON_DIR), "PATH": "/usr/bin:/bin"}
+    # the interpreter's own environment (a hosted CI Python needs its LD_LIBRARY_PATH), this checkout first on the path
+    env = {**os.environ, "PYTHONPATH": str(PYTHON_DIR)}
     p = subprocess.run(args, capture_output=True, text=True, env=env, timeout=120)
-    return p, json.loads((tmp_path / "out" / "result.json").read_text())
+    return p, json.loads((tmp_path / "out" / "result.json").read_text(encoding="utf-8"))
 
 
 def test_cli_exit_codes(tmp_path):
@@ -313,7 +315,7 @@ def test_cli_exit_codes(tmp_path):
     assert "build() raised" in res["error"] and "ValueError: lid too thin to cut" in res["error"]
 
     nobuild = tmp_path / "nobuild.py"
-    nobuild.write_text("X = 1\n")
+    nobuild.write_text("X = 1\n", encoding="utf-8")
     p, res = _cli(tmp_path / "nobuild", script=nobuild)
     assert p.returncode == 2 and "no build(board, settings)" in res["error"]
 
@@ -615,20 +617,21 @@ def test_build_only_then_run_built(tmp_path):
     """The cloud's two stages: build-only (the cad function, user code) writes part-<n>.step and claims.json; run
     --built (the tools function, no script) reads them and checks. The result matches a one-stage run."""
     script = tmp_path / "case.py"
-    script.write_text(mech.TEMPLATE.read_text().replace("return case", "case.notes.append('built by the script'); return case"))
+    script.write_text(mech.TEMPLATE.read_text(encoding="utf-8").replace("return case", "case.notes.append('built by the script'); return case"))
     (tmp_path / "facts.json").write_text(json.dumps(board_facts()))
     (tmp_path / "case.json").write_text(json.dumps(settings()))
-    (tmp_path / "caps.json").write_text(json.dumps(CAPS))
+    (tmp_path / "caps.json").write_text(json.dumps(CAPS), encoding="utf-8")
     built = tmp_path / "built"
     built.mkdir()
-    env = {"PYTHONPATH": str(PYTHON_DIR), "PATH": "/usr/bin:/bin"}
+    # the interpreter's own environment (a hosted CI Python needs its LD_LIBRARY_PATH), this checkout first on the path
+    env = {**os.environ, "PYTHONPATH": str(PYTHON_DIR)}
     p = subprocess.run([sys.executable, "-m", "tracebridge.mech", "build-only", "--facts", str(tmp_path / "facts.json"),
                         "--settings", str(tmp_path / "case.json"), "--capabilities", str(tmp_path / "caps.json"),
                         "--script", str(script), "--out", str(built)],
                        capture_output=True, text=True, env=env, timeout=120)
     assert p.returncode == 0, p.stderr
     assert sorted(f.name for f in built.iterdir()) == ["claims.json", "part-1.step", "part-2.step"]
-    claims = json.loads((built / "claims.json").read_text())
+    claims = json.loads((built / "claims.json").read_text(encoding="utf-8"))
     assert [x["name"] for x in claims["parts"]] == ["base", "lid"]
     p, r = _cli(tmp_path / "two", "--built", str(built), "--formats", "step")
     assert p.returncode == 0, p.stderr
