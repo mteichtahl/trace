@@ -617,7 +617,7 @@ def test_build_only_then_run_built(tmp_path):
     """The cloud's two stages: build-only (the cad function, user code) writes part-<n>.step and claims.json; run
     --built (the tools function, no script) reads them and checks. The result matches a one-stage run."""
     script = tmp_path / "case.py"
-    script.write_text(mech.TEMPLATE.read_text(encoding="utf-8").replace("return case", "case.notes.append('built by the script'); return case"))
+    script.write_text(mech.TEMPLATE.read_text(encoding="utf-8").replace("return case", "case.notes.append('built by the script'); return case"), encoding="utf-8")
     (tmp_path / "facts.json").write_text(json.dumps(board_facts()))
     (tmp_path / "case.json").write_text(json.dumps(settings()))
     (tmp_path / "caps.json").write_text(json.dumps(CAPS), encoding="utf-8")
