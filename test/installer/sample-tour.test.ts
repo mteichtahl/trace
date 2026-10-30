@@ -29,8 +29,10 @@ const JOB_REACH: Record<JobKind, { tools: string[]; says: RegExp }> = {
   kicad: { tools: ['kicad.erc', 'kicad.drc', 'kicad.export'], says: /erc|drc|kicad|export/i },
   ffmpeg: { tools: ['render.turntable'], says: /turntable/i },
   cad: { tools: ['mech.build', 'mech.hand_in'], says: /enclosure|build123d|cad job/i },
+  // the case script's own kind: the project's cad function (docs/enclosure-build.md "Trust"), never the queue
+  'cad-script': { tools: ['mech.build', 'mech.hand_in'], says: /cad-script|case script/i },
 }
-const TOOLS_FUNCTION_ONLY: ReadonlySet<JobKind> = new Set<JobKind>(['kicad', 'ffmpeg', 'cad'])
+const TOOLS_FUNCTION_ONLY: ReadonlySet<JobKind> = new Set<JobKind>(['kicad', 'ffmpeg', 'cad', 'cad-script'])
 
 describe('the sample project\'s tour', () => {
   const tasks = tour()

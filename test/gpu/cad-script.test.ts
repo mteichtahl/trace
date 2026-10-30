@@ -180,7 +180,7 @@ describe('the function handler', () => {
     let seen: Record<string, unknown> = {}
     const reply = await handle({ urls, traceparent: '00-abc-def-01' }, {
       env: cadEnv, fetch: f.fetch, workRoot: mkdtempSync(join(tmpdir(), 'h-')),
-      run: (deps, given) => { seen = { env: deps.env, store: deps.store?.url, given: given?.id }; return observedMain({ ...deps, echo: false }, given) },
+      run: (deps = {}, given) => { seen = { env: deps.env, store: deps.store?.url, given: given?.id }; return observedMain({ ...deps, echo: false }, given) },
     })
     expect(reply).toEqual({ exitCode: 0 })
     expect(seen.store).toBe(`urls:${id}`)
@@ -206,7 +206,7 @@ describe('the function handler', () => {
     await expect(handle({}, { env: cadEnv, run })).rejects.toThrow(/names no job spec/)
     // the tools function (no role flag) still takes a spec event, as before
     let got: string | undefined
-    await handle({ spec: 's3://bucket/jobs/acme/board/x/spec' }, { env: { TRACE_PROJECT: 'acme/board' }, run: async (deps) => { got = deps.env?.TRACE_GPU_JOB_URI; return 0 } })
+    await handle({ spec: 's3://bucket/jobs/acme/board/x/spec' }, { env: { TRACE_PROJECT: 'acme/board' }, run: async (deps = {}) => { got = deps.env?.TRACE_GPU_JOB_URI; return 0 } })
     expect(got).toBe('s3://bucket/jobs/acme/board/x/spec')
   })
 })
@@ -266,7 +266,7 @@ describe('a case script on the cad function', () => {
         const event = JSON.parse(new TextDecoder().decode(i.Payload)) as Record<string, unknown>
         calls.push({ FunctionName: i.FunctionName, event })
         // the cad function: no S3 client, the role flag set, a fetch of its own
-        const reply = await handle(event, { env: { TRACE_CAD_FUNCTION_ROLE: '1', TRACE_PROJECT: 'acme/board' }, fetch: bridge.fetch, run: (deps, given) => observedMain({ ...deps, echo: false }, given) })
+        const reply = await handle(event, { env: { TRACE_CAD_FUNCTION_ROLE: '1', TRACE_PROJECT: 'acme/board' }, fetch: bridge.fetch, run: (deps = {}, given) => observedMain({ ...deps, echo: false }, given) })
         return { StatusCode: 200, Payload: new TextEncoder().encode(JSON.stringify(reply)), $metadata: { requestId: 'req-cad' } }
       },
     }
