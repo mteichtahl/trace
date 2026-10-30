@@ -161,3 +161,52 @@ describe('the URL store', () => {
     await expect(main({ store, echo: false })).rejects.toThrow(/needs the spec given/)
   })
 })
+
+// ------------------------------------------------------------------ the handler: two events, two functions
+
+import { handle } from '../../src/gpu/lambda.js'
+import { observedMain } from '../../src/gpu/runner.js'
+
+describe('the function handler', () => {
+  const cadEnv = { TRACE_CAD_FUNCTION_ROLE: '1', TRACE_PROJECT: 'acme/board' }
+
+  it('runs a urls event on a URL store, with the event\'s traceparent and no S3 address in the environment', async () => {
+    const f = new FakeUrls()
+    const id = 'cad-script-4'
+    const k = jobKeys(id)
+    const spec = scriptSpec(id, ['sh', '-c', 'echo "$TRACEPARENT" > "$0"; echo "${TRACE_GPU_JOB_URI:-unset}"', '{out:claims.json}'], [], ['claims.json'])
+    f.objects.set(f.key(id, k.spec), new TextEncoder().encode(encodeSpec(spec)))
+    const urls = f.urlsFor(id, [], ['claims.json'])
+    let seen: Record<string, unknown> = {}
+    const reply = await handle({ urls, traceparent: '00-abc-def-01' }, {
+      env: cadEnv, fetch: f.fetch, workRoot: mkdtempSync(join(tmpdir(), 'h-')),
+      run: (deps, given) => { seen = { env: deps.env, store: deps.store?.url, given: given?.id }; return observedMain({ ...deps, echo: false }, given) },
+    })
+    expect(reply).toEqual({ exitCode: 0 })
+    expect(seen.store).toBe(`urls:${id}`)
+    expect(seen.given).toBe(id)
+    expect((seen.env as NodeJS.ProcessEnv).TRACEPARENT).toBe('00-abc-def-01')
+    expect((seen.env as NodeJS.ProcessEnv).TRACE_GPU_JOB_URI).toBeUndefined()
+    // the isolated program saw no trace context either: isolatedEnv keeps TRACEPARENT out
+    expect(new TextDecoder().decode(f.objects.get(f.key(id, k.output('claims.json'))))).toBe('\n')
+    expect(new TextDecoder().decode(f.objects.get(f.key(id, k.stdout)))).toBe('unset\n')
+  })
+
+  it('refuses invalid urls, a urls event whose spec is not a case script, and on the cad function any spec event', async () => {
+    const f = new FakeUrls()
+    const id = 'cad-5'
+    const k = jobKeys(id)
+    f.objects.set(f.key(id, k.spec), new TextEncoder().encode(encodeSpec({ ...scriptSpec(id, ['true'], [], []), kind: 'cad' })))
+    const urls = f.urlsFor(id, [], [])
+    const run = () => { throw new Error('must not run') }
+    await expect(handle({ urls }, { env: cadEnv, fetch: f.fetch, run })).rejects.toThrow(/kind cad-script\), not cad/)
+    await expect(handle({ urls: { ...urls, exit: 'ftp://x' } }, { env: cadEnv, fetch: f.fetch, run })).rejects.toThrow(/urls are invalid: exit/)
+    await expect(handle({ urls: 'nope' }, { env: cadEnv, fetch: f.fetch, run })).rejects.toThrow(/urls are invalid/)
+    await expect(handle({ spec: 's3://bucket/jobs/acme/board/x/spec' }, { env: cadEnv, run })).rejects.toThrow(/cad function runs case scripts through URLs only/)
+    await expect(handle({}, { env: cadEnv, run })).rejects.toThrow(/names no job spec/)
+    // the tools function (no role flag) still takes a spec event, as before
+    let got: string | undefined
+    await handle({ spec: 's3://bucket/jobs/acme/board/x/spec' }, { env: { TRACE_PROJECT: 'acme/board' }, run: async (deps) => { got = deps.env?.TRACE_GPU_JOB_URI; return 0 } })
+    expect(got).toBe('s3://bucket/jobs/acme/board/x/spec')
+  })
+})
