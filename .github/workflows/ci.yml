@@ -68,6 +68,13 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      # The deploy installs the web app with npm ci (src/infra/web.ts): a lock file out of step with web/package.json
+      # (a Dependabot bump, say) fails here, on the pull request, instead of in update-installation after the merge
+      - name: The web app installs, tests and builds
+        run: |
+          npm ci --prefix web --no-audit --no-fund
+          npm --prefix web test
+          npm --prefix web run build
       # Every runtime mode starts from the built entry, as AgentCore starts the image: the API and MCP servers are
       # loaded with a dynamic import() that only the built layout resolves, which no unit test exercises
       - name: The runtimes start
