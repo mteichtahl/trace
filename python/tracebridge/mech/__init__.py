@@ -175,7 +175,7 @@ def run(facts: dict[str, Any], settings: dict[str, Any], capabilities: dict[str,
     files = export(case, out, formats)  # may add a note (3MF skipped)
     notes += case.notes
     (out / "fit.json").write_text(json.dumps(fit, indent=2) + "\n", encoding="utf-8")
-    rec = records(case, facts, fit)
+    rec = records(case, facts, fit, settings)
     (out / "case.jsonld").write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
     files += ["fit.json", "case.jsonld"]
     return {

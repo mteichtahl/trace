@@ -256,13 +256,19 @@ def test_records_have_expected_nodes(built):
     r, out = built
     rec = json.loads((out / "case.jsonld").read_text())
     assert rec == r["records"]
-    assert rec["@context"]["trace"] == "https://trace-eda.com/ns/trace#"
     by_id = {n["@id"]: n for n in rec["@graph"]}
     types = {n["@type"] for n in rec["@graph"]}
-    assert {"Enclosure", "CasePart", "Board", "FastenedJoint", "Fastener", "PressFitJoint", "FitCheck"} <= types
+    assert {"Enclosure", "EnclosurePart", "Material", "BoardOutline", "Joint", "Fastener", "MountingPoint", "Opening", "FitCheck"} <= types
+    assert rec["@context"]["tm"] == "https://trace-eda.com/ns/trace/mech#"
+    by_id = {n["@id"]: n for n in rec["@graph"]}
+    assert by_id["case:base"]["partKind"] == "base" and by_id["case:base"]["wallThickness"] == 2.0
+    assert by_id["joint:H1"] == {"@id": "joint:H1", "@type": "Joint", "jointKind": "fastened", "joins": [{"@id": "board:hardware/test.kicad_pcb"}, {"@id": "case:base"}], "usesFastener": {"@id": "fastener:H1"}}
+    assert by_id["joint:lid-base"]["jointKind"] == "press-fit"
+    assert by_id["opening:J1"]["face"] == "south" and by_id["mount:H1"]["diameter"] == 3.2
+    assert by_id["material:case"] == {"@id": "material:case", "@type": "Material", "name": "PA12-HP", "process": "MJF", "service": "jlc3dp"}
     assert {"case:base", "case:lid", "joint:H1", "fastener:H1", "joint:lid-base", "check:fit"} <= set(by_id)
     assert by_id["fastener:H1"]["size"] == "M3"
-    assert by_id["joint:lid-base"]["clearance_mm"] == 0.2
+    assert by_id["joint:lid-base"]["clearance"] == 0.2
     assert by_id["check:fit"]["status"] == "pass" and by_id["check:fit"]["clashCount"] == 0
     assert by_id["check:fit"]["boardSha256"] == "0" * 64
 

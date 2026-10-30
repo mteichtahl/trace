@@ -141,6 +141,20 @@ describe('the API server', () => {
     expect(JSON.stringify(logs)).not.toContain('Bearer')
   })
 
+  it('503s, not 401s, when the caller cannot be identified for want of the signing keys: the token may be good', async () => {
+    // the web app signs out on a 401: a failure on this side (Cognito's JWKS not answering) must not end the session
+    const keyless = await listen({ verifier: new Verifier({ issuer: ISSUER, clientId: CLIENT_ID, fetchJwks: async () => { throw new Error('connect ETIMEDOUT') } }), deps, log: (l) => logs.push(l) }, 0, '127.0.0.1')
+    try {
+      const at = `http://127.0.0.1:${(keyless.address() as AddressInfo).port}/invocations`
+      const r = await fetch(at, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${user}` }, body: JSON.stringify({ action: 'whoami' }) })
+      expect(r.status).toBe(503)
+      expect(((await r.json()) as { error: string }).error).toMatch(/cannot be checked just now/)
+      // a bad token is still a 401 there
+      const bad = await fetch(at, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer garbage' }, body: JSON.stringify({ action: 'whoami' }) })
+      expect(bad.status).toBe(401)
+    } finally { keyless.close() }
+  })
+
   it('whoami and projects', async () => {
     const r = await call(user, { action: 'whoami' })
     expect(r).toMatchObject({ status: 200, body: { ok: true, result: { sub: 'user-1', email: 'user-1@example.com', class: 'user' } } })

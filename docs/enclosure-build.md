@@ -216,11 +216,13 @@ for CNC, walls against the plastic or metal minimum and each pocket's corner rad
 R = H/10 + 0.5. A handed-in file's wall
 thickness is not measured: one rule row says so (`ok: null`).
 
-Records (`case.jsonld`): `@context` `{"trace": "https://trace-eda.com/ns/trace#", "@vocab": "https://trace-eda.com/ns/trace#"}`;
-nodes `Enclosure` (`hasPart` → `CasePart` base/lid, `encloses` → `Board`), `FastenedJoint` per screw (`connects` board and
-base, `fastener` → `Fastener` with `size` "M2.5", `length_mm`), `PressFitJoint` lid↔base (`clearance_mm`), `FitCheck`
-(`status`, `clashCount`, `gapViolations`, `boardSha256`). Names follow the Autodesk assembly ontology's joint terms
-(rigid, fastened, press fit); the SHACL gate shape waits for the ontology work.
+Records (`case.jsonld`): the ontology's mechanical module ([ontology.md](ontology.md)), `@context`
+`{"tm": "https://trace-eda.com/ns/trace/mech#", "@vocab": …}`; nodes `Enclosure` (`hasPart`, `outerSize`, `material`,
+`encloses`), `EnclosurePart` per part (`partKind` base/lid, `wallThickness`, `hasStandoff`), `Material` (name, process,
+service), `Fastener` and `MountingPoint` per screw, `Opening` per connector cut (`forComponent`, `face`), `Joint` per
+fastened or press-fit pair (`jointKind` from the ontology's closed list, `joins`, `usesFastener`), the board's
+`BoardOutline`, and a `FitCheck` (`status`, `enclosed`, `clashes`, `gapViolations`, `boardSha256`). The SHACL shape
+behind the layout gate's fit criterion is the ontology work's; these are the records it reads.
 
 Packaging: `python/pyproject.toml` gains `mech = ["build123d==0.13.0"]`, and `dev` includes it. The tools image
 installs `/app/python[mech]` into `/opt/trace-venv`. The agent image does not get it.

@@ -1,11 +1,11 @@
 # Enclosure CAD engine for trace
 
-Status: design, October 2026. Decided 29 October 2026. Built on branch `claude/enclosure`, to the contract in
-[enclosure-build.md](enclosure-build.md).
+Status: design, October 2026. Decided 29 October 2026. Built on branch `claude/enclosure` (PR #81), to the contract
+in [enclosure-build.md](enclosure-build.md); build123d lives in the tools image, not the agent image.
 
 ## Summary
 
-Use **build123d** as trace's enclosure engine, and keep FreeCAD out of the agent image. build123d is a Python library
+Use **build123d** as trace's enclosure engine, in the tools image beside KiCad, and keep FreeCAD out of trace's images. build123d is a Python library
 on the same OpenCascade kernel as FreeCAD, so it writes real STEP solids, but an enclosure is a short script that trace
 can write, diff, review in a pull request and rebuild in a fraction of a second.
 
@@ -21,7 +21,7 @@ The engine is judged against rules trace already follows, not against general CA
 
 | Need | Why, in trace's terms |
 | --- | --- |
-| Runs headless in the agent image | Specialists run in the Ubuntu 24.04, ARM64 agent container on AgentCore; no display, no desktop session |
+| Runs headless in the tools image | Programs too large for the agent image run in each project's tools function (Ubuntu, ARM64, the tools image beside KiCad); no display, no desktop session |
 | An agent can author it | trace drafts and a person finishes, as with schematics and placement; the model has to be something an agent writes well |
 | Changes can be diffed and reviewed | Releases are cut from git, and gates are signed against evidence; a binary model file shows nothing in a pull request |
 | The KiCad board is the source | The board outline, mounting holes, connectors and tallest parts come from the `.kicad_pcb`, so a board change re-flows into the case |
@@ -59,7 +59,9 @@ for every rebuild.
 
 ## Recommendation
 
-Adopt build123d, pinned to 0.13, in the agent image's existing Python environment; do not install FreeCAD there.
+Adopt build123d, pinned to 0.13, in the tools image's Python environment (`/opt/trace-venv`, `agent/Dockerfile.tools`),
+not the agent image; do not install FreeCAD in either. AgentCore Runtime limits the agent image to 2 GB, which is why
+KiCad, Blender and the FPGA tools already moved to the tools image, and build123d's environment alone is about 850 MB.
 
 Why:
 
@@ -81,7 +83,8 @@ What we give up:
   script (see Decisions).
 - **A younger API.** build123d is pre-1.0 and moves quickly, so trace pins the version and upgrades deliberately.
 - **Image weight.** A fresh environment with build123d is about 850 MB, about 380 MB of it the OpenCascade kernel. The
-  rest is its dependencies, some of which (an interactive shell, viewer materials) trace never uses.
+  rest is its dependencies, some of which (an interactive shell, viewer materials) trace never uses. It goes in the
+  tools image, which has no 2 GB limit, and its cold start is measured there before merging.
 
 ## How it fits trace
 
@@ -102,7 +105,7 @@ flowchart LR
 The board feeds both the case script and the fit check, so a board change re-runs the check before the gate can be
 signed.
 
-- **Board facts in.** `kicad-cli pcb export step` (KiCad is already in the image) gives the populated board as a solid.
+- **Board facts in.** `kicad-cli pcb export step` (KiCad is already in the tools image) gives the populated board as a solid.
   A small reader pulls the outline, mounting holes, edge connectors and the tallest part on each side out of the
   `.kicad_pcb`.
 - **Case script.** A new `mech` tool family writes and runs `mechanical/case.py` in the project repository. A
@@ -112,14 +115,15 @@ signed.
   named by part reference, so it can be waived one by one, like design rule findings.
 - **Outputs.** STEP for the person's CAD and quotes, STL, 3MF or STEP for JLCPCB's 3D printing and CNC. The render
   specialist already loads STEP, so case renders join board renders for approval.
-- **Records.** The case, its parts, joints and fasteners are written as JSON-LD in the mechanical module, and the gate's
-  fit check is a SHACL shape over those records.
+- **Records.** The case, its parts, joints and fasteners are described by the ontology's mechanical module
+  ([ontology.md](ontology.md)) over trace's existing records, and the layout gate's fit criterion is backed by a SHACL
+  shape over them.
 - **Who runs it.** The implementation specialist gains the `mech` tools, since it already owns placement and fixed
   parts; a separate mechanical specialist can follow if case work grows.
 - **Where it runs.** Two job kinds (`src/gpu/jobs.ts`, [enclosure-build.md](enclosure-build.md) "Trust"): `cad-script`
   runs the case script, code from the repository, on the project's **cad function** (`<prefix>-cad-<hash>`, a role
   with no S3; its files move through URLs the worker presigned) or in a local child process; `cad` runs trace's own
-  code (the template, the fit check, the rules, the exports) on the tools function or locally.
+  code (the template, the fit check, the rules, the exports) on the tools function, like the KiCad jobs, or locally.
 
 The Board setup skill's "every fixed part has a mechanical reason" check gets its reason from here: a connector is fixed
 because the case has an opening for it.
@@ -166,11 +170,11 @@ waiver.
 | Agent-written geometry fails in ways a test misses (thin walls, unprintable overhangs) | Medium | Wall, overhang and boss rules checked in the fit check; renders approved by a person at the gate |
 | JLC3DP's capabilities change and are published only as web pages | Medium | Refresh on a schedule, keep the source page and date with each rule, and flag a rule older than its refresh period |
 | ARM64 wheel lags a release | Low | Wheels for Linux ARM64 ship with each OCP release; stay one version behind if needed |
-| Image grows past the build time budget | Low | Install in its own Docker layer; measure on the CodeBuild runner before merging |
+| The tools image's build time or cold start grows too much | Low | Install in its own Docker layer; measure the image build on the CodeBuild runner and the function's cold start before merging |
 
 Next steps:
 
-1. Add build123d to the agent image and the `tracebridge` Python package as a `mech` extra.
+1. Add build123d to the tools image's Python environment, and to the `tracebridge` Python package as a `mech` extra.
 2. Build the fit check first, against the sample `sensor-node` board, with the clearance defaults and per-project and
    per-part overrides, and wire it to the layout gate's fit criterion.
 3. Add the case script and its template for the printed two-part shell, with the three ways to change it: manual edit,
@@ -191,6 +195,6 @@ Next steps:
 - [OpenSCAD](https://en.wikipedia.org/wiki/OpenSCAD): latest stable 2021.01, mesh export only
 - [JLC3DP capabilities](https://jlc3dp.com/pt/capabilities) (processes, materials, tolerances) and
   [combining JLC3DP and JLCPCB orders](https://jlc3dp.com/hk/help/article/how-to-combine-orders-for-jlc3dp-and-jlcpcb-products)
-- This repository: `agent/Dockerfile`, `src/core/journey.ts` (layout gate fit criterion), `src/tools/render/model.ts`
+- This repository: `agent/Dockerfile.tools`, `src/infra/tools.ts`, `src/core/journey.ts` (layout gate fit criterion), `src/tools/render/model.ts`
   (STEP loading)
 - Spike: build123d 0.13.0 on Python 3.13, x86-64, 29 Oct 2026; two-part case, fit check, STEP and STL in 0.15 s
