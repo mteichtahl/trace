@@ -41,7 +41,7 @@ describe('the cad-script job kind', () => {
       process.env.TRACE_GPU_QUEUE = 'q'
       delete process.env.TRACE_CAD_FUNCTION
       await expect(runJob({ kind: 'cad-script', argv: ['true'], timeoutSeconds: 10 })).rejects.toThrow(NO_CAD_FUNCTION)
-      expect(NO_CAD_FUNCTION).toMatch(/cad function \(nested layout\) or on a laptop/)
+      expect(NO_CAD_FUNCTION).toMatch(/cad function \(nested layout\), or on a laptop or in CI/)
     } finally {
       for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]
       Object.assign(process.env, saved)
@@ -208,6 +208,13 @@ describe('the function handler', () => {
     let got: string | undefined
     await handle({ spec: 's3://bucket/jobs/acme/board/x/spec' }, { env: { TRACE_PROJECT: 'acme/board' }, run: async (deps = {}) => { got = deps.env?.TRACE_GPU_JOB_URI; return 0 } })
     expect(got).toBe('s3://bucket/jobs/acme/board/x/spec')
+    // but never a case script: not through URLs (the event is refused before anything is fetched), and not as a
+    // cad-script spec in S3 (the runner, which holds credentials there, refuses the kind)
+    const fetched: string[] = []
+    await expect(handle({ urls }, { env: { TRACE_PROJECT: 'acme/board' }, fetch: ((u, init) => { fetched.push(String(u)); return f.fetch(u, init) }) as FetchLike, run })).rejects.toThrow(/runs on the cad function only/)
+    expect(fetched).toEqual([])
+    const staged = scriptSpec('cad-script-9', ['true'], [], [])
+    await expect(main({ store: undefined, s3: { getObject: async () => { throw new Error('must not read S3') } } as never, env: { TRACE_GPU_JOB_URI: 's3://bucket/jobs/acme/board/cad-script-9/spec' } }, staged)).rejects.toThrow(/cad function only/)
   })
 })
 

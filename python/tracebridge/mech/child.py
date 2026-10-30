@@ -195,7 +195,7 @@ def _read_private(folder: Path, own: Path):
         raise InputError("the case script's process wrote no readable claims (it exited without building a case)")
     try:
         claims = json.loads(raw.decode("utf-8"))
-    except ValueError:
+    except (ValueError, RecursionError):  # RecursionError: a document nested too deep to parse is malformed too
         raise InputError("the case script's process wrote malformed claims") from None
     if not isinstance(claims, dict):
         raise InputError("the case script's process wrote malformed claims")

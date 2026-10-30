@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { call } from './api'
-import { accept, auth } from './auth'
+import { accept, auth, refresh } from './auth'
 import { request, sha256Hex } from './http'
 
 const hex = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex')
@@ -54,6 +54,26 @@ describe('the /api request', () => {
     expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['/api/call', '/api/auth/refresh', '/api/call'])
     expect(((fetchMock.mock.calls[2] as [string, RequestInit])[1].headers as Record<string, string>).authorization).toBe('Bearer new')
     expect(auth.get().accessToken).toBe('new')
+  })
+
+  it('a refresh the backend could not answer (503, 429) keeps the session; only a 401 ends it', async () => {
+    vi.useFakeTimers()
+    try {
+      const signedIn = () => accept({ accessToken: 'tok', idToken: 'id', expiresIn: 3600, user: { sub: 's', email: 'e', class: 'user' } })
+      for (const status of [503, 429, 500]) {
+        signedIn()
+        fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: false, error: 'busy' }), { status }))
+        expect(await refresh()).toBe(false)
+        expect(auth.get()).toMatchObject({ status: 'signed-in', accessToken: 'tok', sessionEnded: false })
+      }
+      signedIn()
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: false, error: 'the session has ended: sign in again' }), { status: 401 }))
+      expect(await refresh()).toBe(false)
+      expect(auth.get()).toMatchObject({ status: 'signed-out', accessToken: null, sessionEnded: true })
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
   })
 
   it('call() throws the API error words', async () => {

@@ -66,7 +66,8 @@ export class UrlStore implements JobStore {
     return u
   }
 
-  /** The spec at urls.spec, decoded and checked to be this id's (when the id is known). */
+  /** The spec at urls.spec, decoded (strictly: ../protocol.ts RemoteSpec). The URLs, not the spec's id, decide what the
+   * job may reach: a UrlStore maps only the keys of the id it is given to the URLs it is given. */
   static async readSpec(urls: JobUrls, fetchFn: FetchLike = (u, i) => fetch(u, i)): Promise<RemoteSpec> {
     const r = await fetchFn(urls.spec, { method: 'GET' })
     if (!r.ok) throw new ToolError(`the job's spec could not be read (HTTP ${r.status})`)

@@ -3,7 +3,7 @@
  * and the one check every authenticated route makes first: the bearer token verified here, locally, before any call
  * goes out (a fast reject; the API runtime checks it again).
  */
-import { AuthError, type AccessClaims, Verifier, bearer } from '../api/jwt.js'
+import { AuthError, type AccessClaims, KeysUnavailable, Verifier, bearer } from '../api/jwt.js'
 import type { WebConfig } from './config.js'
 import { type Ctx, type WebRequest, WebError, whoHash } from './http.js'
 import type { BedrockPort, CloudWatchPort, CognitoPort, Credentials, PollyPort, StorePort } from './ports.js'
@@ -58,6 +58,8 @@ export async function signedIn(req: WebRequest, ctx: Ctx, deps: WebDeps, o: { an
     claims = await deps.verifier(config).verify(token)
   } catch (e) {
     if (e instanceof AuthError) throw new WebError(401, `not signed in: ${e.message}`, 'unauthenticated')
+    // the signing keys could not be fetched: nothing is known about the token, so not a 401 (the app would sign out)
+    if (e instanceof KeysUnavailable) throw new WebError(503, 'sign-in cannot be checked just now: try again in a moment', 'auth_unavailable')
     throw e
   }
   ctx.who = whoHash(claims.sub)

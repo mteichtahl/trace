@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { Verifier } from '../../src/api/jwt.js'
 import { GROUPS } from '../../src/core/access.js'
 import { CLASS_GROUPS, REFRESH_COOKIE } from '../../src/web/auth.js'
 import { parseCookies } from '../../src/web/http.js'
-import { accessToken } from '../api/fixtures.js'
+import { CLIENT_ID, ISSUER, accessToken } from '../api/fixtures.js'
 import { CONFIG, awsError, bearerOf, idToken, world } from './fakes.js'
 
 const EMAIL = 'ada@example.com'
@@ -151,6 +152,33 @@ describe('the session cookie', () => {
     const r = await w.serve({ method: 'POST', path: '/api/auth/refresh', cookies: { [REFRESH_COOKIE]: 'old' } })
     expect(r.status).toBe(401)
     expect(r.cookies).toEqual(['__Secure-trace_rt=; HttpOnly; Secure; SameSite=Strict; Path=/api/auth; Max-Age=0'])
+  })
+
+  it('signing keys that cannot be fetched are 503, never a 401: a refresh keeps the cookie, a call is not signed out', async () => {
+    // a server side failure (Cognito's JWKS timing out) says nothing about the person's tokens: answering 401 made the
+    // app sign out, and the refresh route clear a good cookie
+    const w = world()
+    w.deps.verifier = () => new Verifier({ issuer: ISSUER, clientId: CLIENT_ID, fetchJwks: async () => { throw new Error('connect ETIMEDOUT') } })
+    w.cognito.answers.set('InitiateAuth', () => ({ AuthenticationResult: { ...tokens(), RefreshToken: undefined } }))
+    const r = await w.serve({ method: 'POST', path: '/api/auth/refresh', cookies: { [REFRESH_COOKIE]: 'refresh-secret-123' } })
+    expect(r.status).toBe(503)
+    expect(r.json()).toMatchObject({ code: 'auth_unavailable' })
+    expect(r.cookies).toEqual([])
+    const c = await w.serve({ method: 'POST', path: '/api/call', headers: bearerOf(accessToken('sub-ada', ['trace-users'])), body: JSON.stringify({ action: 'projects' }) })
+    expect(c.status).toBe(503)
+    expect(c.json()).toMatchObject({ code: 'auth_unavailable' })
+  })
+
+  it('a refresh Cognito answers but whose id token does not verify is 401 and keeps the cookie; only Cognito refusing it clears the cookie', async () => {
+    const w = world()
+    w.cognito.answers.set('InitiateAuth', () => ({ AuthenticationResult: { ...tokens(), IdToken: 'not-a-token', RefreshToken: undefined } }))
+    const r = await w.serve({ method: 'POST', path: '/api/auth/refresh', cookies: { [REFRESH_COOKIE]: 'refresh-secret-123' } })
+    expect(r.status).toBe(401)
+    expect(r.cookies).toEqual([])
+    w.cognito.answers.set('InitiateAuth', () => ({}))
+    const ended = await w.serve({ method: 'POST', path: '/api/auth/refresh', cookies: { [REFRESH_COOKIE]: 'refresh-secret-123' } })
+    expect(ended.status).toBe(401)
+    expect(ended.cookies[0]).toContain('Max-Age=0')
   })
 
   it('the cookie is __Secure-trace_rt; the old name is read once and moved; a name sent twice is ignored', async () => {

@@ -226,11 +226,13 @@ for CNC, walls against the plastic or metal minimum and each pocket's corner rad
 R = H/10 + 0.5. A handed-in file's wall
 thickness is not measured: one rule row says so (`ok: null`).
 
-Records (`case.jsonld`): `@context` `{"trace": "https://trace-eda.com/ns/trace#", "@vocab": "https://trace-eda.com/ns/trace#"}`;
-nodes `Enclosure` (`hasPart` → `CasePart` base/lid, `encloses` → `Board`), `FastenedJoint` per screw (`connects` board and
-base, `fastener` → `Fastener` with `size` "M2.5", `length_mm`), `PressFitJoint` lid↔base (`clearance_mm`), `FitCheck`
-(`status`, `clashCount`, `gapViolations`, `boardSha256`). Names follow the Autodesk assembly ontology's joint terms
-(rigid, fastened, press fit); the SHACL gate shape waits for the ontology work.
+Records (`case.jsonld`): the ontology's mechanical module ([ontology.md](ontology.md)), `@context`
+`{"tm": "https://trace-eda.com/ns/trace/mech#", "@vocab": …}`; nodes `Enclosure` (`hasPart`, `outerSize`, `material`,
+`encloses`), `EnclosurePart` per part (`partKind` base/lid, `wallThickness`, `hasStandoff`), `Material` (name, process,
+service), `Fastener` and `MountingPoint` per screw, `Opening` per connector cut (`forComponent`, `face`), `Joint` per
+fastened or press-fit pair (`jointKind` from the ontology's closed list, `joins`, `usesFastener`), the board's
+`BoardOutline`, and a `FitCheck` (`status`, `enclosed`, `clashes`, `gapViolations`, `boardSha256`). The SHACL shape
+behind the layout gate's fit criterion is the ontology work's; these are the records it reads.
 
 Packaging: `python/pyproject.toml` gains `mech = ["build123d==0.13.0"]`, and `dev` includes it. The tools image
 installs `/app/python[mech]` into `/opt/trace-venv`. The agent image does not get it.
@@ -317,8 +319,9 @@ The cad function (`src/gpu/function.ts runCadScript`, `src/gpu/lambda.ts`, `src/
   locale, TMPDIR, the XDG folders and what Python needs; HOME, TMPDIR and XDG in the job's folder; its own process
   group, killed when the job ends). On the cad function this is tidiness, not the boundary: the boundary is the role.
 - **Flat layout.** A flat stack has no room for four more resources per project, so there is no cad function there:
-  `mech.build` says that a custom `case.py` builds only on a laptop or in CI, and builds the template or a handed-in
-  file in the cloud.
+  `mech.build` of a custom `case.py` is refused in the cloud with a message saying it builds on a laptop or in CI, and
+  that a handed-in STEP or the template builds anywhere. The tools function refuses a case script however it is asked
+  (a `urls` event, or a `cad-script` spec in S3), so a script never runs beside credentials.
 
 A laptop and CI run the script as a local child process (`child.py`): `tracectl check` already runs repository code
 there (firmware builds), and the person or the workflow chose to run it. In CI the script step runs only when the

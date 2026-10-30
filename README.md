@@ -943,7 +943,9 @@ runs on the project's CodeBuild runner in AWS like every other job (or on GitHub
 
 trace's records are SQLite databases: the ones below, and beside them in the central bucket each project's journey
 record, agents' facts, job index and cost ledger, the prompt overrides and the memory marks. The few other files it
-keeps are listed after them.
+keeps are listed after them. The ontology that names these records and the rules over them is designed in
+[docs/ontology.md](docs/ontology.md), with its build plan in [docs/ontology-plan.md](docs/ontology-plan.md); nothing of it is
+built yet.
 
 - **Project database** (`.trace/project.db`): one per project. It holds settings plus the run record: every
   simulation, check, build and capture, with its measurements and artifacts stored as blobs. Use `tracectl runs`,
@@ -1485,7 +1487,7 @@ and runs as jobs of two kinds, because `mechanical/case.py` is code that a perso
 `mech.build` runs one `cad` job for the template or a handed-in file, and a `cad-script` job followed by a `cad` job
 otherwise; its answer's `stages` say where each ran. The script's parts are claims: the `cad` job reads them strictly and
 measures the geometry itself. The flat layout has no cad function, so there a custom `case.py` builds only on a laptop or
-in CI; the cloud builds the template or a handed-in STEP and says so. Locally the engine runs with `TRACE_PYTHON` (else
+in CI; in the cloud `mech.build` refuses it and says so, while the template or a handed-in STEP builds anywhere. Locally the engine runs with `TRACE_PYTHON` (else
 `python3`) and `PYTHONPATH` at the repository's `python/`. `tracectl check` builds the case when `mechanical/case.json`
 exists and fails on a failing fit; without build123d it says so and skips the case. In CI it builds the case only when
 the workflow sets `TRACE_CHECK_MECH=1`, which the KiCad build template does for pushes and for pull requests from the

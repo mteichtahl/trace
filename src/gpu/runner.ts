@@ -86,6 +86,9 @@ export async function main(deps: RunnerDeps = {}, given?: RemoteSpec): Promise<n
   const env = deps.env ?? process.env
   if (!given && deps.store) throw new Error('a runner on a URL store needs the spec given (read it with UrlStore.readSpec)')
   const spec = given ?? await readSpec(env, deps.s3)
+  // a case script (user code) runs only on the cad function, which holds no credentials: a runner with S3 (the tools
+  // function, a Batch job) refuses it, whoever staged the spec
+  if (spec.kind === 'cad-script' && !deps.store) throw new Error('a cad-script job (a case script) runs on the cad function only, through URLs: this runner has S3 credentials and refuses it')
   const store: JobStore = deps.store ?? new S3Backend(spec.bucket, spec.prefix, deps.s3)
   const keys = jobKeys(spec.id)
   const dir = mkdtempSync(join(deps.workRoot ?? tmpdir(), `${spec.kind}-`))

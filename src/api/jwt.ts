@@ -16,6 +16,15 @@ export class AuthError extends Error {
   override name = 'AuthError'
 }
 
+/**
+ * The signing keys could not be fetched (Cognito's JWKS did not answer, timed out, or answered an error) and none are
+ * held: nothing is known about the token either way. Not an AuthError, on purpose: callers answer 503 and keep the
+ * person's session, where an AuthError (a bad, expired or foreign token) is a 401 and may end it.
+ */
+export class KeysUnavailable extends Error {
+  override name = 'KeysUnavailable'
+}
+
 const LEEWAY_S = 60
 const REFETCH_MIN_MS = 60_000
 const JWKS_TTL_MS = 6 * 3600_000
@@ -78,7 +87,7 @@ function decodeJson(part: string, what: string): unknown {
 
 const defaultFetch: JwksFetcher = async (url) => {
   const r = await fetch(url, { signal: AbortSignal.timeout(10_000) })
-  if (!r.ok) throw new AuthError(`JWKS ${r.status}`)
+  if (!r.ok) throw new KeysUnavailable(`JWKS ${r.status}`)
   return r.json()
 }
 
@@ -125,7 +134,7 @@ export class Verifier {
       try {
         await this.load()
       } catch (e) {
-        if (!this.keys.size) throw new AuthError(`cannot fetch the signing keys: ${e instanceof Error ? e.message : String(e)}`)
+        if (!this.keys.size) throw new KeysUnavailable(`cannot fetch the signing keys: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
     const k = this.keys.get(kid)

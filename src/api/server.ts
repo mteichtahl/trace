@@ -164,7 +164,11 @@ export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerRes
         if (!token) throw new AuthError('missing bearer token')
         principal = await principalOf(token)
       } catch (e) {
-        return done(401, { ok: false, error: e instanceof AuthError ? `not signed in: ${e.message}` : 'not signed in' }, 'unauthenticated')
+        // 401 only for the token itself (bad, expired, another client's): the caller signs in again. Anything else (the
+        // signing keys not fetched, a lookup that failed) says nothing about the token: 503, so no session is ended
+        if (e instanceof AuthError) return done(401, { ok: false, error: `not signed in: ${e.message}` }, 'unauthenticated')
+        log({ warning: 'the caller could not be identified', error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) })
+        return done(503, { ok: false, error: 'sign-in cannot be checked just now: try again in a moment' }, 'unavailable')
       }
       entry.who = who(principal)
       // who, as a hash (never the email), and their class

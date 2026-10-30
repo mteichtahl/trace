@@ -68,6 +68,7 @@ export async function handle(event: unknown, o: { workRoot?: string; run?: typeo
     if (typeof e.traceparent === 'string') env.TRACEPARENT = e.traceparent
     else delete env.TRACEPARENT
     if (e.urls !== undefined) {
+      if (!isCadFunction(base)) throw new Error('a job through URLs is a case script, which runs on the cad function only ({"urls": {…}} on the tools function is refused: it runs no script)')
       const urls = JobUrlsSchema.safeParse(e.urls)
       if (!urls.success) throw new Error(`the event's urls are invalid: ${urls.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`)
       const spec = await UrlStore.readSpec(urls.data, o.fetch)
@@ -79,6 +80,7 @@ export async function handle(event: unknown, o: { workRoot?: string; run?: typeo
     if (typeof e.spec !== 'string' || !e.spec.startsWith('s3://')) throw new Error('the event names no job spec (expected {"spec": "s3://…"} or {"urls": {…}})')
     if (isCadFunction(base)) throw new Error('the cad function runs case scripts through URLs only ({"urls": {…}}): it has no S3 access, so an event naming a spec in S3 is refused')
     env.TRACE_GPU_JOB_URI = e.spec
+    // a case script never runs here: the runner refuses a cad-script spec (./runner.ts), whoever staged it
     // shared inputs (a project archive sent again) kept in /tmp between the calls a warm container takes
     const exitCode = await (o.run ?? observedMain)({ env, workRoot: dir, sharedCache: o.sharedCache ?? join(tmpdir(), 'trace-shared') })
     return { exitCode }
