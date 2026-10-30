@@ -19,6 +19,9 @@
  *                             and answers each step's outcome, plus that last part as a wait. A step that fails stops
  *                             the ones that depend on it and says so; the request can be sent again (every step is
  *                             safe to repeat).
+ *   project.update    admin   change what a project is after it is made: its name, description, icon, build plan
+ *                             (quantity, unit cost, budget) and later stages, in the journey record (Settings). The
+ *                             template and repository stay fixed
  *
  * Onboarding runs `git` (clone, commit, push) with the token in git's environment, never in a URL or a file: the API
  * runtime's image is the agents' image, which has git. Without it, step 1 fails with "install git" and nothing else
@@ -27,7 +30,7 @@
 import { z } from 'zod'
 import { GROUPS, PARTS, type Part, PartRefused, type PersonClass, RepoSlug, assign, classOf, membersOf, setClass } from '../core/access.js'
 import { Conflict } from '../core/central.js'
-import { BuildSchema, LATER_STAGES, TEMPLATES, type Template, TEMPLATE_NAMES, journeyView, startJourney } from '../core/journey.js'
+import { AboutSchema, BuildSchema, LATER_STAGES, TEMPLATES, type Template, TEMPLATE_NAMES, journeyView, startJourney, updateAbout } from '../core/journey.js'
 import { forgetNoJourney } from '../core/journey-store.js'
 import { register } from '../core/onboard.js'
 import { projectSlug } from '../core/project.js'
@@ -224,5 +227,13 @@ export const PROJECT_ACTIONS = {
       waits: [{ id: 'installation-update', what: 'the project\'s agent and knowledge base', text: cloudWait() }],
       journey,
     }
+  }),
+
+  'project.update': def('admin', Repo.extend(AboutSchema.shape), async ({ repo, ...patch }, ctx) => {
+    if (!Object.values(patch).some((v) => v !== undefined)) throw new ActionError('give at least one of name, description, icon, build or later')
+    return writeJourney(ctx, repo, (db) => {
+      const rec = updateAbout(db, patch, label(ctx.principal))
+      return { result: { repo, view: journeyView(rec, { hash: hashOf(ctx.principal), label: label(ctx.principal), admin: true, part: 'contributor' }) } }
+    })
   }),
 }

@@ -30,6 +30,7 @@ const MUTATING: ReadonlyArray<readonly [string, What]> = [
   ['prompts.revert', 'prompts'],
   ['integrations.', 'integrations'],
   ['projects.create', 'projects'],
+  ['project.update', 'journey'],
   ['gate.', 'journey'],
   ['question.answer', 'journey'],
   ['stuck.dismiss', 'journey'],

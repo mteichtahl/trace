@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   type JourneyRecord, type Viewer, addWaiver, answerQuestion, askQuestion, gateView, inboxItems, journeyView, loadJourney, nextStep, recordOpen,
   returnGate, setCriterion, signBlockers, signGate, sortInbox, startJourney, templateStages, applyJourneySchema, copyJourneyTables, getDraft, loadOrders, putDraft,
-  recordOrder, dismissStuck, JOURNEY_TABLES,
+  recordOrder, dismissStuck, JOURNEY_TABLES, updateAbout,
 } from '../../src/core/journey.js'
 import { openProject } from '../../src/core/store.js'
 import { merge } from '../../src/core/dbmerge.js'
@@ -298,5 +298,34 @@ describe('orders and drafts', () => {
     expect(putDraft(again, 'h'.repeat(16), 'waiver', null)).toBe(true)
     expect(getDraft(again, 'h'.repeat(16), 'waiver')).toBeNull()
     again.close()
+  })
+})
+
+describe('changing what a project is (Settings)', () => {
+  let db: DatabaseSync
+  beforeEach(() => { db = fresh(); startJourney(db, { template: 'board', by: 'x', name: 'Soil sensor', icon: '{"glyph":"board","colour":"blue"}' }) })
+
+  it('changes the name, description, icon and build plan, and logs it', () => {
+    const r = updateAbout(db, { name: 'Soil probe', description: 'Reads moisture.', icon: '{"glyph":"sensor","colour":"green"}', build: { quantity: 25, budget: 400 } }, 'Ada')
+    expect(r.journey).toMatchObject({ name: 'Soil probe', description: 'Reads moisture.', icon: '{"glyph":"sensor","colour":"green"}' })
+    expect(r.journey.build).toMatchObject({ quantity: 25, budget: 400, unit_cost: null, fab: 'JLCPCB' })
+    expect(r.decisions[0]).toMatchObject({ kind: 'project.updated', by: 'Ada', summary: expect.stringMatching(/renamed the project to Soil probe/) })
+  })
+
+  it('adds a later stage with its gates, and removes one that has not started', () => {
+    const on = updateAbout(db, { later: ['certify'] }, 'Ada')
+    expect(on.journey.later).toEqual(['certify'])
+    expect(on.stages.at(-1)?.id).toBe('certify')
+    expect(on.gates.some((g) => g.stage === 'certify')).toBe(true)
+    const off = updateAbout(db, { later: [] }, 'Ada')
+    expect(off.stages.some((s) => s.id === 'certify')).toBe(false)
+    expect(off.gates.some((g) => g.stage === 'certify')).toBe(false)
+  })
+
+  it('refuses a name too short and writes nothing when nothing changed', () => {
+    expect(() => updateAbout(db, { name: 'x' }, 'Ada')).toThrow()
+    const before = loadJourney(db)!.decisions.length
+    updateAbout(db, { name: 'Soil sensor' }, 'Ada')
+    expect(loadJourney(db)!.decisions.length).toBe(before)
   })
 })

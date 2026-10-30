@@ -37,6 +37,10 @@ export interface DecisionEntry {
 }
 export interface JourneyMore extends Journey {
   decisions?: DecisionEntry[]
+  /** what the project is (Settings): its icon, build plan and the later stages it has */
+  icon?: ProjectIcon
+  build?: { quantity: number; unit_cost: number | null; budget: number | null; currency: string; fab: string }
+  later?: ('certify' | 'produce' | 'sustain')[]
 }
 
 // ------------------------------------------------------------------ guided skills (skill.get / skill.submit, needs building)
