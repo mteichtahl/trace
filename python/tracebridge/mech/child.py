@@ -5,13 +5,18 @@ outside OUTDIR), writes the facts and settings it has checked into it, and start
 Python with the same environment and that folder as its working directory. The child loads the board, calls the
 script's build(board, settings), and writes into the folder only
 
-  part-<n>.step   one per case part
+  part-<n>.step   one per case part, n from 1
   claims.json     {"parts": [{"name", "file"}], "joints", "fasteners", "notes", "meta"}, or {"error": "..."}
 
-and exits 0 (or 2 for the script's own failure). The parent then reads the folder strictly: only those names,
-regular files (no symbolic links), under a size cap, and every claim type-checked; part names are short lowercase
-words. What the script did to the board or settings objects, to tracebridge's functions or to sys.modules stays in
-the child; the parent loads the solids and measures them with its own board, settings and capabilities.
+and exits 0 (or 2 for the script's own failure). The parent then reads the folder strictly: only those names, each
+opened once without following a symbolic link and checked on the open descriptor (a regular file, under a size cap)
+so what is measured is what was checked, and every claim type-checked; part names are short lowercase words. What
+the script did to the board or settings objects, to tracebridge's functions or to sys.modules stays in the child;
+the parent loads the solids and measures them with its own board, settings and capabilities.
+
+In the cloud the child is not even a child: the script runs on the project's cad function (a Lambda with no
+credentials), its folder comes back as a `cad-script` job's outputs, and `python -m tracebridge.mech run --built`
+reads it here, on the tools function, which runs no script (docs/enclosure-build.md, Trust).
 """
 from __future__ import annotations
 
@@ -46,6 +51,7 @@ def main(args: Any) -> int:
 
     from . import _read_json, _tail, load_script
     from .board import load_board
+    from .settings import check_facts, normalize_settings, resolve
     from .shell import Case
 
     out = Path(args.out)
@@ -55,8 +61,12 @@ def main(args: Any) -> int:
         return 2
 
     try:
-        facts = _read_json(args.facts, "facts")
-        settings = _read_json(args.settings, "settings")
+        # The raw case.json, as the cloud sends it: checked and completed here as the parent does for itself (the
+        # parent's own copy is what the checks use; this one is the script's)
+        facts = check_facts(_read_json(args.facts, "facts"))
+        settings = normalize_settings(_read_json(args.settings, "settings"))
+        if getattr(args, "capabilities", None):
+            resolve(settings, _read_json(args.capabilities, "capabilities"))
         build = load_script(args.script)
         board = load_board(facts)
         try:
@@ -68,7 +78,7 @@ def main(args: Any) -> int:
         if not isinstance(case, Case) or not case.parts:
             raise InputError(f"case script build() must return a Case with parts, got {type(case).__name__}")
         parts = []
-        for i, (name, shape) in enumerate(sorted(case.parts.items())):
+        for i, (name, shape) in enumerate(sorted(case.parts.items()), 1):
             f = f"part-{i}.step"
             export_step(shape, out / f)
             parts.append({"name": str(name), "file": f})
@@ -129,26 +139,62 @@ def _joints(v: list[dict[str, Any]], notes: list[str]) -> list[dict[str, Any]]:
     return out
 
 
-def _regular(path: Path, cap: int) -> bool:
-    try:
-        st = os.lstat(path)
-    except OSError:
-        return False
+def _read_regular(path: Path, cap: int) -> bytes | None:
+    """The bytes of a regular file under `cap`, opened once without following a link and checked on the descriptor
+    (so the file read is the file checked), or None when it is missing, a link, not a regular file or too large."""
     import stat
-    return stat.S_ISREG(st.st_mode) and st.st_size <= cap
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > cap:
+            return None
+        chunks = []
+        while True:
+            b = os.read(fd, 1 << 20)
+            if not b:
+                break
+            chunks.append(b)
+            if sum(len(c) for c in chunks) > cap:
+                return None
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def _import_bytes(data: bytes, own: Path):
+    """A STEP from bytes already read and checked, through a file in the parent's own fresh folder (OpenCascade
+    reads only paths), so a change to the child's file after the check cannot reach the import."""
+    from build123d import import_step
+
+    f = own / f"import-{len(os.listdir(own)) + 1}.step"
+    with open(f, "wb") as h:
+        h.write(data)
+    return import_step(f)
 
 
 def read_private(folder: Path):
     """The case from the child's private folder, read strictly (see the module docstring)."""
-    from build123d import Compound, import_step
+    own = Path(tempfile.mkdtemp(prefix="trace-case-read-"))
+    try:
+        return _read_private(folder, own)
+    finally:
+        shutil.rmtree(own, ignore_errors=True)
+
+
+def _read_private(folder: Path, own: Path):
+    from build123d import Compound
 
     from .shell import Case
 
-    cp = folder / CLAIMS
-    if not _regular(cp, MAX_CLAIMS_BYTES):
+    raw = _read_regular(folder / CLAIMS, MAX_CLAIMS_BYTES)
+    if raw is None:
         raise InputError("the case script's process wrote no readable claims (it exited without building a case)")
     try:
-        claims = json.loads(cp.read_text(encoding="utf-8"))
+        claims = json.loads(raw.decode("utf-8"))
     except ValueError:
         raise InputError("the case script's process wrote malformed claims") from None
     if not isinstance(claims, dict):
@@ -165,11 +211,12 @@ def read_private(folder: Path):
         name, f = (p.get("name"), p.get("file")) if isinstance(p, dict) else (None, None)
         if not (isinstance(name, str) and NAME_RE.match(name)) or name in seen:
             raise InputError(f"case part name {name!r} is not a short lowercase name (a-z, 0-9, _ and -), or repeats")
-        if not (isinstance(f, str) and FILE_RE.match(f)) or not _regular(folder / f, MAX_STEP_BYTES):
+        data = _read_regular(folder / f, MAX_STEP_BYTES) if isinstance(f, str) and FILE_RE.match(f) else None
+        if data is None:
             raise InputError(f"case part {name}: its file is missing or not a plain file")
         seen.add(name)
         try:
-            solids = import_step(folder / f).solids()
+            solids = _import_bytes(data, own).solids()
         except Exception as e:  # noqa: BLE001
             raise InputError(f"case part {name}: its STEP could not be read ({e})") from None
         if not solids:
