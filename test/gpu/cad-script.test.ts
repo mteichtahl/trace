@@ -61,7 +61,7 @@ describe('the cad-script job kind', () => {
 
 // ------------------------------------------------------------------ the transport: presigned URLs
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { encodeSpec, jobKeys, type RemoteSpec } from '../../src/gpu/protocol.js'
@@ -210,3 +210,124 @@ describe('the function handler', () => {
     expect(got).toBe('s3://bucket/jobs/acme/board/x/spec')
   })
 })
+
+// ------------------------------------------------------------------ the worker's side: stage, sign, invoke, read back
+
+import { type FunctionApi, type Presigner, runFunction, signJobUrls } from '../../src/gpu/function.js'
+import { GpuJobSchema as Schema } from '../../src/gpu/jobs.js'
+import { stageJob } from '../../src/gpu/staging.js'
+import { FakeS3 } from '../core/fake-s3.js'
+
+/** URLs that name the bucket, key and verb, and a fetch that serves them from the FakeS3 as S3 would. */
+function urlBridge(s3: FakeS3): { presign: Presigner; fetch: FetchLike; signed: { key: string; method: string; expiresIn: number }[] } {
+  const signed: { key: string; method: string; expiresIn: number }[] = []
+  return {
+    signed,
+    presign: { sign: async (i) => { signed.push({ key: i.key, method: i.method, expiresIn: i.expiresIn }); return `https://${i.bucket}.s3.test/${i.key}?X-Amz-Expires=${i.expiresIn}&m=${i.method}` } },
+    fetch: async (url, init) => {
+      const u = new URL(url)
+      const Bucket = u.host.split('.')[0] as string
+      const Key = u.pathname.slice(1)
+      if (u.searchParams.get('m') !== init.method) return reply(403, new Uint8Array())
+      if (init.method === 'PUT') {
+        if (init.headers && Object.keys(init.headers).length) return reply(403, new Uint8Array())
+        await s3.putObject({ Bucket, Key, Body: init.body ?? new Uint8Array() })
+        return reply(200, new Uint8Array())
+      }
+      try {
+        return reply(200, (await s3.getObject({ Bucket, Key })).Body)
+      } catch {
+        return reply(404, new Uint8Array())
+      }
+    },
+  }
+}
+
+const workerEnv = { TRACE_CAD_FUNCTION: 'trace-cad-0123abcd', TRACE_TOOLS_FUNCTION: 'trace-tools-0123abcd', TRACE_GPU_BUCKET: 'central-bucket', TRACE_PROJECT: 'Acme/Board', TRACE_CAD_FUNCTION_MEMORY_MB: '3072' }
+
+describe('a case script on the cad function', () => {
+  const scriptJob = (over: Record<string, unknown> = {}) => {
+    const d = mkdtempSync(join(tmpdir(), 'cad-in-'))
+    writeFileSync(join(d, 'case.py'), 'def build(board, settings): ...')
+    writeFileSync(join(d, 'facts.json'), '{"version":1}')
+    return Schema.parse({
+      kind: 'cad-script', timeoutSeconds: 60,
+      argv: ['sh', '-c', 'cat "$0" > "$1"; echo "{\\"parts\\":[]}" > "$2"; echo built; env | grep -c "AWS_\\|TRACE_" || true', '{in:case.py}', '{out:part-1.step}', '{out:claims.json}'],
+      inputs: { 'case.py': join(d, 'case.py'), 'facts.json': join(d, 'facts.json') }, outputs: ['part-1.step', 'part-2.step', 'claims.json'], ...over,
+    })
+  }
+
+  it('stages it, signs a URL per file, invokes the cad function with urls only, and reads the results back from S3', async () => {
+    const s3 = new FakeS3()
+    const bridge = urlBridge(s3)
+    const calls: { FunctionName: string; event: Record<string, unknown> }[] = []
+    const lambda: FunctionApi = {
+      invoke: async (i) => {
+        const event = JSON.parse(new TextDecoder().decode(i.Payload)) as Record<string, unknown>
+        calls.push({ FunctionName: i.FunctionName, event })
+        // the cad function: no S3 client, the role flag set, a fetch of its own
+        const reply = await handle(event, { env: { TRACE_CAD_FUNCTION_ROLE: '1', TRACE_PROJECT: 'acme/board' }, fetch: bridge.fetch, run: (deps, given) => observedMain({ ...deps, echo: false }, given) })
+        return { StatusCode: 200, Payload: new TextEncoder().encode(JSON.stringify(reply)), $metadata: { requestId: 'req-cad' } }
+      },
+    }
+    const rows: Record<string, unknown>[] = []
+    const r = await runFunction(scriptJob(), { lambda, s3, presign: bridge.presign, env: workerEnv, recordCost: async (x) => { rows.push(x as unknown as Record<string, unknown>) } })
+    expect(r).toMatchObject({ exitCode: 0, where: 'function', jobId: 'req-cad' })
+    expect(readFileSync(r.outputs['part-1.step'] as string, 'utf8')).toBe('def build(board, settings): ...')
+    expect(readFileSync(r.outputs['claims.json'] as string, 'utf8')).toBe('{"parts":[]}\n')
+    expect(r.outputs['part-2.step']).toBeUndefined()
+    // the isolated script saw no credentials and no trace settings
+    expect(r.stdout).toBe('built\n0\n')
+    // the event: the cad function's name, urls and nothing else (no spec, no S3 address)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.FunctionName).toBe('trace-cad-0123abcd')
+    expect(Object.keys(calls[0]?.event ?? {})).toEqual(['urls'])
+    const urls = calls[0]?.event.urls as JobUrls
+    expect(Object.keys(urls).sort()).toEqual(['exit', 'inputs', 'outputs', 'spec', 'stderr', 'stdout'])
+    expect(Object.keys(urls.inputs).sort()).toEqual(['case.py', 'facts.json'])
+    expect(Object.keys(urls.outputs).sort()).toEqual(['claims.json', 'part-1.step', 'part-2.step'])
+    for (const u of [urls.spec, ...Object.values(urls.inputs)]) expect(u).toMatch(/m=GET$/)
+    for (const u of [urls.stdout, urls.stderr, urls.exit, ...Object.values(urls.outputs)]) expect(u).toMatch(/m=PUT$/)
+    expect(urls.spec).toMatch(/^https:\/\/central-bucket\.s3\.test\/jobs\/acme\/board\/cad-script-[\w-]+\/spec\?X-Amz-Expires=1200&m=GET$/)
+    // every URL is 20 minutes, and every one is under the job's own prefix
+    expect(bridge.signed).toHaveLength(9)
+    for (const x of bridge.signed) {
+      expect(x.expiresIn).toBe(1200)
+      expect(x.key).toMatch(/^jobs\/acme\/board\/cad-script-[\w-]+\//)
+    }
+    // the spec in S3 is a cad-script spec with no shared inputs
+    const key = [...s3.objects.keys()].find((k) => k.endsWith('/spec')) as string
+    const spec = decodeSpecOf(s3, key)
+    expect(spec.kind).toBe('cad-script')
+    expect(spec.shared).toBeUndefined()
+    expect(spec.isolate).toBe(true)
+    // the call's cost row: priced with the cad function's memory
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ kind: 'tools', agent: 'cad-script', memoryMb: 3072 })
+  })
+
+  it('needs the cad function, reports a function error with the script\'s stderr, and never takes another kind', async () => {
+    const s3 = new FakeS3()
+    const bridge = urlBridge(s3)
+    const { TRACE_CAD_FUNCTION: _f, ...noCad } = workerEnv
+    await expect(runFunction(scriptJob(), { lambda: { invoke: async () => ({}) }, s3, presign: bridge.presign, env: noCad })).rejects.toThrow(/TRACE_CAD_FUNCTION/)
+    const failing: FunctionApi = { invoke: async () => ({ StatusCode: 200, FunctionError: 'Unhandled', Payload: new TextEncoder().encode(JSON.stringify({ errorType: 'Error', errorMessage: 'the cad function runs case scripts through URLs only' })), $metadata: { requestId: 'r' } }) }
+    await expect(runFunction(scriptJob(), { lambda: failing, s3, presign: bridge.presign, env: workerEnv, recordCost: async () => undefined })).rejects.toThrow(/the cad function could not run cad-script-.*through URLs only/)
+    const { runCadScript } = await import('../../src/gpu/function.js')
+    await expect(runCadScript(Schema.parse({ kind: 'cad', argv: ['true'] }), { lambda: failing, s3, presign: bridge.presign, env: workerEnv })).rejects.toThrow(/case scripts only, not a cad job/)
+  })
+
+  it('signJobUrls: the keys under the bucket prefix, GET for what goes in and PUT for what comes out', async () => {
+    const s3 = new FakeS3()
+    const bridge = urlBridge(s3)
+    const job = scriptJob()
+    const staged = await stageJob(job, { env: workerEnv, s3, now: Date.now() })
+    const urls = await signJobUrls(staged, job, bridge.presign, 60)
+    expect(urls.inputs['case.py']).toBe(`https://central-bucket.s3.test/jobs/acme/board/${staged.id}/in/case.py?X-Amz-Expires=60&m=GET`)
+    expect(urls.outputs['claims.json']).toBe(`https://central-bucket.s3.test/jobs/acme/board/${staged.id}/out/claims.json?X-Amz-Expires=60&m=PUT`)
+    expect(urls.exit).toBe(`https://central-bucket.s3.test/jobs/acme/board/${staged.id}/exit?X-Amz-Expires=60&m=PUT`)
+    expect(JobUrlsSchema.safeParse(urls).success).toBe(true)
+  })
+})
+
+const decodeSpecOf = (s3: FakeS3, key: string): RemoteSpec => JSON.parse(new TextDecoder().decode(s3.objects.get(key)?.body)) as RemoteSpec
