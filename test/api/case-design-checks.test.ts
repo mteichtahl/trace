@@ -9,7 +9,7 @@ import { PY_DIR } from '../../src/tools/mech/engine.js'
 
 const inputs: BuildInputs = {
   board: 'hardware/x.kicad_pcb', board_sha256: 'b1', case_json_sha256: 'j1', case_py_sha256: 'p1', case_file: null, case_file_sha256: null,
-  facts_sha256: 'f1', capabilities_checked: '2026-10-29', engine: { ts: ENGINE_VERSION, py_version: null, py_sha256: 'e1' },
+  facts_sha256: 'f1', capabilities_checked: '2026-10-29', capabilities_sha256: 'c1', engine: { ts: ENGINE_VERSION, py_version: null, py_sha256: 'e1' },
 }
 
 const passing = {
@@ -70,14 +70,16 @@ describe('the stale check', () => {
     expect(staleReasons(inputs, now({ facts_sha256: 'f2' }))).toEqual(['the board facts trace reads from the board changed since the build (the facts reader or the height table)'])
     // a board change explains the facts' change: one reason
     expect(staleReasons(inputs, now({ board_sha256: 'b2', facts_sha256: 'f2' }))).toHaveLength(1)
-    expect(staleReasons(inputs, now({ capabilities_checked: '2027-01-15' }))).toEqual(['the process capabilities were re-read (2027-01-15; the build used 2026-10-29)'])
+    // the scheduled check moving the date on, with the same figures, leaves the build current; a changed figure does not
+    expect(staleReasons(inputs, now({ capabilities_checked: '2027-01-15' }))).toEqual([])
+    expect(staleReasons(inputs, now({ capabilities_checked: '2027-01-15', capabilities_sha256: 'c2' }))).toEqual(['the process capabilities changed (confirmed 2027-01-15; the build used the table of 2026-10-29)'])
     expect(staleReasons(inputs, now({ engine: { ts: ENGINE_VERSION, py_version: null, py_sha256: 'e2' } }))).toEqual(['the enclosure engine\'s code changed since the build'])
     expect(staleReasons(inputs, now({ engine: { ts: '2', py_version: null, py_sha256: 'e1' } }))[0]).toMatch(/contract changed/)
     expect(staleReasons({ ...inputs, engine: { ts: ENGINE_VERSION, py_version: '0.1', py_sha256: 'e1' } }, now({ engine: { ts: ENGINE_VERSION, py_version: '0.2', py_sha256: 'e1' } }))[0]).toMatch(/tracebridge\.mech 0\.1 to 0\.2/)
   })
 
   it('treats an older build without the new fields as stale, and skips fields it cannot compute', () => {
-    const { facts_sha256: _f, capabilities_checked: _c, engine: _e, ...old } = inputs
+    const { facts_sha256: _f, capabilities_checked: _c, capabilities_sha256: _s, engine: _e, ...old } = inputs
     expect(staleReasons(old, now({}))).toEqual(expect.arrayContaining(['the build records no engine version']))
     expect(staleReasons(inputs, { board: inputs.board, board_sha256: 'b1', case_json_sha256: 'j1' })).toEqual([])
     expect(staleReasons(null, now({}))).toEqual(['the build recorded no inputs'])
@@ -87,9 +89,9 @@ describe('the stale check', () => {
     const files: Record<string, string> = { 'hardware/x.kicad_pcb': 'board', 'mechanical/case.json': '{}', 'mechanical/case.py': 'print(1)' }
     const was: BuildInputs = { ...inputs, board_sha256: sha256('board'), case_json_sha256: sha256('{}'), case_py_sha256: sha256('print(1)') }
     const read = async (p: string) => (p in files ? new TextEncoder().encode(files[p]) : null)
-    expect(staleReasons(was, await filesNow(was, read, '2026-10-29'))).toEqual([])
+    expect(staleReasons(was, await filesNow(was, read, { checked: '2026-10-29', sha256: 'c1' }))).toEqual([])
     files['mechanical/case.py'] = 'print(2)'
-    const r = staleReasons(was, await filesNow(was, read, '2026-10-29'))
+    const r = staleReasons(was, await filesNow(was, read, { checked: '2026-10-29', sha256: 'c1' }))
     expect(r).toEqual(['mechanical/case.py changed since the build'])
     expect(staleSentence(r)).toBe('The case was built before mechanical/case.py changed: run mech.build.')
   })

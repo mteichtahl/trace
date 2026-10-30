@@ -102,6 +102,16 @@ source page and the date it was read (2026-10-29 for this build). Sources:
 <https://jlc3dp.com/help/article/3d-printing-design-guideline>, <https://jlc3dp.com/capabilities/3d-printing-service>,
 <https://jlccnc.com/help/article/CNC-Machining-Design-Guideline>.
 
+Kept current by trace's own CI (`.github/workflows/capabilities.yml`, daily; README "Keeping the rules current"):
+`src/tools/mech/capsync.ts` re-reads the pages and compares each stored figure (`FIGURES`: page, label, stored text,
+optionally `nth`, `occurrence` and `apply`) with the first text of the same shape after its label, numbers as whole
+numbers and labels ending in a letter or digit as whole words. A figure stated with other numbers and with an `apply`
+is written to `src/tools/mech/capabilities.updates.ts` (`UPDATES`), which `capabilities.ts` applies on top of the
+reviewed table (`BASE_CAPABILITIES` → `CAPABILITIES`), on a pull request a person reviews; when every figure is still
+stated, `checked` moves on by a pull request that may merge itself (every 30 days); anything else becomes an issue for
+a person and nothing changes. A build records `capabilities_sha256` (`capabilitiesStamp`: the figures the engine
+reads, without the date) and is stale when that changes, not when `checked` moves on.
+
 ```jsonc
 {
   "checked": "2026-10-29",
