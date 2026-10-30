@@ -27,6 +27,9 @@ RUN apt-get update \
       build-essential python3 python3-venv python3-pip ngspice verilator iverilog poppler-utils \
  && verilator --version \
  && rm -rf /var/lib/apt/lists/*
+# git trusts the clones on session storage, whose files belong to another uid than the runtime's user: without it git
+# refuses them as "dubious ownership" (src/agents/runtime/job.ts gitAuthEnv says the same for the commands it runs)
+RUN git config --system --add safe.directory '*'
 
 # Node 22 (NodeSource) and the GitHub CLI (its apt repository).
 RUN install -d -m 0755 /etc/apt/keyrings \
