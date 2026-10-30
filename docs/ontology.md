@@ -33,7 +33,7 @@ Read against trace's main branch on 30 October 2026, much of what this design as
 | Templates in installation settings | Four templates (board, FPGA, firmware, mixed) defined in code | Moving them into installation settings is still to do |
 | A case model and "Case fits" gate | The enclosure design note: build123d chosen, the case as `mechanical/case.py` in the project repository, the fit check as the layout gate's `fit` criterion | Follows the note; the fit check's shape backs that criterion |
 
-One more constraint from the code: AgentCore's 2 GB image limit is why KiCad and similar programs moved to the tools image, so build123d (about 850 MB with its kernel) belongs in the tools image too, not the agent image the enclosure note names.
+One more constraint from the code: AgentCore's 2 GB image limit is why KiCad and similar programs moved to the tools image, so build123d (about 850 MB with its kernel) belongs in the tools image too; the enclosure note was corrected to say so on 30 October 2026.
 
 ## Goals and non-goals
 
