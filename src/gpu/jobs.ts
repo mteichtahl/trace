@@ -47,9 +47,13 @@ export const JobKind = z.enum(['blender', 'freerouting', 'orthoroute',
   // thermal (src/tools/thermal), all CPU: the 2.5D board solver for grids too big for the caller (thermal), CalculiX
   // ccx for the 3D finite-element path (calculix), and OpenFOAM conjugate heat transfer for airflow (openfoam)
   'thermal', 'calculix', 'openfoam',
-  // the enclosure engine (src/tools/mech/engine.ts): build123d and tracebridge.mech, building the case, its fit check
-  // and its STEP/STL/3MF files
-  'cad'])
+  // the enclosure engine (src/tools/mech/engine.ts, docs/enclosure-build.md "Trust"), two kinds:
+  //   cad         trace's own code only: the built-in template, the parts a cad-script job built (--built), or a
+  //               handed-in STEP; then the fit, the rules, the exports and the records. On the tools function
+  //   cad-script  the case script (mechanical/case.py: user code, `python -m tracebridge.mech build-only`), the board
+  //               facts and settings in, one STEP per part and claims.json out. On the project's cad function
+  //               (TRACE_CAD_FUNCTION: no credentials, no S3), else a local child process; never the queue
+  'cad', 'cad-script'])
 export type JobKind = z.output<typeof JobKind>
 
 const SEGMENT = /^[\w.-]+$/
@@ -98,12 +102,23 @@ export const GpuJobSchema = z.object({
   /**
    * The program is untrusted code (a project's case script): it runs with a scrubbed environment (isolatedEnv: no
    * credentials, no tokens, nothing of the Lambda runtime), in a process group of its own that is killed whole when
-   * the job ends. Default: true for kind `cad`, false otherwise.
+   * the job ends. Default: true for kinds `cad` and `cad-script`, false otherwise.
    */
   isolate: z.boolean().optional(),
 }).strict().superRefine((j, ctx) => {
   for (const m of nameClashes(Object.keys(j.inputs))) ctx.addIssue({ code: 'custom', path: ['inputs'], message: m })
-}).transform((j) => ({ ...j, isolate: j.isolate ?? j.kind === 'cad' }))
+}).transform((j) => ({ ...j, isolate: j.isolate ?? ISOLATED_KINDS.has(j.kind) }))
+
+/** The kinds whose program is a project's own code: isolated by default. */
+export const ISOLATED_KINDS: ReadonlySet<JobKind> = new Set<JobKind>(['cad', 'cad-script'])
+
+/**
+ * What a `cad-script` job hands back (python/tracebridge/mech/child.py): one STEP per case part (`part-<n>.step`, at
+ * most 16 parts; the child numbers them from 0, so both numberings are listed and the ones not written are simply
+ * absent) and `claims.json` (parts, joints, fasteners, notes, or {"error"}). The `cad` job that follows reads them
+ * strictly (`--built`); they are claims, never a pass.
+ */
+export const CAD_SCRIPT_OUTPUTS: readonly string[] = [...Array.from({ length: 17 }, (_, i) => `part-${i}.step`), 'claims.json']
 export type GpuJob = z.input<typeof GpuJobSchema>
 
 export interface JobResult {
@@ -140,11 +155,16 @@ export const FUNCTION_MAX_SECONDS = 840
  *   of those kinds                                  batch (a project without the tools function: the flat layout)
  *   otherwise                                       local
  * Without the tools function and a queue this is local, as on a laptop.
+ *
+ * A `cad-script` job (a project's case script) is apart from all that: the project's cad function (TRACE_CAD_FUNCTION,
+ * nested layout) when there is one, else local; never the queue or the tools function, which hold credentials
+ * (docs/enclosure-build.md "Trust"). TRACE_GPU_REMOTE=never still means local.
  */
 export function backendFor(job: { kind?: JobKind | undefined; gpu?: boolean | undefined; remote?: boolean | undefined }, env: NodeJS.ProcessEnv = process.env): Backend {
   const queue = env.TRACE_GPU_QUEUE
   const mode = env.TRACE_GPU_REMOTE ?? 'auto'
   if (mode === 'never') return 'local'
+  if (job.kind === 'cad-script') return env.TRACE_CAD_FUNCTION ? 'function' : 'local'
   if (queue && mode === 'always') return 'batch'
   if (queue && ((job.gpu && !localGpu(env)) || job.remote)) return 'batch'
   const tools = !!job.kind && FUNCTION_KINDS.has(job.kind)
@@ -284,8 +304,14 @@ export async function runLocal(spec: GpuJob): Promise<JobResult> {
  * Each job is a span (`trace.gpu_job <kind>`: kind, backend, job ids, seconds, exit code) and counts trace.gpu.jobs and
  * trace.gpu.duration; a Batch job gets the span's trace context (TRACEPARENT), so its runner's span joins the trace.
  */
+/** The message for a case script where nothing may run it: the agent image (TRACE_TOOLS_ELSEWHERE) without a cad function. */
+export const NO_CAD_FUNCTION = "a custom case script builds only with the project's cad function (nested layout) or on a laptop; the cloud builds the template or a handed-in STEP"
+
 export async function runJob(spec: GpuJob): Promise<JobResult> {
   const backend = backendFor(spec)
+  // the agent image has no build123d and no cad function to send the script to (the flat layout): a local run would
+  // only fail later and less clearly
+  if (spec.kind === 'cad-script' && backend === 'local' && ['1', 'true', 'yes'].includes(process.env.TRACE_TOOLS_ELSEWHERE ?? '')) throw new ToolError(NO_CAD_FUNCTION)
   let outcome: Outcome = 'ok'
   const t0 = performance.now()
   try {
