@@ -608,7 +608,7 @@ export class TraceStack extends Stack {
     })
 
     // ------------------------------------------------------------------ the web app's parts that name the pool
-    if (web && webClient) web.attach({ pool: users, client: webClient, apiRuntimeArn: api.attrAgentRuntimeArn, email: emailCodes })
+    if (web && webClient) web.attach({ pool: users, client: webClient, apiRuntimeArn: api.attrAgentRuntimeArn, email: emailCodes, apiBuild: contentTag })
     // ------------------------------------------------------------------ keeping the installation up to date (selfUpdate)
     // The role trace's own repository's ci workflow assumes, on `branch` only, to deploy this stack again with the
     // settings the installer saved (src/installer/update.ts). It may do exactly what that takes and nothing else:

@@ -11,7 +11,8 @@ import { App, Stack } from 'aws-cdk-lib'
 import { Match, Template } from 'aws-cdk-lib/assertions'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { InfraPropsSchema, WEB_OUTPUTS, stackName, webConfigParameter } from '../../src/infra/props.js'
-import { TraceStack } from '../../src/infra/stack.js'
+import { REPO_ROOT, TraceStack } from '../../src/infra/stack.js'
+import { imageContentTag } from '../../src/infra/images.js'
 import { API_FUNCTION, FORWARDED_AUTH_HEADER, bundleBackend, SPA_FUNCTION, SUBSCRIBE_HANDLER, VOICE_PREFIX, contentSecurityPolicy, modelResources } from '../../src/infra/web.js'
 import { RUNNERS, type Synth, synth } from './templates.js'
 
@@ -96,11 +97,12 @@ describe('the web app', () => {
     web.hasResourceProperties('AWS::Lambda::Permission', { Action: 'lambda:InvokeFunction', Principal: 'cloudfront.amazonaws.com', InvokedViaFunctionUrl: true })
   })
 
-  it('runs the backend on Node.js 22 arm64 behind an IAM function URL with response streaming, told only its settings parameter', () => {
+  it('runs the backend on Node.js 22 arm64 behind an IAM function URL with response streaming, told its settings parameter and the API\'s build', () => {
     const fn = (Object.values(web.findResources('AWS::Lambda::Function')) as Res[]).find((f) => f.Properties.FunctionName === 'trace-web')
     expect(fn?.Properties).toMatchObject({
       Runtime: 'nodejs22.x', Architectures: ['arm64'], MemorySize: 1024, Timeout: 900, Handler: 'index.handler',
-      Environment: { Variables: { TRACE_WEB_CONFIG_PARAM: '/trace/web/config', NODE_OPTIONS: '--enable-source-maps' } },
+      // the API's build: people's runtime sessions move to a new one when it changes (src/web/call.ts runtimeSession)
+      Environment: { Variables: { TRACE_WEB_CONFIG_PARAM: '/trace/web/config', NODE_OPTIONS: '--enable-source-maps', TRACE_API_BUILD: imageContentTag(REPO_ROOT) } },
     })
     expect(only(web, 'AWS::Lambda::Url').Properties).toMatchObject({ AuthType: 'AWS_IAM', InvokeMode: 'RESPONSE_STREAM' })
     web.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 30 })

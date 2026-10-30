@@ -40,8 +40,15 @@ export const API_FIRST_BYTE_MS = 50_000
 /** What the app shows when the API runtime does not answer in time, or cannot be reached. */
 export const API_UNAVAILABLE = 'trace\'s service is not answering just now. It may still be starting: try again in a minute. If this keeps happening, an admin can look at the API runtime\'s logs.'
 
-/** The person's stable runtime session id (AgentCore needs 33 to 256 characters). */
-export const runtimeSession = (sub: string): string => `trace-web-${createHash('sha256').update(sub).digest('hex').slice(0, 40)}`
+/**
+ * The person's runtime session id (AgentCore needs 33 to 256 characters): stable for them while the API's build stays
+ * the same. The build (TRACE_API_BUILD, the image content tag the stack gives this function) is in it because a
+ * session keeps the runtime version it started on, and the app's calls keep a person's one session alive to its
+ * 8-hour limit: without it, a deploy reached a signed-in person's calls only hours later (the API's own fixes, and the
+ * worker build it names tool sessions by: src/api/workers.ts toolSession).
+ */
+export const runtimeSession = (sub: string, build: string = process.env.TRACE_API_BUILD ?? ''): string =>
+  `trace-web-${createHash('sha256').update(build ? `${sub}\n${build}` : sub).digest('hex').slice(0, 40)}`
 
 export interface CallAnswer { status: number; text: string; json: unknown }
 

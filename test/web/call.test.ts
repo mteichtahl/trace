@@ -35,6 +35,10 @@ describe('/api/call', () => {
     expect(c.headers.authorization).toBe(`Bearer ${tok}`)
     expect(c.headers['x-amzn-bedrock-agentcore-runtime-session-id']).toBe(`trace-web-${createHash('sha256').update('sub-ada').digest('hex').slice(0, 40)}`)
     expect(runtimeSession('sub-ada').length).toBeGreaterThanOrEqual(33)
+    // a new API build is a new session (a session keeps the runtime version it started on); no build: as before
+    expect(runtimeSession('sub-ada', 'v0.1.0-bbbbbbbbbbbbbbbb')).not.toBe(runtimeSession('sub-ada', 'v0.1.0-aaaaaaaaaaaaaaaa'))
+    expect(runtimeSession('sub-ada', 'v0.1.0-aaaaaaaaaaaaaaaa')).toMatch(/^trace-web-[0-9a-f]{40}$/)
+    expect(runtimeSession('sub-ada', '')).toBe(runtimeSession('sub-ada'))
     expect(c.args).toEqual({ repo: 'acme/board' })
     // a read publishes nothing
     expect(w.publisher.sent).toEqual([])

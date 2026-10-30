@@ -524,6 +524,8 @@ export interface WebAttachProps {
   apiRuntimeArn: string
   /** whether email one-time codes are a first factor (web.sesFrom) */
   email: boolean
+  /** the API's image content tag: the backend's TRACE_API_BUILD, part of each person's runtime session (src/web/call.ts) */
+  apiBuild?: string
 }
 
 /** The web app's settings as the backend reads them (src/web/, from TRACE_WEB_CONFIG_PARAM). */
@@ -591,6 +593,8 @@ export class TraceWeb extends Construct {
     const parent = Stack.of(this)
     const { region } = parent
     void a.pool
+    // a deploy that changes the API's code moves people's calls to new runtime sessions, on the new version
+    if (a.apiBuild) this.stack.backend.addEnvironment('TRACE_API_BUILD', a.apiBuild)
 
     // ------------------------------------------------------------------ the backend's settings
     const config: WebConfig = {
