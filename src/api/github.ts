@@ -38,6 +38,8 @@ export interface GitHubApi {
   openPulls(repo: string): Promise<PullSummary[]>
   openIssues(repo: string, label: string): Promise<IssueSummary[]>
   workflowRuns(repo: string, limit: number): Promise<RunSummary[]>
+  /** Start a workflow_dispatch run of `workflow` (its file name) on `ref`. Optional: absent, nothing is started. */
+  dispatchWorkflow?(repo: string, workflow: string, ref: string): Promise<void>
   lastDeploy(repo: string): Promise<DeploySummary | null>
 }
 
@@ -141,6 +143,10 @@ export class HttpGitHub implements GitHubApi {
     if (r.status === 404) return null
     if (!r.ok) throw new GitHubError(r.status, `GitHub GET contents: ${r.status}`)
     return z.object({ sha: z.string() }).loose().parse(await r.json()).sha
+  }
+
+  async dispatchWorkflow(repo: string, workflow: string, ref: string): Promise<void> {
+    await this.json('POST', `${this.p(repo)}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, { ref })
   }
 
   async createBranch(repo: string, branch: string, sha: string): Promise<void> {

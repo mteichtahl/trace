@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
-import { cloudWait } from '../../src/api/actions-projects.js'
+import { cloudWait, startUpdate } from '../../src/api/actions-projects.js'
 import { AccessDenied } from '../../src/core/access.js'
 import { Registry } from '../../src/core/registry.js'
 import { FLAT_UPDATE_MAX } from '../../src/installer/pending.js'
@@ -47,3 +47,25 @@ describe('installation.layout', () => {
     expect(cloudWait(undefined, 'flat')).toMatch(/next time an admin runs the installer.*flat layout.*about 20 projects fit/)
   })
 })
+
+describe('projects.create starts the installation update', () => {
+  it('runs trace\'s ci workflow on the self-update\'s branch, and says the agent arrives within the hour', async () => {
+    const runs: string[] = []
+    const gh = { dispatchWorkflow: async (repo: string, wf: string, ref: string) => { runs.push(`${repo} ${wf} ${ref}`) } }
+    const r = await startUpdate(gh, 'mteichtahl/trace@main', 'nested')
+    expect(runs).toEqual(['mteichtahl/trace ci.yml main'])
+    expect(r).toEqual({ started: true, text: expect.stringMatching(/^Started the installation update: mteichtahl\/trace's ci workflow on main .*agent and knowledge base, usually within the hour/) })
+    expect((await startUpdate(gh, 'mteichtahl/trace@main', 'flat')).text).toMatch(/agent, usually within the hour.*flat layout/)
+  })
+
+  it('without the self-update, or when GitHub refuses, waits as before and says why', async () => {
+    const runs: string[] = []
+    expect(await startUpdate({ dispatchWorkflow: async () => { runs.push('x') } }, undefined, 'nested')).toEqual({ started: false, text: cloudWait(undefined, 'nested') })
+    expect(runs).toEqual([])
+    expect(await startUpdate({}, 'mteichtahl/trace@main', 'nested')).toEqual({ started: false, text: cloudWait('mteichtahl/trace@main', 'nested') })
+    const refused = await startUpdate({ dispatchWorkflow: async () => { throw new Error('GitHub POST /repos/mteichtahl/trace/actions/workflows/ci.yml/dispatches: 403') } }, 'mteichtahl/trace@main', 'nested')
+    expect(refused.started).toBe(false)
+    expect(refused.text).toMatch(/^The project's agent and knowledge base are added at the next update.*\(trace could not start it itself: .*403\.\)$/)
+  })
+})
+

@@ -121,5 +121,7 @@ export class FakeGitHub implements GitHubApi {
   async openPulls(): Promise<never[]> { return [] }
   async openIssues(): Promise<never[]> { return [] }
   async workflowRuns(): Promise<never[]> { return [] }
+  dispatched: string[] = []
+  async dispatchWorkflow(repo: string, workflow: string, ref: string): Promise<void> { this.dispatched.push(`${repo} ${workflow} ${ref}`) }
   async lastDeploy(): Promise<null> { return null }
 }
