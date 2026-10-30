@@ -15,7 +15,10 @@
  *                               5. record the request under installation/pending-projects/ for the next update of the
  *                                  installation, which adds the project's own agent, memory, knowledge base and build
  *                                  runner (per-project cloud resources need the stack deployed again): the self-update
- *                                  job, or the installer (src/installer/pending.ts; cloudWait says which, and when)
+ *                                  job, or the installer (src/installer/pending.ts; cloudWait says which, and when).
+ *                                  With the self-update on, the API starts that job now (startUpdate: trace's ci
+ *                                  workflow on its branch, by hand), so the project's agent arrives within the hour
+ *                                  instead of at the next merge; until then its tools answer that it is being set up
  *                             and answers each step's outcome, plus that last part as a wait. A step that fails stops
  *                             the ones that depend on it and says so; the request can be sent again (every step is
  *                             safe to repeat).
@@ -35,6 +38,7 @@ import { forgetNoJourney } from '../core/journey-store.js'
 import { register } from '../core/onboard.js'
 import { projectSlug } from '../core/project.js'
 import { FLAT_UPDATE_MAX } from '../installer/pending.js'
+import type { GitHubApi } from './github.js'
 import { ActionError, type Context, Repo, def, hashOf, label, storeAt, writeJourney } from './action-kit.js'
 
 export interface Member { sub: string; email: string | null; class: PersonClass | null; part: Part; admin: boolean; can_sign: boolean }
@@ -104,6 +108,29 @@ export function cloudWait(selfUpdate: string | undefined = process.env.TRACE_SEL
   if (!m && flat) return `The project's agent is added the next time an admin runs the installer (\`tracectl install\`), which takes in every project created here.${flat}`
   if (!m) return 'The project\'s agent and knowledge base are added the next time an admin runs the installer (`tracectl install`), which takes in every project created here.'
   return `The project's agent and knowledge base are added at the next update of the installation: when ${m[1]}'s ${m[2]} branch next changes, its ci workflow deploys the installation with this project (usually within an hour of the merge). An admin can start it now by running that workflow on ${m[2]} by hand (Actions → ci → Run workflow), or by running the installer.`
+}
+
+/** The workflow whose update-installation job deploys the installation (.github/workflows/ci.yml). */
+export const UPDATE_WORKFLOW = 'ci.yml'
+
+/**
+ * Start the self-update now (a workflow_dispatch run of trace's ci workflow on the self-update's branch: its
+ * update-installation job runs on workflow_dispatch too), and say what the project waits for. Without the self-update,
+ * or when GitHub refuses (the API's token may not run workflows in trace's repository), the wait is cloudWait's.
+ * Several projects created close together each start a run; the job's concurrency group runs one deploy at a time and
+ * keeps only the newest waiting, which takes in every pending project.
+ */
+export async function startUpdate(gh: Pick<GitHubApi, 'dispatchWorkflow'>, selfUpdate: string | undefined = process.env.TRACE_SELF_UPDATE, layout: string | undefined = process.env.TRACE_LAYOUT): Promise<{ started: boolean; text: string }> {
+  const m = /^([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)@(.+)$/.exec(selfUpdate?.trim() ?? '')
+  if (!m || !gh.dispatchWorkflow) return { started: false, text: cloudWait(selfUpdate, layout) }
+  const [, repo = '', branch = ''] = m
+  try {
+    await gh.dispatchWorkflow(repo, UPDATE_WORKFLOW, branch)
+  } catch (e) {
+    return { started: false, text: `${cloudWait(selfUpdate, layout)} (trace could not start it itself: ${message(e)}.)` }
+  }
+  const flat = layout === 'flat' ? ` This installation keeps every project in one stack (the flat layout): the project gets no knowledge base, and the update adds it only while there are fewer than ${FLAT_UPDATE_MAX} projects. Admin › Installation says how to move to one nested stack per project.` : ''
+  return { started: true, text: `Started the installation update: ${repo}'s ci workflow on ${branch} tests trace and then deploys the installation with this project's agent${layout === 'flat' ? '' : ' and knowledge base'}, usually within the hour. Until it finishes, the project's tools answer that its agent is being set up.${flat}` }
 }
 
 const DEFAULT_SCAFFOLD: Readonly<Record<Template, 'empty' | 'kicad'>> = { board: 'kicad', mixed: 'kicad', fpga: 'empty', firmware: 'empty' }
@@ -211,20 +238,22 @@ export const PROJECT_ACTIONS = {
       step('journey', 'Start the journey', already ? 'skipped' : 'failed', message(e))
     }
 
-    // 5. the project's own cloud resources: at the next update of the installation
+    // 5. the project's own cloud resources: at the next update of the installation, started now when it can be
+    let cloud = cloudWait()
     try {
       await recordPending(ctx, repo, {
         repo, name: a.name, template: a.template, requested_by: label(ctx.principal), requested_at: new Date().toISOString(),
         needs: ['worker runtime', 'memory', 'knowledge base', 'build runner'],
       })
-      step('cloud', 'Set up the project\'s agent and knowledge base', 'waiting', cloudWait())
+      cloud = (await startUpdate(await ctx.deps.github())).text
+      step('cloud', 'Set up the project\'s agent and knowledge base', 'waiting', cloud)
     } catch (e) {
       step('cloud', 'Set up the project\'s agent and knowledge base', 'failed', message(e))
     }
 
     return {
       repo, ok: !steps.some((s) => s.state === 'failed'), steps, people,
-      waits: [{ id: 'installation-update', what: 'the project\'s agent and knowledge base', text: cloudWait() }],
+      waits: [{ id: 'installation-update', what: 'the project\'s agent and knowledge base', text: cloud }],
       journey,
     }
   }),

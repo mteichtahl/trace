@@ -69,7 +69,7 @@ describe('the API\'s remote jobs', () => {
     expect(jobs.repositoryOf(stranger)).toBeNull()
     expect(await jobs.jobStatus(stranger)).toEqual([])
     expect(f.calls).toHaveLength(2)
-    await expect(jobs.startJob({ kind: 'task', repository: 'other/repo', request: 'x', requestedBy: 'm' })).rejects.toThrow(/no worker runtime/)
+    await expect(jobs.startJob({ kind: 'task', repository: 'other/repo', request: 'x', requestedBy: 'm' })).rejects.toThrow(/agent is not set up yet: a new project's agent arrives with the next update/)
   })
 
   it('forwards a tool call to its own project\'s worker, in one session per project, and returns the tool\'s answer', async () => {
@@ -82,7 +82,7 @@ describe('the API\'s remote jobs', () => {
     expect(toolSession('acme/board')).toMatch(new RegExp(`^trace-api-${projectHash('acme/board')}-[0-9a-f]{24}$`))
     expect(toolSession('acme/fw')).not.toBe(toolSession('acme/board'))
     await expect(jobs.runTool!({ kind: 'tool', repository: 'acme/board', name: 'calc.fail', args: {} })).rejects.toThrow('bad input')
-    await expect(jobs.runTool!({ kind: 'tool', repository: 'other/repo', name: 'calc.via', args: {} })).rejects.toThrow(/no worker runtime/)
+    await expect(jobs.runTool!({ kind: 'tool', repository: 'other/repo', name: 'calc.via', args: {} })).rejects.toThrow(/agent is not set up yet: a new project's agent arrives with the next update/)
   })
 
   it('moves tool calls to a new session when the workers\' build changes: a running session keeps its old code', async () => {

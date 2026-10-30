@@ -112,7 +112,8 @@ export function remoteJobs(o: RemoteJobsOptions): JobsApi {
   const byHash = new Map([...o.runtimes.keys()].map((slug) => [projectHash(slug), slug] as const))
   const arnOf = (slug: string): string => {
     const id = o.runtimes.get(slug)
-    if (!id) throw new ActionError(`${slug} has no worker runtime in this installation`)
+    // a project created in the web app gets its runtime from the next update of the installation (projects.create)
+    if (!id) throw new ActionError(`${slug}'s agent is not set up yet: a new project's agent arrives with the next update of the installation, usually within the hour of its creation. If it has been longer, an admin can run trace's ci workflow on its main branch by hand, or the installer.`)
     return `arn:${o.partition ?? 'aws'}:bedrock-agentcore:${o.region}:${o.account}:runtime/${id}`
   }
   const opts = (slug: string) => ({ runtimeArn: arnOf(slug), region: o.region, ...(o.client ? { client: o.client } : {}) })
