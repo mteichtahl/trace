@@ -203,12 +203,21 @@ const MAX_LIFETIME_S = 28_800
 /** The extraheader value git sends: basic auth as x-access-token, the way actions/checkout does it. */
 export const authHeader = (token: string): string => `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`
 
-/** Environment that gives one git command (or Claude's shell) access to github.com, without touching any config file. */
+/**
+ * Environment that gives one git command (or Claude's shell) access to github.com, without touching any config file.
+ *
+ * And safe.directory=*: on AgentCore's session storage (/mnt/workspace) the clone's files belong to another uid than
+ * the runtime's user, and git then refuses the repository as "dubious ownership" (git config says only "fatal: not
+ * in a git directory", so every fresh checkout failed right after its clone). Every repository git sees here is one
+ * this runtime cloned. Given as command-scope config (GIT_CONFIG_*), which git honours for safe.directory.
+ */
 export function gitAuthEnv(token: string): Record<string, string> {
   return {
-    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_COUNT: '2',
     GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
     GIT_CONFIG_VALUE_0: authHeader(token),
+    GIT_CONFIG_KEY_1: 'safe.directory',
+    GIT_CONFIG_VALUE_1: '*',
     GIT_TERMINAL_PROMPT: '0',
   }
 }
