@@ -127,10 +127,11 @@ def _summary(case: Case) -> dict[str, Any]:
 
 
 def run(facts: dict[str, Any], settings: dict[str, Any], capabilities: dict[str, Any], out_dir: str | Path, *,
-        script: str | Path | None = None, case_file: str | Path | None = None,
+        script: str | Path | None = None, case_file: str | Path | None = None, built: str | Path | None = None,
         formats: list[str] | tuple[str, ...] = FORMATS) -> dict[str, Any]:
     """Build (or import) the case, check its fit and rules, write its files and records into out_dir, and return the
-    result (also what the CLI writes as result.json). Raises InputError for bad input."""
+    result (also what the CLI writes as result.json). Raises InputError for bad input. `built` is a folder a
+    `build-only` run wrote (the cloud's cad function, child.py): its parts are read instead of running any script."""
     t0 = time.perf_counter()
     facts = check_facts(facts)
     settings = normalize_settings(settings)
@@ -152,6 +153,12 @@ def run(facts: dict[str, Any], settings: dict[str, Any], capabilities: dict[str,
         if case_file is None:
             raise InputError("settings source is 'file' but no --case-file was given")
         case = import_case(case_file)
+    elif built is not None:
+        if script is not None:
+            raise InputError("give --built or --script, not both")
+        if not Path(built).is_dir():
+            raise InputError(f"no built-parts folder {built}")
+        case = child.read_private(Path(built))
     elif script is None:
         # The built-in template: the engine's own code, built in-process on copies so nothing it does to them
         # reaches the checks.
@@ -198,11 +205,13 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--capabilities", required=True)
     r.add_argument("--script")
     r.add_argument("--case-file")
+    r.add_argument("--built", help="a folder a build-only run wrote (part-<n>.step, claims.json): read it, run no script")
     r.add_argument("--out", required=True)
     r.add_argument("--formats", default=",".join(FORMATS))
     b = sub.add_parser("build-only", help="(internal) run a case script and write its parts and claims, no checks")
     b.add_argument("--facts", required=True)
     b.add_argument("--settings", required=True)
+    b.add_argument("--capabilities", help="for the process's assembly clearance (settings['resolved']); without it, 0.2 mm")
     b.add_argument("--script", required=True)
     b.add_argument("--out", required=True)
     args = ap.parse_args(argv)
@@ -214,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = run(_read_json(args.facts, "facts"), _read_json(args.settings, "settings"),
                      _read_json(args.capabilities, "capabilities"), out, script=args.script,
-                     case_file=args.case_file, formats=[f.strip() for f in args.formats.split(",") if f.strip()])
+                     case_file=args.case_file, built=args.built, formats=[f.strip() for f in args.formats.split(",") if f.strip()])
     except InputError as e:
         (out / "result.json").write_text(json.dumps({"error": str(e)}, indent=2) + "\n", encoding="utf-8")
         print(f"error: {e}", file=sys.stderr)

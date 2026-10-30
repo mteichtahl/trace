@@ -603,3 +603,39 @@ def test_lip_gap_and_pilot_are_measured_not_claimed(tmp_path):
     assert rows["lip"]["ok"] is False and rows["lip"]["measured"] == pytest.approx(0.05, abs=0.01)
     assert rows["hole"]["ok"] is False and rows["hole"]["measured"] == pytest.approx(1.0, abs=0.01)
     assert rows["lip"]["basis"] == rows["hole"]["basis"] == "model"
+
+
+def test_build_only_then_run_built(tmp_path):
+    """The cloud's two stages: build-only (the cad function, user code) writes part-<n>.step and claims.json; run
+    --built (the tools function, no script) reads them and checks. The result matches a one-stage run."""
+    script = tmp_path / "case.py"
+    script.write_text(mech.TEMPLATE.read_text().replace("return case", "case.notes.append('built by the script'); return case"))
+    (tmp_path / "facts.json").write_text(json.dumps(board_facts()))
+    (tmp_path / "case.json").write_text(json.dumps(settings()))
+    (tmp_path / "caps.json").write_text(json.dumps(CAPS))
+    built = tmp_path / "built"
+    built.mkdir()
+    env = {"PYTHONPATH": str(PYTHON_DIR), "PATH": "/usr/bin:/bin"}
+    p = subprocess.run([sys.executable, "-m", "tracebridge.mech", "build-only", "--facts", str(tmp_path / "facts.json"),
+                        "--settings", str(tmp_path / "case.json"), "--capabilities", str(tmp_path / "caps.json"),
+                        "--script", str(script), "--out", str(built)],
+                       capture_output=True, text=True, env=env, timeout=120)
+    assert p.returncode == 0, p.stderr
+    assert sorted(f.name for f in built.iterdir()) == ["claims.json", "part-1.step", "part-2.step"]
+    claims = json.loads((built / "claims.json").read_text())
+    assert [x["name"] for x in claims["parts"]] == ["base", "lid"]
+    p, r = _cli(tmp_path / "two", "--built", str(built), "--formats", "step")
+    assert p.returncode == 0, p.stderr
+    assert r["source"] == "script" and r["fit"]["status"] == "pass", r["fit"]["summary"]
+    assert "built by the script" in r["notes"]
+    assert all(row["ok"] for row in r["rules"] if row["ok"] is not None), [x for x in r["rules"] if x["ok"] is False]
+    one = run(board_facts(), settings(), CAPS, tmp_path / "one", script=script, formats=["step"])
+    assert one["fit"]["summary"] == r["fit"]["summary"] and one["case"] == r["case"]
+    # a link planted in the built folder is not followed, and a missing claims file is bad input, not a crash
+    link = tmp_path / "linked"
+    link.mkdir()
+    (link / "claims.json").symlink_to(built / "claims.json")
+    p, r = _cli(tmp_path / "three", "--built", str(link), "--formats", "step")
+    assert p.returncode == 2 and "no readable claims" in r["error"]
+    p, r = _cli(tmp_path / "four", "--built", str(built), "--script", str(script), "--formats", "step")
+    assert p.returncode == 2 and "not both" in r["error"]
