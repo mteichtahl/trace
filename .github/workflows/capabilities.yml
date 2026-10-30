@@ -1,0 +1,96 @@
+# Keeps the mechanical capability table current (src/tools/mech/capabilities.ts, docs/enclosure-build.md
+# "Capabilities"): every day it re-reads JLC3DP's and JLCCNC's pages and runs scripts/capabilities-sync.mjs, which
+# decides figure by figure (src/tools/mech/capsync.ts).
+#
+#   update     figures the pages now state with other numbers, in the same words: a pull request from the branch
+#              capabilities/sync that changes src/tools/mech/capabilities.updates.ts. A person reviews it; it never
+#              merges on its own, and case builds made with the old figures become stale when it does.
+#   reverify   every figure still stated, and the table last confirmed 30 or more days ago: a pull request that only
+#              moves the table's date on (no figure, no stale build), set to merge itself once CI passes.
+#   review     figures that could not be read or written back: one issue, labelled capabilities, updated each day and
+#              closed once every figure is confirmed again. The table keeps their last reviewed values.
+#
+# Pushes made with this workflow's token start no workflow, so it starts ci on the branch itself (workflow_dispatch),
+# and the pull request shows that run's checks. Opening pull requests needs the repository setting "Allow GitHub
+# Actions to create and approve pull requests"; self-merging needs "Allow auto-merge". Without either, the workflow
+# says so in its summary and in the issue, and leaves the branch for a person.
+#
+# Runs, like every job here, on this repository's AWS CodeBuild runner once the installation has made it (the
+# repository variable TRACE_CODEBUILD_PROJECT), and on GitHub's ubuntu-24.04 runner until then.
+name: capabilities
+
+on:
+  schedule:
+    - cron: '23 19 * * *' # 06:23 in Melbourne (AEDT)
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency: { group: capabilities, cancel-in-progress: false }
+
+jobs:
+  sync:
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","sync"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: capabilities/sync
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: main }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "22", cache: npm }
+      - run: npm ci
+      - id: sync
+        name: Re-read the pages and decide
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/capsync"
+          node scripts/capabilities-sync.mjs --out "$out" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "out=$out" >> "$GITHUB_OUTPUT"
+          echo "kind=$(cat "$out/kind")" >> "$GITHUB_OUTPUT"
+      - name: Pull request
+        if: steps.sync.outputs.kind != 'none'
+        env:
+          OUT: ${{ steps.sync.outputs.out }}
+          KIND: ${{ steps.sync.outputs.kind }}
+        run: |
+          set -euo pipefail
+          title="$(cat "$OUT/pr-title.txt")"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -C "$BRANCH"
+          git add src/tools/mech/capabilities.updates.ts
+          git commit -q -m "$title" -m "$(cat "$OUT/pr-body.md")"
+          git push -q --force origin "$BRANCH"
+          n="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$n" ]; then
+            gh pr edit "$n" --title "$title" --body-file "$OUT/pr-body.md"
+          elif ! n="$(gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$OUT/pr-body.md" | sed 's#.*/##')"; then
+            echo "Could not open the pull request (is \"Allow GitHub Actions to create and approve pull requests\" on?). The change is on branch $BRANCH." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "Pull request #$n ($KIND): $title" >> "$GITHUB_STEP_SUMMARY"
+          gh workflow run ci.yml --ref "$BRANCH"
+          if [ "$KIND" = reverify ]; then
+            gh pr merge "$n" --auto --squash \
+              || echo "Pull request #$n is not set to merge itself (is \"Allow auto-merge\" on?); merge it once CI passes." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Issue for a person
+        env:
+          OUT: ${{ steps.sync.outputs.out }}
+        run: |
+          set -euo pipefail
+          gh label create capabilities --color c5def5 --description 'The capability check needs a person' 2>/dev/null || true
+          n="$(gh issue list --label capabilities --state open --json number --jq '.[0].number // empty')"
+          if [ -f "$OUT/issue-body.md" ]; then
+            if [ -n "$n" ]; then gh issue edit "$n" --body-file "$OUT/issue-body.md"
+            else gh issue create --title "$(cat "$OUT/issue-title.txt")" --body-file "$OUT/issue-body.md" --label capabilities; fi
+          elif [ -n "$n" ]; then
+            gh issue close "$n" --comment "Every figure is confirmed on its page again ($(date -u +%F))."
+          fi

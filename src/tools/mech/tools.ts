@@ -26,7 +26,7 @@ import { candidates, needPcb, resolveProject } from '../kicad/project.js'
 import { cap, recorded } from '../kicad/record.js'
 import { type BoardFacts, boardFacts, repoPath } from './board.js'
 import {
-  CAPABILITIES, FIGURES, type FigureStatus, RECOMMENDED, RECOMMENDED_WHY, SOURCES, UPLOAD, figureStatus, isCnc, pageText, processRow, staleness,
+  CAPABILITIES, FIGURES, type FigureStatus, RECOMMENDED, RECOMMENDED_WHY, SOURCES, UPLOAD, capabilitiesStamp, figureStatus, isCnc, pageText, processRow, staleness,
 } from './capabilities.js'
 import { ALL_ENGINE_FILES, type EngineResult, FORMATS, PY_DIR, partsFor, runCase } from './engine.js'
 import { copyRepoFile, readRepoFile, removeRepoFile, repoDir, repoFile, writeRepoFile } from './paths.js'
@@ -235,6 +235,7 @@ function currentInputs(r: string, s: CaseSettings, facts?: BoardFacts): BuildInp
     case_file: s.source === 'file' ? s.file ?? null : null, case_file_sha256: s.source === 'file' && s.file ? sha(r, s.file) : null,
     facts_sha256: f ? sha256(JSON.stringify(f)) : '',
     capabilities_checked: CAPABILITIES.checked,
+    capabilities_sha256: capabilitiesStamp(),
     engine: engineStamp(process.env.TRACE_MECH_PYTHONPATH || PY_DIR),
   }
 }
@@ -422,7 +423,7 @@ export const capabilitiesTool = defineTool({
 
 export const capabilitiesCheckTool = defineTool({
   name: 'mech.capabilities_check',
-  description: 'Fetch each source page of the stored capabilities (JLC3DP\'s design guideline and service page, JLCCNC\'s machining guideline) and report, for each stored figure, whether the page still states it next to its label: same, changed (the label is there, the figure is not: a person checks the page and edits src/tools/mech/capabilities.ts with the new date) or unreadable (the page or the label could not be read). Changes nothing. Plain fetch (set NODE_USE_ENV_PROXY=1 for a proxy). Recorded; returns run_id.',
+  description: 'Fetch each source page of the stored capabilities (JLC3DP\'s design guideline and service page, JLCCNC\'s machining guideline) and report, for each stored figure, whether the page still states it next to its label: same, changed (the label is there, the figure is not) or unreadable (the page or the label could not be read). Changes nothing: trace\'s scheduled capabilities workflow re-reads the pages daily, proposes changed figures on a pull request and reports the rest for a person (src/tools/mech/capsync.ts). Plain fetch (set NODE_USE_ENV_PROXY=1 for a proxy). Recorded; returns run_id.',
   input: z.object({ timeout_s: z.number().int().min(5).max(120).default(30) }),
   run: async (a) => recorded('mech.capabilities_check', null, a, async (run) => {
     const pages = new Map<string, { text: string | null; error: string | null }>()
@@ -447,7 +448,7 @@ export const capabilitiesCheckTool = defineTool({
       result: {
         checked: CAPABILITIES.checked, pages: [...pages].map(([url, p]) => ({ url, read: p.text !== null, error: p.error })),
         changed: figures.filter((f) => f.status === 'changed'), unreadable: figures.filter((f) => f.status === 'unreadable'), same: count('same'),
-        note: 'Nothing was changed. A changed figure is a person\'s edit to src/tools/mech/capabilities.ts, with the page and the new date.',
+        note: 'Nothing was changed. trace\'s scheduled capabilities workflow re-reads these pages daily: a figure stated with other numbers comes as a pull request to src/tools/mech/capabilities.updates.ts, anything else as an issue for a person.',
       },
     }
   }),

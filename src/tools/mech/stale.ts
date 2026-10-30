@@ -9,7 +9,10 @@
  *   case_file, case_file_sha256   the handed-in STEP (a case from a file)
  *   facts_sha256                  the board facts the engine was given (changes with trace's facts reader and height
  *                                 table, not only the board)
- *   capabilities_checked          the date the process capabilities were read (src/tools/mech/capabilities.ts)
+ *   capabilities_checked          the date the process capabilities were last confirmed (recorded, not compared: the
+ *                                 scheduled check moves it on without changing a figure)
+ *   capabilities_sha256           a stamp of the figures the engine reads (capabilitiesStamp in ./capabilities.ts):
+ *                                 a changed figure makes the build stale
  *   engine                        ENGINE_VERSION (this side's contract with the engine), the Python package's
  *                                 tracebridge.mech.__version__ when it states one, and a sha256 over its source files
  *
@@ -35,6 +38,7 @@ export interface BuildInputs {
   case_file_sha256: string | null
   facts_sha256?: string
   capabilities_checked?: string
+  capabilities_sha256?: string
   engine?: EngineStamp
 }
 
@@ -85,8 +89,8 @@ export function staleReasons(was: Partial<BuildInputs> | null | undefined, now: 
   if (now.facts_sha256 !== undefined && was.facts_sha256 !== now.facts_sha256 && !boardChanged) {
     out.push('the board facts trace reads from the board changed since the build (the facts reader or the height table)')
   }
-  if (now.capabilities_checked !== undefined && was.capabilities_checked !== now.capabilities_checked) {
-    out.push(`the process capabilities were re-read (${now.capabilities_checked}; the build used ${was.capabilities_checked ?? 'an older table'})`)
+  if (now.capabilities_sha256 !== undefined && was.capabilities_sha256 !== now.capabilities_sha256) {
+    out.push(`the process capabilities changed (confirmed ${now.capabilities_checked ?? 'since'}; the build used ${was.capabilities_checked ? `the table of ${was.capabilities_checked}` : 'an older table'})`)
   }
   if (now.engine) {
     const w = was.engine
@@ -108,11 +112,11 @@ export function staleSentence(reasons: readonly string[]): string {
 
 /**
  * The inputs as they are now, for the files a build recorded, read through `read` (repository path → bytes, null when
- * absent): the board, case.json, case.py and the handed-in file, plus the capabilities' date. The facts and the engine
+ * absent): the board, case.json, case.py and the handed-in file, plus the capabilities' stamp and date. The facts and the engine
  * are left undefined (not compared): a reader of files alone, such as the API reading the default branch from GitHub,
  * cannot compute them.
  */
-export async function filesNow(was: Partial<BuildInputs>, read: (path: string) => Promise<Uint8Array | null>, capabilitiesChecked?: string): Promise<Partial<BuildInputs>> {
+export async function filesNow(was: Partial<BuildInputs>, read: (path: string) => Promise<Uint8Array | null>, capabilities?: { checked: string; sha256: string }): Promise<Partial<BuildInputs>> {
   const hash = async (p: string | null | undefined): Promise<string | null> => {
     if (!p) return null
     const b = await read(p)
@@ -129,6 +133,9 @@ export async function filesNow(was: Partial<BuildInputs>, read: (path: string) =
     now.case_file = was.case_file
     now.case_file_sha256 = await hash(was.case_file)
   }
-  if (capabilitiesChecked !== undefined) now.capabilities_checked = capabilitiesChecked
+  if (capabilities !== undefined) {
+    now.capabilities_checked = capabilities.checked
+    now.capabilities_sha256 = capabilities.sha256
+  }
   return now
 }

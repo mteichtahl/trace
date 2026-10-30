@@ -44,7 +44,7 @@ import { BenchStore, type InstrumentId, type Reading, idsFromRuns, latestByQuant
 import { loadBoards } from '../core/boards.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { boardView, readingView } from './actions-build.js'
-import { CAPABILITIES } from '../tools/mech/capabilities.js'
+import { CAPABILITIES, capabilitiesStamp } from '../tools/mech/capabilities.js'
 import { type BuildInputs, filesNow, staleReasons } from '../tools/mech/stale.js'
 
 /** The skills that read the bench. */
@@ -165,7 +165,7 @@ async function caseStaleness(ctx: Context, repo: string, was: unknown): Promise<
   try {
     const gh = await ctx.deps.github()
     const { branch } = await gh.defaultBranch(repo)
-    const now = await filesNow(was as Partial<BuildInputs>, (p) => gh.rawFile(repo, p, branch), CAPABILITIES.checked)
+    const now = await filesNow(was as Partial<BuildInputs>, (p) => gh.rawFile(repo, p, branch), { checked: CAPABILITIES.checked, sha256: capabilitiesStamp() })
     return staleReasons(was as Partial<BuildInputs>, now)
   } catch {
     return null
