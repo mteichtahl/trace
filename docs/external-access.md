@@ -1,6 +1,6 @@
 # External access: letting other systems talk to trace
 
-Status: design, October 2026. Built on the branch `claude/external-access`.
+Status: built, October 2026: merged to `main` on 28 October from the branch `claude/external-access`.
 
 ## Summary
 

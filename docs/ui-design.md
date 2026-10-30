@@ -1,6 +1,6 @@
 # Trace web app: interface design
 
-> Design only: nothing here is built. The screens below are drawn in a design canvas; their sources are in [`docs/ui/source/`](ui/source/) and rendered images in [`docs/ui/screens/`](ui/screens/). Sample names, numbers, part codes and run ids in the screens are illustrative.
+> The design the web app in [`web/`](../web/) is built from. How it is wired is [web-build.md](web-build.md): where the two disagree on what a person sees, this design wins; on how it is wired, web-build.md wins. The screens below are drawn in a design canvas; their sources are in [`docs/ui/source/`](ui/source/) and rendered images in [`docs/ui/screens/`](ui/screens/). Sample names, numbers, part codes and run ids in the screens are illustrative.
 
 Oct 27, 2026 · @Marc Teichtahl
 
@@ -10,11 +10,11 @@ The trace web app is built around one question on every screen: what needs me ne
 
 - **Three places, no more.** Home (what needs you), a project (its record and next step), and a focused task (one skill at a time). Library and Admin sit beside them for shared parts and people.
 - **One next step per project.** The project page leads with a single card naming the one thing that moves the project forward, with trace's recommendation and the reason. Everything else is one tap below it.
-- **trace is always one keystroke away.** A chat panel built on CopilotKit, talking to trace's agents over AG-UI, knows the screen you are on. Agent questions, recommendations, live runs and plots appear inside it as real interface parts, not paragraphs.
+- **trace is always one keystroke away.** A chat panel built on CopilotKit, talking to trace's chat agent over AG-UI, knows the screen you are on. Agent questions, recommendations, live runs and plots appear inside it as real interface parts, not paragraphs.
 - **Nothing moves out of sight.** One live connection keeps every screen current; anything trace checks on a timer says when it last looked and when it will look next, with a Check now button.
 - **Built from stock parts.** shadcn/ui components on Tailwind with the neutral theme and one accent colour, so the build is mostly assembly.
 
-This is design only: nothing here is built. Twenty-three screens are drawn in the design canvas, covering every area in light mode, Home and the gate in dark mode, and three phone screens; the rest of the forty follow the same layouts and are specified here in words.
+The app in `web/` is built from this design. Twenty-seven screens are drawn in the design canvas: twenty-two covering every area in light mode, Home and the gate in dark mode, and three phone screens; the rest of the forty follow the same layouts and are specified here in words.
 
 **How to review.** Read the principles and the screen map first, then the three core screens (Home, Project, Focused task) and the gate. The last section lists twelve decisions to make before building, each with a recommendation.
 
@@ -43,7 +43,7 @@ Three visual rules keep the screens quiet:
 
 ## Technology
 
-The app is a single-page React app styled with shadcn/ui on Tailwind, served from AWS like the rest of trace, with every conversation running through CopilotKit over the AG-UI protocol to trace's agents.
+The app is a single-page React app styled with shadcn/ui on Tailwind, served from AWS like the rest of trace, with every conversation running through CopilotKit over the AG-UI protocol to trace's chat agent.
 
 ![How the app reaches AWS: five paths behind one address](ui/diagrams/architecture.png)
 
@@ -51,12 +51,14 @@ The app is a single-page React app styled with shadcn/ui on Tailwind, served fro
 
 Chat is the only two-way stream; record changes come back on the one live channel, never by the screen asking again.
 
+As built, two paths differ from the drawing (web-build.md has the detail). Ask trace talks to a chat agent in the web backend (`/api/agui`: Claude on Bedrock, its tools API actions called as the person), not to a CopilotKit runtime in front of the specialists; the specialists' work reaches the screen through each project's job index and the live channel. The live channel is one per person (`/trace/users/<sub>`), not one per project.
+
 | Layer | Choice | Why |
 | --- | --- | --- |
 | App | React 19, Vite, TanStack Router and TanStack Query | A static app needs no server of its own; it ships from S3 and CloudFront in the existing CDK stack, so nothing runs outside AWS |
 | Components | shadcn/ui (Radix base), Tailwind CSS v4, lucide icons, neutral base colour | Accessible parts the team owns as source; the theme is a handful of CSS variables |
 | Chat and agent interface | CopilotKit v2 (`@copilotkit/react-core/v2`) | Chat, shared agent state, human-in-the-loop and tool rendering are ready-made and can be fully restyled with shadcn |
-| Agent protocol | AG-UI (`@ag-ui/client` HttpAgent) | trace's agents stream standard events; the interface reacts to the event type, not to parsing text |
+| Agent protocol | AG-UI (`@ag-ui/client` HttpAgent) | trace's chat agent streams standard events; the interface reacts to the event type, not to parsing text |
 | Live record | One live connection per browser carrying record events | Every screen updates the moment the record changes; Query's cache is patched from the events |
 | Charts and plots | shadcn Chart (Recharts) | Run plots with limit lines, margins and hover values in the same theme |
 | Sheets and boards | The SVG trace already exports (`kicad.export`) with an overlay layer drawn by the app | Findings sit on the drawing; zoom and pan are the app's |
@@ -64,7 +66,7 @@ Chat is the only two-way stream; record changes come back on the one live channe
 
 **How CopilotKit is used.** Each piece maps to one job:
 
-- `CopilotKit` provider at the root, pointed at a CopilotKit runtime endpoint that registers trace's agents as AG-UI `HttpAgent`s.
+- `CopilotKit` provider at the root, with trace's chat agent registered as a self-managed AG-UI `HttpAgent` at `/api/agui` (no CopilotKit runtime: the web backend checks access on every request).
 - `CopilotSidebar` (desktop) and `CopilotChat` inside a shadcn `Drawer` (phone) for Ask trace; `CopilotChat` embedded in Focus mode for the conversational skills (Intent builder, Question answer).
 - `useAgentContext` on every screen, telling the agent where the person is: project, stage, the item selected, what is on screen. "Why is this failing?" works without naming what "this" is.
 - `useAgent` for shared state: the Intent builder's draft statements and topic checklist live in agent state, so the chat and the draft panel stay in step.
@@ -889,9 +891,9 @@ Twelve choices need an answer before the build starts; each has trace's recommen
 | Decision | Recommendation | Why | Alternative not recommended |
 | --- | --- | --- | --- |
 | How the app is hosted | A static single-page app on S3 and CloudFront, added to the existing CDK stack | No server to run; deploys with the stack; stays inside AWS | Next.js on a server: server rendering buys little behind a sign-in, and adds a service to run |
-| Where CopilotKit's runtime runs | A small Lambda with response streaming, behind the same CloudFront address, registering each trace agent as an AG-UI `HttpAgent` | One place checks the person's token and project access before any agent sees a message | Browser talks to agents directly: every agent endpoint would need its own access checks |
-| How agents speak AG-UI | Add an AG-UI stream to trace's agent runtime, mapping its job steps, tool calls and questions onto AG-UI events | The interface reacts to typed events; questions become `useHumanInTheLoop` cards | Parse agent text in the browser: fragile, and loses the summary-first structure |
-| The one live connection | AWS AppSync Events (managed WebSocket channels, one per project, Cognito tokens accepted) | Managed fan-out with no servers; the API publishes record changes as they happen | API Gateway WebSockets: more to build (connection table, fan-out) for the same result |
+| Where CopilotKit's runtime runs | A small Lambda with response streaming, behind the same CloudFront address, registering each trace agent as an AG-UI `HttpAgent`. As built: no CopilotKit runtime; the web backend's `/api/agui` is the one agent endpoint, a self-managed `HttpAgent` | One place checks the person's token and project access before any agent sees a message | Browser talks to agents directly: every agent endpoint would need its own access checks |
+| How agents speak AG-UI | Add an AG-UI stream to trace's agent runtime, mapping its job steps, tool calls and questions onto AG-UI events. As built: the chat agent in the web backend speaks AG-UI; the runtime's jobs reach the app through the job index and live events | The interface reacts to typed events; questions become `useHumanInTheLoop` cards | Parse agent text in the browser: fragile, and loses the summary-first structure |
+| The one live connection | AWS AppSync Events (managed WebSocket channels, one per project, Cognito tokens accepted). As built: one channel per person (`/trace/users/<sub>`), opened with the app's id token through a Lambda authorizer | Managed fan-out with no servers; the API publishes record changes as they happen | API Gateway WebSockets: more to build (connection table, fan-out) for the same result |
 | Our own sign-in's backend | A small sign-in endpoint on the same address that calls Cognito's API and keeps the refresh token in an HTTP-only cookie; `tracectl login` moves to the same pages | Our look everywhere, passkeys included, with tokens out of browser storage | Pages calling Cognito from the browser alone: works, but the refresh token would have to live in browser storage |
 | Creating projects from the app | Add project onboarding to the API, admins only, reusing the installer's onboarding code | "Start your first project" can finish in the app | Keep it in the installer: every new project would mean re-running it |
 | The app's address | CloudFront's own address by default; a custom domain as an optional installer setting | Install stays two inputs | A domain required at install: adds DNS and certificates to the install |
