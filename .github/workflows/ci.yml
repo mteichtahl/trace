@@ -24,10 +24,11 @@ permissions:
   contents: read
 
 jobs:
-  # The longest job, so it asks CodeBuild for a bigger machine (instance-size:xlarge): vitest runs its test files in
-  # parallel forks, one per core. The label means nothing to GitHub's fallback runner
+  # On the project's own machine size (large). An xlarge (36 cores) ran the tests faster but overloaded the machine:
+  # vitest starts a fork per core and each Verilator build asks for every core too, so Verilator crashed ("attempted
+  # to destroy locked Thread Pool") and the API tests' setup timed out
   typescript:
-    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","instance-size:xlarge","typescript"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","typescript"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     timeout-minutes: 45
     env:
       # KiCad, ngspice, Icarus, and the verification/FPGA programs, so those tests run instead of skipping.
