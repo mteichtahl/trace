@@ -928,9 +928,21 @@ export const execReal: Exec = (cmd, args, opts = {}) => new Promise((res, rej) =
   })
 })
 
+/** Where an AgentCore runtime's jobs keep their clones: the container's own disk, for the life of the session. */
+export const RUNTIME_WORKSPACE = '/tmp/trace-work'
+
+/**
+ * Where jobs clone. On AgentCore (TRACE_WORKSPACE under /mnt/workspace, or /mnt/workspace mounted) never on its session
+ * storage itself: a job's tools open the project's SQLite database in the clone, and on session storage its lock never
+ * comes free, so the job waited out the 30-second busy timeout and failed with "database is locked" right after its
+ * clone (tool calls moved off it for the same reason: tool.ts TOOL_WORKSPACE). The clones stay on the container's own
+ * disk for the session's life (persistent: kept and fetched by the next job), and the session storage, which AgentCore
+ * wipes at every version update anyway, holds none. Any other TRACE_WORKSPACE is used as given.
+ */
 export function workspaceDir(env: Record<string, string | undefined> = process.env): { dir: string; persistent: boolean } {
-  if (env.TRACE_WORKSPACE) return { dir: env.TRACE_WORKSPACE, persistent: env.TRACE_WORKSPACE.startsWith('/mnt/workspace') }
-  if (existsSync('/mnt/workspace')) return { dir: '/mnt/workspace/trace', persistent: true }
+  const onSessionStorage = env.TRACE_WORKSPACE ? env.TRACE_WORKSPACE.startsWith('/mnt/workspace') : existsSync('/mnt/workspace')
+  if (onSessionStorage) return { dir: RUNTIME_WORKSPACE, persistent: true }
+  if (env.TRACE_WORKSPACE) return { dir: env.TRACE_WORKSPACE, persistent: false }
   return { dir: '/tmp/trace-work', persistent: false }
 }
 

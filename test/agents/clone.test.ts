@@ -5,7 +5,7 @@ import { chownSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, wri
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { type Exec, cloneDefault, cloneDir, execReal, gitAuthEnv, removeDir } from '../../src/agents/runtime/job.js'
+import { type Exec, RUNTIME_WORKSPACE, cloneDefault, cloneDir, execReal, gitAuthEnv, removeDir, workspaceDir } from '../../src/agents/runtime/job.js'
 import { TOOL_WORKSPACE } from '../../src/agents/runtime/tool.js'
 
 /** Like execFile: a cwd that does not exist fails as Node's spawn does; `git clone … <dir>` makes the clone. */
@@ -94,5 +94,13 @@ describe('what a failed checkout leaves', () => {
   it('tool calls keep their clone on the container\'s own disk, not session storage (SQLite\'s locks)', () => {
     expect(TOOL_WORKSPACE.startsWith('/tmp/')).toBe(true)
     expect(TOOL_WORKSPACE.startsWith('/mnt/workspace')).toBe(false)
+  })
+})
+
+describe('where jobs clone', () => {
+  it('on AgentCore, the container\'s own disk for the session\'s life, never session storage (SQLite\'s locks)', () => {
+    expect(workspaceDir({ TRACE_WORKSPACE: '/mnt/workspace' })).toEqual({ dir: RUNTIME_WORKSPACE, persistent: true })
+    expect(RUNTIME_WORKSPACE.startsWith('/mnt/')).toBe(false)
+    expect(workspaceDir({ TRACE_WORKSPACE: '/srv/work' })).toEqual({ dir: '/srv/work', persistent: false })
   })
 })
