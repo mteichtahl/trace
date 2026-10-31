@@ -74,6 +74,22 @@ describe('the job index, from the jobs\' own events', () => {
     jobs.dispose()
   })
 
+  it('a change that comes before the job\'s first row (its "started" log line, its route) waits for that row', async () => {
+    const s = stores('index-early')
+    const said: string[] = []
+    const runner: JobRunner = async (_p, ctx) => { ctx.log('cloning acme/board (main)'); return 'done' }
+    const jobs = createJobs(runner, quiet)
+    const w = indexJobs(jobs, s.index, (id) => jobs.payloadOf(id), { heartbeat: false, log: (l) => { said.push(l) } })
+    // a log line flushed on its own before the job's 'started' event, as the job's "started …" line is
+    const { jobId } = jobs.startJob(task('Route the board'), 'trace-api-00000000-000000000000000000000000')
+    await until(() => !jobs.busy())
+    await w.flush()
+    expect(said.filter((l) => l.includes('could not write'))).toEqual([])
+    expect((await s.index.read(loadJobs)).result.find((r) => r.id === jobId)).toMatchObject({ kind: 'task', title: 'Route the board', state: 'succeeded' })
+    w.stop()
+    jobs.dispose()
+  })
+
   it('titles a job in words, and finds the Batch job a wait is about', () => {
     expect(titleOf({ kind: 'work-item', repository: REPO, item: { kind: 'ci-red', number: 5, sha: 'a'.repeat(40), ref: 'x', own: true, title: 'Fix CI' } })).toBe('Pull request #5: Fix CI')
     expect(batchOfWait('the remote CPU job c-9')).toEqual({ id: 'c-9', pool: 'cpu' })

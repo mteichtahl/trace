@@ -120,6 +120,8 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
   }
   /** jobs whose first row is pending: written as is only when the queue has not already written theirs */
   const fresh = new Set<string>()
+  /** changes to a job whose first row is not written yet, kept for it */
+  const early = new Map<string, Partial<Omit<JobRow, 'id' | 'updatedAt'>>>()
   const flush = (): Promise<void> => {
     if (!pending.size && !batch.size) return writing
     const rows = new Map(pending)
@@ -131,8 +133,12 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
       try {
         await store.update((db) => {
           for (const [id, f0] of rows) {
+            const exists = Boolean(db.prepare('SELECT 1 FROM jobs WHERE id=?').get(id))
+            // a change that reached the index before the job's first row (a log line's step, its route: the job logs
+            // "started" before its 'started' event) waits for that row instead of failing the whole write
+            if (!exists && !('kind' in f0 && 'title' in f0 && 'state' in f0)) { early.set(id, { ...early.get(id), ...f0 }); continue }
             // the queue (queueAdmit) may have written this job's state first: a first row never overwrites it
-            const f = fresh.has(id) && db.prepare('SELECT 1 FROM jobs WHERE id=?').get(id) ? { ...f0, state: undefined } : f0
+            const f = fresh.has(id) && exists ? { ...f0, state: undefined } : f0
             // a resumed task marks the paused one it carries on
             if (f.resumeOf) putJob(db, f.resumeOf, { resumedBy: id }, at)
             putJob(db, id, f.beatAt === undefined && f.state === 'running' ? { ...f, beatAt: at } : f, at)
@@ -153,7 +159,12 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
     return writing
   }
   const soon = (): void => { void flush() }
-  const merge = (id: string, f: Partial<Omit<JobRow, 'id' | 'updatedAt'>>): void => { pending.set(id, { ...pending.get(id), ...f }) }
+  const merge = (id: string, f: Partial<Omit<JobRow, 'id' | 'updatedAt'>>): void => {
+    // what waited for the job's first row goes under it (the row's own fields win)
+    const before = early.get(id)
+    if (before && 'kind' in f) early.delete(id)
+    pending.set(id, { ...(before && 'kind' in f ? before : {}), ...pending.get(id), ...f })
+  }
 
   const off = jobs.events.on((e: JobEvent) => {
     switch (e.type) {
