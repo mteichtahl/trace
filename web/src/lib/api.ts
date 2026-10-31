@@ -37,6 +37,7 @@ export interface Actions {
   whoami: { args: Record<string, never>; result: { sub: string; email: string; groups: string[]; class: PersonClass | null } }
   projects: { args: Record<string, never>; result: ProjectRef[] }
   status: { args: Repo; result: { repo: string; default_branch: string; pulls: unknown[]; agent_fix_issues: unknown[]; runs: unknown[]; last_deploy: unknown } }
+  'pull.status': { args: Repo & { number: number }; result: import('./types').PullStatus }
   'settings.get': { args: Repo; result: { repo: string; set: Record<string, unknown>; config: Record<string, unknown>; errors: string[] } }
   'settings.set': { args: Repo & { key: string; value?: unknown; unset?: boolean }; result: { branch: string; commit: string } }
   runs: { args: Repo & { kind?: string; limit?: number; agent?: string }; result: Record<string, unknown>[] }

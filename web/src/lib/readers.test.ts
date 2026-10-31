@@ -81,6 +81,19 @@ describe('reading the API\'s answers', () => {
     expect(items[0]!.createdAt).toMatch(/^2026-/)
   })
 
+  it('inbox: a review item opens its pull request on GitHub and carries it for the live status', () => {
+    const items = READERS.inbox!({ items: [{
+      id: 'review:1', kind: 'review', repo: 'acme/x', project: 'X', stage: 'define', summary: 'X: The Verification agent opened pull request #1', since: '2026-10-31T07:40:00.000Z',
+      waited: '20 min', blocking: false, action: 'Review on GitHub', ref: { kind: 'pull', id: '1', url: 'https://github.com/acme/x/pull/1' },
+    }, {
+      id: 'review:2', kind: 'review', repo: 'acme/x', project: 'X', stage: 'define', summary: 'x', since: '2026-10-31T07:40:00.000Z',
+      waited: '', blocking: false, action: 'Review on GitHub', ref: { kind: 'pull', id: '2', url: 'https://evil.example/pull/2' },
+    }] }, {}) as InboxItem[]
+    expect(items[0]).toMatchObject({ kind: 'review', action: { label: 'Review on GitHub', href: 'https://github.com/acme/x/pull/1' }, pull: { repo: 'acme/x', number: 1 } })
+    // only a github.com link is followed
+    expect(items[1]!.action).toEqual({ label: 'Review on GitHub' })
+  })
+
   it('me.get: the document, its views, and the admins\' locks', () => {
     expect(read<MeDoc & { locks: Record<string, string> }>('me.get')).toEqual({ prefs: {}, views: {}, locks: {} })
   })

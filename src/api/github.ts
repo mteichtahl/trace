@@ -12,6 +12,15 @@ export class GitHubError extends Error {
 export interface PullSummary { number: number; title: string; head: string; draft: boolean; labels: string[]; url: string; updated_at: string }
 export interface IssueSummary { number: number; title: string; labels: string[]; url: string; updated_at: string }
 export interface RunSummary { id: number; name: string; path: string; event: string; status: string; conclusion: string | null; branch: string | null; url: string; created_at: string }
+/** One pull request's state now: open, merged or closed, whether it can merge, and its checks on the head commit. */
+export interface PullStatus {
+  number: number; title: string; url: string; state: 'open' | 'merged' | 'closed'; draft: boolean
+  /** GitHub's mergeable_state: clean, blocked, behind, dirty (a conflict), unstable (checks failing), unknown (still computing) */
+  mergeable: string; head: string; sha: string; updated_at: string
+  /** the head commit's check runs, by how they stand (null: GitHub would not list them) */
+  checks: { total: number; passed: number; failed: number; running: number; skipped: number; failing: string[] } | null
+}
+
 export interface DeploySummary { id: number; environment: string; ref: string; sha: string; created_at: string; state: string | null; url: string | null }
 
 /** One file in a repository's tree. */
@@ -41,6 +50,8 @@ export interface GitHubApi {
   /** Start a workflow_dispatch run of `workflow` (its file name) on `ref`. Optional: absent, nothing is started. */
   dispatchWorkflow?(repo: string, workflow: string, ref: string): Promise<void>
   lastDeploy(repo: string): Promise<DeploySummary | null>
+  /** One pull request's state and its head commit's checks. Optional: absent, its status is not shown. */
+  pullStatus?(repo: string, number: number): Promise<PullStatus | null>
 }
 
 const Label = z.union([z.string(), z.object({ name: z.string() }).loose()])
@@ -58,6 +69,24 @@ const Run = z.object({
   id: z.number(), name: z.string().nullable().optional(), path: z.string().default(''), event: z.string(), status: z.string().nullable(),
   conclusion: z.string().nullable(), head_branch: z.string().nullable(), html_url: z.string(), created_at: z.string(),
 }).loose()
+const PullFull = z.object({
+  number: z.number(), title: z.string(), html_url: z.string(), state: z.string(), draft: z.boolean().optional(), merged_at: z.string().nullable().optional(),
+  mergeable_state: z.string().optional(), updated_at: z.string(), head: z.object({ ref: z.string(), sha: z.string() }).loose(),
+}).loose()
+const CheckRun = z.object({ name: z.string(), status: z.string(), conclusion: z.string().nullable() }).loose()
+
+/** Check runs by how they stand: a run not completed is running; neutral and skipped are neither passed nor failed. */
+export function checksOf(runs: readonly z.output<typeof CheckRun>[]): NonNullable<PullStatus['checks']> {
+  const out = { total: runs.length, passed: 0, failed: 0, running: 0, skipped: 0, failing: [] as string[] }
+  for (const c of runs) {
+    if (c.status !== 'completed') out.running++
+    else if (c.conclusion === 'success') out.passed++
+    else if (c.conclusion === 'skipped' || c.conclusion === 'neutral') out.skipped++
+    else { out.failed++; if (!out.failing.includes(c.name)) out.failing.push(c.name) }
+  }
+  return out
+}
+
 const Tree = z.object({
   truncated: z.boolean().default(false),
   tree: z.array(z.object({ path: z.string(), type: z.string(), sha: z.string(), size: z.number().optional() }).loose()),
@@ -186,6 +215,23 @@ export class HttpGitHub implements GitHubApi {
       id: w.id, name: w.name ?? '', path: w.path, event: w.event, status: w.status ?? 'unknown', conclusion: w.conclusion,
       branch: w.head_branch, url: w.html_url, created_at: w.created_at,
     }))
+  }
+
+  async pullStatus(repo: string, number: number): Promise<PullStatus | null> {
+    const r = await this.req('GET', `${this.p(repo)}/pulls/${number}`)
+    if (r.status === 404) return null
+    if (!r.ok) throw new GitHubError(r.status, `GitHub GET pull ${number}: ${r.status}`)
+    const p = PullFull.parse(await r.json())
+    let checks: PullStatus['checks'] = null
+    try {
+      checks = checksOf(z.object({ check_runs: z.array(CheckRun) }).loose().parse(await this.json('GET', `${this.p(repo)}/commits/${p.head.sha}/check-runs?per_page=100`)).check_runs)
+    } catch {
+      // the token may not read checks: the pull request's own state is still worth showing
+    }
+    return {
+      number: p.number, title: p.title, url: p.html_url, state: p.merged_at ? 'merged' : p.state === 'closed' ? 'closed' : 'open', draft: p.draft ?? false,
+      mergeable: p.mergeable_state ?? 'unknown', head: p.head.ref, sha: p.head.sha, updated_at: p.updated_at, checks,
+    }
   }
 
   async lastDeploy(repo: string): Promise<DeploySummary | null> {
