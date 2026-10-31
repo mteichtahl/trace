@@ -29,7 +29,7 @@
 import { z } from 'zod'
 import {
   type AgentFacts, type JourneyRecord, SEVERITIES, type Viewer, addWaiver, answerQuestion, decide, getDraft, loadJourney, loadOrders, mergeAgentFacts, putDraft,
-  questionIsFor,
+  questionIsFor, setCriterion,
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
 import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, storeAt, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
@@ -174,6 +174,19 @@ async function caseStaleness(ctx: Context, repo: string, was: unknown): Promise<
 
 const requirementIds = (db: import('node:sqlite').DatabaseSync): string[] => (hasTable(db, 'requirements') ? (db.prepare('SELECT id FROM requirements').all() as { id: string }[]).map((x) => String(x.id)) : [])
 const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
+
+/** A number followed by its unit (2 layers, 5.1 kΩ, ±10 %, 40 °C, 0.5 Hz). */
+const NUMBER_WITH_UNIT = /\d[\d.,]*\s?(%|°\s?[CF]|[A-Za-zµΩ])/
+/**
+ * The requirements baseline gate's criteria a person moves, as Requirements review leaves the record: every
+ * requirement accepted (struck ones are already out of the list), and every accepted one with a number and a unit in
+ * its criterion. The firmware ones are accepted with the rest. Pure.
+ */
+export function baselineCriteria(requirements: readonly { status: string; acceptance?: string | null }[]): [string, boolean][] {
+  const accepted = requirements.length > 0 && requirements.every((q) => q.status === 'accepted')
+  const measurable = accepted && requirements.every((q) => NUMBER_WITH_UNIT.test(q.acceptance ?? ''))
+  return [['define.accepted', accepted], ['define.measurable', measurable], ['define.firmware', accepted]]
+}
 
 /** The job Intent builder's Submit starts: the candidate requirements, drafted from the intent as the people decided it. */
 export const REQUIREMENTS_FROM_INTENT = [
@@ -377,6 +390,13 @@ export const SKILL_ACTIONS = {
         const p = prepare(d, designRows, reqIds, loadDesignDecisions(db))
         const rec = recordDesignDecision(db, p, by)
         decide(db, { kind: `design.${p.kind}`, stage: loadJourney(db)?.journey.currentStage ?? null, ref: p.target, by: by.label, summary: p.summary, detail: { decision: rec.id, skill: a.skill } })
+      }
+      // Requirements review is the person's act the baseline gate's own criteria wait for: submitted, it records
+      // whether every requirement is accepted (or struck) and each accepted one measurable, as the record now stands
+      if (a.skill === 'requirements-review') {
+        const have = new Set((loadJourney(db)?.criteria ?? []).map((c) => c.id))
+        const evidence = [{ kind: 'skill', ref: 'requirements-review', label: `Requirements review, submitted by ${by.label}` }]
+        for (const [id, ok] of baselineCriteria(i.requirements)) if (have.has(id)) setCriterion(db, id, ok ? 'met' : 'not_met', evidence, by.label)
       }
       if (a.skill === 'waiver') {
         const d = a.draft

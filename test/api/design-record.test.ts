@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
+import { baselineCriteria } from '../../src/api/actions-skills.js'
 import { assign, seen } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
 import { setCriterion, startJourney } from '../../src/core/journey.js'
@@ -272,5 +273,38 @@ describe('the guided skills read the design record', () => {
     expect(a).toEqual(['AccessDenied', expect.any(String)])
     expect(b).toEqual(a)
     expect(github.calls).toEqual([])
+  })
+
+  it('Requirements review: the person confirms no conflicts; Submit records the baseline gate\'s criteria from the record', async () => {
+    const draft = {
+      decisions: [{ requirement: 'REQ-1', choice: 'accept' }, { requirement: 'REQ-2', choice: 'accept' }, { requirement: 'REQ-3', choice: 'strike', reason: 'The farm manager reads it on the phone app.' }],
+      uncovered: [{ statement: 'INT-purpose', reason: 'The purpose is covered by the requirements as a whole.' }, { statement: 'INT-board', reason: 'Checked by Board setup against the outline.' }],
+    }
+    await run(USER, 'skill.draft', { repo: REPO, skill: 'requirements-review', step: 4, data: draft })
+    let c = await checks('requirements-review')
+    // duplicates and conflicting intent are checked; the numbers are the person's to confirm, so it is not met, and
+    // says what to do, rather than "cannot be checked yet" for ever
+    expect(c.conflicts).toMatchObject({ status: 'not_met', detail: expect.stringMatching(/Confirm in Resolve conflicts/) })
+    expect(c.conflicts?.unavailable).toBeUndefined()
+    await expect(run(USER, 'skill.submit', { repo: REPO, skill: 'requirements-review', draft })).rejects.toThrow(/No conflicts or duplicates/)
+    await run(USER, 'skill.draft', { repo: REPO, skill: 'requirements-review', step: 4, data: { ...draft, no_conflicts: true } })
+    c = await checks('requirements-review')
+    expect(c.conflicts).toMatchObject({ status: 'met', detail: expect.stringMatching(/you confirmed/) })
+    const before = await run(USER, 'journey.get', { repo: REPO }) as { gates: { id: string; criteria: { id: string; status: string }[] }[] }
+    expect(before.gates.find((g) => g.id === 'define')?.criteria.filter((x) => x.status === 'met').map((x) => x.id) ?? []).not.toContain('define.accepted')
+    expect(await run(USER, 'skill.submit', { repo: REPO, skill: 'requirements-review', draft: { ...draft, no_conflicts: true } })).toMatchObject({ ok: true })
+    const after = await run(USER, 'journey.get', { repo: REPO }) as { gates: { id: string; criteria: { id: string; status: string; evidence: { kind: string }[] }[] }[] }
+    const define = after.gates.find((g) => g.id === 'define')!.criteria
+    expect(define.find((x) => x.id === 'define.accepted')).toMatchObject({ status: 'met', evidence: [{ kind: 'skill' }] })
+    expect(define.find((x) => x.id === 'define.measurable')).toMatchObject({ status: 'met' })
+  })
+})
+
+describe('the requirements baseline from the record', () => {
+  it('is met when every requirement is accepted, and measurable when each accepted criterion has a number and a unit', () => {
+    expect(baselineCriteria([])).toEqual([['define.accepted', false], ['define.measurable', false], ['define.firmware', false]])
+    expect(baselineCriteria([{ status: 'accepted', acceptance: 'exactly 2 copper layers' }, { status: 'proposed', acceptance: '5 mA' }]).map(([, ok]) => ok)).toEqual([false, false, false])
+    expect(baselineCriteria([{ status: 'accepted', acceptance: '0.45-0.55 Hz' }, { status: 'accepted', acceptance: 'each 5.1 kΩ ± 1 %' }]).map(([, ok]) => ok)).toEqual([true, true, true])
+    expect(baselineCriteria([{ status: 'accepted', acceptance: 'clearly visible' }])).toEqual([['define.accepted', true], ['define.measurable', false], ['define.firmware', true]])
   })
 })
