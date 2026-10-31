@@ -52,6 +52,7 @@ import { AGENT_WORDS, jobIndex, listJobs, projectHandoffs } from './actions-jobs
 import { reviewItems } from './inbox-review.js'
 import { loadJobs } from '../core/job-index.js'
 import { type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, label, plainly, snapshotJourney, withJourneyDb, writeJourney } from './action-kit.js'
+import type { SPECIALIST_KINDS } from '../agents/kinds.js'
 
 const Id = z.string().min(1).max(80)
 
@@ -107,6 +108,25 @@ async function mapLimit<T, R>(items: readonly T[], n: number, fn: (t: T) => Prom
   return out
 }
 
+/**
+ * The work a stage starts when the gate before it is signed: the specialist and what it is asked. Architect: the
+ * options a person then chooses between in Architecture choice (docs/user-journey.md, 2. Architect).
+ */
+export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KINDS)[number]; request: string; started: string }>> = {
+  architect: {
+    agent: 'impl',
+    started: 'The Implementation agent proposes the architecture options for Architecture choice.',
+    request: [
+      'The requirements baseline gate was signed: the project is in Architect. Propose the architecture for Architecture choice.',
+      'Read the accepted requirements (verify.requirements list) and the intent (design.intent list).',
+      'Propose two or three options with design.architecture: each a block diagram (blocks, the connections between them, the key parts of each block with MPN), the requirements each block serves so every requirement maps to a block, and why. Recommend one.',
+      'Size the key circuits with the calc tools, pick candidate parts with parts.search and parts.lookup, pull their datasheets, and check stock and lifecycle for the build quantity: in stock at JLCPCB/LCSC first, then elsewhere, and only then out of stock with the reason written on the part.',
+      'Propose the criteria to compare the options on (with weights) and score each option on each with a reason. Record what you checked as the stock check where journey.check allows.',
+      'Do not choose: a person chooses in Architecture choice. Do not draw the schematic yet.',
+    ].join('\n'),
+  },
+}
+
 export const JOURNEY_ACTIONS = {
   'journey.get': def('read', Repo, async ({ repo }, ctx) => {
     const viewer = await viewerOf(ctx.principal, repo)
@@ -145,13 +165,23 @@ export const JOURNEY_ACTIONS = {
       const r = signGate(db, a.gate, signer(ctx), { acknowledged: a.acknowledge, notes: a.notes ?? null, facts })
       return { result: { repo: a.repo, ...r } }
     })
-    if (!signed.released) return { ...signed, snapshot: null }
+    // the stage the signature opened starts its agents' work (docs/user-journey.md, each stage's "trace:"); the
+    // signature stands even when the job cannot start
+    const work = signed.advanced_to ? STAGE_WORK[signed.advanced_to] : undefined
+    let kickoff: { jobId?: string; started?: string[]; jobError?: string } = {}
+    if (work) {
+      try {
+        const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: a.repo, request: work.request, agent: work.agent, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
+        kickoff = r.accepted ? { jobId: r.jobId, started: [work.started] } : { jobError: r.reason ?? 'trace did not accept the job.' }
+      } catch (e) { kickoff = { jobError: e instanceof Error ? e.message : String(e) } }
+    }
+    if (!signed.released) return { ...signed, ...kickoff, snapshot: null }
     // the signature cut a release: the record goes into the repository with it
     try {
       const s = await snapshot(ctx, a.repo, `${a.gate} signed`)
-      return { ...signed, version: s.version, snapshot: { branch: s.branch, commit: s.commit }, summary: `${signed.summary} The record was copied into the repository.` }
+      return { ...signed, ...kickoff, version: s.version, snapshot: { branch: s.branch, commit: s.commit }, summary: `${signed.summary} The record was copied into the repository.` }
     } catch (e) {
-      return { ...signed, snapshot: { error: `The gate is signed, but the record could not be copied into the repository: ${e instanceof Error ? e.message : String(e)}. An admin can copy it with journey.snapshot.` } }
+      return { ...signed, ...kickoff, snapshot: { error: `The gate is signed, but the record could not be copied into the repository: ${e instanceof Error ? e.message : String(e)}. An admin can copy it with journey.snapshot.` } }
     }
   }),
 
