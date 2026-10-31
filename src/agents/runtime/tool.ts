@@ -10,7 +10,6 @@
  *
  * Everything with side effects is injected (ToolDeps), so tests run it without git or a token.
  */
-import { rmSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path'
 import type { Registry } from '../../core/registry.js'
 import type { Exec } from './job.js'
@@ -96,7 +95,7 @@ export function toolRunner(d: ToolDeps): ToolRunner {
 export function runtimeCheckout(o: { exec: Exec; getToken: () => Promise<string>; workspace: string; persistent: boolean; cli: string }): (repository: string) => Promise<ToolCheckout> {
   return async (repository) => {
     // the job runner's git helpers and Octokit only here: the API imports this module for its policy alone
-    const [{ cloneDefault, cloneDir, gitAuthEnv, redactor }, { Octokit }] = await Promise.all([import('./job.js'), import('@octokit/rest')])
+    const [{ cloneDefault, cloneDir, gitAuthEnv, redactor, removeDir }, { Octokit }] = await Promise.all([import('./job.js'), import('@octokit/rest')])
     const token = await o.getToken()
     const redact = redactor(token)
     const [owner = '', repo = ''] = repository.split('/')
@@ -105,19 +104,28 @@ export function runtimeCheckout(o: { exec: Exec; getToken: () => Promise<string>
     try {
       await cloneDefault({ exec: o.exec, dir, auth: gitAuthEnv(token), log: () => undefined, repository, defaultBranch, cli: o.cli })
     } catch (e) {
-      rmSync(dir, { recursive: true, force: true })
+      // never let the removal's own failure hide why the checkout failed
+      removeDir(dir)
       throw new Error(`cannot check out ${repository}: ${redact(e instanceof Error ? e.message : String(e)).split('\n')[0] ?? 'git failed'}`)
     }
-    return { dir, cleanup: () => { if (!o.persistent) rmSync(dir, { recursive: true, force: true }) } }
+    return { dir, cleanup: () => { if (!o.persistent) removeDir(dir) } }
   }
 }
 
+/**
+ * Where tool calls keep their clone: the container's own disk (/tmp), kept for the life of the session, never AgentCore's
+ * session storage (/mnt/workspace). The tools open the project database (SQLite, .trace/project.db in the clone), and
+ * on session storage its locks never come free: every call that touched it waited out the 30-second busy timeout and
+ * failed with "database is locked" (the API's scratch moved off it for the same reason: src/api/actions.ts). Losing the
+ * clone when the session ends costs one fresh clone.
+ */
+export const TOOL_WORKSPACE = '/tmp/trace-tools'
+
 /** The real runner: the registry of every tool, and the runtime's own clone (TRACE_GITHUB_SECRET_ARN). */
 export async function realToolRunner(env: Record<string, string | undefined> = process.env): Promise<ToolRunner> {
-  const { execReal, secretsToken, workspaceDir } = await import('./job.js')
-  const ws = workspaceDir(env)
+  const { execReal, secretsToken } = await import('./job.js')
   return toolRunner({
     registry: async () => (await import('../../tools/index.js')).allTools(),
-    checkout: runtimeCheckout({ exec: execReal, getToken: secretsToken(env.TRACE_GITHUB_SECRET_ARN, env.AWS_REGION), workspace: ws.dir, persistent: ws.persistent, cli: env.TRACE_CLI || '/app/dist/cli.js' }),
+    checkout: runtimeCheckout({ exec: execReal, getToken: secretsToken(env.TRACE_GITHUB_SECRET_ARN, env.AWS_REGION), workspace: env.TRACE_TOOL_WORKSPACE || TOOL_WORKSPACE, persistent: true, cli: env.TRACE_CLI || '/app/dist/cli.js' }),
   })
 }
