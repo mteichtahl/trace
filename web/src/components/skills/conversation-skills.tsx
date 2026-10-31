@@ -12,7 +12,7 @@
  */
 import { UseAgentUpdate, useAgent } from '@copilotkit/react-core/v2'
 import { ArrowRight, Check, Circle, CircleDot } from 'lucide-react'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -55,7 +55,58 @@ const STATE_WORD: Record<IntentStatement['state'], { status: 'met' | 'yours' | '
 
 // ------------------------------------------------------------------ intent builder
 
-interface IntentLocal extends SkillDraftBase { topic?: number }
+/** A person's decision on one statement, kept in the draft until Submit records it (actions-skills pendingDecisions). */
+export interface IntentDecision { statement: string; choice: 'accept' | 'edit' | 'reject'; text?: string; reason?: string }
+interface IntentLocal extends SkillDraftBase { topic?: number; decisions?: IntentDecision[] }
+
+/** The draft with one statement's decision replaced, or removed (null). Pure. */
+export function withIntentDecision<D extends { decisions?: IntentDecision[] }>(d: D, statement: string, decision: Omit<IntentDecision, 'statement'> | null): D {
+  const rest = (d.decisions ?? []).filter((x) => x.statement !== statement)
+  return { ...d, decisions: decision ? [...rest, { statement, ...decision }] : rest }
+}
+
+const DECIDED_WORD: Record<IntentDecision['choice'], string> = { accept: 'Accepting', edit: 'Rewording', reject: 'Rejecting' }
+
+/**
+ * One statement in the Draft intent panel, with the person's decision on it: Accept as worded, Edit (in their own
+ * words) or Reject (with a line why). The decision goes into the draft; the quality bar (skill.get, the draft laid over
+ * the record) moves with it, and Submit intent records it. Statements left undecided are accepted at Submit.
+ */
+function IntentStatementRow({ st, decision, onDecide }: { st: IntentStatement; decision?: IntentDecision; onDecide: (d: Omit<IntentDecision, 'statement'> | null) => void }) {
+  const [mode, setMode] = useState<'edit' | 'reject' | null>(null)
+  const [words, setWords] = useState('')
+  const ok = words.trim().length >= 3
+  const done = () => { setMode(null); setWords('') }
+  return (
+    <li className="space-y-1.5 text-sm">
+      <div className="flex items-start justify-between gap-3">
+        <span>{decision?.choice === 'edit' && decision.text ? decision.text : st.text}</span>
+        <StatusBadge status={STATE_WORD[st.state].status} label={st.flag ?? STATE_WORD[st.state].label} className="shrink-0" />
+      </div>
+      {mode ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Label className="sr-only" htmlFor={`intent-${st.id}`}>{mode === 'edit' ? `Statement ${st.id} in your words` : `Why ${st.id} is rejected`}</Label>
+          <Input id={`intent-${st.id}`} className="h-8 min-w-0 flex-1" autoFocus placeholder={mode === 'edit' ? 'The statement in your words' : 'Why it is rejected'} value={words} onChange={(e) => setWords(e.target.value)} />
+          <Button size="sm" variant="outline" disabled={!ok} onClick={() => { onDecide(mode === 'edit' ? { choice: 'edit', text: words.trim() } : { choice: 'reject', reason: words.trim() }); done() }}>{mode === 'edit' ? 'Save' : 'Reject'}</Button>
+          <Button size="sm" variant="ghost" onClick={done}>Cancel</Button>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-1 text-xs">
+          {decision && <span className="mr-1 text-muted-foreground">{DECIDED_WORD[decision.choice]} in your draft</span>}
+          {decision ? (
+            <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => onDecide(null)}>Undo</Button>
+          ) : (
+            <>
+              <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" aria-label={`Accept ${st.id}`} onClick={() => onDecide({ choice: 'accept' })}>Accept</Button>
+              <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" aria-label={`Edit ${st.id}`} onClick={() => { setMode('edit'); setWords(st.text) }}>Edit</Button>
+              <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" aria-label={`Reject ${st.id}`} onClick={() => setMode('reject')}>Reject</Button>
+            </>
+          )}
+        </div>
+      )}
+    </li>
+  )
+}
 
 export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
   const s = useSkill<IntentLocal>(repo, def, { done: [] })
@@ -70,6 +121,11 @@ export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
   const checks = qualityChecks(def, v, {})
   const left = checks.filter((c) => c.status === 'not_met').length
   const t = def.steps[topic] ?? def.steps[0]!
+  const decisions = s.draft.data.decisions ?? []
+  // a statement rejected in the draft drops out of the record's view (skill.get lays the draft over it): listed here
+  const shown = new Set((intent?.statements ?? []).map((x) => x.id))
+  const rejected = decisions.filter((d) => d.choice === 'reject' && !shown.has(d.statement))
+  const decide = (statement: string, d: Omit<IntentDecision, 'statement'> | null) => s.draft.setData((x) => withIntentDecision(x, statement, d))
 
   const aside = (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -86,14 +142,24 @@ export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
               <h3 className="mb-1.5 text-xs text-muted-foreground">{g}</h3>
               <ul className="space-y-2">
                 {list.map((st) => (
-                  <li key={st.id} className="flex items-start justify-between gap-3 text-sm">
-                    <span>{st.text}</span>
-                    <StatusBadge status={STATE_WORD[st.state].status} label={st.flag ?? STATE_WORD[st.state].label} className="shrink-0" />
-                  </li>
+                  <IntentStatementRow key={st.id} st={st} decision={decisions.find((x) => x.statement === st.id)} onDecide={(d) => decide(st.id, d)} />
                 ))}
               </ul>
             </section>
           ))
+        )}
+        {rejected.length > 0 && (
+          <section>
+            <h3 className="mb-1.5 text-xs text-muted-foreground">Rejected in your draft ({rejected.length})</h3>
+            <ul className="space-y-2">
+              {rejected.map((d) => (
+                <li key={d.statement} className="flex items-start justify-between gap-3 text-sm">
+                  <span><span className="font-mono text-xs">{d.statement}</span>: {d.reason}</span>
+                  <Button size="sm" variant="ghost" className="h-6 shrink-0 px-2 text-xs" aria-label={`Undo rejecting ${d.statement}`} onClick={() => decide(d.statement, null)}>Undo</Button>
+                </li>
+              ))}
+            </ul>
+          </section>
         )}
         {intent && (
           <section className="border-t pt-4">

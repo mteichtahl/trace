@@ -3,7 +3,7 @@ import type { CoverageRow } from '@/lib/types-s1'
 import { layoutTrace } from '@/components/project/traceability'
 import { recommendGlyph } from '@/components/project/project-icon'
 import { readoutState } from './checklist-skill'
-import { answerChecks } from './conversation-skills'
+import { answerChecks, withIntentDecision } from './conversation-skills'
 import { SKILLS, checksOf, pictureOf } from './definitions'
 import { continueText, draftKey } from './draft'
 import { changeChecks, waiverChecks, type WaiverDraft } from './form-skills'
@@ -116,4 +116,21 @@ describe('traceability', () => {
 
 describe('project icon', () => {
   it('recommends the glyph its description names first', () => expect(recommendGlyph('A soil moisture sensor that reports over LoRa')).toBe('sensor'))
+})
+
+describe('Intent builder decisions', () => {
+  it('keeps one decision per statement in the draft, replaced or removed', () => {
+    let d: { done: string[]; decisions?: Parameters<typeof withIntentDecision>[0]['decisions'] } = { done: ['purpose'] }
+    d = withIntentDecision(d, 'INT-R4', { choice: 'reject', reason: 'superseded by the full USB-C power input statement' })
+    d = withIntentDecision(d, 'INT-R4-interface', { choice: 'accept' })
+    expect(d.decisions).toEqual([
+      { statement: 'INT-R4', choice: 'reject', reason: 'superseded by the full USB-C power input statement' },
+      { statement: 'INT-R4-interface', choice: 'accept' },
+    ])
+    d = withIntentDecision(d, 'INT-R4', { choice: 'edit', text: 'Works with USB-C chargers.' })
+    expect(d.decisions?.find((x) => x.statement === 'INT-R4')).toEqual({ statement: 'INT-R4', choice: 'edit', text: 'Works with USB-C chargers.' })
+    d = withIntentDecision(d, 'INT-R4', null)
+    expect(d.decisions?.map((x) => x.statement)).toEqual(['INT-R4-interface'])
+    expect(d.done).toEqual(['purpose'])
+  })
 })
