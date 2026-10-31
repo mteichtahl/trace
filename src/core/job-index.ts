@@ -87,6 +87,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   claude_session TEXT,            -- its Agent SDK session id, when paused with its transcript kept
   paused_by TEXT,                 -- who paused it (their email), and when
   paused_at REAL,
+  tail TEXT,                      -- its last log lines (JSON array), so a job that goes silent shows what it was doing
+  vitals TEXT,                    -- its microVM at its last word: memory in use and in all, in MB (JSON)
   updated_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state, agent);
@@ -105,6 +107,9 @@ export const applyJobIndexSchema = (db: DatabaseSync): void => {
   // added with hand-offs: an index made before has no such column
   const cols = new Set((db.prepare("SELECT name FROM pragma_table_info('jobs')").all() as { name: string }[]).map((c) => c.name))
   if (!cols.has('handoff')) db.exec('ALTER TABLE jobs ADD COLUMN handoff TEXT')
+  // added to explain lost jobs: an index made before has neither
+  if (!cols.has('tail')) db.exec('ALTER TABLE jobs ADD COLUMN tail TEXT')
+  if (!cols.has('vitals')) db.exec('ALTER TABLE jobs ADD COLUMN vitals TEXT')
 }
 
 /** One project's job index, in `store` (the central bucket at its `projects` prefix). */
@@ -122,7 +127,10 @@ export interface JobRow {
   queuedAt: number | null; startedAt: number | null; endedAt: number | null; beatAt: number | null; where: string | null
   branch: string | null; parentJob: string | null; handoff: string | null; resumeOf: string | null; resumedBy: string | null
   summary: string | null; error: string | null; payload: string | null; claudeSession: string | null
-  pausedBy: string | null; pausedAt: number | null; updatedAt: number
+  pausedBy: string | null; pausedAt: number | null
+  /** its last log lines (JSON array of strings) and its microVM's memory at its last word (JSON { usedMb, totalMb }) */
+  tail: string | null; vitals: string | null
+  updatedAt: number
 }
 export interface BatchRow { id: string; jobId: string; pool: 'gpu' | 'cpu'; state: string | null; submittedAt: number; endedAt: number | null }
 
@@ -136,7 +144,7 @@ export function loadJobs(db: DatabaseSync): JobRow[] {
     queuedAt: num(r.queued_at), startedAt: num(r.started_at), endedAt: num(r.ended_at), beatAt: num(r.beat_at), where: str(r.where_),
     branch: str(r.branch), parentJob: str(r.parent_job), handoff: str(r.handoff), resumeOf: str(r.resume_of), resumedBy: str(r.resumed_by),
     summary: str(r.summary), error: str(r.error), payload: str(r.payload), claudeSession: str(r.claude_session),
-    pausedBy: str(r.paused_by), pausedAt: num(r.paused_at), updatedAt: Number(r.updated_at),
+    pausedBy: str(r.paused_by), pausedAt: num(r.paused_at), tail: str(r.tail), vitals: str(r.vitals), updatedAt: Number(r.updated_at),
   }))
 }
 
@@ -150,7 +158,7 @@ const COLUMN: Record<keyof Omit<JobRow, 'id'>, string> = {
   handle: 'handle', session: 'session', kind: 'kind', agent: 'agent', title: 'title', number: 'number', requestedBySub: 'requested_by_sub', requestedBy: 'requested_by',
   state: 'state', step: 'step', queuedAt: 'queued_at', startedAt: 'started_at', endedAt: 'ended_at', beatAt: 'beat_at', where: 'where_', branch: 'branch',
   parentJob: 'parent_job', handoff: 'handoff', resumeOf: 'resume_of', resumedBy: 'resumed_by', summary: 'summary', error: 'error', payload: 'payload', claudeSession: 'claude_session',
-  pausedBy: 'paused_by', pausedAt: 'paused_at', updatedAt: 'updated_at',
+  pausedBy: 'paused_by', pausedAt: 'paused_at', tail: 'tail', vitals: 'vitals', updatedAt: 'updated_at',
 }
 
 /** Insert or change one job's row (only the fields given), stamping updated_at. */
@@ -285,4 +293,29 @@ export function indexedHandle(repository: string, session: string | null, jobId:
 export function changedSince(db: DatabaseSync, repository: string, since: number): { jobId: string; state: IndexState }[] {
   return (db.prepare('SELECT id, session, state FROM jobs WHERE updated_at >= ? ORDER BY updated_at').all(since) as Record<string, unknown>[])
     .map((r) => ({ jobId: indexedHandle(repository, str(r.session), String(r.id)), state: String(r.state) as IndexState }))
+}
+
+/** How many log lines a job's row keeps, and how long each may be. */
+export const TAIL_LINES = 12
+const TAIL_CHARS = 300
+
+/** A job's last log lines as its row keeps them. Pure. */
+export function tailOf(log: readonly string[]): string {
+  return JSON.stringify(log.slice(-TAIL_LINES).map((l) => (l.length > TAIL_CHARS ? `${l.slice(0, TAIL_CHARS - 1)}…` : l)))
+}
+
+/**
+ * What a lost job's row says about its end, in words: its last lines and how full its microVM's memory was at its last
+ * word (a microVM that runs out of memory ends without one). Empty when the row holds neither. Pure.
+ */
+export function lastWords(r: Pick<JobRow, 'tail' | 'vitals'>): string {
+  let lines: string[] = []
+  try { const t: unknown = r.tail ? JSON.parse(r.tail) : []; if (Array.isArray(t)) lines = t.filter((x): x is string => typeof x === 'string') } catch { /* an unreadable tail says nothing */ }
+  let mem = ''
+  try {
+    const v = r.vitals ? JSON.parse(r.vitals) as { usedMb?: unknown; totalMb?: unknown } : null
+    if (v && typeof v.usedMb === 'number' && typeof v.totalMb === 'number' && v.totalMb > 0) mem = `Its microVM had ${v.usedMb} of ${v.totalMb} MB of memory in use at its last word (${Math.round((v.usedMb / v.totalMb) * 100)} %).`
+  } catch { /* nor unreadable vitals */ }
+  const last = lines.slice(-3)
+  return [last.length ? `Its last lines: ${last.map((l) => `"${l}"`).join(' · ')}.` : '', mem].filter(Boolean).join(' ')
 }

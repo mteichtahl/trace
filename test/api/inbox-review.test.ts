@@ -8,7 +8,7 @@ import type { PullSummary } from '../../src/api/github.js'
 const job = (id: string, branch: string | null, agent: string | null, endedAt: number | null): JobRow => ({
   id, handle: null, session: null, kind: 'task', agent, title: id, number: null, requestedBySub: null, requestedBy: null, state: 'succeeded', step: null,
   queuedAt: null, startedAt: null, endedAt, beatAt: null, where: null, branch, parentJob: null, handoff: null, resumeOf: null, resumedBy: null,
-  summary: null, error: null, payload: null, claudeSession: null, pausedBy: null, pausedAt: null, updatedAt: endedAt ?? 0,
+  summary: null, error: null, payload: null, claudeSession: null, pausedBy: null, pausedAt: null, tail: null, vitals: null, updatedAt: endedAt ?? 0,
 })
 const pull = (number: number, head: string, o: Partial<PullSummary> = {}): PullSummary => ({
   number, title: `PR ${number}`, head, draft: false, labels: [], url: `https://github.com/mteichtahl/testyyyu/pull/${number}`, updated_at: '2026-10-31T07:40:00Z', ...o,

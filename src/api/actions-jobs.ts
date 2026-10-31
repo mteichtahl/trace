@@ -45,7 +45,7 @@
 import { z } from 'zod'
 import { AccessDenied, isAdmin, require_, standing } from '../core/access.js'
 import {
-  type BatchRow, type JobControl, type JobRow, JobIndexStore, STALE_AFTER_S, indexedHandle, isLive, loadBatch, loadControls, loadJobs, moveUpOrder, putControl, queueOrder, typicalSeconds,
+  type BatchRow, type JobControl, type JobRow, JobIndexStore, STALE_AFTER_S, indexedHandle, isLive, lastWords, loadBatch, loadControls, loadJobs, moveUpOrder, putControl, queueOrder, typicalSeconds,
 } from '../core/job-index.js'
 import { type AgentFacts, type JourneyRecord, loadJourney } from '../core/journey.js'
 import { type HandoffView, declineHandoff, handoffViews } from '../core/handoffs.js'
@@ -149,10 +149,10 @@ export function jobViews(repo: string, rows: readonly JobRow[], controls: Readon
     out.push({
       id: indexedHandle(repo, j.session, j.id), workerJobId: j.id, kind: j.kind, repository: repo, agent: j.agent, agentName: j.agent ? AGENT_WORDS[j.agent] ?? j.agent : null,
       title: j.title, number: j.number, startedBy: j.requestedBy, yours: j.requestedBySub !== null && j.requestedBySub === o.sub, state,
-      step: lost ? LOST : discarded ? `discarded by ${c?.by ?? 'a person'}` : j.step, held: Boolean(c?.held),
+      step: lost ? [`${LOST}.`, lastWords(j)].filter(Boolean).join(' ') : discarded ? `discarded by ${c?.by ?? 'a person'}` : j.step, held: Boolean(c?.held),
       queuedAt: iso(j.queuedAt), startedAt: iso(j.state === 'queued' ? null : j.startedAt), endedAt: iso(j.endedAt),
       typicalS: typicalSeconds(rows, j.kind, j.agent), where: j.where, branch: j.branch, queue,
-      parentJob: j.parentJob, resumeOf: j.resumeOf, resumedBy: j.resumedBy, summary: j.summary, error: lost ? LOST : j.error,
+      parentJob: j.parentJob, resumeOf: j.resumeOf, resumedBy: j.resumedBy, summary: j.summary, error: lost ? [`${LOST}.`, lastWords(j)].filter(Boolean).join(' ') : j.error,
       pausedBy: j.pausedBy, pausedAt: iso(j.pausedAt),
       handoff: j.handoff ? handoffOf(j) : null,
       controls: controlsOf({ ...j, held: Boolean(c?.held), discarded, lost, first }, o),

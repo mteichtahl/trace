@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { agentViews, cannot, controlsOf, jobViews } from '../../src/api/actions-jobs.js'
 import {
   type JobControl, type JobRow, STALE_AFTER_S, applyJobIndexSchema, changedSince, indexedHandle, isLive, loadControls, loadJobs, mayStart, moveUpOrder, pruneJobs, putControl,
-  putJob, queueOrder, typicalSeconds,
+  putJob, queueOrder, typicalSeconds, lastWords, tailOf, TAIL_LINES,
 } from '../../src/core/job-index.js'
 import { projectHash } from '../../src/core/project.js'
 
@@ -111,7 +111,7 @@ describe('the views', () => {
     add(d, 'run', { state: 'running', startedAt: AT - 60, beatAt: AT - 5, requestedBySub: 'sub-m', requestedBy: 'm@example.com', step: 'running ERC' })
     add(d, 'q1', { queuedAt: AT - 20, step: 'queued: the verify agent is already working on this project ("run")' })
     add(d, 'q2', { queuedAt: AT - 10 })
-    add(d, 'lost', { state: 'running', agent: 'impl', startedAt: AT - 9000, beatAt: AT - 9000 })
+    add(d, 'lost', { state: 'running', agent: 'impl', startedAt: AT - 9000, beatAt: AT - 9000, tail: tailOf(['cloning', 'running the impl specialist', 'tool: parts.search TLC555']), vitals: JSON.stringify({ usedMb: 7900, totalMb: 8192 }) })
     add(d, 'p', { state: 'paused', agent: 'ams', branch: 'claude/task-x', pausedBy: 'n@example.com', pausedAt: AT - 100 })
     add(d, 'wi', { state: 'running', kind: 'work-item', agent: 'emc', beatAt: AT, session: 'trace-acme-board-5-abcdef1234567890' })
     add(d, 'old', { state: 'succeeded', endedAt: AT - 2 * 86_400 })
@@ -122,6 +122,8 @@ describe('the views', () => {
     expect(by('q1')).toMatchObject({ state: 'queued', queue: { position: 1, of: 2, startsWhen: expect.stringMatching(/already working/) }, controls: ['pause', 'cancel'] })
     expect(by('q2')).toMatchObject({ held: true, queue: { position: 2, startsWhen: 'held by n@example.com: it starts when someone resumes it' }, controls: ['resume', 'move_up', 'cancel'] })
     expect(by('lost')).toMatchObject({ state: 'lost', controls: [], step: expect.stringMatching(/lost contact/) })
+    // what it was doing and how full its memory was at its last word: why it went silent, where people and trace look
+    expect(by('lost')?.error).toMatch(/Its last lines: "cloning" · "running the impl specialist" · "tool: parts.search TLC555"\. Its microVM had 7900 of 8192 MB of memory in use at its last word \(96 %\)\./)
     expect(by('p')).toMatchObject({ state: 'paused', controls: ['resume', 'cancel'], pausedBy: 'n@example.com' })
     // a workflow's work item: cancel only (the workflow would dispatch it again)
     expect(by('wi')).toMatchObject({ id: `p${projectHash(REPO)}.trace-acme-board-5-abcdef1234567890.wi`, controls: ['cancel'] })
@@ -159,5 +161,16 @@ describe('the views', () => {
     // answered and dismissed ones no longer count
     const b = Object.fromEntries(agentViews(jobs, facts, new Set(['q']), new Set(['s']), AT).map((x) => [x.id, x]))
     expect([b.ams?.status, b.thermal?.status]).toEqual(['working', 'idle'])
+  })
+})
+
+describe('a job\'s last words', () => {
+  it('keeps the last lines, each cut to length, and says nothing when the row has none', () => {
+    const t = JSON.parse(tailOf([...Array.from({ length: 20 }, (_, i) => `line ${i}`), 'x'.repeat(500)])) as string[]
+    expect(t).toHaveLength(TAIL_LINES)
+    expect(t.at(-1)).toHaveLength(300)
+    expect(t[0]).toBe('line 9')
+    expect(lastWords({ tail: null, vitals: null })).toBe('')
+    expect(lastWords({ tail: 'not json', vitals: '{}' })).toBe('')
   })
 })
