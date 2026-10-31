@@ -241,7 +241,8 @@ export function readInbox(raw: unknown): InboxItem[] {
     const to = refTo(repo, ref)
     return {
       id: String(i.id), kind: i.kind as InboxItem['kind'], repo, project: String(i.project), stage: str(i.stage), summary: String(i.summary),
-      createdAt: String(i.since), action: { label: String(i.action), ...(to ? { to } : {}) },
+      // a pull request (kind review) opens on GitHub, outside the app
+      createdAt: String(i.since), action: { label: String(i.action), ...(to ? { to } : {}), ...(ref.kind === 'pull' && typeof ref.url === 'string' && /^https:\/\/github\.com\//.test(ref.url) ? { href: ref.url } : {}) },
       ...(isObj(i.recommended) ? { recommended: { id: String(i.recommended.id), label: String(i.recommended.label) } } : {}),
       ...(ref.kind === 'question' ? { questionId: String(ref.id) } : {}),
     }

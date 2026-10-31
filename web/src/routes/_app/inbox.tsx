@@ -30,10 +30,10 @@ export const Route = createFileRoute('/_app/inbox')({
   component: Inbox,
 })
 
-export const INBOX_KINDS: InboxKind[] = ['gate', 'question', 'spend', 'stuck']
-const KIND_WORDS: Record<InboxKind, string> = { gate: 'Gates ready', question: 'Questions', spend: 'Spend', stuck: 'Agents stuck' }
+export const INBOX_KINDS: InboxKind[] = ['gate', 'question', 'spend', 'stuck', 'review']
+const KIND_WORDS: Record<InboxKind, string> = { gate: 'Gates ready', question: 'Questions', spend: 'Spend', stuck: 'Agents stuck', review: 'Pull requests' }
 
-/** Only the four kinds that earn a notification, oldest and most blocking first (the API's order is kept). */
+/** The kinds that need a person (the four that earn a notification, and trace's open pull requests), most blocking and oldest first (the API's order is kept). */
 export function inboxItems(items: InboxItem[] | undefined): InboxItem[] {
   return (items ?? []).filter((i) => INBOX_KINDS.includes(i.kind))
 }

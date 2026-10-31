@@ -45,10 +45,12 @@
 import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
-  INBOX_KINDS, type InboxItem, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
+  INBOX_KINDS, type InboxItem, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
   dismissStuck, journeyView, loadJourney, recordOpen, returnGate, signGate, sortInbox,
 } from '../core/journey.js'
-import { listJobs, projectHandoffs } from './actions-jobs.js'
+import { AGENT_WORDS, jobIndex, listJobs, projectHandoffs } from './actions-jobs.js'
+import { reviewItems } from './inbox-review.js'
+import { loadJobs } from '../core/job-index.js'
 import { type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, label, plainly, snapshotJourney, withJourneyDb, writeJourney } from './action-kit.js'
 
 const Id = z.string().min(1).max(80)
@@ -84,6 +86,12 @@ async function snapshot(ctx: Context, repo: string, why: string): Promise<{ bran
 }
 
 /** At most this many projects' databases are read at once for the inbox. */
+/** The open pull requests the project's jobs opened (inbox-review.ts), from GitHub and the project's job index. */
+async function openReviews(ctx: Context, repo: string, project: string, stage: StageId): Promise<InboxItem[]> {
+  const [pulls, jobs] = await Promise.all([(await ctx.deps.github()).openPulls(repo), jobIndex(ctx, repo).read((db) => loadJobs(db)).then((x) => x.result)])
+  return reviewItems({ repo, project, stage, pulls, jobs, agentWords: AGENT_WORDS })
+}
+
 const INBOX_PARALLEL = 4
 
 async function mapLimit<T, R>(items: readonly T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
@@ -200,7 +208,14 @@ export const JOURNEY_ACTIONS = {
         const r: JourneyRecord | null = await withJourneyDb(ctx, p.repo, (db) => loadJourney(db))
         if (!r) return []
         const facts = await agentFacts(ctx, p.repo)
-        return inboxItems(p.repo, r, { hash: hashOf(ctx.principal), also: hashesOf(ctx.principal), label: label(ctx.principal), admin: isAdmin(ctx.principal), part: p.part, sub: ctx.principal.sub }, undefined, facts)
+        const items = inboxItems(p.repo, r, { hash: hashOf(ctx.principal), also: hashesOf(ctx.principal), label: label(ctx.principal), admin: isAdmin(ctx.principal), part: p.part, sub: ctx.principal.sub }, undefined, facts)
+        // the open pull requests trace's jobs opened, for those who can merge them (admins and contributors)
+        const wantReview = (!a.kinds || a.kinds.includes('review')) && (isAdmin(ctx.principal) || p.part === 'contributor')
+        if (wantReview) items.push(...await openReviews(ctx, p.repo, r.journey.name ?? p.repo, r.journey.currentStage).catch((e: unknown) => {
+          unavailable.push({ repo: p.repo, reason: `its pull requests: ${(e instanceof Error ? e.message : String(e)).slice(0, 160)}` })
+          return []
+        }))
+        return items
       } catch (e) {
         unavailable.push({ repo: p.repo, reason: (e instanceof Error ? e.message : String(e)).slice(0, 200) })
         return []
