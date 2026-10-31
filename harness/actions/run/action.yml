@@ -94,32 +94,32 @@ inputs:
     required: false
     default: ''
 outputs:
-  go: { description: deploy-request/approve — 'true' to deploy, value: '${{ steps.run.outputs.go }}' }
-  sha: { description: deploy-request/approve — the commit to deploy, value: '${{ steps.run.outputs.sha }}' }
-  issue: { description: deploy-request/approve — the request issue, value: '${{ steps.run.outputs.issue }}' }
-  by: { description: deploy-approve — who approved, value: '${{ steps.run.outputs.by }}' }
-  before: { description: deploy-guard — what was deployed before (the rollback target), value: '${{ steps.run.outputs.before }}' }
-  items: { description: worker-pick — the claimed items as a JSON list, value: '${{ steps.run.outputs.items }}' }
-  runner: { description: worker-pick — where items run (worker.runner — agentcore or actions), value: '${{ steps.run.outputs.runner }}' }
-  job: { description: worker-dispatch — the agent's job id, value: '${{ steps.run.outputs.job }}' }
-  trace: { description: worker-dispatch — the trace id the agent's work continues, value: '${{ steps.run.outputs.trace }}' }
-  prompt: { description: worker-prompt — the specialist's prompt; worker-delegate — the worker's, value: '${{ steps.run.outputs.prompt }}' }
-  agent: { description: worker-prompt — the specialist the prompt is for, value: '${{ steps.run.outputs.agent }}' }
-  args: { description: worker-prompt — the specialist's claude_args (read only, structured output); worker-delegate — the worker's, value: '${{ steps.run.outputs.args }}' }
-  tools: { description: worker-prompt — the specialist's trace tools (TRACE_MCP_TOOLS for the install action), value: '${{ steps.run.outputs.tools }}' }
-  memory-actor: { description: worker-prompt — the specialist's memory actor, value: '${{ steps.run.outputs.memory-actor }}' }
-  worker-memory-actor: { description: worker-prompt — the worker's memory actor, value: '${{ steps.run.outputs.worker-memory-actor }}' }
-  memory-session: { description: worker-prompt — the memory session (pr-<n> or issue-<n>), value: '${{ steps.run.outputs.memory-session }}' }
-  delegate: { description: worker-delegate — 'true' when the specialist delegated to the worker, value: '${{ steps.run.outputs.delegate }}' }
-  check-prompt: { description: worker-delegate — the check's prompt (the specialist again), value: '${{ steps.run.outputs.check-prompt }}' }
-  prompts: { description: worker-prompt / worker-delegate — the prompt parts used (id@layer:version, never the text), value: '${{ steps.run.outputs.prompts }}' }
-  check-args: { description: worker-delegate — the check's claude_args (read only), value: '${{ steps.run.outputs.check-args }}' }
-  setup: { description: worker-prompt/deploy-commands — the setup command, value: '${{ steps.run.outputs.setup }}' }
-  risk_check: { description: deploy-commands, value: '${{ steps.run.outputs.risk_check }}' }
-  command: { description: deploy-commands, value: '${{ steps.run.outputs.command }}' }
-  smoke: { description: deploy-commands, value: '${{ steps.run.outputs.smoke }}' }
-  rollback: { description: deploy-commands, value: '${{ steps.run.outputs.rollback }}' }
-  enabled: { description: deploy-commands, value: '${{ steps.run.outputs.enabled }}' }
+  go: { description: 'deploy-request/approve — ''true'' to deploy', value: '${{ steps.run.outputs.go }}' }
+  sha: { description: 'deploy-request/approve — the commit to deploy', value: '${{ steps.run.outputs.sha }}' }
+  issue: { description: 'deploy-request/approve — the request issue', value: '${{ steps.run.outputs.issue }}' }
+  by: { description: 'deploy-approve — who approved', value: '${{ steps.run.outputs.by }}' }
+  before: { description: 'deploy-guard — what was deployed before (the rollback target)', value: '${{ steps.run.outputs.before }}' }
+  items: { description: 'worker-pick — the claimed items as a JSON list', value: '${{ steps.run.outputs.items }}' }
+  runner: { description: 'worker-pick — where items run (worker.runner — agentcore or actions)', value: '${{ steps.run.outputs.runner }}' }
+  job: { description: 'worker-dispatch — the agent''s job id', value: '${{ steps.run.outputs.job }}' }
+  trace: { description: 'worker-dispatch — the trace id the agent''s work continues', value: '${{ steps.run.outputs.trace }}' }
+  prompt: { description: 'worker-prompt — the specialist''s prompt; worker-delegate — the worker''s', value: '${{ steps.run.outputs.prompt }}' }
+  agent: { description: 'worker-prompt — the specialist the prompt is for', value: '${{ steps.run.outputs.agent }}' }
+  args: { description: 'worker-prompt — the specialist''s claude_args (read only, structured output); worker-delegate — the worker''s', value: '${{ steps.run.outputs.args }}' }
+  tools: { description: 'worker-prompt — the specialist''s trace tools (TRACE_MCP_TOOLS for the install action)', value: '${{ steps.run.outputs.tools }}' }
+  memory-actor: { description: 'worker-prompt — the specialist''s memory actor', value: '${{ steps.run.outputs.memory-actor }}' }
+  worker-memory-actor: { description: 'worker-prompt — the worker''s memory actor', value: '${{ steps.run.outputs.worker-memory-actor }}' }
+  memory-session: { description: 'worker-prompt — the memory session (pr-<n> or issue-<n>)', value: '${{ steps.run.outputs.memory-session }}' }
+  delegate: { description: 'worker-delegate — ''true'' when the specialist delegated to the worker', value: '${{ steps.run.outputs.delegate }}' }
+  check-prompt: { description: 'worker-delegate — the check''s prompt (the specialist again)', value: '${{ steps.run.outputs.check-prompt }}' }
+  prompts: { description: 'worker-prompt / worker-delegate — the prompt parts used (id@layer:version, never the text)', value: '${{ steps.run.outputs.prompts }}' }
+  check-args: { description: 'worker-delegate — the check''s claude_args (read only)', value: '${{ steps.run.outputs.check-args }}' }
+  setup: { description: 'worker-prompt/deploy-commands — the setup command', value: '${{ steps.run.outputs.setup }}' }
+  risk_check: { description: 'deploy-commands', value: '${{ steps.run.outputs.risk_check }}' }
+  command: { description: 'deploy-commands', value: '${{ steps.run.outputs.command }}' }
+  smoke: { description: 'deploy-commands', value: '${{ steps.run.outputs.smoke }}' }
+  rollback: { description: 'deploy-commands', value: '${{ steps.run.outputs.rollback }}' }
+  enabled: { description: 'deploy-commands', value: '${{ steps.run.outputs.enabled }}' }
 runs:
   using: composite
   steps:
