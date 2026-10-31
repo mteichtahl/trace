@@ -13,6 +13,7 @@
 import { UseAgentUpdate, useAgent } from '@copilotkit/react-core/v2'
 import { ArrowRight, Check, Circle, CircleDot } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -198,7 +199,12 @@ export function IntentBuilder({ repo, def }: { repo: string; def: SkillDef }) {
       stepsExtra={<p className="px-2 text-xs text-muted-foreground">You can stop at any time. The draft is kept and trace picks up at the topic you left.</p>}
       checks={checks}
       submitLabel={def.submit}
-      onSubmit={() => s.submit(undefined, 'Intent submitted. trace is drafting the candidate requirements for Requirements review.')}
+      onSubmit={() => s.submit(async () => {
+        // Submit starts the Verification agent drafting the candidate requirements (skill.submit); say whether it did
+        const r = await call('skill.submit', { repo, skill: def.id, draft: s.draft.data as unknown as Record<string, unknown> }) as { jobId?: string; jobError?: string }
+        if (r.jobError) toast.warning('trace could not start drafting the requirements.', { description: `${r.jobError} Ask trace to draft them from the intent.` })
+        else toast('trace is drafting the candidate requirements for Requirements review.')
+      }, 'Intent submitted.')}
       onClose={s.close}
       draftSavedAt={s.draft.savedAt}
       aside={aside}
