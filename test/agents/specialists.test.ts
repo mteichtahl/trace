@@ -166,6 +166,19 @@ describe('router', () => {
     expect(cfg.labels.agent_thermal).toBe('agent:thermal')
   })
 
+  it('checks a person\'s pick against the request: a plain mismatch goes to the specialist the request names', () => {
+    // job-mvw1jcwk: a requirements task sent to impl, whose specialist only reported that it was not its work
+    const asked = 'A small 2 layer PCB with a 555 timer flashing a red LED. Write the project purpose and these requirements, each with its measurable criterion'
+    const moved = route({ kind: 'impl', text: asked, checkPick: true }, cfg)
+    expect(moved).toMatchObject({ kind: 'verify', source: 'keyword' })
+    expect(moved.reason).toMatch(/^impl was picked, but nothing in the request is impl's work and the words "requirements" point to verify/)
+    // the request gives the pick any support at all, or says nothing: the pick stands
+    expect(route({ kind: 'impl', text: `${asked}, then route the board`, checkPick: true }, cfg)).toMatchObject({ kind: 'impl', source: 'explicit' })
+    expect(route({ kind: 'impl', text: 'tidy the README', checkPick: true }, cfg)).toMatchObject({ kind: 'impl', source: 'explicit' })
+    // not a person's pick (a delegation, a hand-off, a resumed task): where it says
+    expect(route({ kind: 'impl', text: asked }, cfg)).toMatchObject({ kind: 'impl', source: 'explicit' })
+  })
+
   it('maps the agent:<kind> labels from the settings', () => {
     expect(labelKind('agent:verify', cfg)).toBe('verify')
     expect(labelKind('AGENT:EMC', cfg)).toBe('emc')
