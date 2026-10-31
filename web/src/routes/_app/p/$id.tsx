@@ -12,6 +12,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useTraceContext } from '@/components/chat/context'
+import { GitHubWaits } from '@/components/project/github-waits'
 import { useCrumb } from '@/components/shell/breadcrumbs'
 import { NotShared, QueryError } from '@/components/states'
 import { ApiError, projectName, repoOf } from '@/lib/api'
@@ -131,6 +132,8 @@ function ProjectLayout() {
         })}
         {j.data && tabs.length < all && <span className="hidden pb-2.5 pl-3 text-xs text-muted-foreground lg:inline">More tabs appear as the project reaches later stages</span>}
       </nav>
+      {/* what the project waits for on GitHub, on whichever tab is open */}
+      <GitHubWaits repo={repo} />
       <Outlet />
     </div>
   )
