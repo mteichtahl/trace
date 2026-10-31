@@ -37,15 +37,41 @@ export function NoChecker({ def }: { def: SkillDef }) {
 }
 
 /** The checks the record cannot answer yet, each with what has to be recorded first: Submit waits for them. */
-export function Unavailable({ checks, def }: { checks?: { id: string; unavailable?: string }[]; def: SkillDef }) {
-  const open = (checks ?? []).filter((c) => c.unavailable)
+/** The draft's confirmations of checks no tool can make yet (skill-checks.ts `yours`): confirmed[check id]. */
+export interface Confirmable { data: { confirmed?: Record<string, boolean> }; setData: (fn: (d: { confirmed?: Record<string, boolean> }) => { confirmed?: Record<string, boolean> }) => void }
+
+export function Unavailable({ checks, def, draft }: { checks?: { id: string; unavailable?: string; confirmable?: boolean; confirmed?: boolean }[]; def: SkillDef; draft?: Confirmable }) {
+  const open = (checks ?? []).filter((c) => c.unavailable || c.confirmed)
   if (!open.length) return null
+  const waiting = open.filter((c) => !c.confirmed && !(draft && c.confirmable))
+  const yours = draft ? open.filter((c) => c.confirmable || c.confirmed) : []
+  const text = (id: string) => def.checks.find((x) => x.id === id)?.text ?? id
+  const set = (id: string, v: boolean) => draft?.setData((d) => ({ ...d, confirmed: { ...(d.confirmed ?? {}), [id]: v } }))
   return (
-    <div className="space-y-1 rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
-      <p className="flex items-center gap-2"><Construction className="size-3.5 shrink-0" aria-hidden />{open.length === 1 ? 'One check' : `${open.length} checks`} of the bar cannot be checked from the record yet, so Submit waits for {open.length === 1 ? 'it' : 'them'}:</p>
-      <ul className="ml-5 list-disc space-y-0.5">
-        {open.map((c) => <li key={c.id}><span className="font-medium">{def.checks.find((x) => x.id === c.id)?.text ?? c.id}</span>: needs {c.unavailable}.</li>)}
-      </ul>
+    <div className="space-y-2 rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
+      {waiting.length > 0 && (
+        <>
+          <p className="flex items-center gap-2"><Construction className="size-3.5 shrink-0" aria-hidden />{waiting.length === 1 ? 'One check' : `${waiting.length} checks`} of the bar cannot be checked from the record yet, so Submit waits for {waiting.length === 1 ? 'it' : 'them'}:</p>
+          <ul className="ml-5 list-disc space-y-0.5">
+            {waiting.map((c) => <li key={c.id}><span className="font-medium">{text(c.id)}</span>: needs {c.unavailable}.</li>)}
+          </ul>
+        </>
+      )}
+      {yours.length > 0 && (
+        <>
+          <p className="flex items-center gap-2"><Construction className="size-3.5 shrink-0" aria-hidden />trace cannot check {yours.length === 1 ? 'this' : 'these'} from the record yet, so {yours.length === 1 ? 'it is' : 'they are'} yours to check and confirm:</p>
+          <ul className="space-y-1.5">
+            {yours.map((c) => (
+              <li key={c.id}>
+                <label className="flex items-start gap-2 text-foreground">
+                  <input type="checkbox" className="mt-0.5" checked={draft?.data.confirmed?.[c.id] === true} onChange={(e) => set(c.id, e.target.checked)} />
+                  <span><span className="font-medium">I checked it: {text(c.id).replace(/^./, (x) => x.toLowerCase())}</span>{c.unavailable ? <span className="block text-muted-foreground">trace would need {c.unavailable}.</span> : null}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   )
 }

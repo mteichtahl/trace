@@ -116,6 +116,10 @@ export interface SkillCheckView {
   detail?: string
   /** the check cannot be computed yet: what the record has to hold first */
   unavailable?: string
+  /** no tool can check it from the record yet, so the person may confirm it (the draft's confirmed[id]) */
+  confirmable?: boolean
+  /** met because the person confirmed it */
+  confirmed?: boolean
 }
 
 export interface SkillView {

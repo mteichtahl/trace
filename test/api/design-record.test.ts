@@ -260,6 +260,20 @@ describe('the guided skills read the design record', () => {
     expect((await checks('board-setup')).outline).toMatchObject({ status: 'not_met', detail: 'The board is 60 mm wide (at most 50).' })
   })
 
+  it('a check no tool can make yet is the person\'s to confirm; one waiting on a run or a file is not', async () => {
+    let c = await checks('schematic-finish')
+    expect(c.notes).toMatchObject({ status: 'not_met', unavailable: expect.any(String), confirmable: true })
+    await run(USER, 'skill.draft', { repo: REPO, skill: 'schematic-finish', step: 1, data: { confirmed: { notes: true, serves: true } } })
+    c = await checks('schematic-finish')
+    expect(c.notes).toMatchObject({ status: 'met', confirmed: true, detail: expect.stringMatching(/^You confirmed it/) })
+    expect(c.notes?.unavailable).toBeUndefined()
+    expect(c.changes).toMatchObject({ status: 'not_met', confirmable: true })
+    // serves is checked from the record: a confirmation does not stand in for it
+    expect(c.serves).toMatchObject({ status: 'not_met' })
+    expect(c.serves?.confirmed).toBeUndefined()
+    await run(USER, 'skill.draft', { repo: REPO, skill: 'schematic-finish', step: 1, data: null })
+  })
+
   it('Intent builder Submit accepts every proposed statement as worded, and records an edit; requirements.trace shows them accepted', async () => {
     await expect(run(USER, 'skill.submit', { repo: REPO, skill: 'intent-builder', draft: {} })).rejects.toThrow(/Every topic answered or marked/)
     const r = await run(USER, 'design.decide', { repo: REPO, decision: { kind: 'intent', statement: 'INT-life', choice: 'edit', text: 'Runs 2 years on one 2,000 mAh lithium cell at one reading every 15 minutes.' } }) as { decision: { choice: string } }
