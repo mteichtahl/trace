@@ -8,6 +8,7 @@
  *   projects      signed in             your projects, with your role (read, write) and part (contributor, reviewer)
  *                                       on each: write needs the contributor part (admins are contributors everywhere)
  *   status        read                  open PRs, open agent-fix issues, recent trace workflow runs, the last deploy
+ *   pull.status   read                  one pull request: open, merged or closed, whether it can merge, its head commit's checks
  *   settings.get  read                  the project's settings (.trace/project.db on the default branch), resolved
  *   runs          read                  the project's run record (newest first; kind, limit, agent: one agent's runs;
  *                                       each run names the agent whose session made it, null for a person's own)
@@ -374,6 +375,15 @@ export const ACTIONS = {
     const [pulls, issues, runs, deploy] = await Promise.all([gh.openPulls(repo), gh.openIssues(repo, label), gh.workflowRuns(repo, 60), gh.lastDeploy(repo)])
     const trace = runs.filter((r) => /(^|\/)trace-[^/]*\.ya?ml$/.test(r.path) || /^trace\b/i.test(r.name)).slice(0, 20)
     return { repo, default_branch: branch, pulls, agent_fix_issues: issues, runs: trace, last_deploy: deploy }
+  }),
+
+  // one pull request's state and checks, for its card (the app asks again while it is open: web/src/components/pull-status.tsx)
+  'pull.status': def('read', Repo.extend({ number: z.number().int().min(1) }), async ({ repo, number }, ctx) => {
+    const gh = await ctx.deps.github()
+    if (!gh.pullStatus) throw new ActionError('This installation cannot read pull requests.')
+    const s = await gh.pullStatus(repo, number)
+    if (!s) throw new ActionError(`${repo} has no pull request #${number}`)
+    return { repo, ...s }
   }),
 
   'settings.get': def('read', Repo, async ({ repo }, ctx) => withProjectDb(ctx, repo, (db) => {

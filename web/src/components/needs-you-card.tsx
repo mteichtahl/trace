@@ -9,6 +9,7 @@ import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DismissStuck } from '@/components/dismiss-stuck'
 import { EvidenceChip } from '@/components/evidence-chip'
+import { PullStatusLine } from '@/components/pull-status'
 import { Rich } from '@/components/rich'
 import { waited } from '@/lib/format'
 import type { InboxItem } from '@/lib/types'
@@ -52,6 +53,7 @@ export function NeedsYouCard({ item, onAnswer, answering, onOther, onDismiss, co
             ))}
           </div>
         )}
+        {item.pull && <PullStatusLine repo={item.pull.repo} number={item.pull.number} className="mt-2" />}
         {stuck && onDismiss && item.questionId && <DismissStuck item={item} onDismiss={onDismiss} className="mt-3" />}
       </div>
       <div className="flex shrink-0 gap-2 max-sm:[&>*]:flex-1">

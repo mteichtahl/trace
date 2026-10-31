@@ -245,6 +245,7 @@ export function readInbox(raw: unknown): InboxItem[] {
       createdAt: String(i.since), action: { label: String(i.action), ...(to ? { to } : {}), ...(ref.kind === 'pull' && typeof ref.url === 'string' && /^https:\/\/github\.com\//.test(ref.url) ? { href: ref.url } : {}) },
       ...(isObj(i.recommended) ? { recommended: { id: String(i.recommended.id), label: String(i.recommended.label) } } : {}),
       ...(ref.kind === 'question' ? { questionId: String(ref.id) } : {}),
+      ...(ref.kind === 'pull' && Number(ref.id) > 0 ? { pull: { repo, number: Number(ref.id) } } : {}),
     }
   })
 }

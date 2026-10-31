@@ -346,6 +346,8 @@ export interface InboxItem {
   /** a question with a clear recommendation: its answer as a button */
   recommended?: { id: string; label: string }
   questionId?: string
+  /** a review item's pull request: its live status is shown on the card (components/pull-status.tsx) */
+  pull?: { repo: string; number: number }
   sources?: EvidenceRef[]
   blocks?: string
   read?: boolean
@@ -427,3 +429,11 @@ export type LiveEvent =
   | { type: 'record.changed'; repo: string; what: 'journey' | 'settings' | 'memory' | 'chats' | 'people' | 'prompts' | 'kb'; at: string }
   | { type: 'job.updated'; repo: string; jobId: string; state: string; at: string }
   | { type: 'notification'; id: string; kind: InboxKind; repo: string; summary: string; at: string }
+
+/** pull.status: one pull request now (src/api/github.ts PullStatus). */
+export interface PullStatus {
+  repo: string; number: number; title: string; url: string; state: 'open' | 'merged' | 'closed'; draft: boolean
+  /** GitHub's mergeable_state: clean, blocked, behind, dirty, unstable, unknown */
+  mergeable: string; head: string; sha: string; updated_at: string
+  checks: { total: number; passed: number; failed: number; running: number; skipped: number; failing: string[] } | null
+}
