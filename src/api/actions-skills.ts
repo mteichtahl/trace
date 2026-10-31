@@ -223,7 +223,11 @@ export function pendingDecisions(skill: string, draft: Record<string, unknown>, 
     case 'architecture-choice': {
       const c = draft.choice as { option?: unknown; reason?: unknown } | undefined
       if (!c || typeof c.option !== 'string') return []
-      const reason = typeof c.reason === 'string' && c.reason.trim() ? c.reason : typeof draft.why === 'string' ? draft.why : ''
+      // taking trace's recommendation asks for no reason in the decision card: its own why is the reason
+      const rec = architectureView(rows, decided).options.find((o) => o.recommended && o.id === c.option)
+      const reason = typeof c.reason === 'string' && c.reason.trim() ? c.reason
+        : typeof draft.why === 'string' && draft.why.trim() ? draft.why
+        : rec ? `Took trace's recommendation${rec.why ? `: ${rec.why}` : '.'}`.slice(0, 2000) : ''
       return parse({ kind: 'architecture', option: c.option, reason, deciding: list(draft.deciding), ...(draft.scores ? { scores: draft.scores } : {}), ...(typeof draft.only_one === 'string' ? { only_one: draft.only_one } : {}) })
     }
     case 'pin-plan-review': {
@@ -397,6 +401,11 @@ export const SKILL_ACTIONS = {
         const have = new Set((loadJourney(db)?.criteria ?? []).map((c) => c.id))
         const evidence = [{ kind: 'skill', ref: 'requirements-review', label: `Requirements review, submitted by ${by.label}` }]
         for (const [id, ok] of baselineCriteria(i.requirements)) if (have.has(id)) setCriterion(db, id, ok ? 'met' : 'not_met', evidence, by.label)
+      }
+      // Architecture choice is the person's approval of the blocks and key parts the architecture gate waits for
+      if (a.skill === 'architecture-choice' && (loadJourney(db)?.criteria ?? []).some((c) => c.id === 'architect.blocks')) {
+        const chosen = architectureView(designRows, loadDesignDecisions(db)).chosen
+        if (chosen) setCriterion(db, 'architect.blocks', 'met', [{ kind: 'skill', ref: 'architecture-choice', label: `Architecture choice: option ${chosen.option}, submitted by ${by.label}` }], by.label)
       }
       if (a.skill === 'waiver') {
         const d = a.draft
