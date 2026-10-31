@@ -48,7 +48,8 @@ function Overview() {
       </Loading>
     )
   const d = j.data
-  const running = d.jobs.filter((r) => r.state === 'running' || r.state === 'paused')
+  // a job lost in the last day stays here, with its last words, rather than vanishing without a mention
+  const running = d.jobs.filter((r) => r.state === 'running' || r.state === 'paused' || (r.state === 'lost' && Date.now() - Date.parse(r.startedAt ?? '') < 24 * 3600_000))
   const queued = d.jobs.filter((r) => r.state === 'queued')
   const nextRun = d.next.jobId ? d.jobs.find((r) => r.id === d.next.jobId) : undefined
   // a job another specialist asked for, by the hand-off it answers (journey.get `handoffs`)

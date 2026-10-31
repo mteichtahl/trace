@@ -25,11 +25,11 @@
  * Nothing here fails a job: an index that cannot be written is logged once per job and the job carries on.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { freemem, homedir, totalmem } from 'node:os'
 import { join } from 'node:path'
 import { type Backend } from '../../core/central.js'
 import {
-  BEAT_S, type BatchRow, type JobControl, JobIndexStore, JOB_SESSIONS_FOLDER, type JobRow, loadControls, loadJobs, mayStart, pruneJobs, putBatch, putJob,
+  BEAT_S, type BatchRow, type JobControl, JobIndexStore, JOB_SESSIONS_FOLDER, type JobRow, loadControls, loadJobs, mayStart, pruneJobs, putBatch, putJob, tailOf,
 } from '../../core/job-index.js'
 import { type BucketDb, JourneyStore } from '../../core/journey-store.js'
 import { projectsBackend, projectsFromEnv } from '../../core/agent-facts.js'
@@ -72,6 +72,9 @@ export function batchOfWait(what: string): { id: string; pool: 'gpu' | 'cpu' } |
   const m = /^the (graphics card|remote CPU) job (\S{1,80})$/.exec(what)
   return m ? { id: m[2] as string, pool: m[1] === 'graphics card' ? 'gpu' : 'cpu' } : null
 }
+
+/** The microVM's memory now, for a job's row: a microVM that runs out of it ends without a word. */
+export const vitals = (): string => JSON.stringify({ usedMb: Math.round((totalmem() - freemem()) / 2 ** 20), totalMb: Math.round(totalmem() / 2 ** 20) })
 
 /** Where it runs, in words. */
 const WHERE = 'on the project\'s agent runtime'
@@ -166,7 +169,7 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
   const writeStep = (id: string): void => {
     lastStep.set(id, now())
     const j = jobs.jobStatus(id)[0]
-    if (j) merge(id, { step: j.step ?? null, branch: j.branch ?? null })
+    if (j) merge(id, { step: j.step ?? null, branch: j.branch ?? null, tail: tailOf(j.log ?? []), vitals: vitals() })
     soon()
   }
   const merge = (id: string, f: Partial<Omit<JobRow, 'id' | 'updatedAt'>>): void => {
@@ -224,7 +227,7 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
   }
   const beat = async (): Promise<void> => {
     const live = jobs.jobStatus().filter((j) => j.state === 'running')
-    for (const j of live) merge(j.id, { beatAt: now() / 1000, step: j.step ?? null })
+    for (const j of live) merge(j.id, { beatAt: now() / 1000, step: j.step ?? null, tail: tailOf(j.log ?? []), vitals: vitals() })
     await flush()
   }
   if (o.heartbeat !== false) {

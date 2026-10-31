@@ -66,6 +66,9 @@ describe('the job index, from the jobs\' own events', () => {
     await w.beat()
     rows = (await s.index.read(loadJobs)).result
     expect(rows[0]?.step).toBe('reading the schematic')
+    // its last lines and the microVM's memory ride with each heartbeat, for when it goes silent
+    expect(JSON.parse(rows[0]?.tail ?? '[]')).toContainEqual(expect.stringContaining('reading the schematic'))
+    expect(JSON.parse(rows[0]?.vitals ?? '{}')).toMatchObject({ usedMb: expect.any(Number), totalMb: expect.any(Number) })
     release()
     await until(() => !jobs.busy())
     await w.flush()
