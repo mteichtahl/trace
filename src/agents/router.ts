@@ -3,7 +3,10 @@
  * classification call to the model, when nothing deterministic decided.
  *
  * Precedence:
- *   1. explicit   a kind the caller named (API task `agent`, `tracectl remote task --agent`, a pick that already routed)
+ *   1. explicit   a kind the caller named (API task `agent`, `tracectl remote task --agent`, a pick that already routed).
+ *                 A person's pick (checkPick: a task they asked for, not a hand-off or a delegation) is checked first:
+ *                 when the request's own words or evidence point plainly to another specialist and say nothing for the
+ *                 one picked, that other one takes it (source 'keyword' or 'evidence', the pick named in the reason)
  *   2. label      agent:verify / agent:impl / agent:ams / agent:emc / agent:render / agent:thermal on the issue or PR (labels.agent_*)
  *   3. evidence   failing check or job names and their logs, and the changed files (EVIDENCE below)
  *   4. keyword    words in the issue, PR or task text (each specialist's `keywords`)
@@ -40,6 +43,8 @@ export interface RouteInput {
   files?: readonly string[] | undefined
   /** Title, body, or the task's request. */
   text?: string | undefined
+  /** `kind` is a person's pick (the web app's or tracectl's agent field), checked against the request (route) */
+  checkPick?: boolean | undefined
 }
 
 export type RouteConfig = Pick<TraceConfig, 'labels' | 'agents'>
@@ -154,7 +159,11 @@ export function route(input: RouteInput, cfg: RouteConfig): Route {
   const kinds = kindsOf(cfg)
   const notes: string[] = []
   if (input.kind) {
-    if (kinds.includes(input.kind)) return { kind: input.kind, reason: `asked for the ${input.kind} specialist`, confidence: 1, source: 'explicit' }
+    if (kinds.includes(input.kind)) {
+      const other = input.checkPick ? misPicked(input, input.kind, cfg) : null
+      if (other) return other
+      return { kind: input.kind, reason: `asked for the ${input.kind} specialist`, confidence: 1, source: 'explicit' }
+    }
     notes.push(`${input.kind} was asked for but is not enabled (agents.enabled)`)
   }
   const labelled = (input.labels ?? []).map((l) => [l, labelKind(l, cfg)] as const).filter((x): x is readonly [string, SpecialistKind] => x[1] !== null)
@@ -198,6 +207,20 @@ export function route(input: RouteInput, cfg: RouteConfig): Route {
     }
   }
   return { kind: cfg.agents.default, reason: [`nothing points to a specialist: the default (agents.default)`, ...notes].join('; ').slice(0, 500), confidence: 0.2, source: 'default' }
+}
+
+/**
+ * A person's pick that the request itself contradicts: the route without the pick (labels, evidence, keywords) names
+ * another specialist, and neither the evidence nor the words give the picked one anything at all. A pick the request
+ * is silent on, or gives any support to, stands: only a plain mismatch is moved (a requirements task sent to impl, say,
+ * whose specialist would only report it is not its work and stop). The model is not asked: it decides nothing here.
+ */
+function misPicked(input: RouteInput, picked: SpecialistKind, cfg: RouteConfig): Route | null {
+  const r = route({ ...input, kind: undefined, checkPick: undefined }, cfg)
+  if (r.kind === picked || !(r.source === 'label' || r.source === 'evidence' || r.source === 'keyword')) return null
+  const support = (evidenceScores(input).scores.get(picked) ?? 0) + (keywordScores(input.text ?? '', [picked]).scores.get(picked) ?? 0)
+  if (support > 0) return null
+  return { ...r, reason: `${picked} was picked, but nothing in the request is ${picked}'s work and ${r.reason} point to ${r.kind}`.slice(0, 500) }
 }
 
 // ------------------------------------------------------------------ the model, as a last resort

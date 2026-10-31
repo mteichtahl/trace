@@ -558,7 +558,9 @@ function prepared(p: WorkItemJob | TaskJob): Prepared {
   return {
     slot: `task-${(p.branch ?? p.request).replace(/[^A-Za-z0-9]+/g, '-').slice(0, 30)}`,
     branch: '', from: 'maybe', ...(p.issue ? { issue: p.issue } : {}),
-    route: null, routeInput: { kind: p.agent, text: p.request },
+    // a person's own pick is checked against the request (router.ts misPicked); a specialist's delegation, and a
+    // resumed task (its agent was settled when it first ran), go where they say
+    route: null, routeInput: { kind: p.agent, text: p.request, checkPick: !isDelegated(p) && !p.resume },
     job: (branch) => ({ kind: 'task', request: p.request, requestedBy: p.requestedBy, issue: p.issue, branch }),
     session: (branch) => (p.issue ? `issue-${p.issue}` : sessionIdFor(branch)), query: p.request,
     request: `A person asked: ${p.request}`,
