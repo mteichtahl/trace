@@ -120,7 +120,10 @@ export async function runVerilator(o: VerilatorOptions): Promise<VerilatorRun> {
   ]
   if (o.mode === 'run') {
     lines.push(
-      `verilator --cc --exe --build -j "$(nproc 2>/dev/null || echo 2)" ${svTb ? '--timing ' : ''}-Wno-fatal ${cov.join(' ')} ${o.build_flags.map(sq).join(' ')} ${common} -Mdir obj -o trace_sim ${hdl} ${cppNames.map((n) => `{in:${n}}`).join(' ')} > {out:build.log} 2>&1`,
+      // the C++ build in parallel (--build-jobs), Verilator's own pass on one thread (--verilate-jobs 1): with -j N its
+      // thread pool sometimes fails on the way out ("Internal Error: attempted to destroy locked Thread Pool"), more
+      // often the more cores and the busier the machine, and the verilation of a testbench gains little from threads
+      `verilator --cc --exe --build --build-jobs "$(nproc 2>/dev/null || echo 2)" --verilate-jobs 1 ${svTb ? '--timing ' : ''}-Wno-fatal ${cov.join(' ')} ${o.build_flags.map(sq).join(' ')} ${common} -Mdir obj -o trace_sim ${hdl} ${cppNames.map((n) => `{in:${n}}`).join(' ')} > {out:build.log} 2>&1`,
       'rc=$?; echo "build=$rc" >> {out:status.txt}',
       '[ "$rc" -eq 0 ] || exit 0',
       `TRACE_COVERAGE_FILE={dir}/coverage.dat ./obj/trace_sim ${o.plusargs.map((p) => sq(p.startsWith('+') ? p : `+${p}`)).join(' ')} > {out:sim.log} 2>&1`,
