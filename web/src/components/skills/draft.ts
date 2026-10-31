@@ -79,7 +79,11 @@ export function useSkillDraft<T>(repo: string, skill: string, meta: { name: stri
   const save = useCallback((value: { step: number; data: T } | null) => {
     if (project) {
       void call('skill.draft', { repo, skill, step: value?.step ?? 0, data: value ? (value.data as Record<string, unknown>) : null })
-        .then(() => qc.invalidateQueries({ queryKey: ['skill.drafts', repo] }))
+        .then(() => {
+          void qc.invalidateQueries({ queryKey: ['skill.drafts', repo] })
+          // the quality bar is computed with the draft laid over the record: read it again with this draft
+          void qc.invalidateQueries({ queryKey: ['skill.get', repo] })
+        })
         .catch(() => undefined)
     } else {
       setMe.mutate({ key, value: value ? { name: meta.name, steps: meta.steps, step: value.step, savedAt: Date.now(), data: value.data } satisfies Draft<T> : null })
