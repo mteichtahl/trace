@@ -19,7 +19,10 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { StatusBadge } from '@/components/status-badge'
+import { ArchitectureSummary, OptionSwitch, OptionsTable, drawn, useOption } from '@/components/project/architecture'
+import { BlockDiagram } from '@/components/project/block-diagram'
 import { useCall } from '@/lib/queries'
+import type { ArchitectureRecord } from '@/lib/types-s1'
 import type { SkillView } from '@/lib/types-s1'
 
 export interface DesignDraft {
@@ -41,6 +44,7 @@ export function withDecision(d: DesignDraft, requirement: string, choice: 'accep
 export function DesignSteps({ repo, skill, step, view, draft, setDraft }: { repo: string; skill: string; step: string; view?: SkillView; draft: DesignDraft; setDraft: Set }) {
   if (skill === 'requirements-review' && (step === 'decide' || step === 'cover')) return <ReviewItems view={view} draft={draft} setDraft={setDraft} only={step === 'decide' ? 'requirement' : 'intent'} />
   if (skill === 'requirements-review' && step === 'conflicts') return <NoConflicts draft={draft} setDraft={setDraft} />
+  if (skill === 'architecture-choice' && (step === 'read' || step === 'score')) return <CompareOptions view={view} scores={step === 'score'} />
   if (skill === 'architecture-choice' && step === 'criteria') return <FixCriteria repo={repo} view={view} />
   if (skill === 'architecture-choice' && step === 'choose') return <Deciding view={view} draft={draft} setDraft={setDraft} />
   return null
@@ -142,6 +146,42 @@ function NoConflicts({ draft, setDraft }: { draft: DesignDraft; setDraft: Set })
         <Checkbox checked={draft.no_conflicts === true} onCheckedChange={(v) => setDraft((d) => ({ ...d, no_conflicts: v === true }))} />
         I read them together: no two requirements contradict each other.
       </Label>
+    </section>
+  )
+}
+
+/** The steps that take the stage picture's place for Architecture choice: each option's own diagram. */
+export const ARCH_COMPARE_STEPS: readonly string[] = ['read', 'score']
+
+/**
+ * Read each option / Score: every option, switched with the layout held still (its block diagram, what it is, why,
+ * what it gives up, its risks and the requirements none of its blocks serve), and on Score the options side by side on
+ * the fixed criteria with each score's reason. The same pieces as the Design tab (components/project/architecture).
+ */
+function CompareOptions({ view, scores }: { view?: SkillView; scores: boolean }) {
+  const a = view?.architecture as (ArchitectureRecord & { options: NonNullable<ArchitectureRecord['options']> }) | undefined
+  const [current, setCurrent] = useOption(a)
+  if (!a?.options.length) return null
+  const o = a.options.find((x) => x.id === current)
+  const requirements = [...new Set(a.options.flatMap((x) => x.blocks.flatMap((b) => b.serves)))]
+  return (
+    <section className="mt-4 space-y-4" aria-labelledby="compare-options">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 id="compare-options" className="text-base font-semibold">{a.options.length} options{o ? `: option ${o.id}, ${o.name}` : ''}</h2>
+        <OptionSwitch a={a} value={current} onChange={setCurrent} />
+      </div>
+      <div className="overflow-hidden rounded-xl border bg-muted/20 p-2">
+        <div className="origin-top-left scale-[0.5] sm:scale-[0.75] 2xl:scale-90"><BlockDiagram {...drawn(a, current)} /></div>
+      </div>
+      {o && (
+        <div className="space-y-1 text-sm">
+          <p>{o.summary}</p>
+          {o.why && <p className="text-muted-foreground"><span className="font-medium text-foreground">Why:</span> {o.why}</p>}
+          {o.gives_up && <p className="text-muted-foreground"><span className="font-medium text-foreground">Gives up:</span> {o.gives_up}</p>}
+        </div>
+      )}
+      <ArchitectureSummary a={a} current={current} requirements={requirements} />
+      {scores && <OptionsTable a={a} current={current} />}
     </section>
   )
 }

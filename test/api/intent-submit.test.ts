@@ -66,6 +66,17 @@ beforeAll(async () => {
   rmSync(dir, { recursive: true, force: true })
 })
 
+describe('Intent builder draft panel', () => {
+  it('shows a statement Accepted only once the person accepts it: the preview does not accept the rest', async () => {
+    await run(USER, 'skill.draft', { repo: REPO, skill: 'intent-builder', step: 0, data: { decisions: [{ statement: 'INT-purpose', choice: 'accept' }] } })
+    const v = await run(USER, 'skill.get', { repo: REPO, skill: 'intent-builder' }) as { intent: { statements: { id: string; state: string }[] } }
+    const state = (id: string) => v.intent.statements.find((x) => x.id === id)?.state
+    expect(state('INT-purpose')).toBe('accepted')
+    expect(state('INT-env')).toBe('draft')
+    await run(USER, 'skill.draft', { repo: REPO, skill: 'intent-builder', step: 0, data: null })
+  })
+})
+
 describe('Intent builder Submit', () => {
   it('records the decisions, then starts the Verification agent drafting the candidate requirements', async () => {
     // INT-old lacks the protocol and rate, so the bar is not met until the person rejects it

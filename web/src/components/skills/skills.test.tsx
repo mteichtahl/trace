@@ -112,6 +112,13 @@ describe('traceability', () => {
     expect(l.intents.find((i) => i.id === 'I-2')!.failing).toBe(true)
     expect(l.intents.find((i) => i.id === 'I-1')!.failing).toBe(false)
   })
+  it('counts every link of a requirement from several intent lines: none is "not covered" while it has one', () => {
+    const t = { intent: [{ id: 'I-1', topic: 'Power', text: 'p' }, { id: 'I-2', topic: 'Interfaces', text: 'i' }, { id: 'I-3', topic: 'Build', text: 'b' }], links: [{ requirement: 'R-1', intent: 'I-1' }, { requirement: 'R-1', intent: 'I-2' }, { requirement: 'R-2', intent: 'I-2' }] }
+    const l = layoutTrace([row('R-1', 'verified'), row('R-2', 'failing')], t)
+    expect(l.intents.map((i) => [i.id, i.uncovered])).toEqual([['I-1', false], ['I-2', false], ['I-3', true]])
+    expect(l.reqs.find((r) => r.row.id === 'R-1')).toMatchObject({ intent: 'I-1', intents: ['I-1', 'I-2'] })
+    expect(l.intents.find((i) => i.id === 'I-2')!.failing).toBe(true)
+  })
 })
 
 describe('project icon', () => {

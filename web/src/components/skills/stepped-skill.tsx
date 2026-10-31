@@ -19,7 +19,7 @@ import { projectId } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { type SkillDef, pictureOf } from './definitions'
 import { NoChecker, StepHeader, TraceIntro, Unavailable, type Confirmable } from './parts'
-import { DesignSteps, type DesignDraft } from './design-steps'
+import { ARCH_COMPARE_STEPS, DesignSteps, type DesignDraft } from './design-steps'
 import { StepPicture } from './step-picture'
 import { type SkillDraftBase, qualityChecks, useSkill } from './use-skill'
 
@@ -56,9 +56,12 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
           <Link className="text-primary hover:underline" to="/p/$id" params={{ id: projectId(repo) }}>Back to the project</Link> and use Review and sign on the next step card.
         </p>
       )}
-      <div className="mt-4">
-        <StepPicture repo={repo} kind={pictureOf(def, s.step.id)} view={v} />
-      </div>
+      {/* Architecture choice's Read and Score steps draw each option themselves (design-steps.tsx), switchable */}
+      {!(def.id === 'architecture-choice' && ARCH_COMPARE_STEPS.includes(s.step.id)) && (
+        <div className="mt-4">
+          <StepPicture repo={repo} kind={pictureOf(def, s.step.id)} view={v} />
+        </div>
+      )}
 
       {s.view.isError && <div className="mt-4"><QueryError error={s.view.error} what={`what trace prepared for ${def.name}`} onRetry={() => void s.view.refetch()} /></div>}
 
