@@ -31,6 +31,17 @@ export function stepOf(range: Range, custom?: { start: string; end: string }): n
   return HOUR
 }
 
+/**
+ * A series' label as the chart shows it: CloudWatch's own labels name a runtime or memory by its whole ARN
+ * ("GetMemory arn:aws:bedrock-agentcore:us-east-1:123456789012:memory/trace_m_8a9ca7b7-n7ExQ1Gm5V Invocations"), which
+ * ran to two lines each and, thirty of them in a legend, over the rest of the page. The ARN keeps only its resource.
+ */
+export const seriesLabel = (label: string): string =>
+  label.replace(/arn:aws[a-z-]*:[a-z0-9-]+:[a-z0-9-]*:\d*:(?:runtime|memory|[a-z-]+)\/([A-Za-z0-9_.-]+)/g, '$1').replace(/\s+/g, ' ').trim()
+
+/** A chart keeps its legend inside up to this many series; past it the legend is a capped, scrolling list below. */
+export const IN_CHART_LEGEND_MAX = 6
+
 export const seriesKey = (s: OpsSeries, i: number): string => `s${i}_${s.label.replace(/[^A-Za-z0-9]/g, '').slice(0, 20)}`
 
 /** Rows for Recharts: one per moment, a column per series. */

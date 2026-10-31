@@ -5,7 +5,7 @@
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts'
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart'
 import type { OpsWidget } from '@/lib/admin-types'
-import { axisTime, chartRows, momentLabel, seriesKey } from './ops-model'
+import { IN_CHART_LEGEND_MAX, axisTime, chartRows, momentLabel, seriesKey, seriesLabel } from './ops-model'
 
 /** Muted series colours, distinct from the accent (your move) and the status colours (red, amber, green), in both themes. */
 const COLORS = ['oklch(0.5 0.08 255)', 'oklch(0.62 0.09 145)', 'oklch(0.66 0.1 80)', 'oklch(0.55 0.1 330)', 'oklch(0.6 0.07 195)', 'oklch(0.55 0.08 40)', 'oklch(0.5 0.03 260)', 'oklch(0.7 0.06 110)']
@@ -21,8 +21,10 @@ export interface OpsChartProps {
 export default function OpsChartImpl({ widget, step, selected, onPick }: OpsChartProps) {
   const rows = chartRows(widget)
   const keys = widget.series.map((s, i) => seriesKey(s, i))
-  const config: ChartConfig = Object.fromEntries(widget.series.map((s, i) => [keys[i]!, { label: s.label, color: COLORS[i % COLORS.length] }]))
+  const config: ChartConfig = Object.fromEntries(widget.series.map((s, i) => [keys[i]!, { label: seriesLabel(s.label), color: COLORS[i % COLORS.length] }]))
   const many = widget.series.length > 1
+  // a legend inside the chart only for a few series: a long one grew past the chart's fixed height and over the page
+  const legendInside = many && widget.series.length <= IN_CHART_LEGEND_MAX
   const click = (s: unknown) => {
     const t = (s as { activePayload?: { payload?: { t?: number } }[] } | null)?.activePayload?.[0]?.payload?.t
     if (typeof t === 'number' && onPick) onPick(t)
@@ -33,10 +35,10 @@ export default function OpsChartImpl({ widget, step, selected, onPick }: OpsChar
     <XAxis key="x" dataKey="t" type="category" tickLine={false} axisLine={false} tickMargin={6} minTickGap={24} tickFormatter={(t: number) => axisTime(t, step)} />,
     <YAxis key="y" tickLine={false} axisLine={false} width={36} tickFormatter={(v: number) => (Math.abs(v) >= 1000 ? `${Math.round(v / 100) / 10}k` : String(Math.round(v * 10) / 10))} />,
     <ChartTooltip key="tip" cursor content={<ChartTooltipContent labelFormatter={(t) => momentLabel(Number(t), step)} />} />,
-    ...(many ? [<ChartLegend key="legend" content={<ChartLegendContent />} />] : []),
+    ...(legendInside ? [<ChartLegend key="legend" content={<ChartLegendContent />} />] : []),
   ]
   const common = { data: rows, margin: { top: 8, right: 8, bottom: 0, left: 0 }, onClick: click, className: onPick ? 'cursor-pointer' : undefined }
-  return (
+  const chart = (
     <ChartContainer config={config} className="aspect-auto h-56 w-full">
       {widget.kind === 'bar' ? (
         <BarChart {...common}>
@@ -73,5 +75,19 @@ export default function OpsChartImpl({ widget, step, selected, onPick }: OpsChar
         </LineChart>
       )}
     </ChartContainer>
+  )
+  if (!many || legendInside) return chart
+  return (
+    <div className="flex w-full min-w-0 flex-col gap-2">
+      {chart}
+      <ul aria-label={`${widget.series.length} series`} className="flex max-h-24 flex-wrap gap-x-4 gap-y-1 overflow-y-auto text-xs">
+        {widget.series.map((s, i) => (
+          <li key={keys[i]} className="flex min-w-0 max-w-[18rem] items-center gap-1.5" title={s.label}>
+            <span className="size-2.5 shrink-0 rounded-[2px]" style={{ background: COLORS[i % COLORS.length] }} aria-hidden />
+            <span className="truncate text-muted-foreground">{seriesLabel(s.label)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
