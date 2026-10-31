@@ -29,7 +29,14 @@ import type { Finding, TraceRequirement } from './record-read.js'
 import { staleSentence } from '../tools/mech/stale.js'
 
 export type CheckStatus = 'met' | 'not_met' | 'waived'
-export interface CheckResult { id: string; status: CheckStatus; detail?: string; unavailable?: string }
+export interface CheckResult {
+  id: string; status: CheckStatus; detail?: string; unavailable?: string
+  /** unavailable for good (no tool records what it needs yet), so the person may confirm it themselves: the draft's
+   * confirmed[id] meets it, as theirs */
+  confirmable?: boolean
+  /** met because the person confirmed it (confirmable) */
+  confirmed?: boolean
+}
 
 /** Everything a check may read. Absent pieces were not in the record. */
 export interface CheckInput {
@@ -81,6 +88,8 @@ export interface CheckInput {
 const met = (id: string, detail?: string): CheckResult => ({ id, status: 'met', ...(detail ? { detail } : {}) })
 const notMet = (id: string, detail: string): CheckResult => ({ id, status: 'not_met', detail })
 const unavailable = (id: string, needs: string): CheckResult => ({ id, status: 'not_met', unavailable: needs })
+/** A check no tool can make from the record yet (as opposed to one waiting on a run or a file): the person confirms it. */
+const yours = (id: string, needs: string): CheckResult => ({ ...unavailable(id, needs), confirmable: true })
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 const VAGUE = /^(not needed|n\/?a|none|no need|unnecessary|not required|later|tbd|it depends|you decide|whatever|-+)\.?$/i
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`
@@ -164,7 +173,7 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     if (!i.requirements.length && !i.struck.length) return notMet('confirmed', 'No requirements are recorded yet.')
     return open.length ? notMet('confirmed', `${plural(open.length, 'requirement')} still proposed: ${ids(open)}.`) : met('confirmed')
   },
-  'design-import/entry': () => unavailable('entry', 'the import assessment (each gate\'s criteria run against the imported design) in the record'),
+  'design-import/entry': () => yours('entry', 'the import assessment (each gate\'s criteria run against the imported design) in the record'),
   'design-import/earlier': (i) => {
     if (!i.r) return notMet('earlier', 'The project has no journey yet.')
     const cur = i.r.stages.find((s) => s.id === i.r?.journey.currentStage)?.ord ?? 0
@@ -278,8 +287,8 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
   'architecture-choice/stock': (i) => criterion(i, 'stock', 'architect.stock'),
 
   // ---- Schematic finish
-  'schematic-finish/notes': () => unavailable('notes', 'trace\'s draft notes on the sheets in the record; the drafting agent does not store them yet'),
-  'schematic-finish/changes': () => unavailable('changes', 'the difference between trace\'s draft and the pushed schematic, with a reason per change; no tool records it yet'),
+  'schematic-finish/notes': () => yours('notes', 'trace\'s draft notes on the sheets in the record; the drafting agent does not store them yet'),
+  'schematic-finish/changes': () => yours('changes', 'the difference between trace\'s draft and the pushed schematic, with a reason per change; no tool records it yet'),
   'schematic-finish/erc': (i) => ruleCheck('erc', 'electrical rule check', i.erc, 'kicad.erc on the latest push'),
   'schematic-finish/datasheet': (i) => criterion(i, 'datasheet', 'capture.datasheets'),
   'schematic-finish/mpn': (i) => {
@@ -345,14 +354,14 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     return over.length ? notMet('outline', `The board is ${over.join(' and ')}.`) : met('outline', `${o.width_mm} × ${o.height_mm} mm, within the intent's limits.`)
   },
   'board-setup/stackup': (i) => (!i.board ? notMet('stackup', 'No board check is recorded yet: run kicad.board.') : i.board.stackup_known ? met('stackup', 'The stackup is complete; impedance widths are not checked against targets yet.') : notMet('stackup', 'The board file has no complete stackup.')),
-  'board-setup/fixed': () => unavailable('fixed', 'the fixed parts with their mechanical reasons, in the record; Board setup does not store them yet'),
-  'board-setup/rules': () => unavailable('rules', 'the fab\'s capabilities in the record, to compare the board\'s design rules with'),
+  'board-setup/fixed': () => yours('fixed', 'the fixed parts with their mechanical reasons, in the record; Board setup does not store them yet'),
+  'board-setup/rules': () => yours('rules', 'the fab\'s capabilities in the record, to compare the board\'s design rules with'),
 
   // ---- Placement adjust
-  'placement-adjust/moves': () => unavailable('moves', 'the parts moved since trace placed them, with a reason each; no tool records the moves yet'),
+  'placement-adjust/moves': () => yours('moves', 'the parts moved since trace placed them, with a reason each; no tool records the moves yet'),
   'placement-adjust/check': (i) => (!i.placement ? notMet('check', 'No placement check is recorded yet: run pcb.placement_check.') : i.placement.status === 'pass' ? met('check') : notMet('check', i.placement.summary ?? 'The last placement check did not pass.')),
-  'placement-adjust/fixed': () => unavailable('fixed', 'the fixed parts and where they must stay, in the record'),
-  'placement-adjust/locked': () => unavailable('locked', 'which parts the router must not move, read from the board; no tool reports locks yet'),
+  'placement-adjust/fixed': () => yours('fixed', 'the fixed parts and where they must stay, in the record'),
+  'placement-adjust/locked': () => yours('locked', 'which parts the router must not move, read from the board; no tool reports locks yet'),
 
   // ---- Case design: the latest mech.build run (src/tools/mech), and the layout gate's fit criterion for waivers
   'case-design/process': (i) => {
@@ -396,7 +405,7 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
   'gate-signing/admin': (i) => (i.viewer.admin ? met('admin') : notMet('admin', 'Only an admin can sign a gate.')),
 
   // ---- Release review
-  'release-review/areas': () => unavailable('areas', 'the release report\'s five areas with who acknowledged each, in the record'),
+  'release-review/areas': () => yours('areas', 'the release report\'s five areas with who acknowledged each, in the record'),
   'release-review/untested': (i) => {
     const untested = i.requirements.filter((q) => q.evidence === 'untested')
     const failing = i.requirements.filter((q) => q.evidence === 'failing')
@@ -404,7 +413,7 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     if (untested.length) return notMet('untested', `${plural(untested.length, 'requirement')} untested: ${ids(untested)}.`)
     return failing.length ? notMet('untested', `${plural(failing.length, 'requirement')} failing and not waived: ${ids(failing)}.`) : met('untested')
   },
-  'release-review/single': () => unavailable('single', 'each part\'s sources and lifecycle from a parts check, with their acknowledgement, in the record'),
+  'release-review/single': () => yours('single', 'each part\'s sources and lifecycle from a parts check, with their acknowledgement, in the record'),
   'release-review/cost': (i) => {
     const b = i.r?.journey.build
     return b && b.unit_cost !== null ? met('cost', `${b.quantity} boards at ${b.currency} ${b.unit_cost} each.`) : notMet('cost', 'Set the expected unit cost in the project\'s build plan.')
@@ -412,8 +421,8 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
 
   // ---- Order submit
   'order-submit/stock': (i) => criterion(i, 'stock', 'fabricate.order.stock'),
-  'order-submit/options': () => unavailable('options', 'the order sheet\'s options (from the release package), to compare what was entered with'),
-  'order-submit/matching': () => unavailable('matching', 'the fab\'s matched parts list for the order; trace does not read it from the fab'),
+  'order-submit/options': () => yours('options', 'the order sheet\'s options (from the release package), to compare what was entered with'),
+  'order-submit/matching': () => yours('matching', 'the fab\'s matched parts list for the order; trace does not read it from the fab'),
   'order-submit/recorded': (i) => {
     const rev = i.r?.journey.revision
     const o = i.orders.find((x) => x.revision === rev && x.state !== 'cancelled')
@@ -445,8 +454,8 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     const silent = i.instruments.filter((x) => !ids.get(x.name)?.ok)
     return silent.length ? notMet('idn', `${silent.map((x) => x.name).join(', ')} ${silent.length === 1 ? 'has' : 'have'} not answered its identity query: run hil.idn on the bench.`) : met('idn', i.instruments.map((x) => `${x.name}: ${[ids.get(x.name)?.manufacturer, ids.get(x.name)?.model].filter(Boolean).join(' ')}`).join('; '))
   },
-  'bench-setup/wired': () => unavailable('wired', 'the bench wiring (each connection with its net), in the record'),
-  'bench-setup/hardware': () => unavailable('hardware', 'which machine the bench tools run on; the API cannot see the bench machine'),
+  'bench-setup/wired': () => yours('wired', 'the bench wiring (each connection with its net), in the record'),
+  'bench-setup/hardware': () => yours('hardware', 'which machine the bench tools run on; the API cannot see the bench machine'),
 
   // ---- Bring-up run
   'bring-up-run/limits': (i) => {
@@ -479,17 +488,17 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
     const open = hw.filter((t) => t.status === 'planned' || t.status === 'blocked')
     return open.length ? notMet('results', `${plural(open.length, 'hardware test')} without a result: ${ids(open)}.`) : met('results')
   },
-  'bring-up-run/issues': () => unavailable('issues', 'each failure linked to its issue, in the record'),
+  'bring-up-run/issues': () => yours('issues', 'each failure linked to its issue, in the record'),
 
   // ---- Certification run
-  'certification-run/recorded': () => unavailable('recorded', 'the lab, the standard and the setups, in the record'),
+  'certification-run/recorded': () => yours('recorded', 'the lab, the standard and the setups, in the record'),
   'certification-run/every': (i) => criterion(i, 'every', 'certify.lab'),
-  'certification-run/report': () => unavailable('report', 'the lab\'s report stored with the record'),
+  'certification-run/report': () => yours('report', 'the lab\'s report stored with the record'),
 
   // ---- Production release
   'production-release/findings': (i) => criterion(i, 'findings', 'produce.reviews'),
   'production-release/golden': (i) => criterion(i, 'golden', 'produce.golden'),
-  'production-release/stored': () => unavailable('stored', 'the production package (files, procedure, image and quote) stored together in the record'),
+  'production-release/stored': () => yours('stored', 'the production package (files, procedure, image and quote) stored together in the record'),
 
   // ---- Question answer: the draft against the question
   'question-answer/resolves': (i) => {
@@ -527,5 +536,12 @@ function gateCheck(i: CheckInput, id: string, about: RegExp): CheckResult {
 export function checkSkill(skill: string, input: CheckInput): CheckResult[] | null {
   const def = skillDef(skill)
   if (!def) return null
-  return def.checks.map((c: SkillCheckDef) => (c.id === 'reasons' ? reasons(input) : (CHECKS[`${skill}/${c.id}`] ?? (() => unavailable(c.id, 'a checker for this check')))(input)))
+  const confirmed = input.draft?.confirmed && typeof input.draft.confirmed === 'object' ? input.draft.confirmed as Record<string, unknown> : {}
+  return def.checks.map((c: SkillCheckDef) => {
+    const r = c.id === 'reasons' ? reasons(input) : (CHECKS[`${skill}/${c.id}`] ?? (() => yours(c.id, 'a checker for this check')))(input)
+    // what no tool can check yet, the person checked themselves: met, and said to be theirs
+    return r.confirmable && r.unavailable && confirmed[c.id] === true
+      ? { id: r.id, status: 'met', confirmed: true, detail: `You confirmed it: trace cannot check it from the record yet (it needs ${r.unavailable}).` }
+      : r
+  })
 }

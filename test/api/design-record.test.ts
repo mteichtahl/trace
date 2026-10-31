@@ -33,7 +33,7 @@ const deps: ActionDeps = {
   tools: () => new Registry([]), scratch, store: (p) => backendFor(join(bucket, p)),
 }
 const run = async (who: Context['principal'], action: string, args: Record<string, unknown> = {}): Promise<unknown> => (await perform(action, args, { principal: who, deps })).result
-type Check = { id: string; status: string; detail?: string; unavailable?: string }
+type Check = { id: string; status: string; detail?: string; unavailable?: string; confirmable?: boolean; confirmed?: boolean }
 const checks = async (skill: string, who: Context['principal'] = USER): Promise<Record<string, Check>> =>
   Object.fromEntries(((await run(who, 'skill.get', { repo: REPO, skill })) as { checks: Check[] }).checks.map((c) => [c.id, c]))
 
@@ -258,6 +258,20 @@ describe('the guided skills read the design record', () => {
   it('Schematic finish: every sheet names its requirements; Board setup: the outline against the intent\'s limits', async () => {
     expect((await checks('schematic-finish')).serves).toMatchObject({ status: 'not_met', detail: '1 sheet without the requirements it serves: hw/design.kicad_sch.' })
     expect((await checks('board-setup')).outline).toMatchObject({ status: 'not_met', detail: 'The board is 60 mm wide (at most 50).' })
+  })
+
+  it('a check no tool can make yet is the person\'s to confirm; one waiting on a run or a file is not', async () => {
+    let c = await checks('schematic-finish')
+    expect(c.notes).toMatchObject({ status: 'not_met', unavailable: expect.any(String), confirmable: true })
+    await run(USER, 'skill.draft', { repo: REPO, skill: 'schematic-finish', step: 1, data: { confirmed: { notes: true, serves: true } } })
+    c = await checks('schematic-finish')
+    expect(c.notes).toMatchObject({ status: 'met', confirmed: true, detail: expect.stringMatching(/^You confirmed it/) })
+    expect(c.notes?.unavailable).toBeUndefined()
+    expect(c.changes).toMatchObject({ status: 'not_met', confirmable: true })
+    // serves is checked from the record: a confirmation does not stand in for it
+    expect(c.serves).toMatchObject({ status: 'not_met' })
+    expect(c.serves?.confirmed).toBeUndefined()
+    await run(USER, 'skill.draft', { repo: REPO, skill: 'schematic-finish', step: 1, data: null })
   })
 
   it('Intent builder Submit accepts every proposed statement as worded, and records an edit; requirements.trace shows them accepted', async () => {

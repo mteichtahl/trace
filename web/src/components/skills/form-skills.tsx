@@ -25,7 +25,7 @@ import { call } from '@/lib/api'
 import type { CriterionStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { type SkillDef, pictureOf } from './definitions'
-import { StepHeader, TraceIntro, Unavailable } from './parts'
+import { StepHeader, TraceIntro, Unavailable, type Confirmable } from './parts'
 import { StepPicture } from './step-picture'
 import { type SkillDraftBase, qualityChecks, useSkill } from './use-skill'
 
@@ -180,7 +180,7 @@ export function WaiverSkill({ repo, def, about }: { repo: string; def: SkillDef;
         )}
       </div>
       {s.stepIndex < def.steps.length - 1 && <div className="mt-6 flex justify-end"><Button onClick={s.next}>Continue to {def.steps[s.stepIndex + 1]!.title.toLowerCase()} <ArrowRight /></Button></div>}
-      <div className="mt-4"><Unavailable checks={s.view.data?.checks} def={def} /></div>
+      <div className="mt-4"><Unavailable checks={s.view.data?.checks} def={def} draft={s.draft as unknown as Confirmable} /></div>
     </FocusLayout>
   )
 }
@@ -290,7 +290,7 @@ export function ChangeSkill({ repo, def, about }: { repo: string; def: SkillDef;
         )}
       </div>
       {s.stepIndex < def.steps.length - 1 && <div className="mt-6 flex justify-end"><Button onClick={s.next}>Continue to {def.steps[s.stepIndex + 1]!.title.toLowerCase()} <ArrowRight /></Button></div>}
-      <div className="mt-4"><Unavailable checks={s.view.data?.checks} def={def} /></div>
+      <div className="mt-4"><Unavailable checks={s.view.data?.checks} def={def} draft={s.draft as unknown as Confirmable} /></div>
     </FocusLayout>
   )
 }

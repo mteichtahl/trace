@@ -23,7 +23,7 @@ import type { DraftChange } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
 import { type SkillDef, pictureOf } from './definitions'
 import { FindingsList } from './findings'
-import { NoChecker, StepHeader, TraceIntro, Unavailable } from './parts'
+import { NoChecker, StepHeader, TraceIntro, Unavailable, type Confirmable } from './parts'
 import { StepPicture } from './step-picture'
 import { type SkillDraftBase, qualityChecks, useSkill } from './use-skill'
 
@@ -178,7 +178,7 @@ export function KicadSkill({ repo, def }: { repo: string; def: SkillDef }) {
       </section>
 
       {!v?.checks?.length && !s.view.isLoading && <div className="mt-4"><NoChecker def={def} /></div>}
-      <div className="mt-4"><Unavailable checks={v?.checks} def={def} /></div>
+      <div className="mt-4"><Unavailable checks={v?.checks} def={def} draft={s.draft as unknown as Confirmable} /></div>
       {s.stepIndex < def.steps.length - 1 && (
         <div className="mt-6 flex justify-end"><Button onClick={s.next}>Continue to {def.steps[s.stepIndex + 1]!.title.toLowerCase()} <ArrowRight /></Button></div>
       )}
