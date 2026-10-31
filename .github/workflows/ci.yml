@@ -24,8 +24,10 @@ permissions:
   contents: read
 
 jobs:
+  # The longest job, so it asks CodeBuild for a bigger machine (instance-size:xlarge): vitest runs its test files in
+  # parallel forks, one per core. The label means nothing to GitHub's fallback runner
   typescript:
-    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","typescript"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","instance-size:xlarge","typescript"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     timeout-minutes: 45
     env:
       # KiCad, ngspice, Icarus, and the verification/FPGA programs, so those tests run instead of skipping.
@@ -68,6 +70,17 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+
+  # The web app, the runtimes' start and the harness bundle need neither KiCad nor Python: in a job of their own they
+  # run alongside the TypeScript tests instead of after them, which takes about a minute off every run
+  web-and-build:
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","web-and-build"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "22", cache: npm }
+      - run: npm ci
       # The deploy installs the web app with npm ci (src/infra/web.ts): a lock file out of step with web/package.json
       # (a Dependabot bump, say) fails here, on the pull request, instead of in update-installation after the merge
       - name: The web app installs, tests and builds
@@ -99,7 +112,7 @@ jobs:
   tests-pass:
     name: tests pass
     if: always()
-    needs: [typescript, python-bridge]
+    needs: [typescript, web-and-build, python-bridge]
     runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","tests-pass"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     steps:
       - env:
