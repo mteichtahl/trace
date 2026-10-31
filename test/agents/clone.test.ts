@@ -1,18 +1,24 @@
 // cloneDefault (src/agents/runtime/job.ts): a fresh clone must not run git in the folder it is about to create. Node
 // spawns with that cwd and, the folder not existing yet, fails with `spawn git ENOENT` (seen as "cannot check out
 // mteichtahl/trace-sample: git clone failed: spawn git ENOENT" on the web app's requirements page).
-import { chownSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { chownSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { type Exec, cloneDefault, cloneDir, execReal, gitAuthEnv } from '../../src/agents/runtime/job.js'
+import { type Exec, cloneDefault, cloneDir, execReal, gitAuthEnv, removeDir } from '../../src/agents/runtime/job.js'
+import { TOOL_WORKSPACE } from '../../src/agents/runtime/tool.js'
 
 /** Like execFile: a cwd that does not exist fails as Node's spawn does; `git clone … <dir>` makes the clone. */
 function fakeGit(calls: { args: string[]; cwd: string | undefined }[]): Exec {
   return async (_cmd, args, opts = {}) => {
     calls.push({ args: [...args], cwd: opts.cwd })
     if (opts.cwd && !existsSync(opts.cwd)) throw new Error(`git ${args[0] ?? ''} failed: spawn git ENOENT`)
-    if (args[0] === 'clone') mkdirSync(join(String(args.at(-1)), '.git'), { recursive: true })
+    if (args[0] === 'clone') {
+      const into = String(args.at(-1))
+      // as git: a destination that exists and is not empty is refused
+      if (existsSync(into) && readdirSync(into).length > 0) throw new Error(`git clone failed: fatal: destination path '${into}' already exists and is not an empty directory.`)
+      mkdirSync(join(into, '.git'), { recursive: true })
+    }
     return { stdout: '', stderr: '' }
   }
 }
@@ -57,5 +63,36 @@ describe('git in a clone owned by another user', () => {
       await execReal('git', set, { cwd: dir, env: gitAuthEnv('token-not-sent-anywhere') })
       expect((await execReal('git', ['config', 'remote.origin.fetch'], { cwd: dir, env: gitAuthEnv('t') })).stdout.trim()).toBe('+refs/heads/*:refs/remotes/origin/*')
     } finally { rmSync(ws, { recursive: true, force: true }) }
+  })
+})
+
+describe('what a failed checkout leaves', () => {
+  it('a folder without .git in the clone\'s place is cleared before the clone', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'trace-left-'))
+    try {
+      const dir = cloneDir(ws, 'mteichtahl/trace-sample', 'api-tool')
+      mkdirSync(join(dir, 'hw'), { recursive: true })
+      writeFileSync(join(dir, 'hw', 'half-written.kicad_sch'), '(')
+      const calls: { args: string[]; cwd: string | undefined }[] = []
+      const co = await cloneDefault({ exec: fakeGit(calls), dir, auth: {}, log: () => undefined, repository: 'mteichtahl/trace-sample', defaultBranch: 'main', cli: '/app/dist/cli.js' })
+      expect(co.reused).toBe(false)
+      expect(existsSync(join(dir, 'hw'))).toBe(false)
+      expect(existsSync(join(dir, '.git'))).toBe(true)
+    } finally { rmSync(ws, { recursive: true, force: true }) }
+  })
+
+  it('removeDir removes a tree, and a path that is not there is fine', () => {
+    const ws = mkdtempSync(join(tmpdir(), 'trace-rm-'))
+    mkdirSync(join(ws, 'a', 'b'), { recursive: true })
+    writeFileSync(join(ws, 'a', 'b', 'f'), 'x')
+    expect(removeDir(join(ws, 'a'))).toBe(true)
+    expect(existsSync(join(ws, 'a'))).toBe(false)
+    expect(removeDir(join(ws, 'nothing'))).toBe(true)
+    rmSync(ws, { recursive: true, force: true })
+  })
+
+  it('tool calls keep their clone on the container\'s own disk, not session storage (SQLite\'s locks)', () => {
+    expect(TOOL_WORKSPACE.startsWith('/tmp/')).toBe(true)
+    expect(TOOL_WORKSPACE.startsWith('/mnt/workspace')).toBe(false)
   })
 })

@@ -59,7 +59,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { Octokit } from '@octokit/rest'
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { type TraceConfig, load } from '../../core/config.js'
@@ -250,6 +250,29 @@ export function cloneDir(workspace: string, repository: string, slot: string): s
   return join(workspace, repository.replace('/', '__'), slot.replace(/[^A-Za-z0-9._-]/g, '-'))
 }
 
+/**
+ * Remove a clone (or any folder of the workspace) without failing what called it. On AgentCore's session storage
+ * (/mnt/workspace, a network file system) removing a folder right after its files can find it "not empty" for a moment
+ * (the storage logs "RMDIR failed: directory is not empty."), so the removal is retried; a folder that still stays is
+ * moved aside, out of the clone's path, where nothing reads it, so the next checkout of that slot starts clean.
+ * Answers whether the path is gone from where it was.
+ */
+export function removeDir(path: string, log: (l: string) => void = () => undefined): boolean {
+  try {
+    rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+    return true
+  } catch (e) {
+    try {
+      renameSync(path, `${path}.stale-${Date.now().toString(36)}`)
+      log(`could not remove ${path} (${e instanceof Error ? e.message : String(e)}): moved it aside`)
+      return true
+    } catch {
+      log(`could not remove ${path}: ${e instanceof Error ? e.message : String(e)}`)
+      return !existsSync(path)
+    }
+  }
+}
+
 interface GitOpts { exec: Exec; dir: string; auth: Record<string, string>; signal?: AbortSignal | undefined; log: (l: string) => void }
 
 /** git in the clone (`dir`), or in `cwd` when given. Never in a folder that may not exist yet: the clone itself runs in
@@ -279,6 +302,8 @@ export async function cloneDefault(o: GitOpts & { repository: string; defaultBra
     // itself, which does not exist yet, so every fresh clone failed with \`spawn git ENOENT\`
     const parent = dirname(o.dir)
     mkdirSync(parent, { recursive: true })
+    // what a failed or interrupted checkout left (no .git): git clone refuses a folder that is not empty
+    if (existsSync(o.dir)) removeDir(o.dir, o.log)
     await git(['clone', '--depth=300', '--branch', db, '--', url, o.dir], parent)
     await git(['config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'])
   }
@@ -753,7 +778,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     }
     throw new Error(msg)
   } finally {
-    if (dir && !d.persistent) rmSync(dir, { recursive: true, force: true })
+    if (dir && !d.persistent) removeDir(dir, log)
   }
 }
 
