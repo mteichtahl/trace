@@ -367,7 +367,9 @@ describe('job runner', () => {
       expect(flat).toContain('config user.email noreply@anthropic.com')
       expect(flat).toContain('config merge.trace-db.driver node /app/dist/cli.js db merge %O %A %B')
       expect(flat).toContain('fetch --depth=300 origin +refs/heads/claude/x:refs/remotes/origin/claude/x')
-      expect(flat.at(-1)).toBe('checkout -B claude/x --track origin/claude/x')
+      // the last command: whether the specialist left its record uncommitted (keepRecord: here it did not)
+      expect(flat.at(-1)).toBe('status --porcelain -- .trace/project.db')
+      expect(flat.at(-2)).toBe('checkout -B claude/x --track origin/claude/x')
 
       const { prompt, options } = h.claudeCalls[0]!
       // "Fix it" says nothing and no model is configured: the default specialist (verify), with its own prompt
@@ -467,7 +469,8 @@ describe('job runner', () => {
       expect(branch).toMatch(/^claude\/task-add-a-3v3-rail-check-[0-9a-f]{6}$/)
       const flat = h.cmds.map((c) => c.args.join(' '))
       expect(flat).toContain(`ls-remote --heads origin refs/heads/${branch}`)
-      expect(flat.at(-1)).toBe(`checkout -B ${branch} origin/main`)
+      expect(flat.at(-1)).toBe('status --porcelain -- .trace/project.db')
+      expect(flat.at(-2)).toBe(`checkout -B ${branch} origin/main`)
       const p = h.claudeCalls.at(-1)!.prompt
       expect(p).toMatch(/> Add a 3V3 rail check/)
       expect(p).toMatch(/"marc@example.com"/)

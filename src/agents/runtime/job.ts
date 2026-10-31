@@ -757,6 +757,10 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
       mem = NO_MEMORY
       if (prep.issue) await specialistComment(gh, p.repository, prep.issue, ctx.jobId, s, r, out.ok, summary, cfg.worker.escalate_to, prep.runUrl)
       if (!out.ok) throw new Error(summary)
+      // what the specialist's own tools wrote (requirements, the test plan, runs) is in the record: it reaches the
+      // project only when committed, and nothing else commits it unless the delegated worker was told to
+      const kept = await keepRecord({ g, branch, defaultBranch: base.defaultBranch, jobId: ctx.jobId, agent: r.kind, log })
+      if (kept) log(kept)
       // a hand-off job that finished without answering: its hand-off is closed, so the asker is told
       if (answering && handoffs) { settled = true; await handoffs.settle(answering.id, endedWithout('succeeded', summary)).catch(() => false) }
       return `${r.kind}: done in ${out.turns} turns${escalation(summary) ? ' (escalated)' : ''}${prep.issue ? '' : `: ${summary.slice(0, 2000)}`}`
@@ -831,6 +835,34 @@ export async function runDelegated(d: RunnerDeps, p: DelegatedTaskJob, ctx: JobC
     const msg = redact(errText(e))
     await mem.finish(false, msg)
     throw new Error(msg)
+  }
+}
+
+/** The project's record in a checkout. */
+export const RECORD_PATH = '.trace/project.db'
+
+/**
+ * A finished specialist's record, kept: its tools write the project's record (.trace/project.db: requirements, the test
+ * plan, runs) in its checkout, and that reaches the project only once committed and merged. The delegated worker
+ * commits it only when the specialist's brief says so, and job-mvw37v84 (testyyyu) ended with R1-R10 and its plan
+ * written there but a pull request of markdown alone: the Requirements page stayed empty after the merge. So a record
+ * left uncommitted is committed on the job's branch and pushed (the project's trace-prs workflow opens or updates its
+ * pull request). Never on the default branch. Answers what it did, in words, or null when there was nothing to keep; a
+ * failure is said, never thrown: the job's own work is done.
+ */
+export async function keepRecord(o: { g: GitOpts; branch: string; defaultBranch: string; jobId: string; agent: string; log: (l: string) => void }): Promise<string | null> {
+  const git = gitIn({ ...o.g, signal: undefined })
+  try {
+    const changed = (await git(['status', '--porcelain', '--', RECORD_PATH])).stdout.trim() !== ''
+    if (!changed) return null
+    if (o.branch === o.defaultBranch) return `the project's record changed but stays uncommitted: the job ran on the default branch (${o.branch}), which trace never pushes to`
+    await git(['add', '--', RECORD_PATH])
+    await git(['commit', '-m', `trace: the ${o.agent} specialist's record (${o.jobId})\n\nWhat its tools wrote to the project's record (requirements, the test plan, runs), so it reaches the project when this branch is merged.`])
+    await git(['push', 'origin', `HEAD:refs/heads/${o.branch}`])
+    const head = (await git(['rev-parse', '--short', 'HEAD'])).stdout.trim()
+    return `committed the project's record on ${o.branch} (${head}) and pushed it`
+  } catch (e) {
+    return `could not commit the project's record on ${o.branch}: ${errText(e).slice(0, 300)}`
   }
 }
 
