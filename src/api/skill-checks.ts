@@ -220,7 +220,13 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
       const clash = v.filter((x) => x.flags.includes('conflict') && links.some((l) => l.intent === x.id))
       if (clash.length) return notMet('conflicts', `Requirements derive from intent lines still in conflict: ${clash.map((x) => `${x.id} (${links.filter((l) => l.intent === x.id).map((l) => l.requirement).join(', ')})`).slice(0, 4).join('; ')}. Resolve it in the intent first.`)
     }
-    return unavailable('conflicts', 'a check that two requirements can both hold (duplicates, and conflicts between the intent lines they come from, are checked and there are none; no tool checks the requirements\' own numbers against each other)')
+    // duplicates and conflicting intent are checked above and there are none. No tool compares the requirements' own
+    // numbers against each other, so that last part is the person's: they confirm it in Resolve conflicts
+    // (draft.no_conflicts), as the skill asks which one gives when two cannot both hold (docs/user-journey.md)
+    const confirmed = i.draft?.no_conflicts === true
+    return confirmed
+      ? met('conflicts', 'No duplicates, no conflicting intent, and you confirmed no two requirements contradict each other (their numbers are not compared by a tool).')
+      : notMet('conflicts', 'No duplicates and no conflicting intent were found. Confirm in Resolve conflicts that no two requirements contradict each other: no tool compares their numbers.')
   },
   'requirements-review/sources': (i) => {
     const none = i.requirements.filter((q) => !q.source)

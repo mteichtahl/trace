@@ -26,6 +26,8 @@ export interface DesignDraft {
   decisions?: { requirement: string; choice: 'accept' | 'strike'; reason?: string }[]
   uncovered?: { statement: string; reason: string }[]
   deciding?: string[]
+  /** Resolve conflicts: the person confirms no two requirements contradict each other (no tool compares their numbers) */
+  no_conflicts?: boolean
 }
 
 type Set = (fn: (d: DesignDraft) => DesignDraft) => void
@@ -38,6 +40,7 @@ export function withDecision(d: DesignDraft, requirement: string, choice: 'accep
 
 export function DesignSteps({ repo, skill, step, view, draft, setDraft }: { repo: string; skill: string; step: string; view?: SkillView; draft: DesignDraft; setDraft: Set }) {
   if (skill === 'requirements-review' && (step === 'decide' || step === 'cover')) return <ReviewItems view={view} draft={draft} setDraft={setDraft} only={step === 'decide' ? 'requirement' : 'intent'} />
+  if (skill === 'requirements-review' && step === 'conflicts') return <NoConflicts draft={draft} setDraft={setDraft} />
   if (skill === 'architecture-choice' && step === 'criteria') return <FixCriteria repo={repo} view={view} />
   if (skill === 'architecture-choice' && step === 'choose') return <Deciding view={view} draft={draft} setDraft={setDraft} />
   return null
@@ -123,5 +126,22 @@ function Deciding({ view, draft, setDraft }: { view?: SkillView; draft: DesignDr
         </Label>
       ))}
     </fieldset>
+  )
+}
+
+/**
+ * Resolve conflicts: trace has checked for duplicates and for requirements drawn from intent still in conflict; no tool
+ * compares the requirements' own numbers, so the person reads them together and confirms (draft.no_conflicts).
+ */
+function NoConflicts({ draft, setDraft }: { draft: DesignDraft; setDraft: Set }) {
+  return (
+    <section className="mt-6 space-y-2" aria-labelledby="no-conflicts">
+      <h2 id="no-conflicts" className="text-base font-semibold">Do any two requirements contradict each other?</h2>
+      <p className="text-sm text-muted-foreground">trace found no duplicates and no requirement drawn from intent still in conflict. No tool compares the requirements&apos; own numbers (a power budget against a draw, a size against a connector), so read them together. If two cannot both hold, strike or reword one in Decide.</p>
+      <Label className="flex items-center gap-2 font-normal">
+        <Checkbox checked={draft.no_conflicts === true} onCheckedChange={(v) => setDraft((d) => ({ ...d, no_conflicts: v === true }))} />
+        I read them together: no two requirements contradict each other.
+      </Label>
+    </section>
   )
 }
