@@ -1284,10 +1284,12 @@ export function putDraft(db: DatabaseSync, who: string, skill: string, d: { step
 
 // ------------------------------------------------------------------ the inbox
 
-export const INBOX_KINDS = ['gate', 'question', 'spend', 'stuck'] as const
+/** `review`: an open pull request a trace job opened (src/api/inbox-review.ts), which the API adds; the rest are the record's */
+export const INBOX_KINDS = ['gate', 'question', 'spend', 'stuck', 'review'] as const
 export interface InboxItem {
   id: string; kind: (typeof INBOX_KINDS)[number]; repo: string; project: string; stage: StageId; summary: string
-  since: string; waited: string; blocking: boolean; action: string; ref: { kind: 'gate' | 'question'; id: string }
+  since: string; waited: string; blocking: boolean; action: string
+  ref: { kind: 'gate' | 'question'; id: string } | { kind: 'pull'; id: string; url: string }
   recommended?: { id: string; label: string } | undefined
 }
 

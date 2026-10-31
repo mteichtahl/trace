@@ -329,7 +329,8 @@ export interface JobView {
 
 // ------------------------------------------------------------------ inbox
 
-export type InboxKind = 'gate' | 'question' | 'spend' | 'stuck'
+/** `review`: an open pull request a trace job opened, to review and merge on GitHub */
+export type InboxKind = 'gate' | 'question' | 'spend' | 'stuck' | 'review'
 
 export interface InboxItem {
   id: string
@@ -341,7 +342,7 @@ export interface InboxItem {
   /** one sentence; **bold** marks the recommendation */
   summary: string
   createdAt: string
-  action: { label: string; to?: string }
+  action: { label: string; to?: string; href?: string }
   /** a question with a clear recommendation: its answer as a button */
   recommended?: { id: string; label: string }
   questionId?: string

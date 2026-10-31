@@ -14,7 +14,7 @@ import { waited } from '@/lib/format'
 import type { InboxItem } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-const KIND: Record<InboxItem['kind'], string> = { gate: 'Gate ready', question: 'Question', spend: 'Spend', stuck: 'Agent stuck' }
+const KIND: Record<InboxItem['kind'], string> = { gate: 'Gate ready', question: 'Question', spend: 'Spend', stuck: 'Agent stuck', review: 'Pull request' }
 
 export interface NeedsYouCardProps {
   item: InboxItem
@@ -66,8 +66,10 @@ export function NeedsYouCard({ item, onAnswer, answering, onOther, onDismiss, co
             </Button>
           </>
         ) : (
-          <Button size={compact ? 'sm' : 'lg'} variant={stuck ? 'outline' : 'default'} asChild={!!item.action.to}>
-            {item.action.to ? <Link to={item.action.to}>{item.action.label}</Link> : <span>{item.action.label}</span>}
+          <Button size={compact ? 'sm' : 'lg'} variant={stuck ? 'outline' : 'default'} asChild={!!item.action.to || !!item.action.href}>
+            {item.action.to ? <Link to={item.action.to}>{item.action.label}</Link>
+              : item.action.href ? <a href={item.action.href} target="_blank" rel="noreferrer">{item.action.label}</a>
+              : <span>{item.action.label}</span>}
           </Button>
         )}
       </div>
