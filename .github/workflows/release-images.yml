@@ -11,7 +11,10 @@
 #
 # It runs, like every job here, on this repository's AWS CodeBuild runner once the installation has made it (the
 # repository variable TRACE_CODEBUILD_PROJECT; Docker-in-Docker when that installation publishes: props.ts
-# runners.ciPrivileged), and on GitHub's ubuntu-24.04 runner until then. BuildKit builds the images (QEMU for arm64 on the x86 runner),
+# runners.ciPrivileged), and on GitHub's ubuntu-24.04 runner until then. Each architecture builds on its own machine:
+# publish-arm64 (the agent and tools images) asks CodeBuild for its Amazon Linux arm64 image (image:arm-3.0), and
+# publish-amd64 (the GPU image) runs on the project's x86 one, so neither emulates the other; the two run side by side.
+# On GitHub's fallback runner (x86) the arm64 job emulates arm64 with QEMU, as all three did before. BuildKit builds the images,
 # caches in the registry itself (`:cache`, mode=max), attaches an OCI provenance attestation, and the job summary
 # records each pushed digest.
 name: release-images
@@ -27,14 +30,16 @@ permissions: {}
 concurrency: { group: 'release-images-${{ github.ref }}', cancel-in-progress: false }
 
 jobs:
-  publish:
+  publish-arm64:
     if: vars.TRACE_IMAGE_REGISTRY != '' && vars.TRACE_RELEASE_ROLE != ''
-    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","publish"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","image:arm-3.0","publish-arm64"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     timeout-minutes: 180
     permissions:
       id-token: write
       contents: read
-    steps:
+    env:
+      IMAGES: "agent linux/arm64 agent/Dockerfile;tools linux/arm64 agent/Dockerfile.tools"
+    steps: &publish
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: "22", cache: npm }
@@ -47,7 +52,7 @@ jobs:
           role-to-assume: ${{ vars.TRACE_RELEASE_ROLE }}
           role-session-name: trace-release-${{ github.run_id }}
           aws-region: us-east-1
-      - name: Build and push both images
+      - name: Build and push the images
         env:
           REGISTRY: ${{ vars.TRACE_IMAGE_REGISTRY }}
           TAG: ${{ steps.tag.outputs.tag }}
@@ -55,24 +60,46 @@ jobs:
         run: |
           set -euo pipefail
           aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
-          docker run --privileged --rm public.ecr.aws/eks-distro-build-tooling/binfmt-misc:qemu-v9.2.2 --install arm64
+          # this machine's own platform needs no emulation; any other (arm64 on GitHub's x86 fallback) gets QEMU
+          case "$(uname -m)" in aarch64|arm64) native=linux/arm64 ;; *) native=linux/amd64 ;; esac
+          IFS=';' read -ra specs <<< "$IMAGES"
+          for spec in "${specs[@]}"; do
+            set -- $spec
+            if [ "$2" != "$native" ]; then
+              echo "emulating $2 on $native with QEMU"
+              docker run --privileged --rm public.ecr.aws/eks-distro-build-tooling/binfmt-misc:qemu-v9.2.2 --install "${2#linux/}"
+              break
+            fi
+          done
           docker buildx create --use --name trace-release
           extra=()
           case "$REF" in
             refs/heads/main) extra=(latest) ;;
             refs/tags/v*) extra=("${REF#refs/tags/}") ;;
           esac
-          echo "## Published images" >> "$GITHUB_STEP_SUMMARY"
-          for spec in "agent linux/arm64 agent/Dockerfile" "tools linux/arm64 agent/Dockerfile.tools" "gpu linux/amd64 agent/Dockerfile.gpu"; do
+          echo "## Published images ($native machine)" >> "$GITHUB_STEP_SUMMARY"
+          for spec in "${specs[@]}"; do
             set -- $spec
             repo="$REGISTRY/trace-$1"
             tags=(-t "$repo:$TAG")
             for t in "${extra[@]}"; do tags+=(-t "$repo:$t"); done
+            start=$SECONDS
             docker buildx build --platform "$2" -f "$3" "${tags[@]}" \
               --cache-from "type=registry,ref=$repo:cache" \
               --cache-to "type=registry,ref=$repo:cache,mode=max,image-manifest=true,oci-mediatypes=true" \
               --provenance=mode=max --metadata-file "meta-$1.json" --push .
             digest=$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))["containerimage.digest"])' "meta-$1.json")
-            echo "- \`$repo:$TAG\` → \`$digest\` (also: ${extra[*]:-none})" >> "$GITHUB_STEP_SUMMARY"
+            echo "- \`$repo:$TAG\` → \`$digest\` in $(( (SECONDS - start) / 60 )) min (also: ${extra[*]:-none})" >> "$GITHUB_STEP_SUMMARY"
             echo "published $repo:$TAG @ $digest"
           done
+
+  publish-amd64:
+    if: vars.TRACE_IMAGE_REGISTRY != '' && vars.TRACE_RELEASE_ROLE != ''
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","publish-amd64"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
+    timeout-minutes: 180
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      IMAGES: "gpu linux/amd64 agent/Dockerfile.gpu"
+    steps: *publish
