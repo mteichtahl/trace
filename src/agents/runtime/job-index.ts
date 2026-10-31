@@ -83,6 +83,8 @@ export interface IndexOptions {
   heartbeat?: boolean
   /** a person's tasks wait in the project's queue (queueAdmit): their first row is `queued` */
   queued?: boolean
+  /** at most one step write per job in this window (default STEP_EVERY_MS); tests shorten it */
+  stepEveryMs?: number
 }
 
 export interface JobIndexWriter {
@@ -159,6 +161,14 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
     return writing
   }
   const soon = (): void => { void flush() }
+  /** a job's step written later, at the end of its STEP_EVERY_MS window */
+  const trailing = new Map<string, NodeJS.Timeout>()
+  const writeStep = (id: string): void => {
+    lastStep.set(id, now())
+    const j = jobs.jobStatus(id)[0]
+    if (j) merge(id, { step: j.step ?? null, branch: j.branch ?? null })
+    soon()
+  }
   const merge = (id: string, f: Partial<Omit<JobRow, 'id' | 'updatedAt'>>): void => {
     // what waited for the job's first row goes under it (the row's own fields win)
     const before = early.get(id)
@@ -185,11 +195,19 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
         return soon()
       case 'log': {
         const t = now()
-        if (t - (lastStep.get(e.jobId) ?? 0) < STEP_EVERY_MS) return
-        lastStep.set(e.jobId, t)
-        const j = jobs.jobStatus(e.jobId)[0]
-        if (j) merge(e.jobId, { step: j.step ?? null, branch: j.branch ?? null })
-        return soon()
+        const wait = (o.stepEveryMs ?? STEP_EVERY_MS) - (t - (lastStep.get(e.jobId) ?? 0))
+        // a line inside the window is not dropped: the window's last line is written when it closes. Dropped, a burst
+        // ("cloning", "routed", "running the verify specialist") left the queue's "starting" on screen until the next
+        // heartbeat, minutes later, while the specialist worked
+        if (wait > 0) {
+          if (!trailing.has(e.jobId)) {
+            const timer = setTimeout(() => { trailing.delete(e.jobId); writeStep(e.jobId) }, wait)
+            timer.unref()
+            trailing.set(e.jobId, timer)
+          }
+          return
+        }
+        return writeStep(e.jobId)
       }
       case 'wait': return onWait(e.change)
     }
@@ -216,7 +234,7 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
   return {
     flush,
     beat,
-    stop: () => { off(); if (timer) clearInterval(timer) },
+    stop: () => { off(); if (timer) clearInterval(timer); for (const t of trailing.values()) clearTimeout(t); trailing.clear() },
   }
 }
 
