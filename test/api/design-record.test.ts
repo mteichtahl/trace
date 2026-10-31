@@ -33,7 +33,7 @@ const deps: ActionDeps = {
   tools: () => new Registry([]), scratch, store: (p) => backendFor(join(bucket, p)),
 }
 const run = async (who: Context['principal'], action: string, args: Record<string, unknown> = {}): Promise<unknown> => (await perform(action, args, { principal: who, deps })).result
-type Check = { id: string; status: string; detail?: string; unavailable?: string }
+type Check = { id: string; status: string; detail?: string; unavailable?: string; confirmable?: boolean; confirmed?: boolean }
 const checks = async (skill: string, who: Context['principal'] = USER): Promise<Record<string, Check>> =>
   Object.fromEntries(((await run(who, 'skill.get', { repo: REPO, skill })) as { checks: Check[] }).checks.map((c) => [c.id, c]))
 
