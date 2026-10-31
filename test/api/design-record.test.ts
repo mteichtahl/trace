@@ -235,6 +235,9 @@ describe('the guided skills read the design record', () => {
     expect(d.architecture).toMatchObject({ state: 'chosen', chosen: { option: 'B', by: USER.email } })
     const j = await run(USER, 'journey.get', { repo: REPO }) as { decisions: { kind: string }[] }
     expect(j.decisions.slice(0, 2).map((x) => x.kind)).toEqual(['skill.submitted', 'design.architecture.choice'])
+    // the person's approval of the blocks and key parts, which the architecture review gate waits for
+    const g = await run(USER, 'journey.get', { repo: REPO }) as { gates: { id: string; criteria: { id: string; status: string; evidence: { ref: string }[] }[] }[] }
+    expect(g.gates.find((x) => x.id === 'architect')?.criteria.find((x) => x.id === 'architect.blocks')).toMatchObject({ status: 'met', evidence: [{ ref: 'architecture-choice' }] })
   })
 
   it('Pin plan review: functions, instances, reserved pins, and the match with the schematic\'s netlist', async () => {

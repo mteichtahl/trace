@@ -402,6 +402,11 @@ export const SKILL_ACTIONS = {
         const evidence = [{ kind: 'skill', ref: 'requirements-review', label: `Requirements review, submitted by ${by.label}` }]
         for (const [id, ok] of baselineCriteria(i.requirements)) if (have.has(id)) setCriterion(db, id, ok ? 'met' : 'not_met', evidence, by.label)
       }
+      // Architecture choice is the person's approval of the blocks and key parts the architecture gate waits for
+      if (a.skill === 'architecture-choice' && (loadJourney(db)?.criteria ?? []).some((c) => c.id === 'architect.blocks')) {
+        const chosen = architectureView(designRows, loadDesignDecisions(db)).chosen
+        if (chosen) setCriterion(db, 'architect.blocks', 'met', [{ kind: 'skill', ref: 'architecture-choice', label: `Architecture choice: option ${chosen.option}, submitted by ${by.label}` }], by.label)
+      }
       if (a.skill === 'waiver') {
         const d = a.draft
         const sev = SEVERITIES.includes(d.severity as never) ? d.severity as (typeof SEVERITIES)[number] : (() => { throw new ActionError('Give the severity.') })()
