@@ -175,6 +175,15 @@ async function caseStaleness(ctx: Context, repo: string, was: unknown): Promise<
 const requirementIds = (db: import('node:sqlite').DatabaseSync): string[] => (hasTable(db, 'requirements') ? (db.prepare('SELECT id FROM requirements').all() as { id: string }[]).map((x) => String(x.id)) : [])
 const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
 
+/** The job Intent builder's Submit starts: the candidate requirements, drafted from the intent as the people decided it. */
+export const REQUIREMENTS_FROM_INTENT = [
+  'The intent was submitted in the Intent builder. Draft the candidate requirements from it for Requirements review.',
+  'Read the intent statements with the people\'s decisions (design.intent list): use the accepted ones as accepted and the edited ones in their edited words; leave rejected ones out.',
+  'For each requirement: one testable acceptance criterion with a number and a unit, a kind, and its source (stated by a person, or inferred). Add them with verify.requirements and link each to the intent statements it comes from (design.intent link).',
+  'Keep the requirements already in the record that still match the intent, under their ids, rather than adding duplicates. Leave every requirement proposed: people accept or strike them in Requirements review.',
+  'Do not change the design files.',
+].join('\n')
+
 /**
  * The design decisions a skill's draft makes, which Submit records (design.decide's shapes):
  *   intent-builder       draft.decisions [{ statement, choice: accept | edit | reject, text?, reason? }]; every
@@ -391,7 +400,17 @@ export const SKILL_ACTIONS = {
       putDraft(db, by.hash, a.skill, null)
       return { result: { id, ref } }
     }))
-    return { ok: true, repo: a.repo, skill: a.skill, id: out.id, ...(out.ref ? { ref: out.ref } : {}), ...(jobId ? { jobId } : {}), started, version: out.version }
+    // Intent builder: the intent is now decided, so the Verification agent drafts the candidate requirements from it,
+    // which open Requirements review (docs/user-journey.md, Intent builder: "What it produces"). Started after the
+    // decisions are recorded, so the agent reads them; the submission stands even when the job cannot start
+    let jobError: string | undefined
+    if (a.skill === 'intent-builder') {
+      try {
+        const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: a.repo, request: REQUIREMENTS_FROM_INTENT, agent: 'verify', requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
+        if (r.accepted) { jobId = r.jobId; started = ['The Verification agent drafts the candidate requirements for Requirements review.'] } else jobError = r.reason ?? 'trace did not accept the job.'
+      } catch (e) { jobError = e instanceof Error ? e.message : String(e) }
+    }
+    return { ok: true, repo: a.repo, skill: a.skill, id: out.id, ...(out.ref ? { ref: out.ref } : {}), ...(jobId ? { jobId } : {}), ...(jobError ? { jobError } : {}), started, version: out.version }
   }),
 }
 
