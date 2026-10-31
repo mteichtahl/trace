@@ -68,16 +68,62 @@ export const AGENT_IMAGE_MAX_BYTES = 2_000_000_000
 export const prebuiltImage = (registry: string, kind: ImageKind, tag: string): string => `${registry}/trace-${kind}:${tag}`
 
 /**
+ * crane (go-containerregistry), which copies an image from registry to registry: the layers stream from ECR Public into
+ * the account's repository as they are, never unpacked onto the build's disk and read back as `docker pull` and `docker
+ * push` do, which for the multi-gigabyte tools image is most of the copy's time. Pinned to a release and its published
+ * SHA-256 per architecture (the image builds run on arm64 and x86_64), checked before it is used.
+ */
+export const CRANE = {
+  version: 'v0.22.1',
+  sha256: {
+    arm64: '898c0cff975f898a33e8c4580bdafb0e7c02c7faa33374e946762f97c4ab7110',
+    x86_64: '0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0',
+  },
+} as const
+
+/** Shell that puts crane in /usr/local/bin, or fails (the build then copies with docker, as before). */
+const installCrane = [
+  'install_crane() {',
+  '  case "$(uname -m)" in',
+  `    aarch64|arm64) A=arm64; S=${CRANE.sha256.arm64} ;;`,
+  `    x86_64) A=x86_64; S=${CRANE.sha256.x86_64} ;;`,
+  '    *) return 1 ;;',
+  '  esac',
+  `  curl -fsSL --retry 3 -o /tmp/crane.tgz "https://github.com/google/go-containerregistry/releases/download/${CRANE.version}/go-containerregistry_Linux_$A.tar.gz" || return 1`,
+  '  echo "$S  /tmp/crane.tgz" | sha256sum -c --quiet - || return 1',
+  '  tar -xzf /tmp/crane.tgz -C /usr/local/bin crane',
+  '}',
+].join('\n')
+
+/** Where the build notes that crane copied the image, so post_build has nothing local to push */
+const COPIED_MARK = '/tmp/trace-image-copied'
+
+/**
  * The CodeBuild buildspec of one image: the published image when PREBUILT_IMAGE names one that exists, else a
  * cached build. REPOSITORY_URI and IMAGE_TAG come from the project and the build (src/infra/lambda/image-build.ts).
+ *
+ * The published image is copied registry to registry with crane when it can be: only that platform's image, not the
+ * index with its provenance attestation, so the repository gets the single-platform image Lambda and AgentCore take,
+ * as `docker push` gave it. crane checks every layer and the manifest against their digests, and the source is the
+ * digest resolve-image.mjs pinned. An image with a size limit (maxBytes, the agent image) is still pulled with docker,
+ * because its unpacked size is measured on the local image; so is any image when crane can't be installed or the copy
+ * fails.
  */
 export function imageBuildSpec(o: { dockerfile: string; platform: 'linux/arm64' | 'linux/amd64'; maxBytes?: number }): Record<string, unknown> {
+  // the published image pulled with docker, its digest checked again after the pull
+  const pull = `[ -n "$PINNED" ] && docker pull --platform ${o.platform} "$PINNED" && docker image inspect --format "{{json .RepoDigests}}" "$PINNED" | grep -qF "\${PINNED##*@}"`
   const build = [
     'export DOCKER_BUILDKIT=1',
     // the tag's digest, checked against the published manifest (exit 3: not published, so build)
     'PINNED=""',
     '[ -n "${PREBUILT_IMAGE:-}" ] && PINNED="$(node scripts/resolve-image.mjs "$PREBUILT_IMAGE" || true)"',
-    'if [ -n "$PINNED" ] && docker pull --platform ' + o.platform + ' "$PINNED" && docker image inspect --format "{{json .RepoDigests}}" "$PINNED" | grep -qF "${PINNED##*@}"; then',
+    ...(o.maxBytes ? [`if ${pull}; then`] : [
+      installCrane,
+      `if [ -n "$PINNED" ] && install_crane && crane copy --platform ${o.platform} "$PINNED" "$REPOSITORY_URI:$IMAGE_TAG"; then`,
+      '  echo "trace: copied the published image $PREBUILT_IMAGE, pinned to $PINNED, registry to registry (no build needed)"',
+      `  touch ${COPIED_MARK}`,
+      `elif ${pull}; then`,
+    ]),
     '  echo "trace: copying the published image $PREBUILT_IMAGE, pinned to $PINNED (no build needed)"',
     '  docker tag "$PINNED" "$REPOSITORY_URI:$IMAGE_TAG"',
     'else',
@@ -98,7 +144,7 @@ export function imageBuildSpec(o: { dockerfile: string; platform: 'linux/arm64' 
     phases: {
       pre_build: { commands: ['aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${REPOSITORY_URI%%/*}"'] },
       build: { commands: [build] },
-      post_build: { commands: ['[ "$CODEBUILD_BUILD_SUCCEEDING" = 1 ] && docker push "$REPOSITORY_URI:$IMAGE_TAG"'] },
+      post_build: { commands: [`[ "$CODEBUILD_BUILD_SUCCEEDING" = 1 ] && { [ -f ${COPIED_MARK} ] || docker push "$REPOSITORY_URI:$IMAGE_TAG"; }`] },
     },
   }
 }

@@ -8,7 +8,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { AGENT_IMAGE_MAX_BYTES, imageBuildEnv, imageBuildSpec, imageContentTag, prebuiltImage } from '../../src/infra/images.js'
+import { AGENT_IMAGE_MAX_BYTES, CRANE, imageBuildEnv, imageBuildSpec, imageContentTag, prebuiltImage } from '../../src/infra/images.js'
 import { lockFile } from '../../src/infra/lockfile.js'
 import { gitEnv } from '../../src/installer/onboard-api.js'
 import { InfraPropsSchema, PUBLISHED_REGISTRY } from '../../src/infra/props.js'
@@ -32,6 +32,32 @@ describe('the images', () => {
     expect(spec).toContain('--build-arg BUILDKIT_INLINE_CACHE=1 --cache-from \\"$REPOSITORY_URI:cache\\"')
     expect(spec).toContain('docker push \\"$REPOSITORY_URI:cache\\"')
     expect(prebuiltImage('public.ecr.aws/x', 'agent', 't')).toBe('public.ecr.aws/x/trace-agent:t')
+  })
+
+  it('copy a published image without a size limit registry to registry with a pinned, checked crane, else as before', () => {
+    const spec = imageBuildSpec({ dockerfile: 'agent/Dockerfile.tools', platform: 'linux/arm64' }) as { phases: { build: { commands: string[] }; post_build: { commands: string[] } } }
+    const build = spec.phases.build.commands.join('\n')
+    // crane from its pinned release, used only once its SHA-256 matches, for both architectures the builds run on
+    expect(build).toContain(`/releases/download/${CRANE.version}/go-containerregistry_Linux_$A.tar.gz`)
+    expect(build).toContain('sha256sum -c --quiet -')
+    for (const sum of Object.values(CRANE.sha256)) expect(sum).toMatch(/^[0-9a-f]{64}$/)
+    expect(build).toContain(CRANE.sha256.arm64)
+    expect(build).toContain(CRANE.sha256.x86_64)
+    // just that platform's image, from the pinned digest, straight to the repository
+    expect(build).toContain('crane copy --platform linux/arm64 "$PINNED" "$REPOSITORY_URI:$IMAGE_TAG"')
+    // crane first, then docker's pull, then the build
+    const at = (s: string): number => build.indexOf(s)
+    expect(at('crane copy')).toBeLessThan(at('docker pull'))
+    expect(at('docker pull')).toBeLessThan(at('docker build'))
+    // nothing local to push after a copy; a pull or a build is pushed as before
+    expect(spec.phases.post_build.commands).toEqual(['[ "$CODEBUILD_BUILD_SUCCEEDING" = 1 ] && { [ -f /tmp/trace-image-copied ] || docker push "$REPOSITORY_URI:$IMAGE_TAG"; }'])
+    // the shell is POSIX (CodeBuild's Ubuntu images run it with dash)
+    const sh = spawnSync('sh', ['-n'], { input: `${build}\n${spec.phases.post_build.commands.join('\n')}`, encoding: 'utf8' })
+    expect(sh.status, sh.stderr).toBe(0)
+    // the agent image's size is measured on a local image, so it is still pulled with docker
+    const agent = JSON.stringify(imageBuildSpec({ dockerfile: 'agent/Dockerfile', platform: 'linux/arm64', maxBytes: AGENT_IMAGE_MAX_BYTES }))
+    expect(agent).not.toContain('crane')
+    expect(agent).toContain('docker pull --platform linux/arm64')
   })
 
   it('look for a published image only with images.source prebuilt and a registry to look in', () => {
