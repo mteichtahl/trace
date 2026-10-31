@@ -223,7 +223,11 @@ export function pendingDecisions(skill: string, draft: Record<string, unknown>, 
     case 'architecture-choice': {
       const c = draft.choice as { option?: unknown; reason?: unknown } | undefined
       if (!c || typeof c.option !== 'string') return []
-      const reason = typeof c.reason === 'string' && c.reason.trim() ? c.reason : typeof draft.why === 'string' ? draft.why : ''
+      // taking trace's recommendation asks for no reason in the decision card: its own why is the reason
+      const rec = architectureView(rows, decided).options.find((o) => o.recommended && o.id === c.option)
+      const reason = typeof c.reason === 'string' && c.reason.trim() ? c.reason
+        : typeof draft.why === 'string' && draft.why.trim() ? draft.why
+        : rec ? `Took trace's recommendation${rec.why ? `: ${rec.why}` : '.'}`.slice(0, 2000) : ''
       return parse({ kind: 'architecture', option: c.option, reason, deciding: list(draft.deciding), ...(draft.scores ? { scores: draft.scores } : {}), ...(typeof draft.only_one === 'string' ? { only_one: draft.only_one } : {}) })
     }
     case 'pin-plan-review': {

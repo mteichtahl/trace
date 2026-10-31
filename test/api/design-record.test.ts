@@ -225,6 +225,10 @@ describe('the guided skills read the design record', () => {
     expect(c.scored).toMatchObject({ status: 'not_met', detail: 'Choose an option and name the criteria that decided it.' })
     // against the recommendation needs a reason of its own
     await expect(run(USER, 'skill.submit', { repo: REPO, skill: 'architecture-choice', draft: { choice: { option: 'A', reason: 'ok' }, deciding: ['cost'] } })).rejects.toThrow(/cannot be submitted yet/)
+    // taking the recommendation as the decision card sends it (no reason of the person's own): trace's why stands for it
+    await run(USER, 'skill.draft', { repo: REPO, skill: 'architecture-choice', step: 3, data: { choice: { option: 'B' }, deciding: ['cost'] } })
+    expect((await checks('architecture-choice')).scored?.status).toBe('met')
+    await run(USER, 'skill.draft', { repo: REPO, skill: 'architecture-choice', step: 3, data: null })
     const s = await run(USER, 'skill.submit', { repo: REPO, skill: 'architecture-choice', draft: { choice: { option: 'B', reason: 'Fewer parts for the same cost.' }, deciding: ['cost'] } }) as { ok: boolean }
     expect(s.ok).toBe(true)
     const d = await run(USER, 'design.get', { repo: REPO }) as { architecture: { state: string; chosen: { option: string; by: string } } }
