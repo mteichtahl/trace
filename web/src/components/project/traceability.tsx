@@ -22,24 +22,30 @@ export interface TraceNode {
 }
 
 export interface TraceLayout {
-  reqs: { row: CoverageRow; y: number; intent?: string; failing: boolean }[]
+  /** intent: the line it is placed under (its first, in the intent's order); intents: every line it is linked to */
+  reqs: { row: CoverageRow; y: number; intent?: string; intents: string[]; failing: boolean }[]
   intents: { id: string; topic: string; text: string; y: number; failing: boolean; uncovered: boolean; proposed: boolean }[]
   height: number
 }
 
 /** Place every box: requirements grouped under their intent line, intents centred on their requirements. Pure. */
 export function layoutTrace(rows: CoverageRow[], trace: TraceView | undefined, filter?: (r: CoverageRow) => boolean): TraceLayout {
-  const intentOf = new Map((trace?.links ?? []).map((l) => [l.requirement, l.intent]))
   const order = new Map((trace?.intent ?? []).map((i, n) => [i.id, n]))
+  // a requirement may come from several intent lines: every link counts, and it is placed under the first
+  const linked = new Map<string, string[]>()
+  for (const l of trace?.links ?? []) if (order.has(l.intent)) linked.set(l.requirement, [...(linked.get(l.requirement) ?? []), l.intent])
+  for (const ids of linked.values()) ids.sort((a, b) => order.get(a)! - order.get(b)!)
   const shown = rows.filter((r) => !filter || filter(r))
-  const sorted = [...shown].sort((a, b) => (order.get(intentOf.get(a.id) ?? '') ?? 99) - (order.get(intentOf.get(b.id) ?? '') ?? 99))
-  const reqs = sorted.map((row, i) => ({ row, y: i * ROW, intent: intentOf.get(row.id), failing: row.verdict === 'failing' }))
+  const first = (id: string): number => order.get(linked.get(id)?.[0] ?? '') ?? 99
+  const sorted = [...shown].sort((a, b) => first(a.id) - first(b.id))
+  const reqs = sorted.map((row, i) => ({ row, y: i * ROW, intent: linked.get(row.id)?.[0], intents: linked.get(row.id) ?? [], failing: row.verdict === 'failing' }))
   let spare = reqs.length
   const intents = (trace?.intent ?? []).map((it) => {
-    const mine = reqs.filter((r) => r.intent === it.id)
-    const y = mine.length ? (mine[0]!.y + mine[mine.length - 1]!.y) / 2 : spare++ * ROW
+    const placed = reqs.filter((r) => r.intent === it.id)
+    const mine = reqs.filter((r) => r.intents.includes(it.id))
+    const y = placed.length ? (placed[0]!.y + placed[placed.length - 1]!.y) / 2 : mine.length ? mine[0]!.y : spare++ * ROW
     return { id: it.id, topic: it.topic, text: it.text, y, failing: mine.some((r) => r.failing), uncovered: mine.length === 0 && !filter && it.uncovered === undefined, proposed: it.state === 'proposed' }
-  }).filter((it) => !filter || reqs.some((r) => r.intent === it.id))
+  }).filter((it) => !filter || reqs.some((r) => r.intents.includes(it.id)))
   const height = Math.max(reqs.length, ...intents.map((i) => i.y / ROW + 1), 1) * ROW
   return { reqs, intents, height }
 }
@@ -65,12 +71,14 @@ export function Traceability({ rows, trace, filter, selected, onSelect }: {
       <div className="absolute inset-x-0 top-7" style={{ height: l.height }}>
         <svg className="pointer-events-none absolute inset-0" width={TRACE_WIDTH} height={l.height} aria-hidden>
           {l.reqs.map((r) => {
-            const y0 = r.intent ? iy.get(r.intent) : undefined
             const stroke = r.failing ? 'var(--destructive)' : 'var(--border)'
             const w = r.failing ? 2 : 1.25
             return (
               <g key={r.row.id}>
-                {y0 !== undefined && <path d={path(COL.intent.x + COL.intent.w, y0, COL.req.x, r.y)} stroke={stroke} strokeWidth={w} fill="none" />}
+                {r.intents.map((id) => {
+                  const y0 = iy.get(id)
+                  return y0 === undefined ? null : <path key={id} d={path(COL.intent.x + COL.intent.w, y0, COL.req.x, r.y)} stroke={stroke} strokeWidth={w} fill="none" />
+                })}
                 <path d={path(COL.req.x + COL.req.w, r.y, COL.ev.x, r.y)} stroke={stroke} strokeWidth={w} fill="none" strokeDasharray={r.row.tests.length ? undefined : '4 3'} />
               </g>
             )
