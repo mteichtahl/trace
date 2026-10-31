@@ -49,10 +49,11 @@ const memClient: SendClient = {
 }
 const memories: ProjectMemories = { forProject: (repo) => (repo.toLowerCase() === 'acme/web' ? new AgentMemory('trace_m_0000aaaa-abcdefghij', memClient) : null) }
 
+const startedJobs: { repository: string; agent?: string | undefined; request: string }[] = []
 const deps: ActionDeps = {
   github: async () => github,
   cognito: () => cognito,
-  jobs: async () => ({ repositoryOf: () => null, startJob: async () => ({ accepted: true, jobId: 'j' }), jobStatus: async () => [] }),
+  jobs: async () => ({ repositoryOf: () => null, startJob: async (p) => { startedJobs.push(p); return { accepted: true, jobId: 'j' } }, jobStatus: async () => [] }),
   tools: () => new Registry([]),
   scratch,
   memory: () => memories,
@@ -208,7 +209,9 @@ describe('the journey through the API', () => {
     await expect(run(USER, 'question.answer', { repo: 'acme/web', question: q, option: 'b' })).rejects.toThrow(/why you chose otherwise/)
     expect(await run(USER, 'question.answer', { repo: 'acme/web', question: q, option: 'a' })).toMatchObject({ question: { answered: { answer: '2.7 to 3.6 V', by: USER.email } } })
     const signed = await run(ADMIN, 'gate.sign', { repo: 'acme/web', gate: 'define', notes: 'Looks right.' }) as { advanced_to: string; summary: string }
-    expect(signed).toMatchObject({ advanced_to: 'architect', summary: 'Gate signed. Architect started.', released: false, snapshot: null })
+    expect(signed).toMatchObject({ advanced_to: 'architect', summary: 'Gate signed. Architect started.', released: false, snapshot: null, jobId: 'j', started: [expect.stringMatching(/proposes the architecture options/)] })
+    // the stage the signature opened starts its agents' work: Architect's options, for Architecture choice
+    expect(startedJobs.at(-1)).toMatchObject({ repository: 'acme/web', agent: 'impl', request: expect.stringMatching(/design\.architecture/) })
     expect(github.calls.filter((c) => c.startsWith('putFile') || c.startsWith('createBranch'))).toEqual([])
     const r = await run(GUEST, 'journey.get', { repo: 'acme/web' }) as { current_stage: string; decisions: { kind: string; by: string }[] }
     expect(r.current_stage).toBe('architect')

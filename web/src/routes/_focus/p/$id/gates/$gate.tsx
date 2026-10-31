@@ -379,6 +379,7 @@ function SignDialog({ open, onOpenChange, journey: j, gate: g, to, notes, acknow
       onSuccess: (r) => {
         onOpenChange(false)
         toast(`${cap(g.name.replace(/^the /, ''))} signed.`, { description: r.started?.length ? `Started: ${r.started.join('; ')}` : `${to ?? 'The next stage'} starts now.` })
+        if ((r as { jobError?: string }).jobError) toast.warning(`${to ?? 'The next stage'}'s work did not start.`, { description: `${(r as { jobError?: string }).jobError} Ask trace to start it.` })
         onSigned()
       },
       onError: (e) => setError(e instanceof Error ? e.message : String(e)),
