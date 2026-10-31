@@ -4,7 +4,8 @@
  * with any the screen works out itself laid over them), Close back to where the person was, and Submit.
  */
 import { useNavigate, useRouter } from '@tanstack/react-router'
-import { useCallback, useMemo } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { useCallback, useMemo, useRef } from 'react'
 import { toast } from 'sonner'
 import { useTraceContext } from '@/components/chat/context'
 import type { FocusStep } from '@/components/focus/focus-layout'
@@ -69,16 +70,27 @@ export function useSkill<D extends SkillDraftBase>(repo: string, def: SkillDef, 
   const onStep = useCallback((id: string) => goTo(id), [goTo])
 
   /** Submit: the action given (or skill.submit), then the draft is discarded and the person returns. */
+  // one submission at a time: a second click (or the bar's other Submit button) while the first is on its way would
+  // record the skill twice
+  const submitting = useRef(false)
+  const qc = useQueryClient()
   const submit = useCallback(async (run?: () => Promise<unknown>, done = `${def.name}: submitted.`) => {
+    if (submitting.current) return
+    submitting.current = true
     try {
       await (run ? run() : import('@/lib/api').then(({ call }) => call('skill.submit', { repo, skill: def.id, draft: draft.data })))
       draft.discard()
+      // what the submission changed (the journey, the gate's criteria, the inbox, the skill's own view) is read again,
+      // so the page the person returns to shows it at once
+      for (const k of [['journey.get', repo], ['skill.get', repo], ['skill.drafts', repo], ['design.get', repo], ['requirements.trace', repo], ['inbox']]) void qc.invalidateQueries({ queryKey: k })
       toast(done)
       close()
     } catch (e) {
       toast.error(`${def.name} was not submitted. Your work is kept as a draft.`, { description: e instanceof Error ? e.message : String(e) })
+    } finally {
+      submitting.current = false
     }
-  }, [def, repo, draft, close])
+  }, [def, repo, draft, close, qc])
 
   useTraceContext({ label: def.name, description: 'The guided skill the person is doing', value: { skill: def.id, repo, step: step.title, stepNumber: stepIndex + 1, of: def.steps.length } }, 'skill')
   useCommands([

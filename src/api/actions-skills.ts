@@ -113,7 +113,7 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
     // what Submit would record. One a decision cannot be (it names nothing, or lacks its reason) is left out, and the
     // check it feeds stays not met
     const pendingErrors: string[] = []
-    for (const d of draft ? (() => { const x = designOf(db); return pendingDecisions(skill, draft, x.rows, x.decisions) })() : []) {
+    for (const d of draft ? (() => { const x = designOf(db); return pendingDecisions(skill, draft, x.rows, x.decisions, { acceptRest: false }) })() : []) {
       try {
         const des = designOf(db)
         recordDesignDecision(db, prepare(d, des.rows, new Set(requirementIds(db)), des.decisions), { label: viewer.label, hash: viewer.hash })
@@ -200,7 +200,8 @@ export const REQUIREMENTS_FROM_INTENT = [
 /**
  * The design decisions a skill's draft makes, which Submit records (design.decide's shapes):
  *   intent-builder       draft.decisions [{ statement, choice: accept | edit | reject, text?, reason? }]; every
- *                        proposed statement not named there is accepted as worded (Submit intent accepts the draft)
+ *                        proposed statement not named there is accepted as worded (Submit intent accepts the draft;
+ *                        the bar's preview, acceptRest false, leaves them proposed)
  *   requirements-review  draft.decisions [{ requirement, choice: accept | strike, reason? }], draft.uncovered
  *                        [{ statement, reason }]
  *   architecture-choice  draft.choice { option, reason } with draft.deciding [criterion ids], draft.scores?,
@@ -209,12 +210,15 @@ export const REQUIREMENTS_FROM_INTENT = [
  *   pin-plan-review      every part in the plan, or draft.parts [part]: agreed as it stands
  * Entries that are not decisions are left out (the bar then says what is missing).
  */
-export function pendingDecisions(skill: string, draft: Record<string, unknown>, rows: DesignRows, decided: readonly import('../tools/design/decisions.js').DesignDecision[] = []): DecisionInput[] {
+export function pendingDecisions(skill: string, draft: Record<string, unknown>, rows: DesignRows, decided: readonly import('../tools/design/decisions.js').DesignDecision[] = [], o: { acceptRest?: boolean } = {}): DecisionInput[] {
   const parse = (x: unknown): DecisionInput[] => { const r = Decision.safeParse(x); return r.success ? [r.data] : [] }
   switch (skill) {
     case 'intent-builder': {
       const named = list(draft.decisions).flatMap((d) => parse({ kind: 'intent', ...(d as object) }))
       const inDraft = new Set(named.map((d) => (d.kind === 'intent' ? d.statement : '')))
+      // Submit accepts every statement left undecided; the bar's preview does not, so the draft panel shows a
+      // statement Accepted only once the person accepts it
+      if (o.acceptRest === false) return named
       const rest = intentView(rows, decided).filter((x) => x.state === 'proposed' && !inDraft.has(x.id)).map((x) => ({ kind: 'intent' as const, statement: x.id, choice: 'accept' as const }))
       return [...named, ...rest]
     }
