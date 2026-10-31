@@ -90,6 +90,25 @@ describe('the job index, from the jobs\' own events', () => {
     jobs.dispose()
   })
 
+  it('a step logged inside the step window is written when the window closes, not dropped', async () => {
+    const s = stores('index-step')
+    let release = (): void => undefined
+    const runner: JobRunner = (_p, ctx) => new Promise((res) => {
+      ctx.log('cloning acme/board (main)')
+      ctx.log('routed to verify')
+      ctx.log('running the verify specialist')
+      release = () => res('done')
+    })
+    const jobs = createJobs(runner, quiet)
+    const w = indexJobs(jobs, s.index, (id) => jobs.payloadOf(id), { heartbeat: false, stepEveryMs: 50 })
+    const { jobId } = jobs.startJob(task('Write the requirements'), 'trace-api-00000000-000000000000000000000000')
+    await until(async () => { await w.flush(); return (await s.index.read(loadJobs)).result.find((r) => r.id === jobId)?.step === 'running the verify specialist' })
+    release()
+    await until(() => !jobs.busy())
+    w.stop()
+    jobs.dispose()
+  })
+
   it('titles a job in words, and finds the Batch job a wait is about', () => {
     expect(titleOf({ kind: 'work-item', repository: REPO, item: { kind: 'ci-red', number: 5, sha: 'a'.repeat(40), ref: 'x', own: true, title: 'Fix CI' } })).toBe('Pull request #5: Fix CI')
     expect(batchOfWait('the remote CPU job c-9')).toEqual({ id: 'c-9', pool: 'cpu' })
