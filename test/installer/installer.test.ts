@@ -692,7 +692,12 @@ describe('adding a removed project again, its memory variable, the CPU queue and
     const waitEvents = w.events.filter((e) => e.type === 'wait') as unknown as { step: string; wait: typeof notice; line: string }[]
     expect(waitEvents).toHaveLength(1)
     expect(waitEvents[0]).toMatchObject({ step: 'gpu', wait: notice })
-    expect(waitEvents[0]?.line).toMatch(/^Waiting for the GPU image abc123 to build \(in progress\)\. Checked just now; next check in (30|29) seconds\.$/)
+    // the seconds left count from nextCheckAt, set before the run: on a busy machine the run itself takes a few of them
+    const line = waitEvents[0]?.line ?? ''
+    expect(line).toMatch(/^Waiting for the GPU image abc123 to build \(in progress\)\. Checked just now; next check in \d+ seconds?\.$/)
+    const left = Number(/next check in (\d+)/.exec(line)?.[1])
+    expect(left).toBeGreaterThan(0)
+    expect(left).toBeLessThanOrEqual(30)
     const { EventSchema } = await import('../../src/installer/answers.js')
     expect(EventSchema.safeParse(waitEvents[0]).success).toBe(true)
     // GPU off: nothing to wait for
