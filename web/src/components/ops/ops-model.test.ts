@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { OpsTile, OpsWidget } from '@/lib/admin-types'
-import { chartRows, momentSummary, opsUrl, refreshIn, stepOf, tileViews } from './ops-model'
+import { chartRows, momentSummary, opsUrl, refreshIn, seriesLabel, stepOf, tileViews } from './ops-model'
 
 const tile = (id: string, o: Partial<OpsTile> = {}): OpsTile => ({ id, label: id, value: 3, unit: 'runs', spark: [1, 2, 3], status: 'ok', ...o })
 
@@ -32,5 +32,12 @@ describe('Operations', () => {
     const w: OpsWidget = { id: 'w', title: 'Runs', kind: 'bar', unit: 'runs', series: [{ label: 'Verification', points: [[1, 2], [2, 1]] }, { label: 'Analog', points: [[1, 2]] }] }
     expect(chartRows(w)).toHaveLength(2)
     expect(momentSummary(w, 1)).toBe('4 runs in all: Verification 2, Analog 2.')
+  })
+
+  it('names a series by its runtime or memory, not its whole ARN', () => {
+    expect(seriesLabel('GetMemory arn:aws:bedrock-agentcore:us-east-1:346073464284:memory/trace_m_8a9ca7b7-n7ExQ1Gm5V Invocations')).toBe('GetMemory trace_m_8a9ca7b7-n7ExQ1Gm5V Invocations')
+    expect(seriesLabel('MicroVM trace_w_8a9ca7b7::DEFAULT InvokeAgentRuntime arn:aws:bedrock-agentcore:us-east-1:346073464284:runtime/trace_w_8a9ca7b7-cBaApuCAk0 Invocations'))
+      .toBe('MicroVM trace_w_8a9ca7b7::DEFAULT InvokeAgentRuntime trace_w_8a9ca7b7-cBaApuCAk0 Invocations')
+    expect(seriesLabel('Agent runs')).toBe('Agent runs')
   })
 })
