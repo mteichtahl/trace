@@ -90,6 +90,9 @@ import { handoffAskEnv } from '../../tools/journey/tools.js'
 import { type HandoffRole } from '../specialist.js'
 import { BranchSchema, type DelegatedTaskJob, type JobPayload, type SweepJob, type TaskJob, type WorkItemJob, checkProject, isDelegated, isHandoff } from './schemas.js'
 
+/** How much of a specialist's report its job keeps: its conclusion (what is still open) comes last, so it is not cut short. */
+export const REPORT_MAX = 8000
+
 // ------------------------------------------------------------------ injected pieces
 
 export interface ExecOptions { cwd?: string; env?: Record<string, string>; signal?: AbortSignal }
@@ -763,7 +766,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
       if (kept) log(kept)
       // a hand-off job that finished without answering: its hand-off is closed, so the asker is told
       if (answering && handoffs) { settled = true; await handoffs.settle(answering.id, endedWithout('succeeded', summary)).catch(() => false) }
-      return `${r.kind}: done in ${out.turns} turns${escalation(summary) ? ' (escalated)' : ''}${prep.issue ? '' : `: ${summary.slice(0, 2000)}`}`
+      return `${r.kind}: done in ${out.turns} turns${escalation(summary) ? ' (escalated)' : ''}${prep.issue ? '' : `: ${summary.slice(0, REPORT_MAX)}`}`
     } finally {
       waits.close()
       if (dtoken) delegations?.unregister(ctx.jobId)
