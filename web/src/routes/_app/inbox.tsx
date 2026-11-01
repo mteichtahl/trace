@@ -74,13 +74,13 @@ function Inbox() {
     setBusy(item.id)
     try {
       const own = c.option === '__other'
-      await call('question.answer', { repo: item.repo, question: item.questionId, ...(own ? { answer: c.answer } : { option: c.option }), ...(c.reason ? { reason: c.reason } : {}) })
+      const r = await call('question.answer', { repo: item.repo, question: item.questionId, ...(own ? { answer: c.answer } : { option: c.option }), ...(c.reason ? { reason: c.reason } : {}) })
       // cleared here at once; the live event refetches Home, the bell and the project everywhere else
       qc.setQueryData<InboxItem[]>(['inbox', {}], (xs) => xs?.filter((x) => x.id !== item.id))
       void qc.invalidateQueries({ queryKey: ['inbox'] })
       void qc.invalidateQueries({ queryKey: ['journey.get', item.repo] })
       setAnswering(null)
-      toast(`Answered. The agent carries on.`)
+      toast(r.summary || 'Answered. The agent carries on.')
     } catch (e) {
       toast.error(`Could not send the answer: ${e instanceof Error ? e.message : String(e)}. Your answer is kept; try again.`)
       throw e

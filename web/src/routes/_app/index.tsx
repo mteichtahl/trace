@@ -66,7 +66,7 @@ function Home() {
     answer.mutate(
       { repo: item.repo, question: item.questionId, option: item.recommended.id },
       {
-        onSuccess: () => toast(`Answered: ${item.recommended!.label}`, { description: `${item.project}: the specialist carries on.` }),
+        onSuccess: (r) => toast(`Answered: ${item.recommended!.label}`, { description: `${item.project}: ${r.summary?.replace(/^Answered\. /, '') ?? 'the agent carries on.'}` }),
         onError: (e) => toast.error('Could not send the answer', { description: `${e.message} Nothing was lost; try again.` }),
       },
     )
