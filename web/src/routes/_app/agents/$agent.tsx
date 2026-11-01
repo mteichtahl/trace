@@ -51,6 +51,7 @@ function Agent() {
   }))).sort((x, y) => y.started - x.started)
   const used = [...recent.reduce((m, r) => m.set(r.kind, (m.get(r.kind) ?? 0) + 1), new Map<string, number>())].sort((x, y) => y[1] - x[1]).slice(0, 5)
   const lines = [...(w?.now ?? []), ...(w?.queue ?? [])]
+  const ended = work.ended.filter((x) => x.run.agent === a.id)
 
   return (
     <Column>
@@ -72,6 +73,18 @@ function Agent() {
           </div>
         )}
         {w && <p className="mt-2 text-sm text-muted-foreground">Last 24 hours: {w.today.runs === 0 ? 'no jobs ended' : `${w.today.runs} ${w.today.runs === 1 ? 'job' : 'jobs'} ended, ${w.today.succeeded} succeeded${w.today.medianS !== null ? `, median ${duration(w.today.medianS, { short: true })}` : ''}`}.</p>}
+      </Section>
+
+      <Section label="Recent jobs and how they ended" count={ended.length} className="mt-10">
+        {work.loading ? (
+          <Loading><SkeletonRows rows={2} /></Loading>
+        ) : ended.length === 0 ? (
+          <EmptyState>No job by the {a.name} agent has ended on your projects yet.</EmptyState>
+        ) : (
+          <ul className="divide-y rounded-xl border">
+            {ended.slice(0, 15).map((x) => <EndedJob key={`${x.repo}:${x.run.id}`} item={x} />)}
+          </ul>
+        )}
       </Section>
 
       <Section label="Waiting on a person, or stuck" count={named.length} className="mt-10">
@@ -140,5 +153,28 @@ function Agent() {
 
       <MemorySheet memory={open} onOpenChange={(o) => !o && setOpen(null)} />
     </Column>
+  )
+}
+
+const ENDED: Record<string, { status: 'passed' | 'failing' | 'warning' | 'idle'; label: string }> = {
+  done: { status: 'passed', label: 'Done' }, failed: { status: 'failing', label: 'Failed' }, cancelled: { status: 'idle', label: 'Cancelled' }, lost: { status: 'warning', label: 'Lost' },
+}
+
+/** One ended job: how it went, what was asked, what it said (its summary, or why it failed or was lost), where, when. */
+function EndedJob({ item }: { item: { repo: string; project: string; run: import('@/lib/types').RunSummary } }) {
+  const r = item.run
+  const e = ENDED[r.state] ?? { status: 'idle' as const, label: r.state }
+  const said = r.state === 'done' ? r.summary : r.error ?? r.summary ?? r.step
+  const at = r.endedAt ?? r.startedAt
+  return (
+    <li className="space-y-1 px-4 py-3 text-sm">
+      <div className="flex items-start gap-3">
+        <StatusBadge plain status={e.status} label={e.label} />
+        <span className="min-w-0 flex-1 font-medium">{r.title}</span>
+        <span className="shrink-0 text-xs text-muted-foreground">{item.project}{at ? ` · ${ago(at)}` : ''}{r.startedAt && r.endedAt ? ` · ${duration((Date.parse(r.endedAt) - Date.parse(r.startedAt)) / 1000, { short: true })}` : ''}</span>
+      </div>
+      {said && <p className="line-clamp-3 text-muted-foreground">{said}</p>}
+      {r.branch && <p className="font-mono text-xs text-muted-foreground">{r.branch}</p>}
+    </li>
   )
 }

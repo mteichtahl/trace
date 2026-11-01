@@ -214,6 +214,8 @@ export interface RunSummary {
   pausedBy?: string
   branch?: string
   summary?: string
+  /** why it failed, or what a lost job was last doing (jobs.list `error`) */
+  error?: string
   endedAt?: string
   /** a job another specialist asked for: the hand-off it answers and who asked (its title says so too) */
   handoff?: { id: string; from?: string; fromName?: string }
