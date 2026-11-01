@@ -32,9 +32,9 @@ export const GUIDES: Record<string, StageGuide> = {
 
 const CAPTURE_STEPS: StageStep[] = [
   { id: 'draft', text: 'trace drafts the schematic sheets', owner: 'trace', state: 'done', ref: null },
-  { id: 'pins', text: 'Agree the pin plan with firmware', owner: 'person', who: 'Priya', state: 'done', ref: { kind: 'criterion', id: 'c4' } },
+  { id: 'pins', text: 'Agree the pin plan with firmware', owner: 'person', who: 'Priya', state: 'done', ref: { kind: 'criterion', id: 'capture.pins' } },
   { id: 'change-12', text: "Review trace's power and USB sheet", owner: 'you', state: 'now', ref: { kind: 'change', id: '12' }, to: '/p/acme~soil-sensor/changes/12' },
-  { id: 'stock', text: 'Check every part is in stock for 10 boards', owner: 'trace', state: 'next', ref: { kind: 'criterion', id: 'c3' } },
+  { id: 'stock', text: 'Check every part is in stock for 10 boards', owner: 'trace', state: 'next', ref: { kind: 'criterion', id: 'capture.stock' } },
   { id: 'sign', text: 'Sign the schematic gate', owner: 'admins', state: 'later', ref: { kind: 'gate', id: 'schematic' }, to: '/p/acme~soil-sensor/gates/schematic' },
 ]
 

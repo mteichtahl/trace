@@ -12,6 +12,7 @@ import { resolveUrl, useFileText } from '@/components/files/data'
 import { baseName, extOf } from '@/components/files/kinds'
 import { svgDataUrl } from '@/components/files/sanitize'
 import { PictureCompare } from '@/components/files/viewers/image'
+import { OverlayView, overlayAvailable } from './overlay'
 import { Note, ViewerError, ViewerLoading } from '@/components/files/viewers/common'
 import { ViewerFor } from '@/components/files/viewers'
 import { KiCanvasView } from '@/components/files/viewers/kicad'
@@ -19,10 +20,11 @@ import { q } from '@/lib/queries'
 import type { ChangeFile } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-type Side = 'before' | 'after' | 'both'
+type Side = 'before' | 'after' | 'both' | 'overlay'
 
 function KiCadSides({ repo, file, before, after }: { repo: string; file: ChangeFile; before: { ref: string; path?: string } | null; after: { ref: string } | null }) {
   const [side, setSide] = useState<Side>(after ? 'after' : 'before')
+  const overlay = overlayAvailable(before, after)
   const board = file.kind === 'board'
   const a = useFileText(before ? { repo, path: before.path ?? file.path } : null, { commit: before?.ref })
   const b = useFileText(after ? { repo, path: file.path } : null, { commit: after?.ref })
@@ -38,10 +40,14 @@ function KiCadSides({ repo, file, before, after }: { repo: string; file: ChangeF
           <ToggleGroupItem value="before" disabled={!before} className="h-7 px-3 text-xs">Before</ToggleGroupItem>
           <ToggleGroupItem value="after" disabled={!after} className="h-7 px-3 text-xs">After</ToggleGroupItem>
           <ToggleGroupItem value="both" disabled={!before || !after} className="h-7 px-3 text-xs">Side by side</ToggleGroupItem>
+          <ToggleGroupItem value="overlay" disabled={!overlay.ok} title={overlay.ok ? 'Before and after on one sheet' : overlay.why} className="h-7 px-3 text-xs">Overlay</ToggleGroupItem>
         </ToggleGroup>
       </div>
+      {!overlay.ok && <p className="border-b px-3 py-1 text-xs text-muted-foreground">{overlay.why}</p>}
       <div className={cn('relative min-h-0 flex-1', side === 'both' && 'grid grid-cols-1 gap-px bg-border md:grid-cols-2')}>
-        {side === 'both' ? (
+        {side === 'overlay' && a.data !== undefined && b.data !== undefined ? (
+          <div className="absolute inset-0"><OverlayView before={a.data} after={b.data} name={baseName(file.path)} board={board} /></div>
+        ) : side === 'both' ? (
           <>
             {[['Before', a.data!], ['After', b.data!]].map(([l, t]) => (
               <div key={l} className="relative min-h-[300px] bg-background">

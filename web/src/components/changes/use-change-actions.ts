@@ -8,6 +8,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { call } from '@/lib/api'
 import type { ChangeAccepted, InboxItem } from '@/lib/types'
+import { showAfterAccept } from './after-accept'
 
 /** The toast after accepting: what moved, and what trace starts next. */
 export function acceptedWords(title: string, r: Pick<ChangeAccepted, 'next' | 'stage'>, step?: { index: number; total: number; stage: string } | null): { title: string; description: string } {
@@ -16,6 +17,15 @@ export function acceptedWords(title: string, r: Pick<ChangeAccepted, 'next' | 's
 }
 
 /** Accept a change from a Needs you card (any project): the same toast, and the item leaves the list. */
+/** After an accept: on a phone the "What happens next" screen; on wider screens the toast, whose action opens it. */
+export function confirmAccepted(a: { repo: string; project?: string; title: string; result: Pick<ChangeAccepted, 'next' | 'stage'> }, step?: { index: number; total: number; stage: string } | null) {
+  const phone = typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 767px)').matches
+  showAfterAccept(a, phone)
+  if (phone) return
+  const w = acceptedWords(a.title, a.result, step)
+  toast.success(w.title, { description: `${a.project ? `${a.project}: ` : ''}${w.description}`, action: { label: 'What happens next', onClick: () => showAfterAccept(a, true) } })
+}
+
 export function useAcceptFromInbox() {
   const qc = useQueryClient()
   const [busy, setBusy] = useState<string | null>(null)
@@ -25,8 +35,7 @@ export function useAcceptFromInbox() {
     setBusy(item.id)
     call('change.accept', { repo, number })
       .then((r) => {
-        const w = acceptedWords(title, r)
-        toast.success(w.title, { description: `${item.project}: ${w.description}` })
+        confirmAccepted({ repo, project: item.project, title, result: r })
         qc.setQueryData<InboxItem[]>(['inbox', {}], (xs) => xs?.filter((x) => x.id !== item.id))
       })
       .catch((e: unknown) => toast.error('Could not accept the change', { description: `${e instanceof Error ? e.message : String(e)} Nothing changed.` }))
@@ -49,7 +58,7 @@ export function useChangeActions(repo: string) {
   const accept = useMutation({
     mutationFn: (a: { number: number; title: string; note?: string; step?: { index: number; total: number; stage: string } | null }) =>
       call('change.accept', { repo, number: a.number, ...(a.note ? { note: a.note } : {}) }),
-    onSuccess: (r, a) => { const w = acceptedWords(a.title, r, a.step); toast.success(w.title, { description: w.description }) },
+    onSuccess: (r, a) => confirmAccepted({ repo, title: a.title, result: r }, a.step),
     onError: (e) => toast.error('Could not accept the change', { description: `${e instanceof Error ? e.message : String(e)} Nothing changed.` }),
     onSettled: (_d, _e, a) => refresh(a.number),
   })

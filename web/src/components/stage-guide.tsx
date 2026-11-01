@@ -12,7 +12,8 @@ import { Facts, SideSheet } from '@/components/side-sheet'
 import { askTrace } from '@/components/chat/chat-state'
 import { SKILLS } from '@/components/skills/definitions'
 import { currentStage, gateMeter, gateOf, ownerWord, stageSteps, stepLabel, stepPlace } from '@/lib/guided'
-import type { Gate, Journey, Stage, StageStep } from '@/lib/types'
+import { stepLink } from '@/lib/step-skills'
+import type { Gate, Journey, RunSummary, Stage, StageStep } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 /** The icon for a step's state; trace's step that runs after you is a dashed ring. */
@@ -27,13 +28,13 @@ function StepIcon({ s }: { s: StageStep }) {
 const STATE_WORD: Record<StageStep['state'], string> = { done: 'done', waived: 'waived', now: 'now', next: 'next', later: 'later' }
 
 /** A stage's steps as a list: done ones struck through, the reader's own step on the accent. */
-export function StepList({ steps, links, className }: { steps: StageStep[]; links?: boolean; className?: string }) {
+export function StepList({ steps, links, className }: { steps: StageStep[]; links?: { projectId: string; jobs?: RunSummary[] }; className?: string }) {
   return (
     <ol className={cn('space-y-0.5', className)}>
       {steps.map((s, i) => {
         const mine = s.owner === 'you' && s.state === 'now'
         const done = s.state === 'done' || s.state === 'waived'
-        const skill = links ? skillFor(s) : undefined
+        const skill = links ? stepLink(s, links) : undefined
         return (
           <li
             key={s.id}
@@ -42,7 +43,7 @@ export function StepList({ steps, links, className }: { steps: StageStep[]; link
           >
             <StepIcon s={s} />
             <span className={cn('min-w-0 flex-1', done && 'text-muted-foreground line-through decoration-muted-foreground/50')}>
-              {s.to && !done ? <Link to={s.to} className="hover:underline">{s.text}</Link> : s.text}
+              {s.to && !done && !links ? <Link to={s.to} className="hover:underline">{s.text}</Link> : s.text}
               {skill && !done && (
                 <>
                   <span className="text-muted-foreground"> · </span>
@@ -56,13 +57,6 @@ export function StepList({ steps, links, className }: { steps: StageStep[]; link
       })}
     </ol>
   )
-}
-
-/** The guided skill that does a step, when there is one: the change's review page, the gate's signing, a stage skill. */
-function skillFor(s: StageStep): { label: string; to: string } | undefined {
-  if (s.to && s.ref?.kind === 'change') return { label: 'Open', to: s.to }
-  if (s.to && s.ref?.kind === 'gate') return { label: 'Gate signing skill', to: s.to }
-  return undefined
 }
 
 /** The overview's guide: two panels on desktop. */
@@ -175,7 +169,7 @@ export function StageSheet({ j, stage, admin, onOpenChange }: { j: Journey; stag
           {steps.length > 0 && (
             <section>
               <h3 className="section-label mb-2">Steps</h3>
-              <StepList steps={steps} links />
+              <StepList steps={steps} links={{ projectId: j.repo.replace('/', '~'), jobs: j.jobs }} />
             </section>
           )}
           {skills.length > 0 && (
