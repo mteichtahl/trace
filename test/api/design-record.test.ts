@@ -3,10 +3,10 @@
  * sheet drawings and sheet → requirements, graph.neighbourhood's intent, block and part nodes, people's decisions
  * (design.decide, and skill.submit for the design skills), and the quality-bar checks that read them.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from 'node:sqlite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
 import { baselineCriteria } from '../../src/api/actions-skills.js'
@@ -16,6 +16,8 @@ import { setCriterion, startJourney } from '../../src/core/journey.js'
 import { Registry } from '../../src/core/registry.js'
 import { openProject } from '../../src/core/store.js'
 import { DesignDb } from '../../src/tools/design/db.js'
+import type { DesignDecision } from '../../src/tools/design/decisions.js'
+import { decisionStands } from '../../src/tools/design/record.js'
 import '../../src/tools/verify/db.js'
 import { FakeCognito, FakeGitHub } from './fixtures.js'
 
@@ -321,6 +323,43 @@ describe('the guided skills read the design record', () => {
     const define = after.gates.find((g) => g.id === 'define')!.criteria
     expect(define.find((x) => x.id === 'define.accepted')).toMatchObject({ status: 'met', evidence: [{ kind: 'skill' }] })
     expect(define.find((x) => x.id === 'define.measurable')).toMatchObject({ status: 'met' })
+  })
+
+  it('an agent\'s change of an accepted requirement\'s words reopens it: shown proposed, and open in Requirements review', async () => {
+    type Req = { id: string; status: string; text: string }
+    const req1 = async (): Promise<Req> => ((await run(USER, 'requirements.trace', { repo: REPO })) as { requirements: Req[] }).requirements.find((q) => q.id === 'REQ-1')!
+    expect(await req1()).toMatchObject({ status: 'accepted', text: 'Range of 2 km line of sight' })
+    const items = async (): Promise<string[]> => ((await run(USER, 'skill.get', { repo: REPO, skill: 'requirements-review' })) as { items?: { id: string }[] }).items?.map((x) => x.id) ?? []
+    expect(await items()).not.toContain('requirement:REQ-1')
+    // the verification agent widens it on the default branch after the person accepted it
+    const key = `${REPO}:main:.trace/project.db`
+    const dir = mkdtempSync(join(scratch, 'edit-'))
+    const path = join(dir, 'project.db')
+    writeFileSync(path, github.files.get(key)!)
+    const db = new DatabaseSync(path)
+    db.prepare("UPDATE requirements SET text='Range of 1.5 km line of sight', status='proposed', updated=? WHERE id='REQ-1'").run(Date.now() / 1000 + 1)
+    db.close()
+    github.files.set(key, readFileSync(path))
+    rmSync(dir, { recursive: true, force: true })
+    expect(await req1()).toMatchObject({ status: 'proposed', text: 'Range of 1.5 km line of sight' })
+    expect(await items()).toContain('requirement:REQ-1')
+    // accepted again, it stands on the new words
+    await run(USER, 'design.decide', { repo: REPO, decision: { kind: 'requirement', requirement: 'REQ-1', choice: 'accept' } })
+    expect(await req1()).toMatchObject({ status: 'accepted' })
+  })
+})
+
+describe('a requirement decision stands on the words it was made on', () => {
+  const dec = (detail: Record<string, unknown>, at = 100): DesignDecision => ({ id: 'd', kind: 'requirement', target: 'R5', choice: 'accepted', detail, by: 'Marc', byHash: 'h', at, supersededAt: null })
+  it('compares the words kept with the decision', () => {
+    expect(decisionStands(dec({ text: '0.5 Hz ± 10 %' }), { text: '0.5 Hz ± 10 %', status: 'proposed', updated: 200 })).toBe(true)
+    expect(decisionStands(dec({ text: '0.5 Hz ± 10 %' }), { text: '0.5 Hz ± 25 %', status: 'accepted', updated: 50 })).toBe(false)
+  })
+  it('without words kept (an older decision), an agent proposing the row again after it reopens it', () => {
+    expect(decisionStands(dec({}), { text: 'x', status: 'proposed', updated: 200 })).toBe(false)
+    expect(decisionStands(dec({}), { text: 'x', status: 'proposed', updated: 50 })).toBe(true)
+    expect(decisionStands(dec({}), { text: 'x', status: 'accepted', updated: 200 })).toBe(true)
+    expect(decisionStands(dec({}), undefined)).toBe(true)
   })
 })
 

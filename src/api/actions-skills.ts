@@ -116,7 +116,7 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
     for (const d of draft ? (() => { const x = designOf(db); return pendingDecisions(skill, draft, x.rows, x.decisions, { acceptRest: false }) })() : []) {
       try {
         const des = designOf(db)
-        recordDesignDecision(db, prepare(d, des.rows, new Set(requirementIds(db)), des.decisions), { label: viewer.label, hash: viewer.hash })
+        recordDesignDecision(db, prepare(d, des.rows, requirementTexts(db), des.decisions), { label: viewer.label, hash: viewer.hash })
       } catch (e) { pendingErrors.push(e instanceof Error ? e.message : String(e)) }
     }
     const live = requirementEvidence(db, r)
@@ -174,7 +174,8 @@ async function caseStaleness(ctx: Context, repo: string, was: unknown): Promise<
   }
 }
 
-const requirementIds = (db: import('node:sqlite').DatabaseSync): string[] => (hasTable(db, 'requirements') ? (db.prepare('SELECT id FROM requirements').all() as { id: string }[]).map((x) => String(x.id)) : [])
+/** Each requirement's id and its words as the record has them: a decision on one keeps the words it was made on. */
+const requirementTexts = (db: import('node:sqlite').DatabaseSync): Map<string, string> => new Map(hasTable(db, 'requirements') ? (db.prepare('SELECT id, text FROM requirements').all() as { id: string; text: string }[]).map((x) => [String(x.id), String(x.text)]) : [])
 const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
 
 /** A number followed by its unit (2 layers, 5.1 kΩ, ±10 %, 40 °C, 0.5 Hz). */
@@ -391,7 +392,7 @@ export const SKILL_ACTIONS = {
       jobId = r.jobId
       started = ['The agents raise the change request for approval.']
     }
-    const { rows: designRows, reqIds } = DESIGN_SKILLS.has(a.skill) ? await withRecordDb(ctx, a.repo, (db) => ({ rows: designOf(db).rows, reqIds: new Set(requirementIds(db)) })) : { rows: null as unknown as DesignRows, reqIds: new Set<string>() }
+    const { rows: designRows, reqIds } = DESIGN_SKILLS.has(a.skill) ? await withRecordDb(ctx, a.repo, (db) => ({ rows: designOf(db).rows, reqIds: requirementTexts(db) })) : { rows: null as unknown as DesignRows, reqIds: new Map<string, string>() }
     const out = await plainly(() => writeJourney(ctx, a.repo, (db) => {
       let ref: string | null = null
       // the design decisions the skill makes (Intent builder, Requirements review, Architecture choice, Pin plan
