@@ -253,6 +253,9 @@ describe('the guided skills read the design record', () => {
     expect(await run(USER, 'skill.submit', { repo: REPO, skill: 'pin-plan-review', draft: {} })).toMatchObject({ ok: true })
     const d = await run(USER, 'design.get', { repo: REPO }) as { pin_plan: { parts: { part: string; agreed: { by: string; stale: boolean } }[] } }
     expect(d.pin_plan.parts[0]).toMatchObject({ part: 'U1', agreed: { by: USER.email, stale: false } })
+    // the agreement is what the schematic review's pin plan criterion waits for
+    const g = await run(USER, 'journey.get', { repo: REPO }) as { gates: { id: string; criteria: { id: string; status: string; evidence: { ref: string; label: string }[] }[] }[] }
+    expect(g.gates.find((x) => x.id === 'capture')?.criteria.find((x) => x.id === 'capture.pins')).toMatchObject({ status: 'met', evidence: [{ ref: 'pin-plan-review', label: expect.stringMatching(/U1 agreed/) }] })
   })
 
   it('Schematic finish: every sheet names its requirements; Board setup: the outline against the intent\'s limits', async () => {

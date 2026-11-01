@@ -413,6 +413,12 @@ export const SKILL_ACTIONS = {
         const chosen = architectureView(designRows, loadDesignDecisions(db)).chosen
         if (chosen) setCriterion(db, 'architect.blocks', 'met', [{ kind: 'skill', ref: 'architecture-choice', label: `Architecture choice: option ${chosen.option}, submitted by ${by.label}` }], by.label)
       }
+      // Pin plan review is the person's agreement the schematic review waits for: it submits only when the plan
+      // matches the schematic (its match check), so its submission meets capture.pins
+      if (a.skill === 'pin-plan-review' && (loadJourney(db)?.criteria ?? []).some((c) => c.id === 'capture.pins')) {
+        const parts = [...new Set((designRows?.pins ?? []).filter((x) => x.status !== 'withdrawn').map((x) => x.part))]
+        setCriterion(db, 'capture.pins', 'met', [{ kind: 'skill', ref: 'pin-plan-review', label: `Pin plan review: ${parts.length ? parts.join(', ') : 'the plan'} agreed, submitted by ${by.label}` }], by.label)
+      }
       if (a.skill === 'waiver') {
         const d = a.draft
         const sev = SEVERITIES.includes(d.severity as never) ? d.severity as (typeof SEVERITIES)[number] : (() => { throw new ActionError('Give the severity.') })()
