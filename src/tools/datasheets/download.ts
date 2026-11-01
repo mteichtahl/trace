@@ -5,7 +5,8 @@
  * six hops) so each hop can be checked: only http(s), no credentials in the URL, and never a private, loopback or
  * link-local address (a cloud instance's metadata service, anything inside a VPC). The body is capped, and what comes
  * back must start with the PDF magic bytes — a vendor's product page is not a datasheet, and is refused with a note
- * to upload the document instead.
+ * to upload the document instead. A page that only wraps the document (LCSC's datasheet links answer an HTML viewer
+ * whose iframe loads the PDF) is followed once to the document it embeds, as one more hop under the same checks.
  */
 import { lookup as lookupCb, type LookupAddress } from 'node:dns'
 import { lookup } from 'node:dns/promises'
@@ -121,6 +122,33 @@ export interface DownloadOptions {
   timeoutMs?: number
 }
 
+/**
+ * The document an HTML page embeds, when it is a page that only wraps one: an iframe, embed or object whose source
+ * is a .pdf (or a pdf.js viewer's ?file=), else null. Only the first such element counts, never a link in the text:
+ * a product page that merely links to several documents is not taken as one of them.
+ */
+export function embeddedPdf(html: string, base: URL): URL | null {
+  const tag = /<(?:iframe|embed|object)\b[^>]*?\b(?:src|data)\s*=\s*["']([^"']+)["']/gi
+  for (let m = tag.exec(html); m; m = tag.exec(html)) {
+    let u: URL
+    try {
+      u = new URL(m[1]!.replace(/&amp;/g, '&'), base)
+    } catch {
+      continue
+    }
+    const file = u.searchParams.get('file')
+    if (file && /viewer\.html$/i.test(u.pathname)) {
+      try {
+        u = new URL(file, u)
+      } catch {
+        continue
+      }
+    }
+    if (/\.pdf$/i.test(u.pathname)) return u
+  }
+  return null
+}
+
 export async function downloadPdf(start: string, opts: DownloadOptions = {}): Promise<Downloaded> {
   const f: FetchLike = opts.fetch ?? guardedFetch
   const resolveHost = opts.resolveHost ?? dnsResolve
@@ -131,6 +159,7 @@ export async function downloadPdf(start: string, opts: DownloadOptions = {}): Pr
   } catch {
     throw new DownloadError(`not a URL: ${start}`)
   }
+  let embedFollowed = false
   for (let hop = 0; hop < 7; hop++) {
     if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new DownloadError(`refusing a ${url.protocol} URL`)
     if (url.username || url.password) throw new DownloadError('refusing a URL with credentials')
@@ -174,6 +203,14 @@ export async function downloadPdf(start: string, opts: DownloadOptions = {}): Pr
       at += c.length
     }
     const contentType = r.headers.get('content-type') ?? 'unknown type'
+    if (!isPdf(bytes) && !embedFollowed) {
+      const inner = embeddedPdf(new TextDecoder().decode(bytes.subarray(0, 2_000_000)), url)
+      if (inner && inner.toString() !== url.toString()) {
+        embedFollowed = true
+        url = inner
+        continue
+      }
+    }
     if (!isPdf(bytes)) {
       throw new DownloadError(`${url.toString()} is not a PDF (${contentType}): probably a product page; download the document and add it as a file`)
     }

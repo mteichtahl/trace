@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { bridge } from '../../../src/core/bridge.js'
 import { Central } from '../../../src/core/central.js'
 import { ToolError, Registry } from '../../../src/core/registry.js'
-import { DownloadError, downloadPdf, guardedFetch, isPrivateAddress } from '../../../src/tools/datasheets/download.js'
+import { DownloadError, downloadPdf, embeddedPdf, guardedFetch, isPrivateAddress } from '../../../src/tools/datasheets/download.js'
 import { DatasheetLibrary } from '../../../src/tools/datasheets/library.js'
 import { mpnKey, mpnLoose, packagingBase } from '../../../src/tools/datasheets/mpn.js'
 import { tools } from '../../../src/tools/datasheets/tools.js'
@@ -128,6 +128,31 @@ describe('downloads', () => {
     expect(d.filename).toBe('tpx123.pdf')
     expect(seen.map((s) => s.url)).toEqual(['https://vendor.example/ds', 'https://vendor.example/files/tpx123.pdf'])
     expect(seen[0]?.ua).toMatch(/Mozilla/)
+  })
+
+  it('follows the one PDF a wrapper page embeds (LCSC\'s datasheet links), under the same checks', async () => {
+    // what https://www.lcsc.com/datasheet/C23151.pdf answers: an HTML viewer whose iframe loads the document
+    const page = '<html><body><iframe src="https://datasheet.lcsc.com/datasheet/pdf/0a975aaa.pdf?productCode=C23151"></iframe>'
+      + '<iframe src="https://static.lcsc.com/pdfjs/web/viewer.html?file=https%3A%2F%2Fdatasheet.lcsc.com%2Fdatasheet%2Fpdf%2F0a975aaa.pdf"></iframe></body></html>'
+    const seen: string[] = []
+    const fetch = async (url: string) => {
+      seen.push(url)
+      return url.includes('datasheet.lcsc.com') ? new Response(pdf, { status: 200, headers: { 'content-type': 'application/pdf' } })
+        : new Response(page, { status: 200, headers: { 'content-type': 'text/html' } })
+    }
+    const d = await downloadPdf('https://www.lcsc.com/datasheet/C23151.pdf', { fetch, resolveHost })
+    expect(seen).toEqual(['https://www.lcsc.com/datasheet/C23151.pdf', 'https://datasheet.lcsc.com/datasheet/pdf/0a975aaa.pdf?productCode=C23151'])
+    expect(d.finalUrl).toBe('https://datasheet.lcsc.com/datasheet/pdf/0a975aaa.pdf?productCode=C23151')
+    // the viewer form alone, and the embed followed once only (a page embedding itself, or another page, is refused)
+    expect(embeddedPdf('<iframe src="/pdfjs/web/viewer.html?file=%2Ffiles%2Fa.pdf">', new URL('https://v.example/x'))?.toString()).toBe('https://v.example/files/a.pdf')
+    const loop = async () => new Response('<iframe src="/again.pdf">', { status: 200, headers: { 'content-type': 'text/html' } })
+    await expect(downloadPdf('https://vendor.example/p', { fetch: loop, resolveHost })).rejects.toThrow(/not a PDF/)
+    // an embed to a private address is refused like any other hop
+    const inside = async () => new Response('<iframe src="http://169.254.169.254/latest.pdf">', { status: 200, headers: { 'content-type': 'text/html' } })
+    await expect(downloadPdf('https://vendor.example/p', { fetch: inside, resolveHost: async (h) => (h === '169.254.169.254' ? [h] : ['93.184.216.34']) })).rejects.toThrow(/not a public address/)
+    // a product page that only links to documents is still refused
+    const links = async () => new Response('<a href="/a.pdf">A</a><a href="/b.pdf">B</a>', { status: 200, headers: { 'content-type': 'text/html' } })
+    await expect(downloadPdf('https://vendor.example/p', { fetch: links, resolveHost })).rejects.toThrow(/not a PDF/)
   })
 
   it('refuses product pages and private addresses', async () => {
