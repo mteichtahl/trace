@@ -31,7 +31,8 @@ import { z } from 'zod'
 import { AgentFactsStore, projectsBackend, projectsFromEnv } from '../../core/agent-facts.js'
 import { type HandoffFact, HandoffError, type Limits, loadDeclines, loadHandoffs, markFailed, markStarted } from '../../core/handoffs.js'
 import { JourneyStore } from '../../core/journey-store.js'
-import { SPECIALIST_WORDS, type SpecialistKind } from '../kinds.js'
+import { JobIndexStore, isLive, loadJobs } from '../../core/job-index.js'
+import { SPECIALIST_KINDS, SPECIALIST_WORDS, type SpecialistKind } from '../kinds.js'
 import { type Accepted, type HandoffTaskJob, type JobPayload } from './schemas.js'
 
 export const HandoffStartRequest = z.object({ token: z.string().min(16).max(200), id: z.string().regex(/^ho[0-9a-f]{14}$/) }).strict()
@@ -52,6 +53,12 @@ export interface HandoffRunner {
   declined(id: string): Promise<{ reason: string; by: string } | null>
   /** the job ended: close the hand-off as failed, with `why`, unless it was answered. True when it closed it. */
   settle(id: string, why: string): Promise<boolean>
+  /**
+   * The job answered its hand-off and ended: when the job that asked has ended too, start the asking specialist again
+   * on `branch` (the answering job's, where the answer's work is), told the answer, so it checks it and carries on. A
+   * job that asked and is still queued, running or paused reads the answer itself. The new job's id, or null.
+   */
+  carryOn(id: string, branch: string, startJob: (p: JobPayload) => Accepted): Promise<string | null>
 }
 
 export interface HandoffRuntime extends HandoffRunner {
@@ -93,7 +100,7 @@ export function handoffPayload(h: HandoffFact, repository: string): HandoffTaskJ
   }
 }
 
-export function createHandoffRuntime(o: { facts: AgentFactsStore; journey: Pick<JourneyStore, 'read'>; repository: string }): HandoffRuntime {
+export function createHandoffRuntime(o: { facts: AgentFactsStore; journey: Pick<JourneyStore, 'read'>; repository: string; jobs?: Pick<JobIndexStore, 'read'>; now?: () => number }): HandoffRuntime {
   const byJob = new Map<string, { job: AskingJob; token: string }>()
   const byToken = (token: string): AskingJob => {
     for (const e of byJob.values()) if (same(e.token, token)) return e.job
@@ -143,7 +150,29 @@ export function createHandoffRuntime(o: { facts: AgentFactsStore; journey: Pick<
     async settle(id, why) {
       return (await o.facts.update((db) => { const n = markFailed(db, id, why); return { result: n, changed: n } })).result
     },
+    async carryOn(id, branch, startJob) {
+      const h = (await o.facts.read((db) => loadHandoffs(db).find((x) => x.id === id) ?? null)).result
+      const kind = SPECIALIST_KINDS.find((k) => k === h?.fromAgent)
+      if (!h || h.state !== 'answered' || !kind) return null
+      const asker = o.jobs ? (await o.jobs.read((db) => loadJobs(db).find((j) => j.id === h.fromJob) ?? null)).result : null
+      if (asker && (asker.state === 'queued' || asker.state === 'paused' || isLive(asker, (o.now ?? (() => Date.now() / 1000))()))) return null
+      const r = startJob({ kind: 'task', repository: o.repository, agent: kind, branch, request: carryOnRequest(h, branch), requestedBy: `hand-off ${h.id}` })
+      return r.accepted ? r.jobId : null
+    },
   }
+}
+
+/**
+ * What the asking specialist is told when its hand-off was answered after its job ended: carry on on the answering
+ * job's branch, where the answer's work is, so its pull request carries both the answer and the asker's check of it.
+ */
+export function carryOnRequest(h: HandoffFact, branch: string): string {
+  return [
+    `Your hand-off ${h.id} to the ${SPECIALIST_WORDS[h.toKind]} specialist was answered after your job ended. You asked: ${h.question.slice(0, 1500)}`,
+    `Its answer (read it in full with journey.status, handoff ${h.id}): ${(h.answer ?? '').slice(0, 3000)}`,
+    `${h.acceptanceMet === false ? 'It says your acceptance is not all met. ' : ''}The answer's work is on ${branch}: you are on that branch. Check the answer against your acceptance with your own tools (re-run what it changed: your test items, checks or analyses), record what you find as before, and push to the same branch so its pull request carries the answer and your check of it.`,
+    'Carry on with what the answer unblocked. If it does not hold, say so with the numbers: ask a person (journey.ask) rather than hand the same question back.',
+  ].join('\n')
 }
 
 let current: HandoffRuntime | null | undefined
@@ -157,7 +186,7 @@ export function defaultHandoffRuntime(env: NodeJS.ProcessEnv = process.env): Han
   const where = projectsFromEnv(env)
   if (!where || !env.TRACE_PROJECT?.trim()) { current = null; return null }
   const store = projectsBackend(where.projects)
-  current = createHandoffRuntime({ facts: new AgentFactsStore(store, where.repository), journey: new JourneyStore(store, where.repository), repository: where.repository })
+  current = createHandoffRuntime({ facts: new AgentFactsStore(store, where.repository), journey: new JourneyStore(store, where.repository), jobs: new JobIndexStore(store, where.repository), repository: where.repository })
   return current
 }
 
