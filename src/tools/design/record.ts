@@ -126,10 +126,31 @@ export function linksView(rows: DesignRows): { requirement: string; intent: stri
 
 // ------------------------------------------------------------------ requirements: people's decisions over the table
 
-/** A requirement's standing decision: accepted, or struck with the reason. */
-export function requirementDecisions(decisions: readonly DesignDecision[]): Map<string, { choice: 'accepted' | 'struck'; reason: string | null; by: string; at: string }> {
+/** A requirement row as far as its decision needs it: its words, status and when an agent last changed it. */
+export interface RequirementNow { text: string; status: string; updated: number | null }
+
+/**
+ * Whether a person's decision on a requirement still stands on the row as it is now. A decision keeps the words it was
+ * made on (detail.text), and an agent's later change of them reopens it, the way intent decisions do. A decision
+ * recorded before the words were kept stands until an agent proposes the requirement again after it (status
+ * proposed, changed after the decision).
+ */
+export function decisionStands(d: DesignDecision, now: RequirementNow | undefined): boolean {
+  if (!now) return true
+  if (typeof d.detail.text === 'string') return d.detail.text === now.text
+  return !(now.status === 'proposed' && now.updated !== null && now.updated > d.at)
+}
+
+/**
+ * A requirement's standing decision: accepted, or struck with the reason. Given the rows as they are now, a decision
+ * an agent's change has reopened is left out, so the requirement is the person's to decide again.
+ */
+export function requirementDecisions(decisions: readonly DesignDecision[], rows?: ReadonlyMap<string, RequirementNow>): Map<string, { choice: 'accepted' | 'struck'; reason: string | null; by: string; at: string }> {
   const m = new Map<string, { choice: 'accepted' | 'struck'; reason: string | null; by: string; at: string }>()
-  for (const [id, d] of standing(decisions, 'requirement')) m.set(id, { choice: d.choice === 'struck' ? 'struck' : 'accepted', reason: typeof d.detail.reason === 'string' ? d.detail.reason : null, by: d.by, at: iso(d.at) })
+  for (const [id, d] of standing(decisions, 'requirement')) {
+    if (rows && !decisionStands(d, rows.get(id))) continue
+    m.set(id, { choice: d.choice === 'struck' ? 'struck' : 'accepted', reason: typeof d.detail.reason === 'string' ? d.detail.reason : null, by: d.by, at: iso(d.at) })
+  }
   return m
 }
 

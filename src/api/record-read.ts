@@ -13,7 +13,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { JourneyRecord } from '../core/journey.js'
 import { type DesignDecision, loadDesignDecisions } from '../tools/design/decisions.js'
 import { type DesignRows, readDesignRows } from '../tools/design/db.js'
-import { parseNets, requirementDecisions } from '../tools/design/record.js'
+import { type RequirementNow, parseNets, requirementDecisions } from '../tools/design/record.js'
 import type { Drawing } from '../tools/kicad/export.js'
 import { type CheckReport, parseDrc, parseErc } from '../tools/kicad/checks.js'
 
@@ -38,6 +38,10 @@ export interface TraceRequirement {
   waiver: string | null
 }
 
+/** The requirement rows as a decision on one is checked against them (record.ts decisionStands). */
+const requirementsNow = (all: readonly Record<string, unknown>[]): Map<string, RequirementNow> =>
+  new Map(all.map((q) => [String(q.id), { text: String(q.text), status: String(q.status), updated: typeof q.updated === 'number' ? q.updated : null }]))
+
 /**
  * Every live requirement (not rejected or obsolete) with its evidence status:
  *   waived     an open waiver on the requirement in the journey, or every one of its tests is waived
@@ -49,8 +53,9 @@ export function requirementEvidence(db: DatabaseSync, r: JourneyRecord | null): 
   if (!hasTable(db, 'requirements')) return []
   const tests = hasTable(db, 'test_items') ? rows(db, 'SELECT id, title, requirements, method, status, last_run FROM test_items ORDER BY id') : []
   const waived = new Map((r?.waivers ?? []).filter((w) => w.closedAt === null && w.targetKind === 'requirement').map((w) => [w.target, w]))
-  const decided = requirementDecisions(loadDesignDecisions(db))
-  return rows(db, 'SELECT id, text, kind, acceptance, source, status FROM requirements ORDER BY id').flatMap((q) => {
+  const all = rows(db, 'SELECT * FROM requirements ORDER BY id')
+  const decided = requirementDecisions(loadDesignDecisions(db), requirementsNow(all))
+  return all.flatMap((q) => {
     const d = decided.get(String(q.id))
     // a person's decision stands over the agents' row; without one, the row's own status
     if (d ? d.choice === 'struck' : q.status === 'rejected' || q.status === 'obsolete') return []
@@ -187,8 +192,9 @@ export function runImages(db: DatabaseSync, kinds: readonly string[]): { path: s
  * reason a person gave when they struck it (null: struck without one, by an agent or before reasons were kept). */
 export function struckRequirements(db: DatabaseSync): { id: string; reason: string | null; by: string | null }[] {
   if (!hasTable(db, 'requirements')) return []
-  const decided = requirementDecisions(loadDesignDecisions(db))
-  return rows(db, 'SELECT id, status FROM requirements ORDER BY id').flatMap((q) => {
+  const all = rows(db, 'SELECT * FROM requirements ORDER BY id')
+  const decided = requirementDecisions(loadDesignDecisions(db), requirementsNow(all))
+  return all.flatMap((q) => {
     const d = decided.get(String(q.id))
     const struck = d ? d.choice === 'struck' : q.status === 'rejected' || q.status === 'obsolete'
     return struck ? [{ id: String(q.id), reason: d?.choice === 'struck' ? d.reason : null, by: d?.by ?? null }] : []

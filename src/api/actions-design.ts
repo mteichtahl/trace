@@ -49,8 +49,8 @@ async function repoRows(ctx: Context, repo: string) {
   return withProjectDb(ctx, repo, (path) => {
     const db = openProjectDb(path)
     try {
-      const reqs = (db.prepare('SELECT id FROM requirements').all() as { id: string }[]).map((r) => String(r.id))
-      return { rows: readDesignRows(db), requirements: new Set(reqs) }
+      const reqs = db.prepare('SELECT id, text FROM requirements').all() as { id: string; text: string }[]
+      return { rows: readDesignRows(db), requirements: new Map(reqs.map((r) => [String(r.id), String(r.text)])) }
     } finally {
       db.close()
     }
@@ -61,7 +61,7 @@ async function repoRows(ctx: Context, repo: string) {
  * Check one decision against what the agents proposed, and say in words what it records. Throws the person's error
  * when the decision names something that is not there, or chooses against the recommendation without a reason.
  */
-export function prepare(d: DecisionInput, rows: Awaited<ReturnType<typeof repoRows>>['rows'], requirements: ReadonlySet<string>, prior: readonly DesignDecision[]): { kind: DesignDecision['kind']; target: string; choice: string; detail: Record<string, unknown>; summary: string } {
+export function prepare(d: DecisionInput, rows: Awaited<ReturnType<typeof repoRows>>['rows'], requirements: ReadonlyMap<string, string>, prior: readonly DesignDecision[]): { kind: DesignDecision['kind']; target: string; choice: string; detail: Record<string, unknown>; summary: string } {
   switch (d.kind) {
     case 'intent': {
       const s = intentView(rows, prior).find((x) => x.id === d.statement)
@@ -83,7 +83,8 @@ export function prepare(d: DecisionInput, rows: Awaited<ReturnType<typeof repoRo
       if (!requirements.has(d.requirement)) throw new ActionError(`There is no requirement ${d.requirement} in this project.`)
       if (d.choice === 'strike' && !d.reason) throw new ActionError('Say in a line why the requirement is struck, so a later review can see why.')
       return {
-        kind: 'requirement', target: d.requirement, choice: d.choice === 'accept' ? 'accepted' : 'struck', detail: d.reason ? { reason: d.reason } : {},
+        // the words decided on are kept: an agent's later change of them reopens the decision (record-read.ts)
+        kind: 'requirement', target: d.requirement, choice: d.choice === 'accept' ? 'accepted' : 'struck', detail: { text: requirements.get(d.requirement), ...(d.reason ? { reason: d.reason } : {}) },
         summary: d.choice === 'accept' ? `Requirement ${d.requirement} was accepted.` : `Requirement ${d.requirement} was struck: ${d.reason}`,
       }
     }
