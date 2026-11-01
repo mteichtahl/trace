@@ -183,7 +183,7 @@ export function readJob(j: Obj): RunSummary {
     ...(str(j.agent) ? { agent: String(j.agent) } : {}), ...(str(j.agentName) ? { agentName: String(j.agentName) } : {}),
     ...(str(j.startedBy) ? { startedBy: String(j.startedBy) } : {}), yours: Boolean(j.yours), held: Boolean(j.held),
     ...(str(j.pausedBy) ? { pausedBy: String(j.pausedBy) } : {}), ...(str(j.branch) ? { branch: String(j.branch) } : {}),
-    ...(str(j.summary) ? { summary: String(j.summary) } : {}), ...(str(j.endedAt) ? { endedAt: String(j.endedAt) } : {}),
+    ...(str(j.summary) ? { summary: String(j.summary) } : {}), ...(str(j.error) ? { error: String(j.error) } : {}), ...(str(j.endedAt) ? { endedAt: String(j.endedAt) } : {}),
     ...(isObj(j.handoff) && str(j.handoff.id) ? { handoff: { id: String(j.handoff.id), ...(str(j.handoff.from) ? { from: String(j.handoff.from) } : {}), ...(str(j.handoff.fromName) ? { fromName: String(j.handoff.fromName) } : {}) } } : {}),
   }
 }

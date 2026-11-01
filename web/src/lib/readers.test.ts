@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import answers from './api-answers.json'
-import { READERS, readFileUrl, readJourney } from './readers'
+import { READERS, readFileUrl, readJob, readJourney } from './readers'
 import type { InboxItem, Journey, Member, MeDoc, ProjectJobs } from './types'
 import type { JourneyMore } from './types-s1'
 
@@ -43,6 +43,12 @@ describe('reading the API\'s answers', () => {
     expect(queued!.step).toBeUndefined()
     expect(done).toMatchObject({ state: 'done', controls: [], summary: 'verify: done in 9 turns' })
     expect(r.agents.find((a) => a.id === 'verify')).toMatchObject({ status: 'working', now: [run!.id], queue: [queued!.id], today: { runs: 1, succeeded: 1 } })
+  })
+
+  it('jobs.list: a failed or lost job keeps why (its error), for the agent page\'s ended jobs', () => {
+    const lost = readJob({ id: 'h.job-x', workerJobId: 'job-x', title: 'Draft the schematic', state: 'lost', agent: 'impl', error: 'trace lost contact with it. Its last lines: "tool: kicad.erc".', step: 'trace lost contact with it.', startedAt: '2026-10-31T23:00:00Z' })
+    expect(lost).toMatchObject({ state: 'lost', agent: 'impl', error: expect.stringMatching(/Its last lines/) })
+    expect(readJob({ id: 'h.job-y', workerJobId: 'job-y', title: 't', state: 'succeeded' }).error).toBeUndefined()
   })
 
   it('jobs.list and journey.get: the hand-offs between specialists, and a hand-off job that says who asked', () => {

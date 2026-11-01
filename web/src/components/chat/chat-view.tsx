@@ -129,6 +129,7 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
 
   const send = async (text: string) => {
     stopSpeaking()
+    pinned.current = true
     agent.addMessage({ id: crypto.randomUUID(), role: 'user', content: text })
     push(text)
     // kept first, so the chat agent knows which turn its reply follows
@@ -153,12 +154,22 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, agentId])
 
-  // keep the newest message in view while it streams
+  // the newest message stays in view: the panel opens at it (a kept conversation loads with the panel at its top, and
+  // its cards and replies grow after they first draw), and follows what streams in, until the person scrolls up to
+  // read; scrolling back to the bottom, or sending, follows again
+  const pinned = useRef(true)
+  const toBottom = useCallback(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight }, [])
   useEffect(() => {
     const el = scroller.current
     if (!el) return
-    if (el.scrollHeight - el.scrollTop - el.clientHeight < 160) el.scrollTop = el.scrollHeight
-  }, [messages])
+    const onScroll = () => { pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 160 }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    const grew = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => { if (pinned.current) toBottom() })
+    for (const child of Array.from(el.children)) grew?.observe(child)
+    grew?.observe(el)
+    return () => { el.removeEventListener('scroll', onScroll); grew?.disconnect() }
+  }, [toBottom, messages.length])
+  useEffect(() => { if (pinned.current) toBottom() }, [messages, toBottom])
 
   const toolResults = useMemo(() => new Map(messages.filter((m) => m.role === 'tool').map((m) => [m.toolCallId, m])), [messages])
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')?.id

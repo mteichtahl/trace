@@ -137,6 +137,9 @@ export function useWork() {
     handoffs,
     running: items.filter((x) => x.run.state === 'running' || x.run.state === 'paused'),
     queued: items.filter((x) => x.run.state === 'queued'),
+    /** the jobs that ended (done, failed, cancelled) or were lost, newest first: how each went */
+    ended: items.filter((x) => x.run.state !== 'running' && x.run.state !== 'paused' && x.run.state !== 'queued')
+      .sort((a, b) => (b.run.endedAt ?? b.run.startedAt ?? '').localeCompare(a.run.endedAt ?? a.run.startedAt ?? '')),
     agents: mergeAgents(per),
     write: new Set((projects.data ?? []).filter((p) => (p.part ?? 'contributor') !== 'reviewer').map((p) => p.repo)),
     loading: lists.some((j) => j.isLoading),
