@@ -58,6 +58,8 @@ describe('specialists', () => {
     expect(new Set(area('verify'))).toEqual(new Set(['verify', 'sim', 'kicad', 'protocol']))
     expect(area('impl')).toEqual(expect.arrayContaining(['fpga', 'pcb', 'kicad', 'render']))
     expect(SPECIALISTS.impl.tools).not.toContain('verify.run')
+    // Architect and Capture are its stages: it sizes, picks parts and checks the schematic itself
+    expect(SPECIALISTS.impl.tools).toEqual(expect.arrayContaining(['kicad.erc', 'kicad.netlist', 'calc.rc_timing', 'calc.led_resistor', 'parts.search', 'parts.fetch_datasheet']))
     expect(new Set(area('ams'))).toEqual(new Set(['ams', 'sim', 'calc', 'datasheets', 'parts', 'protocol']))
     expect(new Set(area('emc'))).toEqual(new Set(['emc', 'calc', 'kicad', 'protocol']))
     expect(new Set(area('render'))).toEqual(new Set(['render']))

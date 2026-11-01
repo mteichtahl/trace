@@ -17,12 +17,25 @@ export const impl: Specialist = {
     'fpga.synth', 'fpga.pnr', 'fpga.timing', 'fpga.closure', 'fpga.bitstream',
     'pcb.autoroute', 'pcb.placement_check', 'pcb.length_match', 'pcb.floorplan',
     'kicad.drc', 'kicad.net_length',
+    // Architect (its options are sized and their parts picked) and Capture (the schematic and its ERC) are this
+    // specialist's stages too (src/api/actions-journey.ts STAGE_WORK)
+    'kicad.erc', 'kicad.netlist', 'kicad.bom', 'kicad.projects',
+    'calc.rc_timing', 'calc.led_resistor', 'calc.divider', 'calc.regulator_feedback', 'calc.ldo_thermal', 'calc.power',
+    'calc.trace_width', 'calc.via', 'calc.impedance',
+    'parts.search', 'parts.alternatives', 'parts.bom_check', 'parts.fetch_datasheet',
+    'datasheets.list', 'datasheets.add',
     'render.board',
     'protocol.compat', 'protocol.check', 'protocol.diagram',
     'mech.board', 'mech.init', 'mech.settings', 'mech.build', 'mech.fit', 'mech.hand_in', 'mech.capabilities',
     'mech.capabilities_check', 'mech.order',
   ],
   workflow: [
+    'Architect: size each option\'s key circuits with the calc tools (calc_rc_timing, calc_led_resistor,'
+      + ' calc_divider, calc_regulator_feedback, calc_ldo_thermal) rather than by hand; pick its parts with'
+      + ' parts_search and parts_lookup, pull their datasheets (parts_fetch_datasheet) and check stock for the build'
+      + ' quantity (parts_bom_check). A circuit outside these (a filter, a converter loop, noise) is a hand-off to ams.',
+    'Capture: once the schematic is written, kicad_erc on it and kicad_netlist to check every connection the'
+      + ' architecture names; kicad_bom to check each part carries its MPN, manufacturer and LCSC fields.',
     'Recall earlier implementation sessions (memory_recall): seeds and placer settings that closed before, known'
       + ' tight paths, routing decisions. Read the job and find the design: the FPGA top and constraints (.pcf, .lpf,'
       + ' .cst, .sdc/.xdc) or the KiCad board (.kicad_pcb).',
