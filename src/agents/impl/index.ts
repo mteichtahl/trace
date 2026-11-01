@@ -20,6 +20,9 @@ export const impl: Specialist = {
     // Architect (its options are sized and their parts picked) and Capture (the schematic and its ERC) are this
     // specialist's stages too (src/api/actions-journey.ts STAGE_WORK)
     'kicad.erc', 'kicad.netlist', 'kicad.bom', 'kicad.projects',
+    // the accepted requirements every stage's work starts from (STAGE_WORK): read only, the tool refuses this
+    // specialist add and update (the Verification specialist's)
+    'verify.requirements',
     'calc.rc_timing', 'calc.led_resistor', 'calc.divider', 'calc.regulator_feedback', 'calc.ldo_thermal', 'calc.power',
     'calc.trace_width', 'calc.via', 'calc.impedance',
     'parts.search', 'parts.alternatives', 'parts.bom_check', 'parts.fetch_datasheet',

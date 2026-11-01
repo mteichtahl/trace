@@ -148,7 +148,8 @@ export async function carryOn(ctx: Context, repo: string, asked: { id: string; t
 
 /**
  * The work a stage starts when the gate before it is signed: the specialist and what it is asked. Architect: the
- * options a person then chooses between in Architecture choice (docs/user-journey.md, 2. Architect).
+ * options a person then chooses between in Architecture choice (docs/user-journey.md, 2. Architect). A stage with
+ * trace-owned criteria and no entry here starts nothing, and waits with the next step saying trace is working.
  */
 export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KINDS)[number]; request: string; started: string }>> = {
   architect: {
@@ -174,6 +175,40 @@ export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KIN
       'Datasheets: pull each active part\'s datasheet and compare its limits (voltages, currents, power, temperature) with the operating point; record capture.datasheets with journey.check, each conflict named with the page it comes from.',
       'Pin plan: propose it with design.pins (connectors and every programmable part\'s pins, each with its net and function) for a person to agree in Pin plan. Do not agree it yourself.',
       'A part that breaks a requirement, or a choice the architecture did not make, is a question for a person (journey.ask): ask it, do not pick for them.',
+    ].join('\n'),
+  },
+  prove: {
+    agent: 'verify',
+    started: 'The Verification agent plans a test for every requirement it can check before layout, and runs them.',
+    request: [
+      'The schematic review gate was signed: the project is in Prove. Prove the schematic against the accepted requirements before layout.',
+      'Read the accepted requirements with their acceptance criteria (verify.requirements list) and the schematic.',
+      'Plan a test item for every requirement that can be checked before layout (verify.plan): SPICE (sim.kicad_spice or sim.spice, with sim.sweep or sim.montecarlo for corners and tolerances) for the analog behaviour, inspection of the schematic for parts and fields, the rest with the method that fits. A requirement that can only be checked on the board or the bench gets its item planned for later, with that method, not run now.',
+      'Run them (verify.run) at the corners each acceptance names, and record coverage (verify.coverage). Record prove.verified and prove.failing with journey.check, each with the runs as evidence.',
+      'A test that fails is not yours to fix by changing the requirement: report it with the numbers, and hand the circuit change to the Implementation specialist (journey.handoff), or ask a person (journey.ask) when the requirement itself may be wrong. Do not waive anything yourself.',
+      'Finish with verify.report: what is verified, what is planned for later and why, and anything failing.',
+    ].join('\n'),
+  },
+  layout: {
+    agent: 'impl',
+    started: 'The Implementation agent lays out the board and runs the layout review checks.',
+    request: [
+      'The design proven gate was signed: the project is in Layout. Lay out the board for the proven schematic.',
+      'Read the accepted requirements (verify.requirements list) for the outline, layers and anything that constrains placement, and the schematic.',
+      'Create the board from the schematic, draw the outline the requirements allow, place the parts (pcb.floorplan, pcb.placement_check), and route every connection (pcb.autoroute, finishing by hand where it fails). Size power traces with calc.trace_width.',
+      'Check it: kicad.drc clean (or each finding explained), every connection routed, matched lengths where the design names any (pcb.length_match, kicad.net_length). Record layout.routed, layout.drc and layout.lengths with journey.check, and layout.pins if the pin plan applies.',
+      'Render the board (render.board) so a person can approve the renders. Do not approve them yourself.',
+      'A change the layout forces on the schematic or a requirement is a question for a person (journey.ask), not yours to make.',
+    ].join('\n'),
+  },
+  signoff: {
+    agent: 'verify',
+    started: 'The Verification agent closes coverage and writes the release report for Sign-off.',
+    request: [
+      'The layout review gate was signed: the project is in Sign-off. Prepare the release report.',
+      'Run what the layout made possible (the items planned for after layout), then close coverage (verify.coverage): every requirement verified or waived, the gaps named. Record signoff.coverage with journey.check.',
+      'Hand the parts list check (cost and stock at the build quantity, then signoff.bom) to the Implementation specialist, and the interference prechecks (then signoff.emc) to the EMC specialist, each with journey.handoff, and put their answers in the report.',
+      'Write the release report with verify.report: coverage, interference estimates, the parts list and its cost, and every open waiver, for a person to review. Do not sign or waive anything yourself.',
     ].join('\n'),
   },
 }
