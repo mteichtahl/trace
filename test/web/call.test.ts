@@ -184,6 +184,11 @@ describe('the bundle', () => {
       const auth = readFileSync(join(out, 'authorizer.mjs'), 'utf8')
       expect(auth).toContain('EVENT_SUBSCRIBE')
       expect(auth).not.toContain('node:sqlite')
+      // and GitHub's webhook's function (src/web/hooks-lambda.ts): the route alone, no SQLite (it never reads the store)
+      const hooks = readFileSync(join(out, 'hooks.mjs'), 'utf8')
+      expect(hooks).toContain('streamifyResponse')
+      expect(hooks).toContain('x-hub-signature-256')
+      expect(hooks).not.toContain('node:sqlite')
     } finally {
       rmSync(out, { recursive: true, force: true })
     }

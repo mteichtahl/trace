@@ -25,8 +25,10 @@
  * or added by an earlier update, to the saved settings' repositories (the installer's saved settings are never
  * rewritten here: the records carry them until the installer runs again and takes them in). After a deploy that
  * succeeded each pending record is marked added; after one that failed it counts an attempt. A newly added project then
- * gets what the installer would give it: its token secret (a copy of the shared token) and its repository's variables and
- * TRACE_TOKEN, best effort, with the step summary saying what is left to do by hand.
+ * gets what the installer would give it: its token secret (a copy of the shared token), its repository's variables and
+ * TRACE_TOKEN, and (web.hooks) its live updates from GitHub: the webhook registered with the secret the installer made
+ * (src/installer/hooks.ts; this job reads that secret, never makes or changes it), best effort, with the step summary
+ * saying what is left to do by hand.
  *
  * What it never does: the installer's GitHub admin steps (rulesets, onboarding, people, this machine's settings), and
  * anything the self-update role cannot (it reads installation/*, lists and marks installation/pending-projects/*, writes
@@ -57,6 +59,8 @@ import { checkToken, deleteVariable, getVariable, immutableSubject, repositoryDe
 import { deployEdge, withAcl } from './edge.js'
 import { FLAT_NOTE, type PendingEntry, type PendingIo, type PendingRecord, addPending, markAdded, markAttempt, parsePending, s3PendingIo } from './pending.js'
 import { InstallationRecordSchema } from './record.js'
+import { registerWebhooks } from './hooks.js'
+import { WEB_HOOKS_OUTPUTS, webHooksSecret } from '../infra/props.js'
 
 /** What the update talks to (tests replace every one). */
 export interface UpdateDeps {
@@ -88,6 +92,11 @@ export interface UpdateDeps {
   pending?: Pick<PendingIo, 'list' | 'put'>
   /** write a project's token secret (its value: a copy of the shared token, as the installer writes it) */
   putSecret?: (creds: AwsCredentialIdentity, region: string, secretArn: string, value: string) => Promise<void>
+  /** live updates from GitHub for the projects added now: the hooks secret's text (null: none yet), and one webhook */
+  webhooks?: {
+    readSecret: (creds: AwsCredentialIdentity, region: string, name: string) => Promise<string | null>
+    register?: (token: string, repo: string, url: string, secret: string) => Promise<'created' | 'updated'>
+  }
   log: (line: string) => void
   /** a line of the job's step summary ($GITHUB_STEP_SUMMARY) */
   summary: (line: string) => void
@@ -113,6 +122,14 @@ export const defaultUpdateDeps = (env: NodeJS.ProcessEnv = process.env): UpdateD
   pending: s3PendingIo,
   putSecret: async (creds, region, secretArn, value) => {
     await new SecretsManagerClient({ region, credentials: creds }).send(new PutSecretValueCommand({ SecretId: secretArn, SecretString: value }))
+  },
+  webhooks: {
+    readSecret: async (creds, region, name) => {
+      try { return (await new SecretsManagerClient({ region, credentials: creds }).send(new GetSecretValueCommand({ SecretId: name }))).SecretString ?? null } catch (e) {
+        if ((e as { name?: string }).name === 'ResourceNotFoundException') return null
+        throw e
+      }
+    },
   },
   log: (l) => process.stdout.write(`${l}\n`),
   summary: (l) => {
@@ -332,6 +349,23 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
       } catch (e) {
         log(`${x.repo}: its variables could not be set (${redact(message(e))})`)
         byHand.push(`- ${x.repo}: run the installer again to set its repository variables (${Object.keys(vars).join(', ')}) and TRACE_TOKEN`)
+      }
+    }
+    // live updates from GitHub for the projects added now, with the secret the installer made (never made here)
+    const hooksUrl = after[WEB_HOOKS_OUTPUTS.address]
+    if (grown.added.length && hooksUrl && d.webhooks) {
+      const name = webHooksSecret(InfraPropsSchema.parse(input).prefix)
+      try {
+        const raw = await d.webhooks.readSecret(creds, region, name)
+        const secret = raw ? (JSON.parse(raw) as { webhookSecret?: unknown }).webhookSecret : null
+        if (typeof secret !== 'string' || !secret) throw new Error(`${name} is not there yet: the installer makes it`)
+        if (!token) throw new Error('no shared token')
+        const r = await registerWebhooks(token, grown.added.map((x) => x.repo), hooksUrl, secret, d.webhooks.register ? { register: d.webhooks.register } : {})
+        for (const x of r.done) log(`${x.repo}: webhook ${x.state} (live updates from GitHub)`)
+        for (const w of r.warnings) byHand.push(`- ${w}`)
+      } catch (e) {
+        log(`Live updates from GitHub were not registered for ${grown.added.map((x) => x.repo).join(', ')} (${redact(message(e))})`)
+        byHand.push(`- ${grown.added.map((x) => x.repo).join(', ')}: run the installer again to register live updates from GitHub (meanwhile their screens look again every 60 s)`)
       }
     }
     for (const w of want) {

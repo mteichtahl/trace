@@ -182,16 +182,16 @@ describe('answers', () => {
 
   it('installs the web app by default, keeping the install at two inputs, with an optional custom domain and email codes', () => {
     const a = AnswersSchema.parse(ANSWERS)
-    expect(infraInput(a).web).toEqual({ enabled: true, waf: { enabled: true } })
+    expect(infraInput(a).web).toEqual({ enabled: true, waf: { enabled: true }, hooks: { enabled: true } })
     expect(plan(a).find((s) => s.id === 'web')).toMatchObject({ title: 'Web app: the address people sign in at' })
     expect(plan(a).find((s) => s.id === 'deploy')?.detail).toMatch(/the web app at CloudFront's own address/)
     const custom = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, webDomain: 'trace.example.com', webCertificateArn: CERT, webEmailFrom: 'trace@example.com' } })
-    expect(infraInput(custom).web).toEqual({ enabled: true, domainName: 'trace.example.com', certificateArn: CERT, sesFrom: 'trace@example.com', waf: { enabled: true } })
+    expect(infraInput(custom).web).toEqual({ enabled: true, domainName: 'trace.example.com', certificateArn: CERT, sesFrom: 'trace@example.com', waf: { enabled: true }, hooks: { enabled: true } })
     expect(plan(custom).find((s) => s.id === 'web')?.detail).toContain('https://trace.example.com')
     expect(plan(custom).find((s) => s.id === 'deploy')?.detail).toMatch(/a code by email \(from trace@example.com, through SES\)/)
     expect(AnswersSchema.safeParse({ ...ANSWERS, agents: { ...ANSWERS.agents, webDomain: 'trace.example.com' } }).success).toBe(false)
     const off = AnswersSchema.parse({ ...ANSWERS, agents: { ...ANSWERS.agents, webEnabled: false } })
-    expect(infraInput(off).web).toEqual({ enabled: false, waf: { enabled: true } })
+    expect(infraInput(off).web).toEqual({ enabled: false, waf: { enabled: true }, hooks: { enabled: true } })
     expect(plan(off).map((s) => s.id)).not.toContain('web')
   })
 
@@ -1566,7 +1566,7 @@ describe('the web app\'s WAF outside us-east-1', () => {
   })
 
   it('shows the WAF and its cost in the plan, on by default', () => {
-    expect(plan(AnswersSchema.parse(EU)).find((s) => s.id === 'deploy')?.detail).toMatch(/protected by AWS WAF in its own small stack trace-edge in us-east-1.*about US\$11 a month/)
+    expect(plan(AnswersSchema.parse(EU)).find((s) => s.id === 'deploy')?.detail).toMatch(/protected by AWS WAF in its own small stack trace-edge in us-east-1.*about US\$12 a month/)
     expect(plan(AnswersSchema.parse(ANSWERS)).find((s) => s.id === 'deploy')?.detail).toMatch(/protected by AWS WAF in the web app's stack/)
   })
 })

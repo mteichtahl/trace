@@ -66,7 +66,9 @@ export function changeOf(action: string): What | null {
 
 export const userChannel = (sub: string): string => `/trace/users/${sub}`
 
-/** `job.updated`: { repo, jobId, state } (jobId and state null: several of the project's jobs changed at once). */
+/** `job.updated`: { repo, jobId, state } (jobId and state null: several of the project's jobs changed at once).
+ * `record.changed` with `kind: 'change'` (and `number` when GitHub named one): a change (a pull request a trace job
+ * opened) moved on GitHub (src/web/hooks.ts). */
 export interface LiveEvent { type: 'record.changed' | 'job.updated' | 'notification'; repo?: string; at: string; [k: string]: unknown }
 
 export interface Publisher {
@@ -92,4 +94,11 @@ export function appsyncPublisher(c: Pick<WebConfig, 'region'> & { events: Pick<W
       }
     },
   }
+}
+
+/** Publish one event to each person's channel, all at once; resolves to how many were not delivered (never throws). */
+export async function publishToEach(pub: Publisher, subs: Iterable<string>, event: LiveEvent): Promise<{ failed: number; of: number }> {
+  const all = [...new Set(subs)]
+  const results = await Promise.allSettled(all.map((s) => pub.publish(userChannel(s), [event])))
+  return { failed: results.filter((r) => r.status === 'rejected').length, of: all.length }
 }

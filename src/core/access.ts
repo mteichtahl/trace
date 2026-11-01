@@ -80,8 +80,9 @@ export interface Principal {
   sub: string
   email: string | null
   groups: readonly string[]
-  /** 'service': a connected system (src/api/service-auth.ts); absent or 'person': a person */
-  kind?: 'person' | 'service' | undefined
+  /** 'service': a connected system (src/api/service-auth.ts); 'backend': the web backend acting for no person
+   * (src/api/backend-auth.ts: GitHub's webhook only); absent or 'person': a person */
+  kind?: 'person' | 'service' | 'backend' | undefined
   /** a connected system's name (for logs and records: service:<name>) */
   name?: string | undefined
   /** a connected system's scopes for this request: its token's, within what it has now */
@@ -89,13 +90,17 @@ export interface Principal {
 }
 
 export const isService = (p: Principal): boolean => p.kind === 'service'
+/** The web backend's own identity (src/api/backend-auth.ts): no class, no project, one action (hook.members). */
+export const isBackend = (p: Principal): boolean => p.kind === 'backend'
 
-/** Who did it, for people to read: a person's email (else their sub), or `service:<name>` for a connected system. */
-export const who = (p: Principal): string => (isService(p) ? `service:${p.name ?? p.sub}` : p.email ?? p.sub)
+/** Who did it, for people to read: a person's email (else their sub), `service:<name>` for a connected system, or
+ * `backend:<name>` for the web backend's own identity. */
+export const who = (p: Principal): string => (isService(p) ? `service:${p.name ?? p.sub}` : isBackend(p) ? `backend:${p.name ?? p.sub}` : p.email ?? p.sub)
 
 /** A person's class from their groups; the highest wins when they are in several. Null: no access at all. A
  * connected system is never an admin, whatever its groups say. */
 export function classOf(p: Principal): PersonClass | null {
+  if (isBackend(p)) return null
   for (const c of CLASSES) if (p.groups.includes(GROUPS[c]) && !(c === 'admin' && isService(p))) return c
   return null
 }

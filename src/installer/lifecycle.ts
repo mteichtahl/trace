@@ -175,6 +175,7 @@ export function keptAfterUninstall(a: Answers, deleteData: boolean): string[] {
   if (!deleteData) {
     kept.push(`the Cognito user pool ${p}-users and its domain (everyone's sign-in)`)
     kept.push(`the API's copy of the GitHub token, ${p}/github-token`)
+    if (a.agents.webEnabled && a.agents.webHooks) kept.push(`the GitHub webhook secret, ${p}/web/github-hooks, and each project repository's webhook to the app (it fails harmlessly once the app is gone; delete it under the repository's Settings > Webhooks)`)
   }
   kept.push('the CDK bootstrap (CDKToolkit) and CloudWatch Transaction Search (account-wide)')
   kept.push(`a GitHub connection the stack created (${p}-github), which other installations in the account may reuse, and CodeBuild's GitHub credential unless trace imported it`)
@@ -258,6 +259,7 @@ export async function cmdUninstall(argv: string[]): Promise<number> {
         try { await call(ecr(region, 'DeleteRepository', { repositoryName: name, force: true })); out(`deleted the image repository ${name}`) } catch { /* gone */ }
       }
       await sm.remove(`${a.agents.prefix}/github-token`).then((r) => r && out(`deleted ${a.agents.prefix}/github-token`))
+      await sm.remove(`${a.agents.prefix}/web/github-hooks`).then((r) => r && out(`deleted ${a.agents.prefix}/web/github-hooks`))
       const inst = installation()
       if (inst?.userPoolId) {
         const idp = new cog.CognitoIdentityProviderClient(cfg)

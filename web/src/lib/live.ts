@@ -10,6 +10,7 @@
  * and take `data` messages. `ka` keep-alives reset the silence timer.
  */
 import type { QueryClient, QueryKey } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { auth } from './auth'
 import { createStore, useStore } from './store'
 import type { LiveEvent } from './types'
@@ -33,6 +34,11 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
   switch (e.type) {
     case 'record.changed': {
       const r = e.repo
+      // a change moved on GitHub (src/web/hooks.ts: `kind: 'change'`, `number` when GitHub named one): its status, the
+      // lists that show it, and the journey (its open changes are steps)
+      if ((e as { kind?: unknown }).kind === 'change') {
+        return [['pull.status', r], ['changes.list', r], ['change.get', r], ['inbox'], ['journey.get', r]]
+      }
       const byWhat: Record<typeof e.what, QueryKey[]> = {
         // the journey's record and the agents' facts, and the bench's live readings (src/core/bench.ts): the Build tab and
         // the guided skills (Bring-up run's live readout) read them too; and jobs.list, whose hand-offs between
@@ -56,6 +62,33 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
 
 export function applyEvent(qc: QueryClient, e: LiveEvent): void {
   for (const queryKey of invalidationsFor(e)) void qc.invalidateQueries({ queryKey })
+}
+
+// ------------------------------------------------------------------ polling, as the fallback
+
+/** How often a polled screen looks again while the live connection is up: events say when to look sooner. */
+export const POLL_LIVE_MS = 60_000
+
+/** The poll interval: `offlineMs` while the live connection is not up, POLL_LIVE_MS (or more) while it is. */
+export const pollEvery = (offlineMs: number, state: LiveState = liveStatus.get().state): number => (state === 'live' ? Math.max(offlineMs, POLL_LIVE_MS) : offlineMs)
+
+/** "next look in 40 s" (or "looking now"), from when the data was last fetched and the interval. Pure. */
+export function nextLookWords(updatedAt: number, intervalMs: number, now: number): string {
+  if (!updatedAt) return 'looking now'
+  const left = Math.ceil((updatedAt + intervalMs - now) / 1000)
+  if (left <= 0) return 'looking now'
+  return left >= 120 ? `next look in ${Math.round(left / 60)} min` : `next look in ${left} s`
+}
+
+/** The words above, ticking each second while the screen shows them. */
+export function useNextLook(updatedAt: number, intervalMs: number | false): string | null {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (intervalMs === false) return
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [intervalMs])
+  return intervalMs === false ? null : nextLookWords(updatedAt, intervalMs, now)
 }
 
 // ------------------------------------------------------------------ the AppSync Events client

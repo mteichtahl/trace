@@ -125,9 +125,11 @@ describe('the nested layout', () => {
     // role, policy and log group, and the provider framework's function, role and policy: src/infra/runner.ts
     // RunnerWebhooks). (The dictation vocabularies' read, src/infra/voice.ts, tips the API role's inline policy over
     // sooner.)
+    // Live updates from GitHub (web.hooks, nested only) add two (the web backend's own client and its resource server)
+    // and two outputs (WebHooksAddress, WebHooksClientId).
     // The tools image adds five (its repository, its CodeBuild project with its role and policy, and its image build:
     // src/infra/stack.ts) and one output (ToolsImageUri), whatever the number of projects.
-    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:116/26:1', '24:142/26:4', '60:178/26:4'])
+    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:118/28:1', '24:144/28:4', '60:180/28:4'])
     // without a connection given, the stack creates one: one more resource of the parent's, and nothing more per project
     const created = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: {} }), 'Count1Created')
     expect(count(json(created.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0) + 1)

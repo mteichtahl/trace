@@ -12,6 +12,10 @@
  *   model                   the Bedrock model or inference profile for the chat agent (default below)
  *   features                passkeys, email, voice, ops
  *   waf                     whether AWS WAF is in front of the app, and its limits per address (shown on Admin)
+ *   hooks                   GitHub's webhook (web.hooks, src/web/hooks.ts): the secret's name (the webhook secret and
+ *                           the backend's own client secret, written by the installer), the pool's token address, the
+ *                           backend's own app client and scope, and the debounce table. Absent: no live updates from
+ *                           GitHub (the app polls)
  */
 import { z } from 'zod'
 
@@ -36,6 +40,9 @@ export const WebConfig = z.object({
   }).default({ passkeys: true, email: true, voice: true, ops: true }),
   /** the app's AWS WAF (src/infra/edge.ts): whether one is in front of it, and its limits; absent: an older stack */
   waf: z.object({ enabled: z.boolean(), own: z.boolean().default(false), apiRequestsPer5Minutes: z.number(), authRequestsPer5Minutes: z.number() }).optional(),
+  hooks: z.object({
+    secret: z.string().min(1), tokenUrl: z.string().url(), clientId: z.string().min(1), scope: z.string().min(1), table: z.string().min(1).optional(),
+  }).optional(),
 })
 export type WebConfig = z.output<typeof WebConfig>
 

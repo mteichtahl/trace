@@ -102,6 +102,7 @@
  *   actions-prompts.ts   prompts.chat (the chat agent's editable instructions as the installation has them)
  *   actions-voice.ts     voice.vocabulary, voice.vocabulary.sync (dictation's project words)
  *   actions-layout.ts    installation.layout (flat or nested, what that means, and how to move)
+ *   actions-hooks.ts     hook.members (the web backend's own identity only: who to tell when GitHub says a change moved)
  *   actions-services.ts  services.list, services.create, services.update, services.assign, services.unassign,
  *                        services.rotate, services.retire_secret, services.delete, services.history (connected systems)
  *   actions-changes.ts   changes.list, change.get, change.diff (read); change.accept, change.ask, change.discard (write,
@@ -117,7 +118,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import {
   AccessDenied, CLASSES, GROUPS, PARTS, PartRefused, type PersonClass, type Principal, RepoSlug, type Role,
-  assign, assignments, classOf, isAdmin, isService, lastSeen, projectsFor, require_, setClass, unassign,
+  assign, assignments, classOf, isAdmin, isBackend, isService, lastSeen, projectsFor, require_, setClass, unassign,
 } from '../core/access.js'
 import { readSettings, resolve, setValue, unset } from '../core/config.js'
 import { IntegrationNameSchema, type IntegrationStore, checkIntegration, valuesFor } from '../core/integrations.js'
@@ -157,6 +158,7 @@ import { LAYOUT_ACTIONS } from './actions-layout.js'
 import type { CognitoUser } from './aws.js'
 import { SERVICE_ADMIN_ACTIONS } from './actions-services.js'
 import { CHANGE_ACTIONS } from './actions-changes.js'
+import { HOOK_ACTIONS } from './actions-hooks.js'
 import { SERVICE_ACTIONS, checkService, taskCap, toolOpenToSystems } from './service-policy.js'
 
 export {
@@ -705,6 +707,7 @@ export const ACTIONS = {
   ...LAYOUT_ACTIONS,
   ...SERVICE_ADMIN_ACTIONS,
   ...CHANGE_ACTIONS,
+  ...HOOK_ACTIONS,
 } satisfies Record<string, Action<z.ZodType>>
 
 export type ActionName = keyof typeof ACTIONS
@@ -723,6 +726,8 @@ export async function perform(name: string, raw: Record<string, unknown>, ctx: C
   const action = ACTIONS[name as ActionName] as Action<z.ZodType>
   // a connected system is refused an action not open to systems before its arguments are even read
   if (isService(ctx.principal) && !Object.hasOwn(SERVICE_ACTIONS, name)) throw new AccessDenied(`${name} is not open to connected systems`)
+  // the web backend's own identity calls its one action and nothing else; that action refuses everyone else (below)
+  if (isBackend(ctx.principal) !== (action.need === 'backend')) throw new AccessDenied(NO_ACCESS)
   const parsed = action.args.safeParse(raw)
   if (!parsed.success) throw new ActionError(`${name}: ${parsed.error.issues.map((i) => `${i.path.join('.') || 'args'}: ${i.message}`).join('; ')}`)
   const args = parsed.data as Record<string, unknown>
@@ -733,6 +738,7 @@ export async function perform(name: string, raw: Record<string, unknown>, ctx: C
   await checkService(p, name, args, ctx)
   switch (action.need) {
     case 'signed-in': case 'job': break
+    case 'backend': if (!isBackend(p)) throw new AccessDenied(NO_ACCESS); break
     case 'prompts': if (!action.authorize) throw new AccessDenied(NO_ACCESS); await action.authorize(args, p); break
     case 'admin': if (!isAdmin(p)) throw new AccessDenied('admins only'); break
     case 'read': case 'write': await require_(p, repo ?? '', action.need); break

@@ -70,7 +70,8 @@ describe('external access: off', () => {
     const p = json(off.parent)
     const types = Object.values(p.Resources).map((r) => r.Type)
     expect(types.filter((t) => t === 'AWS::BedrockAgentCore::Runtime')).toHaveLength(1)
-    expect(types).not.toContain('AWS::Cognito::UserPoolResourceServer')
+    // the web backend's own (web.hooks: trace-internal), never trace-external
+    expect(Object.values(p.Resources).filter((r) => r.Type === 'AWS::Cognito::UserPoolResourceServer').map((r) => (r.Properties as Record<string, unknown>).Identifier)).toEqual(['trace-internal'])
     for (const o of [...Object.values(EXTERNAL_OUTPUTS), 'ExternalLogGroup', 'McpLogGroup']) expect(p.Outputs ?? {}).not.toHaveProperty(o)
     expect(JSON.stringify(p)).not.toMatch(/TRACE_EXTERNAL|TRACE_MCP|TRACE_TOKEN_URL|CreateUserPoolClient|trace-external/)
   })
@@ -122,9 +123,9 @@ describe('external access: on', () => {
     expect(auth).not.toHaveProperty('AllowedClients')
     expect(auth).not.toHaveProperty('AllowedAudience')
     expect(auth.DiscoveryUrl).toEqual((api.Properties.AuthorizerConfiguration as { CustomJWTAuthorizer: Record<string, unknown> }).CustomJWTAuthorizer.DiscoveryUrl)
-    // the people's runtime keeps exactly its two clients and no scopes
+    // the people's runtime keeps exactly its two clients and the web backend's own (web.hooks), and no scopes
     const people = (api.Properties.AuthorizerConfiguration as { CustomJWTAuthorizer: Record<string, unknown> }).CustomJWTAuthorizer
-    expect(people.AllowedClients).toHaveLength(2)
+    expect(people.AllowedClients).toHaveLength(3)
     expect(people).not.toHaveProperty('AllowedScopes')
   })
 

@@ -207,6 +207,8 @@ export function accessNote(a: RepoAccess): string | null {
   if (!a.administer) parts.push('its settings and the "trace" ruleset are left alone')
   // CodeBuild makes the runner's webhook with its GitHub credential: with the token as that credential it needs both
   if (!a.administer || !a.webhooks) parts.push('with the token as CodeBuild\'s GitHub credential its build runner can\'t be made (CodeBuild needs Administration and Webhooks: read and write), so the deploy fails; a GitHub connection (Advanced) needs neither')
+  // the installer registers trace's own webhook with the token too (src/installer/hooks.ts): a warning, never a failure
+  if (!a.webhooks) parts.push('its live updates from GitHub can\'t be registered, so its screens look again every 60 s instead')
   return `${a.repo}: the token lacks ${a.missing.join(', ')}: ${parts.join('; ')}.`
 }
 

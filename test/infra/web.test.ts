@@ -10,10 +10,10 @@ import { join } from 'node:path'
 import { App, Stack } from 'aws-cdk-lib'
 import { Match, Template } from 'aws-cdk-lib/assertions'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { InfraPropsSchema, WEB_OUTPUTS, stackName, webConfigParameter } from '../../src/infra/props.js'
+import { InfraPropsSchema, WEB_HOOKS_OUTPUTS, WEB_OUTPUTS, stackName, webConfigParameter } from '../../src/infra/props.js'
 import { REPO_ROOT, TraceStack } from '../../src/infra/stack.js'
 import { imageContentTag } from '../../src/infra/images.js'
-import { API_FUNCTION, FORWARDED_AUTH_HEADER, bundleBackend, SPA_FUNCTION, SUBSCRIBE_HANDLER, VOICE_PREFIX, contentSecurityPolicy, modelResources } from '../../src/infra/web.js'
+import { API_FUNCTION, FORWARDED_AUTH_HEADER, HOOKS_PATH, HOOKS_ROUTE, bundleBackend, SPA_FUNCTION, SUBSCRIBE_HANDLER, VOICE_PREFIX, contentSecurityPolicy, modelResources } from '../../src/infra/web.js'
 import { RUNNERS, type Synth, synth } from './templates.js'
 
 const base = { account: '123456789012', region: 'us-east-1', repositories: ['mteichtahl/trace'], model: 'us.anthropic.claude-sonnet-4-6', adminEmail: 'marc@example.com', runners: RUNNERS }
@@ -46,7 +46,7 @@ beforeAll(() => {
 describe('the web app', () => {
   it('is on by default, and a custom domain needs its certificate', () => {
     const p = InfraPropsSchema.parse(base)
-    expect(p.web).toEqual({ enabled: true, dashboards: [], waf: { enabled: true, apiRequestsPer5Minutes: 1000, authRequestsPer5Minutes: 100 } })
+    expect(p.web).toEqual({ enabled: true, dashboards: [], waf: { enabled: true, apiRequestsPer5Minutes: 1000, authRequestsPer5Minutes: 100 }, hooks: { enabled: true } })
     expect(InfraPropsSchema.safeParse({ ...base, web: { domainName: 'trace.example.com' } }).success).toBe(false)
     expect(InfraPropsSchema.safeParse({ ...base, web: { certificateArn: CERT } }).success).toBe(false)
     expect(InfraPropsSchema.safeParse({ ...base, web: { domainName: 'trace.example.com', certificateArn: CERT } }).success).toBe(true)
@@ -78,8 +78,10 @@ describe('the web app', () => {
       Origins: { OriginAccessControlId?: unknown; S3OriginConfig?: { OriginAccessIdentity: string } }[]; HttpVersion: string; PriceClass: string; Aliases?: string[]
       DefaultCacheBehavior: Record<string, unknown>; CacheBehaviors: Record<string, unknown>[]; CustomErrorResponses?: unknown
     }
-    expect(d.Origins).toHaveLength(2)
-    for (const o of d.Origins) expect(o.OriginAccessControlId).toBeDefined()
+    // the site, the backend, and (web.hooks) GitHub's webhook's function, which alone has no origin access control: see
+    // the 'GitHub's webhook' tests below
+    expect(d.Origins).toHaveLength(3)
+    expect(d.Origins.filter((o) => o.OriginAccessControlId !== undefined)).toHaveLength(2)
     expect(d.HttpVersion).toBe('http2and3')
     expect(d.PriceClass).toBe('PriceClass_100')
     expect(d.Aliases).toBeUndefined()
@@ -104,7 +106,8 @@ describe('the web app', () => {
       // the API's build: people's runtime sessions move to a new one when it changes (src/web/call.ts runtimeSession)
       Environment: { Variables: { TRACE_WEB_CONFIG_PARAM: '/trace/web/config', NODE_OPTIONS: '--enable-source-maps', TRACE_API_BUILD: imageContentTag(REPO_ROOT) } },
     })
-    expect(only(web, 'AWS::Lambda::Url').Properties).toMatchObject({ AuthType: 'AWS_IAM', InvokeMode: 'RESPONSE_STREAM' })
+    const urls = (Object.values(web.findResources('AWS::Lambda::Url')) as Res[]).map((u) => u.Properties)
+    expect(urls.find((u) => JSON.stringify(u.TargetFunctionArn).includes('Backend'))).toMatchObject({ AuthType: 'AWS_IAM', InvokeMode: 'RESPONSE_STREAM' })
     web.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 30 })
   })
 
@@ -160,9 +163,9 @@ describe('the web app', () => {
     expect(c?.CallbackURLs).toBeUndefined()
     // the CLI's client is unchanged
     expect(clients.find((x) => x.Properties.ClientName === 'trace-cli')?.Properties.ExplicitAuthFlows).toEqual(['ALLOW_USER_SRP_AUTH', 'ALLOW_REFRESH_TOKEN_AUTH'])
-    // the API accepts both clients' tokens
+    // the API accepts both clients' tokens, and the web backend's own (web.hooks: hook.members only)
     const api = (Object.values(on.parent.findResources('AWS::BedrockAgentCore::Runtime')) as Res[]).find((r) => r.Properties.AgentRuntimeName === 'trace_api')
-    expect((api?.Properties.AuthorizerConfiguration as { CustomJWTAuthorizer: { AllowedClients: unknown[] } }).CustomJWTAuthorizer.AllowedClients).toHaveLength(2)
+    expect((api?.Properties.AuthorizerConfiguration as { CustomJWTAuthorizer: { AllowedClients: unknown[] } }).CustomJWTAuthorizer.AllowedClients).toHaveLength(3)
   })
 
   it('offers passkeys and passwords first, with the app\'s address as relying party, and email codes only with SES', () => {
@@ -232,6 +235,7 @@ describe('the web app', () => {
       dashboards: ['trace-agents'], model: 'us.anthropic.claude-sonnet-4-6', appUrl: 'https://X',
       features: { passkeys: true, email: false, voice: true, ops: true },
       waf: { enabled: true, own: false, apiRequestsPer5Minutes: 1000, authRequestsPer5Minutes: 100 },
+      hooks: { secret: 'trace/web/github-hooks', tokenUrl: 'https://X.auth.us-east-1.amazoncognito.com/oauth2/token', clientId: 'X', scope: 'trace-internal/members', table: 'X' },
     })
     // the web client, not the CLI's; the events' host names, no scheme
     expect(text).toMatch(/"clientId":"<\{"Ref":"UsersWeb/)
@@ -366,5 +370,59 @@ describe('the web app', () => {
     expect((pool.Policies as Record<string, unknown>).SignInPolicy).toBeUndefined()
     expect(JSON.stringify(pool.AdminCreateUserConfig)).toContain('Sign in with `tracectl login`.')
     expect(off.parent.findOutputs(WEB_OUTPUTS.url)).toEqual({})
+  }, 300_000)
+})
+
+describe('GitHub\'s webhook (web.hooks)', () => {
+  it('has a function of its own on /api/hooks/*, ahead of /api/*, reached without origin access control, passing every header and the body', () => {
+    const d = only(web, 'AWS::CloudFront::Distribution').Properties.DistributionConfig as { Origins: { Id: string; OriginAccessControlId?: unknown; CustomOriginConfig?: Record<string, unknown> }[]; CacheBehaviors: Record<string, unknown>[] }
+    expect(d.CacheBehaviors.map((b) => b.PathPattern)).toEqual([HOOKS_PATH, '/api/*'])
+    const hooks = d.CacheBehaviors[0]!
+    expect(hooks).toMatchObject({
+      AllowedMethods: ['GET', 'HEAD', 'OPTIONS', 'PUT', 'PATCH', 'POST', 'DELETE'], ViewerProtocolPolicy: 'https-only',
+      CachePolicyId: '4135ea2d-6df8-44a3-9df3-4b5a84be39ad', // CachingDisabled
+      OriginRequestPolicyId: 'b689b0a8-53d0-40ab-baf2-68738e2966ac', // AllViewerExceptHostHeader: X-Hub-Signature-256, X-GitHub-Event
+    })
+    // no viewer-request function: the delivery reaches the function as GitHub sent it
+    expect(hooks.FunctionAssociations).toBeUndefined()
+    const origin = d.Origins.find((o) => o.Id === hooks.TargetOriginId)
+    expect(origin?.OriginAccessControlId).toBeUndefined()
+    expect(origin?.CustomOriginConfig).toMatchObject({ OriginProtocolPolicy: 'https-only' })
+    const fn = (Object.values(web.findResources('AWS::Lambda::Function')) as Res[]).find((f) => f.Properties.FunctionName === 'trace-web-hooks')
+    expect(fn?.Properties).toMatchObject({ Runtime: 'nodejs22.x', Architectures: ['arm64'], Handler: 'hooks.handler', Timeout: 60, Environment: { Variables: { TRACE_WEB_CONFIG_PARAM: '/trace/web/config' } } })
+    const urls = (Object.values(web.findResources('AWS::Lambda::Url')) as Res[]).map((u) => u.Properties)
+    expect(urls.find((u) => JSON.stringify(u.TargetFunctionArn).includes('Hooks'))).toMatchObject({ AuthType: 'NONE', InvokeMode: 'RESPONSE_STREAM' })
+  })
+
+  it('gives its function only its settings, the hooks secret (read), its debounce table and publishing; the backend gains nothing', () => {
+    const all = statements(web, 'HooksRole')
+    expect(all.flatMap(actions).sort()).toEqual(['appsync:EventPublish', 'dynamodb:UpdateItem', 'logs:CreateLogStream', 'logs:PutLogEvents', 'secretsmanager:GetSecretValue', 'ssm:GetParameter'])
+    const by = (sid: string): Statement | undefined => all.find((s) => s.Sid === sid)
+    expect(JSON.stringify(by('HooksSecret')?.Resource)).toContain(':secretsmanager:us-east-1:123456789012:secret:trace/web/github-hooks-??????')
+    expect(JSON.stringify(by('HooksDebounce')?.Resource)).toMatch(/HooksDebounce\w+","Arn"/)
+    const text = JSON.stringify(all)
+    for (const never of ['cognito', '/access/', '/projects/', 'bedrock', 's3:']) expect(text).not.toContain(never)
+    web.hasResourceProperties('AWS::DynamoDB::Table', { TableName: 'trace-web-hooks', BillingMode: 'PAY_PER_REQUEST', TimeToLiveSpecification: { AttributeName: 'ttl', Enabled: true } })
+  })
+
+  it('gives the backend its own client: client credentials with one scope of its own, and the API runtime lists it', () => {
+    const clients = Object.values(on.parent.findResources('AWS::Cognito::UserPoolClient')) as Res[]
+    const c = clients.find((x) => x.Properties.ClientName === 'trace-web-hooks')?.Properties
+    expect(c).toMatchObject({ GenerateSecret: true, AllowedOAuthFlows: ['client_credentials'], AllowedOAuthFlowsUserPoolClient: true, AccessTokenValidity: 60 })
+    expect(JSON.stringify(c?.AllowedOAuthScopes)).toContain('/members')
+    on.parent.hasResourceProperties('AWS::Cognito::UserPoolResourceServer', { Identifier: 'trace-internal', Scopes: [Match.objectLike({ ScopeName: 'members' })] })
+    const api = (Object.values(on.parent.findResources('AWS::BedrockAgentCore::Runtime')) as Res[]).find((r) => r.Properties.AgentRuntimeName === 'trace_api')
+    expect(JSON.stringify((api?.Properties.EnvironmentVariables as Record<string, unknown>).TRACE_COGNITO_HOOKS_CLIENT_ID)).toMatch(/UsersWebHooks/)
+    expect(Object.keys(on.parent.findOutputs(WEB_HOOKS_OUTPUTS.address))).toEqual([WEB_HOOKS_OUTPUTS.address])
+    expect(JSON.stringify(on.parent.findOutputs(WEB_HOOKS_OUTPUTS.address))).toContain(HOOKS_ROUTE)
+  })
+
+  it('can be turned off: no function, no behaviour, no client, no hooks in the settings', () => {
+    const off = synth(InfraPropsSchema.parse({ ...base, web: { hooks: { enabled: false } } }), 'HooksOff')
+    const d = only(off.web!, 'AWS::CloudFront::Distribution').Properties.DistributionConfig as { CacheBehaviors: Record<string, unknown>[] }
+    expect(d.CacheBehaviors.map((b) => b.PathPattern)).toEqual(['/api/*'])
+    expect((Object.values(off.web!.findResources('AWS::Lambda::Function')) as Res[]).some((f) => f.Properties.FunctionName === 'trace-web-hooks')).toBe(false)
+    expect((Object.values(off.parent.findResources('AWS::Cognito::UserPoolClient')) as Res[]).some((x) => x.Properties.ClientName === 'trace-web-hooks')).toBe(false)
+    expect(JSON.stringify(only(off.parent, 'AWS::SSM::Parameter').Properties.Value)).not.toContain('github-hooks')
   }, 300_000)
 })
