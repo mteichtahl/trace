@@ -15,12 +15,13 @@ import { createHandoffRuntime, endedWithout, handoffPayload } from '../../src/ag
 import { type ClaudeOptions, type RunnerDeps, createRunner } from '../../src/agents/runtime/job.js'
 import { createJobs, jobKey, pausable } from '../../src/agents/runtime/jobs.js'
 import { titleOf } from '../../src/agents/runtime/job-index.js'
-import { HandoffTaskPayload, InvocationSchema, type JobPayload, isHandoff } from '../../src/agents/runtime/schemas.js'
+import { HandoffTaskPayload, InvocationSchema, type JobPayload, TaskPayload, isHandoff } from '../../src/agents/runtime/schemas.js'
 import { createAgentServer } from '../../src/agents/runtime/server.js'
 import { createWaitRelay } from '../../src/agents/runtime/wait-relay.js'
 import { AgentFactsStore } from '../../src/core/agent-facts.js'
 import { S3Backend } from '../../src/core/central.js'
 import { addHandoff, answerHandoff, declineHandoff, loadHandoffs } from '../../src/core/handoffs.js'
+import { JobIndexStore, putJob } from '../../src/core/job-index.js'
 import { startJourney } from '../../src/core/journey.js'
 import { JourneyStore, forgetNoJourney } from '../../src/core/journey-store.js'
 import { FakeS3 } from '../core/fake-s3.js'
@@ -105,6 +106,35 @@ describe('the receiving job', () => {
     await rt.begin(h2.id, 'job-a2')
     expect(await rt.settle(h2.id, endedWithout('aborted', 'cancelled by u@example.com'))).toBe(true)
     expect((await s.facts.read((db) => loadHandoffs(db))).result.map((x) => [x.state, x.why])).toEqual([['answered', null], ['failed', 'its job was cancelled (cancelled by u@example.com)']])
+  })
+  it('carries on: once answered, the asking specialist starts again on the answering branch when its own job has ended', async () => {
+    const b = new S3Backend('bucket', 'projects', new FakeS3())
+    const s = { facts: new AgentFactsStore(b, 'o/r'), journey: new JourneyStore(b, 'o/r') }
+    const jobs = new JobIndexStore(b, 'o/r')
+    const at = 1_800_000_000
+    const rt = createHandoffRuntime({ ...s, jobs, repository: 'o/r', now: () => at })
+    const h = await raise(s)
+    await rt.begin(h.id, 'job-a1')
+    const started: JobPayload[] = []
+    const startJob = (p: JobPayload) => { started.push(p); return { accepted: true, jobId: 'job-c1' } }
+    // not answered yet: nothing starts
+    expect(await rt.carryOn(h.id, 'claude/handoff-x', startJob)).toBeNull()
+    await s.facts.update((db) => ({ result: answerHandoff(db, h.id, 'job-a1', { answered: true, text: '0.85 W at 500 mA and 85 °C ambient (run-9).', evidence: [{ kind: 'run', ref: 'run-9' }], confidence: 0.8, acceptanceMet: true }) }))
+    // the asking job still running: it reads the answer itself
+    await jobs.update((db) => { putJob(db, 'job-th1', { state: 'running', kind: 'task', agent: 'thermal', title: 'x', startedAt: at - 60, beatAt: at - 10 }, at); return { result: null } })
+    expect(await rt.carryOn(h.id, 'claude/handoff-x', startJob)).toBeNull()
+    // ended: the asking specialist starts again on the answering branch, told the answer
+    await jobs.update((db) => { putJob(db, 'job-th1', { state: 'succeeded', endedAt: at - 5 }, at); return { result: null } })
+    expect(await rt.carryOn(h.id, 'claude/handoff-x', startJob)).toBe('job-c1')
+    expect(started).toHaveLength(1)
+    const p = started[0]!
+    expect(p).toMatchObject({ kind: 'task', repository: 'o/r', agent: 'thermal', branch: 'claude/handoff-x', requestedBy: `hand-off ${h.id}` })
+    expect(TaskPayload.safeParse(p).success).toBe(true)
+    if (p.kind !== 'task') throw new Error('not a task')
+    expect(p.request).toContain(REQ.question)
+    expect(p.request).toContain('0.85 W at 500 mA')
+    expect(p.request).toMatch(/you are on that branch.*push to the same branch/s)
+    expect(p.request).toMatch(/ask a person \(journey\.ask\) rather than hand the same question back/)
   })
 })
 
