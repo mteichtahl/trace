@@ -30,7 +30,7 @@ describe('a finished specialist\'s record', () => {
     writeFileSync(join(r.dir, RECORD_PATH), 'v2: R1-R10')
     writeFileSync(join(r.dir, 'scratch.txt'), 'not the record')
     const said = await keepRecord({ g: gopts(r.dir), branch: 'claude/task-requirements', defaultBranch: 'main', jobId: 'job-1', agent: 'verify', log: () => undefined })
-    expect(said).toMatch(/^committed the project's record on claude\/task-requirements \([0-9a-f]+\) and pushed it$/)
+    expect(said).toMatchObject({ lost: false, text: expect.stringMatching(/^committed the project's record on claude\/task-requirements \([0-9a-f]+\) and pushed it$/) })
     expect(await r.git(['show', 'claude/task-requirements:.trace/project.db'], r.remote)).toBe('v2: R1-R10')
     expect(await r.git(['log', '-1', '--format=%s', 'claude/task-requirements'], r.remote)).toBe("trace: the verify specialist's record (job-1)")
     // only the record: other files are left as they were
@@ -42,7 +42,17 @@ describe('a finished specialist\'s record', () => {
     expect(await keepRecord({ g: gopts(r.dir), branch: 'claude/x', defaultBranch: 'main', jobId: 'j', agent: 'verify', log: () => undefined })).toBeNull()
     const m = await repo('main')
     writeFileSync(join(m.dir, RECORD_PATH), 'v2')
-    expect(await keepRecord({ g: gopts(m.dir), branch: 'main', defaultBranch: 'main', jobId: 'j', agent: 'verify', log: () => undefined })).toMatch(/stays uncommitted: the job ran on the default branch/)
+    expect(await keepRecord({ g: gopts(m.dir), branch: 'main', defaultBranch: 'main', jobId: 'j', agent: 'verify', log: () => undefined })).toMatchObject({ lost: false, text: expect.stringMatching(/stays uncommitted: the job ran on the default branch/) })
     expect(await m.git(['show', 'main:.trace/project.db'], m.remote)).toBe('v1')
+  })
+
+  it('a push the remote refuses (a file over GitHub\'s limit, say): lost, and said why', async () => {
+    const r = await repo('claude/big')
+    writeFileSync(join(r.dir, RECORD_PATH), 'v2: 18 SPICE runs')
+    // the remote refuses every update, as GitHub refuses a push with a file over 100 MB
+    writeFileSync(join(r.remote, 'hooks', 'pre-receive'), '#!/bin/sh\necho "remote: error: GH001: Large files detected" >&2\nexit 1\n', { mode: 0o755 })
+    const said = await keepRecord({ g: gopts(r.dir), branch: 'claude/big', defaultBranch: 'main', jobId: 'j', agent: 'verify', log: () => undefined })
+    expect(said).toMatchObject({ lost: true, text: expect.stringMatching(/^could not commit the project's record on claude\/big: /) })
+    expect(said?.text).toMatch(/GH001|pre-receive|rejected/)
   })
 })
