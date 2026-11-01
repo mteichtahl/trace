@@ -11,6 +11,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 import type { JourneyRecord } from '../core/journey.js'
+import { artifactMime, unpackArtifact } from '../core/store.js'
 import { type DesignDecision, loadDesignDecisions } from '../tools/design/decisions.js'
 import { type DesignRows, readDesignRows } from '../tools/design/db.js'
 import { type RequirementNow, parseNets, requirementDecisions } from '../tools/design/record.js'
@@ -119,8 +120,8 @@ export function runResult(db: DatabaseSync, id: string): Record<string, unknown>
 }
 
 function artifactText(db: DatabaseSync, run: string, name: string): string | null {
-  const r = db.prepare('SELECT bytes FROM artifacts WHERE run_id=? AND name=?').get(run, name) as Record<string, unknown> | undefined
-  return r ? new TextDecoder().decode(r.bytes as Uint8Array) : null
+  const r = db.prepare('SELECT mime, bytes FROM artifacts WHERE run_id=? AND name=?').get(run, name) as Record<string, unknown> | undefined
+  return r ? new TextDecoder().decode(unpackArtifact(r.mime === null ? null : String(r.mime), r.bytes as Uint8Array).bytes) : null
 }
 
 /** A finding's id: stable across runs while the same problem stays at the same place. */
@@ -185,7 +186,7 @@ export function sheetFileOf(where: string, files: readonly string[]): string | n
 export function runImages(db: DatabaseSync, kinds: readonly string[]): { path: string; run: string; kind: string; name: string; mime: string }[] {
   if (!kinds.length) return []
   const q = `SELECT a.run_id, a.name, a.mime, r.kind FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.kind IN (${kinds.map(() => '?').join(',')}) AND (a.mime LIKE 'image/svg%' OR a.mime = 'image/png') ORDER BY r.started DESC, a.name LIMIT 200`
-  return rows(db, q, ...kinds).map((x) => ({ path: `runs/${String(x.run_id)}/${String(x.name)}`, run: String(x.run_id), kind: String(x.kind), name: String(x.name), mime: String(x.mime) }))
+  return rows(db, q, ...kinds).map((x) => ({ path: `runs/${String(x.run_id)}/${String(x.name)}`, run: String(x.run_id), kind: String(x.kind), name: String(x.name), mime: artifactMime(String(x.mime)) ?? '' }))
 }
 
 /** The struck requirements (the repository's rejected or obsolete rows, and those a person struck), each with the

@@ -22,7 +22,7 @@
  */
 import { z } from 'zod'
 import { loadJourney } from '../core/journey.js'
-import { Work } from '../core/store.js'
+import { Work, artifactMime, unpackArtifact } from '../core/store.js'
 import { ActionError, type Context, MAX_ARTIFACT, PROJECT_DB_PATH, Repo, def, withProjectDb, withRecordDb } from './action-kit.js'
 import { checkFindings, sheetFileOf } from './record-read.js'
 
@@ -99,7 +99,7 @@ async function evidence(ctx: Context, repo: string, limit: number): Promise<File
     const w = new Work(db)
     try {
       return (w.db.prepare('SELECT a.run_id, a.name, a.mime, length(a.bytes) AS size FROM artifacts a JOIN runs r ON r.id = a.run_id ORDER BY r.started DESC LIMIT ?').all(limit) as Record<string, unknown>[])
-        .map((r) => ({ path: `runs/${String(r.run_id)}/${String(r.name)}`, kind: 'evidence' as const, size: Number(r.size), sha: null, run: String(r.run_id), mime: r.mime === null ? null : String(r.mime) }))
+        .map((r) => ({ path: `runs/${String(r.run_id)}/${String(r.name)}`, kind: 'evidence' as const, size: Number(r.size), sha: null, run: String(r.run_id), mime: artifactMime(r.mime === null ? null : String(r.mime)) }))
     } finally {
       w.close()
     }
@@ -164,9 +164,9 @@ export const FILE_ACTIONS = {
         try {
           const row = w.db.prepare('SELECT mime, bytes FROM artifacts WHERE run_id=? AND name=?').get(run, name)
           if (!row) throw new ActionError(`There is no ${name} on run ${run}.`)
-          const bytes = row.bytes as Uint8Array
+          const { mime, bytes } = unpackArtifact(row.mime === null ? null : String(row.mime), row.bytes as Uint8Array)
           if (bytes.length > MAX_ARTIFACT) throw new ActionError(`${name} is ${bytes.length} bytes; the API returns at most ${MAX_ARTIFACT}.`)
-          return { repo: a.repo, path: a.path, kind: 'evidence', mime: row.mime === null ? mimeOf(name) : String(row.mime), size: bytes.length, base64: Buffer.from(bytes).toString('base64') }
+          return { repo: a.repo, path: a.path, kind: 'evidence', mime: mime ?? mimeOf(name), size: bytes.length, base64: Buffer.from(bytes).toString('base64') }
         } finally {
           w.close()
         }
