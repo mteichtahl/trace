@@ -596,7 +596,8 @@ export interface NextStep {
   recommendation: string | null
   button: string
   stage: StageId | null
-  ref: { kind: 'gate' | 'criterion' | 'question' | 'stage'; id: string } | null
+  /** skill: a guided skill (src/core/skills.ts) the step opens, such as requirements-review */
+  ref: { kind: 'gate' | 'criterion' | 'question' | 'stage' | 'skill'; id: string } | null
 }
 export interface QuestionView {
   id: string; kind: 'question' | 'stuck'; asked_by: string; for_you: boolean; for: 'you' | 'person' | 'contributors' | 'admins'; stage: StageId | null
