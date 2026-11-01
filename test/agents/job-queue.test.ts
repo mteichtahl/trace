@@ -53,7 +53,8 @@ describe('the job index, from the jobs\' own events', () => {
     const runner: JobRunner = (_p, ctx) => new Promise((res) => {
       ctx.log('reading the schematic')
       withJob(ctx.jobId, () => { const w = trackEventWait({ what: 'the graphics card job g-1' }); w.update('RUNNING') })
-      release = () => res('done')
+      // a long report keeps its end: the conclusion (what is still open) comes last
+      release = () => res(`${'checked. '.repeat(600)}Still open: R7 at the low corner.`)
     })
     const jobs = createJobs(runner, quiet)
     const w = indexJobs(jobs, s.index, (id) => jobs.payloadOf(id), { heartbeat: false })
@@ -72,7 +73,7 @@ describe('the job index, from the jobs\' own events', () => {
     release()
     await until(() => !jobs.busy())
     await w.flush()
-    expect((await s.index.read(loadJobs)).result[0]).toMatchObject({ state: 'succeeded', summary: 'done', endedAt: expect.any(Number) })
+    expect((await s.index.read(loadJobs)).result[0]).toMatchObject({ state: 'succeeded', summary: expect.stringMatching(/Still open: R7 at the low corner\.$/), endedAt: expect.any(Number) })
     w.stop()
     jobs.dispose()
   })

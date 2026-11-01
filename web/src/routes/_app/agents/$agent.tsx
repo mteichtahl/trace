@@ -9,6 +9,7 @@ import { useQueries } from '@tanstack/react-query'
 import { Link, Navigate, createFileRoute } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useTraceContext } from '@/components/chat/context'
+import { Markdown } from '@/components/chat/markdown'
 import { MemorySheet } from '@/components/memory/memory-sheet'
 import { NeedsYouCard } from '@/components/needs-you-card'
 import { useDismissStuck } from '@/components/dismiss-stuck'
@@ -161,6 +162,22 @@ const ENDED: Record<string, { status: 'passed' | 'failing' | 'warning' | 'idle';
 }
 
 /** One ended job: how it went, what was asked, what it said (its summary, or why it failed or was lost), where, when. */
+/** A job's report: three lines, and the whole of it (rendered) on asking. Its conclusion, what is still open, comes last. */
+function Report({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  const long = text.length > 280 || text.includes('\n')
+  return (
+    <div className="text-muted-foreground">
+      {open ? <div className="text-sm text-foreground"><Markdown text={text} /></div> : <p className="line-clamp-3">{text}</p>}
+      {long && (
+        <button type="button" className="mt-1 text-xs font-medium text-primary hover:underline" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+          {open ? 'Show less' : 'Show the whole report'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 function EndedJob({ item }: { item: { repo: string; project: string; run: import('@/lib/types').RunSummary } }) {
   const r = item.run
   const e = ENDED[r.state] ?? { status: 'idle' as const, label: r.state }
@@ -173,7 +190,7 @@ function EndedJob({ item }: { item: { repo: string; project: string; run: import
         <span className="min-w-0 flex-1 font-medium">{r.title}</span>
         <span className="shrink-0 text-xs text-muted-foreground">{item.project}{at ? ` · ${ago(at)}` : ''}{r.startedAt && r.endedAt ? ` · ${duration((Date.parse(r.endedAt) - Date.parse(r.startedAt)) / 1000, { short: true })}` : ''}</span>
       </div>
-      {said && <p className="line-clamp-3 text-muted-foreground">{said}</p>}
+      {said && <Report text={said} />}
       {r.branch && <p className="font-mono text-xs text-muted-foreground">{r.branch}</p>}
     </li>
   )

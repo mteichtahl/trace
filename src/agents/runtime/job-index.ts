@@ -118,7 +118,7 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
       kind: j.kind, agent: j.agent ?? null, title: p ? titleOf(p) : j.key, number: j.number ?? null,
       requestedBySub: p?.kind === 'task' ? p.requestedBySub ?? null : null, requestedBy: p?.kind === 'task' ? p.requestedBy : null,
       state: j.state, step: j.step ?? null, startedAt: iso(j.runningAt ?? j.startedAt), endedAt: iso(j.endedAt), where: WHERE,
-      branch: j.branch ?? null, parentJob: j.parentJobId ?? null, handoff: j.handoffId ?? null, session: j.session ?? null, summary: j.summary?.slice(0, 2000) ?? null, error: j.error?.slice(0, 2000) ?? null,
+      branch: j.branch ?? null, parentJob: j.parentJobId ?? null, handoff: j.handoffId ?? null, session: j.session ?? null, summary: j.summary?.slice(0, 8000) ?? null, error: j.error?.slice(0, 2000) ?? null,
       ...(p?.kind === 'task' && !isDelegated(p) ? { payload: resumablePayload(p), resumeOf: p.resume?.job ?? null } : {}),
       ...(j.pause ? { pausedBy: j.pause.by, pausedAt: iso(j.pause.at) } : {}),
     }
