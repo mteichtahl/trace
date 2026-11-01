@@ -758,12 +758,19 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
       const summary = redact(out.text)
       await mem.finish(out.ok, summary)
       mem = NO_MEMORY
-      if (prep.issue) await specialistComment(gh, p.repository, prep.issue, ctx.jobId, s, r, out.ok, summary, cfg.worker.escalate_to, prep.runUrl)
-      if (!out.ok) throw new Error(summary)
+      if (!out.ok) {
+        if (prep.issue) await specialistComment(gh, p.repository, prep.issue, ctx.jobId, s, r, false, summary, cfg.worker.escalate_to, prep.runUrl)
+        throw new Error(summary)
+      }
       // what the specialist's own tools wrote (requirements, the test plan, runs) is in the record: it reaches the
       // project only when committed, and nothing else commits it unless the delegated worker was told to
       const kept = await keepRecord({ g, branch, defaultBranch: base.defaultBranch, jobId: ctx.jobId, agent: r.kind, log })
-      if (kept) log(kept)
+      if (kept) log(kept.text)
+      // a record that could not be committed or pushed is lost with the checkout: the job did not do its work, whatever
+      // its report says (testyyyu: a Verification re-run reported every test passing and met the Prove criteria with
+      // runs that never reached the repository). It fails, saying so, rather than ending succeeded.
+      if (kept?.lost) throw new Error(`${kept.text}. What its tools recorded (runs, test results, requirements) is not in the project, so any gate check or report citing it has no evidence behind it: run the job again. Its report was: ${summary.slice(0, 1500)}`)
+      if (prep.issue) await specialistComment(gh, p.repository, prep.issue, ctx.jobId, s, r, true, summary, cfg.worker.escalate_to, prep.runUrl)
       // a hand-off job that finished without answering: its hand-off is closed, so the asker is told
       if (answering && handoffs) { settled = true; await handoffs.settle(answering.id, endedWithout('succeeded', summary)).catch(() => false) }
       // one that answered: the asking specialist carries on on this branch when its own job has ended
@@ -858,19 +865,19 @@ export const RECORD_PATH = '.trace/project.db'
  * pull request). Never on the default branch. Answers what it did, in words, or null when there was nothing to keep; a
  * failure is said, never thrown: the job's own work is done.
  */
-export async function keepRecord(o: { g: GitOpts; branch: string; defaultBranch: string; jobId: string; agent: string; log: (l: string) => void }): Promise<string | null> {
+export async function keepRecord(o: { g: GitOpts; branch: string; defaultBranch: string; jobId: string; agent: string; log: (l: string) => void }): Promise<{ text: string; lost: boolean } | null> {
   const git = gitIn({ ...o.g, signal: undefined })
   try {
     const changed = (await git(['status', '--porcelain', '--', RECORD_PATH])).stdout.trim() !== ''
     if (!changed) return null
-    if (o.branch === o.defaultBranch) return `the project's record changed but stays uncommitted: the job ran on the default branch (${o.branch}), which trace never pushes to`
+    if (o.branch === o.defaultBranch) return { text: `the project's record changed but stays uncommitted: the job ran on the default branch (${o.branch}), which trace never pushes to`, lost: false }
     await git(['add', '--', RECORD_PATH])
     await git(['commit', '-m', `trace: the ${o.agent} specialist's record (${o.jobId})\n\nWhat its tools wrote to the project's record (requirements, the test plan, runs), so it reaches the project when this branch is merged.`])
     await git(['push', 'origin', `HEAD:refs/heads/${o.branch}`])
     const head = (await git(['rev-parse', '--short', 'HEAD'])).stdout.trim()
-    return `committed the project's record on ${o.branch} (${head}) and pushed it`
+    return { text: `committed the project's record on ${o.branch} (${head}) and pushed it`, lost: false }
   } catch (e) {
-    return `could not commit the project's record on ${o.branch}: ${errText(e).slice(0, 300)}`
+    return { text: `could not commit the project's record on ${o.branch}: ${errText(e).slice(0, 300)}`, lost: true }
   }
 }
 
