@@ -104,6 +104,9 @@
  *   actions-layout.ts    installation.layout (flat or nested, what that means, and how to move)
  *   actions-services.ts  services.list, services.create, services.update, services.assign, services.unassign,
  *                        services.rotate, services.retire_secret, services.delete, services.history (connected systems)
+ *   actions-changes.ts   changes.list, change.get, change.diff (read); change.accept, change.ask, change.discard (write,
+ *                        never a connected system's): the pull requests trace's jobs opened, reviewed and accepted
+ *                        in the app as changes (docs/guided-flow.md)
  *
  * A connected system (an outside system with a client-credentials token, docs/external-access.md) reaches only the
  * actions in src/api/service-policy.ts's allow-list, with the scope each needs, checked in perform before anything else.
@@ -153,6 +156,7 @@ import { VOICE_ACTIONS } from './actions-voice.js'
 import { LAYOUT_ACTIONS } from './actions-layout.js'
 import type { CognitoUser } from './aws.js'
 import { SERVICE_ADMIN_ACTIONS } from './actions-services.js'
+import { CHANGE_ACTIONS } from './actions-changes.js'
 import { SERVICE_ACTIONS, checkService, taskCap, toolOpenToSystems } from './service-policy.js'
 
 export {
@@ -700,6 +704,7 @@ export const ACTIONS = {
   ...VOICE_ACTIONS,
   ...LAYOUT_ACTIONS,
   ...SERVICE_ADMIN_ACTIONS,
+  ...CHANGE_ACTIONS,
 } satisfies Record<string, Action<z.ZodType>>
 
 export type ActionName = keyof typeof ACTIONS
