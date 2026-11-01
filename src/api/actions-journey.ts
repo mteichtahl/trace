@@ -45,13 +45,14 @@
 import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
-  INBOX_KINDS, type InboxItem, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
+  INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
   dismissStuck, journeyView, loadJourney, recordOpen, returnGate, signGate, sortInbox,
 } from '../core/journey.js'
 import { AGENT_WORDS, jobIndex, listJobs, projectHandoffs } from './actions-jobs.js'
 import { reviewItems } from './inbox-review.js'
 import { loadJobs } from '../core/job-index.js'
-import { type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, label, plainly, snapshotJourney, withJourneyDb, writeJourney } from './action-kit.js'
+import { type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, label, plainly, snapshotJourney, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
+import { requirementEvidence } from './record-read.js'
 import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { isLive } from '../core/job-index.js'
 
@@ -177,6 +178,31 @@ export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KIN
   },
 }
 
+/**
+ * A gate is not the next step while a requirement an agent changed after the requirements baseline is still
+ * unaccepted: the gates check the design against the accepted requirements, so the change is the person's to decide
+ * first, in Requirements review. Only after the baseline (before it, Requirements review itself is how the
+ * requirements are first agreed), and only when the step would be the person signing a gate.
+ */
+export function changedStep(next: NextStep, stage: string, open: readonly string[]): NextStep {
+  if (next.kind !== 'gate' || !next.yours || stage === 'define' || !open.length) return next
+  const one = open.length === 1
+  const ids = one ? open[0] : `${open.slice(0, -1).join(', ')} and ${open.at(-1)}`
+  return {
+    kind: 'task', belongs_to: 'you', yours: true,
+    summary: `${ids} ${one ? 'was' : 'were'} changed after the requirements baseline and ${one ? 'is' : 'are'} not accepted yet: accept, edit or strike ${one ? 'it' : 'them'} in Requirements review. ${next.summary.replace(/ trace recommends signing\.$/, '')}`,
+    why: 'The gates check the design against the accepted requirements, so a changed requirement is agreed before the next gate is signed.',
+    recommendation: null, button: 'Open Requirements review', stage: next.stage, ref: { kind: 'skill', id: 'requirements-review' },
+  }
+}
+
+/** changedStep with the record read: only when it could change the step; a record that cannot be read leaves it. */
+async function changedFirst(ctx: Context, repo: string, r: JourneyRecord, next: NextStep): Promise<NextStep> {
+  if (next.kind !== 'gate' || !next.yours || r.journey.currentStage === 'define') return next
+  const open = await withRecordDb(ctx, repo, (db) => requirementEvidence(db, r).filter((q) => q.status === 'proposed').map((q) => q.id)).catch(() => [] as string[])
+  return changedStep(next, r.journey.currentStage, open)
+}
+
 export const JOURNEY_ACTIONS = {
   'journey.get': def('read', Repo, async ({ repo }, ctx) => {
     const viewer = await viewerOf(ctx.principal, repo)
@@ -189,8 +215,9 @@ export const JOURNEY_ACTIONS = {
     if (!r) return { repo, ...NOT_STARTED, jobs: jobs.jobs, handoffs }
     // whether the project has agent memory here (the Memory tab): its memory is set up, not that a session has happened
     const hasMemory = Boolean(ctx.deps.memory?.()?.forProject(repo))
+    const view = journeyView(r, viewer, undefined, facts)
     return {
-      repo, started: true, you: { admin: viewer.admin, part: viewer.part }, has_memory: hasMemory, ...journeyView(r, viewer, undefined, facts),
+      repo, started: true, you: { admin: viewer.admin, part: viewer.part }, has_memory: hasMemory, ...view, next: await changedFirst(ctx, repo, r, view.next),
       jobs: jobs.jobs, handoffs, ...(jobs.error ? { jobs_unavailable: jobs.error.slice(0, 200) } : {}),
     }
   }),

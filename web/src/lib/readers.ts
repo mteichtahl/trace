@@ -49,6 +49,7 @@ function refTo(repo: string, ref: unknown, criteria?: Map<string, string>): stri
     case 'gate': return `/p/${pid(repo)}/gates/${id}`
     case 'question': return `/p/${pid(repo)}/do/question-answer`
     case 'criterion': { const g = criteria?.get(id); return g ? `/p/${pid(repo)}/gates/${g}` : undefined }
+    case 'skill': return /^[a-z][a-z0-9-]*$/.test(id) ? `/p/${pid(repo)}/do/${id}` : undefined
     default: return undefined
   }
 }
