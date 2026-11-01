@@ -59,7 +59,7 @@ async function documentPages(path: string): Promise<string[]> {
 
 export const requirementsTool = defineTool({
   name: 'verify.requirements',
-  description: 'Requirements in the project database. add (one or many, e.g. confirmed candidates), list (filter by kind/status), update one, or extract: candidate requirements from a specification (text, or a .pdf/.txt/.md file), found by rules: requirement verbs (shall/must/should…), spec-table rows with min/typ/max, numeric limits; each with a kind, an acceptance criterion from its limits, its page and a score. extract never writes; confirm candidates with add.',
+  description: 'Requirements in the project database (only the Verification specialist adds or updates them; others list). add (one or many, e.g. confirmed candidates), list (filter by kind/status), update one, or extract: candidate requirements from a specification (text, or a .pdf/.txt/.md file), found by rules: requirement verbs (shall/must/should…), spec-table rows with min/typ/max, numeric limits; each with a kind, an acceptance criterion from its limits, its page and a score. extract never writes; confirm candidates with add.',
   input: z.object({
     action: z.enum(['add', 'list', 'update', 'extract']),
     requirements: z.array(ReqInput).optional().describe('add: the requirements'),
@@ -85,6 +85,12 @@ export const requirementsTool = defineTool({
         total: all.length, by_kind: Object.fromEntries(REQ_KINDS.map((k) => [k, all.filter((c) => c.kind === k).length])),
         note: 'candidates only: confirm, edit or drop each, then add them (action add)',
       }
+    }
+    // the requirements are the Verification specialist's: another specialist reads them (list) and hands a change to
+    // it (journey.handoff); a worker or a person's own session (no TRACE_AGENT, or worker) is not a specialist
+    const agent = (process.env.TRACE_AGENT ?? '').trim().toLowerCase()
+    if ((a.action === 'add' || a.action === 'update') && agent && agent !== 'verify' && agent !== 'worker' && agent !== 'local') {
+      throw new ToolError(`${a.action}: the requirements are the Verification specialist's to change. Read them with action list, and hand the change to it with journey.handoff (the requirement, the new wording or criterion, and why).`)
     }
     return withVerify((v) => {
       if (a.action === 'add') {

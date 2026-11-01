@@ -766,6 +766,11 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
       if (kept) log(kept)
       // a hand-off job that finished without answering: its hand-off is closed, so the asker is told
       if (answering && handoffs) { settled = true; await handoffs.settle(answering.id, endedWithout('succeeded', summary)).catch(() => false) }
+      // one that answered: the asking specialist carries on on this branch when its own job has ended
+      if (answering && handoffs) {
+        const next = await handoffs.carryOn(answering.id, branch, ctx.startJob).catch((e: unknown) => { log(`could not start the asker again: ${redact(errText(e))}`); return null })
+        if (next) log(`hand-off ${answering.id} answered: the ${answering.from} specialist carries on on ${branch} (job ${next})`)
+      }
       return `${r.kind}: done in ${out.turns} turns${escalation(summary) ? ' (escalated)' : ''}${prep.issue ? '' : `: ${summary.slice(0, REPORT_MAX)}`}`
     } finally {
       waits.close()

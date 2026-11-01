@@ -97,7 +97,7 @@ const FIRMWARE: readonly Template[] = ['firmware', 'mixed']
 const LOGIC: readonly Template[] = ['fpga', 'mixed']
 
 /** Every gate trace knows, in journey order, with each criterion and the templates it applies to (all, when unsaid). */
-const GATES: readonly GateDef[] = [
+export const GATES: readonly GateDef[] = [
   { id: 'define', stage: 'define', name: 'requirements baseline', criteria: [
     { key: 'accepted', text: 'Every requirement is accepted or struck.', owner: 'person', evidence: 'the requirements list' },
     { key: 'measurable', text: 'Every requirement has a criterion that can be measured, with a number and a unit.', owner: 'person', evidence: 'the requirements list' },
@@ -596,7 +596,8 @@ export interface NextStep {
   recommendation: string | null
   button: string
   stage: StageId | null
-  ref: { kind: 'gate' | 'criterion' | 'question' | 'stage'; id: string } | null
+  /** skill: a guided skill (src/core/skills.ts) the step opens, such as requirements-review */
+  ref: { kind: 'gate' | 'criterion' | 'question' | 'stage' | 'skill'; id: string } | null
 }
 export interface QuestionView {
   id: string; kind: 'question' | 'stuck'; asked_by: string; for_you: boolean; for: 'you' | 'person' | 'contributors' | 'admins'; stage: StageId | null

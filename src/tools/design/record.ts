@@ -126,18 +126,21 @@ export function linksView(rows: DesignRows): { requirement: string; intent: stri
 
 // ------------------------------------------------------------------ requirements: people's decisions over the table
 
-/** A requirement row as far as its decision needs it: its words, status and when an agent last changed it. */
-export interface RequirementNow { text: string; status: string; updated: number | null }
+/** What a decision on a requirement is made on: its words and its acceptance criterion. */
+export interface RequirementWords { text: string; acceptance: string | null }
+/** A requirement row as far as its decision needs it: its words, acceptance, status and when an agent last changed it. */
+export interface RequirementNow extends RequirementWords { status: string; updated: number | null }
 
 /**
- * Whether a person's decision on a requirement still stands on the row as it is now. A decision keeps the words it was
- * made on (detail.text), and an agent's later change of them reopens it, the way intent decisions do. A decision
+ * Whether a person's decision on a requirement still stands on the row as it is now. A decision keeps the words and
+ * acceptance it was made on (detail.text, detail.acceptance), and an agent's later change of either reopens it, the
+ * way intent decisions do (a decision kept with words only is checked on its words). A decision
  * recorded before the words were kept stands until an agent proposes the requirement again after it (status
  * proposed, changed after the decision).
  */
 export function decisionStands(d: DesignDecision, now: RequirementNow | undefined): boolean {
   if (!now) return true
-  if (typeof d.detail.text === 'string') return d.detail.text === now.text
+  if (typeof d.detail.text === 'string') return d.detail.text === now.text && (!('acceptance' in d.detail) || d.detail.acceptance === now.acceptance)
   return !(now.status === 'proposed' && now.updated !== null && now.updated > d.at)
 }
 
