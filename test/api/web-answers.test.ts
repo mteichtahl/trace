@@ -142,7 +142,9 @@ describe('the answers the web app reads', () => {
         return {
           'build.get': { args: { repo: REPO }, result: await run(USER, 'build.get', { repo: REPO }) },
           'cost.get': { args: { repo: REPO }, result: await run(ADMIN, 'cost.get', { repo: REPO }) },
-          'usage.month': { args: { month: '2026-10' }, result: await run(ADMIN, 'usage.month', { month: '2026-10' }) },
+          // the month the order was just placed in (it is placed now), kept as 2026-10: asking for a fixed month made the
+          // answer change when the clock passed into the next one, and the kept file must not change by the month
+          'usage.month': { args: { month: '2026-10' }, result: { ...(await run(ADMIN, 'usage.month', { month: new Date().toISOString().slice(0, 7) }) as Record<string, unknown>), month: '2026-10' } },
         }
       })()),
       // the small gaps: what Admin › Installation and New project read, and what the backend reads for voice and chat
