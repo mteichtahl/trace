@@ -375,9 +375,21 @@ export const ACTIONS = {
     } finally {
       t.cleanup()
     }
-    const [pulls, issues, runs, deploy] = await Promise.all([gh.openPulls(repo), gh.openIssues(repo, label), gh.workflowRuns(repo, 60), gh.lastDeploy(repo)])
+    // each part on its own: one GitHub refusal (a token without Deployments: read answers 403) leaves the rest readable
+    const parts = await Promise.allSettled([gh.openPulls(repo), gh.openIssues(repo, label), gh.workflowRuns(repo, 60), gh.lastDeploy(repo)])
+    const unreadable: { part: string; error: string }[] = []
+    const got = <T,>(i: number, part: string, none: T): T => {
+      const p = parts[i]!
+      if (p.status === 'fulfilled') return p.value as T
+      unreadable.push({ part, error: p.reason instanceof Error ? p.reason.message : String(p.reason) })
+      return none
+    }
+    const pulls = got(0, 'open pull requests', [] as Awaited<ReturnType<typeof gh.openPulls>>)
+    const issues = got(1, 'agent-fix issues', [] as Awaited<ReturnType<typeof gh.openIssues>>)
+    const runs = got(2, 'workflow runs', [] as Awaited<ReturnType<typeof gh.workflowRuns>>)
+    const deploy = got(3, 'last deploy (the token needs Deployments: read)', null as Awaited<ReturnType<typeof gh.lastDeploy>>)
     const trace = runs.filter((r) => /(^|\/)trace-[^/]*\.ya?ml$/.test(r.path) || /^trace\b/i.test(r.name)).slice(0, 20)
-    return { repo, default_branch: branch, pulls, agent_fix_issues: issues, runs: trace, last_deploy: deploy }
+    return { repo, default_branch: branch, pulls, agent_fix_issues: issues, runs: trace, last_deploy: deploy, ...(unreadable.length ? { unreadable } : {}) }
   }),
 
   // one pull request's state and checks, for its card (the app asks again while it is open: web/src/components/pull-status.tsx)

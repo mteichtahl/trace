@@ -28,8 +28,8 @@ GitHub token. Nothing else: no Docker, no `gh` CLI, no KiCad or Python on this m
 CodeBuild, and onboarding talks to GitHub's API and `git`).
 
 The token: a fine-grained token (github.com/settings/personal-access-tokens) on the repositories trace will run, with
-Contents, Pull requests, Issues, Workflows, Actions, Secrets, Variables, Administration and Webhooks read and write, and
-the account permission "Email addresses: read"; or a classic token with `repo`, `workflow` and `user:email`. What each
+Contents, Pull requests, Issues, Workflows, Actions, Secrets, Variables, Administration and Webhooks read and write,
+Deployments read, and the account permission "Email addresses: read"; or a classic token with `repo`, `workflow` and `user:email`. What each
 permission is for, and what happens without it, is in [Tokens and permissions](#tokens-and-permissions).
 
 Builds need nothing more. Every GitHub Actions job runs on an AWS CodeBuild runner in your account, trace's own
@@ -173,6 +173,7 @@ One token does everything. On each repository it needs:
 | Secrets, Variables: read and write | Its `TRACE_TOKEN` secret and variables | Refused for that repository, unless an admin token is given |
 | Administration: read and write | Its settings and the "trace" ruleset; with the token as CodeBuild's credential, CodeBuild registering each job's runner | Settings and ruleset left alone; with the token as CodeBuild's credential the preflight stops: its runner can't be made |
 | Webhooks, Commit statuses: read and write | With the token as CodeBuild's credential, its runner's workflow-job webhook | The same (a GitHub connection needs neither) |
+| Deployments: read | The project's last deploy in its status (the app and chat) | Its status says the last deploy is unreadable; the rest still shows |
 | Email addresses: read (account) | The first administrator's email | The email is asked for |
 
 A classic token needs `repo`, `workflow` and `user:email`, and its account must be an admin of each repository. The
