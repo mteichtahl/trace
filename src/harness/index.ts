@@ -15,6 +15,7 @@ import { delegateStep, reportStep, specialistStep } from './actions.js'
 import * as ci from './ci-doctor.js'
 import * as deploy from './deploy.js'
 import { dispatchTask } from './dispatch.js'
+import { retried } from './retry.js'
 import * as prs from './prs.js'
 import type { Context, Core, Deps, GitHub, TaskEnv } from './types.js'
 import * as worker from './worker.js'
@@ -42,14 +43,15 @@ export const TASKS: Record<string, (d: Deps) => Promise<void> | void> = {
 async function defaultDb(github: GitHub, context: Context): Promise<Uint8Array | null> {
   const { owner, repo } = context.repo
   const repository = context.payload.repository as { default_branch?: string } | undefined
-  const branch = repository?.default_branch ?? (await github.rest.repos.get({ owner, repo })).data.default_branch
+  const branch = repository?.default_branch ?? (await retried(() => github.rest.repos.get({ owner, repo }))).data.default_branch
   try {
     // The contents API inlines files up to 1 MB as base64; a larger database is read as its git blob (to 100 MB).
-    const meta = (await github.rest.repos.getContent({ owner, repo, path: '.trace/project.db', ref: branch })).data
+    // Both reads retry a gateway timeout or server error (retry.ts): a large blob now and then answers 504.
+    const meta = (await retried(() => github.rest.repos.getContent({ owner, repo, path: '.trace/project.db', ref: branch }))).data
     if (Array.isArray(meta) || meta.type !== 'file') throw new Error('.trace/project.db is not a file')
     const b64 = meta.content && meta.encoding === 'base64'
       ? meta.content
-      : (await github.rest.git.getBlob({ owner, repo, file_sha: meta.sha })).data.content
+      : (await retried(() => github.rest.git.getBlob({ owner, repo, file_sha: meta.sha }))).data.content
     return new Uint8Array(Buffer.from(b64, 'base64'))
   } catch (e) {
     if ((e as { status?: number }).status !== 404) throw e
