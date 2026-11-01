@@ -33,7 +33,7 @@ import {
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
 import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, storeAt, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
-import { viewerOf } from './actions-journey.js'
+import { type Lasts, carryOn, viewerOf } from './actions-journey.js'
 import { loadDesignDecisions, recordDesignDecision } from '../tools/design/decisions.js'
 import type { DesignRows } from '../tools/design/db.js'
 import { architectureView, intentDraft, intentView, linksView, pinCheck } from '../tools/design/record.js'
@@ -136,7 +136,9 @@ async function inputFor(ctx: Context, repo: string, skill: string, draftOverride
       if (Array.isArray(parsed)) instruments = parsed as CheckInput['instruments']
     } catch { /* unreadable settings: no instruments */ }
     const tests = hasTable(db, 'test_items') ? (db.prepare('SELECT id, method, status FROM test_items').all() as Record<string, unknown>[]).map((t) => ({ id: String(t.id), method: String(t.method), status: String(t.status) })) : []
-    const question = r?.questions.find((q) => q.answeredAt === null && questionIsFor(q, viewer)) ?? null
+    // an agent's question first: a stuck report is dismissed with a reason (stuck.dismiss), it has nothing to choose
+    const open = r?.questions.filter((q) => q.answeredAt === null && questionIsFor(q, viewer)) ?? []
+    const question = open.find((q) => q.kind !== 'stuck') ?? open[0] ?? null
     const fab = latestRun(db, 'kicad.fab')
     const fabResult = fab ? runResult(db, fab.id) : null
     const handPlaced = Array.isArray(fabResult?.hand_placed) ? (fabResult.hand_placed as unknown[]).filter((x): x is string => typeof x === 'string') : null
@@ -433,6 +435,18 @@ export const SKILL_ACTIONS = {
       putDraft(db, by.hash, a.skill, null)
       return { result: { id, ref } }
     }))
+    // Question answer: an agent that asked and then ended is started again with the answer, as question.answer does
+    let carried: { jobId?: string; started?: string[]; jobError?: string; summary?: string } = {}
+    if (a.skill === 'question-answer' && i.question) {
+      const asked = i.facts?.questions.find((q) => q.id === i.question!.id)
+      if (asked?.jobId) {
+        const lasts = (['once', 'rule', 'requirement'] as const).find((x) => x === a.draft.lasts) as Lasts | undefined
+        const row = await withJourneyDb(ctx, a.repo, (db) => loadJourney(db)?.questions.find((q) => q.id === asked.id) ?? null)
+        const answered = row?.answeredAt != null ? { answer: row.answer ?? '', reason: row.answerReason ?? null, by: row.answeredBy ?? null } : null
+        carried = await carryOn(ctx, a.repo, asked, { answered }, lasts).catch((e: unknown) => ({ jobError: e instanceof Error ? e.message : String(e) }))
+        if (carried.jobId) { jobId = carried.jobId; started = [...started, ...(carried.started ?? [])] }
+      }
+    }
     // Intent builder: the intent is now decided, so the Verification agent drafts the candidate requirements from it,
     // which open Requirements review (docs/user-journey.md, Intent builder: "What it produces"). Started after the
     // decisions are recorded, so the agent reads them; the submission stands even when the job cannot start
@@ -443,7 +457,8 @@ export const SKILL_ACTIONS = {
         if (r.accepted) { jobId = r.jobId; started = ['The Verification agent drafts the candidate requirements for Requirements review.'] } else jobError = r.reason ?? 'trace did not accept the job.'
       } catch (e) { jobError = e instanceof Error ? e.message : String(e) }
     }
-    return { ok: true, repo: a.repo, skill: a.skill, id: out.id, ...(out.ref ? { ref: out.ref } : {}), ...(jobId ? { jobId } : {}), ...(jobError ? { jobError } : {}), started, version: out.version }
+    if (carried.jobError) jobError = carried.jobError
+    return { ok: true, repo: a.repo, skill: a.skill, id: out.id, ...(out.ref ? { ref: out.ref } : {}), ...(jobId ? { jobId } : {}), ...(jobError ? { jobError } : {}), ...(carried.summary ? { summary: carried.summary } : {}), started, version: out.version }
   }),
 }
 

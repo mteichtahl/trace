@@ -74,16 +74,17 @@ export function useSkill<D extends SkillDraftBase>(repo: string, def: SkillDef, 
   // record the skill twice
   const submitting = useRef(false)
   const qc = useQueryClient()
-  const submit = useCallback(async (run?: () => Promise<unknown>, done = `${def.name}: submitted.`) => {
+  // done: the toast, or what to say from the call's answer (an answer's summary says whether the agent carried on)
+  const submit = useCallback(async (run?: () => Promise<unknown>, done: string | ((result: unknown) => string) = `${def.name}: submitted.`) => {
     if (submitting.current) return
     submitting.current = true
     try {
-      await (run ? run() : import('@/lib/api').then(({ call }) => call('skill.submit', { repo, skill: def.id, draft: draft.data })))
+      const result = await (run ? run() : import('@/lib/api').then(({ call }) => call('skill.submit', { repo, skill: def.id, draft: draft.data })))
       draft.discard()
       // what the submission changed (the journey, the gate's criteria, the inbox, the skill's own view) is read again,
       // so the page the person returns to shows it at once
       for (const k of [['journey.get', repo], ['skill.get', repo], ['skill.drafts', repo], ['design.get', repo], ['requirements.trace', repo], ['inbox']]) void qc.invalidateQueries({ queryKey: k })
-      toast(done)
+      toast(typeof done === 'function' ? done(result) : done)
       close()
     } catch (e) {
       toast.error(`${def.name} was not submitted. Your work is kept as a draft.`, { description: e instanceof Error ? e.message : String(e) })

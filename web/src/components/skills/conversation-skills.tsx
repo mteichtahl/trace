@@ -320,7 +320,13 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
         repo, question: q!.id,
         ...(d.option && d.option !== 'other' ? { option: d.option } : { answer: [d.value && q?.quantity ? `${d.value} ${q.quantity.unit}` : '', d.answer].filter(Boolean).join(': ') + (d.source ? ` (source: ${d.source})` : '') }),
         ...(d.reason ? { reason: d.reason } : {}),
-      }).then(() => d.lasts === 'rule' ? call('task', { repo, request: `Add a project rule from the answer to "${q!.text}".` }) : undefined), 'Answered. The agent continues.')}
+        ...(d.lasts ? { lasts: d.lasts } : {}),
+      }).then(async (r) => {
+        // the specialist carried on with the answer (and what it lasts as) when its job had ended; else a rule still
+        // gets its own task, as before
+        if (!r.jobId && d.lasts === 'rule') await call('task', { repo, request: `Add a project rule from the answer to "${q!.text}".` })
+        return r
+      }), (r) => (r as { summary?: string } | undefined)?.summary ?? 'Answered. The agent continues.')}
     >
       <StepHeader def={def} index={s.stepIndex} />
       {s.view.isError && <div className="mt-4"><QueryError error={s.view.error} what="the question" onRetry={() => void s.view.refetch()} /></div>}

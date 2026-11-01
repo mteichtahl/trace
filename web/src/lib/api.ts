@@ -82,7 +82,7 @@ export interface Actions {
   'journey.criterion.open': { args: Repo & { gate?: string; criterion?: string; waiver?: string }; result: { repo: string; opened: string; at: string; version: number } }
   'gate.sign': { args: Repo & { gate: string; notes?: string; acknowledge?: string[] }; result: { ok: true; started?: string[]; advanced_to: string | null; released: boolean; summary: string; snapshot: unknown } }
   'gate.return': { args: Repo & { gate: string; reason: string; reopen?: string }; result: { repo: string; reopened: string | null; summary: string } }
-  'question.answer': { args: Repo & { question: string; option?: string; answer?: string; reason?: string }; result: { repo: string; summary: string; jobId?: string; jobError?: string } }
+  'question.answer': { args: Repo & { question: string; option?: string; answer?: string; reason?: string; lasts?: 'once' | 'rule' | 'requirement' }; result: { repo: string; summary: string; jobId?: string; jobError?: string } }
   /** `job`: the stuck agent's job id, or the stuck item's own id (an inbox item's questionId) */
   'stuck.dismiss': { args: Repo & { job: string; reason: string }; result: { repo: string; dismissed: { id: string; job_id: string | null; reason: string; by: string; at: string }; summary: string } }
   'waiver.add': { args: Repo & { target: { kind: 'criterion' | 'requirement' | 'finding' | 'test'; id: string }; reason: string; risk: string; severity: 'cosmetic' | 'degraded' | 'failure' | 'safety'; caught_where: string | null; scope?: string }; result: { repo: string; waiver: { id: string } } }

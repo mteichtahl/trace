@@ -333,6 +333,24 @@ describe('the agents\' facts in the journey', () => {
     expect(startedJobs.length).toBe(before + 1)
   })
 
+  it('the guided Question answer starts the asking specialist again too, told what the answer lasts as', async () => {
+    const now = Date.now() / 1000
+    await new JobIndexStore(backendFor(join(bucket, 'projects')), 'acme/other').update((db) => {
+      putJob(db, 'job-ams', { kind: 'task', agent: 'ams', title: 'Check the flash rate', state: 'succeeded', branch: 'claude/task-flash', startedAt: now - 600, endedAt: now - 30 }, now)
+      return { result: null }
+    })
+    const r = (await journeyStore({ principal: ADMIN, deps }, 'acme/other').read((db) => loadJourney(db))).result
+    await facts().update((db) => ({ result: addAgentQuestion(db, { agent: 'ams', label: 'the Analog and mixed-signal specialist', jobId: 'job-ams' }, { text: 'How should the flash-rate requirement be handled?', blocks: 'R5', options: opts }, r) }))
+    // the skill answers the person's first open question: any other open one is answered first
+    const open = (await run(USER, 'journey.get', { repo: 'acme/other' }) as { questions: { id: string; kind: string; text: string; for_you: boolean; answered: unknown; options: { id: string; recommended?: boolean }[] }[] }).questions
+      .filter((q) => q.kind === 'question' && q.for_you && !q.answered && !q.text.startsWith('How should the flash-rate'))
+    for (const q of open) await run(USER, 'question.answer', { repo: 'acme/other', question: q.id, option: (q.options.find((o) => o.recommended) ?? q.options[0])!.id })
+    const before = startedJobs.length
+    const out = await run(USER, 'skill.submit', { repo: 'acme/other', skill: 'question-answer', draft: { option: 'a', lasts: 'requirement' } }) as { jobId?: string; summary?: string; started: string[] }
+    expect(out).toMatchObject({ jobId: 'j', summary: expect.stringMatching(/carries on with it on claude\/task-flash/), started: [expect.stringMatching(/Analog/)] })
+    expect(startedJobs.slice(before)).toEqual([expect.objectContaining({ agent: 'ams', branch: 'claude/task-flash', request: expect.stringMatching(/changes a requirement[\s\S]*Requirements review/) })])
+  })
+
   it('an agent\'s check of a criterion trace owns moves journey.get; a person\'s criterion is refused', async () => {
     const r = (await journeyStore({ principal: ADMIN, deps }, 'acme/other').read((db) => loadJourney(db))).result
     const by = { agent: 'verify', label: 'the Verification specialist', jobId: 'job-10' }
