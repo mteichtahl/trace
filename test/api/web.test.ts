@@ -305,6 +305,34 @@ describe('the agents\' facts in the journey', () => {
     expect((await facts().read((db) => loadAgentFacts(db))).result.questions).toHaveLength(3)
   })
 
+  it('answering the question of a job that has ended starts its specialist again on that job\'s branch; a live job reads it itself', async () => {
+    const now = Date.now() / 1000
+    await new JobIndexStore(backendFor(join(bucket, 'projects')), 'acme/other').update((db) => {
+      putJob(db, 'job-ended', { kind: 'task', agent: 'impl', title: 'Draw the schematic', state: 'succeeded', branch: 'claude/task-draw', startedAt: now - 900, endedAt: now - 60 }, now)
+      putJob(db, 'job-live', { kind: 'task', agent: 'impl', title: 'Lay out the board', state: 'running', branch: 'claude/task-layout', startedAt: now - 60, beatAt: now }, now)
+      return { result: null }
+    })
+    const r = (await journeyStore({ principal: ADMIN, deps }, 'acme/other').read((db) => loadJourney(db))).result
+    const asked = await facts().update((db) => ({
+      result: [
+        addAgentQuestion(db, { agent: 'impl', label: 'the Implementation specialist', jobId: 'job-ended' }, { text: 'Which USB-C socket should J1 be?', blocks: 'the schematic', options: opts }, r),
+        addAgentQuestion(db, { agent: 'impl', label: 'the Implementation specialist', jobId: 'job-live' }, { text: 'Which side should J1 sit on?', blocks: 'the placement', options: opts }, r),
+      ],
+    }))
+    const [ended, live] = asked.result
+    const before = startedJobs.length
+    expect(await run(USER, 'question.answer', { repo: 'acme/other', question: ended, option: 'a' }))
+      .toMatchObject({ jobId: 'j', summary: 'Answered. The Implementation specialist carries on with it on claude/task-draw.' })
+    expect(startedJobs.slice(before)).toEqual([expect.objectContaining({
+      repository: 'acme/other', agent: 'impl', branch: 'claude/task-draw',
+      request: expect.stringMatching(/Which USB-C socket should J1 be\?[\s\S]*answered: Use the internal oscillator[\s\S]*push to the same branch/),
+    })])
+    const answered = await run(USER, 'question.answer', { repo: 'acme/other', question: live, option: 'a' })
+    expect(answered).toMatchObject({ summary: 'Answered. The agent carries on.' })
+    expect(answered).not.toHaveProperty('jobId')
+    expect(startedJobs.length).toBe(before + 1)
+  })
+
   it('an agent\'s check of a criterion trace owns moves journey.get; a person\'s criterion is refused', async () => {
     const r = (await journeyStore({ principal: ADMIN, deps }, 'acme/other').read((db) => loadJourney(db))).result
     const by = { agent: 'verify', label: 'the Verification specialist', jobId: 'job-10' }

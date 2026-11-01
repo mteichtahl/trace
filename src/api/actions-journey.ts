@@ -52,7 +52,8 @@ import { AGENT_WORDS, jobIndex, listJobs, projectHandoffs } from './actions-jobs
 import { reviewItems } from './inbox-review.js'
 import { loadJobs } from '../core/job-index.js'
 import { type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, label, plainly, snapshotJourney, withJourneyDb, writeJourney } from './action-kit.js'
-import type { SPECIALIST_KINDS } from '../agents/kinds.js'
+import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
+import { isLive } from '../core/job-index.js'
 
 const Id = z.string().min(1).max(80)
 
@@ -112,6 +113,37 @@ async function mapLimit<T, R>(items: readonly T[], n: number, fn: (t: T) => Prom
  * The work a stage starts when the gate before it is signed: the specialist and what it is asked. Architect: the
  * options a person then chooses between in Architecture choice (docs/user-journey.md, 2. Architect).
  */
+/** The request of the task that carries an ended job on once its question is answered. */
+export function answeredRequest(a: { id: string; text: string; jobId: string; branch: string; answer: string; reason: string | null; by: string | null }): string {
+  return [
+    `Your question ${a.id} (asked in job ${a.jobId}) is answered. You asked: ${a.text}`,
+    `${a.by ?? 'A person'} answered: ${a.answer}${a.reason ? ` (because ${a.reason})` : ''}.`,
+    `Carry the work on ${a.branch} on with that answer: read what is already on the branch, change what the answer changes, check it as before, and push to the same branch so its pull request updates.`,
+    'Do not redo what the answer does not touch. If the answer cannot be done as given, ask again (journey.ask) with what you found.',
+  ].join('\n')
+}
+
+/**
+ * After an answer: when the job that asked has ended, a task for the same specialist on that job's branch, told the
+ * answer. A job still queued, running or paused reads the answer itself (journey.status, or on Resume): nothing starts.
+ */
+async function carryOn(ctx: Context, repo: string, asked: { id: string; text: string; jobId: string | null }, q: { answered: { answer: string; reason: string | null; by: string | null } | null }): Promise<{ jobId?: string; started?: string[]; jobError?: string; summary?: string }> {
+  if (!asked.jobId || !q.answered) return {}
+  const { rows } = await listJobs(ctx, repo)
+  const row = rows.find((r) => r.id === asked.jobId)
+  if (!row || row.state === 'queued' || row.state === 'paused' || isLive(row, Date.now() / 1000)) return {}
+  const agent = SPECIALIST_KINDS.find((k) => k === row.agent)
+  // the specialist's own row may not carry the branch its worker pushed to
+  const branch = row.branch ?? rows.find((r) => r.parentJob === row.id && r.branch)?.branch ?? null
+  if (!agent || !branch) return {}
+  const request = answeredRequest({ id: asked.id, text: asked.text, jobId: row.id, branch, answer: q.answered.answer, reason: q.answered.reason, by: q.answered.by })
+  const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: repo, request, agent, branch, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
+  const who = `the ${SPECIALIST_WORDS[agent]} specialist`
+  return r.accepted
+    ? { jobId: r.jobId, started: [`The ${SPECIALIST_WORDS[agent]} specialist carries on with your answer on ${branch}.`], summary: `Answered. The ${SPECIALIST_WORDS[agent]} specialist carries on with it on ${branch}.` }
+    : { jobError: r.reason ?? 'trace did not accept the job.', summary: `Answered, but ${who} could not be started again: ${r.reason ?? 'trace did not accept the job'}. The answer is kept for its next job.` }
+}
+
 export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KINDS)[number]; request: string; started: string }>> = {
   architect: {
     agent: 'impl',
@@ -199,10 +231,16 @@ export const JOURNEY_ACTIONS = {
   }), async (a, ctx) => {
     // an agent's question lives in its facts; the answer is written here, in the record, under the same id
     const facts = await agentFacts(ctx, a.repo)
-    return journeyWrite(ctx, a.repo, (db) => {
+    const answered = await journeyWrite(ctx, a.repo, (db) => {
       const q = answerQuestion(db, a.question, signer(ctx), { option: a.option, answer: a.answer, reason: a.reason }, { facts })
       return { result: { repo: a.repo, question: q, summary: 'Answered. The agent carries on.' } }
     })
+    // an agent that asked and then ended (its question left in its report) reads the answer only in a next job: start
+    // that job, on the asking job's branch, so the answer is acted on now; the answer stands whatever happens here
+    const asked = facts.questions.find((q) => q.id === a.question)
+    if (!asked?.jobId) return answered
+    const carried = await carryOn(ctx, a.repo, asked, answered.question).catch((e: unknown) => ({ jobError: e instanceof Error ? e.message : String(e) }))
+    return { ...answered, ...carried }
   }),
 
   'stuck.dismiss': def('write', Repo.extend({ job: Id, reason: z.string().trim().min(3).max(300) }), async (a, ctx) => {
