@@ -2,7 +2,9 @@
 #
 #   open-pr       a pushed branch gets its pull request
 #   automerge     every PR to __TR_BRANCH__ merges itself once its required check passes (label __TR_HOLD__ holds it)
-#   update-queue  the oldest auto-merge PR that is behind __TR_BRANCH__ is brought up to date, one at a time
+#   update-queue  trace's own PRs whose only conflict is .trace/project.db get __TR_BRANCH__ merged in (the database
+#                 merged as the trace-db driver does); then the oldest auto-merge PR that is behind __TR_BRANCH__ is
+#                 brought up to date, one at a time
 #
 # Behaviour is set in .trace/config.yml (read from __TR_BRANCH__, never from a PR). Kill switch: repository
 # variable TRACE_PRS = 'false'. Needs the TRACE_TOKEN secret for its actions to start builds.

@@ -8,6 +8,8 @@
  *
  *   runs, measurements, artifacts   union: their rows that ours lacks are added (keys are UUIDs, so nothing collides)
  *   registered tables                each area's own merge SQL (store.ensureProjectSchema), else a union
+ *   any other table                  a union (created from their declaration when we lack it); different columns on
+ *                                    the two sides is a CONFLICT, so a table this process did not load is never dropped
  *   settings                         three-way per key: a key only they changed takes theirs; one only we changed keeps
  *                                    ours; one both changed to different values is a CONFLICT — ours is kept, the key
  *                                    is listed, and the driver exits 1 so git reports the conflict.
@@ -32,7 +34,7 @@ function opened(path: string): DatabaseSync {
   return db
 }
 
-/** Merge THEIRS into OURS (in place). Returns the conflicting setting keys (empty when clean). */
+/** Merge THEIRS into OURS (in place). Returns what conflicts: setting keys, and `table <name>` (empty when clean). */
 export function merge(base: string, ours: string, theirs: string): string[] {
   const hasBase = existsSync(base) && statSync(base).size > 0
   const b = hasBase ? opened(base) : null
@@ -62,7 +64,24 @@ export function merge(base: string, ours: string, theirs: string): string[] {
       o.exec('INSERT OR IGNORE INTO measurements SELECT * FROM theirs.measurements')
       o.exec('INSERT OR IGNORE INTO artifacts SELECT * FROM theirs.artifacts')
       // tables areas register (store.ensureProjectSchema): their own merge SQL, else a union
-      for (const tb of projectTables()) o.exec(tb.merge ?? `INSERT OR IGNORE INTO ${tb.table} SELECT * FROM theirs.${tb.table}`)
+      const done = new Set(['runs', 'measurements', 'artifacts', 'settings'])
+      for (const tb of projectTables()) { o.exec(tb.merge ?? `INSERT OR IGNORE INTO ${tb.table} SELECT * FROM theirs.${tb.table}`); done.add(tb.table) }
+      // a table no area registered here (this process did not load that area) is still merged, never dropped: a union
+      // when both sides have it with the same columns; otherwise it is a conflict and the merge stops
+      const tables = (db: string): string[] => (o.prepare(`SELECT name FROM ${db}.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as { name: string }[]).map((r) => r.name)
+      const cols = (db: string, t: string): string => (o.prepare(`SELECT name FROM pragma_table_info(?, ?)`).all(t, db) as { name: string }[]).map((r) => r.name).join(',')
+      const mine = new Set(tables('main'))
+      for (const t of tables('theirs')) {
+        if (done.has(t)) continue
+        if (!mine.has(t)) {
+          // their table as they declared it (keys and constraints kept), then their rows
+          const ddl = (o.prepare(`SELECT sql FROM theirs.sqlite_master WHERE type='table' AND name=?`).get(t) as { sql: string } | undefined)?.sql
+          if (!ddl) { conflicts.push(`table ${t}`); continue }
+          o.exec(ddl)
+        }
+        else if (cols('main', t) !== cols('theirs', t)) { conflicts.push(`table ${t}`); continue }
+        o.exec(`INSERT OR IGNORE INTO "${t.replace(/"/g, '""')}" SELECT * FROM theirs."${t.replace(/"/g, '""')}"`)
+      }
     })
     o.exec('DETACH DATABASE theirs')
     o.exec('VACUUM')
@@ -83,7 +102,7 @@ export function mergeMain(paths: readonly string[]): number {
   }
   const conflicts = merge(base, ours, theirs)
   if (conflicts.length) {
-    process.stderr.write(`trace: settings changed differently on both sides (ours kept): ${conflicts.join(', ')}\n`)
+    process.stderr.write(`trace: changed differently on both sides (ours kept): ${conflicts.join(', ')}\n`)
     return 1
   }
   return 0
