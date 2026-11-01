@@ -35,7 +35,7 @@
  *     tracectl check                      ERC/DRC on every KiCad project, a build of every firmware target, and the
  *                                      case's fit check when the repository has mechanical/case.json
  *     tracectl runs [--kind K] [--limit N] | tracectl run ID | tracectl artifact ID NAME [--out PATH]
- *     tracectl db merge BASE OURS THEIRS | tracectl db prune [--keep N]
+ *     tracectl db merge BASE OURS THEIRS | tracectl db prune [--keep N] | tracectl db pack
  *
  *   Prompts (the catalog of every prompt the agents get, and its overrides: README "Managing prompts")
  *     tracectl prompts list | get ID | set ID --reason "why" [--file F] | reset ID | revert ID VERSION | history ID
@@ -79,7 +79,7 @@ import { serve } from './core/mcp.js'
 import { OnboardError, SCAFFOLDS, type Scaffold, createNew, onboard, projects } from './core/onboard.js'
 import { ToolError } from './core/registry.js'
 import { flush } from './core/telemetry.js'
-import { Work, transaction } from './core/store.js'
+import { Work, packArtifacts, transaction } from './core/store.js'
 import { allTools } from './tools/index.js'
 import { engineAvailable, mechSkipReason } from './tools/mech/engine.js'
 import { CASE_JSON } from './tools/mech/settings.js'
@@ -271,7 +271,15 @@ function cmdDb(argv: string[]): number {
     out(`removed ${n} older runs (kept the newest ${keep} of each kind)`)
     return 0
   }
-  err('usage: tracectl db merge BASE OURS THEIRS | tracectl db prune [--keep N]')
+  if (action === 'pack') {
+    // gzip the large artifacts already in the database (new ones are packed as they are written), keeping every run
+    const w = new Work()
+    const r = transaction(w.db, () => packArtifacts(w.db))
+    w.db.exec('VACUUM')
+    out(`packed ${r.packed} artifacts: ${(r.before / 1e6).toFixed(1)} MB -> ${(r.after / 1e6).toFixed(1)} MB`)
+    return 0
+  }
+  err('usage: tracectl db merge BASE OURS THEIRS | tracectl db prune [--keep N] | tracectl db pack')
   return 2
 }
 
