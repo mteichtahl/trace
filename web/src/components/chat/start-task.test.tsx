@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { keys } from '@/lib/queries'
-import { StartTaskCard } from './renderers'
+import { LiveCall, StartTaskCard } from './renderers'
 
 afterEach(() => { vi.restoreAllMocks(); qc.clear() })
 beforeEach(() => { qc = new QueryClient({ defaultOptions: { queries: { retry: false } } }) })
@@ -32,6 +32,13 @@ describe('start_task: trace asks, the person confirms', () => {
     // the task call (the card then follows the job through the project's job list)
     const bodies = fetch.mock.calls.map(([url, init]) => ({ url: String(url), body: JSON.parse(String((init as RequestInit).body)) as { action: string } }))
     expect(bodies.filter((b) => b.body.action === 'task')).toEqual([{ url: '/api/call', body: { action: 'task', repo: 'acme/board', request: 'Run ERC on the power sheet', agent: 'verify' } }])
+  })
+
+  it('a kept offer the conversation went on from shows as not started, with no buttons and no spinner', () => {
+    render(<LiveCall.Provider value={false}><StartTaskCard args={args} status="inProgress" /></LiveCall.Provider>, { wrapper })
+    expect(screen.getByText('Not started: the conversation went on without it being confirmed.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Confirm and start/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Cancel/ })).toBeNull()
   })
 
   it('Cancel starts nothing and tells trace', async () => {

@@ -239,6 +239,18 @@ describe('the API server', () => {
     started.length = 0
   })
 
+  it('a task may carry on one of trace\'s own branches (its pull request updates), never main or a person\'s', async () => {
+    started.length = 0
+    const r = await call(user, { action: 'task', repo: 'acme/board', request: 'swap J1 for an SMD socket', agent: 'impl', branch: 'claude/task-draw-the-schematic-09f6d5' })
+    expect(r.body).toMatchObject({ ok: true, result: { jobId: 'job-1' } })
+    expect(started).toEqual([expect.objectContaining({ request: 'swap J1 for an SMD socket', agent: 'impl', branch: 'claude/task-draw-the-schematic-09f6d5' })])
+    for (const branch of ['main', 'marc/layout', 'claude/', 'claude/../main', '-f']) {
+      expect((await call(user, { action: 'task', repo: 'acme/board', request: 'x', agent: 'impl', branch })).body.ok, branch).toBe(false)
+    }
+    expect(started).toHaveLength(1)
+    started.length = 0
+  })
+
   it('unassigned and nonexistent projects get the identical answer, before GitHub is touched', async () => {
     for (const who of [user, guest, nobody]) {
       const a = await call(who, { action: 'status', repo: 'acme/secret' })
