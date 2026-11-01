@@ -21,9 +21,9 @@ import { AREA, Controls, Note, ViewerError, ViewerLoading, type ViewerProps } fr
 
 // ------------------------------------------------------------------ the parts of KiCanvas we reach into
 
-interface KcPoint { x: number; y: number }
+export interface KcPoint { x: number; y: number }
 interface KcLayer { name: string; visible: boolean; color: { to_css(): string } }
-interface KcViewer {
+export interface KcViewer {
   viewport: { camera: { matrix: { transform(p: KcPoint): KcPoint }; flipped: boolean } }
   layers: { in_ui_order(): Iterable<KcLayer>; by_name(n: string): KcLayer | undefined }
   flip_view?: () => void
@@ -34,13 +34,13 @@ interface KcViewer {
   zoom_to_page?: () => void
   zoom_to_board?: () => void
 }
-interface KcViewerElement extends HTMLElement { theme?: string; update_theme?: () => void; viewer?: KcViewer }
+export interface KcViewerElement extends HTMLElement { theme?: string; update_theme?: () => void; viewer?: KcViewer }
 
 let loading: Promise<unknown> | null = null
-const loadKiCanvas = () => (loading ??= import('@/vendor/kicanvas/kicanvas.js'))
+export const loadKiCanvas = () => (loading ??= import('@/vendor/kicanvas/kicanvas.js'))
 
 /** Wait for the embed to finish loading and hand back its viewer element (inside two shadow roots). */
-function waitForViewer(embed: HTMLElement, board: boolean, timeoutMs = 20000): Promise<KcViewerElement> {
+export function waitForViewer(embed: HTMLElement, board: boolean, timeoutMs = 20000): Promise<KcViewerElement> {
   const start = Date.now()
   return new Promise((resolve, reject) => {
     const tick = () => {

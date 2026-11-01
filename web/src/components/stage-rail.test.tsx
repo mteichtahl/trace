@@ -22,7 +22,7 @@ describe('StageRail', () => {
 
   it('every form carries the label for screen readers', () => {
     const j = JOURNEYS['acme/soil-sensor']!
-    const label = 'Stage 3 of 9, Capture, 6 of 6 criteria met'
+    const label = 'Stage 3 of 9, Capture, 4 of 6 criteria met'
     for (const variant of ['full', 'compact', 'bar'] as const) {
       const { unmount } = render(
         <TooltipProvider>
@@ -42,7 +42,7 @@ describe('StageRail', () => {
       </TooltipProvider>,
     )
     const current = screen.getByRole('button', { current: 'step' })
-    expect(current).toHaveAccessibleName('Capture: 6 of 6 criteria met')
+    expect(current).toHaveAccessibleName('Capture: 4 of 6 criteria met')
     expect(screen.getAllByText('Queued')).toHaveLength(6)
     expect(screen.getByText('Firmware track')).toBeInTheDocument()
   })

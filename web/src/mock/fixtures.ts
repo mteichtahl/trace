@@ -44,7 +44,7 @@ function gates(st: Stage[], ready: boolean): Gate[] {
   }))
 }
 
-const soilStages = stages(BOARD, 2, 6, 6, {
+const soilStages = stages(BOARD, 2, 4, 6, {
   0: { firmware: { text: 'Requirements accepted', ok: true } },
   1: { firmware: { text: 'Peripherals budgeted', ok: true } },
   2: { firmware: { text: 'Pin plan agreed', ok: true } },
@@ -58,17 +58,21 @@ export const JOURNEYS: Record<string, Journey> = {
     template: 'board',
     revision: 'Rev A',
     stages: soilStages,
-    gates: gates(soilStages, true),
+    gates: gates(soilStages, false),
     current: 'capture',
     next: {
-      kind: 'gate',
+      kind: 'review',
       owner: 'you',
-      short: 'you sign the schematic gate',
-      summary: 'The schematic gate is ready. All 6 criteria are met and 1 waiver was taken. **trace recommends signing.**',
-      why: 'ERC clean, no datasheet conflicts, every part in stock for 10 boards, pin plan matches.',
-      action: { label: 'Review and sign', to: '/p/acme~soil-sensor/gates/schematic' },
-      secondary: { label: 'Read the evidence', to: '/p/acme~soil-sensor/gates/schematic' },
-      reviewer: { summary: 'The schematic gate is waiting for an admin to sign.', action: { label: 'Read the evidence', to: '/p/acme~soil-sensor/gates/schematic' } },
+      short: 'you review the power and USB-C input sheet',
+      lead: 'trace finished the **power and USB-C input sheet**. Review it and accept it into the design.',
+      summary: 'trace finished the **power and USB-C input sheet**. Review it and accept it into the design.',
+      recommend: { text: 'trace recommends accepting.', why: 'All 7 checks passed, both regulators are in stock at JLCPCB, and it matches requirement R-004 (runs from one lithium cell, 3.3 V out).' },
+      why: 'All 7 checks passed, both regulators are in stock at JLCPCB, and it matches requirement R-004.',
+      step: { index: 3, total: 5 },
+      after: 'After you accept: trace checks stock for 10 boards (about 4 minutes), then the gate is ready for an admin to sign.',
+      action: { label: 'Review the change', to: '/p/acme~soil-sensor/changes/12' },
+      ref: { kind: 'change', id: '12' },
+      reviewer: { summary: 'trace finished the power and USB-C input sheet. It waits for a contributor to review it and accept it into the design.', action: { label: 'Read the change', to: '/p/acme~soil-sensor/changes/12' } },
     },
     questions: [
       { id: 'q1', to: 'Priya', text: 'Question to Priya: which antenna connector, u.FL or SMA?', askedAt: ago(2 * DAY), blocks: 'nothing yet; Layout needs it' },
@@ -138,9 +142,14 @@ export const JOURNEYS: Record<string, Journey> = {
 
 export const INBOX: InboxItem[] = [
   {
-    id: 'n1', kind: 'gate', repo: 'acme/soil-sensor', project: 'Soil sensor', revision: 'Rev A', stage: 'Capture', createdAt: ago(3 * HOUR),
-    summary: 'The schematic gate is ready. All 6 criteria are met and 1 waiver was taken. **trace recommends signing.**',
-    action: { label: 'Review and sign', to: '/p/acme~soil-sensor/gates/schematic' },
+    id: 'review:acme/soil-sensor:12', kind: 'review', repo: 'acme/soil-sensor', project: 'Soil sensor', revision: 'Rev A', stage: 'Capture', createdAt: ago(20 * MIN),
+    summary: 'trace finished the **power and USB-C input sheet**. All 7 checks passed; trace recommends accepting it into the design.',
+    action: { label: 'Review the change', to: '/p/acme~soil-sensor/changes/12' }, change: { repo: 'acme/soil-sensor', number: 12 },
+  },
+  {
+    id: 'n3', kind: 'gate', repo: 'acme/motor-driver', project: 'Motor driver', revision: 'Rev A', stage: 'Architect', createdAt: ago(3 * HOUR),
+    summary: 'The architecture gate has 3 of 5 criteria met. trace will tell you when it is ready to sign.',
+    action: { label: 'See the gate', to: '/p/acme~motor-driver/gates/architecture' },
   },
   {
     id: 'n2', kind: 'question', repo: 'acme/motor-driver', project: 'Motor driver', revision: 'Rev A', stage: 'Architect', createdAt: ago(40 * MIN),
