@@ -56,10 +56,11 @@ export function NeedsYouCard({ item, onAnswer, answering, onOther, onDismiss, co
         {item.pull && <PullStatusLine repo={item.pull.repo} number={item.pull.number} className="mt-2" />}
         {stuck && onDismiss && item.questionId && <DismissStuck item={item} onDismiss={onDismiss} className="mt-3" />}
       </div>
-      <div className="flex shrink-0 gap-2 max-sm:[&>*]:flex-1">
+      {/* a long recommended answer wraps inside its button, the buttons capped at 40 % of the card, so the question keeps the room */}
+      <div className="flex gap-2 max-sm:[&>*]:flex-1 sm:max-w-[40%] sm:shrink-0 sm:flex-wrap sm:justify-end">
         {item.recommended && onAnswer ? (
           <>
-            <Button size={compact ? 'sm' : 'lg'} onClick={() => onAnswer(item)} disabled={answering}>
+            <Button size={compact ? 'sm' : 'lg'} className="h-auto min-h-10 max-w-full py-2 text-left whitespace-normal" onClick={() => onAnswer(item)} disabled={answering}>
               {answering && <Loader2 className="animate-spin" />}
               {item.recommended.label}
             </Button>
