@@ -3,13 +3,16 @@
  *
  *   openPr       a pushed branch that is ahead of the default branch and has no open PR gets one.
  *   automerge    every PR to the default branch merges itself once its required checks pass (unless held).
- *   updateQueue  the oldest auto-merge PR that is behind is brought up to date, one at a time, so each merge costs one
- *                rebuild rather than one per open PR.
+ *   updateQueue  first, trace's own PRs (held ones too) whose only conflict is .trace/project.db get the default branch
+ *                merged in with the database merged (db-conflict.ts; up to DB_RESOLVE_PER_RUN a run); then the oldest
+ *                auto-merge PR that is behind is brought up to date, one at a time, so each merge costs one rebuild
+ *                rather than one per open PR.
  *
  * Actions that must start other workflows (opening a PR, merging, updating a branch) are taken with the repository's
  * TRACE_TOKEN: GitHub starts no workflow for an event made with GITHUB_TOKEN.
  */
 import { commentOnce, globMatch } from './util.js'
+import { resolveDbConflict } from './db-conflict.js'
 import { type Deps, type GitHub, PullRequestPayload, errorMessage, errorStatus, labelNames, payload, short } from './types.js'
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -107,13 +110,31 @@ export async function automerge({ github, jobApi, context, core, cfg, env }: Dep
   }
 }
 
-export async function updateQueue({ github, jobApi, context, core, cfg, env }: Deps): Promise<void> {
+/** At most this many conflicted PRs are merged up per run: each push starts a build. */
+export const DB_RESOLVE_PER_RUN = 3
+const PROJECT_DB_FILE = '.trace/project.db'
+
+export async function updateQueue({ github, jobApi, context, core, cfg, env }: Deps, resolve = resolveDbConflict): Promise<void> {
   const { owner, repo } = context.repo
   const lines: string[] = []
   const say = (s: string): void => { lines.push(s); core.info(s) }
   const flush = async (): Promise<void> => { await core.summary.addRaw(lines.map((l) => `- ${l}`).join('\n') + '\n').write() }
   if (!cfg.prs.update_queue) { say('prs.update_queue is off.'); return flush() }
-  const prs = (await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', base: cfg.branch, per_page: 100 }))
+  const open = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', base: cfg.branch, per_page: 100 })
+  // trace's own PRs (held ones too) whose only conflict is the project database: every agent job adds its runs to
+  // that one file, so each merge leaves the rest in conflict, and GitHub's merge button cannot run its merge driver
+  if (env.OWN_TOKEN && cfg.worker.own_branch_prefix) {
+    let resolved = 0
+    for (const p of open.filter((x) => !x.draft && x.head?.repo?.full_name === `${owner}/${repo}` && Boolean(x.head?.ref?.startsWith(cfg.worker.own_branch_prefix)))) {
+      if (resolved >= DB_RESOLVE_PER_RUN) break
+      const pr = (await github.rest.pulls.get({ owner, repo, pull_number: p.number })).data
+      if (pr.mergeable_state !== 'dirty') continue
+      const r = await resolve({ remote: `${context.serverUrl}/${owner}/${repo}.git`, head: pr.head.ref, base: cfg.branch, token: env.OWN_TOKEN })
+      if (r.ok) { resolved++; say(`#${pr.number}: its only conflict was ${PROJECT_DB_FILE}; merged ${cfg.branch} into ${pr.head.ref} with the project database merged (${short(r.commit)}).`) }
+      else say(`#${pr.number} has a conflict with ${cfg.branch}: ${r.why}.`)
+    }
+  }
+  const prs = open
     .filter((p) => p.auto_merge && !p.draft && !labelNames(p.labels).includes(cfg.labels.hold))
     .sort((a, b) => a.created_at.localeCompare(b.created_at))
 

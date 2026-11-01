@@ -113,6 +113,35 @@ describe('update queue', () => {
     await prs.updateQueue(deps(f, fakeCore(), cfgOf(), context(), { OWN_TOKEN: 't' }))
     expect(f.called('pulls.updateBranch').map((c) => c.args.pull_number)).toEqual([2])
   })
+  it('merges the default branch into trace\'s own conflicted PRs, held ones too, and never a person\'s', async () => {
+    const open = [
+      { number: 7, created_at: '2026-01-01', auto_merge: null, draft: false, labels: [{ name: 'no-automerge' }], head: { ref: 'claude/task-a', repo: { full_name: 'o/r' } } },
+      { number: 8, created_at: '2026-01-02', auto_merge: null, draft: false, labels: [], head: { ref: 'marc/layout', repo: { full_name: 'o/r' } } },
+      { number: 9, created_at: '2026-01-03', auto_merge: null, draft: false, labels: [], head: { ref: 'claude/task-b', repo: { full_name: 'o/r' } } },
+    ]
+    const f = fakeGithub({
+      'pulls.list': open,
+      'pulls.get': ({ pull_number }: Record<string, unknown>) => ({ number: pull_number, mergeable_state: 'dirty', head: { sha: SHA(String(pull_number)), ref: open.find((p) => p.number === pull_number)!.head.ref } }),
+      'checks.listForRef': { check_runs: [] },
+    })
+    const asked: unknown[] = []
+    const core = fakeCore()
+    await prs.updateQueue(deps(f, core, cfgOf(), context(), { OWN_TOKEN: 't' }), async (i) => {
+      asked.push(i)
+      return i.head === 'claude/task-a' ? { ok: true, commit: SHA('m') } : { ok: false, why: 'hw/a.kicad_sch conflicts too: a person or the worker merges it' }
+    })
+    expect(asked).toEqual([
+      { remote: 'https://github.com/o/r.git', head: 'claude/task-a', base: 'main', token: 't' },
+      { remote: 'https://github.com/o/r.git', head: 'claude/task-b', base: 'main', token: 't' },
+    ])
+    expect(core.text).toMatch(/#7: its only conflict was \.trace\/project\.db; merged main into claude\/task-a/)
+    expect(core.text).toMatch(/#9 has a conflict with main: hw\/a\.kicad_sch conflicts too/)
+    // without the token nothing is tried
+    const none: unknown[] = []
+    await prs.updateQueue(deps(f, fakeCore(), cfgOf(), context(), {}), async (i) => { none.push(i); return { ok: false, why: 'x' } })
+    expect(none).toEqual([])
+  })
+
   it('waits while the head of the queue is building', async () => {
     const f = fakeGithub({
       'pulls.list': list.slice(1),
