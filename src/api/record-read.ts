@@ -40,7 +40,7 @@ export interface TraceRequirement {
 
 /** The requirement rows as a decision on one is checked against them (record.ts decisionStands). */
 const requirementsNow = (all: readonly Record<string, unknown>[]): Map<string, RequirementNow> =>
-  new Map(all.map((q) => [String(q.id), { text: String(q.text), status: String(q.status), updated: typeof q.updated === 'number' ? q.updated : null }]))
+  new Map(all.map((q) => [String(q.id), { text: String(q.text), acceptance: q.acceptance === null || q.acceptance === undefined ? null : String(q.acceptance), status: String(q.status), updated: typeof q.updated === 'number' ? q.updated : null }]))
 
 /**
  * Every live requirement (not rejected or obsolete) with its evidence status:

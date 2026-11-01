@@ -346,19 +346,34 @@ describe('the guided skills read the design record', () => {
     // accepted again, it stands on the new words
     await run(USER, 'design.decide', { repo: REPO, decision: { kind: 'requirement', requirement: 'REQ-1', choice: 'accept' } })
     expect(await req1()).toMatchObject({ status: 'accepted' })
+    // the words the same but the acceptance changed (R13 on testyyyu: the range it is tested against) reopens it too
+    const dir2 = mkdtempSync(join(scratch, 'edit-'))
+    const path2 = join(dir2, 'project.db')
+    writeFileSync(path2, github.files.get(key)!)
+    const db2 = new DatabaseSync(path2)
+    db2.prepare("UPDATE requirements SET acceptance='at least 1.5 km at 1% packet loss', updated=? WHERE id='REQ-1'").run(Date.now() / 1000 + 2)
+    db2.close()
+    github.files.set(key, readFileSync(path2))
+    rmSync(dir2, { recursive: true, force: true })
+    expect(await req1()).toMatchObject({ status: 'proposed' })
+    expect(await items()).toContain('requirement:REQ-1')
   })
 })
 
 describe('a requirement decision stands on the words it was made on', () => {
   const dec = (detail: Record<string, unknown>, at = 100): DesignDecision => ({ id: 'd', kind: 'requirement', target: 'R5', choice: 'accepted', detail, by: 'Marc', byHash: 'h', at, supersededAt: null })
-  it('compares the words kept with the decision', () => {
-    expect(decisionStands(dec({ text: '0.5 Hz ± 10 %' }), { text: '0.5 Hz ± 10 %', status: 'proposed', updated: 200 })).toBe(true)
-    expect(decisionStands(dec({ text: '0.5 Hz ± 10 %' }), { text: '0.5 Hz ± 25 %', status: 'accepted', updated: 50 })).toBe(false)
+  it('compares the words and acceptance kept with the decision', () => {
+    const now = { text: '0.5 Hz ± 10 %', acceptance: '0.45-0.55 Hz', status: 'proposed', updated: 200 }
+    expect(decisionStands(dec({ text: '0.5 Hz ± 10 %', acceptance: '0.45-0.55 Hz' }), now)).toBe(true)
+    expect(decisionStands(dec({ text: '0.5 Hz ± 10 %', acceptance: '0.45-0.55 Hz' }), { ...now, text: '0.5 Hz ± 25 %' })).toBe(false)
+    expect(decisionStands(dec({ text: '0.5 Hz ± 10 %', acceptance: '0.45-0.55 Hz' }), { ...now, acceptance: '0.375-0.625 Hz' })).toBe(false)
+    // kept with the words only (before the acceptance was kept): checked on the words
+    expect(decisionStands(dec({ text: '0.5 Hz ± 10 %' }), { ...now, acceptance: '0.375-0.625 Hz' })).toBe(true)
   })
   it('without words kept (an older decision), an agent proposing the row again after it reopens it', () => {
-    expect(decisionStands(dec({}), { text: 'x', status: 'proposed', updated: 200 })).toBe(false)
-    expect(decisionStands(dec({}), { text: 'x', status: 'proposed', updated: 50 })).toBe(true)
-    expect(decisionStands(dec({}), { text: 'x', status: 'accepted', updated: 200 })).toBe(true)
+    expect(decisionStands(dec({}), { text: 'x', acceptance: null, status: 'proposed', updated: 200 })).toBe(false)
+    expect(decisionStands(dec({}), { text: 'x', acceptance: null, status: 'proposed', updated: 50 })).toBe(true)
+    expect(decisionStands(dec({}), { text: 'x', acceptance: null, status: 'accepted', updated: 200 })).toBe(true)
     expect(decisionStands(dec({}), undefined)).toBe(true)
   })
 })
