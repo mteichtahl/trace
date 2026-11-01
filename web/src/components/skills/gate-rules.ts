@@ -28,7 +28,7 @@ export const isOpened = (c: Criterion, s: Pick<SignState, 'opened'>): boolean =>
 export function signBlockers(gate: Pick<Gate, 'criteria' | 'waivers'>, s: SignState): Blocker[] {
   const out: Blocker[] = []
   const notMet = gate.criteria.filter((c) => c.status === 'not_met')
-  if (notMet.length) out.push({ id: 'met', text: `${notMet.length} criterion${notMet.length > 1 ? 'a' : ''} not met`, items: notMet.map((c) => c.id) })
+  if (notMet.length) out.push({ id: 'met', text: `${notMet.length} ${notMet.length > 1 ? 'criteria' : 'criterion'} not met`, items: notMet.map((c) => c.id) })
   const unopened = gate.criteria.filter((c) => !isOpened(c, s))
   if (unopened.length) out.push({ id: 'opened', text: `Open the evidence for ${unopened.length} more criteri${unopened.length > 1 ? 'a' : 'on'}`, items: unopened.map((c) => c.id) })
   const unack = gate.waivers.filter((w) => !w.acknowledged && !s.acknowledged.has(w.id))

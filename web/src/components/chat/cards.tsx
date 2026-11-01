@@ -4,6 +4,7 @@
  * useRenderTool / useHumanInTheLoop by tool name.
  */
 import { ChevronRight, CircleCheck, CircleX, FileText, GitBranch, Loader2, TriangleAlert, Wrench } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import { lazy, Suspense, useState, type ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -11,6 +12,7 @@ import { EvidenceChip } from '@/components/evidence-chip'
 import { RunLine } from '@/components/run-line'
 import { StatusBadge } from '@/components/status-badge'
 import { count, eng, money } from '@/lib/format'
+import { q } from '@/lib/queries'
 import type { EvidenceRef, Handoff, RunSummary } from '@/lib/types'
 import { HANDOFF_STATUS, HandoffDetail } from '@/components/handoff'
 import { cn } from '@/lib/utils'
@@ -98,6 +100,13 @@ export interface TaskRequest {
 /** What a confirm card answers trace with (the start_task tool's result). */
 export type TaskAnswer = { confirmed: true; accepted: boolean; jobId?: string; reason?: string } | { confirmed: false; reason: string }
 
+/** The job a confirmed card started, as the project's job list has it now (queued until the list knows it). */
+function StartedRun({ jobId, repo, title }: { jobId: string; repo?: string; title: string }) {
+  const list = useQuery({ ...q('jobs.list', { repo: repo ?? '' }), enabled: Boolean(repo) })
+  const run = list.data?.jobs.find((j) => j.id === jobId)
+  return <RunCard data={{ run: run ?? { id: jobId, repo, title, state: 'queued' } }} />
+}
+
 const AGENT_NAMES: Record<string, string> = { verify: 'Verification', impl: 'Implementation', ams: 'Analog and mixed-signal', emc: 'EMC', render: 'Rendering', thermal: 'Thermal' }
 
 /**
@@ -114,7 +123,7 @@ export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readO
 }) {
   const agent = task.agent ? AGENT_NAMES[task.agent] ?? task.agent : 'chosen by trace'
   if (answer?.confirmed && answer.accepted && answer.jobId) {
-    return <RunCard data={{ run: { id: answer.jobId, repo: task.repo, title: task.request ?? 'Task', state: 'queued' } }} />
+    return <StartedRun jobId={answer.jobId} repo={task.repo} title={task.request ?? 'Task'} />
   }
   return (
     <Frame>

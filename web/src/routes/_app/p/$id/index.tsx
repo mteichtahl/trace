@@ -20,6 +20,7 @@ import { call, repoOf } from '@/lib/api'
 import { ago, initials, money, waited } from '@/lib/format'
 import { useJourney, useProjects, useWaits } from '@/lib/queries'
 import type { Journey } from '@/lib/types'
+import { SKILLS } from '@/components/skills/definitions'
 import { continueText, useProjectDrafts } from '@/components/skills/draft'
 import { DeclineHandoff, declinable, useDeclineHandoffs } from '@/components/handoff'
 
@@ -35,7 +36,7 @@ function Overview() {
   const projects = useProjects()
   const navigate = useNavigate()
   const part = projects.data?.find((p) => p.repo === repo)?.part
-  const draft = useProjectDrafts(repo)[0]
+  const drafts = useProjectDrafts(repo)
   const decline = useDeclineHandoffs()
 
   if (!j.data)
@@ -49,6 +50,10 @@ function Overview() {
     )
   const d = j.data
   // a job lost in the last day stays here, with its last words, rather than vanishing without a mention
+  // a draft to carry on is one of this stage's skills (or one that belongs to any stage): a draft left in a skill of a
+  // stage already signed is not the next step
+  const current = d.stages.find((x) => x.state === 'current' || x.state === 'reopened')?.name
+  const draft = drafts.find((x) => { const st = SKILLS.find((k) => k.id === x.skill)?.stage; return st === undefined || st === 'Any' || st === 'Every gate' || st === current })
   const running = d.jobs.filter((r) => r.state === 'running' || r.state === 'paused' || (r.state === 'lost' && Date.now() - Date.parse(r.startedAt ?? '') < 24 * 3600_000))
   const queued = d.jobs.filter((r) => r.state === 'queued')
   const nextRun = d.next.jobId ? d.jobs.find((r) => r.id === d.next.jobId) : undefined
