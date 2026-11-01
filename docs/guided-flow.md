@@ -90,6 +90,22 @@ before the criteria it would satisfy, else first among the not-done steps. When 
 accept it into the design.", with the change's recommendation and `ref: { kind: 'change', id: String(number) }`. The
 inbox `review` item's action becomes "Review the change" with an in-app link (`/p/<id>/changes/<number>`).
 
+### As built (API): additions to the shapes above
+
+All additive; nothing above changed meaning.
+
+- `change.diff`: `before` also carries `path` when the file was renamed (`{ ref, path }`: read the old name at `ref`).
+- `journey.get` adds `changes_unavailable: string` when GitHub could not be reached; the changes are then left out
+  and the next step is worked out without them. Status is read for the oldest five open changes only; the rest have
+  verdict `checking` and are never the `review` next step.
+- `NextStep.ref.kind` may be `'change'` (with `kind: 'review'`); its `button` is "Review the change" (or "Read the
+  change" for a reviewer), and `recommendation` starts "trace recommends accepting it." followed by the reason.
+- The inbox `review` item's `ref` is `{ kind: 'pull', id, url, to }`: `to` is the in-app link
+  (`/p/<owner~name>/changes/<number>`), `url` stays GitHub's for "View on GitHub".
+- A pull request that is not trace's (no job of the project worked on its branch) is "no such change" to every
+  `change.*` action.
+- Connected systems' MCP tool list describes `changes.list`, `change.get` and `change.diff`.
+
 ## Live updates (`src/web/`, `src/infra/`, `src/installer/`)
 
 - A GitHub webhook on each project repository (pull_request, check_run, check_suite, status) posts to
