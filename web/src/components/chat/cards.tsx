@@ -136,7 +136,7 @@ export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readO
       <p className="mt-1.5 text-xs text-muted-foreground">Agent: {agent}. {task.branch ? <>It carries on <code className="font-mono">{task.branch}</code>, so that branch's pull request updates.</> : 'It works on a branch and opens a pull request.'}</p>
       {answer ? (
         <p className="mt-2 text-xs text-muted-foreground">
-          {answer.confirmed ? `Not started: ${answer.reason ?? 'the job was not accepted'}.` : answer.reason === 'cancelled' ? 'You cancelled this.' : `Not started: ${answer.reason}.`}
+          {answer.confirmed ? `Not started: ${answer.reason ?? 'the job was not accepted'}.` : answer.reason === 'cancelled' ? 'You cancelled this.' : answer.reason === 'not confirmed' ? 'Not started: the conversation went on without it being confirmed.' : `Not started: ${answer.reason}.`}
         </p>
       ) : readOnly ? (
         <p className="mt-2 text-xs text-muted-foreground">Work can't be started from this conversation.</p>

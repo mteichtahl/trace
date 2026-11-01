@@ -28,6 +28,7 @@ import { AGENT_ID, resetWire, setWire } from './agent'
 import { pendingAsk, setThread, useRecallHistory } from './chat-state'
 import { useStore } from '@/lib/store'
 import { Markdown } from './markdown'
+import { LiveCall } from './renderers'
 import { toReplay } from './thread'
 import { enqueueSpeech, speak, speakable, stopSpeaking, useSpeech } from './voice/speech'
 
@@ -194,6 +195,8 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
 
   const toolResults = useMemo(() => new Map(messages.filter((m) => m.role === 'tool').map((m) => [m.toolCallId, m])), [messages])
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')?.id
+  // a tool call after the person's last turn is the one being answered now; earlier ones were moved on from
+  const lastTurn = messages.map((m) => m.role).lastIndexOf('user')
 
   return (
     <div className={cn('flex min-h-0 flex-1 flex-col', className)}>
@@ -243,7 +246,9 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
               {text && <Markdown text={text} streaming={streaming} />}
               {speaking.messageId === m.id && <SpokenText text={text} />}
               {m.toolCalls?.map((tc) => (
-                <div key={tc.id}>{renderToolCall({ toolCall: tc, toolMessage: toolResults.get(tc.id) as never })}</div>
+                <LiveCall.Provider key={tc.id} value={i > lastTurn}>
+                  <div>{renderToolCall({ toolCall: tc, toolMessage: toolResults.get(tc.id) as never })}</div>
+                </LiveCall.Provider>
               ))}
               {text && !streaming && (
                 <MessageActions
