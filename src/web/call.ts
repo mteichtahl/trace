@@ -18,7 +18,7 @@ import { invocationUrl } from '../api/runtime-url.js'
 import type { WebConfig } from './config.js'
 import { type WebDeps, signedIn } from './deps.js'
 import { PROMPT_WRITES, chatPrompts } from './chat-prompts.js'
-import { changeOf, type LiveEvent, type Publisher, appsyncPublisher, userChannel } from './events.js'
+import { changeOf, type LiveEvent, type Publisher, appsyncPublisher, publishToEach } from './events.js'
 import { JSON_HEADERS, MB, WebError, parseBody, route } from './http.js'
 
 const Body = z.object({ action: z.string().min(1).max(64).regex(/^[a-z][a-z0-9_.]*$/, 'an action name') }).catchall(z.unknown())
@@ -130,9 +130,8 @@ export async function publishChange(deps: WebDeps, who: Caller, action: string, 
     }
     const event: LiveEvent = { type: 'record.changed', ...(repo ? { repo } : {}), what, at: new Date(deps.now()).toISOString() }
     const pub = publisher ?? appsyncPublisher(who.config, deps.credentials, deps.fetch)
-    const results = await Promise.allSettled([...subs].map((s) => pub.publish(userChannel(s), [event])))
-    const failed = results.filter((r) => r.status === 'rejected').length
-    if (failed) deps.log({ warning: 'publish: some events were not delivered', action, failed, of: subs.size })
+    const { failed, of } = await publishToEach(pub, subs, event)
+    if (failed) deps.log({ warning: 'publish: some events were not delivered', action, failed, of })
   } catch (e) {
     deps.log({ warning: 'publish failed', action, error: e instanceof Error ? e.message : String(e) })
   }

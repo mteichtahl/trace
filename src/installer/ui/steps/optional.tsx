@@ -79,7 +79,7 @@ function reset(g: Group): void {
     if (g === 'agents') pick('prefix', 'model', 'maxLifetimeHours', 'idleMinutes', 'centralBucketName', 'retainData', 'migrateLayout')
     if (g === 'jobs') pick('gpuEnabled', 'gpuMaxVcpus', 'gpuSpot', 'cpuEnabled', 'cpuMaxVcpus', 'cpuSpot', 'cpuVcpus', 'cpuMemoryMiB', 'imageSource', 'imageRegistry', 'publishImages')
     if (g === 'builds') s.runners = d.runners
-    if (g === 'web') pick('webEnabled', 'webDomain', 'webCertificateArn', 'webEmailFrom', 'webWaf')
+    if (g === 'web') pick('webEnabled', 'webDomain', 'webCertificateArn', 'webEmailFrom', 'webWaf', 'webHooks')
     if (g === 'knowledge') pick('knowledgeBase', 'libraryGateway', 'externalAccess', 'observability', 'transactionSearch', 'dashboard', 'samplingPercent')
     if (g === 'tokens') { s.github.adminToken = ''; s.projectTokens.clear(); for (const p of s.projects.values()) p.memoryDays = '' }
   })
@@ -239,7 +239,8 @@ function WebGroup() {
           </div>
           <TextField id="agents.webEmailFrom" label="Email sign-in codes from" type="email" optional value={g.webEmailFrom} placeholder="passkeys and passwords only" error={err('agents.webEmailFrom')}
             onChange={(v) => update((x) => { x.agents.webEmailFrom = v.trim() })} hint="A verified Amazon SES sender: Cognito sends codes only through SES." />
-          <Toggle label="Protect it with AWS WAF" description="About US$11 a month plus US$0.60 per million requests. The address is public, so managed rules and a request limit keep bots and password guessing off it. Turn off only for a private trial." checked={g.webWaf} onChange={(v) => update((x) => { x.agents.webWaf = v })} />
+          <Toggle label="Protect it with AWS WAF" description="About US$12 a month plus US$0.60 per million requests. The address is public, so managed rules and a request limit keep bots and password guessing off it. Turn off only for a private trial." checked={g.webWaf} onChange={(v) => update((x) => { x.agents.webWaf = v })} />
+          <Toggle label="Live updates from GitHub" description="A webhook on each project repository, so a change's checks and merges show at once. Off, the app looks again every 60 seconds. A repository the token may not add a webhook to is a warning, never a failed install." checked={g.webHooks} onChange={(v) => update((x) => { x.agents.webHooks = v })} />
           <p className="text-xs text-muted-foreground">Passkeys belong to the app's address: moving to a custom domain later means people add their passkeys again.</p>
         </>
       ) : null}

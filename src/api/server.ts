@@ -30,7 +30,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { projectMemoriesFromEnv } from '../agents/runtime/memory.js'
-import { AccessDenied, type Principal, isService, seen, who } from '../core/access.js'
+import { AccessDenied, type Principal, isBackend, isService, seen, who } from '../core/access.js'
 import { ConfigError } from '../core/config.js'
 import { noteServiceSeen } from '../core/services-seen.js'
 import { ToolError } from '../core/registry.js'
@@ -40,6 +40,7 @@ import { ActionError, type ActionDeps, NO_ACCESS, defaultScratch, perform, proje
 import { type CognitoAdmin, HttpCognito, githubToken } from './aws.js'
 import { HttpGitHub } from './github.js'
 import { AuthError, Verifier, bearer } from './jwt.js'
+import { backendPrincipal, peekClient } from './backend-auth.js'
 import { externalFromEnv } from './actions-services.js'
 import { SharedLimit } from './rate-limit.js'
 import { ServiceVerifier } from './service-auth.js'
@@ -66,6 +67,9 @@ export interface ServerOptions {
   serviceSeen?: (clientId: string) => Promise<unknown>
   /** the runtime's name in telemetry; 'external' also hides unexpected errors' detail from the caller */
   runtime?: 'api' | 'external'
+  /** the web backend's own app client (TRACE_COGNITO_HOOKS_CLIENT_ID, src/api/backend-auth.ts): a token of it is the
+   * backend's identity, which may call hook.members and nothing else. Unset: no such identity */
+  backendClientId?: string | undefined
 }
 
 /**
@@ -130,6 +134,8 @@ export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerRes
   const principalOf = async (token: string): Promise<Principal> => {
     if (o.principal) return o.principal(token)
     if (!o.verifier) throw new AuthError('no verifier')
+    // the web backend's own client: checked on its own terms (no person, one scope), never by the people's client list
+    if (o.backendClientId && peekClient(token) === o.backendClientId) return backendPrincipal(await o.verifier.verifySigned(token), o.backendClientId)
     const c = await o.verifier.verify(token)
     let email: string | null = c.username && c.username.includes('@') ? c.username : null
     if (!email && o.emailOf) {
@@ -176,6 +182,8 @@ export function handler(o: ServerOptions): (req: IncomingMessage, res: ServerRes
       if (isService(principal)) {
         // a connected system: when it last called (src/core/services-seen.ts), never the access store
         void o.serviceSeen?.(principal.sub).catch(() => undefined)
+      } else if (isBackend(principal)) {
+        // the web backend's own identity is nobody: nothing is recorded of it
       } else if (!seenOnce.has(principal.sub)) {
         seenOnce.add(principal.sub)
         seen(principal).catch((e: unknown) => { log({ ...entry, warning: `seen: ${message(e)}` }) })
@@ -245,6 +253,8 @@ const Env = z.object({
   TRACE_COGNITO_CLIENT_ID: z.string().min(1),
   /** The web app's client (src/infra/web.ts): its people's tokens are accepted too. */
   TRACE_COGNITO_WEB_CLIENT_ID: z.string().optional(),
+  /** The web backend's own client (src/api/backend-auth.ts): its tokens may call hook.members, nothing else. */
+  TRACE_COGNITO_HOOKS_CLIENT_ID: z.string().optional(),
   TRACE_COGNITO_ISSUER: z.string().url(),
   TRACE_GITHUB_SECRET_ARN: z.string().min(1),
   TRACE_AWS_ACCOUNT: z.string().regex(/^\d{12}$/),
@@ -316,6 +326,7 @@ export async function start(): Promise<void> {
     verifier: new Verifier({ issuer: env.TRACE_COGNITO_ISSUER, clientId: [env.TRACE_COGNITO_CLIENT_ID, ...(env.TRACE_COGNITO_WEB_CLIENT_ID ? [env.TRACE_COGNITO_WEB_CLIENT_ID] : [])] }),
     deps,
     emailOf: async (sub, username) => (await cog().getUser(username ?? sub))?.email ?? null,
+    backendClientId: env.TRACE_COGNITO_HOOKS_CLIENT_ID || undefined,
   }, env.PORT)
   process.stdout.write(`trace api listening on 0.0.0.0:${env.PORT}\n`)
   stopOnSignal(server)

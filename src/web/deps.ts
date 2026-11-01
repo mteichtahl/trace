@@ -6,7 +6,8 @@
 import { AuthError, type AccessClaims, KeysUnavailable, Verifier, bearer } from '../api/jwt.js'
 import type { WebConfig } from './config.js'
 import { type Ctx, type WebRequest, WebError, whoHash } from './http.js'
-import type { BedrockPort, CloudWatchPort, CognitoPort, Credentials, PollyPort, StorePort } from './ports.js'
+import type { DebounceStore } from './hooks.js'
+import type { BedrockPort, CloudWatchPort, CognitoPort, Credentials, PollyPort, SecretsPort, StorePort } from './ports.js'
 
 export interface WebDeps {
   config: () => Promise<WebConfig>
@@ -16,6 +17,10 @@ export interface WebDeps {
   polly: (c: WebConfig) => PollyPort
   store: (c: WebConfig) => StorePort
   cloudwatch: (c: WebConfig) => CloudWatchPort
+  /** GitHub's webhook secret and the backend's own client secret (config.hooks.secret); absent: no webhook */
+  secrets?: (c: WebConfig) => SecretsPort
+  /** the webhook debounce's shared windows (config.hooks.table); absent or null: this container's memory */
+  hookStore?: (c: WebConfig) => DebounceStore | null
   credentials: Credentials
   /** the API runtime and AppSync's HTTP endpoint are reached with it */
   fetch: typeof fetch

@@ -102,6 +102,82 @@ inbox `review` item's action becomes "Review the change" with an in-app link (`/
 - The app keeps polling as a fallback, slower (60 s) when live events are connected, and every polled line says when
   it next looks ("next look in 40 s").
 
+### How it is built (Live updates, built 2 November 2026)
+
+```
+GitHub ──POST, signed──▶ CloudFront /api/hooks/* ──▶ <prefix>-web-hooks (function URL, no IAM; src/web/hooks-lambda.ts)
+                          (WAF: body rules skip it,     │ 1 size, event, X-Hub-Signature-256 (HMAC SHA-256, constant time)
+                           HooksRate limits it)         │   against <prefix>/web/github-hooks (Secrets Manager, cached 5 min)
+                                                        │ 2 hook.members { repo } ──▶ API runtime, as the backend's own client
+                                                        │   (client credentials, scope trace-internal/members)
+                                                        │ 3 debounce per repository (DynamoDB <prefix>-web-hooks)
+                                                        └─▶ AppSync Events: record.changed { repo, kind: 'change', number? }
+                                                            to each member's /trace/users/<sub>
+```
+
+- **Route** (`src/web/hooks.ts`). Dropped with 204 and one log line (why, the event, the delivery id; never the body):
+  live updates off, a body over 1 MB, no signature, an event other than the four, a secret that cannot be read, a bad
+  signature, a body with no repository, a repository that is not a project. A good delivery is 202. A signature that
+  does not match a cached copy older than 30 s reads the secret again once, so a secret the installer replaced is
+  picked up at once without reading it for every forged delivery.
+- **Who is told: the API runtime decides, with the backend's own identity.** `hook.members { repo }`
+  (`src/api/actions-hooks.ts`) answers `{ repo, project, subs }`: whether the repository is in the projects registry,
+  and the Cognito subs of the people assigned to it (any part; connected systems left out) and every admin. It is
+  called with a token of the backend's own Cognito app client, `<prefix>-web-hooks` (client credentials, a secret, one
+  scope `trace-internal/members` of a resource server of its own), which the API runtime's authorizer lists beside the
+  CLI's and the web app's (`TRACE_COGNITO_HOOKS_CLIENT_ID`). `src/api/backend-auth.ts` turns that token (its client,
+  no `username`, the scope) into a principal of kind `backend`: no class, never an admin, on no project. `perform`
+  lets it call `hook.members` and nothing else, and `hook.members` (need `backend`) refuses everyone else, admins and
+  connected systems included. Members are cached 60 s per repository in the function, the token for its hour.
+- **Why that, over the alternatives.** The rule is that the API runtime is the one place that decides access and the
+  backend never reads the access store, and a webhook has no person whose token could ask `project.members`.
+  (1) *Reading the access store in the hooks function*, as `<prefix>-journey-events` does: simplest, but it is the
+  rule broken by the one function that faces the internet without a sign-in. (2) *Signing as the backend's IAM role
+  to the API runtime*: AgentCore's runtime takes a JWT authorizer or IAM, not both, and the people's runtime is JWT;
+  a second runtime for one action is a lot of machinery. (3) *A connected system* (docs/external-access.md): the
+  machinery fits (a client-credentials app client verified against a store), but a connected system is an outside
+  system an admin manages, goes through the external runtime (off unless External access is on), and is assigned to
+  projects; the backend is part of trace and must see every project's members. So the choice is the connected
+  systems' shape (client credentials, a verified client, an allow-list of one) on the people's runtime, with its own
+  resource server and principal kind, made by the stack: no admin step, nothing assigned, and if its secret leaked it
+  tells who is on which project by sub, and nothing else (no emails, no content, no writes).
+- **Debounce.** One push sends dozens of check_run and status deliveries, each its own invocation and often its own
+  container, so the window is shared: `<prefix>-web-hooks` in DynamoDB (`src/web/hooks-store.ts`), one item per
+  repository, conditional UpdateItems only. The first delivery of a quiet repository claims a 5 s window and publishes
+  at once; deliveries inside it only note their number; when the window ends the holder takes what was noted and
+  publishes once more (naming the change when one was noted, else none), and holds another window while they keep
+  coming (at most six). When DynamoDB cannot be reached a delivery publishes on its own (fail open: one more refetch,
+  nothing lost).
+- **Infra** (`src/infra/web.ts`, `web.hooks`, on by default in the nested layout; off, or a flat installation: none of
+  it, and the app polls. A flat parent of 20 projects has no room for the client and its resource server). The hooks function
+  is the backend's code (`hooks.mjs`) with a role of its own: its settings parameter, `GetSecretValue` on the hooks
+  secret, `UpdateItem` on its table, `appsync:EventPublish`, its logs. Nothing of Cognito, the access store or a
+  project; the backend's role gains nothing. CloudFront sends `/api/hooks/*` (ahead of `/api/*`) to its function URL
+  as a plain HTTPS origin, with every viewer header and the body as sent and no viewer function. It cannot sit behind
+  the backend's origin access control: CloudFront signs the request, and Lambda refuses a signed POST that lacks
+  `x-amz-content-sha256`, which GitHub never sends. The function serves that one path and checks every signature, so
+  its open URL is no wider than the CloudFront path. The WAF's body rules (KnownBadInputs, Common) and `ApiRate` skip
+  `/api/hooks/*` (pull request text may look like an attack, and one push is a burst from a few GitHub addresses); a
+  `HooksRate` rule limits it on its own (5,000 per address in 5 minutes); BodyTooLarge and IpReputation still apply.
+  The web settings parameter gains `hooks` (the secret's name, the token address, the client id and scope, the table),
+  the stack outputs `WebHooksAddress` (CloudFront's own address + `/api/hooks/github`, reachable whatever a custom
+  domain's DNS says) and `WebHooksClientId`. No new references between the web stack and the parent.
+- **Installer** (`src/installer/hooks.ts`, the web step of `apply`, so `tracectl install` and `tracectl upgrade`).
+  `<prefix>/web/github-hooks` (JSON `{ webhookSecret, clientSecret }`) is made when missing with a random webhook
+  secret, which is then kept; the backend's client secret, read from Cognito, is written into it each run (a client
+  the stack made again is picked up). Every project repository gets one webhook to `WebHooksAddress`, JSON, the four
+  events, active: found by its exact URL and updated in place, else created, so a second run never adds a second one.
+  A repository that refuses (no admin, no "Webhooks: read and write") is a warning in the summary and the preflight's
+  access note, never a failure. The self-update registers the projects it adds with the secret, which its role may
+  read and never write. `tracectl uninstall --delete-data` removes the secret. The answer `webHooks` (Optional › Web
+  app › "Live updates from GitHub") turns it all off. It is a switch, not a typed value, so there is no check for it to
+  run; the token's webhook permission is already among the checks the token's validation runs.
+- **App** (`web/src/lib/live.ts`): `record.changed` with `kind: 'change'` refetches `pull.status`, `changes.list`,
+  `change.get`, the inbox and the journey for that repository. `pollEvery` slows a polled query to 60 s while the
+  connection is live; `useNextLook` gives the line's "next look in 40 s" (`pull-status.tsx`, `project/github-waits.tsx`).
+- **Not tested here** (nothing is deployed from this branch): a real GitHub delivery through CloudFront and the WAF, the
+  client-credentials token from a real pool, and the API runtime's authorizer taking the third client.
+
 ## Screens (`web/`)
 
 - **Overview:** under the stage rail, the current stage opens into a guide: stage N of M, its purpose, its steps with

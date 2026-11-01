@@ -35,6 +35,10 @@
  *  10 onboard    the onboarding PR in each repository that asked for it, and its repository settings
  *  11 people     invite each person to Cognito, put them in their class's group (admin, user, guest), and record
  *                the projects they are assigned to
+ *     web        the app's address; and (web.hooks) live updates from GitHub (src/installer/hooks.ts): the secret
+ *                `<prefix>/web/github-hooks` made when missing (its webhook secret kept, the backend's own client
+ *                secret written into it), and every project repository's webhook registered or updated in place. A
+ *                repository the token may not add a webhook to is a warning in the summary, never a failure
  *  12 local      save the installation on this machine so `tracectl login` and `tracectl remote …` work
  *  13 release    (agents.publishImages: by default, when the token administers trace's source repository) set this
  *                account up to publish trace's images and start the first release (src/installer/release.ts); a
@@ -79,7 +83,7 @@ import { type WaitNotice, describeWait } from '../core/wait.js'
 import { RELEASE_REGION, RELEASE_REPOSITORIES, RELEASE_STACK } from '../infra/release.js'
 import {
   CENTRAL_BUCKET_OUTPUT, CONNECTION_OUTPUT, GPU_IMAGE_BUILD_OUTPUT, INSTALLATION_RECORD_KEY, SELF_UPDATE_OUTPUT, ciRunnerOutput, type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, cpuEnabled, githubSecretName,
-  kbOutputs, memoryDeliveryName, memoryName, projectHash, projectOutputs, selfUpdateRoleName, stackName, WEB_OUTPUTS, EXTERNAL_OUTPUTS,
+  kbOutputs, memoryDeliveryName, memoryName, projectHash, projectOutputs, selfUpdateRoleName, stackName, WEB_OUTPUTS, EXTERNAL_OUTPUTS, WEB_HOOKS_OUTPUTS, webHooksOn, webHooksSecret,
 } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import { type Answers, AnswersSchema, type InstallEvent, type Secrets, type Step } from './answers.js'
@@ -99,6 +103,7 @@ import { CDK_BOOTSTRAP_MIN, mapLimit } from './preflight.js'
 import { checkNoSecrets, installationRecord } from './record.js'
 import { type ReleaseResult, liveReleaseDeps, releaseSetup } from './release.js'
 import { traceRepository } from './source.js'
+import { type HooksSecretIo, ensureHooksSecret, liveClientSecret, liveHooksSecretIo, registerWebhooks } from './hooks.js'
 
 /** What the installer knows of the stack already in the account (checkAws), when there is one. */
 export interface Existing { outputs: Record<string, string> }
@@ -271,6 +276,7 @@ export function infraInput(a: Answers, existing?: Existing | null, deploy?: Layo
       ...(a.agents.webDomain && a.agents.webCertificateArn ? { domainName: a.agents.webDomain, certificateArn: a.agents.webCertificateArn } : {}),
       ...(a.agents.webEmailFrom ? { sesFrom: a.agents.webEmailFrom } : {}),
       waf: { enabled: a.agents.webWaf },
+      hooks: { enabled: a.agents.webHooks },
     },
     observability: {
       enabled: a.agents.observability, transactionSearch: a.agents.transactionSearch, dashboard: a.agents.dashboard,
@@ -541,9 +547,11 @@ export function plan(input: Answers, existing?: Existing | null, prev?: Answers 
       : 'no repositories yet: run the installer again to add them'],
     ['onboard', 'Onboard the repositories', [onboarding.length ? `open (or refresh) the onboarding PR in ${onboarding.join(', ')}` : '', creating.length ? `create ${creating.join(', ')}` : ''].filter(Boolean).join('; ') || 'none chosen'],
     ['people', 'Invite people and assign projects', `${a.adminEmail || 'the token\'s email'} (admin)${a.people.length ? `, ${a.people.map((p) => `${p.email} (${p.class})`).join(', ')}` : ''}`],
-    ...(props.web.enabled ? [['web', 'Web app: the address people sign in at', props.web.domainName
+    ...(props.web.enabled ? [['web', 'Web app: the address people sign in at', `${props.web.domainName
       ? `https://${props.web.domainName}, served by CloudFront once its DNS points there; passkeys belong to this address`
-      : 'CloudFront\'s own address (https://<id>.cloudfront.net), shown when the deploy is done; passkeys belong to this address'] as [string, string, string]] : []),
+      : 'CloudFront\'s own address (https://<id>.cloudfront.net), shown when the deploy is done; passkeys belong to this address'}${webHooksOn(props) && a.projects.length
+      ? `. Live updates from GitHub: the secret ${webHooksSecret(props.prefix)} (made when missing), and a webhook on ${a.projects.map((p) => p.repo).join(', ')} (registered, or updated in place); one the token may not add is a warning, and that project's screens look again every 60 s`
+      : ''}`] as [string, string, string]] : []),
     ['local', 'Save this installation locally', '~/.trace/client.db, so `tracectl login` works here'],
     ['release', 'Publish trace\'s images', a.agents.publishImages
       ? `set this account up to publish trace's images, all by API: CDK in ${RELEASE_REGION} if needed, the ${RELEASE_STACK} stack there (ECR Public ${Object.values(RELEASE_REPOSITORIES).join(' and ')}, and a release role for ${releaseRepository(a)}'s main and v* tags), the registry's default alias, ${releaseRepository(a)}'s TRACE_RELEASE_ROLE and TRACE_IMAGE_REGISTRY and its trace-images release (where every installation finds the images), then the first release run, on ${selfBuild(a) ? 'its own AWS build runner (Docker-in-Docker)' : 'GitHub\'s runners until it has an AWS one'}`
@@ -634,6 +642,42 @@ export interface Hooks {
   sampleJourney?: (home: string, repo: string, by: string) => Promise<'started' | 'exists'>
   /** the web app's WAF stack in us-east-1 (src/installer/edge.ts): a stack's outputs there, and deleting one left over */
   edge?: { outputs: EdgeDeps['outputs']; remove: (stack: string, region: string) => Promise<void> }
+  /** live updates from GitHub (src/installer/hooks.ts): the secret's store, the backend's client secret, and one
+   * repository's webhook registration */
+  webhooks?: {
+    secrets?: HooksSecretIo
+    clientSecret?: (poolId: string, clientId: string) => Promise<string | null>
+    register?: (token: string, repo: string, url: string, secret: string) => Promise<'created' | 'updated'>
+  }
+}
+
+/**
+ * Live updates from GitHub, after the deploy (src/installer/hooks.ts): the secret, then every project's webhook. Never
+ * throws: what could not be done is in `warnings` (and the app polls meanwhile).
+ */
+export async function setUpWebhooks(o: {
+  prefix: string; outputs: Record<string, string>; repos: readonly string[]; token: string
+  secrets: HooksSecretIo; clientSecret: (poolId: string, clientId: string) => Promise<string | null>
+  register?: (token: string, repo: string, url: string, secret: string) => Promise<'created' | 'updated'>
+  log: (line: string) => void
+}): Promise<{ url: string | null; warnings: string[] }> {
+  const url = o.outputs[WEB_HOOKS_OUTPUTS.address] ?? ''
+  if (!url) return { url: null, warnings: [] }
+  const name = webHooksSecret(o.prefix)
+  let secret: string
+  try {
+    const clientId = o.outputs[WEB_HOOKS_OUTPUTS.clientId] ?? ''
+    const client = clientId && o.outputs.UserPoolId ? await o.clientSecret(o.outputs.UserPoolId, clientId) : null
+    const s = await ensureHooksSecret(o.secrets, name, client)
+    secret = s.webhookSecret
+    o.log(`${name}: ${s.state === 'unchanged' ? 'kept as it is' : s.state}${client ? '' : ' (the backend\'s own client secret could not be read: run the installer again)'}`)
+  } catch (e) {
+    return { url, warnings: [`Live updates from GitHub are not set up: the secret ${name} could not be written (${e instanceof Error ? e.message : String(e)}). The app looks again every 60 s meanwhile; run the installer again.`] }
+  }
+  const r = await registerWebhooks(o.token, o.repos, url, secret, o.register ? { register: o.register } : {})
+  for (const d of r.done) o.log(`${d.repo}: webhook ${d.state} (${url})`)
+  for (const w of r.warnings) o.log(w)
+  return { url, warnings: r.warnings }
 }
 
 /** The edge stack's outputs and its removal, in us-east-1 (CloudFormation). */
@@ -1222,8 +1266,26 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
     if (!existing) summary.push(`${a.adminEmail} receives a temporary password from Cognito; sign in ${webUrl ? `at ${webUrl} or ` : ''}with \`tracectl login\`.`)
     set('people', 'done')
 
-    // the web app's address (its outputs; nothing to do but show it)
-    if (byId.has('web')) set('web', webUrl ? 'done' : 'skipped', webUrl || `the stack has no output ${WEB_OUTPUTS.url} yet: run the installer again once the deploy has it`)
+    // the web app's address (its outputs), and live updates from GitHub: the secret and every project's webhook (a
+    // repository the token may not add one to is a warning: its screens look again every 60 s)
+    if (byId.has('web')) {
+      current = 'web'
+      let hooksLine = ''
+      if (webHooksOn(props) && webUrl) {
+        set('web', 'running')
+        const wh = hooks.webhooks ?? {}
+        const r = await setUpWebhooks({
+          prefix: props.prefix, outputs: out, repos: a.projects.map((p) => p.repo), token: adminToken,
+          secrets: wh.secrets ?? await liveHooksSecretIo(creds, a.aws.region),
+          clientSecret: wh.clientSecret ?? ((pool, client) => liveClientSecret(creds, a.aws.region, pool, client)),
+          ...(wh.register ? { register: wh.register } : {}),
+          log: (l) => log('web', l),
+        })
+        for (const w of r.warnings) summary.push(w)
+        if (r.url) hooksLine = `; live updates from GitHub on ${a.projects.length - r.warnings.length} of ${a.projects.length} project${a.projects.length === 1 ? '' : 's'}`
+      }
+      set('web', webUrl ? 'done' : 'skipped', webUrl ? `${webUrl}${hooksLine}` : `the stack has no output ${WEB_OUTPUTS.url} yet: run the installer again once the deploy has it`)
+    }
 
     // 12 — this machine
     current = 'local'

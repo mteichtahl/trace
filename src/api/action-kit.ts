@@ -149,7 +149,8 @@ export interface Context {
   signal?: AbortSignal | undefined
 }
 
-export type Need = 'signed-in' | 'read' | 'write' | 'admin' | 'tool' | 'job' | 'prompts'
+/** 'backend': the web backend's own identity only (src/api/backend-auth.ts), and nobody else */
+export type Need = 'signed-in' | 'read' | 'write' | 'admin' | 'tool' | 'job' | 'prompts' | 'backend'
 
 export interface Action<S extends z.ZodType> {
   need: Need

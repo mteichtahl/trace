@@ -14,11 +14,13 @@ import { DescribeVoicesCommand, PollyClient, SynthesizeSpeechCommand } from '@aw
 import { CloudWatchClient, DescribeAlarmsCommand, GetDashboardCommand, GetMetricDataCommand, type MetricAlarm, type MetricDataResult } from '@aws-sdk/client-cloudwatch'
 import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers'
 import { Verifier } from '../api/jwt.js'
 import { configLoader, issuerOf, ssmReader } from './config.js'
 import { type WebDeps, once } from './deps.js'
-import type { BedrockPort, CloudWatchPort, CognitoPort, PollyPort, StorePort } from './ports.js'
+import { DynamoDebounceStore } from './hooks-store.js'
+import type { BedrockPort, CloudWatchPort, CognitoPort, PollyPort, SecretsPort, StorePort } from './ports.js'
 
 export function cognitoPort(region: string): CognitoPort {
   const c = new CognitoIdentityProviderClient({ region })
@@ -132,10 +134,22 @@ export function cloudwatchPort(region: string): CloudWatchPort {
   }
 }
 
+export function secretsPort(region: string): SecretsPort {
+  const c = new SecretsManagerClient({ region })
+  return {
+    async get(SecretId) {
+      const out = await c.send(new GetSecretValueCommand({ SecretId }))
+      if (!out.SecretString) throw new Error('the secret is empty')
+      return out.SecretString
+    },
+  }
+}
+
 /** The web backend's dependencies in AWS. TRACE_WEB_CONFIG_PARAM names the SSM parameter. */
 export function awsDeps(env: NodeJS.ProcessEnv = process.env): WebDeps {
   const param = env.TRACE_WEB_CONFIG_PARAM
   if (!param) throw new Error('TRACE_WEB_CONFIG_PARAM is not set')
+  const creds = fromNodeProviderChain()
   return {
     config: configLoader(ssmReader(env.AWS_REGION), param),
     verifier: once((c) => new Verifier({ issuer: issuerOf(c), clientId: c.clientId })),
@@ -144,7 +158,9 @@ export function awsDeps(env: NodeJS.ProcessEnv = process.env): WebDeps {
     polly: once((c) => pollyPort(c.region)),
     store: once((c) => storePort(c.region)),
     cloudwatch: once((c) => cloudwatchPort(c.region)),
-    credentials: fromNodeProviderChain(),
+    secrets: once((c) => secretsPort(c.region)),
+    hookStore: once((c) => (c.hooks?.table ? new DynamoDebounceStore({ table: c.hooks.table, region: c.region, credentials: creds }) : null)),
+    credentials: creds,
     fetch: (input, init) => fetch(input, init),
     ...(env.TRACE_AGENTCORE_ENDPOINT ? { agentcoreEndpoint: env.TRACE_AGENTCORE_ENDPOINT } : {}),
     log: (l) => { process.stdout.write(`${JSON.stringify(l)}\n`) },

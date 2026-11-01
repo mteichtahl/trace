@@ -358,7 +358,10 @@ describe('the trace stack', () => {
     t.hasResourceProperties('AWS::Cognito::UserPoolClient', { GenerateSecret: false, CallbackURLs: ['http://localhost:47821/callback', 'http://localhost:47822/callback'] })
     // identity is the sub; an email change waits for verification, and the clients may write nothing else
     t.hasResourceProperties('AWS::Cognito::UserPool', { UserAttributeUpdateSettings: { AttributesRequireVerificationBeforeUpdate: ['email'] } })
-    for (const c of Object.values(t.findResources('AWS::Cognito::UserPoolClient') as Record<string, { Properties: { WriteAttributes?: string[] } }>)) expect(c.Properties.WriteAttributes).toEqual(['email'])
+    // (the web backend's own client, client credentials only, has no person and writes nothing)
+    for (const c of Object.values(t.findResources('AWS::Cognito::UserPoolClient') as Record<string, { Properties: { ClientName?: string; WriteAttributes?: string[] } }>)) {
+      expect(c.Properties.WriteAttributes, c.Properties.ClientName).toEqual(c.Properties.ClientName === 'trace-web-hooks' ? undefined : ['email'])
+    }
     // the invitation points at the app's /invite page, where the temporary password is entered (no secret in a link)
     const pool = Object.values(t.findResources('AWS::Cognito::UserPool') as Record<string, { Properties: { AdminCreateUserConfig: { InviteMessageTemplate: { EmailMessage: unknown } } } }>)[0]!
     const body = JSON.stringify(pool.Properties.AdminCreateUserConfig.InviteMessageTemplate.EmailMessage)
