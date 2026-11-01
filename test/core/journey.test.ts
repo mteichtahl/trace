@@ -92,6 +92,18 @@ describe('the journey record', () => {
     expect(nextStep(rec(), USER).summary).toBe('trace is working on Architect: every requirement maps to at least one block.')
   })
 
+  it('a person\'s review of trace\'s work waits for that work: Layout says trace is working until the board is routed', () => {
+    for (const g of ['define', 'architect', 'capture', 'prove']) { meetAll(g); openAll(g); signGate(db, g, signer) }
+    expect(rec().journey.currentStage).toBe('layout')
+    // nothing laid out yet: not "approve the renders"
+    expect(nextStep(rec(), USER)).toMatchObject({ kind: 'working', belongs_to: 'trace', ref: { kind: 'criterion', id: 'layout.routed' } })
+    setCriterion(db, 'layout.routed', 'met', [], 'trace')
+    expect(nextStep(rec(), USER)).toMatchObject({ kind: 'working', ref: { kind: 'criterion', id: 'layout.drc' } })
+    setCriterion(db, 'layout.drc', 'met', [], 'trace')
+    // routed and checked: the renders are the person's to approve, though trace still has the lengths and fit to do
+    expect(nextStep(rec(), USER)).toMatchObject({ kind: 'task', belongs_to: 'you', ref: { kind: 'criterion', id: 'layout.renders' } })
+  })
+
   it('a blocking question comes first, with the recommended answer as its button', () => {
     const q = askQuestion(db, { askedBy: 'the Analog specialist', text: 'What is the sensor\'s supply range?', blocks: 'sizing the regulator', options: [
       { id: 'b', label: '1.8 to 3.6 V', why: 'the widest' }, { id: 'a', label: '2.7 to 3.6 V', recommended: true, why: 'from the datasheet' },
