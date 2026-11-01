@@ -180,7 +180,7 @@ function cmdConfig(argv: string[]): number {
   return 2
 }
 
-/** ERC and DRC on every KiCad project, a build of every firmware target, and with mechanical/case.json the case's
+/** ERC and DRC on every KiCad project (DRC skipped, and said so, while a project has no board yet), a build of every firmware target, and with mechanical/case.json the case's
  * build and fit check (mech.build): what a hardware repository's build runs. Exits 1 when any of them reports errors
  * or the fit fails; without build123d here the case is skipped, said so, and not counted as a failure. */
 async function cmdCheck(): Promise<number> {
@@ -196,6 +196,9 @@ async function cmdCheck(): Promise<number> {
   for (const proj of projectsList) {
     for (const kind of ['kicad.erc', 'kicad.drc']) {
       if (!reg.get(kind)) { out(`skip   ${kind} ${proj}: not available`); continue }
+      // Capture draws the schematic before Layout adds the board: a project with no .kicad_pcb yet has no DRC to run
+      const board = join(root, proj).replace(/\.kicad_pro$/, '.kicad_pcb')
+      if (kind === 'kicad.drc' && proj.endsWith('.kicad_pro') && !existsSync(board)) { out(`skip   ${kind} ${proj}: no board yet (${relative(root, board)}); DRC runs once layout adds it`); continue }
       ran++
       try {
         const r = await reg.call(kind, { project: join(root, proj) }, { hardware: false, via: 'cli' })
