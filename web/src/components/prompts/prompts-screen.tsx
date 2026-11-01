@@ -95,7 +95,7 @@ export function PromptsScreen({ repo: fixedRepo, initialScope }: PromptsScreenPr
     ...rows.filter((r) => r.mode === 'editable').map((r) => ({ id: `prompt-${r.id}`, label: `Instruction: ${r.id}`, keywords: [entryTitle(r.id), r.description], group: 'Agent instructions', run: () => setSelected(r.id) })),
   ])
 
-  const scopeWords = scope === 'installation' ? 'Changes here apply to every project at once, for its next job.' : `Changes here apply only to ${repo ? projectName(repo) : 'this project'}, through a pull request someone reviews.`
+  const scopeWords = scope === 'installation' ? 'Changes here apply to every project at once, for its next job.' : `Changes here apply only to ${repo ? projectName(repo) : 'this project'}, through a change someone reviews.`
 
   const catalog = (
     <Catalog rows={rows} filter={filter} onFilter={setFilter} selected={current} onSelect={(id) => { setSelected(id); setCatalogOpen(false) }} loading={list.isLoading} pending={pending} />
@@ -400,7 +400,7 @@ function Entry({ id, scope, repo, canEdit, canHistory, pending, onPending }: { i
       const r = await call('prompts.set', { id, scope, ...(scope === 'project' && repo ? { repo } : {}), text, reason: reason.trim() })
       if (scope === 'project') {
         onPending({ version: r.version, branch: r.branch, at: Date.now() })
-        toast(`Saved as Project v${r.version}: a pull request opens in ${repo} for review. Agents use it once it is merged.`)
+        toast(`Saved as Project v${r.version}: a change opens in ${repo} for review. Agents use it once it is accepted.`)
       } else {
         toast(`Saved as Installation v${r.version}. Every project's next job uses it.`)
       }
@@ -452,10 +452,10 @@ function Entry({ id, scope, repo, canEdit, canHistory, pending, onPending }: { i
       {pending && (
         <p className="mt-2 flex flex-wrap items-center gap-2 text-sm">
           <GitPullRequest className="size-4 text-muted-foreground" aria-hidden />
-          Pending: v{pending.version} in a pull request, waiting for review.
+          Pending: v{pending.version} in a change, waiting for review.
           {pending.branch && repo && (
             <a className="inline-flex items-center gap-1 text-primary hover:underline" href={`https://github.com/${repo}/pulls?q=is%3Apr+head%3A${encodeURIComponent(pending.branch)}`} target="_blank" rel="noreferrer">
-              Open pull request <ExternalLink className="size-3" />
+              View on GitHub <ExternalLink className="size-3" />
             </a>
           )}
         </p>
@@ -604,7 +604,7 @@ function Entry({ id, scope, repo, canEdit, canHistory, pending, onPending }: { i
             {changed && <Button variant="ghost" onClick={() => { setDraft(null); setSuggest(null) }}>Discard</Button>}
           </div>
           <p className="text-xs text-muted-foreground">
-            {scope === 'project' ? <>Opens a pull request in <span className="font-mono">{repo}</span> for review. Agents use it once merged.</> : 'Takes effect at once, for every project\'s next job.'}
+            {scope === 'project' ? <>Opens a change in <span className="font-mono">{repo}</span> for review. Agents use it once accepted.</> : 'Takes effect at once, for every project\'s next job.'}
           </p>
         </div>
       )}
@@ -707,7 +707,7 @@ function UndoDialog({ undo, id, scope, repo, belowLabel, onClose, onDone }: {
       const base = { id, scope, ...(scope === 'project' && repo ? { repo } : {}), reason: reason.trim() }
       const r = undo.kind === 'reset' ? await call('prompts.reset', base) : await call('prompts.revert', { ...base, version: undo.version })
       toast(scope === 'project'
-        ? `${undo.kind === 'reset' ? 'Reset' : `Revert to v${undo.version}`} saved as v${r.version}: a pull request opens for review.`
+        ? `${undo.kind === 'reset' ? 'Reset' : `Revert to v${undo.version}`} saved as v${r.version}: a change opens for review.`
         : `${undo.kind === 'reset' ? 'Reset' : `Reverted to v${undo.version}`}, saved as v${r.version}. Every project's next job uses it.`)
       await onDone(r)
       setReason('')
@@ -725,7 +725,7 @@ function UndoDialog({ undo, id, scope, repo, belowLabel, onClose, onDone }: {
           <AlertDialogTitle>{undo?.kind === 'reset' ? `Reset ${id}?` : `Revert ${id} to v${undo?.kind === 'revert' ? undo.version : ''}?`}</AlertDialogTitle>
           <AlertDialogDescription>
             {undo?.kind === 'reset' ? `This ${scope}'s change is set aside and ${belowLabel} is used again.` : 'That version\'s text becomes the newest version.'} It is recorded as a new version, so it can be undone too.
-            {scope === 'project' && ' It opens a pull request for review.'}
+            {scope === 'project' && ' It opens a change for review.'}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <div className="space-y-1.5">
@@ -749,7 +749,7 @@ const AGENTS: { group: string; items: { value: string; label: string }[] }[] = [
     group: 'Others',
     items: [
       { value: 'worker.task', label: 'Worker, on a task' },
-      { value: 'worker.item', label: 'Worker, on a pull request or issue' },
+      { value: 'worker.item', label: 'Worker, on a change or issue' },
       { value: 'delegate', label: 'Delegation to the worker' },
       { value: 'actions.check', label: 'GitHub Actions check' },
       { value: 'router', label: 'Router' },
@@ -763,8 +763,8 @@ const AGENTS: { group: string; items: { value: string; label: string }[] }[] = [
 
 const JOBS: { value: string; label: string; job: PreviewJob }[] = [
   { value: 'task', label: 'A task someone asked for', job: { kind: 'task', request: '(the request)' } },
-  { value: 'ci-red', label: 'A pull request whose check failed', job: { kind: 'work-item', item: { kind: 'ci-red', number: 1, sha: '0'.repeat(40), ref: 'claude/example', own: true, title: "(the item's title)" } } },
-  { value: 'conflict', label: 'A pull request in merge conflict', job: { kind: 'work-item', item: { kind: 'conflict', number: 1, sha: '0'.repeat(40), ref: 'claude/example', own: true, title: "(the item's title)" } } },
+  { value: 'ci-red', label: 'A change whose check failed', job: { kind: 'work-item', item: { kind: 'ci-red', number: 1, sha: '0'.repeat(40), ref: 'claude/example', own: true, title: "(the item's title)" } } },
+  { value: 'conflict', label: 'A change that conflicts with the design', job: { kind: 'work-item', item: { kind: 'conflict', number: 1, sha: '0'.repeat(40), ref: 'claude/example', own: true, title: "(the item's title)" } } },
   { value: 'agent-fix', label: 'An issue for the agents', job: { kind: 'work-item', item: { kind: 'agent-fix', number: 1, sha: '0'.repeat(40), ref: 'claude/example', own: true, title: "(the item's title)" } } },
 ]
 

@@ -53,7 +53,7 @@ export function PullStatusLine({ repo, number, className }: { repo: string; numb
   const state = res.data?.state
   // merged or closed: the inbox no longer lists it
   useEffect(() => { if (state === 'merged' || state === 'closed') void qc.invalidateQueries({ queryKey: ['inbox'] }) }, [state, qc])
-  if (res.isPending) return <p className={cn('flex items-center gap-1.5 text-xs text-muted-foreground', className)}><Loader2 className="size-3.5 animate-spin" aria-hidden />Checking the pull request…</p>
+  if (res.isPending) return <p className={cn('flex items-center gap-1.5 text-xs text-muted-foreground', className)}><Loader2 className="size-3.5 animate-spin" aria-hidden />Checking the change…</p>
   if (res.isError || !res.data) return <p className={cn('text-xs text-muted-foreground', className)}>Its status could not be read just now.</p>
   const w = pullWords(res.data)
   const Icon = ICON[w.tone]

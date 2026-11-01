@@ -147,7 +147,7 @@ function Settings() {
 
       <Section label="Agent instructions">
         <div className="flex flex-wrap items-center gap-3 rounded-xl border p-5 text-sm">
-          <p className="flex-1">What this project's agents are told, on top of the installation's instructions. A change opens a pull request for review.</p>
+          <p className="flex-1">What this project's agents are told, on top of the installation's instructions. Editing them opens a change for review.</p>
           <Button asChild variant="outline"><Link to="/p/$id/settings/prompts" params={{ id }}>Agent instructions</Link></Button>
         </div>
       </Section>

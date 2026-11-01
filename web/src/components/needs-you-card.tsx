@@ -4,7 +4,10 @@
  * own button ("Use 4.2 A") with "Other answer" beside it, so most questions are answered in one tap. A stuck agent's
  * report can be dismissed with a reason in one line (onDismiss: stuck.dismiss).
  */
+import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
+import { checksWords } from '@/lib/guided'
+import { q } from '@/lib/queries'
 import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DismissStuck } from '@/components/dismiss-stuck'
@@ -15,7 +18,7 @@ import { waited } from '@/lib/format'
 import type { InboxItem } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-const KIND: Record<InboxItem['kind'], string> = { gate: 'Gate ready', question: 'Question', spend: 'Spend', stuck: 'Agent stuck', review: 'Pull request' }
+export const KIND: Record<InboxItem['kind'], string> = { gate: 'Gate ready', question: 'Question', spend: 'Spend', stuck: 'Agent stuck', review: 'Change to review' }
 
 export interface NeedsYouCardProps {
   item: InboxItem
@@ -26,11 +29,40 @@ export interface NeedsYouCardProps {
   onOther?: (item: InboxItem) => void
   /** a stuck report: dismiss it with a reason (useDismissStuck); absent: no Dismiss */
   onDismiss?: (item: InboxItem, reason: string) => Promise<void>
+  /** a change: accept it from the card (shown only when change.get says this person may) */
+  onAccept?: (item: InboxItem, title: string) => void
+  accepting?: boolean
   compact?: boolean
   className?: string
 }
 
-export function NeedsYouCard({ item, onAnswer, answering, onOther, onDismiss, compact, className }: NeedsYouCardProps) {
+/** A change's checks in a line, from change.get. */
+function ChangeStatusLine({ repo, number, className }: { repo: string; number: number; className?: string }) {
+  const c = useQuery({ ...q('change.get', { repo, number }), staleTime: 15_000 })
+  if (!c.data) return null
+  const bad = !!c.data.checks?.failed
+  return <p className={cn('text-xs', bad ? 'text-destructive' : c.data.verdict === 'ready' ? 'text-verified' : 'text-muted-foreground', className)}>{checksWords(c.data.checks)}</p>
+}
+
+/** Review, and Accept when this person may accept it now. */
+function ChangeButtons({ item, compact, onAccept, accepting }: { item: InboxItem; compact?: boolean; onAccept: (i: InboxItem, title: string) => void; accepting?: boolean }) {
+  const c = useQuery({ ...q('change.get', { repo: item.change!.repo, number: item.change!.number }), staleTime: 15_000 })
+  return (
+    <>
+      <Button size={compact ? 'sm' : 'lg'} asChild>
+        <Link to={item.action.to ?? '/'}>Review</Link>
+      </Button>
+      {c.data?.may_accept && (
+        <Button size={compact ? 'sm' : 'lg'} variant="outline" onClick={() => onAccept(item, c.data!.title)} disabled={accepting}>
+          {accepting && <Loader2 className="animate-spin" />}
+          Accept
+        </Button>
+      )}
+    </>
+  )
+}
+
+export function NeedsYouCard({ item, onAnswer, answering, onOther, onDismiss, onAccept, accepting, compact, className }: NeedsYouCardProps) {
   const stuck = item.kind === 'stuck'
   const meta = [item.project, item.revision, item.stage, KIND[item.kind], compact ? waited(item.createdAt) : `waiting ${waited(item.createdAt)}`].filter(Boolean).join(' · ')
   const chips = [...(item.sources ?? []), ...(item.blocks ? [{ kind: 'record' as const, label: `Blocks: ${item.blocks}` }] : [])]
@@ -53,7 +85,7 @@ export function NeedsYouCard({ item, onAnswer, answering, onOther, onDismiss, co
             ))}
           </div>
         )}
-        {item.pull && <PullStatusLine repo={item.pull.repo} number={item.pull.number} className="mt-2" />}
+        {item.change ? <ChangeStatusLine repo={item.change.repo} number={item.change.number} className="mt-2" /> : item.pull && <PullStatusLine repo={item.pull.repo} number={item.pull.number} className="mt-2" />}
         {stuck && onDismiss && item.questionId && <DismissStuck item={item} onDismiss={onDismiss} className="mt-3" />}
       </div>
       {/* a long recommended answer wraps inside its button, the buttons capped at 40 % of the card, so the question keeps the room */}
@@ -68,6 +100,8 @@ export function NeedsYouCard({ item, onAnswer, answering, onOther, onDismiss, co
               {!onOther && item.action.to ? <Link to={item.action.to}>Other answer</Link> : 'Other answer'}
             </Button>
           </>
+        ) : item.change && onAccept ? (
+          <ChangeButtons item={item} compact={compact} onAccept={onAccept} accepting={accepting} />
         ) : (
           <Button size={compact ? 'sm' : 'lg'} variant={stuck ? 'outline' : 'default'} asChild={!!item.action.to || !!item.action.href}>
             {item.action.to ? <Link to={item.action.to}>{item.action.label}</Link>

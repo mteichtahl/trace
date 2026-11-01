@@ -13,6 +13,7 @@ import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { DecisionCard, type Decision, type DecisionChoice } from '@/components/decision-card'
 import { NeedsYouCard } from '@/components/needs-you-card'
+import { useAcceptFromInbox } from '@/components/changes/use-change-actions'
 import { useDismissStuck } from '@/components/dismiss-stuck'
 import { Column, Section } from '@/components/shell/app-shell'
 import { useCommands } from '@/components/shell/command-menu'
@@ -31,9 +32,9 @@ export const Route = createFileRoute('/_app/inbox')({
 })
 
 export const INBOX_KINDS: InboxKind[] = ['gate', 'question', 'spend', 'stuck', 'review']
-const KIND_WORDS: Record<InboxKind, string> = { gate: 'Gates ready', question: 'Questions', spend: 'Spend', stuck: 'Agents stuck', review: 'Pull requests' }
+export const KIND_WORDS: Record<InboxKind, string> = { gate: 'Gates ready', question: 'Questions', spend: 'Spend', stuck: 'Agents stuck', review: 'Changes to review' }
 
-/** The kinds that need a person (the four that earn a notification, and trace's open pull requests), most blocking and oldest first (the API's order is kept). */
+/** The kinds that need a person (the four that earn a notification, and trace's changes to review), most blocking and oldest first (the API's order is kept). */
 export function inboxItems(items: InboxItem[] | undefined): InboxItem[] {
   return (items ?? []).filter((i) => INBOX_KINDS.includes(i.kind))
 }
@@ -59,6 +60,7 @@ function Inbox() {
   const live = useLiveStatus()
   const [answering, setAnswering] = useState<string | null>(null)
   const dismiss = useDismissStuck()
+  const accept = useAcceptFromInbox()
   const [busy, setBusy] = useState<string | null>(null)
   const items = useMemo(() => inboxItems(inbox.data), [inbox.data])
   const qRepos = [...new Set(items.filter((i) => i.kind === 'question').map((i) => i.repo))]
@@ -95,7 +97,7 @@ function Inbox() {
     <Column>
       <h1 className="text-2xl font-semibold tracking-tight">Inbox</h1>
       <p className="mt-1 text-sm text-muted-foreground">
-        trace tells you about four things only: a gate is ready, a question blocks work, money is about to be spent, an agent is stuck. Answering here clears it everywhere.
+        trace tells you about a gate that is ready, a question that blocks work, money about to be spent, an agent that is stuck, and a change it made for you to review. Acting here clears it everywhere.
       </p>
       {offline && <p className="mt-3 text-sm text-muted-foreground">You are offline: answers wait until you are back, and gates and spending cannot be approved offline.</p>}
       <div className="mt-6">
@@ -118,6 +120,8 @@ function Inbox() {
                       onAnswer={offline ? undefined : (it) => void answer(it, { option: it.recommended!.id, recommended: true }).catch(() => undefined)}
                       onOther={(it) => setAnswering(answering === it.id ? null : it.id)}
                       onDismiss={offline ? undefined : dismiss}
+                      onAccept={offline ? undefined : accept.run}
+                      accepting={accept.busy === i.id}
                     />
                     {answering === i.id && (
                       <DecisionCard

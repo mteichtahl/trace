@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer'
 import { Skeleton } from '@/components/ui/skeleton'
 import { NeedsYouCard } from '@/components/needs-you-card'
+import { useAcceptFromInbox } from '@/components/changes/use-change-actions'
 import { useDismissStuck } from '@/components/dismiss-stuck'
 import { RunLine, runControls } from '@/components/run-line'
 import { Column, Section } from '@/components/shell/app-shell'
@@ -50,6 +51,7 @@ function Home() {
   const phone = useMediaQuery('(max-width: 767px)')
   const answer = useCall('question.answer', (a) => [['inbox'], ['journey.get', a.repo]])
   const dismiss = useDismissStuck()
+  const accept = useAcceptFromInbox()
 
   useTraceContext({ label: 'Home', description: 'The screen the person is on', value: 'Home: what needs them across their projects' }, 'screen')
 
@@ -93,7 +95,7 @@ function Home() {
         ) : (
           <div className="space-y-3">
             {items.map((i) => (
-              <NeedsYouCard key={i.id} item={i} compact={phone} onAnswer={onAnswer} onDismiss={dismiss} answering={answer.isPending && answer.variables?.question === i.questionId} onOther={(it) => it.action.to && void navigate({ to: it.action.to })} />
+              <NeedsYouCard key={i.id} item={i} compact={phone} onAnswer={onAnswer} onDismiss={dismiss} onAccept={accept.run} accepting={accept.busy === i.id} answering={answer.isPending && answer.variables?.question === i.questionId} onOther={(it) => it.action.to && void navigate({ to: it.action.to })} />
             ))}
           </div>
         )}

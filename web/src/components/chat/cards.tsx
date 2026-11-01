@@ -133,7 +133,7 @@ export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readO
         <GitBranch className="size-3.5" aria-hidden /> trace offers to start work{task.repo ? ` on ${task.repo}` : ''}
       </p>
       <blockquote className="whitespace-pre-wrap rounded-md border-l-2 bg-muted/40 px-3 py-2 font-mono text-xs" aria-label="The exact request">{task.request ?? ''}</blockquote>
-      <p className="mt-1.5 text-xs text-muted-foreground">Agent: {agent}. {task.branch ? <>It carries on <code className="font-mono">{task.branch}</code>, so that branch's pull request updates.</> : 'It works on a branch and opens a pull request.'}</p>
+      <p className="mt-1.5 text-xs text-muted-foreground">Agent: {agent}. {task.branch ? <>It carries on <code className="font-mono">{task.branch}</code>, so that change updates.</> : 'It works on a branch and hands you a change to review.'}</p>
       {answer ? (
         <p className="mt-2 text-xs text-muted-foreground">
           {answer.confirmed ? `Not started: ${answer.reason ?? 'the job was not accepted'}.` : answer.reason === 'cancelled' ? 'You cancelled this.' : answer.reason === 'not confirmed' ? 'Not started: the conversation went on without it being confirmed.' : `Not started: ${answer.reason}.`}

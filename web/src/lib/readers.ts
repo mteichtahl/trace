@@ -6,7 +6,10 @@
  * Each reader accepts an answer already in the app's shape and returns it unchanged, so mock mode (src/mock, which
  * answers in the app's shapes) and the tests keep working.
  */
-import type { AgentState, ChatMessage, ChatThread, EvidenceRef, Gate, Handoff, HandoffState, InboxItem, Journey, Member, MeDoc, NextStep, ProjectJobs, Question, RunSummary, Stage, Waiver } from './types'
+import type {
+  AgentState, ChangeCheck, ChangeDetail, ChangeDiff, ChangeFile, ChangeFileKind, ChangeSummary, ChangeVerdict, ChatMessage, ChatThread, EvidenceRef, Gate, Handoff,
+  HandoffState, InboxItem, Journey, Member, MeDoc, NextStep, ProjectJobs, Question, RunSummary, Stage, StageGuide, StageStep, StepOwner, StepState, Waiver,
+} from './types'
 import type { DecisionEntry, JourneyMore, ProjectIcon } from './types-s1'
 
 type Obj = Record<string, unknown>
@@ -49,7 +52,120 @@ function refTo(repo: string, ref: unknown, criteria?: Map<string, string>): stri
     case 'gate': return `/p/${pid(repo)}/gates/${id}`
     case 'question': return `/p/${pid(repo)}/do/question-answer`
     case 'criterion': { const g = criteria?.get(id); return g ? `/p/${pid(repo)}/gates/${g}` : undefined }
+    case 'change': return Number(id) > 0 ? `/p/${pid(repo)}/changes/${id}` : undefined
     default: return undefined
+  }
+}
+
+// ------------------------------------------------------------------ the guided flow (stage guide, steps, changes)
+
+const STEP_OWNERS = new Set<StepOwner>(['you', 'trace', 'admins', 'contributors', 'person'])
+const STEP_STATES = new Set<StepState>(['done', 'now', 'next', 'later', 'waived'])
+const REF_KINDS = new Set(['criterion', 'gate', 'question', 'change'])
+
+/** A stage's guide (journey.get `stages[].guide`), or nothing when the API does not give one yet. */
+export function readGuide(g: unknown): StageGuide | undefined {
+  if (!isObj(g) || !str(g.purpose)) return undefined
+  return {
+    purpose: String(g.purpose), you_do: str(g.you_do) ?? '', trace_does: str(g.trace_does) ?? '', you_get: str(g.you_get) ?? '',
+    typical_time: str(g.typical_time) ?? '', next: str(g.next) ?? null,
+  }
+}
+
+/** A stage's steps (journey.get `stages[].steps`): unknown owners read as contributors, unknown states as later. */
+export function readSteps(v: unknown): StageStep[] | undefined {
+  if (!Array.isArray(v)) return undefined
+  return arr(v).filter((s) => str(s.text)).map((s, i) => {
+    const ref = isObj(s.ref) && REF_KINDS.has(String(s.ref.kind)) ? { kind: s.ref.kind as NonNullable<StageStep['ref']>['kind'], id: String(s.ref.id ?? '') } : null
+    return {
+      id: str(s.id) ?? `step-${i + 1}`, text: String(s.text),
+      owner: STEP_OWNERS.has(s.owner as StepOwner) ? (s.owner as StepOwner) : 'contributors',
+      state: STEP_STATES.has(s.state as StepState) ? (s.state as StepState) : 'later',
+      ref, ...(str(s.who) ? { who: String(s.who) } : {}),
+    }
+  })
+}
+
+/**
+ * The recommendation box's two parts: "trace recommends accepting it." and its reason. The API's review step gives
+ * both in one string ("trace recommends accepting it. All 7 checks passed, …"); other steps give the reason as `why`.
+ */
+export function splitRecommendation(rec: string, why?: string): { text: string; why?: string } {
+  const m = /^(trace recommends[^.]*\.)\s+(.+)$/s.exec(rec.trim())
+  if (m) return { text: m[1]!, why: m[2]! }
+  return { text: rec, ...(why ? { why } : {}) }
+}
+
+const VERDICTS = new Set<ChangeVerdict>(['ready', 'checking', 'failing', 'conflict', 'blocked'])
+const FILE_KINDS = new Set<ChangeFileKind>(['schematic', 'board', 'parts', 'text', 'image', 'binary'])
+
+/** One change's checks, or null when GitHub has none. */
+function readChecks(c: unknown): ChangeSummary['checks'] {
+  if (!isObj(c)) return null
+  const n = (k: string) => (typeof c[k] === 'number' ? (c[k] as number) : 0)
+  return { total: n('total'), passed: n('passed'), failed: n('failed'), running: n('running'), skipped: n('skipped'), failing: (Array.isArray(c.failing) ? c.failing : []).map(String) }
+}
+
+/** The list pill's word, worked out from the facts when the API does not say it. */
+export function verdictOf(c: Pick<ChangeSummary, 'checks' | 'mergeable'> & { verdict?: unknown }): ChangeVerdict {
+  if (VERDICTS.has(c.verdict as ChangeVerdict)) return c.verdict as ChangeVerdict
+  if (c.checks?.failed) return 'failing'
+  if (c.checks?.running) return 'checking'
+  if (c.mergeable === 'dirty' || c.mergeable === 'behind') return 'conflict'
+  if (c.mergeable === 'clean' || c.mergeable === 'unstable') return 'ready'
+  return 'blocked'
+}
+
+/** One ChangeSummary (changes.list, change.get), tolerant of missing fields. */
+export function readChangeSummary(c: Obj): ChangeSummary {
+  const state = c.state === 'merged' || c.state === 'closed' ? c.state : 'open'
+  const checks = readChecks(c.checks)
+  const mergeable = str(c.mergeable) ?? 'unknown'
+  return {
+    number: Number(c.number ?? 0), title: str(c.title) ?? `Change ${String(c.number ?? '')}`, url: /^https:\/\/github\.com\//.test(str(c.url) ?? '') ? String(c.url) : '',
+    draft: Boolean(c.draft), held: Boolean(c.held), from: str(c.from) ?? 'a trace job', job_id: str(c.job_id) ?? null, stage: str(c.stage) ?? null,
+    opened_at: str(c.opened_at) ?? '', updated_at: str(c.updated_at) ?? str(c.opened_at) ?? '', state, mergeable, checks,
+    verdict: verdictOf({ checks, mergeable, verdict: c.verdict }),
+  }
+}
+
+/** changes.list: `{ repo, changes }`, oldest first. */
+export function readChanges(raw: unknown, args?: { repo?: string }): { repo: string; changes: ChangeSummary[] } {
+  if (Array.isArray(raw)) return { repo: args?.repo ?? '', changes: arr(raw).map(readChangeSummary) }
+  if (!isObj(raw)) return { repo: args?.repo ?? '', changes: [] }
+  return { repo: str(raw.repo) ?? args?.repo ?? '', changes: arr(raw.changes).map(readChangeSummary).sort((a, b) => a.opened_at.localeCompare(b.opened_at)) }
+}
+
+/** change.get: a ChangeDetail; what an older answer leaves out reads as nothing (and may_accept as false). */
+export function readChange(raw: unknown): ChangeDetail {
+  const c = isObj(raw) ? raw : {}
+  const rec = isObj(c.recommendation) ? c.recommendation : {}
+  const verdict = ['accept', 'ask', 'wait', 'none'].includes(String(rec.verdict)) ? (rec.verdict as ChangeDetail['recommendation']['verdict']) : 'none'
+  const ref = (v: unknown) => (isObj(v) ? { ref: str(v.ref) ?? '', sha: str(v.sha) ?? '' } : { ref: '', sha: '' })
+  return {
+    ...readChangeSummary(c),
+    summary: (Array.isArray(c.summary) ? c.summary : []).map(String).filter(Boolean),
+    files: arr(c.files).map((f) => ({
+      path: String(f.path ?? ''), status: (['added', 'modified', 'removed', 'renamed'].includes(String(f.status)) ? f.status : 'modified') as ChangeFile['status'],
+      additions: Number(f.additions ?? 0), deletions: Number(f.deletions ?? 0), kind: FILE_KINDS.has(f.kind as ChangeFileKind) ? (f.kind as ChangeFileKind) : 'binary',
+    })),
+    checks_list: arr(c.checks_list).map((k) => ({ name: String(k.name ?? ''), state: (['passed', 'failed', 'running', 'skipped'].includes(String(k.state)) ? k.state : 'running') as ChangeCheck['state'], summary: str(k.summary) ?? null })),
+    requirements: (Array.isArray(c.requirements) ? c.requirements : []).map(String),
+    recommendation: { verdict, why: str(rec.why) ?? '' },
+    may_accept: c.may_accept === true,
+    blockers: (Array.isArray(c.blockers) ? c.blockers : []).map(String),
+    base: ref(c.base), head: ref(c.head),
+  }
+}
+
+/** change.diff: one file's two sides. */
+export function readChangeDiff(raw: unknown): ChangeDiff {
+  const d = isObj(raw) ? raw : {}
+  // a renamed file's before side names its old path
+  const side = (v: unknown) => (isObj(v) && str(v.ref) ? { ref: String(v.ref), ...(str(v.path) ? { path: String(v.path) } : {}) } : null)
+  return {
+    path: str(d.path) ?? '', kind: FILE_KINDS.has(d.kind as ChangeFileKind) ? (d.kind as ChangeFileKind) : 'binary',
+    patch: str(d.patch) ?? null, before: side(d.before), after: side(d.after), binary: Boolean(d.binary),
   }
 }
 
@@ -105,12 +221,17 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
       maySign: Boolean(g.may_sign),
     } as Gate
   })
-  const stages: Stage[] = arr(raw.stages).map((s) => ({
-    id: String(s.id), name: String(s.name), state: (STAGE_STATES.has(String(s.state)) ? s.state : 'queued') as Stage['state'],
-    criteria: { met: Number(s.met ?? 0), total: Number(s.total ?? 0) },
-    ...(isObj(s.reopened) ? { reopened: { reason: str(s.reopened.reason) ?? 'reopened' } } : {}),
-    ...(s.optional ? { optional: true } : {}),
-  }))
+  const stages: Stage[] = arr(raw.stages).map((s) => {
+    const guide = readGuide(s.guide)
+    const steps = readSteps(s.steps)?.map((st) => { const to = refTo(repo, st.ref, criterionGate); return to ? { ...st, to } : st })
+    return {
+      id: String(s.id), name: String(s.name), state: (STAGE_STATES.has(String(s.state)) ? s.state : 'queued') as Stage['state'],
+      criteria: { met: Number(s.met ?? 0), total: Number(s.total ?? 0) },
+      ...(isObj(s.reopened) ? { reopened: { reason: str(s.reopened.reason) ?? 'reopened' } } : {}),
+      ...(s.optional ? { optional: true } : {}),
+      ...(guide ? { guide } : {}), ...(steps ? { steps } : {}),
+    }
+  })
   const n = isObj(raw.next) ? raw.next : {}
   const belongs = String(n.belongs_to ?? 'trace')
   const owner: NextStep['owner'] = n.yours ? 'you' : belongs === 'trace' ? 'trace' : belongs === 'outside' ? 'outside' : 'person'
@@ -118,12 +239,17 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
   const recommendation = str(n.recommendation)
   const summary = `${String(n.summary ?? '')}${recommendation && !String(n.summary ?? '').includes(recommendation) ? ` **${recommendation}**` : ''}`
   const to = refTo(repo, n.ref, criterionGate)
+  const stepAt = isObj(n.step) && Number(n.step.total) > 0 ? { index: Number(n.step.index), total: Number(n.step.total) } : null
   const next: NextStep = {
     kind: (kind === 'answer' ? 'task' : kind === 'done' ? 'none' : kind) as NextStep['kind'], owner, summary,
     ...(str(n.why) ? { why: String(n.why) } : {}),
     ...(str(n.button) ? { action: { label: String(n.button), ...(to ? { to } : {}) } } : {}),
     // the API words the step for whoever asks, so the reading form is the same words
     reviewer: { summary, ...(str(n.button) ? { action: { label: String(n.button), ...(to ? { to } : {}) } } : {}) },
+    // the guided flow's additions: the recommendation in its own box, where the step sits in its stage, what comes after
+    ...(recommendation ? { lead: String(n.summary ?? ''), recommend: splitRecommendation(recommendation, str(n.why)) } : {}),
+    step: stepAt, after: str(n.after) ?? null,
+    ...(isObj(n.ref) ? { ref: { kind: String(n.ref.kind), id: String(n.ref.id ?? '') } } : {}),
   }
   const questions: Question[] = arr(raw.questions).filter((q) => !q.answered).map((q) => {
     const rec = isObj(q.recommended) ? q.recommended : null
@@ -146,6 +272,7 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
     handoffs: arr(raw.handoffs).map((h) => readHandoff(h, repo)),
     recent: decisions.slice(0, 5).map((d) => ({ id: String(d.id), who: str(d.by) ?? 'trace', text: String(d.summary), at: String(d.at) })),
     hasMemory: Boolean(raw.has_memory),
+    ...(str(raw.changes_unavailable) ? { changesUnavailable: String(raw.changes_unavailable) } : {}),
     ...readIcon(raw.icon),
     ...(isObj(raw.build) ? { build: {
       quantity: Number(raw.build.quantity ?? 10), unit_cost: typeof raw.build.unit_cost === 'number' ? raw.build.unit_cost : null,
@@ -231,6 +358,17 @@ export function readJobs(raw: unknown, args?: { repo?: string }): ProjectJobs {
 
 // ------------------------------------------------------------------ inbox
 
+/**
+ * An older API's review summary in the app's words: `X: The Verification agent opened pull request #1, "Title". Its
+ * work counts once it is merged.` → `X: The Verification agent finished "Title". Review it and accept it into the design.`
+ * Anything else is kept as it is.
+ */
+export function changeWords(summary: string): string {
+  const m = /^(.*?)opened pull request #\d+, "(.*)"( \(a draft\))?\.(?: Its work counts once it is merged\.)?$/.exec(summary)
+  if (!m) return summary.replace(/\bpull requests?\b/gi, (w) => (/s$/i.test(w) ? 'changes' : 'change'))
+  return `${m[1]}finished "${m[2]}"${m[3] ? ' (a draft)' : ''}. Review it and accept it into the design.`
+}
+
 /** inbox: `{ summary, items, unavailable }` with the API's items, as the app's list. */
 export function readInbox(raw: unknown): InboxItem[] {
   if (Array.isArray(raw)) return raw as InboxItem[]
@@ -238,14 +376,21 @@ export function readInbox(raw: unknown): InboxItem[] {
   return arr(raw.items).map((i) => {
     const repo = String(i.repo)
     const ref = isObj(i.ref) ? i.ref : {}
-    const to = refTo(repo, ref)
+    // a review item is a change: it opens in the app (`ref.kind` change, or an older API's pull with its number)
+    const number = (ref.kind === 'change' || ref.kind === 'pull') && Number(ref.id) > 0 ? Number(ref.id) : 0
+    const change = i.kind === 'review' && number > 0
+    // the API's in-app link (`ref.to`), only when it is an address inside the app
+    const own = str(ref.to) && /^\/p\/[^/]+\/changes\/\d+$/.test(String(ref.to)) ? String(ref.to) : undefined
+    const to = change ? (own ?? `/p/${pid(repo)}/changes/${number}`) : refTo(repo, ref)
+    const label = String(i.action)
     return {
-      id: String(i.id), kind: i.kind as InboxItem['kind'], repo, project: String(i.project), stage: str(i.stage), summary: String(i.summary),
-      // a pull request (kind review) opens on GitHub, outside the app
-      createdAt: String(i.since), action: { label: String(i.action), ...(to ? { to } : {}), ...(ref.kind === 'pull' && typeof ref.url === 'string' && /^https:\/\/github\.com\//.test(ref.url) ? { href: ref.url } : {}) },
+      id: String(i.id), kind: i.kind as InboxItem['kind'], repo, project: String(i.project), stage: str(i.stage),
+      summary: change ? changeWords(String(i.summary)) : String(i.summary),
+      createdAt: String(i.since), action: { label: change && /github/i.test(label) ? 'Review the change' : label, ...(to ? { to } : {}) },
       ...(isObj(i.recommended) ? { recommended: { id: String(i.recommended.id), label: String(i.recommended.label) } } : {}),
       ...(ref.kind === 'question' ? { questionId: String(ref.id) } : {}),
-      ...(ref.kind === 'pull' && Number(ref.id) > 0 ? { pull: { repo, number: Number(ref.id) } } : {}),
+      ...(number && ref.kind === 'pull' ? { pull: { repo, number } } : {}),
+      ...(change ? { change: { repo, number, ...(typeof ref.url === 'string' && /^https:\/\/github\.com\//.test(ref.url) ? { url: ref.url } : {}) } } : {}),
     }
   })
 }
@@ -380,4 +525,7 @@ export const READERS: Partial<Record<string, (raw: unknown, args: Record<string,
   'chats.get': (r, a) => readThread(r, a as { repo?: string }),
   'chats.append': readAppended,
   'chats.recall': readRecall,
+  'changes.list': (r, a) => readChanges(r, a as { repo?: string }),
+  'change.get': readChange,
+  'change.diff': readChangeDiff,
 }

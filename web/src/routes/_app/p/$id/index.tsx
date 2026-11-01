@@ -1,12 +1,25 @@
 /**
- * Project overview: where is it (stage rail), what is the one next step (the card), and what is happening around it
- * (Waiting on people, trace is doing, Queued, Recently). A job one specialist asked another for reads "Asked by the …
+ * Project overview: where is it (stage rail, and under it the current stage's guide: its purpose, its steps with who
+ * does each, and what the gate needs; a segmented bar with "step 3 of 5" on phones), what is the one next step (the
+ * card, with its place in the stage, trace's recommendation and what happens after), the changes trace made waiting
+ * to be reviewed, and what is happening around it (Waiting on people, trace is doing, Queued, Recently). Any stage on
+ * the rail, and "What happens in <Stage>", opens the stage sheet. A job one specialist asked another for reads "Asked by the …
  * specialist: …" (its title), and a queued one can be declined there. A side column holds the requirements and cost
  * summaries.
  * Reference screen for a project tab.
  */
+import { useQuery } from '@tanstack/react-query'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { CircleHelp } from 'lucide-react'
+import { useState } from 'react'
+import { StageCelebration, useStageCelebration } from '@/components/changes/celebration'
+import { ChangesFromTrace } from '@/components/changes/changes-list'
+import { useChangeActions } from '@/components/changes/use-change-actions'
+import { StageGuidePanel, StageSegments, StageSheet } from '@/components/stage-guide'
+import { useAuth } from '@/lib/auth'
+import { changeOf, nextPlace } from '@/lib/guided'
+import { q } from '@/lib/queries'
+import type { Stage } from '@/lib/types'
 import { Skeleton } from '@/components/ui/skeleton'
 import { NextStepCard } from '@/components/next-step-card'
 import { RunLine, runControls } from '@/components/run-line'
@@ -38,6 +51,15 @@ function Overview() {
   const part = projects.data?.find((p) => p.repo === repo)?.part
   const drafts = useProjectDrafts(repo)
   const decline = useDeclineHandoffs()
+  const { user } = useAuth()
+  const admin = user?.class === 'admin'
+  const [sheet, setSheet] = useState<Stage | null>(null)
+  const celebrate = useStageCelebration(j.data)
+  const actions = useChangeActions(repo)
+  // the change the next step is about: whether this person may accept it straight from the card
+  const changeNo = j.data?.next.kind === 'review' ? changeOf(j.data.next) : null
+  const change = useQuery({ ...q('change.get', { repo, number: changeNo ?? 0 }), enabled: !!changeNo && part !== 'reviewer' })
+  void navigate
 
   if (!j.data)
     return (
@@ -60,17 +82,34 @@ function Overview() {
   // a job another specialist asked for, by the hand-off it answers (journey.get `handoffs`)
   const handoffOf = (r: { handoff?: { id: string } }) => (r.handoff ? d.handoffs?.find((h) => h.id === r.handoff!.id) : undefined)
   const write = part !== 'reviewer'
+  const place = nextPlace(d, { admin })
+  const canAccept = write && !!change.data?.may_accept && change.data.number === changeNo
 
   return (
     <div className="pb-12">
-      <div className="mt-6 rounded-xl border p-5 md:p-6">
-        <StageRail stages={d.stages} gates={d.gates} onSelect={(s) => void navigate({ to: `/p/${id}/stages/${s.id}` })} className="max-md:hidden" />
-        <StageRail stages={d.stages} gates={d.gates} variant="bar" className="md:hidden" />
+      <StageCelebration shown={celebrate} />
+      <div className="mt-6 overflow-hidden rounded-xl border bg-card">
+        <div className="p-5 md:px-6 md:pt-6 md:pb-4 max-md:hidden">
+          <StageRail stages={d.stages} gates={d.gates} onSelect={(s) => setSheet(s)} />
+        </div>
+        <StageGuidePanel j={d} admin={admin} onWhat={(s) => setSheet(s)} className="max-md:hidden" />
+        <StageSegments j={d} admin={admin} onWhat={(s) => setSheet(s)} className="p-4 md:hidden" />
       </div>
+      <StageSheet j={d} stage={sheet} admin={admin} onOpenChange={(o) => !o && setSheet(null)} />
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0">
-          <NextStepCard step={d.next} part={part} run={nextRun} resume={draft ? { label: continueText(draft), to: `/p/${id}/do/${draft.skill}` } : undefined} />
+          <NextStepCard
+            step={d.next}
+            part={part}
+            run={nextRun}
+            place={place}
+            onAccept={canAccept ? () => actions.accept.mutate({ number: change.data!.number, title: change.data!.title, step: place }) : undefined}
+            accepting={actions.accept.isPending}
+            resume={draft ? { label: continueText(draft), to: `/p/${id}/do/${draft.skill}` } : undefined}
+          />
+
+          <ChangesFromTrace repo={repo} unavailable={d.changesUnavailable} />
 
           <Section label="Waiting on people" count={d.questions.length} className="mt-10">
             {d.questions.length === 0 ? (

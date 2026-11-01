@@ -159,6 +159,13 @@ export interface Actions {
   'services.retire_secret': { args: { name: string; secret_id: string }; result: { removed: boolean } }
   'services.delete': { args: { name: string }; result: { deleted: true } }
   'services.history': { args: { name: string }; result: { entries: import('./services').ServiceHistoryEntry[] } }
+  // changes: the pull requests trace's jobs opened, reviewed and accepted in the app (docs/guided-flow.md)
+  'changes.list': { args: Repo; result: { repo: string; changes: import('./types').ChangeSummary[] } }
+  'change.get': { args: Repo & { number: number }; result: import('./types').ChangeDetail }
+  'change.diff': { args: Repo & { number: number; path: string }; result: import('./types').ChangeDiff }
+  'change.accept': { args: Repo & { number: number; note?: string }; result: import('./types').ChangeAccepted }
+  'change.ask': { args: Repo & { number: number; note: string }; result: { job_id: string } }
+  'change.discard': { args: Repo & { number: number; reason: string }; result: { closed: true } }
 }
 
 export type ActionName = keyof Actions
