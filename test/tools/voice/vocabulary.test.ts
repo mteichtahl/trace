@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { HEADER, MAX_TABLE_BYTES, numberWords, rowsOf, spokenForms, validPhrase, vocabularyName, vocabularyTable } from '../../../src/tools/voice/vocabulary.js'
-import { type VoiceClients, type VocabularyState, designTerms, syncVocabulary, tableKey, vocabularyBase } from '../../../src/tools/voice/tools.js'
+import { type VoiceClients, type VocabularyState, designTerms, syncVocabulary, tableKey, vocabularyBase, vocabularyMissing } from '../../../src/tools/voice/tools.js'
 import { projectHash } from '../../../src/core/project.js'
 
 const SENSOR = join(import.meta.dirname, '..', '..', '..', 'examples', 'sensor-node')
@@ -135,5 +135,18 @@ describe('making the vocabulary from a design', () => {
     const r = await syncVocabulary(opts(d, c))
     expect(r.languages[0]).toMatchObject({ action: 'skipped', state: 'NONE' })
     expect(c.calls.filter((x) => !x.startsWith('get'))).toEqual([])
+  })
+})
+
+describe('vocabularyMissing: Transcribe saying there is no such vocabulary yet', () => {
+  const err = (name: string, message: string): Error => Object.assign(new Error(message), { name })
+  it('takes Transcribe\'s own wording as missing (a project\'s first sync), and nothing else', () => {
+    // the message GetVocabulary gave on testyyyu's first sync
+    expect(vocabularyMissing(err('BadRequestException', "The requested vocabulary couldn't be found. Check the vocabulary name and try your request again."))).toBe(true)
+    expect(vocabularyMissing(err('NotFoundException', 'gone'))).toBe(true)
+    expect(vocabularyMissing(err('BadRequestException', 'The vocabulary does not exist.'))).toBe(true)
+    expect(vocabularyMissing(err('BadRequestException', 'Invalid vocabulary name.'))).toBe(false)
+    expect(vocabularyMissing(err('AccessDeniedException', "couldn't be found"))).toBe(false)
+    expect(vocabularyMissing('not an error')).toBe(false)
   })
 })

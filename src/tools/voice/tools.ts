@@ -217,6 +217,15 @@ async function waitReady(o: SyncOptions, name: string, ms: number): Promise<{ st
 
 // ------------------------------------------------------------------ the AWS clients
 
+/**
+ * Whether Transcribe's GetVocabulary said there is no such vocabulary (a project's first sync). It answers that as a
+ * BadRequestException, worded "The requested vocabulary couldn't be found. …", not a NotFoundException.
+ */
+export function vocabularyMissing(e: unknown): boolean {
+  if (!(e instanceof Error)) return false
+  return e.name === 'NotFoundException' || (e.name === 'BadRequestException' && /not found|couldn'?t be found|couldn'?t find|doesn'?t exist|does not exist/i.test(e.message))
+}
+
 export async function awsVoiceClients(region?: string): Promise<VoiceClients> {
   const [t, s3] = await Promise.all([import('@aws-sdk/client-transcribe'), import('@aws-sdk/client-s3')])
   const transcribe = new t.TranscribeClient(region ? { region } : {})
@@ -228,7 +237,7 @@ export async function awsVoiceClients(region?: string): Promise<VoiceClients> {
         const state = r.VocabularyState === 'READY' || r.VocabularyState === 'FAILED' ? r.VocabularyState : 'PENDING'
         return { state, ...(r.FailureReason ? { failure: r.FailureReason } : {}) }
       } catch (e) {
-        if (e instanceof Error && (e.name === 'NotFoundException' || (e.name === 'BadRequestException' && /not found|couldn't find|doesn't exist/i.test(e.message)))) return null
+        if (vocabularyMissing(e)) return null
         throw e
       }
     },

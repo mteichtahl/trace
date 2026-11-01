@@ -122,7 +122,8 @@ jobs:
     timeout-minutes: 5
     permissions:
       issues: write
-      pull-requests: read
+      # it claims a conflicted or red PR with a comment on it, and a comment on a pull request needs this
+      pull-requests: write
       contents: read
     outputs:
       items: ${{ steps.pick.outputs.items }}

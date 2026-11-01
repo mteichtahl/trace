@@ -178,6 +178,12 @@ describe('actions runner: the workflow and the install action', () => {
   const template = readFileSync(join(root, 'templates', 'workflows', 'trace-worker.yml'), 'utf8')
   const install = readFileSync(join(root, 'harness', 'actions', 'install', 'action.yml'), 'utf8')
 
+  it('lets pick claim a pull request: it comments on it, which needs pull-requests: write', () => {
+    const pick = template.slice(template.indexOf('\n  pick:'), template.indexOf('\n  dispatch:'))
+    expect(pick).toMatch(/permissions:\n(\s+#.*\n|\s+[\w-]+: \w+\n)*\s+pull-requests: write\n/)
+    expect(pick).toMatch(/issues: write/)
+  })
+
   it('runs the specialist, then the worker only when it delegated, then the check, then the report', () => {
     const work = template.slice(template.indexOf('\n  work:'))
     const order = ['task: worker-prompt', 'harness/actions/install@', 'id: specialist', 'task: worker-delegate', 'id: worker', 'id: check', 'task: worker-report']
