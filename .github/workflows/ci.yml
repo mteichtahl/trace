@@ -127,7 +127,10 @@ jobs:
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && vars.TRACE_UPDATE_ROLE != ''
     runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","update-installation"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
     timeout-minutes: 60
-    # one update at a time, in order: a newer merge waits for the one deploying now instead of cancelling it
+    # one update at a time: a newer merge waits for the one deploying now instead of cancelling it. GitHub keeps only
+    # one waiting run per group, so in a burst of merges the waiting ones cancel each other and the one left may be an
+    # older commit's; it therefore deploys main as it is when it starts (every commit on main came through a pull
+    # request with this workflow green), so the last merge always reaches the installation
     concurrency:
       group: trace-update-installation
       cancel-in-progress: false
@@ -136,6 +139,9 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: main }
+      - name: Say which commit is deployed
+        run: echo "deploying main at $(git rev-parse --short HEAD) (this run was started by ${GITHUB_SHA::7})"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: "22", cache: npm }
       - run: npm ci
