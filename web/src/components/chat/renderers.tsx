@@ -99,7 +99,7 @@ export function ChatRenderers() {
   return null
 }
 
-const StartTask = z.object({ repo: z.string(), request: z.string(), agent: z.string().optional() })
+const StartTask = z.object({ repo: z.string(), request: z.string(), agent: z.string().optional(), branch: z.string().optional() })
 type TaskArgs = z.infer<typeof StartTask>
 
 /** start_task's card: the person's Confirm calls `task` as them; the answer (the job, or why not) goes back to trace. */
@@ -111,7 +111,7 @@ export function StartTaskCard({ args, status, respond, result, readOnly }: { arg
     if (!args.repo || !args.request) return
     setBusy(true)
     try {
-      const r = await call('task', { repo: args.repo, request: args.request, ...(args.agent ? { agent: args.agent } : {}) })
+      const r = await call('task', { repo: args.repo, request: args.request, ...(args.agent ? { agent: args.agent } : {}), ...(args.branch ? { branch: args.branch } : {}) })
       respond({ confirmed: true, accepted: r.accepted, jobId: r.jobId, ...(r.reason ? { reason: r.reason } : {}) } satisfies TaskAnswer)
     } catch (e) {
       respond({ confirmed: true, accepted: false, reason: e instanceof Error ? e.message : 'the task could not be started' } satisfies TaskAnswer)

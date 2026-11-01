@@ -156,18 +156,39 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
 
   // the newest message stays in view: the panel opens at it (a kept conversation loads with the panel at its top, and
   // its cards and replies grow after they first draw), and follows what streams in, until the person scrolls up to
-  // read; scrolling back to the bottom, or sending, follows again
+  // read; scrolling back to the bottom, or sending, follows again. Only the person's own scrolling (wheel, touch,
+  // keys, the scrollbar) lets go: a scroll event alone does not, as the browser fires them too (scroll anchoring while
+  // a card sizes itself), and one of those used to leave the panel short of trace's reply
   const pinned = useRef(true)
   const toBottom = useCallback(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight }, [])
   useEffect(() => {
     const el = scroller.current
     if (!el) return
-    const onScroll = () => { pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 160 }
+    const gap = () => el.scrollHeight - el.scrollTop - el.clientHeight
+    let byPerson = false
+    const person = () => { byPerson = true }
+    // the scrollbar: a press on the scroller itself, not on a button in a card
+    const bar = (e: PointerEvent) => { if (e.target === el) person() }
+    const upward = (e: WheelEvent) => { if (e.deltaY < 0) pinned.current = false; person() }
+    const keys = (e: KeyboardEvent) => { if (['ArrowUp', 'PageUp', 'Home'].includes(e.key)) pinned.current = false; person() }
+    const onScroll = () => {
+      if (gap() < 160) pinned.current = true
+      // touch drags and the scrollbar: a scroll the person made that left the bottom
+      else if (byPerson) pinned.current = false
+      byPerson = false
+    }
     el.addEventListener('scroll', onScroll, { passive: true })
+    el.addEventListener('wheel', upward, { passive: true })
+    el.addEventListener('touchmove', person, { passive: true })
+    el.addEventListener('pointerdown', bar, { passive: true })
+    el.addEventListener('keydown', keys)
     const grew = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => { if (pinned.current) toBottom() })
     for (const child of Array.from(el.children)) grew?.observe(child)
     grew?.observe(el)
-    return () => { el.removeEventListener('scroll', onScroll); grew?.disconnect() }
+    return () => {
+      el.removeEventListener('scroll', onScroll); el.removeEventListener('wheel', upward); el.removeEventListener('touchmove', person)
+      el.removeEventListener('pointerdown', bar); el.removeEventListener('keydown', keys); grew?.disconnect()
+    }
   }, [toBottom, messages.length])
   useEffect(() => { if (pinned.current) toBottom() }, [messages, toBottom])
 
@@ -176,7 +197,7 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
 
   return (
     <div className={cn('flex min-h-0 flex-1 flex-col', className)}>
-      <div ref={scroller} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4" aria-live="polite" aria-busy={running}>
+      <div ref={scroller} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 [overflow-anchor:none]" aria-live="polite" aria-busy={running}>
         {messages.length === 0 && intro}
         {messages.map((m, i) => {
           if (m.role === 'user') {

@@ -45,7 +45,7 @@ export interface Actions {
   artifact: { args: Repo & { id: string; name: string }; result: { id: string; name: string; mime: string | null; size: number; base64: string } }
   'tools.list': { args: Repo; result: { name: string; description: string; needs: 'read' | 'write'; input: unknown }[] }
   tool: { args: Repo & { name: string; args?: Record<string, unknown> }; result: unknown }
-  task: { args: Repo & { request: string; agent?: string }; result: { accepted: boolean; jobId: string; reason?: string } }
+  task: { args: Repo & { request: string; agent?: string; branch?: string }; result: { accepted: boolean; jobId: string; reason?: string } }
   'memory.list': { args: Repo & { agent?: string; limit?: number; includeInactive?: boolean }; result: { repo: string; enabled: boolean; records: Record<string, unknown>[] } }
   'memory.recall': { args: Repo & { query: string; top_k?: number }; result: { repo: string; enabled: boolean; records: Record<string, unknown>[] } }
   'memory.deactivate': { args: Repo & { recordId: string; reason: string }; result: Record<string, unknown> }

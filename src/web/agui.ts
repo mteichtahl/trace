@@ -115,8 +115,8 @@ export const BACKEND_TOOLS: Readonly<Record<string, BackendTool>> = {
  */
 export const CONFIRM_TOOLS: Readonly<Record<string, { description: string; schema: Record<string, unknown> }>> = {
   start_task: {
-    description: 'Offer to start a task on the project (an agent works on a branch and opens a pull request). It does not start anything: the person sees the exact request and agent and presses Confirm or Cancel; the result says which, and the job id when confirmed. Only when the person asked for this work.',
-    schema: { type: 'object', properties: { repo, request: { type: 'string', description: 'What to do, in plain words: the person\'s request' }, agent: { type: 'string', enum: ['verify', 'impl', 'ams', 'emc', 'render', 'thermal'] } }, required: ['repo', 'request'] },
+    description: 'Offer to start a task on the project (an agent works on a branch and opens a pull request). It does not start anything: the person sees the exact request and agent and presses Confirm or Cancel; the result says which, and the job id when confirmed. Only when the person asked for this work. To carry on an open pull request\'s work (a fix to it, an answer applied to it), name its branch: the agent then works on that branch and the pull request updates.',
+    schema: { type: 'object', properties: { repo, request: { type: 'string', description: 'What to do, in plain words: the person\'s request' }, agent: { type: 'string', enum: ['verify', 'impl', 'ams', 'emc', 'render', 'thermal'] }, branch: { type: 'string', description: 'an existing trace branch (claude/…) to carry on, when the person asks to continue an open pull request; leave out for new work' } }, required: ['repo', 'request'] },
   },
 }
 

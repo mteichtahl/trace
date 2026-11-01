@@ -121,7 +121,7 @@ import { IntegrationNameSchema, type IntegrationStore, checkIntegration, valuesF
 import { type AnyTool, Registry, ToolError } from '../core/registry.js'
 import { AgentName, type MemoryRecord, STRATEGIES, actorIn, projectPrefix, within } from '../agents/runtime/memory.js'
 import { type InactiveMark, ReasonSchema, RecordIdSchema, memoryState } from '../agents/runtime/memory-state.js'
-import { TASK_AGENTS } from '../agents/runtime/schemas.js'
+import { BranchSchema, TASK_AGENTS } from '../agents/runtime/schemas.js'
 import { API_HIDDEN_TOOLS, ToolRefused, apiTool, checkPaths } from '../agents/runtime/tool.js'
 import { Work } from '../core/store.js'
 import { personHash as telemetryHash } from '../core/telemetry.js'
@@ -172,6 +172,9 @@ async function integrationStore(ctx: Context): Promise<IntegrationStore> {
 }
 
 /** The installation's knowledge bases from the API runtime's environment (TRACE_PROJECT_KBS). */
+
+/** A branch a task may carry on: one of trace's own (claude/…), so a request can never push to main or a person's branch. */
+export const TaskBranch = BranchSchema.refine((b) => b.startsWith('claude/') && b.length > 'claude/'.length, 'only a trace branch (claude/…) can be carried on')
 export const projectKbsFromEnv = (env: Record<string, string | undefined> = process.env): ReadonlyMap<string, string> => parseProjectKbs(env.TRACE_PROJECT_KBS)
 
 const Who = z.string().min(1).max(320)
@@ -458,11 +461,17 @@ export const ACTIONS = {
     }
   }),
 
-  task: def('write', Repo.extend({ request: z.string().min(1).max(20_000), agent: z.enum(TASK_AGENTS).optional() }), async (a, ctx) => {
+  task: def('write', Repo.extend({
+    request: z.string().min(1).max(20_000), agent: z.enum(TASK_AGENTS).optional(),
+    // carry on an agent's own branch (its pull request updates) instead of starting one from the default branch: only
+    // trace's claude/ branches, never main or a person's
+    branch: TaskBranch.optional(),
+  }), async (a, ctx) => {
     // a connected system: at most three tasks queued or running on one project (src/api/service-policy.ts)
     await taskCap(ctx.principal, a.repo, ctx)
     return (await ctx.deps.jobs()).startJob({
       kind: 'task', repository: a.repo, request: a.request, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub, ...(a.agent ? { agent: a.agent } : {}),
+      ...(a.branch ? { branch: a.branch } : {}),
     })
   }),
 
