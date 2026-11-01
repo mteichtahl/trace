@@ -177,6 +177,10 @@ describe('router', () => {
     expect(route({ kind: 'impl', text: 'tidy the README', checkPick: true }, cfg)).toMatchObject({ kind: 'impl', source: 'explicit' })
     // not a person's pick (a delegation, a hand-off, a resumed task): where it says
     expect(route({ kind: 'impl', text: asked }, cfg)).toMatchObject({ kind: 'impl', source: 'explicit' })
+    // job-mvx1w9mz: drafting the schematic is impl's work, though the request names requirements and checks too
+    const capture = 'Draft the schematic for the chosen architecture (option A): a KiCad 10 project in hw/ with one sheet per block, parts with MPN and LCSC fields from the key-parts list, each sheet naming the requirements it serves. Then run the electrical rule check and the BOM stock check on it.'
+    expect(route({ kind: 'impl', text: capture, checkPick: true }, cfg)).toMatchObject({ kind: 'impl', source: 'explicit' })
+    expect(route({ text: 'add the footprints to the schematic symbols' }, cfg)).toMatchObject({ kind: 'impl', source: 'keyword' })
   })
 
   it('maps the agent:<kind> labels from the settings', () => {

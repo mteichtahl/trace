@@ -88,6 +88,8 @@ export const impl: Specialist = {
     /\btiming( closure)?\b/i, /\bslack\b/i, /\bfmax\b/i, /\bnextpnr\b/i, /\byosys\b/i, /\bsynth(esis)?\b/i,
     /\bplace(ment)?\b/i, /\b(route|routing|unrouted)\b/i, /\bfloor ?plan/i, /\bdrc\b/i, /\bbitstream\b/i,
     /\blength match/i, /\b(pcf|lpf)\b/i, /\bfpga\b/i, /\blayout\b/i,
+    // schematic capture: drafting and changing the schematic is this specialist's work too
+    /\bschematics?\b/i, /\bkicad\b/i, /\bfootprints?\b/i, /\bsymbols?\b/i, /\bnetlist\b/i, /\bnet ?labels?\b/i, /\bkicad_(sch|pcb|pro)\b/i,
     // the enclosure: "case" alone is too common ("test case", "in case"), so only in a mechanical phrase
     /\benclosures?\b/i, /\bhousings?\b/i, /\bfit ?check\b/i,
     /\b(the |a |board'?s? |printed |3d[- ]printed )case\b(?! of\b| for (the )?(test|requirement))|\bcase (design|fit|clash(es)?|walls?|lid|opening|print(ing)?|script)\b/i,
