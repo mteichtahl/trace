@@ -10,8 +10,8 @@
  *                      15 minutes (a chat streams), a function URL with AWS_IAM auth and response streaming. Its
  *                      environment holds only the name of its settings parameter (TRACE_WEB_CONFIG_PARAM)
  *     voice bucket     Polly's speech, kept 30 days under web/voice/ (a replay costs nothing), private
- *     distribution     CloudFront: /* the site bucket (a viewer-request function sends every path without a dot to
- *                      /index.html, so the app's routes load and /api's 404s stay real); /api/* the backend's function
+ *     distribution     CloudFront: /* the site bucket (a viewer-request function sends every path without a dot,
+ *                      and every project path, to /index.html, so the app's routes load and /api's 404s stay real); /api/* the backend's function
  *                      URL (origin access control, no caching, every viewer header but Host, every method). Strict
  *                      security headers and a content security policy on both. HTTP/2 and HTTP/3, price class 100,
  *                      CloudFront's own address or web.domainName with its certificate
@@ -100,11 +100,16 @@ export function onSubscribe(ctx) {
 }
 `
 
-/** The default behaviour's viewer-request function: a path whose last segment has no dot is one of the app's routes. */
+/**
+ * The default behaviour's viewer-request function: a path whose last segment has no dot is one of the app's routes,
+ * and so is every path under a project (/p/… and its read-only /view/p/…), whose file pages end in the file's own
+ * name (/p/<id>/files/runs/<run>/tran.raw): the site's own files are at the top level and under /assets.
+ */
 export const SPA_FUNCTION = `function handler(event) {
   var request = event.request;
-  var last = request.uri.split('/').pop();
-  if (last.indexOf('.') === -1) request.uri = '/index.html';
+  var uri = request.uri;
+  var last = uri.split('/').pop();
+  if (last.indexOf('.') === -1 || uri.indexOf('/p/') === 0 || uri.indexOf('/view/p/') === 0) request.uri = '/index.html';
   return request;
 }
 `
