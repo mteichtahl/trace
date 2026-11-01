@@ -109,16 +109,17 @@ async function mapLimit<T, R>(items: readonly T[], n: number, fn: (t: T) => Prom
   return out
 }
 
-/**
- * The work a stage starts when the gate before it is signed: the specialist and what it is asked. Architect: the
- * options a person then chooses between in Architecture choice (docs/user-journey.md, 2. Architect).
- */
+/** What a person said their answer lasts as (Question answer's last step): a one-off, a rule, or a requirement change. */
+export type Lasts = 'once' | 'rule' | 'requirement'
+
 /** The request of the task that carries an ended job on once its question is answered. */
-export function answeredRequest(a: { id: string; text: string; jobId: string; branch: string; answer: string; reason: string | null; by: string | null }): string {
+export function answeredRequest(a: { id: string; text: string; jobId: string; branch: string; answer: string; reason: string | null; by: string | null; lasts?: Lasts | undefined }): string {
   return [
     `Your question ${a.id} (asked in job ${a.jobId}) is answered. You asked: ${a.text}`,
     `${a.by ?? 'A person'} answered: ${a.answer}${a.reason ? ` (because ${a.reason})` : ''}.`,
     `Carry the work on ${a.branch} on with that answer: read what is already on the branch, change what the answer changes, check it as before, and push to the same branch so its pull request updates.`,
+    ...(a.lasts === 'requirement' ? ['They said this answer changes a requirement. Have the change proposed for a person to accept in Requirements review: the requirement, its new wording and measurable criterion, and why (the Verification specialist owns the requirements: journey.handoff to it unless you are it, then verify.requirements, left proposed). Until it is accepted, treat the requirement as it stands, and say in your report that the change waits on review.'] : []),
+    ...(a.lasts === 'rule' ? ['They made this a rule for the project: remember it (memory.remember) so later jobs apply it without asking again.'] : []),
     'Do not redo what the answer does not touch. If the answer cannot be done as given, ask again (journey.ask) with what you found.',
   ].join('\n')
 }
@@ -127,7 +128,7 @@ export function answeredRequest(a: { id: string; text: string; jobId: string; br
  * After an answer: when the job that asked has ended, a task for the same specialist on that job's branch, told the
  * answer. A job still queued, running or paused reads the answer itself (journey.status, or on Resume): nothing starts.
  */
-async function carryOn(ctx: Context, repo: string, asked: { id: string; text: string; jobId: string | null }, q: { answered: { answer: string; reason: string | null; by: string | null } | null }): Promise<{ jobId?: string; started?: string[]; jobError?: string; summary?: string }> {
+export async function carryOn(ctx: Context, repo: string, asked: { id: string; text: string; jobId: string | null }, q: { answered: { answer: string; reason: string | null; by: string | null } | null }, lasts?: Lasts): Promise<{ jobId?: string; started?: string[]; jobError?: string; summary?: string }> {
   if (!asked.jobId || !q.answered) return {}
   const { rows } = await listJobs(ctx, repo)
   const row = rows.find((r) => r.id === asked.jobId)
@@ -136,7 +137,7 @@ async function carryOn(ctx: Context, repo: string, asked: { id: string; text: st
   // the specialist's own row may not carry the branch its worker pushed to
   const branch = row.branch ?? rows.find((r) => r.parentJob === row.id && r.branch)?.branch ?? null
   if (!agent || !branch) return {}
-  const request = answeredRequest({ id: asked.id, text: asked.text, jobId: row.id, branch, answer: q.answered.answer, reason: q.answered.reason, by: q.answered.by })
+  const request = answeredRequest({ id: asked.id, text: asked.text, jobId: row.id, branch, answer: q.answered.answer, reason: q.answered.reason, by: q.answered.by, lasts })
   const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: repo, request, agent, branch, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
   const who = `the ${SPECIALIST_WORDS[agent]} specialist`
   return r.accepted
@@ -144,6 +145,10 @@ async function carryOn(ctx: Context, repo: string, asked: { id: string; text: st
     : { jobError: r.reason ?? 'trace did not accept the job.', summary: `Answered, but ${who} could not be started again: ${r.reason ?? 'trace did not accept the job'}. The answer is kept for its next job.` }
 }
 
+/**
+ * The work a stage starts when the gate before it is signed: the specialist and what it is asked. Architect: the
+ * options a person then chooses between in Architecture choice (docs/user-journey.md, 2. Architect).
+ */
 export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KINDS)[number]; request: string; started: string }>> = {
   architect: {
     agent: 'impl',
@@ -241,6 +246,8 @@ export const JOURNEY_ACTIONS = {
 
   'question.answer': def('write', Repo.extend({
     question: Id, option: Id.optional(), answer: z.string().trim().max(4000).optional(), reason: z.string().trim().max(2000).optional(),
+    // what the person said the answer lasts as (Question answer's last step): it reaches the specialist carried on
+    lasts: z.enum(['once', 'rule', 'requirement']).optional(),
   }), async (a, ctx) => {
     // an agent's question lives in its facts; the answer is written here, in the record, under the same id
     const facts = await agentFacts(ctx, a.repo)
@@ -252,7 +259,7 @@ export const JOURNEY_ACTIONS = {
     // that job, on the asking job's branch, so the answer is acted on now; the answer stands whatever happens here
     const asked = facts.questions.find((q) => q.id === a.question)
     if (!asked?.jobId) return answered
-    const carried = await carryOn(ctx, a.repo, asked, answered.question).catch((e: unknown) => ({ jobError: e instanceof Error ? e.message : String(e) }))
+    const carried = await carryOn(ctx, a.repo, asked, answered.question, a.lasts).catch((e: unknown) => ({ jobError: e instanceof Error ? e.message : String(e) }))
     return { ...answered, ...carried }
   }),
 
