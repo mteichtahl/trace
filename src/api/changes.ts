@@ -49,7 +49,7 @@ export interface ChangeSummary {
   /** GitHub's mergeable_state */
   mergeable: string
   checks: Checks | null
-  /** GitHub refused to list the checks: trace's token lacks "Checks: read" */
+  /** GitHub refused every way of reading the checks (src/api/github.ts checkRuns) */
   checks_denied?: boolean
   verdict: Verdict
 }
@@ -69,12 +69,12 @@ export interface ChangeDetail extends ChangeSummary {
 /** The facts the verdict, recommendation and blockers are worked out from. */
 export interface ChangeFacts {
   state: 'open' | 'merged' | 'closed'; draft: boolean; mergeable: string; checks: Checks | null
-  /** GitHub refused to list the checks: trace's token lacks "Checks: read" (src/api/github.ts pullStatus) */
+  /** GitHub refused every way of reading the checks (src/api/github.ts checkRuns): the token lacks Actions and Commit statuses */
   checks_denied?: boolean
 }
 
 /** What a person is told when trace's GitHub token may not read checks: who can fix it, and how. */
-export const CHECKS_DENIED = 'trace\'s GitHub token may not read checks, so trace cannot tell whether this work passed. An admin gives the token "Checks: Read-only" on GitHub (run the installer again to see every permission it needs).'
+export const CHECKS_DENIED = 'trace\'s GitHub token may not read this repository\'s checks, so trace cannot tell whether this work passed. An admin gives the token "Actions: read" and "Commit statuses: read" on this repository.'
 
 // ------------------------------------------------------------------ which pull requests are trace's
 

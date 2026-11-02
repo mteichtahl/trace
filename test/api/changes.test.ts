@@ -86,7 +86,7 @@ describe('the rules: verdict, recommendation, may_accept', () => {
     const denied = facts({ checks: null, checks_denied: true })
     expect(verdictOf(denied)).toBe('blocked')
     expect(recommendationOf(denied)).toEqual({ verdict: 'none', why: CHECKS_DENIED })
-    expect(CHECKS_DENIED).toMatch(/Checks: Read-only/)
+    expect(CHECKS_DENIED).toMatch(/Actions: read.*Commit statuses: read/)
     expect(acceptance(denied, true)).toEqual({ may_accept: false, blockers: [CHECKS_DENIED] })
   })
 
@@ -395,7 +395,7 @@ describe('change.accept', () => {
     github.add(1, 'claude/task-reqs', { checks: { total: 0, passed: 0, failed: 0, running: 0, skipped: 0, failing: [] } })
     await expect(run(USER, 'change.accept', { repo: REPO, number: 1, head_sha: sha(1) })).rejects.toThrow(/No checks have run on it yet/)
     github.add(1, 'claude/task-reqs', { checks: null, checks_denied: true })
-    await expect(run(USER, 'change.accept', { repo: REPO, number: 1, head_sha: sha(1) })).rejects.toThrow(/may not read checks.*Checks: Read-only/)
+    await expect(run(USER, 'change.accept', { repo: REPO, number: 1, head_sha: sha(1) })).rejects.toThrow(/may not read this repository's checks.*Actions: read/)
     expect(github.did).toEqual([])
   })
 

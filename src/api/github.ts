@@ -29,7 +29,7 @@ export interface PullStatus {
   mergeable: string; head: string; sha: string; updated_at: string
   /** the head commit's check runs, by how they stand (null: GitHub would not list them) */
   checks: { total: number; passed: number; failed: number; running: number; skipped: number; failing: string[] } | null
-  /** GitHub refused to list them (403): the token lacks "Checks: read" (a fine-grained token's permission) */
+  /** GitHub refused every way of reading them (403; checkRuns) */
   checks_denied?: boolean
 }
 
@@ -133,6 +133,25 @@ const PullFull = z.object({
 }).loose()
 const CheckRun = z.object({ name: z.string(), status: z.string(), conclusion: z.string().nullable() }).loose()
 const CheckRunOut = CheckRun.extend({ output: z.object({ title: z.string().nullable().optional(), summary: z.string().nullable().optional() }).loose().nullable().optional() })
+const CombinedStatus = z.object({ statuses: z.array(z.object({ context: z.string(), state: z.string(), description: z.string().nullable().optional() }).loose()).default([]) }).loose()
+
+/** Workflow runs on a commit as checks: the latest run of each workflow (a re-run replaces the one before). */
+export function runsAsChecks(runs: readonly z.output<typeof Run>[]): CheckRunDetail[] {
+  const latest = new Map<string, z.output<typeof Run>>()
+  for (const r of runs) {
+    const name = r.name || r.path || String(r.id)
+    const had = latest.get(name)
+    if (!had || had.created_at < r.created_at) latest.set(name, r)
+  }
+  return [...latest.entries()].map(([name, r]) => ({ name, status: r.status ?? 'queued', conclusion: r.conclusion, summary: null }))
+}
+
+/** Commit statuses as checks: success passes, failure and error fail, pending runs. */
+export function statusesAsChecks(statuses: readonly { context: string; state: string; description?: string | null | undefined }[]): CheckRunDetail[] {
+  return statuses.map((x) => x.state === 'pending'
+    ? { name: x.context, status: 'in_progress', conclusion: null, summary: x.description ?? null }
+    : { name: x.context, status: 'completed', conclusion: x.state === 'success' ? 'success' : 'failure', summary: x.description ?? null })
+}
 const PullDetailBody = PullFull.extend({
   body: z.string().nullable().optional(), labels: z.array(Label).default([]), created_at: z.string(),
   base: z.object({ ref: z.string(), sha: z.string() }).loose(),
@@ -158,7 +177,7 @@ async function saidBy(r: Response): Promise<string | null> {
 }
 
 /** Check runs by how they stand: a run not completed is running; neutral and skipped are neither passed nor failed. */
-export function checksOf(runs: readonly z.output<typeof CheckRun>[]): NonNullable<PullStatus['checks']> {
+export function checksOf(runs: readonly { name: string; status: string; conclusion: string | null }[]): NonNullable<PullStatus['checks']> {
   const out = { total: runs.length, passed: 0, failed: 0, running: 0, skipped: 0, failing: [] as string[] }
   for (const c of runs) {
     if (c.status !== 'completed') out.running++
@@ -309,7 +328,7 @@ export class HttpGitHub implements GitHubApi {
     let checks: PullStatus['checks'] = null
     let denied = false
     try {
-      checks = checksOf(z.object({ check_runs: z.array(CheckRun) }).loose().parse(await this.json('GET', `${this.p(repo)}/commits/${p.head.sha}/check-runs?per_page=100`)).check_runs)
+      checks = checksOf(await this.checkRuns(repo, p.head.sha))
     } catch (e) {
       // the token may not read checks: the pull request's own state is still worth showing, and a refusal is said as one
       denied = e instanceof GitHubError && e.status === 403
@@ -349,9 +368,27 @@ export class HttpGitHub implements GitHubApi {
     return z.array(C).parse(await this.json('GET', `${this.p(repo)}/pulls/${number}/commits?per_page=100`)).map((c) => c.commit.message)
   }
 
+  /**
+   * A commit's checks. GitHub lists check runs only to tokens with "Checks: read", which a fine-grained personal access
+   * token cannot have (GitHub Apps only). Refused that (403), they are read as GitHub Actions workflow runs on the
+   * commit ("Actions: read") and commit statuses ("Commit statuses: read"), which are what a repository's checks are
+   * made of when its CI is Actions; refused those too, the 403 is thrown.
+   */
   async checkRuns(repo: string, sha: string): Promise<CheckRunDetail[]> {
-    const r = z.object({ check_runs: z.array(CheckRunOut) }).loose().parse(await this.json('GET', `${this.p(repo)}/commits/${encodeURIComponent(sha)}/check-runs?per_page=100`))
-    return r.check_runs.map((c) => ({ name: c.name, status: c.status, conclusion: c.conclusion, summary: (c.output?.title || c.output?.summary || null)?.slice(0, 300) ?? null }))
+    const ref = encodeURIComponent(sha)
+    try {
+      const r = z.object({ check_runs: z.array(CheckRunOut) }).loose().parse(await this.json('GET', `${this.p(repo)}/commits/${ref}/check-runs?per_page=100`))
+      return r.check_runs.map((c) => ({ name: c.name, status: c.status, conclusion: c.conclusion, summary: (c.output?.title || c.output?.summary || null)?.slice(0, 300) ?? null }))
+    } catch (e) {
+      if (!(e instanceof GitHubError) || e.status !== 403) throw e
+      const refused = e
+      const [runs, statuses] = await Promise.all([
+        this.json('GET', `${this.p(repo)}/actions/runs?head_sha=${ref}&per_page=100`).then((j) => runsAsChecks(z.object({ workflow_runs: z.array(Run) }).loose().parse(j).workflow_runs), (x: unknown) => { if (x instanceof GitHubError && x.status === 403) return null; throw x }),
+        this.json('GET', `${this.p(repo)}/commits/${ref}/status`).then((j) => statusesAsChecks(CombinedStatus.parse(j).statuses), (x: unknown) => { if (x instanceof GitHubError && x.status === 403) return null; throw x }),
+      ])
+      if (runs === null && statuses === null) throw refused
+      return [...(runs ?? []), ...(statuses ?? [])]
+    }
   }
 
   async mergeMethods(repo: string): Promise<MergeMethod[]> {
