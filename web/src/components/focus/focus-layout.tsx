@@ -2,6 +2,7 @@
  * Focus mode: one layout for all twenty guided skills. The shell's rail and tabs fold away, leaving
  *   steps (left, 240 px) · the work (centre) · trace (right, 380 px, folds to a button) · the quality bar (bottom).
  * Escape or the close button returns to exactly where the person was; a draft is kept ("Draft saved 2 seconds ago").
+ * A notice the route puts in FocusNotice (the project's agent being set up) is drawn under the header.
  *
  * Variants:
  * - stepped: as above (most skills)
@@ -14,9 +15,10 @@
  * full-height drawer; the quality bar is a sticky footer.
  */
 import { Check, ListOrdered, MessageSquare, PanelRightClose, Sparkles, X, OctagonX } from 'lucide-react'
-import { type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useContext, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
+import { FocusBlocked, FocusNotice } from '@/components/project/agent-setup'
 import { QualityBar, type QualityCheck } from '@/components/quality-bar'
 import { useNow } from '@/components/use-now'
 import { ago } from '@/lib/format'
@@ -47,6 +49,8 @@ export interface FocusLayoutProps {
   checks: QualityCheck[]
   onSubmit: () => void | Promise<void>
   submitLabel?: string
+  /** why Submit cannot be pressed whatever the checks say (the project's agent is not set up yet): shown beside it */
+  blocked?: string | null
   /** returns to where the person was */
   onClose: () => void
   /** epoch ms of the last draft save */
@@ -58,9 +62,11 @@ export interface FocusLayoutProps {
 }
 
 export function FocusLayout({
-  title, context, variant = 'stepped', steps, onStep, stepsExtra, children, trace, aside, checks, onSubmit, submitLabel, onClose, draftSavedAt, stop, centre = 'padded',
+  title, context, variant = 'stepped', steps, onStep, stepsExtra, children, trace, aside, checks, onSubmit, submitLabel, blocked, onClose, draftSavedAt, stop, centre = 'padded',
 }: FocusLayoutProps) {
   const now = useNow(5000)
+  const notice = useContext(FocusNotice)
+  const waits = useContext(FocusBlocked)
   const [traceOpen, setTraceOpen] = useState(true)
   const [stepsDrawer, setStepsDrawer] = useState(false)
   const [traceDrawer, setTraceDrawer] = useState(false)
@@ -147,6 +153,8 @@ export function FocusLayout({
         {draft}
       </div>
 
+      {notice && <div className="shrink-0 border-b px-4 py-3 empty:hidden">{notice}</div>}
+
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-[240px] shrink-0 overflow-y-auto border-r bg-sidebar p-3 md:block lg:w-[240px]">{stepList}</aside>
         {centre === 'fill' ? (
@@ -169,7 +177,7 @@ export function FocusLayout({
         )}
       </div>
 
-      <QualityBar checks={checks} onSubmit={onSubmit} submitLabel={submitLabel} />
+      <QualityBar checks={checks} onSubmit={onSubmit} submitLabel={submitLabel} blocked={blocked ?? waits} />
 
       {stop?.visible && (
         <Button size="lg" variant="destructive" className="fixed bottom-20 right-6 z-30 h-14 px-8 text-base shadow-lg" onClick={stop.onStop}>

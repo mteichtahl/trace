@@ -1,7 +1,8 @@
 /**
  * Mock answers for the small gaps (web gaps "small"): installation.layout (a flat installation, so New project and
- * Admin › Installation show what applies to it; VITE_MOCK_LAYOUT=nested shows the other), prompts.chat, and
- * voice.vocabulary. Registered in handlers.ts with one line; answers undefined for anything else.
+ * Admin › Installation show what applies to it; VITE_MOCK_LAYOUT=nested shows the other), prompts.chat,
+ * voice.vocabulary, and project.agent (every project's agent is set up; VITE_MOCK_AGENT=setting_up shows the notice a
+ * new project has while its agent is being set up). Registered in handlers.ts with one line; answers undefined for anything else.
  */
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 const ok = (result: unknown) => json({ ok: true, result })
@@ -26,6 +27,9 @@ const NESTED = { layout: 'nested', projects: { max: 60, updateMax: 60 }, has: { 
 export function smallAction(name: string, a: Record<string, unknown>): Response | undefined {
   switch (name) {
     case 'installation.layout': return ok(import.meta.env.VITE_MOCK_LAYOUT === 'nested' ? NESTED : FLAT)
+    case 'project.agent': return ok(import.meta.env.VITE_MOCK_AGENT === 'setting_up'
+      ? { repo: a.repo, ready: false, state: 'setting_up', text: 'The installation update is running: it tests trace and then deploys this project\'s agent.', requested_at: new Date(Date.now() - 20 * 60_000).toISOString(), update: { status: 'running', started_at: new Date(Date.now() - 19 * 60_000).toISOString(), url: 'https://github.com/' }, expected_by: new Date(Date.now() + 41 * 60_000).toISOString(), next_check_s: 60 }
+      : { repo: a.repo, ready: true, state: 'ready', text: 'This project\'s agent is set up.', requested_at: null, update: null, expected_by: null, next_check_s: null })
     case 'prompts.chat': return ok({ entries: [{ id: 'chat.role', text: null, version: null, sha: '0123456789ab' }] })
     case 'voice.vocabulary': return ok({ repo: a.repo, language: a.language, name: 'trace-0123abcd-en-AU', state: 'READY', usable: true, note: 'Dictation uses this project\'s words (reference designators, part numbers, net names, requirement ids).' })
     default: return undefined

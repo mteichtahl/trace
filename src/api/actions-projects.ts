@@ -22,6 +22,13 @@
  *                             and answers each step's outcome, plus that last part as a wait. A step that fails stops
  *                             the ones that depend on it and says so; the request can be sent again (every step is
  *                             safe to repeat).
+ *   project.agent     read    whether the project's own agent (its worker runtime) is set up in this installation yet,
+ *                             and, while it is not, how its setting up stands: from the request projects.create
+ *                             recorded under installation/pending-projects/ (pending, added by an update, or failed),
+ *                             and, with the self-update on, the installation update's run on GitHub (queued, running,
+ *                             finished). Answers when it should be ready (usually within the hour of the request or
+ *                             of the update starting) and when to look again: nothing announces the update's end, so
+ *                             the app looks again at next_check_s (agentSetup)
  *   project.update    admin   change what a project is after it is made: its name, description, icon, build plan
  *                             (quantity, unit cost, budget) and later stages, in the journey record (Settings). The
  *                             template and repository stay fixed
@@ -31,14 +38,15 @@
  * is changed.
  */
 import { z } from 'zod'
-import { GROUPS, PARTS, type Part, PartRefused, type PersonClass, RepoSlug, assign, classOf, membersOf, setClass } from '../core/access.js'
+import { GROUPS, PARTS, type Part, PartRefused, type PersonClass, RepoSlug, assign, classOf, isAdmin, membersOf, setClass } from '../core/access.js'
 import { Conflict } from '../core/central.js'
 import { AboutSchema, BuildSchema, LATER_STAGES, TEMPLATES, type Template, TEMPLATE_NAMES, journeyView, startJourney, updateAbout } from '../core/journey.js'
 import { forgetNoJourney } from '../core/journey-store.js'
 import { register } from '../core/onboard.js'
 import { projectSlug } from '../core/project.js'
-import { FLAT_UPDATE_MAX } from '../installer/pending.js'
-import type { GitHubApi } from './github.js'
+import { FLAT_UPDATE_MAX, type PendingRecord, PendingRecordSchema } from '../installer/pending.js'
+import type { GitHubApi, RunSummary } from './github.js'
+import { cached } from './github-cache.js'
 import { ActionError, type Context, Repo, def, hashOf, label, storeAt, writeJourney } from './action-kit.js'
 
 export interface Member { sub: string; email: string | null; class: PersonClass | null; part: Part; admin: boolean; can_sign: boolean }
@@ -133,6 +141,114 @@ export async function startUpdate(gh: Pick<GitHubApi, 'dispatchWorkflow'>, selfU
   return { started: true, text: `Started the installation update: ${repo}'s ci workflow on ${branch} tests trace and then deploys the installation with this project's agent${layout === 'flat' ? '' : ' and knowledge base'}, usually within the hour. Until it finishes, the project's tools answer that its agent is being set up.${flat}` }
 }
 
+// ------------------------------------------------------------------ project.agent
+
+/** How long a new project's agent usually takes: the update's tests and deploy (startUpdate's "within the hour"). */
+export const SETUP_MS = 60 * 60_000
+/** How often the app looks again while the agent is being set up, and once the update has finished (the API picks up
+ * the new runtime within a few minutes of the deploy). */
+export const SETUP_CHECK_S = 60
+export const ADDED_CHECK_S = 20
+/** While only a person can move it on (no request, a failed one): looked at less often, so the notice still clears
+ * itself once an admin has run the installer. */
+export const STALLED_CHECK_S = 300
+/** How long the update's run on GitHub is kept between looks: every open project page asks. */
+const RUN_TTL_MS = 30_000
+
+export type AgentState = 'ready' | 'setting_up' | 'finishing' | 'failed' | 'missing'
+
+export interface AgentSetup {
+  repo: string
+  ready: boolean
+  state: AgentState
+  /** one or two sentences a person reads: what is happening and what happens next */
+  text: string
+  requested_at: string | null
+  /** the installation update's run on GitHub, when the self-update is on and it could be read */
+  update: { status: 'queued' | 'running' | 'finished' | 'failed'; started_at: string; url: string } | null
+  /** when it should be ready (an estimate), or null */
+  expected_by: string | null
+  /** how many seconds until the app should look again (nothing announces the update's end); null once ready */
+  next_check_s: number | null
+}
+
+/** The update's run on GitHub for a request: the newest run of trace's ci workflow on the self-update's branch started
+ * after the request (a minute's slack for clocks). Pure. */
+export function updateRunFor(runs: readonly RunSummary[], branch: string, requestedAt: string | null): RunSummary | null {
+  const after = requestedAt ? Date.parse(requestedAt) - 60_000 : -Infinity
+  return [...runs]
+    .filter((r) => r.path.endsWith(`/${UPDATE_WORKFLOW}`) && (r.branch ?? '') === branch && Date.parse(r.created_at) >= after)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0] ?? null
+}
+
+const runStatus = (r: RunSummary): NonNullable<AgentSetup['update']>['status'] =>
+  r.status !== 'completed' ? (r.status === 'in_progress' ? 'running' : 'queued') : r.conclusion === 'success' ? 'finished' : 'failed'
+
+/**
+ * How a project's agent stands, from what the API knows: whether it has the project's runtime (ready), the pending
+ * request, and the update's run. Pure (the reads are project.agent's).
+ */
+export function agentSetup(o: {
+  repo: string; hasAgent: boolean; record: PendingRecord | null; run: RunSummary | null; selfUpdate: boolean; admin: boolean; now?: number
+}): AgentSetup {
+  const now = o.now ?? Date.now()
+  const base = { repo: o.repo, requested_at: o.record?.requested_at ?? null, update: null, expected_by: null }
+  if (o.hasAgent) return { ...base, ready: true, state: 'ready', text: 'This project\'s agent is set up.', next_check_s: null }
+  const r = o.record
+  if (!r) {
+    return { ...base, ready: false, state: 'missing', next_check_s: STALLED_CHECK_S,
+      text: 'This project\'s agent is not set up in this installation, and no update is waiting to add it. An admin can add it by running the installer.' }
+  }
+  if (r.status === 'failed') {
+    return { ...base, ready: false, state: 'failed', next_check_s: STALLED_CHECK_S,
+      text: `The installation update could not add this project's agent${o.admin && r.last_error ? ` (last: ${r.last_error})` : ''}. An admin can add it by running the installer.` }
+  }
+  if (r.status === 'added') {
+    return { ...base, ready: false, state: 'finishing', next_check_s: ADDED_CHECK_S, expected_by: new Date(now + 5 * 60_000).toISOString(),
+      text: 'The installation update has added this project\'s agent. trace\'s service starts using it within a few minutes.' }
+  }
+  const update = o.run ? { status: runStatus(o.run), started_at: o.run.created_at, url: o.run.url } : null
+  const from = Date.parse(o.run?.created_at ?? r.requested_at ?? '') || now
+  const expected = from + SETUP_MS
+  const late = now > expected
+  const progress = !update
+    ? (o.selfUpdate ? 'The installation update was asked for; it tests trace and then deploys this project\'s agent, usually within the hour.' : 'The agent is added the next time an admin runs the installer.')
+    : update.status === 'queued' ? 'The installation update is queued on GitHub; once it starts it usually takes under an hour.'
+      : update.status === 'running' ? 'The installation update is running: it tests trace and then deploys this project\'s agent.'
+        : update.status === 'finished' ? 'The installation update has finished; trace is checking that it added this project\'s agent.'
+          : 'The installation update failed, so this project\'s agent is not set up yet. An admin can start the update again (Actions → ci → Run workflow) or run the installer.'
+  const retried = r.attempts > 0 && update?.status !== 'failed' ? ' An earlier update with it failed; this one tries again.' : ''
+  return {
+    ...base, ready: false, state: 'setting_up', update,
+    expected_by: o.selfUpdate ? new Date(expected).toISOString() : null,
+    // a failed run waits for a person to start another; the app still looks again, less often
+    next_check_s: update?.status === 'failed' ? STALLED_CHECK_S : SETUP_CHECK_S,
+    text: `${progress}${retried}${o.selfUpdate && late && update?.status !== 'failed' ? ' It is taking longer than usual.' : ''}`,
+  }
+}
+
+/** The pending request projects.create recorded for this project, or null (none, or unreadable). */
+async function pendingRecord(ctx: Context, repo: string): Promise<PendingRecord | null> {
+  const got = await storeAt(ctx, PENDING_PREFIX).get(pendingKey(repo))
+  if (!got) return null
+  const r = PendingRecordSchema.safeParse(JSON.parse(new TextDecoder().decode(got.body)) as unknown)
+  return r.success ? r.data : null
+}
+
+/** The self-update's update run for this request on GitHub, or null (no self-update, or GitHub would not say). */
+async function updateRun(ctx: Context, requestedAt: string | null, selfUpdate: string | undefined): Promise<RunSummary | null> {
+  const m = /^([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)@(.+)$/.exec(selfUpdate?.trim() ?? '')
+  if (!m?.[1] || !m[2]) return null
+  const [repo, branch] = [m[1], m[2]]
+  try {
+    const gh = await ctx.deps.github()
+    const runs = await cached(ctx.deps.githubCache, repo, 'update-runs', () => gh.workflowRuns(repo, 30), RUN_TTL_MS)
+    return updateRunFor(runs, branch, requestedAt)
+  } catch {
+    return null
+  }
+}
+
 const DEFAULT_SCAFFOLD: Readonly<Record<Template, 'empty' | 'kicad'>> = { board: 'kicad', mixed: 'kicad', fpga: 'empty', firmware: 'empty' }
 
 export const PROJECT_ACTIONS = {
@@ -146,6 +262,15 @@ export const PROJECT_ACTIONS = {
       out.push({ sub: m.sub, email: m.email, class: m.class, part: m.part, admin: false, can_sign: false })
     }
     return { repo, members: out.sort((a, b) => Number(b.admin) - Number(a.admin) || (a.email ?? a.sub).localeCompare(b.email ?? b.sub)) }
+  }),
+
+  'project.agent': def('read', Repo, async ({ repo }, ctx): Promise<AgentSetup> => {
+    const jobs = await ctx.deps.jobs()
+    const hasAgent = jobs.hasAgent ? jobs.hasAgent(repo) : true
+    const selfUpdate = process.env.TRACE_SELF_UPDATE
+    const record = hasAgent ? null : await pendingRecord(ctx, repo).catch(() => null)
+    const run = !hasAgent && record?.status === 'pending' ? await updateRun(ctx, record.requested_at ?? null, selfUpdate) : null
+    return agentSetup({ repo, hasAgent, record, run, selfUpdate: Boolean(selfUpdate?.includes('@')), admin: isAdmin(ctx.principal) })
   }),
 
   'projects.create': def('admin', Create, async (a, ctx) => {
