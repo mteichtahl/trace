@@ -33,6 +33,7 @@ import { useCommands } from '@/components/shell/command-menu'
 import { useSkillDraft } from '@/components/skills/draft'
 import { ErrorState, NotShared } from '@/components/states'
 import { WaitLine } from '@/components/wait-line'
+import { AGENT_WAIT, AgentSetupNotice, notReady, openLabel, useAgentSetup } from '@/components/project/agent-setup'
 import { call, projectId, projectName } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { initials, money } from '@/lib/format'
@@ -384,6 +385,11 @@ function TraceTip({ step, d }: { step: StepId; d: NewProjectDraft }) {
 
 function CreatedView({ created, draft: d, onOpen, onClose }: { created: Created; draft: NewProjectDraft; onOpen: () => void; onClose: () => void }) {
   const now = new Date().toISOString()
+  // the project's agent arrives with the installation update: until project.agent says it is there, the notice
+  // follows it (its own next look and Check now), and the button says what the project will be like
+  const waitsForAgent = created.waits.some((w) => w.id === AGENT_WAIT)
+  const setup = useAgentSetup(created.repo, { fetch: waitsForAgent })
+  const settingUp = waitsForAgent && (setup.data === undefined || notReady(setup.data))
   return (
     <div className="flex h-dvh flex-col bg-background">
       <header className="flex h-[52px] items-center gap-3 border-b px-4"><Button variant="outline" size="icon" onClick={onClose} aria-label="Close"><X /></Button><span className="font-semibold">New project</span><span className="text-sm text-muted-foreground">Created</span></header>
@@ -391,10 +397,14 @@ function CreatedView({ created, draft: d, onOpen, onClose }: { created: Created;
         <div className="flex items-center gap-3"><ProjectIconView icon={d.icon} size={48} /><div><h1 className="text-2xl font-semibold tracking-tight">{d.name} is ready</h1><p className="text-sm font-mono text-muted-foreground">{created.repo}</p></div></div>
         <div className="mt-6 divide-y rounded-xl border">
           {created.done.map((t, i) => <RunLine key={i} run={{ id: `c${i}`, title: t, state: 'done', startedAt: now }} />)}
-          {created.waits.map((w) => <WaitLine key={w.id} wait={w} onCheckNow={(x) => call('tools.check_now', { repo: created.repo, waitId: x.id })} />)}
+          {/* the installation update is no wait on a worker: the notice below checks on it */}
+          {created.waits.map((w) => <WaitLine key={w.id} wait={w} onCheckNow={w.id === AGENT_WAIT ? undefined : (x) => call('tools.check_now', { repo: created.repo, waitId: x.id })} />)}
         </div>
-        <p className="mt-3 text-sm text-muted-foreground">You can start now; anything still waiting finishes on its own and says so here and on the project.</p>
-        <Button size="lg" className="mt-6" onClick={() => { toast(`${d.name} created.`); onOpen() }}>Open project</Button>
+        {waitsForAgent && <AgentSetupNotice repo={created.repo} className="mt-4" />}
+        <p className="mt-3 text-sm text-muted-foreground">{settingUp
+          ? 'You can look around and start writing now. Until the agent is ready, trace can\'t save your answers or start work; the project says when it is.'
+          : 'You can start now; anything still waiting finishes on its own and says so here and on the project.'}</p>
+        <Button size="lg" className="mt-6" onClick={() => { toast(`${d.name} created.`); onOpen() }}>{openLabel(settingUp)}</Button>
       </div>
     </div>
   )

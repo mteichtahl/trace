@@ -418,6 +418,19 @@ export interface Journey {
 
 // ------------------------------------------------------------------ jobs and waits (src/api/actions.ts)
 
+/** project.agent (src/api/actions-projects.ts agentSetup): whether the project's own agent is set up yet, and how its
+ * setting up stands while it is not. */
+export interface AgentSetup {
+  repo: string
+  ready: boolean
+  state: 'ready' | 'setting_up' | 'finishing' | 'failed' | 'missing'
+  text: string
+  requested_at: string | null
+  update: { status: 'queued' | 'running' | 'finished' | 'failed'; started_at: string; url: string } | null
+  expected_by: string | null
+  next_check_s: number | null
+}
+
 export interface Wait {
   id: string
   what: string
