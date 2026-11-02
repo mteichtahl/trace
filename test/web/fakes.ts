@@ -182,7 +182,7 @@ export class RecordingSink implements Sink {
 
 export const NOW = Date.parse('2026-10-27T00:00:00Z')
 
-export function world(o: { heartbeatMs?: number } = {}): World {
+export function world(o: { heartbeatMs?: number; config?: Partial<typeof CONFIG> } = {}): World {
   const cognito = new FakeCognito()
   const runtime = new FakeRuntime()
   const bedrock = new FakeBedrock()
@@ -193,7 +193,7 @@ export function world(o: { heartbeatMs?: number } = {}): World {
   const logs: Record<string, unknown>[] = []
   const v = verifier()
   const deps: WebDeps = {
-    config: async () => CONFIG,
+    config: async () => ({ ...CONFIG, ...o.config }),
     verifier: () => v,
     cognito: () => cognito,
     bedrock: () => bedrock,

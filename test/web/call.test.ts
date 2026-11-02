@@ -241,3 +241,35 @@ describe('/api/call when the API runtime does not answer', () => {
     expect(w.logs.filter((l) => typeof l.warning === 'string' && l.warning.startsWith('api runtime'))).toEqual([])
   })
 })
+
+describe('the API build in the settings (deploy order)', () => {
+  it('names each call\'s session for the settings\' apiBuild', async () => {
+    const w = world({ config: { apiBuild: 'v0.1.0-aaaaaaaaaaaaaaaa.7' } })
+    w.runtime.answers.set('status', () => ({ body: { ok: true, result: {} } }))
+    await w.serve(call({ action: 'status', repo: 'acme/board' }))
+    expect(w.runtime.calls[0]?.headers['x-amzn-bedrock-agentcore-runtime-session-id']).toBe(runtimeSession('sub-ada', 'v0.1.0-aaaaaaaaaaaaaaaa.7'))
+  })
+
+  it('names the session for the settings\' apiBuild, so a new build moves calls only once the settings say so', async () => {
+    const { runtimeSession } = await import('../../src/web/call.js')
+    expect(runtimeSession('sub-1', 'tag.1')).not.toBe(runtimeSession('sub-1', 'tag.2'))
+    expect(runtimeSession('sub-1', 'tag.1')).toBe(runtimeSession('sub-1', 'tag.1'))
+  })
+
+  it('reads the settings again after the time to live, and keeps the last good ones when a read fails', async () => {
+    const { configLoader } = await import('../../src/web/config.js')
+    const base = { region: 'us-east-1', prefix: 'trace', userPoolId: 'p', clientId: 'c', apiRuntimeArn: 'arn', events: { http: 'h', realtime: 'r', apiId: 'a' }, voiceBucket: 'b' }
+    let t = 0
+    let value: string | Error = JSON.stringify({ ...base, apiBuild: 'one' })
+    const load = configLoader(async () => { if (value instanceof Error) throw value; return value }, '/p', { ttlMs: 60_000, now: () => t })
+    expect((await load()).apiBuild).toBe('one')
+    value = JSON.stringify({ ...base, apiBuild: 'two' })
+    t = 59_000
+    expect((await load()).apiBuild).toBe('one')
+    t = 60_000
+    expect((await load()).apiBuild).toBe('two')
+    value = new Error('SSM down')
+    t = 130_000
+    expect((await load()).apiBuild).toBe('two')
+  })
+})

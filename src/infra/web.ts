@@ -664,8 +664,10 @@ export interface WebAttachProps {
   apiRuntimeArn: string
   /** whether email one-time codes are a first factor (web.sesFrom) */
   email: boolean
-  /** the API's image content tag: the backend's TRACE_API_BUILD, part of each person's runtime session (src/web/call.ts) */
+  /** the API's image content tag: with apiRuntimeVersion, the settings' apiBuild, part of each person's runtime session (src/web/call.ts) */
   apiBuild?: string
+  /** the API runtime's version (it changes with each update of the runtime) */
+  apiRuntimeVersion?: string
   /** web.hooks: the backend's own app client (addHooksClient) and the pool's token address */
   hooks?: { client: cognito.UserPoolClient; tokenUrl: string } | undefined
 }
@@ -677,6 +679,8 @@ export interface WebConfig {
   userPoolId: string
   clientId: string
   apiRuntimeArn: string
+  /** the API's build and runtime version (src/web/config.ts) */
+  apiBuild?: string
   /** host names, without a scheme */
   events: { http: string; realtime: string; apiId: string }
   voiceBucket: string
@@ -737,8 +741,10 @@ export class TraceWeb extends Construct {
     const parent = Stack.of(this)
     const { region } = parent
     void a.pool
-    // a deploy that changes the API's code moves people's calls to new runtime sessions, on the new version
-    if (a.apiBuild) this.stack.backend.addEnvironment('TRACE_API_BUILD', a.apiBuild)
+    // a deploy that changes the API moves people's calls to new runtime sessions, on the new version: the build is in
+    // the settings parameter (below), which names the runtime and so is written only after it is updated. In the
+    // function's environment it changed first, and sessions started in between stayed on the old version for hours
+
 
     // ------------------------------------------------------------------ the backend's settings
     const config: WebConfig = {
@@ -747,6 +753,7 @@ export class TraceWeb extends Construct {
       userPoolId: a.pool.userPoolId,
       clientId: a.client.userPoolClientId,
       apiRuntimeArn: a.apiRuntimeArn,
+      ...(a.apiBuild ? { apiBuild: a.apiRuntimeVersion ? `${a.apiBuild}.${a.apiRuntimeVersion}` : a.apiBuild } : {}),
       events: { http: this.stack.events.httpDns, realtime: this.stack.events.realtimeDns, apiId: this.stack.events.apiId },
       voiceBucket: this.stack.voiceBucket.bucketName,
       voicePrefix: VOICE_PREFIX,

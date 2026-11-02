@@ -615,7 +615,7 @@ export class TraceStack extends Stack {
     // ------------------------------------------------------------------ the web app's parts that name the pool
     if (web && webClient) {
       web.attach({
-        pool: users, client: webClient, apiRuntimeArn: api.attrAgentRuntimeArn, email: emailCodes, apiBuild: contentTag,
+        pool: users, client: webClient, apiRuntimeArn: api.attrAgentRuntimeArn, apiRuntimeVersion: api.attrAgentRuntimeVersion, email: emailCodes, apiBuild: contentTag,
         ...(hooksClient ? { hooks: { client: hooksClient, tokenUrl } } : {}),
       })
     }

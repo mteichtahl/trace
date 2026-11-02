@@ -1,11 +1,16 @@
 /**
  * The web backend's settings: one SSM parameter, `/<prefix>/web/config` (its name in TRACE_WEB_CONFIG_PARAM), JSON.
- * Read once per Lambda container and kept; a failed read is not kept, so the next request tries again. Nothing in it
+ * Read on first use and again after `ttlMs` (awsDeps: a minute, so a deploy's apiBuild arrives soon); a failed read is
+ * not kept: the last good settings are used, or the next request tries again. Nothing in it
  * is secret: GET /api/config hands the app the public part.
  *
  *   region, prefix          the installation
  *   userPoolId, clientId    the user pool and the web app client (no client secret: public sign-in calls)
  *   apiRuntimeArn           the API runtime (AgentCore), called with the person's bearer token
+ *   apiBuild                the API's build and runtime version, part of each person's runtime session
+ *                           (src/web/call.ts runtimeSession). It is here, and not in the function's environment, because
+ *                           this parameter is updated only after the API runtime is: a session named for a new build
+ *                           must not start on the old version, which would keep it for hours
  *   events                  AppSync Events: http and realtime DNS names, the API id
  *   voiceBucket/Prefix      where Polly's speech is cached
  *   dashboards              the CloudWatch dashboards Operations shows
@@ -27,6 +32,7 @@ export const WebConfig = z.object({
   userPoolId: z.string().min(1),
   clientId: z.string().min(1),
   apiRuntimeArn: z.string().min(1),
+  apiBuild: z.string().min(1).optional(),
   events: z.object({ http: z.string().min(1), realtime: z.string().min(1), apiId: z.string().min(1) }),
   voiceBucket: z.string().min(1),
   voicePrefix: z.string().default('voice'),
@@ -60,11 +66,28 @@ export function publicConfig(c: WebConfig): Record<string, unknown> {
 
 export type ParameterReader = (name: string) => Promise<string>
 
-/** A cached loader: the parameter is read on first use and kept for the life of the container. */
-export function configLoader(read: ParameterReader, name: string): () => Promise<WebConfig> {
+/**
+ * A cached loader: the parameter is read on first use and kept, for `ttlMs` when given (otherwise for the life of the
+ * container). A read that fails keeps the last good settings when there are some; without any, it is not kept, so
+ * the next call tries again.
+ */
+export function configLoader(read: ParameterReader, name: string, o: { ttlMs?: number; now?: () => number } = {}): () => Promise<WebConfig> {
+  const now = o.now ?? Date.now
   let pending: Promise<WebConfig> | null = null
+  let good: WebConfig | null = null
+  let at = 0
   return () => {
-    pending ??= (async () => WebConfig.parse(JSON.parse(await read(name))))().catch((e: unknown) => { pending = null; throw e })
+    if (pending && o.ttlMs !== undefined && good && now() - at >= o.ttlMs) pending = null
+    pending ??= (async () => {
+      at = now()
+      const c = WebConfig.parse(JSON.parse(await read(name)))
+      good = c
+      return c
+    })().catch((e: unknown) => {
+      if (good) return good
+      pending = null
+      throw e
+    })
     return pending
   }
 }

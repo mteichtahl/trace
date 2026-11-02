@@ -119,10 +119,16 @@ export function ErrorState({
   )
 }
 
+/** The API does not know an action the app asks for yet: an update still on its way. */
+export const UPDATING = /^unknown action\b/
+
 /** An error from a query, worded for a person, with the API's message as the folded detail. */
 export function QueryError({ error, what, onRetry }: { error: unknown; what: string; onRetry?: () => void }) {
   const msg = error instanceof Error ? error.message : String(error)
   if (msg === 'no access') return <NotShared />
+  // the app was updated a few minutes before the API it calls (a deploy rebuilds the API's image after publishing the
+  // pages): say so, rather than calling it a failure
+  if (UPDATING.test(msg)) return <ErrorState title={`trace is finishing an update, so ${what} will be here in a few minutes.`} onRetry={onRetry} detail={msg} />
   return <ErrorState title={`Could not load ${what}.`} onRetry={onRetry} detail={msg} />
 }
 
