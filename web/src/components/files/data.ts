@@ -7,6 +7,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { type ArgsOf, call, projectId } from '@/lib/api'
 import { baseName } from './kinds'
+import { bytesOfLocalUrl } from '@/lib/readers'
 
 /** One version of a file, newest first in `FileRef.versions`. */
 export interface FileVersion {
@@ -90,8 +91,10 @@ export async function resolveUrl(f: FileRef, commit?: string): Promise<{ url: st
     const have = artifactUrls.get(key)
     if (have) return { url: have }
     const a = await call('artifact', { repo: f.repo, id: f.run.id, name: f.run.name })
-    const url = URL.createObjectURL(new Blob([b64ToBytes(a.base64)], { type: a.mime ?? 'application/octet-stream' }))
+    const bytes = b64ToBytes(a.base64)
+    const url = URL.createObjectURL(new Blob([bytes], { type: a.mime ?? 'application/octet-stream' }))
     artifactUrls.set(key, url)
+    artifactBytes.set(url, bytes)
     return { url, mime: a.mime, size: a.size }
   }
   // `commit` asks for an earlier version. The API answers bytes (base64) up to 8 MB or GitHub's link above that;
@@ -99,6 +102,9 @@ export async function resolveUrl(f: FileRef, commit?: string): Promise<{ url: st
   const args: ArgsOf<'files.url'> = { repo: f.repo, path: f.path, ...(commit ? { commit } : {}) }
   return call('files.url', args)
 }
+
+/** A run artifact's bytes, by the local address made for it. */
+const artifactBytes = new Map<string, Uint8Array>()
 
 const versionKey = (f: FileRef, commit?: string) => [f.repo, f.run ? `runs/${f.run.id}/${f.run.name}` : f.path, commit ?? f.commit ?? 'current', f.url ?? ''] as const
 
@@ -115,6 +121,9 @@ export function useFileUrl(f: FileRef | null, commit?: string) {
 
 async function fetchBytes(f: FileRef, commit?: string, limit?: number): Promise<ArrayBuffer> {
   const { url } = await resolveUrl(f, commit)
+  // the API already answered the bytes: read them here rather than fetching the local address again
+  const held = bytesOfLocalUrl(url) ?? artifactBytes.get(url)
+  if (held) return (limit ? held.slice(0, limit) : held.slice()).buffer as ArrayBuffer
   const res = await fetch(url, limit ? { headers: { range: `bytes=0-${limit - 1}` } } : undefined)
   if (!res.ok && res.status !== 206) throw new Error(`The file could not be read (${res.status}).`)
   return res.arrayBuffer()

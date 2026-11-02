@@ -143,7 +143,7 @@ describe('the web app', () => {
     ]) expect(csp).toContain(part)
     // the live events: that API's own two hosts, no wildcard
     expect(csp).not.toContain('*.appsync')
-    expect(csp).toContain('connect-src \'self\' https://",{"Fn::GetAtt":["Events')
+    expect(csp).toContain('connect-src \'self\' blob: https://",{"Fn::GetAtt":["Events')
     expect(csp).toMatch(/"Dns\.Http"\]\}," wss:\/\/",\{"Fn::GetAtt":\["Events\w+","Dns\.Realtime"/)
     // the voice bucket's host, for the signed speech URLs
     expect(csp).toMatch(/media-src 'self' blob: https:\/\/".*Voice.*RegionalDomainName/)

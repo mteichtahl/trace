@@ -421,6 +421,10 @@ export function readFiles(raw: unknown): unknown {
 }
 
 const blobs = new Map<string, string>()
+const blobBytes = new Map<string, Uint8Array>()
+/** The bytes behind a local address readFileUrl made, so viewers need not fetch it (a fetch of blob: needs the
+ * content security policy's connect-src to allow it). */
+export const bytesOfLocalUrl = (url: string): Uint8Array | undefined => blobBytes.get(url)
 
 /** files.url: a file's bytes (base64, at most 8 MB) or GitHub's link, as an address the viewers can open. */
 export function readFileUrl(raw: unknown): unknown {
@@ -435,6 +439,7 @@ export function readFileUrl(raw: unknown): unknown {
       const bytes = new Uint8Array(bin.length)
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
       url = URL.createObjectURL(new Blob([bytes], { type: mime }))
+      blobBytes.set(url, bytes)
     } else {
       url = `data:${mime};base64,${raw.base64 as string}`
     }
