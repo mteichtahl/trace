@@ -426,7 +426,8 @@ export interface AgentSetup {
   state: 'ready' | 'setting_up' | 'finishing' | 'failed' | 'missing'
   text: string
   requested_at: string | null
-  update: { status: 'queued' | 'running' | 'finished' | 'failed'; started_at: string; url: string } | null
+  /** `url`: the update's run on GitHub, given to admins only */
+  update: { status: 'queued' | 'running' | 'finished' | 'failed'; started_at: string; url?: string } | null
   expected_by: string | null
   next_check_s: number | null
 }

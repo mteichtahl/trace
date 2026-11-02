@@ -28,7 +28,8 @@
  *                             and, with the self-update on, the installation update's run on GitHub (queued, running,
  *                             finished). Answers when it should be ready (usually within the hour of the request or
  *                             of the update starting) and when to look again: nothing announces the update's end, so
- *                             the app looks again at next_check_s (agentSetup)
+ *                             the app looks again at next_check_s (agentSetup). The link to the update's run and how
+ *                             to start it again (trace's own repository) are an admin's only
  *   project.update    admin   change what a project is after it is made: its name, description, icon, build plan
  *                             (quantity, unit cost, budget) and later stages, in the journey record (Settings). The
  *                             template and repository stay fixed
@@ -152,6 +153,12 @@ export const ADDED_CHECK_S = 20
 /** While only a person can move it on (no request, a failed one): looked at less often, so the notice still clears
  * itself once an admin has run the installer. */
 export const STALLED_CHECK_S = 300
+/** How long trace's service usually takes to start using a runtime an update added (it reads the stack's list again). */
+export const ADDED_MS = 10 * 60_000
+/** How long after the update's run succeeded a request still pending means the update left it out (it marks the
+ * records it added straight after its deploy). */
+export const LEFT_OUT_MS = 10 * 60_000
+
 /** How long the update's run on GitHub is kept between looks: every open project page asks. */
 const RUN_TTL_MS = 30_000
 
@@ -164,8 +171,9 @@ export interface AgentSetup {
   /** one or two sentences a person reads: what is happening and what happens next */
   text: string
   requested_at: string | null
-  /** the installation update's run on GitHub, when the self-update is on and it could be read */
-  update: { status: 'queued' | 'running' | 'finished' | 'failed'; started_at: string; url: string } | null
+  /** the installation update's run on GitHub, when the self-update is on and it could be read; `url` (trace's own
+   * repository) for admins only */
+  update: { status: 'queued' | 'running' | 'finished' | 'failed'; started_at: string; url?: string } | null
   /** when it should be ready (an estimate), or null */
   expected_by: string | null
   /** how many seconds until the app should look again (nothing announces the update's end); null once ready */
@@ -190,6 +198,8 @@ const runStatus = (r: RunSummary): NonNullable<AgentSetup['update']>['status'] =
  */
 export function agentSetup(o: {
   repo: string; hasAgent: boolean; record: PendingRecord | null; run: RunSummary | null; selfUpdate: boolean; admin: boolean; now?: number
+  /** the stack's layout (TRACE_LAYOUT): in a flat one an update adds projects only up to FLAT_UPDATE_MAX */
+  layout?: string | undefined
 }): AgentSetup {
   const now = o.now ?? Date.now()
   const base = { repo: o.repo, requested_at: o.record?.requested_at ?? null, update: null, expected_by: null }
@@ -204,10 +214,32 @@ export function agentSetup(o: {
       text: `The installation update could not add this project's agent${o.admin && r.last_error ? ` (last: ${r.last_error})` : ''}. An admin can add it by running the installer.` }
   }
   if (r.status === 'added') {
-    return { ...base, ready: false, state: 'finishing', next_check_s: ADDED_CHECK_S, expected_by: new Date(now + 5 * 60_000).toISOString(),
-      text: 'The installation update has added this project\'s agent. trace\'s service starts using it within a few minutes.' }
+    // from when the update marked it added (a record from before added_at: from now, as before)
+    const by = (Date.parse(r.added_at ?? '') || now) + ADDED_MS
+    const late = now > by
+    return {
+      ...base, ready: false, state: 'finishing', expected_by: new Date(by).toISOString(),
+      // once it is late only a person can move it on (the service may need restarting): looked at less often
+      next_check_s: late ? STALLED_CHECK_S : ADDED_CHECK_S,
+      text: late
+        ? 'The installation update added this project\'s agent, but trace\'s service is taking longer than usual to start using it. If it is still not ready soon, an admin can run the installer.'
+        : 'The installation update has added this project\'s agent. trace\'s service starts using it within a few minutes.',
+    }
   }
-  const update = o.run ? { status: runStatus(o.run), started_at: o.run.created_at, url: o.run.url } : null
+  const update = o.run ? { status: runStatus(o.run), started_at: o.run.created_at, ...(o.admin ? { url: o.run.url } : {}) } : null
+  // the update finished well ago and still did not mark this request added: it left the project out (in a flat
+  // installation, most likely for its project limit); only the installer, or an admin, adds it now
+  // (when it finished: GitHub's updated_at; without it nothing is concluded)
+  const finishedAt = o.run?.status === 'completed' ? Date.parse(o.run.updated_at ?? '') : NaN
+  if (update?.status === 'finished' && Number.isFinite(finishedAt) && now - finishedAt > LEFT_OUT_MS) {
+    const why = o.layout === 'flat'
+      ? ` This installation keeps every project in one stack, and an update adds projects to it only while there are fewer than ${FLAT_UPDATE_MAX}.`
+      : ''
+    return {
+      ...base, ready: false, state: 'failed', update, next_check_s: STALLED_CHECK_S,
+      text: `The installation update finished without adding this project's agent.${why} An admin can add it by running the installer.`,
+    }
+  }
   const from = Date.parse(o.run?.created_at ?? r.requested_at ?? '') || now
   const expected = from + SETUP_MS
   const late = now > expected
@@ -216,7 +248,7 @@ export function agentSetup(o: {
     : update.status === 'queued' ? 'The installation update is queued on GitHub; once it starts it usually takes under an hour.'
       : update.status === 'running' ? 'The installation update is running: it tests trace and then deploys this project\'s agent.'
         : update.status === 'finished' ? 'The installation update has finished; trace is checking that it added this project\'s agent.'
-          : 'The installation update failed, so this project\'s agent is not set up yet. An admin can start the update again (Actions → ci → Run workflow) or run the installer.'
+          : `The installation update failed, so this project's agent is not set up yet. ${o.admin ? 'You can start the update again (Actions → ci → Run workflow on trace\'s repository) or run the installer.' : 'An admin can start the update again or run the installer.'}`
   const retried = r.attempts > 0 && update?.status !== 'failed' ? ' An earlier update with it failed; this one tries again.' : ''
   return {
     ...base, ready: false, state: 'setting_up', update,
@@ -270,7 +302,7 @@ export const PROJECT_ACTIONS = {
     const selfUpdate = process.env.TRACE_SELF_UPDATE
     const record = hasAgent ? null : await pendingRecord(ctx, repo).catch(() => null)
     const run = !hasAgent && record?.status === 'pending' ? await updateRun(ctx, record.requested_at ?? null, selfUpdate) : null
-    return agentSetup({ repo, hasAgent, record, run, selfUpdate: Boolean(selfUpdate?.includes('@')), admin: isAdmin(ctx.principal) })
+    return agentSetup({ repo, hasAgent, record, run, selfUpdate: Boolean(selfUpdate?.includes('@')), admin: isAdmin(ctx.principal), layout: ctx.deps.layout ?? process.env.TRACE_LAYOUT })
   }),
 
   'projects.create': def('admin', Create, async (a, ctx) => {
