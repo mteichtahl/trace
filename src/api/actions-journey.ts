@@ -61,11 +61,11 @@ import { recommendationOf } from './changes.js'
 import { AGENT_WORDS, jobIndex, listJobs, projectHandoffs } from './actions-jobs.js'
 import { reviewItems } from './inbox-review.js'
 import { loadJobs } from '../core/job-index.js'
-import { ActionError, type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, label, plainly, snapshotJourney, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
+import { ActionError, type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, journeyStore, label, plainly, snapshotJourney, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { requirementEvidence } from './record-read.js'
 import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { isLive } from '../core/job-index.js'
-import { draftRequirements, draftingNow, draftingStep } from './drafting.js'
+import { draftRequirements, draftingNow, draftingStep, logRetry } from './drafting.js'
 
 const Id = z.string().min(1).max(80)
 
@@ -270,7 +270,7 @@ export const JOURNEY_ACTIONS = {
     const viewer = await viewerOf(ctx.principal, repo)
     // the project's jobs (src/api/actions-jobs.ts listJobs: its job index); an index that cannot be read leaves the
     // journey as it is and says so in jobs_unavailable
-    const [r, facts, jobs] = await Promise.all([withJourneyDb(ctx, repo, (db) => loadJourney(db)), agentFacts(ctx, repo),
+    const [{ result: r, version }, facts, jobs] = await Promise.all([journeyStore(ctx, repo).read((db) => loadJourney(db)), agentFacts(ctx, repo),
       listJobs(ctx, repo).then((x) => ({ jobs: x.jobs, rows: x.rows, error: null }), (e: unknown) => ({ jobs: [], rows: [], error: e instanceof Error ? e.message : String(e) }))])
     // the hand-offs between specialists (jobs.list's): who asked whom, for what, and the answer
     const handoffs = projectHandoffs(repo, facts, r, jobs.rows)
@@ -287,8 +287,9 @@ export const JOURNEY_ACTIONS = {
       recommendation: c.verdict === 'ready' ? `trace recommends accepting it. ${recommendationOf(c).why}` : null,
     })))
     // Define before its requirements exist: the intent first, then trace drafting them, or drafting them again when the
-    // job stopped (src/api/drafting.ts); never "accept every requirement" over none
-    const drafting = jobs.error ? null : await draftingNow(ctx, repo, r, jobs.rows)
+    // job stopped (src/api/drafting.ts); never "accept every requirement" over none. The record is read only when that
+    // could change the step, and its count is kept per default-branch commit and record version
+    const drafting = jobs.error ? null : await draftingNow(ctx, repo, r, jobs.rows, { next: view.next, version })
     const next = drafting ? draftingStep(view.next, r, drafting, viewer, drafting.why) : view.next
     return {
       repo, started: true, you: { admin: viewer.admin, part: viewer.part }, has_memory: hasMemory, ...view, next: await changedFirst(ctx, repo, r, next),
@@ -301,9 +302,9 @@ export const JOURNEY_ACTIONS = {
   // the drafting job stopped (lost, failed, cancelled, or never started) with the intent submitted and no requirements:
   // start it again, as Submit did (src/api/drafting.ts), as a new attempt. Refused, in words, while it is not stopped
   'requirements.draft': def('write', Repo, async ({ repo }, ctx) => {
-    const [r, list] = await Promise.all([withJourneyDb(ctx, repo, (db) => loadJourney(db)), listJobs(ctx, repo)])
+    const [{ result: r, version }, list] = await Promise.all([journeyStore(ctx, repo).read((db) => loadJourney(db)), listJobs(ctx, repo)])
     if (!r) throw new ActionError('This project has not started its journey yet.')
-    const d = await draftingNow(ctx, repo, r, list.rows)
+    const d = await draftingNow(ctx, repo, r, list.rows, { version })
     if (!d) throw new ActionError(r.journey.currentStage === 'define' ? 'trace could not read the requirements just now, so it does not start drafting them again. Try again in a minute.' : 'The requirements are drafted already: the project is past Define.')
     if (d.state !== 'stopped') {
       throw new ActionError({
@@ -314,9 +315,14 @@ export const JOURNEY_ACTIONS = {
         stopped: '',
       }[d.state])
     }
-    const s = await draftRequirements(ctx, repo, d.attempts + 1)
+    // the highest attempt recorded, plus one: a new session (src/api/workers.ts taskSession)
+    const attempt = d.attempts + 1
+    const s = await draftRequirements(ctx, repo, attempt)
     if (!s.accepted) throw new ActionError(`trace could not start drafting the requirements: ${s.reason ?? 'it did not accept the job'}.`)
-    return { repo, jobId: s.jobId, attempt: d.attempts + 1, started: ['The Verification agent drafts the candidate requirements again, from your submitted intent.'] }
+    // logged with its time and attempt: until the new job is in the index, the next look reads "drafting" (the grace
+    // counts from this retry, not from Submit) and a second press is refused rather than started in the same session
+    const logged = await writeJourney(ctx, repo, (db) => { logRetry(db, { attempt, by: label(ctx.principal), jobId: s.jobId }); return { result: {} } })
+    return { repo, jobId: s.jobId, attempt, version: logged.version, started: ['The Verification agent drafts the candidate requirements again, from your submitted intent.'] }
   }),
 
   'journey.criterion.open': def('read', Repo.extend({ criterion: Id.optional(), waiver: Id.optional() }).refine((a) => Boolean(a.criterion) !== Boolean(a.waiver), 'name a criterion or a waiver'), async (a, ctx) => {
