@@ -44,3 +44,35 @@ describe('HttpGitHub: what the web app\'s actions add', () => {
     expect(await gh.fileInfo('acme/board', 'none', 'main')).toBeNull()
   })
 })
+
+describe('checks for a fine-grained token (no "Checks: read" exists for one)', () => {
+  const json = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+  const gh = (o: { actions: number; statuses: number }) => new HttpGitHub('github_pat_x', {
+    fetch: (async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes('/check-runs')) return json(403, { message: 'Resource not accessible by personal access token' })
+      if (url.includes('/actions/runs?head_sha=abc')) {
+        return o.actions === 200 ? json(200, { workflow_runs: [
+          { id: 1, name: 'ci', path: '.github/workflows/ci.yml', event: 'pull_request', status: 'completed', conclusion: 'failure', head_branch: 'claude/x', html_url: 'u', created_at: '2026-11-01T00:00:00Z' },
+          { id: 2, name: 'ci', path: '.github/workflows/ci.yml', event: 'pull_request', status: 'completed', conclusion: 'success', head_branch: 'claude/x', html_url: 'u', created_at: '2026-11-01T01:00:00Z' },
+          { id: 3, name: 'erc', path: '.github/workflows/erc.yml', event: 'pull_request', status: 'in_progress', conclusion: null, head_branch: 'claude/x', html_url: 'u', created_at: '2026-11-01T01:00:00Z' },
+        ] }) : json(o.actions, { message: 'no' })
+      }
+      if (url.endsWith('/commits/abc/status')) return o.statuses === 200 ? json(200, { state: 'success', statuses: [{ context: 'drc', state: 'success', description: 'clean' }] }) : json(o.statuses, { message: 'no' })
+      return json(404, { message: 'Not Found' })
+    }) as typeof fetch,
+  })
+
+  it('reads the commit\'s workflow runs (the latest of each) and commit statuses when check runs are refused', async () => {
+    expect(await gh({ actions: 200, statuses: 200 }).checkRuns('acme/board', 'abc')).toEqual([
+      { name: 'ci', status: 'completed', conclusion: 'success', summary: null },
+      { name: 'erc', status: 'in_progress', conclusion: null, summary: null },
+      { name: 'drc', status: 'completed', conclusion: 'success', summary: 'clean' },
+    ])
+  })
+
+  it('uses whichever of the two it may read, and refuses only when both are refused', async () => {
+    expect((await gh({ actions: 403, statuses: 200 }).checkRuns('acme/board', 'abc')).map((c) => c.name)).toEqual(['drc'])
+    await expect(gh({ actions: 403, statuses: 403 }).checkRuns('acme/board', 'abc')).rejects.toMatchObject({ status: 403 })
+  })
+})
