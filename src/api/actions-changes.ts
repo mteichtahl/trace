@@ -55,7 +55,7 @@ import { ActionError, type Context, PROJECT_DB_PATH, Repo, TaskBranch, def, labe
 import { AGENT_WORDS, jobIndex } from './actions-jobs.js'
 import {
   type ChangeDetail, type ChangeFacts, type ChangeSummary, type TraceRule, acceptance, changeSummary, checkState, criteriaNamed, fileKind, jobRequest, jobsByBranch,
-  recommendationOf, requirementIds, summaryBullets, traceChanges, traceJob,
+  recommendationOf, requirementIds, summaryBullets, traceChanges, traceJob, unfinishedWords, verdictOf,
 } from './changes.js'
 import { GitHubError, type GitHubApi, type MergeMethod, type PullDetail, type PullStatus, type PullSummary } from './github.js'
 import { SETTINGS_TTL_MS, cached } from './github-cache.js'
@@ -196,15 +196,19 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   const hold = rule.hold
   const sum = changeSummary({ repo, pull: { ...pull, labels: pull.labels }, job, status, hold, agentWords: AGENT_WORDS })
   const facts = factsOf(pull, status?.checks ?? null, status?.checks_denied ?? false)
+  // the specialist's own word that it is not finished, from its title, summary or the description (src/api/changes.ts)
+  const unfinished = unfinishedWords({ title: pull.title, summary: job.summary, body: pull.body })
+  if (unfinished) facts.unfinished = unfinished
   const checksList = (runs ?? []).map((c) => ({ name: c.name, state: checkState(c), summary: c.summary }))
   const requirements = requirementIds(pull.title, pull.body, ...commits)
   const passed = checksList.filter((c) => c.state === 'passed').map((c) => c.name)
   return {
     ...sum,
+    verdict: verdictOf(facts),
     summary: summaryBullets({ jobSummary: job.summary, body: pull.body, commits }),
     files: files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, kind: fileKind(f.path, f.patch) })),
     checks_list: checksList, requirements,
-    recommendation: recommendationOf(facts, { passed, requirements }),
+    recommendation: recommendationOf(facts, { passed, requirements, from: sum.from }),
     ...acceptance(facts, write),
     base: pull.base, head: { ref: pull.head.ref, sha: pull.head.sha },
   }

@@ -76,7 +76,7 @@ interface ChangeSummary {
   state: 'open' | 'merged' | 'closed'
   mergeable: string       // GitHub's mergeable_state
   checks: { total; passed; failed; running; skipped; failing: string[] } | null
-  verdict: 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked'   // one word for the list's pill
+  verdict: 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked' | 'unfinished'   // one word for the list's pill
 }
 interface ChangeDetail extends ChangeSummary {
   summary: string[]       // what trace did, plain bullets: the job's result summary, else the pull request body's
@@ -95,7 +95,11 @@ interface ChangeDetail extends ChangeSummary {
 
 The recommendation is worked out from facts, never a model: all checks passed and it can merge → accept, naming the
 checks and the requirements; a check failing → ask, naming it; checks running, unreadable or none yet → wait; a
-conflict → none, "trace will bring it up to date". `change.accept` re-reads the status from GitHub (never a kept copy)
+conflict → none, "trace will bring it up to date". The specialist saying its own work is not finished → ask, quoting
+it (verdict `unfinished`): the title's clauses that say so ("incomplete export, not for approval", "WIP"), else the
+plainest sentence of its summary or the description ("not ready for review", "do not merge"). Passing checks say the
+files are sound, not that the work is done. It is a recommendation, not a blocker: the person may still accept, and the
+decision bar then leads with Ask for changes and says accepting takes it as it is. `change.accept` re-reads the status from GitHub (never a kept copy)
 and refuses when the head moved or it is not `may_accept`.
 
 `service-policy.ts`: `changes.list`, `change.get`, `change.diff` are `read`; the other three are not open to

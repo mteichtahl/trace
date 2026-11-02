@@ -17,7 +17,7 @@ import type { ChangeDetail, Part } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export interface DecisionBarProps {
-  change: Pick<ChangeDetail, 'state' | 'may_accept' | 'blockers' | 'title' | 'from'>
+  change: Pick<ChangeDetail, 'state' | 'may_accept' | 'blockers' | 'title' | 'from'> & { verdict?: ChangeDetail['verdict'] }
   part?: Part
   /** the note box's words, carried into Accept and Ask */
   note: string
@@ -34,7 +34,8 @@ export const ASK_MAX = 4000
 export const DISCARD_MAX = 2000
 
 /** The words beside the buttons, for each mode. */
-export function barWords(mode: DecisionMode, c: Pick<ChangeDetail, 'state' | 'blockers' | 'from'>, acceptSays?: string): string {
+export function barWords(mode: DecisionMode, c: Pick<ChangeDetail, 'state' | 'blockers' | 'from'> & { verdict?: ChangeDetail['verdict'] }, acceptSays?: string): string {
+  if (mode === 'ready' && c.verdict === 'unfinished') return `${c.from[0]?.toUpperCase() ?? ''}${c.from.slice(1)} says this is not finished. trace recommends asking for changes; accepting adds it to the design as it is.`
   switch (mode) {
     case 'read-only': return `You are a reviewer on this project, so you can read this change but not decide on it. A contributor accepts it, asks ${c.from} for changes, or discards it.`
     case 'closed': return c.state === 'merged' ? 'This change was accepted into the design.' : 'This change was discarded. Nothing in the design changed.'
@@ -51,6 +52,8 @@ export function DecisionBar({ change, part, note, acceptSays, onAccept, onAsk, o
   const max = confirm === 'ask' ? ASK_MAX : DISCARD_MAX
   const valid = text.trim().length > 0 && text.length <= max
   const decides = mode === 'ready' || mode === 'blocked'
+  // the specialist says it is not finished: asking for changes is the step trace recommends, so it leads
+  const unfinished = change.verdict === 'unfinished'
 
   return (
     <div role="region" aria-label="Your decision" className={cn('sticky bottom-0 z-10 -mx-4 border-t bg-background/95 px-4 py-3 backdrop-blur md:-mx-6 md:px-6 max-md:bottom-16', className)}>
@@ -82,12 +85,12 @@ export function DecisionBar({ change, part, note, acceptSays, onAccept, onAsk, o
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <p className={cn('min-w-0 flex-1 text-sm', mode === 'blocked' ? 'text-foreground' : 'text-muted-foreground')} aria-live="polite">{barWords(mode, change, acceptSays)}</p>
+          <p className={cn('min-w-0 flex-1 text-sm', mode === 'blocked' || unfinished ? 'text-foreground' : 'text-muted-foreground')} aria-live="polite">{barWords(mode, change, acceptSays)}</p>
           {decides && (
             <div className="flex flex-wrap gap-2 max-sm:w-full max-sm:[&>*]:flex-1">
               <Button variant="ghost" onClick={() => open('discard')} disabled={!!busy}>Discard</Button>
-              <Button variant="outline" onClick={() => open('ask')} disabled={!!busy}>Ask for changes</Button>
-              <Button size="lg" onClick={() => onAccept(note.trim())} disabled={mode !== 'ready' || !!busy}>
+              <Button variant={unfinished ? 'default' : 'outline'} size={unfinished ? 'lg' : 'default'} onClick={() => open('ask')} disabled={!!busy}>Ask for changes</Button>
+              <Button variant={unfinished ? 'outline' : 'default'} size={unfinished ? 'default' : 'lg'} onClick={() => onAccept(note.trim())} disabled={mode !== 'ready' || !!busy}>
                 {busy === 'accept' && <Loader2 className="animate-spin" aria-hidden />}
                 Accept into the design
               </Button>

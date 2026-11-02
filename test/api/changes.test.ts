@@ -18,7 +18,7 @@ import { jobIndex } from '../../src/api/actions-jobs.js'
 import { journeyStore } from '../../src/api/action-kit.js'
 import { mergeMethod, neutralise, revisionRequest } from '../../src/api/actions-changes.js'
 import {
-  type ChangeFacts, type TraceRule, CHECKS_DENIED, acceptance, fileKind, jobsByBranch, recommendationOf, requirementIds, summaryBullets, traceChanges, verdictOf,
+  type ChangeFacts, type TraceRule, CHECKS_DENIED, unfinishedWords, acceptance, fileKind, jobsByBranch, recommendationOf, requirementIds, summaryBullets, traceChanges, verdictOf,
 } from '../../src/api/changes.js'
 import { GitHubBudget, GitHubCache } from '../../src/api/github-cache.js'
 import type { JobRow } from '../../src/core/job-index.js'
@@ -314,6 +314,30 @@ beforeEach(() => {
   github.add(4, 'claude/task-wip', { mergeable: 'blocked', checks: { total: 2, passed: 1, failed: 0, running: 1, skipped: 0, failing: [] } })
 })
 
+describe('a specialist that says its work is not finished', () => {
+  it('finds its own words: the title\'s clauses that say so, else the plainest sentence of its summary or description', () => {
+    expect(unfinishedWords({ title: 'trace: board renders (top, bottom) from 2648760, incomplete export, not for approval' })).toBe('incomplete export, not for approval')
+    expect(unfinishedWords({ title: 'WIP: power stage' })).toBe('WIP')
+    expect(unfinishedWords({ title: 'trace: requirements R1 to R4', summary: 'Extracted R1 to R4.\nNot ready for review: R3 needs a unit.' })).toBe('Not ready for review: R3 needs a unit.')
+    expect(unfinishedWords({ title: 'trace: layout', body: '## Status\n- Do not merge until the DRC rules land.' })).toBe('Do not merge until the DRC rules land.')
+    // "incomplete" outside the title is usually about something else
+    expect(unfinishedWords({ title: 'trace: fix the netlist', body: 'Fixes an incomplete netlist export.' })).toBeNull()
+    expect(unfinishedWords({ title: 'trace: requirements R1 to R4', summary: 'All done; every criterion measurable.' })).toBeNull()
+  })
+
+  it('is never "ready": trace recommends asking for changes, quoting it, and the person still decides', () => {
+    const f = facts({ unfinished: 'incomplete export, not for approval' })
+    expect(verdictOf(f)).toBe('unfinished')
+    expect(recommendationOf(f, { from: 'the Rendering specialist' })).toEqual({
+      verdict: 'ask', why: 'The Rendering specialist says this work is not finished: "incomplete export, not for approval". Ask for changes so it finishes before you accept it, or discard it.',
+    })
+    // a recommendation, not a rule: accepting is still the person's call
+    expect(acceptance(f, true)).toEqual({ may_accept: true, blockers: [] })
+    // a failing check is still said first: it is the more specific thing to fix
+    expect(verdictOf(facts({ unfinished: 'WIP', checks: checks({ failed: 1, failing: ['ERC'] }) }))).toBe('failing')
+  })
+})
+
 describe('changes.list and change.get', () => {
   it('lists trace\'s open changes oldest first, never a person\'s own, each with its verdict and who made it', async () => {
     const r = await run(USER, 'changes.list', { repo: REPO })
@@ -337,6 +361,16 @@ describe('changes.list and change.get', () => {
     expect(await run(REVIEWER, 'change.get', { repo: REPO, number: 1 })).toMatchObject({ may_accept: false, blockers: ['Only a contributor on this project can accept a change.'] })
     expect(await run(USER, 'change.get', { repo: REPO, number: 2 })).toMatchObject({ recommendation: { verdict: 'ask' }, may_accept: false })
     await expect(run(USER, 'change.get', { repo: REPO, number: 3 })).rejects.toThrow(/no change #3 from trace/)
+  })
+
+  it('a change its specialist calls unfinished is listed as that, and its page recommends asking for changes', async () => {
+    github.add(1, 'claude/task-reqs', { title: 'trace: board renders, incomplete export, not for approval' })
+    const listed = ((await run(USER, 'changes.list', { repo: REPO })).changes as Record<string, unknown>[]).find((c) => c.number === 1)
+    expect(listed?.verdict).toBe('unfinished')
+    expect(await run(USER, 'change.get', { repo: REPO, number: 1 })).toMatchObject({
+      verdict: 'unfinished', may_accept: true,
+      recommendation: { verdict: 'ask', why: expect.stringMatching(/^The Verification specialist says this work is not finished: "incomplete export, not for approval"/) },
+    })
   })
 
   it('one file\'s diff, with before and after refs (an added file has no before)', async () => {
