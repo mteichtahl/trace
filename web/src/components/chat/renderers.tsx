@@ -17,6 +17,7 @@ import { useHumanInTheLoop, useRenderTool } from '@copilotkit/react-core/v2'
 import { createContext, useContext, useState } from 'react'
 import { z } from 'zod'
 import { DecisionCard, type Decision } from '@/components/decision-card'
+import { agentBlocked, useAgentSetup } from '@/components/project/agent-setup'
 import { call } from '@/lib/api'
 import { usePrefs } from '@/lib/prefs'
 import {
@@ -112,6 +113,8 @@ type TaskArgs = z.infer<typeof StartTask>
 export function StartTaskCard({ args, status, respond, result, readOnly }: { args: Partial<TaskArgs>; status: string; respond?: (r: unknown) => unknown; result?: string; readOnly?: boolean }) {
   const [busy, setBusy] = useState(false)
   const live = useContext(LiveCall)
+  // what the notice on the screen already knows of the project's agent (nothing is asked from here)
+  const blocked = agentBlocked(useAgentSetup(args.repo, { fetch: false }).data)
   if (status === 'complete') return <TaskConfirmCard task={args} answer={parseResult<TaskAnswer>(result)} />
   if (!live && status !== 'executing') return <TaskConfirmCard task={args} answer={{ confirmed: false, reason: 'not confirmed' }} />
   if (status !== 'executing' || !respond) return <TaskConfirmCard task={args} readOnly={readOnly} busy />
@@ -127,5 +130,5 @@ export function StartTaskCard({ args, status, respond, result, readOnly }: { arg
       setBusy(false)
     }
   }
-  return <TaskConfirmCard task={args} busy={busy} readOnly={readOnly} onConfirm={() => void confirm()} onCancel={() => respond({ confirmed: false, reason: 'cancelled' } satisfies TaskAnswer)} />
+  return <TaskConfirmCard task={args} busy={busy} readOnly={readOnly} blocked={blocked} onConfirm={() => void confirm()} onCancel={() => respond({ confirmed: false, reason: 'cancelled' } satisfies TaskAnswer)} />
 }

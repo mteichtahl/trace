@@ -1,6 +1,6 @@
 /**
  * Markdown that is still streaming in: close what is open so half-finished text renders steadily. `remend` closes
- * inline formatting (bold, italics, inline code, links, inline maths); here we also close an open code fence or
+ * inline formatting (bold, italics, inline code, links; never a single $, which is literal text); here we also close an open code fence or
  * maths block and hold back a table row (or separator) that has not finished arriving, so a table never flickers
  * between a paragraph and a table.
  */

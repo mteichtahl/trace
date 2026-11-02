@@ -64,6 +64,8 @@ export interface Actions {
   assignments: { args: { repo?: string }; result: { sub: string; email?: string; repo: string; part?: Part }[] }
   // new (docs/web-build.md)
   'project.members': { args: Repo; result: Member[] }
+  /** whether the project's own agent is set up yet (a new project's arrives with the next installation update) */
+  'project.agent': { args: Repo; result: import('./types').AgentSetup }
   'projects.create': {
     args: {
       repo: string; name: string; description?: string; icon?: string; start?: 'idea' | 'import'; template: 'board' | 'fpga' | 'firmware' | 'mixed'

@@ -141,6 +141,7 @@ export function remoteJobs(o: RemoteJobsOptions): JobsApi {
       const h = parseHandle(handle)
       return h ? byHash.get(h.hash) ?? null : null
     },
+    hasAgent: (repository) => o.runtimes.has(projectSlug(repository)),
     async startJob({ attempt, ...payload }) {
       const slug = projectSlug(payload.repository)
       // a resumed task runs on the paused one's branch: a session of its own (branch is part of the session's hash);

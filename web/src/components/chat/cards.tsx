@@ -115,8 +115,10 @@ const AGENT_NAMES: Record<string, string> = { verify: 'Verification', impl: 'Imp
  * trace offers to start work: the exact request and agent, and nothing starts until the person presses Confirm (then
  * `onConfirm` calls `task` as them). Done: the run, or what happened instead.
  */
-export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readOnly }: {
+export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readOnly, blocked }: {
   task: Partial<TaskRequest>
+  /** why Confirm waits (the project's agent is not set up yet), or null */
+  blocked?: string | null
   answer?: TaskAnswer
   onConfirm?: () => void
   onCancel?: () => void
@@ -141,12 +143,15 @@ export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readO
       ) : readOnly ? (
         <p className="mt-2 text-xs text-muted-foreground">Work can't be started from this conversation.</p>
       ) : (
-        <div className="mt-3 flex gap-2">
-          <button type="button" className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-60" disabled={busy || !task.repo || !task.request} onClick={onConfirm}>
-            {busy ? <Loader2 className="inline size-3 animate-spin" aria-hidden /> : null} Confirm and start
-          </button>
-          <button type="button" className="rounded-md border px-3 py-1.5 text-xs" disabled={busy} onClick={onCancel}>Cancel</button>
-        </div>
+        <>
+          <div className="mt-3 flex gap-2">
+            <button type="button" className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-60" disabled={busy || !task.repo || !task.request || !!blocked} aria-describedby={blocked ? 'task-blocked' : undefined} onClick={onConfirm}>
+              {busy ? <Loader2 className="inline size-3 animate-spin" aria-hidden /> : null} Confirm and start
+            </button>
+            <button type="button" className="rounded-md border px-3 py-1.5 text-xs" disabled={busy} onClick={onCancel}>Cancel</button>
+          </div>
+          {blocked && <p id="task-blocked" className="mt-1.5 text-xs text-muted-foreground">{blocked}</p>}
+        </>
       )}
     </Frame>
   )

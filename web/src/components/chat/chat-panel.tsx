@@ -1,7 +1,8 @@
 /**
  * Ask trace: the chat panel docked on the right (desktop, 380–560 px, resizable, open across routes), sliding over
  * the content on tablets, and the full-screen Ask tab on phones. Header: history and close; voice controls; the
- * context strip (what trace will look at, as removable chips). Body: the conversation, or the history list.
+ * context strip (what trace will look at, as removable chips). Body: the conversation, or the history list. While the
+ * project's agent is being set up, a short notice above the conversation says that answers cannot be saved yet.
  */
 import { useQuery } from '@tanstack/react-query'
 import { History, Plus, Search, Sparkles, X } from 'lucide-react'
@@ -11,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { projectName } from '@/lib/api'
 import { ago } from '@/lib/format'
 import { useProjects } from '@/lib/queries'
+import { AgentSetupNotice } from '@/components/project/agent-setup'
 import { cn } from '@/lib/utils'
 import { AGENT_ID } from './agent'
 import { openPanel, setPanelWidth, setThread, showHistory, usePanel, useThreads } from './chat-state'
@@ -120,6 +122,7 @@ export function AskTrace({ onClose, className }: { onClose?: () => void; classNa
         <ThreadList repo={repo} />
       ) : (
         <>
+          {repo && <AgentSetupNotice repo={repo} compact className="mx-3 mt-3" />}
           <ChatView key={`${repo}:${thread ?? 'new'}`} agentId={AGENT_ID} repo={repo} threadId={thread} intro={<p className="text-sm text-muted-foreground">Ask anything about {repo ? projectName(repo) : 'your projects'}. trace sees the screen you are on.</p>} />
           <div className="px-3 pb-2">
             <PlayerBar />

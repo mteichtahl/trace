@@ -84,6 +84,11 @@ export interface JobsApi {
   /** One tool call on the project's own worker runtime (invocation kind `tool`): its result, or throws ActionError.
    * Absent: this installation runs no tools for the API. */
   runTool?(payload: Omit<ToolJob, 'trace'>): Promise<unknown>
+  /**
+   * Whether this installation has the project's own worker runtime (its agent) yet: a project created in the web app
+   * gets it only with the next update of the installation (project.agent). Absent: every project is taken to have one.
+   */
+  hasAgent?(repository: string): boolean
 }
 
 export interface JobView { id: string; kind: string; repository?: string | undefined; state: string; [k: string]: unknown }

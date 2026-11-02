@@ -2,7 +2,8 @@
  * The markdown renderer for every message (lazy: it brings react-markdown, KaTeX and their plugins in its own chunk).
  *
  * - GitHub-flavoured markdown: tables scroll sideways in their own frame; task lists; images.
- * - Formulas with KaTeX ($…$ and $$…$$).
+ * - Formulas with KaTeX, only between double dollars ($$…$$, inline or on their own lines). A single $ is always
+ *   literal text, so currency ("US$5 … US$50") never becomes a formula.
  * - Code blocks with Shiki, a language label and Copy; ```mermaid as a picture with Show source.
  * - Links into the record (/p/…, or trace:<kind>/<id>) become chips that open in place; links out of trace show
  *   their domain.
@@ -20,6 +21,9 @@ import remarkMath from 'remark-math'
 import { CodeBlock } from './code-block'
 import { Mermaid } from './mermaid'
 import { closeStreaming } from './streaming'
+
+/** Maths only between $$…$$: a single $ is a currency sign far more often than a formula. */
+export const remarkMathOptions = { singleDollarTextMath: false } as const
 
 type Node = { type: string; value?: string; children?: Node[] }
 
@@ -107,7 +111,7 @@ export default function MarkdownImpl({ text, streaming = false }: { text: string
   const source = streaming ? closeStreaming(text) : text
   return (
     <div className="prose-trace text-sm leading-relaxed [&_h1]:mb-2 [&_h1]:mt-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-3 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:font-semibold [&_li]:my-0.5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_p:first-child]:mt-0 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_.contains-task-list]:list-none [&_.contains-task-list]:pl-1 [&_.katex-display]:overflow-x-auto">
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath, remarkHtmlAsText]} rehypePlugins={[rehypeKatex]} components={components(streaming)} skipHtml={false}>
+      <ReactMarkdown remarkPlugins={[remarkGfm, [remarkMath, remarkMathOptions], remarkHtmlAsText]} rehypePlugins={[rehypeKatex]} components={components(streaming)} skipHtml={false}>
         {source}
       </ReactMarkdown>
     </div>
