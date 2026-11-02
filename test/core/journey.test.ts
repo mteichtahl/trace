@@ -130,6 +130,26 @@ describe('the journey record', () => {
     expect(rec().decisions[0]?.summary).toMatch(/not the recommended A, because B is in stock/)
   })
 
+  it('answering "Approve …" to a question that names a person\'s criterion meets it, with the question as evidence', () => {
+    for (const g of ['define', 'architect', 'capture', 'prove']) { meetAll(g); openAll(g); signGate(db, g, signer) }
+    const renders = (): string | undefined => rec().criteria.find((c) => c.id === 'layout.renders')?.status
+    // a criterion trace owns is never met this way, nor one another stage owns, nor by an answer that does not approve
+    const declined = askQuestion(db, { askedBy: 'the Implementation specialist', text: 'Do you approve the board renders (layout.renders)?', blocks: 'layout.renders', options: [
+      { id: 'a', label: 'Approve the renders', recommended: true }, { id: 'b', label: 'Re-render first with a J1 3D model' },
+    ], sources: [{ kind: 'run', ref: 'render-1' }] })
+    answerQuestion(db, declined, signer, { option: 'b', reason: 'the connector should show' })
+    expect(renders()).toBe('not_met')
+    const q = askQuestion(db, { askedBy: 'the Implementation specialist', text: 'Do you approve the board renders for layout.renders? Also mentions layout.routed and define.accepted.', blocks: 'layout.renders', options: [
+      { id: 'a', label: 'Approve the renders', recommended: true }, { id: 'b', label: 'Send back with changes' },
+    ], sources: [{ kind: 'run', ref: 'render-2' }] })
+    answerQuestion(db, q, signer, { option: 'a' })
+    const c = rec().criteria.find((x) => x.id === 'layout.renders')
+    expect(c).toMatchObject({ status: 'met', checkedBy: ADMIN.label })
+    expect(c?.evidence).toEqual([{ kind: 'question', ref: q, label: `Approve the renders, answered by ${ADMIN.label}` }, { kind: 'run', ref: 'render-2' }])
+    expect(rec().criteria.find((x) => x.id === 'layout.routed')?.status).toBe('not_met')
+    expect(rec().decisions.some((d) => d.kind === 'criterion.approved' && d.ref === 'layout.renders')).toBe(true)
+  })
+
   it('waivers: reason, risk, severity and scope; safety must be caught somewhere', () => {
     const base = { target: { kind: 'criterion' as const, id: 'define.measurable' }, reason: 'The range test needs the bench.', risk: 'Range could fall short.', severity: 'degraded' as const, caught_where: 'Bring up', scope: 'this revision only' }
     expect(() => addWaiver(db, { ...base, reason: 'not needed' }, signer)).toThrow(/not needed/)

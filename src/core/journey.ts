@@ -1343,6 +1343,7 @@ export function answerQuestion(db: DatabaseSync, id: string, by: Signer, a: { op
   const reason = a.reason?.trim() ?? ''
   if (differs && recommended && reason.length < 3) throw new JourneyError(`trace recommended "${recommended.label}". Say in a line why you chose otherwise.`)
   const t = now()
+  const approved = opt ? approvedByAnswer(r, q, opt.label) : []
   transaction(db, () => {
     db.prepare('UPDATE questions SET answer=?, option_id=?, answer_reason=?, answered_by=?, answered_by_hash=?, answered_at=?, updated=? WHERE id=?')
       .run(text, opt?.id ?? null, reason || null, by.label, by.hash, t, t, id)
@@ -1350,9 +1351,28 @@ export function answerQuestion(db: DatabaseSync, id: string, by: Signer, a: { op
       kind: 'question.answered', stage: q.stage, ref: id, by: by.label,
       summary: `${q.askedBy} asked: ${q.text} Answered: ${text}${differs && recommended ? ` (not the recommended ${recommended.label}, because ${reason})` : ''}.`,
     })
+    // the person's answer is their approval: the criterion they approved is met, with the question and what it showed
+    for (const c of approved) {
+      setCriterion(db, c.id, 'met', [{ kind: 'question', ref: id, label: `${text}, answered by ${by.label}` }, ...q.sources], by.label)
+      decide(db, { kind: 'criterion.approved', stage: q.stage, ref: c.id, by: by.label, summary: `${c.text} Approved by ${by.label} in answer to question ${id}.` })
+    }
   })
   const after = withFacts(need(db), o.facts).questions.find((x) => x.id === id) as QuestionRow
   return questionView(after, { hash: by.hash, label: by.label, also: by.also, admin: false, part: 'contributor' })
+}
+
+/**
+ * The criteria a person approves by answering a question with an option that approves ("Approve the renders"): those
+ * the question names by id (in its text or what it blocks) that a person owns, in the gates of the question's stage,
+ * and are not met yet. Agents cannot record a person's criterion (journey.check refuses it), so an agent asks, and
+ * the answer is the person's own act. src/api/changes.ts approvalsGiven reads the same answers for change pages.
+ */
+export function approvedByAnswer(r: JourneyRecord, q: Pick<QuestionRow, 'text' | 'blocks' | 'stage'>, label: string): CriterionRow[] {
+  if (!/^\s*approve\b/i.test(label)) return []
+  const named = new Set([...`${q.text} ${q.blocks ?? ''}`.matchAll(/\b[a-z]+(?:\.[a-z]+){1,2}\b/g)].map((m) => m[0]))
+  const stage = q.stage ?? r.journey.currentStage
+  const gates = new Set(r.gates.filter((g) => g.stage === stage).map((g) => g.id))
+  return r.criteria.filter((c) => named.has(c.id) && c.owner === 'person' && c.status !== 'met' && gates.has(c.gate))
 }
 
 export interface WaiverInput {
