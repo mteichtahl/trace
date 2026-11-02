@@ -8,8 +8,9 @@
  *                  electrical rule check's findings pinned on it, and the requirements it serves
  *   Pin plan       each pin's function, peripheral, net and status from the pin plan check against the schematic's
  *                  netlist, and which parts' plans a person agreed (stale when the plan changed since)
- *   Board          the board drawn live from its .kicad_pcb with KiCanvas: Top and Bottom (turned over, far-side layers
- *                  hidden) to look underneath, layers, and the design rule check's findings pinned on it
+ *   Board          the board from its .kicad_pcb, in 3D by default (src/components/board3d: lifelike, turn it, turn it
+ *                  over, tap a part, try a finish) or as KiCanvas's flat drawing (Top and Bottom, layers) for exact
+ *                  checking; the person's last choice is remembered. The design rule check's findings are pinned on both
  *
  * design.get's notes say what the record still does not hold; the tab shows them rather than drawing made-up content.
  */
@@ -40,6 +41,8 @@ import { ViewerLoading } from '@/components/files/viewers/common'
 // KiCanvas draws the KiCad files themselves, so the sheets and the board show as soon as they are in the repository
 // (no export run needed), and stay current with every push. Loaded on first use.
 const KiCanvasView = lazy(() => import('@/components/files/viewers/kicad').then((m) => ({ default: m.KiCanvasView })))
+// the 3D board (three.js), also loaded on first use
+const Board3D = lazy(() => import('@/components/board3d/board-3d').then((m) => ({ default: m.Board3D })))
 
 export const Route = createFileRoute('/_app/p/$id/design')({
   staticData: { crumb: 'Design' },
@@ -200,7 +203,7 @@ function Design() {
           {data.board ? (
             <div className="space-y-4">
               {data.board.file ? (
-                <LiveKiCad repo={repo} path={data.board.file} board title="Board" subtitle={[data.board.size, 'switch Top and Bottom to look underneath'].filter(Boolean).join(' · ')} findings={data.board.findings} onSelect={setSelected} onAsk={() => openPanel(true)} />
+                <LiveBoard repo={repo} path={data.board.file} size={data.board.size} findings={data.board.findings} selected={selected} onSelect={setSelected} onAsk={() => openPanel(true)} />
               ) : (
                 <FindingsPicture repo={repo} title="Board · top" subtitle={data.board.size} path={data.board.path} findings={data.board.findings} selected={selected} onSelect={setSelected} height={420} onAsk={() => openPanel(true)} layers={(data.board.layers ?? []).map((l) => ({ id: l, label: l, on: layers[l] ?? true }))} onLayer={(l, on) => setLayers((st) => ({ ...st, [l]: on }))} emptyText="No board yet: trace places the parts after Board setup." />
               )}
@@ -225,6 +228,59 @@ function BlockDetail({ block: b }: { block: Block }) {
       <dt className="text-muted-foreground">Serves</dt><dd className="font-mono">{b.serves.join(', ') || 'No requirement: map one or remove the block'}</dd>
       <dt className="col-span-2 mt-2 text-xs text-muted-foreground">Price breaks and alternatives come from the parts search (Knowledge › Datasheets and parts).</dt>
     </dl>
+  )
+}
+
+const BOARD_VIEW = 'trace.board.view'
+type BoardView = '3d' | 'flat'
+
+/** 3D or the flat drawing: 3D unless the person last chose the flat drawing (kept in this browser). */
+function useBoardView(): [BoardView, (v: BoardView) => void] {
+  const [v, setV] = useState<BoardView>(() => {
+    try { return localStorage.getItem(BOARD_VIEW) === 'flat' ? 'flat' : '3d' } catch { return '3d' }
+  })
+  return [v, (next) => {
+    setV(next)
+    try { localStorage.setItem(BOARD_VIEW, next) } catch { /* private window: remembered for this visit only */ }
+  }]
+}
+
+/** The board from its file in the repository: in 3D (default) or KiCanvas's flat drawing, findings pinned on either. */
+function LiveBoard({ repo, path, size, findings, selected, onSelect, onAsk }: { repo: string; path: string; size?: string | undefined; findings: PictureFinding[]; selected: string | null; onSelect: (id: string | null) => void; onAsk: () => void }) {
+  const q = useFileText({ repo, path })
+  const [view, setView] = useBoardView()
+  const pinned = findings.flatMap((f) => toFileFinding(f, true))
+  return (
+    <section className="overflow-hidden rounded-xl border bg-card" aria-label="Board">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-2.5">
+        <h3 className="text-sm font-semibold">Board</h3>
+        <span className="text-xs text-muted-foreground">{[size, view === '3d' ? 'Turn over to look underneath' : 'switch Top and Bottom to look underneath'].filter(Boolean).join(' · ')}</span>
+        <div className="ml-auto flex items-center gap-1">
+          <div role="group" aria-label="How to show the board" className="flex overflow-hidden rounded-md border text-xs">
+            {(['3d', 'flat'] as const).map((v) => (
+              <button key={v} type="button" aria-pressed={view === v} onClick={() => setView(v)} className={cn('px-2.5 py-1', v === 'flat' && 'border-l', view === v ? 'bg-accent font-medium' : 'hover:bg-accent/60')}>
+                {v === '3d' ? '3D' : 'Flat drawing'}
+              </button>
+            ))}
+          </div>
+          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={onAsk}>Ask about this</Button>
+        </div>
+      </header>
+      {q.isError ? (
+        <div className="p-4"><QueryError error={q.error} what="the board file" onRetry={() => void q.refetch()} /></div>
+      ) : q.data === undefined ? (
+        <ViewerLoading size="page" label={`Reading ${path.split('/').pop()}`} />
+      ) : view === '3d' ? (
+        <Suspense fallback={<ViewerLoading size="page" label="Loading the 3D view" />}>
+          <Board3D text={q.data} findings={pinned} selected={selected} onSelectFinding={onSelect} />
+        </Suspense>
+      ) : (
+        <Suspense fallback={<ViewerLoading size="page" />}>
+          <KiCanvasView text={q.data} name={path.split('/').pop() ?? path} findings={pinned} size="page" board className="h-[clamp(360px,65vh,720px)]" onSelectFinding={onSelect} />
+        </Suspense>
+      )}
+      {findings.length > pinned.length && <p className="border-t px-4 py-2 text-xs text-muted-foreground">{findings.length - pinned.length} finding{findings.length - pinned.length === 1 ? ' has' : 's have'} no position on the board; see the list below.</p>}
+    </section>
   )
 }
 
