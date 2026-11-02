@@ -13,7 +13,9 @@ import { copyFileSync, existsSync, readFileSync, statSync, writeFileSync } from 
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import { ToolError } from '../../core/registry.js'
 import { findRoot } from '../../core/store.js'
-import { runCli } from '../kicad/project.js'
+import { type ModelDeps, defaultCacheDir, httpGet, stageModels } from '../kicad/models3d.js'
+import { kicadCliVersion, runCli } from '../kicad/project.js'
+import { packBase } from '../kicad/remote.js'
 
 export const MODEL_EXTS = ['.glb', '.gltf', '.wrl', '.vrml', '.x3d', '.stl', '.obj', '.ply', '.fbx', '.step', '.stp'] as const
 export type BoardFormat = 'glb' | 'wrl'
@@ -29,19 +31,30 @@ export interface Prepared {
   zUp: boolean
   /** VRML from a STEP wrapper: the script removes KiCad's stand-in board */
   dropKicadBoard: boolean
+  /** in words, for the render's notes (a board's component models that could not be had) */
+  note?: string
 }
 
-/** Export a board's 3D model into `dir`. */
-export async function exportBoard(pcb: string, dir: string, format: BoardFormat): Promise<Prepared> {
-  if (format === 'glb') {
-    const out = join(dir, 'board.glb')
-    await runCli(['pcb', 'export', 'glb', '--subst-models', '--include-tracks', '--include-pads', '--include-zones',
-      '--include-silkscreen', '--include-soldermask', '-f', '-o', out, pcb], { timeoutMs: 900_000 })
-    return { path: out, format: 'glb', extra: {}, zUp: true, dropKicadBoard: false }
+/**
+ * Export a board's 3D model into `dir`, with the component models it names from KiCad's library fetched for it first
+ * (../kicad/models3d.ts: the images do not carry the library). `models` is for tests.
+ */
+export async function exportBoard(pcb: string, dir: string, format: BoardFormat, models?: ModelDeps): Promise<Prepared> {
+  const staged = await stageModels(pcb, packBase(pcb), format, models ?? { get: httpGet, cacheDir: defaultCacheDir(), version: await kicadCliVersion() })
+  try {
+    const note = staged.note ? { note: staged.note } : {}
+    if (format === 'glb') {
+      const out = join(dir, 'board.glb')
+      await runCli(['pcb', 'export', 'glb', '--subst-models', '--include-tracks', '--include-pads', '--include-zones',
+        '--include-silkscreen', '--include-soldermask', '-f', '-o', out, pcb], { timeoutMs: 900_000, env: staged.env })
+      return { path: out, format: 'glb', extra: {}, zUp: true, dropKicadBoard: false, ...note }
+    }
+    const out = join(dir, 'board.wrl')
+    await runCli(['pcb', 'export', 'vrml', '--units', 'm', '-f', '-o', out, pcb], { timeoutMs: 900_000, env: staged.env })
+    return { path: out, format: 'wrl', extra: {}, zUp: true, dropKicadBoard: false, ...note }
+  } finally {
+    staged.remove()
   }
-  const out = join(dir, 'board.wrl')
-  await runCli(['pcb', 'export', 'vrml', '--units', 'm', '-f', '-o', out, pcb], { timeoutMs: 900_000 })
-  return { path: out, format: 'wrl', extra: {}, zUp: true, dropKicadBoard: false }
 }
 
 /** A STEP tessellated through kicad-cli (see the module note). */
