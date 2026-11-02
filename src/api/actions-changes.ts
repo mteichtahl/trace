@@ -47,21 +47,43 @@ import { z } from 'zod'
 import { isAdmin, standing } from '../core/access.js'
 import { readSettings, resolve } from '../core/config.js'
 import { type JobRow, loadJobs } from '../core/job-index.js'
-import { STAGE_NAMES, decide, loadJourney } from '../core/journey.js'
+import { STAGE_NAMES, decide, loadJourney, mergeAgentFacts } from '../core/journey.js'
 import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { fence } from '../agents/specialist.js'
 import { Composer, NO_LAYERS } from '../prompts/resolve.js'
-import { ActionError, type Context, PROJECT_DB_PATH, Repo, TaskBranch, def, label, tempDb, writeJourney } from './action-kit.js'
+import { ActionError, type Context, PROJECT_DB_PATH, Repo, TaskBranch, agentFacts, def, label, tempDb, withJourneyDb, writeJourney } from './action-kit.js'
 import { AGENT_WORDS, jobIndex } from './actions-jobs.js'
 import {
-  type ChangeDetail, type ChangeFacts, type ChangeSummary, type TraceRule, acceptance, changeSummary, checkState, criteriaNamed, fileKind, jobRequest, jobsByBranch,
-  recommendationOf, requirementIds, summaryBullets, traceChanges, traceJob, unfinishedWords, verdictOf,
+  type ChangeDetail, type ChangeFacts, type ChangeSummary, type TraceRule, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, fileKind, jobRequest, jobsByBranch,
+  recommendationOf, requirementIds, settleUnfinished, summaryBullets, traceChanges, traceJob, unfinishedWords, verdictOf,
 } from './changes.js'
 import { GitHubError, type GitHubApi, type MergeMethod, type PullDetail, type PullStatus, type PullSummary } from './github.js'
 import { SETTINGS_TTL_MS, cached } from './github-cache.js'
 
 /** At most this many open changes get their status read (two GitHub calls each) in one list or journey. */
 export const MAX_STATUS = 5
+
+/**
+ * How long one change's status and checks are kept for its review page: short, because GitHub tells nothing when it
+ * finishes working out whether a change can merge (after another change merged), so the page looks again soon and must
+ * not be answered from a copy made before.
+ */
+export const DETAIL_STATUS_TTL_MS = 4_000
+
+/**
+ * The gate criteria a person has approved in this project (src/api/changes.ts approvalsGiven), with the agents' facts
+ * merged in. A project without a journey, or a journey trace cannot read now: none (a change that waited on an
+ * approval keeps waiting, the safe side).
+ */
+export async function projectApprovals(ctx: Context, repo: string): Promise<Set<string>> {
+  try {
+    const [r, facts] = await Promise.all([withJourneyDb(ctx, repo, (db) => loadJourney(db)), agentFacts(ctx, repo).catch(() => null)])
+    if (!r) return new Set()
+    return approvalsGiven(facts ? mergeAgentFacts(r, facts) : r)
+  } catch {
+    return new Set()
+  }
+}
 
 const Number_ = z.number().int().min(1).max(10_000_000)
 const ChangeArgs = Repo.extend({ number: Number_ })
@@ -167,9 +189,12 @@ export async function openChanges(ctx: Context, repo: string, o: { max?: number 
   const gh = await ctx.deps.github()
   const { changes: mine, rule } = await tracePulls(ctx, repo)
   const max = o.max ?? MAX_STATUS
-  const status = await Promise.all(mine.map(({ pull }, i) => (i < max ? pullStatus(ctx, gh, repo, pull.number, pull.sha).catch(() => null) : Promise.resolve(null))))
+  const [status, given] = await Promise.all([
+    Promise.all(mine.map(({ pull }, i) => (i < max ? pullStatus(ctx, gh, repo, pull.number, pull.sha).catch(() => null) : Promise.resolve(null)))),
+    mine.length ? projectApprovals(ctx, repo) : Promise.resolve(new Set<string>()),
+  ])
   return mine.map(({ pull, job }, i) => ({
-    change: changeSummary({ repo, pull, job, status: status[i] ?? null, hold: rule.hold, agentWords: AGENT_WORDS }),
+    change: changeSummary({ repo, pull, job, status: status[i] ?? null, hold: rule.hold, agentWords: AGENT_WORDS, given }),
     criteria: criteriaNamed(jobRequest(job), job.title),
   }))
 }
@@ -187,24 +212,28 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   const sha = pull.head.sha
   const keep = o.fresh ? undefined : ctx.deps.githubCache
   // everything else is read in parallel; a part GitHub will not give (a token that cannot read checks) is left out
-  const [status, files, commits, runs, write] = await Promise.all([
-    cached(keep, repo, `status:${number}:${sha}`, () => gh.pullStatus(repo, number)),
+  const [status, files, commits, runs, write, given] = await Promise.all([
+    cached(keep, repo, `status:${number}:${sha}`, () => gh.pullStatus(repo, number), DETAIL_STATUS_TTL_MS),
     cached(ctx.deps.githubCache, repo, `files:${number}:${sha}`, () => gh.pullFiles(repo, number)).catch(() => []),
     cached(ctx.deps.githubCache, repo, `commits:${number}:${sha}`, () => gh.pullCommits(repo, number)).catch(() => []),
-    cached(keep, repo, `runs:${sha}`, () => gh.checkRuns(repo, sha)).catch(() => null), writes(ctx, repo),
+    cached(keep, repo, `runs:${sha}`, () => gh.checkRuns(repo, sha), DETAIL_STATUS_TTL_MS).catch(() => null), writes(ctx, repo),
+    projectApprovals(ctx, repo),
   ])
   const hold = rule.hold
-  const sum = changeSummary({ repo, pull: { ...pull, labels: pull.labels }, job, status, hold, agentWords: AGENT_WORDS })
+  const sum = changeSummary({ repo, pull: { ...pull, labels: pull.labels }, job, status, hold, agentWords: AGENT_WORDS, given })
   const facts = factsOf(pull, status?.checks ?? null, status?.checks_denied ?? false)
   // the specialist's own word that it is not finished, from its title, summary or the description (src/api/changes.ts)
   const unfinished = unfinishedWords({ title: pull.title, summary: job.summary, body: pull.body })
   if (unfinished) facts.unfinished = unfinished
+  // it waited on a person's approval: once given, it is finished (src/api/changes.ts settleUnfinished)
+  settleUnfinished(facts, { title: pull.title, summary: job.summary, body: pull.body }, given)
   const checksList = (runs ?? []).map((c) => ({ name: c.name, state: checkState(c), summary: c.summary }))
   const requirements = requirementIds(pull.title, pull.body, ...commits)
   const passed = checksList.filter((c) => c.state === 'passed').map((c) => c.name)
   return {
     ...sum,
     verdict: verdictOf(facts),
+    ...(facts.awaiting ? { awaiting: facts.awaiting } : {}),
     summary: summaryBullets({ jobSummary: job.summary, body: pull.body, commits }),
     files: files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, kind: fileKind(f.path, f.patch) })),
     checks_list: checksList, requirements,

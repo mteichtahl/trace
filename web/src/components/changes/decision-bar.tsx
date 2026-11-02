@@ -17,12 +17,14 @@ import type { ChangeDetail, Part } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export interface DecisionBarProps {
-  change: Pick<ChangeDetail, 'state' | 'may_accept' | 'blockers' | 'title' | 'from'> & { verdict?: ChangeDetail['verdict'] }
+  change: Pick<ChangeDetail, 'state' | 'may_accept' | 'blockers' | 'title' | 'from'> & { verdict?: ChangeDetail['verdict']; awaiting?: string[] | undefined }
   part?: Part
   /** the note box's words, carried into Accept and Ask */
   note: string
   /** "Accepting adds it to the design and moves Capture to step 4." */
   acceptSays?: string
+  /** "next look in 4 s": when trace looks at it again, while it waits on GitHub */
+  nextLook?: string | null
   onAccept: (note: string) => void
   onAsk: (note: string) => void
   onDiscard: (reason: string) => void
@@ -34,7 +36,10 @@ export const ASK_MAX = 4000
 export const DISCARD_MAX = 2000
 
 /** The words beside the buttons, for each mode. */
-export function barWords(mode: DecisionMode, c: Pick<ChangeDetail, 'state' | 'blockers' | 'from'> & { verdict?: ChangeDetail['verdict'] }, acceptSays?: string): string {
+export function barWords(mode: DecisionMode, c: Pick<ChangeDetail, 'state' | 'blockers' | 'from'> & { verdict?: ChangeDetail['verdict']; awaiting?: string[] | undefined }, acceptSays?: string): string {
+  const who = `${c.from[0]?.toUpperCase() ?? ''}${c.from.slice(1)}`
+  // it waits on a person's approval, not on more work: say what to approve; it updates by itself once approved
+  if (mode === 'ready' && c.verdict === 'unfinished' && c.awaiting?.length) return `${who} says this waits for ${c.awaiting.join(' and ')} to be approved. Once it is, this updates by itself.`
   if (mode === 'ready' && c.verdict === 'unfinished') return `${c.from[0]?.toUpperCase() ?? ''}${c.from.slice(1)} says this is not finished. trace recommends asking for changes; accepting adds it to the design as it is.`
   switch (mode) {
     case 'read-only': return `You are a reviewer on this project, so you can read this change but not decide on it. A contributor accepts it, asks ${c.from} for changes, or discards it.`
@@ -44,7 +49,7 @@ export function barWords(mode: DecisionMode, c: Pick<ChangeDetail, 'state' | 'bl
   }
 }
 
-export function DecisionBar({ change, part, note, acceptSays, onAccept, onAsk, onDiscard, busy, className }: DecisionBarProps) {
+export function DecisionBar({ change, part, note, acceptSays, nextLook, onAccept, onAsk, onDiscard, busy, className }: DecisionBarProps) {
   const mode = decisionMode(change, part)
   const [confirm, setConfirm] = useState<'ask' | 'discard' | null>(null)
   const [text, setText] = useState('')
@@ -53,7 +58,8 @@ export function DecisionBar({ change, part, note, acceptSays, onAccept, onAsk, o
   const valid = text.trim().length > 0 && text.length <= max
   const decides = mode === 'ready' || mode === 'blocked'
   // the specialist says it is not finished: asking for changes is the step trace recommends, so it leads
-  const unfinished = change.verdict === 'unfinished'
+  // the specialist says it is not finished and has more to do (not merely waiting on an approval)
+  const unfinished = change.verdict === 'unfinished' && !change.awaiting?.length
 
   return (
     <div role="region" aria-label="Your decision" className={cn('sticky bottom-0 z-10 -mx-4 border-t bg-background/95 px-4 py-3 backdrop-blur md:-mx-6 md:px-6 max-md:bottom-16', className)}>
@@ -85,7 +91,10 @@ export function DecisionBar({ change, part, note, acceptSays, onAccept, onAsk, o
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <p className={cn('min-w-0 flex-1 text-sm', mode === 'blocked' || unfinished ? 'text-foreground' : 'text-muted-foreground')} aria-live="polite">{barWords(mode, change, acceptSays)}</p>
+          <p className={cn('min-w-0 flex-1 text-sm', mode === 'blocked' || unfinished ? 'text-foreground' : 'text-muted-foreground')} aria-live="polite">
+            {barWords(mode, change, acceptSays)}
+            {mode === 'blocked' && nextLook && <span aria-hidden className="ml-1 text-muted-foreground">trace looks again by itself ({nextLook}).</span>}
+          </p>
           {decides && (
             <div className="flex flex-wrap gap-2 max-sm:w-full max-sm:[&>*]:flex-1">
               <Button variant="ghost" onClick={() => open('discard')} disabled={!!busy}>Discard</Button>

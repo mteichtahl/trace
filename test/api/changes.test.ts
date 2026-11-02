@@ -18,7 +18,7 @@ import { jobIndex } from '../../src/api/actions-jobs.js'
 import { journeyStore } from '../../src/api/action-kit.js'
 import { mergeMethod, neutralise, revisionRequest } from '../../src/api/actions-changes.js'
 import {
-  type ChangeFacts, type TraceRule, CHECKS_DENIED, unfinishedWords, acceptance, fileKind, jobsByBranch, recommendationOf, requirementIds, summaryBullets, traceChanges, verdictOf,
+  type ChangeFacts, type TraceRule, CHECKS_DENIED, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, requirementIds, summaryBullets, traceChanges, verdictOf,
 } from '../../src/api/changes.js'
 import { GitHubBudget, GitHubCache } from '../../src/api/github-cache.js'
 import type { JobRow } from '../../src/core/job-index.js'
@@ -601,5 +601,49 @@ describe('journey.get with changes open', () => {
     const define = (j.stages as { id: string; steps: { id: string }[] }[]).find((s) => s.id === 'define')
     expect(define?.steps.some((s) => s.id.startsWith('change:'))).toBe(false)
     expect(j.changes_unavailable).toMatch(/unreachable/)
+  })
+})
+
+describe('a change that waits on a person\'s approval', () => {
+  // PR #25 of the Test project: its description said so, and named the criterion a sentence before
+  const pr = { title: 'trace: board renders top+bottom 1920x1200 (for layout.renders approval)', body: 'They wait for a person to approve `layout.renders`.** Do not merge them before that approval.' }
+  const unfinished = unfinishedWords(pr) as string
+  const passed: ChangeFacts = { state: 'open', draft: false, mergeable: 'clean', checks: { total: 2, passed: 2, failed: 0, running: 0, skipped: 0, failing: [] } }
+  const q = (o: { optionId: string | null; label?: string }) => ({
+    id: 'q1', kind: 'question' as const, askedBy: 'rendering', askedOf: null, stage: 'layout' as const, text: 'Do you approve the board renders in run d09516a5 for layout.renders?',
+    blocks: null, options: [{ id: 'a', label: o.label ?? 'Approve the renders of run d09516a5', recommended: true, why: '' }], sources: [], jobId: null, askedAt: 1,
+    answer: null, optionId: o.optionId, answerReason: null, answeredBy: o.optionId ? 'marc' : null, answeredByHash: null, answeredAt: o.optionId ? 2 : null,
+  })
+  const crit = (status: 'met' | 'not_met') => ({ id: 'layout.renders', gate: 'layout', ord: 1, text: '', owner: 'person' as const, evidenceLabel: null, status, evidence: [], checkedAt: null, checkedBy: null })
+
+  it('finds the criterion it waits on, even when the sentence that says so does not name it', () => {
+    expect(unfinished).toMatch(/Do not merge/)
+    expect(awaitedApprovals(unfinished, pr)).toEqual(['layout.renders'])
+    expect(awaitedApprovals('work in progress', { title: 'trace: layout.renders wip' })).toEqual([])
+  })
+  it('counts an approval: the criterion met, or an approving answer before the specialist records it', () => {
+    expect(approvalsGiven({ criteria: [crit('met')], waivers: [], questions: [] }).has('layout.renders')).toBe(true)
+    expect(approvalsGiven({ criteria: [crit('not_met')], waivers: [], questions: [q({ optionId: 'a' })] }).has('layout.renders')).toBe(true)
+    expect(approvalsGiven({ criteria: [crit('not_met')], waivers: [], questions: [q({ optionId: null })] }).has('layout.renders')).toBe(false)
+    expect(approvalsGiven({ criteria: [crit('not_met')], waivers: [], questions: [q({ optionId: 'a', label: 'Re-render with lighter tracks' })] }).has('layout.renders')).toBe(false)
+  })
+  it('waits, naming what to approve, until it is approved', () => {
+    const f = settleUnfinished({ ...passed, unfinished }, pr, new Set())
+    expect(verdictOf(f)).toBe('unfinished')
+    const r = recommendationOf(f, { from: 'the Rendering specialist' })
+    expect(r.verdict).toBe('wait')
+    expect(r.why).toMatch(/waits for layout\.renders to be approved/)
+  })
+  it('recommends accepting once it is approved and its checks pass', () => {
+    const f = settleUnfinished({ ...passed, unfinished }, pr, new Set(['layout.renders']))
+    expect(f.unfinished).toBeUndefined()
+    expect(verdictOf(f)).toBe('ready')
+    const r = recommendationOf(f, { passed: ['trace-prs', 'build'] })
+    expect(r.verdict).toBe('accept')
+    expect(r.why).toMatch(/waited for layout\.renders to be approved, and it is now/)
+  })
+  it('still recommends asking for changes when the work itself is unfinished', () => {
+    const f = settleUnfinished({ ...passed, unfinished: 'incomplete export' }, { title: 'trace: renders, incomplete export' }, new Set(['layout.renders']))
+    expect(recommendationOf(f).verdict).toBe('ask')
   })
 })

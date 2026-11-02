@@ -5,7 +5,8 @@
  * (Discard, Ask for changes, Accept into the design). Reviewers read it; the bar says why they cannot decide. "View on
  * GitHub" stays a small link.
  *
- * Data: change.get (asked for again every 15 s while checks run), change.diff per file, journey.get (step words).
+ * Data: change.get (asked for again while GitHub works out whether it can merge, every 5 s, and while checks run, as a
+ * fallback to the events; the bar says when it looks next), change.diff per file, journey.get (step words).
  */
 import { useQuery } from '@tanstack/react-query'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
@@ -22,6 +23,7 @@ import { QueryError } from '@/components/states'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { repoOf } from '@/lib/api'
+import { changeLookEvery, useLiveStatus, useNextLook } from '@/lib/live'
 import { ago } from '@/lib/format'
 import { changeOf, checksWords, currentStage, nextPlace, recommendationWords, stepWords } from '@/lib/guided'
 import { q, useJourney, useProjects } from '@/lib/queries'
@@ -52,7 +54,10 @@ function Review() {
   const j = useJourney(repo)
   const projects = useProjects()
   const part = projects.data?.find((p) => p.repo === repo)?.part
-  const c = useQuery({ ...q('change.get', { repo, number }), refetchInterval: (x) => (x.state.data?.checks?.running ? 15_000 : false) })
+  const live = useLiveStatus().state
+  // GitHub says nothing when it finishes working out whether it can merge: look again often until it has, and say when
+  const c = useQuery({ ...q('change.get', { repo, number }), refetchInterval: (x) => changeLookEvery(x.state.data, live) })
+  const nextLook = useNextLook(c.dataUpdatedAt, changeLookEvery(c.data, live))
   const actions = useChangeActions(repo)
   const coverage = useCoverage(repo)
   // the requirement's own words, from the coverage the Requirements tab reads (just the id when it has none)
@@ -169,6 +174,7 @@ function Review() {
         part={part}
         note={note}
         acceptSays={acceptSays}
+        nextLook={nextLook}
         busy={busy}
         onAccept={(n) => actions.accept.mutate({ number, head: d.head.sha, title: d.title, ...(n ? { note: n } : {}), step: isNext ? place : null }, { onSuccess: back })}
         onAsk={(n) => actions.ask.mutate({ number, title: d.title, note: n, from: d.from }, { onSuccess: () => setNote('') })}
