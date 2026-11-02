@@ -32,6 +32,21 @@
  *                      publishes to the namespace; nothing else
  *     content policy   names the events API's own two hosts, Transcribe streaming and the voice bucket; scripts only
  *                      from the app (the theme script is web/public/theme.js, not inline)
+ *     hooks            web.hooks (on by default; src/web/hooks.ts, docs/guided-flow.md "Live updates"): GitHub's
+ *                      webhook deliveries. `<prefix>-web-hooks`, a function of the backend's code (hooks.mjs) with a role
+ *                      of its own, behind a function URL WITHOUT IAM, which CloudFront's /api/hooks/* behaviour reaches
+ *                      as a plain HTTPS origin: origin access control signs each request, and Lambda refuses a signed
+ *                      POST without x-amz-content-sha256 (the payload's hash), which GitHub never sends. So the URL is
+ *                      open to anyone who finds it, around the WAF: CloudFront adds a header with a random value the
+ *                      stack makes (`<prefix>/web/hooks-origin`, the function's TRACE_HOOKS_ORIGIN), and the function
+ *                      drops any request without it before reading anything; at most HOOKS_CONCURRENCY run at once, so
+ *                      a flood cannot run up its cost or starve the account's other functions. Each delivery's HMAC
+ *                      signature (the secret `<prefix>/web/github-hooks`, made by the installer) keeps everyone but
+ *                      GitHub out. The function serves that one path and holds little: its settings parameter, that
+ *                      secret and the backend's own client secret `<prefix>/web/hooks-client` (read), its debounce
+ *                      table `<prefix>-web-hooks` (UpdateItem; its TTL on `ttl` expires windows and delivery ids),
+ *                      publishing live events, its log group. Who to tell it asks the API runtime (hook.members) with
+ *                      the backend's own app client's token (in the parent: addHooksClient), never the access store
  *     WAF              web.waf (src/infra/edge.ts, on by default): made here in us-east-1, else the `<prefix>-edge`
  *                      stack's web ACL (web.waf.aclArn, which the tools pass in); or web.webAclArn, a web ACL of the
  *                      person's own. Without either, none (with a synth warning). The backend's own per-person limit
@@ -39,6 +54,10 @@
  *   in the parent      what names the pool (TraceWeb.attach):
  *     app client       `<prefix>-web`: choice-based sign-in (USER_AUTH) and refresh, no secret
  *     settings         the SSM parameter `/<prefix>/web/config` (webConfigParameter): the JSON the backend reads
+ *     hooks client     (web.hooks) `<prefix>-web-hooks`: client credentials with one scope, trace-internal/members (a
+ *                      resource server of its own), so the backend can ask hook.members without a person
+ *                      (src/api/backend-auth.ts); made beside the web client (addHooksClient) because the API runtime's
+ *                      authorizer lists it. No sign-in flow of a person's is allowed on it
  *
  * The pool itself (src/infra/stack.ts) takes this construct's `domain` as its passkey relying party and offers
  * passkeys and passwords first (email codes too with web.sesFrom: Cognito sends them only through SES).
@@ -54,10 +73,12 @@ import * as acm from 'aws-cdk-lib/aws-certificatemanager'
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront'
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins'
 import * as cognito from 'aws-cdk-lib/aws-cognito'
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'
 import * as iam from 'aws-cdk-lib/aws-iam'
 import * as lambda from 'aws-cdk-lib/aws-lambda'
 import * as logs from 'aws-cdk-lib/aws-logs'
 import * as s3 from 'aws-cdk-lib/aws-s3'
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager'
 import * as deploy from 'aws-cdk-lib/aws-s3-deployment'
 import * as events from 'aws-cdk-lib/aws-events'
 import * as targets from 'aws-cdk-lib/aws-events-targets'
@@ -70,7 +91,8 @@ import { JOB_INDEX_DB, JOB_INDEX_FOLDER } from '../core/job-index.js'
 import { ACCESS_PREFIX } from './project.js'
 import { EDGE_REGION, TraceWebAcl, edgeStackName } from './edge.js'
 import { agentsDashboardName } from './observability.js'
-import { type InfraProps, WEB_OUTPUTS, webConfigParameter, webModel } from './props.js'
+import { BACKEND_RESOURCE_SERVER, BACKEND_SCOPE, BACKEND_SCOPE_FULL } from '../api/backend-auth.js'
+import { type InfraProps, WEB_HOOKS_OUTPUTS, WEB_OUTPUTS, webConfigParameter, webHooksClientSecret, webHooksName, webHooksOn, webHooksOriginSecret, webHooksSecret, webModel } from './props.js'
 
 /** The backend's voice cache, in the voice bucket of its own (docs/web-build.md /api/voice/speak). */
 export const VOICE_PREFIX = 'voice'
@@ -223,6 +245,8 @@ export class WebStack extends NestedStack {
   readonly authorizer: lambda.Function
   /** `<prefix>-journey-events`: the agents' facts written → live events (with `central` only) */
   readonly journeyEvents: lambda.Function | null = null
+  /** `<prefix>-web-hooks`: GitHub's webhook deliveries (web.hooks), its URL and its debounce table */
+  readonly hooks: { fn: lambda.Function; url: lambda.FunctionUrl; table: dynamodb.Table; role: iam.Role; origin: secretsmanager.Secret } | null = null
   /** the app's host name: web.domainName, else CloudFront's */
   readonly domain: string
   readonly contentSecurityPolicy: string
@@ -368,6 +392,9 @@ export class WebStack extends NestedStack {
     // matched: people change it through the API, and the backend publishes those (src/web/call.ts)
     if (p.central) this.journeyEvents = this.addJourneyEvents(p, p.central, code, bundle)
 
+    // ------------------------------------------------------------------ GitHub's webhook (web.hooks)
+    if (p.settings.hooks.enabled) this.hooks = this.addHooks(p, code, bundle)
+
     // ------------------------------------------------------------------ the static app
     const site = bundle
       ? deploy.Source.asset(join(p.root, 'web'), {
@@ -431,6 +458,23 @@ export class WebStack extends NestedStack {
         functionAssociations: [{ function: spa, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST }],
       },
       additionalBehaviors: {
+        // first: CloudFront takes the first pattern that matches, in this order
+        ...(this.hooks ? {
+          [HOOKS_PATH]: {
+            // a plain HTTPS origin: no origin access control (see the file's comment). The header tells the function the
+            // request came this way, through the WAF; the delivery's signature then decides
+            origin: new origins.FunctionUrlOrigin(this.hooks.url, {
+              readTimeout: Duration.seconds(API_READ_TIMEOUT_SECONDS),
+              customHeaders: { [HOOKS_ORIGIN_HEADER]: this.hooks.origin.secretValue.unsafeUnwrap() },
+            }),
+            viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+            allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+            cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+            // every header GitHub sends (X-Hub-Signature-256, X-GitHub-Event, X-GitHub-Delivery) and the body as is
+            originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+            responseHeadersPolicy: headers,
+          },
+        } : {}),
         '/api/*': {
           origin: origins.FunctionUrlOrigin.withOriginAccessControl(this.functionUrl, { readTimeout: Duration.seconds(API_READ_TIMEOUT_SECONDS) }),
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
@@ -458,6 +502,65 @@ export class WebStack extends NestedStack {
       cacheControl: [deploy.CacheControl.noCache()],
       distribution: this.distribution, distributionPaths: ['/', '/index.html'],
     })
+  }
+
+  /** `<prefix>-web-hooks`: GitHub's webhook deliveries, with its own role, URL and debounce table (see the file's comment). */
+  private addHooks(p: WebStackProps, code: lambda.Code, bundle: boolean): NonNullable<WebStack['hooks']> {
+    const { region, account, partition } = Stack.of(this)
+    const name = webHooksName(p.prefix)
+    // the debounce's windows, one item per repository (src/web/hooks-store.ts); nothing in it outlives a day
+    const table = new dynamodb.Table(this, 'HooksDebounce', {
+      tableName: name,
+      partitionKey: { name: 'k', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: 'ttl',
+      removalPolicy: RemovalPolicy.DESTROY,
+    })
+    const role = new iam.Role(this, 'HooksRole', {
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      description: 'trace: GitHub webhook deliveries: its settings, the webhook secret, its debounce table, publishing live events; who to tell through the API runtime',
+    })
+    role.addToPolicy(new iam.PolicyStatement({
+      sid: 'WebConfig', actions: ['ssm:GetParameter'], resources: [`arn:${partition}:ssm:${region}:${account}:parameter${webConfigParameter(p.prefix)}`],
+    }))
+    // by name (the installer makes it; Secrets Manager adds six characters to its ARN), read only
+    role.addToPolicy(new iam.PolicyStatement({
+      sid: 'HooksSecret', actions: ['secretsmanager:GetSecretValue'],
+      resources: [webHooksSecret(p.prefix), webHooksClientSecret(p.prefix)].map((n) => `arn:${partition}:secretsmanager:${region}:${account}:secret:${n}-??????`),
+    }))
+    // CloudFront's header value: random, made here, never written anywhere a person reads. CloudFormation resolves it
+    // into the distribution's origin header and the function's environment at deploy time
+    const origin = new secretsmanager.Secret(this, 'HooksOrigin', {
+      secretName: webHooksOriginSecret(p.prefix),
+      description: 'trace: the header CloudFront adds to GitHub\'s webhook deliveries; the hooks function drops anything without it',
+      generateSecretString: { passwordLength: 48, excludePunctuation: true },
+      removalPolicy: RemovalPolicy.DESTROY,
+    })
+    role.addToPolicy(new iam.PolicyStatement({ sid: 'HooksDebounce', actions: ['dynamodb:UpdateItem'], resources: [table.tableArn] }))
+    role.addToPolicy(new iam.PolicyStatement({
+      sid: 'PublishLiveEvents', actions: ['appsync:EventPublish'], resources: [`${this.events.apiArn}/channelNamespace/${EVENTS_NAMESPACE}`],
+    }))
+    const logGroup = new logs.LogGroup(this, 'HooksLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY })
+    logGroup.grantWrite(role)
+    const fn = new lambda.Function(this, 'Hooks', {
+      functionName: name,
+      description: 'trace: GitHub webhook deliveries (src/web/hooks-lambda.ts): a change moved, tell the people on its project',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      handler: 'hooks.handler',
+      code: bundle ? code : lambda.Code.fromAsset(placeholder('hooks.mjs', 'export const handler = async () => ({ statusCode: 204 })\n')),
+      role,
+      memorySize: 512,
+      // a holder of the debounce's window publishes for up to MAX_ROUNDS windows after answering GitHub
+      timeout: Duration.seconds(60),
+      // its URL is open (see the file's comment): a flood is turned away by Lambda once this many run, rather than
+      // costing money or the account's concurrency. A busy repository's push is a few dozen deliveries, debounced
+      reservedConcurrentExecutions: HOOKS_CONCURRENCY,
+      logGroup,
+      environment: { TRACE_WEB_CONFIG_PARAM: webConfigParameter(p.prefix), TRACE_HOOKS_ORIGIN: origin.secretValue.unsafeUnwrap(), NODE_OPTIONS: '--enable-source-maps' },
+    })
+    const url = fn.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.NONE, invokeMode: lambda.InvokeMode.RESPONSE_STREAM })
+    return { fn, url, table, role, origin }
   }
 
   /** The Lambda `<prefix>-journey-events` and the rule that sends it the agents' facts writes (see the file's comment). */
@@ -515,6 +618,38 @@ export class WebStack extends NestedStack {
 
 export interface TraceWebProps extends WebStackProps {}
 
+/** CloudFront's behaviour for GitHub's webhook (src/web/hooks.ts serves /api/hooks/github under it). */
+export const HOOKS_PATH = '/api/hooks/*'
+/** The header CloudFront adds to it (src/web/hooks.ts ORIGIN_HEADER). */
+export const HOOKS_ORIGIN_HEADER = 'x-trace-origin'
+/** At most this many hooks functions run at once. */
+export const HOOKS_CONCURRENCY = 10
+/** Where the installer registers each project's webhook, on CloudFront's own address. */
+export const HOOKS_ROUTE = '/api/hooks/github'
+
+/**
+ * The backend's own app client of the pool (web.hooks; src/api/backend-auth.ts): client credentials, a secret, one
+ * scope (trace-internal/members) of a resource server of its own, tokens of an hour. No person signs in with it. Made
+ * in the parent beside the web client, before the API runtime, whose authorizer lists it.
+ */
+export function addHooksClient(pool: cognito.UserPool, prefix: string): cognito.UserPoolClient {
+  const members = new cognito.ResourceServerScope({ scopeName: BACKEND_SCOPE, scopeDescription: 'who is on a project, by Cognito sub only: the web backend, for GitHub webhooks' })
+  const server = pool.addResourceServer('Internal', { identifier: BACKEND_RESOURCE_SERVER, userPoolResourceServerName: `${prefix}-internal`, scopes: [members] })
+  const client = pool.addClient('WebHooks', {
+    userPoolClientName: webHooksName(prefix),
+    generateSecret: true,
+    authFlows: {},
+    oAuth: { flows: { clientCredentials: true }, scopes: [cognito.OAuthScope.resourceServer(server, members)] },
+    preventUserExistenceErrors: true,
+    enableTokenRevocation: true,
+    accessTokenValidity: Duration.hours(1),
+  })
+  // no sign-in flow of a person's: CDK leaves ExplicitAuthFlows out for an empty authFlows, and Cognito then allows
+  // SRP and custom sign-in by default. Refresh is the one flow Cognito always requires; client credentials is OAuth's
+  ;(client.node.defaultChild as cognito.CfnUserPoolClient).addPropertyOverride('ExplicitAuthFlows', ['ALLOW_REFRESH_TOKEN_AUTH'])
+  return client
+}
+
 /** The agents' facts objects, as the JourneyEvents rule matches them (EventBridge wildcard). */
 export const AGENT_FACTS_KEYS = `${PROJECTS_PREFIX}/*/${AGENT_FACTS_FOLDER}/${AGENT_FACTS_DB}`
 /** The bench's live copies (src/core/bench.ts): a reading taken refreshes the Bring-up run screen; never read. */
@@ -531,6 +666,8 @@ export interface WebAttachProps {
   email: boolean
   /** the API's image content tag: the backend's TRACE_API_BUILD, part of each person's runtime session (src/web/call.ts) */
   apiBuild?: string
+  /** web.hooks: the backend's own app client (addHooksClient) and the pool's token address */
+  hooks?: { client: cognito.UserPoolClient; tokenUrl: string } | undefined
 }
 
 /** The web app's settings as the backend reads them (src/web/, from TRACE_WEB_CONFIG_PARAM). */
@@ -550,6 +687,8 @@ export interface WebConfig {
   features: { passkeys: boolean; email: boolean; voice: boolean; ops: boolean }
   /** the app's AWS WAF: on (this installation's, or the person's own web ACL), or off (src/infra/edge.ts) */
   waf: { enabled: boolean; own: boolean; apiRequestsPer5Minutes: number; authRequestsPer5Minutes: number }
+  /** GitHub's webhook (web.hooks, src/web/hooks.ts) */
+  hooks?: { secret: string; clientSecret: string; tokenUrl: string; clientId: string; scope: string; table: string }
 }
 
 /** What a person may write of their own Cognito profile through an app client: their email alone (a required
@@ -620,6 +759,12 @@ export class TraceWeb extends Construct {
         own: Boolean(this.p.settings.webAclArn),
         apiRequestsPer5Minutes: this.p.settings.waf.apiRequestsPer5Minutes, authRequestsPer5Minutes: this.p.settings.waf.authRequestsPer5Minutes,
       },
+      ...(a.hooks && this.stack.hooks ? {
+        hooks: {
+          secret: webHooksSecret(this.p.prefix), clientSecret: webHooksClientSecret(this.p.prefix), tokenUrl: a.hooks.tokenUrl, clientId: a.hooks.client.userPoolClientId,
+          scope: BACKEND_SCOPE_FULL, table: this.stack.hooks.table.tableName,
+        },
+      } : {}),
     }
     this.config = new ssm.StringParameter(this, 'Config', {
       parameterName: webConfigParameter(this.p.prefix),
@@ -631,6 +776,11 @@ export class TraceWeb extends Construct {
     new CfnOutput(parent, WEB_OUTPUTS.distributionId, { value: this.stack.distribution.distributionId, description: 'The web app\'s CloudFront distribution' })
     new CfnOutput(parent, WEB_OUTPUTS.eventsEndpoint, { value: `https://${this.stack.events.httpDns}/event`, description: 'The live events\' HTTP endpoint (AppSync Events)' })
     new CfnOutput(parent, WEB_OUTPUTS.clientId, { value: a.client.userPoolClientId, description: 'The web app\'s Cognito app client' })
+    if (a.hooks && this.stack.hooks) {
+      // CloudFront's own address, not the custom domain: GitHub reaches it whether or not that domain's DNS is set yet
+      new CfnOutput(parent, WEB_HOOKS_OUTPUTS.address, { value: `https://${this.stack.distribution.distributionDomainName}${HOOKS_ROUTE}`, description: 'Where each project repository\'s GitHub webhook posts (the installer registers it)' })
+      new CfnOutput(parent, WEB_HOOKS_OUTPUTS.clientId, { value: a.hooks.client.userPoolClientId, description: 'The web backend\'s own app client (hook.members); the installer stores its secret' })
+    }
   }
 }
 
@@ -659,6 +809,7 @@ export function modelResources(model: string, o: { partition: string; region: st
 
 /** The props of TraceWeb from the stack's settings. */
 export const traceWebProps = (cfg: InfraProps, root: string): TraceWebProps => ({
-  prefix: cfg.prefix, root, settings: cfg.web, model: webModel(cfg), dashboards: webDashboards(cfg), retainData: cfg.retainData,
+  // live updates from GitHub in the nested layout only (webHooksOn)
+  prefix: cfg.prefix, root, settings: { ...cfg.web, hooks: { enabled: webHooksOn(cfg) } }, model: webModel(cfg), dashboards: webDashboards(cfg), retainData: cfg.retainData,
   ...(cfg.web.modelRegions ? { modelRegions: cfg.web.modelRegions } : {}),
 })

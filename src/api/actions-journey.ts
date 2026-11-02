@@ -7,7 +7,10 @@
  *                                    met/total, reopened), gates (state, criteria, evidence, waivers, signature, what
  *                                    still stops this person signing), the next step, questions, waivers, decisions,
  *                                    the project's jobs and the hand-offs between its specialists (jobs.list's,
- *                                    src/api/actions-jobs.ts).
+ *                                    src/api/actions-jobs.ts). Each stage has its guide and its steps; the open
+ *                                    changes trace made are steps too, and a ready one is the next step to review
+ *                                    (src/api/actions-changes.ts; left out, with changes_unavailable, when GitHub
+ *                                    cannot be reached).
  *                                    A project with no journey yet: { started: false } and what starts one
  *   journey.criterion.open  read     record that this person opened a criterion's (or a waiver's) evidence: the Sign
  *                                    button needs every one opened by the signer. Reviewers may open evidence too
@@ -46,8 +49,10 @@ import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
   INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
-  dismissStuck, journeyView, loadJourney, recordOpen, returnGate, signGate, sortInbox,
+  dismissStuck, journeyView, loadJourney, recordOpen, returnGate, signGate, sortInbox, withChanges,
 } from '../core/journey.js'
+import { openChanges, openPulls, projectRule } from './actions-changes.js'
+import { recommendationOf } from './changes.js'
 import { AGENT_WORDS, jobIndex, listJobs, projectHandoffs } from './actions-jobs.js'
 import { reviewItems } from './inbox-review.js'
 import { loadJobs } from '../core/job-index.js'
@@ -91,8 +96,12 @@ async function snapshot(ctx: Context, repo: string, why: string): Promise<{ bran
 /** At most this many projects' databases are read at once for the inbox. */
 /** The open pull requests the project's jobs opened (inbox-review.ts), from GitHub and the project's job index. */
 async function openReviews(ctx: Context, repo: string, project: string, stage: StageId): Promise<InboxItem[]> {
-  const [pulls, jobs] = await Promise.all([(await ctx.deps.github()).openPulls(repo), jobIndex(ctx, repo).read((db) => loadJobs(db)).then((x) => x.result)])
-  return reviewItems({ repo, project, stage, pulls, jobs, agentWords: AGENT_WORDS })
+  // the open pull requests and the rule through the changes' short-lived cache (src/api/github-cache.ts): the inbox
+  // asks for every project at once, often
+  const [pulls, jobs] = await Promise.all([openPulls(ctx, repo), jobIndex(ctx, repo).read((db) => loadJobs(db)).then((x) => x.result)])
+  // no open pull request: nothing to tell apart, and the project's settings are not read for it
+  if (!pulls.length) return []
+  return reviewItems({ repo, project, stage, pulls, jobs, rule: await projectRule(ctx, repo), agentWords: AGENT_WORDS })
 }
 
 const INBOX_PARALLEL = 4
@@ -227,7 +236,7 @@ export function changedStep(next: NextStep, stage: string, open: readonly string
     kind: 'task', belongs_to: 'you', yours: true,
     summary: `${ids} ${one ? 'was' : 'were'} changed after the requirements baseline and ${one ? 'is' : 'are'} not accepted yet: accept, edit or strike ${one ? 'it' : 'them'} in Requirements review. ${next.summary.replace(/ trace recommends signing\.$/, '')}`,
     why: 'The gates check the design against the accepted requirements, so a changed requirement is agreed before the next gate is signed.',
-    recommendation: null, button: 'Open Requirements review', stage: next.stage, ref: { kind: 'skill', id: 'requirements-review' },
+    recommendation: null, button: 'Open Requirements review', stage: next.stage, ref: { kind: 'skill', id: 'requirements-review' }, step: null, after: 'Once the changed requirements are agreed, the gate is yours to sign.',
   }
 }
 
@@ -250,10 +259,19 @@ export const JOURNEY_ACTIONS = {
     if (!r) return { repo, ...NOT_STARTED, jobs: jobs.jobs, handoffs }
     // whether the project has agent memory here (the Memory tab): its memory is set up, not that a session has happened
     const hasMemory = Boolean(ctx.deps.memory?.()?.forProject(repo))
-    const view = journeyView(r, viewer, undefined, facts)
+    // the open changes trace made, as steps and (when one is ready) the next step (docs/guided-flow.md). GitHub is
+    // asked for the open pull requests and the status of the oldest MAX_STATUS only, through the same short-lived
+    // cache as changes.list (src/api/github-cache.ts), so a journey and a list together cost one look; when it cannot be reached the
+    // journey is answered without them, and says so in changes_unavailable, rather than guessing
+    const open = await openChanges(ctx, repo).then((x) => ({ list: x, error: null }), (e: unknown) => ({ list: [], error: e instanceof Error ? e.message : String(e) }))
+    const view = withChanges(r, journeyView(r, viewer, undefined, facts), viewer, open.list.map(({ change: c, criteria }) => ({
+      number: c.number, title: c.title, from: c.from, criteria, ready: c.verdict === 'ready',
+      recommendation: c.verdict === 'ready' ? `trace recommends accepting it. ${recommendationOf(c).why}` : null,
+    })))
     return {
       repo, started: true, you: { admin: viewer.admin, part: viewer.part }, has_memory: hasMemory, ...view, next: await changedFirst(ctx, repo, r, view.next),
       jobs: jobs.jobs, handoffs, ...(jobs.error ? { jobs_unavailable: jobs.error.slice(0, 200) } : {}),
+      ...(open.error ? { changes_unavailable: open.error.slice(0, 200) } : {}),
     }
   }),
 

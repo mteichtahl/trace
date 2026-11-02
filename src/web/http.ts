@@ -23,6 +23,9 @@ export interface WebRequest {
   headers: Readonly<Record<string, string>>
   cookies: Readonly<Record<string, string>>
   body: string
+  /** the body's bytes as they arrived, when the event gives them (GitHub's signature is over these, not over a text
+   * decoded and encoded again) */
+  raw?: Buffer
 }
 
 export interface Sink {
@@ -124,6 +127,8 @@ export function router(routes: readonly Route[], o: RouterOptions = {}): (req: W
     let error: string | undefined
     const send = (r: Reply): void => {
       status = r.status ?? 200
+      // 204 has no body (GitHub's webhook deliveries are answered so)
+      if (status === 204) { sink.open(204, { 'cache-control': 'no-store' }, r.cookies); sink.end(); return }
       const text = JSON.stringify(r.body)
       sink.open(status, { ...JSON_HEADERS }, r.cookies)
       sink.write(text)

@@ -3,6 +3,7 @@
  * fixture's bytes, standing in for the signed S3 link), artifact (a run's output as base64) and the firmware.size tool.
  */
 import { FILE_LIST, FILE_THREAD, FILE_THREAD_MESSAGES, FIRMWARE_SIZE, fileContent } from './fixtures-files'
+import { changeFileContent } from './changes'
 
 const ok = (result: unknown) => new Response(JSON.stringify({ ok: true, result }), { headers: { 'content-type': 'application/json' } })
 const fail = (error: string) => new Response(JSON.stringify({ ok: false, error }), { headers: { 'content-type': 'application/json' } })
@@ -12,7 +13,7 @@ function blobUrl(path: string, commit?: string): string | null {
   const key = `${path}@${commit ?? ''}`
   const have = urls.get(key)
   if (have) return have
-  const c = fileContent(path, commit)
+  const c = changeFileContent(path, commit) ?? fileContent(path, commit)
   if (!c) return null
   const url = URL.createObjectURL(new Blob([c.bytes as BlobPart], { type: c.mime }))
   urls.set(key, url)

@@ -6,7 +6,7 @@
 import { App } from 'aws-cdk-lib'
 import { Template } from 'aws-cdk-lib/assertions'
 import { describe, expect, it } from 'vitest'
-import { BODY_TOO_LARGE, WAF_DESCRIPTION, wafDescription, EDGE_ACL_OUTPUT, MAX_BODY_BYTES, TraceEdgeStack, edgeNeeded, edgeStackName } from '../../src/infra/edge.js'
+import { BODY_TOO_LARGE, HOOKS_PER_5_MINUTES, HOOKS_PREFIX, WAF_DESCRIPTION, wafDescription, EDGE_ACL_OUTPUT, MAX_BODY_BYTES, TraceEdgeStack, edgeNeeded, edgeStackName } from '../../src/infra/edge.js'
 import { InfraPropsSchema } from '../../src/infra/props.js'
 import { deployEdge, edgeLeftOver, wafPlan, withAcl } from '../../src/installer/edge.js'
 import { RUNNERS, synth } from './templates.js'
@@ -31,7 +31,7 @@ describe('the edge stack', () => {
 
   it('blocks large API bodies, limits sign-in and the API per address, and runs AWS\'s three managed groups', () => {
     const rules = acl.Properties.Rules
-    expect(rules.map((r) => [r.Priority, r.Name])).toEqual([[1, 'BodyTooLarge'], [2, 'AuthRate'], [3, 'ApiRate'], [4, 'IpReputation'], [5, 'KnownBadInputs'], [6, 'Common']])
+    expect(rules.map((r) => [r.Priority, r.Name])).toEqual([[1, 'BodyTooLarge'], [2, 'AuthRate'], [3, 'ApiRate'], [4, 'IpReputation'], [5, 'KnownBadInputs'], [6, 'Common'], [7, 'HooksRate']])
     const body = rules[0]!.Statement.AndStatement.Statements
     expect(body[0].ByteMatchStatement).toMatchObject({ SearchString: '/api/', PositionalConstraint: 'STARTS_WITH' })
     expect(body[1].RegexMatchStatement).toMatchObject({ FieldToMatch: { SingleHeader: { Name: 'content-length' } }, RegexString: BODY_TOO_LARGE })
@@ -39,9 +39,18 @@ describe('the edge stack', () => {
     for (const n of [MAX_BODY_BYTES, 9_999_999, 12_000_000, 100_000_000]) expect(re.test(String(n)), String(n)).toBe(true)
     for (const n of [0, 4 * 1024 * 1024, 4_999_999, 999_999]) expect(re.test(String(n)), String(n)).toBe(false)
     expect(rules[1]!.Statement.RateBasedStatement).toMatchObject({ Limit: 100, EvaluationWindowSec: 300, AggregateKeyType: 'IP', ScopeDownStatement: { ByteMatchStatement: { SearchString: '/api/auth/' } } })
-    expect(rules[2]!.Statement.RateBasedStatement).toMatchObject({ Limit: 1000, AggregateKeyType: 'IP', ScopeDownStatement: { ByteMatchStatement: { SearchString: '/api/' } } })
+    expect(rules[2]!.Statement.RateBasedStatement).toMatchObject({ Limit: 1000, AggregateKeyType: 'IP' })
+    // GitHub's webhook apart: its deliveries come in bursts from a few addresses (HooksRate below)
+    const apiScope = rules[2]!.Statement.RateBasedStatement.ScopeDownStatement.AndStatement.Statements
+    expect(apiScope[0].ByteMatchStatement).toMatchObject({ SearchString: '/api/' })
+    expect(apiScope[1].NotStatement.Statement.ByteMatchStatement).toMatchObject({ SearchString: HOOKS_PREFIX, PositionalConstraint: 'STARTS_WITH' })
     expect(rules[1]!.Action).toEqual({ Block: { CustomResponse: { ResponseCode: 429 } } })
-    expect(rules.slice(3).map((r) => r.Statement.ManagedRuleGroupStatement.Name)).toEqual(['AWSManagedRulesAmazonIpReputationList', 'AWSManagedRulesKnownBadInputsRuleSet', 'AWSManagedRulesCommonRuleSet'])
+    expect(rules.slice(3, 6).map((r) => r.Statement.ManagedRuleGroupStatement.Name)).toEqual(['AWSManagedRulesAmazonIpReputationList', 'AWSManagedRulesKnownBadInputsRuleSet', 'AWSManagedRulesCommonRuleSet'])
+    // the body rules skip GitHub's webhook (pull request text is not an attack); the reputation list still applies
+    expect(rules[3]!.Statement.ManagedRuleGroupStatement.ScopeDownStatement).toBeUndefined()
+    for (const r of [rules[4]!, rules[5]!]) expect(r.Statement.ManagedRuleGroupStatement.ScopeDownStatement.NotStatement.Statement.ByteMatchStatement).toMatchObject({ SearchString: HOOKS_PREFIX })
+    expect(rules[6]!.Statement.RateBasedStatement).toMatchObject({ Limit: HOOKS_PER_5_MINUTES, AggregateKeyType: 'IP', ScopeDownStatement: { ByteMatchStatement: { SearchString: HOOKS_PREFIX } } })
+    expect(rules[6]!.Action).toEqual({ Block: { CustomResponse: { ResponseCode: 429 } } })
     // the core rule set's 8 KB body limit and body XSS rule would refuse chats and prompts: counted, not blocked
     expect(rules[5]!.Statement.ManagedRuleGroupStatement.RuleActionOverrides).toEqual([
       { Name: 'SizeRestrictions_BODY', ActionToUse: { Count: {} } }, { Name: 'CrossSiteScripting_BODY', ActionToUse: { Count: {} } },
@@ -144,7 +153,7 @@ describe('deploying it (the installer and the self-update)', () => {
   })
 
   it('says in the plan where the WAF is and what it costs', () => {
-    expect(wafPlan(InfraPropsSchema.parse(base))).toMatch(/AWS WAF in its own small stack trace-edge in us-east-1.*about US\$11 a month and US\$0\.60 per million requests/)
+    expect(wafPlan(InfraPropsSchema.parse(base))).toMatch(/AWS WAF in its own small stack trace-edge in us-east-1.*about US\$12 a month and US\$0\.60 per million requests/)
     expect(wafPlan(InfraPropsSchema.parse({ ...base, region: 'us-east-1' }))).toMatch(/in the web app's stack/)
     expect(wafPlan(InfraPropsSchema.parse({ ...base, web: { waf: { enabled: false } } }))).toMatch(/without AWS WAF/)
     expect(wafPlan(InfraPropsSchema.parse({ ...base, web: { webAclArn: ACL } }))).toContain(ACL)

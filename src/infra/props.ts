@@ -314,7 +314,7 @@ export const InfraPropsSchema = z.object({
      * backend's own per-person limits still apply */
     webAclArn: z.string().regex(/^arn:aws[a-z-]*:wafv2:us-east-1:\d{12}:global\/webacl\/[\w-]+\/[0-9a-f-]{36}$/, 'a WAFv2 web ACL ARN of CLOUDFRONT scope (us-east-1, global/webacl/…)').optional(),
     /** AWS WAF in front of the app (src/infra/edge.ts): AWS's managed rules, rate limits per address, a size limit.
-     * On by default (about US$11 a month and US$0.60 per million requests): the address is public and sign-in is not
+     * On by default (about US$12 a month and US$0.60 per million requests): the address is public and sign-in is not
      * behind a token. In the installation's region when that is us-east-1, else in the stack `<prefix>-edge` there,
      * whose output the tools pass back as aclArn. Ignored when webAclArn names a web ACL of your own */
     waf: z.object({
@@ -327,6 +327,11 @@ export const InfraPropsSchema = z.object({
        * they deploy this stack; unset outside us-east-1, the app has no WAF until it is */
       aclArn: z.string().regex(/^arn:aws[a-z-]*:wafv2:us-east-1:\d{12}:global\/webacl\/[\w-]+\/[0-9a-f-]{36}$/, 'a WAFv2 web ACL ARN of CLOUDFRONT scope').optional(),
     }).strict().prefault({}),
+    /** Live updates from GitHub (nested layout only: webHooksOn; src/web/hooks.ts, docs/guided-flow.md "Live updates"): a webhook on every project
+     * repository posts to the app's /api/hooks/github, so a change's checks and merges reach people's screens at once
+     * (the app still polls, every 60 s while connected). On by default: the stack adds the hooks function, its debounce
+     * table and the backend's own app client of the pool; the installer stores the secret and registers the hooks */
+    hooks: z.object({ enabled: z.boolean().default(true) }).strict().prefault({}),
     /** The regions a global or cross-region inference profile may route the chat model to (the backend may invoke the
      * model there); unset: any region */
     modelRegions: z.array(z.string().regex(/^[a-z]{2}(-gov)?-[a-z]+-\d$/, 'an AWS region')).max(30).optional(),
@@ -479,6 +484,24 @@ export const webConfigParameter = (prefix: string): string => `/${prefix}/web/co
 /** The web app's outputs (the parent's): its address, its distribution, the live events' HTTP endpoint, and its
  * Cognito app client. */
 export const WEB_OUTPUTS = { url: 'WebUrl', distributionId: 'WebDistributionId', eventsEndpoint: 'EventsApiEndpoint', clientId: 'WebClientId' } as const
+/** With web.hooks: CloudFront's own address (where GitHub's webhooks post, whatever the custom domain's DNS says) and
+ * the backend's own app client (the installer reads its secret into webHooksSecret). */
+export const WEB_HOOKS_OUTPUTS = { address: 'WebHooksAddress', clientId: 'WebHooksClientId' } as const
+/** GitHub's webhook secret, JSON { webhookSecret } (src/web/hooks.ts), made and written by the installer: the stack
+ * never holds its value. The hooks function and the self-update (which registers new projects' hooks) read it. */
+export const webHooksSecret = (prefix: string): string => `${prefix}/web/github-hooks`
+/** The backend's own app client's secret, JSON { clientSecret }, written by the installer from Cognito: read by the
+ * hooks function alone (the self-update has no use for it, so it cannot read it). */
+export const webHooksClientSecret = (prefix: string): string => `${prefix}/web/hooks-client`
+/** The random value CloudFront adds to every request it sends the hooks function (src/web/hooks.ts ORIGIN_HEADER),
+ * made by the stack. */
+export const webHooksOriginSecret = (prefix: string): string => `${prefix}/web/hooks-origin`
+/** The hooks function and its debounce table (src/infra/web.ts). */
+export const webHooksName = (prefix: string): string => `${prefix}-web-hooks`
+/** Whether the installation takes GitHub's webhooks: the nested layout only. Their client and its resource server are
+ * two resources in the parent, and a flat parent of 20 projects is at CloudFormation's 500 already; a flat installation
+ * polls (every 15 to 30 s) as before. */
+export const webHooksOn = (cfg: Pick<InfraProps, 'web' | 'layout'>): boolean => cfg.web.enabled && cfg.web.hooks.enabled && cfg.layout === 'nested'
 
 /** One entry of `repositories`: OWNER/REPO and its default branch (main when omitted). */
 export interface ProjectRef { repository: string; slug: string; hash: string; branch: string }

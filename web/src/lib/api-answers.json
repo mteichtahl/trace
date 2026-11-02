@@ -41,6 +41,46 @@
           "reopened": null,
           "gates": [
             "define"
+          ],
+          "guide": {
+            "purpose": "Agree what the product must do, as requirements that can each be measured.",
+            "you_do": "Write the intent in plain words (what it does, where it lives, its power, interfaces, size, cost and quantity), then accept or strike each requirement trace proposes.",
+            "trace_does": "The Verification specialist turns the intent into requirements, each with a measurable criterion and the line it came from, and asks about gaps: missing limits, numbers that conflict, wording that cannot be tested.",
+            "you_get": "A requirements list you accepted, every requirement with a number and a unit to check it against.",
+            "typical_time": "An hour or two of your time, spread over a day.",
+            "next": "Architect, to choose how the product is built: its blocks, its key parts, and which block serves each requirement."
+          },
+          "steps": [
+            {
+              "id": "define.accepted",
+              "text": "Every requirement is accepted or struck.",
+              "owner": "you",
+              "state": "done",
+              "ref": {
+                "kind": "criterion",
+                "id": "define.accepted"
+              }
+            },
+            {
+              "id": "define.measurable",
+              "text": "Every requirement has a criterion that can be measured, with a number and a unit.",
+              "owner": "you",
+              "state": "waived",
+              "ref": {
+                "kind": "criterion",
+                "id": "define.measurable"
+              }
+            },
+            {
+              "id": "sign:define",
+              "text": "Sign the requirements baseline gate.",
+              "owner": "admins",
+              "state": "next",
+              "ref": {
+                "kind": "gate",
+                "id": "define"
+              }
+            }
           ]
         },
         {
@@ -56,6 +96,56 @@
           "reopened": null,
           "gates": [
             "architect"
+          ],
+          "guide": {
+            "purpose": "Choose how the product is built: its blocks, its key parts, and which block serves each requirement.",
+            "you_do": "Compare the options trace proposes and choose one, or sketch your own.",
+            "trace_does": "The Implementation specialist proposes two or three block diagrams, sizes the key circuits, picks key parts that are in stock for the build quantity, pulls their datasheets, and scores each option.",
+            "you_get": "An approved block diagram, a key parts list with price, stock and lifecycle, and every requirement mapped to a block.",
+            "typical_time": "A day or two, most of it trace's work.",
+            "next": "Capture, to draw the schematic: every part and every connection, checked against the parts' datasheets."
+          },
+          "steps": [
+            {
+              "id": "architect.blocks",
+              "text": "The blocks and key parts are approved.",
+              "owner": "you",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "architect.blocks"
+              }
+            },
+            {
+              "id": "architect.mapped",
+              "text": "Every requirement maps to at least one block.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "architect.mapped"
+              }
+            },
+            {
+              "id": "architect.stock",
+              "text": "Every key part is in stock for the build quantity, or its exception is signed.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "architect.stock"
+              }
+            },
+            {
+              "id": "sign:architect",
+              "text": "Sign the architecture review gate.",
+              "owner": "admins",
+              "state": "later",
+              "ref": {
+                "kind": "gate",
+                "id": "architect"
+              }
+            }
           ]
         },
         {
@@ -71,6 +161,66 @@
           "reopened": null,
           "gates": [
             "capture"
+          ],
+          "guide": {
+            "purpose": "Draw the schematic: every part and every connection, checked against the parts' datasheets.",
+            "you_do": "Finish and correct the sheets trace drafts in KiCad (the schematic editor), and agree the pin plan.",
+            "trace_does": "The Implementation specialist draws one sheet per block with every part's fields filled, then checks each change: the electrical rule check (wiring mistakes such as an unconnected pin), every part against its datasheet limits, and stock for the build quantity.",
+            "you_get": "A checked schematic and a parts list ready for layout.",
+            "typical_time": "Two to five days.",
+            "next": "Prove, to show the design meets its requirements before any board is drawn."
+          },
+          "steps": [
+            {
+              "id": "capture.erc",
+              "text": "The electrical rule check is clean, or each finding is waived with a reason.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "capture.erc"
+              }
+            },
+            {
+              "id": "capture.datasheets",
+              "text": "No conflict with a part's datasheet is left open.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "capture.datasheets"
+              }
+            },
+            {
+              "id": "capture.stock",
+              "text": "Every part is in stock for the build quantity, or its exception is signed.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "capture.stock"
+              }
+            },
+            {
+              "id": "capture.pins",
+              "text": "The pin plan matches the schematic.",
+              "owner": "you",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "capture.pins"
+              }
+            },
+            {
+              "id": "sign:capture",
+              "text": "Sign the schematic review gate.",
+              "owner": "admins",
+              "state": "later",
+              "ref": {
+                "kind": "gate",
+                "id": "capture"
+              }
+            }
           ]
         },
         {
@@ -86,6 +236,46 @@
           "reopened": null,
           "gates": [
             "prove"
+          ],
+          "guide": {
+            "purpose": "Show the design meets its requirements before any board is drawn.",
+            "you_do": "Read the results, and waive what cannot be checked before there is a board, with a reason.",
+            "trace_does": "The Verification specialist writes the test plan and runs it: circuit simulation across temperature and part tolerances, the stability and noise of the amplifiers, and checks of any logic.",
+            "you_get": "A coverage matrix: each requirement verified, failing, untested or waived, linked to the run that shows it.",
+            "typical_time": "One to three days, most of it trace's work.",
+            "next": "Layout, to place and route the board so it can be made, and so it fits its enclosure."
+          },
+          "steps": [
+            {
+              "id": "prove.verified",
+              "text": "Every requirement that can be checked before layout is verified or waived.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "prove.verified"
+              }
+            },
+            {
+              "id": "prove.failing",
+              "text": "No test item is failing.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "prove.failing"
+              }
+            },
+            {
+              "id": "sign:prove",
+              "text": "Sign the design proven gate.",
+              "owner": "admins",
+              "state": "later",
+              "ref": {
+                "kind": "gate",
+                "id": "prove"
+              }
+            }
           ]
         },
         {
@@ -101,6 +291,76 @@
           "reopened": null,
           "gates": [
             "layout"
+          ],
+          "guide": {
+            "purpose": "Place and route the board so it can be made, and so it fits its enclosure.",
+            "you_do": "Set the outline, the layer stack and the fixed parts (connectors, mounting holes), adjust trace's placement, and approve the renders.",
+            "trace_does": "trace proposes a placement, routes every connection, matches the lengths of signals that need it, runs the design rule check (spacing and widths the fab can make), checks the fit in the enclosure, and renders the board.",
+            "you_get": "A routed board with clean checks, and renders you approved.",
+            "typical_time": "Two to five days.",
+            "next": "Sign-off, to decide the design is ready to be made. This is the last point where a change is cheap."
+          },
+          "steps": [
+            {
+              "id": "layout.routed",
+              "text": "Every connection is routed.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "layout.routed"
+              }
+            },
+            {
+              "id": "layout.drc",
+              "text": "The design rule check is clean, or each finding is waived.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "layout.drc"
+              }
+            },
+            {
+              "id": "layout.lengths",
+              "text": "Matched-length groups are within tolerance.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "layout.lengths"
+              }
+            },
+            {
+              "id": "layout.fit",
+              "text": "The board fits its enclosure, or each clash is waived.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "layout.fit"
+              }
+            },
+            {
+              "id": "layout.renders",
+              "text": "The board renders are approved.",
+              "owner": "you",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "layout.renders"
+              }
+            },
+            {
+              "id": "sign:layout",
+              "text": "Sign the layout review gate.",
+              "owner": "admins",
+              "state": "later",
+              "ref": {
+                "kind": "gate",
+                "id": "layout"
+              }
+            }
           ]
         },
         {
@@ -116,6 +376,66 @@
           "reopened": null,
           "gates": [
             "signoff"
+          ],
+          "guide": {
+            "purpose": "Decide the design is ready to be made. This is the last point where a change is cheap.",
+            "you_do": "Read the release report, then approve it or send it back with what has to change.",
+            "trace_does": "trace runs the radio interference prechecks, runs the whole test plan again on the final files, and checks the parts list's cost and stock for the build quantity.",
+            "you_get": "One release report: coverage, interference estimates, parts cost and stock, and the waivers still open.",
+            "typical_time": "About a day.",
+            "next": "Release, to freeze the approved design as a package that can be made."
+          },
+          "steps": [
+            {
+              "id": "signoff.coverage",
+              "text": "Every requirement is verified or waived.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "signoff.coverage"
+              }
+            },
+            {
+              "id": "signoff.emc",
+              "text": "The radio interference prechecks are run and within the target.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "signoff.emc"
+              }
+            },
+            {
+              "id": "signoff.bom",
+              "text": "The parts list is checked for cost and stock at the build quantity.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "signoff.bom"
+              }
+            },
+            {
+              "id": "signoff.report",
+              "text": "The release report is reviewed: coverage, interference estimates, parts list and open waivers.",
+              "owner": "you",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "signoff.report"
+              }
+            },
+            {
+              "id": "sign:signoff",
+              "text": "Sign the release approval gate.",
+              "owner": "admins",
+              "state": "later",
+              "ref": {
+                "kind": "gate",
+                "id": "signoff"
+              }
+            }
           ]
         },
         {
@@ -129,7 +449,16 @@
           "started": null,
           "finished": null,
           "reopened": null,
-          "gates": []
+          "gates": [],
+          "guide": {
+            "purpose": "Freeze the approved design as a package that can be made.",
+            "you_do": "Nothing beyond the approval you already gave.",
+            "trace_does": "trace builds the fabrication and assembly files (copper layers, drill file, parts list, placement), freezes the parts list with today's prices, tags the release and stores it all together.",
+            "you_get": "The release: its files, its revision, and the report that approved it.",
+            "typical_time": "Minutes.",
+            "next": "Fabricate, to have the boards made, and get ready to test them while they are."
+          },
+          "steps": []
         },
         {
           "id": "fabricate",
@@ -145,6 +474,86 @@
           "gates": [
             "fabricate.order",
             "fabricate.received"
+          ],
+          "guide": {
+            "purpose": "Have the boards made, and get ready to test them while they are.",
+            "you_do": "Sign the order, upload the package and pay on the fab's site, and record the order number. When the boards arrive, inspect them.",
+            "trace_does": "trace prepares everything the fab needs, checks stock and prices again on the day, follows the order, and uses the wait to finish the bring-up plan, the test scripts and the bench setup.",
+            "you_get": "Inspected boards on your bench, with the firmware and the bench ready for them.",
+            "typical_time": "One to three weeks, mostly the fab's.",
+            "next": "Bring up, to prove the real board meets its requirements."
+          },
+          "steps": [
+            {
+              "id": "fabricate.order.package",
+              "text": "The release package is built and stored.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "fabricate.order.package"
+              }
+            },
+            {
+              "id": "fabricate.order.stock",
+              "text": "Stock and prices are checked again today, and every line is available.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "fabricate.order.stock"
+              }
+            },
+            {
+              "id": "fabricate.order.sheet",
+              "text": "The order sheet matches the release.",
+              "owner": "you",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "fabricate.order.sheet"
+              }
+            },
+            {
+              "id": "sign:fabricate.order",
+              "text": "Sign the order approval gate.",
+              "owner": "admins",
+              "state": "later",
+              "ref": {
+                "kind": "gate",
+                "id": "fabricate.order"
+              }
+            },
+            {
+              "id": "fabricate.received.inspected",
+              "text": "The boards are received and inspected.",
+              "owner": "you",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "fabricate.received.inspected"
+              }
+            },
+            {
+              "id": "fabricate.received.bench",
+              "text": "The bring-up plan, test scripts and bench are ready.",
+              "owner": "you",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "fabricate.received.bench"
+              }
+            },
+            {
+              "id": "sign:fabricate.received",
+              "text": "Sign the boards received gate.",
+              "owner": "admins",
+              "state": "later",
+              "ref": {
+                "kind": "gate",
+                "id": "fabricate.received"
+              }
+            }
           ]
         },
         {
@@ -160,6 +569,36 @@
           "reopened": null,
           "gates": [
             "bringup"
+          ],
+          "guide": {
+            "purpose": "Prove the real board meets its requirements.",
+            "you_do": "Put the board on the bench and wire the instruments the way the bench view shows.",
+            "trace_does": "trace steps through the bring-up checklist with current-limited supplies, loads the firmware, runs the hardware tests, and records each result against its requirement. A failure becomes an issue for a specialist.",
+            "you_get": "The coverage matrix with bench results: an accepted revision.",
+            "typical_time": "A few days.",
+            "next": null
+          },
+          "steps": [
+            {
+              "id": "bringup.verified",
+              "text": "Every requirement is verified on hardware, or carried to the next revision as an issue.",
+              "owner": "trace",
+              "state": "later",
+              "ref": {
+                "kind": "criterion",
+                "id": "bringup.verified"
+              }
+            },
+            {
+              "id": "sign:bringup",
+              "text": "Sign the revision accepted gate.",
+              "owner": "admins",
+              "state": "later",
+              "ref": {
+                "kind": "gate",
+                "id": "bringup"
+              }
+            }
           ]
         }
       ],
@@ -661,7 +1100,9 @@
         "ref": {
           "kind": "question",
           "id": "0123456789abcdef"
-        }
+        },
+        "step": null,
+        "after": "Once you answer, the agent that asked carries on, and then an admin can sign the requirements baseline gate."
       },
       "questions": [
         {

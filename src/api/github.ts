@@ -6,10 +6,20 @@ import { z } from 'zod'
 
 export class GitHubError extends Error {
   override name = 'GitHubError'
-  constructor(readonly status: number, message: string) { super(message) }
+  /** `said`: GitHub's own message from the body, when it gave one (a merge refused: "At least 1 approving review is
+   * required…"), so the caller can tell a review rule from a conflict and say which in plain words */
+  constructor(readonly status: number, message: string, readonly said: string | null = null) { super(message) }
 }
 
-export interface PullSummary { number: number; title: string; head: string; draft: boolean; labels: string[]; url: string; updated_at: string }
+/**
+ * One open pull request. `headRepo`: the repository its head branch lives in (owner/name; null when GitHub no longer
+ * knows it, a deleted fork), so a fork's branch that happens to share a trace branch's name is told apart. `sha`: its
+ * head commit. `author`: the login that opened it.
+ */
+export interface PullSummary {
+  number: number; title: string; head: string; draft: boolean; labels: string[]; url: string; updated_at: string; created_at?: string | undefined
+  headRepo?: string | null | undefined; sha?: string | undefined; author?: string | null | undefined
+}
 export interface IssueSummary { number: number; title: string; labels: string[]; url: string; updated_at: string }
 export interface RunSummary { id: number; name: string; path: string; event: string; status: string; conclusion: string | null; branch: string | null; url: string; created_at: string }
 /** One pull request's state now: open, merged or closed, whether it can merge, and its checks on the head commit. */
@@ -20,6 +30,23 @@ export interface PullStatus {
   /** the head commit's check runs, by how they stand (null: GitHub would not list them) */
   checks: { total: number; passed: number; failed: number; running: number; skipped: number; failing: string[] } | null
 }
+
+/** One pull request as the review page needs it: PullStatus's facts plus what it says and where it goes. */
+export interface PullDetail {
+  number: number; title: string; url: string; state: 'open' | 'merged' | 'closed'; draft: boolean; mergeable: string
+  body: string; labels: string[]; created_at: string; updated_at: string
+  /** `repo`: the repository its head branch lives in (null: a deleted fork) */
+  head: { ref: string; sha: string; repo: string | null }; base: { ref: string; sha: string }
+  /** the login that opened it */
+  author: string | null
+}
+/** One file a pull request changes. `patch` is null when GitHub gives none (a binary file, or a diff too large). */
+export interface PullFile {
+  path: string; status: 'added' | 'modified' | 'removed' | 'renamed'; additions: number; deletions: number; patch: string | null; previous: string | null
+}
+/** One check run on a commit, with its own one-line result when it wrote one (its output's title or summary). */
+export interface CheckRunDetail { name: string; status: string; conclusion: string | null; summary: string | null }
+export type MergeMethod = 'squash' | 'merge' | 'rebase'
 
 export interface DeploySummary { id: number; environment: string; ref: string; sha: string; created_at: string; state: string | null; url: string | null }
 
@@ -52,14 +79,42 @@ export interface GitHubApi {
   lastDeploy(repo: string): Promise<DeploySummary | null>
   /** One pull request's state and its head commit's checks. Optional: absent, its status is not shown. */
   pullStatus?(repo: string, number: number): Promise<PullStatus | null>
+
+  // ---- what the guided flow's changes need (src/api/actions-changes.ts). Optional, like pullStatus: an installation
+  // (or a test's fake) without them answers that it cannot review changes, and nothing else changes.
+  /** One pull request with its body, labels and both ends, or null when there is none. */
+  pullDetail?(repo: string, number: number): Promise<PullDetail | null>
+  /** The files it changes (at most 300: a change of more is not one a person reviews file by file). */
+  pullFiles?(repo: string, number: number): Promise<PullFile[]>
+  /** Its commits' messages, oldest first (at most 100). */
+  pullCommits?(repo: string, number: number): Promise<string[]>
+  /** The check runs on one commit, each with its own result line. */
+  checkRuns?(repo: string, sha: string): Promise<CheckRunDetail[]>
+  /** The merge methods the repository allows, in trace's order of preference: squash, merge, rebase. */
+  mergeMethods?(repo: string): Promise<MergeMethod[]>
+  /** Merge it with `method`, only if its head is still `sha` (what the person looked at). Throws GitHubError (with
+   * GitHub's message in `said`) when GitHub refuses. */
+  mergePull?(repo: string, number: number, o: { method: MergeMethod; sha: string }): Promise<{ sha: string }>
+  /** Add a comment to it (to GitHub, a pull request's comments are its issue's). */
+  comment?(repo: string, number: number, body: string): Promise<void>
+  /** Close it without merging. */
+  closePull?(repo: string, number: number): Promise<void>
+  /** Take a label off it: false when it did not have it. */
+  removeLabel?(repo: string, number: number, label: string): Promise<boolean>
+  /** A repository variable's value (Actions variables), or null when there is none or the token may not read it. Used
+   * for TRACE_AGENT_LOGIN, the login trace's agents open pull requests as. */
+  repoVariable?(repo: string, name: string): Promise<string | null>
 }
 
 const Label = z.union([z.string(), z.object({ name: z.string() }).loose()])
 const labelNames = (ls: readonly z.output<typeof Label>[]): string[] => ls.map((l) => (typeof l === 'string' ? l : l.name))
 
+/** A head's repository (null when GitHub no longer knows it: a fork that was deleted) and a pull request's author. */
+const HeadRepo = z.object({ full_name: z.string() }).loose().nullable().optional()
+const User = z.object({ login: z.string() }).loose().nullable().optional()
 const Pull = z.object({
-  number: z.number(), title: z.string(), draft: z.boolean().optional(), html_url: z.string(), updated_at: z.string(),
-  head: z.object({ ref: z.string() }).loose(), labels: z.array(Label).default([]),
+  number: z.number(), title: z.string(), draft: z.boolean().optional(), html_url: z.string(), updated_at: z.string(), created_at: z.string().optional(),
+  head: z.object({ ref: z.string(), sha: z.string().optional(), repo: HeadRepo }).loose(), labels: z.array(Label).default([]), user: User,
 }).loose()
 const Issue = z.object({
   number: z.number(), title: z.string(), html_url: z.string(), updated_at: z.string(), labels: z.array(Label).default([]),
@@ -71,9 +126,34 @@ const Run = z.object({
 }).loose()
 const PullFull = z.object({
   number: z.number(), title: z.string(), html_url: z.string(), state: z.string(), draft: z.boolean().optional(), merged_at: z.string().nullable().optional(),
-  mergeable_state: z.string().optional(), updated_at: z.string(), head: z.object({ ref: z.string(), sha: z.string() }).loose(),
+  mergeable_state: z.string().optional(), updated_at: z.string(), head: z.object({ ref: z.string(), sha: z.string(), repo: HeadRepo }).loose(),
+  user: User,
 }).loose()
 const CheckRun = z.object({ name: z.string(), status: z.string(), conclusion: z.string().nullable() }).loose()
+const CheckRunOut = CheckRun.extend({ output: z.object({ title: z.string().nullable().optional(), summary: z.string().nullable().optional() }).loose().nullable().optional() })
+const PullDetailBody = PullFull.extend({
+  body: z.string().nullable().optional(), labels: z.array(Label).default([]), created_at: z.string(),
+  base: z.object({ ref: z.string(), sha: z.string() }).loose(),
+})
+const FileBody = z.object({
+  filename: z.string(), status: z.string(), additions: z.number().default(0), deletions: z.number().default(0),
+  patch: z.string().optional(), previous_filename: z.string().optional(),
+}).loose()
+const RepoMerge = z.object({ allow_squash_merge: z.boolean().optional(), allow_merge_commit: z.boolean().optional(), allow_rebase_merge: z.boolean().optional() }).loose()
+
+/** GitHub's file statuses in the four words the review page uses: copied, changed and unchanged (a mode change only)
+ * are modifications. */
+const fileStatus = (s: string): PullFile['status'] => (s === 'added' || s === 'removed' || s === 'renamed' ? s : 'modified')
+
+/** GitHub's own message in an error body ({ message }), or null. */
+async function saidBy(r: Response): Promise<string | null> {
+  try {
+    const b = z.object({ message: z.string() }).loose().safeParse(await r.json())
+    return b.success ? b.data.message.slice(0, 500) : null
+  } catch {
+    return null
+  }
+}
 
 /** Check runs by how they stand: a run not completed is running; neutral and skipped are neither passed nor failed. */
 export function checksOf(runs: readonly z.output<typeof CheckRun>[]): NonNullable<PullStatus['checks']> {
@@ -118,7 +198,7 @@ export class HttpGitHub implements GitHubApi {
 
   private async json(method: string, path: string, body?: unknown): Promise<unknown> {
     const r = await this.req(method, path, body)
-    if (!r.ok) throw new GitHubError(r.status, `GitHub ${method} ${path.split('?')[0]}: ${r.status}`)
+    if (!r.ok) throw new GitHubError(r.status, `GitHub ${method} ${path.split('?')[0]}: ${r.status}`, await saidBy(r))
     return r.status === 204 ? null : r.json()
   }
 
@@ -200,6 +280,8 @@ export class HttpGitHub implements GitHubApi {
   async openPulls(repo: string): Promise<PullSummary[]> {
     return z.array(Pull).parse(await this.json('GET', `${this.p(repo)}/pulls?state=open&per_page=100`)).map((p) => ({
       number: p.number, title: p.title, head: p.head.ref, draft: p.draft ?? false, labels: labelNames(p.labels), url: p.html_url, updated_at: p.updated_at,
+      ...(p.created_at ? { created_at: p.created_at } : {}),
+      headRepo: p.head.repo?.full_name ?? null, author: p.user?.login ?? null, ...(p.head.sha ? { sha: p.head.sha } : {}),
     }))
   }
 
@@ -232,6 +314,73 @@ export class HttpGitHub implements GitHubApi {
       number: p.number, title: p.title, url: p.html_url, state: p.merged_at ? 'merged' : p.state === 'closed' ? 'closed' : 'open', draft: p.draft ?? false,
       mergeable: p.mergeable_state ?? 'unknown', head: p.head.ref, sha: p.head.sha, updated_at: p.updated_at, checks,
     }
+  }
+
+  async pullDetail(repo: string, number: number): Promise<PullDetail | null> {
+    const r = await this.req('GET', `${this.p(repo)}/pulls/${number}`)
+    if (r.status === 404) return null
+    if (!r.ok) throw new GitHubError(r.status, `GitHub GET pull ${number}: ${r.status}`)
+    const p = PullDetailBody.parse(await r.json())
+    return {
+      number: p.number, title: p.title, url: p.html_url, state: p.merged_at ? 'merged' : p.state === 'closed' ? 'closed' : 'open', draft: p.draft ?? false,
+      mergeable: p.mergeable_state ?? 'unknown', body: p.body ?? '', labels: labelNames(p.labels), created_at: p.created_at, updated_at: p.updated_at,
+      head: { ref: p.head.ref, sha: p.head.sha, repo: p.head.repo?.full_name ?? null }, base: { ref: p.base.ref, sha: p.base.sha }, author: p.user?.login ?? null,
+    }
+  }
+
+  async pullFiles(repo: string, number: number): Promise<PullFile[]> {
+    // at most three pages of 100: each page is a call, and a change of more than 300 files is not reviewed file by file
+    const out: PullFile[] = []
+    for (let page = 1; page <= 3; page++) {
+      const got = z.array(FileBody).parse(await this.json('GET', `${this.p(repo)}/pulls/${number}/files?per_page=100&page=${page}`))
+      out.push(...got.map((f) => ({ path: f.filename, status: fileStatus(f.status), additions: f.additions, deletions: f.deletions, patch: f.patch ?? null, previous: f.previous_filename ?? null })))
+      if (got.length < 100) break
+    }
+    return out
+  }
+
+  async pullCommits(repo: string, number: number): Promise<string[]> {
+    const C = z.object({ commit: z.object({ message: z.string().default('') }).loose() }).loose()
+    return z.array(C).parse(await this.json('GET', `${this.p(repo)}/pulls/${number}/commits?per_page=100`)).map((c) => c.commit.message)
+  }
+
+  async checkRuns(repo: string, sha: string): Promise<CheckRunDetail[]> {
+    const r = z.object({ check_runs: z.array(CheckRunOut) }).loose().parse(await this.json('GET', `${this.p(repo)}/commits/${encodeURIComponent(sha)}/check-runs?per_page=100`))
+    return r.check_runs.map((c) => ({ name: c.name, status: c.status, conclusion: c.conclusion, summary: (c.output?.title || c.output?.summary || null)?.slice(0, 300) ?? null }))
+  }
+
+  async mergeMethods(repo: string): Promise<MergeMethod[]> {
+    const m = RepoMerge.parse(await this.json('GET', this.p(repo)))
+    // a field GitHub left out (a token that may not read the settings) counts as allowed: the merge itself then decides
+    return ([['squash', m.allow_squash_merge], ['merge', m.allow_merge_commit], ['rebase', m.allow_rebase_merge]] as const).filter(([, on]) => on !== false).map(([k]) => k)
+  }
+
+  async mergePull(repo: string, number: number, o: { method: MergeMethod; sha: string }): Promise<{ sha: string }> {
+    const r = z.object({ sha: z.string() }).loose().parse(await this.json('PUT', `${this.p(repo)}/pulls/${number}/merge`, { merge_method: o.method, sha: o.sha }))
+    return { sha: r.sha }
+  }
+
+  async comment(repo: string, number: number, body: string): Promise<void> {
+    z.object({ id: z.number() }).loose().parse(await this.json('POST', `${this.p(repo)}/issues/${number}/comments`, { body }))
+  }
+
+  async closePull(repo: string, number: number): Promise<void> {
+    z.object({ state: z.string() }).loose().parse(await this.json('PATCH', `${this.p(repo)}/pulls/${number}`, { state: 'closed' }))
+  }
+
+  async removeLabel(repo: string, number: number, label: string): Promise<boolean> {
+    const r = await this.req('DELETE', `${this.p(repo)}/issues/${number}/labels/${encodeURIComponent(label)}`)
+    if (r.status === 404) return false
+    if (!r.ok) throw new GitHubError(r.status, `GitHub DELETE label: ${r.status}`, await saidBy(r))
+    return true
+  }
+
+  async repoVariable(repo: string, name: string): Promise<string | null> {
+    const r = await this.req('GET', `${this.p(repo)}/actions/variables/${encodeURIComponent(name)}`)
+    // none, or a token that may not read the repository's variables: either way there is nothing to go by
+    if (!r.ok) return null
+    const v = z.object({ value: z.string() }).loose().safeParse(await r.json().catch(() => null))
+    return v.success ? v.data.value : null
   }
 
   async lastDeploy(repo: string): Promise<DeploySummary | null> {

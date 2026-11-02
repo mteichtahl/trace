@@ -7,12 +7,14 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda'
 import type { Writable } from 'node:stream'
 import { type Sink, type WebRequest, parseCookies } from './http.js'
 
-/** A function URL event as a WebRequest (base64 bodies decoded, header names lower-cased). */
+/** A function URL event as a WebRequest (base64 bodies decoded, header names lower-cased; `raw`: the body's bytes). */
 export function toRequest(e: APIGatewayProxyEventV2): WebRequest {
   const headers: Record<string, string> = {}
   for (const [k, v] of Object.entries(e.headers ?? {})) if (v !== undefined) headers[k.toLowerCase()] = v
-  const body = e.body ? (e.isBase64Encoded ? Buffer.from(e.body, 'base64').toString('utf8') : e.body) : ''
+  const raw = e.body ? (e.isBase64Encoded ? Buffer.from(e.body, 'base64') : Buffer.from(e.body, 'utf8')) : Buffer.alloc(0)
+  const body = raw.toString('utf8')
   return {
+    raw,
     method: e.requestContext?.http?.method ?? 'GET',
     path: e.rawPath || '/',
     query: new URLSearchParams(e.rawQueryString ?? ''),

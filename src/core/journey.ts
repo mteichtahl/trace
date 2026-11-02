@@ -60,6 +60,7 @@ import { ensureProjectSchema, projectTables, transaction } from './store.js'
 // order tracking, boards by serial and their inspection: journey tables too (src/core/build-tables.ts, src/core/boards.ts)
 import { BUILD_TABLES } from './build-tables.js'
 import type { HandoffFact } from './handoffs.js'
+import { type StageGuide, stageGuideText } from './stage-guides.js'
 
 // ------------------------------------------------------------------ templates
 
@@ -585,11 +586,26 @@ export interface GateView {
   returned: { by: string | null; at: string; reason: string | null } | null
   may_sign: boolean; missing: string[]
 }
+/** What a stage is for, in a person's words (src/core/stage-guides.ts), with what comes after it in this project. */
+export type StageGuideView = StageGuide
+export type StepOwner = 'you' | 'trace' | 'admins' | 'contributors' | 'person'
+export type StepState = 'done' | 'now' | 'next' | 'later' | 'waived'
+/**
+ * One thing left (or done) in a stage, in order: its gates' criteria, then signing each gate; journey.get adds the
+ * open changes trace made (src/api/changes.ts). `now` is what the next step points at, `next` the step after it.
+ */
+export interface StepView {
+  id: string; text: string; owner: StepOwner; state: StepState
+  ref: { kind: 'criterion' | 'gate' | 'question' | 'change'; id: string } | null
+}
 export interface StageView {
   id: StageId; name: string; optional: boolean; state: StageState; met: number; total: number; progress: string
   started: string | null; finished: string | null; reopened: { at: string; reason: string | null } | null; gates: string[]
+  guide: StageGuideView
+  steps: StepView[]
 }
-export type NextKind = 'task' | 'gate' | 'working' | 'waiting_person' | 'waiting_outside' | 'failed' | 'answer' | 'done'
+/** `review`: a change trace made is open and ready to accept (journey.get, docs/guided-flow.md): the API's only */
+export type NextKind = 'task' | 'gate' | 'working' | 'waiting_person' | 'waiting_outside' | 'failed' | 'answer' | 'review' | 'done'
 export interface NextStep {
   kind: NextKind
   /** whose move it is: you, the admins, the contributors, a named person (by label), trace, or someone outside */
@@ -601,7 +617,11 @@ export interface NextStep {
   button: string
   stage: StageId | null
   /** skill: a guided skill (src/core/skills.ts) the step opens, such as requirements-review */
-  ref: { kind: 'gate' | 'criterion' | 'question' | 'stage' | 'skill'; id: string } | null
+  ref: { kind: 'gate' | 'criterion' | 'question' | 'stage' | 'change' | 'skill'; id: string } | null
+  /** the now-step's place among its stage's steps ("Step 3 of 5 in Capture"); null when it points at no step */
+  step: { index: number; total: number } | null
+  /** one sentence: what happens once this is done; null when nothing follows */
+  after: string | null
 }
 export interface QuestionView {
   id: string; kind: 'question' | 'stuck'; asked_by: string; for_you: boolean; for: 'you' | 'person' | 'contributors' | 'admins'; stage: StageId | null
@@ -744,8 +764,111 @@ function questionView(q: QuestionRow, v: Viewer): QuestionView {
 export const blockingQuestions = (r: JourneyRecord): QuestionRow[] =>
   r.questions.filter((q) => q.answeredAt === null && (q.kind === 'stuck' || Boolean(q.blocks?.trim())))
 
-/** The single next step (docs/ui-design.md "The next step card"), for this viewer. */
+// ------------------------------------------------------------------ steps (docs/guided-flow.md "Journey view additions")
+
+/** Whether this viewer may do a person's criterion: contributors and admins (reviewers read). */
+const mayDo = (v: Viewer): boolean => v.admin || v.part === 'contributor'
+
+/**
+ * A stage's steps in order: for each of its gates, the gate's criteria (a person's: `you` when the viewer may do it,
+ * else `contributors`; trace's: `trace`) and then "Sign <the gate>" (`you` for an admin, else `admins`). A signed gate's
+ * steps are done (a waived criterion stays `waived`, so the record shows it was not met). The rest are `later` here:
+ * markSteps picks `now` and `next` for the current stage.
+ */
+export function stageSteps(r: JourneyRecord, stage: StageId, viewer: Viewer): StepView[] {
+  const waived = waiverFor(r)
+  const out: StepView[] = []
+  for (const g of r.gates.filter((x) => x.stage === stage).sort((a, b) => a.ord - b.ord)) {
+    const signed = Boolean(liveSignature(r, g.id))
+    for (const c of r.criteria.filter((x) => x.gate === g.id).sort((a, b) => a.ord - b.ord)) {
+      const state: StepState = waived.has(c.id) && c.status !== 'met' ? 'waived' : signed || c.status === 'met' ? 'done' : 'later'
+      out.push({ id: c.id, text: c.text, owner: c.owner === 'trace' ? 'trace' : mayDo(viewer) ? 'you' : 'contributors', state, ref: { kind: 'criterion', id: c.id } })
+    }
+    out.push({ id: `sign:${g.id}`, text: `Sign ${gateTitle(g)}.`, owner: viewer.admin ? 'you' : 'admins', state: signed ? 'done' : 'later', ref: { kind: 'gate', id: g.id } })
+  }
+  return out
+}
+
+const pending = (s: StepView): boolean => s.state !== 'done' && s.state !== 'waived'
+
+/**
+ * Mark the step the next step points at `now`, and the one after it `next` (the first not-done step after it, else the
+ * first before it); the other not-done steps are `later`. A gate that is not ready yet points at its first not-done
+ * criterion rather than at signing it (the boards are on their way: the first thing left is to receive them). When
+ * the next step points at no step (a question, a reopened stage), nothing is `now`, and the first not-done step is
+ * `next`.
+ */
+export function markSteps(steps: readonly StepView[], ref: NextStep['ref']): StepView[] {
+  const out = steps.map((s) => ({ ...s, state: pending(s) ? 'later' as StepState : s.state }))
+  let i = ref ? out.findIndex((s) => pending(s) && s.ref?.kind === ref.kind && s.ref.id === ref.id) : -1
+  if (i >= 0 && ref?.kind === 'gate') {
+    const first = out.findIndex((s) => pending(s) && s.ref?.kind === 'criterion' && s.ref.id.startsWith(`${ref.id}.`))
+    if (first >= 0 && first < i) i = first
+  }
+  const target = out[i]
+  if (target) target.state = 'now'
+  const after = [...out.slice(i + 1), ...out.slice(0, Math.max(0, i))].find((s) => s.state === 'later')
+  if (after) after.state = 'next'
+  return out
+}
+
+/** The now-step's place in its stage ("Step 3 of 5"), or null when nothing is `now`. */
+export function stepPlace(steps: readonly StepView[]): NextStep['step'] {
+  const i = steps.findIndex((s) => s.state === 'now')
+  return i < 0 ? null : { index: i + 1, total: steps.length }
+}
+
+/** A step in words that follow "then": "you can sign the schematic review gate". */
+export function stepWords(s: StepView): string {
+  const what = s.text.replace(/\.$/, '')
+  const lower = `${what[0]?.toLowerCase() ?? ''}${what.slice(1)}`
+  if (s.ref?.kind === 'gate') return s.owner === 'you' ? `you can ${lower}` : `an admin can ${lower}`
+  if (s.ref?.kind === 'change') return s.owner === 'you' ? `you review the next change from trace: ${what}` : `a contributor reviews the next change from trace: ${what}`
+  switch (s.owner) {
+    case 'trace': return `trace works on the next criterion: ${lower}`
+    case 'you': return `your next step is: ${lower}`
+    default: return `a contributor's next step is: ${lower}`
+  }
+}
+
+/**
+ * One sentence: what happens once the next step is done, from the step after it (`next`) or, at the end of a stage,
+ * the stage that follows. Null when nothing follows (the journey is done, or Sustain runs on its own).
+ */
+export function afterWords(r: JourneyRecord, n: Omit<NextStep, 'step' | 'after'>, steps: readonly StepView[]): string | null {
+  const then = steps.find((s) => s.state === 'next')
+  const stageId = r.journey.currentStage
+  const following = r.stages.find((s) => s.ord > (r.stages.find((x) => x.id === stageId)?.ord ?? 0))
+  const end = following
+    ? `${STAGE_NAMES[following.id]} starts, to ${lowerFirst(stageGuideText(following.id, r.journey.template).purpose)}`
+    : `revision ${r.journey.revision} is accepted`
+  switch (n.kind) {
+    case 'done': return null
+    case 'answer': return `Once you answer, the agent that asked carries on${then ? `, and then ${stepWords(then)}` : ''}.`
+    case 'waiting_person': return 'Once it is answered, the agent that asked carries on.'
+    case 'failed': return 'Once the cause is fixed, trace runs the stage\'s checks again, and only what the failure touched is redone.'
+    case 'waiting_outside': return 'When the boards arrive, you inspect them against the release, and bring-up starts once the gate is signed.'
+    case 'gate': return then ? `Once it is signed, ${stepWords(then)}.` : `Once it is signed, ${end}.`
+    case 'review': return `Once you accept it, its work counts in the design${then ? `, and then ${stepWords(then)}` : ''}.`
+    case 'working':
+      if (stageId === 'sustain' && !n.ref) return null
+      return then ? `When trace has done this, ${stepWords(then)}.` : n.ref ? `When trace has done this, ${end}.` : null
+    default: return then ? `Once it is done, ${stepWords(then)}.` : `Once it is done, ${end}.`
+  }
+}
+
+const lowerFirst = (s: string): string => `${s[0]?.toLowerCase() ?? ''}${s.slice(1)}`.replace(/\.$/, '')
+
+/** The single next step (docs/ui-design.md "The next step card"), for this viewer, with its place among the stage's
+ * steps and what happens after it. */
 export function nextStep(r: JourneyRecord, viewer: Viewer, at: number = now()): NextStep {
+  const n = baseNext(r, viewer, at)
+  const steps = markSteps(stageSteps(r, r.journey.currentStage, viewer), n.ref)
+  return { ...n, step: stepPlace(steps), after: afterWords(r, n, steps) }
+}
+
+/** The next step itself: what to do, whose it is and why (nextStep adds where it sits and what follows). */
+function baseNext(r: JourneyRecord, viewer: Viewer, at: number): Omit<NextStep, 'step' | 'after'> {
   const stageId = r.journey.currentStage
   const stage = r.stages.find((s) => s.id === stageId)
   const stageName = STAGE_NAMES[stageId]
@@ -833,6 +956,13 @@ export function nextStep(r: JourneyRecord, viewer: Viewer, at: number = now()): 
 
 const cap = (s: string): string => `${s[0]?.toUpperCase() ?? ''}${s.slice(1)}`
 
+/** A stage's guide for this project's template, with what comes after it here (none after the last stage). */
+export function stageGuide(r: Pick<JourneyRecord, 'journey'>, stage: StageId, following: StageId | null): StageGuideView {
+  const t = stageGuideText(stage, r.journey.template)
+  // every guide's purpose starts with what to do ("Choose how …"), so it follows "to"
+  return { ...t, next: following ? `${STAGE_NAMES[following]}, to ${lowerFirst(stageGuideText(following, r.journey.template).purpose)}.` : null }
+}
+
 /** The criteria (keys of its gate) a criterion `gate.key` reviews the work of, from its definition. */
 function reviewsAfter(id: string): readonly string[] | undefined {
   const dot = id.lastIndexOf('.')
@@ -844,7 +974,8 @@ export function journeyView(r0: JourneyRecord, viewer: Viewer, at: number = now(
   const r = withoutDismissed(facts ? mergeAgentFacts(r0, facts) : r0)
   const curOrd = r.stages.find((s) => s.id === r.journey.currentStage)?.ord ?? 0
   const gates = r.gates.map((g) => gateView(r, g.id, viewer))
-  const stages: StageView[] = r.stages.map((s) => {
+  const next = nextStep(r, viewer, at)
+  const stages: StageView[] = r.stages.map((s, i) => {
     const own = gates.filter((g) => g.stage === s.id)
     const met = own.reduce((n, g) => n + g.met, 0)
     const total = own.reduce((n, g) => n + g.total, 0)
@@ -856,13 +987,16 @@ export function journeyView(r0: JourneyRecord, viewer: Viewer, at: number = now(
       id: s.id, name: STAGE_NAMES[s.id], optional: (LATER_STAGES as readonly string[]).includes(s.id), state, met, total, progress,
       started: iso(s.started), finished: iso(s.finished), reopened: s.reopenedAt !== null ? { at: isoN(s.reopenedAt), reason: s.reopenedReason } : null,
       gates: own.map((g) => g.id),
+      guide: stageGuide(r, s.id, r.stages[i + 1]?.id ?? null),
+      // only the current stage has a now and a next: the others' steps are done or later
+      steps: s.id === r.journey.currentStage ? markSteps(stageSteps(r, s.id, viewer), next.ref) : stageSteps(r, s.id, viewer),
     }
   })
   const opened = new Set(r.opens.filter((o) => isViewer(viewer, o.who)).map((o) => o.item))
   return {
     template: r.journey.template, template_name: TEMPLATE_NAMES[r.journey.template], revision: r.journey.revision, current_stage: r.journey.currentStage,
     later: r.journey.later, start: r.journey.start, name: r.journey.name, description: r.journey.description, icon: r.journey.icon, build: r.journey.build,
-    stages, gates, next: nextStep(r, viewer, at),
+    stages, gates, next,
     questions: r.questions.map((q) => questionView(q, viewer)),
     waivers: r.waivers.map((w) => ({
       id: w.id, stage: w.stage, gate: w.gate, target: { kind: w.targetKind, id: w.target }, reason: w.reason, risk: w.risk, severity: w.severity,
@@ -872,6 +1006,56 @@ export function journeyView(r0: JourneyRecord, viewer: Viewer, at: number = now(
     decisions: r.decisions.slice(0, 200).map((d) => ({ id: d.id, at: isoN(d.at), kind: d.kind, stage: d.stage, ref: d.ref, summary: d.summary, by: d.by })),
     firmware_track: r.journey.template === 'firmware' || r.journey.template === 'mixed',
   }
+}
+
+/**
+ * An open change trace made (a pull request one of its jobs opened, src/api/changes.ts), as journey.get adds it:
+ * `criteria` are the gate criteria its job named (where its step goes), `ready` whether it can be accepted now (its
+ * checks passed and it can merge), `recommendation` trace's, in words.
+ */
+export interface OpenChange { number: number; title: string; from: string; criteria: readonly string[]; ready: boolean; recommendation: string | null }
+
+/**
+ * The view with the open changes merged in (docs/guided-flow.md "Journey view additions"): each change becomes a step
+ * (owner `you` when the viewer may accept it, else `contributors`; ref `change`) placed before the first criterion it
+ * would satisfy, in that criterion's stage, else first among the current stage's not-done steps. When the next step
+ * is a task or trace working, and a change is open and ready, the next step becomes `review` of the oldest ready one.
+ * The current stage's now and next, and the next step's place and what follows, are worked out again.
+ */
+export function withChanges(r0: JourneyRecord, view: JourneyView, viewer: Viewer, changes: readonly OpenChange[]): JourneyView {
+  if (!changes.length) return view
+  const r = withoutDismissed(r0)
+  const cur = r.journey.currentStage
+  const owner: StepOwner = mayDo(viewer) ? 'you' : 'contributors'
+  const stages = view.stages.map((s) => ({ ...s, steps: [...s.steps] }))
+  for (const c of changes) {
+    const step: StepView = { id: `change:${c.number}`, text: `Review "${c.title}" from ${c.from}.`, owner, state: 'later', ref: { kind: 'change', id: String(c.number) } }
+    // before the first criterion it names that is not done yet, wherever it is; else first among the current stage's
+    // not-done steps (a stage already done is not reopened by a change)
+    const target = stages.find((s) => s.state !== 'done' && s.steps.some((x) => pending(x) && x.ref?.kind === 'criterion' && c.criteria.includes(x.ref.id)))
+    if (target) {
+      target.steps.splice(target.steps.findIndex((x) => pending(x) && x.ref?.kind === 'criterion' && c.criteria.includes(x.ref.id)), 0, step)
+      continue
+    }
+    const here = stages.find((s) => s.id === cur)
+    if (!here) continue
+    // after the changes already placed there, so they stay oldest first
+    const first = here.steps.findIndex((x) => pending(x) && x.ref?.kind !== 'change')
+    here.steps.splice(first < 0 ? here.steps.length : first, 0, step)
+  }
+  let next: Omit<NextStep, 'step' | 'after'> = view.next
+  const ready = changes.find((c) => c.ready)
+  if (ready && (view.next.kind === 'task' || view.next.kind === 'working')) {
+    next = {
+      kind: 'review', belongs_to: owner, yours: owner === 'you', summary: `trace finished ${ready.title}. Review it and accept it into the design.`,
+      why: 'Its work counts in the design only once it is accepted.', recommendation: ready.recommendation, button: owner === 'you' ? 'Review the change' : 'Read the change',
+      stage: cur, ref: { kind: 'change', id: String(ready.number) },
+    }
+  }
+  const here = stages.find((s) => s.id === cur)
+  if (!here) return { ...view, stages }
+  here.steps = markSteps(here.steps, next.ref)
+  return { ...view, stages, next: { ...next, step: stepPlace(here.steps), after: afterWords(r, next, here.steps) } }
 }
 
 // ------------------------------------------------------------------ writes
@@ -1303,7 +1487,8 @@ export const INBOX_KINDS = ['gate', 'question', 'spend', 'stuck', 'review'] as c
 export interface InboxItem {
   id: string; kind: (typeof INBOX_KINDS)[number]; repo: string; project: string; stage: StageId; summary: string
   since: string; waited: string; blocking: boolean; action: string
-  ref: { kind: 'gate' | 'question'; id: string } | { kind: 'pull'; id: string; url: string }
+  /** `pull`: a change trace made; `to` is its review page in the app, `url` its pull request on GitHub */
+  ref: { kind: 'gate' | 'question'; id: string } | { kind: 'pull'; id: string; url: string; to: string }
   recommended?: { id: string; label: string } | undefined
 }
 

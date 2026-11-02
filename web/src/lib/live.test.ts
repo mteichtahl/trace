@@ -1,6 +1,6 @@
 import { QueryClient } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { applyEvent, connectLive, hostOf, invalidationsFor, liveStatus, subprotocols } from './live'
+import { POLL_LIVE_MS, applyEvent, connectLive, hostOf, invalidationsFor, liveStatus, nextLookWords, pollEvery, subprotocols } from './live'
 
 describe('live events → query invalidation', () => {
   it('maps each event to the queries it makes stale', () => {
@@ -19,6 +19,30 @@ describe('live events → query invalidation', () => {
     expect(qc.getQueryState(['journey.get', 'a/b', { repo: 'a/b' }])?.isInvalidated).toBe(true)
     expect(qc.getQueryState(['inbox', {}])?.isInvalidated).toBe(true)
     expect(qc.getQueryState(['journey.get', 'c/d', { repo: 'c/d' }])?.isInvalidated).toBe(false)
+  })
+})
+
+describe('a change moved on GitHub (the webhook\'s record.changed, kind change)', () => {
+  it('refetches the change\'s status, the lists that show it, and the journey', () => {
+    const e = { type: 'record.changed', repo: 'a/b', kind: 'change', number: 7, at: '' } as unknown as Parameters<typeof invalidationsFor>[0]
+    expect(invalidationsFor(e)).toEqual([['pull.status', 'a/b'], ['changes.list', 'a/b'], ['change.get', 'a/b'], ['inbox'], ['journey.get', 'a/b']])
+  })
+})
+
+describe('polling, as the fallback', () => {
+  it('slows to POLL_LIVE_MS while the live connection is up, and keeps its own pace otherwise', () => {
+    expect(POLL_LIVE_MS).toBe(60_000)
+    expect(pollEvery(15_000, 'live')).toBe(60_000)
+    expect(pollEvery(120_000, 'live')).toBe(120_000)
+    for (const s of ['connecting', 'reconnecting', 'offline'] as const) expect(pollEvery(15_000, s)).toBe(15_000)
+  })
+
+  it('says when it next looks', () => {
+    expect(nextLookWords(1_000_000, 60_000, 1_020_000)).toBe('next look in 40 s')
+    expect(nextLookWords(1_000_000, 60_000, 1_059_500)).toBe('next look in 1 s')
+    expect(nextLookWords(1_000_000, 60_000, 1_060_000)).toBe('looking now')
+    expect(nextLookWords(0, 60_000, 5)).toBe('looking now')
+    expect(nextLookWords(0 + 1, 300_000, 1)).toBe('next look in 5 min')
   })
 })
 

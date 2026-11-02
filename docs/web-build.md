@@ -20,6 +20,8 @@ browser ──https──▶ CloudFront (one address)
                                      ├── /api/voice/*   Polly speech (cached in S3) and signed Transcribe streaming URLs
                                      ├── /api/ops       CloudWatch dashboards and metric data, filtered by access
                                      └── /api/config    what the app needs to start (no secrets)
+                    └── /api/hooks/*  GitHub's webhook: a function of its own (`<prefix>-web-hooks`, the backend's code),
+                                   a function URL without IAM; each delivery's HMAC is checked (docs/guided-flow.md)
 browser ──wss──▶ AppSync Events (the id token, checked by a Lambda authorizer): the one live connection, channel /trace/users/<sub>
 ```
 
@@ -70,6 +72,7 @@ All bodies are JSON unless noted. Errors: `{ ok: false, error, code? }` with a f
 | `GET /api/voice/voices?language=en-AU` | bearer | `{ voices: [{ id, name, gender, engines }] }` |
 | `POST /api/voice/speak` | bearer, `{ text, voice, engine?, rate? }` | `{ url, marks }` (signed S3 URL of the MP3, and word speech marks) |
 | `POST /api/voice/listen` | bearer, `{ language, repo? }` | `{ url, vocabulary? }`: signed Transcribe streaming WebSocket URL, 5 minutes; with `repo`, the project's custom vocabulary (`voice.vocabulary`, asked as the person) is named in it when READY, and `vocabulary: { state, used, note }` says whether |
+| `POST /api/hooks/github` | GitHub's delivery, signed (`X-Hub-Signature-256`) | 202, or 204 when dropped (unsigned, a bad signature, another event, too large, not a project): docs/guided-flow.md "Live updates" |
 | `GET /api/ops?range=24h&repo=` | bearer | `{ status, tiles, alarms, sections: [{ id, title, widgets: [{ id, title, kind, unit, series: [{ label, repo?, points: [[t, v]] }] }] }], updatedAt, nextAt }` filtered by access |
 
 ## Live events (AppSync Events)

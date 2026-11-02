@@ -99,11 +99,41 @@ export interface EvidenceRef {
   summary?: string
 }
 
+/** What a stage is for, in plain words (journey.get `guide`, src/core/stage-guides.ts). */
+export interface StageGuide {
+  purpose: string
+  you_do: string
+  trace_does: string
+  you_get: string
+  typical_time: string
+  /** "Prove: simulate the circuit and write the test plan." (null for the last stage) */
+  next: string | null
+}
+
+export type StepOwner = 'you' | 'trace' | 'admins' | 'contributors' | 'person'
+export type StepState = 'done' | 'now' | 'next' | 'later' | 'waived'
+
+/** One step of a stage (journey.get `steps`): who does it, where it stands, and what it is about. */
+export interface StageStep {
+  id: string
+  text: string
+  owner: StepOwner
+  state: StepState
+  ref: { kind: 'criterion' | 'gate' | 'question' | 'change'; id: string } | null
+  /** a named person's name, when owner is person */
+  who?: string
+  /** an in-app address that does the step (its guided skill, gate or change), worked out by the reader */
+  to?: string
+}
+
 export interface Stage {
   id: string
   name: string
   state: StageState
   criteria: { met: number; total: number }
+  /** absent from an API before the guided flow */
+  guide?: StageGuide
+  steps?: StageStep[]
   /** a reopened stage: why ("datasheet conflict found in Prove") */
   reopened?: { reason: string }
   /** what trace has prepared for a queued stage */
@@ -146,7 +176,8 @@ export interface Gate {
   signature?: { by: string; at: string }
 }
 
-export type NextStepKind = 'task' | 'gate' | 'working' | 'waiting_person' | 'waiting_outside' | 'failed' | 'none'
+/** `review`: trace finished a change; review it and accept it into the design */
+export type NextStepKind = 'task' | 'gate' | 'review' | 'working' | 'waiting_person' | 'waiting_outside' | 'failed' | 'none'
 
 export interface NextStep {
   kind: NextStepKind
@@ -165,7 +196,83 @@ export interface NextStep {
   wait?: Wait
   /** reading form for reviewers */
   reviewer?: { summary: string; action?: { label: string; to?: string } }
+  /** the summary without the recommendation folded into it (shown when `recommend` has its own box) */
+  lead?: string
+  /** trace's recommendation and its reason, for the card's recommendation box */
+  recommend?: { text: string; why?: string }
+  /** the now-step's place in its stage: "Step 3 of 5 in Capture" */
+  step?: { index: number; total: number } | null
+  /** one sentence: what happens once this is done */
+  after?: string | null
+  /** what the step is about; a change opens its review page */
+  ref?: { kind: string; id: string } | null
 }
+
+// ------------------------------------------------------------------ changes (src/api/actions-changes.ts)
+
+export type ChangeVerdict = 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked'
+export type ChangeFileKind = 'schematic' | 'board' | 'parts' | 'text' | 'image' | 'binary'
+
+/** A pull request a trace job opened, as people read it: a change. */
+export interface ChangeSummary {
+  number: number
+  title: string
+  /** GitHub's page for it: only for the small "View on GitHub" link */
+  url: string
+  draft: boolean
+  held: boolean
+  /** "the schematic specialist", or "a trace job" */
+  from: string
+  job_id: string | null
+  stage: string | null
+  opened_at: string
+  updated_at: string
+  state: 'open' | 'merged' | 'closed'
+  /** GitHub's mergeable_state */
+  mergeable: string
+  checks: { total: number; passed: number; failed: number; running: number; skipped: number; failing: string[] } | null
+  verdict: ChangeVerdict
+}
+
+export interface ChangeFile {
+  path: string
+  status: 'added' | 'modified' | 'removed' | 'renamed'
+  additions: number
+  deletions: number
+  kind: ChangeFileKind
+}
+
+export interface ChangeCheck { name: string; state: 'passed' | 'failed' | 'running' | 'skipped'; summary: string | null }
+
+export interface ChangeDetail extends ChangeSummary {
+  /** what trace did, plain bullets */
+  summary: string[]
+  files: ChangeFile[]
+  checks_list: ChangeCheck[]
+  /** requirement ids the change names: ["R4", "R7"] */
+  requirements: string[]
+  recommendation: { verdict: 'accept' | 'ask' | 'wait' | 'none'; why: string }
+  /** this person, now */
+  may_accept: boolean
+  /** plain words, when may_accept is false */
+  blockers: string[]
+  base: { ref: string; sha: string }
+  head: { ref: string; sha: string }
+}
+
+/** change.diff: one file's two sides. */
+export interface ChangeDiff {
+  path: string
+  kind: ChangeFileKind
+  patch: string | null
+  /** a renamed file's before side carries its old path */
+  before: { ref: string; path?: string } | null
+  after: { ref: string } | null
+  binary: boolean
+}
+
+/** `warning`: it is merged, but something after it (the decisions log) did not happen */
+export interface ChangeAccepted { merged: true; sha: string; stage: string; next: string; warning?: string }
 
 export interface Question {
   id: string
@@ -296,6 +403,8 @@ export interface Journey {
   recent: RecentItem[]
   /** has an agent session happened yet (the Memory tab appears) */
   hasMemory?: boolean
+  /** GitHub could not be reached, so open changes are left out (journey.get `changes_unavailable`) */
+  changesUnavailable?: string
   /** small summaries for the side column (assumed) */
   summary?: {
     requirements?: { accepted: number; verified: number; failing: number; untested: number }
@@ -331,7 +440,7 @@ export interface JobView {
 
 // ------------------------------------------------------------------ inbox
 
-/** `review`: an open pull request a trace job opened, to review and merge on GitHub */
+/** `review`: a change a trace job made, to review and accept in the app */
 export type InboxKind = 'gate' | 'question' | 'spend' | 'stuck' | 'review'
 
 export interface InboxItem {
@@ -348,8 +457,10 @@ export interface InboxItem {
   /** a question with a clear recommendation: its answer as a button */
   recommended?: { id: string; label: string }
   questionId?: string
-  /** a review item's pull request: its live status is shown on the card (components/pull-status.tsx) */
+  /** a review item's pull request on GitHub (kept for older screens) */
   pull?: { repo: string; number: number }
+  /** a review item's change: the card shows its status, Review and (when this person may) Accept */
+  change?: { repo: string; number: number; /** GitHub's page, for "View on GitHub" only */ url?: string }
   sources?: EvidenceRef[]
   blocks?: string
   read?: boolean

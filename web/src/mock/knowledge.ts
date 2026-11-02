@@ -76,6 +76,8 @@ export function knowledgeAction(name: string, a: Record<string, unknown>): unkno
       return { nodes, links }
     }
     case 'tool':
+      // the coverage matrix is the project tabs' (mock/s1.ts)
+      if (a.name === 'verify.coverage') return undefined
       return toolResult(String(a.name), (a.args ?? {}) as Record<string, unknown>)
     default:
       return undefined

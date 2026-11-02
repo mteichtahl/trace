@@ -18,18 +18,27 @@
  *                       (1 MB for /api/call, 4 MB for a chat) stay, and catch a body sent without one
  *   2 AuthRate          at most authRequestsPer5Minutes (100) requests to /api/auth/* per address in 5 minutes: sign-in
  *                       is the one unauthenticated part, and each try costs a Cognito call (and an email with SES)
- *   3 ApiRate           at most apiRequestsPer5Minutes (1,000) requests to /api/* per address in 5 minutes
+ *   3 ApiRate           at most apiRequestsPer5Minutes (1,000) requests to /api/* per address in 5 minutes, GitHub's
+ *                       webhook (/api/hooks/*) apart
  *   4 IpReputation      AWS's Amazon IP reputation list (known bots, scanners)
- *   5 KnownBadInputs    AWS's known bad inputs (Log4j, Java deserialization, …)
- *   6 Common            AWS's core rule set, with two of its rules only counted: SizeRestrictions_BODY (it blocks any
- *                       body over 8 KB: a chat or a prompt is larger) and CrossSiteScripting_BODY (people paste HTML and
- *                       code into chat; the app renders no HTML from them and its content security policy runs no
- *                       inline script)
+ *   5 KnownBadInputs    AWS's known bad inputs (Log4j, Java deserialization, …), not on /api/hooks/*
+ *   6 Common            AWS's core rule set, not on /api/hooks/*, with two of its rules only counted:
+ *                       SizeRestrictions_BODY (it blocks any body over 8 KB: a chat or a prompt is larger) and
+ *                       CrossSiteScripting_BODY (people paste HTML and code into chat; the app renders no HTML from them
+ *                       and its content security policy runs no inline script)
+ *   7 HooksRate         at most HOOKS_PER_5_MINUTES requests to /api/hooks/* per address in 5 minutes
+ *
+ * GitHub's webhook deliveries (/api/hooks/*, src/web/hooks.ts) carry pull request titles, bodies and check output as
+ * they are: the body rules (KnownBadInputs, Common) would block a delivery whose text names a path with `../`, a
+ * metadata address or a Log4j string, and one push sends dozens of deliveries from a few GitHub addresses, which
+ * ApiRate would count with people's requests. So those three skip that path, and HooksRate limits it on its own (its
+ * own, higher limit: a busy installation's pushes come from the same few addresses). Every delivery's HMAC signature
+ * is checked by the hooks function; BodyTooLarge and IpReputation still apply.
  *
  * Blocked requests answer 403 (rate rules 429). Every rule has CloudWatch metrics and sampled requests.
  *
- * Cost (AWS WAF pricing, us-east-1): US$5 a month for the web ACL and US$1 for each rule or managed rule group (six),
- * so US$11 a month, plus US$0.60 per million requests (EDGE_COST).
+ * Cost (AWS WAF pricing, us-east-1): US$5 a month for the web ACL and US$1 for each rule or managed rule group
+ * (seven), so US$12 a month, plus US$0.60 per million requests (EDGE_COST).
  */
 import { CfnOutput, Stack, type StackProps } from 'aws-cdk-lib'
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2'
@@ -48,7 +57,11 @@ export const MAX_BODY_BYTES = 5_000_000
 /** Content-Length values of MAX_BODY_BYTES or more: eight digits or more, or seven starting 5 to 9. */
 export const BODY_TOO_LARGE = '^(\\d{8,}|[5-9]\\d{6})$'
 /** What the web ACL costs (USD): a month, and per million requests. */
-export const EDGE_COST = { monthly: 11, perMillion: 0.6 } as const
+export const EDGE_COST = { monthly: 12, perMillion: 0.6 } as const
+/** GitHub's webhook deliveries per address in 5 minutes (HooksRate). */
+export const HOOKS_PER_5_MINUTES = 5000
+/** The path GitHub's webhook posts under (src/infra/web.ts HOOKS_PATH). */
+export const HOOKS_PREFIX = '/api/hooks/'
 
 /** Whether the app gets the WAF this stack makes (not when web.webAclArn names one of the person's own). */
 /** The pattern AWS WAF holds every description to: letters, digits, spaces and `+=:#@/-,.` only, no space at either end. */
@@ -65,9 +78,17 @@ const visibility = (metricName: string): wafv2.CfnWebACL.VisibilityConfigPropert
 const startsWith = (path: string): wafv2.CfnWebACL.StatementProperty => ({
   byteMatchStatement: { fieldToMatch: { uriPath: {} }, positionalConstraint: 'STARTS_WITH', searchString: path, textTransformations: [{ priority: 0, type: 'NONE' }] },
 })
-const managed = (name: string, priority: number, metric: string, count: string[] = []): wafv2.CfnWebACL.RuleProperty => ({
+/** Every request but GitHub's webhook deliveries (see the file's comment). */
+const notHooks: wafv2.CfnWebACL.StatementProperty = { notStatement: { statement: startsWith(HOOKS_PREFIX) } }
+const managed = (name: string, priority: number, metric: string, o: { count?: string[]; scopeDown?: wafv2.CfnWebACL.StatementProperty } = {}): wafv2.CfnWebACL.RuleProperty => ({
   name: metric, priority, overrideAction: { none: {} }, visibilityConfig: visibility(`${metric}`),
-  statement: { managedRuleGroupStatement: { vendorName: 'AWS', name, ...(count.length ? { ruleActionOverrides: count.map((r) => ({ name: r, actionToUse: { count: {} } })) } : {}) } },
+  statement: {
+    managedRuleGroupStatement: {
+      vendorName: 'AWS', name,
+      ...(o.count?.length ? { ruleActionOverrides: o.count.map((r) => ({ name: r, actionToUse: { count: {} } })) } : {}),
+      ...(o.scopeDown ? { scopeDownStatement: o.scopeDown } : {}),
+    },
+  },
 })
 
 /** The web ACL (see the file's comment). */
@@ -101,11 +122,20 @@ export class TraceWebAcl extends Construct {
         },
         {
           name: 'ApiRate', priority: 3, action: { block: tooMany }, visibilityConfig: visibility('ApiRate'),
-          statement: { rateBasedStatement: { limit: p.waf.apiRequestsPer5Minutes, evaluationWindowSec: 300, aggregateKeyType: 'IP', scopeDownStatement: startsWith('/api/') } },
+          statement: {
+            rateBasedStatement: {
+              limit: p.waf.apiRequestsPer5Minutes, evaluationWindowSec: 300, aggregateKeyType: 'IP',
+              scopeDownStatement: { andStatement: { statements: [startsWith('/api/'), notHooks] } },
+            },
+          },
         },
         managed('AWSManagedRulesAmazonIpReputationList', 4, 'IpReputation'),
-        managed('AWSManagedRulesKnownBadInputsRuleSet', 5, 'KnownBadInputs'),
-        managed('AWSManagedRulesCommonRuleSet', 6, 'Common', ['SizeRestrictions_BODY', 'CrossSiteScripting_BODY']),
+        managed('AWSManagedRulesKnownBadInputsRuleSet', 5, 'KnownBadInputs', { scopeDown: notHooks }),
+        managed('AWSManagedRulesCommonRuleSet', 6, 'Common', { count: ['SizeRestrictions_BODY', 'CrossSiteScripting_BODY'], scopeDown: notHooks }),
+        {
+          name: 'HooksRate', priority: 7, action: { block: tooMany }, visibilityConfig: visibility('HooksRate'),
+          statement: { rateBasedStatement: { limit: HOOKS_PER_5_MINUTES, evaluationWindowSec: 300, aggregateKeyType: 'IP', scopeDownStatement: startsWith(HOOKS_PREFIX) } },
+        },
       ],
     })
   }

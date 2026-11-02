@@ -49,6 +49,8 @@ import { Route as AppPIdDesignRouteImport } from './routes/_app/p/$id/design'
 import { Route as AppPIdEvidenceRouteImport } from './routes/_app/p/$id/evidence'
 import { Route as AppPIdMemoryRouteImport } from './routes/_app/p/$id/memory'
 import { Route as AppPIdRequirementsRouteImport } from './routes/_app/p/$id/requirements'
+import { Route as AppPIdChangesIndexRouteImport } from './routes/_app/p/$id/changes/index'
+import { Route as AppPIdChangesNumberRouteImport } from './routes/_app/p/$id/changes/$number'
 import { Route as AppPIdFilesIndexRouteImport } from './routes/_app/p/$id/files/index'
 import { Route as AppPIdMemoryIndexRouteImport } from './routes/_app/p/$id/memory/index'
 import { Route as AppPIdMemoryChangesRouteImport } from './routes/_app/p/$id/memory/changes'
@@ -260,6 +262,16 @@ const AppPIdRequirementsRoute = AppPIdRequirementsRouteImport.update({
   path: '/requirements',
   getParentRoute: () => AppPIdRoute,
 } as any)
+const AppPIdChangesIndexRoute = AppPIdChangesIndexRouteImport.update({
+  id: '/changes/',
+  path: '/changes/',
+  getParentRoute: () => AppPIdRoute,
+} as any)
+const AppPIdChangesNumberRoute = AppPIdChangesNumberRouteImport.update({
+  id: '/changes/$number',
+  path: '/changes/$number',
+  getParentRoute: () => AppPIdRoute,
+} as any)
 const AppPIdFilesIndexRoute = AppPIdFilesIndexRouteImport.update({
   id: '/files/',
   path: '/files/',
@@ -360,6 +372,7 @@ export interface FileRoutesByFullPath {
   '/p/$id/requirements': typeof AppPIdRequirementsRouteWithChildren
   '/admin/systems/': typeof AppAdminSystemsIndexRoute
   '/p/$id/': typeof AppPIdIndexRoute
+  '/p/$id/changes/$number': typeof AppPIdChangesNumberRoute
   '/p/$id/memory/changes': typeof AppPIdMemoryChangesRoute
   '/p/$id/memory/recent': typeof AppPIdMemoryRecentRoute
   '/p/$id/requirements/$rid': typeof AppPIdRequirementsRidRoute
@@ -369,6 +382,7 @@ export interface FileRoutesByFullPath {
   '/p/$id/do/$skill': typeof FocusPIdDoSkillRoute
   '/p/$id/gates/$gate': typeof FocusPIdGatesGateRoute
   '/view/p/$id/files/$': typeof ViewPIdFilesSplatRoute
+  '/p/$id/changes/': typeof AppPIdChangesIndexRoute
   '/p/$id/files/': typeof AppPIdFilesIndexRoute
   '/p/$id/memory/': typeof AppPIdMemoryIndexRoute
   '/p/$id/settings/': typeof AppPIdSettingsIndexRoute
@@ -408,6 +422,7 @@ export interface FileRoutesByTo {
   '/p/$id/requirements': typeof AppPIdRequirementsRouteWithChildren
   '/admin/systems': typeof AppAdminSystemsIndexRoute
   '/p/$id': typeof AppPIdIndexRoute
+  '/p/$id/changes/$number': typeof AppPIdChangesNumberRoute
   '/p/$id/memory/changes': typeof AppPIdMemoryChangesRoute
   '/p/$id/memory/recent': typeof AppPIdMemoryRecentRoute
   '/p/$id/requirements/$rid': typeof AppPIdRequirementsRidRoute
@@ -417,6 +432,7 @@ export interface FileRoutesByTo {
   '/p/$id/do/$skill': typeof FocusPIdDoSkillRoute
   '/p/$id/gates/$gate': typeof FocusPIdGatesGateRoute
   '/view/p/$id/files/$': typeof ViewPIdFilesSplatRoute
+  '/p/$id/changes': typeof AppPIdChangesIndexRoute
   '/p/$id/files': typeof AppPIdFilesIndexRoute
   '/p/$id/memory': typeof AppPIdMemoryIndexRoute
   '/p/$id/settings': typeof AppPIdSettingsIndexRoute
@@ -463,6 +479,7 @@ export interface FileRoutesById {
   '/_app/p/$id/requirements': typeof AppPIdRequirementsRouteWithChildren
   '/_app/admin/systems/': typeof AppAdminSystemsIndexRoute
   '/_app/p/$id/': typeof AppPIdIndexRoute
+  '/_app/p/$id/changes/$number': typeof AppPIdChangesNumberRoute
   '/_app/p/$id/memory/changes': typeof AppPIdMemoryChangesRoute
   '/_app/p/$id/memory/recent': typeof AppPIdMemoryRecentRoute
   '/_app/p/$id/requirements/$rid': typeof AppPIdRequirementsRidRoute
@@ -472,6 +489,7 @@ export interface FileRoutesById {
   '/_focus/p/$id/do/$skill': typeof FocusPIdDoSkillRoute
   '/_focus/p/$id/gates/$gate': typeof FocusPIdGatesGateRoute
   '/view/p/$id/files/$': typeof ViewPIdFilesSplatRoute
+  '/_app/p/$id/changes/': typeof AppPIdChangesIndexRoute
   '/_app/p/$id/files/': typeof AppPIdFilesIndexRoute
   '/_app/p/$id/memory/': typeof AppPIdMemoryIndexRoute
   '/_app/p/$id/settings/': typeof AppPIdSettingsIndexRoute
@@ -517,6 +535,7 @@ export interface FileRouteTypes {
     | '/p/$id/requirements'
     | '/admin/systems/'
     | '/p/$id/'
+    | '/p/$id/changes/$number'
     | '/p/$id/memory/changes'
     | '/p/$id/memory/recent'
     | '/p/$id/requirements/$rid'
@@ -526,6 +545,7 @@ export interface FileRouteTypes {
     | '/p/$id/do/$skill'
     | '/p/$id/gates/$gate'
     | '/view/p/$id/files/$'
+    | '/p/$id/changes/'
     | '/p/$id/files/'
     | '/p/$id/memory/'
     | '/p/$id/settings/'
@@ -565,6 +585,7 @@ export interface FileRouteTypes {
     | '/p/$id/requirements'
     | '/admin/systems'
     | '/p/$id'
+    | '/p/$id/changes/$number'
     | '/p/$id/memory/changes'
     | '/p/$id/memory/recent'
     | '/p/$id/requirements/$rid'
@@ -574,6 +595,7 @@ export interface FileRouteTypes {
     | '/p/$id/do/$skill'
     | '/p/$id/gates/$gate'
     | '/view/p/$id/files/$'
+    | '/p/$id/changes'
     | '/p/$id/files'
     | '/p/$id/memory'
     | '/p/$id/settings'
@@ -619,6 +641,7 @@ export interface FileRouteTypes {
     | '/_app/p/$id/requirements'
     | '/_app/admin/systems/'
     | '/_app/p/$id/'
+    | '/_app/p/$id/changes/$number'
     | '/_app/p/$id/memory/changes'
     | '/_app/p/$id/memory/recent'
     | '/_app/p/$id/requirements/$rid'
@@ -628,6 +651,7 @@ export interface FileRouteTypes {
     | '/_focus/p/$id/do/$skill'
     | '/_focus/p/$id/gates/$gate'
     | '/view/p/$id/files/$'
+    | '/_app/p/$id/changes/'
     | '/_app/p/$id/files/'
     | '/_app/p/$id/memory/'
     | '/_app/p/$id/settings/'
@@ -926,6 +950,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPIdRequirementsRouteImport
       parentRoute: typeof AppPIdRoute
     }
+    '/_app/p/$id/changes/': {
+      id: '/_app/p/$id/changes/'
+      path: '/changes'
+      fullPath: '/p/$id/changes/'
+      preLoaderRoute: typeof AppPIdChangesIndexRouteImport
+      parentRoute: typeof AppPIdRoute
+    }
+    '/_app/p/$id/changes/$number': {
+      id: '/_app/p/$id/changes/$number'
+      path: '/changes/$number'
+      fullPath: '/p/$id/changes/$number'
+      preLoaderRoute: typeof AppPIdChangesNumberRouteImport
+      parentRoute: typeof AppPIdRoute
+    }
     '/_app/p/$id/files/': {
       id: '/_app/p/$id/files/'
       path: '/files'
@@ -1090,8 +1128,10 @@ interface AppPIdRouteChildren {
   AppPIdMemoryRoute: typeof AppPIdMemoryRouteWithChildren
   AppPIdRequirementsRoute: typeof AppPIdRequirementsRouteWithChildren
   AppPIdIndexRoute: typeof AppPIdIndexRoute
+  AppPIdChangesNumberRoute: typeof AppPIdChangesNumberRoute
   AppPIdRunsRunRoute: typeof AppPIdRunsRunRoute
   AppPIdSettingsPromptsRoute: typeof AppPIdSettingsPromptsRoute
+  AppPIdChangesIndexRoute: typeof AppPIdChangesIndexRoute
   AppPIdFilesIndexRoute: typeof AppPIdFilesIndexRoute
   AppPIdSettingsIndexRoute: typeof AppPIdSettingsIndexRoute
 }
@@ -1106,8 +1146,10 @@ const AppPIdRouteChildren: AppPIdRouteChildren = {
   AppPIdMemoryRoute: AppPIdMemoryRouteWithChildren,
   AppPIdRequirementsRoute: AppPIdRequirementsRouteWithChildren,
   AppPIdIndexRoute: AppPIdIndexRoute,
+  AppPIdChangesNumberRoute: AppPIdChangesNumberRoute,
   AppPIdRunsRunRoute: AppPIdRunsRunRoute,
   AppPIdSettingsPromptsRoute: AppPIdSettingsPromptsRoute,
+  AppPIdChangesIndexRoute: AppPIdChangesIndexRoute,
   AppPIdFilesIndexRoute: AppPIdFilesIndexRoute,
   AppPIdSettingsIndexRoute: AppPIdSettingsIndexRoute,
 }

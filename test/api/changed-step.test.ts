@@ -9,7 +9,7 @@ import type { NextStep } from '../../src/core/journey.js'
 const gate: NextStep = {
   kind: 'gate', belongs_to: 'you', yours: true, summary: 'The schematic review gate is ready. All 4 criteria met. trace recommends signing.',
   why: 'Work on the next stage starts only when the schematic review gate is signed.', recommendation: 'trace recommends signing.',
-  button: 'Review and sign', stage: 'capture', ref: { kind: 'gate', id: 'capture' },
+  button: 'Review and sign', stage: 'capture', ref: { kind: 'gate', id: 'capture' }, step: { index: 3, total: 3 }, after: 'Layout opens.',
 }
 
 describe('changedStep', () => {
@@ -17,7 +17,7 @@ describe('changedStep', () => {
     expect(changedStep(gate, 'capture', ['R5'])).toEqual({
       kind: 'task', belongs_to: 'you', yours: true,
       summary: 'R5 was changed after the requirements baseline and is not accepted yet: accept, edit or strike it in Requirements review. The schematic review gate is ready. All 4 criteria met.',
-      why: expect.stringMatching(/accepted requirements/), recommendation: null, button: 'Open Requirements review', stage: 'capture', ref: { kind: 'skill', id: 'requirements-review' },
+      why: expect.stringMatching(/accepted requirements/), recommendation: null, button: 'Open Requirements review', stage: 'capture', ref: { kind: 'skill', id: 'requirements-review' }, step: null, after: expect.stringMatching(/sign/),
     })
     expect(changedStep(gate, 'capture', ['R5', 'R7', 'R13']).summary).toMatch(/^R5, R7 and R13 were changed .* accept, edit or strike them/)
   })

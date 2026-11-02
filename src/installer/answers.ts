@@ -70,10 +70,13 @@ export const AgentAnswers = z.object({
   webCertificateArn: z.string().trim().regex(/^(arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[0-9a-f-]{36})?$/, 'an ACM certificate ARN in us-east-1, or empty').default(''),
   /** a verified Amazon SES sender for the user pool: then sign-in also offers a code by email; empty: passkeys and passwords */
   webEmailFrom: z.string().trim().refine((v) => v === '' || z.string().email().safeParse(v).success, 'a verified SES sender address, or empty').default(''),
-  /** AWS WAF in front of the web app (props.ts web.waf, src/infra/edge.ts): on by default. It costs about US$11 a month
+  /** AWS WAF in front of the web app (props.ts web.waf, src/infra/edge.ts): on by default. It costs about US$12 a month
    * and US$0.60 per million requests, which is worth it for an address anyone can reach whose sign-in takes no token;
    * turn it off for a private trial */
   webWaf: z.boolean().default(true),
+  /** Live updates from GitHub (props.ts web.hooks, src/installer/hooks.ts): a webhook on every project repository, so
+   * a change's checks and merges reach people's screens at once; off, the app looks again every 60 s */
+  webHooks: z.boolean().default(true),
   /** AgentCore observability: OpenTelemetry traces and metrics to CloudWatch (GenAI Observability) */
   observability: z.boolean().default(true),
   /** turn on CloudWatch Transaction Search in the account and region (account-wide; never turned off) */

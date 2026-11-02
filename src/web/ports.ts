@@ -62,5 +62,10 @@ export interface CloudWatchPort {
   describeAlarms(prefix: string): Promise<MetricAlarm[]>
 }
 
+/** Secrets Manager: one secret's string (GitHub's webhook secret and the backend's own client secret, src/web/hooks.ts). */
+export interface SecretsPort {
+  get(id: string): Promise<string>
+}
+
 /** The Lambda role's credentials, for SigV4 (AppSync publish, the Transcribe URL). */
 export type Credentials = () => Promise<AwsCredentialIdentity>

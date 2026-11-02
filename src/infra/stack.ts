@@ -92,11 +92,11 @@ import { OrderWatch, WATCH_OBJECTS, orderWatchName } from './order-watch.js'
 import { orderWatchSecretsPrefix } from '../core/integrations-catalog.js'
 import { apiVocabularyStatement } from './voice.js'
 import { EDGE_REGION, edgeNeeded, edgeStackName } from './edge.js'
-import { SELF_WRITABLE, TraceWeb, addWebClient, traceWebProps } from './web.js'
+import { SELF_WRITABLE, TraceWeb, addHooksClient, addWebClient, traceWebProps } from './web.js'
 import { ACCESS_PREFIX, AGENT_FACTS, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
   CDK_QUALIFIER, CENTRAL_BUCKET_OUTPUT, INSTALLATION_PREFIX, GPU_IMAGE_BUILD_OUTPUT, type InfraProps, SELF_UPDATE_OUTPUT, ciRunnerOutput, LAYOUT_OUTPUT, selfUpdateRoleName, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, EXTERNAL_RESOURCE_SERVER, cpuEnabled, toolsEnabled, TOOLS_IMAGE_OUTPUT, webModel,
-  githubSubjects, kbEnabled, projectRefs, projectSettings,
+  githubSubjects, kbEnabled, projectRefs, projectSettings, webHooksOn, webHooksSecret,
 } from './props.js'
 
 /** The tag every runtime (and memory) of an installation carries: its prefix. The API's grant on the workers is scoped
@@ -459,6 +459,9 @@ export class TraceStack extends Stack {
     })
     // the web app's own client: its sign-in pages call the pool's API (USER_AUTH, refresh), never the hosted domain
     const webClient = web ? addWebClient(users, cfg.prefix) : null
+    // the web backend's own client (web.hooks): GitHub's webhook asks the API who is on a project with it, as nobody
+    // (src/api/backend-auth.ts: hook.members, and nothing else)
+    const hooksClient = web && webHooksOn(cfg) ? addHooksClient(users, cfg.prefix) : null
     // The three classes of person (src/core/access.ts). A person's class is their group, carried in their token.
     new cognito.CfnUserPoolGroup(this, 'AdminsGroup', { userPoolId: users.userPoolId, groupName: 'trace-admins', precedence: 0, description: 'admin: everything, on every project, including managing people' })
     new cognito.CfnUserPoolGroup(this, 'UsersGroup', { userPoolId: users.userPoolId, groupName: 'trace-users', precedence: 1, description: 'user: read and write on the projects they are assigned to' })
@@ -508,6 +511,7 @@ export class TraceStack extends Stack {
       TRACE_COGNITO_POOL_ID: users.userPoolId,
       TRACE_COGNITO_CLIENT_ID: client.userPoolClientId,
       ...(webClient ? { TRACE_COGNITO_WEB_CLIENT_ID: webClient.userPoolClientId } : {}),
+      ...(hooksClient ? { TRACE_COGNITO_HOOKS_CLIENT_ID: hooksClient.userPoolClientId } : {}),
       TRACE_COGNITO_ISSUER: `https://cognito-idp.${cfg.region}.amazonaws.com/${users.userPoolId}`,
       TRACE_AWS_ACCOUNT: cfg.account,
       TRACE_WORKER_RUNTIMES: workerList,
@@ -556,7 +560,8 @@ export class TraceStack extends Stack {
       networkConfiguration: { networkMode: 'PUBLIC' },
       protocolConfiguration: 'HTTP',
       // the CLI's client, and the web app's (its backend calls the API with the person's token)
-      authorizerConfiguration: { customJwtAuthorizer: { discoveryUrl, allowedClients: [client.userPoolClientId, ...(webClient ? [webClient.userPoolClientId] : [])] } },
+      // and the web backend's own (web.hooks), which may call hook.members only (src/api/backend-auth.ts)
+      authorizerConfiguration: { customJwtAuthorizer: { discoveryUrl, allowedClients: [client.userPoolClientId, ...(webClient ? [webClient.userPoolClientId] : []), ...(hooksClient ? [hooksClient.userPoolClientId] : [])] } },
       requestHeaderConfiguration: { requestHeaderAllowlist: ['Authorization'] },
       lifecycleConfiguration: lifecycle,
       filesystemConfigurations: filesystems,
@@ -608,7 +613,12 @@ export class TraceStack extends Stack {
     })
 
     // ------------------------------------------------------------------ the web app's parts that name the pool
-    if (web && webClient) web.attach({ pool: users, client: webClient, apiRuntimeArn: api.attrAgentRuntimeArn, email: emailCodes, apiBuild: contentTag })
+    if (web && webClient) {
+      web.attach({
+        pool: users, client: webClient, apiRuntimeArn: api.attrAgentRuntimeArn, email: emailCodes, apiBuild: contentTag,
+        ...(hooksClient ? { hooks: { client: hooksClient, tokenUrl } } : {}),
+      })
+    }
     // ------------------------------------------------------------------ keeping the installation up to date (selfUpdate)
     // The role trace's own repository's ci workflow assumes, on `branch` only, to deploy this stack again with the
     // settings the installer saved (src/installer/update.ts). It may do exactly what that takes and nothing else:
@@ -622,6 +632,7 @@ export class TraceStack extends Stack {
     //              PutSecretValue on the projects' token secrets (<prefix>/github-token/*: a project created in the web app
     //              gets a copy of the shared token, as the installer gives it)
     //   pending    list installation/pending-projects/* and put (mark) its records: the projects created in the web app
+    //   hooks      (web.hooks) GetSecretValue on `<prefix>/web/github-hooks`: a project it adds gets its webhook
     // Whoever can merge to that branch can therefore change this installation: README "Staying up to date".
     if (cfg.selfUpdate) {
       const { repository, branch } = cfg.selfUpdate
@@ -677,6 +688,14 @@ export class TraceStack extends Stack {
         sid: 'ProjectTokenSecrets', actions: ['secretsmanager:PutSecretValue'],
         resources: [`arn:${partition}:secretsmanager:${region}:${account}:secret:${cfg.prefix}/github-token/*`],
       }))
+      // live updates from GitHub (web.hooks): a project it adds gets its webhook registered with the installer's secret,
+      // which it may read, never write
+      if (webHooksOn(cfg)) {
+        updater.addToPolicy(new iam.PolicyStatement({
+          sid: 'WebHooksSecret', actions: ['secretsmanager:GetSecretValue'],
+          resources: [`arn:${partition}:secretsmanager:${region}:${account}:secret:${webHooksSecret(cfg.prefix)}-??????`],
+        }))
+      }
       new CfnOutput(this, SELF_UPDATE_OUTPUT, { value: updater.roleArn, description: `${repository}'s TRACE_UPDATE_ROLE: keeps this installation up to date from its ci workflow on ${branch}` })
     }
 

@@ -87,17 +87,26 @@ describe('reading the API\'s answers', () => {
     expect(items[0]!.createdAt).toMatch(/^2026-/)
   })
 
-  it('inbox: a review item opens its pull request on GitHub and carries it for the live status', () => {
+  it('inbox: a review item is a change that opens in the app; GitHub\'s link is kept only for View on GitHub', () => {
     const items = READERS.inbox!({ items: [{
-      id: 'review:1', kind: 'review', repo: 'acme/x', project: 'X', stage: 'define', summary: 'X: The Verification agent opened pull request #1', since: '2026-10-31T07:40:00.000Z',
+      id: 'review:1', kind: 'review', repo: 'acme/x', project: 'X', stage: 'define', summary: 'X: The Verification agent opened pull request #1, "Requirements R1-R10". Its work counts once it is merged.', since: '2026-10-31T07:40:00.000Z',
       waited: '20 min', blocking: false, action: 'Review on GitHub', ref: { kind: 'pull', id: '1', url: 'https://github.com/acme/x/pull/1' },
     }, {
       id: 'review:2', kind: 'review', repo: 'acme/x', project: 'X', stage: 'define', summary: 'x', since: '2026-10-31T07:40:00.000Z',
-      waited: '', blocking: false, action: 'Review on GitHub', ref: { kind: 'pull', id: '2', url: 'https://evil.example/pull/2' },
+      waited: '', blocking: false, action: 'Review the change', ref: { kind: 'pull', id: '2', url: 'https://evil.example/pull/2', to: '/p/acme~x/changes/2' },
+    }, {
+      id: 'review:3', kind: 'review', repo: 'acme/x', project: 'X', stage: 'define', summary: 'x', since: '2026-10-31T07:40:00.000Z',
+      waited: '', blocking: false, action: 'Review the change', ref: { kind: 'pull', id: '3', to: 'https://evil.example/' },
     }] }, {}) as InboxItem[]
-    expect(items[0]).toMatchObject({ kind: 'review', action: { label: 'Review on GitHub', href: 'https://github.com/acme/x/pull/1' }, pull: { repo: 'acme/x', number: 1 } })
-    // only a github.com link is followed
-    expect(items[1]!.action).toEqual({ label: 'Review on GitHub' })
+    // an older API (no `to`): the in-app address is worked out, and the words say change
+    expect(items[0]).toMatchObject({ kind: 'review', action: { label: 'Review the change', to: '/p/acme~x/changes/1' }, change: { repo: 'acme/x', number: 1, url: 'https://github.com/acme/x/pull/1' } })
+    expect(items[0]!.summary).toBe('X: The Verification agent finished "Requirements R1-R10". Review it and accept it into the design.')
+    expect(items[0]!.action.href).toBeUndefined()
+    // the API's `to` is used; only a github.com link is kept
+    expect(items[1]).toMatchObject({ action: { label: 'Review the change', to: '/p/acme~x/changes/2' }, change: { repo: 'acme/x', number: 2 } })
+    expect(items[1]!.change!.url).toBeUndefined()
+    // a `to` outside the app is never followed
+    expect(items[2]!.action.to).toBe('/p/acme~x/changes/3')
   })
 
   it('me.get: the document, its views, and the admins\' locks', () => {

@@ -5,6 +5,7 @@
 import { Outlet, createFileRoute } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
+import { AfterAccept } from '@/components/changes/after-accept'
 import { ChatProvider } from '@/components/chat/chat-provider'
 import { AppShell } from '@/components/shell/app-shell'
 import { loadConfig } from '@/lib/config'
@@ -40,6 +41,7 @@ function AppLayout() {
     <ChatProvider>
       <AppShell>
         <Outlet />
+        <AfterAccept />
       </AppShell>
     </ChatProvider>
   )

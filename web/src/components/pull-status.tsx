@@ -1,16 +1,20 @@
 /**
  * A pull request's status, live: open, merged or closed, its checks (running, passed, failing by name) and whether it
- * can merge. While it is open it is asked for again every POLL_MS (and when the window regains focus), so the card
- * follows CI and a merge without a reload; once merged or closed it stops, and the inbox is refreshed so the item goes.
+ * can merge. GitHub's webhook tells the app at once when it moves (lib/live.ts: record.changed with kind 'change'
+ * refetches it); polling is the fallback: every POLL_MS while the live connection is down, every POLL_LIVE_MS while it
+ * is up, and when the window regains focus. The line says when it next looks. Once merged or closed it stops, and the
+ * inbox is refreshed so the item goes.
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { CircleCheck, CircleX, GitMerge, GitPullRequestClosed, Loader2 } from 'lucide-react'
+import { pollEvery, useLiveStatus, useNextLook } from '@/lib/live'
 import { q } from '@/lib/queries'
 import type { PullStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-/** How often an open pull request is asked for again (GitHub's API allows this comfortably for a few cards). */
+/** How often an open pull request is asked for again while live events are not connected (GitHub's API allows this
+ * comfortably for a few cards); with them, POLL_LIVE_MS. */
 export const POLL_MS = 15_000
 
 export type PullTone = 'running' | 'good' | 'bad' | 'done' | 'muted'
@@ -45,15 +49,18 @@ const TONE = { running: 'text-muted-foreground', good: 'text-verified', bad: 'te
 
 export function PullStatusLine({ repo, number, className }: { repo: string; number: number; className?: string }) {
   const qc = useQueryClient()
+  const live = useLiveStatus().state
+  const every = pollEvery(POLL_MS, live)
   const res = useQuery({
     ...q('pull.status', { repo, number }),
-    refetchInterval: (query) => (query.state.data?.state === 'open' || query.state.data === undefined ? POLL_MS : false),
+    refetchInterval: (query) => (query.state.data?.state === 'open' || query.state.data === undefined ? every : false),
     refetchOnWindowFocus: true,
   })
   const state = res.data?.state
+  const next = useNextLook(res.dataUpdatedAt, state === 'open' ? every : false)
   // merged or closed: the inbox no longer lists it
   useEffect(() => { if (state === 'merged' || state === 'closed') void qc.invalidateQueries({ queryKey: ['inbox'] }) }, [state, qc])
-  if (res.isPending) return <p className={cn('flex items-center gap-1.5 text-xs text-muted-foreground', className)}><Loader2 className="size-3.5 animate-spin" aria-hidden />Checking the pull request…</p>
+  if (res.isPending) return <p className={cn('flex items-center gap-1.5 text-xs text-muted-foreground', className)}><Loader2 className="size-3.5 animate-spin" aria-hidden />Checking the change…</p>
   if (res.isError || !res.data) return <p className={cn('text-xs text-muted-foreground', className)}>Its status could not be read just now.</p>
   const w = pullWords(res.data)
   const Icon = ICON[w.tone]
@@ -61,7 +68,7 @@ export function PullStatusLine({ repo, number, className }: { repo: string; numb
     <p className={cn('flex items-center gap-1.5 text-xs', TONE[w.tone], className)} aria-live="polite">
       <Icon className={cn('size-3.5 shrink-0', w.tone === 'running' && 'animate-spin')} aria-hidden />
       <span>#{res.data.number}: {w.text}</span>
-      {state === 'open' && <span className="text-muted-foreground">· live</span>}
+      {state === 'open' && next && <span className="text-muted-foreground">· {live === 'live' ? 'live, ' : ''}{next}</span>}
     </p>
   )
 }

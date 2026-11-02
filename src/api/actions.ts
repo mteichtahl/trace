@@ -102,8 +102,12 @@
  *   actions-prompts.ts   prompts.chat (the chat agent's editable instructions as the installation has them)
  *   actions-voice.ts     voice.vocabulary, voice.vocabulary.sync (dictation's project words)
  *   actions-layout.ts    installation.layout (flat or nested, what that means, and how to move)
+ *   actions-hooks.ts     hook.members (the web backend's own identity only: who to tell when GitHub says a change moved)
  *   actions-services.ts  services.list, services.create, services.update, services.assign, services.unassign,
  *                        services.rotate, services.retire_secret, services.delete, services.history (connected systems)
+ *   actions-changes.ts   changes.list, change.get, change.diff (read); change.accept, change.ask, change.discard (write,
+ *                        never a connected system's): the pull requests trace's jobs opened, reviewed and accepted
+ *                        in the app as changes (docs/guided-flow.md)
  *
  * A connected system (an outside system with a client-credentials token, docs/external-access.md) reaches only the
  * actions in src/api/service-policy.ts's allow-list, with the scope each needs, checked in perform before anything else.
@@ -114,14 +118,14 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import {
   AccessDenied, CLASSES, GROUPS, PARTS, PartRefused, type PersonClass, type Principal, RepoSlug, type Role,
-  assign, assignments, classOf, isAdmin, isService, lastSeen, projectsFor, require_, setClass, unassign,
+  assign, assignments, classOf, isAdmin, isBackend, isService, lastSeen, projectsFor, require_, setClass, unassign,
 } from '../core/access.js'
 import { readSettings, resolve, setValue, unset } from '../core/config.js'
 import { IntegrationNameSchema, type IntegrationStore, checkIntegration, valuesFor } from '../core/integrations.js'
 import { type AnyTool, Registry, ToolError } from '../core/registry.js'
 import { AgentName, type MemoryRecord, STRATEGIES, actorIn, projectPrefix, within } from '../agents/runtime/memory.js'
 import { type InactiveMark, ReasonSchema, RecordIdSchema, memoryState } from '../agents/runtime/memory-state.js'
-import { BranchSchema, TASK_AGENTS } from '../agents/runtime/schemas.js'
+import { TASK_AGENTS } from '../agents/runtime/schemas.js'
 import { API_HIDDEN_TOOLS, ToolRefused, apiTool, checkPaths } from '../agents/runtime/tool.js'
 import { Work, unpackArtifact } from '../core/store.js'
 import { personHash as telemetryHash } from '../core/telemetry.js'
@@ -133,7 +137,7 @@ import { PreviewJob, PreviewTarget, getView, listView, preview } from '../prompt
 import { parseProjectKbs } from '../tools/kb/env.js'
 import { FilterSchema, searchKb } from '../tools/kb/search.js'
 import {
-  type Action, ActionError, type Context, type JobView, type JobsApi, MAX_ARTIFACT, type Need, NO_ACCESS, PROJECT_DB_PATH, Repo, def, hashOf, hashesOf, label, memoryInclude, projectMemory, slugify, toolNeed, tempDb, withProjectDb,
+  type Action, ActionError, type Context, type JobView, type JobsApi, MAX_ARTIFACT, type Need, NO_ACCESS, PROJECT_DB_PATH, Repo, def, hashOf, hashesOf, label, memoryInclude, projectMemory, slugify, TaskBranch, toolNeed, tempDb, withProjectDb,
 } from './action-kit.js'
 import { CHAT_ACTIONS } from './actions-chats.js'
 import { DESIGN_ACTIONS } from './actions-design.js'
@@ -153,6 +157,8 @@ import { VOICE_ACTIONS } from './actions-voice.js'
 import { LAYOUT_ACTIONS } from './actions-layout.js'
 import type { CognitoUser } from './aws.js'
 import { SERVICE_ADMIN_ACTIONS } from './actions-services.js'
+import { CHANGE_ACTIONS } from './actions-changes.js'
+import { HOOK_ACTIONS } from './actions-hooks.js'
 import { SERVICE_ACTIONS, checkService, taskCap, toolOpenToSystems } from './service-policy.js'
 
 export {
@@ -173,8 +179,7 @@ async function integrationStore(ctx: Context): Promise<IntegrationStore> {
 
 /** The installation's knowledge bases from the API runtime's environment (TRACE_PROJECT_KBS). */
 
-/** A branch a task may carry on: one of trace's own (claude/…), so a request can never push to main or a person's branch. */
-export const TaskBranch = BranchSchema.refine((b) => b.startsWith('claude/') && b.length > 'claude/'.length, 'only a trace branch (claude/…) can be carried on')
+export { TaskBranch } from './action-kit.js'
 export const projectKbsFromEnv = (env: Record<string, string | undefined> = process.env): ReadonlyMap<string, string> => parseProjectKbs(env.TRACE_PROJECT_KBS)
 
 const Who = z.string().min(1).max(320)
@@ -700,6 +705,8 @@ export const ACTIONS = {
   ...VOICE_ACTIONS,
   ...LAYOUT_ACTIONS,
   ...SERVICE_ADMIN_ACTIONS,
+  ...CHANGE_ACTIONS,
+  ...HOOK_ACTIONS,
 } satisfies Record<string, Action<z.ZodType>>
 
 export type ActionName = keyof typeof ACTIONS
@@ -718,6 +725,8 @@ export async function perform(name: string, raw: Record<string, unknown>, ctx: C
   const action = ACTIONS[name as ActionName] as Action<z.ZodType>
   // a connected system is refused an action not open to systems before its arguments are even read
   if (isService(ctx.principal) && !Object.hasOwn(SERVICE_ACTIONS, name)) throw new AccessDenied(`${name} is not open to connected systems`)
+  // the web backend's own identity calls its one action and nothing else; that action refuses everyone else (below)
+  if (isBackend(ctx.principal) !== (action.need === 'backend')) throw new AccessDenied(NO_ACCESS)
   const parsed = action.args.safeParse(raw)
   if (!parsed.success) throw new ActionError(`${name}: ${parsed.error.issues.map((i) => `${i.path.join('.') || 'args'}: ${i.message}`).join('; ')}`)
   const args = parsed.data as Record<string, unknown>
@@ -728,6 +737,7 @@ export async function perform(name: string, raw: Record<string, unknown>, ctx: C
   await checkService(p, name, args, ctx)
   switch (action.need) {
     case 'signed-in': case 'job': break
+    case 'backend': if (!isBackend(p)) throw new AccessDenied(NO_ACCESS); break
     case 'prompts': if (!action.authorize) throw new AccessDenied(NO_ACCESS); await action.authorize(args, p); break
     case 'admin': if (!isAdmin(p)) throw new AccessDenied('admins only'); break
     case 'read': case 'write': await require_(p, repo ?? '', action.need); break

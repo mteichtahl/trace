@@ -12,7 +12,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useTraceContext } from '@/components/chat/context'
-import { GitHubWaits } from '@/components/project/github-waits'
+import { useChanges } from '@/components/changes/changes-list'
 import { useCrumb } from '@/components/shell/breadcrumbs'
 import { NotShared, QueryError } from '@/components/states'
 import { ApiError, projectName, repoOf } from '@/lib/api'
@@ -47,6 +47,7 @@ export function visibleTabs(j: Journey, o: { admin: boolean }): ProjectTab[] {
     { id: 'overview', label: 'Overview', to: '', show: true },
     { id: 'requirements', label: 'Requirements', to: '/requirements', show: reached(j, ['define']) },
     { id: 'design', label: 'Design', to: '/design', show: reached(j, ['architect']) },
+    { id: 'changes', label: 'Changes', to: '/changes', show: true },
     { id: 'evidence', label: 'Evidence', to: '/evidence', show: reached(j, ['prove']) },
     { id: 'build', label: 'Build', to: '/build', show: reached(j, ['release']) },
     { id: 'decisions', label: 'Decisions', to: '/decisions', show: j.gates.some((g) => g.state === 'signed') },
@@ -80,6 +81,7 @@ function ProjectLayout() {
   const { id } = Route.useParams()
   const repo = repoOf(id)
   const j = useJourney(repo)
+  const changes = useChanges(repo)
   const { user } = useAuth()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const base = `/p/${id}`
@@ -91,6 +93,7 @@ function ProjectLayout() {
   if (j.isError) return j.error instanceof ApiError && j.error.noAccess ? <NotShared /> : <div className="p-6"><QueryError error={j.error} what="this project" onRetry={() => void j.refetch()} /></div>
 
   const tabs = j.data ? visibleTabs(j.data, { admin: user?.class === 'admin' }) : []
+  const ready = (changes.data?.changes ?? []).filter((c) => c.verdict === 'ready').length
   const all = 9
   return (
     <div className="mx-auto w-full max-w-[1200px] px-4 pt-6 md:px-6 md:pt-8">
@@ -125,15 +128,16 @@ function ProjectLayout() {
           const to = base + t.to
           const active = t.to === '' ? pathname === base || pathname === `${base}/` : pathname.startsWith(to)
           return (
-            <Link key={t.id} to={to} aria-current={active ? 'page' : undefined} className={cn('-mb-px whitespace-nowrap border-b-2 px-3 pb-2.5 pt-1 text-sm', active ? 'border-foreground font-medium text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground')}>
+            <Link key={t.id} to={to} aria-current={active ? 'page' : undefined} className={cn('-mb-px inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 pb-2.5 pt-1 text-sm', active ? 'border-foreground font-medium text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground')}>
               {t.label}
+              {t.id === 'changes' && ready > 0 && (
+                <span className="flex size-[18px] items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground" aria-label={`${ready} ready for you`}>{ready}</span>
+              )}
             </Link>
           )
         })}
         {j.data && tabs.length < all && <span className="hidden pb-2.5 pl-3 text-xs text-muted-foreground lg:inline">More tabs appear as the project reaches later stages</span>}
       </nav>
-      {/* what the project waits for on GitHub, on whichever tab is open */}
-      <GitHubWaits repo={repo} />
       <Outlet />
     </div>
   )

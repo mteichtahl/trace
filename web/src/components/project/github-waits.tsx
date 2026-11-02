@@ -8,11 +8,13 @@ import { useQuery } from '@tanstack/react-query'
 import { ExternalLink, GitPullRequest } from 'lucide-react'
 import { PullStatusLine } from '@/components/pull-status'
 import { Button } from '@/components/ui/button'
+import { pollEvery, useLiveStatus, useNextLook } from '@/lib/live'
 import { q } from '@/lib/queries'
 import type { InboxItem } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-/** How often the list itself is asked for again (a job that just finished opens a new pull request). */
+/** How often the list itself is asked for again while live events are not connected (a job that just finished opens
+ * a new pull request); with them, POLL_LIVE_MS: GitHub's webhook and the job's own event say so sooner. */
 export const LIST_POLL_MS = 30_000
 
 /** This repository's pull requests waiting on GitHub, oldest first. */
@@ -26,13 +28,16 @@ export function pullTitle(i: InboxItem): string {
 }
 
 export function GitHubWaits({ repo, className }: { repo: string; className?: string }) {
-  const inbox = useQuery({ ...q('inbox', {}), refetchInterval: LIST_POLL_MS })
+  const every = pollEvery(LIST_POLL_MS, useLiveStatus().state)
+  const inbox = useQuery({ ...q('inbox', {}), refetchInterval: every })
   const waits = githubWaits(inbox.data, repo)
+  const next = useNextLook(inbox.dataUpdatedAt, waits.length ? every : false)
   if (!waits.length) return null
   return (
     <section aria-label="Waiting on GitHub" className={cn('mt-4 rounded-xl border bg-card px-4 py-3', className)}>
       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
         Waiting on GitHub ({waits.length}) · its work counts once merged
+        {next && <span className="normal-case tracking-normal"> · {next}</span>}
       </p>
       <ul className="mt-2 flex flex-col gap-2.5">
         {waits.map((i) => (

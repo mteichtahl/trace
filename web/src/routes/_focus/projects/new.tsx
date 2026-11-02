@@ -211,7 +211,7 @@ function NewProject() {
             <CollapsibleContent className="space-y-4 border-t px-4 py-4 text-sm">
               <Toggle label="This project's own agent token" detail="Its agents reach only its repository. Recommended when projects belong to different teams." checked={d.advanced.ownToken} onChange={(v) => set({ advanced: { ...d.advanced, ownToken: v } })} />
               <div className="flex items-center gap-3"><span className="flex-1"><span className="block font-medium">Recent agent memory kept for</span><span className="text-xs text-muted-foreground">3 to 365 days</span></span><Input type="number" min={3} max={365} className="w-24" value={d.advanced.memoryDays} onChange={(e) => set({ advanced: { ...d.advanced, memoryDays: Math.min(365, Math.max(3, Number(e.target.value) || 30)) } })} aria-label="Days" /><span>days</span></div>
-              <Toggle label="Open the onboarding pull request" detail="Adds trace's settings and workflow to the repository for review." checked={d.advanced.onboardingPr} onChange={(v) => set({ advanced: { ...d.advanced, onboardingPr: v } })} />
+              <Toggle label="Open the onboarding change" detail="Adds trace's settings and workflow to the repository for review." checked={d.advanced.onboardingPr} onChange={(v) => set({ advanced: { ...d.advanced, onboardingPr: v } })} />
               <Toggle label="Apply repository settings" detail="Branch protection and merge rules trace relies on." checked={d.advanced.applySettings} onChange={(v) => set({ advanced: { ...d.advanced, applySettings: v } })} />
             </CollapsibleContent>
           </Collapsible>
@@ -247,19 +247,19 @@ function NewProject() {
           <h1 className="text-2xl font-semibold tracking-tight">Review</h1>
           <ul className="space-y-2 text-sm">
             <li><b>{d.name || 'The project'}</b>, {TEMPLATES.find((t) => t.id === d.template)?.label} template, starting {d.start === 'idea' ? 'from an idea' : 'from an existing KiCad design'}.</li>
-            <li>{d.repository.mode === 'new' ? 'A new private repository' : 'The existing repository'} <span className="font-mono">{d.repository.owner}/{d.repository.name || slug(d.name)}</span> on <span className="font-mono">{d.repository.branch}</span>{d.advanced.onboardingPr ? ', with an onboarding pull request' : ''}.</li>
+            <li>{d.repository.mode === 'new' ? 'A new private repository' : 'The existing repository'} <span className="font-mono">{d.repository.owner}/{d.repository.name || slug(d.name)}</span> on <span className="font-mono">{d.repository.branch}</span>{d.advanced.onboardingPr ? ', with an onboarding change' : ''}.</li>
             <li>{d.people.length ? `${d.people.length} ${d.people.length === 1 ? 'person' : 'people'} added` : 'Nobody added yet'}{d.people.some((p) => p.class === 'new') ? `, ${d.people.filter((p) => p.class === 'new').length} to invite by email` : ''}; admins reach it without being added.</li>
             <li>{d.build.quantity} boards per build{d.build.budget !== undefined ? `, ${money(d.build.budget)} per revision` : ', no budget'}{Object.entries(d.build.later).filter(([, on]) => on).length ? `, with ${Object.entries(d.build.later).filter(([, on]) => on).map(([k]) => k).join(' and ')}` : ''}; {d.build.fab}.</li>
           </ul>
           <div className="rounded-xl border p-4 text-sm">
             <p className="font-medium">What happens when you press Create</p>
             <ol className="mt-2 list-decimal space-y-1 pl-5 text-muted-foreground">
-              <li>{d.repository.mode === 'new' ? 'Create' : 'Connect'} the repository{d.advanced.onboardingPr ? ' and open the onboarding pull request' : ''}</li>
+              <li>{d.repository.mode === 'new' ? 'Create' : 'Connect'} the repository{d.advanced.onboardingPr ? ' and open the onboarding change' : ''}</li>
               <li>Set up the project's agent, knowledge base and build runner</li>
               <li>Invite the people you added</li>
               <li>Open {d.start === 'idea' ? 'the Intent builder' : 'Design import'}</li>
             </ol>
-            <p className="mt-2 text-xs text-muted-foreground">Most of it takes under a minute; the pull request's checks may take a few more, shown as they run.</p>
+            <p className="mt-2 text-xs text-muted-foreground">Most of it takes under a minute; the onboarding change's checks may take a few more, shown as they run.</p>
           </div>
           <FlatNote />
           {create.isError && <ErrorState title="The project was not created." kept="Everything you entered is kept." detail={String(create.error)} onRetry={() => void continueOrCreate()} />}

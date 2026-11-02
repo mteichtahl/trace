@@ -117,8 +117,8 @@ function Difference({ before, after }: { before: string; after: string }) {
 }
 
 /** Two pictures compared: side by side (locked), a slider, or the difference. */
-export function PictureCompare({ before, after, beforeLabel, afterLabel, size }: { before: string; after: string; beforeLabel: string; afterLabel: string; size: ViewerProps['size'] }) {
-  const [mode, setMode] = useState<'side' | 'slider' | 'difference'>('slider')
+export function PictureCompare({ before, after, beforeLabel, afterLabel, size, initial = 'slider' }: { before: string; after: string; beforeLabel: string; afterLabel: string; size: ViewerProps['size']; initial?: 'side' | 'slider' | 'difference' }) {
+  const [mode, setMode] = useState<'side' | 'slider' | 'difference'>(initial)
   const [at, setAt] = useState(50)
   const [view, setView] = useState<PanZoomState>({ zoom: 1, x: 0, y: 0 })
   const img = (src: string, label: string) => <img src={src} alt={label} draggable={false} className="max-h-full max-w-full object-contain" />
