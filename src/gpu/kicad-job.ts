@@ -10,9 +10,10 @@
  * into out.tar. The exit code is kicad-cli's (127: it could not be started).
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { MODEL_VARS, MODELS_DIR } from '../tools/kicad/models3d.js'
 
 export const PROJECT_TOKEN = '@PROJECT@'
 export const OUT_TOKEN = '@OUT@'
@@ -47,7 +48,10 @@ export async function run(a: KicadJobArgs, o: { kicadCli?: string } = {}): Promi
   if (a.outKind === 'dir') mkdirSync(join(out, a.outName), { recursive: true })
   const args = a.cli.map((s) => s.replaceAll(PROJECT_TOKEN, project).replaceAll(OUT_TOKEN, out))
   const code = await new Promise<number>((resolve) => {
-    const p = spawn(o.kicadCli ?? process.env.KICAD_CLI ?? 'kicad-cli', args, { cwd: project, stdio: ['ignore', 'inherit', 'inherit'] })
+    // the board's library 3D models, when the caller staged them with the project (src/tools/kicad/models3d.ts)
+    const models = join(project, MODELS_DIR)
+    const env = existsSync(models) ? { ...process.env, ...Object.fromEntries(MODEL_VARS.map((k) => [k, models])) } : process.env
+    const p = spawn(o.kicadCli ?? process.env.KICAD_CLI ?? 'kicad-cli', args, { cwd: project, env, stdio: ['ignore', 'inherit', 'inherit'] })
     p.on('error', (e: NodeJS.ErrnoException) => { console.error(e.code === 'ENOENT' ? 'kicad-cli is not installed in this image' : e.message); resolve(127) })
     p.on('close', (c) => resolve(c ?? 1))
   })

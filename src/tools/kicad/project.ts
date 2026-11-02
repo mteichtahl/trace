@@ -231,7 +231,7 @@ export function requireKicad(): void {
 }
 
 /** Run kicad-cli wherever it runs (kicadWhere), never throwing for a non-zero exit (the caller decides). */
-export async function kicadRun(args: readonly string[], opts: { timeoutMs?: number; cwd?: string } = {}): Promise<CliResult> {
+export async function kicadRun(args: readonly string[], opts: { timeoutMs?: number; cwd?: string; env?: Record<string, string> } = {}): Promise<CliResult> {
   const cli = findKicadCli()
   if (cli) return runProgram(cli, args, opts)
   if (!kicadWhere()) throw new ToolError(NO_KICAD)
@@ -245,10 +245,10 @@ export interface CliResult {
 }
 
 /** Run a program with a timeout, never throwing for a non-zero exit (the caller decides). */
-export function runProgram(cmd: string, args: readonly string[], opts: { timeoutMs?: number; cwd?: string } = {}): Promise<CliResult> {
+export function runProgram(cmd: string, args: readonly string[], opts: { timeoutMs?: number; cwd?: string; env?: Record<string, string> } = {}): Promise<CliResult> {
   const timeout = opts.timeoutMs ?? 600_000
   return new Promise((done, fail) => {
-    execFile(cmd, [...args], { timeout, cwd: opts.cwd, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8', killSignal: 'SIGKILL' },
+    execFile(cmd, [...args], { timeout, cwd: opts.cwd, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8', killSignal: 'SIGKILL', ...(opts.env ? { env: { ...process.env, ...opts.env } } : {}) },
       (err, stdout, stderr) => {
         if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') return fail(new ToolError(`${cmd} is not installed`))
         if (err && (err as { killed?: boolean }).killed) {
@@ -261,7 +261,7 @@ export function runProgram(cmd: string, args: readonly string[], opts: { timeout
 }
 
 /** Run kicad-cli; an exit code outside `okCodes` becomes a ToolError carrying its output. */
-export async function runCli(args: readonly string[], opts: { timeoutMs?: number; okCodes?: readonly number[]; cwd?: string } = {}): Promise<CliResult> {
+export async function runCli(args: readonly string[], opts: { timeoutMs?: number; okCodes?: readonly number[]; cwd?: string; env?: Record<string, string> } = {}): Promise<CliResult> {
   const r = await kicadRun(args, opts)
   if (!(opts.okCodes ?? [0]).includes(r.code)) {
     const msg = (r.stderr || r.stdout).trim().slice(-1500)

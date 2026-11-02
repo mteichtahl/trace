@@ -206,7 +206,7 @@ async function renderRun(p: Plan): Promise<Record<string, unknown>> {
     try {
       const artifacts: ArtifactOut[] = []
       const files: { name: string; data: Uint8Array }[] = []
-      const notes = [...r.notes]
+      const notes = [...(model.note ? [model.note] : []), ...r.notes]
       let blank = 0
       const statOf = new Map(r.images.map((im) => [im.view, im]))
       const add = (name: string, data: Uint8Array, mime: string, st?: z.output<typeof ImageStat>): void => {
