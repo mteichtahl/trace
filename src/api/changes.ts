@@ -33,7 +33,7 @@
 import { SPECIALIST_KINDS } from '../agents/kinds.js'
 import type { JobRow } from '../core/job-index.js'
 import { indexedHandle } from '../core/job-index.js'
-import { LATER_STAGES, STAGE_IDS, type StageId, TEMPLATES, templateStages } from '../core/journey.js'
+import { type JourneyRecord, LATER_STAGES, STAGE_IDS, type StageId, TEMPLATES, templateStages } from '../core/journey.js'
 import type { PullFile, PullStatus, PullSummary } from './github.js'
 
 export type Verdict = 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked' | 'unfinished'
@@ -52,6 +52,8 @@ export interface ChangeSummary {
   /** GitHub refused every way of reading the checks (src/api/github.ts checkRuns) */
   checks_denied?: boolean
   verdict: Verdict
+  /** the gate criteria it says it waits on a person's approval of (ChangeFacts.awaiting) */
+  awaiting?: string[]
 }
 export interface CheckLine { name: string; state: 'passed' | 'failed' | 'running' | 'skipped'; summary: string | null }
 export interface Recommendation { verdict: 'accept' | 'ask' | 'wait' | 'none'; why: string }
@@ -73,6 +75,11 @@ export interface ChangeFacts {
   checks_denied?: boolean
   /** the specialist's own words saying the work is not finished ("incomplete export, not for approval"): unfinishedWords */
   unfinished?: string
+  /**
+   * The gate criteria the specialist said the change waits on a person's approval of ("do not merge before layout.renders
+   * is approved"). With `unfinished`: still waiting on them. Without: they were approved since, which settled it.
+   */
+  awaiting?: string[]
 }
 
 // a specialist that says its work is not ready for a person, in its title (each clause) or in its summary or the pull
@@ -95,6 +102,49 @@ export function unfinishedWords(o: { title: string; summary?: string | null | un
     if (hit) return hit.slice(0, 160)
   }
   return null
+}
+
+const WAITS_ON_APPROVAL = /\bapprov(e|ed|al|ing)\b/i
+
+/**
+ * The gate criteria an unfinished change says it waits on a person's approval of: those its unfinished words name, else
+ * (words such as "do not merge before that approval" name none) those its title, summary or description name. None
+ * when the words are not about an approval: "work in progress" waits on the specialist, not a person.
+ */
+export function awaitedApprovals(unfinished: string, o: { title: string; summary?: string | null | undefined; body?: string | null | undefined }): string[] {
+  if (!WAITS_ON_APPROVAL.test(unfinished)) return []
+  const own = criteriaNamed(unfinished)
+  return own.length ? own : criteriaNamed(o.title, o.summary ?? '', o.body ?? '')
+}
+
+/**
+ * The gate criteria a person has approved, as the journey says now (with the agents' facts merged in): met, waived by
+ * an open waiver, or named by an agent's question a person answered with an option that approves ("Approve the renders
+ * of run d09516a5"): the answer is the approval, before the specialist records the criterion as met.
+ */
+export function approvalsGiven(r: Pick<JourneyRecord, 'criteria' | 'waivers' | 'questions'>): Set<string> {
+  const out = new Set<string>()
+  for (const c of r.criteria) if (c.status === 'met') out.add(c.id)
+  for (const w of r.waivers) if (w.targetKind === 'criterion' && w.closedAt === null) out.add(w.target)
+  for (const q of r.questions) {
+    if (q.answeredAt === null || !q.optionId) continue
+    const picked = q.options.find((o) => o.id === q.optionId)
+    if (picked && /^\s*approve\b/i.test(picked.label)) for (const id of criteriaNamed(q.text)) out.add(id)
+  }
+  return out
+}
+
+/**
+ * Settle a change's unfinished words against the approvals given: when every criterion it waited on is approved, it is
+ * no longer unfinished (its `awaiting` stays, so the recommendation can say what was waited on). Changes `facts` in place.
+ */
+export function settleUnfinished(facts: ChangeFacts, o: { title: string; summary?: string | null | undefined; body?: string | null | undefined }, given: ReadonlySet<string>): ChangeFacts {
+  if (!facts.unfinished) return facts
+  const awaiting = awaitedApprovals(facts.unfinished, o)
+  if (!awaiting.length) return facts
+  facts.awaiting = awaiting
+  if (awaiting.every((id) => given.has(id))) delete facts.unfinished
+  return facts
 }
 
 /** What a person is told when trace's GitHub token may not read checks: who can fix it, and how. */
@@ -190,6 +240,8 @@ export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]
   // passing checks say the files are sound, not that the work is done: the specialist's own word comes first
   if (f.unfinished) {
     const who = o.from ? `${o.from[0]?.toUpperCase() ?? ''}${o.from.slice(1)}` : 'The specialist'
+    // it waits on a person's approval, not on more work: say what to approve, not "ask for changes"
+    if (f.awaiting?.length) return { verdict: 'wait', why: `${who} says this waits for ${list(f.awaiting)} to be approved: "${f.unfinished}". Once ${f.awaiting.length === 1 ? 'it is' : 'they are'} approved, trace looks at it again.` }
     return { verdict: 'ask', why: `${who} says this work is not finished: "${f.unfinished}". Ask for changes so it finishes before you accept it, or discard it.` }
   }
   if (f.mergeable === 'dirty') return { verdict: 'none', why: 'It conflicts with changes accepted since it was made. trace will bring it up to date.' }
@@ -210,7 +262,8 @@ export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]
   const total = f.checks.passed
   const checks = o.passed?.length ? `${total === 1 ? 'Its check' : `All ${total} checks`} passed (${list(o.passed.slice(0, 5))}${o.passed.length > 5 ? ' and others' : ''}), and it can be merged.`
     : `${total === 1 ? 'Its check' : `All ${total} checks`} passed, and it can be merged.`
-  return { verdict: 'accept', why: `${checks[0]?.toUpperCase() ?? ''}${checks.slice(1)}${reqs}` }
+  const waited = f.awaiting?.length ? ` It waited for ${list(f.awaiting)} to be approved, and ${f.awaiting.length === 1 ? 'it is' : 'they are'} now.` : ''
+  return { verdict: 'accept', why: `${checks[0]?.toUpperCase() ?? ''}${checks.slice(1)}${waited}${reqs}` }
 }
 
 /**
@@ -348,16 +401,20 @@ export function changeSummary(o: {
   repo: string; pull: Pick<PullSummary, 'number' | 'title' | 'url' | 'draft' | 'labels' | 'updated_at'> & { created_at?: string | undefined }
   job: JobRow | null; status: Pick<PullStatus, 'state' | 'mergeable' | 'checks' | 'checks_denied' | 'draft' | 'updated_at'> | null
   hold: string; agentWords: Readonly<Record<string, string>>
+  /** the gate criteria a person has approved (approvalsGiven): settles a change that waited on one */
+  given?: ReadonlySet<string> | undefined
 }): ChangeSummary {
   const s = o.status
   const facts: ChangeFacts = { state: s?.state ?? 'open', draft: s?.draft ?? o.pull.draft, mergeable: s?.mergeable ?? 'unknown', checks: s?.checks ?? null, ...(s?.checks_denied ? { checks_denied: true } : {}) }
   const unfinished = unfinishedWords({ title: o.pull.title, summary: o.job?.summary })
   if (unfinished) facts.unfinished = unfinished
+  settleUnfinished(facts, { title: o.pull.title, summary: o.job?.summary }, o.given ?? new Set())
   const crit = criteriaNamed(jobRequest(o.job), o.job?.title ?? '')
   return {
     number: o.pull.number, title: o.pull.title, url: o.pull.url, draft: facts.draft, held: o.pull.labels.includes(o.hold),
     from: fromWords(o.job, o.agentWords), job_id: o.job ? indexedHandle(o.repo, o.job.session, o.job.id) : null, stage: stageNamed(crit),
     opened_at: o.pull.created_at ?? o.pull.updated_at, updated_at: s?.updated_at ?? o.pull.updated_at,
     state: facts.state, mergeable: facts.mergeable, checks: facts.checks, ...(facts.checks_denied ? { checks_denied: true } : {}), verdict: verdictOf(facts),
+    ...(facts.awaiting ? { awaiting: facts.awaiting } : {}),
   }
 }

@@ -43,7 +43,9 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
         // the journey's record and the agents' facts, and the bench's live readings (src/core/bench.ts): the Build tab and
         // the guided skills (Bring-up run's live readout) read them too; and jobs.list, whose hand-offs between
         // specialists are agents' facts (an answer) or the record (a decline)
-        journey: [['journey.get', r], ['inbox'], ['runs', r], ['build.get', r], ['skill.get', r], ['jobs.list', r]],
+        // and the changes: a change that waited on a person's approval (layout.renders) is settled by it, whether a
+        // person signed it in the record or a specialist recorded it in its facts (both publish 'journey')
+        journey: [['journey.get', r], ['inbox'], ['runs', r], ['build.get', r], ['skill.get', r], ['jobs.list', r], ['change.get', r], ['changes.list', r]],
         settings: [['settings.get', r], ['journey.get', r]],
         memory: [['memory.list', r], ['memory.recall', r]],
         chats: [['chats.list', r], ['chats.get', r], ['chats.recall', r]],
@@ -93,6 +95,24 @@ export const POLL_LIVE_MS = 60_000
 
 /** The poll interval: `offlineMs` while the live connection is not up, POLL_LIVE_MS (or more) while it is. */
 export const pollEvery = (offlineMs: number, state: LiveState = liveStatus.get().state): number => (state === 'live' ? Math.max(offlineMs, POLL_LIVE_MS) : offlineMs)
+
+/** How often a change's review page looks again while GitHub is still working out whether it can merge. */
+export const CHANGE_MERGEABLE_MS = 5_000
+/** How often it looks again while its checks run, with the live connection down (events say when it is up). */
+export const CHANGE_CHECKS_MS = 15_000
+
+/**
+ * When a change's review page looks again, or false. GitHub sends nothing when it finishes working out whether a
+ * change can merge (after another change merged): that is polled, often, live or not. Running checks send events as
+ * they finish, so they are polled only as a fallback (pollEvery). A change that is settled, or waits on a person (an
+ * approval, a conflict trace brings up to date), waits for an event.
+ */
+export function changeLookEvery(d: { state: string; mergeable: string; verdict: string; checks: { running: number; total: number } | null } | undefined, state: LiveState = liveStatus.get().state): number | false {
+  if (!d || d.state !== 'open') return false
+  if (d.mergeable === 'unknown' && !(d.checks?.running)) return CHANGE_MERGEABLE_MS
+  if (d.checks?.running || d.verdict === 'checking') return pollEvery(CHANGE_CHECKS_MS, state)
+  return false
+}
 
 /** "next look in 40 s" (or "looking now"), from when the data was last fetched and the interval. Pure. */
 export function nextLookWords(updatedAt: number, intervalMs: number, now: number): string {

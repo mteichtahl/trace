@@ -1,10 +1,10 @@
 import { QueryClient } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { POLL_LIVE_MS, applyEvent, connectLive, hostOf, invalidationsFor, liveStatus, nextLookWords, pollEvery, subprotocols } from './live'
+import { CHANGE_CHECKS_MS, CHANGE_MERGEABLE_MS, POLL_LIVE_MS, applyEvent, changeLookEvery, connectLive, hostOf, invalidationsFor, liveStatus, nextLookWords, pollEvery, subprotocols } from './live'
 
 describe('live events → query invalidation', () => {
   it('maps each event to the queries it makes stale', () => {
-    expect(invalidationsFor({ type: 'record.changed', repo: 'a/b', what: 'journey', at: '' })).toEqual([['journey.get', 'a/b'], ['inbox'], ['runs', 'a/b'], ['build.get', 'a/b'], ['skill.get', 'a/b'], ['jobs.list', 'a/b']])
+    expect(invalidationsFor({ type: 'record.changed', repo: 'a/b', what: 'journey', at: '' })).toEqual([['journey.get', 'a/b'], ['inbox'], ['runs', 'a/b'], ['build.get', 'a/b'], ['skill.get', 'a/b'], ['jobs.list', 'a/b'], ['change.get', 'a/b'], ['changes.list', 'a/b']])
     expect(invalidationsFor({ type: 'record.changed', repo: 'a/b', what: 'chats', at: '' })).toContainEqual(['chats.recall', 'a/b'])
     expect(invalidationsFor({ type: 'job.updated', repo: 'a/b', jobId: 'j', state: 'done', at: '' })).toContainEqual(['tools.waits', 'a/b'])
     expect(invalidationsFor({ type: 'notification', id: 'n', kind: 'gate', repo: 'a/b', summary: '', at: '' })).toEqual([['inbox'], ['journey.get', 'a/b']])
@@ -88,5 +88,24 @@ describe('the AppSync Events connection', () => {
     s.onmessage?.({ data: JSON.stringify({ type: 'data', event: JSON.stringify({ type: 'notification', id: 'n', kind: 'gate', repo: 'a/b', summary: 's', at: '' }) }) })
     expect(events).toHaveLength(1)
     stop()
+  })
+})
+
+describe('a change\'s review page looks again by itself', () => {
+  const ch = (o: Partial<{ state: string; mergeable: string; verdict: string; checks: { running: number; total: number } | null }> = {}) =>
+    ({ state: 'open', mergeable: 'clean', verdict: 'ready', checks: { running: 0, total: 2 }, ...o })
+  it('polls often while GitHub works out whether it can merge, live or not: no event says when it is done', () => {
+    expect(changeLookEvery(ch({ mergeable: 'unknown', verdict: 'checking' }), 'live')).toBe(CHANGE_MERGEABLE_MS)
+    expect(changeLookEvery(ch({ mergeable: 'unknown', verdict: 'checking' }), 'offline')).toBe(CHANGE_MERGEABLE_MS)
+  })
+  it('polls running checks only as a fallback to their events', () => {
+    expect(changeLookEvery(ch({ mergeable: 'blocked', verdict: 'checking', checks: { running: 1, total: 2 } }), 'offline')).toBe(CHANGE_CHECKS_MS)
+    expect(changeLookEvery(ch({ mergeable: 'blocked', verdict: 'checking', checks: { running: 1, total: 2 } }), 'live')).toBe(POLL_LIVE_MS)
+  })
+  it('does not poll a settled change, or one waiting on a person', () => {
+    expect(changeLookEvery(ch(), 'live')).toBe(false)
+    expect(changeLookEvery(ch({ verdict: 'unfinished' }), 'live')).toBe(false)
+    expect(changeLookEvery(ch({ state: 'merged', mergeable: 'unknown' }), 'live')).toBe(false)
+    expect(changeLookEvery(undefined, 'live')).toBe(false)
   })
 })

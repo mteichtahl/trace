@@ -234,6 +234,8 @@ export interface ChangeSummary {
   /** GitHub refused every way of reading the checks: trace's token lacks Actions and Commit statuses */
   checks_denied?: boolean
   verdict: ChangeVerdict
+  /** the gate criteria it says it waits on a person's approval of ("layout.renders") */
+  awaiting?: string[]
 }
 
 export interface ChangeFile {
