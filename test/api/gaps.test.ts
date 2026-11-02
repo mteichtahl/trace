@@ -208,7 +208,8 @@ describe('design.get', () => {
     expect(d.checks.erc.run).toBe('run-erc')
     expect(d.notes.join(' ')).toMatch(/No architecture is recorded yet/)
     expect(d.notes.join(' ')).toMatch(/No pin plan is recorded yet/)
-    expect(d.notes.join(' ')).toMatch(/kicad.export with sch_svg/)
+    // the app draws the sheets and the board live from their KiCad files, so a missing export is not a gap
+    expect(d.notes.join(' ')).not.toMatch(/kicad.export with sch_svg|No picture of the board/)
   })
 })
 
