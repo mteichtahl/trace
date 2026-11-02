@@ -97,7 +97,7 @@ export function splitRecommendation(rec: string, why?: string): { text: string; 
   return { text: rec, ...(why ? { why } : {}) }
 }
 
-const VERDICTS = new Set<ChangeVerdict>(['ready', 'checking', 'failing', 'conflict', 'blocked'])
+const VERDICTS = new Set<ChangeVerdict>(['ready', 'checking', 'failing', 'conflict', 'blocked', 'unfinished'])
 const FILE_KINDS = new Set<ChangeFileKind>(['schematic', 'board', 'parts', 'text', 'image', 'binary'])
 
 /** One change's checks, or null when GitHub has none. */

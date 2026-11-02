@@ -210,7 +210,7 @@ export interface NextStep {
 
 // ------------------------------------------------------------------ changes (src/api/actions-changes.ts)
 
-export type ChangeVerdict = 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked'
+export type ChangeVerdict = 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked' | 'unfinished'
 export type ChangeFileKind = 'schematic' | 'board' | 'parts' | 'text' | 'image' | 'binary'
 
 /** A pull request a trace job opened, as people read it: a change. */

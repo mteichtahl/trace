@@ -36,7 +36,7 @@ import { indexedHandle } from '../core/job-index.js'
 import { LATER_STAGES, STAGE_IDS, type StageId, TEMPLATES, templateStages } from '../core/journey.js'
 import type { PullFile, PullStatus, PullSummary } from './github.js'
 
-export type Verdict = 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked'
+export type Verdict = 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked' | 'unfinished'
 export type Checks = NonNullable<PullStatus['checks']>
 export type FileKind = 'schematic' | 'board' | 'parts' | 'text' | 'image' | 'binary'
 
@@ -71,6 +71,30 @@ export interface ChangeFacts {
   state: 'open' | 'merged' | 'closed'; draft: boolean; mergeable: string; checks: Checks | null
   /** GitHub refused every way of reading the checks (src/api/github.ts checkRuns): the token lacks Actions and Commit statuses */
   checks_denied?: boolean
+  /** the specialist's own words saying the work is not finished ("incomplete export, not for approval"): unfinishedWords */
+  unfinished?: string
+}
+
+// a specialist that says its work is not ready for a person, in its title (each clause) or in its summary or the pull
+// request's description (only the plainest phrases there: a word like "incomplete" in a description is often about
+// something else, "fixes an incomplete netlist")
+const UNFINISHED_STRONG = /\b(not (yet )?for (approval|review|merging)|do not merge|don'?t merge|not ready( (for|to) (review|merge|merging|approval))?|work in progress|wip)\b/i
+const UNFINISHED_TITLE = /\b(incomplete|unfinished|not finished|partial (work|export|render|result)s?|placeholder)\b/i
+
+/**
+ * The specialist's own words saying its work is not finished, or null. From the title, the clauses that say so
+ * ("incomplete export, not for approval"); else the first sentence of its summary or description that says so plainly.
+ */
+export function unfinishedWords(o: { title: string; summary?: string | null | undefined; body?: string | null | undefined }): string | null {
+  const title = o.title.replace(/^trace:\s*/i, '')
+  const clauses = title.split(/\s*[,;:(){}\u2013\u2014]\s*|\s+-\s+/).map((x) => x.trim()).filter(Boolean)
+  const said = clauses.filter((c) => UNFINISHED_STRONG.test(c) || UNFINISHED_TITLE.test(c))
+  if (said.length) return said.join(', ').slice(0, 160)
+  for (const text of [o.summary, o.body]) {
+    const hit = (text ?? '').split(/(?<=[.!?])\s+|\n+/).map((x) => x.replace(/^[-*#>\s]+/, '').trim()).find((x) => UNFINISHED_STRONG.test(x))
+    if (hit) return hit.slice(0, 160)
+  }
+  return null
 }
 
 /** What a person is told when trace's GitHub token may not read checks: who can fix it, and how. */
@@ -141,6 +165,8 @@ export function verdictOf(f: ChangeFacts): Verdict {
   if (f.state !== 'open' || f.draft) return 'blocked'
   if (f.mergeable === 'dirty') return 'conflict'
   if ((f.checks?.failed ?? 0) > 0 || f.mergeable === 'unstable') return 'failing'
+  // the specialist says it is not finished: that, not the checks, is what a person should hear first
+  if (f.unfinished) return 'unfinished'
   if ((f.checks?.running ?? 0) > 0 || f.mergeable === 'unknown') return 'checking'
   if (f.mergeable === 'behind' || f.mergeable === 'blocked') return 'blocked'
   // never "ready" on checks trace could not read, or before any ran: accepting refuses both (acceptance). A token
@@ -157,10 +183,15 @@ const list = (xs: readonly string[]): string => (xs.length <= 1 ? xs.join('') : 
  * What trace recommends, and why, from the facts only. `passed`: the names of the checks that passed, when known (the
  * review page has them; a list only has counts). `requirements`: the ids the change names.
  */
-export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]; requirements?: readonly string[] } = {}): Recommendation {
+export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]; requirements?: readonly string[]; from?: string } = {}): Recommendation {
   if (f.state === 'merged') return { verdict: 'none', why: 'It is already accepted into the design.' }
   if (f.state === 'closed') return { verdict: 'none', why: 'It was discarded.' }
   if (f.draft) return { verdict: 'wait', why: 'It is a draft: trace has not finished it yet.' }
+  // passing checks say the files are sound, not that the work is done: the specialist's own word comes first
+  if (f.unfinished) {
+    const who = o.from ? `${o.from[0]?.toUpperCase() ?? ''}${o.from.slice(1)}` : 'The specialist'
+    return { verdict: 'ask', why: `${who} says this work is not finished: "${f.unfinished}". Ask for changes so it finishes before you accept it, or discard it.` }
+  }
   if (f.mergeable === 'dirty') return { verdict: 'none', why: 'It conflicts with changes accepted since it was made. trace will bring it up to date.' }
   const failing = f.checks?.failing ?? []
   if ((f.checks?.failed ?? 0) > 0 || f.mergeable === 'unstable') {
@@ -320,6 +351,8 @@ export function changeSummary(o: {
 }): ChangeSummary {
   const s = o.status
   const facts: ChangeFacts = { state: s?.state ?? 'open', draft: s?.draft ?? o.pull.draft, mergeable: s?.mergeable ?? 'unknown', checks: s?.checks ?? null, ...(s?.checks_denied ? { checks_denied: true } : {}) }
+  const unfinished = unfinishedWords({ title: o.pull.title, summary: o.job?.summary })
+  if (unfinished) facts.unfinished = unfinished
   const crit = criteriaNamed(jobRequest(o.job), o.job?.title ?? '')
   return {
     number: o.pull.number, title: o.pull.title, url: o.pull.url, draft: facts.draft, held: o.pull.labels.includes(o.hold),

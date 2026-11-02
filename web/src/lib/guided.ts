@@ -100,6 +100,7 @@ export const VERDICT_WORDS: Record<ChangeVerdict, { pill: string; tone: 'primary
   failing: { pill: 'Needs a fix', tone: 'bad' },
   conflict: { pill: 'Out of date', tone: 'warning' },
   blocked: { pill: 'Waiting', tone: 'neutral' },
+  unfinished: { pill: 'Not finished', tone: 'warning' },
 }
 
 /** The checks in a few words: "7 checks passed", "Checks running, 4 of 7 done", "1 check failing: ERC". */
@@ -120,6 +121,7 @@ export function changeLine(c: ChangeSummary): string {
     case 'checking': return `${checksWords(c.checks)}. Ready to review when the last one finishes.`
     case 'failing': return `${checksWords(c.checks)}. trace is fixing it.`
     case 'conflict': return 'The design moved on since this was made. trace will bring it up to date.'
+    case 'unfinished': return `${c.from[0]?.toUpperCase() ?? ''}${c.from.slice(1)} says it is not finished. trace recommends asking for changes.`
     default: return 'Waiting on GitHub before it can be accepted.'
   }
 }
