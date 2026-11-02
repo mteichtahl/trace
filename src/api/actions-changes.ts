@@ -223,7 +223,7 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   const sum = changeSummary({ repo, pull: { ...pull, labels: pull.labels }, job, status, hold, agentWords: AGENT_WORDS, given })
   const facts = factsOf(pull, status?.checks ?? null, status?.checks_denied ?? false)
   // the specialist's own word that it is not finished, from its title, summary or the description (src/api/changes.ts)
-  const unfinished = unfinishedWords({ title: pull.title, summary: job.summary, body: pull.body })
+  const unfinished = unfinishedWords({ title: pull.title, summary: job.summary, body: pull.body, request: jobRequest(job) })
   if (unfinished) facts.unfinished = unfinished
   // it waited on a person's approval: once given, it is finished (src/api/changes.ts settleUnfinished)
   settleUnfinished(facts, { title: pull.title, summary: job.summary, body: pull.body }, given)

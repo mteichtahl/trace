@@ -325,6 +325,27 @@ describe('a specialist that says its work is not finished', () => {
     expect(unfinishedWords({ title: 'trace: requirements R1 to R4', summary: 'All done; every criterion measurable.' })).toBeNull()
   })
 
+  it('does not take the instructions it was given for its verdict (test-2, change 3)', () => {
+    // the description quotes what the specialist asked its worker; the work itself was done
+    const body = [
+      'Requested by the trace verify specialist (job job-mvz22vdq-9c5cea6e), who asked:',
+      '',
+      'Commit the project record and open a pull request. No design files change.',
+      'Do not change any requirement\'s status, do not merge.',
+      '',
+      '## What changes',
+      'Only .trace/project.db changes. All 19 requirements are proposed.',
+    ].join('\n')
+    const title = 'Draft requirements from accepted intent (REQ-001..REQ-019)'
+    expect(unfinishedWords({ title, summary: 'I drafted 19 requirements; the pull request is open.', body })).toBeNull()
+    // the same words in the job's own request are the request, not its report
+    const request = 'Draft the requirements. Leave every requirement proposed. Do not change any requirement\'s status, do not merge.'
+    expect(unfinishedWords({ title, summary: 'Drafted 19 requirements.\nDo not change any requirement\'s status, do not merge.', request })).toBeNull()
+    // its own words still count, after the quoted request and with a request that does not say them
+    expect(unfinishedWords({ title, body: `${body}\n\nDo not merge until REQ-019 has a quote.`, request })).toBe('Do not merge until REQ-019 has a quote.')
+    expect(unfinishedWords({ title, summary: 'Not ready for review: REQ-019 has no quote yet.', request })).toBe('Not ready for review: REQ-019 has no quote yet.')
+  })
+
   it('is never "ready": trace recommends asking for changes, quoting it, and the person still decides', () => {
     const f = facts({ unfinished: 'incomplete export, not for approval' })
     expect(verdictOf(f)).toBe('unfinished')
