@@ -81,8 +81,10 @@ describe('sign-in', () => {
     w.cognito.answers.set('RespondToAuthChallenge', (i) => (i.ChallengeName === 'SELECT_CHALLENGE'
       ? { ChallengeName: 'WEB_AUTHN', Session: 's2', ChallengeParameters: { CREDENTIAL_REQUEST_OPTIONS: JSON.stringify(options) } }
       : { AuthenticationResult: tokens(['trace-admins']) }))
-    const first = await w.serve(post('/api/auth/respond', { email: EMAIL, session: 's1', kind: 'passkey' }))
+    // the app sends answer: null for the first step (sign-in page and a gate's passkey re-check): no answer yet
+    const first = await w.serve(post('/api/auth/respond', { email: EMAIL, session: 's1', kind: 'passkey', answer: null }))
     expect(first.json()).toEqual({ signedIn: false, next: 'passkey', session: 's2', options })
+    expect(w.cognito.calls[0]?.input).toMatchObject({ ChallengeName: 'SELECT_CHALLENGE', ChallengeResponses: { USERNAME: EMAIL, ANSWER: 'WEB_AUTHN' } })
     const assertion = { id: 'cred-1', rawId: 'cred-1', type: 'public-key', response: { clientDataJSON: 'x', authenticatorData: 'y', signature: 'z' } }
     const second = await w.serve(post('/api/auth/respond', { email: EMAIL, session: 's2', kind: 'passkey', answer: assertion }))
     expect(second.json()).toMatchObject({ signedIn: true, user: { class: 'admin' } })
