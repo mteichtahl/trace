@@ -1182,6 +1182,11 @@
         }
       ],
       "firmware_track": false,
+      "drafting": {
+        "state": "done",
+        "job": null,
+        "why": null
+      },
       "jobs": [
         {
           "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-run",
@@ -1211,6 +1216,11 @@
           "error": null,
           "pausedBy": null,
           "pausedAt": null,
+          "heard": {
+            "at": "2026-10-27T00:00:00.000Z",
+            "overdueAt": "2026-10-27T00:00:00.000Z",
+            "lostAt": "2026-10-27T00:00:00.000Z"
+          },
           "handoff": null,
           "controls": [
             "pause",
@@ -1249,6 +1259,7 @@
           "error": null,
           "pausedBy": null,
           "pausedAt": null,
+          "heard": null,
           "handoff": {
             "id": "ho00000000000000",
             "from": "thermal",
@@ -1291,6 +1302,7 @@
           "error": null,
           "pausedBy": null,
           "pausedAt": null,
+          "heard": null,
           "handoff": null,
           "controls": [
             "pause",
@@ -1325,6 +1337,7 @@
           "error": null,
           "pausedBy": null,
           "pausedAt": null,
+          "heard": null,
           "handoff": {
             "id": "ho00000000000001",
             "from": "thermal",
@@ -1360,6 +1373,7 @@
           "error": null,
           "pausedBy": null,
           "pausedAt": null,
+          "heard": null,
           "handoff": null,
           "controls": []
         }
@@ -1483,6 +1497,11 @@
           "error": null,
           "pausedBy": null,
           "pausedAt": null,
+          "heard": {
+            "at": "2026-10-27T00:00:00.000Z",
+            "overdueAt": "2026-10-27T00:00:00.000Z",
+            "lostAt": "2026-10-27T00:00:00.000Z"
+          },
           "handoff": null,
           "controls": [
             "pause",
@@ -1521,6 +1540,7 @@
           "error": null,
           "pausedBy": null,
           "pausedAt": null,
+          "heard": null,
           "handoff": {
             "id": "ho00000000000000",
             "from": "thermal",
@@ -1563,6 +1583,7 @@
           "error": null,
           "pausedBy": null,
           "pausedAt": null,
+          "heard": null,
           "handoff": null,
           "controls": [
             "pause",
@@ -1597,6 +1618,7 @@
           "error": null,
           "pausedBy": null,
           "pausedAt": null,
+          "heard": null,
           "handoff": {
             "id": "ho00000000000001",
             "from": "thermal",
@@ -1632,6 +1654,7 @@
           "error": null,
           "pausedBy": null,
           "pausedAt": null,
+          "heard": null,
           "handoff": null,
           "controls": []
         }

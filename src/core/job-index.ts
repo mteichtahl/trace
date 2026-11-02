@@ -52,6 +52,8 @@ export const jobIndexKey = (repository: string): string => `${projectDataPrefix(
 export const BEAT_S = 300
 /** A running row whose heartbeat is older than this is lost (its microVM ended without a word). */
 export const STALE_AFTER_S = 3 * BEAT_S
+/** A running row whose heartbeat is older than this is overdue: a beat was missed, and trace has not heard from it. */
+export const OVERDUE_AFTER_S = BEAT_S + 60
 /** Finished rows kept (the estimates and Today read them). */
 export const KEEP_FINISHED = 300
 
@@ -226,7 +228,13 @@ export function putControl(db: DatabaseSync, c: Pick<JobControl, 'job' | 'by' | 
 
 /** A running row that still holds its slot: its heartbeat is recent (or it has none yet and started recently). */
 export const isLive = (j: Pick<JobRow, 'state' | 'beatAt' | 'startedAt' | 'updatedAt'>, at: number): boolean =>
-  j.state === 'running' && at - (j.beatAt ?? j.startedAt ?? j.updatedAt) < STALE_AFTER_S
+  j.state === 'running' && at < heardOf(j).lostAt
+
+/** When trace last heard from a running row, when it is overdue (a beat missed) and when it is declared lost (s). */
+export function heardOf(j: Pick<JobRow, 'beatAt' | 'startedAt' | 'updatedAt'>): { heardAt: number; overdueAt: number; lostAt: number } {
+  const heardAt = j.beatAt ?? j.startedAt ?? j.updatedAt
+  return { heardAt, overdueAt: heardAt + OVERDUE_AFTER_S, lostAt: heardAt + STALE_AFTER_S }
+}
 
 /** The queued jobs of one agent, first first: a person's order where they moved one, else when each was queued. */
 export function queueOrder(jobs: readonly JobRow[], controls: ReadonlyMap<string, JobControl>, agent?: string | null): JobRow[] {

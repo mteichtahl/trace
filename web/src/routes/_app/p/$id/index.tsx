@@ -22,7 +22,9 @@ import { q } from '@/lib/queries'
 import type { Stage } from '@/lib/types'
 import { Skeleton } from '@/components/ui/skeleton'
 import { NextStepCard } from '@/components/next-step-card'
-import { RunLine, runControls } from '@/components/run-line'
+import { RunLine, runControls, splitRuns } from '@/components/run-line'
+import { DraftAgain } from '@/components/draft-again'
+import { useNow } from '@/components/use-now'
 import { Section } from '@/components/shell/app-shell'
 import { StageRail } from '@/components/stage-rail'
 import { StatusBadge } from '@/components/status-badge'
@@ -59,6 +61,7 @@ function Overview() {
   // the change the next step is about: whether this person may accept it straight from the card
   const changeNo = j.data?.next.kind === 'review' ? changeOf(j.data.next) : null
   const change = useQuery({ ...q('change.get', { repo, number: changeNo ?? 0 }), enabled: !!changeNo && part !== 'reviewer' })
+  const now = useNow(30_000)
   void navigate
 
   if (!j.data)
@@ -76,7 +79,10 @@ function Overview() {
   // stage already signed is not the next step
   const current = d.stages.find((x) => x.state === 'current' || x.state === 'reopened')?.name
   const draft = drafts.find((x) => { const st = SKILLS.find((k) => k.id === x.skill)?.stage; return st === undefined || st === 'Any' || st === 'Every gate' || st === current })
-  const running = d.jobs.filter((r) => r.state === 'running' || r.state === 'paused' || (r.state === 'lost' && Date.now() - Date.parse(r.startedAt ?? '') < 24 * 3600_000))
+  // what trace is doing: jobs its runtime still reports (by the clock: one silent past its time is lost, the same as the
+  // Agents page says, without waiting for the next look). A lost job of the last day is not "doing": it is listed
+  // under Ended without finishing, with the recovery where there is one, rather than vanishing without a mention
+  const { doing: running, ended: lostJobs } = splitRuns(d.jobs, now)
   const queued = d.jobs.filter((r) => r.state === 'queued')
   const nextRun = d.next.jobId ? d.jobs.find((r) => r.id === d.next.jobId) : undefined
   // a job another specialist asked for, by the hand-off it answers (journey.get `handoffs`)
@@ -107,6 +113,7 @@ function Overview() {
             onAccept={canAccept ? () => actions.accept.mutate({ number: change.data!.number, head: change.data!.head.sha, title: change.data!.title, step: place }) : undefined}
             accepting={actions.accept.isPending}
             resume={draft ? { label: continueText(draft), to: `/p/${id}/do/${draft.skill}` } : undefined}
+            callButton={d.next.action?.call === 'requirements.draft' && write ? <DraftAgain repo={repo} size="lg" /> : undefined}
           />
 
           <ChangesFromTrace repo={repo} unavailable={d.changesUnavailable} />
@@ -150,6 +157,20 @@ function Overview() {
               </div>
             )}
           </Section>
+
+          {lostJobs.length > 0 && (
+            <Section label="Ended without finishing" count={lostJobs.length}>
+              {/* trace lost contact with these: nothing is running for them. Drafting the requirements can be started again */}
+              <div className="divide-y rounded-xl border">
+                {lostJobs.map((r) => (
+                  <div key={r.id}>
+                    <RunLine run={r} />
+                    {write && d.drafting?.state === 'stopped' && d.drafting.jobId === r.id && <DraftAgain repo={repo} variant="outline" className="mx-5 mb-4" />}
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
 
           {queued.length > 0 && (
             <Section label="Queued" count={queued.length}>

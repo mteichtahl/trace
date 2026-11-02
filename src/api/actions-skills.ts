@@ -34,6 +34,7 @@ import {
 import { SKILL_IDS, skillDef } from '../core/skills.js'
 import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, storeAt, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { type Lasts, askedBy, carryOn, viewerOf } from './actions-journey.js'
+import { REQUIREMENTS_FROM_INTENT, draftRequirements } from './drafting.js'
 import { loadDesignDecisions, recordDesignDecision } from '../tools/design/decisions.js'
 import type { DesignRows } from '../tools/design/db.js'
 import { type RequirementWords, architectureView, intentDraft, intentView, linksView, pinCheck } from '../tools/design/record.js'
@@ -191,14 +192,8 @@ export function baselineCriteria(requirements: readonly { status: string; accept
   return [['define.accepted', accepted], ['define.measurable', measurable], ['define.firmware', accepted]]
 }
 
-/** The job Intent builder's Submit starts: the candidate requirements, drafted from the intent as the people decided it. */
-export const REQUIREMENTS_FROM_INTENT = [
-  'The intent was submitted in the Intent builder. Draft the candidate requirements from it for Requirements review.',
-  'Read the intent statements with the people\'s decisions (design.intent list): use the accepted ones as accepted and the edited ones in their edited words; leave rejected ones out.',
-  'For each requirement: one testable acceptance criterion with a number and a unit, a kind, and its source (stated by a person, or inferred). Add them with verify.requirements and link each to the intent statements it comes from (design.intent link).',
-  'Keep the requirements already in the record that still match the intent, under their ids, rather than adding duplicates. Leave every requirement proposed: people accept or strike them in Requirements review.',
-  'Do not change the design files.',
-].join('\n')
+/** The job Intent builder's Submit starts (src/api/drafting.ts, where requirements.draft starts it again too). */
+export { REQUIREMENTS_FROM_INTENT }
 
 /**
  * The design decisions a skill's draft makes, which Submit records (design.decide's shapes):
@@ -460,7 +455,7 @@ export const SKILL_ACTIONS = {
     let jobError: string | undefined
     if (a.skill === 'intent-builder') {
       try {
-        const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: a.repo, request: REQUIREMENTS_FROM_INTENT, agent: 'verify', requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
+        const r = await draftRequirements(ctx, a.repo)
         if (r.accepted) { jobId = r.jobId; started = ['The Verification agent drafts the candidate requirements for Requirements review.'] } else jobError = r.reason ?? 'trace did not accept the job.'
       } catch (e) { jobError = e instanceof Error ? e.message : String(e) }
     }

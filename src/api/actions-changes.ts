@@ -54,7 +54,7 @@ import { Composer, NO_LAYERS } from '../prompts/resolve.js'
 import { ActionError, type Context, PROJECT_DB_PATH, Repo, TaskBranch, agentFacts, def, label, tempDb, withJourneyDb, writeJourney } from './action-kit.js'
 import { AGENT_WORDS, jobIndex } from './actions-jobs.js'
 import {
-  type ChangeDetail, type ChangeFacts, type ChangeSummary, type TraceRule, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, fileKind, jobRequest, jobsByBranch,
+  type ChangeDetail, type ChangeFacts, type ChangeSummary, type TraceRule, acceptance, approvalsGiven, changeSummary, checkState, creditedAgent, criteriaNamed, fileKind, jobRequest, jobsByBranch,
   recommendationOf, requirementIds, settleUnfinished, summaryBullets, traceChanges, traceJob, unfinishedWords, verdictOf,
 } from './changes.js'
 import { GitHubError, type GitHubApi, type MergeMethod, type PullDetail, type PullStatus, type PullSummary } from './github.js'
@@ -397,7 +397,7 @@ export const CHANGE_ACTIONS = {
     // the same specialist (a job routed or delegated to the generic worker carries on routed), on the same branch:
     // the job's runner checks out the remote branch when it exists (src/agents/runtime/job.ts checkoutBranch), so its
     // pushes update this pull request
-    const agent = SPECIALIST_KINDS.find((k) => k === job.agent)
+    const agent = SPECIALIST_KINDS.find((k) => k === creditedAgent(job))
     const started = await (await ctx.deps.jobs()).startJob({
       kind: 'task', repository: repo, request: revisionRequest({ number, title: pull.title, branch: pull.head.ref, note, by, summary: job.summary }),
       requestedBy: by, requestedBySub: ctx.principal.sub, branch: pull.head.ref, ...(agent ? { agent } : {}),

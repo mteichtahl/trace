@@ -203,7 +203,8 @@ export function jobsByBranch(jobs: readonly JobRow[], rule?: Pick<TraceRule, 'de
   for (const j of [...jobs].sort((a, b) => (a.endedAt ?? a.updatedAt) - (b.endedAt ?? b.updatedAt))) {
     if (!j.branch) continue
     if (rule && (!CHANGE_JOB_KINDS.has(j.kind) || !ownBranch(j.branch, rule))) continue
-    byBranch.set(j.branch, j)
+    // a delegated worker commits for its specialist: the change is the specialist's job's, never the worker's
+    byBranch.set(j.branch, (j.parentJob ? jobs.find((x) => x.id === j.parentJob) : undefined) ?? j)
   }
   return byBranch
 }
@@ -227,10 +228,32 @@ export function traceChanges<P extends Pick<PullSummary, 'number' | 'head' | 'he
     .sort((a, b) => (a.pull.created_at ?? '').localeCompare(b.pull.created_at ?? '') || a.pull.number - b.pull.number)
 }
 
-/** Who made it, in words: "the Verification specialist", else "a trace job". */
-export function fromWords(job: Pick<JobRow, 'agent'> | null, agentWords: Readonly<Record<string, string>>): string {
-  const a = job?.agent
-  return a && (SPECIALIST_KINDS as readonly string[]).includes(a) ? `the ${agentWords[a] ?? a} specialist` : 'a trace job'
+/**
+ * The specialist a change is credited to: the one its task was started with (the `agent` of its recorded request, what
+ * the person confirmed), else the one its row names. The row's agent is where the job was routed (the index takes it
+ * from the job's `routed` event), which the router may move from a person's pick (src/agents/router.ts misPicked), so
+ * it is not who the task was asked of. A delegated worker's commits are its specialist's already (jobsByBranch).
+ */
+export function creditedAgent(job: Pick<JobRow, 'agent' | 'payload'> | null): string | null {
+  if (!job) return null
+  try {
+    const a = job.payload ? (JSON.parse(job.payload) as { agent?: unknown }).agent : undefined
+    if (typeof a === 'string' && (SPECIALIST_KINDS as readonly string[]).includes(a)) return a
+  } catch { /* an unreadable request says nothing: the row's agent stands */ }
+  return job.agent
+}
+
+/**
+ * Who made it, in words: "the Verification specialist" (creditedAgent), else "a trace job". When the job ran as
+ * another specialist (the router moved the pick), it says so rather than hide it: "the Verification specialist (routed
+ * to the Implementation specialist)".
+ */
+export function fromWords(job: Pick<JobRow, 'agent' | 'payload'> | null, agentWords: Readonly<Record<string, string>>): string {
+  const a = creditedAgent(job)
+  if (!a || !(SPECIALIST_KINDS as readonly string[]).includes(a)) return 'a trace job'
+  const ran = job?.agent
+  const routed = ran && ran !== a && (SPECIALIST_KINDS as readonly string[]).includes(ran) ? ` (routed to the ${agentWords[ran] ?? ran} specialist)` : ''
+  return `the ${agentWords[a] ?? a} specialist${routed}`
 }
 
 // ------------------------------------------------------------------ verdict, recommendation, may_accept

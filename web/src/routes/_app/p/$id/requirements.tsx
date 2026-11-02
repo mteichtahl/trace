@@ -24,8 +24,11 @@ import { useCommands } from '@/components/shell/command-menu'
 import { StatusBadge } from '@/components/status-badge'
 import { EmptyState, Partial, QueryError } from '@/components/states'
 import { repoOf } from '@/lib/api'
-import { useAction } from '@/lib/queries'
+import { useAction, useJourney, useProjects } from '@/lib/queries'
 import type { CoverageRow, TraceView, Verdict } from '@/lib/types-s1'
+import type { Journey, RunSummary } from '@/lib/types'
+import { DraftAgain } from '@/components/draft-again'
+import { RunLine } from '@/components/run-line'
 
 export const Route = createFileRoute('/_app/p/$id/requirements')({
   staticData: { crumb: 'Requirements' },
@@ -59,6 +62,10 @@ function Requirements() {
   const navigate = useNavigate()
   const cov = useCoverage(repo)
   const trace = useAction('requirements.trace', { repo })
+  // where drafting them from the intent stands, for the empty state (journey.get `drafting`)
+  const journey = useJourney(repo)
+  const projects = useProjects()
+  const write = (projects.data?.find((p) => p.repo === repo)?.part ?? 'contributor') !== 'reviewer'
   const [status, setStatus] = useState<'all' | Verdict>('all')
   const [selected, setSelected] = useState<string | null>(null)
   const url = useUrlView('requirements')
@@ -96,9 +103,7 @@ function Requirements() {
       </p>
 
       {rows.length === 0 ? (
-        <EmptyState className="mt-6" action={<Button asChild><Link to="/p/$id/do/$skill" params={{ id, skill: 'intent-builder' }}>Open the Intent builder</Link></Button>}>
-          No requirements yet. They come from the intent: once it is written, trace drafts candidates for Requirements review.
-        </EmptyState>
+        <NoRequirements id={id} repo={repo} drafting={journey.data?.drafting} jobs={journey.data?.jobs ?? []} write={write} />
       ) : (
         <>
           <CanvasFrame
@@ -145,6 +150,50 @@ function Requirements() {
 }
 
 /** One line under the view: how much of the intent a person accepted, what no requirement covers, what is unlinked. */
+/**
+ * No requirements yet, and why (journey.get `drafting`): the intent is not written; trace is drafting them (its job,
+ * running); they wait in a change; or the drafting stopped (lost, failed, cancelled) and can be started again. Without
+ * the journey's word it says where requirements come from, as before.
+ */
+export function NoRequirements({ id, repo, drafting, jobs, write }: { id: string; repo: string; drafting: Journey['drafting']; jobs: readonly RunSummary[]; write: boolean }) {
+  const intent = <Button asChild><Link to="/p/$id/do/$skill" params={{ id, skill: 'intent-builder' }}>Open the Intent builder</Link></Button>
+  switch (drafting?.state) {
+    case 'drafting': {
+      const run = drafting.jobId ? jobs.find((j) => j.id === drafting.jobId) : undefined
+      return (
+        <div className="mt-6 space-y-3">
+          <EmptyState>No requirements yet: trace is drafting them from your intent. You accept or strike each in Requirements review once they are drafted.</EmptyState>
+          {run && <RunLine run={run} className="rounded-xl border" />}
+        </div>
+      )
+    }
+    case 'stopped':
+      return (
+        <EmptyState className="mt-6" action={write ? <DraftAgain repo={repo} /> : undefined}>
+          No requirements yet. {drafting.why ?? 'Nothing is drafting them now.'} Your intent is submitted, so it need not be written again{write ? ': draft the requirements again to start once more.' : '.'}
+        </EmptyState>
+      )
+    case 'drafted':
+      return (
+        <EmptyState className="mt-6" action={<Button asChild><Link to="/p/$id/changes" params={{ id }}>See the changes</Link></Button>}>
+          No requirements in the record yet: the Verification specialist drafted them, and they wait in its change. Accept it to bring them into Requirements review.
+        </EmptyState>
+      )
+    case 'intent':
+      return (
+        <EmptyState className="mt-6" action={intent}>
+          No requirements yet. They come from the intent: write it in the Intent builder and submit it, and trace drafts candidates for Requirements review.
+        </EmptyState>
+      )
+    default:
+      return (
+        <EmptyState className="mt-6" action={intent}>
+          No requirements yet. They come from the intent: once it is written, trace drafts candidates for Requirements review.
+        </EmptyState>
+      )
+  }
+}
+
 function IntentLine({ trace, id }: { trace: TraceView; id: string }) {
   const s = trace.summary
   const proposed = trace.intent.filter((i) => i.state === 'proposed').length

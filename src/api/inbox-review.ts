@@ -11,7 +11,7 @@
  */
 import type { JobRow } from '../core/job-index.js'
 import { type InboxItem, type StageId, ago } from '../core/journey.js'
-import { type TraceRule, jobsByBranch, traceJob } from './changes.js'
+import { type TraceRule, creditedAgent, jobsByBranch, traceJob } from './changes.js'
 import type { PullSummary } from './github.js'
 
 /** The app's id of a project in its paths: owner~name (web/src/lib/api.ts projectId). */
@@ -27,7 +27,8 @@ export function reviewItems(o: {
   for (const p of o.pulls) {
     const j = traceJob(p, byBranch, o.rule)
     if (!j) continue
-    const who = j.agent ? `The ${o.agentWords[j.agent] ?? j.agent} agent` : 'A trace job'
+    const a = creditedAgent(j)
+    const who = a ? `The ${o.agentWords[a] ?? a} agent` : 'A trace job'
     const t = j.endedAt ?? (Date.parse(p.updated_at) / 1000 || j.updatedAt)
     out.push({
       id: `review:${p.number}`, kind: 'review', repo: o.repo, project: o.project, stage: o.stage,

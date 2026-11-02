@@ -70,6 +70,31 @@ describe('reading the API\'s answers', () => {
     expect(d).toMatchObject({ declined: { reason: 'The bench measures it on Friday.' }, summary: expect.stringMatching(/^Declined: the Analog and mixed-signal specialist will not answer it/) })
   })
 
+  describe('journey.get: the next step\'s button goes where the step is done', () => {
+    const raw = (answers['journey.get'] as { args: Record<string, unknown>; result: Record<string, unknown> })
+    const withNext = (next: Record<string, unknown>, extra: Record<string, unknown> = {}) => READERS['journey.get']!({ ...raw.result, next, ...extra }, raw.args) as JourneyMore
+
+    it('a person\'s criterion opens its skill, not the gate (test-2: Continue opened the gate-signing page at 0 of 2 met)', () => {
+      const j = withNext({ kind: 'task', belongs_to: 'you', yours: true, summary: 'Define: Every requirement is accepted or struck.', button: 'Continue', ref: { kind: 'criterion', id: 'define.accepted' } })
+      expect(j.next.action).toEqual({ label: 'Continue', to: '/p/acme~answers/do/requirements-review' })
+      // a reviewer cannot do it: "Read the stage" reads the gate's evidence
+      const rev = withNext({ kind: 'task', belongs_to: 'contributors', yours: false, summary: 'Define: …', button: 'Read the stage', ref: { kind: 'criterion', id: 'define.accepted' } })
+      expect(rev.next.action?.to).toBe('/p/acme~answers/gates/define')
+      // signing is the gate's page
+      expect(withNext({ kind: 'gate', belongs_to: 'you', yours: true, summary: 'x', button: 'Review and sign', ref: { kind: 'gate', id: 'define' } }).next.action?.to).toBe('/p/acme~answers/gates/define')
+      // the intent first: the Intent builder
+      expect(withNext({ kind: 'task', belongs_to: 'you', yours: true, summary: 'x', button: 'Open the Intent builder', ref: { kind: 'skill', id: 'intent-builder' } }).next.action?.to).toBe('/p/acme~answers/do/intent-builder')
+    })
+
+    it('drafting again is an action the card calls, and trace drafting names its job', () => {
+      const j = withNext({ kind: 'task', belongs_to: 'you', yours: true, summary: 'x', button: 'Draft the requirements again', ref: { kind: 'action', id: 'requirements.draft' } },
+        { drafting: { state: 'stopped', job: { id: 'h.job-1', state: 'lost', error: null }, why: 'It is lost.' } })
+      expect(j.next.action).toEqual({ label: 'Draft the requirements again', call: 'requirements.draft' })
+      expect(j.drafting).toEqual({ state: 'stopped', jobId: 'h.job-1', jobState: 'lost', why: 'It is lost.' })
+      expect(withNext({ kind: 'working', belongs_to: 'trace', yours: false, summary: 'trace is drafting the requirements from your intent.', button: 'Watch', ref: null, job_id: 'h.job-2' }).next.jobId).toBe('h.job-2')
+    })
+  })
+
   it('journey.get without a journey says how one starts', () => {
     const j = readJourney({ repo: 'acme/x', started: false, summary: 'This project has not started its journey yet.', next: 'An admin starts it.' }) as Journey & { started: boolean }
     expect(j).toMatchObject({ started: false, stages: [], next: { kind: 'none', summary: 'This project has not started its journey yet. An admin starts it.' } })

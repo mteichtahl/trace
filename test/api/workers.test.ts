@@ -50,6 +50,10 @@ describe('the API\'s remote jobs', () => {
     expect(s.length).toBeGreaterThanOrEqual(33)
     expect(taskSession({ ...t, repository: 'acme/board' })).toBe(s)
     expect(taskSession({ ...t, agent: 'render' })).not.toBe(s)
+    // the same request asked again after its job was lost gets a session of its own; the first attempt keeps the old id
+    expect(taskSession({ ...t, attempt: 1 })).toBe(s)
+    expect(taskSession({ ...t, attempt: 2 })).not.toBe(s)
+    expect(taskSession({ ...t, attempt: 3 })).not.toBe(taskSession({ ...t, attempt: 2 }))
     expect(parseHandle(jobHandle(s, 'job-abc-12345678'))).toEqual({ session: s, jobId: 'job-abc-12345678', hash: projectHash('acme/board') })
     for (const bad of ['job-1', `${s}`, `${s}.`, `trace-api-zzzzzzzz-${'0'.repeat(24)}.job-1`, `${s}.job/../x`]) expect(parseHandle(bad)).toBeNull()
   })
@@ -70,6 +74,11 @@ describe('the API\'s remote jobs', () => {
     expect(await jobs.jobStatus(stranger)).toEqual([])
     expect(f.calls).toHaveLength(2)
     await expect(jobs.startJob({ kind: 'task', repository: 'other/repo', request: 'x', requestedBy: 'm' })).rejects.toThrow(/agent is not set up yet: a new project's agent arrives with the next update/)
+    // asked again as a second attempt: a new session, and the worker is sent the task without the attempt
+    await jobs.startJob({ kind: 'task', repository: 'acme/fw', request: 'bump the version', requestedBy: 'dev@example.com', attempt: 2 })
+    expect(f.calls[2]?.session).not.toBe(f.calls[0]?.session)
+    expect(f.calls[2]?.session).toBe(taskSession({ repository: 'acme/fw', request: 'bump the version', attempt: 2 }))
+    expect(f.calls[2]?.body).not.toHaveProperty('attempt')
   })
 
   it('forwards a tool call to its own project\'s worker, in one session per project, and returns the tool\'s answer', async () => {
