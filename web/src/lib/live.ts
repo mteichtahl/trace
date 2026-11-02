@@ -43,7 +43,8 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
         // the journey's record and the agents' facts, and the bench's live readings (src/core/bench.ts): the Build tab and
         // the guided skills (Bring-up run's live readout) read them too; and jobs.list, whose hand-offs between
         // specialists are agents' facts (an answer) or the record (a decline)
-        // and the changes: a change that waited on a person's approval (layout.renders) is settled by it
+        // and the changes: a change that waited on a person's approval (layout.renders) is settled by it, whether a
+        // person signed it in the record or a specialist recorded it in its facts (both publish 'journey')
         journey: [['journey.get', r], ['inbox'], ['runs', r], ['build.get', r], ['skill.get', r], ['jobs.list', r], ['change.get', r], ['changes.list', r]],
         settings: [['settings.get', r], ['journey.get', r]],
         memory: [['memory.list', r], ['memory.recall', r]],
@@ -55,8 +56,7 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
       return byWhat[e.what] ?? [['journey.get', r]]
     }
     case 'job.updated':
-      // a specialist recording a criterion as met lands in its facts, which settle a change waiting on that approval
-      return [['job'], ['jobs.list', e.repo], ['journey.get', e.repo], ['tools.waits', e.repo], ['runs', e.repo], ['change.get', e.repo], ['changes.list', e.repo]]
+      return [['job'], ['jobs.list', e.repo], ['journey.get', e.repo], ['tools.waits', e.repo], ['runs', e.repo]]
     case 'notification':
       return [['inbox'], ['journey.get', e.repo]]
   }
