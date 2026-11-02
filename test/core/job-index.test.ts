@@ -173,6 +173,8 @@ describe('the views', () => {
     expect(agentViews(jobs, stuckAt(AT - 7150), new Set(), new Set(), AT).find((x) => x.id === 'render')?.status).toBe('idle')
     // reported after the last success: still stuck
     expect(agentViews(jobs, stuckAt(AT - 1000), new Set(), new Set(), AT).find((x) => x.id === 'render')).toMatchObject({ status: 'stuck', says: 'Stuck: AccessDenied on batch:TagResource.' })
+    // a person answered it (the answer is kept under the stuck item's id): settled, as Home and the inbox show it
+    expect(agentViews(jobs, stuckAt(AT - 1000), new Set(['s']), new Set(), AT).find((x) => x.id === 'render')?.status).toBe('idle')
   })
 })
 
