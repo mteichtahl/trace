@@ -162,6 +162,18 @@ describe('the views', () => {
     const b = Object.fromEntries(agentViews(jobs, facts, new Set(['q']), new Set(['s']), AT).map((x) => [x.id, x]))
     expect([b.ams?.status, b.thermal?.status]).toEqual(['working', 'idle'])
   })
+
+  it('a stuck report the agent has since got past (a later job of its succeeded) no longer makes it stuck', () => {
+    const d = db()
+    add(d, 'r1', { agent: 'render', state: 'failed', startedAt: AT - 7200, endedAt: AT - 7100 })
+    add(d, 'r2', { agent: 'render', state: 'succeeded', startedAt: AT - 3600, endedAt: AT - 3000 })
+    const jobs = jobViews(REPO, loadJobs(d), new Map(), opts)
+    const stuckAt = (at: number) => ({ questions: [], checks: [], stuck: [{ id: 's', jobId: 'r1', agent: 'the Rendering specialist', why: 'AccessDenied on batch:TagResource.', recommendation: 'Grant it', options: [], sources: [], stage: null, at, resolvedAt: null }] })
+    // reported before r2 started, and r2 succeeded: past it
+    expect(agentViews(jobs, stuckAt(AT - 7150), new Set(), new Set(), AT).find((x) => x.id === 'render')?.status).toBe('idle')
+    // reported after the last success: still stuck
+    expect(agentViews(jobs, stuckAt(AT - 1000), new Set(), new Set(), AT).find((x) => x.id === 'render')).toMatchObject({ status: 'stuck', says: 'Stuck: AccessDenied on batch:TagResource.' })
+  })
 })
 
 describe('a job\'s last words', () => {
