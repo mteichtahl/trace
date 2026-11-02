@@ -22,6 +22,39 @@ wiring, this file wins for what it adds.
 - **Words:** a pull request a trace job opened is a **change** everywhere people read. "Pull request" appears only in
   the small "View on GitHub" link and in error text about GitHub's own rules.
 
+### Decisions from the security review (2 November 2026)
+
+- **Which pull requests are trace's (the trace-change rule).** A branch name proves nothing (anyone who can push can
+  name a branch `claude/…`, and accepting merges it). A pull request is a change only when all of these hold
+  (`src/api/changes.ts` traceJob): its head branch lives in the project's repository itself, not a fork; the branch
+  starts with the project's `worker.own_branch_prefix` (default `claude/`) and is not the default branch; the newest
+  job of the project's index on that branch is a task (hand-offs are tasks) or a work item on that branch of trace's
+  own (a ci-red work item that fixed a person's branch made no change); and, when the login trace's agents act as is
+  known (the API runtime's `TRACE_AGENT_LOGIN`, else the repository's `TRACE_AGENT_LOGIN` variable the installer sets),
+  the pull request was opened by that login. The default branch is never indexed. The rule (default branch, prefix,
+  login, hold label) is read once per repository and kept five minutes. `change.ask` also holds the branch to the task
+  action's rule (`TaskBranch`, `claude/…`) before it starts a revision job.
+- **Accept what was looked at.** `change.accept` takes `head_sha`, the head commit the person was shown (change.get's
+  `head.sha`). A change whose head has moved since is refused: "It changed since you looked at it. Look again before
+  accepting." GitHub is asked to merge that commit only. Checks trace could not read, or none run at all, are never
+  `ready` and never accepted ("trace could not read its checks", "No checks have run on it yet"): a repository without
+  a required check calls anything mergeable. (Reading branch protection for required checks would need admin on the
+  token; refusing when nothing ran covers it without that.)
+- **What is posted as trace's account.** Comments quote the person's note or reason as a Markdown quote, with `<!--`
+  and `-->` written as HTML entities (trace's workflows read markers in comments by its account) and a zero-width
+  joiner after every `@` (it pings nobody). They name the person by their name in the user pool, else "a person on the
+  project (AL)" with their initials: never their email. The decisions log still records the email, as every decision.
+- **A revision request's data.** The revision job's request is the person's note; the change's title and what the job
+  reported last time follow it, fenced (`<change-title>`, `<earlier-summary>`) as data, not instructions.
+- **GitHub's allowance.** Every project shares one token. The API runtime keeps answers 20 s in each container
+  (`src/api/github-cache.ts`): the open pull requests per repository; a pull request's status and a commit's check runs
+  per head commit; a pull request's files and commits per head commit. A push makes a new head, so the next look
+  misses at once. Accepting, asking and discarding forget the repository's answers in that container; accepting reads
+  status and checks fresh. `journey.get` and the inbox use the same kept open pull requests. Each principal may make at
+  most 60 GitHub-touching change actions a minute (a separate budget from the request limit), with a plain-words
+  error saying when to try again. The app's changes list polls no faster than every 60 s while live events are
+  connected.
+
 ## API runtime actions (`src/api/actions-changes.ts`)
 
 Access is checked first, as for every action. `read` = assigned to the project; `write` = the Contributor part.
@@ -31,9 +64,9 @@ Access is checked first, as for every action. `read` = assigned to the project; 
 | `changes.list` | read | `{ repo }` | `{ repo, changes: ChangeSummary[] }`: the open pull requests a trace job of this project opened (the same branch match as `src/api/inbox-review.ts`), oldest first |
 | `change.get` | read | `{ repo, number }` | `ChangeDetail` |
 | `change.diff` | read | `{ repo, number, path }` | `{ path, kind, patch: string \| null, before: { ref } \| null, after: { ref } \| null, binary: boolean }` |
-| `change.accept` | write | `{ repo, number, note? }` | `{ merged: true, sha, stage, next: string }`: merges it (the repository's allowed method, squash first), removes the hold label, records decision `change.accepted` |
-| `change.ask` | write | `{ repo, number, note }` (1–4000 chars) | `{ job_id }`: comments on the pull request ("Asked by <name>: …"), starts a revision job with the same agent on the same branch, records `change.asked` |
-| `change.discard` | write | `{ repo, number, reason }` (1–2000 chars) | `{ closed: true }`: comments the reason, closes it, records `change.discarded` |
+| `change.accept` | write | `{ repo, number, head_sha, note? }` (`head_sha`: 40 hex, the head the person was shown) | `{ merged: true, sha, stage, next: string, warning? }`: refuses a head that moved since; merges that commit (the repository's allowed method, squash first), removes the hold label, comments the note as a quote, records decision `change.accepted` (a record that fails after the merge is `warning`, logged: the merge stands) |
+| `change.ask` | write | `{ repo, number, note }` (1–4000 chars) | `{ job_id }`: holds the branch to the task action's rule, starts a revision job with the same agent on the same branch, comments the note as a quote ("Asked for changes by <name>: …"), records `change.asked` |
+| `change.discard` | write | `{ repo, number, reason }` (1–2000 chars) | `{ closed: true }`: closes it, then comments the reason as a quote (a comment that fails still answers closed, logged), records `change.discarded` |
 
 ```ts
 interface ChangeSummary {
@@ -53,15 +86,17 @@ interface ChangeDetail extends ChangeSummary {
   checks_list: { name: string; state: 'passed' | 'failed' | 'running' | 'skipped'; summary: string | null }[]
   requirements: string[]  // requirement ids the change names (title, body, commit messages): ["R4", "R7"]
   recommendation: { verdict: 'accept' | 'ask' | 'wait' | 'none'; why: string }
-  may_accept: boolean     // this person, now: Contributor part, open, checks not failing or running, no conflict
+  may_accept: boolean     // this person, now: Contributor part, open, checks read, at least one run, none failing or
+                          // running, no conflict
   blockers: string[]      // plain words, when may_accept is false
   base: { ref: string; sha: string }; head: { ref: string; sha: string }
 }
 ```
 
 The recommendation is worked out from facts, never a model: all checks passed and it can merge → accept, naming the
-checks and the requirements; a check failing → ask, naming it; checks running → wait; a conflict → none, "trace will
-bring it up to date". `change.accept` re-reads the status first and refuses when it is not `may_accept`.
+checks and the requirements; a check failing → ask, naming it; checks running, unreadable or none yet → wait; a
+conflict → none, "trace will bring it up to date". `change.accept` re-reads the status from GitHub (never a kept copy)
+and refuses when the head moved or it is not `may_accept`.
 
 `service-policy.ts`: `changes.list`, `change.get`, `change.diff` are `read`; the other three are not open to
 connected systems.
@@ -102,15 +137,17 @@ All additive; nothing above changed meaning.
   change" for a reviewer), and `recommendation` starts "trace recommends accepting it." followed by the reason.
 - The inbox `review` item's `ref` is `{ kind: 'pull', id, url, to }`: `to` is the in-app link
   (`/p/<owner~name>/changes/<number>`), `url` stays GitHub's for "View on GitHub".
-- A pull request that is not trace's (no job of the project worked on its branch) is "no such change" to every
-  `change.*` action.
+- A pull request that is not trace's (the trace-change rule above: a fork's, the default branch's, a person's branch, a
+  job that makes no change, another login's) is "no such change" to every `change.*` action, and is not in the inbox.
 - Connected systems' MCP tool list describes `changes.list`, `change.get` and `change.diff`.
 
 ## Live updates (`src/web/`, `src/infra/`, `src/installer/`)
 
 - A GitHub webhook on each project repository (pull_request, check_run, check_suite, status) posts to
-  `POST /api/hooks/github` on the web backend. Its HMAC (`X-Hub-Signature-256`) is checked against a secret kept in
-  Secrets Manager; anything unsigned or for a repository that is not a project is dropped with 204.
+  `POST /api/hooks/github` on the web backend, through CloudFront, which adds a random origin header the function
+  checks before anything else. Its HMAC (`X-Hub-Signature-256`, over the bytes as sent) is checked against a secret
+  kept in Secrets Manager; anything not through CloudFront, unsigned, a delivery id seen in the last day, or for a
+  repository that is not a project is dropped with 204.
 - A good event publishes `record.changed` (with `{ repo, kind: 'change', number }`) to the project's members on their
   user channels. The API runtime still decides who the members are.
 - The installer creates the secret and registers the webhook on every project repository (onboarding and upgrade),
@@ -121,19 +158,25 @@ All additive; nothing above changed meaning.
 ### How it is built (Live updates, built 2 November 2026)
 
 ```
-GitHub ──POST, signed──▶ CloudFront /api/hooks/* ──▶ <prefix>-web-hooks (function URL, no IAM; src/web/hooks-lambda.ts)
-                          (WAF: body rules skip it,     │ 1 size, event, X-Hub-Signature-256 (HMAC SHA-256, constant time)
-                           HooksRate limits it)         │   against <prefix>/web/github-hooks (Secrets Manager, cached 5 min)
+GitHub ──POST, signed──▶ CloudFront /api/hooks/* ──▶ <prefix>-web-hooks (function URL, no IAM, at most 10 at once)
+                          (WAF: body rules skip it,     │ 0 x-trace-origin: CloudFront's random value (constant time)
+                           HooksRate limits it; adds    │ 1 size, event, X-Hub-Signature-256 (HMAC SHA-256 of the raw bytes,
+                           x-trace-origin)              │   constant time) against <prefix>/web/github-hooks (cached 5 min);
+                                                        │   X-GitHub-Delivery not seen in the last day
                                                         │ 2 hook.members { repo } ──▶ API runtime, as the backend's own client
-                                                        │   (client credentials, scope trace-internal/members)
+                                                        │   (client credentials, scope trace-internal/members; its secret
+                                                        │   <prefix>/web/hooks-client)
                                                         │ 3 debounce per repository (DynamoDB <prefix>-web-hooks)
                                                         └─▶ AppSync Events: record.changed { repo, kind: 'change', number? }
                                                             to each member's /trace/users/<sub>
 ```
 
 - **Route** (`src/web/hooks.ts`). Dropped with 204 and one log line (why, the event, the delivery id; never the body):
-  live updates off, a body over 1 MB, no signature, an event other than the four, a secret that cannot be read, a bad
-  signature, a body with no repository, a repository that is not a project. A good delivery is 202. A signature that
+  no origin header or the wrong one (checked first, before the settings, the body or a secret are read), live updates
+  off, a body over 1 MB, no signature, an event other than the four, a secret that cannot be read, a bad signature, a
+  body with no repository, no delivery id or one seen in the last day (remembered in the debounce table with a TTL,
+  only once signed), a repository that is not a project. A good delivery is 202. The signature is over the body's bytes
+  as the function URL event gives them, not a re-encoded string. A signature that
   does not match a cached copy older than 30 s reads the secret again once, so a secret the installer replaced is
   picked up at once without reading it for every forged delivery.
 - **Who is told: the API runtime decides, with the backend's own identity.** `hook.members { repo }`
@@ -160,37 +203,50 @@ GitHub ──POST, signed──▶ CloudFront /api/hooks/* ──▶ <prefix>-we
 - **Debounce.** One push sends dozens of check_run and status deliveries, each its own invocation and often its own
   container, so the window is shared: `<prefix>-web-hooks` in DynamoDB (`src/web/hooks-store.ts`), one item per
   repository, conditional UpdateItems only. The first delivery of a quiet repository claims a 5 s window and publishes
-  at once; deliveries inside it only note their number; when the window ends the holder takes what was noted and
-  publishes once more (naming the change when one was noted, else none), and holds another window while they keep
+  at once; deliveries inside it only note their number; when the window ends the holder takes what was noted (only if
+  the window is still the one it claimed: its `until` is the condition) and publishes once more (naming the change when one was noted, else none), and holds another window while they keep
   coming (at most six). When DynamoDB cannot be reached a delivery publishes on its own (fail open: one more refetch,
   nothing lost).
 - **Infra** (`src/infra/web.ts`, `web.hooks`, on by default in the nested layout; off, or a flat installation: none of
   it, and the app polls. A flat parent of 20 projects has no room for the client and its resource server). The hooks function
-  is the backend's code (`hooks.mjs`) with a role of its own: its settings parameter, `GetSecretValue` on the hooks
-  secret, `UpdateItem` on its table, `appsync:EventPublish`, its logs. Nothing of Cognito, the access store or a
-  project; the backend's role gains nothing. CloudFront sends `/api/hooks/*` (ahead of `/api/*`) to its function URL
-  as a plain HTTPS origin, with every viewer header and the body as sent and no viewer function. It cannot sit behind
-  the backend's origin access control: CloudFront signs the request, and Lambda refuses a signed POST that lacks
-  `x-amz-content-sha256`, which GitHub never sends. The function serves that one path and checks every signature, so
-  its open URL is no wider than the CloudFront path. The WAF's body rules (KnownBadInputs, Common) and `ApiRate` skip
+  is the backend's code (`hooks.mjs`) with a role of its own: its settings parameter, `GetSecretValue` on the webhook
+  secret and the backend's client secret, `UpdateItem` on its table (TTL on `ttl`), `appsync:EventPublish`, its logs.
+  Nothing of Cognito, the access store or a project; the backend's role gains nothing. CloudFront sends `/api/hooks/*`
+  (ahead of `/api/*`) to its function URL as a plain HTTPS origin, with every viewer header and the body as sent and no
+  viewer function. It cannot sit behind the backend's origin access control: CloudFront signs the request, and Lambda
+  refuses a signed POST that lacks `x-amz-content-sha256`, which GitHub never sends. So its URL takes requests from
+  anyone who finds it, around the WAF: CloudFront adds `x-trace-origin` with a random value the stack makes
+  (`<prefix>/web/hooks-origin`, resolved into the origin's custom header and the function's `TRACE_HOOKS_ORIGIN` at
+  deploy), and the function drops anything without it (constant-time compare) before reading the body, its settings or
+  a secret. Its reserved concurrency is 10, so a flood is throttled by Lambda rather than costing money or the
+  account's concurrency. The backend's app client allows no sign-in flow of a person's (`ExplicitAuthFlows` is
+  `ALLOW_REFRESH_TOKEN_AUTH` only; client credentials is OAuth's). The WAF's body rules (KnownBadInputs, Common) and `ApiRate` skip
   `/api/hooks/*` (pull request text may look like an attack, and one push is a burst from a few GitHub addresses); a
   `HooksRate` rule limits it on its own (5,000 per address in 5 minutes); BodyTooLarge and IpReputation still apply.
   The web settings parameter gains `hooks` (the secret's name, the token address, the client id and scope, the table),
   the stack outputs `WebHooksAddress` (CloudFront's own address + `/api/hooks/github`, reachable whatever a custom
   domain's DNS says) and `WebHooksClientId`. No new references between the web stack and the parent.
-- **Installer** (`src/installer/hooks.ts`, the web step of `apply`, so `tracectl install` and `tracectl upgrade`).
-  `<prefix>/web/github-hooks` (JSON `{ webhookSecret, clientSecret }`) is made when missing with a random webhook
-  secret, which is then kept; the backend's client secret, read from Cognito, is written into it each run (a client
-  the stack made again is picked up). Every project repository gets one webhook to `WebHooksAddress`, JSON, the four
+- **Installer** (`src/installer/hooks.ts`, the web step of `apply`, so `tracectl install` and `tracectl upgrade`). Two
+  secrets, apart because different roles read them: `<prefix>/web/github-hooks` (JSON `{ webhookSecret }`) is made
+  when missing with a random webhook secret, which is then kept (the hooks function and the self-update read it);
+  `<prefix>/web/hooks-client` (JSON `{ clientSecret }`) gets the backend's client secret, read from Cognito, each run (a
+  client the stack made again is picked up; only the hooks function reads it). An older installation's combined secret
+  has its client secret taken out (the hooks function reads the old place until the new one exists). Every project repository gets one webhook to `WebHooksAddress`, JSON, the four
   events, active: found by its exact URL and updated in place, else created, so a second run never adds a second one.
   A repository that refuses (no admin, no "Webhooks: read and write") is a warning in the summary and the preflight's
-  access note, never a failure. The self-update registers the projects it adds with the secret, which its role may
-  read and never write. `tracectl uninstall --delete-data` removes the secret. The answer `webHooks` (Optional › Web
+  access note, never a failure. The self-update registers the projects it adds with the webhook secret, which its role
+  may read and never write, and never the client secret (a webhook secret that is not JSON is logged as a fixed
+  message, never its text). `tracectl uninstall --delete-data` removes both. The answer `webHooks` (Optional › Web
   app › "Live updates from GitHub") turns it all off. It is a switch, not a typed value, so there is no check for it to
   run; the token's webhook permission is already among the checks the token's validation runs.
 - **App** (`web/src/lib/live.ts`): `record.changed` with `kind: 'change'` refetches `pull.status`, `changes.list`,
   `change.get`, the inbox and the journey for that repository. `pollEvery` slows a polled query to 60 s while the
-  connection is live; `useNextLook` gives the line's "next look in 40 s" (`pull-status.tsx`, `project/github-waits.tsx`).
+  connection is live (the changes list too: 30 s offline); `useNextLook` gives the line's "next look in 40 s"
+  (`pull-status.tsx`, `project/github-waits.tsx`). A refetch after an event reaches the API runtime's 20 s cache: a
+  push is a new head commit, which misses it at once; a check finishing on the same head shows within 20 s.
+- **Accept in the app** sends the head it showed: the review page and the next-step card send change.get's
+  `head.sha`; Home's and the inbox's Needs you card reads change.get first and sends that. A change's pictures are
+  fetched only from https or the app's own origin.
 - **Not tested here** (nothing is deployed from this branch): a real GitHub delivery through CloudFront and the WAF, the
   client-credentials token from a real pool, and the API runtime's authorizer taking the third client.
 
