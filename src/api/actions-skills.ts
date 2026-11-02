@@ -33,7 +33,7 @@ import {
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
 import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, storeAt, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
-import { type Lasts, carryOn, viewerOf } from './actions-journey.js'
+import { type Lasts, askedBy, carryOn, viewerOf } from './actions-journey.js'
 import { loadDesignDecisions, recordDesignDecision } from '../tools/design/decisions.js'
 import type { DesignRows } from '../tools/design/db.js'
 import { type RequirementWords, architectureView, intentDraft, intentView, linksView, pinCheck } from '../tools/design/record.js'
@@ -445,7 +445,7 @@ export const SKILL_ACTIONS = {
     // Question answer: an agent that asked and then ended is started again with the answer, as question.answer does
     let carried: { jobId?: string; started?: string[]; jobError?: string; summary?: string } = {}
     if (a.skill === 'question-answer' && i.question) {
-      const asked = i.facts?.questions.find((q) => q.id === i.question!.id)
+      const asked = askedBy(i.facts, i.question.id)
       if (asked?.jobId) {
         const lasts = (['once', 'rule', 'requirement'] as const).find((x) => x === a.draft.lasts) as Lasts | undefined
         const row = await withJourneyDb(ctx, a.repo, (db) => loadJourney(db)?.questions.find((q) => q.id === asked.id) ?? null)

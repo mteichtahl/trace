@@ -48,7 +48,7 @@
 import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
-  INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
+  type AgentFacts, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
   dismissStuck, journeyView, loadJourney, recordOpen, returnGate, signGate, sortInbox, withChanges,
 } from '../core/journey.js'
 import { openChanges, openPulls, projectRule } from './actions-changes.js'
@@ -134,6 +134,16 @@ export function answeredRequest(a: { id: string; text: string; jobId: string; br
   ].join('\n')
 }
 
+/** What an agent asked, by the id it is answered under: its question, or its stuck report, which is answered as a
+ * question too (mergeAgentFacts), the job that asked being the one it blocks. Looking only among questions left every
+ * answered stuck report (testyyyu's Rendering escalations) unacted on: no job started, yet "the agent carries on". */
+export function askedBy(facts: AgentFacts | null | undefined, id: string): { id: string; text: string; jobId: string | null } | undefined {
+  const q = facts?.questions.find((x) => x.id === id)
+  if (q) return { id: q.id, text: q.text, jobId: q.jobId }
+  const s = facts?.stuck.find((x) => x.id === id)
+  return s ? { id: s.id, text: s.why, jobId: s.jobId } : undefined
+}
+
 /**
  * After an answer: when the job that asked has ended, a task for the same specialist on that job's branch, told the
  * answer. A job still queued, running or paused reads the answer itself (journey.status, or on Resume): nothing starts.
@@ -142,11 +152,13 @@ export async function carryOn(ctx: Context, repo: string, asked: { id: string; t
   if (!asked.jobId || !q.answered) return {}
   const { rows } = await listJobs(ctx, repo)
   const row = rows.find((r) => r.id === asked.jobId)
-  if (!row || row.state === 'queued' || row.state === 'paused' || isLive(row, Date.now() / 1000)) return {}
-  const agent = SPECIALIST_KINDS.find((k) => k === row.agent)
+  // the job still runs, waits or is paused: it reads the answer itself
+  if (row && (row.state === 'queued' || row.state === 'paused' || isLive(row, Date.now() / 1000))) return {}
+  const agent = row ? SPECIALIST_KINDS.find((k) => k === row.agent) : undefined
   // the specialist's own row may not carry the branch its worker pushed to
-  const branch = row.branch ?? rows.find((r) => r.parentJob === row.id && r.branch)?.branch ?? null
-  if (!agent || !branch) return {}
+  const branch = row ? row.branch ?? rows.find((r) => r.parentJob === row.id && r.branch)?.branch ?? null : null
+  // never say the agent carries on when nothing will: the answer waits for whichever job asks next
+  if (!row || !agent || !branch) return { summary: `Answered. The job that asked (${asked.jobId}) has ended and could not be started again${!row ? ' (it is not in the project\'s job list)' : !agent ? ` (${row.agent ?? 'no'} agent is not a specialist)` : ' (it has no branch)'}: the answer is kept for its next job.` }
   const request = answeredRequest({ id: asked.id, text: asked.text, jobId: row.id, branch, answer: q.answered.answer, reason: q.answered.reason, by: q.answered.by, lasts })
   const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: repo, request, agent, branch, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
   const who = `the ${SPECIALIST_WORDS[agent]} specialist`
@@ -337,7 +349,7 @@ export const JOURNEY_ACTIONS = {
     })
     // an agent that asked and then ended (its question left in its report) reads the answer only in a next job: start
     // that job, on the asking job's branch, so the answer is acted on now; the answer stands whatever happens here
-    const asked = facts.questions.find((q) => q.id === a.question)
+    const asked = askedBy(facts, a.question)
     if (!asked?.jobId) return answered
     const carried = await carryOn(ctx, a.repo, asked, answered.question, a.lasts).catch((e: unknown) => ({ jobError: e instanceof Error ? e.message : String(e) }))
     return { ...answered, ...carried }
