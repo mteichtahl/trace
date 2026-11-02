@@ -333,6 +333,36 @@ describe('the agents\' facts in the journey', () => {
     expect(startedJobs.length).toBe(before + 1)
   })
 
+  it('answering a stuck report starts the stuck specialist again on its job\'s branch; a job that cannot be found is said so', async () => {
+    // testyyyu: the Rendering specialist escalates through stuck reports; answering one said "the agent carries on"
+    // but started nothing, because only questions were looked up for the job that asked
+    const now = Date.now() / 1000
+    await new JobIndexStore(backendFor(join(bucket, 'projects')), 'acme/other').update((db) => {
+      putJob(db, 'job-render', { kind: 'task', agent: 'render', title: 'Re-render the board', state: 'succeeded', branch: 'claude/task-rerender', startedAt: now - 600, endedAt: now - 30 }, now)
+      return { result: null }
+    })
+    const r = (await journeyStore({ principal: ADMIN, deps }, 'acme/other').read((db) => loadJourney(db))).result
+    const render = { agent: 'render', label: 'the Rendering specialist' }
+    const [stuck, gone] = (await facts().update((db) => ({
+      result: [
+        addStuck(db, { ...render, jobId: 'job-render' }, { why: 'The tracks render darker than the solder mask.', recommendation: 'Fix the track shading, then re-render.', options: opts }, r),
+        addStuck(db, { ...render, jobId: 'job-unknown' }, { why: 'The renders show no component bodies.', recommendation: 'Fetch the 3D models, then re-render.', options: opts }, r),
+      ],
+    }))).result
+    const before = startedJobs.length
+    expect(await run(USER, 'question.answer', { repo: 'acme/other', question: stuck, option: 'a' }))
+      .toMatchObject({ jobId: 'j', summary: 'Answered. The Rendering specialist carries on with it on claude/task-rerender.' })
+    expect(startedJobs.slice(before)).toEqual([expect.objectContaining({
+      repository: 'acme/other', agent: 'render', branch: 'claude/task-rerender',
+      request: expect.stringMatching(/The tracks render darker than the solder mask\.[\s\S]*answered: Use the internal oscillator/),
+    })])
+    // its job is not in the project's list: nothing starts, and the answer does not claim the agent carries on
+    const out = await run(USER, 'question.answer', { repo: 'acme/other', question: gone, option: 'a' }) as { summary: string }
+    expect(out.summary).toMatch(/^Answered\. The job that asked \(job-unknown\) has ended and could not be started again \(it is not in the project's job list\)/)
+    expect(out).not.toHaveProperty('jobId')
+    expect(startedJobs.length).toBe(before + 1)
+  })
+
   it('the guided Question answer starts the asking specialist again too, told what the answer lasts as', async () => {
     const now = Date.now() / 1000
     await new JobIndexStore(backendFor(join(bucket, 'projects')), 'acme/other').update((db) => {
