@@ -367,6 +367,23 @@ describe('a specialist that says its work is not finished', () => {
     expect(unfinishedWords({ title, summary: 'Not ready for review: REQ-019 has no quote yet.', request })).toBe('Not ready for review: REQ-019 has no quote yet.')
   })
 
+  it('does not take a blockquoted request for its verdict (test-2, change 16)', () => {
+    // the worker quotes the specialist's brief as a Markdown blockquote under a heading of its own
+    const body = [
+      'Sign-off release report for led_flasher board rev A. Nothing under `hardware/` changed.',
+      '',
+      '## The request, quoted',
+      '> Sign-off release report for mteichtahl/test-2.',
+      '>',
+      '> 3. Commit on the current branch, push, and open a pull request to main. Do not merge.',
+      '',
+      'Not merged; signoff.report needs a person to review it.',
+    ].join('\n')
+    expect(unfinishedWords({ title: 'Sign-off: release report (led_flasher rev A)', summary: 'verify: done in 9 turns', body })).toBeNull()
+    // its own words outside the quote still count
+    expect(unfinishedWords({ title: 'Sign-off: release report', body: `${body}\n\nDo not merge: the parts list is stale.` })).toBe('Do not merge: the parts list is stale.')
+  })
+
   it('is never "ready": trace recommends asking for changes, quoting it, and the person still decides', () => {
     const f = facts({ unfinished: 'incomplete export, not for approval' })
     expect(verdictOf(f)).toBe('unfinished')
