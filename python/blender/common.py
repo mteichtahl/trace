@@ -237,7 +237,8 @@ def hex_rgba(h, alpha=1.0):
     return tuple(srgb_to_linear(int(h[i:i + 2], 16) / 255.0) for i in (0, 2, 4)) + (alpha,)
 
 
-def principled(name, color, rough=0.5, metal=0.0, coat=0.0):
+def principled(name, color, rough=0.5, metal=0.0, coat=0.0, alpha=1.0):
+    """A Principled BSDF material. `alpha` below 1 lets what lies under it show (a solder mask over copper)."""
     m = bpy.data.materials.new(name)
     m.use_nodes = True
     b = next(n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
@@ -247,6 +248,10 @@ def principled(name, color, rough=0.5, metal=0.0, coat=0.0):
     for k in ("Coat Weight", "Clearcoat"):
         if k in b.inputs and coat:
             b.inputs[k].default_value = coat
+    if alpha < 1.0:
+        b.inputs["Alpha"].default_value = alpha
+        if hasattr(m, "surface_render_method"):   # EEVEE (Blender 4.2+); Cycles honours Alpha as it is
+            m.surface_render_method = "DITHERED"
     m.diffuse_color = color
     return m
 

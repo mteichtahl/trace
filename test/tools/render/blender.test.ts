@@ -155,6 +155,17 @@ describe.skipIf(!works)('blender (real)', () => {
     expect(JSON.parse(readFileSync(join(dir, 'result.json'), 'utf8'))).toMatchObject({ ok: false })
   }, 180_000)
 
+  it('render.board shows the tracks under the solder mask (a translucent mask, not an opaque one)', () => {
+    // testyyyu: the board's 54 tracks were exported but hidden under an opaque mask. A track under the mask now reads
+    // lighter than bare mask in the top view (fixtures/mask_over_copper.py, dressed by render_board.py's own code)
+    const here = dirname(fileURLToPath(import.meta.url))
+    const dir = mkdtempSync(join(tmpdir(), 'render-mask-'))
+    const out = execFileSync(blender as string, ['-b', '--factory-startup', '--python-exit-code', '1', '-P', join(here, 'fixtures/mask_over_copper.py'),
+      '--', join(here, '../../../python/blender'), join(dir, 'top.png')], { timeout: 180_000, stdio: 'pipe' }).toString()
+    expect(out).toMatch(/COUNTS \{'fr4': 1, 'pad': 2, 'mask': 2\}/)
+    expect(out).toMatch(/TRACK_VISIBLE True/)
+  }, 240_000)
+
   it.skipIf(!hasKicad)('render.board renders the demo board: top and iso', async () => {
     const dir = join(mkdtempSync(join(tmpdir(), 'render-board-')), 'demo')
     cpSync(join(dirname(fileURLToPath(import.meta.url)), '../kicad/fixtures/demo'), dir, { recursive: true })

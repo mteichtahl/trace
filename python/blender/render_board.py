@@ -26,10 +26,15 @@ def sat(c):
     return (mx - mn) / (mx + 1e-6)
 
 
+MASK_ALPHA = 0.8
+
+
 def surfaces(job):
     P = C.principled
     return {
-        "mask": P("Solder mask", C.hex_rgba(job.get("mask_color", "#1f6b3a")), rough=0.38),
+        # a real solder mask is a thin translucent film: the copper under it (every track) shows through, as in
+        # KiCad's own 3D viewer (mask opacity about 0.83). An opaque mask hid all of a board's tracks (testyyyu)
+        "mask": P("Solder mask", C.hex_rgba(job.get("mask_color", "#1f6b3a")), rough=0.38, alpha=MASK_ALPHA),
         "silk": P("Silkscreen", C.hex_rgba(job.get("silk_color", "#f2f2ec")), rough=0.85),
         "pad": P("ENIG pads", (1.0, 0.76, 0.42, 1), rough=0.22, metal=1.0),
         "tin": P("Tin", (0.80, 0.80, 0.78, 1), rough=0.28, metal=1.0),
