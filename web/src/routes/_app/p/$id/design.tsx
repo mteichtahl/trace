@@ -4,17 +4,18 @@
  *
  *   Block diagram  the architecture record: the option a person chose (else trace's recommendation), switchable
  *                  between options with the layout held still, the options compared on the criteria below it
- *   Sheets         each schematic file with its drawing (the SVG the latest kicad.export kept in its run, fetched with
- *                  files.url), the electrical rule check's findings placed on it, and the requirements it serves
+ *   Sheets         each schematic file drawn live from the repository with KiCanvas (pan, zoom, select), the
+ *                  electrical rule check's findings pinned on it, and the requirements it serves
  *   Pin plan       each pin's function, peripheral, net and status from the pin plan check against the schematic's
  *                  netlist, and which parts' plans a person agreed (stale when the plan changed since)
- *   Board          the board drawing (or render) with the design rule check's findings
+ *   Board          the board drawn live from its .kicad_pcb with KiCanvas: Top and Bottom (turned over, far-side layers
+ *                  hidden) to look underneath, layers, and the design rule check's findings pinned on it
  *
  * design.get's notes say what the record still does not hold; the tab shows them rather than drawing made-up content.
  */
 import { Link, createFileRoute } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
-import { useState } from 'react'
+import { Suspense, lazy, useState } from 'react'
 import { z } from 'zod'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useTraceContext } from '@/components/chat/context'
@@ -31,8 +32,14 @@ import { StatusBadge } from '@/components/status-badge'
 import { EmptyState, QueryError } from '@/components/states'
 import { repoOf } from '@/lib/api'
 import { useAction } from '@/lib/queries'
-import type { Block, DesignView } from '@/lib/types-s1'
+import type { Block, DesignView, PictureFinding } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
+import { type FileFinding, useFileText } from '@/components/files/data'
+import { ViewerLoading } from '@/components/files/viewers/common'
+
+// KiCanvas draws the KiCad files themselves, so the sheets and the board show as soon as they are in the repository
+// (no export run needed), and stay current with every push. Loaded on first use.
+const KiCanvasView = lazy(() => import('@/components/files/viewers/kicad').then((m) => ({ default: m.KiCanvasView })))
 
 export const Route = createFileRoute('/_app/p/$id/design')({
   staticData: { crumb: 'Design' },
@@ -69,6 +76,8 @@ function Design() {
   const [option, setOption] = useOption(data?.architecture)
   const reqs = useAction('requirements.trace', { repo }, { enabled: tab === 'architecture' })
   const current = data?.sheets.find((s) => s.id === sheet) ?? data?.sheets[0]
+  // two files can share a name (hardware/main.kicad_sch, test-jig/main.kicad_sch): name them by their folder too
+  const label = (s: { id: string; name: string }) => (data && data.sheets.filter((x) => x.name === s.name).length > 1 ? `${s.name} (${s.id.split('/').slice(-2, -1)[0] || 'top folder'})` : s.name)
 
   useTraceContext({ label: 'Design', description: 'The project tab on screen', value: { tab: 'design', view: tab, sheet: current?.name ?? null, finding: selected } }, 'screen')
   useCommands([
@@ -141,7 +150,7 @@ function Design() {
                   const n = s.findings.filter((f) => f.severity !== 'waived').length
                   return (
                     <button key={s.id} type="button" onClick={() => { setSheet(s.id); setSelected(null) }} aria-current={current?.id === s.id ? 'page' : undefined} className={cn('flex shrink-0 items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm', current?.id === s.id ? 'bg-accent font-medium' : 'hover:bg-accent/60')}>
-                      {s.name}
+                      <span className="min-w-0 truncate" title={s.id}>{label(s)}</span>
                       {n ? <StatusBadge plain status="fix" label={`${n} open`} /> : <StatusBadge plain status="clean" label="clean" />}
                     </button>
                   )
@@ -149,7 +158,7 @@ function Design() {
               </nav>
               {current && (
                 <div className="min-w-0 space-y-4">
-                  <FindingsPicture repo={repo} title={current.name} subtitle={`Sheet ${data.sheets.indexOf(current) + 1} of ${data.sheets.length}${current.block ? ` · block ${current.block}` : ''}`} path={current.path} findings={current.findings} selected={selected} onSelect={setSelected} onAsk={() => openPanel(true)} emptyText="No drawing of this sheet yet: kicad.export with sch_svg keeps one in its run." />
+                  <LiveKiCad repo={repo} path={current.id} title={label(current)} subtitle={`Sheet ${data.sheets.indexOf(current) + 1} of ${data.sheets.length}${current.block ? ` · block ${current.block}` : ''}`} findings={current.findings} onSelect={setSelected} onAsk={() => openPanel(true)} />
                   <p className="text-sm">
                     {current.serves?.length ? <>Serves <span className="font-mono">{current.serves.join(', ')}</span>.</>
                       : current.serves_none ? <>Serves no requirement: {current.serves_none}</>
@@ -190,20 +199,11 @@ function Design() {
         <TabsContent value="board" className="mt-4">
           {data.board ? (
             <div className="space-y-4">
-              <FindingsPicture
-                repo={repo}
-                title="Board · top"
-                subtitle={data.board.size}
-                path={data.board.path}
-                findings={data.board.findings}
-                selected={selected}
-                onSelect={setSelected}
-                height={420}
-                onAsk={() => openPanel(true)}
-                layers={(data.board.layers ?? []).map((l) => ({ id: l, label: l, on: layers[l] ?? true }))}
-                onLayer={(l, on) => setLayers((s) => ({ ...s, [l]: on }))}
-                emptyText="No board yet: trace places the parts after Board setup."
-              />
+              {data.board.file ? (
+                <LiveKiCad repo={repo} path={data.board.file} board title="Board" subtitle={[data.board.size, 'switch Top and Bottom to look underneath'].filter(Boolean).join(' · ')} findings={data.board.findings} onSelect={setSelected} onAsk={() => openPanel(true)} />
+              ) : (
+                <FindingsPicture repo={repo} title="Board · top" subtitle={data.board.size} path={data.board.path} findings={data.board.findings} selected={selected} onSelect={setSelected} height={420} onAsk={() => openPanel(true)} layers={(data.board.layers ?? []).map((l) => ({ id: l, label: l, on: layers[l] ?? true }))} onLayer={(l, on) => setLayers((st) => ({ ...st, [l]: on }))} emptyText="No board yet: trace places the parts after Board setup." />
+              )}
               <FindingsList findings={data.board.findings} selected={selected} onSelect={setSelected} empty="The placement and design rule checks are clean." />
             </div>
           ) : (
@@ -225,5 +225,34 @@ function BlockDetail({ block: b }: { block: Block }) {
       <dt className="text-muted-foreground">Serves</dt><dd className="font-mono">{b.serves.join(', ') || 'No requirement: map one or remove the block'}</dd>
       <dt className="col-span-2 mt-2 text-xs text-muted-foreground">Price breaks and alternatives come from the parts search (Knowledge › Datasheets and parts).</dt>
     </dl>
+  )
+}
+
+/** A finding KiCanvas can pin: it needs KiCad's own millimetres. A board finding naming a part selects that part. */
+const toFileFinding = (f: PictureFinding, board: boolean): FileFinding[] =>
+  f.x_mm === undefined || f.y_mm === undefined ? [] : [{ id: f.id, severity: f.severity, text: f.text, x_mm: f.x_mm, y_mm: f.y_mm, ...(board && f.where && /^[A-Z]+\d+$/.test(f.where) ? { ref: f.where } : {}) }]
+
+/** A schematic sheet or the board drawn live from its KiCad file in the repository, with its findings pinned on it. */
+function LiveKiCad({ repo, path, board = false, title, subtitle, findings, onSelect, onAsk }: { repo: string; path: string; board?: boolean; title: string; subtitle?: string; findings: PictureFinding[]; onSelect: (id: string | null) => void; onAsk: () => void }) {
+  const q = useFileText({ repo, path })
+  const pinned = findings.flatMap((f) => toFileFinding(f, board))
+  return (
+    <section className="overflow-hidden rounded-xl border bg-card" aria-label={title}>
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2.5">
+        <h3 className="text-sm font-semibold">{title}</h3>
+        {subtitle && <span className="text-xs text-muted-foreground">{subtitle}</span>}
+        <Button size="sm" variant="ghost" className="ml-auto h-7 text-xs" onClick={onAsk}>Ask about this</Button>
+      </header>
+      {q.isError ? (
+        <div className="p-4"><QueryError error={q.error} what={`the ${board ? 'board' : 'sheet'} file`} onRetry={() => void q.refetch()} /></div>
+      ) : q.data === undefined ? (
+        <ViewerLoading size="page" label={`Reading ${path.split('/').pop()}`} />
+      ) : (
+        <Suspense fallback={<ViewerLoading size="page" />}>
+          <KiCanvasView text={q.data} name={path.split('/').pop() ?? path} findings={pinned} size="page" board={board} className="h-[clamp(360px,65vh,720px)]" onSelectFinding={onSelect} />
+        </Suspense>
+      )}
+      {findings.length > pinned.length && <p className="border-t px-4 py-2 text-xs text-muted-foreground">{findings.length - pinned.length} finding{findings.length - pinned.length === 1 ? ' has' : 's have'} no position on the drawing; see the list below.</p>}
+    </section>
   )
 }

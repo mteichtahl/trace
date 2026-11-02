@@ -104,7 +104,7 @@ function Overlay({ viewer, findings, active, onPick }: { viewer: KcViewer; findi
   )
 }
 
-export function KiCanvasView({ text, name, findings, size, board, fill }: { text: string; name: string; findings: FileFinding[]; size: ViewerProps['size']; board: boolean; /** fill the parent, no controls (compare panes) */ fill?: boolean }) {
+export function KiCanvasView({ text, name, findings, size, board, fill, className, onSelectFinding }: { text: string; name: string; findings: FileFinding[]; size: ViewerProps['size']; board: boolean; /** fill the parent, no controls (compare panes) */ fill?: boolean; /** replaces the viewer's own height */ className?: string; onSelectFinding?: (id: string) => void }) {
   const host = useRef<HTMLDivElement>(null)
   const [el, setEl] = useState<KcViewerElement | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -120,6 +120,7 @@ export function KiCanvasView({ text, name, findings, size, board, fill }: { text
     let live = true
     setEl(null)
     setErr(null)
+    setFlipped(false)
     void loadKiCanvas()
       .then(async () => {
         if (!live) return
@@ -179,8 +180,18 @@ export function KiCanvasView({ text, name, findings, size, board, fill }: { text
     viewer.draw()
     setLayers((ls) => ls.map((x) => ({ ...x, visible: match(x.name) })))
   }
+  /** Look at the board from above or from underneath: the view is mirrored like turning the board over, and the
+   * far side's layers are hidden so the near side reads clearly (Layers › All brings them back). */
+  const showSide = (side: 'top' | 'bottom') => {
+    if (!viewer?.flip_view || (side === 'bottom') === flipped) return
+    viewer.flip_view()
+    setFlipped(side === 'bottom')
+    const near = side === 'bottom' ? 'B.' : 'F.'
+    preset((n) => n.startsWith(near) || n === 'Edge.Cuts' || !/^[FB]\./.test(n))
+  }
   const pick = (f: FileFinding) => {
     setActive(f.id)
+    onSelectFinding?.(f.id)
     if (f.ref && viewer) {
       viewer.select(f.ref)
       viewer.zoom_to_selection()
@@ -197,7 +208,7 @@ export function KiCanvasView({ text, name, findings, size, board, fill }: { text
 
   const card = size === 'card' || !!fill
   return (
-    <div className={cn('flex flex-col', fill ? 'h-full' : card ? 'h-[220px]' : AREA[size])}>
+    <div className={cn('flex flex-col', className ?? (fill ? 'h-full' : card ? 'h-[220px]' : AREA[size]))}>
       {!card && (
         <Controls>
           {board && (
@@ -223,19 +234,21 @@ export function KiCanvasView({ text, name, findings, size, board, fill }: { text
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-xs"
-                disabled={!viewer?.flip_view}
-                aria-pressed={flipped}
-                onClick={() => {
-                  viewer?.flip_view?.()
-                  setFlipped((f) => !f)
-                }}
-              >
-                <FlipHorizontal2 /> {flipped ? 'Bottom side' : 'Top side'}
-              </Button>
+              <div role="group" aria-label="Board side" className="inline-flex h-7 overflow-hidden rounded-md border text-xs">
+                {(['top', 'bottom'] as const).map((side) => (
+                  <button
+                    key={side}
+                    type="button"
+                    disabled={!viewer?.flip_view}
+                    aria-pressed={(side === 'bottom') === flipped}
+                    onClick={() => showSide(side)}
+                    className={cn('flex items-center gap-1 px-2.5 disabled:opacity-50', (side === 'bottom') === flipped ? 'bg-accent font-medium' : 'hover:bg-accent/60')}
+                  >
+                    {side === 'bottom' && <FlipHorizontal2 className="size-3.5" />}
+                    {side === 'top' ? 'Top' : 'Bottom'}
+                  </button>
+                ))}
+              </div>
             </>
           )}
           <div className="flex items-center gap-2">

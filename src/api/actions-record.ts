@@ -113,7 +113,6 @@ export const RECORD_ACTIONS = {
           findings: (bySheet.get(path) ?? []).map((f) => pictureFinding(f, d)),
         }
       })
-      if (files.sch.length && !sheets.some((x) => x.path)) notes.push('No drawing of the sheets is in the record yet: kicad.export with sch_svg keeps one per sheet in its run.')
       const unnamed = files.sch.filter((f) => !serves.has(f))
       if (files.sch.length && unnamed.length) notes.push(`${unnamed.length} of ${files.sch.length} sheets do not name the requirements they serve yet (design.sheets).`)
       const boardRun = latestRun(db, 'kicad.board')
@@ -131,7 +130,6 @@ export const RECORD_ACTIONS = {
         ...(outline?.width_mm ? { size: `${outline.width_mm} × ${outline.height_mm} mm` } : {}),
         findings: (drc.findings ?? []).map((f) => pictureFinding(f, pic?.drawing)),
       } : undefined
-      if (board && !pic) notes.push('No picture of the board is in the record yet: kicad.export with pcb_svg, or render.board, stores one.')
       // the architecture: the option a person chose, else trace's recommendation, drawn; every option listed
       const arch = architectureView(design.rows, design.decisions)
       const shown = arch.options.find((o) => o.id === arch.current)
