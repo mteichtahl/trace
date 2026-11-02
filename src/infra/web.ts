@@ -163,7 +163,8 @@ export function contentSecurityPolicy(region: string, voiceHost: string, events:
     `img-src 'self' data: blob: https://${voiceHost}`,
     "font-src 'self' data:",
     `media-src 'self' blob: https://${voiceHost}`,
-    `connect-src 'self' ${live.join(' ')} wss://transcribestreaming.${region}.amazonaws.com:8443 https://${voiceHost} ${GITHUB_DOWNLOAD_HOSTS.join(' ')}`,
+    // blob: lets the file viewers read the copy of a file the app already holds (files.url answers bytes)
+    `connect-src 'self' blob: ${live.join(' ')} wss://transcribestreaming.${region}.amazonaws.com:8443 https://${voiceHost} ${GITHUB_DOWNLOAD_HOSTS.join(' ')}`,
     "worker-src 'self' blob:",
     "manifest-src 'self'",
     "object-src 'none'",
