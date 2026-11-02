@@ -83,7 +83,7 @@ import { type WaitNotice, describeWait } from '../core/wait.js'
 import { RELEASE_REGION, RELEASE_REPOSITORIES, RELEASE_STACK } from '../infra/release.js'
 import {
   CENTRAL_BUCKET_OUTPUT, CONNECTION_OUTPUT, GPU_IMAGE_BUILD_OUTPUT, INSTALLATION_RECORD_KEY, SELF_UPDATE_OUTPUT, ciRunnerOutput, type InfraInput, type InfraProps, InfraPropsSchema, LAYOUT_OUTPUT, LEGACY_MEMORY_OUTPUT, cpuEnabled, githubSecretName,
-  kbOutputs, memoryDeliveryName, memoryName, projectHash, projectOutputs, selfUpdateRoleName, stackName, WEB_OUTPUTS, EXTERNAL_OUTPUTS, WEB_HOOKS_OUTPUTS, webHooksOn, webHooksSecret,
+  kbOutputs, memoryDeliveryName, memoryName, projectHash, projectOutputs, selfUpdateRoleName, stackName, WEB_OUTPUTS, EXTERNAL_OUTPUTS, WEB_HOOKS_OUTPUTS, webHooksClientSecret, webHooksOn, webHooksSecret,
 } from '../infra/props.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import { type Answers, AnswersSchema, type InstallEvent, type Secrets, type Step } from './answers.js'
@@ -103,7 +103,7 @@ import { CDK_BOOTSTRAP_MIN, mapLimit } from './preflight.js'
 import { checkNoSecrets, installationRecord } from './record.js'
 import { type ReleaseResult, liveReleaseDeps, releaseSetup } from './release.js'
 import { traceRepository } from './source.js'
-import { type HooksSecretIo, ensureHooksSecret, liveClientSecret, liveHooksSecretIo, registerWebhooks } from './hooks.js'
+import { type HooksSecretIo, ensureClientSecret, ensureHooksSecret, liveClientSecret, liveHooksSecretIo, registerWebhooks } from './hooks.js'
 
 /** What the installer knows of the stack already in the account (checkAws), when there is one. */
 export interface Existing { outputs: Record<string, string> }
@@ -664,13 +664,18 @@ export async function setUpWebhooks(o: {
   const url = o.outputs[WEB_HOOKS_OUTPUTS.address] ?? ''
   if (!url) return { url: null, warnings: [] }
   const name = webHooksSecret(o.prefix)
+  const clientName = webHooksClientSecret(o.prefix)
   let secret: string
   try {
+    // the client secret first: once the webhook secret is rewritten without it (an older installation kept both in
+    // one), the hooks function finds it here
     const clientId = o.outputs[WEB_HOOKS_OUTPUTS.clientId] ?? ''
     const client = clientId && o.outputs.UserPoolId ? await o.clientSecret(o.outputs.UserPoolId, clientId) : null
-    const s = await ensureHooksSecret(o.secrets, name, client)
+    const c = await ensureClientSecret(o.secrets, clientName, client)
+    o.log(c === 'unknown' ? `${clientName}: the backend's own client secret could not be read: run the installer again` : `${clientName}: ${c === 'unchanged' ? 'kept as it is' : c}`)
+    const s = await ensureHooksSecret(o.secrets, name)
     secret = s.webhookSecret
-    o.log(`${name}: ${s.state === 'unchanged' ? 'kept as it is' : s.state}${client ? '' : ' (the backend\'s own client secret could not be read: run the installer again)'}`)
+    o.log(`${name}: ${s.state === 'unchanged' ? 'kept as it is' : s.state}`)
   } catch (e) {
     return { url, warnings: [`Live updates from GitHub are not set up: the secret ${name} could not be written (${e instanceof Error ? e.message : String(e)}). The app looks again every 60 s meanwhile; run the installer again.`] }
   }

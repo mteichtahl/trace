@@ -142,6 +142,21 @@ const message = (e: unknown): string => (e instanceof Error ? e.message : String
 
 /** The settings to deploy with: the record's, with the runners' way to GitHub as decided now (as bootstrap.ts
  * runnersOf and infraInput): the token, or the connection to pass (if any) and whether it is authorized. */
+/**
+ * The webhook secret from the hooks secret's text, or null when it holds none. Text that is not JSON throws a fixed
+ * message: JSON.parse's own error quotes the text it choked on, which is the secret, and this one is logged.
+ */
+export function webhookSecretOf(raw: string): string | null {
+  let v: unknown
+  try {
+    v = JSON.parse(raw)
+  } catch {
+    throw new Error('the webhook secret is not JSON: the installer writes it again')
+  }
+  const s = typeof v === 'object' && v !== null ? (v as { webhookSecret?: unknown }).webhookSecret : null
+  return typeof s === 'string' && s ? s : null
+}
+
 export function updateProps(props: Record<string, unknown>, choice: RunnerAuthChoice): InfraInput {
   const runners = (props.runners && typeof props.runners === 'object' ? props.runners : {}) as Record<string, unknown>
   const { auth: _auth, connectionArn: _given, connectionReady: _ready, ...rest } = runners
@@ -357,7 +372,7 @@ export async function updateInstallation(d: UpdateDeps = defaultUpdateDeps()): P
       const name = webHooksSecret(InfraPropsSchema.parse(input).prefix)
       try {
         const raw = await d.webhooks.readSecret(creds, region, name)
-        const secret = raw ? (JSON.parse(raw) as { webhookSecret?: unknown }).webhookSecret : null
+        const secret = raw ? webhookSecretOf(raw) : null
         if (typeof secret !== 'string' || !secret) throw new Error(`${name} is not there yet: the installer makes it`)
         if (!token) throw new Error('no shared token')
         const r = await registerWebhooks(token, grown.added.map((x) => x.repo), hooksUrl, secret, d.webhooks.register ? { register: d.webhooks.register } : {})

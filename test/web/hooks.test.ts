@@ -2,11 +2,13 @@
  * GitHub's webhook on the web backend (src/web/hooks.ts, docs/guided-flow.md "Live updates"): the signature (HMAC
  * SHA-256, constant time), which deliveries are taken and which dropped (204 and a log line), who is told (the API's
  * hook.members with the backend's own token, never the access store), what is published, and the debounce that turns
- * one push's dozens of deliveries into a couple of events, shared between containers through its store.
+ * one push's dozens of deliveries into a couple of events, shared between containers through its store. First of all,
+ * CloudFront's origin header: a request that did not come through CloudFront's hooks path is dropped unread.
  */
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { DEBOUNCE_MS, Debounce, type DebounceStore, MAX_BODY, MemoryDebounceStore, readDelivery, signatureOk } from '../../src/web/hooks.js'
+import { DEBOUNCE_MS, Debounce, type DebounceStore, MAX_BODY, MemoryDebounceStore, ORIGIN_HEADER, readDelivery, sameSecret, signatureOk } from '../../src/web/hooks.js'
+import { toRequest } from '../../src/web/event.js'
 import { DynamoDebounceStore } from '../../src/web/hooks-store.js'
 import type { WebConfig } from '../../src/web/config.js'
 import { CONFIG, FakePublisher, FakeRuntime, NOW, RecordingSink } from './fakes.js'
@@ -16,8 +18,9 @@ import { verifier } from '../api/fixtures.js'
 
 const SECRET = 'a-webhook-secret-of-some-length'
 const CLIENT_SECRET = 'the-backends-own-client-secret'
+const ORIGIN = 'cloudfronts-own-random-origin-value'
 const HOOKS: NonNullable<WebConfig['hooks']> = {
-  secret: 'trace/web/github-hooks', tokenUrl: 'https://trace-111122223333.auth.us-east-1.amazoncognito.com/oauth2/token',
+  secret: 'trace/web/github-hooks', clientSecret: 'trace/web/hooks-client', tokenUrl: 'https://trace-111122223333.auth.us-east-1.amazoncognito.com/oauth2/token',
   clientId: 'hooks-client', scope: 'trace-internal/members', table: 'trace-web-hooks',
 }
 const sign = (body: string, secret = SECRET): string => `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`
@@ -53,7 +56,13 @@ function hooksWorld(o: { hooks?: WebConfig['hooks'] | null; secret?: () => strin
     polly: () => { throw new Error('no polly here') },
     store: () => { throw new Error('no store here') },
     cloudwatch: () => { throw new Error('no cloudwatch here') },
-    secrets: () => ({ get: async (id) => { secretReads.push(id); return o.secret ? o.secret() : JSON.stringify({ webhookSecret: SECRET, clientSecret: CLIENT_SECRET }) } }),
+    secrets: () => ({
+      get: async (id) => {
+        secretReads.push(id)
+        if (id === HOOKS.clientSecret) return JSON.stringify({ clientSecret: CLIENT_SECRET })
+        return o.secret ? o.secret() : JSON.stringify({ webhookSecret: SECRET })
+      },
+    }),
     credentials: async () => ({ accessKeyId: 'AKIDEXAMPLE', secretAccessKey: 'secret' }),
     fetch,
     agentcoreEndpoint: 'https://agentcore.test',
@@ -62,17 +71,49 @@ function hooksWorld(o: { hooks?: WebConfig['hooks'] | null; secret?: () => strin
   }
   // the window ends when the holder sleeps: the clock moves on by what it asked
   const debounce = new Debounce(store, { now, sleep: async (ms) => { sleeps.push(ms); if (clock !== null) clock += ms }, log: deps.log })
-  const handle = hooksApp(deps, { publisher: () => publisher, debounce })
+  const handle = hooksApp(deps, { publisher: () => publisher, debounce, origin: ORIGIN })
+  let delivery = 0
   const deliver = async (event: string, body: string, headers: Record<string, string> = {}) => {
     const sink = new RecordingSink()
-    await handle({ method: 'POST', path: '/api/hooks/github', query: new URLSearchParams(), cookies: {}, body, headers: { 'x-github-event': event, 'x-hub-signature-256': sign(body), 'x-github-delivery': 'd-1', ...headers } }, sink)
+    // each delivery its own id, as GitHub's (a test that repeats one says so)
+    await handle({ method: 'POST', path: '/api/hooks/github', query: new URLSearchParams(), cookies: {}, body, headers: { 'x-github-event': event, 'x-hub-signature-256': sign(body), 'x-github-delivery': `d-${++delivery}`, [ORIGIN_HEADER]: ORIGIN, ...headers } }, sink)
     return sink.r
   }
   const tick = (ms: number): void => { if (clock !== null) clock += ms }
-  return { runtime, publisher, logs, tokens, secretReads, deliver, sleeps, tick, deps }
+  return { runtime, publisher, logs, tokens, secretReads, deliver, sleeps, tick, deps, handle }
 }
 
 const dropped = (logs: Record<string, unknown>[]): unknown[] => logs.filter((l) => l.hook === 'dropped').map((l) => l.why)
+
+describe('CloudFront\'s origin header', () => {
+  it('a request without it, or with another value, is dropped before the body, the settings or a secret is read', async () => {
+    const w = hooksWorld()
+    let configReads = 0
+    const config = w.deps.config
+    w.deps.config = async () => { configReads++; return config() }
+    const body = pr('acme/board', 7)
+    expect((await w.deliver('pull_request', body, { [ORIGIN_HEADER]: '' })).status).toBe(204)
+    expect((await w.deliver('pull_request', body, { [ORIGIN_HEADER]: `${ORIGIN}x` })).status).toBe(204)
+    expect((await w.deliver('pull_request', body, { [ORIGIN_HEADER]: ORIGIN.slice(0, 10) })).status).toBe(204)
+    expect(dropped(w.logs)).toEqual(['not through CloudFront', 'not through CloudFront', 'not through CloudFront'])
+    expect(configReads).toBe(0)
+    expect(w.secretReads).toEqual([])
+    expect(w.runtime.calls).toEqual([])
+  })
+
+  it('a route made without the value takes nothing', async () => {
+    const w = hooksWorld()
+    const handle = hooksApp(w.deps, {})
+    const sink = new RecordingSink()
+    const body = pr('acme/board', 7)
+    await handle({ method: 'POST', path: '/api/hooks/github', query: new URLSearchParams(), cookies: {}, body, headers: { 'x-github-event': 'pull_request', 'x-hub-signature-256': sign(body), 'x-github-delivery': 'd', [ORIGIN_HEADER]: '' } }, sink)
+    expect(sink.r.status).toBe(204)
+    expect(sameSecret('', '')).toBe(false)
+    expect(sameSecret('abc', 'abc')).toBe(true)
+    expect(sameSecret('abc', 'abcd')).toBe(false)
+    expect(sameSecret('abc', undefined)).toBe(false)
+  })
+})
 
 describe('the signature', () => {
   it('is the HMAC SHA-256 of the exact body with the secret, as GitHub sends it', () => {
@@ -99,22 +140,33 @@ describe('the signature', () => {
     expect(JSON.stringify(w.logs)).not.toContain('Regulator')
   })
 
+  it('is over the bytes GitHub sent, not a text decoded and encoded again', () => {
+    // a body that is not valid UTF-8 (GitHub's is, but nothing here should depend on it): decoding would change it
+    const raw = Buffer.concat([Buffer.from('{"repository":{"full_name":"acme/board"},"x":"'), Buffer.from([0xff, 0xfe]), Buffer.from('"}')])
+    const sig = `sha256=${createHmac('sha256', SECRET).update(raw).digest('hex')}`
+    expect(signatureOk(SECRET, raw, sig)).toBe(true)
+    expect(signatureOk(SECRET, raw.toString('utf8'), sig)).toBe(false)
+    // the event keeps them: a base64 body's bytes as they came
+    const req = toRequest({ body: raw.toString('base64'), isBase64Encoded: true, headers: {}, rawPath: '/api/hooks/github', requestContext: { http: { method: 'POST' } } } as never)
+    expect(req.raw?.equals(raw)).toBe(true)
+  })
+
   it('reads the secret again once when a signature does not match an older copy (the installer replaced it)', async () => {
     let current = SECRET
     let t = NOW
-    const w = hooksWorld({ secret: () => JSON.stringify({ webhookSecret: current, clientSecret: CLIENT_SECRET }), now: () => t })
+    const w = hooksWorld({ secret: () => JSON.stringify({ webhookSecret: current }), now: () => t })
     const body = pr('acme/board', 7)
     expect((await w.deliver('pull_request', body)).status).toBe(202)
-    expect(w.secretReads).toEqual(['trace/web/github-hooks'])
+    expect(w.secretReads).toEqual(['trace/web/github-hooks', 'trace/web/hooks-client'])
     current = 'a-new-secret-the-installer-wrote'
     t += 60_000
     const again = pr('acme/board', 8)
     expect((await w.deliver('pull_request', again, { 'x-hub-signature-256': sign(again, current) })).status).toBe(202)
-    // the first copy, then the bad match read it again (the token's own read of the client secret is cached)
-    expect(w.secretReads.length).toBe(2)
+    // the first copy, then the bad match read it again (the client secret is its own, read once for the token)
+    expect(w.secretReads.filter((s) => s === HOOKS.secret).length).toBe(2)
     // a copy just read is not read again for every bad delivery
     expect((await w.deliver('pull_request', again, { 'x-hub-signature-256': sign(again, 'forged-forged-forged') })).status).toBe(204)
-    expect(w.secretReads.length).toBe(2)
+    expect(w.secretReads.filter((s) => s === HOOKS.secret).length).toBe(2)
   })
 
   it('a secret that cannot be read takes nothing', async () => {
@@ -163,12 +215,33 @@ describe('which deliveries are taken', () => {
   })
 })
 
+describe('replays', () => {
+  it('a delivery id seen already is dropped; a new one is taken; one without an id is dropped', async () => {
+    const w = hooksWorld()
+    const body = pr('acme/board', 7)
+    expect((await w.deliver('pull_request', body, { 'x-github-delivery': 'same-id' })).status).toBe(202)
+    w.tick(DEBOUNCE_MS + 1)
+    expect((await w.deliver('pull_request', body, { 'x-github-delivery': 'same-id' })).status).toBe(204)
+    expect((await w.deliver('pull_request', body, { 'x-github-delivery': '' })).status).toBe(204)
+    expect(dropped(w.logs)).toEqual(['a delivery seen already', 'no delivery id'])
+    expect((await w.deliver('pull_request', body, { 'x-github-delivery': 'another-id' })).status).toBe(202)
+  })
+
+  it('remembers ids for a day only', async () => {
+    const s = new MemoryDebounceStore()
+    expect(await s.firstDelivery('a', NOW)).toBe(true)
+    expect(await s.firstDelivery('a', NOW + 3_600_000)).toBe(false)
+    expect(await s.firstDelivery('a', NOW + 86_400_001)).toBe(true)
+  })
+})
+
 describe('who is told, and what', () => {
   it('asks the API runtime with the backend\'s own token (client credentials), and publishes record.changed to each person on the project', async () => {
     const w = hooksWorld()
     const r = await w.deliver('pull_request', pr('Acme/Board', 7))
     expect(r.status).toBe(202)
-    // the token: client credentials of the backend's own client, its one scope
+    // the token: client credentials of the backend's own client (its secret its own), its one scope
+    expect(w.secretReads).toContain(HOOKS.clientSecret)
     expect(w.tokens).toHaveLength(1)
     expect(w.tokens[0]!.auth).toBe(`Basic ${Buffer.from(`hooks-client:${CLIENT_SECRET}`).toString('base64')}`)
     expect(new URLSearchParams(w.tokens[0]!.body).get('grant_type')).toBe('client_credentials')
@@ -265,6 +338,18 @@ describe('the debounce', () => {
     expect(a).toEqual([7, 8])
   })
 
+  it('a holder releases only its own window: one another delivery claimed after it ended is left to that one', async () => {
+    const store = new MemoryDebounceStore()
+    expect(await store.claim('acme/board', NOW + 5000, NOW)).toBe(true)
+    expect(await store.join('acme/board', 7, NOW + 1)).toBe(true)
+    // the holder was slow: its window ended, and another delivery claimed a new one and noted a change in it
+    expect(await store.claim('acme/board', NOW + 12_000, NOW + 7000)).toBe(true)
+    expect(await store.join('acme/board', 8, NOW + 7001)).toBe(true)
+    // the slow holder's release names its own window's end: nothing, and the new window keeps what was noted
+    expect(await store.release('acme/board', NOW + 5000, NOW + 7002)).toEqual([])
+    expect(await store.release('acme/board', NOW + 12_000, NOW + 12_000)).toEqual([8])
+  })
+
   it('fails open: when the store cannot be reached each delivery publishes on its own', async () => {
     const broken: DebounceStore = { claim: async () => { throw new Error('DynamoDB is down') }, join: async () => false, release: async () => [] }
     const logs: Record<string, unknown>[] = []
@@ -312,10 +397,30 @@ describe('the shared store in DynamoDB', () => {
     expect(await s.claim('acme/board', NOW + 5000, NOW)).toBe(false)
     expect(await s.join('acme/board', 7, NOW)).toBe(true)
     expect(await s.join('acme/board', null, NOW)).toBe(true)
-    expect((await s.release('acme/board', NOW + 5000)).sort()).toEqual([7, null].sort())
+    expect((await s.release('acme/board', NOW + 5000, NOW + 5000)).sort()).toEqual([7, null].sort())
     expect(await s.join('acme/board', 9, NOW + 6000)).toBe(false)
     expect(calls[0]).toMatchObject({ TableName: 'trace-web-hooks', Key: { k: { S: 'acme/board' } }, ConditionExpression: 'attribute_not_exists(#u) OR #u <= :now' })
     expect(calls[2]).toMatchObject({ ConditionExpression: '#u > :now', ExpressionAttributeValues: { ':n': { SS: ['7'] } } })
+    // release only the window this holder claimed
+    expect(calls[4]).toMatchObject({ ConditionExpression: '#u = :until', ExpressionAttributeValues: { ':until': { N: String(NOW + 5000) } } })
+  })
+
+  it('a release whose window is no longer the holder\'s answers nothing; a delivery id is remembered once, for a day', async () => {
+    const calls: Record<string, unknown>[] = []
+    const seen = new Set<string>()
+    const refused = () => new Response(JSON.stringify({ __type: 'x#ConditionalCheckFailedException' }), { status: 400 })
+    const fetch: typeof globalThis.fetch = async (_url, init) => {
+      const b = JSON.parse(String(init?.body)) as { Key: { k: { S: string } }; UpdateExpression: string }
+      calls.push(b)
+      if (b.UpdateExpression.startsWith('SET #u = :now')) return refused()
+      if (b.UpdateExpression === 'SET #ttl = :ttl') { if (seen.has(b.Key.k.S)) return refused(); seen.add(b.Key.k.S); return new Response('{}', { status: 200 }) }
+      return new Response('{}', { status: 200 })
+    }
+    const s = new DynamoDebounceStore({ table: 'trace-web-hooks', region: 'us-east-1', credentials: async () => ({ accessKeyId: 'AKID', secretAccessKey: 'secret' }), fetch })
+    expect(await s.release('acme/board', NOW + 5000, NOW + 9000)).toEqual([])
+    expect(await s.firstDelivery('abc-123', NOW)).toBe(true)
+    expect(await s.firstDelivery('abc-123', NOW)).toBe(false)
+    expect(calls[1]).toMatchObject({ Key: { k: { S: 'delivery#abc-123' } }, ConditionExpression: 'attribute_not_exists(#ttl) OR #ttl < :now', ExpressionAttributeValues: { ':ttl': { N: String(Math.floor(NOW / 1000) + 86_400) } } })
   })
 
   it('throws on anything but a refused condition (the debounce then fails open)', async () => {

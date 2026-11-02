@@ -1,11 +1,16 @@
 /**
  * Live updates from GitHub, the installer's part (docs/guided-flow.md "Live updates", src/web/hooks.ts):
  *
- *   secret    `<prefix>/web/github-hooks` in Secrets Manager, JSON { webhookSecret, clientSecret }: made when missing
- *             with a new random webhook secret, which is then kept (every repository's hook is registered with it,
- *             so changing it would break the ones this run cannot reach); the backend's own app client's secret
- *             (`<prefix>-web-hooks`, read from Cognito) written beside it on every run, so a client made again by a
- *             deploy is picked up. The stack never holds either value
+ *   secrets   two in Secrets Manager, apart because different roles read them:
+ *               `<prefix>/web/github-hooks`, JSON { webhookSecret }: made when missing with a new random webhook
+ *               secret, which is then kept (every repository's hook is registered with it, so changing it would break
+ *               the ones this run cannot reach). The hooks function checks deliveries with it, and the self-update
+ *               reads it to register the projects it adds
+ *               `<prefix>/web/hooks-client`, JSON { clientSecret }: the backend's own app client's secret
+ *               (`<prefix>-web-hooks`, read from Cognito), written on every run, so a client made again by a deploy is
+ *               picked up. Only the hooks function reads it: with it, anyone could ask who is on which project
+ *             An older installation kept the client secret inside the first; it is taken out of it here. The stack
+ *             never holds either value
  *   register  on every project repository, one webhook to the app's address (CloudFront's own, the stack's
  *             WebHooksAddress output) + /api/hooks/github, JSON, the four events the backend takes, active. Found by
  *             its exact URL and updated in place (its secret, events and content type set again), else created: a
@@ -23,8 +28,8 @@ import { Github, GithubError } from './github.js'
 
 export { HOOK_EVENTS }
 
-const Stored = z.object({ webhookSecret: z.string().min(16), clientSecret: z.string().optional() }).loose()
-export type HooksSecretValue = z.output<typeof Stored>
+const Stored = z.object({ webhookSecret: z.string().min(16) }).loose()
+const StoredClient = z.object({ clientSecret: z.string().min(1) }).loose()
 
 /** Secrets Manager, as the hooks secret needs it (tests replace it). */
 export interface HooksSecretIo {
@@ -35,24 +40,47 @@ export interface HooksSecretIo {
 }
 
 /**
- * Make the secret when it is missing, keep its webhook secret when it is there (one that does not parse is made
- * again), and write the backend's client secret into it when given and different. Returns the webhook secret.
+ * Make the webhook secret when it is missing, and keep it when it is there (one that does not parse is made again).
+ * Anything else an older installation kept in it (the backend's client secret) is taken out. Returns the webhook secret.
  */
-export async function ensureHooksSecret(io: HooksSecretIo, name: string, clientSecret: string | null, random: () => string = () => randomBytes(32).toString('hex')): Promise<{ webhookSecret: string; state: 'created' | 'updated' | 'unchanged' }> {
+export async function ensureHooksSecret(io: HooksSecretIo, name: string, random: () => string = () => randomBytes(32).toString('hex')): Promise<{ webhookSecret: string; state: 'created' | 'updated' | 'unchanged' }> {
   const raw = await io.read(name)
-  let had: HooksSecretValue | null = null
+  let had: string | null = null
+  let extra = false
   if (raw !== null) {
-    try { const p = Stored.safeParse(JSON.parse(raw)); had = p.success ? p.data : null } catch { had = null }
+    try {
+      const p = Stored.safeParse(JSON.parse(raw))
+      had = p.success ? p.data.webhookSecret : null
+      extra = p.success && Object.keys(p.data).some((k) => k !== 'webhookSecret')
+    } catch { had = null }
   }
-  const next: HooksSecretValue = { ...(had ?? {}), webhookSecret: had?.webhookSecret ?? random(), ...(clientSecret ? { clientSecret } : {}) }
-  const text = JSON.stringify(next)
+  const webhookSecret = had ?? random()
+  const text = JSON.stringify({ webhookSecret })
   if (raw === null) {
-    await io.create(name, text, 'trace: GitHub webhook secret and the web backend\'s own client secret (written by the installer)')
-    return { webhookSecret: next.webhookSecret, state: 'created' }
+    await io.create(name, text, 'trace: the GitHub webhook secret (written by the installer)')
+    return { webhookSecret, state: 'created' }
   }
-  if (had && had.webhookSecret === next.webhookSecret && had.clientSecret === next.clientSecret) return { webhookSecret: next.webhookSecret, state: 'unchanged' }
+  if (had && !extra) return { webhookSecret, state: 'unchanged' }
   await io.put(name, text)
-  return { webhookSecret: next.webhookSecret, state: 'updated' }
+  return { webhookSecret, state: 'updated' }
+}
+
+/** Write the backend's own client secret into its own secret when given and different (made when missing). */
+export async function ensureClientSecret(io: HooksSecretIo, name: string, clientSecret: string | null): Promise<'created' | 'updated' | 'unchanged' | 'unknown'> {
+  if (!clientSecret) return 'unknown'
+  const raw = await io.read(name)
+  let had: string | null = null
+  if (raw !== null) {
+    try { const p = StoredClient.safeParse(JSON.parse(raw)); had = p.success ? p.data.clientSecret : null } catch { had = null }
+  }
+  const text = JSON.stringify({ clientSecret })
+  if (raw === null) {
+    await io.create(name, text, 'trace: the web backend\'s own Cognito client secret, for hook.members (written by the installer)')
+    return 'created'
+  }
+  if (had === clientSecret) return 'unchanged'
+  await io.put(name, text)
+  return 'updated'
 }
 
 const Hook = z.object({ id: z.number(), config: z.object({ url: z.string().optional() }).loose().default({}) }).loose()

@@ -5,7 +5,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import { GithubError } from '../../src/installer/github.js'
-import { HOOK_EVENTS, type HooksSecretIo, ensureHooksSecret, hookRefusedNote, registerWebhook, registerWebhooks } from '../../src/installer/hooks.js'
+import { HOOK_EVENTS, type HooksSecretIo, ensureClientSecret, ensureHooksSecret, hookRefusedNote, registerWebhook, registerWebhooks } from '../../src/installer/hooks.js'
+import { webhookSecretOf } from '../../src/installer/update.js'
 import { setUpWebhooks } from '../../src/installer/bootstrap.js'
 import { WEB_HOOKS_OUTPUTS } from '../../src/infra/props.js'
 
@@ -48,26 +49,46 @@ class FakeSecrets implements HooksSecretIo {
   async put(name: string, value: string): Promise<void> { this.writes.push(`put ${name}`); this.values.set(name, value) }
 }
 
-describe('the hooks secret', () => {
-  it('is made once with a random webhook secret, then kept; the client secret is written when it changes', async () => {
+describe('the hooks secrets (two: the webhook secret, and the backend\'s client secret apart from it)', () => {
+  it('the webhook secret is made once with a random value, then kept', async () => {
     const io = new FakeSecrets()
-    const a = await ensureHooksSecret(io, 'trace/web/github-hooks', 'client-1', () => 'a'.repeat(64))
-    expect(a).toEqual({ webhookSecret: 'a'.repeat(64), state: 'created' })
-    const b = await ensureHooksSecret(io, 'trace/web/github-hooks', 'client-1', () => 'b'.repeat(64))
-    expect(b).toEqual({ webhookSecret: 'a'.repeat(64), state: 'unchanged' })
-    const c = await ensureHooksSecret(io, 'trace/web/github-hooks', 'client-2', () => 'c'.repeat(64))
-    expect(c).toEqual({ webhookSecret: 'a'.repeat(64), state: 'updated' })
-    expect(JSON.parse(io.values.get('trace/web/github-hooks') ?? '')).toEqual({ webhookSecret: 'a'.repeat(64), clientSecret: 'client-2' })
-    // the client secret could not be read this time: the one stored stays
-    expect((await ensureHooksSecret(io, 'trace/web/github-hooks', null)).state).toBe('unchanged')
-    expect(io.writes).toEqual(['create trace/web/github-hooks', 'put trace/web/github-hooks'])
+    expect(await ensureHooksSecret(io, 'trace/web/github-hooks', () => 'a'.repeat(64))).toEqual({ webhookSecret: 'a'.repeat(64), state: 'created' })
+    expect(await ensureHooksSecret(io, 'trace/web/github-hooks', () => 'b'.repeat(64))).toEqual({ webhookSecret: 'a'.repeat(64), state: 'unchanged' })
+    expect(JSON.parse(io.values.get('trace/web/github-hooks') ?? '')).toEqual({ webhookSecret: 'a'.repeat(64) })
+    expect(io.writes).toEqual(['create trace/web/github-hooks'])
+  })
+
+  it('an older installation\'s combined secret has the client secret taken out of it, its webhook secret kept', async () => {
+    const io = new FakeSecrets()
+    io.values.set('trace/web/github-hooks', JSON.stringify({ webhookSecret: 'k'.repeat(64), clientSecret: 'old-client' }))
+    expect(await ensureHooksSecret(io, 'trace/web/github-hooks')).toEqual({ webhookSecret: 'k'.repeat(64), state: 'updated' })
+    expect(JSON.parse(io.values.get('trace/web/github-hooks') ?? '')).toEqual({ webhookSecret: 'k'.repeat(64) })
+  })
+
+  it('the client secret is its own, written when it changes; one that could not be read leaves it', async () => {
+    const io = new FakeSecrets()
+    expect(await ensureClientSecret(io, 'trace/web/hooks-client', 'client-1')).toBe('created')
+    expect(await ensureClientSecret(io, 'trace/web/hooks-client', 'client-1')).toBe('unchanged')
+    expect(await ensureClientSecret(io, 'trace/web/hooks-client', 'client-2')).toBe('updated')
+    expect(await ensureClientSecret(io, 'trace/web/hooks-client', null)).toBe('unknown')
+    expect(JSON.parse(io.values.get('trace/web/hooks-client') ?? '')).toEqual({ clientSecret: 'client-2' })
   })
 
   it('one that does not parse is made again', async () => {
     const io = new FakeSecrets()
     io.values.set('s', 'not json')
-    expect((await ensureHooksSecret(io, 's', null, () => 'z'.repeat(64))).state).toBe('updated')
+    expect((await ensureHooksSecret(io, 's', () => 'z'.repeat(64))).state).toBe('updated')
     expect(JSON.parse(io.values.get('s') ?? '')).toEqual({ webhookSecret: 'z'.repeat(64) })
+  })
+
+  it('the self-update reads the webhook secret; text that is not JSON is a fixed message, never the text', () => {
+    expect(webhookSecretOf(JSON.stringify({ webhookSecret: 'w'.repeat(64) }))).toBe('w'.repeat(64))
+    expect(webhookSecretOf('{}')).toBeNull()
+    const secretish = 'ghs_THIS_IS_THE_SECRET_VALUE'
+    let m = ''
+    try { webhookSecretOf(secretish) } catch (e) { m = (e as Error).message }
+    expect(m).toBe('the webhook secret is not JSON: the installer writes it again')
+    expect(m).not.toContain('ghs_')
   })
 })
 
@@ -110,9 +131,10 @@ describe('the installer\'s web step (setUpWebhooks)', () => {
       register: (t, r, u, s) => registerWebhook(t, r, u, s, gh.fetch), log: (l) => { lines.push(l) },
     })
     expect(await once()).toEqual({ url: URL_, warnings: [] })
-    const stored = JSON.parse(io.values.get('trace/web/github-hooks') ?? '') as { webhookSecret: string; clientSecret: string }
-    expect(stored.clientSecret).toBe('the-client-secret')
+    const stored = JSON.parse(io.values.get('trace/web/github-hooks') ?? '') as { webhookSecret: string; clientSecret?: string }
+    expect(stored.clientSecret).toBeUndefined()
     expect(stored.webhookSecret).toMatch(/^[0-9a-f]{64}$/)
+    expect(JSON.parse(io.values.get('trace/web/hooks-client') ?? '')).toEqual({ clientSecret: 'the-client-secret' })
     expect(asked).toEqual(['us-east-1_X/hooks-client'])
     expect(await once()).toEqual({ url: URL_, warnings: [] })
     // still one hook each, with the same secret; the secret written once
@@ -120,7 +142,7 @@ describe('the installer\'s web step (setUpWebhooks)', () => {
       expect(gh.hooks.get(r)).toHaveLength(1)
       expect(gh.hooks.get(r)?.[0]?.config.secret).toBe(stored.webhookSecret)
     }
-    expect(io.writes).toEqual(['create trace/web/github-hooks'])
+    expect(io.writes).toEqual(['create trace/web/hooks-client', 'create trace/web/github-hooks'])
     expect(lines).toContain(`acme/board: webhook created (${URL_})`)
     expect(lines).toContain(`acme/board: webhook updated (${URL_})`)
   })

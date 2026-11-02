@@ -98,6 +98,8 @@ describe('the self-update role', () => {
     // live updates from GitHub: a project it adds gets its webhook with the installer's secret, read only
     expect(bySid.WebHooksSecret?.Action).toBe('secretsmanager:GetSecretValue')
     expect(JSON.stringify(bySid.WebHooksSecret?.Resource)).toContain(':secret:trace/web/github-hooks-??????')
+    // never the backend's own client secret, which only the hooks function reads
+    expect(JSON.stringify(statements)).not.toContain('hooks-client')
     expect(JSON.stringify(bySid.ProjectTokenSecrets?.Resource)).toContain(':secretsmanager:us-east-1:123456789012:secret:trace/github-token/*')
     const text = (v: unknown): string => JSON.stringify(v)
     expect(bySid.CdkBootstrapRoles?.Action).toBe('sts:AssumeRole')

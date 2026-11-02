@@ -23,6 +23,9 @@ export interface WebRequest {
   headers: Readonly<Record<string, string>>
   cookies: Readonly<Record<string, string>>
   body: string
+  /** the body's bytes as they arrived, when the event gives them (GitHub's signature is over these, not over a text
+   * decoded and encoded again) */
+  raw?: Buffer
 }
 
 export interface Sink {

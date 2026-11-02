@@ -5,15 +5,19 @@
  *
  *   claim    UpdateItem SET until, REMOVE noted, if the item is missing or its window is over
  *   join     UpdateItem ADD noted :n, if a window is open (a number, or `-` for a delivery that named none)
- *   release  UpdateItem SET until = now, REMOVE noted, ReturnValues UPDATED_OLD: what was noted
+ *   release  UpdateItem SET until = now, REMOVE noted, ReturnValues UPDATED_OLD: what was noted, only if the window
+ *            is still the holder's (its `until` is the one the holder claimed): a window another delivery claimed after
+ *            this one ended is that delivery's, and releasing it would drop what was noted in it
+ *   delivery UpdateItem SET ttl on `delivery#<X-GitHub-Delivery>`, if there is none or it has expired: a delivery
+ *            seen in the last day (DELIVERY_TTL_S) is a replay
  *
  * Every write is conditional and atomic, so two containers never both hold a window. Items expire by TTL a day after
- * their last window. Called with DynamoDB's JSON API, signed with SigV4 by the backend's role, as the external
+ * their last window (the table's TTL is on `ttl`: src/infra/web.ts). Called with DynamoDB's JSON API, signed with SigV4 by the backend's role, as the external
  * runtime's request limit is (src/api/rate-limit.ts): the DynamoDB client is not a dependency.
  */
 import { z } from 'zod'
 import { type Credentials, signV4 } from '../api/aws.js'
-import type { DebounceStore } from './hooks.js'
+import { DELIVERY_TTL_S, type DebounceStore } from './hooks.js'
 
 const ErrorShape = z.object({ __type: z.string().optional(), message: z.string().optional() }).loose()
 const Old = z.object({ Attributes: z.object({ noted: z.object({ SS: z.array(z.string()) }).loose().optional() }).loose().optional() }).loose()
@@ -50,21 +54,33 @@ export class DynamoDebounceStore implements DebounceStore {
     }).then((r) => r !== null)
   }
 
-  async release(repo: string, now: number): Promise<(number | null)[]> {
+  async release(repo: string, until: number, now: number): Promise<(number | null)[]> {
     const r = await this.update(repo, {
       UpdateExpression: 'SET #u = :now REMOVE noted',
+      ConditionExpression: '#u = :until',
       ExpressionAttributeNames: { '#u': 'until' },
-      ExpressionAttributeValues: { ':now': { N: String(now) } },
+      ExpressionAttributeValues: { ':now': { N: String(now) }, ':until': { N: String(until) } },
       ReturnValues: 'UPDATED_OLD',
     })
+    if (r === null) return []
     const old = Old.safeParse(r)
     return (old.success ? old.data.Attributes?.noted?.SS ?? [] : []).map((s) => (s === NONE ? null : Number(s))).filter((n) => n === null || Number.isInteger(n))
   }
 
-  /** One conditional UpdateItem: its answer, or null when its condition did not hold. Throws on anything else. */
-  private async update(repo: string, x: Record<string, unknown>): Promise<unknown> {
+  async firstDelivery(id: string, now: number): Promise<boolean> {
+    const s = Math.floor(now / 1000)
+    return this.update(`delivery#${id}`, {
+      UpdateExpression: 'SET #ttl = :ttl',
+      ConditionExpression: 'attribute_not_exists(#ttl) OR #ttl < :now',
+      ExpressionAttributeNames: { '#ttl': 'ttl' },
+      ExpressionAttributeValues: { ':ttl': { N: String(s + DELIVERY_TTL_S) }, ':now': { N: String(s) } },
+    }).then((r) => r !== null)
+  }
+
+  /** One conditional UpdateItem on item `key`: its answer, or null when its condition did not hold. Throws on anything else. */
+  private async update(key: string, x: Record<string, unknown>): Promise<unknown> {
     const host = `dynamodb.${this.o.region}.amazonaws.com`
-    const body = JSON.stringify({ TableName: this.o.table, Key: { k: { S: repo } }, ...x })
+    const body = JSON.stringify({ TableName: this.o.table, Key: { k: { S: key } }, ...x })
     const headers = signV4({
       host, region: this.o.region, service: 'dynamodb', body,
       headers: { 'content-type': 'application/x-amz-json-1.0', 'x-amz-target': 'DynamoDB_20120810.UpdateItem' },

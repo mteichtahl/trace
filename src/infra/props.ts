@@ -487,9 +487,15 @@ export const WEB_OUTPUTS = { url: 'WebUrl', distributionId: 'WebDistributionId',
 /** With web.hooks: CloudFront's own address (where GitHub's webhooks post, whatever the custom domain's DNS says) and
  * the backend's own app client (the installer reads its secret into webHooksSecret). */
 export const WEB_HOOKS_OUTPUTS = { address: 'WebHooksAddress', clientId: 'WebHooksClientId' } as const
-/** GitHub's webhook secret and the backend's own client secret, JSON (src/web/hooks.ts), made and written by the
- * installer: the stack never holds either value. */
+/** GitHub's webhook secret, JSON { webhookSecret } (src/web/hooks.ts), made and written by the installer: the stack
+ * never holds its value. The hooks function and the self-update (which registers new projects' hooks) read it. */
 export const webHooksSecret = (prefix: string): string => `${prefix}/web/github-hooks`
+/** The backend's own app client's secret, JSON { clientSecret }, written by the installer from Cognito: read by the
+ * hooks function alone (the self-update has no use for it, so it cannot read it). */
+export const webHooksClientSecret = (prefix: string): string => `${prefix}/web/hooks-client`
+/** The random value CloudFront adds to every request it sends the hooks function (src/web/hooks.ts ORIGIN_HEADER),
+ * made by the stack. */
+export const webHooksOriginSecret = (prefix: string): string => `${prefix}/web/hooks-origin`
 /** The hooks function and its debounce table (src/infra/web.ts). */
 export const webHooksName = (prefix: string): string => `${prefix}-web-hooks`
 /** Whether the installation takes GitHub's webhooks: the nested layout only. Their client and its resource server are
