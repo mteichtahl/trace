@@ -221,6 +221,8 @@ describe('the trace stack', () => {
       expect(JSON.stringify(tag?.Resource)).toContain(`job-definition/trace-gpu-${c.h}`)
       expect(JSON.stringify(tag?.Resource)).toContain(':job/*')
       expect(JSON.stringify(tag?.Resource)).not.toMatch(/job-definition\/\*/)
+      // …and against the shared queue (which carries no project tag, so the IfExists condition passes)
+      expect(JSON.stringify(tag?.Resource)).toMatch(/GpuQueue/)
       // waiting on its jobs' events: its own wait queues by name, and its own topic, with those queues as the only endpoint
       const ownTopic = new RegExp(`^\\{"Ref":"Project${c.h}JobEvents[0-9A-F]{8}"\\}$`)
       const waitQueues = { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, `:sqs:us-east-1:123456789012:trace-${c.h}-wait-*`]] }
