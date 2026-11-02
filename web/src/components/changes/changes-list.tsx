@@ -33,7 +33,8 @@ export function ChangePill({ verdict, className }: { verdict: ChangeVerdict; cla
 
 /** The checks as a small badge: passed (green), running (spinner), failing (red). */
 export function ChecksBadge({ c }: { c: ChangeSummary['checks'] }) {
-  if (!c || !c.total) return <span className="text-xs text-muted-foreground">No checks yet</span>
+  if (c === null) return <span className="text-xs text-muted-foreground">Not readable</span>
+  if (!c?.total) return <span className="text-xs text-muted-foreground">No checks yet</span>
   const Icon = c.failed ? CircleX : c.running ? Loader2 : CircleCheck
   const tone = c.failed ? 'bg-destructive/10 text-destructive' : c.running ? 'bg-muted text-muted-foreground' : 'bg-verified/10 text-verified'
   const words = c.failed ? checksWords(c) : c.running ? 'Checking' : checksWords(c)

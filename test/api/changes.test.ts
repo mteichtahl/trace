@@ -18,7 +18,7 @@ import { jobIndex } from '../../src/api/actions-jobs.js'
 import { journeyStore } from '../../src/api/action-kit.js'
 import { mergeMethod, neutralise, revisionRequest } from '../../src/api/actions-changes.js'
 import {
-  type ChangeFacts, type TraceRule, acceptance, fileKind, jobsByBranch, recommendationOf, requirementIds, summaryBullets, traceChanges, verdictOf,
+  type ChangeFacts, type TraceRule, CHECKS_DENIED, acceptance, fileKind, jobsByBranch, recommendationOf, requirementIds, summaryBullets, traceChanges, verdictOf,
 } from '../../src/api/changes.js'
 import { GitHubBudget, GitHubCache } from '../../src/api/github-cache.js'
 import type { JobRow } from '../../src/core/job-index.js'
@@ -80,6 +80,14 @@ describe('the rules: verdict, recommendation, may_accept', () => {
     expect(verdictOf(none)).toBe('checking')
     expect(recommendationOf(none).verdict).toBe('wait')
     expect(acceptance(none, true)).toEqual({ may_accept: false, blockers: ['No checks have run on it yet.'] })
+  })
+
+  it('a token that may not read checks is said as that, with who fixes it, and is blocked rather than waiting', () => {
+    const denied = facts({ checks: null, checks_denied: true })
+    expect(verdictOf(denied)).toBe('blocked')
+    expect(recommendationOf(denied)).toEqual({ verdict: 'none', why: CHECKS_DENIED })
+    expect(CHECKS_DENIED).toMatch(/Checks: Read-only/)
+    expect(acceptance(denied, true)).toEqual({ may_accept: false, blockers: [CHECKS_DENIED] })
   })
 
   it('requirement ids from the title, body and commits, ranges spelled out; the summary\'s sources in order', () => {
@@ -217,7 +225,7 @@ class ChangesGitHub extends FakeGitHub {
   reads = new Map<string, number>()
   vars = new Map<string, string>()
   private read(k: string): void { this.reads.set(k, (this.reads.get(k) ?? 0) + 1) }
-  add(number: number, head: string, o: { mergeable?: string; checks?: PullStatus['checks']; labels?: string[]; title?: string; body?: string; headRepo?: string | null; author?: string | null } = {}): void {
+  add(number: number, head: string, o: { mergeable?: string; checks?: PullStatus['checks']; checks_denied?: boolean; labels?: string[]; title?: string; body?: string; headRepo?: string | null; author?: string | null } = {}): void {
     const title = o.title ?? `Change ${number}`
     const detail: PullDetail = {
       number, title, url: `https://github.com/${REPO}/pull/${number}`, state: 'open', draft: false, mergeable: o.mergeable ?? 'clean', body: o.body ?? '',
@@ -226,7 +234,7 @@ class ChangesGitHub extends FakeGitHub {
     }
     const c = o.checks === undefined ? { total: 1, passed: 1, failed: 0, running: 0, skipped: 0, failing: [] } : o.checks
     this.pulls.set(number, {
-      detail, status: { number, title, url: detail.url, state: 'open', draft: false, mergeable: detail.mergeable, head, sha: detail.head.sha, updated_at: detail.updated_at, checks: c },
+      detail, status: { number, title, url: detail.url, state: 'open', draft: false, mergeable: detail.mergeable, head, sha: detail.head.sha, updated_at: detail.updated_at, checks: c, ...(o.checks_denied ? { checks_denied: true } : {}) },
       files: [{ path: 'hw/power.kicad_sch', status: 'modified', additions: 10, deletions: 2, patch: null, previous: null }, { path: 'docs/notes.md', status: 'added', additions: 3, deletions: 0, patch: '@@ +1,3 @@', previous: null }],
       commits: [`${title}\n\ncovers R2`], runs: [{ name: 'build', status: 'completed', conclusion: c && c.failed ? 'failure' : 'success', summary: 'Built.' }],
     })
@@ -386,6 +394,8 @@ describe('change.accept', () => {
     await expect(run(USER, 'change.accept', { repo: REPO, number: 1, head_sha: sha(1) })).rejects.toThrow(/trace could not read its checks/)
     github.add(1, 'claude/task-reqs', { checks: { total: 0, passed: 0, failed: 0, running: 0, skipped: 0, failing: [] } })
     await expect(run(USER, 'change.accept', { repo: REPO, number: 1, head_sha: sha(1) })).rejects.toThrow(/No checks have run on it yet/)
+    github.add(1, 'claude/task-reqs', { checks: null, checks_denied: true })
+    await expect(run(USER, 'change.accept', { repo: REPO, number: 1, head_sha: sha(1) })).rejects.toThrow(/may not read checks.*Checks: Read-only/)
     expect(github.did).toEqual([])
   })
 

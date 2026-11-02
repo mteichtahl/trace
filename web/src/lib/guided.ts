@@ -104,7 +104,8 @@ export const VERDICT_WORDS: Record<ChangeVerdict, { pill: string; tone: 'primary
 
 /** The checks in a few words: "7 checks passed", "Checks running, 4 of 7 done", "1 check failing: ERC". */
 export function checksWords(c: ChangeSummary['checks']): string {
-  if (!c || !c.total) return 'No checks yet'
+  if (c === null) return 'Checks not readable'
+  if (!c?.total) return 'No checks yet'
   const counted = c.total - c.skipped
   if (c.failed) return `${c.failed} ${c.failed === 1 ? 'check' : 'checks'} failing${c.failing.length ? `: ${c.failing.slice(0, 2).join(', ')}${c.failing.length > 2 ? ', …' : ''}` : ''}`
   if (c.running) return `Checks running, ${c.passed} of ${counted} done`
@@ -113,6 +114,7 @@ export function checksWords(c: ChangeSummary['checks']): string {
 
 /** One line under a change's title: what it waits for, in plain words. */
 export function changeLine(c: ChangeSummary): string {
+  if (c.checks_denied) return 'trace may not read its checks: an admin gives trace\'s GitHub token "Checks: Read-only".'
   switch (c.verdict) {
     case 'ready': return `Ready to review. ${checksWords(c.checks)}.`
     case 'checking': return `${checksWords(c.checks)}. Ready to review when the last one finishes.`

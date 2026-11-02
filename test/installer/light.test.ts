@@ -97,7 +97,7 @@ describe('the answers', () => {
 const info = (repos: string[] = ['marc/board', 'marc/fw'], kind: TokenInfo['kind'] = 'fine-grained'): TokenInfo => ({
   login: 'marc', name: null, kind, scopes: [], warnings: [], repos: repos.map((fullName) => ({ fullName, private: true, admin: true, push: true, defaultBranch: 'main' })),
 })
-const full = (repo: string): RepoAccess => ({ repo, visible: true, configure: true, administer: true, webhooks: true, missing: [] })
+const full = (repo: string): RepoAccess => ({ repo, visible: true, configure: true, administer: true, webhooks: true, checks: true, missing: [] })
 
 function deps(over: Partial<PreflightDeps> = {}): PreflightDeps & { calls: string[] } {
   const calls: string[] = []
@@ -225,8 +225,8 @@ describe('the preflight', () => {
   })
 
   it('names the exact permission a repository is missing, and what that costs', async () => {
-    const noHooks: RepoAccess = { repo: 'marc/fw', visible: true, configure: true, administer: false, webhooks: false, missing: ['Administration: read and write', 'Webhooks: read and write'] }
-    const noSecrets: RepoAccess = { repo: 'marc/board', visible: true, configure: false, administer: true, webhooks: true, missing: ['Secrets: read and write'] }
+    const noHooks: RepoAccess = { repo: 'marc/fw', visible: true, configure: true, administer: false, webhooks: false, checks: true, missing: ['Administration: read and write', 'Webhooks: read and write'] }
+    const noSecrets: RepoAccess = { repo: 'marc/board', visible: true, configure: false, administer: true, webhooks: true, checks: true, missing: ['Secrets: read and write'] }
     expect(accessNote(noHooks)).toMatch(/lacks Administration: read and write, Webhooks: read and write: its settings and the "trace" ruleset are left alone; with the token as CodeBuild's GitHub credential its build runner can't be made .*so the deploy fails/)
     const r = await preflight({ ...IN, repos: ['marc/board', 'marc/fw'] }, deps({ repo: async (x) => (x === 'marc/fw' ? noHooks : noSecrets) }))
     // the token would be CodeBuild's credential (no connection, none in the account): its runner's webhook can't be made
