@@ -7,6 +7,9 @@ import { z } from 'zod'
 import { PriceOverridesSchema } from '../core/prices.js'
 import { projectHash, projectSlug } from '../core/project.js'
 import { IMMUTABLE_SUBJECT } from '../core/github-subject.js'
+import { wafPer10Minutes } from '../core/waf-limits.js'
+
+export { wafPer10Minutes }
 
 export {
   connectionName, cpuJobDefinitionName, gpuJobDefinitionName, githubSecretName, knowledgeBaseName, memoryDeliveryName, memoryName, projectDataPrefix, projectHash, projectJobsPrefix,
@@ -317,16 +320,18 @@ export const InfraPropsSchema = z.object({
      * On by default (about US$12 a month and US$0.60 per million requests): the address is public and sign-in is not
      * behind a token. In the installation's region when that is us-east-1, else in the stack `<prefix>-edge` there,
      * whose output the tools pass back as aclArn. Ignored when webAclArn names a web ACL of your own */
-    waf: z.object({
+    waf: z.preprocess(wafPer10Minutes, z.object({
       enabled: z.boolean().default(true),
-      /** requests to /api/* per address in 5 minutes */
-      apiRequestsPer5Minutes: z.number().int().min(100).max(2_000_000_000).default(1000),
-      /** requests to /api/auth/* (sign-in) per address in 5 minutes */
-      authRequestsPer5Minutes: z.number().int().min(10).max(2_000_000_000).default(100),
+      /** requests to /api/* per address in 10 minutes. Generous: a person's open screens poll and refetch on live
+       * events, several screens or people behind one address add up, and a blocked address stays blocked while its
+       * requests keep coming */
+      apiRequestsPer10Minutes: z.number().int().min(100).max(2_000_000_000).default(10_000),
+      /** requests to /api/auth/* (sign-in) per address in 10 minutes */
+      authRequestsPer10Minutes: z.number().int().min(10).max(2_000_000_000).default(200),
       /** the `<prefix>-edge` stack's web ACL (its WebAclArn output), set by the installer and the self-update before
        * they deploy this stack; unset outside us-east-1, the app has no WAF until it is */
       aclArn: z.string().regex(/^arn:aws[a-z-]*:wafv2:us-east-1:\d{12}:global\/webacl\/[\w-]+\/[0-9a-f-]{36}$/, 'a WAFv2 web ACL ARN of CLOUDFRONT scope').optional(),
-    }).strict().prefault({}),
+    }).strict()).prefault({}),
     /** Live updates from GitHub (nested layout only: webHooksOn; src/web/hooks.ts, docs/guided-flow.md "Live updates"): a webhook on every project
      * repository posts to the app's /api/hooks/github, so a change's checks and merges reach people's screens at once
      * (the app still polls, every 60 s while connected). On by default: the stack adds the hooks function, its debounce

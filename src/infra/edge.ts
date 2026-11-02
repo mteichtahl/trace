@@ -16,9 +16,9 @@
  *   1 BodyTooLarge      a request to /api/* whose Content-Length is 5,000,000 bytes or more is blocked. At CloudFront WAF
  *                       inspects at most 64 KB of a body, so the size is read from the header; the backend's own limits
  *                       (1 MB for /api/call, 4 MB for a chat) stay, and catch a body sent without one
- *   2 AuthRate          at most authRequestsPer5Minutes (100) requests to /api/auth/* per address in 5 minutes: sign-in
+ *   2 AuthRate          at most authRequestsPer10Minutes (200) requests to /api/auth/* per address in 10 minutes: sign-in
  *                       is the one unauthenticated part, and each try costs a Cognito call (and an email with SES)
- *   3 ApiRate           at most apiRequestsPer5Minutes (1,000) requests to /api/* per address in 5 minutes, GitHub's
+ *   3 ApiRate           at most apiRequestsPer10Minutes (10,000) requests to /api/* per address in 10 minutes, GitHub's
  *                       webhook (/api/hooks/*) apart
  *   4 IpReputation      AWS's Amazon IP reputation list (known bots, scanners)
  *   5 KnownBadInputs    AWS's known bad inputs (Log4j, Java deserialization, …), not on /api/hooks/*
@@ -118,13 +118,13 @@ export class TraceWebAcl extends Construct {
         },
         {
           name: 'AuthRate', priority: 2, action: { block: tooMany }, visibilityConfig: visibility('AuthRate'),
-          statement: { rateBasedStatement: { limit: p.waf.authRequestsPer5Minutes, evaluationWindowSec: 300, aggregateKeyType: 'IP', scopeDownStatement: startsWith('/api/auth/') } },
+          statement: { rateBasedStatement: { limit: p.waf.authRequestsPer10Minutes, evaluationWindowSec: 600, aggregateKeyType: 'IP', scopeDownStatement: startsWith('/api/auth/') } },
         },
         {
           name: 'ApiRate', priority: 3, action: { block: tooMany }, visibilityConfig: visibility('ApiRate'),
           statement: {
             rateBasedStatement: {
-              limit: p.waf.apiRequestsPer5Minutes, evaluationWindowSec: 300, aggregateKeyType: 'IP',
+              limit: p.waf.apiRequestsPer10Minutes, evaluationWindowSec: 600, aggregateKeyType: 'IP',
               scopeDownStatement: { andStatement: { statements: [startsWith('/api/'), notHooks] } },
             },
           },

@@ -5,13 +5,13 @@
  */
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { Loader2, Lock, Mail, UserRoundCheck } from 'lucide-react'
-import { useState, type ComponentType, type FormEvent } from 'react'
+import { useEffect, useState, type ComponentType, type FormEvent } from 'react'
 import { z } from 'zod'
 import { AuthCard, FieldError } from '@/components/auth-card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { pending, respond, startSignIn } from '@/lib/auth'
+import { pending, refresh, respond, startSignIn, useAuth } from '@/lib/auth'
 import { HttpError } from '@/lib/http'
 import type { SignInChoice } from '@/lib/types'
 import { getAssertion, passkeysSupported } from '@/lib/webauthn'
@@ -59,6 +59,20 @@ function SignIn() {
   const [error, setError] = useState<string | null>(null)
 
   const done = () => void navigate({ to: safeNext(next) })
+  const a = useAuth()
+  const [checking, setChecking] = useState(false)
+  // the session could not be checked on load (a 429 or trace not answering): once a later look succeeds, carry on
+  useEffect(() => {
+    if (a.status === 'signed-in' && a.user?.class) done()
+  }, [a.status])
+  const checkAgain = async () => {
+    setChecking(true)
+    try {
+      if (await refresh()) done()
+    } finally {
+      setChecking(false)
+    }
+  }
 
   const onEmail = async (e: FormEvent) => {
     e.preventDefault()
@@ -138,6 +152,19 @@ function SignIn() {
       setBusy(null)
     }
   }
+
+  if (step === 'email' && a.status === 'unreachable')
+    return (
+      <AuthCard title="trace can't check your sign-in just now" description={a.unreachable ?? undefined} footer="You may well still be signed in: nothing needs typing once trace answers again.">
+        <div className="space-y-3">
+          <Button className="w-full" onClick={() => void checkAgain()} disabled={checking}>
+            {checking && <Loader2 className="animate-spin" />}
+            Try again
+          </Button>
+          <p className="text-center text-xs text-muted-foreground">trace also looks again by itself every minute and a half.</p>
+        </div>
+      </AuthCard>
+    )
 
   if (step === 'email')
     return (

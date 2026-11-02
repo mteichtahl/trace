@@ -661,8 +661,9 @@ Every response carries strict security headers: HSTS, `nosniff`, `X-Frame-Option
 
 **AWS WAF.** On by default (Advanced → Web app, "Protect the app with AWS WAF"; `web.waf`). The app's address is public
 and sign-in takes no token, so a web ACL sits in front of it (`src/infra/edge.ts`): AWS's managed rule groups (the core
-rule set, known bad inputs and the IP reputation list), at most 1,000 requests to `/api/*` and 100 to `/api/auth/*` per
-address in 5 minutes (`web.waf.apiRequestsPer5Minutes`, `authRequestsPer5Minutes`; over them a 429), and no request to
+rule set, known bad inputs and the IP reputation list), at most 10,000 requests to `/api/*` and 200 to `/api/auth/*` per
+address in 10 minutes (`web.waf.apiRequestsPer10Minutes`, `authRequestsPer10Minutes`; over them a 429; settings saved with
+the older `…Per5Minutes` keys are read as twice those), and no request to
 `/api/*` declaring a body of 5 MB or more (the chat's limit is 4 MB). The core rule set's 8 KB body limit and its body
 cross-site-scripting rule only count, since a chat or a prompt is larger and people paste code; the app renders no HTML
 from them. It costs about US$11 a month (US$5 for the web ACL and US$1 for each of its six rules) and US$0.60 per

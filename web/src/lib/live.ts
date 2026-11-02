@@ -62,6 +62,28 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
   }
 }
 
+/** How long events gather before the screens look again: a busy specialist reports many times a second. */
+export const COALESCE_MS = 2_000
+
+/**
+ * Invalidations from a burst of events, made once: the first event starts a COALESCE_MS window, every key the events in
+ * it name is kept once, and at its end each is invalidated once. Without it a running job's stream of updates made each
+ * open screen ask the API again for every one, enough from a few screens for the web firewall to block the address.
+ */
+export function coalescer(qc: Pick<QueryClient, 'invalidateQueries'>, ms: number = COALESCE_MS): (e: LiveEvent) => void {
+  const keys = new Map<string, QueryKey>()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return (e) => {
+    for (const k of invalidationsFor(e)) keys.set(JSON.stringify(k), k)
+    timer ??= setTimeout(() => {
+      timer = undefined
+      const all = [...keys.values()]
+      keys.clear()
+      for (const queryKey of all) void qc.invalidateQueries({ queryKey })
+    }, ms)
+  }
+}
+
 export function applyEvent(qc: QueryClient, e: LiveEvent): void {
   for (const queryKey of invalidationsFor(e)) void qc.invalidateQueries({ queryKey })
 }
@@ -262,6 +284,7 @@ export function connectLive(o: LiveOptions): () => void {
 export function startLive(qc: QueryClient, cfg: { http: string; realtime: string }): () => void {
   let stop: (() => void) | null = null
   let sub: string | null = null
+  const apply = coalescer(qc)
   const sync = () => {
     const a = auth.get()
     const next = a.status === 'signed-in' ? (a.user?.sub ?? null) : null
@@ -275,7 +298,7 @@ export function startLive(qc: QueryClient, cfg: { http: string; realtime: string
       realtime: cfg.realtime,
       channel: `/trace/users/${sub}`,
       idToken: () => auth.get().idToken,
-      onEvent: (e) => applyEvent(qc, e),
+      onEvent: apply,
     })
   }
   const unsub = auth.subscribe(sync)

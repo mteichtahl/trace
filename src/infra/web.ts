@@ -690,7 +690,7 @@ export interface WebConfig {
   appUrl: string
   features: { passkeys: boolean; email: boolean; voice: boolean; ops: boolean }
   /** the app's AWS WAF: on (this installation's, or the person's own web ACL), or off (src/infra/edge.ts) */
-  waf: { enabled: boolean; own: boolean; apiRequestsPer5Minutes: number; authRequestsPer5Minutes: number }
+  waf: { enabled: boolean; own: boolean; apiRequestsPer10Minutes: number; authRequestsPer10Minutes: number }
   /** GitHub's webhook (web.hooks, src/web/hooks.ts) */
   hooks?: { secret: string; clientSecret: string; tokenUrl: string; clientId: string; scope: string; table: string }
 }
@@ -764,7 +764,7 @@ export class TraceWeb extends Construct {
       waf: {
         enabled: Boolean(this.p.settings.webAclArn) || (this.p.settings.waf.enabled && (region === EDGE_REGION || Boolean(this.p.settings.waf.aclArn))),
         own: Boolean(this.p.settings.webAclArn),
-        apiRequestsPer5Minutes: this.p.settings.waf.apiRequestsPer5Minutes, authRequestsPer5Minutes: this.p.settings.waf.authRequestsPer5Minutes,
+        apiRequestsPer10Minutes: this.p.settings.waf.apiRequestsPer10Minutes, authRequestsPer10Minutes: this.p.settings.waf.authRequestsPer10Minutes,
       },
       ...(a.hooks && this.stack.hooks ? {
         hooks: {

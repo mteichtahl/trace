@@ -49,7 +49,7 @@ export function wafPlan(props: InfraProps): string {
   if (props.web.webAclArn) return `, behind your web ACL ${props.web.webAclArn}`
   if (!wafEnabled(props)) return ', without AWS WAF (Advanced › Web app turns it on)'
   const where = props.region === EDGE_REGION ? 'in the web app\'s stack' : `in its own small stack ${edgeStackName(props.prefix)} in ${EDGE_REGION} (CloudFront takes web ACLs from there only), deployed first`
-  return `, protected by AWS WAF ${where}: AWS's managed rules, at most ${props.web.waf.apiRequestsPer5Minutes} requests to the API and ${props.web.waf.authRequestsPer5Minutes} sign-in requests per address in 5 minutes, and no request body over 5 MB (about US$${EDGE_COST.monthly} a month and US$${EDGE_COST.perMillion.toFixed(2)} per million requests)`
+  return `, protected by AWS WAF ${where}: AWS's managed rules, at most ${props.web.waf.apiRequestsPer10Minutes} requests to the API and ${props.web.waf.authRequestsPer10Minutes} sign-in requests per address in 10 minutes, and no request body over 5 MB (about US$${EDGE_COST.monthly} a month and US$${EDGE_COST.perMillion.toFixed(2)} per million requests)`
 }
 
 /**
