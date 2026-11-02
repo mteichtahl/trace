@@ -224,7 +224,7 @@ export const STAGE_WORK: Partial<Record<StageId, { agent: (typeof SPECIALIST_KIN
       'Read the accepted requirements (verify.requirements list) for the outline, layers and anything that constrains placement, and the schematic.',
       'Create the board from the schematic, draw the outline the requirements allow, place the parts (pcb.floorplan, pcb.placement_check), and route every connection (pcb.autoroute, finishing by hand where it fails). Size power traces with calc.trace_width.',
       'Check it: kicad.drc clean (or each finding explained), every connection routed, matched lengths where the design names any (pcb.length_match, kicad.net_length). Record layout.routed, layout.drc and layout.lengths with journey.check, and layout.pins if the pin plan applies.',
-      'Render the board (render.board) so a person can approve the renders. Do not approve them yourself.',
+      'Render the board (render.board) so a person can approve the renders. Do not approve them yourself: ask with journey.ask, naming layout.renders, the render run as a source, and a recommended option labelled "Approve the renders". The person\'s answer meets the criterion.',
       'A change the layout forces on the schematic or a requirement is a question for a person (journey.ask), not yours to make.',
     ].join('\n'),
   },

@@ -14,7 +14,8 @@ export const CRITERION_SKILLS: Record<string, string> = {
   'define.firmware': 'requirements-review',
   'architect.blocks': 'architecture-choice',
   'capture.pins': 'pin-plan-review',
-  'layout.renders': 'placement-adjust',
+  // layout.renders has no skill: Placement adjust comes before routing, and the renders come after it. The renders are
+  // approved by answering the agent's question that shows them (core/journey.ts approvedByAnswer)
   'signoff.report': 'release-review',
   'fabricate.order.sheet': 'order-submit',
   'fabricate.received.inspected': 'incoming-inspection',
@@ -30,7 +31,7 @@ const WORDS: [RegExp, string][] = [
   [/\brequirements?\b.*\b(accept|review|criterion|measur)/i, 'requirements-review'],
   [/\b(block diagram|architecture|key parts)\b/i, 'architecture-choice'],
   [/\b(finish|complete)\b.*\bschematic\b|\bschematic\b.*\b(finish|notes)\b/i, 'schematic-finish'],
-  [/\bplacement\b|\brenders?\b.*\bapprov/i, 'placement-adjust'],
+  [/\bplacement\b/i, 'placement-adjust'],
   [/\bboard (outline|setup)\b/i, 'board-setup'],
   [/\brelease (report|review)\b/i, 'release-review'],
   [/\border sheet\b/i, 'order-submit'],
