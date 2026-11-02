@@ -14,11 +14,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, type JobsApi, perform } from '../../src/api/actions.js'
-import { jobIndex } from '../../src/api/actions-jobs.js'
+import { AGENT_WORDS, jobIndex } from '../../src/api/actions-jobs.js'
 import { journeyStore } from '../../src/api/action-kit.js'
 import { mergeMethod, neutralise, revisionRequest } from '../../src/api/actions-changes.js'
 import {
-  type ChangeFacts, type TraceRule, CHECKS_DENIED, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, requirementIds, summaryBullets, traceChanges, verdictOf,
+  type ChangeFacts, type TraceRule, CHECKS_DENIED, creditedAgent, fromWords, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, requirementIds, summaryBullets, traceChanges, verdictOf,
 } from '../../src/api/changes.js'
 import { GitHubBudget, GitHubCache } from '../../src/api/github-cache.js'
 import type { JobRow } from '../../src/core/job-index.js'
@@ -155,6 +155,27 @@ describe('which pull requests are trace\'s (the branch name alone proves nothing
     const own = [row('t', 'bots/task-x')]
     expect(traceChanges([pr(8, 'bots/task-x')], own, { ...RULE, prefix: 'bots/' }).map((x) => x.pull.number)).toEqual([8])
     expect(traceChanges([pr(8, 'bots/task-x')], own, RULE)).toEqual([])
+  })
+})
+
+describe('who a change is credited to', () => {
+  const verifyTask = (o: Partial<JobRow> = {}): JobRow => ({ ...row('job-v', 'claude/task-reqs', 'task', 'verify', 1), payload: JSON.stringify({ kind: 'task', repository: 'acme/board', request: 'Write the requirements', agent: 'verify', requestedBy: 'p' }), ...o })
+
+  it('the specialist the task was started with, never the worker that committed for it (test-2: "Agent: Verification")', () => {
+    // the delegated worker pushed last to its specialist's branch: the change is still the Verification specialist's
+    const worker = { ...row('job-w', 'claude/task-reqs', 'task', 'worker', 2), parentJob: 'job-v' }
+    const [c] = traceChanges([pr(1, 'claude/task-reqs')], [verifyTask(), worker], RULE)
+    expect(c?.job.id).toBe('job-v')
+    expect(fromWords(c?.job ?? null, AGENT_WORDS)).toBe('the Verification specialist')
+    expect(jobsByBranch([verifyTask(), worker]).get('claude/task-reqs')?.id).toBe('job-v')
+  })
+
+  it('the pick, when the router moved the job to another specialist, saying where it ran', () => {
+    expect(fromWords(verifyTask({ agent: 'impl' }), AGENT_WORDS)).toBe('the Verification specialist (routed to the Implementation specialist)')
+    expect(creditedAgent(verifyTask({ agent: 'impl' }))).toBe('verify')
+    // no pick (routed by trace): the specialist it ran as
+    expect(fromWords({ ...row('j', 'claude/x', 'task', 'impl'), payload: JSON.stringify({ kind: 'task', request: 'x' }) }, AGENT_WORDS)).toBe('the Implementation specialist')
+    expect(fromWords(row('j', 'claude/x', 'sweep', 'sweep'), AGENT_WORDS)).toBe('a trace job')
   })
 })
 
