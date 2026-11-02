@@ -91,6 +91,9 @@ describe('reading the API\'s answers', () => {
         { drafting: { state: 'stopped', job: { id: 'h.job-1', state: 'lost', error: null }, why: 'It is lost.' } })
       expect(j.next.action).toEqual({ label: 'Draft the requirements again', call: 'requirements.draft' })
       expect(j.drafting).toEqual({ state: 'stopped', jobId: 'h.job-1', jobState: 'lost', why: 'It is lost.' })
+      // a reviewer's form of the same step reads the stage: the Define gate's page, a link, never a dead button
+      const rev = withNext({ kind: 'task', belongs_to: 'contributors', yours: false, summary: 'x', button: 'Read the stage', ref: { kind: 'gate', id: 'define' } })
+      expect(rev.next.action).toEqual({ label: 'Read the stage', to: '/p/acme~answers/gates/define' })
       expect(withNext({ kind: 'working', belongs_to: 'trace', yours: false, summary: 'trace is drafting the requirements from your intent.', button: 'Watch', ref: null, job_id: 'h.job-2' }).next.jobId).toBe('h.job-2')
     })
   })

@@ -98,7 +98,9 @@ export function NextStepCard({ step, part, run, place, onAccept, accepting, chil
       )}
       {(action || step.secondary || onAccept) && (
         <div className="mt-5 flex flex-wrap gap-2">
-          {!reviewer && step.action?.call && callButton ? callButton : action && (
+          {/* an action the button calls needs the screen's button; without one (a reviewer) nothing is drawn rather than
+              a button that does nothing */}
+          {!reviewer && step.action?.call && callButton ? callButton : action && (action.to || !step.action?.call) && (
             <Button asChild={!!action.to} variant={yours ? 'default' : 'outline'} size="lg">
               {action.to ? <Link to={action.to}>{action.label}</Link> : <span>{action.label}</span>}
             </Button>

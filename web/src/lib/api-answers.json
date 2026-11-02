@@ -1182,11 +1182,6 @@
         }
       ],
       "firmware_track": false,
-      "drafting": {
-        "state": "done",
-        "job": null,
-        "why": null
-      },
       "jobs": [
         {
           "id": "trace-api-f05f4f8f-0123456789abcdef01234567.job-run",

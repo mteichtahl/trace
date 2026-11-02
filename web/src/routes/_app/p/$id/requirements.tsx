@@ -65,7 +65,7 @@ function Requirements() {
   // where drafting them from the intent stands, for the empty state (journey.get `drafting`)
   const journey = useJourney(repo)
   const projects = useProjects()
-  const write = (projects.data?.find((p) => p.repo === repo)?.part ?? 'contributor') !== 'reviewer'
+  const write = mayWrite(projects.data, repo)
   const [status, setStatus] = useState<'all' | Verdict>('all')
   const [selected, setSelected] = useState<string | null>(null)
   const url = useUrlView('requirements')
@@ -150,6 +150,11 @@ function Requirements() {
 }
 
 /** One line under the view: how much of the intent a person accepted, what no requirement covers, what is unlinked. */
+/** Whether this person may change the project: false until their projects are read, so a reviewer never sees a
+ * button meant for contributors while the list loads. */
+export const mayWrite = (projects: readonly { repo: string; part?: string | undefined }[] | undefined, repo: string): boolean =>
+  projects ? (projects.find((p) => p.repo === repo)?.part ?? 'contributor') !== 'reviewer' : false
+
 /**
  * No requirements yet, and why (journey.get `drafting`): the intent is not written; trace is drafting them (its job,
  * running); they wait in a change; or the drafting stopped (lost, failed, cancelled) and can be started again. Without

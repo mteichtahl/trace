@@ -10,7 +10,7 @@ import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextStepCard } from '@/components/next-step-card'
 import type { NextStep, RunSummary } from '@/lib/types'
-import { NoRequirements } from '@/routes/_app/p/$id/requirements'
+import { NoRequirements, mayWrite } from '@/routes/_app/p/$id/requirements'
 import { DRAFT_AGAIN, DraftAgain } from './draft-again'
 
 const calls: [string, unknown][] = []
@@ -35,6 +35,12 @@ describe('drafting the requirements again', () => {
     expect(calls).toEqual([['requirements.draft', { repo: 'acme/x' }]])
   })
 
+  it('no button until this person\'s part is known, and none for a reviewer', () => {
+    expect(mayWrite(undefined, 'acme/x')).toBe(false)
+    expect(mayWrite([{ repo: 'acme/x', part: 'reviewer' }], 'acme/x')).toBe(false)
+    expect(mayWrite([{ repo: 'acme/x', part: 'contributor' }], 'acme/x')).toBe(true)
+  })
+
   it('a reviewer is told, and not offered the button', () => {
     wrap(<NoRequirements id="acme~x" repo="acme/x" drafting={{ state: 'stopped', why: 'It is lost.' }} jobs={[]} write={false} />)
     expect(screen.queryByRole('button', { name: DRAFT_AGAIN })).toBeNull()
@@ -46,6 +52,12 @@ describe('drafting the requirements again', () => {
     expect(screen.getByText(/trace is drafting them from your intent/)).toBeInTheDocument()
     expect(screen.getByText(run.title)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: DRAFT_AGAIN })).toBeNull()
+  })
+
+  it('a step whose action is a call draws no dead button without the screen\'s (a reviewer\'s step links instead)', () => {
+    const step: NextStep = { kind: 'task', owner: 'person', summary: 'It is lost.', action: { label: DRAFT_AGAIN, call: 'requirements.draft' } }
+    wrap(<NextStepCard step={step} />)
+    expect(screen.queryByText(DRAFT_AGAIN)).toBeNull()
   })
 
   it('the next step card puts the call button in place of a link', async () => {

@@ -118,6 +118,8 @@ describe('what is published', () => {
     expect(changeOf('skill.submit')).toBe('journey')
     expect(changeOf('design.decide')).toBe('journey')
     expect(changeOf('job.control')).toBe('jobs')
+    // drafting the requirements again writes the record and starts a job: the journey (and with it the job list)
+    expect(changeOf('requirements.draft')).toBe('journey')
     expect(changeOf('policy.set')).toBe('preferences')
     expect(changeOf('skill.draft')).toBeNull()
   })

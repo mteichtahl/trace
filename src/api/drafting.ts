@@ -15,10 +15,12 @@
  * (src/api/workers.ts taskSession): the lost job's session may still be held by a runtime that stopped answering, or
  * one that lists the job as running, and asking there would start nothing.
  */
+import type { DatabaseSync } from 'node:sqlite'
 import { type JobRow, heardOf, indexedHandle, isLive } from '../core/job-index.js'
-import type { JourneyRecord, NextStep, Viewer } from '../core/journey.js'
+import { type JourneyRecord, type NextStep, type Viewer, decide } from '../core/journey.js'
 import { jobRequest } from './changes.js'
 import { type Context, label, withRecordDb } from './action-kit.js'
+import { SETTINGS_TTL_MS, cached } from './github-cache.js'
 import { requirementEvidence } from './record-read.js'
 
 /** The job Intent builder's Submit starts: the candidate requirements, drafted from the intent as the people decided it. */
@@ -30,15 +32,21 @@ export const REQUIREMENTS_FROM_INTENT = [
   'Do not change the design files.',
 ].join('\n')
 
-/** How long after Submit a drafting job not yet in the job index is taken as starting, not as missing. */
+/** How long after Submit (or a retry) a drafting job not yet in the job index is taken as starting, not as missing. */
 export const STARTING_S = 120
+
+/** The decision requirements.draft logs for each retry, with its attempt (detail.attempt) and when it was asked. */
+export const DRAFT_AGAIN_KIND = 'requirements.draft'
 
 export type DraftingState = 'intent' | 'drafting' | 'stopped' | 'drafted' | 'done'
 export interface Drafting {
   state: DraftingState
   /** the latest drafting job (the API's id), and how it ended: lost, failed, aborted; null when none was listed */
   job: { id: string; state: 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'aborted' | 'lost'; error: string | null } | null
-  /** how many drafting jobs the project's index lists: the next one is attempt `attempts + 1` */
+  /**
+   * the highest attempt recorded: in a drafting job's request (index rows) or a retry's decision (the record, which
+   * keeps every one: the index keeps only its newest finished rows). The next one is `attempts + 1`
+   */
   attempts: number
 }
 
@@ -53,17 +61,49 @@ export function draftingJobs(rows: readonly JobRow[]): JobRow[] {
 const submittedAt = (r: Pick<JourneyRecord, 'decisions'>): number | null =>
   r.decisions.find((d) => d.kind === 'skill.submitted' && d.ref === 'intent-builder')?.at ?? null
 
+/** When drafting was last asked for: the intent's Submit or a retry, the later (seconds), or null. */
+const askedAt = (r: Pick<JourneyRecord, 'decisions'>): number | null => {
+  const sent = submittedAt(r)
+  const again = r.decisions.find((d) => d.kind === DRAFT_AGAIN_KIND)?.at ?? null
+  return sent === null ? null : Math.max(sent, again ?? sent)
+}
+
+/**
+ * The highest attempt recorded: each retry's decision in the record (requirements.draft logs its attempt; the record
+ * keeps every decision, where the job index keeps only its newest finished rows, so a count of rows could repeat an
+ * attempt, and with it a session). Submit, or a drafting job listed, is attempt 1. 0 when there is neither.
+ */
+export function lastAttempt(r: Pick<JourneyRecord, 'decisions'>, rows: readonly JobRow[]): number {
+  const fromRecord = r.decisions.filter((d) => d.kind === DRAFT_AGAIN_KIND).map((d) => {
+    const a = (d.detail as { attempt?: unknown } | null)?.attempt
+    return typeof a === 'number' && Number.isInteger(a) ? a : 0
+  })
+  const first = submittedAt(r) !== null || draftingJobs(rows).length > 0 ? 1 : 0
+  return Math.max(first, ...fromRecord)
+}
+
+/**
+ * Whether the requirements need counting to say where drafting stands (draftingNow): not before the intent is
+ * submitted with no drafting job listed (that is 'intent' whatever the record holds), and not when the step it would
+ * change is not a task or trace working (a question, a gate, a change to review keep theirs). Pure.
+ */
+export function needsCount(r: Pick<JourneyRecord, 'journey' | 'decisions'>, rows: readonly JobRow[], next?: Pick<NextStep, 'kind'>): boolean {
+  if (r.journey.currentStage !== 'define') return false
+  if (next && next.kind !== 'task' && next.kind !== 'working') return false
+  return submittedAt(r) !== null || draftingJobs(rows).length > 0
+}
+
 /** Where the drafting stands, from the record, the job index and how many requirements the record holds. Pure. */
 export function draftingOf(repo: string, r: Pick<JourneyRecord, 'decisions'>, rows: readonly JobRow[], requirements: number, at: number): Drafting {
   const jobs = draftingJobs(rows)
   const last = jobs[0]
   const job: Drafting['job'] = last ? { id: indexedHandle(repo, last.session, last.id), state: last.state === 'running' && !isLive(last, at) ? 'lost' : last.state, error: last.error } : null
-  const base = { job, attempts: jobs.length }
+  const base = { job, attempts: lastAttempt(r, rows) }
   if (requirements > 0) return { state: 'done', ...base }
-  const sent = submittedAt(r)
+  const sent = askedAt(r)
   if (sent === null) return { state: 'intent', ...base }
   if (job && (job.state === 'queued' || job.state === 'running' || job.state === 'paused')) return { state: 'drafting', ...base }
-  // asked for after the last job listed (or none listed): just started, not in the index yet
+  // asked for (Submit, or a retry) after the last job listed, or none listed: just started, not in the index yet
   const lastAt = last ? last.queuedAt ?? last.startedAt ?? last.updatedAt : null
   if (at - sent < STARTING_S && (lastAt === null || lastAt < sent)) return { state: 'drafting', ...base, job: null }
   if (job?.state === 'succeeded') return { state: 'drafted', ...base }
@@ -109,7 +149,8 @@ export function draftingStep(next: NextStep, r: Pick<JourneyRecord, 'journey'>, 
     case 'stopped': return {
       kind: 'task', ...who, summary: `${why} Draft the requirements again to start it once more.`,
       why: 'Requirements review needs the requirements drafted from your intent, and nothing is drafting them now.',
-      recommendation: null, button: mine ? 'Draft the requirements again' : 'Read the stage', stage: 'define', ref: { kind: 'action', id: 'requirements.draft' }, step: null,
+      // someone who may not start it reads the stage: its gate's page, as "Read the stage" opens for a criterion
+      recommendation: null, button: mine ? 'Draft the requirements again' : 'Read the stage', stage: 'define', ref: mine ? { kind: 'action', id: 'requirements.draft' } : { kind: 'gate', id: 'define' }, step: null,
       after: 'The Verification specialist starts again from your submitted intent; you need not write it again.',
     }
     default: return next
@@ -117,21 +158,49 @@ export function draftingStep(next: NextStep, r: Pick<JourneyRecord, 'journey'>, 
 }
 
 /**
- * Where the drafting stands for journey.get and requirements.draft: in Define only (null elsewhere, or when the record's
- * requirements cannot be read: then nothing is said rather than a guess). `why`: stoppedWords.
+ * How many requirements the repository's record holds, kept per default-branch commit (ctx.deps.githubCache): one look
+ * at the default branch (short-lived, as every changes look), and the database read only when that commit is new. The
+ * person's decisions that strike one are the journey store's, so the count is made against the live record as
+ * requirementEvidence makes it, and kept with the record's version too.
  */
-export async function draftingNow(ctx: Context, repo: string, r: JourneyRecord, rows: readonly JobRow[], at = Date.now() / 1000): Promise<(Drafting & { why: string }) | null> {
-  if (r.journey.currentStage !== 'define') return null
-  const n = await withRecordDb(ctx, repo, (db) => requirementEvidence(db, r).length).catch(() => null)
+async function requirementCount(ctx: Context, repo: string, r: JourneyRecord, version: number): Promise<number> {
+  const gh = await ctx.deps.github()
+  const { sha } = await cached(ctx.deps.githubCache, repo, 'default-branch', () => gh.defaultBranch(repo))
+  return cached(ctx.deps.githubCache, repo, `requirements:${sha}:${version}`, () => withRecordDb(ctx, repo, (db) => requirementEvidence(db, r).length), SETTINGS_TTL_MS)
+}
+
+/**
+ * Where the drafting stands for journey.get and requirements.draft: in Define only. Null elsewhere, when nothing it
+ * says could change the step (needsCount: then the record is not read at all, and costs GitHub nothing), or when the
+ * record's requirements cannot be read (nothing is said rather than a guess). Before the intent is submitted, with no
+ * drafting job listed, it is 'intent' without a read. `why`: stoppedWords.
+ */
+export async function draftingNow(ctx: Context, repo: string, r: JourneyRecord, rows: readonly JobRow[], o: { at?: number; next?: Pick<NextStep, 'kind'>; version?: number } = {}): Promise<(Drafting & { why: string }) | null> {
+  const at = o.at ?? Date.now() / 1000
+  if (r.journey.currentStage !== 'define' || (o.next && o.next.kind !== 'task' && o.next.kind !== 'working')) return null
+  if (!needsCount(r, rows, o.next)) return { ...draftingOf(repo, r, rows, 0, at), why: '' }
+  const n = await requirementCount(ctx, repo, r, o.version ?? 0).catch(() => null)
   if (n === null) return null
   const d = draftingOf(repo, r, rows, n, at)
   return { ...d, why: d.state === 'stopped' ? stoppedWords(d, rows, at) : '' }
 }
 
-/** Start the drafting job (Submit, and requirements.draft with the next attempt): the jobs API's answer. */
+/**
+ * Start the drafting job (Submit, and requirements.draft with the next attempt): the jobs API's answer. `attempt` names
+ * its session only (src/api/workers.ts taskSession); the worker is sent the task as Submit sends it, and the attempt is
+ * kept in the record by logRetry.
+ */
 export async function draftRequirements(ctx: Context, repo: string, attempt = 1): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined }> {
   return (await ctx.deps.jobs()).startJob({
     kind: 'task', repository: repo, request: REQUIREMENTS_FROM_INTENT, agent: 'verify', requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub,
     ...(attempt > 1 ? { attempt } : {}),
+  })
+}
+
+/** Log a retry in the record (requirements.draft), with its attempt: the next look's grace and attempt count from it. */
+export function logRetry(db: DatabaseSync, o: { attempt: number; by: string; jobId: string | null }): void {
+  decide(db, {
+    kind: DRAFT_AGAIN_KIND, stage: 'define', ref: o.jobId, by: o.by,
+    summary: `${o.by} asked trace to draft the requirements again (attempt ${o.attempt}).`, detail: { attempt: o.attempt },
   })
 }

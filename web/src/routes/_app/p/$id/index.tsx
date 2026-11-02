@@ -113,7 +113,7 @@ function Overview() {
             onAccept={canAccept ? () => actions.accept.mutate({ number: change.data!.number, head: change.data!.head.sha, title: change.data!.title, step: place }) : undefined}
             accepting={actions.accept.isPending}
             resume={draft ? { label: continueText(draft), to: `/p/${id}/do/${draft.skill}` } : undefined}
-            callButton={d.next.action?.call === 'requirements.draft' && write ? <DraftAgain repo={repo} size="lg" /> : undefined}
+            callButton={d.next.action?.call === 'requirements.draft' && projects.data !== undefined && write ? <DraftAgain repo={repo} size="lg" /> : undefined}
           />
 
           <ChangesFromTrace repo={repo} unavailable={d.changesUnavailable} />
@@ -165,7 +165,7 @@ function Overview() {
                 {lostJobs.map((r) => (
                   <div key={r.id}>
                     <RunLine run={r} />
-                    {write && d.drafting?.state === 'stopped' && d.drafting.jobId === r.id && <DraftAgain repo={repo} variant="outline" className="mx-5 mb-4" />}
+                    {projects.data !== undefined && write && d.drafting?.state === 'stopped' && d.drafting.jobId === r.id && <DraftAgain repo={repo} variant="outline" className="mx-5 mb-4" />}
                   </div>
                 ))}
               </div>

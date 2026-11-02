@@ -3,7 +3,7 @@
  * Verification agent drafting the candidate requirements that open Requirements review (docs/user-journey.md,
  * Intent builder: "What it produces"). When the job cannot start, the submission still stands and says why.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -14,11 +14,13 @@ import { AccessDenied, assign, seen } from '../../src/core/access.js'
 import { putJob } from '../../src/core/job-index.js'
 import { projectHash, projectSlug } from '../../src/core/project.js'
 import { backendFor } from '../../src/core/central.js'
-import { startJourney } from '../../src/core/journey.js'
+import { type JourneyRecord, type NextStep, startJourney } from '../../src/core/journey.js'
 import { Registry } from '../../src/core/registry.js'
 import { openProject } from '../../src/core/store.js'
 import { DesignDb } from '../../src/tools/design/db.js'
-import '../../src/tools/verify/db.js'
+import { VerifyDb } from '../../src/tools/verify/db.js'
+import { draftingOf, draftingStep, needsCount } from '../../src/api/drafting.js'
+import { GitHubCache } from '../../src/api/github-cache.js'
 import { FakeCognito, FakeGitHub } from './fixtures.js'
 
 const ADMIN = { sub: 'i-admin', email: 'i-admin@example.com', groups: ['trace-admins'] }
@@ -89,7 +91,10 @@ const journey = async (who: Context['principal'] = USER) => await run(who, 'jour
 
 describe('the next step before the requirements exist', () => {
   it('is to write the intent in the Intent builder, not to accept requirements that do not exist', async () => {
+    const calls = github.calls.length
     const j = await journey()
+    // nothing submitted and no drafting job: the step is the intent whatever the record holds, so it is not read
+    expect(github.calls.slice(calls)).toEqual([])
     expect(j.next).toMatchObject({ kind: 'task', summary: 'Define: Write the product intent in the Intent builder.', button: 'Open the Intent builder', ref: { kind: 'skill', id: 'intent-builder' } })
     expect(j.next.summary).not.toMatch(/accepted or struck/)
     expect(j.drafting).toMatchObject({ state: 'intent', job: null })
@@ -162,11 +167,86 @@ describe('after Submit, until the requirements are drafted', () => {
     expect(r).toMatchObject({ attempt: 2, started: [expect.stringMatching(/drafts the candidate requirements again/)] })
   })
 
-  it('a failed job is drafted again too; a finished one waits in its change', async () => {
-    await draftingRow('job-draft-1', { state: 'failed', endedAt: at() - 30, error: 'the runtime ran out of memory' })
+  it('a second press before the new job is listed is refused, not started again in the same session', async () => {
+    // the retry is logged with its time: until its job is in the index, the grace counts from it (not from Submit)
+    expect((await journey()).drafting?.state).toBe('drafting')
+    started.length = 0
+    await expect(run(USER, 'requirements.draft', { repo: REPO })).rejects.toThrow(/drafting the requirements already/)
+    expect(started).toEqual([])
+  })
+
+  it('a failed job is drafted again too, as the next attempt recorded even after the index dropped older rows', async () => {
+    // the second attempt's job, listed after the retry, and the first one's row pruned from the index (it keeps only its
+    // newest finished rows): a count of rows would say 1 and repeat attempt 2 and its session
+    await jobIndex({ principal: ADMIN, deps }, REPO).update((d) => { d.prepare("DELETE FROM jobs WHERE id='job-draft-1'").run(); return { result: null } })
+    await draftingRow('job-draft-2', { state: 'failed', queuedAt: at() + 1, startedAt: at() + 1, endedAt: at() + 2, error: 'the runtime ran out of memory' })
     expect((await journey()).drafting).toMatchObject({ state: 'stopped', why: 'The Verification specialist could not draft the requirements: the runtime ran out of memory.' })
-    await draftingRow('job-draft-1', { state: 'succeeded', endedAt: at() - 30 })
+    started.length = 0
+    const r = await run(USER, 'requirements.draft', { repo: REPO }) as { attempt: number }
+    expect(r.attempt).toBe(3)
+    expect(started[0]).toMatchObject({ attempt: 3 })
+  })
+
+  it('a finished one waits in its change', async () => {
+    await draftingRow('job-draft-3', { state: 'succeeded', queuedAt: at() + 3, startedAt: at() + 3, endedAt: at() + 4 })
     expect((await journey()).drafting?.state).toBe('drafted')
     await expect(run(USER, 'requirements.draft', { repo: REPO })).rejects.toThrow(/wait in a change/)
+  })
+
+  it('once the requirements are in the record, journey.get reads them once per default-branch commit, not on every look', async () => {
+    // the drafted requirements merged into the default branch's record
+    const dir = mkdtempSync(join(scratch, 'reqs-'))
+    writeFileSync(join(dir, 'project.db'), github.files.get(`${REPO}:main:.trace/project.db`) as Uint8Array)
+    mkdirSync(join(dir, '.git'))
+    mkdirSync(join(dir, '.trace'))
+    writeFileSync(join(dir, '.trace', 'project.db'), readFileSync(join(dir, 'project.db')))
+    const v = new VerifyDb(dir)
+    v.addRequirement({ id: 'R1', text: 'The LED flashes at 0.5 Hz.', kind: 'functional', acceptance: '0.5 Hz ± 10 %', status: 'proposed' })
+    v.close()
+    github.files.set(`${REPO}:main:.trace/project.db`, readFileSync(join(dir, '.trace', 'project.db')))
+    const cache = { principal: USER, deps: { ...deps, githubCache: new GitHubCache() } }
+    const look = async () => (await perform('journey.get', { repo: REPO }, cache)).result as { next: Next; drafting?: { state: string } }
+    const before = github.calls.length
+    const first = await look()
+    expect(first.drafting?.state).toBe('done')
+    // with requirements, the gate's own step: Requirements review, not drafting
+    expect(first.next).toMatchObject({ kind: 'task', ref: { kind: 'criterion', id: 'define.accepted' } })
+    const once = github.calls.length - before
+    expect(once).toBeGreaterThan(0)
+    await look()
+    await look()
+    // the default branch and the record were read for the first look only
+    expect(github.calls.length - before).toBe(once)
+  })
+})
+
+describe('where nothing about drafting could change the step, the record is not read', () => {
+  const rec = (o: { start?: 'idea' | 'import'; stage?: string; submitted?: boolean }) => ({
+    journey: { currentStage: o.stage ?? 'define', start: o.start ?? 'idea' },
+    decisions: o.submitted ? [{ id: 'd', at: 1, kind: 'skill.submitted', stage: 'define', ref: 'intent-builder', summary: '', by: null, detail: null }] : [],
+  }) as unknown as JourneyRecord
+  const task = { kind: 'task', belongs_to: 'you', yours: true, summary: 'Define: Every requirement is accepted or struck.', why: 'x', recommendation: null, button: 'Continue', stage: 'define', ref: { kind: 'criterion', id: 'define.accepted' }, step: null, after: null } as NextStep
+  const viewer = { hash: 'h', label: 'u', admin: false, part: 'contributor' } as const
+
+  it('before Submit with no drafting job, in another stage, or when the step is a question or a gate', () => {
+    expect(needsCount(rec({}), [])).toBe(false)
+    expect(needsCount(rec({ submitted: true }), [])).toBe(true)
+    expect(needsCount(rec({ submitted: true, stage: 'architect' }), [])).toBe(false)
+    expect(needsCount(rec({ submitted: true }), [], { kind: 'gate' })).toBe(false)
+    expect(needsCount(rec({ submitted: true }), [], { kind: 'answer' })).toBe(false)
+  })
+
+  it('an imported project in Define keeps its own next step: its requirements come from the import', () => {
+    const d = draftingOf(REPO, rec({ start: 'import' }), [], 0, 1000)
+    expect(d.state).toBe('intent')
+    expect(draftingStep(task, rec({ start: 'import' }), d, viewer, '')).toBe(task)
+    // the same record started from an idea is sent to the Intent builder
+    expect(draftingStep(task, rec({}), d, viewer, '').ref).toEqual({ kind: 'skill', id: 'intent-builder' })
+  })
+
+  it('a reviewer\'s "Read the stage" for a stopped drafting opens the stage\'s gate, never a dead button', () => {
+    const d = { state: 'stopped' as const, job: null, attempts: 1 }
+    expect(draftingStep(task, rec({ submitted: true }), d, { ...viewer, part: 'reviewer' }, 'It is lost.')).toMatchObject({ button: 'Read the stage', ref: { kind: 'gate', id: 'define' } })
+    expect(draftingStep(task, rec({ submitted: true }), d, viewer, 'It is lost.')).toMatchObject({ ref: { kind: 'action', id: 'requirements.draft' } })
   })
 })
