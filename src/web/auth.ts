@@ -60,7 +60,9 @@ const Respond = z.object({
   email: Email,
   session: z.string().min(1).max(8192),
   kind: Kind,
-  answer: z.union([z.string().max(4096), z.record(z.string(), z.unknown())]).optional(),
+  // the app sends null for "no answer yet" (the first passkey step: web/src/routes/sign-in, skills/reauth.ts): the
+  // same as leaving it out. Refused, a passkey sign-in or a gate's passkey re-check failed with "Invalid input"
+  answer: z.union([z.string().max(4096), z.record(z.string(), z.unknown())]).nullish().transform((a) => a ?? undefined),
 })
 const Forgot = z.object({ email: Email })
 const Reset = z.object({ email: Email, code: z.string().trim().min(1).max(32), password: z.string().min(1).max(256) })
