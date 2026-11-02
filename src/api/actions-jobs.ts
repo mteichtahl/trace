@@ -45,7 +45,7 @@
 import { z } from 'zod'
 import { AccessDenied, isAdmin, require_, standing } from '../core/access.js'
 import {
-  type BatchRow, type JobControl, type JobRow, JobIndexStore, STALE_AFTER_S, indexedHandle, isLive, lastWords, loadBatch, loadControls, loadJobs, moveUpOrder, putControl, queueOrder, typicalSeconds,
+  type BatchRow, type JobControl, type JobRow, JobIndexStore, STALE_AFTER_S, heardOf, indexedHandle, isLive, lastWords, loadBatch, loadControls, loadJobs, moveUpOrder, putControl, queueOrder, typicalSeconds,
 } from '../core/job-index.js'
 import { type AgentFacts, type JourneyRecord, loadJourney } from '../core/journey.js'
 import { type HandoffView, declineHandoff, handoffViews } from '../core/handoffs.js'
@@ -80,6 +80,11 @@ export interface IndexedJob extends JobView {
   queue: { position: number; of: number; startsWhen: string } | null
   parentJob: string | null; resumeOf: string | null; resumedBy: string | null; summary: string | null; error: string | null
   pausedBy: string | null; pausedAt: string | null
+  /**
+   * running: when trace last heard from it (its heartbeat), when that is late (a beat missed: overdue) and when it is
+   * declared lost if it stays silent. A screen that has not looked since tells a silent job from a running one by these
+   */
+  heard: { at: string; overdueAt: string; lostAt: string } | null
   /** a hand-off job: the hand-off it answers and who asked (its title says so too: "Asked by the … specialist: …") */
   handoff: { id: string; from: string | null; fromName: string | null } | null
   controls: JobOp[]
@@ -154,6 +159,7 @@ export function jobViews(repo: string, rows: readonly JobRow[], controls: Readon
       typicalS: typicalSeconds(rows, j.kind, j.agent), where: j.where, branch: j.branch, queue,
       parentJob: j.parentJob, resumeOf: j.resumeOf, resumedBy: j.resumedBy, summary: j.summary, error: lost ? [`${LOST}.`, lastWords(j)].filter(Boolean).join(' ') : j.error,
       pausedBy: j.pausedBy, pausedAt: iso(j.pausedAt),
+      heard: state === 'running' ? (({ heardAt, overdueAt, lostAt }) => ({ at: iso(heardAt) as string, overdueAt: iso(overdueAt) as string, lostAt: iso(lostAt) as string }))(heardOf(j)) : null,
       handoff: j.handoff ? handoffOf(j) : null,
       controls: controlsOf({ ...j, held: Boolean(c?.held), discarded, lost, first }, o),
     })

@@ -618,7 +618,8 @@ describe('journey.get with changes open', () => {
   it('GitHub unreachable: the journey is answered without changes, and says so', async () => {
     github.down = true
     const j = await run(USER, 'journey.get', { repo: REPO })
-    expect(j.next).toMatchObject({ kind: 'task', ref: { kind: 'criterion', id: 'define.accepted' } })
+    // no change to review: Define with no requirements and no intent submitted starts with the intent (src/api/drafting.ts)
+    expect(j.next).toMatchObject({ kind: 'task', ref: { kind: 'skill', id: 'intent-builder' } })
     const define = (j.stages as { id: string; steps: { id: string }[] }[]).find((s) => s.id === 'define')
     expect(define?.steps.some((s) => s.id.startsWith('change:'))).toBe(false)
     expect(j.changes_unavailable).toMatch(/unreachable/)

@@ -616,12 +616,15 @@ export interface NextStep {
   recommendation: string | null
   button: string
   stage: StageId | null
-  /** skill: a guided skill (src/core/skills.ts) the step opens, such as requirements-review */
-  ref: { kind: 'gate' | 'criterion' | 'question' | 'stage' | 'change' | 'skill'; id: string } | null
+  /** skill: a guided skill (src/core/skills.ts) the step opens, such as requirements-review; action: an API action the
+   * step's button calls (requirements.draft: src/api/drafting.ts) */
+  ref: { kind: 'gate' | 'criterion' | 'question' | 'stage' | 'change' | 'skill' | 'action'; id: string } | null
   /** the now-step's place among its stage's steps ("Step 3 of 5 in Capture"); null when it points at no step */
   step: { index: number; total: number } | null
   /** one sentence: what happens once this is done; null when nothing follows */
   after: string | null
+  /** trace working: the job doing it (the API's id), when one is known */
+  job_id?: string
 }
 export interface QuestionView {
   id: string; kind: 'question' | 'stuck'; asked_by: string; for_you: boolean; for: 'you' | 'person' | 'contributors' | 'admins'; stage: StageId | null

@@ -19,6 +19,7 @@ export type What = 'journey' | 'settings' | 'memory' | 'chats' | 'people' | 'pro
 const MUTATING: ReadonlyArray<readonly [string, What]> = [
   ['settings.set', 'settings'],
   ['task', 'jobs'],
+  ['requirements.draft', 'jobs'],
   ['memory.deactivate', 'memory'],
   ['memory.reactivate', 'memory'],
   ['kb.sync', 'kb'],

@@ -5,6 +5,11 @@
  * Pause stops a running job at its next safe point and keeps its work (a queued one is held); Resume carries a paused
  * job on from its branch (a held one is released); Move up takes it one place up its queue. Cancel asks once, then
  * says what was kept. Every control says what happened in a toast; what changes next arrives as a live event.
+ *
+ * A running job's view says when trace last heard from it (`heard`). A job whose runtime stops sends no event, so the
+ * line reads that against the clock rather than trusting the screen's last look: past the overdue time it says plainly
+ * that trace has not heard from it and when it will be declared lost, and past that time it shows as lost
+ * (runState), the same as the Agents page and the job index say once they look again.
  */
 import { Circle, CircleAlert, Loader2, MoreHorizontal, PauseCircle, CircleX, CircleCheck } from 'lucide-react'
 import { useState } from 'react'
@@ -14,7 +19,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { about, duration } from '@/lib/format'
+import { about, duration, time } from '@/lib/format'
 import type { RunSummary } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useNow } from './use-now'
@@ -33,7 +38,45 @@ export interface RunLineProps {
   className?: string
 }
 
+/**
+ * Where a run stands now, by the clock: a running job not heard from since its overdue time is `silent`, and one past
+ * the time it is declared lost is `lost`, whatever the screen's last look said. Pure.
+ */
+export function runState(run: Pick<RunSummary, 'state' | 'heard'>, now: number): RunSummary['state'] | 'silent' {
+  if (run.state !== 'running' || !run.heard) return run.state
+  if (now >= Date.parse(run.heard.lostAt)) return 'lost'
+  if (now >= Date.parse(run.heard.overdueAt)) return 'silent'
+  return 'running'
+}
+
+/** A run as it is now: one the clock says is lost reads as lost (no controls), with when trace last heard from it. */
+export function lostNow(r: RunSummary, st: ReturnType<typeof runState>): RunSummary {
+  if (st !== 'lost' || r.state === 'lost') return r
+  return { ...r, state: 'lost', controls: [], step: r.heard ? `trace lost contact with it: nothing heard from it since ${time(r.heard.at)}.` : 'trace lost contact with it.' }
+}
+
+/**
+ * A project's jobs as its Overview lists them, by the clock (runState): `doing` is what trace is doing (running, with a
+ * silent one saying so, and paused); `ended` the jobs lost in the last day, which are over and need attention, never
+ * shown as running. Pure.
+ */
+export function splitRuns(jobs: readonly RunSummary[], now: number): { doing: RunSummary[]; ended: RunSummary[] } {
+  const doing: RunSummary[] = []
+  const ended: RunSummary[] = []
+  for (const r of jobs) {
+    const st = runState(r, now)
+    if (st === 'running' || st === 'silent' || st === 'paused') doing.push(r)
+    else if (st === 'lost' && now - Date.parse(r.heard?.at ?? r.startedAt ?? '') < 24 * 3600_000) ended.push(lostNow(r, st))
+  }
+  return { doing, ended }
+}
+
 export function runDetail(run: RunSummary, now: number): string {
+  const st = runState(run, now)
+  if (st === 'silent' && run.heard) {
+    return `trace has not heard from it since ${time(run.heard.at)} (${duration((now - Date.parse(run.heard.at)) / 1000, { short: true })} ago). If it stays silent, it is declared lost at ${time(run.heard.lostAt)}.`
+  }
+  if (st === 'lost' && run.state === 'running' && run.heard) return `trace lost contact with it: nothing heard since ${time(run.heard.at)}.`
   if (run.state === 'queued') {
     const where = run.position ? `${run.position === 1 ? 'Next' : `Number ${run.position}`} in the queue` : 'Queued'
     return run.startsWhen ? `${where}: ${run.startsWhen}` : where
@@ -55,15 +98,16 @@ export function runDetail(run: RunSummary, now: number): string {
 export function RunLine({ run, project, onPause, onResume, onCancel, onMoveUp, onOpen, className }: RunLineProps) {
   const now = useNow(run.etaS === undefined && run.startedAt ? 1000 : 60_000)
   const [confirm, setConfirm] = useState(false)
-  const active = run.state === 'running'
-  const Icon = run.state === 'running' ? Loader2 : run.state === 'paused' || run.held ? PauseCircle : run.state === 'failed' || run.state === 'cancelled' ? CircleX : run.state === 'lost' ? CircleAlert : run.state === 'done' ? CircleCheck : Circle
+  const st = runState(run, now)
+  const active = st === 'running'
+  const Icon = st === 'running' ? Loader2 : run.state === 'paused' || run.held ? PauseCircle : run.state === 'failed' || run.state === 'cancelled' ? CircleX : st === 'lost' || st === 'silent' ? CircleAlert : run.state === 'done' ? CircleCheck : Circle
   // only what the job system can do for this job, when its view says (job.control answers ok: false for the rest)
   const can = (op: 'pause' | 'resume' | 'cancel' | 'move_up') => !run.controls || run.controls.includes(op)
   const pause = can('pause') ? onPause : undefined
   const resume = can('resume') ? onResume : undefined
   const cancelIt = can('cancel') ? onCancel : undefined
   const moveUp = can('move_up') ? onMoveUp : undefined
-  const controls = (pause || resume || cancelIt || moveUp) && (run.state === 'running' || run.state === 'queued' || run.state === 'paused')
+  const controls = (pause || resume || cancelIt || moveUp) && st !== 'lost' && (run.state === 'running' || run.state === 'queued' || run.state === 'paused')
 
   /** run one control and say what happened (or why not) */
   const act = async (what: string, fn: ((r: RunSummary) => Promise<string | void> | string | void) | undefined) => {

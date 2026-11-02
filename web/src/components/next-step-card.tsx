@@ -38,10 +38,12 @@ export interface NextStepCardProps {
   children?: ReactNode
   /** a guided skill left part-way: "Continue: Schematic finish, step 4 of 6" (Focus mode keeps drafts) */
   resume?: { label: string; to: string }
+  /** the primary action is an API action (`step.action.call`, requirements.draft): its button, given by the screen */
+  callButton?: ReactNode
   className?: string
 }
 
-export function NextStepCard({ step, part, run, place, onAccept, accepting, children, resume, className }: NextStepCardProps) {
+export function NextStepCard({ step, part, run, place, onAccept, accepting, children, resume, callButton, className }: NextStepCardProps) {
   const reviewer = part === 'reviewer' && step.reviewer
   const boxed = !reviewer && !!step.recommend
   const summary = reviewer ? step.reviewer!.summary : boxed ? (step.lead ?? step.summary) : step.summary
@@ -96,7 +98,7 @@ export function NextStepCard({ step, part, run, place, onAccept, accepting, chil
       )}
       {(action || step.secondary || onAccept) && (
         <div className="mt-5 flex flex-wrap gap-2">
-          {action && (
+          {!reviewer && step.action?.call && callButton ? callButton : action && (
             <Button asChild={!!action.to} variant={yours ? 'default' : 'outline'} size="lg">
               {action.to ? <Link to={action.to}>{action.label}</Link> : <span>{action.label}</span>}
             </Button>

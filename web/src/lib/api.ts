@@ -119,6 +119,7 @@ export interface Actions {
   /** this person's drafts on the project, newest first */
   'skill.drafts': { args: Repo; result: { drafts: { skill: string; name: string; step: number; steps: number; saved: string }[] } }
   /** submit a skill's result: refused with what is missing unless every check is met or waived */
+  'requirements.draft': { args: Repo; result: { repo: string; jobId: string; attempt: number; started: string[] } }
   'skill.submit': { args: Repo & { skill: string; draft: unknown }; result: { ok: true; id?: string; ref?: string; jobId?: string; started?: string[] } }
   /** each requirement's evidence status and the intent lines it is derived from */
   'requirements.trace': { args: Repo; result: import('./types-s1').TraceView }

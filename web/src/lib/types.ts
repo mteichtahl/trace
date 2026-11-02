@@ -188,8 +188,8 @@ export interface NextStep {
   /** the short form for Home's project rows ("you sign the schematic gate") */
   short?: string
   why?: string
-  /** primary action */
-  action?: { label: string; to?: string }
+  /** primary action: an address, or an API action the button calls (`call`: requirements.draft) */
+  action?: { label: string; to?: string; call?: string }
   secondary?: { label: string; to?: string }
   /** for kind working */
   jobId?: string
@@ -330,6 +330,8 @@ export interface RunSummary {
   endedAt?: string
   /** a job another specialist asked for: the hand-off it answers and who asked (its title says so too) */
   handoff?: { id: string; from?: string; fromName?: string }
+  /** running: when trace last heard from it, when that is late (overdue), and when it is declared lost if still silent */
+  heard?: { at: string; overdueAt: string; lostAt: string }
 }
 
 /** Where a hand-off between specialists stands (src/core/handoffs.ts). */
@@ -409,6 +411,12 @@ export interface Journey {
   hasMemory?: boolean
   /** GitHub could not be reached, so open changes are left out (journey.get `changes_unavailable`) */
   changesUnavailable?: string
+  /**
+   * Define before the requirements exist (journey.get `drafting`, src/api/drafting.ts): the intent not submitted yet,
+   * trace drafting them (its job), stopped (lost, failed, cancelled or never started: requirements.draft starts it
+   * again, `why` says what happened), drafted (waiting in a change) or done
+   */
+  drafting?: { state: 'intent' | 'drafting' | 'stopped' | 'drafted' | 'done'; jobId?: string; jobState?: string; why?: string }
   /** small summaries for the side column (assumed) */
   summary?: {
     requirements?: { accepted: number; verified: number; failing: number; untested: number }

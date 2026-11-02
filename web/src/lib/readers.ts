@@ -11,6 +11,7 @@ import type {
   HandoffState, InboxItem, Journey, Member, MeDoc, NextStep, ProjectJobs, Question, RunSummary, Stage, StageGuide, StageStep, StepOwner, StepState, Waiver,
 } from './types'
 import type { DecisionEntry, JourneyMore, ProjectIcon } from './types-s1'
+import { CRITERION_SKILLS } from './step-skills'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -43,15 +44,24 @@ function readWaiver(w: Obj): Waiver {
 }
 
 const STAGE_STATES = new Set(['done', 'current', 'queued', 'reopened', 'skipped'])
+const DRAFTING = new Set(['intent', 'drafting', 'stopped', 'drafted', 'done'])
 
-/** The address of what a next step or an inbox item is about. */
+/**
+ * The address of what a next step or an inbox item is about: where it is done. A criterion a person meets in a guided
+ * skill (lib/step-skills.ts CRITERION_SKILLS: "Every requirement is accepted or struck" is Requirements review) opens
+ * that skill; only a criterion with none (trace's own) opens its gate, where its evidence is. Signing is the gate's.
+ */
 function refTo(repo: string, ref: unknown, criteria?: Map<string, string>): string | undefined {
   if (!isObj(ref)) return undefined
   const id = String(ref.id ?? '')
   switch (ref.kind) {
     case 'gate': return `/p/${pid(repo)}/gates/${id}`
     case 'question': return `/p/${pid(repo)}/do/question-answer`
-    case 'criterion': { const g = criteria?.get(id); return g ? `/p/${pid(repo)}/gates/${g}` : undefined }
+    case 'criterion': {
+      if (CRITERION_SKILLS[id]) return `/p/${pid(repo)}/do/${CRITERION_SKILLS[id]}`
+      const g = criteria?.get(id)
+      return g ? `/p/${pid(repo)}/gates/${g}` : undefined
+    }
     case 'change': return Number(id) > 0 ? `/p/${pid(repo)}/changes/${id}` : undefined
     case 'skill': return /^[a-z][a-z0-9-]*$/.test(id) ? `/p/${pid(repo)}/do/${id}` : undefined
     default: return undefined
@@ -239,18 +249,23 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
   const kind = String(n.kind)
   const recommendation = str(n.recommendation)
   const summary = `${String(n.summary ?? '')}${recommendation && !String(n.summary ?? '').includes(recommendation) ? ` **${recommendation}**` : ''}`
-  const to = refTo(repo, n.ref, criterionGate)
+  // the step's own place: a person's criterion opens the skill it is done in, never the gate's signing page (refTo);
+  // someone who cannot do it (a reviewer: "Read the stage") reads the gate's evidence instead
+  const to = n.yours || !(isObj(n.ref) && n.ref.kind === 'criterion') ? refTo(repo, n.ref, criterionGate) : (criterionGate.get(String(n.ref.id)) ? `/p/${pid(repo)}/gates/${criterionGate.get(String(n.ref.id))}` : undefined)
   const stepAt = isObj(n.step) && Number(n.step.total) > 0 ? { index: Number(n.step.index), total: Number(n.step.total) } : null
+  // an action the button calls (requirements.draft) has no address: the card calls it (lib/next-actions.ts)
+  const act = isObj(n.ref) && n.ref.kind === 'action' && str(n.ref.id) ? String(n.ref.id) : undefined
   const next: NextStep = {
     kind: (kind === 'answer' ? 'task' : kind === 'done' ? 'none' : kind) as NextStep['kind'], owner, summary,
     ...(str(n.why) ? { why: String(n.why) } : {}),
-    ...(str(n.button) ? { action: { label: String(n.button), ...(to ? { to } : {}) } } : {}),
+    ...(str(n.button) ? { action: { label: String(n.button), ...(to ? { to } : {}), ...(act ? { call: act } : {}) } } : {}),
     // the API words the step for whoever asks, so the reading form is the same words
     reviewer: { summary, ...(str(n.button) ? { action: { label: String(n.button), ...(to ? { to } : {}) } } : {}) },
     // the guided flow's additions: the recommendation in its own box, where the step sits in its stage, what comes after
     ...(recommendation ? { lead: String(n.summary ?? ''), recommend: splitRecommendation(recommendation, str(n.why)) } : {}),
     step: stepAt, after: str(n.after) ?? null,
     ...(isObj(n.ref) ? { ref: { kind: String(n.ref.kind), id: String(n.ref.id ?? '') } } : {}),
+    ...(str(n.job_id) ? { jobId: String(n.job_id) } : {}),
   }
   const questions: Question[] = arr(raw.questions).filter((q) => !q.answered).map((q) => {
     const rec = isObj(q.recommended) ? q.recommended : null
@@ -274,6 +289,11 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
     recent: decisions.slice(0, 5).map((d) => ({ id: String(d.id), who: str(d.by) ?? 'trace', text: String(d.summary), at: String(d.at) })),
     hasMemory: Boolean(raw.has_memory),
     ...(str(raw.changes_unavailable) ? { changesUnavailable: String(raw.changes_unavailable) } : {}),
+    ...(isObj(raw.drafting) && DRAFTING.has(String(raw.drafting.state)) ? { drafting: {
+      state: String(raw.drafting.state) as NonNullable<Journey['drafting']>['state'],
+      ...(isObj(raw.drafting.job) && str(raw.drafting.job.id) ? { jobId: String(raw.drafting.job.id), jobState: String(raw.drafting.job.state) } : {}),
+      ...(str(raw.drafting.why) ? { why: String(raw.drafting.why) } : {}),
+    } } : {}),
     ...readIcon(raw.icon),
     ...(isObj(raw.build) ? { build: {
       quantity: Number(raw.build.quantity ?? 10), unit_cost: typeof raw.build.unit_cost === 'number' ? raw.build.unit_cost : null,
@@ -313,6 +333,7 @@ export function readJob(j: Obj): RunSummary {
     ...(str(j.pausedBy) ? { pausedBy: String(j.pausedBy) } : {}), ...(str(j.branch) ? { branch: String(j.branch) } : {}),
     ...(str(j.summary) ? { summary: String(j.summary) } : {}), ...(str(j.error) ? { error: String(j.error) } : {}), ...(str(j.endedAt) ? { endedAt: String(j.endedAt) } : {}),
     ...(isObj(j.handoff) && str(j.handoff.id) ? { handoff: { id: String(j.handoff.id), ...(str(j.handoff.from) ? { from: String(j.handoff.from) } : {}), ...(str(j.handoff.fromName) ? { fromName: String(j.handoff.fromName) } : {}) } } : {}),
+    ...(isObj(j.heard) && str(j.heard.at) && str(j.heard.overdueAt) && str(j.heard.lostAt) ? { heard: { at: String(j.heard.at), overdueAt: String(j.heard.overdueAt), lostAt: String(j.heard.lostAt) } } : {}),
   }
 }
 

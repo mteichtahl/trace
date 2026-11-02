@@ -12,6 +12,11 @@
  *                                    (src/api/actions-changes.ts; left out, with changes_unavailable, when GitHub
  *                                    cannot be reached).
  *                                    A project with no journey yet: { started: false } and what starts one
+ *                                    In Define before the requirements exist, the next step and `drafting` say where
+ *                                    their drafting stands (src/api/drafting.ts): write the intent, trace drafting
+ *                                    them, or drafting them again when the job stopped
+ *   requirements.draft      write    start the drafting job again (lost, failed, cancelled or never started), the same
+ *                                    request and agent as Intent builder's Submit, as a new attempt
  *   journey.criterion.open  read     record that this person opened a criterion's (or a waiver's) evidence: the Sign
  *                                    button needs every one opened by the signer. Reviewers may open evidence too
  *   gate.sign               admin    sign a gate: every criterion met or waived, every piece of evidence and every
@@ -56,10 +61,11 @@ import { recommendationOf } from './changes.js'
 import { AGENT_WORDS, jobIndex, listJobs, projectHandoffs } from './actions-jobs.js'
 import { reviewItems } from './inbox-review.js'
 import { loadJobs } from '../core/job-index.js'
-import { type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, label, plainly, snapshotJourney, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
+import { ActionError, type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, label, plainly, snapshotJourney, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { requirementEvidence } from './record-read.js'
 import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { isLive } from '../core/job-index.js'
+import { draftRequirements, draftingNow, draftingStep } from './drafting.js'
 
 const Id = z.string().min(1).max(80)
 
@@ -280,11 +286,37 @@ export const JOURNEY_ACTIONS = {
       number: c.number, title: c.title, from: c.from, criteria, ready: c.verdict === 'ready',
       recommendation: c.verdict === 'ready' ? `trace recommends accepting it. ${recommendationOf(c).why}` : null,
     })))
+    // Define before its requirements exist: the intent first, then trace drafting them, or drafting them again when the
+    // job stopped (src/api/drafting.ts); never "accept every requirement" over none
+    const drafting = jobs.error ? null : await draftingNow(ctx, repo, r, jobs.rows)
+    const next = drafting ? draftingStep(view.next, r, drafting, viewer, drafting.why) : view.next
     return {
-      repo, started: true, you: { admin: viewer.admin, part: viewer.part }, has_memory: hasMemory, ...view, next: await changedFirst(ctx, repo, r, view.next),
+      repo, started: true, you: { admin: viewer.admin, part: viewer.part }, has_memory: hasMemory, ...view, next: await changedFirst(ctx, repo, r, next),
+      ...(drafting ? { drafting: { state: drafting.state, job: drafting.job, why: drafting.why || null } } : {}),
       jobs: jobs.jobs, handoffs, ...(jobs.error ? { jobs_unavailable: jobs.error.slice(0, 200) } : {}),
       ...(open.error ? { changes_unavailable: open.error.slice(0, 200) } : {}),
     }
+  }),
+
+  // the drafting job stopped (lost, failed, cancelled, or never started) with the intent submitted and no requirements:
+  // start it again, as Submit did (src/api/drafting.ts), as a new attempt. Refused, in words, while it is not stopped
+  'requirements.draft': def('write', Repo, async ({ repo }, ctx) => {
+    const [r, list] = await Promise.all([withJourneyDb(ctx, repo, (db) => loadJourney(db)), listJobs(ctx, repo)])
+    if (!r) throw new ActionError('This project has not started its journey yet.')
+    const d = await draftingNow(ctx, repo, r, list.rows)
+    if (!d) throw new ActionError(r.journey.currentStage === 'define' ? 'trace could not read the requirements just now, so it does not start drafting them again. Try again in a minute.' : 'The requirements are drafted already: the project is past Define.')
+    if (d.state !== 'stopped') {
+      throw new ActionError({
+        intent: 'Write and submit the intent in the Intent builder first: trace drafts the requirements from it.',
+        drafting: 'trace is drafting the requirements already.',
+        drafted: 'The requirements are drafted: they wait in a change from the Verification specialist. Accept it to bring them into Requirements review.',
+        done: 'The requirements are in the record: decide them in Requirements review.',
+        stopped: '',
+      }[d.state])
+    }
+    const s = await draftRequirements(ctx, repo, d.attempts + 1)
+    if (!s.accepted) throw new ActionError(`trace could not start drafting the requirements: ${s.reason ?? 'it did not accept the job'}.`)
+    return { repo, jobId: s.jobId, attempt: d.attempts + 1, started: ['The Verification agent drafts the candidate requirements again, from your submitted intent.'] }
   }),
 
   'journey.criterion.open': def('read', Repo.extend({ criterion: Id.optional(), waiver: Id.optional() }).refine((a) => Boolean(a.criterion) !== Boolean(a.waiver), 'name a criterion or a waiver'), async (a, ctx) => {

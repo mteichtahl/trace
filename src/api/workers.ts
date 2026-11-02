@@ -50,10 +50,17 @@ const HANDLE = /^(trace-api-[0-9a-f]{8}-[0-9a-f]{24})\.([A-Za-z0-9_-]{1,64})$/
  */
 const INDEXED = /^p([0-9a-f]{8})\.([A-Za-z0-9_-]{33,256})?\.([A-Za-z0-9_-]{1,64})$/
 
-/** The AgentCore session a task runs in: one per project, agent and request. */
-export function taskSession(t: Pick<TaskJob, 'repository' | 'request' | 'agent' | 'branch'>): string {
+/**
+ * The AgentCore session a task runs in: one per project, agent and request. `attempt` (2 and up) is a fresh session
+ * for the same request asked again after its job was lost or failed: a lost job's session may still be held by a
+ * microVM that stopped answering, or by one whose runtime still lists the job as running (it answers "already
+ * running" with the lost job's id), so asking again in the same session would start nothing. The first attempt's
+ * session is the one it always was.
+ */
+export function taskSession(t: Pick<TaskJob, 'repository' | 'request' | 'agent' | 'branch'> & { attempt?: number | undefined }): string {
   const slug = projectSlug(t.repository)
-  const h = createHash('sha256').update(`${slug}\n${t.agent ?? 'auto'}\n${t.branch ?? ''}\n${t.request}`).digest('hex').slice(0, 24)
+  const again = t.attempt && t.attempt > 1 ? `\nattempt ${t.attempt}` : ''
+  const h = createHash('sha256').update(`${slug}\n${t.agent ?? 'auto'}\n${t.branch ?? ''}\n${t.request}${again}`).digest('hex').slice(0, 24)
   return `trace-api-${projectHash(slug)}-${h}`
 }
 
@@ -134,10 +141,11 @@ export function remoteJobs(o: RemoteJobsOptions): JobsApi {
       const h = parseHandle(handle)
       return h ? byHash.get(h.hash) ?? null : null
     },
-    async startJob(payload) {
+    async startJob({ attempt, ...payload }) {
       const slug = projectSlug(payload.repository)
-      // a resumed task runs on the paused one's branch: a session of its own (branch is part of the session's hash)
-      const session = taskSession(payload)
+      // a resumed task runs on the paused one's branch: a session of its own (branch is part of the session's hash);
+      // the attempt names the session only, the worker is sent the task as it is
+      const session = taskSession({ ...payload, attempt })
       const r = AcceptedSchema.parse(await invoke(payload, session, opts(slug)))
       return { ...r, jobId: jobHandle(session, r.jobId) }
     },

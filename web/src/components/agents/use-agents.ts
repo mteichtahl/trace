@@ -8,6 +8,7 @@
  */
 import { useQueries } from '@tanstack/react-query'
 import { useMemo } from 'react'
+import { lostNow, runState } from '@/components/run-line'
 import { projectName } from '@/lib/api'
 import { q, useProjects } from '@/lib/queries'
 import type { AgentState, Handoff, RunSummary } from '@/lib/types'
@@ -133,12 +134,16 @@ export function useWork() {
   // the hand-offs between agents on every project: open ones first, then the newest
   const handoffs: HandoffItem[] = repos.flatMap((repo, i) => (lists[i]?.data?.handoffs ?? []).map((handoff) => ({ repo, project: projectName(repo), handoff })))
     .sort((a, b) => Number(isOpenHandoff(b.handoff)) - Number(isOpenHandoff(a.handoff)) || b.handoff.createdAt.localeCompare(a.handoff.createdAt))
+  // by the clock, as the project's Overview reads them (run-line.tsx runState): a running job silent past the time it is
+  // declared lost is lost here too, without waiting for the next look
+  const now = Date.now()
+  const at = items.map((x) => { const st = runState(x.run, now); return { ...x, run: lostNow(x.run, st), st } })
   return {
     handoffs,
-    running: items.filter((x) => x.run.state === 'running' || x.run.state === 'paused'),
-    queued: items.filter((x) => x.run.state === 'queued'),
+    running: at.filter((x) => x.st === 'running' || x.st === 'silent' || x.st === 'paused').map(({ st: _s, ...x }) => x),
+    queued: at.filter((x) => x.st === 'queued').map(({ st: _s, ...x }) => x),
     /** the jobs that ended (done, failed, cancelled) or were lost, newest first: how each went */
-    ended: items.filter((x) => x.run.state !== 'running' && x.run.state !== 'paused' && x.run.state !== 'queued')
+    ended: at.filter((x) => x.st !== 'running' && x.st !== 'silent' && x.st !== 'paused' && x.st !== 'queued').map(({ st: _s, ...x }) => x)
       .sort((a, b) => (b.run.endedAt ?? b.run.startedAt ?? '').localeCompare(a.run.endedAt ?? a.run.startedAt ?? '')),
     agents: mergeAgents(per),
     write: new Set((projects.data ?? []).filter((p) => (p.part ?? 'contributor') !== 'reviewer').map((p) => p.repo)),

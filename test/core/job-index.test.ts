@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 import { agentViews, cannot, controlsOf, jobViews } from '../../src/api/actions-jobs.js'
 import {
-  type JobControl, type JobRow, STALE_AFTER_S, applyJobIndexSchema, changedSince, indexedHandle, isLive, loadControls, loadJobs, mayStart, moveUpOrder, pruneJobs, putControl,
+  type JobControl, type JobRow, OVERDUE_AFTER_S, STALE_AFTER_S, applyJobIndexSchema, changedSince, indexedHandle, isLive, loadControls, loadJobs, mayStart, moveUpOrder, pruneJobs, putControl,
   putJob, queueOrder, typicalSeconds, lastWords, tailOf, TAIL_LINES,
 } from '../../src/core/job-index.js'
 import { projectHash } from '../../src/core/project.js'
@@ -121,7 +121,12 @@ describe('the views', () => {
     expect(by('run')).toMatchObject({ id: `${SESSION}.run`, state: 'running', yours: true, step: 'running ERC', controls: ['pause', 'cancel'], agentName: 'Verification' })
     expect(by('q1')).toMatchObject({ state: 'queued', queue: { position: 1, of: 2, startsWhen: expect.stringMatching(/already working/) }, controls: ['pause', 'cancel'] })
     expect(by('q2')).toMatchObject({ held: true, queue: { position: 2, startsWhen: 'held by n@example.com: it starts when someone resumes it' }, controls: ['resume', 'move_up', 'cancel'] })
-    expect(by('lost')).toMatchObject({ state: 'lost', controls: [], step: expect.stringMatching(/lost contact/) })
+    expect(by('lost')).toMatchObject({ state: 'lost', controls: [], step: expect.stringMatching(/lost contact/), heard: null })
+    // a running job says when trace last heard from it, when that is late and when it would be declared lost, so a
+    // screen tells silence from work by the clock (the Overview and the Agents page agree): 6 and 15 minutes after
+    const iso = (t: number) => new Date(t * 1000).toISOString()
+    expect(by('run')?.heard).toEqual({ at: iso(AT - 5), overdueAt: iso(AT - 5 + OVERDUE_AFTER_S), lostAt: iso(AT - 5 + STALE_AFTER_S) })
+    expect(OVERDUE_AFTER_S).toBeLessThan(STALE_AFTER_S)
     // what it was doing and how full its memory was at its last word: why it went silent, where people and trace look
     expect(by('lost')?.error).toMatch(/Its last lines: "cloning" · "running the impl specialist" · "tool: parts.search TLC555"\. Its microVM had 7900 of 8192 MB of memory in use at its last word \(96 %\)\./)
     expect(by('p')).toMatchObject({ state: 'paused', controls: ['resume', 'cancel'], pausedBy: 'n@example.com' })
