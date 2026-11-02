@@ -173,6 +173,7 @@ One token does everything. On each repository it needs:
 | Secrets, Variables: read and write | Its `TRACE_TOKEN` secret and variables | Refused for that repository, unless an admin token is given |
 | Administration: read and write | Its settings and the "trace" ruleset; with the token as CodeBuild's credential, CodeBuild registering each job's runner | Settings and ruleset left alone; with the token as CodeBuild's credential the preflight stops: its runner can't be made |
 | Webhooks, Commit statuses: read and write | With the token as CodeBuild's credential, its runner's workflow-job webhook; and the web app's live updates from GitHub | The same (a GitHub connection needs neither); live updates are a warning, and its screens look again every 60 s |
+| Checks: read | Reading a change's checks, so a person can accept it in the web app once they pass | Changes can't be accepted in the app: each says the token may not read checks |
 | Deployments: read | The project's last deploy in its status (the app and chat) | Its status says the last deploy is unreadable; the rest still shows |
 | Email addresses: read (account) | The first administrator's email | The email is asked for |
 

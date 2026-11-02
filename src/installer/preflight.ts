@@ -336,7 +336,7 @@ export async function preflight(input: PreflightInput, d: PreflightDeps, onProgr
   }
   if (facts.sourceAdmin) add({ id: 'images.publish', status: 'info', title: 'Publishing', detail: `the token administers ${SOURCE}, so this install also publishes trace's images (ECR Public in us-east-1, all by API) and starts the first release; Advanced turns it off` })
   if (source.ok && !source.v.ok) add({ id: 'github.source', status: 'warn', title: 'trace\'s actions', detail: source.v.detail, ...(source.v.canFix ? { action: { id: 'share-source' as FixAction, label: `Share ${SOURCE}'s actions` } } : {}) })
-  const repos = info && input.repos.length ? await track('repos', () => mapLimit(input.repos, 6, (r) => d.repo(r, info?.kind ?? 'unknown').catch((e: unknown): RepoAccess => ({ repo: r, visible: false, configure: false, administer: false, webhooks: false, missing: [msg(e)] })))) : []
+  const repos = info && input.repos.length ? await track('repos', () => mapLimit(input.repos, 6, (r) => d.repo(r, info?.kind ?? 'unknown').catch((e: unknown): RepoAccess => ({ repo: r, visible: false, configure: false, administer: false, webhooks: false, checks: false, missing: [msg(e)] })))) : []
   for (const a of repos) {
     const note = accessNote(a)
     if (!note) { add({ id: `github.repo:${a.repo}`, status: 'ok', title: a.repo, detail: 'the token can configure it, apply its settings and give it a CodeBuild runner' }); continue }

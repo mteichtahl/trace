@@ -157,7 +157,7 @@ async function traceChange(ctx: Context, gh: ReturnType<typeof changesApi>, repo
   return { pull, job, rule }
 }
 
-const factsOf = (p: Pick<PullDetail, 'state' | 'draft' | 'mergeable'>, checks: PullStatus['checks']): ChangeFacts => ({ state: p.state, draft: p.draft, mergeable: p.mergeable, checks })
+const factsOf = (p: Pick<PullDetail, 'state' | 'draft' | 'mergeable'>, checks: PullStatus['checks'], denied = false): ChangeFacts => ({ state: p.state, draft: p.draft, mergeable: p.mergeable, checks, ...(denied ? { checks_denied: true } : {}) })
 
 /**
  * The open changes, oldest first, each with the gate criteria its job named (where its step goes in the journey) and
@@ -195,7 +195,7 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   ])
   const hold = rule.hold
   const sum = changeSummary({ repo, pull: { ...pull, labels: pull.labels }, job, status, hold, agentWords: AGENT_WORDS })
-  const facts = factsOf(pull, status?.checks ?? null)
+  const facts = factsOf(pull, status?.checks ?? null, status?.checks_denied ?? false)
   const checksList = (runs ?? []).map((c) => ({ name: c.name, state: checkState(c), summary: c.summary }))
   const requirements = requirementIds(pull.title, pull.body, ...commits)
   const passed = checksList.filter((c) => c.state === 'passed').map((c) => c.name)

@@ -29,6 +29,8 @@ export interface PullStatus {
   mergeable: string; head: string; sha: string; updated_at: string
   /** the head commit's check runs, by how they stand (null: GitHub would not list them) */
   checks: { total: number; passed: number; failed: number; running: number; skipped: number; failing: string[] } | null
+  /** GitHub refused to list them (403): the token lacks "Checks: read" (a fine-grained token's permission) */
+  checks_denied?: boolean
 }
 
 /** One pull request as the review page needs it: PullStatus's facts plus what it says and where it goes. */
@@ -305,14 +307,17 @@ export class HttpGitHub implements GitHubApi {
     if (!r.ok) throw new GitHubError(r.status, `GitHub GET pull ${number}: ${r.status}`)
     const p = PullFull.parse(await r.json())
     let checks: PullStatus['checks'] = null
+    let denied = false
     try {
       checks = checksOf(z.object({ check_runs: z.array(CheckRun) }).loose().parse(await this.json('GET', `${this.p(repo)}/commits/${p.head.sha}/check-runs?per_page=100`)).check_runs)
-    } catch {
-      // the token may not read checks: the pull request's own state is still worth showing
+    } catch (e) {
+      // the token may not read checks: the pull request's own state is still worth showing, and a refusal is said as one
+      denied = e instanceof GitHubError && e.status === 403
     }
     return {
       number: p.number, title: p.title, url: p.html_url, state: p.merged_at ? 'merged' : p.state === 'closed' ? 'closed' : 'open', draft: p.draft ?? false,
       mergeable: p.mergeable_state ?? 'unknown', head: p.head.ref, sha: p.head.sha, updated_at: p.updated_at, checks,
+      ...(denied ? { checks_denied: true } : {}),
     }
   }
 

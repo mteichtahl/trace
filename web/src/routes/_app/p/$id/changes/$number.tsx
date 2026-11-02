@@ -187,7 +187,7 @@ function Checks({ d }: { d: ChangeDetail }) {
     <section className="rounded-xl border bg-card p-5" aria-labelledby="checks">
       <h3 id="checks" className="section-label">Checks · {checksWords(d.checks)}</h3>
       {list.length === 0 ? (
-        <p className="mt-2 flex items-center gap-2 text-sm text-muted-foreground"><CircleDashed className="size-4" aria-hidden />No checks have run yet.</p>
+        <p className="mt-2 flex items-center gap-2 text-sm text-muted-foreground"><CircleDashed className="size-4" aria-hidden />{d.checks === null ? 'trace could not read the checks.' : 'No checks have run yet.'}</p>
       ) : (
         <ul className="mt-2 space-y-1.5 text-sm">
           {shown.map((k) => {

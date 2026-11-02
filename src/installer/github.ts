@@ -160,6 +160,8 @@ export interface RepoAccess {
   administer: boolean
   /** CodeBuild's webhook (Webhooks) */
   webhooks: boolean
+  /** the check runs on its commits (Checks: read): accepting a change in the app needs them */
+  checks: boolean
   /** each missing permission, said the way GitHub's token settings say it */
   missing: string[]
 }
@@ -175,16 +177,23 @@ export async function repoAccess(token: string, repo: string, kind: TokenInfo['k
     try { await gh.request('GET', path, z.unknown()); return true } catch (e) { if (e instanceof GithubError && [403, 404].includes(e.status)) return false; throw e }
   }
   let perms: { admin?: boolean | undefined; push?: boolean | undefined } = {}
+  let branch = 'HEAD'
   try {
-    perms = (await gh.request('GET', `/repos/${repo}`, z.object({ permissions: z.object({ admin: z.boolean().optional(), push: z.boolean().optional() }).loose().optional() }).loose())).data.permissions ?? {}
+    const meta = (await gh.request('GET', `/repos/${repo}`, z.object({ default_branch: z.string().optional(), permissions: z.object({ admin: z.boolean().optional(), push: z.boolean().optional() }).loose().optional() }).loose())).data
+    perms = meta.permissions ?? {}
+    branch = meta.default_branch ?? branch
   } catch (e) {
     if (e instanceof GithubError && [403, 404].includes(e.status)) {
-      return { repo, visible: false, configure: false, administer: false, webhooks: false, missing: [kind === 'fine-grained' ? `access to ${repo} (add it under "Repository access")` : `access to ${repo}`] }
+      return { repo, visible: false, configure: false, administer: false, webhooks: false, checks: false, missing: [kind === 'fine-grained' ? `access to ${repo} (add it under "Repository access")` : `access to ${repo}`] }
     }
     throw e
   }
-  const [secrets, variables, hooks, admin] = await Promise.all([
-    ok(`/repos/${repo}/actions/secrets/public-key`), ok(`/repos/${repo}/actions/variables?per_page=1`), ok(`/repos/${repo}/hooks?per_page=1`), ok(`/repos/${repo}/actions/permissions`),
+  // check runs: a 403 is the missing permission; an empty repository (409) or no such commit (404/422) is not
+  const readsChecks = async (): Promise<boolean> => {
+    try { await gh.request('GET', `/repos/${repo}/commits/${encodeURIComponent(branch)}/check-runs?per_page=1`, z.unknown()); return true } catch (e) { if (e instanceof GithubError && e.status === 403) return false; if (e instanceof GithubError) return true; throw e }
+  }
+  const [secrets, variables, hooks, admin, checks] = await Promise.all([
+    ok(`/repos/${repo}/actions/secrets/public-key`), ok(`/repos/${repo}/actions/variables?per_page=1`), ok(`/repos/${repo}/hooks?per_page=1`), ok(`/repos/${repo}/actions/permissions`), readsChecks(),
   ])
   const missing: string[] = []
   if (kind === 'classic') {
@@ -194,8 +203,9 @@ export async function repoAccess(token: string, repo: string, kind: TokenInfo['k
     if (!variables) missing.push('Variables: read and write')
     if (!admin) missing.push('Administration: read and write')
     if (!hooks) missing.push('Webhooks: read and write')
+    if (!checks) missing.push('Checks: read')
   }
-  return { repo, visible: true, configure: secrets && variables, administer: admin && Boolean(perms.admin || kind !== 'classic'), webhooks: hooks, missing }
+  return { repo, visible: true, configure: secrets && variables, administer: admin && Boolean(perms.admin || kind !== 'classic'), webhooks: hooks, checks, missing }
 }
 
 /** What a missing permission costs, in the plan and the summary. */
@@ -209,6 +219,8 @@ export function accessNote(a: RepoAccess): string | null {
   if (!a.administer || !a.webhooks) parts.push('with the token as CodeBuild\'s GitHub credential its build runner can\'t be made (CodeBuild needs Administration and Webhooks: read and write), so the deploy fails; a GitHub connection (Advanced) needs neither')
   // the installer registers trace's own webhook with the token too (src/installer/hooks.ts): a warning, never a failure
   if (!a.webhooks) parts.push('its live updates from GitHub can\'t be registered, so its screens look again every 60 s instead')
+  // the app accepts a change only when its checks passed, and trace must be able to read them to know
+  if (!a.checks) parts.push('trace can\'t read its checks, so its changes can\'t be accepted in the web app')
   return `${a.repo}: the token lacks ${a.missing.join(', ')}: ${parts.join('; ')}.`
 }
 
