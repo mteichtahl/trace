@@ -38,8 +38,8 @@ describe('the edge stack', () => {
     const re = new RegExp(BODY_TOO_LARGE)
     for (const n of [MAX_BODY_BYTES, 9_999_999, 12_000_000, 100_000_000]) expect(re.test(String(n)), String(n)).toBe(true)
     for (const n of [0, 4 * 1024 * 1024, 4_999_999, 999_999]) expect(re.test(String(n)), String(n)).toBe(false)
-    expect(rules[1]!.Statement.RateBasedStatement).toMatchObject({ Limit: 100, EvaluationWindowSec: 300, AggregateKeyType: 'IP', ScopeDownStatement: { ByteMatchStatement: { SearchString: '/api/auth/' } } })
-    expect(rules[2]!.Statement.RateBasedStatement).toMatchObject({ Limit: 1000, AggregateKeyType: 'IP' })
+    expect(rules[1]!.Statement.RateBasedStatement).toMatchObject({ Limit: 200, EvaluationWindowSec: 600, AggregateKeyType: 'IP', ScopeDownStatement: { ByteMatchStatement: { SearchString: '/api/auth/' } } })
+    expect(rules[2]!.Statement.RateBasedStatement).toMatchObject({ Limit: 10_000, EvaluationWindowSec: 600, AggregateKeyType: 'IP' })
     // GitHub's webhook apart: its deliveries come in bursts from a few addresses (HooksRate below)
     const apiScope = rules[2]!.Statement.RateBasedStatement.ScopeDownStatement.AndStatement.Statements
     expect(apiScope[0].ByteMatchStatement).toMatchObject({ SearchString: '/api/' })
@@ -65,7 +65,7 @@ describe('the edge stack', () => {
   })
 
   it('takes its limits from the settings', () => {
-    const p = InfraPropsSchema.parse({ ...base, web: { waf: { apiRequestsPer5Minutes: 5000, authRequestsPer5Minutes: 50 } } })
+    const p = InfraPropsSchema.parse({ ...base, web: { waf: { apiRequestsPer10Minutes: 5000, authRequestsPer10Minutes: 50 } } })
     const rules = (Object.values(Template.fromStack(new TraceEdgeStack(new App(), p)).findResources('AWS::WAFv2::WebACL'))[0] as { Properties: { Rules: Rule[] } }).Properties.Rules
     expect(rules.find((r) => r.Name === 'AuthRate')?.Statement.RateBasedStatement.Limit).toBe(50)
     expect(rules.find((r) => r.Name === 'ApiRate')?.Statement.RateBasedStatement.Limit).toBe(5000)

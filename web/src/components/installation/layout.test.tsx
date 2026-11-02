@@ -13,9 +13,9 @@ describe('what a flat installation lacks, in words', () => {
 
 describe('the WAF health line', () => {
   it('says on with its limits, off with what to do and the cost, and not reported for an older install', () => {
-    expect(wafLine({ enabled: true, own: false, apiRequestsPer5Minutes: 1000, authRequestsPer5Minutes: 100 })).toMatchObject({ status: 'verified', word: 'On', detail: expect.stringMatching(/1,000 requests to the API and 100 sign-in requests per address in 5 minutes/) })
-    expect(wafLine({ enabled: true, own: true, apiRequestsPer5Minutes: 1000, authRequestsPer5Minutes: 100 }).detail).toMatch(/Your own web ACL/)
-    expect(wafLine({ enabled: false, own: false, apiRequestsPer5Minutes: 1000, authRequestsPer5Minutes: 100 })).toMatchObject({ word: 'Off', todo: expect.stringMatching(/Protect the app with AWS WAF.*US\$11 a month/) })
+    expect(wafLine({ enabled: true, own: false, apiRequestsPer10Minutes: 10000, authRequestsPer10Minutes: 200 })).toMatchObject({ status: 'verified', word: 'On', detail: expect.stringMatching(/10,000 requests to the API and 200 sign-in requests per address in 10 minutes/) })
+    expect(wafLine({ enabled: true, own: true, apiRequestsPer10Minutes: 1000, authRequestsPer10Minutes: 100 }).detail).toMatch(/Your own web ACL/)
+    expect(wafLine({ enabled: false, own: false, apiRequestsPer10Minutes: 1000, authRequestsPer10Minutes: 100 })).toMatchObject({ word: 'Off', todo: expect.stringMatching(/Protect the app with AWS WAF.*US\$11 a month/) })
     expect(wafLine(undefined)).toMatchObject({ word: 'Not reported' })
   })
 })

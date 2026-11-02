@@ -73,7 +73,7 @@ export function useCatalogue() {
     loading: projects.isLoading || lists.some((l) => l.isLoading),
     error: projects.error ?? (lists.length && lists.every((l) => l.isError) ? lists[0]!.error : null),
     runsFailed: repos.filter((_, i) => runs[i]?.isError),
-    retry: () => [...lists, ...runs].forEach((x) => x.isError && void x.refetch()),
+    retry: () => { if (projects.isError) void projects.refetch(); [...lists, ...runs].forEach((x) => x.isError && void x.refetch()) },
   }
 }
 
@@ -142,7 +142,11 @@ export function useWork() {
       .sort((a, b) => (b.run.endedAt ?? b.run.startedAt ?? '').localeCompare(a.run.endedAt ?? a.run.startedAt ?? '')),
     agents: mergeAgents(per),
     write: new Set((projects.data ?? []).filter((p) => (p.part ?? 'contributor') !== 'reviewer').map((p) => p.repo)),
-    loading: lists.some((j) => j.isLoading),
+    // the project list comes first: until it is read nothing below is known, and without it nothing can be said
+    loading: projects.isLoading || lists.some((j) => j.isLoading),
     failed: repos.filter((_, i) => lists[i]?.isError),
+    /** the person's projects could not be read: every count on the page would be a guess */
+    projectsError: projects.isError ? projects.error : null,
+    retry: () => { if (projects.isError) void projects.refetch(); lists.forEach((x) => x.isError && void x.refetch()) },
   }
 }
