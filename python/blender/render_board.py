@@ -26,15 +26,23 @@ def sat(c):
     return (mx - mn) / (mx + 1e-6)
 
 
-MASK_ALPHA = 0.8
+MASK_ALPHA = 0.6
+
+
+def film(rgba):
+    """The colour a mask film passes: its own hue at full brightness (light through green mask comes out green)."""
+    m = max(rgba[:3]) or 1.0
+    return tuple(c / m for c in rgba[:3]) + (1.0,)
 
 
 def surfaces(job):
     P = C.principled
+    mask = C.hex_rgba(job.get("mask_color", "#1f6b3a"))
     return {
-        # a real solder mask is a thin translucent film: the copper under it (every track) shows through, as in
-        # KiCad's own 3D viewer (mask opacity about 0.83). An opaque mask hid all of a board's tracks (testyyyu)
-        "mask": P("Solder mask", C.hex_rgba(job.get("mask_color", "#1f6b3a")), rough=0.38, alpha=MASK_ALPHA),
+        # a real solder mask is a thin translucent film: the copper under it (every track) shows through it as
+        # lighter mask, as in KiCad's own 3D viewer. An opaque mask hid all of a board's tracks (testyyyu); a plain
+        # 0.8 alpha left them as faint relief, and showed bare metal rather than mask-coloured copper
+        "mask": P("Solder mask", mask, rough=0.38, alpha=MASK_ALPHA, tint=film(mask)),
         "silk": P("Silkscreen", C.hex_rgba(job.get("silk_color", "#f2f2ec")), rough=0.85),
         "pad": P("ENIG pads", (1.0, 0.76, 0.42, 1), rough=0.22, metal=1.0),
         "tin": P("Tin", (0.80, 0.80, 0.78, 1), rough=0.28, metal=1.0),
@@ -87,10 +95,12 @@ def dress(objs, S):
                     key = "tin"
                 elif col[1] > col[0] * 1.3 and col[1] >= col[2] and L < 0.3 and (flat or large):
                     key = "mask"                                        # KiCad's default mask green
-                elif metal > 0.5 and s < 0.2:
-                    key = "tin"
-                elif L < 0.02:
+                elif not flat and L < 0.06 and s < 0.35:
+                    # a dark component body (KiCad's black plastic is about 0.02). Checked before metal: a glTF
+                    # material that gives no metallic factor is metallic 1, which made every IC and resistor body tin
                     key = "black"
+                elif metal > 0.5 and s < 0.2 and L > 0.15:
+                    key = "tin"
             if key is None:                                             # a component body: keep its colour
                 ck = ("keep", tuple(round(x, 3) for x in (col or (0.5, 0.5, 0.5, 1))[:3]))
                 if ck not in made:
