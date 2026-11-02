@@ -10,7 +10,7 @@ import { update, useStore } from '../store.js'
 const FINE_GRAINED = [
   ['Actions', 'Read and write'], ['Administration', 'Read and write'], ['Commit statuses', 'Read and write'], ['Contents', 'Read and write'],
   ['Issues', 'Read and write'], ['Pull requests', 'Read and write'], ['Secrets', 'Read and write'], ['Variables', 'Read and write'],
-  ['Webhooks', 'Read and write'], ['Workflows', 'Read and write'], ['Deployments', 'Read-only'],
+  ['Webhooks', 'Read and write'], ['Workflows', 'Read and write'], ['Checks', 'Read-only'], ['Deployments', 'Read-only'],
 ] as const
 
 export function GithubStep() {

@@ -231,6 +231,8 @@ export interface ChangeSummary {
   /** GitHub's mergeable_state */
   mergeable: string
   checks: { total: number; passed: number; failed: number; running: number; skipped: number; failing: string[] } | null
+  /** GitHub refused to list the checks: trace's GitHub token lacks "Checks: read" */
+  checks_denied?: boolean
   verdict: ChangeVerdict
 }
 

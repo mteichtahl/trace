@@ -49,6 +49,8 @@ export interface ChangeSummary {
   /** GitHub's mergeable_state */
   mergeable: string
   checks: Checks | null
+  /** GitHub refused to list the checks: trace's token lacks "Checks: read" */
+  checks_denied?: boolean
   verdict: Verdict
 }
 export interface CheckLine { name: string; state: 'passed' | 'failed' | 'running' | 'skipped'; summary: string | null }
@@ -65,7 +67,14 @@ export interface ChangeDetail extends ChangeSummary {
 }
 
 /** The facts the verdict, recommendation and blockers are worked out from. */
-export interface ChangeFacts { state: 'open' | 'merged' | 'closed'; draft: boolean; mergeable: string; checks: Checks | null }
+export interface ChangeFacts {
+  state: 'open' | 'merged' | 'closed'; draft: boolean; mergeable: string; checks: Checks | null
+  /** GitHub refused to list the checks: trace's token lacks "Checks: read" (src/api/github.ts pullStatus) */
+  checks_denied?: boolean
+}
+
+/** What a person is told when trace's GitHub token may not read checks: who can fix it, and how. */
+export const CHECKS_DENIED = 'trace\'s GitHub token may not read checks, so trace cannot tell whether this work passed. An admin gives the token "Checks: Read-only" on GitHub (run the installer again to see every permission it needs).'
 
 // ------------------------------------------------------------------ which pull requests are trace's
 
@@ -134,7 +143,9 @@ export function verdictOf(f: ChangeFacts): Verdict {
   if ((f.checks?.failed ?? 0) > 0 || f.mergeable === 'unstable') return 'failing'
   if ((f.checks?.running ?? 0) > 0 || f.mergeable === 'unknown') return 'checking'
   if (f.mergeable === 'behind' || f.mergeable === 'blocked') return 'blocked'
-  // never "ready" on checks trace could not read, or before any ran: accepting refuses both (acceptance)
+  // never "ready" on checks trace could not read, or before any ran: accepting refuses both (acceptance). A token
+  // that may not read checks will not fix itself by waiting: blocked, not checking
+  if (f.checks === null && f.checks_denied) return 'blocked'
   if (f.checks === null || f.checks.total === 0) return 'checking'
   return 'ready'
 }
@@ -162,7 +173,7 @@ export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]
   // its checks are done, yet GitHub says the repository's rules stop it: almost always a required approving review,
   // which trace cannot give (GitHub refuses an approval from the account that opened it)
   if (f.mergeable === 'blocked') return { verdict: 'none', why: 'Its checks are done, but the repository\'s rules on GitHub stop it merging, usually because they require an approving review. trace\'s guided flow expects the rules to require passing checks only.' }
-  if (f.checks === null) return { verdict: 'wait', why: 'trace could not read its checks. Look again in a minute.' }
+  if (f.checks === null) return f.checks_denied ? { verdict: 'none', why: CHECKS_DENIED } : { verdict: 'wait', why: 'trace could not read its checks. Look again in a minute.' }
   if (f.checks.total === 0) return { verdict: 'wait', why: 'No checks have run on it yet. Wait for them to run.' }
   const reqs = o.requirements?.length ? ` It covers ${list([...o.requirements].slice(0, 8))}${o.requirements.length > 8 ? ` and ${plural(o.requirements.length - 8, 'more requirement')}` : ''}.` : ''
   const total = f.checks.passed
@@ -192,7 +203,7 @@ export function acceptance(f: ChangeFacts, write: boolean): { may_accept: boolea
     else if (f.mergeable === 'unstable') out.push('A check failed.')
     if ((f.checks?.running ?? 0) > 0) out.push(`${plural(f.checks?.running ?? 0, 'check is', 'checks are')} still running.`)
     else if (f.mergeable === 'unknown') out.push('GitHub is still working out whether it can be merged.')
-    if (f.checks === null) out.push('trace could not read its checks.')
+    if (f.checks === null) out.push(f.checks_denied ? CHECKS_DENIED : 'trace could not read its checks.')
     else if (f.checks.total === 0) out.push('No checks have run on it yet.')
   }
   return { may_accept: out.length === 0, blockers: out }
@@ -304,16 +315,16 @@ export function fileKind(path: string, patch: string | null): FileKind {
 /** One change's summary from its pull request (with or without its status) and its job. */
 export function changeSummary(o: {
   repo: string; pull: Pick<PullSummary, 'number' | 'title' | 'url' | 'draft' | 'labels' | 'updated_at'> & { created_at?: string | undefined }
-  job: JobRow | null; status: Pick<PullStatus, 'state' | 'mergeable' | 'checks' | 'draft' | 'updated_at'> | null
+  job: JobRow | null; status: Pick<PullStatus, 'state' | 'mergeable' | 'checks' | 'checks_denied' | 'draft' | 'updated_at'> | null
   hold: string; agentWords: Readonly<Record<string, string>>
 }): ChangeSummary {
   const s = o.status
-  const facts: ChangeFacts = { state: s?.state ?? 'open', draft: s?.draft ?? o.pull.draft, mergeable: s?.mergeable ?? 'unknown', checks: s?.checks ?? null }
+  const facts: ChangeFacts = { state: s?.state ?? 'open', draft: s?.draft ?? o.pull.draft, mergeable: s?.mergeable ?? 'unknown', checks: s?.checks ?? null, ...(s?.checks_denied ? { checks_denied: true } : {}) }
   const crit = criteriaNamed(jobRequest(o.job), o.job?.title ?? '')
   return {
     number: o.pull.number, title: o.pull.title, url: o.pull.url, draft: facts.draft, held: o.pull.labels.includes(o.hold),
     from: fromWords(o.job, o.agentWords), job_id: o.job ? indexedHandle(o.repo, o.job.session, o.job.id) : null, stage: stageNamed(crit),
     opened_at: o.pull.created_at ?? o.pull.updated_at, updated_at: s?.updated_at ?? o.pull.updated_at,
-    state: facts.state, mergeable: facts.mergeable, checks: facts.checks, verdict: verdictOf(facts),
+    state: facts.state, mergeable: facts.mergeable, checks: facts.checks, ...(facts.checks_denied ? { checks_denied: true } : {}), verdict: verdictOf(facts),
   }
 }
