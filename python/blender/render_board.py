@@ -27,6 +27,7 @@ def sat(c):
 
 
 MASK_ALPHA = 0.6
+COPPER_METAL, COPPER_ROUGH = 0.3, 0.45
 
 
 def film(rgba):
@@ -44,7 +45,12 @@ def surfaces(job):
         # 0.8 alpha left them as faint relief, and showed bare metal rather than mask-coloured copper
         "mask": P("Solder mask", mask, rough=0.38, alpha=MASK_ALPHA, tint=film(mask)),
         "silk": P("Silkscreen", C.hex_rgba(job.get("silk_color", "#f2f2ec")), rough=0.85),
-        "pad": P("ENIG pads", (1.0, 0.76, 0.42, 1), rough=0.22, metal=1.0),
+        # the board's own copper (pads, tracks, vias) is satin, not a mirror: a top-down orthographic camera sees a
+        # mirror reflect the dim world, so polished copper under the mask read DARKER than the bare laminate beside
+        # it (testyyyu's B.Cu tracks) and F.Cu tracks barely showed. Satin copper catches the lights as a real board's
+        # does, and reads as lighter mask. Component leads stay polished tin
+        "pad": P("ENIG copper", (1.0, 0.76, 0.42, 1), rough=COPPER_ROUGH, metal=COPPER_METAL),
+        "copper": P("HASL copper", (0.80, 0.80, 0.78, 1), rough=COPPER_ROUGH, metal=COPPER_METAL),
         "tin": P("Tin", (0.80, 0.80, 0.78, 1), rough=0.28, metal=1.0),
         "fr4": P("FR4", C.hex_rgba("#a89c62"), rough=0.6),
         "black": P("Black plastic", C.hex_rgba("#141416"), rough=0.45),
@@ -64,6 +70,13 @@ def orient(objs):
             o.rotation_euler.rotate(rot)
             o.location.rotate(rot)
     bpy.context.view_layer.update()
+
+
+def shadowless(o):
+    """Board copper casts no shadow worth drawing (35 um), and kicad-cli writes overlapping pads (testyyyu's J1) as
+    coincident faces, each of which then shadows its twin: satin copper renders such pads black."""
+    if hasattr(o, "visible_shadow"):
+        o.visible_shadow = False
 
 
 def dress(objs, S):
@@ -92,7 +105,7 @@ def dress(objs, S):
                 elif gold:
                     key = "pad"
                 elif flat and s < 0.2 and 0.15 < L <= 0.55:
-                    key = "tin"
+                    key = "copper"                                      # a board copper layer in a grey finish
                 elif col[1] > col[0] * 1.3 and col[1] >= col[2] and L < 0.3 and (flat or large):
                     key = "mask"                                        # KiCad's default mask green
                 elif not flat and L < 0.06 and s < 0.35:
@@ -110,6 +123,8 @@ def dress(objs, S):
             else:
                 slot.material = S[key]
                 counts[key] = counts.get(key, 0) + 1
+                if key in ("pad", "copper"):
+                    shadowless(o)
     return counts
 
 

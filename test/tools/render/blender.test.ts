@@ -155,18 +155,17 @@ describe.skipIf(!works)('blender (real)', () => {
     expect(JSON.parse(readFileSync(join(dir, 'result.json'), 'utf8'))).toMatchObject({ ok: false })
   }, 180_000)
 
-  it('render.board shows the tracks under the solder mask as lighter mask, and black bodies as black', () => {
-    // testyyyu: the board's 54 tracks were hidden under an opaque mask, then only faint under a plain 0.8 alpha; a
-    // track under the mask now reads clearly lighter, and still green, in the top view. Its IC and resistor bodies
-    // rendered as tin (a glTF material is metallic 1 by default); a dark body is now black plastic, a lead still tin
-    // (fixtures/mask_over_copper.py, dressed by render_board.py's own code)
+  it('render.board shows tracks under the mask as lighter mask, doubled pads as copper, black bodies as black', () => {
+    // testyyyu, shot with render_board's own camera and lights (fixtures/mask_over_copper.py, a board as kicad-cli 10
+    // writes it): its tracks were hidden by an opaque mask, then came out DARKER than the mask (polished copper under
+    // an orthographic camera reflects the dim world); J1's overlapping pads rendered black (coincident faces shadowed
+    // each other); and its IC and resistor bodies rendered as tin (a glTF material is metallic 1 by default)
     const here = dirname(fileURLToPath(import.meta.url))
     const dir = mkdtempSync(join(tmpdir(), 'render-mask-'))
     const out = execFileSync(blender as string, ['-b', '--factory-startup', '--python-exit-code', '1', '-P', join(here, 'fixtures/mask_over_copper.py'),
       '--', join(here, '../../../python/blender'), join(dir, 'top.png')], { timeout: 180_000, stdio: 'pipe' }).toString()
-    expect(out).toMatch(/COUNTS \{'fr4': 1, 'pad': 2, 'mask': 2, 'black': 1, 'tin': 1\}/)
-    expect(out).toMatch(/TRACK_VISIBLE True/)
-    expect(out).toMatch(/TRACK_GREEN True/)
+    expect(out).toMatch(/COUNTS \{'fr4': 1, 'pad': 1, 'copper': 3, 'mask': 2, 'black': 1, 'tin': 1\}/)
+    for (const flag of ['GOLD_LIGHTER', 'GOLD_GREEN', 'GREY_LIGHTER', 'GREY_GREEN', 'PAD_BRIGHT']) expect(out).toMatch(new RegExp(`${flag} True`))
   }, 240_000)
 
   it.skipIf(!hasKicad)('render.board renders the demo board: top and iso', async () => {
