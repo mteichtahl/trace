@@ -99,12 +99,11 @@ describe('the web app', () => {
     web.hasResourceProperties('AWS::Lambda::Permission', { Action: 'lambda:InvokeFunction', Principal: 'cloudfront.amazonaws.com', InvokedViaFunctionUrl: true })
   })
 
-  it('runs the backend on Node.js 22 arm64 behind an IAM function URL with response streaming, told its settings parameter and the API\'s build', () => {
+  it('runs the backend on Node.js 22 arm64 behind an IAM function URL with response streaming, told its settings parameter (the API\'s build is in the settings, not here)', () => {
     const fn = (Object.values(web.findResources('AWS::Lambda::Function')) as Res[]).find((f) => f.Properties.FunctionName === 'trace-web')
     expect(fn?.Properties).toMatchObject({
       Runtime: 'nodejs22.x', Architectures: ['arm64'], MemorySize: 1024, Timeout: 900, Handler: 'index.handler',
-      // the API's build: people's runtime sessions move to a new one when it changes (src/web/call.ts runtimeSession)
-      Environment: { Variables: { TRACE_WEB_CONFIG_PARAM: '/trace/web/config', NODE_OPTIONS: '--enable-source-maps', TRACE_API_BUILD: imageContentTag(REPO_ROOT) } },
+      Environment: { Variables: { TRACE_WEB_CONFIG_PARAM: '/trace/web/config', NODE_OPTIONS: '--enable-source-maps' } },
     })
     const urls = (Object.values(web.findResources('AWS::Lambda::Url')) as Res[]).map((u) => u.Properties)
     expect(urls.find((u) => JSON.stringify(u.TargetFunctionArn).includes('Backend'))).toMatchObject({ AuthType: 'AWS_IAM', InvokeMode: 'RESPONSE_STREAM' })
@@ -235,7 +234,7 @@ describe('the web app', () => {
     const text = parts.map((x) => (typeof x === 'string' ? x : `<${JSON.stringify(x)}>`)).join('')
     const shape = JSON.parse(text.replace(/<[^>]*>/g, 'X')) as Record<string, unknown>
     expect(shape).toEqual({
-      region: 'us-east-1', prefix: 'trace', userPoolId: 'X', clientId: 'X', apiRuntimeArn: 'X',
+      region: 'us-east-1', prefix: 'trace', userPoolId: 'X', clientId: 'X', apiRuntimeArn: 'X', apiBuild: `${imageContentTag(REPO_ROOT)}.X`,
       events: { http: 'X', realtime: 'X', apiId: 'X' }, voiceBucket: 'X', voicePrefix: VOICE_PREFIX,
       dashboards: ['trace-agents'], model: 'us.anthropic.claude-sonnet-4-6', appUrl: 'https://X',
       features: { passkeys: true, email: false, voice: true, ops: true },
@@ -328,6 +327,12 @@ describe('the web app', () => {
   it('outputs the address, the distribution, the events endpoint and the web client', () => {
     for (const o of Object.values(WEB_OUTPUTS)) expect(Object.keys(on.parent.findOutputs(o))).toEqual([o])
     expect(JSON.stringify(on.parent.findOutputs(WEB_OUTPUTS.url))).toMatch(/https:\/\/.*DomainName/)
+  })
+
+  it('names the API\'s build and runtime version in the settings, written after the runtime, so no session starts on the old version', () => {
+    const value = (Object.values(on.parent.findResources('AWS::SSM::Parameter')) as Res[]).map((r) => JSON.stringify(r.Properties.Value)).find((v) => v.includes('apiRuntimeArn')) ?? ''
+    expect(value).toContain(imageContentTag(REPO_ROOT))
+    expect(value).toContain('AgentRuntimeVersion')
   })
 
   it('makes no dependency cycle, and nothing in the web stack names the pool', () => {

@@ -145,13 +145,16 @@ export function secretsPort(region: string): SecretsPort {
   }
 }
 
+/** How long a container keeps the settings before reading them again: a deploy's new apiBuild reaches calls within it. */
+export const CONFIG_TTL_MS = 60_000
+
 /** The web backend's dependencies in AWS. TRACE_WEB_CONFIG_PARAM names the SSM parameter. */
 export function awsDeps(env: NodeJS.ProcessEnv = process.env): WebDeps {
   const param = env.TRACE_WEB_CONFIG_PARAM
   if (!param) throw new Error('TRACE_WEB_CONFIG_PARAM is not set')
   const creds = fromNodeProviderChain()
   return {
-    config: configLoader(ssmReader(env.AWS_REGION), param),
+    config: configLoader(ssmReader(env.AWS_REGION), param, { ttlMs: CONFIG_TTL_MS }),
     verifier: once((c) => new Verifier({ issuer: issuerOf(c), clientId: c.clientId })),
     cognito: once((c) => cognitoPort(c.region)),
     bedrock: once((c) => bedrockPort(c.region)),
