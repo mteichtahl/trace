@@ -1,7 +1,9 @@
 /**
  * "Changes from trace" on the overview (in place of "Waiting on GitHub"): each open change a trace job made, with its
  * pill (For you, In progress, Needs a fix, Out of date), its title, how many files, who made it and when, and its
- * checks. A row opens the change's review page. The list is asked for again every 30 s as a fallback for live events.
+ * checks. A row opens the change's review page. The list is asked for again every 30 s as a fallback for live events,
+ * and no faster than every 60 s while they are connected (lib/live.ts pollEvery): each look costs GitHub calls on the
+ * token every project shares.
  */
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
@@ -9,6 +11,7 @@ import { CircleCheck, CircleX, Loader2 } from 'lucide-react'
 import { Section } from '@/components/shell/app-shell'
 import { changeLine, checksWords, VERDICT_WORDS } from '@/lib/guided'
 import { projectId } from '@/lib/api'
+import { pollEvery, useLiveStatus } from '@/lib/live'
 import { ago } from '@/lib/format'
 import { q } from '@/lib/queries'
 import type { ChangeSummary, ChangeVerdict } from '@/lib/types'
@@ -44,7 +47,8 @@ export function ChecksBadge({ c }: { c: ChangeSummary['checks'] }) {
 
 /** The open changes of a project, oldest first (shared by the overview and the Changes tab). */
 export function useChanges(repo: string) {
-  return useQuery({ ...q('changes.list', { repo }), refetchInterval: CHANGES_POLL_MS })
+  const every = pollEvery(CHANGES_POLL_MS, useLiveStatus().state)
+  return useQuery({ ...q('changes.list', { repo }), refetchInterval: every })
 }
 
 /** The line under a change's title: "3 files · from the schematic specialist · 20 min ago", or what it waits for. */

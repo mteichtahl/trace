@@ -104,7 +104,7 @@ function Overview() {
             part={part}
             run={nextRun}
             place={place}
-            onAccept={canAccept ? () => actions.accept.mutate({ number: change.data!.number, title: change.data!.title, step: place }) : undefined}
+            onAccept={canAccept ? () => actions.accept.mutate({ number: change.data!.number, head: change.data!.head.sha, title: change.data!.title, step: place }) : undefined}
             accepting={actions.accept.isPending}
             resume={draft ? { label: continueText(draft), to: `/p/${id}/do/${draft.skill}` } : undefined}
           />

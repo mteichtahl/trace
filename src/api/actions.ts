@@ -125,7 +125,7 @@ import { IntegrationNameSchema, type IntegrationStore, checkIntegration, valuesF
 import { type AnyTool, Registry, ToolError } from '../core/registry.js'
 import { AgentName, type MemoryRecord, STRATEGIES, actorIn, projectPrefix, within } from '../agents/runtime/memory.js'
 import { type InactiveMark, ReasonSchema, RecordIdSchema, memoryState } from '../agents/runtime/memory-state.js'
-import { BranchSchema, TASK_AGENTS } from '../agents/runtime/schemas.js'
+import { TASK_AGENTS } from '../agents/runtime/schemas.js'
 import { API_HIDDEN_TOOLS, ToolRefused, apiTool, checkPaths } from '../agents/runtime/tool.js'
 import { Work } from '../core/store.js'
 import { personHash as telemetryHash } from '../core/telemetry.js'
@@ -137,7 +137,7 @@ import { PreviewJob, PreviewTarget, getView, listView, preview } from '../prompt
 import { parseProjectKbs } from '../tools/kb/env.js'
 import { FilterSchema, searchKb } from '../tools/kb/search.js'
 import {
-  type Action, ActionError, type Context, type JobView, type JobsApi, MAX_ARTIFACT, type Need, NO_ACCESS, PROJECT_DB_PATH, Repo, def, hashOf, hashesOf, label, memoryInclude, projectMemory, slugify, toolNeed, tempDb, withProjectDb,
+  type Action, ActionError, type Context, type JobView, type JobsApi, MAX_ARTIFACT, type Need, NO_ACCESS, PROJECT_DB_PATH, Repo, def, hashOf, hashesOf, label, memoryInclude, projectMemory, slugify, TaskBranch, toolNeed, tempDb, withProjectDb,
 } from './action-kit.js'
 import { CHAT_ACTIONS } from './actions-chats.js'
 import { DESIGN_ACTIONS } from './actions-design.js'
@@ -179,8 +179,7 @@ async function integrationStore(ctx: Context): Promise<IntegrationStore> {
 
 /** The installation's knowledge bases from the API runtime's environment (TRACE_PROJECT_KBS). */
 
-/** A branch a task may carry on: one of trace's own (claude/…), so a request can never push to main or a person's branch. */
-export const TaskBranch = BranchSchema.refine((b) => b.startsWith('claude/') && b.length > 'claude/'.length, 'only a trace branch (claude/…) can be carried on')
+export { TaskBranch } from './action-kit.js'
 export const projectKbsFromEnv = (env: Record<string, string | undefined> = process.env): ReadonlyMap<string, string> => parseProjectKbs(env.TRACE_PROJECT_KBS)
 
 const Who = z.string().min(1).max(320)

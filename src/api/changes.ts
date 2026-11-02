@@ -5,9 +5,17 @@
  * This file holds the rules, as plain functions over what GitHub and the job index say (src/api/actions-changes.ts
  * fetches them; journey.get and the inbox use the same rules):
  *
- *   which pull requests are trace's   its head branch is a branch a job of the project's index worked on (the newest
- *                                     job on a branch names it: a resumed task works on its paused one's branch). A
- *                                     person's own pull requests are never changes
+ *   which pull requests are trace's   all of these (traceRule): its head branch lives in the project's repository
+ *                                     itself, not a fork (a fork can name its branch anything, claude/task-x
+ *                                     included); the branch starts with the project's own prefix
+ *                                     (worker.own_branch_prefix, claude/ by default) and is not the default branch;
+ *                                     a job of the project's index worked on that branch (the newest job on a branch
+ *                                     names it: a resumed task works on its paused one's branch), and that job is a
+ *                                     task or a hand-off, or a work item on a branch of trace's own (a ci-red work
+ *                                     item that fixed a person's branch made no change of trace's); and, when the
+ *                                     login trace's agents act as is known (TRACE_AGENT_LOGIN), the pull request was
+ *                                     opened by that login. A branch name alone proves nothing: anyone who can push
+ *                                     a branch can name it claude/…, and accepting merges it
  *   verdict                           one word for the list's pill: ready, checking, failing, conflict, blocked
  *   recommendation                    worked out from facts, never a model: every check passed and it can merge →
  *                                     accept; a check failing → ask, naming it; checks running → wait; a conflict →
@@ -61,17 +69,51 @@ export interface ChangeFacts { state: 'open' | 'merged' | 'closed'; draft: boole
 
 // ------------------------------------------------------------------ which pull requests are trace's
 
-/** Each branch's newest job (a resumed task works on its paused one's branch, and names it). */
-export function jobsByBranch(jobs: readonly JobRow[]): Map<string, JobRow> {
+/**
+ * What tells trace's pull requests from everyone else's, for one project: the repository (owner/name), its default
+ * branch, the prefix of trace's own branches, and the login trace's agents open pull requests as (null: not known, so
+ * not checked).
+ */
+export interface TraceRule { repo: string; defaultBranch: string; prefix: string; agentLogin: string | null }
+
+/** The job kinds whose branch can carry a change of trace's: a task (a hand-off is a task too) or a work item. */
+const CHANGE_JOB_KINDS: ReadonlySet<string> = new Set(['task', 'work-item'])
+
+/** Whether `branch` is one of trace's own: the prefix, something after it, and never the default branch. */
+export const ownBranch = (branch: string, rule: Pick<TraceRule, 'defaultBranch' | 'prefix'>): boolean =>
+  branch !== rule.defaultBranch && branch.startsWith(rule.prefix) && branch.length > rule.prefix.length
+
+/**
+ * Each branch's newest job (a resumed task works on its paused one's branch, and names it). With a rule, only trace's
+ * own branches are indexed, only for jobs that make changes: the default branch never is (a work item on it is not a
+ * change), nor a person's branch a ci-red or conflict work item worked on.
+ */
+export function jobsByBranch(jobs: readonly JobRow[], rule?: Pick<TraceRule, 'defaultBranch' | 'prefix'>): Map<string, JobRow> {
   const byBranch = new Map<string, JobRow>()
-  for (const j of [...jobs].sort((a, b) => (a.endedAt ?? a.updatedAt) - (b.endedAt ?? b.updatedAt))) if (j.branch) byBranch.set(j.branch, j)
+  for (const j of [...jobs].sort((a, b) => (a.endedAt ?? a.updatedAt) - (b.endedAt ?? b.updatedAt))) {
+    if (!j.branch) continue
+    if (rule && (!CHANGE_JOB_KINDS.has(j.kind) || !ownBranch(j.branch, rule))) continue
+    byBranch.set(j.branch, j)
+  }
   return byBranch
 }
 
+/** What the rule reads of a pull request: its head branch and where it lives, and who opened it. */
+export interface PullFacts { head: string; headRepo?: string | null | undefined; author?: string | null | undefined }
+
+/** The job that made `pull`, when it is one of trace's changes by every part of the rule; else null. */
+export function traceJob(pull: PullFacts, byBranch: ReadonlyMap<string, JobRow>, rule: TraceRule): JobRow | null {
+  // a fork's branch is not trace's whatever its name; an unknown head repository (a deleted fork) neither
+  if (!pull.headRepo || pull.headRepo.toLowerCase() !== rule.repo.toLowerCase()) return null
+  if (!ownBranch(pull.head, rule)) return null
+  if (rule.agentLogin && (pull.author ?? '').toLowerCase() !== rule.agentLogin.toLowerCase()) return null
+  return byBranch.get(pull.head) ?? null
+}
+
 /** The pull requests trace's jobs opened, each with its job, oldest first (by when it was opened, else its number). */
-export function traceChanges<P extends Pick<PullSummary, 'number' | 'head'> & { created_at?: string | undefined }>(pulls: readonly P[], jobs: readonly JobRow[]): { pull: P; job: JobRow }[] {
-  const byBranch = jobsByBranch(jobs)
-  return pulls.flatMap((pull) => { const job = byBranch.get(pull.head); return job ? [{ pull, job }] : [] })
+export function traceChanges<P extends Pick<PullSummary, 'number' | 'head' | 'headRepo' | 'author'> & { created_at?: string | undefined }>(pulls: readonly P[], jobs: readonly JobRow[], rule: TraceRule): { pull: P; job: JobRow }[] {
+  const byBranch = jobsByBranch(jobs, rule)
+  return pulls.flatMap((pull) => { const job = traceJob(pull, byBranch, rule); return job ? [{ pull, job }] : [] })
     .sort((a, b) => (a.pull.created_at ?? '').localeCompare(b.pull.created_at ?? '') || a.pull.number - b.pull.number)
 }
 
@@ -92,6 +134,8 @@ export function verdictOf(f: ChangeFacts): Verdict {
   if ((f.checks?.failed ?? 0) > 0 || f.mergeable === 'unstable') return 'failing'
   if ((f.checks?.running ?? 0) > 0 || f.mergeable === 'unknown') return 'checking'
   if (f.mergeable === 'behind' || f.mergeable === 'blocked') return 'blocked'
+  // never "ready" on checks trace could not read, or before any ran: accepting refuses both (acceptance)
+  if (f.checks === null || f.checks.total === 0) return 'checking'
   return 'ready'
 }
 
@@ -118,19 +162,21 @@ export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]
   // its checks are done, yet GitHub says the repository's rules stop it: almost always a required approving review,
   // which trace cannot give (GitHub refuses an approval from the account that opened it)
   if (f.mergeable === 'blocked') return { verdict: 'none', why: 'Its checks are done, but the repository\'s rules on GitHub stop it merging, usually because they require an approving review. trace\'s guided flow expects the rules to require passing checks only.' }
+  if (f.checks === null) return { verdict: 'wait', why: 'trace could not read its checks. Look again in a minute.' }
+  if (f.checks.total === 0) return { verdict: 'wait', why: 'No checks have run on it yet. Wait for them to run.' }
   const reqs = o.requirements?.length ? ` It covers ${list([...o.requirements].slice(0, 8))}${o.requirements.length > 8 ? ` and ${plural(o.requirements.length - 8, 'more requirement')}` : ''}.` : ''
-  const total = (f.checks?.passed ?? 0)
-  const checks = f.checks === null ? 'trace could not read its checks, but GitHub says it can be merged.'
-    : total === 0 ? 'No checks ran on it, and it can be merged.'
-      : o.passed?.length ? `${total === 1 ? 'Its check' : `All ${total} checks`} passed (${list(o.passed.slice(0, 5))}${o.passed.length > 5 ? ' and others' : ''}), and it can be merged.`
-        : `${total === 1 ? 'Its check' : `All ${total} checks`} passed, and it can be merged.`
+  const total = f.checks.passed
+  const checks = o.passed?.length ? `${total === 1 ? 'Its check' : `All ${total} checks`} passed (${list(o.passed.slice(0, 5))}${o.passed.length > 5 ? ' and others' : ''}), and it can be merged.`
+    : `${total === 1 ? 'Its check' : `All ${total} checks`} passed, and it can be merged.`
   return { verdict: 'accept', why: `${checks[0]?.toUpperCase() ?? ''}${checks.slice(1)}${reqs}` }
 }
 
 /**
  * Whether this person may accept it now, and if not, why (each reason in plain words). `write`: they have the
  * Contributor part on the project (or are an admin). GitHub's own rules (a required review) are not judged here:
- * accepting tries, and says so in plain words when GitHub refuses (src/api/actions-changes.ts).
+ * accepting tries, and says so in plain words when GitHub refuses (src/api/actions-changes.ts). Checks trace could not
+ * read, or none run at all, are refused too: "can be merged" from GitHub then says nothing about whether the work was
+ * checked (a repository without a required check merges anything), and a person accepting would be trusting nothing.
  */
 export function acceptance(f: ChangeFacts, write: boolean): { may_accept: boolean; blockers: string[] } {
   const out: string[] = []
@@ -146,6 +192,8 @@ export function acceptance(f: ChangeFacts, write: boolean): { may_accept: boolea
     else if (f.mergeable === 'unstable') out.push('A check failed.')
     if ((f.checks?.running ?? 0) > 0) out.push(`${plural(f.checks?.running ?? 0, 'check is', 'checks are')} still running.`)
     else if (f.mergeable === 'unknown') out.push('GitHub is still working out whether it can be merged.')
+    if (f.checks === null) out.push('trace could not read its checks.')
+    else if (f.checks.total === 0) out.push('No checks have run on it yet.')
   }
   return { may_accept: out.length === 0, blockers: out }
 }

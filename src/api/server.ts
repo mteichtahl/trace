@@ -39,6 +39,7 @@ import { observeInvocation } from '../agents/runtime/observe.js'
 import { ActionError, type ActionDeps, NO_ACCESS, defaultScratch, perform, projectKbsFromEnv } from './actions.js'
 import { type CognitoAdmin, HttpCognito, githubToken } from './aws.js'
 import { HttpGitHub } from './github.js'
+import { GitHubBudget, GitHubCache } from './github-cache.js'
 import { AuthError, Verifier, bearer } from './jwt.js'
 import { backendPrincipal, peekClient } from './backend-auth.js'
 import { externalFromEnv } from './actions-services.js'
@@ -308,6 +309,12 @@ async function depsFromEnv(env: z.output<typeof Env>): Promise<{ deps: ActionDep
     },
     // connected systems' addresses (services.*): null when external access is off
     external: externalFromEnv(process.env),
+    // the changes' GitHub answers, kept a short while in this container, and each principal's budget of GitHub-touching
+    // change actions (src/api/github-cache.ts): every project shares the one token
+    githubCache: new GitHubCache(),
+    githubBudget: new GitHubBudget(),
+    // the login trace's agents open pull requests as, when the runtime is told it; else each repository's variable
+    ...(process.env.TRACE_AGENT_LOGIN?.trim() ? { agentLogin: process.env.TRACE_AGENT_LOGIN.trim() } : {}),
   }
   return { deps, cog }
 }

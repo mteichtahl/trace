@@ -11,7 +11,15 @@ export class GitHubError extends Error {
   constructor(readonly status: number, message: string, readonly said: string | null = null) { super(message) }
 }
 
-export interface PullSummary { number: number; title: string; head: string; draft: boolean; labels: string[]; url: string; updated_at: string; created_at?: string | undefined }
+/**
+ * One open pull request. `headRepo`: the repository its head branch lives in (owner/name; null when GitHub no longer
+ * knows it, a deleted fork), so a fork's branch that happens to share a trace branch's name is told apart. `sha`: its
+ * head commit. `author`: the login that opened it.
+ */
+export interface PullSummary {
+  number: number; title: string; head: string; draft: boolean; labels: string[]; url: string; updated_at: string; created_at?: string | undefined
+  headRepo?: string | null | undefined; sha?: string | undefined; author?: string | null | undefined
+}
 export interface IssueSummary { number: number; title: string; labels: string[]; url: string; updated_at: string }
 export interface RunSummary { id: number; name: string; path: string; event: string; status: string; conclusion: string | null; branch: string | null; url: string; created_at: string }
 /** One pull request's state now: open, merged or closed, whether it can merge, and its checks on the head commit. */
@@ -27,7 +35,10 @@ export interface PullStatus {
 export interface PullDetail {
   number: number; title: string; url: string; state: 'open' | 'merged' | 'closed'; draft: boolean; mergeable: string
   body: string; labels: string[]; created_at: string; updated_at: string
-  head: { ref: string; sha: string }; base: { ref: string; sha: string }
+  /** `repo`: the repository its head branch lives in (null: a deleted fork) */
+  head: { ref: string; sha: string; repo: string | null }; base: { ref: string; sha: string }
+  /** the login that opened it */
+  author: string | null
 }
 /** One file a pull request changes. `patch` is null when GitHub gives none (a binary file, or a diff too large). */
 export interface PullFile {
@@ -90,14 +101,20 @@ export interface GitHubApi {
   closePull?(repo: string, number: number): Promise<void>
   /** Take a label off it: false when it did not have it. */
   removeLabel?(repo: string, number: number, label: string): Promise<boolean>
+  /** A repository variable's value (Actions variables), or null when there is none or the token may not read it. Used
+   * for TRACE_AGENT_LOGIN, the login trace's agents open pull requests as. */
+  repoVariable?(repo: string, name: string): Promise<string | null>
 }
 
 const Label = z.union([z.string(), z.object({ name: z.string() }).loose()])
 const labelNames = (ls: readonly z.output<typeof Label>[]): string[] => ls.map((l) => (typeof l === 'string' ? l : l.name))
 
+/** A head's repository (null when GitHub no longer knows it: a fork that was deleted) and a pull request's author. */
+const HeadRepo = z.object({ full_name: z.string() }).loose().nullable().optional()
+const User = z.object({ login: z.string() }).loose().nullable().optional()
 const Pull = z.object({
   number: z.number(), title: z.string(), draft: z.boolean().optional(), html_url: z.string(), updated_at: z.string(), created_at: z.string().optional(),
-  head: z.object({ ref: z.string() }).loose(), labels: z.array(Label).default([]),
+  head: z.object({ ref: z.string(), sha: z.string().optional(), repo: HeadRepo }).loose(), labels: z.array(Label).default([]), user: User,
 }).loose()
 const Issue = z.object({
   number: z.number(), title: z.string(), html_url: z.string(), updated_at: z.string(), labels: z.array(Label).default([]),
@@ -109,7 +126,8 @@ const Run = z.object({
 }).loose()
 const PullFull = z.object({
   number: z.number(), title: z.string(), html_url: z.string(), state: z.string(), draft: z.boolean().optional(), merged_at: z.string().nullable().optional(),
-  mergeable_state: z.string().optional(), updated_at: z.string(), head: z.object({ ref: z.string(), sha: z.string() }).loose(),
+  mergeable_state: z.string().optional(), updated_at: z.string(), head: z.object({ ref: z.string(), sha: z.string(), repo: HeadRepo }).loose(),
+  user: User,
 }).loose()
 const CheckRun = z.object({ name: z.string(), status: z.string(), conclusion: z.string().nullable() }).loose()
 const CheckRunOut = CheckRun.extend({ output: z.object({ title: z.string().nullable().optional(), summary: z.string().nullable().optional() }).loose().nullable().optional() })
@@ -263,6 +281,7 @@ export class HttpGitHub implements GitHubApi {
     return z.array(Pull).parse(await this.json('GET', `${this.p(repo)}/pulls?state=open&per_page=100`)).map((p) => ({
       number: p.number, title: p.title, head: p.head.ref, draft: p.draft ?? false, labels: labelNames(p.labels), url: p.html_url, updated_at: p.updated_at,
       ...(p.created_at ? { created_at: p.created_at } : {}),
+      headRepo: p.head.repo?.full_name ?? null, author: p.user?.login ?? null, ...(p.head.sha ? { sha: p.head.sha } : {}),
     }))
   }
 
@@ -305,7 +324,7 @@ export class HttpGitHub implements GitHubApi {
     return {
       number: p.number, title: p.title, url: p.html_url, state: p.merged_at ? 'merged' : p.state === 'closed' ? 'closed' : 'open', draft: p.draft ?? false,
       mergeable: p.mergeable_state ?? 'unknown', body: p.body ?? '', labels: labelNames(p.labels), created_at: p.created_at, updated_at: p.updated_at,
-      head: { ref: p.head.ref, sha: p.head.sha }, base: { ref: p.base.ref, sha: p.base.sha },
+      head: { ref: p.head.ref, sha: p.head.sha, repo: p.head.repo?.full_name ?? null }, base: { ref: p.base.ref, sha: p.base.sha }, author: p.user?.login ?? null,
     }
   }
 
@@ -354,6 +373,14 @@ export class HttpGitHub implements GitHubApi {
     if (r.status === 404) return false
     if (!r.ok) throw new GitHubError(r.status, `GitHub DELETE label: ${r.status}`, await saidBy(r))
     return true
+  }
+
+  async repoVariable(repo: string, name: string): Promise<string | null> {
+    const r = await this.req('GET', `${this.p(repo)}/actions/variables/${encodeURIComponent(name)}`)
+    // none, or a token that may not read the repository's variables: either way there is nothing to go by
+    if (!r.ok) return null
+    const v = z.object({ value: z.string() }).loose().safeParse(await r.json().catch(() => null))
+    return v.success ? v.data.value : null
   }
 
   async lastDeploy(repo: string): Promise<DeploySummary | null> {

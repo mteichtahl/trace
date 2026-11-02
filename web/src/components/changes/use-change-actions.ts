@@ -2,11 +2,16 @@
  * Accept, ask for changes, discard: one place for the three acts on a change, wherever they are taken (the review
  * page, the next-step card, Home's Needs you). Each refreshes the change, its project's list, the journey and the inbox,
  * and confirms with a toast that says what moved and what trace starts next.
+ *
+ * Accepting sends the head commit the person was shown (change.get's head.sha): the API refuses a change that moved
+ * since ("It changed since you looked at it"), so nobody accepts work they did not see. A card that shows no change
+ * detail (Needs you) reads change.get first and sends what that says.
  */
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { call } from '@/lib/api'
+import { q } from '@/lib/queries'
 import type { ChangeAccepted, InboxItem } from '@/lib/types'
 import { showAfterAccept } from './after-accept'
 
@@ -18,9 +23,11 @@ export function acceptedWords(title: string, r: Pick<ChangeAccepted, 'next' | 's
 
 /** Accept a change from a Needs you card (any project): the same toast, and the item leaves the list. */
 /** After an accept: on a phone the "What happens next" screen; on wider screens the toast, whose action opens it. */
-export function confirmAccepted(a: { repo: string; project?: string; title: string; result: Pick<ChangeAccepted, 'next' | 'stage'> }, step?: { index: number; total: number; stage: string } | null) {
+export function confirmAccepted(a: { repo: string; project?: string; title: string; result: Pick<ChangeAccepted, 'next' | 'stage' | 'warning'> }, step?: { index: number; total: number; stage: string } | null) {
   const phone = typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 767px)').matches
   showAfterAccept(a, phone)
+  // merged, but the decision was not written down: said, never hidden (it is not a failure: nothing is to be redone)
+  if (a.result.warning) toast.warning('Accepted, with a note', { description: a.result.warning })
   if (phone) return
   const w = acceptedWords(a.title, a.result, step)
   toast.success(w.title, { description: `${a.project ? `${a.project}: ` : ''}${w.description}`, action: { label: 'What happens next', onClick: () => showAfterAccept(a, true) } })
@@ -33,7 +40,10 @@ export function useAcceptFromInbox() {
     if (!item.change) return
     const { repo, number } = item.change
     setBusy(item.id)
-    call('change.accept', { repo, number })
+    // the card shows no head of its own: what change.get says now is what is accepted (the same query the card's
+    // Accept button was shown from, read again)
+    qc.fetchQuery({ ...q('change.get', { repo, number }), staleTime: 0 })
+      .then((d) => call('change.accept', { repo, number, head_sha: d.head.sha }))
       .then((r) => {
         confirmAccepted({ repo, project: item.project, title, result: r })
         qc.setQueryData<InboxItem[]>(['inbox', {}], (xs) => xs?.filter((x) => x.id !== item.id))
@@ -56,8 +66,9 @@ export function useChangeActions(repo: string) {
     void qc.invalidateQueries({ queryKey: ['inbox'] })
   }
   const accept = useMutation({
-    mutationFn: (a: { number: number; title: string; note?: string; step?: { index: number; total: number; stage: string } | null }) =>
-      call('change.accept', { repo, number: a.number, ...(a.note ? { note: a.note } : {}) }),
+    /** `head`: the head commit the person was shown (change.get's head.sha) */
+    mutationFn: (a: { number: number; head: string; title: string; note?: string; step?: { index: number; total: number; stage: string } | null }) =>
+      call('change.accept', { repo, number: a.number, head_sha: a.head, ...(a.note ? { note: a.note } : {}) }),
     onSuccess: (r, a) => confirmAccepted({ repo, title: a.title, result: r }, a.step),
     onError: (e) => toast.error('Could not accept the change', { description: `${e instanceof Error ? e.message : String(e)} Nothing changed.` }),
     onSettled: (_d, _e, a) => refresh(a.number),

@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import { type AgentMemory, type ProjectMemories, actorIn, personHash } from '../agents/runtime/memory.js'
-import type { TASK_AGENTS, ToolJob } from '../agents/runtime/schemas.js'
+import { BranchSchema, type TASK_AGENTS, type ToolJob } from '../agents/runtime/schemas.js'
 import { AccessDenied, type Principal, RepoSlug, type Role, isAdmin, who } from '../core/access.js'
 import { type Backend, backendFor } from '../core/central.js'
 import type { IntegrationStore, checkIntegration } from '../core/integrations.js'
@@ -34,6 +34,7 @@ import type { RetrieveClient } from '../tools/kb/search.js'
 import type { ApiOnboardResult } from '../installer/onboard-api.js'
 import type { CognitoAdmin } from './aws.js'
 import type { GitHubApi } from './github.js'
+import type { GitHubBudget, GitHubCache } from './github-cache.js'
 
 export const PROJECT_DB_PATH = '.trace/project.db'
 export const MAX_ARTIFACT = 8 * 1024 * 1024
@@ -126,7 +127,20 @@ export interface ActionDeps {
   /** External access (connected systems, docs/external-access.md): its addresses; absent or null: it is off, and
    * services.* other than list and history say so (src/api/actions-services.ts externalFromEnv). */
   external?: ExternalAccess | null
+  /** GitHub answers the changes keep for a short while (src/api/github-cache.ts); absent: every look asks GitHub */
+  githubCache?: GitHubCache
+  /** each principal's GitHub-touching change actions a minute (src/api/github-cache.ts); absent: no budget */
+  githubBudget?: GitHubBudget
+  /** the login trace's agents open pull requests as, for the whole installation (TRACE_AGENT_LOGIN on the API
+   * runtime); absent: each repository's TRACE_AGENT_LOGIN variable, as the installer sets it */
+  agentLogin?: string
+  /** the runtime's log (a JSON line); absent: standard output */
+  log?: (line: Record<string, unknown>) => void
 }
+
+/** A branch a task may carry on: one of trace's own (claude/…), so a request can never push to main or a person's
+ * branch. The task action and change.ask (src/api/actions-changes.ts) both hold a branch to it. */
+export const TaskBranch = BranchSchema.refine((b) => b.startsWith('claude/') && b.length > 'claude/'.length, 'only a trace branch (claude/…) can be carried on')
 
 /** Where connected systems get tokens and call trace, and how their Cognito app clients are named. */
 export interface ExternalAccess {

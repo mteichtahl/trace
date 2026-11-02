@@ -14,13 +14,17 @@ const pull = (number: number, head: string, o: Partial<PullSummary> = {}): PullS
   number, title: `PR ${number}`, head, draft: false, labels: [], url: `https://github.com/mteichtahl/testyyyu/pull/${number}`, updated_at: '2026-10-31T07:40:00Z', ...o,
 })
 const WORDS = { verify: 'Verification', impl: 'Implementation' }
+const rule = (repo: string) => ({ repo, defaultBranch: 'main', prefix: 'claude/', agentLogin: null })
 
 describe('the inbox: pull requests trace\'s jobs opened', () => {
   it('lists an open pull request whose branch a job worked on, with the agent, and a link to it', () => {
     const at = Date.parse('2026-10-31T08:00:00Z') / 1000
     const items = reviewItems({
       repo: 'mteichtahl/testyyyu', project: 'Test', stage: 'define', at,
-      pulls: [pull(1, 'claude/task-write-the-project-purpose', { title: 'Project purpose and requirements R1-R10' }), pull(2, 'marc/my-own-change')],
+      pulls: [pull(1, 'claude/task-write-the-project-purpose', { title: 'Project purpose and requirements R1-R10', headRepo: 'mteichtahl/testyyyu' }), pull(2, 'marc/my-own-change', { headRepo: 'mteichtahl/testyyyu' }),
+        // a fork's pull request borrowing the branch's name is not trace's
+        pull(3, 'claude/task-write-the-project-purpose', { headRepo: 'mallory/testyyyu' })],
+      rule: rule('mteichtahl/testyyyu'),
       jobs: [job('job-a', 'claude/task-write-the-project-purpose', 'verify', at - 1200), job('job-b', null, 'impl', at - 600)],
       agentWords: WORDS,
     })
@@ -34,8 +38,8 @@ describe('the inbox: pull requests trace\'s jobs opened', () => {
   })
 
   it('a person\'s own pull request, or none open, is not listed; a resumed task\'s branch names its newest job', () => {
-    expect(reviewItems({ repo: 'r/r', project: 'P', stage: 'define', pulls: [pull(3, 'feature/x')], jobs: [job('j', 'claude/x', 'verify', 1)], agentWords: WORDS })).toEqual([])
-    const both = reviewItems({ repo: 'r/r', project: 'P', stage: 'define', pulls: [pull(4, 'claude/x', { draft: true })], jobs: [job('old', 'claude/x', 'verify', 1), job('new', 'claude/x', 'impl', 2)], agentWords: WORDS })
+    expect(reviewItems({ repo: 'r/r', project: 'P', stage: 'define', pulls: [pull(3, 'feature/x', { headRepo: 'r/r' })], jobs: [job('j', 'claude/x', 'verify', 1)], rule: rule('r/r'), agentWords: WORDS })).toEqual([])
+    const both = reviewItems({ repo: 'r/r', project: 'P', stage: 'define', pulls: [pull(4, 'claude/x', { draft: true, headRepo: 'r/r' })], jobs: [job('old', 'claude/x', 'verify', 1), job('new', 'claude/x', 'impl', 2)], rule: rule('r/r'), agentWords: WORDS })
     expect(both[0]?.summary).toBe('P: The Implementation agent made a change, "PR 4" (a draft). Its work counts once you accept it.')
   })
 })

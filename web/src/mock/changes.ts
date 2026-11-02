@@ -14,7 +14,8 @@ import sch from './files/soil-sensor.kicad_sch?raw'
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
 const MIN = 60_000
 const BASE = 'a91c04b'
-const HEAD = '7f3e21a'
+// a full sha, as change.get gives it (change.accept takes 40 hex characters)
+const HEAD = '7f3e21a0c5d2b9e84f61a3c7d0e2b5f9a8c4d1e6'
 
 // ------------------------------------------------------------------ stage guides (board template)
 
@@ -175,6 +176,8 @@ export function changesAction(name: string, a: Record<string, unknown>, done: (r
     }
     case 'change.accept':
       if (reviewer) return fail('Only contributors can accept a change.')
+      // as the API: the head the person was shown, or nothing is merged
+      if (a.head_sha !== c.head.sha) return fail('It changed since you looked at it. Look again before accepting.')
       if (!c.may_accept) return fail(c.blockers[0] ?? 'This change cannot be accepted yet.')
       c.state = 'merged'
       accepted(JOURNEYS[repo]!, c.number)

@@ -271,7 +271,8 @@ export interface ChangeDiff {
   binary: boolean
 }
 
-export interface ChangeAccepted { merged: true; sha: string; stage: string; next: string }
+/** `warning`: it is merged, but something after it (the decisions log) did not happen */
+export interface ChangeAccepted { merged: true; sha: string; stage: string; next: string; warning?: string }
 
 export interface Question {
   id: string

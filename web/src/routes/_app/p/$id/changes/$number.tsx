@@ -170,7 +170,7 @@ function Review() {
         note={note}
         acceptSays={acceptSays}
         busy={busy}
-        onAccept={(n) => actions.accept.mutate({ number, title: d.title, ...(n ? { note: n } : {}), step: isNext ? place : null }, { onSuccess: back })}
+        onAccept={(n) => actions.accept.mutate({ number, head: d.head.sha, title: d.title, ...(n ? { note: n } : {}), step: isNext ? place : null }, { onSuccess: back })}
         onAsk={(n) => actions.ask.mutate({ number, title: d.title, note: n, from: d.from }, { onSuccess: () => setNote('') })}
         onDiscard={(r) => actions.discard.mutate({ number, title: d.title, reason: r }, { onSuccess: back })}
       />

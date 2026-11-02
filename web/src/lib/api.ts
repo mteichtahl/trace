@@ -163,7 +163,8 @@ export interface Actions {
   'changes.list': { args: Repo; result: { repo: string; changes: import('./types').ChangeSummary[] } }
   'change.get': { args: Repo & { number: number }; result: import('./types').ChangeDetail }
   'change.diff': { args: Repo & { number: number; path: string }; result: import('./types').ChangeDiff }
-  'change.accept': { args: Repo & { number: number; note?: string }; result: import('./types').ChangeAccepted }
+  /** head_sha: the head commit the person looked at (change.get's head.sha); the API refuses a change that moved since */
+  'change.accept': { args: Repo & { number: number; head_sha: string; note?: string }; result: import('./types').ChangeAccepted }
   'change.ask': { args: Repo & { number: number; note: string }; result: { job_id: string } }
   'change.discard': { args: Repo & { number: number; reason: string }; result: { closed: true } }
 }

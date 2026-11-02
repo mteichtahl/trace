@@ -65,6 +65,16 @@ function KiCadSides({ repo, file, before, after }: { repo: string; file: ChangeF
 }
 
 /** Two pictures side by side (a drawing's SVG made safe first), with the slider and difference a tap away. */
+/** Whether the app may fetch `url`: https, or this page's own origin (a blob: of bytes it read). */
+export function fetchable(url: string, origin: string = typeof location !== 'undefined' ? location.origin : ''): boolean {
+  try {
+    const u = new URL(url, origin || undefined)
+    return u.protocol === 'https:' || (!!origin && u.origin === origin)
+  } catch {
+    return false
+  }
+}
+
 function Pictures({ repo, file, before, after }: { repo: string; file: ChangeFile; before: { ref: string; path?: string }; after: { ref: string } }) {
   const svg = extOf(file.path) === 'svg'
   const p = useQuery({
@@ -72,6 +82,9 @@ function Pictures({ repo, file, before, after }: { repo: string; file: ChangeFil
     queryFn: async () => {
       const get = async (path: string, commit: string) => {
         const { url } = await resolveUrl({ repo, path }, commit)
+        // the address comes from the API's answer: only an https one, or this app's own (a local copy of the bytes),
+        // is fetched or shown, never another scheme
+        if (!fetchable(url)) throw new Error('This picture\'s address is not one the app opens.')
         return svg ? svgDataUrl(await (await fetch(url)).text()) : url
       }
       return Promise.all([get(before.path ?? file.path, before.ref), get(file.path, after.ref)])

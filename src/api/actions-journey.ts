@@ -51,7 +51,7 @@ import {
   INBOX_KINDS, type InboxItem, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
   dismissStuck, journeyView, loadJourney, recordOpen, returnGate, signGate, sortInbox, withChanges,
 } from '../core/journey.js'
-import { openChanges } from './actions-changes.js'
+import { openChanges, openPulls, projectRule } from './actions-changes.js'
 import { recommendationOf } from './changes.js'
 import { AGENT_WORDS, jobIndex, listJobs, projectHandoffs } from './actions-jobs.js'
 import { reviewItems } from './inbox-review.js'
@@ -95,8 +95,12 @@ async function snapshot(ctx: Context, repo: string, why: string): Promise<{ bran
 /** At most this many projects' databases are read at once for the inbox. */
 /** The open pull requests the project's jobs opened (inbox-review.ts), from GitHub and the project's job index. */
 async function openReviews(ctx: Context, repo: string, project: string, stage: StageId): Promise<InboxItem[]> {
-  const [pulls, jobs] = await Promise.all([(await ctx.deps.github()).openPulls(repo), jobIndex(ctx, repo).read((db) => loadJobs(db)).then((x) => x.result)])
-  return reviewItems({ repo, project, stage, pulls, jobs, agentWords: AGENT_WORDS })
+  // the open pull requests and the rule through the changes' short-lived cache (src/api/github-cache.ts): the inbox
+  // asks for every project at once, often
+  const [pulls, jobs] = await Promise.all([openPulls(ctx, repo), jobIndex(ctx, repo).read((db) => loadJobs(db)).then((x) => x.result)])
+  // no open pull request: nothing to tell apart, and the project's settings are not read for it
+  if (!pulls.length) return []
+  return reviewItems({ repo, project, stage, pulls, jobs, rule: await projectRule(ctx, repo), agentWords: AGENT_WORDS })
 }
 
 const INBOX_PARALLEL = 4
@@ -195,7 +199,8 @@ export const JOURNEY_ACTIONS = {
     // whether the project has agent memory here (the Memory tab): its memory is set up, not that a session has happened
     const hasMemory = Boolean(ctx.deps.memory?.()?.forProject(repo))
     // the open changes trace made, as steps and (when one is ready) the next step (docs/guided-flow.md). GitHub is
-    // asked for the open pull requests and the status of the oldest MAX_STATUS only; when it cannot be reached the
+    // asked for the open pull requests and the status of the oldest MAX_STATUS only, through the same short-lived
+    // cache as changes.list (src/api/github-cache.ts), so a journey and a list together cost one look; when it cannot be reached the
     // journey is answered without them, and says so in changes_unavailable, rather than guessing
     const open = await openChanges(ctx, repo).then((x) => ({ list: x, error: null }), (e: unknown) => ({ list: [], error: e instanceof Error ? e.message : String(e) }))
     const view = withChanges(r, journeyView(r, viewer, undefined, facts), viewer, open.list.map(({ change: c, criteria }) => ({
