@@ -55,6 +55,23 @@ export interface ToolDeps {
   registry: () => Registry | Promise<Registry>
   /** The project's default branch, checked out (a kept clone is fetched and reset). */
   checkout: (repository: string) => Promise<ToolCheckout>
+  /**
+   * The project record's fingerprint in a clone (src/agents/runtime/record-guard.ts), and preparing it so a tool's own
+   * open changes no rows. With it, a call that changes the record is refused (RecordChanged): the clone is never
+   * committed, so its "saved" would be lost. Left out, nothing is checked.
+   */
+  record?: { prepare: (dir: string) => void; fingerprint: (dir: string) => string }
+}
+
+/** What a refused record change tells the caller, and through the chat the person: nothing was kept, and how to keep it. */
+export const recordChangedMessage = (name: string): string =>
+  `${name} would change the project record, and a tool run here cannot: it runs on a copy of the default branch that is ` +
+  'never committed, so nothing was saved. To record it, start a task (start_task) for the agent: it makes the change ' +
+  'on a branch and opens a pull request, and the record has it once that is merged.'
+
+/** A tool call refused because it changed the project record (see ToolDeps.record). */
+export class RecordChanged extends ToolRefused {
+  override name = 'RecordChanged'
 }
 
 export type ToolRunner = (p: ToolJob) => Promise<unknown>
@@ -80,7 +97,11 @@ export function toolRunner(d: ToolDeps): ToolRunner {
         checkPaths(p.args, co.dir)
         process.chdir(co.dir)
         process.env.TRACE_PROJECT_DB = join(co.dir, '.trace', 'project.db')
-        return await registry.call(p.name, p.args, { hardware: false, via: 'mcp' })
+        if (d.record) d.record.prepare(co.dir)
+        const before = d.record?.fingerprint(co.dir)
+        const result = await registry.call(p.name, p.args, { hardware: false, via: 'mcp' })
+        if (d.record && d.record.fingerprint(co.dir) !== before) throw new RecordChanged(recordChangedMessage(p.name))
+        return result
       } finally {
         process.chdir(cwd)
         if (db === undefined) delete process.env.TRACE_PROJECT_DB
@@ -123,9 +144,10 @@ export const TOOL_WORKSPACE = '/tmp/trace-tools'
 
 /** The real runner: the registry of every tool, and the runtime's own clone (TRACE_GITHUB_SECRET_ARN). */
 export async function realToolRunner(env: Record<string, string | undefined> = process.env): Promise<ToolRunner> {
-  const { execReal, secretsToken } = await import('./job.js')
+  const [{ execReal, secretsToken }, { prepareRecord, recordFingerprint }] = await Promise.all([import('./job.js'), import('./record-guard.js')])
   return toolRunner({
     registry: async () => (await import('../../tools/index.js')).allTools(),
+    record: { prepare: prepareRecord, fingerprint: recordFingerprint },
     checkout: runtimeCheckout({ exec: execReal, getToken: secretsToken(env.TRACE_GITHUB_SECRET_ARN, env.AWS_REGION), workspace: env.TRACE_TOOL_WORKSPACE || TOOL_WORKSPACE, persistent: true, cli: env.TRACE_CLI || '/app/dist/cli.js' }),
   })
 }
