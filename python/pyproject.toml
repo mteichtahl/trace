@@ -20,7 +20,7 @@ visa = ["pyvisa>=1.16.2", "pyvisa-py>=0.8.1", "pyserial>=3.5"]
 can = ["python-can>=4.6.1"]
 mech = ["build123d==0.13.0"]
 all = ["tracebridge[pdf,visa,can]"]
-dev = ["pytest>=9.1.1", "reportlab>=5.1.0", "tracebridge[all]", "tracebridge[mech]; python_version >= '3.11'"]
+dev = ["pytest>=9.2.0", "reportlab>=5.1.0", "tracebridge[all]", "tracebridge[mech]; python_version >= '3.11'"]
 
 [tool.setuptools.packages.find]
 where = ["."]
