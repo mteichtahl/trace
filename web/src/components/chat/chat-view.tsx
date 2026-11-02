@@ -28,7 +28,7 @@ import { AGENT_ID, resetWire, setWire } from './agent'
 import { pendingAsk, setThread, useRecallHistory } from './chat-state'
 import { useStore } from '@/lib/store'
 import { Markdown } from './markdown'
-import { LiveCall } from './renderers'
+import { ChatRepo, LiveCall } from './renderers'
 import { toReplay } from './thread'
 import { enqueueSpeech, speak, speakable, stopSpeaking, useSpeech } from './voice/speech'
 
@@ -247,7 +247,9 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
               {speaking.messageId === m.id && <SpokenText text={text} />}
               {m.toolCalls?.map((tc) => (
                 <LiveCall.Provider key={tc.id} value={i > lastTurn}>
-                  <div>{renderToolCall({ toolCall: tc, toolMessage: toolResults.get(tc.id) as never })}</div>
+                  <ChatRepo.Provider value={repo}>
+                    <div>{renderToolCall({ toolCall: tc, toolMessage: toolResults.get(tc.id) as never })}</div>
+                  </ChatRepo.Provider>
                 </LiveCall.Provider>
               ))}
               {text && !streaming && (

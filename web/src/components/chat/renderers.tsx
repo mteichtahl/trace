@@ -106,6 +106,9 @@ export function ChatRenderers() {
  */
 export const LiveCall = createContext(true)
 
+/** The project the conversation is on (chat-view.tsx sets it): the screen's notice already asks project.agent for it. */
+export const ChatRepo = createContext<string | undefined>(undefined)
+
 const StartTask = z.object({ repo: z.string(), request: z.string(), agent: z.string().optional(), branch: z.string().optional() })
 type TaskArgs = z.infer<typeof StartTask>
 
@@ -113,8 +116,13 @@ type TaskArgs = z.infer<typeof StartTask>
 export function StartTaskCard({ args, status, respond, result, readOnly }: { args: Partial<TaskArgs>; status: string; respond?: (r: unknown) => unknown; result?: string; readOnly?: boolean }) {
   const [busy, setBusy] = useState(false)
   const live = useContext(LiveCall)
-  // what the notice on the screen already knows of the project's agent (nothing is asked from here)
-  const blocked = agentBlocked(useAgentSetup(args.repo, { fetch: false }).data)
+  // the conversation's own project: what the notice on the screen already knows of its agent (nothing asked from
+  // here); another project's is asked for, so Confirm waits for that project's agent too
+  const chatRepo = useContext(ChatRepo)
+  const other = !!args.repo && args.repo.toLowerCase() !== (chatRepo ?? '').toLowerCase()
+  // asked only while Confirm is offered (a finished or past offer needs no answer)
+  const offered = status === 'executing' && !!respond
+  const blocked = agentBlocked(useAgentSetup(args.repo, { fetch: other && offered }).data)
   if (status === 'complete') return <TaskConfirmCard task={args} answer={parseResult<TaskAnswer>(result)} />
   if (!live && status !== 'executing') return <TaskConfirmCard task={args} answer={{ confirmed: false, reason: 'not confirmed' }} />
   if (status !== 'executing' || !respond) return <TaskConfirmCard task={args} readOnly={readOnly} busy />

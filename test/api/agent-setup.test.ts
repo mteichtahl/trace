@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
-import { ADDED_CHECK_S, SETUP_CHECK_S, STALLED_CHECK_S, SETUP_MS, agentSetup, updateRunFor } from '../../src/api/actions-projects.js'
+import { ADDED_CHECK_S, ADDED_MS, LEFT_OUT_MS, SETUP_CHECK_S, STALLED_CHECK_S, SETUP_MS, agentSetup, updateRunFor } from '../../src/api/actions-projects.js'
 import type { GitHubApi, RunSummary } from '../../src/api/github.js'
 import { parseWorkerRuntimes, remoteJobs } from '../../src/api/workers.js'
 import { AccessDenied, assign, seen } from '../../src/core/access.js'
@@ -54,7 +54,7 @@ describe('agentSetup', () => {
   it('a failed run, a failed record or no record at all wait for a person: said so, looked at less often', () => {
     const failedRun = agentSetup({ ...base, run: run({ status: 'completed', conclusion: 'failure' }) })
     expect(failedRun).toMatchObject({ state: 'setting_up', update: { status: 'failed' }, next_check_s: STALLED_CHECK_S })
-    expect(failedRun.text).toMatch(/update failed.*Run workflow.*installer/)
+    expect(failedRun.text).toMatch(/update failed.*An admin can start the update again or run the installer/)
     const failed = agentSetup({ ...base, record: rec({ status: 'failed', attempts: 2, last_error: 'cdk deploy: limit' }) })
     expect(failed).toMatchObject({ state: 'failed', next_check_s: STALLED_CHECK_S, expected_by: null })
     expect(failed.text).not.toMatch(/cdk deploy/)
@@ -64,6 +64,37 @@ describe('agentSetup', () => {
 
   it('added by the update: the API picks up the new runtime within minutes, so it is looked at sooner', () => {
     expect(agentSetup({ ...base, record: rec({ status: 'added' }) })).toMatchObject({ state: 'finishing', next_check_s: ADDED_CHECK_S })
+  })
+
+  it('added but never ready: the estimate runs from added_at, then it says it is late and looks less often', () => {
+    const added = '2026-11-02T09:55:00.000Z'
+    const soon = agentSetup({ ...base, record: rec({ status: 'added', added_at: added }) })
+    expect(soon).toMatchObject({ state: 'finishing', next_check_s: ADDED_CHECK_S, expected_by: new Date(Date.parse(added) + ADDED_MS).toISOString() })
+    const later = agentSetup({ ...base, record: rec({ status: 'added', added_at: added }), now: Date.parse(added) + ADDED_MS + 60_000 })
+    expect(later).toMatchObject({ state: 'finishing', next_check_s: STALLED_CHECK_S, expected_by: soon.expected_by })
+    expect(later.text).toMatch(/taking longer than usual.*an admin can run the installer/)
+  })
+
+  it('the run finished long ago and the request is still pending: the update left it out, said plainly (with the flat limit when that is the layout)', () => {
+    const done = run({ status: 'completed', conclusion: 'success', updated_at: '2026-11-02T09:30:00Z' })
+    const recently = agentSetup({ ...base, run: { ...done, updated_at: new Date(NOW - LEFT_OUT_MS / 2).toISOString() } })
+    expect(recently).toMatchObject({ state: 'setting_up', update: { status: 'finished' } })
+    const flat = agentSetup({ ...base, run: done, layout: 'flat' })
+    expect(flat).toMatchObject({ state: 'failed', next_check_s: STALLED_CHECK_S })
+    expect(flat.text).toMatch(/finished without adding this project's agent\. This installation keeps every project in one stack.*fewer than 15.*An admin can add it by running the installer/)
+    const nested = agentSetup({ ...base, run: done, layout: 'nested' })
+    expect(nested.text).toBe('The installation update finished without adding this project\'s agent. An admin can add it by running the installer.')
+  })
+
+  it('the link to the update\'s run and how to start it again are an admin\'s only', () => {
+    const failedRun = run({ status: 'completed', conclusion: 'failure' })
+    const reviewer = agentSetup({ ...base, run: failedRun })
+    expect(reviewer.update).not.toHaveProperty('url')
+    expect(reviewer.text).not.toMatch(/Actions|Run workflow/)
+    expect(JSON.stringify(agentSetup({ ...base, run: run() }))).not.toMatch(/github\.com/)
+    const admin = agentSetup({ ...base, admin: true, run: failedRun })
+    expect(admin.update?.url).toBe(failedRun.url)
+    expect(admin.text).toMatch(/Actions → ci → Run workflow/)
   })
 
   it('without the self-update: the installer adds it, and there is no estimate', () => {
@@ -97,6 +128,7 @@ describe('the workers know which projects have an agent', () => {
 describe('project.agent', () => {
   const ADMIN = { sub: 'ag-admin', email: 'ag-admin@example.com', groups: ['trace-admins'] }
   const USER = { sub: 'ag-user', email: 'ag-user@example.com', groups: ['trace-users'] }
+  const REVIEWER = { sub: 'ag-rev', email: 'ag-rev@example.com', groups: ['trace-users'] }
   const OUTSIDER = { sub: 'ag-out', email: 'ag-out@example.com', groups: ['trace-users'] }
   const fake = new FakeGitHub(['acme/new', 'acme/old'])
   let runs: () => Promise<RunSummary[]> = async () => []
@@ -114,8 +146,11 @@ describe('project.agent', () => {
 
   beforeAll(async () => {
     cognito.add(USER.email, USER.sub, 'trace-users')
+    cognito.add(REVIEWER.email, REVIEWER.sub, 'trace-users')
     for (const r of ['acme/new', 'acme/old']) await assign(ADMIN, USER, r, { class: 'user' })
+    await assign(ADMIN, REVIEWER, 'acme/new', { class: 'user', part: 'reviewer' })
     await seen(USER)
+    await seen(REVIEWER)
     mkdirSync(join(bucket, 'installation', 'pending-projects', 'acme'), { recursive: true })
     writeFileSync(join(bucket, 'installation', 'pending-projects', 'acme', 'new.json'), JSON.stringify({ repo: 'acme/new', requested_at: new Date().toISOString(), needs: ['worker runtime'] }))
   })
@@ -135,6 +170,14 @@ describe('project.agent', () => {
     const r = await call(USER, 'acme/new')
     expect(r).toMatchObject({ ready: false, state: 'setting_up', update: { status: 'running' }, next_check_s: SETUP_CHECK_S })
     expect(r.text).toMatch(/installation update is running/)
+    expect(r.update).not.toHaveProperty('url')
+    // a reviewer is told how it stands, never given trace's own repository's run or how to start it
+    runs = async () => [run({ status: 'completed', conclusion: 'failure', created_at: new Date().toISOString() })]
+    const rev = await call(REVIEWER, 'acme/new')
+    expect(rev).toMatchObject({ update: { status: 'failed' } })
+    expect(rev.update).not.toHaveProperty('url')
+    expect(rev.text).not.toMatch(/Actions|Run workflow/)
+    expect((await call(ADMIN, 'acme/new')).update).toMatchObject({ url: expect.stringMatching(/^https:\/\/github\.com\//) })
     // GitHub not answering leaves the estimate from the request
     runs = async () => { throw new Error('rate limited') }
     expect(await call(USER, 'acme/new')).toMatchObject({ state: 'setting_up', update: null, expected_by: expect.any(String) })
