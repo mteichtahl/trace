@@ -89,16 +89,43 @@ const UNFINISHED_STRONG = /\b(not (yet )?for (approval|review|merging)|do not me
 const UNFINISHED_TITLE = /\b(incomplete|unfinished|not finished|partial (work|export|render|result)s?|placeholder)\b/i
 
 /**
+ * A pull request description without the request it quotes: trace's descriptions open with who asked and what
+ * ("Requested by the trace verify specialist (job …), who asked:" then the request), up to the next heading. Those are
+ * the instructions the job was given, so they never say whether its work is finished.
+ */
+export function withoutQuotedRequest(body: string | null | undefined): string {
+  const lines = (body ?? '').split('\n')
+  const out: string[] = []
+  let quoting = false
+  for (const line of lines) {
+    if (quoting) {
+      if (/^\s*#{1,6}\s/.test(line)) quoting = false
+      else continue
+    }
+    if (/\basked:\s*$/i.test(line)) { quoting = true; continue }
+    out.push(line)
+  }
+  return out.join('\n')
+}
+
+/** Text as compared for quoting: lower case, single spaces, no closing punctuation. */
+const plain = (x: string): string => x.toLowerCase().replace(/\s+/g, ' ').replace(/[\s.!?;:,]+$/, '').trim()
+
+/**
  * The specialist's own words saying its work is not finished, or null. From the title, the clauses that say so
  * ("incomplete export, not for approval"); else the first sentence of its summary or description that says so plainly.
+ * A sentence that is also in the job's own `request` is the instruction it was given, not its verdict: a worker's report
+ * and its pull request quote what the specialist asked ("… do not change any requirement's status, do not merge."),
+ * and that once read as "not finished" on a change whose work was done (test-2, change 3).
  */
-export function unfinishedWords(o: { title: string; summary?: string | null | undefined; body?: string | null | undefined }): string | null {
+export function unfinishedWords(o: { title: string; summary?: string | null | undefined; body?: string | null | undefined; request?: string | null | undefined }): string | null {
   const title = o.title.replace(/^trace:\s*/i, '')
   const clauses = title.split(/\s*[,;:(){}\u2013\u2014]\s*|\s+-\s+/).map((x) => x.trim()).filter(Boolean)
   const said = clauses.filter((c) => UNFINISHED_STRONG.test(c) || UNFINISHED_TITLE.test(c))
   if (said.length) return said.join(', ').slice(0, 160)
-  for (const text of [o.summary, o.body]) {
-    const hit = (text ?? '').split(/(?<=[.!?])\s+|\n+/).map((x) => x.replace(/^[-*#>\s]+/, '').trim()).find((x) => UNFINISHED_STRONG.test(x))
+  const asked = o.request ? plain(o.request) : ''
+  for (const text of [o.summary, withoutQuotedRequest(o.body)]) {
+    const hit = (text ?? '').split(/(?<=[.!?])\s+|\n+/).map((x) => x.replace(/^[-*#>\s]+/, '').trim()).find((x) => UNFINISHED_STRONG.test(x) && !(asked && asked.includes(plain(x))))
     if (hit) return hit.slice(0, 160)
   }
   return null
@@ -406,7 +433,7 @@ export function changeSummary(o: {
 }): ChangeSummary {
   const s = o.status
   const facts: ChangeFacts = { state: s?.state ?? 'open', draft: s?.draft ?? o.pull.draft, mergeable: s?.mergeable ?? 'unknown', checks: s?.checks ?? null, ...(s?.checks_denied ? { checks_denied: true } : {}) }
-  const unfinished = unfinishedWords({ title: o.pull.title, summary: o.job?.summary })
+  const unfinished = unfinishedWords({ title: o.pull.title, summary: o.job?.summary, request: jobRequest(o.job) })
   if (unfinished) facts.unfinished = unfinished
   settleUnfinished(facts, { title: o.pull.title, summary: o.job?.summary }, o.given ?? new Set())
   const crit = criteriaNamed(jobRequest(o.job), o.job?.title ?? '')
