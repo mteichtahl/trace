@@ -237,21 +237,33 @@ def hex_rgba(h, alpha=1.0):
     return tuple(srgb_to_linear(int(h[i:i + 2], 16) / 255.0) for i in (0, 2, 4)) + (alpha,)
 
 
-def principled(name, color, rough=0.5, metal=0.0, coat=0.0, alpha=1.0):
-    """A Principled BSDF material. `alpha` below 1 lets what lies under it show (a solder mask over copper)."""
+def principled(name, color, rough=0.5, metal=0.0, coat=0.0, alpha=1.0, tint=None):
+    """A Principled BSDF material. `alpha` below 1 lets what lies under it show (a solder mask over copper); with
+    `tint`, what shows through is seen through a coloured film (Transparent BSDF in that colour), as copper is seen
+    through a solder mask: lighter mask, not bare metal."""
     m = bpy.data.materials.new(name)
     m.use_nodes = True
-    b = next(n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+    nt = m.node_tree
+    b = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
     b.inputs["Base Color"].default_value = color
     b.inputs["Roughness"].default_value = rough
     b.inputs["Metallic"].default_value = metal
     for k in ("Coat Weight", "Clearcoat"):
         if k in b.inputs and coat:
             b.inputs[k].default_value = coat
-    if alpha < 1.0:
+    if alpha < 1.0 and tint is not None:
+        out = next(n for n in nt.nodes if n.type == "OUTPUT_MATERIAL")
+        tr = nt.nodes.new("ShaderNodeBsdfTransparent")
+        tr.inputs["Color"].default_value = tint
+        mix = nt.nodes.new("ShaderNodeMixShader")
+        mix.inputs["Fac"].default_value = alpha          # 0: all film-filtered light from below, 1: all mask
+        nt.links.new(tr.outputs[0], mix.inputs[1])
+        nt.links.new(b.outputs[0], mix.inputs[2])
+        nt.links.new(mix.outputs[0], out.inputs["Surface"])
+    elif alpha < 1.0:
         b.inputs["Alpha"].default_value = alpha
-        if hasattr(m, "surface_render_method"):   # EEVEE (Blender 4.2+); Cycles honours Alpha as it is
-            m.surface_render_method = "DITHERED"
+    if alpha < 1.0 and hasattr(m, "surface_render_method"):   # EEVEE (Blender 4.2+); Cycles honours either as it is
+        m.surface_render_method = "DITHERED"
     m.diffuse_color = color
     return m
 
