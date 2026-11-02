@@ -420,9 +420,12 @@ export class ProjectStack extends Construct {
       // the job: without its definitions here every submit was refused (testyyyu: render.board and pcb.autoroute,
       // "not authorized to perform: batch:TagResource on resource: …:job-definition/trace-gpu-…"). Its own definitions
       // only, carrying its project's tag; never re-tags another project's job
+      // and against the job queue (testyyyu, next: "… on resource: …:job-queue/trace-gpu"). The queues are shared and
+      // carry no project tag, so the resource-tag condition below (IfExists) passes for them; trace never tags a queue
       const cpuDefs = this.cpuJobDefinitionName ? [`arn:${partition}:batch:${region}:${account}:job-definition/${this.cpuJobDefinitionName}`] : []
+      const queues = [p.gpu.queue.jobQueueArn, ...(job.cpu && p.gpu.cpuQueue ? [p.gpu.cpuQueue.jobQueueArn] : [])]
       role.addToPolicy(new iam.PolicyStatement({
-        sid: 'ProjectGpuTag', actions: ['batch:TagResource'], resources: [jobs, def, `${def}:*`, ...cpuDefs.flatMap((d) => [d, `${d}:*`])],
+        sid: 'ProjectGpuTag', actions: ['batch:TagResource'], resources: [jobs, def, `${def}:*`, ...cpuDefs.flatMap((d) => [d, `${d}:*`]), ...queues],
         conditions: {
           StringEquals: { [`aws:RequestTag/${PROJECT_TAG}`]: slug },
           StringEqualsIfExists: { [`aws:ResourceTag/${PROJECT_TAG}`]: slug },
