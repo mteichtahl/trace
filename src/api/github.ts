@@ -21,7 +21,7 @@ export interface PullSummary {
   headRepo?: string | null | undefined; sha?: string | undefined; author?: string | null | undefined
 }
 export interface IssueSummary { number: number; title: string; labels: string[]; url: string; updated_at: string }
-export interface RunSummary { id: number; name: string; path: string; event: string; status: string; conclusion: string | null; branch: string | null; url: string; created_at: string }
+export interface RunSummary { id: number; name: string; path: string; event: string; status: string; conclusion: string | null; branch: string | null; url: string; created_at: string; updated_at?: string }
 /** One pull request's state now: open, merged or closed, whether it can merge, and its checks on the head commit. */
 export interface PullStatus {
   number: number; title: string; url: string; state: 'open' | 'merged' | 'closed'; draft: boolean
@@ -124,7 +124,7 @@ const Issue = z.object({
 }).loose()
 const Run = z.object({
   id: z.number(), name: z.string().nullable().optional(), path: z.string().default(''), event: z.string(), status: z.string().nullable(),
-  conclusion: z.string().nullable(), head_branch: z.string().nullable(), html_url: z.string(), created_at: z.string(),
+  conclusion: z.string().nullable(), head_branch: z.string().nullable(), html_url: z.string(), created_at: z.string(), updated_at: z.string().optional(),
 }).loose()
 const PullFull = z.object({
   number: z.number(), title: z.string(), html_url: z.string(), state: z.string(), draft: z.boolean().optional(), merged_at: z.string().nullable().optional(),
@@ -316,7 +316,7 @@ export class HttpGitHub implements GitHubApi {
     const r = z.object({ workflow_runs: z.array(Run) }).loose().parse(await this.json('GET', `${this.p(repo)}/actions/runs?per_page=${Math.min(100, limit)}`))
     return r.workflow_runs.map((w) => ({
       id: w.id, name: w.name ?? '', path: w.path, event: w.event, status: w.status ?? 'unknown', conclusion: w.conclusion,
-      branch: w.head_branch, url: w.html_url, created_at: w.created_at,
+      branch: w.head_branch, url: w.html_url, created_at: w.created_at, ...(w.updated_at ? { updated_at: w.updated_at } : {}),
     }))
   }
 
