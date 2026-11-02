@@ -20,7 +20,7 @@ import { RunLine, runControls } from '@/components/run-line'
 import { Column, Section } from '@/components/shell/app-shell'
 import { useCommands } from '@/components/shell/command-menu'
 import { NeedsBuilding } from '@/components/side-sheet'
-import { EmptyState, Loading, Partial, SkeletonRows } from '@/components/states'
+import { EmptyState, Loading, Partial, QueryError, SkeletonRows } from '@/components/states'
 import { type Status, StatusBadge } from '@/components/status-badge'
 import { type AgentWork } from '@/components/agents/use-agents'
 import { duration } from '@/lib/format'
@@ -113,7 +113,9 @@ function Agents() {
 
   const summary = work.loading
     ? ' '
-    : `${work.running.length === 0 ? 'Nothing is running' : `${work.running.length} ${work.running.length === 1 ? 'job is' : 'jobs are'} running`}${work.queued.length ? `, ${work.queued.length} queued` : ''}${stuck.length ? `, and ${stuck.length} ${stuck.length === 1 ? 'agent is' : 'agents are'} stuck` : ''}. ${questions.length === 0 ? 'No question is waiting on a person.' : `${questions.length === 1 ? 'One question is' : `${questions.length} questions are`} waiting on a person.`}`
+    : work.projectsError
+      ? 'trace could not read your projects, so what its agents are doing is not known just now.'
+      : `${work.running.length === 0 ? 'Nothing is running' : `${work.running.length} ${work.running.length === 1 ? 'job is' : 'jobs are'} running`}${work.queued.length ? `, ${work.queued.length} queued` : ''}${stuck.length ? `, and ${stuck.length} ${stuck.length === 1 ? 'agent is' : 'agents are'} stuck` : ''}. ${questions.length === 0 ? 'No question is waiting on a person.' : `${questions.length === 1 ? 'One question is' : `${questions.length} questions are`} waiting on a person.`}`
 
   useTraceContext({ label: 'Agents and tools', description: 'The screen the person is on: agents, their work, and the tools', value: { running: work.running.map((w) => `${w.project}: ${w.run.title}`), queued: work.queued.length, stuck: stuck.length } }, 'screen')
   useCommands([
@@ -150,11 +152,17 @@ function Agents() {
         </Section>
       )}
 
+      {work.projectsError && (
+        <QueryError error={work.projectsError} what="your projects, so this page cannot show what the agents are doing" onRetry={work.retry} />
+      )}
+
       <Section label="trace is doing now" count={work.running.length + work.queued.length} className="mt-8">
         {/* running and paused first, then each agent's queue in order; the controls each job's view allows */}
         {work.failed.length > 0 && <Partial>Could not read what is running on {work.failed.map(projectName).join(', ')}.</Partial>}
         {work.loading ? (
           <Loading><SkeletonRows rows={2} /></Loading>
+        ) : work.projectsError ? (
+          <EmptyState>Not known until trace can read your projects.</EmptyState>
         ) : work.running.length + work.queued.length === 0 ? (
           <EmptyState>Nothing is running or queued on your projects.</EmptyState>
         ) : (

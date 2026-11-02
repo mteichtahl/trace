@@ -12,7 +12,8 @@ export const queryClient = new QueryClient({
       // events, not polling: the live connection invalidates what changed (lib/live.ts)
       staleTime: 30_000,
       refetchOnWindowFocus: false,
-      retry: (n, e) => !(e instanceof ApiError && (e.noAccess || e.status === 401)) && n < 2,
+      // never retry a 429: trace's firewall counts every request, so a retry only keeps it shut longer
+      retry: (n, e) => !(e instanceof ApiError && (e.noAccess || e.status === 401 || e.status === 429)) && n < 2,
     },
   },
 })

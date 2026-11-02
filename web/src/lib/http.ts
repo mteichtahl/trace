@@ -16,6 +16,9 @@ export class HttpError extends Error {
   }
 }
 
+/** What a person is told when trace's web firewall is holding back their network's requests (a 429). */
+export const RATE_LIMITED = 'trace has had too many requests from your network in the last few minutes, so it is holding them back. Close any other trace tabs, wait a few minutes and try again.'
+
 /** Hex SHA-256 of a string (UTF-8), with the browser's crypto.subtle. */
 export async function sha256Hex(text: string): Promise<string> {
   const bytes = new TextEncoder().encode(text)
@@ -54,6 +57,8 @@ export async function request<T>(path: string, o: RequestOptions = {}): Promise<
   }
   if (!res.ok) {
     const d = (data ?? {}) as { error?: string; code?: string }
+    // trace's web firewall (src/infra/edge.ts) answers 429 with no body when one address sent too many requests
+    if (res.status === 429 && !d.error) throw new HttpError(RATE_LIMITED, 429, 'rate_limited', data)
     throw new HttpError(d.error ?? `${res.status} ${res.statusText}`, res.status, d.code, data)
   }
   return data as T

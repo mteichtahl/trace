@@ -26,7 +26,7 @@ export interface AppConfig {
   events: { http: string; realtime: string }
   features: { passkeys: boolean; email: boolean; voice: boolean; ops: boolean }
   /** AWS WAF in front of the app (absent: an installation from before it) */
-  waf?: { enabled: boolean; own: boolean; apiRequestsPer5Minutes: number; authRequestsPer5Minutes: number }
+  waf?: { enabled: boolean; own: boolean; apiRequestsPer10Minutes: number; authRequestsPer10Minutes: number }
 }
 
 export type SignInChoice = 'passkey' | 'email_code' | 'password'

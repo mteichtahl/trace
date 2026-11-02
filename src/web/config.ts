@@ -23,6 +23,7 @@
  *                           and the debounce table. Absent: no live updates from GitHub (the app polls)
  */
 import { z } from 'zod'
+import { wafPer10Minutes } from '../core/waf-limits.js'
 
 export const DEFAULT_MODEL = 'global.anthropic.claude-sonnet-4-5-20250929-v1:0'
 
@@ -45,7 +46,8 @@ export const WebConfig = z.object({
     ops: z.boolean().default(true),
   }).default({ passkeys: true, email: true, voice: true, ops: true }),
   /** the app's AWS WAF (src/infra/edge.ts): whether one is in front of it, and its limits; absent: an older stack */
-  waf: z.object({ enabled: z.boolean(), own: z.boolean().default(false), apiRequestsPer5Minutes: z.number(), authRequestsPer5Minutes: z.number() }).optional(),
+  // the older settings parameter said …Per5Minutes: read as their 10-minute equivalents until the stack writes it again
+  waf: z.preprocess(wafPer10Minutes, z.object({ enabled: z.boolean(), own: z.boolean().default(false), apiRequestsPer10Minutes: z.number(), authRequestsPer10Minutes: z.number() })).optional(),
   hooks: z.object({
     secret: z.string().min(1), clientSecret: z.string().min(1).optional(), tokenUrl: z.string().url(), clientId: z.string().min(1), scope: z.string().min(1), table: z.string().min(1).optional(),
   }).optional(),

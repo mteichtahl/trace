@@ -47,12 +47,12 @@ export interface HealthLine {
 export const OPTIONAL_LINE = 'Optional: parts search works without it; adds live stock and prices from this distributor.'
 
 /** The health line for AWS WAF in front of the app (src/infra/edge.ts). */
-export function wafLine(waf: { enabled: boolean; own: boolean; apiRequestsPer5Minutes: number; authRequestsPer5Minutes: number } | undefined): HealthLine {
+export function wafLine(waf: { enabled: boolean; own: boolean; apiRequestsPer10Minutes: number; authRequestsPer10Minutes: number } | undefined): HealthLine {
   const what = 'Protection (AWS WAF in front of the app)'
   if (!waf) return { id: 'waf', what, status: 'idle', word: 'Not reported', detail: 'This installation is older than the setting.', todo: 'Run the installer again: AWS WAF is on by default (about US$11 a month).' }
   if (!waf.enabled) return { id: 'waf', what, status: 'idle', word: 'Off', detail: 'Only the app\'s own limits per person apply; sign-in has no limit per address.', todo: 'Turn on "Protect the app with AWS WAF" in the installer\'s Advanced › Web app (about US$11 a month, plus US$0.60 per million requests).' }
   if (waf.own) return { id: 'waf', what, status: 'verified', word: 'On', detail: 'Your own web ACL is in front of the app.' }
-  return { id: 'waf', what, status: 'verified', word: 'On', detail: `AWS's managed rules; at most ${waf.apiRequestsPer5Minutes.toLocaleString()} requests to the API and ${waf.authRequestsPer5Minutes.toLocaleString()} sign-in requests per address in 5 minutes; no request body over 5 MB.` }
+  return { id: 'waf', what, status: 'verified', word: 'On', detail: `AWS's managed rules; at most ${waf.apiRequestsPer10Minutes.toLocaleString()} requests to the API and ${waf.authRequestsPer10Minutes.toLocaleString()} sign-in requests per address in 10 minutes; no request body over 5 MB.` }
 }
 
 /** The key's last four characters, the only part ever shown again. */

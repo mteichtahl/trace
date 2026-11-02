@@ -46,7 +46,7 @@ beforeAll(() => {
 describe('the web app', () => {
   it('is on by default, and a custom domain needs its certificate', () => {
     const p = InfraPropsSchema.parse(base)
-    expect(p.web).toEqual({ enabled: true, dashboards: [], waf: { enabled: true, apiRequestsPer5Minutes: 1000, authRequestsPer5Minutes: 100 }, hooks: { enabled: true } })
+    expect(p.web).toEqual({ enabled: true, dashboards: [], waf: { enabled: true, apiRequestsPer10Minutes: 10_000, authRequestsPer10Minutes: 200 }, hooks: { enabled: true } })
     expect(InfraPropsSchema.safeParse({ ...base, web: { domainName: 'trace.example.com' } }).success).toBe(false)
     expect(InfraPropsSchema.safeParse({ ...base, web: { certificateArn: CERT } }).success).toBe(false)
     expect(InfraPropsSchema.safeParse({ ...base, web: { domainName: 'trace.example.com', certificateArn: CERT } }).success).toBe(true)
@@ -238,7 +238,7 @@ describe('the web app', () => {
       events: { http: 'X', realtime: 'X', apiId: 'X' }, voiceBucket: 'X', voicePrefix: VOICE_PREFIX,
       dashboards: ['trace-agents'], model: 'us.anthropic.claude-sonnet-4-6', appUrl: 'https://X',
       features: { passkeys: true, email: false, voice: true, ops: true },
-      waf: { enabled: true, own: false, apiRequestsPer5Minutes: 1000, authRequestsPer5Minutes: 100 },
+      waf: { enabled: true, own: false, apiRequestsPer10Minutes: 10_000, authRequestsPer10Minutes: 200 },
       hooks: { secret: 'trace/web/github-hooks', clientSecret: 'trace/web/hooks-client', tokenUrl: 'https://X.auth.us-east-1.amazoncognito.com/oauth2/token', clientId: 'X', scope: 'trace-internal/members', table: 'X' },
     })
     // the web client, not the CLI's; the events' host names, no scheme
