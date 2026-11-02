@@ -176,7 +176,7 @@ export interface AgentView {
 
 /**
  * Each agent's status from the index and the journey's facts. Stuck beats waiting, which beats working: an agent
- * that cannot go on is what a person most needs to see. A stuck report the agent has since got past (a later job of
+ * that cannot go on is what a person most needs to see. A stuck report a person answered or dismissed, or one the agent has since got past (a later job of
  * its that started after the report and succeeded) no longer counts. A question or stuck report counts for an agent when it came
  * from one of its jobs (by job id), or names it (its words) when it has no job.
  */
@@ -193,7 +193,8 @@ export function agentViews(jobs: readonly IndexedJob[], facts: AgentFacts, answe
   // permission, never does), so the agent is not shown stuck on a problem its later work shows is gone
   const got = (agent: string | null, after: number): boolean => agent !== null && jobs.some((j) =>
     j.agent === agent && j.state === 'succeeded' && j.startedAt !== null && j.startedAt !== undefined && Date.parse(j.startedAt) / 1000 > after)
-  const stuck = facts.stuck.filter((s) => s.resolvedAt === null && !dismissed.has(s.id))
+  // a person answering it (question.answer writes the answer under the stuck item's id) settles it too, as on Home
+  const stuck = facts.stuck.filter((s) => s.resolvedAt === null && !dismissed.has(s.id) && !answered.has(s.id))
     .map((s) => ({ agent: of(s.jobId, s.agent), text: s.why, at: s.at }))
     .filter((s) => !got(s.agent, s.at))
   return AGENT_IDS.map((id) => {
