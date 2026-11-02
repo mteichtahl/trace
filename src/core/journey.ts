@@ -88,7 +88,11 @@ const STAGES_OF: Readonly<Record<Template, readonly StageId[]>> = {
 /** Who moves a criterion: a person (through a guided skill) or trace (a checker tool). */
 export type Owner = 'person' | 'trace'
 
-interface CriterionDef { key: string; text: string; owner: Owner; evidence: string; in?: readonly Template[] }
+/**
+ * `after`: the criteria (keys of the same gate) whose work this one reviews; a person's criterion is not the next step
+ * until they are met (the renders are approved once the board is routed, not before trace has drawn anything).
+ */
+interface CriterionDef { key: string; text: string; owner: Owner; evidence: string; in?: readonly Template[]; after?: readonly string[] }
 interface GateDef { id: string; stage: StageId; name: string; criteria: readonly CriterionDef[] }
 
 const ALL = TEMPLATES
@@ -98,7 +102,7 @@ const FIRMWARE: readonly Template[] = ['firmware', 'mixed']
 const LOGIC: readonly Template[] = ['fpga', 'mixed']
 
 /** Every gate trace knows, in journey order, with each criterion and the templates it applies to (all, when unsaid). */
-const GATES: readonly GateDef[] = [
+export const GATES: readonly GateDef[] = [
   { id: 'define', stage: 'define', name: 'requirements baseline', criteria: [
     { key: 'accepted', text: 'Every requirement is accepted or struck.', owner: 'person', evidence: 'the requirements list' },
     { key: 'measurable', text: 'Every requirement has a criterion that can be measured, with a number and a unit.', owner: 'person', evidence: 'the requirements list' },
@@ -129,14 +133,14 @@ const GATES: readonly GateDef[] = [
     { key: 'drc', text: 'The design rule check is clean, or each finding is waived.', owner: 'trace', evidence: 'the design rule check report' },
     { key: 'lengths', text: 'Matched-length groups are within tolerance.', owner: 'trace', evidence: 'the length-match report' },
     { key: 'fit', text: 'The board fits its enclosure, or each clash is waived.', owner: 'trace', evidence: 'the fit check' },
-    { key: 'renders', text: 'The board renders are approved.', owner: 'person', evidence: 'the board renders' },
+    { key: 'renders', text: 'The board renders are approved.', owner: 'person', evidence: 'the board renders', after: ['routed', 'drc'] },
     { key: 'pins', text: 'The pin plan still matches after any pin swaps.', owner: 'trace', evidence: 'the pin plan check', in: ['mixed'] },
   ] },
   { id: 'signoff', stage: 'signoff', name: 'release approval', criteria: [
     { key: 'coverage', text: 'Every requirement is verified or waived.', owner: 'trace', evidence: 'the coverage matrix' },
     { key: 'emc', text: 'The radio interference prechecks are run and within the target.', owner: 'trace', evidence: 'the interference precheck', in: BOARDS },
     { key: 'bom', text: 'The parts list is checked for cost and stock at the build quantity.', owner: 'trace', evidence: 'the parts list check' },
-    { key: 'report', text: 'The release report is reviewed: coverage, interference estimates, parts list and open waivers.', owner: 'person', evidence: 'the release report' },
+    { key: 'report', text: 'The release report is reviewed: coverage, interference estimates, parts list and open waivers.', owner: 'person', evidence: 'the release report', after: ['coverage', 'emc', 'bom'] },
   ] },
   { id: 'fabricate.order', stage: 'fabricate', name: 'order approval', criteria: [
     { key: 'package', text: 'The release package is built and stored.', owner: 'trace', evidence: 'the release package' },
@@ -612,7 +616,8 @@ export interface NextStep {
   recommendation: string | null
   button: string
   stage: StageId | null
-  ref: { kind: 'gate' | 'criterion' | 'question' | 'stage' | 'change'; id: string } | null
+  /** skill: a guided skill (src/core/skills.ts) the step opens, such as requirements-review */
+  ref: { kind: 'gate' | 'criterion' | 'question' | 'stage' | 'change' | 'skill'; id: string } | null
   /** the now-step's place among its stage's steps ("Step 3 of 5 in Capture"); null when it points at no step */
   step: { index: number; total: number } | null
   /** one sentence: what happens once this is done; null when nothing follows */
@@ -931,7 +936,10 @@ function baseNext(r: JourneyRecord, viewer: Viewer, at: number): Omit<NextStep, 
     }
   }
   const unmet = g.criteria.filter((c) => c.status === 'not_met')
-  const first = unmet.find((c) => c.owner === 'person') ?? unmet[0]
+  // a person's criterion that reviews trace's work waits for that work (CriterionDef `after`): until then trace is
+  // working, and the step says so rather than asking a person to approve what does not exist yet
+  const waiting = (c: { id: string }): boolean => (reviewsAfter(c.id) ?? []).some((k) => unmet.some((u) => u.id === `${open.id}.${k}`))
+  const first = unmet.find((c) => c.owner === 'person' && !waiting(c)) ?? unmet.find((c) => c.owner === 'trace') ?? unmet[0]
   const progress = `${g.met} of ${g.total} criteria met`
   if (first?.owner === 'person') {
     const mine = viewer.admin || viewer.part === 'contributor'
@@ -953,6 +961,12 @@ export function stageGuide(r: Pick<JourneyRecord, 'journey'>, stage: StageId, fo
   const t = stageGuideText(stage, r.journey.template)
   // every guide's purpose starts with what to do ("Choose how …"), so it follows "to"
   return { ...t, next: following ? `${STAGE_NAMES[following]}, to ${lowerFirst(stageGuideText(following, r.journey.template).purpose)}.` : null }
+}
+
+/** The criteria (keys of its gate) a criterion `gate.key` reviews the work of, from its definition. */
+function reviewsAfter(id: string): readonly string[] | undefined {
+  const dot = id.lastIndexOf('.')
+  return GATES.find((g) => g.id === id.slice(0, dot))?.criteria.find((c) => c.key === id.slice(dot + 1))?.after
 }
 
 /** The whole journey as people see it, for this viewer (`facts`: the agents' facts, merged in first). */

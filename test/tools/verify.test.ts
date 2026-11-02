@@ -84,6 +84,21 @@ describe('requirement extraction', () => {
     expect(r.total).toBe(2)
     expect((await call('verify.requirements', { action: 'list' })).total).toBe(0)
   })
+
+  it('another specialist lists the requirements but cannot add or update them: they are the Verification specialist\'s', async () => {
+    const was = process.env.TRACE_AGENT
+    process.env.TRACE_AGENT = 'impl'
+    try {
+      await expect(call('verify.requirements', { action: 'add', requirements: [{ text: 'The board is 20 mm square.', kind: 'functional' }] })).rejects.toThrow(/Verification specialist's to change.*journey\.handoff/)
+      await expect(call('verify.requirements', { action: 'update', id: 'REQ-1', set: { text: 'The board is 25 mm square.' } })).rejects.toThrow(/Verification specialist's/)
+      expect((await call('verify.requirements', { action: 'list' })).total).toBe(0)
+      process.env.TRACE_AGENT = 'verify'
+      expect((await call('verify.requirements', { action: 'add', requirements: [{ id: 'REQ-OWN', text: 'The board is 20 mm square.', kind: 'functional' }] })).added).toEqual(['REQ-OWN'])
+    } finally {
+      if (was === undefined) delete process.env.TRACE_AGENT
+      else process.env.TRACE_AGENT = was
+    }
+  })
 })
 
 // ------------------------------------------------------------------ parsers

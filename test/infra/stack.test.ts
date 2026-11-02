@@ -216,6 +216,11 @@ describe('the trace stack', () => {
       expect(submit?.Condition).toEqual({ StringEquals: { 'aws:RequestTag/trace:project': c.repo } })
       expect(s.find((x) => x.Sid === 'ProjectGpuTerminate')?.Condition).toEqual({ StringEquals: { 'aws:ResourceTag/trace:project': c.repo } })
       expect(s.find((x) => x.Sid === 'ProjectGpuTag')?.Condition?.StringEqualsIfExists).toEqual({ 'aws:ResourceTag/trace:project': c.repo })
+      // Batch authorizes the submit's tagging against the job definition too: its own definition is a resource of it
+      const tag = s.find((x) => x.Sid === 'ProjectGpuTag')
+      expect(JSON.stringify(tag?.Resource)).toContain(`job-definition/trace-gpu-${c.h}`)
+      expect(JSON.stringify(tag?.Resource)).toContain(':job/*')
+      expect(JSON.stringify(tag?.Resource)).not.toMatch(/job-definition\/\*/)
       // waiting on its jobs' events: its own wait queues by name, and its own topic, with those queues as the only endpoint
       const ownTopic = new RegExp(`^\\{"Ref":"Project${c.h}JobEvents[0-9A-F]{8}"\\}$`)
       const waitQueues = { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, `:sqs:us-east-1:123456789012:trace-${c.h}-wait-*`]] }

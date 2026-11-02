@@ -416,9 +416,13 @@ export class ProjectStack extends Construct {
         sid: 'ProjectGpuSubmit', actions: ['batch:SubmitJob'], resources: [jobs, p.gpu.queue.jobQueueArn, def, `${def}:*`],
         conditions: { StringEquals: { [`aws:RequestTag/${PROJECT_TAG}`]: slug } },
       }))
-      // tagging on submit (SubmitJob's dependent action); never re-tags another project's job
+      // tagging on submit (SubmitJob's dependent action), which Batch authorizes against the job definition as well as
+      // the job: without its definitions here every submit was refused (testyyyu: render.board and pcb.autoroute,
+      // "not authorized to perform: batch:TagResource on resource: …:job-definition/trace-gpu-…"). Its own definitions
+      // only, carrying its project's tag; never re-tags another project's job
+      const cpuDefs = this.cpuJobDefinitionName ? [`arn:${partition}:batch:${region}:${account}:job-definition/${this.cpuJobDefinitionName}`] : []
       role.addToPolicy(new iam.PolicyStatement({
-        sid: 'ProjectGpuTag', actions: ['batch:TagResource'], resources: [jobs],
+        sid: 'ProjectGpuTag', actions: ['batch:TagResource'], resources: [jobs, def, `${def}:*`, ...cpuDefs.flatMap((d) => [d, `${d}:*`])],
         conditions: {
           StringEquals: { [`aws:RequestTag/${PROJECT_TAG}`]: slug },
           StringEqualsIfExists: { [`aws:ResourceTag/${PROJECT_TAG}`]: slug },

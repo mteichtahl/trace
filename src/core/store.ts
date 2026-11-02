@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, mkdtempSync, statSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, parse, resolve } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
+import { gunzipSync, gzipSync } from 'node:zlib'
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json }
 export type Row = Record<string, SQLInputValue>
@@ -259,13 +260,13 @@ export class Work {
 
   artifact(id: string, name: string, data: string | Uint8Array, mime?: string): void {
     const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data
-    this.db.prepare('INSERT OR REPLACE INTO artifacts VALUES (?,?,?,?)')
-      .run(id, name, mime ?? (typeof data === 'string' ? 'text/plain' : 'application/octet-stream'), bytes)
+    const p = packArtifact(mime ?? (typeof data === 'string' ? 'text/plain' : 'application/octet-stream'), bytes)
+    this.db.prepare('INSERT OR REPLACE INTO artifacts VALUES (?,?,?,?)').run(id, name, p.mime, p.bytes)
   }
 
   getArtifact(id: string, name: string): Uint8Array | null {
-    const row = this.db.prepare('SELECT bytes FROM artifacts WHERE run_id=? AND name=?').get(id, name)
-    return row ? (row.bytes as Uint8Array) : null
+    const row = this.db.prepare('SELECT mime, bytes FROM artifacts WHERE run_id=? AND name=?').get(id, name)
+    return row ? unpackArtifact(row.mime as string | null, row.bytes as Uint8Array).bytes : null
   }
 
   /** The newest runs: of a kind (a prefix), and of one agent's sessions (`agent`), when given. */
@@ -280,7 +281,8 @@ export class Work {
     const r = this.db.prepare('SELECT * FROM runs WHERE id=?').get(id)
     if (!r) return null
     const measurements = this.db.prepare('SELECT name, value, unit FROM measurements WHERE run_id=? ORDER BY name').all(id) as unknown as Measurement[]
-    const artifacts = this.db.prepare('SELECT name, mime, length(bytes) AS size FROM artifacts WHERE run_id=? ORDER BY name').all(id) as unknown as RunRecord['artifacts']
+    const artifacts = (this.db.prepare('SELECT name, mime, length(bytes) AS size FROM artifacts WHERE run_id=? ORDER BY name').all(id) as unknown as RunRecord['artifacts'])
+      .map((a) => ({ ...a, mime: artifactMime(a.mime) }))
     return { ...(r as unknown as RunRecord), args: dec(r.args), result: dec(r.result), measurements, artifacts }
   }
 
@@ -341,4 +343,45 @@ export function fileExists(p: string): boolean {
   } catch {
     return false
   }
+}
+
+// ------------------------------------------------------------------ packed artifacts
+
+/**
+ * A large artifact is kept gzipped in .trace/project.db, which lives in git under GitHub's 100 MB file limit: SPICE
+ * waveforms (tran.raw, several MB of text each) filled testyyyu's database to 72 MB in one Prove stage, and gzip keeps
+ * about a fifth of them. The mime carries the marker, so a reader knows to unpack (unpackArtifact); a file already
+ * compressed (images, archives, PDFs), or one gzip does not shrink by a fifth, is kept as it is.
+ */
+export const PACK_OVER = 256 * 1024
+const PACKED = '; trace-encoding=gzip'
+const COMPRESSED = /^(image\/(png|jpe?g|gif|webp)|application\/(gzip|zip|x-7z-compressed|zstd|pdf)|video\/|audio\/)/
+
+export function packArtifact(mime: string, bytes: Uint8Array): { mime: string; bytes: Uint8Array } {
+  if (bytes.length <= PACK_OVER || mime.endsWith(PACKED) || COMPRESSED.test(mime)) return { mime, bytes }
+  const z = gzipSync(bytes, { level: 6 })
+  return z.length <= bytes.length * 0.8 ? { mime: `${mime}${PACKED}`, bytes: new Uint8Array(z) } : { mime, bytes }
+}
+
+/** An artifact row's own mime and bytes: unpacked when packArtifact packed it, else as stored. */
+export function unpackArtifact(mime: string | null, bytes: Uint8Array): { mime: string | null; bytes: Uint8Array } {
+  if (!mime?.endsWith(PACKED)) return { mime, bytes }
+  return { mime: mime.slice(0, -PACKED.length), bytes: new Uint8Array(gunzipSync(bytes)) }
+}
+
+/** An artifact's mime as its readers see it (without the packing marker). */
+export const artifactMime = (mime: string | null): string | null => (mime?.endsWith(PACKED) ? mime.slice(0, -PACKED.length) : mime)
+
+/** Pack every large artifact already in a database (tracectl db pack). Returns how many and the bytes before/after. */
+export function packArtifacts(db: DatabaseSync): { packed: number; before: number; after: number } {
+  const rows = db.prepare('SELECT run_id, name, mime, bytes FROM artifacts WHERE length(bytes) > ?').all(PACK_OVER) as { run_id: string; name: string; mime: string | null; bytes: Uint8Array }[]
+  const put = db.prepare('UPDATE artifacts SET mime=?, bytes=? WHERE run_id=? AND name=?')
+  let packed = 0, before = 0, after = 0
+  for (const r of rows) {
+    const p = packArtifact(r.mime ?? 'application/octet-stream', r.bytes)
+    if (p.bytes === r.bytes) continue
+    put.run(p.mime, p.bytes, r.run_id, r.name)
+    packed++; before += r.bytes.length; after += p.bytes.length
+  }
+  return { packed, before, after }
 }

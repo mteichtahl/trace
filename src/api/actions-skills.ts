@@ -36,7 +36,7 @@ import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainl
 import { type Lasts, carryOn, viewerOf } from './actions-journey.js'
 import { loadDesignDecisions, recordDesignDecision } from '../tools/design/decisions.js'
 import type { DesignRows } from '../tools/design/db.js'
-import { architectureView, intentDraft, intentView, linksView, pinCheck } from '../tools/design/record.js'
+import { type RequirementWords, architectureView, intentDraft, intentView, linksView, pinCheck } from '../tools/design/record.js'
 import { type DecisionInput, Decision, prepare } from './actions-design.js'
 import { kicadFiles } from './actions-record.js'
 import { checkFindings, designOf, hasTable, latestNetlist, latestRun, requirementEvidence, runResult, struckRequirements } from './record-read.js'
@@ -174,8 +174,8 @@ async function caseStaleness(ctx: Context, repo: string, was: unknown): Promise<
   }
 }
 
-/** Each requirement's id and its words as the record has them: a decision on one keeps the words it was made on. */
-const requirementTexts = (db: import('node:sqlite').DatabaseSync): Map<string, string> => new Map(hasTable(db, 'requirements') ? (db.prepare('SELECT id, text FROM requirements').all() as { id: string; text: string }[]).map((x) => [String(x.id), String(x.text)]) : [])
+/** Each requirement's words and acceptance as the record has them: a decision on one keeps what it was made on. */
+const requirementTexts = (db: import('node:sqlite').DatabaseSync): Map<string, RequirementWords> => new Map(hasTable(db, 'requirements') ? (db.prepare('SELECT id, text, acceptance FROM requirements').all() as { id: string; text: string; acceptance: string | null }[]).map((x) => [String(x.id), { text: String(x.text), acceptance: x.acceptance === null ? null : String(x.acceptance) }]) : [])
 const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
 
 /** A number followed by its unit (2 layers, 5.1 kΩ, ±10 %, 40 °C, 0.5 Hz). */
@@ -392,7 +392,7 @@ export const SKILL_ACTIONS = {
       jobId = r.jobId
       started = ['The agents raise the change request for approval.']
     }
-    const { rows: designRows, reqIds } = DESIGN_SKILLS.has(a.skill) ? await withRecordDb(ctx, a.repo, (db) => ({ rows: designOf(db).rows, reqIds: requirementTexts(db) })) : { rows: null as unknown as DesignRows, reqIds: new Map<string, string>() }
+    const { rows: designRows, reqIds } = DESIGN_SKILLS.has(a.skill) ? await withRecordDb(ctx, a.repo, (db) => ({ rows: designOf(db).rows, reqIds: requirementTexts(db) })) : { rows: null as unknown as DesignRows, reqIds: new Map<string, RequirementWords>() }
     const out = await plainly(() => writeJourney(ctx, a.repo, (db) => {
       let ref: string | null = null
       // the design decisions the skill makes (Intent builder, Requirements review, Architecture choice, Pin plan
