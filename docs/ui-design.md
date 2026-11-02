@@ -408,6 +408,16 @@ The five visuals the journey specifies (traceability, block diagram, findings ov
 | Run plots | Evidence tab; run pages; chat | Reads the verdict and the margin against the limit line; overlays the previous revision |
 | Bench wiring view | Build tab; Bench setup; Bring-up run | Ticks each wire as connected; taps a point to see it on the board render |
 
+**The board in 3D.** The Design tab's Board opens on a lifelike 3D board by default, with the flat drawing (KiCanvas) one tap away for exact checking; the person's last choice is remembered in their browser. It is built in the browser straight from the `.kicad_pcb` (`web/src/lib/kicad-board.ts`, `web/src/components/board3d`), so it follows every push the moment the file does, with nothing to export or wait for:
+
+- **Explore.** Drag to turn, scroll or pinch to zoom, right-drag to move; Angled, From above and Edge on put the camera back; **Turn over** flips the board to show the underside, with its copper, joints and parts.
+- **Parts.** Every footprint gets a body from what its name says: chip resistors (with their value code), capacitors, inductors and LEDs; small diodes with their band; SOT, SOIC, SSOP, TSSOP, QFP and QFN chips with leads and a pin 1 mark; DIP and TO-220; pin headers and sockets; electrolytic capacitors; crystals. A footprint none of these fits is a grey block the size of its courtyard with its reference on top, and the view lists which, so the board never looks emptier than it is. Holes, fiducials, test points and logos get none. Tap a part for its reference, value, footprint, side and position.
+- **Findings.** The design rule check's findings are numbered pins on the board; picking one in the list turns the board the right way up, flies the camera to it and selects the part it names.
+- **Finish.** The solder mask colour and pad plating start from the board's own stackup (KiCad's colour and copper finish); others can be tried there and then. That changes the view only, never the order.
+- **For a closer look, and fun.** Lift parts off raises every part above its pads; Power on lights the LEDs.
+
+Where the browser cannot draw 3D (WebGL off), the view says so and the flat drawing still works. Real KiCad library shapes (from an export of the board's 3D model) are a later step: they need an export made on every push and stored outside the repository.
+
 **Asking for a picture.** "Show me the power sheet" or "render the bottom side" in chat produces the picture as a card. Slow pictures (photographic renders, turntables) show a Run card with an estimate first, then the image when it arrives, and are kept with the run that made them.
 
 **Severity colours** are the only colours in the visuals besides the accent: red (blocks the gate), amber (fix or waive), grey (waived), green (verified). Each also carries its own marker shape and word.
@@ -427,7 +437,7 @@ Every file trace makes or reads opens in the app without downloading it, through
 | Kind | Files | In chat | Full viewer | Built with |
 | --- | --- | --- | --- | --- |
 | Schematic | `.kicad_sch` | Sheet thumbnail with finding markers | Pan and zoom across sheets, hover a net to highlight it, tap a symbol for its part and datasheet, findings overlay | KiCanvas, with trace's overlay layer |
-| Board | `.kicad_pcb` | Top-side thumbnail | Layers on and off, highlight a net, measure, findings overlay, top and bottom flip | KiCanvas, with trace's overlay layer |
+| Board | `.kicad_pcb` | Top-side thumbnail | Layers on and off, highlight a net, measure, findings overlay, top and bottom flip; on the Design tab, a lifelike 3D board by default | KiCanvas, with trace's overlay layer; three.js for 3D |
 | Fabrication | Gerbers, drill files, the JLCPCB zip | Composite board image | Each layer as an image, stacked or alone, the drill map, the zip's contents listed | tracespace (Gerber and drill rendering) |
 | 3D models | `.step`, `.stl`, `.glb` | Still image | Orbit, section, explode; the board in its enclosure with clashes marked | three.js, with an OpenCascade build for STEP |
 | Renders | `.png`, `.jpg`, `.webp`, `.mp4` turntables | The image or a playing loop | Zoom to pixel, compare two side by side with a slider | Native image and video |
@@ -957,6 +967,18 @@ Source: [`Focus.dc.html`](ui/source/Focus.dc.html)
 ![Focus mode: Intent builder](ui/screens/Intent.png)
 
 Source: [`Intent.dc.html`](ui/source/Intent.dc.html)
+
+### Board in 3D
+
+![Board in 3D](ui/screens/Board3D.png)
+
+Turned over, to look underneath:
+
+![Board in 3D, underside](ui/screens/Board3DUnder.png)
+
+Close up (the sample project's sensor node), dark mode:
+
+![Board in 3D, close up](ui/screens/Board3DClose.png)
 
 ### Gate signing
 

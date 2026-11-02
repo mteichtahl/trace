@@ -266,11 +266,11 @@ export const DESIGN: DesignView = {
     { pin: 'PB8', net: 'TP_SPARE1', fn: 'Spare', status: 'spare' },
   ],
   board: {
-    path: 'build/kicad/soil-sensor/pcb/top.svg', size: '50 × 30 mm · 4 layers · ENIG', layers: ['Top copper', 'Inner 1', 'Inner 2', 'Bottom copper', 'Silkscreen'],
+    file: 'hardware/soil-sensor.kicad_pcb', path: 'build/kicad/soil-sensor/pcb/top.svg', size: '50 × 30 mm · 4 layers · ENIG', layers: ['Top copper', 'Inner 1', 'Inner 2', 'Bottom copper', 'Silkscreen'],
     findings: [
-      { id: 'B1', severity: 'blocks', text: 'Decoupling C5 is 6.1 mm from U1 pin 12; the rule is 3 mm.', at: { x: 0.56, y: 0.47 }, where: 'C5' },
-      { id: 'B2', severity: 'fix', text: 'J1 sits 0.3 mm inside the board edge clearance.', at: { x: 0.26, y: 0.48 }, where: 'J1' },
-      { id: 'B3', severity: 'waived', text: 'Silkscreen over pad on TP3.', at: { x: 0.77, y: 0.66 }, where: 'TP3' },
+      { id: 'B1', severity: 'blocks', text: 'Decoupling C5 is 6.1 mm from U1 pin 12; the rule is 3 mm.', at: { x: 0.56, y: 0.47 }, x_mm: 28, y_mm: 14.1, where: 'C5' },
+      { id: 'B2', severity: 'fix', text: 'J1 sits 0.3 mm inside the board edge clearance.', at: { x: 0.26, y: 0.48 }, x_mm: 13, y_mm: 14.4, where: 'J1' },
+      { id: 'B3', severity: 'waived', text: 'Silkscreen over pad on TP3.', at: { x: 0.77, y: 0.66 }, x_mm: 38.5, y_mm: 19.8, where: 'TP3' },
     ],
   },
 }
