@@ -103,6 +103,9 @@ export function withoutQuotedRequest(body: string | null | undefined): string {
       else continue
     }
     if (/\basked:\s*$/i.test(line)) { quoting = true; continue }
+    // a Markdown blockquote is someone else's words: a worker quotes the request it was given that way ("## The
+    // request, quoted" then "> … Do not merge.")
+    if (/^\s*>/.test(line)) continue
     out.push(line)
   }
   return out.join('\n')
