@@ -33,21 +33,24 @@ const ICON: Record<string, LucideIcon> = {
   memory: Brain,
 }
 
-/** Where each later section comes from: "Evidence and Build appear once the project reaches Prove and Release." */
-const LATER: { id: string; label: string; stage: string }[] = [
-  { id: 'requirements', label: 'Requirements', stage: 'Define' },
-  { id: 'design', label: 'Design', stage: 'Architect' },
-  { id: 'evidence', label: 'Evidence', stage: 'Prove' },
-  { id: 'build', label: 'Build', stage: 'Release' },
+/**
+ * Where each later section comes from: "Evidence and Build appear once the project reaches Capture and Release."
+ * Evidence starts with the first checks: Capture where the project has it (board, mixed), else Prove (FPGA, firmware).
+ */
+const LATER: { id: string; label: string; stage: (j?: Journey) => string }[] = [
+  { id: 'requirements', label: 'Requirements', stage: () => 'Define' },
+  { id: 'design', label: 'Design', stage: () => 'Architect' },
+  { id: 'evidence', label: 'Evidence', stage: (j) => (j && !j.stages.some((s) => s.id === 'capture' || s.name.toLowerCase() === 'capture') ? 'Prove' : 'Capture') },
+  { id: 'build', label: 'Build', stage: () => 'Release' },
 ]
 
 const and = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`)
 
 /** The sections still to come, in a sentence, or null when every one is open. */
-export function laterLine(tabs: SectionTab[]): string | null {
+export function laterLine(tabs: SectionTab[], journey?: Journey): string | null {
   const missing = LATER.filter((l) => !tabs.some((t) => t.id === l.id))
   if (!missing.length) return null
-  return `${and(missing.map((m) => m.label))} ${missing.length === 1 ? 'appears' : 'appear'} once the project reaches ${and(missing.map((m) => m.stage))}.`
+  return `${and(missing.map((m) => m.label))} ${missing.length === 1 ? 'appears' : 'appear'} once the project reaches ${and(missing.map((m) => m.stage(journey)))}.`
 }
 
 /** Each section's one-line status, from what the project page already has. */
@@ -87,7 +90,7 @@ export function SectionsSheet({ name, base, tabs, journey, changes, ready, check
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const isHere = (t: SectionTab) => (t.to === '' ? pathname === base || pathname === `${base}/` : pathname.startsWith(base + t.to))
   const here = tabs.find(isHere)
-  const later = laterLine(tabs)
+  const later = laterLine(tabs, journey)
   const stage = journey?.stages.find((s) => s.state === 'current' || s.state === 'reopened')
   return (
     <Drawer open={open} onOpenChange={setOpen}>

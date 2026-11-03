@@ -10,7 +10,7 @@
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, createFileRoute } from '@tanstack/react-router'
-import { ArrowUp, Check, CircleX, FileText, Loader2, Pause, X } from 'lucide-react'
+import { ArrowUp, Check, ChevronRight, CircleX, FileText, Loader2, Pause, X } from 'lucide-react'
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -24,19 +24,26 @@ import { Markdown } from '@/components/chat/markdown'
 import { useCrumb } from '@/components/shell/breadcrumbs'
 import { useCommands } from '@/components/shell/command-menu'
 import { FindingsList } from '@/components/skills/findings'
-import { StatusBadge } from '@/components/status-badge'
+import { FileSheet } from '@/components/files/file-viewer'
+import type { FileRef } from '@/components/files/data'
+import { kindLabel } from '@/components/files/kinds'
+import { RunSteps, stepsOf } from '@/components/runs/run-steps'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useMediaQuery } from '@/hooks/use-media-query'
 import { EmptyState, Loading, QueryError } from '@/components/states'
 import { Term } from '@/components/term'
 import { useNow } from '@/components/use-now'
 import { call, repoOf } from '@/lib/api'
 import { duration, eng, time } from '@/lib/format'
 import { q, useAction, useProjects } from '@/lib/queries'
-import type { RunRecordView, RunStep } from '@/lib/types-s1'
-import { cn } from '@/lib/utils'
+import type { RunRecordView } from '@/lib/types-s1'
 import { RUN_STATUS } from './evidence'
 import { HandoffRow, useDeclineHandoffs } from '@/components/handoff'
 
 const PlotCard = lazy(() => import('@/components/chat/cards').then((m) => ({ default: m.PlotCard })))
+
+/** What the artifact action returns at most (src/api/action-kit.ts MAX_ARTIFACT): a larger file is named, not opened. */
+const MAX_RUN_FILE = 8 * 1024 * 1024
 
 export const Route = createFileRoute('/_app/p/$id/runs/$run')({
   staticData: { crumb: 'Run' },
@@ -60,6 +67,9 @@ function RunPage() {
   const answers = (jobs.data?.handoffs ?? []).filter((h) => workerJob && (h.workerJobId === workerJob || h.jobId === r?.jobId))
   const raised = (jobs.data?.handoffs ?? []).filter((h) => workerJob && (h.fromWorkerJobId === workerJob || h.fromJobId === r?.jobId))
   const [confirm, setConfirm] = useState(false)
+  const phone = useMediaQuery('(max-width: 767px)')
+  const [tab, setTab] = useState('result')
+  const [file, setFile] = useState<FileRef | null>(null)
   useCrumb('/_app/p/$id/runs/$run', r?.title ?? runId)
 
   // the job moved on (a live job.updated invalidated it): read the run again
@@ -102,6 +112,8 @@ function RunPage() {
   const current = r.steps?.find((s) => s.state === 'running')
   const idx = r.steps ? r.steps.indexOf(current!) : -1
   const progress = current?.progress
+  const steps = stepsOf(r, now / 1000)
+  const files = r.artifacts ?? []
 
   return (
     <div className="pb-12">
@@ -143,56 +155,53 @@ function RunPage() {
         )}
       </section>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
-        <div className="min-w-0 space-y-6">
-          {(r.plots?.length ?? 0) > 0 && (
-            <section className="rounded-xl border p-5" aria-labelledby="plots">
-              <h2 id="plots" className="text-lg font-semibold">Plots</h2>
-              {r.plots!.map((p) => (
-                <Suspense key={p.title} fallback={<Skeleton className="mt-3 h-56" />}>
-                  <PlotCard data={p} />
-                </Suspense>
-              ))}
-            </section>
-          )}
-
-          {r.steps && r.steps.length > 0 && (
-            <section className="rounded-xl border p-5" aria-labelledby="steps">
+      {(() => {
+        const plotsEl = (r.plots?.length ?? 0) > 0 && (
+          <section className="rounded-xl border p-5" aria-labelledby="plots">
+            <h2 id="plots" className="text-lg font-semibold">Plots</h2>
+            {r.plots!.map((p) => (
+              <Suspense key={p.title} fallback={<Skeleton className="mt-3 h-56" />}>
+                <PlotCard data={p} />
+              </Suspense>
+            ))}
+          </section>
+        )
+        const stepsEl = (
+          <section className="rounded-xl border p-5" aria-labelledby="steps">
+            <div className="flex items-baseline justify-between gap-2">
               <h2 id="steps" className="text-lg font-semibold">Steps</h2>
-              <ol className="mt-3 space-y-0">
-                {r.steps.map((s, i) => <StepRow key={s.id} step={s} last={i === r.steps!.length - 1} />)}
-              </ol>
-            </section>
-          )}
-
-          {r.findings && r.findings.length > 0 && (
-            <section aria-labelledby="findings">
-              <h2 id="findings" className="mb-3 text-lg font-semibold">Findings</h2>
-              <FindingsList findings={r.findings} />
-            </section>
-          )}
-
-          {answers.length + raised.length > 0 && (
-            <section className="rounded-xl border" aria-labelledby="handoffs">
-              <h2 id="handoffs" className="px-5 pt-5 text-lg font-semibold">Hand-offs</h2>
-              <p className="px-5 text-sm text-muted-foreground">
-                {answers.length ? 'Another specialist asked for this job. ' : ''}{raised.length ? `It asked ${raised.length === 1 ? 'another specialist' : `${raised.length} times`} for an answer in their area.` : ''}
-              </p>
-              <div className="mt-2 divide-y border-t">
-                {[...answers, ...raised].map((h) => (
-                  <HandoffRow key={h.id} handoff={h} defaultOpen={answers.includes(h)} {...(write ? { onDecline: (x, why) => decline(repo, x, why) } : {})} />
-                ))}
-              </div>
-            </section>
-          )}
-
+              {r.session && <span className="text-xs text-muted-foreground">{r.session.agent ? `${r.session.agent} · ` : ''}{steps.length} in this job, oldest first</span>}
+            </div>
+            {steps.length ? <div className="mt-3"><RunSteps steps={steps} /></div> : <p className="mt-2 text-sm text-muted-foreground">{running ? 'Steps appear as the run reports them.' : 'This run reported no steps.'}</p>}
+          </section>
+        )
+        const findingsEl = r.findings && r.findings.length > 0 && (
+          <section aria-labelledby="findings">
+            <h2 id="findings" className="mb-3 text-lg font-semibold">Findings</h2>
+            <FindingsList findings={r.findings} />
+          </section>
+        )
+        const handoffsEl = answers.length + raised.length > 0 && (
+          <section className="rounded-xl border" aria-labelledby="handoffs">
+            <h2 id="handoffs" className="px-5 pt-5 text-lg font-semibold">Hand-offs</h2>
+            <p className="px-5 text-sm text-muted-foreground">
+              {answers.length ? 'Another specialist asked for this job. ' : ''}{raised.length ? `It asked ${raised.length === 1 ? 'another specialist' : `${raised.length} times`} for an answer in their area.` : ''}
+            </p>
+            <div className="mt-2 divide-y border-t">
+              {[...answers, ...raised].map((h) => (
+                <HandoffRow key={h.id} handoff={h} defaultOpen={answers.includes(h)} {...(write ? { onDecline: (x, why) => decline(repo, x, why) } : {})} />
+              ))}
+            </div>
+          </section>
+        )
+        const logEl = (
           <section className="rounded-xl border p-5" aria-labelledby="log">
             <div className="flex items-baseline justify-between gap-2">
               <h2 id="log" className="text-lg font-semibold">Agent log</h2>
               {r.log?.length ? <span className="text-xs text-muted-foreground">{r.log[0]!.who} · newest last</span> : null}
             </div>
             {!r.log?.length ? (
-              <p className="mt-2 text-sm text-muted-foreground">This run kept no agent log: it was a tool run, not an agent's work.</p>
+              <p className="mt-2 text-sm text-muted-foreground">{r.session ? 'The agent\'s own words are not kept with this run; its steps are under Steps.' : 'This run kept no agent log: it was a tool run, not an agent\'s work.'}</p>
             ) : (
               <ol className="mt-3 space-y-5">
                 {r.log.map((m) => (
@@ -209,52 +218,103 @@ function RunPage() {
               </ol>
             )}
           </section>
-        </div>
-
-        <aside className="space-y-4">
-          {running && (
-            <div className="rounded-xl border p-5 text-sm">
-              <h2 className="font-semibold">What you can do</h2>
-              <dl className="mt-3 space-y-3">
-                {can('pause') && <div><dt className="font-medium">Pause</dt><dd className="text-muted-foreground">Keeps what is done. Resume any time.</dd></div>}
-                <div><dt className="font-medium">Cancel</dt><dd className="text-muted-foreground">Stops within seconds and says what was kept: commits the agent already pushed stay on their branch.</dd></div>
-                {can('move_up') && <div><dt className="font-medium">Move up the queue</dt><dd className="text-muted-foreground">Runs before your other waiting jobs.</dd></div>}
-                {!can('pause') && <div><dt className="font-medium">Pause and Move up</dt><dd className="text-muted-foreground">Not available: a run is one agent session that cannot be held and resumed, and runs start as soon as they are asked for, so there is no queue to move up.</dd></div>}
-              </dl>
-            </div>
-          )}
-          {(r.measurements?.length ?? 0) > 0 && (
-            <div className="rounded-xl border p-5 text-sm">
-              <h2 className="font-semibold">Measurements</h2>
-              <dl className="mt-3 space-y-1.5">
-                {r.measurements!.map((m) => (
-                  <div key={m.name} className="flex justify-between gap-3"><dt className="font-mono text-xs text-muted-foreground">{m.name}</dt><dd className="font-mono">{m.value === null ? '—' : m.unit ? eng(m.value, m.unit) : m.value}</dd></div>
-                ))}
-              </dl>
-            </div>
-          )}
+        )
+        const doEl = running && (
+          <div className="rounded-xl border p-5 text-sm">
+            <h2 className="font-semibold">What you can do</h2>
+            <dl className="mt-3 space-y-3">
+              {can('pause') && <div><dt className="font-medium">Pause</dt><dd className="text-muted-foreground">Keeps what is done. Resume any time.</dd></div>}
+              <div><dt className="font-medium">Cancel</dt><dd className="text-muted-foreground">Stops within seconds and says what was kept: commits the agent already pushed stay on their branch.</dd></div>
+              {can('move_up') && <div><dt className="font-medium">Move up the queue</dt><dd className="text-muted-foreground">Runs before your other waiting jobs.</dd></div>}
+              {!can('pause') && <div><dt className="font-medium">Pause and Move up</dt><dd className="text-muted-foreground">Not available: a run is one agent session that cannot be held and resumed, and runs start as soon as they are asked for, so there is no queue to move up.</dd></div>}
+            </dl>
+          </div>
+        )
+        const measEl = (r.measurements?.length ?? 0) > 0 && (
+          <div className="rounded-xl border p-5 text-sm">
+            <h2 className="font-semibold">Measurements</h2>
+            <dl className="mt-3 space-y-1.5">
+              {r.measurements!.map((m) => (
+                <div key={m.name} className="flex justify-between gap-3"><dt className="font-mono text-xs text-muted-foreground">{m.name}</dt><dd className="font-mono">{m.value === null ? '—' : m.unit ? eng(m.value, m.unit) : m.value}</dd></div>
+              ))}
+            </dl>
+          </div>
+        )
+        const filesEl = (
           <div className="rounded-xl border p-5 text-sm">
             <h2 className="font-semibold">Files</h2>
-            {(r.artifacts?.length ?? 0) === 0 ? (
+            {files.length === 0 ? (
               <p className="mt-2 text-muted-foreground">{running ? 'Files appear as the run writes them.' : 'This run kept no files.'}</p>
             ) : (
-              <ul className="mt-2 space-y-1.5">
-                {r.artifacts!.map((a) => (
-                  <li key={a.name} className="flex items-center gap-2"><FileText className="size-3.5 text-muted-foreground" aria-hidden /><span className="truncate font-mono text-xs">{a.name}</span><span className="ml-auto text-xs text-muted-foreground">{eng(a.size, 'B')}</span></li>
-                ))}
+              <ul className="-mx-2 mt-2 space-y-0.5">
+                {files.map((a) => {
+                  const big = a.size > MAX_RUN_FILE
+                  const inner = (
+                    <>
+                      <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-mono text-xs">{a.name}</span>
+                        <span className="block text-xs text-muted-foreground">{big ? `Too large to open here (${eng(a.size, 'B')}; trace opens run files up to 8 MB)` : `${kindLabel(a.name)} · ${eng(a.size, 'B')}`}</span>
+                      </span>
+                    </>
+                  )
+                  return (
+                    <li key={a.name}>
+                      {big ? (
+                        <div className="flex items-center gap-2 px-2 py-2">{inner}</div>
+                      ) : (
+                        <button type="button" onClick={() => setFile({ repo, path: `runs/${r.id}/${a.name}`, run: { id: r.id, name: a.name }, size: a.size })} className="flex min-h-11 w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-muted/60 active:bg-muted">
+                          {inner}
+                          <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                        </button>
+                      )}
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </div>
+        )
+        const whereEl = (
           <div className="rounded-xl border p-5 text-sm">
             <h2 className="font-semibold">Where it runs</h2>
             <p className="mt-2 text-muted-foreground">{r.where ?? "On the project's agent"} · <span className="font-mono">{r.kind}</span>{r.git_sha ? <> on push <span className="font-mono">{r.git_sha}</span></> : null}</p>
             {r.requirement && <p className="mt-2">Judged against <Link to="/p/$id/requirements/$rid" params={{ id, rid: r.requirement }} className="font-mono text-primary hover:underline">{r.requirement}</Link></p>}
             {running && <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground"><span className="size-2 rounded-full bg-verified" aria-hidden /> Updates live as the job reports each step.</p>}
           </div>
-        </aside>
-      </div>
+        )
+        if (phone)
+          return (
+            <Tabs value={tab} onValueChange={setTab} className="mt-4">
+              <TabsList className="sticky top-14 z-10 w-full">
+                <TabsTrigger value="result">Result</TabsTrigger>
+                <TabsTrigger value="steps">Steps{steps.length ? ` (${steps.length})` : ''}</TabsTrigger>
+                <TabsTrigger value="log">Log</TabsTrigger>
+                <TabsTrigger value="files">Files{files.length ? ` (${files.length})` : ''}</TabsTrigger>
+              </TabsList>
+              <TabsContent value="result" className="space-y-4 pt-2">{doEl}{plotsEl}{findingsEl}{measEl}{handoffsEl}{whereEl}</TabsContent>
+              <TabsContent value="steps" className="pt-2">{stepsEl}</TabsContent>
+              <TabsContent value="log" className="pt-2">{logEl}</TabsContent>
+              <TabsContent value="files" className="pt-2">{filesEl}</TabsContent>
+            </Tabs>
+          )
+        return (
+          <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+            <div className="min-w-0 space-y-6">
+              {plotsEl}
+              {steps.length > 0 && stepsEl}
+              {findingsEl}
+              {handoffsEl}
+              {logEl}
+            </div>
+            <aside className="space-y-4">{doEl}{measEl}{filesEl}{whereEl}</aside>
+          </div>
+        )
+      })()}
 
-      {!r.steps && !r.log && !r.plots && !r.findings && !r.summary && <EmptyState className="mt-6">This run has not reported anything yet.</EmptyState>}
+      <FileSheet file={file} open={!!file} onOpenChange={(o) => { if (!o) setFile(null) }} />
+
+      {!steps.length && !r.log && !r.plots && !r.findings && !r.summary && <EmptyState className="mt-6">This run has not reported anything yet.</EmptyState>}
 
       <AlertDialog open={confirm} onOpenChange={setConfirm}>
         <AlertDialogContent>
@@ -269,30 +329,5 @@ function RunPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
-  )
-}
-
-function StepRow({ step: s, last }: { step: RunStep; last: boolean }) {
-  const done = s.state === 'done'
-  const running = s.state === 'running'
-  return (
-    <li className="relative flex gap-3 pb-4">
-      {!last && <span className="absolute left-[9px] top-6 h-[calc(100%-18px)] w-px bg-border" aria-hidden />}
-      <span className={cn('z-[1] mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border-2 bg-background', done && 'border-foreground bg-foreground text-background', running && 'border-primary', s.state === 'failed' && 'border-destructive')} aria-hidden>
-        {done && <Check className="size-3" strokeWidth={3} />}
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className={cn('text-sm', running && 'font-medium', s.state === 'queued' && 'text-muted-foreground')}>
-          <Term>{s.title}</Term>
-        </p>
-        {s.detail && <p className="text-xs text-muted-foreground">{s.detail}</p>}
-        {running && s.progress !== undefined && (
-          <div className="mt-2 h-1 max-w-xs overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: `${s.progress * 100}%` }} /></div>
-        )}
-      </div>
-      <span className="shrink-0 text-xs">
-        {done ? <span className="font-mono text-muted-foreground">✓ {duration(s.durationS ?? 0, { short: true })}</span> : running ? <span className="text-primary">Running · {duration(s.durationS ?? 0, { short: true })}</span> : <StatusBadge status={s.state === 'failed' ? 'failing' : 'queued'} label={s.state === 'skipped' ? 'Skipped' : undefined} />}
-      </span>
-    </li>
   )
 }

@@ -7,6 +7,7 @@ import { PARTS_DB_AFTER, PARTS_DB_BEFORE } from './fixtures-db'
 import { gzipSync, zipSync, strToU8 } from 'fflate'
 import type { FileFinding, ListedFile } from '@/components/files/data'
 import type { ChatMessage, ChatThread } from '@/lib/types'
+import { ROUTE_LOG, ROUTE_REPORT } from './fixtures-s1'
 import pcb from './files/soil-sensor.kicad_pcb?raw'
 import sch from './files/soil-sensor.kicad_sch?raw'
 
@@ -380,6 +381,8 @@ export function fileContent(path: string, commit?: string): { bytes: Uint8Array 
     case 'runs/run_hil1/CH1.csv': return { bytes: CH1_CSV, mime: 'text/csv' }
     case 'runs/run_ams1/loop_gain.csv': return { bytes: LOOP_GAIN_CSV, mime: 'text/csv' }
     case 'runs/run_fpga1/netlist.json.gz': return { bytes: NETLIST_GZ, mime: 'application/gzip' }
+    case 'runs/run_6d20/route-report.json': return { bytes: ROUTE_REPORT, mime: 'application/json' }
+    case 'runs/run_6d20/autoroute.log': return { bytes: ROUTE_LOG, mime: 'text/plain' }
     case 'firmware/src/main.c': return { bytes: prev ? MAIN_C_PREV : MAIN_C, mime: 'text/x-c' }
     case 'firmware/build/soil-sensor.bin': return { bytes: new Uint8Array(87616).map((_, i) => (i * 31) & 0xff), mime: 'application/octet-stream' }
     case 'docs/datasheets/TLV755P.pdf': return { bytes: DATASHEET_PDF, mime: 'application/pdf' }

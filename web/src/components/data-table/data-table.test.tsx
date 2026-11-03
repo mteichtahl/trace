@@ -109,3 +109,25 @@ describe('DataTable', () => {
     expect(firstColumn()).toEqual(['U2', 'U1', 'J1', 'D1', 'C2'])
   })
 })
+
+describe('DataTable phone cards', () => {
+  beforeEach(() => {
+    window.matchMedia = ((q: string) => ({ matches: true, media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia
+  })
+
+  it('a card that opens something shows a chevron and opens with the keyboard', async () => {
+    const opened: string[] = []
+    wrap(<DataTable id="parts" data={data} columns={columns} persist={false} onRowClick={(r) => opened.push(r.ref)} />)
+    const cards = screen.getAllByRole('button', { name: /MPN/ })
+    expect(cards).toHaveLength(5)
+    expect(screen.getAllByTestId('row-chevron')).toHaveLength(5)
+    cards[1]!.focus()
+    await userEvent.keyboard('{Enter}')
+    expect(opened).toEqual(['D1'])
+  })
+
+  it('a card that opens nothing has no chevron', () => {
+    wrap(<DataTable id="parts" data={data} columns={columns} persist={false} />)
+    expect(screen.queryAllByTestId('row-chevron')).toHaveLength(0)
+  })
+})
