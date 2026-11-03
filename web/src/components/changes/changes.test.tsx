@@ -50,6 +50,19 @@ describe('the decision bar', () => {
     expect(screen.getByText('This change was accepted into the design.')).toBeInTheDocument()
   })
 
+  it('in conflict: Bring it up to date leads, Accept is not offered, and a reviewer gets neither', async () => {
+    const onResolve = vi.fn()
+    const c = { ...change, may_accept: false, verdict: 'conflict' as const, blockers: ['It conflicts with changes accepted since it was made. trace will bring it up to date.'] }
+    const { unmount } = render(<DecisionBar change={c} part="contributor" note="" onAccept={vi.fn()} onAsk={vi.fn()} onDiscard={vi.fn()} onResolve={onResolve} />)
+    expect(screen.getByText(/Bring it up to date starts that now/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Accept into the design' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Bring it up to date' }))
+    expect(onResolve).toHaveBeenCalledOnce()
+    unmount()
+    render(<DecisionBar change={c} part="reviewer" note="" onAccept={vi.fn()} onAsk={vi.fn()} onDiscard={vi.fn()} onResolve={onResolve} />)
+    expect(screen.queryByRole('button')).toBeNull()
+  })
+
   it('Discard confirms in the bar and needs a reason', async () => {
     const f = bar({}, 'contributor')
     await userEvent.click(screen.getByRole('button', { name: 'Discard' }))

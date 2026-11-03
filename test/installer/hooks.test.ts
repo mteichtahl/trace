@@ -93,7 +93,7 @@ describe('the hooks secrets (two: the webhook secret, and the backend\'s client 
 })
 
 describe('registering the webhook', () => {
-  it('creates one with the address, JSON, the four events and the secret; a second run updates it in place', async () => {
+  it('creates one with the address, JSON, the five events and the secret; a second run updates it in place', async () => {
     const gh = new FakeHooksApi()
     gh.hooks.set('acme/board', [{ id: 99, name: 'web', active: true, events: ['push'], config: { url: 'https://ci.example.com/hook' } }])
     expect(await registerWebhook('tok', 'acme/board', URL_, 's1', gh.fetch)).toBe('created')
@@ -103,7 +103,8 @@ describe('registering the webhook', () => {
     expect(hooks).toHaveLength(2)
     expect(hooks[0]).toEqual({ id: 99, name: 'web', active: true, events: ['push'], config: { url: 'https://ci.example.com/hook' } })
     expect(hooks[1]).toMatchObject({ active: true, events: [...HOOK_EVENTS], config: { url: URL_, content_type: 'json', secret: 's2', insecure_ssl: '0' } })
-    expect(HOOK_EVENTS).toEqual(['pull_request', 'check_run', 'check_suite', 'status'])
+    // push: a push to the default branch is when other changes fall into conflict (src/api/conflicts.ts)
+    expect(HOOK_EVENTS).toEqual(['pull_request', 'check_run', 'check_suite', 'status', 'push'])
     expect(gh.calls).toEqual(['GET acme/board', 'POST acme/board', 'GET acme/board', `PATCH acme/board/${hooks[1]?.id}`])
   })
 

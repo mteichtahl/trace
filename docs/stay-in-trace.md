@@ -210,6 +210,31 @@ Stuck work: where the worker hands an item to `worker.escalate_to` (src/harness/
 does), so it is a "Needs you" item (inbox kind `stuck`) with what was tried and the recommendation. The GitHub mention
 stays for people who read GitHub.
 
+### Conflicts (`src/api/conflicts.ts`, 3 November 2026)
+
+Merge conflicts used to stall: every accepted change moves the default branch, GitHub sends nothing when that leaves
+other open changes in conflict, and for a few seconds after the push it reads every pull request as `unknown`. The
+pick and update queue started by that push read `unknown`, skipped the change, and the conflict sat until the hourly
+safety net (or until the worker gave up), looking as if it needed a person. Now:
+
+- **Settled before judged** (`src/harness/mergeable.ts`): `worker-pick` and `update-queue` read every candidate once
+  (which starts GitHub's work), then read again only the ones still `unknown`, 3 s apart, up to 5 rounds.
+- **The app is told** (`src/web/hooks.ts`): the webhook takes `push` too (`HOOK_EVENTS`; `tracectl update` re-registers
+  it). A push to the project's default branch makes the hooks function ask the API `hook.conflicts { repo }` (backend
+  only) beside the usual debounce. People on the project get `record.changed { kind: 'change', conflicts, remade,
+  resolving }` (numbers only) and the app says, wherever they are, which changes trace is bringing up to date and which
+  need them (`conflictNotice`, web/src/lib/live.ts).
+- **The app resolves** (`resolveConflicts`): it waits for GitHub to settle (4 rounds, 2.5 s apart), remakes each edit
+  made in trace on the newest design (`applyEdits`, its one-run-per-repository lock), and starts the worker once
+  (`trace-worker.yml`, `workflow_dispatch`) for every other change in conflict. The worker merges the default branch in,
+  never a rebase or a force-push. An edit that cannot be made again is left: the person discards it.
+- **Bring it up to date**: `change.resolve { repo, number }` (write). A change in conflict's decision bar leads with
+  "Bring it up to date" instead of Accept. It does the same for that one change and passes the workflow input `retry`:
+  the pick leaves a `trace-retry` marker, the attempts before it no longer count (so work the worker gave up on goes
+  again), and a person's branch is worked on without the idle wait (asking from trace is the go-ahead). A project whose
+  workflow predates the input is started without it (GitHub refuses unknown inputs with 422), and the answer says an
+  admin refreshes the workflows. Recorded as decision `change.resolve`.
+
 ## 4. Getting and handing in design files (`design.handin`)
 
 - **Get the design files**: the web app zips the project's KiCad files itself (`files.list` for the paths under the

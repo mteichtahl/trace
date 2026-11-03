@@ -16,6 +16,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, type JobsApi, perform } from '../../src/api/actions.js'
 import { journeyStore } from '../../src/api/action-kit.js'
 import { applyEdits } from '../../src/api/apply-edits.js'
+import { resolveConflicts } from '../../src/api/conflicts.js'
 import { type ChangeFacts, editAcceptance, editOf, editRecommendation, editVerdict, editsByBranch } from '../../src/api/changes.js'
 import { editStore } from '../../src/api/edits.js'
 import { requiresReview, withoutReview } from '../../src/api/actions-rules.js'
@@ -122,7 +123,22 @@ class EditsGitHub extends FakeGitHub {
       created_at: p.detail.created_at, headRepo: p.detail.head.repo, author: p.detail.author, sha: p.detail.head.sha,
     })) as never[]
   }
-  async pullStatus(_r: string, n: number): Promise<PullStatus | null> { const p = this.pulls.get(n); return p ? { ...p.status, state: p.detail.state, sha: p.detail.head.sha } : null }
+  /** reads left that answer "unknown" before the real state (GitHub still working out mergeability) */
+  unknownReads = new Map<number, number>()
+  async pullStatus(_r: string, n: number): Promise<PullStatus | null> {
+    const p = this.pulls.get(n)
+    if (!p) return null
+    const left = this.unknownReads.get(n) ?? 0
+    if (left > 0) this.unknownReads.set(n, left - 1)
+    return { ...p.status, ...(left > 0 ? { mergeable: 'unknown' } : {}), state: p.detail.state, sha: p.detail.head.sha }
+  }
+  /** a workflow_dispatch input the workflow does not declare: refused as GitHub does (422) */
+  oldWorkflow = false
+  override async dispatchWorkflow(_r: string, workflow: string, ref: string): Promise<void> { this.did.push(`dispatch ${workflow} ${ref}`) }
+  async dispatchWorkflowWith(_r: string, workflow: string, ref: string, inputs: Record<string, string>): Promise<void> {
+    if (this.oldWorkflow && Object.keys(inputs).length) throw new GitHubError(422, 'GitHub: 422', 'Unexpected inputs provided: ["retry"]')
+    this.did.push(`dispatch ${workflow} ${ref} ${JSON.stringify(inputs)}`)
+  }
   async pullDetail(_r: string, n: number): Promise<PullDetail | null> { return this.pulls.get(n)?.detail ?? null }
   extraFiles: PullFile[] = []
   async pullFiles(): Promise<PullFile[]> { return [{ path: '.trace/project.db', status: 'modified', additions: 0, deletions: 0, patch: null, previous: null }, ...this.extraFiles] }
@@ -181,7 +197,7 @@ beforeAll(async () => {
 })
 
 beforeEach(async () => {
-  github.pulls.clear(); github.did.length = 0; github.rulesets = []; github.classicReviews = false; github.denyRules = false; github.extraFiles = []
+  github.pulls.clear(); github.did.length = 0; github.unknownReads.clear(); github.oldWorkflow = false; github.rulesets = []; github.classicReviews = false; github.denyRules = false; github.extraFiles = []
   github.add(1, 'trace/settings-quantity-1')
   await editStore(ctx(ADMIN)).put(edit())
 })
@@ -333,3 +349,66 @@ describe('repo.rules.fix', () => {
 })
 
 void ADMIN2
+
+describe('changes in conflict, found and set going by trace (src/api/conflicts.ts)', () => {
+  const noWait = async (): Promise<void> => undefined
+
+  it('waits for GitHub to settle, remakes trace\'s own edit, and starts the worker once for the rest', async () => {
+    github.add(1, 'trace/settings-quantity-1', { mergeable: 'dirty' })
+    github.add(2, 'claude/impl-regulator', { mergeable: 'dirty' })
+    github.add(3, 'claude/emc-ferrite', { mergeable: 'dirty' })
+    github.add(4, 'claude/clean-one')
+    for (const n of [1, 2, 3, 4]) github.unknownReads.set(n, 2)
+    await editStore(ctx(ADMIN)).put(edit({ applies: 'auto' }))
+    const r = await resolveConflicts(ctx(BACKEND), REPO, { wait: noWait })
+    expect(r).toMatchObject({ conflicts: [1, 2, 3], remade: [1], worker: [2, 3], left: [], checking: [], started: 'yes' })
+    expect(github.did).toEqual(['reset trace/settings-quantity-1 sha-main', 'put trace/settings-quantity-1 .trace/project.db', 'dispatch trace-worker.yml main'])
+  })
+
+  it('still unknown after settling: reported as checking, nothing started', async () => {
+    github.add(2, 'claude/impl-regulator', { mergeable: 'dirty' })
+    github.pulls.delete(1)
+    github.unknownReads.set(2, 99)
+    expect(await resolveConflicts(ctx(BACKEND), REPO, { wait: noWait })).toMatchObject({ conflicts: [], checking: [2], started: 'not-needed' })
+    expect(github.did).toEqual([])
+  })
+
+  it('an edit that cannot be made again is left for a person; an edit someone pushed to goes to the worker', async () => {
+    github.add(1, 'trace/settings-quantity-1', { mergeable: 'dirty' })
+    await editStore(ctx(ADMIN)).put(edit({ redo: null }))
+    expect(await resolveConflicts(ctx(BACKEND), REPO, { wait: noWait })).toMatchObject({ left: [1], worker: [] })
+    github.add(1, 'trace/settings-quantity-1', { mergeable: 'dirty', headSha: sha(5) })
+    expect(await resolveConflicts(ctx(BACKEND), REPO, { wait: noWait })).toMatchObject({ left: [], worker: [1], started: 'yes' })
+  })
+
+  it('hook.conflicts: the web backend\'s alone', async () => {
+    github.add(2, 'claude/impl-regulator', { mergeable: 'dirty' })
+    await expect(run(ADMIN, 'hook.conflicts', { repo: REPO })).rejects.toBeInstanceOf(AccessDenied)
+    expect(await run(BACKEND, 'hook.conflicts', { repo: REPO })).toMatchObject({ repo: REPO, conflicts: [2], worker: [2], started: 'yes' })
+    expect(await run(BACKEND, 'hook.conflicts', { repo: 'acme/not-a-project' })).toMatchObject({ conflicts: [], started: 'not-needed' })
+  })
+
+  it('change.resolve: a contributor asks; the worker is told which one, with its earlier attempts set aside', async () => {
+    github.add(2, 'claude/impl-regulator', { mergeable: 'dirty' })
+    github.add(3, 'claude/emc-ferrite', { mergeable: 'dirty' })
+    const r = await run(USER, 'change.resolve', { repo: REPO, number: 2 })
+    expect(r).toMatchObject({ conflict: true, worker: true, remade: false, text: expect.stringMatching(/bringing it up to date/) })
+    expect(github.did).toEqual(['dispatch trace-worker.yml main {"retry":"2"}'])
+    expect((await decisions()).find((d) => d.kind === 'change.resolve')).toMatchObject({ by: 'c-user@example.com' })
+  })
+
+  it('change.resolve on a project whose workflow predates the retry input: started without it, and said so', async () => {
+    github.add(2, 'claude/impl-regulator', { mergeable: 'dirty' })
+    github.oldWorkflow = true
+    expect(await run(USER, 'change.resolve', { repo: REPO, number: 2 })).toMatchObject({ worker: true, text: expect.stringMatching(/workflows are older/) })
+    expect(github.did).toEqual(['dispatch trace-worker.yml main'])
+  })
+
+  it('change.resolve on a change not in conflict starts nothing; an edit that cannot be made again is refused', async () => {
+    expect(await run(USER, 'change.resolve', { repo: REPO, number: 1 })).toMatchObject({ conflict: false, worker: false, text: expect.stringMatching(/does not conflict/) })
+    github.add(1, 'trace/settings-quantity-1', { mergeable: 'dirty' })
+    await editStore(ctx(ADMIN)).put(edit({ redo: null }))
+    await expect(run(USER, 'change.resolve', { repo: REPO, number: 1 })).rejects.toThrow(/Discard it and make it again/)
+    expect(github.did).toEqual([])
+  })
+})

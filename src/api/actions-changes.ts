@@ -62,6 +62,7 @@ import {
 import { type AppEdit, EDIT_WORDS, editStray } from '../core/app-edits.js'
 import { editStore } from './edits.js'
 import { applyEditsSoon } from './apply-edits.js'
+import { resolveConflicts, resolveWords } from './conflicts.js'
 import { GitHubError, type GitHubApi, type MergeMethod, type PullDetail, type PullStatus, type PullSummary } from './github.js'
 import { SETTINGS_TTL_MS, cached } from './github-cache.js'
 import { recordRework, recordWait } from './process-metrics.js'
@@ -519,6 +520,26 @@ export const CHANGE_ACTIONS = {
     // sent back: the change is done again (src/api/process-metrics.ts)
     recordRework(repo, 'sent_back')
     return { job_id: started.jobId }
+  }),
+
+  /**
+   * Bring a change in conflict up to date now (src/api/conflicts.ts), instead of waiting for trace to notice: an edit
+   * made in trace is made again on the newest design; anything else goes to the worker, which merges the default branch
+   * in, with the attempts it gave up on set aside. Anyone who may decide on the project's changes may ask.
+   */
+  'change.resolve': def('write', ChangeArgs, async ({ repo, number }, ctx) => {
+    spend(ctx)
+    const r = await resolveConflicts(ctx, repo, { only: [number], retry: true })
+    const text = resolveWords(number, r)
+    bust(ctx, repo)
+    if (r.conflicts.length) {
+      await record(ctx, repo, {
+        kind: 'change.resolve', ref: String(number),
+        summary: `${label(ctx.principal)} asked trace to bring change #${number} up to date with the newest design.`,
+        detail: { number, remade: r.remade.includes(number), worker: r.worker.includes(number), started: r.started },
+      }).catch(() => undefined)
+    }
+    return { text, remade: r.remade.includes(number), worker: r.worker.includes(number) && (r.started === 'yes' || r.started === 'without-retry'), conflict: r.conflicts.includes(number) }
   }),
 
   'change.discard': def('write', ChangeArgs.extend({ reason: z.string().trim().min(1).max(2000) }), async ({ repo, number, reason }, ctx) => {

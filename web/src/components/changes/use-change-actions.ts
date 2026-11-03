@@ -1,5 +1,5 @@
 /**
- * Accept, ask for changes, discard: one place for the three acts on a change, wherever they are taken (the review
+ * Accept, ask for changes, discard, and bring a change in conflict up to date: one place for the acts on a change, wherever they are taken (the review
  * page, the next-step card, Home's Needs you). Each refreshes the change, its project's list, the journey and the inbox,
  * and confirms with a toast that says what moved and what trace starts next.
  *
@@ -85,5 +85,13 @@ export function useChangeActions(repo: string) {
     onError: (e) => toast.error('Could not discard the change', { description: `${e instanceof Error ? e.message : String(e)} Your reason is kept; try again.` }),
     onSettled: (_d, _e, a) => refresh(a.number),
   })
-  return { accept, ask, discard }
+  const resolve = useMutation({
+    mutationFn: (a: { number: number; title: string }) => call('change.resolve', { repo, number: a.number }),
+    onSuccess: (r, a) => (r.conflict
+      ? toast.success(r.remade ? 'Made again on the newest design' : 'Bringing it up to date', { description: `"${a.title}": ${r.text}` })
+      : toast(`"${a.title}" is up to date`, { description: r.text })),
+    onError: (e) => toast.error('Could not bring the change up to date', { description: `${e instanceof Error ? e.message : String(e)}` }),
+    onSettled: (_d, _e, a) => refresh(a.number),
+  })
+  return { accept, ask, discard, resolve }
 }

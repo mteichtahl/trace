@@ -12,7 +12,7 @@
  *             An older installation kept the client secret inside the first; it is taken out of it here. The stack
  *             never holds either value
  *   register  on every project repository, one webhook to the app's address (CloudFront's own, the stack's
- *             WebHooksAddress output) + /api/hooks/github, JSON, the four events the backend takes, active. Found by
+ *             WebHooksAddress output) + /api/hooks/github, JSON, the events the backend takes (HOOK_EVENTS), active. Found by
  *             its exact URL and updated in place (its secret, events and content type set again), else created: a
  *             second run changes nothing it should not and never adds a second hook. A repository it cannot register
  *             on (the token lacks admin, or "Webhooks: read and write") is a warning, never a failed install: that
