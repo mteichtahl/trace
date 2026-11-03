@@ -9,12 +9,11 @@ import { openPanel } from '@/components/chat/chat-state'
 import { CanvasFrame } from '@/components/canvas/canvas-frame'
 import { drawn } from '@/components/project/architecture'
 import { BlockDiagramCanvas } from '@/components/project/block-diagram'
+import { PinMapCanvas, pinMapHeight } from '@/components/project/pin-map'
 import { useCoverage } from '@/components/project/shared'
 import { TraceabilityCanvas } from '@/components/project/traceability'
-import { StatusBadge } from '@/components/status-badge'
 import { useAction } from '@/lib/queries'
 import type { PictureFinding, SkillView } from '@/lib/types-s1'
-import { cn } from '@/lib/utils'
 import { PICTURE_WORDS, type PictureKind } from './definitions'
 import { FindingsPicture } from './findings'
 
@@ -48,20 +47,11 @@ export function StepPicture({ repo, kind, view, selected, onSelect, height = 340
   }
   if (kind === 'pin-map') {
     const pins = d?.pins ?? []
-    return (
-      <CanvasFrame title="Pin map" subtitle={pins.length ? `${pins.length} pins` : undefined} height={height} zoomable={false}>
-        {pins.length ? (
-          <div className="grid w-full grid-cols-2 gap-1.5 overflow-auto p-4 sm:grid-cols-4 lg:grid-cols-5">
-            {pins.map((p) => (
-              <div key={`${p.part ?? ''}.${p.pin}`} className={cn('rounded-md border bg-card p-2 text-xs', p.status === 'conflict' && 'border-destructive', p.status === 'spare' && 'border-dashed')}>
-                <p className="font-mono font-semibold">{p.part ? `${p.part}.` : ''}{p.pin}{p.name ? <span className="font-normal text-muted-foreground"> {p.name}</span> : null}</p>
-                <p className="truncate font-mono text-muted-foreground">{p.net}</p>
-                <p className="truncate">{p.fn}</p>
-                {p.status !== 'ok' && <StatusBadge plain status={p.status === 'conflict' ? 'failing' : p.status === 'waived' ? 'waived' : 'idle'} label={p.status === 'spare' ? 'Spare' : undefined} />}
-              </div>
-            ))}
-          </div>
-        ) : <Empty kind={kind} loading={design.isLoading} />}
+    return pins.length ? (
+      <PinMapCanvas title="Pin map" subtitle={`peripheral → pin → net · ${pins.length} pins`} height={Math.max(height, pinMapHeight(pins.length, 480))} onAsk={() => openPanel(true)} pins={pins} />
+    ) : (
+      <CanvasFrame title="Pin map" height={height} zoomable={false}>
+        <Empty kind={kind} loading={design.isLoading} />
       </CanvasFrame>
     )
   }
