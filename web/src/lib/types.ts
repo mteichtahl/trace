@@ -317,6 +317,25 @@ export interface DeploysView {
   recommendation: { verdict: 'deploy' | 'wait' | 'none'; why: string }
 }
 
+// ------------------------------------------------------------------ build health (docs/stay-in-trace.md "3. A broken build")
+
+/** health.get: the default branch's build, trace's fix for it, and the open requests for a fix (src/api/actions-health.ts). */
+export interface HealthView {
+  build: {
+    state: 'passing' | 'failing' | 'running' | 'none'; sha: string | null; at: string | null
+    /** each failing job: its id (health.log's job_id), name, failing step, and the last 40 lines of its log */
+    failing: { job_id: number; name: string; step: string | null; tail: string }[]
+    /** plain words: trace's own look at the failure, else the failing step */
+    why: string | null
+    /** trace's work on it: its job (RunSummary.id) when known, and which attempt of how many */
+    fixing: { job_id: string | null; attempt: number; of: number } | null
+  }
+  asks: { number: number; title: string; state: 'waiting' | 'working' | 'stuck'; job_id: string | null; opened_at: string }[]
+}
+
+/** health.log: one build job's log, its last 200 KB. */
+export interface HealthLog { name: string; text: string; truncated: boolean }
+
 export interface Question {
   id: string
   /** who it waits on */

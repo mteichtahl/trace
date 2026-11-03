@@ -183,6 +183,10 @@ export interface Actions {
   'deploy.skip': { args: Repo & { reason: string }; result: { skipped: true } }
   /** to: a commit that ran before (a deployed entry of recent) */
   'deploy.rollback': { args: Repo & { to: string }; result: { started: true; approval: string } }
+  // the build's health (docs/stay-in-trace.md "3. A broken build"): asking trace for a fix is `task`
+  'health.get': { args: Repo; result: import('./types').HealthView }
+  /** job_id: a failing job of health.get (its build.failing[].job_id) */
+  'health.log': { args: Repo & { job_id: number }; result: import('./types').HealthLog }
 }
 
 export type ActionName = keyof Actions
