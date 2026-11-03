@@ -75,7 +75,9 @@ export const userChannel = (sub: string): string => `/trace/users/${sub}`
 /** `job.updated`: { repo, jobId, state } (jobId and state null: several of the project's jobs changed at once).
  * `record.changed` with `kind: 'change'` (and `number` when GitHub named one): a change (a pull request a trace job
  * opened) moved on GitHub (src/web/hooks.ts). */
-export interface LiveEvent { type: 'record.changed' | 'job.updated' | 'notification'; repo?: string; at: string; [k: string]: unknown }
+/** `log.appended`: { repo, kind: job | tool | check, id, lines }: a run wrote lines (src/web/journey-events.ts onRunLogs),
+ * never the lines themselves. */
+export interface LiveEvent { type: 'record.changed' | 'job.updated' | 'notification' | 'log.appended'; repo?: string; at: string; [k: string]: unknown }
 
 export interface Publisher {
   publish(channel: string, events: readonly LiveEvent[]): Promise<void>

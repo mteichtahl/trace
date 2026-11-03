@@ -179,6 +179,8 @@ import { HOOK_ACTIONS } from './actions-hooks.js'
 import { RULE_ACTIONS } from './actions-rules.js'
 import { DEPLOY_ACTIONS } from './actions-deploys.js'
 import { HEALTH_ACTIONS } from './actions-health.js'
+import { TOOL_RUN_ID } from '../core/run-logs.js'
+import { PROGRESS_ACTIONS } from './actions-progress.js'
 import { SERVICE_ACTIONS, checkService, taskCap, toolOpenToSystems } from './service-policy.js'
 import { editStore, recordEdit } from './edits.js'
 
@@ -439,7 +441,8 @@ async function writePrompt(ctx: Context, scope: 'installation' | 'project', repo
 
 // ------------------------------------------------------------------ the actions
 
-const ToolArgs = z.object({ repo: RepoSlug, name: z.string().regex(/^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/), args: z.record(z.string(), z.unknown()).default({}) })
+// run_id: the run's own id, so its log can be watched while it runs (src/core/run-logs.ts; the chat makes one per call)
+const ToolArgs = z.object({ repo: RepoSlug, name: z.string().regex(/^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/), args: z.record(z.string(), z.unknown()).default({}), run_id: z.string().regex(TOOL_RUN_ID, 'a tool run id').optional() })
 
 export const ACTIONS = {
   whoami: def('signed-in', z.object({}), async (_a, { principal: p }) => ({
@@ -529,7 +532,7 @@ export const ACTIONS = {
     }
     const jobs = await ctx.deps.jobs()
     if (!jobs.runTool) throw new ActionError('tools run on the project\'s worker runtime, and this installation has none for the API')
-    return jobs.runTool({ kind: 'tool', repository: a.repo, name: a.name, args: a.args })
+    return jobs.runTool({ kind: 'tool', repository: a.repo, name: a.name, args: a.args, ...(a.run_id ? { runId: a.run_id } : {}) })
   }),
 
   'settings.set': def('write', Repo.extend({ key: z.string().min(1).max(200), value: z.unknown().optional(), unset: z.boolean().default(false) }), async (a, ctx) => {
@@ -816,6 +819,7 @@ export const ACTIONS = {
   ...RULE_ACTIONS,
   ...DEPLOY_ACTIONS,
   ...HEALTH_ACTIONS,
+  ...PROGRESS_ACTIONS,
 } satisfies Record<string, Action<z.ZodType>>
 
 export type ActionName = keyof typeof ACTIONS

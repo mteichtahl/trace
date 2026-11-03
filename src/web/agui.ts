@@ -9,6 +9,8 @@
  *            TOOL_CALL_START/ARGS/END for each tool use; backend tools run between STEP_STARTED and STEP_FINISHED, each
  *            answered with TOOL_CALL_RESULT; then RUN_FINISHED (or RUN_ERROR). An SSE comment every 15 s keeps
  *            CloudFront and the browser from closing a quiet stream.
+ *   runs     before a `tool` call runs, a CUSTOM event trace.tool_run { toolCallId, repo, run: tool:<id> }: the call
+ *            carries that run id, so its log can be watched while it runs (docs/progress-and-logs.md)
  *   tools    backend: read-only actions (status, runs, run, journey.get, kb.search, memory.recall, tools.list, tool
  *            for read-only tools, graph.neighbourhood, files.list, inbox), run here as the person. Each result reaches
  *            the model fenced as data (the catalog's chat.tool_result, its closing tag stripped), never as words of the
@@ -42,6 +44,7 @@ import type { BaseEvent, Context as AguiContext, Tool as AguiTool } from '@ag-ui
 import type { ContentBlock, ConverseStreamOutput, Message as BedrockMessage, Tool as BedrockTool, ToolResultContentBlock } from '@aws-sdk/client-bedrock-runtime'
 import type { DocumentType } from '@smithy/types'
 import { z } from 'zod'
+import { newToolRunId } from '../core/run-logs.js'
 import { composeChat, fenceResult } from '../prompts/chat.js'
 import type { Layers } from '../prompts/resolve.js'
 import { chatPrompts } from './chat-prompts.js'
@@ -51,6 +54,8 @@ import type { Publisher } from './events.js'
 import { MB, type Sink, WebError, parseBody, route } from './http.js'
 
 export const AGENT_NAME = 'trace'
+/** The custom event that names a tool call's run, sent before it runs, so the app can follow its log. */
+export const TOOL_RUN_EVENT = 'trace.tool_run'
 export const MAX_ROUNDS = 8
 export const HEARTBEAT_MS = 15_000
 /** How long a chat tool's API call may wait for the runtime to start answering: longer than /api/call's, as the chat's
@@ -132,7 +137,7 @@ const ApiAnswer = z.union([
 const ToolList = z.array(z.object({ name: z.string(), needs: z.string() }).loose())
 
 /** One backend tool call as the person: the text the model reads (and the app's TOOL_CALL_RESULT carries). */
-async function runBackendTool(deps: WebDeps, who: Caller, name: string, input: Record<string, unknown>, readTools: Map<string, Set<string>>): Promise<{ text: string; error: boolean }> {
+async function runBackendTool(deps: WebDeps, who: Caller, name: string, input: Record<string, unknown>, readTools: Map<string, Set<string>>, onRun?: (repo: string, runId: string) => void): Promise<{ text: string; error: boolean }> {
   const t = BACKEND_TOOLS[name]
   if (!t) return { text: JSON.stringify({ ok: false, error: `no tool ${name}` }), error: true }
   let args = input
@@ -148,7 +153,10 @@ async function runBackendTool(deps: WebDeps, who: Caller, name: string, input: R
       readTools.set(r, read)
     }
     if (!read.has(String(input.name))) return { text: JSON.stringify({ ok: false, error: `${String(input.name)} is not a read-only tool: the chat runs read-only tools only` }), error: true }
-    args = { repo: input.repo, name: input.name, args: input.args ?? {} }
+    // its own run id, so the app can show what it says while it runs (trace.tool_run, docs/progress-and-logs.md)
+    const runId = newToolRunId()
+    args = { repo: input.repo, name: input.name, args: input.args ?? {}, run_id: runId }
+    onRun?.(String(input.repo), runId)
   }
   const answer = await callApi(deps, who, t.action, args, { firstByteMs: TOOL_FIRST_BYTE_MS })
   const a = ApiAnswer.safeParse(answer.json)
@@ -370,7 +378,7 @@ export async function runAgent(deps: WebDeps, who: Caller, input: RunInput, sink
           try { const v: unknown = JSON.parse(u.input || '{}'); if (v && typeof v === 'object' && !Array.isArray(v)) args = v as Record<string, unknown> } catch { /* bad arguments: the tool says so */ }
           const r = Object.hasOwn(CONFIRM_TOOLS, u.name)
             ? { text: JSON.stringify({ ok: false, error: `${u.name} is not available in this conversation` }), error: true }
-            : await runBackendTool(deps, who, u.name, args, readTools).catch((e: unknown) => {
+            : await runBackendTool(deps, who, u.name, args, readTools, (repo, runId) => emit({ type: EventType.CUSTOM, name: TOOL_RUN_EVENT, value: { toolCallId: u.id, repo, run: `tool:${runId}` } } as BaseEvent)).catch((e: unknown) => {
               deps.log({ warning: 'agui tool failed', tool: u.name, error: e instanceof Error ? e.name : 'Error', message: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) })
               return { text: JSON.stringify({ ok: false, error: e instanceof WebError && e.code === 'api_unavailable' ? API_UNAVAILABLE : TOOL_FAILED }), error: true }
             })
