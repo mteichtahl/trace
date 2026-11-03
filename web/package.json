@@ -21,6 +21,7 @@
     "@tanstack/react-router": "^1.170.46",
     "@tanstack/react-table": "^8.21.3",
     "@tracespace/core": "^5.0.0-alpha.0",
+    "@xyflow/react": "^12.12.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",

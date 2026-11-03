@@ -73,3 +73,7 @@ mark.match {
 
 /* Spoken-word highlight while reading aloud */
 .speaking-word { background: color-mix(in oklch, var(--primary) 22%, transparent); border-radius: 2px; }
+
+/* React Flow (traceability view, block diagram): its credit sits quietly on the canvas in both themes */
+.react-flow { --xy-attribution-background-color: transparent; }
+.react-flow__attribution a { color: var(--muted-foreground); }

@@ -8,9 +8,9 @@ import { useState } from 'react'
 import { openPanel } from '@/components/chat/chat-state'
 import { CanvasFrame } from '@/components/canvas/canvas-frame'
 import { drawn } from '@/components/project/architecture'
-import { BlockDiagram } from '@/components/project/block-diagram'
+import { BlockDiagramCanvas } from '@/components/project/block-diagram'
 import { useCoverage } from '@/components/project/shared'
-import { TRACE_WIDTH, Traceability } from '@/components/project/traceability'
+import { TraceabilityCanvas } from '@/components/project/traceability'
 import { StatusBadge } from '@/components/status-badge'
 import { useAction } from '@/lib/queries'
 import type { PictureFinding, SkillView } from '@/lib/types-s1'
@@ -37,9 +37,13 @@ export function StepPicture({ repo, kind, view, selected, onSelect, height = 340
   }
   if (kind === 'block-diagram') {
     return (
-      <CanvasFrame title="Block diagram" subtitle={d?.architecture?.option} height={height + 40} onAsk={() => openPanel(true)}>
-        {d?.architecture ? <div className="origin-center scale-[0.4] sm:scale-[0.7] 2xl:scale-90"><BlockDiagram {...drawn(d.architecture, d.architecture.id ?? null)} /></div> : <Empty kind={kind} loading={design.isLoading} />}
-      </CanvasFrame>
+      d?.architecture ? (
+        <BlockDiagramCanvas title="Block diagram" subtitle={d.architecture.option} height={height + 40} onAsk={() => openPanel(true)} {...drawn(d.architecture, d.architecture.id ?? null)} />
+      ) : (
+        <CanvasFrame title="Block diagram" subtitle={d?.architecture?.option} height={height + 40} onAsk={() => openPanel(true)}>
+          <Empty kind={kind} loading={design.isLoading} />
+        </CanvasFrame>
+      )
     )
   }
   if (kind === 'pin-map') {
@@ -64,9 +68,13 @@ export function StepPicture({ repo, kind, view, selected, onSelect, height = 340
   if (kind === 'traceability') {
     const rows = cov.data?.requirements ?? []
     return (
-      <CanvasFrame title="Traceability" subtitle="intent → requirement → evidence" height={height + 60} onAsk={() => openPanel(true)}>
-        {rows.length ? <div className="origin-center scale-[0.5] sm:scale-75 2xl:scale-90" style={{ width: TRACE_WIDTH }}><Traceability rows={rows} trace={trace.data} onSelect={() => undefined} /></div> : <Empty kind={kind} loading={cov.isLoading} />}
-      </CanvasFrame>
+      rows.length ? (
+        <TraceabilityCanvas title="Traceability" subtitle="intent → requirement → evidence" height={height + 60} onAsk={() => openPanel(true)} rows={rows} trace={trace.data} />
+      ) : (
+        <CanvasFrame title="Traceability" subtitle="intent → requirement → evidence" height={height + 60} onAsk={() => openPanel(true)}>
+          <Empty kind={kind} loading={cov.isLoading} />
+        </CanvasFrame>
+      )
     )
   }
   // bench wiring

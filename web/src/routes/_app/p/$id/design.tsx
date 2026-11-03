@@ -24,11 +24,10 @@ import { z } from 'zod'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useTraceContext } from '@/components/chat/context'
 import { openPanel } from '@/components/chat/chat-state'
-import { CanvasFrame } from '@/components/canvas/canvas-frame'
 import { DataTable, useUrlView } from '@/components/data-table'
 import { Button } from '@/components/ui/button'
 import { ArchitectureSummary, OptionSwitch, OptionsTable, drawn, useOption } from '@/components/project/architecture'
-import { BlockDiagram } from '@/components/project/block-diagram'
+import { BlockDiagramCanvas } from '@/components/project/block-diagram'
 import { NeedsBuilding, TabSkeleton, notBuilt } from '@/components/project/shared'
 import { DesignFiles } from '@/components/project/handin'
 import { useCommands } from '@/components/shell/command-menu'
@@ -77,6 +76,8 @@ function Design() {
   const [sheet, setSheet] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [block, setBlock] = useState<Block | null>(null)
+  // the lit block outlives its detail sheet: closing the sheet keeps its connections lit until the canvas is cleared
+  const [lit, setLit] = useState<string | null>(null)
   const [layers, setLayers] = useState<Record<string, boolean>>({})
   const pinUrl = useUrlView('pins')
   const data = d.data
@@ -124,20 +125,20 @@ function Design() {
         <TabsContent value="architecture" className="mt-4 space-y-4">
           {data.architecture ? (
             <>
-              <CanvasFrame
+              <BlockDiagramCanvas
                 title="Block diagram"
                 subtitle={data.architecture.options?.find((o) => o.id === option)?.name ? `Option ${option}: ${data.architecture.options.find((o) => o.id === option)!.name}` : data.architecture.option}
                 height={440}
                 onAsk={() => openPanel(true)}
                 detail={block ? { title: block.name, body: <BlockDetail block={block} /> } : null}
                 onDetailClose={() => setBlock(null)}
-              >
-                <div className="origin-center scale-[0.42] sm:scale-75 lg:scale-100">
-                  <BlockDiagram {...drawn(data.architecture, option)} selected={block?.id} onSelect={setBlock} />
-                </div>
-              </CanvasFrame>
+                {...drawn(data.architecture, option)}
+                selected={lit}
+                onSelect={(b) => { setLit(b?.id ?? null); setBlock(b) }}
+              />
+              <p className="text-xs text-muted-foreground">Select a block to light what it connects to and what flows between them; click the background to clear.</p>
               <div className="flex flex-wrap items-center gap-3">
-                <OptionSwitch a={data.architecture} value={option} onChange={(o) => { setOption(o); setBlock(null) }} />
+                <OptionSwitch a={data.architecture} value={option} onChange={(o) => { setOption(o); setBlock(null); setLit(null) }} />
                 <Button asChild size="sm" variant={data.architecture.chosen ? 'outline' : 'default'}><Link to="/p/$id/do/$skill" params={{ id, skill: 'architecture-choice' }}>{data.architecture.chosen ? 'Review the choice' : 'Choose an architecture'}</Link></Button>
               </div>
               <ArchitectureSummary a={data.architecture} current={option} requirements={(reqs.data?.requirements ?? []).map((r) => r.id)} />

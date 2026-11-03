@@ -7,19 +7,18 @@
  * a person or still proposed by an agent) and each requirement's derived_from link come from requirements.trace.
  * While no intent statement is recorded it answers `intent_note`, and the view draws requirements and evidence only.
  */
-import { Link, Outlet, createFileRoute, useNavigate } from '@tanstack/react-router'
+import { Link, Outlet, createFileRoute, useNavigate, useParams } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { z } from 'zod'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { useTraceContext } from '@/components/chat/context'
 import { openPanel } from '@/components/chat/chat-state'
-import { CanvasFrame } from '@/components/canvas/canvas-frame'
 import { DataTable, Highlight, useUrlView } from '@/components/data-table'
 import { NeedsBuilding, TabSkeleton, VERDICT, notBuilt, useCoverage } from '@/components/project/shared'
-import { TRACE_WIDTH, type TraceNode, Traceability } from '@/components/project/traceability'
+import { type TraceNode, TraceabilityCanvas, nodeKey } from '@/components/project/traceability'
 import { useCommands } from '@/components/shell/command-menu'
 import { StatusBadge } from '@/components/status-badge'
 import { EmptyState, Partial, QueryError } from '@/components/states'
@@ -75,14 +74,17 @@ function Requirements() {
   const failing = rows.filter((r) => r.verdict === 'failing')
   const open = (rid: string) => void navigate({ to: '/p/$id/requirements/$rid', params: { id, rid } })
 
-  const onSelect = (n: TraceNode) => {
-    setSelected(n.kind === 'evidence' ? `ev:${n.id}` : n.id)
-    if (n.kind === 'requirement') open(n.id)
-    if (n.kind === 'evidence') {
-      const run = rows.find((r) => r.id === n.id)?.tests[0]?.last_run
-      if (run) void navigate({ to: '/p/$id/runs/$run', params: { id, run } })
-      else open(n.id)
-    }
+  // a requirement opened from the table (or its own address) lights its chain in the view too
+  const { rid } = useParams({ strict: false }) as { rid?: string }
+  useEffect(() => {
+    if (rid) setSelected((s) => (s === `ev:${rid}` ? s : `req:${rid}`))
+  }, [rid])
+
+  // selecting a box lights its chain; a requirement or its evidence also opens the requirement's side sheet (its
+  // tests and last runs are there), which keeps the view, and the lit chain, in place
+  const onSelect = (n: TraceNode | null) => {
+    setSelected(n ? nodeKey(n) : null)
+    if (n && n.kind !== 'intent') open(n.id)
   }
 
   useTraceContext({ label: 'Requirements', description: 'The project tab on screen', value: { tab: 'requirements', filter: status, failing: failing.map((r) => r.id) } }, 'screen')
@@ -106,13 +108,13 @@ function Requirements() {
         <NoRequirements id={id} repo={repo} drafting={journey.data?.drafting} jobs={journey.data?.jobs ?? []} write={write} />
       ) : (
         <>
-          <CanvasFrame
+          <TraceabilityCanvas
             className="mt-4"
             title="Traceability"
             subtitle={`intent → requirement → evidence${status !== 'all' ? ` · ${FILTERS.find((f) => f.id === status)?.label.toLowerCase()} only` : ''}`}
             height={Math.min(600, 120 + (filter ? rows.filter(filter).length : rows.length) * 70)}
             onAsk={() => openPanel(true)}
-            filter={
+            filterControls={
               <RadioGroup value={status} onValueChange={(v) => setStatus(v as typeof status)} aria-label="Show">
                 {FILTERS.map((f) => (
                   <Label key={f.id} className="flex items-center gap-2 font-normal">
@@ -121,15 +123,17 @@ function Requirements() {
                 ))}
               </RadioGroup>
             }
-          >
-            <div className="origin-top scale-[0.62] sm:scale-90 lg:scale-100" style={{ width: TRACE_WIDTH }}>
-              <Traceability rows={rows} trace={trace.data} filter={filter} selected={selected} onSelect={onSelect} />
-            </div>
-          </CanvasFrame>
+            rows={rows}
+            trace={trace.data}
+            filter={filter}
+            selected={selected}
+            onSelect={onSelect}
+          />
           <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
             <StatusBadge plain status="failing" label="Failing: its whole chain is red" />
             <span>Dashed: no test planned yet</span>
-            <span>Drag to pan; Ctrl and scroll to zoom</span>
+            <span>Select a box to light its whole chain; click the background to clear</span>
+            <span>Drag to pan; Ctrl and scroll, or pinch, to zoom</span>
           </div>
           {trace.data && !trace.data.intent.length && trace.data.intent_note && <div className="mt-3"><NeedsBuilding>{trace.data.intent_note}</NeedsBuilding></div>}
           {trace.data && trace.data.intent.length > 0 && <IntentLine trace={trace.data} id={id} />}
