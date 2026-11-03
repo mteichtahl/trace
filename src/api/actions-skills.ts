@@ -30,7 +30,7 @@ import { z } from 'zod'
 import { recordAnswered } from './process-metrics.js'
 import {
   type AgentFacts, type JourneyRecord, SEVERITIES, STAGE_NAMES, type StageId, type Viewer, addWaiver, answerQuestion, decide, getDraft, loadJourney, loadOrders, mergeAgentFacts, putDraft,
-  questionIsFor, returnForChange, setCriterion,
+  STAGE_IDS, applyChange, changeReason, changeWords, questionIsFor, setCriterion,
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
 import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, storeAt, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
@@ -408,9 +408,13 @@ export const SKILL_ACTIONS = {
         const stage = changesStage(p, prior)
         if (stage) changes.push({ stage, summary: p.summary.replace(/\.$/, '') })
       }
-      // a requirement (or the intent behind it) changed after the baseline: the project goes back to Define first, so
-      // what this skill meets below counts there (Requirements review meets the baseline's criteria again)
-      const backTo = changes.length ? returnForChange(db, changes[0]!.stage, `${changes.length === 1 ? changes[0]!.summary : `${changes.length} requirement decisions changed (${changes.slice(0, 3).map((c) => c.summary).join('; ')})`} after the requirements baseline`, by.label) : null
+      // a requirement, the intent or the architecture changed after its stage was passed: the project goes back there
+      // first, so what this skill meets below counts there (Requirements review and Architecture choice meet it again)
+      // the earliest stage any of them changes; before release the project goes back there, after it the next
+      // revision starts there (applyChange)
+      const first = [...changes].sort((x, y) => STAGE_IDS.indexOf(x.stage) - STAGE_IDS.indexOf(y.stage))[0]
+      const mine = changes.filter((c) => c.stage === first?.stage)
+      const backTo = first ? applyChange(db, first.stage, changeReason(first.stage, mine.length === 1 ? first.summary : `${mine.length} decisions changed (${mine.slice(0, 3).map((c) => c.summary).join('; ')})`), by.label) : null
       // Requirements review is the person's act the baseline gate's own criteria wait for: submitted, it records
       // whether every requirement is accepted (or struck) and each accepted one measurable, as the record now stands
       if (a.skill === 'requirements-review') {
@@ -476,8 +480,8 @@ export const SKILL_ACTIONS = {
       } catch (e) { jobError = e instanceof Error ? e.message : String(e) }
     }
     if (carried.jobError) jobError = carried.jobError
-    if (out.backTo) started = [...started, `The project went back to ${STAGE_NAMES[out.backTo]} to agree the change; every gate from there is signed again.`]
-    return { ok: true, repo: a.repo, skill: a.skill, id: out.id, ...(out.ref ? { ref: out.ref } : {}), ...(jobId ? { jobId } : {}), ...(jobError ? { jobError } : {}), ...(carried.summary ? { summary: carried.summary } : {}), started, ...(out.backTo ? { back_to: out.backTo } : {}), version: out.version }
+    if (out.backTo) started = [...started, `${changeWords(out.backTo)}, to agree the change; every gate from there is signed again.`]
+    return { ok: true, repo: a.repo, skill: a.skill, id: out.id, ...(out.ref ? { ref: out.ref } : {}), ...(jobId ? { jobId } : {}), ...(jobError ? { jobError } : {}), ...(carried.summary ? { summary: carried.summary } : {}), started, ...(out.backTo ? { back_to: out.backTo.stage, ...(out.backTo.revision ? { revision: out.backTo.revision } : {}) } : {}), version: out.version }
   }),
 }
 

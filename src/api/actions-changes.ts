@@ -395,8 +395,8 @@ export const CHANGE_ACTIONS = {
     })().catch(() => null)
     if (back) {
       return {
-        merged: true as const, sha, stage: 'define' as const, back_to: 'define' as const,
-        next: `Its work counts in the design now. Because ${back.reason}, the project went back to Define: agree the change in Requirements review, then sign the requirements baseline and each gate after it again.`,
+        merged: true as const, sha, stage: back.outcome.stage, back_to: back.outcome.stage, ...(back.outcome.revision ? { revision: back.outcome.revision } : {}),
+        next: `Its work counts in the design now. Because ${back.reason}: ${back.words.charAt(0).toLowerCase()}${back.words.slice(1)}. Agree the change in Requirements review, then sign the requirements baseline and each gate after it again.`,
         ...(warning ? { warning } : {}),
       }
     }

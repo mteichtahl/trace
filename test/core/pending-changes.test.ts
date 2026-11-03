@@ -8,8 +8,8 @@ import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
-  type JourneyRecord, type PendingChanges, type Viewer, guardsFabricate, journeyView, loadJourney, pendingBlockers, recordOpen, returnForChange,
-  setCriterion, signBlockers, signGate, startJourney, withPending,
+  type JourneyRecord, type PendingChanges, type Viewer, applyChange, guardsFabricate, isReleased, journeyView, loadJourney, loadOrders, nextRevision,
+  pendingBlockers, recordOpen, recordOrder, returnForChange, setCriterion, signBlockers, signGate, startJourney, withPending,
 } from '../../src/core/journey.js'
 import { openProject } from '../../src/core/store.js'
 import { changesStage } from '../../src/api/actions-design.js'
@@ -86,9 +86,9 @@ describe('a requirement that changes after the baseline', () => {
     const r = rec()
     expect(r.journey.currentStage).toBe('define')
     expect(r.signatures.every((s) => s.supersededAt !== null)).toBe(true)
-    // the person's criteria are agreed again; trace's evidence carries forward
+    // the stage's person criteria are agreed again, and the stages built on it are done again
     expect(r.criteria.filter((c) => c.gate === 'define').every((c) => c.status === 'not_met')).toBe(true)
-    expect(r.criteria.filter((c) => c.gate === 'architect' && c.owner === 'trace').every((c) => c.status === 'met')).toBe(true)
+    expect(r.criteria.filter((c) => ['architect', 'capture', 'layout'].includes(c.gate)).every((c) => c.status === 'not_met')).toBe(true)
     const v = journeyView(r, ADMIN)
     expect(v.next).toMatchObject({ kind: 'task', yours: true, ref: { kind: 'skill', id: 'requirements-review' } })
     expect(v.next.summary).toMatch(/^Back in Define: requirement R5 was changed after the requirements baseline/)
@@ -103,5 +103,73 @@ describe('a requirement that changes after the baseline', () => {
     expect(changesStage({ kind: 'requirement', target: 'R5', choice: 'struck', detail: { text: 'Runs 2 years on AA cells', reason: 'dropped' } }, [was])).toBe('define')
     expect(changesStage({ kind: 'requirement', target: 'R5', choice: 'accepted', detail: { text: 'Runs 3 years on AA cells' } }, [was])).toBe('define')
     expect(changesStage({ kind: 'pins.agreed', target: 'U1', choice: 'agreed', detail: {} }, [])).toBeNull()
+  })
+})
+
+describe('an architecture change', () => {
+  it('before release takes the project back to Architect: Define stays signed, trace re-checks Architect, later work is redone', () => {
+    start()
+    sign('define', 'architect', 'capture', 'prove')
+    expect(applyChange(db, 'architect', 'Architecture B (Two boards) was chosen after the architecture review', ADMIN.label)).toEqual({ stage: 'architect', revision: null })
+    const r = rec()
+    expect(r.journey).toMatchObject({ currentStage: 'architect', revision: 'A' })
+    const live = r.signatures.filter((x) => x.supersededAt === null).map((x) => x.gate)
+    expect(live).toEqual(['define'])
+    expect(r.criteria.find((c) => c.id === 'architect.blocks')?.status).toBe('not_met')
+    expect(r.criteria.find((c) => c.id === 'architect.mapped')?.status).toBe('met')
+    expect(r.criteria.filter((c) => c.gate === 'capture').every((c) => c.status === 'not_met')).toBe(true)
+    const v = journeyView(r, ADMIN)
+    expect(v.next).toMatchObject({ kind: 'task', ref: { kind: 'skill', id: 'architecture-choice' }, button: 'Open Architecture choice' })
+    expect(v.next.summary).toMatch(/^Back in Architect: Architecture B \(Two boards\) was chosen after the architecture review\. Agree the change in Architecture choice\.$/)
+    // at or before Architect, nothing happens
+    expect(applyChange(db, 'architect', 'again', ADMIN.label)).toBeNull()
+  })
+
+  it('after release starts the next revision at Architect, leaving the released one as it was', () => {
+    start()
+    sign('define', 'architect', 'capture', 'prove', 'layout', 'signoff')
+    expect(rec().journey.currentStage).toBe('fabricate')
+    expect(isReleased(rec())).toBe(true)
+    recordOrder(db, { number: 'JLC-1', paid: 120, ship_date: '2026-11-20' }, signer)
+    const a = rec().signatures.filter((x) => x.revision === 'A')
+    expect(applyChange(db, 'architect', 'Architecture B was chosen after the architecture review', ADMIN.label)).toEqual({ stage: 'architect', revision: 'B' })
+    const r = rec()
+    expect(r.journey).toMatchObject({ revision: 'B', currentStage: 'architect' })
+    expect(isReleased(r)).toBe(false)
+    // revision A's record is untouched: its signatures and its order
+    expect(r.signatures.filter((x) => x.revision === 'A')).toEqual(a)
+    expect(loadOrders(db).map((o) => o.revision)).toEqual(['A'])
+    // Define carries into B signed, saying so; nothing from Architect on is signed in B
+    const b = r.signatures.filter((x) => x.revision === 'B')
+    expect(b.map((x) => x.gate)).toEqual(['define'])
+    expect(b[0]?.notes).toBe('Carried from revision A: the change starts at Architect.')
+    const v = journeyView(r, ADMIN)
+    expect(v.revision).toBe('B')
+    expect(v.stages.map((s) => s.state).slice(0, 3)).toEqual(['done', 'reopened', 'queued'])
+    expect(v.gates.find((g) => g.id === 'define')?.state).toBe('signed')
+    expect(v.next.summary).toMatch(/^Revision B starts in Architect: Architecture B was chosen after the architecture review\. Agree the change in Architecture choice\.$/)
+    expect(r.decisions[0]?.summary).toBe('Revision B started at Architect: Architecture B was chosen after the architecture review. Revision A stays as released.')
+  })
+
+  it('counts as a change only when the architecture decided differs', () => {
+    const was: DesignDecision = { id: 'd1', kind: 'architecture.choice', target: 'architecture', choice: 'chosen', detail: { option: 'A' }, by: 'a', byHash: 'h', at: 1, supersededAt: null }
+    expect(changesStage({ kind: 'architecture.choice', target: 'architecture', choice: 'chosen', detail: { option: 'A' } }, [was])).toBeNull()
+    expect(changesStage({ kind: 'architecture.choice', target: 'architecture', choice: 'chosen', detail: { option: 'B' } }, [was])).toBe('architect')
+    expect(changesStage({ kind: 'architecture.criteria', target: 'architecture', choice: 'fixed', detail: { criteria: [] } }, [])).toBe('architect')
+  })
+
+  it('names revisions in order', () => {
+    expect(['A', 'B', 'Z', 'AZ', 'ZZ'].map(nextRevision)).toEqual(['B', 'C', 'AA', 'BA', 'AAA'])
+  })
+})
+
+describe('a requirement change after release', () => {
+  it('starts the next revision at Define', () => {
+    start()
+    sign('define', 'architect', 'capture', 'prove', 'layout', 'signoff')
+    expect(applyChange(db, 'define', 'requirement R5 was changed after the requirements baseline', 'trace')).toEqual({ stage: 'define', revision: 'B' })
+    expect(rec().journey).toMatchObject({ revision: 'B', currentStage: 'define' })
+    expect(rec().signatures.filter((x) => x.revision === 'B')).toEqual([])
+    expect(journeyView(rec(), ADMIN).next.ref).toEqual({ kind: 'skill', id: 'requirements-review' })
   })
 })

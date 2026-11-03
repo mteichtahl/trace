@@ -759,30 +759,145 @@ export function withPending(r: Pick<JourneyRecord, 'stages' | 'gates'>, view: Jo
 }
 
 /** The design changes that take a project back to an earlier stage, and the stage each one belongs to. */
-export const CHANGE_STAGE: Readonly<Record<string, StageId>> = { intent: 'define', 'intent.uncovered': 'define', requirement: 'define' }
+export const CHANGE_STAGE: Readonly<Record<string, StageId>> = {
+  intent: 'define', 'intent.uncovered': 'define', requirement: 'define',
+  'architecture.criteria': 'architect', 'architecture.choice': 'architect',
+}
+
+/** The guided skill a person agrees a change in, by the stage it takes the project back to. */
+export const CHANGE_SKILL: Readonly<Partial<Record<StageId, { id: string; name: string; after: string }>>> = {
+  define: { id: 'requirements-review', name: 'Requirements review', after: 'the requirements baseline' },
+  architect: { id: 'architecture-choice', name: 'Architecture choice', after: 'the architecture review' },
+}
+
+/** Why a change sends the project back, in words: "<what changed> after the architecture review". */
+export const changeReason = (stage: StageId, what: string): string => `${what.replace(/\.$/, '')} after ${CHANGE_SKILL[stage]?.after ?? `${STAGE_NAMES[stage]} was signed`}`
 
 /**
- * Take the project back to `stage` because something it decided has changed (a requirement, after the baseline): the
- * stage is reopened with `reason`, the gates from there on stop counting, and the stage's person-owned criteria are
- * not met again, so the changed work is agreed before the gate is signed again. Evidence trace owns carries forward
- * and is checked again by the agents. Nothing happens while the project is at or before that stage; returns the stage
- * the project went back to, or null.
+ * Whether the current revision is released: a release was cut for it (its record copied into the repository), or the
+ * project has passed its Release stage. A released revision is never edited: a change to it starts the next one.
+ */
+export function isReleased(r: Pick<JourneyRecord, 'journey' | 'stages' | 'decisions'>): boolean {
+  const rev = r.journey.revision
+  if (r.decisions.some((d) => d.kind === 'journey.snapshot' && (d.detail as { revision?: string } | null)?.revision === rev)) return true
+  const release = r.stages.find((s) => s.id === 'release')
+  const cur = r.stages.find((s) => s.id === r.journey.currentStage)
+  return Boolean(release && cur && cur.ord > release.ord)
+}
+
+/** The revision after `rev`: A → B, Z → AA, AZ → BA. */
+export function nextRevision(rev: string): string {
+  const chars = [...(/^[A-Z]+$/.test(rev) ? rev : 'A')]
+  for (let i = chars.length - 1; i >= 0; i--) {
+    if (chars[i] !== 'Z') { chars[i] = String.fromCharCode(chars[i]!.charCodeAt(0) + 1); return chars.join('') }
+    chars[i] = 'A'
+  }
+  return `A${chars.join('')}`
+}
+
+/** The template's own stage for a change that starts at `stage`: it, or the next one this template has. */
+const stageFor = (r: Pick<JourneyRecord, 'stages'>, stage: StageId): StageRow | undefined => {
+  const ideal = STAGE_IDS.indexOf(stage)
+  return r.stages.filter((s) => STAGE_IDS.indexOf(s.id) >= ideal).sort((a, b) => a.ord - b.ord)[0]
+}
+
+/**
+ * The work a change makes stale, from `target` on: its stage's person-owned criteria are agreed again (trace's are
+ * checked again by the agents), and every criterion of the stages after it is done again, since they were built on
+ * what changed.
+ */
+function rewindCriteria(db: DatabaseSync, r: JourneyRecord, target: StageRow, by: string, t: number): void {
+  const stageOf = (gate: string): StageRow | undefined => r.stages.find((s) => s.id === r.gates.find((g) => g.id === gate)?.stage)
+  for (const c of r.criteria) {
+    const st = stageOf(c.gate)
+    if (!st || st.ord < target.ord || c.status !== 'met') continue
+    if (st.ord === target.ord && c.owner !== 'person') continue
+    db.prepare('UPDATE gate_criteria SET status=\'not_met\', checked_at=?, checked_by=?, updated=? WHERE id=?').run(t, by, t, c.id)
+  }
+}
+
+/**
+ * Take the project back to `stage` in the same revision because something it decided has changed (a requirement or
+ * the architecture, before release): the stage is reopened with `reason`, the gates from there on stop counting, and
+ * the stale work is done again (rewindCriteria). Nothing happens while the project is at or before that stage;
+ * returns the stage the project went back to, or null.
  */
 export function returnForChange(db: DatabaseSync, stage: StageId, reason: string, by: string): StageId | null {
   const r = need(db)
-  const target = r.stages.find((s) => s.id === stage)
+  const target = stageFor(r, stage)
   const cur = r.stages.find((s) => s.id === r.journey.currentStage)
   if (!target || !cur || target.ord >= cur.ord) return null
   const t = now()
   transaction(db, () => {
     reopenStage(db, r, target.id, reason, by, t)
-    const gates = r.gates.filter((g) => g.stage === target.id).map((g) => g.id)
-    for (const c of r.criteria.filter((x) => gates.includes(x.gate) && x.owner === 'person' && x.status === 'met')) {
-      db.prepare('UPDATE gate_criteria SET status=\'not_met\', checked_at=?, checked_by=?, updated=? WHERE id=?').run(t, by, t, c.id)
-    }
+    rewindCriteria(db, r, target, by, t)
   })
   return target.id
 }
+
+/**
+ * Start the next revision at `stage` because something a released revision decided has changed: the released revision
+ * is never edited. The journey moves to the next revision (A → B) at that stage; the gates before it carry over
+ * signed (their signatures are copied, saying so), the stages from it on start again, the stale work is done again
+ * (rewindCriteria), and waivers taken for "this revision only" from that stage on are closed. The released
+ * revision's signatures, orders and boards stay as they were. Returns the new revision and stage.
+ */
+export function startRevision(db: DatabaseSync, stage: StageId, reason: string, by: string): { revision: string; stage: StageId } {
+  const r = need(db)
+  const target = stageFor(r, stage)
+  if (!target) throw new JourneyError(`This project has no ${STAGE_NAMES[stage]} stage.`)
+  const old = r.journey.revision
+  const rev = nextRevision(old)
+  const t = now()
+  transaction(db, () => {
+    db.prepare('UPDATE journey SET revision=?, current_stage=?, updated=? WHERE id=\'current\'').run(rev, target.id, t)
+    db.prepare('UPDATE stages SET revision=?, updated=?').run(rev, t)
+    for (const s of r.stages.filter((x) => x.ord >= target.ord)) {
+      db.prepare('UPDATE stages SET started=NULL, finished=NULL, reopened_at=NULL, reopened_reason=NULL, reopened_by=NULL, updated=? WHERE id=?').run(t, s.id)
+    }
+    db.prepare('UPDATE stages SET started=?, reopened_at=?, reopened_reason=?, reopened_by=?, updated=? WHERE id=?').run(t, t, reason, by, t, target.id)
+    const before = r.gates.filter((g) => (r.stages.find((s) => s.id === g.stage)?.ord ?? Infinity) < target.ord)
+    for (const g of before) {
+      const sig = liveSignature(r, g.id)
+      if (!sig) continue
+      db.prepare('INSERT INTO gate_signatures (id, gate, revision, by, by_hash, at, criteria, waivers, notes) VALUES (?,?,?,?,?,?,?,?,?)')
+        .run(newId(), g.id, rev, sig.by, sig.byHash, t, JSON.stringify(sig.criteria), JSON.stringify(sig.waivers), `Carried from revision ${old}: the change starts at ${STAGE_NAMES[target.id]}.`)
+    }
+    db.prepare('UPDATE gates SET returned_at=NULL, returned_by=NULL, return_reason=NULL, updated=?').run(t)
+    for (const w of r.waivers.filter((x) => x.closedAt === null && /this revision only/i.test(x.scope) && (r.stages.find((s) => s.id === x.stage)?.ord ?? -1) >= target.ord)) {
+      db.prepare('UPDATE waivers SET closed_at=?, updated=? WHERE id=?').run(t, t, w.id)
+    }
+    rewindCriteria(db, r, target, by, t)
+    decide(db, {
+      kind: 'revision.started', stage: target.id, ref: rev, by,
+      summary: `Revision ${rev} started at ${STAGE_NAMES[target.id]}: ${reason}. Revision ${old} stays as released.`,
+      detail: { from: old, revision: rev, stage: target.id },
+    })
+  })
+  return { revision: rev, stage: target.id }
+}
+
+/**
+ * Apply a change that belongs to `stage`: before release, the project goes back to that stage in the same revision
+ * (returnForChange); after release, the next revision starts there (startRevision). `revision` is set only when a new
+ * one started. Null when the project is at or before that stage already.
+ */
+export function applyChange(db: DatabaseSync, stage: StageId, reason: string, by: string): { stage: StageId; revision: string | null } | null {
+  const r = need(db)
+  const target = stageFor(r, stage)
+  const cur = r.stages.find((s) => s.id === r.journey.currentStage)
+  if (!target || !cur || target.ord >= cur.ord) return null
+  if (isReleased(r)) {
+    const s = startRevision(db, stage, reason, by)
+    return { stage: s.stage, revision: s.revision }
+  }
+  const back = returnForChange(db, stage, reason, by)
+  return back ? { stage: back, revision: null } : null
+}
+
+/** A change's outcome in words: "The project went back to Architect" or "Revision B started at Architect". */
+export const changeWords = (o: { stage: StageId; revision: string | null }): string =>
+  o.revision ? `Revision ${o.revision} started at ${STAGE_NAMES[o.stage]}, and the released revision stays as it was` : `The project went back to ${STAGE_NAMES[o.stage]}`
 
 /**
  * What still stops `viewer` signing gate `id`, in plain words (empty: they may sign). Pass the waiver ids they are
@@ -993,17 +1108,22 @@ function baseNext(r: JourneyRecord, viewer: Viewer, at: number): Omit<NextStep, 
     return { kind: 'done', belongs_to: 'trace', yours: false, summary: `Revision ${r.journey.revision} is accepted.`, why: 'Every gate is signed.', recommendation: null, button: 'Read the record', stage: stageId, ref: null }
   }
   const blocking = blockingQuestions(r)
+  // Back for a change (applyChange): a requirement or the architecture changed. It is agreed again in its guided
+  // skill, not a failure, while a person-owned criterion of the stage is not met yet
+  const skill = CHANGE_SKILL[stageId]
+  if (stage && stage.reopenedAt !== null && open && !blocking.length && skill && r.criteria.some((c) => c.gate === open.id && c.owner === 'person' && c.status !== 'met')) {
+    const mine = viewer.admin || viewer.part === 'contributor'
+    const fresh = r.decisions.find((d) => d.kind === 'revision.started' && (d.detail as { revision?: string } | null)?.revision === r.journey.revision)
+    return {
+      kind: 'task', belongs_to: mine ? 'you' : 'contributors', yours: mine,
+      summary: `${fresh ? `Revision ${r.journey.revision} starts in ${stageName}` : `Back in ${stageName}`}: ${(stage.reopenedReason ?? 'something changed').replace(/\.$/, '')}. Agree the change in ${skill.name}.`,
+      why: fresh ? 'A released revision is never edited: the change goes into the next one, and its gates are signed again from here.' : 'A change is agreed before any gate after it is signed again, so nothing goes to Fabricate on the old design.',
+      recommendation: null, button: mine ? `Open ${skill.name}` : 'Read the stage', stage: stageId, ref: { kind: 'skill', id: skill.id },
+    }
+  }
   // Something failed: the current stage was reopened and nothing of it is met again yet.
   if (stage && stage.reopenedAt !== null && open && !blocking.length && r.criteria.filter((c) => c.gate === open.id).every((c) => c.status !== 'met')) {
     const mine = viewer.admin || viewer.part === 'contributor'
-    // back in Define: a requirement changed (returnForChange). It is agreed in Requirements review, not a failure
-    if (stageId === 'define') {
-      return {
-        kind: 'task', belongs_to: mine ? 'you' : 'contributors', yours: mine, summary: `Back in Define: ${(stage.reopenedReason ?? 'a requirement changed').replace(/\.$/, '')}. Agree the change in Requirements review.`,
-        why: 'A changed requirement is agreed before any gate after it is signed again, so nothing goes to Fabricate on the old one.', recommendation: null,
-        button: mine ? 'Open Requirements review' : 'Read the requirements', stage: stageId, ref: { kind: 'skill', id: 'requirements-review' },
-      }
-    }
     return {
       kind: 'failed', belongs_to: mine ? 'you' : 'contributors', yours: mine, summary: `${stageName} was reopened: ${(stage.reopenedReason ?? 'something failed').replace(/\.$/, '')}.`,
       why: 'A failure reopens the earliest stage it touches, and work starts again from there.', recommendation: null, button: 'See what failed', stage: stageId, ref: { kind: 'stage', id: stageId },
