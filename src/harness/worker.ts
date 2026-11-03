@@ -217,7 +217,7 @@ export function composeItem(item: WorkItem, cfg: TraceConfig, repository: string
   p.add('worker.role', { repository, where: o.where ?? 'in GitHub Actions' }).add('worker.data.item')
   p.add('worker.item', { item_kind: item.kind, number: item.number, ref: item.ref, sha: item.sha, title: JSON.stringify(item.title) })
   if (!item.own) p.add('worker.item.not-own')
-  p.add('worker.tools')
+  p.add('worker.tools').add('design.silkscreen')
   p.add(`worker.item.${item.kind}`, {
     repository, number: item.number, sha: item.sha, default_branch: cfg.branch, branch_prefix: cfg.worker.own_branch_prefix, ci_red_label: cfg.labels.ci_red,
   })

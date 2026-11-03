@@ -17,7 +17,7 @@ import { type Composed, Composer, type Layers, NO_LAYERS } from '../prompts/reso
 export function composeCloudWorker(repos: readonly string[], layers: Layers = NO_LAYERS): Composed {
   const p = new Composer(layers)
   const listed = repos.length ? repos.map((r) => `- ${r}`) : [p.text('cloudworker.none')]
-  return p.add('cloudworker.prompt', { repositories: listed }).add('cloudworker.guardrails').done()
+  return p.add('design.silkscreen').add('cloudworker.prompt', { repositories: listed }).add('cloudworker.guardrails').done()
 }
 
 /** The prompt text: the catalog's cloudworker.prompt (editable; installation overrides apply) and its guardrails. */
