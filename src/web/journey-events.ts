@@ -26,6 +26,10 @@
  * database put a moment after its row is made, so an earlier row is older than that; a row near the edge may be
  * notified twice, which only makes the app refetch again.
  *
+ *   push      after the live events, push notifications (src/web/push-sender.ts) for the project, to the people who
+ *             turned them on: what is new in Next for them. The journey record's own writes (a gate signed, waived or
+ *             made ready by a person) come here too, for push only: they publish no live event (see below)
+ *
  * Writes by people (the journey record itself) are published by the web backend after the API answers
  * (src/web/call.ts), with the right `what` and to the caller at once, so they are not matched here: two routes would
  * send every answer's event twice. One event is published per S3 event, unbatched: an agent writes its facts a few
@@ -35,11 +39,13 @@ import type { DatabaseSync } from 'node:sqlite'
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers'
 import { Central, S3Backend, type S3Api } from '../core/central.js'
 import { AGENT_FACTS_DB, AGENT_FACTS_FOLDER, applyAgentFactsSchema } from '../core/agent-facts.js'
-import { BucketDb } from '../core/journey-store.js'
+import { BucketDb, JOURNEY_DB, JOURNEY_FOLDER } from '../core/journey-store.js'
 import { BENCH_DB } from '../core/bench.js'
 import { JOB_INDEX_DB, JOB_INDEX_FOLDER, JobIndexStore, changedSince } from '../core/job-index.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { type LiveEvent, type Publisher, appsyncPublisher, userChannel } from './events.js'
+import { DynamoLedger, type PushDeps, type PushOutcome, pushForProject } from './push-sender.js'
+import { type VapidKeys, validVapid } from './web-push.js'
 
 /** A row asked this close to the event is taken as written by it. */
 export const NEW_WITHIN_S = 120
@@ -48,6 +54,7 @@ export const NEW_WITHIN_S = 120
 export interface S3ObjectEvent { 'detail-type'?: string; time?: string; detail?: { bucket?: { name?: string }; object?: { key?: string } } }
 
 const FACTS_KEY = new RegExp(`^${PROJECTS_PREFIX}/([A-Za-z0-9-]+/[A-Za-z0-9._-]+)/${AGENT_FACTS_FOLDER}/(${AGENT_FACTS_DB.replace('.', '\\.')}|${BENCH_DB.replace('.', '\\.')})$`)
+const JOURNEY_KEY = new RegExp(`^${PROJECTS_PREFIX}/([A-Za-z0-9-]+/[A-Za-z0-9._-]+)/${JOURNEY_FOLDER}/${JOURNEY_DB.replace('.', '\\.')}$`)
 const INDEX_KEY = new RegExp(`^${PROJECTS_PREFIX}/([A-Za-z0-9-]+/[A-Za-z0-9._-]+)/${JOB_INDEX_FOLDER}/${JOB_INDEX_DB.replace('.', '\\.')}$`)
 /** The most job.updated events one write sends each person (more: one for the project, with no job). */
 export const MAX_JOB_EVENTS = 10
@@ -55,6 +62,13 @@ export const MAX_JOB_EVENTS = 10
 /** The project (owner/repo, lower case) whose facts the key is, or null for any other key. */
 export function projectOfKey(key: string): string | null {
   const m = FACTS_KEY.exec(key)
+  if (!m?.[1] || m[1].includes('..')) return null
+  return m[1].toLowerCase()
+}
+
+/** The project whose journey record the key is, or null for any other key (push only: see the file's comment). */
+export function projectOfJourneyKey(key: string): string | null {
+  const m = JOURNEY_KEY.exec(key)
   if (!m?.[1] || m[1].includes('..')) return null
   return m[1].toLowerCase()
 }
@@ -121,6 +135,21 @@ export interface JourneyEventsDeps {
   log: (entry: Record<string, unknown>) => void
   /** where temporary copies go */
   scratch?: string | undefined
+  /** push notifications; absent: none are sent (an installation without push set up) */
+  push?: Pick<PushDeps, 'ledger' | 'keys' | 'fetch'> | undefined
+}
+
+/** Push for the project, never failing the live events: a failure is logged. */
+async function pushFor(repo: string, d: JourneyEventsDeps): Promise<PushOutcome | null> {
+  if (!d.push) return null
+  try {
+    const out = await pushForProject(repo, { ...d.push, bucket: d.bucket, s3: d.s3, now: d.now, log: d.log, scratch: d.scratch })
+    if (out.sent || out.gone || out.failed) d.log({ event: 'push', ...out })
+    return out
+  } catch (e) {
+    d.log({ warning: 'push: could not send for the project', repo, error: e instanceof Error ? e.message : String(e) })
+    return null
+  }
 }
 
 /** A write of a project's job index: job.updated to everyone on the project, for each job it changed. */
@@ -145,11 +174,17 @@ async function onJobIndex(repo: string, e: S3ObjectEvent, d: JourneyEventsDeps):
 }
 
 /** One S3 event: what was published, to how many people (tests read it). */
-export async function onObjectCreated(e: S3ObjectEvent, d: JourneyEventsDeps): Promise<{ repo: string | null; changed: number; notified: number; jobs?: number }> {
+export async function onObjectCreated(e: S3ObjectEvent, d: JourneyEventsDeps): Promise<{ repo: string | null; changed: number; notified: number; jobs?: number; pushed?: number }> {
   const key = e.detail?.object?.key ?? ''
   const ours = e.detail?.bucket?.name === d.bucket
   const indexed = ours ? projectOfIndexKey(key) : null
   if (indexed) return onJobIndex(indexed, e, d)
+  // a person's write of the journey record: its live events are the web backend's; here, push only
+  const journal = ours ? projectOfJourneyKey(key) : null
+  if (journal) {
+    const p = await pushFor(journal, d)
+    return { repo: journal, changed: 0, notified: 0, pushed: p?.sent ?? 0 }
+  }
   const repo = ours ? projectOfKey(key) : null
   if (!repo) {
     d.log({ warning: 'journey-events: not an agents\' facts or job index object of this installation', key })
@@ -176,7 +211,9 @@ export async function onObjectCreated(e: S3ObjectEvent, d: JourneyEventsDeps): P
   const results = await Promise.allSettled([...per].map(([sub, evs]) => d.publisher.publish(userChannel(sub), evs)))
   const failed = results.filter((r) => r.status === 'rejected').length
   if (failed) d.log({ warning: 'journey-events: some events were not delivered', repo, failed, of: per.size })
-  return { repo, changed: everyone.length, notified }
+  // a bench reading changes nothing in Next: no push
+  const p = isBenchKey(key) ? null : await pushFor(repo, d)
+  return { repo, changed: everyone.length, notified, ...(p ? { pushed: p.sent } : {}) }
 }
 
 let publisher: Publisher | null = null
@@ -189,6 +226,36 @@ export async function handler(e: S3ObjectEvent): Promise<void> {
   if (!bucket || !http || !region) throw new Error('TRACE_CENTRAL_BUCKET, TRACE_EVENTS_HTTP and AWS_REGION are needed')
   publisher ??= appsyncPublisher({ region, events: { http } }, fromNodeProviderChain(), fetch)
   const log = (entry: Record<string, unknown>): void => { process.stdout.write(`${JSON.stringify(entry)}\n`) }
-  const out = await onObjectCreated(e, { bucket, publisher, now: Date.now, log, scratch: '/tmp' })
+  const out = await onObjectCreated(e, { bucket, publisher, now: Date.now, log, scratch: '/tmp', push: pushDeps(region, log) })
   log({ event: 'journey-events', ...out })
+}
+
+let vapid: { keys: VapidKeys | null; at: number } | null = null
+/** How long the push keys are kept in memory before they are read again (a rotation shows within this). */
+const KEYS_FOR_MS = 15 * 60_000
+
+/** Push, from the environment: TRACE_PUSH_TABLE (the ledger) and TRACE_PUSH_SECRET (the keys' secret name). */
+function pushDeps(region: string, log: (e: Record<string, unknown>) => void): JourneyEventsDeps['push'] {
+  const table = process.env.TRACE_PUSH_TABLE
+  const secret = process.env.TRACE_PUSH_SECRET
+  if (!table || !secret) return undefined
+  const creds = fromNodeProviderChain()
+  return {
+    ledger: new DynamoLedger({ table, region, credentials: async () => creds() }),
+    fetch,
+    keys: async () => {
+      if (vapid && Date.now() - vapid.at < KEYS_FOR_MS) return vapid.keys
+      const { SecretsManagerClient, GetSecretValueCommand } = await import('@aws-sdk/client-secrets-manager')
+      try {
+        const r = await new SecretsManagerClient({ region }).send(new GetSecretValueCommand({ SecretId: secret }))
+        const parsed: unknown = JSON.parse(r.SecretString ?? 'null')
+        vapid = { keys: validVapid(parsed) ? parsed : null, at: Date.now() }
+        if (!vapid.keys) log({ warning: 'push: the push keys secret is not a whole key pair', secret })
+      } catch (e) {
+        log({ warning: 'push: could not read the push keys', secret, error: e instanceof Error ? e.message : String(e) })
+        vapid = { keys: null, at: Date.now() }
+      }
+      return vapid.keys
+    },
+  }
 }

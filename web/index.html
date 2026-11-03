@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- installable to the home screen (needed for push on iPhone) -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="trace" />
+    <meta name="theme-color" content="#0a0a0a" />
     <title>trace</title>
     <!-- before anything paints: the theme and display preferences (a file, so script-src needs no 'unsafe-inline') -->
     <script src="/theme.js"></script>

@@ -501,6 +501,12 @@ export const webHooksClientSecret = (prefix: string): string => `${prefix}/web/h
 /** The random value CloudFront adds to every request it sends the hooks function (src/web/hooks.ts ORIGIN_HEADER),
  * made by the stack. */
 export const webHooksOriginSecret = (prefix: string): string => `${prefix}/web/hooks-origin`
+/** The installation's push key pair, JSON { publicKey, privateKey, subject } (src/web/web-push.ts VapidKeys), made by the
+ * web backend the first time the app asks for the public key (GET /api/push/key) and never changed: the stack never holds it.
+ * The push sender (journey-events) reads it to sign and send. */
+export const webPushSecret = (prefix: string): string => `${prefix}/web/push-keys`
+/** The push ledger table (src/web/push-sender.ts): what was pushed to whom, and dead devices. */
+export const webPushName = (prefix: string): string => `${prefix}-web-push`
 /** The hooks function and its debounce table (src/infra/web.ts). */
 export const webHooksName = (prefix: string): string => `${prefix}-web-hooks`
 /** Whether the installation takes GitHub's webhooks: the nested layout only. Their client and its resource server are

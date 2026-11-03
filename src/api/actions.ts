@@ -89,6 +89,7 @@
  *   actions-journey.ts   journey.get, journey.criterion.open, gate.sign, gate.return, question.answer, stuck.dismiss, waiver.add, inbox
  *   actions-chats.ts     chats.list, chats.get, chats.append, chats.reply, chats.rename, chats.recall
  *   actions-me.ts        me.get, me.set
+ *   actions-push.ts      push.subscribe, push.unsubscribe, push.devices
  *   actions-graph.ts     graph.neighbourhood
  *   actions-files.ts     files.list, files.url
  *   actions-jobs.ts      jobs.list, job.control, handoff.decline
@@ -146,6 +147,7 @@ import { GRAPH_ACTIONS } from './actions-graph.js'
 import { JOURNEY_ACTIONS } from './actions-journey.js'
 import { JOB_ACTIONS, withControls } from './actions-jobs.js'
 import { ME_ACTIONS } from './actions-me.js'
+import { PUSH_ACTIONS } from './actions-push.js'
 import { PEOPLE_ACTIONS } from './actions-people.js'
 import { RECORD_ACTIONS } from './actions-record.js'
 import { BUILD_ACTIONS } from './actions-build.js'
@@ -692,6 +694,7 @@ export const ACTIONS = {
   ...JOURNEY_ACTIONS,
   ...CHAT_ACTIONS,
   ...ME_ACTIONS,
+  ...PUSH_ACTIONS,
   ...GRAPH_ACTIONS,
   ...FILE_ACTIONS,
   ...JOB_ACTIONS,

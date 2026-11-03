@@ -16,6 +16,7 @@ import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { DecisionCard, type Decision, type DecisionChoice } from '@/components/decision-card'
 import { KIND, NeedsYouCard } from '@/components/needs-you-card'
+import { offerPush } from '@/components/push-prompt'
 import { Rich } from '@/components/rich'
 import { Button } from '@/components/ui/button'
 import { useAcceptFromInbox } from '@/components/changes/use-change-actions'
@@ -34,6 +35,8 @@ import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/_app/next')({
   staticData: { crumb: 'Next' },
+  // a tapped notification opens its item at the front (src/web/push-sender.ts messageFor)
+  validateSearch: (s: Record<string, unknown>): { item?: string } => (typeof s.item === 'string' && s.item.length < 200 ? { item: s.item } : {}),
   component: Next,
 })
 
@@ -78,7 +81,8 @@ function Next() {
   const accept = useAcceptFromInbox()
   const [busy, setBusy] = useState<string | null>(null)
   // this visit's order: Later sends an item to the back, Up next brings one to the front
-  const [order, setOrder] = useState<string[]>([])
+  const { item: opened } = Route.useSearch()
+  const [order, setOrder] = useState<string[]>(() => (opened ? [opened] : []))
   const items = useMemo(() => queueOrder(inboxItems(inbox.data), order), [inbox.data, order])
   const qRepos = [...new Set(items.filter((i) => i.kind === 'question').map((i) => i.repo))]
   const journeys = useQueries({ queries: qRepos.map((repo) => ({ ...q('journey.get', { repo }), enabled: !!answering })) })
@@ -138,7 +142,7 @@ function Next() {
               <NeedsYouCard
                 item={first}
                 answering={busy === first.id}
-                onAnswer={offline ? undefined : (it) => void answer(it, { option: it.recommended!.id, recommended: true }).catch(() => undefined)}
+                onAnswer={offline ? undefined : (it) => void answer(it, { option: it.recommended!.id, recommended: true }).then(() => offerPush(), () => undefined)}
                 onOther={(it) => setAnswering(answering === it.id ? null : it.id)}
                 onDismiss={offline ? undefined : dismiss}
                 onAccept={offline ? undefined : accept.run}

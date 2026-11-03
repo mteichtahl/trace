@@ -1,0 +1,19 @@
+{
+  "name": "trace",
+  "short_name": "trace",
+  "description": "From an idea to a board you can order: what needs you, one thing at a time.",
+  "start_url": "/next?from=home-screen",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#0a0a0a",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Next", "short_name": "Next", "url": "/next", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Projects", "short_name": "Projects", "url": "/projects", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

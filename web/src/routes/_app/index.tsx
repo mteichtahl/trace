@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer'
 import { Skeleton } from '@/components/ui/skeleton'
 import { NeedsYouCard } from '@/components/needs-you-card'
+import { offerPush } from '@/components/push-prompt'
 import { useAcceptFromInbox } from '@/components/changes/use-change-actions'
 import { useDismissStuck } from '@/components/dismiss-stuck'
 import { RunLine, runControls } from '@/components/run-line'
@@ -68,7 +69,10 @@ function Home() {
     answer.mutate(
       { repo: item.repo, question: item.questionId, option: item.recommended.id },
       {
-        onSuccess: (r) => toast(`Answered: ${item.recommended!.label}`, { description: `${item.project}: ${r.summary?.replace(/^Answered\. /, '') ?? 'the agent carries on.'}` }),
+        onSuccess: (r) => {
+          toast(`Answered: ${item.recommended!.label}`, { description: `${item.project}: ${r.summary?.replace(/^Answered\. /, '') ?? 'the agent carries on.'}` })
+          void offerPush()
+        },
         onError: (e) => toast.error('Could not send the answer', { description: `${e.message} Nothing was lost; try again.` }),
       },
     )
