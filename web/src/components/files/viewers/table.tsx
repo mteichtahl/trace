@@ -1,16 +1,20 @@
 /**
  * Tables (.csv, .tsv, parts lists, placement files): the shared Data table (sort, search, filter, resize, choose and
- * reorder columns). A parts list links each line's part to the parts library. The card shows the first 5 rows and
- * the row count.
+ * reorder columns). A parts list links each line's part to the parts library. A numeric result (a scope capture,
+ * loop_gain.csv, a sweep's points) also draws as a chart, with a Chart / Table switch that starts on Chart when the
+ * first column runs one way (time, frequency) and there is something numeric to draw. The card shows the chart, or
+ * the first 5 rows and the row count.
  */
 import { Link } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { DataTable, Highlight } from '@/components/data-table'
 import { cn } from '@/lib/utils'
 import { useFileText } from '../data'
 import { type Table, cellNumber, parseDelimited, partsColumns } from '../csv'
-import { AREA, ViewerError, ViewerLoading, type ViewerProps } from './common'
+import { csvToPlots } from '../parse/csv-series'
+import { AREA, Controls, ViewerError, ViewerLoading, type ViewerProps } from './common'
+import { Panels } from './results'
 
 type Row = Record<string, string>
 
@@ -50,9 +54,13 @@ export default function TableViewer({ file, size, commit }: ViewerProps) {
   const table = useMemo(() => (q.data !== undefined ? parseDelimited(q.data, file.path.toLowerCase().endsWith('.tsv') ? '\t' : undefined) : null), [q.data, file.path])
   const columns = useMemo(() => (table ? tableColumns(table) : []), [table])
   const rows = useMemo(() => (table ? tableRows(table) : []), [table])
+  const parts = table ? partsColumns(table.header) : null
+  const plots = useMemo(() => (table && !parts ? csvToPlots(table) : null), [table, parts])
+  const [view, setView] = useState<'chart' | 'table' | null>(null)
   if (q.isError) return <ViewerError error={q.error} onRetry={() => void q.refetch()} />
   if (!table) return <ViewerLoading size={size} />
-  const parts = partsColumns(table.header)
+  const mode = view ?? (plots ? 'chart' : 'table')
+  if (size === 'card' && plots) return <Panels panels={plots} size="card" title={`${table.rows.length.toLocaleString()} rows`} />
   if (size === 'card') {
     return (
       <div className="overflow-x-auto text-xs">
@@ -80,8 +88,29 @@ export default function TableViewer({ file, size, commit }: ViewerProps) {
       </div>
     )
   }
+  const toggle = plots && (
+    <Controls>
+      <div role="tablist" aria-label="View" className="inline-flex rounded-md border p-0.5">
+        {(['chart', 'table'] as const).map((m) => (
+          <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => setView(m)} className={cn('rounded px-2.5 py-1 text-xs', mode === m ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent')}>
+            {m === 'chart' ? 'Chart' : 'Table'}
+          </button>
+        ))}
+      </div>
+      <span className="text-muted-foreground">{table.rows.length.toLocaleString()} rows · {table.header.length} columns</span>
+    </Controls>
+  )
+  if (plots && mode === 'chart')
+    return (
+      <div className={cn('flex min-w-0 flex-col', AREA[size])}>
+        {toggle}
+        <div className="min-h-0 flex-1 [&>*]:h-full"><Panels panels={plots} size={size} /></div>
+      </div>
+    )
   return (
-    <div className={cn('overflow-auto p-3', AREA[size])}>
+    <div className={cn('flex min-w-0 flex-col', AREA[size])}>
+    {toggle}
+    <div className={cn('min-h-0 flex-1 overflow-auto p-3')}>
       <DataTable
         id={`file:${parts ? 'parts' : 'table'}`}
         data={rows}
@@ -92,6 +121,7 @@ export default function TableViewer({ file, size, commit }: ViewerProps) {
         maxHeight={size === 'page' ? 'calc(100dvh - 330px)' : 'calc(100dvh - 350px)'}
         empty="This table has a header but no rows."
       />
+    </div>
     </div>
   )
 }
