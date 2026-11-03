@@ -82,6 +82,7 @@ function skillBench(skill: string, i: CheckInput) {
   }
 }
 import { type CheckInput, type CheckResult, checkSkill } from './skill-checks.js'
+import { changeImpact } from './change-impact.js'
 
 /** The skills whose Submit records design decisions. */
 const DESIGN_SKILLS = new Set(['intent-builder', 'requirements-review', 'architecture-choice', 'pin-plan-review'])
@@ -310,6 +311,10 @@ function extras(skill: string, i: CheckInput): Record<string, unknown> {
       if (!b?.result) return {}
       const x = b.result
       return { case: { run: b.id, status: b.status, summary: b.summary, process: x.process ?? null, fit: x.fit_status ?? null, problems: x.problems ?? [], rules_failing: x.rules_failing ?? [], files: x.files ?? [], case: x.case ?? null } }
+    }
+    case 'change-request': {
+      const impact = changeImpact(i.r, i.draft?.what)
+      return impact ? { impact } : {}
     }
     case 'gate-signing': return i.gate ? { gate: i.gate } : {}
     case 'incoming-inspection': return { boards: (i.boards ?? []).map((b) => boardView(b, i.orders, i.readings ?? [])), ...(i.handPlaced ? { handPlaced: i.handPlaced } : {}) }
