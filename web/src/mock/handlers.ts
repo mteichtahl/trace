@@ -18,6 +18,7 @@ import { handoffsOf, jobsAction, jobsOf } from './jobs'
 import { changesAction } from './changes'
 import { deploysAction } from './deploys'
 import { healthAction } from './health'
+import { progressAction } from './progress'
 
 let signedIn = typeof sessionStorage !== 'undefined' && sessionStorage.getItem('trace.mock.signedOut') !== '1'
 let inbox: InboxItem[] = [...INBOX]
@@ -34,6 +35,7 @@ function action(name: string, a: Record<string, unknown>): Response {
   const ch = changesAction(name, a, (r, n) => { inbox = inbox.filter((i) => !(i.change?.repo === r && i.change.number === n)) }); if (ch) return ch
   const dep = deploysAction(name, a); if (dep) return dep
   const hl = healthAction(name, a); if (hl) return hl
+  const pr = progressAction(name, a); if (pr) return pr
   const files = filesAction(name, a); if (files) return files
   const k = knowledgeAction(name, a); if (k !== undefined) return k && typeof k === 'object' && '__error' in k ? json({ ok: false, error: (k as { __error: string }).__error }, 403) : ok(k)
   const des = designAction(name, a); if (des) return des
@@ -91,6 +93,8 @@ function sse(events: unknown[]): Response {
   const stream = new ReadableStream({
     async start(c) {
       for (const e of events) {
+        // { __pause: ms } holds the stream (a tool that takes a while)
+        if (e && typeof e === 'object' && '__pause' in e) { await new Promise((r) => setTimeout(r, (e as { __pause: number }).__pause)); continue }
         c.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`))
         await new Promise((r) => setTimeout(r, 40))
       }
@@ -106,6 +110,27 @@ function agui(body: { threadId: string; runId: string; messages: { role: string;
   const reply = `**Here is what I found** about “${q.slice(0, 60)}”.\n\nThis is mock mode: no agent ran. In a real installation trace answers from the project record, with cards for runs, plots and parts.\n\n- One\n- Two`
   const id = crypto.randomUUID()
   const words = reply.split(/(?<=\s)/)
+  // a question about a simulation runs a tool for a while, with its run named (docs/progress-and-logs.md, "Chat")
+  if (/simulat|settle/i.test(q)) {
+    const call = `call_${id.slice(0, 8)}`
+    const say = crypto.randomUUID()
+    return sse([
+      { type: 'RUN_STARTED', threadId: body.threadId, runId: body.runId },
+      { type: 'TEXT_MESSAGE_START', messageId: say, role: 'assistant' },
+      { type: 'TEXT_MESSAGE_CONTENT', messageId: say, delta: "I'm running a transient simulation of the probe circuit from power-on to 10 ms." },
+      { type: 'TEXT_MESSAGE_END', messageId: say },
+      { type: 'TOOL_CALL_START', toolCallId: call, toolCallName: 'transient_simulation', parentMessageId: say },
+      { type: 'TOOL_CALL_ARGS', toolCallId: call, delta: JSON.stringify({ circuit: 'probe', stop: '10ms' }) },
+      { type: 'TOOL_CALL_END', toolCallId: call },
+      { type: 'CUSTOM', name: 'trace.tool_run', value: { toolCallId: call, repo: 'acme/soil-sensor', run: 'tool:t_sim' } },
+      { __pause: 45_000 },
+      { type: 'TOOL_CALL_RESULT', messageId: crypto.randomUUID(), toolCallId: call, content: JSON.stringify({ summary: 'Ran the transient simulation: settles in 3.1 ms' }) },
+      { type: 'TEXT_MESSAGE_START', messageId: id, role: 'assistant' },
+      { type: 'TEXT_MESSAGE_CONTENT', messageId: id, delta: 'It settles in **3.1 ms**, inside the 5 ms you need.' },
+      { type: 'TEXT_MESSAGE_END', messageId: id },
+      { type: 'RUN_FINISHED', threadId: body.threadId, runId: body.runId },
+    ])
+  }
   return sse([
     { type: 'RUN_STARTED', threadId: body.threadId, runId: body.runId },
     { type: 'TEXT_MESSAGE_START', messageId: id, role: 'assistant' },

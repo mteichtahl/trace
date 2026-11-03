@@ -1,6 +1,6 @@
 import { QueryClient } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CHANGE_CHECKS_MS, CHANGE_MERGEABLE_MS, POLL_LIVE_MS, applyEvent, changeLookEvery, conflictNotice, connectLive, hostOf, invalidationsFor, liveStatus, nextLookWords, pollEvery, subprotocols } from './live'
+import { CHANGE_CHECKS_MS, CHANGE_MERGEABLE_MS, POLL_LIVE_MS, applyEvent, bumpLog, logTicks, changeLookEvery, conflictNotice, connectLive, hostOf, invalidationsFor, liveStatus, nextLookWords, pollEvery, subprotocols } from './live'
 
 describe('live events → query invalidation', () => {
   it('maps each event to the queries it makes stale', () => {
@@ -22,10 +22,33 @@ describe('live events → query invalidation', () => {
   })
 })
 
+describe('a run\'s log grew (log.appended)', () => {
+  it('refreshes what trace is doing, and a check\'s change runs', () => {
+    expect(invalidationsFor({ type: 'log.appended', repo: 'a/b', kind: 'check', id: '1/1/board', lines: 4, at: '' })).toEqual([['activity.list'], ['change.runs', 'a/b']])
+    expect(invalidationsFor({ type: 'log.appended', repo: 'a/b', kind: 'job', id: 'j1', lines: 2, at: '' })).toEqual([['activity.list']])
+    expect(invalidationsFor({ type: 'log.appended', repo: 'a/b', kind: 'tool', id: 't1', lines: 1, at: '' })).toEqual([['activity.list']])
+  })
+  it('bumps the open log views for that repo only', () => {
+    const before = logTicks.get()
+    bumpLog('a/b')
+    bumpLog('a/b')
+    expect(logTicks.get()['a/b']).toBe((before['a/b'] ?? 0) + 2)
+    expect(logTicks.get()['c/d']).toBe(before['c/d'])
+  })
+  it('activity.list matches the panel\'s key by prefix', async () => {
+    const qc = new QueryClient()
+    qc.setQueryData(['activity.list', {}], { items: [] })
+    qc.setQueryData(['change.runs', 'a/b', { repo: 'a/b', number: 3 }], { jobs: [] })
+    applyEvent(qc, { type: 'log.appended', repo: 'a/b', kind: 'check', id: 'x', lines: 1, at: '' })
+    expect(qc.getQueryState(['activity.list', {}])?.isInvalidated).toBe(true)
+    expect(qc.getQueryState(['change.runs', 'a/b', { repo: 'a/b', number: 3 }])?.isInvalidated).toBe(true)
+  })
+})
+
 describe('a change moved on GitHub (the webhook\'s record.changed, kind change)', () => {
   it('refetches the change\'s status, the lists that show it, and the journey', () => {
     const e = { type: 'record.changed', repo: 'a/b', kind: 'change', number: 7, at: '' } as unknown as Parameters<typeof invalidationsFor>[0]
-    expect(invalidationsFor(e)).toEqual([['pull.status', 'a/b'], ['changes.list', 'a/b'], ['change.get', 'a/b'], ['inbox'], ['journey.get', 'a/b']])
+    expect(invalidationsFor(e)).toEqual([['pull.status', 'a/b'], ['changes.list', 'a/b'], ['change.get', 'a/b'], ['inbox'], ['journey.get', 'a/b'], ['change.runs', 'a/b'], ['activity.list']])
   })
 })
 

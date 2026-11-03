@@ -15,6 +15,7 @@ import { NeedsYouCard } from '@/components/needs-you-card'
 import { useDismissStuck } from '@/components/dismiss-stuck'
 import { Column, Section } from '@/components/shell/app-shell'
 import { RunLine, runControls } from '@/components/run-line'
+import { useWatchRun } from '@/components/run-sheet'
 import { useWork } from '@/components/agents/use-agents'
 import { EmptyState, Loading, NotShared, SkeletonRows } from '@/components/states'
 import { StatusBadge } from '@/components/status-badge'
@@ -37,6 +38,7 @@ function Agent() {
   const mems = useQueries({ queries: repos.map((repo) => ({ ...q('memory.list', { repo, agent, limit: 20 }), enabled: !!a, retry: false })) })
   const runs = useQueries({ queries: repos.map((repo) => ({ ...q('runs', { repo, agent, limit: 50 }), enabled: !!a, retry: false })) })
   const work = useWork()
+  const watch = useWatchRun()
   const [open, setOpen] = useState<MemoryView | null>(null)
   const dismiss = useDismissStuck()
   useTraceContext(a ? { label: a.name, description: 'The agent the person is looking at', value: { agent: a.id, name: a.name } } : null, 'agent')
@@ -70,7 +72,8 @@ function Agent() {
           <EmptyState>The {a.name} agent is not working on your projects and has nothing queued.</EmptyState>
         ) : (
           <div className="divide-y rounded-xl border">
-            {lines.map((x) => <RunLine key={`${x.repo}:${x.run.id}`} run={x.run} project={x.project} {...runControls(work.write.has(x.repo))} />)}
+            {lines.map((x) => <RunLine key={`${x.repo}:${x.run.id}`} run={x.run} project={x.project} {...runControls(work.write.has(x.repo))} onWatch={(r) => watch.onWatch(r, x.repo)} />)}
+            {watch.sheet}
           </div>
         )}
         {w && <p className="mt-2 text-sm text-muted-foreground">Last 24 hours: {w.today.runs === 0 ? 'no jobs ended' : `${w.today.runs} ${w.today.runs === 1 ? 'job' : 'jobs'} ended, ${w.today.succeeded} succeeded${w.today.medianS !== null ? `, median ${duration(w.today.medianS, { short: true })}` : ''}`}.</p>}

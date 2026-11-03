@@ -1,6 +1,6 @@
 /**
  * The shell every signed-in screen sits in (Focus mode excepted):
- *   left rail (Sidebar) · top bar (breadcrumb, ⌘K, live dot, bell, Ask trace, person) · the screen · Ask trace docked
+ *   left rail (Sidebar) · top bar (breadcrumb, ⌘K, "trace is working", live dot, bell, Ask trace, person) · the screen · Ask trace docked
  * Widths: ≥1280 px the rail has labels and Ask trace docks (380–560 px); 768–1279 the rail is icons and Ask trace
  * slides over; <768 a bottom tab bar (Home, Projects, Ask, Next), Ask full screen.
  */
@@ -12,6 +12,7 @@ import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/u
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { OfflineBanner } from '@/components/states'
+import { ActivityPill } from '@/components/activity'
 import { PushPrompt } from '@/components/push-prompt'
 import { DockedAskTrace, AskTrace } from '@/components/chat/chat-panel'
 import { openPanel, usePanel } from '@/components/chat/chat-state'
@@ -70,6 +71,7 @@ function TopBar() {
       <Button variant="outline" size="icon" className="lg:hidden max-md:hidden" aria-label="Search" onClick={() => commandOpen.set(true)}>
         <Search />
       </Button>
+      <ActivityPill />
       <LiveDot className="px-1" />
       <NotificationsBell />
       <Button variant="outline" className="hidden md:inline-flex" onClick={() => openPanel()} aria-pressed={p.open}>

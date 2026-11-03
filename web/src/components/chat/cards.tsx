@@ -3,13 +3,18 @@
  * component taking the tool call's parameters and result; renderers.tsx registers them with CopilotKit's
  * useRenderTool / useHumanInTheLoop by tool name.
  */
-import { ChevronRight, CircleCheck, CircleX, FileText, GitBranch, Loader2, TriangleAlert, Wrench } from 'lucide-react'
+import { ChevronRight, CircleCheck, CircleX, FileText, GitBranch, Loader2, SquareTerminal, TriangleAlert, Wrench } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { lazy, Suspense, useState, type ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { EvidenceChip } from '@/components/evidence-chip'
 import { RunLine } from '@/components/run-line'
+import { useRunLog } from '@/components/log-view'
+import { RunSheet, newestWords } from '@/components/run-sheet'
+import { useNow } from '@/components/use-now'
+import { useToolRun } from './tool-runs'
 import { StatusBadge } from '@/components/status-badge'
 import { count, eng, money } from '@/lib/format'
 import { q } from '@/lib/queries'
@@ -32,12 +37,38 @@ const Frame = ({ children, className }: { children: ReactNode; className?: strin
 
 // ------------------------------------------------------------------ Tool row: any other tool call, one quiet line
 
-/** "Read 3 datasheet pages", folded, with arguments and result inside. */
-export function ToolRow({ name, args, result, status, summary, defaultOpen = false }: { name: string; args: unknown; result?: string; status: ToolStatus; summary?: string; defaultOpen?: boolean }) {
+/** 0:42, 12:05: a running tool's time. Pure. */
+export const elapsedWords = (ms: number): string => {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+/** A tool's run while it runs: its newest line (read on as its repo's logs grow) and its log one tap away. */
+function ToolProgress({ repo, run, name }: { repo: string; run: string; name: string }) {
+  const log = useRunLog(repo, run, { cap: 200 })
+  const [watch, setWatch] = useState(false)
+  const newest = newestWords(log.lines)
+  return (
+    <div className="ml-5 mt-0.5 space-y-1.5 pb-1">
+      {newest && <p className="truncate font-mono text-[11px] text-muted-foreground" title={newest}>{newest}</p>}
+      <Button variant="outline" size="xs" onClick={() => setWatch(true)}><SquareTerminal /> Watch log</Button>
+      <RunSheet repo={repo} run={run} title={name} open={watch} onOpenChange={setWatch} />
+    </div>
+  )
+}
+
+/** "Read 3 datasheet pages", folded, with arguments and result inside. While it runs: its time, ticking, and (when
+ * the chat stream named its run, trace.tool_run) its newest line and Watch log. */
+export function ToolRow({ name, args, result, status, summary, defaultOpen = false, toolCallId }: { name: string; args: unknown; result?: string; status: ToolStatus; summary?: string; defaultOpen?: boolean; toolCallId?: string }) {
   const [open, setOpen] = useState(defaultOpen)
   const done = status === 'complete'
   const parsed = parseResult<Record<string, unknown>>(result)
   const line = summary ?? (typeof parsed === 'object' && parsed && typeof parsed.summary === 'string' ? parsed.summary : undefined)
+  const tr = useToolRun(toolCallId)
+  // the first time this card saw the call running, when the stream did not say
+  const [seen] = useState(() => Date.now())
+  const now = useNow(done ? 3_600_000 : 1000)
+  const started = tr.startedAt ?? seen
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="my-1">
       <CollapsibleTrigger className="group flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-xs text-muted-foreground hover:bg-muted/60">
@@ -45,8 +76,10 @@ export function ToolRow({ name, args, result, status, summary, defaultOpen = fal
         <span className="truncate">
           {line ?? (done ? 'Used' : 'Using')} <span className="font-mono">{name}</span>
         </span>
-        <ChevronRight className="ml-auto size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90" aria-hidden />
+        {!done && <span className="ml-auto shrink-0 font-mono tabular-nums" aria-label={`running for ${elapsedWords(now - started)}`}>{elapsedWords(now - started)}</span>}
+        <ChevronRight className={cn('size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90', done && 'ml-auto')} aria-hidden />
       </CollapsibleTrigger>
+      {!done && tr.run && <ToolProgress repo={tr.run.repo} run={tr.run.run} name={line ?? name} />}
       <CollapsibleContent>
         <div className="mt-1 space-y-2 rounded-md border bg-muted/30 p-2 font-mono text-[11px]">
           <div>

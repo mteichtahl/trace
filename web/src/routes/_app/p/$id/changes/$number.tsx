@@ -10,12 +10,13 @@
  * A repository whose rule asks for a review trace cannot give shows admins "Fix the rule and accept" (repo.rules.fix).
  *
  * Data: change.get (asked for again while GitHub works out whether it can merge, every 5 s, and while checks run, as a
- * fallback to the events; the bar says when it looks next), change.diff per file, journey.get (step words).
+ * fallback to the events; the bar says when it looks next), change.runs (its checks as GitHub's jobs, with their steps
+ * and Watch: components/changes/change-checks.tsx), change.diff per file, journey.get (step words).
  */
 import { useQuery } from '@tanstack/react-query'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { CircleCheck, CircleDashed, CircleMinus, CircleX, Loader2, ShieldAlert, Sparkles } from 'lucide-react'
+import { Loader2, ShieldAlert, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { MoreForAdmins } from '@/components/more-for-admins'
 import { Button } from '@/components/ui/button'
@@ -25,6 +26,7 @@ import { useState } from 'react'
 import { useTraceContext } from '@/components/chat/context'
 import { ChangeFileView } from '@/components/changes/change-file-view'
 import { viewerKind } from '@/components/files/kinds'
+import { ChangeChecks } from '@/components/changes/change-checks'
 import { ChangeRequirements } from '@/components/changes/change-requirements'
 import { DecisionBar } from '@/components/changes/decision-bar'
 import { useChangeActions } from '@/components/changes/use-change-actions'
@@ -37,9 +39,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { repoOf } from '@/lib/api'
 import { changeLookEvery, useLiveStatus, useNextLook } from '@/lib/live'
 import { ago } from '@/lib/format'
-import { KIND_TAG, changeOf, checksWords, currentStage, nextPlace, recommendationWords, stepWords } from '@/lib/guided'
+import { KIND_TAG, changeOf, currentStage, nextPlace, recommendationWords, stepWords } from '@/lib/guided'
 import { q, useJourney, useProjects } from '@/lib/queries'
-import type { ChangeCheck, ChangeDetail, ChangeFile } from '@/lib/types'
+import type { ChangeDetail, ChangeFile } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/_app/p/$id/changes/$number')({
@@ -48,12 +50,6 @@ export const Route = createFileRoute('/_app/p/$id/changes/$number')({
 })
 
 const FILE_TAG: Record<ChangeFile['kind'], string> = { schematic: 'Schematic', board: 'Board', parts: 'Parts list', text: 'Text', image: 'Picture', binary: 'File' }
-const CHECK_ICON: Record<ChangeCheck['state'], { icon: typeof CircleCheck; cls: string; word: string }> = {
-  passed: { icon: CircleCheck, cls: 'text-verified', word: 'passed' },
-  failed: { icon: CircleX, cls: 'text-destructive', word: 'failed' },
-  running: { icon: Loader2, cls: 'animate-spin text-muted-foreground', word: 'running' },
-  skipped: { icon: CircleMinus, cls: 'text-waived', word: 'skipped' },
-}
 
 /** The file's name as people read it ("power.kicad_sch"), its folder dimmed. */
 const fileName = (p: string) => p.split('/').pop() ?? p
@@ -70,6 +66,11 @@ function Review() {
   // GitHub says nothing when it finishes working out whether it can merge: look again often until it has, and say when
   const c = useQuery({ ...q('change.get', { repo, number }), refetchInterval: (x) => changeLookEvery(x.state.data, live) })
   const nextLook = useNextLook(c.dataUpdatedAt, changeLookEvery(c.data, live))
+  // the checks as GitHub's jobs, with their steps: refreshed by log.appended and the change's events; polled with it
+  // only while the live connection is down
+  const runs = useQuery({ ...q('change.runs', { repo, number }), enabled: !!c.data, retry: false, refetchInterval: () => (live === 'live' ? false : changeLookEvery(c.data, live)) })
+  const jobs = runs.data?.jobs
+  const jobsShown = !!jobs?.length
   const actions = useChangeActions(repo)
   const coverage = useCoverage(repo)
   const [note, setNote] = useState('')
@@ -113,6 +114,8 @@ function Review() {
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0 space-y-5">
+          {/* checks with steps and Watch need the room of the main column */}
+          {jobsShown && <ChangeChecks d={d} jobs={jobs} repo={repo} />}
           <section className="rounded-xl border bg-card p-5" aria-labelledby="did">
             <h3 id="did" className="section-label">{edit ? 'What it changes' : 'What trace did'}</h3>
             {d.summary.length ? (
@@ -159,7 +162,7 @@ function Review() {
         </div>
 
         <aside className="space-y-4">
-          <Checks d={d} />
+          {!jobsShown && <ChangeChecks d={d} jobs={jobs} repo={repo} />}
           <section className="rounded-xl border bg-card p-5" aria-labelledby="reqs">
             <h3 id="reqs" className="section-label">Requirements it covers</h3>
             <ChangeRequirements
@@ -190,41 +193,6 @@ function Review() {
         onResolve={() => actions.resolve.mutate({ number, title: d.title })}
       />
     </div>
-  )
-}
-
-function Checks({ d }: { d: ChangeDetail }) {
-  const [all, setAll] = useState(false)
-  const list = d.checks_list
-  const shown = all ? list : list.slice(0, 3)
-  const rest = list.length - shown.length
-  return (
-    <section className="rounded-xl border bg-card p-5" aria-labelledby="checks">
-      <h3 id="checks" className="section-label">Checks · {checksWords(d.checks)}</h3>
-      {list.length === 0 ? (
-        <p className="mt-2 flex items-center gap-2 text-sm text-muted-foreground"><CircleDashed className="size-4" aria-hidden />{d.checks === null ? 'trace could not read the checks.' : 'No checks have run yet.'}</p>
-      ) : (
-        <ul className="mt-2 space-y-1.5 text-sm">
-          {shown.map((k) => {
-            const I = CHECK_ICON[k.state]
-            return (
-              <li key={k.name} className="flex items-start gap-2">
-                <I.icon className={cn('mt-0.5 size-4 shrink-0', I.cls)} aria-hidden />
-                <span>{k.name}{k.summary && <span className="text-muted-foreground">: {k.summary}</span>}<span className="sr-only"> ({I.word})</span></span>
-              </li>
-            )
-          })}
-          {rest > 0 && (
-            <li>
-              <button type="button" onClick={() => setAll(true)} className="flex items-center gap-2 text-sm">
-                <CircleCheck className={cn('size-4', list.slice(3).every((k) => k.state === 'passed') ? 'text-verified' : 'text-muted-foreground')} aria-hidden />
-                {rest} more {rest === 1 ? 'check' : 'checks'} <span className="text-primary">show</span>
-              </button>
-            </li>
-          )}
-        </ul>
-      )}
-    </section>
   )
 }
 

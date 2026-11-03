@@ -634,6 +634,8 @@ export type LiveEvent =
   | { type: 'record.changed'; repo: string; what: 'journey' | 'settings' | 'memory' | 'chats' | 'people' | 'prompts' | 'kb'; at: string }
   | { type: 'job.updated'; repo: string; jobId: string; state: string; at: string }
   | { type: 'notification'; id: string; kind: InboxKind; repo: string; summary: string; at: string }
+  /** a run's log grew (docs/progress-and-logs.md, decision C): a count, never the text */
+  | { type: 'log.appended'; repo: string; kind: RunKind; id: string; lines: number; at: string }
 
 /** pull.status: one pull request now (src/api/github.ts PullStatus). */
 export interface PullStatus {
@@ -642,3 +644,55 @@ export interface PullStatus {
   mergeable: string; head: string; sha: string; updated_at: string
   checks: { total: number; passed: number; failed: number; running: number; skipped: number; failing: string[] } | null
 }
+
+// ------------------------------------------------------------------ progress and logs (src/api/actions-progress.ts)
+
+export type RunKind = 'job' | 'tool' | 'check'
+/** How the app and the API name a run: job:<jobId>, tool:<runId>, check:<GitHub job id>. */
+export type RunRef = `${RunKind}:${string}`
+/** step: "▸ name" opens a step; ok "✓", warn "⚠", error "✗" (src/core/run-logs.ts markOf) */
+export type LogMark = 'step' | 'ok' | 'warn' | 'error' | null
+export interface LogLine { at: string; text: string; mark: LogMark }
+
+/** run.log: a run's lines from a cursor, masked. */
+export interface RunLogResult {
+  repo: string; run: string; source: 'cloudwatch' | 'github' | 'tail' | 'none'
+  lines: LogLine[]
+  /** the cursor for the following call (opaque, passed back as `after`) */
+  next: string | null
+  /** the run has ended and every line was given */
+  done: boolean
+  heardAt: string | null; step: string | null; usualQuietS: number
+  /** why there are no lines yet, in words */
+  note?: string
+  /** admins only: the CloudWatch console's page for the stream */
+  cloudwatch?: string
+}
+
+export type CheckState = 'queued' | 'running' | 'passed' | 'failed' | 'skipped' | 'cancelled'
+export interface CheckStep { name: string; state: Exclude<CheckState, 'cancelled'>; startedAt: string | null; completedAt: string | null }
+/** change.runs: one GitHub Actions job checking a change. */
+export interface CheckJob {
+  id: number; run: RunRef; name: string; workflow: string; state: CheckState
+  startedAt: string | null; completedAt: string | null
+  steps: CheckStep[]; step: string | null; stepIndex: number | null; stepCount: number
+  /** the job's usual length on this project, null: no history */
+  typicalS: number | null
+  /** queued: how long it has waited for a machine */
+  queuedS: number | null
+  heardAt: string | null; newest: string | null; usualQuietS: number; runner: 'aws' | 'github' | null
+}
+export interface ChangeRuns { repo: string; number: number; sha: string; jobs: CheckJob[]; updatedAt: string }
+
+/** activity.list: one thing trace is doing, across the person's projects. */
+export interface ActivityItem {
+  kind: RunKind; repo: string; run: RunRef; title: string; state: 'running' | 'queued' | 'paused'
+  step: string | null; stepIndex: number | null; stepCount: number | null
+  startedAt: string | null; typicalS: number | null
+  heardAt: string | null; newest: string | null; usualQuietS: number
+  /** jobs: their heartbeat limits */
+  overdueAt?: string; lostAt?: string
+  /** checks: the change it checks */
+  change?: number
+}
+export interface ActivityList { items: ActivityItem[]; waits: number; updatedAt: string; unreadable?: string[] }

@@ -17,6 +17,7 @@ import { ToolsCatalogue } from '@/components/agents/tools-catalogue'
 import { useWork } from '@/components/agents/use-agents'
 import { useTraceContext } from '@/components/chat/context'
 import { RunLine, runControls } from '@/components/run-line'
+import { useWatchRun } from '@/components/run-sheet'
 import { Column, Section } from '@/components/shell/app-shell'
 import { useCommands } from '@/components/shell/command-menu'
 import { NeedsBuilding } from '@/components/side-sheet'
@@ -66,6 +67,7 @@ export function todayText(t: AgentWork['today'] | undefined): string {
 
 function Agents() {
   const work = useWork()
+  const watch = useWatchRun()
   const inbox = useInbox()
   const projects = useProjects()
   const { user } = useAuth()
@@ -173,8 +175,10 @@ function Agents() {
                 run={{ ...w.run, title: w.run.agentName ? `${w.run.agentName}: ${w.run.title}` : w.run.title }}
                 project={w.project}
                 {...runControls(work.write.has(w.repo))}
+                onWatch={(r) => watch.onWatch(r, w.repo)}
               />
             ))}
+            {watch.sheet}
           </div>
         )}
       </Section>

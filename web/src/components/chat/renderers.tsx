@@ -42,7 +42,7 @@ export function shapeOf(name: string, args: unknown, result: unknown): Shape {
   return pick(r)
 }
 
-function Generic({ name, parameters, result, status }: { name: string; parameters: unknown; result?: string; status: ToolStatus }) {
+function Generic({ name, parameters, result, status, toolCallId }: { name: string; parameters: unknown; result?: string; status: ToolStatus; toolCallId?: string }) {
   const folded = usePrefs().chat.toolRows === 'folded'
   const shape = shapeOf(name, parameters, status === 'complete' ? parseResult(result) : undefined)
   switch (shape?.kind) {
@@ -51,7 +51,7 @@ function Generic({ name, parameters, result, status }: { name: string; parameter
     case 'part': return <PartCard data={shape.data} />
     case 'file': return <FileCard data={shape.data} />
     case 'run': return <RunCard data={shape.data} />
-    default: return <ToolRow name={name} args={parameters} result={result} status={status} defaultOpen={!folded} />
+    default: return <ToolRow name={name} args={parameters} result={result} status={status} defaultOpen={!folded} toolCallId={toolCallId} />
   }
 }
 
@@ -69,7 +69,7 @@ type AskArgs = z.infer<typeof AskPerson>
 /** Mount once per chat provider. */
 export function ChatRenderers() {
   const detail = usePrefs().chat.recommendations
-  useRenderTool({ name: '*', render: (p: { name: string; parameters: unknown; result?: string; status: ToolStatus }) => <Generic {...p} /> }, [])
+  useRenderTool({ name: '*', render: (p: { name: string; parameters: unknown; result?: string; status: ToolStatus; toolCallId?: string }) => <Generic {...p} /> }, [])
   useHumanInTheLoop<AskArgs>(
     {
       name: 'ask_person',

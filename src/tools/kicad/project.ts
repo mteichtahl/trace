@@ -13,6 +13,7 @@
 import { execFile } from 'node:child_process'
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from 'node:fs'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
+import { forwardOutput } from '../../core/progress.js'
 import { ToolError } from '../../core/registry.js'
 import { type Backend, backendFor } from '../../gpu/jobs.js'
 
@@ -244,12 +245,15 @@ export interface CliResult {
   readonly stderr: string
 }
 
-/** Run a program with a timeout, never throwing for a non-zero exit (the caller decides). */
+/** Run a program with a timeout, never throwing for a non-zero exit (the caller decides). Inside a tool call's
+ * progress channel (src/core/progress.ts) each line it prints is reported as it comes; the result is the same. */
 export function runProgram(cmd: string, args: readonly string[], opts: { timeoutMs?: number; cwd?: string; env?: Record<string, string> } = {}): Promise<CliResult> {
   const timeout = opts.timeoutMs ?? 600_000
+  const fwd = forwardOutput()
   return new Promise((done, fail) => {
-    execFile(cmd, [...args], { timeout, cwd: opts.cwd, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8', killSignal: 'SIGKILL', ...(opts.env ? { env: { ...process.env, ...opts.env } } : {}) },
+    const child = execFile(cmd, [...args], { timeout, cwd: opts.cwd, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8', killSignal: 'SIGKILL', ...(opts.env ? { env: { ...process.env, ...opts.env } } : {}) },
       (err, stdout, stderr) => {
+        fwd?.end()
         if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') return fail(new ToolError(`${cmd} is not installed`))
         if (err && (err as { killed?: boolean }).killed) {
           return fail(new ToolError(`${basename(cmd)} ${args.slice(0, 3).join(' ')} timed out after ${Math.round(timeout / 1000)} s`))
@@ -257,6 +261,10 @@ export function runProgram(cmd: string, args: readonly string[], opts: { timeout
         const code = err ? (typeof (err as { code?: unknown }).code === 'number' ? ((err as { code: number }).code) : 1) : 0
         done({ code, stdout: String(stdout), stderr: String(stderr) })
       })
+    if (fwd) {
+      child.stdout?.on('data', (d: string | Buffer) => fwd.stdout.push(typeof d === 'string' ? d : new Uint8Array(d)))
+      child.stderr?.on('data', (d: string | Buffer) => fwd.stderr.push(typeof d === 'string' ? d : new Uint8Array(d)))
+    }
   })
 }
 

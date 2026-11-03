@@ -33,6 +33,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, wri
 import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { z } from 'zod'
+import { reportLine, reportOutput } from '../../core/progress.js'
 import { ToolError } from '../../core/registry.js'
 import { scratchDir } from '../../core/store.js'
 import { type Backend, backendFor, runJob } from '../../gpu/jobs.js'
@@ -507,11 +508,15 @@ export async function runCfd(input: z.input<typeof CfdSetup>, o: { remote?: 'aut
       const stl = o.stl ?? c.setup.enclosure_stl
       inputs['case/constant/triSurface/enclosure.stl'] = stl
     }
+    // a tool call's progress (src/core/progress.ts): the job may run on the CPU queue, where its output cannot be
+    // followed live, so the step now and its output's end once it is back
+    reportLine(`▸ OpenFOAM: about ${c.cells} cells, ${where === 'local' ? 'here' : `on the ${where === 'batch' ? 'CPU queue' : where}`}`)
     const r = await runJob({
       kind: 'openfoam', gpu: false, remote: wantRemote, timeoutSeconds: o.timeoutSeconds ?? 6 * 3600,
       argv: ['bash', '-c', `cd '{dir}/in' && OUT_VTK='{out:vtk.tar.gz}' OUT_POST='{out:post.tar.gz}' OUT_LOGS='{out:logs.tar.gz}' bash case/Allrun`],
       inputs, outputs: ['vtk.tar.gz', 'post.tar.gz', 'logs.tar.gz'], vcpus: c.setup.procs, env: { OMP_NUM_THREADS: '1' },
     })
+    reportOutput(`${r.stdout}\n${r.stderr}`)
     if (r.exitCode !== 0 || !r.outputs['post.tar.gz']) throw new ToolError(`the OpenFOAM run failed (exit ${r.exitCode}): ${(r.stdout + r.stderr).slice(-600)}`)
     const ex = scratchDir('trace-openfoam-out-')
     try {

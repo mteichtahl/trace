@@ -26,6 +26,7 @@ import type { Stage } from '@/lib/types'
 import { Skeleton } from '@/components/ui/skeleton'
 import { NextStepCard } from '@/components/next-step-card'
 import { RunLine, runControls, splitRuns } from '@/components/run-line'
+import { useWatchRun } from '@/components/run-sheet'
 import { DraftAgain } from '@/components/draft-again'
 import { useNow } from '@/components/use-now'
 import { Section } from '@/components/shell/app-shell'
@@ -68,6 +69,7 @@ function Overview() {
   const now = useNow(30_000)
   const phone = useMediaQuery('(max-width: 767px)')
   const changes = useChanges(repo)
+  const watch = useWatchRun(repo)
   void navigate
 
   if (!j.data)
@@ -127,8 +129,9 @@ function Overview() {
   ) : (
     <div className="divide-y rounded-xl border">
       {running.map((r) => (
-        <RunLine key={r.id} run={r} {...runControls(write)} />
+        <RunLine key={r.id} run={r} {...runControls(write)} onWatch={(x) => watch.onWatch(x)} />
       ))}
+      {watch.sheet}
       {waits.data?.waits.map((w) => (
         <WaitLine key={w.id} wait={w} onCheckNow={(x) => call('tools.check_now', { repo, waitId: x.id })} />
       ))}
