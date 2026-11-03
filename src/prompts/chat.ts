@@ -22,7 +22,7 @@ export interface ChatOptions {
 }
 
 export function composeChat(context: readonly ChatContext[], state: unknown, layers: Layers = NO_LAYERS, o: ChatOptions = {}): Composed {
-  const p = new Composer(layers).add('chat.role').add('chat.data')
+  const p = new Composer(layers).add('chat.role').add('chat.data').add('design.silkscreen')
   const lines = context.map((c) => unfence(`- ${c.description}: ${c.value}`, 'app-context'))
   if (lines.length) p.add('chat.context', { context: lines })
   const empty = state === undefined || state === null || (typeof state === 'object' && Object.keys(state).length === 0)

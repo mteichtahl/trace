@@ -73,9 +73,16 @@ export function refFromDescription(d: string): string | null {
 
 const factor = (units: string | undefined): number => (units === 'in' ? 25.4 : units === 'mils' ? 0.0254 : 1)
 
+/**
+ * DRC types that are always errors, whatever the board's own severity settings say (design.silkscreen in the prompt
+ * catalog): silkscreen is never interrupted by solder mask, so KiCad's "Silkscreen clipped by solder mask" blocks the board.
+ */
+export const ALWAYS_ERRORS: ReadonlySet<string> = new Set(['silk_over_copper'])
+
 function convert(v: z.output<typeof Violation>, where: string, units: string | undefined): CheckViolation {
   const f = factor(units)
-  const severity = v.excluded ? 'exclusion' : v.severity
+  // an always-error type stays an error even when the board file excludes it: it is fixed, never waived
+  const severity = ALWAYS_ERRORS.has(v.type) ? 'error' : v.excluded ? 'exclusion' : v.severity
   return {
     type: v.type, severity, description: v.description, where,
     items: v.items.map((it) => ({
@@ -143,5 +150,31 @@ export async function drc(pcbPath: string, opts: { parity?: boolean; refillZones
   if (opts.parity) args.push('--schematic-parity')
   if (opts.refillZones) args.push('--refill-zones')
   const raw = await runReport([...args, pcbPath], opts.timeoutMs ?? 1_200_000)
-  return [parseDrc(raw), raw]
+  return [withSilenced(parseDrc(raw), silencedRules(pcbPath)), raw]
+}
+
+/**
+ * The always-error rules (ALWAYS_ERRORS) the board's project file sets to "ignore": KiCad does not even look for
+ * those, so the check is turned off rather than passed. Read from the .kicad_pro next to the board.
+ */
+export function silencedRules(pcbPath: string): string[] {
+  const pro = pcbPath.replace(/\.kicad_pcb$/, '.kicad_pro')
+  try {
+    if (pro === pcbPath || !existsSync(pro)) return []
+    const sev = (JSON.parse(readFileSync(pro, 'utf8')) as { board?: { design_settings?: { rule_severities?: Record<string, unknown> } } })
+      .board?.design_settings?.rule_severities ?? {}
+    return [...ALWAYS_ERRORS].filter((t) => sev[t] === 'ignore')
+  } catch {
+    return []
+  }
+}
+
+/** A report with one error for each always-error rule the project turned off. */
+export function withSilenced(r: CheckReport, silenced: readonly string[]): CheckReport {
+  if (!silenced.length) return r
+  const added: CheckViolation[] = silenced.map((type) => ({
+    type, severity: 'error', where: 'violations', items: [],
+    description: `The project file sets ${type} to "ignore", so KiCad did not check it. trace always checks it: set it back to error in Board Setup.`,
+  }))
+  return { ...summarise('drc', r.kicad_version, [...r.violations, ...added]), unconnected: r.unconnected, parity: r.parity }
 }

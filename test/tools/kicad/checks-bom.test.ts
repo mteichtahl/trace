@@ -1,6 +1,9 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { bomCsv, buildBom, footprintName, jlcBomCsv, jlcCplCsv, parseCsv, parsePos } from '../../../src/tools/kicad/bom.js'
-import { parseDrc, parseErc, refFromDescription } from '../../../src/tools/kicad/checks.js'
+import { parseDrc, parseErc, refFromDescription, silencedRules, withSilenced } from '../../../src/tools/kicad/checks.js'
 import { readSchematic } from '../../../src/tools/kicad/schematic.js'
 import { DEMO_PCB, DEMO_SCH, hasKicad } from './helpers.js'
 
@@ -35,6 +38,30 @@ describe('ERC/DRC report parsing', () => {
     expect(r).toMatchObject({ errors: 2, warnings: 1, unconnected: 1, parity: 1 })
     expect(r.violations[0]?.items[0]?.pos).toEqual({ x_mm: 25.4, y_mm: 12.7 })
     expect(r.violations.find((v) => v.where === 'unconnected')?.items[0]?.ref).toBe('R101')
+  })
+
+  it('treats silkscreen clipped by solder mask as an error, even when the board waived or excluded it', () => {
+    const r = parseDrc(JSON.stringify({
+      coordinate_units: 'mm',
+      violations: [
+        { type: 'silk_over_copper', severity: 'warning', description: 'Silkscreen clipped by solder mask', items: [{ description: 'Reference field of R1' }] },
+        { type: 'silk_over_copper', severity: 'warning', description: 'Silkscreen clipped by solder mask', excluded: true, items: [] },
+      ],
+      unconnected_items: [], schematic_parity: [],
+    }))
+    expect(r).toMatchObject({ errors: 2, warnings: 0, excluded: 0 })
+  })
+
+  it('flags a project that switched the silkscreen check off', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'silk-'))
+    const pcb = join(dir, 'b.kicad_pcb')
+    writeFileSync(join(dir, 'b.kicad_pro'), JSON.stringify({ board: { design_settings: { rule_severities: { silk_over_copper: 'ignore' } } } }))
+    expect(silencedRules(pcb)).toEqual(['silk_over_copper'])
+    const clean = parseDrc(JSON.stringify({ violations: [], unconnected_items: [], schematic_parity: [] }))
+    expect(withSilenced(clean, silencedRules(pcb))).toMatchObject({ errors: 1, by_type: { silk_over_copper: 1 } })
+    writeFileSync(join(dir, 'b.kicad_pro'), JSON.stringify({ board: { design_settings: { rule_severities: { silk_over_copper: 'error' } } } }))
+    expect(silencedRules(pcb)).toEqual([])
+    rmSync(dir, { recursive: true, force: true })
   })
 
   it('refuses a report it does not understand rather than reading it as clean', () => {

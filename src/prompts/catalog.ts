@@ -576,6 +576,15 @@ add({ id: 'memory.more', mode: 'locked', prompt: 'memory', vars: { count: num('h
   default: '- … {{count}} more not shown' })
 add({ id: 'system.append', mode: 'locked', prompt: 'system', vars: {}, description: "What is added to Claude Code's system prompt on the runtime: unattended, and never print the token.",
   default: 'You run unattended in a disposable container on Amazon Bedrock AgentCore Runtime. git and gh are authenticated through the environment; never print, echo or write the token anywhere.' })
+add({ id: 'design.silkscreen', mode: 'locked', prompt: 'system', vars: {},
+  description: 'A design rule for every agent, on every surface: silkscreen is never interrupted by a solder mask opening.',
+  default: [
+    'DESIGN RULE (built into trace, for every board): silkscreen is never interrupted by solder mask. No silkscreen line, outline,',
+    'reference designator, logo or text may cross or touch a solder mask opening (pads, exposed copper, test points, fiducials, mask-defined',
+    'areas) or the board edge, so nothing is ever clipped at fabrication. When silkscreen and an opening meet, move, shrink or rotate the',
+    'silkscreen (or drop the item) until it is wholly clear; never rely on the fabricator or the Gerber export clipping it. Any DRC "Silkscreen',
+    'clipped by solder mask" violation (silk_over_copper) is an error that blocks the board: it is fixed in the design, never excluded or waived.',
+  ].join('\n') })
 add({ id: 'system.notes', mode: 'locked', prompt: 'system', vars: { notes: text("the default branch's CLAUDE.md") },
   description: "The project's CLAUDE.md, fenced, in the system prompt; the task and the rules take precedence.",
   default: "The project's notes (CLAUDE.md on the default branch; the task and .trace/rules.md take precedence over them):\n<project-notes>\n{{notes}}\n</project-notes>" })

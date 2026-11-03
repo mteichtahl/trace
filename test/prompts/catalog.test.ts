@@ -79,6 +79,15 @@ function everyPrompt(layers: Layers = {}): { name: string; c: Composed }[] {
 }
 
 describe('the catalog', () => {
+  it('puts the silkscreen design rule, locked, into every prompt an agent designs from', () => {
+    expect(entry('design.silkscreen').mode).toBe('locked')
+    expect(entry('design.silkscreen').default).toMatch(/silkscreen is never interrupted by solder mask/)
+    const designers = ['system', 'system bare', 'chat', 'chat bare', 'chat shared', 'cloudworker', 'cloudworker none']
+    for (const { name, c } of everyPrompt().filter((x) => designers.includes(x.name) || x.name.startsWith('item '))) {
+      expect(c.parts.map((x) => x.id), name).toContain('design.silkscreen')
+    }
+  })
+
   it('has a stable id for every prompt part, each default a valid template, locked parts behind every editable one', () => {
     for (const k of SPECIALIST_KINDS) for (const part of ['role', 'workflow', 'done', 'escalate']) expect(entry(`specialist.${k}.${part}`).mode).toBe('editable')
     for (const id of ['worker.task', 'worker.item.ci-red', 'worker.item.conflict', 'worker.item.agent-fix', 'router.classify', 'delegate.brief', 'render.instructions', 'specialist.report']) {
@@ -217,7 +226,7 @@ describe('locked parts', () => {
     const g = c.parts.find((p) => p.id === 'specialist.guardrails')!
     expect(g.layer).toBe('default')
     expect(g.skipped).toEqual([{ layer: 'project', version: 1, reason: 'the prompt is locked' }])
-    expect(systemAppend(null, layers).text).toBe(entry('system.append').default)
+    expect(systemAppend(null, layers).text).toBe(`${entry('system.append').default}\n\n${entry('design.silkscreen').default}`)
     expect(problems(layers).map((p) => [p.id, p.reason])).toEqual([['specialist.guardrails', 'the prompt is locked'], ['system.append', 'the prompt is locked']])
   })
 
