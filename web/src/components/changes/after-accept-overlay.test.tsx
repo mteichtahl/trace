@@ -117,5 +117,7 @@ describe('the step-to-skill map', () => {
     expect(stepLink(step({ ref: { kind: 'criterion', id: 'capture.pins' } }), { projectId: 'a~b' })).toEqual({ label: 'Pin plan review', to: '/p/a~b/do/pin-plan-review' })
     expect(stepLink(step({ ref: { kind: 'change', id: '12' }, to: '/p/a~b/changes/12' }), { projectId: 'a~b' })).toEqual({ label: 'Review the change', to: '/p/a~b/changes/12' })
     expect(stepLink(step({ state: 'done', ref: { kind: 'gate', id: 'x' } }), { projectId: 'a~b' })).toBeNull()
+    // a gate opens its own screen, never the bare Gate signing page ("trace has nothing open" on every step)
+    expect(stepLink(step({ ref: { kind: 'gate', id: 'capture' } }), { projectId: 'a~b' })).toEqual({ label: 'Review and sign', to: '/p/a~b/gates/capture' })
   })
 })

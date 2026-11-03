@@ -74,6 +74,9 @@ export function jobOf(step: Pick<StageStep, 'owner' | 'text' | 'state'>, jobs: r
 export function stepLink(step: StageStep, o: { projectId: string; jobs?: readonly RunSummary[] }): { label: string; to: string } | null {
   if (step.state === 'done' || step.state === 'waived') return null
   if (step.ref?.kind === 'change' && step.to) return { label: 'Review the change', to: step.to }
+  // A gate is signed on its own screen, which knows which gate it is. The bare Gate signing skill page has no gate, so
+  // every step there read "trace has nothing open".
+  if (step.ref?.kind === 'gate') return { label: 'Review and sign', to: `/p/${o.projectId}/gates/${step.ref.id}` }
   const skill = skillOf(step)
   if (skill) return { label: SKILL_NAMES[skill] ?? skill, to: `/p/${o.projectId}/do/${skill}` }
   const job = jobOf(step, o.jobs ?? [])
