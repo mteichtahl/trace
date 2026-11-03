@@ -8,8 +8,11 @@
  * serial with their incoming inspection (src/components/project/build-record.tsx), and the bench with each
  * instrument's identity answer and the bring-up readings against their limits.
  *
- * Data: build.get, order.record, order.update; build.get's notes say what the record does not hold yet (the order
- * sheet's lines).
+ * Deploys (src/components/project/deploys.tsx): what the environment runs, a request waiting with Deploy / Skip this one
+ * for a person who may decide, a deploy's progress live, and what happened lately with Roll back (docs/stay-in-trace.md).
+ *
+ * Data: build.get, order.record, order.update, deploys.get and the deploy.* decisions; build.get's notes say what the
+ * record does not hold yet (the order sheet's lines).
  */
 import { Link, createFileRoute } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
@@ -37,6 +40,7 @@ import { useAction, useCall, useJourney } from '@/lib/queries'
 import type { OrderView } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
 import { BenchReadings, BoardList, PlacedOrders } from '@/components/project/build-record'
+import { DeploysPanel } from '@/components/project/deploys'
 
 export const Route = createFileRoute('/_app/p/$id/build')({
   staticData: { crumb: 'Build' },
@@ -51,12 +55,15 @@ function Build() {
   const data = b.data
   useTraceContext({ label: 'Build', description: 'The project tab on screen', value: { tab: 'build', orders: data?.orders.map((o) => ({ id: o.id, state: o.state, total: o.total })) ?? [] } }, 'screen')
 
-  if (b.isError && !notBuilt(b.error)) return <div className="mt-6"><QueryError error={b.error} what="the build record" onRetry={() => void b.refetch()} /></div>
+  // deploys come from GitHub and the deploy workflow, not the build record: shown whatever build.get answers
+  const deploys = <Section label="Deploys" className="mt-6"><DeploysPanel repo={repo} /></Section>
+  if (b.isError && !notBuilt(b.error)) return <div className="mt-6"><QueryError error={b.error} what="the build record" onRetry={() => void b.refetch()} />{deploys}</div>
   if (b.isError)
     return (
       <div className="mt-6 space-y-3">
         <EmptyState>Releases, orders and boards appear here from Release on.</EmptyState>
         <NeedsBuilding>This tab reads releases, orders, boards and the bench from build.get, which could not be read.</NeedsBuilding>
+        {deploys}
       </div>
     )
   if (!data) return <TabSkeleton loading={b.isLoading} />
@@ -66,6 +73,8 @@ function Build() {
     <div className="pb-12">
       {ready && <OrderSheet repo={repo} order={ready} />}
       {data.notes?.length ? <div className="mt-6 space-y-1">{data.notes.map((n) => <NeedsBuilding key={n}>{n}</NeedsBuilding>)}</div> : null}
+
+      {deploys}
 
       <PlacedOrders repo={repo} orders={data.orders} />
 

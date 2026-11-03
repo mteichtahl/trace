@@ -176,6 +176,13 @@ export interface Actions {
   'change.discard': { args: Repo & { number: number; reason: string }; result: { closed: true } }
   /** admins: put the repository's rule back to passing checks only (docs/stay-in-trace.md "5. Fixing the repository rule") */
   'repo.rules.fix': { args: Repo; result: { done: string[]; left: string[] } }
+  // deploys, decided in the app (docs/stay-in-trace.md "2. Deploys"); the three writes: an admin or a person in deploy.people
+  'deploys.get': { args: Repo; result: import('./types').DeploysView }
+  /** sha: the commit the person was shown (the request's); the API refuses one that moved since */
+  'deploy.approve': { args: Repo & { sha: string }; result: { started: true; approval: string; next: string } }
+  'deploy.skip': { args: Repo & { reason: string }; result: { skipped: true } }
+  /** to: a commit that ran before (a deployed entry of recent) */
+  'deploy.rollback': { args: Repo & { to: string }; result: { started: true; approval: string } }
 }
 
 export type ActionName = keyof Actions

@@ -8,6 +8,13 @@
 #      commit that ran before (deploy.rollback, or deploy.command + deploy.smoke on that commit).
 #   4. /approve and /reject on the request: only a PERSON with admin or maintain (and in deploy.approvers when set);
 #      bots and apps are always refused, so the agents that write the code never send it to __TR_ENVIRONMENT__.
+#   5. Or in trace (docs/stay-in-trace.md "2. Deploys"): a person approves, or rolls back to a commit that ran before,
+#      in the app. trace writes an approval record only its API can write (the central store, under the project's
+#      journey folder) and starts this workflow with the record's name and the commit (inputs `approval` and `sha`). The
+#      in-trace job reads that record with this repository's own AWS role (TRACE_AWS_ROLE, TRACE_HOME) and deploys only
+#      when it exists, names this repository and that commit, has not expired, and the checks of step 4 pass. A
+#      rollback approved in trace runs the rollback job below on that commit, as after a failed deploy. Its job is
+#      separate from `approve` so that only a run carrying an approval gets an AWS token.
 #
 # The commands run with DEPLOY_SHA and DEPLOY_ENVIRONMENT set, and with the environment's and repository's secrets as
 # environment variables. Cloud credentials: variable TRACE_DEPLOY_AWS_ROLE (GitHub OIDC, environment
@@ -28,6 +35,16 @@ on:
   issue_comment:
     types: [created]
   workflow_dispatch:
+    # both empty: today's "Run workflow" (a person with admin or maintain deploys the default branch's head)
+    inputs:
+      approval:
+        description: Set by trace only, the name of an approval given in the app. Leave empty.
+        required: false
+        default: ''
+      sha:
+        description: Set by trace only, the commit the approval names. Leave empty.
+        required: false
+        default: ''
 
 permissions: {}
 
@@ -57,7 +74,7 @@ jobs:
   approve:
     if: >-
       vars.TRACE_DEPLOY != 'false' && (
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && inputs.approval == '') ||
       (github.event_name == 'issue_comment' && !github.event.issue.pull_request &&
        contains(github.event.issue.labels.*.name, '__TR_DEPLOY__') && github.event.issue.state == 'open' &&
        (startsWith(github.event.comment.body, '/approve') || startsWith(github.event.comment.body, '/reject'))))
@@ -80,10 +97,43 @@ jobs:
           task: deploy-approve
           triggering-actor: ${{ github.triggering_actor }}
 
+  # A deploy or rollback approved in trace (step 5): the approval record is read with this repository's AWS role.
+  in-trace:
+    if: vars.TRACE_DEPLOY != 'false' && github.event_name == 'workflow_dispatch' && inputs.approval != ''
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","in-trace"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
+    timeout-minutes: 5
+    permissions:
+      id-token: write          # GitHub OIDC -> TRACE_AWS_ROLE (reads the approval record in the central store)
+      issues: write
+      contents: read
+      actions: read
+    outputs:
+      go: ${{ steps.check.outputs.go }}
+      sha: ${{ steps.check.outputs.sha }}
+      issue: ${{ steps.check.outputs.issue }}
+      by: ${{ steps.check.outputs.by }}
+      roll_back_to: ${{ steps.check.outputs.roll-back-to }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.TRACE_AWS_ROLE }}
+          role-session-name: trace-deploy-approval-${{ github.run_id }}
+          aws-region: ${{ vars.TRACE_AWS_REGION || 'us-east-1' }}
+      - id: check
+        uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
+        env:
+          TRACE_HOME: ${{ vars.TRACE_HOME }}
+        with:
+          agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
+          task: deploy-approve
+          approval: ${{ inputs.approval }}
+          sha: ${{ inputs.sha }}
+          triggering-actor: ${{ github.triggering_actor }}
+
   deploy:
     name: deploy to __TR_ENVIRONMENT__
-    needs: [request, approve]
-    if: always() && (needs.request.outputs.go == 'true' || needs.approve.outputs.go == 'true')
+    needs: [request, approve, in-trace]
+    if: always() && (needs.request.outputs.go == 'true' || needs.approve.outputs.go == 'true' || needs.in-trace.outputs.go == 'true')
     concurrency: { group: trace-deploy-__TR_ENVIRONMENT__, cancel-in-progress: false }
     environment: __TR_ENVIRONMENT__
     runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","deploy"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
@@ -97,10 +147,11 @@ jobs:
       rollback: ${{ steps.rollback.outputs.to }}
       issue: ${{ env.ISSUE }}
     env:
-      SHA: ${{ needs.request.outputs.go == 'true' && needs.request.outputs.sha || needs.approve.outputs.sha }}
-      ISSUE: ${{ needs.request.outputs.go == 'true' && needs.request.outputs.issue || needs.approve.outputs.issue }}
+      SHA: ${{ needs.request.outputs.go == 'true' && needs.request.outputs.sha || needs.approve.outputs.go == 'true' && needs.approve.outputs.sha || needs.in-trace.outputs.sha }}
+      ISSUE: ${{ needs.request.outputs.go == 'true' && needs.request.outputs.issue || needs.approve.outputs.go == 'true' && needs.approve.outputs.issue || needs.in-trace.outputs.issue }}
       AUTO: ${{ needs.request.outputs.go == 'true' }}
-      BY: ${{ needs.request.outputs.go == 'true' && 'the pipeline (automatic deploy)' || format('@{0}', needs.approve.outputs.by) }}
+      BY: ${{ needs.request.outputs.go == 'true' && 'the pipeline (automatic deploy)' || needs.approve.outputs.go == 'true' && format('@{0}', needs.approve.outputs.by) || needs.in-trace.outputs.by }}
+      VIA: ${{ needs.in-trace.outputs.go == 'true' && 'trace' || '' }}
       DEPLOY_ENVIRONMENT: __TR_ENVIRONMENT__
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -191,15 +242,20 @@ jobs:
           sha: ${{ env.SHA }}
           issue: ${{ env.ISSUE }}
           by: ${{ env.BY }}
+          via: ${{ env.VIA }}
           status: ${{ job.status }}
           guard: ${{ steps.guard.outcome }}
           held: ${{ steps.gate.outputs.hold }}
           rollback-to: ${{ steps.rollback.outputs.to }}
 
+  # After a failed deploy (the commit that ran before), or a rollback a person approved in trace (in-trace's
+  # roll_back_to: a commit that ran before, checked there). The smallest safe path for the second: the same job, so the
+  # same commands run the same way, and the deploy job (whose guard refuses anything older than what runs now) never
+  # sees it.
   rollback:
     name: roll __TR_ENVIRONMENT__ back
-    needs: deploy
-    if: always() && needs.deploy.outputs.rollback != ''
+    needs: [deploy, in-trace]
+    if: always() && (needs.deploy.outputs.rollback != '' || needs.in-trace.outputs.roll_back_to != '')
     concurrency: { group: trace-deploy-__TR_ENVIRONMENT__, cancel-in-progress: false }
     environment: __TR_ENVIRONMENT__
     runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","rollback"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
@@ -209,8 +265,10 @@ jobs:
       contents: read
       issues: write
     env:
-      SHA: ${{ needs.deploy.outputs.rollback }}
+      SHA: ${{ needs.deploy.outputs.rollback || needs.in-trace.outputs.roll_back_to }}
       ISSUE: ${{ needs.deploy.outputs.issue }}
+      BY: ${{ needs.deploy.outputs.rollback == '' && needs.in-trace.outputs.by || '' }}
+      VIA: ${{ needs.deploy.outputs.rollback == '' && 'trace' || '' }}
       DEPLOY_ENVIRONMENT: __TR_ENVIRONMENT__
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -264,4 +322,6 @@ jobs:
           task: rollback-report
           sha: ${{ env.SHA }}
           issue: ${{ env.ISSUE }}
+          by: ${{ env.BY }}
+          via: ${{ env.VIA }}
           status: ${{ job.status }}

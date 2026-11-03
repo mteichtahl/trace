@@ -104,6 +104,9 @@
  *                        edits too: src/api/edits.ts, apply-edits.ts, docs/stay-in-trace.md)
  *   actions-rules.ts     repo.rules.fix
  *   actions-handin.ts    design.handin (KiCad files handed in: one commit on trace/handin-…, recorded as an app edit)
+ *   actions-deploys.ts   deploys.get (read); deploy.approve, deploy.skip, deploy.rollback (write, and a trace admin or a
+ *                        person in deploy.people; never a connected system): deploys decided in the app
+ *                        (docs/stay-in-trace.md "2. Deploys")
  *   actions-me.ts        also policy.get, policy.set
  *   actions-prompts.ts   prompts.chat (the chat agent's editable instructions as the installation has them)
  *   actions-voice.ts     voice.vocabulary, voice.vocabulary.sync (dictation's project words)
@@ -167,6 +170,7 @@ import { SERVICE_ADMIN_ACTIONS } from './actions-services.js'
 import { CHANGE_ACTIONS } from './actions-changes.js'
 import { HOOK_ACTIONS } from './actions-hooks.js'
 import { RULE_ACTIONS } from './actions-rules.js'
+import { DEPLOY_ACTIONS } from './actions-deploys.js'
 import { SERVICE_ACTIONS, checkService, taskCap, toolOpenToSystems } from './service-policy.js'
 import { editStore, recordEdit } from './edits.js'
 
@@ -776,6 +780,7 @@ export const ACTIONS = {
   ...CHANGE_ACTIONS,
   ...HOOK_ACTIONS,
   ...RULE_ACTIONS,
+  ...DEPLOY_ACTIONS,
 } satisfies Record<string, Action<z.ZodType>>
 
 export type ActionName = keyof typeof ACTIONS

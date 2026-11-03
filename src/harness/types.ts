@@ -46,6 +46,12 @@ export interface TaskEnv {
   TRIGGERING_ACTOR?: string
   /** The login the agents act as (TRACE_AGENT_LOGIN): never an approver; its markers are trusted. */
   AGENT_LOGIN?: string
+  /** deploy-approve: the name of an approval given in trace (workflow_dispatch input `approval`, docs/stay-in-trace.md) */
+  APPROVAL?: string
+  /** deploy-approve: the central store (vars.TRACE_HOME), where approvals given in trace are read */
+  TRACE_HOME?: string
+  /** deploy-report/rollback-report: 'trace' when a person approved it in trace (BY is then their name) */
+  VIA?: string
 }
 
 export interface Deps {

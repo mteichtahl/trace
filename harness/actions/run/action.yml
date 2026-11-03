@@ -93,11 +93,21 @@ inputs:
     description: deploy-* only — github.triggering_actor.
     required: false
     default: ''
+  approval:
+    description: deploy-approve only — the name of an approval given in trace (read from TRACE_HOME's store with the step's AWS credentials).
+    required: false
+    default: ''
+  via:
+    description: deploy-report/rollback-report only — 'trace' when a person approved it in trace.
+    required: false
+    default: ''
 outputs:
   go: { description: 'deploy-request/approve — ''true'' to deploy', value: '${{ steps.run.outputs.go }}' }
   sha: { description: 'deploy-request/approve — the commit to deploy', value: '${{ steps.run.outputs.sha }}' }
   issue: { description: 'deploy-request/approve — the request issue', value: '${{ steps.run.outputs.issue }}' }
   by: { description: 'deploy-approve — who approved', value: '${{ steps.run.outputs.by }}' }
+  via: { description: 'deploy-approve — ''trace'' when the approval was given in trace', value: '${{ steps.run.outputs.via }}' }
+  roll-back-to: { description: 'deploy-approve — a rollback approved in trace: the commit to go back to', value: '${{ steps.run.outputs.roll-back-to }}' }
   before: { description: 'deploy-guard — what was deployed before (the rollback target)', value: '${{ steps.run.outputs.before }}' }
   items: { description: 'worker-pick — the claimed items as a JSON list', value: '${{ steps.run.outputs.items }}' }
   runner: { description: 'worker-pick — where items run (worker.runner — agentcore or actions)', value: '${{ steps.run.outputs.runner }}' }
@@ -149,6 +159,8 @@ runs:
         ROLLBACK: ${{ inputs.rollback-to }}
         REASONS: ${{ inputs.reasons }}
         TRIGGERING_ACTOR: ${{ inputs.triggering-actor }}
+        APPROVAL: ${{ inputs.approval }}
+        VIA: ${{ inputs.via }}
         AGENT_LOGIN: ${{ inputs.agent-login }}
       with:
         github-token: ${{ inputs.token || inputs.job-token }}
