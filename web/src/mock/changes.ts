@@ -96,13 +96,13 @@ const CHANGES: Record<string, ChangeDetail[]> = {
         { path: 'hardware/parts.db', status: 'modified', additions: 0, deletions: 0, kind: 'binary' },
       ],
       checks_list: [
-        { name: 'Electrical rules check', state: 'passed', summary: 'No errors' },
-        { name: 'Every part in stock for 10 boards', state: 'passed', summary: 'All 31 lines in stock at LCSC' },
-        { name: 'Matches the pin plan', state: 'passed', summary: '18 used pins agree with the firmware' },
-        { name: 'Datasheet limits', state: 'passed', summary: '0 conflicts' },
-        { name: 'Every sheet names its requirements', state: 'passed', summary: null },
-        { name: 'Footprints exist in the library', state: 'passed', summary: null },
-        { name: 'Parts list matches the schematic', state: 'passed', summary: null },
+        { name: 'Electrical rules check', state: 'passed', summary: 'No errors', id: 'job:9101' },
+        { name: 'Every part in stock for 10 boards', state: 'passed', summary: 'All 31 lines in stock at LCSC', id: 'cr:5502' },
+        { name: 'Matches the pin plan', state: 'passed', summary: '18 used pins agree with the firmware', id: 'cr:5503' },
+        { name: 'Datasheet limits', state: 'passed', summary: '0 conflicts', id: 'cr:5504' },
+        { name: 'Every sheet names its requirements', state: 'passed', summary: null, id: 'cr:5505' },
+        { name: 'Footprints exist in the library', state: 'passed', summary: null, id: 'job:9106' },
+        { name: 'Parts list matches the schematic', state: 'passed', summary: null, id: null },
       ],
       requirements: ['R-004', 'R-008'],
       recommendation: { verdict: 'accept', why: 'All 7 checks passed and it covers R-004 and R-008. The regulator swap gives twice the headroom for the same price, and the original part has no stock until February.' },
@@ -110,24 +110,24 @@ const CHANGES: Record<string, ChangeDetail[]> = {
     }),
     summary(13, {
       title: 'Sensor front end sheet', from: 'the analog specialist', opened_at: ago(8 * MIN), updated_at: ago(2 * MIN), mergeable: 'unknown',
-      checks: { total: 7, passed: 4, failed: 0, running: 3, skipped: 0, failing: [] }, verdict: 'checking',
+      checks: { total: 7, passed: 4, failed: 1, running: 2, skipped: 0, failing: ['Enclosure clearance'] }, verdict: 'checking',
       summary: ['Moved the moisture probe connector 4 mm so it clears the enclosure wall.', 'Updated the front render to match.'],
       files: [
         { path: 'hardware/sensor.kicad_sch', status: 'modified', additions: 3, deletions: 3, kind: 'schematic' },
         { path: 'docs/renders/front.svg', status: 'modified', additions: 2, deletions: 2, kind: 'image' },
       ],
       checks_list: [
-        { name: 'Electrical rules check', state: 'passed', summary: 'No errors' },
-        { name: 'Datasheet limits', state: 'passed', summary: null },
-        { name: 'Footprints exist in the library', state: 'passed', summary: null },
-        { name: 'Parts list matches the schematic', state: 'passed', summary: null },
-        { name: 'Every part in stock for 10 boards', state: 'running', summary: null },
-        { name: 'Matches the pin plan', state: 'running', summary: null },
-        { name: 'Enclosure clearance', state: 'running', summary: null },
+        { name: 'Electrical rules check', state: 'passed', summary: 'No errors', id: 'job:9201' },
+        { name: 'Datasheet limits', state: 'passed', summary: null, id: 'cr:5602' },
+        { name: 'Footprints exist in the library', state: 'passed', summary: null, id: 'job:9203' },
+        { name: 'Parts list matches the schematic', state: 'passed', summary: null, id: 'cr:5604' },
+        { name: 'Enclosure clearance', state: 'failed', summary: 'J3 is 0.6 mm from the wall; 1 mm needed', id: 'job:9207' },
+        { name: 'Every part in stock for 10 boards', state: 'running', summary: null, id: 'cr:5605' },
+        { name: 'Matches the pin plan', state: 'running', summary: null, id: 'cr:5606' },
       ],
       requirements: ['R-001'],
-      recommendation: { verdict: 'wait', why: '3 checks are still running; trace will say when they finish.' },
-      may_accept: false, blockers: ['3 checks are still running. Accepting opens once they pass.'],
+      recommendation: { verdict: 'wait', why: 'The enclosure clearance check failed and 2 checks are still running; trace is fixing the clearance.' },
+      may_accept: false, blockers: ['2 checks are still running and 1 failed. Accepting opens once they pass.'],
     }),
     // an edit someone made in the app (docs/stay-in-trace.md): a setting a contributor changed, waiting for an admin
     summary(14, {
@@ -141,6 +141,78 @@ const CHANGES: Record<string, ChangeDetail[]> = {
       may_accept: true, may_ask: false, may_discard: true, rule_blocks: false,
     }),
   ],
+}
+
+// ------------------------------------------------------------------ one check in full (change.check)
+
+const ERC_LOG = `2026-11-03T09:41:02Z ##[group]Run kicad-cli sch erc hardware/power.kicad_sch
+2026-11-03T09:41:02Z kicad-cli 9.0.4
+2026-11-03T09:41:03Z Loading schematic hardware/power.kicad_sch
+2026-11-03T09:41:04Z Running electrical rules check on 3 sheets
+2026-11-03T09:41:05Z   Sheet /            0 errors, 0 warnings
+2026-11-03T09:41:05Z   Sheet /Power/      0 errors, 0 warnings
+2026-11-03T09:41:05Z   Sheet /USB/        0 errors, 0 warnings
+2026-11-03T09:41:05Z Found 0 violations
+2026-11-03T09:41:05Z Report written to erc-report.json
+2026-11-03T09:41:05Z ##[endgroup]
+2026-11-03T09:41:06Z Post job cleanup.`
+
+const CLEAR_LOG = `2026-11-03T09:58:10Z ##[group]Run trace check enclosure-clearance
+2026-11-03T09:58:10Z Reading hardware/sensor.kicad_sch and enclosure/outline.step
+2026-11-03T09:58:12Z Placed parts: 23; parts near the wall: 4
+2026-11-03T09:58:12Z   J1  USB-C        2.4 mm  ok
+2026-11-03T09:58:12Z   J2  battery      1.8 mm  ok
+2026-11-03T09:58:12Z   J3  probe        0.6 mm  FAIL (needs 1.0 mm)
+2026-11-03T09:58:12Z   TP1 test point   1.2 mm  ok
+2026-11-03T09:58:13Z ##[error]1 part closer to the enclosure wall than 1.0 mm
+2026-11-03T09:58:13Z ##[endgroup]
+2026-11-03T09:58:13Z Error: Process completed with exit code 1.`
+
+type CheckMock = Partial<import('@/lib/types').CheckDetail> & { /** minutes ago */ started?: number; /** seconds */ took?: number }
+const CHECK_DETAIL: Record<string, CheckMock> = {
+  'job:9101': {
+    text: '## Electrical rules check\n\nKiCad checked **3 sheets** of the power and USB-C schematic.\n\n| Sheet | Errors | Warnings |\n|---|---|---|\n| Root | 0 | 0 |\n| Power | 0 | 0 |\n| USB | 0 | 0 |\n\nEvery pin that needs a driver has one, and no two outputs drive the same net.',
+    log: { text: ERC_LOG, truncated: false }, started: 6, took: 4,
+  },
+  'cr:5502': {
+    text: 'All **31 lines** of the parts list are in stock at LCSC for 10 boards.\n\nThe tightest is **U3, AP2112K-3.3**: 4,812 in stock, 10 needed. The MCP1700 it replaces has no stock until February.',
+    started: 8, took: 22,
+  },
+  'cr:5503': { text: 'The schematic and the firmware agree on all **18 used pins**. Four spare pins go to test points TP3 to TP6.', started: 8, took: 9 },
+  'cr:5504': {
+    text: 'Each part was checked against its datasheet limits: 0 conflicts.',
+    annotations: [{ path: 'hardware/power.kicad_sch', line: null, level: 'notice', title: 'Close to a limit', message: 'C4 sees 4.2 V at most; it is rated 6.3 V (67%). Within the 80% rule.' }],
+    started: 9, took: 41,
+  },
+  'cr:5505': { text: 'Power names R-004 and R-008; USB names R-008.', started: 9, took: 2 },
+  'job:9106': { text: 'All 27 footprints are in the project library.', log: { text: '2026-11-03T09:40:58Z Checked 27 footprints\n2026-11-03T09:40:58Z 0 missing', truncated: false }, started: 9, took: 3 },
+  'job:9201': { text: 'KiCad checked 1 sheet: 0 errors, 0 warnings.', log: { text: ERC_LOG.replace(/power/g, 'sensor').replace('3 sheets', '1 sheet'), truncated: false }, started: 5, took: 4 },
+  'cr:5602': { text: '0 conflicts.', started: 5, took: 30 },
+  'job:9203': { text: 'All 23 footprints are in the project library.', started: 5, took: 3 },
+  'cr:5604': { text: 'The parts list matches the schematic: 23 parts.', started: 5, took: 2 },
+  'job:9207': {
+    text: '## Enclosure clearance\n\n**1 part** sits closer to the enclosure wall than the 1 mm the enclosure maker asks for.\n\n- **J3** (the moisture probe connector) is **0.6 mm** from the inside wall.\n\nMoving J3 a further 0.5 mm toward the board centre clears it. trace has asked the analog specialist to do that.',
+    annotations: [
+      { path: 'hardware/sensor.kicad_sch', line: null, level: 'failure', title: 'J3 too close to the wall', message: 'J3 is 0.6 mm from the enclosure wall; at least 1.0 mm is needed.' },
+      { path: 'hardware/sensor.kicad_sch', line: null, level: 'warning', title: 'TP1 near the wall', message: 'TP1 is 1.2 mm from the wall: inside the rule, but a probe tip may not reach it.' },
+    ],
+    log: { text: CLEAR_LOG, truncated: true }, started: 4, took: 3,
+  },
+  'cr:5605': { started: 2 },
+  'cr:5606': { started: 2 },
+}
+
+function checkDetail(c: ChangeDetail, id: string, admin: boolean) {
+  const line = c.checks_list.find((k) => k.id === id)
+  if (!line) return null
+  const x: CheckMock = CHECK_DETAIL[id] ?? {}
+  const startedAt = x.started !== undefined ? ago(x.started * MIN) : null
+  return {
+    id, name: line.name, state: line.state, summary: line.summary, text: x.text ?? null,
+    started_at: startedAt, completed_at: line.state === 'running' || !startedAt || x.took === undefined ? null : new Date(Date.parse(startedAt) + x.took * 1000).toISOString(),
+    annotations: x.annotations ?? [], log: x.log ?? null,
+    ...(admin ? { url: id.startsWith('job:') ? `https://github.com/acme/soil-sensor/actions/runs/1/job/${id.slice(4)}` : `https://github.com/acme/soil-sensor/runs/${id.slice(3)}` } : {}),
+  }
 }
 
 const partOf = (repo: string) => PROJECTS.find((p) => p.repo === repo)?.part ?? 'contributor'
@@ -183,6 +255,10 @@ export function changesAction(name: string, a: Record<string, unknown>, done: (r
   switch (name) {
     case 'change.get':
       return ok(reviewer ? { ...c, may_accept: false, blockers: ['You are a reviewer on this project: you can read changes, and contributors accept them.'] } : c)
+    case 'change.check': {
+      const x = checkDetail(c, String(a.id ?? ''), true)
+      return x ? later(ok(x), 300) : fail('That check is not on this change\'s latest version.')
+    }
     case 'change.diff': {
       const f = c.files.find((x) => x.path === a.path)
       if (!f) return fail(`no file ${String(a.path)} in this change`)

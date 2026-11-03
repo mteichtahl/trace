@@ -50,7 +50,8 @@ export function visibleTabs(j: Journey, o: { admin: boolean }): ProjectTab[] {
     { id: 'requirements', label: 'Requirements', to: '/requirements', show: reached(j, ['define']) },
     { id: 'design', label: 'Design', to: '/design', show: reached(j, ['architect']) },
     { id: 'changes', label: 'Changes', to: '/changes', show: true },
-    { id: 'evidence', label: 'Evidence', to: '/evidence', show: reached(j, ['prove']) },
+    // from the first run on: Capture where the template has it (checks start running there), else Prove
+    { id: 'evidence', label: 'Evidence', to: '/evidence', show: reached(j, ['capture', 'prove']) },
     { id: 'build', label: 'Build', to: '/build', show: reached(j, ['release']) },
     { id: 'decisions', label: 'Decisions', to: '/decisions', show: j.gates.some((g) => g.state === 'signed') },
     { id: 'files', label: 'Files', to: '/files', show: true },

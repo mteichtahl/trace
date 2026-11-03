@@ -39,6 +39,8 @@ export function filesAction(name: string, a: Record<string, unknown>): Response 
     }
     case 'artifact': {
       const path = `runs/${String(a.id)}/${String(a.name)}`
+      // as the API: a run file over 8 MB is refused with its size
+      if (path === 'runs/run_6d20/soil-sensor-routed.dsn.ses') return fail(`${String(a.name)} is 11400000 bytes; the API returns at most ${8 * 1024 * 1024}`)
       const c = fileContent(path)
       return c ? ok({ id: a.id, name: a.name, mime: c.mime, size: typeof c.bytes === 'string' ? c.bytes.length : c.bytes.length, base64: toB64(c.bytes) }) : fail(`no artifact ${String(a.name)} on run ${String(a.id)}`)
     }

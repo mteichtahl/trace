@@ -90,7 +90,12 @@ export async function resolveUrl(f: FileRef, commit?: string): Promise<{ url: st
     const key = `${f.repo}|${f.run.id}|${f.run.name}`
     const have = artifactUrls.get(key)
     if (have) return { url: have }
-    const a = await call('artifact', { repo: f.repo, id: f.run.id, name: f.run.name })
+    const a = await call('artifact', { repo: f.repo, id: f.run.id, name: f.run.name }).catch((e: unknown) => {
+      // the API refuses a run file over its limit: say so in one line, not as a failure
+      const m = e instanceof Error ? /is (\d+) bytes; the API returns at most (\d+)/.exec(e.message) : null
+      if (m) throw new Error(`${f.run!.name} is too large to open here (${Math.round(Number(m[1]) / 1048576)} MB; trace opens run files up to ${Math.round(Number(m[2]) / 1048576)} MB).`)
+      throw e
+    })
     const bytes = b64ToBytes(a.base64)
     const url = URL.createObjectURL(new Blob([bytes], { type: a.mime ?? 'application/octet-stream' }))
     artifactUrls.set(key, url)
