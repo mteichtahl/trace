@@ -27,7 +27,8 @@
  *                          bedrock-agentcore:namespace), as defence in depth: src/infra/project.ts
  *   the API                records under /trace/ of every project's memory (memory.list, memory.recall, and
  *                          GetMemoryRecord to verify a record before memory.deactivate, after its access check), read
- *                          only, and no events (grantReadRecords). Inactive marks are not written to the memory: they
+ *                          only (grantReadRecords), and its agents' events, listed only (memory.events,
+ *                          grantReadEvents). Inactive marks are not written to the memory: they
  *                          are an overlay in S3 (src/agents/runtime/memory-state.ts)
  *   the OIDC role          the same as its project's worker, on its own project's memory only (the worker.runner =
  *                          actions fallback is the worker in GitHub Actions): src/infra/project.ts
@@ -98,6 +99,23 @@ export class TraceMemory extends Construct {
 export const API_RECORD_ACTIONS = [...RECORD_ACTIONS, 'bedrock-agentcore:GetMemoryRecord'] as const
 
 /** Let `grantee` (the API) recall, list and get the records of every project's memory, and nothing else of them. */
+/** The API's read of short-term memory (memory.events): list an actor's sessions and their events, never write them. */
+export const API_EVENT_ACTIONS = ['bedrock-agentcore:ListSessions', 'bedrock-agentcore:ListEvents'] as const
+
+/**
+ * The API reads every project's short-term events (memory.events), read only. Actor ids have no common prefix across
+ * projects, so this is scoped by memory (each project's own) and by the API's access check, which names the actors it
+ * reads: the project's agents and the caller's own person actor (src/api/actions.ts).
+ */
+export function grantReadEvents(grantee: iam.IGrantable, memories: readonly TraceMemory[]): void {
+  if (!memories.length) return
+  grantee.grantPrincipal.addToPrincipalPolicy(new iam.PolicyStatement({
+    sid: 'TraceMemoryEventsRead',
+    actions: [...API_EVENT_ACTIONS],
+    resources: memories.map((m) => m.memoryArn),
+  }))
+}
+
 export function grantReadRecords(grantee: iam.IGrantable, memories: readonly TraceMemory[]): void {
   if (!memories.length) return
   grantee.grantPrincipal.addToPrincipalPolicy(new iam.PolicyStatement({

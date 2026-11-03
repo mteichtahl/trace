@@ -39,6 +39,7 @@ import { EventBus, type WaitChange, waitChanges, withJob } from '../../core/wait
 import { ATTR, annotate } from '../../core/telemetry.js'
 import type { Route } from '../kinds.js'
 import { type PromptRecord, promptAttrs } from '../../prompts/telemetry.js'
+import type { MemoryStatus } from './memory.js'
 import { realRunner } from './job.js'
 import { workerIndex } from './job-index.js'
 import { observeJob } from './observe.js'
@@ -67,6 +68,8 @@ export interface JobContext {
   route?(r: Route): void
   /** Record which prompt versions the job's model calls were built from: on the job (status) and on its span. */
   prompts?(used: readonly PromptRecord[]): void
+  /** Record what memory did for the job: on the job (status) and on its span, so a failure is never silent. */
+  memory?(status: MemoryStatus): void
 }
 
 /** Does one job; resolves with a one-line summary, rejects with the reason it failed. */
@@ -261,6 +264,11 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
         info.prompts = [...(info.prompts ?? []), ...used]
         annotate(promptAttrs(info.prompts))
       }
+      const memory = (m: MemoryStatus): void => {
+        info.memory = m
+        annotate({ [ATTR.memoryState]: m.state, [ATTR.memorySaved]: m.saved, [ATTR.memoryFailed]: m.failed })
+        emit({ type: 'state', jobId: id, job: info })
+      }
       const branch = (b: string): void => { info.branch = b }
       const admit = async (agent: string, o: { maxParallel: number }): Promise<void> => {
         if (!opts.admit) return
@@ -286,7 +294,7 @@ export function createJobs(runner: JobRunner, opts: { echo?: (line: string) => v
       const done = observeJob(payload, id, info.agent ?? 'specialist', () => info, async () => {
         try {
           info.summary = await withJob(id, () => runner(payload, {
-            jobId: id, signal: abort.signal, pauseSignal: pauseCtl.signal, log, startJob: (p) => self.startJob(p, session), route, prompts, admit, branch,
+            jobId: id, signal: abort.signal, pauseSignal: pauseCtl.signal, log, startJob: (p) => self.startJob(p, session), route, prompts, memory, admit, branch,
           }))
           info.state = abort.signal.aborted ? 'aborted' : 'succeeded'
           if (abort.signal.aborted) info.error = abort.signal.reason instanceof Error ? abort.signal.reason.message : String(abort.signal.reason)

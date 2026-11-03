@@ -32,7 +32,7 @@ import { type Route, WORKER } from '../agents/kinds.js'
 import { route } from '../agents/router.js'
 import { SPECIALIST_BUILTINS, SPECIALIST_DENIED, WORKER_TOOLS } from '../agents/specialist.js'
 import { delegatedRequest } from '../agents/runtime/delegation.js'
-import { type AgentMemory, type JobMemory, NO_MEMORY, agentActor, memoryFromEnv, openJobMemory } from '../agents/runtime/memory.js'
+import { type AgentMemory, type JobMemory, NO_MEMORY, agentActor, memoryFromEnv, memoryLine, noMemory, openJobMemory } from '../agents/runtime/memory.js'
 import { type Deps, type TaskEnv, short } from './types.js'
 import { type WorkItem, composeItem, itemFromEnv, rulesOf } from './worker.js'
 
@@ -139,14 +139,23 @@ export function actionsMemory(env: ActionsEnv, proc: Record<string, string | und
   return memoryFromEnv({ TRACE_MEMORY_ID: id, ...(region ? { AWS_REGION: region } : {}) })
 }
 
+/** What a step's memory did, in its log: a warning when writes failed, so it is not missed. */
+function noteMemory(core: Pick<Deps['core'], 'info' | 'warning'>, m: JobMemory): void {
+  if (m === NO_MEMORY) return
+  const st = m.status()
+  if (st.state === 'failed' || st.state === 'partial') core.warning(memoryLine(st))
+  else core.info(memoryLine(st))
+}
+
 /** One agent's memory in one step: recall only in the first. Never throws. */
 async function stepMemory(mem: AgentMemory | null, o: { repository: string; agent: string; item: WorkItem; request: string; recall: boolean }, log: (l: string) => void): Promise<JobMemory> {
-  if (!mem) return NO_MEMORY
+  if (!mem) return noMemory('memory is not set up for this repository (TRACE_MEMORY_ID is not set)')
   try {
     return await openJobMemory(mem, { actor: agentActor(o.repository, o.agent), session: sessionOf(o.item), query: o.item.title, request: o.request }, { log, recall: o.recall })
   } catch (e) {
-    log(`memory: not used: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300))
-    return NO_MEMORY
+    const why = `it could not be opened: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300)
+    log(`memory: not used: ${why}`)
+    return noMemory(why)
   }
 }
 
@@ -238,11 +247,13 @@ export async function delegateStep({ github, core, cfg, env: e, context, prompts
   for (const m of transcript(env.EXECUTION_FILE)) sm.observe(m)
   if (!out) {
     await sm.finish(false, 'the specialist ended without its structured output')
+    noteMemory(core, sm)
     core.warning(`The ${r.kind} specialist ended without its structured output: nothing is delegated.`)
     return
   }
   if (!d) {
     await sm.finish(true, out.report)
+    noteMemory(core, sm)
     if (out.delegate) core.warning('The specialist asked to delegate without a brief and acceptance criteria: nothing is delegated.')
     return
   }
@@ -306,9 +317,11 @@ export async function reportStep({ github, core, cfg, env: e, context }: Deps, m
     const wm = await stepMemory(mem, { repository, agent: WORKER, item, request: '', recall: false }, (l) => core.info(l))
     for (const m of worker) wm.observe(m)
     await wm.finish(env.WORKER_CONCLUSION === 'success', resultText(worker) || `the worker step ended: ${env.WORKER_CONCLUSION || 'it did not run'}`)
+    noteMemory(core, wm)
     const cm = await stepMemory(mem, { repository, agent: s.memoryAgent, item, request: '', recall: false }, (l) => core.info(l))
     for (const m of transcript(env.EXECUTION_FILE)) cm.observe(m)
     await cm.finish(Boolean(check), check?.report ?? 'the check gave no structured answer')
+    noteMemory(core, cm)
   }
   const body = reportBody({ item, r, specialist, check, workerConclusion: env.WORKER_CONCLUSION ?? '', runUrl, escalateTo: cfg.worker.escalate_to })
   await github.rest.issues.createComment({ owner, repo, issue_number: item.number, body: `${body}\n<!-- trace-report: ${short(item.sha)} -->` })

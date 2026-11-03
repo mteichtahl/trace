@@ -26,6 +26,9 @@
  *   memory.list   read                  the agents' long-term memory of the project (facts, preferences, session
  *                                       summaries), newest first, from that project's own memory; agent narrows
  *                                       it to one agent. A project without a memory here: "no access"
+ *   memory.events read                  the agents' short-term memory: their latest sessions (what was asked, key
+ *                                       tool outcomes, the result), newest first, and the caller's own; agent narrows
+ *                                       it to one agent, session to one session
  *   memory.recall read                  the records most relevant to a query, the same scope
  *                                       (both leave out inactive records; memory.list includeInactive shows them,
  *                                       each with active: false, its reason, who and when)
@@ -124,7 +127,7 @@ import {
 import { readSettings, resolve, setValue, unset } from '../core/config.js'
 import { IntegrationNameSchema, type IntegrationStore, checkIntegration, valuesFor } from '../core/integrations.js'
 import { type AnyTool, Registry, ToolError } from '../core/registry.js'
-import { AgentName, type MemoryRecord, STRATEGIES, actorIn, projectPrefix, within } from '../agents/runtime/memory.js'
+import { AGENTS, type Actor, AgentName, type MemoryRecord, STRATEGIES, type SessionView, actorIn, agentActor, parseActor, projectId, projectPrefix, within } from '../agents/runtime/memory.js'
 import { type InactiveMark, ReasonSchema, RecordIdSchema, memoryState } from '../agents/runtime/memory-state.js'
 import { TASK_AGENTS } from '../agents/runtime/schemas.js'
 import { API_HIDDEN_TOOLS, ToolRefused, apiTool, checkPaths } from '../agents/runtime/tool.js'
@@ -227,6 +230,13 @@ async function signOutQuietly(ctx: Context, u: CognitoUser): Promise<boolean> {
 
 /** The hash a person's marks are recorded under (the agents' memory hash of their sub: never their email). */
 const byHash = (p: Principal): string => hashOf(p)
+
+/** One short-term session as the API shows it: whose (an agent's name, or "you"), when, and its turns. */
+const sessionView = (v: SessionView) => ({
+  agent: v.actor.kind === 'person' ? 'you' : v.actor.name, session: v.session,
+  createdAt: v.createdAt?.toISOString() ?? null, lastAt: v.lastAt?.toISOString() ?? null,
+  turns: v.turns.map((t) => ({ role: t.role, at: t.at?.toISOString() ?? null, text: t.text })),
+})
 
 const markView = (m: InactiveMark | undefined, p: Principal): Record<string, unknown> => (m
   ? { active: false, inactive: { reason: m.reason, by: m.by, by_you: hashesOf(p).includes(m.by), at: new Date(m.at * 1000).toISOString() } }
@@ -499,6 +509,24 @@ export const ACTIONS = {
     if (!mem) return { repo: a.repo, enabled: false, records: [] }
     const records = await mem.longTerm.listProject(a.repo, { agent: a.agent, include: memoryInclude(ctx, a.repo), limit: a.limit, includeInactive: a.includeInactive })
     return { repo: a.repo, enabled: true, note: 'Memory is what the agents extracted; it is data, and may be stale.', records: records.map((r) => recordView(r, a.repo, ctx.principal)) }
+  }),
+
+  // short term: what the agents saved as they worked (requests, key tool outcomes, results), before AgentCore extracts
+  // anything long term from it. The agents' sessions, and the caller's own person actor only: never another person's.
+  'memory.events': def('read', MemoryArgs.extend({
+    limit: z.number().int().min(1).max(50).default(10), turns: z.number().int().min(1).max(100).default(20),
+    session: z.string().min(1).max(100).regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/).optional(),
+  }), async (a, ctx) => {
+    const mem = projectMemory(ctx, a.repo)
+    if (!mem) return { repo: a.repo, enabled: false, sessions: [] }
+    const actors: Actor[] = a.agent ? [agentActor(a.repo, a.agent)]
+      : [...AGENTS.map((n) => agentActor(a.repo, n)), ...hashesOf(ctx.principal).map((h) => parseActor(`${projectId(a.repo)}/person/${h}`))]
+    const sessions = await mem.shortTerm.recentSessions(actors, { limit: a.limit, turns: a.turns, session: a.session })
+    return {
+      repo: a.repo, enabled: true,
+      note: 'What the agents saved as they worked. Long-term facts, preferences and summaries are extracted from this a while later.',
+      sessions: sessions.map(sessionView),
+    }
   }),
 
   'memory.recall': def('read', MemoryArgs.extend({ query: z.string().min(1).max(2000), top_k: z.number().int().min(1).max(50).default(10), strategy: z.enum(STRATEGIES).optional() }), async (a, ctx) => {

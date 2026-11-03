@@ -70,7 +70,7 @@ import { type JobContext, JobPaused, type JobRunner } from './jobs.js'
 import { addSecret } from '../../core/telemetry.js'
 import { claudeTelemetry } from './observe.js'
 import { type ModelUse, recordModelUse } from '../../core/cost.js'
-import { type AgentMemory, type Actor, type JobMemory, NO_MEMORY, agentActor, memoryFromEnv, openJobMemory, personActor, sessionIdFor } from './memory.js'
+import { type AgentMemory, type Actor, type JobMemory, NO_MEMORY, agentActor, memoryFromEnv, memoryLine, noMemory, openJobMemory, personActor, sessionIdFor } from './memory.js'
 import { composeTask, taskBranch } from '../worker/prompt.js'
 import { SPECIALISTS, SPECIALIST_BUILTINS, type Specialist, allowedToolsOf, toolsOf } from '../index.js'
 import { type Resumed, composeResumeNote, composeSpecialist } from '../specialist.js'
@@ -573,16 +573,29 @@ function prepared(p: WorkItemJob | TaskJob): Prepared {
 /** The job's memory, or none: memory never stops a job. */
 async function jobMemory(d: RunnerDeps, o: { repository: string; agent: string; person?: string | undefined; session: string; query: string; request: string },
   log: (l: string) => void, redact: (s: string) => string): Promise<JobMemory> {
-  if (!d.memory) return NO_MEMORY
+  if (!d.memory) return noMemory('memory is not set up for this worker (TRACE_MEMORY_ID is not set)')
   try {
     // the runtime's own project (TRACE_PROJECT), never the payload's: its role may use no other actor anyway
     const project = d.project || o.repository
     const person: Actor | undefined = o.person ? personActor(project, o.person) : undefined
     return await openJobMemory(d.memory, { actor: agentActor(project, o.agent), person, session: o.session, query: o.query, request: o.request }, { log, redact })
   } catch (e) {
-    log(`memory: not used for this job: ${redact(errText(e)).slice(0, 300)}`)
-    return NO_MEMORY
+    const why = `it could not be opened: ${redact(errText(e)).slice(0, 300)}`
+    log(`memory: not used for this job: ${why}`)
+    return noMemory(why)
   }
+}
+
+/**
+ * Finish a job's memory and say what it did: on the job (ctx.memory, its status) and in its log. The shared NO_MEMORY
+ * placeholder (not yet opened, or already finished) reports nothing, so a finished job's status is never overwritten.
+ */
+async function endMemory(mem: JobMemory, ctx: JobContext, log: (l: string) => void, ok: boolean, text: string): Promise<void> {
+  if (mem === NO_MEMORY) return
+  await mem.finish(ok, text)
+  const st = mem.status()
+  ctx.memory?.(st)
+  log(memoryLine(st))
 }
 
 /** An issue's or PR's labels, body and latest comments (the runner reads them; a specialist has no shell). Never fails the job. */
@@ -751,12 +764,12 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
       })
       if (out.paused) {
         const kept = await keepPaused(d, { g, dir, branch, defaultBranch: base.defaultBranch, jobId: ctx.jobId, session: out.session, by: errText(ctx.pauseSignal?.reason) })
-        await mem.finish(false, `paused: ${kept}`)
+        await endMemory(mem, ctx, log, false, `paused: ${kept}`)
         mem = NO_MEMORY
         throw new JobPaused(kept)
       }
       const summary = redact(out.text)
-      await mem.finish(out.ok, summary)
+      await endMemory(mem, ctx, log, out.ok, summary)
       mem = NO_MEMORY
       if (!out.ok) {
         if (prep.issue) await specialistComment(gh, p.repository, prep.issue, ctx.jobId, s, r, false, summary, cfg.worker.escalate_to, prep.runUrl)
@@ -788,7 +801,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     // paused: not a failure, and nothing to report on the item yet
     if (e instanceof JobPaused) throw e
     const msg = redact(errText(e))
-    await mem.finish(false, msg)
+    await endMemory(mem, ctx, log, false, msg)
     if (answering && handoffs && !settled) await handoffs.settle(answering.id, endedWithout(ctx.signal.aborted ? 'aborted' : 'failed', msg)).catch(() => false)
     if (prep?.issue) {
       const n = prep.issue
@@ -839,16 +852,16 @@ export async function runDelegated(d: RunnerDeps, p: DelegatedTaskJob, ctx: JobC
     // paused with its specialist: what it changed stays in the checkout, which the specialist commits as it pauses
     if (out.paused) throw new JobPaused('paused with its specialist: its changes are in the checkout')
     const summary = redact(out.text)
-    await mem.finish(out.ok, summary)
+    await endMemory(mem, ctx, log, out.ok, summary)
     mem = NO_MEMORY
     const commits = await d.exec('git', ['log', '--format=%h %s', '-n', '20', `origin/${parent.defaultBranch}..HEAD`], { cwd: parent.dir })
       .then((r) => r.stdout.trim()).catch(() => '')
     if (!out.ok) throw new Error(summary)
     return [`branch ${branch}, done in ${out.turns} turns`, ...(commits ? [`commits:\n${commits}`] : []), summary.slice(0, 6000)].join('\n')
   } catch (e) {
-    if (e instanceof JobPaused) { await mem.finish(false, e.message); throw e }
+    if (e instanceof JobPaused) { await endMemory(mem, ctx, log, false, e.message); throw e }
     const msg = redact(errText(e))
-    await mem.finish(false, msg)
+    await endMemory(mem, ctx, log, false, msg)
     throw new Error(msg)
   }
 }
