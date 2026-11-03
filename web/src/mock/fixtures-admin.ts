@@ -2,7 +2,7 @@
  * Mock data for Operations, Admin and Preferences (the Soil sensor / Motor driver / Panel controller story). Numbers
  * are illustrative. Prompt entries are a slice of src/prompts/catalog.ts with its real ids and variables.
  */
-import type { IntegrationStatus, OpsAnswer, OpsSection, OpsSeries, Passkey, PromptHistoryEntry, PromptRow, PromptView, UserRow } from '@/lib/admin-types'
+import type { IntegrationStatus, JourneyTime, OpsAnswer, OpsProcess, OpsSection, OpsSeries, Passkey, PromptHistoryEntry, PromptRow, PromptView, UserRow } from '@/lib/admin-types'
 
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -48,7 +48,7 @@ export function opsFixture(range: string, repo: string | null, admin: boolean): 
       ],
     },
     {
-      id: 'jobs', title: 'Jobs', widgets: [
+      id: 'jobs', title: 'Remote jobs', widgets: [
         { id: 'jobs:0', title: 'Graphics card and CPU queue depth', kind: 'area', unit: 'jobs', series: [series('Graphics card', 5, 3, range), series('CPU', 6, 2, range)], links: link('jobs') },
         { id: 'jobs:1', title: 'Wait before a job starts', kind: 'line', unit: 'minutes', series: [series('Graphics card', 7, 6, range)], links: link('jobs') },
       ],
@@ -69,13 +69,16 @@ export function opsFixture(range: string, repo: string | null, admin: boolean): 
     ...(admin ? [{ id: 'cost', title: 'Cost', widgets: [{ id: 'cost:0', title: 'Cloud spend by project', kind: 'area', unit: 'US$', series: REPOS.map((r, k) => series(r.split('/')[1]!, k + 17, 4, range, r)), links: link('cost') }] }] : []),
   ]
   const spark = (k: number) => series('', k, 1, '24h').points.map(([, v]) => v)
+  const process = processFixture(range)
   return {
-    status: { level: 'ok', text: 'All systems normal. 2 jobs waiting on a graphics card, oldest 4 minutes.' },
+    status: { level: 'warn', text: '4 jobs were lost in the last 24 hours. A change has waited 47 min on a conflict.' },
     tiles: [
       { id: 'runs', label: 'Agent runs', value: repo ? 41 : 142, unit: 'runs', detail: { successRate: 0.96 }, spark: spark(1), status: 'ok', change: { value: 18, text: '+18 vs previous 24 h' } },
       { id: 'latency', label: 'Median run time', value: 6.4 * 60_000, unit: 'ms', spark: spark(2), status: 'ok', change: { value: -0.3, text: '−0.3 min vs previous 24 h' }, note: 'slowest 5%: 26 min' },
-      { id: 'jobs', label: 'Jobs waiting', value: 2, unit: 'jobs', spark: spark(3), status: 'ok', change: { value: 2, text: '+2 vs an hour ago' }, note: 'oldest 4 min' },
-      { id: 'builds', label: 'Build failures', value: 3, unit: 'failures', spark: spark(4), status: 'ok', change: { value: 1, text: '+1 vs previous 24 h' }, note: '5% of 58 builds' },
+      { id: 'jobs', label: 'Agent jobs finished', value: 31, unit: 'jobs', detail: { done: 27, failed: 0, lost: 4, cancelled: 0 }, spark: process.jobs!.points.map(([, ...v]) => v.reduce((x, y) => x + y, 0)), status: 'warn' },
+      { id: 'builds', label: 'Builds passed', value: 94, unit: '%', detail: { passed: 47, failed: 3, total: 50 }, spark: process.builds!.points.map(([, a, b]) => (a + b ? a / (a + b) : 1)), status: 'ok' },
+      { id: 'waiting', label: 'Waiting on people', value: 13 * 60, unit: 's', detail: { slowest: 72 * 60, count: 35 }, spark: [22, 20, 16, 22, 18, 4, 20, 21].map((v) => 30 - v), status: 'ok' },
+      { id: 'working', label: 'Time trace was working', value: 61, unit: '%', detail: { jobSeconds: 61, waitSeconds: 39 }, spark: [12, 10, 14, 9, 18, 13].map((v) => 30 - v), status: 'ok' },
       ...(admin ? [{ id: 'cost', label: 'Cloud spend this month', value: 412, unit: 'USD', spark: spark(5), status: 'ok' as const, change: { value: 6, text: '+6% vs last month so far' }, note: 'on track for US$560' }] : []),
     ],
     alarms: [
@@ -86,8 +89,47 @@ export function opsFixture(range: string, repo: string | null, admin: boolean): 
       },
     ],
     sections,
+    process,
     updatedAt: new Date(Date.now() - 40_000).toISOString(),
     nextAt: new Date(Date.now() + 20_000).toISOString(),
+  }
+}
+
+/** The Process tab (the approved design's numbers, docs/ui proposal 5): 16 hours of builds and jobs, the waits, rework. */
+function processFixture(range: string): OpsProcess {
+  const { step } = hours(range)
+  const end = Math.floor(Date.now() / step) * step
+  const at = (i: number, n: number) => end - (n - 1 - i) * step
+  const B = [[2, 0], [3, 0], [4, 0], [3, 1], [2, 0], [5, 0], [4, 0], [3, 0], [2, 1], [4, 0], [3, 0], [2, 0], [3, 1], [2, 0], [2, 0], [2, 0]]
+  const J = [[2, 0, 1, 0], [3, 0, 0, 0], [2, 0, 0, 0], [1, 0, 0, 0], [2, 0, 0, 0], [3, 0, 0, 0], [1, 0, 0, 0], [1, 0, 0, 0], [2, 0, 0, 0], [1, 0, 2, 0], [2, 0, 0, 0], [3, 0, 0, 0], [2, 0, 0, 0], [1, 0, 0, 0], [1, 0, 1, 0], [0, 0, 0, 0]]
+  return {
+    builds: { passed: 47, failed: 3, own: { passed: 21, failed: 1 }, projects: { passed: 26, failed: 2 }, points: B.map(([a, b], i) => [at(i, B.length), a!, b!]) },
+    jobs: { done: 27, failed: 0, lost: 4, cancelled: 0, points: J.map(([a, b, c, d], i) => [at(i, J.length), a!, b!, c!, d!]) },
+    waits: [
+      { kind: 'question', count: 11, median: 13 * 60, slowest: 36 * 60 },
+      { kind: 'change', count: 18, median: 10 * 60, slowest: 33 * 60 },
+      { kind: 'gate', count: 6, median: 60, slowest: 4.9 * 3600 },
+    ],
+    wait: { count: 35, median: 13 * 60, slowest: 72 * 60, spark: [8, 10, 14, 8, 12, 26, 10, 9] },
+    rework: [{ cause: 'job_restarted', count: 2 }, { cause: 'conflict_resolved', count: 4 }, { cause: 'sent_back', count: 0 }, { cause: 'asked_again', count: 2 }],
+    working: { share: 0.61, jobSeconds: 61 * 360, waitSeconds: 39 * 360, spark: [0.6, 0.64, 0.56, 0.66, 0.48, 0.58] },
+    runTime: { median: 6.4 * 60, count: 31 },
+  }
+}
+
+/** journey.time for a mock project: the design's stage lengths (hours) and their waits, scaled a little per project. */
+export function journeyTimeFixture(repo: string): JourneyTime {
+  const S: [string, string, number, number][] = [['define', 'Define', 1.18, 0.45], ['architect', 'Architect', 1.68, 0.5], ['capture', 'Capture', 0.35, 0.1], ['prove', 'Prove', 0.84, 0.25], ['layout', 'Layout', 5.0, 2.3], ['signoff', 'Sign-off', 6.23, 4.9], ['fabricate', 'Fabricate', 0.8, 0.55]]
+  const k = REPOS.indexOf(repo)
+  const take = k <= 0 ? S : S.slice(0, Math.max(2, 7 - 2 * k))
+  let t = Date.now() / 1000 - take.reduce((a, [, , h]) => a + h * 3600, 0)
+  return {
+    repo, started: true, project: null, at: new Date().toISOString(),
+    stages: take.map(([id, name, h, w], i) => {
+      const started = t
+      t += h * 3600
+      return { id, name, started, finished: i === take.length - 1 ? null : t, seconds: h * 3600, waiting: w * 3600 }
+    }),
   }
 }
 
