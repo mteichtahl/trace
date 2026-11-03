@@ -7,32 +7,8 @@
 import { api } from '@/lib/api'
 import { audioEvent, readTranscript } from './eventstream'
 
-const WORKLET = `
-class Capture extends AudioWorkletProcessor {
-  constructor(o) { super(); this.ratio = sampleRate / 16000; this.buf = []; this.acc = 0 }
-  process(inputs) {
-    const ch = inputs[0] && inputs[0][0]
-    if (!ch) return true
-    let sum = 0
-    for (let i = 0; i < ch.length; i++) sum += ch[i] * ch[i]
-    // downsample by averaging into 16 kHz
-    for (let i = 0; i < ch.length; i++) {
-      this.acc += 1
-      if (this.acc >= this.ratio) { this.acc -= this.ratio; this.buf.push(ch[i]) }
-    }
-    if (this.buf.length >= 1600) {
-      const pcm = new Int16Array(this.buf.length)
-      for (let i = 0; i < this.buf.length; i++) { const s = Math.max(-1, Math.min(1, this.buf[i])); pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff }
-      this.port.postMessage({ pcm: pcm.buffer, level: Math.sqrt(sum / ch.length) }, [pcm.buffer])
-      this.buf = []
-    } else {
-      this.port.postMessage({ level: Math.sqrt(sum / ch.length) })
-    }
-    return true
-  }
-}
-registerProcessor('trace-capture', Capture)
-`
+/** The capture worklet, served from the app itself (web/public): the content policy refuses blob: scripts. */
+const WORKLET_URL = '/capture-worklet.js'
 
 export interface DictationHandlers {
   /** the text so far: firm words plus the current partial */
@@ -53,13 +29,24 @@ export interface Dictation {
 }
 
 export async function startDictation(o: { language: string; repo?: string } & DictationHandlers): Promise<Dictation> {
-  const { url, vocabulary } = await api<{ url: string; vocabulary?: DictationWords }>('/api/voice/listen', { method: 'POST', body: { language: o.language, ...(o.repo ? { repo: o.repo } : {}) } })
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } })
+  // made at once, inside the tap: a phone only lets an AudioContext run when it starts from one
   const ctx = new AudioContext()
-  const blob = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }))
-  await ctx.audioWorklet.addModule(blob)
-  URL.revokeObjectURL(blob)
-  const src = ctx.createMediaStreamSource(stream)
+  if (ctx.state === 'suspended') void ctx.resume().catch(() => {})
+  let url: string
+  let vocabulary: DictationWords | undefined
+  let stream: MediaStream | undefined
+  try {
+    ;({ url, vocabulary } = await api<{ url: string; vocabulary?: DictationWords }>('/api/voice/listen', { method: 'POST', body: { language: o.language, ...(o.repo ? { repo: o.repo } : {}) } }))
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } })
+    await ctx.audioWorklet.addModule(WORKLET_URL)
+    if (ctx.state === 'suspended') await ctx.resume()
+  } catch (e) {
+    stream?.getTracks().forEach((t) => t.stop())
+    void ctx.close()
+    throw e
+  }
+  const mic = stream
+  const src = ctx.createMediaStreamSource(mic)
   const node = new AudioWorkletNode(ctx, 'trace-capture')
   src.connect(node)
 
@@ -99,7 +86,7 @@ export async function startDictation(o: { language: string; repo?: string } & Di
     node.port.onmessage = null
     src.disconnect()
     node.disconnect()
-    stream.getTracks().forEach((t) => t.stop())
+    mic.getTracks().forEach((t) => t.stop())
     void ctx.close()
     o.onEnd?.()
   }
