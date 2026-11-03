@@ -8,6 +8,10 @@
  *                           (the status of the oldest MAX_STATUS only: each costs two GitHub calls)
  *   change.get      read    { repo, number } → ChangeDetail: what trace did, its files, checks, the requirements it
  *                           names, trace's recommendation, and whether this person may accept it now (and if not, why)
+ *   change.check    read    { repo, number, id } → CheckDetail (src/api/changes.ts): one check of its head commit in full,
+ *                           by the id checks_list gives (cr:<check run id>, job:<Actions job id>): its report, its
+ *                           annotations and, for a GitHub Actions job, the end of its log (null when it cannot be read).
+ *                           A check of another commit is refused. Its GitHub link only for admins
  *   change.diff     read    { repo, number, path } → one file's patch, and the refs to read it before and after (the
  *                           review page opens schematic and board files there, in the viewer)
  *   change.accept   write   { repo, number, head_sha, note? } → { merged, sha, stage, next, warning? }: `head_sha` is
@@ -55,7 +59,7 @@ import { Composer, NO_LAYERS } from '../prompts/resolve.js'
 import { ActionError, type Context, PROJECT_DB_PATH, Repo, TaskBranch, agentFacts, def, label, tempDb, withJourneyDb, writeJourney } from './action-kit.js'
 import { AGENT_WORDS, jobIndex } from './actions-jobs.js'
 import {
-  type ChangeDetail, type ChangeFacts, type ChangeSummary, type TraceRule, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, editAcceptance, editFacts, editOf,
+  CHECK_ANNOTATIONS, type CheckDetail, annotationLevel, checkLines, checkText, type ChangeDetail, type ChangeFacts, type ChangeSummary, type TraceRule, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, editAcceptance, editFacts, editOf,
   editRecommendation, editSummary, editVerdict, editsByBranch, fileKind, jobRequest, jobsByBranch, readySince, recommendationOf, requirementIds, settleUnfinished, summaryBullets, traceChanges,
   traceJob, unfinishedWords, verdictOf,
 } from './changes.js'
@@ -66,6 +70,7 @@ import { resolveConflicts, resolveWords } from './conflicts.js'
 import { GitHubError, type GitHubApi, type MergeMethod, type PullDetail, type PullStatus, type PullSummary } from './github.js'
 import { SETTINGS_TTL_MS, cached } from './github-cache.js'
 import { recordRework, recordWait } from './process-metrics.js'
+import { jobLogEnd, repoJob } from './actions-health.js'
 import { backToDefine, changedRequirements } from './pending-changes.js'
 
 /** At most this many open changes get their status read (two GitHub calls each) in one list or journey. */
@@ -249,7 +254,7 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     cached(keep, repo, `status:${number}:${sha}`, () => gh.pullStatus(repo, number), DETAIL_STATUS_TTL_MS),
     cached(ctx.deps.githubCache, repo, `files:${number}:${sha}`, () => gh.pullFiles(repo, number)).catch(() => []),
     cached(ctx.deps.githubCache, repo, `commits:${number}:${sha}`, () => gh.pullCommits(repo, number)).catch(() => []),
-    cached(keep, repo, `runs:${sha}`, () => gh.checkRuns(repo, sha), DETAIL_STATUS_TTL_MS).catch(() => null), writes(ctx, repo),
+    cached(keep, repo, `runs:${sha}`, () => gh.checkRuns(repo, sha, { jobs: true }), DETAIL_STATUS_TTL_MS).catch(() => null), writes(ctx, repo),
     projectApprovals(ctx, repo),
   ])
   const hold = rule.hold
@@ -260,7 +265,7 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   if (unfinished) facts.unfinished = unfinished
   // it waited on a person's approval: once given, it is finished (src/api/changes.ts settleUnfinished)
   settleUnfinished(facts, { title: pull.title, summary: job.summary, body: pull.body }, given)
-  const checksList = (runs ?? []).map((c) => ({ name: c.name, state: checkState(c), summary: c.summary }))
+  const checksList = checkLines(runs)
   const requirements = requirementIds(pull.title, pull.body, ...commits)
   const passed = checksList.filter((c) => c.state === 'passed').map((c) => c.name)
   return {
@@ -275,6 +280,61 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     base: pull.base, head: { ref: pull.head.ref, sha: pull.head.sha },
     ready_since: readySince(runs, pull.created_at),
     rule_blocks: ruleBlocks(facts), may_discard: write, may_ask: write,
+  }
+}
+
+/** How much of an Actions job's log end change.check answers. */
+export const CHECK_LOG_MAX = 64 * 1024
+/** A check's id as checks_list gives it. */
+const CheckId = z.string().max(40).regex(/^(cr|job):[1-9]\d{0,18}$/, 'a check id from checks_list (cr:<id> or job:<id>)')
+
+/**
+ * One check of change `number`'s head commit in full (CheckDetail). The change must be one of trace's (traceChange),
+ * and the check must have run on its head commit: a check of any other commit is refused. The log is the end of the
+ * GitHub Actions job's log (a check run GitHub Actions made has its job's id), null when there is none or it cannot
+ * be read; reading it never fails the answer.
+ */
+async function checkDetail(ctx: Context, repo: string, number: number, id: string): Promise<CheckDetail> {
+  const gh = changesApi(await ctx.deps.github())
+  const { pull } = await traceChange(ctx, gh, repo, number)
+  const sha = pull.head.sha
+  const [kind, raw] = id.split(':') as ['cr' | 'job', string]
+  const n = Number(raw)
+  const none = (): ActionError => new ActionError(`Change #${number} has no check ${id} on its latest commit.`)
+  const admin = isAdmin(ctx.principal)
+  const logOf = async (job: number, status: string): Promise<CheckDetail['log']> => {
+    try { return await jobLogEnd(ctx, repo, job, status, CHECK_LOG_MAX) } catch { return null }
+  }
+  if (kind === 'cr') {
+    if (typeof gh.checkRun !== 'function') throw new ActionError('This installation cannot open a check in the app yet: its update brings it.')
+    const cr = await cached(ctx.deps.githubCache, repo, `check:${n}`, () => gh.checkRun!(repo, n), DETAIL_STATUS_TTL_MS)
+    if (!cr || cr.head_sha !== sha) throw none()
+    const [annotations, log] = await Promise.all([
+      cr.annotations > 0 && typeof gh.checkAnnotations === 'function'
+        ? cached(ctx.deps.githubCache, repo, `annotations:${n}:${cr.status}`, () => gh.checkAnnotations!(repo, n, CHECK_ANNOTATIONS), DETAIL_STATUS_TTL_MS).catch(() => [])
+        : Promise.resolve([]),
+      cr.app === 'github-actions' ? logOf(cr.id, cr.status) : Promise.resolve(null),
+    ])
+    return {
+      id, name: cr.name, state: checkState(cr), summary: (cr.title || cr.summary || null)?.slice(0, 300) ?? null,
+      text: checkText(cr.summary, cr.text), started_at: cr.started_at, completed_at: cr.completed_at,
+      annotations: annotations.slice(0, CHECK_ANNOTATIONS).map((a) => ({ path: a.path, line: a.start_line, level: annotationLevel(a.level), title: a.title, message: a.message.slice(0, 4000) })),
+      log, ...(admin && cr.url ? { url: cr.url } : {}),
+    }
+  }
+  // a workflow run's job: one of this repository's runs, on this commit
+  let job: Awaited<ReturnType<typeof repoJob>>
+  try {
+    job = await cached(ctx.deps.githubCache, repo, `job:${n}`, () => repoJob(ctx, repo, n), DETAIL_STATUS_TTL_MS)
+  } catch (e) {
+    if (e instanceof ActionError) throw none()
+    throw e
+  }
+  if (job.head_sha !== sha) throw none()
+  return {
+    id, name: job.name, state: checkState({ status: job.status, conclusion: job.conclusion ?? null }), summary: null, text: null,
+    started_at: job.started_at ?? null, completed_at: job.completed_at ?? null, annotations: [],
+    log: await logOf(job.id, job.status), ...(admin && job.html_url ? { url: job.html_url } : {}),
   }
 }
 
@@ -297,13 +357,13 @@ async function editDetail(ctx: Context, gh: ReturnType<typeof changesApi>, repo:
     cached(keep, repo, `status:${number}:${sha}`, () => gh.pullStatus(repo, number), DETAIL_STATUS_TTL_MS),
     cached(ctx.deps.githubCache, repo, `files:${number}:${sha}`, () => gh.pullFiles(repo, number)).catch(() => null),
     cached(ctx.deps.githubCache, repo, `commits:${number}:${sha}`, () => gh.pullCommits(repo, number)).catch(() => []),
-    cached(keep, repo, `runs:${sha}`, () => gh.checkRuns(repo, sha), DETAIL_STATUS_TTL_MS).catch(() => null),
+    cached(keep, repo, `runs:${sha}`, () => gh.checkRuns(repo, sha, { jobs: true }), DETAIL_STATUS_TTL_MS).catch(() => null),
   ])
   const sum = editSummary({ pull: { ...pull, labels: pull.labels }, edit, status, hold: rule.hold, viewerSub: ctx.principal.sub })
   const facts = factsOf(pull, status?.checks ?? null, status?.checks_denied ?? false)
   const mine = edit.by_sub === ctx.principal.sub
   const admin = isAdmin(ctx.principal)
-  const checksList = (runs ?? []).map((c) => ({ name: c.name, state: checkState(c), summary: c.summary }))
+  const checksList = checkLines(runs)
   return {
     ...sum,
     verdict: editVerdict(facts, edit),
@@ -407,6 +467,8 @@ export const CHANGE_ACTIONS = {
   }),
 
   'change.get': def('read', ChangeArgs, async ({ repo, number }, ctx) => { spend(ctx); return changeDetail(ctx, repo, number) }),
+
+  'change.check': def('read', ChangeArgs.extend({ id: CheckId }), async ({ repo, number, id }, ctx) => { spend(ctx); return checkDetail(ctx, repo, number, id) }),
 
   'change.diff': def('read', ChangeArgs.extend({ path: RepoPath }), async ({ repo, number, path }, ctx) => {
     spend(ctx)

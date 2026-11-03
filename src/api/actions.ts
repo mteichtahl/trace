@@ -11,8 +11,10 @@
  *   pull.status   read                  one pull request: open, merged or closed, whether it can merge, its head commit's checks
  *   settings.get  read                  the project's settings (.trace/project.db on the default branch), resolved
  *   runs          read                  the project's run record (newest first; kind, limit, agent: one agent's runs;
- *                                       each run names the agent whose session made it, null for a person's own)
- *   run           read                  one run: args, result, measurements, artifact list
+ *                                       each run names the agent and the job whose session made it, null for a
+ *                                       person's own)
+ *   run           read                  one run: args, result, measurements, artifact list, and `session`: the runs
+ *                                       of the same job, oldest first (Work.session), null when it has no job
  *   artifact      read                  one artifact's bytes (base64), at most 8 MB
  *   tools.list    read                  the tools (never the hardware ones), and which of them need write
  *   tool          read | write          run a tool on the project's own worker runtime (src/agents/runtime/tool.ts), on
@@ -104,8 +106,8 @@
  *   actions-cost.ts      cost.get, usage.month
  *   actions-skills.ts    skill.get, skill.draft, skill.drafts, skill.submit
  *   actions-design.ts    design.decide
- *   actions-changes.ts   changes.list, change.get, change.diff, change.accept, change.ask, change.discard (people's app
- *                        edits too: src/api/edits.ts, apply-edits.ts, docs/stay-in-trace.md)
+ *   actions-changes.ts   changes.list, change.get, change.check, change.diff, change.accept, change.ask, change.discard
+ *                        (people's app edits too: src/api/edits.ts, apply-edits.ts, docs/stay-in-trace.md)
  *   actions-rules.ts     repo.rules.fix
  *   actions-handin.ts    design.handin (KiCad files handed in: one commit on trace/handin-…, recorded as an app edit)
  *   actions-deploys.ts   deploys.get (read); deploy.approve, deploy.skip, deploy.rollback (write, and a trace admin or a
@@ -120,7 +122,7 @@
  *   actions-hooks.ts     hook.members (the web backend's own identity only: who to tell when GitHub says a change moved)
  *   actions-services.ts  services.list, services.create, services.update, services.assign, services.unassign,
  *                        services.rotate, services.retire_secret, services.delete, services.history (connected systems)
- *   actions-changes.ts   changes.list, change.get, change.diff (read); change.accept, change.ask, change.discard (write,
+ *   actions-changes.ts   changes.list, change.get, change.check, change.diff (read); change.accept, change.ask, change.discard (write,
  *                        never a connected system's): the pull requests trace's jobs opened, reviewed and accepted
  *                        in the app as changes (docs/guided-flow.md)
  *
@@ -501,7 +503,8 @@ export const ACTIONS = {
     try {
       const r = w.run(a.id)
       if (!r) throw new ActionError(`no run ${a.id}`)
-      return r
+      // the other runs of the same job's session: its steps (docs/ui/phone-results.md)
+      return { ...r, session: w.session(a.id) }
     } finally { w.close() }
   })),
 

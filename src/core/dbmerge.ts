@@ -29,7 +29,7 @@ function settings(db: DatabaseSync): Map<string, Setting> {
 
 function opened(path: string): DatabaseSync {
   const db = open(path, { wal: false })
-  // the same columns on all three sides (runs.agent added to older ones), so SELECT * lines up
+  // the same columns on all three sides (runs.agent and runs.job added to older ones), so SELECT * lines up
   applyProjectSchema(db)
   return db
 }

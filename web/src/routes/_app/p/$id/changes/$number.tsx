@@ -10,15 +10,19 @@
  * A repository whose rule asks for a review trace cannot give shows admins "Fix the rule and accept" (repo.rules.fix).
  *
  * Data: change.get (asked for again while GitHub works out whether it can merge, every 5 s, and while checks run, as a
- * fallback to the events; the bar says when it looks next), change.runs (its checks as GitHub's jobs, with their steps
- * and Watch: components/changes/change-checks.tsx), change.diff per file, journey.get (step words).
+ * fallback to the events; the bar says when it looks next), change.diff per file, journey.get (step words).
  */
 import { useQuery } from '@tanstack/react-query'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, ShieldAlert, Sparkles } from 'lucide-react'
+import { ArrowLeft, ChevronRight, CircleCheck, CircleDashed, FileStack, Loader2, ShieldAlert, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { MoreForAdmins } from '@/components/more-for-admins'
+import { CHECK_ICON, CheckRow, CheckSheet, ChecksSheet, checksLine, checksState, order } from '@/components/changes/check-sheet'
+import { ChangeChecks, jobFor } from '@/components/changes/change-checks'
+import { RunSheet } from '@/components/run-sheet'
+import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
+import { useMediaQuery } from '@/hooks/use-media-query'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/lib/auth'
 import { call } from '@/lib/api'
@@ -26,7 +30,6 @@ import { useState } from 'react'
 import { useTraceContext } from '@/components/chat/context'
 import { ChangeFileView } from '@/components/changes/change-file-view'
 import { viewerKind } from '@/components/files/kinds'
-import { ChangeChecks } from '@/components/changes/change-checks'
 import { ChangeRequirements } from '@/components/changes/change-requirements'
 import { DecisionBar } from '@/components/changes/decision-bar'
 import { useChangeActions } from '@/components/changes/use-change-actions'
@@ -39,9 +42,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { repoOf } from '@/lib/api'
 import { changeLookEvery, useLiveStatus, useNextLook } from '@/lib/live'
 import { ago } from '@/lib/format'
-import { KIND_TAG, changeOf, currentStage, nextPlace, recommendationWords, stepWords } from '@/lib/guided'
+import { KIND_TAG, changeOf, checksWords, currentStage, nextPlace, recommendationWords, stepWords } from '@/lib/guided'
 import { q, useJourney, useProjects } from '@/lib/queries'
-import type { ChangeDetail, ChangeFile } from '@/lib/types'
+import type { ChangeDetail, ChangeFile, CheckJob } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/_app/p/$id/changes/$number')({
@@ -66,15 +69,23 @@ function Review() {
   // GitHub says nothing when it finishes working out whether it can merge: look again often until it has, and say when
   const c = useQuery({ ...q('change.get', { repo, number }), refetchInterval: (x) => changeLookEvery(x.state.data, live) })
   const nextLook = useNextLook(c.dataUpdatedAt, changeLookEvery(c.data, live))
-  // the checks as GitHub's jobs, with their steps: refreshed by log.appended and the change's events; polled with it
-  // only while the live connection is down
+  // the checks as GitHub's jobs, with their steps (docs/progress-and-logs.md): refreshed by log.appended and the change's
+  // events; polled with the change only while the live connection is down
   const runs = useQuery({ ...q('change.runs', { repo, number }), enabled: !!c.data, retry: false, refetchInterval: () => (live === 'live' ? false : changeLookEvery(c.data, live)) })
   const jobs = runs.data?.jobs
   const jobsShown = !!jobs?.length
+  // a running check opened from the phone's list: its live log (the others open their result sheet)
+  const [watch, setWatch] = useState<CheckJob | null>(null)
+  const watching = watch ? (jobs?.find((x) => x.id === watch.id) ?? watch) : null
   const actions = useChangeActions(repo)
   const coverage = useCoverage(repo)
   const [note, setNote] = useState('')
   const [picked, setPicked] = useState<string | null>(null)
+  const phone = useMediaQuery('(max-width: 767px)')
+  // the checks list (phone) and the one check open in its sheet (an index into checks_list)
+  const [checksOpen, setChecksOpen] = useState(false)
+  const [check, setCheck] = useState<number | null>(null)
+  const [filesOpen, setFilesOpen] = useState(false)
   useCrumb('/_app/p/$id/changes/$number', c.data?.title ?? `Change ${raw}`)
   useTraceContext({ label: c.data?.title ?? 'A change', description: 'The change the person is reviewing', value: c.data ? { number, title: c.data.title, files: c.data.files.map((f) => f.path), recommendation: c.data.recommendation } : { number } }, 'screen')
 
@@ -94,7 +105,7 @@ function Review() {
 
   return (
     <div className="pt-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-medium">
             <span className={cn('rounded px-1.5 py-0.5', forYou ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground')}>
@@ -107,6 +118,7 @@ function Review() {
             {edit && d.kind && KIND_TAG[d.kind] ? <span className="mr-1.5 rounded bg-muted px-1.5 py-0.5 text-xs font-medium text-foreground">{KIND_TAG[d.kind]}</span> : null}
             {edit ? `Made by ${d.mine ? 'you' : d.by_name ?? 'someone'}` : `From ${d.from}`} · {ago(d.opened_at)} · change {d.number}{d.draft ? ' · a draft' : ''}
           </p>
+          {phone && <ChecksLine d={d} onOpen={() => setChecksOpen(true)} />}
         </div>
         <MoreForAdmins links={[d.url ? { label: 'This change on GitHub', href: d.url } : null]} />
       </div>
@@ -115,7 +127,7 @@ function Review() {
       <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0 space-y-5">
           {/* checks with steps and Watch need the room of the main column */}
-          {jobsShown && <ChangeChecks d={d} jobs={jobs} repo={repo} />}
+          {!phone && jobsShown && <ChangeChecks d={d} jobs={jobs} repo={repo} onOpenCheck={setCheck} />}
           <section className="rounded-xl border bg-card p-5" aria-labelledby="did">
             <h3 id="did" className="section-label">{edit ? 'What it changes' : 'What trace did'}</h3>
             {d.summary.length ? (
@@ -127,6 +139,16 @@ function Review() {
             )}
           </section>
 
+          {phone ? (
+            <button type="button" onClick={() => setFilesOpen(true)} className="flex min-h-[52px] w-full items-center gap-3 rounded-xl border bg-card px-4 py-3 text-left active:bg-muted">
+              <FileStack className="size-5 shrink-0 text-muted-foreground" aria-hidden />
+              <span className="min-w-0 flex-1">
+                <span className="block text-[15px] font-medium">Files · {d.files.length} changed</span>
+                <span className="block truncate text-xs text-muted-foreground">{d.files.map((f) => fileName(f.path)).join(', ') || 'This change touches no files.'}</span>
+              </span>
+              <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            </button>
+          ) : (
           <section className="grid overflow-hidden rounded-xl border bg-card md:grid-cols-[220px_minmax(0,1fr)]" aria-label="Files">
             <ul className="border-b md:border-b-0 md:border-r" aria-label={`${d.files.length} files changed`}>
               {d.files.map((f) => (
@@ -151,6 +173,7 @@ function Review() {
               {file ? <ChangeFileView key={file.path} repo={repo} number={number} file={file} /> : <p className="p-5 text-sm text-muted-foreground">This change touches no files.</p>}
             </div>
           </section>
+          )}
 
           {part !== 'reviewer' && d.state === 'open' && d.may_ask !== false && (
             <section className="rounded-xl border bg-card p-5">
@@ -162,7 +185,7 @@ function Review() {
         </div>
 
         <aside className="space-y-4">
-          {!jobsShown && <ChangeChecks d={d} jobs={jobs} repo={repo} />}
+          {!phone && !jobsShown && <Checks d={d} onOpen={setCheck} />}
           <section className="rounded-xl border bg-card p-5" aria-labelledby="reqs">
             <h3 id="reqs" className="section-label">Requirements it covers</h3>
             <ChangeRequirements
@@ -179,6 +202,16 @@ function Review() {
         </aside>
       </div>
 
+      <ChecksSheet open={checksOpen} onOpenChange={setChecksOpen} checks={d.checks_list} counts={d.checks} onPick={(i) => {
+        setChecksOpen(false)
+        const job = jobFor(d.checks_list[i], jobs)
+        if (job && (job.state === 'running' || job.state === 'queued')) setWatch(job)
+        else setCheck(i)
+      }} />
+      {watching && <RunSheet repo={repo} run={watching.run} title={watching.name} open onOpenChange={(o) => !o && setWatch(null)} facts={{ check: watching, finished: !['queued', 'running'].includes(watching.state) }} />}
+      <CheckSheet repo={repo} number={number} checks={d.checks_list} index={check} onIndex={setCheck} />
+      {phone && <PhoneFiles open={filesOpen} onOpenChange={setFilesOpen} repo={repo} number={number} files={d.files} />}
+
       <DecisionBar
         className="mt-6"
         change={d}
@@ -193,6 +226,89 @@ function Review() {
         onResolve={() => actions.resolve.mutate({ number, title: d.title })}
       />
     </div>
+  )
+}
+
+/** On a phone: how the checks went, in one line under the title; it opens the checks list. */
+function ChecksLine({ d, onOpen }: { d: ChangeDetail; onOpen: () => void }) {
+  const st = checksState(d.checks_list)
+  const I = st ? CHECK_ICON[st] : null
+  return (
+    <button type="button" onClick={onOpen} className="mt-2 -ml-1 flex min-h-11 items-center gap-2 rounded-md px-1 text-left text-[15px] font-medium active:bg-muted">
+      {I ? <I.icon className={cn('size-4 shrink-0', I.cls)} aria-hidden /> : <CircleDashed className="size-4 shrink-0 text-muted-foreground" aria-hidden />}
+      <span>{checksLine(d.checks_list, d.checks)}</span>
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+      <span className="sr-only">: open the checks</span>
+    </button>
+  )
+}
+
+/** On a phone: the change's files in a bottom sheet, the list first and then one file in trace's viewer. */
+function PhoneFiles({ open, onOpenChange, repo, number, files }: { open: boolean; onOpenChange: (o: boolean) => void; repo: string; number: number; files: ChangeFile[] }) {
+  const [path, setPath] = useState<string | null>(null)
+  const f = files.find((x) => x.path === path)
+  return (
+    <Drawer open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) setPath(null) }}>
+      <DrawerContent className={cn('max-h-none', f ? 'h-[92dvh]' : 'max-h-[90dvh]')}>
+        <DrawerHeader className="flex-row items-center gap-2 text-left">
+          {f && <Button variant="ghost" size="icon" className="-ml-2 size-9" onClick={() => setPath(null)} aria-label="Back to the files"><ArrowLeft aria-hidden /></Button>}
+          <div className="min-w-0 flex-1">
+            <DrawerTitle className="truncate">{f ? fileName(f.path) : `Files · ${files.length} changed`}</DrawerTitle>
+            <DrawerDescription className="truncate">{f ? f.path : 'Open one to see what changed in it.'}</DrawerDescription>
+          </div>
+        </DrawerHeader>
+        {f ? (
+          <div className="min-h-0 flex-1 overflow-hidden border-t"><ChangeFileView key={f.path} repo={repo} number={number} file={f} /></div>
+        ) : (
+          <ul className="overflow-y-auto px-2 pb-6">
+            {files.map((x) => (
+              <li key={x.path}>
+                <button type="button" onClick={() => setPath(x.path)} className="flex min-h-[52px] w-full items-center gap-3 rounded-lg px-2 py-2 text-left active:bg-muted">
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[15px]">{fileName(x.path)}</span>
+                    <span className="block text-xs text-muted-foreground">{x.kind === 'binary' && viewerKind(x.path) === 'database' ? 'Database' : FILE_TAG[x.kind]}</span>
+                  </span>
+                  <span className="shrink-0 font-mono text-xs">
+                    {x.additions > 0 && <span className="text-verified">+{x.additions}</span>}
+                    {x.deletions > 0 && <span className="ml-1 text-destructive">−{x.deletions}</span>}
+                  </span>
+                  <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </DrawerContent>
+    </Drawer>
+  )
+}
+
+function Checks({ d, onOpen }: { d: ChangeDetail; onOpen: (i: number) => void }) {
+  const [all, setAll] = useState(false)
+  const list = d.checks_list
+  // failing and running first, so what needs attention is never folded away
+  const seq = order(list)
+  const shown = all ? seq : seq.slice(0, 3)
+  const rest = list.length - shown.length
+  return (
+    <section className="rounded-xl border bg-card p-5" aria-labelledby="checks">
+      <h3 id="checks" className="section-label">Checks · {checksWords(d.checks)}</h3>
+      {list.length === 0 ? (
+        <p className="mt-2 flex items-center gap-2 text-sm text-muted-foreground"><CircleDashed className="size-4" aria-hidden />{d.checks === null ? 'trace could not read the checks.' : 'No checks have run yet.'}</p>
+      ) : (
+        <ul className="-mx-2 mt-2 space-y-0.5 text-sm">
+          {shown.map((i) => <li key={`${list[i]!.name}-${i}`}><CheckRow check={list[i]!} onOpen={() => onOpen(i)} /></li>)}
+          {rest > 0 && (
+            <li>
+              <button type="button" onClick={() => setAll(true)} className="flex items-center gap-2 px-2 py-1.5 text-sm">
+                <CircleCheck className={cn('size-4', seq.slice(3).every((i) => list[i]!.state === 'passed') ? 'text-verified' : 'text-muted-foreground')} aria-hidden />
+                {rest} more {rest === 1 ? 'check' : 'checks'} <span className="text-primary">show</span>
+              </button>
+            </li>
+          )}
+        </ul>
+      )}
+    </section>
   )
 }
 

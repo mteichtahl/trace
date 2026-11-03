@@ -59,6 +59,7 @@ def main():
         "compute_types": types,
         "devices": devices,
         "gltf_import": C.gltf_importer_works(),
+        "x3d_import": C.x3d_importer_works(),
         "denoisers": denoisers() + (["OPTIX"] if any(d["type"] == "OPTIX" for d in devices) else []),
         "python": sys.version.split()[0],
     }

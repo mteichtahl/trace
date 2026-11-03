@@ -431,9 +431,15 @@ function RowCard<T>({ row, onClick }: { row: Row<T>; onClick?: (r: T) => void })
         role={onClick ? 'button' : undefined}
         tabIndex={onClick ? 0 : undefined}
         onClick={onClick ? () => onClick(row.original) : undefined}
-        className="rounded-xl border bg-card p-4"
+        onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(row.original) } } : undefined}
+        className={cn('rounded-xl border bg-card p-4', onClick && 'cursor-pointer transition-colors hover:bg-muted/40 active:bg-muted focus-visible:outline-2 focus-visible:outline-ring')}
       >
-        {first && <div className="font-medium">{render(first)}</div>}
+        {first && (
+          <div className="flex items-start gap-2 font-medium">
+            <div className="min-w-0 flex-1">{render(first)}</div>
+            {onClick && <ChevronRight data-testid="row-chevron" className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />}
+          </div>
+        )}
         <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
           {rest.map((c) => (
             <div key={c.id} className="contents">

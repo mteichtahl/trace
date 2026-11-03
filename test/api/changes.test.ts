@@ -16,14 +16,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, type JobsApi, perform } from '../../src/api/actions.js'
 import { AGENT_WORDS, jobIndex } from '../../src/api/actions-jobs.js'
 import { journeyStore } from '../../src/api/action-kit.js'
-import { mergeMethod, neutralise, revisionRequest } from '../../src/api/actions-changes.js'
+import { CHECK_LOG_MAX, mergeMethod, neutralise, revisionRequest } from '../../src/api/actions-changes.js'
 import {
   type ChangeFacts, type TraceRule, CHECKS_DENIED, creditedAgent, fromWords, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, requirementIds, summaryBullets, traceChanges, verdictOf,
-  readySince,
+  readySince, CHECK_TEXT_MAX, checkLines, checkText,
 } from '../../src/api/changes.js'
 import { GitHubBudget, GitHubCache } from '../../src/api/github-cache.js'
 import type { JobRow } from '../../src/core/job-index.js'
-import { type CheckRunDetail, GitHubError, HttpGitHub, type MergeMethod, type PullDetail, type PullFile, type PullStatus, type PullSummary } from '../../src/api/github.js'
+import { type CheckAnnotation, type CheckRunDetail, type CheckRunFull, GitHubError, HttpGitHub, type MergeMethod, type PullDetail, type PullFile, type PullStatus, type PullSummary } from '../../src/api/github.js'
 import { AccessDenied, type Principal, assign } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
 import { putJob } from '../../src/core/job-index.js'
@@ -221,6 +221,48 @@ describe('HttpGitHub: the changes\' calls', () => {
   })
 })
 
+describe('HttpGitHub: what change.check reads', () => {
+  it('a check run in full and its annotations; null for one GitHub does not know; check runs carry their id', async () => {
+    const gh = new HttpGitHub('t', { base: 'https://api.test', fetch: (async (u: string) => {
+      const url = new URL(u)
+      if (url.pathname === '/repos/a/b/check-runs/7') return json({ id: 7, name: 'erc', status: 'completed', conclusion: 'failure', head_sha: 'h1', started_at: 's', completed_at: 'c', html_url: 'https://github.com/a/b/runs/7', details_url: 'd', app: { slug: 'github-actions' }, output: { title: 'ERC failed', summary: '2 errors', text: 'details', annotations_count: 1 } })
+      if (url.pathname === '/repos/a/b/check-runs/7/annotations') return json([{ path: 'hw/a.kicad_sch', start_line: 12, annotation_level: 'failure', title: 'pin', message: 'unconnected' }, { path: 'x', annotation_level: 'warning' }])
+      if (url.pathname === '/repos/a/b/commits/h1/check-runs') return json({ check_runs: [{ id: 7, name: 'erc', status: 'completed', conclusion: 'failure', output: { title: 'ERC failed' } }] })
+      return json({ message: 'Not Found' }, 404)
+    }) as typeof fetch })
+    expect(await gh.checkRun('a/b', 7)).toEqual({ id: 7, name: 'erc', status: 'completed', conclusion: 'failure', head_sha: 'h1', started_at: 's', completed_at: 'c', title: 'ERC failed', summary: '2 errors', text: 'details', annotations: 1, app: 'github-actions', url: 'https://github.com/a/b/runs/7', details_url: 'd' })
+    expect(await gh.checkRun('a/b', 8)).toBeNull()
+    expect(await gh.checkAnnotations('a/b', 7, 50)).toEqual([
+      { path: 'hw/a.kicad_sch', start_line: 12, level: 'failure', title: 'pin', message: 'unconnected' },
+      { path: 'x', start_line: null, level: 'warning', title: null, message: '' },
+    ])
+    expect(await gh.checkRuns('a/b', 'h1')).toEqual([{ id: 'cr:7', name: 'erc', status: 'completed', conclusion: 'failure', summary: 'ERC failed' }])
+  })
+
+  it('a token that cannot read check runs: with jobs, each workflow run is read as its jobs, each with its job id', async () => {
+    const gh = new HttpGitHub('github_pat_x', { base: 'https://api.test', fetch: (async (u: string) => {
+      const url = new URL(u)
+      if (url.pathname.endsWith('/check-runs')) return json({ message: 'no' }, 403)
+      if (url.pathname === '/repos/a/b/actions/runs') return json({ workflow_runs: [
+        { id: 1, name: 'ci', path: 'ci.yml', event: 'pull_request', status: 'completed', conclusion: 'failure', head_branch: 'x', html_url: 'u', created_at: '2026-11-01T00:00:00Z' },
+        { id: 2, name: 'docs', path: 'docs.yml', event: 'pull_request', status: 'completed', conclusion: 'success', head_branch: 'x', html_url: 'u', created_at: '2026-11-01T00:00:00Z' },
+      ] })
+      if (url.pathname === '/repos/a/b/actions/runs/1/jobs') return json({ jobs: [{ id: 11, name: 'erc', status: 'completed', conclusion: 'failure', completed_at: 'c1' }, { id: 12, name: 'drc', status: 'in_progress', conclusion: null }] })
+      if (url.pathname === '/repos/a/b/commits/h1/status') return json({ statuses: [{ context: 'lint', state: 'success' }] })
+      return json({ message: 'Not Found' }, 404)
+    }) as typeof fetch })
+    expect(await gh.checkRuns('a/b', 'h1', { jobs: true })).toEqual([
+      { name: 'erc', status: 'completed', conclusion: 'failure', summary: null, id: 'job:11', completed_at: 'c1' },
+      { name: 'drc', status: 'in_progress', conclusion: null, summary: null, id: 'job:12' },
+      // a run whose jobs cannot be read stays one check, with nothing to open
+      { name: 'docs', status: 'completed', conclusion: 'success', summary: null },
+      { name: 'lint', status: 'completed', conclusion: 'success', summary: null },
+    ])
+    // without jobs: one check per workflow, as before
+    expect((await gh.checkRuns('a/b', 'h1')).map((c) => c.name)).toEqual(['ci', 'docs', 'lint'])
+  })
+})
+
 // ------------------------------------------------------------------ the actions
 
 const ADMIN = { sub: 'c-admin', email: 'c-admin@example.com', groups: ['trace-admins'] }
@@ -258,7 +300,7 @@ class ChangesGitHub extends FakeGitHub {
     this.pulls.set(number, {
       detail, status: { number, title, url: detail.url, state: 'open', draft: false, mergeable: detail.mergeable, head, sha: detail.head.sha, updated_at: detail.updated_at, checks: c, ...(o.checks_denied ? { checks_denied: true } : {}) },
       files: [{ path: 'hw/power.kicad_sch', status: 'modified', additions: 10, deletions: 2, patch: null, previous: null }, { path: 'docs/notes.md', status: 'added', additions: 3, deletions: 0, patch: '@@ +1,3 @@', previous: null }],
-      commits: [`${title}\n\ncovers R2`], runs: [{ name: 'build', status: 'completed', conclusion: c && c.failed ? 'failure' : 'success', summary: 'Built.' }],
+      commits: [`${title}\n\ncovers R2`], runs: [{ name: 'build', status: 'completed', conclusion: c && c.failed ? 'failure' : 'success', summary: 'Built.', id: `cr:${number * 100}` }],
     })
   }
   private live(): void { if (this.down) throw new Error('GitHub is unreachable') }
@@ -276,6 +318,24 @@ class ChangesGitHub extends FakeGitHub {
   async pullCommits(_r: string, n: number): Promise<string[]> { return this.pulls.get(n)?.commits ?? [] }
   async checkRuns(_r: string, s: string): Promise<CheckRunDetail[]> { this.read(`runs ${s}`); return [...this.pulls.values()].find((p) => p.detail.head.sha === s)?.runs ?? [] }
   async repoVariable(_r: string, name: string): Promise<string | null> { return this.vars.get(name) ?? null }
+  /** check runs by id, their annotations, and the generic calls (an Actions job, its log) by path */
+  checks = new Map<number, CheckRunFull>()
+  notes = new Map<number, CheckAnnotation[]>()
+  answers = new Map<string, unknown>()
+  texts = new Map<string, string>()
+  async checkRun(_r: string, id: number): Promise<CheckRunFull | null> { this.read(`check ${id}`); return this.checks.get(id) ?? null }
+  async checkAnnotations(_r: string, id: number, max: number): Promise<CheckAnnotation[]> { return (this.notes.get(id) ?? []).slice(0, max) }
+  async request(method: string, path: string): Promise<unknown> {
+    const a = this.answers.get(path.split('?')[0]!)
+    if (a === undefined) throw new GitHubError(404, `GitHub ${method} ${path}: 404`)
+    return a
+  }
+  async requestText(path: string, max: number): Promise<{ text: string; truncated: boolean }> {
+    const t = this.texts.get(path)
+    if (t === undefined) throw new GitHubError(404, 'gone')
+    const b = Buffer.from(t)
+    return b.length > max ? { text: b.subarray(b.length - max).toString('utf8'), truncated: true } : { text: t, truncated: false }
+  }
   async mergeMethods(): Promise<MergeMethod[]> { return this.methods }
   async mergePull(_r: string, n: number, o: { method: MergeMethod; sha: string }): Promise<{ sha: string }> {
     if (this.mergeRefusal) throw this.mergeRefusal
@@ -330,6 +390,7 @@ beforeAll(async () => {
 beforeEach(() => {
   github.pulls.clear(); github.did.length = 0; github.mergeRefusal = null; github.down = false; started.length = 0; github.commentRefusal = false; logs.length = 0
   github.reads.clear(); github.vars.set('TRACE_AGENT_LOGIN', 'trace-bot')
+  github.checks.clear(); github.notes.clear(); github.answers.clear(); github.texts.clear()
   github.add(1, 'claude/task-reqs', { title: 'Project purpose and requirements R1-R4', labels: ['no-automerge'] })
   github.add(2, 'claude/task-sch', { mergeable: 'unstable', checks: { total: 2, passed: 1, failed: 1, running: 0, skipped: 0, failing: ['kicad-erc'] } })
   github.add(3, 'marc/my-own', {})
@@ -414,7 +475,7 @@ describe('changes.list and change.get', () => {
     expect(d).toMatchObject({
       number: 1, summary: ['extracted R1 to R4', 'each with a measurable criterion'], requirements: ['R1', 'R2', 'R3', 'R4'],
       files: [{ path: 'hw/power.kicad_sch', kind: 'schematic', status: 'modified' }, { path: 'docs/notes.md', kind: 'text', status: 'added' }],
-      checks_list: [{ name: 'build', state: 'passed', summary: 'Built.' }],
+      checks_list: [{ id: 'cr:100', name: 'build', state: 'passed', summary: 'Built.' }],
       recommendation: { verdict: 'accept', why: 'Its check passed (build), and it can be merged. It covers R1, R2, R3 and R4.' },
       may_accept: true, blockers: [], base: { ref: 'main', sha: 'base-sha' }, head: { ref: 'claude/task-reqs', sha: sha(1) },
     })
@@ -455,6 +516,91 @@ describe('changes.list and change.get', () => {
     await expect(run(USER, 'change.ask', { repo: REPO, number: 12, note: 'x' })).rejects.toThrow(/from trace/)
     expect(github.did).toEqual([])
     expect(started).toEqual([])
+  })
+})
+
+describe('change.check', () => {
+  const LOG = ['2026-11-03T01:00:00.0000000Z ##[group]Run kicad-cli sch erc', '2026-11-03T01:00:02.0000000Z \x1b[31mERC: pin 4 of U3\x1b[0m', '2026-11-03T01:00:03.0000000Z ##[error]Process completed with exit code 1.'].join('\n')
+  const cr = (o: Partial<CheckRunFull> = {}): CheckRunFull => ({
+    id: 100, name: 'build', status: 'completed', conclusion: 'failure', head_sha: sha(1), started_at: '2026-11-03T01:00:00Z', completed_at: '2026-11-03T01:02:00Z',
+    title: 'ERC failed', summary: '**2** errors', text: 'See below.', annotations: 2, app: 'github-actions', url: 'https://github.com/acme/changes/runs/100', details_url: null, ...o,
+  })
+
+  it('the rules: ids from the checks, the report cut to 60 kB', () => {
+    expect(checkLines([{ name: 'a', status: 'completed', conclusion: 'success', summary: null, id: 'cr:1' }, { name: 'b', status: 'queued', conclusion: null, summary: 'x' }])).toEqual([
+      { id: 'cr:1', name: 'a', state: 'passed', summary: null }, { id: null, name: 'b', state: 'running', summary: 'x' },
+    ])
+    expect(checkText('s', 't')).toBe('s\n\nt')
+    expect(checkText(null, '  ')).toBeNull()
+    const long = checkText('é'.repeat(CHECK_TEXT_MAX), null)!
+    expect(Buffer.byteLength(long)).toBeLessThanOrEqual(CHECK_TEXT_MAX)
+    expect(long.endsWith('…')).toBe(true)
+  })
+
+  it('a check run in full: report, annotations, the Actions job\'s log end; the GitHub link for admins only', async () => {
+    github.checks.set(100, cr())
+    github.notes.set(100, [{ path: 'hw/power.kicad_sch', start_line: 4, level: 'failure', title: 'pin', message: 'U3 pin 4 unconnected' }, { path: 'docs/notes.md', start_line: null, level: 'notice', title: null, message: 'fyi' }])
+    github.answers.set(`/repos/${REPO}/actions/jobs/100`, { id: 100, name: 'build', status: 'completed', run_url: `https://api.github.com/repos/${REPO}/actions/runs/9` })
+    github.texts.set(`/repos/${REPO}/actions/jobs/100/logs`, LOG)
+    const d = await run(USER, 'change.check', { repo: REPO, number: 1, id: 'cr:100' })
+    expect(d).toEqual({
+      id: 'cr:100', name: 'build', state: 'failed', summary: 'ERC failed', text: '**2** errors\n\nSee below.', started_at: '2026-11-03T01:00:00Z', completed_at: '2026-11-03T01:02:00Z',
+      annotations: [{ path: 'hw/power.kicad_sch', line: 4, level: 'failure', title: 'pin', message: 'U3 pin 4 unconnected' }, { path: 'docs/notes.md', line: null, level: 'notice', title: null, message: 'fyi' }],
+      log: { text: 'Run kicad-cli sch erc\nERC: pin 4 of U3\nError: Process completed with exit code 1.', truncated: false },
+    })
+    expect(await run(ADMIN, 'change.check', { repo: REPO, number: 1, id: 'cr:100' })).toMatchObject({ url: 'https://github.com/acme/changes/runs/100' })
+    // a reviewer and a connected system read it; a stranger does not
+    expect(await run(REVIEWER, 'change.check', { repo: REPO, number: 1, id: 'cr:100' })).toMatchObject({ id: 'cr:100' })
+    expect(await run(SYSTEM, 'change.check', { repo: REPO, number: 1, id: 'cr:100' })).not.toHaveProperty('url')
+    await expect(run(OUTSIDER, 'change.check', { repo: REPO, number: 1, id: 'cr:100' })).rejects.toThrow(AccessDenied)
+  })
+
+  it('a log that cannot be read is null, never an error; a check another app made has no log', async () => {
+    github.checks.set(100, cr())
+    // GitHub no longer keeps it
+    github.answers.set(`/repos/${REPO}/actions/jobs/100`, { id: 100, name: 'build', status: 'completed', run_url: `https://api.github.com/repos/${REPO}/actions/runs/9` })
+    expect(await run(USER, 'change.check', { repo: REPO, number: 1, id: 'cr:100' })).toMatchObject({ log: null, state: 'failed' })
+    github.checks.set(100, cr({ app: 'circleci', annotations: 0 }))
+    github.texts.set(`/repos/${REPO}/actions/jobs/100/logs`, LOG)
+    expect(await run(USER, 'change.check', { repo: REPO, number: 1, id: 'cr:100' })).toMatchObject({ log: null, annotations: [] })
+  })
+
+  it('cuts a long log to its end and says so', async () => {
+    github.checks.set(100, cr())
+    github.texts.set(`/repos/${REPO}/actions/jobs/100/logs`, `${'x'.repeat(CHECK_LOG_MAX)}\n${LOG}`)
+    const d = await run(USER, 'change.check', { repo: REPO, number: 1, id: 'cr:100' })
+    expect(d.log).toMatchObject({ truncated: true, text: expect.stringMatching(/Error: Process completed with exit code 1\.$/) })
+    expect(String((d.log as { text: string }).text).length).toBeLessThanOrEqual(CHECK_LOG_MAX)
+  })
+
+  it('a workflow run\'s job (job:<id>): its state, times and log, when it ran on the head commit', async () => {
+    github.answers.set(`/repos/${REPO}/actions/jobs/55`, { id: 55, name: 'erc', status: 'completed', conclusion: 'failure', head_sha: sha(1), started_at: 's', completed_at: 'c', html_url: 'https://github.com/j/55', run_url: `https://api.github.com/repos/${REPO}/actions/runs/9` })
+    github.texts.set(`/repos/${REPO}/actions/jobs/55/logs`, LOG)
+    expect(await run(USER, 'change.check', { repo: REPO, number: 1, id: 'job:55' })).toEqual({
+      id: 'job:55', name: 'erc', state: 'failed', summary: null, text: null, started_at: 's', completed_at: 'c', annotations: [],
+      log: { text: expect.stringMatching(/^Run kicad-cli sch erc\n/), truncated: false },
+    })
+    expect(await run(ADMIN, 'change.check', { repo: REPO, number: 1, id: 'job:55' })).toMatchObject({ url: 'https://github.com/j/55' })
+  })
+
+  it('refuses a check of another commit, another repository\'s job, one GitHub does not know, a bad id, and a change not trace\'s', async () => {
+    github.checks.set(100, cr({ head_sha: sha(2) }))
+    await expect(run(USER, 'change.check', { repo: REPO, number: 1, id: 'cr:100' })).rejects.toThrow('Change #1 has no check cr:100 on its latest commit.')
+    await expect(run(USER, 'change.check', { repo: REPO, number: 1, id: 'cr:101' })).rejects.toThrow(/no check cr:101/)
+    github.answers.set(`/repos/${REPO}/actions/jobs/56`, { id: 56, name: 'x', status: 'completed', head_sha: sha(2), run_url: `https://api.github.com/repos/${REPO}/actions/runs/9` })
+    github.answers.set(`/repos/${REPO}/actions/jobs/57`, { id: 57, name: 'x', status: 'completed', head_sha: sha(1), run_url: 'https://api.github.com/repos/other/private/actions/runs/1' })
+    await expect(run(USER, 'change.check', { repo: REPO, number: 1, id: 'job:56' })).rejects.toThrow(/no check job:56/)
+    await expect(run(USER, 'change.check', { repo: REPO, number: 1, id: 'job:57' })).rejects.toThrow(/no check job:57/)
+    await expect(run(USER, 'change.check', { repo: REPO, number: 1, id: 'job:58' })).rejects.toThrow(/no check job:58/)
+    for (const id of ['100', 'cr:', 'cr:abc', 'status:1', 'cr:0']) await expect(run(USER, 'change.check', { repo: REPO, number: 1, id })).rejects.toThrow()
+    await expect(run(USER, 'change.check', { repo: REPO, number: 3, id: 'cr:300' })).rejects.toThrow(/no change #3 from trace/)
+  })
+
+  it('counts against the GitHub budget like change.get', async () => {
+    github.checks.set(100, cr({ app: null, annotations: 0 }))
+    const c: Context = { principal: USER, deps: { ...deps, githubBudget: new GitHubBudget(1) } }
+    await perform('change.check', { repo: REPO, number: 1, id: 'cr:100' }, c)
+    await expect(perform('change.check', { repo: REPO, number: 1, id: 'cr:100' }, c)).rejects.toThrow(/more than 1 times in a minute/)
   })
 })
 

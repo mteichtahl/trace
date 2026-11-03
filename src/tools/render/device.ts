@@ -27,6 +27,8 @@ export const ProbeSchema = z.object({
   compute_types: z.array(z.string()),
   devices: z.array(DeviceSchema),
   gltf_import: z.boolean(),
+  /** the X3D/VRML importer is there (an add-on before Blender 4.2, an extension after); older probes lack it */
+  x3d_import: z.boolean().optional(),
   denoisers: z.array(z.string()),
   python: z.string(),
   eevee: z.object({

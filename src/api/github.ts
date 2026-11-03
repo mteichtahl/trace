@@ -49,10 +49,31 @@ export interface PullFile {
 /** One check run on a commit, with its own one-line result when it wrote one (its output's title or summary). */
 export interface CheckRunDetail {
   name: string; status: string; conclusion: string | null; summary: string | null
+  /**
+   * What change.check opens it by: `cr:<check run id>` for a check run, `job:<Actions job id>` for a workflow run's job.
+   * Absent for a commit status, and for a workflow run read in place of check runs (a run is several jobs: nothing one
+   * check can open).
+   */
+  id?: string | null | undefined
   /** when it finished (a check run's completed_at, a finished workflow run's updated_at), when GitHub says */
   completed_at?: string | null | undefined
 }
 export type MergeMethod = 'squash' | 'merge' | 'rebase'
+/** One check run in full, for change.check: its report, its times, the commit it ran on and who made it. */
+export interface CheckRunFull {
+  id: number; name: string; status: string; conclusion: string | null; head_sha: string
+  started_at: string | null; completed_at: string | null
+  /** its output: title (one line), summary and text (markdown) */
+  title: string | null; summary: string | null; text: string | null
+  /** how many annotations it wrote */
+  annotations: number
+  /** the GitHub App that made it, by slug (github-actions: an Actions job, whose id the check run's id is) */
+  app: string | null
+  /** its page on GitHub, and the page its maker links to */
+  url: string | null; details_url: string | null
+}
+/** One annotation a check run wrote on a file. */
+export interface CheckAnnotation { path: string; start_line: number | null; level: string; title: string | null; message: string }
 
 export interface DeploySummary { id: number; environment: string; ref: string; sha: string; created_at: string; state: string | null; url: string | null }
 
@@ -94,8 +115,15 @@ export interface GitHubApi {
   pullFiles?(repo: string, number: number): Promise<PullFile[]>
   /** Its commits' messages, oldest first (at most 100). */
   pullCommits?(repo: string, number: number): Promise<string[]>
-  /** The check runs on one commit, each with its own result line. */
-  checkRuns?(repo: string, sha: string): Promise<CheckRunDetail[]>
+  /**
+   * The check runs on one commit, each with its own result line. `jobs`: when check runs cannot be read and workflow
+   * runs stand in for them, each run is read as its jobs (one call per workflow), so each carries a job id to open.
+   */
+  checkRuns?(repo: string, sha: string, o?: { jobs?: boolean }): Promise<CheckRunDetail[]>
+  /** One check run of the repository in full, or null when it has none by that id (or the token may not read it). */
+  checkRun?(repo: string, id: number): Promise<CheckRunFull | null>
+  /** The annotations a check run wrote, at most `max` (50 at most). */
+  checkAnnotations?(repo: string, id: number, max: number): Promise<CheckAnnotation[]>
   /** The merge methods the repository allows, in trace's order of preference: squash, merge, rebase. */
   mergeMethods?(repo: string): Promise<MergeMethod[]>
   /** Merge it with `method`, only if its head is still `sha` (what the person looked at). Throws GitHubError (with
@@ -153,20 +181,42 @@ const PullFull = z.object({
   mergeable_state: z.string().optional(), updated_at: z.string(), head: z.object({ ref: z.string(), sha: z.string(), repo: HeadRepo }).loose(),
   user: User,
 }).loose()
-const CheckRun = z.object({ name: z.string(), status: z.string(), conclusion: z.string().nullable(), completed_at: z.string().nullable().optional() }).loose()
+const CheckRun = z.object({ id: z.number().optional(), name: z.string(), status: z.string(), conclusion: z.string().nullable(), completed_at: z.string().nullable().optional() }).loose()
 const CheckRunOut = CheckRun.extend({ output: z.object({ title: z.string().nullable().optional(), summary: z.string().nullable().optional() }).loose().nullable().optional() })
+const CheckRunBody = z.object({
+  id: z.number(), name: z.string(), status: z.string(), conclusion: z.string().nullable().optional(), head_sha: z.string(),
+  started_at: z.string().nullable().optional(), completed_at: z.string().nullable().optional(),
+  html_url: z.string().nullable().optional(), details_url: z.string().nullable().optional(),
+  app: z.object({ slug: z.string().nullable().optional() }).loose().nullable().optional(),
+  output: z.object({ title: z.string().nullable().optional(), summary: z.string().nullable().optional(), text: z.string().nullable().optional(), annotations_count: z.number().optional() }).loose().nullable().optional(),
+}).loose()
+const AnnotationBody = z.object({
+  path: z.string(), start_line: z.number().nullable().optional(), annotation_level: z.string().nullable().optional(),
+  title: z.string().nullable().optional(), message: z.string().nullable().optional(),
+}).loose()
 const CombinedStatus = z.object({ statuses: z.array(z.object({ context: z.string(), state: z.string(), description: z.string().nullable().optional() }).loose()).default([]) }).loose()
 
 /** Workflow runs on a commit as checks: the latest run of each workflow (a re-run replaces the one before). */
-export function runsAsChecks(runs: readonly z.output<typeof Run>[]): CheckRunDetail[] {
+function latestRuns(runs: readonly z.output<typeof Run>[]): [string, z.output<typeof Run>][] {
   const latest = new Map<string, z.output<typeof Run>>()
   for (const r of runs) {
     const name = r.name || r.path || String(r.id)
     const had = latest.get(name)
     if (!had || had.created_at < r.created_at) latest.set(name, r)
   }
-  return [...latest.entries()].map(([name, r]) => ({ name, status: r.status ?? 'queued', conclusion: r.conclusion, summary: null, ...(r.status === 'completed' && r.updated_at ? { completed_at: r.updated_at } : {}) }))
+  return [...latest.entries()]
 }
+export function runsAsChecks(runs: readonly z.output<typeof Run>[]): CheckRunDetail[] {
+  return latestRuns(runs).map(([name, r]) => ({ name, status: r.status ?? 'queued', conclusion: r.conclusion, summary: null, ...(r.status === 'completed' && r.updated_at ? { completed_at: r.updated_at } : {}) }))
+}
+
+/** A workflow run's jobs as checks, each with its job id to open (change.check). */
+export function jobsAsChecks(jobs: readonly { id: number; name: string; status: string; conclusion?: string | null | undefined; completed_at?: string | null | undefined }[]): CheckRunDetail[] {
+  return jobs.map((j) => ({ name: j.name, status: j.status, conclusion: j.conclusion ?? null, summary: null, id: `job:${j.id}`, ...(j.status === 'completed' && j.completed_at ? { completed_at: j.completed_at } : {}) }))
+}
+const RunJobs = z.object({ jobs: z.array(z.object({ id: z.number(), name: z.string(), status: z.string(), conclusion: z.string().nullable().optional(), completed_at: z.string().nullable().optional() }).loose()) }).loose()
+/** At most this many workflow runs are read as their jobs for one commit. */
+const MAX_RUN_JOBS = 10
 
 /** Commit statuses as checks: success passes, failure and error fail, pending runs. */
 export function statusesAsChecks(statuses: readonly { context: string; state: string; description?: string | null | undefined }[]): CheckRunDetail[] {
@@ -440,21 +490,54 @@ export class HttpGitHub implements GitHubApi {
    * commit ("Actions: read") and commit statuses ("Commit statuses: read"), which are what a repository's checks are
    * made of when its CI is Actions; refused those too, the 403 is thrown.
    */
-  async checkRuns(repo: string, sha: string): Promise<CheckRunDetail[]> {
+  async checkRuns(repo: string, sha: string, o: { jobs?: boolean } = {}): Promise<CheckRunDetail[]> {
     const ref = encodeURIComponent(sha)
     try {
       const r = z.object({ check_runs: z.array(CheckRunOut) }).loose().parse(await this.json('GET', `${this.p(repo)}/commits/${ref}/check-runs?per_page=100`))
-      return r.check_runs.map((c) => ({ name: c.name, status: c.status, conclusion: c.conclusion, summary: (c.output?.title || c.output?.summary || null)?.slice(0, 300) ?? null, ...(c.completed_at ? { completed_at: c.completed_at } : {}) }))
+      return r.check_runs.map((c) => ({ name: c.name, status: c.status, conclusion: c.conclusion, summary: (c.output?.title || c.output?.summary || null)?.slice(0, 300) ?? null, ...(c.completed_at ? { completed_at: c.completed_at } : {}), ...(c.id !== undefined ? { id: `cr:${c.id}` } : {}) }))
     } catch (e) {
       if (!(e instanceof GitHubError) || e.status !== 403) throw e
       const refused = e
       const [runs, statuses] = await Promise.all([
-        this.json('GET', `${this.p(repo)}/actions/runs?head_sha=${ref}&per_page=100`).then((j) => runsAsChecks(z.object({ workflow_runs: z.array(Run) }).loose().parse(j).workflow_runs), (x: unknown) => { if (x instanceof GitHubError && x.status === 403) return null; throw x }),
+        this.json('GET', `${this.p(repo)}/actions/runs?head_sha=${ref}&per_page=100`).then((j) => this.runChecks(repo, z.object({ workflow_runs: z.array(Run) }).loose().parse(j).workflow_runs, o.jobs === true), (x: unknown) => { if (x instanceof GitHubError && x.status === 403) return null; throw x }),
         this.json('GET', `${this.p(repo)}/commits/${ref}/status`).then((j) => statusesAsChecks(CombinedStatus.parse(j).statuses), (x: unknown) => { if (x instanceof GitHubError && x.status === 403) return null; throw x }),
       ])
       if (runs === null && statuses === null) throw refused
       return [...(runs ?? []), ...(statuses ?? [])]
     }
+  }
+
+  /**
+   * Workflow runs as checks: the latest run of each workflow; with `jobs`, each of those (at most MAX_RUN_JOBS) read as
+   * its jobs, so each can be opened. A run whose jobs cannot be read stays one check, with nothing to open.
+   */
+  private async runChecks(repo: string, runs: readonly z.output<typeof Run>[], jobs: boolean): Promise<CheckRunDetail[]> {
+    const checks = runsAsChecks(runs)
+    if (!jobs) return checks
+    const latest = latestRuns(runs)
+    const parts = await Promise.all(latest.map(([, r], i) => (i < MAX_RUN_JOBS
+      ? this.json('GET', `${this.p(repo)}/actions/runs/${r.id}/jobs?per_page=100`).then((j) => { const js = RunJobs.parse(j).jobs; return js.length ? jobsAsChecks(js) : null }, () => null)
+      : Promise.resolve(null))))
+    return checks.flatMap((c, i) => parts[i] ?? [c])
+  }
+
+  async checkRun(repo: string, id: number): Promise<CheckRunFull | null> {
+    const r = await this.req('GET', `${this.p(repo)}/check-runs/${id}`)
+    if (r.status === 404 || r.status === 403) return null
+    if (!r.ok) throw new GitHubError(r.status, `GitHub GET check run ${id}: ${r.status}`, await saidBy(r))
+    const c = CheckRunBody.parse(await r.json())
+    return {
+      id: c.id, name: c.name, status: c.status, conclusion: c.conclusion ?? null, head_sha: c.head_sha, started_at: c.started_at ?? null, completed_at: c.completed_at ?? null,
+      title: c.output?.title ?? null, summary: c.output?.summary ?? null, text: c.output?.text ?? null, annotations: c.output?.annotations_count ?? 0,
+      app: c.app?.slug ?? null, url: c.html_url ?? null, details_url: c.details_url ?? null,
+    }
+  }
+
+  async checkAnnotations(repo: string, id: number, max: number): Promise<CheckAnnotation[]> {
+    const n = Math.min(50, Math.max(1, max))
+    return z.array(AnnotationBody).parse(await this.json('GET', `${this.p(repo)}/check-runs/${id}/annotations?per_page=${n}`)).slice(0, n).map((a) => ({
+      path: a.path, start_line: a.start_line ?? null, level: a.annotation_level ?? 'notice', title: a.title ?? null, message: a.message ?? '',
+    }))
   }
 
   async mergeMethods(repo: string): Promise<MergeMethod[]> {

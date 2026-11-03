@@ -15,6 +15,8 @@ const DAY = 24 * HOUR
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
 const ahead = (ms: number) => new Date(Date.now() + ms).toISOString()
 const sec = (ms: number) => (Date.now() - ms) / 1000
+export const ROUTE_REPORT = JSON.stringify({ board: 'hardware/soil-sensor.kicad_pcb', router: 'freerouting 2.0', routed: 209, total: 212, unrouted: ['SDA', 'SCL', 'INT'], blocked_by: 'U4', vias: 41, track_mm: 1863.2 }, null, 2)
+export const ROUTE_LOG = ['Loading hardware/soil-sensor.kicad_pcb', 'Net classes: Power (3 nets), Default (209 nets)', 'Pass 1: 188 of 212 routed', 'Pass 4: 205 of 212 routed', 'Pass 8: 209 of 212 routed', 'Pass 12: 209 of 212 routed (no progress for 4 passes)', 'Unrouted: SDA (U4.5 to R7), SCL (U4.6 to R8), INT (U4.3 to U1.18)', 'Stopped: 3 nets unrouted'].join('\n')
 
 // ------------------------------------------------------------------ gates
 
@@ -143,6 +145,29 @@ export const RUNS: RunRecordView[] = [
   {
     id: 'run_6d20', kind: 'pcb.autoroute', subject: 'soil-sensor.kicad_pcb', started: sec(DAY + 4 * HOUR), finished: sec(DAY + 3 * HOUR), status: 'fail',
     summary: "3 nets could not fit between U4's pins. trace suggested moving U4 2 mm left.", title: 'Routing the board (earlier attempt)',
+    job: 'job_route_a',
+    measurements: [{ name: 'nets_routed', value: 209, unit: null }, { name: 'nets_total', value: 212, unit: null }],
+    artifacts: [
+      { name: 'route-report.json', mime: 'application/json', size: ROUTE_REPORT.length },
+      { name: 'autoroute.log', mime: 'text/plain', size: ROUTE_LOG.length },
+      { name: 'soil-sensor-routed.dsn.ses', mime: 'application/octet-stream', size: 11_400_000 },
+    ],
+    // the agent job's tool calls, oldest first (run's `session`): this run is the autorouter step
+    session: {
+      job: 'job_route_a', agent: 'Layout specialist',
+      steps: [
+        { id: 'run_6c01', kind: 'kicad.read_board', summary: 'Read the placement', status: 'pass', started: sec(DAY + 4 * HOUR + 9 * MIN), finished: sec(DAY + 4 * HOUR + 8.5 * MIN) },
+        { id: 'run_6c02', kind: 'design.rules', summary: 'Read the maker\'s design rules (JLCPCB, 2 layers)', status: 'pass', started: sec(DAY + 4 * HOUR + 8.5 * MIN), finished: sec(DAY + 4 * HOUR + 8 * MIN) },
+        { id: 'run_6c03', kind: 'kicad.netclasses', summary: 'Set the net classes', status: 'pass', started: sec(DAY + 4 * HOUR + 8 * MIN), finished: sec(DAY + 4 * HOUR + 7 * MIN),
+          args: { board: 'hardware/soil-sensor.kicad_pcb', classes: { Power: { track_mm: 0.5, clearance_mm: 0.2, nets: ['VBAT', '+3V3', 'VBUS'] }, Default: { track_mm: 0.2, clearance_mm: 0.15 } } },
+          result: { status: 'pass', classes: 2, nets_assigned: 212 } },
+        { id: 'run_6d20', kind: 'kicad.route', summary: 'Ran the autorouter', status: 'fail', started: sec(DAY + 4 * HOUR), finished: sec(DAY + 3 * HOUR + 57 * MIN),
+          args: { board: 'hardware/soil-sensor.kicad_pcb', router: 'freerouting 2.0', layers: ['F.Cu', 'B.Cu'], passes: 12, keepouts: ['antenna'] },
+          result: { status: 'fail', routed: 209, total: 212, unrouted: [{ net: 'SDA', between: 'U4 pin 5 and R7' }, { net: 'SCL', between: 'U4 pin 6 and R8' }, { net: 'INT', between: 'U4 pin 3 and U1 pin 18' }], reason: "U4's pins are 0.5 mm apart; the three nets cannot leave between them at 0.15 mm clearance.", suggestion: 'Move U4 2 mm left to open a channel under it.' } },
+        { id: 'run_6d21', kind: 'kicad.drc', summary: 'Checked the partly routed board', status: 'pass', started: sec(DAY + 3 * HOUR + 57 * MIN), finished: sec(DAY + 3 * HOUR + 56 * MIN) },
+        { id: 'run_6d22', kind: 'agent.report', summary: 'Wrote what it found and asked to move U4', status: 'pass', started: sec(DAY + 3 * HOUR + 56 * MIN), finished: sec(DAY + 3 * HOUR) },
+      ],
+    },
   },
 ]
 

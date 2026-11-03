@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils'
 import { Heartbeat } from '../heartbeat'
 import { timeAgainstUsual } from '../log-view'
 import { RunSheet } from '../run-sheet'
+import { CheckRow } from './check-sheet'
 import { useNow } from '../use-now'
 
 const CHECK_ICON: Record<ChangeCheck['state'], { icon: typeof CircleCheck; cls: string; word: string }> = {
@@ -31,6 +32,13 @@ const norm = (s: string) => s.trim().toLowerCase()
 export function checksWithoutJob(list: readonly ChangeCheck[], jobs: readonly CheckJob[]): ChangeCheck[] {
   const names = new Set(jobs.flatMap((j) => [norm(j.name), norm(`${j.workflow} / ${j.name}`)]))
   return list.filter((k) => !names.has(norm(k.name)))
+}
+
+/** The job change.runs has for one of change.get's checks, if any. Pure. */
+export function jobFor(k: Pick<ChangeCheck, 'name'> | undefined, jobs: readonly CheckJob[] | undefined): CheckJob | undefined {
+  if (!k || !jobs) return undefined
+  const n = norm(k.name)
+  return jobs.find((j) => norm(j.name) === n || norm(`${j.workflow} / ${j.name}`) === n)
 }
 
 /** "2 running · 1 waiting for a build machine · 1 passed". Pure. */
@@ -65,7 +73,7 @@ function Progress({ j, now }: { j: CheckJob; now: number }) {
   )
 }
 
-function JobRow({ j, now, onWatch }: { j: CheckJob; now: number; onWatch: (j: CheckJob) => void }) {
+function JobRow({ j, now, onWatch, onOpen }: { j: CheckJob; now: number; onWatch: (j: CheckJob) => void; onOpen?: (() => void) | undefined }) {
   if (j.state === 'queued') {
     const waited = j.queuedS
     return (
@@ -110,13 +118,14 @@ function JobRow({ j, now, onWatch }: { j: CheckJob; now: number; onWatch: (j: Ch
     <li className="flex items-center gap-3 py-3">
       <I.icon className={cn('size-4 shrink-0', I.cls)} aria-hidden />
       <p className="min-w-0 flex-1 text-sm"><span className="font-medium">{j.name}</span><span className="text-muted-foreground"> · {word}{took !== null && j.state !== 'skipped' ? ` in ${duration(took, { short: true })}` : ''}</span></p>
-      {j.state !== 'skipped' && <Button variant="ghost" size="sm" onClick={() => onWatch(j)} aria-label={`Log of ${j.name}`}>Log</Button>}
+      {/* a finished check opens its result (report, findings, log: CheckSheet) where the page has it, else its log */}
+      {j.state !== 'skipped' && <Button variant="ghost" size="sm" onClick={() => (onOpen ? onOpen() : onWatch(j))} aria-label={`${onOpen ? 'Result' : 'Log'} of ${j.name}`}>{onOpen ? 'Result' : 'Log'}</Button>}
     </li>
   )
 }
 
 /** The Checks card: change.runs's jobs when there are any, then the checks with no job, as before. */
-export function ChangeChecks({ d, jobs, repo }: { d: ChangeDetail; jobs: CheckJob[] | undefined; repo: string }) {
+export function ChangeChecks({ d, jobs, repo, onOpenCheck }: { d: ChangeDetail; jobs: CheckJob[] | undefined; repo: string; onOpenCheck?: (index: number) => void }) {
   const [all, setAll] = useState(false)
   const [watch, setWatch] = useState<CheckJob | null>(null)
   const now = useNow(1000)
@@ -131,7 +140,10 @@ export function ChangeChecks({ d, jobs, repo }: { d: ChangeDetail; jobs: CheckJo
       <h3 id="checks" className="section-label">Checks · <span className="font-normal normal-case tracking-normal">{withJobs ? jobsWords(jobs) : checksWords(d.checks)}</span></h3>
       {withJobs && (
         <ul className="mt-1 divide-y">
-          {jobs.map((j) => <JobRow key={j.id} j={j} now={now} onWatch={setWatch} />)}
+          {jobs.map((j) => {
+            const i = d.checks_list.findIndex((k) => jobFor(k, [j]) !== undefined)
+            return <JobRow key={j.id} j={j} now={now} onWatch={setWatch} onOpen={onOpenCheck && i >= 0 ? () => onOpenCheck(i) : undefined} />
+          })}
         </ul>
       )}
       {list.length === 0 && !withJobs ? (
@@ -140,6 +152,8 @@ export function ChangeChecks({ d, jobs, repo }: { d: ChangeDetail; jobs: CheckJo
         <ul className={cn('space-y-1.5 text-sm', withJobs ? 'mt-1 border-t pt-3' : 'mt-2')}>
           {shown.map((k) => {
             const I = CHECK_ICON[k.state]
+            const i = d.checks_list.indexOf(k)
+            if (onOpenCheck && i >= 0) return <li key={k.name} className="-mx-2"><CheckRow check={k} onOpen={() => onOpenCheck(i)} /></li>
             return (
               <li key={k.name} className="flex items-start gap-2">
                 <I.icon className={cn('mt-0.5 size-4 shrink-0', I.cls)} aria-hidden />
