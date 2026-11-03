@@ -21,7 +21,7 @@
  * released revision carries the decisions that approved it. Agents read it (design.intent list) and never write it.
  */
 import { z } from 'zod'
-import { decide, loadJourney } from '../core/journey.js'
+import { CHANGE_STAGE, STAGE_NAMES, type StageId, decide, loadJourney, returnForChange } from '../core/journey.js'
 import { type DesignDecision, loadDesignDecisions, recordDesignDecision } from '../tools/design/decisions.js'
 import { readDesignRows } from '../tools/design/db.js'
 import { type RequirementWords, architectureView, intentView, pinPlanPrint } from '../tools/design/record.js'
@@ -116,6 +116,18 @@ export function prepare(d: DecisionInput, rows: Awaited<ReturnType<typeof repoRo
   }
 }
 
+/**
+ * The stage a decision changes, when it changes one (CHANGE_STAGE): a requirement or intent decided again the same way,
+ * with the same words, changes nothing and returns null, so re-accepting what stands never sends a project back.
+ */
+export function changesStage(p: { kind: string; target: string; choice: string; detail: Record<string, unknown> }, prior: readonly DesignDecision[]): StageId | null {
+  const stage = CHANGE_STAGE[p.kind]
+  if (!stage) return null
+  const was = [...prior].reverse().find((d) => d.kind === p.kind && d.target === p.target && d.supersededAt === null)
+  const same = was && was.choice === p.choice && JSON.stringify(was.detail) === JSON.stringify(p.detail)
+  return same ? null : stage
+}
+
 export const DESIGN_ACTIONS = {
   'design.decide': def('write', Repo.extend({ decision: Decision }), async (a, ctx) => {
     const { rows, requirements } = await repoRows(ctx, a.repo)
@@ -123,10 +135,14 @@ export const DESIGN_ACTIONS = {
     const out = await plainly(() => writeJourney(ctx, a.repo, (db) => {
       const r = loadJourney(db)
       if (!r) throw new ActionError('This project has no journey yet, so there is nowhere to record the decision.')
-      const p = prepare(a.decision, rows, requirements, loadDesignDecisions(db))
+      const prior = loadDesignDecisions(db)
+      const p = prepare(a.decision, rows, requirements, prior)
       const rec = recordDesignDecision(db, p, by)
       decide(db, { kind: `design.${p.kind}`, stage: r.journey.currentStage, ref: p.target, by: by.label, summary: p.summary, detail: { decision: rec.id } })
-      return { result: { decision: { id: rec.id, kind: rec.kind, target: rec.target, choice: rec.choice, by: rec.by, at: new Date(rec.at * 1000).toISOString() }, summary: p.summary } }
+      // a requirement (or the intent behind it) changed after its stage was passed: the project goes back there
+      const stage = changesStage(p, prior)
+      const back = stage ? returnForChange(db, stage, `${p.summary.replace(/\.$/, '')} after the requirements baseline`, by.label) : null
+      return { result: { decision: { id: rec.id, kind: rec.kind, target: rec.target, choice: rec.choice, by: rec.by, at: new Date(rec.at * 1000).toISOString() }, summary: back ? `${p.summary} The project went back to ${STAGE_NAMES[back]} to agree it.` : p.summary, ...(back ? { back_to: back } : {}) } }
     }))
     return { ok: true, repo: a.repo, ...out }
   }),

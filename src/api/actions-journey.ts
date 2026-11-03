@@ -59,7 +59,7 @@ import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
   type AgentFacts, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
-  dismissStuck, journeyView, loadJourney, mergeAgentFacts, recordOpen, returnGate, signGate, sortInbox, withChanges,
+  dismissStuck, guardsFabricate, journeyView, loadJourney, mergeAgentFacts, nextStep, type PendingChanges, recordOpen, returnForChange, returnGate, signGate, sortInbox, withChanges, withPending,
 } from '../core/journey.js'
 import { gateReadyAt, stageTimes } from '../core/process-time.js'
 import { recordAnswered, recordWait } from './process-metrics.js'
@@ -70,6 +70,7 @@ import { reviewItems } from './inbox-review.js'
 import { loadJobs } from '../core/job-index.js'
 import { ActionError, type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, journeyStore, label, plainly, snapshotJourney, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { requirementEvidence } from './record-read.js'
+import { backToDefine, changedRequirements, pendingOf } from './pending-changes.js'
 import { SPECIALIST_KINDS, SPECIALIST_WORDS } from '../agents/kinds.js'
 import { isLive } from '../core/job-index.js'
 import { draftRequirements, draftingNow, draftingStep, logRetry } from './drafting.js'
@@ -277,8 +278,16 @@ export const JOURNEY_ACTIONS = {
     const viewer = await viewerOf(ctx.principal, repo)
     // the project's jobs (src/api/actions-jobs.ts listJobs: its job index); an index that cannot be read leaves the
     // journey as it is and says so in jobs_unavailable
-    const [{ result: r, version }, facts, jobs] = await Promise.all([journeyStore(ctx, repo).read((db) => loadJourney(db)), agentFacts(ctx, repo),
+    const [{ result: r0, version: v0 }, facts, jobs] = await Promise.all([journeyStore(ctx, repo).read((db) => loadJourney(db)), agentFacts(ctx, repo),
       listJobs(ctx, repo).then((x) => ({ jobs: x.jobs, rows: x.rows, error: null }), (e: unknown) => ({ jobs: [], rows: [], error: e instanceof Error ? e.message : String(e) }))])
+    // a requirement changed after the baseline takes the project back to Define before a gate past it can be signed
+    // (returnForChange). The record is read only when a gate is the next step, as changedFirst did
+    let r = r0
+    let version = v0
+    if (r0 && nextStep(r0, viewer).kind === 'gate') {
+      const back = await backToDefine(ctx, repo, r0, await changedRequirements(ctx, repo, r0).catch(() => [] as string[]), 'trace').catch(() => null)
+      if (back) { r = back.record; version = back.version }
+    }
     // the hand-offs between specialists (jobs.list's): who asked whom, for what, and the answer
     const handoffs = projectHandoffs(repo, facts, r, jobs.rows)
     if (!r) return { repo, ...NOT_STARTED, jobs: jobs.jobs, handoffs }
@@ -289,10 +298,12 @@ export const JOURNEY_ACTIONS = {
     // cache as changes.list (src/api/github-cache.ts), so a journey and a list together cost one look; when it cannot be reached the
     // journey is answered without them, and says so in changes_unavailable, rather than guessing
     const open = await openChanges(ctx, repo).then((x) => ({ list: x, error: null }), (e: unknown) => ({ list: [], error: e instanceof Error ? e.message : String(e) }))
-    const view = withChanges(r, journeyView(r, viewer, undefined, facts), viewer, open.list.map(({ change: c, criteria }) => ({
+    const changed = withChanges(r, journeyView(r, viewer, undefined, facts), viewer, open.list.map(({ change: c, criteria }) => ({
       number: c.number, title: c.title, from: c.from, criteria, ready: c.verdict === 'ready',
       recommendation: c.verdict === 'ready' ? `trace recommends accepting it. ${recommendationOf(c).why}` : null,
     })))
+    // nothing goes to Fabricate while the design is changing: the gates into it are locked while a change is open
+    const view = withPending(r, changed, viewer, pendingOf(open.list, open.error))
     // Define before its requirements exist: the intent first, then trace drafting them, or drafting them again when the
     // job stopped (src/api/drafting.ts); never "accept every requirement" over none. The record is read only when that
     // could change the step, and its count is kept per default-branch commit and record version
@@ -348,12 +359,29 @@ export const JOURNEY_ACTIONS = {
   'gate.sign': def('admin', Repo.extend({ gate: Id, acknowledge: z.array(Id).max(100).default([]), notes: z.string().trim().max(4000).optional() }), async (a, ctx) => {
     // the agents' checks of the criteria trace owns count towards the gate; the signing rules are the record's own
     const facts = await agentFacts(ctx, a.repo)
+    const now0 = (await journeyStore(ctx, a.repo).read((db) => loadJourney(db))).result
+    // a requirement changed after the baseline: no gate past Define is signed over it. The project goes back to
+    // Define (returnForChange) and the signature is refused, saying why. A record that cannot be read does not stop
+    // a gate, except the ones into Fabricate (below)
+    let changedReqs: string[] | null = null
+    if (now0) {
+      changedReqs = await changedRequirements(ctx, a.repo, now0).catch(() => null)
+      const back = await backToDefine(ctx, a.repo, now0, changedReqs ?? [], label(ctx.principal))
+      if (back) throw new ActionError(`The gate was not signed: ${back.reason}, so the project went back to Define. Agree the change in Requirements review and sign the requirements baseline again; every gate after it is signed again.`)
+    }
+    // nothing goes to Fabricate while the design is changing: the gates into it ask GitHub for the open changes now,
+    // and stay locked when it cannot answer (pendingBlockers)
+    let pending: PendingChanges | null = null
+    if (now0 && guardsFabricate(now0, a.gate)) {
+      const open = await openChanges(ctx, a.repo).then((x) => ({ list: x, error: null }), (e: unknown) => ({ list: [], error: e instanceof Error ? e.message : String(e) }))
+      pending = pendingOf(open.list, open.error ?? (changedReqs === null ? 'the requirements could not be read' : null))
+    }
     const { ready_at: readyAt, signed_at: signedAt, ...signed } = await journeyWrite(ctx, a.repo, (db) => {
       // when the gate became ready, from the record as it stood before the signature (its criteria and waivers)
       const before = loadJourney(db)
       const at = Date.now() / 1000
       const ready = before ? gateReadyAt(facts ? mergeAgentFacts(before, facts) : before, a.gate, at) : null
-      const r = signGate(db, a.gate, signer(ctx), { acknowledged: a.acknowledge, notes: a.notes ?? null, facts })
+      const r = signGate(db, a.gate, signer(ctx), { acknowledged: a.acknowledge, notes: a.notes ?? null, facts, pending })
       return { result: { repo: a.repo, ...r, ready_at: ready, signed_at: at } }
     })
     // saved: the wait from ready to signed (src/api/process-metrics.ts)
