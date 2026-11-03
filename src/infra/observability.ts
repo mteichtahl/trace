@@ -376,6 +376,14 @@ export function dashboardBody(o: { region: string; prefix?: string; runtimes: re
  *                Median run time tile: a job's own duration, not the runtime's invocation latency, which is the
  *                milliseconds an asynchronous invocation takes to be accepted)
  */
+/**
+ * A SEARCH of CodeBuild's per-runner counts: the {ProjectName} dimension set alone, since CodeBuild also files each
+ * count per build (BuildId, BuildNumber), which a plain Namespace= search would add in a second time.
+ */
+const builds = (id: string, metric: 'SucceededBuilds' | 'FailedBuilds', runners: string): Record<string, unknown> => ({
+  expression: `SEARCH('{${CODEBUILD_NAMESPACE},ProjectName} MetricName="${metric}" ${runners}', 'Sum', 300)`, id,
+})
+
 function processRows(widgets: Widget[], region: string, prefix: string, y0: number): number {
   let y = y0
   const ours = '"trace.outcome"'
@@ -383,9 +391,7 @@ function processRows(widgets: Widget[], region: string, prefix: string, y0: numb
   const ci = `"${prefix}-ci"`
   widgets.push({ type: 'text', x: 0, y, width: 24, height: 1, properties: { markdown: '### Process (builds, jobs, waiting on people, rework: Operations\' Process tab)' } })
   y += 1
-  widgets.push(graph(`${PROCESS_TITLE}Builds passed and failed`, region, 0, y, [
-    search('bok', CODEBUILD_NAMESPACE, 'SucceededBuilds', 'Sum', ci), search('bfail', CODEBUILD_NAMESPACE, 'FailedBuilds', 'Sum', ci),
-  ], { stacked: true }))
+  widgets.push(graph(`${PROCESS_TITLE}Builds passed and failed`, region, 0, y, [builds('bok', 'SucceededBuilds', ci), builds('bfail', 'FailedBuilds', ci)], { stacked: true }))
   widgets.push(graph(`${PROCESS_TITLE}Agent jobs by outcome`, region, 8, y, [
     search('pjall', METRIC_NAMESPACE, 'trace.jobs', 'Sum', ours), search('pjproj', METRIC_NAMESPACE, 'trace.project.jobs', 'Sum', proj),
   ], { stacked: true }))

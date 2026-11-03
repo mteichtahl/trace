@@ -197,7 +197,7 @@ describe('the dashboard body', () => {
     expect(text).toContain('(\\"lab_agent\\" OR \\"lab_api\\")')
     expect(text).not.toContain('trace.gpu.jobs')
     const exprs = b.widgets.flatMap((w) => ((w.properties as { metrics?: { expression: string }[][] }).metrics ?? []).flat().map((m) => m.expression))
-    for (const e of exprs) expect(e).toMatch(/^SEARCH\('Namespace="[^"]+" MetricName="[^"]+"[^']*', '(Sum|Average|p90)', 300\)$/)
+    for (const e of exprs) expect(e).toMatch(/^SEARCH\('(Namespace="[^"]+"|\{AWS\/CodeBuild,ProjectName\}) MetricName="[^"]+"[^']*', '(Sum|Average|p50|p90|SampleCount)', 300\)$/)
     for (const w of b.widgets) expect((w.properties as { region?: string }).region ?? 'eu-west-1').toBe('eu-west-1')
     expect(JSON.stringify(dashboardBody({ region: 'eu-west-1', runtimes: [], gpu: true }))).toContain('trace.gpu.duration')
     // many projects: the runtime filter would pass SEARCH's 1024-character limit, so every runtime is shown
