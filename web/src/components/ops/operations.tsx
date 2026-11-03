@@ -188,6 +188,10 @@ export function Operations({ section }: { section?: string }) {
           />
           {ops.isError && <Partial onRetry={() => void ops.refetch()}>The last refresh failed. Showing what was true at {time(data.updatedAt)}.</Partial>}
 
+          {admin && !!data.notes?.length && (
+            <Partial>CloudWatch left some numbers out, so some charts may be empty: {data.notes.join(' · ')}</Partial>
+          )}
+
           <section aria-label="Summary" className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5 [&>*:last-child:nth-child(odd)]:col-span-2 md:[&>*:last-child:nth-child(odd)]:col-span-1">
             {tiles.filter((t) => !t.extra).map((t) => <Tile key={t.id} tile={t} />)}
           </section>

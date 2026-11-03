@@ -39,6 +39,7 @@ import { PROCESS_TITLE, REWORK_CAUSES, WAIT_KINDS, type ReworkCause, type WaitKi
 import { type Caller, callApi } from './call.js'
 import type { WebConfig } from './config.js'
 import { type WebDeps, signedIn } from './deps.js'
+import { MESSAGES_ID } from './ports.js'
 import { WebError, route } from './http.js'
 
 export const REFRESH_S = 60
@@ -465,6 +466,7 @@ export async function operations(deps: WebDeps, who: Caller, c: WebConfig, q: UR
   const sections: Record<string, unknown>[] = []
   const shown: { series: Series[] }[] = []
   const processSeries: Series[] = []
+  const notes: string[] = []
   for (const name of c.dashboards) {
     let body: string
     try {
@@ -487,6 +489,15 @@ export async function operations(deps: WebDeps, who: Caller, c: WebConfig, q: UR
     for (let i = 0; i < queries.length; i += 500) results.push(...await cw.getMetricData(queries.slice(i, i + 500), range.start, range.end))
     const byWidget = new Map<number, Series[]>()
     for (const r of results) {
+      // what CloudWatch said it left out (a request over its limits, a query it refused): logged, and shown to admins,
+      // so an empty chart says why instead of looking like no data
+      if (r.StatusCode && r.StatusCode !== 'Complete' || r.Messages?.length) {
+        const where = owner.get(r.Id ?? '')?.widget.title ?? (r.Id === MESSAGES_ID ? 'the request' : r.Id ?? '')
+        for (const m of r.Messages?.length ? r.Messages : [{ Code: r.StatusCode, Value: '' }]) {
+          const note = `${name}: ${where}: ${[m.Code, m.Value].filter(Boolean).join(': ')}`
+          if (!notes.includes(note)) notes.push(note)
+        }
+      }
       const o = owner.get(r.Id ?? '')
       if (!o) continue
       const ts = r.Timestamps ?? []
@@ -519,12 +530,14 @@ export async function operations(deps: WebDeps, who: Caller, c: WebConfig, q: UR
   const a = filterAlarms(alarms, access, c.prefix)
   const visible = only ? a.visible.filter((x) => x.repo === only) : a.visible
   const process = processView(processSeries)
+  if (notes.length) deps.log({ warning: 'ops: CloudWatch left data out', notes: notes.slice(0, 20) })
   return {
     status: statusLine(visible, a.hiddenFiring),
     tiles: tiles(shown, access, process),
     alarms: visible,
     sections,
     process,
+    ...(access.admin && notes.length ? { notes: notes.slice(0, 20) } : {}),
     updatedAt: new Date(now).toISOString(),
     nextAt: new Date(now + REFRESH_S * 1000).toISOString(),
   }

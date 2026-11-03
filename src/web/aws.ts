@@ -20,6 +20,7 @@ import { Verifier } from '../api/jwt.js'
 import { configLoader, issuerOf, ssmReader } from './config.js'
 import { type WebDeps, once } from './deps.js'
 import { DynamoDebounceStore } from './hooks-store.js'
+import { MESSAGES_ID } from './ports.js'
 import type { BedrockPort, CloudWatchPort, CognitoPort, PollyPort, SecretsPort, StorePort } from './ports.js'
 
 export function cognitoPort(region: string): CognitoPort {
@@ -101,6 +102,7 @@ export function cloudwatchPort(region: string): CloudWatchPort {
     },
     async getMetricData(MetricDataQueries, StartTime, EndTime) {
       const results = new Map<string, MetricDataResult>()
+      const notes: MetricDataResult[] = []
       let next: string | undefined
       do {
         const out = await c.send(new GetMetricDataCommand({ MetricDataQueries, StartTime, EndTime, ScanBy: 'TimestampAscending', ...(next ? { NextToken: next } : {}) }))
@@ -115,9 +117,11 @@ export function cloudwatchPort(region: string): CloudWatchPort {
             results.set(key, { ...r })
           }
         }
+        // CloudWatch's own word on the request (a limit reached, data left out): kept, as a result of its own
+        for (const m of out.Messages ?? []) notes.push({ Id: MESSAGES_ID, StatusCode: 'PartialData', Messages: [m] })
         next = out.NextToken
       } while (next)
-      return [...results.values()]
+      return [...results.values(), ...notes]
     },
     async describeAlarms(prefix) {
       const alarms: MetricAlarm[] = []
