@@ -44,6 +44,8 @@ describe('kind detection', () => {
     ['build/fw.elf', 'firmware'],
     ['build/fw.hex', 'firmware'],
     ['build/fw.map', 'firmware'],
+    ['hardware/parts.db', 'database'],
+    ['cache.sqlite3', 'database'],
     ['mystery.xyz', 'unknown'],
     ['noextension', 'unknown'],
   ])('%s is %s', (path, kind) => expect(viewerKind(path)).toBe(kind))

@@ -5,7 +5,7 @@
 
 export type ViewerKind =
   | 'schematic' | 'board' | 'gerber' | 'gerber-zip' | 'model' | 'step' | 'image' | 'video' | 'svg' | 'pdf' | 'table'
-  | 'vcd' | 'plot' | 'wavedrom' | 'code' | 'markdown' | 'firmware' | 'archive' | 'unknown'
+  | 'vcd' | 'plot' | 'wavedrom' | 'code' | 'markdown' | 'firmware' | 'archive' | 'database' | 'unknown'
 
 export type FileGroup = 'design' | 'fabrication' | 'evidence' | 'firmware' | 'documents'
 
@@ -20,7 +20,7 @@ export const GROUPS: { id: FileGroup; label: string; blurb: string }[] = [
 export const KIND_LABEL: Record<ViewerKind, string> = {
   schematic: 'Schematic', board: 'Board', gerber: 'Gerber', 'gerber-zip': 'Fabrication', model: '3D model', step: '3D model',
   image: 'Image', video: 'Video', svg: 'Drawing', pdf: 'PDF', table: 'Table', vcd: 'Waveform', plot: 'Simulation',
-  wavedrom: 'Timing diagram', code: 'Code', markdown: 'Markdown', firmware: 'Firmware image', archive: 'Archive', unknown: 'File',
+  wavedrom: 'Timing diagram', code: 'Code', markdown: 'Markdown', firmware: 'Firmware image', archive: 'Archive', database: 'Database', unknown: 'File',
 }
 
 const GERBER = new Set(['gbr', 'ger', 'pho', 'art', 'gtl', 'gbl', 'gto', 'gbo', 'gts', 'gbs', 'gtp', 'gbp', 'gko', 'gm1', 'gm2', 'gml', 'gm', 'g1', 'g2', 'g3', 'g4', 'g5', 'g6', 'gp1', 'gp2', 'gpt', 'gpb', 'drl', 'xln', 'exc', 'drd', 'txt.drl'])
@@ -33,6 +33,7 @@ const CODE = new Set([
 const NAMED_CODE = new Set(['makefile', 'dockerfile', 'cargo.lock', 'license', 'readme'])
 const IMAGE = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp'])
 const VIDEO = new Set(['mp4', 'webm', 'mov', 'm4v'])
+const DATABASE = new Set(['db', 'sqlite', 'sqlite3', 'db3', 's3db', 'sl3'])
 const FIRMWARE = new Set(['elf', 'hex', 'ihex', 'bin', 'map', 'uf2', 'axf', 'srec', 's19'])
 
 /** The file name without its folders. */
@@ -66,6 +67,7 @@ export function viewerKind(path: string, head?: string): ViewerKind {
   if (ext === 'sim.json' || ext === 'plot.json') return 'plot'
   if (ext === 'wavedrom.json' || ext === 'wave.json' || ext === 'wavedrom' || ext === 'wavejson') return 'wavedrom'
   if (ext === 'md' || ext === 'markdown' || ext === 'mdx') return 'markdown'
+  if (DATABASE.has(ext)) return 'database'
   if (FIRMWARE.has(ext)) return 'firmware'
   if (ext === 'json' && head) return refineJson(head)
   if (CODE.has(ext) || NAMED_CODE.has(name)) return 'code'
@@ -116,7 +118,8 @@ export function codeLang(path: string): string | null {
 export const isLog = (path: string): boolean => extOf(path) === 'log' || /\.log\.txt$/i.test(path)
 
 /** Which kinds can compare two versions, and how. */
-export function compareMode(kind: ViewerKind): 'text' | 'table' | 'image' | 'kicad' | null {
+export function compareMode(kind: ViewerKind): 'text' | 'table' | 'image' | 'kicad' | 'database' | null {
+  if (kind === 'database') return 'database'
   if (kind === 'code' || kind === 'markdown' || kind === 'wavedrom' || kind === 'vcd') return 'text'
   if (kind === 'table') return 'table'
   if (kind === 'image' || kind === 'svg') return 'image'
