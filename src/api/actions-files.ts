@@ -18,7 +18,8 @@
  *                       (earlier commits, newest first). Answered flat (`files`) and grouped (`groups`)
  *   files.url    read   one file (`commit`: as it was at an earlier commit): its bytes (base64) when at most 8 MB (the artifact limit), else GitHub's own short
  *                       download link (it carries a token for a private repository and lasts minutes). An evidence
- *                       path returns the artifact's bytes from the project database (or says it is too large)
+ *                       path returns the artifact's bytes from the project database (or says it is too large). The
+ *                       project database itself is answered only at a named `commit` (reviewing a change to it)
  *   files.edit   write  { repo, path, text, note } → { change, branch, commit }: a text file edited in the app (the
  *                       prompts screen's CLAUDE.md editor; docs/stay-in-trace.md "6. Small links and words"). Text
  *                       files only (no binary type, valid UTF-8 without NUL), at most 1 MB; protected paths
@@ -209,7 +210,10 @@ export const FILE_ACTIONS = {
         }
       })
     }
-    if (SKIP.test(a.path) || a.path === PROJECT_DB_PATH) throw new ActionError(`There is no file ${a.path} to show.`)
+    // the project's record is machinery, never listed or browsed, but a change that touches it is reviewed: at a
+    // named commit (a change's before or after) its bytes are answered so its tables can be compared in the app
+    const record = a.path === PROJECT_DB_PATH && !!a.commit
+    if (!record && (SKIP.test(a.path) || a.path === PROJECT_DB_PATH)) throw new ActionError(`There is no file ${a.path} to show.`)
     const gh = await ctx.deps.github()
     const ref = a.commit ?? a.ref ?? (await gh.defaultBranch(a.repo)).branch
     const info = await gh.fileInfo(a.repo, a.path, ref)
