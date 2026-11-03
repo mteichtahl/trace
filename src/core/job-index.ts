@@ -16,7 +16,8 @@
  *                    its log), when it was queued, started and ended, where it runs, its branch, and for a task the
  *                    request (payload) that resuming or starting it again needs; `beat_at` is the running job's
  *                    heartbeat (a microVM that dies writes nothing, so a running row whose beat is older than
- *                    STALE_AFTER_S is shown as lost and no longer holds the queue)
+ *                    STALE_AFTER_S is shown as lost and no longer holds the queue); `lost_at` is when the project's
+                    worker declared it lost (markLost, LOST COUNTED ONCE below)
  *           batch    the graphics card and CPU jobs (AWS Batch) a job's tools have running, from the waits its tool
  *                    server reports (src/gpu/batch.ts trackEventWait, relayed to the runtime): id, pool, state
  *
@@ -30,6 +31,17 @@
  * slot is free. The queue's order is each job's `order` control when a person moved it, else when it was queued.
  * Work items (the repository's workflows) are not queued here: the workflows already limit them (worker.max_parallel
  * claims), and a claim held while queued could expire and be dispatched twice. They count as running all the same.
+ *
+ * LOST COUNTED ONCE. A lost job ends without a word, so nothing records its end: Operations counted only the jobs
+ * that finished (and showed "100 % succeeded" over lost ones). The project's worker, the one writer of this index,
+ * declares them: every write it makes (and its heartbeat, BEAT_S) runs markLost inside the same conditional put, which
+ * stamps `lost_at` on each running row past STALE_AFTER_S that is not one of its own live jobs and has none yet, and
+ * returns those rows. Only the write that wins the put returns them (a lost race re-runs on the new index, where the
+ * other writer's stamp is already there), so each lost job is counted once (trace.jobs outcome `lost`,
+ * src/agents/runtime/job-index.ts), however many microVMs of the project write and however many API processes read.
+ * The row keeps its state (`running`): the views show it lost from its heartbeat as before. A row that beats again
+ * after it was declared lost (a partition, not a death) keeps its stamp: it is not counted lost a second time, and its
+ * end is counted as well when it comes.
  *
  * Pure except for the store: the views (jobView), the order (queueOrder) and the estimate (typicalSeconds) are
  * functions of the rows, tested on their own.
@@ -91,6 +103,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   paused_at REAL,
   tail TEXT,                      -- its last log lines (JSON array), so a job that goes silent shows what it was doing
   vitals TEXT,                    -- its microVM at its last word: memory in use and in all, in MB (JSON)
+  lost_at REAL,                   -- when the project's worker declared it lost (markLost): counted once
   updated_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state, agent);
@@ -112,6 +125,8 @@ export const applyJobIndexSchema = (db: DatabaseSync): void => {
   // added to explain lost jobs: an index made before has neither
   if (!cols.has('tail')) db.exec('ALTER TABLE jobs ADD COLUMN tail TEXT')
   if (!cols.has('vitals')) db.exec('ALTER TABLE jobs ADD COLUMN vitals TEXT')
+  // added to count lost jobs once (LOST COUNTED ONCE)
+  if (!cols.has('lost_at')) db.exec('ALTER TABLE jobs ADD COLUMN lost_at REAL')
 }
 
 /** One project's job index, in `store` (the central bucket at its `projects` prefix). */
@@ -132,6 +147,8 @@ export interface JobRow {
   pausedBy: string | null; pausedAt: number | null
   /** its last log lines (JSON array of strings) and its microVM's memory at its last word (JSON { usedMb, totalMb }) */
   tail: string | null; vitals: string | null
+  /** when the project's worker declared it lost (markLost) */
+  lostAt?: number | null
   updatedAt: number
 }
 export interface BatchRow { id: string; jobId: string; pool: 'gpu' | 'cpu'; state: string | null; submittedAt: number; endedAt: number | null }
@@ -146,7 +163,7 @@ export function loadJobs(db: DatabaseSync): JobRow[] {
     queuedAt: num(r.queued_at), startedAt: num(r.started_at), endedAt: num(r.ended_at), beatAt: num(r.beat_at), where: str(r.where_),
     branch: str(r.branch), parentJob: str(r.parent_job), handoff: str(r.handoff), resumeOf: str(r.resume_of), resumedBy: str(r.resumed_by),
     summary: str(r.summary), error: str(r.error), payload: str(r.payload), claudeSession: str(r.claude_session),
-    pausedBy: str(r.paused_by), pausedAt: num(r.paused_at), tail: str(r.tail), vitals: str(r.vitals), updatedAt: Number(r.updated_at),
+    pausedBy: str(r.paused_by), pausedAt: num(r.paused_at), tail: str(r.tail), vitals: str(r.vitals), lostAt: num(r.lost_at), updatedAt: Number(r.updated_at),
   }))
 }
 
@@ -160,7 +177,7 @@ const COLUMN: Record<keyof Omit<JobRow, 'id'>, string> = {
   handle: 'handle', session: 'session', kind: 'kind', agent: 'agent', title: 'title', number: 'number', requestedBySub: 'requested_by_sub', requestedBy: 'requested_by',
   state: 'state', step: 'step', queuedAt: 'queued_at', startedAt: 'started_at', endedAt: 'ended_at', beatAt: 'beat_at', where: 'where_', branch: 'branch',
   parentJob: 'parent_job', handoff: 'handoff', resumeOf: 'resume_of', resumedBy: 'resumed_by', summary: 'summary', error: 'error', payload: 'payload', claudeSession: 'claude_session',
-  pausedBy: 'paused_by', pausedAt: 'paused_at', tail: 'tail', vitals: 'vitals', updatedAt: 'updated_at',
+  pausedBy: 'paused_by', pausedAt: 'paused_at', tail: 'tail', vitals: 'vitals', lostAt: 'lost_at', updatedAt: 'updated_at',
 }
 
 /** Insert or change one job's row (only the fields given), stamping updated_at. */
@@ -222,6 +239,22 @@ export function putControl(db: DatabaseSync, c: Pick<JobControl, 'job' | 'by' | 
   const was = loadControls(db).get(c.job)
   db.prepare('INSERT OR REPLACE INTO job_controls (job, held, ord, discarded, by, at) VALUES (?,?,?,?,?,?)').run(
     c.job, (c.held ?? was?.held ?? false) ? 1 : 0, c.order !== undefined ? c.order : was?.order ?? null, (c.discarded ?? was?.discarded ?? false) ? 1 : 0, c.by, c.at)
+}
+
+/**
+ * Declare the lost jobs (LOST COUNTED ONCE): stamp `lost_at` on every running row past STALE_AFTER_S that has none and
+ * is not in `alive` (the writer's own running jobs, which it knows are alive whatever their row says), and return
+ * them. Run it inside the index's conditional put. updated_at is left alone: the live events read it as "changed",
+ * and nothing a person sees changed.
+ */
+export function markLost(db: DatabaseSync, at: number, alive: ReadonlySet<string> = new Set()): Pick<JobRow, 'id' | 'kind' | 'agent'>[] {
+  const out: Pick<JobRow, 'id' | 'kind' | 'agent'>[] = []
+  for (const j of loadJobs(db)) {
+    if (j.state !== 'running' || j.lostAt != null || alive.has(j.id) || isLive(j, at)) continue
+    db.prepare('UPDATE jobs SET lost_at=? WHERE id=? AND lost_at IS NULL').run(at, j.id)
+    out.push({ id: j.id, kind: j.kind, agent: j.agent })
+  }
+  return out
 }
 
 // ------------------------------------------------------------------ the queue
