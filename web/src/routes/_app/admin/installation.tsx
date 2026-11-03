@@ -1,7 +1,8 @@
 /**
  * Admin › Installation (docs/ui-design.md, "Admin"): one health list, each line a status or a Wait line, from what
  * the API can answer today (whoami, /api/config, the live connection, projects with status and tools.waits,
- * integrations.list); then Optional keys (Nexar, Mouser, Digi-Key: integrations.list / set / remove), each entered
+ * integrations.list, and project.agent for a project whose agent the installation update is still adding: its steps,
+ * the time left and on failure the failing step's last lines, the run's GitHub page in the More menu); then Optional keys (Nexar, Mouser, Digi-Key: integrations.list / set / remove), each entered
  * once, never read back; then the dashboards Operations draws from, honestly marked where the API has no read yet.
  */
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -21,6 +22,8 @@ import { type Status, StatusBadge } from '@/components/status-badge'
 import { WaitLine } from '@/components/wait-line'
 import { useTraceContext } from '@/components/chat/context'
 import { LayoutSection } from '@/components/installation/layout'
+import { MoreForAdmins } from '@/components/more-for-admins'
+import { UpdateProgress, notReady, setupLookEvery } from '@/components/project/agent-setup'
 import { call, projectName } from '@/lib/api'
 import type { IntegrationName, IntegrationStatus } from '@/lib/admin-types'
 import { loadConfig } from '@/lib/config'
@@ -68,6 +71,7 @@ function Installation() {
   const repos = (projects.data ?? []).map((p) => p.repo)
   const statuses = useQueries({ queries: repos.map((repo) => ({ ...q('status', { repo }), retry: false })) })
   const waits = useQueries({ queries: repos.map((repo) => q('tools.waits', { repo })) })
+  const agents = useQueries({ queries: repos.map((repo) => ({ ...q('project.agent', { repo }), retry: false, refetchInterval: (query: { state: { data?: unknown } }) => setupLookEvery(notReady(query.state.data) ? query.state.data : undefined) })) })
   const [editing, setEditing] = useState<IntegrationStatus | null>(null)
   const [removing, setRemoving] = useState<IntegrationStatus | null>(null)
 
@@ -137,6 +141,23 @@ function Installation() {
                 <StatusBadge status={l.status} label={l.word} />
               </li>
             ))}
+            {agents.map((a, i) => {
+              const s = a.data
+              if (!notReady(s)) return null
+              return (
+                <li key={`agent-${repos[i]}`} className="px-5 py-3.5" data-density-item>
+                  <div className="flex flex-wrap items-start gap-x-4 gap-y-1">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">{projectName(repos[i] ?? '')}: its agent</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">{s.text}</p>
+                    </div>
+                    <MoreForAdmins className="h-7" links={[s.update?.url ? { label: 'The update\'s run on GitHub', href: s.update.url } : null]} />
+                    <StatusBadge status={s.state === 'failed' || s.state === 'missing' || s.update?.status === 'failed' ? 'failing' : 'waiting'} label={s.update?.status === 'failed' || s.state === 'failed' ? 'Update failed' : s.state === 'missing' ? 'Not set up' : 'Being set up'} />
+                  </div>
+                  <UpdateProgress setup={s} className="mt-2" />
+                </li>
+              )
+            })}
             {projectWaits.map((w) => (
               <li key={w.id}><WaitLine wait={w} project={w.project} onCheckNow={(x) => call('tools.check_now', { repo: x.repo ?? '', waitId: x.id })} /></li>
             ))}

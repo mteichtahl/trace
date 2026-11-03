@@ -450,8 +450,12 @@ export interface AgentSetup {
   state: 'ready' | 'setting_up' | 'finishing' | 'failed' | 'missing'
   text: string
   requested_at: string | null
-  /** `url`: the update's run on GitHub, given to admins only */
-  update: { status: 'queued' | 'running' | 'finished' | 'failed'; started_at: string; url?: string } | null
+  /** `url`: the update's run on GitHub, given to admins only (their More menu). `steps`: the run's steps as they
+   * stand; `failed_log`: the failing step's last 40 lines (admins only, else null) */
+  update: {
+    status: 'queued' | 'running' | 'finished' | 'failed'; started_at: string; url?: string
+    steps?: { name: string; state: 'done' | 'running' | 'waiting' | 'failed' }[]; failed_log?: string | null
+  } | null
   expected_by: string | null
   next_check_s: number | null
 }

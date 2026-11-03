@@ -10,7 +10,8 @@
  * Never, whatever the scope: anything that needs an admin; signing or returning gates; answering questions; waivers;
  * design decisions; orders; chats; preferences and me.*; memory; prompts; skills; people and assignments; voice; the
  * inbox; accepting, asking for changes to or discarding a change trace made (change.accept, change.ask,
- * change.discard: a person decides what goes into the design). These are a person's (docs/user-journey.md: gates are signed by a person; trace prepares orders and a person
+ * change.discard: a person decides what goes into the design); handing in design files and editing a file in the app
+ * (design.handin, files.edit: a person's own edit, recorded with their name). These are a person's (docs/user-journey.md: gates are signed by a person; trace prepares orders and a person
  * submits them).
  *
  * job.control is a system's own jobs only: the job's recorded requester must be the system (its sub), and it needs

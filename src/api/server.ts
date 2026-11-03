@@ -48,6 +48,8 @@ import { ServiceVerifier } from './service-auth.js'
 import { parseWorkerRuntimes, remoteJobs } from './workers.js'
 
 const MAX_BODY = 2 * 1024 * 1024
+/** design.handin's files (src/api/actions-handin.ts: 3.5 MB together, as base64): the one larger body. */
+const MAX_HANDIN_BODY = 6 * 1024 * 1024
 
 const Body = z.object({ action: z.string().min(1).max(64) }).catchall(z.unknown())
 
@@ -107,10 +109,13 @@ async function readBody(req: IncomingMessage): Promise<string> {
   for await (const c of req) {
     const b = Buffer.isBuffer(c) ? c : Buffer.from(String(c))
     size += b.length
-    if (size > MAX_BODY) throw new ActionError('the body is larger than 2 MB')
+    if (size > MAX_HANDIN_BODY) throw new ActionError('the body is larger than 6 MB')
     chunks.push(b)
   }
-  return Buffer.concat(chunks).toString('utf8')
+  const text = Buffer.concat(chunks).toString('utf8')
+  // only design.handin may be larger than 2 MB (the app sends `action` first; anything else is held to 2 MB)
+  if (size > MAX_BODY && !/^\s*\{\s*"action"\s*:\s*"design\.handin"/.test(text.slice(0, 100))) throw new ActionError('the body is larger than 2 MB')
+  return text
 }
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))

@@ -99,7 +99,7 @@ describe('prompts through the API: who may do what', () => {
     await expect(perform('prompts.set', { ...set, repo: undefined }, ctx(USER))).rejects.toThrow(/needs repo/)
     const before = gh.files.get(`${BOARD}:main:.trace/project.db`)
     const r = await call(USER, 'prompts.set', set)
-    expect(r).toMatchObject({ scope: 'project', repo: BOARD, version: 1, action: 'set', commit: 'c0ffee0000000000' })
+    expect(r).toMatchObject({ scope: 'project', repo: BOARD, version: 1, action: 'set', commit: 'c0ffee0000000000000000000000000000000000' })
     expect(String(r.branch)).toMatch(/^trace\/prompts-specialist-verify-workflow-[0-9a-z]+$/)
     expect(gh.files.get(`${BOARD}:main:.trace/project.db`)).toBe(before)
     // the committed database has the override, its history, and the earlier override from the default branch

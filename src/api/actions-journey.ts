@@ -36,8 +36,9 @@
  *                                    under `unavailable` rather than failing the whole inbox
  *
  *   journey.snapshot        admin    copy the record into the repository's .trace/project.db (its journey tables) on a
- *                                    new branch trace/release-<revision>-<time>, held for a person like every change
- *                                    to .trace/**, and log the commit in the decisions. Signing the gate that cuts a
+ *                                    new branch trace/release-<revision>-<time>, recorded as an app edit (kind release:
+ *                                    its pull request opens at once and trace applies it; `change`), and log the
+ *                                    commit in the decisions. Signing the gate that cuts a
  *                                    release (the release approval gate; Prove's in the Firmware template) takes it
  *                                    on its own: a failed copy is reported with the signature and never undoes it
  *
@@ -57,6 +58,7 @@ import {
   dismissStuck, journeyView, loadJourney, recordOpen, returnGate, signGate, sortInbox, withChanges,
 } from '../core/journey.js'
 import { openChanges, openPulls, projectEdits, projectRule } from './actions-changes.js'
+import { recordEdit } from './edits.js'
 import { recommendationOf } from './changes.js'
 import { AGENT_WORDS, jobIndex, listJobs, projectHandoffs } from './actions-jobs.js'
 import { editReviewItems, reviewItems } from './inbox-review.js'
@@ -86,9 +88,13 @@ const signer = (ctx: Context): { hash: string; label: string; also: string[] } =
 /** Run a journey write, turning a refusal of the record's own into the person's error. */
 const journeyWrite = <T>(ctx: Context, repo: string, fn: Parameters<typeof writeJourney<T>>[2]) => plainly(() => writeJourney<T>(ctx, repo, fn))
 
-/** Copy the record into the repository and log the commit in the decisions. */
-async function snapshot(ctx: Context, repo: string, why: string): Promise<{ branch: string; commit: string; revision: string; version: number }> {
-  const s = await plainly(() => snapshotJourney(ctx, repo, why))
+/**
+ * Copy the record into the repository, record it as an app edit (docs/stay-in-trace.md: its pull request opens at once
+ * and trace applies it; `change` is its number), and log the commit in the decisions.
+ */
+async function snapshot(ctx: Context, repo: string, why: string): Promise<{ branch: string; commit: string; revision: string; version: number; change: number | null }> {
+  const { base, ...s } = await plainly(() => snapshotJourney(ctx, repo, why))
+  const edit = await recordEdit(ctx, { repo, branch: s.branch, base, commit: s.commit, kind: 'release', title: `The record of revision ${s.revision}`, redo: { op: 'release', why } })
   const logged = await writeJourney(ctx, repo, (db) => {
     decide(db, {
       kind: 'journey.snapshot', stage: null, ref: s.commit, by: label(ctx.principal),
@@ -96,7 +102,7 @@ async function snapshot(ctx: Context, repo: string, why: string): Promise<{ bran
     })
     return { result: {} }
   })
-  return { ...s, version: logged.version }
+  return { ...s, version: logged.version, change: edit.number }
 }
 
 /** At most this many projects' databases are read at once for the inbox. */
@@ -363,7 +369,7 @@ export const JOURNEY_ACTIONS = {
     // the signature cut a release: the record goes into the repository with it
     try {
       const s = await snapshot(ctx, a.repo, `${a.gate} signed`)
-      return { ...signed, ...kickoff, version: s.version, snapshot: { branch: s.branch, commit: s.commit }, summary: `${signed.summary} The record was copied into the repository.` }
+      return { ...signed, ...kickoff, version: s.version, snapshot: { branch: s.branch, commit: s.commit, change: s.change }, summary: `${signed.summary} The record was copied into the repository.` }
     } catch (e) {
       return { ...signed, ...kickoff, snapshot: { error: `The gate is signed, but the record could not be copied into the repository: ${e instanceof Error ? e.message : String(e)}. An admin can copy it with journey.snapshot.` } }
     }

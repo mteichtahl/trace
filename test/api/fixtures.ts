@@ -113,7 +113,7 @@ export class FakeGitHub implements GitHubApi {
   async putFile(repo: string, o: { path: string; branch: string; content: Uint8Array; message: string; sha: string | null }): Promise<{ commit: string }> {
     this.calls.push(`putFile ${repo} ${o.branch} ${o.path} ${o.sha ?? 'new'}`)
     this.files.set(`${repo}:${o.branch}:${o.path}`, o.content)
-    return { commit: 'c0ffee0000000000' }
+    return { commit: 'c0ffee0000000000000000000000000000000000' }
   }
   /** "repo:path" → the commits that changed it, newest first */
   history = new Map<string, CommitSummary[]>()

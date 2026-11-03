@@ -28,8 +28,14 @@ export function smallAction(name: string, a: Record<string, unknown>): Response 
   switch (name) {
     case 'installation.layout': return ok(import.meta.env.VITE_MOCK_LAYOUT === 'nested' ? NESTED : FLAT)
     case 'project.agent': return ok(import.meta.env.VITE_MOCK_AGENT === 'setting_up'
-      ? { repo: a.repo, ready: false, state: 'setting_up', text: 'The installation update is running: it tests trace and then deploys this project\'s agent.', requested_at: new Date(Date.now() - 20 * 60_000).toISOString(), update: { status: 'running', started_at: new Date(Date.now() - 19 * 60_000).toISOString(), url: 'https://github.com/' }, expected_by: new Date(Date.now() + 41 * 60_000).toISOString(), next_check_s: 60 }
+      ? { repo: a.repo, ready: false, state: 'setting_up', text: 'The installation update is running: it tests trace and then deploys this project\'s agent.', requested_at: new Date(Date.now() - 20 * 60_000).toISOString(), update: { status: 'running', started_at: new Date(Date.now() - 19 * 60_000).toISOString(), url: 'https://github.com/', steps: [{ name: 'typescript › Install', state: 'done' }, { name: 'typescript › Test', state: 'done' }, { name: 'update-installation › Deploy the installation', state: 'running' }, { name: 'update-installation › Mark the projects added', state: 'waiting' }], failed_log: null }, expected_by: new Date(Date.now() + 41 * 60_000).toISOString(), next_check_s: 60 }
       : { repo: a.repo, ready: true, state: 'ready', text: 'This project\'s agent is set up.', requested_at: null, update: null, expected_by: null, next_check_s: null })
+    // a person's edit committed on a branch of trace's own (docs/stay-in-trace.md): the change it opened
+    case 'design.handin': {
+      const files = (a.files as { path: string }[] | undefined) ?? []
+      return ok({ repo: a.repo, change: 12, changed: files.map((f) => f.path), same: [], branch: `trace/handin-mock-${Date.now().toString(36)}`, commit: 'c0ffee1' })
+    }
+    case 'files.edit': return ok({ repo: a.repo, path: a.path, change: 12, branch: `trace/edit-claude-md-${Date.now().toString(36)}`, commit: 'c0ffee1' })
     case 'prompts.chat': return ok({ entries: [{ id: 'chat.role', text: null, version: null, sha: '0123456789ab' }] })
     case 'voice.vocabulary': return ok({ repo: a.repo, language: a.language, name: 'trace-0123abcd-en-AU', state: 'READY', usable: true, note: 'Dictation uses this project\'s words (reference designators, part numbers, net names, requirement ids).' })
     default: return undefined

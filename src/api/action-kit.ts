@@ -299,7 +299,7 @@ export async function withRecordDb<T>(ctx: Context, repo: string, fn: (db: Datab
  * replaced by the store's, committed on a new branch trace/release-<revision>-<time> (held for a person like every
  * change to .trace/**), the way settings.set writes. Returns the branch and commit.
  */
-export async function snapshotJourney(ctx: Context, repo: string, why: string): Promise<{ branch: string; commit: string; revision: string }> {
+export async function snapshotJourney(ctx: Context, repo: string, why: string): Promise<{ branch: string; commit: string; revision: string; base: string }> {
   const bytes = await journeyStore(ctx, repo).bytes()
   if (!bytes) throw new ActionError('This project has no journey to copy yet.')
   const gh = await ctx.deps.github()
@@ -324,7 +324,7 @@ export async function snapshotJourney(ctx: Context, repo: string, why: string): 
       path: PROJECT_DB_PATH, branch, content: readFileSync(t.db), sha: blob,
       message: `journey: the record of revision ${revision} (${why})\n\nRequested by ${label(ctx.principal)} through the trace API.`,
     })
-    return { branch, commit, revision }
+    return { branch, commit, revision, base }
   } finally {
     t.cleanup()
   }
