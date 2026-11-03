@@ -11,7 +11,7 @@ import type { AddressInfo } from 'node:net'
 import { afterAll, describe, expect, it } from 'vitest'
 import { type ClaudeOptions, type Exec, type PausedWork, type RunnerDeps, createRunner, keepPaused } from '../../src/agents/runtime/job.js'
 import {
-  type Changes, batchOfWait, indexJobs, queueAdmit, restoreTranscript, saveTranscript, sessionsDir, timerChanges, titleOf, transcriptKey,
+  INDEX_RETRY, type Changes, batchOfWait, indexJobs, queueAdmit, restoreTranscript, saveTranscript, sessionsDir, timerChanges, titleOf, transcriptKey,
 } from '../../src/agents/runtime/job-index.js'
 import { JobPaused, type JobRunner, createJobs } from '../../src/agents/runtime/jobs.js'
 import type { JobPayload } from '../../src/agents/runtime/schemas.js'
@@ -108,6 +108,53 @@ describe('the job index, from the jobs\' own events', () => {
     expect(said.filter((l) => l.includes('gone is lost'))).toHaveLength(1)
     expect((await s.index.read(loadJobs)).result.find((r) => r.id === 'gone')).toMatchObject({ state: 'running', lostAt: expect.any(Number) })
     for (const x of writers) { x.w.stop(); x.jobs.dispose() }
+  })
+
+  it('a job\'s end that could not be written is tried again, and the runtime stays busy until it lands', async () => {
+    // job-mw0cn2v7, job-mw05bpat: "succeeded" in their last lines, yet shown lost 15 minutes later. Their end's write
+    // failed once, was dropped, and /ping said idle with it unwritten
+    const objects = new Map<string, { body: Uint8Array; etag: string }>()
+    let n = 0
+    let down = false
+    const bucket: Backend = {
+      url: 'mem://retry', localPath: () => null, list: async () => [...objects.keys()],
+      get: async (k) => objects.get(k) ?? null, head: async (k) => objects.get(k)?.etag ?? null,
+      put: async (k, body, o = {}) => {
+        if (down) throw new Error('the bucket did not answer')
+        const had = objects.get(k)
+        if ((o.ifNoneMatch && had) || (o.ifMatch !== undefined && had?.etag !== o.ifMatch)) throw new Conflict(`${k} changed`)
+        const etag = `"${++n}"`
+        objects.set(k, { body, etag })
+        return etag
+      },
+    }
+    const index = new JobIndexStore(bucket, REPO)
+    const was = { ...INDEX_RETRY }
+    Object.assign(INDEX_RETRY, { firstMs: 10, maxMs: 40 })
+    try {
+      let release = (): void => undefined
+      const jobs = createJobs((_p) => new Promise((res) => { release = () => res('all requirements pass') }), quiet)
+      const said: string[] = []
+      const w = indexJobs(jobs, index, (id) => jobs.payloadOf(id), { heartbeat: false, stepEveryMs: 0, log: (l) => { said.push(l) } })
+      const { jobId } = jobs.startJob(task('Verify the chirp'), 'trace-api-00000000-000000000000000000000000')
+      await w.flush()
+      expect((await index.read(loadJobs)).result.find((r) => r.id === jobId)).toMatchObject({ state: 'running' })
+      down = true
+      release()
+      await until(() => !jobs.busy())
+      await w.flush()
+      // not written yet, and not dropped: the writer is not settled, so the runtime would still answer busy
+      expect(w.settled()).toBe(false)
+      expect(said.some((l) => l.includes('trying again'))).toBe(true)
+      down = false
+      await until(async () => (await index.read(loadJobs)).result.find((r) => r.id === jobId)?.state === 'succeeded')
+      await until(() => w.settled())
+      expect(said.some((l) => l.includes('written again'))).toBe(true)
+      w.stop()
+      jobs.dispose()
+    } finally {
+      Object.assign(INDEX_RETRY, was)
+    }
   })
 
   it('a change that comes before the job\'s first row (its "started" log line, its route) waits for that row', async () => {

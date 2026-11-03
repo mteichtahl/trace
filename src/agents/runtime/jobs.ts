@@ -392,7 +392,13 @@ export function defaultJobs(): Jobs {
   if (current) return current
   const index = workerIndex()
   current = createJobs(realRunner(process.env, index?.paused), { project: process.env.TRACE_PROJECT || undefined, ...(index ? { admit: index.admit } : {}) })
-  index?.watch(current)
+  const writer = index?.watch(current)
+  if (writer) {
+    // busy until a job's end has reached the index too: answered idle at once, the session could be stopped with its
+    // last write unwritten, and the job, done, was shown lost 15 minutes later
+    const jobsBusy = current.busy
+    current.busy = () => jobsBusy() || !writer.settled()
+  }
   return current
 }
 
