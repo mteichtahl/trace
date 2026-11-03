@@ -172,7 +172,7 @@ export function engineCapabilities(caps: Capabilities = CAPABILITIES): Record<st
  * numbers, only the first run of the same shape after the label counts (figureMatch): the next row of a table, often
  * with the same numbers, cannot stand in for this one.
  */
-export interface Figure {
+export interface Figure<C = Capabilities> {
   id: string
   page: string
   label: string
@@ -192,7 +192,7 @@ export interface Figure {
    * numbers can be written back safely: a figure without one that changes is reported for a person. Throws when the
    * numbers do not fit (their count, or no row to put them in).
    */
-  apply?: (caps: Capabilities, nums: readonly number[]) => void
+  apply?: (caps: C, nums: readonly number[]) => void
 }
 
 export const WINDOW = 160
@@ -316,7 +316,7 @@ function looseRe(s: string, free: boolean): string {
  * Empty when the figure has no numbers, or nothing of that shape follows the label within its window; null when the
  * label is not on the page. `nth` picks a later text of the shape, for a row that states several.
  */
-export function figureMatches(f: Figure, text: string): string[] | null {
+export function figureMatches<C>(f: Figure<C>, text: string): string[] | null {
   // a label that ends in a letter or digit is a whole word: "PA12" is not the start of "PA12-HP" or "PA12-CF"
   const label = new RegExp(looseRe(f.label, false) + (/[a-z0-9]$/i.test(f.label) ? '(?![a-z0-9-])' : ''), 'gi')
   const shape = new RegExp(looseRe(f.text, true), 'gi')
@@ -336,7 +336,7 @@ export function figureMatches(f: Figure, text: string): string[] | null {
 }
 
 /** Whether `text` (a page's plain text, or null when it could not be fetched) still states the figure. */
-export function figureStatus(f: Figure, text: string | null): FigureStatus {
+export function figureStatus<C>(f: Figure<C>, text: string | null): FigureStatus {
   if (text === null) return 'unreadable'
   const matches = figureMatches(f, text)
   if (matches === null) return 'unreadable'
@@ -370,7 +370,7 @@ export function numbersIn(text: string): number[] {
  * The base table with `u` applied: each updated figure's numbers put in by its `apply`, and `checked` moved on. A
  * figure id that is not known, or has no `apply`, is an error: ./capsync.ts never writes one.
  */
-export function withUpdates(base: Capabilities, u: CapabilityUpdates, figures: readonly Figure[] = BASE_FIGURES): Capabilities {
+export function withUpdates<C extends { checked: string }>(base: C, u: CapabilityUpdates, figures: readonly Figure<C>[] = BASE_FIGURES as unknown as readonly Figure<C>[]): C {
   const caps = structuredClone(base)
   for (const [id, f] of Object.entries(u.figures)) {
     const fig = figures.find((x) => x.id === id)
@@ -382,7 +382,7 @@ export function withUpdates(base: Capabilities, u: CapabilityUpdates, figures: r
 }
 
 /** The figures as the pages last stated them: an updated figure's text is what the check found. */
-export function currentFigures(figures: readonly Figure[], u: CapabilityUpdates): Figure[] {
+export function currentFigures<C>(figures: readonly Figure<C>[], u: CapabilityUpdates): Figure<C>[] {
   return figures.map((f) => (u.figures[f.id] ? { ...f, text: u.figures[f.id]!.text } : f))
 }
 

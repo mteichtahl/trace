@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import { ONTOLOGY_DIR, readVocabulary, turtleFiles } from '../../src/ontology/vocab.js'
 import { jsonLdContext } from '../../src/ontology/jsonld.js'
 import { TABLES, type ColumnRule, type FieldMap } from '../../src/ontology/mapping.js'
+import { BOARD_CLASSES, BOARD_PROPERTIES } from '../../src/ontology/board.js'
 
 const v = readVocabulary()
 
@@ -20,8 +21,8 @@ const acronyms = (s: string): string[] => (s.match(/\b[A-Z]{2,}\b/g) ?? []).filt
 
 /** Classes and properties the mapping names: a table's class, each column's property and link type, each object's. */
 function mapped(): { classes: Set<string>; props: Set<string> } {
-  const classes = new Set<string>(['Project'])
-  const props = new Set<string>(['inProject'])
+  const classes = new Set<string>(['Project', ...BOARD_CLASSES])
+  const props = new Set<string>(['inProject', ...BOARD_PROPERTIES])
   const rule = (r: ColumnRule): void => {
     if ('ignore' in r) return
     props.add(r.prop)
@@ -35,14 +36,15 @@ function mapped(): { classes: Set<string>; props: Set<string> } {
   }
   for (const t of TABLES) {
     classes.add(t.class)
+    for (const c of Object.values(t.typeBy?.classes ?? {})) classes.add(c)
     Object.values(t.columns).forEach(rule)
     if (t.link) props.add(t.link[2])
   }
   return { classes, props }
 }
 
-/** Core properties lineage (phase 4) and the board module use; nothing maps them yet. */
-const FOR_LATER = new Set(['isInputTo', 'isOutputOf', 'derivedFromVersion', 'supersedes', 'versionOf', 'path', 'format', 'sha256', 'gitCommit', 'versionNumber'])
+/** Core properties lineage (phase 4) fills; nothing maps them yet. */
+const FOR_LATER = new Set(['isInputTo', 'isOutputOf', 'derivedFromVersion', 'supersedes', 'versionOf', 'versionNumber'])
 
 describe('the ontology files', () => {
   it('every Turtle file parses', () => {
@@ -52,7 +54,8 @@ describe('the ontology files', () => {
   })
 
   it('every module carries a version', () => {
-    expect(v.versions).toEqual({ 'trace-core.ttl': expect.stringMatching(/^\d+\.\d+\.\d+$/), 'trace-journey.ttl': expect.stringMatching(/^\d+\.\d+\.\d+$/) })
+    const semver = expect.stringMatching(/^\d+\.\d+\.\d+$/)
+    expect(v.versions).toEqual({ 'trace-core.ttl': semver, 'trace-journey.ttl': semver, 'trace-board.ttl': semver })
   })
 
   it('every term has a label and a comment in plain words, acronyms only as other names', () => {

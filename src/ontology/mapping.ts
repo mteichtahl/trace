@@ -27,10 +27,12 @@
  * node to every row (the journey has each stage).
  */
 
-export type DbName = 'journey' | 'facts' | 'jobs'
+import { mpnKey } from '../tools/datasheets/mpn.js'
+
+export type DbName = 'journey' | 'facts' | 'jobs' | 'project' | 'central'
 export type LiteralAs = 'text' | 'time' | 'int' | 'decimal' | 'bool' | 'date' | 'json'
 
-export type RefTarget = string | ((value: string) => readonly [kind: string, id: string] | null)
+export type RefTarget = string | ((value: string, row: Readonly<Record<string, unknown>>) => readonly [kind: string, id: string] | null)
 
 export interface FieldMap { class: string; fields: Readonly<Record<string, ColumnRule>>; typeIf?: { field: string; class: string } }
 
@@ -54,6 +56,8 @@ export interface TableMap {
   columns: Readonly<Record<string, ColumnRule>>
   /** a link from a fixed node to every row: [kind, id, property] */
   link?: readonly [kind: string, id: string, prop: string]
+  /** a further class by a column's value (a run of kicad.drc is also a board rule check) */
+  typeBy?: { column: string; classes: Readonly<Record<string, string>> }
 }
 
 export const ID = (why = 'the identifier: it names the node') => ({ ignore: why }) as const
@@ -72,6 +76,13 @@ const options: FieldMap = {
 }
 const revision = { ref: 'revision', type: 'Revision' } as const
 const specialist = { ref: 'specialist', type: 'Specialist' } as const
+const blockParts: FieldMap = {
+  class: 'BlockPart',
+  typeIf: { field: 'key', class: 'KeyPart' },
+  fields: { mpn: { prop: 'refersToPart', ref: (v) => [`part`, mpnKey(v)] }, role: { prop: 'role' }, key: { ignore: 'whether it is a key part: the node is typed KeyPart' } },
+}
+/** arch_connections.from_block / to_block: a block of the same option */
+const block: RefTarget = (v, row) => ['block', `${String(row.option)}/${v}`]
 /** criterion_opens.item: a criterion id, or waiver:<id> */
 const opened: RefTarget = (v) => (v.startsWith('waiver:') ? ['waiver', v.slice('waiver:'.length)] : ['criterion', v])
 
@@ -318,24 +329,183 @@ export const TABLES: readonly TableMap[] = [
       lost_at: { prop: 'lostAt', as: 'time' }, updated_at: { prop: 'updatedAt', as: 'time' },
     },
   },
+
+  // ------------------------------------------------------------------ the project database (.trace/project.db)
+  {
+    db: 'project', table: 'settings', class: 'ProjectSetting', kind: 'setting', key: 'key',
+    columns: { key: { prop: 'settingKey' }, value: { prop: 'settingValue', as: 'json' }, updated: { prop: 'updatedAt', as: 'time' }, by: { prop: 'updatedBy' } },
+  },
+  {
+    db: 'project', table: 'runs', class: 'Run', kind: 'run', key: 'id',
+    typeBy: { column: 'kind', classes: { 'kicad.drc': 'DesignRuleCheckReport', 'kicad.erc': 'ElectricalRuleCheckReport' } },
+    columns: {
+      id: ID(), kind: { prop: 'runKind' }, subject: { prop: 'subject' }, started: { prop: 'startedAt', as: 'time' }, finished: { prop: 'endedAt', as: 'time' },
+      status: { prop: 'status' }, summary: { prop: 'summary' }, args: { prop: 'arguments', as: 'json' }, result: { prop: 'resultOf', as: 'json' },
+      git_sha: { prop: 'gitCommit' }, agent: { prop: 'performedBy', ...specialist }, job: { prop: 'fromJob', ref: 'job' },
+    },
+  },
+  {
+    db: 'project', table: 'measurements', class: 'Measurement', kind: 'measurement', key: ['run_id', 'name'],
+    columns: { run_id: { prop: 'ofRun', ref: 'run' }, name: { prop: 'name' }, value: { prop: 'value', as: 'decimal' }, unit: { prop: 'unit' }, detail: { prop: 'note' } },
+  },
+  {
+    db: 'project', table: 'artifacts', class: 'RunArtifact', kind: 'artifact', key: ['run_id', 'name'],
+    columns: {
+      run_id: { prop: 'ofRun', ref: 'run' }, name: { prop: 'name' }, mime: { prop: 'format' },
+      bytes: { ignore: 'the file\'s content: the graph names it, files.url and the run record give it' },
+    },
+  },
+  {
+    db: 'project', table: 'intent_statements', class: 'IntentStatement', kind: 'intent', key: 'id',
+    columns: {
+      id: ID(), topic: { prop: 'topic' }, kind: { prop: 'statementKind' }, text: { prop: 'text' }, source: { prop: 'sourceOf', as: 'json' },
+      detail: { prop: 'detail', as: 'json' }, decide_by: { prop: 'decideBy' }, owner: { prop: 'answerOwner' },
+      conflicts: { prop: 'conflictsWith', refList: 'intent' }, testable: { prop: 'testable', as: 'bool' }, status: { prop: 'status' },
+      created: { prop: 'createdAt', as: 'time' }, updated: { prop: 'updatedAt', as: 'time' }, by: { prop: 'updatedBy' },
+    },
+  },
+  {
+    db: 'project', table: 'requirement_intent', class: 'IntentLink', kind: 'intent-link', key: ['requirement', 'intent'],
+    columns: {
+      requirement: { prop: 'ofRequirement', ref: 'requirement' }, intent: { prop: 'fromIntent', ref: 'intent' }, removed: { prop: 'removed', as: 'bool' },
+      updated: { prop: 'updatedAt', as: 'time' }, by: { prop: 'updatedBy' },
+    },
+  },
+  {
+    db: 'project', table: 'arch_options', class: 'ArchitectureOption', kind: 'arch-option', key: 'id',
+    columns: {
+      id: ID('the option\'s letter: it names the node'), name: { prop: 'name' }, summary: { prop: 'summary' }, recommended: { prop: 'isRecommended', as: 'bool' },
+      why: { prop: 'justification' }, gives_up: { prop: 'givesUp' }, risks: { prop: 'optionRisk', textList: true }, status: { prop: 'status' },
+      created: { prop: 'createdAt', as: 'time' }, updated: { prop: 'updatedAt', as: 'time' }, by: { prop: 'updatedBy' },
+    },
+  },
+  {
+    db: 'project', table: 'arch_criteria', class: 'ArchitectureCriterion', kind: 'arch-criterion', key: 'id',
+    columns: {
+      id: ID(), name: { prop: 'name' }, weight: { prop: 'weight', as: 'decimal' }, description: { prop: 'description' }, status: { prop: 'status' },
+      updated: { prop: 'updatedAt', as: 'time' }, by: { prop: 'updatedBy' },
+    },
+  },
+  {
+    db: 'project', table: 'arch_scores', class: 'ArchitectureScore', kind: 'arch-score', key: ['option', 'criterion'],
+    columns: {
+      option: { prop: 'forOption', ref: 'arch-option' }, criterion: { prop: 'scoredOn', ref: 'arch-criterion' }, score: { prop: 'score', as: 'decimal' },
+      reason: { prop: 'reason' }, updated: { prop: 'updatedAt', as: 'time' }, by: { prop: 'updatedBy' },
+    },
+  },
+  {
+    db: 'project', table: 'arch_blocks', class: 'FunctionalBlock', kind: 'block', key: ['option', 'id'],
+    columns: {
+      option: { prop: 'forOption', ref: 'arch-option' }, id: { prop: 'label' }, name: { prop: 'name' }, role: { prop: 'role' },
+      parts: { prop: 'usesPart', objects: blockParts }, requirements: { prop: 'servesRequirement', refList: 'requirement' },
+      x: { ignore: 'where the block sits on the diagram: drawing only' }, y: { ignore: 'where the block sits on the diagram: drawing only' },
+      status: { prop: 'status' }, updated: { prop: 'updatedAt', as: 'time' }, by: { prop: 'updatedBy' },
+    },
+  },
+  {
+    db: 'project', table: 'arch_connections', class: 'Interface', kind: 'connection', key: ['option', 'id'],
+    columns: {
+      option: { prop: 'forOption', ref: 'arch-option' }, id: ID('the connection\'s id within its option: with the option, it names the node'),
+      from_block: { prop: 'fromBlock', ref: block }, to_block: { prop: 'toBlock', ref: block }, kind: { prop: 'connectionKind' }, label: { prop: 'label' },
+      status: { prop: 'status' }, updated: { prop: 'updatedAt', as: 'time' }, by: { prop: 'updatedBy' },
+    },
+  },
+  {
+    db: 'project', table: 'pin_plan', class: 'PinAssignment', kind: 'pin-plan', key: ['part', 'pin'],
+    columns: {
+      part: { prop: 'onComponent', ref: 'component' }, pin: { prop: 'pinNumber' }, name: { prop: 'pinName' }, function: { prop: 'pinFunction' },
+      peripheral: { prop: 'peripheral' }, use: { prop: 'servesUse' }, net: { prop: 'onNet', ref: 'net' }, kind: { prop: 'pinKind' },
+      reserved: { prop: 'reservedFor' }, alternates: { prop: 'alternative', textList: true }, constraints: { prop: 'constraint' }, note: { prop: 'note' },
+      status: { prop: 'status' }, updated: { prop: 'updatedAt', as: 'time' }, by: { prop: 'updatedBy' },
+    },
+  },
+  {
+    db: 'project', table: 'sheet_requirements', class: 'SchematicSheet', kind: 'sheet', key: 'sheet',
+    columns: {
+      sheet: { prop: 'path' }, block: { prop: 'forBlock' }, requirements: { prop: 'servesRequirement', refList: 'requirement' }, reason: { prop: 'reason' },
+      updated: { prop: 'updatedAt', as: 'time' }, by: { prop: 'updatedBy' },
+    },
+  },
+  {
+    db: 'project', table: 'requirements', class: 'Requirement', kind: 'requirement', key: 'id',
+    columns: {
+      id: ID(), text: { prop: 'text' }, kind: { prop: 'requirementKind' }, acceptance: { prop: 'acceptanceCriterion' }, source: { prop: 'sourceDocument' },
+      page: { prop: 'page', as: 'int' }, status: { prop: 'status' }, tags: { prop: 'tag', textList: true },
+      created: { prop: 'createdAt', as: 'time' }, updated: { prop: 'updatedAt', as: 'time' }, by: { prop: 'updatedBy' },
+    },
+  },
+  {
+    db: 'project', table: 'test_items', class: 'TestItem', kind: 'test', key: 'id',
+    columns: {
+      id: ID(), title: { prop: 'title' }, requirements: { prop: 'servesRequirement', refList: 'requirement' }, method: { prop: 'method' },
+      tool: { prop: 'tool' }, args: { prop: 'arguments', as: 'json' }, command: { prop: 'command' }, expect: { prop: 'expects', as: 'json' },
+      status: { prop: 'status' }, last_run: { prop: 'lastRun', ref: 'run' }, note: { prop: 'note' },
+      created: { prop: 'createdAt', as: 'time' }, updated: { prop: 'updatedAt', as: 'time' }, by: { prop: 'updatedBy' },
+    },
+  },
+  {
+    db: 'project', table: 'test_results', class: 'TestResult', kind: 'test-result', key: 'run_id',
+    columns: {
+      run_id: { prop: 'ofRun', ref: 'run' }, test_id: { prop: 'ofTest', ref: 'test' }, status: { prop: 'status' },
+      evidence: { prop: 'restsOn', refList: 'run' }, reason: { prop: 'reason' }, at: { prop: 'recordedAt', as: 'time' },
+    },
+  },
+  {
+    db: 'project', table: 'coverage_points', class: 'CoveragePoint', kind: 'coverage-point', key: 'id',
+    columns: {
+      id: ID(), requirements: { prop: 'servesRequirement', refList: 'requirement' }, kind: { prop: 'pointKind' }, match: { prop: 'matches' },
+      goal: { prop: 'goal', as: 'int' }, description: { prop: 'description' },
+      created: { prop: 'createdAt', as: 'time' }, updated: { prop: 'updatedAt', as: 'time' }, by: { prop: 'updatedBy' },
+    },
+  },
+  {
+    db: 'project', table: 'coverage_hits', class: 'CoverageHit', kind: 'coverage-hit', key: ['run_id', 'kind', 'name'],
+    columns: {
+      run_id: { prop: 'ofRun', ref: 'run' }, kind: { prop: 'pointKind' }, name: { prop: 'name' }, hits: { prop: 'hits', as: 'int' }, location: { prop: 'location' },
+    },
+  },
+  {
+    db: 'project', table: 'bringup_readings', class: 'BenchReading', kind: 'reading', key: 'id',
+    columns: {
+      id: ID(), board: { prop: 'ofBoardUnit', ref: 'board' }, step: { prop: 'step' }, instrument: { prop: 'instrument' }, quantity: { prop: 'quantity' },
+      value: { prop: 'value', as: 'decimal' }, unit: { prop: 'unit' }, min: { prop: 'minimum', as: 'decimal' }, max: { prop: 'maximum', as: 'decimal' },
+      pass: { prop: 'passed', as: 'bool' }, at: { prop: 'recordedAt', as: 'time' }, by: { prop: 'recordedBy' }, run_id: { prop: 'ofRun', ref: 'run' },
+    },
+  },
+
+  // ------------------------------------------------------------------ the installation's parts database (central)
+  {
+    db: 'central', table: 'parts', class: 'Part', kind: 'part', key: 'key',
+    columns: {
+      key: ID('the part number as trace compares it (mpnKey): it names the node'), mpn: { prop: 'mpn' }, manufacturer: { prop: 'manufacturerName' },
+      description: { prop: 'description' }, package: { prop: 'package' }, lifecycle: { prop: 'lifecycle' }, attributes: { prop: 'attributes', as: 'json' },
+      datasheet_url: { prop: 'datasheet' }, datasheet_sha256: { prop: 'sha256' }, updated: { prop: 'updatedAt', as: 'time' },
+    },
+  },
+  {
+    db: 'central', table: 'part_offers', class: 'SupplierOffer', kind: 'offer', key: ['part_key', 'provider', 'seller', 'provider_part'],
+    columns: {
+      part_key: { prop: 'offerFor', ref: 'part' }, provider: { prop: 'provider' }, seller: { prop: 'seller' }, provider_part: { prop: 'sku' },
+      mpn: { prop: 'mpn' }, stock: { prop: 'stock', as: 'int' }, moq: { prop: 'minimumOrder', as: 'int' }, price_breaks: { prop: 'priceBreaks', as: 'json' },
+      url: { prop: 'url' }, offer: { ignore: 'the whole offer as the provider gave it: its fields are the columns beside it' },
+      fetched_at: { prop: 'observedAt', as: 'time' },
+    },
+  },
 ]
 
 /** Tables of a mapped database the ontology leaves out, with why. */
 export const IGNORED_TABLES: Readonly<Record<string, string>> = {
   'journey.skill_drafts': 'one person\'s unsubmitted draft of a guided skill: never part of the record (it is not copied with a release)',
   'jobs.batch': 'the remote machines a job\'s heavy tools ran on (AWS Batch bookkeeping): operational',
+  'project.verify_merge_notes': 'notes a merge leaves when it renames a requirement: bookkeeping for people reading the merge',
+  'central.part_lookups': 'when each provider was last asked about a part, for the cache: operational',
 }
 
 /**
- * Tables trace's project database registers that a later phase maps (docs/ontology-plan.md): the design record and
- * the run record with the board module, the bench readings with it, and the rest as their shapes need them. Listed so
- * a new table still fails the drift test until someone decides where it goes.
+ * Tables the project database registers that wait until a shape needs them (docs/ontology-plan.md: "the rest as their
+ * shapes need them"). Listed so a new table still fails the drift test until someone decides where it goes.
  */
 export const LATER_TABLES: Readonly<Record<string, string>> = {
-  intent_statements: 'board module', requirement_intent: 'board module', arch_options: 'board module', arch_criteria: 'board module',
-  arch_scores: 'board module', arch_blocks: 'board module', arch_connections: 'board module', pin_plan: 'board module',
-  sheet_requirements: 'board module', requirements: 'board module', test_items: 'board module', test_results: 'board module',
-  coverage_points: 'board module', coverage_hits: 'board module', verify_merge_notes: 'board module', bringup_readings: 'board module',
   ams_specs: 'when a shape needs them', protocol_specs: 'when a shape needs them', thermal_envelopes: 'when a shape needs them',
   thermal_part_limits: 'when a shape needs them', thermal_budget: 'when a shape needs them', thermal_derating: 'when a shape needs them',
   thermal_corrections: 'when a shape needs them', kb_objects: 'when a shape needs them', prompts: 'when a shape needs them',

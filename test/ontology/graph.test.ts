@@ -8,7 +8,7 @@ import type { Store } from 'n3'
 import { buildGraph, checkRecords, nodeIri } from '../../src/ontology/graph.js'
 import { contextUrl, recordJsonLd } from '../../src/ontology/jsonld.js'
 import { NS, RDF, readVocabulary } from '../../src/ontology/vocab.js'
-import { factsDb, jobsDb, journeyDb } from './fixture.js'
+import { factsDb, jobsDb, journeyDb, partsDb, projectDb, sampleBoard } from './fixture.js'
 
 const v = readVocabulary()
 const O = { installation: 'acme', project: 'acme/soil-sensor' }
@@ -18,8 +18,8 @@ const T = (n: string): string => `${NS}${n}`
 let store: Store
 let rows: Record<string, number>
 
-beforeAll(() => {
-  ({ store, rows } = buildGraph({ journey: journeyDb(), facts: factsDb(), jobs: jobsDb() }, O))
+beforeAll(async () => {
+  ({ store, rows } = buildGraph({ journey: journeyDb(), facts: factsDb(), jobs: jobsDb(), project: await projectDb(), central: await partsDb(), boards: [await sampleBoard()] }, O))
 })
 
 const objects = (s: string, p: string): string[] => store.getQuads(s, T(p), null, null).map((q) => q.object.value)
@@ -29,7 +29,11 @@ describe('a project\'s graph', () => {
   it('reads every mapped table that has rows', () => {
     for (const t of ['journey.journey', 'journey.stages', 'journey.gates', 'journey.gate_criteria', 'journey.gate_signatures', 'journey.questions', 'journey.waivers',
       'journey.decisions', 'journey.orders', 'journey.job_controls', 'journey.criterion_history', 'journey.stage_history', 'journey.journey_history',
-      'facts.agent_questions', 'facts.criterion_checks', 'facts.stuck', 'facts.handoffs', 'jobs.jobs']) {
+      'facts.agent_questions', 'facts.criterion_checks', 'facts.stuck', 'facts.handoffs', 'jobs.jobs',
+      'project.runs', 'project.measurements', 'project.artifacts', 'project.settings', 'project.intent_statements', 'project.requirement_intent',
+      'project.arch_options', 'project.arch_criteria', 'project.arch_scores', 'project.arch_blocks', 'project.arch_connections', 'project.pin_plan',
+      'project.sheet_requirements', 'project.requirements', 'project.test_items', 'project.test_results', 'project.coverage_points',
+      'project.coverage_hits', 'project.bringup_readings', 'central.parts', 'central.part_offers']) {
       expect(rows[t], t).toBeGreaterThan(0)
     }
   })
@@ -83,6 +87,38 @@ describe('a project\'s graph', () => {
     expect(renamed).toHaveLength(1)
     expect(objects(renamed[0] as string, 'newValue')).toEqual(['Soil sensor, outdoor'])
     expect(objects(renamed[0] as string, 'recordedBy')).toEqual(['admin@example.com'])
+  })
+
+  it('links the design record from intent to the parts it is built from, and the tests to their runs', () => {
+    expect(objects(id('intent-link', 'REQ-PWR-001/INT-1a2b3c'), 'fromIntent')).toEqual([id('intent', 'INT-1a2b3c')])
+    expect(typesOf(id('arch-option', 'A')).sort()).toEqual(['ArchitectureOption'])
+    const power = id('block', 'A/power')
+    expect(objects(power, 'servesRequirement')).toEqual([id('requirement', 'REQ-PWR-001')])
+    const [part] = objects(power, 'usesPart')
+    expect(typesOf(part as string).sort()).toEqual(['BlockPart', 'KeyPart'])
+    expect(objects(part as string, 'refersToPart')).toEqual([id('part', 'TPS7A02')])
+    expect(typesOf(id('part', 'TPS7A02'))).toEqual(['Part'])
+    expect(objects(id('offer', 'TPS7A02/jlcpcb/JLCPCB/C2862740'), 'offerFor')).toEqual([id('part', 'TPS7A02')])
+    expect(objects(id('connection', 'A/c1'), 'toBlock')).toEqual([id('block', 'A/mcu')])
+    expect(typesOf(id('run', 'run-drc')).sort()).toEqual(['DesignRuleCheckReport', 'Run'])
+    expect(objects(id('test-result', 'run-verify'), 'restsOn')).toEqual([id('run', 'run-drc')])
+    expect(objects(id('reading', 'rd-1'), 'ofBoardUnit')).toEqual([id('board', 'SN-001')])
+  })
+
+  it('reads the board from its file: the placed parts, their pads and nets, the layers, and links the pin plan to them', () => {
+    const b = id('board-file', 'hardware/sensor-node.kicad_pcb')
+    expect(typesOf(b)).toEqual(['Board'])
+    expect(Number(objects(b, 'copperLayers')[0])).toBeGreaterThanOrEqual(2)
+    const comps = store.getQuads(null, T('onBoard'), b, null).map((q) => q.subject.value).filter((s) => s.includes(':component:'))
+    expect(comps.length).toBeGreaterThan(5)
+    const j1 = id('component', 'J1')
+    expect(typesOf(j1)).toEqual(['Component'])
+    const pads = store.getQuads(null, T('ofComponent'), j1, null).map((q) => q.subject.value)
+    expect(pads.length).toBeGreaterThan(1)
+    expect(pads.some((p) => objects(p, 'onNet').length > 0)).toBe(true)
+    // the pin plan's J1 is the board's J1
+    expect(objects(id('pin-plan', 'J1/1'), 'onComponent')).toEqual([j1])
+    expect(typesOf(id('net', 'GND'))).toEqual(['Net'])
   })
 
   it('gives a record as JSON-LD, with its evidence embedded and its links as identifiers', () => {

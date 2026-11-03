@@ -383,7 +383,7 @@ describe('the pcb.autoroute tool', () => {
   const ctx = { hardware: false, via: 'test' } as const
 
   it('is registered with a JSON schema, and returns the plan alone when asked', async () => {
-    expect(reg.list().map((t) => t.name)).toEqual(['pcb.autoroute'])
+    expect(reg.list().map((t) => t.name)).toEqual(['pcb.autoroute', 'pcb.capabilities', 'pcb.capabilities_check'])
     expect(Registry.jsonSchema(reg.get('pcb.autoroute')!)).toHaveProperty('properties.engine')
     delete process.env.TRACE_GPU_QUEUE
     process.env.TRACE_GPU = '0'

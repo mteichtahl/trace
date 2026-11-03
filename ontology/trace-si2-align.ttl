@@ -2,9 +2,6 @@
 # the meaning matches and says how the two relate here. This is the only file that mentions Si2; nothing in trace
 # imports it. Written against si2org/aiml_schema_ontology at commit 664164c3d31d37486e50cbdc455d1f8e02ffb950 (the
 # terms it defines are listed in ontology/si2/terms.txt; a test fails if an aligned term is missing there).
-#
-# The board module's alignments (Netlist, Net, Pin, Via, Layer, DesignRule, DesignRuleCheckReport) arrive with the
-# board module.
 
 @prefix trace: <https://trace-eda.com/ns/trace#> .
 @prefix eda:   <http://example.org/eda#> .
@@ -28,3 +25,14 @@ trace:SuccessMetric owl:equivalentClass eda:SuccessMetric .
 trace:DesignArtifact owl:equivalentClass eda:DesignArtifact .
 trace:isInputTo owl:equivalentProperty eda:isInputTo .
 trace:isOutputOf owl:equivalentProperty eda:isOutputOf .
+
+# the board module: board meaning is narrower than chip meaning
+trace:Netlist rdfs:subClassOf eda:Netlist .
+trace:Net rdfs:subClassOf eda:Net .
+trace:Pin rdfs:subClassOf eda:Pin .
+trace:Via rdfs:subClassOf eda:Via .
+trace:Layer rdfs:subClassOf eda:Layer .
+# limits that come from a fab house
+trace:DesignRule rdfs:subClassOf eda:Constraints .
+# the output of a rule check
+trace:DesignRuleCheckReport rdfs:subClassOf eda:VerificationReport .
