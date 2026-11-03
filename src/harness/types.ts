@@ -52,6 +52,9 @@ export interface TaskEnv {
   TRACE_HOME?: string
   /** deploy-report/rollback-report: 'trace' when a person approved it in trace (BY is then their name) */
   VIA?: string
+  /** worker-pick: the items a person asked trace to try again from the app (workflow_dispatch input `retry`: numbers,
+   * comma separated; src/harness/worker.ts) */
+  RETRY?: string
 }
 
 export interface Deps {

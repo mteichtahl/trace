@@ -182,6 +182,9 @@ export interface Actions {
   'change.accept': { args: Repo & { number: number; head_sha: string; note?: string }; result: import('./types').ChangeAccepted }
   'change.ask': { args: Repo & { number: number; note: string }; result: { job_id: string } }
   'change.discard': { args: Repo & { number: number; reason: string }; result: { closed: true } }
+  /** a change in conflict brought up to date now (src/api/conflicts.ts): an edit made in trace is made again, anything
+   * else goes to trace's worker with its earlier attempts set aside. `text`: what happens next, in plain words */
+  'change.resolve': { args: Repo & { number: number }; result: { text: string; remade: boolean; worker: boolean; conflict: boolean } }
   /** admins: put the repository's rule back to passing checks only (docs/stay-in-trace.md "5. Fixing the repository rule") */
   'repo.rules.fix': { args: Repo; result: { done: string[]; left: string[] } }
   // deploys, decided in the app (docs/stay-in-trace.md "2. Deploys"); the three writes: an admin or a person in deploy.people

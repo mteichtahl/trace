@@ -13,6 +13,11 @@
  *                            request moving is when an edit may become ready, or need making again. It answers what it
  *                            did, branch and number only
  *
+ *   hook.conflicts backend   { repo } → ConflictReport (numbers only): a push to the project's default branch, the moment
+ *                            other changes can fall into conflict. Finds them once GitHub has settled, makes trace's
+ *                            own edits again and starts the worker for the rest (src/api/conflicts.ts). The hooks
+ *                            function tells the people on the project which ones, as a live event
+ *
  * Only the web backend's own identity reaches it (need 'backend', src/api/backend-auth.ts), and that identity reaches
  * nothing else (perform). The API runtime still decides who is on a project, as it does for project.members; the
  * backend still never reads the access store.
@@ -22,6 +27,7 @@ import { projects } from '../core/onboard.js'
 import { z } from 'zod'
 import { def } from './action-kit.js'
 import { applyEdits } from './apply-edits.js'
+import { type ConflictReport, resolveConflicts } from './conflicts.js'
 
 export interface HookMembers { repo: string; project: boolean; subs: string[] }
 
@@ -39,5 +45,10 @@ export const HOOK_ACTIONS = {
     if (!(await projects()).includes(repo)) return { repo, applied: [] }
     const done = await applyEdits(ctx, repo)
     return { repo, applied: done.filter((a) => a.did !== 'waiting' && a.did !== 'left').map((a) => ({ branch: a.branch, number: a.number, did: a.did })) }
+  }),
+
+  'hook.conflicts': def('backend', z.object({ repo: RepoSlug }), async ({ repo }, ctx): Promise<ConflictReport> => {
+    if (!(await projects()).includes(repo)) return { repo, conflicts: [], remade: [], worker: [], left: [], checking: [], started: 'not-needed' }
+    return resolveConflicts(ctx, repo)
   }),
 }

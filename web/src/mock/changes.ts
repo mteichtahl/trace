@@ -280,6 +280,14 @@ export function changesAction(name: string, a: Record<string, unknown>, done: (r
       c.blockers = ['The specialist is revising it from your note.']
       c.checks = c.checks ? { ...c.checks, passed: 0, running: c.checks.total } : null
       return later(ok({ job_id: `job_rev_${c.number}` }))
+    case 'change.resolve':
+      if (reviewer) return fail('Only contributors can bring a change up to date.')
+      if (c.verdict !== 'conflict') return later(ok({ text: 'It does not conflict with the newest design any more: nothing to bring up to date.', remade: false, worker: false, conflict: false }))
+      c.verdict = 'checking'
+      c.mergeable = 'clean'
+      c.blockers = ['trace is merging the newest design into it; its checks run again after.']
+      c.checks = c.checks ? { ...c.checks, passed: 0, running: c.checks.total } : null
+      return later(ok({ text: 'trace is bringing it up to date with the newest design now. Its checks run again once it has, and it comes back to you.', remade: false, worker: true, conflict: true }))
     case 'change.discard':
       if (reviewer) return fail('Only contributors can discard a change.')
       c.state = 'closed'

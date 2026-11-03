@@ -13,6 +13,7 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { auth } from './auth'
 import { createStore, useStore } from './store'
+import { toast } from 'sonner'
 import type { LiveEvent } from './types'
 
 export type LiveState = 'live' | 'connecting' | 'reconnecting' | 'offline'
@@ -60,6 +61,28 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
     case 'notification':
       return [['inbox'], ['journey.get', e.repo]]
   }
+}
+
+/**
+ * What the app says when a push left changes in conflict (src/web/hooks.ts `conflicts`, numbers only): which ones, and
+ * that trace is already on them, so nobody goes looking for what to do. Null for any other event. Pure.
+ */
+export function conflictNotice(e: LiveEvent): { title: string; description: string } | null {
+  const x = e as { kind?: unknown; conflicts?: unknown; remade?: unknown; resolving?: unknown }
+  if (e.type !== 'record.changed' || x.kind !== 'change' || !Array.isArray(x.conflicts) || !x.conflicts.length) return null
+  const nums = (v: unknown): number[] => (Array.isArray(v) ? v.filter((n): n is number => typeof n === 'number') : [])
+  const all = nums(x.conflicts)
+  const on = new Set([...nums(x.remade), ...nums(x.resolving)])
+  const list = (ns: number[]): string => ns.map((n) => `#${n}`).join(', ').replace(/, ([^,]*)$/, ' and $1')
+  const project = (e.repo ?? '').split('/').pop() || 'a project'
+  const waiting = all.filter((n) => !on.has(n))
+  const title = `${all.length === 1 ? 'A change' : `${all.length} changes`} on ${project} ${all.length === 1 ? 'conflicts' : 'conflict'} with the newest design`
+  const description = waiting.length === 0
+    ? `trace is bringing ${list(all)} up to date now. Nothing for you to do; ${all.length === 1 ? 'it comes' : 'they come'} back when the checks pass.`
+    : on.size
+      ? `trace is bringing ${list([...on])} up to date now. ${list(waiting)} ${waiting.length === 1 ? 'needs' : 'need'} you: open ${waiting.length === 1 ? 'it' : 'them'} to see what to do.`
+      : `${list(waiting)} ${waiting.length === 1 ? 'needs' : 'need'} you: open ${waiting.length === 1 ? 'it' : 'them'} and choose Bring it up to date.`
+  return { title, description }
 }
 
 /** How long events gather before the screens look again: a busy specialist reports many times a second. */
@@ -284,7 +307,13 @@ export function connectLive(o: LiveOptions): () => void {
 export function startLive(qc: QueryClient, cfg: { http: string; realtime: string }): () => void {
   let stop: (() => void) | null = null
   let sub: string | null = null
-  const apply = coalescer(qc)
+  const coalesced = coalescer(qc)
+  // the screens look again together; a conflict is also said at once, wherever the person is
+  const apply = (e: LiveEvent): void => {
+    coalesced(e)
+    const n = conflictNotice(e)
+    if (n) toast.info(n.title, { description: n.description })
+  }
   const sync = () => {
     const a = auth.get()
     const next = a.status === 'signed-in' ? (a.user?.sub ?? null) : null

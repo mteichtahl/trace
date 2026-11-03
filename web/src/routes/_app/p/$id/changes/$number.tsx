@@ -87,7 +87,7 @@ function Review() {
   const place = j.data ? nextPlace(j.data) : null
   const edit = !!d.kind && d.kind !== 'work'
   const forYou = d.verdict === 'ready' && part !== 'reviewer' && d.may_accept
-  const busy = actions.accept.isPending ? 'accept' : actions.ask.isPending ? 'ask' : actions.discard.isPending ? 'discard' : null
+  const busy = actions.accept.isPending ? 'accept' : actions.ask.isPending ? 'ask' : actions.discard.isPending ? 'discard' : actions.resolve.isPending ? 'resolve' : null
   // the next step is this change: its place in the stage, and what accepting moves
   const isNext = !!j.data && j.data.next.kind === 'review' && changeOf(j.data.next) === number
   const acceptSays = place && isNext ? `Accepting adds it to the design and moves ${place.stage} to step ${Math.min(place.total, place.index + 1)}.` : 'Accepting adds it to the design.'
@@ -205,6 +205,7 @@ function Review() {
         onAccept={(n) => actions.accept.mutate({ number, head: d.head.sha, title: d.title, ...(n ? { note: n } : {}), step: isNext ? place : null }, { onSuccess: back })}
         onAsk={(n) => actions.ask.mutate({ number, title: d.title, note: n, from: d.from }, { onSuccess: () => setNote('') })}
         onDiscard={(r) => actions.discard.mutate({ number, title: d.title, reason: r }, { onSuccess: back })}
+        onResolve={() => actions.resolve.mutate({ number, title: d.title })}
       />
     </div>
   )
