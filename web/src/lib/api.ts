@@ -39,7 +39,7 @@ export interface Actions {
   status: { args: Repo; result: { repo: string; default_branch: string; pulls: unknown[]; agent_fix_issues: unknown[]; runs: unknown[]; last_deploy: unknown } }
   'pull.status': { args: Repo & { number: number }; result: import('./types').PullStatus }
   'settings.get': { args: Repo; result: { repo: string; set: Record<string, unknown>; config: Record<string, unknown>; errors: string[] } }
-  'settings.set': { args: Repo & { key: string; value?: unknown; unset?: boolean }; result: { branch: string; commit: string } }
+  'settings.set': { args: Repo & { key: string; value?: unknown; unset?: boolean }; result: { branch: string; commit: string; /** the change it opened */ change?: number | null } }
   runs: { args: Repo & { kind?: string; limit?: number; agent?: string }; result: Record<string, unknown>[] }
   run: { args: Repo & { id: string }; result: Record<string, unknown> }
   artifact: { args: Repo & { id: string; name: string }; result: { id: string; name: string; mime: string | null; size: number; base64: string } }
@@ -102,6 +102,10 @@ export interface Actions {
   'graph.neighbourhood': { args: Repo & { focus: string; depth?: 1 | 2 | 3; memory?: boolean }; result: { focus: string; nodes: unknown[]; links: unknown[]; groups: unknown[]; truncated: boolean } }
   'files.list': { args: Repo; result: import('@/components/files/data').ListedFile[] }
   'files.url': { args: Repo & { path: string; commit?: string }; result: { url: string; mime?: string | null; size?: number } }
+  /** a text file edited in the app (CLAUDE.md): a change for review */
+  'files.edit': { args: Repo & { path: string; text: string; note?: string }; result: { repo: string; path: string; change: number | null; branch: string; commit: string } }
+  /** KiCad files handed in: one change of the ones that differ from the design */
+  'design.handin': { args: Repo & { files: { path: string; base64: string }[]; note?: string }; result: { repo: string; change: number | null; changed: string[]; same: string[]; branch: string; commit: string } }
   // Operations, Admin and Preferences (src/api/actions.ts: integrations.*, prompts.*; shapes in lib/admin-types.ts)
   'integrations.list': { args: Record<string, never>; result: import('./admin-types').IntegrationStatus[] }
   'integrations.set': { args: { name: import('./admin-types').IntegrationName; values: Record<string, string> }; result: { name: string; secret: string; check: { ok: boolean; detail: string }; note?: string } }

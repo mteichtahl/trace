@@ -116,7 +116,7 @@ function write(op: 'set' | 'reset' | 'revert', a: Record<string, unknown>) {
   }
   // project scope: a branch and a pull request; the default branch (what agents read) is unchanged until merged
   const branch = `trace/prompts-${id.replace(/\./g, '-')}-${Date.now().toString(36)}`
-  return ok({ scope, repo, id, version, uid: entry.uid, action: op, branch, commit: 'c0ffee1', note: '.trace/** is a protected path: the pull request waits for a person to merge it.' })
+  return ok({ scope, repo, id, version, uid: entry.uid, action: op, branch, commit: 'c0ffee1', change: 12, note: 'An admin accepts it in trace.' })
 }
 
 function silentWav(): string {

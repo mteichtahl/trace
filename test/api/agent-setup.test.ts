@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
-import { ADDED_CHECK_S, ADDED_MS, LEFT_OUT_MS, SETUP_CHECK_S, STALLED_CHECK_S, SETUP_MS, agentSetup, updateRunFor } from '../../src/api/actions-projects.js'
+import { ADDED_CHECK_S, ADDED_MS, LEFT_OUT_MS, SETUP_CHECK_S, STALLED_CHECK_S, SETUP_MS, type RunJob, agentSetup, failedJob, logTail, updateRunFor, updateSteps } from '../../src/api/actions-projects.js'
 import type { GitHubApi, RunSummary } from '../../src/api/github.js'
 import { parseWorkerRuntimes, remoteJobs } from '../../src/api/workers.js'
 import { AccessDenied, assign, seen } from '../../src/core/access.js'
@@ -117,6 +117,50 @@ describe('updateRunFor', () => {
   })
 })
 
+describe('the update\'s steps, read from its run\'s jobs', () => {
+  const step = (number: number, name: string, status: string, conclusion: string | null = null) => ({ number, name, status, conclusion })
+  const jobs: RunJob[] = [
+    { id: 11, name: 'typescript', status: 'completed', conclusion: 'success', steps: [step(1, 'Set up job', 'completed', 'success'), step(2, 'npm ci', 'completed', 'success'), step(3, 'Post Run actions/checkout@v4', 'completed', 'success'), step(4, 'Complete job', 'completed', 'success')] },
+    { id: 12, name: 'update-installation', status: 'in_progress', conclusion: null, steps: [step(2, 'Deploy', 'queued'), step(1, 'Test', 'in_progress')] },
+    { id: 13, name: 'tests pass', status: 'queued', conclusion: null },
+  ]
+
+  it('each job\'s steps in order, GitHub\'s bookkeeping left out, named by job when there are several', () => {
+    expect(updateSteps(jobs)).toEqual([
+      { name: 'typescript › npm ci', state: 'done' },
+      { name: 'update-installation › Test', state: 'running' },
+      { name: 'update-installation › Deploy', state: 'waiting' },
+      { name: 'tests pass', state: 'waiting' },
+    ])
+    expect(updateSteps(jobs.slice(1, 2)).map((s) => s.name)).toEqual(['Test', 'Deploy'])
+    expect(updateSteps([{ id: 1, name: 'x', status: 'completed', conclusion: 'skipped' }])).toEqual([{ name: 'x', state: 'done' }])
+  })
+
+  it('a failed step is failed, and its job is the one whose log is read', () => {
+    const failing: RunJob[] = [jobs[0]!, { id: 12, name: 'update-installation', status: 'completed', conclusion: 'failure', steps: [step(1, 'Test', 'completed', 'success'), step(2, 'Deploy', 'completed', 'failure')] }]
+    expect(updateSteps(failing).at(-1)).toEqual({ name: 'update-installation › Deploy', state: 'failed' })
+    expect(failedJob(failing)?.id).toBe(12)
+    expect(failedJob(jobs)).toBeNull()
+  })
+
+  it('the log\'s last 40 lines, without GitHub\'s timestamps', () => {
+    const text = Array.from({ length: 100 }, (_, i) => `2026-11-02T09:50:${String(i % 60).padStart(2, '0')}.1234567Z line ${i}`).join('\r\n') + '\n'
+    const tail = logTail(text).split('\n')
+    expect(tail).toHaveLength(40)
+    expect(tail[0]).toBe('line 60')
+    expect(tail.at(-1)).toBe('line 99')
+  })
+
+  it('agentSetup gives the steps to everyone and the log to admins only', () => {
+    const progress = { steps: updateSteps(jobs), failed_log: 'Error: cdk deploy failed' }
+    const base = { repo: 'acme/new', hasAgent: false, record: rec(), run: run({ status: 'completed', conclusion: 'failure' }), selfUpdate: true, now: NOW, progress }
+    const user = agentSetup({ ...base, admin: false })
+    expect(user.update).toMatchObject({ steps: progress.steps, failed_log: null })
+    expect(agentSetup({ ...base, admin: true }).update).toMatchObject({ steps: progress.steps, failed_log: 'Error: cdk deploy failed' })
+    expect(agentSetup({ ...base, admin: false, progress: null }).update).not.toHaveProperty('steps')
+  })
+})
+
 describe('the workers know which projects have an agent', () => {
   it('hasAgent: a project in TRACE_WORKER_RUNTIMES, any case', () => {
     const jobs = remoteJobs({ runtimes: parseWorkerRuntimes('acme/board=trace_w_aaaaaaaa-AbCdEf1234'), region: 'us-east-1', account: '123456789012' })
@@ -178,6 +222,19 @@ describe('project.agent', () => {
     expect(rev.update).not.toHaveProperty('url')
     expect(rev.text).not.toMatch(/Actions|Run workflow/)
     expect((await call(ADMIN, 'acme/new')).update).toMatchObject({ url: expect.stringMatching(/^https:\/\/github\.com\//) })
+    // the steps come from the run's jobs, and the failed job's log tail to an admin (GitHub's request and requestText)
+    const asked: string[] = []
+    Object.assign(github, {
+      request: async (method: string, path: string) => {
+        asked.push(`${method} ${path}`)
+        return { jobs: [{ id: 77, name: 'update-installation', status: 'completed', conclusion: 'failure', steps: [{ number: 1, name: 'Deploy', status: 'completed', conclusion: 'failure' }] }] }
+      },
+      requestText: async (path: string) => { asked.push(`text ${path}`); return { text: 'one\ntwo\nError: limit', truncated: false } },
+    })
+    const withSteps = await call(ADMIN, 'acme/new')
+    expect(withSteps.update).toMatchObject({ steps: [{ name: 'Deploy', state: 'failed' }], failed_log: 'one\ntwo\nError: limit' })
+    expect(asked).toEqual([expect.stringMatching(/^GET \/repos\/mteichtahl\/trace\/actions\/runs\/1\/jobs/), 'text /repos/mteichtahl/trace/actions/jobs/77/logs'])
+    expect((await call(USER, 'acme/new')).update).toMatchObject({ steps: [{ name: 'Deploy', state: 'failed' }], failed_log: null })
     // GitHub not answering leaves the estimate from the request
     runs = async () => { throw new Error('rate limited') }
     expect(await call(USER, 'acme/new')).toMatchObject({ state: 'setting_up', update: null, expected_by: expect.any(String) })

@@ -172,12 +172,55 @@ export interface AgentSetup {
   text: string
   requested_at: string | null
   /** the installation update's run on GitHub, when the self-update is on and it could be read; `url` (trace's own
-   * repository) for admins only */
-  update: { status: 'queued' | 'running' | 'finished' | 'failed'; started_at: string; url?: string } | null
+   * repository) for admins only. `steps`: its jobs' steps as they stand (updateSteps), so the app shows its progress
+   * without GitHub; `failed_log`: the failing step's last FAILED_LOG_LINES lines, once it failed, for admins only (else null) */
+  update: { status: 'queued' | 'running' | 'finished' | 'failed'; started_at: string; url?: string; steps?: UpdateStep[]; failed_log?: string | null } | null
   /** when it should be ready (an estimate), or null */
   expected_by: string | null
   /** how many seconds until the app should look again (nothing announces the update's end); null once ready */
   next_check_s: number | null
+}
+
+/** One step of the update's run, as the app shows it: done, running, waiting (not started yet) or failed. */
+export interface UpdateStep { name: string; state: 'done' | 'running' | 'waiting' | 'failed' }
+
+/** How many lines of the failing step's log the app shows. */
+export const FAILED_LOG_LINES = 40
+
+/** A run's jobs as GitHub answers GET …/actions/runs/<id>/jobs (only what is read). */
+export interface RunJob {
+  id: number; name: string; status: string; conclusion: string | null
+  steps?: { name: string; status: string; conclusion: string | null; number: number }[]
+}
+
+/** GitHub's own bookkeeping steps ("Set up job", "Post Run actions/checkout@v4", "Complete job"): not shown. */
+const BOOKKEEPING = /^(Set up job|Complete job|Post .+)$/
+
+/** A step's or job's state from GitHub's status and conclusion. Pure. */
+const stepState = (status: string, conclusion: string | null): UpdateStep['state'] =>
+  status !== 'completed' ? (status === 'in_progress' ? 'running' : 'waiting')
+    : conclusion === 'failure' || conclusion === 'timed_out' || conclusion === 'cancelled' ? 'failed' : 'done'
+
+/**
+ * The update's steps in order: each job's steps (bookkeeping left out), named "job › step" when the run has several
+ * jobs; a job GitHub lists without steps yet is one step of its own. A skipped step or job counts as done. Pure.
+ */
+export function updateSteps(jobs: readonly RunJob[]): UpdateStep[] {
+  const many = jobs.length > 1
+  return jobs.flatMap((j) => {
+    const steps = (j.steps ?? []).filter((s) => !BOOKKEEPING.test(s.name)).sort((a, b) => a.number - b.number)
+    if (!steps.length) return [{ name: j.name, state: stepState(j.status, j.conclusion) }]
+    return steps.map((s) => ({ name: many ? `${j.name} › ${s.name}` : s.name, state: stepState(s.status, s.conclusion) }))
+  })
+}
+
+/** The first failed job (the one whose log is read), or null. Pure. */
+export const failedJob = (jobs: readonly RunJob[]): RunJob | null => jobs.find((j) => stepState(j.status, j.conclusion) === 'failed') ?? null
+
+/** A job log's last `n` lines, GitHub's timestamps taken off the front of each line. Pure. */
+export function logTail(text: string, n: number = FAILED_LOG_LINES): string {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\n+$/, '').split('\n')
+  return lines.slice(-n).map((l) => l.replace(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z ?/, '')).join('\n')
 }
 
 /** The update's run on GitHub for a request: the newest run of trace's ci workflow on the self-update's branch started
@@ -200,6 +243,8 @@ export function agentSetup(o: {
   repo: string; hasAgent: boolean; record: PendingRecord | null; run: RunSummary | null; selfUpdate: boolean; admin: boolean; now?: number
   /** the stack's layout (TRACE_LAYOUT): in a flat one an update adds projects only up to FLAT_UPDATE_MAX */
   layout?: string | undefined
+  /** the run's steps and, once it failed, the failing step's log tail (updateProgress); absent: not read */
+  progress?: { steps: UpdateStep[]; failed_log: string | null } | null
 }): AgentSetup {
   const now = o.now ?? Date.now()
   const base = { repo: o.repo, requested_at: o.record?.requested_at ?? null, update: null, expected_by: null }
@@ -226,7 +271,11 @@ export function agentSetup(o: {
         : 'The installation update has added this project\'s agent. trace\'s service starts using it within a few minutes.',
     }
   }
-  const update = o.run ? { status: runStatus(o.run), started_at: o.run.created_at, ...(o.admin ? { url: o.run.url } : {}) } : null
+  const update = o.run ? {
+    status: runStatus(o.run), started_at: o.run.created_at, ...(o.admin ? { url: o.run.url } : {}),
+    // the log of trace's own update is an admin's, like its link: everyone else sees the steps
+    ...(o.progress ? { steps: o.progress.steps, failed_log: o.admin ? o.progress.failed_log : null } : {}),
+  } : null
   // the update finished well ago and still did not mark this request added: it left the project out (in a flat
   // installation, most likely for its project limit); only the installer, or an admin, adds it now
   // (when it finished: GitHub's updated_at; without it nothing is concluded)
@@ -281,6 +330,32 @@ async function updateRun(ctx: Context, requestedAt: string | null, selfUpdate: s
   }
 }
 
+/**
+ * The update run's steps (its jobs, through GitHubApi.request) and, when a job failed, the last FAILED_LOG_LINES lines
+ * of its log (requestText). Kept RUN_TTL_MS like the run. Best effort: null when this installation's client cannot ask
+ * or GitHub would not say; a log that cannot be read is null.
+ */
+async function updateProgress(ctx: Context, run: RunSummary, selfUpdate: string | undefined): Promise<{ steps: UpdateStep[]; failed_log: string | null } | null> {
+  const repo = /^([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)@/.exec(selfUpdate?.trim() ?? '')?.[1]
+  if (!repo) return null
+  try {
+    const gh = await ctx.deps.github()
+    if (!gh.request) return null
+    return await cached(ctx.deps.githubCache, repo, `update-steps-${run.id}`, async () => {
+      const r = await gh.request!('GET', `/repos/${repo}/actions/runs/${run.id}/jobs?per_page=50`) as { jobs?: RunJob[] } | null
+      const jobs = Array.isArray(r?.jobs) ? r.jobs : []
+      const failed = failedJob(jobs)
+      let failed_log: string | null = null
+      if (failed && gh.requestText) {
+        failed_log = await gh.requestText(`/repos/${repo}/actions/jobs/${failed.id}/logs`, 64 * 1024).then((t) => logTail(t.text)).catch(() => null)
+      }
+      return { steps: updateSteps(jobs), failed_log }
+    }, RUN_TTL_MS)
+  } catch {
+    return null
+  }
+}
+
 const DEFAULT_SCAFFOLD: Readonly<Record<Template, 'empty' | 'kicad'>> = { board: 'kicad', mixed: 'kicad', fpga: 'empty', firmware: 'empty' }
 
 export const PROJECT_ACTIONS = {
@@ -302,7 +377,8 @@ export const PROJECT_ACTIONS = {
     const selfUpdate = process.env.TRACE_SELF_UPDATE
     const record = hasAgent ? null : await pendingRecord(ctx, repo).catch(() => null)
     const run = !hasAgent && record?.status === 'pending' ? await updateRun(ctx, record.requested_at ?? null, selfUpdate) : null
-    return agentSetup({ repo, hasAgent, record, run, selfUpdate: Boolean(selfUpdate?.includes('@')), admin: isAdmin(ctx.principal), layout: ctx.deps.layout ?? process.env.TRACE_LAYOUT })
+    const progress = run ? await updateProgress(ctx, run, selfUpdate) : null
+    return agentSetup({ repo, hasAgent, record, run, progress, selfUpdate: Boolean(selfUpdate?.includes('@')), admin: isAdmin(ctx.principal), layout: ctx.deps.layout ?? process.env.TRACE_LAYOUT })
   }),
 
   'projects.create': def('admin', Create, async (a, ctx) => {

@@ -653,7 +653,7 @@ describe('the release copy', () => {
     await open('prove')
     github.calls = []
     const signed = await run(ADMIN, 'gate.sign', { repo: 'acme/secret', gate: 'prove' }) as { released: boolean; advanced_to: string; snapshot: { branch: string; commit: string }; summary: string }
-    expect(signed).toMatchObject({ released: true, advanced_to: 'bringup', snapshot: { branch: expect.stringMatching(/^trace\/release-a-/), commit: 'c0ffee0000000000' } })
+    expect(signed).toMatchObject({ released: true, advanced_to: 'bringup', snapshot: { branch: expect.stringMatching(/^trace\/release-a-/), commit: 'c0ffee0000000000000000000000000000000000' } })
     expect(signed.summary).toMatch(/copied into the repository/)
     expect(github.calls.some((x) => x.startsWith('putFile acme/secret main'))).toBe(false)
     // the copy: the repository's own tables kept, the journey's replaced by the live record
@@ -665,7 +665,7 @@ describe('the release copy', () => {
     expect(db.prepare('SELECT count(*) AS n FROM gate_signatures').get()?.n).toBe(3)
     db.close()
     const log = await run(ADMIN, 'journey.get', { repo: 'acme/secret' }) as { decisions: { kind: string; ref: string }[] }
-    expect(log.decisions[0]).toMatchObject({ kind: 'journey.snapshot', ref: 'c0ffee0000000000' })
+    expect(log.decisions[0]).toMatchObject({ kind: 'journey.snapshot', ref: 'c0ffee0000000000000000000000000000000000' })
   })
 
   it('journey.snapshot is for admins, and needs a journey', async () => {

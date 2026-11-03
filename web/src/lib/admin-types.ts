@@ -152,6 +152,8 @@ export interface PromptView {
   effective: { layer: PromptLayer; version: number | null; sha: string; text: string; skipped?: { layer: string; version: number; reason: string }[] }
   followed_by_locked: string[]
   composed: string
+  /** with a repo: a project change to this id still waiting to go in, and its change's number (the app's edit record) */
+  pending?: { change: number | null; branch: string; title: string; version: number | null; by_name: string }
 }
 
 export interface PromptPreview {
@@ -178,6 +180,8 @@ export interface PromptWriteResult {
   repo?: string
   branch?: string
   commit?: string
+  /** project scope: the change it opened (its number), to open in the app */
+  change?: number | null
   note?: string
 }
 

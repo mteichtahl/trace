@@ -119,7 +119,8 @@ export function useFileUrl(f: FileRef | null, commit?: string) {
   })
 }
 
-async function fetchBytes(f: FileRef, commit?: string, limit?: number): Promise<ArrayBuffer> {
+/** A file's bytes at the default branch (or `commit`), read through files.url or a run's artifact. */
+export async function fetchBytes(f: FileRef, commit?: string, limit?: number): Promise<ArrayBuffer> {
   const { url } = await resolveUrl(f, commit)
   // the API already answered the bytes: read them here rather than fetching the local address again
   const held = bytesOfLocalUrl(url) ?? artifactBytes.get(url)
