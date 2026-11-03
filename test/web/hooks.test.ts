@@ -25,6 +25,7 @@ const HOOKS: NonNullable<WebConfig['hooks']> = {
 }
 const sign = (body: string, secret = SECRET): string => `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`
 const pr = (repo: string, number: number, action = 'synchronize'): string => JSON.stringify({ action, number, pull_request: { number, title: 'Regulator ../../etc/passwd' }, repository: { full_name: repo } })
+const push = (repo: string, ref: string): string => JSON.stringify({ ref, before: 'a'.repeat(40), after: 'b'.repeat(40), repository: { full_name: repo, default_branch: 'main' }, head_commit: { message: 'Regulator ../../etc/passwd' } })
 const checkRun = (repo: string, number: number | null): string => JSON.stringify({ action: 'completed', check_run: { name: 'build', pull_requests: number ? [{ number }] : [] }, repository: { full_name: repo } })
 
 /** A world for the hooks function alone: the API runtime (hook.members), the token address, Secrets Manager, AppSync. */
@@ -177,11 +178,18 @@ describe('the signature', () => {
 })
 
 describe('which deliveries are taken', () => {
-  it('only pull_request, check_run, check_suite and status: anything else is 204 without reading the secret', async () => {
+  it('only pull_request, check_run, check_suite, status and push: anything else is 204 without reading the secret', async () => {
     const w = hooksWorld()
-    for (const e of ['push', 'issues', 'ping', 'workflow_run']) expect((await w.deliver(e, pr('acme/board', 7))).status).toBe(204)
+    for (const e of ['issues', 'ping', 'workflow_run']) expect((await w.deliver(e, pr('acme/board', 7))).status).toBe(204)
     expect(w.secretReads).toEqual([])
-    expect(dropped(w.logs)).toEqual(['push', 'issues', 'ping', 'workflow_run'].map((e) => `not an event trace takes (${e})`))
+    expect(dropped(w.logs)).toEqual(['issues', 'ping', 'workflow_run'].map((e) => `not an event trace takes (${e})`))
+  })
+
+  it('a push is taken only to the default branch: another branch, or a branch deleted, is dropped', () => {
+    expect(readDelivery('push', push('Acme/Board', 'refs/heads/main'))).toEqual({ repo: 'acme/board', number: null, event: 'push', base: true })
+    expect(readDelivery('push', push('acme/board', 'refs/heads/claude/x'))).toEqual({ drop: 'a push to a branch other than the default' })
+    expect(readDelivery('push', JSON.stringify({ ref: 'refs/heads/main', deleted: true, repository: { full_name: 'acme/board', default_branch: 'main' } }))).toMatchObject({ drop: expect.any(String) })
+    expect(readDelivery('push', JSON.stringify({ ref: 'refs/heads/main', repository: { full_name: 'acme/board' } }))).toMatchObject({ drop: expect.any(String) })
   })
 
   it('a body over the cap is dropped unread', async () => {
@@ -281,6 +289,49 @@ describe('who is told, and what', () => {
     w.publisher.fail = true
     expect((await w.deliver('pull_request', pr('acme/board', 7))).status).toBe(202)
     expect(w.logs.find((l) => l.hook === 'published')).toMatchObject({ people: 2, failed: 2 })
+  })
+})
+
+describe('conflicts after a push to the default branch', () => {
+  const report = (o: Record<string, unknown> = {}) => ({ body: { ok: true, result: { repo: 'acme/board', conflicts: [4, 9], remade: [9], worker: [4], left: [], checking: [], started: 'yes', ...o } } })
+
+  it('asks the API to find and set them going, then tells everyone on the project which ones, numbers only', async () => {
+    const w = hooksWorld()
+    w.runtime.answers.set('hook.conflicts', () => report())
+    expect((await w.deliver('push', push('acme/board', 'refs/heads/main'))).status).toBe(202)
+    expect(w.runtime.calls.map((c) => [c.action, c.args])).toContainEqual(['hook.conflicts', { repo: 'acme/board' }])
+    const sent = w.publisher.sent.flatMap((s) => s.events as Record<string, unknown>[]).filter((e) => e.conflicts)
+    expect(sent).toEqual([
+      { type: 'record.changed', repo: 'acme/board', kind: 'change', conflicts: [4, 9], remade: [9], resolving: [4], at: new Date(NOW).toISOString() },
+      { type: 'record.changed', repo: 'acme/board', kind: 'change', conflicts: [4, 9], remade: [9], resolving: [4], at: new Date(NOW).toISOString() },
+    ])
+    expect(JSON.stringify(w.publisher.sent)).not.toContain('Regulator')
+    expect(w.logs.find((l) => l.hook === 'conflicts')).toMatchObject({ conflicts: [4, 9], started: 'yes' })
+  })
+
+  it('says nothing more when no change is in conflict, or when the worker could not be started it says none is resolving', async () => {
+    let w = hooksWorld()
+    w.runtime.answers.set('hook.conflicts', () => report({ conflicts: [], remade: [], worker: [] }))
+    await w.deliver('push', push('acme/board', 'refs/heads/main'))
+    expect(w.publisher.sent.flatMap((s) => s.events as Record<string, unknown>[]).some((e) => e.conflicts)).toBe(false)
+    w = hooksWorld()
+    w.runtime.answers.set('hook.conflicts', () => report({ remade: [], conflicts: [4], started: 'failed' }))
+    await w.deliver('push', push('acme/board', 'refs/heads/main'))
+    expect(w.publisher.sent.flatMap((s) => s.events as Record<string, unknown>[]).find((e) => e.conflicts)).toMatchObject({ conflicts: [4], resolving: [] })
+  })
+
+  it('a pull request or check delivery never asks about conflicts', async () => {
+    const w = hooksWorld()
+    await w.deliver('pull_request', pr('acme/board', 7))
+    await w.deliver('check_run', checkRun('acme/board', 7))
+    expect(w.runtime.calls.map((c) => c.action)).not.toContain('hook.conflicts')
+  })
+
+  it('a failure is logged and GitHub still had its 202', async () => {
+    const w = hooksWorld()
+    w.runtime.answers.set('hook.conflicts', () => ({ status: 500, body: { ok: false, error: 'boom' } }))
+    expect((await w.deliver('push', push('acme/board', 'refs/heads/main'))).status).toBe(202)
+    expect(w.logs.find((l) => l.hook === 'conflicts failed')).toMatchObject({ repo: 'acme/board' })
   })
 })
 

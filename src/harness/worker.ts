@@ -8,6 +8,14 @@
  * that don't start with worker.own_branch_prefix belong to a person: they are worked on only once that person has not
  * pushed for worker.others_branches_after_minutes, and only with merge commits.
  *
+ * Mergeability is settled before it is judged (src/harness/mergeable.ts): a pick started by a push to the default branch
+ * otherwise reads every pull request as "unknown" and misses the conflicts that push made.
+ *
+ * Asked again (RETRY, the workflow_dispatch input `retry`: numbers, comma separated; the app's "Bring it up to date"
+ * starts it, src/api/conflicts.ts): each named item gets a retry marker, so the attempts before it no longer count, and
+ * a person's branch named there is worked on at once (asking from trace is the go-ahead the idle wait stands in for).
+ * Only someone allowed to start workflows can ask: the input is as trusted as the markers.
+ *
  * Handing an item to worker.escalate_to is a mention on GitHub, which most people never read. So every pick also
  * brings the agents' facts in line (src/core/stuck-work.ts): a stuck note for each item at max attempts, saying what
  * was tried and trace's recommendation, which the app shows as a "Needs you" item; and the notes of items that moved
@@ -25,6 +33,7 @@ import { type CheckEvidence, type RouteInput, route } from '../agents/router.js'
 import { jobLogTail } from './ci-doctor.js'
 import { type CommentLike, comments, trustedAuthor } from './util.js'
 import { type Deps, type GitHub, labelNames, short } from './types.js'
+import { conflicted, settle } from './mergeable.js'
 import { type Composed, Composer, type Layers, NO_LAYERS } from '../prompts/resolve.js'
 
 export const WorkItemSchema = z.object({
@@ -80,7 +89,18 @@ export async function evidenceOf(github: GitHub, owner: string, repo: string, it
 const CLAIM = /<!-- trace-claim: (\S+) -->/
 const claimedAt = (cs: CommentLike[]): number[] =>
   cs.map((c) => CLAIM.exec(c.body ?? '')?.[1]).filter((t): t is string => Boolean(t)).map(Date.parse).filter(Number.isFinite)
-const attempts = (cs: CommentLike[], sha: string): number => cs.filter((c) => (c.body ?? '').includes(`<!-- trace-attempt: ${sha} -->`)).length
+/** The comments since the item was last asked again on `sha` (all of them when it never was). */
+const sinceRetry = (cs: CommentLike[], sha: string): CommentLike[] => {
+  const last = cs.map((c) => (c.body ?? '').includes(retryMarker(sha))).lastIndexOf(true)
+  return last < 0 ? cs : cs.slice(last + 1)
+}
+const attempts = (cs: CommentLike[], sha: string): number => sinceRetry(cs, sha).filter((c) => (c.body ?? '').includes(`<!-- trace-attempt: ${sha} -->`)).length
+export const retryMarker = (sha: string): string => `<!-- trace-retry: ${sha} -->`
+
+/** The item numbers RETRY names ("12, 15"): positive whole numbers only, anything else ignored. */
+export function retried(raw: string | undefined): Set<number> {
+  return new Set((raw ?? '').split(/[\s,]+/).map((x) => Number(x)).filter((n) => Number.isInteger(n) && n > 0))
+}
 
 /**
  * The agents' facts of `repository`, where this step can write them (src/core/agent-facts.ts projectsFromEnv), or
@@ -130,7 +150,7 @@ export async function pick({ github, context, core, cfg, env }: Deps, now: numbe
     }
     if (attempts(cs, item.sha) >= cfg.worker.max_attempts) {
       const marker = `<!-- trace-escalated: ${item.sha} -->`
-      if (!cs.some((c) => (c.body ?? '').includes(marker))) blocked.push({ n: item.number, kind: item.kind, sha: item.sha, marker })
+      if (!sinceRetry(cs, item.sha).some((c) => (c.body ?? '').includes(marker))) blocked.push({ n: item.number, kind: item.kind, sha: item.sha, marker })
       // the newest report an attempt left (an Actions report, or the AgentCore agent's last words)
       const report = [...cs].reverse().find((c) => /<!-- trace-(report|agent-done):/.test(c.body ?? ''))
       stuck.push({ kind: item.kind, number: item.number, sha: item.sha, title: item.title, attempts: cfg.worker.max_attempts, lastReport: report ? reportWords(report.body ?? '') : null })
@@ -139,28 +159,41 @@ export async function pick({ github, context, core, cfg, env }: Deps, now: numbe
     items.push(item)
   }
 
-  const prs = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 })
+  const again = retried(env.RETRY)
+  /** Asked again from trace: a marker on the item, so the attempts before it are set aside. */
+  const askAgain = async (n: number, sha: string): Promise<void> => {
+    if (!again.has(n)) return
+    await github.rest.issues.createComment({ owner, repo, issue_number: n,
+      body: `Asked again from trace: the earlier attempts${sha === 'issue' ? '' : ` on ${short(sha)}`} are set aside and the worker takes it from here.\n${retryMarker(sha)}` })
+  }
+
+  const prs = (await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 }))
+    .filter((p) => !p.draft && p.head.repo?.full_name === `${owner}/${repo}` && !p.head.ref.startsWith('dependabot/'))
+  const red = (p: (typeof prs)[number]): boolean => labelNames(p.labels).includes(cfg.labels.ci_red)
+  // one read of each starts GitHub's work out of whether it can merge; then only the ones it has not finished, again
+  const settled = await settle(github, owner, repo, prs.filter((p) => !red(p)).map((p) => p.number))
   for (const p of prs) {
-    if (p.draft || p.head.repo?.full_name !== `${owner}/${repo}` || p.head.ref.startsWith('dependabot/')) continue
-    let kind: WorkItem['kind'] | null = labelNames(p.labels).includes(cfg.labels.ci_red) ? 'ci-red' : null
+    let kind: WorkItem['kind'] | null = red(p) ? 'ci-red' : null
     if (!kind) {
-      const full = (await github.rest.pulls.get({ owner, repo, pull_number: p.number })).data
-      if (full.mergeable === false || full.mergeable_state === 'dirty') kind = 'conflict'
+      const full = settled.get(p.number)
+      if (full && conflicted(full)) kind = 'conflict'
     }
     if (!kind) continue
     const own = Boolean(cfg.worker.own_branch_prefix) && p.head.ref.startsWith(cfg.worker.own_branch_prefix)
-    if (!own) {
+    if (!own && !again.has(p.number)) {
       const head = (await github.rest.repos.getCommit({ owner, repo, ref: p.head.sha })).data
       const at = Date.parse(head.commit.committer?.date ?? head.commit.author?.date ?? '1970-01-01')
       const idle = (now - at) / 60e3
       if (idle < cfg.worker.others_branches_after_minutes) { core.info(`#${p.number} is someone's branch, pushed ${Math.round(idle)} min ago: waiting`); continue }
     }
     known.set(p.number, { labels: labelNames(p.labels), body: p.body })
+    await askAgain(p.number, p.head.sha)
     await consider({ kind, number: p.number, sha: p.head.sha, ref: p.head.ref, own, title: p.title.slice(0, 200) })
   }
   const issues = (await github.paginate(github.rest.issues.listForRepo, { owner, repo, state: 'open', labels: cfg.labels.agent_fix, per_page: 100 }))
     .filter((i) => !i.pull_request)
   for (const i of issues) known.set(i.number, { labels: labelNames(i.labels), body: i.body })
+  for (const i of issues) await askAgain(i.number, 'issue')
   for (const i of issues) await consider({ kind: 'agent-fix', number: i.number, sha: 'issue', ref: '', own: true, title: i.title.slice(0, 200) })
 
   for (const b of blocked) {

@@ -1,6 +1,6 @@
 import { QueryClient } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CHANGE_CHECKS_MS, CHANGE_MERGEABLE_MS, POLL_LIVE_MS, applyEvent, changeLookEvery, connectLive, hostOf, invalidationsFor, liveStatus, nextLookWords, pollEvery, subprotocols } from './live'
+import { CHANGE_CHECKS_MS, CHANGE_MERGEABLE_MS, POLL_LIVE_MS, applyEvent, changeLookEvery, conflictNotice, connectLive, hostOf, invalidationsFor, liveStatus, nextLookWords, pollEvery, subprotocols } from './live'
 
 describe('live events → query invalidation', () => {
   it('maps each event to the queries it makes stale', () => {
@@ -26,6 +26,24 @@ describe('a change moved on GitHub (the webhook\'s record.changed, kind change)'
   it('refetches the change\'s status, the lists that show it, and the journey', () => {
     const e = { type: 'record.changed', repo: 'a/b', kind: 'change', number: 7, at: '' } as unknown as Parameters<typeof invalidationsFor>[0]
     expect(invalidationsFor(e)).toEqual([['pull.status', 'a/b'], ['changes.list', 'a/b'], ['change.get', 'a/b'], ['inbox'], ['journey.get', 'a/b']])
+  })
+})
+
+describe('a push left changes in conflict (the webhook\'s record.changed with conflicts)', () => {
+  const ev = (o: Record<string, unknown>) => ({ type: 'record.changed', repo: 'acme/soil-sensor', kind: 'change', at: '', ...o }) as unknown as Parameters<typeof conflictNotice>[0]
+  it('says which, and that trace is on them', () => {
+    expect(conflictNotice(ev({ conflicts: [4, 9], remade: [9], resolving: [4] }))).toEqual({
+      title: '2 changes on soil-sensor conflict with the newest design',
+      description: 'trace is bringing #4 and #9 up to date now. Nothing for you to do; they come back when the checks pass.',
+    })
+  })
+  it('names the ones that need a person', () => {
+    expect(conflictNotice(ev({ conflicts: [4, 7], remade: [], resolving: [4] }))?.description).toBe('trace is bringing #4 up to date now. #7 needs you: open it to see what to do.')
+    expect(conflictNotice(ev({ conflicts: [7], resolving: [] }))).toEqual({ title: 'A change on soil-sensor conflicts with the newest design', description: '#7 needs you: open it and choose Bring it up to date.' })
+  })
+  it('nothing for an ordinary change event, and the screens still look again', () => {
+    expect(conflictNotice(ev({ number: 3 }))).toBeNull()
+    expect(invalidationsFor(ev({ conflicts: [4] }))).toContainEqual(['changes.list', 'acme/soil-sensor'])
   })
 })
 

@@ -29,6 +29,9 @@
 # Also needs TRACE_TOKEN.
 # How work is found: events. A finished trace-ci run (it labels a red PR or opens an issue), an issue labelled
 # __TR_AGENT_FIX__, and a push to __TR_BRANCH__ (which can put open PRs in conflict) each start the pick at once.
+# A pull request is judged only once GitHub has worked out whether it can merge (a push to __TR_BRANCH__ makes that
+# "unknown" for a few seconds; the pick reads again until it settles), and the web app hears of every push to
+# __TR_BRANCH__ too: it remakes its own edits that fell into conflict and starts this pick (workflow_dispatch).
 # The schedule (minute 23 of every hour, UTC) is only a safety net: GitHub occasionally fails to deliver an event, and
 # that hourly pick finds whatever such a lost event left waiting (a PR still labelled __TR_CI_RED__, a PR still in
 # conflict, an __TR_AGENT_FIX__ issue nobody claimed). On a scheduled run with nothing waiting, the pick finds nothing.
@@ -52,6 +55,13 @@ on:
   schedule:
     - cron: '23 * * * *'       # safety net only: hourly, for events GitHub failed to deliver (see the header)
   workflow_dispatch:
+    # empty: an ordinary pick. trace's web app starts the pick itself when a push leaves changes in conflict, and with
+    # `retry` when a person asks it to bring a change up to date (src/api/conflicts.ts)
+    inputs:
+      retry:
+        description: Set by trace only, the changes a person asked it to try again (numbers, comma separated). Leave empty.
+        required: false
+        default: ''
 
 permissions: {}
 
@@ -142,6 +152,7 @@ jobs:
         uses: __TR_SOURCE__/harness/actions/run@__TR_REF__
         env:
           TRACE_HOME: ${{ vars.TRACE_AWS_ROLE != '' && vars.TRACE_HOME || '' }}
+          RETRY: ${{ github.event_name == 'workflow_dispatch' && inputs.retry || '' }}
         with:
           agent-login: ${{ vars.TRACE_AGENT_LOGIN }}
           task: worker-pick

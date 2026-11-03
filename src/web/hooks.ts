@@ -9,7 +9,7 @@
  *            call it directly, around the WAF and its rate limit; with it, only CloudFront's path reaches the rest
  *   accept   only a delivery signed with the webhook secret (X-Hub-Signature-256: HMAC SHA-256 of the exact bytes
  *            GitHub sent, compared in constant time), of the events the installer subscribes to (pull_request,
- *            check_run, check_suite, status), at most MAX_BODY bytes, naming a repository that is a trace project,
+ *            check_run, check_suite, status, push), at most MAX_BODY bytes, naming a repository that is a trace project,
  *            whose delivery id (X-GitHub-Delivery) was not seen in the last day (a replayed delivery is dropped).
  *            Anything else is dropped: 204 and one log line saying why (never the body). A good one is 202
  *   secret   Secrets Manager, `<prefix>/web/github-hooks` (JSON: the webhook secret), made by the installer, which
@@ -25,6 +25,12 @@
  *            204; when the API is slower than that, the delivery is taken (202) and the answer is awaited after
  *   apply    after publishing, `hook.apply { repo }` (src/api/actions-hooks.ts) with the same token: the project's app edits
  *            that are ready are applied (docs/stay-in-trace.md "Applying"). Once per window, like the event
+ *   conflict a push to the project's default branch (event `push`; a push to any other branch is dropped: its change's
+ *            own events say so) is when other changes fall into conflict, and GitHub sends nothing when they do. So
+ *            beside the debounce, that delivery asks the API `hook.conflicts { repo }` (src/api/conflicts.ts), which
+ *            waits for GitHub to settle, makes trace's own edits again and starts the worker for the rest; when any
+ *            were in conflict, the people on the project get `record.changed { repo, kind: 'change', conflicts,
+ *            remade, resolving }` (numbers only), and the app says which changes trace is bringing up to date
  *   publish  `record.changed { repo, kind: 'change', number? }` to each person's channel (src/web/events.ts), naming no
  *            content, as every live event. One push sets off dozens of check_run and status deliveries, each its own
  *            invocation and often its own container, so the debounce is shared (Debounce over a DebounceStore: the
@@ -50,7 +56,7 @@ import { type LiveEvent, type Publisher, appsyncPublisher, publishToEach } from 
 import { type Reply, type WebRequest, route } from './http.js'
 
 /** The events the installer subscribes each project's hook to (src/installer/hooks.ts registers exactly these). */
-export const HOOK_EVENTS = ['pull_request', 'check_run', 'check_suite', 'status'] as const
+export const HOOK_EVENTS = ['pull_request', 'check_run', 'check_suite', 'status', 'push'] as const
 /** The largest delivery read: none of these four comes near it (GitHub's own cap is 25 MB). */
 export const MAX_BODY = 1024 * 1024
 export const SECRET_TTL_MS = 5 * 60_000
@@ -61,6 +67,8 @@ export const MEMBERS_WAIT_MS = 6_000
 export const DEBOUNCE_MS = 5_000
 /** Windows one holder keeps while deliveries keep coming (the hooks function's 60 s timeout bounds it too). */
 export const MAX_ROUNDS = 6
+/** How long hook.conflicts may take to start answering: it waits for GitHub to settle, then remakes and starts work. */
+export const CONFLICTS_WAIT_MS = 40_000
 /** Repositories remembered for the members' cache (the oldest goes first). */
 const MAX_REPOS = 500
 
@@ -96,14 +104,17 @@ const Slug = z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/)
 const Num = z.number().int().positive()
 const Prs = z.array(z.object({ number: Num }).loose()).optional()
 const Delivery = z.object({
-  repository: z.object({ full_name: Slug }).loose(),
+  repository: z.object({ full_name: Slug, default_branch: z.string().optional() }).loose(),
+  ref: z.string().optional(),
+  deleted: z.boolean().optional(),
   pull_request: z.object({ number: Num }).loose().optional(),
   number: Num.optional(),
   check_run: z.object({ pull_requests: Prs }).loose().optional(),
   check_suite: z.object({ pull_requests: Prs }).loose().optional(),
 }).loose()
 
-export interface HookEvent { repo: string; number: number | null; event: string }
+/** `base`: a push to the repository's default branch, after which other changes may be in conflict. */
+export interface HookEvent { repo: string; number: number | null; event: string; base?: boolean }
 
 /** Whether trace takes this kind of event at all (X-GitHub-Event). */
 export const takes = (event: string | undefined): event is (typeof HOOK_EVENTS)[number] => Boolean(event) && (HOOK_EVENTS as readonly string[]).includes(event ?? '')
@@ -116,6 +127,12 @@ export function readDelivery(event: string | undefined, body: string): HookEvent
   const d = Delivery.safeParse(json)
   if (!d.success) return { drop: 'no repository in it' }
   const v = d.data
+  if (event === 'push') {
+    // only the default branch moving puts other changes in conflict; a push to a change's branch is its own event
+    const base = v.repository.default_branch
+    if (!base || v.ref !== `refs/heads/${base}` || v.deleted) return { drop: 'a push to a branch other than the default' }
+    return { repo: v.repository.full_name.toLowerCase(), number: null, event, base: true }
+  }
   // a status names a commit, not a change; a check names the changes it ran for (same-repository ones only)
   const number = v.pull_request?.number ?? v.number ?? v.check_run?.pull_requests?.[0]?.number ?? v.check_suite?.pull_requests?.[0]?.number ?? null
   return { repo: v.repository.full_name.toLowerCase(), number, event }
@@ -230,6 +247,10 @@ const ClientSecret = z.object({ clientSecret: z.string().min(1) }).loose()
 const TokenAnswer = z.object({ access_token: z.string().min(1), expires_in: z.number().positive().default(3600) }).loose()
 /** hook.apply's answer: what it applied or made again (branch and number only). */
 const ApplyAnswer = z.object({ result: z.object({ applied: z.array(z.object({ branch: z.string(), number: z.number().nullable(), did: z.string() })) }) })
+/** hook.conflicts' answer: numbers only (src/api/conflicts.ts ConflictReport). */
+const ConflictAnswer = z.object({ result: z.object({
+  conflicts: z.array(z.number()), remade: z.array(z.number()), worker: z.array(z.number()), left: z.array(z.number()), started: z.string(),
+}).loose() })
 const MembersAnswer = z.object({ ok: z.literal(true), result: z.object({ project: z.boolean(), subs: z.array(z.string().min(1)) }).loose() }).loose()
 
 export interface HooksOptions {
@@ -349,6 +370,31 @@ export function hooksRoutes(deps: WebDeps, o: HooksOptions = {}) {
     }
   }
 
+  /**
+   * After a push to the default branch: ask the API to find and set going the changes now in conflict (hook.conflicts),
+   * then tell the people on the project which ones, numbers only. Logged; a failure is logged and dropped (the worker's
+   * own pick on that push, and its hourly safety net, still look).
+   */
+  async function conflicts(cfg: WebConfig, repo: string): Promise<void> {
+    try {
+      const t = await backendToken(cfg)
+      const a = await callApi(deps, { config: cfg, token: t, sub: 'backend:web-hooks' }, 'hook.conflicts', { repo }, { firstByteMs: CONFLICTS_WAIT_MS })
+      const r = ConflictAnswer.safeParse(a.json)
+      if (!r.success) { deps.log({ hook: 'conflicts failed', repo, status: a.status }); return }
+      const c = r.data.result
+      if (!c.conflicts.length) return
+      deps.log({ hook: 'conflicts', repo, conflicts: c.conflicts, remade: c.remade, worker: c.worker, left: c.left, started: c.started })
+      const on = await whoIsOn(cfg, repo)
+      if (!on.project) return
+      const resolving = c.started === 'yes' || c.started === 'without-retry' ? c.worker : []
+      const e: LiveEvent = { type: 'record.changed', repo, kind: 'change', conflicts: c.conflicts, remade: c.remade, resolving, at: new Date(deps.now()).toISOString() }
+      const pub = o.publisher?.() ?? appsyncPublisher(cfg, deps.credentials, deps.fetch)
+      await publishToEach(pub, on.subs, e)
+    } catch (e) {
+      deps.log({ hook: 'conflicts failed', repo, error: e instanceof Error ? e.message.slice(0, 200) : 'error' })
+    }
+  }
+
   return [
     route('POST', '/api/hooks/github', async (req) => {
       // before anything else (the body, the settings, a secret): only CloudFront's hooks path carries this
@@ -403,7 +449,9 @@ export function hooksRoutes(deps: WebDeps, o: HooksOptions = {}) {
             const m = await asked
             if (!m.project) { deps.log({ hook: 'dropped', why: 'not a trace project', repo: d.repo, event: d.event }); return }
             debounce ??= new Debounce(deps.hookStore?.(cfg) ?? memoryStore(), { now: deps.now, log: deps.log })
-            const how = await debounce.offer(d.repo, d.number, (n) => publish(cfg, d, n))
+            // a push to the default branch: the conflicts it made are found beside the debounce, not after it (the
+            // function's time is bounded, and a holder may keep its window for MAX_ROUNDS)
+            const [how] = await Promise.all([debounce.offer(d.repo, d.number, (n) => publish(cfg, d, n)), d.base ? conflicts(cfg, d.repo) : undefined])
             if (how === 'joined') deps.log({ hook: 'debounced', repo: d.repo, event: d.event, number: d.number })
           } catch (e) {
             deps.log({ warning: 'hooks: not published', repo: d.repo, event: d.event, error: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) })

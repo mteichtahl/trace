@@ -6,13 +6,14 @@
  *   updateQueue  first, trace's own PRs (held ones too) whose only conflict is .trace/project.db get the default branch
  *                merged in with the database merged (db-conflict.ts; up to DB_RESOLVE_PER_RUN a run); then the oldest
  *                auto-merge PR that is behind is brought up to date, one at a time, so each merge costs one rebuild
- *                rather than one per open PR.
+ *                rather than one per open PR. Mergeability is settled before it is judged (mergeable.ts).
  *
  * Actions that must start other workflows (opening a PR, merging, updating a branch) are taken with the repository's
  * TRACE_TOKEN: GitHub starts no workflow for an event made with GITHUB_TOKEN.
  */
 import { commentOnce, globMatch } from './util.js'
 import { resolveDbConflict } from './db-conflict.js'
+import { settle } from './mergeable.js'
 import { type Deps, type GitHub, PullRequestPayload, errorMessage, errorStatus, labelNames, payload, short } from './types.js'
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -125,10 +126,13 @@ export async function updateQueue({ github, jobApi, context, core, cfg, env }: D
   // that one file, so each merge leaves the rest in conflict, and GitHub's merge button cannot run its merge driver
   if (env.OWN_TOKEN && cfg.worker.own_branch_prefix) {
     let resolved = 0
-    for (const p of open.filter((x) => !x.draft && x.head?.repo?.full_name === `${owner}/${repo}` && Boolean(x.head?.ref?.startsWith(cfg.worker.own_branch_prefix)))) {
+    // settled first: right after the push that starts this run GitHub reads every one as "unknown" (mergeable.ts)
+    const own = open.filter((x) => !x.draft && x.head?.repo?.full_name === `${owner}/${repo}` && Boolean(x.head?.ref?.startsWith(cfg.worker.own_branch_prefix)))
+    const settled = await settle(github, owner, repo, own.map((p) => p.number))
+    for (const p of own) {
       if (resolved >= DB_RESOLVE_PER_RUN) break
-      const pr = (await github.rest.pulls.get({ owner, repo, pull_number: p.number })).data
-      if (pr.mergeable_state !== 'dirty') continue
+      const pr = settled.get(p.number)
+      if (!pr || pr.mergeable_state !== 'dirty') continue
       const r = await resolve({ remote: `${context.serverUrl}/${owner}/${repo}.git`, head: pr.head.ref, base: cfg.branch, token: env.OWN_TOKEN })
       if (r.ok) { resolved++; say(`#${pr.number}: its only conflict was ${PROJECT_DB_FILE}; merged ${cfg.branch} into ${pr.head.ref} with the project database merged (${short(r.commit)}).`) }
       else say(`#${pr.number} has a conflict with ${cfg.branch}: ${r.why}.`)
