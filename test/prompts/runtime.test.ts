@@ -57,7 +57,7 @@ describe('the job runner', () => {
       expect(prompt).toContain('REPORT: INSTALLATION OVERRIDE.')
       // a locked override is not used: the guardrails are the catalog's, and last
       expect(prompt.trimEnd().endsWith(entry('specialist.guardrails').default)).toBe(true)
-      expect(options.systemPrompt.append).toBe(entry('system.append').default)
+      expect(options.systemPrompt.append).toBe(`${entry('system.append').default}\n\n${entry('design.silkscreen').default}`)
       expect(options.allowedTools).toEqual(allowedToolsOf(SPECIALISTS.verify, { delegate: false }))
       expect(options.maxTurns).toBe(120)
       // read from the default branch's checkout (before any other branch is checked out)
