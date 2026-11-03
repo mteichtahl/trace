@@ -70,6 +70,9 @@ export const SERVICE_ACTIONS: Readonly<Record<string, ServiceScope | 'tool'>> = 
   // deploys: a system reads them; approving, skipping and rolling back are a person's (deploy.approve, deploy.skip,
   // deploy.rollback are left out on purpose: docs/stay-in-trace.md)
   'deploys.get': 'read',
+  // the build's health and a failing job's log (docs/stay-in-trace.md "3. A broken build")
+  'health.get': 'read',
+  'health.log': 'read',
   tool: 'tool',
   task: 'write',
   'job.control': 'write',

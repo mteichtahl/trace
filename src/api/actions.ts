@@ -107,6 +107,8 @@
  *   actions-deploys.ts   deploys.get (read); deploy.approve, deploy.skip, deploy.rollback (write, and a trace admin or a
  *                        person in deploy.people; never a connected system): deploys decided in the app
  *                        (docs/stay-in-trace.md "2. Deploys")
+ *   actions-health.ts    health.get, health.log (read): the build's health, its failing step's log, trace's fix and
+ *                        the open requests for a fix (docs/stay-in-trace.md "3. A broken build")
  *   actions-me.ts        also policy.get, policy.set
  *   actions-prompts.ts   prompts.chat (the chat agent's editable instructions as the installation has them)
  *   actions-voice.ts     voice.vocabulary, voice.vocabulary.sync (dictation's project words)
@@ -171,6 +173,7 @@ import { CHANGE_ACTIONS } from './actions-changes.js'
 import { HOOK_ACTIONS } from './actions-hooks.js'
 import { RULE_ACTIONS } from './actions-rules.js'
 import { DEPLOY_ACTIONS } from './actions-deploys.js'
+import { HEALTH_ACTIONS } from './actions-health.js'
 import { SERVICE_ACTIONS, checkService, taskCap, toolOpenToSystems } from './service-policy.js'
 import { editStore, recordEdit } from './edits.js'
 
@@ -781,6 +784,7 @@ export const ACTIONS = {
   ...HOOK_ACTIONS,
   ...RULE_ACTIONS,
   ...DEPLOY_ACTIONS,
+  ...HEALTH_ACTIONS,
 } satisfies Record<string, Action<z.ZodType>>
 
 export type ActionName = keyof typeof ACTIONS
