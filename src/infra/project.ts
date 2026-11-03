@@ -115,7 +115,9 @@ import {
  * prefix and hash back from the topic's name to name its wait queues). */
 
 /** A project's records that only people change, through the API (src/infra/stack.ts CHATS_PREFIX, JOURNEY_PREFIX). */
-export const PEOPLE_RECORDS = ['journey', 'chats'] as const
+// journey and chats: what people decided and said; edits: what they changed in the app (src/core/app-edits.ts); deploys:
+// the deploy approvals they gave in the app (docs/stay-in-trace.md). The API writes them; agents and workflows only read
+export const PEOPLE_RECORDS = ['journey', 'chats', 'edits', 'deploys'] as const
 /** What a project's agents contribute to its journey (src/core/agent-facts.ts AGENT_FACTS_FOLDER): the worker and the
  * workflows write it with conditional puts only, the API reads it. Not under journey/: PeopleRecordsReadOnly's
  * projects/<slug>/journey/* does not match projects/<slug>/journey-agent/*. */

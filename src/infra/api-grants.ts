@@ -42,6 +42,8 @@ import { apiVocabularyStatement } from './voice.js'
 
 const CHATS: (typeof PEOPLE_RECORDS)[number] = 'chats'
 const JOURNEY: (typeof PEOPLE_RECORDS)[number] = 'journey'
+const EDITS: (typeof PEOPLE_RECORDS)[number] = 'edits'
+const DEPLOYS: (typeof PEOPLE_RECORDS)[number] = 'deploys'
 const PENDING = 'installation/pending-projects'
 
 export interface ApiGrantsProps {
@@ -101,10 +103,13 @@ export function grantApiRuntime(role: iam.Role, p: ApiGrantsProps, o: { people: 
     // waiting for the next stack update (projects.create): read, and write only with conditional puts
     // and each project's journey record (journey.*, docs/web-build.md), under projects/<slug>/journey/
     grantPrefixes(role, p.central, { conditional: [`${PROJECTS_PREFIX}/*/${CHATS}`, `${PROJECTS_PREFIX}/*/${JOURNEY}`, PENDING] })
+    // what people changed in the app, and the deploys they approved there (docs/stay-in-trace.md): read, and write only
+    // with conditional puts; the agents' and workflows' roles only read them (PEOPLE_RECORDS)
+    grantPrefixes(role, p.central, { conditional: [`${PROJECTS_PREFIX}/*/${EDITS}`, `${PROJECTS_PREFIX}/*/${DEPLOYS}`] })
   } else {
     // systems: the access store read only (the verifier's lookup, projects), and when each system last called, as one
     // small object per system beside it (src/core/services-seen.ts): plain puts there, nothing else of access/
-    grantPrefixes(role, p.central, { read: [ACCESS_PREFIX, `${PROJECTS_PREFIX}/*/${MEMORY_STATE}`] })
+    grantPrefixes(role, p.central, { read: [ACCESS_PREFIX, `${PROJECTS_PREFIX}/*/${MEMORY_STATE}`, `${PROJECTS_PREFIX}/*/${EDITS}`] })
     role.addToPolicy(new iam.PolicyStatement({ sid: 'ServicesSeen', actions: ['s3:PutObject'], resources: [p.central.arnForObjects(`${ACCESS_PREFIX}/${SERVICES_SEEN}/*`)] }))
     // each project's journey record: read, and conditional writes (its first import; job.control's holds)
     grantPrefixes(role, p.central, { conditional: [`${PROJECTS_PREFIX}/*/${JOURNEY}`] })
