@@ -11,6 +11,7 @@ import type { ArchitectureRecord, CoverageRow, DesignView, TraceView } from '@/l
 import { handle } from '@/mock/handlers'
 import { withDecision } from '@/components/skills/design-steps'
 import { ArchitectureSummary, OptionsTable, drawn, optionToDraw, unmapped } from './architecture'
+import { ReactFlowProvider } from '@xyflow/react'
 import { BlockDiagram } from './block-diagram'
 import { layoutTrace } from './traceability'
 
@@ -36,9 +37,12 @@ describe('design.get as the API answers it', () => {
   it('draws the recommended option\'s blocks with their key part and what they serve', () => {
     const a = d.architecture as ArchitectureRecord
     expect(optionToDraw(a, null)).toBe('A')
-    render(<BlockDiagram {...drawn(a, 'A')} />)
-    expect(screen.getByRole('button', { name: /MCU and radio/ })).toHaveTextContent('STM32WLE5JCI6')
-    expect(screen.getByRole('button', { name: /MCU and radio/ })).toHaveTextContent('REQ-1')
+    render(<ReactFlowProvider><div style={{ width: 900, height: 400 }}><BlockDiagram {...drawn(a, 'A')} /></div></ReactFlowProvider>)
+    // React Flow keeps a box hidden until it can measure it, which jsdom cannot: read the box by its node id
+    const mcu = screen.getByTestId('rf__node-mcu')
+    expect(mcu).toHaveAttribute('aria-label', expect.stringMatching(/MCU and radio/))
+    expect(mcu).toHaveTextContent('STM32WLE5JCI6')
+    expect(mcu).toHaveTextContent('REQ-1')
   })
   it('names each sheet\'s requirements and lists the pin plan with its status', () => {
     expect(d.sheets[0]).toMatchObject({ id: 'hw/answers.kicad_sch', serves: ['REQ-1'] })

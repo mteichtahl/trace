@@ -20,7 +20,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { StatusBadge } from '@/components/status-badge'
 import { ArchitectureSummary, OptionSwitch, OptionsTable, drawn, useOption } from '@/components/project/architecture'
-import { BlockDiagram } from '@/components/project/block-diagram'
+import { BlockDiagramCanvas } from '@/components/project/block-diagram'
 import { useCall } from '@/lib/queries'
 import type { ArchitectureRecord } from '@/lib/types-s1'
 import type { SkillView } from '@/lib/types-s1'
@@ -170,9 +170,7 @@ function CompareOptions({ view, scores }: { view?: SkillView; scores: boolean })
         <h2 id="compare-options" className="text-base font-semibold">{a.options.length} options{o ? `: option ${o.id}, ${o.name}` : ''}</h2>
         <OptionSwitch a={a} value={current} onChange={setCurrent} />
       </div>
-      <div className="overflow-hidden rounded-xl border bg-muted/20 p-2">
-        <div className="origin-top-left scale-[0.5] sm:scale-[0.75] 2xl:scale-90"><BlockDiagram {...drawn(a, current)} /></div>
-      </div>
+      <BlockDiagramCanvas title="Block diagram" subtitle={o ? `Option ${o.id}: ${o.name}` : undefined} height={360} {...drawn(a, current)} />
       {o && (
         <div className="space-y-1 text-sm">
           <p>{o.summary}</p>

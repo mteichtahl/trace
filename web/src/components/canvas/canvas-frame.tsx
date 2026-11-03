@@ -34,16 +34,29 @@ export interface CanvasFrameProps {
   onDetailClose?: () => void
   /** pan and zoom the content (off for content that scrolls itself, like a table) */
   zoomable?: boolean
+  /** content with its own viewport (React Flow): the toolbar's zoom and fit drive it, and the frame neither pans nor
+   * scales the content itself */
+  viewport?: CanvasViewport
   height?: number | string
   className?: string
+}
+
+export interface CanvasViewport {
+  zoom: number
+  zoomIn: () => void
+  zoomOut: () => void
+  fit: () => void
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 
 export function CanvasFrame({
-  title, subtitle, children, layers, onLayer, filter, onCompare, onAsk, onFullscreen, detail, onDetailClose, zoomable = true, height = 420, className,
+  title, subtitle, children, layers, onLayer, filter, onCompare, onAsk, onFullscreen, detail, onDetailClose, zoomable: zoomOwn = true, viewport, height = 420, className,
 }: CanvasFrameProps) {
-  const [zoom, setZoom] = useState(1)
+  // the frame pans and zooms the content itself only when the content has no viewport of its own
+  const zoomable = zoomOwn && !viewport
+  const [ownZoom, setZoom] = useState(1)
+  const zoom = viewport?.zoom ?? ownZoom
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const drag = useRef<{ x: number; y: number; px: number; py: number } | null>(null)
   const fit = useCallback(() => {
@@ -98,18 +111,18 @@ export function CanvasFrame({
             <Sparkles /> <span className="max-sm:hidden">Ask about this</span>
           </Button>
         )}
-        {zoomable && (
+        {(zoomable || viewport) && (
           <div className="flex items-center rounded-md border">
-            <Button variant="ghost" size="icon" className="size-8 rounded-none" aria-label="Zoom out" onClick={() => setZoom((z) => clamp(z / 1.25, 0.25, 8))}>
+            <Button variant="ghost" size="icon" className="size-8 rounded-none" aria-label="Zoom out" onClick={() => (viewport ? viewport.zoomOut() : setZoom((z) => clamp(z / 1.25, 0.25, 8)))}>
               <Minus />
             </Button>
             <span className="w-12 text-center font-mono text-xs max-sm:hidden" aria-live="polite">
               {Math.round(zoom * 100)}%
             </span>
-            <Button variant="ghost" size="icon" className="size-8 rounded-none" aria-label="Zoom in" onClick={() => setZoom((z) => clamp(z * 1.25, 0.25, 8))}>
+            <Button variant="ghost" size="icon" className="size-8 rounded-none" aria-label="Zoom in" onClick={() => (viewport ? viewport.zoomIn() : setZoom((z) => clamp(z * 1.25, 0.25, 8)))}>
               <Plus />
             </Button>
-            <Button variant="ghost" size="icon" className="size-8 rounded-none border-l" aria-label="Fit" onClick={fit}>
+            <Button variant="ghost" size="icon" className="size-8 rounded-none border-l" aria-label="Fit" onClick={viewport ? viewport.fit : fit}>
               <Scan />
             </Button>
           </div>
@@ -121,14 +134,14 @@ export function CanvasFrame({
         )}
       </div>
       <div
-        className={cn('relative overflow-hidden bg-[radial-gradient(var(--border)_1px,transparent_1px)] [background-size:16px_16px]', zoomable && 'cursor-grab active:cursor-grabbing touch-none')}
+        className={cn('relative overflow-hidden', !viewport && 'bg-[radial-gradient(var(--border)_1px,transparent_1px)] [background-size:16px_16px]', zoomable && 'cursor-grab active:cursor-grabbing touch-none')}
         style={{ height }}
         onWheel={zoomable ? (e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); setZoom((z) => clamp(z * (e.deltaY < 0 ? 1.1 : 0.9), 0.25, 8)) } } : undefined}
         onPointerDown={zoomable ? (e) => { drag.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y }; (e.target as HTMLElement).setPointerCapture?.(e.pointerId) } : undefined}
         onPointerMove={zoomable ? (e) => { const d = drag.current; if (d) setPan({ x: d.px + e.clientX - d.x, y: d.py + e.clientY - d.y }) } : undefined}
         onPointerUp={() => (drag.current = null)}
       >
-        <div className="flex h-full w-full items-center justify-center" style={zoomable ? { transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: 'center' } : undefined}>
+        <div className={cn('h-full w-full', !viewport && 'flex items-center justify-center')} style={zoomable ? { transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: 'center' } : undefined}>
           {children}
         </div>
       </div>
