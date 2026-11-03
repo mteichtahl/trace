@@ -34,7 +34,7 @@ import { PROJECTS_PREFIX } from '../core/project.js'
 import { SERVICES_SEEN } from '../core/services-seen.js'
 import { ACTUALS_OBJECTS } from './cost.js'
 import { KB_RETRIEVE_ACTIONS, knowledgeBaseArn } from './knowledge.js'
-import { type TraceMemory, grantReadRecords } from './memory.js'
+import { type TraceMemory, grantReadEvents, grantReadRecords } from './memory.js'
 import { WATCH_OBJECTS } from './order-watch.js'
 import { orderWatchSecretsPrefix } from '../core/integrations-catalog.js'
 import { ACCESS_PREFIX, AGENT_FACTS, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, grantPrefixes } from './project.js'
@@ -150,6 +150,7 @@ export function grantApiRuntime(role: iam.Role, p: ApiGrantsProps, o: { people: 
     }))
   }
   grantReadRecords(role, p.memories)
+  grantReadEvents(role, p.memories, { partition: p.partition, region: p.region, account: p.account, prefix: p.prefix })
   // dictation: the state of each project's vocabulary for voice.vocabulary (after its access check), nothing more
   if (people) role.addToPolicy(apiVocabularyStatement({ partition: p.partition, region: p.region, account: p.account, prefix: p.prefix }))
   // kb.search on any project's knowledge base, after the access check (src/api/actions.ts); nothing else of them.

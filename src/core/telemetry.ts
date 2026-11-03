@@ -112,6 +112,9 @@ export const ATTR = {
   promptOverridden: 'trace.prompt.overridden',
   /** how many inactive memory records were left out of what an agent or a person was given (never their ids) */
   memoryInactiveFiltered: 'trace.memory.inactive_filtered',
+  memoryState: 'trace.memory.state',
+  memorySaved: 'trace.memory.saved',
+  memoryFailed: 'trace.memory.failed',
   /** the knowledge base (src/tools/kb): counts, sizes and outcomes only, never paths, document text or query text */
   kbDocuments: 'trace.kb.documents',
   kbObjects: 'trace.kb.objects',

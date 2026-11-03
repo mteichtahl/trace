@@ -18,7 +18,8 @@ const base = { account: '123456789012', region: 'us-east-1', repositories: [A, `
 type Statement = { Sid?: string; Effect?: string; Action: string | string[]; Resource?: unknown; Condition?: Record<string, Record<string, unknown>> }
 type Res = { Type: string; Properties: Record<string, unknown>; DeletionPolicy?: string; UpdateReplacePolicy?: string }
 const resources = (t: Template, type: string): [string, Res][] => Object.entries(t.findResources(type) as Record<string, Res>)
-const statements = (t: Template, prefix: string): Statement[] => resources(t, 'AWS::IAM::Policy').filter(([id]) => id.startsWith(prefix))
+// a role's inline policy and, once CDK splits a large one, its overflow managed policies
+const statements = (t: Template, prefix: string): Statement[] => [...resources(t, 'AWS::IAM::Policy'), ...resources(t, 'AWS::IAM::ManagedPolicy')].filter(([id]) => id.startsWith(prefix))
   .flatMap(([, p]) => (p.Properties.PolicyDocument as { Statement: Statement[] }).Statement)
 const actions = (s: Statement): string[] => (Array.isArray(s.Action) ? s.Action : [s.Action])
 const ids = (v: unknown): string[] => JSON.stringify(v).match(/Project[0-9a-f]{8}[A-Za-z0-9]*/g) ?? []

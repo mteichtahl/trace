@@ -153,6 +153,13 @@ A deliberate change (a new or changed requirement, a part going end of life, a b
 
 A released revision is never edited. A change after release always opens the next revision, and a firmware-only change opens a firmware revision without reopening the hardware.
 
+### Nothing goes to Fabricate while it is changing
+
+What is ordered must be the design as accepted, with nothing still moving. Two rules hold this (src/core/journey.ts `guardsFabricate`, `pendingBlockers`, `returnForChange`):
+
+- **Fabricate is locked while anything is pending.** The gates that lead into Fabricate (the release approval at Sign-off, whose signature passes Release, and the order approval) cannot be signed while a change trace made is still open (accept or discard it first), while a requirement changed after the baseline is not agreed again, or while trace cannot check (GitHub not answering): it stays locked rather than guessing. The gate shows each reason, and the next step becomes settling the change instead of signing.
+- **A changed requirement takes the project back to Define.** When a requirement or the intent behind it changes after the requirements baseline (a person strikes or rewords it, or a change trace made alters it and is accepted), the project returns to Define at once: the signatures from Define on stop counting, the baseline's own criteria are agreed again in Requirements review, and every gate after it is signed again. Evidence trace owns carries forward and is checked again. A requirement decided again the same way, with the same words, changes nothing. A change found only when a gate is about to be signed (an agent's change merged on its own) does the same, and the signature is refused with the reason.
+
 ### Using the fab wait
 
 The Fabricate stage now runs until the boards are on the bench, and its work fills the one to three weeks JLCPCB takes, so bring-up starts the day the boards arrive. This is Fabricate's own work, so hard gates still hold.

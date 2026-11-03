@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ListMemoryRecordsCommand, RetrieveMemoryRecordsCommand } from '@aws-sdk/client-bedrock-agentcore'
+import { ListEventsCommand, ListMemoryRecordsCommand, ListSessionsCommand, RetrieveMemoryRecordsCommand } from '@aws-sdk/client-bedrock-agentcore'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { AgentMemory, type ProjectMemories, type SendClient, namespaceOf, parseProjectMemories, personActor, projectMemoriesFromEnv } from '../../src/agents/runtime/memory.js'
 import { type ActionDeps, type Context, perform } from '../../src/api/actions.js'
@@ -125,5 +125,57 @@ describe('memory through the API', () => {
     const list = (await perform('tools.list', { repo: 'acme/board' }, ctx(GUEST))).result as { name: string }[]
     expect(list.map((t) => t.name)).not.toContain('memory.recall')
     await expect(perform('tool', { repo: 'acme/board', name: 'memory.remember', args: { text: 'x' } }, ctx(ADMIN))).rejects.toThrow(/no tool memory\.remember/)
+  })
+})
+
+describe('short-term memory through the API (memory.events)', () => {
+  const t = (n: number) => new Date(1_700_000_000_000 + n * 60_000)
+  const conv = (role: string, text: string) => [{ conversational: { role, content: { text } } }]
+  const EVENTS = [
+    { actorId: 'acme/board/impl', sessionId: 'pr-7', at: t(1), payload: conv('USER', 'Fix the DRC on pr 7') },
+    { actorId: 'acme/board/impl', sessionId: 'pr-7', at: t(3), payload: conv('ASSISTANT', 'Result: Pushed abc.') },
+    { actorId: 'acme/board/render', sessionId: 'task-2', at: t(5), payload: conv('USER', 'Render the top side') },
+    { actorId: mine.id, sessionId: 'task-2', at: t(5), payload: conv('USER', 'Render the top side') },
+    { actorId: theirs.id, sessionId: 'task-9', at: t(6), payload: conv('USER', 'Someone else asked this') },
+  ]
+  const asked: { cmd: string; actorId: string }[] = []
+  const evClient: SendClient = {
+    send: async (cmd) => {
+      const input = cmd.input as { actorId?: string; sessionId?: string }
+      asked.push({ cmd: cmd.constructor.name, actorId: input.actorId ?? '' })
+      if (cmd instanceof ListSessionsCommand) {
+        const ids = [...new Set(EVENTS.filter((e) => e.actorId === input.actorId).map((e) => e.sessionId))]
+        return { sessionSummaries: ids.map((s) => ({ sessionId: s, actorId: input.actorId, createdAt: EVENTS.find((e) => e.sessionId === s && e.actorId === input.actorId)?.at })) }
+      }
+      if (cmd instanceof ListEventsCommand) {
+        return { events: EVENTS.filter((e) => e.actorId === input.actorId && e.sessionId === input.sessionId).map((e, i) => ({ eventId: `e${i}`, actorId: e.actorId, sessionId: e.sessionId, eventTimestamp: e.at, payload: e.payload })) }
+      }
+      return { memoryRecordSummaries: [] }
+    },
+  }
+  const evMemories: ProjectMemories = { forProject: (repo) => (repo.toLowerCase() === 'acme/board' ? new AgentMemory(BOARD_MEMORY, evClient) : null) }
+
+  it('shows what the agents saved, newest first, and only the caller\'s own person sessions', async () => {
+    asked.length = 0
+    const r = await perform('memory.events', { repo: 'acme/board' }, ctx(GUEST, evMemories))
+    const out = r.result as { enabled: boolean; sessions: { agent: string; session: string; turns: { role: string; text: string }[] }[] }
+    expect(out.enabled).toBe(true)
+    expect(out.sessions.map((s) => `${s.agent}:${s.session}`)).toEqual(['render:task-2', 'you:task-2', 'impl:pr-7'])
+    expect(out.sessions.at(-1)?.turns.map((x) => x.role)).toEqual(['user', 'assistant'])
+    expect(JSON.stringify(out)).not.toContain('Someone else asked this')
+    expect(asked.map((a) => a.actorId)).not.toContain(theirs.id)
+  })
+
+  it('narrows to one agent, and needs read access first', async () => {
+    asked.length = 0
+    const r = await perform('memory.events', { repo: 'acme/board', agent: 'impl' }, ctx(GUEST, evMemories))
+    expect((r.result as { sessions: { agent: string }[] }).sessions.map((s) => s.agent)).toEqual(['impl'])
+    expect(new Set(asked.map((a) => a.actorId))).toEqual(new Set(['acme/board/impl']))
+    await expect(perform('memory.events', { repo: 'acme/secret' }, ctx(GUEST, evMemories))).rejects.toBeInstanceOf(AccessDenied)
+  })
+
+  it('says memory is off when the installation has none', async () => {
+    const r = await perform('memory.events', { repo: 'acme/board' }, ctx(ADMIN, null))
+    expect(r.result).toEqual({ repo: 'acme/board', enabled: false, sessions: [] })
   })
 })

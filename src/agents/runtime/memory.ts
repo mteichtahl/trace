@@ -52,7 +52,7 @@
  */
 import { createHash } from 'node:crypto'
 import {
-  BedrockAgentCoreClient, CreateEventCommand, GetMemoryRecordCommand, ListEventsCommand, ListMemoryRecordsCommand, RetrieveMemoryRecordsCommand,
+  BedrockAgentCoreClient, CreateEventCommand, GetMemoryRecordCommand, ListEventsCommand, ListMemoryRecordsCommand, ListSessionsCommand, RetrieveMemoryRecordsCommand,
 } from '@aws-sdk/client-bedrock-agentcore'
 import { type Span, trace } from '@opentelemetry/api'
 import { z } from 'zod'
@@ -235,7 +235,7 @@ const API_ROLE = { user: 'USER', assistant: 'ASSISTANT', tool: 'TOOL', other: 'O
 
 /** What the client needs of BedrockAgentCoreClient (tests pass a fake). */
 export interface SendClient {
-  send(command: CreateEventCommand | ListEventsCommand | RetrieveMemoryRecordsCommand | ListMemoryRecordsCommand | GetMemoryRecordCommand): Promise<unknown>
+  send(command: CreateEventCommand | ListEventsCommand | ListSessionsCommand | RetrieveMemoryRecordsCommand | ListMemoryRecordsCommand | GetMemoryRecordCommand): Promise<unknown>
 }
 
 export const MemoryIdSchema = z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,99}-[a-zA-Z0-9]{10}$/, 'an AgentCore memory id')
@@ -255,6 +255,13 @@ const EventSchema = z.object({
 }).loose()
 
 const CreateEventOut = z.object({ event: EventSchema }).loose()
+const ListSessionsOut = z.object({
+  sessionSummaries: z.array(z.object({ sessionId: z.string(), actorId: z.string().optional(), createdAt: When }).loose()).default([]),
+  nextToken: z.string().nullish(),
+}).loose()
+
+/** One short-term session of one actor, newest turns last (the API's memory.events). */
+export interface SessionView { actor: Actor; session: string; createdAt: Date | null; lastAt: Date | null; turns: Turn[] }
 const ListEventsOut = z.object({ events: z.array(EventSchema).default([]), nextToken: z.string().nullish() }).loose()
 
 const RecordSchema = z.object({
@@ -384,6 +391,40 @@ export class AgentMemory {
       }
       turns.sort((x, y) => (x.at?.getTime() ?? 0) - (y.at?.getTime() ?? 0))
       return turns.slice(-Math.max(1, Math.min(k, 100)))
+    },
+    /** This actor's sessions (newest first by when each began), at most `limit`. */
+    sessions: async (a: Actor, limit = 10): Promise<{ session: string; createdAt: Date | null }[]> => {
+      const out: { session: string; createdAt: Date | null }[] = []
+      let nextToken: string | undefined
+      for (let page = 0; page < 5; page++) {
+        const r = ListSessionsOut.parse(await this.client.send(new ListSessionsCommand({
+          memoryId: this.memoryId, actorId: a.id, maxResults: 100, ...(nextToken ? { nextToken } : {}),
+        })))
+        for (const s of r.sessionSummaries) if (!s.actorId || s.actorId === a.id) out.push({ session: s.sessionId, createdAt: s.createdAt })
+        nextToken = r.nextToken ?? undefined
+        if (!nextToken) break
+      }
+      out.sort((x, y) => (y.createdAt?.getTime() ?? 0) - (x.createdAt?.getTime() ?? 0))
+      return out.slice(0, Math.max(1, Math.min(limit, 100)))
+    },
+    /**
+     * The most recent sessions of these actors (the API's memory.events: what the agents saved, before any long-term
+     * record is extracted from it), newest activity first, each with its last `turns` turns. An actor whose sessions
+     * cannot be listed is left out rather than failing the rest.
+     */
+    recentSessions: async (actors: readonly Actor[], o: { limit: number; turns: number; session?: string | undefined }): Promise<SessionView[]> => {
+      const limit = Math.max(1, Math.min(o.limit, 50))
+      const listed = await Promise.all(actors.map(async (a) => {
+        if (o.session) return [{ actor: a, session: checkSession(o.session), createdAt: null }]
+        const ss = await this.shortTerm.sessions(a, limit).catch(() => [])
+        return ss.map((s) => ({ actor: a, ...s }))
+      }))
+      const newest = listed.flat().sort((x, y) => (y.createdAt?.getTime() ?? 0) - (x.createdAt?.getTime() ?? 0)).slice(0, limit)
+      const views = await Promise.all(newest.map(async (s): Promise<SessionView> => {
+        const turns = await this.shortTerm.recent(s.actor, s.session, o.turns).catch(() => [] as Turn[])
+        return { actor: s.actor, session: s.session, createdAt: s.createdAt, lastAt: turns.at(-1)?.at ?? s.createdAt, turns }
+      }))
+      return views.filter((v) => v.turns.length).sort((x, y) => (y.lastAt?.getTime() ?? 0) - (x.lastAt?.getTime() ?? 0))
     },
   }
 
@@ -593,12 +634,55 @@ export interface JobMemory {
   finish(ok: boolean, text: string): Promise<void>
   /** Wait for every pending write without recording a result (a job in several steps: GitHub Actions). Never throws. */
   flush?(): Promise<void>
+  /** What memory did for this job so far: whether it is on, what was recalled, and how many writes landed or failed. */
+  status(): MemoryStatus
 }
+
+/**
+ * What memory did for one job, so that a person can see it (the job's status, its log) rather than it failing quietly.
+ *   off      no memory for this job (reason says why: not set up, or it could not be opened)
+ *   saved    every write landed
+ *   partial  some writes (or a recall) failed
+ *   failed   writes were attempted and none landed
+ */
+export interface MemoryStatus {
+  state: 'off' | 'saved' | 'partial' | 'failed'
+  /** long-term records and earlier turns given to the agent */
+  recalled: number
+  /** events written to short-term memory */
+  saved: number
+  /** writes and recalls that failed */
+  failed: number
+  /** why it is off, or what the first failure said (redacted, bounded) */
+  reason?: string | undefined
+}
+
+/** The status's one line for the job's log. */
+export function memoryLine(s: MemoryStatus): string {
+  const why = s.reason ? `: ${s.reason}` : ''
+  switch (s.state) {
+    case 'off': return `memory: off${why}`
+    case 'saved': return `memory: saved ${s.saved} event${s.saved === 1 ? '' : 's'}, recalled ${s.recalled}`
+    case 'partial': return `memory: partly saved (${s.saved} saved, ${s.failed} failed), recalled ${s.recalled}${why}`
+    case 'failed': return `memory: NOT saved (${s.failed} failed)${why}`
+  }
+}
+
+const statusOf = (saved: number, failed: number, recalled: number, reason?: string): MemoryStatus => ({
+  state: failed === 0 ? 'saved' : saved === 0 ? 'failed' : 'partial', recalled, saved, failed, ...(failed && reason ? { reason } : {}),
+})
 
 export const MAX_TOOL_EVENTS = 12
 const TOOL_OUTCOME_CHARS = 500
 
-export const NO_MEMORY: JobMemory = { context: '', env: {}, observe: () => undefined, finish: async () => undefined }
+/** A job's memory that is off, with why (a person sees this on the job). */
+export function noMemory(reason: string): JobMemory {
+  const st: MemoryStatus = { state: 'off', recalled: 0, saved: 0, failed: 0, reason }
+  return { context: '', env: {}, observe: () => undefined, finish: async () => undefined, status: () => st }
+}
+
+/** No memory, and nothing to report: the placeholder before a job's memory is opened, and after it is finished. */
+export const NO_MEMORY: JobMemory = noMemory('not opened')
 
 const ToolUse = z.object({ type: z.literal('tool_use'), id: z.string(), name: z.string() }).loose()
 const ToolResult = z.object({ type: z.literal('tool_result'), tool_use_id: z.string(), is_error: z.boolean().optional(), content: z.unknown() }).loose()
@@ -619,13 +703,19 @@ const keyTool = (name: string, isError: boolean): boolean => (name.startsWith('m
  */
 export async function openJobMemory(mem: AgentMemory | null, plan: JobMemoryPlan,
   o: { log: (l: string) => void; redact?: (s: string) => string; recall?: boolean }): Promise<JobMemory> {
-  if (!mem) return NO_MEMORY
+  if (!mem) return noMemory('memory is not set up here (TRACE_MEMORY_ID is not set)')
   const redact = o.redact ?? ((s: string) => s)
   let warned = false
+  let saved = 0
+  let failed = 0
+  let firstFailure: string | undefined
   const warn = (what: string, e: unknown): void => {
+    failed++
+    const msg = redact(e instanceof Error ? e.message : String(e)).slice(0, 300)
+    firstFailure ??= `${what} failed: ${msg}`
     if (warned) return
     warned = true
-    o.log(`memory: ${what} failed, continuing without it: ${redact(e instanceof Error ? e.message : String(e)).slice(0, 300)}`)
+    o.log(`memory: ${what} failed, continuing without it: ${msg}`)
   }
   const { actor: a, person, session } = plan
   // recall: false only records (a later step of the same job, e.g. GitHub Actions' report step, recalled already)
@@ -640,10 +730,11 @@ export async function openJobMemory(mem: AgentMemory | null, plan: JobMemoryPlan
   ])
   if (history.length) o.log(`memory: continuing session ${session} (${history.length} earlier turns)`)
   const context = memoryBlock({ records, history, person: personal, legacy })
+  const recalled = records.length + history.length + personal.length + legacy.length
 
   let chain: Promise<unknown> = Promise.resolve()
   const write = (who: Actor, role: Role, text: string): void => {
-    chain = chain.then(() => mem.shortTerm.record(who, session, role, text, redact)).catch((e: unknown) => warn('recording', e))
+    chain = chain.then(() => mem.shortTerm.record(who, session, role, text, redact)).then((t) => { if (t) saved++ }).catch((e: unknown) => warn('recording', e))
   }
   write(a, 'user', plan.request)
   if (person) write(person, 'user', plan.request)
@@ -675,5 +766,6 @@ export async function openJobMemory(mem: AgentMemory | null, plan: JobMemoryPlan
     async flush() {
       await chain.catch(() => undefined)
     },
+    status: () => statusOf(saved, failed, recalled, firstFailure),
   }
 }
