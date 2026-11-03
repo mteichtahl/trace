@@ -28,6 +28,7 @@ import type { QualityCheck } from '@/components/quality-bar'
 import { Rich } from '@/components/rich'
 import { StatusBadge } from '@/components/status-badge'
 import { EmptyState, QueryError } from '@/components/states'
+import { useMediaQuery } from '@/hooks/use-media-query'
 import { call } from '@/lib/api'
 import { useCall } from '@/lib/queries'
 import type { CriterionStatus } from '@/lib/types'
@@ -273,11 +274,10 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
   const checks: QualityCheck[] = qualityChecks(def, v, local, s.goTo)
   const options = useMemo(() => q?.options ?? (q?.recommended ? [q.recommended] : []), [q])
 
-  const aside = (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="border-b px-5 py-4"><h2 className="font-semibold">Your answer</h2></div>
-      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4 text-sm">
-        {!q ? <p className="text-muted-foreground">{s.view.isLoading ? 'Loading the question…' : 'No question is open for you on this project.'}</p> : (
+  // the answer's own fields: beside the work on wide screens, and in the page itself below that, so a phone never has to
+  // find them behind a button
+  const wide = useMediaQuery('(min-width: 1280px)')
+  const fields = q ? (
           <>
             <div>
               <p className="text-xs text-muted-foreground">Chosen</p>
@@ -299,7 +299,13 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
               </RadioGroup>
             </fieldset>
           </>
-        )}
+  ) : null
+
+  const aside = (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="border-b px-5 py-4"><h2 className="font-semibold">Your answer</h2></div>
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4 text-sm">
+        {!q ? <p className="text-muted-foreground">{s.view.isLoading ? 'Loading the question…' : 'No question is open for you on this project.'}</p> : fields}
       </div>
     </div>
   )
@@ -315,7 +321,7 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
       submitLabel={def.submit}
       onClose={s.close}
       draftSavedAt={s.draft.savedAt}
-      aside={aside}
+      aside={wide ? aside : undefined}
       onSubmit={() => s.submit(() => answer.mutateAsync({
         repo, question: q!.id,
         ...(d.option && d.option !== 'other' ? { option: d.option } : { answer: [d.value && q?.quantity ? `${d.value} ${q.quantity.unit}` : '', d.answer].filter(Boolean).join(': ') + (d.source ? ` (source: ${d.source})` : '') }),
@@ -343,15 +349,16 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
           </div>
           {q.recommended && options.length > 0 && (
             <DecisionCard
-              decision={{ recommended: q.recommended.id, options: [...options, { id: 'other', label: 'Other answer', detail: 'Write your own' }], evidence: q.sources, blocks: q.blocks }}
-              chosen={d.option ? { option: d.option, recommended: d.option === q.recommended.id, reason: d.reason } : undefined}
-              onChoose={(c) => { set({ option: c.option, reason: c.reason }); if (s.stepIndex < 2) s.goTo(c.option === 'other' ? 'specific' : 'lasts') }}
+              decision={{ recommended: q.recommended.id, options: [...options, { id: 'other', label: 'Other answer', detail: 'Write your own', free: true }], evidence: q.sources, blocks: q.blocks }}
+              chosen={d.option ? { option: d.option, recommended: d.option === q.recommended.id, reason: d.reason, ...(d.answer ? { answer: d.answer } : {}) } : undefined}
+              onChoose={(c) => { set({ option: c.option, reason: c.reason, ...(c.answer ? { answer: c.answer } : {}) }); if (s.stepIndex < 2) s.goTo(c.option === 'other' ? 'specific' : 'lasts') }}
             />
           )}
           {d.option && <Button variant="ghost" size="sm" onClick={() => set({ option: undefined, reason: undefined })}>Choose again</Button>}
           {(d.option === 'other' || !q.recommended) && (
             <div className="space-y-1.5"><Label htmlFor="qa-answer">Your answer</Label><Textarea id="qa-answer" rows={3} value={d.answer} onChange={(e) => set({ answer: e.target.value })} placeholder={'Specific enough to unblock the agent: not "it depends"'} /></div>
           )}
+          {!wide && <section className="space-y-5 rounded-xl border p-5 text-sm" aria-label="Your answer"><h2 className="font-semibold">Your answer</h2>{fields}</section>}
           <div className="h-[360px] overflow-hidden rounded-xl border"><EmbeddedChat repo={repo} title="Ask trace about this question" placeholder="Why does it recommend that? Where did it look?" /></div>
         </div>
       )}
