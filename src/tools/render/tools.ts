@@ -117,9 +117,12 @@ export function freeName(dir: string, name: string): string {
 async function chooseFormat(want: 'auto' | 'glb' | 'vrml'): Promise<BoardFormat> {
   if (want === 'glb') return 'glb'
   if (want === 'vrml') return 'wrl'
-  // GLB only when the Blender that will import it is known to read glTF (a probe; never a remote job just for this)
+  // A probed Blender decides (never a remote job just for this). Unprobed, a remote Blender is one of trace's own images
+  // (agent/Dockerfile.gpu: Blender 5.x; Dockerfile.tools: Ubuntu's Blender with python3-numpy), which both read glTF but
+  // not VRML: Blender 4.2+ no longer bundles the X3D/VRML importer, and 4.0/4.1 ship it disabled under --factory-startup.
   const p = await probe({ allowRemote: false }).catch(() => null)
-  return p?.gltf_import ? 'glb' : 'wrl'
+  if (p) return p.gltf_import || p.x3d_import === false ? 'glb' : 'wrl'
+  return backendFor({ kind: 'blender', gpu: true }) === 'local' ? 'wrl' : 'glb'
 }
 
 /** ffmpeg's arguments for a turntable: frames f_0001.png… from `input`, an H.264 MP4 to `out`. */
