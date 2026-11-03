@@ -10,6 +10,8 @@ import type { SpeechMark, Voice } from '@/lib/types'
 export interface Speaking {
   messageId: string | null
   playing: boolean
+  /** the voice is being fetched for messageId; Stop cancels it before it starts */
+  loading: boolean
   /** the character range in the spoken text of the current word */
   word: { start: number; end: number } | null
   voice: string | null
@@ -20,7 +22,7 @@ export interface Speaking {
   rate: number
 }
 
-export const speech = createStore<Speaking>({ messageId: null, playing: false, word: null, voice: null, engine: 'neural', language: 'en-AU', rate: 1 })
+export const speech = createStore<Speaking>({ messageId: null, playing: false, loading: false, word: null, voice: null, engine: 'neural', language: 'en-AU', rate: 1 })
 export const useSpeech = () => useStore(speech)
 
 let audio: HTMLAudioElement | null = null
@@ -59,6 +61,8 @@ export function configureSpeech(o: Partial<Pick<Speaking, 'voice' | 'engine' | '
 let marks: SpeechMark[] = []
 let raf = 0
 let queue: { id: string; text: string }[] = []
+/** bumped by every stop, so a voice still loading when Stop is pressed never starts */
+let generation = 0
 
 /** Speech-friendly text: code, tables and file previews become a short line; markdown marks go. */
 export function speakable(markdown: string): string {
@@ -87,13 +91,22 @@ function tick() {
 }
 
 export async function speak(id: string, markdown: string, o: { voice?: string; engine?: 'neural' | 'generative'; rate?: number; fromChar?: number } = {}): Promise<void> {
-  stopSpeaking()
+  halt()
+  const mine = generation
   const text = speakable(markdown)
   const s = speech.get()
+  speech.set((x) => ({ ...x, messageId: id, loading: true, playing: false, word: null }))
   const voice = o.voice ?? s.voice ?? undefined
   const engine = o.engine ?? (o.voice ? 'neural' : s.engine)
   const rate = o.rate ?? s.rate
-  const r = await api<{ url: string; marks: SpeechMark[] }>('/api/voice/speak', { method: 'POST', body: { text, rate, engine, language: s.language, ...(voice ? { voice } : {}) } })
+  let r: { url: string; marks: SpeechMark[] }
+  try {
+    r = await api<{ url: string; marks: SpeechMark[] }>('/api/voice/speak', { method: 'POST', body: { text, rate, engine, language: s.language, ...(voice ? { voice } : {}) } })
+  } catch (e) {
+    if (mine === generation) speech.set((x) => ({ ...x, loading: false, messageId: null }))
+    throw e
+  }
+  if (mine !== generation) return // stopped while the voice was loading
   marks = r.marks
   audio = element()
   audio.src = r.url
@@ -108,11 +121,12 @@ export async function speak(id: string, markdown: string, o: { voice?: string; e
     const next = queue.shift()
     if (next) void speak(next.id, next.text).catch(() => {})
   }
-  speech.set((x) => ({ ...x, messageId: id, playing: true, word: null }))
+  speech.set((x) => ({ ...x, messageId: id, loading: false, playing: true, word: null }))
   try {
     await audio.play()
   } catch (e) {
-    speech.set((x) => ({ ...x, playing: false, messageId: null, word: null }))
+    if (mine !== generation) return
+    speech.set((x) => ({ ...x, playing: false, loading: false, messageId: null, word: null }))
     throw e
   }
   raf = requestAnimationFrame(tick)
@@ -120,7 +134,7 @@ export async function speak(id: string, markdown: string, o: { voice?: string; e
 
 /** For "read replies aloud": queue a reply to be read after the current one. */
 export function enqueueSpeech(id: string, markdown: string) {
-  if (speech.get().playing) queue.push({ id, text: markdown })
+  if (isSpeaking()) queue.push({ id, text: markdown })
   else void speak(id, markdown).catch(() => {})
 }
 
@@ -135,20 +149,40 @@ export function pauseSpeaking() {
   }
 }
 
+/** Stops the voice now, including one still loading, and clears anything queued to be read next. */
 export function stopSpeaking() {
   queue = []
+  halt()
+}
+
+/** Stops the current voice (or one still loading) but keeps the queue. */
+function halt() {
+  generation++
   cancelAnimationFrame(raf)
-  audio?.pause()
+  if (audio) {
+    audio.onended = null
+    audio.pause()
+  }
   audio = null
-  speech.set((s) => ({ ...s, playing: false, messageId: null, word: null }))
+  speech.set((s) => ({ ...s, playing: false, loading: false, messageId: null, word: null }))
+}
+
+/** True while trace is speaking, paused mid-reply, or fetching a voice. */
+export const isSpeaking = (s: Speaking = speech.get()) => s.messageId !== null
+
+/** Escape stops the voice anywhere in the app (once only; safe to call from several screens). */
+let keyed = false
+export function stopOnEscape() {
+  if (keyed || typeof window === 'undefined') return
+  keyed = true
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isSpeaking()) stopSpeaking()
+  })
 }
 
 export function skipSpeaking() {
-  cancelAnimationFrame(raf)
-  audio?.pause()
-  audio = null
   const next = queue.shift()
-  speech.set((s) => ({ ...s, playing: false, messageId: null, word: null }))
+  halt()
   if (next) void speak(next.id, next.text).catch(() => {})
 }
 

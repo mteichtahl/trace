@@ -6,9 +6,11 @@ import { Sparkles } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { FOCUS_AGENT_ID } from './agent'
 import { ChatView } from './chat-view'
+import { stopOnEscape } from './voice/speech'
 import { PlayerBar } from './voice/voice-controls'
 
 export function EmbeddedChat({ repo, threadId, intro, title = 'trace', placeholder = 'Ask about this step…' }: { repo?: string; threadId?: string; intro?: ReactNode; title?: string; placeholder?: string }) {
+  stopOnEscape()
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-2 border-b px-4 py-3 font-semibold">
