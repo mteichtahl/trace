@@ -51,4 +51,10 @@ describe('Sign the gate', () => {
     expect(returnReasonOk('C2 must be rated for 10 V')).toBe(true)
   })
   it('names the act', () => expect(signLabel('the schematic gate')).toBe('Sign the schematic gate'))
+
+  it('holds Sign while the stage has work pending, whatever else is done', () => {
+    const g = { criteria: [], waivers: [], pending: ['Accept or discard 1 open change first ("Swap the regulator")'] }
+    expect(signBlockers(g, { ...base, admin: true }).map((b) => b.id)[0]).toBe('pending')
+    expect(signBlockers({ ...g, pending: [] }, base).map((b) => b.id)).not.toContain('pending')
+  })
 })

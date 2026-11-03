@@ -648,10 +648,14 @@
           "returned": null,
           "may_sign": false,
           "missing": [
+            "Wait for 3 jobs still working to finish, or stop them (\"Asked by the Thermal specialist: What is the worst-case dissipation of the LDO U3 at 85 °C ambient?\", \"Check the DRC\", \"Check the ERC\"): the evidence may still change.",
             "Only an admin can sign a gate.",
             "Open the evidence for 2 more criteria.",
             "Open 1 waiver taken in this stage.",
             "Acknowledge 1 waiver taken in this stage."
+          ],
+          "pending": [
+            "Wait for 3 jobs still working to finish, or stop them (\"Asked by the Thermal specialist: What is the worst-case dissipation of the LDO U3 at 85 °C ambient?\", \"Check the DRC\", \"Check the ERC\"): the evidence may still change."
           ]
         },
         {
@@ -951,10 +955,14 @@
           "returned": null,
           "may_sign": false,
           "missing": [
+            "Wait for 3 jobs still working to finish, or stop them (\"Asked by the Thermal specialist: What is the worst-case dissipation of the LDO U3 at 85 °C ambient?\", \"Check the DRC\", \"Check the ERC\"): the evidence may still change.",
             "Only an admin can sign a gate.",
             "The release approval gate is not in the current stage (Define).",
             "4 criteria are not met or waived: every requirement is verified or waived; the radio interference prechecks are run and within the target; the parts list is checked for cost and stock at the build quantity; the release report is reviewed: coverage, interference estimates, parts list and open waivers.",
             "Open the evidence for 4 more criteria."
+          ],
+          "pending": [
+            "Wait for 3 jobs still working to finish, or stop them (\"Asked by the Thermal specialist: What is the worst-case dissipation of the LDO U3 at 85 °C ambient?\", \"Check the DRC\", \"Check the ERC\"): the evidence may still change."
           ]
         },
         {
@@ -1005,10 +1013,14 @@
           "returned": null,
           "may_sign": false,
           "missing": [
+            "Wait for 3 jobs still working to finish, or stop them (\"Asked by the Thermal specialist: What is the worst-case dissipation of the LDO U3 at 85 °C ambient?\", \"Check the DRC\", \"Check the ERC\"): the evidence may still change.",
             "Only an admin can sign a gate.",
             "The order approval gate is not in the current stage (Define).",
             "3 criteria are not met or waived: the release package is built and stored; stock and prices are checked again today, and every line is available; the order sheet matches the release.",
             "Open the evidence for 3 more criteria."
+          ],
+          "pending": [
+            "Wait for 3 jobs still working to finish, or stop them (\"Asked by the Thermal specialist: What is the worst-case dissipation of the LDO U3 at 85 °C ambient?\", \"Check the DRC\", \"Check the ERC\"): the evidence may still change."
           ]
         },
         {

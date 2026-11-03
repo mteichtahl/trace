@@ -2,19 +2,38 @@
  * What is still changing in a project's design, read for the journey (docs/user-journey.md "Nothing goes to Fabricate
  * while it is changing"):
  *
- *   pendingOf            the open changes trace made, as the gates into Fabricate read them (core PendingChanges)
+ *   pendingOf            the open changes and the jobs still working, as every gate reads them (core PendingChanges)
+ *   stillWorking         the agents' jobs still queued, running or paused
  *   changedRequirements  the requirements changed after the baseline and not agreed again
  *   backToDefine         takes the project back to Define for them (core returnForChange)
  *
  * journey.get and gate.sign (src/api/actions-journey.ts) and change.accept (src/api/actions-changes.ts) use them.
  */
+import { type JobRow, isLive } from '../core/job-index.js'
 import { type JourneyRecord, type PendingChanges, type StageId, applyChange, changeWords, loadJourney } from '../core/journey.js'
 import { type Context, plainly, withRecordDb, writeJourney } from './action-kit.js'
 import { requirementEvidence } from './record-read.js'
 
-/** The changes still open, as the gates into Fabricate read them (`error`: why they could not be listed). */
-export function pendingOf(open: readonly { change: { number: number; title: string; verdict: string } }[], error: string | null, requirements: readonly string[] = []): PendingChanges {
-  return { changes: open.map(({ change: c }) => ({ number: c.number, title: c.title, ready: c.verdict === 'ready' })), requirements, unknown: error ? error.slice(0, 200) : null }
+/**
+ * The work still pending, as the gates read it (`error`: why the changes could not be listed): the open changes with
+ * their stage, and the agents' jobs still working (`jobs`: the project's job index rows; absent when not looked at).
+ */
+export function pendingOf(open: readonly { change: { number: number; title: string; verdict: string; stage?: StageId | null } }[], error: string | null, requirements: readonly string[] = [], jobs?: readonly JobRow[]): PendingChanges {
+  return {
+    changes: open.map(({ change: c }) => ({ number: c.number, title: c.title, ready: c.verdict === 'ready', stage: c.stage ?? null })), requirements,
+    ...(jobs ? { work: stillWorking(jobs) } : {}),
+    unknown: error ? error.slice(0, 200) : null,
+  }
+}
+
+/**
+ * The agents' jobs still working on the project: queued, paused, or running and alive (a running job whose heartbeat
+ * stopped is lost, not working). The weekly look for work (sweep) and a specialist's own sub-jobs are left out.
+ */
+export function stillWorking(jobs: readonly JobRow[], at = Date.now() / 1000): { id: string; title: string; state: string }[] {
+  return jobs
+    .filter((j) => j.kind !== 'sweep' && !j.parentJob && (j.state === 'queued' || j.state === 'paused' || (j.state === 'running' && isLive(j, at))))
+    .map((j) => ({ id: j.handle ?? j.id, title: j.title, state: j.state }))
 }
 
 /** The requirements changed after the baseline and not agreed again (empty before the baseline is signed). */

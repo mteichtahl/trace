@@ -18,6 +18,8 @@ export interface GateMore extends Gate {
   spend?: { total: number; currency: string; changed?: string }
   /** the receipt, once signed or returned */
   record?: { notes?: string; acknowledged?: string[]; returned?: { by: string; at: string; reason: string } }
+  /** the work still pending that holds it (open changes, jobs still working): while any, it is not reviewed or signed */
+  pending?: string[]
 }
 
 /** Journey extras the Decisions tab reads (assumed part of journey.get: "decisions log"). */
