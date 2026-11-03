@@ -49,7 +49,7 @@ class ProgressGitHub extends FakeGitHub {
     if (t === undefined) throw new GitHubError(404, 'gone')
     return { text: t, truncated: false }
   }
-  override async pullStatus(_repo: string, number: number): Promise<PullStatus | null> { return this.pulls.get(number) ?? null }
+  async pullStatus(_repo: string, number: number): Promise<PullStatus | null> { return this.pulls.get(number) ?? null }
 }
 
 const github = new ProgressGitHub([REPO])
