@@ -185,6 +185,8 @@ export const ConfigSchema = z.object({
     auto: z.boolean().default(false),
     environment: z.string().min(1).default('production'),
     approvers: z.array(z.string()).default([]),
+    /** who may approve, skip or roll back a deploy in the app besides trace's admins: their emails (docs/stay-in-trace.md) */
+    people: z.array(z.string().trim().toLowerCase().regex(/^[^\s@]+@[^\s@]+$/, 'expected an email')).default([]),
     setup: z.string().default(''),
     risk_check: z.string().default(''),
     command: z.string().default(''),
