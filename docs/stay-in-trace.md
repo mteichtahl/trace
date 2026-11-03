@@ -260,3 +260,25 @@ Each piece adds tests beside its files, in the repository's style (vitest, fakes
 the edit rule (a pushed commit is not an edit; a fork is not), applying (merge, redo, record removed), the deploy
 approval (expired, wrong sha, wrong repo, missing record all deploy nothing), handin's path and size rules, the rule fix
 (trace's ruleset updated, another ruleset reported not changed), and the web screens with the mock API (web/src/mock).
+
+## After the security review (3 November 2026)
+
+- **An edit changes only its own files.** Each edit records the files it may change (`paths`; a setting, a project
+  prompt and a release copy: `.trace/project.db` only). A pull request that changes anything else is never applied or
+  accepted (`editStray`): someone pushed a commit to the branch between trace making it and trace committing on it.
+  An edit whose files cannot be read is not accepted either.
+- **A review edit is held** (the hold label) when it is opened, so the harness's automerge never merges it on passing
+  checks alone, whatever its path.
+- **Joining trace records only the commit onboarding pushed** (`ApiOnboardResult.commit`); a branch that moved since is
+  not recorded, so it is never applied without checks.
+- **A deploy approval is used once, and only the newest deploys.** The workflow marks it used
+  (`projects/<slug>/journey-agent/deploy-used/<name>`, If-None-Match, which the workflows' role may write) after every
+  other check passed; an older approval, or one already used, deploys nothing. Approvals last 30 minutes.
+- **Code owners' review stays.** When `worker.escalate_to` is set, trace's rule keeps requiring code owners' review: it is
+  what GitHub itself enforces against an agent merging a change to the paths that steer trace past the hold label.
+  `repo.rules.fix` removes approving reviews only, never that one. Open decision: such projects' edits to `.trace/**`
+  still need that review on GitHub, until the agents get a token without merge rights.
+- **The 6 MB body is for `design.handin` only**, judged by the action the parsed body names.
+- Not changed: trace applies an admin's own edit even though the hold label is on it (every edit to `.trace/**` carries
+  the label from the harness, so honouring it would stop every one); a repository's own ruleset named "trace" is taken
+  to be trace's.

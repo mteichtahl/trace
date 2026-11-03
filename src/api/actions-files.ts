@@ -243,7 +243,7 @@ export const FILE_ACTIONS = {
     const title = `Edit ${a.path}`
     const message = `${title}${a.note ? `\n\n${a.note}` : ''}\n\nRequested by ${label(ctx.principal)} through the trace API.`
     const { commit } = await gh.putFile(a.repo, { path: a.path, branch, content, message, sha: blob })
-    const edit = await recordEdit(ctx, { repo: a.repo, branch, base, commit, kind: 'prompt', title, ...(a.note ? { body: `${title}\n\n${quote(a.note)}` } : {}), redo: null })
+    const edit = await recordEdit(ctx, { repo: a.repo, branch, base, commit, kind: 'prompt', title, ...(a.note ? { body: `${title}\n\n${quote(a.note)}` } : {}), redo: null, paths: [a.path] })
     return { repo: a.repo, path: a.path, change: edit.number, branch, commit }
   }),
 }

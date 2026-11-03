@@ -88,7 +88,7 @@ describe('a deploy approved in trace', () => {
   })
 
   it('a good record still needs today\'s checks: on main, built, the newest that passed', async () => {
-    const name = await store.put(approval({}, new Date(Date.now() - 9000)))
+    const name = await store.put(approval({}, new Date(Date.now() + 1000)))
     expect((await run(name, SHA('a'), { onMain: false })).core.outputs.go).toBe('false')
     expect((await run(name, SHA('a'), { built: false })).core.outputs.go).toBe('false')
     const late = await run(name, SHA('a'), { newest: SHA('c') })
@@ -122,12 +122,24 @@ describe('a deploy approved in trace', () => {
   })
 
   it('a rollback goes to the rollback job, only to a commit that ran before', async () => {
-    const name = await store.put(approval({ sha: SHA('9'), action: 'rollback', issue: null }))
-    const ok = await run(name, SHA('9'), { newest: SHA('a'), deployed: [SHA('a'), SHA('9')] })
-    expect(ok.core.outputs).toMatchObject({ go: 'false', 'roll-back-to': SHA('9'), by: 'Alex L.', via: 'trace' })
+    const name = await store.put(approval({ sha: SHA('9'), action: 'rollback', issue: null }, new Date(Date.now() + 2000)))
     const never = await run(name, SHA('9'), { newest: SHA('a'), deployed: [SHA('a')] })
     expect(never.core.outputs['roll-back-to']).toBeUndefined()
+    const ok = await run(name, SHA('9'), { newest: SHA('a'), deployed: [SHA('a'), SHA('9')] })
+    expect(ok.core.outputs).toMatchObject({ go: 'false', 'roll-back-to': SHA('9'), by: 'Alex L.', via: 'trace' })
     expect(never.core.infos.join('\n')).toMatch(/has not run in bench before/)
+    // used once: the same approval again (a replayed dispatch) rolls nothing back
+    const again = await run(name, SHA('9'), { newest: SHA('a'), deployed: [SHA('a'), SHA('9')] })
+    expect(again.core.outputs['roll-back-to']).toBeUndefined()
+    expect(again.core.infos.join('\n')).toMatch(/used already/)
+  })
+
+  it('only the newest approval deploys: an older one, replayed after a newer was given, deploys nothing', async () => {
+    const old = await store.put(approval({}, new Date(Date.now() + 3000)))
+    await store.put(approval({ sha: SHA('c') }, new Date(Date.now() + 4000)))
+    const r = await run(old, SHA('a'))
+    expect(r.core.outputs.go).toBe('false')
+    expect(r.core.infos.join('\n')).toMatch(/A newer approval was given/)
   })
 })
 

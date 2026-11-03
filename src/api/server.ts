@@ -113,8 +113,13 @@ async function readBody(req: IncomingMessage): Promise<string> {
     chunks.push(b)
   }
   const text = Buffer.concat(chunks).toString('utf8')
-  // only design.handin may be larger than 2 MB (the app sends `action` first; anything else is held to 2 MB)
-  if (size > MAX_BODY && !/^\s*\{\s*"action"\s*:\s*"design\.handin"/.test(text.slice(0, 100))) throw new ActionError('the body is larger than 2 MB')
+  // only design.handin may be larger than 2 MB: judged by the action the body actually names once parsed (a later
+  // duplicate "action" key wins in JSON.parse, so the start of the text proves nothing)
+  if (size > MAX_BODY) {
+    let action: unknown
+    try { action = (JSON.parse(text) as { action?: unknown }).action } catch { action = null }
+    if (action !== 'design.handin') throw new ActionError('the body is larger than 2 MB')
+  }
   return text
 }
 

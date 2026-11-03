@@ -58,7 +58,7 @@ import {
   editRecommendation, editSummary, editVerdict, editsByBranch, fileKind, jobRequest, jobsByBranch, recommendationOf, requirementIds, settleUnfinished, summaryBullets, traceChanges,
   traceJob, unfinishedWords, verdictOf,
 } from './changes.js'
-import { type AppEdit, EDIT_WORDS } from '../core/app-edits.js'
+import { type AppEdit, EDIT_WORDS, editStray } from '../core/app-edits.js'
 import { editStore } from './edits.js'
 import { applyEditsSoon } from './apply-edits.js'
 import { GitHubError, type GitHubApi, type MergeMethod, type PullDetail, type PullStatus, type PullSummary } from './github.js'
@@ -273,6 +273,10 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
   }
 }
 
+/** An edit whose pull request changes files the edit does not write is never accepted: a commit was slipped in. */
+const strayAware = (a: { may_accept: boolean; blockers: string[] }, stray: readonly string[]): { may_accept: boolean; blockers: string[] } =>
+  (stray.length ? { may_accept: false, blockers: [`It changes files this change does not write (${stray.slice(0, 3).join(', ')}${stray.length > 3 ? ', …' : ''}): someone pushed to its branch. Discard it and make the change again.`, ...a.blockers] } : a)
+
 /**
  * Its checks are done and none failed, yet GitHub says its rules stop it: a required review trace cannot give (the
  * change page offers admins "Fix the rule and accept": repo.rules.fix).
@@ -286,7 +290,7 @@ async function editDetail(ctx: Context, gh: ReturnType<typeof changesApi>, repo:
   const keep = o.fresh ? undefined : ctx.deps.githubCache
   const [status, files, commits, runs] = await Promise.all([
     cached(keep, repo, `status:${number}:${sha}`, () => gh.pullStatus(repo, number), DETAIL_STATUS_TTL_MS),
-    cached(ctx.deps.githubCache, repo, `files:${number}:${sha}`, () => gh.pullFiles(repo, number)).catch(() => []),
+    cached(ctx.deps.githubCache, repo, `files:${number}:${sha}`, () => gh.pullFiles(repo, number)).catch(() => null),
     cached(ctx.deps.githubCache, repo, `commits:${number}:${sha}`, () => gh.pullCommits(repo, number)).catch(() => []),
     cached(keep, repo, `runs:${sha}`, () => gh.checkRuns(repo, sha), DETAIL_STATUS_TTL_MS).catch(() => null),
   ])
@@ -299,10 +303,10 @@ async function editDetail(ctx: Context, gh: ReturnType<typeof changesApi>, repo:
     ...sum,
     verdict: editVerdict(facts, edit),
     summary: [`${edit.title}.`, `Made in trace by ${mine ? 'you' : edit.by_name} as ${EDIT_WORDS[edit.kind]}.`, ...commits.slice(0, 3).map((m) => m.split('\n')[0] ?? '').filter((m) => m && !m.startsWith(edit.title))],
-    files: files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, kind: fileKind(f.path, f.patch) })),
+    files: (files ?? []).map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, kind: fileKind(f.path, f.patch) })),
     checks_list: checksList, requirements: [],
     recommendation: editRecommendation(facts, edit, mine),
-    ...editAcceptance(facts, edit, { admin, mine }),
+    ...strayAware(editAcceptance(facts, edit, { admin, mine }), files ? editStray(files, edit) : ['its files could not be read']),
     base: pull.base, head: { ref: pull.head.ref, sha: pull.head.sha },
     rule_blocks: ruleBlocks(editFacts(facts, edit.kind)), may_discard: mine || admin, may_ask: false,
   }

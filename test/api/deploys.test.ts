@@ -134,7 +134,7 @@ describe('deploys.get', () => {
 
   it('a deploy running now, with the step it is on and who approved it in trace', async () => {
     const at = new Date(Date.now() - 30_000)
-    await new DeployApprovals(backendFor(join(bucket, 'projects'))).put({ repo: REPO, sha: S('b'), action: 'deploy', by: PERSON.email, by_sub: PERSON.sub, by_name: 'Ada Lovelace', at: at.toISOString(), expires: new Date(at.getTime() + 7_200_000).toISOString(), issue: 7 })
+    await new DeployApprovals(backendFor(join(bucket, 'projects'))).put({ repo: REPO, sha: S('b'), action: 'deploy', by: PERSON.email, by_sub: PERSON.sub, by_name: 'Ada Lovelace', at: at.toISOString(), expires: new Date(at.getTime() + 1_800_000).toISOString(), issue: 7 })
     github.deployRuns = [{ id: 44, event: 'workflow_dispatch', status: 'in_progress', head_sha: S('0'), created_at: new Date().toISOString(), run_started_at: new Date().toISOString() }]
     github.jobs = [{ name: 'in-trace', status: 'completed', steps: [] }, { name: 'deploy to bench', status: 'in_progress', steps: [{ name: 'guard', status: 'completed' }, { name: 'deploy.command', status: 'in_progress' }] }]
     const v = await run(PERSON, 'deploys.get', { repo: REPO })
@@ -174,7 +174,7 @@ describe('deploy.approve', () => {
     expect(github.inputs).toEqual([{ approval: name, sha: S('b') }])
     const rec = JSON.parse(readFileSync(join(bucket, 'projects', REPO, 'journey', 'deploys', name), 'utf8')) as Record<string, unknown>
     expect(rec).toMatchObject({ repo: REPO, sha: S('b'), action: 'deploy', by: PERSON.email, by_sub: PERSON.sub, by_name: 'Ada Lovelace', issue: 7 })
-    expect(Date.parse(String(rec.expires)) - Date.parse(String(rec.at))).toBe(2 * 60 * 60_000)
+    expect(Date.parse(String(rec.expires)) - Date.parse(String(rec.at))).toBe(30 * 60_000)
     expect((await decisions()).find((d) => d.kind === 'deploy.approved')).toMatchObject({ ref: S('b'), by: PERSON.email })
   })
 })

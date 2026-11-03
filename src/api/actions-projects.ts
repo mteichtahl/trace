@@ -519,6 +519,9 @@ async function recordJoin(ctx: Context, repo: string, r: ApiOnboardResult): Prom
   if (!number || !gh.pullDetail) return null
   const pull = await gh.pullDetail(repo, number)
   if (!pull || pull.state !== 'open') return null
+  // only the commit onboarding itself pushed: a branch that moved since (someone pushed in between) is not recorded,
+  // so it is never applied without checks as trace's own scaffold
+  if (!r.commit || pull.head.sha !== r.commit) return null
   const kind = r.state === 'refreshed' ? 'workflows' as const : 'join' as const
   const title = kind === 'join' ? 'Put this repository under trace' : 'Refresh trace\'s workflows'
   await editStore(ctx).put({

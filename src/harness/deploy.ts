@@ -233,6 +233,10 @@ export async function approvedInTrace({ github, context, core, cfg, env }: Pick<
   if (!(await buildPassed(github, owner, repo, cfg, sha))) return refuse(`The build has not passed on ${short(sha)}`)
   if (rec.action === 'rollback') {
     if (!(await deployedBefore(github, owner, repo, cfg)).includes(sha)) return refuse(`${short(sha)} has not run in ${cfg.deploy.environment} before, so it is not a rollback`)
+    // once, and only the newest: a replayed dispatch of an older or used approval deploys nothing. Marked used last,
+    // after every other check passed (a refused attempt does not use it up), before anything goes out
+    const taken = await approvals.use(repository, name).catch((e: unknown) => `The approval could not be marked as used (${(e instanceof Error ? e.message : String(e)).slice(0, 200)})`)
+    if (taken) return refuse(taken)
     core.info(`Rolling ${cfg.deploy.environment} back to ${short(sha)}, approved in trace by ${rec.by_name}.`)
     core.setOutput('by', rec.by_name)
     core.setOutput('via', 'trace')
@@ -241,6 +245,10 @@ export async function approvedInTrace({ github, context, core, cfg, env }: Pick<
   }
   const newest = await newestPassing(github, owner, repo, cfg)
   if (newest && newest !== sha) return refuse(`${short(sha)} is not the newest passing commit (${short(newest)} is)`)
+  // once, and only the newest: a replayed dispatch of an older or used approval deploys nothing. Marked used last,
+  // after every other check passed (a refused attempt does not use it up), before anything goes out
+  const taken = await approvals.use(repository, name).catch((e: unknown) => `The approval could not be marked as used (${(e instanceof Error ? e.message : String(e)).slice(0, 200)})`)
+  if (taken) return refuse(taken)
   // the request it answers, while it is still the workflow's own open request for this commit: the result goes there
   let issue = ''
   if (rec.issue) {

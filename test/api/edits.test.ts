@@ -81,12 +81,13 @@ describe('the rules for an edit: verdict, recommendation, who may accept', () =>
 })
 
 describe('the rule fix: what counts as requiring a review', () => {
-  it('an approving count above 0, or code owners\' review; the fix keeps every other rule', () => {
+  it('an approving count above 0; code owners\' review is not one, and the fix keeps it and every other rule', () => {
     expect(requiresReview([{ type: 'pull_request', parameters: { required_approving_review_count: 1 } }])).toBe(true)
-    expect(requiresReview([{ type: 'pull_request', parameters: { required_approving_review_count: 0, require_code_owner_review: true } }])).toBe(true)
+    // code owners' review guards the paths that steer trace against an agent merging past the hold label: kept
+    expect(requiresReview([{ type: 'pull_request', parameters: { required_approving_review_count: 0, require_code_owner_review: true } }])).toBe(false)
     expect(requiresReview([{ type: 'pull_request', parameters: { required_approving_review_count: 0 } }, { type: 'deletion' }])).toBe(false)
     const fixed = withoutReview([{ type: 'deletion' }, { type: 'pull_request', parameters: { required_approving_review_count: 2, require_code_owner_review: true, dismiss_stale_reviews_on_push: true } }])
-    expect(fixed).toEqual([{ type: 'deletion' }, { type: 'pull_request', parameters: { required_approving_review_count: 0, require_code_owner_review: false, require_last_push_approval: false, dismiss_stale_reviews_on_push: true } }])
+    expect(fixed).toEqual([{ type: 'deletion' }, { type: 'pull_request', parameters: { required_approving_review_count: 0, require_code_owner_review: true, require_last_push_approval: false, dismiss_stale_reviews_on_push: true } }])
   })
 })
 
@@ -123,7 +124,8 @@ class EditsGitHub extends FakeGitHub {
   }
   async pullStatus(_r: string, n: number): Promise<PullStatus | null> { const p = this.pulls.get(n); return p ? { ...p.status, state: p.detail.state, sha: p.detail.head.sha } : null }
   async pullDetail(_r: string, n: number): Promise<PullDetail | null> { return this.pulls.get(n)?.detail ?? null }
-  async pullFiles(): Promise<PullFile[]> { return [{ path: '.trace/project.db', status: 'modified', additions: 0, deletions: 0, patch: null, previous: null }] }
+  extraFiles: PullFile[] = []
+  async pullFiles(): Promise<PullFile[]> { return [{ path: '.trace/project.db', status: 'modified', additions: 0, deletions: 0, patch: null, previous: null }, ...this.extraFiles] }
   async pullCommits(): Promise<string[]> { return ['settings: build.quantity = 10'] }
   async checkRuns(): Promise<CheckRunDetail[]> { return [{ name: 'build', status: 'completed', conclusion: 'success', summary: 'Built.' }] }
   async mergeMethods(): Promise<MergeMethod[]> { return ['squash'] }
@@ -179,7 +181,7 @@ beforeAll(async () => {
 })
 
 beforeEach(async () => {
-  github.pulls.clear(); github.did.length = 0; github.rulesets = []; github.classicReviews = false; github.denyRules = false
+  github.pulls.clear(); github.did.length = 0; github.rulesets = []; github.classicReviews = false; github.denyRules = false; github.extraFiles = []
   github.add(1, 'trace/settings-quantity-1')
   await editStore(ctx(ADMIN)).put(edit())
 })
@@ -274,6 +276,26 @@ describe('applying edits', () => {
   })
 })
 
+describe('a commit slipped in under trace\'s own (someone pushed to the branch before trace committed on it)', () => {
+  const workflow: PullFile = { path: '.github/workflows/evil.yml', status: 'added', additions: 9, deletions: 0, patch: '+x', previous: null }
+  it('is never applied: the edit changes files a setting does not write', async () => {
+    github.extraFiles = [workflow]
+    await editStore(ctx(ADMIN)).put(edit({ applies: 'auto' }))
+    expect((await applyEdits(ctx(ADMIN), REPO))[0]).toMatchObject({ did: 'left', why: expect.stringMatching(/\.github\/workflows\/evil\.yml/) })
+    expect(github.did.filter((d) => d.startsWith('merge'))).toEqual([])
+  })
+  it('is never accepted: the page says so, and accepting is refused', async () => {
+    github.extraFiles = [workflow]
+    expect(await run(ADMIN, 'change.get', { repo: REPO, number: 1 })).toMatchObject({ may_accept: false, blockers: [expect.stringMatching(/someone pushed to its branch/)] })
+    await expect(run(ADMIN, 'change.accept', { repo: REPO, number: 1, head_sha: sha(1) })).rejects.toThrow(/someone pushed to its branch/)
+  })
+  it('an edit of one file may change that file only', async () => {
+    github.extraFiles = [{ ...workflow, path: 'CLAUDE.md' }]
+    await editStore(ctx(ADMIN)).put(edit({ applies: 'auto', kind: 'prompt', paths: ['CLAUDE.md'] }))
+    expect((await applyEdits(ctx(ADMIN), REPO))[0]).toMatchObject({ did: 'left' })
+  })
+})
+
 describe('the inbox: a review edit needs an admin who did not make it', () => {
   it('admins see it; its author and contributors do not', async () => {
     const items = async (p: Principal) => ((await run(p, 'inbox', {})).items as Record<string, unknown>[]).filter((i) => i.kind === 'review')
@@ -286,7 +308,7 @@ describe('the inbox: a review edit needs an admin who did not make it', () => {
 describe('repo.rules.fix', () => {
   it('trace\'s rule is made to require no review; someone else\'s is reported by name and never changed', async () => {
     github.rulesets = [
-      { id: 1, name: 'trace', rules: [{ type: 'pull_request', parameters: { required_approving_review_count: 0, require_code_owner_review: true } }] },
+      { id: 1, name: 'trace', rules: [{ type: 'pull_request', parameters: { required_approving_review_count: 1, require_code_owner_review: true } }] },
       { id: 2, name: 'release', rules: [{ type: 'pull_request', parameters: { required_approving_review_count: 1 } }] },
     ]
     const r = await run(ADMIN, 'repo.rules.fix', { repo: REPO })

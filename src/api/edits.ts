@@ -9,7 +9,7 @@ import { isAdmin } from '../core/access.js'
 import { type AppEdit, AppEditStore, type EditKind, type RedoSpec, appliesOf } from '../core/app-edits.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { type Context, label, storeAt } from './action-kit.js'
-import { publicName } from './actions-changes.js'
+import { holdLabel, publicName } from './actions-changes.js'
 
 export const editStore = (ctx: Context): AppEditStore => new AppEditStore(storeAt(ctx, PROJECTS_PREFIX))
 
@@ -25,6 +25,8 @@ export async function editorName(ctx: Context): Promise<string> {
  */
 export async function recordEdit(ctx: Context, o: {
   repo: string; branch: string; base: string; commit: string; kind: EditKind; title: string; body?: string; redo: RedoSpec | null
+  /** the only files it changes (src/core/app-edits.ts allowedPaths); absent: what its kind writes */
+  paths?: string[]
 }): Promise<{ number: number | null; applies: AppEdit['applies'] }> {
   const gh = await ctx.deps.github()
   const by = label(ctx.principal)
@@ -38,10 +40,16 @@ export async function recordEdit(ctx: Context, o: {
       applies === 'auto' ? 'trace applies it once its checks pass.' : 'An admin accepts it in trace.',
     ].join('\n')
     number = (await gh.openPull(o.repo, { head: o.branch, base: o.base, title: o.title, body })).number
+    // a review edit waits for an admin: held, so the harness's automerge does not merge it on passing checks alone
+    // (a file that is not a protected path, such as CLAUDE.md, would otherwise go in with nobody accepting it)
+    if (applies === 'review' && gh.request) {
+      const hold = await holdLabel(ctx, o.repo)
+      await gh.request('POST', `/repos/${o.repo}/issues/${number}/labels`, { labels: [hold] })
+    }
   }
   await editStore(ctx).put({
     repo: o.repo, branch: o.branch, kind: o.kind, title: o.title, by, by_sub: ctx.principal.sub, by_name: byName, applies,
-    commit: o.commit, number, at: new Date().toISOString(), redo: o.redo,
+    commit: o.commit, number, at: new Date().toISOString(), redo: o.redo, ...(o.paths?.length ? { paths: o.paths } : {}),
   })
   return { number, applies }
 }

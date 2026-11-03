@@ -53,6 +53,8 @@ export const AppEdit = z.object({
   at: z.string(),
   /** how to make it again on a newer default branch; null: it cannot be */
   redo: RedoSpec.nullable(),
+  /** the only files it may change (allowedPaths); absent: what its kind writes */
+  paths: z.array(z.string()).optional(),
 }).loose()
 export type AppEdit = z.infer<typeof AppEdit>
 
@@ -62,6 +64,24 @@ export const editKey = (repo: string, branch: string): string => `${projectSlug(
 /** Whether an edit of this kind made by this person applies on its own once its checks pass (decision A). */
 export const appliesOf = (kind: EditKind, admin: boolean): AppEdit['applies'] =>
   (admin || kind === 'join' || kind === 'workflows' || kind === 'handin' ? 'auto' : 'review')
+
+/**
+ * The only files an edit may change, or null (a repository joining trace, its workflows refreshed: trace's own scaffold,
+ * fixed by the recorded commit). A setting, a project prompt and a release copy write the project database only. Checked
+ * before an edit is merged or accepted (editStray): a commit someone slipped under trace's own (a push to the branch
+ * between trace making it and trace committing on it) changes other files, and is refused.
+ */
+export function allowedPaths(e: Pick<AppEdit, 'kind' | 'paths'>): string[] | null {
+  if (e.paths?.length) return e.paths
+  return e.kind === 'join' || e.kind === 'workflows' ? null : ['.trace/project.db']
+}
+
+/** The files a pull request changes that its edit may not (none: it is only the edit). */
+export function editStray(files: readonly { path: string; previous?: string | null }[], e: Pick<AppEdit, 'kind' | 'paths'>): string[] {
+  const ok = allowedPaths(e)
+  if (!ok) return []
+  return files.flatMap((f) => [f.path, ...(f.previous ? [f.previous] : [])]).filter((p) => !ok.includes(p))
+}
 
 /** The app's words for an edit's kind: "a setting change", "a hand-in". */
 export const EDIT_WORDS: Readonly<Record<EditKind, string>> = {

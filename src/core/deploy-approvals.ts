@@ -19,15 +19,23 @@
  * small.
  */
 import { z } from 'zod'
-import { type Backend, backendFor } from './central.js'
+import { type Backend, Conflict, backendFor } from './central.js'
 import { PROJECTS_PREFIX, projectSlug } from './project.js'
 
 /** The folder under a project's own prefix (projects/<slug>/journey/deploys): inside the journey's, one of PEOPLE_RECORDS. */
 export const DEPLOYS = 'journey/deploys'
 
-/** How long an approval stays good: long enough for a busy runner to pick the run up, short enough that an old one
- * cannot be replayed later. */
-export const APPROVAL_TTL_MS = 2 * 60 * 60_000
+/** How long an approval stays good: long enough for a busy runner to pick the run up. It is also used once only, and
+ * only while it is the project's newest (useApproval): an older one cannot be replayed. */
+export const APPROVAL_TTL_MS = 30 * 60_000
+
+/**
+ * Where a used approval is marked: projects/<slug>/journey-agent/deploy-used/<name>, written once (If-None-Match) by the
+ * workflow that deploys it. The workflows' role may write journey-agent/ with conditional puts only; an agent could
+ * at most mark an approval used before it ran, which stops a deploy (the safe side) and never starts one.
+ */
+export const USED = 'journey-agent/deploy-used'
+export const usedKey = (repo: string, name: string): string => `${projectSlug(repo)}/${USED}/${name}`
 
 const Sha = z.string().regex(/^[0-9a-f]{40}$/)
 
@@ -129,6 +137,22 @@ export class DeployApprovals {
     try { raw = JSON.parse(new TextDecoder().decode(got.body)) } catch { return null }
     const p = DeployApproval.safeParse(raw)
     return p.success ? p.data : null
+  }
+
+  /**
+   * Take approval `name` of `repo` for one deploy: refused (a reason) unless it is the project's newest approval and has
+   * not been used. Marks it used before answering, so a replay (a second dispatch, a re-run) finds it taken.
+   */
+  async use(repo: string, name: string): Promise<string | null> {
+    const newest = (await this.recent(repo, 1))[0]?.name
+    if (newest !== name) return 'A newer approval was given in trace since this one: only the newest deploys'
+    try {
+      await this.store.put(usedKey(repo, name), new TextEncoder().encode(JSON.stringify({ used: new Date().toISOString() })), { ifNoneMatch: true, contentType: 'application/json' })
+    } catch (e) {
+      if (e instanceof Conflict) return 'This approval was used already: approve it again in trace'
+      throw e
+    }
+    return null
   }
 
   /** The newest `max` approvals of `repo`, newest first, each with its name. */

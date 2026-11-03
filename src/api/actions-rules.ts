@@ -5,7 +5,8 @@
  * review stops every change. Before, Accept said "change the rule on GitHub"; now an admin fixes it from the change.
  *
  *   repo.rules.fix   admin   { repo } → { done, left }: the "trace" ruleset is created if it is missing, or updated so it
- *                            requires no approving review (code owners' included: traceRuleset); the default branch's
+ *                            requires no approving review (code owners' review is kept: it guards the paths that steer
+ *                            trace, traceRuleset); the default branch's
  *                            classic protection drops its required reviews; another ruleset that requires a review is
  *                            reported by name in `left`, never changed (it is someone's own rule). Records decision
  *                            repo.rules.fixed
@@ -31,30 +32,36 @@ const RulesetDetail = Ruleset.extend({
   bypass_actors: z.array(z.unknown()).optional(),
 }).loose()
 
-/** Whether a ruleset's rules require a review: an approving count above 0, or code owners' review. */
+/**
+ * Whether a ruleset's rules require an approving review (a count above 0). Code owners' review is not this: it guards the
+ * paths that steer trace against an agent merging past the hold label (traceRuleset), and the fix never removes it.
+ */
 export function requiresReview(rules: readonly z.output<typeof Rule>[]): boolean {
-  return rules.some((r) => r.type === 'pull_request' && (Number(r.parameters?.required_approving_review_count ?? 0) > 0 || r.parameters?.require_code_owner_review === true))
+  return rules.some((r) => r.type === 'pull_request' && Number(r.parameters?.required_approving_review_count ?? 0) > 0)
 }
 
-/** The rules with the pull request rule made to require no review (the rest as they are). */
+/** The rules with the pull request rule made to require no approving review; code owners' review is kept as it is. */
 export function withoutReview(rules: readonly z.output<typeof Rule>[]): z.output<typeof Rule>[] {
   return rules.map((r) => (r.type === 'pull_request'
-    ? { ...r, parameters: { ...(r.parameters ?? {}), required_approving_review_count: 0, require_code_owner_review: false, require_last_push_approval: false } }
+    ? { ...r, parameters: { ...(r.parameters ?? {}), required_approving_review_count: 0, require_last_push_approval: false } }
     : r))
 }
 
-/** The required check of the project's settings on its default branch ("build" when they cannot be read). */
-async function requiredCheck(ctx: Context, gh: GitHubApi, repo: string, branch: string): Promise<string> {
+/** The required check and whether code owners review (worker.escalate_to set), from the project's settings on its
+ * default branch (the defaults when they cannot be read). */
+async function rulesetArgs(ctx: Context, gh: GitHubApi, repo: string, branch: string): Promise<[string, boolean]> {
+  let cfg = resolve({}).config
   try {
     const t = tempDb(ctx.deps.scratch, await gh.rawFile(repo, PROJECT_DB_PATH, branch))
     try {
-      return resolve(readSettings(t.db)).config.build.required_check
+      cfg = resolve(readSettings(t.db)).config
     } finally {
       t.cleanup()
     }
   } catch {
-    return resolve({}).config.build.required_check
+    // the defaults
   }
+  return [cfg.build.required_check, Boolean(cfg.worker.escalate_to.trim())]
 }
 
 /** GitHub refusing for want of admin, in plain words. */
@@ -74,7 +81,7 @@ export async function fixRules(ctx: Context, repo: string): Promise<{ done: stri
     const all = z.array(Ruleset).parse(await req('GET', `/repos/${repo}/rulesets?includes_parents=true&per_page=100`))
     const trace = all.find((r) => r.name === 'trace' && (r.source_type ?? 'Repository') === 'Repository')
     if (!trace) {
-      await req('POST', `/repos/${repo}/rulesets`, traceRuleset(await requiredCheck(ctx, gh, repo, branch)))
+      await req('POST', `/repos/${repo}/rulesets`, traceRuleset(...(await rulesetArgs(ctx, gh, repo, branch))))
       done.push(`Added trace's rule to ${branch}: changes go in once their checks pass, with no review required.`)
     }
     for (const r of all) {

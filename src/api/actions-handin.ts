@@ -149,7 +149,7 @@ export const HANDIN_ACTIONS = {
     const message = [title, '', ...paths.map((p) => `- ${p}`), ...(a.note ? ['', a.note] : []), '', `Handed in by ${by} through the trace API.`].join('\n')
     const { commit } = await gh.commitFiles(a.repo, { branch, base, message, files: changed.map((f) => ({ path: f.path, content: f.bytes })) })
     const body = [title, '', ...paths.map((p) => `- \`${p}\``), ...(a.note ? ['', quote(a.note)] : []), '', `Handed in through trace by ${await editorName(ctx)}.`].join('\n')
-    const edit = await recordEdit(ctx, { repo: a.repo, branch, base, commit, kind: 'handin', title, body, redo: null })
+    const edit = await recordEdit(ctx, { repo: a.repo, branch, base, commit, kind: 'handin', title, body, redo: null, paths })
     return { repo: a.repo, change: edit.number, branch, commit, changed: paths, same }
   }),
 }

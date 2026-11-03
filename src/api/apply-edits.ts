@@ -20,7 +20,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { setValue, unset } from '../core/config.js'
-import type { AppEdit, RedoSpec } from '../core/app-edits.js'
+import { type AppEdit, type RedoSpec, editStray } from '../core/app-edits.js'
 import { copyJourneyTables, decide, loadJourney } from '../core/journey.js'
 import { type PromptWrite, writeProject } from '../prompts/store.js'
 import { ActionError, type Context, PROJECT_DB_PATH, journeyStore, openProjectDb, tempDb, writeJourney } from './action-kit.js'
@@ -102,6 +102,9 @@ export async function applyOne(ctx: Context, gh: GitHubApi, repo: string, e: App
   }
   if (e.applies !== 'auto') return { branch: e.branch, number, did: 'waiting', why: 'An admin accepts it.' }
   if (verdict !== 'ready') return { branch: e.branch, number, did: 'waiting', why: `It is ${verdict}.` }
+  // only the files the edit writes: a commit slipped in under trace's own changes others, and is never merged
+  const stray = editStray(gh.pullFiles ? await gh.pullFiles(repo, number) : [{ path: '?' }], e)
+  if (stray.length) return { branch: e.branch, number, did: 'left', why: `It changes files the edit does not write (${stray.slice(0, 3).join(', ')}): not trace's edit.` }
   return merge(ctx, gh, repo, e, number, status)
 }
 

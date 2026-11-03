@@ -72,7 +72,12 @@ export interface ApiOnboardOptions {
   fetchImpl?: typeof fetch
 }
 
-export interface ApiOnboardResult { repo: string; state: 'opened' | 'updated' | 'refreshed' | 'unchanged' | 'created'; pr: string | null; settings: string[]; notes: string[] }
+export interface ApiOnboardResult {
+  repo: string; state: 'opened' | 'updated' | 'refreshed' | 'unchanged' | 'created'; pr: string | null; settings: string[]; notes: string[]
+  /** the commit onboarding pushed to the pull request's branch: the app edit is that commit, never whatever the branch
+   * holds later (a push in between would otherwise become trace's own scaffold) */
+  commit?: string
+}
 
 const Pull = z.object({ html_url: z.string(), number: z.number() }).loose()
 
@@ -99,17 +104,19 @@ async function ensureLabel(gh: Github, repo: string, name: string, color: string
 /** The repository settings the loop needs (src/core/onboard.ts applySettings, over REST). Returns what was done. */
 /**
  * The "trace" ruleset on the default branch: changes by pull request only, none deleting or rewriting it, and only when
- * the required check passes. No approving review is required, code owners' included: trace records who accepted a
- * change in the app (docs/guided-flow.md), and GitHub refuses an approval from the account that opened it. Shared
+ * the required check passes. No approving review is required (trace records who accepted a change in the app,
+ * docs/guided-flow.md, and GitHub refuses an approval from the account that opened it), except code owners' when
+ * worker.escalate_to is set: CODEOWNERS makes them the owners of the paths that steer trace (prs.protected_paths), and
+ * that review is what GitHub itself enforces against an agent merging a change to them past the hold label. Shared
  * with repo.rules.fix (src/api/actions-rules.ts), which puts it back.
  */
-export function traceRuleset(requiredCheck: string): Record<string, unknown> {
+export function traceRuleset(requiredCheck: string, codeOwners = false): Record<string, unknown> {
   return {
     name: 'trace', target: 'branch', enforcement: 'active',
     conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } },
     rules: [
       { type: 'deletion' }, { type: 'non_fast_forward' },
-      { type: 'pull_request', parameters: { required_approving_review_count: 0, dismiss_stale_reviews_on_push: false, require_code_owner_review: false, require_last_push_approval: false, required_review_thread_resolution: false } },
+      { type: 'pull_request', parameters: { required_approving_review_count: 0, dismiss_stale_reviews_on_push: false, require_code_owner_review: codeOwners, require_last_push_approval: false, required_review_thread_resolution: false } },
       { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: false, required_status_checks: [{ context: requiredCheck }] } },
     ],
   }
@@ -126,7 +133,7 @@ export async function applySettingsApi(gh: Github, repo: string, cfg: ResolvedCo
   if (ruleset) {
     const { data: existing } = await gh.request('GET', `/repos/${repo}/rulesets`, z.array(z.object({ name: z.string() }).loose()))
     if (!existing.some((r) => r.name === 'trace')) {
-      await gh.request('POST', `/repos/${repo}/rulesets`, z.unknown(), traceRuleset(cfg.build.required_check))
+      await gh.request('POST', `/repos/${repo}/rulesets`, z.unknown(), traceRuleset(cfg.build.required_check, Boolean(cfg.worker.escalate_to.trim())))
       done.push(`added the "trace" ruleset: ${cfg.branch} takes changes by PR only, and only when "${cfg.build.required_check}" passes`)
     }
   }
@@ -176,12 +183,13 @@ export async function onboardViaApi(slug: string, o: ApiOnboardOptions): Promise
       git(['git', 'add', '-A', '.github/workflows'], { cwd: repo })
       git(['git', 'commit', '-q', '-m', 'Refresh the trace workflows\n\nRendered again by `tracectl install` from this repository\'s settings, for the trace version it installed (for example: jobs on its CodeBuild-hosted runner when TRACE_CODEBUILD_PROJECT is set).'], { cwd: repo })
       git(['git', 'push', '-q', '--force', 'origin', `HEAD:refs/heads/${REFRESH_BRANCH}`], { cwd: repo })
+      const refreshed = String(git(['git', 'rev-parse', 'HEAD'], { cwd: repo }) ?? '').trim()
       const pr = await pullRequest(gh, slug, REFRESH_BRANCH, cfg.branch, 'Refresh the trace workflows', [
         'The trace workflows, rendered again by `tracectl install` from this repository\'s own settings for the trace version now installed.',
         '', ...changed.split('\n').map((l) => `- \`${l.slice(3)}\``),
         '', `Held with the \`${cfg.labels.hold}\` label: merge it yourself.`,
       ].join('\n'), cfg.labels.hold)
-      return { repo: slug, state: 'refreshed', pr: pr.url, settings, notes: [] }
+      return { repo: slug, state: 'refreshed', pr: pr.url, settings, notes: [], ...(/^[0-9a-f]{40}$/.test(refreshed) ? { commit: refreshed } : {}) }
     }
     // ---------------------------------------------------------------- the first onboarding: a held PR
     const d = await detect(repo, undefined, git)
@@ -191,6 +199,7 @@ export async function onboardViaApi(slug: string, o: ApiOnboardOptions): Promise
     git(['git', 'add', '-A', '.trace', '.github', '.gitattributes', 'CLAUDE.md'], { cwd: repo })
     git(['git', 'commit', '-q', '-m', 'Put this repository under trace\n\nAdds the project database with detected settings, empty rules, the trace workflows, and the merge driver for the database.'], { cwd: repo })
     git(['git', 'push', '-q', '--force', 'origin', `HEAD:refs/heads/${ONBOARD_BRANCH}`], { cwd: repo })
+    const pushed = String(git(['git', 'rev-parse', 'HEAD'], { cwd: repo }) ?? '').trim()
     await ensureLabel(gh, slug, cfg.labels.hold, 'fbca04', 'Held: not merged automatically')
     const body = [
       'Puts this repository under trace: it opens and merges its own PRs, triages CI failures, and fixes them with Claude; deploys stay off until enabled.',
@@ -202,7 +211,7 @@ export async function onboardViaApi(slug: string, o: ApiOnboardOptions): Promise
     ].join('\n')
     const pr = await pullRequest(gh, slug, ONBOARD_BRANCH, cfg.branch, 'Put this repository under trace', body, cfg.labels.hold)
     const settings = o.apply ? await applySettingsApi(gh, slug, cfg) : []
-    return { repo: slug, state: pr.existed ? 'updated' : 'opened', pr: pr.url, settings, notes: d.notes }
+    return { repo: slug, state: pr.existed ? 'updated' : 'opened', pr: pr.url, settings, notes: d.notes, ...(/^[0-9a-f]{40}$/.test(pushed) ? { commit: pushed } : {}) }
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }
