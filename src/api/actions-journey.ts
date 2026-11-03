@@ -59,7 +59,7 @@ import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
   type AgentFacts, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
-  dismissStuck, guardsFabricate, journeyView, loadJourney, mergeAgentFacts, nextStep, type PendingChanges, recordOpen, returnForChange, returnGate, signGate, sortInbox, withChanges, withPending,
+  dismissStuck, guardsFabricate, journeyView, loadJourney, mergeAgentFacts, nextStep, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withChanges, withPending,
 } from '../core/journey.js'
 import { gateReadyAt, stageTimes } from '../core/process-time.js'
 import { recordAnswered, recordWait } from './process-metrics.js'
@@ -367,7 +367,7 @@ export const JOURNEY_ACTIONS = {
     if (now0) {
       changedReqs = await changedRequirements(ctx, a.repo, now0).catch(() => null)
       const back = await backToDefine(ctx, a.repo, now0, changedReqs ?? [], label(ctx.principal))
-      if (back) throw new ActionError(`The gate was not signed: ${back.reason}, so the project went back to Define. Agree the change in Requirements review and sign the requirements baseline again; every gate after it is signed again.`)
+      if (back) throw new ActionError(`The gate was not signed: ${back.reason}. ${back.words}: agree the change in Requirements review and sign the requirements baseline again; every gate after it is signed again.`)
     }
     // nothing goes to Fabricate while the design is changing: the gates into it ask GitHub for the open changes now,
     // and stay locked when it cannot answer (pendingBlockers)
