@@ -114,7 +114,7 @@ export function ProcessPanel({ process, step, repo, repos, rangeWords, phone }: 
         </table>
       </Card>
       <StageTimes repos={repo ? [repo] : repos} phone={phone} />
-      <WaitingNow repo={repo} />
+      <WaitingNow repo={repo} phone={phone} />
     </div>
   )
 }
@@ -160,7 +160,7 @@ function StageTimes({ repos, phone }: { repos: string[]; phone: boolean }) {
 const WAITING_KINDS = new Set(['question', 'review', 'gate'])
 
 /** What waits on this person now, oldest first (the inbox, with its access rules): tapping one opens it. */
-function WaitingNow({ repo }: { repo: string | null }) {
+function WaitingNow({ repo, phone }: { repo: string | null; phone: boolean }) {
   const inbox = useInbox()
   const navigate = useNavigate()
   const items = (inbox.data ?? []).filter((i) => WAITING_KINDS.has(i.kind) && (!repo || i.repo === repo)).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
@@ -188,7 +188,7 @@ function WaitingNow({ repo }: { repo: string | null }) {
                   onKeyDown={(e) => { if (e.key === 'Enter') open(i.action.to, i.action.href) }}
                 >
                   <td className={td}>{i.project.replace(/^.*\//, '')}</td>
-                  <td className={td}>{i.summary.replace(/^[^:]+:\s*/, '').replace(/\*\*/g, '')}</td>
+                  <td className={td}><span className={cn(phone && 'line-clamp-3')}>{i.summary.replace(/^[^:]+:\s*/, '').replace(/\*\*/g, '')}</span></td>
                   <td className={td}>You</td>
                   <td className={cn(td, num, old && 'text-warning')}>{for_}</td>
                 </tr>

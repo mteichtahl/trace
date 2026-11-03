@@ -226,7 +226,7 @@ export function Operations({ section }: { section?: string }) {
 
           <p className="mt-8 rounded-xl bg-muted/60 p-4 text-sm text-muted-foreground">
             <span className="font-medium text-foreground">Who sees what: </span>
-            admins see everything, cost included; contributors and reviewers see their projects' agent runs, jobs and tool calls (trace's own per-project series), and installation health as a status line, without cost, logs or traces.
+            admins see everything, cost and trace's own builds included; contributors and reviewers see their projects' agent runs, jobs, builds, waits on people and rework (trace's own per-project series), and installation health as a status line, without cost, logs or traces.
           </p>
 
           <MomentSheet moment={moment} step={step} admin={admin} repos={repo ? [repo] : (projects.data ?? []).map((p) => p.repo)} onClose={() => setMoment(null)} />
