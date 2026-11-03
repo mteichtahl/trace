@@ -1571,7 +1571,7 @@ export function answerQuestion(db: DatabaseSync, id: string, by: Signer, a: { op
   if (!q) throw new JourneyError(`There is no question ${id} in this project.`)
   if (q.answeredAt !== null) throw new JourneyError('This question is already answered.')
   const opt = a.option ? q.options.find((o) => o.id === a.option) : undefined
-  if (a.option && !opt) throw new JourneyError(`The question has no option ${a.option}.`)
+  if (a.option && !opt) throw new JourneyError(q.options.length ? `"${a.option}" is not one of this question's options: choose again, or write an answer.` : 'This question has no options to choose from: write an answer instead.')
   const text = (a.answer ?? opt?.label ?? '').trim()
   if (!text) throw new JourneyError('Choose an option or write an answer.')
   if (!opt && VAGUE.test(text)) throw new JourneyError('That answer does not unblock the agent. Say what to do, with a number and unit for a quantity.')

@@ -123,7 +123,7 @@ describe('the journey record', () => {
     const q = askQuestion(db, { askedBy: 'agent', text: 'Which?', blocks: 'work', options: [{ id: 'a', label: 'A', recommended: true }, { id: 'b', label: 'B' }] })
     expect(() => answerQuestion(db, q, signer, { option: 'b' })).toThrow(/Say in a line why you chose otherwise/)
     expect(() => answerQuestion(db, q, signer, { answer: 'it depends', reason: 'meh meh' })).toThrow(/does not unblock/)
-    expect(() => answerQuestion(db, q, signer, { option: 'zz' })).toThrow(/no option zz/)
+    expect(() => answerQuestion(db, q, signer, { option: 'zz' })).toThrow(/"zz" is not one of this question's options/)
     const v = answerQuestion(db, q, signer, { option: 'b', reason: 'B is in stock' })
     expect(v.answered).toMatchObject({ answer: 'B', option_id: 'b', reason: 'B is in stock', by: ADMIN.label })
     expect(() => answerQuestion(db, q, signer, { option: 'a' })).toThrow(/already answered/)

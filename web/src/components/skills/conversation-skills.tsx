@@ -12,7 +12,7 @@
  */
 import { UseAgentUpdate, useAgent } from '@copilotkit/react-core/v2'
 import { ArrowRight, Check, Circle, CircleDot } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -249,15 +249,19 @@ export interface AnswerDraft extends SkillDraftBase {
 }
 
 /** The question-answer bar, from the draft. Pure. */
-export function answerChecks(d: AnswerDraft, o: { recommended?: string; unit?: string }): Record<string, CriterionStatus> {
-  const chosen = !!d.option && d.option !== 'other'
+export function answerChecks(d: AnswerDraft, o: { recommended?: string; unit?: string; options?: string[] }): Record<string, CriterionStatus> {
+  // a chosen option counts only while it is one of this question's options: a draft kept from an earlier question can
+  // still hold that question's choice
+  const chosen = !!d.option && d.option !== 'other' && (!o.options || o.options.includes(d.option))
   const text = d.answer.trim()
   const vague = /^(it depends|you decide|whatever|not sure|dunno)\.?$/i.test(text)
   const quantity = !o.unit || chosen || /\d/.test(d.value || text)
   return {
     resolves: chosen || (text.length >= 3 && !vague) ? 'met' : 'not_met',
     units: quantity ? 'met' : 'not_met',
-    source: chosen || d.source.trim().length >= 3 || !/\d/.test(text) ? 'met' : 'not_met',
+    // a source is asked for when the answer states a quantity the question asked for, not for any digit in a decision
+    // ("allow the 2 fixes at J1")
+    source: chosen || !o.unit || d.source.trim().length >= 3 || !/\d/.test(d.value || text) ? 'met' : 'not_met',
     requirement: d.lasts ? 'met' : 'not_met',
     reasons: d.option && o.recommended && d.option !== o.recommended && (d.reason ?? '').trim().length < 3 ? 'not_met' : 'met',
   }
@@ -270,9 +274,15 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
   const d = s.draft.data
   const set = (p: Partial<AnswerDraft>) => s.draft.setData((x) => ({ ...x, ...p }))
   const answer = useCall('question.answer', (a) => [['journey.get', a.repo], ['inbox']])
-  const local = answerChecks(d, { recommended: q?.recommended?.id, unit: q?.quantity?.unit })
-  const checks: QualityCheck[] = qualityChecks(def, v, local, s.goTo)
   const options = useMemo(() => q?.options ?? (q?.recommended ? [q.recommended] : []), [q])
+  // the draft is kept per project, not per question: a choice left from an earlier question is not one of this one's
+  // options, so drop it rather than send it (the record refuses an option the question does not have)
+  const stale = !!q && !!d.option && d.option !== 'other' && !options.some((o) => o.id === d.option)
+  useEffect(() => { if (stale) set({ option: undefined, reason: undefined }) }, [stale]) // eslint-disable-line react-hooks/exhaustive-deps
+  const chosen = !!d.option && d.option !== 'other' && !stale
+  const writing = !chosen
+  const local = answerChecks(d, { recommended: q?.recommended?.id, unit: q?.quantity?.unit, options: options.map((o) => o.id) })
+  const checks: QualityCheck[] = qualityChecks(def, v, local, s.goTo)
 
   // the answer's own fields: beside the work on wide screens, and in the page itself below that, so a phone never has to
   // find them behind a button
@@ -281,13 +291,13 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
           <>
             <div>
               <p className="text-xs text-muted-foreground">Chosen</p>
-              <p className="mt-0.5">{d.option && d.option !== 'other' ? options.find((o) => o.id === d.option)?.label : d.answer || <span className="text-muted-foreground">Nothing yet</span>}</p>
+              <p className="mt-0.5">{chosen ? options.find((o) => o.id === d.option)?.label : d.answer.trim() || <span className="text-muted-foreground">Nothing yet</span>}</p>
               {d.reason && <p className="mt-1 text-muted-foreground">Reason: {d.reason}</p>}
             </div>
-            {q.quantity && d.option === 'other' && (
+            {q.quantity && writing && (
               <div className="space-y-1.5"><Label htmlFor="qa-value">Value ({q.quantity.unit})</Label><Input id="qa-value" inputMode="decimal" value={d.value} onChange={(e) => set({ value: e.target.value })} placeholder={`A number in ${q.quantity.unit}`} /></div>
             )}
-            {d.option === 'other' && (
+            {q.quantity && writing && (
               <div className="space-y-1.5"><Label htmlFor="qa-source">Where the fact comes from</Label><Input id="qa-source" value={d.source} onChange={(e) => set({ source: e.target.value })} placeholder="Datasheet page, a measurement, a person" /></div>
             )}
             <fieldset>
@@ -324,7 +334,7 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
       aside={wide ? aside : undefined}
       onSubmit={() => s.submit(() => answer.mutateAsync({
         repo, question: q!.id,
-        ...(d.option && d.option !== 'other' ? { option: d.option } : { answer: [d.value && q?.quantity ? `${d.value} ${q.quantity.unit}` : '', d.answer].filter(Boolean).join(': ') + (d.source ? ` (source: ${d.source})` : '') }),
+        ...(chosen ? { option: d.option } : { answer: [d.value && q?.quantity ? `${d.value} ${q.quantity.unit}` : '', d.answer].filter(Boolean).join(': ') + (d.source ? ` (source: ${d.source})` : '') }),
         ...(d.reason ? { reason: d.reason } : {}),
         ...(d.lasts ? { lasts: d.lasts } : {}),
       }).then(async (r) => {
@@ -354,7 +364,7 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
               onChoose={(c) => { set({ option: c.option, reason: c.reason, ...(c.answer ? { answer: c.answer } : {}) }); if (s.stepIndex < 2) s.goTo(c.option === 'other' ? 'specific' : 'lasts') }}
             />
           )}
-          {d.option && <Button variant="ghost" size="sm" onClick={() => set({ option: undefined, reason: undefined })}>Choose again</Button>}
+          {d.option && !stale && <Button variant="ghost" size="sm" onClick={() => set({ option: undefined, reason: undefined })}>Choose again</Button>}
           {(d.option === 'other' || !q.recommended) && (
             <div className="space-y-1.5"><Label htmlFor="qa-answer">Your answer</Label><Textarea id="qa-answer" rows={3} value={d.answer} onChange={(e) => set({ answer: e.target.value })} placeholder={'Specific enough to unblock the agent: not "it depends"'} /></div>
           )}

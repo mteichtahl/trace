@@ -510,16 +510,18 @@ export const CHECKS: Readonly<Record<string, Checker>> = {
   'question-answer/units': (i) => {
     const opt = str(i.draft?.option)
     const text = `${str(i.draft?.value)} ${str(i.draft?.answer)}`
-    const wantsNumber = /\b(how (many|much|long|fast|far)|what (is|are) the .*(range|current|voltage|value|size|rate))\b/i.test(i.question?.text ?? '')
-    return (opt && opt !== 'other') || !wantsNumber || /\d/.test(text) ? met('units') : notMet('units', 'The question asks for a quantity: give a number and a unit.')
+    return (opt && opt !== 'other') || !wantsNumber(i.question) || /\d/.test(text) ? met('units') : notMet('units', 'The question asks for a quantity: give a number and a unit.')
   },
+  // a source is asked for a number given in answer to a question that asks for one, not for any digit in a decision
   'question-answer/source': (i) => {
     const opt = str(i.draft?.option)
-    const text = str(i.draft?.answer)
-    return (opt && opt !== 'other') || !/\d/.test(text) || str(i.draft?.source).length >= 3 ? met('source') : notMet('source', 'Say where the number comes from.')
+    const text = `${str(i.draft?.value)} ${str(i.draft?.answer)}`
+    return (opt && opt !== 'other') || !wantsNumber(i.question) || !/\d/.test(text) || str(i.draft?.source).length >= 3 ? met('source') : notMet('source', 'Say where the number comes from.')
   },
   'question-answer/requirement': (i) => (str(i.draft?.lasts) ? met('requirement') : notMet('requirement', 'Say whether the answer is a one-off, a rule, or a requirement change.')),
 }
+
+const wantsNumber = (q: QuestionRow | null): boolean => /\b(how (many|much|long|fast|far)|what (is|are) the .*(range|current|voltage|value|size|rate))\b/i.test(q?.text ?? '')
 
 const boardsOf = (i: CheckInput): BoardRow[] => (i.boards ?? []).filter((b) => !i.r || b.revision === i.r.journey.revision)
 const inspection = (i: CheckInput) => inspectionProblems(i.boards ?? [], i.orders, i.r?.journey.revision ?? 'A', i.handPlaced ?? [])
