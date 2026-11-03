@@ -140,11 +140,16 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
       toast.error('trace could not reply', { description: e instanceof Error ? e.message : String(e) })
     }
     const last = [...(agent.messages as AnyMsg[])].reverse().find((m) => m.role === 'assistant' && textOf(m))
-    if (last && prefs.voice.readAloud !== 'off') {
+    if (last && prefs.voice.speech !== false && prefs.voice.readAloud !== 'off') {
       const text = textOf(last)
       enqueueSpeech(last.id, prefs.voice.readAloud === 'summary' ? (text.split(/\n\n/)[0] ?? text) : text)
     }
-  }, [agent, copilotkit, prefs.voice.readAloud])
+  }, [agent, copilotkit, prefs.voice.readAloud, prefs.voice.speech])
+
+  // spoken replies turned off (here or on another device): stop any voice now
+  useEffect(() => {
+    if (prefs.voice.speech === false) stopSpeaking()
+  }, [prefs.voice.speech])
 
   const send = async (text: string) => {
     stopSpeaking()
@@ -272,6 +277,7 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
               ))}
               {text && !streaming && (
                 <MessageActions
+                  canSpeak={prefs.voice.speech !== false}
                   speaking={speaking.messageId === m.id}
                   onSpeak={() => (speaking.messageId === m.id ? stopSpeaking() : void speak(m.id, text).catch(() => toast.error('Could not read that aloud.')))}
                   onCopy={() => void navigator.clipboard?.writeText(text).then(() => toast('Copied as markdown'))}
@@ -305,7 +311,7 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
           history={history}
           placeholder={placeholder}
           repo={repo}
-          onReadAgain={() => {
+          onReadAgain={prefs.voice.speech === false ? undefined : () => {
             const last = [...messages].reverse().find((m) => m.role === 'assistant' && textOf(m))
             if (last) void speak(last.id, textOf(last))
           }}
@@ -315,14 +321,14 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
   )
 }
 
-function MessageActions({ speaking, onSpeak, onCopy, onRetry, onFeedback }: { speaking?: boolean; onSpeak: () => void; onCopy: () => void; onRetry?: () => void; onFeedback: (reason: string) => void }) {
+function MessageActions({ canSpeak = true, speaking, onSpeak, onCopy, onRetry, onFeedback }: { canSpeak?: boolean; speaking?: boolean; onSpeak: () => void; onCopy: () => void; onRetry?: () => void; onFeedback: (reason: string) => void }) {
   const [reason, setReason] = useState('')
   const [open, setOpen] = useState(false)
   return (
     <div className="mt-1 flex items-center gap-0.5 text-muted-foreground opacity-70 transition-opacity group-hover/msg:opacity-100 focus-within:opacity-100">
-      <Button variant="ghost" size="icon" className={cn('size-7', speaking && 'text-primary')} aria-label={speaking ? 'Stop reading aloud' : 'Read aloud'} title={speaking ? 'Stop reading aloud (Esc)' : 'Read aloud'} onClick={onSpeak}>
+      {canSpeak && <Button variant="ghost" size="icon" className={cn('size-7', speaking && 'text-primary')} aria-label={speaking ? 'Stop reading aloud' : 'Read aloud'} title={speaking ? 'Stop reading aloud (Esc)' : 'Read aloud'} onClick={onSpeak}>
         {speaking ? <Square className="size-3.5" /> : <Volume2 className="size-3.5" />}
-      </Button>
+      </Button>}
       <Button variant="ghost" size="icon" className="size-7" aria-label="Copy as markdown" onClick={onCopy}>
         <Copy className="size-3.5" />
       </Button>

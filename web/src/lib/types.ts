@@ -540,6 +540,10 @@ export interface Prefs {
     recommendations: 'short' | 'full'
   }
   voice: {
+    /** trace's replies can be read aloud (speaker buttons, Read aloud, voice choice) */
+    speech: boolean
+    /** the microphone button for dictating messages */
+    dictation: boolean
     voice?: string
     rate: number
     readAloud: 'off' | 'summary' | 'all'

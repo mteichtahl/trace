@@ -11,6 +11,10 @@ describe('Preferences catalog', () => {
     expect(searchSettings('2fa').map((s) => s.id)).toEqual(['security.password'])
     expect(searchSettings('voice speed').map((s) => s.id)).toEqual(['voice.rate'])
   })
+  it('finds the switches for spoken replies and dictation', () => {
+    expect(searchSettings('turn off voice').map((s) => s.id)).toContain('voice.speech')
+    expect(searchSettings('microphone').map((s) => s.id)).toContain('voice.dictation')
+  })
   it('keeps spend notifications on in the app for admins', () => {
     expect(notifyLock('spend', 'app', true)).toMatch(/Admins/)
     expect(notifyLock('spend', 'app', false)).toBeNull()

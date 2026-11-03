@@ -386,9 +386,19 @@ export function VoiceGroup() {
   useEffect(() => {
     void navigator.mediaDevices?.enumerateDevices?.().then((d) => setMics(d.filter((x) => x.kind === 'audioinput'))).catch(() => undefined)
   }, [])
+  const speechOff = v.speech === false
+  const dictationOff = v.dictation === false
+  const offSpeech = speechOff ? 'Turn on Spoken replies to change this.' : undefined
+  const offDictation = dictationOff ? 'Turn on Dictation to change this.' : undefined
   return (
     <>
-      <PrefRow id="voice.voice">
+      <PrefRow id="voice.speech">
+        <Switch checked={!speechOff} onCheckedChange={(on) => { if (!on) stopSpeaking(); save('voice.speech', on) }} aria-label="Spoken replies" />
+      </PrefRow>
+      <PrefRow id="voice.dictation">
+        <Switch checked={!dictationOff} onCheckedChange={(on) => save('voice.dictation', on)} aria-label="Dictation" />
+      </PrefRow>
+      <PrefRow id="voice.voice" locked={offSpeech}>
         {voices.isError ? (
           <p className="text-sm text-muted-foreground">Voices could not be loaded: reading aloud may be turned off for this installation.</p>
         ) : voices.isLoading ? (
@@ -412,22 +422,22 @@ export function VoiceGroup() {
           </RadioGroup>
         )}
       </PrefRow>
-      <PrefRow id="voice.rate">
+      <PrefRow id="voice.rate" locked={offSpeech}>
         <span className="text-xs text-muted-foreground">0.75×</span>
         <Slider className="w-48" min={0.75} max={1.5} step={0.05} value={[v.rate]} onValueChange={([r]) => save('voice.rate', Math.round(r! * 100) / 100)} aria-label="Speaking speed" />
         <span className="text-xs text-muted-foreground">1.5×</span>
         <span className="w-12 text-sm tabular-nums">{v.rate}×</span>
       </PrefRow>
-      <PrefRow id="voice.readAloud">
+      <PrefRow id="voice.readAloud" locked={offSpeech}>
         <Segmented label="Read replies aloud" value={v.readAloud} onChange={(x) => save('voice.readAloud', x)} options={[{ value: 'off', label: 'Off' }, { value: 'summary', label: 'Summary only' }, { value: 'all', label: 'Whole reply' }]} />
       </PrefRow>
-      <PrefRow id="voice.language">
+      <PrefRow id="voice.language" locked={speechOff && dictationOff ? 'Turn on Spoken replies or Dictation to change this.' : undefined}>
         <Select value={v.language} onValueChange={(x) => save('voice.language', x)}>
           <SelectTrigger className="w-56" aria-label="Dictation language"><SelectValue /></SelectTrigger>
           <SelectContent>{DICTATION.map(([value, label]) => <SelectItem key={value} value={value!}>{label}</SelectItem>)}</SelectContent>
         </Select>
       </PrefRow>
-      <PrefRow id="voice.mic" device>
+      <PrefRow id="voice.mic" device locked={offDictation}>
         <div className="space-y-2">
           <Segmented label="How dictation starts" value={v.mic} onChange={(x) => save('voice.mic', x)} options={[{ value: 'hold', label: 'Hold to talk' }, { value: 'tap', label: 'Tap to start and stop' }]} />
           <Select value={mic} onValueChange={(x) => { setMic(x); writeDevice('mic', x); markSaved('voice.mic') }}>
@@ -440,8 +450,8 @@ export function VoiceGroup() {
           <p className="text-xs text-muted-foreground">The browser asks once for the microphone. To take that back, use the site settings beside the address bar.</p>
         </div>
       </PrefRow>
-      <PrefRow id="voice.sendOnStop"><Switch checked={v.sendOnStop} onCheckedChange={(x) => save('voice.sendOnStop', x)} aria-label="Send when I stop talking" /></PrefRow>
-      <PrefRow id="voice.commands"><Switch checked={v.commands} onCheckedChange={(x) => save('voice.commands', x)} aria-label="Spoken commands" /></PrefRow>
+      <PrefRow id="voice.sendOnStop" locked={offDictation}><Switch checked={v.sendOnStop} onCheckedChange={(x) => save('voice.sendOnStop', x)} aria-label="Send when I stop talking" /></PrefRow>
+      <PrefRow id="voice.commands" locked={offDictation}><Switch checked={v.commands} onCheckedChange={(x) => save('voice.commands', x)} aria-label="Spoken commands" /></PrefRow>
     </>
   )
 }

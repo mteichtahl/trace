@@ -13,10 +13,12 @@ export function VoiceControls() {
   const prefs = usePrefs()
   const setPref = useSetPref()
   const s = useSpeech()
-  const voices = useQuery({ queryKey: ['voice.voices', prefs.voice.language], queryFn: () => listVoices(prefs.voice.language), staleTime: 3600_000, retry: false })
+  const on = prefs.voice.speech !== false
+  const voices = useQuery({ queryKey: ['voice.voices', prefs.voice.language], queryFn: () => listVoices(prefs.voice.language), staleTime: 3600_000, retry: false, enabled: on })
   const current = s.voice ?? prefs.voice.voice ?? voices.data?.voices[0]?.id
   const name = voices.data?.voices.find((v) => v.id === current)?.name ?? current ?? 'Voice'
   const rate = s.rate !== 1 ? s.rate : prefs.voice.rate
+  if (!on) return null
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
       <label className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1">

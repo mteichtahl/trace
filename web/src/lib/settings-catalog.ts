@@ -45,6 +45,8 @@ export const SETTINGS: Setting[] = [
   { id: 'notifications.quiet', group: 'notifications', label: 'Quiet hours', line: 'No email or push in this window; everything waits in the Inbox.', key: 'notifications.quiet', keywords: ['do not disturb', 'night'] },
   { id: 'notifications.projects', group: 'notifications', label: 'Per project', line: 'Normal, or only gates and spend.', key: 'notifications.projects' },
 
+  { id: 'voice.speech', group: 'voice', label: 'Spoken replies', line: 'Let trace read its replies aloud. When off, the speaker buttons and voice controls are hidden.', key: 'voice.speech', keywords: ['read aloud', 'speech', 'polly', 'mute', 'turn off voice'] },
+  { id: 'voice.dictation', group: 'voice', label: 'Dictation', line: 'Show the microphone button so you can speak your messages. When off, it is hidden.', key: 'voice.dictation', keywords: ['microphone', 'mic', 'speak', 'transcribe', 'turn off'] },
   { id: 'voice.voice', group: 'voice', label: 'Voice', line: 'Who reads trace\'s replies aloud.', key: 'voice.voice', keywords: ['polly', 'speech'] },
   { id: 'voice.rate', group: 'voice', label: 'Speaking speed', line: 'How fast replies are read.', key: 'voice.rate', keywords: ['speed'] },
   { id: 'voice.readAloud', group: 'voice', label: 'Read replies aloud', line: 'Speak trace\'s replies as they arrive.', key: 'voice.readAloud' },

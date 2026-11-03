@@ -5,7 +5,7 @@
  * cancel, stop and read that again. On a phone a history button lists sent messages to pick from.
  */
 import { ArrowUp, History, Loader2, Mic, Square } from 'lucide-react'
-import { useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -36,6 +36,7 @@ export function ChatInput({ onSend, onStop, running, history, placeholder = 'Ask
   const [value, setValue] = useState('')
   const [recall, setRecall] = useState<RecallState>(initialRecall)
   const [listening, setListening] = useState<'off' | 'starting' | 'on'>('off')
+  const dictation = prefs.voice.dictation !== false
   const [level, setLevel] = useState(0)
   const [words, setWords] = useState<DictationWords | null>(null)
   const ref = useRef<HTMLTextAreaElement>(null)
@@ -146,6 +147,15 @@ export function ChatInput({ onSend, onStop, running, history, placeholder = 'Ask
     if (prefs.voice.sendOnStop) requestAnimationFrame(() => send(ref.current?.value ?? ''))
   }
 
+  // dictation turned off in preferences while listening: let the microphone go (nothing is sent)
+  useEffect(() => {
+    if (dictation || !dict.current) return
+    dict.current.stop()
+    dict.current = null
+    setListening('off')
+    setLevel(0)
+  }, [dictation])
+
   // hold to talk, or tap to start and tap again to stop
   const micDown = () => {
     if (listening === 'on') return stopMic()
@@ -213,7 +223,7 @@ export function ChatInput({ onSend, onStop, running, history, placeholder = 'Ask
             </PopoverContent>
           </Popover>
         )}
-        <Button
+        {dictation && <Button
           variant={listening === 'on' ? 'default' : 'outline'}
           size="icon"
           className="size-8"
@@ -230,7 +240,7 @@ export function ChatInput({ onSend, onStop, running, history, placeholder = 'Ask
           }}
         >
           {listening === 'starting' ? <Loader2 className="animate-spin" /> : <Mic />}
-        </Button>
+        </Button>}
         {running ? (
           <Button size="icon" className="size-8" variant="outline" aria-label="Stop the reply" onClick={onStop}>
             <Square className="fill-current" />

@@ -12,7 +12,7 @@ export const DEFAULT_PREFS: Prefs = {
   profile: {},
   display: { theme: 'system', density: 'comfortable', textSize: 1, motion: 'system', contrast: 'standard' },
   chat: { dock: 'asked', enter: 'enter', recall: true, toolRows: 'folded', reasoning: 'hidden', terms: 'first', recommendations: 'short' },
-  voice: { rate: 1, readAloud: 'off', language: 'en-AU', mic: 'hold', sendOnStop: false, commands: true },
+  voice: { speech: true, dictation: true, rate: 1, readAloud: 'off', language: 'en-AU', mic: 'hold', sendOnStop: false, commands: true },
   formats: { units: 'mm', currency: 'USD', numbers: 'engineering' },
   work: { start: 'home', pinned: [], hideFinished: false },
 }
