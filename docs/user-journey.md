@@ -153,6 +153,16 @@ A deliberate change (a new or changed requirement, a part going end of life, a b
 
 A released revision is never edited. A change after release always opens the next revision, and a firmware-only change opens a firmware revision without reopening the hardware.
 
+### A stage is signed only when its work is settled
+
+A gate checks the design as it will stand, so no stage is reviewed or signed while its work is still moving (src/core/journey.ts `pendingBlockers`, `withPending`; src/api/pending-changes.ts `pendingOf`, `stillWorking`). The current stage's gate is locked while:
+
+- **a change is open** for that stage or an earlier one: a change trace made, or a person's own edit (a change whose stage is not known holds it too; one from a later stage does not). Accept or discard it first.
+- **an agent is still working** on the project: a job queued, running or paused (the weekly look for work and a specialist's own sub-jobs aside). Let it finish, or stop it.
+- **trace cannot look** (GitHub or the job list not answering): it stays locked rather than guessing.
+
+While any of these holds, the gate page shows what is pending and how to settle it instead of the review: no evidence is opened, nothing is signed, and gate.sign refuses with the same words. The next step becomes settling it: reviewing the change, or watching the job. The page opens for review on its own once nothing is pending.
+
 ### Nothing goes to Fabricate while it is changing
 
 What is ordered must be the design as accepted, with nothing still moving. Three rules hold this (src/core/journey.ts `guardsFabricate`, `pendingBlockers`, `applyChange`):

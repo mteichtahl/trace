@@ -30,7 +30,7 @@ const start = (template: 'board' | 'fpga' | 'firmware' = 'board'): void => {
 }
 
 const NONE: PendingChanges = { changes: [], requirements: [] }
-const OPEN: PendingChanges = { changes: [{ number: 12, title: 'Swap the regulator', ready: true }], requirements: [] }
+const OPEN: PendingChanges = { changes: [{ number: 12, title: 'Swap the regulator', ready: true, stage: 'signoff' }], requirements: [] }
 
 describe('the gates into Fabricate', () => {
   it('are Sign-off (it passes Release) and the order approval, and only where the project has a Fabricate stage', () => {
@@ -50,7 +50,7 @@ describe('the gates into Fabricate', () => {
     expect(signBlockers(rec(), 'signoff', ADMIN, [], OPEN)).toEqual([expect.stringMatching(/^Accept or discard 1 open change from trace first \("Swap the regulator"\)/)])
     expect(() => signGate(db, 'signoff', signer, { pending: OPEN })).toThrow(/Accept or discard 1 open change/)
     expect(rec().journey.currentStage).toBe('signoff')
-    // the other gates are not held by it
+    // a change of a later stage does not hold an earlier gate
     expect(pendingBlockers(rec(), 'layout', OPEN)).toEqual([])
     expect(signGate(db, 'signoff', signer, { pending: NONE })).toMatchObject({ advanced_to: 'fabricate' })
     meetAll('fabricate.order'); openAll('fabricate.order')
@@ -72,8 +72,41 @@ describe('the gates into Fabricate', () => {
     const v = withPending(rec(), before, ADMIN, OPEN)
     expect(v.gates.find((g) => g.id === 'signoff')).toMatchObject({ may_sign: false, missing: [expect.stringMatching(/open change/)] })
     expect(v.next).toMatchObject({ kind: 'review', yours: true, ref: { kind: 'change', id: '12' }, button: 'Review the change' })
-    expect(v.next.summary).toMatch(/release approval gate is locked: 1 change from trace is still open/)
+    expect(v.next.summary).toMatch(/release approval gate is locked: 1 change is still open/)
     expect(withPending(rec(), before, ADMIN, NONE)).toEqual(before)
+  })
+})
+
+describe('every gate, while its stage has work pending', () => {
+  it('cannot be reviewed or signed while a change of its stage (or an earlier one) is open', () => {
+    start()
+    meetAll('define'); openAll('define')
+    const mine: PendingChanges = { changes: [{ number: 7, title: 'Draft the requirements', ready: true, stage: 'define' }], requirements: [] }
+    expect(signBlockers(rec(), 'define', ADMIN, [], mine)).toEqual([expect.stringMatching(/^Accept or discard 1 open change first \("Draft the requirements"\): a stage is reviewed and signed once its work is settled/)])
+    expect(() => signGate(db, 'define', signer, { pending: mine })).toThrow(/open change/)
+    // a change whose stage is not known holds it too; one of a later stage does not
+    expect(pendingBlockers(rec(), 'define', { changes: [{ number: 8, title: 'An edit', stage: null }], requirements: [] })).toHaveLength(1)
+    expect(pendingBlockers(rec(), 'define', { changes: [{ number: 9, title: 'Route the board', stage: 'layout' }], requirements: [] })).toEqual([])
+    expect(signGate(db, 'define', signer, { pending: NONE })).toMatchObject({ advanced_to: 'architect' })
+  })
+
+  it('cannot be signed while an agent is still working, and the next step watches the job', () => {
+    start()
+    meetAll('define'); openAll('define')
+    const busy: PendingChanges = { changes: [], requirements: [], work: [{ id: 'job-1', title: 'Check the intent', state: 'running' }] }
+    expect(pendingBlockers(rec(), 'define', busy)).toEqual([expect.stringMatching(/^Wait for 1 job still working to finish, or stop it \("Check the intent"\)/)])
+    expect(() => signGate(db, 'define', signer, { pending: busy })).toThrow(/still working/)
+    const before = journeyView(rec(), ADMIN)
+    expect(before.next).toMatchObject({ kind: 'gate', ref: { kind: 'gate', id: 'define' } })
+    const v = withPending(rec(), before, ADMIN, busy)
+    expect(v.gates.find((g) => g.id === 'define')).toMatchObject({ may_sign: false, pending: [expect.stringMatching(/still working/)] })
+    expect(v.next).toMatchObject({ kind: 'working', belongs_to: 'trace', job_id: 'job-1' })
+    expect(v.next.summary).toMatch(/is locked: 1 job is still working/)
+  })
+
+  it('stays locked when trace cannot look', () => {
+    start()
+    expect(pendingBlockers(rec(), 'define', { ...NONE, unknown: 'GitHub did not answer' })).toEqual([expect.stringMatching(/so this gate stays locked/)])
   })
 })
 

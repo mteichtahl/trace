@@ -230,6 +230,7 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
       record: { ...(signature?.notes ? { notes: String(signature.notes) } : {}), ...(returned ? { returned: { by: String(returned.by ?? ''), at: String(returned.at), reason: String(returned.reason ?? '') } } : {}) },
       missing: Array.isArray(g.missing) ? g.missing.map(String) : [],
       maySign: Boolean(g.may_sign),
+      pending: Array.isArray(g.pending) ? g.pending.map(String) : [],
     } as Gate
   })
   const stages: Stage[] = arr(raw.stages).map((s) => {

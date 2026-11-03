@@ -585,6 +585,8 @@ export interface GateView {
   signature: { by: string; at: string; notes: string | null } | null
   returned: { by: string | null; at: string; reason: string | null } | null
   may_sign: boolean; missing: string[]
+  /** the pending work that holds it (withPending): while any, it is neither reviewed nor signed */
+  pending?: string[]
 }
 /** What a stage is for, in a person's words (src/core/stage-guides.ts), with what comes after it in this project. */
 export type StageGuideView = StageGuide
@@ -675,7 +677,7 @@ const liveSignature = (r: JourneyRecord, gate: string): SignatureRow | null =>
 /** The waivers a gate's signer must open and acknowledge: every open waiver taken in that gate's stage. */
 const stageWaivers = (r: JourneyRecord, stage: StageId): WaiverRow[] => r.waivers.filter((w) => w.stage === stage && w.closedAt === null)
 
-// ------------------------------------------------------------------ pending changes (docs/user-journey.md "Nothing goes to Fabricate while it is changing")
+// ------------------------------------------------------------------ pending work (docs/user-journey.md "A stage is signed only when its work is settled")
 
 /**
  * What is still changing in the design, as the API sees it when a gate is read or signed:
@@ -686,8 +688,11 @@ const stageWaivers = (r: JourneyRecord, stage: StageId): WaiverRow[] => r.waiver
  *   unknown       why trace could not look (GitHub unreachable): Fabricate stays locked rather than guessing
  */
 export interface PendingChanges {
-  changes: readonly { number: number; title: string; ready?: boolean }[]
+  /** `stage`: the stage the change belongs to (null or absent: not known, so it holds every gate) */
+  changes: readonly { number: number; title: string; ready?: boolean; stage?: StageId | null | undefined }[]
   requirements: readonly string[]
+  /** the agents' jobs still queued, running or paused on the project (absent: not looked at) */
+  work?: readonly { id: string; title: string; state: string }[] | undefined
   unknown?: string | null | undefined
 }
 
@@ -713,43 +718,75 @@ export function guardsFabricate(r: Pick<JourneyRecord, 'stages' | 'gates'>, id: 
 
 const quoted = (xs: readonly { title: string }[]): string => xs.slice(0, 3).map((c) => `"${c.title}"`).join(', ') + (xs.length > 3 ? ` and ${xs.length - 3} more` : '')
 
-/** What pending changes stop on gate `id`, in plain words (empty: nothing pending, or the gate does not lead to Fabricate). */
+/**
+ * The open changes that hold gate `id`: those of its own stage or an earlier one, and those whose stage is not known.
+ * A change from a later stage cannot hold it (the project is not there yet).
+ */
+const holding = (r: Pick<JourneyRecord, 'stages' | 'gates'>, id: string, pending: PendingChanges): PendingChanges['changes'] => {
+  const gate = r.gates.find((g) => g.id === id)
+  const at = gate ? ordOf(r, gate.stage) : -1
+  return pending.changes.filter((c) => !c.stage || at < 0 || ordOf(r, c.stage) <= at)
+}
+
+/**
+ * What pending work stops on gate `id`, in plain words (empty: nothing pending). A stage is reviewed and signed only
+ * once its work is settled (docs/user-journey.md "A stage is signed only when its work is settled"): no open change
+ * from trace or a person for this stage or an earlier one, no agent still working, and trace able to look. The gates
+ * into Fabricate also wait for changed requirements to be agreed again.
+ */
 export function pendingBlockers(r: Pick<JourneyRecord, 'stages' | 'gates'>, id: string, pending: PendingChanges | null | undefined): string[] {
-  if (!pending || !guardsFabricate(r, id)) return []
+  if (!pending || !r.gates.some((g) => g.id === id)) return []
+  const fab = guardsFabricate(r, id)
   const out: string[] = []
-  if (pending.unknown) out.push(`trace could not check for open changes just now (${pending.unknown.replace(/\.$/, '')}), so Fabricate stays locked. Try again in a minute.`)
+  if (pending.unknown) out.push(`trace could not check for open changes just now (${pending.unknown.replace(/\.$/, '')}), so ${fab ? 'Fabricate' : 'this gate'} stays locked. Try again in a minute.`)
   const n = pending.requirements.length
-  if (n) out.push(`${n === 1 ? `Requirement ${pending.requirements[0]} was` : `Requirements ${pending.requirements.join(', ')} were`} changed after the requirements baseline: agree ${n === 1 ? 'it' : 'them'} in Define before anything goes to Fabricate.`)
-  const c = pending.changes.length
-  if (c) out.push(`Accept or discard ${plural(c, 'open change')} from trace first (${quoted(pending.changes)}): what goes to Fabricate must be the design as accepted, with nothing still changing.`)
+  if (fab && n) out.push(`${n === 1 ? `Requirement ${pending.requirements[0]} was` : `Requirements ${pending.requirements.join(', ')} were`} changed after the requirements baseline: agree ${n === 1 ? 'it' : 'them'} in Define before anything goes to Fabricate.`)
+  const open = holding(r, id, pending)
+  const c = open.length
+  if (c) out.push(fab
+    ? `Accept or discard ${plural(c, 'open change')} from trace first (${quoted(open)}): what goes to Fabricate must be the design as accepted, with nothing still changing.`
+    : `Accept or discard ${plural(c, 'open change')} first (${quoted(open)}): a stage is reviewed and signed once its work is settled.`)
+  const w = pending.work ?? []
+  if (w.length) out.push(`Wait for ${plural(w.length, 'job')} still working to finish, or stop ${w.length === 1 ? 'it' : 'them'} (${quoted(w)}): the evidence may still change.`)
   return out
 }
 
 /**
- * The view with the pending changes applied to the gates that lead to Fabricate: each says what is pending and may
- * not be signed. When the next step is signing one of them, it becomes settling the pending change instead: the
- * oldest open change (ready first) or, for a changed requirement, Requirements review.
+ * The view with the pending work applied to the gates: each unsigned gate it holds says what is pending (`pending`,
+ * also first in `missing`) and may not be reviewed or signed. When the next step is signing one of them, it becomes
+ * settling the work instead: a changed requirement (Requirements review), the oldest open change (ready first), or
+ * watching the job still working.
  */
 export function withPending(r: Pick<JourneyRecord, 'stages' | 'gates'>, view: JourneyView, viewer: Viewer, pending: PendingChanges | null | undefined): JourneyView {
   if (!pending) return view
   const gates = view.gates.map((g) => {
-    const extra = g.signature ? [] : pendingBlockers(r, g.id, pending)
-    return extra.length ? { ...g, may_sign: false, missing: [...extra, ...g.missing.filter((m) => !extra.includes(m))] } : g
+    // a gate of a later stage (queued) is not held yet, except the gates into Fabricate, which always show the lock
+    const extra = g.signature || (g.state === 'queued' && !guardsFabricate(r, g.id)) ? [] : pendingBlockers(r, g.id, pending)
+    return extra.length ? { ...g, may_sign: false, pending: extra, missing: [...extra, ...g.missing.filter((m) => !extra.includes(m))] } : g
   })
   let next = view.next
   const locked = next.kind === 'gate' && next.ref?.kind === 'gate' ? gates.find((g) => g.id === next.ref?.id && pendingBlockers(r, g.id, pending).length) : undefined
   if (locked) {
+    const fab = guardsFabricate(r, locked.id)
     const mine = viewer.admin || viewer.part === 'contributor'
-    const change = pending.changes.find((c) => c.ready) ?? pending.changes[0]
-    const why = 'Nothing goes to Fabricate while the design is still changing: what is ordered must be what was accepted.'
-    const base = { belongs_to: mine ? 'you' as const : 'contributors' as const, yours: mine, why, stage: next.stage, step: null, after: `Once nothing is pending, ${locked.title} is ${viewer.admin ? 'yours' : 'an admin\'s'} to sign.` }
-    if (pending.requirements.length) {
+    const open = holding(r, locked.id, pending)
+    const change = open.find((c) => c.ready) ?? open[0]
+    const work = pending.work ?? []
+    const why = fab ? 'Nothing goes to Fabricate while the design is still changing: what is ordered must be what was accepted.' : 'A stage is reviewed and signed once its work is settled: the gate checks the design as it will stand.'
+    const base = { belongs_to: mine ? 'you' as const : 'contributors' as const, yours: mine, why, stage: next.stage, step: null, after: `Once nothing is pending, ${locked.title} is ${viewer.admin ? 'yours' : 'an admin\'s'} to review and sign.` }
+    if (fab && pending.requirements.length) {
       next = { ...base, kind: 'task', summary: `${pendingBlockers(r, locked.id, { changes: [], requirements: pending.requirements })[0]}`, recommendation: null, button: 'Open Requirements review', ref: { kind: 'skill', id: 'requirements-review' } }
     } else if (change) {
       next = {
         ...base, kind: change.ready ? 'review' : 'task',
-        summary: `${cap(locked.title)} is locked: ${plural(pending.changes.length, 'change')} from trace ${pending.changes.length === 1 ? 'is' : 'are'} still open. Accept or discard ${pending.changes.length === 1 ? 'it' : 'them'} first.`,
+        summary: `${cap(locked.title)} is locked: ${plural(open.length, 'change')} ${open.length === 1 ? 'is' : 'are'} still open. Accept or discard ${open.length === 1 ? 'it' : 'them'} first.`,
         recommendation: change.ready ? `Review "${change.title}" first.` : null, button: mine ? 'Review the change' : 'Read the change', ref: { kind: 'change', id: String(change.number) },
+      }
+    } else if (work[0]) {
+      next = {
+        ...base, kind: 'working', belongs_to: 'trace', yours: false,
+        summary: `${cap(locked.title)} is locked: ${plural(work.length, 'job')} ${work.length === 1 ? 'is' : 'are'} still working ("${work[0].title}"). It opens for review when ${work.length === 1 ? 'it finishes' : 'they finish'}.`,
+        recommendation: null, button: 'Watch', ref: null, job_id: work[0].id,
       }
     } else {
       next = { ...next, summary: `${cap(locked.title)} is locked: ${pending.unknown ?? 'trace could not check for open changes'}.`, recommendation: null, button: 'Check again', after: base.after }

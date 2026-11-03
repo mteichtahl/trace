@@ -312,8 +312,9 @@ export const JOURNEY_ACTIONS = {
       number: c.number, title: c.title, from: c.from, criteria, ready: c.verdict === 'ready',
       recommendation: c.verdict === 'ready' ? `trace recommends accepting it. ${recommendationOf(c).why}` : null,
     })))
-    // nothing goes to Fabricate while the design is changing: the gates into it are locked while a change is open
-    const view = withPending(r, changed, viewer, pendingOf(open.list, open.error))
+    // a stage is reviewed and signed only once its work is settled: its gate is locked while a change of it (or an
+    // earlier stage) is open or an agent is still working, and the gates into Fabricate while anything is changing
+    const view = withPending(r, changed, viewer, pendingOf(open.list, open.error ?? (jobs.error ? `the jobs could not be listed: ${jobs.error}` : null), [], jobs.rows))
     // Define before its requirements exist: the intent first, then trace drafting them, or drafting them again when the
     // job stopped (src/api/drafting.ts); never "accept every requirement" over none. The record is read only when that
     // could change the step, and its count is kept per default-branch commit and record version
@@ -379,12 +380,18 @@ export const JOURNEY_ACTIONS = {
       const back = await backToDefine(ctx, a.repo, now0, changedReqs ?? [], label(ctx.principal))
       if (back) throw new ActionError(`The gate was not signed: ${back.reason}. ${back.words}: agree the change in Requirements review and sign the requirements baseline again; every gate after it is signed again.`)
     }
-    // nothing goes to Fabricate while the design is changing: the gates into it ask GitHub for the open changes now,
-    // and stay locked when it cannot answer (pendingBlockers)
+    // a stage is signed only once its work is settled: every gate asks GitHub for the open changes and the job index
+    // for the agents still working, now, and stays locked when either cannot answer (pendingBlockers). The changed
+    // requirements count at the gates into Fabricate
     let pending: PendingChanges | null = null
-    if (now0 && guardsFabricate(now0, a.gate)) {
-      const open = await openChanges(ctx, a.repo).then((x) => ({ list: x, error: null }), (e: unknown) => ({ list: [], error: e instanceof Error ? e.message : String(e) }))
-      pending = pendingOf(open.list, open.error ?? (changedReqs === null ? 'the requirements could not be read' : null))
+    if (now0) {
+      const [open, jobs] = await Promise.all([
+        openChanges(ctx, a.repo).then((x) => ({ list: x, error: null }), (e: unknown) => ({ list: [], error: e instanceof Error ? e.message : String(e) })),
+        listJobs(ctx, a.repo).then((x) => ({ rows: x.rows, error: null }), (e: unknown) => ({ rows: [], error: e instanceof Error ? e.message : String(e) })),
+      ])
+      const fab = guardsFabricate(now0, a.gate)
+      const why = open.error ?? (jobs.error ? `the jobs could not be listed: ${jobs.error}` : null) ?? (fab && changedReqs === null ? 'the requirements could not be read' : null)
+      pending = pendingOf(open.list, why, fab ? (changedReqs ?? []) : [], jobs.rows)
     }
     const { ready_at: readyAt, signed_at: signedAt, ...signed } = await journeyWrite(ctx, a.repo, (db) => {
       // when the gate became ready, from the record as it stood before the signature (its criteria and waivers)

@@ -107,9 +107,43 @@ function GatePage() {
             <Lock className="size-4" aria-hidden /> Queued: this gate opens when {from?.name ?? 'its stage'} starts. Stages after the current gate are visible but locked.
           </p>
         </div>
+      ) : g.pending?.length ? (
+        <GatePending journey={j.data} gate={g} />
       ) : (
         <GateReview journey={j.data} gate={g} onDone={close} />
       )}
+    </div>
+  )
+}
+
+// ------------------------------------------------------------------ pending work
+
+/**
+ * The stage still has work pending (open changes, jobs still working): the gate is neither reviewed nor signed until
+ * it is settled, so the review is not shown. What is pending, and the way to settle it.
+ */
+function GatePending({ journey: j, gate: g }: { journey: Journey; gate: GateMore }) {
+  const id = projectId(j.repo)
+  const from = j.stages.find((s) => s.id === g.after)
+  const pending = g.pending ?? []
+  const changes = pending.some((p) => /open change/.test(p))
+  return (
+    <div className="mx-auto w-full max-w-[880px] px-4 py-10 md:px-8">
+      <h1 className="text-2xl font-semibold tracking-tight">{gateTitle(g)}</h1>
+      <p className="mt-3 flex items-center gap-2 text-sm font-medium">
+        <Lock className="size-4 shrink-0" aria-hidden /> Not ready for review: {from?.name ?? 'this stage'} still has work pending.
+      </p>
+      <p className="mt-2 text-sm text-muted-foreground">A stage is reviewed and signed once its work is settled, so the gate checks the design as it will stand.</p>
+      <ul className="mt-5 space-y-2" aria-label="What is pending">
+        {pending.map((p) => (
+          <li key={p} className="flex gap-2 rounded-lg border bg-card p-3 text-sm"><Clock className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden /><Rich text={p} /></li>
+        ))}
+      </ul>
+      <div className="mt-6 flex flex-wrap gap-2">
+        {changes && <Button asChild><Link to="/p/$id/changes" params={{ id }}>Review the changes <ArrowRight /></Link></Button>}
+        <Button asChild variant={changes ? 'outline' : 'default'}><Link to="/p/$id" params={{ id }}>Back to the project</Link></Button>
+      </div>
+      <p className="mt-4 text-xs text-muted-foreground">This page opens for review on its own once nothing is pending.</p>
     </div>
   )
 }

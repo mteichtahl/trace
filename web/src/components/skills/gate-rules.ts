@@ -1,5 +1,6 @@
 /**
- * The gate's hard rule (docs/ui-design.md, "Gates and signing"): Sign stays disabled until every criterion is met or
+ * The gate's hard rule (docs/ui-design.md, "Gates and signing"): Sign stays disabled while the stage has work pending,
+ * and until every criterion is met or
  * waived, every piece of evidence has been opened and every waiver acknowledged, and only an admin signs. Pure, so the
  * screen and its tests share it.
  */
@@ -15,7 +16,7 @@ export interface SignState {
 }
 
 export interface Blocker {
-  id: 'none' | 'met' | 'opened' | 'acknowledged' | 'admin' | 'online'
+  id: 'pending' | 'none' | 'met' | 'opened' | 'acknowledged' | 'admin' | 'online'
   /** what is still missing, in words for the tooltip */
   text: string
   /** the rows it concerns */
@@ -25,8 +26,10 @@ export interface Blocker {
 export const isOpened = (c: Criterion, s: Pick<SignState, 'opened'>): boolean => !!c.opened || s.opened.has(c.id)
 
 /** What still stands between this person and Sign; empty means Sign is enabled. */
-export function signBlockers(gate: Pick<Gate, 'criteria' | 'waivers'>, s: SignState): Blocker[] {
+export function signBlockers(gate: Pick<Gate, 'criteria' | 'waivers'> & { pending?: string[] }, s: SignState): Blocker[] {
   const out: Blocker[] = []
+  // the stage still has work pending (open changes, jobs still working): nothing is reviewed or signed over it
+  if (gate.pending?.length) out.push({ id: 'pending', text: gate.pending[0] as string, items: [] })
   // no criteria reported yet is not "nothing to check": a gate is hard, so it cannot be signed blind
   if (!gate.criteria.length) out.push({ id: 'none', text: "The checker has not reported this gate's criteria yet", items: [] })
   // anything not met or waived (including one still being checked) holds the gate
