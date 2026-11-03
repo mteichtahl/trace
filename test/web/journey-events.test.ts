@@ -80,6 +80,7 @@ describe('live updates when an agent records a fact', () => {
     expect(projectOfKey('projects/acme/board/journey-agent/other.db')).toBeNull()
     expect(projectOfKey('projects/acme/../journey-agent/facts.db')).toBeNull()
     expect(projectOfKey('access/central.db')).toBeNull()
+    expect(projectOfKey('kb/acme/journey-agent/facts.db')).toBeNull()
     // the bench's live copy (src/core/bench.ts): a reading was taken
     expect(projectOfKey('projects/acme/board/journey-agent/bench.db')).toBe('acme/board')
     expect(projectOfKey('projects/acme/board/journey-agent/cost.db')).toBeNull()

@@ -635,7 +635,9 @@ export class WebStack extends NestedStack {
       eventPattern: {
         source: ['aws.s3'],
         detailType: ['Object Created'],
-        detail: { bucket: { name: [central.bucketName] }, object: { key: events.Match.anyOf(events.Match.wildcard(AGENT_FACTS_KEYS), events.Match.wildcard(BENCH_KEYS), events.Match.wildcard(JOB_INDEX_KEYS), events.Match.wildcard(JOURNEY_KEYS)) } },
+        detail: { bucket: { name: [central.bucketName] }, // matched by their endings: EventBridge refuses four wildcards in one rule as "too complex"; the handler
+        // (src/web/journey-events.ts) checks each key whole, so a key outside projects/ that ends the same is ignored
+        object: { key: events.Match.anyOf(...JOURNEY_EVENT_KEY_ENDINGS.map((e) => events.Match.suffix(e))) } },
       },
     })
     rule.addTarget(new targets.LambdaFunction(fn, { retryAttempts: 2, maxEventAge: Duration.hours(1) }))
@@ -677,7 +679,14 @@ export function addHooksClient(pool: cognito.UserPool, prefix: string): cognito.
   return client
 }
 
-/** The agents' facts objects, as the JourneyEvents rule matches them (EventBridge wildcard). */
+/** The endings of the keys the JourneyEvents rule matches: the facts, the bench, the job index, the journey record. */
+export const JOURNEY_EVENT_KEY_ENDINGS = [
+  `/${AGENT_FACTS_FOLDER}/${AGENT_FACTS_DB}`,
+  `/${AGENT_FACTS_FOLDER}/${BENCH_DB}`,
+  `/${JOB_INDEX_FOLDER}/${JOB_INDEX_DB}`,
+  `/${JOURNEY_FOLDER}/${JOURNEY_DB}`,
+] as const
+/** The agents' facts objects, as the JourneyEvents rule matches them (the read grant). */
 export const AGENT_FACTS_KEYS = `${PROJECTS_PREFIX}/*/${AGENT_FACTS_FOLDER}/${AGENT_FACTS_DB}`
 /** The bench's live copies (src/core/bench.ts): a reading taken refreshes the Bring-up run screen; never read. */
 export const BENCH_KEYS = `${PROJECTS_PREFIX}/*/${AGENT_FACTS_FOLDER}/${BENCH_DB}`
