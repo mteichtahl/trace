@@ -96,6 +96,8 @@ function ProjectLayout() {
 
   const tabs = j.data ? visibleTabs(j.data, { admin: user?.class === 'admin' }) : []
   const ready = (changes.data?.changes ?? []).filter((c) => c.verdict === 'ready').length
+  /** changes whose checks are still running: shown in orange beside the ready count */
+  const checking = (changes.data?.changes ?? []).filter((c) => c.verdict === 'checking').length
   const all = 9
   return (
     <div className="mx-auto w-full max-w-[1200px] px-4 pt-4 md:px-6 md:pt-8">
@@ -135,6 +137,7 @@ function ProjectLayout() {
             journey={j.data}
             changes={changes.data?.changes.length ?? 0}
             ready={ready}
+            checking={checking}
             actions={
               <Button asChild variant="outline" size="sm">
                 <Link to="/p/$id/do/$skill" params={{ id, skill: 'change-request' }}>Raise a change</Link>
@@ -152,6 +155,14 @@ function ProjectLayout() {
               {t.label}
               {t.id === 'changes' && ready > 0 && (
                 <span className="flex size-[18px] items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground" aria-label={`${ready} ready for you`}>{ready}</span>
+              )}
+              {t.id === 'changes' && checking > 0 && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-orange-500 px-1 text-[11px] font-semibold text-white" aria-label={`${checking} being checked`}>{checking}</span>
+                  </TooltipTrigger>
+                  <TooltipContent>{checking} {checking === 1 ? 'change is' : 'changes are'} being checked</TooltipContent>
+                </Tooltip>
               )}
             </Link>
           )

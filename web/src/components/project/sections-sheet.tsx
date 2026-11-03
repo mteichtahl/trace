@@ -72,13 +72,15 @@ export function statusLine(id: string, j: Journey | undefined, o: { changes: num
   }
 }
 
-export function SectionsSheet({ name, base, tabs, journey, changes, ready, actions }: {
+export function SectionsSheet({ name, base, tabs, journey, changes, ready, checking = 0, actions }: {
   name: string
   base: string
   tabs: SectionTab[]
   journey?: Journey
   changes: number
   ready: number
+  /** changes whose checks are still running (orange) */
+  checking?: number
   actions?: React.ReactNode
 }) {
   const [open, setOpen] = useState(false)
@@ -121,6 +123,7 @@ export function SectionsSheet({ name, base, tabs, journey, changes, ready, actio
                       {line && <span className="block text-xs text-muted-foreground">{line}</span>}
                     </span>
                     {t.id === 'changes' && ready > 0 && <span className="shrink-0 rounded-full bg-primary-soft px-2 py-0.5 text-xs font-semibold text-primary">{ready} for you</span>}
+                    {t.id === 'changes' && checking > 0 && <span className="shrink-0 rounded-full bg-orange-500/15 px-2 py-0.5 text-xs font-semibold text-orange-700 dark:text-orange-300">{checking} checking</span>}
                     {active && <span className="shrink-0 text-xs font-semibold text-primary">You are here</span>}
                   </Link>
                 </li>
