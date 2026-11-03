@@ -187,6 +187,21 @@ describe('voice', () => {
     expect(w.polly.synth[0]).toMatchObject({ Engine: 'generative', TextType: 'ssml', Text: '<speak><prosody rate="125%">R1 &amp; R2 &lt; 5</prosody></speak>' })
   })
 
+  it('with no voice picked yet, reads with the first voice for the language that the engine has', async () => {
+    const w = world()
+    w.polly.voices = [
+      { Id: 'Stephen', Name: 'Zed', SupportedEngines: ['neural'] },
+      { Id: 'Ruth', Name: 'Abby', SupportedEngines: ['generative'] },
+      { Id: 'Olivia', Name: 'Olivia', SupportedEngines: ['neural', 'generative'] },
+    ]
+    const r = await w.serve({ method: 'POST', path: '/api/voice/speak', headers: bearerOf(tok), body: JSON.stringify({ text: 'Hello', language: 'en-AU' }) })
+    expect(r.status).toBe(200)
+    expect(w.polly.synth[0]).toMatchObject({ VoiceId: 'Olivia', Engine: 'neural' })
+    w.polly.voices = []
+    const none = await w.serve({ method: 'POST', path: '/api/voice/speak', headers: bearerOf(tok), body: JSON.stringify({ text: 'Hello again', language: 'en-AU' }) })
+    expect(none.status).toBe(400)
+  })
+
   it('splits text over 3,000 characters at sentence ends and answers the parts in order', async () => {
     const sentence = 'The regulator holds three point three volts under load. '
     const text = sentence.repeat(130)
