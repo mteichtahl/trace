@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   type JourneyRecord, type Viewer, addWaiver, answerQuestion, askQuestion, gateView, inboxItems, journeyView, loadJourney, nextStep, recordOpen,
   returnGate, setCriterion, signBlockers, signGate, sortInbox, startJourney, templateStages, applyJourneySchema, copyJourneyTables, getDraft, loadOrders, putDraft,
-  recordOrder, dismissStuck, JOURNEY_TABLES, updateAbout,
+  recordOrder, dismissStuck, JOURNEY_TABLES, updateAbout, reviewWaitsOn,
 } from '../../src/core/journey.js'
 import { openProject } from '../../src/core/store.js'
 import { merge } from '../../src/core/dbmerge.js'
@@ -148,6 +148,19 @@ describe('the journey record', () => {
     expect(c?.evidence).toEqual([{ kind: 'question', ref: q, label: `Approve the renders, answered by ${ADMIN.label}` }, { kind: 'run', ref: 'render-2' }])
     expect(rec().criteria.find((x) => x.id === 'layout.routed')?.status).toBe('not_met')
     expect(rec().decisions.some((d) => d.kind === 'criterion.approved' && d.ref === 'layout.renders')).toBe(true)
+  })
+
+  it('the release report review waits on coverage, interference and the parts list, met or waived', () => {
+    const waits = (): string[] => reviewWaitsOn(rec(), 'signoff.report').map((c) => c.id)
+    expect(waits()).toEqual(['signoff.coverage', 'signoff.emc', 'signoff.bom'])
+    setCriterion(db, 'signoff.coverage', 'met', [], 'trace')
+    setCriterion(db, 'signoff.bom', 'met', [], 'trace')
+    expect(waits()).toEqual(['signoff.emc'])
+    addWaiver(db, { target: { kind: 'criterion', id: 'signoff.emc' }, reason: 'A bench board with no radio target.', risk: 'Interference is not estimated.', severity: 'cosmetic', caught_where: 'Bring up', scope: 'this revision only' }, signer)
+    expect(waits()).toEqual([])
+    // a criterion with nothing to review first, or none at all, waits on nothing
+    expect(reviewWaitsOn(rec(), 'define.accepted')).toEqual([])
+    expect(reviewWaitsOn(rec(), 'nope')).toEqual([])
   })
 
   it('waivers: reason, risk, severity and scope; safety must be caught somewhere', () => {

@@ -1494,6 +1494,19 @@ export function setCriterion(db: DatabaseSync, id: string, status: 'met' | 'not_
   if (!Number(n)) throw new JourneyError(`There is no criterion called ${id} in this project.`)
 }
 
+/**
+ * The criteria a person's criterion `id` reviews (its `after`, src GATES) that are not met or waived yet, in this
+ * project. Empty: the work it reviews is done, so the person's review may meet it.
+ */
+export function reviewWaitsOn(r: JourneyRecord, id: string): CriterionRow[] {
+  const c = r.criteria.find((x) => x.id === id)
+  const def = c ? GATES.find((g) => g.id === c.gate)?.criteria.find((d) => `${c.gate}.${d.key}` === id) : undefined
+  if (!c || !def?.after?.length) return []
+  const waived = waiverFor(r)
+  const ids = new Set(def.after.map((k) => `${c.gate}.${k}`))
+  return r.criteria.filter((x) => ids.has(x.id) && x.status !== 'met' && !waived.has(x.id))
+}
+
 export interface Signer { hash: string; label: string; also?: readonly string[] | undefined }
 
 /** Sign a gate (the caller has checked the signer is an admin). Moves the project on when it closes the stage. */
