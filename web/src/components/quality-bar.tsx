@@ -118,7 +118,11 @@ export function QualityBar({ checks, onSubmit, submitLabel = 'Submit', blocked, 
       <div className="flex items-center gap-3 px-4 py-3 md:hidden">
         <button type="button" className="flex-1 text-left text-sm font-semibold underline-offset-4 hover:underline" onClick={() => setList(true)}>
           {met} of {checks.length} met
-          {blocked && <span className="block text-xs font-normal text-muted-foreground">Waits for the project's agent</span>}
+          {blocked ? (
+            <span className="block text-xs font-normal text-muted-foreground">Waits for the project's agent</span>
+          ) : !ready && (
+            <span className="block text-xs font-normal text-muted-foreground">{todo.length} left before you can submit · <span className="text-primary">See which</span></span>
+          )}
         </button>
         {button}
       </div>

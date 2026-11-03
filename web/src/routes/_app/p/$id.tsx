@@ -14,6 +14,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { useTraceContext } from '@/components/chat/context'
 import { useChanges } from '@/components/changes/changes-list'
 import { AgentSetupNotice } from '@/components/project/agent-setup'
+import { SectionsSheet } from '@/components/project/sections-sheet'
 import { useCrumb } from '@/components/shell/breadcrumbs'
 import { NotShared, QueryError } from '@/components/states'
 import { ApiError, projectName, repoOf } from '@/lib/api'
@@ -97,18 +98,20 @@ function ProjectLayout() {
   const ready = (changes.data?.changes ?? []).filter((c) => c.verdict === 'ready').length
   const all = 9
   return (
-    <div className="mx-auto w-full max-w-[1200px] px-4 pt-6 md:px-6 md:pt-8">
-      <header className="flex flex-wrap items-center gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">{name}</h1>
-        {j.data ? (
-          <>
-            <Badge variant="outline" className="rounded-md">{j.data.revision}</Badge>
-            <span className="text-sm text-muted-foreground">{j.data.template === 'fpga' ? 'FPGA' : j.data.template.charAt(0).toUpperCase() + j.data.template.slice(1)} template</span>
-          </>
-        ) : (
-          <Skeleton className="h-5 w-32" />
-        )}
-        <div className="ml-auto flex items-center gap-2">
+    <div className="mx-auto w-full max-w-[1200px] px-4 pt-4 md:px-6 md:pt-8">
+      <header className="flex flex-wrap items-center gap-3 max-md:flex-nowrap">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 max-md:flex-1">
+          <h1 className="text-2xl font-semibold tracking-tight max-md:truncate max-md:text-xl">{name}</h1>
+          {j.data ? (
+            <>
+              <Badge variant="outline" className="rounded-md">{j.data.revision}</Badge>
+              <span className="text-sm text-muted-foreground max-md:hidden">{j.data.template === 'fpga' ? 'FPGA' : j.data.template.charAt(0).toUpperCase() + j.data.template.slice(1)} template</span>
+            </>
+          ) : (
+            <Skeleton className="h-5 w-32" />
+          )}
+        </div>
+        <div className="ml-auto flex items-center gap-2 max-md:hidden">
           <People repo={repo} />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -123,8 +126,24 @@ function ProjectLayout() {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+        {/* a phone: the sections open in a sheet rather than a row of tabs that scrolls out of sight */}
+        <div className="shrink-0 md:hidden">
+          <SectionsSheet
+            name={name}
+            base={base}
+            tabs={tabs}
+            journey={j.data}
+            changes={changes.data?.changes.length ?? 0}
+            ready={ready}
+            actions={
+              <Button asChild variant="outline" size="sm">
+                <Link to="/p/$id/do/$skill" params={{ id, skill: 'change-request' }}>Raise a change</Link>
+              </Button>
+            }
+          />
+        </div>
       </header>
-      <nav aria-label="Project" className="mt-5 flex items-end gap-1 overflow-x-auto border-b">
+      <nav aria-label="Project" className="mt-5 flex items-end gap-1 overflow-x-auto border-b max-md:hidden">
         {tabs.map((t) => {
           const to = base + t.to
           const active = t.to === '' ? pathname === base || pathname === `${base}/` : pathname.startsWith(to)

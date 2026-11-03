@@ -2,10 +2,10 @@
  * The shell every signed-in screen sits in (Focus mode excepted):
  *   left rail (Sidebar) · top bar (breadcrumb, ⌘K, live dot, bell, Ask trace, person) · the screen · Ask trace docked
  * Widths: ≥1280 px the rail has labels and Ask trace docks (380–560 px); 768–1279 the rail is icons and Ask trace
- * slides over; <768 a bottom tab bar (Home, Projects, Ask, Inbox), Ask full screen.
+ * slides over; <768 a bottom tab bar (Home, Projects, Ask, Next), Ask full screen.
  */
 import { Link, useRouterState } from '@tanstack/react-router'
-import { FolderClosed, House, Inbox as InboxIcon, Search, Sparkles } from 'lucide-react'
+import { ArrowRight, FolderClosed, House, Search, Sparkles } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
@@ -82,7 +82,7 @@ function PhoneTabs() {
   const inbox = useInbox()
   const p = usePanel()
   const n = inbox.data?.length ?? 0
-  const tab = (active: boolean) => cn('flex flex-1 flex-col items-center gap-0.5 pb-1 pt-2 text-[11px]', active ? 'text-primary' : 'text-muted-foreground')
+  const tab = (active: boolean) => cn('flex h-14 flex-1 flex-col items-center justify-center gap-0.5 text-[11px]', active ? 'text-primary' : 'text-muted-foreground')
   return (
     <nav aria-label="Main" className="fixed inset-x-0 bottom-0 z-40 flex border-t bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
       <Link to="/" className={tab(pathname === '/' && !p.open)}>
@@ -94,10 +94,10 @@ function PhoneTabs() {
       <button type="button" className={tab(p.open)} onClick={() => openPanel()}>
         <Sparkles className="size-6" aria-hidden /> Ask
       </button>
-      <Link to="/inbox" className={cn(tab(pathname === '/inbox' && !p.open), 'relative')}>
-        <InboxIcon className="size-6" aria-hidden />
+      <Link to="/next" className={cn(tab(pathname === '/next' && !p.open), 'relative')} aria-label={n > 0 ? `Next, ${n} for you` : 'Next'}>
+        <ArrowRight className="size-6" aria-hidden />
         {n > 0 && <span className="absolute left-1/2 top-1 ml-2 flex size-5 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">{n}</span>}
-        Inbox
+        Next
       </Link>
     </nav>
   )

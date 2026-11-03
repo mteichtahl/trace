@@ -330,7 +330,7 @@ export function QuestionAnswer({ repo, def }: { repo: string; def: SkillDef }) {
     >
       <StepHeader def={def} index={s.stepIndex} />
       {s.view.isError && <div className="mt-4"><QueryError error={s.view.error} what="the question" onRetry={() => void s.view.refetch()} /></div>}
-      {!q && !s.view.isLoading && <EmptyState className="mt-4">No question is waiting on you here. Questions appear on Home and in the Inbox when an agent asks one.</EmptyState>}
+      {!q && !s.view.isLoading && <EmptyState className="mt-4">No question is waiting on you here. Questions appear on Home and in Next when an agent asks one.</EmptyState>}
       {q && (
         <div className="mt-4 space-y-4">
           <div className="rounded-xl border p-5 text-sm">

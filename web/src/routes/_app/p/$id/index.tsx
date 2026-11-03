@@ -13,9 +13,11 @@ import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { CircleHelp } from 'lucide-react'
 import { useState } from 'react'
 import { StageCelebration, useStageCelebration } from '@/components/changes/celebration'
-import { ChangesFromTrace } from '@/components/changes/changes-list'
+import { ChangesFromTrace, useChanges } from '@/components/changes/changes-list'
+import { FoldLink, FoldRow, FoldRows } from '@/components/fold-row'
+import { useMediaQuery } from '@/hooks/use-media-query'
 import { useChangeActions } from '@/components/changes/use-change-actions'
-import { StageGuidePanel, StageSegments, StageSheet } from '@/components/stage-guide'
+import { StageChip, StageGuidePanel, StageSheet } from '@/components/stage-guide'
 import { useAuth } from '@/lib/auth'
 import { changeOf, nextPlace } from '@/lib/guided'
 import { q } from '@/lib/queries'
@@ -32,7 +34,7 @@ import { EmptyState, Loading } from '@/components/states'
 import { Explained } from '@/components/term'
 import { WaitLine } from '@/components/wait-line'
 import { call, repoOf } from '@/lib/api'
-import { ago, initials, money, waited } from '@/lib/format'
+import { ago, initials, money, plural, waited } from '@/lib/format'
 import { useJourney, useProjects, useWaits } from '@/lib/queries'
 import type { Journey } from '@/lib/types'
 import { SKILLS } from '@/components/skills/definitions'
@@ -62,6 +64,8 @@ function Overview() {
   const changeNo = j.data?.next.kind === 'review' ? changeOf(j.data.next) : null
   const change = useQuery({ ...q('change.get', { repo, number: changeNo ?? 0 }), enabled: !!changeNo && part !== 'reviewer' })
   const now = useNow(30_000)
+  const phone = useMediaQuery('(max-width: 767px)')
+  const changes = useChanges(repo)
   void navigate
 
   if (!j.data)
@@ -91,121 +95,179 @@ function Overview() {
   const place = nextPlace(d, { admin })
   const canAccept = write && !!change.data?.may_accept && change.data.number === changeNo
 
+  const doingCount = running.length + (waits.data?.waits.length ?? 0)
+
+  // each section's list, drawn as a section on wider screens and inside a folded row's drawer on a phone
+  const waitingList = d.questions.length === 0 ? (
+    <EmptyState>Nothing is waiting on anyone.</EmptyState>
+  ) : (
+    <ul className="divide-y rounded-xl border">
+      {d.questions.map((qn) => (
+        <li key={qn.id} className="flex items-center gap-4 px-5 py-4" data-density-item>
+          <CircleHelp className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm">{qn.text}</p>
+            <p className="text-xs text-muted-foreground">
+              Asked {waited(qn.askedAt)} ago{qn.blocks ? ` · blocks ${qn.blocks}` : ''}
+            </p>
+          </div>
+          {part !== 'reviewer' && (
+            <Link to="/p/$id/do/$skill" params={{ id, skill: 'question-answer' }} className="text-sm text-primary hover:underline">
+              Answer it
+            </Link>
+          )}
+        </li>
+      ))}
+    </ul>
+  )
+  const doingList = doingCount === 0 ? (
+    <EmptyState>trace is not working on anything here right now.</EmptyState>
+  ) : (
+    <div className="divide-y rounded-xl border">
+      {running.map((r) => (
+        <RunLine key={r.id} run={r} {...runControls(write)} />
+      ))}
+      {waits.data?.waits.map((w) => (
+        <WaitLine key={w.id} wait={w} onCheckNow={(x) => call('tools.check_now', { repo, waitId: x.id })} />
+      ))}
+    </div>
+  )
+  // trace lost contact with these: nothing is running for them. Drafting the requirements can be started again
+  const lostList = (
+    <div className="divide-y rounded-xl border">
+      {lostJobs.map((r) => (
+        <div key={r.id}>
+          <RunLine run={r} />
+          {projects.data !== undefined && write && d.drafting?.state === 'stopped' && d.drafting.jobId === r.id && <DraftAgain repo={repo} variant="outline" className="mx-5 mb-4" />}
+        </div>
+      ))}
+    </div>
+  )
+  // in each agent's queue order: Move up, Hold and Cancel for people allowed to
+  const queuedList = (
+    <div className="divide-y rounded-xl border">
+      {queued.map((r) => {
+        const h = handoffOf(r)
+        return (
+          <div key={r.id}>
+            <RunLine run={r} {...runControls(write)} />
+            {/* a hand-off waiting its turn: a person may decline it, with a reason the asking specialist reads */}
+            {h && write && declinable(h) && <DeclineHandoff handoff={h} onDecline={(x, why) => decline(repo, x, why)} className="px-5 pb-4" />}
+          </div>
+        )
+      })}
+    </div>
+  )
+  const recentList = d.recent.length === 0 ? (
+    <EmptyState>Nothing has changed the record yet.</EmptyState>
+  ) : (
+    <ul className="divide-y rounded-xl border">
+      {d.recent.slice(0, 5).map((r) => (
+        <li key={r.id} className="flex items-center gap-4 px-5 py-3.5" data-density-item>
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{r.who === 'trace' ? 't' : initials(r.who)}</span>
+          <p className="min-w-0 flex-1 text-sm">
+            {r.text} {r.ref && <code className="font-mono text-xs text-muted-foreground">{r.ref}</code>}
+          </p>
+          <span className="shrink-0 text-xs text-muted-foreground">{ago(r.at)}</span>
+        </li>
+      ))}
+    </ul>
+  )
+  const nextCard = (
+    <NextStepCard
+      step={d.next}
+      part={part}
+      run={nextRun}
+      place={place}
+      pinned={phone}
+      onAccept={canAccept ? () => actions.accept.mutate({ number: change.data!.number, head: change.data!.head.sha, title: change.data!.title, step: place }) : undefined}
+      accepting={actions.accept.isPending}
+      resume={draft ? { label: continueText(draft), to: `/p/${id}/do/${draft.skill}` } : undefined}
+      callButton={d.next.action?.call === 'requirements.draft' && projects.data !== undefined && write ? <DraftAgain repo={repo} size="lg" /> : undefined}
+    />
+  )
+
+  if (phone) {
+    const changeList = changes.data?.changes ?? []
+    const forYou = changeList.filter((c) => c.verdict === 'ready').length
+    const waitingOn = [...new Set(d.questions.map((qn) => qn.to).filter(Boolean))]
+    const working = [doingCount && `${doingCount} now`, queued.length && `${queued.length} queued`].filter(Boolean).join(' · ')
+    const r = d.summary?.requirements
+    const c = d.summary?.cost
+    return (
+      // room under the content for the pinned action bar
+      <div className="space-y-3 pb-28 pt-3">
+        <StageCelebration shown={celebrate} />
+        <StageChip j={d} admin={admin} onOpen={(s) => setSheet(s)} />
+        <StageSheet j={d} stage={sheet} admin={admin} onOpenChange={(o) => !o && setSheet(null)} />
+        {nextCard}
+        <FoldRows label="Around this project">
+          {(changeList.length > 0 || d.changesUnavailable) && (
+            <FoldLink label="Changes from trace" to="/p/$id/changes" params={{ id }} count={forYou ? `${forYou} for you` : changeList.length || undefined} accent={forYou > 0} />
+          )}
+          <FoldRow label={waitingOn.length === 1 ? `Waiting on ${waitingOn[0]}` : 'Waiting on people'} count={d.questions.length ? plural(d.questions.length, 'question') : 'nothing'}>
+            {waitingList}
+          </FoldRow>
+          <FoldRow label="trace is working" count={working || 'idle'} description="What trace is doing now, and what is queued after it.">
+            <div className="space-y-6">
+              {doingList}
+              {lostJobs.length > 0 && <Section label="Ended without finishing" count={lostJobs.length}>{lostList}</Section>}
+              {queued.length > 0 && <Section label="Queued" count={queued.length}>{queuedList}</Section>}
+            </div>
+          </FoldRow>
+          <FoldRow label="Recently" count={d.recent.length ? ago(d.recent[0]!.at) : undefined}>
+            {recentList}
+            <Link to="/p/$id/$" params={{ id, _splat: 'decisions' }} className="mt-3 inline-block text-sm text-primary hover:underline">Full history</Link>
+          </FoldRow>
+          {(r || c) && (
+            <FoldRow label="Requirements and cost" count={[r && `${r.accepted}`, c && money(c.cloudToDate, c.currency)].filter(Boolean).join(' · ')}>
+              <div className="space-y-4"><SideSummary j={d} id={id} /></div>
+            </FoldRow>
+          )}
+        </FoldRows>
+      </div>
+    )
+  }
+
   return (
     <div className="pb-12">
       <StageCelebration shown={celebrate} />
       <div className="mt-6 overflow-hidden rounded-xl border bg-card">
-        <div className="p-5 md:px-6 md:pt-6 md:pb-4 max-md:hidden">
+        <div className="p-5 md:px-6 md:pt-6 md:pb-4">
           <StageRail stages={d.stages} gates={d.gates} onSelect={(s) => setSheet(s)} />
         </div>
-        <StageGuidePanel j={d} admin={admin} onWhat={(s) => setSheet(s)} className="max-md:hidden" />
-        <StageSegments j={d} admin={admin} onWhat={(s) => setSheet(s)} className="p-4 md:hidden" />
+        <StageGuidePanel j={d} admin={admin} onWhat={(s) => setSheet(s)} />
       </div>
       <StageSheet j={d} stage={sheet} admin={admin} onOpenChange={(o) => !o && setSheet(null)} />
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0">
-          <NextStepCard
-            step={d.next}
-            part={part}
-            run={nextRun}
-            place={place}
-            onAccept={canAccept ? () => actions.accept.mutate({ number: change.data!.number, head: change.data!.head.sha, title: change.data!.title, step: place }) : undefined}
-            accepting={actions.accept.isPending}
-            resume={draft ? { label: continueText(draft), to: `/p/${id}/do/${draft.skill}` } : undefined}
-            callButton={d.next.action?.call === 'requirements.draft' && projects.data !== undefined && write ? <DraftAgain repo={repo} size="lg" /> : undefined}
-          />
+          {nextCard}
 
           <ChangesFromTrace repo={repo} unavailable={d.changesUnavailable} />
 
           <Section label="Waiting on people" count={d.questions.length} className="mt-10">
-            {d.questions.length === 0 ? (
-              <EmptyState>Nothing is waiting on anyone.</EmptyState>
-            ) : (
-              <ul className="divide-y rounded-xl border">
-                {d.questions.map((qn) => (
-                  <li key={qn.id} className="flex items-center gap-4 px-5 py-4" data-density-item>
-                    <CircleHelp className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm">{qn.text}</p>
-                      <p className="text-xs text-muted-foreground">
-                        Asked {waited(qn.askedAt)} ago{qn.blocks ? ` · blocks ${qn.blocks}` : ''}
-                      </p>
-                    </div>
-                    {part !== 'reviewer' && (
-                      <Link to="/p/$id/do/$skill" params={{ id, skill: 'question-answer' }} className="text-sm text-primary hover:underline">
-                        Answer it
-                      </Link>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
+            {waitingList}
           </Section>
 
-          <Section label="trace is doing" count={running.length + (waits.data?.waits.length ?? 0)}>
-            {running.length + (waits.data?.waits.length ?? 0) === 0 ? (
-              <EmptyState>trace is not working on anything here right now.</EmptyState>
-            ) : (
-              <div className="divide-y rounded-xl border">
-                {running.map((r) => (
-                  <RunLine key={r.id} run={r} {...runControls(write)} />
-                ))}
-                {waits.data?.waits.map((w) => (
-                  <WaitLine key={w.id} wait={w} onCheckNow={(x) => call('tools.check_now', { repo, waitId: x.id })} />
-                ))}
-              </div>
-            )}
+          <Section label="trace is doing" count={doingCount}>
+            {doingList}
           </Section>
 
           {lostJobs.length > 0 && (
             <Section label="Ended without finishing" count={lostJobs.length}>
-              {/* trace lost contact with these: nothing is running for them. Drafting the requirements can be started again */}
-              <div className="divide-y rounded-xl border">
-                {lostJobs.map((r) => (
-                  <div key={r.id}>
-                    <RunLine run={r} />
-                    {projects.data !== undefined && write && d.drafting?.state === 'stopped' && d.drafting.jobId === r.id && <DraftAgain repo={repo} variant="outline" className="mx-5 mb-4" />}
-                  </div>
-                ))}
-              </div>
+              {lostList}
             </Section>
           )}
 
           {queued.length > 0 && (
             <Section label="Queued" count={queued.length}>
-              {/* in each agent's queue order: Move up, Hold and Cancel for people allowed to */}
-              <div className="divide-y rounded-xl border">
-                {queued.map((r) => {
-                  const h = handoffOf(r)
-                  return (
-                    <div key={r.id}>
-                      <RunLine run={r} {...runControls(write)} />
-                      {/* a hand-off waiting its turn: a person may decline it, with a reason the asking specialist reads */}
-                      {h && write && declinable(h) && <DeclineHandoff handoff={h} onDecline={(x, why) => decline(repo, x, why)} className="px-5 pb-4" />}
-                    </div>
-                  )
-                })}
-              </div>
+              {queuedList}
             </Section>
           )}
 
           <Section label="Recently" action={<Link to="/p/$id/$" params={{ id, _splat: 'decisions' }} className="text-primary hover:underline">Full history</Link>}>
-            {d.recent.length === 0 ? (
-              <EmptyState>Nothing has changed the record yet.</EmptyState>
-            ) : (
-              <ul className="divide-y rounded-xl border">
-                {d.recent.slice(0, 5).map((r) => (
-                  <li key={r.id} className="flex items-center gap-4 px-5 py-3.5" data-density-item>
-                    <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{r.who === 'trace' ? 't' : initials(r.who)}</span>
-                    <p className="min-w-0 flex-1 text-sm">
-                      {r.text} {r.ref && <code className="font-mono text-xs text-muted-foreground">{r.ref}</code>}
-                    </p>
-                    <span className="shrink-0 text-xs text-muted-foreground">{ago(r.at)}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
+            {recentList}
           </Section>
         </div>
 

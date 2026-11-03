@@ -8,8 +8,9 @@ export function StepHeader({ def, index, extra }: { def: SkillDef; index: number
   const step = def.steps[index]!
   return (
     <div>
-      <p className="text-xs text-muted-foreground">Step {index + 1} of {def.steps.length}</p>
-      <h1 className="mt-0.5 text-xl font-semibold tracking-tight">{step.title}</h1>
+      {/* a phone shows the count once, in the step bar above */}
+      <p className="text-xs text-muted-foreground max-md:hidden">Step {index + 1} of {def.steps.length}</p>
+      <h1 className="mt-0.5 max-md:mt-0 text-xl font-semibold tracking-tight">{step.title}</h1>
       <p className="mt-1 text-sm text-muted-foreground"><Explained text={step.detail} /></p>
       {extra}
     </div>

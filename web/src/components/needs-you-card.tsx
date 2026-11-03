@@ -1,5 +1,5 @@
 /**
- * One item that needs the person (Home, Inbox, the bell): the project and stage as small text, the summary, how long
+ * One item that needs the person (Home, Next, the bell): the project and stage as small text, the summary, how long
  * it has waited, and one primary button. A question with a clear recommendation shows the recommended answer as its
  * own button ("Use 4.2 A") with "Other answer" beside it, so most questions are answered in one tap. A stuck agent's
  * report can be dismissed with a reason in one line (onDismiss: stuck.dismiss).

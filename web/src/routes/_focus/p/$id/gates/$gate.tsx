@@ -14,7 +14,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, createFileRoute, useRouter } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
-import { ArrowRight, CircleAlert, Clock, KeyRound, Loader2, Lock, Receipt, X } from 'lucide-react'
+import { ArrowRight, Clock, KeyRound, Loader2, Lock, Receipt, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -34,7 +34,7 @@ import { Rich } from '@/components/rich'
 import { useCommands } from '@/components/shell/command-menu'
 import { LiveDot } from '@/components/shell/live-dot'
 import { EvidenceBody, EvidencePanel } from '@/components/skills/evidence-sheet'
-import { type Blocker, isOpened, needsReauth, returnReasonOk, signBlockers, signLabel } from '@/components/skills/gate-rules'
+import { type Blocker, isOpened, lockedLine, needsReauth, returnReasonOk, signBlockers, signLabel } from '@/components/skills/gate-rules'
 import { reauthenticate } from '@/components/skills/reauth'
 import { StatusBadge } from '@/components/status-badge'
 import { EmptyState, ErrorState, Loading, NotShared, OfflineBanner, QueryError } from '@/components/states'
@@ -316,7 +316,7 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
       <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-background/95 px-4 pb-[max(env(safe-area-inset-bottom),12px)] pt-3 backdrop-blur md:hidden">
         {admin ? (
           <>
-            {!ready && <p className="mb-2 flex items-center gap-2 text-sm text-muted-foreground"><CircleAlert className="size-4" aria-hidden />{blockers[0]?.text} to sign</p>}
+            {!ready && <p className="mb-2 flex items-start gap-2 text-sm text-foreground/80"><Lock className="mt-0.5 size-4 shrink-0" aria-hidden />{lockedLine(g, blockers)}</p>}
             <Button className="h-12 w-full text-base" disabled={!ready} onClick={() => setConfirm(true)}>{label}</Button>
           </>
         ) : (
