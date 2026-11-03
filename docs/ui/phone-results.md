@@ -54,3 +54,19 @@ interface SessionStep { id: string; kind: string; summary: string | null; status
 ```
 are every run with the same job, oldest first, at most 200; `args` and `result` only for this run, a failed or errored
 step, and at most 20 others nearest this run (each JSON cut to 4 kB as text with `…` when longer).
+
+## Every result type opens in trace
+
+Marc's follow-up (Nov 2026): a person must be able to view every kind of result trace keeps, simulations and traces
+included. Every run file opens through the shared file viewer, chosen by its name. Added or checked:
+
+| Result | Files | Shown as |
+| --- | --- | --- |
+| Circuit simulation | `*.raw` (ngspice) | Chart: transient against time, AC as gain and phase on a log frequency axis, DC sweeps; operating point as a table |
+| S-parameters | `*.s1p` … `*.sNp` | Chart of each S-parameter in dB against frequency, phase on a switch |
+| Captures and sweeps | numeric `*.csv` / `*.tsv` (scope channels, loop gain, transient, temperature, Monte Carlo, corners) | Chart or table, chart first when the first column is time or frequency |
+| Digital traces | `*.vcd` | Waveform viewer, scrolls inside its own box on a phone |
+| Compressed outputs | single-file `*.gz` | Unpacked in the browser, then shown with the inner file's viewer |
+| Logs, netlists, models | `.log`, `.cir`, `.xml`, `.vtu`, `.inp`, `.edif`, `.asc`, `.trc` … | Text with highlighting |
+| Images, drawings, 3D | `.png`, `.svg`, `.glb`, `.step` | As before |
+| Binary CAN logs | `.blf` | Named and described, for download |
