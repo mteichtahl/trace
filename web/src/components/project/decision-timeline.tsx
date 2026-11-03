@@ -41,19 +41,19 @@ function tone(d: DecisionEntry): string {
   return 'border-verified/40 bg-verified/10 text-verified'
 }
 
-export interface TimelineGroup {
+export interface TimelineGroup<T = DecisionEntry> {
   key: string
   label: string
-  items: DecisionEntry[]
+  items: T[]
 }
 
 /** Newest first, one group per day ("Today", "Yesterday", "Mon 2 Nov"), and the undated ones last. */
-export function timelineGroups(rows: DecisionEntry[], now: number = Date.now()): TimelineGroup[] {
+export function timelineGroups<T extends { at: string; undated?: boolean | undefined }>(rows: T[], now: number = Date.now()): TimelineGroup<T>[] {
   const today = new Date(now).toDateString()
   const yesterday = new Date(now - 86400_000).toDateString()
   const thisYear = new Date(now).getFullYear()
   const dated = rows.filter((r) => !r.undated).sort((a, b) => b.at.localeCompare(a.at))
-  const groups: TimelineGroup[] = []
+  const groups: TimelineGroup<T>[] = []
   for (const r of dated) {
     const d = new Date(r.at)
     const key = d.toDateString()

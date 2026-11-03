@@ -2,13 +2,14 @@
  * Project overview: where is it (stage rail, and under it the current stage's guide: its purpose, its steps with who
  * does each, and what the gate needs; a segmented bar with "step 3 of 5" on phones), what is the one next step (the
  * card, with its place in the stage, trace's recommendation and what happens after), the changes trace made waiting
- * to be reviewed, the build when it is failing (with "Ask trace to fix something"), and what is happening around it (Waiting on people, trace is doing, Queued, Recently). Any stage on
+ * to be reviewed, the build when it is failing (with "Ask trace to fix something"), and what is happening around it (Waiting on people, trace is doing, Queued, and Recently as a short timeline). Any stage on
  * the rail, and "What happens in <Stage>", opens the stage sheet. A job one specialist asked another for reads "Asked by the …
  * specialist: …" (its title), and a queued one can be declined there. A side column holds the requirements and cost
  * summaries.
  * Reference screen for a project tab.
  */
 import { useQuery } from '@tanstack/react-query'
+import { RecentTimeline } from '@/components/project/recent-timeline'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { CircleHelp } from 'lucide-react'
 import { useState } from 'react'
@@ -34,7 +35,7 @@ import { EmptyState, Loading } from '@/components/states'
 import { Explained } from '@/components/term'
 import { WaitLine } from '@/components/wait-line'
 import { call, repoOf } from '@/lib/api'
-import { ago, initials, money, plural, waited } from '@/lib/format'
+import { ago, money, plural, waited } from '@/lib/format'
 import { useJourney, useProjects, useWaits } from '@/lib/queries'
 import type { Journey } from '@/lib/types'
 import { SKILLS } from '@/components/skills/definitions'
@@ -162,17 +163,7 @@ function Overview() {
   const recentList = d.recent.length === 0 ? (
     <EmptyState>Nothing has changed the record yet.</EmptyState>
   ) : (
-    <ul className="divide-y rounded-xl border">
-      {d.recent.slice(0, 5).map((r) => (
-        <li key={r.id} className="flex items-center gap-4 px-5 py-3.5" data-density-item>
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{r.who === 'trace' ? 't' : initials(r.who)}</span>
-          <p className="min-w-0 flex-1 text-sm">
-            {r.text} {r.ref && <code className="font-mono text-xs text-muted-foreground">{r.ref}</code>}
-          </p>
-          <span className="shrink-0 text-xs text-muted-foreground">{ago(r.at)}</span>
-        </li>
-      ))}
-    </ul>
+    <RecentTimeline items={d.recent} />
   )
   const nextCard = (
     <NextStepCard
