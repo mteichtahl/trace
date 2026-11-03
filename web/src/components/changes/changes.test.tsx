@@ -127,7 +127,7 @@ describe('the mock change actions (dev:mock)', () => {
 
   it('lists, reads, diffs, refuses an early accept, and accepting moves Capture on', async () => {
     const list = await call<{ changes: ChangeSummary[] }>('changes.list', { repo: 'acme/soil-sensor' })
-    expect(list.result.changes.map((c) => [c.number, c.verdict])).toEqual([[12, 'ready'], [13, 'checking']])
+    expect(list.result.changes.map((c) => [c.number, c.verdict])).toEqual([[12, 'ready'], [13, 'checking'], [14, 'ready']])
     const twelve = await call<ChangeDetail>('change.get', { repo: 'acme/soil-sensor', number: 12 })
     expect(twelve.result).toMatchObject({ may_accept: true, recommendation: { verdict: 'accept' } })
     const diff = await call<{ before: unknown; after: unknown }>('change.diff', { repo: 'acme/soil-sensor', number: 12, path: 'hardware/power.kicad_sch' })
@@ -142,7 +142,7 @@ describe('the mock change actions (dev:mock)', () => {
     expect(done.result.merged).toBe(true)
     const j = await call<Journey>('journey.get', { repo: 'acme/soil-sensor' })
     expect(j.result.next).toMatchObject({ kind: 'working', step: { index: 4, total: 5 } })
-    expect((await call<{ changes: ChangeSummary[] }>('changes.list', { repo: 'acme/soil-sensor' })).result.changes.map((c) => c.number)).toEqual([13])
+    expect((await call<{ changes: ChangeSummary[] }>('changes.list', { repo: 'acme/soil-sensor' })).result.changes.map((c) => c.number)).toEqual([13, 14])
     expect((await call<{ id: string }[]>('inbox', {})).result.some((i) => i.id.includes(':12'))).toBe(false)
   })
 })
