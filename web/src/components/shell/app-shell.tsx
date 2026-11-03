@@ -15,6 +15,8 @@ import { OfflineBanner } from '@/components/states'
 import { PushPrompt } from '@/components/push-prompt'
 import { DockedAskTrace, AskTrace } from '@/components/chat/chat-panel'
 import { openPanel, usePanel } from '@/components/chat/chat-state'
+import { stopOnEscape } from '@/components/chat/voice/speech'
+import { FloatingStop } from '@/components/chat/voice/voice-controls'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { dismissSessionEnded, useAuth } from '@/lib/auth'
 import { useInbox } from '@/lib/queries'
@@ -135,7 +137,9 @@ function OverlayAskTrace() {
 
 export function AppShell({ children }: { children: ReactNode }) {
   useShortcuts()
+  stopOnEscape()
   const wide = useMediaQuery('(min-width: 1280px)')
+  const panel = usePanel()
   return (
     <SidebarProvider defaultOpen style={{ '--sidebar-width': '232px' } as React.CSSProperties} open={wide ? undefined : false}>
       <AppSidebar />
@@ -151,6 +155,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <CommandMenu />
       <PushPrompt />
       <ShortcutsDialog />
+      <FloatingStop hidden={panel.open} />
     </SidebarProvider>
   )
 }

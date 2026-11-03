@@ -1,11 +1,11 @@
 /** The chat header's voice controls (Read aloud toggle, voice picker with Preview, speed) and the player bar. */
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, Pause, Play, SkipForward, Square, Volume2 } from 'lucide-react'
+import { ChevronDown, Loader2, Pause, Play, SkipForward, Square, Volume2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
 import { usePrefs, useSetPref } from '@/lib/prefs'
-import { listVoices, pauseSpeaking, previewVoice, setRate, setVoice, skipSpeaking, speech, stopSpeaking, useSpeech } from './speech'
+import { isSpeaking, listVoices, pauseSpeaking, previewVoice, setRate, setVoice, skipSpeaking, speech, stopSpeaking, useSpeech } from './speech'
 
 const RATES = [0.75, 1, 1.25, 1.5]
 
@@ -23,6 +23,11 @@ export function VoiceControls() {
         <Switch checked={prefs.voice.readAloud !== 'off'} onCheckedChange={(on) => setPref('voice', 'readAloud', on ? 'all' : 'off')} aria-label="Read replies aloud" className="scale-90" />
         <Volume2 className="size-3.5" aria-hidden /> Read aloud
       </label>
+      {isSpeaking(s) && (
+        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={stopSpeaking} title="Stop the voice (Esc)">
+          <Square className="size-3" /> Stop voice
+        </Button>
+      )}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="sm" className="h-7 text-xs">
@@ -86,16 +91,29 @@ export function PlayerBar() {
     <div className="flex items-center gap-2 rounded-lg border bg-muted/40 px-3 py-1.5 text-xs" role="status">
       <Volume2 className="size-3.5 text-primary" aria-hidden />
       <span className="flex-1">
-        Speaking · {speech.get().voice ?? 'voice'} · {s.rate}×
+        {s.loading ? 'Getting the voice ready…' : `Speaking · ${speech.get().voice ?? 'voice'} · ${s.rate}×`}
       </span>
-      <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={pauseSpeaking}>
+      <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={pauseSpeaking} disabled={s.loading}>
         {s.playing ? <Pause /> : <Play />} {s.playing ? 'Pause' : 'Play'}
       </Button>
       <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={skipSpeaking} aria-label="Skip to next reply">
         <SkipForward />
       </Button>
-      <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={stopSpeaking}>
+      <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={stopSpeaking} title="Stop the voice (Esc)">
         <Square /> Stop
+      </Button>
+    </div>
+  )
+}
+
+/** A Stop button that floats over any screen while trace is speaking and the chat (with its player bar) is closed. */
+export function FloatingStop({ hidden }: { hidden?: boolean }) {
+  const s = useSpeech()
+  if (hidden || !isSpeaking(s)) return null
+  return (
+    <div className="fixed bottom-24 right-4 z-50 md:bottom-6" role="status">
+      <Button size="sm" className="h-9 rounded-full shadow-lg" onClick={stopSpeaking} title="Stop the voice (Esc)">
+        {s.loading ? <Loader2 className="animate-spin" /> : <Square />} Stop voice
       </Button>
     </div>
   )
