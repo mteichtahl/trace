@@ -46,6 +46,13 @@ import { type JobInfo, type JobPayload, isDelegated, isHandoff } from './schemas
 import { handoffTitle } from '../../core/handoffs.js'
 
 export const STEP_EVERY_MS = 15_000
+/**
+ * A write to the index that failed (its conditional puts kept losing to other writers, or the bucket did not answer)
+ * is tried again after this long, doubling up to the cap, for at most `giveUpMs`. Dropped at once, a job's last write
+ * (its 'ended': succeeded, failed) never landed and its row stayed "running" until it was declared lost, 15 minutes
+ * later, though its work was done (job-mw0cn2v7, job-mw05bpat: "succeeded" in their last lines, lost on screen).
+ */
+export const INDEX_RETRY = { firstMs: 2_000, maxMs: 60_000, giveUpMs: 10 * 60_000 }
 /** Where a queued job looks when no event reaches it (no events topic, or subscribing failed). */
 export const QUEUE_CHECK = { intervalMs: 30_000, factor: 2, maxIntervalMs: 5 * 60_000 }
 /** What the project's topic carries for a write of the index or of people's controls (S3 events through EventBridge). */
@@ -99,6 +106,12 @@ export interface JobIndexWriter {
   flush(): Promise<void>
   /** write every running job's heartbeat now */
   beat(): Promise<void>
+  /**
+   * True when everything the jobs said has reached the index (nothing pending, no write under way, no retry or
+   * trailing step waiting). Until then the runtime answers /ping busy, so its session is not stopped with a job's last
+   * write (its end) still unwritten.
+   */
+  settled(): boolean
   stop(): void
 }
 
@@ -115,6 +128,13 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
   const failedOnce = new Set<string>()
   let writing: Promise<void> = Promise.resolve()
   let timer: NodeJS.Timeout | null = null
+  /** writes started and not yet finished */
+  let inFlight = 0
+  /** a failed write's retry, and since when writes have been failing (null: the last one landed) */
+  let retry: NodeJS.Timeout | null = null
+  let retryMs = INDEX_RETRY.firstMs
+  let failingSince: number | null = null
+  let stopped = false
 
   const rowOf = (j: JobInfo): Partial<Omit<JobRow, 'id' | 'updatedAt'>> => {
     const p = payloadOf(j.id)
@@ -139,7 +159,9 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
     const bs = [...batch.values()]
     pending.clear()
     batch.clear()
+    const swept = sweep
     sweep = false
+    inFlight++
     writing = writing.then(async () => {
       const at = now() / 1000
       try {
@@ -168,12 +190,35 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
           recordProjectMetric('trace.jobs', 1, { [ATTR.jobKind]: j.kind, [ATTR.agent]: j.agent ?? undefined, [ATTR.outcome]: 'lost' })
           log(`${j.id} is lost: no word from it for more than ${Math.round(STALE_AFTER_S / 60)} minutes`)
         }
+        if (failingSince !== null) log(`the project's job index is written again after ${Math.round((now() - failingSince) / 1000)} s of failed writes`)
+        failingSince = null
+        retryMs = INDEX_RETRY.firstMs
       } catch (e) {
+        const t = now()
+        failingSince ??= t
+        if (t - failingSince > INDEX_RETRY.giveUpMs) {
+          // given up: what was not written is dropped, so a stopped bucket does not keep the session busy for ever
+          log(`gave up writing ${[...rows.keys()].join(', ') || 'a heartbeat'} into the project's job index after ${Math.round(INDEX_RETRY.giveUpMs / 60_000)} minutes of failed writes: ${errText(e)}`)
+          failingSince = null
+          retryMs = INDEX_RETRY.firstMs
+          return
+        }
+        // kept, under anything newer that arrived meanwhile, and tried again: a job's end is never dropped on one failure
+        for (const [id, f] of rows) pending.set(id, { ...f, ...pending.get(id) })
+        for (const b of bs) if (!batch.has(b.id)) batch.set(b.id, b)
+        if (swept) sweep = true
         for (const id of rows.keys()) {
           if (failedOnce.has(id)) continue
           failedOnce.add(id)
-          log(`could not write ${id} into the project's job index (the job carries on; screens will not list it): ${errText(e)}`)
+          log(`could not write ${id} into the project's job index yet (the job carries on; trying again): ${errText(e)}`)
         }
+        if (!retry && !stopped) {
+          retry = setTimeout(() => { retry = null; void flush() }, retryMs)
+          retry.unref()
+          retryMs = Math.min(INDEX_RETRY.maxMs, retryMs * 2)
+        }
+      } finally {
+        inFlight--
       }
     })
     return writing
@@ -253,7 +298,15 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
   return {
     flush,
     beat,
-    stop: () => { off(); if (timer) clearInterval(timer); for (const t of trailing.values()) clearTimeout(t); trailing.clear() },
+    settled: () => !pending.size && !batch.size && inFlight === 0 && retry === null && trailing.size === 0,
+    stop: () => {
+      stopped = true
+      off()
+      if (timer) clearInterval(timer)
+      if (retry) { clearTimeout(retry); retry = null }
+      for (const t of trailing.values()) clearTimeout(t)
+      trailing.clear()
+    },
   }
 }
 
