@@ -114,7 +114,7 @@ export function ProcessPanel({ process, step, repo, repos, rangeWords, phone }: 
         </table>
       </Card>
       <StageTimes repos={repo ? [repo] : repos} phone={phone} />
-      <WaitingNow repo={repo} phone={phone} />
+      <WaitingNow repo={repo} />
     </div>
   )
 }
@@ -156,11 +156,14 @@ function StageTimes({ repos, phone }: { repos: string[]; phone: boolean }) {
   )
 }
 
-/** What waits on this person now, oldest first (the inbox): tapping one opens it. */
-function WaitingNow({ repo, phone }: { repo: string | null; phone: boolean }) {
+/** What waits on a person here: open questions, changes ready to accept, gates ready to sign (not spend or stuck agents). */
+const WAITING_KINDS = new Set(['question', 'review', 'gate'])
+
+/** What waits on this person now, oldest first (the inbox, with its access rules): tapping one opens it. */
+function WaitingNow({ repo }: { repo: string | null }) {
   const inbox = useInbox()
   const navigate = useNavigate()
-  const items = (inbox.data ?? []).filter((i) => !repo || i.repo === repo).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  const items = (inbox.data ?? []).filter((i) => WAITING_KINDS.has(i.kind) && (!repo || i.repo === repo)).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   const open = (to?: string, href?: string) => { if (to) void navigate({ to: to as string }); else if (href) window.open(href, '_blank', 'noopener') }
   return (
     <Card wide title="Waiting now, oldest first" sub="tap one to open it">
@@ -169,7 +172,7 @@ function WaitingNow({ repo, phone }: { repo: string | null; phone: boolean }) {
       ) : (
         <table className="w-full border-collapse text-sm">
           <thead>
-            <tr><th className={th}>Project</th><th className={th}>What</th>{!phone && <th className={th}>Waiting on</th>}<th className={cn(th, num)}>For</th></tr>
+            <tr><th className={th}>Project</th><th className={th}>What</th><th className={th}>Waiting on</th><th className={cn(th, num)}>For</th></tr>
           </thead>
           <tbody>
             {items.map((i) => {
@@ -186,7 +189,7 @@ function WaitingNow({ repo, phone }: { repo: string | null; phone: boolean }) {
                 >
                   <td className={td}>{i.project.replace(/^.*\//, '')}</td>
                   <td className={td}>{i.summary.replace(/^[^:]+:\s*/, '').replace(/\*\*/g, '')}</td>
-                  {!phone && <td className={td}>You</td>}
+                  <td className={td}>You</td>
                   <td className={cn(td, num, old && 'text-warning')}>{for_}</td>
                 </tr>
               )

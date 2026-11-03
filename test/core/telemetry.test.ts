@@ -25,9 +25,10 @@ import { GpuJobSchema, runJob } from '../../src/gpu/jobs.js'
 import { observedMain } from '../../src/gpu/runner.js'
 import { Registry, ToolError, defineTool } from '../../src/core/registry.js'
 import {
-  addSecret, argShape, continueFromEnv, enabled, personHash, projectDimension, recordProjectMetric, redact, resetMetricsCache, span, traceEnv, withSession,
+  addSecret, argShape, continueFromEnv, enabled, personHash, projectDimension, recordProcessMetric, recordProjectMetric, redact, resetMetricsCache, span, traceEnv, withSession,
 } from '../../src/core/telemetry.js'
 import type { WorkItem } from '../../src/harness/worker.js'
+import { recordAnswered, recordRework, recordWait, waitedS } from '../../src/api/process-metrics.js'
 import { SHA, cfgOf, fakeGithub } from '../harness/fake.js'
 import { FakeS3 } from './fake-s3.js'
 
@@ -316,6 +317,37 @@ const STREAM: unknown[] = [
     modelUsage: { [MODEL]: { inputTokens: 100, outputTokens: 50, cacheReadInputTokens: 30, cacheCreationInputTokens: 5, webSearchRequests: 0, costUSD: 0.0123, contextWindow: 200000, maxOutputTokens: 64000 } },
   },
 ]
+
+describe('the process metrics (waits on people, rework)', () => {
+  const P = `project-${projectHash('acme/board')}`
+
+  it('a wait is the seconds from ready to the act, by kind and project; negative, absurd or unknown waits are dropped', async () => {
+    expect(recordWait('Acme/Board', 'change', '2026-11-02T10:00:00Z', '2026-11-02T10:10:00Z')).toBe(600)
+    expect(recordAnswered('acme/board', { asked_at: '2026-11-02T10:00:00Z', answered: { at: '2026-11-02T10:13:00Z' } })).toBe(780)
+    expect(recordWait('acme/board', 'gate', 1_800_000_100, 1_800_000_000)).toBeNull()
+    expect(recordWait('acme/board', 'gate', null, 1_800_000_000)).toBeNull()
+    expect(waitedS(0, 100 * 86_400)).toBeNull()
+    expect(recordAnswered('acme/board', { asked_at: '2026-11-02T10:00:00Z', answered: null })).toBeNull()
+    const w = await points('trace.project.wait')
+    expect(w.map((x) => [x.attrs, x.value, x.count]).sort()).toEqual([
+      [{ 'trace.project': P, 'trace.wait.kind': 'change' }, 600, 1],
+      [{ 'trace.project': P, 'trace.wait.kind': 'question' }, 780, 1],
+    ].sort())
+  })
+
+  it('rework counts by cause; a repository that is not one, or no project at all, records nothing', async () => {
+    recordRework('acme/board', 'sent_back')
+    recordRework('acme/board', 'sent_back')
+    recordProcessMetric('trace.project.rework', 1, { cause: 'asked_again' }, 'acme/board')
+    recordRework('not a repo', 'sent_back')
+    // the API runtime serves no one project: without the repository nothing is recorded
+    recordProcessMetric('trace.project.rework', 1, { cause: 'job_restarted' })
+    expect(await total('trace.project.rework', { 'trace.rework.cause': 'sent_back' })).toBe(2)
+    expect(await total('trace.project.rework', { 'trace.rework.cause': 'asked_again' })).toBe(1)
+    expect(await total('trace.project.rework', { 'trace.rework.cause': 'job_restarted' })).toBe(0)
+    expect((await points('trace.project.rework')).every((x) => x.attrs['trace.project'] === P)).toBe(true)
+  })
+})
 
 describe('Claude', () => {
   it('records the query, one chat span per model response, and one span per tool use, with tokens and cost', async () => {

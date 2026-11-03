@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { agentViews, cannot, controlsOf, jobViews } from '../../src/api/actions-jobs.js'
 import {
   type JobControl, type JobRow, OVERDUE_AFTER_S, STALE_AFTER_S, applyJobIndexSchema, changedSince, indexedHandle, isLive, loadControls, loadJobs, mayStart, moveUpOrder, pruneJobs, putControl,
-  putJob, queueOrder, typicalSeconds, lastWords, tailOf, TAIL_LINES,
+  putJob, queueOrder, typicalSeconds, lastWords, markLost, tailOf, TAIL_LINES,
 } from '../../src/core/job-index.js'
 import { projectHash } from '../../src/core/project.js'
 
@@ -191,5 +191,25 @@ describe('a job\'s last words', () => {
     expect(t[0]).toBe('line 9')
     expect(lastWords({ tail: null, vitals: null })).toBe('')
     expect(lastWords({ tail: 'not json', vitals: '{}' })).toBe('')
+  })
+})
+
+describe('lost jobs, declared once (LOST COUNTED ONCE)', () => {
+  it('stamps each running row past STALE_AFTER_S once, never the writer\'s own live jobs, nor finished or fresh ones', () => {
+    const d = db()
+    add(d, 'silent', { state: 'running', startedAt: AT - 3 * STALE_AFTER_S, beatAt: AT - 2 * STALE_AFTER_S })
+    add(d, 'mine', { state: 'running', startedAt: AT - 3 * STALE_AFTER_S, beatAt: AT - 2 * STALE_AFTER_S })
+    add(d, 'beating', { state: 'running', startedAt: AT - 60, beatAt: AT - 10 })
+    add(d, 'ended', { state: 'failed', startedAt: AT - 3 * STALE_AFTER_S, endedAt: AT - 2 * STALE_AFTER_S })
+    expect(markLost(d, AT, new Set(['mine']))).toEqual([{ id: 'silent', kind: 'task', agent: 'verify' }])
+    expect(loadJobs(d).find((j) => j.id === 'silent')?.lostAt).toBe(AT)
+    // the next write (this writer's or another's) finds the stamp: not counted again
+    expect(markLost(d, AT + 60)).toEqual([{ id: 'mine', kind: 'task', agent: 'verify' }])
+    expect(markLost(d, AT + 120)).toEqual([])
+    // a lost job that beats again keeps its stamp and its row's state: still not counted twice
+    putJob(d, 'silent', { beatAt: AT + 130 }, AT + 130)
+    putJob(d, 'silent', { beatAt: AT + 130 - 2 * STALE_AFTER_S }, AT + 131)
+    expect(markLost(d, AT + 200)).toEqual([])
+    expect(loadJobs(d).find((j) => j.id === 'silent')).toMatchObject({ state: 'running', lostAt: AT })
   })
 })

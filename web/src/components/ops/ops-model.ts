@@ -209,7 +209,7 @@ export function tileViews(tiles: OpsTile[], admin: boolean, month?: MonthCost | 
 export const WAIT_WORDS: Record<OpsWaitKind, string> = { question: 'Question answered', change: 'Change accepted', gate: 'Gate signed' }
 /** Why work was done twice, in words (the Rework table's rows, in this order). */
 export const REWORK_WORDS: Record<OpsReworkCause, string> = {
-  job_restarted: 'Jobs started again after being lost',
+  job_restarted: 'Jobs started again after they stopped',
   conflict_resolved: 'Changes that conflicted and were brought up to date',
   sent_back: 'Changes sent back (Ask for changes)',
   asked_again: 'Questions asked again',

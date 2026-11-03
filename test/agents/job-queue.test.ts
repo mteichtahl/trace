@@ -16,8 +16,8 @@ import {
 import { JobPaused, type JobRunner, createJobs } from '../../src/agents/runtime/jobs.js'
 import type { JobPayload } from '../../src/agents/runtime/schemas.js'
 import { PAUSE_KEPT, createAgentServer } from '../../src/agents/runtime/server.js'
-import { backendFor } from '../../src/core/central.js'
-import { JobIndexStore, loadJobs, loadBatch, putControl } from '../../src/core/job-index.js'
+import { type Backend, Conflict, backendFor } from '../../src/core/central.js'
+import { JobIndexStore, STALE_AFTER_S, loadJobs, loadBatch, putControl, putJob } from '../../src/core/job-index.js'
 import { JourneyStore } from '../../src/core/journey-store.js'
 import { trackEventWait, withJob } from '../../src/core/wait.js'
 import { cfgOf, fakeGithub } from '../harness/fake.js'
@@ -76,6 +76,38 @@ describe('the job index, from the jobs\' own events', () => {
     expect((await s.index.read(loadJobs)).result[0]).toMatchObject({ state: 'succeeded', summary: expect.stringMatching(/Still open: R7 at the low corner\.$/), endedAt: expect.any(Number) })
     w.stop()
     jobs.dispose()
+  })
+
+  it('a job that went silent is declared lost once, however many of the project\'s microVMs write the index', async () => {
+    // the bucket's conditional put is atomic (S3's If-Match), which the local directory's is not under one process's
+    // concurrent writes: an in-memory bucket that checks and writes in one step
+    const objects = new Map<string, { body: Uint8Array; etag: string }>()
+    let n = 0
+    const bucket: Backend = {
+      url: 'mem://lost', localPath: () => null, list: async () => [...objects.keys()],
+      get: async (k) => objects.get(k) ?? null, head: async (k) => objects.get(k)?.etag ?? null,
+      put: async (k, body, o = {}) => {
+        const had = objects.get(k)
+        if ((o.ifNoneMatch && had) || (o.ifMatch !== undefined && had?.etag !== o.ifMatch)) throw new Conflict(`${k} changed`)
+        const etag = `"${++n}"`
+        objects.set(k, { body, etag })
+        return etag
+      },
+    }
+    const s = { index: new JobIndexStore(bucket, REPO) }
+    const at = Date.now() / 1000
+    await s.index.update((db) => { putJob(db, 'gone', { kind: 'task', title: 'gone', state: 'running', agent: 'verify', session: 's', startedAt: at - 3 * STALE_AFTER_S, beatAt: at - 2 * STALE_AFTER_S }, at - 2 * STALE_AFTER_S); return { result: null } })
+    const said: string[] = []
+    const writers = [0, 1].map(() => {
+      const jobs = createJobs(async () => 'done', quiet)
+      return { jobs, w: indexJobs(jobs, s.index, (id) => jobs.payloadOf(id), { heartbeat: false, log: (l) => { said.push(l) } }) }
+    })
+    // both heartbeats at once, and again: one conditional put wins each time, and the stamp is there for the rest
+    await Promise.all(writers.map((x) => x.w.beat()))
+    await Promise.all(writers.map((x) => x.w.beat()))
+    expect(said.filter((l) => l.includes('gone is lost'))).toHaveLength(1)
+    expect((await s.index.read(loadJobs)).result.find((r) => r.id === 'gone')).toMatchObject({ state: 'running', lostAt: expect.any(Number) })
+    for (const x of writers) { x.w.stop(); x.jobs.dispose() }
   })
 
   it('a change that comes before the job\'s first row (its "started" log line, its route) waits for that row', async () => {
