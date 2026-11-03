@@ -65,6 +65,7 @@ import { applyEditsSoon } from './apply-edits.js'
 import { GitHubError, type GitHubApi, type MergeMethod, type PullDetail, type PullStatus, type PullSummary } from './github.js'
 import { SETTINGS_TTL_MS, cached } from './github-cache.js'
 import { recordRework, recordWait } from './process-metrics.js'
+import { backToDefine, changedRequirements } from './pending-changes.js'
 
 /** At most this many open changes get their status read (two GitHub calls each) in one list or journey. */
 export const MAX_STATUS = 5
@@ -465,6 +466,20 @@ export const CHANGE_ACTIONS = {
     // merged: the wait from ready to accepted (src/api/process-metrics.ts)
     recordWait(repo, 'change', d.ready_since, Date.now() / 1000)
     const stage = d.stage
+    // a change that alters a requirement after the baseline takes the project back to Define, where the person agrees
+    // it (docs/user-journey.md "Nothing goes to Fabricate while it is changing"). The merge stands either way; when the
+    // record cannot be read now, journey.get and gate.sign find the change before any gate past Define is signed
+    const back = await (async () => {
+      const r = await withJourneyDb(ctx, repo, (db) => loadJourney(db))
+      return r ? backToDefine(ctx, repo, r, await changedRequirements(ctx, repo, r), by) : null
+    })().catch(() => null)
+    if (back) {
+      return {
+        merged: true as const, sha, stage: 'define' as const, back_to: 'define' as const,
+        next: `Its work counts in the design now. Because ${back.reason}, the project went back to Define: agree the change in Requirements review, then sign the requirements baseline and each gate after it again.`,
+        ...(warning ? { warning } : {}),
+      }
+    }
     return {
       merged: true as const, sha, stage,
       next: d.kind !== 'work' ? 'It is applied.' : `Its work counts in the design now.${stage ? ` trace checks ${STAGE_NAMES[stage]}'s criteria again with it.` : ' trace checks the stage\'s criteria again with it.'}`,

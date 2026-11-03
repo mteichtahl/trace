@@ -3,6 +3,7 @@
  * Shared by the runtime (src/agents/runtime/server.ts), the dispatcher (src/agents/runtime/dispatch.ts) and the API runtime (src/api),
  * which starts the same jobs in-process.
  */
+import type { MemoryStatus } from './memory.js'
 import { z } from 'zod'
 import type { PromptRecord } from '../../prompts/resolve.js'
 import { WorkItemSchema } from '../../harness/worker.js'
@@ -240,6 +241,8 @@ export interface JobInfo {
   handoffId?: string
   /** Which prompt versions its model calls were built from: id, layer, version and the template's sha (never the text). */
   prompts?: PromptRecord[]
+  /** What memory did for it: off (and why), or how many events it saved and how many writes failed. */
+  memory?: MemoryStatus
   log: string[]
 }
 

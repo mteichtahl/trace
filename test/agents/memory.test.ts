@@ -9,7 +9,7 @@ import { type ClaudeOptions, type RunnerDeps, createRunner } from '../../src/age
 import type { JobPayload } from '../../src/agents/runtime/schemas.js'
 import {
   AgentMemory, FENCE_CLOSE, FENCE_OPEN, LEGACY_AGENTS, MAX_BLOCK_CHARS, MAX_EVENT_CHARS, MAX_TOOL_EVENTS, MemoryScopeError, NAMESPACE_TEMPLATES, NO_MEMORY,
-  type SendClient, actorIn, actorPrefix, agentActor, legacyActorsOf, memoryBlock, memoryFromEnv, namespaceOf, openJobMemory, parseActor, personActor,
+  type MemoryStatus, type SendClient, actorIn, actorPrefix, agentActor, legacyActorsOf, memoryBlock, memoryFromEnv, memoryLine, namespaceOf, openJobMemory, parseActor, personActor,
   projectPrefix, scrub, sessionIdFor, within,
 } from '../../src/agents/runtime/memory.js'
 import { memoryScope, tools as memoryTools } from '../../src/tools/memory/tools.js'
@@ -222,7 +222,11 @@ describe('job memory', () => {
     expect(memoryFromEnv({ TRACE_MEMORY_ID: 'not an id' })).toBeNull()
     expect(memoryFromEnv({ TRACE_MEMORY_ID: MEMORY_ID, AWS_REGION: 'us-east-1' })).toBeInstanceOf(AgentMemory)
     const plan = { actor: agentActor('o/r', 'worker'), session: 'pr-1', query: 'q', request: 'r' }
-    expect(await openJobMemory(null, plan, { log: () => undefined })).toBe(NO_MEMORY)
+    const off = await openJobMemory(null, plan, { log: () => undefined })
+    expect(off.context).toBe('')
+    expect(off.status()).toMatchObject({ state: 'off', saved: 0, failed: 0 })
+    expect(off.status().reason).toContain('TRACE_MEMORY_ID')
+    expect(NO_MEMORY.status().state).toBe('off')
     const f = new FakeMemory()
     f.fail = new Error('AccessDeniedException: not today')
     const lines: string[] = []
@@ -231,6 +235,28 @@ describe('job memory', () => {
     jm.observe({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'x', is_error: true, content: 'boom' }] } })
     await expect(jm.finish(true, 'done')).resolves.toBeUndefined()
     expect(lines.filter((l) => l.startsWith('memory:'))).toHaveLength(1)
+    // quiet in the log, but never invisible: the job's status says nothing was saved, and why
+    const st = jm.status()
+    expect(st).toMatchObject({ state: 'failed', saved: 0 })
+    expect(st.failed).toBeGreaterThan(0)
+    expect(st.reason).toContain('AccessDeniedException')
+    expect(memoryLine(st)).toMatch(/^memory: NOT saved \(\d+ failed\): .*AccessDeniedException/)
+  })
+
+  it('reports what was saved, and a partial save when some writes fail', async () => {
+    const f = new FakeMemory()
+    const plan = { actor: agentActor('o/r', 'worker'), session: 'pr-1', query: 'q', request: 'Fix the DRC' }
+    const jm = await openJobMemory(new AgentMemory(MEMORY_ID, f), plan, { log: () => undefined })
+    await jm.finish(true, 'Pushed abc.')
+    expect(jm.status()).toEqual({ state: 'saved', recalled: 0, saved: 2, failed: 0 })
+    expect(memoryLine(jm.status())).toBe('memory: saved 2 events, recalled 0')
+
+    const g = new FakeMemory()
+    const jm2 = await openJobMemory(new AgentMemory(MEMORY_ID, g), plan, { log: () => undefined })
+    await jm2.flush?.()
+    g.fail = new Error('ThrottlingException')
+    await jm2.finish(false, 'Failed.')
+    expect(jm2.status()).toMatchObject({ state: 'partial', saved: 1, failed: 1, reason: expect.stringContaining('ThrottlingException') })
   })
 
   it('records the request, a bounded number of key tool outcomes, and the result', async () => {
@@ -331,8 +357,9 @@ describe('job runner with memory', () => {
       env: { PATH: '/usr/bin' }, now: Date.now, memory: mem, ...(project ? { project } : {}),
     }
     const lines: string[] = []
-    const ctx = { jobId: 'job-m', signal: new AbortController().signal, log: (l: string) => { lines.push(l) }, startJob: () => ({ accepted: true, jobId: 'c' }) }
-    return { go: () => createRunner(d)(payload, ctx), calls, lines }
+    const statuses: MemoryStatus[] = []
+    const ctx = { jobId: 'job-m', signal: new AbortController().signal, log: (l: string) => { lines.push(l) }, startJob: () => ({ accepted: true, jobId: 'c' }), memory: (st: MemoryStatus) => { statuses.push(st) } }
+    return { go: () => createRunner(d)(payload, ctx), calls, lines, statuses }
   }
 
   const ITEM = { kind: 'ci-red' as const, number: 5, sha: 'a'.repeat(40), ref: 'claude/x', own: true, title: 'DRC fails on the 3V3 rail' }
@@ -412,7 +439,14 @@ describe('job runner with memory', () => {
     f.fail = new Error('ThrottledException')
     const g = run(new AgentMemory(MEMORY_ID, f), { kind: 'work-item', repository: 'o/r', item: ITEM })
     await expect(g.go()).resolves.toMatch(/3 turns/)
-    expect(g.lines.filter((l) => l.startsWith('memory:'))).toHaveLength(1)
+    // one warning when it first fails, and one line at the end saying what memory did for the job
+    const mem = g.lines.filter((l) => l.startsWith('memory:'))
+    expect(mem).toHaveLength(2)
+    expect(mem.at(-1)).toMatch(/^memory: NOT saved \(\d+ failed\): .*ThrottledException/)
+    expect(g.statuses).toEqual([expect.objectContaining({ state: 'failed', saved: 0 })])
+    expect(h.statuses).toEqual([expect.objectContaining({ state: 'off' })])
+    // and without memory, the job says it is off rather than nothing
+    expect(h.lines.filter((l) => l.startsWith('memory:'))).toEqual([expect.stringMatching(/^memory: off: .*TRACE_MEMORY_ID/)])
   })
 })
 
