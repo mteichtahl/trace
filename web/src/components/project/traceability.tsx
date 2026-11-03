@@ -9,12 +9,10 @@
  * lights its whole chain: every intent line, requirement and piece of evidence it is linked to, upstream and
  * downstream, with everything else faded. Clicking the empty canvas or pressing Escape clears it.
  */
-import '@xyflow/react/dist/base.css'
-import {
-  Background, Handle, type Edge, type Node, type NodeChange, type NodeProps, Position, ReactFlow, ReactFlowProvider, useReactFlow, useStore,
-} from '@xyflow/react'
-import { type ReactNode, memo, useCallback, useEffect, useMemo, useState } from 'react'
-import { CanvasFrame, type CanvasFrameProps } from '@/components/canvas/canvas-frame'
+import { Handle, type Edge, type Node, type NodeProps, Position } from '@xyflow/react'
+import { type ReactNode, memo, useMemo } from 'react'
+import type { CanvasFrameProps } from '@/components/canvas/canvas-frame'
+import { FlowCanvas, FlowView, HANDLE, type Lit, chainOf, litClass, litEdgeStyle, litOf, useFlowSelection } from '@/components/canvas/flow'
 import { StatusBadge } from '@/components/status-badge'
 import type { CoverageRow, TraceView } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
@@ -85,36 +83,9 @@ export function traceLinks(l: TraceLayout): TraceLink[] {
   ])
 }
 
-/**
- * A box's whole chain: the box, everything it comes from (upstream, to the intent) and everything that comes from it
- * (downstream, to the evidence), and the links on those paths. Siblings that only share a parent are not in it: a
- * requirement's chain holds its own intent lines and its own evidence, not the other requirements under that intent.
- * Pure.
- */
-export function chainOf(links: readonly TraceLink[], key: string): { nodes: Set<string>; links: Set<string> } {
-  const nodes = new Set([key])
-  const on = new Set<string>()
-  // two directed walks, so a walk never turns round at a shared parent or child
-  const walk = (from: 'source' | 'target', to: 'source' | 'target') => {
-    const stack = [key]
-    while (stack.length) {
-      const at = stack.pop()!
-      for (const l of links) {
-        if (l[from] !== at) continue
-        on.add(l.id)
-        if (!nodes.has(l[to])) {
-          nodes.add(l[to])
-          stack.push(l[to])
-        }
-      }
-    }
-  }
-  walk('source', 'target') // downstream, to the evidence
-  walk('target', 'source') // upstream, to the intent
-  return { nodes, links: on }
-}
+/** A box's whole chain: upstream to the intent, downstream to the evidence, never across to siblings. */
+export { chainOf }
 
-type Lit = 'none' | 'lit' | 'dim' | 'selected'
 type BoxData = { label: string; failing: boolean; dashed: boolean; lit: Lit; side: 'left' | 'right' | 'both'; width: number; body: ReactNode }
 type HeadData = { label: string; width: number }
 type BoxNode = Node<BoxData, 'box'>
@@ -128,15 +99,13 @@ const Box = memo(function Box({ data }: NodeProps<BoxNode>) {
         'hover:border-foreground/30',
         data.failing && 'border-destructive/60 bg-destructive/5',
         data.dashed && 'border-dashed',
-        data.lit === 'lit' && (data.failing ? 'border-destructive ring-1 ring-destructive/60' : 'border-primary ring-1 ring-primary/50'),
-        data.lit === 'selected' && (data.failing ? 'border-destructive ring-2 ring-destructive' : 'border-primary ring-2 ring-primary'),
-        data.lit === 'dim' && 'opacity-30',
+        litClass(data.lit, data.failing),
       )}
       style={{ width: data.width, height: BOX }}
     >
-      {data.side !== 'right' && <Handle type="target" position={Position.Left} isConnectable={false} className="!size-1 !min-h-0 !min-w-0 !border-0 !bg-transparent" />}
+      {data.side !== 'right' && <Handle type="target" position={Position.Left} isConnectable={false} className={HANDLE} />}
       {data.body}
-      {data.side !== 'left' && <Handle type="source" position={Position.Right} isConnectable={false} className="!size-1 !min-h-0 !min-w-0 !border-0 !bg-transparent" />}
+      {data.side !== 'left' && <Handle type="source" position={Position.Right} isConnectable={false} className={HANDLE} />}
     </div>
   )
 })
@@ -150,7 +119,7 @@ const nodeTypes = { box: Box, head: Head }
 /** The boxes and links for React Flow, lit for the selected box's chain. Pure apart from the JSX in each box. */
 export function traceElements(l: TraceLayout, links: readonly TraceLink[], selected: string | null): { nodes: (BoxNode | HeadNode)[]; edges: Edge[] } {
   const chain = selected ? chainOf(links, selected) : null
-  const lit = (key: string): Lit => (!chain ? 'none' : key === selected ? 'selected' : chain.nodes.has(key) ? 'lit' : 'dim')
+  const lit = (key: string): Lit => litOf(chain, selected, key)
   const head = (id: string, label: string, x: number, width: number): HeadNode => ({ id: `head:${id}`, type: 'head', position: { x, y: -28 }, data: { label, width }, selectable: false, focusable: false, draggable: false })
   const nodes: (BoxNode | HeadNode)[] = [
     ...(l.intents.length ? [head('intent', 'Intent', COL.intent.x, COL.intent.w)] : []),
@@ -203,14 +172,10 @@ export function traceElements(l: TraceLayout, links: readonly TraceLink[], selec
     })
   }
   const edges: Edge[] = links.map((k) => {
-    const on = chain?.links.has(k.id)
-    const stroke = k.failing ? 'var(--destructive)' : on ? 'var(--primary)' : 'var(--border)'
+    const on = chain?.links.has(k.id) ?? false
     return {
       id: k.id, source: k.source, target: k.target, selectable: false, focusable: false, zIndex: on ? 1 : 0,
-      style: {
-        stroke, strokeWidth: on ? 2.5 : k.failing ? 2 : 1.25, strokeDasharray: k.dashed ? '4 3' : undefined,
-        opacity: chain && !on ? 0.15 : 1, transition: 'opacity 150ms, stroke-width 150ms',
-      },
+      style: litEdgeStyle(on, !!chain && !on, { bad: k.failing, dashed: k.dashed }),
     }
   })
   return { nodes, edges }
@@ -226,96 +191,28 @@ export interface TraceabilityProps {
   onSelect?: (n: TraceNode | null) => void
 }
 
-/** The traceability view in its Canvas frame, the frame's zoom and fit driving React Flow's viewport. */
-export function TraceabilityCanvas(props: TraceabilityProps & Omit<CanvasFrameProps, 'children' | 'viewport' | 'filter'> & { filterControls?: ReactNode }) {
-  return (
-    <ReactFlowProvider>
-      <Framed {...props} />
-    </ReactFlowProvider>
-  )
-}
+const FIT = { padding: 0.08 }
 
-function Framed({ rows, trace, filter, selected, onSelect, filterControls, ...frame }: TraceabilityProps & Omit<CanvasFrameProps, 'children' | 'viewport' | 'filter'> & { filterControls?: ReactNode }) {
-  const flow = useReactFlow()
-  const zoom = useStore((s) => s.transform[2])
-  const viewport = useMemo(() => ({
-    zoom,
-    zoomIn: () => void flow.zoomIn({ duration: 150 }),
-    zoomOut: () => void flow.zoomOut({ duration: 150 }),
-    fit: () => void flow.fitView({ padding: 0.08, duration: 200 }),
-  }), [flow, zoom])
+/** The traceability view in its Canvas frame, the frame's zoom and fit driving React Flow's viewport. */
+export function TraceabilityCanvas({ rows, trace, filter, selected, onSelect, filterControls, ...frame }: TraceabilityProps & Omit<CanvasFrameProps, 'children' | 'viewport' | 'filter'> & { filterControls?: ReactNode }) {
   return (
-    <CanvasFrame {...frame} filter={filterControls} viewport={viewport}>
+    <FlowCanvas {...frame} filter={filterControls} fit={FIT}>
       <Traceability rows={rows} trace={trace} filter={filter} selected={selected} onSelect={onSelect} />
-    </CanvasFrame>
+    </FlowCanvas>
   )
 }
 
 /** The drawing itself; needs a ReactFlowProvider above it (TraceabilityCanvas gives one). */
 export function Traceability({ rows, trace, filter, selected: controlled, onSelect }: TraceabilityProps) {
-  const [own, setOwn] = useState<string | null>(null)
-  const selected = controlled === undefined ? own : controlled
+  const [selected, choose] = useFlowSelection(controlled, onSelect, parseKey)
   const layout = useMemo(() => layoutTrace(rows, trace, filter), [rows, trace, filter])
   const links = useMemo(() => traceLinks(layout), [layout])
   const { nodes, edges } = useMemo(() => traceElements(layout, links, selected), [layout, links, selected])
-  const flow = useReactFlow()
-
-  const choose = useCallback((key: string | null) => {
-    setOwn(key)
-    onSelect?.(key ? parseKey(key) : null)
-  }, [onSelect])
-
-  // a different set of boxes (a filter, new rows): fit them in view again
-  const shape = nodes.map((n) => n.id).join('|')
-  useEffect(() => {
-    const t = setTimeout(() => void flow.fitView({ padding: 0.08, duration: 200 }), 0)
-    return () => clearTimeout(t)
-  }, [shape, flow])
-
-  // the selection leaves the drawing (filtered out): clear it
-  useEffect(() => {
-    if (selected && !nodes.some((n) => n.id === selected)) choose(null)
-  }, [selected, nodes, choose])
-
-  // keyboard: Tab to a box and press Enter selects it; Escape clears (React Flow reports both as select changes)
-  const onNodesChange = useCallback((changes: NodeChange[]) => {
-    const on = changes.find((c) => c.type === 'select' && c.selected)
-    if (on && 'id' in on) {
-      if (on.id !== selected && !on.id.startsWith('head:')) choose(on.id)
-      return
-    }
-    if (selected && changes.some((c) => c.type === 'select' && !c.selected && c.id === selected)) choose(null)
-  }, [selected, choose])
-
   return (
-    <div className="h-full w-full" role="group" aria-label="Traceability: intent, requirements and evidence. Select a box to light its whole chain.">
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        onNodesChange={onNodesChange}
-        onNodeClick={(_, n) => { if (n.type === 'box') choose(n.id) }}
-        onPaneClick={() => selected && choose(null)}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        edgesFocusable={false}
-        elementsSelectable
-        multiSelectionKeyCode={null}
-        selectionKeyCode={null}
-        deleteKeyCode={null}
-        zoomOnScroll={false}
-        zoomActivationKeyCode={['Control', 'Meta']}
-        zoomOnDoubleClick={false}
-        preventScrolling={false}
-        minZoom={0.2}
-        maxZoom={2.5}
-        fitView
-        fitViewOptions={{ padding: 0.08 }}
-        proOptions={{ hideAttribution: false }}
-       
-      >
-        <Background gap={16} size={1} color="var(--border)" />
-      </ReactFlow>
-    </div>
+    <FlowView
+      nodes={nodes} edges={edges} nodeTypes={nodeTypes} selected={selected} onChoose={choose} fit={FIT}
+      refitKey={nodes.map((n) => n.id).join('|')}
+      label="Traceability: intent, requirements and evidence. Select a box to light its whole chain."
+    />
   )
 }
