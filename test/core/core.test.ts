@@ -13,7 +13,7 @@ import { doctor } from '../../src/core/doctor.js'
 import { callTool, offered } from '../../src/core/mcp.js'
 import * as onboard from '../../src/core/onboard.js'
 import { Registry, ToolError, defineTool } from '../../src/core/registry.js'
-import { Cache, Work, runAgent } from '../../src/core/store.js'
+import { Cache, SESSION_DETAILED, SESSION_JSON_MAX, SESSION_STEPS, Work, runAgent, runJob, trimJson } from '../../src/core/store.js'
 
 const tmp = (): string => mkdtempSync(join(tmpdir(), 'trace-core-'))
 function gitRepo(dir = join(tmp(), 'r')): string {
@@ -88,6 +88,87 @@ describe('run record and cache', () => {
       else process.env.TRACE_AGENT = was
     }
   })
+  it('records which job made each run (TRACE_JOB_ID, else gh-<GITHUB_RUN_ID>), or an explicit one; an older database gains the column after agent', () => {
+    const path = join(tmp(), 'jobs.db')
+    const old = new DatabaseSync(path)
+    old.exec("CREATE TABLE runs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, subject TEXT, started REAL NOT NULL, finished REAL, status TEXT NOT NULL DEFAULT 'running', summary TEXT, args TEXT, result TEXT, git_sha TEXT, agent TEXT)")
+    old.exec("INSERT INTO runs (id, kind, started) VALUES ('old-run', 'kicad.erc', 1)")
+    old.close()
+    expect(runJob({ TRACE_JOB_ID: ' job-1 ', GITHUB_RUN_ID: '9' })).toBe('job-1')
+    expect(runJob({ GITHUB_RUN_ID: '42' })).toBe('gh-42')
+    expect(runJob({})).toBeNull()
+    const was = { j: process.env.TRACE_JOB_ID, g: process.env.GITHUB_RUN_ID }
+    try {
+      const w = new Work(path)
+      expect((w.db.prepare("SELECT name FROM pragma_table_info('runs')").all() as { name: string }[]).map((c) => c.name).slice(-2)).toEqual(['agent', 'job'])
+      process.env.TRACE_JOB_ID = 'job-a'
+      const a = w.start('kicad.erc')
+      delete process.env.TRACE_JOB_ID
+      delete process.env.GITHUB_RUN_ID
+      const none = w.start('kicad.drc')
+      const named = w.start('sim.spice', { job: 'job-b' })
+      expect(Object.fromEntries(w.runs(undefined, 10).map((r) => [r.id, r.job]))).toEqual({ 'old-run': null, [a]: 'job-a', [none]: null, [named]: 'job-b' })
+      expect(w.run(a)?.job).toBe('job-a')
+      w.close()
+    } finally {
+      for (const [k, v] of [['TRACE_JOB_ID', was.j], ['GITHUB_RUN_ID', was.g]] as const) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+    }
+  })
+  it('a run\'s session: every run of its job oldest first, args and result only for it, failed steps and the nearest others, cut to 4 kB', () => {
+    const w = new Work(join(tmp(), 'session.db'))
+    const at = (id: string, t: number): void => { w.db.prepare('UPDATE runs SET started=? WHERE id=?').run(t, id) }
+    const ids: string[] = []
+    for (let i = 0; i < 30; i++) {
+      const id = w.start('mcp.tool', { job: 'job-s', agent: 'impl', args: { i } })
+      at(id, 1000 + i)
+      w.finish(id, i === 2 ? 'fail' : 'pass', `step ${i}`, { ok: i })
+      ids.push(id)
+    }
+    const other = w.start('mcp.tool', { job: 'job-other' }); at(other, 1015)
+    const lone = w.start('kicad.erc', { job: null })
+    const big = w.start('mcp.tool', { job: 'job-s', args: { blob: 'x'.repeat(SESSION_JSON_MAX * 2) } }); at(big, 2000)
+    const me = ids[20]!
+    const s = w.session(me)!
+    expect(s.job).toBe('job-s')
+    expect(s.agent).toBe('impl')
+    expect(s.steps.map((x) => x.id)).toEqual([...ids, big])
+    expect(s.steps.find((x) => x.id === me)).toMatchObject({ kind: 'mcp.tool', summary: 'step 20', status: 'pass', started: 1020, args: { i: 20 }, result: { ok: 20 } })
+    // the failed one far away carries its args; of the others, the SESSION_DETAILED nearest
+    expect(s.steps[2]).toMatchObject({ status: 'fail', args: { i: 2 } })
+    const detailed = s.steps.filter((x) => 'args' in x).map((x) => x.id)
+    expect(detailed).toHaveLength(SESSION_DETAILED + 2)
+    expect(s.steps[0]).not.toHaveProperty('args')
+    expect(s.steps[0]).not.toHaveProperty('result')
+    expect(detailed).toContain(big)
+    const cut = s.steps.find((x) => x.id === big)!.args as string
+    expect(cut.length).toBe(SESSION_JSON_MAX)
+    expect(cut.endsWith('…')).toBe(true)
+    expect(w.session(lone)).toBeNull()
+    expect(w.session('nope')).toBeNull()
+    expect(trimJson({ a: 1 })).toEqual({ a: 1 })
+    w.close()
+  })
+  it('a long session answers at most SESSION_STEPS steps, the ones around the run', () => {
+    const w = new Work(join(tmp(), 'long.db'))
+    w.db.exec('BEGIN')
+    const ids: string[] = []
+    for (let i = 0; i < SESSION_STEPS + 50; i++) {
+      const id = w.start('mcp.tool', { job: 'job-l' })
+      w.db.prepare('UPDATE runs SET started=?, status=? WHERE id=?').run(i, 'pass', id)
+      ids.push(id)
+    }
+    w.db.exec('COMMIT')
+    const last = w.session(ids[ids.length - 1]!)!.steps
+    expect(last).toHaveLength(SESSION_STEPS)
+    expect(last[last.length - 1]!.id).toBe(ids[ids.length - 1])
+    const first = w.session(ids[0]!)!.steps
+    expect(first).toHaveLength(SESSION_STEPS)
+    expect(first[0]!.id).toBe(ids[0])
+    const mid = w.session(ids[125]!)!.steps.map((x) => x.id)
+    expect(mid).toHaveLength(SESSION_STEPS)
+    expect(mid.indexOf(ids[125]!)).toBe(SESSION_STEPS / 2)
+    w.close()
+  })
   it('caches with expiry', () => {
     const c = new Cache(join(tmp(), 'c.db'))
     c.put('ns', 'k', { a: 1 }, { ttlSeconds: 60 })
@@ -107,7 +188,7 @@ describe('db merge driver', () => {
     writeFileSync(ours, readFileSync(base)); writeFileSync(theirs, readFileSync(base))
     const o = new Work(ours); const t = new Work(theirs)
     const ro = o.start('kicad.drc'); o.finish(ro, 'pass')
-    const rt = t.start('sim.spice'); t.measure(rt, 'x', 1); t.finish(rt, 'fail')
+    const rt = t.start('sim.spice', { job: 'job-t', agent: 'ams' }); t.measure(rt, 'x', 1); t.finish(rt, 'fail')
     o.db.exec(`UPDATE settings SET value='"squash"' WHERE key='prs.merge_method'`) // only we changed it
     t.db.exec(`UPDATE settings SET value='"develop"' WHERE key='branch'`)         // only they changed it
     o.db.exec(`UPDATE settings SET value='"b"' WHERE key='worker.model'`)         // both, differently
@@ -117,6 +198,7 @@ describe('db merge driver', () => {
     const m = new Work(ours)
     expect(new Set(m.runs().map((r) => r.id))).toEqual(new Set([ro, rt]))
     expect(m.run(rt)?.measurements[0]?.name).toBe('x')
+    expect(m.run(rt)).toMatchObject({ agent: 'ams', job: 'job-t' })
     expect(Object.fromEntries(m.db.prepare('SELECT key, value FROM settings').all().map((r) => [r.key, r.value])))
       .toEqual({ branch: '"develop"', 'prs.merge_method': '"squash"', 'worker.model': '"b"' })
     m.close()

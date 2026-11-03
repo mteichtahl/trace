@@ -69,7 +69,48 @@ export interface ChangeSummary {
   /** the gate criteria it says it waits on a person's approval of (ChangeFacts.awaiting) */
   awaiting?: string[]
 }
-export interface CheckLine { name: string; state: 'passed' | 'failed' | 'running' | 'skipped'; summary: string | null }
+/**
+ * One check of a change's head commit. `id` opens it with change.check: `cr:<check run id>` for a check run,
+ * `job:<Actions job id>` for a workflow run's job, null for a commit status (nothing more to open).
+ */
+export interface CheckLine { id: string | null; name: string; state: 'passed' | 'failed' | 'running' | 'skipped'; summary: string | null }
+/** One check in full (change.check): its report, annotations and, for a GitHub Actions job, the end of its log. */
+export interface CheckDetail {
+  id: string; name: string; state: CheckLine['state']
+  /** one line, as in checks_list */
+  summary: string | null
+  /** the check's own report: output.summary + output.text, markdown, at most CHECK_TEXT_MAX bytes */
+  text: string | null
+  started_at: string | null; completed_at: string | null
+  /** at most CHECK_ANNOTATIONS */
+  annotations: { path: string; line: number | null; level: 'failure' | 'warning' | 'notice'; title: string | null; message: string }[]
+  /** the Actions job's log end (cleaned), when there is one */
+  log: { text: string; truncated: boolean } | null
+  /** admins only: the check on GitHub */
+  url?: string
+}
+/** A check's report is cut to this many bytes (UTF-8). */
+export const CHECK_TEXT_MAX = 60 * 1024
+/** At most this many annotations of a check are answered. */
+export const CHECK_ANNOTATIONS = 50
+
+/** The checks list of a change: each check's id, name, state and one line. */
+export const checkLines = (runs: readonly CheckRunDetail[] | null): CheckLine[] =>
+  (runs ?? []).map((c) => ({ id: c.id ?? null, name: c.name, state: checkState(c), summary: c.summary }))
+
+/** A check run's report as change.check answers it: its summary then its text, cut to `max` bytes; null when empty. */
+export function checkText(summary: string | null | undefined, text: string | null | undefined, max = CHECK_TEXT_MAX): string | null {
+  const all = [summary?.trim(), text?.trim()].filter((x): x is string => !!x).join('\n\n')
+  if (!all) return null
+  const b = Buffer.from(all, 'utf8')
+  if (b.length <= max) return all
+  // cut on a character boundary, with a mark that it was cut, within max
+  const mark = '\n\n…'
+  return b.subarray(0, max - Buffer.byteLength(mark)).toString('utf8').replace(/\uFFFD+$/, '') + mark
+}
+
+/** GitHub's annotation levels in the three words the sheet uses. */
+export const annotationLevel = (l: string): CheckDetail['annotations'][number]['level'] => (l === 'failure' || l === 'warning' ? l : 'notice')
 export interface Recommendation { verdict: 'accept' | 'ask' | 'wait' | 'none'; why: string }
 export interface ChangeDetail extends ChangeSummary {
   summary: string[]
