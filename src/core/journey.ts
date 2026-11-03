@@ -675,14 +675,123 @@ const liveSignature = (r: JourneyRecord, gate: string): SignatureRow | null =>
 /** The waivers a gate's signer must open and acknowledge: every open waiver taken in that gate's stage. */
 const stageWaivers = (r: JourneyRecord, stage: StageId): WaiverRow[] => r.waivers.filter((w) => w.stage === stage && w.closedAt === null)
 
+// ------------------------------------------------------------------ pending changes (docs/user-journey.md "Nothing goes to Fabricate while it is changing")
+
+/**
+ * What is still changing in the design, as the API sees it when a gate is read or signed:
+ *
+ *   changes       the changes trace made that are still open (pull requests not yet accepted or discarded)
+ *   requirements  requirements changed after the requirements baseline and not agreed again (normally the project is
+ *                 already back in Define for them: returnForChange)
+ *   unknown       why trace could not look (GitHub unreachable): Fabricate stays locked rather than guessing
+ */
+export interface PendingChanges {
+  changes: readonly { number: number; title: string; ready?: boolean }[]
+  requirements: readonly string[]
+  unknown?: string | null | undefined
+}
+
+const ordOf = (r: Pick<JourneyRecord, 'stages'>, id: StageId): number => r.stages.find((s) => s.id === id)?.ord ?? -1
+
+/**
+ * Whether signing gate `id` lets the project move to Fabricate: the order approval itself, or the last gate of the
+ * stage before it (Sign-off), whose signature passes Release (no gate of its own) and opens Fabricate. A project with
+ * no Fabricate stage (firmware) has none.
+ */
+export function guardsFabricate(r: Pick<JourneyRecord, 'stages' | 'gates'>, id: string): boolean {
+  const gate = r.gates.find((g) => g.id === id)
+  const fab = ordOf(r, 'fabricate')
+  if (!gate || fab < 0) return false
+  if (gate.id === 'fabricate.order') return true
+  const at = ordOf(r, gate.stage)
+  if (at < 0 || at >= fab) return false
+  const own = r.gates.filter((g) => g.stage === gate.stage)
+  if (own.some((g) => g.ord > gate.ord)) return false
+  // every stage between it and Fabricate has no gate: the signature carries the project straight there
+  return r.stages.filter((s) => s.ord > at && s.ord < fab).every((s) => !r.gates.some((g) => g.stage === s.id))
+}
+
+const quoted = (xs: readonly { title: string }[]): string => xs.slice(0, 3).map((c) => `"${c.title}"`).join(', ') + (xs.length > 3 ? ` and ${xs.length - 3} more` : '')
+
+/** What pending changes stop on gate `id`, in plain words (empty: nothing pending, or the gate does not lead to Fabricate). */
+export function pendingBlockers(r: Pick<JourneyRecord, 'stages' | 'gates'>, id: string, pending: PendingChanges | null | undefined): string[] {
+  if (!pending || !guardsFabricate(r, id)) return []
+  const out: string[] = []
+  if (pending.unknown) out.push(`trace could not check for open changes just now (${pending.unknown.replace(/\.$/, '')}), so Fabricate stays locked. Try again in a minute.`)
+  const n = pending.requirements.length
+  if (n) out.push(`${n === 1 ? `Requirement ${pending.requirements[0]} was` : `Requirements ${pending.requirements.join(', ')} were`} changed after the requirements baseline: agree ${n === 1 ? 'it' : 'them'} in Define before anything goes to Fabricate.`)
+  const c = pending.changes.length
+  if (c) out.push(`Accept or discard ${plural(c, 'open change')} from trace first (${quoted(pending.changes)}): what goes to Fabricate must be the design as accepted, with nothing still changing.`)
+  return out
+}
+
+/**
+ * The view with the pending changes applied to the gates that lead to Fabricate: each says what is pending and may
+ * not be signed. When the next step is signing one of them, it becomes settling the pending change instead: the
+ * oldest open change (ready first) or, for a changed requirement, Requirements review.
+ */
+export function withPending(r: Pick<JourneyRecord, 'stages' | 'gates'>, view: JourneyView, viewer: Viewer, pending: PendingChanges | null | undefined): JourneyView {
+  if (!pending) return view
+  const gates = view.gates.map((g) => {
+    const extra = g.signature ? [] : pendingBlockers(r, g.id, pending)
+    return extra.length ? { ...g, may_sign: false, missing: [...extra, ...g.missing.filter((m) => !extra.includes(m))] } : g
+  })
+  let next = view.next
+  const locked = next.kind === 'gate' && next.ref?.kind === 'gate' ? gates.find((g) => g.id === next.ref?.id && pendingBlockers(r, g.id, pending).length) : undefined
+  if (locked) {
+    const mine = viewer.admin || viewer.part === 'contributor'
+    const change = pending.changes.find((c) => c.ready) ?? pending.changes[0]
+    const why = 'Nothing goes to Fabricate while the design is still changing: what is ordered must be what was accepted.'
+    const base = { belongs_to: mine ? 'you' as const : 'contributors' as const, yours: mine, why, stage: next.stage, step: null, after: `Once nothing is pending, ${locked.title} is ${viewer.admin ? 'yours' : 'an admin\'s'} to sign.` }
+    if (pending.requirements.length) {
+      next = { ...base, kind: 'task', summary: `${pendingBlockers(r, locked.id, { changes: [], requirements: pending.requirements })[0]}`, recommendation: null, button: 'Open Requirements review', ref: { kind: 'skill', id: 'requirements-review' } }
+    } else if (change) {
+      next = {
+        ...base, kind: change.ready ? 'review' : 'task',
+        summary: `${cap(locked.title)} is locked: ${plural(pending.changes.length, 'change')} from trace ${pending.changes.length === 1 ? 'is' : 'are'} still open. Accept or discard ${pending.changes.length === 1 ? 'it' : 'them'} first.`,
+        recommendation: change.ready ? `Review "${change.title}" first.` : null, button: mine ? 'Review the change' : 'Read the change', ref: { kind: 'change', id: String(change.number) },
+      }
+    } else {
+      next = { ...next, summary: `${cap(locked.title)} is locked: ${pending.unknown ?? 'trace could not check for open changes'}.`, recommendation: null, button: 'Check again', after: base.after }
+    }
+  }
+  return { ...view, gates, next }
+}
+
+/** The design changes that take a project back to an earlier stage, and the stage each one belongs to. */
+export const CHANGE_STAGE: Readonly<Record<string, StageId>> = { intent: 'define', 'intent.uncovered': 'define', requirement: 'define' }
+
+/**
+ * Take the project back to `stage` because something it decided has changed (a requirement, after the baseline): the
+ * stage is reopened with `reason`, the gates from there on stop counting, and the stage's person-owned criteria are
+ * not met again, so the changed work is agreed before the gate is signed again. Evidence trace owns carries forward
+ * and is checked again by the agents. Nothing happens while the project is at or before that stage; returns the stage
+ * the project went back to, or null.
+ */
+export function returnForChange(db: DatabaseSync, stage: StageId, reason: string, by: string): StageId | null {
+  const r = need(db)
+  const target = r.stages.find((s) => s.id === stage)
+  const cur = r.stages.find((s) => s.id === r.journey.currentStage)
+  if (!target || !cur || target.ord >= cur.ord) return null
+  const t = now()
+  transaction(db, () => {
+    reopenStage(db, r, target.id, reason, by, t)
+    const gates = r.gates.filter((g) => g.stage === target.id).map((g) => g.id)
+    for (const c of r.criteria.filter((x) => gates.includes(x.gate) && x.owner === 'person' && x.status === 'met')) {
+      db.prepare('UPDATE gate_criteria SET status=\'not_met\', checked_at=?, checked_by=?, updated=? WHERE id=?').run(t, by, t, c.id)
+    }
+  })
+  return target.id
+}
+
 /**
  * What still stops `viewer` signing gate `id`, in plain words (empty: they may sign). Pass the waiver ids they are
  * acknowledging with the signature; waivers acknowledged before count too.
  */
-export function signBlockers(r: JourneyRecord, id: string, viewer: Viewer, acknowledging: readonly string[] = []): string[] {
+export function signBlockers(r: JourneyRecord, id: string, viewer: Viewer, acknowledging: readonly string[] = [], pending?: PendingChanges | null): string[] {
   const gate = r.gates.find((g) => g.id === id)
   if (!gate) return [`There is no gate called ${id} in this project.`]
-  const out: string[] = []
+  const out: string[] = [...pendingBlockers(r, id, pending)]
   if (!viewer.admin) out.push('Only an admin can sign a gate.')
   if (gate.stage !== r.journey.currentStage) out.push(`${gateTitle(gate)[0]?.toUpperCase()}${gateTitle(gate).slice(1)} is not in the current stage (${STAGE_NAMES[r.journey.currentStage]}).`)
   if (liveSignature(r, id)) out.push('This gate is already signed.')
@@ -887,6 +996,14 @@ function baseNext(r: JourneyRecord, viewer: Viewer, at: number): Omit<NextStep, 
   // Something failed: the current stage was reopened and nothing of it is met again yet.
   if (stage && stage.reopenedAt !== null && open && !blocking.length && r.criteria.filter((c) => c.gate === open.id).every((c) => c.status !== 'met')) {
     const mine = viewer.admin || viewer.part === 'contributor'
+    // back in Define: a requirement changed (returnForChange). It is agreed in Requirements review, not a failure
+    if (stageId === 'define') {
+      return {
+        kind: 'task', belongs_to: mine ? 'you' : 'contributors', yours: mine, summary: `Back in Define: ${(stage.reopenedReason ?? 'a requirement changed').replace(/\.$/, '')}. Agree the change in Requirements review.`,
+        why: 'A changed requirement is agreed before any gate after it is signed again, so nothing goes to Fabricate on the old one.', recommendation: null,
+        button: mine ? 'Open Requirements review' : 'Read the requirements', stage: stageId, ref: { kind: 'skill', id: 'requirements-review' },
+      }
+    }
     return {
       kind: 'failed', belongs_to: mine ? 'you' : 'contributors', yours: mine, summary: `${stageName} was reopened: ${(stage.reopenedReason ?? 'something failed').replace(/\.$/, '')}.`,
       why: 'A failure reopens the earliest stage it touches, and work starts again from there.', recommendation: null, button: 'See what failed', stage: stageId, ref: { kind: 'stage', id: stageId },
@@ -1223,11 +1340,11 @@ export function setCriterion(db: DatabaseSync, id: string, status: 'met' | 'not_
 export interface Signer { hash: string; label: string; also?: readonly string[] | undefined }
 
 /** Sign a gate (the caller has checked the signer is an admin). Moves the project on when it closes the stage. */
-export function signGate(db: DatabaseSync, id: string, signer: Signer, o: { acknowledged?: readonly string[] | undefined; notes?: string | null | undefined; facts?: AgentFacts | null | undefined } = {}): { gate: GateView; advanced_to: StageId | null; released: boolean; summary: string } {
+export function signGate(db: DatabaseSync, id: string, signer: Signer, o: { acknowledged?: readonly string[] | undefined; notes?: string | null | undefined; facts?: AgentFacts | null | undefined; pending?: PendingChanges | null | undefined } = {}): { gate: GateView; advanced_to: StageId | null; released: boolean; summary: string } {
   // the agents' checks of the criteria trace owns count; the signing rules are the same
   const r = withFacts(need(db), o.facts)
   const viewer: Viewer = { hash: signer.hash, label: signer.label, also: signer.also, admin: true, part: 'contributor' }
-  const blockers = signBlockers(r, id, viewer, o.acknowledged ?? [])
+  const blockers = signBlockers(r, id, viewer, o.acknowledged ?? [], o.pending)
   if (blockers.length) throw new JourneyError(`The gate cannot be signed yet. ${blockers.join(' ')}`)
   const gate = r.gates.find((g) => g.id === id) as GateRow
   const t = now()
