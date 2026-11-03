@@ -36,6 +36,8 @@ export interface DecisionEntry {
   reason?: string
   state?: 'open' | 'approved' | 'rejected' | 'signed' | 'returned' | 'answered' | 'active' | 'closed'
   to?: string
+  /** the record keeps no time for it (a waiver in force): the timeline lists it apart rather than as today */
+  undated?: boolean
 }
 export interface JourneyMore extends Journey {
   decisions?: DecisionEntry[]
