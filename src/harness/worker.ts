@@ -7,9 +7,18 @@
  * worker.max_attempts attempts on the same head it is handed to worker.escalate_to once, then left alone. Branches
  * that don't start with worker.own_branch_prefix belong to a person: they are worked on only once that person has not
  * pushed for worker.others_branches_after_minutes, and only with merge commits.
+ *
+ * Handing an item to worker.escalate_to is a mention on GitHub, which most people never read. So every pick also
+ * brings the agents' facts in line (src/core/stuck-work.ts): a stuck note for each item at max attempts, saying what
+ * was tried and trace's recommendation, which the app shows as a "Needs you" item; and the notes of items that moved
+ * on, resolved. It needs the central bucket (TRACE_PROJECT_HOME or TRACE_HOME, and credentials that may write this
+ * project's journey-agent/ folder: the worker runtime's role on AgentCore, the repository's TRACE_AWS_ROLE in GitHub
+ * Actions); without them, or when the write fails, the GitHub mention is the only word and the pick goes on.
  */
 import { z } from 'zod'
+import { AgentFactsStore, projectsBackend, projectsFromEnv } from '../core/agent-facts.js'
 import type { TraceConfig } from '../core/config.js'
+import { type StuckItem, reportWords, sourceKey, syncStuckWork } from '../core/stuck-work.js'
 import { SPECIALISTS } from '../agents/index.js'
 import { type Route, RouteSchema, SpecialistKindSchema } from '../agents/kinds.js'
 import { type CheckEvidence, type RouteInput, route } from '../agents/router.js'
@@ -73,7 +82,35 @@ const claimedAt = (cs: CommentLike[]): number[] =>
   cs.map((c) => CLAIM.exec(c.body ?? '')?.[1]).filter((t): t is string => Boolean(t)).map(Date.parse).filter(Number.isFinite)
 const attempts = (cs: CommentLike[], sha: string): number => cs.filter((c) => (c.body ?? '').includes(`<!-- trace-attempt: ${sha} -->`)).length
 
-export async function pick({ github, context, core, cfg, env }: Deps, now: number = Date.now(), via?: string): Promise<void> {
+/**
+ * The agents' facts of `repository`, where this step can write them (src/core/agent-facts.ts projectsFromEnv), or
+ * null. GITHUB_REPOSITORY is not trusted for which project: the repository the pick runs on is.
+ */
+export function factsStore(repository: string, env: Record<string, string | undefined> = process.env): AgentFactsStore | null {
+  const where = projectsFromEnv({ ...env, TRACE_PROJECT: repository })
+  return where ? new AgentFactsStore(projectsBackend(where.projects), where.repository) : null
+}
+
+/** Bring the stuck notes in line (src/core/stuck-work.ts). Never fails the pick: the GitHub mention stands either way. */
+async function recordStuck(repository: string, stuck: readonly StuckItem[], claimed: readonly string[], core: Deps['core'], store: AgentFactsStore | null | undefined): Promise<void> {
+  const s = store === undefined ? factsStore(repository) : store
+  if (!s) {
+    if (stuck.length) core.info('The stuck items are not recorded for the app: this step has no TRACE_HOME (or TRACE_PROJECT_HOME).')
+    return
+  }
+  try {
+    const { result } = await s.update((db) => {
+      const r = syncStuckWork(db, stuck, claimed)
+      return { result: r, changed: r.added.length + r.resolved.length > 0 }
+    })
+    if (result.added.length || result.resolved.length) core.info(`Stuck notes: added ${result.added.join(', ') || 'none'}; resolved ${result.resolved.join(', ') || 'none'}`)
+  } catch (e) {
+    core.warning(`The stuck items could not be recorded for the app: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}`)
+  }
+}
+
+/** `facts`: where the stuck notes go (tests); absent, from the step's environment; null, nowhere. */
+export async function pick({ github, context, core, cfg, env }: Deps, now: number = Date.now(), via?: string, facts?: AgentFactsStore | null): Promise<void> {
   const { owner, repo } = context.repo
   core.setOutput('items', '[]')
   core.setOutput('runner', cfg.worker.runner)
@@ -81,14 +118,22 @@ export async function pick({ github, context, core, cfg, env }: Deps, now: numbe
   const items: WorkItem[] = []
   const known = new Map<number, { labels: string[]; body: string | null | undefined }>()
   const blocked: { n: number; kind: WorkItem['kind']; sha: string; marker: string }[] = []
+  const stuck: StuckItem[] = []
+  const claimed: string[] = []
 
   const consider = async (item: WorkItem): Promise<void> => {
     // Only markers left by the workflows or the agents count: anyone who can comment could otherwise stall an item.
     const cs = (await comments(github, owner, repo, item.number)).filter((c) => trustedAuthor(c, env.AGENT_LOGIN))
-    if (claimedAt(cs).some((t) => now - t < cfg.worker.claim_hours * 3600e3)) return core.info(`#${item.number} (${item.kind}) is claimed: skipped`)
+    if (claimedAt(cs).some((t) => now - t < cfg.worker.claim_hours * 3600e3)) {
+      claimed.push(sourceKey(item))
+      return core.info(`#${item.number} (${item.kind}) is claimed: skipped`)
+    }
     if (attempts(cs, item.sha) >= cfg.worker.max_attempts) {
       const marker = `<!-- trace-escalated: ${item.sha} -->`
       if (!cs.some((c) => (c.body ?? '').includes(marker))) blocked.push({ n: item.number, kind: item.kind, sha: item.sha, marker })
+      // the newest report an attempt left (an Actions report, or the AgentCore agent's last words)
+      const report = [...cs].reverse().find((c) => /<!-- trace-(report|agent-done):/.test(c.body ?? ''))
+      stuck.push({ kind: item.kind, number: item.number, sha: item.sha, title: item.title, attempts: cfg.worker.max_attempts, lastReport: report ? reportWords(report.body ?? '') : null })
       return core.info(`#${item.number} had ${cfg.worker.max_attempts} attempts on ${item.sha === 'issue' ? 'this issue' : short(item.sha)}: left for a person`)
     }
     items.push(item)
@@ -123,6 +168,7 @@ export async function pick({ github, context, core, cfg, env }: Deps, now: numbe
     await github.rest.issues.createComment({ owner, repo, issue_number: b.n,
       body: `${who}the worker has tried this ${cfg.worker.max_attempts} times (${b.kind}${b.sha === 'issue' ? '' : ` on ${short(b.sha)}`}) without resolving it, so it is left for a person. The attempts' comments above say what was tried. A new push, or deleting the attempt comments, puts it back in the queue.\n${b.marker}` })
   }
+  await recordStuck(`${owner}/${repo}`, stuck, claimed, core, facts)
 
   const picked: WorkItem[] = []
   for (const it of items.slice(0, cfg.worker.max_parallel)) {
