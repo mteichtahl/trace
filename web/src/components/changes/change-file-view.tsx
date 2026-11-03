@@ -5,11 +5,11 @@
  * sit side by side. A file added or removed shows its one side.
  */
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { CompareView } from '@/components/files/compare'
 import { resolveUrl, useFileText } from '@/components/files/data'
-import { baseName, extOf } from '@/components/files/kinds'
+import { baseName, extOf, viewerKind } from '@/components/files/kinds'
 import { svgDataUrl } from '@/components/files/sanitize'
 import { PictureCompare } from '@/components/files/viewers/image'
 import { OverlayView, overlayAvailable } from './overlay'
@@ -19,6 +19,8 @@ import { KiCanvasView } from '@/components/files/viewers/kicad'
 import { q } from '@/lib/queries'
 import type { ChangeFile } from '@/lib/types'
 import { cn } from '@/lib/utils'
+
+const DatabaseCompare = lazy(() => import('@/components/files/viewers/database').then((m) => ({ default: m.DatabaseCompare })))
 
 type Side = 'before' | 'after' | 'both' | 'overlay'
 
@@ -102,6 +104,24 @@ export function ChangeFileView({ repo, number, file }: { repo: string; number: n
   if (!d.data) return <ViewerLoading size="sheet" label="Opening the change to this file" />
   const { before, after, binary } = d.data
   if (file.kind === 'schematic' || file.kind === 'board') return <KiCadSides repo={repo} file={file} before={before} after={after} />
+  // a database is stored as bytes, but its tables and rows are shown and compared, read in the browser
+  if (viewerKind(file.path) === 'database') {
+    const at = (side: { ref: string; path?: string } | null) => (side ? { file: { repo, path: side.path ?? file.path }, commit: side.ref } : null)
+    return (
+      <div className="h-full min-h-[360px]">
+        <Suspense fallback={<ViewerLoading size="sheet" label="Opening the database" />}>
+          {before && after ? (
+            <DatabaseCompare before={at(before)} after={at(after)} size="sheet" />
+          ) : (
+            <div className="flex h-full flex-col">
+              <p className="border-b px-3 py-1.5 text-xs text-muted-foreground">{after ? 'A new database in this change.' : 'This change removes the database. Its last version:'}</p>
+              <div className="min-h-0 flex-1"><ViewerFor file={{ repo, path: before?.path ?? file.path }} kind="database" size="sheet" commit={(after ?? before)!.ref} /></div>
+            </div>
+          )}
+        </Suspense>
+      </div>
+    )
+  }
   if (binary || file.kind === 'binary') return <Note>This file is not text or a picture, so it cannot be shown here. Use View on GitHub to download either version.</Note>
   const ref = { repo, path: file.path }
   // one side only: added or removed

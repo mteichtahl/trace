@@ -29,6 +29,7 @@ const VIEWERS: Record<ViewerKind, Lazy> = {
   markdown: lazy(() => import('./markdown')),
   firmware: lazy(() => import('./firmware')),
   archive: lazy(() => import('./archive')),
+  database: lazy(() => import('./database')),
   unknown: UnknownViewer as Lazy,
 }
 

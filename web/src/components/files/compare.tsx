@@ -15,6 +15,9 @@ import { svgDataUrl } from './sanitize'
 import { AREA, Controls, Note, ViewerError, ViewerLoading, type ViewerSize } from './viewers/common'
 import { PictureCompare } from './viewers/image'
 import { KiCadCompare } from './viewers/kicad'
+import { lazy, Suspense } from 'react'
+
+const DatabaseCompare = lazy(() => import('./viewers/database').then((m) => ({ default: m.DatabaseCompare })))
 import { TextDiff } from './text-diff'
 
 const short = (c: string) => c.slice(0, 7)
@@ -119,5 +122,11 @@ export function CompareView({ file, before, after, size }: { file: FileRef; befo
   if (mode === 'table') return <TextBased file={file} before={before} after={after} size={size} table />
   if (mode === 'image') return <Pictures file={file} before={before} after={after} size={size} />
   if (mode === 'kicad') return <KiCad file={file} before={before} after={after} size={size} />
+  if (mode === 'database')
+    return (
+      <Suspense fallback={<ViewerLoading size={size} label="Opening both versions of the database" />}>
+        <DatabaseCompare before={{ file, commit: before }} after={{ file, commit: after === 'current' ? undefined : after }} size={size} />
+      </Suspense>
+    )
   return <Note>Versions of this kind of file cannot be compared here. Download each to compare them.</Note>
 }

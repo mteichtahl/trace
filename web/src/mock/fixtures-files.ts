@@ -3,6 +3,7 @@
  * firmware and documents. Small, real files of each format (the PDF, STL and fab zip are generated here), with an
  * earlier version where Compare has something to show.
  */
+import { PARTS_DB_AFTER, PARTS_DB_BEFORE } from './fixtures-db'
 import { zipSync, strToU8 } from 'fflate'
 import type { FileFinding, ListedFile } from '@/components/files/data'
 import type { ChatMessage, ChatThread } from '@/lib/types'
@@ -266,6 +267,7 @@ export const FILE_LIST: Record<string, ListedFile[]> = {
     { path: 'hardware/parts-list.csv', kind: 'design', size: PARTS_CSV.length, commit: '7f3e21a', at: ago(3 * HOUR), revision: 'Rev A', versions: [v('7f3e21a', 3 * HOUR), v('a91c04b', DAY)] },
     { path: 'hardware/enclosure-outline.svg', kind: 'design', size: DRAWING_SVG.length, commit: '3b77e90', at: ago(5 * DAY), versions: [v('3b77e90', 5 * DAY)] },
     { path: 'hardware/3d/soil-sensor.stl', kind: 'design', size: BOARD_STL.length, commit: 'a91c04b', at: ago(DAY) },
+    { path: 'hardware/parts.db', kind: 'design', size: PARTS_DB_AFTER.length, commit: '7f3e21a', at: ago(3 * HOUR), versions: [v('7f3e21a', 3 * HOUR), v('a91c04b', DAY)] },
     { path: 'fab/soil-sensor-jlcpcb.zip', kind: 'fabrication', size: FAB_ZIP.length, release: 'Rev A release 1', frozen: true, commit: 'e4d1c2f', at: ago(6 * DAY) },
     { path: 'fab/soil-sensor-F_Cu.gtl', kind: 'fabrication', size: FCU.length, release: 'Rev A release 1', frozen: true, commit: 'e4d1c2f', at: ago(6 * DAY) },
     { path: 'runs/run_8f2c/i2c-capture.vcd', kind: 'evidence', size: VCD.length, at: ago(20 * HOUR) },
@@ -289,6 +291,7 @@ export function fileContent(path: string, commit?: string): { bytes: Uint8Array 
     case 'hardware/parts-list.csv': return { bytes: prev ? PARTS_CSV_PREV : PARTS_CSV, mime: 'text/csv' }
     case 'hardware/enclosure-outline.svg': return { bytes: DRAWING_SVG, mime: 'image/svg+xml' }
     case 'hardware/3d/soil-sensor.stl': return { bytes: BOARD_STL, mime: 'model/stl' }
+    case 'hardware/parts.db': return { bytes: prev ? PARTS_DB_BEFORE : PARTS_DB_AFTER, mime: 'application/vnd.sqlite3' }
     case 'fab/soil-sensor-jlcpcb.zip': return { bytes: FAB_ZIP, mime: 'application/zip' }
     case 'fab/soil-sensor-F_Cu.gtl': return { bytes: FCU, mime: 'text/plain' }
     case 'runs/run_8f2c/i2c-capture.vcd': return { bytes: VCD, mime: 'text/plain' }
