@@ -28,6 +28,7 @@ import { DataTable, useUrlView } from '@/components/data-table'
 import { Button } from '@/components/ui/button'
 import { ArchitectureSummary, OptionSwitch, OptionsTable, drawn, useOption } from '@/components/project/architecture'
 import { BlockDiagramCanvas } from '@/components/project/block-diagram'
+import { PIN_STATUS, PinMapCanvas, type PinMapNode, pinMapHeight } from '@/components/project/pin-map'
 import { NeedsBuilding, TabSkeleton, notBuilt } from '@/components/project/shared'
 import { DesignFiles } from '@/components/project/handin'
 import { useCommands } from '@/components/shell/command-menu'
@@ -54,9 +55,6 @@ export const Route = createFileRoute('/_app/p/$id/design')({
 })
 
 type Pin = NonNullable<DesignView['pins']>[number]
-const PIN_STATUS: Record<Pin['status'], { status: 'met' | 'failing' | 'idle' | 'waived'; label: string }> = {
-  ok: { status: 'met', label: 'Agreed' }, conflict: { status: 'failing', label: 'Conflict' }, spare: { status: 'idle', label: 'Spare' }, waived: { status: 'waived', label: 'Waived' },
-}
 const pinColumns: ColumnDef<Pin, any>[] = [
   { id: 'part', accessorFn: (p) => p.part ?? '', header: 'Part', size: 70, meta: { label: 'Part', kind: 'text', mono: true } },
   { accessorKey: 'pin', header: 'Pin', size: 70, meta: { label: 'Pin', kind: 'text', mono: true } },
@@ -78,6 +76,8 @@ function Design() {
   const [block, setBlock] = useState<Block | null>(null)
   // the lit block outlives its detail sheet: closing the sheet keeps its connections lit until the canvas is cleared
   const [lit, setLit] = useState<string | null>(null)
+  // the pin map's selection, and what it is, for the line under the map
+  const [pinSel, setPinSel] = useState<PinMapNode | null>(null)
   const [layers, setLayers] = useState<Record<string, boolean>>({})
   const pinUrl = useUrlView('pins')
   const data = d.data
@@ -193,6 +193,16 @@ function Design() {
                 <span className="text-muted-foreground">{data.pin_plan?.checked ? `Checked against the schematic in run ${data.pin_plan.checked.run.slice(0, 8)}.` : 'Not checked against the schematic yet.'}</span>
                 <Button asChild size="sm" variant="outline" className="ml-auto"><Link to="/p/$id/do/$skill" params={{ id, skill: 'pin-plan-review' }}>Review the pin plan</Link></Button>
               </div>
+              <PinMapCanvas
+                title="Pin map"
+                subtitle={`peripheral → pin → net · ${data.pins.length} pins`}
+                height={pinMapHeight(data.pins.length)}
+                onAsk={() => openPanel(true)}
+                pins={data.pins}
+                selected={pinSel ? (pinSel.kind === 'peripheral' ? `per:${pinSel.id}` : `${pinSel.kind}:${pinSel.id}`) : null}
+                onSelect={setPinSel}
+              />
+              <PinSelection sel={pinSel} pins={data.pins} />
               <DataTable id="pins" url={pinUrl} data={data.pins} columns={pinColumns} getRowId={(p) => `${p.part ?? ''}.${p.pin}`} noun="pins" />
               {(data.pin_plan?.findings ?? []).filter((f) => f.kind === 'missing_pin').length > 0 && (
                 <ul className="space-y-1 text-sm">
@@ -317,4 +327,24 @@ function LiveKiCad({ repo, path, board = false, title, subtitle, findings, onSel
       {findings.length > pinned.length && <p className="border-t px-4 py-2 text-xs text-muted-foreground">{findings.length - pinned.length} finding{findings.length - pinned.length === 1 ? ' has' : 's have'} no position on the drawing; see the list below.</p>}
     </section>
   )
+}
+
+/** One line under the pin map about what is selected, or how to use the map. */
+function PinSelection({ sel, pins }: { sel: PinMapNode | null; pins: Pin[] }) {
+  if (!sel) return <p className="text-xs text-muted-foreground">Select a peripheral, pin or net to light its whole path; click the background to clear. Red: a conflict. Dashed: a spare pin.</p>
+  if (sel.kind === 'pin') {
+    const p = sel.pin
+    const s = PIN_STATUS[p.status]
+    return (
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+        <span className="font-mono font-semibold">{p.part ? `${p.part}.` : ''}{p.pin}</span>
+        {p.name && p.name !== p.pin && <span className="font-mono text-muted-foreground">{p.name}</span>}
+        <span>{p.fn}{p.alt ? ` (alt ${p.alt})` : ''} on <span className="font-mono">{p.net}</span>{p.use ? `, ${p.use}` : ''}.</span>
+        <StatusBadge status={s.status} label={s.label} />
+        {p.note && <span className="text-muted-foreground">{p.note}</span>}
+      </p>
+    )
+  }
+  const on = pins.filter((p) => (sel.kind === 'net' ? p.net === sel.id : true))
+  return <p className="text-sm">{sel.kind === 'net' ? <>Net <span className="font-mono font-semibold">{sel.id}</span>: {on.map((p) => p.pin).join(', ')}.</> : <>Peripheral <span className="font-semibold">{sel.id}</span>: its pins and the nets they drive are lit.</>}</p>
 }

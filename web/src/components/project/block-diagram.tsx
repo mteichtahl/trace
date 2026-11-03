@@ -8,12 +8,10 @@
  * lights it, every block it connects to in either direction, and the connections between them with what flows along
  * each; everything else fades. Clicking the empty canvas or pressing Escape clears it.
  */
-import '@xyflow/react/dist/base.css'
-import {
-  Background, type Edge, Handle, MarkerType, type Node, type NodeChange, type NodeProps, Position, ReactFlow, ReactFlowProvider, useReactFlow, useStore,
-} from '@xyflow/react'
-import { memo, useCallback, useEffect, useMemo, useState } from 'react'
-import { CanvasFrame, type CanvasFrameProps } from '@/components/canvas/canvas-frame'
+import { type Edge, Handle, MarkerType, type Node, type NodeProps, Position } from '@xyflow/react'
+import { memo, useCallback, useMemo } from 'react'
+import type { CanvasFrameProps } from '@/components/canvas/canvas-frame'
+import { FlowCanvas, FlowView, HANDLE, type Lit, litClass, litOf, useFlowSelection } from '@/components/canvas/flow'
 import { StatusBadge } from '@/components/status-badge'
 import type { Block, BlockConnection } from '@/lib/types-s1'
 import { cn } from '@/lib/utils'
@@ -22,7 +20,8 @@ const W = 1180
 const H = 470
 const BW = 200
 const BH = 92
-const BOUNDS = { x: -16, y: -16, width: W + 32, height: H + 32 }
+// fit the frame (not the blocks), so switching options keeps every block where it was drawn
+const FIT = { bounds: { x: -16, y: -16, width: W + 32, height: H + 32 } }
 
 type Side = 'left' | 'right' | 'top' | 'bottom'
 const SIDES: { side: Side; position: Position }[] = [
@@ -52,27 +51,23 @@ export function sidesFor(a: { x: number; y: number }, b: { x: number; y: number 
   return dy >= 0 ? { from: 'bottom', to: 'top' } : { from: 'top', to: 'bottom' }
 }
 
-type Lit = 'none' | 'lit' | 'dim' | 'selected'
 type BlockData = { block: Block; lit: Lit }
 type BlockNode = Node<BlockData, 'block'>
 
 const BlockBox = memo(function BlockBox({ data }: NodeProps<BlockNode>) {
   const b = data.block
-  const handle = '!size-1 !min-h-0 !min-w-0 !border-0 !bg-transparent'
   return (
     <div
       className={cn(
         'rounded-lg border-2 bg-card p-2.5 text-left text-xs text-card-foreground shadow-xs transition-[opacity,box-shadow,border-color] duration-150 motion-reduce:transition-none hover:border-foreground/40',
         'border-border',
         b.serves.length === 0 && 'border-dashed border-warning',
-        data.lit === 'lit' && 'border-primary/70 ring-1 ring-primary/40',
-        data.lit === 'selected' && 'border-primary ring-2 ring-primary',
-        data.lit === 'dim' && 'opacity-30',
+        litClass(data.lit),
       )}
       style={{ width: BW, height: BH }}
     >
-      {SIDES.map((s) => <Handle key={`t-${s.side}`} id={`t-${s.side}`} type="target" position={s.position} isConnectable={false} className={handle} />)}
-      {SIDES.map((s) => <Handle key={`s-${s.side}`} id={`s-${s.side}`} type="source" position={s.position} isConnectable={false} className={handle} />)}
+      {SIDES.map((s) => <Handle key={`t-${s.side}`} id={`t-${s.side}`} type="target" position={s.position} isConnectable={false} className={HANDLE} />)}
+      {SIDES.map((s) => <Handle key={`s-${s.side}`} id={`s-${s.side}`} type="source" position={s.position} isConnectable={false} className={HANDLE} />)}
       <span className="block text-sm font-semibold">{b.name}</span>
       {b.part && (
         <span className="mt-0.5 flex items-center gap-1.5">
@@ -91,7 +86,7 @@ const nodeTypes = { block: BlockBox }
 export function blockElements(blocks: readonly Block[], connections: readonly BlockConnection[], selected: string | null): { nodes: BlockNode[]; edges: Edge[] } {
   const at = new Map(blocks.map((b) => [b.id, { x: b.x * (W - BW), y: b.y * (H - BH) }]))
   const near = selected && at.has(selected) ? linkedTo(connections, selected) : null
-  const lit = (id: string): Lit => (!near ? 'none' : id === selected ? 'selected' : near.blocks.has(id) ? 'lit' : 'dim')
+  const lit = (id: string): Lit => litOf(near && { nodes: near.blocks }, selected, id)
   const nodes: BlockNode[] = blocks.map((b) => ({
     id: b.id, type: 'block', position: at.get(b.id)!, selected: b.id === selected, ariaRole: 'button',
     ariaLabel: `${b.name}${b.part ? `, ${b.part}` : ''}. Serves ${b.serves.length ? b.serves.join(', ') : 'no requirement'}`,
@@ -128,86 +123,25 @@ export interface BlockDiagramProps {
 }
 
 /** The block diagram in its Canvas frame, the frame's zoom and fit driving React Flow's viewport. */
-export function BlockDiagramCanvas(props: BlockDiagramProps & Omit<CanvasFrameProps, 'children' | 'viewport'>) {
+export function BlockDiagramCanvas({ blocks, connections, selected, onSelect, ...frame }: BlockDiagramProps & Omit<CanvasFrameProps, 'children' | 'viewport'>) {
   return (
-    <ReactFlowProvider>
-      <Framed {...props} />
-    </ReactFlowProvider>
-  )
-}
-
-function Framed({ blocks, connections, selected, onSelect, ...frame }: BlockDiagramProps & Omit<CanvasFrameProps, 'children' | 'viewport'>) {
-  const flow = useReactFlow()
-  const zoom = useStore((s) => s.transform[2])
-  const viewport = useMemo(() => ({
-    zoom,
-    zoomIn: () => void flow.zoomIn({ duration: 150 }),
-    zoomOut: () => void flow.zoomOut({ duration: 150 }),
-    fit: () => void flow.fitBounds(BOUNDS, { duration: 200 }),
-  }), [flow, zoom])
-  return (
-    <CanvasFrame {...frame} viewport={viewport}>
+    <FlowCanvas {...frame} fit={FIT}>
       <BlockDiagram blocks={blocks} connections={connections} selected={selected} onSelect={onSelect} />
-    </CanvasFrame>
+    </FlowCanvas>
   )
 }
 
-/** The drawing itself; needs a ReactFlowProvider above it (BlockDiagramCanvas gives one). */
+/** The drawing itself; needs a ReactFlowProvider above it (BlockDiagramCanvas gives one). Uncontrolled (no
+ * `selected`), as in a skill step that only looks, it keeps its own selection. */
 export function BlockDiagram({ blocks, connections, selected: controlled, onSelect }: BlockDiagramProps) {
-  const flow = useReactFlow()
-  // uncontrolled, for pictures that only look (a skill step) rather than open a block's detail
-  const [mine, setMine] = useState<string | null>(null)
-  const selected = controlled === undefined ? mine : controlled
-  const { nodes, edges } = useMemo(() => blockElements(blocks, connections, selected ?? null), [blocks, connections, selected])
   const byId = useMemo(() => new Map(blocks.map((b) => [b.id, b])), [blocks])
-
-  const choose = useCallback((id: string | null) => {
-    setMine(id)
-    onSelect?.(id ? byId.get(id) ?? null : null)
-  }, [onSelect, byId, setMine])
-
-  // fit the frame (not the blocks), so switching options keeps every block where it was drawn
-  useEffect(() => {
-    const t = setTimeout(() => void flow.fitBounds(BOUNDS), 0)
-    return () => clearTimeout(t)
-  }, [flow])
-
-  // keyboard: Tab to a block and press Enter selects it; Escape clears (React Flow reports both as select changes)
-  const onNodesChange = useCallback((changes: NodeChange[]) => {
-    const on = changes.find((c) => c.type === 'select' && c.selected)
-    if (on && 'id' in on) {
-      if (on.id !== selected) choose(on.id)
-      return
-    }
-    if (selected && changes.some((c) => c.type === 'select' && !c.selected && c.id === selected)) choose(null)
-  }, [selected, choose])
-
+  const toBlock = useCallback((id: string) => byId.get(id) ?? null, [byId])
+  const [selected, choose] = useFlowSelection(controlled, onSelect, toBlock)
+  const { nodes, edges } = useMemo(() => blockElements(blocks, connections, selected ?? null), [blocks, connections, selected])
   return (
-    <div className="h-full w-full" role="group" aria-label="Block diagram. Select a block to light what it connects to.">
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        onNodesChange={onNodesChange}
-        onNodeClick={(_, n) => choose(n.id)}
-        onPaneClick={() => selected && choose(null)}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        edgesFocusable={false}
-        elementsSelectable
-        multiSelectionKeyCode={null}
-        selectionKeyCode={null}
-        deleteKeyCode={null}
-        zoomOnScroll={false}
-        zoomActivationKeyCode={['Control', 'Meta']}
-        zoomOnDoubleClick={false}
-        preventScrolling={false}
-        minZoom={0.2}
-        maxZoom={2.5}
-      >
-        <Background gap={16} size={1} color="var(--border)" />
-      </ReactFlow>
-    </div>
+    <FlowView
+      nodes={nodes} edges={edges} nodeTypes={nodeTypes} selected={selected} onChoose={choose} fit={FIT}
+      label="Block diagram. Select a block to light what it connects to."
+    />
   )
 }
-

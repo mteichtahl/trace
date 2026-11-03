@@ -28,6 +28,7 @@ import { useState } from 'react'
 import { useTraceContext } from '@/components/chat/context'
 import { ChangeFileView } from '@/components/changes/change-file-view'
 import { viewerKind } from '@/components/files/kinds'
+import { ChangeRequirements } from '@/components/changes/change-requirements'
 import { DecisionBar } from '@/components/changes/decision-bar'
 import { useChangeActions } from '@/components/changes/use-change-actions'
 import { TabSkeleton, useCoverage } from '@/components/project/shared'
@@ -68,8 +69,6 @@ function Review() {
   const nextLook = useNextLook(c.dataUpdatedAt, changeLookEvery(c.data, live))
   const actions = useChangeActions(repo)
   const coverage = useCoverage(repo)
-  // the requirement's own words, from the coverage the Requirements tab reads (just the id when it has none)
-  const reqText = (rid: string) => coverage.data?.requirements?.find((r) => r.id === rid || r.id.replace('-0', '') === rid.replace('-0', ''))?.text ?? ''
   const [note, setNote] = useState('')
   const [picked, setPicked] = useState<string | null>(null)
   const phone = useMediaQuery('(max-width: 767px)')
@@ -177,15 +176,12 @@ function Review() {
           {!phone && <Checks d={d} onOpen={setCheck} />}
           <section className="rounded-xl border bg-card p-5" aria-labelledby="reqs">
             <h3 id="reqs" className="section-label">Requirements it covers</h3>
-            {d.requirements.length ? (
-              <ul className="mt-2 space-y-1 text-sm">
-                {d.requirements.map((r) => (
-                  <li key={r}><Link to="/p/$id/requirements/$rid" params={{ id, rid: r }} className="hover:underline"><span className="mr-2 font-mono text-xs text-muted-foreground">{r}</span>{reqText(r)}</Link></li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-2 text-sm text-muted-foreground">This change does not name a requirement.</p>
-            )}
+            <ChangeRequirements
+              ids={d.requirements}
+              rows={coverage.data?.requirements}
+              loading={coverage.isPending}
+              link={(rid, children, className) => <Link to="/p/$id/requirements/$rid" params={{ id, rid }} className={className}>{children}</Link>}
+            />
           </section>
           <section className={cn('rounded-xl border p-5', d.recommendation.verdict === 'accept' ? 'border-primary/40 bg-primary-soft' : 'bg-card')} aria-labelledby="rec">
             <h3 id="rec" className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-primary"><Sparkles className="size-3.5" aria-hidden /> {recommendationWords(d.recommendation)}</h3>
