@@ -278,6 +278,29 @@ export interface ChangeDiff {
 /** `warning`: it is merged, but something after it (the decisions log) did not happen */
 export interface ChangeAccepted { merged: true; sha: string; stage: string; next: string; warning?: string }
 
+// ------------------------------------------------------------------ deploys (docs/stay-in-trace.md "2. Deploys")
+
+export type DeployResult = 'deployed' | 'failed' | 'rolled_back' | 'skipped'
+
+/** deploys.get: the project's deploys as the app shows them (src/api/actions-deploys.ts DeploysView). */
+export interface DeploysView {
+  enabled: boolean; environment: string; url: string | null; auto: boolean
+  /** this person may approve, skip or roll back, now */
+  may_approve: boolean
+  /** what the environment runs */
+  running: { sha: string; at: string | null } | null
+  /** the open request, or null */
+  request: {
+    sha: string; opened_at: string; held: boolean; held_reasons: string[]
+    /** since the running one, newest first */
+    commits: { sha: string; subject: string }[]
+    build_passed: boolean
+  } | null
+  in_progress: { sha: string; started_at: string; by: string; step: string | null } | null
+  recent: { sha: string; result: DeployResult; at: string; by: string }[]
+  recommendation: { verdict: 'deploy' | 'wait' | 'none'; why: string }
+}
+
 export interface Question {
   id: string
   /** who it waits on */
