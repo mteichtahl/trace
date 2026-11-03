@@ -42,6 +42,8 @@ export interface OpsAlarm {
 export interface OpsSeries {
   label: string
   repo?: string
+  /** a colour that means something (passed green, failed red): the Process tab's charts; others take the palette */
+  color?: string
   /** [epoch ms, value] */
   points: [number, number][]
 }
@@ -68,8 +70,36 @@ export interface OpsAnswer {
   tiles: OpsTile[]
   alarms: OpsAlarm[]
   sections: OpsSection[]
+  /** the Process tab (src/web/ops.ts processView); absent from an older API */
+  process?: OpsProcess
+  /** admins: what CloudWatch said it left out (a limit reached, a query refused), so an empty chart says why */
+  notes?: string[]
   updatedAt: string
   nextAt: string
+}
+
+export type OpsWaitKind = 'question' | 'change' | 'gate'
+export type OpsReworkCause = 'job_restarted' | 'conflict_resolved' | 'sent_back' | 'asked_again'
+type OpsTally = { passed: number; failed: number }
+
+/** How the people and trace work together over the range (src/web/ops.ts ProcessView). Seconds; [epoch ms, …] points. */
+export interface OpsProcess {
+  builds: (OpsTally & { points: [number, number, number][]; own: OpsTally; projects: OpsTally }) | null
+  jobs: { done: number; failed: number; lost: number; cancelled: number; points: [number, number, number, number, number][] } | null
+  waits: { kind: OpsWaitKind; count: number; median: number | null; slowest: number | null }[]
+  wait: { count: number; median: number | null; slowest: number | null; spark: number[] } | null
+  rework: { cause: OpsReworkCause; count: number }[]
+  working: { share: number | null; jobSeconds: number; waitSeconds: number; spark: number[] } | null
+  runTime: { median: number | null; count: number } | null
+}
+
+/** journey.time: where one project's time went, each started stage's length and its wait on people (seconds). */
+export interface JourneyTime {
+  repo: string
+  started: boolean
+  project: string | null
+  at?: string
+  stages: { id: string; name: string; started: number; finished: number | null; seconds: number; waiting: number }[]
 }
 
 // ------------------------------------------------------------------ users

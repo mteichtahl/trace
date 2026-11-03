@@ -63,6 +63,9 @@ function action(name: string, a: Record<string, unknown>): Response {
     case 'question.answer': inbox = inbox.filter((i) => i.questionId !== a.question); return ok({ ok: true })
     case 'me.get': return ok(me)
     case 'me.set': me = setPath(me, String(a.key), a.value); return ok({ ok: true })
+    case 'push.subscribe': return ok({ subscribed: true, devices: 1 })
+    case 'push.unsubscribe': return ok({ removed: true })
+    case 'push.devices': return ok({ devices: [] })
     case 'chats.list': return ok(withFileThread(repo, threads.filter((t) => t.repo === repo)))
     case 'chats.get': return ok({ thread: threads.find((t) => t.id === (a.thread ?? a.id)), messages: messages[String(a.thread ?? a.id)] ?? [] })
     case 'chats.recall': return ok(RECALL)
@@ -143,6 +146,9 @@ export async function handle(path: string, init: RequestInit = {}): Promise<Resp
     case '/api/auth/totp/verify':
     case '/api/auth/passkeys/finish':
       return json({ ok: true })
+    // a demo key (a valid P-256 point): the browser subscribes with it; nothing is ever pushed in mock mode
+    case '/api/push/key':
+      return json({ publicKey: 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4' })
     case '/api/call':
       return action(String(body.action), body)
     case '/api/agui':

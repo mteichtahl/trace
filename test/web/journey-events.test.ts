@@ -13,7 +13,7 @@ import { Central, S3Backend } from '../../src/core/central.js'
 import { loadJourney, startJourney } from '../../src/core/journey.js'
 import { JourneyStore, forgetNoJourney } from '../../src/core/journey-store.js'
 import type { LiveEvent, Publisher } from '../../src/web/events.js'
-import { MAX_JOB_EVENTS, NEW_WITHIN_S, onObjectCreated, projectOfIndexKey, projectOfKey } from '../../src/web/journey-events.js'
+import { MAX_JOB_EVENTS, NEW_WITHIN_S, onObjectCreated, projectOfIndexKey, projectOfJourneyKey, projectOfKey } from '../../src/web/journey-events.js'
 import { JobIndexStore, putJob } from '../../src/core/job-index.js'
 import { projectHash } from '../../src/core/project.js'
 import { FakeS3 } from '../core/fake-s3.js'
@@ -75,9 +75,12 @@ describe('live updates when an agent records a fact', () => {
   it('takes the project from the key, and only an agents\' facts object', () => {
     expect(projectOfKey('projects/Acme/Board/journey-agent/facts.db')).toBe('acme/board')
     expect(projectOfKey('projects/acme/board/journey/journey.db')).toBeNull()
+    expect(projectOfJourneyKey('projects/Acme/Board/journey/journey.db')).toBe('acme/board')
+    expect(projectOfJourneyKey('projects/acme/board/journey/other.db')).toBeNull()
     expect(projectOfKey('projects/acme/board/journey-agent/other.db')).toBeNull()
     expect(projectOfKey('projects/acme/../journey-agent/facts.db')).toBeNull()
     expect(projectOfKey('access/central.db')).toBeNull()
+    expect(projectOfKey('kb/acme/journey-agent/facts.db')).toBeNull()
     // the bench's live copy (src/core/bench.ts): a reading was taken
     expect(projectOfKey('projects/acme/board/journey-agent/bench.db')).toBe('acme/board')
     expect(projectOfKey('projects/acme/board/journey-agent/cost.db')).toBeNull()
@@ -135,7 +138,8 @@ describe('live updates when an agent records a fact', () => {
 
   it('ignores another bucket or key, and a failed publish does not stop the others', async () => {
     const r = await rig()
-    expect(await r.run(r.event('projects/acme/board/journey/journey.db'))).toEqual({ repo: null, changed: 0, notified: 0 })
+    // the journey record itself: push only (none set up here), and no live event: the web backend publishes those
+    expect(await r.run(r.event('projects/acme/board/journey/journey.db'))).toEqual({ repo: 'acme/board', changed: 0, notified: 0, pushed: 0 })
     expect(await r.run(r.event(KEY, 'someone-elses'))).toEqual({ repo: null, changed: 0, notified: 0 })
     expect(r.pub.sent).toEqual([])
     r.pub.fail.add('/trace/users/user-1')

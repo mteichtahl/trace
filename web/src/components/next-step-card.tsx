@@ -40,10 +40,12 @@ export interface NextStepCardProps {
   resume?: { label: string; to: string }
   /** the primary action is an API action (`step.action.call`, requirements.draft): its button, given by the screen */
   callButton?: ReactNode
+  /** on a phone: the buttons sit in a bar pinned above the tab bar, so the next move is always one tap away */
+  pinned?: boolean
   className?: string
 }
 
-export function NextStepCard({ step, part, run, place, onAccept, accepting, children, resume, callButton, className }: NextStepCardProps) {
+export function NextStepCard({ step, part, run, place, onAccept, accepting, children, resume, callButton, pinned, className }: NextStepCardProps) {
   const reviewer = part === 'reviewer' && step.reviewer
   const boxed = !reviewer && !!step.recommend
   const summary = reviewer ? step.reviewer!.summary : boxed ? (step.lead ?? step.summary) : step.summary
@@ -97,7 +99,12 @@ export function NextStepCard({ step, part, run, place, onAccept, accepting, chil
         </p>
       )}
       {(action || step.secondary || onAccept) && (
-        <div className="mt-5 flex flex-wrap gap-2">
+        <div
+          className={cn(
+            'mt-5 flex flex-wrap gap-2',
+            pinned && 'fixed inset-x-0 bottom-[calc(3.5rem+env(safe-area-inset-bottom))] z-30 m-0 flex-nowrap border-t bg-background/95 px-4 py-3 backdrop-blur [&>*]:min-w-0 [&>*]:flex-1 [&>*:first-child]:flex-[1.4]',
+          )}
+        >
           {/* an action the button calls needs the screen's button; without one (a reviewer) nothing is drawn rather than
               a button that does nothing */}
           {!reviewer && step.action?.call && callButton ? callButton : action && (action.to || !step.action?.call) && (
@@ -118,7 +125,7 @@ export function NextStepCard({ step, part, run, place, onAccept, accepting, chil
           )}
         </div>
       )}
-      {step.after && !reviewer && <p className="mt-4 text-sm text-muted-foreground">{step.after}</p>}
+      {step.after && !reviewer && <p className={cn('mt-4 text-sm text-muted-foreground', pinned && 'mt-3')}>{step.after}</p>}
     </section>
   )
 }

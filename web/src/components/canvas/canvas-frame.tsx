@@ -93,8 +93,9 @@ export function CanvasFrame({
           </Button>
         )}
         {onAsk && (
-          <Button variant="ghost" size="sm" onClick={onAsk}>
-            <Sparkles /> Ask about this
+          <Button variant="ghost" size="sm" onClick={onAsk} aria-label="Ask about this">
+            {/* a phone: the icon alone, so the drawing's name keeps its room */}
+            <Sparkles /> <span className="max-sm:hidden">Ask about this</span>
           </Button>
         )}
         {zoomable && (
@@ -102,7 +103,7 @@ export function CanvasFrame({
             <Button variant="ghost" size="icon" className="size-8 rounded-none" aria-label="Zoom out" onClick={() => setZoom((z) => clamp(z / 1.25, 0.25, 8))}>
               <Minus />
             </Button>
-            <span className="w-12 text-center font-mono text-xs" aria-live="polite">
+            <span className="w-12 text-center font-mono text-xs max-sm:hidden" aria-live="polite">
               {Math.round(zoom * 100)}%
             </span>
             <Button variant="ghost" size="icon" className="size-8 rounded-none" aria-label="Zoom in" onClick={() => setZoom((z) => clamp(z * 1.25, 0.25, 8))}>

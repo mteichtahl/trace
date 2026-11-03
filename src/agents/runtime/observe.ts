@@ -15,7 +15,7 @@ import { z } from 'zod'
 import type { IncomingHttpHeaders } from 'node:http'
 import { context, trace } from '@opentelemetry/api'
 import {
-  ATTR, type Attrs, type Outcome, type Span, SpanKind, childNodeArgs, fail, fromHeaders, ok, parentContext, personHash, recordMetric, recordProjectMetric, setAttrs, span, startSpan, traceEnv, withSession,
+  ATTR, type Attrs, type Outcome, type Span, SpanKind, childNodeArgs, fail, fromHeaders, ok, parentContext, personHash, recordMetric, recordProcessMetric, recordProjectMetric, setAttrs, span, startSpan, traceEnv, withSession,
 } from '../../core/telemetry.js'
 import type { JobPayload, TraceContext } from './schemas.js'
 
@@ -124,11 +124,13 @@ export function jobAttrs(p: JobPayload, jobId: string, agent: string): Attrs {
 
 /**
  * One job as a span (`trace.job <kind>`, under whatever is active: the invocation that started it) plus the job
- * count and duration metrics. `run` never throws (jobs.ts records the failure on the job); the outcome is read from
+ * count and duration metrics, and a rework (conflict_resolved) when it is a conflict work item. `run` never throws (jobs.ts records the failure on the job); the outcome is read from
  * the job's state once it has run.
  */
 export async function observeJob(p: JobPayload, jobId: string, agent: string, state: () => { state: string; error?: string | undefined; agent?: string | undefined }, run: () => Promise<void>): Promise<void> {
   const t0 = performance.now()
+  // a change that conflicted being brought up to date is work done again (src/core/telemetry.ts PROCESS METRICS)
+  if (p.kind === 'work-item' && p.item.kind === 'conflict') recordProcessMetric('trace.project.rework', 1, { cause: 'conflict_resolved' })
   let outcome: Outcome = 'ok'
   try {
     await span(`trace.job ${p.kind}`, jobAttrs(p, jobId, agent), async (s) => {

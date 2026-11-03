@@ -47,7 +47,11 @@ export interface PullFile {
   path: string; status: 'added' | 'modified' | 'removed' | 'renamed'; additions: number; deletions: number; patch: string | null; previous: string | null
 }
 /** One check run on a commit, with its own one-line result when it wrote one (its output's title or summary). */
-export interface CheckRunDetail { name: string; status: string; conclusion: string | null; summary: string | null }
+export interface CheckRunDetail {
+  name: string; status: string; conclusion: string | null; summary: string | null
+  /** when it finished (a check run's completed_at, a finished workflow run's updated_at), when GitHub says */
+  completed_at?: string | null | undefined
+}
 export type MergeMethod = 'squash' | 'merge' | 'rebase'
 
 export interface DeploySummary { id: number; environment: string; ref: string; sha: string; created_at: string; state: string | null; url: string | null }
@@ -149,7 +153,7 @@ const PullFull = z.object({
   mergeable_state: z.string().optional(), updated_at: z.string(), head: z.object({ ref: z.string(), sha: z.string(), repo: HeadRepo }).loose(),
   user: User,
 }).loose()
-const CheckRun = z.object({ name: z.string(), status: z.string(), conclusion: z.string().nullable() }).loose()
+const CheckRun = z.object({ name: z.string(), status: z.string(), conclusion: z.string().nullable(), completed_at: z.string().nullable().optional() }).loose()
 const CheckRunOut = CheckRun.extend({ output: z.object({ title: z.string().nullable().optional(), summary: z.string().nullable().optional() }).loose().nullable().optional() })
 const CombinedStatus = z.object({ statuses: z.array(z.object({ context: z.string(), state: z.string(), description: z.string().nullable().optional() }).loose()).default([]) }).loose()
 
@@ -161,7 +165,7 @@ export function runsAsChecks(runs: readonly z.output<typeof Run>[]): CheckRunDet
     const had = latest.get(name)
     if (!had || had.created_at < r.created_at) latest.set(name, r)
   }
-  return [...latest.entries()].map(([name, r]) => ({ name, status: r.status ?? 'queued', conclusion: r.conclusion, summary: null }))
+  return [...latest.entries()].map(([name, r]) => ({ name, status: r.status ?? 'queued', conclusion: r.conclusion, summary: null, ...(r.status === 'completed' && r.updated_at ? { completed_at: r.updated_at } : {}) }))
 }
 
 /** Commit statuses as checks: success passes, failure and error fail, pending runs. */
@@ -440,7 +444,7 @@ export class HttpGitHub implements GitHubApi {
     const ref = encodeURIComponent(sha)
     try {
       const r = z.object({ check_runs: z.array(CheckRunOut) }).loose().parse(await this.json('GET', `${this.p(repo)}/commits/${ref}/check-runs?per_page=100`))
-      return r.check_runs.map((c) => ({ name: c.name, status: c.status, conclusion: c.conclusion, summary: (c.output?.title || c.output?.summary || null)?.slice(0, 300) ?? null }))
+      return r.check_runs.map((c) => ({ name: c.name, status: c.status, conclusion: c.conclusion, summary: (c.output?.title || c.output?.summary || null)?.slice(0, 300) ?? null, ...(c.completed_at ? { completed_at: c.completed_at } : {}) }))
     } catch (e) {
       if (!(e instanceof GitHubError) || e.status !== 403) throw e
       const refused = e

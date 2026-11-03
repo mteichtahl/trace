@@ -8,7 +8,9 @@
  *                   questions with their answers, the agents that are stuck, and the stuck reports a person dismissed
  *                   (stuck.dismiss) with the reason, so the agent knows to stop waiting on them and why
  *   journey.ask     ask a person (by Cognito sub) or the project's contributors or admins: what it blocks, the options
- *                   with exactly one recommended and a reason for each, the sources read. Answers the question id; with
+ *                   with exactly one recommended and a reason for each, the sources read. Asking again what an
+ *                   answered question blocked counts as rework (asked_again: src/core/process-time.ts asksAgain).
+ *                   Answers the question id; with
  *                   wait_minutes it waits for the answer (read from the journey record). On events where the project
  *                   has its events topic (TRACE_BATCH_EVENTS_TOPIC, nested layout): a person's answer is a write of
  *                   projects/<slug>/journey/journey.db, whose S3 "Object Created" event an EventBridge rule sends to
@@ -58,6 +60,8 @@ import {
   markFailed, nextFor,
 } from '../../core/handoffs.js'
 import { JobIndexStore, indexedHandle, loadJobs } from '../../core/job-index.js'
+import { asksAgain } from '../../core/process-time.js'
+import { recordProcessMetric } from '../../core/telemetry.js'
 
 const configured = (): boolean => projectsFromEnv() !== null
 
@@ -210,6 +214,8 @@ export const ask = defineTool({
     const { result: id } = await s.facts.update((db) => ({
       result: addAgentQuestion(db, s.asker, { text: a.text, blocks: a.blocks, options: a.options, sources: a.sources, askedOfSub: a.sub ?? null, askedPart: a.ask }, r),
     }))
+    // asked again what a person already answered: a rework (src/core/process-time.ts asksAgain)
+    if (asksAgain(r, a.blocks)) { try { recordProcessMetric('trace.project.rework', 1, { cause: 'asked_again' }, s.repository) } catch { /* never fails the ask */ } }
     const asked = { question_id: id, for: a.sub ? 'one person' : `the ${a.ask}` }
     if (!a.wait_minutes) return { ...asked, answered: null, next: `Asked. Read the answer later with journey.status { question: "${id}" }, or ask again with wait_minutes.` }
     const out = await waitForAnswer(s, id, a.wait_minutes * 60_000, { events: eventsOf(process.env, s.repository) })

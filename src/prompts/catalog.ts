@@ -407,6 +407,9 @@ add({ id: 'worker.tools', mode: 'editable', prompt: 'worker.task', vars: {}, des
     'datasheet library, calculators, SPICE and Verilog simulation, firmware build; instruments and targets only on a',
     'runner wired to hardware). The datasheet and parts databases are shared by every project: add any datasheet you',
     'rely on to the library, and cite each figure you use with its part number, sha256 and page.',
+    'Fabrication and drawing files come only from the trace tool that makes them (kicad.fab, kicad.export), with the',
+    "brief's choices passed as that tool's inputs. Never rename, edit, hand-write or leave out their files to make up for",
+    'something a tool cannot do: stop and report exactly which choice could not be applied.',
   ].join('\n') })
 add({ id: 'worker.knowledge', mode: 'editable', prompt: 'worker.task', vars: {},
   description: "How the worker uses the project's knowledge base (src/tools/kb), when it has one.",

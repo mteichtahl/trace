@@ -28,6 +28,7 @@ import { useAuth } from '@/lib/auth'
 import { ago, initials } from '@/lib/format'
 import { ME_KEY, usePrefs, useSetMe } from '@/lib/prefs'
 import { CHANNELS, NOTIFY_KINDS, notifyLock, notifyPrefs } from '@/lib/settings-catalog'
+import { type PushState, turnOn } from '@/lib/push'
 import { useProjects } from '@/lib/queries'
 import type { MeDoc, Prefs } from '@/lib/types'
 import { createCredential, passkeysSupported } from '@/lib/webauthn'
@@ -256,6 +257,14 @@ function TotpRow() {
 
 // ------------------------------------------------------------------ Notifications
 
+/** Why push stays off on this device, in a sentence. */
+export const PUSH_WORDS: Record<Exclude<PushState, 'on'>, string> = {
+  'needs-home-screen': 'On an iPhone or iPad, add trace to your Home Screen first (Share, then Add to Home Screen), open it from there, and turn push on again.',
+  unsupported: 'This browser cannot show push notifications. Email still reaches you.',
+  denied: 'Push stays off: this browser was told not to show trace\'s notifications. You can allow them in the browser\'s site settings.',
+  off: 'Push stays off: the browser did not allow notifications.',
+}
+
 export function NotificationsGroup() {
   const { user } = useAuth()
   const admin = user?.class === 'admin'
@@ -265,12 +274,13 @@ export function NotificationsGroup() {
   const projects = useProjects()
   const [pushAsk, setPushAsk] = useState(false)
   const setChannel = async (kind: string, ch: string, on: boolean) => {
-    if (ch === 'push' && on && typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+    // push on: this device must be subscribed first (the browser asks; on an iPhone, trace must be on the Home Screen)
+    if (ch === 'push' && on) {
       setPushAsk(true)
-      const p = await Notification.requestPermission().catch(() => 'denied' as NotificationPermission)
+      const state = await turnOn().catch((e: unknown) => { toast.error(`Push could not be turned on: ${e instanceof Error ? e.message : String(e)}`); return null })
       setPushAsk(false)
-      if (p !== 'granted') {
-        toast('Push stays off: this browser was not allowed to show notifications. You can allow it in the browser\'s site settings.')
+      if (state !== 'on') {
+        if (state) toast(PUSH_WORDS[state])
         return
       }
     }

@@ -29,6 +29,8 @@
  *   waiver.add              write    take a waiver: reason, risk, severity, where it is caught instead, scope
  *   stuck.dismiss           write    dismiss a stuck agent's report with a reason in one line: it leaves Home and the
  *                                    inbox, and the agent reads the dismissal and its reason (journey.status)
+ *   journey.time            read     where the project's time went (Operations' Process tab): each started stage's
+ *                                    length and the part of it spent waiting on a person (src/core/process-time.ts)
  *   inbox                   signed in  the four kinds that earn a notification (a gate ready, a question blocking
  *                                    work, money about to be spent, an agent stuck) across the person's projects,
  *                                    most blocking and oldest first. Each project's database is read once, in
@@ -50,13 +52,18 @@
  * Who did it is recorded as their email for the record people read, and as the 16-character hash of their Cognito sub
  * where the record only matches them (opened evidence, questions asked of them), never as anything else. Records made
  * before identity was keyed on the sub carry the email's hash: both are accepted when reading (hashesOf).
+ *
+ * The waits on people are recorded here once each act is saved (src/api/process-metrics.ts): an answer (asked →
+ * answered) and a signature (the gate ready → signed).
  */
 import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
   type AgentFacts, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
-  dismissStuck, journeyView, loadJourney, recordOpen, returnGate, signGate, sortInbox, withChanges,
+  dismissStuck, journeyView, loadJourney, mergeAgentFacts, recordOpen, returnGate, signGate, sortInbox, withChanges,
 } from '../core/journey.js'
+import { gateReadyAt, stageTimes } from '../core/process-time.js'
+import { recordAnswered, recordWait } from './process-metrics.js'
 import { openChanges, openPulls, projectEdits, projectRule } from './actions-changes.js'
 import { recordEdit } from './edits.js'
 import { recommendationOf } from './changes.js'
@@ -351,10 +358,16 @@ export const JOURNEY_ACTIONS = {
   'gate.sign': def('admin', Repo.extend({ gate: Id, acknowledge: z.array(Id).max(100).default([]), notes: z.string().trim().max(4000).optional() }), async (a, ctx) => {
     // the agents' checks of the criteria trace owns count towards the gate; the signing rules are the record's own
     const facts = await agentFacts(ctx, a.repo)
-    const signed = await journeyWrite(ctx, a.repo, (db) => {
+    const { ready_at: readyAt, signed_at: signedAt, ...signed } = await journeyWrite(ctx, a.repo, (db) => {
+      // when the gate became ready, from the record as it stood before the signature (its criteria and waivers)
+      const before = loadJourney(db)
+      const at = Date.now() / 1000
+      const ready = before ? gateReadyAt(facts ? mergeAgentFacts(before, facts) : before, a.gate, at) : null
       const r = signGate(db, a.gate, signer(ctx), { acknowledged: a.acknowledge, notes: a.notes ?? null, facts })
-      return { result: { repo: a.repo, ...r } }
+      return { result: { repo: a.repo, ...r, ready_at: ready, signed_at: at } }
     })
+    // saved: the wait from ready to signed (src/api/process-metrics.ts)
+    recordWait(a.repo, 'gate', readyAt, signedAt)
     // the stage the signature opened starts its agents' work (docs/user-journey.md, each stage's "trace:"); the
     // signature stands even when the job cannot start
     const work = signed.advanced_to ? STAGE_WORK[signed.advanced_to] : undefined
@@ -395,6 +408,8 @@ export const JOURNEY_ACTIONS = {
       const q = answerQuestion(db, a.question, signer(ctx), { option: a.option, answer: a.answer, reason: a.reason }, { facts })
       return { result: { repo: a.repo, question: q, summary: 'Answered. The agent carries on.' } }
     })
+    // saved: the wait from asked to answered (src/api/process-metrics.ts)
+    recordAnswered(a.repo, answered.question)
     // an agent that asked and then ended (its question left in its report) reads the answer only in a next job: start
     // that job, on the asking job's branch, so the answer is acted on now; the answer stands whatever happens here
     const asked = askedBy(facts, a.question)
@@ -425,6 +440,13 @@ export const JOURNEY_ACTIONS = {
       const w = addWaiver(db, { target: a.target, reason: a.reason, risk: a.risk, severity: a.severity, caught_where: a.caught_where, scope: a.scope }, signer(ctx), { facts })
       return { result: { repo: a.repo, waiver: w } }
     })
+  }),
+
+  'journey.time': def('read', Repo, async ({ repo }, ctx) => {
+    const [r, facts] = await Promise.all([withJourneyDb(ctx, repo, (db) => loadJourney(db)), agentFacts(ctx, repo).catch(() => null)])
+    if (!r) return { repo, started: false, project: null, stages: [] }
+    const at = Date.now() / 1000
+    return { repo, started: true, project: r.journey.name ?? repo, at: new Date(at * 1000).toISOString(), stages: stageTimes(facts ? mergeAgentFacts(r, facts) : r, at) }
   }),
 
   inbox: def('signed-in', z.object({ kinds: z.array(z.enum(INBOX_KINDS)).optional(), limit: z.number().int().min(1).max(200).default(50) }), async (a, ctx) => {

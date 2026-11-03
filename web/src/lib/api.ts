@@ -89,6 +89,8 @@ export interface Actions {
   'stuck.dismiss': { args: Repo & { job: string; reason: string }; result: { repo: string; dismissed: { id: string; job_id: string | null; reason: string; by: string; at: string }; summary: string } }
   'waiver.add': { args: Repo & { target: { kind: 'criterion' | 'requirement' | 'finding' | 'test'; id: string }; reason: string; risk: string; severity: 'cosmetic' | 'degraded' | 'failure' | 'safety'; caught_where: string | null; scope?: string }; result: { repo: string; waiver: { id: string } } }
   inbox: { args: Record<string, never>; result: InboxItem[] }
+  /** where a project's time went, by stage (Operations' Process tab) */
+  'journey.time': { args: Repo; result: import('./admin-types').JourneyTime }
   // the API's own shapes are read by lib/readers.ts (readThreads, readThread, readAppended, readRecall)
   'chats.list': { args: Repo & { query?: string; limit?: number }; result: ChatThread[] }
   'chats.get': { args: Repo & { thread: string; before?: string; limit?: number }; result: { thread: ChatThread; messages: ChatMessage[]; more?: boolean } }
@@ -99,6 +101,10 @@ export interface Actions {
   'chats.recall': { args: Repo & { limit?: number }; result: string[] }
   'me.get': { args: Record<string, never>; result: MeDoc & { locks: Record<string, string> } }
   'me.set': { args: { key: string; value?: unknown; unset?: boolean }; result: { changed: boolean } }
+  /** push notifications on this device (src/api/actions-push.ts, docs/push.md) */
+  'push.subscribe': { args: { subscription: PushSubscriptionJSON; tz?: string | null; label?: string | null }; result: { subscribed: boolean; devices: number } }
+  'push.unsubscribe': { args: { endpoint: string }; result: { removed: boolean } }
+  'push.devices': { args: Record<string, never>; result: { devices: { endpoint: string; label: string | null; tz: string | null; since: string }[] } }
   'graph.neighbourhood': { args: Repo & { focus: string; depth?: 1 | 2 | 3; memory?: boolean }; result: { focus: string; nodes: unknown[]; links: unknown[]; groups: unknown[]; truncated: boolean } }
   'files.list': { args: Repo; result: import('@/components/files/data').ListedFile[] }
   'files.url': { args: Repo & { path: string; commit?: string }; result: { url: string; mime?: string | null; size?: number } }

@@ -11,6 +11,7 @@ import { AppShell } from '@/components/shell/app-shell'
 import { loadConfig } from '@/lib/config'
 import { requireSignedIn } from '@/lib/guard'
 import { liveStatus, startLive } from '@/lib/live'
+import { keepFresh } from '@/lib/push'
 
 export function useLiveConnection() {
   const qc = useQueryClient()
@@ -35,8 +36,16 @@ export function useLiveConnection() {
   }, [qc])
 }
 
+/** Push on this device: the service worker, and a subscription the browser dropped made again (lib/push.ts). */
+function usePushFresh() {
+  useEffect(() => {
+    void keepFresh()
+  }, [])
+}
+
 function AppLayout() {
   useLiveConnection()
+  usePushFresh()
   return (
     <ChatProvider>
       <AppShell>

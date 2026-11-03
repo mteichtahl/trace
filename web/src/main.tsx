@@ -38,6 +38,14 @@ async function start() {
     const { installMock } = await import('./mock/handlers')
     installMock()
   }
+  // a tapped notification, when the open window could not be moved to its card by the service worker itself
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (e: MessageEvent<{ type?: string; url?: string }>) => {
+      if (e.data?.type !== 'trace.open' || !e.data.url) return
+      const u = new URL(e.data.url, location.origin)
+      if (u.origin === location.origin) void router.navigate({ href: u.pathname + u.search })
+    })
+  }
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>

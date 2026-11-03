@@ -19,6 +19,8 @@ export interface WebDeps {
   cloudwatch: (c: WebConfig) => CloudWatchPort
   /** GitHub's webhook secret and the backend's own client secret (config.hooks.secret); absent: no webhook */
   secrets?: (c: WebConfig) => SecretsPort
+  /** the installation's push keys in Secrets Manager (src/web/push-keys.ts); absent: the live one */
+  pushKeys?: (c: WebConfig) => import('./push-keys.js').PushKeysIo
   /** the webhook debounce's shared windows (config.hooks.table); absent or null: this container's memory */
   hookStore?: (c: WebConfig) => DebounceStore | null
   credentials: Credentials

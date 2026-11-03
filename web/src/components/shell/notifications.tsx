@@ -22,8 +22,8 @@ export function NotificationsBell() {
       <PopoverContent align="end" className="w-96 p-0">
         <div className="flex items-center justify-between border-b px-4 py-2.5">
           <p className="text-sm font-semibold">Needs you</p>
-          <Link to="/inbox" className="text-sm text-primary hover:underline">
-            View all
+          <Link to="/next" className="text-sm text-primary hover:underline">
+            Go to Next
           </Link>
         </div>
         <ul className="max-h-[420px] divide-y overflow-y-auto">
@@ -36,7 +36,7 @@ export function NotificationsBell() {
                 <Rich text={i.summary} terms={false} />
               </p>
               <Button asChild size="sm" variant="link" className="h-auto px-0">
-                <Link to={i.action.to ?? '/inbox'}>{i.action.label}</Link>
+                <Link to={i.action.to ?? '/next'}>{i.action.label}</Link>
               </Button>
             </li>
           ))}

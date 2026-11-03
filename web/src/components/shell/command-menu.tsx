@@ -89,8 +89,8 @@ export function CommandMenu() {
               <a.icon /> {a.label}
             </CommandItem>
           ))}
-          <CommandItem value="go inbox notifications" onSelect={() => go(() => void navigate({ to: '/inbox' }))}>
-            <ArrowRight /> Inbox
+          <CommandItem value="go next inbox notifications needs you" onSelect={() => go(() => void navigate({ to: '/next' }))}>
+            <ArrowRight /> Next
           </CommandItem>
           <CommandItem value="go preferences settings me" onSelect={() => go(() => void navigate({ to: '/me' }))}>
             <ArrowRight /> Preferences

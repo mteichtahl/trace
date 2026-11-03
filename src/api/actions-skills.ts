@@ -27,6 +27,7 @@
  *                         logged for every skill, and the draft discarded
  */
 import { z } from 'zod'
+import { recordAnswered } from './process-metrics.js'
 import {
   type AgentFacts, type JourneyRecord, SEVERITIES, type Viewer, addWaiver, answerQuestion, decide, getDraft, loadJourney, loadOrders, mergeAgentFacts, putDraft,
   questionIsFor, setCriterion,
@@ -82,6 +83,7 @@ function skillBench(skill: string, i: CheckInput) {
   }
 }
 import { type CheckInput, type CheckResult, checkSkill } from './skill-checks.js'
+import { changeImpact } from './change-impact.js'
 
 /** The skills whose Submit records design decisions. */
 const DESIGN_SKILLS = new Set(['intent-builder', 'requirements-review', 'architecture-choice', 'pin-plan-review'])
@@ -311,6 +313,10 @@ function extras(skill: string, i: CheckInput): Record<string, unknown> {
       const x = b.result
       return { case: { run: b.id, status: b.status, summary: b.summary, process: x.process ?? null, fit: x.fit_status ?? null, problems: x.problems ?? [], rules_failing: x.rules_failing ?? [], files: x.files ?? [], case: x.case ?? null } }
     }
+    case 'change-request': {
+      const impact = changeImpact(i.r, i.draft?.what)
+      return impact ? { impact } : {}
+    }
     case 'gate-signing': return i.gate ? { gate: i.gate } : {}
     case 'incoming-inspection': return { boards: (i.boards ?? []).map((b) => boardView(b, i.orders, i.readings ?? [])), ...(i.handPlaced ? { handPlaced: i.handPlaced } : {}) }
     case 'bench-setup': case 'bring-up-run': return { bench: skillBench(skill, i) }
@@ -390,6 +396,7 @@ export const SKILL_ACTIONS = {
     const { rows: designRows, reqIds } = DESIGN_SKILLS.has(a.skill) ? await withRecordDb(ctx, a.repo, (db) => ({ rows: designOf(db).rows, reqIds: requirementTexts(db) })) : { rows: null as unknown as DesignRows, reqIds: new Map<string, RequirementWords>() }
     const out = await plainly(() => writeJourney(ctx, a.repo, (db) => {
       let ref: string | null = null
+      let answered: ReturnType<typeof answerQuestion> | null = null
       // the design decisions the skill makes (Intent builder, Requirements review, Architecture choice, Pin plan
       // review), recorded as design.decide would, each logged
       for (const d of DESIGN_SKILLS.has(a.skill) ? pendingDecisions(a.skill, a.draft, designRows, loadDesignDecisions(db)) : []) {
@@ -426,7 +433,7 @@ export const SKILL_ACTIONS = {
         const d = a.draft
         const opt = typeof d.option === 'string' && d.option !== 'other' ? d.option : undefined
         const text = opt ? undefined : [d.value ? String(d.value) : '', String(d.answer ?? '')].filter((x) => x.trim()).join(': ') + (d.source ? ` (source: ${String(d.source)})` : '')
-        answerQuestion(db, i.question.id, by, { option: opt, answer: text, reason: typeof d.reason === 'string' ? d.reason : undefined }, { facts: i.facts })
+        answered = answerQuestion(db, i.question.id, by, { option: opt, answer: text, reason: typeof d.reason === 'string' ? d.reason : undefined }, { facts: i.facts })
         ref = i.question.id
       }
       const id = decide(db, {
@@ -435,8 +442,10 @@ export const SKILL_ACTIONS = {
         detail: { skill: a.skill, checks: checks.map((c) => ({ id: c.id, status: c.status })), ...(jobId ? { job: jobId } : {}) },
       })
       putDraft(db, by.hash, a.skill, null)
-      return { result: { id, ref } }
+      return { result: { id, ref, answered } }
     }))
+    // saved: the wait from asked to answered, as question.answer records it (src/api/process-metrics.ts)
+    if (out.answered) recordAnswered(a.repo, out.answered)
     // Question answer: an agent that asked and then ended is started again with the answer, as question.answer does
     let carried: { jobId?: string; started?: string[]; jobError?: string; summary?: string } = {}
     if (a.skill === 'question-answer' && i.question) {

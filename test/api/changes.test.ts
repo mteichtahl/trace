@@ -19,6 +19,7 @@ import { journeyStore } from '../../src/api/action-kit.js'
 import { mergeMethod, neutralise, revisionRequest } from '../../src/api/actions-changes.js'
 import {
   type ChangeFacts, type TraceRule, CHECKS_DENIED, creditedAgent, fromWords, unfinishedWords, acceptance, approvalsGiven, awaitedApprovals, settleUnfinished, fileKind, jobsByBranch, recommendationOf, requirementIds, summaryBullets, traceChanges, verdictOf,
+  readySince,
 } from '../../src/api/changes.js'
 import { GitHubBudget, GitHubCache } from '../../src/api/github-cache.js'
 import type { JobRow } from '../../src/core/job-index.js'
@@ -720,5 +721,17 @@ describe('a change that waits on a person\'s approval', () => {
   it('still recommends asking for changes when the work itself is unfinished', () => {
     const f = settleUnfinished({ ...passed, unfinished: 'incomplete export' }, { title: 'trace: renders, incomplete export' }, new Set(['layout.renders']))
     expect(recommendationOf(f).verdict).toBe('ask')
+  })
+})
+
+describe('when a change became ready for a person (readySince)', () => {
+  const OPENED = '2026-11-02T09:00:00.000Z'
+  it('is the last of its checks to finish; when one has not finished or says no time, when it was opened', () => {
+    expect(readySince([{ status: 'completed', completed_at: '2026-11-02T09:20:00Z' }, { status: 'completed', completed_at: '2026-11-02T09:31:00Z' }], OPENED)).toBe('2026-11-02T09:31:00.000Z')
+    expect(readySince([{ status: 'completed', completed_at: '2026-11-02T09:20:00Z' }, { status: 'in_progress', completed_at: null }], OPENED)).toBe(OPENED)
+    expect(readySince([], OPENED)).toBe(OPENED)
+    expect(readySince(null, OPENED)).toBe(OPENED)
+    // a check that finished before the change was opened (a branch pushed earlier): ready when it was opened
+    expect(readySince([{ status: 'completed', completed_at: '2026-11-02T08:00:00Z' }], OPENED)).toBe(OPENED)
   })
 })

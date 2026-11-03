@@ -41,8 +41,15 @@ export interface ExportOptions {
   layers?: string
   /** 3D render side */
   side?: 'top' | 'bottom' | 'left' | 'right' | 'front' | 'back'
+  /** gerbers: plot these choices instead of the settings saved in the board file (--board-plot-params) */
+  gerbers?: { layers: string; protelExt: boolean; subtractSoldermask: boolean }
+  /** drill: plated and unplated holes in separate files (-PTH.drl, -NPTH.drl) instead of one merged file */
+  separateDrill?: boolean
   timeoutMs?: number
 }
+
+/** The non-copper layers a fab package plots, after the board's copper layers. */
+export const FAB_TECH_LAYERS = ['F.Paste', 'B.Paste', 'F.SilkS', 'B.SilkS', 'F.Mask', 'B.Mask', 'Edge.Cuts'] as const
 
 /** Run one export into `outDir`; returns kicad-cli's command for the record. */
 export async function exportOne(kind: ExportKind, files: { sch: string | null; pcb: string | null; name: string }, outDir: string,
@@ -56,12 +63,16 @@ export async function exportOne(kind: ExportKind, files: { sch: string | null; p
   switch (kind) {
     case 'gerbers':
       mkdirSync(join(outDir, 'gerbers'), { recursive: true })
-      args = ['pcb', 'export', 'gerbers', '--board-plot-params', '-o', join(outDir, 'gerbers') + '/', need(files.pcb, 'board')]
+      args = opts.gerbers
+        ? ['pcb', 'export', 'gerbers', '--layers', opts.gerbers.layers,
+            ...(opts.gerbers.subtractSoldermask ? ['--subtract-soldermask'] : []), ...(opts.gerbers.protelExt ? [] : ['--no-protel-ext']),
+            '-o', join(outDir, 'gerbers') + '/', need(files.pcb, 'board')]
+        : ['pcb', 'export', 'gerbers', '--board-plot-params', '-o', join(outDir, 'gerbers') + '/', need(files.pcb, 'board')]
       break
     case 'drill':
       mkdirSync(join(outDir, 'gerbers'), { recursive: true })
-      args = ['pcb', 'export', 'drill', '--format', 'excellon', '--excellon-units', 'mm', '--generate-map', '--map-format', 'gerberx2',
-        '-o', join(outDir, 'gerbers') + '/', need(files.pcb, 'board')]
+      args = ['pcb', 'export', 'drill', '--format', 'excellon', '--excellon-units', 'mm', ...(opts.separateDrill ? ['--excellon-separate-th'] : []),
+        '--generate-map', '--map-format', 'gerberx2', '-o', join(outDir, 'gerbers') + '/', need(files.pcb, 'board')]
       break
     case 'pos':
       args = ['pcb', 'export', 'pos', '--format', 'csv', '--units', 'mm', '--side', 'both', '--exclude-dnp',
@@ -92,6 +103,100 @@ export async function exportOne(kind: ExportKind, files: { sch: string | null; p
   }
   await runCli(args, t)
   return args
+}
+
+// ------------------------------------------------------------------ checking a fab package against what was asked
+
+/** What kicad.fab was asked to plot. `board`: the Gerber settings saved in the board file, so the two Gerber choices
+ * below are the board's and are not checked. */
+export interface FabSettings {
+  gerber_source: 'explicit' | 'board'
+  protel_ext: boolean
+  subtract_soldermask: boolean
+  separate_drill: boolean
+}
+
+export interface HoleCount { plated: number; unplated: number }
+
+/** The holes a board drills: vias and through-hole pads plated, NPTH pads not. */
+export function boardHoles(b: { vias: Record<string, readonly (readonly unknown[])[]>; pads: Record<string, readonly { kind: string; drill?: unknown }[]>; unnetted?: readonly { kind: string; drill?: unknown }[] | undefined }): HoleCount {
+  let plated = 0
+  let unplated = 0
+  for (const vs of Object.values(b.vias)) for (const v of vs) if (v[3] !== null && v[3] !== undefined) plated++
+  for (const p of [...Object.values(b.pads).flat(), ...(b.unnetted ?? [])]) {
+    if (!p.drill) continue
+    if (p.kind === 'np_thru_hole') unplated++
+    else if (p.kind === 'thru_hole') plated++
+  }
+  return { plated, unplated }
+}
+
+/** The holes in an Excellon file: drill hits (X…Y…), routed slots (M15) and canned slots (G85). */
+export function drillHits(text: string): number {
+  let n = 0
+  for (const raw of text.split(/\r?\n/)) {
+    const l = raw.trim()
+    if (/^X-?[\d.]+Y-?[\d.]+$/.test(l) || l === 'M15' || l.includes('G85')) n++
+  }
+  return n
+}
+
+export interface FabCheck {
+  /** what was asked and was not done: the package must not be sent */
+  problems: string[]
+  notes: string[]
+  holes: { board: HoleCount; files: HoleCount | { merged: number } }
+  drill_files: string[]
+}
+
+/**
+ * Whether the Gerbers and drill files kicad-cli wrote into `dir` are what `s` asked for: file names (Protel or .gbr),
+ * the Gerber job file and every file it names, separate or merged drill files, and every hole the board drills, in
+ * the right file. Anything missing is a problem, so a package is never passed on with a choice quietly not applied.
+ */
+export function checkFab(dir: string, name: string, s: FabSettings, board: HoleCount): FabCheck {
+  const problems: string[] = []
+  const notes: string[] = []
+  const files = readdirSync(dir).filter((f) => statSync(join(dir, f)).isFile()).sort()
+  const copper = files.filter((f) => f.startsWith(`${name}-`) && /_Cu\.[^.]+$/.test(f))
+  if (!copper.length) problems.push('no copper Gerbers were written')
+  if (s.gerber_source === 'explicit') {
+    const gbr = copper.filter((f) => f.endsWith('.gbr'))
+    if (s.protel_ext && gbr.length) problems.push(`Protel extensions were asked for, but kicad-cli wrote ${gbr.join(', ')}`)
+    if (!s.protel_ext && copper.length > gbr.length) problems.push(`.gbr names were asked for, but kicad-cli wrote ${copper.filter((f) => !f.endsWith('.gbr')).join(', ')}`)
+  } else notes.push("Gerber names and silkscreen clipping follow the settings saved in the board file")
+  const job = files.find((f) => f.endsWith('.gbrjob'))
+  if (!job) problems.push('no Gerber job file (.gbrjob) was written')
+  else {
+    try {
+      const named = ((JSON.parse(readFileSync(join(dir, job), 'utf8')) as { FilesAttributes?: { Path?: string }[] }).FilesAttributes ?? [])
+        .map((a) => a.Path ?? '').filter(Boolean)
+      const missing = named.filter((p) => !files.includes(basename(p)))
+      if (missing.length) problems.push(`the Gerber job file names files that are not in the package: ${missing.join(', ')}`)
+    } catch {
+      problems.push(`the Gerber job file ${job} is not readable JSON`)
+    }
+  }
+  const drl = files.filter((f) => f.endsWith('.drl'))
+  const hits = (f: string): number => drillHits(readFileSync(join(dir, f), 'utf8'))
+  let fileHoles: FabCheck['holes']['files']
+  if (s.separate_drill) {
+    if (!drl.includes(`${name}-PTH.drl`)) problems.push(`separate drill files were asked for, but there is no ${name}-PTH.drl`)
+    if (drl.includes(`${name}.drl`)) problems.push(`separate drill files were asked for, but kicad-cli wrote a merged ${name}.drl`)
+    const npth = drl.filter((f) => /-NPTH\.drl$/.test(f))
+    if (!npth.length && board.unplated) problems.push(`the board has ${board.unplated} unplated holes but there is no ${name}-NPTH.drl`)
+    const f = { plated: drl.filter((x) => !npth.includes(x)).reduce((n, x) => n + hits(x), 0), unplated: npth.reduce((n, x) => n + hits(x), 0) }
+    if (f.plated !== board.plated) problems.push(`the board drills ${board.plated} plated holes, the drill files hold ${f.plated}`)
+    if (f.unplated !== board.unplated) problems.push(`the board drills ${board.unplated} unplated holes, the NPTH file holds ${f.unplated}`)
+    fileHoles = f
+  } else {
+    if (!drl.includes(`${name}.drl`)) problems.push(`a merged drill file was asked for, but there is no ${name}.drl`)
+    const merged = drl.reduce((n, x) => n + hits(x), 0)
+    if (merged !== board.plated + board.unplated) problems.push(`the board drills ${board.plated + board.unplated} holes, the drill file holds ${merged}`)
+    if (board.unplated) notes.push(`${board.unplated} unplated holes share the merged drill file with the plated ones: check the fab will not plate them`)
+    fileHoles = { merged }
+  }
+  return { problems, notes, holes: { board, files: fileHoles }, drill_files: drl }
 }
 
 /** Zip a folder, files stored uncompressed (no compression library needed: a fab house only needs them together). */

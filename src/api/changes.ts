@@ -25,6 +25,10 @@
  *   requirements                      the requirement ids (R4, R7, and ranges such as R1-R10) the change names
  *   summary                           what trace did, as plain bullets: the job's result, else the pull request's
  *                                     first list, else its commit subjects
+ *   ready_since                       when it became ready for a person (readySince): its head commit's checks all
+ *                                     finished, the last of them; GitHub giving no finishing time (commit statuses,
+ *                                     none at all), when the pull request was opened. Operations' wait on a change
+ *                                     runs from it to the accept (src/api/process-metrics.ts)
  *
  * GitHub's mergeable_state is read as: clean or has_hooks (can merge), unstable (a check that is not required failed),
  * dirty (a conflict), behind (the repository wants it up to date first), blocked (its rules stop it: required checks
@@ -35,7 +39,7 @@ import { type AppEdit, EDIT_WORDS, type EditKind } from '../core/app-edits.js'
 import type { JobRow } from '../core/job-index.js'
 import { indexedHandle } from '../core/job-index.js'
 import { type JourneyRecord, LATER_STAGES, STAGE_IDS, type StageId, TEMPLATES, templateStages } from '../core/journey.js'
-import type { PullFile, PullStatus, PullSummary } from './github.js'
+import type { CheckRunDetail, PullFile, PullStatus, PullSummary } from './github.js'
 
 export type Verdict = 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked' | 'unfinished' | 'applying'
 /** 'work': a specialist's change (docs/guided-flow.md); otherwise an edit a person made in the app (docs/stay-in-trace.md) */
@@ -82,6 +86,18 @@ export interface ChangeDetail extends ChangeSummary {
   may_discard: boolean
   /** a specialist's change: whether this person may ask for changes (never for an edit: there is no specialist) */
   may_ask: boolean
+  /** when it became ready for a person (readySince), ISO */
+  ready_since: string
+}
+
+/**
+ * When a change became ready for a person: the last of its head commit's checks to finish, when every check finished
+ * and GitHub says when; otherwise when the pull request was opened (all trace has). Pure.
+ */
+export function readySince(runs: readonly Pick<CheckRunDetail, 'status' | 'completed_at'>[] | null, openedAt: string): string {
+  const done = (runs ?? []).map((r) => (r.status === 'completed' && r.completed_at ? Date.parse(r.completed_at) : NaN))
+  if (!done.length || done.some((t) => !Number.isFinite(t))) return openedAt
+  return new Date(Math.max(...done, Date.parse(openedAt) || 0)).toISOString()
 }
 
 /** The facts the verdict, recommendation and blockers are worked out from. */

@@ -1,7 +1,8 @@
 /**
  * "What happens next", after a change is accepted (docs/guided-flow.md, Confirmations; the proposal's phone screen):
  * the confirmation (what moved: "Capture is now on step 4 of 5", and what trace is doing now with its time), the next
- * three steps with who does them, "We'll tell you the moment the gate is ready", and "Back to Needs you · N left".
+ * three steps with who does them, "We'll tell you the moment the gate is ready", and "Go to next · N left" (Next, the
+ * queue of what needs the person) with the project one tap back, or "Back to Home" when nothing is left.
  *
  * It is driven by the accept answer (`stage`, `next`) and the journey as it is after the accept (its refreshed steps).
  * On a phone the screen opens at once, full height, in place of the toast. On wider screens the toast stays (it
@@ -9,7 +10,7 @@
  */
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { Check, Circle, CircleDashed, PartyPopper } from 'lucide-react'
+import { ArrowRight, Check, Circle, CircleDashed, PartyPopper } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { SideSheet } from '@/components/side-sheet'
@@ -34,6 +35,8 @@ export interface NextView {
   steps: { text: string; who: string; when: 'now' | 'next' | 'later'; owner: StageStep['owner'] }[]
   notice: string
   back: string
+  /** whether anything else needs the person: the main button goes on to Next */
+  more: boolean
 }
 
 const stageNameOf = (j: Pick<Journey, 'stages'> | undefined, id: string) => j?.stages.find((s) => s.id === id)?.name ?? (id ? id.charAt(0).toUpperCase() + id.slice(1) : 'The stage')
@@ -60,7 +63,8 @@ export function nextView(a: Pick<Accepted, 'title' | 'result'>, j: Pick<Journey,
     doing: a.result.next || 'trace carries on with the next step.',
     steps: upcoming,
     notice: gateNext ? "We'll tell you the moment the gate is ready. No need to keep this open." : "We'll tell you when something needs you. No need to keep this open.",
-    back: left > 0 ? `Back to Needs you · ${left} left` : 'Back to Home',
+    back: left > 0 ? `Go to next · ${left} left` : 'Back to Home',
+    more: left > 0,
   }
 }
 
@@ -96,9 +100,18 @@ export function NextBody({ v, onBack, className }: { v: NextView; onBack: () => 
         </section>
       )}
       <p className="text-sm text-muted-foreground">{v.notice}</p>
-      <Button variant="outline" className="h-11 w-full" asChild>
-        <Link to="/" onClick={onBack}>{v.back}</Link>
-      </Button>
+      {v.more ? (
+        <div className="space-y-2">
+          <Button className="h-12 w-full text-base" asChild>
+            <Link to="/next" onClick={onBack}>{v.back} <ArrowRight aria-hidden /></Link>
+          </Button>
+          <Button variant="outline" className="h-11 w-full" onClick={onBack}>Back to the project</Button>
+        </div>
+      ) : (
+        <Button variant="outline" className="h-11 w-full" asChild>
+          <Link to="/" onClick={onBack}>{v.back}</Link>
+        </Button>
+      )}
     </div>
   )
 }

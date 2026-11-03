@@ -88,11 +88,12 @@ import { BENCH_DB } from '../core/bench.js'
 import { AGENT_FACTS_DB, AGENT_FACTS_FOLDER } from '../core/agent-facts.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
 import { JOB_INDEX_DB, JOB_INDEX_FOLDER } from '../core/job-index.js'
+import { JOURNEY_DB, JOURNEY_FOLDER } from '../core/journey-store.js'
 import { ACCESS_PREFIX } from './project.js'
 import { EDGE_REGION, TraceWebAcl, edgeStackName } from './edge.js'
 import { agentsDashboardName } from './observability.js'
 import { BACKEND_RESOURCE_SERVER, BACKEND_SCOPE, BACKEND_SCOPE_FULL } from '../api/backend-auth.js'
-import { type InfraProps, WEB_HOOKS_OUTPUTS, WEB_OUTPUTS, webConfigParameter, webHooksClientSecret, webHooksName, webHooksOn, webHooksOriginSecret, webHooksSecret, webModel } from './props.js'
+import { type InfraProps, WEB_HOOKS_OUTPUTS, WEB_OUTPUTS, webConfigParameter, webHooksClientSecret, webHooksName, webHooksOn, webHooksOriginSecret, webHooksSecret, webModel, webPushName, webPushSecret } from './props.js'
 
 /** The backend's voice cache, in the voice bucket of its own (docs/web-build.md /api/voice/speak). */
 export const VOICE_PREFIX = 'voice'
@@ -297,6 +298,12 @@ export class WebStack extends NestedStack {
     // a cache miss is a 404, not a 403, only with ListBucket
     role.addToPolicy(new iam.PolicyStatement({
       sid: 'VoiceCacheList', actions: ['s3:ListBucket'], resources: [this.voiceBucket.bucketArn], conditions: { StringLike: { 's3:prefix': [`${VOICE_PREFIX}/*`] } },
+    }))
+    // the installation's push keys: GET /api/push/key gives the app their public half, and makes the pair the first time
+    // (src/web/push-keys.ts). By name; never updated or deleted
+    role.addToPolicy(new iam.PolicyStatement({
+      sid: 'PushKeys', actions: ['secretsmanager:GetSecretValue', 'secretsmanager:CreateSecret'],
+      resources: [`arn:${partition}:secretsmanager:${region}:${account}:secret:${webPushSecret(p.prefix)}-??????`],
     }))
     // no resource-level permissions exist for these two; dashboards are read by name below
     role.addToPolicy(new iam.PolicyStatement({ sid: 'OpsRead', actions: ['cloudwatch:GetMetricData', 'cloudwatch:DescribeAlarms'], resources: ['*'] }))
@@ -566,10 +573,26 @@ export class WebStack extends NestedStack {
 
   /** The Lambda `<prefix>-journey-events` and the rule that sends it the agents' facts writes (see the file's comment). */
   private addJourneyEvents(p: WebStackProps, central: s3.IBucket, code: lambda.Code, bundle: boolean): lambda.Function {
+    const { region, account, partition } = Stack.of(this)
     const fnRole = new iam.Role(this, 'JourneyEventsRole', {
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
-      description: 'trace: live events for the agents\' facts: reads the access store and the facts that changed, publishes live events',
+      description: 'trace: live events and push for the journey: reads the access store and what changed, publishes live events, sends push notifications',
     })
+    // push (src/web/push-sender.ts): what was pushed to whom, and dead devices; nothing in it outlives 90 days
+    const pushTable = new dynamodb.Table(this, 'PushLedger', {
+      tableName: webPushName(p.prefix),
+      partitionKey: { name: 'k', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: 'ttl',
+      removalPolicy: RemovalPolicy.DESTROY,
+    })
+    fnRole.addToPolicy(new iam.PolicyStatement({ sid: 'PushLedger', actions: ['dynamodb:UpdateItem'], resources: [pushTable.tableArn] }))
+    // the installation's push keys: by name (the installer makes them; Secrets Manager adds six characters), read only
+    fnRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'PushKeys', actions: ['secretsmanager:GetSecretValue'], resources: [`arn:${partition}:secretsmanager:${region}:${account}:secret:${webPushSecret(p.prefix)}-??????`],
+    }))
+    // the journey record, read only: what Next shows each person, to push what is new (no live events from it)
+    fnRole.addToPolicy(new iam.PolicyStatement({ sid: 'JourneyRead', actions: ['s3:GetObject'], resources: [central.arnForObjects(JOURNEY_KEYS)] }))
     // who is on the project: the access store, read only (S3 answers a missing object 404 only with ListBucket there)
     fnRole.addToPolicy(new iam.PolicyStatement({ sid: 'AccessStoreRead', actions: ['s3:GetObject'], resources: [central.arnForObjects(`${ACCESS_PREFIX}/*`)] }))
     fnRole.addToPolicy(new iam.PolicyStatement({
@@ -586,20 +609,23 @@ export class WebStack extends NestedStack {
     fnLogs.grantWrite(fnRole)
     const fn = new lambda.Function(this, 'JourneyEvents', {
       functionName: `${p.prefix}-journey-events`,
-      description: 'trace: an agent recorded a journey fact; tells the people on the project (src/web/journey-events.ts)',
+      description: 'trace: the journey or an agent\'s facts changed; tells the people on the project, live and by push (src/web/journey-events.ts)',
       runtime: lambda.Runtime.NODEJS_22_X,
       architecture: lambda.Architecture.ARM_64,
       handler: 'journey-events.handler',
       code: bundle ? code : lambda.Code.fromAsset(placeholder('journey-events.mjs', 'export const handler = async () => undefined\n')),
       role: fnRole,
       memorySize: 512,
-      timeout: Duration.seconds(30),
+      // a push to each subscribed person's devices comes after the live events
+      timeout: Duration.seconds(60),
       logGroup: fnLogs,
       environment: {
         TRACE_CENTRAL_BUCKET: central.bucketName,
         TRACE_EVENTS_HTTP: this.events.httpDns,
         // the access store's read copy is cached in the one writable folder
         XDG_CACHE_HOME: '/tmp',
+        TRACE_PUSH_TABLE: pushTable.tableName,
+        TRACE_PUSH_SECRET: webPushSecret(p.prefix),
         NODE_OPTIONS: '--enable-source-maps',
       },
     })
@@ -609,7 +635,9 @@ export class WebStack extends NestedStack {
       eventPattern: {
         source: ['aws.s3'],
         detailType: ['Object Created'],
-        detail: { bucket: { name: [central.bucketName] }, object: { key: events.Match.anyOf(events.Match.wildcard(AGENT_FACTS_KEYS), events.Match.wildcard(BENCH_KEYS), events.Match.wildcard(JOB_INDEX_KEYS)) } },
+        detail: { bucket: { name: [central.bucketName] }, // matched by their endings: EventBridge refuses four wildcards in one rule as "too complex"; the handler
+        // (src/web/journey-events.ts) checks each key whole, so a key outside projects/ that ends the same is ignored
+        object: { key: events.Match.anyOf(...JOURNEY_EVENT_KEY_ENDINGS.map((e) => events.Match.suffix(e))) } },
       },
     })
     rule.addTarget(new targets.LambdaFunction(fn, { retryAttempts: 2, maxEventAge: Duration.hours(1) }))
@@ -651,10 +679,19 @@ export function addHooksClient(pool: cognito.UserPool, prefix: string): cognito.
   return client
 }
 
-/** The agents' facts objects, as the JourneyEvents rule matches them (EventBridge wildcard). */
+/** The endings of the keys the JourneyEvents rule matches: the facts, the bench, the job index, the journey record. */
+export const JOURNEY_EVENT_KEY_ENDINGS = [
+  `/${AGENT_FACTS_FOLDER}/${AGENT_FACTS_DB}`,
+  `/${AGENT_FACTS_FOLDER}/${BENCH_DB}`,
+  `/${JOB_INDEX_FOLDER}/${JOB_INDEX_DB}`,
+  `/${JOURNEY_FOLDER}/${JOURNEY_DB}`,
+] as const
+/** The agents' facts objects, as the JourneyEvents rule matches them (the read grant). */
 export const AGENT_FACTS_KEYS = `${PROJECTS_PREFIX}/*/${AGENT_FACTS_FOLDER}/${AGENT_FACTS_DB}`
 /** The bench's live copies (src/core/bench.ts): a reading taken refreshes the Bring-up run screen; never read. */
 export const BENCH_KEYS = `${PROJECTS_PREFIX}/*/${AGENT_FACTS_FOLDER}/${BENCH_DB}`
+/** The projects' journey records (src/core/journey-store.ts): push only (src/web/push-sender.ts). */
+export const JOURNEY_KEYS = `${PROJECTS_PREFIX}/*/${JOURNEY_FOLDER}/${JOURNEY_DB}`
 /** The projects' job indexes (src/core/job-index.ts), the same way: job.updated events. */
 export const JOB_INDEX_KEYS = `${PROJECTS_PREFIX}/*/${JOB_INDEX_FOLDER}/${JOB_INDEX_DB}`
 

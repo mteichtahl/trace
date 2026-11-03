@@ -54,6 +54,9 @@ export interface StorePort {
   presignGet(bucket: string, key: string, seconds: number): Promise<string>
 }
 
+/** The id of the results that carry GetMetricData's request-level Messages (a limit reached, data left out). */
+export const MESSAGES_ID = '__messages'
+
 export interface CloudWatchPort {
   /** The dashboard's body (JSON text). */
   getDashboard(name: string): Promise<string>

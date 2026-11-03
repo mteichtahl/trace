@@ -22,6 +22,7 @@ import { jobRequest } from './changes.js'
 import { type Context, label, withRecordDb } from './action-kit.js'
 import { SETTINGS_TTL_MS, cached } from './github-cache.js'
 import { requirementEvidence } from './record-read.js'
+import { recordRework } from './process-metrics.js'
 
 /** The job Intent builder's Submit starts: the candidate requirements, drafted from the intent as the people decided it. */
 export const REQUIREMENTS_FROM_INTENT = [
@@ -191,10 +192,13 @@ export async function draftingNow(ctx: Context, repo: string, r: JourneyRecord, 
  * kept in the record by logRetry.
  */
 export async function draftRequirements(ctx: Context, repo: string, attempt = 1): Promise<{ accepted: boolean; jobId: string; reason?: string | undefined }> {
-  return (await ctx.deps.jobs()).startJob({
+  const r = await (await ctx.deps.jobs()).startJob({
     kind: 'task', repository: repo, request: REQUIREMENTS_FROM_INTENT, agent: 'verify', requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub,
     ...(attempt > 1 ? { attempt } : {}),
   })
+  // a stopped drafting job started again is work done twice (src/api/process-metrics.ts)
+  if (attempt > 1 && r.accepted) recordRework(repo, 'job_restarted')
+  return r
 }
 
 /** Log a retry in the record (requirements.draft), with its attempt: the next look's grace and attempt count from it. */

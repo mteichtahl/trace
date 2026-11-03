@@ -19,6 +19,7 @@ import { Route as AppAdminRouteImport } from './routes/_app/admin'
 import { Route as AppInboxRouteImport } from './routes/_app/inbox'
 import { Route as AppKnowledgeRouteImport } from './routes/_app/knowledge'
 import { Route as AppMeRouteImport } from './routes/_app/me'
+import { Route as AppNextRouteImport } from './routes/_app/next'
 import { Route as SignInIndexRouteImport } from './routes/sign-in/index'
 import { Route as SignInCodeRouteImport } from './routes/sign-in/code'
 import { Route as SignInResetRouteImport } from './routes/sign-in/reset'
@@ -110,6 +111,11 @@ const AppKnowledgeRoute = AppKnowledgeRouteImport.update({
 const AppMeRoute = AppMeRouteImport.update({
   id: '/me',
   path: '/me',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppNextRoute = AppNextRouteImport.update({
+  id: '/next',
+  path: '/next',
   getParentRoute: () => AppRoute,
 } as any)
 const SignInIndexRoute = SignInIndexRouteImport.update({
@@ -342,6 +348,7 @@ export interface FileRoutesByFullPath {
   '/inbox': typeof AppInboxRoute
   '/knowledge': typeof AppKnowledgeRouteWithChildren
   '/me': typeof AppMeRoute
+  '/next': typeof AppNextRoute
   '/sign-in/code': typeof SignInCodeRoute
   '/sign-in/reset': typeof SignInResetRoute
   '/sign-in/': typeof SignInIndexRoute
@@ -394,6 +401,7 @@ export interface FileRoutesByTo {
   '/view': typeof ViewRouteWithChildren
   '/inbox': typeof AppInboxRoute
   '/me': typeof AppMeRoute
+  '/next': typeof AppNextRoute
   '/sign-in/code': typeof SignInCodeRoute
   '/sign-in/reset': typeof SignInResetRoute
   '/sign-in': typeof SignInIndexRoute
@@ -448,6 +456,7 @@ export interface FileRoutesById {
   '/_app/inbox': typeof AppInboxRoute
   '/_app/knowledge': typeof AppKnowledgeRouteWithChildren
   '/_app/me': typeof AppMeRoute
+  '/_app/next': typeof AppNextRoute
   '/sign-in/code': typeof SignInCodeRoute
   '/sign-in/reset': typeof SignInResetRoute
   '/_app/': typeof AppIndexRoute
@@ -505,6 +514,7 @@ export interface FileRouteTypes {
     | '/inbox'
     | '/knowledge'
     | '/me'
+    | '/next'
     | '/sign-in/code'
     | '/sign-in/reset'
     | '/sign-in/'
@@ -557,6 +567,7 @@ export interface FileRouteTypes {
     | '/view'
     | '/inbox'
     | '/me'
+    | '/next'
     | '/sign-in/code'
     | '/sign-in/reset'
     | '/sign-in'
@@ -610,6 +621,7 @@ export interface FileRouteTypes {
     | '/_app/inbox'
     | '/_app/knowledge'
     | '/_app/me'
+    | '/_app/next'
     | '/sign-in/code'
     | '/sign-in/reset'
     | '/_app/'
@@ -738,6 +750,13 @@ declare module '@tanstack/react-router' {
       path: '/me'
       fullPath: '/me'
       preLoaderRoute: typeof AppMeRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/next': {
+      id: '/_app/next'
+      path: '/next'
+      fullPath: '/next'
+      preLoaderRoute: typeof AppNextRouteImport
       parentRoute: typeof AppRoute
     }
     '/sign-in/': {
@@ -1162,6 +1181,7 @@ interface AppRouteChildren {
   AppInboxRoute: typeof AppInboxRoute
   AppKnowledgeRoute: typeof AppKnowledgeRouteWithChildren
   AppMeRoute: typeof AppMeRoute
+  AppNextRoute: typeof AppNextRoute
   AppIndexRoute: typeof AppIndexRoute
   AppAgentsAgentRoute: typeof AppAgentsAgentRoute
   AppOpsSectionRoute: typeof AppOpsSectionRoute
@@ -1178,6 +1198,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppInboxRoute: AppInboxRoute,
   AppKnowledgeRoute: AppKnowledgeRouteWithChildren,
   AppMeRoute: AppMeRoute,
+  AppNextRoute: AppNextRoute,
   AppIndexRoute: AppIndexRoute,
   AppAgentsAgentRoute: AppAgentsAgentRoute,
   AppOpsSectionRoute: AppOpsSectionRoute,
