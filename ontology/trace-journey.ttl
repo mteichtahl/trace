@@ -1,0 +1,940 @@
+# trace's ontology: the journey module (docs/ontology.md "Journey module"). Who did what, why and who approved it, for
+# one project from its intent to bring-up: the journey record (journey.db, written by the API only), the agents' facts
+# (facts.db) and the job index (jobs.db). Names are trace's own (src/core/journey.ts, agent-facts.ts, job-index.ts);
+# src/ontology/mapping.ts says which table and column each class and property comes from, and CI checks the two agree.
+#
+# A class no table stores says where its instances come from instead (trace:keptIn): trace's code, the central store,
+# GitHub, or a later phase's mapping.
+
+@prefix trace: <https://trace-eda.com/ns/trace#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix skos:  <http://www.w3.org/2004/02/skos/core#> .
+
+<https://trace-eda.com/ns/trace/journey> a owl:Ontology ;
+    rdfs:label "trace journey" ;
+    rdfs:comment "Templates, stages, gates and their criteria, signatures, waivers, questions, decisions, hand-offs and jobs: the record of how a project got where it is." ;
+    owl:imports <https://trace-eda.com/ns/trace/core> ;
+    owl:versionInfo "0.1.0" .
+
+# ================================================================== templates, journey, revisions, stages
+
+trace:JourneyTemplate a owl:Class ;
+    rdfs:label "Project template" ;
+    rdfs:comment "The stages, gates and criteria for one kind of project: board, programmable logic, firmware or mixed." ;
+    trace:keptIn "trace's code (TEMPLATES and GATES in src/core/journey.ts), and later each installation's settings" .
+
+trace:Journey a owl:Class ;
+    rdfs:label "Journey" ;
+    rdfs:comment "One project's run through its template, from intent to bring-up and any later stages." .
+
+trace:Revision a owl:Class ;
+    rdfs:label "Revision" ;
+    rdfs:comment "One pass of the journey, such as A or B. A change after a release starts the next revision." ;
+    trace:keptIn "the revision columns of the journey record's tables" .
+
+trace:Stage a owl:Class ;
+    rdfs:label "Stage" ;
+    rdfs:comment "A phase of the journey, such as Architect or Capture, with the gates that end it." .
+
+trace:Gate a owl:Class ;
+    rdfs:label "Gate" ;
+    rdfs:comment "A check that ends a stage: every criterion met or waived, and a signature." .
+
+trace:Criterion a owl:Class ;
+    rdfs:label "Criterion" ;
+    rdfs:comment "One thing a gate needs, owned by a person or by trace, with the evidence that meets it." .
+
+trace:CriterionCheck a owl:Class ;
+    rdfs:subClassOf trace:AgentAction ;
+    rdfs:label "Criterion check" ;
+    rdfs:comment "One check of a criterion by a specialist or a checker, with its result and evidence." ;
+    skos:altLabel "gate run" .
+
+trace:EvidenceOpening a owl:Class ;
+    rdfs:label "Evidence opened" ;
+    rdfs:comment "A person opened a criterion's or a waiver's evidence: signing needs it." .
+
+trace:Signature a owl:Class ;
+    rdfs:label "Signature" ;
+    rdfs:comment "A person's approval of a gate, with each criterion and its evidence as they stood when signed." .
+
+trace:Waiver a owl:Class ;
+    rdfs:label "Waiver" ;
+    rdfs:comment "An accepted exception: a criterion, requirement, finding or test let through, with its reason, risk and where it is caught instead." .
+
+# ================================================================== questions, options and decisions
+
+trace:Question a owl:Class ;
+    rdfs:label "Question" ;
+    rdfs:comment "Something trace needs a person to answer, with its options recommended first." .
+
+trace:Option a owl:Class ;
+    rdfs:label "Option" ;
+    rdfs:comment "One answer offered to a question, with why and what it gives up." .
+
+trace:Recommendation a owl:Class ;
+    rdfs:subClassOf trace:Option ;
+    rdfs:label "Recommendation" ;
+    rdfs:comment "The option trace recommends, with its reason." .
+
+trace:Decision a owl:Class ;
+    rdfs:label "Decision" ;
+    rdfs:comment "A choice a person made." .
+
+trace:DesignDecision a owl:Class ;
+    rdfs:subClassOf trace:Decision ;
+    rdfs:label "Design decision" ;
+    rdfs:comment "A person's decision about what the agents proposed in the design record: an intent statement, a requirement struck, the architecture chosen, the pin plan agreed." .
+
+trace:DecisionEntry a owl:Class ;
+    rdfs:label "Entry in the decisions log" ;
+    rdfs:comment "One line of the journey's log of what happened: a start, a signature, a return, an answer, a waiver, a change accepted." .
+
+# ================================================================== specialists, skills, jobs, hand-offs
+
+trace:Specialist a owl:Class ;
+    rdfs:label "Specialist" ;
+    rdfs:comment "One of trace's agent roles, such as the Verification specialist." ;
+    trace:keptIn "trace's code (the agent definitions); named by kind in the records" .
+
+trace:Skill a owl:Class ;
+    rdfs:label "Skill" ;
+    rdfs:comment "Guidance that sets a minimum quality bar for a kind of work." ;
+    trace:keptIn "trace's code (src/core/skills.ts)" .
+
+trace:HeuristicRule a owl:Class ;
+    rdfs:label "Rule of thumb" ;
+    rdfs:comment "A rule a skill applies, such as prefer parts in stock." ;
+    trace:keptIn "trace's code (the skills' text)" .
+
+trace:SuccessMetric a owl:Class ;
+    rdfs:label "Success measure" ;
+    rdfs:comment "How a piece of work is judged to have worked." ;
+    trace:keptIn "trace's code (the skills' checks)" .
+
+trace:FallbackStrategy a owl:Class ;
+    rdfs:label "Fallback" ;
+    rdfs:comment "What to do when the main approach fails." ;
+    trace:keptIn "trace's code (the skills' text)" .
+
+trace:AgentAction a owl:Class ;
+    rdfs:label "Agent action" ;
+    rdfs:comment "Something a specialist did, with what it read and what it made." .
+
+trace:Job a owl:Class ;
+    rdfs:subClassOf trace:AgentAction ;
+    rdfs:label "Job" ;
+    rdfs:comment "Queued work a specialist does: a person's task, a work item or a hand-off's answer." .
+
+trace:JobControl a owl:Class ;
+    rdfs:label "Job control" ;
+    rdfs:comment "A person's hold, place in the queue or discard of a job." .
+
+trace:HandOff a owl:Class ;
+    rdfs:label "Hand-off" ;
+    rdfs:comment "A request from one specialist to another, which starts a job of its own." .
+
+trace:HandOffDecline a owl:Class ;
+    rdfs:label "Declined hand-off" ;
+    rdfs:comment "A person's decision not to start a hand-off, with their reason." .
+
+trace:Stuck a owl:Class ;
+    rdfs:label "Stuck work" ;
+    rdfs:comment "A specialist could not go on and says why, with what it recommends." .
+
+trace:StuckDismissal a owl:Class ;
+    rdfs:label "Dismissed stuck work" ;
+    rdfs:comment "A person set stuck work aside, with their reason." .
+
+# ================================================================== changes
+
+trace:Change a owl:Class ;
+    rdfs:label "Change" ;
+    rdfs:comment "Work a specialist's job proposes, which reaches the record only when a person accepts it." ;
+    skos:altLabel "pull request" ;
+    trace:keptIn "the pull requests a trace job opened, read from GitHub by the API, with their outcome in the decisions log" .
+
+trace:ChangeImpact a owl:Class ;
+    rdfs:label "Change impact" ;
+    rdfs:comment "What a change request would reopen before a person agrees to it: stages, gates to sign again, evidence made out of date." ;
+    trace:derived true ;
+    trace:keptIn "worked out when it is read (src/api/change-impact.ts)" .
+
+# ================================================================== orders and boards
+
+trace:PlacedOrder a owl:Class ;
+    rdfs:label "Placed order" ;
+    rdfs:comment "Boards a person ordered from the fab house, with the fab house's order number and its state." .
+
+trace:Shipment a owl:Class ;
+    rdfs:label "Shipment" ;
+    rdfs:comment "How a placed order travels: its carrier and tracking number." .
+
+trace:BoardUnit a owl:Class ;
+    rdfs:label "Board" ;
+    rdfs:comment "One physical board, by the serial on its label." .
+
+trace:InspectionCheck a owl:Class ;
+    rdfs:label "Inspection check" ;
+    rdfs:comment "One result of looking a received board over: a count, a visual check, a fault or a part placed by hand." .
+
+trace:BenchReading a owl:Class ;
+    rdfs:label "Bench reading" ;
+    rdfs:comment "A measurement taken at the bench while a board is brought up, against its limits." ;
+    trace:keptIn "the run record (.trace/project.db bringup_readings), mapped with the board module" .
+
+trace:Deployment a owl:Class ;
+    rdfs:label "Deployment" ;
+    rdfs:comment "Firmware put into an environment, or rolled back." ;
+    trace:keptIn "the deploy workflow's runs and the decisions log (deploy.approved, deploy.rollback)" .
+
+trace:DeployApproval a owl:Class ;
+    rdfs:label "Deploy approval" ;
+    rdfs:comment "A person's approval of one commit for one environment, which only trace's own service can write." ;
+    trace:keptIn "the central store, beside the journey record (src/core/deploy-approvals.ts)" .
+
+# ================================================================== people
+
+trace:Person a owl:Class ;
+    rdfs:label "Person" ;
+    rdfs:comment "Someone who uses trace." ;
+    trace:keptIn "the installation's access store; records name people by email and by a short hash" .
+
+trace:ProjectRole a owl:Class ;
+    rdfs:label "Project role" ;
+    rdfs:comment "What a person may do on one project: contributor or reviewer." ;
+    trace:keptIn "the installation's access store" .
+
+# ================================================================== history (append-only)
+
+trace:CriterionChange a owl:Class ;
+    rdfs:label "Criterion change" ;
+    rdfs:comment "One change to a criterion's status or evidence, kept for good." .
+
+trace:StageEvent a owl:Class ;
+    rdfs:label "Stage event" ;
+    rdfs:comment "A stage started, finished, reopened or cleared for a new revision, kept for good." .
+
+trace:JourneyFieldChange a owl:Class ;
+    rdfs:label "Journey change" ;
+    rdfs:comment "One change to one of the journey's own fields, such as its current stage or its name, kept for good." .
+
+# ================================================================== journey properties
+
+trace:fromTemplate a owl:ObjectProperty ;
+    rdfs:label "from template" ;
+    rdfs:comment "The template the journey started from." ;
+    rdfs:domain trace:Journey ;
+    rdfs:range trace:JourneyTemplate .
+
+trace:currentRevision a owl:ObjectProperty ;
+    rdfs:label "current revision" ;
+    rdfs:comment "The revision the journey is on now." ;
+    rdfs:domain trace:Journey ;
+    rdfs:range trace:Revision .
+
+trace:currentStage a owl:ObjectProperty ;
+    rdfs:label "current stage" ;
+    rdfs:comment "The stage the journey is at now." ;
+    rdfs:domain trace:Journey ;
+    rdfs:range trace:Stage .
+
+trace:laterStage a owl:DatatypeProperty ;
+    rdfs:label "later stage chosen" ;
+    rdfs:comment "A stage after bring-up the project chose: certify, produce or sustain." ;
+    rdfs:domain trace:Journey ;
+    rdfs:range xsd:string .
+
+trace:startedFrom a owl:DatatypeProperty ;
+    rdfs:label "started from" ;
+    rdfs:comment "Whether the project started from an idea or from an imported design." ;
+    rdfs:domain trace:Journey ;
+    rdfs:range xsd:string .
+
+trace:icon a owl:DatatypeProperty ;
+    rdfs:label "icon" ;
+    rdfs:comment "The project's icon, as its glyph and colour." ;
+    rdfs:range rdf:JSON .
+
+trace:buildPlan a owl:DatatypeProperty ;
+    rdfs:label "build plan" ;
+    rdfs:comment "How many boards, at what unit cost and budget, from which fab house, in which currency." ;
+    rdfs:domain trace:Journey ;
+    rdfs:range rdf:JSON .
+
+trace:hasStage a owl:ObjectProperty ;
+    rdfs:label "has stage" ;
+    rdfs:comment "A stage of the journey." ;
+    rdfs:domain trace:Journey ;
+    rdfs:range trace:Stage .
+
+trace:inRevision a owl:ObjectProperty ;
+    rdfs:label "in revision" ;
+    rdfs:comment "The revision a record belongs to." ;
+    rdfs:range trace:Revision .
+
+# ================================================================== stage and gate properties
+
+trace:stageKind a owl:DatatypeProperty ;
+    rdfs:label "stage kind" ;
+    rdfs:comment "Which stage it is: define, architect, capture, prove, layout, signoff, release, fabricate, bringup, certify, produce or sustain." ;
+    rdfs:range xsd:string .
+
+trace:startedAt a owl:DatatypeProperty ;
+    rdfs:label "started at" ;
+    rdfs:comment "When it started." ;
+    rdfs:range xsd:dateTime .
+
+trace:endedAt a owl:DatatypeProperty ;
+    rdfs:label "ended at" ;
+    rdfs:comment "When it finished." ;
+    rdfs:range xsd:dateTime .
+
+trace:reopenedAt a owl:DatatypeProperty ;
+    rdfs:label "reopened at" ;
+    rdfs:comment "When the stage was reopened." ;
+    rdfs:domain trace:Stage ;
+    rdfs:range xsd:dateTime .
+
+trace:reopenReason a owl:DatatypeProperty ;
+    rdfs:label "reopened because" ;
+    rdfs:comment "Why the stage was reopened." ;
+    rdfs:domain trace:Stage ;
+    rdfs:range xsd:string .
+
+trace:reopenedBy a owl:DatatypeProperty ;
+    rdfs:label "reopened by" ;
+    rdfs:comment "Who reopened the stage." ;
+    rdfs:domain trace:Stage ;
+    rdfs:range xsd:string .
+
+trace:ofStage a owl:ObjectProperty ;
+    rdfs:label "of stage" ;
+    rdfs:comment "The stage a gate ends." ;
+    rdfs:domain trace:Gate ;
+    rdfs:range trace:Stage .
+
+trace:atStage a owl:ObjectProperty ;
+    rdfs:label "at stage" ;
+    rdfs:comment "The stage something happened at or belongs to." ;
+    rdfs:range trace:Stage .
+
+trace:returnedAt a owl:DatatypeProperty ;
+    rdfs:label "returned at" ;
+    rdfs:comment "When the gate was sent back." ;
+    rdfs:domain trace:Gate ;
+    rdfs:range xsd:dateTime .
+
+trace:returnedBy a owl:DatatypeProperty ;
+    rdfs:label "returned by" ;
+    rdfs:comment "Who sent the gate back." ;
+    rdfs:domain trace:Gate ;
+    rdfs:range xsd:string .
+
+trace:returnReason a owl:DatatypeProperty ;
+    rdfs:label "returned because" ;
+    rdfs:comment "Why the gate was sent back." ;
+    rdfs:domain trace:Gate ;
+    rdfs:range xsd:string .
+
+# ================================================================== criterion properties
+
+trace:ofGate a owl:ObjectProperty ;
+    rdfs:label "of gate" ;
+    rdfs:comment "The gate a criterion belongs to." ;
+    rdfs:range trace:Gate .
+
+trace:ownedBy a owl:DatatypeProperty ;
+    rdfs:label "owned by" ;
+    rdfs:comment "Who decides the criterion: a person, or trace from its checks." ;
+    rdfs:domain trace:Criterion ;
+    rdfs:range xsd:string .
+
+trace:evidenceLabel a owl:DatatypeProperty ;
+    rdfs:label "evidence shows" ;
+    rdfs:comment "What opening the criterion's evidence shows, in words." ;
+    rdfs:domain trace:Criterion ;
+    rdfs:range xsd:string .
+
+trace:checkedAt a owl:DatatypeProperty ;
+    rdfs:label "checked at" ;
+    rdfs:comment "When the criterion was last checked or set." ;
+    rdfs:range xsd:dateTime .
+
+trace:checkedBy a owl:DatatypeProperty ;
+    rdfs:label "checked by" ;
+    rdfs:comment "Who or what last checked or set the criterion." ;
+    rdfs:range xsd:string .
+
+trace:checks a owl:ObjectProperty ;
+    rdfs:label "checks" ;
+    rdfs:comment "The criterion a check is of." ;
+    rdfs:range trace:Criterion .
+
+trace:opened a owl:ObjectProperty ;
+    rdfs:label "opened" ;
+    rdfs:comment "The criterion or waiver whose evidence the person opened." ;
+    rdfs:domain trace:EvidenceOpening .
+
+# ================================================================== signatures and waivers
+
+trace:signs a owl:ObjectProperty ;
+    rdfs:label "signs" ;
+    rdfs:comment "The gate a signature approves." ;
+    rdfs:domain trace:Signature ;
+    rdfs:range trace:Gate .
+
+trace:criteriaAsSigned a owl:DatatypeProperty ;
+    rdfs:label "criteria as signed" ;
+    rdfs:comment "Each criterion with its status and evidence when the gate was signed." ;
+    rdfs:domain trace:Signature ;
+    rdfs:range rdf:JSON .
+
+trace:acknowledgesWaiver a owl:ObjectProperty ;
+    rdfs:label "acknowledges waiver" ;
+    rdfs:comment "A waiver the signer acknowledged when signing." ;
+    rdfs:domain trace:Signature ;
+    rdfs:range trace:Waiver .
+
+trace:supersededAt a owl:DatatypeProperty ;
+    rdfs:label "replaced at" ;
+    rdfs:comment "When a later record took its place, such as a signature undone by reopening its stage." ;
+    rdfs:range xsd:dateTime .
+
+trace:atGate a owl:ObjectProperty ;
+    rdfs:label "at gate" ;
+    rdfs:comment "The gate a waiver was given at." ;
+    rdfs:range trace:Gate .
+
+trace:targetKind a owl:DatatypeProperty ;
+    rdfs:label "waives a" ;
+    rdfs:comment "What kind of thing the waiver lets through: a criterion, a requirement, a finding or a test." ;
+    rdfs:domain trace:Waiver ;
+    rdfs:range xsd:string .
+
+trace:waivesTarget a owl:DatatypeProperty ;
+    rdfs:label "waives" ;
+    rdfs:comment "The identifier of the criterion, requirement, finding or test let through." ;
+    rdfs:domain trace:Waiver ;
+    rdfs:range xsd:string .
+
+trace:risk a owl:DatatypeProperty ;
+    rdfs:label "risk" ;
+    rdfs:comment "What could go wrong because of the waiver." ;
+    rdfs:domain trace:Waiver ;
+    rdfs:range xsd:string .
+
+trace:severity a owl:DatatypeProperty ;
+    rdfs:label "severity" ;
+    rdfs:comment "How bad it is if the risk happens: cosmetic, degraded, failure or safety." ;
+    rdfs:domain trace:Waiver ;
+    rdfs:range xsd:string .
+
+trace:caughtWhere a owl:DatatypeProperty ;
+    rdfs:label "caught where" ;
+    rdfs:comment "The later stage or bench test that catches the issue instead, or none when it is accepted for good." ;
+    rdfs:domain trace:Waiver ;
+    rdfs:range xsd:string .
+
+trace:scope a owl:DatatypeProperty ;
+    rdfs:label "scope" ;
+    rdfs:comment "How far the waiver reaches." ;
+    rdfs:domain trace:Waiver ;
+    rdfs:range xsd:string .
+
+trace:acknowledgedAt a owl:DatatypeProperty ;
+    rdfs:label "acknowledged at" ;
+    rdfs:comment "When a second person acknowledged it." ;
+    rdfs:range xsd:dateTime .
+
+trace:acknowledgedBy a owl:DatatypeProperty ;
+    rdfs:label "acknowledged by" ;
+    rdfs:comment "Who acknowledged it." ;
+    rdfs:range xsd:string .
+
+trace:closedAt a owl:DatatypeProperty ;
+    rdfs:label "closed at" ;
+    rdfs:comment "When it was closed." ;
+    rdfs:range xsd:dateTime .
+
+# ================================================================== question properties
+
+trace:questionKind a owl:DatatypeProperty ;
+    rdfs:label "question kind" ;
+    rdfs:comment "A question, or stuck work asked as one." ;
+    rdfs:domain trace:Question ;
+    rdfs:range xsd:string .
+
+trace:askedBy a owl:DatatypeProperty ;
+    rdfs:label "asked by" ;
+    rdfs:comment "The specialist that asked, in words." ;
+    rdfs:range xsd:string .
+
+trace:askedOf a owl:DatatypeProperty ;
+    rdfs:label "asked of" ;
+    rdfs:comment "The person asked (by their key), or the part of the project asked: contributors or admins." ;
+    rdfs:range xsd:string .
+
+trace:blocks a owl:DatatypeProperty ;
+    rdfs:label "blocks" ;
+    rdfs:comment "What waits on the answer, in words." ;
+    rdfs:range xsd:string .
+
+trace:hasOption a owl:ObjectProperty ;
+    rdfs:label "has option" ;
+    rdfs:comment "An option offered, recommended first." ;
+    rdfs:range trace:Option .
+
+trace:isRecommended a owl:DatatypeProperty ;
+    rdfs:label "recommended" ;
+    rdfs:comment "Whether this is the option trace recommends." ;
+    rdfs:domain trace:Option ;
+    rdfs:range xsd:boolean .
+
+trace:justification a owl:DatatypeProperty ;
+    rdfs:label "why" ;
+    rdfs:comment "Why the option is offered or recommended." ;
+    rdfs:domain trace:Option ;
+    rdfs:range xsd:string .
+
+trace:givesUp a owl:DatatypeProperty ;
+    rdfs:label "gives up" ;
+    rdfs:comment "What choosing the option gives up." ;
+    rdfs:domain trace:Option ;
+    rdfs:range xsd:string .
+
+trace:consulted a owl:ObjectProperty ;
+    rdfs:label "read before asking" ;
+    rdfs:comment "What the specialist already read before it asked." ;
+    rdfs:range trace:Evidence .
+
+trace:askedAt a owl:DatatypeProperty ;
+    rdfs:label "asked at" ;
+    rdfs:comment "When it was asked." ;
+    rdfs:range xsd:dateTime .
+
+trace:answer a owl:DatatypeProperty ;
+    rdfs:label "answer" ;
+    rdfs:comment "The answer, in words." ;
+    rdfs:range xsd:string .
+
+trace:chose a owl:ObjectProperty ;
+    rdfs:label "chose" ;
+    rdfs:comment "The option the person chose." ;
+    rdfs:range trace:Option .
+
+trace:answeredAt a owl:DatatypeProperty ;
+    rdfs:label "answered at" ;
+    rdfs:comment "When it was answered." ;
+    rdfs:range xsd:dateTime .
+
+trace:answeredBy a owl:DatatypeProperty ;
+    rdfs:label "answered by" ;
+    rdfs:comment "Who answered." ;
+    rdfs:range xsd:string .
+
+# ================================================================== decisions
+
+trace:entryKind a owl:DatatypeProperty ;
+    rdfs:label "what happened" ;
+    rdfs:comment "The kind of log entry, such as gate.signed or change.accepted." ;
+    rdfs:domain trace:DecisionEntry ;
+    rdfs:range xsd:string .
+
+trace:about a owl:DatatypeProperty ;
+    rdfs:label "about" ;
+    rdfs:comment "The identifier of what the entry or decision is about: a gate, a question, a waiver, a requirement, an option." ;
+    rdfs:range xsd:string .
+
+trace:decisionKind a owl:DatatypeProperty ;
+    rdfs:label "decision kind" ;
+    rdfs:comment "What was decided: an intent statement, a requirement struck, the architecture criteria or choice, the pin plan." ;
+    rdfs:domain trace:DesignDecision ;
+    rdfs:range xsd:string .
+
+trace:choice a owl:DatatypeProperty ;
+    rdfs:label "choice" ;
+    rdfs:comment "What the person chose: accepted, edited, rejected, left out, struck, fixed, chosen or agreed." ;
+    rdfs:domain trace:DesignDecision ;
+    rdfs:range xsd:string .
+
+# ================================================================== specialists, jobs and hand-offs
+
+trace:performedBy a owl:ObjectProperty ;
+    rdfs:label "performed by" ;
+    rdfs:comment "The specialist that did it." ;
+    rdfs:range trace:Specialist .
+
+trace:fromJob a owl:ObjectProperty ;
+    rdfs:label "from job" ;
+    rdfs:comment "The job it came from." ;
+    rdfs:range trace:Job .
+
+trace:askedOfPart a owl:DatatypeProperty ;
+    rdfs:label "asked of part" ;
+    rdfs:comment "Which people of the project are asked: contributors or admins." ;
+    rdfs:range xsd:string .
+
+trace:recommendation a owl:DatatypeProperty ;
+    rdfs:label "recommends" ;
+    rdfs:comment "What the specialist recommends, in words." ;
+    rdfs:range xsd:string .
+
+trace:resolvedAt a owl:DatatypeProperty ;
+    rdfs:label "resolved at" ;
+    rdfs:comment "When it was resolved." ;
+    rdfs:range xsd:dateTime .
+
+trace:resolution a owl:DatatypeProperty ;
+    rdfs:label "resolution" ;
+    rdfs:comment "How it was resolved." ;
+    rdfs:range xsd:string .
+
+trace:fromSpecialist a owl:ObjectProperty ;
+    rdfs:label "from specialist" ;
+    rdfs:comment "The specialist that asked." ;
+    rdfs:domain trace:HandOff ;
+    rdfs:range trace:Specialist .
+
+trace:toSpecialist a owl:ObjectProperty ;
+    rdfs:label "to specialist" ;
+    rdfs:comment "The specialist asked." ;
+    rdfs:domain trace:HandOff ;
+    rdfs:range trace:Specialist .
+
+trace:request a owl:DatatypeProperty ;
+    rdfs:label "request" ;
+    rdfs:comment "What one specialist asks of another." ;
+    rdfs:domain trace:HandOff ;
+    rdfs:range xsd:string .
+
+trace:acceptance a owl:DatatypeProperty ;
+    rdfs:label "a good answer has" ;
+    rdfs:comment "What a good answer must contain." ;
+    rdfs:domain trace:HandOff ;
+    rdfs:range xsd:string .
+
+trace:depth a owl:DatatypeProperty ;
+    rdfs:label "depth" ;
+    rdfs:comment "How many hand-offs deep the answering job is." ;
+    rdfs:domain trace:HandOff ;
+    rdfs:range xsd:integer .
+
+trace:startsJob a owl:ObjectProperty ;
+    rdfs:label "starts job" ;
+    rdfs:comment "The job that answers the hand-off." ;
+    rdfs:domain trace:HandOff ;
+    rdfs:range trace:Job .
+
+trace:answerEvidence a owl:ObjectProperty ;
+    rdfs:label "answer's evidence" ;
+    rdfs:comment "What the answer points at to show why." ;
+    rdfs:domain trace:HandOff ;
+    rdfs:range trace:Evidence .
+
+trace:confidence a owl:DatatypeProperty ;
+    rdfs:label "confidence" ;
+    rdfs:comment "How sure the answering specialist is, from 0 to 1." ;
+    rdfs:range xsd:decimal .
+
+trace:acceptanceMet a owl:DatatypeProperty ;
+    rdfs:label "answer is good" ;
+    rdfs:comment "Whether the answer contains what a good answer must." ;
+    rdfs:domain trace:HandOff ;
+    rdfs:range xsd:boolean .
+
+trace:failureReason a owl:DatatypeProperty ;
+    rdfs:label "failed because" ;
+    rdfs:comment "Why it could not start or ended without an answer." ;
+    rdfs:range xsd:string .
+
+trace:declines a owl:ObjectProperty ;
+    rdfs:label "declines" ;
+    rdfs:comment "The hand-off a person chose not to start." ;
+    rdfs:domain trace:HandOffDecline ;
+    rdfs:range trace:HandOff .
+
+trace:dismisses a owl:DatatypeProperty ;
+    rdfs:label "sets aside" ;
+    rdfs:comment "The identifier of the stuck work set aside." ;
+    rdfs:domain trace:StuckDismissal ;
+    rdfs:range xsd:string .
+
+trace:jobKind a owl:DatatypeProperty ;
+    rdfs:label "job kind" ;
+    rdfs:comment "A person's task, a work item or a sweep." ;
+    rdfs:domain trace:Job ;
+    rdfs:range xsd:string .
+
+trace:title a owl:DatatypeProperty ;
+    rdfs:label "title" ;
+    rdfs:comment "The request or item in one line." ;
+    rdfs:range xsd:string .
+
+trace:githubNumber a owl:DatatypeProperty ;
+    rdfs:label "issue or change number" ;
+    rdfs:comment "The number of the issue or change on GitHub." ;
+    rdfs:range xsd:integer .
+
+trace:requestedBy a owl:DatatypeProperty ;
+    rdfs:label "requested by" ;
+    rdfs:comment "The person who asked for the job." ;
+    rdfs:domain trace:Job ;
+    rdfs:range xsd:string .
+
+trace:queuedAt a owl:DatatypeProperty ;
+    rdfs:label "queued at" ;
+    rdfs:comment "When the job was queued." ;
+    rdfs:domain trace:Job ;
+    rdfs:range xsd:dateTime .
+
+trace:branch a owl:DatatypeProperty ;
+    rdfs:label "branch" ;
+    rdfs:comment "The repository branch the job worked on." ;
+    rdfs:domain trace:Job ;
+    rdfs:range xsd:string .
+
+trace:parentJob a owl:ObjectProperty ;
+    rdfs:label "delegated by" ;
+    rdfs:comment "The specialist's job a delegated job works for." ;
+    rdfs:domain trace:Job ;
+    rdfs:range trace:Job .
+
+trace:answersHandOff a owl:ObjectProperty ;
+    rdfs:label "answers hand-off" ;
+    rdfs:comment "The hand-off a job answers." ;
+    rdfs:domain trace:Job ;
+    rdfs:range trace:HandOff .
+
+trace:resumes a owl:ObjectProperty ;
+    rdfs:label "carries on" ;
+    rdfs:comment "The paused job this one carries on." ;
+    rdfs:domain trace:Job ;
+    rdfs:range trace:Job .
+
+trace:error a owl:DatatypeProperty ;
+    rdfs:label "error" ;
+    rdfs:comment "What went wrong, in the job's words." ;
+    rdfs:domain trace:Job ;
+    rdfs:range xsd:string .
+
+trace:pausedAt a owl:DatatypeProperty ;
+    rdfs:label "paused at" ;
+    rdfs:comment "When the job was paused." ;
+    rdfs:domain trace:Job ;
+    rdfs:range xsd:dateTime .
+
+trace:pausedBy a owl:DatatypeProperty ;
+    rdfs:label "paused by" ;
+    rdfs:comment "Who paused the job." ;
+    rdfs:domain trace:Job ;
+    rdfs:range xsd:string .
+
+trace:lostAt a owl:DatatypeProperty ;
+    rdfs:label "lost at" ;
+    rdfs:comment "When the project's worker declared the job lost." ;
+    rdfs:domain trace:Job ;
+    rdfs:range xsd:dateTime .
+
+trace:controlsJob a owl:ObjectProperty ;
+    rdfs:label "controls job" ;
+    rdfs:comment "The job held, moved or discarded." ;
+    rdfs:domain trace:JobControl ;
+    rdfs:range trace:Job .
+
+trace:held a owl:DatatypeProperty ;
+    rdfs:label "held" ;
+    rdfs:comment "Whether the job is held back from starting." ;
+    rdfs:domain trace:JobControl ;
+    rdfs:range xsd:boolean .
+
+trace:discarded a owl:DatatypeProperty ;
+    rdfs:label "discarded" ;
+    rdfs:comment "Whether the job was discarded." ;
+    rdfs:domain trace:JobControl ;
+    rdfs:range xsd:boolean .
+
+# ================================================================== orders and boards
+
+trace:ofRevision a owl:ObjectProperty ;
+    rdfs:label "of revision" ;
+    rdfs:comment "The revision an order or a board is of." ;
+    rdfs:range trace:Revision .
+
+trace:fabHouse a owl:DatatypeProperty ;
+    rdfs:label "fab house" ;
+    rdfs:comment "Who makes the boards, such as JLCPCB." ;
+    rdfs:range xsd:string .
+
+trace:fabOrderNumber a owl:DatatypeProperty ;
+    rdfs:label "fab house's order number" ;
+    rdfs:comment "The fab house's own number for the order." ;
+    rdfs:domain trace:PlacedOrder ;
+    rdfs:range xsd:string .
+
+trace:boardCount a owl:DatatypeProperty ;
+    rdfs:label "boards" ;
+    rdfs:comment "How many boards were ordered." ;
+    rdfs:domain trace:PlacedOrder ;
+    rdfs:range xsd:integer .
+
+trace:amountPaid a owl:DatatypeProperty ;
+    rdfs:label "paid" ;
+    rdfs:comment "What was paid, in the order's currency." ;
+    rdfs:domain trace:PlacedOrder ;
+    rdfs:range xsd:decimal .
+
+trace:currency a owl:DatatypeProperty ;
+    rdfs:label "currency" ;
+    rdfs:comment "The currency of a price or payment." ;
+    rdfs:range xsd:string .
+
+trace:expectedShipDate a owl:DatatypeProperty ;
+    rdfs:label "expected to ship" ;
+    rdfs:comment "The date the fab house expects to ship." ;
+    rdfs:domain trace:PlacedOrder ;
+    rdfs:range xsd:date .
+
+trace:placedAt a owl:DatatypeProperty ;
+    rdfs:label "placed at" ;
+    rdfs:comment "When the order was placed." ;
+    rdfs:domain trace:PlacedOrder ;
+    rdfs:range xsd:dateTime .
+
+trace:placedBy a owl:DatatypeProperty ;
+    rdfs:label "placed by" ;
+    rdfs:comment "Who placed the order." ;
+    rdfs:domain trace:PlacedOrder ;
+    rdfs:range xsd:string .
+
+trace:shippedAt a owl:DatatypeProperty ;
+    rdfs:label "shipped at" ;
+    rdfs:comment "When the order shipped." ;
+    rdfs:domain trace:PlacedOrder ;
+    rdfs:range xsd:dateTime .
+
+trace:deliveredAt a owl:DatatypeProperty ;
+    rdfs:label "delivered at" ;
+    rdfs:comment "When the order was delivered." ;
+    rdfs:domain trace:PlacedOrder ;
+    rdfs:range xsd:dateTime .
+
+trace:ofOrder a owl:ObjectProperty ;
+    rdfs:label "of order" ;
+    rdfs:comment "The placed order a shipment carries." ;
+    rdfs:domain trace:Shipment ;
+    rdfs:range trace:PlacedOrder .
+
+trace:carrier a owl:DatatypeProperty ;
+    rdfs:label "carrier" ;
+    rdfs:comment "Who carries the shipment." ;
+    rdfs:domain trace:Shipment ;
+    rdfs:range xsd:string .
+
+trace:trackingNumber a owl:DatatypeProperty ;
+    rdfs:label "tracking number" ;
+    rdfs:comment "The carrier's tracking number." ;
+    rdfs:domain trace:Shipment ;
+    rdfs:range xsd:string .
+
+trace:serial a owl:DatatypeProperty ;
+    rdfs:label "serial" ;
+    rdfs:comment "The serial on a board's label." ;
+    rdfs:range xsd:string .
+
+trace:cameIn a owl:ObjectProperty ;
+    rdfs:label "came in" ;
+    rdfs:comment "The placed order a board came in." ;
+    rdfs:domain trace:BoardUnit ;
+    rdfs:range trace:PlacedOrder .
+
+trace:receivedAt a owl:DatatypeProperty ;
+    rdfs:label "received at" ;
+    rdfs:comment "When the board was received." ;
+    rdfs:domain trace:BoardUnit ;
+    rdfs:range xsd:dateTime .
+
+trace:photo a owl:DatatypeProperty ;
+    rdfs:label "photo" ;
+    rdfs:comment "The path of a photo kept as evidence." ;
+    rdfs:range xsd:string .
+
+trace:ofBoardUnit a owl:ObjectProperty ;
+    rdfs:label "of board" ;
+    rdfs:comment "The board a check or reading is of." ;
+    rdfs:range trace:BoardUnit .
+
+trace:checkKind a owl:DatatypeProperty ;
+    rdfs:label "check kind" ;
+    rdfs:comment "A count, a visual check, a fault, a part placed by hand or a label." ;
+    rdfs:domain trace:InspectionCheck ;
+    rdfs:range xsd:string .
+
+trace:checkName a owl:DatatypeProperty ;
+    rdfs:label "what was checked" ;
+    rdfs:comment "The check's own name, such as the top side's visual check." ;
+    rdfs:domain trace:InspectionCheck ;
+    rdfs:range xsd:string .
+
+trace:result a owl:DatatypeProperty ;
+    rdfs:label "result" ;
+    rdfs:comment "Pass, fail or marked." ;
+    rdfs:range xsd:string .
+
+trace:atReference a owl:DatatypeProperty ;
+    rdfs:label "at part" ;
+    rdfs:comment "The reference of the part a fault is at, such as U3." ;
+    rdfs:domain trace:InspectionCheck ;
+    rdfs:range xsd:string .
+
+# ================================================================== history properties
+
+trace:forCriterion a owl:ObjectProperty ;
+    rdfs:label "for criterion" ;
+    rdfs:comment "The criterion that changed." ;
+    rdfs:domain trace:CriterionChange ;
+    rdfs:range trace:Criterion .
+
+trace:forStage a owl:ObjectProperty ;
+    rdfs:label "for stage" ;
+    rdfs:comment "The stage the event happened to." ;
+    rdfs:domain trace:StageEvent ;
+    rdfs:range trace:Stage .
+
+trace:changeSource a owl:DatatypeProperty ;
+    rdfs:label "changed through" ;
+    rdfs:comment "Whether a person or trace's checker made the change, or a signature recorded it (rebuilt history)." ;
+    rdfs:domain trace:CriterionChange ;
+    rdfs:range xsd:string .
+
+trace:event a owl:DatatypeProperty ;
+    rdfs:label "event" ;
+    rdfs:comment "Started, finished, reopened, cleared or unfinished." ;
+    rdfs:domain trace:StageEvent ;
+    rdfs:range xsd:string .
+
+trace:field a owl:DatatypeProperty ;
+    rdfs:label "field" ;
+    rdfs:comment "Which of the journey's fields changed." ;
+    rdfs:domain trace:JourneyFieldChange ;
+    rdfs:range xsd:string .
+
+trace:oldValue a owl:DatatypeProperty ;
+    rdfs:label "was" ;
+    rdfs:comment "The value before the change." ;
+    rdfs:domain trace:JourneyFieldChange ;
+    rdfs:range xsd:string .
+
+trace:newValue a owl:DatatypeProperty ;
+    rdfs:label "became" ;
+    rdfs:comment "The value after the change." ;
+    rdfs:domain trace:JourneyFieldChange ;
+    rdfs:range xsd:string .
+
+trace:reconstructed a owl:DatatypeProperty ;
+    rdfs:label "rebuilt" ;
+    rdfs:comment "Whether the history row was rebuilt from the decisions log or a signature, for a project older than its history." ;
+    rdfs:range xsd:boolean .

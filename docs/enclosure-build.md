@@ -227,7 +227,7 @@ R = H/10 + 0.5. A handed-in file's wall
 thickness is not measured: one rule row says so (`ok: null`).
 
 Records (`case.jsonld`): the ontology's mechanical module ([ontology.md](ontology.md)), `@context`
-`{"tm": "https://trace-eda.com/ns/trace/mech#", "@vocab": …}`; nodes `Enclosure` (`hasPart`, `outerSize`, `material`,
+`{"tm": "https://trace-eda.com/ns/trace#", "@vocab": …}`; nodes `Enclosure` (`hasPart`, `outerSize`, `material`,
 `encloses`), `EnclosurePart` per part (`partKind` base/lid, `wallThickness`, `hasStandoff`), `Material` (name, process,
 service), `Fastener` and `MountingPoint` per screw, `Opening` per connector cut (`forComponent`, `face`), `Joint` per
 fastened or press-fit pair (`jointKind` from the ontology's closed list, `joins`, `usesFastener`), the board's

@@ -1,0 +1,45 @@
+# trace's ontology
+
+The shared vocabulary of trace's records: what a gate, a waiver, a hand-off or a placed order is, and how they link.
+[docs/ontology.md](../docs/ontology.md) is the design and [docs/ontology-plan.md](../docs/ontology-plan.md) the
+build plan. trace's SQLite tables stay the record; the ontology is how they are read as one graph.
+
+| File | Holds |
+| --- | --- |
+| `trace-core.ttl` | The design artifact and its versions, the input and output links (Si2's pattern), evidence, and the plain properties many records share |
+| `trace-journey.ttl` | The journey record, the agents' facts and the job index: templates, stages, gates, criteria, signatures, waivers, questions, decisions, hand-offs, jobs, orders, boards, and the history tables |
+| `trace-si2-align.ttl` | How trace's terms relate to the Si2 EDA ontology's; the only file that names Si2 |
+| `si2/terms.txt` | The terms Si2 defines at the pinned commit, which every alignment is checked against |
+| `context.jsonld` | The JSON-LD context, written from the ontology by `scripts/ontology-context.mjs` |
+
+The board and mechanical modules, the SHACL shapes and the shapes behind criteria come in later phases.
+
+## Conventions
+
+- One namespace for every module: `https://trace-eda.com/ns/trace#`. The prefixes `tc:`, `tj:`, `tb:` and `tm:` in
+  the docs name the module a term is defined in and all stand for it.
+- Classes in UpperCamelCase and properties in lowerCamelCase, in words a person who is not an electronics engineer
+  would use. Every term has an `rdfs:label` and an `rdfs:comment` in plain words; an acronym only as `skos:altLabel`.
+- A class no mapped table stores says where its instances come from (`trace:keptIn`), or that it is worked out when
+  read (`trace:derived`).
+- Records are named `urn:trace:<installation>:<project>:<kind>:<key>`, from the table's own key.
+
+## How the code uses it
+
+- `src/ontology/vocab.ts` reads these files into one vocabulary.
+- `src/ontology/mapping.ts` says which table and column becomes which class and property, for every column of the
+  journey record (journey.db), the agents' facts (facts.db) and the job index (jobs.db).
+- `src/ontology/graph.ts` builds a project's graph in memory through the mapping, and checks records against the
+  ontology.
+- `src/ontology/jsonld.ts` gives the JSON-LD context and one record as JSON-LD.
+
+## Changing it
+
+- A new column or table in a mapped database fails `test/ontology/mapping.test.ts` until the mapping says what it
+  becomes, or why it is left out.
+- A new term needs a label and a comment (`test/ontology/vocabulary.test.ts`), and the JSON-LD context written again:
+  `npm run build && node scripts/ontology-context.mjs`.
+- Each file's `owl:versionInfo` follows semantic versioning: adding a class or an optional property is a minor change;
+  renaming or removing a term is a major one and needs a migration for stored records.
+- To move to a newer Si2 commit, clone it and run `node scripts/ontology-si2.mjs <clone>`; the tests name any aligned
+  term it dropped.

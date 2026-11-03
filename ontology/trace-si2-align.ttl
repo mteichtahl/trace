@@ -1,0 +1,30 @@
+# trace's alignment with the Si2 EDA ontology (docs/ontology.md "Alignment with Si2"): trace keeps Si2's name where
+# the meaning matches and says how the two relate here. This is the only file that mentions Si2; nothing in trace
+# imports it. Written against si2org/aiml_schema_ontology at commit 664164c3d31d37486e50cbdc455d1f8e02ffb950 (the
+# terms it defines are listed in ontology/si2/terms.txt; a test fails if an aligned term is missing there).
+#
+# The board module's alignments (Netlist, Net, Pin, Via, Layer, DesignRule, DesignRuleCheckReport) arrive with the
+# board module.
+
+@prefix trace: <https://trace-eda.com/ns/trace#> .
+@prefix eda:   <http://example.org/eda#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+
+<https://trace-eda.com/ns/trace/si2-align> a owl:Ontology ;
+    rdfs:label "trace and Si2" ;
+    rdfs:comment "How trace's terms relate to the Si2 EDA ontology's, pinned to commit 664164c3d31d37486e50cbdc455d1f8e02ffb950." ;
+    owl:versionInfo "0.1.0" .
+
+# a journey is a flow instance made from a template
+trace:Journey rdfs:subClassOf eda:Flow .
+trace:Stage owl:equivalentClass eda:Stage .
+# a decision point that needs a signature
+trace:Gate rdfs:subClassOf eda:DecisionPoint .
+trace:AgentAction owl:equivalentClass eda:AgentAction .
+trace:FallbackStrategy owl:equivalentClass eda:FallbackStrategy .
+trace:HeuristicRule owl:equivalentClass eda:HeuristicRule .
+trace:SuccessMetric owl:equivalentClass eda:SuccessMetric .
+trace:DesignArtifact owl:equivalentClass eda:DesignArtifact .
+trace:isInputTo owl:equivalentProperty eda:isInputTo .
+trace:isOutputOf owl:equivalentProperty eda:isOutputOf .
