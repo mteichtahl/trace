@@ -158,6 +158,32 @@ def gltf_importer_works():
         return False
 
 
+def x3d_importer_works():
+    """Blender's X3D/VRML importer: a bundled add-on up to 4.1 (off under --factory-startup, so enable it), an
+    extension from 4.2 that a plain install does not have."""
+    def present():
+        try:
+            bpy.ops.import_scene.x3d.get_rna_type()
+            return True
+        except (KeyError, AttributeError, RuntimeError):
+            return False
+
+    if present():
+        return True
+    try:
+        import addon_utils
+    except ImportError:
+        return False
+    for name in ("io_scene_x3d", "bl_ext.blender_org.web3d_x3d_vrml2_format"):
+        try:
+            addon_utils.enable(name, default_set=False, handle_error=lambda _e: None)
+        except Exception:  # noqa: BLE001
+            pass
+        if present():
+            return True
+    return False
+
+
 def import_model(path, fmt, up_axis=None):
     """Import a model file into the scene; returns the new mesh objects with transforms applied."""
     before = set(bpy.data.objects)
@@ -167,6 +193,9 @@ def import_model(path, fmt, up_axis=None):
             raise JobError("this Blender's glTF importer needs numpy, which its Python does not have; use VRML/STL/OBJ")
         bpy.ops.import_scene.gltf(filepath=path)
     elif fmt in ("wrl", "vrml", "x3d"):
+        if not x3d_importer_works():
+            raise JobError(f"this Blender ({bpy.app.version_string}) has no X3D/VRML importer (an extension since 4.2); "
+                           "render the board as GLB (model_format=glb)")
         # VRML is Y-up by its standard; kicad-cli writes it Z-up (the board's normal is +Z)
         if up_axis == "Z":
             bpy.ops.import_scene.x3d(filepath=path, axis_forward="Y", axis_up="Z")
