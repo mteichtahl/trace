@@ -38,6 +38,7 @@ import * as iam from 'aws-cdk-lib/aws-iam'
 import { CfnMemory } from 'aws-cdk-lib/aws-bedrockagentcore'
 import { Construct } from 'constructs'
 import { NAMESPACE_TEMPLATES, ROOT } from '../agents/runtime/memory.js'
+import { memoryNamePattern } from '../core/project.js'
 
 /** The memory of installations before memory was per project (one for every project). Kept only so that it can be
  * retained on the way out (memory.legacySharedMemory): its name must not change, or CloudFormation replaces it. */
@@ -103,16 +104,17 @@ export const API_RECORD_ACTIONS = [...RECORD_ACTIONS, 'bedrock-agentcore:GetMemo
 export const API_EVENT_ACTIONS = ['bedrock-agentcore:ListSessions', 'bedrock-agentcore:ListEvents'] as const
 
 /**
- * The API reads every project's short-term events (memory.events), read only. Actor ids have no common prefix across
- * projects, so this is scoped by memory (each project's own) and by the API's access check, which names the actors it
- * reads: the project's agents and the caller's own person actor (src/api/actions.ts).
+ * The API reads every project's short-term events (memory.events), read only. One short statement on this
+ * installation's memories by name (`<prefix>_m_*`, src/core/project.ts memoryName), not one ARN per project, so the
+ * API's policy keeps its size however many projects there are. The API's access check names the actors it reads: the
+ * project's agents and the caller's own person actor (src/api/actions.ts).
  */
-export function grantReadEvents(grantee: iam.IGrantable, memories: readonly TraceMemory[]): void {
+export function grantReadEvents(grantee: iam.IGrantable, memories: readonly TraceMemory[], at: { partition: string; region: string; account: string; prefix: string }): void {
   if (!memories.length) return
   grantee.grantPrincipal.addToPrincipalPolicy(new iam.PolicyStatement({
     sid: 'TraceMemoryEventsRead',
     actions: [...API_EVENT_ACTIONS],
-    resources: memories.map((m) => m.memoryArn),
+    resources: [`arn:${at.partition}:bedrock-agentcore:${at.region}:${at.account}:memory/${memoryNamePattern(at.prefix)}`],
   }))
 }
 

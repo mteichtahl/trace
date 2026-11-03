@@ -150,7 +150,7 @@ export function grantApiRuntime(role: iam.Role, p: ApiGrantsProps, o: { people: 
     }))
   }
   grantReadRecords(role, p.memories)
-  grantReadEvents(role, p.memories)
+  grantReadEvents(role, p.memories, { partition: p.partition, region: p.region, account: p.account, prefix: p.prefix })
   // dictation: the state of each project's vocabulary for voice.vocabulary (after its access check), nothing more
   if (people) role.addToPolicy(apiVocabularyStatement({ partition: p.partition, region: p.region, account: p.account, prefix: p.prefix }))
   // kb.search on any project's knowledge base, after the access check (src/api/actions.ts); nothing else of them.

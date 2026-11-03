@@ -65,6 +65,8 @@ const gen = (generation: number, sep: string): string => (generation > 0 ? `${se
 
 /** The project's AgentCore memory (CfnMemory Name: `^[a-zA-Z][a-zA-Z0-9_]{0,47}$`, at most 36 characters here). */
 export const memoryName = (prefix: string, repository: string, generation = 0): string => `${under(prefix)}_m_${projectHash(repository)}${gen(generation, '_')}`
+/** The IAM pattern every project's memory id of this installation matches (memory ids are `<name>-<suffix>`). */
+export const memoryNamePattern = (prefix: string): string => `${under(prefix)}_m_*`
 /** The IAM pattern every project's worker runtime ARN of this installation matches (runtime ids are `<name>-<suffix>`). */
 export const workerRuntimeNamePattern = (prefix: string): string => `${under(prefix)}_w_*`
 /** `@` is in no repository name, so `owner/repo@g1` can never be another repository's generation 0. */
