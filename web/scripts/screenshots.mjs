@@ -18,6 +18,14 @@ const shots = [
   { name: 'focus', path: '/p/acme~soil-sensor/do/schematic-finish' },
   { name: 'home-phone', path: '/', width: 390, height: 844, scale: 2, full: true },
   { name: 'no-access', path: '/no-access' },
+  // progress and logs (docs/progress-and-logs.md)
+  { name: 'progress-activity', path: '/', act: async (p) => { await p.click('button[aria-label^="trace is working"]'); await p.waitForTimeout(600) } },
+  { name: 'progress-activity-dark', path: '/', theme: 'dark', act: async (p) => { await p.click('button[aria-label^="trace is working"]'); await p.waitForTimeout(600) } },
+  { name: 'progress-change-checks', path: '/p/acme~soil-sensor/changes/13', full: true },
+  { name: 'progress-log-sheet', path: '/p/acme~soil-sensor/changes/13', act: async (p) => { await p.click('button[aria-label="Watch Board checks"]'); await p.waitForTimeout(1500) } },
+  { name: 'progress-log-sheet-dark', path: '/p/acme~soil-sensor/changes/13', theme: 'dark', act: async (p) => { await p.click('button[aria-label="Watch Board checks"]'); await p.waitForTimeout(1500) } },
+  { name: 'progress-phone-activity', path: '/', width: 390, height: 844, scale: 2, act: async (p) => { await p.click('button[aria-label^="trace is working"]'); await p.waitForTimeout(800) } },
+  { name: 'progress-phone-log', path: '/p/acme~soil-sensor/changes/13', width: 390, height: 844, scale: 2, act: async (p) => { await p.click('button[aria-label="Watch Board checks"]'); await p.waitForTimeout(1500) } },
 ]
 
 const browser = await chromium.launch()

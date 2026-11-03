@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { EventType } from '@ag-ui/core'
-import { MAX_ROUNDS, toBedrock } from '../../src/web/agui.js'
+import { MAX_ROUNDS, TOOL_RUN_EVENT, toBedrock } from '../../src/web/agui.js'
+import { TOOL_RUN_ID } from '../../src/core/run-logs.js'
 import { API_UNAVAILABLE } from '../../src/web/call.js'
 import { accessToken } from '../api/fixtures.js'
 import { bearerOf, say, use, world } from './fakes.js'
@@ -195,7 +196,12 @@ describe('the trace agent over AG-UI', () => {
     expect(results[0]).toMatch(/not a read-only tool/)
     expect(results[1]).toBe('{"findings":0}')
     expect(w.runtime.calls.map((c) => c.action)).toEqual(['tools.list', 'tool'])
-    expect(w.runtime.calls[1]?.args).toEqual({ repo: 'acme/board', name: 'kicad.erc', args: { x: 1 } })
+    expect(w.runtime.calls[1]?.args).toEqual({ repo: 'acme/board', name: 'kicad.erc', args: { x: 1 }, run_id: expect.stringMatching(TOOL_RUN_ID) })
+    // the app is told the run before the call runs, so it can follow its log; the refused call has no run
+    const runs = events(r.body).filter((e) => e.type === 'CUSTOM' && e.name === TOOL_RUN_EVENT)
+    expect(runs).toEqual([expect.objectContaining({ value: { toolCallId: 'b', repo: 'acme/board', run: `tool:${String(w.runtime.calls[1]?.args.run_id)}` } })])
+    const all = events(r.body).map((e) => e.type)
+    expect(all.indexOf('CUSTOM')).toBeLessThan(all.lastIndexOf('TOOL_CALL_RESULT'))
   })
 
   it(`stops after ${MAX_ROUNDS} tool rounds`, async () => {

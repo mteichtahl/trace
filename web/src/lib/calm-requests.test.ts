@@ -13,7 +13,7 @@ describe('a burst of live events', () => {
     for (let i = 0; i < 50; i++) apply({ type: 'job.updated', repo: 'a/b', id: 'j', state: 'running', at: '' } as never)
     expect(asked).toEqual([])
     vi.advanceTimersByTime(COALESCE_MS)
-    expect(asked).toEqual([['job'], ['jobs.list', 'a/b'], ['journey.get', 'a/b'], ['tools.waits', 'a/b'], ['runs', 'a/b']])
+    expect(asked).toEqual([['job'], ['jobs.list', 'a/b'], ['journey.get', 'a/b'], ['tools.waits', 'a/b'], ['runs', 'a/b'], ['activity.list']])
   })
 })
 

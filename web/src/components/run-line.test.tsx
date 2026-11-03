@@ -9,6 +9,15 @@ const run: RunSummary = { id: 'job-1', title: 'Routing the board', state: 'runni
 const noop = () => undefined
 
 describe('RunLine', () => {
+  it('offers Watch while it runs, and not once it has ended', async () => {
+    const watched: string[] = []
+    const { rerender } = render(<RunLine run={run} onWatch={(r) => watched.push(r.id)} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Watch Routing the board' }))
+    expect(watched).toEqual(['job-1'])
+    rerender(<RunLine run={{ ...run, state: 'done' }} onWatch={() => undefined} />)
+    expect(screen.queryByRole('button', { name: 'Watch Routing the board' })).toBeNull()
+  })
+
   it('offers only what the job\'s view says job.control can do', async () => {
     render(<RunLine run={{ ...run, controls: ['cancel'] }} onPause={noop} onCancel={noop} onMoveUp={noop} />)
     await userEvent.click(screen.getByRole('button', { name: 'Controls for Routing the board' }))

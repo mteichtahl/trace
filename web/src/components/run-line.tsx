@@ -11,7 +11,7 @@
  * that trace has not heard from it and when it will be declared lost, and past that time it shows as lost
  * (runState), the same as the Agents page and the job index say once they look again.
  */
-import { Circle, CircleAlert, Loader2, MoreHorizontal, PauseCircle, CircleX, CircleCheck } from 'lucide-react'
+import { Circle, CircleAlert, Loader2, MoreHorizontal, PauseCircle, CircleX, CircleCheck, SquareTerminal } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -35,6 +35,8 @@ export interface RunLineProps {
   onCancel?: (run: RunSummary) => Promise<string | void> | string | void
   onMoveUp?: (run: RunSummary) => Promise<string | void> | string | void
   onOpen?: (run: RunSummary) => void
+  /** Watch: open the run's log (RunSheet, run `job:<id>`); offered while it runs or is paused */
+  onWatch?: (run: RunSummary) => void
   className?: string
 }
 
@@ -95,7 +97,7 @@ export function runDetail(run: RunSummary, now: number): string {
   return parts.join(' · ')
 }
 
-export function RunLine({ run, project, onPause, onResume, onCancel, onMoveUp, onOpen, className }: RunLineProps) {
+export function RunLine({ run, project, onPause, onResume, onCancel, onMoveUp, onOpen, onWatch, className }: RunLineProps) {
   const now = useNow(run.etaS === undefined && run.startedAt ? 1000 : 60_000)
   const [confirm, setConfirm] = useState(false)
   const st = runState(run, now)
@@ -152,6 +154,11 @@ export function RunLine({ run, project, onPause, onResume, onCancel, onMoveUp, o
           </div>
         )}
       </div>
+      {onWatch && (st === 'running' || st === 'silent' || run.state === 'paused') && (
+        <Button variant="outline" size="sm" className="shrink-0" onClick={() => onWatch(run)} aria-label={`Watch ${run.title}`}>
+          <SquareTerminal /> Watch
+        </Button>
+      )}
       {controls && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

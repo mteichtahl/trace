@@ -20,7 +20,8 @@
  *                task, tool, tools.waits, kb.sync     InvokeAgentRuntime on the projects' workers
  *
  *              and never: Cognito, the central database, prompts, chats, the projects waiting to be created, the cost
- *              actuals, the order watch and its key, the integrations, the dictation vocabularies
+ *              actuals, the order watch and its key, the integrations, the dictation vocabularies, the runs log group
+ *              (people's only: GetLogEvents on its streams, DescribeLogStreams and FilterLogEvents on it, read only)
  *
  * The people's role gets its statements in the order it always had, so its template does not change with this split.
  */
@@ -39,6 +40,7 @@ import { WATCH_OBJECTS } from './order-watch.js'
 import { orderWatchSecretsPrefix } from '../core/integrations-catalog.js'
 import { ACCESS_PREFIX, AGENT_FACTS, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, grantPrefixes } from './project.js'
 import { apiVocabularyStatement } from './voice.js'
+import { runLogsReadStatements } from './run-logs.js'
 
 const CHATS: (typeof PEOPLE_RECORDS)[number] = 'chats'
 const JOURNEY: (typeof PEOPLE_RECORDS)[number] = 'journey'
@@ -114,7 +116,7 @@ export function grantApiRuntime(role: iam.Role, p: ApiGrantsProps, o: { people: 
   // (and what the bench measured, live: projects/<slug>/journey-agent/bench.db, src/core/bench.ts)
   grantPrefixes(role, p.central, { read: [`${PROJECTS_PREFIX}/*/${AGENT_FACTS}`] })
   if (people) {
-    // cost and the build's shipping, in a policy of their own (the role's inline policy has a size limit, which CDK
+    // cost, the build's shipping and the run logs, in a policy of their own (the role's inline policy has a size limit, which CDK
     // would otherwise meet by moving statements into an overflow policy):
     //   the cost ledger (cost.get, usage.month; src/core/cost.ts): the installation's actuals and the price table fetched
     //   from the AWS price list (installation/cost/actuals.db, prices.json), which the cost read writes
@@ -132,6 +134,11 @@ export function grantApiRuntime(role: iam.Role, p: ApiGrantsProps, o: { people: 
       sid: 'ManageOrderWatchKey', actions: ['secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue', 'secretsmanager:DescribeSecret', 'secretsmanager:DeleteSecret', 'secretsmanager:TagResource'],
       resources: [`arn:${p.partition}:secretsmanager:${p.region}:${p.account}:secret:${orderWatchSecretsPrefix(p.prefix)}*`],
     }))
+    // the runs log group (/trace/<prefix>/runs, src/infra/run-logs.ts): what jobs, tool calls and checks say while they
+    // run, for run.log, change.runs and activity.list (src/api/actions-progress.ts). Read only, beside the cost
+    // statements (a policy of its own would be one resource more, which a flat stack of 20 projects has no room for);
+    // the external runtime gets none (no action open to systems reads it)
+    costPolicy.addStatements(...runLogsReadStatements({ partition: p.partition, region: p.region, account: p.account }, p.prefix))
   } else {
     // build.get's wait lines: the shipped orders' watches, read only
     grantPrefixes(role, p.central, { read: [WATCH_OBJECTS] })

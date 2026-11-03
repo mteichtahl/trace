@@ -93,8 +93,16 @@ function expectRunner(t: Template, name: string, repository: string, how: Hook, 
   expect(actions).toEqual([
     'codeconnections:GetConnection', 'codeconnections:GetConnectionToken', 'codeconnections:UseConnection',
     'codestar-connections:GetConnection', 'codestar-connections:GetConnectionToken', 'codestar-connections:UseConnection',
-    'logs:CreateLogStream', 'logs:PutLogEvents',
+    // its own log group, and the runs group's streams of its own repository's checks
+    'logs:CreateLogStream', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:PutLogEvents',
   ])
+  // a check's own lines (src/core/check-stream.ts): gha/<owner>/<repo>/* of /trace/<prefix>/runs, nothing else of it;
+  // and every build is told the group
+  const prefix = name.replace(/-ci-[0-9a-f]{8}$/, '')
+  expect(list(statements.find((s) => s.Sid === 'RunnerRunLogs')?.Resource)).toEqual([
+    { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, `:logs:us-east-1:123456789012:log-group:/trace/${prefix}/runs:log-stream:gha/${repository.toLowerCase()}/*`]] },
+  ])
+  expect((p.Environment as { EnvironmentVariables?: unknown }).EnvironmentVariables).toEqual([{ Name: 'TRACE_RUNS_LOG_GROUP', Type: 'PLAINTEXT', Value: `/trace/${prefix}/runs` }])
   const granted = list(statements.find((s) => s.Sid === 'RunnerConnection')?.Resource)
   if (connection === CONNECTION_ARN) expect(granted.sort()).toEqual([CONNECTION_ARN, CODESTAR_ARN].sort())
   else {
@@ -127,7 +135,7 @@ describe("each project's runner project", () => {
       expect(project.Properties.Source).toMatchObject({ Type: 'GITHUB', Location: `https://github.com/${repo}` })
       expect(project.Properties.Source).not.toHaveProperty('Auth')
       const value = webhookOf(t, name, 'custom')
-      expect(statements.flatMap((x) => list(x.Action)).sort()).toEqual(['logs:CreateLogStream', 'logs:PutLogEvents'])
+      expect(statements.flatMap((x) => list(x.Action)).sort()).toEqual(['logs:CreateLogStream', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:PutLogEvents'])
       expect((t.toJSON() as { Outputs: Record<string, { Value: unknown }> }).Outputs[projectOutputs(repo).runnerProject]?.Value).toEqual(value)
     }
     // a connection is for auth connection only

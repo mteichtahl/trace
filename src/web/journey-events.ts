@@ -30,6 +30,10 @@
  *             turned them on: what is new in Next for them. The journey record's own writes (a gate signed, waived or
  *             made ready by a person) come here too, for push only: they publish no live event (see below)
  *
+ *   run logs  the runs log group's subscription (src/infra/web.ts) sends each batch of a run's lines here:
+ *             `log.appended { repo, kind, id, lines }` to everyone on the project, at most once a second per stream,
+ *             never the lines themselves (onRunLogs)
+ *
  * Writes by people (the journey record itself) are published by the web backend after the API answers
  * (src/web/call.ts), with the right `what` and to the caller at once, so they are not matched here: two routes would
  * send every answer's event twice. One event is published per S3 event, unbatched: an agent writes its facts a few
@@ -43,6 +47,7 @@ import { BucketDb, JOURNEY_DB, JOURNEY_FOLDER } from '../core/journey-store.js'
 import { BENCH_DB } from '../core/bench.js'
 import { JOB_INDEX_DB, JOB_INDEX_FOLDER, JobIndexStore, changedSince } from '../core/job-index.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
+import { parseStream } from '../core/run-logs.js'
 import { type LiveEvent, type Publisher, appsyncPublisher, userChannel } from './events.js'
 import { DynamoLedger, type PushDeps, type PushOutcome, pushForProject } from './push-sender.js'
 import { type VapidKeys, validVapid } from './web-push.js'
@@ -216,16 +221,84 @@ export async function onObjectCreated(e: S3ObjectEvent, d: JourneyEventsDeps): P
   return { repo, changed: everyone.length, notified, ...(p ? { pushed: p.sent } : {}) }
 }
 
+// ------------------------------------------------------------------ run logs (docs/progress-and-logs.md, decision C)
+
+/** CloudWatch Logs' subscription delivery: base64 of a gzipped batch of one stream's events. */
+export interface AwsLogsEvent { awslogs?: { data?: string } }
+interface LogsBatch { messageType?: string; logGroup?: string; logStream?: string; logEvents?: { id?: string; timestamp?: number; message?: string }[] }
+
+/** How long the people on a project are kept between batches: a running job sends one a second or so. */
+export const AUDIENCE_FOR_MS = 60_000
+/** The least time between two log.appended events for one stream (a chatty run is told once a second). */
+export const LOG_EVENT_EVERY_MS = 1_000
+
+const audiences = new Map<string, { subs: string[]; at: number }>()
+const lastLogEvent = new Map<string, number>()
+
+/** Decode a subscription delivery (null: not one). */
+export async function decodeLogs(e: AwsLogsEvent): Promise<LogsBatch | null> {
+  const data = e.awslogs?.data
+  if (!data) return null
+  const { gunzipSync } = await import('node:zlib')
+  try {
+    return JSON.parse(gunzipSync(Buffer.from(data, 'base64')).toString('utf8')) as LogsBatch
+  } catch {
+    return null
+  }
+}
+
+/**
+ * A batch of lines in the runs log group: `log.appended { repo, kind, id, lines }` to everyone on the project, no text.
+ * A check's id is "<run id>/<attempt>/<job key>". Streams trace did not name, and the group's control messages, send
+ * nothing.
+ */
+export async function onRunLogs(batch: LogsBatch, d: Pick<JourneyEventsDeps, 'bucket' | 's3' | 'publisher' | 'now' | 'log'> & { sleep?: (ms: number) => Promise<void> }): Promise<{ repo: string | null; sent: number }> {
+  if (batch.messageType !== 'DATA_MESSAGE') return { repo: null, sent: 0 }
+  const p = parseStream(batch.logStream ?? '')
+  const lines = batch.logEvents?.length ?? 0
+  if (!p || !lines) return { repo: null, sent: 0 }
+  const repo = p.repo
+  const cachedAudience = audiences.get(repo.toLowerCase())
+  let subs: string[]
+  if (cachedAudience && d.now() - cachedAudience.at < AUDIENCE_FOR_MS) subs = cachedAudience.subs
+  else {
+    const access = new Central({ home: `s3://${d.bucket}/access`, ...(d.s3 ? { s3: d.s3 } : {}) })
+    const a = await access.query((db) => audienceOf(db, repo))
+    subs = [...new Set([...a.admins, ...a.contributors, ...a.reviewers])]
+    audiences.set(repo.toLowerCase(), { subs, at: d.now() })
+  }
+  if (!subs.length) return { repo, sent: 0 }
+  const stream = batch.logStream ?? ''
+  const since = d.now() - (lastLogEvent.get(stream) ?? 0)
+  if (since < LOG_EVENT_EVERY_MS) await (d.sleep ?? ((ms: number) => new Promise<void>((r) => { setTimeout(r, ms) })))(LOG_EVENT_EVERY_MS - since)
+  lastLogEvent.set(stream, d.now())
+  if (lastLogEvent.size > 2000) lastLogEvent.clear()
+  const id = p.kind === 'check' ? `${p.runId}/${p.attempt}/${p.job}` : p.id
+  const ev: LiveEvent = { type: 'log.appended', repo, kind: p.kind, id, lines, at: new Date(d.now()).toISOString() }
+  const results = await Promise.allSettled(subs.map((sub) => d.publisher.publish(userChannel(sub), [ev])))
+  const failed = results.filter((r) => r.status === 'rejected').length
+  if (failed) d.log({ warning: 'journey-events: some log events were not delivered', repo, failed, of: subs.length })
+  return { repo, sent: subs.length - failed }
+}
+
 let publisher: Publisher | null = null
 
-/** The Lambda handler (bundled beside the backend as journey-events.mjs). */
-export async function handler(e: S3ObjectEvent): Promise<void> {
+/** The Lambda handler (bundled beside the backend as journey-events.mjs): the bucket's object events, and the runs log
+ * group's subscription deliveries. */
+export async function handler(e: S3ObjectEvent & AwsLogsEvent): Promise<void> {
   const bucket = process.env.TRACE_CENTRAL_BUCKET
   const http = process.env.TRACE_EVENTS_HTTP
   const region = process.env.AWS_REGION
   if (!bucket || !http || !region) throw new Error('TRACE_CENTRAL_BUCKET, TRACE_EVENTS_HTTP and AWS_REGION are needed')
   publisher ??= appsyncPublisher({ region, events: { http } }, fromNodeProviderChain(), fetch)
   const log = (entry: Record<string, unknown>): void => { process.stdout.write(`${JSON.stringify(entry)}\n`) }
+  if (e.awslogs) {
+    const batch = await decodeLogs(e)
+    const out = batch ? await onRunLogs(batch, { bucket, publisher, now: Date.now, log }) : { repo: null, sent: 0 }
+    // the run's own lines are not logged here: they are in the runs group already
+    if (out.repo) log({ event: 'run-logs', ...out })
+    return
+  }
   const out = await onObjectCreated(e, { bucket, publisher, now: Date.now, log, scratch: '/tmp', push: pushDeps(region, log) })
   log({ event: 'journey-events', ...out })
 }

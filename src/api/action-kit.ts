@@ -15,6 +15,7 @@
  * agents' facts (src/core/agent-facts.ts, projects/<slug>/journey-agent/facts.db) are read beside it and merged in.
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import type { RunLogsReader } from './run-logs-reader.js'
 import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
@@ -143,6 +144,9 @@ export interface ActionDeps {
   agentLogin?: string
   /** the runtime's log (a JSON line); absent: standard output */
   log?: (line: Record<string, unknown>) => void
+  /** the runs log group (TRACE_RUNS_LOG_GROUP, src/core/run-logs.ts); absent or null: run.log falls back to what the job
+   * index and GitHub keep */
+  runLogs?: () => RunLogsReader | null
 }
 
 /** A branch a task may carry on: one of trace's own (claude/…), so a request can never push to main or a person's

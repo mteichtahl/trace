@@ -12,6 +12,7 @@
 import { spawn } from 'node:child_process'
 import { accessSync, constants, statSync } from 'node:fs'
 import { delimiter, isAbsolute, join } from 'node:path'
+import { forwardOutput } from '../../core/progress.js'
 import { ToolError } from '../../core/registry.js'
 
 export interface RunResult {
@@ -58,6 +59,8 @@ export function run(command: string, opts: RunOptions): Promise<RunResult> {
     let matched = false
     let scan = ''
     let killTimer: NodeJS.Timeout | undefined
+    // inside a tool call's progress channel (src/core/progress.ts): each line, as it comes
+    const fwd = forwardOutput()
     const stop = (sig: NodeJS.Signals): void => {
       try {
         if (child.pid !== undefined && process.platform !== 'win32') process.kill(-child.pid, sig)
@@ -87,11 +90,16 @@ export function run(command: string, opts: RunOptions): Promise<RunResult> {
     }
     child.stdout.on('data', onChunk)
     child.stderr.on('data', onChunk)
+    if (fwd) {
+      child.stdout.on('data', (b: Buffer) => fwd.stdout.push(b))
+      child.stderr.on('data', (b: Buffer) => fwd.stderr.push(b))
+    }
     const timer = setTimeout(() => { timedOut = true; stopThenKill() }, opts.timeoutMs)
     child.on('error', (e) => { clearTimeout(timer); clearTimeout(killTimer); reject(new ToolError(`could not run ${command}: ${e.message}`)) })
     child.on('close', (code, signal) => {
       clearTimeout(timer)
       clearTimeout(killTimer)
+      fwd?.end()
       // the shell may be gone while a grandchild (a probe tool) holds on: make sure the group is gone too
       stop('SIGKILL')
       const output = truncated ? `${head}\n… [${size - head.length - tailBuf.length} bytes not kept] …\n${tailBuf}` : head

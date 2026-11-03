@@ -25,6 +25,7 @@
  * service:<name>.
  */
 import { createHash, randomBytes } from 'node:crypto'
+import { type RunLogsReader, cloudWatchRunLogs } from './run-logs-reader.js'
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -323,10 +324,18 @@ async function depsFromEnv(env: z.output<typeof Env>): Promise<{ deps: ActionDep
     // change actions (src/api/github-cache.ts): every project shares the one token
     githubCache: new GitHubCache(),
     githubBudget: new GitHubBudget(),
+    // what checks, jobs and tool calls say while they run (docs/progress-and-logs.md): read here, written elsewhere
+    ...(process.env.TRACE_RUNS_LOG_GROUP?.trim() ? { runLogs: runLogsFrom(process.env.TRACE_RUNS_LOG_GROUP.trim(), env.AWS_REGION) } : {}),
     // the login trace's agents open pull requests as, when the runtime is told it; else each repository's variable
     ...(process.env.TRACE_AGENT_LOGIN?.trim() ? { agentLogin: process.env.TRACE_AGENT_LOGIN.trim() } : {}),
   }
   return { deps, cog }
+}
+
+/** The runs log group's reader, made once. */
+function runLogsFrom(group: string, region: string): () => RunLogsReader {
+  let r: RunLogsReader | null = null
+  return () => (r ??= cloudWatchRunLogs(group, region))
 }
 
 function stopOnSignal(server: Server): void {

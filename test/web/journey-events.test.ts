@@ -6,6 +6,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { gzipSync } from 'node:zlib'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import '../../src/core/access.js'
 import { AgentFactsStore, addAgentQuestion, addCriterionCheck, addStuck } from '../../src/core/agent-facts.js'
@@ -13,7 +14,7 @@ import { Central, S3Backend } from '../../src/core/central.js'
 import { loadJourney, startJourney } from '../../src/core/journey.js'
 import { JourneyStore, forgetNoJourney } from '../../src/core/journey-store.js'
 import type { LiveEvent, Publisher } from '../../src/web/events.js'
-import { MAX_JOB_EVENTS, NEW_WITHIN_S, onObjectCreated, projectOfIndexKey, projectOfJourneyKey, projectOfKey } from '../../src/web/journey-events.js'
+import { LOG_EVENT_EVERY_MS, MAX_JOB_EVENTS, NEW_WITHIN_S, decodeLogs, onObjectCreated, onRunLogs, projectOfIndexKey, projectOfJourneyKey, projectOfKey } from '../../src/web/journey-events.js'
 import { JobIndexStore, putJob } from '../../src/core/job-index.js'
 import { projectHash } from '../../src/core/project.js'
 import { FakeS3 } from '../core/fake-s3.js'
@@ -181,5 +182,40 @@ describe('live updates when a job changes', () => {
     })
     await r.run(r.event(INDEX))
     expect(r.pub.to('user-1')).toEqual([{ type: 'job.updated', repo: 'acme/board', jobId: null, state: null, at: expect.any(String) }])
+  })
+})
+
+describe('run logs (log.appended)', () => {
+  const delivery = (o: Record<string, unknown>) => ({ awslogs: { data: gzipSync(Buffer.from(JSON.stringify(o))).toString('base64') } })
+
+  it('tells everyone on the project that a run wrote lines, without the lines', async () => {
+    const { s3, pub, now } = await rig()
+    const batch = await decodeLogs(delivery({ messageType: 'DATA_MESSAGE', logGroup: '/trace/t/runs', logStream: 'gha/acme/board/70/1/check', logEvents: [{ id: '1', timestamp: 1, message: 'secret line' }, { id: '2', timestamp: 2, message: 'more' }] }))
+    const out = await onRunLogs(batch!, { bucket: BUCKET, s3, publisher: pub, now, log: () => undefined, sleep: async () => undefined })
+    expect(out).toEqual({ repo: 'acme/board', sent: 4 })
+    const e = pub.to('user-2')
+    expect(e).toEqual([{ type: 'log.appended', repo: 'acme/board', kind: 'check', id: '70/1/check', lines: 2, at: expect.any(String) }])
+    expect(JSON.stringify(pub.sent)).not.toContain('secret line')
+    expect(pub.to('other-1')).toEqual([])
+  })
+
+  it('says nothing for streams trace did not name, or a control message', async () => {
+    const { s3, pub, now } = await rig()
+    const d = { bucket: BUCKET, s3, publisher: pub, now, log: () => undefined, sleep: async () => undefined }
+    expect(await onRunLogs({ messageType: 'DATA_MESSAGE', logStream: 'a1b2c3d4-build', logEvents: [{ message: 'x' }] }, d)).toEqual({ repo: null, sent: 0 })
+    expect(await onRunLogs({ messageType: 'CONTROL_MESSAGE', logStream: 'job/acme/board/job-1', logEvents: [{ message: 'x' }] }, d)).toEqual({ repo: null, sent: 0 })
+    expect(await decodeLogs({})).toBeNull()
+    expect(pub.sent).toEqual([])
+  })
+
+  it('waits out the second between two events for one stream', async () => {
+    const { s3, pub, now } = await rig()
+    const slept: number[] = []
+    const d = { bucket: BUCKET, s3, publisher: pub, now, log: () => undefined, sleep: async (ms: number) => { slept.push(ms) } }
+    const b = { messageType: 'DATA_MESSAGE', logStream: 'job/acme/board/job-quick', logEvents: [{ message: 'x' }] }
+    await onRunLogs(b, d)
+    await onRunLogs(b, d)
+    expect(slept.length).toBe(1)
+    expect(slept[0]).toBeLessThanOrEqual(LOG_EVENT_EVERY_MS)
   })
 })

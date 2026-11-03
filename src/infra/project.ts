@@ -43,6 +43,9 @@
  *             <prefix>-<hash>-wait-* only, Subscribe (its own wait queues as the only endpoint), Unsubscribe and
  *             ListSubscriptionsByTopic on its own topic only, and ListQueues (the Batch line above)
  *   telemetry its own runtime's log group, X-Ray, PutMetricData in the bedrock-agentcore namespace
+ *   run logs  CreateLogStream and PutLogEvents on the installation's runs log group (/trace/<prefix>/runs,
+ *             src/infra/run-logs.ts), on its own streams only: job/<owner>/<repo>/* and tool/<owner>/<repo>/*; the group's
+ *             name reaches it as TRACE_RUNS_LOG_GROUP (the stack's shared environment)
  *   model     Bedrock InvokeModel on Anthropic models and the account's inference profiles
  *   knowledge bedrock:Retrieve and Start/Get/ListIngestionJob on its own knowledge base only (nested layout,
  *             src/infra/knowledge.ts); its documents are S3 under projects/<slug>/kb/, inside its own prefix
@@ -103,6 +106,7 @@ import { ProjectKnowledgeBase } from './knowledge.js'
 import { EVENT_ACTIONS, RECORD_ACTIONS, TraceMemory } from './memory.js'
 import { projectVocabularyStatements, vocabularyBase } from './voice.js'
 import { RunnerProject } from './runner.js'
+import { partitionOf, runLogsWriteStatement } from './run-logs.js'
 import { CadFunction, ToolsFunction } from './tools.js'
 import { gpuTelemetryEnv } from './observability.js'
 import { jobIndexKey } from '../core/job-index.js'
@@ -275,8 +279,16 @@ export class ProjectStack extends Construct {
     p.images.grantPull(role)
     role.addToPolicy(new iam.PolicyStatement({ actions: ['ecr:GetAuthorizationToken'], resources: ['*'] }))
     const logs = `arn:${partition}:logs:${region}:${account}:log-group:/aws/bedrock-agentcore/runtimes/${this.runtimeName}-*`
+    // its own runtime's log group; and its jobs' and tool calls' logs (src/agents/runtime/log-stream.ts), its own streams
+    // of the runs group only (job/<slug>/*, tool/<slug>/*). In the one statement: the role's inline policy has a size
+    // limit, past which CDK adds an overflow policy, a resource more per project that a flat stack of 20 projects has no
+    // room for. CreateLogGroup and DescribeLogStreams authorize on a log group, which a stream's ARN never matches, so
+    // the runs group's ARNs give only CreateLogStream and PutLogEvents on those streams
+    // To fit: `logs` ends in '*', which IAM matches across ':', so it names its own streams too (no `:log-stream:*` beside
+    // it); and the runs streams' ARNs name the partition from the region (plain strings, not a join each)
+    const runStreams = runLogsWriteStatement({ partition: partitionOf(cfg.region), region, account }, cfg.prefix, repository, ['job', 'tool']).resources
     role.addToPolicy(new iam.PolicyStatement({
-      actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams'], resources: [logs, `${logs}:log-stream:*`],
+      actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams'], resources: [logs, ...runStreams],
     }))
     role.addToPolicy(new iam.PolicyStatement({ actions: ['logs:DescribeLogGroups'], resources: [`arn:${partition}:logs:${region}:${account}:log-group:*`] }))
     role.addToPolicy(new iam.PolicyStatement({ actions: TELEMETRY_ACTIONS, resources: ['*'] }))
@@ -618,7 +630,7 @@ export class ProjectStack extends Construct {
     this.runner = p.runnerSource
       ? new RunnerProject(this, 'Runner', {
           name: runnerProjectName(cfg.prefix, repository), repository, connectionArn: p.runnerSource.connectionArn, webhooks: p.runnerSource.webhooks,
-          computeType, image, privileged, ...(cfg.runners.webhookAttempt ? { attempt: cfg.runners.webhookAttempt } : {}),
+          computeType, image, privileged, runLogs: { prefix: cfg.prefix }, ...(cfg.runners.webhookAttempt ? { attempt: cfg.runners.webhookAttempt } : {}),
           tags: { [PROJECT_TAG]: slug, 'trace:installation': cfg.prefix },
         })
       : null

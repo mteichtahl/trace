@@ -12,11 +12,17 @@
  *     no start_task there
  *   - forwardedProps { repo, thread, after }: where the backend keeps trace's reply (chats.reply, after the viewer's
  *     own latest turn, `after` being the id chats.append gave it)
+ *
+ * What comes back passes tool-runs.ts on its way to CopilotKit: the `trace.tool_run` custom events say which run each
+ * tool call is, so its card can show the run's newest line and Watch log.
  */
 import { HttpAgent } from '@ag-ui/client'
-import type { Message, RunAgentInput } from '@ag-ui/client'
+import type { BaseEvent, Message, RunAgentInput } from '@ag-ui/client'
+import type { Observable } from 'rxjs'
+import { tap } from 'rxjs'
 import { refresh, token } from '@/lib/auth'
 import { sha256Hex } from '@/lib/http'
+import { noteEvent } from './tool-runs'
 
 export const AGENT_ID = 'trace'
 /** a second registration for chats embedded in Focus mode, so they keep their own thread */
@@ -86,6 +92,10 @@ class TraceAgent extends HttpAgent {
   }
   protected override requestInit(input: RunAgentInput): RequestInit {
     return super.requestInit(shapeInput(input, wireOf(this.wireId)))
+  }
+  /** every event also goes past tool-runs.ts: the trace.tool_run custom events name each tool call's run */
+  override run(input: RunAgentInput): Observable<BaseEvent> {
+    return super.run(input).pipe(tap((e) => noteEvent(e)))
   }
   override clone(): TraceAgent {
     const c = new TraceAgent(this.wireId)

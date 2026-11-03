@@ -38,7 +38,7 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
       // a change moved on GitHub (src/web/hooks.ts: `kind: 'change'`, `number` when GitHub named one): its status, the
       // lists that show it, and the journey (its open changes are steps)
       if ((e as { kind?: unknown }).kind === 'change') {
-        return [['pull.status', r], ['changes.list', r], ['change.get', r], ['inbox'], ['journey.get', r]]
+        return [['pull.status', r], ['changes.list', r], ['change.get', r], ['inbox'], ['journey.get', r], ['change.runs', r], ['activity.list']]
       }
       const byWhat: Record<typeof e.what, QueryKey[]> = {
         // the journey's record and the agents' facts, and the bench's live readings (src/core/bench.ts): the Build tab and
@@ -57,11 +57,26 @@ export function invalidationsFor(e: LiveEvent): QueryKey[] {
       return byWhat[e.what] ?? [['journey.get', r]]
     }
     case 'job.updated':
-      return [['job'], ['jobs.list', e.repo], ['journey.get', e.repo], ['tools.waits', e.repo], ['runs', e.repo]]
+      return [['job'], ['jobs.list', e.repo], ['journey.get', e.repo], ['tools.waits', e.repo], ['runs', e.repo], ['activity.list']]
     case 'notification':
       return [['inbox'], ['journey.get', e.repo]]
+    case 'log.appended':
+      // the open log view reads on from its cursor by itself (logTicks); these are the summaries that show the newest line
+      return e.kind === 'check' ? [['activity.list'], ['change.runs', e.repo]] : [['activity.list']]
   }
 }
+
+// ------------------------------------------------------------------ log.appended → open log views read on
+
+/**
+ * How many times each repo's logs have grown since the app started (log.appended bumps it). An open LogView, and a
+ * running tool card's newest line, watch their repo's count and read on from their cursor when it moves: the event
+ * carries no text, and invalidating would read from the start again.
+ */
+export const logTicks = createStore<Record<string, number>>({})
+export const bumpLog = (repo: string): void => logTicks.set((t) => ({ ...t, [repo]: (t[repo] ?? 0) + 1 }))
+/** The count for one repo, live. */
+export const useLogTick = (repo: string): number => useStore(logTicks)[repo] ?? 0
 
 /**
  * What the app says when a push left changes in conflict (src/web/hooks.ts `conflicts`, numbers only): which ones, and
@@ -310,6 +325,7 @@ export function startLive(qc: QueryClient, cfg: { http: string; realtime: string
   const coalesced = coalescer(qc)
   // the screens look again together; a conflict is also said at once, wherever the person is
   const apply = (e: LiveEvent): void => {
+    if (e.type === 'log.appended') bumpLog(e.repo)
     coalesced(e)
     const n = conflictNotice(e)
     if (n) toast.info(n.title, { description: n.description })

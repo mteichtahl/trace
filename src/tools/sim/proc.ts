@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process'
 import { accessSync, constants } from 'node:fs'
 import { availableParallelism } from 'node:os'
 import { delimiter, join } from 'node:path'
+import { forwardOutput } from '../../core/progress.js'
 
 export interface ProcResult {
   readonly code: number | null
@@ -26,7 +27,8 @@ export interface ProcOptions {
   readonly maxOutput?: number
 }
 
-/** Run a program to completion, or kill it (SIGKILL) at the timeout. Never throws for a non-zero exit. */
+/** Run a program to completion, or kill it (SIGKILL) at the timeout. Never throws for a non-zero exit. Inside a tool
+ * call's progress channel (src/core/progress.ts) each line it prints is reported as it comes. */
 export function run(cmd: string, args: readonly string[], opts: ProcOptions): Promise<ProcResult> {
   const max = opts.maxOutput ?? 4_000_000
   const t0 = Date.now()
@@ -35,12 +37,13 @@ export function run(cmd: string, args: readonly string[], opts: ProcOptions): Pr
     let out = ''
     let err = ''
     let timedOut = false
+    const fwd = forwardOutput()
     const keep = (s: string, add: string): string => {
       const t = s + add
       return t.length > max ? t.slice(t.length - max) : t
     }
-    child.stdout.setEncoding('utf8').on('data', (d: string) => { out = keep(out, d) })
-    child.stderr.setEncoding('utf8').on('data', (d: string) => { err = keep(err, d) })
+    child.stdout.setEncoding('utf8').on('data', (d: string) => { out = keep(out, d); fwd?.stdout.push(d) })
+    child.stderr.setEncoding('utf8').on('data', (d: string) => { err = keep(err, d); fwd?.stderr.push(d) })
     const timer = setTimeout(() => {
       timedOut = true
       child.kill('SIGKILL')
@@ -51,6 +54,7 @@ export function run(cmd: string, args: readonly string[], opts: ProcOptions): Pr
     })
     child.on('close', (code, signal) => {
       clearTimeout(timer)
+      fwd?.end()
       resolve({ code, signal, stdout: out, stderr: err, timedOut, ms: Date.now() - t0 })
     })
   })

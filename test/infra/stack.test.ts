@@ -632,6 +632,52 @@ describe('the trace stack', () => {
     expect(() => new TraceStack(new App(), 'Long', InfraPropsSchema.parse({ ...props, repositories: long }))).toThrow(/characters \(AgentCore allows 5000\)/)
   }, 300_000)
 
+  it('keeps run logs in one group, /trace/<prefix>/runs: each worker writes its own job/ and tool/ streams, the API reads, the web app follows', () => {
+    // the group: a month, deleted with the stack
+    // in the web app's nested stack (the parent has no room to spare in the flat layout), and nowhere else
+    expect(Object.values(t.findResources('AWS::Logs::LogGroup') as Record<string, { Properties: Record<string, unknown> }>).filter((g) => g.Properties.LogGroupName === '/trace/trace/runs')).toEqual([])
+    const groups = Object.entries(syn.web?.findResources('AWS::Logs::LogGroup') as Record<string, { Properties: Record<string, unknown>; DeletionPolicy?: string }>).filter(([, g]) => g.Properties.LogGroupName === '/trace/trace/runs')
+    expect(groups).toHaveLength(1)
+    expect(groups[0]?.[1]).toMatchObject({ DeletionPolicy: 'Delete', Properties: { RetentionInDays: 30 } })
+    // plain strings in the worker's policy (its size: src/infra/project.ts)
+    const streams = (kind: string, repo: string): unknown => `arn:aws:logs:us-east-1:123456789012:log-group:/trace/trace/runs:log-stream:${kind}/${repo}/*`
+    for (const [repo, h, other] of [[A, HA, B], [B, HB, A]] as const) {
+      // its name in each worker's environment
+      expect(runtimeEnv(nestedOf(syn, repo), `trace_w_${h}`).TRACE_RUNS_LOG_GROUP).toBe('/trace/trace/runs')
+      // and its own streams only, beside its runtime's own log group (one statement: the role's policy size)
+      const s = statementsOf(t, `Project${h}RuntimeRole`)
+      const write = s.filter((x) => JSON.stringify(x.Resource).includes('/trace/trace/runs'))
+      expect(write).toHaveLength(1)
+      expect(actionsOf(write[0]!)).toEqual(expect.arrayContaining(['logs:CreateLogStream', 'logs:PutLogEvents']))
+      expect(write[0]!.Resource).toEqual(expect.arrayContaining([streams('job', repo), streams('tool', repo)]))
+      // only stream ARNs of the runs group: nothing that matches the group itself (CreateLogGroup, DescribeLogStreams)
+      expect((write[0]!.Resource as unknown[]).filter((r) => JSON.stringify(r).includes('/trace/trace/runs'))).toHaveLength(2)
+      expect(JSON.stringify(s)).not.toContain(`log-stream:job/${other}/`)
+    }
+    // the API: read only, on the group and its streams, beside its cost statements
+    expect(runtimeEnv(syn.parent, 'trace_api').TRACE_RUNS_LOG_GROUP).toBe('/trace/trace/runs')
+    const read = statementsOf(t, 'ApiRuntimeRoleCostPolicy').filter((x) => x.Sid?.startsWith('RunLogs'))
+    expect(read.flatMap(actionsOf).sort()).toEqual(['logs:DescribeLogStreams', 'logs:FilterLogEvents', 'logs:GetLogEvents'])
+    expect(JSON.stringify(read)).toContain(':log-group:/trace/trace/runs:log-stream:*')
+    // and nothing of the API's writes there
+    expect(statementsOf(t, 'ApiRuntimeRole').filter((x) => JSON.stringify(x.Resource).includes('/trace/trace/runs') && actionsOf(x).some((a) => /CreateLogStream|PutLogEvents/.test(a)))).toEqual([])
+    // the web app's JourneyEvents is sent every batch (log.appended), and told the group
+    const web = syn.web
+    expect(web).not.toBeNull()
+    const filters = Object.values(web?.findResources('AWS::Logs::SubscriptionFilter') ?? {}) as { Properties: Record<string, unknown> }[]
+    expect(filters).toHaveLength(1)
+    expect(filters[0]?.Properties).toMatchObject({ FilterPattern: '', FilterName: 'trace-run-logs-live', DestinationArn: { 'Fn::GetAtt': [expect.stringMatching(/^JourneyEvents/), 'Arn'] } })
+    const fn = Object.values(web?.findResources('AWS::Lambda::Function') ?? {}).find((f) => (f as { Properties: { FunctionName?: string } }).Properties.FunctionName === 'trace-journey-events') as { Properties: { Environment: { Variables: Record<string, unknown> } } } | undefined
+    expect(fn?.Properties.Environment.Variables.TRACE_RUNS_LOG_GROUP).toBe('/trace/trace/runs')
+    expect(filters[0]?.Properties.LogGroupName).toEqual({ Ref: groups[0]?.[0] })
+    // without the web app, the parent makes the group itself
+    const off = synth(InfraPropsSchema.parse({ ...props, web: { enabled: false } }), 'NoWebRunLogs')
+    expect(Object.values(off.parent.findResources('AWS::Logs::LogGroup') as Record<string, { Properties: Record<string, unknown> }>).filter((g) => g.Properties.LogGroupName === '/trace/trace/runs')).toHaveLength(1)
+    // CloudWatch Logs may invoke it, from that group only
+    const perms = Object.values(web?.findResources('AWS::Lambda::Permission') ?? {}) as { Properties: Record<string, unknown> }[]
+    expect(perms.some((p) => p.Properties.Principal === 'logs.amazonaws.com')).toBe(true)
+  }, 300_000)
+
   it('creates none of the memory when memory.enabled is false', () => {
     const off = InfraPropsSchema.parse({ ...props, memory: { enabled: false } })
     const t2 = synth(off, 'NoMemory').all

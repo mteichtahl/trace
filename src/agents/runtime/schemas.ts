@@ -8,6 +8,7 @@ import { z } from 'zod'
 import type { PromptRecord } from '../../prompts/resolve.js'
 import { WorkItemSchema } from '../../harness/worker.js'
 import { type Route, SPECIALIST_KINDS, SpecialistKindSchema, WORKER } from '../kinds.js'
+import { TOOL_RUN_ID } from '../../core/run-logs.js'
 
 /** owner/repo, GitHub's own character set (no "..", no leading dash or dot). */
 export const RepositorySchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/, 'expected owner/repo')
@@ -174,12 +175,15 @@ export const HandoffTaskPayload = TaskPayload.extend({
  * One tool call the API forwards to the project's worker runtime (src/agents/runtime/tool.ts): no model and no job,
  * the tool's answer in the response. The worker clones the project's default branch, refuses hardware tools and
  * paths outside the clone, and runs the tool through the registry. The API checked the person's access first.
+ * `runId` (the API's `run_id`, src/core/run-logs.ts newToolRunId): the call's log stream, tool/<owner>/<repo>/<runId>,
+ * which the runtime writes while the tool runs (docs/progress-and-logs.md); absent, nothing is written.
  */
 export const ToolPayload = z.object({
   kind: z.literal('tool'),
   repository: RepositorySchema,
   name: z.string().regex(/^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/, 'a tool name (area.tool)'),
   args: z.record(z.string(), z.unknown()).default({}),
+  runId: z.string().regex(TOOL_RUN_ID, 'a tool run id (newToolRunId)').optional(),
   trace: TraceContextSchema.optional(),
 }).strict()
 export type ToolJob = z.infer<typeof ToolPayload>

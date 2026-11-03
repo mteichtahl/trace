@@ -198,6 +198,13 @@ export interface Actions {
   'health.get': { args: Repo; result: import('./types').HealthView }
   /** job_id: a failing job of health.get (its build.failing[].job_id) */
   'health.log': { args: Repo & { job_id: number }; result: import('./types').HealthLog }
+  // progress and logs (docs/progress-and-logs.md, src/api/actions-progress.ts)
+  /** a run's lines from its cursor (`after`: the last answer's `next`) */
+  'run.log': { args: Repo & { run: string; after?: string | null; limit?: number }; result: import('./types').RunLogResult }
+  /** a change's checks as GitHub's jobs: steps, the step now, time against the usual, the newest line */
+  'change.runs': { args: Repo & { number: number }; result: import('./types').ChangeRuns }
+  /** what trace is doing now, across every project the person can see */
+  'activity.list': { args: Record<string, never>; result: import('./types').ActivityList }
 }
 
 export type ActionName = keyof Actions

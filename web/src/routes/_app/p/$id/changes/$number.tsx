@@ -19,6 +19,8 @@ import { ArrowLeft, ChevronRight, CircleCheck, CircleDashed, FileStack, Loader2,
 import { toast } from 'sonner'
 import { MoreForAdmins } from '@/components/more-for-admins'
 import { CHECK_ICON, CheckRow, CheckSheet, ChecksSheet, checksLine, checksState, order } from '@/components/changes/check-sheet'
+import { ChangeChecks, jobFor } from '@/components/changes/change-checks'
+import { RunSheet } from '@/components/run-sheet'
 import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { Button } from '@/components/ui/button'
@@ -42,7 +44,7 @@ import { changeLookEvery, useLiveStatus, useNextLook } from '@/lib/live'
 import { ago } from '@/lib/format'
 import { KIND_TAG, changeOf, checksWords, currentStage, nextPlace, recommendationWords, stepWords } from '@/lib/guided'
 import { q, useJourney, useProjects } from '@/lib/queries'
-import type { ChangeDetail, ChangeFile } from '@/lib/types'
+import type { ChangeDetail, ChangeFile, CheckJob } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/_app/p/$id/changes/$number')({
@@ -67,6 +69,14 @@ function Review() {
   // GitHub says nothing when it finishes working out whether it can merge: look again often until it has, and say when
   const c = useQuery({ ...q('change.get', { repo, number }), refetchInterval: (x) => changeLookEvery(x.state.data, live) })
   const nextLook = useNextLook(c.dataUpdatedAt, changeLookEvery(c.data, live))
+  // the checks as GitHub's jobs, with their steps (docs/progress-and-logs.md): refreshed by log.appended and the change's
+  // events; polled with the change only while the live connection is down
+  const runs = useQuery({ ...q('change.runs', { repo, number }), enabled: !!c.data, retry: false, refetchInterval: () => (live === 'live' ? false : changeLookEvery(c.data, live)) })
+  const jobs = runs.data?.jobs
+  const jobsShown = !!jobs?.length
+  // a running check opened from the phone's list: its live log (the others open their result sheet)
+  const [watch, setWatch] = useState<CheckJob | null>(null)
+  const watching = watch ? (jobs?.find((x) => x.id === watch.id) ?? watch) : null
   const actions = useChangeActions(repo)
   const coverage = useCoverage(repo)
   const [note, setNote] = useState('')
@@ -116,6 +126,8 @@ function Review() {
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0 space-y-5">
+          {/* checks with steps and Watch need the room of the main column */}
+          {!phone && jobsShown && <ChangeChecks d={d} jobs={jobs} repo={repo} onOpenCheck={setCheck} />}
           <section className="rounded-xl border bg-card p-5" aria-labelledby="did">
             <h3 id="did" className="section-label">{edit ? 'What it changes' : 'What trace did'}</h3>
             {d.summary.length ? (
@@ -173,7 +185,7 @@ function Review() {
         </div>
 
         <aside className="space-y-4">
-          {!phone && <Checks d={d} onOpen={setCheck} />}
+          {!phone && !jobsShown && <Checks d={d} onOpen={setCheck} />}
           <section className="rounded-xl border bg-card p-5" aria-labelledby="reqs">
             <h3 id="reqs" className="section-label">Requirements it covers</h3>
             <ChangeRequirements
@@ -190,7 +202,13 @@ function Review() {
         </aside>
       </div>
 
-      <ChecksSheet open={checksOpen} onOpenChange={setChecksOpen} checks={d.checks_list} counts={d.checks} onPick={(i) => { setChecksOpen(false); setCheck(i) }} />
+      <ChecksSheet open={checksOpen} onOpenChange={setChecksOpen} checks={d.checks_list} counts={d.checks} onPick={(i) => {
+        setChecksOpen(false)
+        const job = jobFor(d.checks_list[i], jobs)
+        if (job && (job.state === 'running' || job.state === 'queued')) setWatch(job)
+        else setCheck(i)
+      }} />
+      {watching && <RunSheet repo={repo} run={watching.run} title={watching.name} open onOpenChange={(o) => !o && setWatch(null)} facts={{ check: watching, finished: !['queued', 'running'].includes(watching.state) }} />}
       <CheckSheet repo={repo} number={number} checks={d.checks_list} index={check} onIndex={setCheck} />
       {phone && <PhoneFiles open={filesOpen} onOpenChange={setFilesOpen} repo={repo} number={number} files={d.files} />}
 

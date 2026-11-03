@@ -30,6 +30,7 @@ import { dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ToolError } from '../../core/registry.js'
 import { scratchDir } from '../../core/store.js'
+import { reportLine, reportOutput } from '../../core/progress.js'
 import { type Backend, CAD_SCRIPT_OUTPUTS, backendFor, type GpuJob, type JobResult, runJob } from '../../gpu/jobs.js'
 import type { BoardFacts } from './board.js'
 import { CAPABILITIES, engineCapabilities } from './capabilities.js'
@@ -203,7 +204,9 @@ function missingModule(stderr: string, where: Backend): string | null {
  */
 async function runScript(input: CaseInput & { script: string }, dir: string): Promise<{ built: Record<string, string>; stage: BuildStage }> {
   const { job, where } = scriptJob(input, dir)
+  reportLine(`▸ Case script (${where})`)
   const r = await runJob(job)
+  reportOutput(r.stderr)
   const claimsPath = r.outputs['claims.json']
   const claims = claimsPath && existsSync(claimsPath) ? safeJson(readFileSync(claimsPath, 'utf8')) as { error?: unknown } | null : null
   if (r.exitCode === 2) throw new ToolError(`the case script (mechanical/case.py) failed: ${typeof claims?.error === 'string' ? claims.error : (tail(r.stderr) || 'no claims written')}`)
@@ -232,7 +235,11 @@ export async function runCase(input: CaseInput): Promise<CaseRun> {
       stages.push(s.stage)
     }
     const { job, where } = caseJob(input, join(dir, 'case'), process.env, built)
+    // a tool call's progress (src/core/progress.ts): the job may run on the cad function, where its output cannot be
+    // followed live, so the step now and its output's end once it is back
+    reportLine(`▸ Case build and fit check (${where})`)
     const r = await runJob(job)
+    reportOutput(r.stderr)
     stages.push(stageOf('cad', r))
     const resPath = r.outputs['result.json']
     const parsed = resPath && existsSync(resPath) ? safeJson(readFileSync(resPath, 'utf8')) : null
