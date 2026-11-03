@@ -6,6 +6,7 @@
 export type ViewerKind =
   | 'schematic' | 'board' | 'gerber' | 'gerber-zip' | 'model' | 'step' | 'image' | 'video' | 'svg' | 'pdf' | 'table'
   | 'vcd' | 'plot' | 'wavedrom' | 'code' | 'markdown' | 'firmware' | 'archive' | 'database' | 'unknown'
+  | 'spice' | 'touchstone' | 'gzip' | 'report'
 
 export type FileGroup = 'design' | 'fabrication' | 'evidence' | 'firmware' | 'documents'
 
@@ -21,6 +22,7 @@ export const KIND_LABEL: Record<ViewerKind, string> = {
   schematic: 'Schematic', board: 'Board', gerber: 'Gerber', 'gerber-zip': 'Fabrication', model: '3D model', step: '3D model',
   image: 'Image', video: 'Video', svg: 'Drawing', pdf: 'PDF', table: 'Table', vcd: 'Waveform', plot: 'Simulation',
   wavedrom: 'Timing diagram', code: 'Code', markdown: 'Markdown', firmware: 'Firmware image', archive: 'Archive', database: 'Database', unknown: 'File',
+  spice: 'Simulation', touchstone: 'S-parameters', gzip: 'Compressed', report: 'Check report',
 }
 
 const GERBER = new Set(['gbr', 'ger', 'pho', 'art', 'gtl', 'gbl', 'gto', 'gbo', 'gts', 'gbs', 'gtp', 'gbp', 'gko', 'gm1', 'gm2', 'gml', 'gm', 'g1', 'g2', 'g3', 'g4', 'g5', 'g6', 'gp1', 'gp2', 'gpt', 'gpb', 'drl', 'xln', 'exc', 'drd', 'txt.drl'])
@@ -29,12 +31,17 @@ const CODE = new Set([
   'cir', 'sp', 'spi', 'spice', 'net', 'lib', 'mod', 'ses', 'dsn', 'json', 'jsonc', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf',
   'log', 'txt', 'out', 'sh', 'bash', 'zsh', 'ld', 'x', 'kicad_pro', 'kicad_sym', 'kicad_mod', 'kicad_dru', 'kicad_prl', 'pos',
   'xdc', 'pcf', 'lpf', 'sdc', 'tcl', 'mk', 'cmake', 'diff', 'patch', 'rpt',
+  // text results the tools keep: openEMS and VTK XML, CalculiX decks, EDIF netlists, iCE40 ASCII bitstreams and CAN
+  // logs (ASC, TRC, candump), S-expressions, ECP5 configs, coverage
+  'xml', 'vtu', 'vtk', 'inp', 'frd', 'edif', 'edn', 'edf', 'asc', 'trc', 'candump', 'sexp', 'sexpr', 'config', 'info', 'dat', 'stat', 'dsl',
 ])
 const NAMED_CODE = new Set(['makefile', 'dockerfile', 'cargo.lock', 'license', 'readme'])
 const IMAGE = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp'])
 const VIDEO = new Set(['mp4', 'webm', 'mov', 'm4v'])
 const DATABASE = new Set(['db', 'sqlite', 'sqlite3', 'db3', 's3db', 'sl3'])
-const FIRMWARE = new Set(['elf', 'hex', 'ihex', 'bin', 'map', 'uf2', 'axf', 'srec', 's19'])
+const FIRMWARE = new Set(['elf', 'hex', 'ihex', 'bin', 'map', 'uf2', 'axf', 'srec', 's19', 'bit', 'fs', 'jed', 'svf'])
+/** kicad-cli's JSON check reports and the tools' findings files (a findings list with the file behind it) */
+const REPORT_NAMES = /^(erc|drc)(-report)?\.json$|-(erc|drc)\.json$|^(pin-)?findings\.json$/
 
 /** The file name without its folders. */
 export const baseName = (path: string): string => path.split('/').filter(Boolean).pop() ?? path
@@ -63,6 +70,10 @@ export function viewerKind(path: string, head?: string): ViewerKind {
   if (ext === 'svg') return 'svg'
   if (ext === 'pdf') return 'pdf'
   if (ext === 'csv' || ext === 'tsv') return 'table'
+  if (ext === 'raw') return 'spice'
+  if (/^s\d+p$/.test(ext) || ext === 'snp') return 'touchstone'
+  if (ext === 'gz') return 'gzip'
+  if (ext === 'json' && REPORT_NAMES.test(name)) return 'report'
   if (ext === 'vcd') return 'vcd'
   if (ext === 'sim.json' || ext === 'plot.json') return 'plot'
   if (ext === 'wavedrom.json' || ext === 'wave.json' || ext === 'wavedrom' || ext === 'wavejson') return 'wavedrom'
@@ -96,7 +107,11 @@ export function groupOf(path: string, apiKind?: string): FileGroup {
   const v = viewerKind(path)
   if (v === 'gerber' || v === 'gerber-zip' || /(^|\/)(fab|gerbers?|production|jlcpcb)\//.test(p) || /(cpl|placement|pick.?and.?place)/.test(baseName(p))) return 'fabrication'
   if (v === 'firmware' || /(^|\/)(firmware|fw|src\/main|embedded)\//.test(p)) return 'firmware'
-  if (v === 'vcd' || v === 'plot' || v === 'video' || /(^|\/)(runs?|evidence|captures?|renders?|results?|reports?)\//.test(p) || extOf(p) === 'log') return 'evidence'
+  if (v === 'gzip') {
+    const inner = path.replace(/\.gz$/i, '')
+    return inner === path ? 'documents' : groupOf(inner)
+  }
+  if (v === 'vcd' || v === 'plot' || v === 'video' || v === 'spice' || v === 'touchstone' || v === 'report' || /(^|\/)(runs?|evidence|captures?|renders?|results?|reports?)\//.test(p) || extOf(p) === 'log') return 'evidence'
   if (v === 'schematic' || v === 'board' || v === 'model' || v === 'step' || v === 'svg' || /(bom|parts)/.test(baseName(p))) return 'design'
   return 'documents'
 }
@@ -110,6 +125,7 @@ export function codeLang(path: string): string | null {
     json: 'json', jsonc: 'json', kicad_pro: 'json', 'wavedrom.json': 'json', 'sim.json': 'json', 'plot.json': 'json', yaml: 'yaml', yml: 'yaml',
     toml: 'toml', sh: 'shellscript', bash: 'shellscript', zsh: 'shellscript', kicad_sch: 'lisp', kicad_pcb: 'lisp',
     kicad_sym: 'lisp', kicad_mod: 'lisp', kicad_dru: 'lisp', ses: 'lisp', dsn: 'lisp', diff: 'diff', patch: 'diff', md: 'markdown',
+    edif: 'lisp', edn: 'lisp', edf: 'lisp', sexp: 'lisp', sexpr: 'lisp',
   }
   return map[ext] ?? null
 }
@@ -120,9 +136,20 @@ export const isLog = (path: string): boolean => extOf(path) === 'log' || /\.log\
 /** Which kinds can compare two versions, and how. */
 export function compareMode(kind: ViewerKind): 'text' | 'table' | 'image' | 'kicad' | 'database' | null {
   if (kind === 'database') return 'database'
-  if (kind === 'code' || kind === 'markdown' || kind === 'wavedrom' || kind === 'vcd') return 'text'
+  if (kind === 'code' || kind === 'markdown' || kind === 'wavedrom' || kind === 'vcd' || kind === 'spice' || kind === 'touchstone' || kind === 'report') return 'text'
   if (kind === 'table') return 'table'
   if (kind === 'image' || kind === 'svg') return 'image'
   if (kind === 'schematic' || kind === 'board') return 'kicad'
   return null
+}
+
+/** A sentence about a file trace cannot draw, when it knows what the file is (shown with Download). */
+export function aboutFile(path: string): string | null {
+  switch (extOf(path)) {
+    case 'blf': return 'A binary CAN bus log (Vector BLF) from hil.can_capture. trace does not draw it here: download it and open it in a CAN tool (python-can, Vector CANalyzer, BUSMASTER). Capture as candump, ASC or TRC to read it in trace.'
+    case 'mf4': case 'mdf': return 'A binary measurement log (ASAM MDF). Download it and open it in a measurement tool (asammdf, CANape).'
+    case 'pcap': case 'pcapng': return 'A packet capture. Download it and open it in Wireshark.'
+    case 'sch': return 'A legacy KiCad (5 or earlier) schematic. Open it in KiCad and save it as .kicad_sch to view it here.'
+    default: return null
+  }
 }

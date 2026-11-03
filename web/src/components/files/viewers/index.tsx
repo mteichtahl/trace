@@ -1,6 +1,6 @@
 /**
  * The viewer for each kind, each its own lazily loaded chunk: a kind's code (and its library: KiCanvas, PDF.js,
- * three.js, tracespace, WaveDrom, Shiki's grammars) loads only when a file of that kind first appears.
+ * three.js, tracespace, WaveDrom, Shiki's grammars, Recharts) loads only when a file of that kind first appears.
  */
 import { lazy, Suspense, type ComponentType, type ReactNode } from 'react'
 import type { FileRef } from '../data'
@@ -31,6 +31,10 @@ const VIEWERS: Record<ViewerKind, Lazy> = {
   archive: lazy(() => import('./archive')),
   database: lazy(() => import('./database')),
   unknown: UnknownViewer as Lazy,
+  spice: lazy(() => import('./results').then((m) => ({ default: m.SpiceViewer }))),
+  touchstone: lazy(() => import('./results').then((m) => ({ default: m.TouchstoneViewer }))),
+  gzip: lazy(() => import('./gzip')),
+  report: lazy(() => import('./report')),
 }
 
 /** Draw a file with its kind's viewer. `kind` overrides the one worked out from the name. */
