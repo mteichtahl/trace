@@ -7,12 +7,20 @@
  *   this module  refuses hardware tools and the session-scoped ones (memory.*, agent.*, journey.*), refuses paths outside the
  *                clone, clones (or fetches) the default branch, and runs the tool through the registry there: no
  *                model, no job. Calls run one at a time, since tools resolve the project from the working directory.
+ *   its log      a call that came with a run id (ToolJob.runId, the API's run_id) writes its stream
+ *                tool/<owner>/<repo>/<runId> in the runs log group (src/agents/runtime/log-stream.ts toolRun): `▸ <tool>`
+ *                once it is accepted, what the tool and the programs it runs report (src/core/progress.ts), then
+ *                `✓ done in 12 s` or `✗ <why>`; its quiet gaps are learned when it ends. Without the group, or without
+ *                a run id, nothing is written and the call is unchanged
  *
  * Everything with side effects is injected (ToolDeps), so tests run it without git or a token.
  */
 import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path'
+import type { RunLogWriter } from '../../core/cw-writer.js'
+import { withProgress } from '../../core/progress.js'
 import type { Registry } from '../../core/registry.js'
 import type { Exec } from './job.js'
+import type { LearnQuiet, ToolRunLog } from './log-stream.js'
 import type { ToolJob } from './schemas.js'
 
 /** Tools scoped by a job's environment (its project, agent, session or delegation token): never through the API. The
@@ -61,6 +69,10 @@ export interface ToolDeps {
    * committed, so its "saved" would be lost. Left out, nothing is checked.
    */
   record?: { prepare: (dir: string) => void; fingerprint: (dir: string) => string }
+  /** the runs log group's writer (a call with a run id writes its stream there); absent: nothing is written */
+  runLogs?: RunLogWriter | null
+  /** fold a finished call's gaps into its project's quiet profile; absent: not learned */
+  learn?: LearnQuiet | null
 }
 
 /** What a refused record change tells the caller, and through the chat the person: nothing was kept, and how to keep it. */
@@ -89,7 +101,13 @@ export function toolRunner(d: ToolDeps): ToolRunner {
     if (!apiTool(t)) throw new ToolRefused(`no tool ${p.name}`)
     // before anything is cloned, then again against the clone itself
     checkPaths(p.args, '/repository')
-    return serialised(async () => {
+    // its stream, opened once the call is accepted: a refused call has no log
+    // (loaded only then: the API imports this module for its policy alone)
+    const log: ToolRunLog | null = p.runId && d.runLogs
+      ? (await import('./log-stream.js')).toolRun(d.runLogs, { repository: p.repository, runId: p.runId, name: p.name, learn: d.learn ?? undefined })
+      : null
+    const call = (): Promise<unknown> => registry.call(p.name, p.args, { hardware: false, via: 'mcp' })
+    const run = serialised(async () => {
       const co = await d.checkout(p.repository)
       const cwd = process.cwd()
       const db = process.env.TRACE_PROJECT_DB
@@ -99,7 +117,7 @@ export function toolRunner(d: ToolDeps): ToolRunner {
         process.env.TRACE_PROJECT_DB = join(co.dir, '.trace', 'project.db')
         if (d.record) d.record.prepare(co.dir)
         const before = d.record?.fingerprint(co.dir)
-        const result = await registry.call(p.name, p.args, { hardware: false, via: 'mcp' })
+        const result = await (log ? withProgress(log.sink, call) : call())
         if (d.record && d.record.fingerprint(co.dir) !== before) throw new RecordChanged(recordChangedMessage(p.name))
         return result
       } finally {
@@ -109,6 +127,15 @@ export function toolRunner(d: ToolDeps): ToolRunner {
         co.cleanup()
       }
     })
+    if (!log) return run
+    try {
+      const result = await run
+      log.done()
+      return result
+    } catch (e) {
+      log.failed(e)
+      throw e
+    }
   }
 }
 
@@ -144,10 +171,12 @@ export const TOOL_WORKSPACE = '/tmp/trace-tools'
 
 /** The real runner: the registry of every tool, and the runtime's own clone (TRACE_GITHUB_SECRET_ARN). */
 export async function realToolRunner(env: Record<string, string | undefined> = process.env): Promise<ToolRunner> {
-  const [{ execReal, secretsToken }, { prepareRecord, recordFingerprint }] = await Promise.all([import('./job.js'), import('./record-guard.js')])
+  const [{ execReal, secretsToken }, { prepareRecord, recordFingerprint }, { processRunLogs, workerQuiet }] = await Promise.all([import('./job.js'), import('./record-guard.js'), import('./log-stream.js')])
   return toolRunner({
     registry: async () => (await import('../../tools/index.js')).allTools(),
     record: { prepare: prepareRecord, fingerprint: recordFingerprint },
+    // the call's log (a run id from the API, TRACE_RUNS_LOG_GROUP here) and its quiet gaps (src/agents/runtime/log-stream.ts)
+    runLogs: processRunLogs(), learn: workerQuiet(env as NodeJS.ProcessEnv),
     checkout: runtimeCheckout({ exec: execReal, getToken: secretsToken(env.TRACE_GITHUB_SECRET_ARN, env.AWS_REGION), workspace: env.TRACE_TOOL_WORKSPACE || TOOL_WORKSPACE, persistent: true, cli: env.TRACE_CLI || '/app/dist/cli.js' }),
   })
 }

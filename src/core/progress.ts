@@ -85,7 +85,11 @@ export interface LineSplitter {
 export function lineSplitter(emit: (line: string) => void, max = 4_000): LineSplitter {
   let buf = ''
   const decoder = new TextDecoder()
-  const out = (l: string): void => { try { emit(l) } catch { /* the emitter's own */ } }
+  const out = (l: string): void => {
+    for (let i = 0; i === 0 || i < l.length; i += max) {
+      try { emit(l.slice(i, i + max)) } catch { /* the emitter's own */ }
+    }
+  }
   return {
     push(chunk) {
       buf += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true })
@@ -95,7 +99,8 @@ export function lineSplitter(emit: (line: string) => void, max = 4_000): LineSpl
         out(buf.slice(0, i))
         buf = buf.slice(buf.startsWith('\r\n', i) ? i + 2 : i + 1)
       }
-      while (buf.length > max) { out(buf.slice(0, max)); buf = buf.slice(max) }
+      // an unterminated line past the maximum goes now, in pieces, so the buffer stays small
+      if (buf.length > max) { const cut = buf.length - (buf.length % max || max); out(buf.slice(0, cut)); buf = buf.slice(cut) }
     },
     end() {
       buf += decoder.decode()

@@ -22,10 +22,14 @@
  *                personal access token the installer imported with ImportSourceCredentials, or one the account had
  *                already), which CodeBuild keeps itself: no job can read it, and the role below gets no connection
  *                statement
- *   logs         its own log group, /aws/codebuild/<name>, kept a month, deleted with the project
+ *   logs         its own log group, /aws/codebuild/<name>, kept a month, deleted with the project; and the
+ *                installation's runs log group (/trace/<prefix>/runs, src/infra/run-logs.ts) named to every build as the
+ *                project environment variable TRACE_RUNS_LOG_GROUP, where trace's own steps write a check's lines while it
+ *                runs (src/core/check-stream.ts)
  *   role         its service role, assumed by CodeBuild only for this project (aws:SourceAccount, aws:SourceArn), and
  *                allowed only:
- *                  logs        CreateLogStream and PutLogEvents on its own log group
+ *                  logs        CreateLogStream and PutLogEvents on its own log group, and on the runs group's
+ *                              gha/<owner>/<repo>/* streams (its own repository's checks) only
  *                  connection  codeconnections:UseConnection, GetConnectionToken and GetConnection (and the same
  *                              codestar-connections actions, the service's former name, whose ARNs are the same
  *                              connection's) on that one connection ARN (auth 'connection' only)
@@ -72,6 +76,8 @@ import * as logs from 'aws-cdk-lib/aws-logs'
 import { Provider } from 'aws-cdk-lib/custom-resources'
 import { Construct } from 'constructs'
 import { connectionName } from '../core/project.js'
+import { RUNS_LOG_GROUP_ENV, runsLogGroup } from '../core/run-logs.js'
+import { runLogsWriteStatement } from './run-logs.js'
 import { bundlingRoot } from './lockfile.js'
 import { CONNECTION_CREATED_OUTPUT, CONNECTION_OUTPUT } from './props.js'
 
@@ -109,6 +115,10 @@ export interface RunnerProjectProps {
   tags?: Record<string, string>
   /** the log group's (DESTROY by default: build logs are not data) */
   removalPolicy?: RemovalPolicy
+  /** the installation's runs log group (src/infra/run-logs.ts), by the installation's prefix: the project's builds get
+   * TRACE_RUNS_LOG_GROUP, and the role may write gha/<repository>/* there (a check's own lines,
+   * src/core/check-stream.ts). Absent: neither */
+  runLogs?: { prefix: string }
 }
 
 /** The connection's ARN under both of the service's names (codeconnections, and codestar-connections before it). An
@@ -234,6 +244,8 @@ export class RunnerProject extends Construct {
               sid: 'RunnerLogs', actions: ['logs:CreateLogStream', 'logs:PutLogEvents'],
               resources: [this.logGroup.logGroupArn, `arn:${partition}:logs:${region}:${account}:log-group:${this.logGroup.logGroupName}:log-stream:*`],
             }),
+            // a check's own lines, written by tracectl and the harness actions while the job runs (src/core/check-stream.ts)
+            ...(p.runLogs ? [runLogsWriteStatement({ partition, region, account }, p.runLogs.prefix, p.repository, ['gha'], 'RunnerRunLogs')] : []),
             ...(p.connectionArn ? [new iam.PolicyStatement({
               sid: 'RunnerConnection',
               actions: [
@@ -267,6 +279,8 @@ export class RunnerProject extends Construct {
         image: p.image,
         imagePullCredentialsType: 'CODEBUILD',
         privilegedMode: p.privileged,
+        // every build (every job) knows the runs log group, so trace's own steps write the check's stream there
+        ...(p.runLogs ? { environmentVariables: [{ name: RUNS_LOG_GROUP_ENV, type: 'PLAINTEXT', value: runsLogGroup(p.runLogs.prefix) }] } : {}),
       },
       logsConfig: { cloudWatchLogs: { status: 'ENABLED', groupName: this.logGroup.logGroupName }, s3Logs: { status: 'DISABLED' } },
       timeoutInMinutes: RUNNER_TIMEOUT_MINUTES,

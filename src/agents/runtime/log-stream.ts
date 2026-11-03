@@ -23,6 +23,7 @@
  * quiet profile runs in the background and swallows its errors. Without TRACE_RUNS_LOG_GROUP (a laptop, tests, an
  * installation from before the group) nothing is written.
  */
+import { projectsBackend, projectsFromEnv } from '../../core/agent-facts.js'
 import type { Backend } from '../../core/central.js'
 import { type LogsApi, type RunLogWriter, awsLogsApi, runLogWriter } from '../../core/cw-writer.js'
 import { projectSlug } from '../../core/project.js'
@@ -38,6 +39,17 @@ export type LearnQuiet = (repo: string, run: string, kind: RunKind, what: string
 
 /** learnQuiet on the central bucket's projects/ store (the job index's: src/agents/runtime/job-index.ts workerIndex). */
 export const quietLearner = (projects: Backend): LearnQuiet => (repo, run, kind, what, gaps) => learnQuiet(projects, repo, run, kind, what, gaps)
+
+/**
+ * The worker's learner: the central bucket's projects/ store, reached as the job index reaches it (TRACE_PROJECT and
+ * TRACE_PROJECT_HOME, src/core/agent-facts.ts projectsFromEnv); null elsewhere, where nothing is learned.
+ */
+export function workerQuiet(env: NodeJS.ProcessEnv = process.env): LearnQuiet | null {
+  try {
+    const where = projectsFromEnv(env)
+    return where ? quietLearner(projectsBackend(where.projects)) : null
+  } catch { return null }
+}
 
 /** The writer for the runs group named in the environment; null without one. `api`: tests give a fake. */
 export function runLogsFromEnv(env: NodeJS.ProcessEnv = process.env, o: { api?: LogsApi; warn?: (l: string) => void } = {}): RunLogWriter | null {

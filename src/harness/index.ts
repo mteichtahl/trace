@@ -8,7 +8,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { teeCheckOutput } from '../core/check-stream.js'
 import { type TraceConfig, readSettings, resolve } from '../core/config.js'
+import { stepLine } from '../core/run-logs.js'
 import type { Layers, Override } from '../prompts/resolve.js'
 import { InstallationPrompts, loadLayers, projectOverrides, promptsHome } from '../prompts/store.js'
 import { delegateStep, reportStep, specialistStep } from './actions.js'
@@ -110,6 +112,22 @@ export async function run(args: { github: GitHub; context: Context; core: Core; 
   const env = process.env as TaskEnv & { TRACE_TASK?: string; JOB_TOKEN?: string }
   const task = env.TRACE_TASK ? TASKS[env.TRACE_TASK] : undefined
   if (!task) throw new Error(`Unknown trace task "${env.TRACE_TASK}" (one of: ${Object.keys(TASKS).join(', ')})`)
+  // on a CodeBuild runner that names the runs log group, what the task prints also goes to the check's own stream
+  // while it runs (src/core/check-stream.ts), under a step line of its own; elsewhere nothing changes
+  const tee = teeCheckOutput()
+  if (!tee) return runTask(args, env, task)
+  args.core.info(stepLine(`trace ${env.TRACE_TASK}`))
+  try {
+    await runTask(args, env, task)
+  } catch (e) {
+    args.core.info(`✗ trace ${env.TRACE_TASK}: ${(e instanceof Error ? e.message : String(e)).split('\n')[0]}`)
+    throw e
+  } finally {
+    await tee.close()
+  }
+}
+
+async function runTask(args: { github: GitHub; context: Context; core: Core; getOctokit: (token: string) => GitHub }, env: TaskEnv & { TRACE_TASK?: string; JOB_TOKEN?: string }, task: (d: Deps) => Promise<void> | void): Promise<void> {
   const jobApi = env.JOB_TOKEN ? args.getOctokit(env.JOB_TOKEN) : args.github
   // prompt overrides matter only to the steps that build prompts: the others need not read the installation's store
   const prompting = ['worker-prompt', 'worker-delegate'].includes(env.TRACE_TASK ?? '')

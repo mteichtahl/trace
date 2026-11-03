@@ -42,6 +42,7 @@ import { type PromptRecord, promptAttrs } from '../../prompts/telemetry.js'
 import type { MemoryStatus } from './memory.js'
 import { realRunner } from './job.js'
 import { workerIndex } from './job-index.js'
+import { processRunLogs, streamJobs, workerQuiet } from './log-stream.js'
 import { observeJob } from './observe.js'
 import { type Accepted, type JobInfo, type JobPayload, checkProject, isDelegated, isHandoff } from './schemas.js'
 
@@ -386,7 +387,8 @@ let current: Jobs | null = null
 /**
  * The jobs of this process, with the real runner (git, GitHub, Claude). Created on first use. On a project's worker
  * runtime (TRACE_PROJECT_HOME) its jobs are written into the project's job index, a person's task waits its turn in
- * the project's queue, and a paused job's transcript is kept (src/agents/runtime/job-index.ts).
+ * the project's queue, and a paused job's transcript is kept (src/agents/runtime/job-index.ts). With the runs log group
+ * (TRACE_RUNS_LOG_GROUP) each job's log is written to its stream there (src/agents/runtime/log-stream.ts).
  */
 export function defaultJobs(): Jobs {
   if (current) return current
@@ -398,6 +400,15 @@ export function defaultJobs(): Jobs {
     // last write unwritten, and the job, done, was shown lost 15 minutes later
     const jobsBusy = current.busy
     current.busy = () => jobsBusy() || !writer.settled()
+  }
+  // each job's whole log to its stream in the runs group (TRACE_RUNS_LOG_GROUP, src/agents/runtime/log-stream.ts), and
+  // its quiet gaps learned when it ends; busy, too, until its last lines are sent (a second at most, or given up)
+  const runLogs = processRunLogs()
+  if (runLogs) {
+    const learn = workerQuiet()
+    streamJobs(current, runLogs, learn ? { learn } : {})
+    const before = current.busy
+    current.busy = () => before() || runLogs.pending()
   }
   return current
 }

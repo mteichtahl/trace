@@ -78,6 +78,7 @@ import { doctor } from './core/doctor.js'
 import { serve } from './core/mcp.js'
 import { OnboardError, SCAFFOLDS, type Scaffold, createNew, onboard, projects } from './core/onboard.js'
 import { ToolError } from './core/registry.js'
+import { stepLine } from './core/run-logs.js'
 import { flush } from './core/telemetry.js'
 import { Work, packArtifacts, transaction } from './core/store.js'
 import { allTools } from './tools/index.js'
@@ -182,7 +183,11 @@ function cmdConfig(argv: string[]): number {
 
 /** ERC and DRC on every KiCad project (DRC skipped, and said so, while a project has no board yet), a build of every firmware target, and with mechanical/case.json the case's
  * build and fit check (mech.build): what a hardware repository's build runs. Exits 1 when any of them reports errors
- * or the fit fails; without build123d here the case is skipped, said so, and not counted as a failure. */
+ * or the fit fails; without build123d here the case is skipped, said so, and not counted as a failure.
+ * Each check opens with a step line (`▸ ERC on hardware/board`, `▸ DRC on …`, `▸ Firmware build <target>`, `▸ Case fit
+ * check`) and ends with ✓ or ✗ (src/core/run-logs.ts), so the app can show which step a running check is on. On a
+ * CodeBuild runner that names the runs log group, everything it prints also goes to the check's own stream
+ * (src/core/check-stream.ts; main() below). */
 async function cmdCheck(): Promise<number> {
   const cfg = load()
   const reg = allTools()
@@ -193,6 +198,9 @@ async function cmdCheck(): Promise<number> {
   let failures = 0
   let ran = 0
   const num = (r: unknown, k: string): number => (r !== null && typeof r === 'object' && typeof (r as Record<string, unknown>)[k] === 'number' ? (r as Record<string, number>)[k] ?? 0 : 0)
+  // ✓ / ✗ open a result line, so the log viewer marks it (src/core/run-logs.ts markOf)
+  const ok = '✓ ok  '
+  const fail = '✗ FAIL'
   for (const proj of projectsList) {
     for (const kind of ['kicad.erc', 'kicad.drc']) {
       if (!reg.get(kind)) { out(`skip   ${kind} ${proj}: not available`); continue }
@@ -200,29 +208,31 @@ async function cmdCheck(): Promise<number> {
       const board = join(root, proj).replace(/\.kicad_pro$/, '.kicad_pcb')
       if (kind === 'kicad.drc' && proj.endsWith('.kicad_pro') && !existsSync(board)) { out(`skip   ${kind} ${proj}: no board yet (${relative(root, board)}); DRC runs once layout adds it`); continue }
       ran++
+      out(stepLine(`${kind === 'kicad.erc' ? 'ERC' : 'DRC'} on ${proj.replace(/\.kicad_pro$/, '')}`))
       try {
         const r = await reg.call(kind, { project: join(root, proj) }, { hardware: false, via: 'cli' })
         const e = num(r, 'errors')
         failures += e ? 1 : 0
-        out(`${e ? 'FAIL' : 'ok  '}   ${kind} ${proj}: ${e} errors, ${num(r, 'warnings')} warnings`)
+        out(`${e ? fail : ok} ${kind} ${proj}: ${e} errors, ${num(r, 'warnings')} warnings`)
       } catch (x) {
         failures++
-        out(`FAIL   ${kind} ${proj}: ${x instanceof Error ? x.message : String(x)}`)
+        out(`${fail} ${kind} ${proj}: ${x instanceof Error ? x.message : String(x)}`)
       }
     }
   }
   for (const t of cfg.firmware.targets) {
     if (!reg.get('firmware.build')) { out(`skip   firmware.build ${t.name}: not available`); continue }
     ran++
+    out(stepLine(`Firmware build ${t.name}`))
     try {
       const r = (await reg.call('firmware.build', { target: t.name }, { hardware: false, via: 'cli' })) as Record<string, unknown>
-      const ok = r.ok === true || ['pass', 'ok', 'success'].includes(String(r.status))
-      failures += ok ? 0 : 1
+      const passed = r.ok === true || ['pass', 'ok', 'success'].includes(String(r.status))
+      failures += passed ? 0 : 1
       const said = r.summary ?? (r.errors !== undefined ? `${String(r.errors)} errors, ${String(r.warnings ?? 0)} warnings${r.seconds !== undefined ? ` in ${String(r.seconds)} s` : ''}` : r.status ?? '')
-      out(`${ok ? 'ok  ' : 'FAIL'}   firmware.build ${t.name}: ${String(said)}`)
+      out(`${passed ? ok : fail} firmware.build ${t.name}: ${String(said)}`)
     } catch (x) {
       failures++
-      out(`FAIL   firmware.build ${t.name}: ${x instanceof Error ? x.message : String(x)}`)
+      out(`${fail} firmware.build ${t.name}: ${x instanceof Error ? x.message : String(x)}`)
     }
   }
   if (existsSync(join(root, CASE_JSON)) && reg.get('mech.build')) {
@@ -232,15 +242,16 @@ async function cmdCheck(): Promise<number> {
     else if (!engine.ok) out(`skip   mech.build ${CASE_JSON}: ${engine.why ?? 'the enclosure engine is not available'} (pip install 'build123d==0.13.0' and the repository's python/ package to check the case)`)
     else {
       ran++
+      out(stepLine('Case fit check'))
       try {
         const r = (await reg.call('mech.build', {}, { hardware: false, via: 'cli' })) as Record<string, unknown>
-        const ok = r.passed === true
-        failures += ok ? 0 : 1
+        const passed = r.passed === true
+        failures += passed ? 0 : 1
         const problems = Array.isArray(r.problems) ? (r.problems as string[]).slice(0, 5).join('; ') : ''
-        out(`${ok ? 'ok  ' : 'FAIL'}   mech.build ${CASE_JSON}: fit ${String(r.fit_status)}${problems ? ` (${problems})` : ''}; rules ${Array.isArray(r.rules_failing) && r.rules_failing.length ? `${r.rules_failing.length} failing` : 'within limits'} (run ${String(r.run_id)})`)
+        out(`${passed ? ok : fail} mech.build ${CASE_JSON}: fit ${String(r.fit_status)}${problems ? ` (${problems})` : ''}; rules ${Array.isArray(r.rules_failing) && r.rules_failing.length ? `${r.rules_failing.length} failing` : 'within limits'} (run ${String(r.run_id)})`)
       } catch (x) {
         failures++
-        out(`FAIL   mech.build ${CASE_JSON}: ${x instanceof Error ? x.message : String(x)}`)
+        out(`${fail} mech.build ${CASE_JSON}: ${x instanceof Error ? x.message : String(x)}`)
       }
     }
   }
@@ -339,7 +350,20 @@ async function main(argv: string[]): Promise<number> {
     case 'tool': return cmdTool(rest)
     case 'mcp': await serve(allTools()); return new Promise<number>(() => undefined)
     case 'config': return cmdConfig(rest)
-    case 'check': return cmdCheck()
+    case 'check': {
+      // on a CodeBuild runner that names the runs log group: everything printed also goes to the check's own stream,
+      // sent before the process exits (src/core/check-stream.ts); elsewhere nothing changes
+      const tee = (await import('./core/check-stream.js')).teeCheckOutput()
+      if (!tee) return cmdCheck()
+      try {
+        // and there, what the programs say (kicad-cli, the firmware build) is printed as they run, indented, so the
+        // stream shows it live (src/core/progress.ts: the process helpers report each line)
+        const { withProgress } = await import('./core/progress.js')
+        return await withProgress({ line: (l) => out(`  ${l}`) }, cmdCheck)
+      } finally {
+        await tee.close()
+      }
+    }
     case 'runs': return cmdRuns(rest)
     case 'run': {
       const r = rest[0] ? new Work().run(rest[0]) : null

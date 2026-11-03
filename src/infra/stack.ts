@@ -87,6 +87,7 @@ import { KB_RETRIEVE_ACTIONS, VectorStore, knowledgeBaseArn } from './knowledge.
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
 import { DISABLED_ENV, OBSERVABILITY_ENV_ENTRIES, Observability, gpuTelemetryEnv } from './observability.js'
 import { GithubConnection, RunnerProject, RunnerWebhooks } from './runner.js'
+import { RUNS_LOG_GROUP_ENV, runsLogGroup } from '../core/run-logs.js'
 import { ACTUALS_OBJECTS, CostRead } from './cost.js'
 import { OrderWatch, WATCH_OBJECTS, orderWatchName } from './order-watch.js'
 import { orderWatchSecretsPrefix } from '../core/integrations-catalog.js'
@@ -336,7 +337,7 @@ export class TraceStack extends Stack {
         const repository = projectSlug(r)
         const runner = new RunnerProject(this, `CiRunner${projectHash(repository)}`, {
           name: runnerProjectName(cfg.prefix, repository), repository, connectionArn: runnerSource.connectionArn, webhooks,
-          computeType, image, privileged: privileged || ciPrivileged,
+          computeType, image, privileged: privileged || ciPrivileged, runLogs: { prefix: cfg.prefix },
           ...(cfg.runners.webhookAttempt ? { attempt: cfg.runners.webhookAttempt } : {}),
           tags: { 'trace:installation': cfg.prefix, 'trace:ci': repository },
         })
@@ -351,6 +352,9 @@ export class TraceStack extends Stack {
       runnerSource,
       environment: {
         AWS_REGION: cfg.region, TRACE_HOME: traceHome, CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: cfg.model, TRACE_WORKSPACE: '/mnt/workspace',
+        // where its jobs and tool calls write their logs (src/agents/runtime/log-stream.ts); by name, so a nested stack
+        // takes no parameter for it (the group is made above, before any project)
+        [RUNS_LOG_GROUP_ENV]: runsLogGroup(cfg.prefix),
         // the installation's price overrides for the cost ledger's estimates (src/core/prices.ts), which win over the
         // price list the workers read from installation/cost/prices.json and over the built-in table
         ...(cfg.cost.prices ? { TRACE_PRICES: JSON.stringify(cfg.cost.prices) } : {}),
@@ -401,7 +405,17 @@ export class TraceStack extends Stack {
     }
     // ------------------------------------------------------------------ shipped orders, with their carrier (src/infra/order-watch.ts)
     const orderWatch = new OrderWatch(this, 'OrderWatch', { prefix: cfg.prefix, central, root: REPO_ROOT })
-    const web = cfg.web.enabled ? new TraceWeb(this, 'Web', { ...traceWebProps(cfg, REPO_ROOT), central }) : null
+    // ------------------------------------------------------------------ run logs (src/infra/run-logs.ts)
+    // what every job, tool call and check says while it runs, one stream per run (docs/progress-and-logs.md): written by
+    // the workers and the runners, read by the API, followed live by the web app's JourneyEvents. Kept a month and
+    // deleted with the stack: logs are not data. Made in the web app's nested stack, beside the subscription that
+    // follows it, when there is one (the default); in this stack otherwise. Not here always: a flat stack of 20
+    // projects is at CloudFormation's 500 resources already, and the web app's three resources leave room without it.
+    // Everyone else names it by its fixed name (runsLogGroup), so nothing is passed between the stacks. (Turning the
+    // web app off or on moves it between stacks under the same name, which CloudFormation refuses while the old one
+    // exists: delete the group first; it holds a month of logs, nothing else)
+    const web = cfg.web.enabled ? new TraceWeb(this, 'Web', { ...traceWebProps(cfg, REPO_ROOT), central, runLogs: true }) : null
+    if (!web) new logs.LogGroup(this, 'RunLogs', { logGroupName: runsLogGroup(cfg.prefix), retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY })
     // email one-time codes need the pool to send through SES (Cognito's own sender cannot send them)
     const emailCodes = Boolean(web && cfg.web.sesFrom)
 
@@ -529,6 +543,8 @@ export class TraceStack extends Stack {
       // and whether the price list is fetched (the fetched table itself is read from installation/cost/prices.json)
       ...(cfg.cost.prices ? { TRACE_PRICES: JSON.stringify(cfg.cost.prices) } : {}),
       TRACE_PRICE_LIST: cfg.cost.priceList.enabled ? '1' : '0',
+      // the runs log group the progress actions read (src/api/actions-progress.ts)
+      [RUNS_LOG_GROUP_ENV]: runsLogGroup(cfg.prefix),
       // where this installation's self-update runs (projects.create says when a new project's agent arrives)
       ...(cfg.selfUpdate ? { TRACE_SELF_UPDATE: `${cfg.selfUpdate.repository}@${cfg.selfUpdate.branch}` } : {}),
       ...memoryEnv,

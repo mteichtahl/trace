@@ -27,9 +27,12 @@
  *     journey events   `<prefix>-journey-events` (src/web/journey-events.ts) and its EventBridge rule: the central
  *                      bucket's "Object Created" events of each project's journey-agent/facts.db (an agent recorded a fact)
  *                      become `record.changed` (and `notification` for a new question or stuck report), and of its
- *                      job-index/jobs.db (a job changed) `job.updated`, on the channels of the people on that project.
- *                      Its role reads access/*, the agents' facts objects and the job indexes (S3 Get only), and
- *                      publishes to the namespace; nothing else
+ *                      job-index/jobs.db (a job changed) `job.updated`, on the channels of the people on that project;
+ *                      and, through a CloudWatch Logs subscription filter on the installation's runs log group
+ *                      (/trace/<prefix>/runs, made here: `runLogs`), every batch of a run's lines becomes
+ *                      `log.appended` (a count, never the text: docs/progress-and-logs.md). Its role reads access/*, the
+ *                      agents' facts objects and the job indexes (S3 Get only), and publishes to the namespace; nothing
+ *                      else (the log batches arrive in the invocation: no read of the group)
  *     content policy   names the events API's own two hosts, Transcribe streaming and the voice bucket; scripts only
  *                      from the app (the theme script is web/public/theme.js, not inline)
  *     hooks            web.hooks (on by default; src/web/hooks.ts, docs/guided-flow.md "Live updates"): GitHub's
@@ -77,6 +80,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'
 import * as iam from 'aws-cdk-lib/aws-iam'
 import * as lambda from 'aws-cdk-lib/aws-lambda'
 import * as logs from 'aws-cdk-lib/aws-logs'
+import * as destinations from 'aws-cdk-lib/aws-logs-destinations'
 import * as s3 from 'aws-cdk-lib/aws-s3'
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager'
 import * as deploy from 'aws-cdk-lib/aws-s3-deployment'
@@ -87,6 +91,7 @@ import { Construct } from 'constructs'
 import { BENCH_DB } from '../core/bench.js'
 import { AGENT_FACTS_DB, AGENT_FACTS_FOLDER } from '../core/agent-facts.js'
 import { PROJECTS_PREFIX } from '../core/project.js'
+import { RUNS_LOG_GROUP_ENV, runsLogGroup } from '../core/run-logs.js'
 import { JOB_INDEX_DB, JOB_INDEX_FOLDER } from '../core/job-index.js'
 import { JOURNEY_DB, JOURNEY_FOLDER } from '../core/journey-store.js'
 import { ACCESS_PREFIX } from './project.js'
@@ -233,6 +238,10 @@ export interface WebStackProps {
   bundle?: boolean
   /** the central bucket (the parent's): its agents' facts writes become live events (JourneyEvents). Absent: none */
   central?: s3.IBucket | undefined
+  /** make the installation's runs log group here (/trace/<prefix>/runs, src/infra/run-logs.ts; the parent makes it
+   * itself without a web app), and have JourneyEvents follow it through a subscription filter, publishing log.appended
+   * (with `central` only). Absent: neither */
+  runLogs?: boolean | undefined
 }
 
 /** What the address is made of (see the file's comment). Names nothing of the parent's. */
@@ -627,8 +636,22 @@ export class WebStack extends NestedStack {
         TRACE_PUSH_TABLE: pushTable.tableName,
         TRACE_PUSH_SECRET: webPushSecret(p.prefix),
         NODE_OPTIONS: '--enable-source-maps',
+        // the runs log group whose batches it is sent (below): log.appended
+        ...(p.runLogs ? { [RUNS_LOG_GROUP_ENV]: runsLogGroup(p.prefix) } : {}),
       },
     })
+    // every batch written to the runs log group (a job's, a tool call's or a check's lines: src/core/run-logs.ts), so it
+    // publishes log.appended, a count per stream at most once a second, never the text (src/web/journey-events.ts). The
+    // filter pattern '' matches every event; CloudWatch Logs invokes the function with the `awslogs` payload, and
+    // LambdaDestination grants it that (lambda:InvokeFunction from logs.amazonaws.com, for this group only)
+    if (p.runLogs) {
+      // the group itself, here (see WebStackProps.runLogs): a month, deleted with the stack (logs are not data)
+      const runLogs = new logs.LogGroup(this, 'RunLogs', { logGroupName: runsLogGroup(p.prefix), retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY })
+      new logs.SubscriptionFilter(this, 'RunLogsSubscription', {
+        logGroup: runLogs, destination: new destinations.LambdaDestination(fn), filterPattern: logs.FilterPattern.allEvents(),
+        filterName: `${p.prefix}-run-logs-live`,
+      })
+    }
     const rule = new events.Rule(this, 'JourneyEventsRule', {
       ruleName: `${p.prefix}-journey-events`,
       description: 'trace: the agents\' journey facts written in the central bucket, to live events',
