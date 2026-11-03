@@ -30,7 +30,7 @@ import { z } from 'zod'
 import { recordAnswered } from './process-metrics.js'
 import {
   type AgentFacts, type JourneyRecord, SEVERITIES, STAGE_NAMES, type StageId, type Viewer, addWaiver, answerQuestion, decide, getDraft, loadJourney, loadOrders, mergeAgentFacts, putDraft,
-  STAGE_IDS, applyChange, changeReason, changeWords, questionIsFor, setCriterion,
+  STAGE_IDS, applyChange, changeReason, changeWords, questionIsFor, reviewWaitsOn, setCriterion,
 } from '../core/journey.js'
 import { SKILL_IDS, skillDef } from '../core/skills.js'
 import { ActionError, type Context, Repo, agentFacts, def, hashOf, label, plainly, storeAt, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
@@ -432,6 +432,18 @@ export const SKILL_ACTIONS = {
       if (a.skill === 'pin-plan-review' && (loadJourney(db)?.criteria ?? []).some((c) => c.id === 'capture.pins')) {
         const parts = [...new Set((designRows?.pins ?? []).filter((x) => x.status !== 'withdrawn').map((x) => x.part))]
         setCriterion(db, 'capture.pins', 'met', [{ kind: 'skill', ref: 'pin-plan-review', label: `Pin plan review: ${parts.length ? parts.join(', ') : 'the plan'} agreed, submitted by ${by.label}` }], by.label)
+      }
+      // Release review is the person's review of the release report the release approval gate waits for: submitted,
+      // it meets signoff.report, once the coverage, interference and parts list work it reviews is met or waived.
+      // Without this the next step sent the person back to the same review after each submission (test-2, rev C).
+      const rec = loadJourney(db)
+      if (a.skill === 'release-review' && rec?.criteria.some((c) => c.id === 'signoff.report')) {
+        const waits = reviewWaitsOn(rec, 'signoff.report')
+        if (waits.length) throw new ActionError(`The release report can't be approved yet: ${waits.map((c) => c.text.replace(/\.$/, '').toLowerCase()).join('; ')}. trace is still working on ${waits.length === 1 ? 'it' : 'them'}.`)
+        setCriterion(db, 'signoff.report', 'met', [
+          { kind: 'skill', ref: 'release-review', label: `Release review, submitted by ${by.label}` },
+          { kind: 'file', ref: 'docs/release-report.md', label: 'the release report' },
+        ], by.label)
       }
       if (a.skill === 'waiver') {
         const d = a.draft
