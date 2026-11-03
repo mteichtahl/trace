@@ -436,7 +436,10 @@ export const SKILL_ACTIONS = {
       // Release review is the person's review of the release report the release approval gate waits for: submitted,
       // it meets signoff.report, once the coverage, interference and parts list work it reviews is met or waived.
       // Without this the next step sent the person back to the same review after each submission (test-2, rev C).
-      const rec = loadJourney(db)
+      // with the agents' checks merged in, as every view does: coverage, interference and the parts list are trace's
+      // criteria, met by its agents' journey.check facts, so the raw record alone always read them as unmet
+      const own = loadJourney(db)
+      const rec = own ? mergeAgentFacts(own, i.facts) : own
       if (a.skill === 'release-review' && rec?.criteria.some((c) => c.id === 'signoff.report')) {
         const waits = reviewWaitsOn(rec, 'signoff.report')
         if (waits.length) throw new ActionError(`The release report can't be approved yet: ${waits.map((c) => c.text.replace(/\.$/, '').toLowerCase()).join('; ')}. trace is still working on ${waits.length === 1 ? 'it' : 'them'}.`)
