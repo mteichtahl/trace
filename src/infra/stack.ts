@@ -85,7 +85,7 @@ import { bundlingRoot } from './lockfile.js'
 import { GpuCompute } from './gpu.js'
 import { KB_RETRIEVE_ACTIONS, VectorStore, knowledgeBaseArn } from './knowledge.js'
 import { TraceMemory, grantReadRecords, sharedMemoryName } from './memory.js'
-import { DISABLED_ENV, ENABLED_ENV, Observability, gpuTelemetryEnv } from './observability.js'
+import { DISABLED_ENV, OBSERVABILITY_ENV_ENTRIES, Observability, gpuTelemetryEnv } from './observability.js'
 import { GithubConnection, RunnerProject, RunnerWebhooks } from './runner.js'
 import { ACTUALS_OBJECTS, CostRead } from './cost.js'
 import { OrderWatch, WATCH_OBJECTS, orderWatchName } from './order-watch.js'
@@ -573,7 +573,7 @@ export class TraceStack extends Stack {
       tags: { [INSTALLATION_TAG]: cfg.prefix },
     })
     api.node.addDependency(apiRole)
-    const observabilityEnv = Math.max(Object.keys(ENABLED_ENV).length, Object.keys(DISABLED_ENV).length)
+    const observabilityEnv = Math.max(OBSERVABILITY_ENV_ENTRIES, Object.keys(DISABLED_ENV).length)
     for (const r of [api, ...(external ? [external.external, external.mcp] : []), ...projects.map((p) => p.runtime)]) {
       const env = r.environmentVariables
       if (env && typeof env === 'object' && !('resolve' in env)) checkRuntimeEnv(r.agentRuntimeName, env, observabilityEnv)
