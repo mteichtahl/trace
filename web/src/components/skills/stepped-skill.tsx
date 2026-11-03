@@ -77,7 +77,8 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
       <DesignSteps repo={repo} skill={def.id} step={s.step.id} view={v} draft={s.draft.data} setDraft={(fn) => s.draft.setData((d) => ({ ...d, ...fn(d) }))} />
       {v?.pending_errors?.length ? <p className="mt-3 text-sm text-destructive">{v.pending_errors.join(' ')}</p> : null}
 
-      <section className="mt-6" aria-labelledby="items">
+      {/* Gate signing has no items of its own: they live on the gate's screen, so an empty "nothing open" here misleads */}
+      {!gate && <section className="mt-6" aria-labelledby="items">
         <h2 id="items" className="text-base font-semibold">For this step</h2>
         {items.length === 0 ? (
           <EmptyState className="mt-2">{s.view.isLoading ? 'Loading what trace prepared…' : `trace has nothing open for “${s.step.title.toLowerCase()}”. ${s.step.detail}`}</EmptyState>
@@ -100,7 +101,7 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
             })}
           </ul>
         )}
-      </section>
+      </section>}
 
       {!v?.checks?.length && <div className="mt-4"><NoChecker def={def} /></div>}
       <div className="mt-4"><Unavailable checks={v?.checks} def={def} draft={s.draft as unknown as Confirmable} /></div>
