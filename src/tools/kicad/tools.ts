@@ -16,7 +16,7 @@ import { z } from 'zod'
 import { defineTool, ToolError, type AnyTool } from '../../core/registry.js'
 import { buildBom, bomCsv, jlcBomCsv, jlcCplCsv, placements } from './bom.js'
 import { drc, erc, type CheckReport } from './checks.js'
-import { type Drawing, EXPORT_KINDS, drawingArtifacts, exportOne, listFiles, outDirFor, sheetPlaces, zipDir, type ExportKind } from './export.js'
+import { boardHoles, checkFab, type Drawing, EXPORT_KINDS, FAB_TECH_LAYERS, drawingArtifacts, exportOne, type FabSettings, listFiles, outDirFor, sheetPlaces, zipDir, type ExportKind } from './export.js'
 import { describeLayer, designRules, layerOf, loadBoard, Net, netNames, stackupKnown, type Board } from './pcb.js'
 import { candidates, fileVersion, findKicadCli, fromPath, kicadCliVersion, kicadWhere, needPcb, needSch, relTo, resolveProject, summary, type Project } from './project.js'
 import { netlist, parts, powerNets, readSchematic, symbolSummary, type Symbol } from './schematic.js'
@@ -297,22 +297,42 @@ const bom = defineTool({
 
 const fab = defineTool({
   name: 'kicad.fab',
-  description: 'A fabrication + assembly package in out_dir: Gerbers and drill files (zipped), BOM CSV, placement file, and for JLCPCB the BOM and CPL in their columns. Lists the files and flags parts missing an LCSC code or a placement. Needs kicad-cli.',
+  description: 'A fabrication + assembly package in out_dir: Gerbers (with their job file) and drill files (zipped), BOM CSV, placement file, and for JLCPCB the BOM and CPL in their columns. The Gerber and drill choices are applied by kicad-cli itself and then checked against the files written (names, job file, every hole of the board in the right drill file): anything not applied fails the run, so never rename, hand-write or leave out a file to make up for it. Lists the files and flags parts missing an LCSC code or a placement. Needs kicad-cli.',
   input: z.object({
     project,
     out_dir: z.string().optional().describe('default: <repo>/build/kicad/<project>/fab'),
     house: z.enum(['jlcpcb', 'generic']).default('jlcpcb'),
     zip: z.boolean().default(true).describe('zip gerbers + drill into <name>-gerbers.zip'),
+    protel_ext: z.boolean().optional().describe('Gerbers named with Protel extensions (.gtl, .gbl, …) rather than .gbr; default true'),
+    subtract_soldermask: z.boolean().optional().describe('remove silkscreen where there is no solder mask (over pads); default true'),
+    separate_drill: z.boolean().default(true).describe('plated and unplated holes in separate drill files (<name>-PTH.drl, <name>-NPTH.drl) rather than one merged file'),
+    board_plot_settings: z.boolean().default(false).describe('plot the Gerbers with the settings saved in the board file instead; protel_ext and subtract_soldermask cannot be given with it'),
   }),
   run: async (a) => {
+    if (a.board_plot_settings && (a.protel_ext !== undefined || a.subtract_soldermask !== undefined)) {
+      throw new ToolError('board_plot_settings uses the Gerber settings saved in the board file: protel_ext and subtract_soldermask cannot be given with it')
+    }
     const p = await resolveProject(a.project)
     return recorded('kicad.fab', subject(p), a, async (run) => {
       const pcb = needPcb(p)
       const { root } = await candidates()
       const dir = outDirFor(a.out_dir, root, join(p.name, 'fab'))
       const files = { sch: p.sch, pcb, name: p.name }
-      await exportOne('gerbers', files, dir)
-      await exportOne('drill', files, dir)
+      const board = loadBoard(pcb)
+      const settings: FabSettings = {
+        gerber_source: a.board_plot_settings ? 'board' : 'explicit',
+        protel_ext: a.protel_ext ?? true, subtract_soldermask: a.subtract_soldermask ?? true, separate_drill: a.separate_drill,
+      }
+      const gerbers = a.board_plot_settings ? undefined
+        : { layers: [...board.layers.map((l) => l.name), ...FAB_TECH_LAYERS].join(','), protelExt: settings.protel_ext, subtractSoldermask: settings.subtract_soldermask }
+      const commands: string[][] = []
+      commands.push(await exportOne('gerbers', files, dir, { ...(gerbers ? { gerbers } : {}) }))
+      commands.push(await exportOne('drill', files, dir, { separateDrill: settings.separate_drill }))
+      const check = checkFab(join(dir, 'gerbers'), p.name, settings, boardHoles(board))
+      run.artifact('fab-check.json', JSON.stringify({ settings, kicad_cli: commands, ...check }, null, 2), 'application/json')
+      run.measure('holes_plated', check.holes.board.plated)
+      run.measure('holes_unplated', check.holes.board.unplated)
+      run.measure('fab_problems', check.problems.length)
       if (a.zip) zipDir(join(dir, 'gerbers'), join(dir, `${p.name}-gerbers.zip`))
       const warnings: string[] = []
       const pl = await placements(pcb)
@@ -341,8 +361,11 @@ const fab = defineTool({
       run.artifact('files.txt', out.map((f) => `${f.path}\t${f.bytes}`).join('\n'))
       run.measure('files', out.length)
       run.measure('placements', pl.length)
-      return { status: 'pass' as const, summary: `${out.length} fab files in ${dir}`,
-        result: { project: p.name, out_dir: dir, house: a.house, placements: pl.length, hand_placed: handPlaced, warnings, files_total: out.length, files: out.slice(0, 80) } }
+      const ok = check.problems.length === 0
+      return { status: ok ? 'pass' as const : 'fail' as const,
+        summary: ok ? `${out.length} fab files in ${dir}` : `fab package not ready (do not send it): ${check.problems.join('; ')}`,
+        result: { project: p.name, out_dir: dir, house: a.house, settings, problems: check.problems, notes: check.notes, holes: check.holes,
+          kicad_cli: commands, placements: pl.length, hand_placed: handPlaced, warnings, files_total: out.length, files: out.slice(0, 80) } }
     })
   },
 })
