@@ -88,6 +88,18 @@ describe('Question answer', () => {
     expect(answerChecks({ ...d, option: '4.2', lasts: 'once' }, { recommended: '4.2', unit: 'A' })).toMatchObject({ resolves: 'met', units: 'met', requirement: 'met', reasons: 'met' })
     expect(answerChecks({ ...d, option: '3.5' }, { recommended: '4.2' }).reasons).toBe('not_met')
   })
+  it('lets an open question be answered in words, digits and all', () => {
+    // no options and no quantity: a decision naming "2 errors at J1" needs no source, and every check can be met
+    const d = { done: [], answer: 'Allow a silkscreen-only edit to clear the 2 errors at J1.', value: '', source: '', lasts: 'rule' as const }
+    expect(Object.values(answerChecks(d, { options: [] })).every((x) => x === 'met')).toBe(true)
+    // a number given for a quantity still says where it comes from
+    expect(answerChecks({ ...d, answer: 'about 4 A' }, { unit: 'A', options: [] }).source).toBe('not_met')
+  })
+  it('does not count a choice kept from an earlier question', () => {
+    const d = { done: [], option: 'park', answer: '', value: '', source: '', lasts: 'once' as const }
+    expect(answerChecks(d, { options: ['a', 'b'] }).resolves).toBe('not_met')
+    expect(answerChecks({ ...d, option: 'a' }, { options: ['a', 'b'] }).resolves).toBe('met')
+  })
 })
 
 describe('bench readouts', () => {
