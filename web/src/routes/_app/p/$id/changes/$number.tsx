@@ -24,6 +24,7 @@ import { call } from '@/lib/api'
 import { useState } from 'react'
 import { useTraceContext } from '@/components/chat/context'
 import { ChangeFileView } from '@/components/changes/change-file-view'
+import { viewerKind } from '@/components/files/kinds'
 import { DecisionBar } from '@/components/changes/decision-bar'
 import { useChangeActions } from '@/components/changes/use-change-actions'
 import { TabSkeleton, useCoverage } from '@/components/project/shared'
@@ -134,7 +135,7 @@ function Review() {
                   >
                     <span className="min-w-0 flex-1">
                       <span className="block truncate" title={f.path}>{fileName(f.path)}</span>
-                      <span className="block text-xs font-normal text-muted-foreground">{FILE_TAG[f.kind]}</span>
+                      <span className="block text-xs font-normal text-muted-foreground">{f.kind === 'binary' && viewerKind(f.path) === 'database' ? 'Database' : FILE_TAG[f.kind]}</span>
                     </span>
                     <span className="shrink-0 font-mono text-xs">
                       {f.additions > 0 && <span className="text-verified">+{f.additions}</span>}

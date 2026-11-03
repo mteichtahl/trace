@@ -5,6 +5,7 @@
  * memory for the session. The files a change touches have a before (base) and an after (head) version, served by
  * files.url through `changeFileContent`.
  */
+import { PARTS_DB_AFTER, PARTS_DB_BEFORE } from './fixtures-db'
 import type { ChangeDetail, Journey, StageGuide, StageStep } from '@/lib/types'
 import type { GateMore } from '@/lib/types-s1'
 import { JOURNEYS, PROJECTS } from './fixtures'
@@ -55,7 +56,8 @@ const DECISIONS_AFTER = `${DECISIONS_BEFORE}- The 3.3 V regulator is the AP2112K
 `
 const RENDER_AFTER = DRAWING_SVG.replace('Soil sensor enclosure outline', 'Soil sensor front end, probe moved 4 mm').replace('<rect x="300" y="20"', '<rect x="296" y="24"')
 
-const FILES: Record<string, { before: string | null; after: string | null; mime: string }> = {
+const FILES: Record<string, { before: string | Uint8Array | null; after: string | Uint8Array | null; mime: string }> = {
+  'hardware/parts.db': { before: PARTS_DB_BEFORE, after: PARTS_DB_AFTER, mime: 'application/vnd.sqlite3' },
   'hardware/power.kicad_sch': { before: SCH_BEFORE, after: sch, mime: 'text/plain' },
   'docs/decisions.md': { before: DECISIONS_BEFORE, after: DECISIONS_AFTER, mime: 'text/markdown' },
   'hardware/sensor.kicad_sch': { before: sch, after: sch, mime: 'text/plain' },
@@ -63,7 +65,7 @@ const FILES: Record<string, { before: string | null; after: string | null; mime:
 }
 
 /** A changed file's bytes at the change's base (before) or head (after). */
-export function changeFileContent(path: string, commit?: string): { bytes: string; mime: string } | null {
+export function changeFileContent(path: string, commit?: string): { bytes: string | Uint8Array; mime: string } | null {
   const f = FILES[path]
   if (!f) return null
   const t = commit === BASE ? f.before : f.after
@@ -91,6 +93,7 @@ const CHANGES: Record<string, ChangeDetail[]> = {
         { path: 'hardware/power.kicad_sch', status: 'modified', additions: 14, deletions: 0, kind: 'schematic' },
         { path: 'hardware/parts-list.csv', status: 'modified', additions: 6, deletions: 1, kind: 'parts' },
         { path: 'docs/decisions.md', status: 'modified', additions: 4, deletions: 0, kind: 'text' },
+        { path: 'hardware/parts.db', status: 'modified', additions: 0, deletions: 0, kind: 'binary' },
       ],
       checks_list: [
         { name: 'Electrical rules check', state: 'passed', summary: 'No errors' },
