@@ -2,7 +2,7 @@
  * /api/voice: Amazon Polly speech and Amazon Transcribe streaming, with no AWS keys in the browser.
  *
  *   voices   DescribeVoices for a language, neural and generative voices only: { id, name, gender, engines }
- *   speak    SynthesizeSpeech as MP3 and as word speech marks, cached in the voice bucket under
+ *   speak    SynthesizeSpeech as MP3 (with no voice named, the first voice for `language` the engine has) and as word speech marks, cached in the voice bucket under
  *            `<voicePrefix>/<sha256(voice|engine|rate|text)>.mp3` (and `.json` for the marks), so a replay costs
  *            nothing; answered with presigned GET URLs (5 minutes) and the marks themselves. Text over 3,000
  *            characters is split at sentence (then word) boundaries and answered as `parts`, in order; the first part
@@ -38,7 +38,9 @@ const ENGINES = ['neural', 'generative'] as const
 const Language = z.string().regex(/^[a-z]{2,3}-[A-Z]{2}$/, 'a language code such as en-AU')
 const Speak = z.object({
   text: z.string().min(1).max(MAX_SPEAK),
-  voice: z.string().min(1).max(64).regex(/^[A-Za-z-]+$/),
+  /** Absent until the person picks one: then the first voice for `language` that the engine has. */
+  voice: z.string().min(1).max(64).regex(/^[A-Za-z-]+$/).optional(),
+  language: Language.optional(),
   engine: z.enum(ENGINES).default('neural'),
   rate: z.number().min(0.75).max(1.5).default(1),
 })
@@ -100,7 +102,7 @@ export async function transcribeUrl(region: string, language: string, credential
   return `wss://${hostname}${signed.path}?${qs}`
 }
 
-async function speakOne(deps: WebDeps, c: WebConfig, b: z.output<typeof Speak>, text: string): Promise<{ url: string; marks: Mark[] }> {
+async function speakOne(deps: WebDeps, c: WebConfig, b: z.output<typeof Speak> & { voice: string }, text: string): Promise<{ url: string; marks: Mark[] }> {
   const store = deps.store(c)
   const base = speechKey(c.voicePrefix, b.voice, b.engine, b.rate, text)
   const mp3 = `${base}.mp3`
@@ -131,6 +133,16 @@ const pollyError = (e: unknown): WebError => {
   if (/Throttl|TooManyRequests/.test(name)) return new WebError(429, 'speech is busy: try again in a moment', 'throttled')
   if (/InvalidSsml|TextLengthExceeded|LanguageNotSupported|EngineNotSupported|InvalidParameter|Validation/.test(name)) return new WebError(400, 'that voice cannot read this text', name)
   return new WebError(500, 'speech is not available right now', 'polly')
+}
+
+/** The first voice (by name) for a language that the engine has, when the person has picked none. */
+async function defaultVoice(deps: WebDeps, c: WebConfig, language: string, engine: string): Promise<string> {
+  const voices = await deps.polly(c).describeVoices({ LanguageCode: language as LanguageCode, IncludeAdditionalLanguageCodes: true }).catch((e: unknown) => { throw pollyError(e) })
+  const id = voices
+    .filter((v) => v.Id && (v.SupportedEngines ?? []).includes(engine as Engine))
+    .sort((x, y) => (x.Name ?? x.Id ?? '').localeCompare(y.Name ?? y.Id ?? ''))[0]?.Id
+  if (!id) throw new WebError(400, 'no voice reads that language', 'no_voice')
+  return id
 }
 
 /** The project's vocabulary for this person and language: asked of the API, READY answers kept a while. Never throws. */
@@ -177,7 +189,8 @@ export function voiceRoutes(deps: WebDeps) {
 
     route('POST', '/api/voice/speak', async (req, ctx) => {
       const s = await signedIn(req, ctx, deps)
-      const b = parseBody(req, Speak)
+      const asked = parseBody(req, Speak)
+      const b = { ...asked, voice: asked.voice ?? await defaultVoice(deps, s.config, asked.language ?? 'en-US', asked.engine) }
       const pieces = splitText(b.text)
       const parts: { url: string; marks: Mark[] }[] = []
       for (const p of pieces) parts.push(await speakOne(deps, s.config, b, p).catch((e: unknown) => { throw e instanceof WebError ? e : pollyError(e) }))

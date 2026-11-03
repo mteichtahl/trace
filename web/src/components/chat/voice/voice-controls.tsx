@@ -36,7 +36,7 @@ export function VoiceControls() {
             <DropdownMenuItem
               key={v.id}
               onSelect={() => {
-                setVoice(v.id)
+                setVoice(v.id, v.engines)
                 setPref('voice', 'voice', v.id)
               }}
               className="justify-between"
@@ -50,7 +50,7 @@ export function VoiceControls() {
                 className="h-6 px-1.5 text-xs"
                 onClick={(e) => {
                   e.stopPropagation()
-                  void previewVoice(v.id)
+                  void previewVoice(v.id, v.engines).catch(() => {})
                 }}
               >
                 Preview

@@ -11,6 +11,7 @@
  * - Controls: Stop while replying; per reply: read aloud (with the spoken word highlighted), Copy as markdown,
  *   Retry (the last reply), thumbs down with a reason.
  */
+import { useQuery } from '@tanstack/react-query'
 import { useAgent, useCopilotKit, useRenderToolCall } from '@copilotkit/react-core/v2'
 import type { Message } from '@ag-ui/client'
 import { ChevronRight, Copy, RotateCcw, ThumbsDown, Volume2 } from 'lucide-react'
@@ -30,7 +31,7 @@ import { useStore } from '@/lib/store'
 import { Markdown } from './markdown'
 import { ChatRepo, LiveCall } from './renderers'
 import { toReplay } from './thread'
-import { enqueueSpeech, speak, speakable, stopSpeaking, useSpeech } from './voice/speech'
+import { configureSpeech, enqueueSpeech, listVoices, speak, speakable, stopSpeaking, unlockAudio, useSpeech } from './voice/speech'
 
 type AnyMsg = Message & { content?: unknown; toolCalls?: { id: string; type: 'function'; function: { name: string; arguments: string } }[]; toolCallId?: string }
 
@@ -57,6 +58,23 @@ export function ChatView({ agentId, repo, threadId, placeholder, intro, classNam
   const prefs = usePrefs()
   const { history, push } = useRecallHistory(repo)
   const speaking = useSpeech()
+  const voices = useQuery({ queryKey: ['voice.voices', prefs.voice.language], queryFn: () => listVoices(prefs.voice.language), staleTime: 3600_000, retry: false })
+  // read aloud with the person's own voice, speed and language (with no saved voice, the first one for the language)
+  useEffect(() => {
+    const list = voices.data?.voices ?? []
+    const v = list.find((x) => x.id === prefs.voice.voice) ?? list[0]
+    configureSpeech({ language: prefs.voice.language, rate: prefs.voice.rate, ...(v ? { voice: v.id, engine: v.engines.includes('neural') ? 'neural' : 'generative' } : {}) })
+  }, [prefs.voice.voice, prefs.voice.rate, prefs.voice.language, voices.data])
+  // a phone plays replies aloud only once a tap has started the player
+  useEffect(() => {
+    const opts = { capture: true, passive: true } as const
+    document.addEventListener('pointerdown', unlockAudio, opts)
+    document.addEventListener('keydown', unlockAudio, opts)
+    return () => {
+      document.removeEventListener('pointerdown', unlockAudio, opts)
+      document.removeEventListener('keydown', unlockAudio, opts)
+    }
+  }, [])
   const messages = agent.messages as AnyMsg[]
   const running = agent.isRunning
   const thread = useRef<string | undefined>(threadId)

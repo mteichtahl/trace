@@ -8,7 +8,7 @@
  *
  * journey.get and gate.sign (src/api/actions-journey.ts) and change.accept (src/api/actions-changes.ts) use them.
  */
-import { type JourneyRecord, type PendingChanges, loadJourney, returnForChange } from '../core/journey.js'
+import { type JourneyRecord, type PendingChanges, type StageId, applyChange, changeWords, loadJourney } from '../core/journey.js'
 import { type Context, plainly, withRecordDb, writeJourney } from './action-kit.js'
 import { requirementEvidence } from './record-read.js'
 
@@ -31,17 +31,17 @@ export const changedWords = (ids: readonly string[]): string =>
   `${ids.length === 1 ? `requirement ${ids[0]} was` : `requirements ${ids.slice(0, -1).join(', ')} and ${ids.at(-1)} were`} changed after the requirements baseline`
 
 /**
- * Take the project back to Define when requirements changed after the baseline (core returnForChange): the changed
- * requirements are agreed again in Requirements review, and every gate from Define on is signed again. Null when
- * nothing changed or the project is not past Define.
+ * Act on requirements changed after the baseline (core applyChange): before release the project goes back to Define,
+ * after it the next revision starts there. The changed requirements are agreed again in Requirements review, and
+ * every gate from Define on is signed again. Null when nothing changed or the project is not past Define. `words`:
+ * what happened, for a person ("The project went back to Define").
  */
-export async function backToDefine(ctx: Context, repo: string, r: JourneyRecord, ids: readonly string[], by: string): Promise<{ record: JourneyRecord; version: number; reason: string } | null> {
+export async function backToDefine(ctx: Context, repo: string, r: JourneyRecord, ids: readonly string[], by: string): Promise<{ record: JourneyRecord; version: number; reason: string; words: string; outcome: { stage: StageId; revision: string | null } } | null> {
   if (!ids.length || !pastDefine(r)) return null
   const reason = changedWords(ids)
   const out = await plainly(() => writeJourney(ctx, repo, (db) => {
-    const back = returnForChange(db, 'define', reason, by)
+    const back = applyChange(db, 'define', reason, by)
     return { result: { back, record: loadJourney(db) }, changed: back !== null }
   }))
-  return out.back && out.record ? { record: out.record, version: out.version, reason } : null
+  return out.back && out.record ? { record: out.record, version: out.version, reason, words: changeWords(out.back), outcome: out.back } : null
 }
-

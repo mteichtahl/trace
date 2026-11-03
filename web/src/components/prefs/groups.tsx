@@ -403,7 +403,7 @@ export function VoiceGroup() {
                   <Label htmlFor={`voice-${x.id}`} className="flex-1 cursor-pointer font-normal">
                     <span className="font-medium">{x.name}</span> <span className="text-xs text-muted-foreground">{x.engines.join(', ')} · {x.gender}</span>
                   </Label>
-                  <Button size="icon" variant="outline" className="size-8" aria-label={playing ? `Stop ${x.name}` : `Preview ${x.name}`} onClick={() => (playing ? stopSpeaking() : void previewVoice(x.id).catch((e) => toast.error(`Could not play: ${e instanceof Error ? e.message : String(e)}`)))}>
+                  <Button size="icon" variant="outline" className="size-8" aria-label={playing ? `Stop ${x.name}` : `Preview ${x.name}`} onClick={() => (playing ? stopSpeaking() : void previewVoice(x.id, x.engines).catch((e) => toast.error(`Could not play: ${e instanceof Error ? e.message : String(e)}`)))}>
                     {playing ? <Pause /> : <Play />}
                   </Button>
                 </div>

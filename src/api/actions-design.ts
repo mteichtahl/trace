@@ -21,7 +21,7 @@
  * released revision carries the decisions that approved it. Agents read it (design.intent list) and never write it.
  */
 import { z } from 'zod'
-import { CHANGE_STAGE, STAGE_NAMES, type StageId, decide, loadJourney, returnForChange } from '../core/journey.js'
+import { CHANGE_STAGE, type StageId, applyChange, changeReason, changeWords, decide, loadJourney } from '../core/journey.js'
 import { type DesignDecision, loadDesignDecisions, recordDesignDecision } from '../tools/design/decisions.js'
 import { readDesignRows } from '../tools/design/db.js'
 import { type RequirementWords, architectureView, intentView, pinPlanPrint } from '../tools/design/record.js'
@@ -139,10 +139,11 @@ export const DESIGN_ACTIONS = {
       const p = prepare(a.decision, rows, requirements, prior)
       const rec = recordDesignDecision(db, p, by)
       decide(db, { kind: `design.${p.kind}`, stage: r.journey.currentStage, ref: p.target, by: by.label, summary: p.summary, detail: { decision: rec.id } })
-      // a requirement (or the intent behind it) changed after its stage was passed: the project goes back there
+      // a requirement, the intent behind it or the architecture changed after its stage was passed
       const stage = changesStage(p, prior)
-      const back = stage ? returnForChange(db, stage, `${p.summary.replace(/\.$/, '')} after the requirements baseline`, by.label) : null
-      return { result: { decision: { id: rec.id, kind: rec.kind, target: rec.target, choice: rec.choice, by: rec.by, at: new Date(rec.at * 1000).toISOString() }, summary: back ? `${p.summary} The project went back to ${STAGE_NAMES[back]} to agree it.` : p.summary, ...(back ? { back_to: back } : {}) } }
+      // before release the project goes back to that stage; after it, the next revision starts there (applyChange)
+      const back = stage ? applyChange(db, stage, changeReason(stage, p.summary), by.label) : null
+      return { result: { decision: { id: rec.id, kind: rec.kind, target: rec.target, choice: rec.choice, by: rec.by, at: new Date(rec.at * 1000).toISOString() }, summary: back ? `${p.summary} ${changeWords(back)}, to agree it.` : p.summary, ...(back ? { back_to: back.stage, ...(back.revision ? { revision: back.revision } : {}) } : {}) } }
     }))
     return { ok: true, repo: a.repo, ...out }
   }),
