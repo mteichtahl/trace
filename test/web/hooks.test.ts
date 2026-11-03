@@ -247,20 +247,23 @@ describe('who is told, and what', () => {
     expect(new URLSearchParams(w.tokens[0]!.body).get('grant_type')).toBe('client_credentials')
     expect(new URLSearchParams(w.tokens[0]!.body).get('scope')).toBe('trace-internal/members')
     // the API decides who: hook.members, with that token, never the access store
-    expect(w.runtime.calls.map((c) => [c.action, c.args, c.headers.authorization])).toEqual([['hook.members', { repo: 'acme/board' }, 'Bearer backend-token-1']])
+    // then hook.apply with the same token: the project's app edits that are ready are applied (docs/stay-in-trace.md)
+    expect(w.runtime.calls.map((c) => [c.action, c.args, c.headers.authorization])).toEqual([
+      ['hook.members', { repo: 'acme/board' }, 'Bearer backend-token-1'], ['hook.apply', { repo: 'acme/board' }, 'Bearer backend-token-1'],
+    ])
     expect(w.publisher.sent.map((s) => s.channel)).toEqual(['/trace/users/sub-ada', '/trace/users/sub-bob'])
     expect(w.publisher.sent[0]!.events).toEqual([{ type: 'record.changed', repo: 'acme/board', kind: 'change', number: 7, at: new Date(NOW).toISOString() }])
     // no content in the event: not the title, not the body
     expect(JSON.stringify(w.publisher.sent)).not.toContain('Regulator')
   })
 
-  it('keeps the token and the members for a while: a second delivery asks Cognito and the API nothing', async () => {
+  it('keeps the token and the members for a while: a second delivery asks Cognito and the API nothing but to apply', async () => {
     const w = hooksWorld()
     await w.deliver('pull_request', pr('acme/board', 7))
     w.tick(DEBOUNCE_MS + 1)
     await w.deliver('pull_request', pr('acme/board', 7, 'closed'))
     expect(w.tokens).toHaveLength(1)
-    expect(w.runtime.calls).toHaveLength(1)
+    expect(w.runtime.calls.map((c) => c.action)).toEqual(['hook.members', 'hook.apply', 'hook.apply'])
     expect(w.publisher.sent).toHaveLength(4)
   })
 

@@ -7,6 +7,12 @@
  *                            email, a name or a part: a live event says "look again", and the app asks the API as
  *                            the person, who then sees only what they may
  *
+ *   hook.apply     backend   { repo } → { repo, applied }: apply the people's app edits of the project that are ready
+ *                            (src/api/apply-edits.ts, docs/stay-in-trace.md "Applying"). The hooks function calls it for
+ *                            every accepted delivery of a project, once per debounce window: a check finishing or a pull
+ *                            request moving is when an edit may become ready, or need making again. It answers what it
+ *                            did, branch and number only
+ *
  * Only the web backend's own identity reaches it (need 'backend', src/api/backend-auth.ts), and that identity reaches
  * nothing else (perform). The API runtime still decides who is on a project, as it does for project.members; the
  * backend still never reads the access store.
@@ -15,6 +21,7 @@ import { GROUPS, RepoSlug, membersOf } from '../core/access.js'
 import { projects } from '../core/onboard.js'
 import { z } from 'zod'
 import { def } from './action-kit.js'
+import { applyEdits } from './apply-edits.js'
 
 export interface HookMembers { repo: string; project: boolean; subs: string[] }
 
@@ -26,5 +33,11 @@ export const HOOK_ACTIONS = {
     // connected systems are assigned like people (their sub is their client id) but have no screen to tell
     const people = assigned.filter((m) => !(m.email ?? '').startsWith('service:'))
     return { repo, project: true, subs: [...new Set([...admins.map((a) => a.sub), ...people.map((m) => m.sub)])].sort() }
+  }),
+
+  'hook.apply': def('backend', z.object({ repo: RepoSlug }), async ({ repo }, ctx) => {
+    if (!(await projects()).includes(repo)) return { repo, applied: [] }
+    const done = await applyEdits(ctx, repo)
+    return { repo, applied: done.filter((a) => a.did !== 'waiting' && a.did !== 'left').map((a) => ({ branch: a.branch, number: a.number, did: a.did })) }
   }),
 }

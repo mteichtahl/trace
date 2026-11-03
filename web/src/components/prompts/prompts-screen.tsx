@@ -8,17 +8,21 @@
  *               Changed only and search
  *   entry       description, the layer in force, a markdown editor with Insert variable, live checks (declared
  *               variables only, 16,000 characters), the locked entries that always follow, Compare with the layer
- *               below or an earlier version, Ask trace to improve it, Save with a reason (project scope opens a pull
- *               request and shows Pending), Reset and Revert with a reason
+ *               below or an earlier version, Ask trace to improve it, Save with a reason (project scope opens a change
+ *               and shows Pending, linked to the change's page in the app: prompts.get's `pending`, or what the save
+ *               answered), Reset and Revert with a reason. GitHub's page for it is only in the admins' More menu
+ *   CLAUDE.md   the notes entry (system.notes) quotes the repository's CLAUDE.md: Change it opens it in a simple editor
+ *               here, which saves through files.edit (a change for review, linked)
  *   history     every version as a Data table, with Compare and Revert
  *   preview     the whole prompt one agent gets for one kind of job, its parts labelled, locked parts greyed, Copy
  *
- * Actions: prompts.list / get / preview / set / reset / revert / history (src/api/actions.ts).
+ * Actions: prompts.list / get / preview / set / reset / revert / history (src/api/actions.ts), files.edit and files.url
+ * (src/api/actions-files.ts).
  */
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
-import { Activity, Check, ChevronDown, ChevronRight, Copy, ExternalLink, GitPullRequest, ListTree, Loader2, Lock, Pencil, RotateCcw, Search, Sparkles, TriangleAlert, Variable, X } from 'lucide-react'
+import { Activity, Check, ChevronDown, ChevronRight, Copy, GitPullRequest, ListTree, Loader2, Lock, Pencil, RotateCcw, Search, Sparkles, TriangleAlert, Variable, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
@@ -32,6 +36,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DataTable } from '@/components/data-table'
+import { MoreForAdmins } from '@/components/more-for-admins'
+import { useFileText } from '@/components/files/data'
 import { useCommands } from '@/components/shell/command-menu'
 import { SideSheet } from '@/components/side-sheet'
 import { EmptyState, Loading, Partial, QueryError, SkeletonRows } from '@/components/states'
@@ -63,7 +69,13 @@ export interface PromptsScreenProps {
 
 const keyFor = (scope: Scope, repo: string | undefined) => (scope === 'project' && repo ? { repo } : ({} as Record<string, never>))
 
-interface Pending { version: number; branch?: string; at: number }
+interface Pending { version: number | null; branch?: string; at: number; /** the change's number, to open it in the app */ change?: number | null }
+
+/** The app's page for a change, from its number. Pure. */
+export const changeHref = (repo: string, number: number): string => `/p/${projectId(repo)}/changes/${number}`
+
+/** GitHub's page for the pull requests from a branch: only for the admins' More menu. Pure. */
+const branchPullsHref = (repo: string, branch: string): string => `https://github.com/${repo}/pulls?q=is%3Apr+head%3A${encodeURIComponent(branch)}`
 
 export function PromptsScreen({ repo: fixedRepo, initialScope }: PromptsScreenProps) {
   const { user } = useAuth()
@@ -361,6 +373,9 @@ function Entry({ id, scope, repo, canEdit, canHistory, pending, onPending }: { i
 
   const isLocked = v?.mode === 'locked'
   const editable = !!v && !isLocked && canEdit
+  // what the API says waits (prompts.get's pending), else what this screen saved a moment ago
+  const shownPending: Pending | undefined = scope === 'project' && v?.pending ? { version: v.pending.version, branch: v.pending.branch, change: v.pending.change, at: 0 } : pending
+  const [editingNotes, setEditingNotes] = useState(false)
   const declared = Object.keys(v?.vars ?? {})
   const check = checkTemplate(text, declared)
   const changed = draft !== null && draft !== original
@@ -399,8 +414,8 @@ function Entry({ id, scope, repo, canEdit, canHistory, pending, onPending }: { i
     try {
       const r = await call('prompts.set', { id, scope, ...(scope === 'project' && repo ? { repo } : {}), text, reason: reason.trim() })
       if (scope === 'project') {
-        onPending({ version: r.version, branch: r.branch, at: Date.now() })
-        toast(`Saved as Project v${r.version}: a change opens in ${repo} for review. Agents use it once it is accepted.`)
+        onPending({ version: r.version, branch: r.branch, at: Date.now(), change: r.change ?? null })
+        toast(`Saved as Project v${r.version}: a change opens in ${repo ? projectName(repo) : 'the project'}. ${r.note ?? 'Agents use it once it is accepted.'}`)
       } else {
         toast(`Saved as Installation v${r.version}. Every project's next job uses it.`)
       }
@@ -449,15 +464,14 @@ function Entry({ id, scope, repo, canEdit, canHistory, pending, onPending }: { i
       {v.effective.skipped?.map((s, i) => (
         <p key={i} className="mt-2 flex items-center gap-1.5 text-xs text-warning-foreground"><TriangleAlert className="size-3.5" /> The {s.layer} v{s.version} override is skipped: {s.reason}.</p>
       ))}
-      {pending && (
+      {shownPending && (
         <p className="mt-2 flex flex-wrap items-center gap-2 text-sm">
           <GitPullRequest className="size-4 text-muted-foreground" aria-hidden />
-          Pending: v{pending.version} in a change, waiting for review.
-          {pending.branch && repo && (
-            <a className="inline-flex items-center gap-1 text-primary hover:underline" href={`https://github.com/${repo}/pulls?q=is%3Apr+head%3A${encodeURIComponent(pending.branch)}`} target="_blank" rel="noreferrer">
-              View on GitHub <ExternalLink className="size-3" />
-            </a>
+          Pending: {shownPending.version !== null ? `v${shownPending.version} ` : ''}in a change, waiting to go in.
+          {shownPending.change && repo && (
+            <Link to={changeHref(repo, shownPending.change) as string} className="text-primary hover:underline">Open the change</Link>
           )}
+          {shownPending.branch && repo && <MoreForAdmins className="h-7" links={[{ label: 'View on GitHub', href: branchPullsHref(repo, shownPending.branch) }]} />}
         </p>
       )}
 
@@ -468,12 +482,17 @@ function Entry({ id, scope, repo, canEdit, canHistory, pending, onPending }: { i
             <>
               {' '}
               <Link to={`/p/${projectId(repo)}/files/CLAUDE.md` as string} className="text-primary hover:underline">Open CLAUDE.md</Link>
-              {' · '}
-              <a href={`https://github.com/${repo}/edit/HEAD/CLAUDE.md`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">Change it in the repository <ExternalLink className="size-3" /></a>
+              {canEdit && (
+                <>
+                  {' · '}
+                  <button type="button" onClick={() => setEditingNotes(true)} className="text-primary hover:underline">Change it</button>
+                </>
+              )}
             </>
           )}
         </p>
       )}
+      {id === 'system.notes' && repo && canEdit && <NotesEditor repo={repo} open={editingNotes} onOpenChange={setEditingNotes} />}
 
       <div className="mt-4 overflow-hidden rounded-xl border bg-card">
         {editable && (
@@ -639,7 +658,7 @@ function Entry({ id, scope, repo, canEdit, canHistory, pending, onPending }: { i
         belowLabel={below?.layer === 'installation' ? 'the installation\'s text' : 'trace\'s default'}
         onClose={() => setUndo(null)}
         onDone={async (r) => {
-          if (scope === 'project') onPending({ version: r.version, branch: r.branch, at: Date.now() })
+          if (scope === 'project') onPending({ version: r.version, branch: r.branch, at: Date.now(), change: r.change ?? null })
           setDraft(null)
           await invalidate()
         }}
@@ -696,7 +715,7 @@ function UndoDialog({ undo, id, scope, repo, belowLabel, onClose, onDone }: {
   repo?: string
   belowLabel: string
   onClose: () => void
-  onDone: (r: { version: number; branch?: string }) => Promise<void>
+  onDone: (r: { version: number; branch?: string; change?: number | null }) => Promise<void>
 }) {
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
@@ -847,5 +866,70 @@ function Preview({ repo, entry, rows }: { repo: string; entry: string; rows: Pro
         Each run records the entries and versions it received, but the API cannot yet count or list the runs that used one entry.
       </p>
     </section>
+  )
+}
+
+/**
+ * CLAUDE.md in a simple editor (the notes every agent reads): the default branch's text, edited here and saved through
+ * files.edit with a note, which opens a change for review; the toast and the sheet link to it.
+ */
+function NotesEditor({ repo, open, onOpenChange }: { repo: string; open: boolean; onOpenChange: (o: boolean) => void }) {
+  const file = useFileText(open ? { repo, path: 'CLAUDE.md' } : null)
+  const [text, setText] = useState<string | null>(null)
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState<number | null>(null)
+  const missing = file.isError && /no file/i.test(file.error instanceof Error ? file.error.message : '')
+  const original = file.data ?? (missing ? '' : null)
+  const value = text ?? original ?? ''
+  const changed = original !== null && value !== original
+  const close = (o: boolean) => { if (!o) { setText(null); setNote(''); setSaved(null) } onOpenChange(o) }
+  const save = async () => {
+    setSaving(true)
+    try {
+      const r = await call('files.edit', { repo, path: 'CLAUDE.md', text: value, note: note.trim() })
+      setSaved(r.change ?? 0)
+      toast('Saved: a change to CLAUDE.md opens for review. Agents read it once it is accepted.')
+    } catch (e) {
+      toast.error(`Could not save CLAUDE.md: ${e instanceof Error ? e.message : String(e)}. Your text is kept.`)
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <SideSheet
+      open={open}
+      onOpenChange={close}
+      title={<span className="font-mono text-base">CLAUDE.md</span>}
+      description="The project's notes, quoted in every agent's instructions. Saving opens a change for review; agents read the new notes once it is accepted."
+      footer={saved !== null ? (
+        <>
+          {saved ? <Button asChild><Link to={changeHref(repo, saved) as string}>Open the change</Link></Button> : null}
+          <Button variant="outline" onClick={() => close(false)}>Close</Button>
+        </>
+      ) : (
+        <>
+          <Button variant="outline" onClick={() => close(false)}>Cancel</Button>
+          <Button disabled={!changed || saving} onClick={() => void save()}>{saving && <Loader2 className="animate-spin" />} Save as a change</Button>
+        </>
+      )}
+    >
+      {file.isError && !missing ? (
+        <QueryError error={file.error} what="CLAUDE.md" onRetry={() => void file.refetch()} />
+      ) : original === null ? (
+        <Loading><SkeletonRows rows={4} /></Loading>
+      ) : saved !== null ? (
+        <p className="text-sm">Saved. {saved ? 'The change waits for review: open it to see where it stands.' : 'The change opens for review shortly.'}</p>
+      ) : (
+        <div className="space-y-3">
+          {missing && <p className="text-xs text-muted-foreground">The repository has no CLAUDE.md yet: saving creates it.</p>}
+          <Textarea aria-label="Text of CLAUDE.md" value={value} onChange={(e) => setText(e.target.value)} spellCheck={false} className="min-h-80 resize-y font-mono text-[13px] leading-6" />
+          <div className="space-y-1.5">
+            <Label htmlFor="notes-note">What changed (optional)</Label>
+            <Input id="notes-note" value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} placeholder="For example: ceramic capacitors only, 0603 or larger" />
+          </div>
+        </div>
+      )}
+    </SideSheet>
   )
 }

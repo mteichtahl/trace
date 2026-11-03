@@ -129,13 +129,24 @@ const CHANGES: Record<string, ChangeDetail[]> = {
       recommendation: { verdict: 'wait', why: '3 checks are still running; trace will say when they finish.' },
       may_accept: false, blockers: ['3 checks are still running. Accepting opens once they pass.'],
     }),
+    // an edit someone made in the app (docs/stay-in-trace.md): a setting a contributor changed, waiting for an admin
+    summary(14, {
+      title: 'Boards per build: 5 → 10', kind: 'setting', by_name: 'Alex L.', mine: false, applies: 'review', from: 'a setting change by Alex L.',
+      job_id: null, stage: null, opened_at: ago(30 * MIN), updated_at: ago(25 * MIN), head: { ref: 'trace/settings-quantity-m1', sha: HEAD },
+      checks: { total: 1, passed: 1, failed: 0, running: 0, skipped: 0, failing: [] }, verdict: 'ready',
+      summary: ['Boards per build: 5 → 10.', 'Made in trace by Alex L. as a setting change.'],
+      files: [{ path: '.trace/project.db', status: 'modified', additions: 0, deletions: 0, kind: 'binary' }],
+      checks_list: [{ name: 'build', state: 'passed', summary: 'Built.' }],
+      recommendation: { verdict: 'accept', why: 'Its check passed, and it can be merged. Alex L. made it in trace; accepting applies it.' },
+      may_accept: true, may_ask: false, may_discard: true, rule_blocks: false,
+    }),
   ],
 }
 
 const partOf = (repo: string) => PROJECTS.find((p) => p.repo === repo)?.part ?? 'contributor'
 const open = (repo: string) => (CHANGES[repo] ?? []).filter((c) => c.state === 'open')
-const SUMMARY_KEYS = ['number', 'title', 'url', 'draft', 'held', 'from', 'job_id', 'stage', 'opened_at', 'updated_at', 'state', 'mergeable', 'checks', 'verdict'] as const
-const toSummary = (c: ChangeDetail) => Object.fromEntries(SUMMARY_KEYS.map((k) => [k, c[k]]))
+const SUMMARY_KEYS = ['number', 'title', 'url', 'draft', 'held', 'from', 'job_id', 'stage', 'opened_at', 'updated_at', 'state', 'mergeable', 'checks', 'verdict', 'kind', 'by_name', 'mine', 'applies'] as const
+const toSummary = (c: ChangeDetail) => Object.fromEntries(SUMMARY_KEYS.filter((k) => c[k] !== undefined).map((k) => [k, c[k]]))
 
 /** After a change is accepted: Capture moves to step 4 and trace starts the stock check. */
 function accepted(j: Journey, n: number) {

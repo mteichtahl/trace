@@ -2,7 +2,7 @@
  * Project overview: where is it (stage rail, and under it the current stage's guide: its purpose, its steps with who
  * does each, and what the gate needs; a segmented bar with "step 3 of 5" on phones), what is the one next step (the
  * card, with its place in the stage, trace's recommendation and what happens after), the changes trace made waiting
- * to be reviewed, and what is happening around it (Waiting on people, trace is doing, Queued, Recently). Any stage on
+ * to be reviewed, the build when it is failing (with "Ask trace to fix something"), and what is happening around it (Waiting on people, trace is doing, Queued, Recently). Any stage on
  * the rail, and "What happens in <Stage>", opens the stage sheet. A job one specialist asked another for reads "Asked by the …
  * specialist: …" (its title), and a queued one can be declined there. A side column holds the requirements and cost
  * summaries.
@@ -40,6 +40,7 @@ import type { Journey } from '@/lib/types'
 import { SKILLS } from '@/components/skills/definitions'
 import { continueText, useProjectDrafts } from '@/components/skills/draft'
 import { DeclineHandoff, declinable, useDeclineHandoffs } from '@/components/handoff'
+import { BuildHealth } from '@/components/project/build-health'
 
 export const Route = createFileRoute('/_app/p/$id/')({
   component: Overview,
@@ -245,6 +246,9 @@ function Overview() {
           {nextCard}
 
           <ChangesFromTrace repo={repo} unavailable={d.changesUnavailable} />
+
+          {/* the build when it is failing, the fixes asked for, and Ask trace to fix something (health.get) */}
+          <BuildHealth repo={repo} jobs={d.jobs} write={projects.data !== undefined && write} />
 
           <Section label="Waiting on people" count={d.questions.length} className="mt-10">
             {waitingList}

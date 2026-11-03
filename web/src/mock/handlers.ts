@@ -16,6 +16,8 @@ import { filesAction, withFileThread } from './files'
 import { buildCostAction } from './build-cost'
 import { handoffsOf, jobsAction, jobsOf } from './jobs'
 import { changesAction } from './changes'
+import { deploysAction } from './deploys'
+import { healthAction } from './health'
 
 let signedIn = typeof sessionStorage !== 'undefined' && sessionStorage.getItem('trace.mock.signedOut') !== '1'
 let inbox: InboxItem[] = [...INBOX]
@@ -30,6 +32,8 @@ const tokens = () => ({ accessToken: 'mock-access', idToken: 'mock-id', expiresI
 function action(name: string, a: Record<string, unknown>): Response {
   const repo = a.repo as string
   const ch = changesAction(name, a, (r, n) => { inbox = inbox.filter((i) => !(i.change?.repo === r && i.change.number === n)) }); if (ch) return ch
+  const dep = deploysAction(name, a); if (dep) return dep
+  const hl = healthAction(name, a); if (hl) return hl
   const files = filesAction(name, a); if (files) return files
   const k = knowledgeAction(name, a); if (k !== undefined) return k && typeof k === 'object' && '__error' in k ? json({ ok: false, error: (k as { __error: string }).__error }, 403) : ok(k)
   const des = designAction(name, a); if (des) return des

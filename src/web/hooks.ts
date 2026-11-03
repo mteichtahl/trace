@@ -23,6 +23,8 @@
  *            it, nothing else. The backend never reads the access store. Kept MEMBERS_TTL_MS per repository, so a burst
  *            asks once. Asked before answering, for at most MEMBERS_WAIT_MS: a repository that is not a project is a
  *            204; when the API is slower than that, the delivery is taken (202) and the answer is awaited after
+ *   apply    after publishing, `hook.apply { repo }` (src/api/actions-hooks.ts) with the same token: the project's app edits
+ *            that are ready are applied (docs/stay-in-trace.md "Applying"). Once per window, like the event
  *   publish  `record.changed { repo, kind: 'change', number? }` to each person's channel (src/web/events.ts), naming no
  *            content, as every live event. One push sets off dozens of check_run and status deliveries, each its own
  *            invocation and often its own container, so the debounce is shared (Debounce over a DebounceStore: the
@@ -226,6 +228,8 @@ export class Debounce {
 const HooksSecret = z.object({ webhookSecret: z.string().min(16), clientSecret: z.string().min(1).optional() }).loose()
 const ClientSecret = z.object({ clientSecret: z.string().min(1) }).loose()
 const TokenAnswer = z.object({ access_token: z.string().min(1), expires_in: z.number().positive().default(3600) }).loose()
+/** hook.apply's answer: what it applied or made again (branch and number only). */
+const ApplyAnswer = z.object({ result: z.object({ applied: z.array(z.object({ branch: z.string(), number: z.number().nullable(), did: z.string() })) }) })
 const MembersAnswer = z.object({ ok: z.literal(true), result: z.object({ project: z.boolean(), subs: z.array(z.string().min(1)) }).loose() }).loose()
 
 export interface HooksOptions {
@@ -325,6 +329,24 @@ export function hooksRoutes(deps: WebDeps, o: HooksOptions = {}) {
     const pub = o.publisher?.() ?? appsyncPublisher(cfg, deps.credentials, deps.fetch)
     const { failed, of } = await publishToEach(pub, on.subs, e)
     deps.log({ hook: 'published', repo: d.repo, event: d.event, number, people: of, ...(failed ? { failed } : {}) })
+    await applyEdits(cfg, d.repo)
+  }
+
+  /**
+   * Ask the API runtime to apply the project's app edits that are ready (hook.apply, docs/stay-in-trace.md "Applying"):
+   * once per debounce window, after the live event. What it did is logged (branches and numbers only); a failure is
+   * logged and dropped, since the next delivery asks again.
+   */
+  async function applyEdits(cfg: WebConfig, repo: string): Promise<void> {
+    try {
+      const t = await backendToken(cfg)
+      const a = await callApi(deps, { config: cfg, token: t, sub: 'backend:web-hooks' }, 'hook.apply', { repo })
+      const r = ApplyAnswer.safeParse(a.json)
+      if (r.success && r.data.result.applied.length) deps.log({ hook: 'applied', repo, applied: r.data.result.applied })
+      else if (!r.success) deps.log({ hook: 'apply failed', repo, status: a.status })
+    } catch (e) {
+      deps.log({ hook: 'apply failed', repo, error: e instanceof Error ? e.message.slice(0, 200) : 'error' })
+    }
   }
 
   return [

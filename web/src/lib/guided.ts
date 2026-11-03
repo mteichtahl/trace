@@ -101,6 +101,12 @@ export const VERDICT_WORDS: Record<ChangeVerdict, { pill: string; tone: 'primary
   conflict: { pill: 'Out of date', tone: 'warning' },
   blocked: { pill: 'Waiting', tone: 'neutral' },
   unfinished: { pill: 'Not finished', tone: 'warning' },
+  applying: { pill: 'Applying', tone: 'neutral' },
+}
+
+/** The words for an edit's kind, as a tag beside its title: "Setting", "Hand-in". */
+export const KIND_TAG: Record<NonNullable<ChangeSummary['kind']>, string | null> = {
+  work: null, setting: 'Setting', prompt: 'Prompt', release: 'Release copy', join: 'Joining trace', workflows: 'Workflow update', handin: 'Hand-in',
 }
 
 /** The checks in a few words: "7 checks passed", "Checks running, 4 of 7 done", "1 check failing: ERC". */
@@ -122,8 +128,21 @@ export function changeLine(c: ChangeSummary): string {
     case 'failing': return `${checksWords(c.checks)}. trace is fixing it.`
     case 'conflict': return 'The design moved on since this was made. trace will bring it up to date.'
     case 'unfinished': return `${c.from[0]?.toUpperCase() ?? ''}${c.from.slice(1)} says it is not finished. trace recommends asking for changes.`
-    default: return 'Waiting on GitHub before it can be accepted.'
+    case 'applying': return 'Its checks passed: trace applies it now.'
+    default: return blockedLine(c)
   }
+}
+
+/** What a change that is not ready waits for, in plain words, from what the list knows. */
+export function blockedLine(c: Pick<ChangeSummary, 'state' | 'draft' | 'mergeable' | 'checks' | 'applies'>): string {
+  if (c.state === 'merged') return 'It was accepted into the design.'
+  if (c.state === 'closed') return 'It was discarded.'
+  if (c.draft) return 'It is a draft: trace has not finished it yet.'
+  if (c.mergeable === 'behind') return 'The design moved on since this was made. trace will bring it up to date.'
+  if (c.mergeable === 'blocked' && c.checks && c.checks.total > 0 && !c.checks.running && !c.checks.failed) return 'Its checks passed, but this repository asks for a review trace cannot give. An admin can fix the rule from the change.'
+  if (c.checks?.running) return `${checksWords(c.checks)}. Ready when the last one finishes.`
+  if (c.mergeable === 'unknown') return 'Working out whether it can go in. trace looks again in a moment.'
+  return c.applies === 'auto' ? 'trace applies it once its checks pass.' : 'Waiting for its checks.'
 }
 
 /** trace's recommendation as the box says it: "trace recommends accepting." */

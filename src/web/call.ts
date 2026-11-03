@@ -29,6 +29,10 @@ export const BACKEND_ONLY = new Set(['chats.reply'])
 
 const CALL_TIMEOUT_MS = 14 * 60_000
 
+/** design.handin carries KiCad files as base64 (at most 3.5 MB of files together, src/api/actions-handin.ts): its body
+ * may be this large; every other action's stays at 1 MB. */
+export const HANDIN_BODY = 6 * MB
+
 /**
  * How long the API runtime has to start answering (its status and headers) before the call fails with 503
  * `api_unavailable`. Under CloudFront's 60 s wait for the backend (src/infra/web.ts API_READ_TIMEOUT_SECONDS; a test
@@ -142,7 +146,8 @@ export function callRoutes(deps: WebDeps, publisher?: () => Publisher) {
   return [
     route('POST', '/api/call', async (req, ctx) => {
       const s = await signedIn(req, ctx, deps)
-      const { action, ...args } = parseBody(req, Body, MB)
+      const { action, ...args } = parseBody(req, Body, HANDIN_BODY)
+      if (action !== 'design.handin' && Buffer.byteLength(req.body) > MB) throw new WebError(413, 'the body is larger than 1 MB')
       if (BACKEND_ONLY.has(action)) throw new WebError(403, 'that action is the chat agent\'s own', 'backend_only')
       const who: Caller = { config: s.config, token: s.token, sub: s.claims.sub }
       return {

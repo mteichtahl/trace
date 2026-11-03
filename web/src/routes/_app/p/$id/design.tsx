@@ -13,6 +13,9 @@
  *                  checking; the person's last choice is remembered. The design rule check's findings are pinned on both
  *
  * design.get's notes say what the record still does not hold; the tab shows them rather than drawing made-up content.
+ *
+ * Above the tabs: Get the design files (.zip) and, for people who can write, Hand in your edits
+ * (src/components/project/handin.tsx: KiCad files compared with the design, handed in as one change with design.handin).
  */
 import { Link, createFileRoute } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
@@ -27,6 +30,7 @@ import { Button } from '@/components/ui/button'
 import { ArchitectureSummary, OptionSwitch, OptionsTable, drawn, useOption } from '@/components/project/architecture'
 import { BlockDiagram } from '@/components/project/block-diagram'
 import { NeedsBuilding, TabSkeleton, notBuilt } from '@/components/project/shared'
+import { DesignFiles } from '@/components/project/handin'
 import { useCommands } from '@/components/shell/command-menu'
 import { FindingsList, FindingsPicture } from '@/components/skills/findings'
 import { StatusBadge } from '@/components/status-badge'
@@ -108,6 +112,7 @@ function Design() {
         {data.sheets.length} schematic sheet{data.sheets.length === 1 ? '' : 's'}{data.board ? ', a board' : ''}; {open ? `${open} findings to fix or waive.` : 'no open findings.'}
       </p>
       {data.notes?.length ? <div className="mt-3 space-y-1">{data.notes.map((n) => <NeedsBuilding key={n}>{n}</NeedsBuilding>)}</div> : null}
+      <DesignFiles repo={repo} className="mt-3" />
       <Tabs value={tab} onValueChange={setTab} className="mt-4">
         <TabsList className="max-w-full overflow-x-auto">
           <TabsTrigger value="architecture">Block diagram</TabsTrigger>

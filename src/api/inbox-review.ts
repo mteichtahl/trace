@@ -9,9 +9,10 @@
  * questions and gates come first. It is reviewed in the app (docs/guided-flow.md): the item links to the change's
  * review page (`to`); GitHub's link stays in `url` for the small "View on GitHub".
  */
+import { type AppEdit, EDIT_WORDS } from '../core/app-edits.js'
 import type { JobRow } from '../core/job-index.js'
 import { type InboxItem, type StageId, ago } from '../core/journey.js'
-import { type TraceRule, creditedAgent, jobsByBranch, traceJob } from './changes.js'
+import { type TraceRule, creditedAgent, editOf, editsByBranch, jobsByBranch, traceJob } from './changes.js'
 import type { PullSummary } from './github.js'
 
 /** The app's id of a project in its paths: owner~name (web/src/lib/api.ts projectId). */
@@ -33,6 +34,32 @@ export function reviewItems(o: {
     out.push({
       id: `review:${p.number}`, kind: 'review', repo: o.repo, project: o.project, stage: o.stage,
       summary: `${o.project}: ${who} made a change, "${p.title}"${p.draft ? ' (a draft)' : ''}. Its work counts once you accept it.`,
+      since: new Date(t * 1000).toISOString(), waited: ago(t, o.at), blocking: false, action: 'Review the change',
+      ref: { kind: 'pull', id: String(p.number), url: p.url, to: `/p/${projectPathId(o.repo)}/changes/${p.number}` },
+    })
+  }
+  return out
+}
+
+/**
+ * The inbox's `review` items for people's app edits (docs/stay-in-trace.md): only a `review` edit (someone who is not an
+ * admin made it) waits on a person, an admin who did not make it, so only admins are shown it, and never its author. An
+ * `auto` edit needs nobody: trace applies it.
+ */
+export function editReviewItems(o: {
+  repo: string; project: string; stage: StageId; pulls: readonly PullSummary[]; edits: readonly AppEdit[]
+  viewer: { admin: boolean; sub: string }; at?: number
+}): InboxItem[] {
+  if (!o.viewer.admin) return []
+  const byBranch = editsByBranch(o.edits)
+  const out: InboxItem[] = []
+  for (const p of o.pulls) {
+    const e = editOf(p, byBranch, o.repo)
+    if (!e || e.applies !== 'review' || e.by_sub === o.viewer.sub) continue
+    const t = Date.parse(e.at) / 1000 || Date.parse(p.updated_at) / 1000
+    out.push({
+      id: `review:${p.number}`, kind: 'review', repo: o.repo, project: o.project, stage: o.stage,
+      summary: `${o.project}: ${e.by_name} made ${EDIT_WORDS[e.kind]}, "${e.title}". It applies once an admin accepts it.`,
       since: new Date(t * 1000).toISOString(), waited: ago(t, o.at), blocking: false, action: 'Review the change',
       ref: { kind: 'pull', id: String(p.number), url: p.url, to: `/p/${projectPathId(o.repo)}/changes/${p.number}` },
     })

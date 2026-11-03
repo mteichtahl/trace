@@ -6,8 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { TaskConfirmCard } from '@/components/chat/cards'
 import { QualityBar } from '@/components/quality-bar'
+import { auth } from '@/lib/auth'
 import type { AgentSetup } from '@/lib/types'
-import { AgentSetupNotice, agentBlocked, lookWords, notReady, openLabel, setupLookEvery, setupWords } from './agent-setup'
+import { AgentSetupNotice, UpdateProgress, agentBlocked, lookWords, minutesLeft, notReady, openLabel, setupLookEvery, setupWords, stepsDone } from './agent-setup'
 
 const NOW = Date.parse('2026-11-02T10:00:00Z')
 const setup = (o: Partial<AgentSetup> = {}): AgentSetup => ({
@@ -82,6 +83,48 @@ describe('the notice', () => {
     const { container } = render(<AgentSetupNotice repo="acme/old" />, { wrapper })
     await waitFor(() => expect(qc.getQueryState(['project.agent', 'acme/old', { repo: 'acme/old' }])?.status).toBe('success'))
     expect(container).toBeEmptyDOMElement()
+  })
+})
+
+describe('the update\'s progress', () => {
+  afterEach(() => { auth.set((s) => ({ ...s, user: null })) })
+  const steps = [
+    { name: 'Test', state: 'done' as const }, { name: 'Deploy', state: 'running' as const }, { name: 'Mark the projects added', state: 'waiting' as const }, { name: 'Notify', state: 'waiting' as const },
+  ]
+
+  it('how far, and the time left from the estimate', () => {
+    expect(stepsDone(steps)).toBe(1.5 / 4)
+    expect(stepsDone([])).toBeNull()
+    expect(minutesLeft('2026-11-02T10:25:00Z', NOW)).toBe('about 25 min left')
+    expect(minutesLeft('2026-11-02T09:00:00Z', NOW)).toBeNull()
+    expect(minutesLeft(null, NOW)).toBeNull()
+  })
+
+  it('shows each step with its state and a bar; on failure the failing step\'s last lines', () => {
+    const { rerender } = render(<UpdateProgress setup={setup({ update: { status: 'running', started_at: '2026-11-02T09:41:00Z', steps } })} />)
+    expect(screen.getByRole('progressbar', { name: 'The installation update' })).toHaveAttribute('aria-valuenow', '38')
+    expect(screen.getByText('Deploy').parentElement).toHaveTextContent('Deploy: running')
+    expect(screen.getByText('Notify').parentElement).toHaveTextContent('Notify: waiting')
+    rerender(<UpdateProgress setup={setup({ update: { status: 'failed', started_at: '2026-11-02T09:41:00Z', steps: [{ name: 'Deploy', state: 'failed' }], failed_log: 'Error: limit reached' } })} />)
+    expect(screen.getByText('Deploy').parentElement).toHaveTextContent('Deploy: failed')
+    expect(screen.getByText('Error: limit reached')).toBeInTheDocument()
+  })
+
+  it('the run\'s page on GitHub is never a link for someone who is not an admin', async () => {
+    let qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const wrap = ({ children }: { children: ReactNode }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ ok: true, result: setup({ update: { status: 'running', started_at: '2026-11-02T09:41:00Z', url: 'https://github.com/mteichtahl/trace/actions/runs/1', steps } }) }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    auth.set((s) => ({ ...s, user: { sub: 'u', email: 'u@x', groups: [], class: 'user' } as never }))
+    const { unmount } = render(<AgentSetupNotice repo="acme/new" />, { wrapper: wrap })
+    expect(await screen.findByText('Deploy')).toBeInTheDocument()
+    expect(document.querySelector('a[href*="github.com"]')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'More' })).toBeNull()
+    unmount()
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    auth.set((s) => ({ ...s, user: { sub: 'a', email: 'a@x', groups: [], class: 'admin' } as never }))
+    render(<AgentSetupNotice repo="acme/new" />, { wrapper: wrap })
+    expect(await screen.findByRole('button', { name: 'More' })).toBeInTheDocument()
+    vi.restoreAllMocks()
   })
 })
 

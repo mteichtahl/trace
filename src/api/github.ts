@@ -110,6 +110,24 @@ export interface GitHubApi {
   /** A repository variable's value (Actions variables), or null when there is none or the token may not read it. Used
    * for TRACE_AGENT_LOGIN, the login trace's agents open pull requests as. */
   repoVariable?(repo: string, name: string): Promise<string | null>
+
+  // ---- what "stay in trace" needs (docs/stay-in-trace.md). Optional, like the rest: absent, the action that needs one
+  // says this installation cannot do it.
+  /** Open a pull request from `head` to `base`, or answer the one already open for `head`. */
+  openPull?(repo: string, o: { head: string; base: string; title: string; body: string }): Promise<{ number: number; existed: boolean }>
+  /** Point `branch` at `sha`, forced (only ever a branch of trace's own: an edit made again on a newer default branch). */
+  resetBranch?(repo: string, branch: string, sha: string): Promise<void>
+  /**
+   * One commit of several files on a new branch made from `base` (blobs, a tree on the base commit's tree, a commit, the
+   * branch). Answers the commit. Throws when the branch already exists.
+   */
+  commitFiles?(repo: string, o: { branch: string; base: string; message: string; files: { path: string; content: Uint8Array }[] }): Promise<{ commit: string }>
+  /** Start a workflow_dispatch run with inputs. Absent: dispatchWorkflow without inputs. */
+  dispatchWorkflowWith?(repo: string, workflow: string, ref: string, inputs: Record<string, string>): Promise<void>
+  /** Any other GitHub REST call, as JSON (rulesets, branch protection, issues, run jobs and logs). */
+  request?(method: string, path: string, body?: unknown): Promise<unknown>
+  /** A text response (a job's log), at most `max` bytes from its end. */
+  requestText?(path: string, max: number): Promise<{ text: string; truncated: boolean }>
 }
 
 const Label = z.union([z.string(), z.object({ name: z.string() }).loose()])
@@ -285,6 +303,50 @@ export class HttpGitHub implements GitHubApi {
 
   async createBranch(repo: string, branch: string, sha: string): Promise<void> {
     await this.json('POST', `${this.p(repo)}/git/refs`, { ref: `refs/heads/${branch}`, sha })
+  }
+
+  async openPull(repo: string, o: { head: string; base: string; title: string; body: string }): Promise<{ number: number; existed: boolean }> {
+    const [owner] = repo.split('/')
+    const open = z.array(z.object({ number: z.number() }).loose()).parse(await this.json('GET', `${this.p(repo)}/pulls?state=open&head=${encodeURIComponent(`${owner}:${o.head}`)}&per_page=1`))
+    if (open[0]) return { number: open[0].number, existed: true }
+    const r = z.object({ number: z.number() }).loose().parse(await this.json('POST', `${this.p(repo)}/pulls`, { head: o.head, base: o.base, title: o.title.slice(0, 250), body: o.body }))
+    return { number: r.number, existed: false }
+  }
+
+  async resetBranch(repo: string, branch: string, sha: string): Promise<void> {
+    await this.json('PATCH', `${this.p(repo)}/git/refs/heads/${branch.split('/').map(encodeURIComponent).join('/')}`, { sha, force: true })
+  }
+
+  async commitFiles(repo: string, o: { branch: string; base: string; message: string; files: { path: string; content: Uint8Array }[] }): Promise<{ commit: string }> {
+    const Sha = z.object({ sha: z.string() }).loose()
+    const head = await this.branchSha(repo, o.base)
+    if (!head) throw new GitHubError(404, `GitHub: no branch ${o.base}`)
+    const baseTree = z.object({ tree: z.object({ sha: z.string() }).loose() }).loose().parse(await this.json('GET', `${this.p(repo)}/git/commits/${head}`)).tree.sha
+    const tree: { path: string; mode: '100644'; type: 'blob'; sha: string }[] = []
+    for (const f of o.files) {
+      const b = Sha.parse(await this.json('POST', `${this.p(repo)}/git/blobs`, { content: Buffer.from(f.content).toString('base64'), encoding: 'base64' }))
+      tree.push({ path: f.path, mode: '100644', type: 'blob', sha: b.sha })
+    }
+    const t = Sha.parse(await this.json('POST', `${this.p(repo)}/git/trees`, { base_tree: baseTree, tree }))
+    const c = Sha.parse(await this.json('POST', `${this.p(repo)}/git/commits`, { message: o.message, tree: t.sha, parents: [head] }))
+    await this.createBranch(repo, o.branch, c.sha)
+    return { commit: c.sha }
+  }
+
+  async dispatchWorkflowWith(repo: string, workflow: string, ref: string, inputs: Record<string, string>): Promise<void> {
+    await this.json('POST', `${this.p(repo)}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, { ref, inputs })
+  }
+
+  async request(method: string, path: string, body?: unknown): Promise<unknown> {
+    if (!path.startsWith('/')) throw new GitHubError(400, 'GitHub: a path from the API root, starting with /')
+    return this.json(method, path, body)
+  }
+
+  async requestText(path: string, max: number): Promise<{ text: string; truncated: boolean }> {
+    const r = await this.req('GET', path, undefined, 'application/vnd.github+json')
+    if (!r.ok) throw new GitHubError(r.status, `GitHub GET ${path.split('?')[0]}: ${r.status}`, await saidBy(r))
+    const all = Buffer.from(await r.arrayBuffer())
+    return all.length > max ? { text: all.subarray(all.length - max).toString('utf8'), truncated: true } : { text: all.toString('utf8'), truncated: false }
   }
 
   async putFile(repo: string, o: { path: string; branch: string; content: Uint8Array; message: string; sha: string | null }): Promise<{ commit: string }> {

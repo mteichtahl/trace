@@ -66,7 +66,7 @@ describe('the rules: verdict, recommendation, may_accept', () => {
 
   it('blocked by the repository\'s rules with checks done says so; a draft waits; a reviewer is told who may accept', () => {
     expect(verdictOf(facts({ mergeable: 'blocked' }))).toBe('blocked')
-    expect(recommendationOf(facts({ mergeable: 'blocked' })).why).toMatch(/approving review.*passing checks only/)
+    expect(recommendationOf(facts({ mergeable: 'blocked' })).why).toMatch(/asks for a review trace cannot give.*admin can fix the rule from this page/)
     expect(recommendationOf(facts({ draft: true })).verdict).toBe('wait')
     expect(acceptance(facts(), false)).toEqual({ may_accept: false, blockers: ['Only a contributor on this project can accept a change.'] })
     expect(acceptance(facts({ state: 'merged' }), true).blockers).toEqual(['It is already accepted into the design.'])
@@ -506,9 +506,9 @@ describe('change.accept', () => {
     }
   })
 
-  it('a repository that requires a review: plain words saying so and that the guided flow expects checks-only rules', async () => {
+  it('a repository that requires a review: plain words saying so, and that an admin fixes the rule from the change', async () => {
     github.mergeRefusal = new GitHubError(405, 'GitHub PUT merge: 405', 'At least 1 approving review is required by reviewers with write access.')
-    await expect(run(USER, 'change.accept', { repo: REPO, number: 1, head_sha: sha(1) })).rejects.toThrow(/requires an approving review.*passing checks only/)
+    await expect(run(USER, 'change.accept', { repo: REPO, number: 1, head_sha: sha(1) })).rejects.toThrow(/requires an approving review.*Fix the rule and accept/)
     expect((await decisions()).filter((x) => x.kind === 'change.accepted' && x.ref === '1').length).toBe(1) // only the earlier test's
   })
 })

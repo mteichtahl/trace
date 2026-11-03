@@ -210,17 +210,27 @@ export interface NextStep {
 
 // ------------------------------------------------------------------ changes (src/api/actions-changes.ts)
 
-export type ChangeVerdict = 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked' | 'unfinished'
+export type ChangeVerdict = 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked' | 'unfinished' | 'applying'
+/** 'work': a specialist's change; otherwise an edit a person made in the app (docs/stay-in-trace.md) */
+export type ChangeKind = 'work' | 'setting' | 'prompt' | 'release' | 'join' | 'workflows' | 'handin'
 export type ChangeFileKind = 'schematic' | 'board' | 'parts' | 'text' | 'image' | 'binary'
 
-/** A pull request a trace job opened, as people read it: a change. */
+/** A pull request a trace job opened, or an edit a person made in the app, as people read it: a change. */
 export interface ChangeSummary {
   number: number
   title: string
-  /** GitHub's page for it: only for the small "View on GitHub" link */
+  /** GitHub's page for it: only in the admins' More menu */
   url: string
   draft: boolean
   held: boolean
+  /** absent from an older API: a specialist's change */
+  kind?: ChangeKind
+  /** an edit: who made it */
+  by_name?: string
+  /** an edit: the viewer made it */
+  mine?: boolean
+  /** an edit: trace applies it (auto), or an admin who did not make it accepts it (review) */
+  applies?: 'auto' | 'review'
   /** "the schematic specialist", or "a trace job" */
   from: string
   job_id: string | null
@@ -262,6 +272,12 @@ export interface ChangeDetail extends ChangeSummary {
   blockers: string[]
   base: { ref: string; sha: string }
   head: { ref: string; sha: string }
+  /** its checks passed but the repository asks for a review trace cannot give (admins: repo.rules.fix) */
+  rule_blocks?: boolean
+  /** whether this person may discard it; absent from an older API: as may_accept's contributor rule */
+  may_discard?: boolean
+  /** whether this person may ask for changes (never for an edit: there is no specialist) */
+  may_ask?: boolean
 }
 
 /** change.diff: one file's two sides. */
@@ -277,6 +293,48 @@ export interface ChangeDiff {
 
 /** `warning`: it is merged, but something after it (the decisions log) did not happen */
 export interface ChangeAccepted { merged: true; sha: string; stage: string; next: string; warning?: string }
+
+// ------------------------------------------------------------------ deploys (docs/stay-in-trace.md "2. Deploys")
+
+export type DeployResult = 'deployed' | 'failed' | 'rolled_back' | 'skipped'
+
+/** deploys.get: the project's deploys as the app shows them (src/api/actions-deploys.ts DeploysView). */
+export interface DeploysView {
+  enabled: boolean; environment: string; url: string | null; auto: boolean
+  /** this person may approve, skip or roll back, now */
+  may_approve: boolean
+  /** what the environment runs */
+  running: { sha: string; at: string | null } | null
+  /** the open request, or null */
+  request: {
+    sha: string; opened_at: string; held: boolean; held_reasons: string[]
+    /** since the running one, newest first */
+    commits: { sha: string; subject: string }[]
+    build_passed: boolean
+  } | null
+  in_progress: { sha: string; started_at: string; by: string; step: string | null } | null
+  recent: { sha: string; result: DeployResult; at: string; by: string }[]
+  recommendation: { verdict: 'deploy' | 'wait' | 'none'; why: string }
+}
+
+// ------------------------------------------------------------------ build health (docs/stay-in-trace.md "3. A broken build")
+
+/** health.get: the default branch's build, trace's fix for it, and the open requests for a fix (src/api/actions-health.ts). */
+export interface HealthView {
+  build: {
+    state: 'passing' | 'failing' | 'running' | 'none'; sha: string | null; at: string | null
+    /** each failing job: its id (health.log's job_id), name, failing step, and the last 40 lines of its log */
+    failing: { job_id: number; name: string; step: string | null; tail: string }[]
+    /** plain words: trace's own look at the failure, else the failing step */
+    why: string | null
+    /** trace's work on it: its job (RunSummary.id) when known, and which attempt of how many */
+    fixing: { job_id: string | null; attempt: number; of: number } | null
+  }
+  asks: { number: number; title: string; state: 'waiting' | 'working' | 'stuck'; job_id: string | null; opened_at: string }[]
+}
+
+/** health.log: one build job's log, its last 200 KB. */
+export interface HealthLog { name: string; text: string; truncated: boolean }
 
 export interface Question {
   id: string
@@ -434,8 +492,12 @@ export interface AgentSetup {
   state: 'ready' | 'setting_up' | 'finishing' | 'failed' | 'missing'
   text: string
   requested_at: string | null
-  /** `url`: the update's run on GitHub, given to admins only */
-  update: { status: 'queued' | 'running' | 'finished' | 'failed'; started_at: string; url?: string } | null
+  /** `url`: the update's run on GitHub, given to admins only (their More menu). `steps`: the run's steps as they
+   * stand; `failed_log`: the failing step's last 40 lines (admins only, else null) */
+  update: {
+    status: 'queued' | 'running' | 'finished' | 'failed'; started_at: string; url?: string
+    steps?: { name: string; state: 'done' | 'running' | 'waiting' | 'failed' }[]; failed_log?: string | null
+  } | null
   expected_by: string | null
   next_check_s: number | null
 }

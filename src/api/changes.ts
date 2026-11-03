@@ -35,17 +35,27 @@
  * still running, or a required review), unknown (GitHub is still working it out), draft.
  */
 import { SPECIALIST_KINDS } from '../agents/kinds.js'
+import { type AppEdit, EDIT_WORDS, type EditKind } from '../core/app-edits.js'
 import type { JobRow } from '../core/job-index.js'
 import { indexedHandle } from '../core/job-index.js'
 import { type JourneyRecord, LATER_STAGES, STAGE_IDS, type StageId, TEMPLATES, templateStages } from '../core/journey.js'
 import type { CheckRunDetail, PullFile, PullStatus, PullSummary } from './github.js'
 
-export type Verdict = 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked' | 'unfinished'
+export type Verdict = 'ready' | 'checking' | 'failing' | 'conflict' | 'blocked' | 'unfinished' | 'applying'
+/** 'work': a specialist's change (docs/guided-flow.md); otherwise an edit a person made in the app (docs/stay-in-trace.md) */
+export type ChangeKind = 'work' | EditKind
 export type Checks = NonNullable<PullStatus['checks']>
 export type FileKind = 'schematic' | 'board' | 'parts' | 'text' | 'image' | 'binary'
 
 export interface ChangeSummary {
   number: number; title: string; url: string; draft: boolean; held: boolean
+  kind: ChangeKind
+  /** an edit: who made it (their name, else their initials) */
+  by_name?: string
+  /** an edit: the viewer made it */
+  mine?: boolean
+  /** an edit: auto (trace applies it once its checks pass) or review (an admin who did not make it accepts it) */
+  applies?: AppEdit['applies']
   /** "the Verification specialist", or "a trace job" */
   from: string
   job_id: string | null; stage: StageId | null; opened_at: string; updated_at: string
@@ -70,6 +80,12 @@ export interface ChangeDetail extends ChangeSummary {
   may_accept: boolean
   blockers: string[]
   base: { ref: string; sha: string }; head: { ref: string; sha: string }
+  /** its checks are done, yet the repository's rules stop it: a required review trace cannot give (repo.rules.fix) */
+  rule_blocks: boolean
+  /** an edit: whether this person may discard it (its author, or an admin); a specialist's change: write access */
+  may_discard: boolean
+  /** a specialist's change: whether this person may ask for changes (never for an edit: there is no specialist) */
+  may_ask: boolean
   /** when it became ready for a person (readySince), ISO */
   ready_since: string
 }
@@ -247,6 +263,78 @@ export function traceChanges<P extends Pick<PullSummary, 'number' | 'head' | 'he
     .sort((a, b) => (a.pull.created_at ?? '').localeCompare(b.pull.created_at ?? '') || a.pull.number - b.pull.number)
 }
 
+// ------------------------------------------------------------------ which pull requests are a person's app edits
+
+/**
+ * The edit `pull` is, or null (docs/stay-in-trace.md "Which pull requests are edits"): its head branch lives in the
+ * project's repository (not a fork), an edit is recorded for that branch, and its head commit is the recorded one.
+ * Anyone who can push may push to a trace/… branch, and a pushed commit makes it no longer the edit trace made. The
+ * branch prefix and the author are not checked: the commit is.
+ */
+export function editOf(pull: Pick<PullFacts, 'head' | 'headRepo'> & { sha?: string | undefined }, edits: ReadonlyMap<string, AppEdit>, repo: string): AppEdit | null {
+  if (!pull.headRepo || pull.headRepo.toLowerCase() !== repo.toLowerCase()) return null
+  const e = edits.get(pull.head)
+  if (!e || !pull.sha || e.commit !== pull.sha) return null
+  return e
+}
+
+/** Each recorded edit by its branch. */
+export const editsByBranch = (edits: readonly AppEdit[]): Map<string, AppEdit> => new Map(edits.map((e) => [e.branch, e]))
+
+/** Who made an edit, in the app's words: "a setting change by Alex L.", "a hand-in by you". */
+export const editFrom = (e: Pick<AppEdit, 'kind' | 'by_name'>, mine: boolean): string => `${EDIT_WORDS[e.kind]} by ${mine ? 'you' : e.by_name}`
+
+/**
+ * Whether an edit may be applied with no checks at all: a repository joining trace (or its workflows refreshed) has no
+ * build of trace's yet, and its content is trace's own scaffold, fixed by the recorded commit.
+ */
+export const mayApplyUnchecked = (kind: ChangeKind): boolean => kind === 'join' || kind === 'workflows'
+
+/**
+ * The facts of an edit, read as a change's: a join or workflows edit with no checks that GitHub says can merge counts as
+ * checked (mayApplyUnchecked), so it is not held for checks that will never run.
+ */
+export function editFacts(f: ChangeFacts, kind: ChangeKind): ChangeFacts {
+  if (!mayApplyUnchecked(kind) || f.state !== 'open') return f
+  const none = f.checks === null || f.checks.total === 0
+  if (!none || !CAN_MERGE.has(f.mergeable)) return f
+  return { ...f, checks: { total: 1, passed: 1, failed: 0, running: 0, skipped: 0, failing: [] }, checks_denied: false }
+}
+
+/** An edit's verdict: an auto edit that is ready is "applying" (trace merges it); otherwise as any change. */
+export function editVerdict(f: ChangeFacts, e: Pick<AppEdit, 'kind' | 'applies'>): Verdict {
+  const v = verdictOf(editFacts(f, e.kind))
+  return v === 'ready' && e.applies === 'auto' ? 'applying' : v
+}
+
+/** What trace recommends for an edit: an auto one needs nothing from anyone; a review one, as a change's. */
+export function editRecommendation(f: ChangeFacts, e: Pick<AppEdit, 'kind' | 'applies' | 'by_name'>, mine: boolean): Recommendation {
+  const g = editFacts(f, e.kind)
+  const r = recommendationOf(g)
+  if (e.applies === 'auto' && g.state === 'open') {
+    if (r.verdict === 'accept') return { verdict: 'none', why: 'Its checks passed: trace applies it now.' }
+    if (r.verdict === 'wait') return { verdict: 'wait', why: `${r.why} trace applies it once they pass, with nothing for anyone to do.` }
+    if (r.verdict === 'ask') return { verdict: 'none', why: `${r.why.replace(/ Ask trace to fix (it|them) before accepting\.$/, '')} trace does not apply it while that is so: discard it, or make the change again.` }
+    return r
+  }
+  if (r.verdict === 'accept') return { verdict: 'accept', why: `${r.why} ${mine ? 'You made it, so another admin accepts it.' : `${e.by_name} made it in trace; accepting applies it.`}` }
+  if (r.verdict === 'ask') return { verdict: 'none', why: `${r.why.replace(/ Ask trace to fix (it|them) before accepting\.$/, '')} Ask ${mine ? 'trace' : e.by_name} to make it again, or discard it.` }
+  return r
+}
+
+/**
+ * Whether this person may accept an edit now, and if not why: only a review edit is ever accepted, by an admin who did
+ * not make it (decision A); then the change's own rules (acceptance).
+ */
+export function editAcceptance(f: ChangeFacts, e: Pick<AppEdit, 'kind' | 'applies' | 'by_name'>, viewer: { admin: boolean; mine: boolean }): { may_accept: boolean; blockers: string[] } {
+  const base = acceptance(editFacts(f, e.kind), true)
+  const out = [...base.blockers]
+  if (e.applies === 'auto') out.unshift('trace applies it once its checks pass: nobody needs to accept it.')
+  else if (viewer.mine) out.unshift('You made this change: another admin accepts it.')
+  else if (!viewer.admin) out.unshift('Only an admin can accept a change someone made in the app.')
+  return { may_accept: out.length === 0, blockers: out }
+}
+
 /**
  * The specialist a change is credited to: the one its task was started with (the `agent` of its recorded request, what
  * the person confirmed), else the one its row names. The row's agent is where the job was routed (the index takes it
@@ -324,7 +412,7 @@ export function recommendationOf(f: ChangeFacts, o: { passed?: readonly string[]
   if (f.mergeable === 'behind') return { verdict: 'none', why: 'It is behind changes accepted since it was made. trace will bring it up to date.' }
   // its checks are done, yet GitHub says the repository's rules stop it: almost always a required approving review,
   // which trace cannot give (GitHub refuses an approval from the account that opened it)
-  if (f.mergeable === 'blocked') return { verdict: 'none', why: 'Its checks are done, but the repository\'s rules on GitHub stop it merging, usually because they require an approving review. trace\'s guided flow expects the rules to require passing checks only.' }
+  if (f.mergeable === 'blocked') return { verdict: 'none', why: 'Its checks passed, but this repository asks for a review trace cannot give. An admin can fix the rule from this page, then accept it.' }
   if (f.checks === null) return f.checks_denied ? { verdict: 'none', why: CHECKS_DENIED } : { verdict: 'wait', why: 'trace could not read its checks. Look again in a minute.' }
   if (f.checks.total === 0) return { verdict: 'wait', why: 'No checks have run on it yet. Wait for them to run.' }
   const reqs = o.requirements?.length ? ` It covers ${list([...o.requirements].slice(0, 8))}${o.requirements.length > 8 ? ` and ${plural(o.requirements.length - 8, 'more requirement')}` : ''}.` : ''
@@ -465,6 +553,25 @@ export function fileKind(path: string, patch: string | null): FileKind {
 
 // ------------------------------------------------------------------ the summary
 
+/** One edit's summary from its pull request (with or without its status) and its record. */
+export function editSummary(o: {
+  pull: Pick<PullSummary, 'number' | 'title' | 'url' | 'draft' | 'labels' | 'updated_at'> & { created_at?: string | undefined }
+  edit: AppEdit; status: Pick<PullStatus, 'state' | 'mergeable' | 'checks' | 'checks_denied' | 'draft' | 'updated_at'> | null
+  hold: string; viewerSub: string
+}): ChangeSummary {
+  const s = o.status
+  const facts: ChangeFacts = { state: s?.state ?? 'open', draft: s?.draft ?? o.pull.draft, mergeable: s?.mergeable ?? 'unknown', checks: s?.checks ?? null, ...(s?.checks_denied ? { checks_denied: true } : {}) }
+  const mine = o.edit.by_sub === o.viewerSub
+  return {
+    number: o.pull.number, title: o.edit.title, url: o.pull.url, draft: facts.draft, held: o.pull.labels.includes(o.hold), kind: o.edit.kind,
+    by_name: o.edit.by_name, mine, applies: o.edit.applies,
+    from: editFrom(o.edit, mine), job_id: null, stage: null,
+    opened_at: o.pull.created_at ?? o.edit.at, updated_at: s?.updated_at ?? o.pull.updated_at,
+    state: facts.state, mergeable: facts.mergeable, checks: facts.checks, ...(facts.checks_denied ? { checks_denied: true } : {}),
+    verdict: editVerdict(facts, o.edit),
+  }
+}
+
 /** One change's summary from its pull request (with or without its status) and its job. */
 export function changeSummary(o: {
   repo: string; pull: Pick<PullSummary, 'number' | 'title' | 'url' | 'draft' | 'labels' | 'updated_at'> & { created_at?: string | undefined }
@@ -480,7 +587,7 @@ export function changeSummary(o: {
   settleUnfinished(facts, { title: o.pull.title, summary: o.job?.summary }, o.given ?? new Set())
   const crit = criteriaNamed(jobRequest(o.job), o.job?.title ?? '')
   return {
-    number: o.pull.number, title: o.pull.title, url: o.pull.url, draft: facts.draft, held: o.pull.labels.includes(o.hold),
+    number: o.pull.number, title: o.pull.title, url: o.pull.url, draft: facts.draft, held: o.pull.labels.includes(o.hold), kind: 'work',
     from: fromWords(o.job, o.agentWords), job_id: o.job ? indexedHandle(o.repo, o.job.session, o.job.id) : null, stage: stageNamed(crit),
     opened_at: o.pull.created_at ?? o.pull.updated_at, updated_at: s?.updated_at ?? o.pull.updated_at,
     state: facts.state, mergeable: facts.mergeable, checks: facts.checks, ...(facts.checks_denied ? { checks_denied: true } : {}), verdict: verdictOf(facts),

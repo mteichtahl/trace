@@ -3,6 +3,9 @@
  * it has waited, and one primary button. A question with a clear recommendation shows the recommended answer as its
  * own button ("Use 4.2 A") with "Other answer" beside it, so most questions are answered in one tap. A stuck agent's
  * report can be dismissed with a reason in one line (onDismiss: stuck.dismiss).
+ *
+ * An item whose only way forward is a page on GitHub (an older API's `href`) never shows that link to someone who is not
+ * an admin (docs/stay-in-trace.md, decision C): its words stay, as plain text, and the link is in the admins' More menu.
  */
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
@@ -10,6 +13,7 @@ import { checksWords } from '@/lib/guided'
 import { q } from '@/lib/queries'
 import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { MoreForAdmins } from '@/components/more-for-admins'
 import { DismissStuck } from '@/components/dismiss-stuck'
 import { EvidenceChip } from '@/components/evidence-chip'
 import { PullStatusLine } from '@/components/pull-status'
@@ -35,6 +39,9 @@ export interface NeedsYouCardProps {
   compact?: boolean
   className?: string
 }
+
+/** Whether an item's link is GitHub's own page: only admins are shown it, in the More menu. Pure. */
+export const isGitHubHref = (href: string | undefined): boolean => !!href && /^https:\/\/([a-z0-9-]+\.)*github(usercontent)?\.com(\/|$)/i.test(href)
 
 /** A change's checks in a line, from change.get. */
 function ChangeStatusLine({ repo, number, className }: { repo: string; number: number; className?: string }) {
@@ -102,6 +109,11 @@ export function NeedsYouCard({ item, onAnswer, answering, onOther, onDismiss, on
           </>
         ) : item.change && onAccept ? (
           <ChangeButtons item={item} compact={compact} onAccept={onAccept} accepting={accepting} />
+        ) : !item.action.to && isGitHubHref(item.action.href) ? (
+          <span className="flex items-center gap-1 text-sm text-muted-foreground">
+            {item.action.label.replace(/\s+on GitHub$/i, '')}
+            <MoreForAdmins links={[{ label: item.action.label.match(/on GitHub$/i) ? item.action.label : `${item.action.label} (GitHub)`, href: item.action.href! }]} />
+          </span>
         ) : (
           <Button size={compact ? 'sm' : 'lg'} variant={stuck ? 'outline' : 'default'} asChild={!!item.action.to || !!item.action.href}>
             {item.action.to ? <Link to={item.action.to}>{item.action.label}</Link>

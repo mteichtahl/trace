@@ -39,7 +39,7 @@ export interface Actions {
   status: { args: Repo; result: { repo: string; default_branch: string; pulls: unknown[]; agent_fix_issues: unknown[]; runs: unknown[]; last_deploy: unknown } }
   'pull.status': { args: Repo & { number: number }; result: import('./types').PullStatus }
   'settings.get': { args: Repo; result: { repo: string; set: Record<string, unknown>; config: Record<string, unknown>; errors: string[] } }
-  'settings.set': { args: Repo & { key: string; value?: unknown; unset?: boolean }; result: { branch: string; commit: string } }
+  'settings.set': { args: Repo & { key: string; value?: unknown; unset?: boolean }; result: { branch: string; commit: string; /** the change it opened */ change?: number | null } }
   runs: { args: Repo & { kind?: string; limit?: number; agent?: string }; result: Record<string, unknown>[] }
   run: { args: Repo & { id: string }; result: Record<string, unknown> }
   artifact: { args: Repo & { id: string; name: string }; result: { id: string; name: string; mime: string | null; size: number; base64: string } }
@@ -108,6 +108,10 @@ export interface Actions {
   'graph.neighbourhood': { args: Repo & { focus: string; depth?: 1 | 2 | 3; memory?: boolean }; result: { focus: string; nodes: unknown[]; links: unknown[]; groups: unknown[]; truncated: boolean } }
   'files.list': { args: Repo; result: import('@/components/files/data').ListedFile[] }
   'files.url': { args: Repo & { path: string; commit?: string }; result: { url: string; mime?: string | null; size?: number } }
+  /** a text file edited in the app (CLAUDE.md): a change for review */
+  'files.edit': { args: Repo & { path: string; text: string; note?: string }; result: { repo: string; path: string; change: number | null; branch: string; commit: string } }
+  /** KiCad files handed in: one change of the ones that differ from the design */
+  'design.handin': { args: Repo & { files: { path: string; base64: string }[]; note?: string }; result: { repo: string; change: number | null; changed: string[]; same: string[]; branch: string; commit: string } }
   // Operations, Admin and Preferences (src/api/actions.ts: integrations.*, prompts.*; shapes in lib/admin-types.ts)
   'integrations.list': { args: Record<string, never>; result: import('./admin-types').IntegrationStatus[] }
   'integrations.set': { args: { name: import('./admin-types').IntegrationName; values: Record<string, string> }; result: { name: string; secret: string; check: { ok: boolean; detail: string }; note?: string } }
@@ -176,6 +180,19 @@ export interface Actions {
   'change.accept': { args: Repo & { number: number; head_sha: string; note?: string }; result: import('./types').ChangeAccepted }
   'change.ask': { args: Repo & { number: number; note: string }; result: { job_id: string } }
   'change.discard': { args: Repo & { number: number; reason: string }; result: { closed: true } }
+  /** admins: put the repository's rule back to passing checks only (docs/stay-in-trace.md "5. Fixing the repository rule") */
+  'repo.rules.fix': { args: Repo; result: { done: string[]; left: string[] } }
+  // deploys, decided in the app (docs/stay-in-trace.md "2. Deploys"); the three writes: an admin or a person in deploy.people
+  'deploys.get': { args: Repo; result: import('./types').DeploysView }
+  /** sha: the commit the person was shown (the request's); the API refuses one that moved since */
+  'deploy.approve': { args: Repo & { sha: string }; result: { started: true; approval: string; next: string } }
+  'deploy.skip': { args: Repo & { reason: string }; result: { skipped: true } }
+  /** to: a commit that ran before (a deployed entry of recent) */
+  'deploy.rollback': { args: Repo & { to: string }; result: { started: true; approval: string } }
+  // the build's health (docs/stay-in-trace.md "3. A broken build"): asking trace for a fix is `task`
+  'health.get': { args: Repo; result: import('./types').HealthView }
+  /** job_id: a failing job of health.get (its build.failing[].job_id) */
+  'health.log': { args: Repo & { job_id: number }; result: import('./types').HealthLog }
 }
 
 export type ActionName = keyof Actions

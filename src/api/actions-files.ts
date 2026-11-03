@@ -19,11 +19,20 @@
  *   files.url    read   one file (`commit`: as it was at an earlier commit): its bytes (base64) when at most 8 MB (the artifact limit), else GitHub's own short
  *                       download link (it carries a token for a private repository and lasts minutes). An evidence
  *                       path returns the artifact's bytes from the project database (or says it is too large)
+ *   files.edit   write  { repo, path, text, note } → { change, branch, commit }: a text file edited in the app (the
+ *                       prompts screen's CLAUDE.md editor; docs/stay-in-trace.md "6. Small links and words"). Text
+ *                       files only (no binary type, valid UTF-8 without NUL), at most 1 MB; protected paths
+ *                       (.trace/**, .github/**, prs.protected_paths) refused except CLAUDE.md. One commit
+ *                       (putFile) on a new branch trace/edit-<slug>-<base36 time> from the default branch, then
+ *                       recorded as an app edit (kind prompt, "Edit CLAUDE.md"): its pull request opens at once
  */
 import { z } from 'zod'
 import { loadJourney } from '../core/journey.js'
 import { Work, artifactMime, unpackArtifact } from '../core/store.js'
-import { ActionError, type Context, MAX_ARTIFACT, PROJECT_DB_PATH, Repo, def, withProjectDb, withRecordDb } from './action-kit.js'
+import { ActionError, type Context, MAX_ARTIFACT, PROJECT_DB_PATH, Repo, def, label, slugify, withProjectDb, withRecordDb } from './action-kit.js'
+import { isProtected, protectedPathsOf } from './actions-handin.js'
+import { quote } from './actions-changes.js'
+import { recordEdit } from './edits.js'
 import { checkFindings, sheetFileOf } from './record-read.js'
 
 export const FILE_KINDS = ['design', 'fabrication', 'firmware', 'documents', 'models', 'evidence', 'other'] as const
@@ -115,6 +124,34 @@ const mimeOf = (path: string): string => {
   return m[ext] ?? (/(kicad_|\.(c|h|rs|v|sv|py|ts|toml|ya?ml|ini|log|net|cir)$)/.test(path) ? 'text/plain' : 'application/octet-stream')
 }
 
+/** The most a file edited in the app may be (UTF-8 bytes). */
+export const MAX_EDIT_BYTES = 1024 * 1024
+
+/** The one protected path a person may edit in the app: the project's notes the agents read. */
+export const EDITABLE_PROTECTED: ReadonlySet<string> = new Set(['CLAUDE.md'])
+
+/** File types that are never text, whatever their bytes. */
+const BINARY = /\.(png|jpe?g|webp|gif|bmp|ico|pdf|zip|gz|tgz|7z|stl|glb|gltf|step|stp|wrl|elf|bin|hex|uf2|bit|bitstream|db|sqlite|mp4|mov|docx?|xlsx?|pptx?|odt|woff2?|ttf|otf)$/i
+
+/** Whether these bytes read as text: valid UTF-8 with no NUL. Pure. */
+export function isText(bytes: Uint8Array): boolean {
+  if (bytes.includes(0)) return false
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Why a path cannot be edited in the app, or null. Pure. */
+export function editRefusal(path: string, protectedPaths: readonly string[]): string | null {
+  if (SKIP.test(path) || path === PROJECT_DB_PATH) return `${path} is not a file people edit.`
+  if (BINARY.test(path)) return `${path} is not a text file, so it is not edited here.`
+  if (!EDITABLE_PROTECTED.has(path) && isProtected(path, protectedPaths)) return `${path} steers trace itself, so it is not edited in the app.`
+  return null
+}
+
 export const FILE_ACTIONS = {
   'files.list': def('read', Repo.extend({
     kinds: z.array(z.enum(FILE_KINDS)).optional(), ref: Ref.optional(), evidence_limit: z.number().int().min(0).max(2000).default(200),
@@ -185,5 +222,28 @@ export const FILE_ACTIONS = {
     }
     if (!info.downloadUrl) throw new ActionError(`${a.path} is larger than 8 MB and GitHub gave no download link for it.`)
     return { ...base, url: info.downloadUrl, note: 'A short-lived link from GitHub; ask again when it stops working.' }
+  }),
+
+  'files.edit': def('write', Repo.extend({ path: SafePath, text: z.string().max(MAX_EDIT_BYTES), note: z.string().trim().max(2000).default('') }), async (a, ctx) => {
+    const content = new TextEncoder().encode(a.text)
+    if (content.length > MAX_EDIT_BYTES) throw new ActionError(`The text is ${(content.length / (1024 * 1024)).toFixed(1)} MB; a file edited here is at most 1 MB.`)
+    if (a.text.includes('\u0000')) throw new ActionError('The text has a NUL character, so it is not a text file.')
+    const gh = await ctx.deps.github()
+    const { branch: base, sha } = await gh.defaultBranch(a.repo)
+    const why = editRefusal(a.path, await protectedPathsOf(ctx, a.repo, base))
+    if (why) throw new ActionError(why)
+    const now = await gh.rawFile(a.repo, a.path, base)
+    if (now && !isText(now)) throw new ActionError(`${a.path} is not a text file, so it is not edited here.`)
+    if (now && new TextDecoder().decode(now) === a.text) throw new ActionError(`This is the same as ${a.path} now: there is nothing to change.`)
+    const blob = now ? await gh.fileSha(a.repo, a.path, base) : null
+    const name = a.path.slice(a.path.lastIndexOf('/') + 1)
+    const branch = `trace/edit-${slugify(name)}-${Date.now().toString(36)}`
+    if (branch === base) throw new ActionError('refusing to write the default branch')
+    await gh.createBranch(a.repo, branch, sha)
+    const title = `Edit ${a.path}`
+    const message = `${title}${a.note ? `\n\n${a.note}` : ''}\n\nRequested by ${label(ctx.principal)} through the trace API.`
+    const { commit } = await gh.putFile(a.repo, { path: a.path, branch, content, message, sha: blob })
+    const edit = await recordEdit(ctx, { repo: a.repo, branch, base, commit, kind: 'prompt', title, ...(a.note ? { body: `${title}\n\n${quote(a.note)}` } : {}), redo: null, paths: [a.path] })
+    return { repo: a.repo, path: a.path, change: edit.number, branch, commit }
   }),
 }

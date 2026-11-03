@@ -17,8 +17,9 @@
  *   tools.list    read                  the tools (never the hardware ones), and which of them need write
  *   tool          read | write          run a tool on the project's own worker runtime (src/agents/runtime/tool.ts), on
  *                                       its clone of the default branch; write for WRITE_TOOLS; hardware: never
- *   settings.set  write                 change (or unset) one setting: a commit on trace/settings-<slug>, pushed (the
- *                                       harness opens the PR); never the default branch
+ *   settings.set  write                 change (or unset) one setting: a commit on trace/settings-<slug>, its pull
+ *                                       request opened and recorded as an app edit (src/api/edits.ts; a person's
+ *                                       only: `change` is its number); never the default branch
  *   task          write                 start a free-form task job (Claude, on a claude/ branch), requestedBy you;
  *                                       agent: verify, impl, ams, emc, render or thermal (a specialist), or left out to be
  *                                       routed (src/agents/router.ts). It runs on the project's own worker
@@ -78,8 +79,9 @@
  *   prompts.preview  read                 a whole prompt (a specialist kind, a prompt's name, or an id) as the model
  *                                         would get it with the overrides, its parts marked
  *   prompts.set      admin (installation) override one editable id (text, reason). Installation: the prompts store;
- *                    write (project)      project: a commit of .trace/project.db on trace/prompts-<slug>-<ts>, pushed
- *                                         (the harness opens the PR, held for a person: .trace/** is protected)
+ *                    write (project)      project: a commit of .trace/project.db on trace/prompts-<slug>-<ts>, its
+ *                                         pull request opened and recorded as an app edit (`change`); prompts.get
+ *                                         with a repo answers `pending` (that change) while it waits
  *   prompts.reset    the same             back to the layer below (a recorded reset)
  *   prompts.revert   the same             back to an earlier version (a number or a history uid)
  *   prompts.history  admin or user        every change to one id in one layer (installation: a user or an admin;
@@ -94,7 +96,7 @@
  *   actions-me.ts        me.get, me.set
  *   actions-push.ts      push.subscribe, push.unsubscribe, push.devices
  *   actions-graph.ts     graph.neighbourhood
- *   actions-files.ts     files.list, files.url
+ *   actions-files.ts     files.list, files.url, files.edit (CLAUDE.md and other text files edited in the app)
  *   actions-jobs.ts      jobs.list, job.control, handoff.decline
  *   actions-people.ts    users.history
  *   actions-record.ts    requirements.trace, design.get
@@ -102,6 +104,15 @@
  *   actions-cost.ts      cost.get, usage.month
  *   actions-skills.ts    skill.get, skill.draft, skill.drafts, skill.submit
  *   actions-design.ts    design.decide
+ *   actions-changes.ts   changes.list, change.get, change.diff, change.accept, change.ask, change.discard (people's app
+ *                        edits too: src/api/edits.ts, apply-edits.ts, docs/stay-in-trace.md)
+ *   actions-rules.ts     repo.rules.fix
+ *   actions-handin.ts    design.handin (KiCad files handed in: one commit on trace/handin-…, recorded as an app edit)
+ *   actions-deploys.ts   deploys.get (read); deploy.approve, deploy.skip, deploy.rollback (write, and a trace admin or a
+ *                        person in deploy.people; never a connected system): deploys decided in the app
+ *                        (docs/stay-in-trace.md "2. Deploys")
+ *   actions-health.ts    health.get, health.log (read): the build's health, its failing step's log, trace's fix and
+ *                        the open requests for a fix (docs/stay-in-trace.md "3. A broken build")
  *   actions-me.ts        also policy.get, policy.set
  *   actions-prompts.ts   prompts.chat (the chat agent's editable instructions as the installation has them)
  *   actions-voice.ts     voice.vocabulary, voice.vocabulary.sync (dictation's project words)
@@ -124,7 +135,7 @@ import {
   AccessDenied, CLASSES, GROUPS, PARTS, PartRefused, type PersonClass, type Principal, RepoSlug, type Role,
   assign, assignments, classOf, isAdmin, isBackend, isService, lastSeen, projectsFor, require_, setClass, unassign,
 } from '../core/access.js'
-import { readSettings, resolve, setValue, unset } from '../core/config.js'
+import { leaves, readSettings, resolve, setValue, unset } from '../core/config.js'
 import { IntegrationNameSchema, type IntegrationStore, checkIntegration, valuesFor } from '../core/integrations.js'
 import { type AnyTool, Registry, ToolError } from '../core/registry.js'
 import { AGENTS, type Actor, AgentName, type MemoryRecord, STRATEGIES, type SessionView, actorIn, agentActor, parseActor, projectId, projectPrefix, within } from '../agents/runtime/memory.js'
@@ -146,6 +157,7 @@ import {
 import { CHAT_ACTIONS } from './actions-chats.js'
 import { DESIGN_ACTIONS } from './actions-design.js'
 import { FILE_ACTIONS } from './actions-files.js'
+import { HANDIN_ACTIONS } from './actions-handin.js'
 import { GRAPH_ACTIONS } from './actions-graph.js'
 import { JOURNEY_ACTIONS } from './actions-journey.js'
 import { JOB_ACTIONS, withControls } from './actions-jobs.js'
@@ -164,7 +176,11 @@ import type { CognitoUser } from './aws.js'
 import { SERVICE_ADMIN_ACTIONS } from './actions-services.js'
 import { CHANGE_ACTIONS } from './actions-changes.js'
 import { HOOK_ACTIONS } from './actions-hooks.js'
+import { RULE_ACTIONS } from './actions-rules.js'
+import { DEPLOY_ACTIONS } from './actions-deploys.js'
+import { HEALTH_ACTIONS } from './actions-health.js'
 import { SERVICE_ACTIONS, checkService, taskCap, toolOpenToSystems } from './service-policy.js'
+import { editStore, recordEdit } from './edits.js'
 
 export {
   ActionError, NO_ACCESS, PROJECT_DB_PATH, type ActionDeps, type Context, type JobView, type JobsApi, type OnboardRequest, type WaitView,
@@ -343,6 +359,52 @@ function checked<T>(fn: () => T): T {
   }
 }
 
+/** The app's title for a project prompt edit: "Instruction specialist.verify.done: version 4". Pure. */
+export function promptTitle(w: Pick<PromptWrite, 'op' | 'id'>, version: number): string {
+  const what = w.op === 'set' ? 'version' : w.op === 'reset' ? 'reset, version' : 'reverted, version'
+  return `Instruction ${w.id}: ${what} ${version}`
+}
+
+/** A setting's value as a person reads it in a title: short, plain JSON for lists and mappings. Pure. */
+const settingWords = (v: unknown): string => {
+  const t = typeof v === 'string' ? v : JSON.stringify(v)
+  return t.length > 60 ? `${t.slice(0, 59)}…` : t
+}
+
+/**
+ * The app's title for a setting edit: "worker.max_attempts: 3 → 5" when the value before can be read (its own, or the
+ * default), else "worker.max_attempts set to 5"; an unset goes back to the default. Pure.
+ */
+export function settingTitle(key: string, old: { value: unknown } | null, value: unknown): string {
+  if (value === undefined) return old ? `${key}: ${settingWords(old.value)} → the default` : `${key} back to the default`
+  return old ? `${key}: ${settingWords(old.value)} → ${settingWords(value)}` : `${key} set to ${settingWords(value)}`
+}
+
+/** A setting's value on the default branch now: its own, else its default; null when it is not a setting there. */
+function settingNow(db: string, key: string): { value: unknown } | null {
+  try {
+    const set = readSettings(db)
+    if (Object.hasOwn(set, key)) return { value: set[key] }
+    const known = leaves()
+    return Object.hasOwn(known, key) ? { value: known[key] } : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * A project prompt edit still waiting for this id (prompts.get's `pending`): the newest recorded prompt edit whose
+ * redo writes it, with its change's number so the app links to the change. Best effort: none when the store cannot be
+ * read.
+ */
+async function pendingPrompt(ctx: Context, repo: string, id: string): Promise<{ change: number | null; branch: string; title: string; version: number | null; by_name: string } | null> {
+  const edits = await editStore(ctx).list(repo).catch(() => [])
+  const e = [...edits].reverse().find((x) => x.kind === 'prompt' && x.redo?.op === 'prompt' && x.redo.write.id === id)
+  if (!e) return null
+  const v = /version (\d+)$/.exec(e.title)
+  return { change: e.number, branch: e.branch, title: e.title, version: v ? Number(v[1]) : null, by_name: e.by_name }
+}
+
 /** One write to one layer: the installation's store, or a commit of the project's database on a branch of its own. */
 async function writePrompt(ctx: Context, scope: 'installation' | 'project', repo: string | undefined, w: PromptWrite) {
   if (scope === 'installation') {
@@ -365,7 +427,11 @@ async function writePrompt(ctx: Context, scope: 'installation' | 'project', repo
     await gh.createBranch(r, branch, sha)
     const message = `prompts: ${w.op} ${w.id} (v${h.version})\n\n${h.reason ?? ''}\n\nRequested by ${label(ctx.principal)} through the trace API.`
     const { commit } = await gh.putFile(r, { path: PROJECT_DB_PATH, branch, content: readFileSync(t.db), message, sha: blob })
-    return { scope, repo: r, id: w.id, version: h.version, uid: h.uid, action: h.action, branch, commit, note: '.trace/** is a protected path: the pull request waits for a person to merge it.' }
+    const edit = await recordEdit(ctx, { repo: r, branch, base, commit, kind: 'prompt', title: promptTitle(w, h.version), redo: { op: 'prompt', write: { ...w } } })
+    return {
+      scope, repo: r, id: w.id, version: h.version, uid: h.uid, action: h.action, branch, commit, change: edit.number,
+      note: edit.applies === 'auto' ? 'trace applies it once its checks pass.' : 'An admin accepts it in trace.',
+    }
   } finally {
     t.cleanup()
   }
@@ -474,6 +540,7 @@ export const ACTIONS = {
     const t = tempDb(ctx.deps.scratch, await gh.rawFile(a.repo, PROJECT_DB_PATH, base))
     try {
       const by = label(ctx.principal)
+      const old = settingNow(t.db, a.key)
       if (a.unset) {
         if (!unset(a.key, t.root)) throw new ActionError(`${a.key} is not set`)
       } else {
@@ -484,7 +551,12 @@ export const ACTIONS = {
       await gh.createBranch(a.repo, branch, sha)
       const message = a.unset ? `settings: unset ${a.key}` : `settings: ${a.key} = ${JSON.stringify(a.value)}`.slice(0, 200)
       const { commit } = await gh.putFile(a.repo, { path: PROJECT_DB_PATH, branch, content: readFileSync(t.db), message: `${message}\n\nRequested by ${by} through the trace API.`, sha: blob })
-      return { repo: a.repo, branch, commit, key: a.key, ...(a.unset ? { unset: true } : { value: a.value }) }
+      // a connected system's setting is not a person's edit in the app: it stays a pull request the harness opens
+      const edit = isService(ctx.principal) ? null : await recordEdit(ctx, {
+        repo: a.repo, branch, base, commit, kind: 'setting', title: settingTitle(a.key, old, a.unset ? undefined : a.value),
+        redo: { op: 'setting', key: a.key, ...(a.unset ? { unset: true } : { value: a.value }) },
+      })
+      return { repo: a.repo, branch, commit, key: a.key, ...(a.unset ? { unset: true } : { value: a.value }), change: edit?.number ?? null }
     } finally {
       t.cleanup()
     }
@@ -686,7 +758,9 @@ export const ACTIONS = {
 
   'prompts.get': def('prompts', PromptRepo.extend({ id: PromptId }), async (a, ctx) => {
     checked(() => entry(a.id))
-    return { ...(a.repo ? { repo: a.repo } : {}), ...getView(a.id, await promptLayers(ctx, a.repo)) }
+    const view = getView(a.id, await promptLayers(ctx, a.repo))
+    const pending = a.repo ? await pendingPrompt(ctx, a.repo, a.id) : null
+    return { ...(a.repo ? { repo: a.repo } : {}), ...view, ...(pending ? { pending } : {}) }
   }, mayReadPrompts),
 
   'prompts.preview': def('read', Repo.extend({ target: PreviewTarget, job: PreviewJob.optional() }), async (a, ctx) => {
@@ -732,12 +806,16 @@ export const ACTIONS = {
   ...COST_ACTIONS,
   ...SKILL_ACTIONS,
   ...DESIGN_ACTIONS,
+  ...HANDIN_ACTIONS,
   ...PROMPT_ACTIONS,
   ...VOICE_ACTIONS,
   ...LAYOUT_ACTIONS,
   ...SERVICE_ADMIN_ACTIONS,
   ...CHANGE_ACTIONS,
   ...HOOK_ACTIONS,
+  ...RULE_ACTIONS,
+  ...DEPLOY_ACTIONS,
+  ...HEALTH_ACTIONS,
 } satisfies Record<string, Action<z.ZodType>>
 
 export type ActionName = keyof typeof ACTIONS

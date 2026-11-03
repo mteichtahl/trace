@@ -14,7 +14,7 @@ import { TabSkeleton } from '@/components/project/shared'
 import { EmptyState, QueryError } from '@/components/states'
 import { repoOf } from '@/lib/api'
 import { ago } from '@/lib/format'
-import { VERDICT_WORDS, changeLine } from '@/lib/guided'
+import { KIND_TAG, VERDICT_WORDS, changeLine } from '@/lib/guided'
 import { useJourney } from '@/lib/queries'
 import type { ChangeSummary } from '@/lib/types'
 
@@ -36,6 +36,7 @@ export const changeColumns: ColumnDef<ChangeSummary, any>[] = [
       </span>
     ),
   },
+  { id: 'kind', accessorFn: (c) => (c.kind && KIND_TAG[c.kind]) || 'Specialist\'s work', header: 'Kind', size: 140, meta: { label: 'Kind', kind: 'enum' } },
   { id: 'verdict', accessorFn: (c) => VERDICT_WORDS[c.verdict].pill, header: 'Where it is', size: 130, meta: { label: 'Where it is', kind: 'enum', options: Object.values(VERDICT_WORDS).map((v) => v.pill) }, cell: ({ row }) => <ChangePill verdict={row.original.verdict} /> },
   { id: 'checks', accessorFn: (c) => (c.checks ? c.checks.passed : -1), header: 'Checks', size: 170, meta: { label: 'Checks', kind: 'number' }, cell: ({ row }) => <ChecksBadge c={row.original.checks} /> },
   { accessorKey: 'from', header: 'Made by', size: 200, meta: { label: 'Made by', kind: 'enum' } },
