@@ -142,6 +142,8 @@ describe('external access: on', () => {
     expect(JSON.stringify(env.TRACE_TOKEN_URL)).toMatch(/UsersDomain.*\/oauth2\/token/)
     for (const [k, v] of Object.entries(apiEnv)) {
       if (k === 'TRACE_AGENT_MODE' || k === 'TRACE_EXTERNAL_RUNTIME_ARN' || k === 'TRACE_MCP_RUNTIME_ARN') continue
+      // each runtime writes its metrics to a log group of its own name
+      if (k === 'OTEL_EXPORTER_OTLP_LOGS_HEADERS') { expect(env[k]).toContain('/runtimes/trace_external-metrics,'); continue }
       expect(env[k], k).toEqual(v)
     }
     // the shared rate limit's table, and only the external runtime is told it

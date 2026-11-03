@@ -3,8 +3,8 @@
  *
  *   runtimes           every runtime: the projects' workers, the API, and (external access) the external API and MCP
  *                      endpoint, each with its log group output and on the dashboard. The image loads ADOT (`node --require …/register`, agent/Dockerfile); AgentCore Runtime
- *                      supplies its OTEL_* settings, and this adds AGENT_OBSERVABILITY_ENABLED=true and turns
- *                      GenAI message-content capture off. Disabled: DISABLE_ADOT_OBSERVABILITY=true (AgentCore's
+ *                      supplies its OTEL_* settings, and this adds AGENT_OBSERVABILITY_ENABLED=true, turns
+ *                      GenAI message-content capture off, and names where its metrics go (metricsHeaders). Disabled: DISABLE_ADOT_OBSERVABILITY=true (AgentCore's
  *                      defaults unset) and OTEL_SDK_DISABLED=true (ADOT starts nothing).
  *   IAM                the execution role statements the AgentCore guide lists are in stack.ts (X-Ray, runtime log
  *                      groups, PutMetricData in the bedrock-agentcore namespace); this adds logs:PutResourcePolicy on
@@ -52,12 +52,26 @@ export const agentsDashboardName = (prefix: string): string => `${prefix}-agents
 /** CodeBuild's own metrics (SucceededBuilds, FailedBuilds, Builds by ProjectName): every build runner's builds. */
 export const CODEBUILD_NAMESPACE = 'AWS/CodeBuild'
 
-/** Runtime environment when observability is on. AgentCore sets the rest (OTEL_RESOURCE_ATTRIBUTES, the OTLP headers). */
+/** Runtime environment when observability is on. AgentCore sets OTEL_RESOURCE_ATTRIBUTES; metricsHeaders names where metrics go. */
 export const ENABLED_ENV: Readonly<Record<string, string>> = {
   AGENT_OBSERVABILITY_ENABLED: 'true',
   // ADOT's GenAI instrumentations would otherwise record prompts and completions on spans
   OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: 'false',
 }
+/**
+ * Where ADOT writes a runtime's metrics (its CloudWatch EMF exporter, OTEL_METRICS_EXPORTER=awsemf in agent mode):
+ * AgentCore does not tell a custom container this, and without it ADOT drops every trace.* metric, so the dashboard's
+ * jobs, tool calls, cost and Process rows stayed empty. A log group of the runtime's own name pattern
+ * (/aws/bedrock-agentcore/runtimes/<name>-*, which every runtime role may already create and write), created by ADOT
+ * on its first write; CloudWatch turns the EMF lines into metrics in METRIC_NAMESPACE.
+ */
+export const metricsLogGroup = (runtimeName: string): string => `/aws/bedrock-agentcore/runtimes/${runtimeName}-metrics`
+export const METRICS_LOG_STREAM = 'trace-metrics'
+export const metricsHeaders = (runtimeName: string): string =>
+  `x-aws-log-group=${metricsLogGroup(runtimeName)},x-aws-log-stream=${METRICS_LOG_STREAM},x-aws-metric-namespace=${METRIC_NAMESPACE}`
+/** The variables Observability adds to a runtime, at most (the runtime's environment budget, stack.ts). */
+export const OBSERVABILITY_ENV_ENTRIES = Object.keys(ENABLED_ENV).length + 1
+
 /** Runtime environment when it is off: AgentCore's ADOT defaults unset, and the SDK the image loads does nothing. */
 export const DISABLED_ENV: Readonly<Record<string, string>> = { DISABLE_ADOT_OBSERVABILITY: 'true', OTEL_SDK_DISABLED: 'true' }
 
@@ -140,6 +154,7 @@ export class Observability extends Construct {
     const roles = new Set<iam.IRole>()
     for (const r of p.runtimes) {
       for (const [k, v] of Object.entries(ENABLED_ENV)) r.runtime.addPropertyOverride(`EnvironmentVariables.${k}`, v)
+      r.runtime.addPropertyOverride('EnvironmentVariables.OTEL_EXPORTER_OTLP_LOGS_HEADERS', metricsHeaders(r.name))
       // AgentCore delivers the agent's spans to its own log group and needs to let X-Ray write there
       const again = roles.has(r.role)
       roles.add(r.role)

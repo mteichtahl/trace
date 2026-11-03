@@ -44,12 +44,19 @@ describe('observability in the stack', () => {
     expect(o).toEqual({ enabled: true, transactionSearch: true, dashboard: true })
   })
 
-  it('tells both runtimes to run ADOT for AgentCore, without message content, and leaves the rest to AgentCore', () => {
+  it('tells both runtimes to run ADOT for AgentCore, without message content, and where their metrics go', () => {
     for (const name of [WORKER, 'trace_api']) {
       const env = runtimeEnv(t, name)
       expect(env).toMatchObject({ AGENT_OBSERVABILITY_ENABLED: 'true', OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: 'false' })
-      // AgentCore supplies these for hosted runtimes (they name the runtime's own log group)
-      for (const k of ['DISABLE_ADOT_OBSERVABILITY', 'OTEL_SDK_DISABLED', 'OTEL_RESOURCE_ATTRIBUTES', 'OTEL_EXPORTER_OTLP_LOGS_HEADERS']) expect(env[k]).toBeUndefined()
+      // AgentCore does not name a metrics log group for a custom container: without one ADOT's EMF exporter drops
+      // every trace.* metric (none ever reached CloudWatch). A group of the runtime's own name, in trace's namespace
+      expect(env.OTEL_EXPORTER_OTLP_LOGS_HEADERS).toBe(
+        `x-aws-log-group=/aws/bedrock-agentcore/runtimes/${name}-metrics,x-aws-log-stream=trace-metrics,x-aws-metric-namespace=bedrock-agentcore`,
+      )
+      // the runtime's role may create and write that group: its log statement covers /runtimes/<name>-*
+      expect(JSON.stringify(t.findResources('AWS::IAM::Policy'))).toMatch(new RegExp(`logs:PutLogEvents[^\\]]*\\][^\\]]*/aws/bedrock-agentcore/runtimes/${name}-\\*`))
+      // AgentCore supplies the resource attributes
+      for (const k of ['DISABLE_ADOT_OBSERVABILITY', 'OTEL_SDK_DISABLED', 'OTEL_RESOURCE_ATTRIBUTES']) expect(env[k]).toBeUndefined()
     }
   })
 
@@ -169,6 +176,7 @@ describe('observability in the stack', () => {
       const env = runtimeEnv(off, name)
       expect(env).toMatchObject({ DISABLE_ADOT_OBSERVABILITY: 'true', OTEL_SDK_DISABLED: 'true' })
       expect(env.AGENT_OBSERVABILITY_ENABLED).toBeUndefined()
+      expect(env.OTEL_EXPORTER_OTLP_LOGS_HEADERS).toBeUndefined()
     }
     const json = JSON.stringify(off.toJSON())
     expect(json).not.toContain('OTEL_EXPORTER_OTLP_TRACES_ENDPOINT')
