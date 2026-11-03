@@ -12,6 +12,7 @@ import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/u
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { OfflineBanner } from '@/components/states'
+import { PushPrompt } from '@/components/push-prompt'
 import { DockedAskTrace, AskTrace } from '@/components/chat/chat-panel'
 import { openPanel, usePanel } from '@/components/chat/chat-state'
 import { useMediaQuery } from '@/hooks/use-media-query'
@@ -148,6 +149,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <OverlayAskTrace />
       <PhoneTabs />
       <CommandMenu />
+      <PushPrompt />
       <ShortcutsDialog />
     </SidebarProvider>
   )

@@ -247,16 +247,18 @@ describe('the web app', () => {
     expect(text).toMatch(/"realtime":"<\{"Fn::GetAtt":\["WebWebStack\w+","Outputs\.\w*Events\w*DnsRealtime"\]\}>"/)
   })
 
-  it('gives the backend exactly what it needs: nothing of the access store, any project, or Cognito', () => {
+  it('gives the backend exactly what it needs: nothing of the access store, any project, or Cognito; one secret, the push keys', () => {
     const all = statements(web, 'BackendRole')
     expect(all.flatMap(actions).sort()).toEqual([
       'appsync:EventPublish', 'bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:DescribeAlarms', 'cloudwatch:GetDashboard', 'cloudwatch:GetMetricData',
-      'logs:CreateLogStream', 'logs:PutLogEvents', 'polly:DescribeVoices', 'polly:SynthesizeSpeech', 's3:GetObject', 's3:ListBucket', 's3:PutObject', 'ssm:GetParameter',
-      'transcribe:StartStreamTranscriptionWebSocket',
+      'logs:CreateLogStream', 'logs:PutLogEvents', 'polly:DescribeVoices', 'polly:SynthesizeSpeech', 's3:GetObject', 's3:ListBucket', 's3:PutObject',
+      'secretsmanager:CreateSecret', 'secretsmanager:GetSecretValue', 'ssm:GetParameter', 'transcribe:StartStreamTranscriptionWebSocket',
     ])
-    const text = JSON.stringify(all)
-    for (const never of ['cognito', '/access/', '/projects/', '/central/', 'secretsmanager', 'bedrock-agentcore', 'iam:', 's3:DeleteObject']) expect(text).not.toContain(never)
     const by = (sid: string): Statement | undefined => all.find((s) => s.Sid === sid)
+    // one secret: the push keys (GET /api/push/key gives out their public half, and makes them the first time), by name
+    expect(JSON.stringify(by('PushKeys')?.Resource)).toMatch(/:secret:trace\/web\/push-keys-\?\?\?\?\?\?"/)
+    const text = JSON.stringify(all.filter((s) => s.Sid !== 'PushKeys'))
+    for (const never of ['cognito', '/access/', '/projects/', '/central/', 'secretsmanager', 'bedrock-agentcore', 'iam:', 's3:DeleteObject']) expect(text).not.toContain(never)
     expect(by('WebConfig')?.Resource).toEqual({ 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':ssm:us-east-1:123456789012:parameter/trace/web/config']] })
     expect(JSON.stringify(by('VoiceCache')?.Resource)).toContain(`/${VOICE_PREFIX}/*`)
     expect(by('VoiceCacheList')?.Condition).toEqual({ StringLike: { 's3:prefix': [`${VOICE_PREFIX}/*`] } })
@@ -274,22 +276,25 @@ describe('the web app', () => {
     const central = Object.entries(on.parent.findResources('AWS::S3::Bucket')).find(([id]) => id.startsWith('Central'))?.[1] as Res
     expect(central.Properties.NotificationConfiguration).toEqual({ EventBridgeConfiguration: { EventBridgeEnabled: true } })
     on.parent.resourceCountIs('Custom::S3BucketNotifications', 0)
-    // the rule: Object Created of the agents' facts objects in that bucket only (not the journey record: the backend
-    // publishes people's writes, so they are not sent twice)
+    // the rule: Object Created of the agents' facts objects in that bucket, and the journey record for push only (the
+    // backend publishes people's writes as live events, so they are not sent twice: src/web/journey-events.ts)
     const rule = only(web, 'AWS::Events::Rule').Properties as { Name: string; EventPattern: unknown; Targets: { Arn: unknown; RetryPolicy: unknown }[] }
     expect(rule.Name).toBe('trace-journey-events')
     expect(rule.EventPattern).toEqual({
       source: ['aws.s3'], 'detail-type': ['Object Created'],
-      detail: { bucket: { name: [{ Ref: expect.stringMatching(/Central/) }] }, object: { key: [{ wildcard: 'projects/*/journey-agent/facts.db' }, { wildcard: 'projects/*/journey-agent/bench.db' }, { wildcard: 'projects/*/journey-agent/jobs.db' }] } },
+      detail: { bucket: { name: [{ Ref: expect.stringMatching(/Central/) }] }, object: { key: [{ wildcard: 'projects/*/journey-agent/facts.db' }, { wildcard: 'projects/*/journey-agent/bench.db' }, { wildcard: 'projects/*/journey-agent/jobs.db' }, { wildcard: 'projects/*/journey/journey.db' }] } },
     })
     expect(rule.Targets).toEqual([expect.objectContaining({ Arn: { 'Fn::GetAtt': [expect.stringMatching(/^JourneyEvents[0-9A-F]{8}$/), 'Arn'] }, RetryPolicy: { MaximumEventAgeInSeconds: 3600, MaximumRetryAttempts: 2 } })])
     web.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'trace-journey-events', Handler: 'journey-events.handler', Runtime: 'nodejs22.x', Architectures: ['arm64'],
-      Environment: { Variables: Match.objectLike({ TRACE_CENTRAL_BUCKET: { Ref: Match.stringLikeRegexp('Central') }, TRACE_EVENTS_HTTP: { 'Fn::GetAtt': [Match.stringLikeRegexp('^Events'), 'Dns.Http'] } }) },
+      Environment: { Variables: Match.objectLike({ TRACE_CENTRAL_BUCKET: { Ref: Match.stringLikeRegexp('Central') }, TRACE_EVENTS_HTTP: { 'Fn::GetAtt': [Match.stringLikeRegexp('^Events'), 'Dns.Http'] }, TRACE_PUSH_TABLE: { Ref: Match.stringLikeRegexp('^PushLedger') }, TRACE_PUSH_SECRET: 'trace/web/push-keys' }) },
     })
-    // its role: read access/* and the agents' facts objects, publish to the namespace, its log group. Nothing else
+    // push: its ledger, by key with a TTL, nothing kept past it
+    web.hasResourceProperties('AWS::DynamoDB::Table', { TableName: 'trace-web-push', KeySchema: [{ AttributeName: 'k', KeyType: 'HASH' }], BillingMode: 'PAY_PER_REQUEST', TimeToLiveSpecification: { AttributeName: 'ttl', Enabled: true } })
+    // its role: read access/*, the agents' facts objects and the journey records, publish to the namespace, the push
+    // ledger and the push keys, its log group. Nothing else
     const all = statements(web, 'JourneyEventsRole')
-    expect(all.flatMap(actions).sort()).toEqual(['appsync:EventPublish', 'logs:CreateLogStream', 'logs:PutLogEvents', 's3:GetObject', 's3:GetObject', 's3:GetObject', 's3:ListBucket'])
+    expect(all.flatMap(actions).sort()).toEqual(['appsync:EventPublish', 'dynamodb:UpdateItem', 'logs:CreateLogStream', 'logs:PutLogEvents', 's3:GetObject', 's3:GetObject', 's3:GetObject', 's3:GetObject', 's3:ListBucket', 'secretsmanager:GetSecretValue'])
     const by = (sid: string): Statement | undefined => all.find((x) => x.Sid === sid)
     expect(JSON.stringify(by('AccessStoreRead')?.Resource)).toMatch(/"\/access\/\*"/)
     expect(by('AccessStoreList')?.Condition).toEqual({ StringLike: { 's3:prefix': ['access/*'] } })
@@ -297,8 +302,12 @@ describe('the web app', () => {
     // and the job index that changed (job.updated): that one object of each project
     expect(JSON.stringify(by('JobIndexRead')?.Resource)).toMatch(/"\/projects\/\*\/journey-agent\/jobs\.db"/)
     expect(JSON.stringify(by('PublishLiveEvents')?.Resource)).toMatch(/Events\w+","ApiArn"\]\},"\/channelNamespace\/trace"/)
+    // push: the journey record itself, read only; the ledger table; the push keys secret by name, read only
+    expect(JSON.stringify(by('JourneyRead')?.Resource)).toMatch(/"\/projects\/\*\/journey\/journey\.db"/)
+    expect(JSON.stringify(by('PushLedger')?.Resource)).toMatch(/PushLedger\w+","Arn"/)
+    expect(JSON.stringify(by('PushKeys')?.Resource)).toMatch(/:secret:trace\/web\/push-keys-\?\?\?\?\?\?"/)
     const text = JSON.stringify(all)
-    for (const never of ['s3:PutObject', 's3:DeleteObject', '/central/', '/journey/', '/chats/', 'cognito', 'bedrock', 'ssm:']) expect(text).not.toContain(never)
+    for (const never of ['s3:PutObject', 's3:DeleteObject', 'secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue', '/central/', '/chats/', 'cognito', 'bedrock', 'ssm:']) expect(text).not.toContain(never)
   })
 
   it('scopes the chat model to the configured model, and attaches a given WAF web ACL', () => {

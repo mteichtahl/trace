@@ -101,6 +101,10 @@ export interface Actions {
   'chats.recall': { args: Repo & { limit?: number }; result: string[] }
   'me.get': { args: Record<string, never>; result: MeDoc & { locks: Record<string, string> } }
   'me.set': { args: { key: string; value?: unknown; unset?: boolean }; result: { changed: boolean } }
+  /** push notifications on this device (src/api/actions-push.ts, docs/push.md) */
+  'push.subscribe': { args: { subscription: PushSubscriptionJSON; tz?: string | null; label?: string | null }; result: { subscribed: boolean; devices: number } }
+  'push.unsubscribe': { args: { endpoint: string }; result: { removed: boolean } }
+  'push.devices': { args: Record<string, never>; result: { devices: { endpoint: string; label: string | null; tz: string | null; since: string }[] } }
   'graph.neighbourhood': { args: Repo & { focus: string; depth?: 1 | 2 | 3; memory?: boolean }; result: { focus: string; nodes: unknown[]; links: unknown[]; groups: unknown[]; truncated: boolean } }
   'files.list': { args: Repo; result: import('@/components/files/data').ListedFile[] }
   'files.url': { args: Repo & { path: string; commit?: string }; result: { url: string; mime?: string | null; size?: number } }
