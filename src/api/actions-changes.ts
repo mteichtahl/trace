@@ -35,7 +35,7 @@
  * GitHub's review rule: trace never approves on GitHub (its account opened the pull request, and GitHub refuses an
  * approval from the author). The guided flow expects the repository to require passing checks only; trace records who
  * accepted in the decisions log. A repository that still requires a review makes accepting fail with plain words that
- * say so and how to change the rule.
+ * say so; an admin fixes the rule from the change's page (repo.rules.fix, src/api/actions-rules.ts).
  *
  * Who did it goes into the decisions log as their label (email), like every other decision. The comment on GitHub,
  * which anyone who can read the repository sees, names them by their name in the user pool, else "a person on the
@@ -54,9 +54,13 @@ import { Composer, NO_LAYERS } from '../prompts/resolve.js'
 import { ActionError, type Context, PROJECT_DB_PATH, Repo, TaskBranch, agentFacts, def, label, tempDb, withJourneyDb, writeJourney } from './action-kit.js'
 import { AGENT_WORDS, jobIndex } from './actions-jobs.js'
 import {
-  type ChangeDetail, type ChangeFacts, type ChangeSummary, type TraceRule, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, fileKind, jobRequest, jobsByBranch,
-  recommendationOf, requirementIds, settleUnfinished, summaryBullets, traceChanges, traceJob, unfinishedWords, verdictOf,
+  type ChangeDetail, type ChangeFacts, type ChangeSummary, type TraceRule, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, editAcceptance, editFacts, editOf,
+  editRecommendation, editSummary, editVerdict, editsByBranch, fileKind, jobRequest, jobsByBranch, recommendationOf, requirementIds, settleUnfinished, summaryBullets, traceChanges,
+  traceJob, unfinishedWords, verdictOf,
 } from './changes.js'
+import { type AppEdit, EDIT_WORDS } from '../core/app-edits.js'
+import { editStore } from './edits.js'
+import { applyEditsSoon } from './apply-edits.js'
 import { GitHubError, type GitHubApi, type MergeMethod, type PullDetail, type PullStatus, type PullSummary } from './github.js'
 import { SETTINGS_TTL_MS, cached } from './github-cache.js'
 
@@ -95,7 +99,7 @@ const RepoPath = z.string().min(1).max(500).refine((p) => !p.startsWith('/') && 
 /** The repository's GitHub calls the changes need, or a plain refusal when this installation's client has none. */
 function changesApi(gh: GitHubApi): Required<Pick<GitHubApi, 'pullStatus' | 'pullDetail' | 'pullFiles' | 'pullCommits' | 'checkRuns' | 'mergeMethods' | 'mergePull' | 'comment' | 'closePull' | 'removeLabel'>> & GitHubApi {
   const need = ['pullStatus', 'pullDetail', 'pullFiles', 'pullCommits', 'checkRuns', 'mergeMethods', 'mergePull', 'comment', 'closePull', 'removeLabel'] as const
-  if (need.some((k) => typeof gh[k] !== 'function')) throw new ActionError('This installation cannot review changes in the app. Use the "View on GitHub" link.')
+  if (need.some((k) => typeof gh[k] !== 'function')) throw new ActionError('This installation cannot review changes in the app yet: its update brings it.')
   return gh as ReturnType<typeof changesApi>
 }
 
@@ -156,13 +160,23 @@ const spend = (ctx: Context): void => { ctx.deps.githubBudget?.take(ctx.principa
 /** Forget what is kept for the repository: after accepting, asking or discarding, its next look is fresh. */
 const bust = (ctx: Context, repo: string): void => { ctx.deps.githubCache?.bust(repo) }
 
-/** The open pull requests that are trace's changes, each with its job, oldest first, and the project's rule. */
-export async function tracePulls(ctx: Context, repo: string): Promise<{ changes: { pull: PullSummary; job: JobRow }[]; rule: ProjectRule }> {
+/** The project's recorded app edits (docs/stay-in-trace.md); none when the store cannot be read (nothing is lost:
+ * an edit not listed is neither applied nor accepted). */
+export const projectEdits = async (ctx: Context, repo: string): Promise<AppEdit[]> =>
+  cached(ctx.deps.githubCache, repo, 'edits', () => editStore(ctx).list(repo)).catch(() => [])
+
+/**
+ * The open pull requests that are trace's changes, each with its job, oldest first; the open pull requests that are
+ * people's app edits, each with its record; and the project's rule.
+ */
+export async function tracePulls(ctx: Context, repo: string): Promise<{ changes: { pull: PullSummary; job: JobRow }[]; edits: { pull: PullSummary; edit: AppEdit }[]; rule: ProjectRule }> {
   const [pulls, rows] = await Promise.all([openPulls(ctx, repo), jobRows(ctx, repo)])
   // no open pull request: nothing to tell apart, so the settings are not read for it
-  if (!pulls.length) return { changes: [], rule: { repo, defaultBranch: '', prefix: 'claude/', agentLogin: null, hold: 'no-automerge' } }
-  const rule = await projectRule(ctx, repo)
-  return { changes: traceChanges(pulls, rows, rule), rule }
+  if (!pulls.length) return { changes: [], edits: [], rule: { repo, defaultBranch: '', prefix: 'claude/', agentLogin: null, hold: 'no-automerge' } }
+  const [rule, recorded] = await Promise.all([projectRule(ctx, repo), projectEdits(ctx, repo)])
+  const byBranch = editsByBranch(recorded)
+  const edits = pulls.flatMap((pull) => { const edit = editOf(pull, byBranch, repo); return edit ? [{ pull, edit }] : [] })
+  return { changes: traceChanges(pulls, rows, rule), edits, rule }
 }
 
 /** Whether this person may change the project: an admin, or the Contributor part on it. */
@@ -170,13 +184,19 @@ async function writes(ctx: Context, repo: string): Promise<boolean> {
   return isAdmin(ctx.principal) || (await standing(ctx.principal, repo))?.part === 'contributor'
 }
 
-/** The change `number` with the job that made it, or "no such change" (a person's own pull request, a fork's, or one
- * another login opened, is not one: src/api/changes.ts traceJob). */
-async function traceChange(ctx: Context, gh: ReturnType<typeof changesApi>, repo: string, number: number): Promise<{ pull: PullDetail; job: JobRow; rule: ProjectRule }> {
+/**
+ * The change `number`: with the job that made it (a specialist's change), or with the record of the person's app edit
+ * it is; else "no such change" (a person's own pull request, a fork's, one another login opened, or an edit branch
+ * someone pushed to: src/api/changes.ts traceJob and editOf).
+ */
+async function traceChange(ctx: Context, gh: ReturnType<typeof changesApi>, repo: string, number: number): Promise<{ pull: PullDetail; job: JobRow | null; edit: AppEdit | null; rule: ProjectRule }> {
   const [pull, rows, rule] = await Promise.all([gh.pullDetail(repo, number), jobRows(ctx, repo), projectRule(ctx, repo)])
   const job = pull ? traceJob({ head: pull.head.ref, headRepo: pull.head.repo, author: pull.author }, jobsByBranch(rows, rule), rule) : null
-  if (!pull || !job) throw new ActionError(`${repo} has no change #${number} from trace.`)
-  return { pull, job, rule }
+  // an edit is read from its store each time (never a kept copy): accepting decides on it
+  const recorded = pull && !job ? await editStore(ctx).get(repo, pull.head.ref).catch(() => null) : null
+  const edit = pull && recorded ? editOf({ head: pull.head.ref, headRepo: pull.head.repo, sha: pull.head.sha }, new Map([[recorded.branch, recorded]]), repo) : null
+  if (!pull || (!job && !edit)) throw new ActionError(`${repo} has no change #${number} from trace.`)
+  return { pull, job, edit, rule }
 }
 
 const factsOf = (p: Pick<PullDetail, 'state' | 'draft' | 'mergeable'>, checks: PullStatus['checks'], denied = false): ChangeFacts => ({ state: p.state, draft: p.draft, mergeable: p.mergeable, checks, ...(denied ? { checks_denied: true } : {}) })
@@ -187,16 +207,22 @@ const factsOf = (p: Pick<PullDetail, 'state' | 'draft' | 'mergeable'>, checks: P
  */
 export async function openChanges(ctx: Context, repo: string, o: { max?: number } = {}): Promise<{ change: ChangeSummary; criteria: string[] }[]> {
   const gh = await ctx.deps.github()
-  const { changes: mine, rule } = await tracePulls(ctx, repo)
+  const { changes: mine, edits, rule } = await tracePulls(ctx, repo)
   const max = o.max ?? MAX_STATUS
-  const [status, given] = await Promise.all([
+  const [status, editStatus, given] = await Promise.all([
     Promise.all(mine.map(({ pull }, i) => (i < max ? pullStatus(ctx, gh, repo, pull.number, pull.sha).catch(() => null) : Promise.resolve(null)))),
+    Promise.all(edits.map(({ pull }, i) => (i < max ? pullStatus(ctx, gh, repo, pull.number, pull.sha).catch(() => null) : Promise.resolve(null)))),
     mine.length ? projectApprovals(ctx, repo) : Promise.resolve(new Set<string>()),
   ])
-  return mine.map(({ pull, job }, i) => ({
+  const works = mine.map(({ pull, job }, i) => ({
     change: changeSummary({ repo, pull, job, status: status[i] ?? null, hold: rule.hold, agentWords: AGENT_WORDS, given }),
     criteria: criteriaNamed(jobRequest(job), job.title),
   }))
+  const own = edits.map(({ pull, edit }, i) => ({
+    change: editSummary({ pull, edit, status: editStatus[i] ?? null, hold: rule.hold, viewerSub: ctx.principal.sub }),
+    criteria: [] as string[],
+  }))
+  return [...works, ...own].sort((a, b) => a.change.opened_at.localeCompare(b.change.opened_at) || a.change.number - b.change.number)
 }
 
 /** The open changes as changes.list answers them. */
@@ -208,7 +234,10 @@ export const listChanges = async (ctx: Context, repo: string, o: { max?: number 
  */
 async function changeDetail(ctx: Context, repo: string, number: number, o: { fresh?: boolean } = {}): Promise<ChangeDetail> {
   const gh = changesApi(await ctx.deps.github())
-  const { pull, job, rule } = await traceChange(ctx, gh, repo, number)
+  const found = await traceChange(ctx, gh, repo, number)
+  if (found.edit) return editDetail(ctx, gh, repo, number, found.pull, found.edit, found.rule, o)
+  const { pull, rule } = found
+  const job = found.job as JobRow
   const sha = pull.head.sha
   const keep = o.fresh ? undefined : ctx.deps.githubCache
   // everything else is read in parallel; a part GitHub will not give (a token that cannot read checks) is left out
@@ -240,6 +269,42 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     recommendation: recommendationOf(facts, { passed, requirements, from: sum.from }),
     ...acceptance(facts, write),
     base: pull.base, head: { ref: pull.head.ref, sha: pull.head.sha },
+    rule_blocks: ruleBlocks(facts), may_discard: write, may_ask: write,
+  }
+}
+
+/**
+ * Its checks are done and none failed, yet GitHub says its rules stop it: a required review trace cannot give (the
+ * change page offers admins "Fix the rule and accept": repo.rules.fix).
+ */
+export const ruleBlocks = (f: ChangeFacts): boolean =>
+  f.state === 'open' && !f.draft && f.mergeable === 'blocked' && f.checks !== null && f.checks.total > 0 && f.checks.failed === 0 && f.checks.running === 0
+
+/** One app edit in full, for this person (docs/stay-in-trace.md "Where they show"). */
+async function editDetail(ctx: Context, gh: ReturnType<typeof changesApi>, repo: string, number: number, pull: PullDetail, edit: AppEdit, rule: ProjectRule, o: { fresh?: boolean }): Promise<ChangeDetail> {
+  const sha = pull.head.sha
+  const keep = o.fresh ? undefined : ctx.deps.githubCache
+  const [status, files, commits, runs] = await Promise.all([
+    cached(keep, repo, `status:${number}:${sha}`, () => gh.pullStatus(repo, number), DETAIL_STATUS_TTL_MS),
+    cached(ctx.deps.githubCache, repo, `files:${number}:${sha}`, () => gh.pullFiles(repo, number)).catch(() => []),
+    cached(ctx.deps.githubCache, repo, `commits:${number}:${sha}`, () => gh.pullCommits(repo, number)).catch(() => []),
+    cached(keep, repo, `runs:${sha}`, () => gh.checkRuns(repo, sha), DETAIL_STATUS_TTL_MS).catch(() => null),
+  ])
+  const sum = editSummary({ pull: { ...pull, labels: pull.labels }, edit, status, hold: rule.hold, viewerSub: ctx.principal.sub })
+  const facts = factsOf(pull, status?.checks ?? null, status?.checks_denied ?? false)
+  const mine = edit.by_sub === ctx.principal.sub
+  const admin = isAdmin(ctx.principal)
+  const checksList = (runs ?? []).map((c) => ({ name: c.name, state: checkState(c), summary: c.summary }))
+  return {
+    ...sum,
+    verdict: editVerdict(facts, edit),
+    summary: [`${edit.title}.`, `Made in trace by ${mine ? 'you' : edit.by_name} as ${EDIT_WORDS[edit.kind]}.`, ...commits.slice(0, 3).map((m) => m.split('\n')[0] ?? '').filter((m) => m && !m.startsWith(edit.title))],
+    files: files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, kind: fileKind(f.path, f.patch) })),
+    checks_list: checksList, requirements: [],
+    recommendation: editRecommendation(facts, edit, mine),
+    ...editAcceptance(facts, edit, { admin, mine }),
+    base: pull.base, head: { ref: pull.head.ref, sha: pull.head.sha },
+    rule_blocks: ruleBlocks(editFacts(facts, edit.kind)), may_discard: mine || admin, may_ask: false,
   }
 }
 
@@ -253,7 +318,7 @@ export function mergeRefusal(e: unknown): ActionError | null {
   if (!(e instanceof GitHubError)) return null
   const said = e.said ?? ''
   if (/review/i.test(said)) {
-    return new ActionError('GitHub refused: this repository requires an approving review before a pull request can merge, and trace cannot approve its own. trace\'s guided flow expects the repository\'s rules to require passing checks only: an admin of the repository can change the rule on GitHub (Settings, Branches or Rules, for the default branch), and then accept again.')
+    return new ActionError('GitHub refused: this repository requires an approving review before a change goes in, and trace cannot approve its own. An admin can fix the rule from this change\'s page ("Fix the rule and accept"), and nothing else changes.')
   }
   if (e.status === 409) return new ActionError('The change moved on since you looked at it (trace pushed to it again). Look at it again, then accept.')
   if (e.status === 405) return new ActionError(`GitHub would not merge it: ${said || 'its rules do not allow it yet'}. Look at it again in a minute.`)
@@ -323,7 +388,13 @@ const logLine = (ctx: Context, l: Record<string, unknown>): void => {
 }
 
 export const CHANGE_ACTIONS = {
-  'changes.list': def('read', Repo, async ({ repo }, ctx) => { spend(ctx); return { repo, changes: await listChanges(ctx, repo) } }),
+  'changes.list': def('read', Repo, async ({ repo }, ctx) => {
+    spend(ctx)
+    // the fallback for an installation whose hooks are not set up: apply people's edits that are ready (at most every
+    // 30 s per repository; it never waits on it, src/api/apply-edits.ts)
+    applyEditsSoon(ctx, repo)
+    return { repo, changes: await listChanges(ctx, repo) }
+  }),
 
   'change.get': def('read', ChangeArgs, async ({ repo, number }, ctx) => { spend(ctx); return changeDetail(ctx, repo, number) }),
 
@@ -351,6 +422,8 @@ export const CHANGE_ACTIONS = {
     const d = await changeDetail(ctx, repo, number, { fresh: true })
     if (d.head.sha !== looked) throw new ActionError('It changed since you looked at it. Look again before accepting.')
     if (!d.may_accept) throw new ActionError(`It cannot be accepted now. ${d.blockers.join(' ')}`)
+    // an edit made in the app: an admin who did not make it accepts it (decision A); writes once it is merged
+    if (d.kind !== 'work' && !isAdmin(ctx.principal)) throw new ActionError('Only an admin can accept a change someone made in the app.')
     const gh = changesApi(await ctx.deps.github())
     const method = mergeMethod(await gh.mergeMethods(repo).catch(() => ['squash' as const]))
     let sha: string
@@ -366,13 +439,15 @@ export const CHANGE_ACTIONS = {
     if (d.held) await gh.removeLabel(repo, number, await holdLabel(ctx, repo)).catch(() => false)
     if (note) await gh.comment(repo, number, `Accepted by ${await publicName(ctx)}:\n\n${quote(note)}`).catch(() => undefined)
     const by = label(ctx.principal)
+    // an edit's record is done once it is merged: it is never applied or listed again
+    if (d.kind !== 'work') await editStore(ctx).remove(repo, d.head.ref).catch(() => undefined)
     // it is merged: whatever happens to the record now, the answer says so (a person told "it failed" would try again)
     let warning: string | undefined
     try {
       await record(ctx, repo, {
         kind: 'change.accepted', ref: String(number),
         summary: `${by} accepted "${d.title}" from ${d.from} into the design.${d.requirements.length ? ` It covers ${d.requirements.join(', ')}.` : ''}${note ? ` Note: ${note}` : ''}`,
-        detail: { number, sha, method, head: d.head.sha, checks: d.checks, requirements: d.requirements },
+        detail: { number, sha, method, head: d.head.sha, checks: d.checks, requirements: d.requirements, kind: d.kind },
       })
     } catch (e) {
       logLine(ctx, { warning: 'change.accept: merged, but the decision was not recorded', repo, number, error: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) })
@@ -381,7 +456,7 @@ export const CHANGE_ACTIONS = {
     const stage = d.stage
     return {
       merged: true as const, sha, stage,
-      next: `Its work counts in the design now.${stage ? ` trace checks ${STAGE_NAMES[stage]}'s criteria again with it.` : ' trace checks the stage\'s criteria again with it.'}`,
+      next: d.kind !== 'work' ? 'It is applied.' : `Its work counts in the design now.${stage ? ` trace checks ${STAGE_NAMES[stage]}'s criteria again with it.` : ' trace checks the stage\'s criteria again with it.'}`,
       ...(warning ? { warning } : {}),
     }
   }),
@@ -389,7 +464,11 @@ export const CHANGE_ACTIONS = {
   'change.ask': def('write', ChangeArgs.extend({ note: z.string().trim().min(1).max(4000) }), async ({ repo, number, note }, ctx) => {
     spend(ctx)
     const gh = changesApi(await ctx.deps.github())
-    const { pull, job } = await traceChange(ctx, gh, repo, number)
+    const found = await traceChange(ctx, gh, repo, number)
+    const { pull } = found
+    // an edit has no specialist to ask: the person who made it makes it again
+    if (!found.job) throw new ActionError(`${found.edit ? `${found.edit.by_name} made this change in trace. Ask them to make it again, or discard it.` : `${repo} has no change #${number} from trace.`}`)
+    const job = found.job
     if (pull.state !== 'open') throw new ActionError(pull.state === 'merged' ? 'It is already accepted into the design: ask for a new task instead.' : 'It was discarded: ask for a new task instead.')
     // the rule the task action holds a branch to: a revision job pushes to it, so never main or a person's branch
     if (!TaskBranch.safeParse(pull.head.ref).success) throw new ActionError(`${repo} has no change #${number} from trace.`)
@@ -417,8 +496,10 @@ export const CHANGE_ACTIONS = {
   'change.discard': def('write', ChangeArgs.extend({ reason: z.string().trim().min(1).max(2000) }), async ({ repo, number, reason }, ctx) => {
     spend(ctx)
     const gh = changesApi(await ctx.deps.github())
-    const { pull } = await traceChange(ctx, gh, repo, number)
+    const { pull, edit } = await traceChange(ctx, gh, repo, number)
     if (pull.state !== 'open') throw new ActionError(pull.state === 'merged' ? 'It is already accepted into the design, so it cannot be discarded.' : 'It is discarded already.')
+    // an edit made in the app: its author or an admin discards it
+    if (edit && edit.by_sub !== ctx.principal.sub && !isAdmin(ctx.principal)) throw new ActionError(`${edit.by_name} made this change: they or an admin can discard it.`)
     const by = label(ctx.principal)
     // closed first, then the reason: a comment that cannot be posted must not leave it open after the person was told
     // it is discarded, nor post a reason on a change that stays open
@@ -430,6 +511,7 @@ export const CHANGE_ACTIONS = {
     await gh.comment(repo, number, `Discarded by ${await publicName(ctx)}:\n\n${quote(reason)}`).catch((e: unknown) => {
       logLine(ctx, { warning: 'change.discard: closed, but the reason was not posted', repo, number, error: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) })
     })
+    if (edit) await editStore(ctx).remove(repo, edit.branch).catch(() => undefined)
     await record(ctx, repo, {
       kind: 'change.discarded', ref: String(number),
       summary: `${by} discarded "${pull.title}": ${reason.replace(/\s+/g, ' ').slice(0, 300)}`, detail: { number, branch: pull.head.ref },

@@ -98,6 +98,9 @@
  *   actions-cost.ts      cost.get, usage.month
  *   actions-skills.ts    skill.get, skill.draft, skill.drafts, skill.submit
  *   actions-design.ts    design.decide
+ *   actions-changes.ts   changes.list, change.get, change.diff, change.accept, change.ask, change.discard (people's app
+ *                        edits too: src/api/edits.ts, apply-edits.ts, docs/stay-in-trace.md)
+ *   actions-rules.ts     repo.rules.fix
  *   actions-me.ts        also policy.get, policy.set
  *   actions-prompts.ts   prompts.chat (the chat agent's editable instructions as the installation has them)
  *   actions-voice.ts     voice.vocabulary, voice.vocabulary.sync (dictation's project words)
@@ -159,6 +162,7 @@ import type { CognitoUser } from './aws.js'
 import { SERVICE_ADMIN_ACTIONS } from './actions-services.js'
 import { CHANGE_ACTIONS } from './actions-changes.js'
 import { HOOK_ACTIONS } from './actions-hooks.js'
+import { RULE_ACTIONS } from './actions-rules.js'
 import { SERVICE_ACTIONS, checkService, taskCap, toolOpenToSystems } from './service-policy.js'
 
 export {
@@ -707,6 +711,7 @@ export const ACTIONS = {
   ...SERVICE_ADMIN_ACTIONS,
   ...CHANGE_ACTIONS,
   ...HOOK_ACTIONS,
+  ...RULE_ACTIONS,
 } satisfies Record<string, Action<z.ZodType>>
 
 export type ActionName = keyof typeof ACTIONS

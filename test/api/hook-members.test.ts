@@ -74,14 +74,18 @@ describe('hook.members', () => {
 
   it('refuses every person, admins too, and every connected system: it is the backend\'s alone', async () => {
     const service: Principal = { sub: 'svc', email: null, groups: ['trace-users'], kind: 'service', name: 'ci', scopes: ['read', 'write'] }
-    for (const p of [ADMIN, USER, REVIEWER, service]) await expect(run(p, 'hook.members', { repo: 'acme/board' })).rejects.toBeInstanceOf(AccessDenied)
+    for (const p of [ADMIN, USER, REVIEWER, service]) {
+      await expect(run(p, 'hook.members', { repo: 'acme/board' })).rejects.toBeInstanceOf(AccessDenied)
+      await expect(run(p, 'hook.apply', { repo: 'acme/board' })).rejects.toBeInstanceOf(AccessDenied)
+    }
   })
 
   it('the backend\'s identity reaches nothing else: no class, no project, every other action refused', async () => {
     expect(classOf(BACKEND)).toBeNull()
     expect(isAdmin(BACKEND)).toBe(false)
     expect(who(BACKEND)).toBe('backend:web-hooks')
-    for (const a of ACTION_NAMES.filter((x) => x !== 'hook.members')) {
+    // hook.apply is the backend's too (docs/stay-in-trace.md "Applying"): it applies people's edits, nothing else
+    for (const a of ACTION_NAMES.filter((x) => x !== 'hook.members' && x !== 'hook.apply')) {
       await expect(run(BACKEND, a, { repo: 'acme/board' }), a).rejects.toBeInstanceOf(AccessDenied)
     }
   })

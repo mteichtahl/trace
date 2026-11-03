@@ -4,9 +4,10 @@
  * refreshed, KiCad files handed in). Each is recorded here so the app can show it as a change and trace can apply it
  * without anyone going to GitHub.
  *
- *   where     the central bucket, projects/<slug>/edits/<branch with / as ~>.json: one plain JSON object per branch.
- *             `edits` is one of PEOPLE_RECORDS (src/infra/project.ts): the agents' and workflows' roles read it and
- *             never write it, so an agent cannot make its own branch look like a person's edit
+ *   where     the central bucket, projects/<slug>/journey/edits/<branch with / as ~>.json: one plain JSON object per
+ *             branch. Under the journey's folder, one of PEOPLE_RECORDS (src/infra/project.ts): the API writes it with
+ *             conditional puts, and the agents' and workflows' roles read it and are denied writing it, so an agent
+ *             cannot make its own branch look like a person's edit
  *   which     a pull request is an edit only while its head commit is the recorded `commit` (editOf in
  *             src/api/changes.ts): anyone who can push may push to a trace/… branch, and a pushed commit makes it no
  *             longer the edit trace made
@@ -20,8 +21,8 @@ import { projectSlug } from './project.js'
 export const EDIT_KINDS = ['setting', 'prompt', 'release', 'join', 'workflows', 'handin'] as const
 export type EditKind = (typeof EDIT_KINDS)[number]
 
-/** The folder under a project's own prefix (projects/<slug>/edits): one of PEOPLE_RECORDS. */
-export const EDITS = 'edits'
+/** The folder under a project's own prefix (projects/<slug>/journey/edits): inside the journey's, one of PEOPLE_RECORDS. */
+export const EDITS = 'journey/edits'
 
 export const RedoSpec = z.discriminatedUnion('op', [
   z.object({ op: z.literal('setting'), key: z.string(), value: z.unknown().optional(), unset: z.boolean().optional() }),

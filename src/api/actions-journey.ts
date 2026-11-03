@@ -56,10 +56,10 @@ import {
   type AgentFacts, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
   dismissStuck, journeyView, loadJourney, recordOpen, returnGate, signGate, sortInbox, withChanges,
 } from '../core/journey.js'
-import { openChanges, openPulls, projectRule } from './actions-changes.js'
+import { openChanges, openPulls, projectEdits, projectRule } from './actions-changes.js'
 import { recommendationOf } from './changes.js'
 import { AGENT_WORDS, jobIndex, listJobs, projectHandoffs } from './actions-jobs.js'
-import { reviewItems } from './inbox-review.js'
+import { editReviewItems, reviewItems } from './inbox-review.js'
 import { loadJobs } from '../core/job-index.js'
 import { ActionError, type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, journeyStore, label, plainly, snapshotJourney, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { requirementEvidence } from './record-read.js'
@@ -107,7 +107,11 @@ async function openReviews(ctx: Context, repo: string, project: string, stage: S
   const [pulls, jobs] = await Promise.all([openPulls(ctx, repo), jobIndex(ctx, repo).read((db) => loadJobs(db)).then((x) => x.result)])
   // no open pull request: nothing to tell apart, and the project's settings are not read for it
   if (!pulls.length) return []
-  return reviewItems({ repo, project, stage, pulls, jobs, rule: await projectRule(ctx, repo), agentWords: AGENT_WORDS })
+  const [rule, edits] = await Promise.all([projectRule(ctx, repo), projectEdits(ctx, repo)])
+  return [
+    ...reviewItems({ repo, project, stage, pulls, jobs, rule, agentWords: AGENT_WORDS }),
+    ...editReviewItems({ repo, project, stage, pulls, edits, viewer: { admin: isAdmin(ctx.principal), sub: ctx.principal.sub } }),
+  ]
 }
 
 const INBOX_PARALLEL = 4

@@ -29,7 +29,7 @@ The guided flow moved a specialist's change into the app. Six things still sent 
   not its author, to accept it in the app. An agent's change to a protected path stays held, as before: the hold is
   there for agents.
 - **B. A deploy is approved in trace, and the deploy workflow checks that approval.** The approval is a record only
-  the API can write (`projects/<slug>/deploys/`, denied to the agents' and the workflows' roles like the journey), naming
+  the API can write (`projects/<slug>/journey/deploys/`, inside the journey's folder: denied to the agents' and the workflows' roles), naming
   the person, the exact commit and an expiry. trace starts the deploy workflow with the record's key; the workflow reads
   the record with its own AWS role before deploying. An agent can never approve: it cannot write the record, and a key
   that names no record deploys nothing.
@@ -41,8 +41,9 @@ The guided flow moved a specialist's change into the app. Six things still sent 
 ### The record
 
 Every edit the API commits on a branch of its own is recorded in the central bucket, at
-`projects/<slug>/edits/<branch with / as ~>.json`. `edits` joins `PEOPLE_RECORDS` (src/infra/project.ts), so the
-agents' and workflows' roles read it and never write it; the API role writes it (src/infra/api-grants.ts).
+`projects/<slug>/journey/edits/<branch with / as ~>.json`: inside the journey's folder, which the API already writes
+with conditional puts and the agents' and workflows' roles may only read (`PEOPLE_RECORDS`, src/infra/project.ts). No
+IAM changes: a new prefix would push the roles' inline policies over their size.
 
 ```ts
 type EditKind = 'setting' | 'prompt' | 'release' | 'join' | 'workflows' | 'handin'
@@ -162,7 +163,7 @@ The request and results are read from GitHub (the deploy issues the workflow ope
 passing commit (the same rules as `approve` in the harness). Writes the approval:
 
 ```ts
-// projects/<slug>/deploys/<sha>-<base36 time>.json, conditional put (If-None-Match)
+// projects/<slug>/journey/deploys/<sha>-<base36 time>.json, conditional put (If-None-Match)
 interface DeployApproval { repo: string; sha: string; action: 'deploy' | 'rollback'; by: string; by_sub: string
   by_name: string; at: string; expires: string /* at + 2 h */; issue: number | null }
 ```
@@ -176,12 +177,13 @@ records decision `deploy.approved` (or `deploy.rollback`), then starts `trace-de
 `workflow_dispatch` gains inputs `approval` and `sha` (both optional: a dispatch without them is today's "Run
 workflow"). The `approve` job, when `inputs.approval` is set: takes AWS credentials with `TRACE_AWS_ROLE` (OIDC,
 `id-token: write`), and the harness task `deploy-approve` reads the record (`TRACE_HOME`'s bucket,
-`projects/<slug>/deploys/<key>`) instead of judging a GitHub login. It deploys only when: the record exists, its `repo`
+`projects/<slug>/journey/deploys/<key>`) instead of judging a GitHub login. It deploys only when: the record exists, its `repo`
 is this repository, its `sha` equals `inputs.sha`, it has not expired, and the build/branch/newest checks of today pass.
 `by` is the record's `by_name`. Reports name the person (`Deployed a41c9e2 to bench, approved in trace by Alex L.`).
 The GitHub-login path (`/approve` comments) still works for people who use it.
 
-`deploys` joins `PEOPLE_RECORDS`; the API role may `PutObject` there with `If-None-Match` only.
+The record lives under the journey's folder: the API role already writes there with conditional puts only, and the
+agents' and workflows' roles are denied writing it. No IAM change.
 
 ## 3. A broken build, stuck work, asking for a fix (`src/api/actions-health.ts`)
 

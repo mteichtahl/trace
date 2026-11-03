@@ -49,6 +49,9 @@ import { FLAT_UPDATE_MAX, type PendingRecord, PendingRecordSchema } from '../ins
 import type { GitHubApi, RunSummary } from './github.js'
 import { cached } from './github-cache.js'
 import { ActionError, type Context, Repo, def, hashOf, label, storeAt, writeJourney } from './action-kit.js'
+import { appliesOf } from '../core/app-edits.js'
+import type { ApiOnboardResult } from '../installer/onboard-api.js'
+import { editStore, editorName } from './edits.js'
 
 export interface Member { sub: string; email: string | null; class: PersonClass | null; part: Part; admin: boolean; can_sign: boolean }
 
@@ -321,7 +324,10 @@ export const PROJECT_ACTIONS = {
         refreshed: `The repository was already under trace; opened a pull request refreshing its workflows${r.pr ? ` (${r.pr})` : ''}.`,
         unchanged: 'The repository was already under trace, with current workflows.',
       }[r.state]
-      step('repository', a.new ? 'Create the repository' : 'Connect the repository', 'done', [what, ...r.settings.map((x) => `${x[0]?.toUpperCase()}${x.slice(1)}.`)].join(' '))
+      // the joining (or workflow refresh) pull request is an edit the admin made in the app: recorded so the app shows
+      // it as a change and trace applies it (docs/stay-in-trace.md "Writers"); nobody goes to GitHub to merge it
+      const joining = await recordJoin(ctx, repo, r).catch(() => null)
+      step('repository', a.new ? 'Create the repository' : 'Connect the repository', 'done', [joining ? what.replace(/ It is held for a person to merge\./, '').replace(/ \(https:[^)]*\)/, '') : what, ...(joining ? [joining] : []), ...r.settings.map((x) => `${x[0]?.toUpperCase()}${x.slice(1)}.`)].join(' '))
     } catch (e) {
       step('repository', a.new ? 'Create the repository' : 'Connect the repository', 'failed', message(e))
       for (const [id, title] of [['registry', 'Add it to trace\'s list of projects'], ['people', 'Add people'], ['journey', 'Start the journey'], ['cloud', 'Set up the project\'s agent and knowledge base']] as const) {
@@ -422,4 +428,26 @@ export const PROJECT_ACTIONS = {
       return { result: { repo, view: journeyView(rec, { hash: hashOf(ctx.principal), label: label(ctx.principal), admin: true, part: 'contributor' }) } }
     })
   }),
+}
+
+
+/**
+ * Record the onboarding's pull request as an app edit (src/api/edits.ts): `join` for the pull request that puts an
+ * existing repository under trace, `workflows` for one refreshing its workflows. Answers the words for the step, or null
+ * when there is no pull request (a new repository, or nothing to change).
+ */
+async function recordJoin(ctx: Context, repo: string, r: ApiOnboardResult): Promise<string | null> {
+  if (!r.pr || !['opened', 'updated', 'refreshed'].includes(r.state)) return null
+  const number = Number(/\/pull\/(\d+)/.exec(r.pr)?.[1] ?? 0)
+  const gh = await ctx.deps.github()
+  if (!number || !gh.pullDetail) return null
+  const pull = await gh.pullDetail(repo, number)
+  if (!pull || pull.state !== 'open') return null
+  const kind = r.state === 'refreshed' ? 'workflows' as const : 'join' as const
+  const title = kind === 'join' ? 'Put this repository under trace' : 'Refresh trace\'s workflows'
+  await editStore(ctx).put({
+    repo, branch: pull.head.ref, kind, title, by: label(ctx.principal), by_sub: ctx.principal.sub, by_name: await editorName(ctx),
+    applies: appliesOf(kind, isAdmin(ctx.principal)), commit: pull.head.sha, number, at: new Date().toISOString(), redo: null,
+  })
+  return kind === 'join' ? `Its change "${title}" is on the project's Changes: trace applies it once it can.` : `Its change "${title}" is on the project's Changes: trace applies it once its checks pass.`
 }

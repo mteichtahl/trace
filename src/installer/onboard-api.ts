@@ -97,6 +97,24 @@ async function ensureLabel(gh: Github, repo: string, name: string, color: string
 }
 
 /** The repository settings the loop needs (src/core/onboard.ts applySettings, over REST). Returns what was done. */
+/**
+ * The "trace" ruleset on the default branch: changes by pull request only, none deleting or rewriting it, and only when
+ * the required check passes. No approving review is required, code owners' included: trace records who accepted a
+ * change in the app (docs/guided-flow.md), and GitHub refuses an approval from the account that opened it. Shared
+ * with repo.rules.fix (src/api/actions-rules.ts), which puts it back.
+ */
+export function traceRuleset(requiredCheck: string): Record<string, unknown> {
+  return {
+    name: 'trace', target: 'branch', enforcement: 'active',
+    conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } },
+    rules: [
+      { type: 'deletion' }, { type: 'non_fast_forward' },
+      { type: 'pull_request', parameters: { required_approving_review_count: 0, dismiss_stale_reviews_on_push: false, require_code_owner_review: false, require_last_push_approval: false, required_review_thread_resolution: false } },
+      { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: false, required_status_checks: [{ context: requiredCheck }] } },
+    ],
+  }
+}
+
 export async function applySettingsApi(gh: Github, repo: string, cfg: ResolvedConfig, ruleset = true): Promise<string[]> {
   const done: string[] = []
   await gh.request('PATCH', `/repos/${repo}`, z.unknown(), { allow_auto_merge: true, delete_branch_on_merge: true, allow_update_branch: true })
@@ -108,15 +126,7 @@ export async function applySettingsApi(gh: Github, repo: string, cfg: ResolvedCo
   if (ruleset) {
     const { data: existing } = await gh.request('GET', `/repos/${repo}/rulesets`, z.array(z.object({ name: z.string() }).loose()))
     if (!existing.some((r) => r.name === 'trace')) {
-      await gh.request('POST', `/repos/${repo}/rulesets`, z.unknown(), {
-        name: 'trace', target: 'branch', enforcement: 'active',
-        conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } },
-        rules: [
-          { type: 'deletion' }, { type: 'non_fast_forward' },
-          { type: 'pull_request', parameters: { required_approving_review_count: 0, dismiss_stale_reviews_on_push: false, require_code_owner_review: Boolean(cfg.worker.escalate_to.trim()), require_last_push_approval: false, required_review_thread_resolution: false } },
-          { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: false, required_status_checks: [{ context: cfg.build.required_check }] } },
-        ],
-      })
+      await gh.request('POST', `/repos/${repo}/rulesets`, z.unknown(), traceRuleset(cfg.build.required_check))
       done.push(`added the "trace" ruleset: ${cfg.branch} takes changes by PR only, and only when "${cfg.build.required_check}" passes`)
     }
   }
