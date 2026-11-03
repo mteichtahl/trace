@@ -114,7 +114,7 @@ function Installation() {
     lines.push({
       id: `p-${repo}`, what: `${projectName(repo)}: repository and build runner`, status: failed ? 'failing' : 'verified', word: failed ? 'Last deploy failed' : 'Connected',
       detail: `Default branch ${d.default_branch}; ${d.pulls.length} open change${d.pulls.length === 1 ? '' : 's'}.`,
-      todo: failed ? 'Open the failed deploy in GitHub Actions.' : undefined,
+      todo: failed ? 'Open the project\'s Build tab: its Deploys panel shows what failed and can roll back.' : undefined,
     })
   })
 
