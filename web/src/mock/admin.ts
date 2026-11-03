@@ -5,7 +5,7 @@
 import type { MeDoc } from '@/lib/types'
 import type { PromptHistoryEntry, PromptView } from '@/lib/admin-types'
 import { checkTemplate } from '@/lib/prompts'
-import { INSTALLATION_OVERRIDES, INTEGRATIONS, OPS_RUNS, PASSKEYS, PROJECT_OVERRIDES, PROMPT_DEFS, PROMPT_HISTORY, USERS, type MockOverride, opsFixture } from './fixtures-admin'
+import { INSTALLATION_OVERRIDES, INTEGRATIONS, OPS_RUNS, PASSKEYS, PROJECT_OVERRIDES, PROMPT_DEFS, PROMPT_HISTORY, USERS, type MockOverride, journeyTimeFixture, opsFixture } from './fixtures-admin'
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 const ok = (result: unknown) => json({ ok: true, result })
@@ -202,6 +202,7 @@ function action(name: string, a: Record<string, unknown>, me: MeDoc): Response |
       return ok({ id: a.id, scope: a.scope, history: history[key] ?? [] })
     }
     case 'runs': return ok(OPS_RUNS[String(a.repo)] ?? [])
+    case 'journey.time': return ok(journeyTimeFixture(String(a.repo)))
     case 'status': return ok({ repo: a.repo, default_branch: 'main', pulls: [{}], agent_fix_issues: [], runs: [], last_deploy: { conclusion: 'success' } })
     default: return null
   }

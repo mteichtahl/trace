@@ -18,7 +18,8 @@
  *   dashboard          invocations, latency, errors, jobs, tokens, cost, tool calls, GPU jobs, and the memories'
  *                      operations (one SEARCH across every project's memory); then the same jobs, tool calls, cost and
  *                      GPU jobs per project (trace.project.*, dimension trace.project = project-<hash>: src/core/
- *                      telemetry.ts PROJECT METRICS), one series per project, which Operations attributes to projects
+ *                      telemetry.ts PROJECT METRICS), one series per project, which Operations attributes to projects;
+ *                      and, between them, the Process rows (PROCESS below), which Operations draws as its Process tab
  *
  * Disabled, nothing is created: only the two environment variables that keep the runtimes quiet.
  */
@@ -34,6 +35,7 @@ import * as logs from 'aws-cdk-lib/aws-logs'
 import { Provider } from 'aws-cdk-lib/custom-resources'
 import { Construct } from 'constructs'
 import { memoryDeliveryName } from '../core/project.js'
+import { PROCESS_TITLE } from '../core/telemetry.js'
 import type { InfraProps } from './props.js'
 import { bundlingRoot } from './lockfile.js'
 
@@ -46,6 +48,9 @@ export const SPANS_LOG_GROUP = 'aws/spans'
 
 /** The agents' CloudWatch dashboard (observability.dashboard): the web app's Operations page reads it too. */
 export const agentsDashboardName = (prefix: string): string => `${prefix}-agents`
+
+/** CodeBuild's own metrics (SucceededBuilds, FailedBuilds, Builds by ProjectName): every build runner's builds. */
+export const CODEBUILD_NAMESPACE = 'AWS/CodeBuild'
 
 /** Runtime environment when observability is on. AgentCore sets the rest (OTEL_RESOURCE_ATTRIBUTES, the OTLP headers). */
 export const ENABLED_ENV: Readonly<Record<string, string>> = {
@@ -242,7 +247,7 @@ export class Observability extends Construct {
     if (p.settings.dashboard) {
       this.dashboard = new cloudwatch.CfnDashboard(this, 'Dashboard', {
         dashboardName: this.dashboardName,
-        dashboardBody: JSON.stringify(dashboardBody({ region, runtimes: p.runtimes.map((r) => r.name), memories: (p.memories ?? []).map((m) => m.hash), gpu: p.gpu })),
+        dashboardBody: JSON.stringify(dashboardBody({ region, prefix: p.prefix, runtimes: p.runtimes.map((r) => r.name), memories: (p.memories ?? []).map((m) => m.hash), gpu: p.gpu })),
       })
       new CfnOutput(stack, 'DashboardUrl', {
         value: `https://${region}.console.aws.amazon.com/cloudwatch/home?region=${region}#dashboards/dashboard/${this.dashboardName}`,
@@ -276,11 +281,14 @@ const search = (id: string, namespace: string, metric: string, stat: string, ext
   id, ...(label ? { label } : {}),
 })
 
-function graph(title: string, region: string, x: number, y: number, queries: Record<string, unknown>[], o: { w?: number; stacked?: boolean; yLabel?: string } = {}): Widget {
+function graph(title: string, region: string, x: number, y: number, queries: Record<string, unknown>[], o: { w?: number; stacked?: boolean; yLabel?: string; whole?: boolean } = {}): Widget {
   return {
     type: 'metric', x, y, width: o.w ?? 8, height: 6,
     properties: {
-      title, region, view: 'timeSeries', stacked: o.stacked ?? false, period: 300,
+      title, region, period: 300,
+      // whole: one value per series for the whole time range shown (CloudWatch's own setPeriodToTimeRange), for
+      // medians and counts over the range; Operations reads it the same way (src/web/ops.ts)
+      ...(o.whole ? { view: 'singleValue', setPeriodToTimeRange: true } : { view: 'timeSeries', stacked: o.stacked ?? false }),
       metrics: queries.map((q) => [q]),
       ...(o.yLabel ? { yAxis: { left: { label: o.yLabel, showUnits: false } } } : {}),
     },
@@ -292,7 +300,7 @@ function graph(title: string, region: string, x: number, y: number, queries: Rec
  * the projects' memories. `memories` are the projects' hashes: each memory's name and id (<prefix>_m_<hash>-…) carry
  * it, so one SEARCH term per project finds that memory's series whichever dimension AgentCore files them under.
  */
-export function dashboardBody(o: { region: string; runtimes: readonly string[]; memories?: readonly string[]; gpu: boolean }): { widgets: Widget[] } {
+export function dashboardBody(o: { region: string; prefix?: string; runtimes: readonly string[]; memories?: readonly string[]; gpu: boolean }): { widgets: Widget[] } {
   const { region } = o
   const rt = o.runtimes.map((n) => `"${n}"`).join(' OR ')
   // a SEARCH expression is at most 1024 characters: with many projects, every runtime in the namespace is shown
@@ -338,6 +346,7 @@ export function dashboardBody(o: { region: string; runtimes: readonly string[]; 
     ]))
     y += 6
   }
+  y = processRows(widgets, region, o.prefix ?? 'trace', y)
   // per project: one series per project and outcome (the label carries project-<hash>: src/web/ops.ts attribute). Kept
   // apart from the aggregate widgets above, which stay exactly as they were
   const proj = '"trace.project"'
@@ -351,4 +360,58 @@ export function dashboardBody(o: { region: string; runtimes: readonly string[]; 
   widgets.push(graph('Claude cost per project (estimate, USD)', region, 8, y, [search('pcost', METRIC_NAMESPACE, 'trace.project.claude.cost', 'Sum', proj)], { stacked: true }))
   if (o.gpu) widgets.push(graph('GPU and CPU jobs per project', region, 16, y, [search('pgpu', METRIC_NAMESPACE, 'trace.project.gpu.jobs', 'Sum', proj)], { stacked: true }))
   return { widgets }
+}
+
+/**
+ * PROCESS: how well trace and its people work together (Operations' Process tab, src/web/ops.ts processView). Each
+ * row's title starts with PROCESS_TITLE; Operations finds its numbers by metric name and statistic, not by title.
+ *
+ *   builds       CodeBuild's own SucceededBuilds and FailedBuilds of every build runner of this installation
+ *                (`<prefix>-ci-<hash>`: each project's, which Operations attributes by the hash, and trace's own
+ *                build-only repositories', which belong to no project: admins only)
+ *   jobs         every job by outcome, lost included (trace.jobs, and trace.project.jobs per project)
+ *   waits        trace.project.wait: per period (sum and count), and over the whole range (median, slowest 10 %, count)
+ *   rework       trace.project.rework over the whole range, by cause
+ *   job time     trace's working time: the jobs' run time summed per period, and their median over the range (the
+ *                Median run time tile: a job's own duration, not the runtime's invocation latency, which is the
+ *                milliseconds an asynchronous invocation takes to be accepted)
+ */
+/**
+ * A SEARCH of CodeBuild's per-runner counts: the {ProjectName} dimension set alone, since CodeBuild also files each
+ * count per build (BuildId, BuildNumber), which a plain Namespace= search would add in a second time.
+ */
+const builds = (id: string, metric: 'SucceededBuilds' | 'FailedBuilds', runners: string): Record<string, unknown> => ({
+  expression: `SEARCH('{${CODEBUILD_NAMESPACE},ProjectName} MetricName="${metric}" ${runners}', 'Sum', 300)`, id,
+})
+
+function processRows(widgets: Widget[], region: string, prefix: string, y0: number): number {
+  let y = y0
+  const ours = '"trace.outcome"'
+  const proj = '"trace.project"'
+  const ci = `"${prefix}-ci"`
+  widgets.push({ type: 'text', x: 0, y, width: 24, height: 1, properties: { markdown: '### Process (builds, jobs, waiting on people, rework: Operations\' Process tab)' } })
+  y += 1
+  widgets.push(graph(`${PROCESS_TITLE}Builds passed and failed`, region, 0, y, [builds('bok', 'SucceededBuilds', ci), builds('bfail', 'FailedBuilds', ci)], { stacked: true }))
+  widgets.push(graph(`${PROCESS_TITLE}Agent jobs by outcome`, region, 8, y, [
+    search('pjall', METRIC_NAMESPACE, 'trace.jobs', 'Sum', ours), search('pjproj', METRIC_NAMESPACE, 'trace.project.jobs', 'Sum', proj),
+  ], { stacked: true }))
+  widgets.push(graph(`${PROCESS_TITLE}Agent job time`, region, 16, y, [
+    search('jtall', METRIC_NAMESPACE, 'trace.job.duration', 'Sum', ours), search('jtproj', METRIC_NAMESPACE, 'trace.project.job.duration', 'Sum', proj),
+  ], { yLabel: 's' }))
+  y += 6
+  const kind = '"trace.wait.kind"'
+  widgets.push(graph(`${PROCESS_TITLE}Waiting on people`, region, 0, y, [
+    search('wsum', METRIC_NAMESPACE, 'trace.project.wait', 'Sum', kind), search('wn', METRIC_NAMESPACE, 'trace.project.wait', 'SampleCount', kind),
+  ], { yLabel: 's' }))
+  widgets.push(graph(`${PROCESS_TITLE}Waiting on people over the range`, region, 8, y, [
+    search('wp50', METRIC_NAMESPACE, 'trace.project.wait', 'p50', kind), search('wp90', METRIC_NAMESPACE, 'trace.project.wait', 'p90', kind),
+    search('wcount', METRIC_NAMESPACE, 'trace.project.wait', 'SampleCount', kind),
+  ], { whole: true, yLabel: 's' }))
+  widgets.push(graph(`${PROCESS_TITLE}Rework over the range`, region, 16, y, [search('rw', METRIC_NAMESPACE, 'trace.project.rework', 'Sum', '"trace.rework.cause"')], { whole: true }))
+  y += 6
+  widgets.push(graph(`${PROCESS_TITLE}Agent run time over the range`, region, 0, y, [
+    search('rtall', METRIC_NAMESPACE, 'trace.job.duration', 'p50', ours), search('rtalln', METRIC_NAMESPACE, 'trace.job.duration', 'SampleCount', ours),
+    search('rtproj', METRIC_NAMESPACE, 'trace.project.job.duration', 'p50', proj), search('rtprojn', METRIC_NAMESPACE, 'trace.project.job.duration', 'SampleCount', proj),
+  ], { whole: true, w: 24, yLabel: 's' }))
+  return y + 6
 }

@@ -89,6 +89,8 @@ export interface Actions {
   'stuck.dismiss': { args: Repo & { job: string; reason: string }; result: { repo: string; dismissed: { id: string; job_id: string | null; reason: string; by: string; at: string }; summary: string } }
   'waiver.add': { args: Repo & { target: { kind: 'criterion' | 'requirement' | 'finding' | 'test'; id: string }; reason: string; risk: string; severity: 'cosmetic' | 'degraded' | 'failure' | 'safety'; caught_where: string | null; scope?: string }; result: { repo: string; waiver: { id: string } } }
   inbox: { args: Record<string, never>; result: InboxItem[] }
+  /** where a project's time went, by stage (Operations' Process tab) */
+  'journey.time': { args: Repo; result: import('./admin-types').JourneyTime }
   // the API's own shapes are read by lib/readers.ts (readThreads, readThread, readAppended, readRecall)
   'chats.list': { args: Repo & { query?: string; limit?: number }; result: ChatThread[] }
   'chats.get': { args: Repo & { thread: string; before?: string; limit?: number }; result: { thread: ChatThread; messages: ChatMessage[]; more?: boolean } }

@@ -12,16 +12,19 @@ const COLORS = ['oklch(0.5 0.08 255)', 'oklch(0.62 0.09 145)', 'oklch(0.66 0.1 8
 
 export interface OpsChartProps {
   widget: OpsWidget
+  /** the chart's height class (default h-56) */
+  height?: string
   /** the range's step in ms, for axis labels */
   step: number
   selected?: number | null
   onPick?: (t: number) => void
 }
 
-export default function OpsChartImpl({ widget, step, selected, onPick }: OpsChartProps) {
+export default function OpsChartImpl({ widget, step, selected, onPick, height }: OpsChartProps) {
   const rows = chartRows(widget)
   const keys = widget.series.map((s, i) => seriesKey(s, i))
-  const config: ChartConfig = Object.fromEntries(widget.series.map((s, i) => [keys[i]!, { label: seriesLabel(s.label), color: COLORS[i % COLORS.length] }]))
+  // a series' own colour when it means something (the Process tab: passed green, failed red), else the palette
+  const config: ChartConfig = Object.fromEntries(widget.series.map((s, i) => [keys[i]!, { label: seriesLabel(s.label), color: s.color ?? COLORS[i % COLORS.length] }]))
   const many = widget.series.length > 1
   // a legend inside the chart only for a few series: a long one grew past the chart's fixed height and over the page
   const legendInside = many && widget.series.length <= IN_CHART_LEGEND_MAX
@@ -39,7 +42,7 @@ export default function OpsChartImpl({ widget, step, selected, onPick }: OpsChar
   ]
   const common = { data: rows, margin: { top: 8, right: 8, bottom: 0, left: 0 }, onClick: click, className: onPick ? 'cursor-pointer' : undefined }
   const chart = (
-    <ChartContainer config={config} className="aspect-auto h-56 w-full">
+    <ChartContainer config={config} className={`aspect-auto ${height ?? 'h-56'} w-full`}>
       {widget.kind === 'bar' ? (
         <BarChart {...common}>
           {axes}
@@ -83,7 +86,7 @@ export default function OpsChartImpl({ widget, step, selected, onPick }: OpsChar
       <ul aria-label={`${widget.series.length} series`} className="flex max-h-24 flex-wrap gap-x-4 gap-y-1 overflow-y-auto text-xs">
         {widget.series.map((s, i) => (
           <li key={keys[i]} className="flex min-w-0 max-w-[18rem] items-center gap-1.5" title={s.label}>
-            <span className="size-2.5 shrink-0 rounded-[2px]" style={{ background: COLORS[i % COLORS.length] }} aria-hidden />
+            <span className="size-2.5 shrink-0 rounded-[2px]" style={{ background: s.color ?? COLORS[i % COLORS.length] }} aria-hidden />
             <span className="truncate text-muted-foreground">{seriesLabel(s.label)}</span>
           </li>
         ))}

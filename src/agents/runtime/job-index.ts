@@ -8,7 +8,10 @@
  *                            written at once; a new log line (the job's current step) at most every STEP_EVERY_MS per
  *                            job, so a chatty job does not rewrite the index for every line. A running job's heartbeat
  *                            is written every BEAT_S seconds: a timer, because a microVM that dies sends no event, and
- *                            the heartbeat is how a lost job stops holding the queue
+ *                            the heartbeat is how a lost job stops holding the queue. Every write, and every
+ *                            heartbeat even when nothing else changed, also declares the project's lost jobs
+ *                            (src/core/job-index.ts markLost, LOST COUNTED ONCE) and counts each once as a job that
+ *                            ended `lost` (trace.jobs and trace.project.jobs, as observeJob counts the others)
  *   queueAdmit(store, …)     createJobs' `admit`: the job's row is claimed as running or queued in one conditional
  *                            write (two jobs that start together cannot both take the last slot: one write wins, the
  *                            other is re-run on the new index). A queued job waits for the index or people's controls
@@ -29,8 +32,9 @@ import { freemem, homedir, totalmem } from 'node:os'
 import { join } from 'node:path'
 import { type Backend } from '../../core/central.js'
 import {
-  BEAT_S, type BatchRow, type JobControl, JobIndexStore, JOB_SESSIONS_FOLDER, type JobRow, loadControls, loadJobs, mayStart, pruneJobs, putBatch, putJob, tailOf,
+  BEAT_S, STALE_AFTER_S, type BatchRow, type JobControl, JobIndexStore, JOB_SESSIONS_FOLDER, type JobRow, loadControls, loadJobs, markLost, mayStart, pruneJobs, putBatch, putJob, tailOf,
 } from '../../core/job-index.js'
+import { ATTR, recordProjectMetric } from '../../core/telemetry.js'
 import { type BucketDb, JourneyStore } from '../../core/journey-store.js'
 import { projectsBackend, projectsFromEnv } from '../../core/agent-facts.js'
 import type { PausedWork } from './job.js'
@@ -127,16 +131,19 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
   const fresh = new Set<string>()
   /** changes to a job whose first row is not written yet, kept for it */
   const early = new Map<string, Partial<Omit<JobRow, 'id' | 'updatedAt'>>>()
+  /** a heartbeat asks for a write even with nothing pending: it is when the project's lost jobs are declared */
+  let sweep = false
   const flush = (): Promise<void> => {
-    if (!pending.size && !batch.size) return writing
+    if (!pending.size && !batch.size && !sweep) return writing
     const rows = new Map(pending)
     const bs = [...batch.values()]
     pending.clear()
     batch.clear()
+    sweep = false
     writing = writing.then(async () => {
       const at = now() / 1000
       try {
-        await store.update((db) => {
+        const out = await store.update((db) => {
           for (const [id, f0] of rows) {
             const exists = Boolean(db.prepare('SELECT 1 FROM jobs WHERE id=?').get(id))
             // a change that reached the index before the job's first row (a log line's step, its route: the job logs
@@ -149,10 +156,18 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
             putJob(db, id, f.beatAt === undefined && f.state === 'running' ? { ...f, beatAt: at } : f, at)
           }
           for (const b of bs) putBatch(db, b)
+          // this runtime's own running jobs are alive whatever their rows say (a beat not written yet)
+          const lost = markLost(db, at, new Set(jobs.jobStatus().filter((j) => j.state === 'running').map((j) => j.id)))
           pruneJobs(db)
-          return { result: null }
+          // a heartbeat with nothing to write and nobody lost writes nothing
+          return { result: lost, ...(!rows.size && !bs.length && !lost.length ? { changed: false } : {}) }
         })
         for (const id of rows.keys()) fresh.delete(id)
+        // only the write that won the put returns them: each lost job is counted once
+        for (const j of out.result) {
+          recordProjectMetric('trace.jobs', 1, { [ATTR.jobKind]: j.kind, [ATTR.agent]: j.agent ?? undefined, [ATTR.outcome]: 'lost' })
+          log(`${j.id} is lost: no word from it for more than ${Math.round(STALE_AFTER_S / 60)} minutes`)
+        }
       } catch (e) {
         for (const id of rows.keys()) {
           if (failedOnce.has(id)) continue
@@ -228,6 +243,7 @@ export function indexJobs(jobs: Jobs, store: JobIndexStore, payloadOf: (jobId: s
   const beat = async (): Promise<void> => {
     const live = jobs.jobStatus().filter((j) => j.state === 'running')
     for (const j of live) merge(j.id, { beatAt: now() / 1000, step: j.step ?? null, tail: tailOf(j.log ?? []), vitals: vitals() })
+    sweep = true
     await flush()
   }
   if (o.heartbeat !== false) {

@@ -15,10 +15,11 @@
  *                           moved since is refused, and GitHub merges only that commit. Reads the status again and
  *                           refuses unless it may be accepted now; merges it with the repository's allowed method
  *                           (squash first), takes the hold label off, and records change.accepted (a record that
- *                           cannot be written after the merge is a warning in the answer: the merge stands)
+ *                           cannot be written after the merge is a warning in the answer: the merge stands), with when it became
+ *                           ready (ready_since); then the wait from ready to accepted (src/api/process-metrics.ts)
  *   change.ask      write   { repo, number, note } → { job_id }: comments the note on it as a quote, starts a revision
  *                           job with the same specialist on the same branch (so the same pull request updates), and
- *                           records change.asked
+ *                           records change.asked (and a rework, sent_back: src/api/process-metrics.ts)
  *   change.discard  write   { repo, number, reason } → { closed }: closes it, then comments the reason (a comment that
  *                           fails leaves it closed), records change.discarded
  *
@@ -55,10 +56,11 @@ import { ActionError, type Context, PROJECT_DB_PATH, Repo, TaskBranch, agentFact
 import { AGENT_WORDS, jobIndex } from './actions-jobs.js'
 import {
   type ChangeDetail, type ChangeFacts, type ChangeSummary, type TraceRule, acceptance, approvalsGiven, changeSummary, checkState, criteriaNamed, fileKind, jobRequest, jobsByBranch,
-  recommendationOf, requirementIds, settleUnfinished, summaryBullets, traceChanges, traceJob, unfinishedWords, verdictOf,
+  readySince, recommendationOf, requirementIds, settleUnfinished, summaryBullets, traceChanges, traceJob, unfinishedWords, verdictOf,
 } from './changes.js'
 import { GitHubError, type GitHubApi, type MergeMethod, type PullDetail, type PullStatus, type PullSummary } from './github.js'
 import { SETTINGS_TTL_MS, cached } from './github-cache.js'
+import { recordRework, recordWait } from './process-metrics.js'
 
 /** At most this many open changes get their status read (two GitHub calls each) in one list or journey. */
 export const MAX_STATUS = 5
@@ -240,6 +242,7 @@ async function changeDetail(ctx: Context, repo: string, number: number, o: { fre
     recommendation: recommendationOf(facts, { passed, requirements, from: sum.from }),
     ...acceptance(facts, write),
     base: pull.base, head: { ref: pull.head.ref, sha: pull.head.sha },
+    ready_since: readySince(runs, pull.created_at),
   }
 }
 
@@ -372,12 +375,15 @@ export const CHANGE_ACTIONS = {
       await record(ctx, repo, {
         kind: 'change.accepted', ref: String(number),
         summary: `${by} accepted "${d.title}" from ${d.from} into the design.${d.requirements.length ? ` It covers ${d.requirements.join(', ')}.` : ''}${note ? ` Note: ${note}` : ''}`,
-        detail: { number, sha, method, head: d.head.sha, checks: d.checks, requirements: d.requirements },
+        // ready_since: when it became ready for a person, for where the stage's time went (src/core/process-time.ts)
+        detail: { number, sha, method, head: d.head.sha, checks: d.checks, requirements: d.requirements, ready_since: d.ready_since },
       })
     } catch (e) {
       logLine(ctx, { warning: 'change.accept: merged, but the decision was not recorded', repo, number, error: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300) })
       warning = 'It is merged, but trace could not write the decision to the log. Nothing else needs doing; an admin can find it in the runtime\'s log.'
     }
+    // merged: the wait from ready to accepted (src/api/process-metrics.ts)
+    recordWait(repo, 'change', d.ready_since, Date.now() / 1000)
     const stage = d.stage
     return {
       merged: true as const, sha, stage,
@@ -411,6 +417,8 @@ export const CHANGE_ACTIONS = {
       summary: `${by} asked for changes to "${pull.title}": ${note.replace(/\s+/g, ' ').slice(0, 300)}`,
       detail: { number, job_id: started.jobId, branch: pull.head.ref, agent: agent ?? null },
     })
+    // sent back: the change is done again (src/api/process-metrics.ts)
+    recordRework(repo, 'sent_back')
     return { job_id: started.jobId }
   }),
 

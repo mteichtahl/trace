@@ -11,6 +11,8 @@
  *   traceEnv()                     TRACEPARENT/TRACESTATE/BAGGAGE for a child process or a Batch job
  *   flush()                        push what is buffered (before process.exit)
  *   recordProjectMetric(name, v, a) the per-project series of a job, tool, cost or GPU metric (PROJECT METRICS below)
+ *   recordProcessMetric(name, v, a, repo?) a process metric of one project: how long a person was waited on, and work
+ *                                  done twice (PROCESS METRICS below)
  *
  * What may be recorded: names, kinds, ids, counts, sizes, durations and outcomes. Never argument values, file
  * contents, prompts, tokens or email addresses. Every attribute goes through `redact`, which truncates strings and
@@ -65,6 +67,10 @@ export const ATTR = {
   repository: 'trace.repository',
   /** `project-<8 hex>`: the project's hash (src/core/project.ts projectHash), the only per-project metric dimension */
   project: 'trace.project',
+  /** what waited on a person: question | change | gate (trace.project.wait) */
+  waitKind: 'trace.wait.kind',
+  /** why work was done twice: job_restarted | conflict_resolved | sent_back | asked_again (trace.project.rework) */
+  reworkCause: 'trace.rework.cause',
   agent: 'trace.agent',
   agentKind: 'trace.agent.kind',
   routeReason: 'trace.route.reason',
@@ -125,8 +131,9 @@ export const ATTR = {
 export type AttrKey = (typeof ATTR)[keyof typeof ATTR]
 export type Attrs = Partial<Record<AttrKey, AttributeValue | undefined>>
 
-/** Outcomes, the same words in spans and metrics. */
-export type Outcome = 'ok' | 'error' | 'denied' | 'aborted' | 'rejected'
+/** Outcomes, the same words in spans and metrics. `lost`: a job whose runtime went silent (src/core/job-index.ts
+ * markLost), counted once by the project's worker when it declares it lost. */
+export type Outcome = 'ok' | 'error' | 'denied' | 'aborted' | 'rejected' | 'lost'
 
 // ------------------------------------------------------------------ redaction
 
@@ -404,6 +411,9 @@ export const METRICS = {
   'trace.project.claude.cost': { kind: 'counter', unit: 'USD', description: 'Estimated cost of Claude on one project (the Agent SDK\'s estimate)' },
   'trace.project.gpu.jobs': { kind: 'counter', unit: '{job}', description: 'GPU and CPU remote jobs on one project, by outcome' },
   'trace.project.gpu.duration': { kind: 'histogram', unit: 's', description: 'How long a remote job took on one project, queue wait included' },
+  // the process metrics (recordProcessMetric): the project's hash and one bounded word each
+  'trace.project.wait': { kind: 'histogram', unit: 's', description: 'How long trace waited on a person, from ready to the act, by kind (question, change, gate)' },
+  'trace.project.rework': { kind: 'counter', unit: '{rework}', description: 'Work done twice on one project, by cause (job_restarted, conflict_resolved, sent_back, asked_again)' },
 } as const satisfies Record<string, { kind: 'counter' | 'histogram'; unit: string; description: string }>
 
 export type MetricName = keyof typeof METRICS
@@ -472,8 +482,8 @@ let projectDim: string | null | undefined
 /** This process's project as a metric dimension value (`project-<hash>`), or null when it serves no one project. */
 export function projectDimension(env: NodeJS.ProcessEnv = process.env): string | null {
   if (env === process.env && projectDim !== undefined) return projectDim
-  const repo = env.TRACE_PROJECT?.trim().toLowerCase()
-  const v = repo && /^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/.test(repo) ? `project-${createHash('sha256').update(repo).digest('hex').slice(0, 8)}` : null
+  const repo = env.TRACE_PROJECT?.trim()
+  const v = repo ? projectHashDimension(repo) : null
   if (env === process.env) projectDim = v
   return v
 }
@@ -487,6 +497,50 @@ export function recordProjectMetric(name: keyof typeof PROJECT_METRICS, value: n
   const project = projectDimension()
   if (!project) return
   recordMetric(PROJECT_METRICS[name], value, { [ATTR.project]: project, ...(attrs[ATTR.outcome] !== undefined ? { [ATTR.outcome]: attrs[ATTR.outcome] } : {}) })
+}
+
+// ------------------------------------------------------------------ PROCESS METRICS
+
+/** What waited on a person (trace.project.wait's trace.wait.kind). */
+export const WAIT_KINDS = ['question', 'change', 'gate'] as const
+export type WaitKind = (typeof WAIT_KINDS)[number]
+/** Why work was done twice (trace.project.rework's trace.rework.cause). */
+export const REWORK_CAUSES = ['job_restarted', 'conflict_resolved', 'sent_back', 'asked_again'] as const
+export type ReworkCause = (typeof REWORK_CAUSES)[number]
+
+/** The dashboard's Process rows' titles start with this (src/infra/observability.ts PROCESS): Operations shows them on
+ * its Process tab (src/web/ops.ts processView), not as charts of their own. */
+export const PROCESS_TITLE = 'Process: '
+
+/** The longest wait recorded: a value past it is a clock or record mistake (a criterion re-checked long after), not a wait. */
+export const MAX_WAIT_S = 90 * 86_400
+
+/**
+ * How the people and trace work together, per project: Operations' Process tab (src/web/ops.ts). Unlike PROJECT
+ * METRICS these are recorded where the act happens, which is often the API runtime (a person answers, accepts, signs)
+ * and so serves every project: the project is then given (`repo`), never taken from a request before its access check
+ * (each caller records after the act succeeded, which needs the person's part on that project), so the value is still
+ * one of the installation's projects (bounded, as above). Without `repo`, the process's own project (TRACE_PROJECT). Each
+ * carries the project and one bounded word: the wait's kind (WAIT_KINDS) or the rework's cause (REWORK_CAUSES). There
+ * is no aggregate series: every wait and every rework belongs to a project, and admins see every project's series.
+ */
+export function recordProcessMetric(name: 'trace.project.wait', seconds: number, dims: { kind: WaitKind }, repo?: string): void
+export function recordProcessMetric(name: 'trace.project.rework', count: number, dims: { cause: ReworkCause }, repo?: string): void
+export function recordProcessMetric(name: 'trace.project.wait' | 'trace.project.rework', value: number, dims: { kind?: WaitKind; cause?: ReworkCause }, repo?: string): void {
+  if (name === 'trace.project.wait' && !(value >= 0 && value <= MAX_WAIT_S)) return
+  const project = repo ? projectHashDimension(repo) : projectDimension()
+  if (!project) return
+  recordMetric(name, value, {
+    [ATTR.project]: project,
+    ...(dims.kind && (WAIT_KINDS as readonly string[]).includes(dims.kind) ? { [ATTR.waitKind]: dims.kind } : {}),
+    ...(dims.cause && (REWORK_CAUSES as readonly string[]).includes(dims.cause) ? { [ATTR.reworkCause]: dims.cause } : {}),
+  })
+}
+
+/** `project-<hash>` for a repository (the same hash as projectDimension and src/core/project.ts projectHash), or null. */
+export function projectHashDimension(repo: string): string | null {
+  const r = repo.trim().toLowerCase()
+  return /^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/.test(r) ? `project-${createHash('sha256').update(r).digest('hex').slice(0, 8)}` : null
 }
 
 // ------------------------------------------------------------------ the SDK

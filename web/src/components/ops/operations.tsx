@@ -4,11 +4,14 @@
  *
  *   1. the status line, amber or red with the reason when an alarm fires
  *   2. controls: time range, a project filter (the person's projects only), the Wait line for refreshes
- *   3. five summary tiles with sparklines, change and a status word (cloud spend for admins only)
+ *   3. five summary tiles with sparklines and a status word: Builds passed, Agent jobs finished, Waiting on people,
+ *      Time trace was working, Cloud spend this month (admins only); the API's other numbers behind "More numbers"
  *   4. alarms, summary first
- *   5. sections as tabs, one per dashboard; tapping a point opens a side sheet for that moment
+ *   5. sections as tabs: Process first (process-panel.tsx: builds, jobs by outcome, waits on people, rework, where
+ *      the time went, what waits now), then one per dashboard; tapping a point opens a side sheet for that moment
  *
- * Phone: status and alarms first, tiles two by two, each section's charts scroll sideways one at a time.
+ * Phone: status and alarms first, tiles two by two, Process in one column, each other section's charts scroll
+ * sideways one at a time.
  */
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
@@ -39,6 +42,10 @@ import { ago, time } from '@/lib/format'
 import { q, useAction, useProjects } from '@/lib/queries'
 import { cn } from '@/lib/utils'
 import { LEVEL, RANGES, type Range, momentLabel, momentSummary, opsUrl, refreshIn, sectionTitle, stepOf, tileViews, type TileView } from './ops-model'
+import { ProcessPanel } from './process-panel'
+
+/** The Process tab's id in the address (/ops/process): first, before the dashboards' sections. */
+export const PROCESS_SECTION = 'process'
 
 const OpsChart = lazy(() => import('./ops-chart-impl'))
 
@@ -81,7 +88,10 @@ export function Operations({ section }: { section?: string }) {
   })
   const data = ops.data
   const sections = data?.sections ?? []
-  const current = sections.find((s) => s.id === section) ?? sections[0]
+  // Process first, whenever the API reports it; then the dashboards
+  const hasProcess = Boolean(data?.process)
+  const onProcess = hasProcess && (section === undefined || section === PROCESS_SECTION || !sections.some((s) => s.id === section))
+  const current = onProcess ? undefined : sections.find((s) => s.id === section) ?? sections[0]
   // the month's cloud spend from the cost ledger (admins only: usage.month refuses anyone else)
   const month = useAction('usage.month', {}, { enabled: admin })
   const monthCost = month.data ? { estimated: month.data.totals.estimated, actual: month.data.totals.actual, currency: month.data.currency, projects: month.data.projects.length } : null
@@ -91,7 +101,7 @@ export function Operations({ section }: { section?: string }) {
     {
       label: 'Operations',
       description: 'The screen the person is on: Operations, how trace itself is running (from CloudWatch, filtered by their access)',
-      value: { range, project: repo, section: current?.title ?? null, status: data?.status.text ?? null, firing: data?.alarms.filter((a) => a.state === 'ALARM').map((a) => a.name) ?? [] },
+      value: { range, project: repo, section: onProcess ? 'Process' : current?.title ?? null, status: data?.status.text ?? null, firing: data?.alarms.filter((a) => a.state === 'ALARM').map((a) => a.name) ?? [] },
     },
     'screen',
   )
@@ -100,6 +110,7 @@ export function Operations({ section }: { section?: string }) {
   useCommands([
     { id: 'ops-refresh', label: 'Refresh Operations now', group: 'Operations', icon: RefreshCw, run: () => void ops.refetch() },
     ...RANGES.filter((r) => r.id !== 'custom').map((r) => ({ id: `ops-range-${r.id}`, label: `Operations: show ${r.words}`, keywords: ['range', 'time'], run: () => setRange(r.id) })),
+    ...(hasProcess ? [{ id: 'ops-section-process', label: 'Operations: Process', keywords: ['builds', 'waiting', 'rework'], run: () => void navigate({ to: '/ops/$section', params: { section: PROCESS_SECTION } }) }] : []),
     ...sections.map((s) => ({ id: `ops-section-${s.id}`, label: `Operations: ${sectionTitle(s.title)}`, keywords: ['dashboard', 'section'], run: () => void navigate({ to: '/ops/$section', params: { section: s.id } }) })),
   ])
 
@@ -177,15 +188,35 @@ export function Operations({ section }: { section?: string }) {
           />
           {ops.isError && <Partial onRetry={() => void ops.refetch()}>The last refresh failed. Showing what was true at {time(data.updatedAt)}.</Partial>}
 
-          <section aria-label="Summary" className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-            {tiles.map((t) => <Tile key={t.id} tile={t} />)}
+          <section aria-label="Summary" className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5 [&>*:last-child:nth-child(odd)]:col-span-2 md:[&>*:last-child:nth-child(odd)]:col-span-1">
+            {tiles.filter((t) => !t.extra).map((t) => <Tile key={t.id} tile={t} />)}
           </section>
+          {tiles.some((t) => t.extra) && (
+            <Collapsible className="mt-3">
+              <CollapsibleTrigger className="group flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+                <ChevronRight className="size-3 transition-transform group-data-[state=open]:rotate-90" aria-hidden /> More numbers: {tiles.filter((t) => t.extra).map((t) => t.label.toLowerCase()).join(', ')}
+              </CollapsibleTrigger>
+              <CollapsibleContent className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+                {tiles.filter((t) => t.extra).map((t) => <Tile key={t.id} tile={t} />)}
+              </CollapsibleContent>
+            </Collapsible>
+          )}
 
           {!phone && <div className="mt-6">{alarmsBlock}</div>}
 
           <Sections
             sections={sections}
-            current={current?.id}
+            current={onProcess ? PROCESS_SECTION : current?.id}
+            process={hasProcess ? (
+              <ProcessPanel
+                process={data.process}
+                step={step}
+                repo={repo}
+                repos={(projects.data ?? []).map((p) => p.repo)}
+                rangeWords={RANGES.find((r) => r.id === range)?.words.replace(/^the /, '') ?? ''}
+                phone={phone}
+              />
+            ) : null}
             onSection={(id) => void navigate({ to: '/ops/$section', params: { section: id } })}
             step={step}
             phone={phone}
@@ -195,7 +226,7 @@ export function Operations({ section }: { section?: string }) {
 
           <p className="mt-8 rounded-xl bg-muted/60 p-4 text-sm text-muted-foreground">
             <span className="font-medium text-foreground">Who sees what: </span>
-            admins see everything, cost included; contributors and reviewers see their projects' agent runs, jobs and tool calls (trace's own per-project series), and installation health as a status line, without cost, logs or traces.
+            admins see everything, cost and trace's own builds included; contributors and reviewers see their projects' agent runs, jobs, builds, waits on people and rework (trace's own per-project series), and installation health as a status line, without cost, logs or traces.
           </p>
 
           <MomentSheet moment={moment} step={step} admin={admin} repos={repo ? [repo] : (projects.data ?? []).map((p) => p.repo)} onClose={() => setMoment(null)} />
@@ -261,6 +292,9 @@ export function Sparkline({ values, className }: { values: number[]; className?:
   )
 }
 
+/** A sparkline's colour: what its number is about. */
+const SPARK: Record<NonNullable<TileView['tone']>, string> = { verified: 'text-verified', primary: 'text-primary', warning: 'text-warning', muted: 'text-muted-foreground' }
+
 function Tile({ tile: t }: { tile: TileView }) {
   const l = LEVEL[t.status] ?? LEVEL.ok
   return (
@@ -277,11 +311,16 @@ function Tile({ tile: t }: { tile: TileView }) {
             {t.value}
             {t.unit && <span className="ml-1 text-sm font-normal text-muted-foreground">{t.unit}</span>}
           </p>
-          {t.sub && <p className="mt-0.5 text-xs text-muted-foreground">{t.sub}</p>}
-          <Sparkline values={t.spark} className="mt-2 text-muted-foreground" />
+          {(t.sub || t.subWarn) && (
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {t.sub}
+              {t.subWarn && <span className={cn(t.status === 'warn' && 'font-semibold text-warning')}>{t.subWarn}</span>}
+            </p>
+          )}
+          <Sparkline values={t.spark} className={cn('mt-2', SPARK[t.tone ?? 'muted'])} />
           {t.change && <p className="mt-1 text-xs text-muted-foreground">{t.change}</p>}
           <div className="mt-auto pt-2">
-            <StatusBadge status={l.status} label={l.word} plain />
+            {t.plain ? <p className="text-xs text-muted-foreground">{t.statusWord}</p> : <StatusBadge status={l.status} label={t.statusWord ?? l.word} plain />}
           </div>
         </>
       )}
@@ -352,39 +391,47 @@ function Alarms({ alarms, admin }: { alarms: OpsAlarm[]; admin: boolean }) {
 }
 
 function Sections({
-  sections, current, onSection, step, phone, selected, onPick,
+  sections, current, onSection, step, phone, selected, onPick, process,
 }: {
   sections: OpsAnswer['sections']
   current?: string
+  /** the Process tab's panel, first (null: the API reports no Process) */
+  process: React.ReactNode
   onSection: (id: string) => void
   step: number
   phone: boolean
   selected: number | null
   onPick: (w: OpsWidget, t: number) => void
 }) {
-  if (!sections.length)
+  if (!sections.length && !process)
     return (
       <EmptyState className="mt-8">
         No charts to show for this range. Either no dashboard is listed for Operations yet (an admin lists them in Admin › Installation), or none of their metrics belong to your projects.
       </EmptyState>
     )
-  const sec = sections.find((s) => s.id === current) ?? sections[0]!
+  const onProcess = Boolean(process) && current === PROCESS_SECTION
+  const sec = onProcess ? null : sections.find((s) => s.id === current) ?? sections[0] ?? null
+  const tab = (on: boolean) => cn('-mb-px shrink-0 border-b-2 px-3 py-2 text-sm', on ? 'border-foreground font-medium text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground')
   return (
     <section className="mt-8" aria-label="Dashboards">
       <div role="tablist" aria-label="Sections" className="-mx-4 flex gap-1 overflow-x-auto border-b px-4 md:mx-0 md:px-0">
+        {process && (
+          <button type="button" role="tab" aria-selected={onProcess} onClick={() => onSection(PROCESS_SECTION)} className={tab(onProcess)}>Process</button>
+        )}
         {sections.map((s) => (
           <button
             key={s.id}
             type="button"
             role="tab"
-            aria-selected={s.id === sec.id}
+            aria-selected={s.id === sec?.id}
             onClick={() => onSection(s.id)}
-            className={cn('-mb-px shrink-0 border-b-2 px-3 py-2 text-sm', s.id === sec.id ? 'border-foreground font-medium text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground')}
+            className={tab(s.id === sec?.id)}
           >
             {sectionTitle(s.title)}
           </button>
         ))}
       </div>
+      {onProcess ? <div role="tabpanel">{process}</div> : sec && (
       <div role="tabpanel" className={cn('mt-4', phone ? '-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2' : 'grid gap-4 lg:grid-cols-2')}>
         {sec.widgets.map((w) => (
           <article key={w.id} className={cn('rounded-xl border bg-card p-4', phone && 'w-[85vw] shrink-0 snap-center')} aria-label={w.title}>
@@ -411,6 +458,7 @@ function Sections({
           </article>
         ))}
       </div>
+      )}
     </section>
   )
 }
