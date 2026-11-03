@@ -104,7 +104,7 @@ A person is never more than two steps from Home: an area from the rail, then an 
 - **Top bar:** where you are as a breadcrumb (Soil sensor · Rev A · Capture), the search and command box (⌘K), the live status dot, the notifications bell, and the person's menu.
 - **Ask trace:** a button at the top right and the shortcut ⌘J open the chat panel docked on the right. It stays open as the person moves between screens and always knows which screen they are on.
 
-**The shell, on a phone.** A bottom bar with four tabs: Home, Projects, Ask, Inbox. The breadcrumb shrinks to the current page's title with a back arrow. Side sheets become bottom drawers. Focus mode takes the whole screen.
+**The shell, on a phone.** A bottom bar with four tabs: Home, Projects, Ask, Next (what needs you, one card at a time; it was called Inbox, and `/inbox` still leads there). Inside a project, the next step comes first with its buttons pinned above the tab bar, the stage is one tappable line, everything else folds into one-line rows that open drawers, and a Sections button replaces the row of tabs. Side sheets become bottom drawers. Focus mode takes the whole screen.
 
 **Inside a project.** A project page has one header and a short row of tabs. Tabs appear only once the project has reached the stage that fills them, so a new project shows three tabs, not nine.
 
@@ -747,7 +747,7 @@ The installer asks for two things, AWS credentials and a GitHub token, and makes
 
 trace notifies a person about four things only, and every notification is the same item that sits on Home, so acting on it in one place clears it everywhere.
 
-- **Where they appear:** the bell's popover (the latest ten, with View all), the Inbox (`/inbox`, the phone's fourth tab), and by email for anything left unanswered for an hour. Browser and phone push are off until the person turns them on from their profile.
+- **Where they appear:** the bell's popover (the latest ten, with View all), Next (`/next`, the phone's fourth tab; once called the Inbox), and by email for anything left unanswered for an hour. Browser and phone push are off until the person turns them on from their profile.
 - **What each says:** the project and stage, a one-sentence summary, and the action as a button. A gate notification: "Soil sensor Rev A: the schematic gate is ready to sign. trace recommends signing." \[Review and sign\].
 - **Who gets them:** gates and spend go to admins on the project; questions go to the person the agent asked, or the project's users if it asked no one; stuck agents go to whoever started the work.
 - **Toasts** (shadcn Sonner) are not notifications. They confirm the person's own actions ("Gate signed. Layout started.") and report live changes on the screen they are looking at. They vanish on their own and are never the only place something is said.

@@ -137,6 +137,36 @@ export function StageSegments({ j, admin, onWhat, className }: { j: Journey; adm
   )
 }
 
+/** The phone's project header line: the stage, "stage 3 of 9", "step 3 of 5" and the segments, in one tappable row
+ * that opens the stage sheet (what the stage is for, who does what, the steps). */
+export function StageChip({ j, admin, onOpen, className }: { j: Journey; admin?: boolean; onOpen: (s: Stage) => void; className?: string }) {
+  const visible = j.stages.filter((s) => !(s.optional && s.state === 'skipped'))
+  const c = currentStage(j)
+  if (!c) return null
+  const place = j.next.step ?? stepPlace(stageSteps(c.stage, gateOf(j.gates, c.stage), { admin }))
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(c.stage)}
+      className={cn('flex min-h-11 w-full items-center gap-3 rounded-xl border bg-card px-3 py-2.5 text-left', className)}
+      aria-label={`${c.stage.name}, stage ${c.index + 1} of ${c.total}${place ? `, step ${place.index} of ${place.total}` : ''}. What happens in ${c.stage.name}`}
+    >
+      <span className="min-w-0 flex-1 space-y-1.5">
+        <span className="flex items-baseline justify-between gap-2 text-[13px]">
+          <span><span className="font-semibold">{c.stage.name}</span><span className="text-muted-foreground"> · stage {c.index + 1} of {c.total}</span></span>
+          {place && <span className="text-muted-foreground">step {place.index} of {place.total}</span>}
+        </span>
+        <span className="flex gap-[3px]" aria-hidden>
+          {visible.map((s) => (
+            <span key={s.id} className={cn('h-[5px] flex-1 rounded-full', s.state === 'done' ? 'bg-foreground' : s.state === 'current' || s.state === 'reopened' ? 'bg-primary' : 'bg-muted')} />
+          ))}
+        </span>
+      </span>
+      <ArrowRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+    </button>
+  )
+}
+
 /** The stage sheet: any stage, from the rail or "What happens in …". */
 export function StageSheet({ j, stage, admin, onOpenChange }: { j: Journey; stage: Stage | null; admin?: boolean; onOpenChange: (open: boolean) => void }) {
   const visible = j.stages.filter((s) => !(s.optional && s.state === 'skipped'))

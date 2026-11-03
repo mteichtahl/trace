@@ -1,5 +1,5 @@
 /**
- * Keyboard shortcuts: ⌘K search, ⌘J Ask trace, ⌘B the rail, G then H Home (G then P Projects, G then I Inbox),
+ * Keyboard shortcuts: ⌘K search, ⌘J Ask trace, ⌘B the rail, G then H Home (G then P Projects, G then N Next),
  * ? lists them. Typing in a field never triggers the letter shortcuts.
  */
 import { useNavigate } from '@tanstack/react-router'
@@ -20,7 +20,7 @@ export const SHORTCUTS: { keys: string[]; does: string }[] = [
   { keys: [mod, 'Shift', 'Space'], does: 'Dictate a message' },
   { keys: ['G', 'H'], does: 'Go to Home' },
   { keys: ['G', 'P'], does: 'Go to Projects' },
-  { keys: ['G', 'I'], does: 'Go to Inbox' },
+  { keys: ['G', 'N'], does: 'Go to Next' },
   { keys: ['↑', '↓'], does: 'Recall messages you sent (in the message box)' },
   { keys: ['Esc'], does: 'Close, or leave Focus mode' },
   { keys: ['?'], does: 'Show these shortcuts' },
@@ -59,7 +59,7 @@ export function useShortcuts() {
       }
       if (Date.now() - g < 1200) {
         g = 0
-        const to = k === 'h' ? '/' : k === 'p' ? '/projects' : k === 'i' ? '/inbox' : null
+        const to = k === 'h' ? '/' : k === 'p' ? '/projects' : k === 'n' || k === 'i' ? '/next' : null
         if (to) {
           e.preventDefault()
           void navigate({ to })

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Gate } from '@/lib/types'
-import { needsReauth, returnReasonOk, signBlockers, signLabel } from './gate-rules'
+import { lockedLine, needsReauth, returnReasonOk, signBlockers, signLabel } from './gate-rules'
 
 const gate: Pick<Gate, 'criteria' | 'waivers'> = {
   criteria: [
@@ -13,6 +13,17 @@ const gate: Pick<Gate, 'criteria' | 'waivers'> = {
 const base = { opened: new Set<string>(), acknowledged: new Set<string>(), admin: true, online: true }
 
 describe('Sign the gate', () => {
+  it('cannot be signed blind: no criteria reported yet keeps Sign locked, and says so', () => {
+    const empty = { criteria: [], waivers: [] }
+    const b = signBlockers(empty, base)
+    expect(b.map((x) => x.id)).toEqual(['none'])
+    expect(lockedLine(empty, b)).toMatch(/has not reported/)
+  })
+  it('names the open checks on a phone, where there is no tooltip', () => {
+    const g = { criteria: [...gate.criteria, { id: 'c4', text: 'Power budget within 2 W', status: 'not_met' as const, opened: true }], waivers: [] }
+    expect(lockedLine(g, signBlockers(g, base))).toBe('You can sign once the open check is met: Power budget within 2 W.')
+  })
+
   it('stays disabled until every piece of evidence is opened and every waiver acknowledged', () => {
     expect(signBlockers(gate, base).map((b) => b.id)).toEqual(['opened', 'acknowledged'])
     expect(signBlockers(gate, base)[0]!.text).toBe('Open the evidence for 2 more criteria')

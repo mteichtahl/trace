@@ -67,7 +67,8 @@ describe('What happens next, after accepting', () => {
       { text: 'Prove starts', who: 'trace', when: 'later', owner: 'trace' },
     ])
     expect(v.notice).toBe("We'll tell you the moment the gate is ready. No need to keep this open.")
-    expect(v.back).toBe('Back to Needs you · 2 left')
+    expect(v.back).toBe('Go to next · 2 left')
+    expect(v.more).toBe(true)
   })
 
   it('still reads before the journey has refreshed, and with nothing left', () => {

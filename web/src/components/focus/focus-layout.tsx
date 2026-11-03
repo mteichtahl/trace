@@ -150,7 +150,15 @@ export function FocusLayout({
         <button type="button" className="inline-flex items-center gap-1.5" onClick={() => setStepsDrawer(true)}>
           <ListOrdered className="size-4" aria-hidden /> Step {idx + 1} of {steps.length}
         </button>
-        {draft}
+        <div className="flex items-center gap-2">
+          {draft}
+          {/* trace sits in this bar on a phone, rather than floating over the work */}
+          {(trace || aside) && (
+            <Button variant="outline" size="sm" className="h-9" onClick={() => setTraceDrawer(true)}>
+              <MessageSquare /> Ask trace
+            </Button>
+          )}
+        </div>
       </div>
 
       {notice && <div className="shrink-0 border-b px-4 py-3 empty:hidden">{notice}</div>}
@@ -189,7 +197,7 @@ export function FocusLayout({
       {(trace || aside) && (
         <Button
           size="icon"
-          className="fixed bottom-20 right-4 z-20 size-12 rounded-full shadow-lg xl:hidden"
+          className="fixed bottom-20 right-4 z-20 size-12 rounded-full shadow-lg max-md:hidden xl:hidden"
           onClick={() => setTraceDrawer(true)}
           aria-label="Open trace"
         >
