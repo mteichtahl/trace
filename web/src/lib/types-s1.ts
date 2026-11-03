@@ -333,6 +333,20 @@ export interface RunStep {
   durationS?: number
   progress?: number
 }
+/** One tool call of a run's agent job (run's `session.steps`, oldest first); args and result only for some */
+export interface SessionStep {
+  id: string
+  kind: string
+  summary: string | null
+  status: 'running' | 'pass' | 'fail' | 'error'
+  /** seconds */
+  started: number
+  finished: number | null
+  args?: unknown
+  result?: unknown
+}
+export interface RunSession { job: string; agent: string | null; steps: SessionStep[] }
+
 export interface RunRecordView {
   id: string
   kind: string
@@ -346,6 +360,9 @@ export interface RunRecordView {
   git_sha?: string | null
   measurements?: { name: string; value: number | null; unit: string | null }[]
   artifacts?: { name: string; mime: string | null; size: number }[]
+  /** the runs of the same agent job, in order (null: the run has no job) */
+  session?: RunSession | null
+  job?: string | null
   // assumed extras
   title?: string
   where?: string

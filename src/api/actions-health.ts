@@ -271,14 +271,22 @@ async function health(ctx: Context, repo: string): Promise<HealthView> {
   return { build, asks: asksOf(repo, issues, rows, stuck, at) }
 }
 
-/** One job's whole log (its end, LOG_MAX), after checking it is one of this repository's runs. */
-async function jobLog(ctx: Context, repo: string, id: number): Promise<{ name: string; text: string; truncated: boolean }> {
+/** One Actions job as GitHub describes it, with the run it belongs to, its commit and its times. */
+export const JobFull = Job.extend({
+  run_url: z.string().optional(), head_sha: z.string().optional(), workflow_name: z.string().nullable().optional(),
+  started_at: z.string().nullable().optional(), completed_at: z.string().nullable().optional(), html_url: z.string().nullable().optional(),
+})
+export type JobFull = z.infer<typeof JobFull>
+
+/**
+ * One Actions job of this repository's runs, or an ActionError ("no build job") when GitHub does not know it, will not
+ * show it, or names another repository's run for it.
+ */
+export async function repoJob(ctx: Context, repo: string, id: number): Promise<JobFull> {
   const gh = healthApi(await ctx.deps.github())
-  const p = repoPath(repo)
-  const J = Job.extend({ run_url: z.string().optional() })
-  let job: z.infer<typeof J>
+  let job: JobFull
   try {
-    job = J.parse(await gh.request('GET', `${p}/actions/jobs/${id}`))
+    job = JobFull.parse(await gh.request('GET', `${repoPath(repo)}/actions/jobs/${id}`))
   } catch (e) {
     if (e instanceof GitHubError && (e.status === 404 || e.status === 403)) throw new ActionError(`${repo} has no build job ${id}.`)
     throw e
@@ -286,9 +294,24 @@ async function jobLog(ctx: Context, repo: string, id: number): Promise<{ name: s
   // GitHub names the run the job belongs to: it must be this repository's
   const runRepo = /\/repos\/([^/]+\/[^/]+)\/actions\/runs\/\d+$/.exec(job.run_url ?? '')?.[1]
   if (!runRepo || decodeURIComponent(runRepo).toLowerCase() !== repo.toLowerCase()) throw new ActionError(`${repo} has no build job ${id}.`)
+  return job
+}
+
+/**
+ * The end of one job's log (at most `max` bytes), cleaned (cleanLog), kept a while once the job finished. The caller has
+ * made sure the job is this repository's. Throws GitHub's error (404/410: no longer kept).
+ */
+export async function jobLogEnd(ctx: Context, repo: string, id: number, status: string, max = LOG_MAX): Promise<{ text: string; truncated: boolean }> {
+  const gh = healthApi(await ctx.deps.github())
+  const { text, truncated } = await cached(ctx.deps.githubCache, repo, `health-log:${id}:${status}:${max}`, () => gh.requestText(`${repoPath(repo)}/actions/jobs/${id}/logs`, max), status === 'completed' ? DONE_TTL_MS : undefined)
+  return { text: cleanLog(text).join('\n'), truncated }
+}
+
+/** One job's whole log (its end, LOG_MAX), after checking it is one of this repository's runs. */
+async function jobLog(ctx: Context, repo: string, id: number): Promise<{ name: string; text: string; truncated: boolean }> {
+  const job = await repoJob(ctx, repo, id)
   try {
-    const { text, truncated } = await cached(ctx.deps.githubCache, repo, `health-log:${id}:${job.status}`, () => gh.requestText(`${p}/actions/jobs/${id}/logs`, LOG_MAX), job.status === 'completed' ? DONE_TTL_MS : undefined)
-    return { name: job.name, text: cleanLog(text).join('\n'), truncated }
+    return { name: job.name, ...await jobLogEnd(ctx, repo, id, job.status) }
   } catch (e) {
     if (e instanceof GitHubError && (e.status === 404 || e.status === 410)) throw new ActionError(`The log of "${job.name}" is no longer kept: GitHub keeps logs for a limited time.`)
     throw e

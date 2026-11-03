@@ -134,7 +134,8 @@ CREATE TABLE IF NOT EXISTS runs (
   args TEXT,                      -- JSON text: the inputs
   result TEXT,                    -- JSON text: the compact result returned to the caller
   git_sha TEXT,
-  agent TEXT                      -- the agent whose session made it (TRACE_AGENT: verify, impl, …, worker), NULL for a person's own run
+  agent TEXT,                     -- the agent whose session made it (TRACE_AGENT: verify, impl, …, worker), NULL for a person's own run
+  job TEXT                        -- the job whose session made it (TRACE_JOB_ID, else gh-<GITHUB_RUN_ID>), NULL outside a job
 );
 CREATE INDEX IF NOT EXISTS runs_kind ON runs(kind, started);
 CREATE TABLE IF NOT EXISTS measurements (
@@ -171,13 +172,14 @@ export function projectTables(): ProjectTable[] {
 
 /**
  * The project schema, every registered table, and the columns added since a database was made: `runs.agent` (which
- * agent made a run; databases from before it get the column, NULL on their old rows, always last so `SELECT *`
- * merges line up).
+ * agent made a run) then `runs.job` (which job's session made it); databases from before them get the columns, NULL on
+ * their old rows, always last and in that order so `SELECT *` merges line up.
  */
 export function applyProjectSchema(db: DatabaseSync): void {
   db.exec(PROJECT_SCHEMA)
   const cols = new Set((db.prepare("SELECT name FROM pragma_table_info('runs')").all() as { name: string }[]).map((c) => c.name))
   if (!cols.has('agent')) db.exec('ALTER TABLE runs ADD COLUMN agent TEXT')
+  if (!cols.has('job')) db.exec('ALTER TABLE runs ADD COLUMN job TEXT')
   for (const t of PROJECT_TABLES.values()) db.exec(t.sql)
 }
 
@@ -186,6 +188,15 @@ export function applyProjectSchema(db: DatabaseSync): void {
 export const runAgent = (env: NodeJS.ProcessEnv = process.env): string | null => {
   const a = env.TRACE_AGENT?.trim().toLowerCase()
   return a && /^[a-z][a-z0-9-]{0,31}$/.test(a) ? a : null
+}
+
+/** Which job is making runs in this process: TRACE_JOB_ID (a job's MCP server has it), else the GitHub Actions run
+ * (`gh-<GITHUB_RUN_ID>`), else none (a person's own CLI). */
+export const runJob = (env: NodeJS.ProcessEnv = process.env): string | null => {
+  const j = env.TRACE_JOB_ID?.trim()
+  if (j) return j.slice(0, 200)
+  const g = env.GITHUB_RUN_ID?.trim()
+  return g ? `gh-${g.slice(0, 40)}` : null
 }
 
 export function openProject(root?: string): DatabaseSync {
@@ -206,6 +217,26 @@ export interface RunSummary {
   summary: string | null
   /** the agent whose session made it (null: a person's own run, or a run from before agents were recorded) */
   agent: string | null
+  /** the job whose session made it (null: outside a job, or a run from before jobs were recorded) */
+  job: string | null
+}
+
+/** One run of a job's session, as the run page lists its steps. `args` and `result` only for some (Work.session). */
+export interface SessionStep { id: string; kind: string; summary: string | null; status: RunStatus; started: number; finished: number | null; args?: Json; result?: Json }
+/** The runs of one job's session (Work.session). */
+export interface RunSession { job: string; agent: string | null; steps: SessionStep[] }
+/** At most this many steps of a session are answered. */
+export const SESSION_STEPS = 200
+/** At most this many steps other than the run itself and the failed ones carry their args and result. */
+export const SESSION_DETAILED = 20
+/** A step's args and result are cut to this many characters of JSON. */
+export const SESSION_JSON_MAX = 4 * 1024
+
+/** A value as a step carries it: itself when its JSON is at most `max` characters, else that JSON cut, ending in `…`. */
+export function trimJson(v: Json, max = SESSION_JSON_MAX): Json {
+  if (v === null) return null
+  const t = JSON.stringify(v)
+  return t.length <= max ? v : `${t.slice(0, max - 1)}…`
 }
 
 export interface Measurement {
@@ -241,11 +272,12 @@ export class Work {
     applyProjectSchema(this.db)
   }
 
-  /** `agent`: who makes it (default runAgent(): the agent of the job this process serves, if any). */
-  start(kind: string, opts: { subject?: string; args?: unknown; gitSha?: string; agent?: string | null } = {}): string {
+  /** `agent`: who makes it (default runAgent(): the agent of the job this process serves, if any); `job`: in which job
+   * (default runJob()). */
+  start(kind: string, opts: { subject?: string; args?: unknown; gitSha?: string; agent?: string | null; job?: string | null } = {}): string {
     const id = randomUUID().replaceAll('-', '').slice(0, 16)
-    this.db.prepare('INSERT INTO runs (id, kind, subject, started, args, git_sha, agent) VALUES (?,?,?,?,?,?,?)')
-      .run(id, kind, opts.subject ?? null, now(), enc(opts.args), opts.gitSha ?? null, opts.agent === undefined ? runAgent() : opts.agent)
+    this.db.prepare('INSERT INTO runs (id, kind, subject, started, args, git_sha, agent, job) VALUES (?,?,?,?,?,?,?,?)')
+      .run(id, kind, opts.subject ?? null, now(), enc(opts.args), opts.gitSha ?? null, opts.agent === undefined ? runAgent() : opts.agent, opts.job === undefined ? runJob() : opts.job)
     return id
   }
 
@@ -272,7 +304,7 @@ export class Work {
   /** The newest runs: of a kind (a prefix), and of one agent's sessions (`agent`), when given. */
   runs(kind?: string, limit = 20, agent?: string): RunSummary[] {
     const where = [...(kind ? ['kind LIKE ?'] : []), ...(agent ? ['agent = ?'] : [])]
-    const sql = `SELECT id, kind, subject, started, finished, status, summary, agent FROM runs${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY started DESC LIMIT ?`
+    const sql = `SELECT id, kind, subject, started, finished, status, summary, agent, job FROM runs${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY started DESC LIMIT ?`
     const args = [...(kind ? [`${kind}%`] : []), ...(agent ? [agent] : []), limit]
     return this.db.prepare(sql).all(...args) as unknown as RunSummary[]
   }
@@ -284,6 +316,36 @@ export class Work {
     const artifacts = (this.db.prepare('SELECT name, mime, length(bytes) AS size FROM artifacts WHERE run_id=? ORDER BY name').all(id) as unknown as RunRecord['artifacts'])
       .map((a) => ({ ...a, mime: artifactMime(a.mime) }))
     return { ...(r as unknown as RunRecord), args: dec(r.args), result: dec(r.result), measurements, artifacts }
+  }
+
+  /**
+   * The session run `id` belongs to: every run of the same job, oldest first, at most SESSION_STEPS (the ones nearest
+   * `id` when there are more). `args` and `result` (each cut to SESSION_JSON_MAX characters of JSON) only for `id`
+   * itself, a failed or errored step, and the SESSION_DETAILED others nearest it. Null when there is no such run or it
+   * has no job.
+   */
+  session(id: string): RunSession | null {
+    const me = this.db.prepare('SELECT job, agent, started FROM runs WHERE id=?').get(id) as { job: string | null; agent: string | null; started: number } | undefined
+    if (!me?.job) return null
+    type Row = { id: string; kind: string; summary: string | null; status: RunStatus; started: number; finished: number | null; args: string | null; result: string | null }
+    const cols = 'id, kind, summary, status, started, finished, args, result'
+    // the runs around this one: up to half before and the rest after, then topped up from the other side
+    const half = Math.floor(SESSION_STEPS / 2)
+    const before = this.db.prepare(`SELECT ${cols} FROM runs WHERE job=? AND (started < ? OR (started = ? AND id < ?)) ORDER BY started DESC, id DESC LIMIT ?`).all(me.job, me.started, me.started, id, SESSION_STEPS) as unknown as Row[]
+    const after = this.db.prepare(`SELECT ${cols} FROM runs WHERE job=? AND (started > ? OR (started = ? AND id >= ?)) ORDER BY started, id LIMIT ?`).all(me.job, me.started, me.started, id, SESSION_STEPS) as unknown as Row[]
+    const nb = Math.min(before.length, Math.max(half, SESSION_STEPS - after.length))
+    const rows = [...before.slice(0, nb).reverse(), ...after.slice(0, SESSION_STEPS - nb)]
+    const at = rows.findIndex((r) => r.id === id)
+    // the others nearest this run (by position), apart from the failed ones that carry theirs anyway
+    const near = new Set(rows.map((r, i) => ({ r, d: Math.abs(i - at) }))
+      .filter(({ r }) => r.id !== id && r.status !== 'fail' && r.status !== 'error')
+      .sort((a, b) => a.d - b.d).slice(0, SESSION_DETAILED).map(({ r }) => r.id))
+    const steps = rows.map((r): SessionStep => {
+      const s: SessionStep = { id: r.id, kind: r.kind, summary: r.summary, status: r.status, started: r.started, finished: r.finished }
+      if (r.id === id || r.status === 'fail' || r.status === 'error' || near.has(r.id)) { s.args = trimJson(dec(r.args)); s.result = trimJson(dec(r.result)) }
+      return s
+    })
+    return { job: me.job, agent: me.agent, steps }
   }
 
   close(): void {

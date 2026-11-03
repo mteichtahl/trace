@@ -66,6 +66,7 @@ export const SERVICE_ACTIONS: Readonly<Record<string, ServiceScope | 'tool'>> = 
   // (change.accept, change.ask, change.discard are left out on purpose: docs/guided-flow.md)
   'changes.list': 'read',
   'change.get': 'read',
+  'change.check': 'read',
   'change.diff': 'read',
   // deploys: a system reads them; approving, skipping and rolling back are a person's (deploy.approve, deploy.skip,
   // deploy.rollback are left out on purpose: docs/stay-in-trace.md)

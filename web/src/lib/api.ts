@@ -175,6 +175,8 @@ export interface Actions {
   // changes: the pull requests trace's jobs opened, reviewed and accepted in the app (docs/guided-flow.md)
   'changes.list': { args: Repo; result: { repo: string; changes: import('./types').ChangeSummary[] } }
   'change.get': { args: Repo & { number: number }; result: import('./types').ChangeDetail }
+  /** one check of the change's head commit in full; id from checks_list */
+  'change.check': { args: Repo & { number: number; id: string }; result: import('./types').CheckDetail }
   'change.diff': { args: Repo & { number: number; path: string }; result: import('./types').ChangeDiff }
   /** head_sha: the head commit the person looked at (change.get's head.sha); the API refuses a change that moved since */
   'change.accept': { args: Repo & { number: number; head_sha: string; note?: string }; result: import('./types').ChangeAccepted }

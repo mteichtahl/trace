@@ -256,7 +256,27 @@ export interface ChangeFile {
   kind: ChangeFileKind
 }
 
-export interface ChangeCheck { name: string; state: 'passed' | 'failed' | 'running' | 'skipped'; summary: string | null }
+/** `id`: what change.check opens ("cr:<check run id>", "job:<actions job id>"); null or absent: a commit status, nothing more to open */
+export interface ChangeCheck { name: string; state: 'passed' | 'failed' | 'running' | 'skipped'; summary: string | null; id?: string | null }
+
+/** change.check: one check in full (docs/ui/phone-results.md) */
+export interface CheckAnnotation { path: string; line: number | null; level: 'failure' | 'warning' | 'notice'; title: string | null; message: string }
+export interface CheckDetail {
+  id: string
+  name: string
+  state: ChangeCheck['state']
+  /** one line, as in checks_list */
+  summary: string | null
+  /** the check's own report, markdown */
+  text: string | null
+  started_at: string | null
+  completed_at: string | null
+  annotations: CheckAnnotation[]
+  /** the end of the Actions job's log, when the check is one */
+  log: { text: string; truncated: boolean } | null
+  /** admins only: the check on GitHub */
+  url?: string
+}
 
 export interface ChangeDetail extends ChangeSummary {
   /** what trace did, plain bullets */

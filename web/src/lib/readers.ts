@@ -160,7 +160,7 @@ export function readChange(raw: unknown): ChangeDetail {
       path: String(f.path ?? ''), status: (['added', 'modified', 'removed', 'renamed'].includes(String(f.status)) ? f.status : 'modified') as ChangeFile['status'],
       additions: Number(f.additions ?? 0), deletions: Number(f.deletions ?? 0), kind: FILE_KINDS.has(f.kind as ChangeFileKind) ? (f.kind as ChangeFileKind) : 'binary',
     })),
-    checks_list: arr(c.checks_list).map((k) => ({ name: String(k.name ?? ''), state: (['passed', 'failed', 'running', 'skipped'].includes(String(k.state)) ? k.state : 'running') as ChangeCheck['state'], summary: str(k.summary) ?? null })),
+    checks_list: arr(c.checks_list).map((k) => ({ name: String(k.name ?? ''), state: (['passed', 'failed', 'running', 'skipped'].includes(String(k.state)) ? k.state : 'running') as ChangeCheck['state'], summary: str(k.summary) ?? null, id: str(k.id) ?? null })),
     requirements: (Array.isArray(c.requirements) ? c.requirements : []).map(String),
     recommendation: { verdict, why: str(rec.why) ?? '' },
     may_accept: c.may_accept === true,

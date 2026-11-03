@@ -4,9 +4,10 @@
  * earlier version where Compare has something to show.
  */
 import { PARTS_DB_AFTER, PARTS_DB_BEFORE } from './fixtures-db'
-import { zipSync, strToU8 } from 'fflate'
+import { gzipSync, zipSync, strToU8 } from 'fflate'
 import type { FileFinding, ListedFile } from '@/components/files/data'
 import type { ChatMessage, ChatThread } from '@/lib/types'
+import { ROUTE_LOG, ROUTE_REPORT } from './fixtures-s1'
 import pcb from './files/soil-sensor.kicad_pcb?raw'
 import sch from './files/soil-sensor.kicad_sch?raw'
 
@@ -224,6 +225,76 @@ function box(x: number, y: number, z: number, w: number, d: number, h: number): 
 
 export const BOARD_STL = `solid soil-sensor\n${[box(0, 0, 0, 50, 30, 1.6), box(8, 8, 1.6, 4, 4, 1), box(22, 10, 1.6, 7, 7, 0.9), box(36, 18, 1.6, 5, 5, 0.9), box(0, 12, 1.6, 7, 9, 3.2)].join('\n')}\nendsolid soil-sensor\n`
 
+// ------------------------------------------------------------------ run results (charts)
+
+/** An ngspice ASCII rawfile, as sim.spice keeps it (`set filetype=ascii`). */
+function rawFile(title: string, plotname: string, complex: boolean, vars: [string, string][], rows: (number | [number, number])[][]): string {
+  const f = (v: number | [number, number]) => (Array.isArray(v) ? `${v[0].toExponential(15)},${v[1].toExponential(15)}` : v.toExponential(15))
+  const head = `Title: ${title}\nDate: Mon Nov  2 10:00:00  2026\nPlotname: ${plotname}\nFlags: ${complex ? 'complex' : 'real'}\nNo. Variables: ${vars.length}\nNo. Points: ${rows.length}\nVariables:\n${vars.map(([n, t], i) => `\t${i}\t${n}\t${t}`).join('\n')}\nValues:\n`
+  return head + rows.map((r, i) => r.map((v, j) => (j === 0 ? ` ${i}\t${f(v)}` : `\t${f(v)}`)).join('\n')).join('\n') + '\n'
+}
+
+// a 3V3 LDO's load step: 0 to 50 mA at 20 µs, the output dips and recovers
+export const TRAN_RAW = rawFile('ldo load step', 'Transient Analysis', false, [['time', 'time'], ['v(out)', 'voltage'], ['v(in)', 'voltage'], ['i(vload)', 'current']],
+  Array.from({ length: 401 }, (_, i) => {
+    const t = i * 0.25e-6
+    const on = t >= 20e-6
+    const dt = t - 20e-6
+    const dip = on ? 0.085 * Math.exp(-dt / 6e-6) * Math.cos(dt / 2.2e-6) : 0
+    return [t, 3.3 - dip - (on ? 0.004 : 0), 5 - (on ? 0.02 : 0), on ? 0.05 : 0]
+  }))
+
+// the LDO's loop: a two-pole response from 10 Hz to 10 MHz
+export const AC_RAW = rawFile('ldo loop', 'AC Analysis', true, [['frequency', 'frequency grid=3'], ['v(out)', 'voltage'], ['v(fb)', 'voltage']],
+  Array.from({ length: 61 }, (_, i) => {
+    const f = 10 * 10 ** (i / 10)
+    const h = (p1: number, p2: number, k: number): [number, number] => {
+      // k / ((1 + jf/p1)(1 + jf/p2))
+      const ar = 1 - (f * f) / (p1 * p2)
+      const ai = f / p1 + f / p2
+      const d = ar * ar + ai * ai
+      return [(k * ar) / d, (-k * ai) / d]
+    }
+    return [[f, 0], h(1e3, 2e6, 1000), h(5e4, 4e6, 2)]
+  }))
+
+// a 2-port low-pass from emc.run (MA, MHz)
+export const S2P = `! openEMS, trace emc.run: microstrip low-pass, ports 1 and 2
+# MHz S MA R 50
+${Array.from({ length: 41 }, (_, i) => {
+  const f = 10 * 10 ** (i / 13.33)
+  const x = f / 900
+  const s21 = 1 / Math.sqrt(1 + x ** 6)
+  const s11 = Math.sqrt(Math.max(1e-6, 1 - s21 * s21))
+  const ph = -Math.atan(x) * 180 / Math.PI * 3
+  const w = (v: number) => (((v + 180) % 360) + 360) % 360 - 180
+  return `${f.toPrecision(6)} ${s11.toFixed(5)} ${w(ph + 90).toFixed(2)} ${s21.toFixed(5)} ${w(ph).toFixed(2)} ${s21.toFixed(5)} ${w(ph).toFixed(2)} ${s11.toFixed(5)} ${w(ph + 90).toFixed(2)}`
+}).join('\n')}
+`
+
+// a scope capture from hil.scope_capture: a 100 kHz PWM edge with ringing, 20 000 points (drawn thinned)
+export const CH1_CSV = `t_s,CH1_v\n${Array.from({ length: 20000 }, (_, i) => {
+  const t = i * 1e-9
+  const ph = (t * 1e5) % 1
+  const high = ph < 0.5
+  const since = high ? ph / 1e5 : (ph - 0.5) / 1e5
+  const ring = 0.6 * Math.exp(-since / 40e-9) * Math.sin(since / 8e-9)
+  const noise = Math.sin(i * 12.9898) * 0.015
+  return `${t.toPrecision(9)},${((high ? 3.3 : 0) + (high ? ring : -ring) + noise).toPrecision(6)}`
+}).join('\n')}\n`
+
+// ams.stability's loop gain (f, mag_db, phase_deg)
+export const LOOP_GAIN_CSV = `f,mag_db,phase_deg\n${Array.from({ length: 51 }, (_, i) => {
+  const f = 10 * 10 ** (i / 8.5)
+  const mag = 60 - 20 * Math.log10(Math.sqrt(1 + (f / 1e3) ** 2)) - 20 * Math.log10(Math.sqrt(1 + (f / 2e6) ** 2))
+  const ph = -Math.atan(f / 1e3) * 180 / Math.PI - Math.atan(f / 2e6) * 180 / Math.PI
+  return `${f.toPrecision(6)},${mag.toFixed(3)},${ph.toFixed(3)}`
+}).join('\n')}\n`
+
+// fpga.synth's netlist, gzip compressed as the tool keeps it
+export const NETLIST_JSON = JSON.stringify({ creator: 'Yosys 0.44', modules: { top: { attributes: { top: '00000000000000000000000000000001' }, ports: { clk: { direction: 'input', bits: [2] }, led: { direction: 'output', bits: [3, 4, 5, 6] } }, cells: { '$auto$ff.cc:266:slice$12': { type: 'SB_DFF', connections: { C: [2], D: [7], Q: [3] } }, '$abc$lut$7': { type: 'SB_LUT4', parameters: { LUT_INIT: '0110100110010110' }, connections: { I0: [3], I1: [4], I2: [5], I3: [6], O: [7] } } }, netnames: { clk: { bits: [2] }, led: { bits: [3, 4, 5, 6] } } } } }, null, 2)
+export const NETLIST_GZ = gzipSync(strToU8(NETLIST_JSON))
+
 // ------------------------------------------------------------------ Gerbers and the fab zip
 
 const gerber = (body: string) => `%FSLAX46Y46*%\n%MOMM*%\n${body}\nM02*\n`
@@ -274,6 +345,12 @@ export const FILE_LIST: Record<string, ListedFile[]> = {
     { path: 'evidence/sim/3v3-burst.sim.json', kind: 'evidence', size: SIM_JSON.length, at: ago(30 * HOUR), commit: 'a91c04b' },
     { path: 'evidence/i2c-write.wavedrom.json', kind: 'evidence', size: WAVEDROM.length, at: ago(2 * DAY), commit: '3b77e90' },
     { path: 'runs/run_77aa/build.log', kind: 'evidence', size: BUILD_LOG.length, at: ago(40 * 60_000) },
+    { path: 'runs/run_sim1/tran.raw', kind: 'evidence', size: TRAN_RAW.length, at: ago(5 * HOUR) },
+    { path: 'runs/run_sim1/ac.raw', kind: 'evidence', size: AC_RAW.length, at: ago(5 * HOUR) },
+    { path: 'runs/run_emc1/model.s2p', kind: 'evidence', size: S2P.length, at: ago(7 * HOUR) },
+    { path: 'runs/run_hil1/CH1.csv', kind: 'evidence', size: CH1_CSV.length, at: ago(9 * HOUR) },
+    { path: 'runs/run_ams1/loop_gain.csv', kind: 'evidence', size: LOOP_GAIN_CSV.length, at: ago(6 * HOUR) },
+    { path: 'runs/run_fpga1/netlist.json.gz', kind: 'evidence', size: NETLIST_GZ.length, at: ago(10 * HOUR) },
     { path: 'firmware/src/main.c', kind: 'firmware', size: MAIN_C.length, commit: '7f3e21a', at: ago(4 * HOUR), versions: [v('7f3e21a', 4 * HOUR), v('5aa9e03', 2 * DAY)] },
     { path: 'firmware/build/soil-sensor.bin', kind: 'firmware', size: 87616, commit: '7f3e21a', at: ago(40 * 60_000) },
     { path: 'docs/datasheets/TLV755P.pdf', kind: 'documents', size: DATASHEET_PDF.length, commit: '3b77e90', at: ago(9 * DAY) },
@@ -298,6 +375,14 @@ export function fileContent(path: string, commit?: string): { bytes: Uint8Array 
     case 'evidence/sim/3v3-burst.sim.json': return { bytes: SIM_JSON, mime: 'application/json' }
     case 'evidence/i2c-write.wavedrom.json': return { bytes: WAVEDROM, mime: 'application/json' }
     case 'runs/run_77aa/build.log': return { bytes: BUILD_LOG, mime: 'text/plain' }
+    case 'runs/run_sim1/tran.raw': return { bytes: TRAN_RAW, mime: 'text/plain' }
+    case 'runs/run_sim1/ac.raw': return { bytes: AC_RAW, mime: 'text/plain' }
+    case 'runs/run_emc1/model.s2p': return { bytes: S2P, mime: 'application/x-touchstone' }
+    case 'runs/run_hil1/CH1.csv': return { bytes: CH1_CSV, mime: 'text/csv' }
+    case 'runs/run_ams1/loop_gain.csv': return { bytes: LOOP_GAIN_CSV, mime: 'text/csv' }
+    case 'runs/run_fpga1/netlist.json.gz': return { bytes: NETLIST_GZ, mime: 'application/gzip' }
+    case 'runs/run_6d20/route-report.json': return { bytes: ROUTE_REPORT, mime: 'application/json' }
+    case 'runs/run_6d20/autoroute.log': return { bytes: ROUTE_LOG, mime: 'text/plain' }
     case 'firmware/src/main.c': return { bytes: prev ? MAIN_C_PREV : MAIN_C, mime: 'text/x-c' }
     case 'firmware/build/soil-sensor.bin': return { bytes: new Uint8Array(87616).map((_, i) => (i * 31) & 0xff), mime: 'application/octet-stream' }
     case 'docs/datasheets/TLV755P.pdf': return { bytes: DATASHEET_PDF, mime: 'application/pdf' }

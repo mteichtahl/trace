@@ -4,6 +4,10 @@
  * under the matrix. Operations, filtered to this project, is one link away.
  */
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
+import { ChevronRight } from 'lucide-react'
+import { useState } from 'react'
+import { useMediaQuery } from '@/hooks/use-media-query'
+import { cn } from '@/lib/utils'
 import type { ColumnDef } from '@tanstack/react-table'
 import { z } from 'zod'
 import { useTraceContext } from '@/components/chat/context'
@@ -68,6 +72,8 @@ function Evidence() {
   const rows = (runs.data ?? []) as unknown as RunRow[]
   const s = cov.data?.summary ?? {}
   const open = (run: string) => void navigate({ to: '/p/$id/runs/$run', params: { id, run } })
+  const openReq = (r: CoverageRow) => { const run = r.tests.find((t) => t.last_run)?.last_run; if (run) open(run); else void navigate({ to: '/p/$id/requirements/$rid', params: { id, rid: r.id } }) }
+  const phone = useMediaQuery('(max-width: 767px)')
 
   useTraceContext({ label: 'Evidence', description: 'The project tab on screen', value: { tab: 'evidence', summary: s } }, 'screen')
   useCommands(rows.slice(0, 20).map((r) => ({ id: `run-${r.id}`, label: `Open run ${r.id}`, keywords: [r.kind, r.summary ?? ''], run: () => open(r.id) })))
@@ -91,8 +97,9 @@ function Evidence() {
         ) : !cov.data ? null : cov.data.requirements.length === 0 ? (
           <EmptyState>No requirements to cover yet. Coverage fills in once the requirements baseline is signed and tests are planned.</EmptyState>
         ) : (
-          <DataTable id="coverage" url={covUrl} data={cov.data.requirements} columns={coverageColumns} getRowId={(r) => r.id} noun="requirements"
-            onRowClick={(r) => { const run = r.tests.find((t) => t.last_run)?.last_run; if (run) open(run); else void navigate({ to: '/p/$id/requirements/$rid', params: { id, rid: r.id } }) }} />
+          phone ? <CoverageList rows={cov.data.requirements} onOpen={openReq} /> : (
+          <DataTable id="coverage" url={covUrl} data={cov.data.requirements} columns={coverageColumns} getRowId={(r) => r.id} noun="requirements" onRowClick={openReq} />
+          )
         )}
       </Section>
 
@@ -102,6 +109,7 @@ function Evidence() {
         ) : !runs.data ? null : rows.length === 0 ? (
           <EmptyState>No runs yet. trace starts the first when the requirements baseline is signed.</EmptyState>
         ) : (
+          phone ? <RunList rows={rows} onOpen={open} /> :
           <DataTable id="runs" url={runUrl} data={rows} columns={runColumns} getRowId={(r) => r.id} noun="runs" onRowClick={(r) => open(r.id)} defaultView={{ sorting: [{ id: 'started', desc: true }] }} />
         )}
       </Section>
@@ -121,5 +129,77 @@ function Evidence() {
         </Section>
       )}
     </div>
+  )
+}
+
+/** The quick filters on a phone, in place of the table's controls. */
+export const COVERAGE_CHIPS = [
+  { id: 'all', label: 'All', has: () => true },
+  { id: 'failing', label: 'Failing', has: (r: CoverageRow) => r.verdict === 'failing' },
+  { id: 'untested', label: 'Untested', has: (r: CoverageRow) => r.verdict === 'untested' || r.verdict === 'no_test' || r.verdict === 'partial' || r.verdict === 'coverage_gap' },
+  { id: 'verified', label: 'Verified', has: (r: CoverageRow) => r.verdict === 'verified' },
+  { id: 'waived', label: 'Waived', has: (r: CoverageRow) => r.verdict === 'waived' },
+] as const
+
+/** Coverage on a phone: one line per requirement (status pill, id, its words, chevron) under quick filter chips. */
+export function CoverageList({ rows, onOpen }: { rows: CoverageRow[]; onOpen: (r: CoverageRow) => void }) {
+  const [chip, setChip] = useState<(typeof COVERAGE_CHIPS)[number]['id']>('all')
+  const has = COVERAGE_CHIPS.find((c) => c.id === chip)!.has
+  const shown = rows.filter(has)
+  return (
+    <div>
+      <div role="group" aria-label="Show" className="-mx-4 mb-2 flex gap-1.5 overflow-x-auto px-4 pb-1">
+        {COVERAGE_CHIPS.map((c) => {
+          const n = rows.filter(c.has).length
+          return (
+            <button key={c.id} type="button" aria-pressed={chip === c.id} onClick={() => setChip(c.id)}
+              className={cn('h-9 shrink-0 rounded-full border px-3 text-sm', chip === c.id ? 'border-foreground bg-foreground text-background' : 'bg-card text-foreground active:bg-muted')}>
+              {c.label} <span className={cn('ml-0.5 text-xs', chip === c.id ? 'opacity-80' : 'text-muted-foreground')}>{n}</span>
+            </button>
+          )
+        })}
+      </div>
+      {shown.length === 0 ? (
+        <p className="rounded-xl border border-dashed px-4 py-5 text-sm text-muted-foreground">No requirements are {COVERAGE_CHIPS.find((c) => c.id === chip)!.label.toLowerCase()}.</p>
+      ) : (
+        <ul className="divide-y rounded-xl border bg-card" aria-label="Requirements">
+          {shown.map((r) => (
+            <li key={r.id}>
+              <button type="button" onClick={() => onOpen(r)} className="flex min-h-[52px] w-full items-center gap-2.5 px-3 py-2.5 text-left active:bg-muted">
+                <StatusBadge status={VERDICT[r.verdict].status} label={VERDICT[r.verdict].label} className="shrink-0" />
+                <span className="shrink-0 font-mono text-xs text-muted-foreground">{r.id}</span>
+                <span className="min-w-0 flex-1 truncate text-sm">{r.text}</span>
+                <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+const DOT: Record<RunRow['status'], string> = { running: 'bg-primary animate-pulse', pass: 'bg-verified', fail: 'bg-destructive', error: 'bg-warning' }
+
+/** Runs on a phone: newest first, one line each with a status dot (and the word for screen readers). */
+export function RunList({ rows, onOpen }: { rows: RunRow[]; onOpen: (id: string) => void }) {
+  const sorted = [...rows].sort((a, b) => b.started - a.started)
+  return (
+    <ul className="divide-y rounded-xl border bg-card" aria-label="Runs">
+      {sorted.map((r) => (
+        <li key={r.id}>
+          <button type="button" onClick={() => onOpen(r.id)} className="flex min-h-[52px] w-full items-center gap-3 px-3 py-2.5 text-left active:bg-muted">
+            <span className={cn('size-2.5 shrink-0 rounded-full', DOT[r.status])} aria-hidden />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm">{r.summary ?? r.kind}</span>
+              <span className="block truncate text-xs text-muted-foreground">
+                {RUN_STATUS[r.status].label} · {ago(r.started * 1000)} · <span className="font-mono">{r.kind}</span>
+              </span>
+            </span>
+            <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          </button>
+        </li>
+      ))}
+    </ul>
   )
 }

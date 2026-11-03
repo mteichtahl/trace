@@ -13,7 +13,7 @@ import { readSettings } from '../../src/core/config.js'
 import { Registry, defineTool } from '../../src/core/registry.js'
 import { toolRunner } from '../../src/agents/runtime/tool.js'
 import type { ToolJob } from '../../src/agents/runtime/schemas.js'
-import { openProject } from '../../src/core/store.js'
+import { Work, openProject } from '../../src/core/store.js'
 import { CLIENT_ID, FakeCognito, FakeGitHub, ISSUER, KID, accessToken, jwks, otherKeys, sign, verifier } from './fixtures.js'
 
 const ADMIN = { sub: 'admin-1', email: 'admin@example.com', groups: ['trace-admins'] }
@@ -348,6 +348,29 @@ describe('settings', () => {
     const s = await perform('settings.set', { repo: 'acme/board', key: 'deploy.environment', value: 'lab' }, { principal: ADMIN, deps })
     const branch = (s.result as { branch: string }).branch
     expect(github.calls).toContain(`putFile acme/board ${branch} .trace/project.db new`)
+  })
+
+  it('run answers its session: the runs of the same job in order, null without a job; runs name their job', async () => {
+    const dir = mkdtempSync(join(scratch, 'runs-'))
+    mkdirSync(join(dir, '.git'))
+    openProject(dir).close()
+    const w = new Work(join(dir, '.trace', 'project.db'))
+    const a = w.start('mcp.tool', { job: 'job-x', agent: 'impl', args: { q: 1 } }); w.db.prepare('UPDATE runs SET started=1 WHERE id=?').run(a); w.finish(a, 'pass', 'read', { r: 1 })
+    const b = w.start('kicad.erc', { job: 'job-x', agent: 'impl', args: { q: 2 } }); w.db.prepare('UPDATE runs SET started=2 WHERE id=?').run(b); w.finish(b, 'fail', 'erc failed', { errors: 3 })
+    const solo = w.start('kicad.drc', { job: null, agent: null })
+    w.close()
+    github.files.set('acme/board:main:.trace/project.db', readFileSync(join(dir, '.trace', 'project.db')))
+    rmSync(dir, { recursive: true, force: true })
+    const guest = { principal: { sub: 'guest-1', email: null, groups: ['trace-guests'] }, deps }
+    const r = (await perform('run', { repo: 'acme/board', id: b }, guest)).result as Record<string, unknown>
+    expect(r).toMatchObject({ id: b, job: 'job-x', agent: 'impl', args: { q: 2 } })
+    expect(r.session).toEqual({ job: 'job-x', agent: 'impl', steps: [
+      { id: a, kind: 'mcp.tool', summary: 'read', status: 'pass', started: 1, finished: expect.any(Number), args: { q: 1 }, result: { r: 1 } },
+      { id: b, kind: 'kicad.erc', summary: 'erc failed', status: 'fail', started: 2, finished: expect.any(Number), args: { q: 2 }, result: { errors: 3 } },
+    ] })
+    expect(((await perform('run', { repo: 'acme/board', id: solo }, guest)).result as Record<string, unknown>).session).toBeNull()
+    const list = (await perform('runs', { repo: 'acme/board' }, guest)).result as { id: string; job: string | null }[]
+    expect(Object.fromEntries(list.map((x) => [x.id, x.job]))).toEqual({ [a]: 'job-x', [b]: 'job-x', [solo]: null })
   })
 
   it('settings.set commits on a trace/settings- branch, never main', async () => {
