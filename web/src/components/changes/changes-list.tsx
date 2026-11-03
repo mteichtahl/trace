@@ -1,7 +1,8 @@
 /**
- * "Changes from trace" on the overview (in place of "Waiting on GitHub"): each open change a trace job made, with its
- * pill (For you, In progress, Needs a fix, Out of date), its title, how many files, who made it and when, and its
- * checks. A row opens the change's review page. The list is asked for again every 30 s as a fallback for live events,
+ * "Changes from trace" on the overview (in place of "Waiting on GitHub"): each open change a trace job made, and each
+ * edit a person made in the app (a setting, a prompt, a hand-in: docs/stay-in-trace.md) tagged with its kind, with its
+ * pill (For you, In progress, Needs a fix, Out of date, Applying), its title, how many files, who made it and when, and
+ * its checks. A row opens the change's review page. The list is asked for again every 30 s as a fallback for live events,
  * and no faster than every 60 s while they are connected (lib/live.ts pollEvery): each look costs GitHub calls on the
  * token every project shares.
  */
@@ -9,7 +10,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { CircleCheck, CircleX, Loader2 } from 'lucide-react'
 import { Section } from '@/components/shell/app-shell'
-import { changeLine, checksWords, VERDICT_WORDS } from '@/lib/guided'
+import { KIND_TAG, changeLine, checksWords, VERDICT_WORDS } from '@/lib/guided'
 import { projectId } from '@/lib/api'
 import { pollEvery, useLiveStatus } from '@/lib/live'
 import { ago } from '@/lib/format'
@@ -77,7 +78,10 @@ export function ChangesFromTrace({ repo, unavailable, className }: { repo: strin
             <Link to="/p/$id/changes/$number" params={{ id, number: String(c.number) }} className="flex items-center gap-4 px-5 py-3.5 hover:bg-muted/50" data-density-item>
               <ChangePill verdict={c.verdict} className="justify-center sm:w-[84px]" />
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold sm:truncate">{c.title}</p>
+                <p className="text-sm font-semibold sm:truncate">
+                  {c.kind && KIND_TAG[c.kind] ? <span className="mr-1.5 rounded bg-muted px-1.5 py-0.5 align-middle text-xs font-medium">{KIND_TAG[c.kind]}</span> : null}
+                  {c.title}
+                </p>
                 <p className="text-sm text-muted-foreground sm:truncate">{changeMeta(c)}</p>
               </div>
               <span className="max-sm:hidden"><ChecksBadge c={c.checks} /></span>

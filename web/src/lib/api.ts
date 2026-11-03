@@ -170,6 +170,8 @@ export interface Actions {
   'change.accept': { args: Repo & { number: number; head_sha: string; note?: string }; result: import('./types').ChangeAccepted }
   'change.ask': { args: Repo & { number: number; note: string }; result: { job_id: string } }
   'change.discard': { args: Repo & { number: number; reason: string }; result: { closed: true } }
+  /** admins: put the repository's rule back to passing checks only (docs/stay-in-trace.md "5. Fixing the repository rule") */
+  'repo.rules.fix': { args: Repo; result: { done: string[]; left: string[] } }
 }
 
 export type ActionName = keyof Actions

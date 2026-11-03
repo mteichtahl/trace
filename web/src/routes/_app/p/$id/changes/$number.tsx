@@ -2,15 +2,25 @@
  * Review a change (/p/:id/changes/:number): what trace did in plain words, the files it touched in trace's own viewers
  * (schematics and boards in KiCanvas with Before / After, text as a diff, pictures side by side), its checks, the
  * requirements it covers, trace's recommendation with its reason, a note box for the specialist, and the decision bar
- * (Discard, Ask for changes, Accept into the design). Reviewers read it; the bar says why they cannot decide. "View on
- * GitHub" stays a small link.
+ * (Discard, Ask for changes, Accept into the design). Reviewers read it; the bar says why they cannot decide. GitHub's
+ * own page is only in the admins' More menu (docs/stay-in-trace.md, decision C).
+ *
+ * An edit a person made in the app (a setting, a prompt, a hand-in: docs/stay-in-trace.md) reads the same way, as "What
+ * it changes", tagged with its kind; trace applies an admin's own edit by itself, and an admin accepts someone else's.
+ * A repository whose rule asks for a review trace cannot give shows admins "Fix the rule and accept" (repo.rules.fix).
  *
  * Data: change.get (asked for again while GitHub works out whether it can merge, every 5 s, and while checks run, as a
  * fallback to the events; the bar says when it looks next), change.diff per file, journey.get (step words).
  */
 import { useQuery } from '@tanstack/react-query'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
-import { CircleCheck, CircleDashed, CircleMinus, CircleX, ExternalLink, Loader2, Sparkles } from 'lucide-react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { CircleCheck, CircleDashed, CircleMinus, CircleX, Loader2, ShieldAlert, Sparkles } from 'lucide-react'
+import { toast } from 'sonner'
+import { MoreForAdmins } from '@/components/more-for-admins'
+import { Button } from '@/components/ui/button'
+import { useAuth } from '@/lib/auth'
+import { call } from '@/lib/api'
 import { useState } from 'react'
 import { useTraceContext } from '@/components/chat/context'
 import { ChangeFileView } from '@/components/changes/change-file-view'
@@ -25,7 +35,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { repoOf } from '@/lib/api'
 import { changeLookEvery, useLiveStatus, useNextLook } from '@/lib/live'
 import { ago } from '@/lib/format'
-import { changeOf, checksWords, currentStage, nextPlace, recommendationWords, stepWords } from '@/lib/guided'
+import { KIND_TAG, changeOf, checksWords, currentStage, nextPlace, recommendationWords, stepWords } from '@/lib/guided'
 import { q, useJourney, useProjects } from '@/lib/queries'
 import type { ChangeCheck, ChangeDetail, ChangeFile } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -73,7 +83,8 @@ function Review() {
   const file = d.files.find((f) => f.path === picked) ?? d.files[0]
   const stage = j.data ? currentStage(j.data) : null
   const place = j.data ? nextPlace(j.data) : null
-  const forYou = d.verdict === 'ready' && part !== 'reviewer'
+  const edit = !!d.kind && d.kind !== 'work'
+  const forYou = d.verdict === 'ready' && part !== 'reviewer' && d.may_accept
   const busy = actions.accept.isPending ? 'accept' : actions.ask.isPending ? 'ask' : actions.discard.isPending ? 'discard' : null
   // the next step is this change: its place in the stage, and what accepting moves
   const isNext = !!j.data && j.data.next.kind === 'review' && changeOf(j.data.next) === number
@@ -91,19 +102,19 @@ function Review() {
             </span>
           </p>
           <h2 className="mt-2 text-xl font-semibold tracking-tight">{d.title}</h2>
-          <p className="text-sm text-muted-foreground">From {d.from} · {ago(d.opened_at)} · change {d.number}{d.draft ? ' · a draft' : ''}</p>
+          <p className="text-sm text-muted-foreground">
+            {edit && d.kind && KIND_TAG[d.kind] ? <span className="mr-1.5 rounded bg-muted px-1.5 py-0.5 text-xs font-medium text-foreground">{KIND_TAG[d.kind]}</span> : null}
+            {edit ? `Made by ${d.mine ? 'you' : d.by_name ?? 'someone'}` : `From ${d.from}`} · {ago(d.opened_at)} · change {d.number}{d.draft ? ' · a draft' : ''}
+          </p>
         </div>
-        {d.url && (
-          <a href={d.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-            View on GitHub <ExternalLink className="size-3" aria-hidden />
-          </a>
-        )}
+        <MoreForAdmins links={[d.url ? { label: 'This change on GitHub', href: d.url } : null]} />
       </div>
+      {d.rule_blocks && d.state === 'open' && <RuleFix repo={repo} change={d} onFixed={(n) => actions.accept.mutate({ number, head: d.head.sha, title: d.title, ...(n ? { note: n } : {}), step: isNext ? place : null }, { onSuccess: back })} note={note.trim()} />}
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0 space-y-5">
           <section className="rounded-xl border bg-card p-5" aria-labelledby="did">
-            <h3 id="did" className="section-label">What trace did</h3>
+            <h3 id="did" className="section-label">{edit ? 'What it changes' : 'What trace did'}</h3>
             {d.summary.length ? (
               <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
                 {d.summary.map((s, i) => <li key={i}><Rich text={s} /></li>)}
@@ -138,7 +149,7 @@ function Review() {
             </div>
           </section>
 
-          {part !== 'reviewer' && d.state === 'open' && (
+          {part !== 'reviewer' && d.state === 'open' && d.may_ask !== false && (
             <section className="rounded-xl border bg-card p-5">
               <Label htmlFor="change-note" className="section-label">Talk to {d.from}</Label>
               <Textarea id="change-note" rows={2} className="mt-2" value={note} onChange={(e) => setNote(e.target.value)} placeholder="For example: use a 1 A regulator, we may add a radio later." />
@@ -214,6 +225,45 @@ function Checks({ d }: { d: ChangeDetail }) {
             </li>
           )}
         </ul>
+      )}
+    </section>
+  )
+}
+
+/**
+ * The repository's rule asks for a review trace cannot give, though every check passed (change.get's rule_blocks).
+ * An admin fixes the rule here (repo.rules.fix: trace's own rule back to passing checks only; someone else's rule is
+ * only named) and the change is accepted straight after; anyone else is told an admin can.
+ */
+function RuleFix({ repo, change, note, onFixed }: { repo: string; change: ChangeDetail; note: string; onFixed: (note: string) => void }) {
+  const { user } = useAuth()
+  const admin = user?.class === 'admin'
+  const qc = useQueryClient()
+  // trace applies an admin's own edit by itself: fixing the rule is all it needs
+  const acceptsAfter = change.applies !== 'auto'
+  const fix = useMutation({
+    mutationFn: () => call('repo.rules.fix', { repo }),
+    onSuccess: (r) => {
+      if (r.left.length) toast.warning('Fixed trace\'s rule; one more rule asks for a review', { description: r.left.join(' ') })
+      else if (acceptsAfter) onFixed(note)
+      else toast.success('Fixed the rule', { description: 'trace applies this change now.' })
+    },
+    onError: (e) => toast.error('Could not fix the rule', { description: e instanceof Error ? e.message : String(e) }),
+    onSettled: () => void qc.invalidateQueries({ queryKey: ['change.get', repo] }),
+  })
+  return (
+    <section className="mt-4 flex flex-wrap items-start gap-3 rounded-xl border border-warning/40 bg-warning/10 p-4" aria-labelledby="rule-fix">
+      <ShieldAlert className="mt-0.5 size-5 shrink-0 text-warning-foreground" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <h3 id="rule-fix" className="text-sm font-semibold">This repository asks for a review trace cannot give</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {admin
+            ? 'Every check passed. trace records who accepted instead. Putting trace\'s rule back changes only what this repository asks for before a change goes in: passing checks.'
+            : 'Every check passed. An admin can put trace\'s rule back from this page, and then it can be accepted.'}
+        </p>
+      </div>
+      {admin && (
+        <Button onClick={() => fix.mutate()} disabled={fix.isPending}>{fix.isPending && <Loader2 className="animate-spin" aria-hidden />}{acceptsAfter ? 'Fix the rule and accept' : 'Fix the rule'}</Button>
       )}
     </section>
   )

@@ -6,6 +6,9 @@
  * - A reviewer sees no buttons, and a sentence saying why (they can read changes; contributors decide).
  * - A change that cannot be accepted yet shows its blockers in plain words, and Accept stays disabled.
  * - A change already accepted or discarded says so.
+ * - An edit a person made in the app (docs/stay-in-trace.md) has no specialist to ask, so no Ask for changes; its author
+ *   or an admin may discard it; one trace applies by itself (an admin's own edit, a hand-in) has no Accept: the bar says
+ *   trace applies it once its checks pass.
  */
 import { Loader2 } from 'lucide-react'
 import { useState } from 'react'
@@ -17,7 +20,10 @@ import type { ChangeDetail, Part } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export interface DecisionBarProps {
-  change: Pick<ChangeDetail, 'state' | 'may_accept' | 'blockers' | 'title' | 'from'> & { verdict?: ChangeDetail['verdict']; awaiting?: string[] | undefined }
+  change: Pick<ChangeDetail, 'state' | 'may_accept' | 'blockers' | 'title' | 'from'> & {
+    verdict?: ChangeDetail['verdict']; awaiting?: string[] | undefined
+    may_ask?: boolean | undefined; may_discard?: boolean | undefined; applies?: ChangeDetail['applies']
+  }
   part?: Part
   /** the note box's words, carried into Accept and Ask */
   note: string
@@ -36,8 +42,14 @@ export const ASK_MAX = 4000
 export const DISCARD_MAX = 2000
 
 /** The words beside the buttons, for each mode. */
-export function barWords(mode: DecisionMode, c: Pick<ChangeDetail, 'state' | 'blockers' | 'from'> & { verdict?: ChangeDetail['verdict']; awaiting?: string[] | undefined }, acceptSays?: string): string {
+export function barWords(mode: DecisionMode, c: Pick<ChangeDetail, 'state' | 'blockers' | 'from'> & { verdict?: ChangeDetail['verdict']; awaiting?: string[] | undefined; applies?: ChangeDetail['applies'] }, acceptSays?: string): string {
   const who = `${c.from[0]?.toUpperCase() ?? ''}${c.from.slice(1)}`
+  // trace applies it by itself: nobody accepts it, and the bar says what it waits for
+  if (c.applies === 'auto' && c.state === 'open') {
+    if (c.verdict === 'applying') return 'Its checks passed: trace applies it now. Nothing for you to do.'
+    const rest = c.blockers.filter((b) => !/nobody needs to accept it/.test(b))
+    return `trace applies it once its checks pass, with nothing for anyone to do.${rest.length ? ` For now: ${rest.join(' ')}` : ''}`
+  }
   // it waits on a person's approval, not on more work: say what to approve; it updates by itself once approved
   if (mode === 'ready' && c.verdict === 'unfinished' && c.awaiting?.length) return `${who} says this waits for ${c.awaiting.join(' and ')} to be approved. Once it is, this updates by itself.`
   if (mode === 'ready' && c.verdict === 'unfinished') return `${c.from[0]?.toUpperCase() ?? ''}${c.from.slice(1)} says this is not finished. trace recommends asking for changes; accepting adds it to the design as it is.`
@@ -57,6 +69,10 @@ export function DecisionBar({ change, part, note, acceptSays, nextLook, onAccept
   const max = confirm === 'ask' ? ASK_MAX : DISCARD_MAX
   const valid = text.trim().length > 0 && text.length <= max
   const decides = mode === 'ready' || mode === 'blocked'
+  // what this person may do here (an older API says nothing: everything, as before)
+  const mayAsk = change.may_ask !== false
+  const mayDiscard = change.may_discard !== false
+  const mayAccept = change.applies !== 'auto'
   // the specialist says it is not finished: asking for changes is the step trace recommends, so it leads
   // the specialist says it is not finished and has more to do (not merely waiting on an approval)
   const unfinished = change.verdict === 'unfinished' && !change.awaiting?.length
@@ -97,12 +113,14 @@ export function DecisionBar({ change, part, note, acceptSays, nextLook, onAccept
           </p>
           {decides && (
             <div className="flex flex-wrap gap-2 max-sm:w-full max-sm:[&>*]:flex-1">
-              <Button variant="ghost" onClick={() => open('discard')} disabled={!!busy}>Discard</Button>
-              <Button variant={unfinished ? 'default' : 'outline'} size={unfinished ? 'lg' : 'default'} onClick={() => open('ask')} disabled={!!busy}>Ask for changes</Button>
-              <Button variant={unfinished ? 'outline' : 'default'} size={unfinished ? 'default' : 'lg'} onClick={() => onAccept(note.trim())} disabled={mode !== 'ready' || !!busy}>
-                {busy === 'accept' && <Loader2 className="animate-spin" aria-hidden />}
-                Accept into the design
-              </Button>
+              {mayDiscard && <Button variant="ghost" onClick={() => open('discard')} disabled={!!busy}>Discard</Button>}
+              {mayAsk && <Button variant={unfinished ? 'default' : 'outline'} size={unfinished ? 'lg' : 'default'} onClick={() => open('ask')} disabled={!!busy}>Ask for changes</Button>}
+              {mayAccept && (
+                <Button variant={unfinished ? 'outline' : 'default'} size={unfinished ? 'default' : 'lg'} onClick={() => onAccept(note.trim())} disabled={mode !== 'ready' || !!busy}>
+                  {busy === 'accept' && <Loader2 className="animate-spin" aria-hidden />}
+                  Accept into the design
+                </Button>
+              )}
             </div>
           )}
         </div>
