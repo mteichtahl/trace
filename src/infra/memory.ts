@@ -27,7 +27,8 @@
  *                          bedrock-agentcore:namespace), as defence in depth: src/infra/project.ts
  *   the API                records under /trace/ of every project's memory (memory.list, memory.recall, and
  *                          GetMemoryRecord to verify a record before memory.deactivate, after its access check), read
- *                          only, and no events (grantReadRecords). Inactive marks are not written to the memory: they
+ *                          only (grantReadRecords), and its agents' events, listed only (memory.events,
+ *                          grantReadEvents). Inactive marks are not written to the memory: they
  *                          are an overlay in S3 (src/agents/runtime/memory-state.ts)
  *   the OIDC role          the same as its project's worker, on its own project's memory only (the worker.runner =
  *                          actions fallback is the worker in GitHub Actions): src/infra/project.ts
@@ -37,6 +38,7 @@ import * as iam from 'aws-cdk-lib/aws-iam'
 import { CfnMemory } from 'aws-cdk-lib/aws-bedrockagentcore'
 import { Construct } from 'constructs'
 import { NAMESPACE_TEMPLATES, ROOT } from '../agents/runtime/memory.js'
+import { memoryNamePattern } from '../core/project.js'
 
 /** The memory of installations before memory was per project (one for every project). Kept only so that it can be
  * retained on the way out (memory.legacySharedMemory): its name must not change, or CloudFormation replaces it. */
@@ -98,6 +100,24 @@ export class TraceMemory extends Construct {
 export const API_RECORD_ACTIONS = [...RECORD_ACTIONS, 'bedrock-agentcore:GetMemoryRecord'] as const
 
 /** Let `grantee` (the API) recall, list and get the records of every project's memory, and nothing else of them. */
+/** The API's read of short-term memory (memory.events): list an actor's sessions and their events, never write them. */
+export const API_EVENT_ACTIONS = ['bedrock-agentcore:ListSessions', 'bedrock-agentcore:ListEvents'] as const
+
+/**
+ * The API reads every project's short-term events (memory.events), read only. One short statement on this
+ * installation's memories by name (`<prefix>_m_*`, src/core/project.ts memoryName), not one ARN per project, so the
+ * API's policy keeps its size however many projects there are. The API's access check names the actors it reads: the
+ * project's agents and the caller's own person actor (src/api/actions.ts).
+ */
+export function grantReadEvents(grantee: iam.IGrantable, memories: readonly TraceMemory[], at: { partition: string; region: string; account: string; prefix: string }): void {
+  if (!memories.length) return
+  grantee.grantPrincipal.addToPrincipalPolicy(new iam.PolicyStatement({
+    sid: 'TraceMemoryEventsRead',
+    actions: [...API_EVENT_ACTIONS],
+    resources: [`arn:${at.partition}:bedrock-agentcore:${at.region}:${at.account}:memory/${memoryNamePattern(at.prefix)}`],
+  }))
+}
+
 export function grantReadRecords(grantee: iam.IGrantable, memories: readonly TraceMemory[]): void {
   if (!memories.length) return
   grantee.grantPrincipal.addToPrincipalPolicy(new iam.PolicyStatement({
