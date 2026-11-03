@@ -130,6 +130,19 @@ describe('the Process tab and its tiles', () => {
     expect(tile(only, 'jobs')?.status).toBe('ok')
   })
 
+  it('says what CloudWatch left out, to admins only, instead of an empty chart that looks like no data', async () => {
+    const w = world()
+    w.cw.dashboards.set('trace-agents', body)
+    w.cw.data = (q) => q.Id?.startsWith('w1_') ? [{ Id: q.Id, Label: 'x', StatusCode: 'PartialData', Messages: [{ Code: 'MaxQueryTimeSeriesLimit', Value: 'Too many series' }], Timestamps: [], Values: [] }] : []
+    for (const cls of ['admin', 'user'] as const) {
+      w.runtime.answers.set('whoami', () => ({ body: { ok: true, result: { sub: 's', class: cls } } }))
+      w.runtime.answers.set('projects', () => ({ body: { ok: true, result: [{ repo: A }] } }))
+      const o = (await w.serve({ method: 'GET', path: '/api/ops', query: new URLSearchParams('range=24h'), headers: bearerOf(accessToken('s', cls === 'admin' ? ['trace-admins'] : ['trace-users'])) })).json() as { notes?: string[] }
+      if (cls === 'admin') expect(o.notes?.[0]).toMatch(/^trace-agents: .+: MaxQueryTimeSeriesLimit: Too many series$/)
+      else expect(o.notes).toBeUndefined()
+    }
+  })
+
   it('without the Process rows (a dashboard made before them): no Process, and the old jobs tile from the other widgets', () => {
     const p = processView([])
     expect(p).toEqual({ builds: null, jobs: null, waits: [], wait: null, rework: [{ cause: 'job_restarted', count: 0 }, { cause: 'conflict_resolved', count: 0 }, { cause: 'sent_back', count: 0 }, { cause: 'asked_again', count: 0 }], working: null, runTime: null })

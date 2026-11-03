@@ -72,6 +72,8 @@ export interface OpsAnswer {
   sections: OpsSection[]
   /** the Process tab (src/web/ops.ts processView); absent from an older API */
   process?: OpsProcess
+  /** admins: what CloudWatch said it left out (a limit reached, a query refused), so an empty chart says why */
+  notes?: string[]
   updatedAt: string
   nextAt: string
 }
