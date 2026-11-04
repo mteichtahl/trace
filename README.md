@@ -557,6 +557,9 @@ action the system may use:
 
 **What a system can and can't do.** With read it can see the projects it is on: their status, settings, runs and
 artifacts, jobs, requirements, design, build and cost records, files, the knowledge base, and the read-only tools.
+It can also read trace's records the way trace names them: the ontology's terms (`ontology.describe`), any record
+as JSON-LD (`record.get`), what a run was made from (`artifact.lineage`) and which runs no longer stand
+(`artifact.stale`).
 With read and change it can also, where it is a contributor, give the agents work, pause or cancel its own jobs,
 propose a settings change (as a pull request a person merges), sync the knowledge base and run tools that record
 runs. Never, whatever it may do: anything that needs an admin, signing gates, answering questions, waivers, design
