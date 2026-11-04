@@ -116,8 +116,8 @@ describe('restack', () => {
       'repos.getBranch': Object.assign(new Error('Branch not found'), { status: 404 }),
     })
     const r = await restack(rd(f), [pr(2, 'claude/b', 'claude/a')])
-    const order = f.calls.map((c) => c.key).filter((k) => ['issues.addLabels', 'pulls.update', 'pulls.updateBranch', 'issues.removeLabel'].includes(k))
-    expect(order).toEqual(['issues.addLabels', 'pulls.update', 'pulls.updateBranch', 'issues.removeLabel'])
+    const order = f.calls.map((c) => c.key).filter((k) => ['issues.addLabels', 'pulls.update', 'repos.merge', 'issues.removeLabel'].includes(k))
+    expect(order).toEqual(['issues.addLabels', 'pulls.update', 'repos.merge', 'issues.removeLabel'])
     expect(f.called('pulls.update')[0]!.args).toMatchObject({ pull_number: 2, base: 'main' })
     expect([...r.pushed]).toEqual([2])
     expect(r.lines.join()).toMatch(/#1 merged, so it now targets main and is up to date/)
@@ -140,7 +140,8 @@ describe('restack', () => {
     const still = pr(3, 'claude/c', 'claude/b', { base: { ref: 'claude/b', sha: head(2) } })
     const r = await restack(rd(f), [pr(1, 'claude/a'), pr(2, 'claude/b', 'claude/a', { base: { ref: 'claude/a', sha: 'older' } }), still])
     expect(f.called('repos.compareCommits')).toHaveLength(1)
-    expect(f.called('pulls.updateBranch').map((c) => c.args.pull_number)).toEqual([2])
+    // merged with the merges API: GitHub refuses "Update branch" for a stacked pull request
+    expect(f.called('repos.merge').map((c) => [c.args.base, c.args.head])).toEqual([['claude/b', 'claude/a']])
     expect(r.lines.join()).toMatch(/#2: merged claude\/a \(#1\) in/)
   })
 
@@ -156,23 +157,21 @@ describe('restack', () => {
     expect(g.calls.filter((c) => !['pulls.list', 'repos.getBranch'].includes(c.key))).toEqual([])
   })
 
-  it('tells a conflict from a head that moved, pushes nothing without a token, and keeps to its budget', async () => {
+  it('says when a merge conflicts, pushes nothing without a token, and keeps to its budget', async () => {
     const behind = { ahead_by: 1, behind_by: 1 }
-    const conflict = Object.assign(new Error('merge conflict between base and head'), { status: 422 })
-    const f = fakeGithub({ 'repos.compareCommits': () => behind, 'pulls.updateBranch': conflict })
+    const conflict = Object.assign(new Error('Merge conflict'), { status: 409 })
+    const f = fakeGithub({ 'repos.compareCommits': () => behind, 'repos.merge': conflict })
     const many = [pr(1, 'claude/a'), ...Array.from({ length: RESTACK_PER_RUN + 1 }, (_, i) => pr(i + 2, `claude/s${i}`, 'claude/a'))]
     const r = await restack(rd(f), many)
     expect(r.lines.join()).toMatch(/conflict with #1: left for the worker/)
     expect(r.pushed.size).toBe(0)
-    const moved = fakeGithub({ 'repos.compareCommits': () => behind, 'pulls.updateBranch': Object.assign(new Error("expected head sha didn't match current head ref."), { status: 422 }) })
-    expect((await restack(rd(moved), many.slice(0, 2))).lines.join()).toMatch(/moved while it was looked at/)
     const ok = fakeGithub({ 'repos.compareCommits': () => behind })
     const capped = await restack(rd(ok), many, 2)
     expect(capped.pushed.size).toBe(2)
     expect(capped.lines.join()).toMatch(/next run/)
     const g = fakeGithub({ 'repos.compareCommits': () => behind })
     expect((await restack(rd(g, false), many.slice(0, 2))).lines.join()).toMatch(/no TRACE_TOKEN/)
-    expect(g.called('pulls.updateBranch')).toHaveLength(0)
+    expect(g.called('repos.merge')).toHaveLength(0)
   })
 
   it("leaves a change based on a person's own branch (no pull request) alone", async () => {
