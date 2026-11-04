@@ -131,7 +131,10 @@ describe('the nested layout', () => {
     // src/infra/stack.ts) and one output (ToolsImageUri), whatever the number of projects.
     // The runs log group adds none here: it is in the web app's nested stack (src/infra/run-logs.ts; the API reads it
     // through its cost policy).
-    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:118/28:1', '24:144/28:4', '60:180/28:4'])
+    // The chat's events (src/infra/memory.ts grantChatEvents: CreateEvent on each project's memory, for its chat and
+    // person actors only) are one statement per project in the API role: three more overflow policies at 60 projects
+    // (seven in all, under IAM's ten managed policies per role).
+    expect(sizes.map((z) => `${z.n}:${z.resources + z.overflow}/${z.outputs}:${z.overflow}`)).toEqual(['1:118/28:1', '24:144/28:4', '60:183/28:7'])
     // without a connection given, the stack creates one: one more resource of the parent's, and nothing more per project
     const created = synth(InfraPropsSchema.parse({ ...base, repositories: repos(1), memory: { legacySharedMemory: true }, runners: {} }), 'Count1Created')
     expect(count(json(created.parent).Resources)).toBe((sizes[0]?.resources ?? 0) + (sizes[0]?.overflow ?? 0) + 1)

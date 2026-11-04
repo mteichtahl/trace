@@ -12,7 +12,9 @@
  * THE SCHEME. Every actor id starts with the project, so every namespace does too:
  *
  *   agent actor    <owner>/<repo>/<agent>              agent: verify | impl | ams | emc | render (the specialists),
- *                                                      worker (delegated), local; ci-doctor and conflict (before the specialists)
+ *                                                      worker (delegated), local; ci-doctor and conflict (before the specialists);
+ *                                                      chat (Ask trace, the web app's chat: its conversations, and what a
+ *                                                      person confirmed it should remember about the project)
  *                                                      A specialist's recall also reads the legacy actors ci-doctor,
  *                                                      conflict and worker (LEGACY_AGENTS), after its own; nothing writes them
  *                                                      on its behalf.
@@ -36,7 +38,9 @@
  * also still allows only actors `<owner>/<repo>/*` (bedrock-agentcore:actorId) and namespaces `/trace/<owner>/<repo>/*`
  * (bedrock-agentcore:namespace) of its own project (src/infra/project.ts builds those patterns from projectId and
  * projectPrefix below). The API runtime, which serves every project after its access check, may only read records,
- * and picks the memory of the project asked for (projectMemoriesFromEnv).
+ * and picks the memory of the project asked for (projectMemoriesFromEnv). It writes short-term events for the chat
+ * only: of each project's `chat` actor and its person actors (`<owner>/<repo>/chat`, `<owner>/<repo>/person/*`, IAM
+ * per project: src/infra/memory.ts grantChatEvents), never an agent's, and never a record.
  *
  *   TRACE_MEMORY_ID           a worker's memory: its project's (memoryFromEnv)
  *   TRACE_PROJECT_MEMORIES    the API's: `owner/repo=<memory id> …`, space-separated, written by the stack
@@ -76,8 +80,14 @@ export const NAMESPACE_TEMPLATES: Readonly<Record<Strategy, string>> = {
   sessions: `/${ROOT}/{actorId}/sessions/{sessionId}/`,
 }
 
-/** The agents that run jobs today (any name matching AgentName is accepted). */
-export const AGENTS = ['verify', 'impl', 'ams', 'emc', 'render', 'thermal', 'worker', 'local', 'ci-doctor', 'conflict'] as const
+/** The actors that remember today: the agents that run jobs, and the chat (any name matching AgentName is accepted). */
+export const AGENTS = ['verify', 'impl', 'ams', 'emc', 'render', 'thermal', 'worker', 'local', 'ci-doctor', 'conflict', 'chat'] as const
+
+/**
+ * The chat's actor name: Ask trace's conversations on a project (the API records them, src/api/actions-chats.ts), and
+ * the project facts a person confirmed it should remember (memory.remember). No job runs as it.
+ */
+export const CHAT_AGENT = 'chat'
 
 /**
  * The agents before the specialists: `ci-doctor` and `conflict` (named jobs of their own), and `worker` (every job
@@ -146,6 +156,9 @@ export function agentActor(repository: string, agent: string): Actor {
   return actor(repository, 'agent', a.data, `${projectId(repository)}/${a.data}`)
 }
 
+/** The chat's actor on one project: `<owner>/<repo>/chat`. */
+export const chatActor = (repository: string): Actor => agentActor(repository, CHAT_AGENT)
+
 /** A person's hash: who they are is never written into an id or a namespace. */
 export const personHash = (who: string): string => createHash('sha256').update(who.trim().toLowerCase()).digest('hex').slice(0, 16)
 
@@ -199,6 +212,9 @@ export function sessionIdFor(text: string): string {
   const hash = createHash('sha256').update(text).digest('hex').slice(0, 12)
   return `${clean.slice(0, SESSION_MAX - 13).replace(/-+$/, '')}-${hash}`
 }
+
+/** The short-term session of one chat thread (its id, src/core/chats.ts ThreadId): `chat-<thread>`. */
+export const chatSession = (thread: string): string => sessionIdFor(`chat-${thread}`)
 
 // ------------------------------------------------------------------ bounds and secrets
 
