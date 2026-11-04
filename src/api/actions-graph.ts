@@ -5,7 +5,9 @@
  *
  * Built from ONE project's record after the read check, so it is filtered by access by construction: nothing of
  * another project is read, drawn, grouped or counted. From the project's database (default branch) and its journey record
- * (the journey store), like journey.get:
+ * (the journey store), like journey.get. The journey's kinds (gate, criterion, waiver, decision, and who signed, waived
+ * or answered) are read through the ontology: the journey's graph, built by the mapping (src/ontology/journey-graph.ts),
+ * not its tables (docs/ontology-plan.md P2.7):
  *
  *   requirement   requirements (status: its evidence, record-read.ts)
  *   run           runs, and test items ("Run or evidence": a planned test is evidence to come); stale (with why) when
@@ -52,7 +54,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
-import { loadJourney } from '../core/journey.js'
+import { journeyGraph } from '../ontology/journey-graph.js'
 import { NODE_KINDS } from '../ontology/graph-kinds.gen.js'
 import { type Board, loadBoard } from '../tools/kicad/pcb.js'
 import { filesRead, staleRuns } from '../ontology/lineage.js'
@@ -126,7 +128,8 @@ export function projectGraph(db: DatabaseSync, repo?: string, extras: GraphExtra
     return id
   }
   const rows = (sql: string): Record<string, unknown>[] => db.prepare(sql).all() as Record<string, unknown>[]
-  const r = loadJourney(db)
+  // the journey as the ontology has it: read through the mapping (src/ontology/journey-graph.ts), not its tables
+  const r = journeyGraph(db, { installation: process.env.TRACE_PREFIX ?? 'trace', project: repo ?? 'local/project' })
 
   for (const q of requirementEvidence(db, r)) {
     node({ id: `requirement:${q.id}`, kind: 'requirement', label: q.id, title: short(q.text, 120), summary: q.why, status: q.evidence, facts: { Kind: q.kind, Status: q.status, ...(q.source ? { Source: q.source } : {}) }, ...at(`/requirements/${encodeURIComponent(q.id)}`) })
@@ -165,7 +168,7 @@ export function projectGraph(db: DatabaseSync, repo?: string, extras: GraphExtra
     }
   }
   if (r) {
-    const signed = new Map(r.signatures.filter((x) => x.supersededAt === null && x.revision === r.journey.revision).map((x) => [x.gate, x]))
+    const signed = new Map(r.signatures.filter((x) => x.supersededAt === null && x.revision === r.revision).map((x) => [x.gate, x]))
     for (const g of r.gates) {
       const sig = signed.get(g.id)
       node({ id: `gate:${g.id}`, kind: 'gate', label: `the ${g.name} gate`, title: `The ${g.name} gate`, summary: sig ? `Signed by ${sig.by}.` : 'Not signed yet.', status: sig ? 'verified' : 'untested', facts: { Gate: g.id, Stage: g.stage }, ...at(`/gates/${encodeURIComponent(g.id)}`) })
