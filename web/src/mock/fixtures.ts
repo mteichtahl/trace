@@ -152,6 +152,11 @@ export const INBOX: InboxItem[] = [
     action: { label: 'See the gate', to: '/p/acme~motor-driver/gates/architecture' },
   },
   {
+    id: 'renders:B', kind: 'renders', repo: 'acme/soil-sensor', project: 'Soil sensor', revision: 'Rev B', stage: 'Release', createdAt: ago(22 * MIN),
+    summary: 'Revision B\'s renders are ready: 6 pictures.',
+    action: { label: 'See the renders', to: '/p/acme~soil-sensor/renders' },
+  },
+  {
     id: 'n2', kind: 'question', repo: 'acme/motor-driver', project: 'Motor driver', revision: 'Rev A', stage: 'Architect', createdAt: ago(40 * MIN),
     summary: 'The Analog specialist needs the motor\'s stall current to size the current-sense resistor. **It recommends 4.2 A**, from the motor datasheet, page 3.',
     action: { label: 'Answer', to: '/p/acme~motor-driver/do/question-answer' },

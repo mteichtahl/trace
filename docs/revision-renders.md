@@ -101,8 +101,39 @@ test-esp32_rev-B_2026-11-04_exploded.png
 4. **The hook.** After `snapshot()` succeeds in `gate.sign` and `journey.snapshot`, trace starts a job with
    `agent: 'render'` and a request naming the revision, the date and the shots. The signature stands even if the job
    cannot start, as with `STAGE_WORK`.
-5. **In the app.** The revision's images show on the Release stage and in the run page's file viewer. The phone gets
-   the same images.
+5. **In the app: the Renders tab** (chosen by Marc, November 2026, over the Build tab; screens in
+   `docs/ui/screens/Renders*.png`). It shows from Release on.
+   - **Each revision, newest first** (`renders.list`). The newest is a gallery, with the exploded view large. Earlier
+     revisions are a row each.
+   - **A revision still being made** shows what the rendering agent is doing, and its log.
+   - **The viewer** steps through a revision's pictures with the arrow keys. It shows the file, the revision, the
+     commit, the case's material, the size and the colours. On a phone it opens full screen.
+   - **Downloads.** One picture, or all of them as a zip. The browser makes the zip from the pictures, because a full
+     set at 2560 × 1600 is over the API's 8 MB answer limit.
+   - **When they are ready**, people get a push notification and an item in Next.
+
+## When they are ready
+
+The rendering agent's change, which commits its render runs to the run record, applies on its own once its checks
+pass, as trace's own release record does (Marc, November 2026). This is `src/api/apply-renders.ts`, run in the same
+pass that applies trace's own edits.
+
+It applies only a change that is renders and nothing else:
+
+- one of trace's changes, made by the rendering agent;
+- open, not a draft, and aimed at the default branch;
+- every check passed, and the agent did not say it is unfinished;
+- it touches `.trace/project.db` and no other file;
+- every run it adds is a render, and every other row of the run record is as the default branch has it.
+
+Anything else waits for a person, like any agent change.
+
+An applied change records `renders.ready` for each revision it rendered. That decision becomes a Next item,
+"Revision B's renders are ready: 6 pictures", for everyone on the project. The item leaves a person's Next once they open
+the Renders tab (`renders.seen`), and leaves for everyone after 14 days.
+
+It is also a push of kind `renders`, which opens the Renders tab. Push for it is off until the person turns notifications
+on. It follows each person's settings and quiet hours. A project set to "gates and spend only" does not push it.
 
 ## What the ontology needs
 

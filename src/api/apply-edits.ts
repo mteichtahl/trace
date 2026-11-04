@@ -16,6 +16,7 @@
  * per container (when hooks are not set up). Never a timer. One run per repository at a time per container.
  *
  * A review edit (someone who is not an admin made it) is never merged here: an admin accepts it (change.accept).
+ * The rendering agent's changes that are renders and nothing else are applied in the same pass (./apply-renders.ts).
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -27,6 +28,7 @@ import { ActionError, type Context, PROJECT_DB_PATH, journeyStore, openProjectDb
 import { mergeMethod, projectRule } from './actions-changes.js'
 import { editFacts, verdictOf } from './changes.js'
 import { editStore } from './edits.js'
+import { applyRenders } from './apply-renders.js'
 import type { GitHubApi, PullStatus } from './github.js'
 
 /** changes.list looks at most this often per repository and container (the hooks are the usual way). */
@@ -58,7 +60,6 @@ export function applyEditsSoon(ctx: Context, repo: string, now = Date.now()): vo
 async function applyAll(ctx: Context, repo: string): Promise<Applied[]> {
   const store = editStore(ctx)
   const edits = await store.list(repo)
-  if (!edits.length) return []
   const gh = await ctx.deps.github()
   const out: Applied[] = []
   for (const e of edits) {
@@ -68,6 +69,8 @@ async function applyAll(ctx: Context, repo: string): Promise<Applied[]> {
       out.push({ branch: e.branch, number: e.number, did: 'waiting', why: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300) })
     }
   }
+  // the rendering agent's renders apply on their own too, when they are renders and nothing else (./apply-renders.ts)
+  out.push(...await applyRenders(ctx, gh, repo).catch(() => [] as Applied[]))
   if (out.some((a) => a.did !== 'waiting' && a.did !== 'left')) ctx.deps.githubCache?.bust(repo)
   return out
 }

@@ -36,8 +36,10 @@ export default defineConfig({
     trace: live ? 'off' : 'retain-on-failure',
   },
   projects: [
-    { name: 'desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 1000 } }, grepInvert: /@phone-only/ },
-    { name: 'phone', use: { ...devices['Pixel 7'] }, grep: /@phone/ },
+    { name: 'desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 1000 } }, grepInvert: /@phone-only|@3d/ },
+    { name: 'phone', use: { ...devices['Pixel 7'] }, grep: /@phone/, grepInvert: /@3d/ },
+    // the 3D board screens, one at a time (smoke/board3d.smoke.ts): without a GPU two at once starve each other
+    { name: '3d', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 1000 } }, grep: /@3d/, workers: 1 },
   ],
   webServer: live
     ? undefined

@@ -1555,10 +1555,14 @@ const need = (db: DatabaseSync): JourneyRecord => {
 }
 
 /** Record that a person opened a criterion's (or a waiver's) evidence: the Sign button needs it. */
-export function recordOpen(db: DatabaseSync, item: { criterion: string } | { waiver: string }, who: string): { item: string; at: string } {
+export function recordOpen(db: DatabaseSync, item: { criterion: string } | { waiver: string } | { renders: string }, who: string): { item: string; at: string } {
   const r = need(db)
   let key: string
-  if ('criterion' in item) {
+  if ('renders' in item) {
+    // a revision's renders, seen: its Next item leaves this person's list (inboxItems)
+    if (!r.decisions.some((d) => d.kind === 'renders.ready' && rendersRevision(d) === item.renders)) throw new JourneyError(`Revision ${item.renders} has no renders yet.`)
+    key = `renders:${item.renders}`
+  } else if ('criterion' in item) {
     if (!r.criteria.some((c) => c.id === item.criterion)) throw new JourneyError(`There is no criterion called ${item.criterion} in this project.`)
     key = item.criterion
   } else {
@@ -1899,12 +1903,19 @@ export function putDraft(db: DatabaseSync, who: string, skill: string, d: { step
 // ------------------------------------------------------------------ the inbox
 
 /** `review`: an open pull request a trace job opened (src/api/inbox-review.ts), which the API adds; the rest are the record's */
-export const INBOX_KINDS = ['gate', 'question', 'spend', 'stuck', 'review'] as const
+export const INBOX_KINDS = ['gate', 'question', 'spend', 'stuck', 'review', 'renders'] as const
+/** A revision's renders stay in Next this long after they are ready, until each person opens them. */
+export const RENDERS_FRESH_S = 14 * 86_400
+/** The revision a renders.ready decision is for (its detail's), or null. */
+export const rendersRevision = (d: Pick<DecisionRow, 'detail'>): string | null => {
+  const v = (d.detail as { revision?: unknown } | null)?.revision
+  return typeof v === 'string' && /^[A-Z]{1,3}$/.test(v) ? v : null
+}
 export interface InboxItem {
   id: string; kind: (typeof INBOX_KINDS)[number]; repo: string; project: string; stage: StageId; summary: string
   since: string; waited: string; blocking: boolean; action: string
   /** `pull`: a change trace made; `to` is its review page in the app, `url` its pull request on GitHub */
-  ref: { kind: 'gate' | 'question'; id: string } | { kind: 'pull'; id: string; url: string; to: string }
+  ref: { kind: 'gate' | 'question'; id: string } | { kind: 'pull'; id: string; url: string; to: string } | { kind: 'renders'; id: string }
   recommended?: { id: string; label: string } | undefined
 }
 
@@ -1941,6 +1952,21 @@ export function inboxItems(repo: string, r0: JourneyRecord, viewer: Viewer, at: 
       summary: `${lead}${q.kind === 'stuck' ? `${q.askedBy} is stuck: ` : `${q.askedBy} asks: `}${q.text}${rec ? ` It recommends ${rec.label}.` : q.recommendation ? ` It recommends: ${q.recommendation.replace(/\.$/, '')}.` : ''}`,
       since: isoN(q.askedAt), waited: ago(q.askedAt, at), blocking: q.kind === 'stuck' || Boolean(q.blocks?.trim()), action: q.kind === 'stuck' ? 'See options' : 'Answer',
       ref: { kind: 'question', id: q.id }, ...(rec ? { recommended: { id: rec.id, label: rec.label } } : {}),
+    })
+  }
+  // each revision's renders, newly ready, to everyone on the project until they open them (docs/revision-renders.md)
+  const seenRenders = new Set<string>()
+  for (const d of r.decisions) {
+    const rev = d.kind === 'renders.ready' ? rendersRevision(d) : null
+    if (!rev || seenRenders.has(rev)) continue
+    seenRenders.add(rev)
+    if (at - d.at > RENDERS_FRESH_S) continue
+    if (r.opens.some((o) => o.item === `renders:${rev}` && o.at >= d.at && isViewer(viewer, o.who))) continue
+    const n = (d.detail as { pictures?: unknown } | null)?.pictures
+    out.push({
+      id: `renders:${rev}`, kind: 'renders', repo, project, stage: (d.stage as StageId | null) ?? stage,
+      summary: `${lead}Revision ${rev}'s renders are ready${typeof n === 'number' ? `: ${plural(n, 'picture')}` : ''}.`,
+      since: isoN(d.at), waited: ago(d.at, at), blocking: false, action: 'See the renders', ref: { kind: 'renders', id: rev },
     })
   }
   return out
