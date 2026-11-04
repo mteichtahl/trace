@@ -14,6 +14,7 @@
  * Built on Node's own `node:sqlite` (no native module to compile). Lists and mappings are stored as JSON text inside
  * a column: an encoding, not a file.
  */
+import { normalisedHash } from './normalise.js'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, statSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -171,6 +172,38 @@ export function projectTables(): ProjectTable[] {
 }
 
 /**
+ * Lineage (docs/ontology.md "Input/output, versions and staleness"): what each run was made from, and a hash of each
+ * output over a normalised form, so freshness can be worked out on read (src/ontology/lineage.ts). Rows are written
+ * once, with the run, and merge as a union: a run's inputs never change after it.
+ *
+ *   run_inputs       one row per input: a file of the repository (its path and the hash of its normalised content when
+ *                    the run read it), or an output of another run (that run's id, the output's name and its hash)
+ *   artifact_hashes  each output's hash, over the normalised form its kind defines (src/core/normalise.ts), so a
+ *                    report regenerated with only a new timestamp has the same hash
+ */
+ensureProjectSchema({ table: 'run_inputs', sql: `
+CREATE TABLE IF NOT EXISTS run_inputs (
+  run_id TEXT NOT NULL,
+  ord INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('file', 'artifact')),
+  ref TEXT NOT NULL,              -- file: its path in the repository; artifact: the run that made it
+  name TEXT,                      -- artifact: the output's name
+  sha256 TEXT,                    -- the normalised content's hash when the run read it (NULL: the file was missing)
+  PRIMARY KEY (run_id, ord)
+);
+CREATE INDEX IF NOT EXISTS run_inputs_ref ON run_inputs(ref);` })
+
+ensureProjectSchema({ table: 'artifact_hashes', sql: `
+CREATE TABLE IF NOT EXISTS artifact_hashes (
+  run_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  sha256 TEXT NOT NULL,           -- over the normalised form (src/core/normalise.ts)
+  PRIMARY KEY (run_id, name)
+);` })
+
+export interface RunInput { kind: 'file' | 'artifact'; ref: string; name?: string | null; sha256: string | null }
+
+/**
  * The project schema, every registered table, and the columns added since a database was made: `runs.agent` (which
  * agent made a run) then `runs.job` (which job's session made it); databases from before them get the columns, NULL on
  * their old rows, always last and in that order so `SELECT *` merges line up.
@@ -294,6 +327,13 @@ export class Work {
     const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data
     const p = packArtifact(mime ?? (typeof data === 'string' ? 'text/plain' : 'application/octet-stream'), bytes)
     this.db.prepare('INSERT OR REPLACE INTO artifacts VALUES (?,?,?,?)').run(id, name, p.mime, p.bytes)
+    this.db.prepare('INSERT OR REPLACE INTO artifact_hashes (run_id, name, sha256) VALUES (?,?,?)').run(id, name, normalisedHash(name, bytes))
+  }
+
+  /** Record what a run was made from (lineage): once, in order. */
+  inputs(id: string, inputs: readonly RunInput[]): void {
+    const add = this.db.prepare('INSERT OR IGNORE INTO run_inputs (run_id, ord, kind, ref, name, sha256) VALUES (?,?,?,?,?,?)')
+    inputs.forEach((x, i) => add.run(id, i, x.kind, x.ref, x.name ?? null, x.sha256))
   }
 
   getArtifact(id: string, name: string): Uint8Array | null {
