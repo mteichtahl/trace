@@ -73,9 +73,14 @@ jobs:
                 const done = await update(p)
                 lines.push(`#${p.number}: #${pr.number} merged, so it now targets \`${pr.base.ref}\`${done ? ' and is up to date' : ` (it conflicts there: merge \`${pr.base.ref}\` into \`${p.head.ref}\` by hand)`}.`)
               } else {
-                await github.rest.issues.createComment({ owner, repo, issue_number: p.number,
-                  body: `#${pr.number}, which this is built on, was closed without merging, so this branch still carries its commits. Rebuild it on \`${pr.base.ref}\` without them, or close it.` })
-                lines.push(`#${p.number}: told that #${pr.number} was closed unmerged.`)
+                // once per base: a pull request closed and reopened, then closed again, does not say it twice
+                const marker = `<!-- stack: base-closed #${pr.number} -->`
+                const said = (await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: p.number, per_page: 100 })).some((c) => (c.body ?? '').includes(marker))
+                if (!said) {
+                  await github.rest.issues.createComment({ owner, repo, issue_number: p.number,
+                    body: `#${pr.number}, which this is built on, was closed without merging, so this branch still carries its commits. Rebuild it on \`${pr.base.ref}\` without them, or close it. Do not merge it as it is.\n${marker}` })
+                }
+                lines.push(`#${p.number}: ${said ? 'already told' : 'told'} that #${pr.number} was closed unmerged.`)
               }
             }
             for (const p of moved) {

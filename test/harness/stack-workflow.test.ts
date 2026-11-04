@@ -58,9 +58,13 @@ describe('stack.yml', () => {
   })
 
   it('tells the ones built on a pull request closed unmerged, and ignores a fork', async () => {
-    const f = fakeGithub({ 'pulls.list': [pr(2, 'claude/b', 'claude/a')] })
+    const f = fakeGithub({ 'pulls.list': [pr(2, 'claude/b', 'claude/a')], 'issues.listComments': [] })
     await run(f, 'closed', pr(1, 'claude/a', 'main', { merged: false })).done
     expect(String(f.called('issues.createComment')[0]!.args.body)).toMatch(/closed without merging/)
+    // said once
+    const again = fakeGithub({ 'pulls.list': [pr(2, 'claude/b', 'claude/a')], 'issues.listComments': [{ body: 'x\n<!-- stack: base-closed #1 -->' }] })
+    await run(again, 'closed', pr(1, 'claude/a', 'main', { merged: false })).done
+    expect(again.called('issues.createComment')).toHaveLength(0)
     expect(f.called('pulls.update')).toHaveLength(0)
     const g = fakeGithub()
     await run(g, 'closed', { ...pr(1, 'claude/a', 'main', { merged: true }), head: { ref: 'claude/a', sha: SHA('1'), repo: { full_name: 'someone/trace' } } }).done
