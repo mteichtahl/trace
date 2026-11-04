@@ -1,6 +1,6 @@
 # Push notifications
 
-trace can tap a person on the shoulder when something needs them: a gate is ready to sign, a question is holding up work, money is about to be spent, or an agent is stuck. Each notification opens straight on its card, so most things are answered from the lock screen in a tap or two.
+trace can tap a person on the shoulder when something needs them: a gate is ready to sign, a question is holding up work, money is about to be spent, or an agent is stuck. Each notification opens straight on its card, so most things are answered from the lock screen in a tap or two. It also says when a revision's renders are ready (`renders`), which opens the project's Renders tab: news rather than a request, so it is never emailed by default and leaves Next once the person opens the renders.
 
 Push is standard Web Push. It works in Chrome, Edge and Firefox on desktop and Android, and in Safari on macOS. On an iPhone or iPad, trace must first be added to the Home Screen (Share, then Add to Home Screen) and opened from there. That is Apple's rule for web apps, and the app explains it when it applies.
 

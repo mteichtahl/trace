@@ -179,6 +179,7 @@ import { PUSH_ACTIONS } from './actions-push.js'
 import { PEOPLE_ACTIONS } from './actions-people.js'
 import { RECORD_ACTIONS } from './actions-record.js'
 import { BUILD_ACTIONS } from './actions-build.js'
+import { RENDER_ACTIONS } from './actions-renders.js'
 import { COST_ACTIONS } from './actions-cost.js'
 import { SKILL_ACTIONS } from './actions-skills.js'
 import { PROJECT_ACTIONS } from './actions-projects.js'
@@ -882,6 +883,7 @@ export const ACTIONS = {
   ...CHAT_ACTIONS,
   ...ME_ACTIONS,
   ...PUSH_ACTIONS,
+  ...RENDER_ACTIONS,
   ...GRAPH_ACTIONS,
   ...FILE_ACTIONS,
   ...JOB_ACTIONS,

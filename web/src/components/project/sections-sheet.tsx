@@ -5,7 +5,7 @@
  * and the project's rare actions sit at the bottom. On wider screens the tab row stays.
  */
 import { Link, useRouterState } from '@tanstack/react-router'
-import { Brain, ClipboardList, Coins, FileStack, Folder, GitPullRequest, LayoutGrid, ListChecks, type LucideIcon, Package, PanelsTopLeft, Settings, ShieldCheck } from 'lucide-react'
+import { Brain, ClipboardList, Coins, FileStack, Folder, GitPullRequest, Images, LayoutGrid, ListChecks, type LucideIcon, Package, PanelsTopLeft, Settings, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer'
@@ -26,6 +26,7 @@ const ICON: Record<string, LucideIcon> = {
   changes: GitPullRequest,
   evidence: ClipboardList,
   build: Package,
+  renders: Images,
   decisions: ShieldCheck,
   files: Folder,
   settings: Settings,
@@ -42,6 +43,7 @@ const LATER: { id: string; label: string; stage: (j?: Journey) => string }[] = [
   { id: 'design', label: 'Design', stage: () => 'Architect' },
   { id: 'evidence', label: 'Evidence', stage: (j) => (j && !j.stages.some((s) => s.id === 'capture' || s.name.toLowerCase() === 'capture') ? 'Prove' : 'Capture') },
   { id: 'build', label: 'Build', stage: () => 'Release' },
+  { id: 'renders', label: 'Renders', stage: () => 'Release' },
 ]
 
 const and = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`)
@@ -50,7 +52,7 @@ const and = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).
 export function laterLine(tabs: SectionTab[], journey?: Journey): string | null {
   const missing = LATER.filter((l) => !tabs.some((t) => t.id === l.id))
   if (!missing.length) return null
-  return `${and(missing.map((m) => m.label))} ${missing.length === 1 ? 'appears' : 'appear'} once the project reaches ${and(missing.map((m) => m.stage(journey)))}.`
+  return `${and(missing.map((m) => m.label))} ${missing.length === 1 ? 'appears' : 'appear'} once the project reaches ${and([...new Set(missing.map((m) => m.stage(journey)))])}.`
 }
 
 /** Each section's one-line status, from what the project page already has. */
