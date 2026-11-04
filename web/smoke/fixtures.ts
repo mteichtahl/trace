@@ -51,8 +51,19 @@ export class App {
     await this.page.keyboard.press('Control+j')
     const chat = this.page.getByRole('region', { name: 'Ask trace' })
     await expect(chat).toBeVisible()
-    // let it finish opening the last conversation, which replaces what the panel shows
-    await this.page.waitForLoadState('networkidle')
+    // ready when it has decided which conversation to show and finished loading it: its conversation log is up and
+    // not busy (it is busy while a stored conversation loads, and absent while the last one is looked up). Typing
+    // before then would race the panel; network quiet says nothing about it
+    await expect(chat.locator('[aria-live="polite"][aria-busy="false"]')).toBeVisible({ timeout: 30_000 })
+    return chat
+  }
+
+  /** Open Ask trace on a new conversation of its own, so a check starts from nothing the project's history put there. */
+  async newChat(): Promise<Locator> {
+    const chat = await this.openChat()
+    await chat.getByRole('button', { name: 'Conversations' }).click()
+    await chat.getByRole('button', { name: 'New conversation' }).click()
+    await expect(chat.locator('[aria-live="polite"][aria-busy="false"]')).toBeVisible()
     return chat
   }
 }
