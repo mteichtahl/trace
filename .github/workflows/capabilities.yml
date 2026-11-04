@@ -1,9 +1,9 @@
-# Keeps the mechanical capability table current (src/tools/mech/capabilities.ts, docs/enclosure-build.md
-# "Capabilities"): every day it re-reads JLC3DP's and JLCCNC's pages and runs scripts/capabilities-sync.mjs, which
-# decides figure by figure (src/tools/mech/capsync.ts).
+# Keeps trace's capability tables current: JLC3DP's and JLCCNC's (src/tools/mech/capabilities.ts, docs/enclosure-build.md
+# "Capabilities") and JLCPCB's boards (src/tools/pcb/capabilities.ts). Every day it re-reads their pages and runs
+# scripts/capabilities-sync.mjs, which decides figure by figure for every table (src/tools/mech/capsync.ts).
 #
 #   update     figures the pages now state with other numbers, in the same words: a pull request from the branch
-#              capabilities/sync that changes src/tools/mech/capabilities.updates.ts. A person reviews it; it never
+#              capabilities/sync that changes each table's capabilities.updates.ts. A person reviews it; it never
 #              merges on its own, and case builds made with the old figures become stale when it does.
 #   reverify   every figure still stated, and the table last confirmed 30 or more days ago: a pull request that only
 #              moves the table's date on (no figure, no stale build), set to merge itself once CI passes.
@@ -65,7 +65,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git switch -C "$BRANCH"
-          git add src/tools/mech/capabilities.updates.ts
+          xargs git add < "$OUT/files"
           git commit -q -m "$title" -m "$(cat "$OUT/pr-body.md")"
           git push -q --force origin "$BRANCH"
           n="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"

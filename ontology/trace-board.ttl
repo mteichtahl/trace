@@ -1,0 +1,789 @@
+# trace's ontology: the board module (docs/ontology.md "Board module"). What is being built, from the stated intent
+# to the order: the design record (src/tools/design/db.ts), the verification record (src/tools/verify/db.ts), the run
+# record (src/core/store.ts), bring-up readings (src/core/bench.ts), the shared parts database (src/tools/parts/db.ts)
+# and the board itself, read from its .kicad_pcb when the graph is built (src/ontology/board.ts).
+
+@prefix trace: <https://trace-eda.com/ns/trace#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix skos:  <http://www.w3.org/2004/02/skos/core#> .
+
+<https://trace-eda.com/ns/trace/board> a owl:Ontology ;
+    rdfs:label "trace board" ;
+    rdfs:comment "Intent, requirements, architecture, the pin plan, tests and runs, parts and offers, and the board's components, pads and nets." ;
+    owl:imports <https://trace-eda.com/ns/trace/core>, <https://trace-eda.com/ns/trace/journey> ;
+    owl:versionInfo "0.1.0" .
+
+# ================================================================== intent and requirements
+
+trace:IntentStatement a owl:Class ;
+    rdfs:label "Intent statement" ;
+    rdfs:comment "One thing the board must do or be, in the words of the person or the brief it came from." .
+
+trace:IntentLink a owl:Class ;
+    rdfs:label "Requirement drawn from intent" ;
+    rdfs:comment "A requirement and the intent statement it was drawn from." .
+
+trace:Requirement a owl:Class ;
+    rdfs:label "Requirement" ;
+    rdfs:comment "One testable need, with the criterion that accepts it." .
+
+# ================================================================== architecture
+
+trace:ArchitectureOption a owl:Class ;
+    rdfs:subClassOf trace:Option ;
+    rdfs:label "Architecture option" ;
+    rdfs:comment "One way to build the board: its blocks, their parts and the connections between them." .
+
+trace:ArchitectureCriterion a owl:Class ;
+    rdfs:label "Architecture criterion" ;
+    rdfs:comment "What the options are weighed on, such as cost or power, with its weight." .
+
+trace:ArchitectureScore a owl:Class ;
+    rdfs:label "Architecture score" ;
+    rdfs:comment "How well one option does on one criterion, from 1 to 5, and why." .
+
+trace:FunctionalBlock a owl:Class ;
+    rdfs:label "Block" ;
+    rdfs:comment "A part of the architecture, such as power or the radio, with its parts and the requirements it serves." .
+
+trace:BlockPart a owl:Class ;
+    rdfs:label "Part of a block" ;
+    rdfs:comment "A part a block is built from, by its manufacturer part number." .
+
+trace:KeyPart a owl:Class ;
+    rdfs:subClassOf trace:BlockPart ;
+    rdfs:label "Key part" ;
+    rdfs:comment "A part the design depends on, chosen during Architect." .
+
+trace:Interface a owl:Class ;
+    rdfs:label "Connection between blocks" ;
+    rdfs:comment "What flows between two blocks, or to the outside: a supply rail, a bus, a radio link, a signal." .
+
+trace:PinAssignment a owl:Class ;
+    rdfs:label "Pin plan entry" ;
+    rdfs:comment "What one pin of a microcontroller or programmable logic part is used for, and the net it must be on." .
+
+trace:SchematicSheet a owl:Class ;
+    rdfs:label "Schematic sheet" ;
+    rdfs:comment "One sheet of the schematic and the block and requirements it serves." .
+
+# ================================================================== verification
+
+trace:TestItem a owl:Class ;
+    rdfs:label "Test" ;
+    rdfs:comment "A planned test of one or more requirements: how it is run and what it must measure." .
+
+trace:TestResult a owl:Class ;
+    rdfs:label "Test result" ;
+    rdfs:comment "One run's verdict on a test, and the tool runs it rests on." .
+
+trace:CoveragePoint a owl:Class ;
+    rdfs:label "Coverage point" ;
+    rdfs:comment "Something a simulation or proof must reach to cover a requirement." .
+
+trace:CoverageHit a owl:Class ;
+    rdfs:label "Coverage hit" ;
+    rdfs:comment "How often one run reached a coverage point." .
+
+# ================================================================== runs
+
+trace:Run a owl:Class ;
+    rdfs:label "Run" ;
+    rdfs:comment "One call of one of trace's tools on the project, with its inputs, result and status." .
+
+trace:DesignRuleCheckReport a owl:Class ;
+    rdfs:subClassOf trace:Run ;
+    rdfs:label "Board rule check" ;
+    rdfs:comment "A run that checked the board against its design rules." ;
+    skos:altLabel "DRC" .
+
+trace:ElectricalRuleCheckReport a owl:Class ;
+    rdfs:subClassOf trace:Run ;
+    rdfs:label "Schematic rule check" ;
+    rdfs:comment "A run that checked the schematic's connections." ;
+    skos:altLabel "ERC" .
+
+trace:Measurement a owl:Class ;
+    rdfs:label "Measurement" ;
+    rdfs:comment "A named value a run measured, with its unit." .
+
+trace:RunArtifact a owl:Class ;
+    rdfs:subClassOf trace:DesignArtifact ;
+    rdfs:label "Run output" ;
+    rdfs:comment "A file a run kept, such as a report, a netlist or a log." .
+
+trace:ProjectSetting a owl:Class ;
+    rdfs:label "Project setting" ;
+    rdfs:comment "One of the project's settings, by its dotted name." .
+
+# ================================================================== parts and supply
+
+trace:Part a owl:Class ;
+    rdfs:label "Part" ;
+    rdfs:comment "A manufacturer part number, as every project of the installation sees it." .
+
+trace:SupplierOffer a owl:Class ;
+    rdfs:label "Offer" ;
+    rdfs:comment "Stock and prices one seller had for a part when it was looked up." .
+
+trace:Manufacturer a owl:Class ;
+    rdfs:label "Manufacturer" ;
+    rdfs:comment "Who makes a part." ;
+    trace:keptIn "the parts database's manufacturer field" .
+
+trace:Supplier a owl:Class ;
+    rdfs:label "Supplier" ;
+    rdfs:comment "Who sells parts, such as JLCPCB's parts library." ;
+    trace:keptIn "the offers' provider and seller" .
+
+# ================================================================== the schematic and the board
+
+trace:Schematic a owl:Class ;
+    rdfs:subClassOf trace:FileArtifact ;
+    rdfs:label "Schematic" ;
+    rdfs:comment "The schematic design files." ;
+    trace:keptIn "the repository's schematic files" .
+
+trace:Netlist a owl:Class ;
+    rdfs:subClassOf trace:DesignArtifact ;
+    rdfs:label "Connection list" ;
+    rdfs:comment "Every connection the schematic makes, as exported from it." ;
+    skos:altLabel "netlist" ;
+    trace:keptIn "the runs that export it (kicad.netlist) and their outputs" .
+
+trace:Board a owl:Class ;
+    rdfs:subClassOf trace:FileArtifact ;
+    rdfs:label "Board" ;
+    rdfs:comment "The layout: its outline, layers, the parts placed on it and the copper between them." .
+
+trace:Component a owl:Class ;
+    rdfs:label "Component" ;
+    rdfs:comment "One placed part, such as U3, with where it sits." .
+
+trace:Pad a owl:Class ;
+    rdfs:label "Pad" ;
+    rdfs:comment "A connection point of a placed part, and the net it is on." .
+
+trace:Pin a owl:Class ;
+    rdfs:label "Pin" ;
+    rdfs:comment "A connection point of a part's schematic symbol." ;
+    trace:keptIn "the schematic and its connection list" .
+
+trace:Net a owl:Class ;
+    rdfs:label "Net" ;
+    rdfs:comment "A set of connected pads, by its name." .
+
+trace:Layer a owl:Class ;
+    rdfs:label "Layer" ;
+    rdfs:comment "One copper, mask or silkscreen layer of the board." .
+
+trace:Via a owl:Class ;
+    rdfs:label "Via" ;
+    rdfs:comment "A plated hole joining layers." ;
+    trace:keptIn "the board file: counted on the board, not each made a record" .
+
+trace:Footprint a owl:Class ;
+    rdfs:label "Footprint" ;
+    rdfs:comment "The copper pattern for a part." ;
+    trace:keptIn "the footprint libraries; components name theirs" .
+
+# ================================================================== fabrication
+
+trace:FabHouse a owl:Class ;
+    rdfs:label "Fab house" ;
+    rdfs:comment "A maker of boards or cases, JLCPCB first." ;
+    trace:keptIn "trace's capability tables" .
+
+trace:FabCapability a owl:Class ;
+    rdfs:label "Fab capability" ;
+    rdfs:comment "What a fab house can make, as figures read from its pages, with the day they were last confirmed." ;
+    trace:keptIn "trace's capability tables, kept current by the daily check" .
+
+trace:DesignRule a owl:Class ;
+    rdfs:label "Design rule" ;
+    rdfs:comment "A limit from a fab house, such as the narrowest track it makes." ;
+    trace:keptIn "trace's capability tables" .
+
+trace:FabricationPackage a owl:Class ;
+    rdfs:subClassOf trace:DesignArtifact ;
+    rdfs:label "Fabrication files" ;
+    rdfs:comment "Everything sent to the fab house: copper and drill files, the parts list, the placement file." ;
+    trace:keptIn "the runs that make it (kicad.fab) and their outputs" .
+
+trace:PreparedOrder a owl:Class ;
+    rdfs:label "Prepared order" ;
+    rdfs:comment "The order trace prepares for a person to check, submit and pay." ;
+    trace:keptIn "the order sheet runs; a person's order once placed is a placed order" .
+
+# ================================================================== intent and requirement properties
+
+trace:topic a owl:DatatypeProperty ;
+    rdfs:label "topic" ;
+    rdfs:comment "What the statement is about: purpose, environment, power, interfaces, performance, physical, compliance, build, constraints or references." ;
+    rdfs:range xsd:string .
+
+trace:statementKind a owl:DatatypeProperty ;
+    rdfs:label "statement kind" ;
+    rdfs:comment "A statement, something that does not matter, something not known yet, or a question." ;
+    rdfs:domain trace:IntentStatement ;
+    rdfs:range xsd:string .
+
+trace:sourceOf a owl:DatatypeProperty ;
+    rdfs:label "comes from" ;
+    rdfs:comment "Where it came from: a person, a brief, a document or the design, with the quote and page." ;
+    rdfs:range rdf:JSON .
+
+trace:decideBy a owl:DatatypeProperty ;
+    rdfs:label "decide by" ;
+    rdfs:comment "The stage something not known yet must be decided by." ;
+    rdfs:domain trace:IntentStatement ;
+    rdfs:range xsd:string .
+
+trace:answerOwner a owl:DatatypeProperty ;
+    rdfs:label "who answers" ;
+    rdfs:comment "Who answers a question in the intent." ;
+    rdfs:domain trace:IntentStatement ;
+    rdfs:range xsd:string .
+
+trace:conflictsWith a owl:ObjectProperty ;
+    rdfs:label "cannot hold with" ;
+    rdfs:comment "Another statement this one cannot hold together with." ;
+    rdfs:domain trace:IntentStatement ;
+    rdfs:range trace:IntentStatement .
+
+trace:testable a owl:DatatypeProperty ;
+    rdfs:label "testable" ;
+    rdfs:comment "Whether the statement can become a testable requirement as worded." ;
+    rdfs:domain trace:IntentStatement ;
+    rdfs:range xsd:boolean .
+
+trace:ofRequirement a owl:ObjectProperty ;
+    rdfs:label "of requirement" ;
+    rdfs:comment "The requirement a link is of." ;
+    rdfs:domain trace:IntentLink ;
+    rdfs:range trace:Requirement .
+
+trace:fromIntent a owl:ObjectProperty ;
+    rdfs:label "from intent" ;
+    rdfs:comment "The intent statement a requirement was drawn from." ;
+    rdfs:domain trace:IntentLink ;
+    rdfs:range trace:IntentStatement .
+
+trace:removed a owl:DatatypeProperty ;
+    rdfs:label "removed" ;
+    rdfs:comment "Whether the link was taken away." ;
+    rdfs:range xsd:boolean .
+
+trace:requirementKind a owl:DatatypeProperty ;
+    rdfs:label "requirement kind" ;
+    rdfs:comment "Functional, electrical, timing or emissions." ;
+    rdfs:domain trace:Requirement ;
+    rdfs:range xsd:string .
+
+trace:acceptanceCriterion a owl:DatatypeProperty ;
+    rdfs:label "accepted when" ;
+    rdfs:comment "What a test must show for the requirement to be met." ;
+    rdfs:domain trace:Requirement ;
+    rdfs:range xsd:string .
+
+trace:sourceDocument a owl:DatatypeProperty ;
+    rdfs:label "source document" ;
+    rdfs:comment "The document a requirement comes from." ;
+    rdfs:domain trace:Requirement ;
+    rdfs:range xsd:string .
+
+trace:page a owl:DatatypeProperty ;
+    rdfs:label "page" ;
+    rdfs:comment "The page of the source document." ;
+    rdfs:range xsd:integer .
+
+trace:tag a owl:DatatypeProperty ;
+    rdfs:label "tag" ;
+    rdfs:comment "A word that groups it with others." ;
+    rdfs:range xsd:string .
+
+# ================================================================== architecture properties
+
+trace:optionRisk a owl:DatatypeProperty ;
+    rdfs:label "risk of the option" ;
+    rdfs:comment "A risk the option carries, in one line." ;
+    rdfs:domain trace:ArchitectureOption ;
+    rdfs:range xsd:string .
+
+trace:weight a owl:DatatypeProperty ;
+    rdfs:label "weight" ;
+    rdfs:comment "How much the criterion counts." ;
+    rdfs:domain trace:ArchitectureCriterion ;
+    rdfs:range xsd:decimal .
+
+trace:forOption a owl:ObjectProperty ;
+    rdfs:label "for option" ;
+    rdfs:comment "The architecture option it belongs to." ;
+    rdfs:range trace:ArchitectureOption .
+
+trace:scoredOn a owl:ObjectProperty ;
+    rdfs:label "scored on" ;
+    rdfs:comment "The criterion a score is on." ;
+    rdfs:domain trace:ArchitectureScore ;
+    rdfs:range trace:ArchitectureCriterion .
+
+trace:score a owl:DatatypeProperty ;
+    rdfs:label "score" ;
+    rdfs:comment "From 1, the worst, to 5, the best." ;
+    rdfs:domain trace:ArchitectureScore ;
+    rdfs:range xsd:decimal .
+
+trace:role a owl:DatatypeProperty ;
+    rdfs:label "role" ;
+    rdfs:comment "What it does in the design, in words." ;
+    rdfs:range xsd:string .
+
+trace:usesPart a owl:ObjectProperty ;
+    rdfs:label "uses part" ;
+    rdfs:comment "A part a block is built from." ;
+    rdfs:domain trace:FunctionalBlock ;
+    rdfs:range trace:BlockPart .
+
+trace:refersToPart a owl:ObjectProperty ;
+    rdfs:label "is part" ;
+    rdfs:comment "The part in the parts database." ;
+    rdfs:range trace:Part .
+
+trace:mpn a owl:DatatypeProperty ;
+    rdfs:label "manufacturer part number" ;
+    rdfs:comment "The manufacturer's number for the part." ;
+    skos:altLabel "MPN" ;
+    rdfs:range xsd:string .
+
+trace:servesRequirement a owl:ObjectProperty ;
+    rdfs:label "serves" ;
+    rdfs:comment "A requirement a block, a sheet or a test serves." ;
+    rdfs:range trace:Requirement .
+
+trace:fromBlock a owl:ObjectProperty ;
+    rdfs:label "from block" ;
+    rdfs:comment "The block a connection leaves." ;
+    rdfs:domain trace:Interface ;
+    rdfs:range trace:FunctionalBlock .
+
+trace:toBlock a owl:ObjectProperty ;
+    rdfs:label "to block" ;
+    rdfs:comment "The block a connection reaches." ;
+    rdfs:domain trace:Interface ;
+    rdfs:range trace:FunctionalBlock .
+
+trace:connectionKind a owl:DatatypeProperty ;
+    rdfs:label "connection kind" ;
+    rdfs:comment "A supply rail, a bus, a radio link, a signal or a mechanical link." ;
+    rdfs:domain trace:Interface ;
+    rdfs:range xsd:string .
+
+# ================================================================== pin plan and sheets
+
+trace:onComponent a owl:ObjectProperty ;
+    rdfs:label "on component" ;
+    rdfs:comment "The placed part, by its reference such as U1." ;
+    rdfs:range trace:Component .
+
+trace:pinNumber a owl:DatatypeProperty ;
+    rdfs:label "pin number" ;
+    rdfs:comment "The pin's number as the symbol or footprint has it." ;
+    rdfs:range xsd:string .
+
+trace:pinName a owl:DatatypeProperty ;
+    rdfs:label "pin name" ;
+    rdfs:comment "The part's own name for the pin." ;
+    rdfs:range xsd:string .
+
+trace:pinFunction a owl:DatatypeProperty ;
+    rdfs:label "used as" ;
+    rdfs:comment "What the firmware uses the pin as." ;
+    rdfs:domain trace:PinAssignment ;
+    rdfs:range xsd:string .
+
+trace:peripheral a owl:DatatypeProperty ;
+    rdfs:label "peripheral" ;
+    rdfs:comment "The peripheral of the part the pin belongs to." ;
+    rdfs:domain trace:PinAssignment ;
+    rdfs:range xsd:string .
+
+trace:servesUse a owl:DatatypeProperty ;
+    rdfs:label "for" ;
+    rdfs:comment "What the peripheral serves, such as the debug console." ;
+    rdfs:domain trace:PinAssignment ;
+    rdfs:range xsd:string .
+
+trace:onNet a owl:ObjectProperty ;
+    rdfs:label "on net" ;
+    rdfs:comment "The net a pin or pad is on, or must be on." ;
+    rdfs:range trace:Net .
+
+trace:pinKind a owl:DatatypeProperty ;
+    rdfs:label "pin kind" ;
+    rdfs:comment "Signal, analog, power, boot, reset, debug, clock, spare or not connected." ;
+    rdfs:domain trace:PinAssignment ;
+    rdfs:range xsd:string .
+
+trace:reservedFor a owl:DatatypeProperty ;
+    rdfs:label "reserved for" ;
+    rdfs:comment "The role the part itself gives the pin: boot, reset or debug." ;
+    rdfs:domain trace:PinAssignment ;
+    rdfs:range xsd:string .
+
+trace:alternative a owl:DatatypeProperty ;
+    rdfs:label "could be" ;
+    rdfs:comment "Another function the part allows on the pin." ;
+    rdfs:domain trace:PinAssignment ;
+    rdfs:range xsd:string .
+
+trace:constraint a owl:DatatypeProperty ;
+    rdfs:label "constraint" ;
+    rdfs:comment "A limit it must keep to, in words." ;
+    rdfs:range xsd:string .
+
+trace:forBlock a owl:DatatypeProperty ;
+    rdfs:label "for block" ;
+    rdfs:comment "The block a schematic sheet implements, by its identifier." ;
+    rdfs:domain trace:SchematicSheet ;
+    rdfs:range xsd:string .
+
+# ================================================================== tests and coverage
+
+trace:method a owl:DatatypeProperty ;
+    rdfs:label "method" ;
+    rdfs:comment "How a test is done: simulation, proof, circuit simulation, the bench, inspection or a rule check." ;
+    rdfs:domain trace:TestItem ;
+    rdfs:range xsd:string .
+
+trace:tool a owl:DatatypeProperty ;
+    rdfs:label "tool" ;
+    rdfs:comment "The trace tool that runs it." ;
+    rdfs:range xsd:string .
+
+trace:arguments a owl:DatatypeProperty ;
+    rdfs:label "arguments" ;
+    rdfs:comment "What the tool is called with." ;
+    rdfs:range rdf:JSON .
+
+trace:command a owl:DatatypeProperty ;
+    rdfs:label "command" ;
+    rdfs:comment "The command run in the repository instead of a tool, which passes when it exits cleanly." ;
+    rdfs:domain trace:TestItem ;
+    rdfs:range xsd:string .
+
+trace:expects a owl:DatatypeProperty ;
+    rdfs:label "expects" ;
+    rdfs:comment "The measurements the run must meet, with their limits." ;
+    rdfs:domain trace:TestItem ;
+    rdfs:range rdf:JSON .
+
+trace:lastRun a owl:ObjectProperty ;
+    rdfs:label "last run" ;
+    rdfs:comment "The run that last set the test's status." ;
+    rdfs:domain trace:TestItem ;
+    rdfs:range trace:Run .
+
+trace:ofRun a owl:ObjectProperty ;
+    rdfs:label "of run" ;
+    rdfs:comment "The run it belongs to or came from." ;
+    rdfs:range trace:Run .
+
+trace:ofTest a owl:ObjectProperty ;
+    rdfs:label "of test" ;
+    rdfs:comment "The test a result is for." ;
+    rdfs:domain trace:TestResult ;
+    rdfs:range trace:TestItem .
+
+trace:restsOn a owl:ObjectProperty ;
+    rdfs:label "rests on" ;
+    rdfs:comment "A tool run a verdict rests on." ;
+    rdfs:domain trace:TestResult ;
+    rdfs:range trace:Run .
+
+trace:pointKind a owl:DatatypeProperty ;
+    rdfs:label "point kind" ;
+    rdfs:comment "A functional point, or a proof's cover statement." ;
+    rdfs:range xsd:string .
+
+trace:matches a owl:DatatypeProperty ;
+    rdfs:label "matches" ;
+    rdfs:comment "The hit name, or pattern, that counts for the point." ;
+    rdfs:domain trace:CoveragePoint ;
+    rdfs:range xsd:string .
+
+trace:goal a owl:DatatypeProperty ;
+    rdfs:label "goal" ;
+    rdfs:comment "How many hits the point needs." ;
+    rdfs:domain trace:CoveragePoint ;
+    rdfs:range xsd:integer .
+
+trace:hits a owl:DatatypeProperty ;
+    rdfs:label "hits" ;
+    rdfs:comment "How many times the run reached it." ;
+    rdfs:domain trace:CoverageHit ;
+    rdfs:range xsd:integer .
+
+trace:location a owl:DatatypeProperty ;
+    rdfs:label "where" ;
+    rdfs:comment "The file and line, when the tool knows them." ;
+    rdfs:range xsd:string .
+
+# ================================================================== runs
+
+trace:runKind a owl:DatatypeProperty ;
+    rdfs:label "tool" ;
+    rdfs:comment "The tool the run called, such as kicad.drc." ;
+    rdfs:domain trace:Run ;
+    rdfs:range xsd:string .
+
+trace:subject a owl:DatatypeProperty ;
+    rdfs:label "ran on" ;
+    rdfs:comment "What the run ran on: a project, a netlist, a target, an instrument." ;
+    rdfs:domain trace:Run ;
+    rdfs:range xsd:string .
+
+trace:resultOf a owl:DatatypeProperty ;
+    rdfs:label "result" ;
+    rdfs:comment "The compact result the tool returned." ;
+    rdfs:domain trace:Run ;
+    rdfs:range rdf:JSON .
+
+trace:value a owl:DatatypeProperty ;
+    rdfs:label "value" ;
+    rdfs:comment "The number measured or set." ;
+    rdfs:range xsd:decimal .
+
+trace:unit a owl:DatatypeProperty ;
+    rdfs:label "unit" ;
+    rdfs:comment "The unit of a value." ;
+    rdfs:range xsd:string .
+
+trace:settingKey a owl:DatatypeProperty ;
+    rdfs:label "setting" ;
+    rdfs:comment "The setting's dotted name." ;
+    rdfs:domain trace:ProjectSetting ;
+    rdfs:range xsd:string .
+
+trace:settingValue a owl:DatatypeProperty ;
+    rdfs:label "set to" ;
+    rdfs:comment "The setting's value." ;
+    rdfs:domain trace:ProjectSetting ;
+    rdfs:range rdf:JSON .
+
+# ================================================================== bench readings
+
+trace:step a owl:DatatypeProperty ;
+    rdfs:label "step" ;
+    rdfs:comment "The bring-up step: inspect, unpowered, rails, clocks, firmware or tests." ;
+    rdfs:domain trace:BenchReading ;
+    rdfs:range xsd:string .
+
+trace:instrument a owl:DatatypeProperty ;
+    rdfs:label "instrument" ;
+    rdfs:comment "The bench instrument, by the name the project gives it." ;
+    rdfs:domain trace:BenchReading ;
+    rdfs:range xsd:string .
+
+trace:quantity a owl:DatatypeProperty ;
+    rdfs:label "what was measured" ;
+    rdfs:comment "What was measured, in words, such as the supply rail at a test point." ;
+    rdfs:domain trace:BenchReading ;
+    rdfs:range xsd:string .
+
+trace:minimum a owl:DatatypeProperty ;
+    rdfs:label "at least" ;
+    rdfs:comment "The lowest value allowed." ;
+    rdfs:range xsd:decimal .
+
+trace:maximum a owl:DatatypeProperty ;
+    rdfs:label "at most" ;
+    rdfs:comment "The highest value allowed." ;
+    rdfs:range xsd:decimal .
+
+trace:passed a owl:DatatypeProperty ;
+    rdfs:label "passed" ;
+    rdfs:comment "Whether it was within its limits." ;
+    rdfs:range xsd:boolean .
+
+# ================================================================== parts and offers
+
+trace:manufacturerName a owl:DatatypeProperty ;
+    rdfs:label "made by" ;
+    rdfs:comment "The manufacturer's name." ;
+    rdfs:domain trace:Part ;
+    rdfs:range xsd:string .
+
+trace:package a owl:DatatypeProperty ;
+    rdfs:label "package" ;
+    rdfs:comment "The part's package." ;
+    rdfs:domain trace:Part ;
+    rdfs:range xsd:string .
+
+trace:lifecycle a owl:DatatypeProperty ;
+    rdfs:label "lifecycle" ;
+    rdfs:comment "Whether the part is active, not recommended for new designs, or ending." ;
+    rdfs:domain trace:Part ;
+    rdfs:range xsd:string .
+
+trace:attributes a owl:DatatypeProperty ;
+    rdfs:label "attributes" ;
+    rdfs:comment "The part's parameters as its supplier lists them." ;
+    rdfs:domain trace:Part ;
+    rdfs:range rdf:JSON .
+
+trace:datasheet a owl:DatatypeProperty ;
+    rdfs:label "datasheet" ;
+    rdfs:comment "Where the part's datasheet is." ;
+    rdfs:domain trace:Part ;
+    rdfs:range xsd:string .
+
+trace:offerFor a owl:ObjectProperty ;
+    rdfs:label "offer for" ;
+    rdfs:comment "The part an offer is for." ;
+    rdfs:domain trace:SupplierOffer ;
+    rdfs:range trace:Part .
+
+trace:provider a owl:DatatypeProperty ;
+    rdfs:label "found through" ;
+    rdfs:comment "The service the offer was looked up through." ;
+    rdfs:domain trace:SupplierOffer ;
+    rdfs:range xsd:string .
+
+trace:seller a owl:DatatypeProperty ;
+    rdfs:label "seller" ;
+    rdfs:comment "Who sells the part on that service." ;
+    rdfs:domain trace:SupplierOffer ;
+    rdfs:range xsd:string .
+
+trace:sku a owl:DatatypeProperty ;
+    rdfs:label "seller's part number" ;
+    rdfs:comment "The seller's own number for the part." ;
+    rdfs:domain trace:SupplierOffer ;
+    rdfs:range xsd:string .
+
+trace:stock a owl:DatatypeProperty ;
+    rdfs:label "stock" ;
+    rdfs:comment "How many the seller had." ;
+    rdfs:domain trace:SupplierOffer ;
+    rdfs:range xsd:integer .
+
+trace:minimumOrder a owl:DatatypeProperty ;
+    rdfs:label "minimum order" ;
+    rdfs:comment "The fewest the seller sells." ;
+    rdfs:domain trace:SupplierOffer ;
+    rdfs:range xsd:integer .
+
+trace:priceBreaks a owl:DatatypeProperty ;
+    rdfs:label "prices" ;
+    rdfs:comment "The price at each quantity, with its currency." ;
+    rdfs:domain trace:SupplierOffer ;
+    rdfs:range rdf:JSON .
+
+trace:url a owl:DatatypeProperty ;
+    rdfs:label "web page" ;
+    rdfs:comment "Where it can be seen on the web." ;
+    rdfs:range xsd:string .
+
+trace:observedAt a owl:DatatypeProperty ;
+    rdfs:label "seen at" ;
+    rdfs:comment "When the offer was looked up." ;
+    rdfs:domain trace:SupplierOffer ;
+    rdfs:range xsd:dateTime .
+
+# ================================================================== the board as read from its file
+
+trace:onBoard a owl:ObjectProperty ;
+    rdfs:label "on board" ;
+    rdfs:comment "The board a component, net or layer belongs to." ;
+    rdfs:range trace:Board .
+
+trace:reference a owl:DatatypeProperty ;
+    rdfs:label "reference" ;
+    rdfs:comment "A placed part's reference, such as U3." ;
+    rdfs:range xsd:string .
+
+trace:componentValue a owl:DatatypeProperty ;
+    rdfs:label "value" ;
+    rdfs:comment "The value printed for a placed part, such as 10k or its part number." ;
+    rdfs:domain trace:Component ;
+    rdfs:range xsd:string .
+
+trace:footprintName a owl:DatatypeProperty ;
+    rdfs:label "footprint" ;
+    rdfs:comment "The footprint a component is placed with, by library and name." ;
+    rdfs:domain trace:Component ;
+    rdfs:range xsd:string .
+
+trace:side a owl:DatatypeProperty ;
+    rdfs:label "side" ;
+    rdfs:comment "The board's top or bottom." ;
+    rdfs:range xsd:string .
+
+trace:positionX a owl:DatatypeProperty ;
+    rdfs:label "across" ;
+    rdfs:comment "Across the board, in millimetres, in the board file's frame." ;
+    rdfs:range xsd:decimal .
+
+trace:positionY a owl:DatatypeProperty ;
+    rdfs:label "down" ;
+    rdfs:comment "Down the board, in millimetres, in the board file's frame." ;
+    rdfs:range xsd:decimal .
+
+trace:rotation a owl:DatatypeProperty ;
+    rdfs:label "rotation" ;
+    rdfs:comment "How far it is turned, in degrees." ;
+    rdfs:range xsd:decimal .
+
+trace:ofComponent a owl:ObjectProperty ;
+    rdfs:label "of component" ;
+    rdfs:comment "The component a pad belongs to." ;
+    rdfs:domain trace:Pad ;
+    rdfs:range trace:Component .
+
+trace:padType a owl:DatatypeProperty ;
+    rdfs:label "pad type" ;
+    rdfs:comment "Surface mount, through hole, or a hole with no copper." ;
+    rdfs:domain trace:Pad ;
+    rdfs:range xsd:string .
+
+trace:layerKind a owl:DatatypeProperty ;
+    rdfs:label "layer kind" ;
+    rdfs:comment "Signal, power, mixed, or a mask, paste or silkscreen layer." ;
+    rdfs:domain trace:Layer ;
+    rdfs:range xsd:string .
+
+trace:copperLayers a owl:DatatypeProperty ;
+    rdfs:label "copper layers" ;
+    rdfs:comment "How many copper layers the board has." ;
+    rdfs:domain trace:Board ;
+    rdfs:range xsd:integer .
+
+trace:thickness a owl:DatatypeProperty ;
+    rdfs:label "thickness" ;
+    rdfs:comment "How thick it is, in millimetres." ;
+    rdfs:range xsd:decimal .
+
+trace:width a owl:DatatypeProperty ;
+    rdfs:label "width" ;
+    rdfs:comment "Its width, in millimetres." ;
+    rdfs:range xsd:decimal .
+
+trace:height a owl:DatatypeProperty ;
+    rdfs:label "height" ;
+    rdfs:comment "Its size down the board, in millimetres." ;
+    rdfs:range xsd:decimal .
+
+trace:viaCount a owl:DatatypeProperty ;
+    rdfs:label "vias" ;
+    rdfs:comment "How many vias the board has." ;
+    rdfs:domain trace:Board ;
+    rdfs:range xsd:integer .
+
+trace:trackCount a owl:DatatypeProperty ;
+    rdfs:label "track segments" ;
+    rdfs:comment "How many track segments the board has." ;
+    rdfs:domain trace:Board ;
+    rdfs:range xsd:integer .

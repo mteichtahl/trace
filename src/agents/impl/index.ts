@@ -15,7 +15,7 @@ export const impl: Specialist = {
   memoryAgent: 'impl',
   tools: [
     'fpga.synth', 'fpga.pnr', 'fpga.timing', 'fpga.closure', 'fpga.bitstream',
-    'pcb.autoroute', 'pcb.placement_check', 'pcb.length_match', 'pcb.floorplan',
+    'pcb.autoroute', 'pcb.placement_check', 'pcb.length_match', 'pcb.floorplan', 'pcb.capabilities', 'pcb.capabilities_check',
     'kicad.drc', 'kicad.net_length',
     // Architect (its options are sized and their parts picked) and Capture (the schematic and its ERC) are this
     // specialist's stages too (src/api/actions-journey.ts STAGE_WORK)

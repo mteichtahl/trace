@@ -82,3 +82,68 @@ export function jobsDb(): DatabaseSync {
   add.run('job-2', 'task', 'verify', 'Answer the hand-off', 'queued', t, null, null, 'ho-1', 'job-1', t)
   return db
 }
+
+/** The repository's project database (.trace/project.db): settings, runs, the design and verification records, a bench reading. */
+export async function projectDb(): Promise<DatabaseSync> {
+  const { openProject } = await import('../../src/core/store.js')
+  // the modules that register the design, verification and bench tables
+  await import('../../src/tools/design/db.js')
+  await import('../../src/tools/verify/db.js')
+  await import('../../src/core/bench.js')
+  const dir = mkdtempSync(join(tmpdir(), 'trace-ontology-project-'))
+  mkdirSync(join(dir, '.git'))
+  const db = openProject(dir)
+  const t = Date.now() / 1000
+  const run = db.prepare('INSERT INTO runs (id, kind, subject, started, finished, status, summary, args, result, git_sha, agent, job) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+  run.run('run-drc', 'kicad.drc', 'hardware/sensor-node.kicad_pro', t, t, 'pass', '0 errors', '{}', '{"errors":0}', 'abc123', 'impl', 'job-1')
+  run.run('run-verify', 'verify.run', 'TST-1', t, t, 'pass', 'passed', '{"test":"TST-1"}', '{}', 'abc123', 'verify', null)
+  db.prepare('INSERT INTO measurements (run_id, name, value, unit, detail) VALUES (?,?,?,?,?)').run('run-drc', 'errors', 0, null, null)
+  db.prepare('INSERT INTO artifacts (run_id, name, mime, bytes) VALUES (?,?,?,?)').run('run-drc', 'drc-report', 'application/json', new Uint8Array([123, 125]))
+  db.prepare('INSERT INTO settings (key, value, updated, by) VALUES (?,?,?,?)').run('build.quantity', '5', t, ADMIN.label)
+  db.prepare('INSERT INTO intent_statements (id, topic, kind, text, source, testable, status, created, updated, by) VALUES (?,?,?,?,?,?,?,?,?,?)')
+    .run('INT-1a2b3c', 'power', 'statement', 'Runs a year on two AA cells.', '{"kind":"person"}', 1, 'proposed', t, t, ADMIN.label)
+  db.prepare('INSERT INTO requirements (id, text, kind, acceptance, status, tags, created, updated, by) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run('REQ-PWR-001', 'The board shall run from 2.0 V to 3.3 V.', 'electrical', 'The rail holds within 3.2 to 3.4 V.', 'accepted', '["power"]', t, t, ADMIN.label)
+  db.prepare('INSERT INTO requirement_intent (requirement, intent, removed, updated, by) VALUES (?,?,?,?,?)').run('REQ-PWR-001', 'INT-1a2b3c', 0, t, 'verify')
+  db.prepare('INSERT INTO arch_options (id, name, summary, recommended, why, gives_up, risks, status, created, updated, by) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+    .run('A', 'Low-dropout supply', 'A regulator and a microcontroller', 1, 'quiet', 'efficiency', '["a short battery life"]', 'proposed', t, t, 'impl')
+  db.prepare('INSERT INTO arch_criteria (id, name, weight, status, updated, by) VALUES (?,?,?,?,?,?)').run('power', 'Power', 2, 'proposed', t, 'impl')
+  db.prepare('INSERT INTO arch_scores (option, criterion, score, reason, updated, by) VALUES (?,?,?,?,?,?)').run('A', 'power', 4, 'low quiescent current', t, 'impl')
+  const block = db.prepare('INSERT INTO arch_blocks (option, id, name, role, parts, requirements, status, updated, by) VALUES (?,?,?,?,?,?,?,?,?)')
+  block.run('A', 'power', 'Power', 'supply', '[{"mpn":"TPS7A02","role":"regulator","key":true}]', '["REQ-PWR-001"]', 'proposed', t, 'impl')
+  block.run('A', 'mcu', 'Microcontroller', 'control', '[{"mpn":"STM32L031"}]', '[]', 'proposed', t, 'impl')
+  db.prepare('INSERT INTO arch_connections (option, id, from_block, to_block, kind, label, status, updated, by) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run('A', 'c1', 'power', 'mcu', 'rail', '3.3 V, 10 mA', 'proposed', t, 'impl')
+  db.prepare('INSERT INTO pin_plan (part, pin, name, function, net, kind, alternates, status, updated, by) VALUES (?,?,?,?,?,?,?,?,?,?)')
+    .run('J1', '1', 'VDD', 'power', 'GND', 'power', '[]', 'proposed', t, 'impl')
+  db.prepare('INSERT INTO sheet_requirements (sheet, block, requirements, updated, by) VALUES (?,?,?,?,?)').run('hardware/sensor-node.kicad_sch', 'power', '["REQ-PWR-001"]', t, 'impl')
+  db.prepare('INSERT INTO test_items (id, title, requirements, method, tool, args, status, last_run, created, updated, by) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+    .run('TST-1', 'The rail holds', '["REQ-PWR-001"]', 'drc', 'kicad.drc', '{}', 'pass', 'run-verify', t, t, 'verify')
+  db.prepare('INSERT INTO test_results (run_id, test_id, status, evidence, reason, at) VALUES (?,?,?,?,?,?)').run('run-verify', 'TST-1', 'pass', '["run-drc"]', null, t)
+  db.prepare('INSERT INTO coverage_points (id, requirements, kind, match, goal, created, updated, by) VALUES (?,?,?,?,?,?,?,?)').run('COV-1', '["REQ-PWR-001"]', 'functional', 'rail_ok', 1, t, t, 'verify')
+  db.prepare('INSERT INTO coverage_hits (run_id, kind, name, hits) VALUES (?,?,?,?)').run('run-verify', 'functional', 'rail_ok', 3)
+  db.prepare('INSERT INTO bringup_readings (id, board, step, instrument, quantity, value, unit, min, max, pass, at, by, run_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run('rd-1', 'SN-001', 'rails', 'dmm', '3V3 rail at TP4', 3.31, 'V', 3.2, 3.4, 1, t, 'impl', 'run-verify')
+  return db
+}
+
+/** The installation's parts database, with one part and one offer. */
+export async function partsDb(): Promise<DatabaseSync> {
+  const { PARTS_SCHEMA } = await import('../../src/tools/parts/db.js')
+  const { mpnKey } = await import('../../src/tools/datasheets/mpn.js')
+  const db = tempDb('central.db')
+  db.exec(PARTS_SCHEMA)
+  const t = Date.now() / 1000
+  db.prepare('INSERT INTO parts (key, mpn, manufacturer, description, package, lifecycle, attributes, datasheet_url, updated) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(mpnKey('TPS7A02'), 'TPS7A02', 'Texas Instruments', 'Low-dropout regulator', 'X2SON-4', 'active', '{}', 'https://www.ti.com/lit/ds/symlink/tps7a02.pdf', t)
+  db.prepare('INSERT INTO part_offers (part_key, provider, seller, provider_part, mpn, stock, moq, price_breaks, url, offer, fetched_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+    .run(mpnKey('TPS7A02'), 'jlcpcb', 'JLCPCB', 'C2862740', 'TPS7A02', 1200, 1, '[{"qty":1,"price":0.4,"currency":"USD"}]', null, '{}', t)
+  return db
+}
+
+/** The sample project's board (examples/sensor-node), read the way every trace tool reads it. */
+export async function sampleBoard(): Promise<{ path: string; board: import('../../src/tools/kicad/pcb.js').Board }> {
+  const { loadBoard } = await import('../../src/tools/kicad/pcb.js')
+  const path = 'hardware/sensor-node.kicad_pcb'
+  return { path, board: loadBoard(join(process.cwd(), 'examples', 'sensor-node', path)) }
+}

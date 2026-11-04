@@ -240,10 +240,12 @@
       "kicad.drc",
       "protocol.compat",
       "protocol.check",
-      "protocol.diagram"
+      "protocol.diagram",
+      "pcb.capabilities",
+      "pcb.capabilities_check"
     ],
     "remote": "gpu",
-    "body": "Layout stage. `layout/trace-sample.kicad_pcb` is the board with every part placed and no copper.\n\n- pcb.autoroute project `layout/trace-sample.kicad_pcb` engine=both (OrthoRoute then Freerouting, GPU jobs), ignore_nets [\"GND\"] (the B.Cu pour joins it). Never route over `hardware/`.\n- pcb.placement_check and pcb.floorplan (blocks power, sense, io) on the routed result.\n- pcb.length_match against `hardware/trace-sample.kicad_dru` (ADC line ≤ 50 mm, header buses ≤ 40 mm); kicad.net_length /ADC_IN.\n- kicad.drc on the routed board; then protocol.compat, protocol.check and protocol.diagram for I2C with the routed lengths.\n\nDone when: no net is left unrouted, DRC has no errors, and the length rules pass. Comment the numbers with their run ids on this issue, then close it."
+    "body": "Layout stage. `layout/trace-sample.kicad_pcb` is the board with every part placed and no copper.\n\n- pcb.autoroute project `layout/trace-sample.kicad_pcb` engine=both (OrthoRoute then Freerouting, GPU jobs), ignore_nets [\"GND\"] (the B.Cu pour joins it). Never route over `hardware/`.\n- pcb.placement_check and pcb.floorplan (blocks power, sense, io) on the routed result.\n- pcb.length_match against `hardware/trace-sample.kicad_dru` (ADC line ≤ 50 mm, header buses ≤ 40 mm); kicad.net_length /ADC_IN.\n- kicad.drc on the routed board; then protocol.compat, protocol.check and protocol.diagram for I2C with the routed lengths.\n- pcb.capabilities, then pcb.capabilities_check: say whether JLCPCB's page still states every stored board figure, and whether the routed board keeps to them (track, gap, via).\n\nDone when: no net is left unrouted, DRC has no errors, and the length rules pass. Comment the numbers with their run ids on this issue, then close it."
   },
   {
     "id": "emc-precheck",

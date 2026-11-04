@@ -11,14 +11,17 @@ import { describe, expect, it } from 'vitest'
 import { applyJourneySchema, EvidenceSchema, JOURNEY_TABLES, OptionSchema } from '../../src/core/journey.js'
 import { applyAgentFactsSchema } from '../../src/core/agent-facts.js'
 import { JOB_CONTROLS_SQL, applyJobIndexSchema } from '../../src/core/job-index.js'
-import { PROJECT_SCHEMA, projectTables } from '../../src/core/store.js'
+import { PROJECT_SCHEMA, applyProjectSchema, projectTables } from '../../src/core/store.js'
+import { PARTS_SCHEMA } from '../../src/tools/parts/db.js'
 import { type DbName, IGNORED_TABLES, LATER_TABLES, TABLES, keyColumns, tableMap } from '../../src/ontology/mapping.js'
 
-function schemaOf(db: DbName): DatabaseSync {
+async function schemaOf(db: DbName): Promise<DatabaseSync> {
   const d = new DatabaseSync(':memory:')
   if (db === 'journey') { applyJourneySchema(d, { store: true }); d.exec(JOB_CONTROLS_SQL) }
   if (db === 'facts') applyAgentFactsSchema(d)
   if (db === 'jobs') applyJobIndexSchema(d)
+  if (db === 'project') { for (const f of registeringModules()) await import(f); applyProjectSchema(d) }
+  if (db === 'central') d.exec(PARTS_SCHEMA)
   return d
 }
 const tablesOf = (d: DatabaseSync): string[] => (d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[]).map((r) => r.name)
@@ -36,11 +39,13 @@ function registeringModules(dir = join(process.cwd(), 'src')): string[] {
 }
 
 describe('the mapping and the schema', () => {
-  for (const db of ['journey', 'facts', 'jobs'] as const) {
-    it(`maps every table and column of ${db}.db, and nothing that is gone`, () => {
-      const d = schemaOf(db)
+  for (const db of ['journey', 'facts', 'jobs', 'project', 'central'] as const) {
+    it(`maps every table and column of the ${db} database, and nothing that is gone`, async () => {
+      const d = await schemaOf(db)
       const live = tablesOf(d)
       for (const t of live) {
+        // the project database holds the journey's tables too (a release's copy): the journey's mapping covers them
+        if (db === 'project' && ((JOURNEY_TABLES as readonly string[]).includes(t) || LATER_TABLES[t])) continue
         const m = tableMap(db, t)
         if (!m) { expect(IGNORED_TABLES[`${db}.${t}`], `${db}.${t} is neither mapped nor ignored`).toBeTruthy(); continue }
         const cols = columnsOf(d, t)
@@ -57,17 +62,17 @@ describe('the mapping and the schema', () => {
     for (const t of JOURNEY_TABLES) expect(tableMap('journey', t), t).toBeTruthy()
   })
 
-  it('every table the project database registers is mapped with the journey or waits for a named phase', async () => {
+  it('every table the project database registers is mapped, or waits for a shape that needs it', async () => {
     for (const f of registeringModules()) await import(f)
     const base = [...PROJECT_SCHEMA.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)].map((x) => x[1] as string)
     expect(base).toEqual(['settings', 'runs', 'measurements', 'artifacts'])
     const registered = projectTables().map((t) => t.table)
     expect(registered.length).toBeGreaterThan(40)
-    for (const t of registered) {
+    for (const t of [...base, ...registered]) {
       if ((JOURNEY_TABLES as readonly string[]).includes(t)) continue
-      expect(LATER_TABLES[t], `project table ${t} is not mapped and waits for no phase`).toBeTruthy()
+      expect(tableMap('project', t) ?? IGNORED_TABLES[`project.${t}`] ?? LATER_TABLES[t], `project table ${t} is not mapped and waits for nothing`).toBeTruthy()
     }
-    for (const t of Object.keys(LATER_TABLES)) expect(registered, `${t} waits for a phase but is not registered`).toContain(t)
+    for (const t of Object.keys(LATER_TABLES)) expect(registered, `${t} waits for a shape but is not registered`).toContain(t)
   })
 
   it('maps every field of the JSON objects it reads (evidence, options)', () => {

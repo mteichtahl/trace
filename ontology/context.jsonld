@@ -24,6 +24,10 @@
       "@id": "trace:answersHandOff",
       "@type": "@id"
     },
+    "arguments": {
+      "@id": "trace:arguments",
+      "@type": "@json"
+    },
     "askedAt": {
       "@id": "trace:askedAt",
       "@type": "xsd:dateTime"
@@ -35,6 +39,10 @@
     "atStage": {
       "@id": "trace:atStage",
       "@type": "@id"
+    },
+    "attributes": {
+      "@id": "trace:attributes",
+      "@type": "@json"
     },
     "buildPlan": {
       "@id": "trace:buildPlan",
@@ -59,6 +67,10 @@
     "closedAt": {
       "@id": "trace:closedAt",
       "@type": "xsd:dateTime"
+    },
+    "conflictsWith": {
+      "@id": "trace:conflictsWith",
+      "@type": "@id"
     },
     "consulted": {
       "@id": "trace:consulted",
@@ -108,12 +120,28 @@
       "@id": "trace:expectedShipDate",
       "@type": "xsd:date"
     },
+    "expects": {
+      "@id": "trace:expects",
+      "@type": "@json"
+    },
     "forCriterion": {
       "@id": "trace:forCriterion",
       "@type": "@id"
     },
+    "forOption": {
+      "@id": "trace:forOption",
+      "@type": "@id"
+    },
     "forStage": {
       "@id": "trace:forStage",
+      "@type": "@id"
+    },
+    "fromBlock": {
+      "@id": "trace:fromBlock",
+      "@type": "@id"
+    },
+    "fromIntent": {
+      "@id": "trace:fromIntent",
       "@type": "@id"
     },
     "fromJob": {
@@ -160,12 +188,28 @@
       "@id": "trace:isOutputOf",
       "@type": "@id"
     },
+    "lastRun": {
+      "@id": "trace:lastRun",
+      "@type": "@id"
+    },
     "lostAt": {
       "@id": "trace:lostAt",
       "@type": "xsd:dateTime"
     },
+    "observedAt": {
+      "@id": "trace:observedAt",
+      "@type": "xsd:dateTime"
+    },
     "ofBoardUnit": {
       "@id": "trace:ofBoardUnit",
+      "@type": "@id"
+    },
+    "ofComponent": {
+      "@id": "trace:ofComponent",
+      "@type": "@id"
+    },
+    "offerFor": {
+      "@id": "trace:offerFor",
       "@type": "@id"
     },
     "ofGate": {
@@ -176,12 +220,36 @@
       "@id": "trace:ofOrder",
       "@type": "@id"
     },
+    "ofRequirement": {
+      "@id": "trace:ofRequirement",
+      "@type": "@id"
+    },
     "ofRevision": {
       "@id": "trace:ofRevision",
       "@type": "@id"
     },
+    "ofRun": {
+      "@id": "trace:ofRun",
+      "@type": "@id"
+    },
     "ofStage": {
       "@id": "trace:ofStage",
+      "@type": "@id"
+    },
+    "ofTest": {
+      "@id": "trace:ofTest",
+      "@type": "@id"
+    },
+    "onBoard": {
+      "@id": "trace:onBoard",
+      "@type": "@id"
+    },
+    "onComponent": {
+      "@id": "trace:onComponent",
+      "@type": "@id"
+    },
+    "onNet": {
+      "@id": "trace:onNet",
       "@type": "@id"
     },
     "opened": {
@@ -204,6 +272,10 @@
       "@id": "trace:placedAt",
       "@type": "xsd:dateTime"
     },
+    "priceBreaks": {
+      "@id": "trace:priceBreaks",
+      "@type": "@json"
+    },
     "queuedAt": {
       "@id": "trace:queuedAt",
       "@type": "xsd:dateTime"
@@ -216,6 +288,10 @@
       "@id": "trace:recordedAt",
       "@type": "xsd:dateTime"
     },
+    "refersToPart": {
+      "@id": "trace:refersToPart",
+      "@type": "@id"
+    },
     "reopenedAt": {
       "@id": "trace:reopenedAt",
       "@type": "xsd:dateTime"
@@ -223,6 +299,14 @@
     "resolvedAt": {
       "@id": "trace:resolvedAt",
       "@type": "xsd:dateTime"
+    },
+    "restsOn": {
+      "@id": "trace:restsOn",
+      "@type": "@id"
+    },
+    "resultOf": {
+      "@id": "trace:resultOf",
+      "@type": "@json"
     },
     "resumes": {
       "@id": "trace:resumes",
@@ -232,6 +316,18 @@
       "@id": "trace:returnedAt",
       "@type": "xsd:dateTime"
     },
+    "scoredOn": {
+      "@id": "trace:scoredOn",
+      "@type": "@id"
+    },
+    "servesRequirement": {
+      "@id": "trace:servesRequirement",
+      "@type": "@id"
+    },
+    "settingValue": {
+      "@id": "trace:settingValue",
+      "@type": "@json"
+    },
     "shippedAt": {
       "@id": "trace:shippedAt",
       "@type": "xsd:dateTime"
@@ -239,6 +335,10 @@
     "signs": {
       "@id": "trace:signs",
       "@type": "@id"
+    },
+    "sourceOf": {
+      "@id": "trace:sourceOf",
+      "@type": "@json"
     },
     "startedAt": {
       "@id": "trace:startedAt",
@@ -256,6 +356,10 @@
       "@id": "trace:supersedes",
       "@type": "@id"
     },
+    "toBlock": {
+      "@id": "trace:toBlock",
+      "@type": "@id"
+    },
     "toSpecialist": {
       "@id": "trace:toSpecialist",
       "@type": "@id"
@@ -263,6 +367,10 @@
     "updatedAt": {
       "@id": "trace:updatedAt",
       "@type": "xsd:dateTime"
+    },
+    "usesPart": {
+      "@id": "trace:usesPart",
+      "@type": "@id"
     },
     "versionOf": {
       "@id": "trace:versionOf",

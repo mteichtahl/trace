@@ -8,11 +8,12 @@ build plan. trace's SQLite tables stay the record; the ontology is how they are 
 | --- | --- |
 | `trace-core.ttl` | The design artifact and its versions, the input and output links (Si2's pattern), evidence, and the plain properties many records share |
 | `trace-journey.ttl` | The journey record, the agents' facts and the job index: templates, stages, gates, criteria, signatures, waivers, questions, decisions, hand-offs, jobs, orders, boards, and the history tables |
+| `trace-board.ttl` | The design record, the verification and run records, bench readings, parts and offers, and the board read from its file: components, pads, nets, layers |
 | `trace-si2-align.ttl` | How trace's terms relate to the Si2 EDA ontology's; the only file that names Si2 |
 | `si2/terms.txt` | The terms Si2 defines at the pinned commit, which every alignment is checked against |
 | `context.jsonld` | The JSON-LD context, written from the ontology by `scripts/ontology-context.mjs` |
 
-The board and mechanical modules, the SHACL shapes and the shapes behind criteria come in later phases.
+The mechanical module and the SHACL shapes behind criteria come in later phases.
 
 ## Conventions
 
@@ -28,7 +29,9 @@ The board and mechanical modules, the SHACL shapes and the shapes behind criteri
 
 - `src/ontology/vocab.ts` reads these files into one vocabulary.
 - `src/ontology/mapping.ts` says which table and column becomes which class and property, for every column of the
-  journey record (journey.db), the agents' facts (facts.db) and the job index (jobs.db).
+  journey record (journey.db), the agents' facts (facts.db), the job index (jobs.db), the project database
+  (.trace/project.db) and the parts database.
+- `src/ontology/board.ts` reads a board from its .kicad_pcb when the graph is built: nothing about the board is stored.
 - `src/ontology/graph.ts` builds a project's graph in memory through the mapping, and checks records against the
   ontology.
 - `src/ontology/jsonld.ts` gives the JSON-LD context and one record as JSON-LD.

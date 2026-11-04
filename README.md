@@ -1463,20 +1463,22 @@ kept in `src/tools/mech/capabilities.ts` with each source. They cover the minimu
 smallest hole, assembly clearance, and for CNC the wall and internal-corner radius. Screws go into pilot holes
 (self-tapping): JLC3DP recommends M6 as the smallest printed thread.
 
-**Keeping the rules current.** JLC3DP publishes no data feed, so trace's own CI re-reads the three pages every day
-(`.github/workflows/capabilities.yml`, `scripts/capabilities-sync.mjs`, `src/tools/mech/capsync.ts`) and decides
-figure by figure:
+**Keeping the rules current.** JLCPCB, JLC3DP and JLCCNC publish no data feed, so trace's own CI re-reads their pages
+every day (`.github/workflows/capabilities.yml`, `scripts/capabilities-sync.mjs`, `src/tools/mech/capsync.ts`) and
+decides figure by figure, for the case table (`src/tools/mech/capabilities.ts`) and JLCPCB's board table
+(`src/tools/pcb/capabilities.ts`: tracks and gaps, vias, annular rings, hole gaps, solder mask, silkscreen, edge
+clearance) alike:
 
 | What the page says | What happens |
 | --- | --- |
 | Every figure as stored | Nothing, until the table was last confirmed 30 days ago: then a pull request moves its date on (no figure changes, no case build goes stale) and merges itself once CI passes |
-| A figure in the same words with other numbers, of a kind trace writes back (build sizes, walls, holes, tolerances, CNC walls, lead time) | A pull request from `capabilities/sync` writes it to `src/tools/mech/capabilities.updates.ts`, applied on top of the reviewed table, with the stored and new figure side by side. A person reviews and merges it; case builds made with the old figures go stale when it does |
+| A figure in the same words with other numbers, of a kind trace writes back (build sizes, walls, holes, tolerances, CNC walls, lead time, every board figure) | A pull request from `capabilities/sync` writes it to its table's `capabilities.updates.ts`, applied on top of the reviewed table, with the stored and new figure side by side. A person reviews and merges it; case builds made with the old figures go stale when it does |
 | Anything else: a page or label that cannot be read, a figure reworded, one the engine computes in code (the CNC corner radius), or two figures for one row that disagree | One issue labelled `capabilities`, updated daily and closed when every figure is confirmed again. The table keeps the last reviewed figure, and its date does not move, so it still goes stale after 90 days |
 
 A case build is stale when the figures it used change, not when they are only confirmed again. The workflow needs the
 repository settings "Allow GitHub Actions to create and approve pull requests" and, for the self-merging date update,
-"Allow auto-merge"; without them it says so in its summary and leaves the branch. `mech.capabilities_check` runs the
-same comparison on demand and changes nothing.
+"Allow auto-merge"; without them it says so in its summary and leaves the branch. `mech.capabilities_check` and
+`pcb.capabilities_check` run the same comparison on demand and change nothing; `pcb.capabilities` gives the board table.
 
 **Where it runs.** The engine is Python (`python/tracebridge/mech`, `pip install 'python[mech]'`, build123d 0.13.0)
 and runs as jobs of two kinds, because `mechanical/case.py` is code that a person, the worker or a pull request wrote

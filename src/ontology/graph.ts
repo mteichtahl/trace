@@ -16,10 +16,22 @@ import type { DatabaseSync } from 'node:sqlite'
 import { DataFactory, type NamedNode, type Quad_Object, Store } from 'n3'
 import { type ColumnRule, type DbName, type FieldMap, type LiteralAs, type TableMap, TABLES, keyColumns } from './mapping.js'
 import { NS, RDF, XSD, type Vocabulary, isA, local } from './vocab.js'
+import type { Board } from '../tools/kicad/pcb.js'
+import { addBoard } from './board.js'
 
 const { namedNode, literal, quad } = DataFactory
 
-export interface GraphSources { journey?: DatabaseSync | null; facts?: DatabaseSync | null; jobs?: DatabaseSync | null }
+export interface GraphSources {
+  journey?: DatabaseSync | null
+  facts?: DatabaseSync | null
+  jobs?: DatabaseSync | null
+  /** the repository's .trace/project.db: the design record, the verification and run records, bench readings */
+  project?: DatabaseSync | null
+  /** the installation's parts database */
+  central?: DatabaseSync | null
+  /** the boards, read from their .kicad_pcb (src/tools/kicad/pcb.ts loadBoard), by their path in the repository */
+  boards?: readonly { path: string; board: Board }[]
+}
 export interface GraphOptions {
   /** the installation's name (its prefix): identifiers are unique across installations */
   installation: string
@@ -76,7 +88,7 @@ function apply(c: Ctx, s: NamedNode, name: string, rule: ColumnRule, v: unknown,
   const p = T(rule.prop)
   if ('ref' in rule) {
     if (v === null || v === undefined || v === '') return
-    const target = typeof rule.ref === 'function' ? rule.ref(String(v)) : [rule.ref, String(v)] as const
+    const target = typeof rule.ref === 'function' ? rule.ref(String(v), row) : [rule.ref, String(v)] as const
     if (target) c.store.addQuad(quad(s, p, link(c, target[0], target[1], rule.type)))
     return
   }
@@ -128,6 +140,8 @@ function table(c: Ctx, db: DatabaseSync, t: TableMap): number {
   for (const row of rows) {
     const s = namedNode(nodeIri(c.o, t.kind, keyColumns(t).map((k) => String(row[k])).join('/')))
     c.store.addQuad(quad(s, TYPE, T(t.class)))
+    const extra = t.typeBy ? t.typeBy.classes[String(row[t.typeBy.column])] : undefined
+    if (extra) c.store.addQuad(quad(s, TYPE, T(extra)))
     for (const [col, rule] of Object.entries(t.columns)) apply(c, s, col, rule, row[col], row, t.columns)
     if (fixed && t.link) c.store.addQuad(quad(fixed, T(t.link[2]), s))
   }
@@ -140,8 +154,10 @@ export function buildGraph(src: GraphSources, o: GraphOptions): { store: Store; 
   const rows: Record<string, number> = {}
   for (const t of TABLES) {
     const db = src[t.db as DbName]
+    // the project database carries a copy of the journey's tables (a release's): the journey record is read for them
     if (db) rows[`${t.db}.${t.table}`] = table(c, db, t)
   }
+  for (const b of src.boards ?? []) addBoard(c.store, o, b.path, b.board)
   // the journey belongs to its project
   if (src.journey && hasTable(src.journey, 'journey') && src.journey.prepare("SELECT 1 FROM journey WHERE id='current'").get()) {
     c.store.addQuad(quad(link(c, 'journey', 'current'), T('inProject'), link(c, 'project', o.project, 'Project')))
