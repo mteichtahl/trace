@@ -44,6 +44,19 @@ RUN install -d -m 0755 /etc/apt/keyrings \
 # Blender uses the system Python, and its glTF importer needs numpy.
 RUN apt-get update && apt-get install -y --no-install-recommends blender python3-numpy && blender --version && rm -rf /var/lib/apt/lists/*
 
+# Printing the project's documents (docs/scribe.md "Rendering", the `docs` job kind, python -m tracebridge.docs):
+# pandoc writes Typst, Mermaid's command line draws the diagrams in a headless Chromium (Playwright's arm64 build:
+# Puppeteer has none for linux/arm64), Typst (the venv's `typst` module) makes the PDF in the Liberation and DejaVu
+# fonts. trace-chromium points at the browser whatever its version folder; Mermaid never downloads its own.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers PUPPETEER_SKIP_DOWNLOAD=1
+RUN apt-get update && apt-get install -y --no-install-recommends pandoc fonts-liberation fonts-dejavu-core \
+ && npm install -g --no-fund --no-audit '@mermaid-js/mermaid-cli@11.16.0' \
+ && npx -y 'playwright@1.64.1' install --with-deps chromium \
+ && ln -s "$(ls -d /opt/pw-browsers/chromium-*/chrome-linux*/chrome | head -1)" /usr/local/bin/trace-chromium \
+ && chmod -R a+rX /opt/pw-browsers \
+ && pandoc --version | head -1 && mmdc --version && trace-chromium --version \
+ && rm -rf /var/lib/apt/lists/* /root/.npm
+
 # Verification and FPGA implementation (src/tools/verify, src/tools/fpga): Verilator, Yosys, nextpnr for ice40, ECP5
 # and Gowin, the IceStorm and Trellis packers, and z3 for formal (yosys-smtbmc). SymbiYosys from its repository at the
 # tag matching Ubuntu's Yosys; without that tag, verify.formal runs yosys + yosys-smtbmc directly.
@@ -82,7 +95,7 @@ RUN npm run build:image \
 # The enclosure engine (python -m tracebridge.mech, the `cad` job kind): tracebridge with its mech extra, which pins
 # build123d and pulls OpenCascade's arm64 wheels. Installed as a copy, not editable, so the venv does not point back
 # into /app's build tree; in its own layer because it is the largest thing in the venv.
-RUN /opt/trace-venv/bin/pip install --no-cache-dir '/app/python[mech,shapes]'
+RUN /opt/trace-venv/bin/pip install --no-cache-dir '/app/python[mech,shapes,docs]'
 
 # ------------------------------------------------------------------ final: what the tools function runs
 FROM tools
@@ -90,12 +103,13 @@ COPY --from=build /app /app
 COPY --from=build /opt/trace-venv /opt/trace-venv
 ENV PATH=/opt/trace-venv/bin:$PATH \
     TRACE_PYTHON=/opt/trace-venv/bin/python \
+    TRACE_CHROMIUM=/usr/local/bin/trace-chromium \
     HOME=/tmp \
     XDG_CONFIG_HOME=/tmp/.config \
     XDG_CACHE_HOME=/tmp/.cache \
     XDG_DATA_HOME=/tmp/.local/share \
     NODE_ENV=production
 WORKDIR /tmp
-RUN test -f /app/dist/gpu/lambda.js && test -f /app/dist/gpu/kicad-job.js && test -d /app/python/blender && command -v kicad-cli blender ffmpeg yosys verilator ccx cocotb-config gowin_pack \
- && /opt/trace-venv/bin/python -c "import build123d, tracebridge.mech"
+RUN test -f /app/dist/gpu/lambda.js && test -f /app/dist/gpu/kicad-job.js && test -d /app/python/blender && command -v kicad-cli blender ffmpeg yosys verilator ccx cocotb-config gowin_pack pandoc mmdc trace-chromium \
+ && /opt/trace-venv/bin/python -c "import build123d, tracebridge.mech, typst, tracebridge.docs"
 CMD ["node", "/app/dist/gpu/lambda.js"]

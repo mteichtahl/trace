@@ -8,6 +8,8 @@ build-backend = "setuptools.build_meta"
 #   can  — CAN through vendor interfaces (PCAN, Kvaser, Vector, gs_usb, SocketCAN) and BLF/ASC logs (python-can)
 #   mech — the enclosure engine (build123d on OpenCascade), run as `python -m tracebridge.mech` in the tools image;
 #          not part of `all`, because it is about 850 MB and needs Python 3.11 or later (docs/enclosure-build.md)
+#   docs — printing a project's documents to PDF (Typst; pandoc and Mermaid's mmdc as programs), run as
+#          `python -m tracebridge.docs` in the tools image (docs/scribe.md)
 #   shapes — SHACL checks behind trace's own gate criteria (pySHACL, with rdflib), `shapes.check` (docs/ontology.md)
 [project]
 name = "tracebridge"
@@ -21,6 +23,7 @@ visa = ["pyvisa>=1.16.2", "pyvisa-py>=0.8.1", "pyserial>=3.5"]
 can = ["python-can>=4.6.1"]
 mech = ["build123d==0.13.0"]
 shapes = ["pyshacl==0.40.2"]
+docs = ["typst==0.15.0"]
 all = ["tracebridge[pdf,visa,can,shapes]"]
 dev = ["pytest>=9.2.0", "reportlab>=5.1.0", "tracebridge[all]", "tracebridge[mech]; python_version >= '3.11'"]
 
@@ -28,6 +31,8 @@ dev = ["pytest>=9.2.0", "reportlab>=5.1.0", "tracebridge[all]", "tracebridge[mec
 where = ["."]
 include = ["tracebridge*"]
 
-# The case script template (tracebridge.mech.TEMPLATE) is read as text and copied into projects by mech.init.
+# The case script template (tracebridge.mech.TEMPLATE) is read as text and copied into projects by mech.init; the
+# documents' Typst template (tracebridge.docs) is read by pandoc.
 [tool.setuptools.package-data]
 "tracebridge.mech" = ["templates/*.py"]
+"tracebridge.docs" = ["template.typ"]

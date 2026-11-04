@@ -21,7 +21,7 @@ make it dissipate about 0.44 W, which the thermal tools have to check.
 
 | Folder | What it holds |
 |---|---|
-| `docs/` | `intent.md`, the product brief in trace's ten intent topics. `spec.md`, the numbered requirements (REQ-…) with acceptance criteria. `datasheets/`, two datasheets for **fictional** parts (TRC-OPA1, an op-amp; TRC-TMP1, an I2C temperature sensor), written for this sample by `make_datasheets.py`, not copied from any vendor |
+| `docs/` | `intent.md`, the product brief in trace's ten intent topics. `spec.md`, the numbered requirements (REQ-…) with acceptance criteria. `design/high-level-design.md`, the start of the board's high level design (Scribe's document: overview, context and data flow written, the rest pending). `datasheets/`, two datasheets for **fictional** parts (TRC-OPA1, an op-amp; TRC-TMP1, an I2C temperature sensor), written for this sample by `make_datasheets.py`, not copied from any vendor |
 | `hardware/` | The KiCad 10 project: schematic, routed board, and a `.kicad_dru` with length rules |
 | `layout/` | The same board with every part placed and no copper. It is the autorouter's input |
 | `tools/generate.ts` | Writes both KiCad projects from one parts list and checks ERC and DRC |
@@ -53,7 +53,7 @@ The tour follows the journey:
 4. **Prove:** the analog, mixed-signal, logic, protocol and FPGA work.
 5. **Layout:** autorouting, EMC, thermal and the enclosure.
 6. **Sign-off:** solver cross-checks, renders and the test plan.
-7. **Release:** the fab package.
+7. **Release:** the fab package, and the project's documents checked and printed.
 8. **Bring-up:** on the emulated bench.
 
 Tasks marked as GPU or CPU jobs run on AWS Batch, and the installer leaves them out when those jobs are off.
