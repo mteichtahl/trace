@@ -174,3 +174,46 @@ export function RetireDialog({ repo, name, open, onOpenChange }: { repo: string;
     </AlertDialog>
   )
 }
+
+/** The Next step card's words while the project is paused or retired, or null when it is active. Pure. */
+export function heldNextWords(l: Pick<Lifecycle, 'paused' | 'retired'> | undefined, o: { admin: boolean; part?: string | undefined }, now: number = Date.now()): { label: string; summary: string; detail: string; action: 'resume' | 'restore' | null } | null {
+  if (!l) return null
+  if (l.retired) {
+    return {
+      label: 'Retired', summary: 'Nothing happens here: this project is retired.',
+      detail: `${markWords('Retired', l.retired, now)} ${o.admin ? 'Restore it from the banner above to bring it back as it was.' : ''}`.trim(),
+      action: o.admin ? 'restore' : null,
+    }
+  }
+  if (l.paused) {
+    const may = mayPause(o)
+    return {
+      label: 'Paused', summary: 'Nothing happens here until the project is resumed.',
+      detail: `${markWords('Paused', l.paused, now)} ${may ? 'Resume it from the banner above when it should carry on: trace picks up where it stopped.' : 'A Contributor or an admin can resume it.'}`,
+      action: may ? 'resume' : null,
+    }
+  }
+  return null
+}
+
+/**
+ * Stands in for the Overview's Next step card while the project is paused or retired, so nobody is nudged toward work
+ * that cannot happen. The one button that undoes it stays on the banner above (PausedBanner), not repeated here.
+ */
+export function HeldNextCard({ repo, part, className }: { repo: string; part?: string | undefined; className?: string }) {
+  const { user } = useAuth()
+  const l = useLifecycle(repo)
+  const w = heldNextWords(l.data, { admin: user?.class === 'admin', part })
+  if (!w) return null
+  const retired = !!l.data?.retired
+  return (
+    <section aria-labelledby="next-step" className={cn('rounded-xl border p-5 md:p-6', retired ? 'border-destructive/30 bg-destructive/5' : 'border-warning/40 bg-warning/5', className)}>
+      <p id="next-step" className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className={cn('size-2 rounded-full', retired ? 'bg-destructive' : 'bg-warning')} aria-hidden />
+        Next step · {w.label}
+      </p>
+      <p className="mt-3 text-lg leading-snug md:text-xl">{w.summary}</p>
+      <p className="mt-2 text-sm text-muted-foreground">{w.detail}</p>
+    </section>
+  )
+}
