@@ -56,6 +56,8 @@ export const SOIL_GATES: Record<string, Partial<GateMore>> = {
       crit('c4', 'Firmware pin plan matches the schematic', 'run_62de', 'run', 'Pin plan: 18 used pins agree between the schematic and the firmware configuration.', true),
       crit('c7', 'Power sheet reviewed by a person', 'record', 'record', 'Waits for the power and USB-C input change to be accepted.', false, 'not_met'),
       crit('c3', 'All parts in stock for 10 boards', 'run_77b0', 'run', 'Runs once the power sheet is accepted.', false, 'not_met'),
+      // an admin added this to the Board template (Admin › Project templates): a person signs it off in the gate
+      { id: 'capture.safety', text: 'The battery safety review is done.', status: 'not_met', added: true },
     ],
     waivers: [W3],
   },

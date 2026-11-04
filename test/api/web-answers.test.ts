@@ -117,6 +117,9 @@ describe('the answers the web app reads', () => {
     await run(ADMIN, 'chats.append', { repo: REPO, thread: t.thread.id, messages: [{ text: 'And the heat?' }] })
     const answers = stable({
       'journey.get': { args: { repo: REPO }, result: await run(USER, 'journey.get', { repo: REPO }) },
+      // the installation's project templates (src/api/actions-templates.ts): the list, and one with its catalog
+      'templates.list': { args: {}, result: await run(USER, 'templates.list') },
+      'templates.get': { args: { template: 'board' }, result: await run(ADMIN, 'templates.get', { template: 'board' }) },
       'jobs.list': { args: { repo: REPO }, result: await run(USER, 'jobs.list', { repo: REPO }) },
       'handoff.decline': { args: { repo: REPO, id: pending, reason: 'The bench measures it on Friday.' }, result: await run(USER, 'handoff.decline', { repo: REPO, id: pending, reason: 'The bench measures it on Friday.' }) },
       inbox: { args: {}, result: await run(USER, 'inbox') },

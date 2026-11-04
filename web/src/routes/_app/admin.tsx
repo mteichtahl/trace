@@ -18,6 +18,7 @@ export const ADMIN_TABS = [
   { to: '/admin/people', label: 'People', line: 'Who can sign in, their class, and their part on each project.' },
   { to: '/admin/systems', label: 'Connected systems', line: 'Other systems and AI agents that call trace with their own keys.' },
   { to: '/admin/prompts', label: 'Agent instructions', line: 'Every instruction and system prompt the agents receive.' },
+  { to: '/admin/templates', label: 'Project templates', line: 'The stages, gates and criteria a new project starts from.' },
   { to: '/admin/installation', label: 'Installation', line: "The installation's health and optional keys." },
   { to: '/admin/usage', label: 'Usage and cost', line: 'Spend across projects this month.' },
   { to: '/admin/retired', label: 'Retired projects', line: 'Projects hidden from everyone, which you can restore.' },

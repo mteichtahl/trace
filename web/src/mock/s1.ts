@@ -34,6 +34,17 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
       if (c) c.opened = true
       return ok({ ok: true })
     }
+    case 'criterion.confirm': {
+      const c = (JOURNEYS[repo]?.gates as GateMore[] | undefined)?.flatMap((g) => g.criteria).find((x) => x.id === a.criterion)
+      if (!c?.added) return fail('That criterion is met by its own check or guided step, not by signing it off here.')
+      const met = a.met !== false
+      if (met && String(a.note ?? '').trim().length < 3) return fail('Say what you checked: it is the evidence the gate is signed on.')
+      c.status = met ? 'met' : 'not_met'
+      if (met) c.evidence = { kind: 'record', label: String(a.note).trim(), id: c.id, summary: String(a.note).trim() }
+      else delete c.evidence
+      c.opened = false
+      return ok({ repo, criterion: c.id, met, summary: met ? 'Signed off.' : 'Taken back: it is not met.' })
+    }
     case 'gate.sign': {
       const g = gateOf(repo, String(a.gate))
       if (!g) return fail('no such gate')

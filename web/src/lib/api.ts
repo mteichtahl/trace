@@ -168,6 +168,14 @@ export interface Actions {
   'policy.get': { args: Record<string, never>; result: { locks: Record<string, string>; updated: string | null; by: string | null } }
   'installation.layout': { args: Record<string, never>; result: import('@/components/installation/layout').LayoutView }
   'policy.set': { args: { key: string; reason: string | null }; result: { locks: Record<string, string>; changed: boolean } }
+  // the installation's project templates (src/api/actions-templates.ts)
+  'templates.list': { args: Record<string, never>; result: { templates: import('./types').TemplateView[] } }
+  'templates.get': { args: { template: import('./types').TemplateId }; result: { template: import('./types').TemplateView; history: import('./types').TemplateHistoryEntry[]; catalog: import('./types').TemplateCatalogStage[]; code: import('./types').TemplateDoc } }
+  'templates.check': { args: { doc: import('./types').TemplateDoc }; result: { ok: boolean; problems: string[] } }
+  'templates.save': { args: { doc: import('./types').TemplateDoc; reason: string }; result: { template: import('./types').TemplateView; saved: boolean; summary: string } }
+  'templates.reset': { args: { template: import('./types').TemplateId; reason: string }; result: { template: import('./types').TemplateView; saved: boolean; summary: string } }
+  // a criterion an admin added to the template, signed off by a person saying what they checked
+  'criterion.confirm': { args: Repo & { criterion: string; met?: boolean; note?: string }; result: { repo: string; criterion: string; met: boolean; summary: string } }
   'users.history': { args: { who: string; limit?: number }; result: { sub: string; email: string | null; entries: { at: string; by: string; repo: string | null; action: 'assign' | 'unassign' | 'class'; detail: string | null; text: string }[] } }
   // connected systems, admins only (docs/external-access.md "Managing connected systems"; shapes in lib/services.ts)
   'services.list': { args: Record<string, never>; result: import('./services').ServiceList }

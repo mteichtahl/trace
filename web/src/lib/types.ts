@@ -172,6 +172,8 @@ export interface Criterion {
   /** not met by its shape (shape.check): each thing still needed, in words naming what to fix, with the id a waiver
    *  of that one finding names */
   findings?: { id: string; text: string }[]
+  /** an admin added it to the template: a person signs it off by saying what they checked (criterion.confirm) */
+  added?: boolean
 }
 
 export interface Waiver {
@@ -747,3 +749,21 @@ export interface ActivityItem {
   change?: number
 }
 export interface ActivityList { items: ActivityItem[]; waits: number; updatedAt: string; unreadable?: string[] }
+
+// ------------------------------------------------------------------ project templates (src/api/actions-templates.ts)
+
+export type TemplateId = 'board' | 'fpga' | 'firmware' | 'mixed'
+export interface TemplateGuide { purpose: string; you_do: string; trace_does: string; you_get: string; typical_time: string }
+export interface TemplateCriterionDoc { id: string; text: string; custom?: boolean; evidence?: string }
+export interface TemplateStageDoc { id: string; gates: { id: string; criteria: TemplateCriterionDoc[] }[]; guide: TemplateGuide }
+/** A template's definition as the installation keeps it (src/core/templates.ts TemplateDoc). */
+export interface TemplateDoc { id: TemplateId; name: string; stages: TemplateStageDoc[] }
+/** templates.list / templates.get: a template as a new project starts from it (version 0: trace's own). */
+export interface TemplateView { id: TemplateId; name: string; version: number; doc: TemplateDoc; changed: boolean; updated: string | null; by: string | null }
+export interface TemplateHistoryEntry { version: number; action: 'save' | 'reset'; by: string | null; at: string; reason: string | null }
+/** Every stage, its gates, and every criterion trace knows for each gate: what an admin chooses from. */
+export interface TemplateCatalogStage {
+  id: string; name: string; later: boolean
+  gates: { id: string; name: string; criteria: { id: string; text: string; owner: 'person' | 'trace'; evidence: string; templates: TemplateId[] }[] }[]
+}
+

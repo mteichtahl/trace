@@ -172,6 +172,13 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
   const to = from ? j.stages[j.stages.indexOf(from) + 1] : undefined
   const label = signLabel(g.name)
   const openCriterion = useCall('journey.criterion.open')
+  // signing off a criterion an admin added to the template (criterion.confirm): the person says what they checked
+  const [signingOff, setSigningOff] = useState<Criterion | null>(null)
+  const confirmCriterion = useCall('criterion.confirm', (a) => [['journey.get', a.repo]])
+  const takeBack = (c: Criterion) => confirmCriterion.mutate({ repo, criterion: c.id, met: false }, {
+    onSuccess: () => toast('Taken back: it is not met.'),
+    onError: (e) => toast.error(e.message),
+  })
   // the project's spend so far, for the cost line (admins only: cost.get carries no money for anyone else)
   const cost = useQuery(q('cost.get', { repo }, { enabled: admin }))
   const spendLine = admin && cost.data?.money ? gateSpendLine(cost.data) : null
@@ -242,11 +249,23 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
     },
     {
       id: 'open', header: '', size: 140, enableSorting: false, meta: { label: 'Open evidence' },
-      cell: ({ row }) => (
-        <Button variant="outline" size="sm" className={cn(!isOpened(row.original, state) && 'border-primary text-primary')} onClick={(e) => { e.stopPropagation(); open(row.original) }} disabled={!row.original.evidence}>
-          Open evidence
-        </Button>
-      ),
+      cell: ({ row }) => {
+        const c = row.original
+        // a criterion an admin added to the template: no check or guided step meets it, a person signs it off here
+        if (c.added && c.status === 'not_met') {
+          return <Button variant="outline" size="sm" className="border-primary text-primary" onClick={(e) => { e.stopPropagation(); setSigningOff(c) }}>Sign off…</Button>
+        }
+        return (
+          <div className="flex items-center gap-1">
+            <Button variant="outline" size="sm" className={cn(!isOpened(c, state) && 'border-primary text-primary')} onClick={(e) => { e.stopPropagation(); open(c) }} disabled={!c.evidence}>
+              Open evidence
+            </Button>
+            {c.added && c.status === 'met' && (
+              <Button variant="ghost" size="sm" disabled={confirmCriterion.isPending} onClick={(e) => { e.stopPropagation(); takeBack(c) }}>Take back</Button>
+            )}
+          </div>
+        )
+      },
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [opened, g, id])
@@ -390,6 +409,11 @@ function GateReview({ journey: j, gate: g, onDone }: { journey: Journey; gate: G
 
       <SignDialog open={confirm} onOpenChange={setConfirm} journey={j} gate={g} to={to?.name} notes={notes} acknowledged={[...acknowledged]} onSigned={onDone} />
       <ReturnDialog open={returning} onOpenChange={setReturning} repo={repo} gate={g} stage={from?.name} id={id} onReturned={onDone} />
+      <SignOffDialog criterion={signingOff} onClose={() => setSigningOff(null)} pending={confirmCriterion.isPending}
+        onSignOff={(note) => signingOff && confirmCriterion.mutate({ repo, criterion: signingOff.id, met: true, note }, {
+          onSuccess: () => { toast('Signed off.'); setSigningOff(null) },
+          onError: (e) => toast.error(e.message),
+        })} />
     </div>
   )
 }
@@ -508,6 +532,33 @@ function SignDialog({ open, onOpenChange, journey: j, gate: g, to, notes, acknow
               {reauth ? 'Confirm with passkey and sign' : 'Sign'}
             </Button>
           )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** Sign off a criterion an admin added to the template: the person says what they checked, and that is its evidence. */
+function SignOffDialog({ criterion: c, onClose, onSignOff, pending }: { criterion: Criterion | null; onClose: () => void; onSignOff: (note: string) => void; pending: boolean }) {
+  const [checked, setChecked] = useState('')
+  const close = () => { setChecked(''); onClose() }
+  return (
+    <Dialog open={c !== null} onOpenChange={(o) => { if (!o) close() }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Sign off</DialogTitle>
+          <DialogDescription>{c?.text} An admin added this to the project's template, so it is met when a person says what they checked.</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-2">
+          <Label htmlFor="signoff-note">What did you check?</Label>
+          <Textarea id="signoff-note" value={checked} onChange={(e) => setChecked(e.target.value)} maxLength={300} placeholder="What you read or saw, and when" />
+          <p className="text-xs text-muted-foreground">It becomes the evidence the gate is signed on.</p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={close}>Cancel</Button>
+          <Button disabled={checked.trim().length < 3 || pending} onClick={() => { onSignOff(checked.trim()); setChecked('') }}>
+            {pending && <Loader2 className="animate-spin" />}Sign off
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
