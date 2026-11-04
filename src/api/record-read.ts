@@ -14,7 +14,7 @@ import type { JourneyRecord } from '../core/journey.js'
 import { artifactMime, unpackArtifact } from '../core/store.js'
 import { type DesignDecision, loadDesignDecisions } from '../tools/design/decisions.js'
 import { type DesignRows, readDesignRows } from '../tools/design/db.js'
-import { type RequirementNow, parseNets, requirementDecisions } from '../tools/design/record.js'
+import { parseNets, requirementDecisions, requirementsNow } from '../tools/design/record.js'
 import type { Drawing } from '../tools/kicad/export.js'
 import { type CheckReport, parseDrc, parseErc } from '../tools/kicad/checks.js'
 
@@ -39,9 +39,6 @@ export interface TraceRequirement {
   waiver: string | null
 }
 
-/** The requirement rows as a decision on one is checked against them (record.ts decisionStands). */
-const requirementsNow = (all: readonly Record<string, unknown>[]): Map<string, RequirementNow> =>
-  new Map(all.map((q) => [String(q.id), { text: String(q.text), acceptance: q.acceptance === null || q.acceptance === undefined ? null : String(q.acceptance), status: String(q.status), updated: typeof q.updated === 'number' ? q.updated : null }]))
 
 /**
  * Every live requirement (not rejected or obsolete) with its evidence status:

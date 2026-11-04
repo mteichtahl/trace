@@ -144,6 +144,10 @@ export function decisionStands(d: DesignDecision, now: RequirementNow | undefine
   return !(now.status === 'proposed' && now.updated !== null && now.updated > d.at)
 }
 
+/** The requirement rows as a decision on one is checked against them (decisionStands). */
+export const requirementsNow = (all: readonly Record<string, unknown>[]): Map<string, RequirementNow> =>
+  new Map(all.map((q) => [String(q.id), { text: String(q.text), acceptance: q.acceptance === null || q.acceptance === undefined ? null : String(q.acceptance), status: String(q.status), updated: typeof q.updated === 'number' ? q.updated : null }]))
+
 /**
  * A requirement's standing decision: accepted, or struck with the reason. Given the rows as they are now, a decision
  * an agent's change has reopened is left out, so the requirement is the person's to decide again.

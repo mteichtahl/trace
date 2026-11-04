@@ -18,6 +18,7 @@ import { type ColumnRule, type DbName, type FieldMap, type LiteralAs, type Table
 import { NS, RDF, XSD, type Vocabulary, isA, local } from './vocab.js'
 import type { Board } from '../tools/kicad/pcb.js'
 import { addBoard } from './board.js'
+import { addDerived } from './derived.js'
 
 const { namedNode, literal, quad } = DataFactory
 
@@ -37,6 +38,9 @@ export interface GraphOptions {
   installation: string
   /** the project, owner/repo */
   project: string
+  /** add the facts no column stores, worked out as the app reads them (src/ontology/derived.ts): for the shapes. Off
+   *  by default, so the graph checked against the ontology (checkRecords) is what trace stores */
+  derived?: boolean
 }
 
 const enc = (s: string): string => encodeURIComponent(s)
@@ -159,6 +163,9 @@ export function buildGraph(src: GraphSources, o: GraphOptions): { store: Store; 
     if (db) rows[`${t.db}.${t.table}`] = table(c, db, t)
   }
   for (const b of src.boards ?? []) addBoard(c.store, o, b.path, b.board)
+  // for the shapes, what no column stores, worked out as the app reads it: people's decisions are the journey's, or the
+  // project database's copy of them (a release, the API's record copy)
+  if (o.derived && src.project) addDerived(c.store, o, src.project, src.journey ?? src.project)
   // the journey belongs to its project
   if (src.journey && hasTable(src.journey, 'journey') && src.journey.prepare("SELECT 1 FROM journey WHERE id='current'").get()) {
     c.store.addQuad(quad(link(c, 'journey', 'current'), T('inProject'), link(c, 'project', o.project, 'Project')))

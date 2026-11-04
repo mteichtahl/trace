@@ -8,6 +8,7 @@ build-backend = "setuptools.build_meta"
 #   can  — CAN through vendor interfaces (PCAN, Kvaser, Vector, gs_usb, SocketCAN) and BLF/ASC logs (python-can)
 #   mech — the enclosure engine (build123d on OpenCascade), run as `python -m tracebridge.mech` in the tools image;
 #          not part of `all`, because it is about 850 MB and needs Python 3.11 or later (docs/enclosure-build.md)
+#   shapes — SHACL checks behind trace's own gate criteria (pySHACL, with rdflib), `shapes.check` (docs/ontology.md)
 [project]
 name = "tracebridge"
 version = "0.1.0"
@@ -19,7 +20,8 @@ pdf = ["pdfplumber>=0.11.10", "pypdf>=6.21.4"]
 visa = ["pyvisa>=1.16.2", "pyvisa-py>=0.8.1", "pyserial>=3.5"]
 can = ["python-can>=4.6.1"]
 mech = ["build123d==0.13.0"]
-all = ["tracebridge[pdf,visa,can]"]
+shapes = ["pyshacl==0.40.2"]
+all = ["tracebridge[pdf,visa,can,shapes]"]
 dev = ["pytest>=9.2.0", "reportlab>=5.1.0", "tracebridge[all]", "tracebridge[mech]; python_version >= '3.11'"]
 
 [tool.setuptools.packages.find]

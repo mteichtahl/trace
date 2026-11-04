@@ -1,0 +1,62 @@
+# The Architecture review gate's criterion architect.mapped: "every requirement maps to at least one block"
+# (docs/ontology.md "Gates as SHACL shapes"). Over the project's graph (src/ontology/graph.ts): every live requirement
+# is served by a block, not withdrawn, of the option the design goes ahead with. Which requirements are live and which
+# option is current are worked out the way the app shows them (src/ontology/derived.ts: isLive, isCurrentOption), so
+# this shape and the architecture-choice skill agree.
+#
+# Each finding names the requirement by its words and says what to do next, in plain words (no acronyms).
+
+@prefix trace: <https://trace-eda.com/ns/trace#> .
+@prefix tsh:   <https://trace-eda.com/ns/trace/shapes#> .
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+
+tsh: a owl:Ontology ;
+    rdfs:label "trace shapes" ;
+    sh:declare [ sh:prefix "trace" ; sh:namespace "https://trace-eda.com/ns/trace#"^^xsd:anyURI ] .
+
+tsh:ArchitectMapped a sh:NodeShape ;
+    rdfs:label "Every live requirement is served by a block" ;
+    rdfs:comment "Backs the criterion architect.mapped." ;
+    tsh:criterion "architect.mapped" ;
+    sh:targetClass trace:Requirement ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "No block of the chosen architecture serves \"{?text}\". Add it to a block, or strike it with a reason." ;
+        sh:select """
+            SELECT $this ?text WHERE {
+                $this trace:isLive true ; trace:text ?text .
+                ?option a trace:ArchitectureOption ; trace:isCurrentOption true .
+                FILTER NOT EXISTS {
+                    ?block trace:forOption ?option ; trace:servesRequirement $this .
+                    FILTER NOT EXISTS { ?block trace:status "withdrawn" }
+                }
+            }
+        """ ;
+    ] .
+
+# Nothing to map is not "every requirement is mapped": with no live requirement, or no architecture proposed, the
+# criterion is not met. Checked once, on the journey.
+tsh:ArchitectMappedHasSomething a sh:NodeShape ;
+    rdfs:label "There are requirements and an architecture to map them to" ;
+    rdfs:comment "Backs the criterion architect.mapped." ;
+    tsh:criterion "architect.mapped" ;
+    sh:targetClass trace:Journey ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "No requirements are recorded yet: record them before the architecture is mapped to them." ;
+        sh:select """
+            SELECT $this WHERE { FILTER NOT EXISTS { ?r trace:isLive true } }
+        """ ;
+    ] , [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "No architecture is proposed yet: propose one, with its blocks, before mapping the requirements to it." ;
+        sh:select """
+            SELECT $this WHERE { FILTER NOT EXISTS { ?o a trace:ArchitectureOption ; trace:isCurrentOption true } }
+        """ ;
+    ] .
