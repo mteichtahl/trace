@@ -23,7 +23,9 @@
  *
  * Why the worker runtime starts it, not the API: the asking job is already on the project's own runtime, whose role
  * reaches the project's queue and facts; starting a job there needs no new permission and no caller outside the
- * container. The new job runs in its own checkout (its own branch), not the asker's. The endpoint answers loopback
+ * container. The new job runs in its own checkout (its own branch), not the asker's; that branch starts from the
+ * asker's when the asker's is on GitHub, so the answer is stacked on the work that asked (docs/stacked-changes.md).
+ * The endpoint answers loopback
  * callers only, and tokens are compared in constant time.
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto'
@@ -42,6 +44,8 @@ export interface AskingJob {
   jobId: string
   kind: SpecialistKind
   repository: string
+  /** its branch, when it is not the default branch: a hand-off's job starts from it when it is on GitHub (stacked) */
+  branch?: string | undefined
   /** agents.enabled and the limits, from the default branch's settings */
   enabled: readonly SpecialistKind[]
   limits: Limits
@@ -88,14 +92,14 @@ const same = (a: string, b: string): boolean => {
 }
 
 /** The receiving job's payload, from the recorded request only. */
-export function handoffPayload(h: HandoffFact, repository: string): HandoffTaskJob {
+export function handoffPayload(h: HandoffFact, repository: string, base?: string): HandoffTaskJob {
   return {
     kind: 'task', repository, agent: h.toKind,
     request: h.question,
     requestedBy: `the ${SPECIALIST_WORDS[h.fromAgent as SpecialistKind] ?? h.fromAgent} specialist (job ${h.fromJob})`.slice(0, 200),
     handoff: {
       id: h.id, from: h.fromAgent as SpecialistKind, fromJob: h.fromJob, question: h.question, blocks: h.blocks, evidence: h.evidence.map((e) => ({ kind: e.kind, ref: e.ref, ...(e.label ? { label: e.label } : {}) })),
-      recommendation: h.recommendation, acceptance: h.acceptance, depth: 1,
+      recommendation: h.recommendation, acceptance: h.acceptance, depth: 1, ...(base ? { base } : {}),
     },
   }
 }
@@ -124,7 +128,7 @@ export function createHandoffRuntime(o: { facts: AgentFactsStore; journey: Pick<
       if (d) return { accepted: false, jobId: '', reason: `declined by ${d.by}: ${d.reason}`, handoff: id }
       let r: Accepted
       try {
-        r = startJob(handoffPayload(h, o.repository), job)
+        r = startJob(handoffPayload(h, o.repository, job.branch), job)
       } catch (e) {
         const why = `its job could not start (${e instanceof Error ? e.message : String(e)})`
         await o.facts.update((db) => ({ result: markFailed(db, id, why) }))

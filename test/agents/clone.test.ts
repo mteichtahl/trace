@@ -5,7 +5,7 @@ import { chownSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, wri
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { type Exec, RUNTIME_WORKSPACE, cloneDefault, cloneDir, execReal, gitAuthEnv, removeDir, workspaceDir } from '../../src/agents/runtime/job.js'
+import { type Exec, RUNTIME_WORKSPACE, checkoutBranch, cloneDefault, cloneDir, execReal, gitAuthEnv, removeDir, workspaceDir } from '../../src/agents/runtime/job.js'
 import { TOOL_WORKSPACE } from '../../src/agents/runtime/tool.js'
 
 /** Like execFile: a cwd that does not exist fails as Node's spawn does; `git clone … <dir>` makes the clone. */
@@ -102,5 +102,71 @@ describe('where jobs clone', () => {
     expect(workspaceDir({ TRACE_WORKSPACE: '/mnt/workspace' })).toEqual({ dir: RUNTIME_WORKSPACE, persistent: true })
     expect(RUNTIME_WORKSPACE.startsWith('/mnt/')).toBe(false)
     expect(workspaceDir({ TRACE_WORKSPACE: '/srv/work' })).toEqual({ dir: '/srv/work', persistent: false })
+  })
+})
+
+// Stacked changes (docs/stacked-changes.md): a new branch starts from the open change it depends on, when that branch
+// is on GitHub, and from the default branch otherwise. With a real git and a local "origin".
+describe('checkoutBranch with a stacked base', () => {
+  const git = (args: string[], cwd: string) => execReal('git', args, { cwd, env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } })
+  const setup = async (): Promise<{ ws: string; work: string }> => {
+    const ws = mkdtempSync(join(tmpdir(), 'trace-stack-'))
+    const origin = join(ws, 'origin.git')
+    const seed = join(ws, 'seed')
+    await git(['init', '-q', '--bare', '-b', 'main', origin], ws)
+    await git(['init', '-q', '-b', 'main', seed], ws)
+    writeFileSync(join(seed, 'a.txt'), 'main\n')
+    await git(['add', '.'], seed); await git(['commit', '-qm', 'main'], seed)
+    await git(['checkout', '-qb', 'claude/parent'], seed)
+    writeFileSync(join(seed, 'p.txt'), 'parent\n')
+    await git(['add', '.'], seed); await git(['commit', '-qm', 'parent work'], seed)
+    await git(['push', '-q', origin, 'main', 'claude/parent'], seed)
+    const work = join(ws, 'work')
+    await git(['clone', '-q', '--branch', 'main', origin, work], ws)
+    return { ws, work }
+  }
+  const opts = (dir: string, log: string[] = []) => ({ exec: execReal, dir, auth: { ...process.env, GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }, log: (l: string) => { log.push(l) } })
+
+  it('starts a new branch from an open change on GitHub, and says so', async () => {
+    const { ws, work } = await setup()
+    try {
+      const log: string[] = []
+      let started = ''
+      await checkoutBranch({ ...opts(work, log), defaultBranch: 'main', branch: 'claude/child', from: 'maybe', base: 'claude/parent', started: (f) => { started = f } })
+      expect(existsSync(join(work, 'p.txt'))).toBe(true)
+      expect(started).toBe('claude/parent')
+      expect(log.join()).toMatch(/stacked on that open change/)
+    } finally { rmSync(ws, { recursive: true, force: true }) }
+  })
+
+  it('starts from the default branch when the base is not on GitHub, is the default branch, or is not a branch name', async () => {
+    for (const base of ['claude/gone', 'main', '../etc']) {
+      const { ws, work } = await setup()
+      try {
+        let started = ''
+        await checkoutBranch({ ...opts(work), defaultBranch: 'main', branch: 'claude/child', from: 'maybe', base, started: (f) => { started = f } })
+        expect(existsSync(join(work, 'p.txt')), base).toBe(false)
+        expect(started).toBe('main')
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    }
+  })
+
+  it("starts from a local branch (a delegated worker on its specialist's unpushed work)", async () => {
+    const { ws, work } = await setup()
+    try {
+      await git(['checkout', '-qb', 'claude/spec'], work)
+      writeFileSync(join(work, 's.txt'), 'specialist\n')
+      await git(['add', '.'], work); await git(['commit', '-qm', 'unpushed'], work)
+      await checkoutBranch({ ...opts(work), defaultBranch: 'main', branch: 'claude/worker', from: 'maybe', base: 'claude/spec', baseLocal: true })
+      expect(existsSync(join(work, 's.txt'))).toBe(true)
+    } finally { rmSync(ws, { recursive: true, force: true }) }
+  })
+
+  it('checks out an existing branch as it is, whatever the base', async () => {
+    const { ws, work } = await setup()
+    try {
+      await checkoutBranch({ ...opts(work), defaultBranch: 'main', branch: 'claude/parent', from: 'maybe', base: 'claude/other' })
+      expect(existsSync(join(work, 'p.txt'))).toBe(true)
+    } finally { rmSync(ws, { recursive: true, force: true }) }
   })
 })

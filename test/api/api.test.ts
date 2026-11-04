@@ -251,6 +251,21 @@ describe('the API server', () => {
     started.length = 0
   })
 
+  it('a task may start a new change stacked on one of trace\'s own open changes, never on main or a person\'s', async () => {
+    started.length = 0
+    const r = await call(user, { action: 'task', repo: 'acme/board', request: 'add test points to the OLED header', agent: 'impl', stack_on: 'claude/task-oled-pin-plan-1a2b3c' })
+    expect(r.body).toMatchObject({ ok: true })
+    expect(started).toEqual([expect.objectContaining({ stackOn: 'claude/task-oled-pin-plan-1a2b3c' })])
+    expect(started[0]).not.toHaveProperty('branch')
+    for (const stack_on of ['main', 'marc/layout', 'claude/']) {
+      expect((await call(user, { action: 'task', repo: 'acme/board', request: 'x', agent: 'impl', stack_on })).body.ok, stack_on).toBe(false)
+    }
+    // carrying on a change and stacking a new one on another are different asks
+    expect((await call(user, { action: 'task', repo: 'acme/board', request: 'x', agent: 'impl', branch: 'claude/a', stack_on: 'claude/b' })).body.ok).toBe(false)
+    expect(started).toHaveLength(1)
+    started.length = 0
+  })
+
   it('unassigned and nonexistent projects get the identical answer, before GitHub is touched', async () => {
     for (const who of [user, guest, nobody]) {
       const a = await call(who, { action: 'status', repo: 'acme/secret' })

@@ -110,10 +110,12 @@ export type SpecialistJob =
       /** The issue or PR body and its latest comments, read by the runner (the specialist has no shell). Data. */
       thread?: string | undefined }
   | { kind: 'task'; request: string; requestedBy: string; issue?: number | undefined; branch: string
+      /** the open change its new branch started from: a stacked change (docs/stacked-changes.md) */
+      stackedOn?: string | undefined
       /** it carries on a paused job whose conversation was not kept: what was done (src/agents/runtime/job.ts) */
       resumed?: Resumed | undefined }
   /** Another specialist asked for it (journey.handoff): the recorded request, which it answers with journey.handoff_answer. */
-  | { kind: 'handoff'; handoff: Handoff; branch: string }
+  | { kind: 'handoff'; handoff: Handoff; branch: string; stackedOn?: string | undefined }
   /** `tracectl agent prompt`: no job, for review. */
   | { kind: 'preview' }
 
@@ -168,9 +170,10 @@ function addJob(p: Composer, job: SpecialistJob, cfg: TraceConfig, repository: s
     }
     case 'task':
       p.add('specialist.job.task', {
-        from: JSON.stringify(job.requestedBy), request: quoted(job.request), branch: job.branch, default_branch: cfg.branch,
+        from: JSON.stringify(job.requestedBy), request: quoted(job.request), branch: job.branch, default_branch: cfg.branch, start: job.stackedOn ?? cfg.branch,
         asked_on: job.issue ? p.text('specialist.job.task.issue', { issue: job.issue }) : '',
       })
+      if (job.stackedOn) p.add('specialist.job.stacked', { base: job.stackedOn, default_branch: cfg.branch })
       if (job.resumed) p.add('specialist.job.resumed', { paused_by: job.resumed.pausedBy, paused_at: job.resumed.pausedAt, commits: job.resumed.commits || '(none)', last_step: job.resumed.lastStep || '(not recorded)' })
       return
     case 'handoff': {
@@ -179,8 +182,9 @@ function addJob(p: Composer, job: SpecialistJob, cfg: TraceConfig, repository: s
         from: SPECIALIST_WORDS[h.from], from_job: h.fromJob, id: h.id, question: quoted(h.question), blocks: h.blocks,
         evidence: h.evidence.map((e) => `- ${e.kind} ${e.ref}${e.label ? ` (${e.label})` : ''}`),
         recommendation: h.recommendation ? quoted(h.recommendation) : '(none given)',
-        acceptance: h.acceptance.map((a, i) => `${i + 1}. ${a}`), branch: job.branch, default_branch: cfg.branch,
+        acceptance: h.acceptance.map((a, i) => `${i + 1}. ${a}`), branch: job.branch, default_branch: cfg.branch, start: job.stackedOn ?? cfg.branch,
       })
+      if (job.stackedOn) p.add('specialist.job.stacked', { base: job.stackedOn, default_branch: cfg.branch })
       return
     }
     case 'preview':

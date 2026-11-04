@@ -575,12 +575,15 @@ export const ACTIONS = {
     // carry on an agent's own branch (its pull request updates) instead of starting one from the default branch: only
     // trace's claude/ branches, never main or a person's
     branch: TaskBranch.optional(),
-  }), async (a, ctx) => {
+    // follow-up work on a new branch stacked on one of trace's open changes (docs/stacked-changes.md): it starts from
+    // that change's branch and its pull request targets it. Only trace's claude/ branches, and not with `branch`
+    stack_on: TaskBranch.optional(),
+  }).refine((a) => !(a.branch && a.stack_on), 'give branch (carry on a change) or stack_on (a new change on top of one), not both'), async (a, ctx) => {
     // a connected system: at most three tasks queued or running on one project (src/api/service-policy.ts)
     await taskCap(ctx.principal, a.repo, ctx)
     return (await ctx.deps.jobs()).startJob({
       kind: 'task', repository: a.repo, request: a.request, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub, ...(a.agent ? { agent: a.agent } : {}),
-      ...(a.branch ? { branch: a.branch } : {}),
+      ...(a.branch ? { branch: a.branch } : {}), ...(a.stack_on ? { stackOn: a.stack_on } : {}),
     })
   }),
 

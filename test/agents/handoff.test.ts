@@ -83,6 +83,18 @@ describe('the receiving job', () => {
     await expect(rt.start(token, h.id, startJob)).rejects.toThrow(/not a running specialist job/)
   })
 
+  it("is stacked on the asker's branch: the payload carries it as its base, only when the asker has one", async () => {
+    const s = stores()
+    const rt = createHandoffRuntime({ ...s, repository: 'o/r' })
+    const token = rt.register({ ...ASKER, branch: 'claude/thermal-1' })
+    const h = await raise(s)
+    const started: JobPayload[] = []
+    await rt.start(token, h.id, (p) => { started.push(p); return { accepted: true, jobId: 'job-a1' } })
+    expect(started[0]).toMatchObject({ handoff: { id: h.id, base: 'claude/thermal-1' } })
+    expect(HandoffTaskPayload.safeParse(started[0]).success).toBe(true)
+    expect(handoffPayload(h, 'o/r').handoff.base).toBeUndefined()
+  })
+
   it('is not started once a person declined it, and stops at its turn when declined while queued', async () => {
     const s = stores()
     await s.journey.update((db) => { startJourney(db, { template: 'board', by: 'a@example.com', name: 'x' }); return { result: null } })

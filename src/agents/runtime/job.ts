@@ -319,9 +319,14 @@ export async function cloneDefault(o: GitOpts & { repository: string; defaultBra
 
 /**
  * Check out `branch` in a clone made by cloneDefault: 'remote' = the existing remote branch (a PR's head, fetched),
- * 'maybe' = the remote branch when it exists, else a new branch off the default branch.
+ * 'maybe' = the remote branch when it exists, else a new branch. A new branch starts from `base` when given and it
+ * exists (a stacked change, docs/stacked-changes.md: the open change it depends on; `baseLocal`: a branch of this
+ * checkout, as a delegated worker's specialist's), else from the default branch. `started` is told what a new branch
+ * started from.
  */
-export async function checkoutBranch(o: GitOpts & { defaultBranch: string; branch: string; from: 'remote' | 'maybe' }): Promise<string> {
+export async function checkoutBranch(o: GitOpts & {
+  defaultBranch: string; branch: string; from: 'remote' | 'maybe'; base?: string | undefined; baseLocal?: boolean; started?: (from: string) => void
+}): Promise<string> {
   const git = gitIn(o)
   const branch = BranchSchema.parse(o.branch)
   const remote = o.from === 'remote' || (await git(['ls-remote', '--heads', 'origin', `refs/heads/${branch}`])).stdout.trim() !== ''
@@ -329,9 +334,27 @@ export async function checkoutBranch(o: GitOpts & { defaultBranch: string; branc
     await git(['fetch', '--depth=300', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`])
     await git(['checkout', '-B', branch, '--track', `origin/${branch}`])
   } else if (branch !== o.defaultBranch) {
-    await git(['checkout', '-B', branch, `origin/${o.defaultBranch}`])
+    const start = await stackBase(o, branch)
+    await git(['checkout', '-B', branch, start.ref])
+    o.started?.(start.name)
   }
   return branch
+}
+
+/** Where a new branch starts: its base when that exists (fetched, unless local), else the default branch. */
+async function stackBase(o: GitOpts & { defaultBranch: string; base?: string | undefined; baseLocal?: boolean }, branch: string): Promise<{ ref: string; name: string }> {
+  const fallback = { ref: `origin/${o.defaultBranch}`, name: o.defaultBranch }
+  const base = o.base && BranchSchema.safeParse(o.base).success ? o.base : null
+  if (!base || base === o.defaultBranch || base === branch) return fallback
+  const git = gitIn(o)
+  if (o.baseLocal) return (await git(['rev-parse', '--verify', '--quiet', `refs/heads/${base}`]).then((r) => r.stdout.trim() !== '').catch(() => false)) ? { ref: base, name: base } : fallback
+  if ((await git(['ls-remote', '--heads', 'origin', `refs/heads/${base}`])).stdout.trim() === '') {
+    o.log(`${base} is not on GitHub (merged, or not pushed yet): starting ${branch} from ${o.defaultBranch}`)
+    return fallback
+  }
+  await git(['fetch', '--depth=300', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`])
+  o.log(`starting ${branch} from ${base}: stacked on that open change`)
+  return { ref: `origin/${base}`, name: base }
 }
 
 // ------------------------------------------------------------------ Claude
@@ -525,7 +548,7 @@ interface Prepared {
   /** The route a pick already made, or what to route on. */
   route: Route | null; routeInput: RouteInput
   /** The job as the specialist's prompt describes it, given the branch it runs on and the item's thread. */
-  job: (branch: string, thread?: string) => SpecialistJob
+  job: (branch: string, thread?: string, stackedOn?: string) => SpecialistJob
   /** Memory: the session (given the branch it runs on), what it is about, and what was asked. */
   session: (branch: string) => string; query: string; request: string
 }
@@ -553,7 +576,7 @@ function prepared(p: WorkItemJob | TaskJob): Prepared {
     return {
       slot: `handoff-${h.id}`, branch: '', from: 'maybe',
       route: null, routeInput: { kind: p.agent, text: p.request },
-      job: (branch) => ({ kind: 'handoff', handoff: h, branch }),
+      job: (branch, _t, stackedOn) => ({ kind: 'handoff', handoff: h, branch, ...(stackedOn ? { stackedOn } : {}) }),
       session: () => `handoff-${h.id}`, query: p.request,
       request: `The ${h.from} specialist asked (hand-off ${h.id}): ${p.request}`,
     }
@@ -564,7 +587,7 @@ function prepared(p: WorkItemJob | TaskJob): Prepared {
     // a person's own pick is checked against the request (router.ts misPicked); a specialist's delegation, and a
     // resumed task (its agent was settled when it first ran), go where they say
     route: null, routeInput: { kind: p.agent, text: p.request, checkPick: !isDelegated(p) && !p.resume },
-    job: (branch) => ({ kind: 'task', request: p.request, requestedBy: p.requestedBy, issue: p.issue, branch }),
+    job: (branch, _t, stackedOn) => ({ kind: 'task', request: p.request, requestedBy: p.requestedBy, issue: p.issue, branch, ...(stackedOn ? { stackedOn } : {}) }),
     session: (branch) => (p.issue ? `issue-${p.issue}` : sessionIdFor(branch)), query: p.request,
     request: `A person asked: ${p.request}`,
   }
@@ -685,7 +708,11 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     const layers = await jobLayers(d, base.dir, log)
     // a hand-off job works on a branch of its own, never the asker's
     let branch = isHandoff(p) ? `${cfg.worker.own_branch_prefix || 'claude/'}handoff-${p.handoff.id}` : p.kind === 'task' ? taskBranch(p, cfg) : prep.branch
-    if (prep.from !== 'none') branch = await checkoutBranch({ ...g, defaultBranch: base.defaultBranch, branch, from: prep.from })
+    // dependent work stacks on the open change it depends on (docs/stacked-changes.md): a hand-off on the asker's
+    // branch, a task on the change it was given
+    const stackOn = isHandoff(p) ? p.handoff.base : p.kind === 'task' ? p.stackOn : undefined
+    let startedFrom: string | undefined
+    if (prep.from !== 'none') branch = await checkoutBranch({ ...g, defaultBranch: base.defaultBranch, branch, from: prep.from, base: stackOn, started: (f) => { startedFrom = f } })
     else branch = base.defaultBranch
     ctx.branch?.(branch)
     // a resumed task: the paused job it carries on (its branch is this one: the API resumes it with that branch)
@@ -724,7 +751,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
     const dtoken = delegate && delegations
       ? delegations.register({ jobId: ctx.jobId, kind: r.kind, repository: p.repository, dir, cfg, branch, defaultBranch: base.defaultBranch, session, notes, prompts: layers })
       : undefined
-    const htoken = role === 'ask' && handoffs ? handoffs.register({ jobId: ctx.jobId, kind: r.kind, repository: p.repository, enabled: cfg.agents.enabled, limits }) : undefined
+    const htoken = role === 'ask' && handoffs ? handoffs.register({ jobId: ctx.jobId, kind: r.kind, repository: p.repository, enabled: cfg.agents.enabled, limits, ...(branch !== base.defaultBranch ? { branch } : {}) }) : undefined
     const handoffEnvOf: Record<string, string> = role === 'answer' && answering ? { TRACE_HANDOFF_ID: answering.id }
       : htoken && d.delegateUrl ? handoffAskEnv({ url: d.delegateUrl, token: htoken, enabled: cfg.agents.enabled, limits }) : {}
     const waits = openWaitRelay(d, ctx.jobId)
@@ -738,7 +765,7 @@ export async function runItem(d: RunnerDeps, p: WorkItemJob | TaskJob, ctx: JobC
         if (prior?.session && d.paused && await d.paused.restore(resumeOf.job, prior.session, dir).catch(() => false)) continueSession = prior.session
         log(`resuming ${resumeOf.job} on ${branch}: ${continueSession ? 'its conversation was kept and carries on' : 'its conversation was not kept, so a new one starts from what the branch has'}`)
       }
-      const job = prep.job(branch, thread?.text)
+      const job = prep.job(branch, thread?.text, startedFrom && startedFrom !== base.defaultBranch ? startedFrom : undefined)
       const prompt = continueSession && resumed
         ? composeResumeNote(resumed, branch, layers)
         : composeSpecialist(s, { cfg, repository: p.repository, job: job.kind === 'task' && resumed ? { ...job, resumed } : job, rules, route: r, hardware, delivery: 'delegate', handoff: role, prompts: layers })
@@ -831,12 +858,15 @@ export async function runDelegated(d: RunnerDeps, p: DelegatedTaskJob, ctx: JobC
   let mem: JobMemory = NO_MEMORY
   try {
     const g: GitOpts = { exec: d.exec, dir: parent.dir, auth: gitAuthEnv(token), signal: ctx.signal, log }
+    // a branch of its own starts from the specialist's (its work so far, pushed or not): stacked on it
+    let stackedOn: { ref: string; name: string } | undefined
     const branch = p.branch && p.branch !== parent.branch
-      ? await checkoutBranch({ ...g, defaultBranch: parent.defaultBranch, branch: p.branch, from: 'maybe' })
+      ? await checkoutBranch({ ...g, defaultBranch: parent.defaultBranch, branch: p.branch, from: 'maybe', base: parent.branch, baseLocal: true,
+        started: (f) => { if (f !== parent.defaultBranch) stackedOn = { ref: f, name: f } } })
       : parent.branch
     mem = await jobMemory(d, { repository: p.repository, agent: WORKER, session: parent.session, query: p.request.slice(0, 2000), request: p.request }, log, redact)
     const layers = parent.prompts ?? NO_LAYERS
-    const prompt = composeTask(p, parent.cfg, branch, layers)
+    const prompt = composeTask(p, parent.cfg, branch, layers, stackedOn)
     const system = systemAppend(parent.notes, layers)
     // the brief's wording (delegate.*) was composed when the specialist delegated, with the same layers
     const used = [...provenanceOf(['delegate.brief', 'delegate.request'], layers), ...prompt.provenance, ...system.provenance, ...(mem.context ? provenanceOf(['memory.block']) : [])]
@@ -854,7 +884,7 @@ export async function runDelegated(d: RunnerDeps, p: DelegatedTaskJob, ctx: JobC
     const summary = redact(out.text)
     await endMemory(mem, ctx, log, out.ok, summary)
     mem = NO_MEMORY
-    const commits = await d.exec('git', ['log', '--format=%h %s', '-n', '20', `origin/${parent.defaultBranch}..HEAD`], { cwd: parent.dir })
+    const commits = await d.exec('git', ['log', '--format=%h %s', '-n', '20', `${stackedOn?.ref ?? `origin/${parent.defaultBranch}`}..HEAD`], { cwd: parent.dir })
       .then((r) => r.stdout.trim()).catch(() => '')
     if (!out.ok) throw new Error(summary)
     return [`branch ${branch}, done in ${out.turns} turns`, ...(commits ? [`commits:\n${commits}`] : []), summary.slice(0, 6000)].join('\n')
