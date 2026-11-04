@@ -18,6 +18,7 @@ export const DESCRIPTIONS: Readonly<Record<string, string>> = {
   'requirements.trace': 'A project\'s requirements, each with its evidence status (verified, failing, untested, waived), its tests, and the intent statements it comes from.',
   'design.get': 'A project\'s design: schematic sheets with their electrical rule check findings, the board with its design rule check findings, the architecture and the pin plan.',
   'build.get': 'A project\'s build record: releases, orders and their shipping, boards by serial with their inspection, and bench readings.',
+  'renders.list': 'A project\'s photorealistic renders of each revision, newest first: each picture by shot (exploded, board in case, case, board, top, underside) with its file name, size and the colours used, and the revisions whose renders are still being made. Fetch a picture with artifact.',
   'deploys.get': 'A project\'s deploys: what the environment runs now, the open deploy request with the commits since, one in progress, recent results and trace\'s recommendation. Read only: a person approves deploys in trace.',
   'health.get': 'A project\'s build health: whether the default branch builds, why it failed in plain words with the failing steps\' last lines, what trace is doing about it, and the fixes people asked trace for.',
   'health.log': 'One failing build job\'s log, its last 200 KB. Needs repo (OWNER/REPO) and job_id from health.get.',
