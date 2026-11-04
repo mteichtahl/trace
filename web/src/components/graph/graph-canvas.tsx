@@ -30,13 +30,19 @@ const SHAPE: Record<NodeKind, string> = {
   block: 'round-rectangle',
   part: 'hexagon',
   datasheet: 'tag',
+  component: 'cut-rectangle',
+  net: 'barrel',
   run: 'diamond',
+  artifact: 'rhomboid',
+  gate: 'octagon',
+  criterion: 'round-diamond',
+  waiver: 'round-triangle',
   decision: 'triangle',
   memory: 'ellipse',
   document: 'rectangle',
   person: 'ellipse',
 }
-const SIZE: Partial<Record<NodeKind, [number, number]>> = { intent: [140, 34], memory: [16, 16], block: [34, 34], person: [30, 30], requirement: [44, 44], document: [26, 32], datasheet: [26, 32] }
+const SIZE: Partial<Record<NodeKind, [number, number]>> = { intent: [140, 34], memory: [16, 16], block: [34, 34], person: [30, 30], requirement: [44, 44], document: [26, 32], datasheet: [26, 32], gate: [36, 36], criterion: [22, 22], net: [34, 14], artifact: [26, 20] }
 
 let probe: CanvasRenderingContext2D | null = null
 /** A theme token as rgb(): Cytoscape cannot read oklch(), and computed styles keep it, so paint one pixel and read it. */
@@ -116,6 +122,8 @@ function styles(t: Theme): StylesheetJson {
     { selector: 'node[status="failing"]', style: { 'border-color': t.failing } },
     { selector: 'node[status="verified"]', style: { 'border-color': t.verified } },
     { selector: 'node[status="waived"], node[status="inactive"]', style: { 'border-style': 'dashed' } },
+    // made from something that changed since it ran: a warning, not a failure
+    { selector: 'node[status="stale"]', style: { 'border-color': t.warning, 'border-style': 'dashed', 'border-width': 2 } },
     { selector: 'node.group', style: { shape: 'round-rectangle', width: 120, height: 26, 'border-style': 'dashed', 'text-valign': 'center', 'text-margin-y': 0, 'font-size': 11, color: t.muted } },
     { selector: 'node.chain', style: { 'border-color': t.failing, 'border-width': 2.5 } },
     { selector: 'node.focus', style: { 'border-width': 3, 'border-color': t.primary, 'overlay-color': t.primary, 'overlay-opacity': 0.06, 'overlay-padding': 6, 'font-weight': 700 } },

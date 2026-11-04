@@ -58,6 +58,7 @@ beforeAll(async () => {
   work.close()
   github.files.set(`${REPO}:main:.trace/project.db`, readFileSync(join(dir, '.trace', 'project.db')))
   github.files.set(`${REPO}:main:hw/board.kicad_sch`, enc(SCH))
+  github.files.set(`${REPO}:main:hardware/trace-sample.kicad_pcb`, readFileSync(join(import.meta.dirname, '../../templates/sample/hardware/trace-sample.kicad_pcb')))
 })
 afterAll(() => { rmSync(scratch, { recursive: true, force: true }); rmSync(bucket, { recursive: true, force: true }) })
 
@@ -108,6 +109,20 @@ describe('artifact.lineage and artifact.stale', () => {
     await expect(run(USER, 'artifact.lineage', { repo: REPO, run: 'nope-nope' })).rejects.toThrow(/no run nope-nope/)
   })
 
+  it('the graph draws a run\'s outputs and the runs made from them, and the board\'s placed parts and nets', async () => {
+    type G = { nodes: { id: string; kind: string; status?: string }[]; links: { source: string; target: string; kind: string }[] }
+    const g = await run(USER, 'graph.neighbourhood', { repo: REPO, focus: `run:${netRun}`, depth: 2 }) as G
+    expect(g.links).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: `run:${netRun}`, target: `artifact:${netRun}/netlist.net`, kind: 'made' }),
+      expect.objectContaining({ source: `run:${layoutRun}`, target: `artifact:${netRun}/netlist.net`, kind: 'uses' }),
+    ]))
+    expect(g.nodes.find((n) => n.id === `artifact:${netRun}/netlist.net`)?.kind).toBe('artifact')
+    const c = await run(USER, 'graph.neighbourhood', { repo: REPO, focus: 'component:U1', depth: 1 }) as G
+    expect(c.nodes[0]).toMatchObject({ id: 'component:U1', kind: 'component' })
+    expect(c.links.some((l) => l.source === 'component:U1' && l.kind === 'connects' && l.target.startsWith('net:'))).toBe(true)
+    expect(c.nodes.some((n) => n.kind === 'net')).toBe(true)
+  })
+
   it('says each newest run is current, and stale with why once the default branch\'s schematic changes', async () => {
     const before = await run(SYSTEM, 'artifact.stale', { repo: REPO }) as { stale: number; runs: { run: string; state: string }[] }
     expect(before.stale).toBe(0)
@@ -115,5 +130,9 @@ describe('artifact.lineage and artifact.stale', () => {
     github.files.set(`${REPO}:main:hw/board.kicad_sch`, enc(SCH.replace('LM1117', 'TPS7A02')))
     const after = await run(SYSTEM, 'artifact.stale', { repo: REPO, runs: [layoutRun] }) as { stale: number; runs: { state: string; why: string[] }[] }
     expect(after).toMatchObject({ stale: 1, runs: [{ state: 'stale', why: ['netlist.net from kicad.netlist is out of date: hw/board.kicad_sch changed since kicad.netlist ran'] }] })
+    // and the graph draws them stale, with why
+    const g = await run(USER, 'graph.neighbourhood', { repo: REPO, focus: `run:${layoutRun}`, depth: 1 }) as { nodes: { id: string; status?: string; summary?: string }[] }
+    expect(g.nodes.find((n) => n.id === `run:${layoutRun}`)).toMatchObject({ status: 'stale', summary: expect.stringMatching(/^Out of date: netlist\.net from kicad\.netlist is out of date/) })
+    expect(g.nodes.find((n) => n.id === `artifact:${netRun}/netlist.net`)?.status).toBe('stale')
   })
 })

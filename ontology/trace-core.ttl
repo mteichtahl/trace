@@ -13,13 +13,17 @@
 <https://trace-eda.com/ns/trace/core> a owl:Ontology ;
     rdfs:label "trace core" ;
     rdfs:comment "The design artifact, its versions and the input and output links between them, shared by every trace module." ;
-    owl:versionInfo "0.1.0" .
+    owl:versionInfo "0.2.0" .
 
 # ------------------------------------------------------------------ annotations
 
 trace:derived a owl:AnnotationProperty ;
     rdfs:label "derived" ;
     rdfs:comment "Marks a term no table stores: trace computes it when it is read (freshness, for one)." .
+
+trace:graphKind a owl:AnnotationProperty ;
+    rdfs:label "graph kind" ;
+    rdfs:comment "Which kind of item the graph view draws a record of this class as, such as requirement or run: the view's kinds are made from these." .
 
 trace:keptIn a owl:AnnotationProperty ;
     rdfs:label "kept in" ;

@@ -281,9 +281,9 @@ export async function writeJourney<T>(ctx: Context, repo: string, fn: (db: Datab
  * The project's database from the default branch with its journey tables replaced by the live record (read only):
  * what the graph draws from, the requirements and runs of the repository beside the journey of the store.
  */
-export async function withRecordDb<T>(ctx: Context, repo: string, fn: (db: DatabaseSync) => T): Promise<T> {
+export async function withRecordDb<T>(ctx: Context, repo: string, fn: (db: DatabaseSync) => T | Promise<T>): Promise<T> {
   const live = await journeyStore(ctx, repo).bytes()
-  return withProjectDb(ctx, repo, (path, root) => {
+  return withProjectDb(ctx, repo, async (path, root) => {
     const db = openProjectDb(path)
     try {
       if (live) {
@@ -291,7 +291,7 @@ export async function withRecordDb<T>(ctx: Context, repo: string, fn: (db: Datab
         writeFileSync(src, live)
         copyJourneyTables(db, src)
       }
-      return fn(db)
+      return await fn(db)
     } finally {
       db.close()
     }
