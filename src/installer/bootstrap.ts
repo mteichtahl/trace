@@ -103,7 +103,7 @@ import { CDK_BOOTSTRAP_MIN, mapLimit } from './preflight.js'
 import { checkNoSecrets, installationRecord } from './record.js'
 import { type ReleaseResult, liveReleaseDeps, releaseSetup } from './release.js'
 import { traceRepository } from './source.js'
-import { SMOKE_SECRET_VARIABLE, type SmokeIo, ensureSmokeUser, liveSmokeIo, smokeEmail } from './smoke.js'
+import { SMOKE_SECRET_VARIABLE, type SmokeIo, type SmokeResult, ensureSmokeUser, liveSmokeIo, removeSmokeUser, smokeEmail } from './smoke.js'
 import { type HooksSecretIo, ensureClientSecret, ensureHooksSecret, liveClientSecret, liveHooksSecretIo, registerWebhooks } from './hooks.js'
 
 /** What the installer knows of the stack already in the account (checkAws), when there is one. */
@@ -222,10 +222,39 @@ export function selfUpdateOf(a: Answers): { repository: string; branch: string }
  * its web app, unless runners.smokeTest is turned off. */
 export const smokeOn = (a: Answers): boolean => Boolean(selfUpdateOf(a)) && a.runners.smokeTest && a.agents.webEnabled
 
+/** Who the installer acts as in the access store: an admin, named after the AWS caller. */
+export const installerPrincipal = (arn: string, email: string): Principal => ({ sub: `installer:${arn}`, email, groups: [GROUPS.admin] })
+
+/** The smoke user in the access store: an ordinary user, a Reviewer of the smoke project and of nothing else (a project
+ * it checked before is taken away). `env`: the AWS credentials and TRACE_HOME the store needs, for the duration. */
+export async function assignSmokeUser(r: Pick<SmokeResult, 'email' | 'sub'>, project: string, o: { env: Record<string, string>; by: Principal; log: (l: string) => void }): Promise<void> {
+  const saved = Object.fromEntries(Object.keys(o.env).map((k) => [k, process.env[k]]))
+  Object.assign(process.env, o.env)
+  try {
+    const who = { sub: r.sub, email: r.email }
+    await setClass(o.by, who, 'user')
+    await assign(o.by, who, project, { part: 'reviewer', class: 'user' })
+    for (const g of await assignments(o.by, { sub: r.sub })) {
+      if (g.repo.toLowerCase() === project.toLowerCase()) continue
+      await unassign(o.by, r.sub, g.repo)
+      o.log(`${r.email}: no longer on ${g.repo} (the smoke project is ${project})`)
+    }
+    o.log(`${r.email}: a Reviewer of ${project}`)
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  }
+}
+
 /** The project the live smoke test checks the screens on: the one chosen, else the sample, else the first project;
  * '' when there is none yet. */
 export function smokeProjectOf(a: Answers): string {
-  return a.runners.smokeProject || sampleRepoOf(a) || a.projects[0]?.repo || ''
+  const chosen = a.runners.smokeProject.toLowerCase()
+  // the project as it is listed (the answer is matched without regard to case): its address must match the app's
+  const listed = chosen ? (a.projects.find((p) => p.repo.toLowerCase() === chosen)?.repo ?? (sampleRepoOf(a)?.toLowerCase() === chosen ? sampleRepoOf(a) : null) ?? a.runners.smokeProject) : ''
+  return listed || sampleRepoOf(a) || a.projects[0]?.repo || ''
 }
 
 /**
@@ -564,7 +593,7 @@ export function plan(input: Answers, existing?: Existing | null, prev?: Answers 
       ? `. Live updates from GitHub: the secret ${webHooksSecret(props.prefix)} (made when missing), and a webhook on ${a.projects.map((p) => p.repo).join(', ')} (registered, or updated in place); one the token may not add is a warning, and that project's screens look again every 60 s`
       : ''}`] as [string, string, string]] : []),
     ...(smokeOn(a) ? [['smoke', 'Set up the live smoke test', smokeProjectOf(a)
-      ? `the smoke user ${smokeEmail(props.prefix)} (an admin that receives no mail, with a random password and an authenticator enrolled now; kept as it is when it already works), its sign-in in the secret ${smokeSecret(props.prefix)} that only the self-update role may read, and ${SMOKE_SECRET_VARIABLE} on ${selfUpdateOf(a)?.repository}: after each self-update its ci workflow checks every screen of the web app on ${smokeProjectOf(a)} (docs/smoke-test.md)`
+      ? `the smoke user ${smokeEmail(props.prefix)} (an ordinary user that receives no mail and is a Reviewer of ${smokeProjectOf(a)} only, so it can only read; a random password and an authenticator enrolled now, kept as they are while they still sign in), its sign-in in the secret ${smokeSecret(props.prefix)} that only the self-update role may read, and ${SMOKE_SECRET_VARIABLE} on ${selfUpdateOf(a)?.repository}: after each self-update its ci workflow checks every screen of the web app on ${smokeProjectOf(a)} (docs/smoke-test.md)`
       : 'no project yet: the smoke user is made once there is one to check the screens on'] as [string, string, string]] : []),
     ['local', 'Save this installation locally', '~/.trace/client.db, so `tracectl login` works here'],
     ['release', 'Publish trace\'s images', a.agents.publishImages
@@ -612,6 +641,8 @@ export function redact(line: string, secrets: Secrets): string {
 }
 
 export interface Hooks {
+  /** the smoke user and its secret (src/installer/smoke.ts liveSmokeIo) */
+  smoke?: SmokeIo
   cdk?: (args: string[], env: Record<string, string>, onLine: (l: string) => void) => Promise<number>
   outputs?: (creds: AwsCredentialIdentity, region: string, stack: string) => Promise<Record<string, string>>
   freeSecrets?: (creds: AwsCredentialIdentity, region: string, names: readonly string[]) => Promise<string[]>
@@ -658,8 +689,6 @@ export interface Hooks {
   edge?: { outputs: EdgeDeps['outputs']; remove: (stack: string, region: string) => Promise<void> }
   /** live updates from GitHub (src/installer/hooks.ts): the secret's store, the backend's client secret, and one
    * repository's webhook registration */
-  /** the smoke user and its secret (src/installer/smoke.ts liveSmokeIo) */
-  smoke?: SmokeIo
   webhooks?: {
     secrets?: HooksSecretIo
     clientSecret?: (poolId: string, clientId: string) => Promise<string | null>
@@ -966,6 +995,16 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
 
     // 4 — deploy (one deploy, or the three of the move to nested stacks, in order), with the runners unless they wait
     // for a connection nobody has authorized yet
+    // no live smoke test now (turned off, no project, or no self-update): its variable goes before the deploy takes the
+    // role's read of the secret away, so the ci workflow never runs it without one. Best effort
+    if (!smokeOn(a) || !smokeProjectOf(a)) {
+      const repos = [selfUpdateOf(a)?.repository, earlierUpdate, a.runners.traceRepository].filter((x): x is string => Boolean(x))
+      for (const r of repos.filter((x, i) => repos.findIndex((y) => y.toLowerCase() === x.toLowerCase()) === i)) {
+        try {
+          if (await deleteVariable(adminToken, r, SMOKE_SECRET_VARIABLE)) log('deploy', `${r}: ${SMOKE_SECRET_VARIABLE} removed (no live smoke test)`)
+        } catch (e) { log('deploy', `${r}: could not remove ${SMOKE_SECRET_VARIABLE} (${redact(e instanceof Error ? e.message : String(e), s)}): remove it by hand`) }
+      }
+    }
     current = 'deploy'
     set('deploy', 'running', existing ? 'updating the stack: only what changed' : `the first deploy ${props.images.source === 'prebuilt' ? 'copies the agent image (or builds it when this version has none published): 15–40 minutes' : 'builds the agent image: expect 20–40 minutes'}`)
     // the web app's WAF first: CloudFront takes a web ACL from us-east-1 only (src/installer/edge.ts). A failure is said
@@ -1163,13 +1202,6 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
       if (update) {
         const vars = { [UPDATE_ROLE_VARIABLE]: need(SELF_UPDATE_OUTPUT), TRACE_AWS_REGION: a.aws.region, [UPDATE_STACK_VARIABLE]: stack }
         await Promise.all(Object.entries(vars).map(async ([k, v]) => log('repos', `${update.repository}: ${k} ${await setVariable(adminToken, update.repository, k, v)} (keeps this installation up to date when its ${update.branch} branch changes)`)))
-        // the live smoke test after each update: set only once the smoke user's secret is there (the smoke step below);
-        // off, the job must stop looking for it. Best effort
-        if (!smokeOn(a) || !smokeProjectOf(a)) {
-          try {
-            if (await deleteVariable(adminToken, update.repository, SMOKE_SECRET_VARIABLE)) log('repos', `${update.repository}: ${SMOKE_SECRET_VARIABLE} removed (no live smoke test)`)
-          } catch (e) { log('repos', `${update.repository}: could not remove ${SMOKE_SECRET_VARIABLE} (${redact(e instanceof Error ? e.message : String(e), s)})`) }
-        }
       }
       if (!runnersReady) log('repos', GITHUB_RUNNERS_NOTE)
       const refusedNote = refused.length ? webhookRefusedNote(refused, access) : null
@@ -1328,13 +1360,27 @@ export async function apply(input: Answers, s: Secrets, emit: Emit, hooks: Hooks
         try {
           const io = hooks.smoke ?? await liveSmokeIo(creds, a.aws.region, need('UserPoolId'), need(WEB_OUTPUTS.clientId))
           const r = await ensureSmokeUser(io, { prefix: props.prefix, url: webUrl, project, log: (l) => log('smoke', l) })
+          await assignSmokeUser(r, project, { env: { ...awsEnv(creds, a.aws.region), TRACE_HOME: need('TraceHome') }, by: installerPrincipal(check.arn, a.adminEmail), log: (l) => log('smoke', l) })
           log('smoke', `${update.repository}: ${SMOKE_SECRET_VARIABLE} ${await setVariable(adminToken, update.repository, SMOKE_SECRET_VARIABLE, r.secret)}`)
-          set('smoke', 'done', `${r.email} checks every screen on ${project} after each update (${r.state === 'made' ? 'made now' : r.state === 'updated' ? 'its address or project brought up to date' : 'already set up'})`)
+          set('smoke', 'done', `${r.email} (a Reviewer of ${project} only) checks every screen after each update (${r.state === 'made' ? 'made now' : r.state === 'updated' ? 'its address or project brought up to date' : 'already set up'})`)
         } catch (e) {
           const m = redact(e instanceof Error ? e.message : String(e), s)
           set('smoke', 'failed', m)
           summary.push(`The live smoke test is not set up: ${m}. Everything else is installed; run the installer again to finish it.`)
         }
+      }
+    }
+
+    // the live smoke test off on an installation that may have had it: its user and secret go too (the variable went
+    // before the deploy). Best effort
+    if (!byId.has('smoke') && existing && props.web.enabled) {
+      try {
+        const io = hooks.smoke ?? await liveSmokeIo(creds, a.aws.region, need('UserPoolId'), need(WEB_OUTPUTS.clientId))
+        const gone = await removeSmokeUser(io, props.prefix)
+        if (gone.user || gone.secret) log('local', `the live smoke test is off: ${[gone.user ? `${smokeEmail(props.prefix)} deleted` : '', gone.secret ? `${smokeSecret(props.prefix)} deleted` : ''].filter(Boolean).join(', ')}`)
+      } catch (e) {
+        const m = redact(e instanceof Error ? e.message : String(e), s)
+        summary.push(`The live smoke test is off, but its user or secret could not be removed (${m}): delete ${smokeEmail(props.prefix)} in Cognito and the secret ${smokeSecret(props.prefix)}.`)
       }
     }
 

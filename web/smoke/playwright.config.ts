@@ -23,13 +23,17 @@ export default defineConfig({
   workers: live ? 2 : 3,
   timeout: live ? 60_000 : 45_000,
   expect: { timeout: 15_000 },
-  reporter: [['list'], ['html', { outputFolder: `${WEB}smoke-report`, open: 'never' }], ['json', { outputFile: `${WEB}smoke-report/results.json` }]],
+  // live: no HTML report, traces or screenshots of passing checks. trace's repository is public, and a trace or report
+  // from a live run would hold the signed-in session and the installation's data; the CI job keeps results.json only
+  reporter: live
+    ? [['list'], ['json', { outputFile: `${WEB}smoke-report/results.json` }]]
+    : [['list'], ['html', { outputFolder: `${WEB}smoke-report`, open: 'never' }], ['json', { outputFile: `${WEB}smoke-report/results.json` }]],
   globalSetup: './global-setup.ts',
   use: {
     baseURL: live ? process.env.TRACE_SMOKE_URL : `http://localhost:${PORT}`,
     storageState: live ? `${WEB}test-results/smoke-auth.json` : undefined,
-    screenshot: 'on',
-    trace: 'retain-on-failure',
+    screenshot: live ? 'off' : 'on',
+    trace: live ? 'off' : 'retain-on-failure',
   },
   projects: [
     { name: 'desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 1000 } }, grepInvert: /@phone-only/ },

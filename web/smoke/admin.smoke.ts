@@ -1,7 +1,9 @@
 /** The installation-wide screens: people, connected systems, instructions, installation, usage, operations, agents, knowledge. */
+import { admin } from './env'
 import { expect, test } from './fixtures'
 
 test('admin: people and access', async ({ app, page }) => {
+  test.skip(!admin, 'admin screens: the live smoke user is not an admin (TRACE_SMOKE_ADMIN=1 when it is)')
   await app.open('/admin/people')
   await expect(page.getByRole('heading', { name: 'People and access' })).toBeVisible()
   await app.tableHasRows()
@@ -9,12 +11,14 @@ test('admin: people and access', async ({ app, page }) => {
 })
 
 test('admin: connected systems', async ({ app, page }) => {
+  test.skip(!admin, 'admin screens: the live smoke user is not an admin (TRACE_SMOKE_ADMIN=1 when it is)')
   await app.open('/admin/systems')
   await expect(page.getByRole('heading', { name: 'Connected systems' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Connect a system' })).toBeVisible()
 })
 
 test('admin: agent instructions open in the editor', async ({ app, page }) => {
+  test.skip(!admin, 'admin screens: the live smoke user is not an admin (TRACE_SMOKE_ADMIN=1 when it is)')
   await app.open('/admin/prompts')
   await expect(page.getByRole('heading', { name: 'Agent instructions' })).toBeVisible()
   await page.getByRole('textbox', { name: 'Find an instruction' }).fill('role')
@@ -23,6 +27,7 @@ test('admin: agent instructions open in the editor', async ({ app, page }) => {
 })
 
 test('admin: installation health and usage', async ({ app, page }) => {
+  test.skip(!admin, 'admin screens: the live smoke user is not an admin (TRACE_SMOKE_ADMIN=1 when it is)')
   await app.open('/admin/installation')
   await expect(page.getByRole('heading', { name: 'Health' })).toBeVisible()
   await app.open('/admin/usage')

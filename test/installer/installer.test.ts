@@ -170,10 +170,10 @@ function fakeSmoke() {
   const users = new Set<string>()
   const secrets = new Map<string, string>()
   const io: import('../../src/installer/smoke.js').SmokeIo = {
-    exists: async (e) => users.has(e), create: async (e) => { users.add(e) }, admin: async () => undefined,
+    sub: async (e) => (users.has(e) ? `sub-${e}` : null), create: async (e) => { users.add(e); return `sub-${e}` }, user: async () => undefined,
     password: async () => undefined, mfaOff: async () => undefined, signIn: async () => 'access-token',
-    associate: async () => 'JBSWY3DPEHPK3PXP', verify: async () => undefined,
-    read: async (n) => secrets.get(n) ?? null, write: async (n, v) => { secrets.set(n, v) },
+    associate: async () => 'JBSWY3DPEHPK3PXP', verify: async () => undefined, remove: async (e) => { users.delete(e) },
+    read: async (n) => secrets.get(n) ?? null, write: async (n, v) => { secrets.set(n, v) }, forget: async (n) => { secrets.delete(n) },
   }
   return { io, users, secrets }
 }
@@ -800,7 +800,7 @@ describe('external access', () => {
 })
 
 describe('the light install', () => {
-  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] }, smoke: fakeSmoke().io }
   const run = async (a: unknown, s: Record<string, unknown> = {}, hooks: Parameters<typeof apply>[3] = {}): Promise<{ ok: boolean; events: { type: string; line?: string; summary?: string[]; step?: { id: string; status: string; detail: string } }[] }> => {
     OUTPUTS.TraceHome = join(mkdtempSync(join(tmpdir(), 'trace-central-')), 'home')
     const events: { type: string; line?: string; summary?: string[]; step?: { id: string; status: string; detail: string } }[] = []
@@ -942,7 +942,7 @@ describe('the light install', () => {
 })
 
 describe('the CodeBuild runners', () => {
-  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] }, smoke: fakeSmoke().io }
 
   const URL = 'https://us-east-1.console.aws.amazon.com/codesuite/settings/connections?region=us-east-1'
   type Ev = { type: string; line?: string; summary?: string[]; step?: { id: string; status: string; detail: string } }
@@ -1135,7 +1135,7 @@ describe('the CodeBuild runners', () => {
 
 describe('no console step on the default path', () => {
   const CONSOLE = /console\.aws\.amazon\.com|AWS console|in the console/i
-  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] }, smoke: fakeSmoke().io }
 
   it('plans nothing for a person to do in the AWS console, with or without publishing the images', () => {
     for (const a of [ANSWERS, { ...ANSWERS, agents: { ...ANSWERS.agents, publishImages: true } }, { ...ANSWERS, runners: { auth: 'token' } }]) {
@@ -1197,7 +1197,7 @@ describe('no console step on the default path', () => {
 })
 
 describe('the sample project', () => {
-  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] }, smoke: fakeSmoke().io }
   const SAMPLE = 'trace-agent/trace-sample'
   type Ev = { type: string; line?: string; summary?: string[]; step?: { id: string; status: string; detail: string } }
   const outputsFor = (repos: string[]): Record<string, string> => {
@@ -1330,7 +1330,7 @@ describe('the sample project', () => {
 })
 
 describe("trace's own repository", () => {
-  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] }, smoke: fakeSmoke().io }
   const TRACE = 'mteichtahl/trace'
   const yes = async () => ({ ok: true, reason: '' })
   const no = async () => ({ ok: false, reason: 'GET /repos/mteichtahl/trace/actions/secrets/public-key: 403 Resource not accessible' })
@@ -1393,8 +1393,8 @@ describe("trace's own repository", () => {
     expect(ok).toBe(true)
     expect(infra[0]?.ciRepositories).toEqual([TRACE])
     expect(calls.values.get(`${TRACE}:TRACE_CODEBUILD_PROJECT`)).toBe(`trace-ci-${projectHash(TRACE)}`)
-    // its runner, and (keeping the installation up to date, on by default) the self-update job's variables: nothing of a project
-    expect([...calls.values.keys()].filter((k) => k.startsWith(`${TRACE}:`)).sort()).toEqual([`${TRACE}:TRACE_AWS_REGION`, `${TRACE}:TRACE_CODEBUILD_PROJECT`, `${TRACE}:TRACE_STACK`, `${TRACE}:TRACE_UPDATE_ROLE`])
+    // its runner, and (keeping the installation up to date, on by default) the self-update and live smoke jobs' variables: nothing of a project
+    expect([...calls.values.keys()].filter((k) => k.startsWith(`${TRACE}:`)).sort()).toEqual([`${TRACE}:TRACE_AWS_REGION`, `${TRACE}:TRACE_CODEBUILD_PROJECT`, `${TRACE}:TRACE_SMOKE_SECRET`, `${TRACE}:TRACE_STACK`, `${TRACE}:TRACE_UPDATE_ROLE`])
     expect(calls.ghSecrets.filter((k) => k.startsWith(`${TRACE}:`))).toEqual([])
     expect(events.filter((e) => e.type === 'log').map((e) => e.line)).toContain(`Building trace's own repository (${TRACE}) on AWS too: a build runner for it alone.`)
     // saved with the answers, so the page shows it next time
@@ -1411,8 +1411,8 @@ describe("trace's own repository", () => {
     expect(off).toBe(true)
     expect(infra[0]?.ciRepositories).toBeUndefined()
     expect(calls.values.has(`${TRACE}:TRACE_CODEBUILD_PROJECT`)).toBe(false)
-    // and the self-update role goes with it (selfUpdate needs trace's own repository built), so its variable goes too
-    expect(calls.deleted.sort()).toEqual([`${TRACE}:TRACE_CODEBUILD_PROJECT`, `${TRACE}:TRACE_UPDATE_ROLE`])
+    // and the self-update role goes with it (selfUpdate needs trace's own repository built), so its variables go too, the live smoke test's with them
+    expect(calls.deleted.sort()).toEqual([`${TRACE}:TRACE_CODEBUILD_PROJECT`, `${TRACE}:TRACE_SMOKE_SECRET`, `${TRACE}:TRACE_UPDATE_ROLE`])
   })
 
   it('reads which repositories an earlier run built from its saved answers', () => {
@@ -1423,7 +1423,7 @@ describe("trace's own repository", () => {
 })
 
 describe('keeping the installation up to date', () => {
-  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] }, smoke: fakeSmoke().io }
   const TRACE = 'mteichtahl/trace'
   const yes = async () => ({ ok: true, reason: '' })
   const ADMIN = ['ghp', 'ADMINFAKEFAKEFAKE0123456789'].join('_')
@@ -1460,6 +1460,10 @@ describe('keeping the installation up to date', () => {
     expect(signIn).toMatchObject({ TRACE_SMOKE_EMAIL: 'smoke@trace.trace.invalid', TRACE_SMOKE_URL: (OUTPUTS.WebUrl ?? '').replace(/\/+$/, '') })
     expect(saved[0]?.text).not.toContain(signIn.TRACE_SMOKE_PASSWORD)
     expect(calls.values.get(`${TRACE}:TRACE_SMOKE_SECRET`)).toBe('trace/smoke/sign-in')
+    // a Reviewer of the smoke project (the sample's, else the first project) and of nothing else
+    process.env.TRACE_HOME = OUTPUTS.TraceHome
+    const mine = (await assignments({ sub: 'test', email: 'test@example.com', groups: ['trace-admins'] }, { sub: 'sub-smoke@trace.trace.invalid' }))
+    expect(mine.map((g) => [g.repo, g.part])).toEqual([[signIn.TRACE_SMOKE_PROJECT?.replace('~', '/'), 'reviewer']])
     // the repository's variables for the update job
     expect(calls.values.get(`${TRACE}:TRACE_UPDATE_ROLE`)).toBe(OUTPUTS.SelfUpdateRoleArn)
     expect(calls.values.get(`${TRACE}:TRACE_AWS_REGION`)).toBe('us-east-1')
@@ -1513,7 +1517,7 @@ describe('keeping the installation up to date', () => {
 })
 
 describe('projects created in the web app', () => {
-  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] }, smoke: fakeSmoke().io }
   const NEW = 'acme/fresh'
 
   it('takes them in as existing, onboarded projects, deploys them, and removes their records once the run is done', async () => {
@@ -1553,7 +1557,7 @@ describe('projects created in the web app', () => {
 describe('the web app\'s WAF outside us-east-1', () => {
   const ACL = 'arn:aws:wafv2:us-east-1:123456789012:global/webacl/trace-web/33333333-3333-3333-3333-333333333333'
   const EU = { ...ANSWERS, aws: { ...ANSWERS.aws, region: 'eu-west-1' } }
-  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] } }
+  const quiet = { names: { deployed: async () => new Set<string>(), taken: async () => [] }, smoke: fakeSmoke().io }
   const run = async (a: unknown, edge: { toolkit: boolean; exists?: boolean }) => {
     const deploys: { stack: string; infra: Record<string, unknown> }[] = []
     const bootstraps: string[] = []
