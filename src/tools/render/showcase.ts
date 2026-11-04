@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { basename, join, resolve } from 'node:path'
 import { z } from 'zod'
 import { normalisedHash } from '../../core/normalise.js'
+import { logoPath } from '../../docs/logo.js'
 import { defineTool, ToolError } from '../../core/registry.js'
 import { findRoot, scratchDir, Work, type RunInput } from '../../core/store.js'
 import { backendFor } from '../../gpu/jobs.js'
@@ -29,12 +30,31 @@ export const BOARD_SHOTS: readonly Shot[] = ['board', 'board-top', 'board-bottom
 export const CASE_FILES = { base: `${OUT_DIR}/case-base.stl`, lid: `${OUT_DIR}/case-lid.stl` } as const
 
 /**
- * Where the project's logo is looked for, first found wins. The documentation module's logo (docs/scribe.md "Project
- * logo") is the one logo of a project; its upload saves it here. Blender reads PNG, JPEG and WebP; an SVG logo needs
- * a PNG copy beside it for its colours to be read.
+ * The project's logo is the documentation module's (docs/scribe.md "Project logo", src/docs/logo.ts): one logo for the
+ * documents and the pictures, uploaded in the project's settings and kept in the repository. The renders use the one
+ * for light backgrounds. Blender reads a PNG itself; an SVG's colours are read from its fills and strokes here.
  */
-export const LOGO_PATHS = ['.trace/brand/logo.png', '.trace/brand/logo.webp', '.trace/brand/logo.jpg', '.trace/brand/logo.jpeg'] as const
-const SVG_LOGO = '.trace/brand/logo.svg'
+export const LOGO_PATHS: readonly string[] = [logoPath('light', 'png'), logoPath('light', 'svg')]
+
+/**
+ * The colours an SVG paints with, most used first: fill, stroke and stop-color, as attributes or in style, in #rgb,
+ * #rrggbb or rgb(). Each is weighted by how often it is used; none, transparent, currentColor and url() are not colours.
+ */
+export function svgColours(svg: string): { hex: string; uses: number }[] {
+  const counts = new Map<string, number>()
+  const add = (hex: string): void => { counts.set(hex, (counts.get(hex) ?? 0) + 1) }
+  const re = /(?:fill|stroke|stop-color)\s*(?:=\s*["']|:\s*)\s*(#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b|rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\))/g
+  for (const m of svg.matchAll(re)) {
+    const v = (m[1] as string).toLowerCase()
+    if (v.startsWith('rgb')) {
+      const n = (v.match(/\d+/g) ?? []).map((x) => Math.min(255, Number(x)))
+      add(`#${n.map((x) => x.toString(16).padStart(2, '0')).join('')}`)
+    } else {
+      add(v.length === 4 ? `#${v[1]}${v[1]}${v[2]}${v[2]}${v[3]}${v[3]}` : v)
+    }
+  }
+  return [...counts].map(([hex, uses]) => ({ hex, uses })).sort((a, b) => b.uses - a.uses || a.hex.localeCompare(b.hex))
+}
 
 /** Picture sizes: release quality by default, draft for a quick look. */
 export const QUALITY = {
@@ -131,9 +151,10 @@ export const showcase = defineTool({
     }
     if (!hasCase && !a.shots) notes.push('the project has no built case (mech.build): board shots only')
 
-    // the logo, when there is one Blender can read
+    // the project's logo (the documentation module's): a PNG Blender reads, or an SVG whose colours are read here
     const logoRel = LOGO_PATHS.find((l) => existsSync(join(root, l))) ?? null
-    if (!logoRel && existsSync(join(root, SVG_LOGO))) notes.push(`${SVG_LOGO} is an SVG, whose colours Blender cannot read: add a PNG copy as .trace/brand/logo.png; neutral colours used`)
+    const svg = logoRel?.endsWith('.svg') ? svgColours(readFileSync(join(root, logoRel), 'utf8')) : null
+    if (svg && !svg.length) notes.push(`${logoRel} names no colours trace can read (fills and strokes): neutral colours used`)
 
     // where the board sits in the case: its outline's bounds, from the board file alone
     const facts = boardFacts(pcb, root)
@@ -173,12 +194,12 @@ export const showcase = defineTool({
       const inputs: Record<string, string> = { 'board.glb': model.path }
       const args = ['{in:board.glb}']
       if (hasCase) { inputs['base.stl'] = base; inputs['lid.stl'] = lid; args.push('{in:base.stl}', '{in:lid.stl}') }
-      if (logoRel) { const ext = logoRel.slice(logoRel.lastIndexOf('.')); inputs[`logo${ext}`] = join(root, logoRel); args.push(`{in:logo${ext}}`) }
+      if (logoRel && !svg) { inputs['logo.png'] = join(root, logoRel); args.push('{in:logo.png}') }
       const outs = shots.map((s) => names[s])
       const q = QUALITY[a.quality]
       const job = {
         shots, board_xy_mm: bounds, format: model.format, up_axis: 'Z',
-        ...(hasCase ? { case: { look } } : {}), ...(logoRel ? { logo: true } : {}),
+        ...(hasCase ? { case: { look } } : {}), ...(logoRel && !svg ? { logo: true } : {}), ...(svg?.length ? { logo_colours: svg.slice(0, 32).map((c) => [c.hex, c.uses]) } : {}),
         mask_color: a.mask_color, silk_color: a.silk_color,
         ...(a.width ? { width: a.width } : {}), ...(a.height ? { height: a.height } : {}), ...(a.samples ? { samples: a.samples } : {}),
         defaults: q, denoise: true, device: want, engine: 'cycles',

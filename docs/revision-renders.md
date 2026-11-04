@@ -68,9 +68,9 @@ The logo is the documentation module's (`trace:projectLogo`, docs/scribe.md "Pro
 These renders only read it, so there is one logo for the documents and the pictures.
 
 - **Upload.** A person uploads the logo when creating the project or in its settings, as PNG or SVG (Scribe, layer 3).
-- **Where it is kept.** It is committed to the repository as `.trace/brand/logo.<ext>`, with the palette in
-  `.trace/brand/palette.json`.
-- **SVG.** An SVG is turned into a 1024-pixel PNG for the palette.
+- **Where it is kept.** In the repository, as Scribe keeps it: `docs/design/logo.png` or `logo.svg` (`src/docs/logo.ts`).
+  The renders use the logo for light backgrounds.
+- **SVG.** Blender cannot open an SVG, so its colours are read from its fills and strokes, each weighted by how often it is used.
 
 ## Names and where the images go
 

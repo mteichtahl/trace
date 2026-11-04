@@ -121,7 +121,23 @@ def kmeans(pixels, k=5, rounds=12):
 def palette_from_logo(path):
     """{source, base, accent, neutral, background: [top, bottom]} from the logo's dominant colours (hex), or None when
     the logo has too few coloured pixels to say."""
-    px = logo_pixels(path)
+    return palette_from_pixels(logo_pixels(path))
+
+
+def svg_pixels(colours):
+    """An SVG logo's colours ([hex, uses], read by the TypeScript side from its fills and strokes) as pixels, each
+    colour as many times as it is used, without near-white and near-black ones as for a picture."""
+    out = []
+    for hx, uses in colours:
+        rgb = from_hex(hx)
+        L = hls(rgb)[1]
+        if L > 0.94 or L < 0.05:
+            continue
+        out += [rgb] * max(1, min(int(uses), 50)) * 10
+    return out
+
+
+def palette_from_pixels(px):
     if len(px) < 20:
         return None
     clusters = kmeans(px)
@@ -333,6 +349,10 @@ def main():
     palette = dict(NEUTRAL)
     if job.get("palette"):
         palette = dict(job["palette"])
+    elif job.get("logo_colours"):
+        palette = palette_from_pixels(svg_pixels(job["logo_colours"])) or palette
+        if palette["source"] == "neutral":
+            notes.append("the logo's colours are all near white or black: neutral colours used")
     elif logo_path:
         try:
             p = palette_from_logo(logo_path)
