@@ -7,6 +7,9 @@
  *   freshness(db, run, read)   one run: current, stale (with reasons) or unknown (no inputs recorded: a run from before
  *                              lineage). `read(path)` gives a repository file as it is now, or null when it is gone
  *   latestFreshness(db, read)  the newest run of each tool and subject, with its freshness
+ *   as of a moment             both take `asOf` (seconds since 1970; plan P8.2): only runs started by then count, so
+ *                              "the newest run that made it" is the newest then; `read` gives the files as they were
+ *                              at that moment (the commit then)
  *
  * The rule, for each input:
  *   a file              current while its normalised content has the hash the run recorded (src/core/normalise.ts)
@@ -61,14 +64,14 @@ const inWords = (ref: string): string => {
   return view ? `${VIEW_WORDS[view] ?? `the ${view} of`} ${path}` : path
 }
 
-/** The newest run of the same tool and subject that made output `name`. */
-function newestMaker(db: DatabaseSync, r: RunRow, name: string): RunRow | undefined {
+/** The newest run (started by `asOf`) of the same tool and subject that made output `name`. */
+function newestMaker(db: DatabaseSync, r: RunRow, name: string, asOf = Number.MAX_VALUE): RunRow | undefined {
   return db.prepare(`SELECT r.id, r.kind, r.subject, r.started FROM runs r JOIN artifact_hashes h ON h.run_id = r.id AND h.name = ?
-    WHERE r.kind = ? AND r.subject IS ? ORDER BY r.started DESC, r.id DESC LIMIT 1`).get(name, r.kind, r.subject) as RunRow | undefined
+    WHERE r.kind = ? AND r.subject IS ? AND r.started <= ? ORDER BY r.started DESC, r.id DESC LIMIT 1`).get(name, r.kind, r.subject, asOf) as RunRow | undefined
 }
 
 /** One run's freshness. `seen` guards a cycle (a run's inputs never name itself; a damaged record might). */
-export function freshness(db: DatabaseSync, runId: string, read: (path: string) => Uint8Array | null, memo: Map<string, Freshness> = new Map(), seen: Set<string> = new Set()): Freshness {
+export function freshness(db: DatabaseSync, runId: string, read: (path: string) => Uint8Array | null, memo: Map<string, Freshness> = new Map(), seen: Set<string> = new Set(), asOf = Number.MAX_VALUE): Freshness {
   const hit = memo.get(runId)
   if (hit) return hit
   const r = runOf(db, runId)
@@ -92,12 +95,12 @@ export function freshness(db: DatabaseSync, runId: string, read: (path: string) 
     const maker = runOf(db, i.ref)
     const name = i.name ?? ''
     if (!maker) { out.reasons.push(`the run that made ${name} (${i.ref}) is no longer in the record`); continue }
-    const newest = newestMaker(db, maker, name) ?? maker
-    const f = freshness(db, newest.id, read, memo, seen)
+    const newest = newestMaker(db, maker, name, asOf) ?? maker
+    const f = freshness(db, newest.id, read, memo, seen, asOf)
     if (newest.id !== maker.id) {
       const h = hashOf(db, newest.id, name)
       if (h !== i.sha256) { out.reasons.push(`${maker.kind} made ${name} again (run ${newest.id.slice(0, 8)}) and it differs`); continue }
-      const up = freshness(db, maker.id, read, memo, seen)
+      const up = freshness(db, maker.id, read, memo, seen, asOf)
       out.kept.push(`${up.reasons[0] ?? `${maker.kind}'s inputs changed`}, but ${maker.kind} made the same ${name} again (run ${newest.id.slice(0, 8)})`)
     }
     if (f.state === 'stale') out.reasons.push(`${name} from ${maker.kind} is out of date: ${f.reasons[0] ?? 'its inputs changed'}`)
@@ -110,11 +113,11 @@ export function freshness(db: DatabaseSync, runId: string, read: (path: string) 
 }
 
 /** The newest run of each tool and subject, each with its freshness, newest first. */
-export function latestFreshness(db: DatabaseSync, read: (path: string) => Uint8Array | null): Freshness[] {
-  const rows = db.prepare(`SELECT id FROM runs r WHERE started = (SELECT MAX(started) FROM runs x WHERE x.kind = r.kind AND x.subject IS r.subject)
-    ORDER BY started DESC`).all() as { id: string }[]
+export function latestFreshness(db: DatabaseSync, read: (path: string) => Uint8Array | null, asOf = Number.MAX_VALUE): Freshness[] {
+  const rows = db.prepare(`SELECT id FROM runs r WHERE started <= ? AND started = (SELECT MAX(started) FROM runs x WHERE x.kind = r.kind AND x.subject IS r.subject AND x.started <= ?)
+    ORDER BY started DESC`).all(asOf, asOf) as { id: string }[]
   const memo = new Map<string, Freshness>()
-  return rows.map((x) => freshness(db, x.id, read, memo))
+  return rows.map((x) => freshness(db, x.id, read, memo, new Set(), asOf))
 }
 
 /**
