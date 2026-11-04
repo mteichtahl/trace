@@ -19,7 +19,7 @@ import traceback
 
 from . import BridgeError, METHODS
 
-AREAS = ("tracebridge.pdf", "tracebridge.visa", "tracebridge.can")
+AREAS = ("tracebridge.pdf", "tracebridge.visa", "tracebridge.can", "tracebridge.shapes")
 
 
 def load() -> dict[str, str]:

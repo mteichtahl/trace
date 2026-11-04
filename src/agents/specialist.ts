@@ -15,6 +15,7 @@ import type { TraceConfig } from '../core/config.js'
 import { type Route, SPECIALIST_WORDS, type SpecialistKind } from './kinds.js'
 import type { Handoff } from './runtime/schemas.js'
 import { type Composed, Composer, type Layers, NO_LAYERS } from '../prompts/resolve.js'
+import { shapedCriteria } from '../ontology/shapes.js'
 
 /** Read tools every specialist has, whatever its area. */
 export const SHARED_TOOLS = [
@@ -27,6 +28,8 @@ export const SHARED_TOOLS = [
   'kb.search', 'kb.status',
   // the project's journey: read it, ask people, check the criteria trace owns, say when stuck (src/tools/journey)
   'journey.status', 'journey.ask', 'journey.check', 'journey.stuck',
+  // a criterion a shape backs, checked over the project's records (src/tools/shape)
+  'shape.check',
   // the design record: propose intent, link requirements to it, architectures, the pin plan, sheet → requirements
   // (src/tools/design). Agents propose; a person accepts, chooses and agrees through the guided skills
   'design.intent', 'design.architecture', 'design.pins', 'design.sheets',
@@ -216,7 +219,7 @@ export function composeSpecialist(s: Specialist, c: PromptContext): Composed {
   addJob(p, c.job, cfg, repository)
   p.add(`specialist.${s.kind}.workflow`, role).add('specialist.tools', { tools: tools.map(mcpName).join(', '), mcp_server: MCP_SERVER })
   p.add('specialist.knowledge', { search_tool: mcpName('kb.search'), status_tool: mcpName('kb.status') }).add('specialist.knowledge.data')
-  p.add('specialist.journey', { status_tool: mcpName('journey.status'), ask_tool: mcpName('journey.ask'), check_tool: mcpName('journey.check'), stuck_tool: mcpName('journey.stuck') })
+  p.add('specialist.journey', { status_tool: mcpName('journey.status'), ask_tool: mcpName('journey.ask'), check_tool: mcpName('journey.check'), shape_tool: mcpName('shape.check'), shaped: shapedCriteria().join(', ') || 'none yet', stuck_tool: mcpName('journey.stuck') })
     .add('specialist.journey.people')
   if (handoff === 'ask') {
     const others = (c.enabled ?? cfg.agents.enabled).filter((k) => k !== s.kind)
