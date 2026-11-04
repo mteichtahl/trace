@@ -1,6 +1,7 @@
 """The case's drawings for the project's documents (tracebridge/mech/drawing.py, docs/scribe.md "Mechanical drawings"):
 three dimensioned views and an exploded view of a case the engine built, and the sizes they state."""
 import json
+import os
 import subprocess
 import sys
 
@@ -37,6 +38,6 @@ def test_draws_three_views_and_the_parts_apart(case_step, tmp_path):
 
 def test_the_command_says_when_there_is_no_case(tmp_path):
     r = subprocess.run([sys.executable, "-m", "tracebridge.mech", "drawing", "--step", str(tmp_path / "none.step"), "--out", str(tmp_path)],
-                       capture_output=True, text=True, env={"PYTHONPATH": str(PYTHON_DIR), "PATH": "/usr/bin:/bin"})
+                       capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(PYTHON_DIR)})
     assert r.returncode == 2
     assert "build it first" in json.loads(r.stdout)["error"]
