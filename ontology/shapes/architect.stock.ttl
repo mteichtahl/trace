@@ -1,0 +1,62 @@
+# The Architecture review gate's criterion architect.stock: "Every key part is in stock for the build quantity, or its
+# exception is signed." (src/core/journey.ts). Over the project's graph: each key part of a block, not withdrawn, of
+# the option the design goes ahead with (src/ontology/derived.ts isCurrentOption) has a line in a stock check
+# (parts.bom_check, of the parts list or of lines given inline), and the newest such line is for at least the build
+# quantity and is available. A part trace cannot get is signed as an exception on the criterion, at the gate.
+#
+# Each finding names the part and says what to do next, in plain words (no acronyms).
+
+@prefix trace: <https://trace-eda.com/ns/trace#> .
+@prefix tsh:   <https://trace-eda.com/ns/trace/shapes#> .
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+
+tsh: a owl:Ontology ;
+    rdfs:label "trace shapes" ;
+    sh:declare [ sh:prefix "trace" ; sh:namespace "https://trace-eda.com/ns/trace#"^^xsd:anyURI ] ,
+               [ sh:prefix "xsd" ; sh:namespace "http://www.w3.org/2001/XMLSchema#"^^xsd:anyURI ] .
+
+tsh:ArchitectStock a sh:NodeShape ;
+    rdfs:label "Every key part is in stock for the build" ;
+    rdfs:comment "Backs the criterion architect.stock." ;
+    tsh:criterion "architect.stock" ;
+    sh:targetClass trace:KeyPart ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "The key part {?part}{?why}." ;
+        sh:select """
+            SELECT $this ?part ?why WHERE {
+                ?option a trace:ArchitectureOption ; trace:isCurrentOption true .
+                ?block trace:forOption ?option ; trace:usesPart $this .
+                FILTER NOT EXISTS { ?block trace:status "withdrawn" }
+                $this trace:refersToPart ?p .
+                ?journey a trace:Journey ; trace:buildQuantity ?n .
+                OPTIONAL {
+                    ?line trace:refersToPart ?p ; trace:ofRun ?run ; trace:status ?st .
+                    ?run trace:runKind "parts.bom_check" ; trace:startedAt ?t .
+                    FILTER NOT EXISTS { ?run trace:status "error" }
+                    FILTER NOT EXISTS {
+                        ?l2 trace:refersToPart ?p ; trace:ofRun ?r2 .
+                        ?r2 trace:runKind "parts.bom_check" ; trace:startedAt ?t2 .
+                        FILTER NOT EXISTS { ?r2 trace:status "error" }
+                        FILTER (?t2 > ?t)
+                    }
+                    OPTIONAL { ?line trace:mpn ?mpn } OPTIONAL { ?line trace:quantityNeeded ?q } OPTIONAL { ?line trace:stock ?s }
+                    OPTIONAL { ?m trace:ofRun ?run ; trace:name "boards" ; trace:value ?b }
+                }
+                BIND (COALESCE(?mpn, STRAFTER(STR(?p), ":part:")) AS ?part)
+                BIND (STR(xsd:integer(?q)) AS ?need)
+                BIND (". Propose an in-stock alternative, or sign an exception for it" AS ?next)
+                BIND (IF(!BOUND(?line), " is not checked for stock yet: run parts.bom_check with it at the build quantity",
+                      IF(BOUND(?b) && ?b < ?n, CONCAT(" was last checked for ", STR(xsd:integer(?b)), " boards, fewer than the ", STR(?n), " the project builds: check it again at ", STR(?n)),
+                      IF(?st = "out", CONCAT(" is out of stock: ", ?need, " needed", ?next),
+                      IF(?st = "short", CONCAT(" is short: ", ?need, " needed, ", STR(?s), " in stock", ?next),
+                      IF(?st = "not-found", CONCAT(" was not found at any supplier", ?next),
+                      IF(?st = "error", " could not be checked: check it again", "")))))) AS ?why)
+                FILTER (?why != "")
+            }
+        """ ;
+    ] .

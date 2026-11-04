@@ -14,6 +14,7 @@ import { z } from 'zod'
 import { Bridge } from '../../src/core/bridge.js'
 import { GATES, applyJourneySchema, startJourney } from '../../src/core/journey.js'
 import { recordDesignDecision } from '../../src/tools/design/decisions.js'
+import { mpnKey } from '../../src/tools/datasheets/mpn.js'
 import { buildGraph, nodeIri } from '../../src/ontology/graph.js'
 import { shapedCriteria } from '../../src/ontology/shapes.js'
 import { SHAPES_DIR, graphQuads, runShape, turtle } from '../../src/tools/shape/tools.js'
@@ -124,5 +125,35 @@ describe.skipIf(!shacl)('architect.mapped over the project\'s graph (pySHACL)', 
       'No architecture is proposed yet: propose one, with its blocks, before mapping the requirements to it.',
       'No requirements are recorded yet: record them before the architecture is mapped to them.',
     ])
+  }, 60_000)
+})
+
+describe.skipIf(!shacl)('the stock shapes over the project\'s graph (pySHACL)', () => {
+  const bridge = new Bridge(python)
+  afterAll(() => bridge.close())
+  const check = async (criterion: string) => runShape(criterion, await turtle(graphQuads({ journey: db, project: db }, O)), (m, p) => bridge.call(m, p, z.any()))
+  /** a parts.bom_check run as the tool records it, with its lines */
+  const stockCheck = (id: string, boards: number, lines: [mpn: string, status: string, stock: number][], subject = 'hardware/bom.csv'): void => {
+    const t = Date.now() / 1000 + Number(id.slice(1))
+    db.prepare('INSERT INTO runs (id, kind, subject, started, finished, status, summary, args, result, git_sha, agent, job) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(id, 'parts.bom_check', subject, t, t, 'pass', 'checked', '{}', '{}', null, 'impl', null)
+    db.prepare('INSERT INTO measurements (run_id, name, value, unit, detail) VALUES (?,?,?,?,?)').run(id, 'boards', boards, '', null)
+    lines.forEach(([mpn, status, stock], i) => db.prepare('INSERT INTO parts_list_lines (run_id, line, mpn, part_key, order_code, refs, per_board, need, status, flags, stock, unit_price, line_total, currency, note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(id, i + 1, mpn, mpnKey(mpn), null, null, 1, boards, status, '[]', stock, 0.5, 0.5 * boards, 'USD', null))
+  }
+  beforeEach(() => { startJourney(db, { template: 'board', by: ADMIN.label, name: 'Soil sensor', build: { quantity: 5 } }) })
+
+  it('capture.stock reads the newest parts list check at the build quantity', async () => {
+    expect((await check('capture.stock')).findings.map((f) => f.message)).toEqual(['No parts list is checked for stock yet: run parts.bom_check on the parts list at the build quantity.'])
+    stockCheck('r1', 5, [['TPS7A02', 'ok', 1000], ['STM32L031', 'ok', 50]])
+    expect(await check('capture.stock')).toEqual({ conforms: true, findings: [] })
+    stockCheck('r2', 5, [['TPS7A02', 'short', 3], ['STM32L031', 'ok', 50]])
+    expect((await check('capture.stock')).findings).toEqual([expect.objectContaining({ focus: iri('parts-line', 'r2/1'), message: 'TPS7A02 is short: 5 needed, 3 in stock. Propose an in-stock alternative, or sign an exception for it.' })])
+  }, 60_000)
+
+  it('architect.stock reads the key parts of the current option, through the part they name', async () => {
+    // the fixture's option A: the power block's key part TPS7A02 (STM32L031 is not a key part)
+    expect((await check('architect.stock')).findings.map((f) => f.message)).toEqual(['The key part TPS7A02 is not checked for stock yet: run parts.bom_check with it at the build quantity.'])
+    stockCheck('r1', 5, [['tps7a02', 'ok', 1000]], 'rows')
+    expect(await check('architect.stock')).toEqual({ conforms: true, findings: [] })
   }, 60_000)
 })

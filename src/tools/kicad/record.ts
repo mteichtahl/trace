@@ -7,6 +7,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { ToolError } from '../../core/registry.js'
 import { normalisedHash } from '../../core/normalise.js'
+import type { DatabaseSync } from 'node:sqlite'
 import { Work, findRoot, type RunInput, type RunStatus } from '../../core/store.js'
 
 export interface RunHandle {
@@ -15,6 +16,8 @@ export interface RunHandle {
   artifact(name: string, data: string | Uint8Array, mime?: string): void
   /** another run's output this run was made from (lineage), by that run and the output's name */
   uses(run: string, name: string): void
+  /** the project database, for a tool that keeps rows of its own with the run (parts.bom_check's lines) */
+  readonly db: DatabaseSync
 }
 
 /**
@@ -60,6 +63,7 @@ export async function recorded<T extends object>(kind: string, subject: string |
   const inputs: RunInput[] = fileInputs(args)
   const handle: RunHandle = {
     id,
+    db: work.db,
     measure: (name, value, unit = '') => work.measure(id, name, value, unit),
     artifact: (name, data, mime) => work.artifact(id, name, data, mime),
     uses: (run, name) => {

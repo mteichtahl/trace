@@ -487,6 +487,15 @@ export const TABLES: readonly TableMap[] = [
 
   // ------------------------------------------------------------------ the installation's parts database (central)
   {
+    db: 'project', table: 'parts_list_lines', class: 'PartsListLine', kind: 'parts-line', key: ['run_id', 'line'],
+    columns: {
+      run_id: { prop: 'ofRun', ref: 'run' }, line: { prop: 'lineNumber', as: 'int' }, mpn: { prop: 'mpn' }, part_key: { prop: 'refersToPart', ref: 'part' }, order_code: { prop: 'orderCode' },
+      refs: { prop: 'designators' }, per_board: { prop: 'perBoard', as: 'decimal' }, need: { prop: 'quantityNeeded', as: 'decimal' },
+      status: { prop: 'status' }, flags: { prop: 'flag', textList: true }, stock: { prop: 'stock', as: 'int' },
+      unit_price: { prop: 'unitPrice', as: 'decimal' }, line_total: { prop: 'lineTotal', as: 'decimal' }, currency: { prop: 'currency' }, note: { prop: 'note' },
+    },
+  },
+  {
     db: 'central', table: 'parts', class: 'Part', kind: 'part', key: 'key',
     columns: {
       key: ID('the part number as trace compares it (mpnKey): it names the node'), mpn: { prop: 'mpn' }, manufacturer: { prop: 'manufacturerName' },

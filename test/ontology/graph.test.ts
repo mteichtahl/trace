@@ -33,7 +33,7 @@ describe('a project\'s graph', () => {
       'project.runs', 'project.measurements', 'project.artifacts', 'project.settings', 'project.intent_statements', 'project.requirement_intent',
       'project.arch_options', 'project.arch_criteria', 'project.arch_scores', 'project.arch_blocks', 'project.arch_connections', 'project.pin_plan',
       'project.sheet_requirements', 'project.requirements', 'project.test_items', 'project.test_results', 'project.coverage_points',
-      'project.coverage_hits', 'project.bringup_readings', 'central.parts', 'central.part_offers']) {
+      'project.coverage_hits', 'project.bringup_readings', 'project.parts_list_lines', 'central.parts', 'central.part_offers']) {
       expect(rows[t], t).toBeGreaterThan(0)
     }
   })
@@ -127,7 +127,7 @@ describe('a project\'s graph', () => {
       '@context': contextUrl(v), '@id': id('criterion', 'define.accepted'), '@type': 'Criterion', ofGate: id('gate', 'define'), status: 'met',
       hasEvidence: { '@type': 'Evidence', evidenceKind: 'run', evidenceRef: 'run-define.accepted' },
     })
-    expect(contextUrl(v)).toBe('https://trace-eda.com/ns/trace/context/0.2.0.jsonld')
+    expect(contextUrl(v)).toBe('https://trace-eda.com/ns/trace/context/0.3.0.jsonld')
     expect(recordJsonLd(store, id('journey', 'current'), v)).toMatchObject({ buildPlan: { quantity: 5 } })
     expect(recordJsonLd(store, id('criterion', 'nope'), v)).toBeNull()
   })

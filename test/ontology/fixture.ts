@@ -121,6 +121,8 @@ export async function projectDb(): Promise<DatabaseSync> {
     .run('TST-1', 'The rail holds', '["REQ-PWR-001"]', 'drc', 'kicad.drc', '{}', 'pass', 'run-verify', t, t, 'verify')
   db.prepare('INSERT INTO test_results (run_id, test_id, status, evidence, reason, at) VALUES (?,?,?,?,?,?)').run('run-verify', 'TST-1', 'pass', '["run-drc"]', null, t)
   db.prepare('INSERT INTO coverage_points (id, requirements, kind, match, goal, created, updated, by) VALUES (?,?,?,?,?,?,?,?)').run('COV-1', '["REQ-PWR-001"]', 'functional', 'rail_ok', 1, t, t, 'verify')
+  db.prepare('INSERT INTO parts_list_lines (run_id, line, mpn, part_key, order_code, refs, per_board, need, status, flags, stock, unit_price, line_total, currency, note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run('run-drc', 1, 'TPS7A02', 'TPS7A02', 'C2862740', 'U1', 1, 5, 'ok', '["end-of-life"]', 1200, 0.42, 2.1, 'USD', null)
   db.prepare('INSERT INTO coverage_hits (run_id, kind, name, hits) VALUES (?,?,?,?)').run('run-verify', 'functional', 'rail_ok', 3)
   db.prepare('INSERT INTO bringup_readings (id, board, step, instrument, quantity, value, unit, min, max, pass, at, by, run_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
     .run('rd-1', 'SN-001', 'rails', 'dmm', '3V3 rail at TP4', 3.31, 'V', 3.2, 3.4, 1, t, 'impl', 'run-verify')

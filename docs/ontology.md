@@ -401,16 +401,16 @@ When the walk stops on a matching hash, the reason is kept ("the schematic chang
 
 Each trace-owned criterion of trace's existing gates is backed by one SHACL shape, run as a checker tool whose result is written to `criterion_checks` like any other check. Gates, signing, waivers and the rule that a signer opens every piece of evidence stay exactly as built in `src/core/journey.ts`; violation messages feed the "what's still needed" list.
 
-**First criteria backed by shapes**
+**First criteria backed by shapes** (`ontology/shapes/<criterion>.ttl`, run by `shape.check`; a stock check keeps every line in `parts_list_lines`)
 
 | Gate | Criterion | Shape checks |
 | --- | --- | --- |
-| Architecture review | `architect.mapped`: every requirement maps to a block | Every accepted requirement is served by at least one block |
-| Architecture review | `architect.stock`: every key part in stock, or its exception signed | Every key part has a current offer with stock at the build quantity, or a waiver |
-| Schematic review | `capture.stock`: every part in stock, or its exception signed | The same rule over every part on the schematic |
+| Architecture review | `architect.mapped`: every requirement maps to a block | Every live requirement (not struck) is served by a block, not withdrawn, of the option the design goes ahead with; no requirements or no architecture is not met |
+| Architecture review | `architect.stock`: every key part in stock, or its exception signed | Each key part of the current option has a line in a stock check (`parts.bom_check`), and its newest line is for the build quantity and available; an exception is a waiver on the criterion |
+| Schematic review | `capture.stock`: every part in stock, or its exception signed | The newest check of the parts list file is for the build quantity, and no line is out of stock, short or not found |
 | Layout review | `layout.fit`: the board fits its enclosure, or each clash is waived | No clash between case and board; both clearances met; every mounting point has a standoff; each failure named by part |
-| Release approval | `signoff.bom`: parts list checked for cost and stock | Every line has a price and stock at the build quantity, observed within a day |
-| Order approval | `fabricate.order.stock`: stock and prices checked again today | Every line's offer was observed today and is available |
+| Release approval | `signoff.bom`: parts list checked for cost and stock | As `capture.stock`, and every line fitted has a price |
+| Order approval | `fabricate.order.stock`: stock and prices checked again today | As `capture.stock`, and the check ran today |
 
 Criteria owned by a person ("The blocks and key parts are approved", "The board renders are approved") stay a person's call: no shape moves them.
 
