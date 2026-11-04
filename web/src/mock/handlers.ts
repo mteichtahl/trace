@@ -12,6 +12,7 @@ import { servicesAction } from './services'
 import { s1Action } from './s1'
 import { designAction } from './design'
 import { smallAction } from './small'
+import { lifecycleAction, withLifecycle } from './lifecycle'
 import { filesAction, withFileThread } from './files'
 import { buildCostAction } from './build-cost'
 import { handoffsOf, jobsAction, jobsOf } from './jobs'
@@ -43,9 +44,10 @@ function action(name: string, a: Record<string, unknown>): Response {
   const jobs = jobsAction(name, a); if (jobs) return jobs.ok ? ok(jobs.result) : json({ ok: false, error: jobs.error })
   const s1 = s1Action(name, a); if (s1) return s1
   const small = smallAction(name, a); if (small) return small
+  const life = lifecycleAction(name, a); if (life) return life
   switch (name) {
     case 'whoami': return ok({ sub: ME.sub, email: ME.email, groups: ['trace-admins'], class: ME.class })
-    case 'projects': return ok(PROJECTS)
+    case 'projects': return ok(withLifecycle(PROJECTS))
     case 'inbox': return ok(inbox)
     case 'journey.get': return JOURNEYS[repo] ? ok({ ...JOURNEYS[repo], jobs: jobsOf(repo), handoffs: handoffsOf(repo) }) : json({ ok: false, error: 'no access' }, 403)
     case 'project.update': {

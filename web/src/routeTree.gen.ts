@@ -27,6 +27,7 @@ import { Route as AppAdminIndexRouteImport } from './routes/_app/admin/index'
 import { Route as AppAdminInstallationRouteImport } from './routes/_app/admin/installation'
 import { Route as AppAdminPeopleRouteImport } from './routes/_app/admin/people'
 import { Route as AppAdminPromptsRouteImport } from './routes/_app/admin/prompts'
+import { Route as AppAdminRetiredRouteImport } from './routes/_app/admin/retired'
 import { Route as AppAdminUsageRouteImport } from './routes/_app/admin/usage'
 import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents/index'
 import { Route as AppAgentsAgentRouteImport } from './routes/_app/agents/$agent'
@@ -151,6 +152,11 @@ const AppAdminPeopleRoute = AppAdminPeopleRouteImport.update({
 const AppAdminPromptsRoute = AppAdminPromptsRouteImport.update({
   id: '/prompts',
   path: '/prompts',
+  getParentRoute: () => AppAdminRoute,
+} as any)
+const AppAdminRetiredRoute = AppAdminRetiredRouteImport.update({
+  id: '/retired',
+  path: '/retired',
   getParentRoute: () => AppAdminRoute,
 } as any)
 const AppAdminUsageRoute = AppAdminUsageRouteImport.update({
@@ -355,6 +361,7 @@ export interface FileRoutesByFullPath {
   '/admin/installation': typeof AppAdminInstallationRoute
   '/admin/people': typeof AppAdminPeopleRoute
   '/admin/prompts': typeof AppAdminPromptsRoute
+  '/admin/retired': typeof AppAdminRetiredRoute
   '/admin/usage': typeof AppAdminUsageRoute
   '/agents/$agent': typeof AppAgentsAgentRoute
   '/knowledge/$tab': typeof AppKnowledgeTabRoute
@@ -408,6 +415,7 @@ export interface FileRoutesByTo {
   '/admin/installation': typeof AppAdminInstallationRoute
   '/admin/people': typeof AppAdminPeopleRoute
   '/admin/prompts': typeof AppAdminPromptsRoute
+  '/admin/retired': typeof AppAdminRetiredRoute
   '/admin/usage': typeof AppAdminUsageRoute
   '/agents/$agent': typeof AppAgentsAgentRoute
   '/knowledge/$tab': typeof AppKnowledgeTabRoute
@@ -464,6 +472,7 @@ export interface FileRoutesById {
   '/_app/admin/installation': typeof AppAdminInstallationRoute
   '/_app/admin/people': typeof AppAdminPeopleRoute
   '/_app/admin/prompts': typeof AppAdminPromptsRoute
+  '/_app/admin/retired': typeof AppAdminRetiredRoute
   '/_app/admin/usage': typeof AppAdminUsageRoute
   '/_app/agents/$agent': typeof AppAgentsAgentRoute
   '/_app/knowledge/$tab': typeof AppKnowledgeTabRoute
@@ -521,6 +530,7 @@ export interface FileRouteTypes {
     | '/admin/installation'
     | '/admin/people'
     | '/admin/prompts'
+    | '/admin/retired'
     | '/admin/usage'
     | '/agents/$agent'
     | '/knowledge/$tab'
@@ -574,6 +584,7 @@ export interface FileRouteTypes {
     | '/admin/installation'
     | '/admin/people'
     | '/admin/prompts'
+    | '/admin/retired'
     | '/admin/usage'
     | '/agents/$agent'
     | '/knowledge/$tab'
@@ -629,6 +640,7 @@ export interface FileRouteTypes {
     | '/_app/admin/installation'
     | '/_app/admin/people'
     | '/_app/admin/prompts'
+    | '/_app/admin/retired'
     | '/_app/admin/usage'
     | '/_app/agents/$agent'
     | '/_app/knowledge/$tab'
@@ -806,6 +818,13 @@ declare module '@tanstack/react-router' {
       path: '/prompts'
       fullPath: '/admin/prompts'
       preLoaderRoute: typeof AppAdminPromptsRouteImport
+      parentRoute: typeof AppAdminRoute
+    }
+    '/_app/admin/retired': {
+      id: '/_app/admin/retired'
+      path: '/retired'
+      fullPath: '/admin/retired'
+      preLoaderRoute: typeof AppAdminRetiredRouteImport
       parentRoute: typeof AppAdminRoute
     }
     '/_app/admin/usage': {
@@ -1074,6 +1093,7 @@ interface AppAdminRouteChildren {
   AppAdminInstallationRoute: typeof AppAdminInstallationRoute
   AppAdminPeopleRoute: typeof AppAdminPeopleRoute
   AppAdminPromptsRoute: typeof AppAdminPromptsRoute
+  AppAdminRetiredRoute: typeof AppAdminRetiredRoute
   AppAdminUsageRoute: typeof AppAdminUsageRoute
   AppAdminIndexRoute: typeof AppAdminIndexRoute
   AppAdminSystemsNameRoute: typeof AppAdminSystemsNameRoute
@@ -1084,6 +1104,7 @@ const AppAdminRouteChildren: AppAdminRouteChildren = {
   AppAdminInstallationRoute: AppAdminInstallationRoute,
   AppAdminPeopleRoute: AppAdminPeopleRoute,
   AppAdminPromptsRoute: AppAdminPromptsRoute,
+  AppAdminRetiredRoute: AppAdminRetiredRoute,
   AppAdminUsageRoute: AppAdminUsageRoute,
   AppAdminIndexRoute: AppAdminIndexRoute,
   AppAdminSystemsNameRoute: AppAdminSystemsNameRoute,

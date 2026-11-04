@@ -58,7 +58,8 @@ import { type EventWait, activeWaits, checkNow, describeWait, trackEventWait, wi
 import { DelegateCancelRequest, DelegateRequest, DelegateStatusRequest, DelegateWaitRequest, DelegationError, type Delegations, MAX_WAIT_S, defaultDelegations } from './delegation.js'
 import { type Jobs, defaultJobs } from './jobs.js'
 import { invocationHeaders, observeInvocation, sessionOf } from './observe.js'
-import { InvocationSchema, WrongProject, checkProject } from './schemas.js'
+import { InvocationSchema, WrongProject, checkProject, repositoriesOf } from './schemas.js'
+import { heldReason } from '../../core/lifecycle.js'
 import { ToolRefused, type ToolRunner } from './tool.js'
 import { MAX_WAKES_S, RelayError, type WaitRelay, WaitReportRequest, WaitWakesRequest, defaultWaitRelay } from './wait-relay.js'
 import { HandoffStartError, HandoffStartRequest, type HandoffRuntime, defaultHandoffRuntime } from './handoff.js'
@@ -101,6 +102,17 @@ export interface HandlerOptions {
   waitRelay?: WaitRelay
   /** The hand-offs of this process (default: the process's own, handoff.ts; null: none here). */
   handoffs?: HandoffRuntime | null
+  /** Why work on a project must wait (paused or retired, src/core/lifecycle.ts), or null; default heldReason. */
+  held?: (repo: string) => Promise<string | null>
+}
+
+/** The first reason one of these projects must wait, or null. */
+async function firstHeld(repos: readonly string[], held: (repo: string) => Promise<string | null>): Promise<string | null> {
+  for (const r of repos) {
+    const why = await held(r)
+    if (why) return why
+  }
+  return null
 }
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
@@ -310,6 +322,13 @@ export function handler(jobs: Jobs, o: HandlerOptions = {}): (req: IncomingMessa
             } finally {
               toolsRunning--
             }
+          }
+          // a paused or retired project starts no new work (a task already queued waits in its queue: job-index.ts)
+          const why = await firstHeld(repositoriesOf(p), o.held ?? ((r) => heldReason(r, process.env, log)))
+          if (why) {
+            log(JSON.stringify({ at: new Date().toISOString(), refused: p.kind, reason: why }))
+            outcome('rejected')
+            return send(res, 200, { accepted: false, jobId: '', reason: `Not started: ${why}.` })
           }
           // the job's span starts here, under this invocation (and its session)
           const r = jobs.startJob(p, sessionOf(req.headers))

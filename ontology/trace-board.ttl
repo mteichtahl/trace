@@ -115,6 +115,10 @@ trace:RunArtifact a owl:Class ;
     rdfs:label "Run output" ;
     rdfs:comment "A file a run kept, such as a report, a netlist or a log." .
 
+trace:RunInput a owl:Class ;
+    rdfs:label "Input of a run" ;
+    rdfs:comment "One thing a run was made from: a file of the repository, or another run's output, with its content hash when read." .
+
 trace:ProjectSetting a owl:Class ;
     rdfs:label "Project setting" ;
     rdfs:comment "One of the project's settings, by its dotted name." .
@@ -560,6 +564,24 @@ trace:unit a owl:DatatypeProperty ;
     rdfs:label "unit" ;
     rdfs:comment "The unit of a value." ;
     rdfs:range xsd:string .
+
+trace:inputKind a owl:DatatypeProperty ;
+    rdfs:label "input kind" ;
+    rdfs:comment "A file of the repository, or another run's output." ;
+    rdfs:domain trace:RunInput ;
+    rdfs:range xsd:string .
+
+trace:inputOf a owl:ObjectProperty ;
+    rdfs:label "input of" ;
+    rdfs:comment "The run the input was read by." ;
+    rdfs:domain trace:RunInput ;
+    rdfs:range trace:Run .
+
+trace:fromRun a owl:ObjectProperty ;
+    rdfs:label "made by run" ;
+    rdfs:comment "The run whose output the input is." ;
+    rdfs:domain trace:RunInput ;
+    rdfs:range trace:Run .
 
 trace:settingKey a owl:DatatypeProperty ;
     rdfs:label "setting" ;

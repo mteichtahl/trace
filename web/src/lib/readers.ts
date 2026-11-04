@@ -222,6 +222,7 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
           id: String(c.id), text: String(c.text), status: (c.status === 'met' || c.status === 'waived' ? c.status : 'not_met') as 'met' | 'waived' | 'not_met',
           ...(ev ? { evidence: readEvidence(ev, repo) } : str(c.evidence_label) ? { evidence: { kind: 'record' as const, label: String(c.evidence_label) } } : {}),
           opened: Boolean(c.opened_by_you),
+          ...(str(c.stale) ? { stale: String(c.stale) } : {}),
         }
       }),
       waivers: (Array.isArray(g.waivers) ? g.waivers : []).map((id) => waiverById.get(String(id))).filter((w): w is Waiver => !!w),

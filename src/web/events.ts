@@ -33,6 +33,11 @@ const MUTATING: ReadonlyArray<readonly [string, What]> = [
   ['prompts.revert', 'prompts'],
   ['integrations.', 'integrations'],
   ['projects.create', 'projects'],
+  // pausing, resuming, retiring and restoring: every list, the project's banner and its Next items
+  ['project.pause', 'projects'],
+  ['project.resume', 'projects'],
+  ['project.retire', 'projects'],
+  ['project.restore', 'projects'],
   ['project.update', 'journey'],
   ['gate.', 'journey'],
   ['question.answer', 'journey'],

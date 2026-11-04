@@ -27,6 +27,7 @@ function mapped(): { classes: Set<string>; props: Set<string> } {
     if ('ignore' in r) return
     props.add(r.prop)
     if (('ref' in r || 'refList' in r) && r.type) classes.add(r.type)
+    if ('ref' in r && r.orLiteral) props.add(r.orLiteral)
     if ('objects' in r) obj(r.objects)
   }
   const obj = (m: FieldMap): void => {

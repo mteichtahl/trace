@@ -1,6 +1,6 @@
 /**
  * Admin (docs/ui-design.md, "Admin"): plain screens for admins only — People and access, Connected systems, Agent
- * instructions, Installation, Usage and cost — under one row of tabs. Anyone else gets the same "doesn't exist, or isn't shared
+ * instructions, Installation, Usage and cost, Retired projects — under one row of tabs. Anyone else gets the same "doesn't exist, or isn't shared
  * with you" answer as any page they cannot see.
  */
 import { Link, Outlet, createFileRoute, useRouterState } from '@tanstack/react-router'
@@ -20,6 +20,7 @@ export const ADMIN_TABS = [
   { to: '/admin/prompts', label: 'Agent instructions', line: 'Every instruction and system prompt the agents receive.' },
   { to: '/admin/installation', label: 'Installation', line: "The installation's health and optional keys." },
   { to: '/admin/usage', label: 'Usage and cost', line: 'Spend across projects this month.' },
+  { to: '/admin/retired', label: 'Retired projects', line: 'Projects hidden from everyone, which you can restore.' },
 ] as const
 
 function AdminLayout() {

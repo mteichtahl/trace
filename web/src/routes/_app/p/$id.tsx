@@ -5,22 +5,25 @@
  */
 import { useQuery } from '@tanstack/react-query'
 import { Link, Outlet, createFileRoute, useRouterState } from '@tanstack/react-router'
-import { MoreHorizontal } from 'lucide-react'
+import { Archive, MoreHorizontal, PauseCircle, Play } from 'lucide-react'
+import { useState } from 'react'
+import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useTraceContext } from '@/components/chat/context'
 import { useChanges } from '@/components/changes/changes-list'
 import { AgentSetupNotice } from '@/components/project/agent-setup'
+import { PauseDialog, PausedBanner, RetireDialog, mayPause, useLifecycle } from '@/components/project/lifecycle'
 import { SectionsSheet } from '@/components/project/sections-sheet'
 import { useCrumb } from '@/components/shell/breadcrumbs'
 import { NotShared, QueryError } from '@/components/states'
 import { ApiError, projectName, repoOf } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { initials } from '@/lib/format'
-import { q, useJourney } from '@/lib/queries'
+import { q, useCall, useJourney, useProjects } from '@/lib/queries'
 import type { Journey } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -91,7 +94,16 @@ function ProjectLayout() {
   const name = j.data?.name ?? projectName(repo)
   useCrumb('/_app/p/$id', j.data ? `${name} · ${j.data.revision}` : name)
   const current = j.data?.stages.find((s) => s.state === 'current' || s.state === 'reopened')
-  useTraceContext({ label: name, description: 'The project the person is looking at', value: { repo, name, revision: j.data?.revision ?? null, stage: current?.name ?? null } }, 'project')
+  const admin = user?.class === 'admin'
+  const part = useProjects().data?.find((p) => p.repo.toLowerCase() === repo.toLowerCase())?.part
+  const life = useLifecycle(repo)
+  const paused = !!life.data?.paused
+  const retired = !!life.data?.retired
+  const canPause = mayPause({ admin, part })
+  const [dialog, setDialog] = useState<'pause' | 'retire' | null>(null)
+  const resume = useCall('project.resume', ({ repo: r }) => [['project.lifecycle', r], ['projects'], ['journey.get', r], ['inbox']])
+  const doResume = () => resume.mutate({ repo }, { onSuccess: (r) => toast(r.summary), onError: (e) => toast.error(`Could not resume: ${e.message}`) })
+  useTraceContext({ label: name, description: 'The project the person is looking at', value: { repo, name, revision: j.data?.revision ?? null, stage: current?.name ?? null, paused, retired } }, 'project')
 
   if (j.isError) return j.error instanceof ApiError && j.error.noAccess ? <NotShared /> : <div className="p-6"><QueryError error={j.error} what="this project" onRetry={() => void j.refetch()} /></div>
 
@@ -123,9 +135,14 @@ function ProjectLayout() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem asChild><Link to="/p/$id/do/$skill" params={{ id, skill: 'change-request' }}>Raise a change</Link></DropdownMenuItem>
-              <DropdownMenuItem disabled={user?.class !== 'admin'}>Start next revision</DropdownMenuItem>
+              <DropdownMenuItem asChild disabled={paused || retired}><Link to="/p/$id/do/$skill" params={{ id, skill: 'change-request' }}>Raise a change</Link></DropdownMenuItem>
+              <DropdownMenuItem disabled={!admin || paused || retired}>Start next revision</DropdownMenuItem>
               <DropdownMenuItem>Export the record</DropdownMenuItem>
+              {(canPause || admin) && <DropdownMenuSeparator />}
+              {canPause && !retired && (paused
+                ? <DropdownMenuItem onSelect={doResume}><Play />Resume project</DropdownMenuItem>
+                : <DropdownMenuItem onSelect={() => setDialog('pause')}><PauseCircle />Pause project…</DropdownMenuItem>)}
+              {admin && !retired && <DropdownMenuItem variant="destructive" onSelect={() => setDialog('retire')}><Archive />Retire project…</DropdownMenuItem>}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -140,9 +157,15 @@ function ProjectLayout() {
             ready={ready}
             checking={checking}
             actions={
-              <Button asChild variant="outline" size="sm">
-                <Link to="/p/$id/do/$skill" params={{ id, skill: 'change-request' }}>Raise a change</Link>
-              </Button>
+              <>
+                {!paused && !retired && (
+                  <Button asChild variant="outline" size="sm">
+                    <Link to="/p/$id/do/$skill" params={{ id, skill: 'change-request' }}>Raise a change</Link>
+                  </Button>
+                )}
+                {canPause && !paused && !retired && <Button variant="outline" size="sm" onClick={() => setDialog('pause')}><PauseCircle />Pause</Button>}
+                {admin && !retired && <Button variant="outline" size="sm" className="text-destructive" onClick={() => setDialog('retire')}><Archive />Retire</Button>}
+              </>
             }
           />
         </div>
@@ -170,7 +193,10 @@ function ProjectLayout() {
         })}
         {j.data && tabs.length < all && <span className="hidden pb-2.5 pl-3 text-xs text-muted-foreground lg:inline">More tabs appear as the project reaches later stages</span>}
       </nav>
+      <PausedBanner repo={repo} part={part} className="mt-4" />
       <AgentSetupNotice repo={repo} className="mt-4" />
+      <PauseDialog repo={repo} name={name} open={dialog === 'pause'} onOpenChange={(o) => setDialog(o ? 'pause' : null)} />
+      <RetireDialog repo={repo} name={name} open={dialog === 'retire'} onOpenChange={(o) => setDialog(o ? 'retire' : null)} />
       <Outlet />
     </div>
   )
