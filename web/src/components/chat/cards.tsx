@@ -3,7 +3,7 @@
  * component taking the tool call's parameters and result; renderers.tsx registers them with CopilotKit's
  * useRenderTool / useHumanInTheLoop by tool name.
  */
-import { ChevronRight, CircleCheck, CircleX, FileText, GitBranch, Loader2, SquareTerminal, TriangleAlert, Wrench } from 'lucide-react'
+import { BookmarkPlus, ChevronRight, CircleCheck, CircleX, FileText, GitBranch, Loader2, SquareTerminal, TriangleAlert, Wrench } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { lazy, Suspense, useState, type ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
@@ -148,8 +148,10 @@ const AGENT_NAMES: Record<string, string> = { verify: 'Verification', impl: 'Imp
  * trace offers to start work: the exact request and agent, and nothing starts until the person presses Confirm (then
  * `onConfirm` calls `task` as them). Done: the run, or what happened instead.
  */
-export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readOnly, blocked }: {
+export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readOnly, blocked, refused }: {
   task: Partial<TaskRequest>
+  /** why this offer cannot be confirmed at all (it names another project than the conversation's), or null */
+  refused?: string | null
   /** why Confirm waits (the project's agent is not set up yet), or null */
   blocked?: string | null
   answer?: TaskAnswer
@@ -175,6 +177,8 @@ export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readO
         </p>
       ) : readOnly ? (
         <p className="mt-2 text-xs text-muted-foreground">Work can't be started from this conversation.</p>
+      ) : refused ? (
+        <Refused text={refused} onCancel={onCancel} />
       ) : (
         <>
           <div className="mt-3 flex gap-2">
@@ -185,6 +189,77 @@ export function TaskConfirmCard({ task, answer, onConfirm, onCancel, busy, readO
           </div>
           {blocked && <p id="task-blocked" className="mt-1.5 text-xs text-muted-foreground">{blocked}</p>}
         </>
+      )}
+    </Frame>
+  )
+}
+
+/** A confirm card's offer that cannot be confirmed: why, and Dismiss (which tells trace why). */
+function Refused({ text, onCancel }: { text: string; onCancel?: () => void }) {
+  return (
+    <>
+      <p className="mt-2 text-xs text-destructive" role="alert">{text}</p>
+      {onCancel && <button type="button" className="mt-2 rounded-md border px-3 py-1.5 text-xs" onClick={onCancel}>Dismiss</button>}
+    </>
+  )
+}
+
+// ------------------------------------------------------------------ Remember: trace asks, the person confirms
+
+export interface RememberRequest {
+  repo: string
+  text: string
+  /** personal: the person's own preference (only they and admins see it); project: a fact everyone on it shares */
+  scope: 'personal' | 'project'
+}
+
+/** What a remember card answers trace with (the remember tool's result). */
+export type RememberAnswer = { confirmed: true; recorded: boolean; reason?: string; note?: string } | { confirmed: false; reason: string }
+
+const SCOPE_WORDS: Record<RememberRequest['scope'], string> = {
+  personal: 'Your own preference: only you (and admins) see it, and the agents use it for your requests.',
+  project: 'A fact about the project: recalled in this project\'s chats, and shown to everyone on it on its Memory screen.',
+}
+
+/**
+ * trace offers to remember something: the exact words and whose they are, and nothing is saved until the person
+ * presses Confirm (then `onConfirm` calls memory.remember as them). Done: that it was recorded, and when it shows.
+ */
+export function RememberConfirmCard({ memory, answer, onConfirm, onCancel, busy, readOnly, refused }: {
+  memory: Partial<RememberRequest>
+  /** why this offer cannot be confirmed at all (another project than the conversation's, or none), or null */
+  refused?: string | null
+  answer?: RememberAnswer
+  onConfirm?: () => void
+  onCancel?: () => void
+  busy?: boolean
+  readOnly?: boolean
+}) {
+  const scope = memory.scope === 'personal' || memory.scope === 'project' ? memory.scope : null
+  return (
+    <Frame>
+      <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <BookmarkPlus className="size-3.5" aria-hidden /> trace offers to remember this{memory.repo ? ` on ${memory.repo}` : ''}
+      </p>
+      <blockquote className="whitespace-pre-wrap rounded-md border-l-2 bg-muted/40 px-3 py-2 text-xs" aria-label="What trace will remember">{memory.text ?? ''}</blockquote>
+      <p className="mt-1.5 text-xs text-muted-foreground">{scope ? SCOPE_WORDS[scope] : 'Whose it is was not said.'}</p>
+      {answer ? (
+        <p className="mt-2 text-xs text-muted-foreground" role="status">
+          {answer.confirmed
+            ? answer.recorded ? 'Remembered. It shows in Memory in a few minutes, once it has been extracted.' : `Not remembered: ${answer.reason ?? 'it could not be recorded'}.`
+            : answer.reason === 'cancelled' ? 'You cancelled this.' : answer.reason === 'not confirmed' ? 'Not remembered: the conversation went on without it being confirmed.' : `Not remembered: ${answer.reason}.`}
+        </p>
+      ) : readOnly ? (
+        <p className="mt-2 text-xs text-muted-foreground">Nothing can be remembered from this conversation.</p>
+      ) : refused ? (
+        <Refused text={refused} onCancel={onCancel} />
+      ) : (
+        <div className="mt-3 flex gap-2">
+          <button type="button" className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-60" disabled={busy || !memory.repo || !memory.text?.trim() || !scope} onClick={onConfirm}>
+            {busy ? <Loader2 className="inline size-3 animate-spin" aria-hidden /> : null} Remember this
+          </button>
+          <button type="button" className="rounded-md border px-3 py-1.5 text-xs" disabled={busy} onClick={onCancel}>Cancel</button>
+        </div>
       )}
     </Frame>
   )

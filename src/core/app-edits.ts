@@ -18,7 +18,7 @@ import { z } from 'zod'
 import { type Backend, Conflict } from './central.js'
 import { projectSlug } from './project.js'
 
-export const EDIT_KINDS = ['setting', 'prompt', 'release', 'join', 'workflows', 'handin'] as const
+export const EDIT_KINDS = ['setting', 'prompt', 'release', 'join', 'workflows', 'handin', 'logo'] as const
 export type EditKind = (typeof EDIT_KINDS)[number]
 
 /** The folder under a project's own prefix (projects/<slug>/journey/edits): inside the journey's, one of PEOPLE_RECORDS. */
@@ -86,7 +86,7 @@ export function editStray(files: readonly { path: string; previous?: string | nu
 /** The app's words for an edit's kind: "a setting change", "a hand-in". */
 export const EDIT_WORDS: Readonly<Record<EditKind, string>> = {
   setting: 'a setting change', prompt: 'a prompt change', release: 'a release copy', join: 'joining trace',
-  workflows: 'a workflow update', handin: 'a hand-in',
+  workflows: 'a workflow update', handin: 'a hand-in', logo: 'a logo change',
 }
 
 /** The edits of the projects, in the central bucket's projects prefix (storeAt(ctx, PROJECTS_PREFIX)). */

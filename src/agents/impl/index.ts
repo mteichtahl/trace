@@ -30,7 +30,7 @@ export const impl: Specialist = {
     'render.board',
     'protocol.compat', 'protocol.check', 'protocol.diagram',
     'mech.board', 'mech.init', 'mech.settings', 'mech.build', 'mech.fit', 'mech.hand_in', 'mech.capabilities',
-    'mech.capabilities_check', 'mech.order',
+    'mech.capabilities_check', 'mech.order', 'mech.options',
   ],
   workflow: [
     'Architect: size each option\'s key circuits with the calc tools (calc_rc_timing, calc_led_resistor,'
@@ -68,14 +68,16 @@ export const impl: Specialist = {
       + ' unrouted areas, silkscreen over pads. A render is a review aid, not evidence the board works.',
     'Enclosure: when the project has no mechanical/case.json and the job asks for an enclosure, case or housing,'
       + ' mech_board first (read the assumed heights: a part at the 5 mm default needs a Height field from a person or'
-      + ' its datasheet), then mech_init (the recommended process unless the job names one, with its reason). Then'
-      + ' mech_build; with a case already there, mech_fit says whether the last build is stale before you rebuild.',
+      + ' its datasheet), then mech_options with ask: true (the designs that could work, the rest pruned with why, put'
+      + ' to a person recommended first); mech_init with the template and process the answer names (the recommended'
+      + ' one unless the job names another, with its reason). Then mech_build; with a case already there, mech_fit says'
+      + ' whether the last build is stale before you rebuild.',
     'Read every clash and gap by part: a clearance, wall or process change is mech_settings with its reason; a shape'
       + ' change (an opening moved, a boss added) is an edit to mechanical/case.py, delegated with the clash it fixes'
       + ' and the build run id; a handed-in STEP is mech_hand_in. Rebuild after every change. mech_capabilities says'
       + ' whether the process rules are stale (older than 90 days: mech_capabilities_check before relying on them).',
-    'When mech_build passes, journey_check layout.fit met with that run id as evidence; never record it met from a'
-      + ' failing or stale build. mech_order only when a person asks for the case order: it writes the order sheet, a'
+    'After each mech_build, shape_check layout.fit: its shape reads the newest build and records the criterion (met'
+      + ' when the build still stands and every problem is fixed or waived by a person); never journey_check it. mech_order only when a person asks for the case order: it writes the order sheet, a'
       + ' person uploads and pays.',
     'Changes to constraint files, RTL, placement or the routed board are delegated (DELIVERY) with the run ids and'
       + ' settings that produced the result you want kept (seed, placer, region; or the routed board artifact).',
@@ -86,7 +88,7 @@ export const impl: Specialist = {
   done: [
     'FPGA: fpga_timing on the committed settings reports closure "closed" with every clock met, worst slack and Fmax per clock with the run id;',
     'PCB: kicad_drc with zero errors and zero unconnected items (or each remaining one listed and why), length-match within tolerance for the constrained nets;',
-    'enclosure: mech_build passes (no clash, every gap at its clearance, within the process\'s rules) and layout.fit is recorded met with that run id, or each clash is listed with its part, volume and the change that would clear it;',
+    'enclosure: mech_build passes (no clash, every gap at its clearance, within the process\'s rules) and shape_check layout.fit records it met, or each clash is listed with its part, volume and the change that would clear it;',
     'utilisation and the critical paths are reported with numbers from the runs, not estimates.',
   ],
   escalate: [

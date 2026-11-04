@@ -4,14 +4,23 @@
  * read back by the ontology as the revision's renders.
  */
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, cpSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import { buildGraph } from '../../../src/ontology/graph.js'
 import { findBlender } from '../../../src/tools/render/blender.js'
-import { caseLook, dayIn, outlineBounds, projectSlug, shotName, showcase } from '../../../src/tools/render/showcase.js'
+import { caseLook, dayIn, outlineBounds, projectSlug, shotName, showcase, svgColours } from '../../../src/tools/render/showcase.js'
+
+/** A small SVG logo in the same colours as logo.png: navy block (used twice), red bar, grey band, white text. */
+const SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 256">
+  <rect x="20" y="40" width="360" height="176" rx="24" fill="#1D3557"/>
+  <path d="M30 50h20v20h-20z" style="fill:#1d3557;stroke:none"/>
+  <rect x="400" y="40" width="90" height="176" fill="rgb(230, 57, 70)"/>
+  <rect x="60" y="110" width="280" height="36" fill="#a8b0ba"/>
+  <text x="80" y="140" fill="#fff" stroke="currentColor">ACME</text>
+</svg>`
 
 const ROOT = join(import.meta.dirname, '..', '..', '..')
 const FIX = join(ROOT, 'test', 'fixtures', 'showcase')
@@ -19,7 +28,7 @@ const PCB = 'hardware/trace-sample.kicad_pro'
 const run = (a: Record<string, unknown>) => showcase.run(showcase.input.parse(a) as never, { hardware: false, via: 'test' }) as Promise<Record<string, unknown>>
 
 /** The sample project in a fresh repository, with its case and logo when asked. */
-function sample(o: { case?: boolean; logo?: boolean } = {}): string {
+function sample(o: { case?: boolean; logo?: boolean | 'svg' } = {}): string {
   const dir = mkdtempSync(join(tmpdir(), 'trace-showcase-'))
   cpSync(join(ROOT, 'templates', 'sample', 'hardware'), join(dir, 'hardware'), { recursive: true })
   mkdirSync(join(dir, '.git'))
@@ -30,8 +39,9 @@ function sample(o: { case?: boolean; logo?: boolean } = {}): string {
     copyFileSync(join(ROOT, 'test', 'fixtures', 'case-build', 'good', 'case.json'), join(dir, 'mechanical', 'case.json'))
   }
   if (o.logo) {
-    mkdirSync(join(dir, '.trace', 'brand'), { recursive: true })
-    copyFileSync(join(FIX, 'logo.png'), join(dir, '.trace', 'brand', 'logo.png'))
+    mkdirSync(join(dir, 'docs', 'design'), { recursive: true })
+    if (o.logo === 'svg') writeFileSync(join(dir, 'docs', 'design', 'logo.svg'), SVG)
+    else copyFileSync(join(FIX, 'logo.png'), join(dir, 'docs', 'design', 'logo.png'))
   }
   return dir
 }
@@ -63,6 +73,11 @@ describe('names, days and looks', () => {
     expect(caseLook({ service: 'jlccnc', process: 'CNC', material: '6061' })).toBe('aluminium')
   })
 
+  it('reads an SVG logo\'s colours from its fills and strokes, most used first', () => {
+    expect(svgColours(SVG)).toEqual([{ hex: '#1d3557', uses: 2 }, { hex: '#a8b0ba', uses: 1 }, { hex: '#e63946', uses: 1 }, { hex: '#ffffff', uses: 1 }])
+    expect(svgColours('<svg><rect fill="none" stroke="url(#g)"/></svg>')).toEqual([])
+  })
+
   it('puts the outline in the case frame (y flipped)', () => {
     expect(outlineBounds([[100, 100], [160, 100], [160, 140], [100, 140]])).toEqual([100, -140, 160, -100])
   })
@@ -90,7 +105,7 @@ describe.skipIf(!works)('with Blender', () => {
     expect(pal.source).toBe('logo')
     expect(pal.base).toBe('#1d3557')
     expect(pal.accent).toBe('#e63946')
-    expect((pal.logo as Record<string, unknown>).path).toBe('.trace/brand/logo.png')
+    expect((pal.logo as Record<string, unknown>).path).toBe('docs/design/logo.png')
     expect(r.case).toEqual({ look: 'nylon' })
     // the run record (test/setup.ts points every test's at TRACE_PROJECT_DB), with this run alone in the graph
     const db = new DatabaseSync(process.env.TRACE_PROJECT_DB as string)
@@ -100,7 +115,13 @@ describe.skipIf(!works)('with Blender', () => {
     const T = 'https://trace-eda.com/ns/trace#'
     expect(store.getSubjects('http://www.w3.org/1999/02/22-rdf-syntax-ns#type', `${T}Render`)).toHaveLength(2)
     const inputs = db.prepare('SELECT ref FROM run_inputs WHERE run_id=? ORDER BY ord').all(String(r.run_id)).map((x) => (x as { ref: string }).ref)
-    expect(inputs).toEqual(['hardware/trace-sample.kicad_pcb', 'mechanical/out/case-base.stl', 'mechanical/out/case-lid.stl', '.trace/brand/logo.png'])
+    expect(inputs).toEqual(['hardware/trace-sample.kicad_pcb', 'mechanical/out/case-base.stl', 'mechanical/out/case-lid.stl', 'docs/design/logo.png'])
+  }, 600_000)
+
+  it('takes the colours of an SVG logo from the colours it paints with', async () => {
+    process.chdir(sample({ logo: 'svg' }))
+    const r = await run({ revision: 'A', date: '2026-11-05', project: PCB, board_model: 'board.glb', quality: 'draft', width: 160, height: 100, samples: 4, device: 'cpu', shots: ['board'] })
+    expect(r.palette).toMatchObject({ source: 'logo', base: '#1d3557', accent: '#e63946', logo: { path: 'docs/design/logo.svg' } })
   }, 600_000)
 
   it('makes board shots only, in neutral colours, for a project with no case and no logo', async () => {

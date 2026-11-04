@@ -30,6 +30,13 @@ export function knowledgeAction(name: string, a: Record<string, unknown>): unkno
       const list = (memories[repo] ?? []).filter((m) => m.active).map((m) => ({ ...m, score: Math.round(score(q, m.text) * 100) / 100 })).filter((m) => m.score > 0.05).sort((x, y) => y.score - x.score)
       return { repo, enabled: !!memories[repo], records: list.slice(0, Number(a.top_k ?? 10)) }
     }
+    case 'memory.remember': {
+      // recorded now; in the real thing the record is extracted a few minutes later (here at once, as the chat's)
+      const list = (memories[repo] ??= [])
+      const scope = a.scope === 'personal' ? 'personal' : 'project'
+      list.unshift({ id: `mem-r${list.length + 1}`, strategy: scope === 'personal' ? 'preferences' : 'facts', actor: scope === 'personal' ? 'person/h-marc' : 'chat', text: String(a.text), created_at: new Date().toISOString(), active: true })
+      return { repo, recorded: true, scope, actor: scope === 'personal' ? 'you' : 'chat', session: a.thread ? `chat-${String(a.thread)}` : 'remember-today', note: 'Recorded. AgentCore extracts long-term memory from it asynchronously: it shows in Memory, and in recall, a few minutes from now.' }
+    }
     case 'memory.deactivate': {
       const m = memories[repo]?.find((x) => x.id === a.recordId)
       if (!m) return { __error: 'no access' }

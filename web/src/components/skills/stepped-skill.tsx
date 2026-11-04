@@ -88,7 +88,7 @@ export function SteppedSkill({ repo, def }: { repo: string; def: SkillDef }) {
               const done = it.status !== 'open' || s.draft.data.resolved.includes(it.id)
               return (
                 <li key={it.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
-                  <StatusBadge status={it.status === 'waived' ? 'waived' : done ? 'done' : 'yours'} label={it.status === 'waived' ? undefined : done ? 'Resolved' : 'Open'} />
+                  <StatusBadge status={it.status === 'waived' ? 'waived' : done ? 'done' : 'yours'} label={it.label ?? (it.status === 'waived' ? undefined : done ? 'Resolved' : 'Open')} />
                   <span className={cn('min-w-0 flex-1 text-sm', done && 'text-muted-foreground')}>{it.title}{it.detail && <span className="block text-xs text-muted-foreground">{it.detail}</span>}</span>
                   {it.evidence && <EvidenceChip evidence={it.evidence} />}
                   {it.status === 'open' && (

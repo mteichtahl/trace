@@ -35,6 +35,12 @@
  *   memory.recall read                  the records most relevant to a query, the same scope
  *                                       (both leave out inactive records; memory.list includeInactive shows them,
  *                                       each with active: false, its reason, who and when)
+ *   memory.remember write               record something the person asked trace to remember, as a short-term event
+ *                                       that AgentCore extracts long-term records from a few minutes later: a
+ *                                       preference of theirs (scope personal: their own person actor, the hash of
+ *                                       their sub) or a fact about the project (scope project: the chat actor). Who
+ *                                       asked is always the signed-in caller, never an argument. A guest (read only)
+ *                                       is refused. The chat offers it only behind the person's Confirm (src/web/agui.ts)
  *   memory.deactivate  write, or read   mark one record inactive (recordId, reason): no agent considers it again.
  *                      for your own     The record is first found in this project's memory, under its prefix, and
  *                      person records   one you may see; any other id gets the same "no access". A guest may mark
@@ -140,7 +146,10 @@ import {
 import { leaves, readSettings, resolve, setValue, unset } from '../core/config.js'
 import { IntegrationNameSchema, type IntegrationStore, checkIntegration, valuesFor } from '../core/integrations.js'
 import { type AnyTool, Registry, ToolError } from '../core/registry.js'
-import { AGENTS, type Actor, AgentName, type MemoryRecord, STRATEGIES, type SessionView, actorIn, agentActor, parseActor, projectId, projectPrefix, within } from '../agents/runtime/memory.js'
+import {
+  AGENTS, type Actor, AgentName, type MemoryRecord, STRATEGIES, type SessionView, actorIn, agentActor, chatActor, chatSession, parseActor, personActor, projectId, projectPrefix,
+  sessionIdFor, within,
+} from '../agents/runtime/memory.js'
 import { type InactiveMark, ReasonSchema, RecordIdSchema, memoryState } from '../agents/runtime/memory-state.js'
 import { TASK_AGENTS } from '../agents/runtime/schemas.js'
 import { API_HIDDEN_TOOLS, ToolRefused, apiTool, checkPaths } from '../agents/runtime/tool.js'
@@ -156,10 +165,12 @@ import { FilterSchema, searchKb } from '../tools/kb/search.js'
 import {
   type Action, ActionError, type Context, type JobView, type JobsApi, MAX_ARTIFACT, type Need, NO_ACCESS, PROJECT_DB_PATH, Repo, def, hashOf, hashesOf, label, memoryInclude, projectMemory, slugify, TaskBranch, toolNeed, tempDb, withProjectDb,
 } from './action-kit.js'
-import { CHAT_ACTIONS } from './actions-chats.js'
+import { CHAT_ACTIONS, author as chatAuthor, limited, store as chatStore } from './actions-chats.js'
+import { ThreadId, isAuthor } from '../core/chats.js'
 import { DESIGN_ACTIONS } from './actions-design.js'
 import { FILE_ACTIONS } from './actions-files.js'
 import { HANDIN_ACTIONS } from './actions-handin.js'
+import { LOGO_ACTIONS } from './actions-logo.js'
 import { GRAPH_ACTIONS } from './actions-graph.js'
 import { JOURNEY_ACTIONS } from './actions-journey.js'
 import { JOB_ACTIONS, withControls } from './actions-jobs.js'
@@ -197,7 +208,8 @@ export {
 export { WRITE_TOOLS } from './action-kit.js'
 
 /** Tools scoped by the session's environment (a job's project and agent), not by the request: never through the API.
- * The API reaches memory through memory.list and memory.recall, scoped to the project the access check passed.
+ * The API reaches memory through memory.list, memory.recall and memory.events, scoped to the project the access check
+ * passed, and writes it only as memory.remember (a person's own words, as them) and the chat's recording of its turns.
  * The policy (these, hardware tools, paths inside the clone) is src/agents/runtime/tool.ts's, applied on both sides. */
 export { API_HIDDEN_TOOLS }
 
@@ -291,6 +303,30 @@ async function mayMark(ctx: Context, repo: string, ns: string): Promise<void> {
 }
 
 const MarkArgs = Repo.extend({ recordId: RecordIdSchema })
+
+/** The most one "remember this" may say. */
+export const MAX_REMEMBER_CHARS = 2000
+
+/** What the answer of memory.remember says about when it shows. */
+export const REMEMBER_NOTE = 'Recorded. AgentCore extracts long-term memory from it asynchronously: it shows in Memory, and in recall, a few minutes from now.'
+
+/** The event memory.remember records: marked as something the person asked to remember, in their own words. */
+export const rememberText = (scope: 'personal' | 'project', text: string): string =>
+  scope === 'personal'
+    ? `I asked trace to remember this preference of mine: ${text}`
+    : `I asked trace to remember this about the project: ${text}`
+
+/** The most recent messages of a thread looked at for the caller's own turn (memory.remember's `thread`). */
+const OWN_THREAD_LOOKBACK = 500
+
+/** memory.remember's thread: one on `repo` that the caller started or wrote in. Anything else is refused, the same way
+ * whether it is missing, another project's, or someone else's. */
+async function ownThread(ctx: Context, repo: string, thread: string): Promise<void> {
+  const who = chatAuthor(ctx)
+  const t = await chatStore(ctx, repo).get(thread, { limit: OWN_THREAD_LOOKBACK })
+  const yours = !!t && (isAuthor(who, t.thread.by_hash) || t.messages.some((m) => m.role === 'user' && isAuthor(who, m.by_hash)))
+  if (!yours) throw new ActionError(`There is no conversation ${thread} of yours on this project.`)
+}
 
 const MemoryArgs = Repo.extend({ agent: AgentName.optional() })
 
@@ -626,6 +662,31 @@ export const ACTIONS = {
     return { repo: a.repo, enabled: true, records: records.map((r) => recordView(r, a.repo, ctx.principal)) }
   }),
 
+  // a person's explicit "remember this": one user turn, marked as asked for, under the caller's own person actor
+  // (personal) or the project's chat actor (project). Long-term records are extracted from it asynchronously.
+  'memory.remember': def('write', Repo.extend({
+    text: z.string().trim().min(1).max(MAX_REMEMBER_CHARS),
+    scope: z.enum(['personal', 'project']).default('project'),
+    thread: ThreadId.optional(),
+  }), async (a, ctx) => {
+    // the same soft limit on writes as the chat's own (src/api/actions-chats.ts CHAT_WRITES)
+    limited(ctx)
+    const mem = projectMemory(ctx, a.repo)
+    if (!mem) throw new ActionError('memory is not enabled in this installation')
+    // the thread, when one is named: a conversation on this project that is the caller's (they started it, or wrote in
+    // it), so a remembered thing is never filed under another project's or another person's session
+    if (a.thread) await ownThread(ctx, a.repo, a.thread)
+    // whose: the signed-in caller (their sub's hash), whatever the request says
+    const actor = a.scope === 'personal' ? personActor(a.repo, ctx.principal.sub) : chatActor(a.repo)
+    const session = a.thread ? chatSession(a.thread) : sessionIdFor(`remember-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}`)
+    const turn = await mem.shortTerm.record(actor, session, 'user', rememberText(a.scope, a.text))
+    if (!turn) throw new ActionError('nothing is left to remember once secrets are removed')
+    return {
+      repo: a.repo, recorded: true, scope: a.scope, actor: a.scope === 'personal' ? 'you' : actor.name, session,
+      note: REMEMBER_NOTE,
+    }
+  }),
+
   // need 'read' here: mayMark decides between write access and a person's own records, once the record is found
   'memory.deactivate': def('read', MarkArgs.extend({ reason: ReasonSchema }), async (a, ctx) => {
     const mem = projectMemory(ctx, a.repo)
@@ -829,6 +890,7 @@ export const ACTIONS = {
   ...SKILL_ACTIONS,
   ...DESIGN_ACTIONS,
   ...HANDIN_ACTIONS,
+  ...LOGO_ACTIONS,
   ...PROMPT_ACTIONS,
   ...VOICE_ACTIONS,
   ...LAYOUT_ACTIONS,

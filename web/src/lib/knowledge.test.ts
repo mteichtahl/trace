@@ -24,6 +24,12 @@ describe('knowledge rules', () => {
     expect(agentName(m.actor)).toBe('Analog and mixed-signal')
   })
 
+  it('names the chat\'s memories "Chat", and learned in a chat', () => {
+    expect(agentName('chat')).toBe('Chat')
+    const m = readMemory({ id: 'r2', strategy: 'facts', actor: 'chat', text: 'The case is PETG.', created_at: '2026-10-01T00:00:00Z' }, 'o/r')!
+    expect(memoryRows([m], { includeOff: false, ranked: false })[0]).toMatchObject({ agent: 'Chat', learned: 'Chat' })
+  })
+
   it('lets contributors, admins and owners of a preference switch; reviewers cannot', () => {
     expect(maySwitch({ actor: 'ams' }, { admin: false, part: 'reviewer' })).toBe(false)
     expect(maySwitch({ actor: 'ams' }, { admin: false, part: 'contributor' })).toBe(true)

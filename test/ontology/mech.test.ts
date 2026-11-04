@@ -3,7 +3,8 @@
  * made by mech.build's engine with the template, and with a case script that lowers the lid 1.5 mm so parts clash) read
  * into the project's graph; the engine's records keep to the ontology and to the mechanical record shapes as they are;
  * and what a case depends on of a board: a part moved in the middle leaves the build current, an edge connector moved
- * makes it stale, saying which.
+ * makes it stale, saying which; and the layout gate's fit criterion (ontology/shapes/layout.fit.ttl) over it: met on the
+ * good build, not met on the clashing one until each problem is waived on its own, and not met on a stale build.
  */
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
@@ -19,7 +20,9 @@ import { buildGraph, checkRecords, nodeIri } from '../../src/ontology/graph.js'
 import { freshness, inputHash } from '../../src/ontology/lineage.js'
 import { ENGINE_CLASSES, ENGINE_PROPERTIES, INTEGER_KEYS, JSON_KEYS, addCaseRecords, latestCaseBuild } from '../../src/ontology/mech.js'
 import { RDF, XSD, readVocabulary, ONTOLOGY_DIR } from '../../src/ontology/vocab.js'
-import { turtle } from '../../src/tools/shape/tools.js'
+import { graphQuads, runShape, turtle, withWaivers } from '../../src/tools/shape/tools.js'
+import { startJourney } from '../../src/core/journey.js'
+import { applyJourneySchema } from '../../src/core/journey.js'
 import { boardFacts } from '../../src/tools/mech/board.js'
 import { caseFactHashes, caseViewHash, caseViewHashOf } from '../../src/tools/mech/case-facts.js'
 import { staleReasons } from '../../src/tools/mech/stale.js'
@@ -168,4 +171,48 @@ describe.skipIf(!shacl)('the mechanical record shapes (pySHACL)', () => {
     expect(r.conforms).toBe(false)
     expect(r.findings.map((f) => f.message).sort()).toEqual(['A joint is fixed, fastened, snap-fit, press-fit, bonded, hinged, sliding or ball.', 'The case record needs exactly one material.'])
   })
+})
+
+describe.skipIf(!shacl)('layout.fit over the newest case build (pySHACL)', () => {
+  const bridge = new Bridge(python)
+  afterAll(() => bridge.close())
+  const board = (b: Uint8Array) => (p: string): Uint8Array | null => (p === BOARD ? b : p === 'mechanical/case.json' ? null : null)
+  const files = (k: 'good' | 'clash', b: Uint8Array = new TextEncoder().encode(PCB)) => (p: string): Uint8Array | null => (p === 'mechanical/case.json' ? new TextEncoder().encode(fixture(k, 'case.json')) : board(b)(p))
+  const check = async (db: Work['db'], f?: (p: string) => Uint8Array | null) => runShape('layout.fit', await turtle(graphQuads({ journey: db, project: db }, { ...O, ...(f ? { files: f } : {}) })), (m, p) => bridge.call(m, p, z.any())) as Promise<{ conforms: boolean; findings: { focus: string | null; message: string }[] }>
+
+  it('is met on a build that fits and still stands', async () => {
+    const { db } = project('good')
+    expect(await check(db, files('good'))).toEqual({ conforms: true, findings: [] })
+  }, 60_000)
+
+  it('names each clash, gap, missing opening and failing rule by its part; each waived on its own meets it', async () => {
+    const { db } = project('clash')
+    const r = await check(db, files('clash'))
+    expect(r.conforms).toBe(false)
+    expect(r.findings).toHaveLength(9)
+    expect(r.findings.map((f) => f.message)).toContain('J2 clashes with the lid (37.74 mm³). Fix it with the case settings or the case script and build again, or waive this one problem.')
+    expect(r.findings.map((f) => f.message)).toContain('J1 to the lid: 0 mm, needs 1 mm. Fix it with the case settings or the case script and build again, or waive this one problem.')
+    expect(r.findings.find((f) => f.focus === iri('case-rule', 'lid_top'))?.message).toMatch(/^Outside the process's rules: .*waive this rule\.$/)
+    // a waiver of each one problem (a waiver of kind finding on its id) meets the criterion; one left open does not
+    const ids = r.findings.map((f) => `layout.fit@${f.focus}`)
+    expect(withWaivers('layout.fit', r.findings as never, new Set(ids)).every((f) => f.waived)).toBe(true)
+    expect(withWaivers('layout.fit', r.findings as never, new Set(ids.slice(1))).filter((f) => !f.waived).map((f) => f.focus)).toEqual([r.findings[0]!.focus])
+    expect(ids).toContain(`layout.fit@${iri('case-finding', 'clash/J2/lid')}`)
+  }, 60_000)
+
+  it('is not met when the build no longer stands, or when trace cannot tell', async () => {
+    const { db } = project('good')
+    expect((await check(db, files('good', moved('R3', 118, 112)))).conforms).toBe(true)
+    expect((await check(db, files('good', moved('J1', 103, 113)))).findings.map((f) => f.message))
+      .toEqual([`The case build is out of date: what the case depends on of ${BOARD} changed since mech.build ran. Run mech.build again.`])
+    expect((await check(db)).findings.map((f) => f.message)).toEqual(['trace could not tell whether the case build still stands: check layout.fit where the project\'s files are.'])
+  }, 60_000)
+
+  it('nothing built is not met', async () => {
+    const { db } = project('good')
+    applyJourneySchema(db)
+    startJourney(db, { template: 'board', by: 'seed', name: 'Cased' })
+    db.exec("DELETE FROM runs WHERE kind = 'mech.build'")
+    expect((await check(db, files('good'))).findings.map((f) => f.message)).toEqual(['No case is built yet: run mech.build, then check layout.fit again.'])
+  }, 60_000)
 })
