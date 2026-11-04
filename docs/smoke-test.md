@@ -30,10 +30,11 @@ Checks tagged `@phone` run again on a Pixel 7 viewport. A phone shows tables as 
 | --- | --- |
 | `shell.smoke.ts` | sign-in page, Home, Next, the working indicator, themes, search |
 | `projects.smoke.ts` | projects table (search, columns), a project's stage strip, a new project's first step |
-| `chat.smoke.ts` | Ask trace: send, reply, up-arrow recall, conversations, read-aloud and dictation controls |
-| `project.smoke.ts` | traceability highlight, block diagram, sheets, pin plan, 3D board and underside, decisions timeline, evidence and a run, file viewer, settings, cost, memory |
-| `changes.smoke.ts` | review a change in the app, its files, accepting it, a gate locked while work is pending |
-| `admin.smoke.ts` | people, connected systems, agent instructions, installation, usage, operations, agents and tools, knowledge and its graph, voice preferences |
+| `chat.smoke.ts` | Ask trace: send, reply, up-arrow recall, conversations, read-aloud and dictation controls, a remember card kept only on Confirm |
+| `project.smoke.ts` | traceability highlight, block diagram, sheets, pin plan, decisions timeline, evidence and a run, file viewer, settings and the project logo's sample cover, cost, memory |
+| `board3d.smoke.ts` | the 3D board and its underside (desktop and phone), the Case tab: whether the board fits, its problems on the board and listed. Run one at a time (the `3d` project) |
+| `changes.smoke.ts` | review a change in the app, its files, accepting it, a gate locked while work is pending, a shape's findings under its criterion (each waivable), signing off a criterion an admin added |
+| `admin.smoke.ts` | people, connected systems, agent instructions, project templates (edit a stage, discard), installation, usage, operations, agents and tools, knowledge, its graph and a project's replay, voice preferences |
 | `outside.smoke.ts` | external API, remote MCP, `tracectl`, web push (live only; each skips with its reason when not set up) |
 
 Checks that change data (a new project, accepting a change) run against the mock always, and against a live
@@ -83,3 +84,4 @@ system turn on the external API and MCP checks. A later installer run keeps them
 | 2026-11-04 | Mock: Evidence → a run | The runs list (admin fixtures) and the single-run lookup (s1 fixtures) disagreed, so a listed run sometimes showed "Could not load this run" | fixed in the mock |
 | 2026-11-04 | Ask trace, desktop and phone | A message sent soon after the panel opened vanished: the panel reopened the last conversation from a lookup started on open, and when that answered late (a loaded machine) it switched away from the new conversation the message had just made; a message sent while a stored conversation was still loading was overwritten when it landed. Intermittent in CI | fixed: the panel shows the conversation only once it knows which one, never switches away from one started meanwhile, and holds sending (not typing) until a conversation has loaded; the check starts a conversation of its own and waits for the panel to be ready rather than for the network to go quiet |
 | 2026-11-04 | 3D board, desktop | Building the board in 3D took over 30 s with software rendering on a loaded test machine | check allows 90 s |
+| 2026-11-05 | 3D board, desktop | With the Case tab's check added, two 3D boards rendered at once on a runner without a GPU, and the Turn over click timed out (each passes alone) | the 3D checks run one at a time (`board3d.smoke.ts`, the `3d` project) |
