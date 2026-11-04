@@ -113,6 +113,8 @@ export interface Actions {
   'push.subscribe': { args: { subscription: PushSubscriptionJSON; tz?: string | null; label?: string | null }; result: { subscribed: boolean; devices: number } }
   'push.unsubscribe': { args: { endpoint: string }; result: { removed: boolean } }
   'push.devices': { args: Record<string, never>; result: { devices: { endpoint: string; label: string | null; tz: string | null; since: string }[] } }
+  /** the project's record played back for the graph view's player (src/api/actions-replay.ts) */
+  'journey.replay': { args: Repo & { after?: string; limit?: number }; result: import('./replay').ReplayPage }
   'graph.neighbourhood': { args: Repo & { focus: string; depth?: 1 | 2 | 3; memory?: boolean }; result: { focus: string; nodes: unknown[]; links: unknown[]; groups: unknown[]; truncated: boolean } }
   'files.list': { args: Repo; result: import('@/components/files/data').ListedFile[] }
   'files.url': { args: Repo & { path: string; commit?: string }; result: { url: string; mime?: string | null; size?: number } }
