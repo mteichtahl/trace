@@ -1,0 +1,84 @@
+# A project template as an admin saves it (src/core/template-store.ts; docs/ontology.md "Where templates live"): its
+# shape is checked on save, so a template that is saved can always start a journey. Over the template's graph
+# (src/ontology/template-graph.ts): it starts at Define, no stage is listed twice, every gate of a stage has at least one
+# criterion, and every criterion has its words, an owner (a person or trace) and the evidence that meets it.
+# src/core/templates.ts templateProblems holds the catalog's own rules (which gates a stage has, which criteria trace
+# checks) before this runs.
+#
+# Each finding names the stage, gate or criterion and says what to do, in plain words (no acronyms).
+
+@prefix trace: <https://trace-eda.com/ns/trace#> .
+@prefix tsh:   <https://trace-eda.com/ns/trace/shapes#> .
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+
+tsh: a owl:Ontology ;
+    rdfs:label "trace shapes" ;
+    sh:declare [ sh:prefix "trace" ; sh:namespace "https://trace-eda.com/ns/trace#"^^xsd:anyURI ] .
+
+tsh:JourneyTemplateShape a sh:NodeShape ;
+    rdfs:label "A template that can start a journey" ;
+    rdfs:comment "Checked when an admin saves a template." ;
+    sh:targetClass trace:JourneyTemplate ;
+    sh:property [
+        sh:path trace:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ;
+        sh:message "The template needs a name." ;
+    ] , [
+        sh:path trace:hasStage ; sh:minCount 2 ;
+        sh:message "The template needs Define and at least one stage after it." ;
+    ] ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "The template must start at Define." ;
+        sh:select """
+            SELECT $this WHERE {
+                FILTER NOT EXISTS {
+                    $this trace:hasStage ?first . ?first trace:stageKind "define" ; trace:order ?o .
+                    FILTER NOT EXISTS { $this trace:hasStage ?other . ?other trace:order ?o2 . FILTER (?o2 < ?o) }
+                }
+            }
+        """ ;
+    ] , [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "The stage {?kind} is listed twice: keep one." ;
+        sh:select """
+            SELECT DISTINCT $this ?kind WHERE {
+                $this trace:hasStage ?a , ?b . ?a trace:stageKind ?kind . ?b trace:stageKind ?kind . FILTER (?a != ?b)
+            }
+        """ ;
+    ] .
+
+tsh:TemplateGateShape a sh:NodeShape ;
+    rdfs:label "Every gate of a template has a criterion" ;
+    rdfs:comment "Checked when an admin saves a template." ;
+    sh:targetClass trace:Gate ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "The {?gate} gate has no criteria: keep or add at least one." ;
+        sh:select """
+            SELECT $this ?gate WHERE {
+                $this trace:name ?gate .
+                FILTER NOT EXISTS { ?c trace:ofGate $this }
+            }
+        """ ;
+    ] .
+
+tsh:TemplateCriterionShape a sh:NodeShape ;
+    rdfs:label "Every criterion of a template is complete" ;
+    rdfs:comment "Checked when an admin saves a template." ;
+    sh:targetClass trace:Criterion ;
+    sh:property [
+        sh:path trace:text ; sh:minCount 1 ; sh:maxCount 1 ; sh:minLength 3 ; sh:maxLength 300 ;
+        sh:message "A criterion needs its words, between 3 and 300 characters." ;
+    ] , [
+        sh:path trace:ownedBy ; sh:minCount 1 ; sh:in ( "person" "trace" ) ;
+        sh:message "A criterion is decided by a person or by trace." ;
+    ] , [
+        sh:path trace:evidenceLabel ; sh:minCount 1 ; sh:minLength 3 ;
+        sh:message "A criterion needs the evidence that meets it." ;
+    ] .

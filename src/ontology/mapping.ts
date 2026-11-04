@@ -104,6 +104,15 @@ export const TABLES: readonly TableMap[] = [
     },
   },
   {
+    // the template definition the journey started from: the node the journey's fromTemplate names
+    db: 'journey', table: 'journey_template', class: 'JourneyTemplate', kind: 'template', key: 'template',
+    columns: {
+      id: ID('always "current": one per journey'), template: ID('the template\'s id: it names the node'), version: { prop: 'versionNumber', as: 'int' },
+      doc: { ignore: 'the definition as JSON: the journey\'s own stages, gates and criteria were made from it, and are mapped' },
+      at: { prop: 'recordedAt', as: 'time' }, by: { prop: 'recordedBy' },
+    },
+  },
+  {
     db: 'journey', table: 'stages', class: 'Stage', kind: 'stage', key: 'id', link: ['journey', 'current', 'hasStage'],
     columns: {
       id: { prop: 'stageKind' }, ord: { prop: 'order', as: 'decimal' }, revision: { prop: 'inRevision', ...revision },

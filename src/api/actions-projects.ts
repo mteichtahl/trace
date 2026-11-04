@@ -38,6 +38,7 @@
  * runtime's image is the agents' image, which has git. Without it, step 1 fails with "install git" and nothing else
  * is changed.
  */
+import { TemplateStore } from '../core/template-store.js'
 import { z } from 'zod'
 import { GROUPS, PARTS, type Part, PartRefused, type PersonClass, RepoSlug, assign, classOf, isAdmin, membersOf, setClass } from '../core/access.js'
 import { Conflict } from '../core/central.js'
@@ -463,15 +464,18 @@ export const PROJECT_ACTIONS = {
     let journey: unknown = null
     try {
       forgetNoJourney(repo)
+      // the installation's definition of the template, as its admins keep it (src/core/template-store.ts): the
+      // journey keeps this version, whatever is saved later
+      const definition = await new TemplateStore().definition(a.template)
       const r = await writeJourney(ctx, repo, (db) => {
         const rec = startJourney(db, {
           template: a.template, later: a.later, start: a.start, name: a.name, description: a.description ?? null, icon: a.icon ?? null,
-          build: a.build ?? {}, by: label(ctx.principal),
+          build: a.build ?? {}, by: label(ctx.principal), definition,
         })
         return { result: { view: journeyView(rec, { hash: hashOf(ctx.principal), label: label(ctx.principal), admin: true, part: 'contributor' }) } }
       })
       journey = r.view
-      step('journey', 'Start the journey', 'done', `Started from the ${TEMPLATE_NAMES[a.template]} template at ${r.view.stages[0]?.name ?? 'the first stage'}.`)
+      step('journey', 'Start the journey', 'done', `Started from the ${TEMPLATE_NAMES[a.template]} template${definition.version ? ` (version ${definition.version})` : ''} at ${r.view.stages[0]?.name ?? 'the first stage'}.`)
     } catch (e) {
       const already = e instanceof Error && /already has a journey/.test(e.message)
       step('journey', 'Start the journey', already ? 'skipped' : 'failed', message(e))

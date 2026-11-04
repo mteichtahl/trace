@@ -13,6 +13,7 @@ build plan. trace's SQLite tables stay the record; the ontology is how they are 
 | `si2/terms.txt` | The terms Si2 defines at the pinned commit, which every alignment is checked against |
 | `context.jsonld` | The JSON-LD context, written from the ontology by `scripts/ontology-context.mjs` |
 | `shapes/<criterion>.ttl` | The SHACL shape behind a gate criterion trace owns, each naming its criterion (`tsh:criterion`) |
+| `shapes/templates/journey-template.ttl` | The shape a project template keeps to, checked when an admin saves it (`templates.save`) |
 
 The mechanical module comes in a later phase.
 
@@ -38,6 +39,9 @@ The mechanical module comes in a later phase.
 - `src/ontology/jsonld.ts` gives the JSON-LD context and one record as JSON-LD.
 - `src/ontology/derived.ts` adds, for the shapes only, the facts no column stores (a requirement still live, the
   architecture option the design goes ahead with), worked out by the same code the app shows them with.
+- Project templates (`src/core/templates.ts`, `src/core/template-store.ts`) are the installation's, seeded from the
+  code's catalog (`src/core/journey-catalog.ts`); `src/ontology/template-graph.ts` gives one as a graph for its shape.
+  A journey keeps the definition it started from (`journey_template`, mapped to its `JourneyTemplate` node).
 - `shape.check` (`src/tools/shape/tools.ts`) runs a criterion's shape over the project's graph with pySHACL on the
   Python bridge (`python/tracebridge/shapes.py`) and records the result as that criterion's check: met with the run as
   evidence, or not met with each finding. A finding's message names the thing and what to do, in plain words.

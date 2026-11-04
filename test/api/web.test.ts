@@ -12,6 +12,8 @@ import { bucketStore, journeyStore } from '../../src/api/action-kit.js'
 import { kindOf } from '../../src/api/actions-files.js'
 import { neighbourhood, type GraphLink, type GraphNode } from '../../src/api/actions-graph.js'
 import { listen } from '../../src/api/server.js'
+import { templateChecks } from '../../src/api/actions-templates.js'
+import type { TemplateDoc } from '../../src/core/templates.js'
 import { AccessDenied, assign, standing } from '../../src/core/access.js'
 import { backendFor } from '../../src/core/central.js'
 import { AgentFactsStore, addAgentQuestion, addCriterionCheck, addStuck, loadAgentFacts } from '../../src/core/agent-facts.js'
@@ -31,7 +33,7 @@ const REVIEWER = { sub: 'w-rev', email: 'w-rev@example.com', groups: ['trace-use
 const GUEST = { sub: 'w-guest', email: 'w-guest@example.com', groups: ['trace-guests'] }
 const OUTSIDER = { sub: 'w-out', email: 'w-out@example.com', groups: ['trace-users'] }
 
-const github = new FakeGitHub(['acme/web', 'acme/other', 'acme/secret', 'acme/fresh', 'acme/ident'])
+const github = new FakeGitHub(['acme/web', 'acme/other', 'acme/secret', 'acme/fresh', 'acme/ident', 'acme/houserules'])
 const cognito = new FakeCognito()
 const scratch = mkdtempSync(join(tmpdir(), 'trace-web-'))
 const bucket = mkdtempSync(join(tmpdir(), 'trace-bucket-'))
@@ -619,6 +621,33 @@ describe('projects.create', () => {
     // safe to send again: the journey is kept, not restarted
     const again = await run(ADMIN, 'projects.create', { repo: 'acme/fresh', name: 'Fresh board', template: 'board' }) as { steps: { id: string; state: string; detail: string }[] }
     expect(again.steps.find((s) => s.id === 'journey')).toMatchObject({ state: 'skipped', detail: expect.stringMatching(/already has a journey/) })
+  })
+
+  it('starts a project from the installation\'s template as its admins saved it, and keeps that version', async () => {
+    const was = templateChecks.shape
+    templateChecks.shape = async () => []
+    try {
+      await expect(run(USER, 'templates.get', { template: 'firmware' })).rejects.toThrow(AccessDenied)
+      expect((await run(USER, 'templates.list') as { templates: { id: string; version: number }[] }).templates.map((t) => t.id)).toEqual(['board', 'fpga', 'firmware', 'mixed'])
+      const got = await run(ADMIN, 'templates.get', { template: 'firmware' }) as { template: { doc: TemplateDoc }; catalog: { id: string }[]; code: TemplateDoc }
+      expect(got.catalog.map((s) => s.id)).toContain('capture')
+      const doc = structuredClone(got.template.doc)
+      doc.name = 'Firmware, house rules'
+      doc.stages[0]!.gates[0]!.criteria.push({ id: 'define.legal', text: 'Legal has read the requirements.', custom: true, evidence: 'the legal review' })
+      expect(await run(ADMIN, 'templates.check', { doc: { ...doc, stages: [] } })).toMatchObject({ ok: false })
+      await expect(run(ADMIN, 'templates.save', { doc, reason: '' })).rejects.toThrow()
+      expect(await run(ADMIN, 'templates.save', { doc, reason: 'Legal reads every requirements baseline.' })).toMatchObject({ saved: true, template: { version: 1 } })
+      const r = await run(ADMIN, 'projects.create', { repo: 'acme/houserules', name: 'House rules', template: 'firmware' }) as { steps: { id: string; detail: string }[] }
+      expect(r.steps.find((s) => s.id === 'journey')?.detail).toBe('Started from the Firmware template (version 1) at Define.')
+      // a later save does not change the journey; the added criterion is a person's to sign off
+      await run(ADMIN, 'templates.reset', { template: 'firmware', reason: 'Back to trace\'s own.' })
+      const j = await run(ADMIN, 'journey.get', { repo: 'acme/houserules' }) as { gates: { id: string; criteria: { id: string; added?: boolean }[] }[] }
+      expect(j.gates.find((g) => g.id === 'define')?.criteria.find((c) => c.id === 'define.legal')?.added).toBe(true)
+      expect(await run(ADMIN, 'criterion.confirm', { repo: 'acme/houserules', criterion: 'define.legal', note: 'Legal signed it on 3 November.' })).toMatchObject({ met: true })
+      await expect(run(ADMIN, 'criterion.confirm', { repo: 'acme/houserules', criterion: 'define.accepted', note: 'looked' })).rejects.toThrow(/guided step/)
+    } finally {
+      templateChecks.shape = was
+    }
   })
 
   it('stops the dependent steps when onboarding fails', async () => {
