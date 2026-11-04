@@ -7,7 +7,7 @@
  *                 A person's pick (checkPick: a task they asked for, not a hand-off or a delegation) is checked first:
  *                 when the request's own words or evidence point plainly to another specialist and say nothing for the
  *                 one picked, that other one takes it (source 'keyword' or 'evidence', the pick named in the reason)
- *   2. label      agent:verify / agent:impl / agent:ams / agent:emc / agent:render / agent:thermal on the issue or PR (labels.agent_*)
+ *   2. label      agent:verify / agent:impl / agent:ams / agent:emc / agent:render / agent:thermal / agent:docs on the issue or PR (labels.agent_*)
  *   3. evidence   failing check or job names and their logs, and the changed files (EVIDENCE below)
  *   4. keyword    words in the issue, PR or task text (each specialist's `keywords`)
  *   5. model      one turn, no tools, schema-constrained output (Classifier), unless agents.route_with_model is off
@@ -61,6 +61,7 @@ const CHECK_NAME_RULES: readonly Rule[] = [
   { kind: 'emc', re: /\b(emc|emi|si|openems|s ?param\w*|crosstalk|precheck|impedance)\b/i, weight: 3, what: 'EMC or signal-integrity check' },
   { kind: 'render', re: /\b(render\w*|turntable)\b/i, weight: 3, what: 'render job' },
   { kind: 'thermal', re: /\b(thermal|temperature|tj|junction|derating|heat ?sink|overheat\w*)\b/i, weight: 3, what: 'thermal check' },
+  { kind: 'docs', re: /\b(docs?|documents?|documentation|publish)\b/i, weight: 3, what: 'documents check' },
 ]
 
 /** What the failing logs say. */
@@ -89,6 +90,7 @@ const FILE_RULES: readonly Rule[] = [
   { kind: 'emc', re: /(^|\/)(emc|emi|openems|si)\//i, weight: 2, what: 'EMC or SI files' },
   { kind: 'thermal', re: /\.thermal$|(^|\/)(thermal|temperature)[^/]*\.(csv|log|txt|dat)$|(^|\/)(temp|temps|temperature)[-_]?log[^/]*$/i, weight: 3, what: 'thermal files or temperature logs' },
   { kind: 'thermal', re: /(^|\/)thermal\//i, weight: 2, what: 'thermal models or results' },
+  { kind: 'docs', re: /^docs\/design\//i, weight: 3, what: 'the project\'s documents' },
   { kind: 'thermal', re: /(^|\/)[^/]*(ldo|regulator|buck|boost|mosfet|heatsink|power[-_]?stage)[^/]*\.(kicad_sch|kicad_pcb|kicad_sym|kicad_mod)$/i, weight: 2, what: 'power-stage parts' },
 ]
 

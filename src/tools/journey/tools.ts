@@ -482,7 +482,7 @@ export const handoff = defineTool({
   name: 'journey.handoff',
   description: 'Ask another specialist for something in its area that blocks or materially changes your work, as a recorded request: it runs as a queued job of the project, answers with its evidence, and the answer is recorded for you (journey.status lists it). Give the question in plain words, the evidence (run ids, files, datasheet pages), what it blocks, your recommended answer if you have one, and acceptance (what a good answer contains). A vague request is refused with what is missing. By default you do not wait; wait_minutes waits for the answer. Not for what you can do yourself, nor for a decision only a person can make (journey.ask).',
   input: z.object({
-    to: z.enum(SPECIALIST_KINDS).describe('the specialist asked: verify, impl, ams, emc, render or thermal (never yourself)'),
+    to: z.enum(SPECIALIST_KINDS).describe('the specialist asked: verify, impl, ams, emc, render, thermal or docs (never yourself)'),
     question: z.string().max(4000).describe('the question or task, in plain words, naming the part, net, block or figure it is about'),
     evidence: z.array(Evidence).max(20).default([]).describe('what to start from: run ids, files, artifacts, datasheet pages (part, sha256, page)'),
     blocks: z.string().max(1000).default('').describe('what it blocks in your work, in words'),

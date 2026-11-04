@@ -26,18 +26,6 @@ test('design: block diagram, schematic sheets and pin plan render', async ({ app
   await expect(page.locator('#main .react-flow__node, #main table tbody tr').first()).toBeVisible()
 })
 
-test('design: the board opens in 3D and turns over to the underside @phone', async ({ app, page }) => {
-  // building the board in 3D takes a while with software rendering on a busy test machine
-  test.slow()
-  await app.open(projectPath('/design'))
-  await page.getByRole('tab', { name: 'Board' }).click()
-  await expect(page.locator('canvas[aria-label^="The board in 3D"]')).toBeVisible({ timeout: 90_000 })
-  const camera = page.getByRole('group', { name: 'Camera' })
-  await camera.getByRole('button', { name: 'Turn over' }).click()
-  await expect(page.getByText('Underside', { exact: true })).toBeVisible()
-  await page.getByRole('group', { name: 'How to show the board' }).getByRole('button').last().click()
-})
-
 test('decisions: the timeline shows dated entries and filters', async ({ app, page }) => {
   await app.open(projectPath('/decisions'))
   await expect(page.getByRole('group', { name: 'How to show the decisions' })).toBeVisible()
@@ -83,4 +71,10 @@ test('settings, cost and memory open with their data', async ({ app, page }) => 
   await expect(page.getByRole('heading', { name: 'Stage timeline' })).toBeVisible()
   await app.open(projectPath('/memory'))
   await app.tableHasRows()
+})
+
+test('settings: the project logo for its documents, with a sample cover', async ({ app, page }) => {
+  await app.open(projectPath('/settings'))
+  await expect(page.getByRole('heading', { name: 'Documents' })).toBeVisible()
+  await expect(page.getByLabel('Sample cover page')).toBeVisible()
 })

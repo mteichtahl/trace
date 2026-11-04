@@ -55,7 +55,9 @@ export const SOIL_GATES: Record<string, Partial<GateMore>> = {
       crit('c5', 'Every sheet names its requirements', 'record', 'record', 'Power, MCU, Radio and Sensor each list the requirements they serve.', true),
       crit('c4', 'Firmware pin plan matches the schematic', 'run_62de', 'run', 'Pin plan: 18 used pins agree between the schematic and the firmware configuration.', true),
       crit('c7', 'Power sheet reviewed by a person', 'record', 'record', 'Waits for the power and USB-C input change to be accepted.', false, 'not_met'),
-      crit('c3', 'All parts in stock for 10 boards', 'run_77b0', 'run', 'Runs once the power sheet is accepted.', false, 'not_met'),
+      // not met by its shape (shape.check): each thing still needed shows under it, each waivable on its own
+      { ...crit('c3', 'All parts in stock for 10 boards', 'run_77b0', 'run', 'Stock check on push 7f3e21: 29 of 31 lines in stock at LCSC.', false, 'not_met'),
+        findings: [{ id: 'stock-u3', text: 'U3 (TLV75533) has 6 in stock: 10 boards need 10.' }, { id: 'stock-j2', text: 'J2 (U.FL connector) is out of stock at LCSC.' }] },
       // an admin added this to the Board template (Admin › Project templates): a person signs it off in the gate
       { id: 'capture.safety', text: 'The battery safety review is done.', status: 'not_met', added: true },
     ],

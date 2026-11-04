@@ -24,6 +24,7 @@ import { logoPaths } from '../../docs/logo.js'
 import { PY_DIR } from '../mech/engine.js'
 import { commitOf } from '../render/model.js'
 import { figureTools } from './figures.js'
+import { scribeTools } from './scribe.js'
 
 const Kinds = z.array(z.enum(DOC_KINDS)).min(1).max(4).optional().describe('which documents (hld, lld, protocol, guide); default: every one the repository has')
 
@@ -140,4 +141,4 @@ const publish = defineTool({
   },
 })
 
-export const tools: AnyTool[] = [check, publish, ...figureTools]
+export const tools: AnyTool[] = [check, publish, ...figureTools, ...scribeTools]

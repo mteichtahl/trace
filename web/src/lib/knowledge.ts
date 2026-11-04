@@ -16,6 +16,7 @@ export const AGENTS = [
   { id: 'emc', name: 'EMC', does: 'Looks for radio interference problems in the layout and the parts.' },
   { id: 'render', name: 'Rendering', does: 'Makes pictures of the board and the product: renders, turntables and 3D models.' },
   { id: 'thermal', name: 'Thermal', does: 'Models how hot the board and its parts get, and where the heat goes.' },
+  { id: 'docs', name: 'Documentation', does: 'Writes the project\'s documents from its records and keeps them current.' },
   { id: 'worker', name: 'Worker', does: 'Makes code and file changes when a specialist asks for them.' },
 ] as const
 

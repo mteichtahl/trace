@@ -23,7 +23,7 @@
  *                                       request opened and recorded as an app edit (src/api/edits.ts; a person's
  *                                       only: `change` is its number); never the default branch
  *   task          write                 start a free-form task job (Claude, on a claude/ branch), requestedBy you;
- *                                       agent: verify, impl, ams, emc, render or thermal (a specialist), or left out to be
+ *                                       agent: verify, impl, ams, emc, render, thermal or docs (a specialist), or left out to be
  *                                       routed (src/agents/router.ts). It runs on the project's own worker
  *                                       runtime (src/api/workers.ts), never in this process: the API runs no model
  *   memory.list   read                  the agents' long-term memory of the project (facts, preferences, session

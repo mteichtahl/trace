@@ -215,7 +215,7 @@ describe('in the job runner', () => {
     expect(seen!.TRACE_MCP_TOOLS!.split(',')).toEqual(toolsOf(SPECIALISTS.thermal, { delegate: false, handoff: 'ask' }))
     expect(seen!.TRACE_MCP_TOOLS).toContain(HANDOFF_TOOL)
     expect(seen!.TRACE_MCP_TOOLS).not.toContain(HANDOFF_ANSWER_TOOL)
-    expect(seen).toMatchObject({ TRACE_HANDOFF_URL: 'http://127.0.0.1:8080', TRACE_HANDOFF_ENABLED: 'verify,impl,ams,emc,render,thermal', TRACE_HANDOFF_LIMITS: '2,10' })
+    expect(seen).toMatchObject({ TRACE_HANDOFF_URL: 'http://127.0.0.1:8080', TRACE_HANDOFF_ENABLED: 'verify,impl,ams,emc,render,thermal,docs', TRACE_HANDOFF_LIMITS: '2,10' })
     expect(seen!.TRACE_HANDOFF_TOKEN).toMatch(/^[0-9a-f]{64}$/)
     expect(options.env.TRACE_HANDOFF_TOKEN).toBeUndefined()
     expect(prompt).toMatch(/ASKING ANOTHER SPECIALIST[\s\S]*- ams: the Analog and mixed-signal specialist/)
