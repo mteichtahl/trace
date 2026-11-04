@@ -110,6 +110,32 @@ jobs:
       - run: pip install -q -e 'python[dev]'
       - run: python -m pytest -q python/tests
 
+  # The screen smoke test, Tier 1 (docs/smoke-test.md): every screen of the web app in mock mode loads, shows its data
+  # and does one thing, on a desktop and a phone. Not yet among the jobs "tests pass" waits for: it becomes required
+  # once it has run green for a while (one known intermittent failure is open, docs/smoke-test.md "Findings").
+  smoke:
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","smoke"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "22", cache: npm }
+      - run: npm ci --prefix web --no-audit --no-fund
+      - name: Chromium for the smoke test
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - run: npm --prefix web run smoke:typecheck
+      - name: Screen smoke test (mock)
+        run: npm --prefix web run smoke
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: smoke-report
+          path: |
+            web/smoke-report
+            web/test-results/smoke
+          retention-days: 14
+
   tests-pass:
     name: tests pass
     if: always()
@@ -156,3 +182,43 @@ jobs:
           TRACE_STACK: ${{ vars.TRACE_STACK }}
           TRACE_AWS_REGION: ${{ vars.TRACE_AWS_REGION }}
         run: node dist/bin.js update-installation
+
+  # The screen smoke test against the installation just updated, signed in as the smoke user (docs/smoke-test.md
+  # "Live runs"). Runs only once an admin has set TRACE_SMOKE_SECRET: the name of a Secrets Manager secret holding the
+  # smoke user's sign-in, which the update role may read.
+  smoke-live:
+    needs: update-installation
+    if: vars.TRACE_SMOKE_SECRET != ''
+    runs-on: ${{ vars.TRACE_CODEBUILD_PROJECT && fromJSON(format('["codebuild-{0}-{1}-{2}","smoke-live"]', vars.TRACE_CODEBUILD_PROJECT, github.run_id, github.run_attempt)) || 'ubuntu-24.04' }}
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: main }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "22", cache: npm }
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.TRACE_UPDATE_ROLE }}
+          aws-region: ${{ vars.TRACE_AWS_REGION }}
+          role-session-name: trace-smoke-live
+      - name: The smoke user's sign-in, from Secrets Manager
+        env:
+          SECRET: ${{ vars.TRACE_SMOKE_SECRET }}
+        run: node web/smoke/load-secret.mjs "$SECRET"
+      - run: npm ci --prefix web --no-audit --no-fund
+      - name: Chromium for the smoke test
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Screen smoke test (live)
+        run: npm --prefix web run smoke:live
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: smoke-live-report
+          path: |
+            web/smoke-report
+            web/test-results/smoke
+          retention-days: 14

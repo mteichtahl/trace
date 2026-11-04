@@ -5,3 +5,5 @@ screenshots/
 .env
 .env.*
 !.env.example
+smoke-report/
+test-results/
