@@ -295,7 +295,7 @@ async function stackFor(ctx: Context, repo: string, pull: Pick<PullDetail, 'numb
   const pulls = await openPulls(ctx, repo).catch(() => [] as PullSummary[])
   const built_on_by = stacksOf(pulls, repo, rule.defaultBranch).get(pull.number)?.built_on_by ?? []
   if (!rule.defaultBranch || pull.base.ref === rule.defaultBranch) return { built_on_by }
-  const below = pulls.find((p) => p.head === pull.base.ref && (!p.headRepo || p.headRepo.toLowerCase() === repo.toLowerCase()))
+  const below = pulls.find((p) => p.head === pull.base.ref && p.headRepo?.toLowerCase() === repo.toLowerCase())
   return { stacked: { base: pull.base.ref, on: below ? { number: below.number, title: below.title } : null }, built_on_by }
 }
 
@@ -513,7 +513,13 @@ export const CHANGE_ACTIONS = {
     // an edit made in the app: an admin who did not make it accepts it (decision A); writes once it is merged
     if (d.kind !== 'work' && !isAdmin(ctx.principal)) throw new ActionError('Only an admin can accept a change someone made in the app.')
     const gh = changesApi(await ctx.deps.github())
-    const method = mergeMethod(await gh.mergeMethods(repo).catch(() => ['squash' as const]))
+    const allowed: readonly MergeMethod[] = await gh.mergeMethods(repo).catch(() => ['squash' as const])
+    // changes stacked on it hold its commits: squashed or rebased, they would conflict with the design (docs/stacked-changes.md)
+    const above = d.built_on_by ?? []
+    if (above.length && !allowed.includes('merge')) {
+      throw new ActionError(`${above.length === 1 ? 'A change builds' : `${above.length} changes build`} on this one, so it must go in with a merge commit, and this repository does not allow merge commits. An admin can allow them in the repository's settings, then accept it.`)
+    }
+    const method = above.length ? 'merge' as const : mergeMethod(allowed)
     let sha: string
     try {
       sha = (await gh.mergePull(repo, number, { method, sha: looked })).sha

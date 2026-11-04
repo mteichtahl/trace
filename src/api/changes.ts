@@ -515,7 +515,7 @@ export function acceptance(f: ChangeFacts, write: boolean): { may_accept: boolea
 export function stackedWords(s: NonNullable<ChangeFacts['stacked']>): string {
   return s.on
     ? `It builds on "${s.on.title}" (change ${s.on.number}), which is not accepted yet. Accept that one first.`
-    : `It is built on ${s.base}, not on the design itself, so it cannot be accepted into the design. Ask for changes to rebuild it on the design, or discard it.`
+    : `It is built on ${s.base}, not on the design itself, so it cannot be accepted yet. If the change it builds on was just accepted, trace moves this one onto the design in a few minutes; if that change was discarded, discard this one too.`
 }
 
 /**
@@ -524,11 +524,12 @@ export function stackedWords(s: NonNullable<ChangeFacts['stacked']>): string {
  * in the repository itself count, so a fork's branch never stands for a trace change.
  */
 export function stacksOf(pulls: readonly Pick<PullSummary, 'number' | 'title' | 'head' | 'base' | 'headRepo'>[], repo: string, defaultBranch: string): Map<number, { stacked?: { base: string; on: StackLink | null }; built_on_by: StackLink[] }> {
-  const own = pulls.filter((p) => !p.headRepo || p.headRepo.toLowerCase() === repo.toLowerCase())
+  // a head repository GitHub no longer knows (null: a deleted fork) is not the repository's own
+  const own = pulls.filter((p) => p.headRepo?.toLowerCase() === repo.toLowerCase())
   const byHead = new Map(own.map((p) => [p.head, p]))
   const out = new Map<number, { stacked?: { base: string; on: StackLink | null }; built_on_by: StackLink[] }>()
   const at = (n: number) => { let e = out.get(n); if (!e) { e = { built_on_by: [] }; out.set(n, e) } return e }
-  for (const p of pulls) {
+  for (const p of own) {
     if (!p.base || !defaultBranch || p.base === defaultBranch) continue
     const below = byHead.get(p.base)
     at(p.number).stacked = { base: p.base, on: below ? { number: below.number, title: below.title } : null }

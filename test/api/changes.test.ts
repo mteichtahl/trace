@@ -644,6 +644,17 @@ describe('a stack of changes', () => {
     expect((detail.blockers as string[]).join()).toMatch(/Accept that one first/)
     await expect(run(USER, 'change.accept', { repo: REPO, number: 2, head_sha: sha(2) })).rejects.toThrow(/builds on "Project purpose/)
     expect(github.did.filter((d) => d.startsWith('merge'))).toEqual([])
+    // the change below goes in with a merge commit (a squash would leave #2 conflicting with the design), and never
+    // in a repository that forbids merge commits
+    // (on #4 here: the decision log is shared with the tests that count #1's)
+    github.pulls.delete(2); github.pulls.delete(4)
+    github.add(4, 'claude/task-wip', { title: 'Pin plan' })
+    github.add(2, 'claude/task-sch', { title: 'Schematic for the OLED', base: 'claude/task-wip' })
+    github.methods = ['squash']
+    await expect(run(USER, 'change.accept', { repo: REPO, number: 4, head_sha: sha(4) })).rejects.toThrow(/must go in with a merge commit/)
+    github.methods = ['merge', 'squash']
+    await run(USER, 'change.accept', { repo: REPO, number: 4, head_sha: sha(4) })
+    expect(github.did.filter((d) => d.startsWith('merge'))).toEqual([`merge 4 merge ${sha(4)}`])
   })
 })
 
