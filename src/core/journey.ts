@@ -583,7 +583,11 @@ export interface JourneyRow {
 }
 export interface StageRow { id: StageId; ord: number; revision: string; started: number | null; finished: number | null; reopenedAt: number | null; reopenedReason: string | null; reopenedBy: string | null }
 export interface GateRow { id: string; stage: StageId; ord: number; name: string; returnedAt: number | null; returnedBy: string | null; returnReason: string | null }
-export interface CriterionRow { id: string; gate: string; ord: number; text: string; owner: Owner; evidenceLabel: string | null; status: 'met' | 'not_met'; evidence: Evidence[]; checkedAt: number | null; checkedBy: string | null }
+export interface CriterionRow {
+  id: string; gate: string; ord: number; text: string; owner: Owner; evidenceLabel: string | null; status: 'met' | 'not_met'; evidence: Evidence[]; checkedAt: number | null; checkedBy: string | null
+  /** set by withStaleEvidence: the evidence it was met on is out of date, and why, in words */
+  staleBecause?: string | null
+}
 export interface SignatureRow { id: string; gate: string; revision: string; by: string; byHash: string; at: number; criteria: unknown; waivers: string[]; notes: string | null; supersededAt: number | null }
 export interface QuestionRow {
   id: string; kind: 'question' | 'stuck'; askedBy: string; askedOf: string | null; stage: StageId | null; text: string; blocks: string | null
@@ -698,6 +702,8 @@ export type GateState = 'signed' | 'ready' | 'open' | 'queued'
 export interface CriterionView {
   id: string; text: string; owner: Owner; status: CriterionState; evidence: Evidence[]; evidence_label: string | null
   waiver: string | null; opened_by_you: boolean; checked_at: string | null
+  /** met on evidence that is now out of date (withStaleEvidence): not met until trace checks it again, and why */
+  stale?: string
 }
 export interface GateView {
   id: string; stage: StageId; name: string; title: string; state: GateState; met: number; total: number
@@ -1092,9 +1098,36 @@ function criterionViews(r: JourneyRecord, gate: string, viewer: Viewer): Criteri
     return {
       id: c.id, text: c.text, owner: c.owner, status: c.status === 'met' ? 'met' : w ? 'waived' : 'not_met', evidence: c.evidence,
       evidence_label: c.evidenceLabel, waiver: w?.id ?? null, opened_by_you: opened.has(c.id), checked_at: iso(c.checkedAt),
+      ...(c.staleBecause ? { stale: c.staleBecause } : {}),
     }
   })
 }
+
+/**
+ * Evidence that has gone out of date (docs/ontology.md "How it runs": "A criterion whose evidence is now stale shows as
+ * not met until its checker runs again"). `staleRun(id)` says why a run cited as evidence no longer stands for the
+ * project (src/ontology/lineage.ts freshness), or null when it does or cannot be told. A met criterion trace owns that
+ * cites such a run reads as not met, with the reason, until a check on current evidence meets it again; the record
+ * itself is not changed. A person's criterion stays the person's call: their agreement is not undone by a file
+ * changing, and the change request flow is how they are asked again.
+ */
+export function withStaleEvidence(r: JourneyRecord, staleRun: (id: string) => string | null): JourneyRecord {
+  let changed = false
+  const criteria = r.criteria.map((c) => {
+    if (c.status !== 'met' || c.owner !== 'trace') return c
+    for (const e of c.evidence) {
+      if (e.kind !== 'run') continue
+      const why = staleRun(e.ref)
+      if (why) { changed = true; return { ...c, status: 'not_met' as const, staleBecause: `Its evidence is out of date: ${why.replace(/\.$/, '')}. trace checks it again.` } }
+    }
+    return c
+  })
+  return changed ? { ...r, criteria } : r
+}
+
+/** The criteria whose evidence is out of date, for the main screen: each with its gate and why. */
+export const staleCriteria = (r: JourneyRecord): { criterion: string; gate: string; text: string; why: string }[] =>
+  r.criteria.filter((c) => c.staleBecause).map((c) => ({ criterion: c.id, gate: c.gate, text: c.text, why: c.staleBecause as string }))
 
 const isMet = (c: CriterionView): boolean => c.status === 'met' || c.status === 'waived'
 
@@ -1631,9 +1664,9 @@ export function reviewWaitsOn(r: JourneyRecord, id: string): CriterionRow[] {
 export interface Signer { hash: string; label: string; also?: readonly string[] | undefined }
 
 /** Sign a gate (the caller has checked the signer is an admin). Moves the project on when it closes the stage. */
-export function signGate(db: DatabaseSync, id: string, signer: Signer, o: { acknowledged?: readonly string[] | undefined; notes?: string | null | undefined; facts?: AgentFacts | null | undefined; pending?: PendingChanges | null | undefined } = {}): { gate: GateView; advanced_to: StageId | null; released: boolean; summary: string } {
-  // the agents' checks of the criteria trace owns count; the signing rules are the same
-  const r = withFacts(need(db), o.facts)
+export function signGate(db: DatabaseSync, id: string, signer: Signer, o: { acknowledged?: readonly string[] | undefined; notes?: string | null | undefined; facts?: AgentFacts | null | undefined; pending?: PendingChanges | null | undefined; staleRun?: ((id: string) => string | null) | undefined } = {}): { gate: GateView; advanced_to: StageId | null; released: boolean; summary: string } {
+  // the agents' checks of the criteria trace owns count, unless their evidence is out of date; the signing rules are the same
+  const r = o.staleRun ? withStaleEvidence(withFacts(need(db), o.facts), o.staleRun) : withFacts(need(db), o.facts)
   const viewer: Viewer = { hash: signer.hash, label: signer.label, also: signer.also, admin: true, part: 'contributor' }
   const blockers = signBlockers(r, id, viewer, o.acknowledged ?? [], o.pending)
   if (blockers.length) throw new JourneyError(`The gate cannot be signed yet. ${blockers.join(' ')}`)

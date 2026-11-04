@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { Work } from '../../src/core/store.js'
 import { normalise, normalisedHash } from '../../src/core/normalise.js'
 import { fileInputs } from '../../src/tools/kicad/record.js'
-import { freshness, latestFreshness } from '../../src/ontology/lineage.js'
+import { filesRead, freshness, latestFreshness, staleRuns } from '../../src/ontology/lineage.js'
 
 let root: string
 let work: Work
@@ -116,5 +116,15 @@ describe('freshness, worked out on read', () => {
     const l = fromNetlist(n2, 3)
     put('hw/board.kicad_sch', sch('TPS7A02', 10))
     expect(latestFreshness(work.db, read).map((f) => [f.run, f.state])).toEqual([[l, 'stale'], [n2, 'stale']])
+  })
+
+  it('names every file freshness reads, through the runs an output came from, and says which runs no longer stand', () => {
+    const n = netlistRun('LM1117', 'd1', 1)
+    const l = fromNetlist(n, 2)
+    expect(filesRead(work.db, [l])).toEqual(['hw/board.kicad_sch'])
+    const files = new Map([['hw/board.kicad_sch', read('hw/board.kicad_sch')]])
+    expect(staleRuns(work.db, [l, n], files)).toEqual(new Map())
+    files.set('hw/board.kicad_sch', new TextEncoder().encode(sch('TPS7A02', 10)))
+    expect([...staleRuns(work.db, [l, n], files).keys()].sort()).toEqual([l, n].sort())
   })
 })

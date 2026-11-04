@@ -60,7 +60,7 @@ import { z } from 'zod'
 import { AccessDenied, type Principal, classOf, isAdmin, projectsFor, standing } from '../core/access.js'
 import {
   type AgentFacts, INBOX_KINDS, type InboxItem, type NextStep, type StageId, decide, type JourneyRecord, type Viewer, SEVERITIES, STAGE_IDS, WAIVER_TARGETS, answerQuestion, addWaiver, inboxItems,
-  dismissStuck, guardsFabricate, journeyView, loadJourney, mergeAgentFacts, nextStep, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withChanges, withPending,
+  dismissStuck, guardsFabricate, journeyView, loadJourney, mergeAgentFacts, nextStep, type PendingChanges, recordOpen, returnGate, signGate, sortInbox, withChanges, withPending, withStaleEvidence, staleCriteria,
 } from '../core/journey.js'
 import { gateReadyAt, stageTimes } from '../core/process-time.js'
 import { recordAnswered, recordWait } from './process-metrics.js'
@@ -70,6 +70,7 @@ import { recommendationOf } from './changes.js'
 import { AGENT_WORDS, jobIndex, listJobs, projectHandoffs } from './actions-jobs.js'
 import { editReviewItems, reviewItems } from './inbox-review.js'
 import { loadJobs } from '../core/job-index.js'
+import { evidenceStaleness } from './evidence-freshness.js'
 import { ActionError, type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, journeyStore, label, plainly, snapshotJourney, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { requirementEvidence } from './record-read.js'
 import { backToDefine, changedRequirements, pendingOf } from './pending-changes.js'
@@ -308,7 +309,11 @@ export const JOURNEY_ACTIONS = {
     // cache as changes.list (src/api/github-cache.ts), so a journey and a list together cost one look; when it cannot be reached the
     // journey is answered without them, and says so in changes_unavailable, rather than guessing
     const open = await openChanges(ctx, repo).then((x) => ({ list: x, error: null }), (e: unknown) => ({ list: [], error: e instanceof Error ? e.message : String(e) }))
-    const changed = withChanges(r, journeyView(r, viewer, undefined, facts), viewer, open.list.map(({ change: c, criteria }) => ({
+    // evidence that has gone out of date since it was checked: the criterion reads as not met until checked again
+    const merged = facts ? mergeAgentFacts(r, facts) : r
+    const staleRun = await evidenceStaleness(ctx, repo, merged)
+    const seen = staleRun ? withStaleEvidence(merged, staleRun) : null
+    const changed = withChanges(r, seen ? journeyView(seen, viewer) : journeyView(r, viewer, undefined, facts), viewer, open.list.map(({ change: c, criteria }) => ({
       number: c.number, title: c.title, from: c.from, criteria, ready: c.verdict === 'ready',
       recommendation: c.verdict === 'ready' ? `trace recommends accepting it. ${recommendationOf(c).why}` : null,
     })))
@@ -324,6 +329,7 @@ export const JOURNEY_ACTIONS = {
       repo, started: true, you: { admin: viewer.admin, part: viewer.part }, has_memory: hasMemory, ...view, next: await changedFirst(ctx, repo, r, next),
       ...(drafting ? { drafting: { state: drafting.state, job: drafting.job, why: drafting.why || null } } : {}),
       jobs: jobs.jobs, handoffs, ...(jobs.error ? { jobs_unavailable: jobs.error.slice(0, 200) } : {}),
+      ...(seen && staleCriteria(seen).length ? { stale_evidence: staleCriteria(seen) } : {}),
       ...(open.error ? { changes_unavailable: open.error.slice(0, 200) } : {}),
     }
   }),
@@ -393,12 +399,14 @@ export const JOURNEY_ACTIONS = {
       const why = open.error ?? (jobs.error ? `the jobs could not be listed: ${jobs.error}` : null) ?? (fab && changedReqs === null ? 'the requirements could not be read' : null)
       pending = pendingOf(open.list, why, fab ? (changedReqs ?? []) : [], jobs.rows)
     }
+    // a criterion met on evidence that is now out of date does not count until it is checked again
+    const staleRun = now0 ? await evidenceStaleness(ctx, a.repo, facts ? mergeAgentFacts(now0, facts) : now0) : undefined
     const { ready_at: readyAt, signed_at: signedAt, ...signed } = await journeyWrite(ctx, a.repo, (db) => {
       // when the gate became ready, from the record as it stood before the signature (its criteria and waivers)
       const before = loadJourney(db)
       const at = Date.now() / 1000
       const ready = before ? gateReadyAt(facts ? mergeAgentFacts(before, facts) : before, a.gate, at) : null
-      const r = signGate(db, a.gate, signer(ctx), { acknowledged: a.acknowledge, notes: a.notes ?? null, facts, pending })
+      const r = signGate(db, a.gate, signer(ctx), { acknowledged: a.acknowledge, notes: a.notes ?? null, facts, pending, staleRun })
       return { result: { repo: a.repo, ...r, ready_at: ready, signed_at: at } }
     })
     // saved: the wait from ready to signed (src/api/process-metrics.ts)
