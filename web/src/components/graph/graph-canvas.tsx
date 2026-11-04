@@ -170,13 +170,16 @@ export interface GraphCanvasProps {
   chain: { nodes: Set<string>; links: Set<string> } | null
   path: { nodes: Set<string>; links: Set<string> } | null
   pinned: boolean
+  /** the graph grows (the replay): new items start beside what they link to and the layout carries on from where
+   * everything is, so what was already drawn stays put */
+  grow?: boolean
   onSelect: (id: string | null) => void
   onOpenGroup: (g: GroupNode) => void
   onHover: (h: { id: string; x: number; y: number } | null) => void
   handle?: Ref<CanvasHandle>
 }
 
-export default function GraphCanvas({ graph, groups, focus, selected, chain, path, pinned, onSelect, onOpenGroup, onHover, handle }: GraphCanvasProps) {
+export default function GraphCanvas({ graph, groups, focus, selected, chain, path, pinned, grow = false, onSelect, onOpenGroup, onHover, handle }: GraphCanvasProps) {
   const box = useRef<HTMLDivElement>(null)
   const mini = useRef<HTMLCanvasElement>(null)
   const cy = useRef<Core | null>(null)
@@ -252,6 +255,24 @@ export default function GraphCanvas({ graph, groups, focus, selected, chain, pat
       c.add(els)
     })
     const known = c.nodes().filter((n) => positions.current.has(n.id()))
+    if (grow) {
+      const centre = { x: c.width() / 2, y: c.height() / 2 }
+      c.nodes().forEach((n) => {
+        const had = positions.current.get(n.id())
+        if (had) { n.position(had); return }
+        const near = n.neighborhood('node').filter((m) => positions.current.has(m.id()))
+        const at = near.length ? near.map((m) => positions.current.get(m.id())!).reduce((a, b) => ({ x: a.x + b.x / near.length, y: a.y + b.y / near.length }), { x: 0, y: 0 }) : centre
+        const a = Math.random() * Math.PI * 2
+        n.position({ x: at.x + Math.cos(a) * 60, y: at.y + Math.sin(a) * 60 })
+      })
+      const layout = c.layout({ name: layoutName, animate: false, randomize: false, nodeRepulsion: () => 9000, idealEdgeLength: () => 110, nodeSeparation: 90, padding: 40, fit: true } as cytoscape.LayoutOptions)
+      layout.one('layoutstop', () => {
+        c.nodes().forEach((n) => { positions.current.set(n.id(), { ...n.position() }) })
+        drawMini(c, mini.current)
+      })
+      layout.run()
+      return
+    }
     if (pinned && known.length === c.nodes().length) {
       c.nodes().forEach((n) => { n.position(positions.current.get(n.id())!) })
       c.fit(undefined, 40)

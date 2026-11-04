@@ -2,6 +2,7 @@
  * Mock handlers for Knowledge, the graph, Memory and Agents and tools. `knowledgeAction(name, args)` answers the
  * actions those screens call, or returns undefined so handlers.ts carries on with its own cases.
  */
+import { replayAction } from './replay'
 import { DATASHEETS, FILES, GRAPH_EXTRA, GRAPH_LINKS, GRAPH_NODES, KB, MEMORIES, type MockMemory, OFFERS, RUNS, TOOLS } from './fixtures-knowledge'
 
 const memories: Record<string, MockMemory[]> = structuredClone(MEMORIES)
@@ -67,6 +68,8 @@ export function knowledgeAction(name: string, a: Record<string, unknown>): unkno
       return TOOLS
     case 'runs':
       return (RUNS[repo] ?? []).slice(0, Number(a.limit ?? 20))
+    case 'journey.replay':
+      return replayAction(a)
     case 'graph.neighbourhood': {
       const depth = Number(a.depth ?? 2)
       const extra = depth >= 3 ? GRAPH_EXTRA : { nodes: [], links: [] }
