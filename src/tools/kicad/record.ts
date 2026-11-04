@@ -16,6 +16,9 @@ export interface RunHandle {
   artifact(name: string, data: string | Uint8Array, mime?: string): void
   /** another run's output this run was made from (lineage), by that run and the output's name */
   uses(run: string, name: string): void
+  /** a repository file this run read that its arguments do not name, or a view of one (`<path>#case`), with its hash
+   *  (src/ontology/lineage.ts inputHash): lineage records it like the files the arguments name */
+  reads(ref: string, sha256: string | null): void
   /** the project database, for a tool that keeps rows of its own with the run (parts.bom_check's lines) */
   readonly db: DatabaseSync
 }
@@ -69,6 +72,9 @@ export async function recorded<T extends object>(kind: string, subject: string |
     uses: (run, name) => {
       const h = work.db.prepare('SELECT sha256 FROM artifact_hashes WHERE run_id=? AND name=?').get(run, name) as { sha256: string } | undefined
       inputs.push({ kind: 'artifact', ref: run, name, sha256: h?.sha256 ?? null })
+    },
+    reads: (ref, sha256) => {
+      if (!inputs.some((x) => x.kind === 'file' && x.ref === ref)) inputs.push({ kind: 'file', ref, sha256 })
     },
   }
   try {

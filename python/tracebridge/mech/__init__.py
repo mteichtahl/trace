@@ -70,7 +70,7 @@ from .rules import rules_check
 from .settings import InputError, check_facts, normalize_settings, resolve, unknown_refs
 from .shell import Case
 
-__version__ = "1"  # bumped when the engine's results change for the same inputs (TypeScript's stale check reads it)
+__version__ = "2"  # bumped when the engine's results change for the same inputs (TypeScript's stale check reads it)
 
 __all__ = ["Board", "Case", "InputError", "export", "fit_check", "import_case", "load_board", "records",
            "rules_check", "run", "shell"]

@@ -107,8 +107,15 @@ The allow-list (`SERVICE_ACTIONS` in `src/api/service-policy.ts`) and the scope 
 
 | Scope | Actions |
 | --- | --- |
-| `read` | `whoami`, `projects`, `installation.layout`, `status`, `settings.get`, `runs`, `run`, `artifact`, `jobs.list`, `job`, `journey.get`, `requirements.trace`, `design.get`, `build.get`, `cost.get`, `files.list`, `files.url`, `graph.neighbourhood`, `kb.search`, `tools.list`, `tools.waits`, `tool` (read-only tools) |
+| `read` | `whoami`, `projects`, `installation.layout`, `status`, `settings.get`, `runs`, `run`, `artifact`, `jobs.list`, `job`, `journey.get`, `requirements.trace`, `design.get`, `build.get`, `cost.get`, `files.list`, `files.url`, `graph.neighbourhood`, `ontology.describe`, `record.get`, `artifact.lineage`, `artifact.stale`, `kb.search`, `tools.list`, `tools.waits`, `tool` (read-only tools) |
 | `write` | `task` (at most 3 queued or running per project), `job.control` (its own jobs), `settings.set` (opens a pull request a person merges), `kb.sync`, `tool` (tools that record runs) |
+
+The ontology's four (`src/api/actions-ontology.ts`, docs/ontology.md) let a system read trace's records the way
+trace names them: `ontology.describe` lists every class and property in plain words, with its Si2 alignments (with
+`term`, one term and the tables that store it); `record.get` gives one record of a project as JSON-LD, named by its
+identifier (`urn:trace:…`) or as `<kind>:<key>` (`requirement:REQ-001`, `criterion:capture.erc`); `artifact.lineage`
+gives what a run was made from, what it made and the runs made from that; `artifact.stale` says whether the newest
+run of each tool still stands against the default branch's files, and why not.
 
 `tool` never runs the tools of the shared datasheet library or the parts search (`parts.*`, `datasheets.*`,
 `SHARED_TOOL_PREFIXES`), whatever the scope: they read and write the library every project shares, and the parts

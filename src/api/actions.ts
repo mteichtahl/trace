@@ -185,6 +185,7 @@ import { LIFECYCLE_ACTIONS_DEFS, lifecycleGate } from './actions-lifecycle.js'
 import { assertNotHeld } from './held.js'
 import { PROMPT_ACTIONS } from './actions-prompts.js'
 import { TEMPLATE_ACTIONS } from './actions-templates.js'
+import { ONTOLOGY_ACTIONS } from './actions-ontology.js'
 import { VOICE_ACTIONS } from './actions-voice.js'
 import { LAYOUT_ACTIONS } from './actions-layout.js'
 import type { CognitoUser } from './aws.js'
@@ -857,6 +858,7 @@ export const ACTIONS = {
   ...LIFECYCLE_ACTIONS_DEFS,
   ...JOURNEY_ACTIONS,
   ...TEMPLATE_ACTIONS,
+  ...ONTOLOGY_ACTIONS,
   ...CHAT_ACTIONS,
   ...ME_ACTIONS,
   ...PUSH_ACTIONS,

@@ -1,0 +1,438 @@
+{
+  "version": 1,
+  "seconds": 2.212,
+  "source": "script",
+  "board_sha256": "289406e6e26f13cfabb836b493e1e0b3f87f901524aa176849b9fe7bfdac24d9",
+  "case": {
+    "parts": [
+      {
+        "name": "base",
+        "volume_mm3": 9499.0,
+        "bbox_mm": [
+          69.4,
+          49.4,
+          6.6
+        ]
+      },
+      {
+        "name": "lid",
+        "volume_mm3": 21151.3,
+        "bbox_mm": [
+          69.4,
+          49.4,
+          17.0
+        ]
+      }
+    ],
+    "bbox_mm": [
+      69.4,
+      49.4,
+      20.6
+    ]
+  },
+  "fit": {
+    "status": "pass",
+    "enclosed": true,
+    "clashes": [],
+    "gaps": [
+      {
+        "ref": "board",
+        "where": "edge",
+        "measured_mm": 0.5,
+        "required_mm": 0.5,
+        "ok": true
+      },
+      {
+        "ref": "C1",
+        "where": "above",
+        "measured_mm": 11.1,
+        "required_mm": 1.0,
+        "ok": true
+      },
+      {
+        "ref": "C2",
+        "where": "above",
+        "measured_mm": 11.1,
+        "required_mm": 1.0,
+        "ok": true
+      },
+      {
+        "ref": "C3",
+        "where": "above",
+        "measured_mm": 10.65,
+        "required_mm": 1.0,
+        "ok": true
+      },
+      {
+        "ref": "C4",
+        "where": "above",
+        "measured_mm": 10.65,
+        "required_mm": 1.0,
+        "ok": true
+      },
+      {
+        "ref": "D1",
+        "where": "above",
+        "measured_mm": 10.75,
+        "required_mm": 1.0,
+        "ok": true
+      },
+      {
+        "ref": "D2",
+        "where": "above",
+        "measured_mm": 11.2,
+        "required_mm": 1.0,
+        "ok": true
+      },
+      {
+        "ref": "J1",
+        "where": "around",
+        "measured_mm": 1.0,
+        "required_mm": 0.0,
+        "ok": true
+      },
+      {
+        "ref": "J2",
+        "where": "above",
+        "measured_mm": 1.0,
+        "required_mm": 1.0,
+        "ok": true
+      },
+      {
+        "ref": "J2",
+        "where": "below",
+        "measured_mm": 1.0,
+        "required_mm": 1.0,
+        "ok": true
+      },
+      {
+        "ref": "J3",
+        "where": "above",
+        "measured_mm": 1.0,
+        "required_mm": 1.0,
+        "ok": true
+      },
+      {
+        "ref": "J3",
+        "where": "below",
+        "measured_mm": 1.0,
+        "required_mm": 1.0,
+        "ok": true
+      },
+      {
+        "ref": "R1",
+        "where": "above",
+        "measured_mm": 11.45,
+        "required_mm": 1.0,
+        "ok": true
+      },
+      {
+        "ref": "R2",
+        "where": "above",
+        "measured_mm": 11.45,
+        "required_mm": 1.0,
+        "ok": true
+      },
+      {
+        "ref": "R3",
+        "where": "above",
+        "measured_mm": 11.45,
+        "required_mm": 1.0,
+        "ok": true
+      },
+      {
+        "ref": "R4",
+        "where": "above",
+        "measured_mm": 11.45,
+        "required_mm": 1.0,
+        "ok": true
+      },
+      {
+        "ref": "R5",
+        "where": "above",
+        "measured_mm": 11.45,
+        "required_mm": 1.0,
+        "ok": true
+      },
+      {
+        "ref": "R6",
+        "where": "above",
+        "measured_mm": 11.45,
+        "required_mm": 1.0,
+        "ok": true
+      },
+      {
+        "ref": "U1",
+        "where": "above",
+        "measured_mm": 10.2,
+        "required_mm": 1.0,
+        "ok": true
+      },
+      {
+        "ref": "U2",
+        "where": "above",
+        "measured_mm": 10.75,
+        "required_mm": 1.0,
+        "ok": true
+      }
+    ],
+    "openings": [
+      {
+        "ref": "J1",
+        "side": "west",
+        "made": true
+      }
+    ],
+    "assumptions": [],
+    "summary": "fits: no clashes, every gap within its clearance (board edge 0.50 mm)"
+  },
+  "rules": [
+    {
+      "rule": "wall",
+      "ok": true,
+      "detail": "wall 2 mm meets MJF's 2 mm for a 69 mm part",
+      "measured": 2.0,
+      "limit": 2,
+      "source": "https://jlc3dp.com/help/article/3d-printing-design-guideline",
+      "basis": "params"
+    },
+    {
+      "rule": "floor",
+      "ok": true,
+      "detail": "floor 2 mm meets MJF's 2 mm for a 69 mm part",
+      "measured": 2.0,
+      "limit": 2,
+      "source": "https://jlc3dp.com/help/article/3d-printing-design-guideline",
+      "basis": "params"
+    },
+    {
+      "rule": "lid",
+      "ok": true,
+      "detail": "lid 2 mm meets MJF's 2 mm for a 69 mm part",
+      "measured": 2.0,
+      "limit": 2,
+      "source": "https://jlc3dp.com/help/article/3d-printing-design-guideline",
+      "basis": "params"
+    },
+    {
+      "rule": "base_wall",
+      "ok": true,
+      "detail": "the base's wall as built is 2 mm, meeting MJF's 2 mm for a 69 mm part",
+      "measured": 2.0,
+      "limit": 2,
+      "source": "https://jlc3dp.com/help/article/3d-printing-design-guideline",
+      "basis": "model"
+    },
+    {
+      "rule": "lip_wall",
+      "ok": true,
+      "detail": "the lid's lip as built is 2 mm, meeting MJF's 2 mm for a 69 mm part",
+      "measured": 2.0,
+      "limit": 2,
+      "source": "https://jlc3dp.com/help/article/3d-printing-design-guideline",
+      "basis": "model"
+    },
+    {
+      "rule": "lid_wall",
+      "ok": true,
+      "detail": "the lid's wall as built is 4.2 mm, meeting MJF's 2 mm for a 69 mm part",
+      "measured": 4.2,
+      "limit": 2,
+      "source": "https://jlc3dp.com/help/article/3d-printing-design-guideline",
+      "basis": "model"
+    },
+    {
+      "rule": "base_floor",
+      "ok": true,
+      "detail": "the base's floor as built is 2 mm, meeting MJF's 2 mm for a 69 mm part",
+      "measured": 2.0,
+      "limit": 2,
+      "source": "https://jlc3dp.com/help/article/3d-printing-design-guideline",
+      "basis": "model"
+    },
+    {
+      "rule": "lid_top",
+      "ok": true,
+      "detail": "the lid's top as built is 2 mm, meeting MJF's 2 mm for a 69 mm part",
+      "measured": 2.0,
+      "limit": 2,
+      "source": "https://jlc3dp.com/help/article/3d-printing-design-guideline",
+      "basis": "model"
+    },
+    {
+      "rule": "size",
+      "ok": true,
+      "detail": "base 69.4 \u00d7 49.4 \u00d7 6.6 mm fits MJF's 370 \u00d7 276 \u00d7 360 mm",
+      "measured": [
+        69.4,
+        49.4,
+        6.6
+      ],
+      "limit": [
+        370,
+        276,
+        360
+      ],
+      "source": "https://jlc3dp.com/help/article/3d-printing-design-guideline",
+      "basis": "bbox"
+    },
+    {
+      "rule": "size",
+      "ok": true,
+      "detail": "lid 69.4 \u00d7 49.4 \u00d7 17 mm fits MJF's 370 \u00d7 276 \u00d7 360 mm",
+      "measured": [
+        69.4,
+        49.4,
+        17.0
+      ],
+      "limit": [
+        370,
+        276,
+        360
+      ],
+      "source": "https://jlc3dp.com/help/article/3d-printing-design-guideline",
+      "basis": "bbox"
+    },
+    {
+      "rule": "lip",
+      "ok": true,
+      "detail": "lip gap 0.2 mm meets MJF's 0.2 mm assembly clearance",
+      "measured": 0.2,
+      "limit": 0.2,
+      "source": "https://jlc3dp.com/help/article/3d-printing-design-guideline",
+      "basis": "model"
+    }
+  ],
+  "files": [
+    "case.step",
+    "case-base.step",
+    "case-lid.step",
+    "fit.json",
+    "case.jsonld"
+  ],
+  "records": {
+    "@context": {
+      "tm": "https://trace-eda.com/ns/trace#",
+      "@vocab": "https://trace-eda.com/ns/trace#",
+      "boundingBox": {
+        "@type": "@json"
+      },
+      "outerSize": {
+        "@type": "@json"
+      }
+    },
+    "@graph": [
+      {
+        "@id": "case:enclosure",
+        "@type": "Enclosure",
+        "caseSource": "script",
+        "hasPart": [
+          {
+            "@id": "case:base"
+          },
+          {
+            "@id": "case:lid"
+          }
+        ],
+        "material": {
+          "@id": "material:case"
+        },
+        "encloses": {
+          "@id": "board:hardware/trace-sample.kicad_pcb"
+        },
+        "outerSize": [
+          69.4,
+          49.4,
+          20.6
+        ]
+      },
+      {
+        "@id": "material:case",
+        "@type": "Material",
+        "name": "PA12-HP",
+        "process": "MJF",
+        "service": "jlc3dp"
+      },
+      {
+        "@id": "board:hardware/trace-sample.kicad_pcb",
+        "@type": "BoardOutline",
+        "path": "hardware/trace-sample.kicad_pcb",
+        "sha256": "289406e6e26f13cfabb836b493e1e0b3f87f901524aa176849b9fe7bfdac24d9",
+        "thickness": 1.6,
+        "unit": "mm"
+      },
+      {
+        "@id": "case:base",
+        "@type": "EnclosurePart",
+        "partKind": "base",
+        "boundingBox": [
+          69.4,
+          49.4,
+          6.6
+        ],
+        "unit": "mm",
+        "wallThickness": 2.0
+      },
+      {
+        "@id": "case:lid",
+        "@type": "EnclosurePart",
+        "partKind": "lid",
+        "boundingBox": [
+          69.4,
+          49.4,
+          17.0
+        ],
+        "unit": "mm",
+        "wallThickness": 2.0
+      },
+      {
+        "@id": "opening:J1",
+        "@type": "Opening",
+        "forComponent": {
+          "@id": "component:J1"
+        },
+        "face": "west",
+        "inPart": [
+          {
+            "@id": "case:base"
+          },
+          {
+            "@id": "case:lid"
+          }
+        ]
+      },
+      {
+        "@id": "joint:lid-base",
+        "@type": "Joint",
+        "jointKind": "press-fit",
+        "joins": [
+          {
+            "@id": "case:lid"
+          },
+          {
+            "@id": "case:base"
+          }
+        ],
+        "clearance": 0.2,
+        "unit": "mm"
+      },
+      {
+        "@id": "check:fit",
+        "@type": "FitCheck",
+        "status": "pass",
+        "enclosed": true,
+        "clashCount": 0,
+        "clashes": [],
+        "gapViolations": 0,
+        "boardSha256": "289406e6e26f13cfabb836b493e1e0b3f87f901524aa176849b9fe7bfdac24d9",
+        "fitOf": {
+          "@id": "case:enclosure"
+        }
+      }
+    ]
+  },
+  "notes": [
+    "no mounting holes: the board rests on 4 rests and is held by 4 lid posts"
+  ],
+  "fasteners": []
+}
