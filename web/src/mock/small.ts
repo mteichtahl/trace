@@ -35,6 +35,15 @@ export function smallAction(name: string, a: Record<string, unknown>): Response 
       const files = (a.files as { path: string }[] | undefined) ?? []
       return ok({ repo: a.repo, change: 12, changed: files.map((f) => f.path), same: [], branch: `trace/handin-mock-${Date.now().toString(36)}`, commit: 'c0ffee1' })
     }
+    // the project logo (src/api/actions-logo.ts): none yet; a chosen file is checked by its first bytes and size
+    case 'project.logo': return ok({ repo: a.repo, light: null, dark: null })
+    case 'project.logo_check': {
+      const head = atob(String(a.base64 ?? '').slice(0, 64))
+      const png = head.startsWith('\x89PNG')
+      const svg = /<svg[\s>]|<\?xml/i.test(head)
+      return ok({ repo: a.repo, ok: png || svg, format: png ? 'png' : svg ? 'svg' : null, width: png ? 1024 : 200, height: png ? 512 : 80, problems: png || svg ? [] : ['It is not an SVG or PNG image. Save the logo as SVG (best, sharp at any size) or PNG.'] })
+    }
+    case 'project.logo_set': return ok({ repo: a.repo, change: 12, branch: `trace/logo-${Date.now().toString(36)}`, commit: 'c0ffee1', written: ['docs/design/logo.svg'], removed: [] })
     case 'files.edit': return ok({ repo: a.repo, path: a.path, change: 12, branch: `trace/edit-claude-md-${Date.now().toString(36)}`, commit: 'c0ffee1' })
     case 'prompts.chat': return ok({ entries: [{ id: 'chat.role', text: null, version: null, sha: '0123456789ab' }] })
     case 'voice.vocabulary': return ok({ repo: a.repo, language: a.language, name: 'trace-0123abcd-en-AU', state: 'READY', usable: true, note: 'Dictation uses this project\'s words (reference designators, part numbers, net names, requirement ids).' })

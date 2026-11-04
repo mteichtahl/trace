@@ -119,6 +119,10 @@ export interface Actions {
   'files.edit': { args: Repo & { path: string; text: string; note?: string }; result: { repo: string; path: string; change: number | null; branch: string; commit: string } }
   /** KiCad files handed in: one change of the ones that differ from the design */
   'design.handin': { args: Repo & { files: { path: string; base64: string }[]; note?: string }; result: { repo: string; change: number | null; changed: string[]; same: string[]; branch: string; commit: string } }
+  /** The project logo (src/api/actions-logo.ts): each variant kept beside the documents, checked before it is saved */
+  'project.logo': { args: Repo; result: { repo: string; light: StoredLogo | null; dark: StoredLogo | null } }
+  'project.logo_check': { args: Repo & { base64: string }; result: LogoCheck & { repo: string } }
+  'project.logo_set': { args: Repo & { light?: { base64: string } | null; dark?: { base64: string } | null }; result: { repo: string; change: number | null; branch: string; commit: string; written: string[]; removed: string[] } }
   // Operations, Admin and Preferences (src/api/actions.ts: integrations.*, prompts.*; shapes in lib/admin-types.ts)
   'integrations.list': { args: Record<string, never>; result: import('./admin-types').IntegrationStatus[] }
   'integrations.set': { args: { name: import('./admin-types').IntegrationName; values: Record<string, string> }; result: { name: string; secret: string; check: { ok: boolean; detail: string }; note?: string } }
@@ -239,6 +243,11 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
 }
 
 /** Call one API action. */
+/** A logo variant as the repository keeps it (src/api/actions-logo.ts StoredLogo). */
+export interface StoredLogo { path: string; format: 'svg' | 'png'; base64: string }
+/** What trace says of a logo file (src/docs/logo.ts LogoCheck). */
+export interface LogoCheck { ok: boolean; format: 'svg' | 'png' | null; width: number | null; height: number | null; problems: string[] }
+
 export async function call<A extends ActionName>(action: A, args: ArgsOf<A>, o: { signal?: AbortSignal } = {}): Promise<ResultOf<A>> {
   let env: Envelope<ResultOf<A>>
   try {
