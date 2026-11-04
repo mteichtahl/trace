@@ -21,6 +21,8 @@
  *   block         the blocks of the architecture drawn (the chosen option, else trace's recommendation)
  *   part          each block's parts by part number
  *   component     each placed part of the board (the first .kicad_pcb of the default branch); net: the nets on its pads
+ *   case          the newest case build's case (src/ontology/mech.ts): verified when it fits, failing with its problems,
+ *                 stale with its build; made by its run, and failing each placed part that clashes with it
  *   document      the schematic sheets that name the requirements they serve (design.sheets)
  *   (datasheet: the record keeps no link from a part to its datasheet page yet)
  *
@@ -54,6 +56,7 @@ import { loadJourney } from '../core/journey.js'
 import { NODE_KINDS } from '../ontology/graph-kinds.gen.js'
 import { type Board, loadBoard } from '../tools/kicad/pcb.js'
 import { filesRead, staleRuns } from '../ontology/lineage.js'
+import { artifactJson, latestCaseBuild } from '../ontology/mech.js'
 import { ActionError, type Context, Repo, def, memoryInclude, projectMemory, withRecordDb } from './action-kit.js'
 import { TOPIC_NAMES } from '../tools/design/db.js'
 import { architectureView, intentView, linksView } from '../tools/design/record.js'
@@ -80,7 +83,7 @@ export const MAX_NODES = 150
 
 const KIND_WORDS: Readonly<Record<NodeKind, string>> = {
   intent: 'intent statements', requirement: 'requirements', block: 'blocks', part: 'parts', datasheet: 'datasheet pages', component: 'components',
-  net: 'nets', run: 'runs', artifact: 'outputs', gate: 'gates', criterion: 'criteria', waiver: 'waivers', decision: 'decisions', memory: 'memories',
+  net: 'nets', case: 'cases', run: 'runs', artifact: 'outputs', gate: 'gates', criterion: 'criteria', waiver: 'waivers', decision: 'decisions', memory: 'memories',
   document: 'documents', person: 'people',
 }
 
@@ -258,6 +261,21 @@ export function projectGraph(db: DatabaseSync, repo?: string, extras: GraphExtra
         link(id, `net:${net}`, 'connects')
       }
     }
+  }
+  // the case: the newest build's, made by its run; each part that clashes with it, or lacks room, is failed by it
+  const cb = latestCaseBuild(db)
+  if (cb) {
+    const fit = (artifactJson(db, cb.run, 'fit.json') ?? {}) as { clashes?: { ref: string; case_part: string }[]; gaps?: { ref: string; ok: boolean }[]; summary?: string }
+    const bad = [...new Set([...(fit.clashes ?? []).map((c) => c.ref), ...(fit.gaps ?? []).filter((g) => !g.ok).map((g) => g.ref)])].filter((r) => r !== 'board')
+    const stale = extras.stale?.get(cb.run)
+    node({
+      id: 'case:enclosure', kind: 'case', label: 'Case', title: `The case, from build ${cb.run.slice(0, 8)}`,
+      status: stale ? 'stale' : cb.status === 'pass' ? 'verified' : 'failing',
+      summary: stale ? `Out of date: ${stale}` : fit.summary ?? (cb.status === 'pass' ? 'The board fits its case.' : 'The board does not fit its case.'),
+      facts: { Build: cb.run, ...(bad.length ? { Problems: bad.join(', ') } : {}) }, ...at('/design'),
+    })
+    link(runNode(cb.run), 'case:enclosure', 'made')
+    for (const ref of bad) link('case:enclosure', `component:${ref}`, 'fails')
   }
   const seen = new Set<string>()
   return { nodes, links: links.filter((l) => nodes.has(l.source) && nodes.has(l.target) && !seen.has(l.id) && Boolean(seen.add(l.id))) }

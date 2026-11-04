@@ -15,7 +15,7 @@ import { EmptyState, Loading, QueryError, SkeletonRows } from '@/components/stat
 import { useAuth } from '@/lib/auth'
 import { repoOf } from '@/lib/api'
 import { time } from '@/lib/format'
-import { AGENTS, DEFAULT_RETENTION_DAYS, type MemoryView, agentName, byDay, expiresInDays } from '@/lib/knowledge'
+import { DEFAULT_RETENTION_DAYS, MEMORY_ACTORS, type MemoryView, agentName, byDay, expiresInDays } from '@/lib/knowledge'
 import { cn } from '@/lib/utils'
 import { useProjectMemories } from '../memory'
 
@@ -57,7 +57,7 @@ function Recent() {
             <Label htmlFor="r-agent" className="text-xs text-muted-foreground">Agent</Label>
             <select id="r-agent" className="h-9 w-48 rounded-md border bg-background px-2 text-sm" value={agent} onChange={(e) => setAgent(e.target.value)}>
               <option value="all">All agents</option>
-              {AGENTS.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              {MEMORY_ACTORS.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           </div>
           <div className="space-y-1">

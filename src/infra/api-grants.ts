@@ -21,13 +21,16 @@
  *
  *              and never: Cognito, the central database, prompts, chats, the projects waiting to be created, the cost
  *              actuals, the order watch and its key, the integrations, the dictation vocabularies, the runs log group
- *              (people's only: GetLogEvents on its streams, DescribeLogStreams and FilterLogEvents on it, read only)
+ *              (people's only: GetLogEvents on its streams, DescribeLogStreams and FilterLogEvents on it, read only),
+ *              and no memory writes (the people's API records the chat's events: CreateEvent for each project's chat
+ *              and person actors, src/infra/memory.ts grantChatEvents)
  *
  * The people's role gets its statements in the order it always had, so its template does not change with this split.
  */
 import type { Construct } from 'constructs'
 import type * as ecr from 'aws-cdk-lib/aws-ecr'
 import * as iam from 'aws-cdk-lib/aws-iam'
+import { RegionInfo } from 'aws-cdk-lib/region-info'
 import type * as s3 from 'aws-cdk-lib/aws-s3'
 import type * as secrets from 'aws-cdk-lib/aws-secretsmanager'
 import { MEMORY_STATE } from '../agents/runtime/memory-state.js'
@@ -35,7 +38,7 @@ import { PROJECTS_PREFIX } from '../core/project.js'
 import { SERVICES_SEEN } from '../core/services-seen.js'
 import { ACTUALS_OBJECTS } from './cost.js'
 import { KB_RETRIEVE_ACTIONS, knowledgeBaseArn } from './knowledge.js'
-import { type TraceMemory, grantReadEvents, grantReadRecords } from './memory.js'
+import { type TraceMemory, grantChatEvents, grantReadEvents, grantReadRecords } from './memory.js'
 import { WATCH_OBJECTS } from './order-watch.js'
 import { orderWatchSecretsPrefix } from '../core/integrations-catalog.js'
 import { ACCESS_PREFIX, AGENT_FACTS, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, grantPrefixes } from './project.js'
@@ -63,6 +66,8 @@ export interface ApiGrantsProps {
   /** each project's worker runtime ARN */
   workers: readonly string[]
   memories: readonly TraceMemory[]
+  /** each project with a memory: its repository and its memory's name, for the chat's events (people only: grantChatEvents) */
+  chatMemories?: readonly { repository: string; name: string }[]
   /** each project's knowledge base id */
   knowledgeBases: readonly string[]
   /** the order watch's function ARN (people only: order.check_now) */
@@ -158,6 +163,11 @@ export function grantApiRuntime(role: iam.Role, p: ApiGrantsProps, o: { people: 
   }
   grantReadRecords(role, p.memories)
   grantReadEvents(role, p.memories, { partition: p.partition, region: p.region, account: p.account, prefix: p.prefix })
+  // Ask trace's conversations and memory.remember (people only: systems neither chat nor remember): CreateEvent on each
+  // project's memory, for its chat and person actors only. The region's own partition, written out when the region is
+  // known (aws, aws-cn, aws-us-gov, …): the stack's partition is a reference, which in every one of the sixty statements
+  // would cost the role one more overflow policy (test/infra/layout.test.ts); a region it does not know takes that reference
+  if (people) grantChatEvents(role, p.chatMemories ?? [], { partition: RegionInfo.get(p.region).partition ?? p.partition, region: p.region, account: p.account })
   // dictation: the state of each project's vocabulary for voice.vocabulary (after its access check), nothing more
   if (people) role.addToPolicy(apiVocabularyStatement({ partition: p.partition, region: p.region, account: p.account, prefix: p.prefix }))
   // kb.search on any project's knowledge base, after the access check (src/api/actions.ts); nothing else of them.

@@ -9,7 +9,7 @@
  *   - only the viewer's own turns and trace's replies to them are sent as the conversation; messages by other people
  *     on the project (`foreign` ids) go as forwardedProps.others, quoted as data, never as the viewer's requests
  *   - forwardedProps.readOnly when the thread holds other people's messages (or the view is read-only): trace offers
- *     no start_task there
+ *     no start_task or remember there
  *   - forwardedProps { repo, thread, after }: where the backend keeps trace's reply (chats.reply, after the viewer's
  *     own latest turn, `after` being the id chats.append gave it)
  *

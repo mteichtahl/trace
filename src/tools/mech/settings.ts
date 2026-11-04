@@ -20,6 +20,12 @@ const positive = mm.positive()
 const nonNeg = mm.min(0)
 const Ref = z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,30}$/, 'a part reference such as J1')
 
+/** The case designs the engine builds (python/tracebridge/mech: shell.py, boxes.py): the printed two-part shell (the
+ *  recommendation), an extruded box (a tube and two end plates; the board slides in guides) and a DIN rail enclosure
+ *  (the shell with a foot that clips onto a 35 mm rail). */
+export const TEMPLATE_IDS = ['printed-shell', 'extruded-box', 'din-rail'] as const
+export type CaseTemplate = (typeof TEMPLATE_IDS)[number]
+
 export const ProcessSchema = z.object({
   service: z.string().min(1).default('jlc3dp'),
   process: z.string().min(1).default('MJF'),
@@ -56,7 +62,7 @@ const RepoPath = z.string().min(1).max(512).refine(isRepoRelative, { message: "a
 export const CaseSettingsSchema = z.object({
   version: z.literal(1).default(1),
   board: RepoPath,
-  template: z.literal('printed-shell').default('printed-shell'),
+  template: z.enum(TEMPLATE_IDS).default('printed-shell'),
   source: z.enum(['script', 'file']).default('script'),
   file: RepoPath.optional(),
   process: ProcessSchema,

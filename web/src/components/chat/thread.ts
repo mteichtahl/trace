@@ -6,7 +6,7 @@
  *     calls and results)
  *   - other people's turns, and trace's replies to them, are shown in the thread but go to trace only as quoted data
  *     (`foreign`: id → "who: text", or "" for a row that is not quoted at all, a tool result); a thread with any of
- *     them is read-only for trace (no start_task)
+ *     them is read-only for trace (no start_task, no remember)
  *
  * What the person sends is kept with chats.append (their own words only); trace's replies are kept by the chat agent
  * itself (src/web/agui.ts, chats.reply).

@@ -1,0 +1,893 @@
+{
+ "options": [
+  {
+   "key": "din-rail/rests/lid/mjf",
+   "label": "DIN rail enclosure, MJF PA12-HP at JLC3DP, board held between rests and lid posts",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "rests",
+    "closure": "lid",
+    "process": "mjf"
+   },
+   "feasible": true,
+   "score": 4,
+   "why": [
+    "right when it mounts on a rail in a cabinet",
+    "MJF PA12-HP at JLC3DP is trace's recommended process (strong and isotropic nylon)",
+    "the requirements ask for a DIN rail mount (\u201cThe unit mounts on a DIN rail in the control cabinet.\u201d)"
+   ],
+   "gives_up": "about 5 mm more height for the rail foot, and it must hang on a rail",
+   "size_mm": [
+    69.4,
+    49.4,
+    26.0
+   ],
+   "rank": 1,
+   "recommended": true
+  },
+  {
+   "key": "din-rail/rests/lid/sla",
+   "label": "DIN rail enclosure, SLA Ledo6060 at JLC3DP, board held between rests and lid posts",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "rests",
+    "closure": "lid",
+    "process": "sla"
+   },
+   "feasible": true,
+   "score": 3,
+   "why": [
+    "right when it mounts on a rail in a cabinet",
+    "the requirements ask for a DIN rail mount (\u201cThe unit mounts on a DIN rail in the control cabinet.\u201d)"
+   ],
+   "gives_up": "about 5 mm more height for the rail foot, and it must hang on a rail",
+   "size_mm": [
+    69.4,
+    49.4,
+    26.0
+   ],
+   "rank": 2,
+   "recommended": false
+  },
+  {
+   "key": "printed-shell/rests/lid/mjf",
+   "label": "Printed two-part shell, MJF PA12-HP at JLC3DP, board held between rests and lid posts",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "rests",
+    "closure": "lid",
+    "process": "mjf"
+   },
+   "feasible": true,
+   "score": 2,
+   "why": [
+    "the simplest case: two printed parts, the board screwed or clamped inside",
+    "MJF PA12-HP at JLC3DP is trace's recommended process (strong and isotropic nylon)"
+   ],
+   "gives_up": "nothing to mount it by: it sits on a shelf or is fixed by its own screws",
+   "size_mm": [
+    69.4,
+    49.4,
+    20.6
+   ],
+   "rank": 3,
+   "recommended": false
+  },
+  {
+   "key": "din-rail/rests/lid/cnc",
+   "label": "DIN rail enclosure, CNC aluminium 6061 at JLCCNC, board held between rests and lid posts",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "rests",
+    "closure": "lid",
+    "process": "cnc"
+   },
+   "feasible": true,
+   "score": 2,
+   "why": [
+    "right when it mounts on a rail in a cabinet",
+    "the requirements ask for a DIN rail mount (\u201cThe unit mounts on a DIN rail in the control cabinet.\u201d)"
+   ],
+   "gives_up": "about 5 mm more height for the rail foot, and it must hang on a rail; machined aluminium costs several times a printed case",
+   "size_mm": [
+    69.4,
+    49.4,
+    26.0
+   ],
+   "rank": 4,
+   "recommended": false
+  },
+  {
+   "key": "printed-shell/rests/lid/sla",
+   "label": "Printed two-part shell, SLA Ledo6060 at JLC3DP, board held between rests and lid posts",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "rests",
+    "closure": "lid",
+    "process": "sla"
+   },
+   "feasible": true,
+   "score": 1,
+   "why": [
+    "the simplest case: two printed parts, the board screwed or clamped inside"
+   ],
+   "gives_up": "nothing to mount it by: it sits on a shelf or is fixed by its own screws",
+   "size_mm": [
+    69.4,
+    49.4,
+    20.6
+   ],
+   "rank": 5,
+   "recommended": false
+  },
+  {
+   "key": "printed-shell/rests/lid/cnc",
+   "label": "Printed two-part shell, CNC aluminium 6061 at JLCCNC, board held between rests and lid posts",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "rests",
+    "closure": "lid",
+    "process": "cnc"
+   },
+   "feasible": true,
+   "score": 0,
+   "why": [
+    "the simplest case: two printed parts, the board screwed or clamped inside"
+   ],
+   "gives_up": "nothing to mount it by: it sits on a shelf or is fixed by its own screws; machined aluminium costs several times a printed case",
+   "size_mm": [
+    69.4,
+    49.4,
+    20.6
+   ],
+   "rank": 6,
+   "recommended": false
+  },
+  {
+   "key": "printed-shell/screws/lid/mjf",
+   "label": "Printed two-part shell, MJF PA12-HP at JLC3DP, board screwed into its mounting holes",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "screws",
+    "closure": "lid",
+    "process": "mjf"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the board has no mounting holes to screw it down by"
+   }
+  },
+  {
+   "key": "printed-shell/screws/lid/sla",
+   "label": "Printed two-part shell, SLA Ledo6060 at JLC3DP, board screwed into its mounting holes",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "screws",
+    "closure": "lid",
+    "process": "sla"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the board has no mounting holes to screw it down by"
+   }
+  },
+  {
+   "key": "printed-shell/screws/lid/cnc",
+   "label": "Printed two-part shell, CNC aluminium 6061 at JLCCNC, board screwed into its mounting holes",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "screws",
+    "closure": "lid",
+    "process": "cnc"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the board has no mounting holes to screw it down by"
+   }
+  },
+  {
+   "key": "printed-shell/screws/end-plates/mjf",
+   "label": "Printed two-part shell, MJF PA12-HP at JLC3DP, board screwed into its mounting holes",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "screws",
+    "closure": "end-plates",
+    "process": "mjf"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the printed two-part shell closes with a lid"
+   }
+  },
+  {
+   "key": "printed-shell/screws/end-plates/sla",
+   "label": "Printed two-part shell, SLA Ledo6060 at JLC3DP, board screwed into its mounting holes",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "screws",
+    "closure": "end-plates",
+    "process": "sla"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the printed two-part shell closes with a lid"
+   }
+  },
+  {
+   "key": "printed-shell/screws/end-plates/cnc",
+   "label": "Printed two-part shell, CNC aluminium 6061 at JLCCNC, board screwed into its mounting holes",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "screws",
+    "closure": "end-plates",
+    "process": "cnc"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the printed two-part shell closes with a lid"
+   }
+  },
+  {
+   "key": "printed-shell/rests/end-plates/mjf",
+   "label": "Printed two-part shell, MJF PA12-HP at JLC3DP, board held between rests and lid posts",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "rests",
+    "closure": "end-plates",
+    "process": "mjf"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the printed two-part shell closes with a lid"
+   }
+  },
+  {
+   "key": "printed-shell/rests/end-plates/sla",
+   "label": "Printed two-part shell, SLA Ledo6060 at JLC3DP, board held between rests and lid posts",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "rests",
+    "closure": "end-plates",
+    "process": "sla"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the printed two-part shell closes with a lid"
+   }
+  },
+  {
+   "key": "printed-shell/rests/end-plates/cnc",
+   "label": "Printed two-part shell, CNC aluminium 6061 at JLCCNC, board held between rests and lid posts",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "rests",
+    "closure": "end-plates",
+    "process": "cnc"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the printed two-part shell closes with a lid"
+   }
+  },
+  {
+   "key": "printed-shell/guides/lid/mjf",
+   "label": "Printed two-part shell, MJF PA12-HP at JLC3DP, board slid along guides",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "guides",
+    "closure": "lid",
+    "process": "mjf"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the printed two-part shell has no guides: it screws or clamps the board"
+   }
+  },
+  {
+   "key": "printed-shell/guides/lid/sla",
+   "label": "Printed two-part shell, SLA Ledo6060 at JLC3DP, board slid along guides",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "guides",
+    "closure": "lid",
+    "process": "sla"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the printed two-part shell has no guides: it screws or clamps the board"
+   }
+  },
+  {
+   "key": "printed-shell/guides/lid/cnc",
+   "label": "Printed two-part shell, CNC aluminium 6061 at JLCCNC, board slid along guides",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "guides",
+    "closure": "lid",
+    "process": "cnc"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the printed two-part shell has no guides: it screws or clamps the board"
+   }
+  },
+  {
+   "key": "printed-shell/guides/end-plates/mjf",
+   "label": "Printed two-part shell, MJF PA12-HP at JLC3DP, board slid along guides",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "guides",
+    "closure": "end-plates",
+    "process": "mjf"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the printed two-part shell closes with a lid"
+   }
+  },
+  {
+   "key": "printed-shell/guides/end-plates/sla",
+   "label": "Printed two-part shell, SLA Ledo6060 at JLC3DP, board slid along guides",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "guides",
+    "closure": "end-plates",
+    "process": "sla"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the printed two-part shell closes with a lid"
+   }
+  },
+  {
+   "key": "printed-shell/guides/end-plates/cnc",
+   "label": "Printed two-part shell, CNC aluminium 6061 at JLCCNC, board slid along guides",
+   "choices": {
+    "template": "printed-shell",
+    "mounting": "guides",
+    "closure": "end-plates",
+    "process": "cnc"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the printed two-part shell closes with a lid"
+   }
+  },
+  {
+   "key": "extruded-box/screws/lid/mjf",
+   "label": "Extruded box with end plates, MJF PA12-HP at JLC3DP, board screwed into its mounting holes",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "screws",
+    "closure": "lid",
+    "process": "mjf"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the extruded box with end plates closes with end plates"
+   }
+  },
+  {
+   "key": "extruded-box/screws/lid/sla",
+   "label": "Extruded box with end plates, SLA Ledo6060 at JLC3DP, board screwed into its mounting holes",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "screws",
+    "closure": "lid",
+    "process": "sla"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the extruded box with end plates closes with end plates"
+   }
+  },
+  {
+   "key": "extruded-box/screws/lid/cnc",
+   "label": "Extruded box with end plates, CNC aluminium 6061 at JLCCNC, board screwed into its mounting holes",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "screws",
+    "closure": "lid",
+    "process": "cnc"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the extruded box with end plates closes with end plates"
+   }
+  },
+  {
+   "key": "extruded-box/screws/end-plates/mjf",
+   "label": "Extruded box with end plates, MJF PA12-HP at JLC3DP, board screwed into its mounting holes",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "screws",
+    "closure": "end-plates",
+    "process": "mjf"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the extruded box holds the board in guides along its walls"
+   }
+  },
+  {
+   "key": "extruded-box/screws/end-plates/sla",
+   "label": "Extruded box with end plates, SLA Ledo6060 at JLC3DP, board screwed into its mounting holes",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "screws",
+    "closure": "end-plates",
+    "process": "sla"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the extruded box holds the board in guides along its walls"
+   }
+  },
+  {
+   "key": "extruded-box/screws/end-plates/cnc",
+   "label": "Extruded box with end plates, CNC aluminium 6061 at JLCCNC, board screwed into its mounting holes",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "screws",
+    "closure": "end-plates",
+    "process": "cnc"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the extruded box holds the board in guides along its walls"
+   }
+  },
+  {
+   "key": "extruded-box/rests/lid/mjf",
+   "label": "Extruded box with end plates, MJF PA12-HP at JLC3DP, board held between rests and lid posts",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "rests",
+    "closure": "lid",
+    "process": "mjf"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the extruded box with end plates closes with end plates"
+   }
+  },
+  {
+   "key": "extruded-box/rests/lid/sla",
+   "label": "Extruded box with end plates, SLA Ledo6060 at JLC3DP, board held between rests and lid posts",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "rests",
+    "closure": "lid",
+    "process": "sla"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the extruded box with end plates closes with end plates"
+   }
+  },
+  {
+   "key": "extruded-box/rests/lid/cnc",
+   "label": "Extruded box with end plates, CNC aluminium 6061 at JLCCNC, board held between rests and lid posts",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "rests",
+    "closure": "lid",
+    "process": "cnc"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the extruded box with end plates closes with end plates"
+   }
+  },
+  {
+   "key": "extruded-box/rests/end-plates/mjf",
+   "label": "Extruded box with end plates, MJF PA12-HP at JLC3DP, board held between rests and lid posts",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "rests",
+    "closure": "end-plates",
+    "process": "mjf"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the extruded box holds the board in guides along its walls"
+   }
+  },
+  {
+   "key": "extruded-box/rests/end-plates/sla",
+   "label": "Extruded box with end plates, SLA Ledo6060 at JLC3DP, board held between rests and lid posts",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "rests",
+    "closure": "end-plates",
+    "process": "sla"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the extruded box holds the board in guides along its walls"
+   }
+  },
+  {
+   "key": "extruded-box/rests/end-plates/cnc",
+   "label": "Extruded box with end plates, CNC aluminium 6061 at JLCCNC, board held between rests and lid posts",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "rests",
+    "closure": "end-plates",
+    "process": "cnc"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the extruded box holds the board in guides along its walls"
+   }
+  },
+  {
+   "key": "extruded-box/guides/lid/mjf",
+   "label": "Extruded box with end plates, MJF PA12-HP at JLC3DP, board slid along guides",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "guides",
+    "closure": "lid",
+    "process": "mjf"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the extruded box with end plates closes with end plates"
+   }
+  },
+  {
+   "key": "extruded-box/guides/lid/sla",
+   "label": "Extruded box with end plates, SLA Ledo6060 at JLC3DP, board slid along guides",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "guides",
+    "closure": "lid",
+    "process": "sla"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the extruded box with end plates closes with end plates"
+   }
+  },
+  {
+   "key": "extruded-box/guides/lid/cnc",
+   "label": "Extruded box with end plates, CNC aluminium 6061 at JLCCNC, board slid along guides",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "guides",
+    "closure": "lid",
+    "process": "cnc"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the extruded box with end plates closes with end plates"
+   }
+  },
+  {
+   "key": "extruded-box/guides/end-plates/mjf",
+   "label": "Extruded box with end plates, MJF PA12-HP at JLC3DP, board slid along guides",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "guides",
+    "closure": "end-plates",
+    "process": "mjf"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "board-slides-in",
+    "why": "J9 sticks out past the board's long edge, so the board cannot slide into the tube"
+   }
+  },
+  {
+   "key": "extruded-box/guides/end-plates/sla",
+   "label": "Extruded box with end plates, SLA Ledo6060 at JLC3DP, board slid along guides",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "guides",
+    "closure": "end-plates",
+    "process": "sla"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "board-slides-in",
+    "why": "J9 sticks out past the board's long edge, so the board cannot slide into the tube"
+   }
+  },
+  {
+   "key": "extruded-box/guides/end-plates/cnc",
+   "label": "Extruded box with end plates, CNC aluminium 6061 at JLCCNC, board slid along guides",
+   "choices": {
+    "template": "extruded-box",
+    "mounting": "guides",
+    "closure": "end-plates",
+    "process": "cnc"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "board-slides-in",
+    "why": "J9 sticks out past the board's long edge, so the board cannot slide into the tube"
+   }
+  },
+  {
+   "key": "din-rail/screws/lid/mjf",
+   "label": "DIN rail enclosure, MJF PA12-HP at JLC3DP, board screwed into its mounting holes",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "screws",
+    "closure": "lid",
+    "process": "mjf"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the board has no mounting holes to screw it down by"
+   }
+  },
+  {
+   "key": "din-rail/screws/lid/sla",
+   "label": "DIN rail enclosure, SLA Ledo6060 at JLC3DP, board screwed into its mounting holes",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "screws",
+    "closure": "lid",
+    "process": "sla"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the board has no mounting holes to screw it down by"
+   }
+  },
+  {
+   "key": "din-rail/screws/lid/cnc",
+   "label": "DIN rail enclosure, CNC aluminium 6061 at JLCCNC, board screwed into its mounting holes",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "screws",
+    "closure": "lid",
+    "process": "cnc"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the board has no mounting holes to screw it down by"
+   }
+  },
+  {
+   "key": "din-rail/screws/end-plates/mjf",
+   "label": "DIN rail enclosure, MJF PA12-HP at JLC3DP, board screwed into its mounting holes",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "screws",
+    "closure": "end-plates",
+    "process": "mjf"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the DIN rail enclosure closes with a lid"
+   }
+  },
+  {
+   "key": "din-rail/screws/end-plates/sla",
+   "label": "DIN rail enclosure, SLA Ledo6060 at JLC3DP, board screwed into its mounting holes",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "screws",
+    "closure": "end-plates",
+    "process": "sla"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the DIN rail enclosure closes with a lid"
+   }
+  },
+  {
+   "key": "din-rail/screws/end-plates/cnc",
+   "label": "DIN rail enclosure, CNC aluminium 6061 at JLCCNC, board screwed into its mounting holes",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "screws",
+    "closure": "end-plates",
+    "process": "cnc"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the DIN rail enclosure closes with a lid"
+   }
+  },
+  {
+   "key": "din-rail/rests/end-plates/mjf",
+   "label": "DIN rail enclosure, MJF PA12-HP at JLC3DP, board held between rests and lid posts",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "rests",
+    "closure": "end-plates",
+    "process": "mjf"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the DIN rail enclosure closes with a lid"
+   }
+  },
+  {
+   "key": "din-rail/rests/end-plates/sla",
+   "label": "DIN rail enclosure, SLA Ledo6060 at JLC3DP, board held between rests and lid posts",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "rests",
+    "closure": "end-plates",
+    "process": "sla"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the DIN rail enclosure closes with a lid"
+   }
+  },
+  {
+   "key": "din-rail/rests/end-plates/cnc",
+   "label": "DIN rail enclosure, CNC aluminium 6061 at JLCCNC, board held between rests and lid posts",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "rests",
+    "closure": "end-plates",
+    "process": "cnc"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the DIN rail enclosure closes with a lid"
+   }
+  },
+  {
+   "key": "din-rail/guides/lid/mjf",
+   "label": "DIN rail enclosure, MJF PA12-HP at JLC3DP, board slid along guides",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "guides",
+    "closure": "lid",
+    "process": "mjf"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the DIN rail enclosure has no guides: it screws or clamps the board"
+   }
+  },
+  {
+   "key": "din-rail/guides/lid/sla",
+   "label": "DIN rail enclosure, SLA Ledo6060 at JLC3DP, board slid along guides",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "guides",
+    "closure": "lid",
+    "process": "sla"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the DIN rail enclosure has no guides: it screws or clamps the board"
+   }
+  },
+  {
+   "key": "din-rail/guides/lid/cnc",
+   "label": "DIN rail enclosure, CNC aluminium 6061 at JLCCNC, board slid along guides",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "guides",
+    "closure": "lid",
+    "process": "cnc"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "mounting-of-template",
+    "why": "the DIN rail enclosure has no guides: it screws or clamps the board"
+   }
+  },
+  {
+   "key": "din-rail/guides/end-plates/mjf",
+   "label": "DIN rail enclosure, MJF PA12-HP at JLC3DP, board slid along guides",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "guides",
+    "closure": "end-plates",
+    "process": "mjf"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the DIN rail enclosure closes with a lid"
+   }
+  },
+  {
+   "key": "din-rail/guides/end-plates/sla",
+   "label": "DIN rail enclosure, SLA Ledo6060 at JLC3DP, board slid along guides",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "guides",
+    "closure": "end-plates",
+    "process": "sla"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the DIN rail enclosure closes with a lid"
+   }
+  },
+  {
+   "key": "din-rail/guides/end-plates/cnc",
+   "label": "DIN rail enclosure, CNC aluminium 6061 at JLCCNC, board slid along guides",
+   "choices": {
+    "template": "din-rail",
+    "mounting": "guides",
+    "closure": "end-plates",
+    "process": "cnc"
+   },
+   "feasible": false,
+   "pruned_by": {
+    "rule": "closure-of-template",
+    "why": "the DIN rail enclosure closes with a lid"
+   }
+  }
+ ],
+ "feasible": 6,
+ "pruned": 48,
+ "not_offered": [
+  {
+   "label": "Extruded box with end plates, MJF PA12-HP at JLC3DP",
+   "template": "extruded-box",
+   "process": "mjf",
+   "rule": "board-slides-in",
+   "why": "J9 sticks out past the board's long edge, so the board cannot slide into the tube"
+  },
+  {
+   "label": "Extruded box with end plates, SLA Ledo6060 at JLC3DP",
+   "template": "extruded-box",
+   "process": "sla",
+   "rule": "board-slides-in",
+   "why": "J9 sticks out past the board's long edge, so the board cannot slide into the tube"
+  },
+  {
+   "label": "Extruded box with end plates, CNC aluminium 6061 at JLCCNC",
+   "template": "extruded-box",
+   "process": "cnc",
+   "rule": "board-slides-in",
+   "why": "J9 sticks out past the board's long edge, so the board cannot slide into the tube"
+  }
+ ],
+ "recommended": "din-rail/rests/lid/mjf"
+}

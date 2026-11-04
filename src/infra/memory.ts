@@ -29,7 +29,12 @@
  *                          GetMemoryRecord to verify a record before memory.deactivate, after its access check), read
  *                          only (grantReadRecords), and its agents' events, listed only (memory.events,
  *                          grantReadEvents). Inactive marks are not written to the memory: they
- *                          are an overlay in S3 (src/agents/runtime/memory-state.ts)
+ *                          are an overlay in S3 (src/agents/runtime/memory-state.ts). And one write: CreateEvent on
+ *                          each project's memory, for that project's chat actor and person actors only
+ *                          (`<owner>/<repo>/chat`, `<owner>/<repo>/person/*`, bedrock-agentcore:actorId; grantChatEvents):
+ *                          a person's own chat turns (their person actor) and what a person confirmed Ask trace should
+ *                          remember (memory.remember: the chat actor only so).
+ *                          Never an agent's actor, never another project's, never a record or a delete
  *   the OIDC role          the same as its project's worker, on its own project's memory only (the worker.runner =
  *                          actions fallback is the worker in GitHub Actions): src/infra/project.ts
  */
@@ -37,7 +42,7 @@ import { RemovalPolicy } from 'aws-cdk-lib'
 import * as iam from 'aws-cdk-lib/aws-iam'
 import { CfnMemory } from 'aws-cdk-lib/aws-bedrockagentcore'
 import { Construct } from 'constructs'
-import { NAMESPACE_TEMPLATES, ROOT } from '../agents/runtime/memory.js'
+import { CHAT_AGENT, NAMESPACE_TEMPLATES, ROOT, projectId } from '../agents/runtime/memory.js'
 import { memoryNamePattern } from '../core/project.js'
 
 /** The memory of installations before memory was per project (one for every project). Kept only so that it can be
@@ -126,4 +131,29 @@ export function grantReadRecords(grantee: iam.IGrantable, memories: readonly Tra
     resources: memories.map((m) => m.memoryArn),
     conditions: { StringLike: { 'bedrock-agentcore:namespace': NAMESPACE_PATTERN } },
   }))
+}
+
+/** What the API may write to short-term memory (the chat's events): CreateEvent, and nothing else. */
+export const CHAT_EVENT_ACTIONS = ['bedrock-agentcore:CreateEvent'] as const
+
+/** The actors the API may write events for on one project: its chat, and its people (src/agents/runtime/memory.ts). */
+export const chatActorPatterns = (repository: string): string[] => [`${projectId(repository)}/${CHAT_AGENT}`, `${projectId(repository)}/person/*`]
+
+/**
+ * Let `grantee` (the people's API) record Ask trace's conversations and what a person asked it to remember: CreateEvent
+ * on each project's own memory, for that project's chat actor and person actors only. One statement per project, so
+ * no project's actors can be written into another project's memory (the per-project isolation of src/infra/project.ts).
+ * Each memory is named by its fixed name (`<name>-*`: an id is `<name>-<10 characters>`, and no other project's name
+ * starts with `<name>-`), so the statements carry no reference to the projects' stacks and stay short.
+ */
+export function grantChatEvents(grantee: iam.IGrantable, projects: readonly { repository: string; name: string }[], at: { partition: string; region: string; account: string }): void {
+  for (const p of projects) {
+    if (!MEMORY_NAME_PATTERN.test(p.name)) throw new Error(`not an AgentCore memory name: ${JSON.stringify(p.name)}`)
+    // no Sid, and the ARN as one plain string: sixty of these must fit the API role's policies
+    grantee.grantPrincipal.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: [...CHAT_EVENT_ACTIONS],
+      resources: [`arn:${at.partition}:bedrock-agentcore:${at.region}:${at.account}:memory/${p.name}-*`],
+      conditions: { StringLike: { 'bedrock-agentcore:actorId': chatActorPatterns(p.repository) } },
+    }))
+  }
 }
