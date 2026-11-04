@@ -11,7 +11,8 @@ test('a message is sent, recalled with the up key, and the reply renders markdow
   const before = await replies.count()
   await box.fill(message)
   await box.press('Enter')
-  // a new reply from trace arrives, rendered as markdown with its own controls
+  // the message is in the conversation, and a new reply from trace follows it with its own controls
+  await expect(chat.getByText(message).first()).toBeVisible()
   await expect.poll(() => replies.count(), { timeout: 60_000 }).toBeGreaterThan(before)
   await expect(chat.locator('p, li, strong').filter({ visible: true }).last()).toBeVisible()
   await box.focus()

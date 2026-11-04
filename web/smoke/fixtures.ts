@@ -30,10 +30,9 @@ export class App {
    * so a list item counts as a row there.
    */
   async tableHasRows(scope: Locator | Page = this.page.locator('#main').or(this.page.locator('body')).first()): Promise<Locator> {
-    const tableRow = scope.locator('table tbody tr').filter({ visible: true }).first()
-    const listRow = scope.locator('ul > li').filter({ visible: true }).first()
-    await expect(tableRow.or(listRow).first()).toBeVisible()
-    const row = (await tableRow.isVisible()) ? tableRow : listRow
+    // decided by the screen, not by whichever appears first: a desktop page can show a list while its table loads
+    const phone = (this.page.viewportSize()?.width ?? 1440) < 768
+    const row = scope.locator(phone ? 'ul > li' : 'table tbody tr').filter({ visible: true }).first()
     await expect(row).toBeVisible()
     await expect(row).not.toHaveText(/^\s*(No results|Nothing)/i)
     return row
@@ -52,6 +51,8 @@ export class App {
     await this.page.keyboard.press('Control+j')
     const chat = this.page.getByRole('region', { name: 'Ask trace' })
     await expect(chat).toBeVisible()
+    // let it finish opening the last conversation, which replaces what the panel shows
+    await this.page.waitForLoadState('networkidle')
     return chat
   }
 }
