@@ -10,6 +10,8 @@
  *
  * The rule, for each input:
  *   a file              current while its normalised content has the hash the run recorded (src/core/normalise.ts)
+ *   a view of a file    `<path>#<view>`: current while the part of the file the run depends on has the hash recorded
+ *                       (inputHash; `case`: what a case build depends on of a board, src/tools/mech/case-facts.ts)
  *   another run's output current while that run is the newest of its tool and subject and is itself current; when
  *                       the tool ran again, current while the newer run made the same output (the same hash) and is
  *                       current. That is the content check: a schematic edit that leaves the netlist the same leaves
@@ -17,6 +19,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 import { normalisedHash } from '../core/normalise.js'
+import { CASE_VIEW, caseViewHash } from '../tools/mech/case-facts.js'
 
 export type FreshnessState = 'current' | 'stale' | 'unknown'
 export interface Freshness {
@@ -36,6 +39,27 @@ interface InputRow { kind: 'file' | 'artifact'; ref: string; name: string | null
 const has = (db: DatabaseSync, t: string): boolean => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t))
 const runOf = (db: DatabaseSync, id: string): RunRow | undefined => db.prepare('SELECT id, kind, subject, started FROM runs WHERE id=?').get(id) as RunRow | undefined
 const hashOf = (db: DatabaseSync, run: string, name: string): string | null => (db.prepare('SELECT sha256 FROM artifact_hashes WHERE run_id=? AND name=?').get(run, name) as { sha256: string } | undefined)?.sha256 ?? null
+
+/** A file input's path and the view of it a run depends on (`hardware/x.kicad_pcb#case` → the board, `case`). */
+export function splitRef(ref: string): { path: string; view: string | null } {
+  const at = ref.lastIndexOf('#')
+  // only a view trace knows: a file whose own name has a # in it is that file
+  return at > 0 && VIEWS.has(ref.slice(at + 1)) ? { path: ref.slice(0, at), view: ref.slice(at + 1) } : { path: ref, view: null }
+}
+const VIEWS: ReadonlySet<string> = new Set([CASE_VIEW])
+
+/** The hash a file input records: of the file's normalised content, or of the view of it named after `#`. */
+export function inputHash(ref: string, bytes: Uint8Array): string {
+  const { path, view } = splitRef(ref)
+  if (view === CASE_VIEW) return caseViewHash(path, bytes)
+  return normalisedHash(path, bytes)
+}
+
+const VIEW_WORDS: Readonly<Record<string, string>> = { [CASE_VIEW]: 'what the case depends on of' }
+const inWords = (ref: string): string => {
+  const { path, view } = splitRef(ref)
+  return view ? `${VIEW_WORDS[view] ?? `the ${view} of`} ${path}` : path
+}
 
 /** The newest run of the same tool and subject that made output `name`. */
 function newestMaker(db: DatabaseSync, r: RunRow, name: string): RunRow | undefined {
@@ -60,9 +84,9 @@ export function freshness(db: DatabaseSync, runId: string, read: (path: string) 
   seen.add(runId)
   for (const i of inputs) {
     if (i.kind === 'file') {
-      const now = read(i.ref)
-      if (now === null) { if (i.sha256 !== null) out.reasons.push(`${i.ref} is gone`); continue }
-      if (normalisedHash(i.ref, now) !== i.sha256) out.reasons.push(i.sha256 === null ? `${i.ref} was added since` : `${i.ref} changed since ${r.kind} ran`)
+      const now = read(splitRef(i.ref).path)
+      if (now === null) { if (i.sha256 !== null) out.reasons.push(`${splitRef(i.ref).path} is gone`); continue }
+      if (inputHash(i.ref, now) !== i.sha256) out.reasons.push(i.sha256 === null ? `${splitRef(i.ref).path} was added since` : `${inWords(i.ref)} changed since ${r.kind} ran`)
       continue
     }
     const maker = runOf(db, i.ref)
@@ -108,7 +132,7 @@ export function filesRead(db: DatabaseSync, runs: readonly string[]): string[] {
     if (seen.has(id)) continue
     seen.add(id)
     for (const i of db.prepare('SELECT kind, ref, name FROM run_inputs WHERE run_id=?').all(id) as unknown as InputRow[]) {
-      if (i.kind === 'file') { files.add(i.ref); continue }
+      if (i.kind === 'file') { files.add(splitRef(i.ref).path); continue }
       todo.push(i.ref)
       const maker = runOf(db, i.ref)
       const newest = maker && i.name ? newestMaker(db, maker, i.name) : undefined

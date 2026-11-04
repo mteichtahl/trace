@@ -9,13 +9,13 @@ build plan. trace's SQLite tables stay the record; the ontology is how they are 
 | `trace-core.ttl` | The design artifact and its versions, the input and output links (Si2's pattern), evidence, and the plain properties many records share |
 | `trace-journey.ttl` | The journey record, the agents' facts and the job index: templates, stages, gates, criteria, signatures, waivers, questions, decisions, hand-offs, jobs, orders, boards, and the history tables |
 | `trace-board.ttl` | The design record, the verification and run records, bench readings, parts and offers, and the board read from its file: components, pads, nets, layers |
+| `trace-mech.ttl` | The case a board goes in, from its newest build: its parts, material, fasteners, openings, joints, the fit check with each problem it found, the process's rule results, the settings and each part's space |
 | `trace-si2-align.ttl` | How trace's terms relate to the Si2 EDA ontology's; the only file that names Si2 |
 | `si2/terms.txt` | The terms Si2 defines at the pinned commit, which every alignment is checked against |
 | `context.jsonld` | The JSON-LD context, written from the ontology by `scripts/ontology-context.mjs` |
 | `shapes/<criterion>.ttl` | The SHACL shape behind a gate criterion trace owns, each naming its criterion (`tsh:criterion`) |
+| `shapes/records/mech.ttl` | The shapes a sound case record keeps to (case.jsonld as the engine writes it) |
 | `shapes/templates/journey-template.ttl` | The shape a project template keeps to, checked when an admin saves it (`templates.save`) |
-
-The mechanical module comes in a later phase.
 
 ## Conventions
 
@@ -34,6 +34,7 @@ The mechanical module comes in a later phase.
   journey record (journey.db), the agents' facts (facts.db), the job index (jobs.db), the project database
   (.trace/project.db) and the parts database.
 - `src/ontology/board.ts` reads a board from its .kicad_pcb when the graph is built: nothing about the board is stored.
+- `src/ontology/mech.ts` reads the newest case build (mech.build's artifacts in the run record) when the graph is built.
 - `src/ontology/graph.ts` builds a project's graph in memory through the mapping, and checks records against the
   ontology.
 - `src/ontology/jsonld.ts` gives the JSON-LD context and one record as JSON-LD.

@@ -19,6 +19,7 @@ import { NS, RDF, XSD, type Vocabulary, isA, local } from './vocab.js'
 import type { Board } from '../tools/kicad/pcb.js'
 import { addBoard } from './board.js'
 import { addDerived } from './derived.js'
+import { addCase } from './mech.js'
 
 const { namedNode, literal, quad } = DataFactory
 
@@ -41,6 +42,9 @@ export interface GraphOptions {
   /** add the facts no column stores, worked out as the app reads them (src/ontology/derived.ts): for the shapes. Off
    *  by default, so the graph checked against the ontology (checkRecords) is what trace stores */
   derived?: boolean
+  /** the repository's files as they are now (path → bytes, null when gone): with `derived`, whether the newest case
+   *  build still stands is worked out from its lineage (src/ontology/mech.ts) */
+  files?: (path: string) => Uint8Array | null
 }
 
 const enc = (s: string): string => encodeURIComponent(s)
@@ -163,6 +167,8 @@ export function buildGraph(src: GraphSources, o: GraphOptions): { store: Store; 
     if (db) rows[`${t.db}.${t.table}`] = table(c, db, t)
   }
   for (const b of src.boards ?? []) addBoard(c.store, o, b.path, b.board)
+  // the newest case build, from the run record's artifacts (the mechanical module)
+  if (src.project) addCase(c.store, o, src.project, o.files)
   // for the shapes, what no column stores, worked out as the app reads it: people's decisions are the journey's, or the
   // project database's copy of them (a release, the API's record copy)
   if (o.derived && src.project) addDerived(c.store, o, src.project, src.journey ?? src.project)

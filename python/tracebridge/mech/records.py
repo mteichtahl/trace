@@ -1,12 +1,15 @@
 """The case as JSON-LD records (case.jsonld), in the ontology's mechanical module (docs/ontology.md: the one namespace
-every module shares, https://trace-eda.com/ns/trace#; `tm:` names the module in the docs and stands for it).
+every module shares, https://trace-eda.com/ns/trace#; `tm:` names the module in the docs and stands for it). Every
+key is a term of ontology/trace-mech.ttl (or the core and board modules it builds on), and src/ontology/mech.ts reads
+these records into the project's graph as they are.
 
 Nodes: the `Enclosure` with its `EnclosurePart`s (partKind base, lid, or case for a handed-in file), its `Material`
-(name and process), one `Fastener` and one `MountingPoint` per screw, an `Opening` per connector cut (face = the
+(name and process), one `Fastener`, one `MountingPoint` and one `Standoff` per screw, an `Opening` per connector cut (face = the
 compass side), a `Joint` per fastened or press-fit pair (jointKind from the ontology's closed list), the board's
 `BoardOutline`, and a `FitCheck` with what the fit measured. Ids are deterministic ("case:base", "joint:H1",
-"fastener:H1"), so two builds of the same board and settings write the same graph. The SHACL shape behind the
-layout gate's fit criterion is the ontology work's; these records are what it will read.
+"fastener:H1"), so two builds of the same board and settings write the same graph; an opening names its part as
+"component:J1", the board module's own record of it. The layout gate's fit criterion (ontology/shapes/layout.fit.ttl)
+reads these records.
 """
 from __future__ import annotations
 
@@ -15,7 +18,8 @@ from typing import Any
 from .shell import Case
 
 MECH = "https://trace-eda.com/ns/trace#"
-CONTEXT = {"tm": MECH, "@vocab": MECH}
+# lists of numbers are one value each (JSON), not several
+CONTEXT = {"tm": MECH, "@vocab": MECH, "boundingBox": {"@type": "@json"}, "outerSize": {"@type": "@json"}}
 # the ontology's closed list of joint kinds, from the shell's own names
 JOINT_KINDS = {"fastened": "fastened", "press_fit": "press-fit"}
 
@@ -24,7 +28,7 @@ def records(case: Case, facts: dict[str, Any], fit: dict[str, Any], settings: di
     board_id = "board:" + str(facts.get("board") or "board")
     process = (settings or {}).get("process") or {}
     graph: list[dict[str, Any]] = [
-        {"@id": "case:enclosure", "@type": "Enclosure", "source": case.source,
+        {"@id": "case:enclosure", "@type": "Enclosure", "caseSource": case.source,
          "hasPart": [{"@id": f"case:{n}"} for n in sorted(case.parts)],
          "material": {"@id": "material:case"}, "encloses": {"@id": board_id}},
         {"@id": "material:case", "@type": "Material", "name": process.get("material"), "process": process.get("process"),
@@ -49,13 +53,15 @@ def records(case: Case, facts: dict[str, Any], fit: dict[str, Any], settings: di
         graph.append(node)
     graph[0]["outerSize"] = [round(h - l, 3) for l, h in zip(lo, hi)] if case.parts else None
     for f in case.fasteners:
-        graph.append({"@id": f["id"], "@type": "Fastener", "kind": "screw", "size": f["size"], "length": f["length_mm"],
+        graph.append({"@id": f["id"], "@type": "Fastener", "fastenerKind": "screw", "size": f["size"], "length": f["length_mm"],
                       "pilotDiameter": f["pilot_d_mm"], "unit": "mm"})
-        graph.append({"@id": f"mount:{f['ref']}", "@type": "MountingPoint", "ref": f["ref"], "x": f.get("x"), "y": f.get("y"),
-                      "diameter": f.get("hole_d_mm"), "fastener": {"@id": f["id"]}, "unit": "mm"})
+        graph.append({"@id": f"mount:{f['ref']}", "@type": "MountingPoint", "reference": f["ref"], "positionX": f.get("x"),
+                      "positionY": f.get("y"), "diameter": f.get("hole_d_mm"), "fastener": {"@id": f["id"]}, "unit": "mm"})
+        graph.append({"@id": f"standoff:{f['ref']}", "@type": "Standoff", "atMountingPoint": {"@id": f"mount:{f['ref']}"}})
     for o in fit.get("openings") or []:
         if o.get("made"):
-            graph.append({"@id": f"opening:{o['ref']}", "@type": "Opening", "forComponent": o["ref"], "face": o.get("side"),
+            graph.append({"@id": f"opening:{o['ref']}", "@type": "Opening", "forComponent": {"@id": f"component:{o['ref']}"},
+                          "face": o.get("side"),
                           "inPart": [{"@id": "case:base"}, {"@id": "case:lid"}]})
     for j in case.joints:
         kind = JOINT_KINDS.get(j["type"])
@@ -72,5 +78,5 @@ def records(case: Case, facts: dict[str, Any], fit: dict[str, Any], settings: di
     graph.append({"@id": "check:fit", "@type": "FitCheck", "status": fit["status"], "enclosed": fit.get("enclosed"),
                   "clashCount": len(fit["clashes"]), "clashes": [c["ref"] for c in fit["clashes"]],
                   "gapViolations": sum(1 for g in fit["gaps"] if not g["ok"]),
-                  "boardSha256": facts.get("sha256"), "checks": {"@id": "case:enclosure"}})
+                  "boardSha256": facts.get("sha256"), "fitOf": {"@id": "case:enclosure"}})
     return {"@context": CONTEXT, "@graph": graph}

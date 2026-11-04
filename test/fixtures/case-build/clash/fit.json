@@ -1,0 +1,184 @@
+{
+  "status": "fail",
+  "enclosed": true,
+  "clashes": [
+    {
+      "ref": "board",
+      "case_part": "lid",
+      "volume_mm3": 294.0
+    },
+    {
+      "ref": "J1",
+      "case_part": "lid",
+      "volume_mm3": 10.779
+    },
+    {
+      "ref": "J2",
+      "case_part": "lid",
+      "volume_mm3": 37.736
+    },
+    {
+      "ref": "J3",
+      "case_part": "lid",
+      "volume_mm3": 28.745
+    }
+  ],
+  "gaps": [
+    {
+      "ref": "board",
+      "where": "edge",
+      "measured_mm": 0.5,
+      "required_mm": 0.5,
+      "ok": true
+    },
+    {
+      "ref": "C1",
+      "where": "above",
+      "measured_mm": 9.6,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "C2",
+      "where": "above",
+      "measured_mm": 9.6,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "C3",
+      "where": "above",
+      "measured_mm": 9.15,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "C4",
+      "where": "above",
+      "measured_mm": 9.15,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "D1",
+      "where": "above",
+      "measured_mm": 9.25,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "D2",
+      "where": "above",
+      "measured_mm": 9.7,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "J1",
+      "where": "above",
+      "measured_mm": 0.0,
+      "required_mm": 1.0,
+      "ok": false
+    },
+    {
+      "ref": "J1",
+      "where": "below",
+      "measured_mm": 1.0,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "J2",
+      "where": "above",
+      "measured_mm": 0.0,
+      "required_mm": 1.0,
+      "ok": false
+    },
+    {
+      "ref": "J2",
+      "where": "below",
+      "measured_mm": 1.0,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "J3",
+      "where": "above",
+      "measured_mm": 0.0,
+      "required_mm": 1.0,
+      "ok": false
+    },
+    {
+      "ref": "J3",
+      "where": "below",
+      "measured_mm": 1.0,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "R1",
+      "where": "above",
+      "measured_mm": 9.95,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "R2",
+      "where": "above",
+      "measured_mm": 9.95,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "R3",
+      "where": "above",
+      "measured_mm": 9.95,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "R4",
+      "where": "above",
+      "measured_mm": 9.95,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "R5",
+      "where": "above",
+      "measured_mm": 9.95,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "R6",
+      "where": "above",
+      "measured_mm": 9.95,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "U1",
+      "where": "above",
+      "measured_mm": 8.7,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "U2",
+      "where": "above",
+      "measured_mm": 9.25,
+      "required_mm": 1.0,
+      "ok": true
+    }
+  ],
+  "openings": [
+    {
+      "ref": "J1",
+      "side": "west",
+      "made": false
+    }
+  ],
+  "assumptions": [],
+  "summary": "4 clashes (board with lid 294.00 mm\u00b3; J1 with lid 10.78 mm\u00b3; J2 with lid 37.74 mm\u00b3; J3 with lid 28.75 mm\u00b3); 3 gaps under their clearance (J1 above 0.00 mm, needs 1.00 mm; J2 above 0.00 mm, needs 1.00 mm; J3 above 0.00 mm, needs 1.00 mm); no opening for J1"
+}

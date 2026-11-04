@@ -1,0 +1,110 @@
+{
+  "@context": {
+    "tm": "https://trace-eda.com/ns/trace#",
+    "@vocab": "https://trace-eda.com/ns/trace#",
+    "boundingBox": {
+      "@type": "@json"
+    },
+    "outerSize": {
+      "@type": "@json"
+    }
+  },
+  "@graph": [
+    {
+      "@id": "case:enclosure",
+      "@type": "Enclosure",
+      "caseSource": "script",
+      "hasPart": [
+        {
+          "@id": "case:base"
+        },
+        {
+          "@id": "case:lid"
+        }
+      ],
+      "material": {
+        "@id": "material:case"
+      },
+      "encloses": {
+        "@id": "board:hardware/trace-sample.kicad_pcb"
+      },
+      "outerSize": [
+        69.4,
+        49.4,
+        19.1
+      ]
+    },
+    {
+      "@id": "material:case",
+      "@type": "Material",
+      "name": "PA12-HP",
+      "process": "MJF",
+      "service": "jlc3dp"
+    },
+    {
+      "@id": "board:hardware/trace-sample.kicad_pcb",
+      "@type": "BoardOutline",
+      "path": "hardware/trace-sample.kicad_pcb",
+      "sha256": "289406e6e26f13cfabb836b493e1e0b3f87f901524aa176849b9fe7bfdac24d9",
+      "thickness": 1.6,
+      "unit": "mm"
+    },
+    {
+      "@id": "case:base",
+      "@type": "EnclosurePart",
+      "partKind": "base",
+      "boundingBox": [
+        69.4,
+        49.4,
+        6.6
+      ],
+      "unit": "mm",
+      "wallThickness": 2.0
+    },
+    {
+      "@id": "case:lid",
+      "@type": "EnclosurePart",
+      "partKind": "lid",
+      "boundingBox": [
+        69.4,
+        49.4,
+        17.0
+      ],
+      "unit": "mm",
+      "wallThickness": 2.0
+    },
+    {
+      "@id": "joint:lid-base",
+      "@type": "Joint",
+      "jointKind": "press-fit",
+      "joins": [
+        {
+          "@id": "case:lid"
+        },
+        {
+          "@id": "case:base"
+        }
+      ],
+      "clearance": 0.2,
+      "unit": "mm"
+    },
+    {
+      "@id": "check:fit",
+      "@type": "FitCheck",
+      "status": "fail",
+      "enclosed": true,
+      "clashCount": 4,
+      "clashes": [
+        "board",
+        "J1",
+        "J2",
+        "J3"
+      ],
+      "gapViolations": 3,
+      "boardSha256": "289406e6e26f13cfabb836b493e1e0b3f87f901524aa176849b9fe7bfdac24d9",
+      "fitOf": {
+        "@id": "case:enclosure"
+      }
+    }
+  ]
+}
