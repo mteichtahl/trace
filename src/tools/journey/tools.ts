@@ -62,6 +62,7 @@ import {
 import { JobIndexStore, indexedHandle, loadJobs } from '../../core/job-index.js'
 import { asksAgain } from '../../core/process-time.js'
 import { recordProcessMetric } from '../../core/telemetry.js'
+import { video } from './video.js'
 
 const configured = (): boolean => projectsFromEnv() !== null
 
@@ -565,4 +566,4 @@ export const handoffAnswer = defineTool({
   }),
 })
 
-export const tools = [status, ask, check, stuck, handoff, handoffAnswer]
+export const tools = [status, ask, check, stuck, handoff, handoffAnswer, video]

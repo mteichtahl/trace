@@ -88,6 +88,7 @@ export function knowledgeAction(name: string, a: Record<string, unknown>): unkno
     case 'tool':
       // the coverage matrix is the project tabs' (mock/s1.ts)
       if (a.name === 'verify.coverage') return undefined
+      if (a.name === 'replay.video') return { run_id: 'run_replay1', artifact: 'replay.mp4', poster: 'poster.svg', events: 33, seconds: 120, size: 711_592, summary: '33 records in 120 s, 1280×720 at 30 fps (0.7 MB)' }
       return toolResult(String(a.name), (a.args ?? {}) as Record<string, unknown>)
     default:
       return undefined

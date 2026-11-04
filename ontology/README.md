@@ -44,7 +44,9 @@ build plan. trace's SQLite tables stay the record; the ontology is how they are 
   same moment.
 - `src/ontology/replay.ts` gives the record as events in time order, each typed by the mapping's class and naming the
   graph node it changes (`journey.replay`, the graph view's player), and the journey record as of a moment
-  (`recordAsOf`), which the replay test checks against every signature.
+  (`recordAsOf`), which the replay test checks against every signature. `src/ontology/replay-video.ts` draws the same
+  events as SVG frames, headless, for `replay.video` (`src/tools/journey/video.ts`), which encodes them with ffmpeg and
+  stores the MP4 as a run's artifact.
 - `src/ontology/jsonld.ts` gives the JSON-LD context and one record as JSON-LD.
 - `src/ontology/derived.ts` adds, for the shapes only, the facts no column stores (a requirement still live, the
   architecture option the design goes ahead with), worked out by the same code the app shows them with.

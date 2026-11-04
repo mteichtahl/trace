@@ -3,11 +3,12 @@
  * the graph growing as each record is made. Play, pause, speed, a scrubber with each stage's start marked, stage chips
  * that jump to a chapter, a caption naming who did what and from which record, a filter by person or specialist, and
  * a click through to the record. The events come from journey.replay (every page read); the graph at the playhead
- * is lib/replay.ts graphAt. Keyboard: Space plays and pauses, ← and → step, Home and End go to either end.
+ * is lib/replay.ts graphAt. Export a video runs replay.video on the project's worker (src/tools/journey/video.ts): a
+ * two-minute MP4 stored as a run's artifact, opened from its run. Keyboard: Space plays and pauses, ← and → step, Home and End go to either end.
  */
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ArrowLeft, ExternalLink, Pause, Play, SkipBack, SkipForward } from 'lucide-react'
+import { ArrowLeft, ExternalLink, Film, Loader2, Pause, Play, SkipBack, SkipForward } from 'lucide-react'
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -15,7 +16,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Slider } from '@/components/ui/slider'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { EmptyState, ErrorState } from '@/components/states'
-import { call, projectName } from '@/lib/api'
+import { call, projectId, projectName } from '@/lib/api'
 import { NODE_WORD } from '@/lib/graph'
 import { type Replay, type ReplayPage, SPEEDS, chapterAt, chapterIndex, graphAt, joinPages, shown, step } from '@/lib/replay'
 import { cn } from '@/lib/utils'
@@ -49,6 +50,12 @@ export function ReplayPlayer({ repo, onExit }: { repo: string; onExit: () => voi
   const [picked, setPicked] = useState<string | null>(null)
   const canvas = useRef<CanvasHandle>(null)
   const total = r?.events.length ?? 0
+  const film = useMutation({ mutationFn: () => call('tool', { repo, name: 'replay.video', args: {} }) })
+  const filmRun = (() => {
+    const v = film.data as { run_id?: unknown; result?: { run_id?: unknown } } | undefined
+    const id = v?.run_id ?? v?.result?.run_id
+    return typeof id === 'string' ? id : null
+  })()
 
   // start at the end: the record as it stands, ready to play back from the start
   useEffect(() => { if (r) setAt(r.events.length) }, [r])
@@ -88,6 +95,16 @@ export function ReplayPlayer({ repo, onExit }: { repo: string; onExit: () => voi
         <Button variant="ghost" size="sm" onClick={onExit}><ArrowLeft /> Back to the graph</Button>
         <h2 className="text-base font-semibold">Replay · {projectName(repo)}</h2>
         {r && r.events.length > 0 && <span className="text-xs text-muted-foreground">{when(r.events[0]!.at)} – {when(r.events.at(-1)!.at)} · {r.events.length} records</span>}
+        {r && r.events.length > 0 && (
+          <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
+            {film.isPending && 'Filming the record: this takes a minute or two.'}
+            {film.isError && <span className="text-destructive">Could not make the video: {film.error instanceof Error ? film.error.message : String(film.error)}</span>}
+            {filmRun && <Link className="text-primary hover:underline" to={`/p/${projectId(repo)}/runs/${filmRun}` as string}>The video is ready: open its run</Link>}
+            <Button size="sm" variant="outline" disabled={film.isPending} onClick={() => film.mutate()}>
+              {film.isPending ? <Loader2 className="animate-spin" /> : <Film />} Export a video
+            </Button>
+          </span>
+        )}
       </div>
 
       {q.isLoading ? (
