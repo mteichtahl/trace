@@ -233,6 +233,7 @@ export function readJourney(raw: unknown, args?: { repo?: string }): Journey {
           opened: Boolean(c.opened_by_you),
           ...(str(c.stale) ? { stale: String(c.stale) } : {}),
           ...(findings.length ? { findings } : {}),
+          ...(c.added === true ? { added: true } : {}),
         }
       }),
       waivers: (Array.isArray(g.waivers) ? g.waivers : []).map((id) => waiverById.get(String(id))).filter((w): w is Waiver => !!w),
