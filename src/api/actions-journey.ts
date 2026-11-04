@@ -71,6 +71,9 @@ import { AGENT_WORDS, jobIndex, listJobs, projectHandoffs } from './actions-jobs
 import { editReviewItems, reviewItems } from './inbox-review.js'
 import { loadJobs } from '../core/job-index.js'
 import { evidenceStaleness } from './evidence-freshness.js'
+import { STAGE_NAMES } from '../core/journey-catalog.js'
+import { docsFor } from '../docs/catalog.js'
+import { docsRequest, startScribe } from './docs-follow.js'
 import { ActionError, type Context, NO_ACCESS, Repo, agentFacts, def, hashOf, hashesOf, journeyStore, label, plainly, snapshotJourney, withJourneyDb, withRecordDb, writeJourney } from './action-kit.js'
 import { requirementEvidence } from './record-read.js'
 import { backToDefine, changedRequirements, pendingOf } from './pending-changes.js'
@@ -461,6 +464,12 @@ export const JOURNEY_ACTIONS = {
         const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: a.repo, request: work.request, agent: work.agent, requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
         kickoff = r.accepted ? { jobId: r.jobId, started: [work.started] } : { jobError: r.reason ?? 'trace did not accept the job.' }
       } catch (e) { kickoff = { jobError: e instanceof Error ? e.message : String(e) } }
+    }
+    // the stage that opened may need new documents or sections: Scribe brings them up to date (docs/scribe.md); a
+    // stage that needs none starts nothing, and the signature stands whatever happens here
+    if (signed.advanced_to && docsFor(signed.advanced_to, true).length) {
+      const d = await startScribe(ctx, a.repo, docsRequest(`The ${a.gate} gate was signed and ${STAGE_NAMES[signed.advanced_to]} opened.`, { stage: signed.advanced_to }))
+      if (d.started) kickoff = { ...kickoff, started: [...(kickoff.started ?? []), d.started] }
     }
     if (!signed.released) return { ...signed, ...kickoff, snapshot: null }
     // the signature cut a release: the record goes into the repository with it

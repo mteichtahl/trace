@@ -82,7 +82,8 @@ export const GATES: readonly GateDef[] = [
     { key: 'coverage', text: 'Every requirement is verified or waived.', owner: 'trace', evidence: 'the coverage matrix' },
     { key: 'emc', text: 'The radio interference prechecks are run and within the target.', owner: 'trace', evidence: 'the interference precheck', in: BOARDS },
     { key: 'bom', text: 'The parts list is checked for cost and stock at the build quantity.', owner: 'trace', evidence: 'the parts list check' },
-    { key: 'report', text: 'The release report is reviewed: coverage, interference estimates, parts list and open waivers.', owner: 'person', evidence: 'the release report', after: ['coverage', 'emc', 'bom'] },
+    { key: 'docs', text: 'The project\'s documents are current: every one the release needs is there, every section due is written, and they pass the documents check.', owner: 'trace', evidence: 'the documents check' },
+    { key: 'report', text: 'The release report is reviewed: coverage, interference estimates, parts list and open waivers.', owner: 'person', evidence: 'the release report', after: ['coverage', 'emc', 'bom', 'docs'] },
   ] },
   { id: 'fabricate.order', stage: 'fabricate', name: 'order approval', criteria: [
     { key: 'package', text: 'The release package is built and stored.', owner: 'trace', evidence: 'the release package' },

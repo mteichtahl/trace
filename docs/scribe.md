@@ -54,15 +54,25 @@ Two rules keep it trustworthy:
    names the records it is written from (requirements, decisions, architecture, schematic, board, enclosure, protocol
    specs and runs, power and thermal results, tests). Scribe writes only between its section markers, so a person's
    own notes outside them are kept.
-2. **Event driven.** A merged change, a signed gate or a journey record update starts a recorded hand-off job for
-   Scribe. A nightly drift check catches anything the events missed, and the app says when it next runs.
+2. **Event driven.** Scribe starts on its own after anything that can change the documents
+   (`src/api/docs-follow.ts`):
+   - **a push to the default branch** (every merged change, a person's edit in the app, a released record), when the
+     commit changed a record a document is written from: the hooks function asks `hook.docs`, which reads the commit's
+     files and compares its project database with its parent's table by table. A commit of only the documents, or of
+     only the runs Scribe makes for them, starts nothing, so Scribe's own change never starts Scribe again;
+   - **a gate signed** whose new stage needs documents (from Architect on).
+   One Scribe job runs per project at a time. It compares with the commit the documents were last written at (their
+   front matter), not with the push that started it, so a missed or skipped event is caught by the next one.
 3. **Surgical updates.** Scribe works out which sections the change touched and rewrites only those, then opens a
    stacked pull request on the change it documents, reviewed in the app like any other.
 4. **Quality bar.** Each document has its own writing rules, checked by `src/docs/checks.ts`: every section present,
    sections due by the current stage written, no unexplained acronyms, every figure captioned with its kind and source,
    only the diagram kinds that document allows, every value with a basis and a source. A failed check, or a diagram
    that does not render, blocks the change.
-5. **Gates.** A SHACL shape marks the documents current; a stage's gate cannot be signed while its documents are stale.
+5. **Gates.** The release approval gate has a documents criterion (`signoff.docs`, owned by trace): every document
+   the release needs is there, every section due is written, and they pass the documents check. Scribe records it
+   with `journey.check`, its evidence the `docs.check` run, which is recorded for that. The release report's review
+   waits on it, with coverage, interference and the parts list.
 6. **Rendering.** `docs.publish` (`src/tools/docs/tools.ts`) runs `python -m tracebridge.docs` as the `docs` job kind
    on the project's tools function, where KiCad and Blender already run (`agent/Dockerfile.tools`): Mermaid draws each
    diagram as SVG with its labels as text, pandoc writes Typst through `python/tracebridge/docs/template.typ`, and Typst
@@ -121,14 +131,16 @@ Each layer is one pull request that builds and passes on its own.
    drawing`, a cad job); a timing diagram per protocol modelled. Figures go to `docs/design/figures` with stable names
    and `figures.json` (each one's run, inputs hash and quality), so an unchanged figure is never made again and a draft
    is replaced only by a release. Blender renders with Cycles: Eevee cannot run on the tools function (no display).
-6. **Scribe**: the `docs` specialist (`src/agents/docs`: label `agent:docs`, its prompt in the catalog from its
+6. **Scribe** (merged, #264): the `docs` specialist (`src/agents/docs`: label `agent:docs`, its prompt in the catalog from its
    definition) and its tools (`src/tools/docs/scribe.ts`): `docs.init` starts the documents a stage needs,
    `docs.stale` names the sections a change touched (its files, and the project database compared table by table),
    `docs.write_section` writes one section between its markers only when it passes the quality bar. As a specialist it
    has no file tools of its own; the worker commits its documents as a change stacked on the one documented.
-7. **Events and gates**: hand-off on merge, gate and journey changes; the nightly drift check; the "documents
-   current" SHACL shape, run over the graph with the documents read in; published copies to the central bucket and
-   attached to each release.
+7. **Events and gates**: Scribe started by a push that changed a record (`hook.docs`) and by a gate opening a stage
+   that needs documents (`gate.sign`); `docs.stale` compares with the documents' own last commit; `docs.check` recorded
+   as a run and the release gate's documents criterion (`signoff.docs`).
+7b. **Publishing**: printed copies to the central bucket and attached to each release with the journey record, and a
+   nightly drift check with its next time shown in the app.
 8. **Docs tab** in the web app: each document with a freshness badge, the PDF viewer, and when it next checks.
 9. **Proof**: `test-esp32` through every stage, checking each document and figure as it appears (the I2C display
    exercises the protocol specification).

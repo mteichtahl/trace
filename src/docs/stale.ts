@@ -24,10 +24,13 @@ export const TABLE_SOURCES: Readonly<Record<string, readonly SourceKind[]>> = {
 /** Run kinds and the records their results are: a new run of one marks its sections. */
 export const RUN_SOURCES: readonly (readonly [RegExp, readonly SourceKind[]])[] = [
   [/^thermal\.(check|junction|board|measure|pcb)$/, ['thermal']], [/^thermal\.budget$/, ['power']],
-  [/^protocol\.(model|check|capture|diagram|compat|bus_analog)$/, ['protocol-runs']],
+  [/^protocol\.(model|check|capture|compat|bus_analog)$/, ['protocol-runs']],
   [/^(sim|verify|ams|emc)\./, ['tests']], [/^(kicad\.(erc|drc)|layout\.)/, ['board']],
-  [/^(render\.(board|showcase)|mech\.(build|fit))$/, ['board', 'enclosure']], [/^fab\./, ['fabrication']],
+  [/^mech\.(build|fit)$/, ['enclosure']], [/^fab\./, ['fabrication']],
 ]
+// Not here, on purpose: the runs Scribe itself makes for the documents (docs.*, render.showcase, render.board,
+// protocol.diagram). They are pictures of records, not records, so they never mark a section: otherwise Scribe's own
+// change would start Scribe again.
 
 /** Repository paths and the records they hold. */
 export const PATH_SOURCES: readonly (readonly [RegExp, readonly SourceKind[]])[] = [

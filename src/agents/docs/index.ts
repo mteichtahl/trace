@@ -44,7 +44,9 @@ export const docs: Specialist = {
       + ' out where it first appears or put in the glossary section; part numbers, pins and nets in `code`. If it is'
       + ' refused, fix what the findings say and write it again. Then docs_check at the stage: no errors left.',
     'Print the documents you changed with docs_publish and look at the result (trace_run on its run): every diagram'
-      + ' drew, the cover carries the logo or the project icon.',
+      + ' drew, the cover carries the logo or the project icon. From Sign-off on, record the documents criterion:'
+      + ' journey_check signoff.docs, met with the docs_check run as evidence when it passes, not met with its findings'
+      + ' when it does not.',
     'Delivery: delegate (DELIVERY) to the worker to commit docs/design (and .trace/project.db for the runs you made)'
       + ' on a branch stacked on the change you documented, and open the pull request. Its title says which documents'
       + ' and sections changed and why; its body lists each section with the records that changed it.',
