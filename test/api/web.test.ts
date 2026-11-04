@@ -24,6 +24,7 @@ import { askQuestion, loadJourney, setCriterion, startJourney } from '../../src/
 import { allTools } from '../../src/tools/index.js'
 import { Registry } from '../../src/core/registry.js'
 import { openProject } from '../../src/core/store.js'
+import { cutDay } from '../../src/api/actions-journey.js'
 import '../../src/tools/verify/db.js'
 import { FakeCognito, FakeGitHub, accessToken, verifier } from './fixtures.js'
 
@@ -51,7 +52,7 @@ const memClient: SendClient = {
 }
 const memories: ProjectMemories = { forProject: (repo) => (repo.toLowerCase() === 'acme/web' ? new AgentMemory('trace_m_0000aaaa-abcdefghij', memClient) : null) }
 
-const startedJobs: { repository: string; agent?: string | undefined; request: string }[] = []
+const startedJobs: { kind?: string; repository: string; agent?: string | undefined; request: string }[] = []
 const deps: ActionDeps = {
   github: async () => github,
   cognito: () => cognito,
@@ -687,9 +688,18 @@ describe('the release copy', () => {
     for (const g of ['define', 'architect']) { await open(g); expect(await run(ADMIN, 'gate.sign', { repo: 'acme/secret', gate: g })).toMatchObject({ snapshot: null }) }
     await open('prove')
     github.calls = []
-    const signed = await run(ADMIN, 'gate.sign', { repo: 'acme/secret', gate: 'prove' }) as { released: boolean; advanced_to: string; snapshot: { branch: string; commit: string }; summary: string }
+    startedJobs.length = 0
+    const signed = await run(ADMIN, 'gate.sign', { repo: 'acme/secret', gate: 'prove', time_zone: 'Australia/Melbourne' }) as { released: boolean; advanced_to: string; snapshot: { branch: string; commit: string }; summary: string; renders: { jobId?: string; started?: string } }
     expect(signed).toMatchObject({ released: true, advanced_to: 'bringup', snapshot: { branch: expect.stringMatching(/^trace\/release-a-/), commit: 'c0ffee0000000000000000000000000000000000' } })
     expect(signed.summary).toMatch(/copied into the repository/)
+    // the revision's renders: the rendering agent, asked for revision A on the day it was cut where the signer is
+    const day = cutDay(new Date(), 'Australia/Melbourne')
+    const job = startedJobs.find((p) => p.agent === 'render')
+    expect(job).toMatchObject({ kind: 'task', repository: 'acme/secret', agent: 'render' })
+    expect(job?.request).toContain(`render_showcase with revision=A and date=${day}`)
+    expect(job?.request).toContain(`_rev-A_${day}_<shot>.png`)
+    expect(signed.renders).toMatchObject({ jobId: 'j', started: `The Rendering agent makes revision A's renders (${day}).` })
+    expect(signed.summary).toMatch(/makes revision A's renders/)
     expect(github.calls.some((x) => x.startsWith('putFile acme/secret main'))).toBe(false)
     // the copy: the repository's own tables kept, the journey's replaced by the live record
     const bytes = github.files.get(`acme/secret:${signed.snapshot.branch}:.trace/project.db`)
@@ -705,7 +715,13 @@ describe('the release copy', () => {
 
   it('journey.snapshot is for admins, and needs a journey', async () => {
     expect((await call(accessToken('w-user', ['trace-users']), { action: 'journey.snapshot', repo: 'acme/web' })).status).toBe(403)
-    expect(await run(ADMIN, 'journey.snapshot', { repo: 'acme/web', reason: 'a check' })).toMatchObject({ branch: expect.stringMatching(/^trace\/release-/), revision: 'A', version: expect.any(Number) })
+    startedJobs.length = 0
+    expect(await run(ADMIN, 'journey.snapshot', { repo: 'acme/web', reason: 'a check', time_zone: 'not a zone' })).toMatchObject({ branch: expect.stringMatching(/^trace\/release-/), revision: 'A', version: expect.any(Number), renders: { jobId: 'j' } })
+    // a time zone that is not one is dropped: the day is UTC's
+    expect(startedJobs.find((p) => p.agent === 'render')?.request).toContain(`date=${cutDay(new Date())}`)
+    startedJobs.length = 0
+    expect(await run(ADMIN, 'journey.snapshot', { repo: 'acme/web', reason: 'no pictures', renders: false })).not.toHaveProperty('renders')
+    expect(startedJobs).toEqual([])
     await expect(run(ADMIN, 'journey.snapshot', { repo: 'acme/fresh2' })).rejects.toThrow()
   })
 })
