@@ -155,6 +155,7 @@ export interface Actions {
   'design.decide': { args: Repo & { decision: import('./types-s1').DesignDecisionInput }; result: { ok: true; decision: { id: string; kind: string; target: string; choice: string; by: string; at: string }; summary: string } }
   /** releases, orders, boards */
   'build.get': { args: Repo; result: import('./types-s1').BuildView }
+  'renders.list': { args: Repo; result: import('./types-renders').RendersView }
   /** record a placed order (number, paid cost, ship date) */
   'order.record': { args: Repo & { order?: string; number: string; paid: number | null; ship: string | null }; result: { ok: true; wait?: Wait } }
   /** the stage timeline; money for admins (cloud estimates and actuals from the cost ledger, orders); notes */

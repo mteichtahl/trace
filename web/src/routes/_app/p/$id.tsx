@@ -56,6 +56,8 @@ export function visibleTabs(j: Journey, o: { admin: boolean }): ProjectTab[] {
     // from the first run on: Capture where the template has it (checks start running there), else Prove
     { id: 'evidence', label: 'Evidence', to: '/evidence', show: reached(j, ['capture', 'prove']) },
     { id: 'build', label: 'Build', to: '/build', show: reached(j, ['release']) },
+    // each revision's renders, made when it is cut (docs/revision-renders.md)
+    { id: 'renders', label: 'Renders', to: '/renders', show: reached(j, ['release']) },
     { id: 'decisions', label: 'Decisions', to: '/decisions', show: j.gates.some((g) => g.state === 'signed') },
     { id: 'files', label: 'Files', to: '/files', show: true },
     { id: 'settings', label: 'Settings', to: '/settings', show: true },
@@ -111,7 +113,7 @@ function ProjectLayout() {
   const ready = (changes.data?.changes ?? []).filter((c) => c.verdict === 'ready').length
   /** changes whose checks are still running: shown in orange beside the ready count */
   const checking = (changes.data?.changes ?? []).filter((c) => c.verdict === 'checking').length
-  const all = 9
+  const all = 10
   return (
     <div className="mx-auto w-full max-w-[1200px] px-4 pt-4 md:px-6 md:pt-8">
       <header className="flex flex-wrap items-center gap-3 max-md:flex-nowrap">
