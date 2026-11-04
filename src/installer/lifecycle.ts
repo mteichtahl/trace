@@ -44,12 +44,13 @@ import type { AwsCredentialIdentity } from '@smithy/types'
 import { answers as savedAnswers, forgetInstallation, installation } from '../core/client.js'
 import { INTEGRATION_NAMES, IntegrationStore, secretsManagerApi } from '../core/integrations.js'
 import { REF, SOURCE } from '../core/onboard.js'
-import { githubSecretName, stackName } from '../infra/props.js'
+import { githubSecretName, smokeSecret, stackName } from '../infra/props.js'
 import { EDGE_REGION, edgeStackName } from '../infra/edge.js'
 import { REPO_ROOT } from '../infra/stack.js'
 import { RUNNER_VARIABLE } from '../core/project.js'
 import { type Answers, AnswersSchema, type InstallEvent, RUNNER_AUTH, SecretsSchema } from './answers.js'
 import { UPDATE_ROLE_VARIABLE, UPDATE_STACK_VARIABLE, apply, selfUpdateOf } from './bootstrap.js'
+import { SMOKE_SECRET_VARIABLE, smokeEmail } from './smoke.js'
 import { credentials, removeSourceCredential } from './aws.js'
 import { deleteVariable } from './github.js'
 
@@ -221,10 +222,25 @@ export async function cmdUninstall(argv: string[]): Promise<number> {
       // the self-update job's: its role goes with the stack, so trace's own ci workflow must stop trying to use it
       const update = selfUpdateOf(a)
       if (update) {
-        for (const v of [UPDATE_ROLE_VARIABLE, UPDATE_STACK_VARIABLE, 'TRACE_AWS_REGION']) await deleteVariable(token, update.repository, v).catch(() => false)
-        out(`${update.repository}: ${UPDATE_ROLE_VARIABLE}, ${UPDATE_STACK_VARIABLE} and TRACE_AWS_REGION removed (the installation no longer updates itself)`)
+        for (const v of [UPDATE_ROLE_VARIABLE, UPDATE_STACK_VARIABLE, 'TRACE_AWS_REGION', SMOKE_SECRET_VARIABLE]) await deleteVariable(token, update.repository, v).catch(() => false)
+        out(`${update.repository}: ${UPDATE_ROLE_VARIABLE}, ${UPDATE_STACK_VARIABLE}, TRACE_AWS_REGION and ${SMOKE_SECRET_VARIABLE} removed (the installation no longer updates itself)`)
       }
     } else out('(no GitHub token stored: each repository\'s TRACE_* variables and TRACE_TOKEN secret are left; remove them in its Settings)')
+    // the smoke user's sign-in (src/installer/smoke.ts): the installer made it, so the stack does not delete it
+    try {
+      const smsdk = await import('@aws-sdk/client-secrets-manager')
+      await new smsdk.SecretsManagerClient(cfg).send(new smsdk.DeleteSecretCommand({ SecretId: smokeSecret(a.agents.prefix), ForceDeleteWithoutRecovery: true }))
+      out(`removed the smoke test's sign-in (${smokeSecret(a.agents.prefix)})`)
+    } catch (e) { if ((e as { name?: string }).name !== 'ResourceNotFoundException') out(`${smokeSecret(a.agents.prefix)} could not be removed (${e instanceof Error ? e.message : String(e)}): delete it in Secrets Manager`) }
+    // and the smoke user: the user pool is kept (RETAIN), so it would outlive the installation
+    try {
+      const [cfn0, cog0] = await Promise.all([import('@aws-sdk/client-cloudformation'), import('@aws-sdk/client-cognito-identity-provider')])
+      const pool = (await new cfn0.CloudFormationClient(cfg).send(new cfn0.DescribeStacksCommand({ StackName: stack }))).Stacks?.[0]?.Outputs?.find((o) => o.OutputKey === 'UserPoolId')?.OutputValue
+      if (pool) {
+        await new cog0.CognitoIdentityProviderClient(cfg).send(new cog0.AdminDeleteUserCommand({ UserPoolId: pool, Username: smokeEmail(a.agents.prefix) }))
+        out(`removed the smoke test's user (${smokeEmail(a.agents.prefix)})`)
+      }
+    } catch (e) { if ((e as { name?: string }).name !== 'UserNotFoundException') out(`the smoke test's user could not be removed (${e instanceof Error ? e.message : String(e)}): delete ${smokeEmail(a.agents.prefix)} in Cognito`) }
     const integrations = new IntegrationStore(a.agents.prefix, sm)
     for (const n of INTEGRATION_NAMES) if (await integrations.remove(n)) out(`removed the ${n} integration`)
     // the stack

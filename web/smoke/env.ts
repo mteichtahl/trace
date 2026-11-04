@@ -13,6 +13,12 @@ export const projectPath = (sub = '') => `/p/${project}${sub}`
  */
 export const writes = !live || process.env.TRACE_SMOKE_WRITES === '1'
 
+/**
+ * The admin screens: always against the mock; live only with TRACE_SMOKE_ADMIN=1, because the smoke user the installer
+ * makes is an ordinary user and a Reviewer of the smoke project only (src/installer/smoke.ts).
+ */
+export const admin = !live || process.env.TRACE_SMOKE_ADMIN === '1'
+
 /** The outside-system credentials for the external API and MCP checks; absent → those checks are skipped. */
 export const external = {
   tokenUrl: process.env.TRACE_SMOKE_TOKEN_URL,

@@ -217,8 +217,8 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: smoke-live-report
-          path: |
-            web/smoke-report
-            web/test-results/smoke
-          retention-days: 14
+          name: smoke-live-results
+          # the results only: this repository is public, and a trace, screenshot or HTML report of a live run would show
+          # the installation's data (web/smoke/playwright.config.ts makes none on live runs)
+          path: web/smoke-report/results.json
+          retention-days: 7

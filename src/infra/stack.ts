@@ -97,7 +97,7 @@ import { SELF_WRITABLE, TraceWeb, addHooksClient, addWebClient, traceWebProps } 
 import { ACCESS_PREFIX, AGENT_FACTS, CENTRAL_PREFIX, PEOPLE_RECORDS, PROMPTS_PREFIX, type ProjectProps, ProjectNestedStack, ProjectStack, grantPrefixes } from './project.js'
 import {
   CDK_QUALIFIER, CENTRAL_BUCKET_OUTPUT, INSTALLATION_PREFIX, GPU_IMAGE_BUILD_OUTPUT, type InfraProps, SELF_UPDATE_OUTPUT, ciRunnerOutput, LAYOUT_OUTPUT, selfUpdateRoleName, LIBRARY_GATEWAY_OUTPUT, LIBRARY_KEYS_OUTPUT, STACK_OUTPUTS_MAX, STACK_PARAMETERS_MAX, STACK_RESOURCES_MAX, apiRuntimeName, EXTERNAL_RESOURCE_SERVER, cpuEnabled, toolsEnabled, TOOLS_IMAGE_OUTPUT, webModel,
-  githubSubjects, kbEnabled, projectRefs, projectSettings, webHooksOn, webHooksSecret,
+  githubSubjects, kbEnabled, projectRefs, projectSettings, smokeSecret, webHooksOn, webHooksSecret,
 } from './props.js'
 
 /** The tag every runtime (and memory) of an installation carries: its prefix. The API's grant on the workers is scoped
@@ -649,6 +649,9 @@ export class TraceStack extends Stack {
     //              gets a copy of the shared token, as the installer gives it)
     //   pending    list installation/pending-projects/* and put (mark) its records: the projects created in the web app
     //   hooks      (web.hooks) GetSecretValue on `<prefix>/web/github-hooks`: a project it adds gets its webhook
+    //   smoke      (selfUpdate.smoke) GetSecretValue on `<prefix>/smoke/sign-in`: the smoke test user's sign-in, for the
+    //              live smoke test after the update (docs/smoke-test.md). That user is an admin of the web app; the role
+    //              can deploy the installation again anyway, so reading it gives it nothing it could not do already
     // Whoever can merge to that branch can therefore change this installation: README "Staying up to date".
     if (cfg.selfUpdate) {
       const { repository, branch } = cfg.selfUpdate
@@ -710,6 +713,12 @@ export class TraceStack extends Stack {
         updater.addToPolicy(new iam.PolicyStatement({
           sid: 'WebHooksSecret', actions: ['secretsmanager:GetSecretValue'],
           resources: [`arn:${partition}:secretsmanager:${region}:${account}:secret:${webHooksSecret(cfg.prefix)}-??????`],
+        }))
+      }
+      if (cfg.selfUpdate.smoke) {
+        updater.addToPolicy(new iam.PolicyStatement({
+          sid: 'SmokeUserSecret', actions: ['secretsmanager:GetSecretValue'],
+          resources: [`arn:${partition}:secretsmanager:${region}:${account}:secret:${smokeSecret(cfg.prefix)}-??????`],
         }))
       }
       new CfnOutput(this, SELF_UPDATE_OUTPUT, { value: updater.roleArn, description: `${repository}'s TRACE_UPDATE_ROLE: keeps this installation up to date from its ci workflow on ${branch}` })

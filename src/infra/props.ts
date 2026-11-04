@@ -350,6 +350,9 @@ export const InfraPropsSchema = z.object({
     repository: z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'expected OWNER/REPO'),
     /** the branch whose ci workflow may update the installation */
     branch: z.string().regex(/^[A-Za-z0-9._\/-]+$/, 'a branch name').default('main'),
+    /** the live smoke test after each update (docs/smoke-test.md): the role may read the smoke user's sign-in
+     * (smokeSecret), which the installer writes */
+    smoke: z.boolean().optional(),
   }).strict().optional(),
   /** GitHub's immutable OIDC subject prefix (IMMUTABLE_SUBJECT) of each repository whose workflows assume a role here,
    * by OWNER/REPO in lower case: its roles trust that form beside `repo:OWNER/REPO` (githubSubjects). A repository not
@@ -505,6 +508,9 @@ export const webHooksOriginSecret = (prefix: string): string => `${prefix}/web/h
  * web backend the first time the app asks for the public key (GET /api/push/key) and never changed: the stack never holds it.
  * The push sender (journey-events) reads it to sign and send. */
 export const webPushSecret = (prefix: string): string => `${prefix}/web/push-keys`
+/** The smoke test user's sign-in (src/installer/smoke.ts): written by the installer, read only by the self-update role
+ * (selfUpdate.smoke), when the ci workflow's smoke-live job runs after an update. */
+export const smokeSecret = (prefix: string): string => `${prefix}/smoke/sign-in`
 /** The push ledger table (src/web/push-sender.ts): what was pushed to whom, and dead devices. */
 export const webPushName = (prefix: string): string => `${prefix}-web-push`
 /** The hooks function and its debounce table (src/infra/web.ts). */
