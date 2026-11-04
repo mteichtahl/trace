@@ -4,6 +4,7 @@
  * session: opened evidence, signatures, returns, waivers, recorded orders and created projects.
  */
 import { JOURNEYS, MEMBERS } from './fixtures'
+import { OPS_RUNS } from './fixtures-admin'
 import {
   BUILD, COST, COVERAGE, DECISIONS, DESIGN, EXISTING_USERS, FILE_URLS, FILES, JOB_ROUTE, QUESTIONS, RUNS, SETTINGS, SKILL_VIEWS, SOIL_GATES, TRACE,
 } from './fixtures-s1'
@@ -63,7 +64,9 @@ export function s1Action(name: string, a: Record<string, unknown>): Response | u
     case 'runs':
       return ok(RUNS.filter(() => repo === 'acme/soil-sensor').map(({ id, kind, subject, started, finished, status, summary }) => ({ id, kind, subject, started, finished, status, summary })))
     case 'run': {
-      const r = RUNS.find((x) => x.id === a.id)
+      // the Evidence page lists runs from the admin fixtures (OPS_RUNS): a listed run must open too, so fall back to
+      // its row when this file's fuller records do not have it
+      const r = RUNS.find((x) => x.id === a.id) ?? Object.values(OPS_RUNS).flat().find((x) => x.id === a.id)
       return r ? ok(r) : fail(`no run ${String(a.id)}`)
     }
     case 'job':
