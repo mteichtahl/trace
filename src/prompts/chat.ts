@@ -1,6 +1,6 @@
 /**
  * The web app's chat agent's system prompt (Ask trace, src/web/agui.ts): chat.role (editable), chat.data, and the
- * screen's context and shared state, each fenced (locked); in a shared conversation, the other people's messages
+ * pictures the app draws (chat.visuals), the screen's context and shared state, each fenced (locked); in a shared conversation, the other people's messages
  * (chat.others) and, when work may not be started, chat.read_only. Every fenced value is cleaned of its closing tag,
  * so nothing inside can end the fence early. Tool results reach the model fenced too (chat.tool_result, fenceResult).
  */
@@ -22,7 +22,7 @@ export interface ChatOptions {
 }
 
 export function composeChat(context: readonly ChatContext[], state: unknown, layers: Layers = NO_LAYERS, o: ChatOptions = {}): Composed {
-  const p = new Composer(layers).add('chat.role').add('chat.data').add('design.silkscreen')
+  const p = new Composer(layers).add('chat.role').add('chat.data').add('chat.visuals').add('design.silkscreen')
   const lines = context.map((c) => unfence(`- ${c.description}: ${c.value}`, 'app-context'))
   if (lines.length) p.add('chat.context', { context: lines })
   const empty = state === undefined || state === null || (typeof state === 'object' && Object.keys(state).length === 0)
