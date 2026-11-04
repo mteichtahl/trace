@@ -92,6 +92,9 @@ const NOT_STARTED = {
   next: 'An admin starts it by choosing a template: Board, FPGA, Firmware or Mixed.',
 }
 
+/** An IANA time zone from the signer's browser, for the day a revision was cut; anything else is dropped. */
+const TimeZone = z.string().trim().max(64).regex(/^[A-Za-z_]+(\/[A-Za-z0-9_+-]+){0,2}$/).optional().catch(undefined)
+
 const signer = (ctx: Context): { hash: string; label: string; also: string[] } => ({ hash: hashOf(ctx.principal), also: hashesOf(ctx.principal), label: label(ctx.principal) })
 
 /** Run a journey write, turning a refusal of the record's own into the person's error. */
@@ -190,6 +193,44 @@ export async function carryOn(ctx: Context, repo: string, asked: { id: string; t
   return r.accepted
     ? { jobId: r.jobId, started: [`The ${SPECIALIST_WORDS[agent]} specialist carries on with your answer on ${branch}.`], summary: `Answered. The ${SPECIALIST_WORDS[agent]} specialist carries on with it on ${branch}.` }
     : { jobError: r.reason ?? 'trace did not accept the job.', summary: `Answered, but ${who} could not be started again: ${r.reason ?? 'trace did not accept the job'}. The answer is kept for its next job.` }
+}
+
+/** The day a revision was cut, YYYY-MM-DD, in the signer's time zone (an IANA name from their browser), else UTC. */
+export function cutDay(at: Date, timeZone?: string | null): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: timeZone || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(at)
+  } catch {
+    return at.toISOString().slice(0, 10)
+  }
+}
+
+/**
+ * What the rendering agent is asked when a revision is cut (docs/revision-renders.md): the revision's photorealistic
+ * renders, named by the revision and the day it was cut.
+ */
+export function rendersRequest(revision: string, day: string): string {
+  return [
+    `Revision ${revision} was cut on ${day}: make its renders.`,
+    `Call render_showcase with revision=${revision} and date=${day}, at release quality, for every shot it offers: the board, the board from above and below, and, when the case is built, the closed case, the board in the case and the exploded view. The pictures are named <project>_rev-${revision}_${day}_<shot>.png.`,
+    'Try one shot at quality=draft first, look at it, then make the full set in one call. Look at every picture before reporting it: framed, lit, the right way up, the board sitting in its case.',
+    'Deliver the run the way your instructions say, naming the revision in the pull request\'s title.',
+  ].join('\n')
+}
+
+/**
+ * Start the rendering agent on a revision that was just cut. A revision stands whatever happens here: a job that
+ * cannot start is said, and an admin can ask for the renders in chat.
+ */
+async function startRenders(ctx: Context, repo: string, revision: string, timeZone?: string | null): Promise<{ jobId?: string; started?: string; jobError?: string }> {
+  const day = cutDay(new Date(), timeZone)
+  try {
+    const r = await (await ctx.deps.jobs()).startJob({ kind: 'task', repository: repo, request: rendersRequest(revision, day), agent: 'render', requestedBy: label(ctx.principal), requestedBySub: ctx.principal.sub })
+    return r.accepted
+      ? { ...(r.jobId ? { jobId: r.jobId } : {}), started: `The Rendering agent makes revision ${revision}'s renders (${day}).` }
+      : { jobError: r.reason ?? 'trace did not accept the job.' }
+  } catch (e) {
+    return { jobError: e instanceof Error ? e.message : String(e) }
+  }
 }
 
 /**
@@ -373,7 +414,7 @@ export const JOURNEY_ACTIONS = {
     })
   }),
 
-  'gate.sign': def('admin', Repo.extend({ gate: Id, acknowledge: z.array(Id).max(100).default([]), notes: z.string().trim().max(4000).optional() }), async (a, ctx) => {
+  'gate.sign': def('admin', Repo.extend({ gate: Id, acknowledge: z.array(Id).max(100).default([]), notes: z.string().trim().max(4000).optional(), time_zone: TimeZone }), async (a, ctx) => {
     // the agents' checks of the criteria trace owns count towards the gate; the signing rules are the record's own
     const facts = await agentFacts(ctx, a.repo)
     const now0 = (await journeyStore(ctx, a.repo).read((db) => loadJourney(db))).result
@@ -425,14 +466,24 @@ export const JOURNEY_ACTIONS = {
     // the signature cut a release: the record goes into the repository with it
     try {
       const s = await snapshot(ctx, a.repo, `${a.gate} signed`)
-      return { ...signed, ...kickoff, version: s.version, snapshot: { branch: s.branch, commit: s.commit, change: s.change }, summary: `${signed.summary} The record was copied into the repository.` }
+      // the revision's renders, made by the rendering agent from what was released (docs/revision-renders.md)
+      const renders = await startRenders(ctx, a.repo, s.revision, a.time_zone)
+      const said = renders.started ? ` ${renders.started}` : ` Its renders could not be started: ${renders.jobError ?? 'trace did not accept the job'}.`
+      return {
+        ...signed, ...kickoff, version: s.version, snapshot: { branch: s.branch, commit: s.commit, change: s.change }, renders,
+        started: [...(kickoff.started ?? []), ...(renders.started ? [renders.started] : [])],
+        summary: `${signed.summary} The record was copied into the repository.${said}`,
+      }
     } catch (e) {
       return { ...signed, ...kickoff, snapshot: { error: `The gate is signed, but the record could not be copied into the repository: ${e instanceof Error ? e.message : String(e)}. An admin can copy it with journey.snapshot.` } }
     }
   }),
 
-  'journey.snapshot': def('admin', Repo.extend({ reason: z.string().trim().max(300).default('copied by an admin') }), async (a, ctx) =>
-    ({ repo: a.repo, ...(await snapshot(ctx, a.repo, a.reason)) })),
+  'journey.snapshot': def('admin', Repo.extend({ reason: z.string().trim().max(300).default('copied by an admin'), renders: z.boolean().default(true), time_zone: TimeZone }), async (a, ctx) => {
+    const s = await snapshot(ctx, a.repo, a.reason)
+    // a revision copied by hand gets its renders too, unless the admin says not to
+    return { repo: a.repo, ...s, ...(a.renders ? { renders: await startRenders(ctx, a.repo, s.revision, a.time_zone) } : {}) }
+  }),
 
   'gate.return': def('write', Repo.extend({ gate: Id, reason: z.string().trim().min(1).max(4000), reopen: z.enum(STAGE_IDS).optional() }), async (a, ctx) =>
     journeyWrite(ctx, a.repo, (db) => {

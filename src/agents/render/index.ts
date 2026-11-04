@@ -11,11 +11,14 @@ export const render: Specialist = {
   description: 'photographic renders of boards, enclosures and assemblies, and turntables, for documentation and'
     + ' review. Renders show what a design looks like; they are not evidence that it works.',
   memoryAgent: 'render',
-  tools: ['render.status', 'render.board', 'render.model', 'render.turntable'],
+  tools: ['render.status', 'render.board', 'render.model', 'render.turntable', 'render.showcase'],
   workflow: [
     'Start with render_status: is Blender there, which device would render, is ffmpeg there for movies.',
     'Boards: render_board (views top, bottom, iso). Enclosures, assemblies, parts (GLB, STEP, STL, OBJ, VRML):'
       + ' render_model. Turntables: render_turntable (a project or a path).',
+    'A revision\'s renders (asked for when a revision is cut): render_showcase with the revision letter and the day'
+      + ' it was cut, as the request gives them. It makes every board shot, and the case shots when the case is built,'
+      + ' at release quality, coloured from the project logo; try quality=draft on one shot first.',
     'device=auto (the default) uses a GPU when there is one and the CPU otherwise; use gpu only when a GPU is'
       + ' required, as it fails without one.',
     'Keep the defaults unless asked. Try one view at low size first (e.g. width 640, height 400, samples 16), then'

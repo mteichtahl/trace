@@ -11,7 +11,7 @@ import { allTools } from '../../src/tools/index.js'
 
 /** Which tool, with what said in the task, makes each kind of remote job run. */
 const JOB_REACH: Record<JobKind, { tools: string[]; says: RegExp }> = {
-  blender: { tools: ['render.board', 'render.model', 'render.turntable', 'thermal.render'], says: /render|blender|turntable/i },
+  blender: { tools: ['render.board', 'render.model', 'render.turntable', 'render.showcase', 'thermal.render'], says: /render|blender|turntable/i },
   freerouting: { tools: ['pcb.autoroute'], says: /freerouting|strategy[^.]*both/i },
   orthoroute: { tools: ['pcb.autoroute'], says: /orthoroute|strategy[^.]*both/i },
   verilator: { tools: ['verify.verilator'], says: /verilator/i },

@@ -342,10 +342,11 @@
       "render.status",
       "render.board",
       "render.model",
-      "render.turntable"
+      "render.turntable",
+      "render.showcase"
     ],
     "remote": "gpu",
-    "body": "Sign-off stage. Renders with Blender run as GPU jobs. Keep them small.\n\n- render.status first.\n- render.board on `hardware/trace-sample.kicad_pro`, views top, bottom, iso, 800 x 500, 32 samples.\n- render.model on `mech/enclosure.stl` (mm, clay), view iso.\n- render.turntable of the board, 24 frames, 4 s.\n\nDone when: the images and the movie are stored and the board looks right: 17 parts and three headers. Comment the numbers with their run ids on this issue, then close it."
+    "body": "Sign-off stage. Renders with Blender run as GPU jobs. Keep them small.\n\n- render.status first.\n- render.board on `hardware/trace-sample.kicad_pro`, views top, bottom, iso, 800 x 500, 32 samples.\n- render.model on `mech/enclosure.stl` (mm, clay), view iso.\n- render.turntable of the board, 24 frames, 4 s.\n- render.showcase on `hardware/trace-sample.kicad_pro` for revision A: quality draft, shots board and board-top.\n\nDone when: the images and the movie are stored, the showcase pictures are named <repository>_rev-A_<today>_<shot>.png, and the board looks right: 17 parts and three headers. Comment the numbers with their run ids on this issue, then close it."
   },
   {
     "id": "signoff-verification",

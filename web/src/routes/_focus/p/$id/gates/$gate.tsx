@@ -462,7 +462,8 @@ function SignDialog({ open, onOpenChange, journey: j, gate: g, to, notes, acknow
   const label = signLabel(g.name)
 
   const doSign = () =>
-    sign.mutate({ repo: j.repo, gate: g.id, notes: notes || undefined, acknowledge: acknowledged }, {
+    // the signer's time zone: a release's renders carry the day it was cut, as the signer saw it (docs/revision-renders.md)
+    sign.mutate({ repo: j.repo, gate: g.id, notes: notes || undefined, acknowledge: acknowledged, time_zone: browserTimeZone() }, {
       onSuccess: (r) => {
         onOpenChange(false)
         toast(`${cap(g.name.replace(/^the /, ''))} signed.`, { description: r.started?.length ? `Started: ${r.started.join('; ')}` : `${to ?? 'The next stage'} starts now.` })
@@ -644,4 +645,9 @@ export function GateRecord({ journey: j, gate: g }: { journey: Journey; gate: Ga
       </div>
     </div>
   )
+}
+
+/** The browser's IANA time zone, or nothing when it cannot say. */
+function browserTimeZone(): string | undefined {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined } catch { return undefined }
 }
