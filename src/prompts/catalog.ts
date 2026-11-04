@@ -454,7 +454,8 @@ add({ id: 'worker.guardrails', mode: 'locked', prompt: 'worker.task', vars: {}, 
     'a deploy or any workflow run; never change repository settings, secrets, rulesets or workflow permissions.'].join('\n') })
 
 const ITEM_VARS: VarSpecs = {
-  repository: V.repository, number: V.number, sha: text('its head sha'), default_branch: V.default_branch, branch_prefix: V.branch_prefix,
+  repository: V.repository, number: V.number, sha: text('its head sha'), default_branch: V.default_branch,
+  base: text("the pull request's base: the default branch, or for a stacked change the branch it builds on"), branch_prefix: V.branch_prefix,
   ci_red_label: text('labels.ci_red'),
 }
 add({ id: 'worker.item', mode: 'locked', prompt: 'worker.item',
@@ -465,7 +466,7 @@ add({ id: 'worker.item.not-own', mode: 'locked', prompt: 'worker.item', vars: {}
   default: 'This branch belongs to a person: push only merge commits on top of it, never rewrite it.' })
 add({ id: 'worker.item.conflict', mode: 'editable', prompt: 'worker.item', vars: ITEM_VARS, description: 'How the worker resolves a merge conflict.',
   default: [
-    "You are on the PR's branch. `git merge origin/{{default_branch}}`; resolve keeping the intent of both sides (read both",
+    "You are on the PR's branch. `git fetch origin +refs/heads/{{base}}:refs/remotes/origin/{{base}} && git merge origin/{{base}}` (its base: {{base}}); resolve keeping the intent of both sides (read both",
     "histories with git log/show); regenerate lockfiles with the repository's own tooling, never by hand; `.trace/project.db`",
     'merges itself through the trace-db merge driver; validate; commit the merge; `git push`. Never rebase or force-push. If',
     'the two sides need a decision only a person can make, `git merge --abort` and escalate.',

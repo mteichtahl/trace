@@ -1,9 +1,10 @@
 /**
  * The pull-request half of the loop, generalised from Potroller's agent-pr, automerge and update-branches workflows.
  *
- *   openPr       a pushed branch that is ahead of the default branch and has no open PR gets one.
+ *   openPr       a pushed branch that is ahead of the default branch and has no open PR gets one. A branch built on
+ *                another open PR's branch is stacked on it (stack.ts): its PR targets that branch, not the default one.
  *   automerge    every PR to the default branch merges itself once its required checks pass (unless held).
- *   updateQueue  first, trace's own PRs (held ones too) whose only conflict is .trace/project.db get the default branch
+ *   updateQueue  first the stacks are kept in order (stack.ts restack); then trace's own PRs (held ones too) whose only conflict is .trace/project.db get the default branch
  *                merged in with the database merged (db-conflict.ts; up to DB_RESOLVE_PER_RUN a run); then the oldest
  *                auto-merge PR that is behind is brought up to date, one at a time, so each merge costs one rebuild
  *                rather than one per open PR. Mergeability is settled before it is judged (mergeable.ts).
@@ -14,6 +15,7 @@
 import { commentOnce, globMatch } from './util.js'
 import { resolveDbConflict } from './db-conflict.js'
 import { settle } from './mergeable.js'
+import { StackUnclear, parentOf, restack, stackLine } from './stack.js'
 import { type Deps, type GitHub, PullRequestPayload, errorMessage, errorStatus, labelNames, payload, short } from './types.js'
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -30,9 +32,28 @@ export async function openPr({ github, context, core, cfg, env }: Deps): Promise
 
   const open = (await github.rest.pulls.list({ owner, repo, state: 'open', head: `${owner}:${branch}`, per_page: 1 })).data
   if (open[0]) return say(`#${open[0].number} is already open for \`${branch}\`.`)
-  const cmp = await github.rest.repos.compareCommits({ owner, repo, base: cfg.branch, head: branch }).catch(() => null)
-  if (!cmp || cmp.data.ahead_by === 0) return say(`\`${branch}\` has nothing that ${cfg.branch} lacks: no PR opened.`)
-  const compare = `${context.serverUrl}/${owner}/${repo}/compare/${cfg.branch}...${encodeURIComponent(branch)}?expand=1`
+  const toDefault = await github.rest.repos.compareCommits({ owner, repo, base: cfg.branch, head: branch }).catch(() => null)
+  if (!toDefault || toDefault.data.ahead_by === 0) return say(`\`${branch}\` has nothing that ${cfg.branch} lacks: no PR opened.`)
+  // built on another open PR's branch: stacked on it, so the PR shows only this branch's own commits. Any doubt opens
+  // nothing: a PR to the default branch carrying another change's commits would merge them unaccepted
+  let parent: Awaited<ReturnType<typeof parentOf>> = null
+  if (cfg.prs.stack) {
+    const listed = toDefault.data.commits
+    if (listed.length < toDefault.data.ahead_by) {
+      core.warning(`${branch} is ${toDefault.data.ahead_by} commits ahead of ${cfg.branch}, more than GitHub lists: no PR opened.`)
+      return say(`\`${branch}\` has more commits than trace can check for stacking (${toDefault.data.ahead_by}): no PR opened. Open it by hand.`)
+    }
+    try {
+      parent = await parentOf(github, owner, repo, branch, cfg.branch, new Set(listed.map((c) => c.sha)))
+    } catch (e) {
+      const why = e instanceof StackUnclear ? e.message : `trace could not check whether \`${branch}\` builds on another open pull request (${errorMessage(e)}), so no PR was opened. Push again, or re-run this job, to try again.`
+      core.warning(why)
+      return say(why)
+    }
+  }
+  const base = parent?.ref ?? cfg.branch
+  const cmp = parent ? await github.rest.repos.compareCommits({ owner, repo, base, head: branch }) : toDefault
+  const compare = `${context.serverUrl}/${owner}/${repo}/compare/${base}...${encodeURIComponent(branch)}?expand=1`
   if (!env.OWN_TOKEN) {
     core.warning('No TRACE_TOKEN secret: a PR opened with GITHUB_TOKEN would start no build, so none was opened.')
     return say(`No TRACE_TOKEN secret, so no PR was opened. Open it here: ${compare}`)
@@ -43,14 +64,15 @@ export async function openPr({ github, context, core, cfg, env }: Deps): Promise
   const title = commits.length === 1 ? first : `${first.replace(/\.$/, '')} (+${commits.length - 1} more)`
   const rest = commits.length === 1 ? (commits[0]?.commit.message ?? '').split('\n').slice(1).join('\n').trim() : ''
   const body = [
-    `Opened automatically for \`${branch}\` when it was pushed.${cfg.prs.auto_merge ? ` It merges itself once \`${cfg.build.required_check}\` passes; add the \`${cfg.labels.hold}\` label to hold it.` : ''}`,
+    `Opened automatically for \`${branch}\` when it was pushed.${cfg.prs.auto_merge ? ` It merges itself once \`${cfg.build.required_check}\` passes${parent ? ` and it targets \`${cfg.branch}\`` : ''}; add the \`${cfg.labels.hold}\` label to hold it.` : ''}`,
+    ...(parent ? ['', stackLine(parent, cfg.branch)] : []),
     '',
     '### Commits',
     ...commits.map((c) => `- ${c.sha.slice(0, 7)} ${subject(c.commit.message)}`),
     ...(rest ? ['', rest] : []),
   ].join('\n')
-  const pr = await github.rest.pulls.create({ owner, repo, head: branch, base: cfg.branch, title: title.slice(0, 250), body })
-  return say(`Opened #${pr.data.number}: ${pr.data.html_url}`)
+  const pr = await github.rest.pulls.create({ owner, repo, head: branch, base, title: title.slice(0, 250), body })
+  return say(`Opened #${pr.data.number}${parent ? `, stacked on #${parent.number}` : ''}: ${pr.data.html_url}`)
 }
 
 const ENABLE = 'mutation($id: ID!, $method: PullRequestMergeMethod!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) { clientMutationId } }'
@@ -100,13 +122,20 @@ export async function automerge({ github, jobApi, context, core, cfg, env }: Dep
     await attempt((gh) => gh.graphql(DISABLE, { id: pr.node_id })).catch(() => undefined)
     return say(`#${pr.number} has the \`${cfg.labels.hold}\` label: auto-merge is off.`)
   }
+  // a PR others are stacked on merges with a merge commit, whatever the setting: squashed or rebased, the PRs above
+  // would hold commits the default branch no longer has, and conflict with them (docs/stacked-changes.md)
+  const above = cfg.prs.stack && cfg.prs.merge_method !== 'merge'
+    ? (await github.rest.pulls.list({ owner, repo, state: 'open', base: pr.head.ref ?? '', per_page: 1 })).data.length > 0
+    : false
+  const method = above ? 'merge' : cfg.prs.merge_method
+  if (above) await say(`#${pr.number} has changes stacked on it: it merges with a merge commit, not by ${cfg.prs.merge_method}.`)
   try {
-    await attempt((gh) => gh.graphql(ENABLE, { id: pr.node_id, method: cfg.prs.merge_method.toUpperCase() }))
+    await attempt((gh) => gh.graphql(ENABLE, { id: pr.node_id, method: method.toUpperCase() }))
     return say(`Auto-merge is on for #${pr.number}: it merges when the required checks pass.`)
   } catch (e) {
     // GitHub refuses auto-merge on a PR that can merge right now ("clean status"): merge it directly.
     if (!/clean status|unstable status/i.test(errorMessage(e))) throw e
-    await attempt((gh) => gh.rest.pulls.merge({ owner, repo, pull_number: pr.number, merge_method: cfg.prs.merge_method, sha: pr.head.sha }))
+    await attempt((gh) => gh.rest.pulls.merge({ owner, repo, pull_number: pr.number, merge_method: method, sha: pr.head.sha }))
     return say(`#${pr.number} could merge at once: merged.`)
   }
 }
@@ -121,21 +150,33 @@ export async function updateQueue({ github, jobApi, context, core, cfg, env }: D
   const say = (s: string): void => { lines.push(s); core.info(s) }
   const flush = async (): Promise<void> => { await core.summary.addRaw(lines.map((l) => `- ${l}`).join('\n') + '\n').write() }
   if (!cfg.prs.update_queue) { say('prs.update_queue is off.'); return flush() }
-  const open = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', base: cfg.branch, per_page: 100 })
+  const all = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 })
+  // the stacks first (one push budget with the database merges below: each push starts a build). A PR moved onto the
+  // default branch here is seen by the next run's queue, not this one's (the list was read before it moved)
+  let pushed = new Set<number>()
+  if (cfg.prs.stack) {
+    const r = await restack({ github, owner, repo, defaultBranch: cfg.branch, hold: cfg.labels.hold, canPush: Boolean(env.OWN_TOKEN) }, all, DB_RESOLVE_PER_RUN)
+    for (const l of r.lines) say(l)
+    pushed = r.pushed
+  }
+  const open = all.filter((p) => (p.base?.ref ?? cfg.branch) === cfg.branch)
+  // a stacked PR (based on another PR's branch) can be in conflict with its base too: resolved the same way
+  const ownStacked = all.filter((p) => (p.base?.ref ?? cfg.branch) !== cfg.branch)
   // trace's own PRs (held ones too) whose only conflict is the project database: every agent job adds its runs to
   // that one file, so each merge leaves the rest in conflict, and GitHub's merge button cannot run its merge driver
   if (env.OWN_TOKEN && cfg.worker.own_branch_prefix) {
-    let resolved = 0
+    let resolved = pushed.size
     // settled first: right after the push that starts this run GitHub reads every one as "unknown" (mergeable.ts)
-    const own = open.filter((x) => !x.draft && x.head?.repo?.full_name === `${owner}/${repo}` && Boolean(x.head?.ref?.startsWith(cfg.worker.own_branch_prefix)))
+    const own = [...open, ...ownStacked].filter((x) => !pushed.has(x.number) && !x.draft && x.head?.repo?.full_name === `${owner}/${repo}` && Boolean(x.head?.ref?.startsWith(cfg.worker.own_branch_prefix)))
     const settled = await settle(github, owner, repo, own.map((p) => p.number))
     for (const p of own) {
       if (resolved >= DB_RESOLVE_PER_RUN) break
       const pr = settled.get(p.number)
       if (!pr || pr.mergeable_state !== 'dirty') continue
-      const r = await resolve({ remote: `${context.serverUrl}/${owner}/${repo}.git`, head: pr.head.ref, base: cfg.branch, token: env.OWN_TOKEN })
-      if (r.ok) { resolved++; say(`#${pr.number}: its only conflict was ${PROJECT_DB_FILE}; merged ${cfg.branch} into ${pr.head.ref} with the project database merged (${short(r.commit)}).`) }
-      else say(`#${pr.number} has a conflict with ${cfg.branch}: ${r.why}.`)
+      const base = pr.base?.ref ?? cfg.branch
+      const r = await resolve({ remote: `${context.serverUrl}/${owner}/${repo}.git`, head: pr.head.ref, base, token: env.OWN_TOKEN })
+      if (r.ok) { resolved++; say(`#${pr.number}: its only conflict was ${PROJECT_DB_FILE}; merged ${base} into ${pr.head.ref} with the project database merged (${short(r.commit)}).`) }
+      else say(`#${pr.number} has a conflict with ${base}: ${r.why}.`)
     }
   }
   const prs = open
