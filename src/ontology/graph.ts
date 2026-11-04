@@ -18,7 +18,9 @@ import { type ColumnRule, type DbName, type FieldMap, type LiteralAs, type Table
 import { NS, RDF, XSD, type Vocabulary, isA, local } from './vocab.js'
 import type { Board } from '../tools/kicad/pcb.js'
 import { addBoard } from './board.js'
+import { addDocuments } from './docs.js'
 import { addDerived } from './derived.js'
+import { addCase } from './mech.js'
 
 const { namedNode, literal, quad } = DataFactory
 
@@ -32,6 +34,8 @@ export interface GraphSources {
   central?: DatabaseSync | null
   /** the boards, read from their .kicad_pcb (src/tools/kicad/pcb.ts loadBoard), by their path in the repository */
   boards?: readonly { path: string; board: Board }[]
+  /** the project's documents (docs/scribe.md), each docs/design file's repository path and text */
+  documents?: readonly { path: string; text: string }[]
 }
 export interface GraphOptions {
   /** the installation's name (its prefix): identifiers are unique across installations */
@@ -41,6 +45,9 @@ export interface GraphOptions {
   /** add the facts no column stores, worked out as the app reads them (src/ontology/derived.ts): for the shapes. Off
    *  by default, so the graph checked against the ontology (checkRecords) is what trace stores */
   derived?: boolean
+  /** the repository's files as they are now (path → bytes, null when gone): with `derived`, whether the newest case
+   *  build still stands is worked out from its lineage (src/ontology/mech.ts) */
+  files?: (path: string) => Uint8Array | null
 }
 
 const enc = (s: string): string => encodeURIComponent(s)
@@ -163,6 +170,10 @@ export function buildGraph(src: GraphSources, o: GraphOptions): { store: Store; 
     if (db) rows[`${t.db}.${t.table}`] = table(c, db, t)
   }
   for (const b of src.boards ?? []) addBoard(c.store, o, b.path, b.board)
+  // the newest case build, from the run record's artifacts (the mechanical module)
+  if (src.project) addCase(c.store, o, src.project, o.files)
+  // the project's documents, read through their markers (the documentation module)
+  if (src.documents?.length && addDocuments(c.store, o, src.documents)) link(c, 'project', o.project, 'Project')
   // for the shapes, what no column stores, worked out as the app reads it: people's decisions are the journey's, or the
   // project database's copy of them (a release, the API's record copy)
   if (o.derived && src.project) addDerived(c.store, o, src.project, src.journey ?? src.project)

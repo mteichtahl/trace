@@ -1,0 +1,156 @@
+{
+  "status": "pass",
+  "enclosed": true,
+  "clashes": [],
+  "gaps": [
+    {
+      "ref": "board",
+      "where": "edge",
+      "measured_mm": 0.5,
+      "required_mm": 0.5,
+      "ok": true
+    },
+    {
+      "ref": "C1",
+      "where": "above",
+      "measured_mm": 11.1,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "C2",
+      "where": "above",
+      "measured_mm": 11.1,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "C3",
+      "where": "above",
+      "measured_mm": 10.65,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "C4",
+      "where": "above",
+      "measured_mm": 10.65,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "D1",
+      "where": "above",
+      "measured_mm": 10.75,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "D2",
+      "where": "above",
+      "measured_mm": 11.2,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "J1",
+      "where": "around",
+      "measured_mm": 1.0,
+      "required_mm": 0.0,
+      "ok": true
+    },
+    {
+      "ref": "J2",
+      "where": "above",
+      "measured_mm": 1.0,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "J2",
+      "where": "below",
+      "measured_mm": 1.0,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "J3",
+      "where": "above",
+      "measured_mm": 1.0,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "J3",
+      "where": "below",
+      "measured_mm": 1.0,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "R1",
+      "where": "above",
+      "measured_mm": 11.45,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "R2",
+      "where": "above",
+      "measured_mm": 11.45,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "R3",
+      "where": "above",
+      "measured_mm": 11.45,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "R4",
+      "where": "above",
+      "measured_mm": 11.45,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "R5",
+      "where": "above",
+      "measured_mm": 11.45,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "R6",
+      "where": "above",
+      "measured_mm": 11.45,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "U1",
+      "where": "above",
+      "measured_mm": 10.2,
+      "required_mm": 1.0,
+      "ok": true
+    },
+    {
+      "ref": "U2",
+      "where": "above",
+      "measured_mm": 10.75,
+      "required_mm": 1.0,
+      "ok": true
+    }
+  ],
+  "openings": [
+    {
+      "ref": "J1",
+      "side": "west",
+      "made": true
+    }
+  ],
+  "assumptions": [],
+  "summary": "fits: no clashes, every gap within its clearance (board edge 0.50 mm)"
+}

@@ -1,0 +1,153 @@
+# The mechanical module's records as a case build writes them (plan P7.1; python/tracebridge/mech/records.py, read into
+# the graph by src/ontology/mech.ts): what a sound case record holds, so any program reading case.jsonld, or the
+# project's graph, can rely on it. Not a gate criterion: the layout gate's fit criterion is ontology/shapes/layout.fit.ttl.
+#
+#   a case has its parts, its material and the board it encloses, with its outer size
+#   a part is a base, a lid, or a whole case handed in as one file
+#   a joint joins two things, by one of the joint kinds; a fastened joint names its fastener
+#   an opening is for one placed part, on one side of the case
+#   a mounting point has its fastener and where it is; a fastener its size and length
+#   a fit check measured one case, and passed or failed
+#
+# Each finding names the record and says what is missing, in plain words (no acronyms).
+
+@prefix trace: <https://trace-eda.com/ns/trace#> .
+@prefix tsh:   <https://trace-eda.com/ns/trace/shapes#> .
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+
+tsh: a owl:Ontology ;
+    rdfs:label "trace shapes" ;
+    sh:declare [ sh:prefix "trace" ; sh:namespace "https://trace-eda.com/ns/trace#"^^xsd:anyURI ] .
+
+tsh:EnclosureRecord a sh:NodeShape ;
+    rdfs:label "A case record" ;
+    sh:targetClass trace:Enclosure ;
+    sh:property [
+        sh:path trace:hasPart ; sh:minCount 1 ; sh:class trace:EnclosurePart ;
+        sh:message "The case record names none of its parts." ;
+    ] , [
+        sh:path trace:material ; sh:minCount 1 ; sh:maxCount 1 ; sh:class trace:Material ;
+        sh:message "The case record needs exactly one material." ;
+    ] , [
+        sh:path trace:encloses ; sh:minCount 1 ; sh:maxCount 1 ; sh:class trace:BoardOutline ;
+        sh:message "The case record needs the one board it encloses." ;
+    ] , [
+        sh:path trace:caseSource ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ( "script" "file" ) ;
+        sh:message "The case record must say whether it was built from the case script or handed in as a file." ;
+    ] , [
+        sh:path trace:outerSize ; sh:maxCount 1 ; sh:datatype rdf:JSON ;
+        sh:message "The case's outer size is one list of three numbers." ;
+    ] .
+
+tsh:EnclosurePartRecord a sh:NodeShape ;
+    rdfs:label "A case part record" ;
+    sh:targetClass trace:EnclosurePart ;
+    sh:property [
+        sh:path trace:partKind ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ( "base" "lid" "case" ) ;
+        sh:message "A case part is a base, a lid, or a whole case handed in as one file." ;
+    ] , [
+        sh:path trace:wallThickness ; sh:maxCount 1 ; sh:datatype xsd:decimal ; sh:minExclusive 0 ;
+        sh:message "A part's wall thickness is one number above zero." ;
+    ] , [
+        sh:path trace:hasStandoff ; sh:class trace:Standoff ;
+        sh:message "A part's standoff must be a standoff record." ;
+    ] .
+
+tsh:MaterialRecord a sh:NodeShape ;
+    rdfs:label "A material record" ;
+    sh:targetClass trace:Material ;
+    sh:property [
+        sh:path trace:name ; sh:minCount 1 ; sh:maxCount 1 ;
+        sh:message "The material needs its name." ;
+    ] , [
+        sh:path trace:process ; sh:minCount 1 ; sh:maxCount 1 ;
+        sh:message "The material needs the process that makes it." ;
+    ] .
+
+tsh:BoardOutlineRecord a sh:NodeShape ;
+    rdfs:label "A board outline record" ;
+    sh:targetClass trace:BoardOutline ;
+    sh:property [
+        sh:path trace:path ; sh:minCount 1 ; sh:maxCount 1 ;
+        sh:message "The board outline needs the board file it was read from." ;
+    ] , [
+        sh:path trace:thickness ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:decimal ; sh:minExclusive 0 ;
+        sh:message "The board outline needs the board's thickness." ;
+    ] .
+
+tsh:JointRecord a sh:NodeShape ;
+    rdfs:label "A joint record" ;
+    sh:targetClass trace:Joint ;
+    sh:property [
+        sh:path trace:jointKind ; sh:minCount 1 ; sh:maxCount 1 ;
+        sh:in ( "fixed" "fastened" "snap-fit" "press-fit" "bonded" "hinged" "sliding" "ball" ) ;
+        sh:message "A joint is fixed, fastened, snap-fit, press-fit, bonded, hinged, sliding or ball." ;
+    ] , [
+        sh:path trace:joins ; sh:minCount 2 ; sh:maxCount 2 ;
+        sh:message "A joint joins exactly two things." ;
+    ] ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:prefixes tsh: ;
+        sh:message "A fastened joint must name the fastener it is made with." ;
+        sh:select """
+            SELECT $this WHERE { $this trace:jointKind "fastened" . FILTER NOT EXISTS { $this trace:usesFastener ?f } }
+        """ ;
+    ] .
+
+tsh:OpeningRecord a sh:NodeShape ;
+    rdfs:label "An opening record" ;
+    sh:targetClass trace:Opening ;
+    sh:property [
+        sh:path trace:forComponent ; sh:minCount 1 ; sh:maxCount 1 ;
+        sh:message "An opening is for exactly one placed part." ;
+    ] , [
+        sh:path trace:face ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ( "west" "east" "north" "south" "top" "bottom" ) ;
+        sh:message "An opening is on one side of the case: west, east, north, south, top or bottom." ;
+    ] , [
+        sh:path trace:inPart ; sh:minCount 1 ; sh:class trace:EnclosurePart ;
+        sh:message "An opening must name the case part it is cut through." ;
+    ] .
+
+tsh:MountingPointRecord a sh:NodeShape ;
+    rdfs:label "A mounting point record" ;
+    sh:targetClass trace:MountingPoint ;
+    sh:property [
+        sh:path trace:fastener ; sh:minCount 1 ; sh:maxCount 1 ; sh:class trace:Fastener ;
+        sh:message "A mounting point needs the fastener that goes through it." ;
+    ] , [
+        sh:path trace:positionX ; sh:minCount 1 ; sh:maxCount 1 ;
+        sh:message "A mounting point needs where it is across the board." ;
+    ] , [
+        sh:path trace:positionY ; sh:minCount 1 ; sh:maxCount 1 ;
+        sh:message "A mounting point needs where it is down the board." ;
+    ] .
+
+tsh:FastenerRecord a sh:NodeShape ;
+    rdfs:label "A fastener record" ;
+    sh:targetClass trace:Fastener ;
+    sh:property [
+        sh:path trace:size ; sh:minCount 1 ; sh:maxCount 1 ;
+        sh:message "A fastener needs its size, such as M3." ;
+    ] , [
+        sh:path trace:length ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:decimal ; sh:minExclusive 0 ;
+        sh:message "A fastener needs its length." ;
+    ] .
+
+tsh:FitCheckRecord a sh:NodeShape ;
+    rdfs:label "A fit check record" ;
+    sh:targetClass trace:FitCheck ;
+    sh:property [
+        sh:path trace:status ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ( "pass" "fail" ) ;
+        sh:message "A fit check passed or failed." ;
+    ] , [
+        sh:path trace:fitOf ; sh:minCount 1 ; sh:maxCount 1 ; sh:class trace:Enclosure ;
+        sh:message "A fit check measured exactly one case." ;
+    ] , [
+        sh:path trace:clashCount ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:integer ;
+        sh:message "A fit check needs how many parts clash." ;
+    ] .

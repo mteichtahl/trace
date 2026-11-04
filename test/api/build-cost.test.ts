@@ -256,7 +256,8 @@ describe('cost', () => {
     for (const who of [USER, REVIEWER]) {
       const u = await run(who, 'cost.get', { repo: REPO })
       expect(u).toMatchObject({ money: false, spent: { cloud: null, orders: null }, committed: null, forecast: null, lines: [] })
-      expect(JSON.stringify(u)).not.toMatch(/explorer|3\.45|48\.5/)
+      // no money anywhere in the answer (its times left out: a stage started at 12:37:48.560Z is not $48.50)
+      expect(JSON.stringify(u).replace(/\d{4}-\d\d-\d\dT[\d:.]+Z/g, '<time>')).not.toMatch(/explorer|3\.45|48\.5/)
       expect(u.stages.every((s: { cloud: null }) => s.cloud === null)).toBe(true)
     }
     const m = await run(ADMIN, 'usage.month', {})

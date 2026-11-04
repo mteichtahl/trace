@@ -31,6 +31,8 @@ import {
 import { ALL_ENGINE_FILES, type EngineResult, FORMATS, PY_DIR, partsFor, runCase } from './engine.js'
 import { copyRepoFile, readRepoFile, removeRepoFile, repoDir, repoFile, writeRepoFile } from './paths.js'
 import { type BuildInputs, engineStamp, sha256, staleReasons } from './stale.js'
+import { CASE_VIEW, caseFactHashes, caseViewHashOf } from './case-facts.js'
+import { normalisedHash } from '../../core/normalise.js'
 import {
   CASE_JSON, CASE_PY, type CaseSettings, MECH_DIR, OUT_DIR, SETTABLE, defaults, describe, missingReasons, needSettings, readSettings,
   withClearance, withValue, writeSettings,
@@ -231,6 +233,7 @@ function currentInputs(r: string, s: CaseSettings, facts?: BoardFacts): BuildInp
   }
   return {
     board: s.board, board_sha256: sha(r, s.board) ?? '',
+    ...(f ? { case_facts: caseFactHashes(f) } : {}),
     case_json_sha256: sha(r, CASE_JSON), case_py_sha256: s.source === 'script' ? sha(r, CASE_PY) : null,
     case_file: s.source === 'file' ? s.file ?? null : null, case_file_sha256: s.source === 'file' && s.file ? sha(r, s.file) : null,
     facts_sha256: f ? sha256(JSON.stringify(f)) : '',
@@ -275,6 +278,13 @@ async function build(r: string, s: CaseSettings, args: unknown, formats: readonl
     written.sort()
     run.artifact('result.json', JSON.stringify(res, null, 1), 'application/json')
     run.artifact('facts.json', JSON.stringify(facts, null, 1), 'application/json')
+    run.artifact('case.json', JSON.stringify(s, null, 1), 'application/json')
+    // lineage (src/ontology/lineage.ts): the part of the board the case depends on, and the case's own files, so the
+    // build's freshness everywhere (the graph, artifact.stale, the layout.fit shape) agrees with mech.fit
+    run.reads(`${s.board}#${CASE_VIEW}`, caseViewHashOf(facts))
+    for (const p of [CASE_JSON, ...(script ? [CASE_PY] : []), ...(s.source === 'file' && s.file ? [s.file] : [])]) {
+      run.reads(p, existsSync(join(r, p)) ? normalisedHash(p, readRepoFile(r, p)) : null)
+    }
     for (const [name, p] of Object.entries(c.outputs)) {
       if (name === 'fit.json') run.artifact(name, readFileSync(p, 'utf8'), 'application/json')
       else if (name.endsWith('.step')) run.artifact(name, readFileSync(p), 'model/step')

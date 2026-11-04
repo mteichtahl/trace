@@ -1,0 +1,449 @@
+# trace's ontology: the mechanical module (docs/ontology.md "Mechanical module"). The case a board goes in, as the
+# enclosure engine builds and checks it (python/tracebridge/mech, run by mech.build): the case's records as the engine
+# writes them (mechanical/out/case.jsonld), its fit check's findings and the process's rule results (the build's
+# fit.json and result.json), the case's settings (mechanical/case.json) and each part's space on the board (the build's
+# board facts). None of it is a table: src/ontology/mech.ts reads the newest build of the run record when the graph is
+# built, the way src/ontology/board.ts reads the board.
+
+@prefix trace: <https://trace-eda.com/ns/trace#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix skos:  <http://www.w3.org/2004/02/skos/core#> .
+
+<https://trace-eda.com/ns/trace/mech> a owl:Ontology ;
+    rdfs:label "trace mechanical" ;
+    rdfs:comment "The case a board goes in: its parts, material, fasteners, openings and joints, its fit check and the process's rules, and its settings." ;
+    owl:imports <https://trace-eda.com/ns/trace/core>, <https://trace-eda.com/ns/trace/board> ;
+    owl:versionInfo "0.4.0" .
+
+# ================================================================== the case
+
+trace:Enclosure a owl:Class ;
+    rdfs:label "Case" ;
+    skos:altLabel "Enclosure" ;
+    rdfs:comment "The case a board goes in, as a whole, from its newest build." ;
+    trace:keptIn "the newest mech.build run's case records (mechanical/out/case.jsonld), in the run record" .
+
+trace:EnclosurePart a owl:Class ;
+    rdfs:label "Case part" ;
+    rdfs:comment "One piece of the case, such as the base or the lid, or the whole case when it was handed in as one file." ;
+    trace:keptIn "the newest mech.build run's case records, in the run record" .
+
+trace:Material a owl:Class ;
+    rdfs:label "Material" ;
+    rdfs:comment "What the case is made of, and the process and service that make it." ;
+    trace:keptIn "the newest mech.build run's case records and the case settings" .
+
+trace:BoardOutline a owl:Class ;
+    rdfs:label "Board outline" ;
+    rdfs:comment "The board as the case sees it: its file, the hash of that file, and its thickness." ;
+    trace:keptIn "the newest mech.build run's case records, in the run record" .
+
+trace:Standoff a owl:Class ;
+    rdfs:label "Standoff" ;
+    rdfs:comment "A post in the base that a mounting screw goes into." ;
+    trace:keptIn "the newest mech.build run's case records, in the run record" .
+
+trace:Fastener a owl:Class ;
+    rdfs:label "Fastener" ;
+    rdfs:comment "A screw that holds the board to the case, with its size, length and the hole it needs." ;
+    trace:keptIn "the newest mech.build run's case records, in the run record" .
+
+trace:MountingPoint a owl:Class ;
+    rdfs:label "Mounting point" ;
+    rdfs:comment "A hole in the board that fixes it to the case, and the fastener that goes through it." ;
+    trace:keptIn "the newest mech.build run's case records, in the run record" .
+
+trace:Opening a owl:Class ;
+    rdfs:label "Opening" ;
+    rdfs:comment "A cut in the case for a connector at the board's edge, on one side of the case." ;
+    trace:keptIn "the newest mech.build run's case records, in the run record" .
+
+trace:Joint a owl:Class ;
+    rdfs:label "Joint" ;
+    rdfs:comment "How two parts are held together: the board screwed to the base, or the lid pressed onto it." ;
+    trace:keptIn "the newest mech.build run's case records, in the run record" .
+
+trace:ComponentEnvelope a owl:Class ;
+    rdfs:label "Part's space" ;
+    rdfs:comment "The space a placed part takes up: its box on the board, its height and which side it is on." ;
+    trace:keptIn "the newest mech.build run's board facts, in the run record" .
+
+# ================================================================== the fit check
+
+trace:FitCheck a owl:Class ;
+    rdfs:label "Fit check" ;
+    rdfs:comment "Whether the board fits its case, as a build measured it: clashes, gaps under their clearance, and openings." ;
+    trace:keptIn "the newest mech.build run's case records and fit, in the run record" .
+
+trace:FitFinding a owl:Class ;
+    rdfs:label "Fit problem" ;
+    rdfs:comment "One thing the fit check found wrong: a part that clashes with the case, a gap under its clearance, or a missing opening." ;
+    trace:keptIn "the newest mech.build run's fit (fit.json), in the run record" .
+
+trace:RuleResult a owl:Class ;
+    rdfs:label "Process rule result" ;
+    rdfs:comment "One of the process's design rules, such as the thinnest wall it can make, against the case as built." ;
+    trace:keptIn "the newest mech.build run's result (result.json), in the run record" .
+
+# ================================================================== the settings
+
+trace:CaseSettings a owl:Class ;
+    rdfs:label "Case settings" ;
+    rdfs:comment "The case's settings as the newest build used them: process, wall thicknesses and clearances, each away from the recommendation with its reason." ;
+    trace:keptIn "the newest mech.build run's settings (mechanical/case.json as built), in the run record" .
+
+trace:PartClearance a owl:Class ;
+    rdfs:label "Clearance for one part" ;
+    rdfs:comment "More room for one part than the case's clearance gives, with the reason a person gave." ;
+    trace:keptIn "the case settings" .
+
+# ================================================================== properties of the case
+
+trace:caseSource a owl:DatatypeProperty ;
+    rdfs:label "case source" ;
+    rdfs:comment "Where the case came from: script (built from the case script) or file (a handed-in file)." ;
+    rdfs:range xsd:string .
+
+trace:hasPart a owl:ObjectProperty ;
+    rdfs:label "has part" ;
+    rdfs:comment "A piece the case is made of." ;
+    rdfs:domain trace:Enclosure ;
+    rdfs:range trace:EnclosurePart .
+
+trace:material a owl:ObjectProperty ;
+    rdfs:label "material" ;
+    rdfs:comment "What it is made of." ;
+    rdfs:range trace:Material .
+
+trace:encloses a owl:ObjectProperty ;
+    rdfs:label "encloses" ;
+    rdfs:comment "The board the case is for." ;
+    rdfs:domain trace:Enclosure ;
+    rdfs:range trace:BoardOutline .
+
+trace:outerSize a owl:DatatypeProperty ;
+    rdfs:label "outer size" ;
+    rdfs:comment "The case's size across, deep and high, in millimetres, as a list of three numbers." ;
+    rdfs:domain trace:Enclosure ;
+    rdfs:range rdf:JSON .
+
+trace:process a owl:DatatypeProperty ;
+    rdfs:label "process" ;
+    rdfs:comment "How the material is made into the part, in the service's own word for it, such as its powder printing." ;
+    rdfs:range xsd:string .
+
+trace:service a owl:DatatypeProperty ;
+    rdfs:label "service" ;
+    rdfs:comment "Who makes it, by trace's name for the service (jlc3dp for printing, jlccnc for machining)." ;
+    rdfs:range xsd:string .
+
+trace:outlineOf a owl:ObjectProperty ;
+    rdfs:label "outline of" ;
+    rdfs:comment "The board file the outline was read from." ;
+    rdfs:domain trace:BoardOutline ;
+    rdfs:range trace:Board .
+
+trace:partKind a owl:DatatypeProperty ;
+    rdfs:label "part kind" ;
+    rdfs:comment "Which piece of the case it is: base, lid, or case for a handed-in file." ;
+    rdfs:domain trace:EnclosurePart ;
+    rdfs:range xsd:string .
+
+trace:boundingBox a owl:DatatypeProperty ;
+    rdfs:label "box size" ;
+    rdfs:comment "The size of the box it fits in, as a list of numbers in millimetres." ;
+    rdfs:range rdf:JSON .
+
+trace:wallThickness a owl:DatatypeProperty ;
+    rdfs:label "wall thickness" ;
+    rdfs:comment "How thick the case's walls are, in millimetres." ;
+    rdfs:range xsd:decimal .
+
+trace:hasStandoff a owl:ObjectProperty ;
+    rdfs:label "has standoff" ;
+    rdfs:comment "A post in this part that a mounting screw goes into." ;
+    rdfs:domain trace:EnclosurePart ;
+    rdfs:range trace:Standoff .
+
+trace:atMountingPoint a owl:ObjectProperty ;
+    rdfs:label "at mounting point" ;
+    rdfs:comment "The board's hole a standoff is under." ;
+    rdfs:domain trace:Standoff ;
+    rdfs:range trace:MountingPoint .
+
+trace:fastenerKind a owl:DatatypeProperty ;
+    rdfs:label "fastener kind" ;
+    rdfs:comment "What sort of fastener it is, such as screw." ;
+    rdfs:domain trace:Fastener ;
+    rdfs:range xsd:string .
+
+trace:size a owl:DatatypeProperty ;
+    rdfs:label "size" ;
+    rdfs:comment "A fastener's size by its thread, such as M2.5." ;
+    rdfs:domain trace:Fastener ;
+    rdfs:range xsd:string .
+
+trace:length a owl:DatatypeProperty ;
+    rdfs:label "length" ;
+    rdfs:comment "How long it is, in millimetres." ;
+    rdfs:range xsd:decimal .
+
+trace:pilotDiameter a owl:DatatypeProperty ;
+    rdfs:label "pilot hole" ;
+    rdfs:comment "How wide the hole a screw cuts its own thread in must be, in millimetres." ;
+    rdfs:domain trace:Fastener ;
+    rdfs:range xsd:decimal .
+
+trace:diameter a owl:DatatypeProperty ;
+    rdfs:label "diameter" ;
+    rdfs:comment "How wide a hole is, in millimetres." ;
+    rdfs:range xsd:decimal .
+
+trace:fastener a owl:ObjectProperty ;
+    rdfs:label "fastener" ;
+    rdfs:comment "The fastener that goes through a mounting point." ;
+    rdfs:domain trace:MountingPoint ;
+    rdfs:range trace:Fastener .
+
+trace:forComponent a owl:ObjectProperty ;
+    rdfs:label "for part" ;
+    rdfs:comment "The placed part an opening is cut for." ;
+    rdfs:domain trace:Opening ;
+    rdfs:range trace:Component .
+
+trace:face a owl:DatatypeProperty ;
+    rdfs:label "face" ;
+    rdfs:comment "The side of the case an opening is on, as the board's file shows it: west, east, north or south." ;
+    rdfs:domain trace:Opening ;
+    rdfs:range xsd:string .
+
+trace:inPart a owl:ObjectProperty ;
+    rdfs:label "in part" ;
+    rdfs:comment "A piece of the case the opening is cut through." ;
+    rdfs:domain trace:Opening ;
+    rdfs:range trace:EnclosurePart .
+
+trace:jointKind a owl:DatatypeProperty ;
+    rdfs:label "joint kind" ;
+    rdfs:comment "How the joint holds: fixed, fastened, snap-fit, press-fit, bonded, hinged, sliding or ball." ;
+    rdfs:domain trace:Joint ;
+    rdfs:range xsd:string .
+
+trace:joins a owl:ObjectProperty ;
+    rdfs:label "joins" ;
+    rdfs:comment "One of the two things a joint holds together: a piece of the case, or the board." ;
+    rdfs:domain trace:Joint .
+
+trace:usesFastener a owl:ObjectProperty ;
+    rdfs:label "uses fastener" ;
+    rdfs:comment "The fastener a fastened joint is made with." ;
+    rdfs:domain trace:Joint ;
+    rdfs:range trace:Fastener .
+
+trace:clearance a owl:DatatypeProperty ;
+    rdfs:label "clearance" ;
+    rdfs:comment "The room left between two things, in millimetres." ;
+    rdfs:range xsd:decimal .
+
+trace:envelopeOf a owl:ObjectProperty ;
+    rdfs:label "space of" ;
+    rdfs:comment "The placed part whose space it is." ;
+    rdfs:domain trace:ComponentEnvelope ;
+    rdfs:range trace:Component .
+
+trace:heightSource a owl:DatatypeProperty ;
+    rdfs:label "height from" ;
+    rdfs:comment "Where a part's height came from: its Height field, trace's table of parts, or a default when neither has it." ;
+    rdfs:domain trace:ComponentEnvelope ;
+    rdfs:range xsd:string .
+
+trace:isConnector a owl:DatatypeProperty ;
+    rdfs:label "is a connector" ;
+    rdfs:comment "Whether the part is a connector, which needs an opening when it sits at the board's edge." ;
+    rdfs:domain trace:ComponentEnvelope ;
+    rdfs:range xsd:boolean .
+
+trace:edgeSide a owl:DatatypeProperty ;
+    rdfs:label "at edge" ;
+    rdfs:comment "The board's side a part sits at, when it is within reach of the edge: west, east, north or south." ;
+    rdfs:domain trace:ComponentEnvelope ;
+    rdfs:range xsd:string .
+
+# ================================================================== properties of the fit check
+
+trace:fitOf a owl:ObjectProperty ;
+    rdfs:label "fit of" ;
+    rdfs:comment "The case a fit check measured." ;
+    rdfs:domain trace:FitCheck ;
+    rdfs:range trace:Enclosure .
+
+trace:madeByRun a owl:ObjectProperty ;
+    rdfs:label "made by run" ;
+    rdfs:comment "The run of trace's tools that made it." ;
+    rdfs:range trace:Run .
+
+trace:enclosed a owl:DatatypeProperty ;
+    rdfs:label "enclosed" ;
+    rdfs:comment "Whether the case closes around the whole board." ;
+    rdfs:domain trace:FitCheck ;
+    rdfs:range xsd:boolean .
+
+trace:clashCount a owl:DatatypeProperty ;
+    rdfs:label "clashes counted" ;
+    rdfs:comment "How many parts clash with the case." ;
+    rdfs:domain trace:FitCheck ;
+    rdfs:range xsd:integer .
+
+trace:clashes a owl:DatatypeProperty ;
+    rdfs:label "clashing part" ;
+    rdfs:comment "A part that clashes with the case, by its reference." ;
+    rdfs:domain trace:FitCheck ;
+    rdfs:range xsd:string .
+
+trace:gapViolations a owl:DatatypeProperty ;
+    rdfs:label "gaps too small" ;
+    rdfs:comment "How many gaps are under the clearance they need." ;
+    rdfs:domain trace:FitCheck ;
+    rdfs:range xsd:integer .
+
+trace:boardSha256 a owl:DatatypeProperty ;
+    rdfs:label "board hash" ;
+    rdfs:comment "The hash of the board file the fit was measured against." ;
+    rdfs:domain trace:FitCheck ;
+    rdfs:range xsd:string .
+
+trace:isCurrentBuild a owl:DatatypeProperty ;
+    rdfs:label "build still stands" ;
+    rdfs:comment "Whether nothing the build was made from has changed since: worked out when read, never stored." ;
+    rdfs:domain trace:FitCheck ;
+    rdfs:range xsd:boolean ;
+    trace:derived true .
+
+trace:staleBecause a owl:DatatypeProperty ;
+    rdfs:label "out of date because" ;
+    rdfs:comment "What changed since the build, in words: worked out when read, never stored." ;
+    rdfs:domain trace:FitCheck ;
+    rdfs:range xsd:string ;
+    trace:derived true .
+
+trace:findingOf a owl:ObjectProperty ;
+    rdfs:label "found by" ;
+    rdfs:comment "The fit check that found it." ;
+    rdfs:domain trace:FitFinding ;
+    rdfs:range trace:FitCheck .
+
+trace:findingKind a owl:DatatypeProperty ;
+    rdfs:label "problem kind" ;
+    rdfs:comment "What sort of fit problem it is: clash, gap or opening." ;
+    rdfs:domain trace:FitFinding ;
+    rdfs:range xsd:string .
+
+trace:casePart a owl:DatatypeProperty ;
+    rdfs:label "case part" ;
+    rdfs:comment "The piece of the case a part clashes with, by its kind (base, lid or case)." ;
+    rdfs:domain trace:FitFinding ;
+    rdfs:range xsd:string .
+
+trace:place a owl:DatatypeProperty ;
+    rdfs:label "where" ;
+    rdfs:comment "Where a gap is measured: edge (board to wall), above (part to lid), below (part to floor) or around (a connector in its opening)." ;
+    rdfs:domain trace:FitFinding ;
+    rdfs:range xsd:string .
+
+trace:measured a owl:DatatypeProperty ;
+    rdfs:label "measured" ;
+    rdfs:comment "What was measured, in millimetres or the rule's unit." ;
+    rdfs:range xsd:decimal .
+
+trace:required a owl:DatatypeProperty ;
+    rdfs:label "needed" ;
+    rdfs:comment "What it needs to be, in millimetres or the rule's unit." ;
+    rdfs:range xsd:decimal .
+
+trace:volume a owl:DatatypeProperty ;
+    rdfs:label "volume" ;
+    rdfs:comment "How much space overlaps, in cubic millimetres." ;
+    rdfs:domain trace:FitFinding ;
+    rdfs:range xsd:decimal .
+
+trace:ruleOf a owl:ObjectProperty ;
+    rdfs:label "rule checked in" ;
+    rdfs:comment "The fit check the process's rule was checked with." ;
+    rdfs:domain trace:RuleResult ;
+    rdfs:range trace:FitCheck .
+
+trace:ruleName a owl:DatatypeProperty ;
+    rdfs:label "rule" ;
+    rdfs:comment "Which of the process's rules it is, such as wall, floor or hole." ;
+    rdfs:domain trace:RuleResult ;
+    rdfs:range xsd:string .
+
+trace:sourceAddress a owl:DatatypeProperty ;
+    rdfs:label "source page" ;
+    rdfs:comment "The web page a figure was published on." ;
+    rdfs:range xsd:string .
+
+# ================================================================== properties of the settings
+
+trace:settingsOf a owl:ObjectProperty ;
+    rdfs:label "settings of" ;
+    rdfs:comment "The case the settings were built into." ;
+    rdfs:domain trace:CaseSettings ;
+    rdfs:range trace:Enclosure .
+
+trace:caseTemplate a owl:DatatypeProperty ;
+    rdfs:label "case template" ;
+    rdfs:comment "Which of trace's case designs the case starts from, such as printed-shell." ;
+    rdfs:domain trace:CaseSettings ;
+    rdfs:range xsd:string .
+
+trace:floorThickness a owl:DatatypeProperty ;
+    rdfs:label "floor thickness" ;
+    rdfs:comment "How thick the base's floor is, in millimetres." ;
+    rdfs:domain trace:CaseSettings ;
+    rdfs:range xsd:decimal .
+
+trace:lidThickness a owl:DatatypeProperty ;
+    rdfs:label "lid thickness" ;
+    rdfs:comment "How thick the lid's top is, in millimetres." ;
+    rdfs:domain trace:CaseSettings ;
+    rdfs:range xsd:decimal .
+
+trace:edgeClearance a owl:DatatypeProperty ;
+    rdfs:label "edge clearance" ;
+    rdfs:comment "The room between the board's edge and the case's wall, in millimetres." ;
+    rdfs:domain trace:CaseSettings ;
+    rdfs:range xsd:decimal .
+
+trace:clearanceAbove a owl:DatatypeProperty ;
+    rdfs:label "clearance above" ;
+    rdfs:comment "The room between the tallest part and the lid, in millimetres." ;
+    rdfs:domain trace:CaseSettings ;
+    rdfs:range xsd:decimal .
+
+trace:clearanceBelow a owl:DatatypeProperty ;
+    rdfs:label "clearance below" ;
+    rdfs:comment "The room between the parts under the board and the floor, in millimetres." ;
+    rdfs:domain trace:CaseSettings ;
+    rdfs:range xsd:decimal .
+
+trace:caseQuantity a owl:DatatypeProperty ;
+    rdfs:label "cases to order" ;
+    rdfs:comment "How many cases the order sheet is for." ;
+    rdfs:domain trace:CaseSettings ;
+    rdfs:range xsd:integer .
+
+trace:hasPartClearance a owl:ObjectProperty ;
+    rdfs:label "has clearance for a part" ;
+    rdfs:comment "More room the settings give one part." ;
+    rdfs:domain trace:CaseSettings ;
+    rdfs:range trace:PartClearance .
+
+trace:settingReasons a owl:DatatypeProperty ;
+    rdfs:label "reasons for the settings" ;
+    rdfs:comment "Why each setting is away from its recommendation, by the setting's path, as a person gave it." ;
+    rdfs:domain trace:CaseSettings ;
+    rdfs:range rdf:JSON .

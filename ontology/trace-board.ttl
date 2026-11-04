@@ -14,7 +14,7 @@
     rdfs:label "trace board" ;
     rdfs:comment "Intent, requirements, architecture, the pin plan, tests and runs, parts and offers, and the board's components, pads and nets." ;
     owl:imports <https://trace-eda.com/ns/trace/core>, <https://trace-eda.com/ns/trace/journey> ;
-    owl:versionInfo "0.3.0" .
+    owl:versionInfo "0.3.1" .
 
 # ================================================================== intent and requirements
 
@@ -876,3 +876,16 @@ trace:trackCount a owl:DatatypeProperty ;
     rdfs:comment "How many track segments the board has." ;
     rdfs:domain trace:Board ;
     rdfs:range xsd:integer .
+
+# ------------------------------------------------------------------ how the graph view draws them (graphKind)
+
+trace:IntentStatement trace:graphKind "intent" .
+trace:Requirement trace:graphKind "requirement" .
+trace:FunctionalBlock trace:graphKind "block" .
+trace:SchematicSheet trace:graphKind "document" .
+trace:TestItem trace:graphKind "run" .
+trace:Run trace:graphKind "run" .
+trace:RunArtifact trace:graphKind "artifact" .
+trace:Part trace:graphKind "part" .
+trace:Component trace:graphKind "component" .
+trace:Net trace:graphKind "net" .

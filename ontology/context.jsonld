@@ -36,12 +36,20 @@
       "@id": "trace:atGate",
       "@type": "@id"
     },
+    "atMountingPoint": {
+      "@id": "trace:atMountingPoint",
+      "@type": "@id"
+    },
     "atStage": {
       "@id": "trace:atStage",
       "@type": "@id"
     },
     "attributes": {
       "@id": "trace:attributes",
+      "@type": "@json"
+    },
+    "boundingBox": {
+      "@id": "trace:boundingBox",
       "@type": "@json"
     },
     "buildPlan": {
@@ -112,9 +120,17 @@
       "@id": "trace:detail",
       "@type": "@json"
     },
+    "encloses": {
+      "@id": "trace:encloses",
+      "@type": "@id"
+    },
     "endedAt": {
       "@id": "trace:endedAt",
       "@type": "xsd:dateTime"
+    },
+    "envelopeOf": {
+      "@id": "trace:envelopeOf",
+      "@type": "@id"
     },
     "expectedShipDate": {
       "@id": "trace:expectedShipDate",
@@ -123,6 +139,26 @@
     "expects": {
       "@id": "trace:expects",
       "@type": "@json"
+    },
+    "fastener": {
+      "@id": "trace:fastener",
+      "@type": "@id"
+    },
+    "figureFromRun": {
+      "@id": "trace:figureFromRun",
+      "@type": "@id"
+    },
+    "findingOf": {
+      "@id": "trace:findingOf",
+      "@type": "@id"
+    },
+    "fitOf": {
+      "@id": "trace:fitOf",
+      "@type": "@id"
+    },
+    "forComponent": {
+      "@id": "trace:forComponent",
+      "@type": "@id"
     },
     "forCriterion": {
       "@id": "trace:forCriterion",
@@ -164,17 +200,41 @@
       "@id": "trace:hasEvidence",
       "@type": "@id"
     },
+    "hasFigure": {
+      "@id": "trace:hasFigure",
+      "@type": "@id"
+    },
     "hasOption": {
       "@id": "trace:hasOption",
+      "@type": "@id"
+    },
+    "hasPart": {
+      "@id": "trace:hasPart",
+      "@type": "@id"
+    },
+    "hasPartClearance": {
+      "@id": "trace:hasPartClearance",
+      "@type": "@id"
+    },
+    "hasSection": {
+      "@id": "trace:hasSection",
       "@type": "@id"
     },
     "hasStage": {
       "@id": "trace:hasStage",
       "@type": "@id"
     },
+    "hasStandoff": {
+      "@id": "trace:hasStandoff",
+      "@type": "@id"
+    },
     "icon": {
       "@id": "trace:icon",
       "@type": "@json"
+    },
+    "inPart": {
+      "@id": "trace:inPart",
+      "@type": "@id"
     },
     "inProject": {
       "@id": "trace:inProject",
@@ -196,6 +256,10 @@
       "@id": "trace:isOutputOf",
       "@type": "@id"
     },
+    "joins": {
+      "@id": "trace:joins",
+      "@type": "@id"
+    },
     "lastRun": {
       "@id": "trace:lastRun",
       "@type": "@id"
@@ -203,6 +267,14 @@
     "lostAt": {
       "@id": "trace:lostAt",
       "@type": "xsd:dateTime"
+    },
+    "madeByRun": {
+      "@id": "trace:madeByRun",
+      "@type": "@id"
+    },
+    "material": {
+      "@id": "trace:material",
+      "@type": "@id"
     },
     "observedAt": {
       "@id": "trace:observedAt",
@@ -264,6 +336,14 @@
       "@id": "trace:opened",
       "@type": "@id"
     },
+    "outerSize": {
+      "@id": "trace:outerSize",
+      "@type": "@json"
+    },
+    "outlineOf": {
+      "@id": "trace:outlineOf",
+      "@type": "@id"
+    },
     "parentJob": {
       "@id": "trace:parentJob",
       "@type": "@id"
@@ -283,6 +363,22 @@
     "priceBreaks": {
       "@id": "trace:priceBreaks",
       "@type": "@json"
+    },
+    "projectLogo": {
+      "@id": "trace:projectLogo",
+      "@type": "@id"
+    },
+    "projectLogoDark": {
+      "@id": "trace:projectLogoDark",
+      "@type": "@id"
+    },
+    "publishedFor": {
+      "@id": "trace:publishedFor",
+      "@type": "@id"
+    },
+    "publishedFrom": {
+      "@id": "trace:publishedFrom",
+      "@type": "@id"
     },
     "queuedAt": {
       "@id": "trace:queuedAt",
@@ -324,12 +420,24 @@
       "@id": "trace:returnedAt",
       "@type": "xsd:dateTime"
     },
+    "ruleOf": {
+      "@id": "trace:ruleOf",
+      "@type": "@id"
+    },
     "scoredOn": {
       "@id": "trace:scoredOn",
       "@type": "@id"
     },
     "servesRequirement": {
       "@id": "trace:servesRequirement",
+      "@type": "@id"
+    },
+    "settingReasons": {
+      "@id": "trace:settingReasons",
+      "@type": "@json"
+    },
+    "settingsOf": {
+      "@id": "trace:settingsOf",
       "@type": "@id"
     },
     "settingValue": {
@@ -356,6 +464,10 @@
       "@id": "trace:startsJob",
       "@type": "@id"
     },
+    "statesValue": {
+      "@id": "trace:statesValue",
+      "@type": "@id"
+    },
     "supersededAt": {
       "@id": "trace:supersededAt",
       "@type": "xsd:dateTime"
@@ -376,8 +488,16 @@
       "@id": "trace:updatedAt",
       "@type": "xsd:dateTime"
     },
+    "usesFastener": {
+      "@id": "trace:usesFastener",
+      "@type": "@id"
+    },
     "usesPart": {
       "@id": "trace:usesPart",
+      "@type": "@id"
+    },
+    "valueFromRun": {
+      "@id": "trace:valueFromRun",
       "@type": "@id"
     },
     "versionOf": {

@@ -226,13 +226,18 @@ for CNC, walls against the plastic or metal minimum and each pocket's corner rad
 R = H/10 + 0.5. A handed-in file's wall
 thickness is not measured: one rule row says so (`ok: null`).
 
-Records (`case.jsonld`): the ontology's mechanical module ([ontology.md](ontology.md)), `@context`
-`{"tm": "https://trace-eda.com/ns/trace#", "@vocab": …}`; nodes `Enclosure` (`hasPart`, `outerSize`, `material`,
-`encloses`), `EnclosurePart` per part (`partKind` base/lid, `wallThickness`, `hasStandoff`), `Material` (name, process,
-service), `Fastener` and `MountingPoint` per screw, `Opening` per connector cut (`forComponent`, `face`), `Joint` per
-fastened or press-fit pair (`jointKind` from the ontology's closed list, `joins`, `usesFastener`), the board's
-`BoardOutline`, and a `FitCheck` (`status`, `enclosed`, `clashes`, `gapViolations`, `boardSha256`). The SHACL shape
-behind the layout gate's fit criterion is the ontology work's; these are the records it reads.
+Records (`case.jsonld`): the ontology's mechanical module (`ontology/trace-mech.ttl`, [ontology.md](ontology.md)),
+`@context` `{"tm": "https://trace-eda.com/ns/trace#", "@vocab": …}` with `boundingBox` and `outerSize` as JSON; nodes
+`Enclosure` (`caseSource`, `hasPart`, `outerSize`, `material`, `encloses`), `EnclosurePart` per part (`partKind`
+base/lid, `wallThickness`, `hasStandoff`), `Material` (name, process, service), `Fastener` (`fastenerKind`, `size`,
+`length`, `pilotDiameter`), `MountingPoint` (`reference`, `positionX`, `positionY`, `diameter`, `fastener`) and
+`Standoff` (`atMountingPoint`) per screw, `Opening` per connector cut (`forComponent` the board module's
+`component:<ref>`, `face`, `inPart`), `Joint` per fastened or press-fit pair (`jointKind` from the ontology's closed
+list, `joins`, `usesFastener`), the board's `BoardOutline`, and a `FitCheck` (`status`, `enclosed`, `clashCount`,
+`clashes`, `gapViolations`, `boardSha256`, `fitOf`). Every key is a term of the ontology; they keep to the mechanical
+record shapes (`ontology/shapes/records/mech.ttl`). `src/ontology/mech.ts` reads the newest build into the project's
+graph, with its fit problems (`FitFinding`), the process's rule results (`RuleResult`), the settings as built
+(`CaseSettings`) and each part's space (`ComponentEnvelope`).
 
 Packaging: `python/pyproject.toml` gains `mech = ["build123d==0.13.0"]`, and `dev` includes it. The tools image
 installs `/app/python[mech]` into `/opt/trace-venv`. The agent image does not get it.
@@ -255,9 +260,15 @@ installs `/app/python[mech]` into `/opt/trace-venv`. The agent image does not ge
     run artifacts, measures `clashes`, `gap_violations`, `assumed_heights`; run status `pass` / `fail` from the fit
     and rules. Its answer says, when it passes, to record `layout.fit` with `journey.check` and this run id.
   - `mech.fit` — the latest `mech.build` run's fit, and whether it is stale (`src/tools/mech/stale.ts`): the build
-    records its `inputs` (the board and its sha256, the sha256 of case.json, case.py and a handed-in file, the facts'
+    records its `inputs` (the board and its sha256, what of the board the case depends on (`case_facts`,
+    `src/tools/mech/case-facts.ts`: the outline, the mounting and unplated holes, the parts at the edge and every part's
+    height and side, so a part moved in the middle of the board leaves the case current and an edge connector moved
+    makes it stale, naming it), the sha256 of case.json, case.py and a handed-in file, the facts'
     sha256, the capabilities' `checked` date, and the engine: `ENGINE_VERSION` in stale.ts, `tracebridge.mech.__version__`
     when the package states one, and a sha256 over `python/tracebridge/mech/**/*.py`); any that changed is a reason.
+    The build also records its lineage (`run_inputs`: the board as `<board>#case`, hashed by those facts, and the
+    case's own files) and its settings as `case.json`, so the graph, `artifact.stale` and the fit criterion's shape
+    agree with mech.fit.
     mech.order and the Case design skill's `fit` check use the same function (the skill compares the files on the
     default branch).
   - `mech.hand_in` — copies a STEP (or a `case.py`) from a path in the repository into `mechanical/`, sets
